@@ -243,8 +243,6 @@ class MHATokenToKVPool(BaseTokenToKVPool):
     @debug_timing
     def transfer(self, indices, flat_data):
         flat_data = flat_data.to(device=self.device, non_blocking=False)
-        # todo: less expensive protection
-        torch.cuda.synchronize()
         k_data, v_data = flat_data[0], flat_data[1]
         for i in range(self.layer_num):
             self.k_buffer[i][indices] = k_data[i]
@@ -474,9 +472,9 @@ class MLATokenToKVPoolHost:
 
     @debug_timing
     def transfer(self, indices, flat_data):
-        # todo: ensure host memory synchronization
+        # non_blocking=True only works with pinned memory on a separate stream.
+        # otherwise blocks current stream (https://pytorch.org/tutorials/intermediate/pinmem_nonblock.html)
         flat_data = flat_data.to(device=self.device, non_blocking=False)
-        torch.cuda.synchronize()
         self.kv_buffer[:, :, indices] = flat_data
 
     @synchronized

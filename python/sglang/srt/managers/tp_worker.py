@@ -220,6 +220,7 @@ class TpModelWorker:
         self,
         model_worker_batch: ModelWorkerBatch,
         launch_done: Optional[threading.Event] = None,
+        copy_done_event: Optional[torch.cuda.Event] = None,
         skip_sample: bool = False,
     ) -> Tuple[
         Union[LogitsProcessorOutput, torch.Tensor], Optional[torch.Tensor], bool
@@ -245,7 +246,7 @@ class TpModelWorker:
                 next_token_ids = None
             else:
                 next_token_ids = self.model_runner.sample(
-                    logits_output, model_worker_batch
+                    logits_output, model_worker_batch, copy_done_event
                 )
 
             return logits_output, next_token_ids, can_run_cuda_graph

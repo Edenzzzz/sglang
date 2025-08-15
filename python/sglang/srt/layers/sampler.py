@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.distributed as dist
@@ -45,6 +45,7 @@ class Sampler(nn.Module):
         return_logprob: bool,
         top_logprobs_nums: List[int],
         token_ids_logprobs: List[List[int]],
+        copy_done_event: Optional[torch.cuda.Event] = None,
     ):
         """Run a sampler & compute logprobs and update logits_output accordingly.
 
@@ -57,12 +58,16 @@ class Sampler(nn.Module):
             batch_next_token_ids: next token IDs. If set, skip sampling and only
                 compute output logprobs It is used for speculative decoding which
                 performs sampling in draft workers.
+            copy_done_event: An event that is set when the actual logits finish computation on GPU
+              and are copied to the CPU.
         """
         logits = logits_output.next_token_logits
 
         # Apply the custom logit processors if registered in the sampling info.
         if sampling_info.has_custom_logit_processor:
-            apply_custom_logit_processor(logits, sampling_info)
+            apply_custom_logit_processor(
+                logits, sampling_info, copy_done_event=copy_done_event
+            )
 
         if self.use_nan_detection and torch.any(torch.isnan(logits)):
             logger.warning("Detected errors during sampling! NaN in the logits.")
@@ -233,6 +238,7 @@ def apply_custom_logit_processor(
     logits: torch.Tensor,
     sampling_batch_info: SamplingBatchInfo,
     num_tokens_in_batch: int = 1,
+    copy_done_event: Optional[torch.cuda.Event] = None,
 ):
     """Apply custom logit processors to the logits.
     This function will modify the logits in-place.
@@ -263,6 +269,7 @@ def apply_custom_logit_processor(
         logits[batch_mask] = processor(
             logits[batch_mask],
             [sampling_batch_info.custom_params[i] for i in batch_indices],
+            copy_done_event,
         )
 
         logger.debug(

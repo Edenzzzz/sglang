@@ -13,6 +13,7 @@ from typing import Optional
 
 import numpy as np
 import requests
+import torch
 
 from sglang.srt.sampling.custom_logit_processor import CustomLogitProcessor
 from sglang.srt.utils import kill_process_tree
@@ -320,7 +321,9 @@ class TestSRTEndpoint(CustomTestCase):
             sample the given token id.
             """
 
-            def __call__(self, logits, custom_param_list):
+            def __call__(
+                self, logits, custom_param_list, copy_done_event: torch.cuda.Event
+            ):
                 assert logits.shape[0] == len(custom_param_list)
                 key = "token_id"
 
@@ -378,9 +381,11 @@ class TestSRTEndpoint(CustomTestCase):
             sample the given token id.
             """
 
-            def __call__(self, logits, custom_param_list):
+            def __call__(
+                self, logits, custom_param_list, copy_done_event: torch.cuda.Event
+            ):
                 assert logits.shape[0] == len(custom_param_list)
-
+                copy_done_event.wait()
                 for i, param_dict in enumerate(custom_param_list):
                     if param_dict["delay"] > 0:
                         param_dict["delay"] -= 1
@@ -444,7 +449,7 @@ class TestSRTEndpoint(CustomTestCase):
         with ThreadPoolExecutor(len(target_token_ids)) as executor:
             list(executor.map(self.run_custom_logit_processor, target_token_ids))
 
-    @unittest.skip("Skip this test because this feature has a bug. See comments below.")
+    # @unittest.skip("Skip this test because this feature has a bug. See comments below.")
     def test_stateful_custom_logit_processor(self):
         """Test custom logit processor with a single request."""
 
@@ -459,7 +464,7 @@ class TestSRTEndpoint(CustomTestCase):
 
         self.run_stateful_custom_logit_processor(first_token_id=5)
 
-    @unittest.skip("Skip this test because this feature has a bug. See comments above.")
+    # @unittest.skip("Skip this test because this feature has a bug. See comments above.")
     def test_stateful_custom_logit_processor_batch_mixed(self):
         """Test a batch of requests mixed of requests with and without custom logit processor."""
         target_token_ids = list(range(32)) + [None] * 16

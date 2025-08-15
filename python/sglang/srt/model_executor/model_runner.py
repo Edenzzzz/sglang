@@ -1822,12 +1822,15 @@ class ModelRunner:
         self,
         logits_output: LogitsProcessorOutput,
         forward_batch: ForwardBatch,
+        copy_done_event: Optional[torch.cuda.Event] = None,
     ) -> torch.Tensor:
         """Sample and compute logprobs and update logits_output.
 
         Args:
             logits_output: The logits output from the model forward
             forward_batch: The forward batch that generates logits_output
+            copy_done_event: An event that is set when the actual logits finish computation on GPU
+              and are copied to the CPU.
 
         Returns:
             A list of next_token_ids
@@ -1848,6 +1851,7 @@ class ModelRunner:
             forward_batch.return_logprob,
             forward_batch.top_logprobs_nums,
             forward_batch.token_ids_logprobs,
+            copy_done_event=copy_done_event,
         )
         return next_token_ids
 

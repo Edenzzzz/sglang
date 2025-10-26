@@ -943,6 +943,7 @@ class FlashInferIndicesUpdaterDecode:
                 data_type=self.data_type,
                 q_data_type=self.q_data_type,
                 non_blocking=True,
+                # flipped_schedule=True
             )
         else:
             # When using original begin_forward, don't pass global_override_indptr_cpu

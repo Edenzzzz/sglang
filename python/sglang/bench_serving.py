@@ -209,10 +209,6 @@ async def async_request_openai_completions(
             "ignore_eos": not args.disable_ignore_eos,
             **request_func_input.extra_request_body,
         }
-
-        if request_func_input.image_data:
-            payload.update({"image_data": request_func_input.image_data})
-
         headers = get_auth_headers()
 
         output = RequestFuncOutput.init_new(request_func_input)
@@ -1137,8 +1133,7 @@ def sample_sharegpt_requests(
                 add_generation_prompt=True,
                 tokenize=False,
             )
-            if tokenizer.bos_token:
-                prompt = prompt.replace(tokenizer.bos_token, "")
+            prompt = prompt.replace(tokenizer.bos_token, "")
 
         prompt_token_ids = tokenizer.encode(prompt)
         completion = dataset[i][1]
@@ -1878,9 +1873,7 @@ async def benchmark(
         pbar.close()
 
     if "sglang" in backend:
-        server_info = requests.get(
-            base_url + "/get_server_info", headers=get_auth_headers()
-        )
+        server_info = requests.get(base_url + "/get_server_info")
         if server_info.status_code == 200:
             server_info_json = server_info.json()
             if "decode" in server_info_json:
@@ -2160,15 +2153,39 @@ def run_benchmark(args_: argparse.Namespace):
 
     # Handle repeats and optional CSV saving
     num_repeats = getattr(args, "repeat", 1)
-    save_to_csv_path = None
-    if num_repeats > 1:
-        save_to_csv_path = args.save_to_csv
+    save_to_csv_path = args.save_to_csv
+
+    # Fetch server info once to get attention_backend and enable_mixed_chunk
+    attention_backend = None
+    enable_mixed_chunk = None
+    if "sglang" in backend:
+        try:
+            server_info_url = (
+                f"http://{args.host}:{args.port}"
+                if args.base_url is None
+                else args.base_url
+            )
+            server_info_response = requests.get(
+                server_info_url + "/get_server_info", headers=get_auth_headers()
+            )
+            if server_info_response.status_code == 200:
+                server_info_json = server_info_response.json()
+                # Handle PD-separated case where server_info has "decode" key
+                if "decode" in server_info_json:
+                    server_info_json = server_info_json["decode"][0]
+                # Extract attention_backend and enable_mixed_chunk from server_args
+                attention_backend = server_info_json.get("attention_backend")
+                enable_mixed_chunk = server_info_json.get("enable_mixed_chunk")
+        except Exception as e:
+            print(f"Warning: Failed to fetch server info: {e}")
 
     def _write_csv_row(
         csv_path: str,
         metrics: BenchmarkMetrics,
         run_idx: int,
         args: argparse.Namespace,
+        attention_backend: Optional[str] = None,
+        enable_mixed_chunk: Optional[bool] = None,
     ):
         # Get scalar metrics and add run-specific fields
         scalar_data = metrics.to_scalar_dict()
@@ -2183,6 +2200,8 @@ def run_benchmark(args_: argparse.Namespace):
                 "random_output_len": args.random_output_len,
                 "request_rate": args.request_rate,
                 "max_concurrency": args.max_concurrency,
+                "attention_backend": attention_backend,
+                "enable_mixed_chunk": enable_mixed_chunk,
             }
         )
         # ensure field order is consistent across runs with model first, run second
@@ -2228,7 +2247,14 @@ def run_benchmark(args_: argparse.Namespace):
 
         # save to CSV if requested
         if save_to_csv_path and result is not None:
-            _write_csv_row(save_to_csv_path, result, i + 1, args)
+            _write_csv_row(
+                save_to_csv_path,
+                result,
+                i + 1,
+                args,
+                attention_backend=attention_backend,
+                enable_mixed_chunk=enable_mixed_chunk,
+            )
 
         last_result = result
 

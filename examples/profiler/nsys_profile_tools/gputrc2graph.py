@@ -245,8 +245,78 @@ class GPUTrace2Graph:
         logger.info("Finished generating %s", sum_file)
         return sum_file
 
-    def gen_graph(self, in_file, out_dir, title, nsys_cmd, engine_model):
+    def gen_kernel_stats(self, in_file, out_dir, nsys_cmd, kernel_name_prefixes):
+        """generates kernel statistics for specified kernel name prefixes"""
+        results = []
+        for idx, (file, engine, model, total_sec) in enumerate(in_file):
+            file_dir = os.path.dirname(file)
+            file_name = os.path.basename(file)
+            if not file_dir:
+                file_dir = "."
+            sum_file = self.gen_sum_file(file, nsys_cmd)
+            # read kernel summary file
+            df = self.pd.read_csv(sum_file)
+
+            # Calculate total GPU time (sum of all kernel elapsed times)
+            total_gpu_time = df["Elapsed Time (sec)"].sum()
+
+            # Process each kernel name prefix
+            for kernel_prefix in kernel_name_prefixes:
+                # Filter kernels that start with the prefix
+                matching_kernels = df[
+                    df["Name"].str.startswith(kernel_prefix, na=False)
+                ]
+
+                if len(matching_kernels) == 0:
+                    logger.warning(
+                        f"No kernels found matching prefix '{kernel_prefix}' in {file}"
+                    )
+                    total_kernel_time = 0.0
+                    percentage = 0.0
+                else:
+                    # Sum up elapsed time for matching kernels
+                    total_kernel_time = matching_kernels["Elapsed Time (sec)"].sum()
+                    # Calculate percentage of total GPU time
+                    percentage = (
+                        (total_kernel_time / total_gpu_time * 100)
+                        if total_gpu_time > 0
+                        else 0.0
+                    )
+
+                results.append(
+                    {
+                        "File": file_name,
+                        "Engine": engine,
+                        "Model": model,
+                        "Kernel_Prefix": kernel_prefix,
+                        "Total_Time_sec": round(total_kernel_time, 4),
+                        "Percentage_of_GPU_Time": round(percentage, 2),
+                        "Total_GPU_Time_sec": round(total_gpu_time, 4),
+                    }
+                )
+
+        if results:
+            stats_df = self.pd.DataFrame(results)
+            if out_dir is None:
+                out_dir = "."
+            else:
+                os.makedirs(out_dir, exist_ok=True)
+            stats_file = os.path.join(out_dir, "kernel_stats.csv")
+            stats_df.to_csv(stats_file, index=False)
+            logger.info(f"Generated kernel statistics: {stats_file}")
+            print(f"\nKernel Statistics:")
+            print(stats_df.to_string(index=False))
+            return stats_df
+        return None
+
+    def gen_graph(
+        self, in_file, out_dir, title, nsys_cmd, engine_model, kernel_name_prefixes=None
+    ):
         """generates graph and csv file from in_file into out_dir"""
+        # Generate kernel statistics if kernel_name_prefixes is provided
+        if kernel_name_prefixes:
+            self.gen_kernel_stats(in_file, out_dir, nsys_cmd, kernel_name_prefixes)
+
         # Initialize an empty DataFrame to store combined data
         combined_df = self.pd.DataFrame()
         for idx, (file, engine, model, total_sec) in enumerate(in_file):
@@ -333,10 +403,26 @@ def main():
         help=("nsys cmd, e.g. /usr/bin/nsys, Default: nsys"),
         default="nsys",
     )
+    parser.add_argument(
+        "--kernel_name_prefixes",
+        type=str,
+        nargs="*",
+        default=["void flashinfer::PersistentKernelTemplate"],
+        help=(
+            "List of kernel name prefixes to analyze. "
+            "Kernels whose names start with any of these prefixes will be included. "
+            "Default: 'void flashinfer::PersistentKernelTemplate'"
+        ),
+    )
     args = parser.parse_args()
     gputrace = GPUTrace2Graph()
     gputrace.gen_graph(
-        args.in_file, args.out_dir, args.title, args.nsys_cmd, engine_model_supported
+        args.in_file,
+        args.out_dir,
+        args.title,
+        args.nsys_cmd,
+        engine_model_supported,
+        args.kernel_name_prefixes,
     )
 
 

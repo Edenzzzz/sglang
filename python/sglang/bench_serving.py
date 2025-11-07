@@ -1162,8 +1162,8 @@ def sample_sharegpt_requests(
     # Filter out sequences that are too long or too short
     filtered_dataset: List[DatasetRow] = []
     for i in range(len(dataset)):
-        if len(filtered_dataset) == num_requests:
-            break
+        # if len(filtered_dataset) == num_requests:
+        #     break
 
         # Tokenize the prompts and completions.
         prompt = dataset[i][0]

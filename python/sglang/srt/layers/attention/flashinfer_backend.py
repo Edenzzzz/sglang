@@ -468,7 +468,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 self.prefill_wrappers_mixed
             )  # (Wenxuan) hardcode this to support full graph capture
             use_ragged = True
-            if self.use_deterministic and isinstance(wrappers[0], BatchAttention):
+            if self.enable_deterministic and isinstance(wrappers[0], BatchAttention):
                 raise NotImplementedError(
                     "Deterministic is not supported for persistent attention yet"
                 )
@@ -524,7 +524,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 multi_item_params=multi_item_params,
             )
             self.forward_metadata = PrefillMetadata(
-                self.prefill_wrappers_paged,
+                wrappers,
                 use_ragged,
                 extend_no_prefix,
                 multi_item_params,
@@ -974,7 +974,7 @@ class FlashInferIndicesUpdaterDecode:
         fixed_split_size: Optional[int] = None,
         disable_split_kv: Optional[bool] = None,
     ):
-        decode_wrappers = decode_wrappers or self.decode_wrappers
+        decode_wrappes = decode_wrappers or self.decode_wrappers
         self.call_begin_forward(
             decode_wrappers[0],
             req_pool_indices,

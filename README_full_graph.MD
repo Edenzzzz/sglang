@@ -10,8 +10,8 @@ We will develop on the following branches. As this is a large feature, **please 
 - SGLANG: [attn_fuse_](https://github.com/Edenzzzz/sglang-dev/tree/attn_fuse_)
 - FlashInfer: [persistent_overlap_](https://github.com/Edenzzzz/flashinfer/tree/persistent_overlap_)
    - To install, run `pip install -e . --no-build-isolation`. To recompile, just edit the code in the main repo and clear cache `python3 -m flashinfer clear-cache`. If you edit `.cu` files in csrc, it might be necessary to run `rm -rf ~/.cache/flashinfer`.
-
+We need to capture all the operations in the forward pass of the [flashinfer backend](python/sglang/srt/layers/attention/flashinfer_backend.py), including kv cache saving operations.
 
 ## Benchmarking
-It is useful to reference the workloads ran in [my PR](https://github.com/sgl-project/sglang/pull/8368) and [the official benchmarking docs](https://docs.sglang.ai/developer_guide/benchmark_and_profiling.html) before making the PR.
+It is useful to reference the workloads ran in [my PR](https://github.com/sgl-project/sglang/pull/8368) and [the official benchmarking docs](https://docs.sglang.ai/developer_guide/benchmark_and_profiling.html) before making the PR. **Better use H100/H800 to benchmark as that's what we will use for the final experiments**
 You may also use/modify the nsys profiler tools in [examples/profiler/nsys_profile_tools/README.md](examples/profiler/nsys_profile_tools/README.md), which decomposes kernel runtime into different categories and compare it against total CPU runtime. For example, it may be useful to know how much kernel launch gap exists in the attention phase.

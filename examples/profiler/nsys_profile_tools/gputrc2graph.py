@@ -245,6 +245,149 @@ class GPUTrace2Graph:
         logger.info("Finished generating %s", sum_file)
         return sum_file
 
+    def gen_attention_bubble_time(
+        self, in_file, out_dir, nsys_cmd, engine_model, bubble_threshold_ns=1000
+    ):
+        """
+        Analyzes CPU/bubble time between GPU kernels in attention operator regions.
+
+        Args:
+            in_file: List of (file, engine, model, total_sec) tuples
+            out_dir: Output directory
+            nsys_cmd: nsys command path
+            engine_model: Engine model mapping for kernel categorization
+            bubble_threshold_ns: Minimum gap (ns) to consider as bubble time (default: 1000ns = 1us)
+        """
+        results = []
+
+        for idx, (file, engine, model, total_sec) in enumerate(in_file):
+            file_dir = os.path.dirname(file)
+            file_name = os.path.basename(file)
+            if not file_dir:
+                file_dir = "."
+
+            # Generate trace CSV if needed
+            file_base = os.path.basename(file).replace(".nsys-rep", "")
+            nsys_stats_file = os.path.join(file_dir, f"{file_base}_cuda_gpu_trace.csv")
+            if not os.path.exists(nsys_stats_file):
+                # Need to generate it first
+                self.gen_sum_file(file, nsys_cmd)
+
+            if not os.path.exists(nsys_stats_file):
+                logger.warning(f"Trace file not found: {nsys_stats_file}")
+                continue
+
+            # Load full trace data
+            logger.info(f"Loading trace data from {nsys_stats_file}")
+            df = self.pd.read_csv(
+                nsys_stats_file,
+                usecols=["Start (ns)", "Duration (ns)", "Device", "Strm", "Name"],
+            )
+            df["End (ns)"] = df["Start (ns)"] + df["Duration (ns)"]
+
+            # Get attention kernel mapping
+            if not engine_model.get(engine) or not engine_model[engine].get(model):
+                logger.warning(f"Unknown engine/model: {engine}/{model}")
+                continue
+
+            mapping = engine_model[engine][model]
+
+            # Categorize kernels
+            def get_category(name):
+                for kern_name, val in mapping.items():
+                    if re.search(kern_name, name):
+                        return val
+                return "misc"
+
+            df["Category"] = df["Name"].apply(get_category)
+
+            # Filter for attention kernels only
+            attn_df = df[df["Category"] == "attn"].copy()
+
+            if len(attn_df) == 0:
+                logger.warning(f"No attention kernels found in {file}")
+                results.append(
+                    {
+                        "File": file_name,
+                        "Engine": engine,
+                        "Model": model,
+                        "Total_Attention_Kernels": 0,
+                        "Total_Bubble_Time_sec": 0.0,
+                        "Total_Attention_Time_sec": 0.0,
+                        "Bubble_Percentage": 0.0,
+                        "Avg_Bubble_Time_us": 0.0,
+                        "Max_Bubble_Time_us": 0.0,
+                    }
+                )
+                continue
+
+            # Sort all attention kernels by start time globally (ignore streams)
+            attn_df = attn_df.sort_values(by="Start (ns)").reset_index(drop=True)
+
+            # Calculate bubbles between consecutive attention kernels
+            bubble_times = []
+            total_attn_time = attn_df["Duration (ns)"].sum()
+
+            if len(attn_df) < 2:
+                # Need at least 2 kernels to find gaps
+                pass
+            else:
+                # Find gaps between consecutive kernels globally
+                for i in range(len(attn_df) - 1):
+                    current_end = attn_df.iloc[i]["End (ns)"]
+                    next_start = attn_df.iloc[i + 1]["Start (ns)"]
+
+                    if next_start > current_end:
+                        gap = next_start - current_end
+                        if gap >= bubble_threshold_ns:
+                            bubble_times.append(gap)
+
+            total_bubble_time_ns = sum(bubble_times) if bubble_times else 0
+            total_bubble_time_sec = total_bubble_time_ns / 1e9
+            total_attn_time_sec = total_attn_time / 1e9
+
+            # Calculate statistics
+            bubble_percentage = (
+                (total_bubble_time_sec / total_attn_time_sec * 100)
+                if total_attn_time_sec > 0
+                else 0.0
+            )
+            avg_bubble_us = (
+                (total_bubble_time_ns / len(bubble_times) / 1000)
+                if bubble_times
+                else 0.0
+            )
+            max_bubble_us = (max(bubble_times) / 1000) if bubble_times else 0.0
+
+            results.append(
+                {
+                    "File": file_name,
+                    "Engine": engine,
+                    "Model": model,
+                    "Total_Attention_Kernels": len(attn_df),
+                    "Total_Bubble_Time_sec": round(total_bubble_time_sec, 6),
+                    "Total_Attention_Time_sec": round(total_attn_time_sec, 4),
+                    "Bubble_Percentage": round(bubble_percentage, 2),
+                    "Avg_Bubble_Time_us": round(avg_bubble_us, 2),
+                    "Max_Bubble_Time_us": round(max_bubble_us, 2),
+                    "Num_Bubbles": len(bubble_times),
+                }
+            )
+
+        if results:
+            bubble_df = self.pd.DataFrame(results)
+            if out_dir is None:
+                out_dir = "."
+            else:
+                os.makedirs(out_dir, exist_ok=True)
+            bubble_file = os.path.join(out_dir, "attention_bubble_time.csv")
+            bubble_df.to_csv(bubble_file, index=False)
+            logger.info(f"Generated attention bubble time analysis: {bubble_file}")
+            print(f"\nAttention Bubble Time Analysis:")
+            print(bubble_df.to_string(index=False))
+            return bubble_df
+        return None
+
     def gen_kernel_stats(self, in_file, out_dir, nsys_cmd, kernel_name_prefixes):
         """generates kernel statistics for specified kernel name prefixes"""
         results = []
@@ -310,12 +453,26 @@ class GPUTrace2Graph:
         return None
 
     def gen_graph(
-        self, in_file, out_dir, title, nsys_cmd, engine_model, kernel_name_prefixes=None
+        self,
+        in_file,
+        out_dir,
+        title,
+        nsys_cmd,
+        engine_model,
+        kernel_name_prefixes=None,
+        analyze_attention_bubbles=False,
+        bubble_threshold_ns=1000,
     ):
         """generates graph and csv file from in_file into out_dir"""
         # Generate kernel statistics if kernel_name_prefixes is provided
         if kernel_name_prefixes:
             self.gen_kernel_stats(in_file, out_dir, nsys_cmd, kernel_name_prefixes)
+
+        # Analyze attention bubble time if requested
+        if analyze_attention_bubbles:
+            self.gen_attention_bubble_time(
+                in_file, out_dir, nsys_cmd, engine_model, bubble_threshold_ns
+            )
 
         # Initialize an empty DataFrame to store combined data
         combined_df = self.pd.DataFrame()
@@ -414,6 +571,23 @@ def main():
             "Default: 'void flashinfer::PersistentKernelTemplate'"
         ),
     )
+    parser.add_argument(
+        "--analyze_attention_bubbles",
+        action="store_true",
+        help=(
+            "Analyze CPU/bubble time between GPU kernels in attention operator regions. "
+            "Outputs attention_bubble_time.csv with bubble time statistics."
+        ),
+    )
+    parser.add_argument(
+        "--bubble_threshold_ns",
+        type=int,
+        default=1000,
+        help=(
+            "Minimum gap in nanoseconds to consider as bubble time between kernels. "
+            "Default: 1000 (1 microsecond)"
+        ),
+    )
     args = parser.parse_args()
     gputrace = GPUTrace2Graph()
     gputrace.gen_graph(
@@ -423,6 +597,8 @@ def main():
         args.nsys_cmd,
         engine_model_supported,
         args.kernel_name_prefixes,
+        args.analyze_attention_bubbles,
+        args.bubble_threshold_ns,
     )
 
 

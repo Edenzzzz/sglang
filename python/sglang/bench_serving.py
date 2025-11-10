@@ -2392,10 +2392,12 @@ def run_benchmark(args_: argparse.Namespace):
                 "commit_id": commit_id,
             }
         )
-        # ensure field order is consistent across runs with model first, run second, commit_id third
-        fieldnames = ["model", "run", "commit_id"] + [
-            k for k in scalar_data.keys() if k not in ["model", "run", "commit_id"]
-        ]
+        # ensure field order is consistent across runs with model first, run second, commit_id last
+        fieldnames = (
+            ["model", "run"]
+            + [k for k in scalar_data.keys() if k not in ["model", "run", "commit_id"]]
+            + ["commit_id"]
+        )
         file_exists = os.path.exists(csv_path) and os.path.getsize(csv_path) > 0
         with open(csv_path, "a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)

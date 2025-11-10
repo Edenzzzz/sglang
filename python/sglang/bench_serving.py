@@ -19,6 +19,7 @@ import os
 import pickle
 import random
 import resource
+import subprocess
 import sys
 import time
 import traceback
@@ -2363,6 +2364,8 @@ def run_benchmark(args_: argparse.Namespace):
         except Exception as e:
             print(f"Warning: Failed to fetch server info: {e}")
 
+    commit_id = _get_commit_id()
+
     def _write_csv_row(
         csv_path: str,
         metrics: BenchmarkMetrics,
@@ -2386,11 +2389,12 @@ def run_benchmark(args_: argparse.Namespace):
                 "max_concurrency": args.max_concurrency,
                 "attention_backend": attention_backend,
                 "enable_mixed_chunk": enable_mixed_chunk,
+                "commit_id": commit_id,
             }
         )
-        # ensure field order is consistent across runs with model first, run second
-        fieldnames = ["model", "run"] + [
-            k for k in scalar_data.keys() if k not in ["model", "run"]
+        # ensure field order is consistent across runs with model first, run second, commit_id third
+        fieldnames = ["model", "run", "commit_id"] + [
+            k for k in scalar_data.keys() if k not in ["model", "run", "commit_id"]
         ]
         file_exists = os.path.exists(csv_path) and os.path.getsize(csv_path) > 0
         with open(csv_path, "a", newline="") as f:
@@ -2522,6 +2526,24 @@ def run_benchmark(args_: argparse.Namespace):
         )
 
     return last_result
+
+
+def _get_commit_id() -> str:
+    """Get the current git commit ID."""
+    try:
+        # Get the repository root (assuming bench_serving.py is in python/sglang/)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        repo_root = os.path.dirname(os.path.dirname(script_dir))
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=repo_root,
+        )
+        return result.stdout.strip()[:8]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
 
 
 def set_ulimit(target_soft_limit=65535):

@@ -8,6 +8,7 @@ We can achieve full graph capture by replacing the BatchPrefill kernel with our 
 ## Development branches
 We will develop on the following branches. As this is a large feature, **please make PRs instead of directly pushing the code**.
 - SGLANG: [attn_fuse_](https://github.com/Edenzzzz/sglang-dev/tree/attn_fuse_)
+   - `pip install -e "python"`
 - FlashInfer: [persistent_overlap_](https://github.com/Edenzzzz/flashinfer/tree/persistent_overlap_)
    - To install, run `pip install -e . --no-build-isolation`. To recompile, just edit the code in the main repo and clear cache `python3 -m flashinfer clear-cache`. If you edit `.cu` files in csrc, it might be necessary to run `rm -rf ~/.cache/flashinfer`.
 We need to capture all the operations in the forward pass of the [flashinfer backend](python/sglang/srt/layers/attention/flashinfer_backend.py), including kv cache saving operations.

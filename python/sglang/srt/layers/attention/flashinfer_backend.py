@@ -53,6 +53,9 @@ if is_flashinfer_available():
     from flashinfer.cascade import merge_state
 
 
+USE_PERSISTENT = envs.SGLANG_FLASHINFER_USE_PERSISTENT.get()
+
+
 class WrapperDispatch(Enum):
     SLIDING_WINDOW = auto()
     CROSS_ATTENTION = auto()
@@ -423,7 +426,11 @@ class FlashInferAttnBackend(AttentionBackend):
                 forward_batch.seq_lens,
                 forward_batch.seq_lens_cpu,
                 forward_batch.seq_lens_sum,
-                decode_wrappers=self.decode_wrappers,
+                decode_wrappers=(
+                    self.prefill_wrappers_mixed
+                    if USE_PERSISTENT
+                    else self.decode_wrappers
+                ),
                 encoder_lens=forward_batch.encoder_lens,
                 spec_info=forward_batch.spec_info,
                 fixed_split_size=self.decode_split_tile_size,
@@ -466,6 +473,8 @@ class FlashInferAttnBackend(AttentionBackend):
             # wrappers = self.prefill_wrappers_paged
             wrappers = (
                 self.prefill_wrappers_mixed
+                if USE_PERSISTENT
+                else self.prefill_wrappers_paged
             )  # (Wenxuan) hardcode this to support full graph capture
             use_ragged = True
             if self.enable_deterministic and isinstance(wrappers[0], BatchAttention):
@@ -779,7 +788,7 @@ class FlashInferAttnBackend(AttentionBackend):
                     forward_batch.token_to_kv_pool.set_kv_buffer(
                         layer, cache_loc, k, v, layer.k_scale, layer.v_scale
                     )
-            if isinstance(prefill_wrapper_paged, BatchAttention):
+            if USE_PERSISTENT:
                 o, _ = persistent_attn_forward(
                     prefill_wrapper_paged,
                     q,
@@ -842,7 +851,7 @@ class FlashInferAttnBackend(AttentionBackend):
                     sm_scale=layer.scaling,
                     logits_soft_cap=logits_soft_cap,
                 )
-                if isinstance(prefill_wrapper_paged, BatchAttention):
+                if USE_PERSISTENT:
                     o2, s2 = persistent_attn_forward(
                         prefill_wrapper_paged,
                         q,
@@ -1154,19 +1163,19 @@ class FlashInferIndicesUpdaterDecode:
                 ),
                 global_override_indptr_cpu=global_override_indptr_cpu,
             )
-        elif isinstance(wrapper, BatchAttention):
+        elif USE_PERSISTENT:
             wrapper.plan(
+                torch.arange(bs, device=kv_indices.device),
                 kv_indptr,
                 kv_indices,
-                self.kv_last_page_len[:bs],
+                paged_kernel_lens,
                 self.num_qo_heads,
                 self.num_kv_heads,
-                self.head_dim,
-                1,
+                head_dim_qk=self.head_dim,
+                head_dim_vo=self.head_dim,
                 data_type=self.data_type,
                 q_data_type=self.q_data_type,
-                non_blocking=True,
-                # flipped_schedule=True
+                causal=True,
             )
         else:
             # When using original begin_forward, don't pass global_override_indptr_cpu
@@ -1261,9 +1270,11 @@ class FlashInferIndicesUpdaterPrefill:
             # and forward_batch.extend_seq_lens_cpu
             paged_kernel_lens = prefix_lens
             paged_kernel_lens_sum = paged_kernel_lens.sum().item()
+            causal = False
         else:
             paged_kernel_lens = seq_lens
             paged_kernel_lens_sum = seq_lens_sum
+            causal = True
 
         self.call_begin_forward(
             self.prefill_wrapper_ragged,
@@ -1280,6 +1291,7 @@ class FlashInferIndicesUpdaterPrefill:
             spec_info,
             fixed_split_size=fixed_split_size,
             multi_item_params=multi_item_params,
+            causal=causal,
         )
 
     def update_sliding_window(
@@ -1304,11 +1316,12 @@ class FlashInferIndicesUpdaterPrefill:
                     torch.tensor(self.sliding_window_size) + seq_lens - prefix_lens,
                 )
                 paged_kernel_lens_sum = paged_kernel_lens.sum().item()
+                causal = False
             else:
                 # full attention
                 paged_kernel_lens = seq_lens
                 paged_kernel_lens_sum = seq_lens_sum
-
+                causal = True
             kv_start_idx = seq_lens - paged_kernel_lens
             use_sliding_window_kv_pool = wrapper_id == 0 and isinstance(
                 self.token_to_kv_pool_allocator, SWATokenToKVPoolAllocator
@@ -1329,6 +1342,7 @@ class FlashInferIndicesUpdaterPrefill:
                 spec_info,
                 use_sliding_window_kv_pool=use_sliding_window_kv_pool,
                 multi_item_params=multi_item_params,
+                causal=causal,
             )
 
     def update_cross_attention(
@@ -1372,8 +1386,9 @@ class FlashInferIndicesUpdaterPrefill:
                 self.qo_indptr[wrapper_id],
                 use_ragged,
                 spec_info,
-                causal=causal,
+                fixed_split_size=fixed_split_size,
                 multi_item_params=multi_item_params,
+                causal=causal,
             )
 
     def call_begin_forward(
@@ -1391,9 +1406,9 @@ class FlashInferIndicesUpdaterPrefill:
         use_ragged: bool,
         spec_info: Optional[SpecInput],
         use_sliding_window_kv_pool: bool = False,
-        causal: bool = False,  # cached prefix should be attended to by all queries. Defaulting to True will cause wrong results for the persistent kernel.
         fixed_split_size: Optional[int] = None,
         multi_item_params: Optional[MultiItemScoringParams] = None,
+        causal: bool = False,  # cached prefix should be attended to by all queries. Defaulting to True will cause wrong results for the persistent kernel.
     ):
         bs = len(seq_lens)
         if spec_info is None:
@@ -1473,7 +1488,7 @@ class FlashInferIndicesUpdaterPrefill:
             token_pos_in_items_len = 0
             max_item_len_ptr = None
 
-        if isinstance(wrapper_paged, BatchAttention):
+        if USE_PERSISTENT:
             wrapper_paged.plan(
                 qo_indptr,
                 kv_indptr,

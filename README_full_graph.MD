@@ -16,3 +16,17 @@ We need to capture all the operations in the forward pass of the [flashinfer bac
 ## Benchmarking
 It is useful to reference the workloads ran in [my PR](https://github.com/sgl-project/sglang/pull/8368) and [the official benchmarking docs](https://docs.sglang.ai/developer_guide/benchmark_and_profiling.html) before making the PR. **Better use H100/H800 to benchmark as that's what we will use for the final experiments**
 You may also use/modify the nsys profiler tools in [examples/profiler/nsys_profile_tools/README.md](examples/profiler/nsys_profile_tools/README.md), which decomposes kernel runtime into different categories and compare it against total CPU runtime. For example, it may be useful to know how much kernel launch gap exists in the attention phase.
+You can use either one of the following workloads:
+* Launch server:
+```
+python3 -m sglang.launch_server --model-path Qwen/Qwen3-8B  --enable-mixed-chunk  --attention-backend flashinfer 
+```
+* Benchmark:
+```
+python3 -m sglang.bench_serving --backend sglang --dataset-name random --random-input 8192 --random-output 400 --request-rate 8 --num-prompt 480
+python3 -m sglang.bench_serving --backend sglang --dataset-name sharegpt --request-rate 8 --sharegpt-context-len 131072 --num-prompts 480
+```
+
+
+
+

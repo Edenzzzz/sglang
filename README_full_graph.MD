@@ -14,7 +14,7 @@ We will develop on the following branches. As this is a large feature, **please 
 We need to capture all the operations in the forward pass of the [flashinfer backend](python/sglang/srt/layers/attention/flashinfer_backend.py), including kv cache saving operations.
 
 ## Benchmarking
-It is useful to reference the workloads ran in [my PR](https://github.com/sgl-project/sglang/pull/8368) and [the official benchmarking docs](https://docs.sglang.ai/developer_guide/benchmark_and_profiling.html) before making the PR. **Better use H100/H800 to benchmark as that's what we will use for the final experiments**
+You can reference the workloads in [my PR](https://github.com/sgl-project/sglang/pull/8368) and [the official benchmarking docs](https://docs.sglang.ai/developer_guide/benchmark_and_profiling.html) before making the PR. We plan to benchmark on one multi-turn chat dataset (ShareGPT, medium benefit for our method), one low-benefit dataset (LooGLE), and two high-benefit (decode-heavy/balanced) datasets: codebase analysis/debugging with reasoning (e.g. Cursor) and Agent/tool calling.  **Better use H100/H800 to benchmark as that's what we will use for the final experiments**
 You may also use/modify the nsys profiler tools in [examples/profiler/nsys_profile_tools/README.md](examples/profiler/nsys_profile_tools/README.md), which decomposes kernel runtime into different categories and compare it against total CPU runtime. For example, it may be useful to know how much kernel launch gap exists in the attention phase.
 You can use either one of the following workloads:
 * Launch server:

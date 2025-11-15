@@ -2411,11 +2411,88 @@ class Scheduler(
             )
             num_waiting_reqs += len(self.disagg_decode_prealloc_queue.queue)
 
+        # Compute decode and prefill token counts from running batch
+        # Use seq_lens - prefix_lens: == 1 for decode, > 1 for prefill
+        num_decode_tokens = 0
+        num_prefill_tokens = 0
+
+        if (
+            not self.running_batch.is_empty()
+            and self.running_batch.seq_lens is not None
+        ):
+            # For pure decode batches, new_tokens = batch_size (each request processes 1 token)
+            if (
+                self.running_batch.forward_mode is not None
+                and self.running_batch.forward_mode.is_decode()
+            ):
+                bs = len(self.running_batch.reqs)
+                num_decode_tokens += bs
+            else:
+                # For prefill/extend/mixed batches, compute seq_lens - prefix_lens
+                seq_lens_cpu = self.running_batch.seq_lens_cpu
+                # prefix_lens should be set by prepare_for_extend() for prefill/extend batches
+                if self.running_batch.prefix_lens is not None:
+                    # TODO: check if this remove device sync
+                    prefix_lens_cpu = self.running_batch.prefix_lens.to(
+                        "cpu", non_blocking=True
+                    )
+                    # Compute seq_lens - prefix_lens
+                    new_tokens = seq_lens_cpu - prefix_lens_cpu
+                    num_decode_tokens += int(
+                        (new_tokens == 1).sum().to("cpu", non_blocking=True)
+                    )
+                    num_prefill_tokens += int(
+                        (new_tokens > 1).sum().to("cpu", non_blocking=True)
+                    )
+
+        # Also count tokens in waiting queue
+        if self.waiting_queue:
+            waiting_req_lens = torch.tensor(
+                [len(req.origin_input_ids) for req in self.waiting_queue],
+                dtype=torch.int64,
+            )
+            num_decode_tokens += int((waiting_req_lens == 1).sum().item())
+            prefill_mask = waiting_req_lens > 1
+            num_prefill_tokens += (
+                int(waiting_req_lens[prefill_mask].sum().item())
+                if prefill_mask.any()
+                else 0
+            )
+
+        # Count tokens in disaggregation queues
+        if self.disaggregation_mode == DisaggregationMode.PREFILL:
+            if self.disagg_prefill_bootstrap_queue.queue:
+                prefill_req_lens = torch.tensor(
+                    [
+                        len(req.origin_input_ids)
+                        for req in self.disagg_prefill_bootstrap_queue.queue
+                    ],
+                    dtype=torch.int64,
+                )
+                prefill_mask = prefill_req_lens > 1
+                num_prefill_tokens += (
+                    int(prefill_req_lens[prefill_mask].sum().item())
+                    if prefill_mask.any()
+                    else 0
+                )
+        elif self.disaggregation_mode == DisaggregationMode.DECODE:
+            if self.disagg_decode_prealloc_queue.queue:
+                decode_req_lens = torch.tensor(
+                    [
+                        len(req.req.origin_input_ids)
+                        for req in self.disagg_decode_prealloc_queue.queue
+                    ],
+                    dtype=torch.int64,
+                )
+                num_decode_tokens += int((decode_req_lens == 1).sum().item())
+
         return GetLoadReqOutput(
             dp_rank=self.dp_rank,
             num_reqs=len(self.running_batch.reqs) + num_waiting_reqs,
             num_waiting_reqs=num_waiting_reqs,
             num_tokens=num_tokens,
+            num_decode_tokens=num_decode_tokens,
+            num_prefill_tokens=num_prefill_tokens,
         )
 
     def get_internal_state(self, recv_req: GetInternalStateReq):

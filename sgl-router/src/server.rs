@@ -423,7 +423,9 @@ async fn get_loads(State(state): State<Arc<AppState>>, _req: Request) -> Respons
         .map(|info| {
             json!({
                 "worker": &info.worker,
-                "load": info.load
+                "load": info.load,
+                "num_decode_tokens": info.num_decode_tokens,
+                "num_prefill_tokens": info.num_prefill_tokens,
             })
         })
         .collect();

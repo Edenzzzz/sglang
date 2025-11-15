@@ -1466,6 +1466,8 @@ class GetLoadReqOutput(BaseReq):
     num_reqs: int
     num_waiting_reqs: int
     num_tokens: int
+    num_decode_tokens: int = 0
+    num_prefill_tokens: int = 0
 
 
 @dataclass

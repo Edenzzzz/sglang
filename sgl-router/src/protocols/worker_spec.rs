@@ -303,4 +303,10 @@ pub struct WorkerLoadInfo {
     pub worker_type: Option<String>,
     /// Current load (-1 indicates failure to fetch)
     pub load: isize,
+    /// Number of decode tokens (-1 indicates failure to fetch)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_decode_tokens: Option<isize>,
+    /// Number of prefill tokens (-1 indicates failure to fetch)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_prefill_tokens: Option<isize>,
 }

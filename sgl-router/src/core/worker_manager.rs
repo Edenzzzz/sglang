@@ -133,7 +133,7 @@ impl WorkerManager {
         url: &str,
         api_key: Option<&str>,
         client: &reqwest::Client,
-    ) -> Option<isize> {
+    ) -> Option<(isize, Option<isize>, Option<isize>)> {
         let load_url = format!("{}/get_load", url);
         let mut request = client.get(&load_url);
 
@@ -146,7 +146,7 @@ impl WorkerManager {
                 match response.json::<Value>().await {
                     Ok(json) => {
                         // The /get_load endpoint returns an array of load info objects (one per DP rank)
-                        // Each object has: {dp_rank, num_reqs, num_waiting_reqs, num_tokens}
+                        // Each object has: {dp_rank, num_reqs, num_waiting_reqs, num_tokens, num_decode_tokens, num_prefill_tokens}
                         if let Some(array) = json.as_array() {
                             let total_tokens: i64 = array
                                 .iter()
@@ -154,8 +154,27 @@ impl WorkerManager {
                                     entry.get("num_tokens").and_then(|v| v.as_i64())
                                 })
                                 .sum();
-                            debug!("Worker {} load (total tokens): {}", url, total_tokens);
-                            Some(total_tokens as isize)
+                            let total_decode_tokens: i64 = array
+                                .iter()
+                                .filter_map(|entry| {
+                                    entry.get("num_decode_tokens").and_then(|v| v.as_i64())
+                                })
+                                .sum();
+                            let total_prefill_tokens: i64 = array
+                                .iter()
+                                .filter_map(|entry| {
+                                    entry.get("num_prefill_tokens").and_then(|v| v.as_i64())
+                                })
+                                .sum();
+                            debug!(
+                                "Worker {} load: total={}, decode={}, prefill={}",
+                                url, total_tokens, total_decode_tokens, total_prefill_tokens
+                            );
+                            Some((
+                                total_tokens as isize,
+                                Some(total_decode_tokens as isize),
+                                Some(total_prefill_tokens as isize),
+                            ))
                         } else {
                             warn!(
                                 "Invalid load response from {}: expected array, got {:?}",
@@ -206,18 +225,20 @@ impl WorkerManager {
             let client = client.clone();
 
             tasks.push(async move {
-                let load = if is_http {
+                let (load, num_decode_tokens, num_prefill_tokens) = if is_http {
                     Self::get_worker_load(&url, api_key.as_deref(), &client)
                         .await
-                        .unwrap_or(-1)
+                        .unwrap_or((-1, None, None))
                 } else {
-                    -1
+                    (-1, None, None)
                 };
 
                 WorkerLoadInfo {
                     worker: url,
                     worker_type,
                     load,
+                    num_decode_tokens,
+                    num_prefill_tokens,
                 }
             });
         }

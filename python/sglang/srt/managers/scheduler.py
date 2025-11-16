@@ -2389,6 +2389,7 @@ class Scheduler(
             )
             num_tokens = max(num_tokens_full, num_tokens_swa)
         else:
+            # Compute currently running + retracted tokens
             num_tokens = (
                 self.max_total_num_tokens
                 - self.token_to_kv_pool_allocator.available_size()
@@ -2413,48 +2414,29 @@ class Scheduler(
 
         # Compute decode and prefill token counts from running batch
         # Use seq_lens - prefix_lens: == 1 for decode, > 1 for prefill
-        num_decode_tokens = 0
-        num_prefill_tokens = 0
-
-        if (
-            not self.running_batch.is_empty()
-            and self.running_batch.seq_lens is not None
-        ):
-            # For pure decode batches, new_tokens = batch_size (each request processes 1 token)
-            if (
-                self.running_batch.forward_mode is not None
-                and self.running_batch.forward_mode.is_decode()
-            ):
-                bs = len(self.running_batch.reqs)
-                num_decode_tokens += bs
+        if not self.running_batch.is_empty():
+            if self.running_batch.forward_mode.is_decode():
+                num_decode_tokens = len(self.running_batch.reqs)
+                num_prefill_tokens = 0
             else:
-                # For prefill/extend/mixed batches, compute seq_lens - prefix_lens
-                seq_lens_cpu = self.running_batch.seq_lens_cpu
                 # prefix_lens should be set by prepare_for_extend() for prefill/extend batches
                 if self.running_batch.prefix_lens is not None:
-                    # TODO: check if this remove device sync
-                    prefix_lens_cpu = self.running_batch.prefix_lens.to(
-                        "cpu", non_blocking=True
-                    )
                     # Compute seq_lens - prefix_lens
-                    new_tokens = seq_lens_cpu - prefix_lens_cpu
-                    num_decode_tokens += int(
-                        (new_tokens == 1).sum().to("cpu", non_blocking=True)
-                    )
-                    num_prefill_tokens += int(
-                        (new_tokens > 1).sum().to("cpu", non_blocking=True)
-                    )
+                    new_tokens = self.running_batch.extend_lens
+                    num_decode_tokens += int((new_tokens == 1).sum())
+                    num_prefill_tokens += int((new_tokens > 1).sum())
 
         # Also count tokens in waiting queue
         if self.waiting_queue:
-            waiting_req_lens = torch.tensor(
-                [len(req.origin_input_ids) for req in self.waiting_queue],
-                dtype=torch.int64,
+            waiting_extend_lens = torch.tensor(
+                [req.extend_input_len for req in self.waiting_queue],
+                dtype=torch.int32,
             )
-            num_decode_tokens += int((waiting_req_lens == 1).sum().item())
-            prefill_mask = waiting_req_lens > 1
+            prefill_mask = waiting_extend_lens > 1
+            num_decode_tokens += int(waiting_extend_lens[~prefill_mask].sum())
+
             num_prefill_tokens += (
-                int(waiting_req_lens[prefill_mask].sum().item())
+                int(waiting_extend_lens[prefill_mask].sum())
                 if prefill_mask.any()
                 else 0
             )
@@ -2462,29 +2444,40 @@ class Scheduler(
         # Count tokens in disaggregation queues
         if self.disaggregation_mode == DisaggregationMode.PREFILL:
             if self.disagg_prefill_bootstrap_queue.queue:
-                prefill_req_lens = torch.tensor(
+                prefill_extend_lens = torch.tensor(
                     [
-                        len(req.origin_input_ids)
+                        req.extend_input_len
                         for req in self.disagg_prefill_bootstrap_queue.queue
                     ],
                     dtype=torch.int64,
                 )
-                prefill_mask = prefill_req_lens > 1
+                prefill_mask = prefill_extend_lens > 1
                 num_prefill_tokens += (
-                    int(prefill_req_lens[prefill_mask].sum().item())
+                    int(prefill_extend_lens[prefill_mask].sum().item())
                     if prefill_mask.any()
                     else 0
                 )
         elif self.disaggregation_mode == DisaggregationMode.DECODE:
             if self.disagg_decode_prealloc_queue.queue:
-                decode_req_lens = torch.tensor(
+                # DecodeRequest has req attribute
+                # In PD disaggregation decode, requests in prealloc queue are waiting for initial prefill
+                # extend_input_len is set to len(origin_input_ids) for the initial prefill operation
+                # So these are prefill tokens, not decode tokens
+                decode_extend_lens = torch.tensor(
                     [
-                        len(req.req.origin_input_ids)
+                        req.req.extend_input_len
                         for req in self.disagg_decode_prealloc_queue.queue
                     ],
-                    dtype=torch.int64,
+                    dtype=torch.int32,
                 )
-                num_decode_tokens += int((decode_req_lens == 1).sum().item())
+                prefill_mask = decode_extend_lens > 1
+                num_prefill_tokens += (
+                    int(decode_extend_lens[prefill_mask].sum())
+                    if prefill_mask.any()
+                    else 0
+                )
+                # Count decode tokens (extend_input_len == 1) if any
+                num_decode_tokens += int((decode_extend_lens == 1).sum())
 
         return GetLoadReqOutput(
             dp_rank=self.dp_rank,

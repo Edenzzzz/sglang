@@ -474,7 +474,7 @@ class FlashInferAttnBackend(AttentionBackend):
             # wrappers = self.prefill_wrappers_paged
             wrappers = (
                 self.prefill_wrappers_mixed
-                if USE_PERSISTENT or forward_batch.forward_mode.is_mixed()
+                if forward_batch.forward_mode.is_mixed()
                 else self.prefill_wrappers_paged
             )  # (Wenxuan) hardcode this to support full graph capture
             use_ragged = True

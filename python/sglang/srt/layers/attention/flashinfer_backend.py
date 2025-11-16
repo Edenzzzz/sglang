@@ -259,6 +259,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 if not is_sm100_supported():
                     self.prefill_wrappers_mixed.append(
                         BatchAttention(
+                            self.workspace_buffer,
                             "NHD",
                         )
                     )
@@ -473,7 +474,7 @@ class FlashInferAttnBackend(AttentionBackend):
             # wrappers = self.prefill_wrappers_paged
             wrappers = (
                 self.prefill_wrappers_mixed
-                if USE_PERSISTENT
+                if USE_PERSISTENT or forward_batch.forward_mode.is_mixed()
                 else self.prefill_wrappers_paged
             )  # (Wenxuan) hardcode this to support full graph capture
             use_ragged = True
@@ -598,6 +599,15 @@ class FlashInferAttnBackend(AttentionBackend):
                             :num_tokens
                         ],
                     )
+                    if not USE_PERSISTENT
+                    else BatchAttention(
+                        self.workspace_buffer,
+                        "NHD",
+                        use_cuda_graph=True,
+                        paged_kv_indptr_buffer=self.kv_indptr[i][: num_tokens + 1],
+                        paged_kv_indices_buffer=self.cuda_graph_kv_indices[i],
+                        kv_len_arr_buffer=self.kv_last_page_len[:num_tokens],
+                    )
                 )
             seq_lens_sum = seq_lens.sum().item()
             self.indices_updater_decode.update(
@@ -613,8 +623,12 @@ class FlashInferAttnBackend(AttentionBackend):
             )
             self.decode_cuda_graph_metadata[bs] = decode_wrappers
             self.forward_metadata = DecodeMetadata(decode_wrappers)
-            for i in range(self.num_wrappers):
-                decode_wrappers[i].plan = partial(fast_decode_plan, decode_wrappers[i])
+            if not USE_PERSISTENT:
+                for i in range(self.num_wrappers):
+                    decode_wrappers[i].plan = partial(
+                        fast_decode_plan, decode_wrappers[i]
+                    )
+
         elif forward_mode.is_target_verify():
             prefill_wrappers = []
             for i in range(self.num_wrappers):
@@ -731,6 +745,23 @@ class FlashInferAttnBackend(AttentionBackend):
     def get_cuda_graph_seq_len_fill_value(self):
         return 1
 
+    def persistent_attn_forward(
+        self,
+        batch_attn_wrapper: BatchAttention,
+        forward_batch: ForwardBatch,
+        q: torch.Tensor,
+        layer: RadixAttention,
+        logits_soft_cap: float,
+    ):
+        o, lse = batch_attn_wrapper.run(
+            q.view(-1, layer.tp_q_head_num, layer.head_dim),
+            forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id),
+            logits_soft_cap=logits_soft_cap,
+            k_scale=layer.k_scale,
+            v_scale=layer.v_scale,
+        )
+        return o, lse
+
     def forward_extend(
         self,
         q: torch.Tensor,
@@ -749,35 +780,6 @@ class FlashInferAttnBackend(AttentionBackend):
             else forward_batch.encoder_out_cache_loc
         )
 
-        # Persistent kernel only supports passing sm_scale through plan() for now.
-        apply_scale = lambda scale: (
-            scale is not None and (scale != 1.0).any()
-            if isinstance(scale, torch.Tensor)
-            else scale is not None and scale != 1.0
-        )
-
-        def persistent_attn_forward(
-            prefill_wrapper_paged: BatchAttention,
-            q: torch.Tensor,
-            layer: RadixAttention,
-            logits_soft_cap: float,
-        ):
-            # TODO(Wenxuan) pass in kv scale after Flashinfer interface change
-            # TODO(Wenxuan) support logits_soft_cap in Flashinfer
-            prefill_wrapper_paged._sm_scale = (
-                layer.scaling * layer.k_scale
-                if apply_scale(layer.k_scale)
-                else layer.scaling
-            )
-            o, lse = prefill_wrapper_paged.run(
-                q.view(-1, layer.tp_q_head_num, layer.head_dim),
-                forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id),
-                logits_soft_cap=logits_soft_cap,
-            )
-            if apply_scale(layer.v_scale):
-                o = o * layer.v_scale
-            return o, lse
-
         logits_soft_cap = layer.logit_cap
 
         q = q.contiguous()
@@ -789,8 +791,9 @@ class FlashInferAttnBackend(AttentionBackend):
                         layer, cache_loc, k, v, layer.k_scale, layer.v_scale
                     )
             if USE_PERSISTENT:
-                o, _ = persistent_attn_forward(
+                o, _ = self.persistent_attn_forward(
                     prefill_wrapper_paged,
+                    forward_batch,
                     q,
                     layer,
                     logits_soft_cap,
@@ -852,8 +855,9 @@ class FlashInferAttnBackend(AttentionBackend):
                     logits_soft_cap=logits_soft_cap,
                 )
                 if USE_PERSISTENT:
-                    o2, s2 = persistent_attn_forward(
+                    o2, s2 = self.persistent_attn_forward(
                         prefill_wrapper_paged,
+                        forward_batch,
                         q,
                         layer,
                         logits_soft_cap,
@@ -902,15 +906,24 @@ class FlashInferAttnBackend(AttentionBackend):
                 )
 
         # Call the wrapped function
-        o = decode_wrapper.forward(
-            q.contiguous().view(-1, layer.tp_q_head_num, layer.head_dim),
-            forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id),
-            sm_scale=layer.scaling,
-            logits_soft_cap=layer.logit_cap,
-            # Must use _float to avoid device-to-host copy that breaks cuda graph capture.
-            k_scale=layer.k_scale_float,
-            v_scale=layer.v_scale_float,
-        )
+        if USE_PERSISTENT:
+            o, _ = self.persistent_attn_forward(
+                decode_wrapper,
+                forward_batch,
+                q,
+                layer,
+                layer.logit_cap,
+            )
+        else:
+            o = decode_wrapper.forward(
+                q.contiguous().view(-1, layer.tp_q_head_num, layer.head_dim),
+                forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id),
+                sm_scale=layer.scaling,
+                logits_soft_cap=layer.logit_cap,
+                # Must use _float to avoid device-to-host copy that breaks cuda graph capture.
+                k_scale=layer.k_scale_float,
+                v_scale=layer.v_scale_float,
+            )
 
         return o.view(-1, layer.tp_q_head_num * layer.head_dim)
 
@@ -945,6 +958,7 @@ class FlashInferIndicesUpdaterDecode:
         self.kv_indptr = attn_backend.kv_indptr
         self.kv_last_page_len = attn_backend.kv_last_page_len
         self.req_to_token = model_runner.req_to_token_pool.req_to_token
+        self.qo_indptr = attn_backend.qo_indptr
         self.token_to_kv_pool_allocator = model_runner.token_to_kv_pool_allocator
 
         # Dispatch the update function
@@ -1153,7 +1167,7 @@ class FlashInferIndicesUpdaterDecode:
                 self.num_qo_heads,
                 self.num_kv_heads,
                 self.head_dim,
-                1,
+                page_size=1,
                 data_type=self.data_type,
                 q_data_type=self.q_data_type,
                 non_blocking=True,
@@ -1164,19 +1178,27 @@ class FlashInferIndicesUpdaterDecode:
                 global_override_indptr_cpu=global_override_indptr_cpu,
             )
         elif USE_PERSISTENT:
-            wrapper.plan(
-                torch.arange(bs, device=kv_indices.device),
-                kv_indptr,
-                kv_indices,
-                paged_kernel_lens,
-                self.num_qo_heads,
-                self.num_kv_heads,
-                head_dim_qk=self.head_dim,
-                head_dim_vo=self.head_dim,
-                data_type=self.data_type,
-                q_data_type=self.q_data_type,
-                causal=True,
+            self.qo_indptr[0][1 : bs + 1] = torch.arange(
+                1, bs + 1, device=kv_indices.device
             )
+            qo_indptr = self.qo_indptr[0][: bs + 1]
+            try:
+                wrapper.plan(
+                    qo_indptr,
+                    kv_indptr,
+                    kv_indices,
+                    paged_kernel_lens,
+                    self.num_qo_heads,
+                    self.num_kv_heads,
+                    page_size=1,
+                    head_dim_qk=self.head_dim,
+                    head_dim_vo=self.head_dim,
+                    q_data_type=self.q_data_type,
+                    kv_data_type=self.data_type,
+                    causal=True,
+                )
+            except Exception as e:
+                torch.distributed.breakpoint()
         else:
             # When using original begin_forward, don't pass global_override_indptr_cpu
             wrapper.begin_forward(
@@ -1186,7 +1208,7 @@ class FlashInferIndicesUpdaterDecode:
                 self.num_qo_heads,
                 self.num_kv_heads,
                 self.head_dim,
-                1,
+                page_size=1,
                 data_type=self.data_type,
                 q_data_type=self.q_data_type,
                 non_blocking=True,

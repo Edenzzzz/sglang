@@ -854,7 +854,7 @@ class FlashInferAttnBackend(AttentionBackend):
                     sm_scale=layer.scaling,
                     logits_soft_cap=logits_soft_cap,
                 )
-                if USE_PERSISTENT:
+                if USE_PERSISTENT and isinstance(prefill_wrapper_paged, BatchAttention):
                     o2, s2 = self.persistent_attn_forward(
                         prefill_wrapper_paged,
                         forward_batch,

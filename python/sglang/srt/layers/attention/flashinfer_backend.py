@@ -422,22 +422,21 @@ class FlashInferAttnBackend(AttentionBackend):
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         if forward_batch.forward_mode.is_decode_or_idle():
+            decode_wrappers = (
+                self.prefill_wrappers_mixed if USE_PERSISTENT else self.decode_wrappers
+            )
             self.indices_updater_decode.update(
                 forward_batch.req_pool_indices,
                 forward_batch.seq_lens,
                 forward_batch.seq_lens_cpu,
                 forward_batch.seq_lens_sum,
-                decode_wrappers=(
-                    self.prefill_wrappers_mixed
-                    if USE_PERSISTENT
-                    else self.decode_wrappers
-                ),
+                decode_wrappers=decode_wrappers,
                 encoder_lens=forward_batch.encoder_lens,
                 spec_info=forward_batch.spec_info,
                 fixed_split_size=self.decode_split_tile_size,
                 disable_split_kv=False,
             )
-            self.forward_metadata = DecodeMetadata(self.decode_wrappers)
+            self.forward_metadata = DecodeMetadata(decode_wrappers)
         elif forward_batch.forward_mode.is_draft_extend():
             self.indices_updater_prefill.update(
                 forward_batch.req_pool_indices,
@@ -1187,7 +1186,7 @@ class FlashInferIndicesUpdaterDecode:
                     qo_indptr,
                     kv_indptr,
                     kv_indices,
-                    paged_kernel_lens,
+                    paged_kernel_lens.to(qo_indptr.dtype, non_blocking=True),
                     self.num_qo_heads,
                     self.num_kv_heads,
                     page_size=1,

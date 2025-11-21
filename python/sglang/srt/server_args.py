@@ -546,6 +546,9 @@ class ServerArgs:
     mm_max_concurrent_calls: int = 32
     mm_per_request_timeout: float = 10.0
 
+    # For chunk size plotting
+    plot_chunk_size: bool = False
+
     def __post_init__(self):
         """
         Orchestrates the handling of various server arguments, ensuring proper configuration and validation.
@@ -3544,6 +3547,12 @@ class ServerArgs:
             type=int,
             default=ServerArgs.mm_per_request_timeout,
             help="The timeout for each multi-modal request in seconds.",
+        )
+        parser.add_argument(
+            "--plot-chunk-size",
+            action="store_true",
+            default=ServerArgs.plot_chunk_size,
+            help="Enable plotting of chunk size trends. Logs prefill tokens, new_token_ratio, and batch formation time to chunk_size_trend.json and plots on exit.",
         )
 
     @classmethod

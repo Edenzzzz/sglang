@@ -454,6 +454,172 @@ class Scheduler(
             self.default_stream.synchronize = lambda: None  # No-op for CPU
         self.forward_sleep_time = None
 
+        # Init chunk size plotting
+        self.plot_chunk_size = server_args.plot_chunk_size
+        if self.plot_chunk_size:
+            import atexit
+
+            import pandas as pd
+
+            self.chunk_size_csv_path = "chunk_size_trend.csv"
+            self.chunk_size_start_time = time.perf_counter()
+            self.is_entry_rank_for_plotting = self.is_entry_rank
+
+            # Initialize CSV file with header if it doesn't exist
+            if self.is_entry_rank:
+                try:
+                    pd.DataFrame(
+                        columns=[
+                            "time",
+                            "prefill_tokens",
+                            "new_token_ratio",
+                            "decode_bs",
+                            "avg_kv_length",
+                        ]
+                    ).to_csv(self.chunk_size_csv_path, index=False)
+                except Exception:
+                    pass  # File might already exist
+
+            def plot_on_exit():
+                try:
+                    import matplotlib.pyplot as plt
+                    import pandas as pd
+
+                    # Load data from CSV file
+                    try:
+                        df = pd.read_csv(self.chunk_size_csv_path)
+                    except FileNotFoundError:
+                        return
+                    except pd.errors.EmptyDataError:
+                        return
+
+                    if df.empty:
+                        return
+
+                    # Separate prefill and decode data
+                    prefill_data = df[df["prefill_tokens"].notna()].copy()
+                    decode_data = df[df["decode_bs"].notna()].copy()
+
+                    # Plot 1: Prefill tokens and new token ratio (dual y-axis)
+                    if not prefill_data.empty:
+                        prefill_times = prefill_data["time"].tolist()
+                        prefill_tokens = prefill_data["prefill_tokens"].tolist()
+                        new_token_ratios = prefill_data["new_token_ratio"].tolist()
+
+                        # Calculate mean prefill length
+                        mean_prefill_len = prefill_data["prefill_tokens"].mean()
+
+                        fig1, ax1 = plt.subplots(figsize=(12, 6))
+
+                        # Left y-axis for prefill tokens
+                        color1 = "tab:blue"
+                        ax1.set_xlabel("Time (seconds)", fontsize=12)
+                        ax1.set_ylabel("Prefill Tokens", fontsize=12, color=color1)
+                        line1 = ax1.plot(
+                            prefill_times,
+                            prefill_tokens,
+                            color=color1,
+                            linewidth=1.5,
+                            label="Prefill Tokens",
+                        )
+                        ax1.tick_params(axis="y", labelcolor=color1)
+                        ax1.grid(True, alpha=0.3)
+
+                        # Right y-axis for new token ratio
+                        ax1_twin = ax1.twinx()
+                        color2 = "tab:red"
+                        ax1_twin.set_ylabel(
+                            "New Token Ratio", fontsize=12, color=color2
+                        )
+                        line2 = ax1_twin.plot(
+                            prefill_times,
+                            new_token_ratios,
+                            color=color2,
+                            linewidth=1.5,
+                            label="New Token Ratio",
+                        )
+                        ax1_twin.tick_params(axis="y", labelcolor=color2)
+
+                        # Combine legends
+                        lines = line1 + line2
+                        labels = [l.get_label() for l in lines]
+                        ax1.legend(lines, labels, loc="upper left")
+                        ax1.set_title(
+                            "Prefill Tokens and New Token Ratio Over Time", fontsize=14
+                        )
+
+                        plt.tight_layout()
+                        filename = (
+                            f"chunk_size_trend_prefill_mean_{mean_prefill_len:.1f}.png"
+                        )
+                        plt.savefig(filename, dpi=150, bbox_inches="tight")
+                        plt.close(fig1)
+                        logger.info(
+                            f"Prefill chunk size trend plot saved to {filename}"
+                        )
+
+                    # Plot 2: Decode batch size and average KV length (dual y-axis)
+                    if not decode_data.empty:
+                        decode_times = decode_data["time"].tolist()
+                        decode_bs = decode_data["decode_bs"].tolist()
+                        avg_kv_lengths = decode_data["avg_kv_length"].tolist()
+
+                        # Calculate mean decode KV length
+                        mean_decode_kv_len = decode_data["avg_kv_length"].mean()
+
+                        fig2, ax2 = plt.subplots(figsize=(12, 6))
+
+                        # Left y-axis for decode batch size
+                        color1 = "tab:blue"
+                        ax2.set_xlabel("Time (seconds)", fontsize=12)
+                        ax2.set_ylabel("Decode Batch Size", fontsize=12, color=color1)
+                        line1 = ax2.plot(
+                            decode_times,
+                            decode_bs,
+                            color=color1,
+                            linewidth=1.5,
+                            label="Decode Batch Size",
+                        )
+                        ax2.tick_params(axis="y", labelcolor=color1)
+                        ax2.grid(True, alpha=0.3)
+
+                        # Right y-axis for average KV length
+                        ax2_twin = ax2.twinx()
+                        color2 = "tab:red"
+                        ax2_twin.set_ylabel(
+                            "Average KV Length", fontsize=12, color=color2
+                        )
+                        line2 = ax2_twin.plot(
+                            decode_times,
+                            avg_kv_lengths,
+                            color=color2,
+                            linewidth=1.5,
+                            label="Average KV Length",
+                        )
+                        ax2_twin.tick_params(axis="y", labelcolor=color2)
+
+                        # Combine legends
+                        lines = line1 + line2
+                        labels = [l.get_label() for l in lines]
+                        ax2.legend(lines, labels, loc="upper left")
+                        ax2.set_title(
+                            "Decode Batch Size and Average KV Length Over Time",
+                            fontsize=14,
+                        )
+
+                        plt.tight_layout()
+                        filename = (
+                            f"chunk_size_trend_decode_mean_{mean_decode_kv_len:.1f}.png"
+                        )
+                        plt.savefig(filename, dpi=150, bbox_inches="tight")
+                        plt.close(fig2)
+                        logger.info(f"Decode chunk size trend plot saved to {filename}")
+                except Exception as e:
+                    logger.warning(f"Failed to plot chunk size trends: {e}")
+
+            if self.is_entry_rank:
+                atexit.register(plot_on_exit)
+
         # Init chunked prefill
         self.chunked_prefill_size = server_args.chunked_prefill_size
         if self.chunked_prefill_size <= 0:  # -1 means disable
@@ -588,6 +754,7 @@ class Scheduler(
                 (GetLoadReqInput, self.get_load),
             ]
         )
+        self.forward_init_time = None
 
     def init_sockets(self, server_args: ServerArgs, port_args: PortArgs):
         context = zmq.Context(2)
@@ -1689,6 +1856,43 @@ class Scheduler(
             if not self.running_batch.is_empty():
                 self.running_batch = self.update_running_batch(self.running_batch)
                 ret = self.running_batch if not self.running_batch.is_empty() else None
+
+                # Log decode batch data if enabled
+                if (
+                    ret
+                    and self.plot_chunk_size
+                    and self.is_entry_rank
+                    and ret.forward_mode.is_decode()
+                ):
+                    decode_bs = len(ret.reqs)
+                    if ret.seq_lens is not None and len(ret.seq_lens) > 0:
+                        # Calculate average decode KV length
+                        avg_kv_length = float(ret.seq_lens.float().mean().item())
+                        current_time = time.perf_counter() - self.chunk_size_start_time
+
+                        # Append to CSV using pandas
+                        try:
+                            import pandas as pd
+
+                            new_row = pd.DataFrame(
+                                [
+                                    {
+                                        "time": current_time,
+                                        "prefill_tokens": None,
+                                        "new_token_ratio": None,
+                                        "decode_bs": decode_bs,
+                                        "avg_kv_length": avg_kv_length,
+                                    }
+                                ]
+                            )
+                            new_row.to_csv(
+                                self.chunk_size_csv_path,
+                                mode="a",
+                                header=False,
+                                index=False,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to write chunk size data: {e}")
             else:
                 ret = None
 
@@ -1823,6 +2027,38 @@ class Scheduler(
         can_run_list: List[Req] = adder.can_run_list
         if len(can_run_list) == 0:
             return None
+
+        # Track batch formation time
+        batch_formation_start_time = time.perf_counter()
+        if self.forward_init_time is None:
+            self.forward_init_time = batch_formation_start_time
+
+        # Log chunk size data if enabled
+        if self.plot_chunk_size and self.is_entry_rank:
+            prefill_tokens = adder.log_input_tokens
+            new_token_ratio = self.new_token_ratio
+            current_time = batch_formation_start_time - self.chunk_size_start_time
+
+            # Append to CSV using pandas
+            try:
+                import pandas as pd
+
+                new_row = pd.DataFrame(
+                    [
+                        {
+                            "time": current_time,
+                            "prefill_tokens": prefill_tokens,
+                            "new_token_ratio": new_token_ratio,
+                            "decode_bs": None,
+                            "avg_kv_length": None,
+                        }
+                    ]
+                )
+                new_row.to_csv(
+                    self.chunk_size_csv_path, mode="a", header=False, index=False
+                )
+            except Exception as e:
+                logger.warning(f"Failed to write chunk size data: {e}")
 
         if self.enable_metrics:
             # only record queue time when enable_metrics is True to avoid overhead

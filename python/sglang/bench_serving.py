@@ -745,6 +745,8 @@ def get_dataset(args, tokenizer, model_id=None):
             context_len=args.sharegpt_context_len,
             prompt_suffix=args.prompt_suffix,
             apply_chat_template=args.apply_chat_template,
+            num_input_turns=args.num_input_turns,
+            output_len_multiplier=args.output_len_multiplier,
         )
     elif args.dataset_name.startswith("random"):
         input_requests = sample_random_requests(
@@ -1130,6 +1132,8 @@ def sample_sharegpt_requests(
     context_len: Optional[int] = None,
     prompt_suffix: Optional[str] = "",
     apply_chat_template=False,
+    num_input_turns: int = 4,
+    output_len_multiplier: int = 4,
 ) -> List[DatasetRow]:
     if fixed_output_len is not None and fixed_output_len < 4:
         raise ValueError("output_len too small")
@@ -1148,23 +1152,33 @@ def sample_sharegpt_requests(
         for data in dataset
         if len(data.get("conversations", data.get("conversation", []))) >= 2
     ]
-    # Only keep the first two turns of each conversation.
-    dataset = [
-        (
-            data.get("conversations", data.get("conversation", []))[0]["value"],
-            data.get("conversations", data.get("conversation", []))[1]["value"],
-        )
-        for data in dataset
-    ]
 
+    # Extract input and output from conversations
+    processed_dataset = []
+    max_turns = 0
+    for data in dataset:
+        conversations = data.get("conversations", data.get("conversation", []))
+        if not conversations:
+            continue
+
+        # Use up to num_input_turns - 1 turns for input, or all but the last if fewer turns
+        num_input = min(num_input_turns - 1, len(conversations) - 1)
+        input_text = "\n".join([conversations[i]["value"] for i in range(num_input)])
+        output_text = conversations[num_input]["value"]
+        processed_dataset.append((input_text, output_text))
+        max_turns = max(max_turns, len(conversations))
+
+    dataset = processed_dataset
     # Shuffle the dataset.
     random.shuffle(dataset)
 
     # Filter out sequences that are too long or too short
     filtered_dataset: List[DatasetRow] = []
+    input_tokens = []
+    output_tokens = []
     for i in range(len(dataset)):
-        # if len(filtered_dataset) == num_requests:
-        #     break
+        if len(filtered_dataset) == num_requests:
+            break
 
         # Tokenize the prompts and completions.
         prompt = dataset[i][0]
@@ -1188,9 +1202,12 @@ def sample_sharegpt_requests(
         completion_token_ids = tokenizer.encode(completion)
         prompt_len = len(prompt_token_ids)
         output_len = (
-            len(completion_token_ids) if fixed_output_len is None else fixed_output_len
+            len(completion_token_ids) * output_len_multiplier
+            if fixed_output_len is None
+            else fixed_output_len
         )
-
+        input_tokens.append(prompt_len)
+        output_tokens.append(output_len)
         if prompt_len < 2 or output_len < 2:
             # Prune too short sequences.
             continue
@@ -1208,7 +1225,14 @@ def sample_sharegpt_requests(
         )
 
     print(f"#Input tokens: {np.sum([x.prompt_len for x in filtered_dataset])}")
+    print(f"#Max Input tokens: {np.max(input_tokens)}")
+    print(f"#Mean Input tokens: {np.mean(input_tokens)}")
+    print(f"#Std Input tokens: {np.std(input_tokens)}")
     print(f"#Output tokens: {np.sum([x.output_len for x in filtered_dataset])}")
+    print(f"#Max Output tokens: {np.max(output_tokens)}")
+    print(f"#Mean Output tokens: {np.mean(output_tokens)}")
+    print(f"#Std Output tokens: {np.std(output_tokens)}")
+    print(f"#Max turns: {max_turns}")
     return filtered_dataset
 
 
@@ -2888,6 +2912,18 @@ if __name__ == "__main__":
         type=int,
         default=1,
         help="Number of repeats for the benchmark. Will take the average result and flush cache between runs, and save the result to CSV.",
+    )
+    parser.add_argument(
+        "--num-input-turns",
+        type=int,
+        default=4,
+        help="Number of input turns for the benchmark. Used for ShareGPT dataset.",
+    )
+    parser.add_argument(
+        "--output-len-multiplier",
+        type=int,
+        default=4,
+        help="Output length multiplier for the benchmark. Used for ShareGPT dataset.",
     )
     args = parser.parse_args()
     run_benchmark(args)

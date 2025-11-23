@@ -456,6 +456,7 @@ class Scheduler(
 
         # Init chunk size plotting
         self.plot_chunk_size = server_args.plot_chunk_size
+        self._plotting_done = False
         if self.plot_chunk_size:
             import atexit
 
@@ -481,6 +482,10 @@ class Scheduler(
                     pass  # File might already exist
 
             def plot_on_exit():
+                if self._plotting_done:
+                    return
+                self._plotting_done = True
+                logger.info("Starting to generate chunk size trend plots...")
                 try:
                     import matplotlib.pyplot as plt
                     import pandas as pd
@@ -618,7 +623,28 @@ class Scheduler(
                     logger.warning(f"Failed to plot chunk size trends: {e}")
 
             if self.is_entry_rank:
+                # Store the plotting function as an instance method so it can be called from anywhere
+                self._plot_chunk_size_data = plot_on_exit
                 atexit.register(plot_on_exit)
+
+                # Also register signal handlers to ensure plotting on SIGTERM/SIGINT
+                # This is needed because atexit may not be called in multiprocessing scenarios
+                def signal_handler(signum, frame):
+                    logger.info(
+                        f"Signal {signum} received, generating plots before exit..."
+                    )
+                    plot_on_exit()
+                    # Re-raise the signal to allow normal shutdown
+                    signal.signal(signum, signal.SIG_DFL)
+                    os.kill(os.getpid(), signum)
+
+                # Register signal handlers (these will be called before process termination)
+                signal.signal(signal.SIGTERM, signal_handler)
+                signal.signal(signal.SIGINT, signal_handler)
+
+                # Store original handlers if they exist
+                original_sigterm = signal.signal(signal.SIGTERM, signal_handler)
+                original_sigint = signal.signal(signal.SIGINT, signal_handler)
 
         # Init chunked prefill
         self.chunked_prefill_size = server_args.chunked_prefill_size
@@ -3133,7 +3159,40 @@ def run_scheduler_process(
             else:
                 scheduler.event_loop_normal_disagg_decode()
 
+    except KeyboardInterrupt:
+        # Handle Ctrl+C gracefully and ensure plotting happens
+        if (
+            scheduler.plot_chunk_size
+            and scheduler.is_entry_rank
+            and hasattr(scheduler, "_plot_chunk_size_data")
+        ):
+            logger.info("KeyboardInterrupt received, generating plots...")
+            scheduler._plot_chunk_size_data()
+        raise
     except Exception:
         traceback = get_exception_traceback()
         logger.error(f"Scheduler hit an exception: {traceback}")
+        # Try to plot before exiting
+        if (
+            scheduler.plot_chunk_size
+            and scheduler.is_entry_rank
+            and hasattr(scheduler, "_plot_chunk_size_data")
+        ):
+            try:
+                scheduler._plot_chunk_size_data()
+            except Exception as e:
+                logger.warning(f"Failed to plot on exception: {e}")
         parent_process.send_signal(signal.SIGQUIT)
+    finally:
+        # Ensure plotting happens on exit
+        if (
+            scheduler.plot_chunk_size
+            and scheduler.is_entry_rank
+            and hasattr(scheduler, "_plot_chunk_size_data")
+        ):
+            if not scheduler._plotting_done:
+                logger.info("Scheduler exiting, generating plots in finally block...")
+                try:
+                    scheduler._plot_chunk_size_data()
+                except Exception as e:
+                    logger.warning(f"Failed to plot in finally block: {e}")

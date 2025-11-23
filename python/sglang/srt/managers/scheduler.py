@@ -80,6 +80,8 @@ from sglang.srt.managers.io_struct import (
     FlushCacheReqInput,
     FlushCacheReqOutput,
     FreezeGCReq,
+    GeneratePlotsReqInput,
+    GeneratePlotsReqOutput,
     GetInternalStateReq,
     GetInternalStateReqOutput,
     GetLoadReqInput,
@@ -744,6 +746,7 @@ class Scheduler(
                 (BatchTokenizedGenerateReqInput, self.handle_batch_generate_request),
                 (BatchTokenizedEmbeddingReqInput, self.handle_batch_embedding_request),
                 (FlushCacheReqInput, self.flush_cache_wrapped),
+                (GeneratePlotsReqInput, self.generate_plots_wrapped),
                 (ClearHiCacheReqInput, self.clear_hicache_storage_wrapped),
                 (AbortReq, self.abort_request),
                 (OpenSessionReqInput, self.open_session),
@@ -1891,9 +1894,9 @@ class Scheduler(
                     and ret.forward_mode.is_decode()
                 ):
                     decode_bs = len(ret.reqs)
-                    if ret.seq_lens is not None and len(ret.seq_lens) > 0:
+                    if ret.seq_lens_cpu is not None and len(ret.seq_lens_cpu) > 0:
                         # Calculate average decode KV length
-                        avg_kv_length = float(ret.seq_lens.float().mean().item())
+                        avg_kv_length = float(ret.seq_lens_cpu.float().mean())
                         current_time = time.perf_counter() - self.chunk_size_start_time
 
                         # Append to CSV using pandas
@@ -2571,6 +2574,26 @@ class Scheduler(
     def flush_cache_wrapped(self, recv_req: FlushCacheReqInput):
         success = self.flush_cache()
         return FlushCacheReqOutput(success=success)
+
+    def generate_plots_wrapped(self, recv_req: GeneratePlotsReqInput):
+        """Generate chunk size trend plots."""
+        try:
+            if self.plot_chunk_size and hasattr(self, "_plot_chunk_size_data"):
+                if not self._plotting_done:
+                    logger.info("Generating chunk size trend plots via RPC...")
+                    self._plot_chunk_size_data()
+                    return GeneratePlotsReqOutput(success=True)
+                else:
+                    logger.warning("Plots have already been generated.")
+                    return GeneratePlotsReqOutput(success=False)
+            else:
+                logger.warning(
+                    "Plotting is not enabled or plotting function not available."
+                )
+                return GeneratePlotsReqOutput(success=False)
+        except Exception as e:
+            logger.error(f"Failed to generate plots: {e}")
+            return GeneratePlotsReqOutput(success=False)
 
     def clear_hicache_storage_wrapped(self, recv_req: ClearHiCacheReqInput):
         if self.enable_hierarchical_cache:

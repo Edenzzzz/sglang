@@ -268,7 +268,7 @@ def main():
     # Plot input length CDF with percentiles
     plot_cdf_with_percentiles(input_lengths, "Input Length", "tab:blue", ax)
     ax.set_title(
-        f"ShareGPT Input Length CDF (up to {num_input_turns} turns)", fontsize=14
+        f"ShareGPT Input Length CDF (up to {args.num_input_turns} turns)", fontsize=14
     )
 
     plt.tight_layout()

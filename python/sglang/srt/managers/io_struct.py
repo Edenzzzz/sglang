@@ -1009,6 +1009,16 @@ class FlushCacheReqOutput(BaseReq):
 
 
 @dataclass
+class GeneratePlotsReqInput(BaseReq):
+    pass
+
+
+@dataclass
+class GeneratePlotsReqOutput(BaseReq):
+    success: bool
+
+
+@dataclass
 class UpdateWeightFromDiskReqInput(BaseReq):
     # The model path with the new weights
     model_path: str

@@ -624,6 +624,16 @@ async def flush_cache():
     )
 
 
+@app.api_route("/generate_plots", methods=["GET", "POST"])
+async def generate_plots():
+    """Generate chunk size trend plots."""
+    ret = await _global_state.tokenizer_manager.generate_plots()
+    return Response(
+        content="Plots generated.\nPlease check backend logs for more details.\n",
+        status_code=200 if ret.success else HTTPStatus.BAD_REQUEST,
+    )
+
+
 @app.api_route("/clear_hicache_storage_backend", methods=["GET", "POST"])
 async def clear_hicache_storage_backend():
     """Clear the hierarchical cache storage backend."""

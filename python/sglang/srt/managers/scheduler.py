@@ -148,7 +148,11 @@ from sglang.srt.managers.scheduler_update_weights_mixin import (
     SchedulerUpdateWeightsMixin,
 )
 from sglang.srt.managers.session_controller import Session
-from sglang.srt.managers.utils import GenerationBatchResult, validate_input_length
+from sglang.srt.managers.utils import (
+    GenerationBatchResult,
+    plot_chunk_size_trends,
+    validate_input_length,
+)
 from sglang.srt.mem_cache.chunk_cache import ChunkCache, SWAChunkCache
 from sglang.srt.mem_cache.hiradix_cache import HiRadixCache
 from sglang.srt.mem_cache.mamba_radix_cache import MambaRadixCache
@@ -193,7 +197,7 @@ from sglang.srt.utils.hf_transformers_utils import (
     get_tokenizer_from_processor,
 )
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
-from sglang.utils import TypeBasedDispatcher, get_exception_traceback
+from sglang.utils import TypeBasedDispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -483,151 +487,8 @@ class Scheduler(
                 except Exception:
                     pass  # File might already exist
 
-            def plot_on_exit():
-                if self._plotting_done:
-                    return
-                self._plotting_done = True
-                logger.info("Starting to generate chunk size trend plots...")
-                try:
-                    import matplotlib.pyplot as plt
-                    import pandas as pd
-
-                    # Load data from CSV file
-                    try:
-                        df = pd.read_csv(self.chunk_size_csv_path)
-                    except FileNotFoundError:
-                        return
-                    except pd.errors.EmptyDataError:
-                        return
-
-                    if df.empty:
-                        return
-
-                    # Separate prefill and decode data
-                    prefill_data = df[df["prefill_tokens"].notna()].copy()
-                    decode_data = df[df["decode_bs"].notna()].copy()
-
-                    # Plot 1: Prefill tokens and new token ratio (dual y-axis)
-                    if not prefill_data.empty:
-                        prefill_times = prefill_data["time"].tolist()
-                        prefill_tokens = prefill_data["prefill_tokens"].tolist()
-                        new_token_ratios = prefill_data["new_token_ratio"].tolist()
-
-                        # Calculate mean prefill length
-                        mean_prefill_len = prefill_data["prefill_tokens"].mean()
-
-                        fig1, ax1 = plt.subplots(figsize=(12, 6))
-
-                        # Left y-axis for prefill tokens
-                        color1 = "tab:blue"
-                        ax1.set_xlabel("Time (seconds)", fontsize=12)
-                        ax1.set_ylabel("Prefill Tokens", fontsize=12, color=color1)
-                        line1 = ax1.plot(
-                            prefill_times,
-                            prefill_tokens,
-                            color=color1,
-                            linewidth=1.5,
-                            label="Prefill Tokens",
-                        )
-                        ax1.tick_params(axis="y", labelcolor=color1)
-                        ax1.grid(True, alpha=0.3)
-
-                        # Right y-axis for new token ratio
-                        ax1_twin = ax1.twinx()
-                        color2 = "tab:red"
-                        ax1_twin.set_ylabel(
-                            "New Token Ratio", fontsize=12, color=color2
-                        )
-                        line2 = ax1_twin.plot(
-                            prefill_times,
-                            new_token_ratios,
-                            color=color2,
-                            linewidth=1.5,
-                            label="New Token Ratio",
-                        )
-                        ax1_twin.tick_params(axis="y", labelcolor=color2)
-
-                        # Combine legends
-                        lines = line1 + line2
-                        labels = [l.get_label() for l in lines]
-                        ax1.legend(lines, labels, loc="upper left")
-                        ax1.set_title(
-                            "Prefill Tokens and New Token Ratio Over Time", fontsize=14
-                        )
-
-                        plt.tight_layout()
-                        filename = (
-                            f"chunk_size_trend_prefill_mean_{mean_prefill_len:.1f}.png"
-                        )
-                        plt.savefig(filename, dpi=150, bbox_inches="tight")
-                        plt.close(fig1)
-                        logger.info(
-                            f"Prefill chunk size trend plot saved to {filename}"
-                        )
-
-                    # Plot 2: Decode batch size and average KV length (dual y-axis)
-                    if not decode_data.empty:
-                        decode_times = decode_data["time"].tolist()
-                        decode_bs = decode_data["decode_bs"].tolist()
-                        avg_kv_lengths = decode_data["avg_kv_length"].tolist()
-
-                        # Calculate mean decode KV length
-                        mean_decode_kv_len = decode_data["avg_kv_length"].mean()
-
-                        fig2, ax2 = plt.subplots(figsize=(12, 6))
-
-                        # Left y-axis for decode batch size
-                        color1 = "tab:blue"
-                        ax2.set_xlabel("Time (seconds)", fontsize=12)
-                        ax2.set_ylabel("Decode Batch Size", fontsize=12, color=color1)
-                        line1 = ax2.plot(
-                            decode_times,
-                            decode_bs,
-                            color=color1,
-                            linewidth=1.5,
-                            label="Decode Batch Size",
-                        )
-                        ax2.tick_params(axis="y", labelcolor=color1)
-                        ax2.grid(True, alpha=0.3)
-
-                        # Right y-axis for average KV length
-                        ax2_twin = ax2.twinx()
-                        color2 = "tab:red"
-                        ax2_twin.set_ylabel(
-                            "Average KV Length", fontsize=12, color=color2
-                        )
-                        line2 = ax2_twin.plot(
-                            decode_times,
-                            avg_kv_lengths,
-                            color=color2,
-                            linewidth=1.5,
-                            label="Average KV Length",
-                        )
-                        ax2_twin.tick_params(axis="y", labelcolor=color2)
-
-                        # Combine legends
-                        lines = line1 + line2
-                        labels = [l.get_label() for l in lines]
-                        ax2.legend(lines, labels, loc="upper left")
-                        ax2.set_title(
-                            "Decode Batch Size and Average KV Length Over Time",
-                            fontsize=14,
-                        )
-
-                        plt.tight_layout()
-                        filename = (
-                            f"chunk_size_trend_decode_mean_{mean_decode_kv_len:.1f}.png"
-                        )
-                        plt.savefig(filename, dpi=150, bbox_inches="tight")
-                        plt.close(fig2)
-                        logger.info(f"Decode chunk size trend plot saved to {filename}")
-                except Exception as e:
-                    logger.warning(f"Failed to plot chunk size trends: {e}")
-
             if self.is_entry_rank:
-                # Store the plotting function as an instance method so it can be called from anywhere
-                self._plot_chunk_size_data = plot_on_exit
-                atexit.register(plot_on_exit)
+                atexit.register(self._plot_chunk_size_data)
 
                 # Also register signal handlers to ensure plotting on SIGTERM/SIGINT
                 # This is needed because atexit may not be called in multiprocessing scenarios
@@ -635,7 +496,7 @@ class Scheduler(
                     logger.info(
                         f"Signal {signum} received, generating plots before exit..."
                     )
-                    plot_on_exit()
+                    self._plot_chunk_size_data()
                     # Re-raise the signal to allow normal shutdown
                     signal.signal(signum, signal.SIG_DFL)
                     os.kill(os.getpid(), signum)
@@ -2575,6 +2436,19 @@ class Scheduler(
         success = self.flush_cache()
         return FlushCacheReqOutput(success=success)
 
+    def _plot_chunk_size_data(self):
+        """Generate chunk size trend plots from CSV data."""
+        if self._plotting_done:
+            return
+        self._plotting_done = True
+        logger.info("Starting to generate chunk size trend plots...")
+        try:
+            plot_chunk_size_trends(
+                self.chunk_size_csv_path, output_dir=".", use_logger=True
+            )
+        except Exception as e:
+            logger.warning(f"Failed to plot chunk size trends: {e}")
+
     def generate_plots_wrapped(self, recv_req: GeneratePlotsReqInput):
         """Generate chunk size trend plots."""
         try:
@@ -3139,83 +3013,44 @@ def run_scheduler_process(
         trace_set_thread_info(thread_label, tp_rank, dp_rank)
 
     # Create a scheduler and run the event loop
-    try:
-        scheduler = Scheduler(
-            server_args,
-            port_args,
-            gpu_id,
-            tp_rank,
-            moe_ep_rank,
-            pp_rank,
-            dp_rank,
-        )
-        pipe_writer.send(
-            {
-                "status": "ready",
-                "max_total_num_tokens": scheduler.max_total_num_tokens,
-                "max_req_input_len": scheduler.max_req_input_len,
-            }
-        )
+    scheduler = Scheduler(
+        server_args,
+        port_args,
+        gpu_id,
+        tp_rank,
+        moe_ep_rank,
+        pp_rank,
+        dp_rank,
+    )
+    pipe_writer.send(
+        {
+            "status": "ready",
+            "max_total_num_tokens": scheduler.max_total_num_tokens,
+            "max_req_input_len": scheduler.max_req_input_len,
+        }
+    )
 
-        disaggregation_mode: DisaggregationMode = scheduler.disaggregation_mode
-        if disaggregation_mode == DisaggregationMode.NULL:
-            if scheduler.enable_pdmux:
-                scheduler.event_loop_pdmux()
-            elif server_args.pp_size > 1:
-                scheduler.event_loop_pp()
-            elif scheduler.enable_overlap:
-                scheduler.event_loop_overlap()
+    disaggregation_mode: DisaggregationMode = scheduler.disaggregation_mode
+    if disaggregation_mode == DisaggregationMode.NULL:
+        if scheduler.enable_pdmux:
+            scheduler.event_loop_pdmux()
+        elif server_args.pp_size > 1:
+            scheduler.event_loop_pp()
+        elif scheduler.enable_overlap:
+            scheduler.event_loop_overlap()
+        else:
+            scheduler.event_loop_normal()
+    elif disaggregation_mode == DisaggregationMode.PREFILL:
+        if scheduler.enable_overlap:
+            scheduler.event_loop_overlap_disagg_prefill()
+        else:
+            if server_args.pp_size > 1:
+                scheduler.event_loop_pp_disagg_prefill()
             else:
-                scheduler.event_loop_normal()
-        elif disaggregation_mode == DisaggregationMode.PREFILL:
-            if scheduler.enable_overlap:
-                scheduler.event_loop_overlap_disagg_prefill()
-            else:
-                if server_args.pp_size > 1:
-                    scheduler.event_loop_pp_disagg_prefill()
-                else:
-                    scheduler.event_loop_normal_disagg_prefill()
+                scheduler.event_loop_normal_disagg_prefill()
 
-        elif disaggregation_mode == DisaggregationMode.DECODE:
-            if scheduler.enable_overlap:
-                scheduler.event_loop_overlap_disagg_decode()
-            else:
-                scheduler.event_loop_normal_disagg_decode()
-
-    except KeyboardInterrupt:
-        # Handle Ctrl+C gracefully and ensure plotting happens
-        if (
-            scheduler.plot_chunk_size
-            and scheduler.is_entry_rank
-            and hasattr(scheduler, "_plot_chunk_size_data")
-        ):
-            logger.info("KeyboardInterrupt received, generating plots...")
-            scheduler._plot_chunk_size_data()
-        raise
-    except Exception:
-        traceback = get_exception_traceback()
-        logger.error(f"Scheduler hit an exception: {traceback}")
-        # Try to plot before exiting
-        if (
-            scheduler.plot_chunk_size
-            and scheduler.is_entry_rank
-            and hasattr(scheduler, "_plot_chunk_size_data")
-        ):
-            try:
-                scheduler._plot_chunk_size_data()
-            except Exception as e:
-                logger.warning(f"Failed to plot on exception: {e}")
-        parent_process.send_signal(signal.SIGQUIT)
-    finally:
-        # Ensure plotting happens on exit
-        if (
-            scheduler.plot_chunk_size
-            and scheduler.is_entry_rank
-            and hasattr(scheduler, "_plot_chunk_size_data")
-        ):
-            if not scheduler._plotting_done:
-                logger.info("Scheduler exiting, generating plots in finally block...")
-                try:
-                    scheduler._plot_chunk_size_data()
-                except Exception as e:
-                    logger.warning(f"Failed to plot in finally block: {e}")
+    elif disaggregation_mode == DisaggregationMode.DECODE:
+        if scheduler.enable_overlap:
+            scheduler.event_loop_overlap_disagg_decode()
+        else:
+            scheduler.event_loop_normal_disagg_decode()

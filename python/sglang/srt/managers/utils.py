@@ -229,12 +229,17 @@ def plot_chunk_size_trends(
     prefill_data = df[df["prefill_tokens"].notna()].copy()
     decode_data = df[df["decode_bs"].notna()].copy()
 
+    # Get retracted requests data (from decode data, as retractions happen during decode)
+    retracted_data = df[df["num_retracted_reqs"].notna()].copy()
+
     # Determine overall time range (min and max across all data)
     all_times = []
     if not prefill_data.empty:
         all_times.extend(prefill_data["time"].tolist())
     if not decode_data.empty:
         all_times.extend(decode_data["time"].tolist())
+    if not retracted_data.empty:
+        all_times.extend(retracted_data["time"].tolist())
 
     if not all_times:
         if use_logger:
@@ -387,5 +392,39 @@ def plot_chunk_size_trends(
         plt.savefig(filename, dpi=150, bbox_inches="tight")
         plt.close(fig2)
         log_func(f"Decode chunk size trend plot saved to {filename}")
+
+    # Plot 3: Number of retracted requests
+    if not retracted_data.empty:
+        retracted_times = retracted_data["time"].tolist()
+        num_retracted = retracted_data["num_retracted_reqs"].tolist()
+
+        fig3, ax3 = plt.subplots(figsize=(12, 6))
+        fig3.patch.set_facecolor("white")
+
+        color = "yellow"
+        ax3.set_xlabel("Time (seconds)", fontsize=12)
+        ax3.set_ylabel("Number of Retracted Requests", fontsize=12, color=color)
+        ax3.plot(
+            retracted_times,
+            num_retracted,
+            color=color,
+            linewidth=1.5,
+            label="Retracted Requests",
+        )
+        ax3.tick_params(axis="y", labelcolor=color)
+        ax3.set_xlim(time_min, time_max)
+        ax3.set_xticks(x_ticks)
+        ax3.grid(True, alpha=0.3)
+        ax3.legend(loc="upper left")
+        ax3.set_title("Number of Retracted Requests Over Time", fontsize=14)
+
+        plt.tight_layout()
+        filename = os.path.join(
+            output_dir,
+            "chunk_size_trend_retracted_requests.png",
+        )
+        plt.savefig(filename, dpi=150, bbox_inches="tight")
+        plt.close(fig3)
+        log_func(f"Retracted requests trend plot saved to {filename}")
 
     return True

@@ -469,7 +469,6 @@ class Scheduler(
             import pandas as pd
 
             self.chunk_size_csv_path = "chunk_size_trend.csv"
-            self.chunk_size_start_time = time.perf_counter()
             self.is_entry_rank_for_plotting = self.is_entry_rank
 
             # Initialize CSV file with header if it doesn't exist
@@ -1758,7 +1757,7 @@ class Scheduler(
                     if ret.seq_lens_cpu is not None and len(ret.seq_lens_cpu) > 0:
                         # Calculate average decode KV length
                         avg_kv_length = float(ret.seq_lens_cpu.float().mean())
-                        current_time = time.perf_counter() - self.chunk_size_start_time
+                        current_time = time.perf_counter() - self.forward_init_time
 
                         # Append to CSV using pandas
                         try:
@@ -1772,6 +1771,7 @@ class Scheduler(
                                         "new_token_ratio": None,
                                         "decode_bs": decode_bs,
                                         "avg_kv_length": avg_kv_length,
+                                        "num_retracted_reqs": self.num_retracted_reqs,
                                     }
                                 ]
                             )
@@ -1904,6 +1904,10 @@ class Scheduler(
 
             if res != AddReqResult.CONTINUE:
                 if res == AddReqResult.NO_TOKEN:
+                    current_time = time.perf_counter() - self.forward_init_time
+                    print(
+                        f"Time: {current_time}, no token with real chunk size {adder.log_input_tokens}, rem_total_token_offset {adder.rem_total_token_offset}, running bs {running_bs}"
+                    )
                     if self.enable_hierarchical_cache:
                         # Set batch_is_full after making sure there are requests that can be served
                         self.running_batch.batch_is_full = len(
@@ -1927,7 +1931,7 @@ class Scheduler(
         if self.plot_chunk_size and self.is_entry_rank:
             prefill_tokens = adder.log_input_tokens
             new_token_ratio = self.new_token_ratio
-            current_time = batch_formation_start_time - self.chunk_size_start_time
+            current_time = batch_formation_start_time - self.forward_init_time
 
             # Append to CSV using pandas
             try:
@@ -1941,6 +1945,7 @@ class Scheduler(
                             "new_token_ratio": new_token_ratio,
                             "decode_bs": None,
                             "avg_kv_length": None,
+                            "num_retracted_reqs": None,
                         }
                     ]
                 )
@@ -2057,6 +2062,7 @@ class Scheduler(
             for req in retracted_reqs:
                 self._add_request_to_queue(req, is_retracted=True)
         else:
+            self.num_retracted_reqs = 0  # Reset if no retractions
             self.new_token_ratio = max(
                 self.new_token_ratio - self.new_token_ratio_decay,
                 self.min_new_token_ratio,
@@ -3012,45 +3018,45 @@ def run_scheduler_process(
             thread_label = "Decode Scheduler"
         trace_set_thread_info(thread_label, tp_rank, dp_rank)
 
-    # Create a scheduler and run the event loop
-    scheduler = Scheduler(
-        server_args,
-        port_args,
-        gpu_id,
-        tp_rank,
-        moe_ep_rank,
-        pp_rank,
-        dp_rank,
-    )
-    pipe_writer.send(
-        {
-            "status": "ready",
-            "max_total_num_tokens": scheduler.max_total_num_tokens,
-            "max_req_input_len": scheduler.max_req_input_len,
-        }
-    )
+        # Create a scheduler and run the event loop
+        scheduler = Scheduler(
+            server_args,
+            port_args,
+            gpu_id,
+            tp_rank,
+            moe_ep_rank,
+            pp_rank,
+            dp_rank,
+        )
+        pipe_writer.send(
+            {
+                "status": "ready",
+                "max_total_num_tokens": scheduler.max_total_num_tokens,
+                "max_req_input_len": scheduler.max_req_input_len,
+            }
+        )
 
-    disaggregation_mode: DisaggregationMode = scheduler.disaggregation_mode
-    if disaggregation_mode == DisaggregationMode.NULL:
-        if scheduler.enable_pdmux:
-            scheduler.event_loop_pdmux()
-        elif server_args.pp_size > 1:
-            scheduler.event_loop_pp()
-        elif scheduler.enable_overlap:
-            scheduler.event_loop_overlap()
-        else:
-            scheduler.event_loop_normal()
-    elif disaggregation_mode == DisaggregationMode.PREFILL:
-        if scheduler.enable_overlap:
-            scheduler.event_loop_overlap_disagg_prefill()
-        else:
-            if server_args.pp_size > 1:
-                scheduler.event_loop_pp_disagg_prefill()
+        disaggregation_mode: DisaggregationMode = scheduler.disaggregation_mode
+        if disaggregation_mode == DisaggregationMode.NULL:
+            if scheduler.enable_pdmux:
+                scheduler.event_loop_pdmux()
+            elif server_args.pp_size > 1:
+                scheduler.event_loop_pp()
+            elif scheduler.enable_overlap:
+                scheduler.event_loop_overlap()
             else:
-                scheduler.event_loop_normal_disagg_prefill()
+                scheduler.event_loop_normal()
+        elif disaggregation_mode == DisaggregationMode.PREFILL:
+            if scheduler.enable_overlap:
+                scheduler.event_loop_overlap_disagg_prefill()
+            else:
+                if server_args.pp_size > 1:
+                    scheduler.event_loop_pp_disagg_prefill()
+                else:
+                    scheduler.event_loop_normal_disagg_prefill()
 
-    elif disaggregation_mode == DisaggregationMode.DECODE:
-        if scheduler.enable_overlap:
-            scheduler.event_loop_overlap_disagg_decode()
-        else:
-            scheduler.event_loop_normal_disagg_decode()
+        elif disaggregation_mode == DisaggregationMode.DECODE:
+            if scheduler.enable_overlap:
+                scheduler.event_loop_overlap_disagg_decode()
+            else:
+                scheduler.event_loop_normal_disagg_decode()

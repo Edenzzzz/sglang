@@ -481,6 +481,7 @@ class Scheduler(
                             "new_token_ratio",
                             "decode_bs",
                             "avg_kv_length",
+                            "num_retracted_reqs",
                         ]
                     ).to_csv(self.chunk_size_csv_path, index=False)
                 except Exception:

@@ -3018,45 +3018,45 @@ def run_scheduler_process(
             thread_label = "Decode Scheduler"
         trace_set_thread_info(thread_label, tp_rank, dp_rank)
 
-        # Create a scheduler and run the event loop
-        scheduler = Scheduler(
-            server_args,
-            port_args,
-            gpu_id,
-            tp_rank,
-            moe_ep_rank,
-            pp_rank,
-            dp_rank,
-        )
-        pipe_writer.send(
-            {
-                "status": "ready",
-                "max_total_num_tokens": scheduler.max_total_num_tokens,
-                "max_req_input_len": scheduler.max_req_input_len,
-            }
-        )
+    # Create a scheduler and run the event loop
+    scheduler = Scheduler(
+        server_args,
+        port_args,
+        gpu_id,
+        tp_rank,
+        moe_ep_rank,
+        pp_rank,
+        dp_rank,
+    )
+    pipe_writer.send(
+        {
+            "status": "ready",
+            "max_total_num_tokens": scheduler.max_total_num_tokens,
+            "max_req_input_len": scheduler.max_req_input_len,
+        }
+    )
 
-        disaggregation_mode: DisaggregationMode = scheduler.disaggregation_mode
-        if disaggregation_mode == DisaggregationMode.NULL:
-            if scheduler.enable_pdmux:
-                scheduler.event_loop_pdmux()
-            elif server_args.pp_size > 1:
-                scheduler.event_loop_pp()
-            elif scheduler.enable_overlap:
-                scheduler.event_loop_overlap()
+    disaggregation_mode: DisaggregationMode = scheduler.disaggregation_mode
+    if disaggregation_mode == DisaggregationMode.NULL:
+        if scheduler.enable_pdmux:
+            scheduler.event_loop_pdmux()
+        elif server_args.pp_size > 1:
+            scheduler.event_loop_pp()
+        elif scheduler.enable_overlap:
+            scheduler.event_loop_overlap()
+        else:
+            scheduler.event_loop_normal()
+    elif disaggregation_mode == DisaggregationMode.PREFILL:
+        if scheduler.enable_overlap:
+            scheduler.event_loop_overlap_disagg_prefill()
+        else:
+            if server_args.pp_size > 1:
+                scheduler.event_loop_pp_disagg_prefill()
             else:
-                scheduler.event_loop_normal()
-        elif disaggregation_mode == DisaggregationMode.PREFILL:
-            if scheduler.enable_overlap:
-                scheduler.event_loop_overlap_disagg_prefill()
-            else:
-                if server_args.pp_size > 1:
-                    scheduler.event_loop_pp_disagg_prefill()
-                else:
-                    scheduler.event_loop_normal_disagg_prefill()
+                scheduler.event_loop_normal_disagg_prefill()
 
-        elif disaggregation_mode == DisaggregationMode.DECODE:
-            if scheduler.enable_overlap:
-                scheduler.event_loop_overlap_disagg_decode()
-            else:
-                scheduler.event_loop_normal_disagg_decode()
+    elif disaggregation_mode == DisaggregationMode.DECODE:
+        if scheduler.enable_overlap:
+            scheduler.event_loop_overlap_disagg_decode()
+        else:
+            scheduler.event_loop_normal_disagg_decode()

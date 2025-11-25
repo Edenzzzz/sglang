@@ -1809,6 +1809,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             extend_input_logprob_token_ids=self.extend_input_logprob_token_ids,
             is_prefill_only=self.is_prefill_only,
             dimensions=self.dimensions,
+            decoding_reqs=self.decoding_reqs,
         )
 
     def copy(self):
@@ -1922,3 +1923,5 @@ class ModelWorkerBatch:
 
     # Whether this batch is prefill-only (no token generation needed)
     is_prefill_only: bool = False
+
+    decoding_reqs: List[Req] = None

@@ -820,14 +820,19 @@ class FlashInferAttnBackend(AttentionBackend):
         q_p = q_reshaped[: self.qo_indptr[0][num_p + 1]]
         q_d = q_reshaped[self.qo_indptr[0][num_p + 1] :]
         kv_buffer = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
-        o = pod_attn_wrapper.run(
+        (o_p, o_d), (lse_p, lse_d) = pod_attn_wrapper.run(
             q_p,
             kv_buffer,
             q_d,
             kv_buffer,
             causal_p=not layer.is_cross_attention,
             return_lse=return_lse,
+            join_outputs=False
         )
+        o = torch.cat([o_p, o_d], dim=0)
+        if return_lse:
+            lse = torch.cat([lse_p, lse_d], dim=0)
+            return o, lse
         return o
 
     def forward_extend(
@@ -959,7 +964,6 @@ class FlashInferAttnBackend(AttentionBackend):
                         sm_scale=layer.scaling,
                         logits_soft_cap=logits_soft_cap,
                     )
-                torch.distributed.breakpoint()
                 o, _ = merge_state(o1, s1, o2, s2)
 
             if save_kv_cache:

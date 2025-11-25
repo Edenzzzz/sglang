@@ -1928,34 +1928,6 @@ class Scheduler(
         if self.forward_init_time is None:
             self.forward_init_time = batch_formation_start_time
 
-        # Log chunk size data if enabled
-        if self.plot_chunk_size and self.is_entry_rank:
-            prefill_tokens = adder.log_input_tokens
-            new_token_ratio = self.new_token_ratio
-            current_time = batch_formation_start_time - self.forward_init_time
-
-            # Append to CSV using pandas
-            try:
-                import pandas as pd
-
-                new_row = pd.DataFrame(
-                    [
-                        {
-                            "time": current_time,
-                            "prefill_tokens": prefill_tokens,
-                            "new_token_ratio": new_token_ratio,
-                            "decode_bs": None,
-                            "avg_kv_length": None,
-                            "num_retracted_reqs": None,
-                        }
-                    ]
-                )
-                new_row.to_csv(
-                    self.chunk_size_csv_path, mode="a", header=False, index=False
-                )
-            except Exception as e:
-                logger.warning(f"Failed to write chunk size data: {e}")
-
         if self.enable_metrics:
             # only record queue time when enable_metrics is True to avoid overhead
             for req in can_run_list:
@@ -2008,6 +1980,10 @@ class Scheduler(
         new_batch.prepare_for_extend()
 
         # Mixed-style chunked prefill
+        # Capture decode batch info before it's cleared (for logging)
+        decode_bs_for_log = None
+        avg_kv_length_for_log = None
+
         if (
             self.is_mixed_chunk
             and not self.running_batch.is_empty()
@@ -2020,12 +1996,49 @@ class Scheduler(
                 self.running_batch.prepare_for_decode()
                 new_batch.mix_with_running(self.running_batch)
                 new_batch.decoding_reqs = self.running_batch.reqs
+                # Capture decode batch info before clearing
+                decode_bs_for_log = len(self.running_batch.reqs)
+                if (
+                    self.running_batch.seq_lens_cpu is not None
+                    and len(self.running_batch.seq_lens_cpu) > 0
+                ):
+                    avg_kv_length_for_log = float(
+                        self.running_batch.seq_lens_cpu.float().mean()
+                    )
             self.running_batch = ScheduleBatch(
                 reqs=[],
                 batch_is_full=self.running_batch.batch_is_full,
             )
         else:
             new_batch.decoding_reqs = None
+
+        # Log chunk size data if enabled
+        if self.plot_chunk_size and self.is_entry_rank:
+            prefill_tokens = adder.log_input_tokens
+            new_token_ratio = self.new_token_ratio
+            current_time = batch_formation_start_time - self.forward_init_time
+
+            # Append to CSV using pandas
+            try:
+                import pandas as pd
+
+                new_row = pd.DataFrame(
+                    [
+                        {
+                            "time": current_time,
+                            "prefill_tokens": prefill_tokens,
+                            "new_token_ratio": new_token_ratio,
+                            "decode_bs": decode_bs_for_log,
+                            "avg_kv_length": avg_kv_length_for_log,
+                            "num_retracted_reqs": None,
+                        }
+                    ]
+                )
+                new_row.to_csv(
+                    self.chunk_size_csv_path, mode="a", header=False, index=False
+                )
+            except Exception as e:
+                logger.warning(f"Failed to write chunk size data: {e}")
 
         return new_batch
 

@@ -320,7 +320,7 @@ class ForwardBatch:
     # For matryoshka embeddings
     dimensions: Optional[list[int]] = None
 
-    decoding_reqs: List = None
+    decoding_bs: int = None
 
     @classmethod
     def init_new(
@@ -364,7 +364,7 @@ class ForwardBatch:
             token_type_ids=batch.token_type_ids,
             tbo_split_seq_index=batch.tbo_split_seq_index,
             dimensions=batch.dimensions,
-            decoding_reqs=batch.decoding_reqs,
+            decoding_bs=len(batch.decoding_reqs),
         )
         device = model_runner.device
 

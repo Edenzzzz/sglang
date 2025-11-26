@@ -497,7 +497,9 @@ class FlashInferAttnBackend(AttentionBackend):
 
             # Disable ragged wrapper and ensure prefix handling for multimodal and multi-item scoring
             if self.is_multimodal or self.multi_item_scoring_delimiter is not None:
-                if not isinstance(wrappers[0], BatchAttention):
+                if isinstance(wrappers[0], BatchAttention) or isinstance(
+                    wrappers[0], BatchPODWithPagedKVCacheWrapper
+                ):
                     raise NotImplementedError(
                         "Multi-item scoring is not supported for persistent attention yet"
                     )
@@ -545,7 +547,7 @@ class FlashInferAttnBackend(AttentionBackend):
                     raise NotImplementedError(
                         "Multi-item scoring is not supported for POD attention yet"
                     )
-                num_decode = len(forward_batch.decoding_reqs)
+                num_decode = forward_batch.decoding_bs
                 num_prefill = forward_batch.batch_size - num_decode
 
                 self.indices_updater_prefill.update_pod(
@@ -816,7 +818,7 @@ class FlashInferAttnBackend(AttentionBackend):
         if logits_soft_cap != 0:
             raise ValueError("logits_soft_cap is not supported for POD attention yet")
         q_reshaped = q.view(-1, layer.tp_q_head_num, layer.head_dim)
-        num_p = forward_batch.batch_size - len(forward_batch.decoding_reqs)
+        num_p = forward_batch.batch_size - forward_batch.decoding_bs
         q_p = q_reshaped[: self.qo_indptr[0][num_p + 1]]
         q_d = q_reshaped[self.qo_indptr[0][num_p + 1] :]
         kv_buffer = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
@@ -827,7 +829,7 @@ class FlashInferAttnBackend(AttentionBackend):
             kv_buffer,
             causal_p=not layer.is_cross_attention,
             return_lse=return_lse,
-            join_outputs=False
+            join_outputs=False,
         )
         o = torch.cat([o_p, o_d], dim=0)
         if return_lse:
@@ -1526,7 +1528,9 @@ class FlashInferIndicesUpdaterPrefill:
 
         if use_ragged:
             paged_kernel_lens = prefix_lens
-            paged_kernel_lens_sum = paged_kernel_lens.sum().item()
+            paged_kernel_lens_sum = paged_kernel_lens.sum().to(
+                device="cpu", non_blocking=True
+            )
         else:
             paged_kernel_lens = seq_lens
             paged_kernel_lens_sum = seq_lens_sum
@@ -1536,6 +1540,7 @@ class FlashInferIndicesUpdaterPrefill:
         kv_indptr[1 : bs + 1] = torch.cumsum(paged_kernel_lens, dim=0)
         kv_indptr = kv_indptr[: bs + 1]
         # Create full kv_indices using triton kernel
+        paged_kernel_lens_sum = int(paged_kernel_lens_sum)
         kv_indices = torch.empty(
             paged_kernel_lens_sum + 256,
             dtype=torch.int32,

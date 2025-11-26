@@ -96,6 +96,8 @@ from sglang.srt.managers.io_struct import (
     OpenSessionReqInput,
     OpenSessionReqOutput,
     ProfileReq,
+    ProfileSeqLensReqInput,
+    ProfileSeqLensReqOutput,
     ReleaseMemoryOccupationReqInput,
     ResumeMemoryOccupationReqInput,
     RpcReqInput,
@@ -635,6 +637,7 @@ class Scheduler(
                 (ResumeMemoryOccupationReqInput, self.resume_memory_occupation),
                 (SlowDownReqInput, self.slow_down),
                 (ProfileReq, self.profile),
+                (ProfileSeqLensReqInput, self.profile_seq_lens),
                 (FreezeGCReq, self.handle_freeze_gc),
                 (GetInternalStateReq, self.get_internal_state),
                 (SetInternalStateReq, self.set_internal_state),
@@ -646,6 +649,46 @@ class Scheduler(
             ]
         )
         self.forward_init_time = None
+
+    def profile_seq_lens(self, req: ProfileSeqLensReqInput) -> ProfileSeqLensReqOutput:
+        """Handle a POD overlap profiling request from the tokenizer manager."""
+
+        from sglang.srt.model_executor.pod_overlap_profiler import profile_default_grid
+
+        # Only the main TP worker's model_runner is used for profiling.
+        model_runner = self.tp_worker.model_runner
+        model_name = model_runner.model_config.model_path or "model"
+        safe_name = model_name.replace("/", "_")
+
+        base_dir = "."
+        os.makedirs(base_dir, exist_ok=True)
+
+        no_overlap_path = os.path.join(base_dir, f"{safe_name}_profile.csv")
+        overlap_path = os.path.join(base_dir, f"{safe_name}_profile_overlap.csv")
+
+        num_no_overlap = 0
+        num_overlap = 0
+
+        if not req.overlap_only:
+            df_no = profile_default_grid(
+                model_runner, overlap=False, max_configs=req.max_configs
+            )
+            df_no.to_csv(no_overlap_path, index=False)
+            num_no_overlap = len(df_no)
+
+        if not req.no_overlap_only:
+            df_ov = profile_default_grid(
+                model_runner, overlap=True, max_configs=req.max_configs
+            )
+            df_ov.to_csv(overlap_path, index=False)
+            num_overlap = len(df_ov)
+
+        return ProfileSeqLensReqOutput(
+            num_no_overlap=num_no_overlap,
+            num_overlap=num_overlap,
+            path_no_overlap=no_overlap_path if num_no_overlap > 0 else None,
+            path_overlap=overlap_path if num_overlap > 0 else None,
+        )
 
     def init_sockets(self, server_args: ServerArgs, port_args: PortArgs):
         context = zmq.Context(2)

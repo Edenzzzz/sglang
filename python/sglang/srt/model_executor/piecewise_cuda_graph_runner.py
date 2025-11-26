@@ -470,6 +470,7 @@ class PiecewiseCudaGraphRunner:
             temperature=forward_batch.temperature,
             top_p_normalized_logprobs=forward_batch.top_p_normalized_logprobs,
             top_p=forward_batch.top_p,
+            decoding_bs=forward_batch.decoding_bs,  # TODO (Wenxuan): record a static value when we later use prefill attention cuda graph
         )
 
         return static_forward_batch

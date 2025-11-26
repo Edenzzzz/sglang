@@ -51,6 +51,8 @@ from sglang.srt.managers.io_struct import (
     ProfileReq,
     ProfileReqOutput,
     ProfileReqType,
+    ProfileSeqLensReqInput,
+    ProfileSeqLensReqOutput,
     ReleaseMemoryOccupationReqInput,
     ReleaseMemoryOccupationReqOutput,
     ResumeMemoryOccupationReqInput,
@@ -200,6 +202,9 @@ class TokenizerCommunicatorMixin:
         self.profile_communicator = _Communicator(
             self.send_to_scheduler, server_args.dp_size
         )
+        self.profile_seq_lens_communicator = _Communicator(
+            self.send_to_scheduler, server_args.dp_size
+        )
         self.get_internal_state_communicator = _Communicator(
             self.send_to_scheduler, server_args.dp_size
         )
@@ -282,6 +287,10 @@ class TokenizerCommunicatorMixin:
                     self.profile_communicator.handle_recv,
                 ),
                 (
+                    ProfileSeqLensReqOutput,
+                    self.profile_seq_lens_communicator.handle_recv,
+                ),
+                (
                     GetInternalStateReqOutput,
                     self.get_internal_state_communicator.handle_recv,
                 ),
@@ -310,6 +319,28 @@ class TokenizerCommunicatorMixin:
     async def generate_plots(self: TokenizerManager) -> GeneratePlotsReqOutput:
         """Generate chunk size trend plots."""
         return (await self.generate_plots_communicator(GeneratePlotsReqInput()))[0]
+
+    async def profile_seq_lens(
+        self: "TokenizerManager",
+        max_configs: Optional[int] = None,
+        overlap_only: bool = False,
+        no_overlap_only: bool = False,
+    ) -> ProfileSeqLensReqOutput:
+        """Run POD overlap profiling over a grid of sequence lengths.
+
+        This forwards a `ProfileSeqLensReqInput` to the scheduler, which calls
+        the POD overlap profiler in `model_executor` and writes CSV files that
+        can be used for performance model training.
+        """
+
+        self.auto_create_handle_loop()
+
+        req = ProfileSeqLensReqInput(
+            max_configs=max_configs,
+            overlap_only=overlap_only,
+            no_overlap_only=no_overlap_only,
+        )
+        return (await self.profile_seq_lens_communicator(req))[0]
 
     async def clear_hicache_storage(self: TokenizerManager) -> ClearHiCacheReqOutput:
         """Clear the hierarchical cache storage."""

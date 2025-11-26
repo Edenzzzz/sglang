@@ -87,6 +87,7 @@ from sglang.srt.managers.io_struct import (
     OpenSessionReqInput,
     ParseFunctionCallReq,
     ProfileReqInput,
+    ProfileSeqLensReqInput,
     ReleaseMemoryOccupationReqInput,
     ResumeMemoryOccupationReqInput,
     SendWeightsToRemoteInstanceReqInput,
@@ -674,6 +675,26 @@ async def stop_profile_async():
         content="Stop profiling. This will take some time.\n",
         status_code=200,
     )
+
+
+@app.api_route("/profile_seq_lens", methods=["GET", "POST"])
+async def profile_seq_lens_async(obj: Optional[ProfileSeqLensReqInput] = None):
+    """Run POD overlap seq-len profiling and dump CSVs for performance modeling."""
+
+    if obj is None:
+        obj = ProfileSeqLensReqInput()
+
+    ret = await _global_state.tokenizer_manager.profile_seq_lens(
+        max_configs=obj.max_configs,
+        overlap_only=obj.overlap_only,
+        no_overlap_only=obj.no_overlap_only,
+    )
+    content = (
+        f"Profile seq_lens completed. "
+        f"no_overlap: {ret.num_no_overlap} configs -> {ret.path_no_overlap}, "
+        f"overlap: {ret.num_overlap} configs -> {ret.path_overlap}\n"
+    )
+    return Response(content=content, status_code=200)
 
 
 @app.api_route("/freeze_gc", methods=["GET", "POST"])

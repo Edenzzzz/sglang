@@ -364,7 +364,11 @@ class ForwardBatch:
             token_type_ids=batch.token_type_ids,
             tbo_split_seq_index=batch.tbo_split_seq_index,
             dimensions=batch.dimensions,
-            decoding_bs=len(batch.decoding_reqs),
+            decoding_bs=(
+                len(batch.decoding_reqs)
+                if batch.forward_mode.is_extend() and batch.decoding_reqs
+                else 0
+            ),
         )
         device = model_runner.device
 

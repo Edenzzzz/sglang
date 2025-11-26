@@ -1313,6 +1313,31 @@ class ProfileReqOutput(BaseReq):
 
 
 @dataclass
+class ProfileSeqLensReqInput(BaseReq):
+    """Request to run POD overlap profiling over a grid of sequence lengths."""
+
+    # Maximum number of configs to run (subset of the full grid).
+    # If not set, run all configs.
+    max_configs: Optional[int] = None
+    # Only run overlap=True profiling.
+    overlap_only: bool = False
+    # Only run overlap=False profiling.
+    no_overlap_only: bool = False
+
+
+@dataclass
+class ProfileSeqLensReqOutput(BaseReq):
+    """Response from POD overlap profiling."""
+
+    # Number of configurations successfully profiled (per mode).
+    num_no_overlap: int
+    num_overlap: int
+    # Paths to the CSV files saved on disk.
+    path_no_overlap: Optional[str]
+    path_overlap: Optional[str]
+
+
+@dataclass
 class FreezeGCReq(BaseReq):
     pass
 

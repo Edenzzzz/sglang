@@ -869,13 +869,13 @@ class FlashInferAttnBackend(AttentionBackend):
             if USE_POD and forward_batch.forward_mode.is_mixed():
                 wrapper_idx = self._get_wrapper_idx(layer)
                 pod_wrapper = prefill_wrapper_paged
-                o = self.pod_forward(
+                o, _ = self.pod_forward(
                     pod_wrapper,
                     forward_batch,
                     q,
                     layer,
                     logits_soft_cap,
-                    return_lse=False,
+                    return_lse=True,  # Always return for piecewise cuda graph compatibility
                 )
             elif USE_PERSISTENT and forward_batch.forward_mode.is_mixed():
                 o, _ = self.persistent_attn_forward(
@@ -966,7 +966,11 @@ class FlashInferAttnBackend(AttentionBackend):
                         sm_scale=layer.scaling,
                         logits_soft_cap=logits_soft_cap,
                     )
-                o, _ = merge_state(o1, s1, o2, s2)
+                try:
+                    o, _ = merge_state(o1, s1, o2, s2)
+                except Exception as e:
+                    torch.distributed.breakpoint()
+                    raise e
 
             if save_kv_cache:
                 forward_batch.token_to_kv_pool.set_kv_buffer(

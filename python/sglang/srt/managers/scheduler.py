@@ -482,6 +482,7 @@ class Scheduler(
                             "decode_bs",
                             "avg_kv_length",
                             "num_retracted_reqs",
+                            "cur_rem_tokens",
                         ]
                     ).to_csv(self.chunk_size_csv_path, index=False)
                 except Exception:
@@ -1773,6 +1774,7 @@ class Scheduler(
                                         "decode_bs": decode_bs,
                                         "avg_kv_length": avg_kv_length,
                                         "num_retracted_reqs": self.num_retracted_reqs,
+                                        "cur_rem_tokens": None,
                                     }
                                 ]
                             )
@@ -1907,8 +1909,38 @@ class Scheduler(
                 if res == AddReqResult.NO_TOKEN:
                     current_time = time.perf_counter() - self.forward_init_time
                     print(
-                        f"Time: {current_time}, no token with real chunk size {adder.log_input_tokens}, rem_total_token_offset {adder.rem_total_token_offset}, running bs {running_bs}"
+                        f"Time: {current_time}, no token with real chunk size {adder.log_input_tokens}, rem_total_token_offset {adder.rem_total_token_offset}, cur_rem_tokens {adder.cur_rem_tokens}, running bs {running_bs}"
                     )
+
+                    # Also log cur_rem_tokens to the chunk size CSV so it can be plotted
+                    if self.plot_chunk_size and self.is_entry_rank:
+                        try:
+                            import pandas as pd
+
+                            new_row = pd.DataFrame(
+                                [
+                                    {
+                                        "time": current_time,
+                                        "prefill_tokens": None,
+                                        "new_token_ratio": None,
+                                        "decode_bs": None,
+                                        "avg_kv_length": None,
+                                        "num_retracted_reqs": None,
+                                        "cur_rem_tokens": adder.cur_rem_tokens,
+                                    }
+                                ]
+                            )
+                            new_row.to_csv(
+                                self.chunk_size_csv_path,
+                                mode="a",
+                                header=False,
+                                index=False,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to write cur_rem_tokens chunk size data: {e}"
+                            )
+
                     if self.enable_hierarchical_cache:
                         # Set batch_is_full after making sure there are requests that can be served
                         self.running_batch.batch_is_full = len(
@@ -2031,6 +2063,7 @@ class Scheduler(
                             "decode_bs": decode_bs_for_log,
                             "avg_kv_length": avg_kv_length_for_log,
                             "num_retracted_reqs": None,
+                            "cur_rem_tokens": None,
                         }
                     ]
                 )

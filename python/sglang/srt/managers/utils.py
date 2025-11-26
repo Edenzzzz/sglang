@@ -229,8 +229,14 @@ def plot_chunk_size_trends(
     prefill_data = df[df["prefill_tokens"].notna()].copy()
     decode_data = df[df["decode_bs"].notna()].copy()
 
-    # Get retracted requests data (from decode data, as retractions happen during decode)
-    retracted_data = df[df["num_retracted_reqs"].notna()].copy()
+    # Get retracted / remaining-tokens data: any row with either num_retracted_reqs
+    # or cur_rem_tokens present.
+    if "cur_rem_tokens" in df.columns:
+        retracted_data = df[
+            df["num_retracted_reqs"].notna() | df["cur_rem_tokens"].notna()
+        ].copy()
+    else:
+        retracted_data = df[df["num_retracted_reqs"].notna()].copy()
 
     # Determine overall time range (min and max across all data)
     all_times = []
@@ -248,13 +254,34 @@ def plot_chunk_size_trends(
             print("Warning: No valid data found in CSV file")
         return False
 
-    time_min = min(all_times)
-    time_max = max(all_times)
+    # Find the first time with actual data (skipping the warmup batch at index 0).
+    if not prefill_data.empty:
+        # Skip the first prefill row, which is a warmup batch added by the server.
+        if len(prefill_data) > 1:
+            prefill_data = prefill_data.iloc[1:]
+        else:
+            prefill_data = prefill_data
+
+        # Use pandas to find the first non-zero prefill token after warmup.
+        first_nonzero = prefill_data[prefill_data["prefill_tokens"] > 0]
+        if not first_nonzero.empty:
+            first_batch_time = first_nonzero["time"].iloc[0]
+        else:
+            # Fallback to the minimum time across all data if everything is zero.
+            first_batch_time = min(all_times)
+    else:
+        # If there is no prefill data at all, fall back to the global minimum time.
+        first_batch_time = min(all_times)
+    time_min = first_batch_time
+    time_max = max(all_times) - time_min
+    prefill_data["time"] = prefill_data["time"] - time_min
+    decode_data["time"] = decode_data["time"] - time_min
+    retracted_data["time"] = retracted_data["time"] - time_min
 
     # Use fixed 9 ticks (8 intervals)
-    tick_interval = (time_max - time_min) / 8
+    tick_interval = time_max / 8
     x_ticks = []
-    current = time_min
+    current = 0
     for _ in range(9):
         x_ticks.append(current)
         current += tick_interval
@@ -263,30 +290,20 @@ def plot_chunk_size_trends(
 
     # Plot 1: Prefill tokens and new token ratio (dual y-axis)
     if not prefill_data.empty:
-        # Calculate mean prefill length
-        mean_prefill_len = prefill_data["prefill_tokens"].mean()
-        prefill_times = prefill_data["time"].tolist()
-        prefill_tokens = prefill_data["prefill_tokens"].tolist()
-        new_token_ratios = prefill_data["new_token_ratio"].tolist()
+        # Filter data using pandas: only keep rows where time >= time_min
+        prefill_data = prefill_data[prefill_data["time"] >= 0]
 
-        # Extend prefill data with zeros for times beyond the last prefill batch
-        if not decode_data.empty:
-            last_prefill_time = max(prefill_times) if prefill_times else time_min
-            decode_times = decode_data["time"].tolist()
-            # Find decode times that are beyond the last prefill time
-            extended_times = [t for t in decode_times if t > last_prefill_time]
-            if extended_times:
-                # Sort and add to prefill data
-                extended_times = sorted(set(extended_times))
-                prefill_times.extend(extended_times)
-                prefill_tokens.extend([0] * len(extended_times))
-                new_token_ratios.extend([0] * len(extended_times))
-                # Sort all data by time
-                combined = sorted(zip(prefill_times, prefill_tokens, new_token_ratios))
-                prefill_times, prefill_tokens, new_token_ratios = zip(*combined)
-                prefill_times = list(prefill_times)
-                prefill_tokens = list(prefill_tokens)
-                new_token_ratios = list(new_token_ratios)
+        if not prefill_data.empty:
+            # Calculate mean prefill length
+            mean_prefill_len = prefill_data["prefill_tokens"].mean()
+            prefill_times = prefill_data["time"].tolist()
+            prefill_tokens = prefill_data["prefill_tokens"].tolist()
+            new_token_ratios = prefill_data["new_token_ratio"].tolist()
+        else:
+            mean_prefill_len = 0
+            prefill_times = []
+            prefill_tokens = []
+            new_token_ratios = []
 
         fig1, ax1 = plt.subplots(figsize=(12, 6))
         fig1.patch.set_facecolor("white")
@@ -320,7 +337,7 @@ def plot_chunk_size_trends(
             label="Prefill Tokens",
         )
         ax1.tick_params(axis="y", labelcolor=color1)
-        ax1.set_xlim(time_min, time_max)
+        ax1.set_xlim(0, time_max)
         ax1.set_xticks(x_ticks)
         ax1.grid(True, alpha=0.3)
 
@@ -340,11 +357,20 @@ def plot_chunk_size_trends(
 
     # Plot 2: Decode batch size and average KV length (dual y-axis)
     if not decode_data.empty:
-        # Calculate mean decode KV length
-        mean_decode_kv_len = decode_data["avg_kv_length"].mean()
-        decode_times = decode_data["time"].tolist()
-        decode_bs = decode_data["decode_bs"].tolist()
-        avg_kv_lengths = decode_data["avg_kv_length"].tolist()
+        # Filter data using pandas: only keep rows where time >= time_min
+        decode_data = decode_data[decode_data["time"] >= 0]
+
+        if not decode_data.empty:
+            # Calculate mean decode KV length
+            mean_decode_kv_len = decode_data["avg_kv_length"].mean()
+            decode_times = decode_data["time"].tolist()
+            decode_bs = decode_data["decode_bs"].tolist()
+            avg_kv_lengths = decode_data["avg_kv_length"].tolist()
+        else:
+            mean_decode_kv_len = 0
+            decode_times = []
+            decode_bs = []
+            avg_kv_lengths = []
 
         fig2, ax2 = plt.subplots(figsize=(12, 6))
         fig2.patch.set_facecolor("white")
@@ -361,7 +387,7 @@ def plot_chunk_size_trends(
             label="Decode Batch Size",
         )
         ax2.tick_params(axis="y", labelcolor=color1)
-        ax2.set_xlim(time_min, time_max)
+        ax2.set_xlim(0, time_max)
         ax2.set_xticks(x_ticks)
         ax2.grid(True, alpha=0.3)
 
@@ -393,35 +419,78 @@ def plot_chunk_size_trends(
         plt.close(fig2)
         log_func(f"Decode chunk size trend plot saved to {filename}")
 
-    # Plot 3: Number of retracted requests
+    # Plot 3: Number of retracted requests (and remaining token budget if available)
     if not retracted_data.empty:
-        retracted_times = retracted_data["time"].tolist()
-        num_retracted = retracted_data["num_retracted_reqs"].tolist()
+        # Shifted time is already used, so just keep entries within the visible window.
+        retracted_data = retracted_data[retracted_data["time"] >= 0]
+
+        if retracted_data.empty:
+            return True
+
+        # Left-axis data: only rows where we actually retracted something.
+        retracted_nonzero = retracted_data[retracted_data["num_retracted_reqs"] > 0]
+        retracted_times = retracted_nonzero["time"].tolist()
+        num_retracted = retracted_nonzero["num_retracted_reqs"].tolist()
+
+        # Right-axis data: rows where we logged remaining token budget.
+        cur_rem_times = None
+        cur_rem_tokens = None
+        if "cur_rem_tokens" in retracted_data.columns:
+            budget_data = retracted_data[retracted_data["cur_rem_tokens"].notna()]
+            if not budget_data.empty:
+                cur_rem_times = budget_data["time"].tolist()
+                cur_rem_tokens = budget_data["cur_rem_tokens"].tolist()
 
         fig3, ax3 = plt.subplots(figsize=(12, 6))
         fig3.patch.set_facecolor("white")
 
-        color = "yellow"
+        # Left y-axis: number of retracted requests
+        color_left = "orange"
         ax3.set_xlabel("Time (seconds)", fontsize=12)
-        ax3.set_ylabel("Number of Retracted Requests", fontsize=12, color=color)
-        ax3.plot(
+        ax3.set_ylabel("Number of Retracted Requests", fontsize=12, color=color_left)
+        line_left = ax3.scatter(
             retracted_times,
             num_retracted,
-            color=color,
-            linewidth=1.5,
-            label="Retracted Requests",
+            color=color_left,
+            s=20,  # marker size (tweak if needed)
+            alpha=0.8,
+            label="Retracted Decode Requests",
         )
-        ax3.tick_params(axis="y", labelcolor=color)
-        ax3.set_xlim(time_min, time_max)
+        ax3.tick_params(axis="y", labelcolor=color_left)
+
+        # Right y-axis: remaining token budget if present
+        if cur_rem_tokens is not None and cur_rem_times is not None:
+            ax3_twin = ax3.twinx()
+            color_right = "tab:green"
+            ax3_twin.set_ylabel(
+                "Remaining prefill token budget", fontsize=12, color=color_right
+            )
+            line_right = ax3_twin.plot(
+                cur_rem_times,
+                cur_rem_tokens,
+                color=color_right,
+                linewidth=1.5,
+                label="Rem. prefill token budget",
+            )
+            ax3_twin.tick_params(axis="y", labelcolor=color_right)
+            lines = [line_left] + line_right
+        else:
+            lines = [line_left]
+
+        ax3.set_xlim(0, time_max)
         ax3.set_xticks(x_ticks)
         ax3.grid(True, alpha=0.3)
-        ax3.legend(loc="upper left")
-        ax3.set_title("Number of Retracted Requests Over Time", fontsize=14)
+        labels = [l.get_label() for l in lines]
+        ax3.legend(lines, labels, loc="upper left")
+        ax3.set_title(
+            "Number of Retracted Requests and Remaining prefilltoken budget Over Time",
+            fontsize=14,
+        )
 
         plt.tight_layout()
         filename = os.path.join(
             output_dir,
-            "chunk_size_trend_retracted_requests.png",
+            "chunk_size_trend_retracted.png",
         )
         plt.savefig(filename, dpi=150, bbox_inches="tight")
         plt.close(fig3)

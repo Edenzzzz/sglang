@@ -548,6 +548,7 @@ class ServerArgs:
 
     # For chunk size plotting
     plot_chunk_size: bool = False
+    chunk_size_csv_path: Optional[str] = "chunk_size_trend.csv"
 
     def __post_init__(self):
         """
@@ -3553,6 +3554,12 @@ class ServerArgs:
             action="store_true",
             default=ServerArgs.plot_chunk_size,
             help="Enable plotting of chunk size trends. Logs prefill tokens, new_token_ratio, and batch formation time to chunk_size_trend.json and plots on exit.",
+        )
+        parser.add_argument(
+            "--chunk-size-csv-path",
+            type=str,
+            default=ServerArgs.chunk_size_csv_path,
+            help="The path to save the chunk size trends.",
         )
 
     @classmethod

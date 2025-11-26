@@ -54,14 +54,6 @@ if is_flashinfer_available():
     from flashinfer.cascade import merge_state
 
 
-USE_PERSISTENT = envs.SGLANG_FLASHINFER_USE_PERSISTENT.get()
-USE_POD = envs.SGLANG_FLASHINFER_USE_POD.get()
-if USE_POD and USE_PERSISTENT:
-    raise ValueError(
-        "SGLANG_FLASHINFER_USE_POD and SGLANG_FLASHINFER_USE_PERSISTENT cannot both be True"
-    )
-
-
 class WrapperDispatch(Enum):
     SLIDING_WINDOW = auto()
     CROSS_ATTENTION = auto()
@@ -192,6 +184,14 @@ class FlashInferAttnBackend(AttentionBackend):
             self.disable_cuda_graph_kv_split = True
             envs.SGLANG_FLASHINFER_WORKSPACE_SIZE.set(2048 * 1024 * 1024)
 
+        # Set mixed batch backend
+        self.use_persistent = envs.SGLANG_FLASHINFER_USE_PERSISTENT.get()
+        self.use_pod = envs.SGLANG_FLASHINFER_USE_POD.get()
+        if self.use_pod and self.use_persistent:
+            raise ValueError(
+                "SGLANG_FLASHINFER_USE_POD and SGLANG_FLASHINFER_USE_PERSISTENT cannot both be True"
+            )
+
         # Allocate buffers
         global global_workspace_buffer
         if global_workspace_buffer is None:
@@ -235,7 +235,9 @@ class FlashInferAttnBackend(AttentionBackend):
                 torch.zeros(
                     (max_bs + 1,), dtype=torch.int32, device=model_runner.device
                 )
-                for _ in range(self.num_wrappers)
+                for _ in range(
+                    self.num_wrappers if not self.use_pod else self.num_wrappers * 2
+                )
             ]
 
         fmha_backend = "auto"
@@ -263,7 +265,7 @@ class FlashInferAttnBackend(AttentionBackend):
         self.pod_wrappers = []
         for _ in range(self.num_wrappers):
             if not skip_prefill:
-                if USE_PERSISTENT:
+                if self.use_persistent:
                     self.prefill_wrappers_mixed.append(
                         BatchAttention(
                             self.workspace_buffer,
@@ -290,14 +292,13 @@ class FlashInferAttnBackend(AttentionBackend):
                     use_tensor_cores=self.decode_use_tensor_cores,
                 )
             )
-            if USE_POD and not skip_prefill:
+            if self.use_pod and not skip_prefill:
                 self.pod_wrappers.append(
                     BatchPODWithPagedKVCacheWrapper(
                         self.workspace_buffer,
                         "NHD",
                     )
                 )
-
         # Create indices updater
         if not skip_prefill:
             self.indices_updater_prefill = FlashInferIndicesUpdaterPrefill(
@@ -435,9 +436,19 @@ class FlashInferAttnBackend(AttentionBackend):
         )
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
+        # Update attn env var as it could be changed by profiler
+        self.use_persistent = envs.SGLANG_FLASHINFER_USE_PERSISTENT.get()
+        self.use_pod = envs.SGLANG_FLASHINFER_USE_POD.get()
+        if self.use_pod and self.use_persistent:
+            raise ValueError(
+                "SGLANG_FLASHINFER_USE_POD and SGLANG_FLASHINFER_USE_PERSISTENT cannot both be True"
+            )
+
         if forward_batch.forward_mode.is_decode_or_idle():
             decode_wrappers = (
-                self.prefill_wrappers_mixed if USE_PERSISTENT else self.decode_wrappers
+                self.prefill_wrappers_mixed
+                if self.use_persistent
+                else self.decode_wrappers
             )
             self.indices_updater_decode.update(
                 forward_batch.req_pool_indices,
@@ -486,11 +497,11 @@ class FlashInferAttnBackend(AttentionBackend):
             prefix_lens = forward_batch.extend_prefix_lens
             # wrappers = self.prefill_wrappers_paged
             wrappers = []
-            if forward_batch.forward_mode.is_mixed():
-                if USE_POD:
-                    wrappers = self.pod_wrappers
-                else:
-                    wrappers = self.prefill_wrappers_mixed
+
+            if self.use_pod and forward_batch.forward_mode.is_mixed():
+                wrappers = self.pod_wrappers
+            elif self.use_persistent and forward_batch.forward_mode.is_mixed():
+                wrappers = self.prefill_wrappers_mixed
             else:
                 wrappers = self.prefill_wrappers_paged
             use_ragged = True
@@ -539,7 +550,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 multi_item_params = self._process_multi_item_scoring(forward_batch)
 
             # Use POD for mixed batches if enabled
-            if USE_POD and forward_batch.forward_mode.is_mixed():
+            if self.use_pod and forward_batch.forward_mode.is_mixed():
                 assert (
                     self.dispatch_reason == None
                 ), "POD only supports regular attention"
@@ -556,6 +567,7 @@ class FlashInferAttnBackend(AttentionBackend):
                     forward_batch.seq_lens_cpu,
                     forward_batch.seq_lens_sum,
                     prefix_lens,
+                    self.prefill_wrapper_ragged,
                     wrappers[0],
                     use_ragged=use_ragged,
                     encoder_lens=forward_batch.encoder_lens,
@@ -564,6 +576,7 @@ class FlashInferAttnBackend(AttentionBackend):
                     num_decode=num_decode,
                 )
             else:
+                # Both persistent and batch prefill included
                 self.indices_updater_prefill.update(
                     forward_batch.req_pool_indices,
                     forward_batch.seq_lens,
@@ -643,7 +656,7 @@ class FlashInferAttnBackend(AttentionBackend):
                             :num_tokens
                         ],
                     )
-                    if not USE_PERSISTENT
+                    if not self.use_persistent
                     else BatchAttention(
                         self.workspace_buffer,
                         "NHD",
@@ -667,7 +680,7 @@ class FlashInferAttnBackend(AttentionBackend):
             )
             self.decode_cuda_graph_metadata[bs] = decode_wrappers
             self.forward_metadata = DecodeMetadata(decode_wrappers)
-            if not USE_PERSISTENT:
+            if not self.use_persistent:
                 for i in range(self.num_wrappers):
                     decode_wrappers[i].plan = partial(
                         fast_decode_plan, decode_wrappers[i]
@@ -808,7 +821,7 @@ class FlashInferAttnBackend(AttentionBackend):
 
     def pod_forward(
         self,
-        pod_attn_wrapper: BatchPODWithPagedKVCacheWrapper,
+        pod_wrapper: BatchPODWithPagedKVCacheWrapper,
         forward_batch: ForwardBatch,
         q: torch.Tensor,
         layer: RadixAttention,
@@ -818,22 +831,30 @@ class FlashInferAttnBackend(AttentionBackend):
         if logits_soft_cap != 0:
             raise ValueError("logits_soft_cap is not supported for POD attention yet")
         q_reshaped = q.view(-1, layer.tp_q_head_num, layer.head_dim)
-        num_p = forward_batch.batch_size - forward_batch.decoding_bs
-        q_p = q_reshaped[: self.qo_indptr[0][num_p + 1]]
-        q_d = q_reshaped[self.qo_indptr[0][num_p + 1] :]
+        # Convert GPU tensor to Python int to avoid illegal memory access
+        # when accessing tensor elements in slice operations
+        num_p_tokens = pod_wrapper._qo_indptr_buf_p[-1].item()
+        q_p = q_reshaped[:num_p_tokens]
+        q_d = q_reshaped[num_p_tokens:]
         kv_buffer = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
-        (o_p, o_d), (lse_p, lse_d) = pod_attn_wrapper.run(
-            q_p,
-            kv_buffer,
-            q_d,
-            kv_buffer,
-            causal_p=not layer.is_cross_attention,
-            return_lse=return_lse,
-            join_outputs=False,
-        )
+        try:
+            (o_p, o_d), (lse_p, lse_d) = pod_wrapper.run(
+                q_p,
+                kv_buffer,
+                q_d,
+                kv_buffer,
+                causal_p=not layer.is_cross_attention,
+                return_lse=return_lse,
+                join_outputs=False,
+            )
+        except Exception as e:
+            torch.distributed.breakpoint()
+            raise e
         o = torch.cat([o_p, o_d], dim=0)
         if return_lse:
             lse = torch.cat([lse_p, lse_d], dim=0)
+            if o.shape == lse.shape:
+                torch.distributed.breakpoint()
             return o, lse
         return o
 
@@ -866,7 +887,7 @@ class FlashInferAttnBackend(AttentionBackend):
                         layer, cache_loc, k, v, layer.k_scale, layer.v_scale
                     )
             # Use POD Attention for mixed batches
-            if USE_POD and forward_batch.forward_mode.is_mixed():
+            if self.use_pod and forward_batch.forward_mode.is_mixed():
                 wrapper_idx = self._get_wrapper_idx(layer)
                 pod_wrapper = prefill_wrapper_paged
                 o, _ = self.pod_forward(
@@ -877,7 +898,7 @@ class FlashInferAttnBackend(AttentionBackend):
                     logits_soft_cap,
                     return_lse=True,  # Always return for piecewise cuda graph compatibility
                 )
-            elif USE_PERSISTENT and forward_batch.forward_mode.is_mixed():
+            elif self.use_persistent and forward_batch.forward_mode.is_mixed():
                 o, _ = self.persistent_attn_forward(
                     prefill_wrapper_paged,
                     forward_batch,
@@ -941,7 +962,7 @@ class FlashInferAttnBackend(AttentionBackend):
                     sm_scale=layer.scaling,
                     logits_soft_cap=logits_soft_cap,
                 )
-                if USE_POD and forward_batch.forward_mode.is_mixed():
+                if self.use_pod and forward_batch.forward_mode.is_mixed():
                     o2, s2 = self.pod_forward(
                         prefill_wrapper_paged,
                         forward_batch,
@@ -950,7 +971,7 @@ class FlashInferAttnBackend(AttentionBackend):
                         logits_soft_cap,
                         return_lse=True,
                     )
-                elif USE_PERSISTENT and forward_batch.forward_mode.is_mixed():
+                elif self.use_persistent and forward_batch.forward_mode.is_mixed():
                     o2, s2 = self.persistent_attn_forward(
                         prefill_wrapper_paged,
                         forward_batch,
@@ -966,11 +987,7 @@ class FlashInferAttnBackend(AttentionBackend):
                         sm_scale=layer.scaling,
                         logits_soft_cap=logits_soft_cap,
                     )
-                try:
-                    o, _ = merge_state(o1, s1, o2, s2)
-                except Exception as e:
-                    torch.distributed.breakpoint()
-                    raise e
+                o, _ = merge_state(o1, s1, o2, s2)
 
             if save_kv_cache:
                 forward_batch.token_to_kv_pool.set_kv_buffer(
@@ -1005,7 +1022,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 )
 
         # Call the wrapped function
-        if USE_PERSISTENT:
+        if self.use_persistent:
             o, _ = self.persistent_attn_forward(
                 decode_wrapper,
                 forward_batch,
@@ -1276,7 +1293,7 @@ class FlashInferIndicesUpdaterDecode:
                 ),
                 global_override_indptr_cpu=global_override_indptr_cpu,
             )
-        elif USE_PERSISTENT:
+        elif self.attn_backend.use_persistent:
             # Persistent is faster for decode
             self.qo_indptr[0][1 : bs + 1] = torch.arange(
                 1, bs + 1, device=kv_indices.device
@@ -1517,6 +1534,7 @@ class FlashInferIndicesUpdaterPrefill:
         seq_lens_cpu: Optional[torch.Tensor],
         seq_lens_sum: int,
         prefix_lens: torch.Tensor,
+        wrapper_ragged: BatchPrefillWithRaggedKVCacheWrapper,
         pod_wrapper: BatchPODWithPagedKVCacheWrapper,
         use_ragged: bool,
         encoder_lens: Optional[torch.Tensor],
@@ -1568,34 +1586,49 @@ class FlashInferIndicesUpdaterPrefill:
         extend_lens = seq_lens - prefix_lens
         p_extend_lens = extend_lens[:num_prefill]
         d_extend_lens = extend_lens[num_prefill:]
+        # NOTE: hardcode to use two qo_indptr buffers
         p_q_indptr = self.qo_indptr[0][: num_prefill + 1]
         if num_prefill > 0:
             p_q_indptr[1:] = torch.cumsum(p_extend_lens, dim=0)
-
-        d_q_indptr = self.qo_indptr[0][num_prefill + 1 : bs + 2]
+        d_q_indptr = self.qo_indptr[1][: num_decode + 1]
         if num_decode > 0:
             d_q_indptr[1:] = torch.cumsum(d_extend_lens, dim=0)
 
         # Use same kv_indices for both, split kv_indptr
-        pod_wrapper.plan(
-            # Prefill params
-            p_q_indptr,
-            p_kv_indptr,
-            kv_indices,
-            self.kv_last_page_len[:num_prefill],
-            # Decode params
-            d_q_indptr,
-            d_kv_indptr,
-            kv_indices,
-            self.kv_last_page_len[num_prefill:bs],
-            # Common params
-            num_qo_heads=self.num_qo_heads,
-            num_kv_heads=self.num_kv_heads,
-            head_dim=self.head_dim,
-            page_size=page_size,
-            q_data_type=self.q_data_type,
-            kv_data_type=self.data_type,
-        )
+        try:
+            pod_wrapper.plan(
+                # Prefill params
+                p_q_indptr,
+                p_kv_indptr,
+                kv_indices,
+                self.kv_last_page_len[:num_prefill],
+                # Decode params
+                d_q_indptr,
+                d_kv_indptr,
+                kv_indices,
+                self.kv_last_page_len[num_prefill:bs],
+                # Common params
+                num_qo_heads=self.num_qo_heads,
+                num_kv_heads=self.num_kv_heads,
+                head_dim=self.head_dim,
+                page_size=page_size,
+                q_data_type=self.q_data_type,
+                kv_data_type=self.data_type,
+            )
+        except Exception as e:
+            torch.distributed.breakpoint()
+            raise e
+        if use_ragged:
+            qo_indptr = self.qo_indptr[0][: bs + 1]
+            qo_indptr[1 : bs + 1] = torch.cumsum(seq_lens - prefix_lens, dim=0)
+            wrapper_ragged.plan(
+                qo_indptr,
+                qo_indptr,
+                self.num_qo_heads,
+                self.num_kv_heads,
+                self.head_dim,
+                q_data_type=self.q_data_type,
+            )
 
     def call_begin_forward(
         self,
@@ -1694,7 +1727,7 @@ class FlashInferIndicesUpdaterPrefill:
             token_pos_in_items_len = 0
             max_item_len_ptr = None
 
-        if USE_PERSISTENT:
+        if self.attn_backend.use_persistent:
             wrapper_paged.plan(
                 qo_indptr,
                 kv_indptr,

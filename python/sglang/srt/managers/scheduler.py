@@ -470,7 +470,7 @@ class Scheduler(
 
             import pandas as pd
 
-            self.chunk_size_csv_path = "chunk_size_trend.csv"
+            self.chunk_size_csv_path = server_args.chunk_size_csv_path
             self.is_entry_rank_for_plotting = self.is_entry_rank
 
             # Initialize CSV file with header if it doesn't exist

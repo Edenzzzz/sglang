@@ -320,7 +320,7 @@ class ForwardBatch:
     # For matryoshka embeddings
     dimensions: Optional[list[int]] = None
 
-    decoding_bs: int = None
+    decoding_bs: int = 0
 
     @classmethod
     def init_new(

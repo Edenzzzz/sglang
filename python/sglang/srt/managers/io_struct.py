@@ -1325,7 +1325,7 @@ class ProfileSeqLensReqInput(BaseReq):
     no_overlap_only: bool = False
     # Resume profiling from this config index (0-based). Useful for resuming interrupted runs.
     resume_idx: Optional[int] = None
-    repeat: int = 3
+    repeat: int = 5
 
 
 @dataclass
@@ -1352,7 +1352,7 @@ class ProfileSeqLensValReqInput(BaseReq):
     overlap_only: bool = False
     # Only run overlap=False profiling.
     no_overlap_only: bool = False
-    repeat: int = 3
+    repeat: int = 5
 
 
 @dataclass

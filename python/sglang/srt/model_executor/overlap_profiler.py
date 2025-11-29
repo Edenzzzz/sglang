@@ -62,7 +62,7 @@ class ProfilingRunner:
         r_p: int,  # prefill prefix length
         r_d: int,  # decode KV length
         decode_bs: int,  # decode batch size
-        repeat: int = 3,
+        repeat: int = 5,
     ) -> float:
         """Profile one configuration and return avg execution time in milliseconds.
 
@@ -273,7 +273,7 @@ def profile_configs(
     max_num_tokens: int,
     overlap: bool,
     output_path: str,
-    repeat: int = 3,
+    repeat: int = 5,
 ) -> pd.DataFrame:
     """Profile a set of (n_p, r_p, r_d, decode_bs) configs.
 
@@ -304,6 +304,7 @@ def profile_configs(
     runner = ProfilingRunner(model_runner, max_num_tokens)
     # warmup
     runner.profile_one_seq_config(*configs[0], repeat=1)
+
     # Check if output file exists to determine if we need to write headers
     write_header = output_path is None or not os.path.exists(output_path)
 
@@ -311,7 +312,7 @@ def profile_configs(
     for n_p, r_p, r_d, decode_bs in tqdm(
         configs, desc="Profiling configs", leave=False
     ):
-        time_ms = runner.profile_one_seq_config(n_p, r_p, r_d, decode_bs)
+        time_ms = runner.profile_one_seq_config(n_p, r_p, r_d, decode_bs, repeat=repeat)
         result = {
             "n_p": n_p,
             "r_p": r_p,
@@ -342,7 +343,7 @@ def profile_default_grid(
     output_path: str,
     max_configs: Optional[int] = None,
     resume_idx: Optional[int] = None,
-    repeat: int = 3,
+    repeat: int = 5,
 ) -> pd.DataFrame:
     """Convenience helper that profiles the default grid of configs.
 
@@ -382,7 +383,7 @@ def profile_validation_configs(
     seed: int,
     overlap: bool,
     output_path: str,
-    repeat: int = 3,
+    repeat: int = 5,
 ) -> int:
     """Profile random validation configs for model evaluation.
 

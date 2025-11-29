@@ -335,7 +335,7 @@ class TokenizerCommunicatorMixin:
         overlap_only: bool = False,
         no_overlap_only: bool = False,
         resume_idx: Optional[int] = None,
-        repeat: int = 3,
+        repeat: int = 5,
     ) -> ProfileSeqLensReqOutput:
         """Run POD overlap profiling over a grid of sequence lengths.
 
@@ -367,7 +367,7 @@ class TokenizerCommunicatorMixin:
         seed: int = 42,
         overlap_only: bool = False,
         no_overlap_only: bool = False,
-        repeat: int = 3,
+        repeat: int = 5,
     ) -> ProfileSeqLensValReqOutput:
         """Run POD overlap profiling on random validation configs.
 

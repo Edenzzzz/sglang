@@ -1810,7 +1810,9 @@ class TokenizerManager(TokenizerCommunicatorMixin):
         meta_info["completion_tokens"] = len(output_ids)
         out = {
             "text": state.text,
-            "output_ids": [output_ids[-1]] if is_stream else output_ids,
+            "output_ids": (
+                [output_ids[-1]] if (is_stream and output_ids) else output_ids
+            ),
             "meta_info": meta_info,
         }
         state.out_list.append(out)

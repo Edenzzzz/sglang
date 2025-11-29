@@ -265,13 +265,12 @@ class FlashInferAttnBackend(AttentionBackend):
         self.pod_wrappers = []
         for _ in range(self.num_wrappers):
             if not skip_prefill:
-                if self.use_persistent:
-                    self.prefill_wrappers_mixed.append(
-                        BatchAttention(
-                            self.workspace_buffer,
-                            "NHD",
-                        )
+                self.prefill_wrappers_mixed.append(
+                    BatchAttention(
+                        self.workspace_buffer,
+                        "NHD",
                     )
+                )
                 self.prefill_wrappers_paged.append(
                     BatchPrefillWithPagedKVCacheWrapper(
                         self.workspace_buffer,
@@ -285,6 +284,12 @@ class FlashInferAttnBackend(AttentionBackend):
                         "NHD",
                     )
                 )
+                self.pod_wrappers.append(
+                    BatchPODWithPagedKVCacheWrapper(
+                        self.workspace_buffer,
+                        "NHD",
+                    )
+                )
             self.decode_wrappers.append(
                 BatchDecodeWithPagedKVCacheWrapper(
                     self.workspace_buffer,
@@ -292,13 +297,7 @@ class FlashInferAttnBackend(AttentionBackend):
                     use_tensor_cores=self.decode_use_tensor_cores,
                 )
             )
-            if self.use_pod and not skip_prefill:
-                self.pod_wrappers.append(
-                    BatchPODWithPagedKVCacheWrapper(
-                        self.workspace_buffer,
-                        "NHD",
-                    )
-                )
+
         # Create indices updater
         if not skip_prefill:
             self.indices_updater_prefill = FlashInferIndicesUpdaterPrefill(
@@ -826,17 +825,32 @@ class FlashInferAttnBackend(AttentionBackend):
         q: torch.Tensor,
         layer: RadixAttention,
         logits_soft_cap: float,
-        return_lse: bool = False,
     ):
         if logits_soft_cap != 0:
             raise ValueError("logits_soft_cap is not supported for POD attention yet")
+        bs_p = pod_wrapper.batch_size_p
+        bs_d = pod_wrapper.batch_size_d
         q_reshaped = q.view(-1, layer.tp_q_head_num, layer.head_dim)
-        # Convert GPU tensor to Python int to avoid illegal memory access
-        # when accessing tensor elements in slice operations
+        kv_buffer = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
+        # print(f"qo_indptr_p:{self.indices_updater_prefill.p_q_indptr}, qo_indptr_d:{self.indices_updater_prefill.d_q_indptr}, kv_indptr_p:{self.indices_updater_prefill.p_kv_indptr}, kv_indptr_d:{self.indices_updater_prefill.d_kv_indptr}, kv_indices:{self.indices_updater_prefill.kv_indices}, kv_last_page_len_p:{self.indices_updater_prefill.kv_last_page_len_p}, kv_last_page_len_d:{self.indices_updater_prefill.kv_last_page_len_d}, q_reshaped.shape: {q_reshaped.shape}, kv_buffer[0].shape: {kv_buffer[0].shape}")
+        # Save all inputs to kernel call for debugging/reproducing issues
+        # torch.save(pod_wrapper._qo_indptr_buf_p, "qo_indptr_p.pt")
+        # torch.save(pod_wrapper._qo_indptr_buf_d, "qo_indptr_d.pt")
+        # torch.save(pod_wrapper._kv_indptr_buf_p, "kv_indptr_p.pt")
+        # torch.save(pod_wrapper._kv_indptr_buf_d, "kv_indptr_d.pt")
+        # torch.save(pod_wrapper._kv_indices_buf_d, "kv_indices.pt")
+        # torch.save(pod_wrapper._kv_last_page_len_buf_p, "kv_last_page_len_p.pt")
+        # torch.save(pod_wrapper._kv_last_page_len_buf_d, "kv_last_page_len_d.pt")
+        # # torch.save(kv_buffer[0], "kv_buffer_0.pt")  # K buffer
+        # # torch.save(kv_buffer[1], "kv_buffer_1.pt")  # V buffer
+        # torch.save(kv_buffer[0].shape, "kv_buffer_0_shape.pt")  # K buffer shape
+
         num_p_tokens = pod_wrapper._qo_indptr_buf_p[-1].item()
         q_p = q_reshaped[:num_p_tokens]
         q_d = q_reshaped[num_p_tokens:]
-        kv_buffer = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
+        # torch.save(q_p, "q_p.pt")
+        # torch.save(q_d, "q_d.pt")
+        # torch.cuda.synchronize()  # Ensure all saves complete before kernel call
         try:
             (o_p, o_d), (lse_p, lse_d) = pod_wrapper.run(
                 q_p,
@@ -844,19 +858,15 @@ class FlashInferAttnBackend(AttentionBackend):
                 q_d,
                 kv_buffer,
                 causal_p=not layer.is_cross_attention,
-                return_lse=return_lse,
+                return_lse=True,
                 join_outputs=False,
             )
         except Exception as e:
             torch.distributed.breakpoint()
             raise e
         o = torch.cat([o_p, o_d], dim=0)
-        if return_lse:
-            lse = torch.cat([lse_p, lse_d], dim=0)
-            if o.shape == lse.shape:
-                torch.distributed.breakpoint()
-            return o, lse
-        return o
+        lse = torch.cat([lse_p, lse_d], dim=0)
+        return o, lse
 
     def forward_extend(
         self,
@@ -896,7 +906,6 @@ class FlashInferAttnBackend(AttentionBackend):
                     q,
                     layer,
                     logits_soft_cap,
-                    return_lse=True,  # Always return for piecewise cuda graph compatibility
                 )
             elif self.use_persistent and forward_batch.forward_mode.is_mixed():
                 o, _ = self.persistent_attn_forward(
@@ -969,7 +978,6 @@ class FlashInferAttnBackend(AttentionBackend):
                         q,
                         layer,
                         logits_soft_cap,
-                        return_lse=True,
                     )
                 elif self.use_persistent and forward_batch.forward_mode.is_mixed():
                     o2, s2 = self.persistent_attn_forward(
@@ -1596,6 +1604,13 @@ class FlashInferIndicesUpdaterPrefill:
 
         # Use same kv_indices for both, split kv_indptr
         try:
+            self.p_q_indptr = p_q_indptr
+            self.d_q_indptr = d_q_indptr
+            self.p_kv_indptr = p_kv_indptr
+            self.d_kv_indptr = d_kv_indptr
+            self.kv_indices = kv_indices[: paged_kernel_lens_sum + 256]
+            self.kv_last_page_len_p = self.kv_last_page_len[:num_prefill]
+            self.kv_last_page_len_d = self.kv_last_page_len[num_prefill:bs]
             pod_wrapper.plan(
                 # Prefill params
                 p_q_indptr,

@@ -53,6 +53,8 @@ from sglang.srt.managers.io_struct import (
     ProfileReqType,
     ProfileSeqLensReqInput,
     ProfileSeqLensReqOutput,
+    ProfileSeqLensValReqInput,
+    ProfileSeqLensValReqOutput,
     ReleaseMemoryOccupationReqInput,
     ReleaseMemoryOccupationReqOutput,
     ResumeMemoryOccupationReqInput,
@@ -205,6 +207,9 @@ class TokenizerCommunicatorMixin:
         self.profile_seq_lens_communicator = _Communicator(
             self.send_to_scheduler, server_args.dp_size
         )
+        self.profile_seq_lens_val_communicator = _Communicator(
+            self.send_to_scheduler, server_args.dp_size
+        )
         self.get_internal_state_communicator = _Communicator(
             self.send_to_scheduler, server_args.dp_size
         )
@@ -291,6 +296,10 @@ class TokenizerCommunicatorMixin:
                     self.profile_seq_lens_communicator.handle_recv,
                 ),
                 (
+                    ProfileSeqLensValReqOutput,
+                    self.profile_seq_lens_val_communicator.handle_recv,
+                ),
+                (
                     GetInternalStateReqOutput,
                     self.get_internal_state_communicator.handle_recv,
                 ),
@@ -325,12 +334,20 @@ class TokenizerCommunicatorMixin:
         max_configs: Optional[int] = None,
         overlap_only: bool = False,
         no_overlap_only: bool = False,
+        resume_idx: Optional[int] = None,
+        repeat: int = 3,
     ) -> ProfileSeqLensReqOutput:
         """Run POD overlap profiling over a grid of sequence lengths.
 
         This forwards a `ProfileSeqLensReqInput` to the scheduler, which calls
         the POD overlap profiler in `model_executor` and writes CSV files that
         can be used for performance model training.
+
+        Args:
+            max_configs: Maximum number of configs to profile.
+            overlap_only: Only run overlap=True profiling.
+            no_overlap_only: Only run overlap=False profiling.
+            resume_idx: Resume profiling from this config index (0-based).
         """
 
         self.auto_create_handle_loop()
@@ -339,8 +356,42 @@ class TokenizerCommunicatorMixin:
             max_configs=max_configs,
             overlap_only=overlap_only,
             no_overlap_only=no_overlap_only,
+            resume_idx=resume_idx,
+            repeat=repeat,
         )
         return (await self.profile_seq_lens_communicator(req))[0]
+
+    async def profile_seq_lens_val(
+        self: "TokenizerManager",
+        num_configs: int = 1000,
+        seed: int = 42,
+        overlap_only: bool = False,
+        no_overlap_only: bool = False,
+        repeat: int = 3,
+    ) -> ProfileSeqLensValReqOutput:
+        """Run POD overlap profiling on random validation configs.
+
+        This forwards a `ProfileSeqLensValReqInput` to the scheduler, which calls
+        the POD overlap profiler with randomly sampled configs (without step sizes)
+        for model validation.
+
+        Args:
+            num_configs: Number of validation configs to generate and profile.
+            seed: Random seed for generating configs.
+            overlap_only: Only run overlap=True profiling.
+            no_overlap_only: Only run overlap=False profiling.
+        """
+
+        self.auto_create_handle_loop()
+
+        req = ProfileSeqLensValReqInput(
+            num_configs=num_configs,
+            seed=seed,
+            overlap_only=overlap_only,
+            no_overlap_only=no_overlap_only,
+            repeat=repeat,
+        )
+        return (await self.profile_seq_lens_val_communicator(req))[0]
 
     async def clear_hicache_storage(self: TokenizerManager) -> ClearHiCacheReqOutput:
         """Clear the hierarchical cache storage."""

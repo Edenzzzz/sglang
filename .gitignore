@@ -245,3 +245,6 @@ lmms-eval
 **/.claude/
 **/.serena/
 !plots/*
+
+
+cuda_coredump*

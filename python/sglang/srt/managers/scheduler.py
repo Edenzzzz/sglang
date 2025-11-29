@@ -17,6 +17,7 @@ import faulthandler
 import logging
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -98,6 +99,8 @@ from sglang.srt.managers.io_struct import (
     ProfileReq,
     ProfileSeqLensReqInput,
     ProfileSeqLensReqOutput,
+    ProfileSeqLensValReqInput,
+    ProfileSeqLensValReqOutput,
     ReleaseMemoryOccupationReqInput,
     ResumeMemoryOccupationReqInput,
     RpcReqInput,
@@ -638,6 +641,7 @@ class Scheduler(
                 (SlowDownReqInput, self.slow_down),
                 (ProfileReq, self.profile),
                 (ProfileSeqLensReqInput, self.profile_seq_lens),
+                (ProfileSeqLensValReqInput, self.profile_seq_lens_val),
                 (FreezeGCReq, self.handle_freeze_gc),
                 (GetInternalStateReq, self.get_internal_state),
                 (SetInternalStateReq, self.set_internal_state),
@@ -653,7 +657,7 @@ class Scheduler(
     def profile_seq_lens(self, req: ProfileSeqLensReqInput) -> ProfileSeqLensReqOutput:
         """Handle a POD overlap profiling request from the tokenizer manager."""
 
-        from sglang.srt.model_executor.pod_overlap_profiler import profile_default_grid
+        from sglang.srt.model_executor.overlap_profiler import profile_default_grid
 
         # Only the main TP worker's model_runner is used for profiling.
         model_runner = self.tp_worker.model_runner
@@ -662,28 +666,100 @@ class Scheduler(
 
         base_dir = "."
         os.makedirs(base_dir, exist_ok=True)
-
-        no_overlap_path = os.path.join(base_dir, f"{safe_name}_profile.csv")
-        overlap_path = os.path.join(base_dir, f"{safe_name}_profile_overlap.csv")
+        commit_hash = (
+            subprocess.check_output(["git", "rev-parse", "HEAD"])
+            .decode("utf-8")
+            .strip()[:8]
+        )
+        cur_time = time.strftime("%Y%m%d_%H%M%S")
+        no_overlap_path = os.path.join(
+            base_dir, f"{safe_name}_{commit_hash}_{cur_time}_profile.csv"
+        )
+        overlap_path = os.path.join(
+            base_dir, f"{safe_name}_{commit_hash}_{cur_time}_profile_overlap.csv"
+        )
 
         num_no_overlap = 0
         num_overlap = 0
 
         if not req.overlap_only:
-            df_no = profile_default_grid(
-                model_runner, overlap=False, max_configs=req.max_configs
+            num_no_overlap = profile_default_grid(
+                model_runner,
+                overlap=False,
+                max_configs=req.max_configs,
+                output_path=no_overlap_path,
+                resume_idx=req.resume_idx,
             )
-            df_no.to_csv(no_overlap_path, index=False)
-            num_no_overlap = len(df_no)
 
         if not req.no_overlap_only:
-            df_ov = profile_default_grid(
-                model_runner, overlap=True, max_configs=req.max_configs
+            num_overlap = profile_default_grid(
+                model_runner,
+                overlap=True,
+                max_configs=req.max_configs,
+                output_path=overlap_path,
+                resume_idx=req.resume_idx,
             )
-            df_ov.to_csv(overlap_path, index=False)
-            num_overlap = len(df_ov)
 
         return ProfileSeqLensReqOutput(
+            num_no_overlap=num_no_overlap,
+            num_overlap=num_overlap,
+            path_no_overlap=no_overlap_path if num_no_overlap > 0 else None,
+            path_overlap=overlap_path if num_overlap > 0 else None,
+        )
+
+    def profile_seq_lens_val(
+        self, req: ProfileSeqLensValReqInput
+    ) -> ProfileSeqLensValReqOutput:
+        """Handle a POD overlap validation profiling request from the tokenizer manager."""
+
+        from sglang.srt.model_executor.overlap_profiler import (
+            profile_validation_configs,
+        )
+
+        # Only the main TP worker's model_runner is used for profiling.
+        model_runner = self.tp_worker.model_runner
+        model_name = model_runner.model_config.model_path or "model"
+        safe_name = model_name.replace("/", "_")
+
+        base_dir = "."
+        os.makedirs(base_dir, exist_ok=True)
+        commit_hash = (
+            subprocess.check_output(["git", "rev-parse", "HEAD"])
+            .decode("utf-8")
+            .strip()[:8]
+        )
+        cur_time = time.strftime("%Y%m%d_%H%M%S")
+        no_overlap_path = os.path.join(
+            base_dir, f"{safe_name}_{commit_hash}_{cur_time}_profile_val.csv"
+        )
+        overlap_path = os.path.join(
+            base_dir, f"{safe_name}_{commit_hash}_{cur_time}_profile_val_overlap.csv"
+        )
+
+        num_no_overlap = 0
+        num_overlap = 0
+
+        if not req.overlap_only:
+            num_no_overlap = profile_validation_configs(
+                model_runner,
+                num_configs=req.num_configs,
+                seed=req.seed,
+                overlap=False,
+                output_path=no_overlap_path,
+                repeat=req.repeat,
+            )
+
+        if not req.no_overlap_only:
+            num_overlap = profile_validation_configs(
+                model_runner,
+                num_configs=req.num_configs,
+                seed=req.seed,
+                overlap=True,
+                output_path=overlap_path,
+                repeat=req.repeat,
+            )
+
+        return ProfileSeqLensValReqOutput(
             num_no_overlap=num_no_overlap,
             num_overlap=num_overlap,
             path_no_overlap=no_overlap_path if num_no_overlap > 0 else None,

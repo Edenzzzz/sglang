@@ -88,6 +88,7 @@ from sglang.srt.managers.io_struct import (
     ParseFunctionCallReq,
     ProfileReqInput,
     ProfileSeqLensReqInput,
+    ProfileSeqLensValReqInput,
     ReleaseMemoryOccupationReqInput,
     ResumeMemoryOccupationReqInput,
     SendWeightsToRemoteInstanceReqInput,
@@ -688,9 +689,33 @@ async def profile_seq_lens_async(obj: Optional[ProfileSeqLensReqInput] = None):
         max_configs=obj.max_configs,
         overlap_only=obj.overlap_only,
         no_overlap_only=obj.no_overlap_only,
+        resume_idx=obj.resume_idx,
+        repeat=obj.repeat,
     )
     content = (
         f"Profile seq_lens completed. "
+        f"no_overlap: {ret.num_no_overlap} configs -> {ret.path_no_overlap}, "
+        f"overlap: {ret.num_overlap} configs -> {ret.path_overlap}\n"
+    )
+    return Response(content=content, status_code=200)
+
+
+@app.api_route("/profile_seq_lens_val", methods=["GET", "POST"])
+async def profile_seq_lens_val_async(obj: Optional[ProfileSeqLensValReqInput] = None):
+    """Run POD overlap validation profiling with random configs."""
+
+    if obj is None:
+        obj = ProfileSeqLensValReqInput()
+
+    ret = await _global_state.tokenizer_manager.profile_seq_lens_val(
+        num_configs=obj.num_configs,
+        seed=obj.seed,
+        overlap_only=obj.overlap_only,
+        no_overlap_only=obj.no_overlap_only,
+        repeat=obj.repeat,
+    )
+    content = (
+        f"Profile seq_lens validation completed. "
         f"no_overlap: {ret.num_no_overlap} configs -> {ret.path_no_overlap}, "
         f"overlap: {ret.num_overlap} configs -> {ret.path_overlap}\n"
     )

@@ -1323,11 +1323,41 @@ class ProfileSeqLensReqInput(BaseReq):
     overlap_only: bool = False
     # Only run overlap=False profiling.
     no_overlap_only: bool = False
+    # Resume profiling from this config index (0-based). Useful for resuming interrupted runs.
+    resume_idx: Optional[int] = None
+    repeat: int = 3
 
 
 @dataclass
 class ProfileSeqLensReqOutput(BaseReq):
     """Response from POD overlap profiling."""
+
+    # Number of configurations successfully profiled (per mode).
+    num_no_overlap: int
+    num_overlap: int
+    # Paths to the CSV files saved on disk.
+    path_no_overlap: Optional[str]
+    path_overlap: Optional[str]
+
+
+@dataclass
+class ProfileSeqLensValReqInput(BaseReq):
+    """Request to run POD overlap profiling on random validation configs."""
+
+    # Number of validation configs to generate and profile.
+    num_configs: int = 1000
+    # Random seed for generating validation configs.
+    seed: int = 42
+    # Only run overlap=True profiling.
+    overlap_only: bool = False
+    # Only run overlap=False profiling.
+    no_overlap_only: bool = False
+    repeat: int = 3
+
+
+@dataclass
+class ProfileSeqLensValReqOutput(BaseReq):
+    """Response from POD overlap validation profiling."""
 
     # Number of configurations successfully profiled (per mode).
     num_no_overlap: int

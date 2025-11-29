@@ -23,6 +23,7 @@ Where:
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -51,7 +52,14 @@ class PerformanceMLP(nn.Module):
       term4' = term4 * Speedup
     """
 
-    def __init__(self, hidden1_size=64, hidden2_size=32, dropout=0.1):
+    def __init__(
+        self,
+        hidden1_size=64,
+        hidden2_size=32,
+        dropout=0.1,
+        pred_log: bool = False,
+        standardize: bool = True,
+    ):
         super().__init__()
         self.hidden1_size = hidden1_size
         self.hidden2_size = hidden2_size
@@ -62,7 +70,8 @@ class PerformanceMLP(nn.Module):
         self.fc3 = nn.Linear(hidden2_size, 1)
 
         self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(dropout)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
 
         # Speedup parameters (umbrella-like quadratic curve) for overlap mode
         self.alpha_1 = nn.Parameter(
@@ -79,6 +88,10 @@ class PerformanceMLP(nn.Module):
         # For [term1, term2, term3, term4, R_pd]
         self.register_buffer("feat_mean", torch.zeros(5, dtype=torch.float32))
         self.register_buffer("feat_std", torch.ones(5, dtype=torch.float32))
+        # Whether to predict in log space and apply exp() during inference
+        self.pred_log = pred_log
+        # Whether to standardize features
+        self.standardize = standardize
 
         # Initialize weights
         self._initialize_weights()
@@ -87,7 +100,7 @@ class PerformanceMLP(nn.Module):
         """Initialize weights using Xavier uniform."""
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
+                nn.init.kaiming_uniform_(m.weight)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
@@ -101,9 +114,9 @@ class PerformanceMLP(nn.Module):
         Returns:
             Predicted time in milliseconds, shape (batch_size,)
         """
-        # During training, we assume inputs are already standardized.
-        # During eval/inference, normalize using stored training-set stats.
-        if not self.training:
+        # During training, we assume inputs are already standardized if standardize=True.
+        # During eval/inference, normalize using stored training-set stats if standardize=True.
+        if self.standardize and not self.training:
             mean = self.feat_mean.view(1, -1)
             std = self.feat_std.view(1, -1)
             features = (features - mean) / std
@@ -120,13 +133,19 @@ class PerformanceMLP(nn.Module):
 
         # Forward through MLP
         x = self.relu(self.fc1(features))
-        x = self.dropout(x)
+        x = self.dropout1(x)
         x = self.relu(self.fc2(x))
-        x = self.dropout(x)
+        x = self.dropout2(x)
         x = self.fc3(x)
 
         # Return flattened output
-        return x.squeeze(-1)
+        pred = x.squeeze(-1)
+
+        # If pred_log is True and not training, apply exp() to convert from log space to time space
+        if self.pred_log and not self.training:
+            pred = pred.exp()
+
+        return pred
 
     def get_params(self):
         """Get model architecture info as a dictionary."""
@@ -194,32 +213,20 @@ def train_model_mlp(
     hidden2_size: int = 32,
     dropout: float = 0.1,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
+    pred_log: bool = False,
+    standardize: bool = True,
 ):
-    """Train the MLP performance model.
 
-    Args:
-        train_df: Training data with columns [term1, term2, term3, term4, R_pd, time_ms]
-        val_df: Validation data with columns [term1, term2, term3, term4, R_pd, time_ms]
-        overlap: Boolean indicating whether to use overlap mode (True) or non-overlap mode (False)
-        model: Optional pre-trained model. If None, creates a new model and trains all parameters.
-               If provided, freezes base MLP and only trains speedup parameters (alpha_1, alpha_2, alpha_3).
-        num_epochs: Number of training epochs
-        learning_rate: Learning rate
-        batch_size: Batch size for training
-        hidden1_size: Size of first hidden layer (only used if model is None)
-        hidden2_size: Size of second hidden layer (only used if model is None)
-        dropout: Dropout rate (only used if model is None)
-        device: Device to train on
-
-    Returns:
-        Trained model and training history
-    """
     criterion = nn.MSELoss()
 
     # Create new model or use existing one
     if model is None:
         model = PerformanceMLP(
-            hidden1_size=hidden1_size, hidden2_size=hidden2_size, dropout=dropout
+            hidden1_size=hidden1_size,
+            hidden2_size=hidden2_size,
+            dropout=dropout,
+            pred_log=pred_log,
+            standardize=standardize,
         ).to(device)
         optimizer = torch.optim.Adam(
             model.parameters(), lr=learning_rate, weight_decay=1e-4
@@ -246,33 +253,50 @@ def train_model_mlp(
         train_df[["term1", "term2", "term3", "term4", "R_pd"]].values,
         dtype=torch.float32,
     ).to(device)
-    train_targets = torch.tensor(train_df["time_ms"].values, dtype=torch.float32).to(
-        device
-    )
+    # Use log(time_ms) as targets if pred_log is True
+    if pred_log:
+        train_targets = torch.log(
+            torch.tensor(train_df["time_ms"].values, dtype=torch.float32) + 1e-8
+        ).to(device)
+    else:
+        train_targets = torch.tensor(
+            train_df["time_ms"].values, dtype=torch.float32
+        ).to(device)
 
     val_features_raw = torch.tensor(
         val_df[["term1", "term2", "term3", "term4", "R_pd"]].values, dtype=torch.float32
     ).to(device)
-    val_targets = torch.tensor(val_df["time_ms"].values, dtype=torch.float32).to(device)
+    val_targets_raw = torch.tensor(val_df["time_ms"].values, dtype=torch.float32).to(
+        device
+    )
+    # For validation, we need raw time_ms for computing metrics after exp()
+    if pred_log:
+        val_targets = torch.log(val_targets_raw + 1e-8)
+    else:
+        val_targets = val_targets_raw
 
     # Feature standardization
-    if train_all_params:
-        # Compute stats from training set
-        feat_mean = train_features_raw.mean(dim=0)
-        feat_std = train_features_raw.std(dim=0)
-        eps = 1e-6
-        feat_std = torch.where(feat_std < eps, torch.ones_like(feat_std), feat_std)
-        # Store stats in the model
-        with torch.no_grad():
-            model.feat_mean.copy_(feat_mean)
-            model.feat_std.copy_(feat_std)
-    else:
-        # Use existing stats from the model
-        feat_mean = model.feat_mean.to(device)
-        feat_std = model.feat_std.to(device)
+    if standardize:
+        if train_all_params:
+            # Compute stats from training set
+            feat_mean = train_features_raw.mean(dim=0)
+            feat_std = train_features_raw.std(dim=0)
+            eps = 1e-6
+            feat_std = torch.where(feat_std < eps, torch.ones_like(feat_std), feat_std)
+            # Store stats in the model
+            with torch.no_grad():
+                model.feat_mean.copy_(feat_mean)
+                model.feat_std.copy_(feat_std)
+        else:
+            # Use existing stats from the model
+            feat_mean = model.feat_mean.to(device)
+            feat_std = model.feat_std.to(device)
 
-    # Standardize train features
-    train_features = (train_features_raw - feat_mean) / feat_std
+        # Standardize train features
+        train_features = (train_features_raw - feat_mean) / feat_std
+    else:
+        # No standardization: use raw features
+        train_features = train_features_raw
 
     # Create data loader
     train_dataset = TensorDataset(train_features, train_targets)
@@ -280,9 +304,9 @@ def train_model_mlp(
 
     history = {"train_loss": [], "val_loss": []}
     best_val_loss = float("inf")
-    patience = 50
+    patience = 100
     patience_counter = 0
-
+    best_ckpt = None
     if train_all_params:
         print(f"Training on {device}")
         print(f"Train samples: {len(train_df)}, Val samples: {len(val_df)}")
@@ -315,7 +339,11 @@ def train_model_mlp(
         model.eval()
         with torch.no_grad():
             val_pred = model(val_features_raw, overlap=overlap)
-            val_loss = criterion(val_pred, val_targets).item()
+            if pred_log:
+                # Model outputs exp(log(time)) = time, compare with raw targets
+                val_loss = torch.mean((val_pred - val_targets_raw) ** 2).item()
+            else:
+                val_loss = criterion(val_pred, val_targets).item()
 
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
@@ -324,6 +352,7 @@ def train_model_mlp(
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
+            best_ckpt = model.state_dict()
         else:
             patience_counter += 1
             if patience_counter >= patience:
@@ -337,23 +366,30 @@ def train_model_mlp(
             )
 
     print(f"\nBest val loss: {best_val_loss:.4f}")
-
+    model.load_state_dict(best_ckpt)
     return model, history
 
 
-def evaluate_model(model: nn.Module, df: pd.DataFrame, device: str = "cpu"):
+def evaluate_model(
+    model: nn.Module, df: pd.DataFrame, device: str = "cpu", pred_log: bool = False
+):
     """Evaluate model on a dataset.
 
     Args:
         model: Trained model
         df: DataFrame with columns [term1, term2, term3, term4, R_pd, overlap, time_ms]
             (overlap is passed as a separate boolean flag, not as a feature)
-        device: Device to evaluate on
+        device: Device to evaluate on (model will be moved to CPU for evaluation)
+        pred_log: If True, model predicts log(time), so apply exp() to predictions
 
     Returns:
-        Dictionary with evaluation metrics
+        Dictionary with evaluation metrics including average inference time
     """
     model.eval()
+
+    # Move model to CPU for evaluation
+    model_cpu = model.cpu()
+    eval_device = "cpu"
 
     # Split into non-overlap and overlap
     df_no_overlap = df[df["overlap"] == False]
@@ -361,6 +397,7 @@ def evaluate_model(model: nn.Module, df: pd.DataFrame, device: str = "cpu"):
 
     preds = []
     targets_list = []
+    inference_times = []
 
     with torch.no_grad():
         # Non-overlap evaluation
@@ -368,12 +405,19 @@ def evaluate_model(model: nn.Module, df: pd.DataFrame, device: str = "cpu"):
             features_no = torch.tensor(
                 df_no_overlap[["term1", "term2", "term3", "term4", "R_pd"]].values,
                 dtype=torch.float32,
-            ).to(device)
+                device=eval_device,
+            )
             targets_no = torch.tensor(
-                df_no_overlap["time_ms"].values, dtype=torch.float32
-            ).to(device)
-            pred_no = model(features_no, overlap=False)
-            preds.append(pred_no.cpu().numpy())
+                df_no_overlap["time_ms"].values, dtype=torch.float32, device=eval_device
+            )
+            # Measure inference time
+            start_time = time.perf_counter()
+            # Model handles exp() internally when pred_log=True and not training
+            pred_no = model_cpu(features_no, overlap=False).cpu().numpy()
+            end_time = time.perf_counter()
+            inference_time = (end_time - start_time) * 1000  # Convert to ms
+            inference_times.append(inference_time)
+            preds.append(pred_no)
             targets_list.append(targets_no.cpu().numpy())
 
         # Overlap evaluation
@@ -381,18 +425,36 @@ def evaluate_model(model: nn.Module, df: pd.DataFrame, device: str = "cpu"):
             features_ov = torch.tensor(
                 df_overlap[["term1", "term2", "term3", "term4", "R_pd"]].values,
                 dtype=torch.float32,
-            ).to(device)
+                device=eval_device,
+            )
             targets_ov = torch.tensor(
-                df_overlap["time_ms"].values, dtype=torch.float32
-            ).to(device)
-            pred_ov = model(features_ov, overlap=True)
-            preds.append(pred_ov.cpu().numpy())
+                df_overlap["time_ms"].values, dtype=torch.float32, device=eval_device
+            )
+            # Measure inference time
+            start_time = time.perf_counter()
+            # Model handles exp() internally when pred_log=True and not training
+            pred_ov = model_cpu(features_ov, overlap=True).cpu().numpy()
+            end_time = time.perf_counter()
+            inference_time = (end_time - start_time) * 1000  # Convert to ms
+            inference_times.append(inference_time)
+            preds.append(pred_ov)
             targets_list.append(targets_ov.cpu().numpy())
 
         pred = np.concatenate(preds) if len(preds) > 0 else np.array([])
         targets = (
             np.concatenate(targets_list) if len(targets_list) > 0 else np.array([])
         )
+
+    # Calculate average inference time per sample
+    total_samples = len(pred)
+    total_inference_time = sum(inference_times)
+    avg_inference_time_per_sample = (
+        total_inference_time / total_samples if total_samples > 0 else 0.0
+    )
+
+    print(
+        f"  Average inference time per sample: {avg_inference_time_per_sample:.4f} ms"
+    )
 
     mse = np.mean((pred - targets) ** 2)
     mean_deviation = np.mean(np.abs(pred - targets))  # Mean absolute error in ms
@@ -417,8 +479,19 @@ def evaluate_model(model: nn.Module, df: pd.DataFrame, device: str = "cpu"):
         "mean_deviation": mean_deviation,
         "mean_deviation_pct": mean_deviation_pct,
         "max_deviation": max_deviation,
+        "avg_inference_time_per_sample_ms": avg_inference_time_per_sample,
         "predictions": pred,
     }
+
+
+def get_model_filename(base_name: str, pred_log: bool, standardize: bool) -> str:
+    suffixes = []
+    if standardize:
+        suffixes.append("_standardize")
+    if pred_log:
+        suffixes.append("_log")
+    suffix = "".join(suffixes)
+    return f"{base_name}{suffix}"
 
 
 def main(args):
@@ -490,6 +563,8 @@ def main(args):
             hidden2_size=args.hidden2_size,
             dropout=args.dropout,
             device=device,
+            pred_log=args.pred_log,
+            standardize=args.standardize,
         )
 
         # If overlap CSV is provided, continue training on overlap data (only speedup parameters)
@@ -542,10 +617,21 @@ def main(args):
                 learning_rate=args.lr,
                 batch_size=args.batch_size,
                 device=device,
+                pred_log=args.pred_log,
+                standardize=args.standardize,
             )
     else:
         # Evaluation-only mode: load existing model
-        model_path = os.path.join(args.output_dir, "perf_model_mlp.pt")
+        # Try to find model file with appropriate suffixes
+        model_filename = get_model_filename(
+            "perf_model_mlp", args.pred_log, args.standardize
+        )
+        model_path = os.path.join(args.output_dir, f"{model_filename}.pt")
+
+        # If file doesn't exist with suffixes, try base name
+        if not os.path.exists(model_path):
+            model_path = os.path.join(args.output_dir, f"{base_name}.pt")
+
         if not os.path.exists(model_path):
             raise FileNotFoundError(
                 f"No existing model found at {model_path}. "
@@ -553,10 +639,15 @@ def main(args):
             )
         print(f"Loading existing model from {model_path} for evaluation...")
         checkpoint = torch.load(model_path, map_location=device)
+        # Use pred_log and standardize from checkpoint if available, otherwise use args
+        pred_log_loaded = checkpoint.get("pred_log", args.pred_log)
+        standardize_loaded = checkpoint.get("standardize", args.standardize)
         model = PerformanceMLP(
             hidden1_size=checkpoint.get("hidden1_size", 64),
             hidden2_size=checkpoint.get("hidden2_size", 32),
             dropout=checkpoint.get("dropout", 0.1),
+            pred_log=pred_log_loaded,
+            standardize=standardize_loaded,
         ).to(device)
         model.load_state_dict(checkpoint["model_state_dict"])
         history = checkpoint.get("history", {"train_loss": [], "val_loss": []})
@@ -572,7 +663,7 @@ def main(args):
             val_df_no_overlap = pd.read_csv(args.val_csv)
             val_df_no_overlap = compute_features(val_df_no_overlap)
             val_metrics_no_overlap = evaluate_model(
-                model, val_df_no_overlap, device=device
+                model, val_df_no_overlap, device=device, pred_log=args.pred_log
             )
             print(f"Non-overlap validation metrics:")
             print(f"  MSE:           {val_metrics_no_overlap['mse']:.4f}")
@@ -600,7 +691,9 @@ def main(args):
             print("Evaluating on overlap validation data...")
             val_df_overlap = pd.read_csv(args.val_csv_overlap)
             val_df_overlap = compute_features(val_df_overlap)
-            val_metrics_overlap = evaluate_model(model, val_df_overlap, device=device)
+            val_metrics_overlap = evaluate_model(
+                model, val_df_overlap, device=device, pred_log=args.pred_log
+            )
             print(f"Overlap validation metrics:")
             print(f"  MSE:           {val_metrics_overlap['mse']:.4f}")
             print(f"  Mean deviation: {val_metrics_overlap['mean_deviation']:.4f} ms")
@@ -620,7 +713,10 @@ def main(args):
 
     # Save model
     os.makedirs(args.output_dir, exist_ok=True)
-    model_path = os.path.join(args.output_dir, "perf_model_mlp.pt")
+    model_filename = get_model_filename(
+        "perf_model_mlp", args.pred_log, args.standardize
+    )
+    model_path = os.path.join(args.output_dir, f"{model_filename}.pt")
     torch.save(
         {
             "model_state_dict": model.state_dict(),
@@ -630,13 +726,18 @@ def main(args):
             "hidden1_size": args.hidden1_size,
             "hidden2_size": args.hidden2_size,
             "dropout": args.dropout,
+            "pred_log": args.pred_log,
+            "standardize": args.standardize,
         },
         model_path,
     )
     print(f"Model saved to {model_path}")
 
     # Save parameters to text file
-    params_path = os.path.join(args.output_dir, "perf_model_mlp_params.txt")
+    params_filename = get_model_filename(
+        "perf_model_mlp_params", args.pred_log, args.standardize
+    )
+    params_path = os.path.join(args.output_dir, f"{params_filename}.txt")
     with open(params_path, "w") as f:
         f.write("Performance MLP Model Parameters\n")
         f.write("=" * 60 + "\n\n")
@@ -649,7 +750,10 @@ def main(args):
 
     # Save validation metrics as CSV
     if val_metrics:
-        metrics_csv_path = os.path.join(args.output_dir, "validation_metrics_mlp.csv")
+        metrics_filename = get_model_filename(
+            "validation_metrics_mlp", args.pred_log, args.standardize
+        )
+        metrics_csv_path = os.path.join(args.output_dir, f"{metrics_filename}.csv")
         metrics_rows = []
         if "non-overlap-mse" in val_metrics:
             metrics_rows.append(
@@ -758,6 +862,16 @@ if __name__ == "__main__":
         type=int,
         default=42,
         help="Random seed (default: 42)",
+    )
+    parser.add_argument(
+        "--pred-log",
+        action="store_true",
+        help="If set, predict log(time) during training and output exp(pred) during inference",
+    )
+    parser.add_argument(
+        "--standardize",
+        action="store_true",
+        help="If set, standardize features during training and evaluation (default: disabled)",
     )
 
     args = parser.parse_args()

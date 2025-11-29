@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Example usage:
-python /workloads/train_perf_model.py --csv /path/to/profiling.csv --val-csv /path/to/validation.csv --csv-overlap /path/to/overlap.csv --val-csv-overlap /path/to/overlap-validation.csv
+python /workloads/train_regression_model.py --csv /path/to/profiling.csv --val-csv /path/to/validation.csv --csv-overlap /path/to/overlap.csv --val-csv-overlap /path/to/overlap-validation.csv
 
 Train performance model for POD attention overlap prediction.
 
@@ -26,6 +26,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -56,7 +57,7 @@ class PerformanceModel(nn.Module):
       S_d = sum(r_d)
     """
 
-    def __init__(self):
+    def __init__(self, pred_log: bool = False, standardize: bool = True):
         super().__init__()
         # Model parameters
         self.theta_1p = nn.Parameter(
@@ -87,6 +88,10 @@ class PerformanceModel(nn.Module):
         # These are per-feature stats for [term1, term2, term3, term4].
         self.register_buffer("feat_mean", torch.zeros(4, dtype=torch.float32))
         self.register_buffer("feat_std", torch.ones(4, dtype=torch.float32))
+        # Whether to predict in log space and apply exp() during inference
+        self.pred_log = pred_log
+        # Whether to standardize features
+        self.standardize = standardize
 
     def forward(self, term1, term2, term3, term4, overlap, R_pd):
         """Forward pass.
@@ -110,9 +115,9 @@ class PerformanceModel(nn.Module):
             # No overlap: speedup = 1.0
             speedup = 1.0
 
-        # During training, we assume inputs are already standardized.
-        # During eval/inference, normalize using stored training-set stats.
-        if not self.training:
+        # During training, we assume inputs are already standardized if standardize=True.
+        # During eval/inference, normalize using stored training-set stats if standardize=True.
+        if self.standardize and not self.training:
             features = torch.stack([term1, term2, term3, term4], dim=0)
             # Reshape stats to broadcast over batch dimension
             mean = self.feat_mean.view(-1, 1)
@@ -128,6 +133,9 @@ class PerformanceModel(nn.Module):
             + speedup * self.theta_4d * term4
             + self.beta
         )
+        # If pred_log is True and not training, apply exp() to convert from log space to time space
+        if self.pred_log and not self.training:
+            pred = pred.exp()
         return pred
 
     def get_params(self):
@@ -184,243 +192,223 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def train_model_no_overlap(
+def train_model(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
+    overlap: bool = False,
+    model: Optional[PerformanceModel] = None,
     num_epochs: int = 1000,
     learning_rate: float = 1e-3,
     batch_size: int = 256,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
+    pred_log: bool = False,
+    standardize: bool = True,
 ):
-    """Train the performance model on non-overlap data.
+    """Train the performance model.
 
     Args:
         train_df: Training data with columns [term1, term2, term3, term4, R_pd, time_ms]
         val_df: Validation data with columns [term1, term2, term3, term4, R_pd, time_ms]
+        overlap: Boolean indicating whether to use overlap mode (True) or non-overlap mode (False)
+        model: Optional pre-trained model. If None, creates a new model and trains all parameters.
+               If provided, freezes base parameters and only trains speedup parameters (alpha_1, alpha_2, alpha_3).
         num_epochs: Number of training epochs
         learning_rate: Learning rate
         batch_size: Batch size for training
         device: Device to train on
+        pred_log: If True, predict log(time) during training
 
     Returns:
         Trained model and training history
     """
-    model = PerformanceModel().to(device)
-
-    # Prepare data
-    # Raw features
-    train_features_raw = torch.tensor(
-        train_df[["term1", "term2", "term3", "term4"]].values, dtype=torch.float32
-    ).to(device)
-    train_R_pd = torch.tensor(train_df["R_pd"].values, dtype=torch.float32).to(device)
-    train_targets = torch.tensor(train_df["time_ms"].values, dtype=torch.float32).to(
-        device
-    )
-
-    val_features = torch.tensor(
-        val_df[["term1", "term2", "term3", "term4"]].values, dtype=torch.float32
-    ).to(device)
-    val_R_pd = torch.tensor(val_df["R_pd"].values, dtype=torch.float32).to(device)
-    val_targets = torch.tensor(val_df["time_ms"].values, dtype=torch.float32).to(device)
-
-    # -----------------------------
-    # Feature standardization (train set)
-    # -----------------------------
-    feat_mean = train_features_raw.mean(dim=0)
-    feat_std = train_features_raw.std(dim=0)
-    # Avoid extremely small std which would explode gradients / blow up normalization
-    eps = 1e-6
-    feat_std = torch.where(feat_std < eps, torch.ones_like(feat_std), feat_std)
-
-    # Store stats in the model so that forward() can normalize at eval time
-    with torch.no_grad():
-        model.feat_mean.copy_(feat_mean)
-        model.feat_std.copy_(feat_std)
-
-    # Standardize train features; keep validation features in original space
-    train_features = (train_features_raw - feat_mean) / feat_std
-
-    # -----------------------------
-    # Closed-form least squares for non-overlap terms
-    # -----------------------------
-    # Design matrix for standardized features (no intercept for features, bias is separate)
-    # X has shape [N, 5]: [term1_n, term2_n, term3_n, term4_n, 1]
-    X = train_features.to(torch.float64)
-    ones = torch.ones((X.shape[0], 1), dtype=torch.float64, device=device)
-    X = torch.cat([X, ones], dim=1)
-    y = train_targets.to(torch.float64).unsqueeze(1)
-
-    # Solve X w ≈ y in least-squares sense
-    solution = torch.linalg.lstsq(X, y)
-    w = solution.solution.squeeze(1)  # shape [5]
-
-    # Assign parameters (note θ's operate on standardized features)
-    with torch.no_grad():
-        model.theta_1p.copy_(w[0].to(torch.float32).unsqueeze(0))
-        model.theta_2p.copy_(w[1].to(torch.float32).unsqueeze(0))
-        model.theta_3.copy_(w[2].to(torch.float32).unsqueeze(0))
-        model.theta_4d.copy_(w[3].to(torch.float32).unsqueeze(0))
-        model.beta.copy_(w[4].to(torch.float32))
-
-    # Compute training and validation losses for logging
-    model.eval()
-    with torch.no_grad():
-        # Training loss
-        term1_t, term2_t, term3_t, term4_t = train_features.T
-        pred_train = model(term1_t, term2_t, term3_t, term4_t, False, train_R_pd)
-        train_mse = torch.mean((pred_train - train_targets) ** 2).item()
-
-        # Validation loss
-        term1_v, term2_v, term3_v, term4_v = val_features.T
-        pred_val = model(term1_v, term2_v, term3_v, term4_v, False, val_R_pd)
-        val_mse = torch.mean((pred_val - val_targets) ** 2).item()
-
-    history = {
-        "train_loss": [train_mse],
-        "val_loss": [val_mse],
-    }
-
-    print(f"Fitted non-overlap parameters (least squares): {model.get_params()}")
-    print(f"Non-overlap train MSE: {train_mse:.4f}")
-    print(f"Non-overlap val MSE:   {val_mse:.4f}")
-
-    return model, history
-
-
-def train_model_overlap(
-    model: PerformanceModel,
-    train_df: pd.DataFrame,
-    val_df: pd.DataFrame,
-    num_epochs: int = 1000,
-    learning_rate: float = 1e-3,
-    batch_size: int = 256,
-    device: str = "cuda" if torch.cuda.is_available() else "cpu",
-):
-    """Train the overlap speedup parameters while freezing original parameters.
-
-    Args:
-        model: Pre-trained model (original parameters will be frozen)
-        train_df: Training data with columns [term1, term2, term3, term4, R_pd, time_ms]
-        val_df: Validation data with columns [term1, term2, term3, term4, R_pd, time_ms]
-        num_epochs: Number of training epochs
-        learning_rate: Learning rate
-        batch_size: Batch size for training
-        device: Device to train on
-
-    Returns:
-        Trained model and training history
-    """
-    # Freeze original parameters (theta_1p, theta_2p, theta_3, theta_4d, beta)
-    model.theta_1p.requires_grad = False
-    model.theta_2p.requires_grad = False
-    model.theta_3.requires_grad = False
-    model.theta_4d.requires_grad = False
-    model.beta.requires_grad = False
+    # Create new model or use existing one
+    if model is None:
+        model = PerformanceModel(pred_log=pred_log, standardize=standardize).to(device)
+        train_main_params = True
+    else:
+        # Freeze original parameters (theta_1p, theta_2p, theta_3, theta_4d, beta)
+        model.theta_1p.requires_grad = False
+        model.theta_2p.requires_grad = False
+        model.theta_3.requires_grad = False
+        model.theta_4d.requires_grad = False
+        model.beta.requires_grad = False
+        train_main_params = False
 
     # Prepare data
     train_features_raw = torch.tensor(
         train_df[["term1", "term2", "term3", "term4"]].values, dtype=torch.float32
     ).to(device)
     train_R_pd = torch.tensor(train_df["R_pd"].values, dtype=torch.float32).to(device)
-    train_targets = torch.tensor(train_df["time_ms"].values, dtype=torch.float32).to(
-        device
-    )
+    # Use log(time_ms) as targets if pred_log is True
+    if pred_log:
+        train_targets = torch.log(
+            torch.tensor(train_df["time_ms"].values, dtype=torch.float32) + 1e-8
+        ).to(device)
+    else:
+        train_targets = torch.tensor(
+            train_df["time_ms"].values, dtype=torch.float32
+        ).to(device)
 
     val_features = torch.tensor(
         val_df[["term1", "term2", "term3", "term4"]].values, dtype=torch.float32
     ).to(device)
     val_R_pd = torch.tensor(val_df["R_pd"].values, dtype=torch.float32).to(device)
-    val_targets = torch.tensor(val_df["time_ms"].values, dtype=torch.float32).to(device)
+    val_targets_raw = torch.tensor(val_df["time_ms"].values, dtype=torch.float32).to(
+        device
+    )
+    # For validation, we need raw time_ms for computing metrics after exp()
+    if pred_log:
+        val_targets = torch.log(val_targets_raw + 1e-8)
+    else:
+        val_targets = val_targets_raw
 
-    # Feature standardization for overlap training uses the same stats as non-overlap.
-    feat_mean = model.feat_mean.to(device)
-    feat_std = model.feat_std.to(device)
-    train_features = (train_features_raw - feat_mean) / feat_std
+    # Feature standardization
+    if standardize:
+        if train_main_params:
+            # Compute stats from training set
+            feat_mean = train_features_raw.mean(dim=0)
+            feat_std = train_features_raw.std(dim=0)
+            # Avoid extremely small std which would explode gradients / blow up normalization
+            eps = 1e-6
+            feat_std = torch.where(feat_std < eps, torch.ones_like(feat_std), feat_std)
+            # Store stats in the model so that forward() can normalize at eval time
+            with torch.no_grad():
+                model.feat_mean.copy_(feat_mean)
+                model.feat_std.copy_(feat_std)
+        else:
+            # Use existing stats from the model
+            feat_mean = model.feat_mean.to(device)
+            feat_std = model.feat_std.to(device)
+
+        # Standardize train features
+        train_features = (train_features_raw - feat_mean) / feat_std
+    else:
+        # No standardization: use raw features
+        train_features = train_features_raw
 
     # -----------------------------
-    # Closed-form least squares for overlap speedup parameters α₁, α₂, α₃
+    # Closed-form least squares
     # -----------------------------
-    # Use current θ parameters (already fitted on non-overlap) and solve for α's.
-    # Model for overlap:
-    #   T = θ1 * term1_n + θ3 * term3_n + β
-    #       + α1 * (θ2 * term2_n * R + θ4 * term4_n * R)
-    #       + α2 * (θ2 * term2_n * R^2 + θ4 * term4_n * R^2)
-    #       + α3 * (θ2 * term2_n + θ4 * term4_n)
-    #
-    # This is linear in [α1, α2, α3].
-    theta_1 = model.theta_1p.to(torch.float64)
-    theta_2 = model.theta_2p.to(torch.float64)
-    theta_3 = model.theta_3.to(torch.float64)
-    theta_4 = model.theta_4d.to(torch.float64)
-    beta = model.beta.to(torch.float64)
+    if train_main_params:
+        # Solve for theta_1p, theta_2p, theta_3, theta_4d, beta
+        # Design matrix for standardized features (no intercept for features, bias is separate)
+        # X has shape [N, 5]: [term1_n, term2_n, term3_n, term4_n, 1]
+        X = train_features.to(torch.float64)
+        ones = torch.ones((X.shape[0], 1), dtype=torch.float64, device=device)
+        X = torch.cat([X, ones], dim=1)
+        y = train_targets.to(torch.float64).unsqueeze(1)
 
-    # Standardized features for overlap training
-    feat_mean = model.feat_mean.to(device).to(torch.float64)
-    feat_std = model.feat_std.to(device).to(torch.float64)
-    train_features_std = (train_features_raw.to(torch.float64) - feat_mean) / feat_std
+        # Solve X w ≈ y in least-squares sense
+        solution = torch.linalg.lstsq(X, y)
+        w = solution.solution.squeeze(1)  # shape [5]
 
-    term1_n, term2_n, term3_n, term4_n = train_features_std.T
-    R = train_R_pd.to(torch.float64)
-    y = train_targets.to(torch.float64)
+        # Assign parameters (note θ's operate on standardized features)
+        with torch.no_grad():
+            model.theta_1p.copy_(w[0].to(torch.float32).unsqueeze(0))
+            model.theta_2p.copy_(w[1].to(torch.float32).unsqueeze(0))
+            model.theta_3.copy_(w[2].to(torch.float32).unsqueeze(0))
+            model.theta_4d.copy_(w[3].to(torch.float32).unsqueeze(0))
+            model.beta.copy_(w[4].to(torch.float32))
+    else:
+        # Solve for overlap speedup parameters α₁, α₂, α₃ only
+        # Use current θ parameters (already fitted on non-overlap) and solve for α's.
+        # Model for overlap:
+        #   T = θ1 * term1_n + θ3 * term3_n + β
+        #       + α1 * (θ2 * term2_n * R + θ4 * term4_n * R)
+        #       + α2 * (θ2 * term2_n * R^2 + θ4 * term4_n * R^2)
+        #       + α3 * (θ2 * term2_n + θ4 * term4_n)
+        #
+        # This is linear in [α1, α2, α3].
+        theta_1 = model.theta_1p.to(torch.float64)
+        theta_2 = model.theta_2p.to(torch.float64)
+        theta_3 = model.theta_3.to(torch.float64)
+        theta_4 = model.theta_4d.to(torch.float64)
+        beta = model.beta.to(torch.float64)
 
-    base = (
-        theta_1 * term1_n + theta_3 * term3_n + beta
-    )  # base contribution without overlap speedup
+        # Features for overlap training (standardize if enabled)
+        if standardize:
+            feat_mean_f64 = model.feat_mean.to(device).to(torch.float64)
+            feat_std_f64 = model.feat_std.to(device).to(torch.float64)
+            train_features_std = (
+                train_features_raw.to(torch.float64) - feat_mean_f64
+            ) / feat_std_f64
+        else:
+            train_features_std = train_features_raw.to(torch.float64)
 
-    A1 = theta_2 * term2_n * R + theta_4 * term4_n * R
-    A2 = theta_2 * term2_n * R**2 + theta_4 * term4_n * R**2
-    A3 = theta_2 * term2_n + theta_4 * term4_n
+        term1_n, term2_n, term3_n, term4_n = train_features_std.T
+        R = train_R_pd.to(torch.float64)
+        y = train_targets.to(torch.float64)
 
-    # Solve for α's in least-squares sense: [A1 A2 A3] * alpha ≈ (y - base)
-    X = torch.stack([A1, A2, A3], dim=1)  # [N, 3]
-    target = (y - base).unsqueeze(1)  # [N, 1]
+        base = (
+            theta_1 * term1_n + theta_3 * term3_n + beta
+        )  # base contribution without overlap speedup
 
-    solution = torch.linalg.lstsq(X, target)
-    alpha = solution.solution.squeeze(1)  # [3]
+        A1 = theta_2 * term2_n * R + theta_4 * term4_n * R
+        A2 = theta_2 * term2_n * R**2 + theta_4 * term4_n * R**2
+        A3 = theta_2 * term2_n + theta_4 * term4_n
 
-    with torch.no_grad():
-        model.alpha_1.copy_(alpha[0].to(torch.float32))
-        model.alpha_2.copy_(alpha[1].to(torch.float32))
-        model.alpha_3.copy_(alpha[2].to(torch.float32))
+        # Solve for α's in least-squares sense: [A1 A2 A3] * alpha ≈ (y - base)
+        X = torch.stack([A1, A2, A3], dim=1)  # [N, 3]
+        target = (y - base).unsqueeze(1)  # [N, 1]
+
+        solution = torch.linalg.lstsq(X, target)
+        alpha = solution.solution.squeeze(1)  # [3]
+
+        with torch.no_grad():
+            model.alpha_1.copy_(alpha[0].to(torch.float32))
+            model.alpha_2.copy_(alpha[1].to(torch.float32))
+            model.alpha_3.copy_(alpha[2].to(torch.float32))
 
     # Compute training and validation losses for logging
     model.eval()
     with torch.no_grad():
         # Training loss
-        pred_train = model(
-            term1_n.to(torch.float32),
-            term2_n.to(torch.float32),
-            term3_n.to(torch.float32),
-            term4_n.to(torch.float32),
-            True,
-            train_R_pd,
-        )
-        train_mse = torch.mean((pred_train - train_targets) ** 2).item()
+        if train_main_params:
+            term1_t, term2_t, term3_t, term4_t = train_features.T
+        else:
+            # For overlap, use standardized features
+            term1_t, term2_t, term3_t, term4_t = train_features_std.T.to(torch.float32)
+        pred_train = model(term1_t, term2_t, term3_t, term4_t, overlap, train_R_pd)
+
+        if pred_log:
+            # Model outputs exp(log(time)) = time, compare with exp(log(targets))
+            train_targets_exp = torch.exp(train_targets)
+            train_mse = torch.mean((pred_train - train_targets_exp) ** 2).item()
+        else:
+            train_mse = torch.mean((pred_train - train_targets) ** 2).item()
 
         # Validation loss
         term1_v, term2_v, term3_v, term4_v = val_features.T
-        pred_val = model(term1_v, term2_v, term3_v, term4_v, True, val_R_pd)
-        val_mse = torch.mean((pred_val - val_targets) ** 2).item()
+        pred_val = model(term1_v, term2_v, term3_v, term4_v, overlap, val_R_pd)
+        if pred_log:
+            # Model outputs exp(log(time)) = time, compare with raw targets
+            val_mse = torch.mean((pred_val - val_targets_raw) ** 2).item()
+        else:
+            val_mse = torch.mean((pred_val - val_targets) ** 2).item()
 
     history = {
         "train_loss": [train_mse],
         "val_loss": [val_mse],
     }
 
-    print(f"Fitted overlap speedup parameters (least squares): {model.get_params()}")
-    print(f"Overlap train MSE: {train_mse:.4f}")
-    print(f"Overlap val MSE:   {val_mse:.4f}")
+    mode_str = "overlap" if overlap else "non-overlap"
+    print(f"Fitted {mode_str} parameters (least squares): {model.get_params()}")
+    print(f"{mode_str.capitalize()} train MSE: {train_mse:.4f}")
+    print(f"{mode_str.capitalize()} val MSE:   {val_mse:.4f}")
 
     return model, history
 
 
-def evaluate_model(model: nn.Module, df: pd.DataFrame, device: str = "cpu"):
+def evaluate_model(
+    model: nn.Module, df: pd.DataFrame, device: str = "cpu", pred_log: bool = False
+):
     """Evaluate model on a dataset.
 
     Args:
         model: Trained model
         df: DataFrame with columns [term1, term2, term3, term4, R_pd, overlap, time_ms]
         device: Device to evaluate on
+        pred_log: If True, model predicts log(time), so apply exp() to predictions
 
     Returns:
         Dictionary with evaluation metrics
@@ -445,6 +433,7 @@ def evaluate_model(model: nn.Module, df: pd.DataFrame, device: str = "cpu"):
                 df_no_overlap["R_pd"].values, dtype=torch.float32
             ).to(device)
             term1, term2, term3, term4 = features_no.T
+            # Model handles exp() internally when pred_log=True and not training
             pred_no = model(term1, term2, term3, term4, False, R_pd_no).cpu().numpy()
             preds.append(pred_no)
             targets_list.append(df_no_overlap["time_ms"].values)
@@ -459,6 +448,7 @@ def evaluate_model(model: nn.Module, df: pd.DataFrame, device: str = "cpu"):
                 device
             )
             term1, term2, term3, term4 = features_ov.T
+            # Model handles exp() internally when pred_log=True and not training
             pred_ov = model(term1, term2, term3, term4, True, R_pd_ov).cpu().numpy()
             preds.append(pred_ov)
             targets_list.append(df_overlap["time_ms"].values)
@@ -493,6 +483,16 @@ def evaluate_model(model: nn.Module, df: pd.DataFrame, device: str = "cpu"):
         "max_deviation": max_deviation,
         "predictions": pred,
     }
+
+
+def get_model_filename(base_name: str, pred_log: bool, standardize: bool) -> str:
+    suffixes = []
+    if standardize:
+        suffixes.append("_standardize")
+    if pred_log:
+        suffixes.append("_log")
+    suffix = "".join(suffixes)
+    return f"{base_name}{suffix}"
 
 
 def main(args):
@@ -546,13 +546,17 @@ def main(args):
         print("=" * 60)
         print("Fitting on non-overlap data (least squares)...")
         print("=" * 60)
-        model, history = train_model_no_overlap(
+        model, history = train_model(
             train_df,
             val_df,
+            overlap=False,
+            model=None,
             num_epochs=args.epochs,
             learning_rate=args.lr,
             batch_size=args.batch_size,
             device=device,
+            pred_log=args.pred_log,
+            standardize=args.standardize,
         )
 
         # If overlap CSV is provided, fit overlap speedup parameters
@@ -598,18 +602,30 @@ def main(args):
                 )
 
             # Fit overlap speedup parameters (only α's) using least squares
-            model, history_overlap = train_model_overlap(
-                model,
+            model, history_overlap = train_model(
                 train_df_overlap,
                 val_df_overlap,
+                overlap=True,
+                model=model,
                 num_epochs=args.epochs,
                 learning_rate=args.lr,
                 batch_size=args.batch_size,
                 device=device,
+                pred_log=args.pred_log,
+                standardize=args.standardize,
             )
     else:
         # Evaluation-only mode: load existing model
-        model_path = os.path.join(args.output_dir, "perf_model.pt")
+        # Try to find model file with appropriate suffixes
+        model_filename = get_model_filename(
+            "regression_model", args.pred_log, args.standardize
+        )
+        model_path = os.path.join(args.output_dir, f"{model_filename}.pt")
+
+        # If file doesn't exist with suffixes, try base name
+        if not os.path.exists(model_path):
+            model_path = os.path.join(args.output_dir, f"regression_model.pt")
+
         if not os.path.exists(model_path):
             raise FileNotFoundError(
                 f"No existing model found at {model_path}. "
@@ -617,7 +633,12 @@ def main(args):
             )
         print(f"Loading existing model from {model_path} for evaluation...")
         checkpoint = torch.load(model_path, map_location=device)
-        model = PerformanceModel().to(device)
+        # Use pred_log and standardize from checkpoint if available, otherwise use args
+        pred_log_loaded = checkpoint.get("pred_log", args.pred_log)
+        standardize_loaded = checkpoint.get("standardize", args.standardize)
+        model = PerformanceModel(
+            pred_log=pred_log_loaded, standardize=standardize_loaded
+        ).to(device)
         model.load_state_dict(checkpoint["model_state_dict"])
         history = checkpoint.get("history", {"train_loss": [], "val_loss": []})
 
@@ -632,7 +653,7 @@ def main(args):
             val_df_no_overlap = pd.read_csv(args.val_csv)
             val_df_no_overlap = compute_features(val_df_no_overlap)
             val_metrics_no_overlap = evaluate_model(
-                model, val_df_no_overlap, device=device
+                model, val_df_no_overlap, device=device, pred_log=args.pred_log
             )
             print(f"Non-overlap validation metrics:")
             print(f"  MSE:           {val_metrics_no_overlap['mse']:.4f}")
@@ -661,7 +682,9 @@ def main(args):
             print("Evaluating on overlap validation data...")
             val_df_overlap = pd.read_csv(args.val_csv_overlap)
             val_df_overlap = compute_features(val_df_overlap)
-            val_metrics_overlap = evaluate_model(model, val_df_overlap, device=device)
+            val_metrics_overlap = evaluate_model(
+                model, val_df_overlap, device=device, pred_log=args.pred_log
+            )
             print(f"Overlap validation metrics:")
             print(f"  MSE:           {val_metrics_overlap['mse']:.4f}")
             print(f"  Mean deviation: {val_metrics_overlap['mean_deviation']:.4f} ms")
@@ -682,20 +705,28 @@ def main(args):
 
     # Save model
     os.makedirs(args.output_dir, exist_ok=True)
-    model_path = os.path.join(args.output_dir, "perf_model.pt")
+    model_filename = get_model_filename(
+        "regression_model", args.pred_log, args.standardize
+    )
+    model_path = os.path.join(args.output_dir, f"{model_filename}.pt")
     torch.save(
         {
             "model_state_dict": model.state_dict(),
             "params": model.get_params(),
             "history": history,
             "val_metrics": val_metrics,
+            "pred_log": args.pred_log,
+            "standardize": args.standardize,
         },
         model_path,
     )
     print(f"Model saved to {model_path}")
 
     # Save parameters to text file
-    params_path = os.path.join(args.output_dir, "perf_model_params.txt")
+    params_filename = get_model_filename(
+        "regression_model_params", args.pred_log, args.standardize
+    )
+    params_path = os.path.join(args.output_dir, f"{params_filename}.txt")
     with open(params_path, "w") as f:
         if args.csv_overlap:
             f.write(
@@ -713,7 +744,10 @@ def main(args):
 
     # Save validation metrics as CSV
     if val_metrics:
-        metrics_csv_path = os.path.join(args.output_dir, "validation_metrics.csv")
+        metrics_filename = get_model_filename(
+            "validation_metrics", args.pred_log, args.standardize
+        )
+        metrics_csv_path = os.path.join(args.output_dir, f"{metrics_filename}.csv")
         metrics_rows = []
         if "non-overlap-mse" in val_metrics:
             metrics_rows.append(
@@ -804,6 +838,16 @@ if __name__ == "__main__":
         type=int,
         default=42,
         help="Random seed (default: 42)",
+    )
+    parser.add_argument(
+        "--pred-log",
+        action="store_true",
+        help="If set, predict log(time) during training and output exp(pred) during inference",
+    )
+    parser.add_argument(
+        "--standardize",
+        action="store_true",
+        help="If set, standardize features during training and evaluation (default: disabled)",
     )
 
     args = parser.parse_args()

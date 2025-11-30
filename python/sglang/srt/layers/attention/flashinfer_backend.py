@@ -860,6 +860,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 causal_p=not layer.is_cross_attention,
                 return_lse=True,
                 join_outputs=False,
+                debug=True,
             )
         except Exception as e:
             torch.distributed.breakpoint()

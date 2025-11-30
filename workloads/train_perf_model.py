@@ -42,16 +42,17 @@ class PerformanceModel(nn.Module):
     """Performance model for predicting execution time of mixed prefill+decode batches.
 
     Without overlap (Speedup = 1.0):
-      T = θ₁ₚ * term1 + θ₂ₚ * term2 + θ₃ * term3 + θ₄ₐ * term4 + β
+      T = θ₁ₚ * term1 + θ₂ₚ * term2 + θ₃ * term3 + θ₄ₐ * term4 + θ₅ₐ * term5 + β
 
     With overlap (Speedup = α₁Rₚd + α₂Rₚd² + α₃):
-      T = θ₁ₚ * term1 + Speedup * θ₂ₚ * term2 + θ₃ * term3 + Speedup * θ₄ₐ * term4 + β
+      T = θ₁ₚ * term1 + Speedup * θ₂ₚ * term2 + θ₃ * term3 + Speedup * θ₄ₐ * term4 + θ₅ₐ * term5 + β
 
     Where:
       term1 = sum(n_{i,p}²) = n_p²
       term2 = sum(n_{i,p} * r_{i,p}) = n_p * r_p
-      term3 = sum(n_{i,p} + r_{i,p} + r_{i,d}) = n_p + r_p + (r_d * decode_bs)
+      term3 = sum(n_{i,p} + r_{i,p}) = n_p + r_p
       term4 = sum(r_{i,d}) = r_d * decode_bs
+      term5 = sum(r_{i,d}²) = r_d² * decode_bs
       Rₚd = S_d / (S_p + S_d)
       S_p = sum(r_p)
       S_d = sum(r_d)
@@ -68,10 +69,13 @@ class PerformanceModel(nn.Module):
         )  # n_p * r_p coefficient
         self.theta_3 = nn.Parameter(
             torch.randn(1, dtype=torch.float32)
-        )  # (n_p + r_p + r_d*bs) coefficient
+        )  # (n_p + r_p) coefficient
         self.theta_4d = nn.Parameter(
             torch.randn(1, dtype=torch.float32)
         )  # r_d * decode_bs coefficient
+        self.theta_5d = nn.Parameter(
+            torch.randn(1, dtype=torch.float32)
+        )  # r_d² coefficient
         self.beta = nn.Parameter(torch.tensor(0.0, dtype=torch.float32))  # bias term
         # Speedup parameters (umbrella-like quadratic curve)
         self.alpha_1 = nn.Parameter(
@@ -85,22 +89,23 @@ class PerformanceModel(nn.Module):
         )  # constant term
 
         # Feature normalization stats (computed from non-overlap training set).
-        # These are per-feature stats for [term1, term2, term3, term4].
-        self.register_buffer("feat_mean", torch.zeros(4, dtype=torch.float32))
-        self.register_buffer("feat_std", torch.ones(4, dtype=torch.float32))
+        # These are per-feature stats for [term1, term2, term3, term4, term5].
+        self.register_buffer("feat_mean", torch.zeros(5, dtype=torch.float32))
+        self.register_buffer("feat_std", torch.ones(5, dtype=torch.float32))
         # Whether to predict in log space and apply exp() during inference
         self.pred_log = pred_log
         # Whether to standardize features
         self.standardize = standardize
 
-    def forward(self, term1, term2, term3, term4, overlap, R_pd):
+    def forward(self, term1, term2, term3, term4, term5, overlap, R_pd):
         """Forward pass.
 
         Args:
             term1: n_p²
             term2: n_p * r_p
-            term3: n_p + r_p + (r_d * decode_bs)
+            term3: n_p + r_p
             term4: r_d * decode_bs
+            term5: r_d²
             overlap: Boolean indicating whether overlap is enabled for this forward pass
             R_pd: Rₚd = S_d / (S_p + S_d) for speedup calculation
 
@@ -118,19 +123,20 @@ class PerformanceModel(nn.Module):
         # During training, we assume inputs are already standardized if standardize=True.
         # During eval/inference, normalize using stored training-set stats if standardize=True.
         if self.standardize and not self.training:
-            features = torch.stack([term1, term2, term3, term4], dim=0)
+            features = torch.stack([term1, term2, term3, term4, term5], dim=0)
             # Reshape stats to broadcast over batch dimension
             mean = self.feat_mean.view(-1, 1)
             std = self.feat_std.view(-1, 1)
             features = (features - mean) / std
 
-            term1, term2, term3, term4 = features
+            term1, term2, term3, term4, term5 = features
 
         pred = (
             self.theta_1p * term1
             + speedup * self.theta_2p * term2
             + self.theta_3 * term3
             + speedup * self.theta_4d * term4
+            + self.theta_5d * term5
             + self.beta
         )
         # If pred_log is True and not training, apply exp() to convert from log space to time space
@@ -145,6 +151,7 @@ class PerformanceModel(nn.Module):
             "theta_2p": self.theta_2p.item(),
             "theta_3": self.theta_3.item(),
             "theta_4d": self.theta_4d.item(),
+            "theta_5d": self.theta_5d.item(),
             "beta": self.beta.item(),
             "alpha_1": self.alpha_1.item(),
             "alpha_2": self.alpha_2.item(),
@@ -153,10 +160,12 @@ class PerformanceModel(nn.Module):
             "feat_mean_term2": float(self.feat_mean[1].item()),
             "feat_mean_term3": float(self.feat_mean[2].item()),
             "feat_mean_term4": float(self.feat_mean[3].item()),
+            "feat_mean_term5": float(self.feat_mean[4].item()),
             "feat_std_term1": float(self.feat_std[0].item()),
             "feat_std_term2": float(self.feat_std[1].item()),
             "feat_std_term3": float(self.feat_std[2].item()),
             "feat_std_term4": float(self.feat_std[3].item()),
+            "feat_std_term5": float(self.feat_std[4].item()),
         }
 
 
@@ -167,7 +176,7 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
         df: DataFrame with columns [n_p, r_p, r_d, decode_bs, time_ms, overlap]
 
     Returns:
-        DataFrame with added feature columns [term1, term2, term3, term4, R_pd] and preserved overlap
+        DataFrame with added feature columns [term1, term2, term3, term4, term5, R_pd] and preserved overlap
     """
     df = df.copy()
 
@@ -178,8 +187,9 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     # Compute model terms
     df["term1"] = df["n_p"] ** 2
     df["term2"] = df["n_p"] * df["r_p"]
-    df["term3"] = df["n_p"] + df["r_p"] + (df["r_d"] * df["decode_bs"])
+    df["term3"] = df["n_p"] + df["r_p"]
     df["term4"] = df["r_d"] * df["decode_bs"]
+    df["term5"] = (df["r_d"] ** 2) * df["decode_bs"]
 
     # Compute R_pd = S_d / (S_p + S_d)
     # For single sample: S_p = r_p, S_d = r_d * decode_bs
@@ -226,17 +236,19 @@ def train_model(
         model = PerformanceModel(pred_log=pred_log, standardize=standardize).to(device)
         train_main_params = True
     else:
-        # Freeze original parameters (theta_1p, theta_2p, theta_3, theta_4d, beta)
+        # Freeze original parameters (theta_1p, theta_2p, theta_3, theta_4d, theta_5d, beta)
         model.theta_1p.requires_grad = False
         model.theta_2p.requires_grad = False
         model.theta_3.requires_grad = False
         model.theta_4d.requires_grad = False
+        model.theta_5d.requires_grad = False
         model.beta.requires_grad = False
         train_main_params = False
 
     # Prepare data
     train_features_raw = torch.tensor(
-        train_df[["term1", "term2", "term3", "term4"]].values, dtype=torch.float32
+        train_df[["term1", "term2", "term3", "term4", "term5"]].values,
+        dtype=torch.float32,
     ).to(device)
     train_R_pd = torch.tensor(train_df["R_pd"].values, dtype=torch.float32).to(device)
     # Use log(time_ms) as targets if pred_log is True
@@ -250,7 +262,8 @@ def train_model(
         ).to(device)
 
     val_features = torch.tensor(
-        val_df[["term1", "term2", "term3", "term4"]].values, dtype=torch.float32
+        val_df[["term1", "term2", "term3", "term4", "term5"]].values,
+        dtype=torch.float32,
     ).to(device)
     val_R_pd = torch.tensor(val_df["R_pd"].values, dtype=torch.float32).to(device)
     val_targets_raw = torch.tensor(val_df["time_ms"].values, dtype=torch.float32).to(
@@ -290,9 +303,9 @@ def train_model(
     # Closed-form least squares
     # -----------------------------
     if train_main_params:
-        # Solve for theta_1p, theta_2p, theta_3, theta_4d, beta
+        # Solve for theta_1p, theta_2p, theta_3, theta_4d, theta_5d, beta
         # Design matrix for standardized features (no intercept for features, bias is separate)
-        # X has shape [N, 5]: [term1_n, term2_n, term3_n, term4_n, 1]
+        # X has shape [N, 6]: [term1_n, term2_n, term3_n, term4_n, term5_n, 1]
         X = train_features.to(torch.float64)
         ones = torch.ones((X.shape[0], 1), dtype=torch.float64, device=device)
         X = torch.cat([X, ones], dim=1)
@@ -300,7 +313,7 @@ def train_model(
 
         # Solve X w ≈ y in least-squares sense
         solution = torch.linalg.lstsq(X, y)
-        w = solution.solution.squeeze(1)  # shape [5]
+        w = solution.solution.squeeze(1)  # shape [6]
 
         # Assign parameters (note θ's operate on standardized features)
         with torch.no_grad():
@@ -308,12 +321,13 @@ def train_model(
             model.theta_2p.copy_(w[1].to(torch.float32).unsqueeze(0))
             model.theta_3.copy_(w[2].to(torch.float32).unsqueeze(0))
             model.theta_4d.copy_(w[3].to(torch.float32).unsqueeze(0))
-            model.beta.copy_(w[4].to(torch.float32))
+            model.theta_5d.copy_(w[4].to(torch.float32).unsqueeze(0))
+            model.beta.copy_(w[5].to(torch.float32))
     else:
         # Solve for overlap speedup parameters α₁, α₂, α₃ only
         # Use current θ parameters (already fitted on non-overlap) and solve for α's.
         # Model for overlap:
-        #   T = θ1 * term1_n + θ3 * term3_n + β
+        #   T = θ1 * term1_n + θ3 * term3_n + θ5 * term5_n + β
         #       + α1 * (θ2 * term2_n * R + θ4 * term4_n * R)
         #       + α2 * (θ2 * term2_n * R^2 + θ4 * term4_n * R^2)
         #       + α3 * (θ2 * term2_n + θ4 * term4_n)
@@ -323,6 +337,7 @@ def train_model(
         theta_2 = model.theta_2p.to(torch.float64)
         theta_3 = model.theta_3.to(torch.float64)
         theta_4 = model.theta_4d.to(torch.float64)
+        theta_5 = model.theta_5d.to(torch.float64)
         beta = model.beta.to(torch.float64)
 
         # Features for overlap training (standardize if enabled)
@@ -335,12 +350,12 @@ def train_model(
         else:
             train_features_std = train_features_raw.to(torch.float64)
 
-        term1_n, term2_n, term3_n, term4_n = train_features_std.T
+        term1_n, term2_n, term3_n, term4_n, term5_n = train_features_std.T
         R = train_R_pd.to(torch.float64)
         y = train_targets.to(torch.float64)
 
         base = (
-            theta_1 * term1_n + theta_3 * term3_n + beta
+            theta_1 * term1_n + theta_3 * term3_n + theta_5 * term5_n + beta
         )  # base contribution without overlap speedup
 
         A1 = theta_2 * term2_n * R + theta_4 * term4_n * R
@@ -364,11 +379,15 @@ def train_model(
     with torch.no_grad():
         # Training loss
         if train_main_params:
-            term1_t, term2_t, term3_t, term4_t = train_features.T
+            term1_t, term2_t, term3_t, term4_t, term5_t = train_features.T
         else:
             # For overlap, use standardized features
-            term1_t, term2_t, term3_t, term4_t = train_features_std.T.to(torch.float32)
-        pred_train = model(term1_t, term2_t, term3_t, term4_t, overlap, train_R_pd)
+            term1_t, term2_t, term3_t, term4_t, term5_t = train_features_std.T.to(
+                torch.float32
+            )
+        pred_train = model(
+            term1_t, term2_t, term3_t, term4_t, term5_t, overlap, train_R_pd
+        )
 
         if pred_log:
             # Model outputs exp(log(time)) = time, compare with exp(log(targets))
@@ -378,8 +397,8 @@ def train_model(
             train_mse = torch.mean((pred_train - train_targets) ** 2).item()
 
         # Validation loss
-        term1_v, term2_v, term3_v, term4_v = val_features.T
-        pred_val = model(term1_v, term2_v, term3_v, term4_v, overlap, val_R_pd)
+        term1_v, term2_v, term3_v, term4_v, term5_v = val_features.T
+        pred_val = model(term1_v, term2_v, term3_v, term4_v, term5_v, overlap, val_R_pd)
         if pred_log:
             # Model outputs exp(log(time)) = time, compare with raw targets
             val_mse = torch.mean((pred_val - val_targets_raw) ** 2).item()
@@ -426,30 +445,34 @@ def evaluate_model(
         # Non-overlap evaluation
         if len(df_no_overlap) > 0:
             features_no = torch.tensor(
-                df_no_overlap[["term1", "term2", "term3", "term4"]].values,
+                df_no_overlap[["term1", "term2", "term3", "term4", "term5"]].values,
                 dtype=torch.float32,
             ).to(device)
             R_pd_no = torch.tensor(
                 df_no_overlap["R_pd"].values, dtype=torch.float32
             ).to(device)
-            term1, term2, term3, term4 = features_no.T
+            term1, term2, term3, term4, term5 = features_no.T
             # Model handles exp() internally when pred_log=True and not training
-            pred_no = model(term1, term2, term3, term4, False, R_pd_no).cpu().numpy()
+            pred_no = (
+                model(term1, term2, term3, term4, term5, False, R_pd_no).cpu().numpy()
+            )
             preds.append(pred_no)
             targets_list.append(df_no_overlap["time_ms"].values)
 
         # Overlap evaluation
         if len(df_overlap) > 0:
             features_ov = torch.tensor(
-                df_overlap[["term1", "term2", "term3", "term4"]].values,
+                df_overlap[["term1", "term2", "term3", "term4", "term5"]].values,
                 dtype=torch.float32,
             ).to(device)
             R_pd_ov = torch.tensor(df_overlap["R_pd"].values, dtype=torch.float32).to(
                 device
             )
-            term1, term2, term3, term4 = features_ov.T
+            term1, term2, term3, term4, term5 = features_ov.T
             # Model handles exp() internally when pred_log=True and not training
-            pred_ov = model(term1, term2, term3, term4, True, R_pd_ov).cpu().numpy()
+            pred_ov = (
+                model(term1, term2, term3, term4, term5, True, R_pd_ov).cpu().numpy()
+            )
             preds.append(pred_ov)
             targets_list.append(df_overlap["time_ms"].values)
 

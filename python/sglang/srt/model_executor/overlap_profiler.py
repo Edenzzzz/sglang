@@ -195,7 +195,7 @@ def generate_default_configs() -> List[Tuple[int, int, int, int]]:
     configs: List[Tuple[int, int, int, int]] = []
 
     n_p_values = list(range(256, 4097, 256)) + [6000, 8192]
-    r_p_values = list(range(256, 4097, 256))
+    r_p_values = list(range(0, 4097, 256))
     r_d_values = list(range(256, 10001, 512))
 
     for n_p in n_p_values:
@@ -217,7 +217,27 @@ def generate_default_configs() -> List[Tuple[int, int, int, int]]:
 
                 for decode_bs in decode_bs_values:
                     configs.append((n_p, r_p, r_d, decode_bs))
+    random_configs = generate_validation_configs(1800, seed=9999)
+    long_prefill_configs = generate_long_prefill_configs(1000, seed=9999)
+    return configs + random_configs + long_prefill_configs
 
+
+def generate_long_prefill_configs(
+    num_configs: int,
+    seed: int = 42,
+) -> List[Tuple[int, int, int, int]]:
+    """Generate long prefill configs for document summary/QA dataset such as LooGLE"""
+    rng = np.random.RandomState(seed)
+    configs: List[Tuple[int, int, int, int]] = []
+    for _ in range(num_configs):
+        n_p = int(rng.uniform(10000, 21000))
+        r_p = int(rng.uniform(0, 4097))
+        r_d = int(rng.uniform(5, 300))
+        max_decode_bs = min(150, (4096 * 100) // r_d)
+        if max_decode_bs <= 0:
+            continue
+        decode_bs = int(rng.uniform(1, max_decode_bs + 1))
+        configs.append((n_p, r_p, r_d, decode_bs))
     return configs
 
 

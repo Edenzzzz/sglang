@@ -1027,6 +1027,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
 
     # For extend and mixed chunekd prefill
     prefix_lens: List[int] = None
+    prefix_lens_sum: int = 0
     extend_lens: List[int] = None
     extend_num_tokens: Optional[int] = None
     decoding_reqs: List[Req] = None
@@ -1207,6 +1208,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         seq_lens = [len(r.fill_ids) for r in reqs]
         orig_seq_lens = [max(len(r.fill_ids), len(r.origin_input_ids)) for r in reqs]
         prefix_lens = [len(r.prefix_indices) for r in reqs]
+        prefix_lens_sum = sum(prefix_lens)
         extend_lens = [r.extend_input_len for r in reqs]
 
         # For matryoshka embeddings
@@ -1241,6 +1243,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
 
         # Set batch fields needed by alloc_for_extend
         self.prefix_lens = prefix_lens
+        self.prefix_lens_sum = prefix_lens_sum
         self.extend_lens = extend_lens
         self.seq_lens = seq_lens_tensor
         self.seq_lens_cpu = seq_lens_cpu
@@ -1782,6 +1785,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             extend_num_tokens=self.extend_num_tokens,
             extend_seq_lens=extend_seq_lens,
             extend_prefix_lens=extend_prefix_lens,
+            prefix_lens_sum=self.prefix_lens_sum,
             extend_logprob_start_lens=extend_logprob_start_lens,
             multimodal_inputs=self.multimodal_inputs,
             encoder_cached=self.encoder_cached,
@@ -1882,6 +1886,7 @@ class ModelWorkerBatch:
     extend_num_tokens: Optional[int]
     extend_seq_lens: Optional[List[int]]
     extend_prefix_lens: Optional[List[int]]
+    prefix_lens_sum: Optional[int]
     extend_logprob_start_lens: Optional[List[int]]
     extend_input_logprob_token_ids: Optional[torch.Tensor]
 

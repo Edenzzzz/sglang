@@ -231,6 +231,7 @@ class PiecewiseCudaGraphRunner:
                 return_logprob=False,
                 extend_seq_lens=torch.tensor([num_tokens], device=self.device),
                 extend_prefix_lens=torch.tensor([num_tokens], device=self.device),
+                prefix_lens_sum=num_tokens,
                 extend_start_loc=torch.tensor([0], device=self.device),
                 extend_prefix_lens_cpu=torch.tensor([num_tokens]),
                 extend_seq_lens_cpu=torch.tensor([num_tokens]),

@@ -541,6 +541,10 @@ class FlashInferAttnBackend(AttentionBackend):
             else:
                 use_ragged = not self.enable_deterministic
                 extend_no_prefix = not any(forward_batch.extend_prefix_lens_cpu)
+            if forward_batch.seq_lens_sum - forward_batch.prefix_lens_sum <= 1:
+                # NOTE(Wenxuan): on some H100 machines this throws fail to initialize TMA descriptor error. See https://github.com/flashinfer-ai/flashinfer/issues/2150
+                use_ragged = False
+                extend_no_prefix = False
 
             # Process multi-item scoring in attention backend instead of ForwardBatch
             multi_item_params = MultiItemScoringParams()
@@ -860,7 +864,6 @@ class FlashInferAttnBackend(AttentionBackend):
                 causal_p=not layer.is_cross_attention,
                 return_lse=True,
                 join_outputs=False,
-                debug=True,
             )
         except Exception as e:
             torch.distributed.breakpoint()
@@ -964,10 +967,13 @@ class FlashInferAttnBackend(AttentionBackend):
                     logits_soft_cap=logits_soft_cap,
                 )
             else:
+                q = q.view(-1, layer.tp_q_head_num, layer.head_dim).contiguous()
+                k = k.view(-1, layer.tp_k_head_num, layer.head_dim).contiguous()
+                v = v.view(-1, layer.tp_v_head_num, layer.head_dim).contiguous()
                 o1, s1 = self.prefill_wrapper_ragged.forward_return_lse(
-                    q.view(-1, layer.tp_q_head_num, layer.head_dim),
-                    k.view(-1, layer.tp_k_head_num, layer.head_dim),
-                    v.view(-1, layer.tp_v_head_num, layer.head_dim),
+                    q,
+                    k,
+                    v,
                     causal=True,
                     sm_scale=layer.scaling,
                     logits_soft_cap=logits_soft_cap,

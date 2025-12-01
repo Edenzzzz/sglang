@@ -207,10 +207,9 @@ class ForwardBatch:
 
     # For extend
     extend_num_tokens: Optional[int] = None
-    extend_seq_lens: Optional[torch.Tensor] = (
-        None  # number of new query tokens to generate
-    )
-    extend_prefix_lens: Optional[torch.Tensor] = None
+    extend_seq_lens: Optional[torch.Tensor] = None
+    extend_prefix_lens: Optional[List[int]] = None
+    prefix_lens_sum: Optional[int] = None
     extend_start_loc: Optional[torch.Tensor] = None
     extend_prefix_lens_cpu: Optional[List[int]] = None
     extend_seq_lens_cpu: Optional[List[int]] = None
@@ -369,6 +368,7 @@ class ForwardBatch:
                 if batch.forward_mode.is_extend() and batch.decoding_reqs
                 else 0
             ),
+            prefix_lens_sum=batch.prefix_lens_sum,
         )
         device = model_runner.device
 
@@ -444,6 +444,7 @@ class ForwardBatch:
             if ret.positions is None:
                 ret.positions = positions
             ret.extend_prefix_lens_cpu = batch.extend_prefix_lens
+            ret.prefix_lens_sum = batch.prefix_lens_sum
             ret.extend_seq_lens_cpu = batch.extend_seq_lens
             ret.extend_logprob_start_lens_cpu = batch.extend_logprob_start_lens
 

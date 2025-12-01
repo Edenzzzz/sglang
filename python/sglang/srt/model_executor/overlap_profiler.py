@@ -85,6 +85,7 @@ class ProfilingRunner:
 
         # extend_prefix_lens: [r_p, r_d, r_d, ...]
         extend_prefix_lens = [r_p] + [r_d] * decode_bs
+        prefix_lens_sum = r_p + r_d * decode_bs
         extend_prefix_lens_tensor = torch.tensor(
             extend_prefix_lens, dtype=torch.int32, device=self.device
         )
@@ -147,6 +148,7 @@ class ProfilingRunner:
             positions=positions,
             extend_num_tokens=extend_num_tokens,
             extend_prefix_lens=extend_prefix_lens_tensor,
+            prefix_lens_sum=prefix_lens_sum,
             extend_prefix_lens_cpu=extend_prefix_lens_cpu,
             extend_seq_lens=torch.tensor(
                 extend_lens, dtype=torch.int32, device=self.device

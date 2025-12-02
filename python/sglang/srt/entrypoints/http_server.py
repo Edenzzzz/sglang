@@ -713,6 +713,7 @@ async def profile_seq_lens_val_async(obj: Optional[ProfileSeqLensValReqInput] = 
         overlap_only=obj.overlap_only,
         no_overlap_only=obj.no_overlap_only,
         repeat=obj.repeat,
+        resume_idx=obj.resume_idx,
     )
     content = (
         f"Profile seq_lens validation completed. "

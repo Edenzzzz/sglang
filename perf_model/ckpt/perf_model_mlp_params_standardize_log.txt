@@ -1,0 +1,21 @@
+Performance MLP Model Parameters
+============================================================
+
+hidden1_size: 128
+hidden2_size: 64
+num_params: 9092
+alpha_1: 0.0
+alpha_2: 0.0
+alpha_3: 0.0
+feat_mean_term1: 13156029.0
+feat_mean_term2: 5809169.5
+feat_mean_term3: 249351.625
+feat_mean_term4: 244466.203125
+feat_mean_R_pd: 0.986248791217804
+feat_std_term1: 28156038.0
+feat_std_term2: 6384457.5
+feat_std_term3: 117103.8515625
+feat_std_term4: 117294.625
+feat_std_R_pd: 0.03583785146474838
+
+Validation Metrics:

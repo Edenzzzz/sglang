@@ -368,6 +368,7 @@ class TokenizerCommunicatorMixin:
         overlap_only: bool = False,
         no_overlap_only: bool = False,
         repeat: int = 5,
+        resume_idx: Optional[int] = None,
     ) -> ProfileSeqLensValReqOutput:
         """Run POD overlap profiling on random validation configs.
 
@@ -390,6 +391,7 @@ class TokenizerCommunicatorMixin:
             overlap_only=overlap_only,
             no_overlap_only=no_overlap_only,
             repeat=repeat,
+            resume_idx=resume_idx,
         )
         return (await self.profile_seq_lens_val_communicator(req))[0]
 

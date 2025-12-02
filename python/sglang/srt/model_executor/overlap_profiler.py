@@ -434,8 +434,25 @@ def profile_validation_configs(
         Number of configs profiled.
     """
     configs = generate_validation_configs(num_configs, seed=seed)
+    # Calculate max_num_tokens from all configs (before slicing) to ensure sufficient buffer allocation
     max_num_tokens = max(n_p + r_p + r_d for n_p, r_p, r_d, _ in configs)
-    if resume_idx is not None and resume_idx > 0:
+
+    if resume_idx is not None:
+        if resume_idx < 0:
+            resume_idx = 0
+        if resume_idx >= len(configs):
+            logger.warning(
+                "resume_idx %d >= num_configs %d, nothing to profile",
+                resume_idx,
+                len(configs),
+            )
+            return 0
+        logger.info(
+            "Resuming from index %d: skipping first %d configs, profiling %d configs",
+            resume_idx,
+            resume_idx,
+            len(configs) - resume_idx,
+        )
         configs = configs[resume_idx:]
     if len(configs) == 0:
         logger.warning("No configs to profile with resume_idx %d", resume_idx)

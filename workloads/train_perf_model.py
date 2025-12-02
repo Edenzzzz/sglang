@@ -532,7 +532,7 @@ def main(args):
     # -----------------------------
     # Training / fitting (least squares)
     # -----------------------------
-    if args.training:
+    if args.csv:
         # Load non-overlap data
         print(f"Loading non-overlap data from {args.csv}...")
         df_no_overlap = pd.read_csv(args.csv)
@@ -806,8 +806,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--csv",
         type=str,
-        required=True,
-        help="Path to profiling CSV file",
+        required=False,
+        default=None,
+        help="Path to profiling CSV file. If provided, will train the model. If not provided, will only evaluate using an existing checkpoint in --output-dir",
     )
     parser.add_argument(
         "--output-dir",
@@ -850,11 +851,6 @@ if __name__ == "__main__":
         type=int,
         default=256,
         help="Batch size (default: 256; unused by least-squares solver)",
-    )
-    parser.add_argument(
-        "--training",
-        action="store_true",
-        help="If set, fit model parameters (least squares). If not set, only evaluate using an existing checkpoint in --output-dir",
     )
     parser.add_argument(
         "--seed",

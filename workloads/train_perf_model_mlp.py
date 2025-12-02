@@ -510,7 +510,7 @@ def main(args):
     # -----------------------------
     # Training
     # -----------------------------
-    if args.training:
+    if args.csv:
         # Load non-overlap data
         print(f"Loading non-overlap data from {args.csv}...")
         df_no_overlap = pd.read_csv(args.csv)
@@ -623,9 +623,8 @@ def main(args):
     else:
         # Evaluation-only mode: load existing model
         # Try to find model file with appropriate suffixes
-        model_filename = get_model_filename(
-            "perf_model_mlp", args.pred_log, args.standardize
-        )
+        base_name = "perf_model_mlp"
+        model_filename = get_model_filename(base_name, args.pred_log, args.standardize)
         model_path = os.path.join(args.output_dir, f"{model_filename}.pt")
 
         # If file doesn't exist with suffixes, try base name
@@ -789,8 +788,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--csv",
         type=str,
-        required=True,
-        help="Path to profiling CSV file",
+        required=False,
+        default=None,
+        help="Path to profiling CSV file. If provided, will train the model. If not provided, will only evaluate using an existing checkpoint in --output-dir",
     )
     parser.add_argument(
         "--output-dir",
@@ -851,11 +851,6 @@ if __name__ == "__main__":
         type=float,
         default=0.1,
         help="Dropout rate (default: 0.1)",
-    )
-    parser.add_argument(
-        "--training",
-        action="store_true",
-        help="If set, train model. If not set, only evaluate using an existing checkpoint in --output-dir",
     )
     parser.add_argument(
         "--seed",

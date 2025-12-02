@@ -11,6 +11,7 @@ It is intended to be called from the scheduler / executor when handling a
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import List, Optional, Sequence, Tuple
 
@@ -26,6 +27,8 @@ from sglang.srt.model_executor.forward_batch_info import (
     ForwardMode,
 )
 from sglang.srt.model_executor.model_runner import ModelRunner
+
+logger = logging.getLogger(__name__)
 
 
 class ProfilingRunner:
@@ -266,8 +269,11 @@ def generate_validation_configs(
 
     for _ in range(num_configs):
         # Sample n_p: [256, 8192] (allow 6000 and 8192 as special values, otherwise uniform)
-        if rng.random() < 0.1:  # 10% chance for special values
+        rand = rng.random()
+        if rand < 0.1:  # 10% chance for special values
             n_p = int(rng.uniform(6000, 8193))
+        if rand > 0.9:  # 10% chance for long prefill
+            n_p = int(rng.uniform(10000, 21000))
         else:
             n_p = int(rng.uniform(256, 4097))  # Up to 4096, but allow 4096
 
@@ -387,7 +393,13 @@ def profile_default_grid(
     # Apply max_configs limit
     if max_configs is not None:
         configs = configs[:max_configs]
-
+    if len(configs) == 0:
+        logger.warning(
+            "No configs to profile with resume_idx %d and max_configs %d",
+            resume_idx,
+            max_configs,
+        )
+        return pd.DataFrame()
     return profile_configs(
         model_runner,
         configs,
@@ -405,6 +417,7 @@ def profile_validation_configs(
     seed: int,
     overlap: bool,
     output_path: str,
+    resume_idx: Optional[int] = None,
     repeat: int = 5,
 ) -> int:
     """Profile random validation configs for model evaluation.
@@ -415,12 +428,18 @@ def profile_validation_configs(
         seed: Random seed for generating configs.
         overlap: Whether to use POD overlap mode.
         output_path: Path to CSV file for progressive output.
-
+        resume_idx: Resume profiling from this config index (0-based). If provided,
+            configs before this index are skipped. Useful for resuming interrupted runs.
     Returns:
         Number of configs profiled.
     """
     configs = generate_validation_configs(num_configs, seed=seed)
     max_num_tokens = max(n_p + r_p + r_d for n_p, r_p, r_d, _ in configs)
+    if resume_idx is not None and resume_idx > 0:
+        configs = configs[resume_idx:]
+    if len(configs) == 0:
+        logger.warning("No configs to profile with resume_idx %d", resume_idx)
+        return 0
     return profile_configs(
         model_runner,
         configs,

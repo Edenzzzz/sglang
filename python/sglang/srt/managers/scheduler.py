@@ -747,6 +747,7 @@ class Scheduler(
                 overlap=False,
                 output_path=no_overlap_path,
                 repeat=req.repeat,
+                resume_idx=req.resume_idx,
             )
 
         if not req.no_overlap_only:
@@ -757,6 +758,7 @@ class Scheduler(
                 overlap=True,
                 output_path=overlap_path,
                 repeat=req.repeat,
+                resume_idx=req.resume_idx,
             )
 
         return ProfileSeqLensValReqOutput(

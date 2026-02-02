@@ -526,13 +526,15 @@ class FlashInferAttnBackend(AttentionBackend):
                 self.dispatch_reason == WrapperDispatch.SLIDING_WINDOW
                 or self.enable_deterministic
             ):  # TODO(Wenxuan): support sliding window and deterministic in flashinfer
-                if isinstance(wrappers[0], BatchAttention):
+                if isinstance(wrappers[0], BatchAttention) or isinstance(
+                    wrappers[0], BatchPODWithPagedKVCacheWrapper
+                ):
                     raise NotImplementedError(
                         "Sliding window and deterministic are not supported for persistent attention yet"
                     )
-                # wrappers = self.prefill_wrappers_mixed
-                # use_ragged = True
-                # extend_no_prefix = not any(forward_batch.extend_prefix_lens_cpu)
+                wrappers = self.prefill_wrappers_mixed
+                use_ragged = True
+                extend_no_prefix = not any(forward_batch.extend_prefix_lens_cpu)
             elif self.dispatch_reason == WrapperDispatch.CROSS_ATTENTION:
                 if isinstance(wrappers[0], BatchAttention):
                     raise NotImplementedError(
@@ -593,12 +595,15 @@ class FlashInferAttnBackend(AttentionBackend):
                     fixed_split_size=self.prefill_split_tile_size,
                     multi_item_params=multi_item_params,
                 )
-            self.forward_metadata = PrefillMetadata(
-                wrappers,
-                use_ragged,
-                extend_no_prefix,
-                multi_item_params,
-            )
+            try:
+                self.forward_metadata = PrefillMetadata(
+                    wrappers,
+                    use_ragged,
+                    extend_no_prefix,
+                    multi_item_params,
+                )
+            except:
+                torch.distributed.breakpoint()
 
     def init_cuda_graph_state(
         self,
@@ -863,7 +868,8 @@ class FlashInferAttnBackend(AttentionBackend):
                 kv_buffer,
                 causal_p=not layer.is_cross_attention,
                 return_lse=True,
-                join_outputs=False,
+                debug=True,
+                # join_outputs=False,
             )
         except Exception as e:
             torch.distributed.breakpoint()

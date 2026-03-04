@@ -812,7 +812,18 @@ def get_dataset(args, tokenizer, model_id=None):
         # Limit the number of requests based on --num-prompts
         input_requests = all_requests_data[: args.num_prompts]
     else:
-        raise ValueError(f"Unknown dataset: {args.dataset_name}")
+        # Check if it's a third-party dataset
+        from sglang.bench_serving_3rdparty import THIRD_PARTY_DATASETS, sample_3rdparty_requests
+        if args.dataset_name in THIRD_PARTY_DATASETS:
+            input_requests = sample_3rdparty_requests(
+                dataset_name=args.dataset_name,
+                num_requests=args.num_prompts,
+                tokenizer=tokenizer,
+                fixed_output_len=args.sharegpt_output_len,
+                context_len=args.sharegpt_context_len,
+            )
+        else:
+            raise ValueError(f"Unknown dataset: {args.dataset_name}")
     return input_requests
 
 
@@ -2625,6 +2636,11 @@ if __name__ == "__main__":
             "mmmu",
             "image",
             "mooncake",
+            "code-feedback",
+            "codeact",
+            "swe-gym",
+            "swe-smith",
+            "orca-agentinstruct",
         ],
         help="Name of the dataset to benchmark on.",
     )

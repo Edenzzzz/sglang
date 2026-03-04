@@ -842,24 +842,10 @@ class FlashInferAttnBackend(AttentionBackend):
         q_reshaped = q.view(-1, layer.tp_q_head_num, layer.head_dim)
         kv_buffer = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
         # print(f"qo_indptr_p:{self.indices_updater_prefill.p_q_indptr}, qo_indptr_d:{self.indices_updater_prefill.d_q_indptr}, kv_indptr_p:{self.indices_updater_prefill.p_kv_indptr}, kv_indptr_d:{self.indices_updater_prefill.d_kv_indptr}, kv_indices:{self.indices_updater_prefill.kv_indices}, kv_last_page_len_p:{self.indices_updater_prefill.kv_last_page_len_p}, kv_last_page_len_d:{self.indices_updater_prefill.kv_last_page_len_d}, q_reshaped.shape: {q_reshaped.shape}, kv_buffer[0].shape: {kv_buffer[0].shape}")
-        # Save all inputs to kernel call for debugging/reproducing issues
-        # torch.save(pod_wrapper._qo_indptr_buf_p, "qo_indptr_p.pt")
-        # torch.save(pod_wrapper._qo_indptr_buf_d, "qo_indptr_d.pt")
-        # torch.save(pod_wrapper._kv_indptr_buf_p, "kv_indptr_p.pt")
-        # torch.save(pod_wrapper._kv_indptr_buf_d, "kv_indptr_d.pt")
-        # torch.save(pod_wrapper._kv_indices_buf_d, "kv_indices.pt")
-        # torch.save(pod_wrapper._kv_last_page_len_buf_p, "kv_last_page_len_p.pt")
-        # torch.save(pod_wrapper._kv_last_page_len_buf_d, "kv_last_page_len_d.pt")
-        # # torch.save(kv_buffer[0], "kv_buffer_0.pt")  # K buffer
-        # # torch.save(kv_buffer[1], "kv_buffer_1.pt")  # V buffer
-        # torch.save(kv_buffer[0].shape, "kv_buffer_0_shape.pt")  # K buffer shape
 
-        num_p_tokens = pod_wrapper._qo_indptr_buf_p[-1].item()
+        num_p_tokens = pod_wrapper._qo_indptr_buf_p[-1]  # .item()
         q_p = q_reshaped[:num_p_tokens]
         q_d = q_reshaped[num_p_tokens:]
-        # torch.save(q_p, "q_p.pt")
-        # torch.save(q_d, "q_d.pt")
-        # torch.cuda.synchronize()  # Ensure all saves complete before kernel call
         try:
             (o_p, o_d), (lse_p, lse_d) = pod_wrapper.run(
                 q_p,
@@ -868,7 +854,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 kv_buffer,
                 causal_p=not layer.is_cross_attention,
                 return_lse=True,
-                debug=True,
+                debug=False,
                 # join_outputs=False,
             )
         except Exception as e:
@@ -1572,7 +1558,7 @@ class FlashInferIndicesUpdaterPrefill:
         if use_ragged:
             paged_kernel_lens = prefix_lens
             paged_kernel_lens_sum = paged_kernel_lens.sum().to(
-                device="cpu", non_blocking=True
+                device="cpu",  # non_blocking=True
             )
         else:
             paged_kernel_lens = seq_lens
@@ -1624,6 +1610,8 @@ class FlashInferIndicesUpdaterPrefill:
             self.kv_indices = kv_indices[: paged_kernel_lens_sum + 256]
             self.kv_last_page_len_p = self.kv_last_page_len[:num_prefill]
             self.kv_last_page_len_d = self.kv_last_page_len[num_prefill:bs]
+            if len(kv_indices) == 0:
+                torch.distributed.breakpoint()
             pod_wrapper.plan(
                 # Prefill params
                 p_q_indptr,

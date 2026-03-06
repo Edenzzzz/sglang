@@ -1,0 +1,26 @@
+{
+  "openhands-feedback": {
+    "total_messages": {
+      "count": 275,
+      "mean": 71.6,
+      "median": 48.0,
+      "min": 8,
+      "max": 530,
+      "p25": 28.0,
+      "p75": 88.0,
+      "p90": 157.6,
+      "p95": 188.2
+    },
+    "assistant_turns": {
+      "count": 275,
+      "mean": 57.5,
+      "median": 39.0,
+      "min": 0,
+      "max": 486,
+      "p25": 19.0,
+      "p75": 72.0,
+      "p90": 127.6,
+      "p95": 145.7
+    }
+  }
+}

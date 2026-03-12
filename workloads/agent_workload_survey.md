@@ -8,22 +8,23 @@ A survey of how many turns/steps each agent workload type takes, what the per-tu
 
 Which of our collected datasets have full multi-turn traces (conversation trajectories), and how many turns per example?
 
-| Dataset | Category | Has Traces? | Trace Format | Turns Mean | Turns Med | Turns P95 | Notes |
-|---------|----------|-------------|-------------|-----------|----------|----------|-------|
-| AgentInstruct (Orca) | Mixed agent | **Yes** | JSON messages (system/user/assistant) | 7.8 | 5 | 22 | Full multi-turn conversations; roles include tool outputs |
-| Code-Feedback | Code | **Yes** | Conversation list (user/assistant) | 3.3 | 3 | 7 | Short code Q&A dialogues |
-| CodeActInstruct | Code+Tools | **Yes** | Conversation list (user/assistant) | 3.7 | 4 | 6 | Includes tool-use actions in assistant turns |
-| Mind2Web | Web browsing | **Yes** | Action sequence list | 7.7 | 6 | 17 | Each action = one web interaction step |
-| Nebius-SWE-Trajectories | Coding/SWE | **Yes** | Trajectory list (thought/action/observation) | 26.4 | 17 | 70 | Full SWE-agent trajectories with tool outputs |
-| openhands-feedback | Coding/SWE | **Yes** | Messages list (system/user/assistant) | 57.5 | 39 | 146 | Full OpenHands agent trajectories; very long |
-| SWE-Gym/OpenHands-SFT | Coding/SWE | **Yes** | Messages list (system/user/assistant) | ~20 | — | — | 491 successful trajectories (13-101 msgs) |
-| NNetNav-wa | Web browsing | **No** § | Single (state, action) pair | 1 | 1 | 1 | Single-step snapshot from multi-step trajectory |
-| Go-Browse | Web browsing | **No** § | Single (state, action) pair | 1 | 1 | 1 | Single-step snapshot from multi-step trajectory |
-| SWE-bench | Coding/SWE | **No** ‡ | (problem_statement, patch) | — | — | — | Benchmark only; no trajectory. Turns depend on scaffold (2-181) |
-| SWE-Gym | Coding/SWE | **No** ‡ | (problem_statement, patch) | — | — | — | Same schema as SWE-bench; trajectories in companion datasets |
-| SWE-smith | Coding/SWE | **No** ‡ | (problem_statement, patch) | — | — | — | Same schema as SWE-bench; 59K problems |
-| Synatra-CodeInterpreter | Code | **No** ‡ | (instruction, response) | — | — | — | Single instruction-response pairs |
-| ShareGPT | Chat baseline | **Yes** † | Conversation list | 5.75 | — | — | Literature value (CachedAttention ATC'24) |
+| Dataset | Cat | Has Traces? | Trace Format | Turns Mean | Turns Med | Turns P95 | Notes |
+|---------|-----|-------------|-------------|-----------|----------|----------|-------|
+| ShareGPT | — | **Yes** † | Conversation list | ~6 | ~6 | — | Literature value (CachedAttention ATC'24) |
+| SWE-bench | S | **No** ‡ | (problem_statement, patch) | — | — | — | No trajectory; turns depend on scaffold (2-181) |
+| [AgentInstruct](https://huggingface.co/datasets/THUDM/AgentInstruct) | C T W | **Yes** | JSON messages (system/user/assistant) | 7.8 | 5 | 22 | Full multi-turn conversations; roles include tool outputs |
+| [Code-Feedback](https://huggingface.co/datasets/m-a-p/Code-Feedback) | C | **Yes** | Conversation list (user/assistant) | 3.3 | 3 | 7 | Short code Q&A dialogues |
+| [CodeActInstruct](https://huggingface.co/datasets/xingyaoww/code-act) | C | **Yes** | Conversation list (user/assistant) | 3.7 | 4 | 6 | Includes tool-use actions in assistant turns |
+| Go-Browse | W | **No** § | Single (state, action) pair | 1 | 1 | 1 | Single-step snapshot from multi-step trajectory |
+| [Mind2Web](https://huggingface.co/datasets/osunlp/Mind2Web) | W | **Yes** | Action sequence list | 7.7 | 6 | 17 | Each action = one web interaction step |
+| [Nebius SWE Trajectories](https://huggingface.co/datasets/nebius/SWE-agent-trajectories) | S | **Yes** | Trajectory list (thought/action/observation) | 26.4 | 17 | 70 | Full SWE-agent trajectories with tool outputs |
+| NNetNav-live | W | **No** § | Single (state, action) pair | 1 | 1 | 1 | Single-step snapshot from live web exploration |
+| NNetNav-wa | W | **No** § | Single (state, action) pair | 1 | 1 | 1 | Single-step snapshot from WebArena exploration |
+| [openhands-feedback](https://huggingface.co/datasets/all-hands/openhands-feedback) | C T W | **Yes** | Messages list (system/user/assistant) | 57.5 | 39 | 146 | Full OpenHands agent trajectories; very long |
+| Orca AgentInstruct | T | TBD | JSON messages | TBD | TBD | TBD | Large-scale synthetic; couldn't load (disk space) |
+| SWE-Gym | S | **Yes** | Messages list (system/user/assistant) | ~20 | — | — | Main dataset is (problem, patch); traces in: [OpenHands-SFT](https://huggingface.co/datasets/SWE-Gym/OpenHands-SFT-Trajectories) (491), [OpenHands-Sampled](https://huggingface.co/datasets/SWE-Gym/OpenHands-Sampled-Trajectories) (~6k), [Verifier](https://huggingface.co/datasets/SWE-Gym/OpenHands-Verifier-Trajectories) (~5.3k) |
+| SWE-smith | S | **No** ‡ | (problem_statement, patch) | — | — | — | Same schema as SWE-bench; 59K problems |
+| Synatra | W | **No** § | Single (instruction, response) | 1 | 1 | 1 | Single prompt/response pairs |
 
 **Legend:**
 - § Single-step snapshots extracted from multi-step trajectories — the full trajectory is not in the dataset

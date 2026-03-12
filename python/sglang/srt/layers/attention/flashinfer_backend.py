@@ -837,12 +837,11 @@ class FlashInferAttnBackend(AttentionBackend):
     ):
         if logits_soft_cap != 0:
             raise ValueError("logits_soft_cap is not supported for POD attention yet")
-        bs_p = pod_wrapper.batch_size_p
-        bs_d = pod_wrapper.batch_size_d
+        # bs_p = pod_wrapper.batch_size_p
+        # bs_d = pod_wrapper.batch_size_d
         q_reshaped = q.view(-1, layer.tp_q_head_num, layer.head_dim)
         kv_buffer = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
         # print(f"qo_indptr_p:{self.indices_updater_prefill.p_q_indptr}, qo_indptr_d:{self.indices_updater_prefill.d_q_indptr}, kv_indptr_p:{self.indices_updater_prefill.p_kv_indptr}, kv_indptr_d:{self.indices_updater_prefill.d_kv_indptr}, kv_indices:{self.indices_updater_prefill.kv_indices}, kv_last_page_len_p:{self.indices_updater_prefill.kv_last_page_len_p}, kv_last_page_len_d:{self.indices_updater_prefill.kv_last_page_len_d}, q_reshaped.shape: {q_reshaped.shape}, kv_buffer[0].shape: {kv_buffer[0].shape}")
-
         num_p_tokens = pod_wrapper._qo_indptr_buf_p[-1]  # .item()
         q_p = q_reshaped[:num_p_tokens]
         q_d = q_reshaped[num_p_tokens:]
@@ -1310,7 +1309,7 @@ class FlashInferIndicesUpdaterDecode:
                 qo_indptr,
                 kv_indptr,
                 kv_indices,
-                paged_kernel_lens.to(qo_indptr.dtype, non_blocking=True),
+                paged_kernel_lens.to(qo_indptr.dtype),
                 self.num_qo_heads,
                 self.num_kv_heads,
                 page_size=1,
@@ -1558,7 +1557,7 @@ class FlashInferIndicesUpdaterPrefill:
         if use_ragged:
             paged_kernel_lens = prefix_lens
             paged_kernel_lens_sum = paged_kernel_lens.sum().to(
-                device="cpu",  # non_blocking=True
+                device="cpu", 
             )
         else:
             paged_kernel_lens = seq_lens
@@ -1610,8 +1609,6 @@ class FlashInferIndicesUpdaterPrefill:
             self.kv_indices = kv_indices[: paged_kernel_lens_sum + 256]
             self.kv_last_page_len_p = self.kv_last_page_len[:num_prefill]
             self.kv_last_page_len_d = self.kv_last_page_len[num_prefill:bs]
-            if len(kv_indices) == 0:
-                torch.distributed.breakpoint()
             pod_wrapper.plan(
                 # Prefill params
                 p_q_indptr,

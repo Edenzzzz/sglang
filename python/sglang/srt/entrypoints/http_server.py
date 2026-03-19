@@ -513,6 +513,8 @@ async def get_server_info():
         **_global_state.scheduler_info,
         "internal_states": internal_states,
         "version": __version__,
+        "use_persistent": os.environ.get("SGLANG_FLASHINFER_USE_PERSISTENT", ""),
+        "use_pod": os.environ.get("SGLANG_FLASHINFER_USE_POD", ""),
     }
 
 

@@ -2375,9 +2375,11 @@ def run_benchmark(args_: argparse.Namespace):
     num_repeats = getattr(args, "repeat", 1)
     save_to_csv_path = args.save_to_csv
 
-    # Fetch server info once to get attention_backend and enable_mixed_chunk
+    # Fetch server info once to get attention_backend, enable_mixed_chunk, etc.
     attention_backend = None
     enable_mixed_chunk = None
+    use_persistent = None
+    use_pod = None
     if "sglang" in backend:
         try:
             server_info_url = (
@@ -2396,6 +2398,8 @@ def run_benchmark(args_: argparse.Namespace):
                 # Extract attention_backend and enable_mixed_chunk from server_args
                 attention_backend = server_info_json.get("attention_backend")
                 enable_mixed_chunk = server_info_json.get("enable_mixed_chunk")
+                use_persistent = server_info_json.get("use_persistent")
+                use_pod = server_info_json.get("use_pod")
         except Exception as e:
             print(f"Warning: Failed to fetch server info: {e}")
 
@@ -2408,6 +2412,8 @@ def run_benchmark(args_: argparse.Namespace):
         args: argparse.Namespace,
         attention_backend: Optional[str] = None,
         enable_mixed_chunk: Optional[bool] = None,
+        use_persistent: Optional[str] = None,
+        use_pod: Optional[str] = None,
     ):
         # Get scalar metrics and add run-specific fields
         scalar_data = metrics.to_scalar_dict()
@@ -2424,6 +2430,8 @@ def run_benchmark(args_: argparse.Namespace):
                 "max_concurrency": args.max_concurrency,
                 "attention_backend": attention_backend,
                 "enable_mixed_chunk": enable_mixed_chunk,
+                "use_persistent": use_persistent,
+                "use_pod": use_pod,
                 "commit_id": commit_id,
             }
         )
@@ -2481,6 +2489,8 @@ def run_benchmark(args_: argparse.Namespace):
                 args,
                 attention_backend=attention_backend,
                 enable_mixed_chunk=enable_mixed_chunk,
+                use_persistent=use_persistent,
+                use_pod=use_pod,
             )
 
         last_result = result

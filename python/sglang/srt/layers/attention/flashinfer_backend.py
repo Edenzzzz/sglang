@@ -859,6 +859,7 @@ class FlashInferAttnBackend(AttentionBackend):
         except Exception as e:
             torch.distributed.breakpoint()
             raise e
+        # TODO: remove cat
         o = torch.cat([o_p, o_d], dim=0)
         lse = torch.cat([lse_p, lse_d], dim=0)
         return o, lse
@@ -1568,6 +1569,7 @@ class FlashInferIndicesUpdaterPrefill:
         kv_indptr[1 : bs + 1] = torch.cumsum(paged_kernel_lens, dim=0)
         kv_indptr = kv_indptr[: bs + 1]
         # Create full kv_indices using triton kernel
+        # TODO: cache
         paged_kernel_lens_sum = int(paged_kernel_lens_sum)
         kv_indices = torch.empty(
             paged_kernel_lens_sum + 256,

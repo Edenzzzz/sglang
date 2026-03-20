@@ -849,7 +849,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 causal_p=not layer.is_cross_attention,
                 return_lse=True,
                 debug=False,
-                # join_outputs=False,
+                # join_outputs=False, # TODO: join_outputs to avoid additional cat
             )
         except Exception as e:
             torch.distributed.breakpoint()
@@ -1365,6 +1365,10 @@ class FlashInferIndicesUpdaterPrefill:
         self.prefill_wrapper_ragged = attn_backend.prefill_wrapper_ragged
         self.wrapper_mixed = attn_backend.prefill_wrappers_mixed
 
+        # Cached buffer for kv_indices in update_pod (avoids per-call allocation)
+        self._cached_kv_indices_size = 0
+        self._cached_kv_indices = None
+
         # Dispatch the update function
         if self.attn_backend.dispatch_reason == WrapperDispatch.SLIDING_WINDOW:
             self.update = self.update_sliding_window
@@ -1566,14 +1570,16 @@ class FlashInferIndicesUpdaterPrefill:
         kv_indptr = self.kv_indptr[0]
         kv_indptr[1 : bs + 1] = torch.cumsum(paged_kernel_lens, dim=0)
         kv_indptr = kv_indptr[: bs + 1]
-        # Create full kv_indices using triton kernel
-        # TODO: cache
+
+        # Create kv_indices using cached buffer (avoids per-call allocation)
         paged_kernel_lens_sum = int(paged_kernel_lens_sum)
-        kv_indices = torch.empty(
-            paged_kernel_lens_sum + 256,
-            dtype=torch.int32,
-            device=req_pool_indices.device,
-        )
+        needed = paged_kernel_lens_sum + 256
+        if needed > self._cached_kv_indices_size:
+            self._cached_kv_indices_size = needed
+            self._cached_kv_indices = torch.empty(
+                needed, dtype=torch.int32, device=req_pool_indices.device,
+            )
+        kv_indices = self._cached_kv_indices
         kv_start_idx = encoder_lens if encoder_lens is not None else None
         create_flashinfer_kv_indices_triton[(bs,)](
             self.req_to_token,
@@ -1589,6 +1595,7 @@ class FlashInferIndicesUpdaterPrefill:
         d_kv_indptr = kv_indptr[num_prefill:]
 
         # Compute qo_indptr separately for prefill and decode
+        # Compute extend_lens once and reuse for ragged wrapper below
         extend_lens = seq_lens - prefix_lens
         p_extend_lens = extend_lens[:num_prefill]
         d_extend_lens = extend_lens[num_prefill:]
@@ -1601,39 +1608,36 @@ class FlashInferIndicesUpdaterPrefill:
             d_q_indptr[1:] = torch.cumsum(d_extend_lens, dim=0)
 
         # Use same kv_indices for both, split kv_indptr
-        try:
-            self.p_q_indptr = p_q_indptr
-            self.d_q_indptr = d_q_indptr
-            self.p_kv_indptr = p_kv_indptr
-            self.d_kv_indptr = d_kv_indptr
-            self.kv_indices = kv_indices[: paged_kernel_lens_sum + 256]
-            self.kv_last_page_len_p = self.kv_last_page_len[:num_prefill]
-            self.kv_last_page_len_d = self.kv_last_page_len[num_prefill:bs]
-            pod_wrapper.plan(
-                # Prefill params
-                p_q_indptr,
-                p_kv_indptr,
-                kv_indices,
-                self.kv_last_page_len[:num_prefill],
-                # Decode params
-                d_q_indptr,
-                d_kv_indptr,
-                kv_indices,
-                self.kv_last_page_len[num_prefill:bs],
-                # Common params
-                num_qo_heads=self.num_qo_heads,
-                num_kv_heads=self.num_kv_heads,
-                head_dim=self.head_dim,
-                page_size=page_size,
-                q_data_type=self.q_data_type,
-                kv_data_type=self.data_type,
-            )
-        except Exception as e:
-            torch.distributed.breakpoint()
-            raise e
+        self.p_q_indptr = p_q_indptr
+        self.d_q_indptr = d_q_indptr
+        self.p_kv_indptr = p_kv_indptr
+        self.d_kv_indptr = d_kv_indptr
+        self.kv_indices = kv_indices[: paged_kernel_lens_sum + 256]
+        self.kv_last_page_len_p = self.kv_last_page_len[:num_prefill]
+        self.kv_last_page_len_d = self.kv_last_page_len[num_prefill:bs]
+        pod_wrapper.plan(
+            # Prefill params
+            p_q_indptr,
+            p_kv_indptr,
+            kv_indices,
+            self.kv_last_page_len[:num_prefill],
+            # Decode params
+            d_q_indptr,
+            d_kv_indptr,
+            kv_indices,
+            self.kv_last_page_len[num_prefill:bs],
+            # Common params
+            num_qo_heads=self.num_qo_heads,
+            num_kv_heads=self.num_kv_heads,
+            head_dim=self.head_dim,
+            page_size=page_size,
+            q_data_type=self.q_data_type,
+            kv_data_type=self.data_type,
+        )
         if use_ragged:
+            # Reuse extend_lens computed above (avoid recomputing seq_lens - prefix_lens)
             qo_indptr = self.qo_indptr[0][: bs + 1]
-            qo_indptr[1 : bs + 1] = torch.cumsum(seq_lens - prefix_lens, dim=0)
+            qo_indptr[1 : bs + 1] = torch.cumsum(extend_lens, dim=0)
             wrapper_ragged.plan(
                 qo_indptr,
                 qo_indptr,

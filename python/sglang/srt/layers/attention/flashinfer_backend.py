@@ -1302,15 +1302,18 @@ class FlashInferIndicesUpdaterDecode:
             )
         elif self.attn_backend.use_persistent:
             # Persistent is faster for decode
-            self.qo_indptr[0][1 : bs + 1] = torch.arange(
-                1, bs + 1, device=kv_indices.device
-            )
+            if not hasattr(self, '_cached_arange') or bs > self._cached_arange_size:
+                self._cached_arange_size = bs
+                self._cached_arange = torch.arange(
+                    1, bs + 1, device=kv_indices.device
+                )
+            self.qo_indptr[0][1 : bs + 1] = self._cached_arange[:bs]
             qo_indptr = self.qo_indptr[0][: bs + 1]
             wrapper.plan(
                 qo_indptr,
                 kv_indptr,
                 kv_indices,
-                paged_kernel_lens.to(qo_indptr.dtype),
+                paged_kernel_lens.to(qo_indptr.dtype, non_blocking=True),
                 self.num_qo_heads,
                 self.num_kv_heads,
                 page_size=1,

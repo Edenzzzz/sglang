@@ -231,16 +231,22 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 
 ### Questions
 
-1. **How should KV splitting work with the dynamic scheduler?** The static scheduler pre-computes `partial_indptr`, `merge_indptr`, `merge_o_indices` per tile. With dynamic scheduling, tile-to-CTA assignment is unknown at plan time. Options:
-   - (a) Pre-compute partial output slots per (sequence, head, kv_chunk) triple — deterministic given sequence metadata, independent of which CTA processes it.
-   - (b) Avoid KV splitting for the dynamic scheduler — simpler, but can't parallelize long KV.
-   - (c) Atomic counters for runtime slot allocation.
-   Leaning toward (a). Is this correct?
+1. **How should KV splitting work with the dynamic scheduler?**
+   Answer: Use option (a) — pre-compute partial output slots per (sequence, head, kv_chunk) triple. The mapping is deterministic given sequence metadata, independent of which CTA processes it. Skip for initial v3 implementation (no KV splitting), add later.
 
-2. **Should `atomicAdd` use a gridDim stride or be strictly sequential?** FA3 does `atomicAdd(..., 1) + gridDim.x` — each CTA gets an initial tile at launch without contention, then subsequent tiles via atomic. For two queues, per-queue gridDim = `gridDim.x * gridDim.y / 2`. But strict `atomicAdd(..., 1)` always fetches the true next-largest tile (better LPT). Trade-off: initial atomic contention vs strict LPT ordering. Plan to benchmark both.
+2. **Should `atomicAdd` use a gridDim stride or be strictly sequential?**
+   FA3 does `atomicAdd(..., 1) + gridDim.x`. For two queues, per-queue gridDim = `gridDim.x * gridDim.y / 2`. Strict sequential always fetches the true next-largest tile (better LPT). Plan to benchmark both.
 
-3. **Does FlippedSchedule already implement queue switching?** When a CTA finishes its primary queue (e.g. Runner1/prefill), it naturally falls through to Runner2/decode in `PersistentKernelTemplate`. Each runner has its own atomic counter. So FlippedSchedule (even CTA: Runner1→Runner2, odd CTA: Runner2→Runner1) already gives the queue-switching behavior — CTA drains one queue, then helps the other. Correct?
+3. **Does FlippedSchedule already implement queue switching?**
+   Answer: Partially. FlippedSchedule provides the *template* — even CTA: Runner1→Runner2, odd CTA: Runner2→Runner1. But with the dynamic scheduler, each Runner now dynamically fetches tiles from its queue via `atomicAdd`. When a Runner's queue is drained (tile_idx >= total_tiles), it exits, and the CTA proceeds to the other Runner which queries the other queue's atomic counter. So the dynamic part is the per-queue `atomicAdd`, and FlippedSchedule just controls which queue each CTA starts with.
 
-4. **What's the right L2 budget for B200?** FA3 hardcodes 32MB for H100. B200 has 126MB L2. Should I query `cudaDevAttrL2CacheSize` at runtime, or hardcode a conservative fraction (e.g. 50% = 63MB to account for other data in L2)?
+4. **What's the right L2 budget for B200?**
+   FA3 hardcodes 32MB for K&V on H100. B200 has 126MB L2. Should query `cudaDevAttrL2CacheSize` at runtime, or hardcode a conservative fraction (e.g. 50% = 63MB)?
 
-5. **For KV splitting case in `tile_idx_to_work_tile()`**: FA3's `VarlenDynamicPersistentTileScheduler` packs `split_idx` and `num_splits` into the upper bits of `bidh`. The split case uses head-first ordering (`bidh = mh_block / num_m_blocks`) without L2 sectioning. Should I follow the same approach, or can KV splitting be handled differently in flashinfer where `kv_start`/`kv_end` are explicit?
+5. **For KV splitting in `tile_idx_to_work_tile()`**: FA3 packs `split_idx`/`num_splits` into upper bits of `bidh` and uses head-first ordering without L2 sectioning. Flashinfer has explicit `kv_start`/`kv_end` — can handle this differently. Skip for initial v3, add later.
+
+6. **Is L2-aware grouping essential even for the first implementation?**
+   Answer (from user): Yes, absolutely. Without L2-aware grouping the scheduler is fundamentally wrong — different sequences' KV caches will thrash L2.
+
+7. **Can persistent kernel launch more than 2 CTAs/SM?**
+   Answer (from user): No, 2 CTAs/SM is a shared memory constraint. Same limit as POD (which launches 128 threads/block, 256 threads/SM total).

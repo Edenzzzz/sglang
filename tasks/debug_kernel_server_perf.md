@@ -139,52 +139,72 @@ Currently the persistent kernel uses `TwoStageHolisticPlan` in `../flashinfer/in
 - **Current FlippedSchedule**: Just alternates Runner1/Runner2 execution order per CTA (even CTAs: big tiles first, odd: small tiles first). Still uses static tile assignment. Provides some overlap but can't adapt to runtime load imbalance.
 - **POD (separate kernel)**: Launches prefill and decode independently on different SMs, using SM-aware scheduling (`sm_aware_sched` buffer). No L2 contention between p/d since they run on different SMs.
 
-### Implementation Plan
-1. Add a new scheduler mode (e.g., `LPTScheduler`) alongside `TwoStageHolisticPlan`
-2. In `plan()`: sort tiles by cost descending (LPT), store as two sorted arrays (prefill queue, decode queue) + global atomic counters
-3. In `PersistentKernelTemplate`: replace static `work_indptr` iteration with atomic fetch from queues
-4. L2-aware grouping: compute `nheads_in_l2 = L2_size / (seq_len * head_dim * 2 * elem_size)`, only contend among those heads
-5. Two CTAs per SM: CTA0 fetches from prefill queue, CTA1 from decode queue; switch when own queue is empty
+### Implementation Plan (v3: FA3-style runtime dynamic scheduler)
+
+The v1/v2 approach of sorting pre-built flat tile arrays and atomically indexing into them was wrong — it still uses the static per-tile metadata arrays from `TwoStageHolisticPlan`. The correct approach is a **runtime dynamic scheduler** like FA3's `VarlenDynamicPersistentTileScheduler`, which replaces `get_block_coord()` entirely.
+
+#### FA3 VarlenDynamicPersistentTileScheduler Design
+Global tile indices are laid out as: **batch (slowest) → head → query block (fastest)**.
+1. `atomicAdd(tile_count_semaphore, 1)` → get global `tile_idx`
+2. `tile_idx_to_work_tile(tile_idx)`:
+   - **Find batch**: while loop using `warp_prefix_sum` of `num_m_blocks` per batch (31 batches at a time via warp lanes). `__ballot_sync` + `__popc` to find exact batch within group.
+   - **Compute offset**: `mh_block = tile_idx - group_start_tile` (offset within this batch)
+   - **L2-aware LPT (non-split case)**: divide heads into sections of `nheads_in_l2` (power-of-2, computed as `L2_size / (kv_len * head_dim * 2 * elem_size)`). Within each section, iterate **query block first, head second** → consecutive tiles access same KV cache (L2-friendly). `block = num_m_blocks - 1 - block` reverses order for LPT (causal: larger Q tiles = more work).
+   - **Split-KV case**: head-first ordering with split_idx packed into bidh upper bits.
+3. **Queue switching**: when one CTA's queue is empty, it fetches from the other queue using the same `atomicAdd` mechanism.
+4. **gridDim stride**: FA3 uses `atomicAdd(...) + int(gridDim.x)` to skip by gridDim — this gives each CTA an initial tile at launch without contention, then subsequent tiles via atomic. **Need to explore**: whether strict sequential `atomicAdd(..., 1)` (no gridDim skip) gives better LPT behavior since it always fetches the next-largest tile, vs gridDim stride which distributes tiles more evenly but breaks strict LPT order. For per-queue gridDim, need `gridDim_per_queue = gridDim.x * gridDim.y / 2` (half the CTAs per queue in FlippedSchedule).
+
+#### Mapping to Flashinfer
+- FA3 `batch` = flashinfer sequence index (within prefill or decode set)
+- FA3 `num_m_blocks` = `ceil_div(packed_qo_len, CTA_TILE_Q)` per sequence
+- FA3 `num_head` = `num_kv_heads` (GQA group is handled inside)
+- FA3 `block` = Q tile index within sequence
+- FA3 `bidh` = KV head index
+- Flashinfer has paged KV cache → `kv_indptr` + `kv_indices` for page table lookup
+- Flashinfer may split KV → need `partial_indptr`, `merge_indptr`, `merge_o_indices` for reduction
+
+#### Static Scheduler (plan-time) Changes
+For the FlippedSchedule path, `TwoStageHolisticPlan` just needs to:
+1. Split sequences into prefill queue (task 0) and decode queue (task 1) — already done
+2. Store per-sequence metadata: `num_m_blocks_ptr`, `nheads_in_l2_ptr`, `qo_indptr`, `kv_indptr`, `kv_len`, per queue
+3. Compute L2 budget: `nheads_in_l2 = min(num_kv_heads, floor_pow2(L2_size / (kv_len * head_dim * 2 * elem_size)))` per sequence
+4. Store tile counters (one per queue, zero-initialized)
+5. Keep the MinHeap path for non-FlippedSchedule (pure prefill/decode batches)
+
+#### Runtime Scheduler (kernel-side) Changes
+Replace `get_block_coord(params, work_idx)` with `tile_idx_to_work_tile(params, tile_idx)`:
+1. Thread 0 does `atomicAdd(tile_counter, 1)` (+ optional gridDim stride)
+2. Broadcast tile_idx to all threads via smem + `__syncthreads()`
+3. `tile_idx_to_work_tile()`: batch lookup → L2-aware LPT head/block mapping → return (q_indptr, kv_indptr, q_len, kv_len, packed_qo_start, kv_start, kv_end, kv_head_idx, len_kv_chunk)
+
+#### Queue Switching
+When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it switches to the other queue's counter and fetches from there. This requires:
+- Both Runners to have access to both tile counters
+- A way to call the other Runner's compute path from within a Runner
+- OR: simpler — after Runner1 finishes, PersistentKernelTemplate passes Runner1 the OTHER queue's params/counter to continue draining
+
+#### Files to Modify
+1. `scheduler.cuh` — `TwoStageHolisticPlan`: for FlippedSchedule, store per-sequence metadata (num_m_blocks, nheads_in_l2, qo_indptr, kv_indptr, kv_len) per queue instead of per-tile metadata
+2. `persistent.cuh` — replace `get_block_coord()` with `tile_idx_to_work_tile()` containing batch-find while loop + L2-aware LPT mapping. Replace `work_indptr` loop with atomic fetch loop.
+3. `batch_attention_customize_config.jinja` — add new params for dynamic scheduling (num_m_blocks_ptr, nheads_in_l2_ptr, per-sequence metadata arrays)
+4. `batch_attention.cu` — populate new params from plan_info
 
 ### Key Findings from Investigation
 1. **FlippedSchedule rarely triggers**: Condition `prefill*128 <= decode_kv_total && prefill >= 3072`. Only cases 6-7 in bench trigger it. Cases 1-5 where persistent is 2x slower than POD don't use FlippedSchedule.
-
-2. **Enabling FlippedSchedule universally makes things worse**: Tested with `total_prefill > 0 && total_decode > 0` — persistent got slower (case 1: 0.28→0.38ms, case 4: 0.52→0.61ms). The CTA alternation overhead isn't worth it without real overlap benefit from LPT.
-
-3. **B200 specs**: L2=126MB, 148 SMs. L2 can hold ~15 decode sequences (kv=2048, 8 heads, hd=128, bf16).
-
-4. **Root cause of persistent slowness**: Static tile assignment via MinHeap. When a cluster gets a large prefill tile, its decode tiles must wait. No runtime load balancing.
-
-### Files to Modify
-1. `include/flashinfer/attention/scheduler.cuh` — `TwoStageHolisticPlan`: add LPT-sorted flat tile arrays + atomic counter offsets to `HolisticPlanInfo`
-2. `include/flashinfer/attention/persistent.cuh` — `BlockBatchPagedAttentionPersistent::Run()`: add atomic tile fetching code path
-3. `include/flashinfer/attention/persistent_template.cuh` — `PersistentKernelTemplate`: allocate/zero tile counters, pass to runners
-4. `include/flashinfer/attention/persistent.cuh` — `BatchPagedAttentionPersistent()`: allocate global tile counter buffer
-
-### Questions
-1. **Grid sync with runtime fetching**: `grid.sync()` is needed before reduction. With runtime fetching, all CTAs naturally drain both queues before hitting the barrier. No issue — CTAs loop until queue empty, then fall through to `grid.sync()`.
-
-2. **Partial output with runtime fetching**: The `partial_indptr` and `merge_o_indices` are pre-computed per work item. Since the tile *content* (q_indptr, kv ranges, etc.) is still pre-computed in plan — only the *assignment* (which CTA gets which tile) changes. The tile metadata arrays stay the same, just not grouped by cluster. Each tile still has its own `partial_indptr` slot. This should work without changes to the merge logic.
-
-3. **L2 cache awareness**: For the initial implementation, skip L2 grouping and just do plain LPT. Add L2 awareness as a second step if LPT alone shows improvement.
-
-4. **Two queues vs one**: The design says CTA0 fetches from prefill queue, CTA1 from decode. But with the current `PersistentKernelTemplate`, Runner1 (tile=128) runs prefill and Runner2 (tile=16) runs decode. With LPT, we want CTA0 to grab from Runner1's queue and CTA1 from Runner2's queue. The FlippedSchedule alternation in the template already does this — CTA0 runs Runner1 first, CTA1 runs Runner2 first. The key change is making each Runner's `Run()` use atomic fetching instead of static iteration.
-
-5. **Cost function**: Keep `2*qo + kv` for now. LPT (descending sort) naturally gives larger tiles to faster CTAs.
+2. **v2 (static LPT sort + relaxed condition) improved some cases but still 2x gap**: The static MinHeap tile assignment + atomic indexing into the flat array is fundamentally wrong — it doesn't do L2-aware grouping and the tile metadata is still laid out per-cluster.
+3. **B200 specs**: L2=126MB, 148 SMs, 2 CTAs/SM (smem constrained, same as POD).
+4. **`__syncthreads` for smem broadcast is safe**: Confirmed by user.
 
 ### Progress
 
-**v1: LPT atomic tile fetching (scheduler.cuh + persistent.cuh + batch_attention.cu)**
+**v1: Static LPT atomic tile fetching**
 - Added `tile_counter` and `total_num_works` to `HolisticPlanInfo` and `PersistentParams`
-- Modified `BlockBatchPagedAttentionPersistent::Run()`: when `tile_counter != nullptr`, uses `atomicAdd` to grab next tile instead of iterating `work_indptr`
-- Tile counters zeroed via `cudaMemsetAsync` before each kernel launch
-- **Result**: Cases 6-7 (where FlippedSchedule triggers) improved 10% (1.92→1.73ms, 3.77→3.68ms). Cases 1-5 unchanged (FlippedSchedule condition not met).
-- **Next step**: The FlippedSchedule condition needs to be relaxed, AND the tile arrays need to be sorted in LPT order (descending cost). Currently tiles are still in the MinHeap-assigned order which is roughly balanced but not LPT-sorted. Need to sort the flat tile arrays by cost before writing to device.
+- Modified `BlockBatchPagedAttentionPersistent::Run()`: when `tile_counter != nullptr`, uses `atomicAdd` to grab next tile from the flat array
+- **Result**: Cases 6-7 improved ~10%. Cases 1-5 unchanged.
 
 **v2: LPT sorting + relaxed FlippedSchedule condition**
-- Added `std::sort` by cost descending after `flatten()` in `TwoStageHolisticPlan`
-- Changed FlippedSchedule condition from `prefill*128 <= decode && prefill >= 3072` to `prefill > 0 && decode > 0`
-- **Results vs original baseline**:
+- Sorted flat tile arrays by cost descending. Relaxed condition to `prefill > 0 && decode > 0`.
+- **Results vs baseline**:
   | Case | Original | LPT v2 | Improvement | POD |
   |------|----------|--------|-------------|-----|
   | 1 | 0.28ms | 0.32ms | -14% | 0.17ms |
@@ -194,27 +214,33 @@ Currently the persistent kernel uses `TwoStageHolisticPlan` in `../flashinfer/in
   | 5 | 1.45ms | 1.31ms | +10% | 0.72ms |
   | 6 | 1.92ms | 1.79ms | +7% | 0.92ms |
   | 7 | 3.77ms | 3.26ms | +14% | 4.14ms |
-- Case 7 now beats POD (3.26 vs 4.14ms). Cases 2,4 significantly improved.
-- Case 1 regressed slightly — atomic overhead for small workloads.
-- Still ~2x slower than POD for most cases. Root cause: the persistent kernel processes ALL tiles sequentially (prefill then decode for each CTA), while POD runs them on different SMs concurrently.
+- Still 2x slower than POD for most cases — needs FA3-style runtime dynamic scheduler.
 
-### Issues Encountered (implementation)
-1. **POD precision mismatch in `bench_mixed_attention.py`**: Fixed — changed to `join_outputs=False` with manual d-first cat.
-2. **`__shfl_sync` only works within a warp**: For multi-warp blocks, needed shared memory broadcast of atomic result. Used `volatile` cast of `smem_storage[0]`.
-3. **Tile counter lifetime**: Counter is in `int_buffer` (set once in `plan()`). Need `cudaMemsetAsync` before each `run()` call to reset.
-4. **Enabling FlippedSchedule universally hurts**: CTA alternation overhead without LPT is worse than static scheduling. Need both LPT + FlippedSchedule together.
+**v3: FA3-style runtime dynamic scheduler (TODO)**
+- [ ] Implement `tile_idx_to_work_tile()` with batch-find while loop + L2-aware LPT mapping
+- [ ] Modify `TwoStageHolisticPlan` to store per-sequence metadata for dynamic scheduler
+- [ ] Add per-sequence `num_m_blocks_ptr`, `nheads_in_l2_ptr` to PersistentParams
+- [ ] Queue switching: CTA drains own queue, then switches to other queue
+- [ ] Explore gridDim stride vs strict sequential atomicAdd
+- [ ] Handle KV splitting in the dynamic scheduler (partial output slots)
+
+### Issues Encountered
+1. **POD precision mismatch in `bench_mixed_attention.py`**: Fixed — `join_outputs` was returning prefill-first but reference is decode-first. Changed to `join_outputs=False` with manual d-first cat.
+2. **v2 static LPT + FlippedSchedule hurts small workloads (case 1)**: Atomic overhead + CTA alternation overhead > benefit. Dynamic scheduler should fix this by being pure compute (no extra memory traffic for pre-built tile arrays).
+3. **Tile counter reset**: Counter in `int_buffer` needs `cudaMemsetAsync` before each `run()`.
 
 ### Questions
-1. **Tile ordering**: The current MinHeap produces tiles grouped by cluster. When using atomic fetching, the tile order in the flat array matters — LPT needs descending cost order. But the `flatten()` function just concatenates per-cluster arrays. Need to either (a) sort the flat array after flatten, or (b) build the flat array directly in sorted order without the per-cluster grouping.
 
-2. **Separate queues for prefill/decode**: The design says CTA0 fetches from prefill queue (task 0, tile=128), CTA1 from decode queue (task 1, tile=16). Currently FlippedSchedule alternates which Runner goes first per CTA, and each Runner has its own `tile_counter`. This should naturally give overlap — but only if both tasks have tiles. In cases 1-5, task 0 (tile=128) may have very few tiles while task 1 (tile=16) has many decode tiles. Need to verify the tile classification is correct.
+1. **How should KV splitting work with the dynamic scheduler?** The static scheduler pre-computes `partial_indptr`, `merge_indptr`, `merge_o_indices` per tile. With dynamic scheduling, tile-to-CTA assignment is unknown at plan time. Options:
+   - (a) Pre-compute partial output slots per (sequence, head, kv_chunk) triple — deterministic given sequence metadata, independent of which CTA processes it.
+   - (b) Avoid KV splitting for the dynamic scheduler — simpler, but can't parallelize long KV.
+   - (c) Atomic counters for runtime slot allocation.
+   Leaning toward (a). Is this correct?
 
-3. **`smem_storage` reinterpretation**: Using `volatile IdType*` cast of the SharedStorage union for atomic broadcast is sketchy. The SharedStorage is a union of q_smem, k_smem, v_smem — writing to byte 0 could corrupt data if the kernel reads q_smem later. However, we do `__syncthreads()` and the atomic fetch happens at the loop top before any smem data loading, so it should be safe. The q_smem loading happens after `get_block_coord()` which is after the broadcast. Verify this doesn't cause issues.
+2. **Should `atomicAdd` use a gridDim stride or be strictly sequential?** FA3 does `atomicAdd(..., 1) + gridDim.x` — each CTA gets an initial tile at launch without contention, then subsequent tiles via atomic. For two queues, per-queue gridDim = `gridDim.x * gridDim.y / 2`. But strict `atomicAdd(..., 1)` always fetches the true next-largest tile (better LPT). Trade-off: initial atomic contention vs strict LPT ordering. Plan to benchmark both.
 
-4. **Why persistent is still 2x slower than POD**: POD runs prefill and decode as separate CTAs across ALL SMs concurrently — full parallelism. Persistent runs sequentially within each CTA. Even with FlippedSchedule, the overlap is only between the two CTAs on the same SM. After one CTA finishes its first queue, it switches to the second queue, reducing overlap. The `grid.sync()` barrier means ALL CTAs must drain BOTH queues before reduction. If workload is imbalanced (e.g., many decode tiles, few prefill tiles), most CTAs finish Runner1 quickly and then all pile on Runner2, losing the overlap benefit. Need to investigate whether the cost is dominated by the tiles themselves or by the barrier/reduction.
+3. **Does FlippedSchedule already implement queue switching?** When a CTA finishes its primary queue (e.g. Runner1/prefill), it naturally falls through to Runner2/decode in `PersistentKernelTemplate`. Each runner has its own atomic counter. So FlippedSchedule (even CTA: Runner1→Runner2, odd CTA: Runner2→Runner1) already gives the queue-switching behavior — CTA drains one queue, then helps the other. Correct?
 
-5. **Possible next steps to close the gap**:
-   - Profile with nsys to see where time is spent (tiles vs barrier vs reduction)
-   - Try disabling KV splitting (avoid reduction entirely) for mixed batches
-   - Consider a hybrid approach: only use persistent+LPT when it's beneficial, fall back to POD otherwise
-   - L2-aware head grouping (FA3 approach) could improve memory efficiency
+4. **What's the right L2 budget for B200?** FA3 hardcodes 32MB for H100. B200 has 126MB L2. Should I query `cudaDevAttrL2CacheSize` at runtime, or hardcode a conservative fraction (e.g. 50% = 63MB to account for other data in L2)?
+
+5. **For KV splitting case in `tile_idx_to_work_tile()`**: FA3's `VarlenDynamicPersistentTileScheduler` packs `split_idx` and `num_splits` into the upper bits of `bidh`. The split case uses head-first ordering (`bidh = mh_block / num_m_blocks`) without L2 sectioning. Should I follow the same approach, or can KV splitting be handled differently in flashinfer where `kv_start`/`kv_end` are explicit?

@@ -181,6 +181,23 @@ Currently the persistent kernel uses `TwoStageHolisticPlan` in `../flashinfer/in
 - **Result**: Cases 6-7 (where FlippedSchedule triggers) improved 10% (1.92→1.73ms, 3.77→3.68ms). Cases 1-5 unchanged (FlippedSchedule condition not met).
 - **Next step**: The FlippedSchedule condition needs to be relaxed, AND the tile arrays need to be sorted in LPT order (descending cost). Currently tiles are still in the MinHeap-assigned order which is roughly balanced but not LPT-sorted. Need to sort the flat tile arrays by cost before writing to device.
 
+**v2: LPT sorting + relaxed FlippedSchedule condition**
+- Added `std::sort` by cost descending after `flatten()` in `TwoStageHolisticPlan`
+- Changed FlippedSchedule condition from `prefill*128 <= decode && prefill >= 3072` to `prefill > 0 && decode > 0`
+- **Results vs original baseline**:
+  | Case | Original | LPT v2 | Improvement | POD |
+  |------|----------|--------|-------------|-----|
+  | 1 | 0.28ms | 0.32ms | -14% | 0.17ms |
+  | 2 | 0.48ms | 0.40ms | +17% | 0.21ms |
+  | 3 | 0.80ms | 0.79ms | +1% | 0.38ms |
+  | 4 | 0.52ms | 0.38ms | **+27%** | 0.24ms |
+  | 5 | 1.45ms | 1.31ms | +10% | 0.72ms |
+  | 6 | 1.92ms | 1.79ms | +7% | 0.92ms |
+  | 7 | 3.77ms | 3.26ms | +14% | 4.14ms |
+- Case 7 now beats POD (3.26 vs 4.14ms). Cases 2,4 significantly improved.
+- Case 1 regressed slightly — atomic overhead for small workloads.
+- Still ~2x slower than POD for most cases. Root cause: the persistent kernel processes ALL tiles sequentially (prefill then decode for each CTA), while POD runs them on different SMs concurrently.
+
 ### Issues Encountered (implementation)
 1. **POD precision mismatch in `bench_mixed_attention.py`**: Fixed — changed to `join_outputs=False` with manual d-first cat.
 2. **`__shfl_sync` only works within a warp**: For multi-warp blocks, needed shared memory broadcast of atomic result. Used `volatile` cast of `smem_storage[0]`.

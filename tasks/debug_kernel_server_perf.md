@@ -216,13 +216,17 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   | 7 | 3.77ms | 3.26ms | +14% | 4.14ms |
 - Still 2x slower than POD for most cases — needs FA3-style runtime dynamic scheduler.
 
-**v3: FA3-style runtime dynamic scheduler (TODO)**
-- [ ] Implement `tile_idx_to_work_tile()` with batch-find while loop + L2-aware LPT mapping
-- [ ] Modify `TwoStageHolisticPlan` to store per-sequence metadata for dynamic scheduler
-- [ ] Add per-sequence `num_m_blocks_ptr`, `nheads_in_l2_ptr` to PersistentParams
-- [ ] Queue switching: CTA drains own queue, then switches to other queue
+**v3: FA3-style runtime dynamic scheduler (IN PROGRESS)**
+- [x] Implement `tile_idx_to_work_tile()` with batch-find while loop + L2-aware LPT mapping
+- [x] Modify `TwoStageHolisticPlan` to store per-sequence metadata (qo_indptr, qo_len, kv_indptr, kv_len, num_m_blocks, nheads_in_l2) per queue
+- [x] Add dynamic scheduler fields to `HolisticPlanInfo`, `PersistentParams`, `batch_attention.cu`
+- [x] L2-aware nheads_in_l2 computation: `floor_pow2(L2_budget / kv_bytes_per_head)`, queried at runtime via `cudaDevAttrL2CacheSize`
+- [x] Fixed qo_len indptr differencing bug (non-contiguous sequences) — added separate `dyn_qo_len` array
+- [ ] **NOT YET TESTED** — GPU unavailable during development (preempted)
+- [ ] Queue switching: FlippedSchedule handles this via Runner1→Runner2 sequencing + per-queue atomicAdd
 - [ ] Explore gridDim stride vs strict sequential atomicAdd
-- [ ] Handle KV splitting in the dynamic scheduler (partial output slots)
+- [ ] Handle KV splitting in the dynamic scheduler (currently no-split only: kv_start=0, kv_end=kv_len)
+- [ ] Verify correctness with `bench_mixed_attention.py`
 
 ### Issues Encountered
 1. **POD precision mismatch in `bench_mixed_attention.py`**: Fixed — `join_outputs` was returning prefill-first but reference is decode-first. Changed to `join_outputs=False` with manual d-first cat.

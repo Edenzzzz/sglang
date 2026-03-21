@@ -210,3 +210,11 @@ Currently the persistent kernel uses `TwoStageHolisticPlan` in `../flashinfer/in
 2. **Separate queues for prefill/decode**: The design says CTA0 fetches from prefill queue (task 0, tile=128), CTA1 from decode queue (task 1, tile=16). Currently FlippedSchedule alternates which Runner goes first per CTA, and each Runner has its own `tile_counter`. This should naturally give overlap — but only if both tasks have tiles. In cases 1-5, task 0 (tile=128) may have very few tiles while task 1 (tile=16) has many decode tiles. Need to verify the tile classification is correct.
 
 3. **`smem_storage` reinterpretation**: Using `volatile IdType*` cast of the SharedStorage union for atomic broadcast is sketchy. The SharedStorage is a union of q_smem, k_smem, v_smem — writing to byte 0 could corrupt data if the kernel reads q_smem later. However, we do `__syncthreads()` and the atomic fetch happens at the loop top before any smem data loading, so it should be safe. The q_smem loading happens after `get_block_coord()` which is after the broadcast. Verify this doesn't cause issues.
+
+4. **Why persistent is still 2x slower than POD**: POD runs prefill and decode as separate CTAs across ALL SMs concurrently — full parallelism. Persistent runs sequentially within each CTA. Even with FlippedSchedule, the overlap is only between the two CTAs on the same SM. After one CTA finishes its first queue, it switches to the second queue, reducing overlap. The `grid.sync()` barrier means ALL CTAs must drain BOTH queues before reduction. If workload is imbalanced (e.g., many decode tiles, few prefill tiles), most CTAs finish Runner1 quickly and then all pile on Runner2, losing the overlap benefit. Need to investigate whether the cost is dominated by the tiles themselves or by the barrier/reduction.
+
+5. **Possible next steps to close the gap**:
+   - Profile with nsys to see where time is spent (tiles vs barrier vs reduction)
+   - Try disabling KV splitting (avoid reduction entirely) for mixed batches
+   - Consider a hybrid approach: only use persistent+LPT when it's beneficial, fall back to POD otherwise
+   - L2-aware head grouping (FA3 approach) could improve memory efficiency

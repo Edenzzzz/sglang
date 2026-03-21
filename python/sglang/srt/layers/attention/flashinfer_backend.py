@@ -574,6 +574,7 @@ class FlashInferAttnBackend(AttentionBackend):
                     page_size=forward_batch.token_to_kv_pool.page_size,
                     num_prefill=num_prefill,
                     num_decode=num_decode,
+                    prefix_lens_cpu=forward_batch.extend_prefix_lens_cpu,
                 )
             else:
                 # Both persistent and batch prefill included
@@ -589,6 +590,7 @@ class FlashInferAttnBackend(AttentionBackend):
                     spec_info=None,
                     fixed_split_size=self.prefill_split_tile_size,
                     multi_item_params=multi_item_params,
+                    prefix_lens_cpu=forward_batch.extend_prefix_lens_cpu,
                 )
             try:
                 self.forward_metadata = PrefillMetadata(
@@ -832,31 +834,24 @@ class FlashInferAttnBackend(AttentionBackend):
     ):
         if logits_soft_cap != 0:
             raise ValueError("logits_soft_cap is not supported for POD attention yet")
-        # bs_p = pod_wrapper.batch_size_p
-        # bs_d = pod_wrapper.batch_size_d
         q_reshaped = q.view(-1, layer.tp_q_head_num, layer.head_dim)
         kv_buffer = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
-        # print(f"qo_indptr_p:{self.indices_updater_prefill.p_q_indptr}, qo_indptr_d:{self.indices_updater_prefill.d_q_indptr}, kv_indptr_p:{self.indices_updater_prefill.p_kv_indptr}, kv_indptr_d:{self.indices_updater_prefill.d_kv_indptr}, kv_indices:{self.indices_updater_prefill.kv_indices}, kv_last_page_len_p:{self.indices_updater_prefill.kv_last_page_len_p}, kv_last_page_len_d:{self.indices_updater_prefill.kv_last_page_len_d}, q_reshaped.shape: {q_reshaped.shape}, kv_buffer[0].shape: {kv_buffer[0].shape}")
-        num_p_tokens = pod_wrapper._qo_indptr_buf_p[-1]  # .item()
+        num_p_tokens = pod_wrapper._qo_indptr_buf_p[-1]
         q_p = q_reshaped[:num_p_tokens]
         q_d = q_reshaped[num_p_tokens:]
         try:
-            (o_p, o_d), (lse_p, lse_d) = pod_wrapper.run(
+            o, lse = pod_wrapper.run(
                 q_p,
                 kv_buffer,
                 q_d,
                 kv_buffer,
                 causal_p=not layer.is_cross_attention,
                 return_lse=True,
-                debug=False,
-                # join_outputs=False, # TODO: join_outputs to avoid additional cat
+                join_outputs=True,
             )
         except Exception as e:
             torch.distributed.breakpoint()
             raise e
-        # TODO: remove cat
-        o = torch.cat([o_p, o_d], dim=0)
-        lse = torch.cat([lse_p, lse_d], dim=0)
         return o, lse
 
     def forward_extend(
@@ -1390,6 +1385,7 @@ class FlashInferIndicesUpdaterPrefill:
         encoder_lens: Optional[torch.Tensor],
         spec_info: Optional[SpecInput],
         fixed_split_size: Optional[int] = None,
+        prefix_lens_cpu=None,
     ):
         # Keep the signature for type checking. It will be assigned during runtime.
         raise NotImplementedError()
@@ -1409,12 +1405,14 @@ class FlashInferIndicesUpdaterPrefill:
         spec_info: Optional[SpecInput],
         fixed_split_size: Optional[int] = None,
         multi_item_params: Optional[MultiItemScoringParams] = None,
+        prefix_lens_cpu=None,
     ):
         if use_ragged:
-            # TODO: remove this device sync, we can use forward_batch.extend_prefix_lens_cpu
-            # and forward_batch.extend_seq_lens_cpu
             paged_kernel_lens = prefix_lens
-            paged_kernel_lens_sum = paged_kernel_lens.sum().item()
+            if prefix_lens_cpu is not None:
+                paged_kernel_lens_sum = int(sum(prefix_lens_cpu))
+            else:
+                paged_kernel_lens_sum = paged_kernel_lens.sum().item()
             causal = False
         else:
             paged_kernel_lens = seq_lens
@@ -1452,6 +1450,7 @@ class FlashInferIndicesUpdaterPrefill:
         spec_info: Optional[SpecInput],
         fixed_split_size: Optional[int] = None,
         multi_item_params: Optional[MultiItemScoringParams] = None,
+        prefix_lens_cpu=None,
     ):
         for wrapper_id in range(2):
             if wrapper_id == 0:
@@ -1503,6 +1502,7 @@ class FlashInferIndicesUpdaterPrefill:
         spec_info: Optional[SpecInput],
         fixed_split_size: Optional[int] = None,
         multi_item_params: Optional[MultiItemScoringParams] = None,
+        prefix_lens_cpu=None,
     ):
         for wrapper_id in range(2):
             if wrapper_id == 0:
@@ -1550,6 +1550,7 @@ class FlashInferIndicesUpdaterPrefill:
         page_size: int,
         num_prefill: int,
         num_decode: int,
+        prefix_lens_cpu=None,
     ):
         """Update POD wrapper for mixed batches. Prefill requests come first, then decode."""
         bs = len(seq_lens)
@@ -1559,20 +1560,35 @@ class FlashInferIndicesUpdaterPrefill:
 
         if use_ragged:
             paged_kernel_lens = prefix_lens
-            paged_kernel_lens_sum = paged_kernel_lens.sum().to(
-                device="cpu", 
-            )
         else:
             paged_kernel_lens = seq_lens
+
+        # Compute paged_kernel_lens_sum on CPU (avoids GPU->CPU sync)
+        if use_ragged and prefix_lens_cpu is not None:
+            paged_kernel_lens_cpu = torch.tensor(prefix_lens_cpu, dtype=torch.int32) if not isinstance(prefix_lens_cpu, torch.Tensor) else prefix_lens_cpu
+            paged_kernel_lens_sum = int(paged_kernel_lens_cpu.sum())
+        elif not use_ragged and seq_lens_cpu is not None:
             paged_kernel_lens_sum = seq_lens_sum
+        else:
+            paged_kernel_lens_sum = int(paged_kernel_lens.sum().to(device="cpu"))
 
         # Create full kv_indptr for all requests
         kv_indptr = self.kv_indptr[0]
         kv_indptr[1 : bs + 1] = torch.cumsum(paged_kernel_lens, dim=0)
         kv_indptr = kv_indptr[: bs + 1]
+        p_kv_indptr = kv_indptr[: num_prefill + 1]
+        d_kv_indptr = kv_indptr[num_prefill:]
+
+        # Compute qo_indptr separately for prefill and decode
+        extend_lens = seq_lens - prefix_lens
+        p_q_indptr = self.qo_indptr[0][: num_prefill + 1]
+        if num_prefill > 0:
+            p_q_indptr[1:] = torch.cumsum(extend_lens[:num_prefill], dim=0)
+        d_q_indptr = self.qo_indptr[1][: num_decode + 1]
+        if num_decode > 0:
+            d_q_indptr[1:] = torch.cumsum(extend_lens[num_prefill:], dim=0)
 
         # Create kv_indices using cached buffer (avoids per-call allocation)
-        paged_kernel_lens_sum = int(paged_kernel_lens_sum)
         needed = paged_kernel_lens_sum + 256
         if needed > self._cached_kv_indices_size:
             self._cached_kv_indices_size = needed
@@ -1591,21 +1607,31 @@ class FlashInferIndicesUpdaterPrefill:
             self.req_to_token.shape[1],
         )
         kv_indices = kv_indices[:paged_kernel_lens_sum]
-        p_kv_indptr = kv_indptr[: num_prefill + 1]
-        d_kv_indptr = kv_indptr[num_prefill:]
 
-        # Compute qo_indptr separately for prefill and decode
-        # Compute extend_lens once and reuse for ragged wrapper below
-        extend_lens = seq_lens - prefix_lens
-        p_extend_lens = extend_lens[:num_prefill]
-        d_extend_lens = extend_lens[num_prefill:]
-        # NOTE: hardcode to use two qo_indptr buffers
-        p_q_indptr = self.qo_indptr[0][: num_prefill + 1]
-        if num_prefill > 0:
-            p_q_indptr[1:] = torch.cumsum(p_extend_lens, dim=0)
-        d_q_indptr = self.qo_indptr[1][: num_decode + 1]
-        if num_decode > 0:
-            d_q_indptr[1:] = torch.cumsum(d_extend_lens, dim=0)
+        # Build CPU tensors for pod_wrapper.plan() to avoid GPU->CPU sync
+        if seq_lens_cpu is not None and prefix_lens_cpu is not None:
+            prefix_lens_cpu_t = torch.tensor(prefix_lens_cpu, dtype=torch.int32) if not isinstance(prefix_lens_cpu, torch.Tensor) else prefix_lens_cpu
+            paged_kernel_lens_cpu = prefix_lens_cpu_t if use_ragged else seq_lens_cpu
+            kv_indptr_cpu = torch.zeros(bs + 1, dtype=torch.int32)
+            kv_indptr_cpu[1:] = torch.cumsum(paged_kernel_lens_cpu, dim=0)
+            extend_lens_cpu = seq_lens_cpu - prefix_lens_cpu_t
+            p_q_indptr_cpu = torch.zeros(num_prefill + 1, dtype=torch.int32)
+            if num_prefill > 0:
+                p_q_indptr_cpu[1:] = torch.cumsum(extend_lens_cpu[:num_prefill], dim=0)
+            d_q_indptr_cpu = torch.zeros(num_decode + 1, dtype=torch.int32)
+            if num_decode > 0:
+                d_q_indptr_cpu[1:] = torch.cumsum(extend_lens_cpu[num_prefill:], dim=0)
+            last_page_len_host_p = torch.ones(num_prefill, dtype=torch.int32)
+            last_page_len_host_d = torch.ones(num_decode, dtype=torch.int32)
+            p_kv_indptr_cpu = kv_indptr_cpu[:num_prefill + 1]
+            d_kv_indptr_cpu = kv_indptr_cpu[num_prefill:]
+        else:
+            p_q_indptr_cpu = None
+            d_q_indptr_cpu = None
+            last_page_len_host_p = None
+            last_page_len_host_d = None
+            p_kv_indptr_cpu = None
+            d_kv_indptr_cpu = None
 
         # Use same kv_indices for both, split kv_indptr
         self.p_q_indptr = p_q_indptr
@@ -1633,9 +1659,15 @@ class FlashInferIndicesUpdaterPrefill:
             page_size=page_size,
             q_data_type=self.q_data_type,
             kv_data_type=self.data_type,
+            # CPU tensors to avoid GPU->CPU sync
+            qo_indptr_host_p=p_q_indptr_cpu,
+            kv_indptr_host_p=p_kv_indptr_cpu,
+            last_page_len_host_p=last_page_len_host_p,
+            qo_indptr_host_d=d_q_indptr_cpu,
+            kv_indptr_host_d=d_kv_indptr_cpu,
+            last_page_len_host_d=last_page_len_host_d,
         )
         if use_ragged:
-            # Reuse extend_lens computed above (avoid recomputing seq_lens - prefix_lens)
             qo_indptr = self.qo_indptr[0][: bs + 1]
             qo_indptr[1 : bs + 1] = torch.cumsum(extend_lens, dim=0)
             wrapper_ragged.plan(

@@ -50,28 +50,11 @@ Investigate and fix performance overhead of persistent kernel and POD (Prefill-O
 ### 4. Benchmark CSV logging (commit 5c268789)
 Added `use_persistent` and `use_pod` fields to `bench_serving.py` CSV output and `http_server.py` `/get_server_info` endpoint for tracking kernel configuration in benchmark results.
 
-## Remaining TODOs
-From `flashinfer_backend.py`:
-
-1. **Remove `torch.cat` for POD outputs** (line ~857):
-   ```python
-   # TODO: remove cat
-   o = torch.cat([o_p, o_d], dim=0)
-   lse = torch.cat([lse_p, lse_d], dim=0)
-   ```
-   Could use `join_outputs=False` in `pod_wrapper.plan()` or pre-allocate output buffer.
-
-2. **Remove device sync in prefill indices updater** (line ~1414):
-   ```python
-   # TODO: remove this device sync, we can use forward_batch.extend_prefix_lens_cpu
-   ```
-3. Look into `class BatchPODWithPagedKVCacheWrapper` in `../flashinfer/flashinfer/pod.py`
-to see if some indices operations can be optimized.
-
-4. Verify valid output using send_reqs.sh 
-
-## Remaining Overhead
-The main remaining overhead in POD attention is inside flashinfer's `pod_wrapper.plan()` itself, which contains GPU→CPU synchronizations (`.to("cpu")` calls at lines 849, 859-862, 897, 907-910 of pod.py). This is upstream in flashinfer and not easily fixable from the SGLang side.
+## Completed TODOs
+- ~~Remove `torch.cat` for POD outputs~~ — used `join_outputs=True` (fixed p-first ordering in pod.py)
+- ~~Remove device sync in prefill indices updater~~ — pass `prefix_lens_cpu` from `forward_batch.extend_prefix_lens_cpu`
+- ~~Optimize POD pod.py indices~~ — added optional CPU tensor params to `plan()` to bypass GPU→CPU syncs
+- ~~Verify valid output~~ — confirmed with `send_reqs.sh` for both persistent and POD
 
 ## GPU Launch Gap Analysis (from nsys bt traces)
 | Config | Num gaps | Avg gap (us) | Total gap (ms) | Trace duration (ms) | Gap % |
@@ -108,3 +91,105 @@ The main remaining overhead in POD attention is inside flashinfer's `pod_wrapper
 | POD (join_outputs) | 2938 | 129 | 8.1 | warmup=25 (JIT compile) |
 
 **NOTE:** POD requires `--warmup-requests 25` (or flush cache + re-run) because flashinfer JIT-compiles POD kernels on first use, which is very slow. The earlier 601 tok/s result was caused by JIT overhead during the benchmark. flashinfer 0.5.2 shows ~20% throughput regression for all configs vs 0.4.1.
+
+---
+
+## TODO: Persistent Kernel Prefill-Decode Overlap Scheduler
+
+### Goal
+Implement a new scheduler for the persistent kernel that beats POD by doing prefill-decode overlap within the persistent kernel itself.
+
+### Background
+Currently the persistent kernel uses `TwoStageHolisticPlan` in `../flashinfer/include/flashinfer/attention/scheduler.cuh`, which uses a coarse cost function to rank tiles and a min-heap to achieve load balance across SMs (2 CTAs/SM). It has two drawbacks:
+
+1. **No L2 cache awareness**: the scheduler may assign too many query tiles from different sequences to the same SM, causing their KV caches to overflow L2 and degrade performance vs iterating sequence-by-sequence.
+2. **Coarse cost function**: cannot accurately model runtime for prefill-decode overlap (see `tasks/pod_overlap.png` and `FlippedSchedule` in `../flashinfer/include/flashinfer/attention/persistent_template.cuh`).
+
+### Design
+1. Use the same coarse cost function to **rank** tiles.
+2. **Runtime tile fetching + LPT scheduling**: due to causal attention, a CTA contends for the largest tile in a queue using a semaphore. SMs that finish faster fetch more/larger tiles, and LPT (Longest Processing Time first) minimizes load imbalance.
+   - Still 2 CTAs/SM: one fetches from **prefill queue**, the other from **decode queue**; switches to the other queue when its queue is empty.
+3. **L2-aware contention**: as in FA3 ([tile_scheduler.hpp#L317](https://github.com/Dao-AILab/flash-attention/blob/c783ab2f7e05ba1cd79ecfe0e6e109a4e3f6e542/hopper/tile_scheduler.hpp#L317)), only do LPT among the KV heads that can completely fit into L2 to avoid cache eviction. E.g. for a 1k seq w/ 8 heads, if only 4 heads' KV cache fits in L2, contend for tail (largest) queries on those 4 heads.
+
+### References
+- Flash-Attention 3 tile scheduler: clone under `tasks/` to read the code
+- `../flashinfer/.claude/` for how to add/modify a kernel
+- `../flashinfer/benchmarks/bench_mixed_attention.py` for benchmarking
+
+### Validation
+- `bench_mixed_attention.py`: `FlippedSchedule=True` should beat `FlippedSchedule=False` **and** POD
+- Precision must match (note: `o_batch_pod` has a precision issue likely due to `join_outputs` p/d order mismatch — fix that)
+
+### Baseline Benchmark Results (B200, flashinfer 0.5.2)
+| Case | Prefill | Decode | Persistent (ms) | POD (ms) | POD speedup |
+|------|---------|--------|-----------------|----------|-------------|
+| 1 | 512x1 | 1x100, kv=2048 | 0.28 | 0.17 | 1.69x |
+| 2 | 1536x1 | 1x100, kv=2048 | 0.48 | 0.21 | 2.33x |
+| 3 | 2048x2 | 1x100, kv=2048 | 0.80 | 0.38 | 2.09x |
+| 4 | 2048x1 | 1x100, kv=2048 | 0.52 | 0.24 | 2.19x |
+| 5 | 4096x1 | 1x100, kv=4096 | 1.45 | 0.72 | 2.01x |
+| 6 | 4096x1 | 1x100, kv=8192 | 1.92 | 0.92 | 2.09x |
+| 7 | 6000x1 | 1x100, kv=8192 | 3.77 | 4.14 | 0.91x |
+
+### Issues Encountered
+1. **POD precision mismatch in `bench_mixed_attention.py`**: Fixed. The `join_outputs=True` was returning prefill-first order but the reference `o` has decode-first order. Changed to use `join_outputs=False` (returns `(o_p, o_d)` tuple) and cat manually in d-first order.
+
+### Architecture Understanding
+- **Current persistent kernel**: `TwoStageHolisticPlan` (CPU) pre-assigns all tiles to clusters using MinHeap. `BlockPersistentRunner::Run()` iterates `work_indptr[blockIdx.y]` to `work_indptr[blockIdx.y+1]` — **static assignment, no runtime contention**.
+- **Current FlippedSchedule**: Just alternates Runner1/Runner2 execution order per CTA (even CTAs: big tiles first, odd: small tiles first). Still uses static tile assignment. Provides some overlap but can't adapt to runtime load imbalance.
+- **POD (separate kernel)**: Launches prefill and decode independently on different SMs, using SM-aware scheduling (`sm_aware_sched` buffer). No L2 contention between p/d since they run on different SMs.
+
+### Implementation Plan
+1. Add a new scheduler mode (e.g., `LPTScheduler`) alongside `TwoStageHolisticPlan`
+2. In `plan()`: sort tiles by cost descending (LPT), store as two sorted arrays (prefill queue, decode queue) + global atomic counters
+3. In `PersistentKernelTemplate`: replace static `work_indptr` iteration with atomic fetch from queues
+4. L2-aware grouping: compute `nheads_in_l2 = L2_size / (seq_len * head_dim * 2 * elem_size)`, only contend among those heads
+5. Two CTAs per SM: CTA0 fetches from prefill queue, CTA1 from decode queue; switch when own queue is empty
+
+### Key Findings from Investigation
+1. **FlippedSchedule rarely triggers**: Condition `prefill*128 <= decode_kv_total && prefill >= 3072`. Only cases 6-7 in bench trigger it. Cases 1-5 where persistent is 2x slower than POD don't use FlippedSchedule.
+
+2. **Enabling FlippedSchedule universally makes things worse**: Tested with `total_prefill > 0 && total_decode > 0` — persistent got slower (case 1: 0.28→0.38ms, case 4: 0.52→0.61ms). The CTA alternation overhead isn't worth it without real overlap benefit from LPT.
+
+3. **B200 specs**: L2=126MB, 148 SMs. L2 can hold ~15 decode sequences (kv=2048, 8 heads, hd=128, bf16).
+
+4. **Root cause of persistent slowness**: Static tile assignment via MinHeap. When a cluster gets a large prefill tile, its decode tiles must wait. No runtime load balancing.
+
+### Files to Modify
+1. `include/flashinfer/attention/scheduler.cuh` — `TwoStageHolisticPlan`: add LPT-sorted flat tile arrays + atomic counter offsets to `HolisticPlanInfo`
+2. `include/flashinfer/attention/persistent.cuh` — `BlockBatchPagedAttentionPersistent::Run()`: add atomic tile fetching code path
+3. `include/flashinfer/attention/persistent_template.cuh` — `PersistentKernelTemplate`: allocate/zero tile counters, pass to runners
+4. `include/flashinfer/attention/persistent.cuh` — `BatchPagedAttentionPersistent()`: allocate global tile counter buffer
+
+### Questions
+1. **Grid sync with runtime fetching**: `grid.sync()` is needed before reduction. With runtime fetching, all CTAs naturally drain both queues before hitting the barrier. No issue — CTAs loop until queue empty, then fall through to `grid.sync()`.
+
+2. **Partial output with runtime fetching**: The `partial_indptr` and `merge_o_indices` are pre-computed per work item. Since the tile *content* (q_indptr, kv ranges, etc.) is still pre-computed in plan — only the *assignment* (which CTA gets which tile) changes. The tile metadata arrays stay the same, just not grouped by cluster. Each tile still has its own `partial_indptr` slot. This should work without changes to the merge logic.
+
+3. **L2 cache awareness**: For the initial implementation, skip L2 grouping and just do plain LPT. Add L2 awareness as a second step if LPT alone shows improvement.
+
+4. **Two queues vs one**: The design says CTA0 fetches from prefill queue, CTA1 from decode. But with the current `PersistentKernelTemplate`, Runner1 (tile=128) runs prefill and Runner2 (tile=16) runs decode. With LPT, we want CTA0 to grab from Runner1's queue and CTA1 from Runner2's queue. The FlippedSchedule alternation in the template already does this — CTA0 runs Runner1 first, CTA1 runs Runner2 first. The key change is making each Runner's `Run()` use atomic fetching instead of static iteration.
+
+5. **Cost function**: Keep `2*qo + kv` for now. LPT (descending sort) naturally gives larger tiles to faster CTAs.
+
+### Progress
+
+**v1: LPT atomic tile fetching (scheduler.cuh + persistent.cuh + batch_attention.cu)**
+- Added `tile_counter` and `total_num_works` to `HolisticPlanInfo` and `PersistentParams`
+- Modified `BlockBatchPagedAttentionPersistent::Run()`: when `tile_counter != nullptr`, uses `atomicAdd` to grab next tile instead of iterating `work_indptr`
+- Tile counters zeroed via `cudaMemsetAsync` before each kernel launch
+- **Result**: Cases 6-7 (where FlippedSchedule triggers) improved 10% (1.92→1.73ms, 3.77→3.68ms). Cases 1-5 unchanged (FlippedSchedule condition not met).
+- **Next step**: The FlippedSchedule condition needs to be relaxed, AND the tile arrays need to be sorted in LPT order (descending cost). Currently tiles are still in the MinHeap-assigned order which is roughly balanced but not LPT-sorted. Need to sort the flat tile arrays by cost before writing to device.
+
+### Issues Encountered (implementation)
+1. **POD precision mismatch in `bench_mixed_attention.py`**: Fixed — changed to `join_outputs=False` with manual d-first cat.
+2. **`__shfl_sync` only works within a warp**: For multi-warp blocks, needed shared memory broadcast of atomic result. Used `volatile` cast of `smem_storage[0]`.
+3. **Tile counter lifetime**: Counter is in `int_buffer` (set once in `plan()`). Need `cudaMemsetAsync` before each `run()` call to reset.
+4. **Enabling FlippedSchedule universally hurts**: CTA alternation overhead without LPT is worse than static scheduling. Need both LPT + FlippedSchedule together.
+
+### Questions
+1. **Tile ordering**: The current MinHeap produces tiles grouped by cluster. When using atomic fetching, the tile order in the flat array matters — LPT needs descending cost order. But the `flatten()` function just concatenates per-cluster arrays. Need to either (a) sort the flat array after flatten, or (b) build the flat array directly in sorted order without the per-cluster grouping.
+
+2. **Separate queues for prefill/decode**: The design says CTA0 fetches from prefill queue (task 0, tile=128), CTA1 from decode queue (task 1, tile=16). Currently FlippedSchedule alternates which Runner goes first per CTA, and each Runner has its own `tile_counter`. This should naturally give overlap — but only if both tasks have tiles. In cases 1-5, task 0 (tile=128) may have very few tiles while task 1 (tile=16) has many decode tiles. Need to verify the tile classification is correct.
+
+3. **`smem_storage` reinterpretation**: Using `volatile IdType*` cast of the SharedStorage union for atomic broadcast is sketchy. The SharedStorage is a union of q_smem, k_smem, v_smem — writing to byte 0 could corrupt data if the kernel reads q_smem later. However, we do `__syncthreads()` and the atomic fetch happens at the loop top before any smem data loading, so it should be safe. The q_smem loading happens after `get_block_coord()` which is after the broadcast. Verify this doesn't cause issues.

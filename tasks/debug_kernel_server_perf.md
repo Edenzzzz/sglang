@@ -222,11 +222,28 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - [x] Add dynamic scheduler fields to `HolisticPlanInfo`, `PersistentParams`, `batch_attention.cu`
 - [x] L2-aware nheads_in_l2 computation: `floor_pow2(L2_budget / kv_bytes_per_head)`, queried at runtime via `cudaDevAttrL2CacheSize`
 - [x] Fixed qo_len indptr differencing bug (non-contiguous sequences) — added separate `dyn_qo_len` array
-- [ ] **NOT YET TESTED** — GPU unavailable during development (preempted)
-- [ ] Queue switching: FlippedSchedule handles this via Runner1→Runner2 sequencing + per-queue atomicAdd
+- [ ] **NOT YET TESTED** — GPU preempted during development
+- [x] Queue switching: FlippedSchedule handles this — even CTAs: Runner1(prefill)→Runner2(decode), odd CTAs: Runner2→Runner1. Each runner atomically fetches from its own queue.
 - [ ] Explore gridDim stride vs strict sequential atomicAdd
 - [ ] Handle KV splitting in the dynamic scheduler (currently no-split only: kv_start=0, kv_end=kv_len)
 - [ ] Verify correctness with `bench_mixed_attention.py`
+
+**To test when GPU returns:**
+```bash
+bash ../VibeCUDA/scripts/gpu_keepalive.sh start
+python3 -m flashinfer clear-cache && rm -rf ~/.cache/flashinfer
+cd ../flashinfer && python3 benchmarks/bench_mixed_attention.py
+```
+If it crashes, check server log and use `FLASHINFER_LOGLEVEL=3` for debugging.
+
+**Code review notes (done while GPU was down):**
+- Verified warp-level operations in `tile_idx_to_work_tile()` are correct for multi-warp blocks (each warp independently computes same result)
+- Verified `__syncthreads()` ordering for smem broadcast of tile_idx (barrier → write → barrier → read)
+- Verified warm-start mechanism (`prev_bidb`, `prev_group_start`) works with monotonically increasing tile indices per CTA
+- Verified L2 sectioning math: `section_idx`, `l2_mod`, `nheads_in_this_section` correctly handle tail sections
+- Verified LPT reversal: `block = num_m_blocks - 1 - block` gives largest-first for causal
+- Verified task classification: with gqa_group_size=4, decode packed_qo_len=4 ≤ 16 → task 1. Prefill → task 0. Correct.
+- No KV splitting in v3 initial impl: `num_kv_chunks=1` → write-through to `final_o` → merge/reduction is a no-op. This should work but means long KV sequences aren't parallelized.
 
 ### Issues Encountered
 1. **POD precision mismatch in `bench_mixed_attention.py`**: Fixed — `join_outputs` was returning prefill-first but reference is decode-first. Changed to `join_outputs=False` with manual d-first cat.

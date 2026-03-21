@@ -232,6 +232,8 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 1. **POD precision mismatch in `bench_mixed_attention.py`**: Fixed — `join_outputs` was returning prefill-first but reference is decode-first. Changed to `join_outputs=False` with manual d-first cat.
 2. **v2 static LPT + FlippedSchedule hurts small workloads (case 1)**: Atomic overhead + CTA alternation overhead > benefit. Dynamic scheduler should fix this by being pure compute (no extra memory traffic for pre-built tile arrays).
 3. **Tile counter reset**: Counter in `int_buffer` needs `cudaMemsetAsync` before each `run()`.
+4. **Non-contiguous sequences in dyn_qo_indptr**: Sequences in prefill/decode queues are not necessarily contiguous in the original batch. Cannot use `indptr[s+1] - indptr[s]` for qo_len. Fixed by adding separate `dyn_qo_len` array.
+5. **GPU preempted**: B200 GPU lost during v3 development. Keepalive process died, GPU was reclaimed. Cannot test compilation or correctness of v3 until GPU returns. All v3 code is committed but untested.
 
 ### Questions
 

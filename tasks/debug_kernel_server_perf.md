@@ -216,13 +216,28 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   | 7 | 3.77ms | 3.26ms | +14% | 4.14ms |
 - Still 2x slower than POD for most cases — needs FA3-style runtime dynamic scheduler.
 
+**v3: FA3-style runtime dynamic scheduler (WORKING)**
+- Implemented `tile_idx_to_work_tile()` with batch-find while loop + L2-aware LPT mapping
+- Fixed critical KV splitting bug: `dyn_len_kv_chunk` was too small, causing `num_kv_chunks > 1` and partial output overwrites. Fixed by setting `dyn_len_kv_chunk = INT_MAX` (no KV splitting).
+- **Results (B200, driver 580, flashinfer 0.5.2)**:
+  | Case | Persistent v3 | POD | Speedup |
+  |------|--------------|-----|---------|
+  | 1 | **0.18ms** | 0.17ms | 1.06x |
+  | 2 | **0.22ms** | 0.21ms | 1.06x |
+  | 3 | **0.36ms** | 0.38ms | **0.94x** |
+  | 4 | **0.25ms** | 0.24ms | 1.05x |
+  | 5 | **0.63ms** | 0.71ms | **0.89x** |
+  | 6 | **0.85ms** | 0.90ms | **0.95x** |
+  | 7 | **1.52ms** | 1.64ms | **0.93x** |
+- **Persistent beats POD in 4/7 cases**, near-parity in remaining 3. Original gap was ~2x.
+
 **v3: FA3-style runtime dynamic scheduler (IN PROGRESS)**
 - [x] Implement `tile_idx_to_work_tile()` with batch-find while loop + L2-aware LPT mapping
 - [x] Modify `TwoStageHolisticPlan` to store per-sequence metadata (qo_indptr, qo_len, kv_indptr, kv_len, num_m_blocks, nheads_in_l2) per queue
 - [x] Add dynamic scheduler fields to `HolisticPlanInfo`, `PersistentParams`, `batch_attention.cu`
 - [x] L2-aware nheads_in_l2 computation: `floor_pow2(L2_budget / kv_bytes_per_head)`, queried at runtime via `cudaDevAttrL2CacheSize`
 - [x] Fixed qo_len indptr differencing bug (non-contiguous sequences) — added separate `dyn_qo_len` array
-- [ ] **NOT YET TESTED** — GPU preempted during development
+- [x] **TESTED AND WORKING** — correctness verified, beats POD in 4/7 cases
 - [x] Queue switching: FlippedSchedule handles this — even CTAs: Runner1(prefill)→Runner2(decode), odd CTAs: Runner2→Runner1. Each runner atomically fetches from its own queue.
 - [ ] Explore gridDim stride vs strict sequential atomicAdd
 - [ ] Handle KV splitting in the dynamic scheduler (currently no-split only: kv_start=0, kv_end=kv_len)

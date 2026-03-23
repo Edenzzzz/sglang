@@ -31,18 +31,12 @@ python3 -m sglang.launch_server \
 - [ ] **Must redo** with P95/P99 TTFT and ITL columns. Current results only have median. Also add prefill-prioritized config to show P99 ITL tail latency disadvantage. Redo again after kernel optimizations in `debug_kernel_server_perf.md` if performance changes.
 
 ### 2. Realistic arrival rates
-- [ ] Research LLM serving papers that use the trace datasets in `workloads/agent_workload_survey.md` to find realistic request arrival rates
-- [ ] Papers to check: Autellix, Continuum, ServeGen, BurstGPT, Cost of Dynamic Reasoning, Agent.xpu, Throughput-Optimal Scheduling (refs 1-8, 19-20 in survey)
-- [ ] bench_serving currently uses Poisson rate=8 req/s — determine if this is realistic
+- [x] Research done — see Arrival Rate Research table below. Poisson rate=8 is stress test; realistic agent rate is 0.5-3 req/s.
 
 ### 3. First-turn output length stats (with reasoning)
-- [ ] Run `count_workload_lengths.py --run-inference --num-samples 200` on trace datasets only (skip single-step/no-trace datasets for now)
-- [ ] **Use 200 samples per dataset.** ~20-30 min per short-input dataset, ~1-2h for Nebius-SWE.
-- [ ] Note: `length_stats.json` has **static field tokenization** only — NOT model inference output. Model output with thinking is 3-8x longer (e.g. CodeActInstruct: static median=354 vs inference median=1,174)
-- [x] Already cached in `output_length.json`: SWE-bench, CodeActInstruct, SWE-smith
-- [x] Batch 1 done: Mind2Web, openhands-feedback, AgentInstruct, SWE-Gym
-- [x] Batch 2 done: Code-Feedback, Nebius-SWE-Trajectories
-- [ ] Skip for now (no traces / single-step): Go-Browse, NNetNav-live, NNetNav-wa, Synatra, Orca-AgentInstruct, ShareGPT (not in script registry)
+- [x] Run `count_workload_lengths.py --run-inference --num-samples 200` on all trace datasets (200 samples each)
+- [x] Results in `output_length.json`: SWE-bench, CodeActInstruct, SWE-smith, AgentInstruct, Mind2Web, openhands-feedback, SWE-Gym, Code-Feedback, Nebius-SWE-Trajectories
+- [x] Skipped (no traces / single-step): Go-Browse, NNetNav-live, NNetNav-wa, Synatra, Orca-AgentInstruct, ShareGPT
 
 ### 4. Per-turn context growth
 - [x] Ran Qwen3-8B with thinking on Nebius-SWE traces (3 traces, 8 turns each, via online server HTTP)
@@ -189,5 +183,5 @@ Based on ratio sweep + dataset analysis + per-turn context growth:
 - Extremely prefill-heavy (Go-Browse, NNetNav) — tiny decode means overlap has nothing to overlap with
 
 **Remaining work:**
-- [ ] Run inference output lengths on Nebius-SWE to confirm decode fraction with thinking mode
-- [ ] Benchmark Nebius-SWE traces via bench_serving_3rdparty if supported, or use equivalent random workload (--random-input 9000 --random-output TBD)
+- [x] Inference output lengths on Nebius-SWE done: median=3,726 tokens with thinking. In:Out ratio=2.4:1, confirming ~30% decode fraction.
+- [ ] Benchmark Nebius-SWE traces via bench_serving_3rdparty if supported, or use equivalent random workload (--random-input 9000 --random-output 4000)

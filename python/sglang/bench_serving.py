@@ -859,6 +859,7 @@ class BenchmarkMetrics:
     mean_ttft_ms: float
     median_ttft_ms: float
     std_ttft_ms: float
+    p95_ttft_ms: float
     p99_ttft_ms: float
     mean_tpot_ms: float
     median_tpot_ms: float
@@ -1769,6 +1770,7 @@ def calculate_metrics(
         * 1000,  # ttfts is empty if streaming is not supported by backend
         median_ttft_ms=np.median(ttfts or 0) * 1000,
         std_ttft_ms=np.std(ttfts or 0) * 1000,
+        p95_ttft_ms=np.percentile(ttfts or 0, 95) * 1000,
         p99_ttft_ms=np.percentile(ttfts or 0, 99) * 1000,
         mean_tpot_ms=np.mean(tpots or 0) * 1000,
         median_tpot_ms=np.median(tpots or 0) * 1000,
@@ -1865,6 +1867,8 @@ def _print_benchmark_summary(
     print("{s:{c}^{n}}".format(s="Time to First Token", n=50, c="-"))
     print("{:<40} {:<10.2f}".format("Mean TTFT (ms):", metrics.mean_ttft_ms))
     print("{:<40} {:<10.2f}".format("Median TTFT (ms):", metrics.median_ttft_ms))
+    if hasattr(metrics, "p95_ttft_ms"):
+        print("{:<40} {:<10.2f}".format("P95 TTFT (ms):", metrics.p95_ttft_ms))
     if hasattr(metrics, "p99_ttft_ms"):
         print("{:<40} {:<10.2f}".format("P99 TTFT (ms):", metrics.p99_ttft_ms))
     print("{s:{c}^{n}}".format(s="Inter-Token Latency", n=50, c="-"))
@@ -2175,6 +2179,7 @@ async def benchmark(
                 "mean_ttft_ms": result.mean_ttft_ms,
                 "median_ttft_ms": result.median_ttft_ms,
                 "std_ttft_ms": result.std_ttft_ms,
+                "p95_ttft_ms": result.p95_ttft_ms,
                 "p99_ttft_ms": result.p99_ttft_ms,
                 "mean_tpot_ms": result.mean_tpot_ms,
                 "median_tpot_ms": result.median_tpot_ms,
@@ -2539,6 +2544,7 @@ def run_benchmark(args_: argparse.Namespace):
             mean_ttft_ms=avg.get("mean_ttft_ms", 0.0),
             median_ttft_ms=avg.get("median_ttft_ms", 0.0),
             std_ttft_ms=avg.get("std_ttft_ms", 0.0),
+            p95_ttft_ms=avg.get("p95_ttft_ms", 0.0),
             p99_ttft_ms=avg.get("p99_ttft_ms", 0.0),
             mean_tpot_ms=avg.get("mean_tpot_ms", 0.0),
             median_tpot_ms=avg.get("median_tpot_ms", 0.0),
@@ -2856,7 +2862,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--warmup-requests",
         type=int,
-        default=1,
+        default=20,
         help="Number of warmup requests to run before the benchmark",
     )
     parser.add_argument(

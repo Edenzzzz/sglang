@@ -8,7 +8,7 @@ Investigate and fix performance overhead of persistent kernel and POD (Prefill-O
 - Server: `--enable-mixed-chunk --attention-backend flashinfer`
 - Env vars: `SGLANG_FLASHINFER_USE_PERSISTENT=1`, `SGLANG_FLASHINFER_USE_POD=1`
 - Benchmark: `bench_serving --dataset-name random --random-input 4096 --random-output 1024 --request-rate 8 --num-prompt 100`
-- Profile logs: `tasks/profile_logs/`
+- Profile logs: `tasks/debug_kernel_server_perf/profile_logs/`
 
 ## Profiling Configurations
 | Config | Server log | nsys trace | sqlite |
@@ -90,34 +90,34 @@ Added `use_persistent` and `use_pod` fields to `bench_serving.py` CSV output and
 | Persistent | 2838 | 102 | 8.6 | warmup=1 |
 | POD (join_outputs) | 2938 | 129 | 8.1 | warmup=25 (JIT compile) |
 
-### Full 5-config server benchmark (STALE — needs rerun with P95/P99 tail latencies)
+### Full 5-config server benchmark (H100 80GB, `--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`, keepalive OFF)
 
-**NOTE: These results are stale.** Missing P95/P99 TTFT and ITL (tail latency critical for user experience, especially prefill-prioritized which may have high P99 ITL from head-of-line blocking). Also used wrong flags (`--mem-fraction-static 0.85` without `--enable-piecewise-cuda-graph`). Rerun needed — see TODO below.
+Full output saved to `tasks/debug_kernel_server_perf/profile_logs/bench_results/`.
 
-**Workload 1: --random-input 4096 --random-output 1024 --num-prompt 400**
-| Config | Total tok/s | Out tok/s | TTFT median (ms) | ITL median (ms) |
-|--------|-----------|----------|-------------------|-----------------|
-| **Prefill-prioritized** | **19167** | 2680 | **68** | 8.38 |
-| Default-mixed-chunk | 18919 | 2854 | 105 | 9.53 |
-| Persistent (static) | 16651 | 3374 | 125 | 9.91 |
-| Persistent v3 (dynamic) | 18789 | 3807 | 100 | 9.91 |
-| POD | 18951 | 3840 | 121 | 9.23 |
+**Workload 1: --random-input 4096 --random-output 1024 --request-rate 8 --num-prompt 400**
+| Config | Total tok/s | Out tok/s | TTFT med (ms) | TTFT P95 | TTFT P99 | ITL med (ms) | ITL P95 | ITL P99 | Max ITL |
+|--------|-----------|----------|-------------|---------|---------|------------|---------|---------|---------|
+| **Prefill-prioritized** | **15,108** | 3,061 | **226** | **4,869** | **5,148** | **26** | **118** | **182** | 486 |
+| Persistent (static) | 13,369 | 2,709 | 4,876 | 13,208 | 13,555 | 27 | 131 | 504 | 714 |
+| Default-mixed-chunk | 13,249 | 2,685 | 4,813 | 14,005 | 14,299 | 27 | 133 | 495 | 664 |
+| POD | 13,199 | 2,675 | 6,148 | 14,403 | 14,707 | 26 | 158 | 525 | 611 |
+| Persistent v3 (dynamic) | 13,059 | 2,646 | 4,986 | 14,693 | 15,164 | 26 | 125 | 579 | 792 |
 
-**Workload 2: --random-input 6500 --random-output 7500 --num-prompt 400**
-| Config | Total tok/s | Out tok/s | TTFT median (ms) | ITL median (ms) |
-|--------|-----------|----------|-------------------|-----------------|
-| Prefill-prioritized | 9199 | 2285 | **147** | 28.63 |
-| Default-mixed-chunk | 8777 | 2034 | 350 | 28.91 |
-| Persistent (static) | 4947 | 2618 | 414 | 29.84 |
-| **Persistent v3 (dynamic)** | **8919** | **4720** | 278 | **28.65** |
-| POD | 8895 | 4708 | 400 | 28.66 |
+**Workload 2: --random-input 6500 --random-output 7500 --request-rate 8 --num-prompt 400**
+| Config | Total tok/s | Out tok/s | TTFT med (s) | TTFT P95 (s) | TTFT P99 (s) | ITL med (ms) | ITL P95 | ITL P99 | Max ITL (s) |
+|--------|-----------|----------|------------|------------|------------|------------|---------|---------|-----------|
+| **Persistent v3 (dynamic)** | **4,104** | **2,172** | **189** | **451** | **487** | **26** | **27** | **83** | 472 |
+| Persistent (static) | 4,072 | 2,155 | 196 | 457 | 493 | 26 | 28 | 89 | 502 |
+| Prefill-prioritized | 4,046 | 2,141 | 191 | 464 | 505 | 27 | 28 | 52 | 503 |
+| POD | 3,995 | 2,114 | 199 | 476 | 510 | 27 | 29 | 104 | 512 |
+| Default-mixed-chunk | 3,987 | 2,110 | 197 | 476 | 512 | 27 | 29 | 95 | 514 |
 
-**Key findings (preliminary, pending rerun with tail latencies):**
-1. **WL1 (short output)**: All configs ~19K tok/s. Prefill-prioritized wins TTFT (68ms) since prefill completes immediately with no decode interleaving. Persistent (static) lags at 16.6K — FlippedSchedule template overhead hurts.
-2. **WL2 (long output)**: v3 and POD tie at ~8.9K tok/s, both far ahead of Persistent (static) at 5K (catastrophic TTFT for mixed batches without FlippedSchedule). v3 has best mixed-chunk TTFT (278ms vs 350ms default, 400ms POD).
-3. **v3 vs POD**: Nearly identical throughput. v3 wins TTFT in both workloads (100 vs 121ms WL1, 278 vs 400ms WL2). v3 has no POD indexing overhead.
-4. **Persistent (static) collapses on WL2**: Without FlippedSchedule, mixed batches serialize prefill→decode, starving new prefills. Only 4947 tok/s vs 8919 for v3.
-5. **Prefill-prioritized TTFT advantage**: No mixed-chunk means all prefills run to completion immediately (68ms WL1, 147ms WL2), but decode ITL suffers under high load when prefills block decode. **P99 ITL likely much worse — need tail latency data.**
+**Key findings:**
+1. **WL1 (short output)**: Prefill-prioritized dominates throughput (15.1K vs ~13.2K) and TTFT (226ms vs ~5s). All mixed-chunk configs have similar throughput (~13.2K). **Tail latency**: Prefill-prio has best P99 ITL (182ms) vs mixed-chunk configs (495-579ms). POD has worst P95 ITL (158ms).
+2. **WL2 (long output)**: All configs collapse to ~4K tok/s with 3+ minute TTFT — the system is saturated. v3 wins marginally on throughput (4,104) and TTFT (189s). Prefill-prio has best P99 ITL (52ms) since long decodes run uninterrupted.
+3. **v3 vs POD**: v3 wins WL2 throughput (4,104 vs 3,995) and TTFT (189s vs 199s). On WL1, v3 is slightly behind (13,059 vs 13,199). v3's WL1 P95 ITL (125ms) is better than POD (158ms).
+4. **Persistent (static) surprisingly competitive**: Beats default-mixed-chunk on WL1 throughput (13,369 vs 13,249) and WL2 (4,072 vs 3,987). No longer collapses on WL2 as in old B200 results.
+5. **Prefill-prioritized trade-off confirmed**: Best WL1 throughput+TTFT+tail ITL, but on WL2 the advantage disappears. The P99 ITL concern (head-of-line blocking) is NOT seen — Prefill-prio actually has the lowest P99 ITL on both workloads.
 
 **NOTE:** POD requires `--warmup-requests 25` (or flush cache + re-run) because flashinfer JIT-compiles POD kernels on first use, which is very slow. The earlier 601 tok/s result was caused by JIT overhead during the benchmark. flashinfer 0.5.2 shows ~20% throughput regression for all configs vs 0.4.1.
 
@@ -299,9 +299,9 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - [x] Added `uniform_num_m_blocks` fast path: O(1) sequence lookup via direct division when all seqs have same num_m_blocks (skip warp search)
 - [x] Fixed `bench_mixed_attention.py`: persistent was using `np.mean` (skewed by outliers) while POD used `np.median` — fixed to use median consistently
 - [x] Handle KV splitting in the dynamic scheduler: uses actual `len_kv_chunk` from static scheduler; falls back to static MinHeap when any sequence needs splitting (causal attention makes partial_o addressing complex). No splitting triggers for current benchmark cases (kv_lens ≤ 8192 < kv_len_limit).
-- [x] Run sglang server benchmark: Qwen3-8B, --random-input 4096 --random-output 1024 --request-rate 8 --num-prompt 400 (STALE — missing tail latencies, wrong flags)
-- [x] Run sglang server benchmark: Qwen3-8B, --random-input 6500 --random-output 7500 --request-rate 8 --num-prompt 400 (STALE — missing tail latencies, wrong flags)
-- [ ] Run full 5-config comparison (Prefill-prioritized, Default-mixed-chunk, Persistent static, Persistent v3, POD) for both workloads with **P95/P99 TTFT and ITL**. Previous run missing tail latencies and used wrong server flags. Prefill-prioritized likely has high P99 ITL from head-of-line blocking — must capture this.
+- [x] Run sglang server benchmark: Qwen3-8B, --random-input 4096 --random-output 1024 --request-rate 8 --num-prompt 400
+- [x] Run sglang server benchmark: Qwen3-8B, --random-input 6500 --random-output 7500 --request-rate 8 --num-prompt 400
+- [x] Run full 5-config comparison with **P95/P99 TTFT and ITL** on H100 80GB with `--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`. Key surprise: Prefill-prioritized has lowest P99 ITL (not highest as expected).
 - [x] **Investigate 2x persistent-vs-POD gap in baseline benchmarks**: **RESOLVED.** The 2x gap was between the **static** persistent scheduler (baseline) and POD. The v3 dynamic scheduler closes this gap entirely:
   | Case | Persistent v3 (ms) | POD (ms) | POD speedup | Old static gap |
   |------|-------------------|---------|-------------|---------------|
@@ -320,8 +320,8 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   - v3 has fewer kernel launches overall (36,524 vs 45,578 `cudaLaunchKernelExC` calls) — persistent reduces launch overhead.
   - **Root cause hypothesis**: cooperative kernel launch (`cudaLaunchCooperativeKernel`) blocks other work while persistent kernel runs, causing downstream `cudaDeviceSynchronize` calls to wait longer. The persistent kernel occupies ALL SMs simultaneously, preventing any overlap with other GPU work (e.g., memcpy, other kernels).
   - **Next steps**: (a) Check if the extra sync time correlates with persistent kernel runtime (compare trace timelines). (b) Try `cudaLaunchKernel` instead of cooperative launch (requires proving grid < num_SMs). (c) Consider hybrid: use persistent kernel only for mixed batches, fall back to default for pure-decode.
-  - Profiles saved to `tasks/profile_logs/default_mixed_chunk_server.nsys-rep` and `persistent_v3_server.nsys-rep`.
-- [ ] Rerun full 5-config server benchmark with correct flags (`--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`). Must log **P95 and P99 TTFT and ITL** — tail latency is critical for comparing prefill-prioritized (likely high P99 ITL from head-of-line blocking) vs mixed-chunk configs. Update benchmark table above with all tail latency columns.
+  - Profiles saved to `tasks/debug_kernel_server_perf/profile_logs/default_mixed_chunk_server.nsys-rep` and `persistent_v3_server.nsys-rep`.
+- [x] Rerun full 5-config server benchmark with correct flags (`--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`) and **P95/P99 TTFT and ITL**. Results above. Key surprise: Prefill-prioritized has LOWEST P99 ITL, not highest as expected.
 - [ ] **Investigate why default-mixed-chunk is slower than persistent+POD in flashinfer 0.5.2 microbenchmark but faster in full server benchmark**: In the 0.5.2 microbenchmark (warmup=1), default=2836 tok/s vs persistent=2838 vs POD=2938. But in the full 5-config server benchmark (rate=8, 400 prompts), default-mixed-chunk beats persistent v3 by 2-3% throughput and ties/beats POD. Possible explanations: (a) microbenchmark uses different workload mix than server under load, (b) server scheduling overhead differs per config, (c) CUDA graph capture differences, (d) warmup=1 vs fully warmed server. Need to identify which conditions cause the reversal.
 - [ ] nsys analysis on POD vs Default-mixed-chunk to explain POD's lower throughput
 - [ ] nsys & python code analysis of why prefill prioritized beats mixed chunk in almost all metrics even with persistent v3 kernel--it's supposed to lag behind at least in ITL because it always runs prefill first when new requests come in, interrupting running decode requests.

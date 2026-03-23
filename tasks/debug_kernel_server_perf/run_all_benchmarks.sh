@@ -2,8 +2,9 @@
 # Run all 5 server configs for both workloads
 # gpu_keepalive MUST NOT be running during benchmarks (it's compute-intensive)
 # The sglang server itself keeps GPU allocated while running.
+export PATH="/mlx_devbox/users/wenxuan.tan/playground/sglang/.venv/bin:$PATH"
 
-RESULTS_FILE="/tmp/benchmark_results_v2.txt"
+RESULTS_FILE="/tmp/benchmark_results_v3.txt"
 echo "=== Server Benchmark Results (keepalive OFF) ===" > $RESULTS_FILE
 echo "Date: $(date)" >> $RESULTS_FILE
 
@@ -36,7 +37,7 @@ run_config() {
         return 1
     fi
 
-    local CMD="python3 -m sglang.launch_server --model-path Qwen/Qwen3-8B --attention-backend flashinfer --watchdog-timeout 999999 --mem-fraction-static 0.85 --port 30000"
+    local CMD="python3 -m sglang.launch_server --model-path Qwen/Qwen3-8B --attention-backend flashinfer --watchdog-timeout 999999 --mem-fraction-static 0.85 --enable-piecewise-cuda-graph --port 30000"
     [ "$MIXED_CHUNK" = "1" ] && CMD="$CMD --enable-mixed-chunk"
 
     SGLANG_FLASHINFER_USE_PERSISTENT=$PERSISTENT \
@@ -63,13 +64,13 @@ run_config() {
     echo "--- $NAME: WL1 (4096/1024/400) ---" | tee -a $RESULTS_FILE
     python3 -m sglang.bench_serving --backend sglang --dataset-name random \
         --random-input 4096 --random-output 1024 --request-rate 8 --num-prompt 400 --port 30000 2>&1 \
-        | tail -18 | tee -a $RESULTS_FILE
+        | tail -20 | tee -a $RESULTS_FILE
 
     # WL2: 6500 in, 7500 out, 400 prompts
     echo "--- $NAME: WL2 (6500/7500/400) ---" | tee -a $RESULTS_FILE
     python3 -m sglang.bench_serving --backend sglang --dataset-name random \
         --random-input 6500 --random-output 7500 --request-rate 8 --num-prompt 400 --port 30000 2>&1 \
-        | tail -18 | tee -a $RESULTS_FILE
+        | tail -20 | tee -a $RESULTS_FILE
 
     kill $SERVER_PID 2>/dev/null
     wait $SERVER_PID 2>/dev/null

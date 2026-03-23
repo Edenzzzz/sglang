@@ -1,6 +1,6 @@
 #!/bin/bash
 export PATH="/mlx_devbox/users/wenxuan.tan/playground/sglang/.venv/bin:$PATH"
-cd /mlx_devbox/users/wenxuan.tan/playground/sglang/tasks/profile_logs
+cd /mlx_devbox/users/wenxuan.tan/playground/sglang/tasks/debug_kernel_server_perf/profile_logs
 
 echo "=== Default-mixed-chunk kernel summary ==="
 nsys stats --report cuda_gpu_kern_sum default_mixed_chunk.nsys-rep 2>&1 | head -40

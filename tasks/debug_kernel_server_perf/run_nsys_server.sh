@@ -3,7 +3,7 @@
 export PATH="/mlx_devbox/users/wenxuan.tan/playground/sglang/.venv/bin:$PATH"
 cd /mlx_devbox/users/wenxuan.tan/playground/sglang
 
-OUTDIR="tasks/profile_logs"
+OUTDIR="tasks/debug_kernel_server_perf/profile_logs"
 CONFIG_NAME="${1:-default_mixed_chunk}"
 PERSISTENT="${2:-0}"
 

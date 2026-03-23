@@ -86,11 +86,13 @@ Added `use_persistent` and `use_pod` fields to `bench_serving.py` CSV output and
 ### flashinfer 0.5.2 (post-fix, current)
 | Config | Throughput (tok/s) | Mean TTFT (ms) | Median ITL (ms) | Notes |
 |--------|-------------------|----------------|-----------------|-------|
-| Default | 2836 | 145 | 8.7 | warmup=1 |
+| Default mixed chunk | 2836 | 145 | 8.7 | warmup=1 |
 | Persistent | 2838 | 102 | 8.6 | warmup=1 |
 | POD (join_outputs) | 2938 | 129 | 8.1 | warmup=25 (JIT compile) |
 
-### Full 5-config server benchmark (B200, Qwen3-8B, rate=8, keepalive OFF during measurement)
+### Full 5-config server benchmark (STALE — needs rerun with P95/P99 tail latencies)
+
+**NOTE: These results are stale.** Missing P95/P99 TTFT and ITL (tail latency critical for user experience, especially prefill-prioritized which may have high P99 ITL from head-of-line blocking). Also used wrong flags (`--mem-fraction-static 0.85` without `--enable-piecewise-cuda-graph`). Rerun needed — see TODO below.
 
 **Workload 1: --random-input 4096 --random-output 1024 --num-prompt 400**
 | Config | Total tok/s | Out tok/s | TTFT median (ms) | ITL median (ms) |
@@ -110,12 +112,12 @@ Added `use_persistent` and `use_pod` fields to `bench_serving.py` CSV output and
 | **Persistent v3 (dynamic)** | **8919** | **4720** | 278 | **28.65** |
 | POD | 8895 | 4708 | 400 | 28.66 |
 
-**Key findings:**
+**Key findings (preliminary, pending rerun with tail latencies):**
 1. **WL1 (short output)**: All configs ~19K tok/s. Prefill-prioritized wins TTFT (68ms) since prefill completes immediately with no decode interleaving. Persistent (static) lags at 16.6K — FlippedSchedule template overhead hurts.
 2. **WL2 (long output)**: v3 and POD tie at ~8.9K tok/s, both far ahead of Persistent (static) at 5K (catastrophic TTFT for mixed batches without FlippedSchedule). v3 has best mixed-chunk TTFT (278ms vs 350ms default, 400ms POD).
 3. **v3 vs POD**: Nearly identical throughput. v3 wins TTFT in both workloads (100 vs 121ms WL1, 278 vs 400ms WL2). v3 has no POD indexing overhead.
 4. **Persistent (static) collapses on WL2**: Without FlippedSchedule, mixed batches serialize prefill→decode, starving new prefills. Only 4947 tok/s vs 8919 for v3.
-5. **Prefill-prioritized TTFT advantage**: No mixed-chunk means all prefills run to completion immediately (68ms WL1, 147ms WL2), but decode ITL suffers under high load when prefills block decode.
+5. **Prefill-prioritized TTFT advantage**: No mixed-chunk means all prefills run to completion immediately (68ms WL1, 147ms WL2), but decode ITL suffers under high load when prefills block decode. **P99 ITL likely much worse — need tail latency data.**
 
 **NOTE:** POD requires `--warmup-requests 25` (or flush cache + re-run) because flashinfer JIT-compiles POD kernels on first use, which is very slow. The earlier 601 tok/s result was caused by JIT overhead during the benchmark. flashinfer 0.5.2 shows ~20% throughput regression for all configs vs 0.4.1.
 
@@ -297,16 +299,19 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - [x] Added `uniform_num_m_blocks` fast path: O(1) sequence lookup via direct division when all seqs have same num_m_blocks (skip warp search)
 - [x] Fixed `bench_mixed_attention.py`: persistent was using `np.mean` (skewed by outliers) while POD used `np.median` — fixed to use median consistently
 - [x] Handle KV splitting in the dynamic scheduler: uses actual `len_kv_chunk` from static scheduler; falls back to static MinHeap when any sequence needs splitting (causal attention makes partial_o addressing complex). No splitting triggers for current benchmark cases (kv_lens ≤ 8192 < kv_len_limit).
-- [x] Run sglang server benchmark: Qwen3-8B, --random-input 4096 --random-output 1024 --request-rate 8 --num-prompt 400
-- [x] Run sglang server benchmark: Qwen3-8B, --random-input 6500 --random-output 7500 --request-rate 8 --num-prompt 400
-- [x] Run full 5-config comparison (Prefill-prioritized, Default-mixed-chunk, Persistent static, Persistent v3, POD) for both workloads. Key finding: Persistent (static) has 15% higher throughput than v3 due to FlippedSchedule template overhead on pure-decode batches.
+- [x] Run sglang server benchmark: Qwen3-8B, --random-input 4096 --random-output 1024 --request-rate 8 --num-prompt 400 (STALE — missing tail latencies, wrong flags)
+- [x] Run sglang server benchmark: Qwen3-8B, --random-input 6500 --random-output 7500 --request-rate 8 --num-prompt 400 (STALE — missing tail latencies, wrong flags)
+- [ ] Run full 5-config comparison (Prefill-prioritized, Default-mixed-chunk, Persistent static, Persistent v3, POD) for both workloads with **P95/P99 TTFT and ITL**. Previous run missing tail latencies and used wrong server flags. Prefill-prioritized likely has high P99 ITL from head-of-line blocking — must capture this.
+- [ ] **Investigate 2x persistent-vs-POD gap in baseline benchmarks**: Baseline table shows persistent (without FlippedSchedule) is ~2x slower than POD on cases 1-6, but the POD PR author ([flashinfer#2079](https://github.com/flashinfer-ai/flashinfer/pull/2079)) reported max 1.26x speedup for POD over persistent. Possible causes: (a) different GPU (previously used B200 vs author's H100, but now we are also using H100), (b) different benchmark configs (our cases have 100 decode seqs vs author's setup) (d) measurement methodology (we use `np.median` of CUDA events, author may use different timing). Reproduce the author's exact benchmark configs to verify, then identify what causes the larger gap on our setup.
 - [ ] **Test FA3's actual tile fetching pattern**: `tile_idx = atomicAdd(counter, gridDim.x) + blockIdx.x`. Each CTA gets a unique initial tile (CTA 0→tile 0, CTA 1→tile 1, ...) without atomic contention on first fetch, then subsequent fetches stride by gridDim. This differs from what was tested: (a) pure round-robin (static stride, no atomic — hurts L2), (b) batch-fetch (grab N consecutive tiles — breaks syncthreads), (c) sequential atomicAdd(counter,1) (current, strict LPT). FA3's pattern preserves some L2 locality (each CTA processes tiles spaced gridDim apart within the same L2 section) while avoiding first-fetch contention. For FlippedSchedule with 2 queues, per-queue gridDim = `gridDim.x * gridDim.y / 2`. Benchmark on `bench_mixed_attention.py` cases 1-7 vs current sequential approach.
 - [ ] **Investigate v3 throughput regression vs default-mixed-chunk**: Ratio sweep shows v3 is ~2-3% lower total throughput than default on some workloads (e.g. 4889 vs 5068 tok/s on 1024/1024, 6355 vs 6490 on 2048/2048) despite better TTFT. Hypotheses: (a) FlippedSchedule template overhead on pure-decode batches (already known from static persistent), (b) atomicAdd contention in the dynamic scheduler adding per-step latency, (c) cooperative kernel launch overhead (~6us per step). Profile with nsys to find the bottleneck. Consider: disable FlippedSchedule for pure-decode batches (fall back to default decode wrapper), or amortize atomic overhead by processing multiple tiles per fetch.
 **Profiling suggestion**:
 Because the only difference is what kernel you use for the mixed batch case, try to narrow down the problem to python level indexing/launch overhead or kernel performance issue. For example,
 since Persistent kernel should have low launch gap/indexing overhead, you may examine nsys trace to see if that's true--if so, it probably means it's slower than the default BatchPrefill kernel in some cases. Then you should try to find such decode/prefill mixed batch configs in which Persistent v3 underperforms and profile against BatchPrefill with NCU as in `bench_mixed_attention.py`.
-- [ ] Rerun full 5-config server benchmark with correct flags (`--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`). Previous results missed `--enable-piecewise-cuda-graph`. Update benchmark table above.
+- [ ] Rerun full 5-config server benchmark with correct flags (`--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`). Must log **P95 and P99 TTFT and ITL** — tail latency is critical for comparing prefill-prioritized (likely high P99 ITL from head-of-line blocking) vs mixed-chunk configs. Update benchmark table above with all tail latency columns.
+- [ ] **Investigate why default-mixed-chunk is slower than persistent+POD in flashinfer 0.5.2 microbenchmark but faster in full server benchmark**: In the 0.5.2 microbenchmark (warmup=1), default=2836 tok/s vs persistent=2838 vs POD=2938. But in the full 5-config server benchmark (rate=8, 400 prompts), default-mixed-chunk beats persistent v3 by 2-3% throughput and ties/beats POD. Possible explanations: (a) microbenchmark uses different workload mix than server under load, (b) server scheduling overhead differs per config, (c) CUDA graph capture differences, (d) warmup=1 vs fully warmed server. Need to identify which conditions cause the reversal.
 - [ ] nsys analysis on POD vs Default-mixed-chunk to explain POD's lower throughput
+- [ ] nsys & python code analysis of why prefill prioritized beats mixed chunk in almost all metrics even with persistent v3 kernel--it's supposed to lag behind at least in ITL because it always runs prefill first when new requests come in, interrupting running decode requests.
 - [x] Sweep prefill/decode length ratios — done. See `tasks/realistic_workload_analysis.md` for full results. Key findings: v3 wins throughput only on 6500/7500 (+1.9%), wins TTFT on prefill-heavy 4096/1024 (-24%), but has 0.5-4% throughput regression on other workloads. Benefit comes from large absolute prefill (>4096 tokens), not ratio.
 - [ ] Realistic workload analysis for v3 kernel evaluation — see `tasks/realistic_workload_analysis.md`
 

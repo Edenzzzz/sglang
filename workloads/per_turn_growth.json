@@ -1,0 +1,130 @@
+{
+  "Nebius-SWE-Trajectories": [
+    [
+      {
+        "turn": 1,
+        "cum_input_tokens": 1124,
+        "output_tokens": 3376
+      },
+      {
+        "turn": 2,
+        "cum_input_tokens": 1504,
+        "output_tokens": 2501
+      },
+      {
+        "turn": 3,
+        "cum_input_tokens": 1638,
+        "output_tokens": 1741
+      },
+      {
+        "turn": 4,
+        "cum_input_tokens": 1798,
+        "output_tokens": 1958
+      },
+      {
+        "turn": 5,
+        "cum_input_tokens": 1913,
+        "output_tokens": 1412
+      },
+      {
+        "turn": 6,
+        "cum_input_tokens": 2062,
+        "output_tokens": 1512
+      },
+      {
+        "turn": 7,
+        "cum_input_tokens": 3311,
+        "output_tokens": 2895
+      },
+      {
+        "turn": 8,
+        "cum_input_tokens": 4621,
+        "output_tokens": 259
+      }
+    ],
+    [
+      {
+        "turn": 1,
+        "cum_input_tokens": 1124,
+        "output_tokens": 3167
+      },
+      {
+        "turn": 2,
+        "cum_input_tokens": 1505,
+        "output_tokens": 1343
+      },
+      {
+        "turn": 3,
+        "cum_input_tokens": 2837,
+        "output_tokens": 2070
+      },
+      {
+        "turn": 4,
+        "cum_input_tokens": 3674,
+        "output_tokens": 1453
+      },
+      {
+        "turn": 5,
+        "cum_input_tokens": 4364,
+        "output_tokens": 1681
+      },
+      {
+        "turn": 6,
+        "cum_input_tokens": 4936,
+        "output_tokens": 187
+      },
+      {
+        "turn": 7,
+        "cum_input_tokens": 5544,
+        "output_tokens": 1332
+      },
+      {
+        "turn": 8,
+        "cum_input_tokens": 6167,
+        "output_tokens": 1865
+      }
+    ],
+    [
+      {
+        "turn": 1,
+        "cum_input_tokens": 1124,
+        "output_tokens": 3424
+      },
+      {
+        "turn": 2,
+        "cum_input_tokens": 1505,
+        "output_tokens": 1418
+      },
+      {
+        "turn": 3,
+        "cum_input_tokens": 2802,
+        "output_tokens": 2510
+      },
+      {
+        "turn": 4,
+        "cum_input_tokens": 4153,
+        "output_tokens": 1520
+      },
+      {
+        "turn": 5,
+        "cum_input_tokens": 5490,
+        "output_tokens": 1733
+      },
+      {
+        "turn": 6,
+        "cum_input_tokens": 7104,
+        "output_tokens": 410
+      },
+      {
+        "turn": 7,
+        "cum_input_tokens": 7435,
+        "output_tokens": 2712
+      },
+      {
+        "turn": 8,
+        "cum_input_tokens": 8833,
+        "output_tokens": 132
+      }
+    ]
+  ]
+}

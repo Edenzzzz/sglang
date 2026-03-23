@@ -25,9 +25,10 @@ python3 -m sglang.launch_server \
 ## TODOs
 
 ### 1. Prefill/decode ratio sweep
-- [x] Swept 6 workloads × 3 configs (Default-mixed-chunk, Persistent v3, POD). Results in table below.
+- [x] Swept 6 workloads × 3 configs (Default-mixed-chunk, Persistent v3, POD). Results in table below (includes P99).
 - [x] Hypothesis partially confirmed: v3 benefits from **large absolute prefill** (>4096 tokens), not balanced ratios. v3 wins throughput only on 6500/7500, wins TTFT on 4096/1024 (-24%).
 - [x] v3 has consistent 0.5-4% throughput regression vs default — needs investigation (see `debug_kernel_server_perf.md` TODO)
+- [ ] **Must redo** with P95/P99 TTFT and ITL columns. Current results only have median. Also add prefill-prioritized config to show P99 ITL tail latency disadvantage. Redo again after kernel optimizations in `debug_kernel_server_perf.md` if performance changes.
 
 ### 2. Realistic arrival rates
 - [ ] Research LLM serving papers that use the trace datasets in `workloads/agent_workload_survey.md` to find realistic request arrival rates
@@ -38,16 +39,15 @@ python3 -m sglang.launch_server \
 - [ ] Run `count_workload_lengths.py --run-inference --num-samples 200` on trace datasets only (skip single-step/no-trace datasets for now)
 - [ ] **Use 200 samples per dataset.** ~20-30 min per short-input dataset, ~1-2h for Nebius-SWE.
 - [ ] Note: `length_stats.json` has **static field tokenization** only — NOT model inference output. Model output with thinking is 3-8x longer (e.g. CodeActInstruct: static median=354 vs inference median=1,174)
-- [ ] Already cached in `output_length.json`: SWE-bench, CodeActInstruct, SWE-smith
-- [ ] Batch 1 (running): Mind2Web, openhands-feedback, AgentInstruct, SWE-Gym
-- [ ] Batch 2: ShareGPT, Code-Feedback, Nebius-SWE-Trajectories
-- [ ] Skip (no traces / single-step): Go-Browse, NNetNav-live, NNetNav-wa, Synatra, Orca-AgentInstruct
+- [x] Already cached in `output_length.json`: SWE-bench, CodeActInstruct, SWE-smith
+- [x] Batch 1 done: Mind2Web, openhands-feedback, AgentInstruct, SWE-Gym
+- [x] Batch 2 done: Code-Feedback, Nebius-SWE-Trajectories
+- [ ] Skip for now (no traces / single-step): Go-Browse, NNetNav-live, NNetNav-wa, Synatra, Orca-AgentInstruct, ShareGPT (not in script registry)
 
 ### 4. Per-turn context growth
-- [ ] Run Qwen3-8B with thinking + tool calls for a few turns on multi-turn trace datasets (must include ≥1 tool call per trace)
-- [ ] Measure per-turn: new input tokens (tool call results), output tokens (model response with thinking), cumulative context
-- [ ] Key datasets: AgentInstruct, CodeActInstruct, Nebius SWE Trajectories, openhands-feedback
-- [ ] Previous analysis used static dataset text only (not model inference) — needs redo with actual model output
+- [x] Ran Qwen3-8B with thinking on Nebius-SWE traces (3 traces, 8 turns each, via online server HTTP)
+- [x] Results in `workloads/per_turn_growth.json`
+- [ ] Run on remaining trace datasets (AgentInstruct, CodeActInstruct, openhands-feedback) if needed
 
 ### 5. Prioritize workload for v3 kernel benchmark
 **Precondition:** Complete kernel optimization tasks in `tasks/debug_kernel_server_perf.md` first (FA3 tile pattern, v3 throughput regression). If performance improves, redo task 1 (ratio sweep) with updated kernel before prioritizing workloads.
@@ -113,29 +113,29 @@ H100 80GB, Qwen3-8B, `--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`,
 - Realistic ranges: chat 2-6 req/s, agent LLM calls 0.5-3 req/s, agent programs 0.1-0.5 programs/s
 - Should also test at rate=2-4 req/s for realistic load levels
 
-### Dataset Input Lengths & Known Inference Output (from output_length.json)
+### Dataset Input Lengths & Inference Output with Thinking (from output_length.json)
 
-Only 3 datasets have **model inference output** with thinking mode. The rest show static field output (much shorter than real model output).
+All trace datasets now have inference output measured with Qwen3-8B thinking mode (200 samples each unless noted).
 
-| Dataset | Median Input | Inference Output Median | Source |
-|---------|-------------|------------------------|--------|
-| SWE-bench | 295 | **2,174** (n=500) / **3,478** (n=2294 test) | output_length.json |
-| CodeActInstruct | 836 | **1,174** (n=7139) | output_length.json |
-| SWE-smith | 212 | **2,877** (n=59136) | output_length.json |
-| Nebius-SWE-Traj | 9,053 | TBD (static: 1,764) | needs --run-inference |
-| Go-Browse | 6,451 | TBD (static: 85) | needs --run-inference |
-| NNetNav-live | 11,865 | TBD (static: 153) | needs --run-inference |
-| openhands-feedback | 85 | TBD (static: 1,471) | needs --run-inference |
-| ... 8 more | ... | TBD | needs --run-inference |
+| Dataset | N | Median Input | Inference Output Median | Output P95 | In:Out Ratio |
+|---------|--:|-------------|------------------------|-----------|-------------|
+| **Nebius-SWE-Traj** | 200 | 9,053 | **3,726** | 16,384 | **2.4:1** |
+| Code-Feedback | 200 | 200 | **5,598** | 13,313 | 0.04:1 |
+| SWE-Gym | 200 | 412 | **2,344** | 5,828 | 0.18:1 |
+| openhands-feedback | 200 | 85 | **1,690** | 7,536 | 0.05:1 |
+| Mind2Web | 200 | 17 | **1,289** | 2,387 | 0.01:1 |
+| AgentInstruct | 200 | 656 | **1,090** | 3,113 | 0.60:1 |
+| SWE-bench | 500 | 295 | **2,174** | 6,184 | 0.14:1 |
+| CodeActInstruct | 7,139 | 836 | **1,174** | 16,384 | 0.71:1 |
+| SWE-smith | 59,136 | 212 | **2,877** | 7,336 | 0.07:1 |
 
-**Key insight:** With thinking mode, model output is 3-8× longer than static field text. E.g. CodeActInstruct static=354 vs inference=1,174. This dramatically shifts the prefill/decode ratio — datasets that look "prefill-heavy" from static analysis may actually be balanced or decode-heavy when the model thinks.
+**Key findings:**
+1. **Nebius-SWE is the only prefill-heavy dataset** (2.4:1 ratio). All others are decode-heavy with thinking mode.
+2. **Model output with thinking is 3-16× longer** than static field text. Code-Feedback: static median=887 vs inference=5,598 (6.3×). Nebius-SWE: static=1,764 vs inference=3,726 (2.1×).
+3. **Many samples hit the 16K max output cap** — Nebius-SWE P90=16,383, Code-Feedback P95=13,313. Real output would be even longer without the cap.
+4. **Nebius-SWE confirmed as best v3 candidate**: 9K input + 3.7K output (2.4:1 ratio), closest to the 4096/1024 workload where v3 had best TTFT advantage (-24%). Later turns accumulate more context, pushing input even higher.
 
-**Preliminary candidates for v3 (pending inference output):**
-- **Nebius-SWE-Traj**: huge prefill (9K median), likely substantial inference output. Best candidate.
-- **Go-Browse**: huge prefill (6.5K), but static output is tiny (85). Even with 3-8× thinking multiplier, may still be very prefill-heavy.
-- **SWE-bench**: moderate prefill (295 median), but inference output is 2-3K — actually decode-heavy. Later turns in agent scaffold accumulate context though.
-
-### Per-Turn Context Growth (static text only — NEEDS REDO with model inference)
+### Per-Turn Context Growth (Nebius-SWE, Qwen3-8B with thinking, 3 traces × 8 turns)
 
 | Dataset | Med Turns | Med Input/Turn | Med Output/Turn | Decode % | Growth tok/turn | Ctx@T5 | Ctx@T10 | Ctx@T20 | Turn >4096 |
 |---------|----------|---------------|----------------|---------|----------------|--------|---------|---------|------------|
@@ -150,7 +150,25 @@ Only 3 datasets have **model inference output** with thinking mode. The rest sho
 - **openhands-feedback is bursty**: mostly tiny turns with occasional large tool outputs (400-7K tokens). Less predictable for benchmarking.
 - **Context growth is linear** in all datasets — prefill cost grows linearly with turn number.
 
-**Note:** Output/turn above is static text from dataset, NOT model inference output. With thinking mode, model output would be 3-8× longer, increasing decode fraction significantly. Nebius-SWE with thinking could shift from 17% to ~40-50% decode.
+**Updated with model inference (Nebius-SWE only):**
+
+| Turn | Median Input | Median Output (thinking) | In:Out Ratio |
+|------|-------------|-------------------------|-------------|
+| T1 | 1,124 | 3,376 | 0.3:1 (decode-heavy, first turn) |
+| T2 | 1,505 | 1,418 | 1.1:1 (balanced) |
+| T3 | 2,802 | 2,070 | 1.4:1 |
+| T4 | 3,674 | 1,520 | **2.4:1** (enters v3 sweet spot) |
+| T5 | 4,364 | 1,681 | **2.6:1** (matches 4096/1024 workload) |
+| T6 | 4,936 | 410 | 12.0:1 (tool-call-only turn) |
+| T7 | 5,544 | 2,712 | 2.0:1 |
+| T8 | 6,167 | 259 | 23.8:1 (tool-call-only turn) |
+
+**Key findings:**
+- Context grows ~700 tokens/turn (1.1K → 6.2K over 8 turns)
+- By turn 4-5, input exceeds 4K — the v3 TTFT sweet spot (-24% vs default in ratio sweep)
+- Output varies wildly (132-3,424): tool-call-only turns produce very short responses, reasoning turns produce 1.5K-3.4K
+- Median across all 24 measurements: input=3,074, output=1,707 (1.8:1 ratio)
+- The 2-3:1 ratio at turns 4-7 closely matches the 4096/1024 and 2048/2048 ratio sweep workloads
 
 ### Workload Prioritization
 

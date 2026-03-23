@@ -472,7 +472,11 @@ DATASETS = [
 # ============================================================
 
 def process_dataset(ds_config, tokenizer, num_samples=None):
-    """Load a dataset, extract input/output texts, tokenize, return stats."""
+    """Load a dataset, extract input texts, tokenize, return input length stats.
+
+    Output lengths are NOT computed here — they must come from model inference
+    with thinking mode (--run-inference) to be meaningful.
+    """
     name = ds_config["name"]
     hf_id = ds_config["hf_id"]
     extract = ds_config["extract"]
@@ -482,7 +486,6 @@ def process_dataset(ds_config, tokenizer, num_samples=None):
     print(f"{'=' * 60}")
 
     all_input_texts = []
-    all_output_texts = []
 
     for split_name in ds_config["splits"]:
         try:
@@ -491,9 +494,8 @@ def process_dataset(ds_config, tokenizer, num_samples=None):
             print(f"    {len(ds)} examples")
 
             for ex in ds:
-                inp, out = extract(ex)
+                inp, _ = extract(ex)
                 all_input_texts.append(inp)
-                all_output_texts.append(out)
         except Exception as e:
             print(f"    ERROR loading split '{split_name}': {e}")
 
@@ -503,59 +505,50 @@ def process_dataset(ds_config, tokenizer, num_samples=None):
 
     if num_samples and len(all_input_texts) > num_samples:
         all_input_texts = all_input_texts[:num_samples]
-        all_output_texts = all_output_texts[:num_samples]
 
     print(f"  Total examples: {len(all_input_texts)}")
     print(f"  Tokenizing inputs...")
     input_lengths = tokenize_lengths(all_input_texts, tokenizer)
-    print(f"  Tokenizing outputs...")
-    output_lengths = tokenize_lengths(all_output_texts, tokenizer)
 
     input_stats = compute_statistics(input_lengths)
-    output_stats = compute_statistics(output_lengths)
 
     print_statistics(input_lengths, f"  {name} — Input Lengths")
-    print_statistics(output_lengths, f"  {name} — Output Lengths")
 
     return {
         "name": name,
         "hf_id": hf_id,
         "total_examples": len(all_input_texts),
         "input": input_stats,
-        "output": output_stats,
     }
 
 
 def print_summary_table(results):
-    """Print a formatted summary table of all datasets."""
+    """Print a formatted summary table of input lengths only."""
     print("\n")
-    print("=" * 120)
-    print("SUMMARY TABLE: Input/Output Token Length Statistics")
-    print("=" * 120)
+    print("=" * 80)
+    print("SUMMARY TABLE: Input Token Length Statistics")
+    print("(Output lengths require --run-inference with thinking mode)")
+    print("=" * 80)
 
     header = (
         f"{'Dataset':<28} {'Count':>8} │ "
-        f"{'In Mean':>8} {'In Med':>8} {'In P95':>8} {'In Max':>8} │ "
-        f"{'Out Mean':>8} {'Out Med':>8} {'Out P95':>8} {'Out Max':>8}"
+        f"{'In Mean':>8} {'In Med':>8} {'In P95':>8} {'In Max':>8}"
     )
     print(header)
-    print("─" * 120)
+    print("─" * 80)
 
     for r in results:
         if r is None:
             continue
         i = r["input"]
-        o = r["output"]
         row = (
             f"{r['name']:<28} {r['total_examples']:>8} │ "
             f"{i.get('mean', 0):>8.0f} {i.get('median', 0):>8.0f} "
-            f"{i.get('p95', 0):>8.0f} {i.get('max', 0):>8} │ "
-            f"{o.get('mean', 0):>8.0f} {o.get('median', 0):>8.0f} "
-            f"{o.get('p95', 0):>8.0f} {o.get('max', 0):>8}"
+            f"{i.get('p95', 0):>8.0f} {i.get('max', 0):>8}"
         )
         print(row)
 
-    print("─" * 120)
+    print("─" * 80)
     print()
 
 

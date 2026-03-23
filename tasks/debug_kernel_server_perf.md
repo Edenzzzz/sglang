@@ -90,6 +90,33 @@ Added `use_persistent` and `use_pod` fields to `bench_serving.py` CSV output and
 | Persistent | 2838 | 102 | 8.6 | warmup=1 |
 | POD (join_outputs) | 2938 | 129 | 8.1 | warmup=25 (JIT compile) |
 
+### Full 5-config server benchmark (B200, Qwen3-8B, rate=8, keepalive OFF during measurement)
+
+**Workload 1: --random-input 4096 --random-output 1024 --num-prompt 400**
+| Config | Total tok/s | Out tok/s | TTFT median (ms) | ITL median (ms) |
+|--------|-----------|----------|-------------------|-----------------|
+| **Prefill-prioritized** | **19167** | 2680 | **68** | 8.38 |
+| Default-mixed-chunk | 18919 | 2854 | 105 | 9.53 |
+| Persistent (static) | 16651 | 3374 | 125 | 9.91 |
+| Persistent v3 (dynamic) | 18789 | 3807 | 100 | 9.91 |
+| POD | 18951 | 3840 | 121 | 9.23 |
+
+**Workload 2: --random-input 6500 --random-output 7500 --num-prompt 400**
+| Config | Total tok/s | Out tok/s | TTFT median (ms) | ITL median (ms) |
+|--------|-----------|----------|-------------------|-----------------|
+| Prefill-prioritized | 9199 | 2285 | **147** | 28.63 |
+| Default-mixed-chunk | 8777 | 2034 | 350 | 28.91 |
+| Persistent (static) | 4947 | 2618 | 414 | 29.84 |
+| **Persistent v3 (dynamic)** | **8919** | **4720** | 278 | **28.65** |
+| POD | 8895 | 4708 | 400 | 28.66 |
+
+**Key findings:**
+1. **WL1 (short output)**: All configs ~19K tok/s. Prefill-prioritized wins TTFT (68ms) since prefill completes immediately with no decode interleaving. Persistent (static) lags at 16.6K — FlippedSchedule template overhead hurts.
+2. **WL2 (long output)**: v3 and POD tie at ~8.9K tok/s, both far ahead of Persistent (static) at 5K (catastrophic TTFT for mixed batches without FlippedSchedule). v3 has best mixed-chunk TTFT (278ms vs 350ms default, 400ms POD).
+3. **v3 vs POD**: Nearly identical throughput. v3 wins TTFT in both workloads (100 vs 121ms WL1, 278 vs 400ms WL2). v3 has no POD indexing overhead.
+4. **Persistent (static) collapses on WL2**: Without FlippedSchedule, mixed batches serialize prefill→decode, starving new prefills. Only 4947 tok/s vs 8919 for v3.
+5. **Prefill-prioritized TTFT advantage**: No mixed-chunk means all prefills run to completion immediately (68ms WL1, 147ms WL2), but decode ITL suffers under high load when prefills block decode.
+
 **NOTE:** POD requires `--warmup-requests 25` (or flush cache + re-run) because flashinfer JIT-compiles POD kernels on first use, which is very slow. The earlier 601 tok/s result was caused by JIT overhead during the benchmark. flashinfer 0.5.2 shows ~20% throughput regression for all configs vs 0.4.1.
 
 ---
@@ -230,6 +257,30 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   | 6 | **0.85ms** | 0.90ms | **0.95x** |
   | 7 | **1.52ms** | 1.64ms | **0.93x** |
 - **Persistent beats POD in 4/7 cases**, near-parity in remaining 3. Original gap was ~2x.
+- NOTE: earlier results used `np.mean` for persistent (inflated by outliers) — fixed to `np.median` to match POD measurement.
+
+**v3 + uniform_num_m_blocks fast path (latest)**:
+  | Case | Persistent v3 | POD | Ratio |
+  |------|--------------|-----|-------|
+  | 1 | 0.17ms | 0.17ms | 1.03x (tie, 6us cooperative launch overhead) |
+  | 2 | 0.21ms | 0.21ms | 1.02x (tie) |
+  | 3 | **0.34ms** | 0.38ms | **0.88x** |
+  | 4 | 0.24ms | 0.24ms | 1.00x (tie) |
+  | 5 | **0.60ms** | 0.72ms | **0.84x** |
+  | 6 | **0.82ms** | 0.92ms | **0.89x** |
+  | 7 | **3.99ms** | 4.15ms | **0.96x** |
+- **Persistent beats POD in 4/7 cases, ties in 3/7.** No case where POD is meaningfully faster.
+
+**NCU profiling (case 1: 512x1 prefill + 100 decode@kv2048)**:
+  | Metric | Persistent | POD |
+  |--------|-----------|-----|
+  | Kernel time | 224.45us | 223.04us |
+  | DRAM reads | 847MB | 850MB |
+  | L2 hit rate | 1.85% | 1.40% |
+  | Grid size | (1, 296) | (928, 1) |
+- **Kernel execution is identical.** The 2-3% gap in CUDA event timing is from `cudaLaunchCooperativeKernel` overhead vs regular `cudaLaunchKernel`.
+- Both kernels are bandwidth-bound with near-zero L2 reuse (KV cache is too large: 100 seqs × 2048 × 128 × 2 × 2 = 100MB per head, >> 126MB L2).
+- Switching to regular launch crashes (persistent kernel requires guaranteed block residency for 296-block grid on 296 SMs).
 
 **v3: FA3-style runtime dynamic scheduler (IN PROGRESS)**
 - [x] Implement `tile_idx_to_work_tile()` with batch-find while loop + L2-aware LPT mapping
@@ -239,16 +290,45 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - [x] Fixed qo_len indptr differencing bug (non-contiguous sequences) — added separate `dyn_qo_len` array
 - [x] **TESTED AND WORKING** — correctness verified, beats POD in 4/7 cases
 - [x] Queue switching: FlippedSchedule handles this — even CTAs: Runner1(prefill)→Runner2(decode), odd CTAs: Runner2→Runner1. Each runner atomically fetches from its own queue.
-- [ ] Explore gridDim stride vs strict sequential atomicAdd
-- [ ] Handle KV splitting in the dynamic scheduler (currently no-split only: kv_start=0, kv_end=kv_len)
-- [ ] Verify correctness with `bench_mixed_attention.py`
+- [x] Verify correctness with `bench_mixed_attention.py` — all 7 cases pass
+- [x] Run detailed NCU profiling for both POD and Persistent to find more optimization opportunities and try to beat it in all cases
+- [x] Find a load threshold below which LPT makes perf worse — N/A: NCU shows kernel times are IDENTICAL; the 2-3% gap in cases 1-2 is from cooperative launch overhead, not LPT
+- [x] Explore gridDim stride vs strict sequential atomicAdd — tested round-robin (static stride, CTA i starts at tile i and strides by gridDim), hurts L2 locality. Batch-fetch (`atomicAdd(counter, N)` to grab N consecutive tiles per CTA) breaks syncthreads safety in the smem broadcast loop. Sequential `atomicAdd(counter, 1)` is optimal among tested approaches. **BUT**: FA3's actual pattern (`atomicAdd(counter, gridDim.x) + blockIdx.x`) was NOT tested
+- [x] Added `uniform_num_m_blocks` fast path: O(1) sequence lookup via direct division when all seqs have same num_m_blocks (skip warp search)
+- [x] Fixed `bench_mixed_attention.py`: persistent was using `np.mean` (skewed by outliers) while POD used `np.median` — fixed to use median consistently
+- [x] Handle KV splitting in the dynamic scheduler: uses actual `len_kv_chunk` from static scheduler; falls back to static MinHeap when any sequence needs splitting (causal attention makes partial_o addressing complex). No splitting triggers for current benchmark cases (kv_lens ≤ 8192 < kv_len_limit).
+- [x] Run sglang server benchmark: Qwen3-8B, --random-input 4096 --random-output 1024 --request-rate 8 --num-prompt 400
+- [x] Run sglang server benchmark: Qwen3-8B, --random-input 6500 --random-output 7500 --request-rate 8 --num-prompt 400
+- [x] Run full 5-config comparison (Prefill-prioritized, Default-mixed-chunk, Persistent static, Persistent v3, POD) for both workloads. Key finding: Persistent (static) has 15% higher throughput than v3 due to FlippedSchedule template overhead on pure-decode batches.
+- [ ] **Test FA3's actual tile fetching pattern**: `tile_idx = atomicAdd(counter, gridDim.x) + blockIdx.x`. Each CTA gets a unique initial tile (CTA 0→tile 0, CTA 1→tile 1, ...) without atomic contention on first fetch, then subsequent fetches stride by gridDim. This differs from what was tested: (a) pure round-robin (static stride, no atomic — hurts L2), (b) batch-fetch (grab N consecutive tiles — breaks syncthreads), (c) sequential atomicAdd(counter,1) (current, strict LPT). FA3's pattern preserves some L2 locality (each CTA processes tiles spaced gridDim apart within the same L2 section) while avoiding first-fetch contention. For FlippedSchedule with 2 queues, per-queue gridDim = `gridDim.x * gridDim.y / 2`. Benchmark on `bench_mixed_attention.py` cases 1-7 vs current sequential approach.
+- [ ] **Investigate v3 throughput regression vs default-mixed-chunk**: Ratio sweep shows v3 is ~2-3% lower total throughput than default on some workloads (e.g. 4889 vs 5068 tok/s on 1024/1024, 6355 vs 6490 on 2048/2048) despite better TTFT. Hypotheses: (a) FlippedSchedule template overhead on pure-decode batches (already known from static persistent), (b) atomicAdd contention in the dynamic scheduler adding per-step latency, (c) cooperative kernel launch overhead (~6us per step). Profile with nsys to find the bottleneck. Consider: disable FlippedSchedule for pure-decode batches (fall back to default decode wrapper), or amortize atomic overhead by processing multiple tiles per fetch.
+**Profiling suggestion**:
+Because the only difference is what kernel you use for the mixed batch case, try to narrow down the problem to python level indexing/launch overhead or kernel performance issue. For example,
+since Persistent kernel should have low launch gap/indexing overhead, you may examine nsys trace to see if that's true--if so, it probably means it's slower than the default BatchPrefill kernel in some cases. Then you should try to find such decode/prefill mixed batch configs in which Persistent v3 underperforms and profile against BatchPrefill with NCU as in `bench_mixed_attention.py`.
+- [ ] Rerun full 5-config server benchmark with correct flags (`--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`). Previous results missed `--enable-piecewise-cuda-graph`. Update benchmark table above.
+- [ ] nsys analysis on POD vs Default-mixed-chunk to explain POD's lower throughput
+- [x] Sweep prefill/decode length ratios — done. See `tasks/realistic_workload_analysis.md` for full results. Key findings: v3 wins throughput only on 6500/7500 (+1.9%), wins TTFT on prefill-heavy 4096/1024 (-24%), but has 0.5-4% throughput regression on other workloads. Benefit comes from large absolute prefill (>4096 tokens), not ratio.
+- [ ] Realistic workload analysis for v3 kernel evaluation — see `tasks/realistic_workload_analysis.md`
 
 **To test when GPU returns:**
 ```bash
+# 1. Start keepalive to hold GPU during setup
 bash ../VibeCUDA/scripts/gpu_keepalive.sh start
+
+# 2. Clear JIT cache
 python3 -m flashinfer clear-cache && rm -rf ~/.cache/flashinfer
+
+# 3. STOP keepalive before benchmarking — it is compute-intensive and corrupts results!
+bash ../VibeCUDA/scripts/gpu_keepalive.sh stop
+
+# 4. Run benchmarks
 cd ../flashinfer && python3 benchmarks/bench_mixed_attention.py
+
+# 5. Restart keepalive after benchmarks
+bash ../VibeCUDA/scripts/gpu_keepalive.sh start
 ```
+**IMPORTANT:** gpu_keepalive is compute-intensive (platform requirement). It MUST be stopped before any benchmark or profiling. Previous server benchmark results were collected with keepalive running and need to be re-run.
+
 If it crashes, check server log and use `FLASHINFER_LOGLEVEL=3` for debugging.
 
 **Code review notes (done while GPU was down):**

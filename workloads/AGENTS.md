@@ -43,7 +43,7 @@ See `docs/basic_usage/offline_engine_api.ipynb` and related examples for details
 
 ## Counting Length Statistics
 
-Count the output length statistics as in `workloads/count_swebench_lengths.py`.
+Count the output length statistics as in `workloads/count_workload_lengths.py`.
 
 For now, test on **SWE-bench** first. Later, compute input/output lengths for all datasets in this [paper](workloads/AGENT%20DATA%20PROTOCOL-%20UNIFYING%20DATASETS%20FORDIVERSE,%20EFFECTIVE%20FINE-TUNING%20OF%20LLM%20AGENT.pdf).
 
@@ -70,6 +70,16 @@ Model output lengths are cached in `workloads/output_length.json` to avoid re-ru
 5. **Run on all datasets overnight**: ✅ Done. Results in `workloads/length_stats.json`.
 6. **Final output**: ✅ Done. Summary table presented.
 7. **bench_serving_3rdparty.py**: ✅ Done. `python/sglang/bench_serving_3rdparty.py` supports Code-Feedback, CodeActInstruct, SWE-Gym, SWE-smith, Orca AgentInstruct. `bench_serving.py` redirects via `--dataset-name`.
+
+## TODO: v3 Persistent Kernel Workload Analysis
+
+Goal: identify which real workloads benefit most from v3 persistent kernel's prefill-decode overlap.
+
+- [ ] **Prefill/decode ratio sweep**: Vary input/output lengths in bench_serving to find where overlap kernels (POD + persistent v3 FlippedSchedule) maximize benefit. Hypothesis: balanced prefill/decode ratios and prefill >2000 tokens.
+- [ ] **Realistic arrival rates**: Research LLM serving papers that use the trace datasets below to find realistic request arrival rates. bench_serving currently uses Poisson rate=8 req/s.
+- [ ] **First-turn output length stats**: With reasoning & tool calls ON (Qwen3-8B), measure first-turn output length for remaining trace workloads. This tells us how much output (decode) vs input (prefill) per turn.
+- [ ] **Per-turn context growth**: Measure avg new input & output length per-turn for workloads with tool calls (tool results vary in size per workload). Only need a few turns per workload (must include ≥1 tool call).
+- [ ] **Prioritize workload for v3 kernel**: Based on ratio sweep findings, determine which workload/trace to benchmark v3 persistent kernel on for maximum advantage.
 
 ## Target Datasets
 

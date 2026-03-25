@@ -187,6 +187,7 @@ class FlashInferAttnBackend(AttentionBackend):
         # Set mixed batch backend
         self.use_persistent = envs.SGLANG_FLASHINFER_USE_PERSISTENT.get()
         self.use_pod = envs.SGLANG_FLASHINFER_USE_POD.get()
+        self.no_flipped_schedule = envs.SGLANG_FLASHINFER_NO_FLIPPED_SCHEDULE.get()
         if self.use_pod and self.use_persistent:
             raise ValueError(
                 "SGLANG_FLASHINFER_USE_POD and SGLANG_FLASHINFER_USE_PERSISTENT cannot both be True"
@@ -650,6 +651,10 @@ class FlashInferAttnBackend(AttentionBackend):
             decode_wrappers = []
             for i in range(self.num_wrappers):
                 decode_wrappers.append(
+                    # Always use BatchDecodeWithPagedKVCacheWrapper for decode CUDA graphs,
+                    # even when use_persistent=True. Persistent kernel only activates on
+                    # mixed batches, not decode. Using BatchAttention here was unnecessarily
+                    # heavy and prevented fast_decode_plan optimization.
                     BatchDecodeWithPagedKVCacheWrapper(
                         self.workspace_buffer,
                         "NHD",
@@ -660,15 +665,6 @@ class FlashInferAttnBackend(AttentionBackend):
                         paged_kv_last_page_len_buffer=self.kv_last_page_len[
                             :num_tokens
                         ],
-                    )
-                    if not self.use_persistent
-                    else BatchAttention(
-                        self.workspace_buffer,
-                        "NHD",
-                        use_cuda_graph=True,
-                        paged_kv_indptr_buffer=self.kv_indptr[i][: num_tokens + 1],
-                        paged_kv_indices_buffer=self.cuda_graph_kv_indices[i],
-                        kv_len_arr_buffer=self.kv_last_page_len[:num_tokens],
                     )
                 )
             seq_lens_sum = seq_lens.sum().item()
@@ -685,11 +681,12 @@ class FlashInferAttnBackend(AttentionBackend):
             )
             self.decode_cuda_graph_metadata[bs] = decode_wrappers
             self.forward_metadata = DecodeMetadata(decode_wrappers)
-            if not self.use_persistent:
-                for i in range(self.num_wrappers):
-                    decode_wrappers[i].plan = partial(
-                        fast_decode_plan, decode_wrappers[i]
-                    )
+            # Enable fast_decode_plan for all configs (including persistent,
+            # since decode steps now always use BatchDecodeWithPagedKVCacheWrapper)
+            for i in range(self.num_wrappers):
+                decode_wrappers[i].plan = partial(
+                    fast_decode_plan, decode_wrappers[i]
+                )
 
         elif forward_mode.is_target_verify():
             prefill_wrappers = []
@@ -1018,25 +1015,17 @@ class FlashInferAttnBackend(AttentionBackend):
                     layer, cache_loc, k, v, layer.k_scale, layer.v_scale
                 )
 
-        # Call the wrapped function
-        if self.use_persistent:
-            o, _ = self.persistent_attn_forward(
-                decode_wrapper,
-                forward_batch,
-                q,
-                layer,
-                layer.logit_cap,
-            )
-        else:
-            o = decode_wrapper.forward(
-                q.contiguous().view(-1, layer.tp_q_head_num, layer.head_dim),
-                forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id),
-                sm_scale=layer.scaling,
-                logits_soft_cap=layer.logit_cap,
-                # Must use _float to avoid device-to-host copy that breaks cuda graph capture.
-                k_scale=layer.k_scale_float,
-                v_scale=layer.v_scale_float,
-            )
+        # Always use standard decode forward — persistent kernel only activates
+        # on mixed batches (forward_extend with is_mixed()), not decode.
+        o = decode_wrapper.forward(
+            q.contiguous().view(-1, layer.tp_q_head_num, layer.head_dim),
+            forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id),
+            sm_scale=layer.scaling,
+            logits_soft_cap=layer.logit_cap,
+            # Must use _float to avoid device-to-host copy that breaks cuda graph capture.
+            k_scale=layer.k_scale_float,
+            v_scale=layer.v_scale_float,
+        )
 
         return o.view(-1, layer.tp_q_head_num * layer.head_dim)
 
@@ -1290,29 +1279,10 @@ class FlashInferIndicesUpdaterDecode:
                 ),
                 global_override_indptr_cpu=global_override_indptr_cpu,
             )
-        elif self.attn_backend.use_persistent:
-            # Persistent is faster for decode
-            if not hasattr(self, '_cached_arange') or bs > self._cached_arange_size:
-                self._cached_arange_size = bs
-                self._cached_arange = torch.arange(
-                    1, bs + 1, device=kv_indices.device
-                )
-            self.qo_indptr[0][1 : bs + 1] = self._cached_arange[:bs]
-            qo_indptr = self.qo_indptr[0][: bs + 1]
-            wrapper.plan(
-                qo_indptr,
-                kv_indptr,
-                kv_indices,
-                paged_kernel_lens.to(qo_indptr.dtype, non_blocking=True),
-                self.num_qo_heads,
-                self.num_kv_heads,
-                page_size=1,
-                head_dim_qk=self.head_dim,
-                head_dim_vo=self.head_dim,
-                q_data_type=self.q_data_type,
-                kv_data_type=self.data_type,
-                causal=True,
-            )
+        # NOTE: Previously use_persistent forced BatchAttention.plan() for decode steps,
+        # but this is slower at the server level because it skips fast_decode_plan and
+        # CUDA graph optimizations. The persistent kernel is only used for mixed batches
+        # (forward_mode.is_mixed()), so decode steps should use the regular decode wrapper.
         else:
             # When using original begin_forward, don't pass global_override_indptr_cpu
             wrapper.begin_forward(
@@ -1776,7 +1746,24 @@ class FlashInferIndicesUpdaterPrefill:
             token_pos_in_items_len = 0
             max_item_len_ptr = None
 
-        if self.attn_backend.use_persistent:
+        if self.attn_backend.use_persistent and isinstance(wrapper_paged, BatchAttention):
+            flipped = None if not self.attn_backend.no_flipped_schedule else False
+            wrapper_paged.plan(
+                qo_indptr,
+                kv_indptr,
+                kv_indices,
+                paged_kernel_lens,
+                self.num_qo_heads,
+                self.num_kv_heads,
+                head_dim_qk=self.head_dim,
+                head_dim_vo=self.head_dim,
+                page_size=1,
+                q_data_type=self.q_data_type,
+                kv_data_type=self.data_type,
+                causal=causal,
+                flipped_schedule=flipped,
+            )
+        elif self.attn_backend.use_persistent:
             wrapper_paged.plan(
                 qo_indptr,
                 kv_indptr,

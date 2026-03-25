@@ -29,8 +29,7 @@ Which of our collected datasets have full multi-turn traces (conversation trajec
 **Legend:**
 - § Single-step snapshots extracted from multi-step trajectories — the full trajectory is not in the dataset
 - ‡ Problem+solution pairs only — no agent trajectory; turns depend entirely on the scaffold/agent framework used
-- † Value from literature, not directly measured from dataset
-
+- † Value from literature, not directly measured from data
 **Key takeaway:** Only 7 of our 14 datasets contain full multi-turn traces. For benchmarking agent serving, the trajectory datasets (Nebius, openhands, AgentInstruct, CodeActInstruct) are the most valuable because they provide realistic per-turn input/output distributions. For ‡ datasets (SWE-bench/Gym/smith), we would need to run an actual agent scaffold to generate traces.
 
 ---

@@ -252,3 +252,5 @@ lmms-eval
 
 cuda_coredump*
 !workloads/profile_data/**
+tasks/flash-attention
+**/profile_logs/

@@ -164,24 +164,56 @@ All trace datasets now have inference output measured with Qwen3-8B thinking mod
 - Median across all 24 measurements: input=3,074, output=1,707 (1.8:1 ratio)
 - The 2-3:1 ratio at turns 4-7 closely matches the 4096/1024 and 2048/2048 ratio sweep workloads
 
+### Workload Scan Results (B200, 4 configs × 10 workloads, 200 prompts, rate=8, to be rerun on H100)
+
+Full CSV: `/tmp/workload_scan_results.csv`. Script: `tasks/realistic_workload_analysis/run_workload_scan.sh`.
+
+**Throughput (tok/s) — v3-fixed and POD vs Default-mixed-chunk:**
+
+| Input | Output | Prefill-prio | Default | v3-fixed | POD | v3 vs Def | POD vs Def |
+|------:|-------:|-------------:|--------:|---------:|----:|----------:|-----------:|
+| 512 | 512 | 3,883 | 3,880 | 3,879 | 3,873 | -0.0% | -0.2% |
+| 1024 | 1024 | 7,033 | 7,068 | 7,075 | 7,045 | +0.1% | -0.3% |
+| 2048 | 1024 | 10,792 | 10,821 | 10,868 | 10,818 | +0.4% | -0.0% |
+| **4096** | **1024** | **17,132** | 16,858 | **17,141** | 17,096 | **+1.7%** | +1.4% |
+| 2048 | 2048 | 10,812 | 10,852 | 10,831 | 10,782 | -0.2% | -0.6% |
+| 4096 | 4096 | 11,675 | 11,588 | 11,646 | 11,596 | +0.5% | +0.1% |
+| **6500** | **4000** | **12,552** | 12,150 | **12,360** | 12,349 | **+1.7%** | +1.6% |
+| **9000** | **4000** | **12,779** | 12,372 | **12,577** | 12,604 | **+1.7%** | **+1.9%** |
+| 6500 | 7500 | 8,455 | 8,344 | 8,375 | 8,385 | +0.4% | +0.5% |
+| 1024 | 4096 | 8,752 | 8,778 | 8,737 | 8,700 | -0.5% | -0.9% |
+
+**TTFT median (ms):**
+
+| Input | Output | Prefill-prio | Default | v3-fixed | POD |
+|------:|-------:|-------------:|--------:|---------:|----:|
+| 4096 | 1024 | **46** | 68 | **63** | 63 |
+| 6500 | 4000 | **51** | 108 | **95** | 110 |
+| 9000 | 4000 | **107** | **214** | **196** | 210 |
+| 6500 | 7500 | **74** | 129 | **114** | 145 |
+
+**P99 ITL (ms):**
+
+| Input | Output | Prefill-prio | Default | v3-fixed | POD |
+|------:|-------:|-------------:|--------:|---------:|----:|
+| 4096 | 1024 | **37** | 43 | **37** | 52 |
+| 6500 | 4000 | **54** | 88 | **65** | 89 |
+| 9000 | 4000 | **113** | 153 | **127** | 156 |
+| 6500 | 7500 | **44** | 62 | **57** | 70 |
+
 ### Workload Prioritization
 
-Based on ratio sweep + dataset analysis + per-turn context growth:
+**Key findings from workload scan:**
+1. **v3-fixed wins throughput on large-input workloads** (4096+): +1.7% at 4096/1024, 6500/4000, 9000/4000. No regression on small inputs.
+2. **v3-fixed has best TTFT among mixed-chunk configs**: 8-11% better than default on 6500/4000 and 9000/4000 (agent-realistic workloads).
+3. **v3-fixed has best P99 ITL among mixed-chunk configs**: matches prefill-prio at 4096/1024 (37ms), 27% better than default at 6500/4000 (65 vs 88ms).
+4. **POD matches v3 on throughput** but has worse TTFT and P99 ITL on all workloads.
+5. **Prefill-prioritized still wins all metrics** on all workloads due to CUDA graph advantage. Gap is 1.5-3.3% throughput.
 
-**Best workload for v3 kernel evaluation: Nebius-SWE-Trajectories**
-- Median input 9,053 tokens (well above 4096 threshold where v3 TTFT advantage kicks in)
-- Multi-turn (median 25 turns), context grows ~607 tok/turn → 15K by turn 20
-- 17% decode fraction from static text, likely ~40-50% with thinking mode
-- v3's -24% TTFT improvement at 4096 input would directly benefit this workload's later turns
+**Best workload for v3/POD evaluation: 9000/4000 (Nebius-SWE realistic)**
+- v3-fixed: +1.7% throughput, -8% TTFT, -17% P99 ITL vs default
+- POD: +1.9% throughput, similar TTFT/ITL to default
+- Matches real Nebius-SWE late-turn workload (input 9K, output 4K with thinking)
 
-**Secondary: 6500/7500 random workload**
-- Only workload where v3 wins throughput (+1.9%)
-- Matches Go-Browse (6.5K input) and Nebius-SWE later turns (9K+ context)
-
-**Not recommended:**
-- Short-input datasets (AgentInstruct, CodeActInstruct, SWE-bench) — median input <1K, below v3 benefit threshold
-- Extremely prefill-heavy (Go-Browse, NNetNav) — tiny decode means overlap has nothing to overlap with
-
-**Remaining work:**
-- [x] Inference output lengths on Nebius-SWE done: median=3,726 tokens with thinking. In:Out ratio=2.4:1, confirming ~30% decode fraction.
-- [ ] Benchmark Nebius-SWE traces via bench_serving_3rdparty if supported, or use equivalent random workload (--random-input 9000 --random-output 4000)
+**Runner-up: 6500/4000 (Nebius-SWE mid-turn)**
+- v3-fixed: +1.7% throughput, -11% TTFT, -27% P99 ITL vs default

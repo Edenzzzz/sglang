@@ -82,13 +82,13 @@ H100 80GB, Qwen3-8B, `--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`,
 | 4096 | 4096 | 19.13 | 19.05 | 19.12 |
 | 6500 | 7500 | 26.17 | 25.05 | 26.15 |
 
-**Key findings:**
-1. **v3 wins throughput only on longest workload** (6500/7500: +1.9%). On all others, v3 is 0.5-4% behind default.
-2. **v3 wins TTFT on prefill-heavy workloads**: 4096/1024 is the sweet spot (156ms vs 206ms, -24%). This is the prefill-decode overlap benefit.
-3. **POD consistently worse TTFT than both default and v3**, especially on prefill-heavy workloads (302-339ms vs 84-156ms for 1024/4096). POD JIT warmup may not fully eliminate startup penalty.
+**Key findings (OUTDATED — from before decode overhead fix and mixed CG. See `debug_kernel_server_perf.md` for current results with v3+LPT+CG):**
+1. **v3 wins throughput only on longest workload** (6500/7500: +1.9%). On all others, v3 is 0.5-4% behind default. *(NOTE: the 0.5-4% regression was caused by BatchAttention decode overhead, now fixed.)*
+2. **v3 wins TTFT on prefill-heavy workloads**: 4096/1024 is the sweet spot (156ms vs 206ms, -24%).
+3. **POD consistently worse TTFT than both default and v3**, especially on prefill-heavy workloads.
 4. **ITL is nearly identical across all configs** (~±0.3ms). Decode performance is the same.
-5. **v3 throughput regression is consistent** (-0.5% to -4%), worst on decode-heavy workloads (1024/4096: -4%). Likely FlippedSchedule template overhead on pure-decode batches.
-6. **Input/output ratio doesn't clearly predict v3 benefit**: the 6500/7500 win (ratio 0.87) and the 4096/1024 TTFT win (ratio 4.0) suggest v3 benefits from large absolute prefill tokens, not the ratio itself.
+5. ~~**v3 throughput regression is consistent** (-0.5% to -4%)~~ — **FIXED**: decode overhead eliminated by using regular decode wrapper. v3 now matches default-mc within ±0.1%.
+6. **Input/output ratio doesn't clearly predict v3 benefit**: v3 benefits from large absolute prefill tokens, not the ratio itself.
 
 ### Arrival Rate Research
 
@@ -217,3 +217,4 @@ Full CSV: `/tmp/workload_scan_results.csv`. Script: `tasks/realistic_workload_an
 
 **Runner-up: 6500/4000 (Nebius-SWE mid-turn)**
 - v3-fixed: +1.7% throughput, -11% TTFT, -27% P99 ITL vs default
+

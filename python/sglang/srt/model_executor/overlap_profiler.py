@@ -171,6 +171,11 @@ class ProfilingRunner:
         # Initialize attention backend metadata
         self.model_runner.attn_backend.init_forward_metadata(forward_batch)
 
+        # Temporarily disable CUDA graph runner to force non-CG forward path.
+        # The profiler needs to measure raw kernel time, not CG replay time.
+        saved_graph_runner = self.model_runner.graph_runner
+        self.model_runner.graph_runner = None
+
         # CUDA timing
         start_event = torch.cuda.Event(enable_timing=True)
         end_event = torch.cuda.Event(enable_timing=True)
@@ -182,6 +187,8 @@ class ProfilingRunner:
             end_event.record()
             torch.cuda.synchronize()
             times.append(float(start_event.elapsed_time(end_event)))
+
+        self.model_runner.graph_runner = saved_graph_runner
 
         return float(np.median(times))
 

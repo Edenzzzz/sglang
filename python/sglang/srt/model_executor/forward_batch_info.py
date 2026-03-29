@@ -133,6 +133,7 @@ class ForwardMode(IntEnum):
             self == ForwardMode.DECODE
             or self == ForwardMode.TARGET_VERIFY
             or self == ForwardMode.IDLE
+            or self == ForwardMode.MIXED
         )
 
     def is_cpu_graph(self):

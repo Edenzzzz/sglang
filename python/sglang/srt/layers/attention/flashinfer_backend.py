@@ -312,6 +312,7 @@ class FlashInferAttnBackend(AttentionBackend):
         self.decode_cuda_graph_metadata = {}
         self.prefill_cuda_graph_metadata = {}  # For verify
         self.draft_extend_cuda_graph_metadata = {}  # For draft extend
+        self.mixed_cuda_graph_metadata = {}  # For mixed batch persistent kernel
 
     def _process_multi_item_scoring(
         self, forward_batch: ForwardBatch
@@ -637,6 +638,29 @@ class FlashInferAttnBackend(AttentionBackend):
             self.cuda_graph_qk_indptr = [x.clone() for x in self.kv_indptr]
             self.cuda_graph_qo_indptr = [x.clone() for x in self.kv_indptr]
 
+    def init_mixed_cuda_graph_state(
+        self, max_mixed_bs: int, max_total_kv_tokens: int
+    ):
+        """Initialize state for mixed batch (persistent kernel) CUDA graphs."""
+        kv_indices_size = max(max_total_kv_tokens, max_mixed_bs * 256)
+        self.mixed_cuda_graph_kv_indices = [
+            torch.zeros(kv_indices_size, dtype=torch.int32, device="cuda")
+            for _ in range(self.num_wrappers)
+        ]
+        self.mixed_cuda_graph_kv_len_arr = [
+            torch.zeros(max_mixed_bs, dtype=torch.int32, device="cuda")
+            for _ in range(self.num_wrappers)
+        ]
+        # Allocate separate kv_indptr/qo_indptr for mixed CG (don't resize shared ones).
+        self.mixed_cuda_graph_kv_indptr = [
+            torch.zeros(max_mixed_bs + 1, dtype=torch.int32, device="cuda")
+            for _ in range(self.num_wrappers)
+        ]
+        self.mixed_cuda_graph_qo_indptr = [
+            torch.zeros(max_mixed_bs + 1, dtype=torch.int32, device="cuda")
+            for _ in range(max(len(self.qo_indptr), 1))
+        ]
+
     def init_forward_metadata_capture_cuda_graph(
         self,
         bs: int,
@@ -748,6 +772,43 @@ class FlashInferAttnBackend(AttentionBackend):
             )
             self.prefill_cuda_graph_metadata[bs] = prefill_wrappers
             self.forward_metadata = PrefillMetadata(prefill_wrappers, False, False)
+        elif forward_mode.is_mixed():
+            mixed_wrappers = []
+            for i in range(self.num_wrappers):
+                mixed_wrappers.append(
+                    BatchAttention(
+                        self.workspace_buffer,
+                        "NHD",
+                        use_cuda_graph=True,
+                        paged_kv_indptr_buffer=self.mixed_cuda_graph_kv_indptr[i][: bs + 1],
+                        paged_kv_indices_buffer=self.mixed_cuda_graph_kv_indices[i],
+                        kv_len_arr_buffer=self.mixed_cuda_graph_kv_len_arr[i][:bs],
+                    )
+                )
+            seq_lens_sum = seq_lens.sum().item()
+            prefix_lens = torch.zeros(bs, dtype=torch.int32, device=req_pool_indices.device)
+            # Temporarily swap indptr buffers to larger mixed CG buffers
+            saved_kv_indptr = self.indices_updater_prefill.kv_indptr
+            saved_qo_indptr = self.indices_updater_prefill.qo_indptr
+            self.indices_updater_prefill.kv_indptr = self.mixed_cuda_graph_kv_indptr
+            self.indices_updater_prefill.qo_indptr = self.mixed_cuda_graph_qo_indptr
+            self.indices_updater_prefill.update(
+                req_pool_indices,
+                seq_lens,
+                seq_lens.cpu(),
+                seq_lens_sum,
+                prefix_lens=prefix_lens,
+                prefill_wrappers=mixed_wrappers,
+                use_ragged=False,
+                encoder_lens=encoder_lens,
+                spec_info=None,
+            )
+            self.indices_updater_prefill.kv_indptr = saved_kv_indptr
+            self.indices_updater_prefill.qo_indptr = saved_qo_indptr
+            self.mixed_cuda_graph_metadata[bs] = mixed_wrappers
+            self.forward_metadata = PrefillMetadata(
+                mixed_wrappers, use_ragged=False, extend_no_prefix=False
+            )
         else:
             raise ValueError(f"Invalid mode: {forward_mode=}")
 
@@ -761,6 +822,8 @@ class FlashInferAttnBackend(AttentionBackend):
         forward_mode: ForwardMode,
         spec_info: Optional[SpecInput],
         seq_lens_cpu: Optional[torch.Tensor],
+        prefix_lens: Optional[torch.Tensor] = None,
+        num_real_seq: int = 0,
     ):
         if forward_mode.is_decode_or_idle():
             self.indices_updater_decode.update(
@@ -798,6 +861,25 @@ class FlashInferAttnBackend(AttentionBackend):
                 encoder_lens=encoder_lens[:bs] if encoder_lens is not None else None,
                 spec_info=spec_info,
             )
+        elif forward_mode.is_mixed():
+            # Swap to larger mixed CG indptr buffers for the update
+            saved_kv = self.indices_updater_prefill.kv_indptr
+            saved_qo = self.indices_updater_prefill.qo_indptr
+            self.indices_updater_prefill.kv_indptr = self.mixed_cuda_graph_kv_indptr
+            self.indices_updater_prefill.qo_indptr = self.mixed_cuda_graph_qo_indptr
+            self.indices_updater_prefill.update(
+                req_pool_indices[:bs],
+                seq_lens[:bs],
+                seq_lens_cpu[:bs] if seq_lens_cpu is not None else None,
+                seq_lens_sum,
+                prefix_lens=prefix_lens[:bs] if prefix_lens is not None else None,
+                prefill_wrappers=self.mixed_cuda_graph_metadata[bs],
+                use_ragged=False,
+                encoder_lens=encoder_lens[:bs] if encoder_lens is not None else None,
+                spec_info=None,
+            )
+            self.indices_updater_prefill.kv_indptr = saved_kv
+            self.indices_updater_prefill.qo_indptr = saved_qo
         else:
             raise ValueError("Invalid forward mode")
 
@@ -1674,11 +1756,19 @@ class FlashInferIndicesUpdaterPrefill:
             # Normal extend
             kv_indptr[1 : bs + 1] = torch.cumsum(paged_kernel_lens, dim=0)
             kv_indptr = kv_indptr[: bs + 1]  # cumulative page ranges for each req
-            kv_indices = torch.empty(  # page to kv indices
-                paged_kernel_lens_sum + 256,
-                dtype=torch.int32,
-                device=req_pool_indices.device,
-            )
+            # For BatchAttention in CUDA graph mode, write kv_indices directly
+            # to the pre-allocated buffer so the graph kernel sees the update.
+            if (
+                isinstance(wrapper_paged, BatchAttention)
+                and wrapper_paged.is_cuda_graph_enabled
+            ):
+                kv_indices = wrapper_paged._paged_kv_indices_buf
+            else:
+                kv_indices = torch.empty(
+                    paged_kernel_lens_sum + 256,
+                    dtype=torch.int32,
+                    device=req_pool_indices.device,
+                )
             create_flashinfer_kv_indices_triton[(bs,)](
                 self.req_to_token,
                 req_pool_indices,

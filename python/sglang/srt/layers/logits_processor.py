@@ -368,6 +368,19 @@ class LogitsProcessor(nn.Module):
                 input_ids, hidden_states, lm_head, logits_metadata, multi_item_delimiter
             )
 
+        # For CUDA graph capture of mixed batches: return full hidden states
+        # without logits computation. The extend-mode pruning (cumsum of
+        # extend_seq_lens) is data-dependent and can't be captured in a graph.
+        # Logits will be computed outside the graph during replay.
+        if (
+            logits_metadata.capture_hidden_mode.is_full()
+            and logits_metadata.forward_mode.is_mixed()
+        ):
+            return LogitsProcessorOutput(
+                next_token_logits=None,
+                hidden_states=hidden_states,
+            )
+
         # Get the last hidden states and last logits for the next token prediction
         if (
             logits_metadata.forward_mode.is_decode_or_idle()

@@ -2153,6 +2153,15 @@ class ModelRunner:
             )
             return ret, can_run_graph
 
+        # Track non-CG mixed batches
+        if forward_batch.forward_mode.is_mixed() and self.graph_runner and hasattr(self.graph_runner, '_non_cg_mixed_count'):
+            self.graph_runner._non_cg_mixed_count += 1
+            n = self.graph_runner._non_cg_mixed_count
+            if n % 50 == 1:
+                import sys
+                num_tokens = forward_batch.input_ids.shape[0]
+                print(f"[NON-CG MIXED] #{n} tokens={num_tokens} bs={forward_batch.batch_size} (mixed_cg: {self.graph_runner._mixed_replay_count}, decode_cg: {self.graph_runner._decode_replay_count})", file=sys.stderr, flush=True)
+
         # For MLP sync
         if forward_batch.global_num_tokens_cpu is not None:
             forward_batch.prepare_mlp_sync_batch(self)

@@ -285,6 +285,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - Switching to regular launch crashes (persistent kernel requires guaranteed block residency for 296-block grid on 296 SMs).
 
 **v3: FA3-style runtime dynamic scheduler (IN PROGRESS)**
+## TODOs
 - [x] Implement `tile_idx_to_work_tile()` with batch-find while loop + L2-aware LPT mapping
 - [x] Modify `TwoStageHolisticPlan` to store per-sequence metadata (qo_indptr, qo_len, kv_indptr, kv_len, num_m_blocks, nheads_in_l2) per queue
 - [x] Add dynamic scheduler fields to `HolisticPlanInfo`, `PersistentParams`, `batch_attention.cu`
@@ -317,7 +318,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   - v2 results (with guard): cases 2-4 are 10-19% slower (0.39 vs 0.35, 0.43 vs 0.36ms). Cases 5-7 similar or slightly worse.
   - Also shows static vs flipped persistent: static is consistently ~20% slower than flipped on cases 5-7 (0.99 vs 0.84, 1.56 vs 1.35, 2.25 vs 1.90ms), confirming FlippedSchedule benefit on large workloads.
   - **Conclusion**: Sequential `atomicAdd(counter, 1)` is optimal for our use case. FA3's pattern may work better with FA3's warp-specialized architecture where producer/consumer warps have different roles. Reverted.
-- [ ] **Investigate v3 throughput regression vs default-mixed-chunk**: nsys profiling (H100, 4096/1024, 50 prompts):
+- [x] **Investigate v3 throughput regression vs default-mixed-chunk** (FIXED — decode overhead eliminated): nsys profiling (H100, 4096/1024, 50 prompts):
   - **Kernel times**: Persistent mixed=150μs avg (878 calls, total 132ms) vs Default BatchPrefill mixed=217μs (936 calls, total 203ms). **Persistent saves 71ms on mixed batches.** Persistent decode-like (MaskMode=1)=35μs (2,592 calls, 90ms) vs Default decode=30μs (2,628 calls, 79ms). Persistent costs 11ms on decode. Net kernel savings = 60ms.
   - **cudaDeviceSynchronize distribution**: The throughput regression is from **113 sync calls in the 1-10ms range** for v3 (vs only 4 for default). v3 P95 sync=5,854μs vs default P95=324μs. These long syncs (~565ms total) more than cancel the 60ms kernel savings.
   - **Cooperative launch concurrency test (B200)**: Tested — cooperative kernel DOES allow overlap (ratio=1.30x), but less than regular kernels (1.94x). Not fully serialized, but ~34% less overlap. The 2019 forum claim is wrong for modern GPUs.
@@ -347,10 +348,98 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   2. **Token budget tax**: In mixed-chunk, `PrefillAdder` subtracts `running_bs` (decode batch size) from both `rem_input_tokens` and `rem_chunk_tokens` (`schedule_policy.py:334-337`). With 50-200 running decode requests, this reduces effective prefill budget per step, potentially requiring more steps to complete a prefill.
   3. **Kernel efficiency**: Pure decode steps have uniform 1-token-per-request workload (high CUDA graph batch efficiency). Mixed steps combine quadratic prefill + linear decode in one kernel, suboptimal for both.
   - **TTFT**: Prefill-prioritized runs 4096-token prefill to completion in one step (fits in chunked_prefill_size=8192). Mixed-chunk may need multiple mixed steps if decode batch consumes token budget.
-- [x] Sweep prefill/decode length ratios — done. See `tasks/realistic_workload_analysis.md` for full results. Key findings: v3 wins throughput only on 6500/7500 (+1.9%), wins TTFT on prefill-heavy 4096/1024 (-24%), but has 0.5-4% throughput regression on other workloads. Benefit comes from large absolute prefill (>4096 tokens), not ratio.
+- [x] Sweep prefill/decode length ratios — done. See `tasks/realistic_workload_analysis.md` for full results. Key findings: v3 wins throughput only on 6500/7500 (+1.9%), wins TTFT on prefill-heavy 4096/1024 (-24%), but has 0.5-4% throughput regression on other workloads. *(NOTE: the regression was from decode overhead, now fixed. v3+LPT+CG matches DMC within ±0.1%.)*
 - [ ] Realistic workload analysis for v3 kernel evaluation — see `tasks/realistic_workload_analysis.md`
+- [ ] **CUDA graph capture for mixed batch (persistent v3)**: WORKING. LPT compatible with CG. 200 requests at rate=20 stable, no CUDA errors. **Memory: 1.68 GB** for 15 mixed CG graphs (bs 1→8192), on top of 3.28 GB for 52 decode CG graphs. Total CG: 4.96 GB. Bugs fixed:
+  1. **Missing kv_indices copy** (flashinfer `attention.py`): CG plan() never copied kv_indices to pre-allocated buffer → kernel read garbage page indices.
+  2. **plan_info[-1] wrong field** (flashinfer `scheduler.cuh`): Added `dyn_scalars_offset` + `enable_cuda_graph` to plan_info vector, pushing `flipped_schedule` away from `[-1]`. Python auto-schedule read wrong value → loaded wrong kernel binary.
+  3. **Module auto-switch breaks CG** (flashinfer `attention.py`): `plan()` at replay switched `self.module` to different kernel binary based on batch composition. Graph replays captured kernel with mismatched workspace layout. Fix: use `flipped_schedule=True` kernel binary for CG (handles both paths at runtime via `dyn_scalars`), prevent auto-switch.
+  4. **Padding overflow in `_replay_prepare_mixed`** (sglang `cuda_graph_runner.py`): Mixed CG captures bs=num_tokens (e.g., 1024). At replay, 20 real seqs + 1004 padding seqs each with qo_len=1 → total Q tokens 1727 > captured buffer 1024. Fix: set `prefix_lens = seq_len_fill_value` for padding → qo_len=0.
+  5. **Shared indptr too small** (sglang `flashinfer_backend.py`): `kv_indptr` (size 513) too small for mixed CG bs=8192. Fix: separate `mixed_cuda_graph_kv_indptr` / `mixed_cuda_graph_qo_indptr` buffers.
+  6. **LPT CG compatibility** (flashinfer `scheduler.cuh`, `batch_attention.cu`): For CG, always allocate dyn scheduler buffers (`|| enable_cuda_graph`) and always set tile_counter/dyn_scalars/dyn_* pointers so they're non-null when frozen. LPT activates at runtime when plan() detects mixed batch.
+  - Standalone flashinfer CG tests: 4/4 pass (same-config, mixed replays, varying kv_lens, cross-schedule decode→mixed).
+  - Files changed: flashinfer `scheduler.cuh`, `batch_attention.cu`, `attention.py`; sglang `flashinfer_backend.py`, `cuda_graph_runner.py`.
+  - [x] **Server benchmark: v3+LPT+CG vs prefill-prio vs default-mc** (H100 80GB, Qwen3-8B, `--mem-fraction-static 0.85`, radix cache ON, NO PCG, 400 prompts):
 
-**To test when GPU returns:**
+  | WL | Input | Output | Rate | v3 in tok/s | v3 out tok/s | v3 total | PP total | DMC total | v3 vs PP | v3 vs DMC |
+  |----|------:|-------:|-----:|----------:|-----------:|--------:|--------:|----------:|---------:|----------:|
+  | 1 | 4096 | 1024 | 8 | 11,971 | 3,042 | **15,013** | 15,050 | 14,992 | -0.2% | +0.1% |
+  | 2 | 8192 | 2048 | 4 | 8,531 | 2,025 | 10,556 | 10,208 | **10,565** | **+3.4%** | -0.1% |
+  | 3 | 12000 | 1024 | 4 | **14,715** | 1,277 | **15,993** | 11,308 | 15,984 | **+41%** | +0.1% |
+  | 4 | 16384 | 1024 | 3 | **14,921** | 957 | **15,878** | 8,492 | 15,879 | **+87%** | 0.0% |
+  | 5 | 4096 | 4096 | 6 | 3,234 | 3,218 | 6,451 | **6,502** | 6,446 | -0.8% | +0.1% |
+  | 6 | 6000 | 6000 | 3 | 2,325 | 2,269 | 4,593 | **4,636** | 4,589 | -0.9% | +0.1% |
+
+  | WL | v3 TTFT med | PP TTFT med | DMC TTFT med | v3 P99 ITL | PP P99 ITL | DMC P99 ITL | v3 Max ITL | PP Max ITL | DMC Max ITL |
+  |----|------------:|----------:|------------:|----------:|----------:|----------:|----------:|----------:|----------:|
+  | 1 | 436ms | **255ms** | 457ms | 222ms | 195ms | 221ms | **233ms** | 462ms | 230ms |
+  | 2 | 26,647ms | 29,513ms | 26,499ms | 222ms | 231ms | 222ms | **225ms** | **1,671ms** | 246ms |
+  | 3 | **19,218ms** | 49,091ms | 19,293ms | **223ms** | **950ms** | 223ms | **238ms** | **19,227ms** | 256ms |
+  | 4 | **35,484ms** | 132,965ms | 35,474ms | **223ms** | **1,791ms** | 223ms | **310ms** | **25,898ms** | 306ms |
+  | 5 | 51,657ms | 51,023ms | 51,810ms | 122ms | **100ms** | 122ms | 224ms | 432ms | 225ms |
+  | 6 | 107,553ms | 107,046ms | 107,724ms | 122ms | **84ms** | 122ms | **164,772ms** | 618ms | **164,925ms** |
+
+  **Key findings (N=400):**
+  1. **v3 vs PP on long prefill**: v3 dominates. At 12k: **+41% throughput**, max ITL 238ms vs 19.2s. At 16k: **+87% throughput**, max ITL 310ms vs 25.9s. HOL blocking crossover at ~8k.
+  2. **v3 ≈ DMC on all workloads**: Within ±0.1% throughput. v3 does NOT beat DMC despite having mixed CG and LPT kernel. The persistent kernel advantage doesn't show at server level.
+  3. **PP wins P99 ITL** on balanced/decode-heavy workloads (WL5/6): 84-100ms vs 122ms. Pure decode steps are lightweight.
+  4. **WL6 (6k/6k)**: System heavily overloaded at rate=3 (164s max ITL for both v3 and DMC). v3 ≈ DMC. PP has better max ITL (618ms) because decode steps don't mix with prefill.
+  5. **Input tok/s**: v3 gets 14.9k input tok/s on WL4 vs PP's 8.0k — the chunked prefill processes input ~87% faster by avoiding HOL blocking.
+
+- [ ] **Investigate why v3 doesn't beat DMC on some workloads**: Mixed CG is 100% utilized (251+ replays on WL1, 0 non-CG). Yet v3 ≈ DMC.
+  - **(a) CONFIRMED: v3 plan() is 5.82ms slower** than DMC plan() (74ms vs 68ms, +9% at 4k tokens). TwoStageHolisticPlan processes two queues + LPT sorting + dynamic scheduler metadata → extra overhead. With ~250 mixed batches per WL1: +1,455ms. CG run() savings: -600ms. **Net: +855ms ≈ 1.2% overhead**, matching observed v3 ≈ DMC.
+  - To make v3 definitively beat DMC, need to: (1) optimize plan() (skip LPT metadata when not needed? cache work assignments?), (2) reduce plan() sync overhead (the `torch.cuda.synchronize()` in plan() is 18ms), or (3) find workloads where kernel speedup > plan overhead.
+- [ ] **Support v3 LPT + split KV**: **IN PROGRESS.** Removed the static scheduler fallback. Added `dyn_partial_o_offset` per-sequence array for partial output addressing. The planner now computes per-sequence partial_o_offset and merge_indptr entries for split sequences. `tile_idx_to_work_tile` reads `dyn_partial_o_offset[bidb]`. Non-CG correctness verified. **REGRESSION**: CG wrapper (`use_cuda_graph=True`) produces wrong results with varying KV lengths. Uniform KV passes. The plan_info vector size changed (`NUM_DYN_ARGS` 10→11) which may affect CG's frozen params. Need to debug CG compatibility before merging.
+  - Files: `scheduler.cuh` (planner split-KV loop + partial_o_offset), `persistent.cuh` (read `dyn_partial_o_offset`), `batch_attention.cu` (set pointer), `batch_attention_customize_config.jinja` (Params struct).
+- [x] **Rerun all WLs with `--enable-piecewise-cuda-graph`**: PCG makes zero difference (±0.2%) for all 3 configs on all 6 workloads. v3+PCG=15,080, DMC+PCG=15,003, PP+PCG=15,016 on WL1 (vs 15,013 / 14,992 / 15,050 without PCG). Relative v3-vs-PP and v3-vs-DMC differences unchanged.
+- [x] **Ablation: v3 without mixed batch CG** (SGLANG_DISABLE_MIXED_CG=1): WL1: 15,118 tok/s (vs 15,013 with CG = -0.7%). WL2: 10,444 (vs 10,556 = +1.1%). WL3 crashed during 12k workload. **Mixed CG provides ≤1% benefit** — within noise. v3 still beats PP by 41-87% on long prefill WITHOUT mixed CG. The HOL blocking advantage is entirely from chunked prefill, not CG.
+- [ ] **Profile LPT load-balance improvement**: Script at `flashinfer/profiler/profile_lpt_balance.py`. Results with KV splitting (H100 80GB, 8 kv_heads, 32 qo_heads, head_dim=128, SM clock ~1.83 GHz):
+
+  | Workload | Static kernel | LPT kernel | Speedup | Static max wait | Static mean wait | LPT max wait | LPT mean wait | Max wait reduction |
+  |----------|-------------|----------|---------|---------------|-----------------|-------------|-------------|-------------------|
+  | 3 decode@32k + 1 prefill@4k (16 SMs) | 0.708ms | **0.657ms** | **-7.2%** | **156.8μs** | 112.7μs | **96.3μs** | 77.1μs | **-39%** |
+  | 5 decode@32k + 2 prefill@4k (32 SMs) | 1.176ms | **1.201ms** | +2.1% | **189.8μs** | 84.5μs | **161.8μs** | 94.8μs | **-15%** |
+  | 20 decode@16k + 1 prefill@4k | 0.866ms | **0.726ms** | **-16%** | (no split) | | (no split) | | — |
+  | 128 decode@2k + 1 prefill@4k | 0.778ms | **0.695ms** | **-11%** | (no split) | | (no split) | | — |
+
+  **Key findings**:
+  - On KV-splitting workloads, static scheduler has 157-190μs max wait at grid.sync. LPT reduces to 96-162μs (**-15% to -39%**).
+  - On the 3-seq workload (most imbalanced), LPT cuts max wait from 157μs to 96μs and kernel from 0.708ms to 0.657ms (-7.2%).
+  - On non-splitting workloads, LPT still gives 11-16% kernel speedup from better tile distribution (no grid.sync data because no reduction phase).
+- [x] **Find prefill-prioritized HOL blocking crossover**: Found at **8k-12k input tokens**. At 8k input: prefill-prio max ITL=1.4s. At 12k input: prefill-prio max ITL=21.6s, throughput -47% vs v3. See WL2 and WL4 results above.
+- [ ] **Investigate mixed CG utilization and memory**:
+  1. **Verify actual mixed CG hit rate**: The "1 replay out of 110 batches" measurement used only 100 prompts at rate=8. Rerun with 400 prompts at different rates and log mixed CG replay count vs total batch count per workload. Random input lengths are uniform [0, 2×mean], so half are below 4096 — some mixed batches should fit in ≤8192 tokens.
+  2. **[RESOLVED] CG overhead analysis**: At 4096 tokens: kernel=5.05ms, Python run() overhead=2.41ms, plan()=18.5ms. CG saves the **2.4ms run() overhead** (Python→C++ FFI + plan_info reconstruction + Params setup) per mixed batch. plan() is still called for CG replay (workspace update). With ~250 mixed batches per WL1, CG saves 250×2.4ms = 600ms total in a ~70s benchmark = **~0.9% savings**, matching the observed v3 vs DMC difference. Extending capture range beyond 8192 would add more CG-eligible batches but the kernel at 8k tokens is already 10ms — run() overhead becomes <24% of total. Not worth the 970MB memory per large graph.
+  3. **[RESOLVED] Mixed CG memory is expected**: First mixed graph (bs=8192) costs 970 MB because it captures a full 8192-token forward pass (Q/K/V projections, attention output, etc.). Remaining 14 graphs reuse the pool (47 MB/graph incremental). Decode CG first graph (bs=512) costs 390 MB. Graph pool IS shared correctly (`set_graph_pool_id` called). Memory is proportional to peak intermediate activation size, not a bug.
+  4. **[RESOLVED] Kernel runtime vs CG overhead**: Profiled persistent kernel at 1k-8k tokens (90% decode@kv512 + 10% prefill):
+     | Tokens | Kernel | CG saves ~50μs |
+     |--------|--------|----------------|
+     | 1024 | 0.68ms | **7.4%** |
+     | 2048 | 1.27ms | **3.9%** |
+     | 4096 | 5.05ms | 1.0% |
+     | 8192 | 10.07ms | 0.5% |
+     CG overhead savings only meaningful at ≤2048 tokens. At 4k+, kernel dominates. This explains why v3 ≈ DMC at server level — most mixed batches are 2-8k tokens where CG adds <1-4% per-kernel improvement, drowned out by other server overhead.
+
+### Summary: v3+LPT+CG Performance Landscape (H100 80GB, Qwen3-8B)
+
+**Where v3+LPT+CG wins vs prefill-prio:**
+- **Long prefill (≥8k input)**: +46% throughput at 12k, +75% at 16k. Max ITL 230ms vs 21-24s. HOL blocking crossover at ~8k input.
+- **P99 ITL consistency**: v3 is always ~221ms. Prefill-prio degrades to 721ms (12k), 1,468ms (16k).
+- **All workloads**: v3 has lower max ITL on every workload tested.
+
+**Where v3+LPT+CG wins vs default-mc:**
+- v3 ≈ DMC on all workloads (within ±0.1%). The mixed CG + LPT kernel advantage does NOT show at server level with N=400.
+- Kernel-level LPT: 3-12% speedup on mixed batches, but server-level overhead (scheduling, index computation) masks it.
+- TODO: investigate why — see task below.
+
+**DMC + piecewise CG doesn't help:**
+- Tested `--enable-piecewise-cuda-graph` with default-mc (N=200). Throughput within noise (±0.3%).
+
+**Where prefill-prio still wins:**
+- **TTFT on short-to-moderate prefills (WL1, 4k)**: 255ms vs 436ms for v3.
+- **P99 ITL on balanced/decode-heavy (WL5/6)**: 84-100ms vs 122ms. Pure decode steps are lightweight.
+
+## GPU Keepalive
 ```bash
 # 1. Start keepalive to hold GPU during setup
 bash ../VibeCUDA/scripts/gpu_keepalive.sh start
@@ -381,11 +470,10 @@ If it crashes, check server log and use `FLASHINFER_LOGLEVEL=3` for debugging.
 - No KV splitting in v3 initial impl: `num_kv_chunks=1` → write-through to `final_o` → merge/reduction is a no-op. This should work but means long KV sequences aren't parallelized.
 
 ### Issues Encountered
-1. **POD precision mismatch in `bench_mixed_attention.py`**: Fixed — `join_outputs` was returning prefill-first but reference is decode-first. Changed to `join_outputs=False` with manual d-first cat.
-2. **v2 static LPT + FlippedSchedule hurts small workloads (case 1)**: Atomic overhead + CTA alternation overhead > benefit. Dynamic scheduler should fix this by being pure compute (no extra memory traffic for pre-built tile arrays).
-3. **Tile counter reset**: Counter in `int_buffer` needs `cudaMemsetAsync` before each `run()`.
-4. **Non-contiguous sequences in dyn_qo_indptr**: Sequences in prefill/decode queues are not necessarily contiguous in the original batch. Cannot use `indptr[s+1] - indptr[s]` for qo_len. Fixed by adding separate `dyn_qo_len` array.
-5. **GPU preempted**: B200 GPU lost during v3 development. Keepalive process died, GPU was reclaimed. Cannot test compilation or correctness of v3 until GPU returns. All v3 code is committed but untested.
+1. **v2 static LPT + FlippedSchedule hurts small workloads (case 1)**: Atomic overhead + CTA alternation overhead > benefit. Dynamic scheduler should fix this by being pure compute (no extra memory traffic for pre-built tile arrays).
+2. **Tile counter reset**: Counter in `int_buffer` needs `cudaMemsetAsync` before each `run()`.
+3. **Non-contiguous sequences in dyn_qo_indptr**: Sequences in prefill/decode queues are not necessarily contiguous in the original batch. Cannot use `indptr[s+1] - indptr[s]` for qo_len. Fixed by adding separate `dyn_qo_len` array.
+4. **GPU preempted**: B200 GPU lost during v3 development. Keepalive process died, GPU was reclaimed. Cannot test compilation or correctness of v3 until GPU returns. All v3 code is committed but untested.
 
 ### Questions
 
@@ -408,3 +496,48 @@ If it crashes, check server log and use `FLASHINFER_LOGLEVEL=3` for debugging.
 
 7. **Can persistent kernel launch more than 2 CTAs/SM?**
    Answer (from user): No, 2 CTAs/SM is a shared memory constraint. Same limit as POD (which launches 128 threads/block, 256 threads/SM total).
+
+## Mixed CUDA Graph Debugging (2026-03-27 → 2026-03-28)
+
+### Summary
+
+Mixed batch CUDA graphs for the persistent kernel (BatchAttention) are **WORKING**. LPT (dynamic scheduler) is compatible with CG. 6 bugs fixed across flashinfer and sglang.
+
+### How CG works with BatchAttention
+
+CUDA graphs freeze kernel launch params (pointers, scalars). For BatchAttention:
+- **Frozen at capture**: Pointers to `int_workspace_buffer`, `float_workspace_buffer`, `kv_indices`, `kv_indptr`, `kv_len_arr`, `q`, `out`, `lse`. Also `tile_counter`, `dyn_scalars`, and all `dyn_*` per-seq metadata pointers.
+- **Updated at replay**: Data at those fixed addresses is updated by `plan()` before each `graph.replay()`. The `plan()` call runs outside the graph: writes new workspace data via `cudaMemcpyAsync`, updates `kv_indices` via triton kernel.
+- **Workspace layout invariant**: `max_total_num_works = 65536` (constant), so all offset allocations are the same regardless of batch composition. Dynamic scheduler buffers are allocated for `batch_size` entries even when `flipped_schedule=false`.
+- **LPT at runtime**: The kernel reads `dyn_scalars[0]` (num_seqs) from GPU buffer. When `plan()` detects mixed batch → `flipped_schedule=true` → writes LPT-reordered work tiles + dynamic scheduler metadata. When pure decode → `flipped_schedule=false` → writes static work tiles, `dyn_scalars[0]=0`. Kernel decides at runtime.
+
+### Bugs fixed
+
+1. **Missing kv_indices copy** (flashinfer `attention.py`): CG `plan()` copied `qo_indptr`, `kv_indptr`, `kv_len_arr` but not `kv_indices` to pre-allocated buffer → kernel read garbage page indices.
+
+2. **plan_info[-1] wrong field** (flashinfer `scheduler.cuh`): Added `dyn_scalars_offset` + `enable_cuda_graph` to the serialized plan_info vector, pushing `flipped_schedule` away from `[-1]`. Python reads `plan_info[-1]` for auto-schedule → picked `enable_cuda_graph=1` as the schedule → loaded `flipped_schedule_true` kernel for a `flipped_schedule_false` workspace → crash. Fix: append `flipped_schedule` again at end as duplicate.
+
+3. **Module auto-switch breaks CG** (flashinfer `attention.py`): At replay, `plan()` auto-selects a different `flipped_schedule` based on batch composition and switches `self.module` to a different JIT kernel binary. Graph replays the captured kernel, but `plan()` wrote workspace data for the new kernel's layout → mismatch → crash. Fix: for CG, always use `flipped_schedule=True` kernel binary (handles both paths via `dyn_scalars`), skip auto-switch.
+
+4. **Padding overflow in `_replay_prepare_mixed`** (sglang `cuda_graph_runner.py`): Mixed CG captures `bs=num_tokens` (e.g., 1024). At replay with 20 real sequences (723 tokens), code added `1024-20=1004` padding "sequences" each with `seq_lens=1, prefix_lens=0` → `qo_len=1` per padding → total Q tokens = 723 + 1004 = 1727 > captured Q buffer of 1024 → OOB read. Fix: set `prefix_lens = seq_len_fill_value` for padding → `qo_len = seq_lens - prefix_lens = 0`.
+
+5. **Shared indptr too small** (sglang `flashinfer_backend.py`): Shared `kv_indptr` (size 513 for decode max_bs=512) too small for mixed CG bs=8192 → tensor size mismatch. Fix: allocate separate `mixed_cuda_graph_kv_indptr` / `mixed_cuda_graph_qo_indptr` buffers, swap in during mixed CG capture/replay.
+
+6. **LPT CG compatibility** (flashinfer `scheduler.cuh`, `batch_attention.cu`): For CG, always allocate dynamic scheduler buffers (`if flipped_schedule || enable_cuda_graph`) and always set `tile_counter`, `dyn_scalars`, and all `dyn_*` pointers (`if flipped_schedule || enable_cuda_graph`) so they're non-null when frozen. LPT activates at runtime when `plan()` detects mixed batch.
+
+### Test coverage
+
+- **Standalone flashinfer**: 4/4 tests pass in `tests/attention/test_batch_attention_cuda_graph.py`: same-config replay, mixed capture/replay with different kv_lens, varying kv_lens (simulating generation), cross-schedule (decode capture → mixed replay).
+- **sglang server**: 200 requests at rate=8-12 across 5 workloads (4k-16k input), all pass with zero CUDA errors. Radix cache ON.
+
+### Files changed
+
+**flashinfer:**
+- `include/flashinfer/attention/scheduler.cuh`: `|| enable_cuda_graph` for dyn buffer allocation; `flipped_schedule` appended at end of plan_info vector; `NUM_SHARED_ARGS` updated.
+- `csrc/batch_attention.cu`: `|| plan_info.enable_cuda_graph` for tile_counter/dyn pointer setup.
+- `flashinfer/attention.py`: kv_indices copy in CG plan(); force `flipped_schedule=True` kernel for CG; skip auto-switch for CG.
+
+**sglang:**
+- `python/sglang/srt/model_executor/cuda_graph_runner.py`: `_replay_prepare_mixed` padding fix (prefix_lens = seq_len_fill_value); mixed CG capture/replay logic; debug sync after replay.
+- `python/sglang/srt/layers/attention/flashinfer_backend.py`: `init_mixed_cuda_graph_state` with separate indptr buffers; indptr swap in capture/replay; `mixed_cuda_graph_metadata` management.
+

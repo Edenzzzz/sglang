@@ -263,6 +263,37 @@ class CudaGraphRunner:
         self.capture_forward_mode = ForwardMode.DECODE
         self.capture_hidden_mode = CaptureHiddenMode.NULL
         self.num_tokens_per_bs = 1
+
+        # Mixed batch CUDA graph support (persistent kernel only)
+        import os
+        self.enable_mixed_cuda_graph = (
+            hasattr(model_runner, "attn_backend")
+            and hasattr(model_runner.attn_backend, "use_persistent")
+            and model_runner.attn_backend.use_persistent
+            and model_runner.server_args.enable_mixed_chunk
+            and not os.environ.get("SGLANG_DISABLE_MIXED_CG", "")
+        )
+        self.mixed_graphs = {}
+        self.mixed_output_buffers = {}
+        self._is_mixed_replay = False
+        if self.enable_mixed_cuda_graph:
+            self.mixed_capture_bs = sorted(
+                [1, 2, 4, 8, 12, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+            )
+            max_mixed_tokens = min(
+                model_runner.server_args.chunked_prefill_size or 8192, 8192
+            )
+            self.mixed_capture_bs = [
+                s for s in self.mixed_capture_bs if s <= max_mixed_tokens
+            ]
+            self.mixed_max_bs = max(self.mixed_capture_bs) if self.mixed_capture_bs else 0
+            log_info_on_rank0(
+                logger, f"Capture mixed batch cuda graph bs {self.mixed_capture_bs}"
+            )
+        else:
+            self.mixed_capture_bs = []
+            self.mixed_max_bs = 0
+
         if (
             model_runner.spec_algorithm.is_eagle()
             or model_runner.spec_algorithm.is_standalone()
@@ -286,13 +317,22 @@ class CudaGraphRunner:
         self.model_runner.attn_backend.init_cuda_graph_state(
             self.max_bs, self.max_num_token
         )
+        if self.enable_mixed_cuda_graph:
+            max_total_kv = model_runner.req_to_token_pool.size
+            self.model_runner.attn_backend.init_mixed_cuda_graph_state(
+                self.mixed_max_bs, max_total_kv
+            )
         self.seq_len_fill_value = (
             self.model_runner.attn_backend.get_cuda_graph_seq_len_fill_value()
         )
 
         self.encoder_len_fill_value = 0
+        overall_max_bs = max(self.max_bs, self.mixed_max_bs)
+        overall_max_num_token = max(self.max_num_token, self.mixed_max_bs)
+        # Logits buffer only needs decode size
+        logits_buf_num_token = self.max_num_token
         self.seq_lens_cpu = torch.full(
-            (self.max_bs,), self.seq_len_fill_value, dtype=torch.int32
+            (overall_max_bs,), self.seq_len_fill_value, dtype=torch.int32
         )
 
         if self.enable_torch_compile:
@@ -303,30 +343,34 @@ class CudaGraphRunner:
 
         # Graph inputs
         with torch.device(self.device):
-            self.input_ids = torch.zeros((self.max_num_token,), dtype=torch.int64)
-            self.req_pool_indices = torch.zeros((self.max_bs,), dtype=torch.int32)
+            self.input_ids = torch.zeros((overall_max_num_token,), dtype=torch.int64)
+            self.req_pool_indices = torch.zeros((overall_max_bs,), dtype=torch.int32)
             self.seq_lens = torch.full(
-                (self.max_bs,), self.seq_len_fill_value, dtype=torch.int32
+                (overall_max_bs,), self.seq_len_fill_value, dtype=torch.int32
             )
             self.out_cache_loc = torch.zeros(
-                (self.max_num_token,), dtype=self._cache_loc_dtype()
+                (overall_max_num_token,), dtype=self._cache_loc_dtype()
             )
-            self.positions = torch.zeros((self.max_num_token,), dtype=torch.int64)
+            self.positions = torch.zeros((overall_max_num_token,), dtype=torch.int64)
             self.mrope_positions = torch.zeros(
-                (3, self.max_num_token), dtype=torch.int64
+                (3, overall_max_num_token), dtype=torch.int64
             )
             self.num_token_non_padded = torch.zeros((1,), dtype=torch.int32)
             self.tbo_plugin = TboCudaGraphRunnerPlugin()
+            if self.enable_mixed_cuda_graph:
+                self.prefix_lens = torch.zeros(
+                    (overall_max_bs,), dtype=torch.int32
+                )
 
             # pipeline parallelism
             if self.pp_size > 1:
                 self.pp_proxy_tensors = {
                     "hidden_states": torch.zeros(
-                        (self.max_bs, self.model_runner.model_config.hidden_size),
+                        (overall_max_bs, self.model_runner.model_config.hidden_size),
                         dtype=self.model_runner.model_config.dtype,
                     ),
                     "residual": torch.zeros(
-                        (self.max_bs, self.model_runner.model_config.hidden_size),
+                        (overall_max_bs, self.model_runner.model_config.hidden_size),
                         dtype=self.model_runner.model_config.dtype,
                     ),
                 }
@@ -338,7 +382,7 @@ class CudaGraphRunner:
             if self.is_encoder_decoder:
                 # NOTE: encoder_lens can influence the full_text_row_masked_out_mask tensor when doing mixed batch
                 self.encoder_lens = torch.full(
-                    (self.max_bs,), self.encoder_len_fill_value, dtype=torch.int32
+                    (overall_max_bs,), self.encoder_len_fill_value, dtype=torch.int32
                 )
             else:
                 self.encoder_lens = None
@@ -370,7 +414,7 @@ class CudaGraphRunner:
                 device=self.device,
             )
             self.next_token_logits_buffer = torch.zeros(
-                (self.max_num_token, self.model_runner.model_config.vocab_size),
+                (logits_buf_num_token, self.model_runner.model_config.vocab_size),
                 dtype=torch.float,
                 device=self.device,
             )
@@ -388,6 +432,17 @@ class CudaGraphRunner:
         return torch.int64
 
     def can_run(self, forward_batch: ForwardBatch):
+        if forward_batch.forward_mode.is_mixed():
+            if not self.mixed_graphs:
+                return False
+            num_tokens = forward_batch.input_ids.shape[0]
+            is_bs_supported = (
+                num_tokens in self.mixed_graphs
+                if self.disable_padding
+                else num_tokens <= self.mixed_max_bs
+            )
+            return is_bs_supported
+
         if self.require_mlp_tp_gather:
             cuda_graph_bs = (
                 max(forward_batch.global_num_tokens_cpu) // self.num_tokens_per_bs
@@ -503,6 +558,35 @@ class CudaGraphRunner:
 
                     # Save gemlite cache after each capture
                     save_gemlite_cache()
+
+                if self.enable_mixed_cuda_graph and self.mixed_capture_bs:
+                    mixed_range = (
+                        tqdm.tqdm(list(reversed(self.mixed_capture_bs)))
+                        if get_tensor_model_parallel_rank() == 0
+                        else reversed(self.mixed_capture_bs)
+                    )
+                    for num_tokens in mixed_range:
+                        if get_tensor_model_parallel_rank() == 0:
+                            avail_mem = get_available_gpu_memory(
+                                self.model_runner.device,
+                                self.model_runner.gpu_id,
+                                empty_cache=False,
+                            )
+                            mixed_range.set_description(
+                                f"Capturing mixed batches ({num_tokens=} {avail_mem=:.2f} GB)"
+                            )
+                        with patch_model(
+                            self.model_runner.model,
+                            False,
+                            num_tokens=num_tokens,
+                            tp_group=self.model_runner.tp_group,
+                        ) as forward:
+                            graph, output_buffers = (
+                                self.capture_one_mixed_batch(num_tokens, forward)
+                            )
+                            self.mixed_graphs[num_tokens] = graph
+                            self.mixed_output_buffers[num_tokens] = output_buffers
+                        save_gemlite_cache()
 
         if self.enable_profile_cuda_graph:
             torch.cuda.memory._dump_snapshot(f"cuda_graph_runner_memory_usage.pickle")
@@ -698,6 +782,91 @@ class CudaGraphRunner:
 
         return graph, out
 
+    def capture_one_mixed_batch(self, bs: int, forward: Callable):
+        graph = self._create_device_graph()
+        stream = self.stream
+
+        # Graph inputs
+        input_ids = self.input_ids[:bs]
+        req_pool_indices = self.req_pool_indices[:bs]
+        seq_lens = self.seq_lens[:bs]
+        seq_lens_cpu = self.seq_lens_cpu[:bs]
+        out_cache_loc = self.out_cache_loc[:bs]
+        positions = self.positions[:bs]
+        mrope_positions = self.mrope_positions[:, :bs]
+        extend_seq_lens = torch.ones(bs, dtype=torch.int32, device=self.device)
+        prefix_lens = self.prefix_lens[:bs]
+        self.num_token_non_padded[...] = bs
+
+        forward_batch = ForwardBatch(
+            forward_mode=ForwardMode.MIXED,
+            batch_size=bs,
+            input_ids=input_ids,
+            req_pool_indices=req_pool_indices,
+            seq_lens=seq_lens,
+            seq_lens_cpu=seq_lens_cpu,
+            next_token_logits_buffer=None,
+            orig_seq_lens=seq_lens,
+            req_to_token_pool=self.model_runner.req_to_token_pool,
+            token_to_kv_pool=self.model_runner.token_to_kv_pool,
+            attn_backend=self.model_runner.attn_backend,
+            out_cache_loc=out_cache_loc,
+            seq_lens_sum=seq_lens.sum().item(),
+            encoder_lens=None,
+            return_logprob=False,
+            positions=positions,
+            global_num_tokens_gpu=self.global_num_tokens_gpu,
+            global_num_tokens_for_logprob_gpu=self.global_num_tokens_for_logprob_gpu,
+            mrope_positions=mrope_positions,
+            spec_algorithm=self.model_runner.spec_algorithm,
+            spec_info=None,
+            capture_hidden_mode=CaptureHiddenMode.FULL,
+            num_token_non_padded=self.num_token_non_padded,
+            global_forward_mode=ForwardMode.MIXED,
+            extend_seq_lens=extend_seq_lens,
+            extend_prefix_lens=prefix_lens,
+            decoding_bs=bs,
+        )
+
+        # Attention backend
+        self.model_runner.attn_backend.init_forward_metadata_capture_cuda_graph(
+            bs,
+            bs,
+            req_pool_indices,
+            seq_lens,
+            None,
+            ForwardMode.MIXED,
+            None,
+        )
+
+        # Run and capture
+        def run_once():
+            forward_batch.dp_local_start_pos = forward_batch.dp_local_num_tokens = None
+            set_dp_buffer_len(None, bs)
+            set_is_extend_in_batch(False)
+            logits_output = forward(
+                input_ids,
+                forward_batch.positions,
+                forward_batch,
+            )
+            return logits_output
+
+        self.deepep_adapter.capture(is_extend_in_batch=False)
+
+        for _ in range(2):
+            self.device_module.synchronize()
+            self.model_runner.tp_group.barrier()
+            run_once()
+
+        if get_global_graph_memory_pool() is None:
+            set_global_graph_memory_pool(self.device_module.graph_pool_handle())
+        set_graph_pool_id(get_global_graph_memory_pool())
+        out = self._capture_graph(
+            graph, get_global_graph_memory_pool(), stream, run_once
+        )
+
+        return graph, out
+
     def recapture_if_needed(self, forward_batch: ForwardBatch):
 
         # If the required capture_hidden_mode changes, we need to recapture the graph
@@ -735,6 +904,9 @@ class CudaGraphRunner:
         forward_batch: ForwardBatch,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ):
+        if forward_batch.forward_mode.is_mixed():
+            return self._replay_prepare_mixed(forward_batch)
+
         self.recapture_if_needed(forward_batch)
 
         raw_bs = forward_batch.batch_size
@@ -819,6 +991,74 @@ class CudaGraphRunner:
         self.raw_bs = raw_bs
         self.raw_num_token = raw_num_token
         self.bs = bs
+        self._is_mixed_replay = False
+
+    def _replay_prepare_mixed(self, forward_batch: ForwardBatch):
+        raw_num_token = forward_batch.input_ids.shape[0]
+        raw_bs = forward_batch.batch_size  # actual number of sequences
+        index = bisect.bisect_left(self.mixed_capture_bs, raw_num_token)
+        bs = self.mixed_capture_bs[index]
+
+        if bs != raw_num_token:
+            self.seq_lens.fill_(self.seq_len_fill_value)
+            self.out_cache_loc.zero_()
+            if hasattr(self, 'prefix_lens'):
+                self.prefix_lens.zero_()
+            # Fill padding req_pool_indices with first real request's slot.
+            # Padding sequences have seq_len=1, so the kernel reads 1 KV page
+            # from this slot. Using a live request's slot guarantees the page
+            # index is valid (freed slots may contain garbage page indices).
+            self.req_pool_indices[:] = forward_batch.req_pool_indices[0]
+
+        # Copy real data (token-indexed vs sequence-indexed)
+        self.input_ids[:raw_num_token].copy_(forward_batch.input_ids)
+        self.req_pool_indices[:raw_bs].copy_(forward_batch.req_pool_indices)
+        self.seq_lens[:raw_bs].copy_(forward_batch.seq_lens)
+        self.out_cache_loc[:raw_num_token].copy_(forward_batch.out_cache_loc)
+        self.positions[:raw_num_token].copy_(forward_batch.positions)
+
+        seq_lens_cpu = None
+        if forward_batch.seq_lens_cpu is not None:
+            if bs != raw_num_token:
+                self.seq_lens_cpu.fill_(self.seq_len_fill_value)
+            self.seq_lens_cpu[:raw_bs].copy_(forward_batch.seq_lens_cpu)
+            seq_lens_cpu = self.seq_lens_cpu[:bs]
+
+        if forward_batch.mrope_positions is not None:
+            self.mrope_positions[:, :raw_num_token].copy_(forward_batch.mrope_positions)
+
+        # Copy prefix_lens for attention metadata.
+        # Padding sequences must have prefix_lens = seq_lens so that
+        # extend_lens = seq_lens - prefix_lens = 0 (no extra Q tokens).
+        # Otherwise, padding with qo_len=1 each adds (bs - raw_bs) tokens
+        # that overflow the captured Q buffer (which only has bs tokens total).
+        if hasattr(self, 'prefix_lens') and forward_batch.extend_prefix_lens is not None:
+            self.prefix_lens[:raw_bs].copy_(forward_batch.extend_prefix_lens)
+            self.prefix_lens[raw_bs:bs] = self.seq_len_fill_value  # match seq_lens → qo_len=0
+
+        # Attention backend: padded_seq_lens_sum accounts for padding sequences
+        padded_seq_lens_sum = (
+            forward_batch.seq_lens_sum
+            + (bs - raw_bs) * self.seq_len_fill_value
+        )
+        self.model_runner.attn_backend.init_forward_metadata_replay_cuda_graph(
+            bs,
+            self.req_pool_indices[:bs],
+            self.seq_lens[:bs],
+            padded_seq_lens_sum,
+            None,
+            ForwardMode.MIXED,
+            None,
+            seq_lens_cpu=seq_lens_cpu,
+            prefix_lens=self.prefix_lens[:bs] if hasattr(self, 'prefix_lens') else None,
+            num_real_seq=raw_bs,
+        )
+
+        # Store fields
+        self.raw_bs = raw_bs
+        self.raw_num_token = raw_num_token
+        self.bs = bs
+        self._is_mixed_replay = True
 
     def replay(
         self,
@@ -836,21 +1076,56 @@ class CudaGraphRunner:
             self.positions[: self.raw_num_token].copy_(forward_batch.positions)
 
         # Replay
-        self.graphs[self.bs].replay()
-
-        output = self.output_buffers[self.bs]
-        if isinstance(output, LogitsProcessorOutput):
+        if self._is_mixed_replay:
+            if not hasattr(self, '_mixed_replay_count'):
+                self._mixed_replay_count = 0
+                self._decode_replay_count = 0
+                self._non_cg_mixed_count = 0
+            self._mixed_replay_count += 1
+            if self._mixed_replay_count % 50 == 1:
+                import sys
+                print(f"[MIXED CG] replay #{self._mixed_replay_count} bs={self.bs} raw_tokens={self.raw_num_token} raw_bs={self.raw_bs} (decode_cg: {self._decode_replay_count}, non_cg_mixed: {self._non_cg_mixed_count})", file=sys.stderr, flush=True)
+            self.mixed_graphs[self.bs].replay()
+            try:
+                torch.cuda.synchronize()
+            except Exception as e:
+                import sys
+                print(f"[MIXED CG CRASH] bs={self.bs} raw_bs={self.raw_bs} raw_num_token={self.raw_num_token}", file=sys.stderr, flush=True)
+                raise
+            output = self.mixed_output_buffers[self.bs]
+            assert isinstance(output, LogitsProcessorOutput)
+            hidden_states = output.hidden_states[: self.raw_num_token]
+            last_index = (
+                torch.cumsum(forward_batch.extend_seq_lens, dim=0) - 1
+            )
+            pruned_hidden = hidden_states[last_index]
+            lm_head = self.model_runner.model.lm_head
+            next_token_logits = torch.matmul(
+                pruned_hidden.to(lm_head.weight.dtype),
+                lm_head.weight.T,
+            )
             return LogitsProcessorOutput(
-                next_token_logits=output.next_token_logits[: self.raw_num_token],
-                hidden_states=(
-                    output.hidden_states[: self.raw_num_token]
-                    if output.hidden_states is not None
-                    else None
-                ),
+                next_token_logits=next_token_logits,
+                hidden_states=hidden_states,
             )
         else:
-            assert isinstance(output, PPProxyTensors)
-            return PPProxyTensors({k: v[: self.bs] for k, v in output.tensors.items()})
+            if hasattr(self, '_decode_replay_count'):
+                self._decode_replay_count += 1
+            self.graphs[self.bs].replay()
+
+            output = self.output_buffers[self.bs]
+            if isinstance(output, LogitsProcessorOutput):
+                return LogitsProcessorOutput(
+                    next_token_logits=output.next_token_logits[: self.raw_num_token],
+                    hidden_states=(
+                        output.hidden_states[: self.raw_num_token]
+                        if output.hidden_states is not None
+                        else None
+                    ),
+                )
+            else:
+                assert isinstance(output, PPProxyTensors)
+                return PPProxyTensors({k: v[: self.bs] for k, v in output.tensors.items()})
 
     def get_spec_info(self, num_tokens: int):
         spec_info = None

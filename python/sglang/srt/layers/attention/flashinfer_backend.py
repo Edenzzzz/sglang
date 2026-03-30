@@ -642,6 +642,7 @@ class FlashInferAttnBackend(AttentionBackend):
         self, max_mixed_bs: int, max_total_kv_tokens: int
     ):
         """Initialize state for mixed batch (persistent kernel) CUDA graphs."""
+        self.mixed_cuda_graph_max_bs = max_mixed_bs
         kv_indices_size = max(max_total_kv_tokens, max_mixed_bs * 256)
         self.mixed_cuda_graph_kv_indices = [
             torch.zeros(kv_indices_size, dtype=torch.int32, device="cuda")
@@ -1838,6 +1839,11 @@ class FlashInferIndicesUpdaterPrefill:
 
         if self.attn_backend.use_persistent and isinstance(wrapper_paged, BatchAttention):
             flipped = None if not self.attn_backend.no_flipped_schedule else False
+            # Enable CUDA graph mode for persistent kernel — sglang uses CG for
+            # all BatchAttention calls. This forces invariant workspace layout so
+            # capture and replay have consistent offsets regardless of batch composition.
+            # For CG: pass max_bs to force invariant workspace layout across capture/replay.
+            max_bs = getattr(self.attn_backend, 'mixed_cuda_graph_max_bs', 0)
             wrapper_paged.plan(
                 qo_indptr,
                 kv_indptr,
@@ -1852,6 +1858,8 @@ class FlashInferIndicesUpdaterPrefill:
                 kv_data_type=self.data_type,
                 causal=causal,
                 flipped_schedule=flipped,
+                enable_cuda_graph=(max_bs > 0),
+                cuda_graph_max_bs=max_bs,
             )
         elif self.attn_backend.use_persistent:
             wrapper_paged.plan(

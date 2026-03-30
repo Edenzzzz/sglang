@@ -101,12 +101,12 @@ Full output saved to `tasks/debug_kernel_server_perf/profile_logs/bench_results/
 | Persistent (static) | 13,369 | 2,709 | 4,876 | 13,208 | 13,555 | 27 | 131 | 504 | 714 |
 | Default-mixed-chunk | 13,249 | 2,685 | 4,813 | 14,005 | 14,299 | 27 | 133 | 495 | 664 |
 | POD | 13,199 | 2,675 | 6,148 | 14,403 | 14,707 | 26 | 158 | 525 | 611 |
-| Persistent v3 (dynamic) | 13,059 | 2,646 | 4,986 | 14,693 | 15,164 | 26 | 125 | 579 | 792 |
+| Persistent LPT (dynamic) | 13,059 | 2,646 | 4,986 | 14,693 | 15,164 | 26 | 125 | 579 | 792 |
 
 **Workload 2: --random-input 6500 --random-output 7500 --request-rate 8 --num-prompt 400**
 | Config | Total tok/s | Out tok/s | TTFT med (s) | TTFT P95 (s) | TTFT P99 (s) | ITL med (ms) | ITL P95 | ITL P99 | Max ITL (s) |
 |--------|-----------|----------|------------|------------|------------|------------|---------|---------|-----------|
-| **Persistent v3 (dynamic)** | **4,104** | **2,172** | **189** | **451** | **487** | **26** | **27** | **83** | 472 |
+| **Persistent LPT (dynamic)** | **4,104** | **2,172** | **189** | **451** | **487** | **26** | **27** | **83** | 472 |
 | Persistent (static) | 4,072 | 2,155 | 196 | 457 | 493 | 26 | 28 | 89 | 502 |
 | Prefill-prioritized | 4,046 | 2,141 | 191 | 464 | 505 | 27 | 28 | 52 | 503 |
 | POD | 3,995 | 2,114 | 199 | 476 | 510 | 27 | 29 | 104 | 512 |
@@ -150,8 +150,8 @@ Currently the persistent kernel uses `TwoStageHolisticPlan` in `../flashinfer/in
 - Precision must match (note: `o_batch_pod` has a precision issue likely due to `join_outputs` p/d order mismatch — fix that)
 
 ### Baseline Benchmark Results (B200, flashinfer 0.5.2)
-| Case | Prefill | Decode | Persistent (ms) | POD (ms) | POD speedup |
-|------|---------|--------|-----------------|----------|-------------|
+| Case | Prefill | Decode | Static Persistent (ms) | POD (ms) | POD speedup |
+|------|---------|--------|----------------------|----------|-------------|
 | 1 | 512x1 | 1x100, kv=2048 | 0.28 | 0.17 | 1.69x |
 | 2 | 1536x1 | 1x100, kv=2048 | 0.48 | 0.21 | 2.33x |
 | 3 | 2048x2 | 1x100, kv=2048 | 0.80 | 0.38 | 2.09x |
@@ -249,7 +249,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - Implemented `tile_idx_to_work_tile()` with batch-find while loop + L2-aware LPT mapping
 - Fixed critical KV splitting bug: `dyn_len_kv_chunk` was too small, causing `num_kv_chunks > 1` and partial output overwrites. Fixed by setting `dyn_len_kv_chunk = INT_MAX` (no KV splitting).
 - **Results (B200, driver 580, flashinfer 0.5.2)**:
-  | Case | Persistent v3 | POD | Speedup |
+  | Case | Persistent LPT | POD | Speedup |
   |------|--------------|-----|---------|
   | 1 | **0.18ms** | 0.17ms | 1.06x |
   | 2 | **0.22ms** | 0.21ms | 1.06x |
@@ -262,7 +262,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - NOTE: earlier results used `np.mean` for persistent (inflated by outliers) — fixed to `np.median` to match POD measurement.
 
 **v3 + uniform_num_m_blocks fast path (latest)**:
-  | Case | Persistent v3 | POD | Ratio |
+  | Case | Persistent LPT | POD | Ratio |
   |------|--------------|-----|-------|
   | 1 | 0.17ms | 0.17ms | 1.03x (tie, 6us cooperative launch overhead) |
   | 2 | 0.21ms | 0.21ms | 1.02x (tie) |
@@ -304,7 +304,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - [x] Run sglang server benchmark: Qwen3-8B, --random-input 6500 --random-output 7500 --request-rate 8 --num-prompt 400
 - [x] Run full 5-config comparison with **P95/P99 TTFT and ITL** on H100 80GB with `--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`. Key surprise: Prefill-prioritized has lowest P99 ITL (not highest as expected).
 - [x] **Investigate 2x persistent-vs-POD gap in baseline benchmarks**: **RESOLVED.** The 2x gap was between the **static** persistent scheduler (baseline) and POD. The v3 dynamic scheduler closes this gap entirely:
-  | Case | Persistent v3 (ms) | POD (ms) | POD speedup | Old static gap |
+  | Case | Persistent LPT (ms) | POD (ms) | LPT speedup | Old static gap |
   |------|-------------------|---------|-------------|---------------|
   | 1 (512×1) | 0.31 | 0.30 | 1.01x | was 1.69x |
   | 2 (1536×1) | 0.35 | 0.32 | 1.09x | was 2.33x |
@@ -405,7 +405,9 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   **Key findings**:
   - On KV-splitting workloads, static scheduler has 157-190μs max wait at grid.sync. LPT reduces to 96-162μs (**-15% to -39%**).
   - On the 3-seq workload (most imbalanced), LPT cuts max wait from 157μs to 96μs and kernel from 0.708ms to 0.657ms (-7.2%).
-  - On non-splitting workloads, LPT still gives 11-16% kernel speedup from better tile distribution (no grid.sync data because no reduction phase).
+  - On non-splitting workloads, LPT still gives 11-16% kernel speedup from better tile distribution.
+  - **BUG**: "(no split)" entries show 0 SMs but grid.sync() ALWAYS exists (`persistent_template.cuh:104`). The profiler only captures reduction events which are no-op without split KV. Need to add profiler event around grid.sync() itself or measure Runner end → post-sync time for ALL workloads. See task #47.
+- [ ] **GPU-side LPT plan kernel**: If v3 plan() overhead (~6ms) is the main reason v3 doesn't beat DMC in real serving, implement the plan function as a GPU kernel to overlap with prior compute. Reference: `include/flashinfer/attention/blackwell/plan.cuh` in flashinfer shows how GPU-side plan is implemented. NOTE: only implement for the LPT dynamic scheduler plan — the static scheduler plan is not the bottleneck and doesn't need GPU-side implementation. Steps: (1) Confirm via nsys that plan() CPU time is on the critical path (not overlapped with prior GPU work), (2) Port LPT per-sequence metadata + tile counting to a CUDA kernel, (3) Compare server throughput before/after.
 - [x] **Find prefill-prioritized HOL blocking crossover**: Found at **8k-12k input tokens**. At 8k input: prefill-prio max ITL=1.4s. At 12k input: prefill-prio max ITL=21.6s, throughput -47% vs v3. See WL2 and WL4 results above.
 - [ ] **Investigate mixed CG utilization and memory**:
   1. **Verify actual mixed CG hit rate**: The "1 replay out of 110 batches" measurement used only 100 prompts at rate=8. Rerun with 400 prompts at different rates and log mixed CG replay count vs total batch count per workload. Random input lengths are uniform [0, 2×mean], so half are below 4096 — some mixed batches should fit in ≤8192 tokens.

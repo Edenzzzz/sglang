@@ -14,6 +14,9 @@
 - Write results directly into the relevant `.md` file under the TODO bullet, not into separate files.
 - When asked to fix/reinvestigate a bullet, you should **uncheck that box** to properly track the progress.
 - When encountering problems in completing a bullet, you should try to fix it and **investigate every possible cause to the bottom**, instead of throwing a few hypotheses and checking that box. Strictly follow the task description and the user's intention.
+- **IMPORTANT**: Do not stop on things like "This is getting very deep/I will need to dig deeper". Just **continue digging until you finish everything on the task list**. However, you are allowed to commit and push intermediate states.
+- **Overnight mode**: When the user says "overnight task" or leaves you to work autonomously, you MUST work through ALL pending tasks in sequence without waiting for user feedback. After finishing each task, immediately move to the next one. Only stop when all tasks are completed or you hit a hard blocker that truly requires user input (e.g., missing credentials, ambiguous requirements). Running out of ideas is NOT a valid reason to stop — try harder.
+- **Task list discipline**: Always keep the task list (`TaskList`) up to date. Mark tasks `in_progress` when starting, `completed` when done. Check for pending tasks after completing each one. The task list is your TODO — if it has pending items, you have work to do.
 
 # Implementation Standards
 

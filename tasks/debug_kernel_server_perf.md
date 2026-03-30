@@ -389,8 +389,16 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - [ ] **Investigate why v3 doesn't beat DMC on some workloads**: Mixed CG is 100% utilized (251+ replays on WL1, 0 non-CG). Yet v3 ≈ DMC.
   - **(a) CONFIRMED: v3 plan() is 5.82ms slower** than DMC plan() (74ms vs 68ms, +9% at 4k tokens). TwoStageHolisticPlan processes two queues + LPT sorting + dynamic scheduler metadata → extra overhead. With ~250 mixed batches per WL1: +1,455ms. CG run() savings: -600ms. **Net: +855ms ≈ 1.2% overhead**, matching observed v3 ≈ DMC.
   - To make v3 definitively beat DMC, need to: (1) optimize plan() (skip LPT metadata when not needed? cache work assignments?), (2) reduce plan() sync overhead (the `torch.cuda.synchronize()` in plan() is 18ms), or (3) find workloads where kernel speedup > plan overhead.
-- [ ] **Support v3 LPT + split KV**: **IN PROGRESS.** Removed the static scheduler fallback. Added `dyn_partial_o_offset` per-sequence array for partial output addressing. The planner now computes per-sequence partial_o_offset and merge_indptr entries for split sequences. `tile_idx_to_work_tile` reads `dyn_partial_o_offset[bidb]`. Non-CG correctness verified. **REGRESSION**: CG wrapper (`use_cuda_graph=True`) produces wrong results with varying KV lengths. Uniform KV passes. The plan_info vector size changed (`NUM_DYN_ARGS` 10→11) which may affect CG's frozen params. Need to debug CG compatibility before merging.
-  - Files: `scheduler.cuh` (planner split-KV loop + partial_o_offset), `persistent.cuh` (read `dyn_partial_o_offset`), `batch_attention.cu` (set pointer), `batch_attention_customize_config.jinja` (Params struct).
+- [x] **LPT scheduler fixes (merged loops, CG compat, correctness)**: Major refactor complete:
+  1. Removed `|| enable_cuda_graph` — dynamic scheduler only with `flipped_schedule`
+  2. Merged two separate for-task loops into single loop with if/else (dynamic vs static)
+  3. Fixed causal kv_end clamping in `tile_idx_to_work_tile` (prevents unnecessary KV tile processing when kv_len < q_len)
+  4. Dynamic scheduler does NOT do split-KV (kv_chunk_idx always 0 since kv_start=0 — needs per-tile kv_start for proper split)
+  5. CG forces `flipped_schedule=true` in C++ plan (kernel binary always flipped=true for CG)
+  6. Zero work_indptr for dynamic tasks prevents CG deadlock when static fallback reads garbage
+  7. Added `enable_cuda_graph` + `cuda_graph_max_bs` to `plan()` for sglang CG workspace invariance
+  8. All 5 standalone flashinfer test groups pass. Server works with `SGLANG_DISABLE_MIXED_CG=1` (WL1: 15,131 tok/s)
+  - **KNOWN ISSUE**: Mixed CG 2nd replay crashes (pre-existing bug, not from LPT changes). Workaround: `SGLANG_DISABLE_MIXED_CG=1`.
 - [x] **Rerun all WLs with `--enable-piecewise-cuda-graph`**: PCG makes zero difference (±0.2%) for all 3 configs on all 6 workloads. v3+PCG=15,080, DMC+PCG=15,003, PP+PCG=15,016 on WL1 (vs 15,013 / 14,992 / 15,050 without PCG). Relative v3-vs-PP and v3-vs-DMC differences unchanged.
 - [x] **Ablation: v3 without mixed batch CG** (SGLANG_DISABLE_MIXED_CG=1): WL1: 15,118 tok/s (vs 15,013 with CG = -0.7%). WL2: 10,444 (vs 10,556 = +1.1%). WL3 crashed during 12k workload. **Mixed CG provides ≤1% benefit** — within noise. v3 still beats PP by 41-87% on long prefill WITHOUT mixed CG. The HOL blocking advantage is entirely from chunked prefill, not CG.
 - [ ] **Profile LPT load-balance improvement**: Script at `flashinfer/profiler/profile_lpt_balance.py`. Results with KV splitting (H100 80GB, 8 kv_heads, 32 qo_heads, head_dim=128, SM clock ~1.83 GHz):

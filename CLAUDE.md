@@ -22,6 +22,7 @@
 
 - Do NOT add fallbacks or shortcuts that disable a feature for "complex" cases. If a feature is requested, implement it fully. If a reference implementation exists (e.g., FA3), study it and follow the same approach rather than falling back to a simpler path.
 - Do NOT add comments like "complex", "too hard", or "not supported yet" as justification for skipping functionality. Implement it or clearly explain what's blocking with a concrete TODO.
+- Do NOT write self-reminder comments after fixing or deleting code (e.g., "// CG is orthogonal — ..."). Comments should explain the code, not document your thought process or lessons learned. Use memory files for that.
 
 # Commits
 

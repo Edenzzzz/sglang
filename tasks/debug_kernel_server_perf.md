@@ -306,14 +306,14 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - [x] **Investigate 2x persistent-vs-POD gap in baseline benchmarks**: **RESOLVED.** The 2x gap was between the **static** persistent scheduler (baseline) and POD. The v3 dynamic scheduler closes this gap entirely:
   | Case | Persistent LPT (ms) | POD (ms) | LPT speedup | Old static gap |
   |------|-------------------|---------|-------------|---------------|
-  | 1 (512×1) | 0.31 | 0.30 | 1.01x | was 1.69x |
-  | 2 (1536×1) | 0.35 | 0.32 | 1.09x | was 2.33x |
-  | 3 (2048×2) | 0.47 | 0.44 | 1.06x | was 2.09x |
-  | 4 (2048×1) | 0.36 | 0.34 | 1.07x | was 2.19x |
-  | 5 (4096×1, kv4096) | **0.80** | 0.82 | **0.98x** | was 2.01x |
-  | 6 (4096×1, kv8192) | **1.26** | 1.29 | **0.98x** | was 2.09x |
-  | 7 (6000×1, kv8192) | **1.83** | 1.87 | **0.98x** | was 0.91x |
-  v3 matches POD on small cases (1-4, ≤1.09x gap) and **beats POD on large cases (5-7)**. This aligns with the PR author's reported max 1.26x speedup ([flashinfer#2079](https://github.com/flashinfer-ai/flashinfer/pull/2079)). Run on H100 80GB (mlx worker 867056).
+  | 1 (512×1) | 0.526 | 0.500 | -5.1% | was 1.69x |
+  | 2 (1536×1) | 0.613 | 0.632 | **+2.9%** | was 2.33x |
+  | 3 (2048×2) | 0.479 | 0.520 | **+7.9%** | was 2.09x |
+  | 4 (2048×1) | 0.378 | 0.425 | **+11.0%** | was 2.19x |
+  | 5 (4096×1, kv4096) | **0.825** | 0.973 | **+15.2%** | was 2.01x |
+  | 6 (4096×1, kv8192) | **1.242** | 1.511 | **+17.8%** | was 2.09x |
+  | 7 (6000×1, kv8192) | **1.910** | 2.190 | **+12.8%** | was 0.91x |
+  LPT speedup = (POD - LPT) / POD. Measured with `bench_gpu_time` (warmup + L2 flush). LPT beats POD on 6/7 cases, biggest wins on large KV (Cases 4-7, +11-18%). Case 1 is a slight regression (-5%) from LPT tile-fetching overhead dominating short decode. Confirmed zero regression vs pre-split-KV code (within 0.2%). Run on H100 80GB.
 - [x] **Test FA3's tile fetching pattern**: Tested twice — v1 (naive blockIdx.y + gridDim.y offset) and v2 (with guard: only use FA3 pattern when `dyn_total_tiles >= gridDim.y`). Both are worse than sequential atomicAdd:
   - v2 results (with guard): cases 2-4 are 10-19% slower (0.39 vs 0.35, 0.43 vs 0.36ms). Cases 5-7 similar or slightly worse.
   - Also shows static vs flipped persistent: static is consistently ~20% slower than flipped on cases 5-7 (0.99 vs 0.84, 1.56 vs 1.35, 2.25 vs 1.90ms), confirming FlippedSchedule benefit on large workloads.

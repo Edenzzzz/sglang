@@ -427,16 +427,18 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   - Grid.sync max wait reduction up to 12.76x on split-KV workloads.
   - Agent and prefill-heavy: tied (no regression), except prefill-heavy sync regressed (0.49x).
 
-  **Split-KV A/B comparison** (split enabled vs disabled within LPT, 2x kv_limit). Speedup = nosplit_time / split_time (>1x = split faster).
+  **Split-KV A/B comparison** (split enabled vs disabled within LPT, 2x kv_limit). Speedup = (nosplit - split) / nosplit.
   | Case | Split | No-split | Split speedup |
   |------|-------|----------|---------|
-  | 3d@64k+1p@2k | **0.681ms** | 1.659ms | **2.44x** |
-  | 5d@32k+1p@4k | 1.228ms | 1.223ms | 1.00x |
-  | 10d@16k+1p@4k | 1.298ms | 1.303ms | 1.00x |
-  | 20d@8k+2p@2k | 0.932ms | 0.931ms | 1.00x |
-  | 100d@2k+2p@2k | 1.036ms | 1.030ms | 1.00x |
+  | 3d@64k+1p@2k | **0.681ms** | 1.659ms | **59%** |
+  | 5d@32k+1p@4k | 1.228ms | 1.223ms | 0% |
+  | 10d@16k+1p@4k | 1.298ms | 1.303ms | 0% |
+  | 20d@8k+2p@2k | 0.932ms | 0.931ms | 0% |
+  | 100d@2k+2p@2k | 1.036ms | 1.030ms | 0% |
 
-  **Conclusion**: Split-KV with 2x kv_limit gives 2.44x speedup on severe imbalance (3d@64k) and zero regression on balanced workloads. No overhead when split not triggered (INT_MAX sentinel skips all split-KV code).
+  **Conclusion**: Split-KV with 2x kv_limit gives 59% speedup on severe imbalance (3d@64k) and zero regression on balanced workloads. No overhead when split not triggered (INT_MAX sentinel skips all split-KV code).
+  
+  **Remaining overhead**: Binary size +12% (1483KB→1659KB) from split-KV code paths. NCU shows identical kernel execution (same instructions, registers, occupancy). ~5% regression in CUDA event timing is from larger params struct and icache pressure. Cannot be reduced without removing split-KV support.
 
 - [x] **GPU-side LPT plan kernel**: **NOT NEEDED**. Plan() C++ overhead is only 0.15ms p50 with pre-allocated GPU tensors. The 28-64ms measured earlier was Python `.cuda()` allocation overhead. Sglang pre-allocates tensors, so real plan overhead ≈ 0.15ms — negligible vs 1-5ms kernel time.
 - [x] **Find prefill-prioritized HOL blocking crossover**: Found at **8k-12k input tokens**. At 8k input: prefill-prio max ITL=1.4s. At 12k input: prefill-prio max ITL=21.6s, throughput -47% vs v3. See WL2 and WL4 results above.

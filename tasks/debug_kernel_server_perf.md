@@ -410,32 +410,31 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - [x] **Fix mixed CG 2nd replay crash**: Was OOM, not a code bug. `mem-fraction-static=0.85` + mixed CG graphs consume too much memory → OOM manifests as "illegal memory access". With `mem-fraction-static=0.75`, server runs stable (6 mixed CG replays, 0 crashes, WL1: 13,699 tok/s). Server crashes with illegal memory access on the 2nd mixed CG `graph.replay()`. 1st replay succeeds. NOT from the attention kernel (standalone flashinfer CG tests pass). Likely from some other model component's CG replay. Workaround: `SGLANG_DISABLE_MIXED_CG=1` (same throughput, mixed CG only saves ~1%). Debug: run with `compute-sanitizer --tool memcheck` to find exact kernel + address.
 - [x] **Rerun all WLs with `--enable-piecewise-cuda-graph`**: PCG makes zero difference (±0.2%) for all 3 configs on all 6 workloads. v3+PCG=15,080, DMC+PCG=15,003, PP+PCG=15,016 on WL1 (vs 15,013 / 14,992 / 15,050 without PCG). Relative v3-vs-PP and v3-vs-DMC differences unchanged.
 - [x] **Ablation: v3 without mixed batch CG** (SGLANG_DISABLE_MIXED_CG=1): WL1: 15,118 tok/s (vs 15,013 with CG = -0.7%). WL2: 10,444 (vs 10,556 = +1.1%). WL3 crashed during 12k workload. **Mixed CG provides ≤1% benefit** — within noise. v3 still beats PP by 41-87% on long prefill WITHOUT mixed CG. The HOL blocking advantage is entirely from chunked prefill, not CG.
-- [x] **Profile LPT load-balance improvement**: Script at `flashinfer/profiler/profile_lpt_balance.py`. Results with 2x kv_limit + zero-overhead sentinel.
+- [x] **Profile LPT load-balance improvement**: Script at `flashinfer/profiler/profile_lpt_balance.py`. Results with 2x kv_limit + zero-overhead sentinel. Speedup = baseline_time / new_time (>1x = faster).
 
-  | Workload | Static kernel | LPT kernel | Speedup | Static max sync | LPT max sync | Sync reduction |
+  | Workload | Static kernel | LPT kernel | LPT speedup | Static max sync | LPT max sync | Sync reduction |
   |----------|-------------|----------|---------|----------------|-------------|---------------|
-  | WL1: 60d@kv2k + 2p@4k | 1.021ms | **1.010ms** | **-1%** | 73K | 41K | **-44%** |
-  | WL2: 40d@kv4k + 1p@8k | 1.842ms | **1.788ms** | **-3%** | 73K | 63K | **-14%** |
-  | WL3: 30d@kv8k + 1p@12k | 6.287ms | **6.157ms** | **-2%** | 325K | 43K | **-87%** |
-  | WL4: 20d@kv12k + 1p@4k | 0.770ms | **0.667ms** | **-13%** | 319K | 25K | **-92%** |
-  | Agent: 80d@kv1k + 3p@2k | 0.480ms | 0.480ms | 0% | 26K | 25K | -4% |
-  | Mixed: 50d@kv1k-8k + 2p@4k | 1.175ms | **1.086ms** | **-8%** | 185K | 41K | **-78%** |
-  | Prefill-heavy: 10d@kv4k + 1p@16k | **13.954ms** | 13.995ms | +0.3% | 71K | 146K | regressed |
+  | WL1: 60d@kv2k + 2p@4k | 1.021ms | **1.010ms** | **1.01x** | 73K | 41K | 1.78x |
+  | WL2: 40d@kv4k + 1p@8k | 1.842ms | **1.788ms** | **1.03x** | 73K | 63K | 1.16x |
+  | WL3: 30d@kv8k + 1p@12k | 6.287ms | **6.157ms** | **1.02x** | 325K | 43K | **7.56x** |
+  | WL4: 20d@kv12k + 1p@4k | 0.770ms | **0.667ms** | **1.15x** | 319K | 25K | **12.76x** |
+  | Agent: 80d@kv1k + 3p@2k | 0.480ms | 0.480ms | 1.00x | 26K | 25K | 1.04x |
+  | Mixed: 50d@kv1k-8k + 2p@4k | 1.175ms | **1.086ms** | **1.08x** | 185K | 41K | **4.51x** |
+  | Prefill-heavy: 10d@kv4k + 1p@16k | **13.954ms** | 13.995ms | 1.00x | 71K | 146K | 0.49x (regressed) |
 
   **Key findings**:
-  - LPT faster on 5/7 workloads. Biggest win: WL4 (-13%), Mixed (-8%).
-  - Grid.sync wait 14-92% reduction on split-KV workloads.
-  - Agent and prefill-heavy: tied (no regression).
-  - Zero-overhead sentinel (INT_MAX) eliminates all split-KV code for non-split cases.
+  - LPT faster on 5/7 workloads. Biggest win: WL4 (1.15x), Mixed (1.08x).
+  - Grid.sync max wait reduction up to 12.76x on split-KV workloads.
+  - Agent and prefill-heavy: tied (no regression), except prefill-heavy sync regressed (0.49x).
 
-  **Split-KV A/B comparison** (split enabled vs disabled within LPT, 2x kv_limit):
-  | Case | Split | No-split | Speedup |
+  **Split-KV A/B comparison** (split enabled vs disabled within LPT, 2x kv_limit). Speedup = nosplit_time / split_time (>1x = split faster).
+  | Case | Split | No-split | Split speedup |
   |------|-------|----------|---------|
   | 3d@64k+1p@2k | **0.681ms** | 1.659ms | **2.44x** |
-  | 5d@32k+1p@4k | 1.228ms | 1.223ms | tie |
-  | 10d@16k+1p@4k | 1.298ms | 1.303ms | tie |
-  | 20d@8k+2p@2k | 0.932ms | 0.931ms | tie |
-  | 100d@2k+2p@2k | 1.036ms | 1.030ms | tie |
+  | 5d@32k+1p@4k | 1.228ms | 1.223ms | 1.00x |
+  | 10d@16k+1p@4k | 1.298ms | 1.303ms | 1.00x |
+  | 20d@8k+2p@2k | 0.932ms | 0.931ms | 1.00x |
+  | 100d@2k+2p@2k | 1.036ms | 1.030ms | 1.00x |
 
   **Conclusion**: Split-KV with 2x kv_limit gives 2.44x speedup on severe imbalance (3d@64k) and zero regression on balanced workloads. No overhead when split not triggered (INT_MAX sentinel skips all split-KV code).
 

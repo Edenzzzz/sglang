@@ -410,23 +410,35 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - [x] **Fix mixed CG 2nd replay crash**: Was OOM, not a code bug. `mem-fraction-static=0.85` + mixed CG graphs consume too much memory → OOM manifests as "illegal memory access". With `mem-fraction-static=0.75`, server runs stable (6 mixed CG replays, 0 crashes, WL1: 13,699 tok/s). Server crashes with illegal memory access on the 2nd mixed CG `graph.replay()`. 1st replay succeeds. NOT from the attention kernel (standalone flashinfer CG tests pass). Likely from some other model component's CG replay. Workaround: `SGLANG_DISABLE_MIXED_CG=1` (same throughput, mixed CG only saves ~1%). Debug: run with `compute-sanitizer --tool memcheck` to find exact kernel + address.
 - [x] **Rerun all WLs with `--enable-piecewise-cuda-graph`**: PCG makes zero difference (±0.2%) for all 3 configs on all 6 workloads. v3+PCG=15,080, DMC+PCG=15,003, PP+PCG=15,016 on WL1 (vs 15,013 / 14,992 / 15,050 without PCG). Relative v3-vs-PP and v3-vs-DMC differences unchanged.
 - [x] **Ablation: v3 without mixed batch CG** (SGLANG_DISABLE_MIXED_CG=1): WL1: 15,118 tok/s (vs 15,013 with CG = -0.7%). WL2: 10,444 (vs 10,556 = +1.1%). WL3 crashed during 12k workload. **Mixed CG provides ≤1% benefit** — within noise. v3 still beats PP by 41-87% on long prefill WITHOUT mixed CG. The HOL blocking advantage is entirely from chunked prefill, not CG.
-- [x] **Profile LPT load-balance improvement**: Script at `flashinfer/profiler/profile_lpt_balance.py`. Realistic workloads based on WL1-6 + agent patterns (H100 80GB, 8 kv_heads, 32 qo_heads, head_dim=128). Grid.sync profiler event added (#47).
+- [x] **Profile LPT load-balance improvement**: Script at `flashinfer/profiler/profile_lpt_balance.py`. Results with 2x kv_limit + zero-overhead sentinel.
 
   | Workload | Static kernel | LPT kernel | Speedup | Static max sync | LPT max sync | Sync reduction |
   |----------|-------------|----------|---------|----------------|-------------|---------------|
-  | WL1: 60d@kv2k + 2p@4k (no split) | 1.756ms | **1.240ms** | **-29%** | 66K | 37K | **-44%** |
-  | WL2: 40d@kv4k + 1p@8k (borderline split) | 2.015ms | **2.000ms** | **-0.7%** | 98K | 41K | **-58%** |
-  | WL3: 30d@kv8k + 1p@12k (decode split) | 4.029ms | **3.999ms** | **-0.7%** | 286K | 45K | **-84%** |
-  | WL4: 20d@kv12k + 1p@4k (heavy split) | 0.846ms | **0.742ms** | **-12%** | 337K | 28K | **-92%** |
-  | Agent: 80d@kv1k + 3p@2k (no split, many seqs) | **0.538ms** | 0.562ms | +4.5% | 30K | 29K | -3% |
-  | Mixed: 50d@kv1k-8k + 2p@4k (mixed split) | 1.280ms | **1.216ms** | **-5%** | 183K | 41K | **-78%** |
-  | Prefill-heavy: 10d@kv4k + 1p@16k | **6.871ms** | 6.981ms | +1.6% | 88K | 87K | -1% |
+  | WL1: 60d@kv2k + 2p@4k | 1.021ms | **1.010ms** | **-1%** | 73K | 41K | **-44%** |
+  | WL2: 40d@kv4k + 1p@8k | 1.842ms | **1.788ms** | **-3%** | 73K | 63K | **-14%** |
+  | WL3: 30d@kv8k + 1p@12k | 6.287ms | **6.157ms** | **-2%** | 325K | 43K | **-87%** |
+  | WL4: 20d@kv12k + 1p@4k | 0.770ms | **0.667ms** | **-13%** | 319K | 25K | **-92%** |
+  | Agent: 80d@kv1k + 3p@2k | 0.480ms | 0.480ms | 0% | 26K | 25K | -4% |
+  | Mixed: 50d@kv1k-8k + 2p@4k | 1.175ms | **1.086ms** | **-8%** | 185K | 41K | **-78%** |
+  | Prefill-heavy: 10d@kv4k + 1p@16k | **13.954ms** | 13.995ms | +0.3% | 71K | 146K | regressed |
 
   **Key findings**:
-  - LPT faster on 5/7 workloads. Biggest win: WL1 (-29%), WL4 (-12%).
-  - Grid.sync wait reduction 44-92% for split-KV workloads (WL1-4, Mixed).
-  - Agent-like (many short seqs, no split) and prefill-heavy slightly slower (+1-4.5%).
-  - Split-KV with per-q_tile chunks correctly matches static scheduler output.
+  - LPT faster on 5/7 workloads. Biggest win: WL4 (-13%), Mixed (-8%).
+  - Grid.sync wait 14-92% reduction on split-KV workloads.
+  - Agent and prefill-heavy: tied (no regression).
+  - Zero-overhead sentinel (INT_MAX) eliminates all split-KV code for non-split cases.
+
+  **Split-KV A/B comparison** (split enabled vs disabled within LPT, 2x kv_limit):
+  | Case | Split | No-split | Speedup |
+  |------|-------|----------|---------|
+  | 3d@64k+1p@2k | **0.681ms** | 1.659ms | **2.44x** |
+  | 5d@32k+1p@4k | 1.228ms | 1.223ms | tie |
+  | 10d@16k+1p@4k | 1.298ms | 1.303ms | tie |
+  | 20d@8k+2p@2k | 0.932ms | 0.931ms | tie |
+  | 100d@2k+2p@2k | 1.036ms | 1.030ms | tie |
+
+  **Conclusion**: Split-KV with 2x kv_limit gives 2.44x speedup on severe imbalance (3d@64k) and zero regression on balanced workloads. No overhead when split not triggered (INT_MAX sentinel skips all split-KV code).
+
 - [ ] **GPU-side LPT plan kernel**: If v3 plan() overhead (~6ms) is the main reason v3 doesn't beat DMC in real serving, implement the plan function as a GPU kernel to overlap with prior compute. Reference: `include/flashinfer/attention/blackwell/plan.cuh` in flashinfer shows how GPU-side plan is implemented. NOTE: only implement for the LPT dynamic scheduler plan — the static scheduler plan is not the bottleneck and doesn't need GPU-side implementation. Steps: (1) Confirm via nsys that plan() CPU time is on the critical path (not overlapped with prior GPU work), (2) Port LPT per-sequence metadata + tile counting to a CUDA kernel, (3) Compare server throughput before/after.
 - [x] **Find prefill-prioritized HOL blocking crossover**: Found at **8k-12k input tokens**. At 8k input: prefill-prio max ITL=1.4s. At 12k input: prefill-prio max ITL=21.6s, throughput -47% vs v3. See WL2 and WL4 results above.
 - [x] **Investigate mixed CG utilization and memory**:

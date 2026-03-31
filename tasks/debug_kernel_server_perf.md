@@ -231,19 +231,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - Modified `BlockBatchPagedAttentionPersistent::Run()`: when `tile_counter != nullptr`, uses `atomicAdd` to grab next tile from the flat array
 - **Result**: Cases 6-7 improved ~10%. Cases 1-5 unchanged.
 
-**v2: LPT sorting + relaxed FlippedSchedule condition**
-- Sorted flat tile arrays by cost descending. Relaxed condition to `prefill > 0 && decode > 0`.
-- **Results vs baseline**:
-  | Case | Original | LPT v2 | Improvement | POD |
-  |------|----------|--------|-------------|-----|
-  | 1 | 0.28ms | 0.32ms | -14% | 0.17ms |
-  | 2 | 0.48ms | 0.40ms | +17% | 0.21ms |
-  | 3 | 0.80ms | 0.79ms | +1% | 0.38ms |
-  | 4 | 0.52ms | 0.38ms | **+27%** | 0.24ms |
-  | 5 | 1.45ms | 1.31ms | +10% | 0.72ms |
-  | 6 | 1.92ms | 1.79ms | +7% | 0.92ms |
-  | 7 | 3.77ms | 3.26ms | +14% | 4.14ms |
-- Still 2x slower than POD for most cases — needs FA3-style runtime dynamic scheduler.
+**v2: LPT sorting + relaxed FlippedSchedule condition** — Static LPT sort + relaxed condition improved 4-27% over baseline but still 2x slower than POD. Needed FA3-style runtime dynamic scheduler (v3).
 
 **v3: FA3-style runtime dynamic scheduler (WORKING)**
 - Implemented `tile_idx_to_work_tile()` with batch-find while loop + L2-aware LPT mapping
@@ -361,30 +349,31 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   - Files changed: flashinfer `scheduler.cuh`, `batch_attention.cu`, `attention.py`; sglang `flashinfer_backend.py`, `cuda_graph_runner.py`.
   - [x] **Server benchmark: v3+LPT+CG vs prefill-prio vs default-mc** (H100 80GB, Qwen3-8B, `--mem-fraction-static 0.85`, radix cache ON, NO PCG, 400 prompts):
 
-  | WL | Input | Output | Rate | v3 in tok/s | v3 out tok/s | v3 total | PP total | DMC total | v3 vs PP | v3 vs DMC |
-  |----|------:|-------:|-----:|----------:|-----------:|--------:|--------:|----------:|---------:|----------:|
-  | 1 | 4096 | 1024 | 8 | 11,971 | 3,042 | **15,013** | 15,050 | 14,992 | -0.2% | +0.1% |
-  | 2 | 8192 | 2048 | 4 | 8,531 | 2,025 | 10,556 | 10,208 | **10,565** | **+3.4%** | -0.1% |
-  | 3 | 12000 | 1024 | 4 | **14,715** | 1,277 | **15,993** | 11,308 | 15,984 | **+41%** | +0.1% |
-  | 4 | 16384 | 1024 | 3 | **14,921** | 957 | **15,878** | 8,492 | 15,879 | **+87%** | 0.0% |
-  | 5 | 4096 | 4096 | 6 | 3,234 | 3,218 | 6,451 | **6,502** | 6,446 | -0.8% | +0.1% |
-  | 6 | 6000 | 6000 | 3 | 2,325 | 2,269 | 4,593 | **4,636** | 4,589 | -0.9% | +0.1% |
+  | WL | Input | Output | Rate | v3 in | v3 out | v3 total | DMC in | DMC out | DMC total | PP in | PP out | PP total | v3 vs DMC | v3 vs PP |
+  |----|------:|-------:|-----:|------:|-------:|--------:|-------:|--------:|----------:|------:|-------:|---------:|----------:|---------:|
+  | 1 | 4096 | 1024 | 8 | 11,211 | 2,849 | **14,060** | 10,202 | 2,593 | 12,795 | 12,051 | 3,062 | 15,113 | **+9.9%** | -7.0% |
+  | 2 | 8192 | 2048 | 4 | 8,093 | 1,922 | 10,015 | 8,272 | 1,964 | **10,235** | 8,467 | 2,010 | **10,477** | -2.2% | -4.4% |
+  | 3 | 12000 | 1024 | 4 | 13,603 | 1,181 | **14,784** | 13,185 | 1,145 | 14,329 | 13,591 | 1,180 | 14,771 | **+3.2%** | +0.1% |
+  | 4 | 16384 | 1024 | 3 | 13,793 | 885 | **14,678** | 13,161 | 844 | 14,005 | 13,324 | 854 | 14,178 | **+4.8%** | +3.5% |
+  | 5 | 4096 | 4096 | 6 | 3,158 | 3,142 | 6,300 | 3,177 | 3,161 | 6,338 | 3,256 | 3,240 | **6,497** | -0.6% | -3.0% |
+  | 6 | 6000 | 6000 | 3 | 2,308 | 2,253 | 4,561 | 2,349 | 2,292 | 4,641 | 2,364 | 2,307 | **4,671** | -1.7% | -2.4% |
 
-  | WL | v3 TTFT med | PP TTFT med | DMC TTFT med | v3 P99 ITL | PP P99 ITL | DMC P99 ITL | v3 Max ITL | PP Max ITL | DMC Max ITL |
-  |----|------------:|----------:|------------:|----------:|----------:|----------:|----------:|----------:|----------:|
-  | 1 | 436ms | **255ms** | 457ms | 222ms | 195ms | 221ms | **233ms** | 462ms | 230ms |
-  | 2 | 26,647ms | 29,513ms | 26,499ms | 222ms | 231ms | 222ms | **225ms** | **1,671ms** | 246ms |
-  | 3 | **19,218ms** | 49,091ms | 19,293ms | **223ms** | **950ms** | 223ms | **238ms** | **19,227ms** | 256ms |
-  | 4 | **35,484ms** | 132,965ms | 35,474ms | **223ms** | **1,791ms** | 223ms | **310ms** | **25,898ms** | 306ms |
-  | 5 | 51,657ms | 51,023ms | 51,810ms | 122ms | **100ms** | 122ms | 224ms | 432ms | 225ms |
-  | 6 | 107,553ms | 107,046ms | 107,724ms | 122ms | **84ms** | 122ms | **164,772ms** | 618ms | **164,925ms** |
+  | WL | v3 TTFT med | DMC TTFT med | PP TTFT med | v3 P99 ITL | DMC P99 ITL | PP P99 ITL | v3 Max ITL | DMC Max ITL | PP Max ITL |
+  |----|------------:|------------:|------------:|----------:|----------:|----------:|----------:|----------:|----------:|
+  | 1 | **680ms** | 5,838ms | **215ms** | 272ms | 592ms | **200ms** | 489ms | 812ms | 465ms |
+  | 2 | 30,868ms | 29,134ms | **27,052ms** | 271ms | **236ms** | 227ms | **276ms** | 887ms | 914ms |
+  | 3 | 25,746ms | 27,800ms | **25,105ms** | **272ms** | 275ms | 426ms | **299ms** | 1,045ms | 1,684ms |
+  | 4 | 43,437ms | 49,710ms | **48,247ms** | **271ms** | 294ms | 573ms | **306ms** | 872ms | 6,430ms |
+  | 5 | 55,203ms | 54,073ms | **51,690ms** | 148ms | 119ms | **112ms** | **121,607ms** | 699ms | 456ms |
+  | 6 | 111,456ms | 108,023ms | **105,683ms** | 148ms | 121ms | **107ms** | **235,089ms** | **225,262ms** | **223,899ms** |
 
-  **Key findings (N=400):**
-  1. **v3 vs PP on long prefill**: v3 dominates. At 12k: **+41% throughput**, max ITL 238ms vs 19.2s. At 16k: **+87% throughput**, max ITL 310ms vs 25.9s. HOL blocking crossover at ~8k.
-  2. **v3 ≈ DMC on all workloads**: Within ±0.1% throughput. v3 does NOT beat DMC despite having mixed CG and LPT kernel. The persistent kernel advantage doesn't show at server level.
-  3. **PP wins P99 ITL** on balanced/decode-heavy workloads (WL5/6): 84-100ms vs 122ms. Pure decode steps are lightweight.
-  4. **WL6 (6k/6k)**: System heavily overloaded at rate=3 (164s max ITL for both v3 and DMC). v3 ≈ DMC. PP has better max ITL (618ms) because decode steps don't mix with prefill.
-  5. **Input tok/s**: v3 gets 14.9k input tok/s on WL4 vs PP's 8.0k — the chunked prefill processes input ~87% faster by avoiding HOL blocking.
+  **Key findings (N=400, with split-KV + 2x kv_limit):**
+  1. **v3 beats DMC on prefill-heavy workloads**: WL1 (+9.9%), WL3 (+3.2%), WL4 (+4.8%). First time v3 shows real throughput wins over DMC.
+  2. **v3 WL1 TTFT dramatically better**: 680ms vs DMC 5,838ms (8.6x faster). Mixed CG + LPT kernel reduces first-token latency.
+  3. **v3 loses on decode-heavy workloads**: WL2 (-2.2%), WL5 (-0.6%), WL6 (-1.7%). Plan() overhead dominates when mixed batches are infrequent.
+  4. **PP still wins throughput on decode-heavy**: WL5/6 PP beats both v3 and DMC by 2-3%.
+  5. **v3 Max ITL regression on WL5/6**: 121s and 235s — needs investigation. Likely mixed batch stalls under heavy decode load.
+  6. **TODO**: nsys profile WL2 or WL5 (where v3 loses to DMC) to find whether plan() overhead or other bottleneck.
 
 - [x] **Investigate why v3 doesn't beat DMC on some workloads**: Mixed CG is 100% utilized (251+ replays on WL1, 0 non-CG). Yet v3 ≈ DMC.
   - **(a) CONFIRMED: v3 plan() is 5.82ms slower** than DMC plan() (74ms vs 68ms, +9% at 4k tokens). TwoStageHolisticPlan processes two queues + LPT sorting + dynamic scheduler metadata → extra overhead. With ~250 mixed batches per WL1: +1,455ms. CG run() savings: -600ms. **Net: +855ms ≈ 1.2% overhead**, matching observed v3 ≈ DMC.

@@ -74,16 +74,7 @@ Added `use_persistent` and `use_pod` fields to `bench_serving.py` CSV output and
 
 ## Benchmark Summary
 
-### flashinfer 0.4.1 (original profiling run)
-| Config | Throughput (tok/s) | Mean TTFT (ms) | Median ITL (ms) |
-|--------|-------------------|----------------|-----------------|
-| Default (no persistent) | 3572 | 2519 | 18.3 |
-| Default (profiled) | 3640 | 1148 | 16.9 |
-| Persistent (before fix) | 3586 | 1033 | 17.8 |
-| POD (before fix) | 3684 | 356 | 14.8 |
-| POD (optimized, commit 6244007) | 3804 | 182 | 12.0 |
-
-### flashinfer 0.5.2 (post-fix, current)
+### flashinfer 0.5.2 (post-fix)
 | Config | Throughput (tok/s) | Mean TTFT (ms) | Median ITL (ms) | Notes |
 |--------|-------------------|----------------|-----------------|-------|
 | Default mixed chunk | 2836 | 145 | 8.7 | warmup=1 |

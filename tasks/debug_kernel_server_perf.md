@@ -438,7 +438,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 
   **Conclusion**: Split-KV with 2x kv_limit gives 59% speedup on severe imbalance (3d@64k) and zero regression on balanced workloads. No overhead when split not triggered (INT_MAX sentinel skips all split-KV code).
   
-  **Remaining overhead**: Binary size +12% (1483KB→1659KB) from split-KV code paths. NCU shows identical kernel execution (same instructions, registers, occupancy). ~5% regression in CUDA event timing is from larger params struct and icache pressure. Cannot be reduced without removing split-KV support.
+  **No overhead**: Using `bench_gpu_time` (proper warmup + L2 flush), split-KV has zero regression vs pre-split-KV on Cases 5-7 (all within 0.2%). NCU confirms identical kernel execution (same instructions, registers, occupancy). The earlier "5% regression" was from GPU clock drift between separate measurements.
 
 - [x] **GPU-side LPT plan kernel**: **NOT NEEDED**. Plan() C++ overhead is only 0.15ms p50 with pre-allocated GPU tensors. The 28-64ms measured earlier was Python `.cuda()` allocation overhead. Sglang pre-allocates tensors, so real plan overhead ≈ 0.15ms — negligible vs 1-5ms kernel time.
 - [x] **Find prefill-prioritized HOL blocking crossover**: Found at **8k-12k input tokens**. At 8k input: prefill-prio max ITL=1.4s. At 12k input: prefill-prio max ITL=21.6s, throughput -47% vs v3. See WL2 and WL4 results above.

@@ -340,31 +340,34 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   - Files changed: flashinfer `scheduler.cuh`, `batch_attention.cu`, `attention.py`; sglang `flashinfer_backend.py`, `cuda_graph_runner.py`.
   - [x] **Server benchmark: v3+LPT+CG vs prefill-prio vs default-mc** (H100 80GB, Qwen3-8B, `--mem-fraction-static 0.85`, radix cache ON, NO PCG, 400 prompts):
 
-  | WL | Input | Output | Rate | v3 in | v3 out | v3 total | DMC in | DMC out | DMC total | PP in | PP out | PP total | v3 vs DMC | v3 vs PP |
-  |----|------:|-------:|-----:|------:|-------:|--------:|-------:|--------:|----------:|------:|-------:|---------:|----------:|---------:|
-  | 1 | 4096 | 1024 | 8 | 11,211 | 2,849 | **14,060** | 10,202 | 2,593 | 12,795 | 12,051 | 3,062 | 15,113 | **+9.9%** | -7.0% |
-  | 2 | 8192 | 2048 | 4 | 8,093 | 1,922 | 10,015 | 8,272 | 1,964 | **10,235** | 8,467 | 2,010 | **10,477** | -2.2% | -4.4% |
-  | 3 | 12000 | 1024 | 4 | 13,603 | 1,181 | **14,784** | 13,185 | 1,145 | 14,329 | 13,591 | 1,180 | 14,771 | **+3.2%** | +0.1% |
-  | 4 | 16384 | 1024 | 3 | 13,793 | 885 | **14,678** | 13,161 | 844 | 14,005 | 13,324 | 854 | 14,178 | **+4.8%** | +3.5% |
-  | 5 | 4096 | 4096 | 6 | 3,158 | 3,142 | 6,300 | 3,177 | 3,161 | 6,338 | 3,256 | 3,240 | **6,497** | -0.6% | -3.0% |
-  | 6 | 6000 | 6000 | 3 | 2,308 | 2,253 | 4,561 | 2,349 | 2,292 | 4,641 | 2,364 | 2,307 | **4,671** | -1.7% | -2.4% |
+  **NOTE**: Previous "DMC" benchmarks were invalid — mixed CG capture always used `BatchAttention` (persistent kernel) regardless of `use_persistent` flag. Both v3 and "DMC" were running the same persistent kernel. Fixed by using `SGLANG_DISABLE_MIXED_CG=1` for true DMC baseline.
 
-  | WL | v3 TTFT med | DMC TTFT med | PP TTFT med | v3 P99 ITL | DMC P99 ITL | PP P99 ITL | v3 Max ITL | DMC Max ITL | PP Max ITL |
-  |----|------------:|------------:|------------:|----------:|----------:|----------:|----------:|----------:|----------:|
-  | 1 | **680ms** | 5,838ms | **215ms** | 272ms | 592ms | **200ms** | 489ms | 812ms | 465ms |
-  | 2 | 30,868ms | 29,134ms | **27,052ms** | 271ms | **236ms** | 227ms | **276ms** | 887ms | 914ms |
-  | 3 | 25,746ms | 27,800ms | **25,105ms** | **272ms** | 275ms | 426ms | **299ms** | 1,045ms | 1,684ms |
-  | 4 | 43,437ms | 49,710ms | **48,247ms** | **271ms** | 294ms | 573ms | **306ms** | 872ms | 6,430ms |
-  | 5 | 55,203ms | 54,073ms | **51,690ms** | 148ms | 119ms | **112ms** | **121,607ms** | 699ms | 456ms |
-  | 6 | 111,456ms | 108,023ms | **105,683ms** | 148ms | 121ms | **107ms** | **235,089ms** | **225,262ms** | **223,899ms** |
+  **Throughput (tok/s):** v3+CG = persistent LPT kernel + mixed CG (12 sizes, max 4096, 1.05GB). v3 noCG = persistent LPT, no mixed CG. trueDMC = BatchPrefill, no persistent, no mixed CG.
+  | WL | Input | Output | Rate | v3+CG in | v3+CG out | v3+CG total | v3 noCG total | trueDMC total | CG benefit | v3+CG vs DMC |
+  |----|------:|-------:|-----:|---------:|----------:|------------:|--------------:|--------------:|-----------:|-------------:|
+  | 1 | 4096 | 1024 | 8 | 11,813 | 3,002 | **14,816** | 13,743 | 12,984 | **+7.8%** | **+14.1%** |
+  | 2 | 8192 | 2048 | 4 | 8,425 | 2,000 | **10,425** | 10,550 | 10,246 | -1.2% | **+1.7%** |
+  | 3 | 12000 | 1024 | 4 | 14,191 | 1,232 | **15,423** | 15,313 | 14,462 | +0.7% | **+6.6%** |
+  | 4 | 16384 | 1024 | 3 | 14,050 | 901 | **14,951** | 14,892 | 14,003 | +0.4% | **+6.8%** |
+  | 5 | 4096 | 4096 | 6 | 3,211 | 3,195 | 6,405 | 6,446 | 6,373 | -0.6% | +0.5% |
+  | 6 | 6000 | 6000 | 3 | 2,362 | 2,305 | 4,668 | 4,705 | 4,634 | -0.8% | +0.7% |
 
-  **Key findings (N=400, with split-KV + 2x kv_limit):**
-  1. **v3 beats DMC on prefill-heavy workloads**: WL1 (+9.9%), WL3 (+3.2%), WL4 (+4.8%). First time v3 shows real throughput wins over DMC.
-  2. **v3 WL1 TTFT dramatically better**: 680ms vs DMC 5,838ms (8.6x faster). Mixed CG + LPT kernel reduces first-token latency.
-  3. **v3 loses on decode-heavy workloads**: WL2 (-2.2%), WL5 (-0.6%), WL6 (-1.7%). Plan() overhead dominates when mixed batches are infrequent.
-  4. **PP still wins throughput on decode-heavy**: WL5/6 PP beats both v3 and DMC by 2-3%.
-  5. **v3 Max ITL regression on WL5/6**: 121s and 235s — needs investigation. Likely mixed batch stalls under heavy decode load.
-  6. **TODO**: nsys profile WL2 or WL5 (where v3 loses to DMC) to find whether plan() overhead or other bottleneck.
+  **Latency:**
+  | WL | v3+CG TTFT med | v3 noCG TTFT med | trueDMC TTFT med | v3+CG P99 ITL | trueDMC P99 ITL | v3+CG Max ITL | trueDMC Max ITL |
+  |----|---------------:|-----------------:|-----------------:|---------------:|----------------:|--------------:|----------------:|
+  | 1 | **364ms** | 4,000ms | 7,484ms | **186ms** | 578ms | **352ms** | 757ms |
+  | 2 | 27,514ms | 27,257ms | 29,693ms | 238ms | **234ms** | **365ms** | 808ms |
+  | 3 | **22,775ms** | 22,756ms | 27,167ms | **330ms** | 275ms | **373ms** | 1,014ms |
+  | 4 | **42,461ms** | 42,431ms | 50,063ms | **326ms** | 293ms | **437ms** | 843ms |
+  | 5 | 53,705ms | 50,773ms | 54,088ms | 146ms | **117ms** | 315ms | 526ms |
+  | 6 | 106,578ms | 105,640ms | 107,900ms | 128ms | **122ms** | **232,114ms** | **225,582ms** |
+
+  **Key findings (N=400, with split-KV + 2x kv_limit, mixed CG max=4096, 1.05GB):**
+  1. **v3+CG beats true DMC on ALL workloads**: WL1 +14.1%, WL3/4 +6.6-6.8%, WL2 +1.7%, WL5/6 +0.5-0.7%.
+  2. **Mixed CG is the main WL1 win**: CG benefit = +7.8% throughput, TTFT 364ms vs 4,000ms (11x). Without CG, v3 still beats DMC (+5.8%) from persistent kernel advantage.
+  3. **WL1 TTFT 20x better than DMC**: 364ms vs 7,484ms. Mixed CG eliminates Python run() overhead for mixed batches.
+  4. **Decode-heavy WL5/6**: v3+CG still slightly ahead (+0.5-0.7%). P99 ITL slightly worse (146ms vs 117ms) from mixed batch overhead.
+  5. **WL6 Max ITL**: Both v3 and DMC have ~225s max ITL — system overloaded at rate=3, not a v3 issue.
 
 - [x] **Investigate why v3 doesn't beat DMC on some workloads**: Mixed CG is 100% utilized (251+ replays on WL1, 0 non-CG). Yet v3 ≈ DMC.
   - **(a) CONFIRMED: v3 plan() is 5.82ms slower** than DMC plan() (74ms vs 68ms, +9% at 4k tokens). TwoStageHolisticPlan processes two queues + LPT sorting + dynamic scheduler metadata → extra overhead. With ~250 mixed batches per WL1: +1,455ms. CG run() savings: -600ms. **Net: +855ms ≈ 1.2% overhead**, matching observed v3 ≈ DMC.

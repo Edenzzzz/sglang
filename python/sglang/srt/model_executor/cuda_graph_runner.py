@@ -278,7 +278,7 @@ class CudaGraphRunner:
         self._is_mixed_replay = False
         if self.enable_mixed_cuda_graph:
             self.mixed_capture_bs = sorted(
-                [1, 2, 4, 8, 12, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+                [1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
             )
             max_mixed_tokens = min(
                 model_runner.server_args.chunked_prefill_size or 8192, 8192

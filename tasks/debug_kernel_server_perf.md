@@ -410,7 +410,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - [x] **Fix mixed CG 2nd replay crash**: Was OOM, not a code bug. `mem-fraction-static=0.85` + mixed CG graphs consume too much memory → OOM manifests as "illegal memory access". With `mem-fraction-static=0.75`, server runs stable (6 mixed CG replays, 0 crashes, WL1: 13,699 tok/s). Server crashes with illegal memory access on the 2nd mixed CG `graph.replay()`. 1st replay succeeds. NOT from the attention kernel (standalone flashinfer CG tests pass). Likely from some other model component's CG replay. Workaround: `SGLANG_DISABLE_MIXED_CG=1` (same throughput, mixed CG only saves ~1%). Debug: run with `compute-sanitizer --tool memcheck` to find exact kernel + address.
 - [x] **Rerun all WLs with `--enable-piecewise-cuda-graph`**: PCG makes zero difference (±0.2%) for all 3 configs on all 6 workloads. v3+PCG=15,080, DMC+PCG=15,003, PP+PCG=15,016 on WL1 (vs 15,013 / 14,992 / 15,050 without PCG). Relative v3-vs-PP and v3-vs-DMC differences unchanged.
 - [x] **Ablation: v3 without mixed batch CG** (SGLANG_DISABLE_MIXED_CG=1): WL1: 15,118 tok/s (vs 15,013 with CG = -0.7%). WL2: 10,444 (vs 10,556 = +1.1%). WL3 crashed during 12k workload. **Mixed CG provides ≤1% benefit** — within noise. v3 still beats PP by 41-87% on long prefill WITHOUT mixed CG. The HOL blocking advantage is entirely from chunked prefill, not CG.
-- [x] **Profile LPT load-balance improvement**: Script at `flashinfer/profiler/profile_lpt_balance.py`. Results with 2x kv_limit + zero-overhead sentinel. Speedup = baseline_time / new_time (>1x = faster).
+- [ ] **Profile LPT load-balance improvement**: Script at `flashinfer/profiler/profile_lpt_balance.py`. Results with 2x kv_limit + zero-overhead sentinel. Speedup = baseline_time / new_time (>1x = faster). TODO: (1) Rerun WL1-6 server benchmarks, (2) nsys profile a case where LPT doesn't beat DMC to find plan() or other overhead, (3) investigate prefill-heavy sync regression (71K→146K).
 
   | Workload | Static kernel | LPT kernel | LPT speedup | Static max sync | LPT max sync | Sync reduction |
   |----------|-------------|----------|---------|----------------|-------------|---------------|
@@ -422,10 +422,10 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   | Mixed: 50d@kv1k-8k + 2p@4k | 1.175ms | **1.086ms** | **1.08x** | 185K | 41K | **4.51x** |
   | Prefill-heavy: 10d@kv4k + 1p@16k | **13.954ms** | 13.995ms | 1.00x | 71K | 146K | 0.49x (regressed) |
 
-  **Key findings**:
-  - LPT faster on 5/7 workloads. Biggest win: WL4 (1.15x), Mixed (1.08x).
-  - Grid.sync max wait reduction up to 12.76x on split-KV workloads.
-  - Agent and prefill-heavy: tied (no regression), except prefill-heavy sync regressed (0.49x).
+  **TODOs**:
+  - [ ] Convert sync columns from clock cycles (K = thousands of cycles) to ms for readability
+  - [ ] Investigate why LPT speedup over static (1.01-1.15x) is much smaller than LPT speedup over POD (up to 17.8%). Static flipped already has LPT tile ordering — the difference should only be atomicAdd overhead. Need to understand what static flipped actually does vs dynamic LPT.
+  - [ ] Investigate prefill-heavy sync regression (71K→146K cycles). LPT assigns largest causal tiles first, leaving late CTAs idle at grid.sync. Kernel time is tied but the imbalance may hurt in multi-layer serving.
 
   **Split-KV A/B comparison** (split enabled vs disabled within LPT, 2x kv_limit). Speedup = (nosplit - split) / nosplit.
   | Case | Split | No-split | Split speedup |
@@ -440,7 +440,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   
   **No overhead**: Using `bench_gpu_time` (proper warmup + L2 flush), split-KV has zero regression vs pre-split-KV on Cases 5-7 (all within 0.2%). NCU confirms identical kernel execution (same instructions, registers, occupancy). The earlier "5% regression" was from GPU clock drift between separate measurements.
 
-- [x] **GPU-side LPT plan kernel**: **NOT NEEDED**. Plan() C++ overhead is only 0.15ms p50 with pre-allocated GPU tensors. The 28-64ms measured earlier was Python `.cuda()` allocation overhead. Sglang pre-allocates tensors, so real plan overhead ≈ 0.15ms — negligible vs 1-5ms kernel time.
+- [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan with pre-allocated tensors. But need to verify in server context with nsys — plan() may be on the critical path if it doesn't overlap with GPU work. Recheck after WL1-6 server profiling.
 - [x] **Find prefill-prioritized HOL blocking crossover**: Found at **8k-12k input tokens**. At 8k input: prefill-prio max ITL=1.4s. At 12k input: prefill-prio max ITL=21.6s, throughput -47% vs v3. See WL2 and WL4 results above.
 - [x] **Investigate mixed CG utilization and memory**:
   1. **Verify actual mixed CG hit rate**: The "1 replay out of 110 batches" measurement used only 100 prompts at rate=8. Rerun with 400 prompts at different rates and log mixed CG replay count vs total batch count per workload. Random input lengths are uniform [0, 2×mean], so half are below 4096 — some mixed batches should fit in ≤8192 tokens.

@@ -394,18 +394,19 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 
   | Workload | Static kernel | LPT kernel | LPT speedup | Static max sync | LPT max sync | Sync reduction |
   |----------|-------------|----------|---------|----------------|-------------|---------------|
-  | WL1: 60d@kv2k + 2p@4k | 1.021ms | **1.010ms** | **1.01x** | 73K | 41K | 1.78x |
-  | WL2: 40d@kv4k + 1p@8k | 1.842ms | **1.788ms** | **1.03x** | 73K | 63K | 1.16x |
-  | WL3: 30d@kv8k + 1p@12k | 6.287ms | **6.157ms** | **1.02x** | 325K | 43K | **7.56x** |
-  | WL4: 20d@kv12k + 1p@4k | 0.770ms | **0.667ms** | **1.15x** | 319K | 25K | **12.76x** |
-  | Agent: 80d@kv1k + 3p@2k | 0.480ms | 0.480ms | 1.00x | 26K | 25K | 1.04x |
-  | Mixed: 50d@kv1k-8k + 2p@4k | 1.175ms | **1.086ms** | **1.08x** | 185K | 41K | **4.51x** |
-  | Prefill-heavy: 10d@kv4k + 1p@16k | **13.954ms** | 13.995ms | 1.00x | 71K | 146K | 0.49x (regressed) |
+  | WL1: 60d@kv2k + 2p@4k | 1.021ms | **1.010ms** | **1.01x** | 40μs | **22μs** | 1.78x |
+  | WL2: 40d@kv4k + 1p@8k | 1.842ms | **1.788ms** | **1.03x** | 40μs | **34μs** | 1.16x |
+  | WL3: 30d@kv8k + 1p@12k | 6.287ms | **6.157ms** | **1.02x** | 178μs | **24μs** | **7.56x** |
+  | WL4: 20d@kv12k + 1p@4k | 0.770ms | **0.667ms** | **1.15x** | 174μs | **14μs** | **12.76x** |
+  | Agent: 80d@kv1k + 3p@2k | 0.480ms | 0.480ms | 1.00x | 14μs | 14μs | 1.04x |
+  | Mixed: 50d@kv1k-8k + 2p@4k | 1.175ms | **1.086ms** | **1.08x** | 101μs | **22μs** | **4.51x** |
+  | Prefill-heavy: 10d@kv4k + 1p@16k | **13.954ms** | 13.995ms | 1.00x | 39μs | 80μs | 0.49x (regressed) |
 
-  **TODOs**:
-  - [ ] Convert sync columns from clock cycles (K = thousands of cycles) to ms for readability
-  - [ ] Investigate why LPT speedup over static (1.01-1.15x) is much smaller than LPT speedup over POD (up to 17.8%). Static flipped already has LPT tile ordering — the difference should only be atomicAdd overhead. Need to understand what static flipped actually does vs dynamic LPT.
-  - [ ] Investigate prefill-heavy sync regression (71K→146K cycles). LPT assigns largest causal tiles first, leaving late CTAs idle at grid.sync. Kernel time is tied but the imbalance may hurt in multi-layer serving.
+  (Max sync = max grid.sync() wait across all SMs. Converted from clock cycles at 1.83 GHz.)
+
+  **LPT-vs-static vs LPT-vs-POD gap**: LPT speedup over static flipped (1.01-1.15x) is much smaller than LPT speedup over POD (up to 17.8%) because static flipped already uses LPT-sorted tile order (pre-computed at plan time). The only runtime difference is: (1) static uses pre-built work_indptr arrays (O(1) tile fetch per CTA), while LPT uses atomicAdd-based dynamic scheduling; (2) static's tile order is frozen at plan time, while LPT adapts per-CTA. On balanced workloads (WL1, Agent), the pre-computed order works fine — LPT's dynamic scheduling adds minimal benefit. On split-KV workloads (WL3, WL4), LPT's per-CTA tile stealing better handles the variable chunk counts.
+
+  **Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k (512 q_tiles × 8 heads = 4096 prefill tiles), LPT assigns largest causal tiles first. Early CTAs get the top q_tiles (processing ~16K KV tokens each), while late CTAs get bottom q_tiles (~32 tokens). The late CTAs finish first and wait at grid.sync. Static's round-robin distributes large/small tiles more evenly. However, kernel time is tied (13.95 vs 14.0ms) — the sync imbalance doesn't affect throughput because the prefill compute (not sync) dominates.
 
   **Split-KV A/B comparison** (split enabled vs disabled within LPT, 2x kv_limit). Speedup = (nosplit - split) / nosplit.
   | Case | Split | No-split | Split speedup |

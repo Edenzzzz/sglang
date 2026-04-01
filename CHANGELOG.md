@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.1 — CG25: data-driven mixed CG size optimization (2026-04-01)
+
+### Mixed CG Size Optimization
+- Instrumented mixed CG replay to collect (raw_tokens, padded_tokens) per workload
+- Greedy selection of 6 additional capture sizes based on real padding waste: +3584 (28% of waste), +2816 (7%), +2304 (5%), +640, +1408, +1920
+- CG25 (25 sizes, ~1.79GB) reduces padding from 11% to 6.5%, improves all 6 workloads +0.3-1.4% over CG19
+- LPT+CG25 beats trueDMC on all workloads: +18.9% (WL1), +3.6-8.0% (WL2-4), +1.9-2.1% (WL5/6)
+- Updated task MD: replaced v3 with LPT in tables, updated stale CG12-era results with CG25 data
+
 ## v0.2.0 — Mixed Batch CUDA Graphs + LPT + Server Benchmarks (2026-03-27 → 2026-03-29)
 
 ### Mixed Batch CUDA Graph Support

@@ -276,9 +276,11 @@ class CudaGraphRunner:
         self.mixed_graphs = {}
         self.mixed_output_buffers = {}
         self._is_mixed_replay = False
+        self._log_mixed_cg_padding = bool(os.environ.get("SGLANG_LOG_MIXED_CG_PADDING", ""))
+        self._mixed_cg_padding_log = [] if self._log_mixed_cg_padding else None
         if self.enable_mixed_cuda_graph:
             self.mixed_capture_bs = sorted(
-                [1, 4, 8, 16, 32, 64, 128, 256, 384, 512, 768, 1024, 1280, 1536, 1792, 2048, 2560, 3072, 4096]
+                [1, 4, 8, 16, 32, 64, 128, 256, 384, 512, 640, 768, 1024, 1280, 1408, 1536, 1792, 1920, 2048, 2304, 2560, 2816, 3072, 3584, 4096]
             )
             max_mixed_tokens = min(
                 model_runner.server_args.chunked_prefill_size or 8192, 8192
@@ -998,6 +1000,15 @@ class CudaGraphRunner:
         raw_bs = forward_batch.batch_size  # actual number of sequences
         index = bisect.bisect_left(self.mixed_capture_bs, raw_num_token)
         bs = self.mixed_capture_bs[index]
+
+        # Padding stats collection (env SGLANG_LOG_MIXED_CG_PADDING=1 to enable)
+        if self._log_mixed_cg_padding:
+            self._mixed_cg_padding_log.append((raw_num_token, bs))
+            if len(self._mixed_cg_padding_log) % 200 == 0:
+                import json
+                with open('/tmp/mixed_cg_padding.jsonl', 'w') as f:
+                    for r, p in self._mixed_cg_padding_log:
+                        f.write(json.dumps({"raw": r, "padded": p}) + '\n')
 
         if bs != raw_num_token:
             self.seq_lens.fill_(self.seq_len_fill_value)

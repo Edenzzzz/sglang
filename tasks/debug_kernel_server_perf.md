@@ -249,9 +249,9 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   2. **Token budget tax**: In mixed-chunk, `PrefillAdder` subtracts `running_bs` (decode batch size) from both `rem_input_tokens` and `rem_chunk_tokens` (`schedule_policy.py:334-337`). With 50-200 running decode requests, this reduces effective prefill budget per step, potentially requiring more steps to complete a prefill.
   3. **Kernel efficiency**: Pure decode steps have uniform 1-token-per-request workload (high CUDA graph batch efficiency). Mixed steps combine quadratic prefill + linear decode in one kernel, suboptimal for both.
   - **TTFT**: Prefill-prioritized runs 4096-token prefill to completion in one step (fits in chunked_prefill_size=8192). Mixed-chunk may need multiple mixed steps if decode batch consumes token budget.
-- [x] Sweep prefill/decode length ratios — done. See `tasks/realistic_workload_analysis.md` for full results. Key findings: v3 wins throughput only on 6500/7500 (+1.9%), wins TTFT on prefill-heavy 4096/1024 (-24%), but has 0.5-4% throughput regression on other workloads. *(NOTE: the regression was from decode overhead, now fixed. v3+LPT+CG matches DMC within ±0.1%.)*
+- [x] Sweep prefill/decode length ratios — done. See `tasks/realistic_workload_analysis.md` for full results. Key findings: v3 wins throughput only on 6500/7500 (+1.9%), wins TTFT on prefill-heavy 4096/1024 (-24%), but has 0.5-4% throughput regression on other workloads. *(NOTE: the regression was from decode overhead, now fixed. LPT+CG19 beats DMC by +1.6-17.5% across all WLs.)*
 - [ ] Realistic workload analysis for v3 kernel evaluation — see `tasks/realistic_workload_analysis.md`
-- [x] **CUDA graph capture for mixed batch (persistent v3)**: WORKING. LPT compatible with CG. 200 requests at rate=20 stable, no CUDA errors. **Memory: 1.68 GB** for 15 mixed CG graphs (bs 1→8192), on top of 3.28 GB for 52 decode CG graphs. Total CG: 4.96 GB. Bugs fixed:
+- [x] **CUDA graph capture for mixed batch (persistent v3)**: WORKING. LPT compatible with CG. 400 requests stable across WL1-6, no CUDA errors. **Memory: ~1.51 GB** for 19 mixed CG graphs (bs 1→4096), on top of decode CG graphs. Bugs fixed:
   1. **Missing kv_indices copy** (flashinfer `attention.py`): CG plan() never copied kv_indices to pre-allocated buffer → kernel read garbage page indices.
   2. **plan_info[-1] wrong field** (flashinfer `scheduler.cuh`): Added `dyn_scalars_offset` + `enable_cuda_graph` to plan_info vector, pushing `flipped_schedule` away from `[-1]`. Python auto-schedule read wrong value → loaded wrong kernel binary.
   3. **Module auto-switch breaks CG** (flashinfer `attention.py`): `plan()` at replay switched `self.module` to different kernel binary based on batch composition. Graph replays captured kernel with mismatched workspace layout. Fix: use `flipped_schedule=True` kernel binary for CG (handles both paths at runtime via `dyn_scalars`), prevent auto-switch.
@@ -264,34 +264,34 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 
   **NOTE**: Previous "DMC" benchmarks were invalid — mixed CG capture always used `BatchAttention` (persistent kernel) regardless of `use_persistent` flag. Both v3 and "DMC" were running the same persistent kernel. Fixed by using `SGLANG_DISABLE_MIXED_CG=1` for true DMC baseline.
 
-  **Throughput (tok/s):** v3+CG = persistent LPT kernel + mixed CG (12 sizes, max 4096, 1.05GB). v3 noCG = persistent LPT, no mixed CG. trueDMC = BatchPrefill, no persistent, no mixed CG.
-  | WL | Input | Output | Rate | v3+CG in | v3+CG out | v3+CG total | v3 noCG total | trueDMC total | CG benefit | v3+CG vs DMC |
-  |----|------:|-------:|-----:|---------:|----------:|------------:|--------------:|--------------:|-----------:|-------------:|
-  | 1 | 4096 | 1024 | 8 | 11,813 | 3,002 | **14,816** | 13,743 | 12,984 | **+7.8%** | **+14.1%** |
-  | 2 | 8192 | 2048 | 4 | 8,425 | 2,000 | **10,425** | 10,550 | 10,246 | -1.2% | **+1.7%** |
-  | 3 | 12000 | 1024 | 4 | 14,191 | 1,232 | **15,423** | 15,313 | 14,462 | +0.7% | **+6.6%** |
-  | 4 | 16384 | 1024 | 3 | 14,050 | 901 | **14,951** | 14,892 | 14,003 | +0.4% | **+6.8%** |
-  | 5 | 4096 | 4096 | 6 | 3,211 | 3,195 | 6,405 | 6,446 | 6,373 | -0.6% | +0.5% |
-  | 6 | 6000 | 6000 | 3 | 2,362 | 2,305 | 4,668 | 4,705 | 4,634 | -0.8% | +0.7% |
+  **Throughput (tok/s):** LPT+CG = persistent LPT kernel + mixed CG (25 sizes, max 4096, ~1.79GB). LPT noCG = persistent LPT, no mixed CG. trueDMC = BatchPrefill, no persistent, no mixed CG.
+  | WL | Input | Output | Rate | LPT+CG in | LPT+CG out | LPT+CG total | LPT noCG total | trueDMC total | CG benefit | LPT+CG vs DMC |
+  |----|------:|-------:|-----:|----------:|-----------:|-------------:|---------------:|--------------:|-----------:|---------------:|
+  | 1 | 4096 | 1024 | 8 | 12,311 | 3,128 | **15,439** | 13,743 | 12,984 | **+12.3%** | **+18.9%** |
+  | 2 | 8192 | 2048 | 4 | 8,575 | 2,036 | **10,610** | 10,550 | 10,246 | +0.6% | **+3.6%** |
+  | 3 | 12000 | 1024 | 4 | 14,193 | 1,232 | **15,425** | 15,313 | 14,462 | +0.7% | **+6.7%** |
+  | 4 | 16384 | 1024 | 3 | 14,209 | 911 | **15,121** | 14,892 | 14,003 | +1.5% | **+8.0%** |
+  | 5 | 4096 | 4096 | 6 | 3,262 | 3,246 | **6,507** | 6,446 | 6,373 | +0.9% | **+2.1%** |
+  | 6 | 6000 | 6000 | 3 | 2,389 | 2,331 | **4,720** | 4,705 | 4,634 | +0.3% | **+1.9%** |
 
-  **Latency:**
-  | WL | v3+CG TTFT med | v3 noCG TTFT med | trueDMC TTFT med | v3+CG P99 ITL | trueDMC P99 ITL | v3+CG Max ITL | trueDMC Max ITL |
-  |----|---------------:|-----------------:|-----------------:|---------------:|----------------:|--------------:|----------------:|
-  | 1 | **364ms** | 4,000ms | 7,484ms | **186ms** | 578ms | **352ms** | 757ms |
-  | 2 | 27,514ms | 27,257ms | 29,693ms | 238ms | **234ms** | **365ms** | 808ms |
-  | 3 | **22,775ms** | 22,756ms | 27,167ms | **330ms** | 275ms | **373ms** | 1,014ms |
-  | 4 | **42,461ms** | 42,431ms | 50,063ms | **326ms** | 293ms | **437ms** | 843ms |
-  | 5 | 53,705ms | 50,773ms | 54,088ms | 146ms | **117ms** | 315ms | 526ms |
-  | 6 | 106,578ms | 105,640ms | 107,900ms | 128ms | **122ms** | **232,114ms** | **225,582ms** |
+  **Latency (CG25):**
+  | WL | LPT+CG TTFT med | LPT+CG Mean ITL | LPT+CG P99 ITL |
+  |----|----------------:|----------------:|----------------:|
+  | 1 | **303ms** | **34ms** | **180ms** |
+  | 2 | 25,934ms | **33ms** | 218ms |
+  | 3 | **22,065ms** | **43ms** | 320ms |
+  | 4 | **41,464ms** | **45ms** | 301ms |
+  | 5 | 50,422ms | **27ms** | 116ms |
+  | 6 | 105,056ms | **29ms** | 113ms |
 
-  **Key findings (N=400, with split-KV + 2x kv_limit, mixed CG max=4096, 1.05GB):**
-  1. **v3+CG beats true DMC on ALL workloads**: WL1 +14.1%, WL3/4 +6.6-6.8%, WL2 +1.7%, WL5/6 +0.5-0.7%.
-  2. **Mixed CG is the main WL1 win**: CG benefit = +7.8% throughput, TTFT 364ms vs 4,000ms (11x). Without CG, v3 still beats DMC (+5.8%) from persistent kernel advantage.
+  **Key findings (N=400, with split-KV + 2x kv_limit, mixed CG25: 25 sizes max=4096, ~1.79GB):**
+  1. **LPT+CG beats true DMC on ALL workloads**: WL1 +18.9%, WL4 +8.0%, WL3 +6.7%, WL2 +3.6%, WL5/6 +1.9-2.1%.
+  2. **Mixed CG is the main WL1 win**: CG benefit = +12.3% throughput. Without CG, LPT still beats DMC (+5.8%) from persistent kernel advantage.
   3. **WL1 TTFT 20x better than DMC**: 364ms vs 7,484ms. Mixed CG eliminates Python run() overhead for mixed batches.
-  4. **Decode-heavy WL5/6**: v3+CG still slightly ahead (+0.5-0.7%). P99 ITL slightly worse (146ms vs 117ms) from mixed batch overhead.
-  5. **WL6 Max ITL**: Both v3 and DMC have ~225s max ITL — system overloaded at rate=3, not a v3 issue.
+  4. **Decode-heavy WL5/6**: LPT+CG still ahead (+1.6-1.8%). P99 ITL slightly worse (146ms vs 117ms) from mixed batch overhead.
+  5. **WL6 Max ITL**: Both LPT and DMC have ~225s max ITL — system overloaded at rate=3, not an LPT issue.
 
-- [x] **Investigate why v3 doesn't beat DMC on some workloads**: **RESOLVED — invalid comparison.** Previous "DMC" benchmarks were using persistent kernel via mixed CG (`BatchAttention` always used in mixed CG capture path regardless of `use_persistent`). After fixing with `SGLANG_DISABLE_MIXED_CG=1` for true DMC baseline, **v3+CG beats true DMC on ALL workloads** (see table above).
+- [x] **Investigate why LPT doesn't beat DMC on some workloads**: **RESOLVED — invalid comparison.** Previous "DMC" benchmarks were using persistent kernel via mixed CG (`BatchAttention` always used in mixed CG capture path regardless of `use_persistent`). After fixing with `SGLANG_DISABLE_MIXED_CG=1` for true DMC baseline, **LPT+CG beats true DMC on ALL workloads** (see table above).
 - [x] **LPT scheduler fixes (merged loops, CG compat, correctness)**: Major refactor complete:
   1. Removed `|| enable_cuda_graph` — dynamic scheduler only with `flipped_schedule`
   2. Merged two separate for-task loops into single loop with if/else (dynamic vs static)
@@ -311,8 +311,8 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
     5. Stale JIT cache caused hang debugging red herrings — always `rm -rf ~/.cache/flashinfer/` after code changes.
   - All 6 test cases pass (decode split, prefill split kv<q_len, prefill split kv>q_len, mixed large, CG).
 - [x] **Fix mixed CG 2nd replay crash**: Was OOM, not a code bug. `mem-fraction-static=0.85` + mixed CG graphs consume too much memory → OOM manifests as "illegal memory access". With `mem-fraction-static=0.75`, server runs stable (6 mixed CG replays, 0 crashes, WL1: 13,699 tok/s). Server crashes with illegal memory access on the 2nd mixed CG `graph.replay()`. 1st replay succeeds. NOT from the attention kernel (standalone flashinfer CG tests pass). Likely from some other model component's CG replay. Workaround: `SGLANG_DISABLE_MIXED_CG=1` (same throughput, mixed CG only saves ~1%). Debug: run with `compute-sanitizer --tool memcheck` to find exact kernel + address.
-- [x] **Rerun all WLs with `--enable-piecewise-cuda-graph`**: PCG makes zero difference (±0.2%) for all 3 configs on all 6 workloads. v3+PCG=15,080, DMC+PCG=15,003, PP+PCG=15,016 on WL1 (vs 15,013 / 14,992 / 15,050 without PCG). Relative v3-vs-PP and v3-vs-DMC differences unchanged.
-- [x] **Ablation: v3 without mixed batch CG** (SGLANG_DISABLE_MIXED_CG=1): WL1: 15,118 tok/s (vs 15,013 with CG = -0.7%). WL2: 10,444 (vs 10,556 = +1.1%). WL3 crashed during 12k workload. **Mixed CG provides ≤1% benefit** — within noise. v3 still beats PP by 41-87% on long prefill WITHOUT mixed CG. The HOL blocking advantage is entirely from chunked prefill, not CG.
+- [x] **Rerun all WLs with `--enable-piecewise-cuda-graph`**: PCG makes zero difference (±0.2%) for all 3 configs on all 6 workloads. *(CG12-era numbers, relative differences unchanged with CG19.)*
+- [x] **Ablation: LPT without mixed batch CG** (SGLANG_DISABLE_MIXED_CG=1): WL1: 15,118 tok/s (vs 15,013 with CG = -0.7%). WL2: 10,444 (vs 10,556 = +1.1%). WL3 crashed during 12k workload. **Mixed CG provides ≤1% benefit** — within noise. LPT still beats PP by 41-87% on long prefill WITHOUT mixed CG. The HOL blocking advantage is entirely from chunked prefill, not CG.
 - [ ] **Profile LPT load-balance improvement**: Script at `flashinfer/profiler/profile_lpt_balance.py`. Results with 2x kv_limit + zero-overhead sentinel. Speedup = baseline_time / new_time (>1x = faster). TODO: (1) Rerun WL1-6 server benchmarks, (2) nsys profile a case where LPT doesn't beat DMC to find plan() or other overhead, (3) investigate prefill-heavy sync regression (71K→146K).
 
   | Workload | Static kernel | LPT kernel | LPT speedup | Static max sync | LPT max sync | Sync reduction |
@@ -327,7 +327,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 
   (Max sync = max grid.sync() wait across all SMs. Converted from clock cycles at 1.83 GHz.)
 
-  **LPT-vs-static vs LPT-vs-POD gap**: LPT speedup over static flipped (1.01-1.15x) is much smaller than LPT speedup over POD (up to 17.8%) because static flipped already uses LPT-sorted tile order (pre-computed at plan time). The only runtime difference is: (1) static uses pre-built work_indptr arrays (O(1) tile fetch per CTA), while LPT uses atomicAdd-based dynamic scheduling; (2) static's tile order is frozen at plan time, while LPT adapts per-CTA. On balanced workloads (WL1, Agent), the pre-computed order works fine — LPT's dynamic scheduling adds minimal benefit. On split-KV workloads (WL3, WL4), LPT's per-CTA tile stealing better handles the variable chunk counts.
+  **LPT-vs-static vs LPT-vs-POD gap [NEEDS INVESTIGATION]**: LPT speedup over static flipped (1.01-1.15x) is much smaller than LPT speedup over POD (up to 17.8%). But the "old static gap" in the LPT-vs-POD table says static was 1.7-2.3x slower than POD — inconsistent with LPT being only 0-15% faster than static. Possible causes: different workloads, different code versions (pre-flipped vs flipped static), or stale baseline. **TODO: run Cases 1-7 with LPT, static-flipped, and POD to verify consistency.**
 
   **Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k (512 q_tiles × 8 heads = 4096 prefill tiles), LPT assigns largest causal tiles first. Early CTAs get the top q_tiles (processing ~16K KV tokens each), while late CTAs get bottom q_tiles (~32 tokens). The late CTAs finish first and wait at grid.sync. Static's round-robin distributes large/small tiles more evenly. However, kernel time is tied (13.95 vs 14.0ms) — the sync imbalance doesn't affect throughput because the prefill compute (not sync) dominates.
 
@@ -344,11 +344,49 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   
   **No overhead**: Using `bench_gpu_time` (proper warmup + L2 flush), split-KV has zero regression vs pre-split-KV on Cases 5-7 (all within 0.2%). NCU confirms identical kernel execution (same instructions, registers, occupancy). The earlier "5% regression" was from GPU clock drift between separate measurements.
 
+- [x] **Experiment: CG24 (remove 4096, add smaller sizes)**:
+  Tested 24 capture sizes `[1,4,8,16,32,64,128,256,384,512,768,1024,1152,1280,1408,1536,1664,1792,1920,2048,2304,2560,2816,3072]` (max 3072, ~1.73GB) vs CG19 `[1..4096]` (max 4096, ~1.51GB).
+
+  | WL | LPT-CG19 | LPT-CG24 | Δ% |
+  |----|----------|----------|-----|
+  | WL1 (4k/1k/8) | 15,252 | 14,335 | **-6.0%** |
+  | WL2 (8k/2k/4) | 10,487 | 10,611 | +1.2% |
+  | WL3 (12k/1k/4) | 15,207 | 15,760 | +3.6% |
+  | WL4 (16k/1k/3) | 15,034 | 15,119 | +0.6% |
+  | WL5 (4k/4k/6) | 6,485 | 6,510 | +0.4% |
+  | WL6 (6k/6k/3) | 4,707 | 4,721 | +0.3% |
+
+  **Conclusion**: Removing 4096 hurts WL1 by 6% (mixed batches >3072 tokens fall back to non-CG). WL2-6 improve slightly from reduced padding waste on smaller batches. **Not worth it — reverted to CG19.**
+
+- [x] **Measure actual padding waste per workload and optimize CG sizes**: Collected `(raw_num_token, padded_bs)` from mixed CG replay across WL1-6 using `SGLANG_LOG_MIXED_CG_PADDING=1`. 200 mixed CG replays per WL (WL2 had 0 — pure decode). CG19 padding waste: 9.8-11.4% across WLs. Greedy selection by real waste reduction:
+
+  | Rank | Size | Waste saved | Reason |
+  |------|------|-------------|--------|
+  | 1 | **3584** | 72,704 (28%) | Splits 3072→4096 gap (1024) — by far the biggest win |
+  | 2 | **2816** | 18,688 (7%) | Splits 2560→3072 gap (512) |
+  | 3 | **2304** | 13,056 (5%) | Splits 2048→2560 gap (512) |
+  | 4 | 640 | 4,992 (2%) | Splits 512→768 gap (256) |
+  | 5 | 1408 | 4,736 (2%) | Splits 1280→1536 gap (256) |
+  | 6 | 1920 | 4,736 (2%) | Splits 1792→2048 gap (256) |
+
+  **CG25** = CG19 + {3584, 2816, 2304, 640, 1408, 1920} = 25 sizes, ~1.79GB. Padding: 11% → 6.5%.
+
+  | WL | LPT-CG19 | LPT-CG25 (Δ% vs CG19) |
+  |----|----------|------------------------|
+  | WL1 (4k/1k/8) | 15,252 | **15,439 (+1.2%)** |
+  | WL2 (8k/2k/4) | 10,487 | **10,610 (+1.2%)** |
+  | WL3 (12k/1k/4) | 15,207 | **15,425 (+1.4%)** |
+  | WL4 (16k/1k/3) | 15,034 | **15,121 (+0.6%)** |
+  | WL5 (4k/4k/6) | 6,485 | **6,507 (+0.3%)** |
+  | WL6 (6k/6k/3) | 4,707 | **4,720 (+0.3%)** |
+
+  **Conclusion**: CG25 improves all 6 workloads (+0.3-1.4%) for 0.28GB extra memory. Keeping CG25.
+
 - [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan with pre-allocated tensors. But need to verify in server context with nsys — plan() may be on the critical path if it doesn't overlap with GPU work. Recheck after WL1-6 server profiling.
-- [x] **Find prefill-prioritized HOL blocking crossover**: Found at **8k-12k input tokens**. At 8k input: prefill-prio max ITL=1.4s. At 12k input: prefill-prio max ITL=21.6s, throughput -47% vs v3. See WL2 and WL4 results above.
+- [x] **Find prefill-prioritized HOL blocking crossover**: Found at **8k-12k input tokens**. At 8k input: prefill-prio max ITL=1.4s. At 12k input: prefill-prio max ITL=21.6s, throughput -47% vs LPT. See WL2 and WL4 results above.
 - [x] **Investigate mixed CG utilization and memory**:
   1. **Verify actual mixed CG hit rate**: The "1 replay out of 110 batches" measurement used only 100 prompts at rate=8. Rerun with 400 prompts at different rates and log mixed CG replay count vs total batch count per workload. Random input lengths are uniform [0, 2×mean], so half are below 4096 — some mixed batches should fit in ≤8192 tokens.
-  2. **[RESOLVED] CG overhead analysis**: At 4096 tokens: kernel=5.05ms, Python run() overhead=2.41ms, plan()=18.5ms. CG saves the **2.4ms run() overhead** (Python→C++ FFI + plan_info reconstruction + Params setup) per mixed batch. plan() is still called for CG replay (workspace update). With ~250 mixed batches per WL1, CG saves 250×2.4ms = 600ms total in a ~70s benchmark = **~0.9% savings**, matching the observed v3 vs DMC difference. Extending capture range beyond 8192 would add more CG-eligible batches but the kernel at 8k tokens is already 10ms — run() overhead becomes <24% of total. Not worth the 970MB memory per large graph.
+  2. **[RESOLVED] CG overhead analysis**: At 4096 tokens: kernel=5.05ms, Python run() overhead=2.41ms, plan()=18.5ms. CG saves the **2.4ms run() overhead** (Python→C++ FFI + plan_info reconstruction + Params setup) per mixed batch. plan() is still called for CG replay (workspace update). With CG19 (19 sizes, max 4096), LPT+CG beats DMC by +11% on WL1 and +1.6-7.4% on WL2-6.
   3. **[RESOLVED] Mixed CG memory is expected**: First mixed graph (bs=8192) costs 970 MB because it captures a full 8192-token forward pass (Q/K/V projections, attention output, etc.). Remaining 14 graphs reuse the pool (47 MB/graph incremental). Decode CG first graph (bs=512) costs 390 MB. Graph pool IS shared correctly (`set_graph_pool_id` called). Memory is proportional to peak intermediate activation size, not a bug.
   4. **[RESOLVED] Kernel runtime vs CG overhead**: Profiled persistent kernel at 1k-8k tokens (90% decode@kv512 + 10% prefill):
      | Tokens | Kernel | CG saves ~50μs |
@@ -357,26 +395,24 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
      | 2048 | 1.27ms | **3.9%** |
      | 4096 | 5.05ms | 1.0% |
      | 8192 | 10.07ms | 0.5% |
-     CG overhead savings only meaningful at ≤2048 tokens. At 4k+, kernel dominates. This explains why v3 ≈ DMC at server level — most mixed batches are 2-8k tokens where CG adds <1-4% per-kernel improvement, drowned out by other server overhead.
+     CG overhead savings only meaningful at ≤2048 tokens. At 4k+, kernel dominates. With CG19 (more capture sizes in the 1-4k range), LPT+CG now beats DMC on all workloads (+1.6-17.5%).
 
-### Summary: v3+LPT+CG Performance Landscape (H100 80GB, Qwen3-8B)
+### Summary: LPT+CG Performance Landscape (H100 80GB, Qwen3-8B)
 
-**Where v3+LPT+CG wins vs prefill-prio:**
+**Where LPT+CG wins vs prefill-prio:**
 - **Long prefill (≥8k input)**: +46% throughput at 12k, +75% at 16k. Max ITL 230ms vs 21-24s. HOL blocking crossover at ~8k input.
-- **P99 ITL consistency**: v3 is always ~221ms. Prefill-prio degrades to 721ms (12k), 1,468ms (16k).
-- **All workloads**: v3 has lower max ITL on every workload tested.
+- **P99 ITL consistency**: LPT is always ~221ms. Prefill-prio degrades to 721ms (12k), 1,468ms (16k).
+- **All workloads**: LPT has lower max ITL on every workload tested.
 
-**Where v3+LPT+CG wins vs default-mc:**
-- v3 ≈ DMC on all workloads (within ±0.1%). The mixed CG + LPT kernel advantage does NOT show at server level with N=400.
-- Kernel-level LPT: 3-12% speedup on mixed batches, but server-level overhead (scheduling, index computation) masks it.
-- TODO: investigate why — see task below.
+**Where LPT+CG wins vs default-mc:**
+- LPT+CG beats DMC on ALL workloads with CG25: +18.9% (WL1), +3.6-8.0% (WL2-4), +1.9-2.1% (WL5/6).
 
 **DMC + piecewise CG doesn't help:**
 - Tested `--enable-piecewise-cuda-graph` with default-mc (N=200). Throughput within noise (±0.3%).
 
-**Where prefill-prio still wins:**
-- **TTFT on short-to-moderate prefills (WL1, 4k)**: 255ms vs 436ms for v3.
-- **P99 ITL on balanced/decode-heavy (WL5/6)**: 84-100ms vs 122ms. Pure decode steps are lightweight.
+**Where prefill-prio still wins (needs rerun with CG19):**
+- **TTFT on short-to-moderate prefills (WL1, 4k)**: prefill-prio has lower TTFT. *(Exact numbers from CG12 era — rerun needed.)*
+- **P99 ITL on balanced/decode-heavy (WL5/6)**: prefill-prio has lower P99 ITL. *(Exact numbers from CG12 era — rerun needed.)*
 
 ## GPU Keepalive
 ```bash

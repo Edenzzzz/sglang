@@ -16,19 +16,21 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 ## Kernel-Level Results
 
 ### LPT vs POD vs Static 3-way comparison
-(H100 80GB, flashinfer `02b068f0`, `bench_mixed_attention.py`, 100 decode + 1-2 prefill each)
+(H100 80GB, flashinfer `e5ec8952`, `bench_mixed_attention.py`, 100 decode + 1-2 prefill each)
 
-| Case | POD (ms) | LPT (ms) | Static (ms) | POD/LPT | POD/Static |
-|------|----------|----------|-------------|---------|------------|
-| 1 (512×1) | 0.30 | 0.31 | 0.30 | 0.97x | 1.00x |
-| 2 (1536×1) | 0.32 | 0.36 | 0.37 | 1.13x | 1.16x |
-| 3 (2048×2) | 0.44 | 0.48 | 0.52 | 1.10x | 1.18x |
-| 4 (2048×1) | 0.34 | 0.38 | 0.42 | 1.12x | 1.24x |
-| 5 (4096×1,kv4k) | 0.82 | 0.82 | 0.97 | 1.00x | 1.18x |
-| 6 (4096×1,kv8k) | 1.29 | **1.24** | 1.51 | **0.96x** | 1.17x |
-| 7 (6000×1,kv8k) | 1.85 | 1.89 | 2.18 | 1.02x | 1.18x |
+| Case | Workload | POD (ms) | LPT (ms) | Static (ms) | POD/LPT | POD/Static |
+|------|----------|----------|----------|-------------|---------|------------|
+| 1 | 100d@kv2k + 1p@512 | 0.30 | 0.31 | 0.31 | 1.03x | 1.02x |
+| 2 | 100d@kv2k + 1p@1536 | 0.32 | 0.35 | 0.37 | 1.10x | 1.14x |
+| 3 | 100d@kv2k + 2p@2048 | 0.44 | 0.48 | 0.52 | 1.09x | 1.18x |
+| 4 | 100d@kv2k + 1p@2048 | 0.34 | 0.37 | 0.42 | 1.10x | 1.26x |
+| 5 | 100d@kv4k + 1p@4096 | 0.82 | 0.82 | 0.98 | 1.00x | 1.19x |
+| 6 | 100d@kv8k + 1p@4096 | 3.81 | 3.81 | 4.05 | 1.00x | 1.06x |
+| 7 | 100d@kv8k + 1p@6000 | 4.40 | 4.45 | 4.73 | 1.01x | 1.08x |
+| 8 | 95d@kv2k+5d@kv24k+1p@2k | 0.70 | **0.65** | 0.71 | **0.93x** | 1.02x |
+| 9 | 100d@kv2k+1p@kv24k,q4k | 9.58 | 9.85 | 9.45 | 1.03x | 0.99x |
 
-On H100, LPT ≈ POD (within 3% on most cases, wins on case 6). Static is 1.0-1.24x slower than both.
+LPT ≈ POD on most cases. LPT wins on Case 8 (split-KV decode: **7% faster** than POD). Case 9 (split-KV prefill) is compute-bound — all schedulers similar. Static 6-26% slower on non-split cases.
 
 **Note on old stale table**: An earlier table showed LPT beating POD by +3-18%. Those numbers were **contaminated by gpu_keepalive** (confirmed from conversation history). Keepalive inflates cooperative launch (persistent) more than POD, creating fake speedup.
 

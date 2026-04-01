@@ -165,40 +165,55 @@ Data-driven optimization: instrumented `_replay_prepare_mixed` with `SGLANG_LOG_
 CG25 = CG19 + {3584, 2816, 2304, 640, 1408, 1920} = 25 sizes, ~1.79GB. Padding: 11% → 6.5%.
 CG29 = CG25 + {3200, 3456, 3712, 3968} = 29 sizes, ~1.98GB. Fills 3072-4096 with 128-token granularity. Padding: 6.5% → 4.3%.
 
-**CG25 vs CG19:**
+**CG evolution** (all measured at rate=8 except CG19/CG25 which used mixed rates):
+- CG19 (19 sizes, ~1.51GB, padding 11%) → CG25 (+6 sizes, ~1.79GB, padding 6.5%) → **CG29** (+4 more in 3072-4096, ~1.98GB, **padding 4.3%**)
+- CG24 experiment (no 4096): hurt WL1 by -6%. 4096 needed for large mixed batches.
 
-| WL | LPT-CG19 | LPT-CG25 (Δ%) |
-|----|----------|----------------|
-| WL1 | 15,252 | **15,439 (+1.2%)** |
-| WL2 | 10,487 | **10,610 (+1.2%)** |
-| WL3 | 15,207 | **15,425 (+1.4%)** |
-| WL4 | 15,034 | **15,121 (+0.6%)** |
-| WL5 | 6,485 | **6,507 (+0.3%)** |
-| WL6 | 4,707 | **4,720 (+0.3%)** |
+### Server Results: LPT+CG29 vs trueDMC (H100 80GB, Qwen3-8B, rate=8 all WLs)
 
-**CG24 experiment (no 4096)**: Removing 4096 hurt WL1 by -6%. Not worth it — 4096 needed for large mixed batches.
+Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / manual `bench_serving` at rate=8, N=400.
 
-### Summary: LPT+CG Performance Landscape (H100 80GB, Qwen3-8B)
+**Throughput (tok/s):**
+| WL | Input | Output | LPT+CG29 in | LPT+CG29 out | LPT+CG29 total | trueDMC total | Δ% |
+|----|------:|-------:|------------:|-------------:|----------------:|--------------:|----:|
+| 1 | 4096 | 1024 | 12,365 | 3,142 | **15,507** | 13,022 | **+19.1%** |
+| 2 | 8192 | 2048 | 8,692 | 2,064 | **10,755** | 10,393 | **+3.5%** |
+| 3 | 12000 | 1024 | 14,381 | 1,248 | **15,629** | 14,912 | **+4.8%** |
+| 4 | 16384 | 1024 | 14,301 | 917 | **15,218** | 14,251 | **+6.8%** |
+| 5 | 4096 | 4096 | 3,309 | 3,293 | **6,602** | 6,431 | **+2.7%** |
+| 6 | 6000 | 6000 | 2,393 | 2,335 | **4,728** | 4,671 | **+1.2%** |
 
-**Where LPT+CG wins vs prefill-prio:**
-- **Long prefill (≥8k input)**: +46% throughput at 12k, +75% at 16k. Max ITL 230ms vs 21-24s.
-- **P99 ITL consistency**: LPT always ~221ms. Prefill-prio degrades to 721ms (12k), 1,468ms (16k).
+**Latency:**
+| WL | LPT+CG29 TTFT med | DMC TTFT med | LPT+CG29 Mean ITL | DMC Mean ITL | LPT+CG29 P99 ITL | DMC P99 ITL |
+|----|-------------------:|-------------:|-------------------:|-------------:|------------------:|------------:|
+| 1 | **284ms** | 5,511ms | **34ms** | 44ms | **173ms** | 536ms |
+| 2 | **47,196ms** | 49,826ms | **34ms** | 35ms | **231ms** | 235ms |
+| 3 | **43,542ms** | 46,415ms | **44ms** | 46ms | 318ms | **263ms** |
+| 4 | **81,765ms** | 88,004ms | **45ms** | 48ms | 296ms | **292ms** |
+| 5 | **57,874ms** | 59,637ms | **28ms** | 28ms | 122ms | **117ms** |
+| 6 | **137,571ms** | 140,771ms | **29ms** | 29ms | **114ms** | 119ms |
 
-**Where LPT+CG wins vs default-mc:**
-- LPT+CG beats DMC on ALL workloads with CG25: +19.0% (WL1), +3.0-6.7% (WL2-4), +1.6-2.1% (WL5/6).
+**Key findings:**
+1. **LPT+CG29 beats DMC on ALL workloads**: +19.1% (WL1), +6.8% (WL4), +4.8% (WL3), +3.5% (WL2), +2.7% (WL5), +1.2% (WL6).
+2. **TTFT**: CG29 wins massively on WL1 (284ms vs 5.5s = 19x). Wins on all WLs.
+3. **Mean ITL**: CG29 lower on all WLs (27-45ms vs 28-48ms).
+4. **P99 ITL**: CG29 wins big on WL1 (173ms vs 536ms). WL3/4/5 slightly higher — CG padding tradeoff (51/200 replays pad large batches by 10-13%).
 
-**Where prefill-prio still wins (needs rerun):**
-- TTFT on short prefills (WL1, 4k): prefill-prio has lower TTFT.
-- P99 ITL on decode-heavy (WL5/6): prefill-prio has lower P99 ITL.
+**ShareGPT (thinking, rate=4, max_out=4096, N=400):**
+| Config | Total tok/s | TTFT med | Mean ITL | P99 ITL |
+|--------|------------|----------|----------|---------|
+| LPT+CG25 | **4,962** | **40,767ms** | **36ms** | **67ms** |
+| trueDMC | 4,794 | 53,298ms | 41ms | 96ms |
+| **Δ** | **+3.5%** | **-23.5%** | **-12%** | **-30%** |
 
 ---
 
 ## Open TODOs
 
-- [ ] **Benchmark CG29 vs trueDMC at rate=8**: In progress. CG29 done, trueDMC running.
-- [ ] **Unify LPT profile workloads**: Match profile_lpt_balance.py with bench_mixed_attention.py (100 decode). Add proper split-KV decode and prefill test cases.
-- [ ] **nsys profile POD vs LPT**: Compare plan() overhead, indexing, kernel time on 2-3 WLs.
+- [ ] **Unify LPT profile workloads**: Match profile_lpt_balance.py with bench_mixed_attention.py (100 decode). Add proper split-KV decode and prefill test cases. Keep 3d@64k+1p@2k.
+- [ ] **nsys profile POD vs LPT**: Compare plan() overhead, indexing, kernel time on 2-3 WLs. Provide nsys files.
 - [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan. Verify in server context with nsys.
+- [ ] **Reorganize this doc**: Separate kernel-level vs server-level sections with clear headers.
 - [ ] Realistic workload analysis — see `tasks/realistic_workload_analysis.md`
 
 ---

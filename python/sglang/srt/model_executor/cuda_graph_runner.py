@@ -280,7 +280,7 @@ class CudaGraphRunner:
         self._mixed_cg_padding_log = [] if self._log_mixed_cg_padding else None
         if self.enable_mixed_cuda_graph:
             self.mixed_capture_bs = sorted(
-                [1, 4, 8, 16, 32, 64, 128, 256, 384, 512, 640, 768, 1024, 1280, 1408, 1536, 1792, 1920, 2048, 2304, 2560, 2816, 3072, 3584, 4096]
+                [1, 4, 8, 16, 32, 64, 128, 256, 384, 512, 640, 768, 1024, 1280, 1408, 1536, 1792, 1920, 2048, 2304, 2560, 2816, 3072, 3200, 3456, 3584, 3712, 3968, 4096]
             )
             max_mixed_tokens = min(
                 model_runner.server_args.chunked_prefill_size or 8192, 8192

@@ -48,11 +48,11 @@ run_wl() {
 }
 
 run_wl 1 4096  1024 8
-run_wl 2 8192  2048 4
-run_wl 3 12000 1024 4
-run_wl 4 16384 1024 3
-run_wl 5 4096  4096 6
-run_wl 6 6000  6000 3
+run_wl 2 8192  2048 8
+run_wl 3 12000 1024 8
+run_wl 4 16384 1024 8
+run_wl 5 4096  4096 8
+run_wl 6 6000  6000 8
 
 kill $SERVER_PID 2>/dev/null
 wait $SERVER_PID 2>/dev/null

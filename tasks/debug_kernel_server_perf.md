@@ -85,32 +85,7 @@ Added `use_persistent` and `use_pod` fields to `bench_serving.py` CSV output and
 
 Full output saved to `tasks/debug_kernel_server_perf/profile_logs/bench_results/`.
 
-**Workload 1: --random-input 4096 --random-output 1024 --request-rate 8 --num-prompt 400**
-| Config | Total tok/s | Out tok/s | TTFT med (ms) | TTFT P95 | TTFT P99 | ITL med (ms) | ITL P95 | ITL P99 | Max ITL |
-|--------|-----------|----------|-------------|---------|---------|------------|---------|---------|---------|
-| **Prefill-prioritized** | **15,108** | 3,061 | **226** | **4,869** | **5,148** | **26** | **118** | **182** | 486 |
-| Persistent (static) | 13,369 | 2,709 | 4,876 | 13,208 | 13,555 | 27 | 131 | 504 | 714 |
-| Default-mixed-chunk | 13,249 | 2,685 | 4,813 | 14,005 | 14,299 | 27 | 133 | 495 | 664 |
-| POD | 13,199 | 2,675 | 6,148 | 14,403 | 14,707 | 26 | 158 | 525 | 611 |
-| Persistent LPT (dynamic) | 13,059 | 2,646 | 4,986 | 14,693 | 15,164 | 26 | 125 | 579 | 792 |
-
-**Workload 2: --random-input 6500 --random-output 7500 --request-rate 8 --num-prompt 400**
-| Config | Total tok/s | Out tok/s | TTFT med (s) | TTFT P95 (s) | TTFT P99 (s) | ITL med (ms) | ITL P95 | ITL P99 | Max ITL (s) |
-|--------|-----------|----------|------------|------------|------------|------------|---------|---------|-----------|
-| **Persistent LPT (dynamic)** | **4,104** | **2,172** | **189** | **451** | **487** | **26** | **27** | **83** | 472 |
-| Persistent (static) | 4,072 | 2,155 | 196 | 457 | 493 | 26 | 28 | 89 | 502 |
-| Prefill-prioritized | 4,046 | 2,141 | 191 | 464 | 505 | 27 | 28 | 52 | 503 |
-| POD | 3,995 | 2,114 | 199 | 476 | 510 | 27 | 29 | 104 | 512 |
-| Default-mixed-chunk | 3,987 | 2,110 | 197 | 476 | 512 | 27 | 29 | 95 | 514 |
-
-**Key findings:**
-1. **WL1 (short output)**: Prefill-prioritized dominates throughput (15.1K vs ~13.2K) and TTFT (226ms vs ~5s). All mixed-chunk configs have similar throughput (~13.2K). **Tail latency**: Prefill-prio has best P99 ITL (182ms) vs mixed-chunk configs (495-579ms). POD has worst P95 ITL (158ms).
-2. **WL2 (long output)**: All configs collapse to ~4K tok/s with 3+ minute TTFT — the system is saturated. v3 wins marginally on throughput (4,104) and TTFT (189s). Prefill-prio has best P99 ITL (52ms) since long decodes run uninterrupted.
-3. **v3 vs POD**: v3 wins WL2 throughput (4,104 vs 3,995) and TTFT (189s vs 199s). On WL1, v3 is slightly behind (13,059 vs 13,199). v3's WL1 P95 ITL (125ms) is better than POD (158ms).
-4. **Persistent (static) surprisingly competitive**: Beats default-mixed-chunk on WL1 throughput (13,369 vs 13,249) and WL2 (4,072 vs 3,987). No longer collapses on WL2 as in old B200 results.
-5. **Prefill-prioritized trade-off confirmed**: Best WL1 throughput+TTFT+tail ITL, but on WL2 the advantage disappears. The P99 ITL concern (head-of-line blocking) is NOT seen — Prefill-prio actually has the lowest P99 ITL on both workloads.
-
-**NOTE:** POD requires `--warmup-requests 25` (or flush cache + re-run) because flashinfer JIT-compiles POD kernels on first use, which is very slow. The earlier 601 tok/s result was caused by JIT overhead during the benchmark. flashinfer 0.5.2 shows ~20% throughput regression for all configs vs 0.4.1.
+(Old WL1-2 5-config results removed — see WL1-6 results below with corrected DMC baseline.)
 
 ---
 
@@ -139,17 +114,6 @@ Currently the persistent kernel uses `TwoStageHolisticPlan` in `../flashinfer/in
 ### Validation
 - `bench_mixed_attention.py`: `FlippedSchedule=True` should beat `FlippedSchedule=False` **and** POD
 - Precision must match (note: `o_batch_pod` has a precision issue likely due to `join_outputs` p/d order mismatch — fix that)
-
-### Baseline Benchmark Results (B200, flashinfer 0.5.2)
-| Case | Prefill | Decode | Static Persistent (ms) | POD (ms) | POD speedup |
-|------|---------|--------|----------------------|----------|-------------|
-| 1 | 512x1 | 1x100, kv=2048 | 0.28 | 0.17 | 1.69x |
-| 2 | 1536x1 | 1x100, kv=2048 | 0.48 | 0.21 | 2.33x |
-| 3 | 2048x2 | 1x100, kv=2048 | 0.80 | 0.38 | 2.09x |
-| 4 | 2048x1 | 1x100, kv=2048 | 0.52 | 0.24 | 2.19x |
-| 5 | 4096x1 | 1x100, kv=4096 | 1.45 | 0.72 | 2.01x |
-| 6 | 4096x1 | 1x100, kv=8192 | 1.92 | 0.92 | 2.09x |
-| 7 | 6000x1 | 1x100, kv=8192 | 3.77 | 4.14 | 0.91x |
 
 ### Issues Encountered
 1. **POD precision mismatch in `bench_mixed_attention.py`**: Fixed. The `join_outputs=True` was returning prefill-first order but the reference `o` has decode-first order. Changed to use `join_outputs=False` (returns `(o_p, o_d)` tuple) and cat manually in d-first order.
@@ -212,8 +176,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 ### Key Findings from Investigation
 1. **FlippedSchedule rarely triggers**: Condition `prefill*128 <= decode_kv_total && prefill >= 3072`. Only cases 6-7 in bench trigger it. Cases 1-5 where persistent is 2x slower than POD don't use FlippedSchedule.
 2. **v2 (static LPT sort + relaxed condition) improved some cases but still 2x gap**: The static MinHeap tile assignment + atomic indexing into the flat array is fundamentally wrong — it doesn't do L2-aware grouping and the tile metadata is still laid out per-cluster.
-3. **B200 specs**: L2=126MB, 148 SMs, 2 CTAs/SM (smem constrained, same as POD).
-4. **`__syncthreads` for smem broadcast is safe**: Confirmed by user.
+3. **`__syncthreads` for smem broadcast is safe**: Confirmed by user.
 
 ### Progress
 
@@ -227,41 +190,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 **v3: FA3-style runtime dynamic scheduler (WORKING)**
 - Implemented `tile_idx_to_work_tile()` with batch-find while loop + L2-aware LPT mapping
 - Fixed critical KV splitting bug: `dyn_len_kv_chunk` was too small, causing `num_kv_chunks > 1` and partial output overwrites. Fixed by setting `dyn_len_kv_chunk = INT_MAX` (no KV splitting).
-- **Results (B200, driver 580, flashinfer 0.5.2)**:
-  | Case | Persistent LPT | POD | Speedup |
-  |------|--------------|-----|---------|
-  | 1 | **0.18ms** | 0.17ms | 1.06x |
-  | 2 | **0.22ms** | 0.21ms | 1.06x |
-  | 3 | **0.36ms** | 0.38ms | **0.94x** |
-  | 4 | **0.25ms** | 0.24ms | 1.05x |
-  | 5 | **0.63ms** | 0.71ms | **0.89x** |
-  | 6 | **0.85ms** | 0.90ms | **0.95x** |
-  | 7 | **1.52ms** | 1.64ms | **0.93x** |
-- **Persistent beats POD in 4/7 cases**, near-parity in remaining 3. Original gap was ~2x.
-- NOTE: earlier results used `np.mean` for persistent (inflated by outliers) — fixed to `np.median` to match POD measurement.
-
-**v3 + uniform_num_m_blocks fast path (latest)**:
-  | Case | Persistent LPT | POD | Ratio |
-  |------|--------------|-----|-------|
-  | 1 | 0.17ms | 0.17ms | 1.03x (tie, 6us cooperative launch overhead) |
-  | 2 | 0.21ms | 0.21ms | 1.02x (tie) |
-  | 3 | **0.34ms** | 0.38ms | **0.88x** |
-  | 4 | 0.24ms | 0.24ms | 1.00x (tie) |
-  | 5 | **0.60ms** | 0.72ms | **0.84x** |
-  | 6 | **0.82ms** | 0.92ms | **0.89x** |
-  | 7 | **3.99ms** | 4.15ms | **0.96x** |
-- **Persistent beats POD in 4/7 cases, ties in 3/7.** No case where POD is meaningfully faster.
-
-**NCU profiling (case 1: 512x1 prefill + 100 decode@kv2048)**:
-  | Metric | Persistent | POD |
-  |--------|-----------|-----|
-  | Kernel time | 224.45us | 223.04us |
-  | DRAM reads | 847MB | 850MB |
-  | L2 hit rate | 1.85% | 1.40% |
-  | Grid size | (1, 296) | (928, 1) |
-- **Kernel execution is identical.** The 2-3% gap in CUDA event timing is from `cudaLaunchCooperativeKernel` overhead vs regular `cudaLaunchKernel`.
-- Both kernels are bandwidth-bound with near-zero L2 reuse (KV cache is too large: 100 seqs × 2048 × 128 × 2 × 2 = 100MB per head, >> 126MB L2).
-- Switching to regular launch crashes (persistent kernel requires guaranteed block residency for 296-block grid on 296 SMs).
+- Added uniform_num_m_blocks O(1) fast path, split-KV with zero-overhead sentinel (INT_MAX).
 
 **v3: FA3-style runtime dynamic scheduler (IN PROGRESS)**
 ## TODOs
@@ -305,13 +234,6 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   - **Additionally**: CUDA graph capture uses `BatchAttention` instead of `BatchDecodeWithPagedKVCacheWrapper` when persistent is enabled (line 665-673). This forces ALL decode steps through the heavier persistent wrapper, even though the persistent kernel only activates on mixed steps.
   - **Root cause summary**: The throughput regression is NOT from the persistent kernel itself (which is faster per-call). It's from **unnecessary overhead on pure decode steps**: heavier plan(), no fast_decode_plan optimization, and BatchAttention wrapper overhead on every decode step.
   - **Fix implemented**: Removed persistent decode override — decode steps now use regular `BatchDecodeWithPagedKVCacheWrapper` with fast_decode_plan + CUDA graphs. `BatchAttention` only used for mixed batches.
-  - **B200 results after fix** (WL1: 4096/1024/400, to be rerun on H100):
-    | Config | Total tok/s | TTFT med | ITL med | P99 ITL |
-    |--------|-----------|---------|---------|---------|
-    | Prefill-prio | **19,131** | **67ms** | **8ms** | **74ms** |
-    | **v3-fixed** | **18,847** | **127ms** | 12ms | 299ms |
-    | Default-mc | 18,782 | 139ms | 12ms | 256ms |
-    v3-fixed now **matches default throughput** (+0.3%) and has better TTFT (127ms vs 139ms). Gap to prefill-prio narrowed from 14% to **1.5%** (was caused by BatchAttention decode overhead).
   - Profiles saved to `tasks/debug_kernel_server_perf/profile_logs/nsys/`.
 - [x] Rerun full 5-config server benchmark with correct flags (`--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`) and **P95/P99 TTFT and ITL**. Results above. Key surprise: Prefill-prioritized has LOWEST P99 ITL, not highest as expected.
 - [x] **Microbench vs server reversal explained**: The 0.5.2 microbenchmark measures a single mixed-batch kernel call where persistent/POD is faster than BatchPrefill. But in the server: (a) most batches are **pure decode** (not mixed) — persistent is not used for decode, so the kernel advantage only applies to the minority of mixed steps, (b) POD has double plan() + per-layer GPU-CPU sync overhead that the microbenchmark doesn't capture, (c) the server measures end-to-end including scheduling, index computation, and CUDA graph overheads — not just the attention kernel. The reversal is because the kernel advantage on infrequent mixed batches is outweighed by Python/plan overhead on all batches.
@@ -369,9 +291,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   4. **Decode-heavy WL5/6**: v3+CG still slightly ahead (+0.5-0.7%). P99 ITL slightly worse (146ms vs 117ms) from mixed batch overhead.
   5. **WL6 Max ITL**: Both v3 and DMC have ~225s max ITL — system overloaded at rate=3, not a v3 issue.
 
-- [x] **Investigate why v3 doesn't beat DMC on some workloads**: Mixed CG is 100% utilized (251+ replays on WL1, 0 non-CG). Yet v3 ≈ DMC.
-  - **(a) CONFIRMED: v3 plan() is 5.82ms slower** than DMC plan() (74ms vs 68ms, +9% at 4k tokens). TwoStageHolisticPlan processes two queues + LPT sorting + dynamic scheduler metadata → extra overhead. With ~250 mixed batches per WL1: +1,455ms. CG run() savings: -600ms. **Net: +855ms ≈ 1.2% overhead**, matching observed v3 ≈ DMC.
-  - To make v3 definitively beat DMC, need to: (1) optimize plan() (skip LPT metadata when not needed? cache work assignments?), (2) reduce plan() sync overhead (the `torch.cuda.synchronize()` in plan() is 18ms), or (3) find workloads where kernel speedup > plan overhead.
+- [x] **Investigate why v3 doesn't beat DMC on some workloads**: **RESOLVED — invalid comparison.** Previous "DMC" benchmarks were using persistent kernel via mixed CG (`BatchAttention` always used in mixed CG capture path regardless of `use_persistent`). After fixing with `SGLANG_DISABLE_MIXED_CG=1` for true DMC baseline, **v3+CG beats true DMC on ALL workloads** (see table above).
 - [x] **LPT scheduler fixes (merged loops, CG compat, correctness)**: Major refactor complete:
   1. Removed `|| enable_cuda_graph` — dynamic scheduler only with `flipped_schedule`
   2. Merged two separate for-task loops into single loop with if/else (dynamic vs static)

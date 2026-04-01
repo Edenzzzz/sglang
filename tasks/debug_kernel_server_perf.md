@@ -211,7 +211,9 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - [x] Run sglang server benchmark: Qwen3-8B, --random-input 4096 --random-output 1024 --request-rate 8 --num-prompt 400
 - [x] Run sglang server benchmark: Qwen3-8B, --random-input 6500 --random-output 7500 --request-rate 8 --num-prompt 400
 - [x] Run full 5-config comparison with **P95/P99 TTFT and ITL** on H100 80GB with `--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`. Key surprise: Prefill-prioritized has lowest P99 ITL (not highest as expected).
-- [x] **Investigate 2x persistent-vs-POD gap in baseline benchmarks**: **RESOLVED.** The 2x gap was from a stale code version (pre-flipped, pre-split-KV). After all fixes, LPT ≈ POD (within 3% on most cases). See updated 3-way table in "Profile LPT load-balance improvement" section below. *(Old numbers below are stale — kept for history.)*
+- [x] **Investigate 2x persistent-vs-POD gap in baseline benchmarks**: **RESOLVED — old numbers were likely on B200, not H100.** The absolute times (0.526ms case 1) are 40-75% higher than current H100 results (0.30ms) — POD didn't change, so this is a GPU difference, not code regression. B200 has 126MB L2 (vs H100 50MB) and different clock speeds. LPT's L2-sectioning advantage varies by GPU. See 3-way table in "Profile LPT load-balance improvement" for current H100 results.
+
+  *(Old B200(?) numbers — kept for history, do not compare with H100 results above:)*
   | Case | Persistent LPT (ms) | POD (ms) | LPT speedup | Old static gap |
   |------|-------------------|---------|-------------|---------------|
   | 1 (512×1) | 0.526 | 0.500 | -5.1% | was 1.69x |
@@ -221,7 +223,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   | 5 (4096×1, kv4096) | **0.825** | 0.973 | **+15.2%** | was 2.01x |
   | 6 (4096×1, kv8192) | **1.242** | 1.511 | **+17.8%** | was 2.09x |
   | 7 (6000×1, kv8192) | **1.910** | 2.190 | **+12.8%** | was 0.91x |
-  *(These numbers are from an earlier code version and don't match current results. See 3-way table below for latest.)*
+  *(Commit/GPU unknown — no metadata recorded. See CLAUDE.md rule on recording commit IDs.)*
 - [x] **Test FA3's tile fetching pattern**: Tested twice — v1 (naive blockIdx.y + gridDim.y offset) and v2 (with guard: only use FA3 pattern when `dyn_total_tiles >= gridDim.y`). Both are worse than sequential atomicAdd:
   - v2 results (with guard): cases 2-4 are 10-19% slower (0.39 vs 0.35, 0.43 vs 0.36ms). Cases 5-7 similar or slightly worse.
   - Also shows static vs flipped persistent: static is consistently ~20% slower than flipped on cases 5-7 (0.99 vs 0.84, 1.56 vs 1.35, 2.25 vs 1.90ms), confirming FlippedSchedule benefit on large workloads.
@@ -327,7 +329,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 
   (Max sync = max grid.sync() wait across all SMs. Converted from clock cycles at 1.83 GHz.)
 
-  **LPT-vs-static vs LPT-vs-POD gap [RESOLVED]**: Re-ran Cases 1-7 (100 decode each) with all 3 schedulers:
+  **LPT-vs-static vs LPT-vs-POD 3-way comparison** (H100 80GB, flashinfer `02b068f0`, `bench_mixed_attention.py`, 100 decode each):
 
   | Case | POD (ms) | LPT (ms) | Static (ms) | POD/LPT | POD/Static |
   |------|----------|----------|-------------|---------|------------|
@@ -339,7 +341,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   | 6 (4096×1,kv8k) | 1.29 | **1.24** | 1.51 | **0.96x** | 1.17x |
   | 7 (6000×1,kv8k) | 1.85 | 1.89 | 2.18 | 1.02x | 1.18x |
 
-  **The "old static gap" of 1.7-2.3x was from a stale code version** (pre-flipped, pre-split-KV, pre-LPT fixes). Current code: static is 1.0-1.24x slower than POD, LPT ≈ POD (within 3% on most cases, wins on case 6). The LPT-vs-static gap (1.03-1.22x) is consistent with POD-vs-static (1.0-1.24x) since LPT ≈ POD.
+  On H100, LPT ≈ POD (within 3% on most cases, wins on case 6). Static is 1.0-1.24x slower than both. The old table showing LPT +3-18% over POD was likely measured on B200 (absolute times 40-75% higher for identical POD code — can't be a code change).
 
   **Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k (512 q_tiles × 8 heads = 4096 prefill tiles), LPT assigns largest causal tiles first. Early CTAs get the top q_tiles (processing ~16K KV tokens each), while late CTAs get bottom q_tiles (~32 tokens). The late CTAs finish first and wait at grid.sync. Static's round-robin distributes large/small tiles more evenly. However, kernel time is tied (13.95 vs 14.0ms) — the sync imbalance doesn't affect throughput because the prefill compute (not sync) dominates.
 
@@ -393,6 +395,15 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   | WL6 (6k/6k/3) | 4,707 | **4,720 (+0.3%)** |
 
   **Conclusion**: CG25 improves all 6 workloads (+0.3-1.4%) for 0.28GB extra memory. Keeping CG25.
+
+- [x] **ShareGPT benchmark with thinking** (Qwen3-8B, `--reasoning-parser qwen3`, `--sharegpt-output-len 4096`, N=400, rate=4):
+
+  | Config | Total tok/s | Out tok/s | TTFT med | Mean ITL | P99 ITL |
+  |--------|------------|-----------|----------|----------|---------|
+  | LPT+CG25 | **4,962** | **4,325** | **40,767ms** | **36ms** | **67ms** |
+  | trueDMC | 4,794 | 4,178 | 53,298ms | 41ms | 96ms |
+
+  **LPT+CG25 vs DMC**: +3.5% throughput, -23.5% TTFT, -12% mean ITL, -30% P99 ITL. ShareGPT is decode-heavy (in:out ≈ 1:7 with thinking) — LPT still wins on all metrics.
 
 - [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan with pre-allocated tensors. But need to verify in server context with nsys — plan() may be on the critical path if it doesn't overlap with GPU work. Recheck after WL1-6 server profiling.
 - [x] **Find prefill-prioritized HOL blocking crossover**: Found at **8k-12k input tokens**. At 8k input: prefill-prio max ITL=1.4s. At 12k input: prefill-prio max ITL=21.6s, throughput -47% vs LPT. See WL2 and WL4 results above.

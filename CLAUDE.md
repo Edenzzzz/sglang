@@ -24,6 +24,10 @@
 - Do NOT add comments like "complex", "too hard", or "not supported yet" as justification for skipping functionality. Implement it or clearly explain what's blocking with a concrete TODO.
 - Do NOT write self-reminder comments after fixing or deleting code (e.g., "// CG is orthogonal — ..."). Comments should explain the code, not document your thought process or lessons learned. Use memory files for that.
 
+# Performance Results
+
+- For ALL performance tables/numbers in task docs, always record: (1) the git commit ID (both sglang and flashinfer repos if applicable), and (2) the exact script/command used to produce the results. This makes results reproducible and enables bisecting regressions.
+
 # Commits
 
 - For every commit, document changes in `CHANGELOG.md` with version number updates. Focus on main functional changes and important fixes, not minor details.

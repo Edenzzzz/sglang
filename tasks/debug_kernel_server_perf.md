@@ -211,7 +211,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - [x] Run sglang server benchmark: Qwen3-8B, --random-input 4096 --random-output 1024 --request-rate 8 --num-prompt 400
 - [x] Run sglang server benchmark: Qwen3-8B, --random-input 6500 --random-output 7500 --request-rate 8 --num-prompt 400
 - [x] Run full 5-config comparison with **P95/P99 TTFT and ITL** on H100 80GB with `--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`. Key surprise: Prefill-prioritized has lowest P99 ITL (not highest as expected).
-- [x] **Investigate 2x persistent-vs-POD gap in baseline benchmarks**: **RESOLVED.** The 2x gap was between the **static** persistent scheduler (baseline) and POD. The v3 dynamic scheduler closes this gap entirely:
+- [x] **Investigate 2x persistent-vs-POD gap in baseline benchmarks**: **RESOLVED.** The 2x gap was from a stale code version (pre-flipped, pre-split-KV). After all fixes, LPT ≈ POD (within 3% on most cases). See updated 3-way table in "Profile LPT load-balance improvement" section below. *(Old numbers below are stale — kept for history.)*
   | Case | Persistent LPT (ms) | POD (ms) | LPT speedup | Old static gap |
   |------|-------------------|---------|-------------|---------------|
   | 1 (512×1) | 0.526 | 0.500 | -5.1% | was 1.69x |
@@ -221,7 +221,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   | 5 (4096×1, kv4096) | **0.825** | 0.973 | **+15.2%** | was 2.01x |
   | 6 (4096×1, kv8192) | **1.242** | 1.511 | **+17.8%** | was 2.09x |
   | 7 (6000×1, kv8192) | **1.910** | 2.190 | **+12.8%** | was 0.91x |
-  LPT speedup = (POD - LPT) / POD. Measured with `bench_gpu_time` (warmup + L2 flush). LPT beats POD on 6/7 cases, biggest wins on large KV (Cases 4-7, +11-18%). Case 1 is a slight regression (-5%) from LPT tile-fetching overhead dominating short decode. Confirmed zero regression vs pre-split-KV code (within 0.2%). Run on H100 80GB.
+  *(These numbers are from an earlier code version and don't match current results. See 3-way table below for latest.)*
 - [x] **Test FA3's tile fetching pattern**: Tested twice — v1 (naive blockIdx.y + gridDim.y offset) and v2 (with guard: only use FA3 pattern when `dyn_total_tiles >= gridDim.y`). Both are worse than sequential atomicAdd:
   - v2 results (with guard): cases 2-4 are 10-19% slower (0.39 vs 0.35, 0.43 vs 0.36ms). Cases 5-7 similar or slightly worse.
   - Also shows static vs flipped persistent: static is consistently ~20% slower than flipped on cases 5-7 (0.99 vs 0.84, 1.56 vs 1.35, 2.25 vs 1.90ms), confirming FlippedSchedule benefit on large workloads.
@@ -327,7 +327,19 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 
   (Max sync = max grid.sync() wait across all SMs. Converted from clock cycles at 1.83 GHz.)
 
-  **LPT-vs-static vs LPT-vs-POD gap [NEEDS INVESTIGATION]**: LPT speedup over static flipped (1.01-1.15x) is much smaller than LPT speedup over POD (up to 17.8%). But the "old static gap" in the LPT-vs-POD table says static was 1.7-2.3x slower than POD — inconsistent with LPT being only 0-15% faster than static. Possible causes: different workloads, different code versions (pre-flipped vs flipped static), or stale baseline. **TODO: run Cases 1-7 with LPT, static-flipped, and POD to verify consistency.**
+  **LPT-vs-static vs LPT-vs-POD gap [RESOLVED]**: Re-ran Cases 1-7 (100 decode each) with all 3 schedulers:
+
+  | Case | POD (ms) | LPT (ms) | Static (ms) | POD/LPT | POD/Static |
+  |------|----------|----------|-------------|---------|------------|
+  | 1 (512×1) | 0.30 | 0.31 | 0.30 | 0.97x | 1.00x |
+  | 2 (1536×1) | 0.32 | 0.36 | 0.37 | 1.13x | 1.16x |
+  | 3 (2048×2) | 0.44 | 0.48 | 0.52 | 1.10x | 1.18x |
+  | 4 (2048×1) | 0.34 | 0.38 | 0.42 | 1.12x | 1.24x |
+  | 5 (4096×1,kv4k) | 0.82 | 0.82 | 0.97 | 1.00x | 1.18x |
+  | 6 (4096×1,kv8k) | 1.29 | **1.24** | 1.51 | **0.96x** | 1.17x |
+  | 7 (6000×1,kv8k) | 1.85 | 1.89 | 2.18 | 1.02x | 1.18x |
+
+  **The "old static gap" of 1.7-2.3x was from a stale code version** (pre-flipped, pre-split-KV, pre-LPT fixes). Current code: static is 1.0-1.24x slower than POD, LPT ≈ POD (within 3% on most cases, wins on case 6). The LPT-vs-static gap (1.03-1.22x) is consistent with POD-vs-static (1.0-1.24x) since LPT ≈ POD.
 
   **Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k (512 q_tiles × 8 heads = 4096 prefill tiles), LPT assigns largest causal tiles first. Early CTAs get the top q_tiles (processing ~16K KV tokens each), while late CTAs get bottom q_tiles (~32 tokens). The late CTAs finish first and wait at grid.sync. Static's round-robin distributes large/small tiles more evenly. However, kernel time is tied (13.95 vs 14.0ms) — the sync imbalance doesn't affect throughput because the prefill compute (not sync) dominates.
 

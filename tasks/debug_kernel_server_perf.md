@@ -215,7 +215,23 @@ Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / 
 ## Open TODOs
 
 - [ ] **Unify LPT profile workloads**: Match profile_lpt_balance.py with bench_mixed_attention.py (100 decode). Add proper split-KV decode and prefill test cases. Keep 3d@64k+1p@2k.
-- [ ] **nsys profile POD vs LPT**: Compare plan() overhead, indexing, kernel time on 2-3 WLs. Provide nsys files.
+- [x] **nsys profile LPT+CG29 vs trueDMC** (WL1, 50 prompts, rate=8):
+  Files: `profile_logs/lpt_cg29_wl1.nsys-rep` (40MB), `profile_logs/trueDMC_wl1.nsys-rep` (35MB).
+
+  | CUDA API | LPT+CG29 | trueDMC | Note |
+  |----------|----------|---------|------|
+  | cudaDeviceSynchronize | **2,812ms** (1,869 calls) | 1,181ms (2,176 calls) | LPT 2.4x more sync — cooperative launch overhead |
+  | cudaMemcpyAsync | 2,650ms (4,538 calls) | 2,639ms (5,036 calls) | ~same |
+  | cudaLaunchKernel | 663ms (70,286 calls) | 670ms (56,213 calls) | LPT more launches, same total |
+  | cudaGraphInstantiate | 997ms (1,624 calls) | 752ms (1,997 calls) | LPT has more CG instantiations (29 mixed + decode) |
+
+  | Kernel | LPT+CG29 | trueDMC |
+  |--------|----------|---------|
+  | PersistentKernelTemplate | 618ms (2,088 calls, avg 296μs) | — |
+  | BatchPrefillWithPagedKVCache | 76ms (2,592 calls, avg 29μs) | (included in nvjet totals) |
+  | nvjet GEMM total | ~2.8s | ~1.6s |
+
+  **Key finding**: LPT's main overhead is `cudaDeviceSynchronize` (2.4x more than DMC). This is from cooperative launch — each persistent kernel invocation requires a device-wide sync before launch. The kernel itself (avg 296μs) is efficient, but the sync overhead accumulates. Mixed CG helps by avoiding repeated cooperative launches for cached batch sizes.
 - [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan. Verify in server context with nsys.
 - [ ] **Reorganize this doc**: Separate kernel-level vs server-level sections with clear headers.
 - [ ] Realistic workload analysis — see `tasks/realistic_workload_analysis.md`

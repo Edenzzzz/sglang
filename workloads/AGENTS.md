@@ -85,21 +85,23 @@ Goal: identify which real workloads benefit most from v3 persistent kernel's pre
 
 | Dataset | Cat | Count | Source | Turns Mean | Turns Med | Turns P95 | In Mean | In Med | In P95 | Out Mean | Out Med | Out P95 | Note |
 |---------|-----|------:|--------|----------:|----------:|----------:|--------:|-------:|-------:|---------:|--------:|--------:|------|
-| ShareGPT | — | 92,886 | manual | ~6† | ~6† | — | 319 | 136 | 945 | TBD | TBD | TBD | General chat conversations |
-| SWE-bench | S | 21,302 | manual | 1‡ | 1‡ | 1‡ | 584 | 295 | 1,747 | TBD | TBD | TBD | Real GitHub issue → patch (turns depend on scaffold) |
-| AgentInstruct (Zeng et al., 2023) | C T W | 1,866 | synthetic | 7.8 | 5.0 | **22.0** | 785 | 656 | 1,570 | TBD | TBD | TBD | Mixture of Browsing, Database, OS, etc. |
-| Code-Feedback (Zheng et al., 2024a) | C | 66,383 | manual | 3.3 | 3.0 | 6.0 | 274 | 200 | 688 | TBD | TBD | TBD | Code generation with runtime feedback loops |
-| CodeActInstruct (Wang et al., 2024b) | C | 7,139 | synthetic | 3.7 | 4.0 | 5.0 | 828 | 836 | 1,455 | **2,934** | 1,174 | **16,384** | Code generation and tool use with execution |
+| ShareGPT | — | 92,886 | manual | ~6† | ~6† | — | 319 | 136 | 945 | TBD | TBD | TBD | General chat conversations. Output with thinking TBD — needs inference run. |
+| SWE-bench | S | 21,302 | manual | 1‡ | 1‡ | 1‡ | 584 | 295 | 1,747 | — | **2,174** | 6,184 | Real GitHub issue → patch (N=500, Qwen3-8B thinking) |
+| AgentInstruct (Zeng et al., 2023) | C T W | 1,866 | synthetic | 7.8 | 5.0 | **22.0** | 785 | 656 | 1,570 | — | **1,090** | 3,113 | Mixture of Browsing, Database, OS, etc. (N=200, thinking) |
+| Code-Feedback (Zheng et al., 2024a) | C | 66,383 | manual | 3.3 | 3.0 | 6.0 | 274 | 200 | 688 | — | **5,598** | 13,313 | Code generation with runtime feedback loops (N=200, thinking) |
+| CodeActInstruct (Wang et al., 2024b) | C | 7,139 | synthetic | 3.7 | 4.0 | 5.0 | 828 | 836 | 1,455 | **2,934** | **1,174** | **16,384** | Code generation and tool use with execution (static field) |
 | Go-Browse (Gandhi & Neubig, 2025) | W | **164,533** | rollout | 1§ | 1§ | 1§ | **8,500** | **6,451** | **17,520** | TBD | TBD | TBD | Single-step snapshots from web rollouts |
-| Mind2Web (Deng et al., 2023) | W | 1,009 | manual | 7.7 | 6.0 | 17.0 | 20 | 17 | 44 | TBD | TBD | TBD | Human web demos on real websites |
-| Nebius SWE Trajectories (Golubev et al., 2024) | S | 80,036 | rollout | **26.4** | **17.0** | **70.0** | **12,393** | **9,053** | **26,411** | TBD | TBD | TBD | SWE-agent trajectories (open-weight models) |
+| Mind2Web (Deng et al., 2023) | W | 1,009 | manual | 7.7 | 6.0 | 17.0 | 20 | 17 | 44 | — | **1,289** | 2,387 | Human web demos on real websites (N=200, thinking) |
+| Nebius SWE Trajectories (Golubev et al., 2024) | S | 80,036 | rollout | **26.4** | **17.0** | **70.0** | **12,393** | **9,053** | **26,411** | — | **3,726** | **16,384** | SWE-agent trajectories (N=200, thinking). Best v3 candidate (2.4:1 in:out). |
 | NNetNav-live (Murty et al., 2024) | W | 53,709 | rollout | 1§ | 1§ | 1§ | **10,493** | **11,865** | **18,859** | TBD | TBD | TBD | Single-step snapshots from live web exploration |
 | NNetNav-wa (Murty et al., 2024) | W | 50,310 | rollout | 1§ | 1§ | 1§ | **6,169** | **4,902** | **16,281** | TBD | TBD | TBD | Single-step snapshots from WebArena exploration |
-| openhands-feedback (All Hands AI, 2024) | C T W | 275 | rollout | **57.5** | **39.0** | **145.7** | 670 | 85 | 492 | TBD | TBD | TBD | Full OpenHands agent trajectories with feedback |
+| openhands-feedback (All Hands AI, 2024) | C T W | 275 | rollout | **57.5** | **39.0** | **145.7** | 670 | 85 | 492 | — | **1,690** | 7,536 | Full OpenHands agent trajectories (N=200, thinking) |
 | Orca AgentInstruct (Mitra et al., 2024) | T | **1,046,410** | synthetic | TBD | TBD | TBD | 467 | 202 | 1,595 | TBD | TBD | TBD | Large-scale synthetic tool-use instructions data |
-| SWE-Gym (Pan et al., 2025) | S | 2,438 | rollout | 1‡ | 1‡ | 1‡ | 686 | 412 | 2,050 | TBD | TBD | TBD | Problem+patch pairs (no trajectory) |
-| SWE-smith (Yang et al., 2025b) | S | **59,136** | manual | 1‡ | 1‡ | 1‡ | 188 | 212 | 392 | **3,042** | 2,877 | 7,336 | Problem+patch pairs (no trajectory) |
+| SWE-Gym (Pan et al., 2025) | S | 2,438 | rollout | 1‡ | 1‡ | 1‡ | 686 | 412 | 2,050 | — | **2,344** | 5,828 | Problem+patch pairs (N=200, thinking) |
+| SWE-smith (Yang et al., 2025b) | S | **59,136** | manual | 1‡ | 1‡ | 1‡ | 188 | 212 | 392 | **3,042** | **2,877** | 7,336 | Problem+patch pairs (static field) |
 | Synatra (Ou et al., 2024) | W | **99,924** | rollout | 1§ | 1§ | 1§ | 1,594 | 1,321 | 3,638 | TBD | TBD | TBD | Single prompt/response pairs |
+
+**Output with Thinking**: Measured using Qwen3-8B with reasoning mode (max_new_tokens=16384). Output is 3-16x longer than static field text due to chain-of-thought. Many samples hit the 16K cap — real output would be longer.
 
 **Categories:** C = Code, T = Tool-use, W = Web, S = SWE
 **Turns** = assistant responses per example (from dataset structure). **Bold** = notably large values.

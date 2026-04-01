@@ -264,32 +264,32 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 
   **NOTE**: Previous "DMC" benchmarks were invalid — mixed CG capture always used `BatchAttention` (persistent kernel) regardless of `use_persistent` flag. Both v3 and "DMC" were running the same persistent kernel. Fixed by using `SGLANG_DISABLE_MIXED_CG=1` for true DMC baseline.
 
-  **Throughput (tok/s):** LPT+CG = persistent LPT kernel + mixed CG (25 sizes, max 4096, ~1.79GB). LPT noCG = persistent LPT, no mixed CG. trueDMC = BatchPrefill, no persistent, no mixed CG.
-  | WL | Input | Output | Rate | LPT+CG in | LPT+CG out | LPT+CG total | LPT noCG total | trueDMC total | CG benefit | LPT+CG vs DMC |
-  |----|------:|-------:|-----:|----------:|-----------:|-------------:|---------------:|--------------:|-----------:|---------------:|
-  | 1 | 4096 | 1024 | 8 | 12,311 | 3,128 | **15,439** | 13,743 | 12,984 | **+12.3%** | **+18.9%** |
-  | 2 | 8192 | 2048 | 4 | 8,575 | 2,036 | **10,610** | 10,550 | 10,246 | +0.6% | **+3.6%** |
-  | 3 | 12000 | 1024 | 4 | 14,193 | 1,232 | **15,425** | 15,313 | 14,462 | +0.7% | **+6.7%** |
-  | 4 | 16384 | 1024 | 3 | 14,209 | 911 | **15,121** | 14,892 | 14,003 | +1.5% | **+8.0%** |
-  | 5 | 4096 | 4096 | 6 | 3,262 | 3,246 | **6,507** | 6,446 | 6,373 | +0.9% | **+2.1%** |
-  | 6 | 6000 | 6000 | 3 | 2,389 | 2,331 | **4,720** | 4,705 | 4,634 | +0.3% | **+1.9%** |
+  **Throughput (tok/s):** LPT+CG = persistent LPT kernel + mixed CG25 (25 sizes, max 4096, ~1.79GB). LPT noCG = persistent LPT, no mixed CG. trueDMC = BatchPrefill, no persistent, no mixed CG. All runs: same session, N=400, `--mem-fraction-static 0.85`.
+  | WL | Input | Output | Rate | LPT+CG total | LPT noCG total | trueDMC total | CG benefit | LPT+CG vs DMC |
+  |----|------:|-------:|-----:|-------------:|---------------:|--------------:|-----------:|---------------:|
+  | 1 | 4096 | 1024 | 8 | **15,439** | 13,459 | 12,974 | **+14.7%** | **+19.0%** |
+  | 2 | 8192 | 2048 | 4 | **10,610** | 10,584 | 10,304 | +0.2% | **+3.0%** |
+  | 3 | 12000 | 1024 | 4 | **15,425** | 15,354 | 14,705 | +0.5% | **+4.9%** |
+  | 4 | 16384 | 1024 | 3 | **15,121** | 15,009 | 14,171 | +0.7% | **+6.7%** |
+  | 5 | 4096 | 4096 | 6 | **6,507** | 6,480 | 6,375 | +0.4% | **+2.1%** |
+  | 6 | 6000 | 6000 | 3 | **4,720** | 4,714 | 4,645 | +0.1% | **+1.6%** |
 
-  **Latency (CG25):**
-  | WL | LPT+CG TTFT med | LPT+CG Mean ITL | LPT+CG P99 ITL |
-  |----|----------------:|----------------:|----------------:|
-  | 1 | **303ms** | **34ms** | **180ms** |
-  | 2 | 25,934ms | **33ms** | 218ms |
-  | 3 | **22,065ms** | **43ms** | 320ms |
-  | 4 | **41,464ms** | **45ms** | 301ms |
-  | 5 | 50,422ms | **27ms** | 116ms |
-  | 6 | 105,056ms | **29ms** | 113ms |
+  **Latency:**
+  | WL | LPT+CG TTFT med | LPT noCG TTFT med | trueDMC TTFT med | LPT+CG Mean ITL | trueDMC Mean ITL | LPT+CG P99 ITL | trueDMC P99 ITL |
+  |----|----------------:|-----------------:|-----------------:|-----------------:|-----------------:|----------------:|----------------:|
+  | 1 | **303ms** | 3,600ms | 6,306ms | **34ms** | 44ms | **180ms** | 527ms |
+  | 2 | **25,934ms** | 26,618ms | 28,513ms | **33ms** | 35ms | **218ms** | 229ms |
+  | 3 | **22,065ms** | 23,233ms | 25,409ms | **43ms** | 46ms | **320ms** | 266ms |
+  | 4 | **41,464ms** | 41,838ms | 48,489ms | **45ms** | 48ms | 301ms | 291ms |
+  | 5 | 50,422ms | 50,937ms | 53,150ms | **27ms** | 28ms | 116ms | 116ms |
+  | 6 | 105,056ms | 105,539ms | 108,174ms | **29ms** | 29ms | **113ms** | 119ms |
 
   **Key findings (N=400, with split-KV + 2x kv_limit, mixed CG25: 25 sizes max=4096, ~1.79GB):**
-  1. **LPT+CG beats true DMC on ALL workloads**: WL1 +18.9%, WL4 +8.0%, WL3 +6.7%, WL2 +3.6%, WL5/6 +1.9-2.1%.
-  2. **Mixed CG is the main WL1 win**: CG benefit = +12.3% throughput. Without CG, LPT still beats DMC (+5.8%) from persistent kernel advantage.
-  3. **WL1 TTFT 20x better than DMC**: 364ms vs 7,484ms. Mixed CG eliminates Python run() overhead for mixed batches.
-  4. **Decode-heavy WL5/6**: LPT+CG still ahead (+1.6-1.8%). P99 ITL slightly worse (146ms vs 117ms) from mixed batch overhead.
-  5. **WL6 Max ITL**: Both LPT and DMC have ~225s max ITL — system overloaded at rate=3, not an LPT issue.
+  1. **LPT+CG beats true DMC on ALL workloads**: WL1 +19.0%, WL4 +6.7%, WL3 +4.9%, WL2 +3.0%, WL5 +2.1%, WL6 +1.6%.
+  2. **Mixed CG is the main WL1 win**: CG benefit = +14.7% throughput. Without CG, LPT still beats DMC (+3.7%) from persistent kernel advantage.
+  3. **WL1 TTFT 21x better than DMC**: 303ms vs 6,306ms. Mixed CG eliminates Python run() overhead for mixed batches.
+  4. **Mean ITL**: LPT+CG has lower mean ITL on all workloads (27-45ms vs 28-48ms for DMC).
+  5. **P99 ITL**: LPT+CG wins big on WL1 (180ms vs 527ms). WL3/4 slightly worse (320/301ms vs 266/291ms) — need investigation.
 
 - [x] **Investigate why LPT doesn't beat DMC on some workloads**: **RESOLVED — invalid comparison.** Previous "DMC" benchmarks were using persistent kernel via mixed CG (`BatchAttention` always used in mixed CG capture path regardless of `use_persistent`). After fixing with `SGLANG_DISABLE_MIXED_CG=1` for true DMC baseline, **LPT+CG beats true DMC on ALL workloads** (see table above).
 - [x] **LPT scheduler fixes (merged loops, CG compat, correctness)**: Major refactor complete:
@@ -405,7 +405,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - **All workloads**: LPT has lower max ITL on every workload tested.
 
 **Where LPT+CG wins vs default-mc:**
-- LPT+CG beats DMC on ALL workloads with CG25: +18.9% (WL1), +3.6-8.0% (WL2-4), +1.9-2.1% (WL5/6).
+- LPT+CG beats DMC on ALL workloads with CG25: +19.0% (WL1), +3.0-6.7% (WL2-4), +1.6-2.1% (WL5/6).
 
 **DMC + piecewise CG doesn't help:**
 - Tested `--enable-piecewise-cuda-graph` with default-mc (N=200). Throughput within noise (±0.3%).

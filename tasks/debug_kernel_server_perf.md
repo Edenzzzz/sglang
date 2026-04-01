@@ -33,21 +33,23 @@ On H100, LPT ≈ POD (within 3% on most cases, wins on case 6). Static is 1.0-1.
 **Note on old stale table**: An earlier table showed LPT beating POD by +3-18%. Those numbers were **contaminated by gpu_keepalive** (confirmed from conversation history). Keepalive inflates cooperative launch (persistent) more than POD, creating fake speedup.
 
 ### LPT Load-Balance Profiling
-Script: `flashinfer/profiler/profile_lpt_balance.py`. Speedup = baseline_time / new_time.
+Script: `flashinfer/profiler/profile_lpt_balance.py`. Workloads unified with `bench_mixed_attention.py` (all 100 decode). flashinfer `02b068f0`, H100 80GB.
 
-| Workload | Static kernel | LPT kernel | LPT speedup | Static max sync | LPT max sync | Sync reduction |
-|----------|-------------|----------|---------|----------------|-------------|---------------|
-| WL1: 60d@kv2k + 2p@4k | 1.021ms | **1.010ms** | **1.01x** | 40μs | **22μs** | 1.78x |
-| WL2: 40d@kv4k + 1p@8k | 1.842ms | **1.788ms** | **1.03x** | 40μs | **34μs** | 1.16x |
-| WL3: 30d@kv8k + 1p@12k | 6.287ms | **6.157ms** | **1.02x** | 178μs | **24μs** | **7.56x** |
-| WL4: 20d@kv12k + 1p@4k | 0.770ms | **0.667ms** | **1.15x** | 174μs | **14μs** | **12.76x** |
-| Agent: 80d@kv1k + 3p@2k | 0.480ms | 0.480ms | 1.00x | 14μs | 14μs | 1.04x |
-| Mixed: 50d@kv1k-8k + 2p@4k | 1.175ms | **1.086ms** | **1.08x** | 101μs | **22μs** | **4.51x** |
-| Prefill-heavy: 10d@kv4k + 1p@16k | **13.954ms** | 13.995ms | 1.00x | 39μs | 80μs | 0.49x (regressed) |
+| Case | Workload | Static kernel | LPT kernel | LPT speedup | Static max sync | LPT max sync |
+|------|----------|-------------|----------|---------|----------------|-------------|
+| 1 | 100d@kv2k + 1p@512 | 0.397ms | 0.404ms | 0.98x | 26μs | 30μs |
+| 2 | 100d@kv2k + 1p@1536 | 0.397ms | 0.396ms | 1.00x | 21μs | 17μs |
+| 3 | 100d@kv2k + 2p@2048 | 0.568ms | **0.476ms** | **1.19x** | 25μs | **13μs** |
+| 4 | 100d@kv2k + 1p@2048 | 0.443ms | **0.369ms** | **1.20x** | 23μs | 20μs |
+| 5 | 100d@kv4k + 1p@4096 | 0.987ms | **0.814ms** | **1.21x** | 42μs | **16μs** |
+| 6 | 100d@kv8k + 1p@4096 | 1.521ms | **1.184ms** | **1.28x** | 88μs | 112μs |
+| 7 | 100d@kv8k + 1p@6000 | 4.792ms | **1.816ms** | **2.64x** | 1,510μs | **52μs** |
+| 8 | 95d@kv2k+5d@kv24k+1p@2k | 0.727ms | **0.613ms** | **1.19x** | 176μs | 150μs |
+| 9 | 100d@kv2k+1p@kv24k,q4k | 9.615ms | 9.723ms | 0.99x | 121μs | 1,933μs |
 
-(Max sync = max grid.sync() wait across all SMs. Converted from clock cycles at 1.83 GHz.)
+(Max sync converted from clock cycles at 1.83 GHz.)
 
-**TODO**: Unify these workloads with bench_mixed_attention Cases 1-7 (all 100 decode). Add split-KV test cases.
+**Key findings**: LPT wins big on Case 7 (2.64x — prefill-heavy imbalance). Cases 3-6 get 19-28% speedup. Split-KV decode (Case 8) gets 19% from load rebalancing. Split-KV prefill (Case 9) is compute-bound — LPT can't help, sync regresses.
 
 **Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k, LPT assigns largest causal tiles first → early CTAs get top q_tiles (16K KV each), late CTAs get bottom q_tiles (~32 tokens). Kernel time tied (13.95 vs 14.0ms) — compute dominates.
 
@@ -92,7 +94,7 @@ LPT+CG = persistent LPT kernel + mixed CG29 (29 sizes, max 4096, ~1.98GB). trueD
 | 5 | 4096 | 4096 | 3,309 | 3,293 | **6,602** | 3,224 | 3,208 | 6,431 | **+2.7%** |
 | 6 | 6000 | 6000 | 2,393 | 2,335 | **4,728** | 2,364 | 2,307 | 4,671 | **+1.2%** |
 
-**Latency (rate=8):**
+**Latency (rate=8):** *(LPT noCG rate=8 pending — needed to confirm CG padding causes WL3 P99 regression)*
 
 | WL | LPT+CG TTFT med | DMC TTFT med | LPT+CG Mean ITL | DMC Mean ITL | LPT+CG P99 ITL | DMC P99 ITL |
 |----|----------------:|-------------:|-----------------:|-------------:|----------------:|------------:|
@@ -117,14 +119,14 @@ LPT+CG = persistent LPT kernel + mixed CG25 (25 sizes, max 4096, ~1.79GB). All r
 
 **Latency (CG25, mixed rates):**
 
-| WL | LPT+CG TTFT med | LPT noCG TTFT med | trueDMC TTFT med | LPT+CG Mean ITL | trueDMC Mean ITL | LPT+CG P99 ITL | trueDMC P99 ITL |
-|----|----------------:|-----------------:|-----------------:|-----------------:|-----------------:|----------------:|----------------:|
-| 1 | **303ms** | 3,600ms | 6,306ms | **34ms** | 44ms | **180ms** | 527ms |
-| 2 | **25,934ms** | 26,618ms | 28,513ms | **33ms** | 35ms | **218ms** | 229ms |
-| 3 | **22,065ms** | 23,233ms | 25,409ms | **43ms** | 46ms | **320ms** | 266ms |
-| 4 | **41,464ms** | 41,838ms | 48,489ms | **45ms** | 48ms | 301ms | 291ms |
-| 5 | 50,422ms | 50,937ms | 53,150ms | **27ms** | 28ms | 116ms | 116ms |
-| 6 | 105,056ms | 105,539ms | 108,174ms | **29ms** | 29ms | **113ms** | 119ms |
+| WL | LPT+CG TTFT med | LPT noCG TTFT med | trueDMC TTFT med | LPT+CG Mean ITL | trueDMC Mean ITL | LPT+CG P99 ITL | LPT noCG P99 ITL | trueDMC P99 ITL |
+|----|----------------:|-----------------:|-----------------:|-----------------:|-----------------:|----------------:|-----------------:|----------------:|
+| 1 | **303ms** | 3,600ms | 6,306ms | **34ms** | 44ms | **180ms** | 485ms | 527ms |
+| 2 | **25,934ms** | 26,618ms | 28,513ms | **33ms** | 35ms | **218ms** | 202ms | 229ms |
+| 3 | **22,065ms** | 23,233ms | 25,409ms | **43ms** | 46ms | 320ms | **244ms** | 266ms |
+| 4 | **41,464ms** | 41,838ms | 48,489ms | **45ms** | 48ms | 301ms | **265ms** | 291ms |
+| 5 | 50,422ms | 50,937ms | 53,150ms | **27ms** | 28ms | 116ms | **101ms** | 116ms |
+| 6 | 105,056ms | 105,539ms | 108,174ms | **29ms** | 29ms | **113ms** | **98ms** | 119ms |
 
 **Key findings:**
 1. **LPT+CG beats true DMC on ALL workloads**: WL1 +19.0%, WL4 +6.7%, WL3 +4.9%, WL2 +3.0%, WL5 +2.1%, WL6 +1.6%.

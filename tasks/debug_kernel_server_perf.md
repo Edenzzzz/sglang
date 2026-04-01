@@ -211,19 +211,14 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
 - [x] Run sglang server benchmark: Qwen3-8B, --random-input 4096 --random-output 1024 --request-rate 8 --num-prompt 400
 - [x] Run sglang server benchmark: Qwen3-8B, --random-input 6500 --random-output 7500 --request-rate 8 --num-prompt 400
 - [x] Run full 5-config comparison with **P95/P99 TTFT and ITL** on H100 80GB with `--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`. Key surprise: Prefill-prioritized has lowest P99 ITL (not highest as expected).
-- [x] **Investigate 2x persistent-vs-POD gap in baseline benchmarks**: **RESOLVED — old numbers were likely on B200, not H100.** The absolute times (0.526ms case 1) are 40-75% higher than current H100 results (0.30ms) — POD didn't change, so this is a GPU difference, not code regression. B200 has 126MB L2 (vs H100 50MB) and different clock speeds. LPT's L2-sectioning advantage varies by GPU. See 3-way table in "Profile LPT load-balance improvement" for current H100 results.
+- [x] **Investigate 2x persistent-vs-POD gap in baseline benchmarks**: **RESOLVED — old numbers were contaminated by `gpu_keepalive`.** The 0.526/0.500ms table was measured with keepalive running (confirmed from conversation history: "keepalive was competing for the GPU"). Keepalive inflates persistent (cooperative launch) more than POD, creating fake LPT speedup. The original clean measurements (0.31/0.30ms, without keepalive) match current 3-way results. See "Profile LPT load-balance improvement" for correct data.
 
-  *(Old B200(?) numbers — kept for history, do not compare with H100 results above:)*
-  | Case | Persistent LPT (ms) | POD (ms) | LPT speedup | Old static gap |
-  |------|-------------------|---------|-------------|---------------|
-  | 1 (512×1) | 0.526 | 0.500 | -5.1% | was 1.69x |
-  | 2 (1536×1) | 0.613 | 0.632 | **+2.9%** | was 2.33x |
-  | 3 (2048×2) | 0.479 | 0.520 | **+7.9%** | was 2.09x |
-  | 4 (2048×1) | 0.378 | 0.425 | **+11.0%** | was 2.19x |
-  | 5 (4096×1, kv4096) | **0.825** | 0.973 | **+15.2%** | was 2.01x |
-  | 6 (4096×1, kv8192) | **1.242** | 1.511 | **+17.8%** | was 2.09x |
-  | 7 (6000×1, kv8192) | **1.910** | 2.190 | **+12.8%** | was 0.91x |
-  *(Commit/GPU unknown — no metadata recorded. See CLAUDE.md rule on recording commit IDs.)*
+  *(Old keepalive-contaminated numbers — INVALID, kept for history only:)*
+  | Case | Persistent LPT (ms) | POD (ms) | LPT speedup | Note |
+  |------|-------------------|---------|-------------|------|
+  | 1 (512×1) | 0.526 | 0.500 | -5.1% | **gpu_keepalive was running** |
+  | 5 (4096×1, kv4096) | 0.825 | 0.973 | +15.2% | |
+  | 6 (4096×1, kv8192) | 1.242 | 1.511 | +17.8% | |
 - [x] **Test FA3's tile fetching pattern**: Tested twice — v1 (naive blockIdx.y + gridDim.y offset) and v2 (with guard: only use FA3 pattern when `dyn_total_tiles >= gridDim.y`). Both are worse than sequential atomicAdd:
   - v2 results (with guard): cases 2-4 are 10-19% slower (0.39 vs 0.35, 0.43 vs 0.36ms). Cases 5-7 similar or slightly worse.
   - Also shows static vs flipped persistent: static is consistently ~20% slower than flipped on cases 5-7 (0.99 vs 0.84, 1.56 vs 1.35, 2.25 vs 1.90ms), confirming FlippedSchedule benefit on large workloads.
@@ -267,7 +262,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   **NOTE**: Previous "DMC" benchmarks were invalid — mixed CG capture always used `BatchAttention` (persistent kernel) regardless of `use_persistent` flag. Both v3 and "DMC" were running the same persistent kernel. Fixed by using `SGLANG_DISABLE_MIXED_CG=1` for true DMC baseline.
 
   **Throughput (tok/s):** LPT+CG = persistent LPT kernel + mixed CG25 (25 sizes, max 4096, ~1.79GB). LPT noCG = persistent LPT, no mixed CG. trueDMC = BatchPrefill, no persistent, no mixed CG. All runs: same session, N=400, `--mem-fraction-static 0.85`.
-  | WL | Input | Output | Rate | LPT+CG total | LPT noCG total | trueDMC total | CG benefit | LPT+CG vs DMC |
+  | WL | Input | Output | Rate (reqs/s) | LPT+CG total | LPT noCG total | trueDMC total | CG benefit | LPT+CG vs DMC |
   |----|------:|-------:|-----:|-------------:|---------------:|--------------:|-----------:|---------------:|
   | 1 | 4096 | 1024 | 8 | **15,439** | 13,459 | 12,974 | **+14.7%** | **+19.0%** |
   | 2 | 8192 | 2048 | 4 | **10,610** | 10,584 | 10,304 | +0.2% | **+3.0%** |
@@ -291,7 +286,7 @@ When a CTA finishes its own queue (e.g., prefill CTA drains prefill queue), it s
   2. **Mixed CG is the main WL1 win**: CG benefit = +14.7% throughput. Without CG, LPT still beats DMC (+3.7%) from persistent kernel advantage.
   3. **WL1 TTFT 21x better than DMC**: 303ms vs 6,306ms. Mixed CG eliminates Python run() overhead for mixed batches.
   4. **Mean ITL**: LPT+CG has lower mean ITL on all workloads (27-45ms vs 28-48ms for DMC).
-  5. **P99 ITL**: LPT+CG wins big on WL1 (180ms vs 527ms). WL3/4 slightly worse (320/301ms vs 266/291ms) — need investigation.
+  5. **P99 ITL**: LPT+CG wins big on WL1 (180ms vs 527ms). WL3 slightly worse (320ms vs 266ms) — caused by mixed CG padding: with CG25, 25/200 replays pad 3585-4095→4096 (12% waste) and 26/200 pad 3073-3583→3584 (13% waste). These ~51 padded steps add 10-13% extra kernel time each, pushing P99 ITL higher. Inherent CG padding tradeoff — total throughput still wins (+4.9%).
 
 - [x] **Investigate why LPT doesn't beat DMC on some workloads**: **RESOLVED — invalid comparison.** Previous "DMC" benchmarks were using persistent kernel via mixed CG (`BatchAttention` always used in mixed CG capture path regardless of `use_persistent`). After fixing with `SGLANG_DISABLE_MIXED_CG=1` for true DMC baseline, **LPT+CG beats true DMC on ALL workloads** (see table above).
 - [x] **LPT scheduler fixes (merged loops, CG compat, correctness)**: Major refactor complete:

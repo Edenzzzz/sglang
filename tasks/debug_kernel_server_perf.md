@@ -15,7 +15,7 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 
 ## Kernel-Level Results
 
-### LPT vs POD vs Static 3-way comparison
+### LPT vs POD vs Static Persistent 3-way comparison
 (H100 80GB, Qwen3-8B heads: num_kv=8 num_qo=32 dim=128, `bench_mixed_attention.py`, 100 decode each)
 
 | Case | Workload | POD (ms) | LPT (ms) | Static (ms) | LPT over POD | LPT over Static |
@@ -27,10 +27,13 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 | 5 | 100d@kv4k + 1p@4096 | 0.81 | 0.82 | 0.97 | 0.99x | **1.18x** |
 | 6 | 100d@kv8k + 1p@4096 | 1.28 | **1.24** | 1.51 | **1.03x** | **1.22x** |
 | 7 | 100d@kv8k + 1p@6000 | 1.85 | 1.89 | 2.18 | 0.98x | **1.15x** |
-| **8** | **95d@kv2k+5d@kv24k+1p@2k** *(split-KV decode)* | 0.69 | **0.62** | 0.71 | **1.11x** | **1.15x** |
-| **9** | **100d@kv2k+1p@kv24k,q4k** *(split-KV prefill)* | 4.53 | 4.73 | 4.37 | 0.96x | 0.92x |
+| **8** | **95d@kv2k+5d@kv24k+1p@2k** *(split-KV decode)* | 0.69 | **0.64** | 0.71 | **1.08x** | **1.11x** |
+| **9** | **100d@kv2k+1p@kv24k,q4k** *(split-KV prefill, ratio≥2→static)* | 4.56 | 4.67 | 4.67 | 0.98x | **1.00x** |
+| 10 | 100d@kv2k+1p@kv12k,q4k *(ratio≥2→static)* | 2.14 | 2.17 | 2.17 | 0.99x | **1.00x** |
 
-Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Case 8 (split-KV decode: 1.11x over POD, 1.15x over static)** — dynamic tile stealing handles imbalanced KV chunks. LPT beats static by 1.09-1.22x on Cases 3-7. **Case 9 regresses (0.92x vs static) due to compute-bound nature making scheduling useless** — see NCU analysis below.
+(Cases 1-8: flashinfer `a74bb2d4`, `bench_mixed_attention.py`. Cases 9-10: ratio threshold auto-fallback to static.)
+
+Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Cases 6,8 over POD.** LPT beats static by 1.03-1.22x on Cases 2-8. **Cases 9-10: ratio threshold kicks in → static, 1.00x (zero regression).** Still loses to POD on Cases 2,4 (0.89x) — cooperative launch overhead on small workloads.
 
 **Note on old stale table**: An earlier table showed LPT beating POD by +3-18%. Those numbers were **contaminated by gpu_keepalive** (confirmed from conversation history). Keepalive inflates cooperative launch (persistent) more than POD, creating fake speedup.
 
@@ -56,18 +59,6 @@ Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (war
 **Case 9 regression investigation**:
 - Consistent ~8% across kv12k/16k/24k (0.92x, 0.93x, 0.92x vs static)
 - FA3-style stride sweep (commit `1fe946aa`, flashinfer `persistent_overlap_`):
-
-| Case | Static (ms) | LPT seq (ms) | LPT auto-stride (ms) | seq speedup | auto speedup |
-|------|------------|-------------|----------------------|-------------|-------------|
-| 1 | 0.302 | 0.310 | 0.311 | 0.97x | 0.97x |
-| 2 | 0.368 | 0.357 | 0.359 | 1.03x | 1.03x |
-| 3 | 0.518 | 0.477 | 0.477 | 1.09x | 1.09x |
-| 4 | 0.423 | 0.378 | 0.378 | 1.12x | 1.12x |
-| 5 | 0.969 | 0.821 | 0.822 | 1.18x | 1.18x |
-| 6 | 1.508 | 1.237 | 1.239 | 1.22x | 1.22x |
-| 7 | 2.172 | 1.881 | 1.881 | 1.16x | 1.16x |
-| 8 | 0.708 | 0.688 | 0.689 | 1.03x | 1.03x |
-| 9 | 4.368 | 4.777 | 4.762 | 0.91x | 0.92x |
 
   Auto-stride = gridDim.y/2 static initial tiles (FA3-style, `is_first_runner` from per-SM `cta_counter`, predicated `atomicAdd(counter, 0/1)`). Zero improvement — atomic contention is not the bottleneck.
 - NCU: same instructions (0.3% diff), SM Busy 51.8% vs 55.9%, Warp Cycles/Instr 6.45 vs 5.99. grid.sync() max wait 940K vs 225K cycles.
@@ -144,7 +135,7 @@ CG overhead savings meaningful at ≤2048 tokens. At 4k+, kernel dominates.
 ## Server-Level Results
 
 ### WL1-6 Throughput (req rate=8 for all, N=400)
-LPT+CG = persistent LPT kernel + mixed CG29 (29 sizes, max 4096, ~1.98GB). trueDMC = BatchPrefill, no persistent, no mixed CG. sglang `7e03a363e`, flashinfer `02b068f0`. Script: `run_one_config.sh` / manual `bench_serving --request-rate 8`.
+LPT+CG = persistent LPT kernel + mixed CG29 (29 sizes, max 4096, ~1.98GB). **DMC = default mixed chunk with batch prefill kernel (no persistent, no mixed CG). CG = CUDA graph** (listed once — all CG entries use CG29 unless noted). sglang `7e03a363e`, flashinfer `02b068f0`. Script: `run_one_config.sh` / manual `bench_serving --request-rate 8`.
 
 | WL | Input | Output | LPT+CG in | LPT+CG out | LPT+CG total | DMC in | DMC out | DMC total | LPT+CG vs DMC |
 |----|------:|-------:|----------:|-----------:|-------------:|-------:|--------:|----------:|---------------:|

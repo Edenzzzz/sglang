@@ -53,7 +53,17 @@ Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (war
 
 (Max sync converted from clock cycles at 1.83 GHz.)
 
-**Key findings**: LPT wins Cases 3-7 (9-21% speedup). Split-KV decode (Case 8) gets 6%. Split-KV prefill (Case 9) regresses 8% — LPT assigns large causal tiles first, creating imbalance when one prefill dominates.
+**Key findings**: LPT wins Cases 3-7 (9-21% speedup). Split-KV decode (Case 8) gets 6%. Split-KV prefill (Case 9) regresses 8%.
+
+**Case 9 regression NCU analysis** (LPT 6.00ms vs Static 5.55ms):
+| Metric | LPT | Static |
+|--------|-----|--------|
+| Instructions | 1,382M | 1,378M (+0.3%) |
+| SM Busy | **51.8%** | **55.9%** (-7.4%) |
+| L2 Hit Rate | 86.8% | 87.4% |
+| Warp Cycles/Issued Instr | **6.45** | **5.99** (+7.7%) |
+
+Same instructions, but LPT has 7.4% lower SM utilization and 7.7% more warp stall cycles. Root cause: LPT assigns largest causal tiles first → early CTAs finish and idle at grid.sync() while others process small decode tiles. The grid.sync() imbalance (max 940K vs 225K cycles) wastes 8% of wall time. **Fix needed**: skip LPT reversal for split-KV prefill tiles, or interleave prefill/decode tile ordering.
 
 **Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k, LPT assigns largest causal tiles first → early CTAs get top q_tiles (16K KV each), late CTAs get bottom q_tiles (~32 tokens). Kernel time tied (13.95 vs 14.0ms) — compute dominates.
 

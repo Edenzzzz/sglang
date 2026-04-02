@@ -182,30 +182,30 @@ CG29 = CG25 + {3200, 3456, 3712, 3968} = 29 sizes, ~1.98GB. Fills 3072-4096 with
 Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / manual `bench_serving` at rate=8, N=400.
 
 **Throughput (tok/s):**
-| WL | Input | Output | LPT+CG29 in | LPT+CG29 out | LPT+CG29 total | trueDMC total | Δ% |
-|----|------:|-------:|------------:|-------------:|----------------:|--------------:|----:|
-| 1 | 4096 | 1024 | 12,365 | 3,142 | **15,507** | 13,022 | **+19.1%** |
-| 2 | 8192 | 2048 | 8,692 | 2,064 | **10,755** | 10,393 | **+3.5%** |
-| 3 | 12000 | 1024 | 14,381 | 1,248 | **15,629** | 14,912 | **+4.8%** |
-| 4 | 16384 | 1024 | 14,301 | 917 | **15,218** | 14,251 | **+6.8%** |
-| 5 | 4096 | 4096 | 3,309 | 3,293 | **6,602** | 6,431 | **+2.7%** |
-| 6 | 6000 | 6000 | 2,393 | 2,335 | **4,728** | 4,671 | **+1.2%** |
+| WL | Input | Output | LPT+CG29 total | LPT noCG total | trueDMC total | CG benefit | CG29 vs DMC |
+|----|------:|-------:|----------------:|---------------:|--------------:|-----------:|------------:|
+| 1 | 4096 | 1024 | **15,507** | 13,515 | 13,022 | **+14.7%** | **+19.1%** |
+| 2 | 8192 | 2048 | **10,755** | 10,692 | 10,393 | +0.6% | **+3.5%** |
+| 3 | 12000 | 1024 | **15,629** | 15,597 | 14,912 | +0.2% | **+4.8%** |
+| 4 | 16384 | 1024 | **15,218** | 15,054 | 14,251 | +1.1% | **+6.8%** |
+| 5 | 4096 | 4096 | **6,602** | 6,531 | 6,431 | +1.1% | **+2.7%** |
+| 6 | 6000 | 6000 | **4,728** | 4,719 | 4,671 | +0.2% | **+1.2%** |
 
 **Latency:**
-| WL | LPT+CG29 TTFT med | DMC TTFT med | LPT+CG29 Mean ITL | DMC Mean ITL | LPT+CG29 P99 ITL | DMC P99 ITL |
-|----|-------------------:|-------------:|-------------------:|-------------:|------------------:|------------:|
-| 1 | **284ms** | 5,511ms | **34ms** | 44ms | **173ms** | 536ms |
-| 2 | **47,196ms** | 49,826ms | **34ms** | 35ms | **231ms** | 235ms |
-| 3 | **43,542ms** | 46,415ms | **44ms** | 46ms | 318ms | **263ms** |
-| 4 | **81,765ms** | 88,004ms | **45ms** | 48ms | 296ms | **292ms** |
-| 5 | **57,874ms** | 59,637ms | **28ms** | 28ms | 122ms | **117ms** |
-| 6 | **137,571ms** | 140,771ms | **29ms** | 29ms | **114ms** | 119ms |
+| WL | CG29 TTFT med | noCG TTFT med | DMC TTFT med | CG29 Mean ITL | DMC Mean ITL | CG29 P99 ITL | noCG P99 ITL | DMC P99 ITL |
+|----|---------------:|--------------:|-------------:|--------------:|-------------:|-------------:|-------------:|------------:|
+| 1 | **284ms** | 3,469ms | 5,511ms | **34ms** | 44ms | **173ms** | 468ms | 536ms |
+| 2 | **47,196ms** | 47,382ms | 49,826ms | **34ms** | 35ms | 231ms | **216ms** | 235ms |
+| 3 | **43,542ms** | 43,134ms | 46,415ms | **44ms** | 46ms | 318ms | **244ms** | 263ms |
+| 4 | **81,765ms** | 82,433ms | 88,004ms | **45ms** | 48ms | 296ms | **266ms** | 292ms |
+| 5 | **57,874ms** | 58,435ms | 59,637ms | **28ms** | 28ms | 122ms | **103ms** | 117ms |
+| 6 | **137,571ms** | 138,779ms | 140,771ms | **29ms** | 29ms | 114ms | **104ms** | 119ms |
 
 **Key findings:**
 1. **LPT+CG29 beats DMC on ALL workloads**: +19.1% (WL1), +6.8% (WL4), +4.8% (WL3), +3.5% (WL2), +2.7% (WL5), +1.2% (WL6).
-2. **TTFT**: CG29 wins massively on WL1 (284ms vs 5.5s = 19x). Wins on all WLs.
-3. **Mean ITL**: CG29 lower on all WLs (27-45ms vs 28-48ms).
-4. **P99 ITL**: CG29 wins big on WL1 (173ms vs 536ms). WL3/4/5 slightly higher — CG padding tradeoff (51/200 replays pad large batches by 10-13%).
+2. **WL1 TTFT: CG29 284ms vs noCG 3,469ms = 12.2x improvement.** Mixed CG eliminates Python run() overhead (~2.4ms per mixed batch) for chunked prefill steps. nsys shows 3,132 cooperative launches eliminated by CG replay.
+3. **Mean ITL**: CG29 lower than DMC on all WLs (27-45ms vs 28-48ms).
+4. **P99 ITL tradeoff**: CG29 wins WL1 (173ms vs noCG 468ms, DMC 536ms). noCG has lower P99 on WL2-6 (216-266ms vs CG's 231-318ms) — CG padding adds 10-13% extra compute on worst-case steps. The throughput gain outweighs this on average.
 
 **ShareGPT (thinking, rate=4, max_out=4096, N=400):**
 | Config | Total tok/s | TTFT med | Mean ITL | P99 ITL |

@@ -220,7 +220,7 @@ Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / 
 
 ## Open TODOs
 
-- [ ] **Mixed CG padding threshold**: Skip CG when padding % > threshold (`SGLANG_MIXED_CG_PADDING_PCT`). Previous sweep results were invalid (servers killed mid-run). Need clean rerun with pct=5/8/10 on WL1-6 at rate=8. Must satisfy: P99 ITL ≤ noCG AND throughput/TTFT/mean ITL ≥ CG29.
+- [x] **Mixed CG padding threshold [INFEASIBLE]**: Swept pct=5/8/10% (clean rerun, no keepalive). pct=10%: WL1 TTFT 5,306ms (vs CG29 284ms), WL3 P99 ITL 299ms (vs noCG 244ms — still worse). **Fundamental conflict**: the batches causing P99 ITL spikes are the same large mixed batches that need CG for TTFT. Skipping CG for them loses TTFT benefit without fixing P99 because padding is only 6% (CG29). The P99 regression (noCG 103-266ms vs CG 114-318ms) is inherent to mixed-chunk scheduling: CG-padded mixed steps hold the GPU longer, delaying subsequent decode steps. Only fix: more capture sizes (diminishing returns) or decoupling prefill/decode scheduling.
 - [x] **Unify LPT profile workloads**: Done — Cases 1-9 (100 decode), split-KV decode/prefill.
 - [x] **nsys profile LPT+CG29 vs trueDMC** (WL1, 50 prompts, rate=8):
   Files: `profile_logs/lpt_cg29_wl1.nsys-rep` (40MB), `profile_logs/trueDMC_wl1.nsys-rep` (35MB).

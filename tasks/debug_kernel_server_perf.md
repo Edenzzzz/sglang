@@ -55,10 +55,34 @@ Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (war
 
 **Case 9 regression investigation**:
 - Consistent ~8% across kv12k/16k/24k (0.92x, 0.93x, 0.92x vs static)
-- FA3-style stride (gridDim/2 static tiles + dynamic atomicAdd) tested: **zero improvement** (0.92x same as sequential). Atomic contention is not the bottleneck.
+- FA3-style stride sweep (commit `1fe946aa`, flashinfer `persistent_overlap_`):
+
+| Case | Static (ms) | LPT seq (ms) | LPT auto-stride (ms) | seq speedup | auto speedup |
+|------|------------|-------------|----------------------|-------------|-------------|
+| 1 | 0.302 | 0.310 | 0.311 | 0.97x | 0.97x |
+| 2 | 0.368 | 0.357 | 0.359 | 1.03x | 1.03x |
+| 3 | 0.518 | 0.477 | 0.477 | 1.09x | 1.09x |
+| 4 | 0.423 | 0.378 | 0.378 | 1.12x | 1.12x |
+| 5 | 0.969 | 0.821 | 0.822 | 1.18x | 1.18x |
+| 6 | 1.508 | 1.237 | 1.239 | 1.22x | 1.22x |
+| 7 | 2.172 | 1.881 | 1.881 | 1.16x | 1.16x |
+| 8 | 0.708 | 0.688 | 0.689 | 1.03x | 1.03x |
+| 9 | 4.368 | 4.777 | 4.762 | 0.91x | 0.92x |
+
+  Auto-stride = gridDim.y/2 static initial tiles (FA3-style, `is_first_runner` from per-SM `cta_counter`, predicated `atomicAdd(counter, 0/1)`). Zero improvement — atomic contention is not the bottleneck.
 - NCU: same instructions (0.3% diff), SM Busy 51.8% vs 55.9%, Warp Cycles/Instr 6.45 vs 5.99. grid.sync() max wait 940K vs 225K cycles.
 - Root cause: LPT's sequential tile ordering creates SM imbalance when one prefill sequence dominates (causal tiles have widely varying compute costs). Static distributes tiles round-robin → more balanced.
 - Perfetto traces: `profile_logs/case9_lpt.perfetto-trace`, `case9_static.perfetto-trace`
+- Realistic split-KV prefill (q≤8192, commit `1fe946aa`):
+
+| Config | Static (ms) | LPT (ms) | LPT speedup |
+|--------|------------|----------|-------------|
+| 100d@kv2k+1p@kv8k,q4k | 1.415 | 1.471 | 0.96x |
+| 100d@kv2k+1p@kv12k,q4k | 2.083 | 2.252 | 0.92x |
+| 100d@kv2k+1p@kv12k,q8k | 3.223 | 3.331 | 0.97x |
+| 100d@kv2k+1p@kv16k,q8k | 4.813 | 5.017 | 0.96x |
+
+  Regression persists at 3-8% across realistic prefill sizes. Worst when q is small relative to kv (4k/12k = 0.92x) — fewer q_tiles means more causal compute variance per tile.
 
 **Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k, LPT assigns largest causal tiles first → early CTAs get top q_tiles (16K KV each), late CTAs get bottom q_tiles (~32 tokens). Kernel time tied (13.95 vs 14.0ms) — compute dominates.
 

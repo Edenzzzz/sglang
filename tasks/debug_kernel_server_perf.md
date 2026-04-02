@@ -86,11 +86,12 @@ Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (war
 | 100d@kv4k+4p@q2k,kv{2k,4k,8k,12k} | 2.575 | 2.662 | 0.97x |
 | 100d@kv4k+2p@q4k,kv{4k,12k} | 2.729 | 2.806 | 0.97x |
 
-- **Root cause & decision**: Split-KV prefill is compute-bound — the prefill tiles dominate total kernel time. In compute-bound regimes, LPT dynamic scheduling adds overhead without benefit:
-  1. **No load-balance opportunity**: With causal masking, tile costs vary widely (early q_tiles: ~32 KV tokens, late q_tiles: full KV). LPT assigns tiles sequentially via atomicAdd → CTAs that grab late (heavy) tiles stall at grid.sync() while CTAs with early (light) tiles idle. Static's round-robin naturally interleaves heavy and light tiles across CTAs.
-  2. **Scheduling overhead without payoff**: `tile_idx_to_work_tile` binary search + atomicAdd contention add ~3-8% overhead that LPT cannot recoup because there's no imbalance *between sequences* to exploit — there's only one dominant prefill sequence.
-  3. **FA3-style stride doesn't help**: Only eliminates first-tile atomic contention (one tile per CTA out of ~8). The tile mapping itself is the problem.
-  - **Fix**: Disable LPT for the prefill task when split-KV is active. Use static round-robin for the prefill runner, keep LPT for decode runner.
+- **Root cause & fix**: Compute-bound prefill makes dynamic scheduling overhead pure loss. When prefill compute dominates, LPT's atomicAdd + tile mapping adds overhead with no load-balance opportunity to recoup it.
+  - **Fix** (commit `a74bb2d4`): When `prefill_kv_compute / decode_kv_compute >= 2.0`, set `flipped_schedule=false` (static for both tasks). Threshold found empirically:
+    - ratio ≤ 0.92 → LPT wins (1.03-1.22x)
+    - ratio ~2.0 → neutral (0.99x)
+    - ratio ≥ 3.5 → LPT loses (0.91-0.97x)
+  - **Result**: Cases 1-8 unchanged (0.98-1.22x). All heavy-prefill configs: **1.00x** (zero regression). All 16 configs pass correctness.
 
 **Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k, LPT assigns largest causal tiles first → early CTAs get top q_tiles (16K KV each), late CTAs get bottom q_tiles (~32 tokens). Kernel time tied (13.95 vs 14.0ms) — compute dominates.
 

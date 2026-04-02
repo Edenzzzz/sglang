@@ -134,30 +134,7 @@ CG overhead savings meaningful at ≤2048 tokens. At 4k+, kernel dominates.
 
 ## Server-Level Results
 
-### WL1-6 Throughput (req rate=8 for all, N=400)
-LPT+CG = persistent LPT kernel + mixed CG29 (29 sizes, max 4096, ~1.98GB). **DMC = default mixed chunk with batch prefill kernel (no persistent, no mixed CG). CG = CUDA graph** (listed once — all CG entries use CG29 unless noted). sglang `7e03a363e`, flashinfer `02b068f0`. Script: `run_one_config.sh` / manual `bench_serving --request-rate 8`.
-
-| WL | Input | Output | LPT+CG in | LPT+CG out | LPT+CG total | DMC in | DMC out | DMC total | LPT+CG vs DMC |
-|----|------:|-------:|----------:|-----------:|-------------:|-------:|--------:|----------:|---------------:|
-| 1 | 4096 | 1024 | 12,365 | 3,142 | **15,507** | 10,383 | 2,639 | 13,022 | **+19.1%** |
-| 2 | 8192 | 2048 | 8,692 | 2,064 | **10,755** | 8,399 | 1,994 | 10,393 | **+3.5%** |
-| 3 | 12000 | 1024 | 14,381 | 1,248 | **15,629** | 13,721 | 1,191 | 14,912 | **+4.8%** |
-| 4 | 16384 | 1024 | 14,301 | 917 | **15,218** | 13,392 | 859 | 14,251 | **+6.8%** |
-| 5 | 4096 | 4096 | 3,309 | 3,293 | **6,602** | 3,224 | 3,208 | 6,431 | **+2.7%** |
-| 6 | 6000 | 6000 | 2,393 | 2,335 | **4,728** | 2,364 | 2,307 | 4,671 | **+1.2%** |
-
-**Latency (rate=8):**
-
-| WL | LPT+CG TTFT med | noCG TTFT med | DMC TTFT med | LPT+CG Mean ITL | DMC Mean ITL | LPT+CG P99 ITL | noCG P99 ITL | DMC P99 ITL |
-|----|----------------:|--------------:|-------------:|-----------------:|-------------:|----------------:|-------------:|------------:|
-| 1 | **284ms** | 3,469ms | 5,511ms | **34ms** | 44ms | **173ms** | 468ms | 536ms |
-| 2 | **47,196ms** | 47,382ms | 49,826ms | **34ms** | 35ms | 231ms | **216ms** | 235ms |
-| 3 | **43,542ms** | 43,134ms | 46,415ms | **44ms** | 46ms | 318ms | **244ms** | 263ms |
-| 4 | **81,765ms** | 82,433ms | 88,004ms | **45ms** | 48ms | 296ms | **266ms** | 292ms |
-| 5 | **57,874ms** | 58,435ms | 59,637ms | **28ms** | 28ms | 122ms | **103ms** | 117ms |
-| 6 | **137,571ms** | 138,779ms | 140,771ms | **29ms** | 29ms | 114ms | **104ms** | 119ms |
-
-**WL1 TTFT: CG29 284ms vs noCG 3,469ms = 12.2x improvement.** Mixed CG eliminates Python run() overhead (~2.4ms per mixed batch) for chunked prefill steps, allowing TTFT completion in fewer steps. nsys shows 3,132 cooperative kernel launches in the noCG trace; CG replays these from cached graphs.
+*(Moved to consolidated table below: "Server Results: LPT+CG29 vs trueDMC")*
 
 **P99 ITL: noCG is lower on WL2-6** (216-266ms vs CG's 231-318ms). CG padding adds 10-13% extra compute on worst-case steps. WL1 is the exception — CG's P99 (173ms) beats noCG (468ms) because CG eliminates the run() overhead that dominates WL1's short-output decode steps.
 
@@ -229,7 +206,9 @@ CG29 = CG25 + {3200, 3456, 3712, 3968} = 29 sizes, ~1.98GB. Fills 3072-4096 with
 
 ### Server Results: LPT+CG29 vs trueDMC (H100 80GB, Qwen3-8B, rate=8 all WLs)
 
-Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / manual `bench_serving` at rate=8, N=400.
+* **DMC** = default mixed chunk with batch prefill kernel (no persistent, no mixed CG).
+* **CG** = CUDA graph (CG29 = 29 sizes, max 4096, ~1.98GB, padding 4.3%).
+* Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / manual `bench_serving` at rate=8, N=400.
 
 **Throughput (tok/s):**
 | WL | Input | Output | LPT+CG29 total | LPT noCG total | trueDMC total | CG benefit | CG29 vs DMC |

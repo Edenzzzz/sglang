@@ -30,7 +30,7 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 | **8** | **95d@kv2k+5d@kv24k+1p@2k** *(split-KV decode)* | 0.69 | **0.62** | 0.71 | **1.11x** | **1.15x** |
 | **9** | **100d@kv2k+1p@kv24k,q4k** *(split-KV prefill)* | 4.53 | 4.73 | 4.37 | 0.96x | 0.92x |
 
-Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Case 8 (split-KV decode: 1.11x over POD, 1.15x over static)** — dynamic tile stealing handles imbalanced KV chunks. LPT beats static by 1.09-1.22x on Cases 3-7. **Case 9 regresses (0.92x vs static)** — see NCU analysis below.
+Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Case 8 (split-KV decode: 1.11x over POD, 1.15x over static)** — dynamic tile stealing handles imbalanced KV chunks. LPT beats static by 1.09-1.22x on Cases 3-7. **Case 9 regresses (0.92x vs static) due to compute-bound nature making scheduling useless** — see NCU analysis below.
 
 **Note on old stale table**: An earlier table showed LPT beating POD by +3-18%. Those numbers were **contaminated by gpu_keepalive** (confirmed from conversation history). Keepalive inflates cooperative launch (persistent) more than POD, creating fake speedup.
 
@@ -91,7 +91,26 @@ Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (war
     - ratio ≤ 0.92 → LPT wins (1.03-1.22x)
     - ratio ~2.0 → neutral (0.99x)
     - ratio ≥ 3.5 → LPT loses (0.91-0.97x)
-  - **Result**: Cases 1-8 unchanged (0.98-1.22x). All heavy-prefill configs: **1.00x** (zero regression). All 16 configs pass correctness.
+  - **Result** (commit `a74bb2d4`, script: inline python with `bench_gpu_time`):
+
+| Config | Static (ms) | Auto (ms) | Mode | Speedup |
+|--------|------------|----------|------|---------|
+| Case1: 100d@kv2k+1p@512 | 0.303 | 0.310 | LPT | 0.98x |
+| Case2: 100d@kv2k+1p@1536 | 0.368 | 0.356 | LPT | 1.03x |
+| Case3: 100d@kv2k+2p@2048 | 0.518 | 0.477 | LPT | **1.09x** |
+| Case4: 100d@kv2k+1p@2048 | 0.423 | 0.379 | LPT | **1.12x** |
+| Case5: 100d@kv4k+1p@4096 | 0.968 | 0.822 | LPT | **1.18x** |
+| Case6: 100d@kv8k+1p@4096 | 1.506 | 1.239 | LPT | **1.22x** |
+| Case7: 100d@kv8k+1p@6000 | 2.174 | 1.876 | LPT | **1.16x** |
+| Case8: 95d@kv2k+5d@kv24k+1p@2k | 0.707 | 0.694 | LPT | 1.02x |
+| Case9: 100d@kv2k+1p@kv24k,q4k | 4.663 | 4.666 | static | **1.00x** |
+| 100d@kv2k+1p@kv8k,q4k | 1.446 | 1.440 | static | 1.00x |
+| 100d@kv2k+1p@kv12k,q4k | 2.171 | 2.171 | static | 1.00x |
+| 100d@kv2k+1p@kv12k,q8k | 3.400 | 3.411 | static | 1.00x |
+| 100d@kv2k+1p@kv16k,q8k | 5.151 | 5.163 | static | 1.00x |
+| 100d@kv2k+4p@q2k,kv{2k,4k,8k,12k} | 2.484 | 2.487 | static | 1.00x |
+| 100d@kv2k+8p@q1k,kv{1k..8k} | 1.909 | 1.911 | static | 1.00x |
+| 100d@kv4k+4p@q2k,kv{2k,4k,8k,12k} | 2.671 | 2.683 | static | 1.00x |
 
 **Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k, LPT assigns largest causal tiles first → early CTAs get top q_tiles (16K KV each), late CTAs get bottom q_tiles (~32 tokens). Kernel time tied (13.95 vs 14.0ms) — compute dominates.
 

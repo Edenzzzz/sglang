@@ -96,16 +96,20 @@ LPT+CG = persistent LPT kernel + mixed CG29 (29 sizes, max 4096, ~1.98GB). trueD
 | 5 | 4096 | 4096 | 3,309 | 3,293 | **6,602** | 3,224 | 3,208 | 6,431 | **+2.7%** |
 | 6 | 6000 | 6000 | 2,393 | 2,335 | **4,728** | 2,364 | 2,307 | 4,671 | **+1.2%** |
 
-**Latency (rate=8):** *(LPT noCG rate=8 pending — needed to confirm CG padding causes WL3 P99 regression)*
+**Latency (rate=8):**
 
-| WL | LPT+CG TTFT med | DMC TTFT med | LPT+CG Mean ITL | DMC Mean ITL | LPT+CG P99 ITL | DMC P99 ITL |
-|----|----------------:|-------------:|-----------------:|-------------:|----------------:|------------:|
-| 1 | **284ms** | 5,511ms | **34ms** | 44ms | **173ms** | 536ms |
-| 2 | **47,196ms** | 49,826ms | **34ms** | 35ms | **231ms** | 235ms |
-| 3 | **43,542ms** | 46,415ms | **44ms** | 46ms | **318ms** | 263ms |
-| 4 | **81,765ms** | 88,004ms | **45ms** | 48ms | 296ms | 292ms |
-| 5 | **57,874ms** | 59,637ms | **28ms** | 28ms | 122ms | 117ms |
-| 6 | **137,571ms** | 140,771ms | **29ms** | 29ms | **114ms** | 119ms |
+| WL | LPT+CG TTFT med | noCG TTFT med | DMC TTFT med | LPT+CG Mean ITL | DMC Mean ITL | LPT+CG P99 ITL | noCG P99 ITL | DMC P99 ITL |
+|----|----------------:|--------------:|-------------:|-----------------:|-------------:|----------------:|-------------:|------------:|
+| 1 | **284ms** | 3,469ms | 5,511ms | **34ms** | 44ms | **173ms** | 468ms | 536ms |
+| 2 | **47,196ms** | 47,382ms | 49,826ms | **34ms** | 35ms | 231ms | **216ms** | 235ms |
+| 3 | **43,542ms** | 43,134ms | 46,415ms | **44ms** | 46ms | 318ms | **244ms** | 263ms |
+| 4 | **81,765ms** | 82,433ms | 88,004ms | **45ms** | 48ms | 296ms | **266ms** | 292ms |
+| 5 | **57,874ms** | 58,435ms | 59,637ms | **28ms** | 28ms | 122ms | **103ms** | 117ms |
+| 6 | **137,571ms** | 138,779ms | 140,771ms | **29ms** | 29ms | 114ms | **104ms** | 119ms |
+
+**WL1 TTFT: CG29 284ms vs noCG 3,469ms = 12.2x improvement.** Mixed CG eliminates Python run() overhead (~2.4ms per mixed batch) for chunked prefill steps, allowing TTFT completion in fewer steps. nsys shows 3,132 cooperative kernel launches in the noCG trace; CG replays these from cached graphs.
+
+**P99 ITL: noCG is lower on WL2-6** (216-266ms vs CG's 231-318ms). CG padding adds 10-13% extra compute on worst-case steps. WL1 is the exception — CG's P99 (173ms) beats noCG (468ms) because CG eliminates the run() overhead that dominates WL1's short-output decode steps.
 
 ### WL1-6 Throughput (mixed rates, N=400, CG25)
 LPT+CG = persistent LPT kernel + mixed CG25 (25 sizes, max 4096, ~1.79GB). All runs same session, `--mem-fraction-static 0.85`.

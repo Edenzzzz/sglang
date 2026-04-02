@@ -84,6 +84,18 @@ Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (war
 
   Regression persists at 3-8% across realistic prefill sizes. Worst when q is small relative to kv (4k/12k = 0.92x) — fewer q_tiles means more causal compute variance per tile.
 
+- Multi-request realistic prefill (multiple requests summing to ~8192 q tokens, commit `e1d28595b`):
+
+| Config | Static (ms) | LPT (ms) | LPT speedup |
+|--------|------------|----------|-------------|
+| 100d@kv2k+4p@q2k,kv{2k,4k,8k,12k} | 2.320 | 2.488 | 0.93x |
+| 100d@kv2k+2p@q4k,kv{4k,12k} | 2.474 | 2.657 | 0.93x |
+| 100d@kv2k+8p@q1k,kv{1k..8k} | 1.787 | 1.937 | 0.92x |
+| 100d@kv4k+4p@q2k,kv{2k,4k,8k,12k} | 2.575 | 2.662 | 0.97x |
+| 100d@kv4k+2p@q4k,kv{4k,12k} | 2.729 | 2.806 | 0.97x |
+
+  Still 3-8% regression. Worse with short decode KV (2k → 0.92x) since decode tiles finish fast, leaving prefill to dominate. Better with longer decode KV (4k → 0.97x) where tile sizes are more balanced.
+
 **Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k, LPT assigns largest causal tiles first → early CTAs get top q_tiles (16K KV each), late CTAs get bottom q_tiles (~32 tokens). Kernel time tied (13.95 vs 14.0ms) — compute dominates.
 
 ### Split-KV A/B Comparison

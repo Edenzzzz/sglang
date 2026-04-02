@@ -37,23 +37,23 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 **Note on old stale table**: An earlier table showed LPT beating POD by +3-18%. Those numbers were **contaminated by gpu_keepalive** (confirmed from conversation history). Keepalive inflates cooperative launch (persistent) more than POD, creating fake speedup.
 
 ### LPT Load-Balance Profiling
-Script: `flashinfer/profiler/profile_lpt_balance.py`. Workloads unified with `bench_mixed_attention.py` (all 100 decode). flashinfer `02b068f0`, H100 80GB.
+Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (warmup + L2 flush). Qwen3-8B heads (8/32/128). flashinfer `daf646c3`, H100 80GB. Verified ±1-2% match with `bench_mixed_attention.py`.
 
 | Case | Workload | Static kernel | LPT kernel | LPT speedup | Static max sync | LPT max sync |
 |------|----------|-------------|----------|---------|----------------|-------------|
-| 1 | 100d@kv2k + 1p@512 | 0.397ms | 0.404ms | 0.98x | 26μs | 30μs |
-| 2 | 100d@kv2k + 1p@1536 | 0.397ms | 0.396ms | 1.00x | 21μs | 17μs |
-| 3 | 100d@kv2k + 2p@2048 | 0.568ms | **0.476ms** | **1.19x** | 25μs | **13μs** |
-| 4 | 100d@kv2k + 1p@2048 | 0.443ms | **0.369ms** | **1.20x** | 23μs | 20μs |
-| 5 | 100d@kv4k + 1p@4096 | 0.987ms | **0.814ms** | **1.21x** | 42μs | **16μs** |
-| 6 | 100d@kv8k + 1p@4096 | 1.521ms | **1.184ms** | **1.28x** | 88μs | 112μs |
-| 7 | 100d@kv8k + 1p@6000 | 4.792ms | **1.816ms** | **2.64x** | 1,510μs | **52μs** |
-| 8 | 95d@kv2k+5d@kv24k+1p@2k | 0.727ms | **0.613ms** | **1.19x** | 176μs | 150μs |
-| 9 | 100d@kv2k+1p@kv24k,q4k | 9.615ms | 9.723ms | 0.99x | 121μs | 1,933μs |
+| 1 | 100d@kv2k + 1p@512 | 0.302ms | 0.310ms | 0.97x | 26μs | 30μs |
+| 2 | 100d@kv2k + 1p@1536 | 0.368ms | 0.355ms | 1.04x | 21μs | 17μs |
+| 3 | 100d@kv2k + 2p@2048 | 0.519ms | **0.478ms** | **1.09x** | 25μs | **13μs** |
+| 4 | 100d@kv2k + 1p@2048 | 0.423ms | **0.377ms** | **1.12x** | 23μs | 20μs |
+| 5 | 100d@kv4k + 1p@4096 | 0.969ms | **0.822ms** | **1.18x** | 42μs | **16μs** |
+| 6 | 100d@kv8k + 1p@4096 | 1.507ms | **1.245ms** | **1.21x** | 88μs | 112μs |
+| 7 | 100d@kv8k + 1p@6000 | 2.175ms | **1.885ms** | **1.15x** | 1,510μs | **52μs** |
+| **8** | **95d@kv2k+5d@kv24k+1p@2k** *(split-KV decode)* | 0.708ms | **0.665ms** | **1.06x** | 176μs | 150μs |
+| **9** | **100d@kv2k+1p@kv24k,q4k** *(split-KV prefill)* | 4.335ms | 4.736ms | 0.92x | 121μs | 1,933μs |
 
 (Max sync converted from clock cycles at 1.83 GHz.)
 
-**Key findings**: LPT wins big on Case 7 (2.64x — prefill-heavy imbalance). Cases 3-6 get 19-28% speedup. Split-KV decode (Case 8) gets 19% from load rebalancing. Split-KV prefill (Case 9) is compute-bound — LPT can't help, sync regresses.
+**Key findings**: LPT wins Cases 3-7 (9-21% speedup). Split-KV decode (Case 8) gets 6%. Split-KV prefill (Case 9) regresses 8% — LPT assigns large causal tiles first, creating imbalance when one prefill dominates.
 
 **Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k, LPT assigns largest causal tiles first → early CTAs get top q_tiles (16K KV each), late CTAs get bottom q_tiles (~32 tokens). Kernel time tied (13.95 vs 14.0ms) — compute dominates.
 

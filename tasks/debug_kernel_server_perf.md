@@ -243,17 +243,7 @@ Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / 
 
   **Scheduler analysis** (`--plot-chunk-size`, WL1 only, rate=8 N=400): CG29 completes in ~76s vs noCG ~91s (17% faster). Prefill chunks: CG29 mean 2,781 vs noCG 3,200 tokens — CG processes mixed batches faster → scheduler issues more frequent, smaller chunks. Decode BS ramps up slightly faster with CG (peak ~150 by 15s vs 20s).
 
-  **CG29 prefill chunks + new_token_ratio:**
-  ![CG29 prefill](./debug_kernel_server_perf/profile_logs/chunk_plots_cg29/chunk_size_trend_prefill_mean_2781.2.png)
-
-  **noCG prefill chunks + new_token_ratio:**
-  ![noCG prefill](./debug_kernel_server_perf/profile_logs/chunk_plots_nocg/chunk_size_trend_prefill_mean_3200.1.png)
-
-  **CG29 decode BS + avg KV:**
-  ![CG29 decode](./debug_kernel_server_perf/profile_logs/chunk_plots_cg29/chunk_size_trend_decode_mean_2394.5.png)
-
-  **noCG decode BS + avg KV:**
-  ![noCG decode](./debug_kernel_server_perf/profile_logs/chunk_plots_nocg/chunk_size_trend_decode_mean_2402.8.png)
+  ![CG29 vs noCG scheduler WL1](./debug_kernel_server_perf/profile_logs/cg_vs_nocg_scheduler_wl1.png)
 
 - [x] **Unify LPT profile workloads**: Done — Cases 1-9 (100 decode), split-KV decode/prefill.
 - [x] **nsys profile LPT+CG29 vs trueDMC** (WL1, 50 prompts, rate=8):

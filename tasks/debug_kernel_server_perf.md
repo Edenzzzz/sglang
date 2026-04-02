@@ -220,7 +220,18 @@ Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / 
 
 ## Open TODOs
 
-- [x] **Mixed CG padding threshold [INFEASIBLE]**: Swept pct=5/8/10% (clean rerun, no keepalive). pct=10%: WL1 TTFT 5,306ms (vs CG29 284ms), WL3 P99 ITL 299ms (vs noCG 244ms — still worse). **Fundamental conflict**: the batches causing P99 ITL spikes are the same large mixed batches that need CG for TTFT. Skipping CG for them loses TTFT benefit without fixing P99 because padding is only 6% (CG29). The P99 regression (noCG 103-266ms vs CG 114-318ms) is inherent to mixed-chunk scheduling: CG-padded mixed steps hold the GPU longer, delaying subsequent decode steps. Only fix: more capture sizes (diminishing returns) or decoupling prefill/decode scheduling.
+- [x] **Mixed CG padding threshold [INFEASIBLE]**: Swept `SGLANG_MIXED_CG_PADDING_PCT`=5/8/10% (clean rerun, no keepalive, rate=8).
+
+  | WL | CG29 total | noCG P99 | pct=10% total | pct=10% TTFT | pct=10% P99 | pct=8% total | pct=8% P99 | pct=5% total | pct=5% P99 |
+  |----|-----------|---------|--------------|-------------|------------|-------------|-----------|-------------|-----------|
+  | 1 | **15,507** | 468ms | 14,380 (-7%) | 5,306ms (19x↑) | **215ms** ✓ | 14,021 (-10%) | **236ms** ✓ | 13,651 (-12%) | 499ms ✗ |
+  | 2 | **10,755** | 216ms | 10,704 | 48,210ms | 223ms ✗ | 10,789 | 221ms ✗ | 10,780 | **216ms** ✓ |
+  | 3 | **15,629** | 244ms | 15,890 | 42,357ms | 299ms ✗ | 15,916 | 294ms ✗ | 15,724 | 290ms ✗ |
+  | 4 | **15,218** | 266ms | 15,181 | 81,509ms | 296ms ✗ | 15,131 | 299ms ✗ | 15,099 | 296ms ✗ |
+  | 5 | **6,602** | 103ms | 6,559 | 58,713ms | 123ms ✗ | 6,540 | 123ms ✗ | 6,534 | 124ms ✗ |
+  | 6 | **4,728** | 104ms | 4,710 | 138,526ms | 113ms ✗ | 4,718 | 112ms ✗ | 4,721 | 115ms ✗ |
+
+  **All thresholds fail both constraints.** WL1 TTFT regresses 18-19x (CG skipped for prefill-heavy batches). WL2-6 P99 still exceeds noCG at every threshold — the padding is only 6% (CG29) but mixed-chunk scheduling inherently delays decode steps within padded batches. **Fundamental conflict**: TTFT needs CG for the same batches that cause P99 spikes.
 - [x] **Unify LPT profile workloads**: Done — Cases 1-9 (100 decode), split-KV decode/prefill.
 - [x] **nsys profile LPT+CG29 vs trueDMC** (WL1, 50 prompts, rate=8):
   Files: `profile_logs/lpt_cg29_wl1.nsys-rep` (40MB), `profile_logs/trueDMC_wl1.nsys-rep` (35MB).

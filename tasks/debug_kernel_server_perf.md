@@ -37,6 +37,8 @@ Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Cases 6,8 over
 
 **Note on old stale table**: An earlier table showed LPT beating POD by +3-18%. Those numbers were **contaminated by gpu_keepalive** (confirmed from conversation history). Keepalive inflates cooperative launch (persistent) more than POD, creating fake speedup.
 
+**POD gap on Cases 2,4 (0.89x)**: nsys shows LPT kernel=362μs vs static=421μs on Case 4 — LPT is 16% faster as a kernel. But POD (separate prefill+decode launches) is 340μs total. The 22μs gap (6.5%) is cooperative launch overhead (cudaLaunchCooperativeKernel + grid.sync). Inherent to persistent kernel architecture — amortized on larger workloads (Cases 5-8 where LPT wins).
+
 ### LPT Load-Balance Profiling
 Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (warmup + L2 flush). Qwen3-8B heads (8/32/128). flashinfer `daf646c3`, H100 80GB. Verified ±1-2% match with `bench_mixed_attention.py`.
 

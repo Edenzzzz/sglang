@@ -71,9 +71,8 @@ Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (war
 
   Auto-stride = gridDim.y/2 static initial tiles (FA3-style, `is_first_runner` from per-SM `cta_counter`, predicated `atomicAdd(counter, 0/1)`). Zero improvement — atomic contention is not the bottleneck.
 - NCU: same instructions (0.3% diff), SM Busy 51.8% vs 55.9%, Warp Cycles/Instr 6.45 vs 5.99. grid.sync() max wait 940K vs 225K cycles.
-- Root cause: LPT's sequential tile ordering creates SM imbalance when one prefill sequence dominates (causal tiles have widely varying compute costs). Static distributes tiles round-robin → more balanced.
 - Perfetto traces: `profile_logs/case9_lpt.perfetto-trace`, `case9_static.perfetto-trace`
-- Realistic split-KV prefill (q≤8192, commit `1fe946aa`):
+- Realistic split-KV prefill sweep (single + multi-request, commits `1fe946aa`..`e1d28595b`):
 
 | Config | Static (ms) | LPT (ms) | LPT speedup |
 |--------|------------|----------|-------------|
@@ -81,20 +80,17 @@ Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (war
 | 100d@kv2k+1p@kv12k,q4k | 2.083 | 2.252 | 0.92x |
 | 100d@kv2k+1p@kv12k,q8k | 3.223 | 3.331 | 0.97x |
 | 100d@kv2k+1p@kv16k,q8k | 4.813 | 5.017 | 0.96x |
-
-  Regression persists at 3-8% across realistic prefill sizes. Worst when q is small relative to kv (4k/12k = 0.92x) — fewer q_tiles means more causal compute variance per tile.
-
-- Multi-request realistic prefill (multiple requests summing to ~8192 q tokens, commit `e1d28595b`):
-
-| Config | Static (ms) | LPT (ms) | LPT speedup |
-|--------|------------|----------|-------------|
 | 100d@kv2k+4p@q2k,kv{2k,4k,8k,12k} | 2.320 | 2.488 | 0.93x |
 | 100d@kv2k+2p@q4k,kv{4k,12k} | 2.474 | 2.657 | 0.93x |
 | 100d@kv2k+8p@q1k,kv{1k..8k} | 1.787 | 1.937 | 0.92x |
 | 100d@kv4k+4p@q2k,kv{2k,4k,8k,12k} | 2.575 | 2.662 | 0.97x |
 | 100d@kv4k+2p@q4k,kv{4k,12k} | 2.729 | 2.806 | 0.97x |
 
-  Still 3-8% regression. Worse with short decode KV (2k → 0.92x) since decode tiles finish fast, leaving prefill to dominate. Better with longer decode KV (4k → 0.97x) where tile sizes are more balanced.
+- **Root cause & decision**: Split-KV prefill is compute-bound — the prefill tiles dominate total kernel time. In compute-bound regimes, LPT dynamic scheduling adds overhead without benefit:
+  1. **No load-balance opportunity**: With causal masking, tile costs vary widely (early q_tiles: ~32 KV tokens, late q_tiles: full KV). LPT assigns tiles sequentially via atomicAdd → CTAs that grab late (heavy) tiles stall at grid.sync() while CTAs with early (light) tiles idle. Static's round-robin naturally interleaves heavy and light tiles across CTAs.
+  2. **Scheduling overhead without payoff**: `tile_idx_to_work_tile` binary search + atomicAdd contention add ~3-8% overhead that LPT cannot recoup because there's no imbalance *between sequences* to exploit — there's only one dominant prefill sequence.
+  3. **FA3-style stride doesn't help**: Only eliminates first-tile atomic contention (one tile per CTA out of ~8). The tile mapping itself is the problem.
+  - **Fix**: Disable LPT for the prefill task when split-KV is active. Use static round-robin for the prefill runner, keep LPT for decode runner.
 
 **Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k, LPT assigns largest causal tiles first → early CTAs get top q_tiles (16K KV each), late CTAs get bottom q_tiles (~32 tokens). Kernel time tied (13.95 vs 14.0ms) — compute dominates.
 

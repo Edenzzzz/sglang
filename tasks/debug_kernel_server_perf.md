@@ -16,21 +16,23 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 ## Kernel-Level Results
 
 ### LPT vs POD vs Static 3-way comparison
-(H100 80GB, flashinfer `e5ec8952`, `bench_mixed_attention.py`, 100 decode + 1-2 prefill each)
+(H100 80GB, Qwen3-8B heads: num_kv=8 num_qo=32 dim=128, `bench_mixed_attention.py`, 100 decode each)
 
 | Case | Workload | POD (ms) | LPT (ms) | Static (ms) | POD/LPT | POD/Static |
 |------|----------|----------|----------|-------------|---------|------------|
-| 1 | 100d@kv2k + 1p@512 | 0.30 | 0.31 | 0.31 | 1.03x | 1.02x |
-| 2 | 100d@kv2k + 1p@1536 | 0.32 | 0.35 | 0.37 | 1.10x | 1.14x |
-| 3 | 100d@kv2k + 2p@2048 | 0.44 | 0.48 | 0.52 | 1.09x | 1.18x |
-| 4 | 100d@kv2k + 1p@2048 | 0.34 | 0.37 | 0.42 | 1.10x | 1.26x |
-| 5 | 100d@kv4k + 1p@4096 | 0.82 | 0.82 | 0.98 | 1.00x | 1.19x |
-| 6 | 100d@kv8k + 1p@4096 | 3.81 | 3.81 | 4.05 | 1.00x | 1.06x |
-| 7 | 100d@kv8k + 1p@6000 | 4.40 | 4.45 | 4.73 | 1.01x | 1.08x |
-| 8 | 95d@kv2k+5d@kv24k+1p@2k | 0.70 | **0.65** | 0.71 | **0.93x** | 1.02x |
-| 9 | 100d@kv2k+1p@kv24k,q4k | 9.58 | 9.85 | 9.45 | 1.03x | 0.99x |
+| 1 | 100d@kv2k + 1p@512 | 0.30 | 0.31 | 0.30 | 1.02x | 1.00x |
+| 2 | 100d@kv2k + 1p@1536 | 0.32 | 0.36 | 0.37 | 1.10x | 1.14x |
+| 3 | 100d@kv2k + 2p@2048 | 0.44 | 0.48 | 0.52 | 1.09x | 1.19x |
+| 4 | 100d@kv2k + 1p@2048 | 0.34 | 0.38 | 0.42 | 1.12x | 1.26x |
+| 5 | 100d@kv4k + 1p@4096 | 0.81 | 0.82 | 0.97 | 1.01x | 1.20x |
+| 6 | 100d@kv8k + 1p@4096 | 1.28 | **1.24** | 1.51 | **0.97x** | 1.18x |
+| 7 | 100d@kv8k + 1p@6000 | 1.85 | 1.89 | 2.18 | 1.02x | 1.18x |
+| **8** | **95d@kv2k+5d@kv24k+1p@2k** *(split-KV decode)* | 0.69 | **0.62** | 0.71 | **0.90x** | 1.03x |
+| **9** | **100d@kv2k+1p@kv24k,q4k** *(split-KV prefill)* | 4.53 | 4.73 | 4.37 | 1.04x | 0.96x |
 
-LPT ≈ POD on most cases. LPT wins on Case 8 (split-KV decode: **7% faster** than POD). Case 9 (split-KV prefill) is compute-bound — all schedulers similar. Static 6-26% slower on non-split cases.
+**LPT wins Case 8 (split-KV decode: 10% faster than POD)** — dynamic tile stealing handles imbalanced KV chunks. Case 6 LPT beats POD by 3%. Case 9 (split-KV prefill) compute-bound. Static 14-26% slower on Cases 3-7.
+
+*(Previous table had wrong head config num_kv=4/num_qo=28 — fixed to Qwen3-8B.)*
 
 **Note on old stale table**: An earlier table showed LPT beating POD by +3-18%. Those numbers were **contaminated by gpu_keepalive** (confirmed from conversation history). Keepalive inflates cooperative launch (persistent) more than POD, creating fake speedup.
 
@@ -218,7 +220,8 @@ Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / 
 
 ## Open TODOs
 
-- [ ] **Unify LPT profile workloads**: Match profile_lpt_balance.py with bench_mixed_attention.py (100 decode). Add proper split-KV decode and prefill test cases. Keep 3d@64k+1p@2k.
+- [ ] **Mixed CG padding threshold**: Skip CG replay when padding > threshold to eliminate P99 ITL regression vs noCG. Env var `SGLANG_MIXED_CG_PADDING_THRESHOLD` (default 256). Sweep thresholds (64, 128, 256) on WL1-6, find value with zero P99 regression vs noCG while keeping CG throughput/TTFT benefits.
+- [x] **Unify LPT profile workloads**: Done — Cases 1-9 (100 decode), split-KV decode/prefill.
 - [x] **nsys profile LPT+CG29 vs trueDMC** (WL1, 50 prompts, rate=8):
   Files: `profile_logs/lpt_cg29_wl1.nsys-rep` (40MB), `profile_logs/trueDMC_wl1.nsys-rep` (35MB).
 

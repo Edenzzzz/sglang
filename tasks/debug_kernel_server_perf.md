@@ -241,7 +241,7 @@ Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / 
 
   **All thresholds fail both constraints.** WL1 TTFT regresses 18-19x (CG skipped for prefill-heavy batches). WL2-6 P99 still exceeds noCG at every threshold — the padding is only 6% (CG29) but mixed-chunk scheduling inherently delays decode steps within padded batches. **Fundamental conflict**: TTFT needs CG for the same batches that cause P99 spikes.
 
-  **Scheduler analysis** (`--plot-chunk-size`, WL1 only, rate=8 N=400): CG29 completes in ~76s vs noCG ~91s (17% faster). Prefill chunks: CG29 mean 2,781 vs noCG 3,200 tokens — CG processes mixed batches faster → scheduler issues more frequent, smaller chunks. Decode BS ramps up slightly faster with CG (peak ~150 by 15s vs 20s).
+  **Scheduler analysis** (`--plot-chunk-size`, WL1 only, rate=8 N=400): CG29 completes in ~76s vs noCG ~91s (17% faster). Prefill chunks: CG29 mean 2,781 vs noCG 3,200 tokens. `new_token_ratio` decays faster with CG29 in both wallclock and step-count space — CG processes more decode steps per second, each applying one decay. noCG shows a plateau at ratio ~0.4 (steps 75-120) where fewer decode steps occurred. CG29 reaches `min_new_token_ratio` (0.098) sooner → scheduler admits more prefill earlier → possible over-admission causing decode pressure. **TODO**: track P99-hitting requests to confirm over-admission is the mechanism (see task below).
 
   ![CG29 vs noCG scheduler WL1](./debug_kernel_server_perf/profile_logs/cg_vs_nocg_scheduler_wl1.png)
 
@@ -263,8 +263,8 @@ Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / 
   | nvjet GEMM total | ~2.8s | ~1.6s |
 
   **Key finding**: LPT's main overhead is `cudaDeviceSynchronize` (2.4x more than DMC). This is from cooperative launch — each persistent kernel invocation requires a device-wide sync before launch. The kernel itself (avg 296μs) is efficient, but the sync overhead accumulates. Mixed CG helps by avoiding repeated cooperative launches for cached batch sizes.
+- [ ] **Investigate CG P99 ITL over-admission hypothesis**: CG's faster decode steps cause `new_token_ratio` to decay faster (more decay events per second) → scheduler admits more prefill sooner → decode pressure. Track requests that hit P99 ITL in CG29 vs noCG: log per-request lifecycle (admit time, each ITL, batch size at each step, prefill chunk size at each step). Determine if P99-hitting requests correlate with periods of high prefill admission (low `new_token_ratio` + large decode BS).
 - [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan. Verify in server context with nsys.
-- [ ] **Reorganize this doc**: Separate kernel-level vs server-level sections with clear headers.
 - [ ] Realistic workload analysis — see `tasks/realistic_workload_analysis.md`
 
 ---

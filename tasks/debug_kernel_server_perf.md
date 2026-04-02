@@ -53,15 +53,12 @@ Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (war
 
 **Key findings**: LPT wins Cases 3-7 (9-21% speedup). Split-KV decode (Case 8) gets 6%. Split-KV prefill (Case 9) regresses 8%.
 
-**Case 9 regression NCU analysis** (LPT 6.00ms vs Static 5.55ms):
-| Metric | LPT | Static |
-|--------|-----|--------|
-| Instructions | 1,382M | 1,378M (+0.3%) |
-| SM Busy | **51.8%** | **55.9%** (-7.4%) |
-| L2 Hit Rate | 86.8% | 87.4% |
-| Warp Cycles/Issued Instr | **6.45** | **5.99** (+7.7%) |
-
-Same instructions, but LPT has 7.4% lower SM utilization and 7.7% more warp stall cycles. Root cause: LPT assigns largest causal tiles first → early CTAs finish and idle at grid.sync() while others process small decode tiles. The grid.sync() imbalance (max 940K vs 225K cycles) wastes 8% of wall time. **Fix needed**: skip LPT reversal for split-KV prefill tiles, or interleave prefill/decode tile ordering.
+**Case 9 regression investigation**:
+- Consistent ~8% across kv12k/16k/24k (0.92x, 0.93x, 0.92x vs static)
+- FA3-style stride (gridDim/2 static tiles + dynamic atomicAdd) tested: **zero improvement** (0.92x same as sequential). Atomic contention is not the bottleneck.
+- NCU: same instructions (0.3% diff), SM Busy 51.8% vs 55.9%, Warp Cycles/Instr 6.45 vs 5.99. grid.sync() max wait 940K vs 225K cycles.
+- Root cause: LPT's sequential tile ordering creates SM imbalance when one prefill sequence dominates (causal tiles have widely varying compute costs). Static distributes tiles round-robin → more balanced.
+- Perfetto traces: `profile_logs/case9_lpt.perfetto-trace`, `case9_static.perfetto-trace`
 
 **Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k, LPT assigns largest causal tiles first → early CTAs get top q_tiles (16K KV each), late CTAs get bottom q_tiles (~32 tokens). Kernel time tied (13.95 vs 14.0ms) — compute dominates.
 
@@ -94,7 +91,7 @@ CG overhead savings meaningful at ≤2048 tokens. At 4k+, kernel dominates.
 
 ## Server-Level Results
 
-### WL1-6 Throughput (rate=8 for all, N=400)
+### WL1-6 Throughput (req rate=8 for all, N=400)
 LPT+CG = persistent LPT kernel + mixed CG29 (29 sizes, max 4096, ~1.98GB). trueDMC = BatchPrefill, no persistent, no mixed CG. sglang `7e03a363e`, flashinfer `02b068f0`. Script: `run_one_config.sh` / manual `bench_serving --request-rate 8`.
 
 | WL | Input | Output | LPT+CG in | LPT+CG out | LPT+CG total | DMC in | DMC out | DMC total | LPT+CG vs DMC |
@@ -159,7 +156,7 @@ LPT+CG = persistent LPT kernel + mixed CG25 (25 sizes, max 4096, ~1.79GB). All r
 | Config | Total tok/s | Out tok/s | TTFT med | Mean ITL | P99 ITL |
 |--------|------------|-----------|----------|----------|---------|
 | LPT+CG25 | **4,962** | **4,325** | **40,767ms** | **36ms** | **67ms** |
-| trueDMC | 4,794 | 4,178 | 53,298ms | 41ms | 96ms |
+| DMC | 4,794 | 4,178 | 53,298ms | 41ms | 96ms |
 
 LPT+CG vs DMC: +3.5% throughput, -23.5% TTFT, -12% mean ITL, -30% P99 ITL.
 

@@ -242,6 +242,12 @@ Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / 
   | 6 | **4,728** | 104ms | 4,710 | 138,526ms | 113ms ✗ | 4,718 | 112ms ✗ | 4,721 | 115ms ✗ |
 
   **All thresholds fail both constraints.** WL1 TTFT regresses 18-19x (CG skipped for prefill-heavy batches). WL2-6 P99 still exceeds noCG at every threshold — the padding is only 6% (CG29) but mixed-chunk scheduling inherently delays decode steps within padded batches. **Fundamental conflict**: TTFT needs CG for the same batches that cause P99 spikes.
+
+  **Scheduler analysis** (`--plot-chunk-size`, WL1 only, rate=8 N=400): CG29 runs 9% more steps in 14% less time. Prefill chunks smaller (median 2,754 vs noCG 3,188 tokens). Decode BS ramp-up similar. On WL1, P99 regression appears to be from per-step CG padding overhead. Need WL3/WL5 plots to confirm — WL1 is prefill-heavy, other workloads may show different dynamics.
+
+  ![CG29 vs noCG scheduler WL1](debug_kernel_server_perf/profile_logs/cg_vs_nocg_scheduler_wl1.png)
+
+  ![CG29 vs noCG scheduler](profile_logs/cg_vs_nocg_scheduler_wl1.png)
 - [x] **Unify LPT profile workloads**: Done — Cases 1-9 (100 decode), split-KV decode/prefill.
 - [x] **nsys profile LPT+CG29 vs trueDMC** (WL1, 50 prompts, rate=8):
   Files: `profile_logs/lpt_cg29_wl1.nsys-rep` (40MB), `profile_logs/trueDMC_wl1.nsys-rep` (35MB).

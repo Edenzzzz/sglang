@@ -220,7 +220,7 @@ Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / 
 
 ## Open TODOs
 
-- [ ] **Mixed CG padding threshold**: Skip CG replay when padding > threshold to eliminate P99 ITL regression vs noCG. Env var `SGLANG_MIXED_CG_PADDING_THRESHOLD` (default 256). Sweep thresholds (64, 128, 256) on WL1-6, find value with zero P99 regression vs noCG while keeping CG throughput/TTFT benefits.
+- [ ] **Mixed CG padding threshold**: Skip CG when padding % > threshold (`SGLANG_MIXED_CG_PADDING_PCT`). Previous sweep results were invalid (servers killed mid-run). Need clean rerun with pct=5/8/10 on WL1-6 at rate=8. Must satisfy: P99 ITL ≤ noCG AND throughput/TTFT/mean ITL ≥ CG29.
 - [x] **Unify LPT profile workloads**: Done — Cases 1-9 (100 decode), split-KV decode/prefill.
 - [x] **nsys profile LPT+CG29 vs trueDMC** (WL1, 50 prompts, rate=8):
   Files: `profile_logs/lpt_cg29_wl1.nsys-rep` (40MB), `profile_logs/trueDMC_wl1.nsys-rep` (35MB).

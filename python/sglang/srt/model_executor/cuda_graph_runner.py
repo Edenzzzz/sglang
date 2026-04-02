@@ -278,6 +278,8 @@ class CudaGraphRunner:
         self._is_mixed_replay = False
         self._log_mixed_cg_padding = bool(os.environ.get("SGLANG_LOG_MIXED_CG_PADDING", ""))
         self._mixed_cg_padding_log = [] if self._log_mixed_cg_padding else None
+        # Skip mixed CG when padding exceeds this % of raw tokens (0 = disabled)
+        self._mixed_cg_padding_pct = float(os.environ.get("SGLANG_MIXED_CG_PADDING_PCT", "0"))
         if self.enable_mixed_cuda_graph:
             self.mixed_capture_bs = sorted(
                 [1, 4, 8, 16, 32, 64, 128, 256, 384, 512, 640, 768, 1024, 1280, 1408, 1536, 1792, 1920, 2048, 2304, 2560, 2816, 3072, 3200, 3456, 3584, 3712, 3968, 4096]
@@ -443,7 +445,16 @@ class CudaGraphRunner:
                 if self.disable_padding
                 else num_tokens <= self.mixed_max_bs
             )
-            return is_bs_supported
+            if not is_bs_supported:
+                return False
+            # Skip CG if padding % exceeds threshold (avoids P99 ITL regression)
+            if self._mixed_cg_padding_pct > 0:
+                index = bisect.bisect_left(self.mixed_capture_bs, num_tokens)
+                padded = self.mixed_capture_bs[index]
+                padding_pct = (padded - num_tokens) / num_tokens * 100
+                if padding_pct > self._mixed_cg_padding_pct:
+                    return False
+            return True
 
         if self.require_mlp_tp_gather:
             cuda_graph_bs = (

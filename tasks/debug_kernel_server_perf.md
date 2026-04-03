@@ -245,7 +245,9 @@ CG29 = CG25 + {3200, 3456, 3712, 3968} = 29 sizes, ~1.98GB. Fills 3072-4096 with
 | LPT+CG29 | **4,888** | **44,671ms** | **37ms** | **71ms** |
 | trueDMC | 4,794 | 53,298ms | 41ms | 96ms |
 
-CG25→CG29: similar throughput (-1.5%), slightly higher P99 (71 vs 67ms — more capture sizes = more padding). Both beat DMC.
+CG25→CG29: similar throughput (-1.5%), slightly higher P99 (71 vs 67ms). Difference is noise — confirmed by WL1-6 rerun (all within 2%).
+
+**WL1-6 rerun** (flashinfer `d9c01c81` with ratio threshold, same sglang): all within 2% of previous results. Ratio threshold has zero measurable server overhead.
 (CG25: sglang `090b86f5`, flashinfer `02b068f0`. CG29: flashinfer `d9c01c81`.)
 
 ---

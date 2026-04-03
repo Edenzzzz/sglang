@@ -253,4 +253,4 @@ lmms-eval
 cuda_coredump*
 !workloads/profile_data/**
 tasks/flash-attention
-**/profile_logs/
+**/profile_logs/workloads/ShareGPT_V3_unfiltered_cleaned_split.json

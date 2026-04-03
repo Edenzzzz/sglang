@@ -250,6 +250,22 @@ CG25→CG29: similar throughput (-1.5%), slightly higher P99 (71 vs 67ms). Diffe
 **WL1-6 rerun** (flashinfer `d9c01c81` with ratio threshold, same sglang): all within 2% of previous results. Ratio threshold has zero measurable server overhead.
 (CG25: sglang `090b86f5`, flashinfer `02b068f0`. CG29: flashinfer `d9c01c81`.)
 
+### WL1-6: LPT+CG29 vs PP (prefill-prioritized, no mixed chunk) (rate=8, N=400)
+
+PP = no `--enable-mixed-chunk`, no `--enable-piecewise-cuda-graph`, no persistent kernel. Prefill completes fully before decode interleaves.
+flashinfer `d9c01c81`, sglang `857603c2a`.
+
+| WL | In | Out | LPT+CG29 Total | PP Total | LPT TTFT med | PP TTFT med | LPT P99 ITL | PP P99 ITL |
+|----|---:|----:|:-:|:-:|:-:|:-:|:-:|:-:|
+| 1 | 4096 | 1024 | ~15,400 | ~15,100 | 291ms | **215ms** | **174ms** | 192ms |
+| 2 | 8192 | 2048 | ~10,640 | ~10,300 | **47,471ms** | 52,684ms | 240ms | **218ms** |
+| 3 | 12000 | 1024 | **~15,400** | ~14,200 | **42,236ms** | 69,066ms | **298ms** | 836ms |
+| 4 | 16384 | 1024 | **~14,920** | ~13,400 | **81,348ms** | 165,447ms | **297ms** | 1,697ms |
+| 5 | 4096 | 4096 | ~6,510 | ~6,510 | 58,189ms | 58,333ms | 124ms | **98ms** |
+| 6 | 6000 | 6000 | ~4,730 | ~4,740 | 137,718ms | 139,034ms | 112ms | **95ms** |
+
+**Key findings**: PP wins P99 ITL on output-heavy WL5-6 (no mixed-batch decode disruption). LPT+CG29 wins on input-heavy WL3-4 (chunked prefill + CG amortize large prefills, PP blocks decode during long prefills → massive P99 spikes). WL1: PP has lower TTFT (no CG capture overhead) but higher P99.
+
 ---
 
 ## Open TODOs

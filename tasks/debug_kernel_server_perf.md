@@ -309,6 +309,22 @@ flashinfer `d9c01c81`. Nebius-SWE median: 9K input, 3.7K output (2.4:1 prefill-h
 
 **All configs identical** — Nebius-SWE (9K+3.7K) is compute-bound at ~1 req/s. Scheduling strategy has no effect when prefill dominates and the system is fully saturated. Differences emerge only with shorter prefills (WL1-6) where decode overlapping matters.
 
+### P99 ITL Lifecycle Analysis (WL1, 200 prompts, rate=8)
+
+Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares batch conditions during P99-hitting steps vs normal steps.
+
+| | LPT+CG29 P99 steps | LPT normal | PP+PCG P99 steps | PP normal |
+|--|:---:|:---:|:---:|:---:|
+| P99 ITL threshold | 133ms | — | 191ms | — |
+| decode_bs | **91** | 55 | 88 | 87 |
+| prefill_tokens | **5,153** | 3,476 | 2,893 | 2,896 |
+| new_token_ratio | 0.160 | 0.240 | 0.143 | 0.144 |
+| is_mixed (%) | **37%** | 1% | 0% | 0% |
+
+**LPT P99 is driven by mixed batches with high decode_bs + high prefill_tokens** — 37% of P99 steps are mixed (vs 1% normal). High prefill admission (low ntr 0.16 vs 0.24) causes decode pressure. **Confirms CG over-admission hypothesis.**
+
+**PP P99 steps have identical batch conditions to normal steps** — decode_bs, prefill_tokens, and ntr are the same. PP's higher P99 (191ms) is NOT from scheduling but from chunked prefill blocking decode within each step (no mixed-chunk overlap).
+
 ---
 
 ## Open TODOs

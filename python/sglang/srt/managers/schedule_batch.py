@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import enum
+import os
 
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 
@@ -647,6 +648,10 @@ class Req:
         self.time_stats: TimeStats = TimeStats(disagg_mode=disagg_mode)
         self.has_log_time_stats: bool = False
         self.last_tic = time.monotonic()
+
+        # Per-decode-step lifecycle tracking (enabled by SGLANG_LOG_REQUEST_LIFECYCLE=1)
+        # Each entry: (timestamp, decode_bs, prefill_tokens, new_token_ratio)
+        self.lifecycle_steps: list = [] if os.environ.get("SGLANG_LOG_REQUEST_LIFECYCLE") else None
 
         # For disaggregation
         self.bootstrap_host: str = bootstrap_host

@@ -254,3 +254,7 @@ cuda_coredump*
 !workloads/profile_data/**
 tasks/flash-attention
 **/profile_logs/workloads/ShareGPT_V3_unfiltered_cleaned_split.json
+tasks/debug_kernel_server_perf/profile_logs/bench_results/
+tasks/debug_kernel_server_perf/profile_logs/*.sqlite
+tasks/debug_kernel_server_perf/profile_logs/*.perfetto-trace
+workloads/ShareGPT_V3_unfiltered_cleaned_split.json

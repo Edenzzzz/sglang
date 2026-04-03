@@ -79,6 +79,18 @@ class SchedulerOutputProcessorMixin:
 
             hidden_state_offset = 0
 
+            # Per-request lifecycle tracking for decode reqs in mixed batches
+            if self.is_mixed_chunk and batch.reqs and hasattr(batch.reqs[0], 'lifecycle_steps') and batch.reqs[0].lifecycle_steps is not None:
+                import time as _time
+                _ts = _time.perf_counter()
+                _decode_bs = batch.batch_size()
+                _prefill_tokens = getattr(self, 'last_prefill_tokens', 0)
+                _ntr = getattr(self, 'new_token_ratio', 0)
+                for req in batch.reqs:
+                    if req.lifecycle_steps is not None and len(req.output_ids) > 0:
+                        # Only record for decode reqs (have output_ids already)
+                        req.lifecycle_steps.append((_ts, _decode_bs, _prefill_tokens, _ntr, True))
+
             # Check finish conditions
             logprob_pt = 0
 
@@ -113,6 +125,20 @@ class SchedulerOutputProcessorMixin:
                     if req.finished():
                         self.tree_cache.cache_finished_req(req)
                         req.time_stats.completion_time = time.perf_counter()
+                        # Dump lifecycle on completion (mixed path)
+                        if req.lifecycle_steps is not None and len(req.lifecycle_steps) > 0:
+                            import csv, os
+                            lifecycle_path = os.environ.get("SGLANG_LIFECYCLE_CSV", "/tmp/request_lifecycle.csv")
+                            write_header = not os.path.exists(lifecycle_path)
+                            with open(lifecycle_path, "a", newline="") as f:
+                                w = csv.writer(f)
+                                if write_header:
+                                    w.writerow(["rid", "input_len", "output_len", "step", "timestamp",
+                                               "decode_bs", "prefill_tokens", "new_token_ratio", "is_mixed"])
+                                for step_i, (ts, dbs, pt, ntr, mixed) in enumerate(req.lifecycle_steps):
+                                    w.writerow([req.rid[:8], len(req.origin_input_ids), len(req.output_ids),
+                                               step_i, f"{ts:.6f}", dbs, pt, f"{ntr:.4f}", int(mixed)])
+                            req.lifecycle_steps = None
                     elif not batch.decoding_reqs or req not in batch.decoding_reqs:
                         # This updates radix so others can match
                         self.tree_cache.cache_unfinished_req(req)
@@ -305,6 +331,18 @@ class SchedulerOutputProcessorMixin:
         if not batch.spec_algorithm.is_none():
             self.update_spec_metrics(batch.batch_size(), result.num_accepted_tokens)
 
+        # Per-request lifecycle tracking
+        if hasattr(batch.reqs[0], 'lifecycle_steps') and batch.reqs[0].lifecycle_steps is not None:
+            import time as _time
+            _ts = _time.perf_counter()
+            _decode_bs = batch.batch_size()
+            _prefill_tokens = getattr(self, 'last_prefill_tokens', 0)
+            _ntr = getattr(self, 'new_token_ratio', 0)
+            _is_mixed = batch.forward_mode.is_mixed() if hasattr(batch.forward_mode, 'is_mixed') else False
+            for req in batch.reqs:
+                if req.lifecycle_steps is not None:
+                    req.lifecycle_steps.append((_ts, _decode_bs, _prefill_tokens, _ntr, _is_mixed))
+
         self.token_to_kv_pool_allocator.free_group_begin()
 
         # Check finish condition
@@ -379,6 +417,21 @@ class SchedulerOutputProcessorMixin:
                     self.tree_cache.cache_finished_req(req)
 
                 req.time_stats.completion_time = time.perf_counter()
+
+                # Dump lifecycle data on completion
+                if req.lifecycle_steps is not None and len(req.lifecycle_steps) > 0:
+                    import csv, os
+                    lifecycle_path = os.environ.get("SGLANG_LIFECYCLE_CSV", "/tmp/request_lifecycle.csv")
+                    write_header = not os.path.exists(lifecycle_path)
+                    with open(lifecycle_path, "a", newline="") as f:
+                        w = csv.writer(f)
+                        if write_header:
+                            w.writerow(["rid", "input_len", "output_len", "step", "timestamp",
+                                       "decode_bs", "prefill_tokens", "new_token_ratio", "is_mixed"])
+                        for step_i, (ts, dbs, pt, ntr, mixed) in enumerate(req.lifecycle_steps):
+                            w.writerow([req.rid[:8], len(req.origin_input_ids), len(req.output_ids),
+                                       step_i, f"{ts:.6f}", dbs, pt, f"{ntr:.4f}", int(mixed)])
+                    req.lifecycle_steps = None  # free memory
 
             if req.return_logprob and batch.spec_algorithm.is_none():
                 # speculative worker handles logprob in speculative decoding

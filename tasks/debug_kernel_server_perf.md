@@ -266,6 +266,22 @@ flashinfer `d9c01c81`, sglang `857603c2a`.
 
 **Key findings**: PP wins P99 ITL on output-heavy WL5-6 (no mixed-batch decode disruption). LPT+CG29 wins on input-heavy WL3-4 (chunked prefill + CG amortize large prefills, PP blocks decode during long prefills → massive P99 spikes). WL1: PP has lower TTFT (no CG capture overhead) but higher P99. CG makes no difference for PP (without mixed chunk, batches are pure prefill or decode).
 
+### Nebius-SWE-like workload (random in=9053, out=3726, N=200)
+
+flashinfer `d9c01c81`. Nebius-SWE median: 9K input, 3.7K output (2.4:1 prefill-heavy).
+
+| Config | Rate | Throughput | TTFT med | Mean ITL | P99 ITL |
+|--------|-----:|:---------:|:---------:|:---------:|:---------:|
+| LPT+CG29 | 2 | 0.99 req/s | 340ms | 27.40ms | 155ms |
+| DMC | 2 | 0.99 req/s | 340ms | 27.37ms | 155ms |
+| PP+CG | 2 | 0.98 req/s | 330ms | 27.58ms | 153ms |
+| LPT+CG29 | 4 | 1.02 req/s | 11,014ms | 28.67ms | 164ms |
+| DMC | 4 | 1.02 req/s | 11,046ms | 28.68ms | 164ms |
+| PP+CG | 4 | 1.02 req/s | 11,310ms | 28.81ms | 169ms |
+| LPT+CG29 | 8 | 1.03 req/s | 18,575ms | 28.95ms | 184ms |
+
+**All configs identical** — Nebius-SWE (9K+3.7K) is compute-bound at ~1 req/s. Scheduling strategy has no effect when prefill dominates and the system is fully saturated. Differences emerge only with shorter prefills (WL1-6) where decode overlapping matters.
+
 ---
 
 ## Open TODOs

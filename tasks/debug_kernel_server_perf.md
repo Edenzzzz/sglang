@@ -242,8 +242,11 @@ CG29 = CG25 + {3200, 3456, 3712, 3968} = 29 sizes, ~1.98GB. Fills 3072-4096 with
 | Config | Total tok/s | TTFT med | Mean ITL | P99 ITL |
 |--------|------------|----------|----------|---------|
 | LPT+CG25 | **4,962** | **40,767ms** | **36ms** | **67ms** |
+| LPT+CG29 | **4,888** | **44,671ms** | **37ms** | **71ms** |
 | trueDMC | 4,794 | 53,298ms | 41ms | 96ms |
-| **Δ** | **+3.5%** | **-23.5%** | **-12%** | **-30%** |
+
+CG25→CG29: similar throughput (-1.5%), slightly higher P99 (71 vs 67ms — more capture sizes = more padding). Both beat DMC.
+(CG25: sglang `090b86f5`, flashinfer `02b068f0`. CG29: flashinfer `d9c01c81`.)
 
 ---
 

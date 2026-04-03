@@ -256,7 +256,7 @@ CG25≈CG29 (identical within noise). First CG29 run was outlier from cold JIT c
 PP = no `--enable-mixed-chunk`, WITH `--enable-piecewise-cuda-graph`, no persistent kernel. Prefill completes fully before decode interleaves.
 flashinfer `d9c01c81`, sglang `857603c2a`.
 
-| WL | In | Out | LPT+CG29 Total | PP+CG Total | LPT TTFT med | PP TTFT med | LPT P99 ITL | PP P99 ITL |
+| WL | In | Out | LPT+CG29 Total | PP+PCG Total | LPT TTFT med | PP TTFT med | LPT P99 ITL | PP P99 ITL |
 |----|---:|----:|:-:|:-:|:-:|:-:|:-:|:-:|
 | 1 | 4096 | 1024 | ~15,400 | ~15,100 | 291ms | **214ms** | **174ms** | 195ms |
 | 2 | 8192 | 2048 | ~10,640 | ~10,300 | **47,471ms** | 52,597ms | 240ms | **219ms** |
@@ -281,6 +281,18 @@ flashinfer `d9c01c81`.
 
 **LPT+CG29 dominates WL1**: 18x better TTFT (mixed CG eliminates per-batch Python plan() overhead for chunked prefill), 2.5x better P99. **WL3**: LPT has better throughput (+6%), POD has slightly better P99 (284 vs 298ms — no cooperative launch overhead). POD's main overhead: double plan() calls + GPU-CPU sync in pod_forward per layer.
 
+**nsys overhead analysis** (WL1, 50 prompts, `pod_server.nsys-rep` vs `lpt_cg29_wl1.nsys-rep`):
+
+| Metric | LPT+CG29 | POD+PCG | Note |
+|--------|-----------|---------|------|
+| Attention GPU time | 694ms (618 persistent + 76 paged) | 427ms (237 prefill + 113 POD-decode + 77 paged) | POD 38% less |
+| cudaDeviceSynchronize | **2,812ms** (1,869 calls) | 1,162ms (2,448 calls) | LPT cooperative launch |
+| cudaStreamSynchronize | 0ms | **2,360ms** (3,334 calls) | **POD plan() GPU-CPU sync per layer** |
+| cudaMemcpyAsync | 2,650ms | 3,312ms (+25%) | POD double plan indexing |
+| Total sync overhead | 2,812ms | 3,522ms | POD 25% more total |
+
+**POD's cudaStreamSynchronize (2,360ms) = 553% of its attention GPU time.** This is the dominant bottleneck — the GPU-CPU sync in `pod_forward` (reading `qo_indptr_buf` per layer) serializes each attention layer, preventing overlap with MLP compute. LPT avoids this by fusing prefill+decode into a single kernel with no per-layer sync.
+
 ### Nebius-SWE-like workload (random in=9053, out=3726, N=200)
 
 flashinfer `d9c01c81`. Nebius-SWE median: 9K input, 3.7K output (2.4:1 prefill-heavy).
@@ -289,10 +301,10 @@ flashinfer `d9c01c81`. Nebius-SWE median: 9K input, 3.7K output (2.4:1 prefill-h
 |--------|-----:|:---------:|:---------:|:---------:|:---------:|
 | LPT+CG29 | 2 | 0.99 req/s | 340ms | 27.40ms | 155ms |
 | DMC | 2 | 0.99 req/s | 340ms | 27.37ms | 155ms |
-| PP+CG | 2 | 0.98 req/s | 330ms | 27.58ms | 153ms |
+| PP+PCG | 2 | 0.98 req/s | 330ms | 27.58ms | 153ms |
 | LPT+CG29 | 4 | 1.02 req/s | 11,014ms | 28.67ms | 164ms |
 | DMC | 4 | 1.02 req/s | 11,046ms | 28.68ms | 164ms |
-| PP+CG | 4 | 1.02 req/s | 11,310ms | 28.81ms | 169ms |
+| PP+PCG | 4 | 1.02 req/s | 11,310ms | 28.81ms | 169ms |
 | LPT+CG29 | 8 | 1.03 req/s | 18,575ms | 28.95ms | 184ms |
 
 **All configs identical** — Nebius-SWE (9K+3.7K) is compute-bound at ~1 req/s. Scheduling strategy has no effect when prefill dominates and the system is fully saturated. Differences emerge only with shorter prefills (WL1-6) where decode overlapping matters.

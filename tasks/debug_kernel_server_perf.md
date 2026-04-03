@@ -291,7 +291,7 @@ flashinfer `d9c01c81`.
 | cudaMemcpyAsync | 2,650ms | 3,312ms (+25%) | POD double plan indexing |
 | Total sync overhead | 2,812ms | 3,522ms | POD 25% more total |
 
-**POD's cudaStreamSynchronize (2,360ms) = 553% of its attention GPU time.** This is the dominant bottleneck — the GPU-CPU sync in `pod_forward` (reading `qo_indptr_buf` per layer) serializes each attention layer, preventing overlap with MLP compute. LPT avoids this by fusing prefill+decode into a single kernel with no per-layer sync.
+**POD's cudaStreamSynchronize (2,360ms) = 553% of its attention GPU time.** This is the dominant bottleneck — POD splits `qo_indptr_buf` into separate prefill/decode index arrays (cumsum, slice, `.to(device)`) per layer, requiring GPU-CPU sync each time. LPT reads the same `qo_indptr_buf` but passes it directly to the fused kernel without splitting — no per-layer sync needed.
 
 ### Nebius-SWE-like workload (random in=9053, out=3726, N=200)
 

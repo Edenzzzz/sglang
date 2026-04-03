@@ -335,9 +335,9 @@ Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares 
 | P99 prefill_tokens | 4,420 | 4,185 |
 | Worst spike cause | decode_bs=66, prefill=7677 | **decode_bs=64, prefill=259, ntr=0.632** |
 
-**PP's worst spikes (21.6s!) happen early** (ntr=0.632) when prefill chunks block all 64 decode requests. Without mixed chunk, a 12K-token prefill requires ~2 chunked steps (8192+3808), each blocking all decode requests for the entire step duration. LPT's mixed chunk interleaves decode tokens within each prefill step, keeping max ITL at 473ms.
+**PP's worst spikes (21.6s!) happen early** (ntr=0.632) from decode starvation: after a request gets TTFT, the scheduler goes back to prefilling a backlog of newly-arrived requests (rate=8 × 12K input = continuous prefill work). Decode only runs when no prefills are pending, so already-prefilled requests starve for 21.6s while the scheduler drains the prefill queue. LPT's mixed chunk interleaves decode tokens within each prefill step, keeping max ITL at 473ms.
 
-**Why PP works on WL5-6 but not WL3-4**: WL5-6 have 4K-6K input (≤1 chunk), so prefill completes in 1 step with minimal blocking. WL3-4 have 12K-16K input (2-3 chunks), creating multi-step blocking periods.
+**Why PP works on WL5-6 but not WL3-4**: WL5-6 have 4K-6K input (≤1 chunk per request). The prefill backlog clears quickly, so decode starvation is brief. WL3-4 have 12K-16K input (2-3 chunks per request) — at rate=8, new prefill work arrives faster than the scheduler can clear it, causing prolonged decode starvation.
 
 ---
 

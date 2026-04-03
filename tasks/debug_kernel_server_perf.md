@@ -206,14 +206,14 @@ CG29 = CG25 + {3200, 3456, 3712, 3968} = 29 sizes, ~1.98GB. Fills 3072-4096 with
 - CG19 (19 sizes, ~1.51GB, padding 11%) → CG25 (+6 sizes, ~1.79GB, padding 6.5%) → **CG29** (+4 more in 3072-4096, ~1.98GB, **padding 4.3%**)
 - CG24 experiment (no 4096): hurt WL1 by -6%. 4096 needed for large mixed batches.
 
-### Server Results: LPT+CG29 vs trueDMC (H100 80GB, Qwen3-8B, rate=8 all WLs)
+### Server Stress Test Results: LPT+CG29 vs DMC (H100 80GB, Qwen3-8B, rate=8 all WLs)
 
 * **DMC** = default mixed chunk with batch prefill kernel (no persistent, no mixed CG).
 * **CG** = CUDA graph (CG29 = 29 sizes, max 4096, ~1.98GB, padding 4.3%).
 * Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / manual `bench_serving` at rate=8, N=400.
 
 **Throughput (tok/s):**
-| WL | Input | Output | LPT+CG29 total | LPT noCG total | trueDMC total | CG benefit | CG29 vs DMC |
+| WL | Input | Output | LPT+CG29 total | LPT noCG total | DMC total | CG benefit | CG29 vs DMC |
 |----|------:|-------:|----------------:|---------------:|--------------:|-----------:|------------:|
 | 1 | 4096 | 1024 | **15,507** | 13,515 | 13,022 | **+14.7%** | **+19.1%** |
 | 2 | 8192 | 2048 | **10,755** | 10,692 | 10,393 | +0.6% | **+3.5%** |

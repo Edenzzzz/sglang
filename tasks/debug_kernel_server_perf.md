@@ -325,6 +325,20 @@ Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares 
 
 **PP P99 steps have identical batch conditions to normal steps** — decode_bs, prefill_tokens, and ntr are the same. PP's higher P99 (191ms) is NOT from scheduling but from chunked prefill blocking decode within each step (no mixed-chunk overlap).
 
+### PP WL3 P99 Regression Root Cause (lifecycle tracking)
+
+| | LPT+CG29 WL3 | PP+PCG WL3 |
+|--|:---:|:---:|
+| P99 ITL | 306ms | **720ms** |
+| Max ITL | 473ms | **21,644ms** |
+| P99 decode_bs | 59 | 59 |
+| P99 prefill_tokens | 4,420 | 4,185 |
+| Worst spike cause | decode_bs=66, prefill=7677 | **decode_bs=64, prefill=259, ntr=0.632** |
+
+**PP's worst spikes (21.6s!) happen early** (ntr=0.632) when prefill chunks block all 64 decode requests. Without mixed chunk, a 12K-token prefill requires ~2 chunked steps (8192+3808), each blocking all decode requests for the entire step duration. LPT's mixed chunk interleaves decode tokens within each prefill step, keeping max ITL at 473ms.
+
+**Why PP works on WL5-6 but not WL3-4**: WL5-6 have 4K-6K input (≤1 chunk), so prefill completes in 1 step with minimal blocking. WL3-4 have 12K-16K input (2-3 chunks), creating multi-step blocking periods.
+
 ---
 
 ## Open TODOs

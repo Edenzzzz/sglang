@@ -267,6 +267,20 @@ flashinfer `d9c01c81`, sglang `857603c2a`.
 
 **Key findings**: PP wins P99 ITL on output-heavy WL5-6 (no mixed-batch decode disruption). LPT+CG29 wins on input-heavy WL3-4 (chunked prefill + CG amortize large prefills, PP blocks decode during long prefills → massive P99 spikes). WL1: PP has lower TTFT (no CG capture overhead) but higher P99. CG makes no difference for PP (without mixed chunk, batches are pure prefill or decode).
 
+### POD+CG vs LPT+CG29 (WL1, WL3, rate=8, N=400)
+
+POD = `SGLANG_FLASHINFER_USE_POD=1` (separate prefill+decode kernels) + `--enable-piecewise-cuda-graph`.
+flashinfer `d9c01c81`.
+
+| WL | Config | Total tok/s | TTFT med | Mean ITL | P99 ITL |
+|----|--------|:-----------:|:---------:|:---------:|:---------:|
+| 1 | LPT+CG29 | **~15,400** | **291ms** | **34ms** | **174ms** |
+| 1 | POD+CG | ~13,300 | 5,390ms | 43ms | 437ms |
+| 3 | LPT+CG29 | **~15,400** | **42,236ms** | 43ms | 298ms |
+| 3 | POD+CG | ~14,500 | 46,394ms | 45ms | **284ms** |
+
+**LPT+CG29 dominates WL1**: 18x better TTFT (mixed CG eliminates per-batch Python plan() overhead for chunked prefill), 2.5x better P99. **WL3**: LPT has better throughput (+6%), POD has slightly better P99 (284 vs 298ms — no cooperative launch overhead). POD's main overhead: double plan() calls + GPU-CPU sync in pod_forward per layer.
+
 ### Nebius-SWE-like workload (random in=9053, out=3726, N=200)
 
 flashinfer `d9c01c81`. Nebius-SWE median: 9K input, 3.7K output (2.4:1 prefill-heavy).

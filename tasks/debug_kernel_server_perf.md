@@ -37,7 +37,17 @@ Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Cases 6,8 over
 
 **Note on old stale table**: An earlier table showed LPT beating POD by +3-18%. Those numbers were **contaminated by gpu_keepalive** (confirmed from conversation history). Keepalive inflates cooperative launch (persistent) more than POD, creating fake speedup.
 
-**POD gap on Cases 2,4 (0.89x)**: nsys shows LPT kernel=362μs vs static=421μs on Case 4 — LPT is 16% faster as a kernel. But POD (separate prefill+decode launches) is 340μs total. The 22μs gap is NOT from cooperative launch overhead (single CUDA stream → all SMs available, both micro-bench and server). Likely from grid.sync() + reduction runner overhead within the persistent kernel, or the fused two-runner architecture being suboptimal on small workloads where two specialized kernels are more efficient. TODO: NCU compare POD kernels vs persistent kernel on Case 4 to identify where the extra cycles go.
+**POD gap on Cases 2,4 (0.89x)**: LPT kernel=362μs vs POD=340μs. NOT from cooperative launch (single stream). NCU Case 4 stall breakdown (flashinfer `d9c01c81`):
+
+| Stall reason | Cycles/instr | % of total (10.42 cyc) |
+|-------------|:---:|:---:|
+| **wait (grid.sync)** | **1.78** | **17.1%** |
+| long_scoreboard (DRAM) | 1.62 | 15.6% |
+| no_instruction | 1.28 | 12.3% |
+| short_scoreboard (smem) | 1.14 | 10.9% |
+| barrier (__syncthreads) | 0.84 | 8.1% |
+
+**grid.sync() is the #1 stall — 17% of kernel time.** POD doesn't need grid.sync (separate kernels). Fix: replace grid.sync with per-output-row semaphore barriers (persistent_barrier branch). This eliminates the global sync — each CTA signals completion per tile, reduction runner waits only for its specific tiles.
 
 ### LPT Load-Balance Profiling
 Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (warmup + L2 flush). Qwen3-8B heads (8/32/128). flashinfer `daf646c3`, H100 80GB. Verified ±1-2% match with `bench_mixed_attention.py`.

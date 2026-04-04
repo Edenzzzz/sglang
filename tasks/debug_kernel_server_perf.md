@@ -37,7 +37,7 @@ Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Cases 6,8 over
 
 **Note on old stale table**: An earlier table showed LPT beating POD by +3-18%. Those numbers were **contaminated by gpu_keepalive** (confirmed from conversation history). Keepalive inflates cooperative launch (persistent) more than POD, creating fake speedup.
 
-**POD gap on Cases 2,4 (0.89x)**: nsys shows LPT kernel=362μs vs static=421μs on Case 4 — LPT is 16% faster as a kernel. But POD (separate prefill+decode launches) is 340μs total. The 22μs gap is NOT from cooperative launch overhead (single CUDA stream → all SMs available). Likely from grid.sync() cost within the persistent kernel or from the fused kernel being suboptimal on small workloads where two specialized kernels are more efficient.
+**POD gap on Cases 2,4 (0.89x)**: nsys shows LPT kernel=362μs vs static=421μs on Case 4 — LPT is 16% faster as a kernel. But POD (separate prefill+decode launches) is 340μs total. The 22μs gap is NOT from cooperative launch overhead (single CUDA stream → all SMs available, both micro-bench and server). Likely from grid.sync() + reduction runner overhead within the persistent kernel, or the fused two-runner architecture being suboptimal on small workloads where two specialized kernels are more efficient. TODO: NCU compare POD kernels vs persistent kernel on Case 4 to identify where the extra cycles go.
 
 ### LPT Load-Balance Profiling
 Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (warmup + L2 flush). Qwen3-8B heads (8/32/128). flashinfer `daf646c3`, H100 80GB. Verified ±1-2% match with `bench_mixed_attention.py`.

@@ -33,11 +33,11 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 
 (Cases 1-8: flashinfer `a74bb2d4`, `bench_mixed_attention.py`. Cases 9-10: ratio threshold auto-fallback to static.)
 
-Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Cases 6,8 over POD.** LPT beats static by 1.03-1.22x on Cases 2-8. **Cases 9-10: ratio threshold kicks in → static, 1.00x (zero regression).** Still loses to POD on Cases 2,4 (0.89x) — cooperative launch overhead on small workloads.
+Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Cases 6,8 over POD.** LPT beats static by 1.03-1.22x on Cases 2-8. **Cases 9-10: ratio threshold kicks in → static, 1.00x (zero regression).** Still loses to POD on Cases 2,4 (0.89x) — cause TBD (not cooperative launch overhead; single CUDA stream means all SMs available).
 
 **Note on old stale table**: An earlier table showed LPT beating POD by +3-18%. Those numbers were **contaminated by gpu_keepalive** (confirmed from conversation history). Keepalive inflates cooperative launch (persistent) more than POD, creating fake speedup.
 
-**POD gap on Cases 2,4 (0.89x)**: nsys shows LPT kernel=362μs vs static=421μs on Case 4 — LPT is 16% faster as a kernel. But POD (separate prefill+decode launches) is 340μs total. The 22μs gap (6.5%) is cooperative launch overhead (cudaLaunchCooperativeKernel + grid.sync). Inherent to persistent kernel architecture — amortized on larger workloads (Cases 5-8 where LPT wins).
+**POD gap on Cases 2,4 (0.89x)**: nsys shows LPT kernel=362μs vs static=421μs on Case 4 — LPT is 16% faster as a kernel. But POD (separate prefill+decode launches) is 340μs total. The 22μs gap is NOT from cooperative launch overhead (single CUDA stream → all SMs available). Likely from grid.sync() cost within the persistent kernel or from the fused kernel being suboptimal on small workloads where two specialized kernels are more efficient.
 
 ### LPT Load-Balance Profiling
 Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (warmup + L2 flush). Qwen3-8B heads (8/32/128). flashinfer `daf646c3`, H100 80GB. Verified ±1-2% match with `bench_mixed_attention.py`.
@@ -234,7 +234,7 @@ CG29 = CG25 + {3200, 3456, 3712, 3968} = 29 sizes, ~1.98GB. Fills 3072-4096 with
 
 **Key findings:**
 1. **LPT+CG29 beats DMC on ALL workloads**: +19.1% (WL1), +6.8% (WL4), +4.8% (WL3), +3.5% (WL2), +2.7% (WL5), +1.2% (WL6).
-2. **WL1 TTFT: CG29 284ms vs noCG 3,469ms = 12.2x improvement.** Mixed CG eliminates Python run() overhead (~2.4ms per mixed batch) for chunked prefill steps. nsys shows 3,132 cooperative launches eliminated by CG replay.
+2. **WL1 TTFT: CG29 284ms vs noCG 3,469ms = 12.2x improvement.** Mixed CG eliminates Python run() overhead (~2.4ms per mixed batch) for chunked prefill steps. nsys shows 3,132 plan() calls eliminated by CG replay.
 3. **Mean ITL**: CG29 lower than DMC on all WLs (27-45ms vs 28-48ms).
 4. **P99 ITL tradeoff**: CG29 wins WL1 (173ms vs noCG 468ms, DMC 536ms). noCG has lower P99 on WL2-6 (216-266ms vs CG's 231-318ms) — CG padding adds 10-13% extra compute on worst-case steps. The throughput gain outweighs this on average.
 
@@ -279,14 +279,14 @@ flashinfer `d9c01c81`.
 | 3 | LPT+CG29 | **~15,400** | **42,236ms** | 43ms | 298ms |
 | 3 | POD+CG | ~14,500 | 46,394ms | 45ms | **284ms** |
 
-**LPT+CG29 dominates WL1**: 18x better TTFT (mixed CG eliminates per-batch Python plan() overhead for chunked prefill), 2.5x better P99. **WL3**: LPT has better throughput (+6%), POD has slightly better P99 (284 vs 298ms — no cooperative launch overhead). POD's main overhead: double plan() calls + GPU-CPU sync in pod_forward per layer.
+**LPT+CG29 dominates WL1**: 18x better TTFT (mixed CG eliminates per-batch Python plan() overhead for chunked prefill), 2.5x better P99. **WL3**: LPT has better throughput (+6%), POD has slightly better P99 (284 vs 298ms). POD's main overhead: double plan() calls + GPU-CPU sync for index splitting in pod_forward per layer.
 
 **nsys overhead analysis** (WL1, 50 prompts, `pod_server.nsys-rep` vs `lpt_cg29_wl1.nsys-rep`):
 
 | Metric | LPT+CG29 | POD+PCG | Note |
 |--------|-----------|---------|------|
 | Attention GPU time | 694ms (618 persistent + 76 paged) | 427ms (237 prefill + 113 POD-decode + 77 paged) | POD 38% less |
-| cudaDeviceSynchronize | **2,812ms** (1,869 calls) | 1,162ms (2,448 calls) | LPT cooperative launch |
+| cudaDeviceSynchronize | **2,812ms** (1,869 calls) | 1,162ms (2,448 calls) | plan() GPU→CPU sync |
 | cudaStreamSynchronize | 0ms | **2,360ms** (3,334 calls) | **POD plan() GPU-CPU sync per layer** |
 | cudaMemcpyAsync | 2,650ms | 3,312ms (+25%) | POD double plan indexing |
 | Total sync overhead | 2,812ms | 3,522ms | POD 25% more total |
@@ -366,7 +366,7 @@ Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares 
 
   | CUDA API | LPT+CG29 | trueDMC | Note |
   |----------|----------|---------|------|
-  | cudaDeviceSynchronize | **2,812ms** (1,869 calls) | 1,181ms (2,176 calls) | LPT 2.4x more sync — cooperative launch overhead |
+  | cudaDeviceSynchronize | **2,812ms** (1,869 calls) | 1,181ms (2,176 calls) | plan() GPU→CPU sync (more calls in LPT due to mixed batches) |
   | cudaMemcpyAsync | 2,650ms (4,538 calls) | 2,639ms (5,036 calls) | ~same |
   | cudaLaunchKernel | 663ms (70,286 calls) | 670ms (56,213 calls) | LPT more launches, same total |
   | cudaGraphInstantiate | 997ms (1,624 calls) | 752ms (1,997 calls) | LPT has more CG instantiations (29 mixed + decode) |
@@ -377,7 +377,7 @@ Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares 
   | BatchPrefillWithPagedKVCache | 76ms (2,592 calls, avg 29μs) | (included in nvjet totals) |
   | nvjet GEMM total | ~2.8s | ~1.6s |
 
-  **Key finding**: LPT's main overhead is `cudaDeviceSynchronize` (2.4x more than DMC). This is from cooperative launch — each persistent kernel invocation requires a device-wide sync before launch. The kernel itself (avg 296μs) is efficient, but the sync overhead accumulates. Mixed CG helps by avoiding repeated cooperative launches for cached batch sizes.
+  **Key finding**: LPT's `cudaDeviceSynchronize` (2.4x more than DMC) is from `plan()` GPU→CPU sync (`torch.cuda.synchronize()` in `attention.py:200` to copy qo_indptr/kv_indptr/kv_len_arr to CPU). NOT from cooperative launch (single CUDA stream → all SMs available). Mixed CG helps by skipping `plan()` entirely for cached batch sizes.
 - [ ] **Investigate CG P99 ITL over-admission hypothesis**: CG's faster decode steps cause `new_token_ratio` to decay faster (more decay events per second) → scheduler admits more prefill sooner → decode pressure. Track requests that hit P99 ITL in CG29 vs noCG: log per-request lifecycle (admit time, each ITL, batch size at each step, prefill chunk size at each step). Determine if P99-hitting requests correlate with periods of high prefill admission (low `new_token_ratio` + large decode BS).
 - [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan. Verify in server context with nsys.
 - [ ] Realistic workload analysis — see `tasks/realistic_workload_analysis.md`

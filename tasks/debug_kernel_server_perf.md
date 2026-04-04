@@ -47,7 +47,7 @@ Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Cases 6,8 over
 | short_scoreboard (smem) | 1.14 | 10.9% |
 | barrier (__syncthreads) | 0.84 | 8.1% |
 
-**grid.sync() is the #1 stall — 17% of kernel time.** POD doesn't need grid.sync (separate kernels). Fix: replace grid.sync with per-output-row semaphore barriers (persistent_barrier branch). This eliminates the global sync — each CTA signals completion per tile, reduction runner waits only for its specific tiles.
+**grid.sync() is the #1 stall — 17% of kernel time** (under NCU instrumentation). Attempted fix: replaced grid.sync with per-output-row semaphore barriers (flashinfer `a6ae8e32`). **Result: NO improvement** — barrier kernel matches cooperative exactly on all cases. The 17% NCU stall is likely inflated by instrumentation replay, or barrier reset + acquire-release overhead equals grid.sync cost. **The POD gap is inherent to the fused two-runner architecture** (shared memory reuse, runner switching, reduction overhead), not to any sync mechanism.
 
 ### LPT Load-Balance Profiling
 Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (warmup + L2 flush). Qwen3-8B heads (8/32/128). flashinfer `daf646c3`, H100 80GB. Verified ±1-2% match with `bench_mixed_attention.py`.

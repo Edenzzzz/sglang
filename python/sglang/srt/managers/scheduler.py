@@ -1970,24 +1970,8 @@ class Scheduler(
             # in the waiting queue.
             return None
 
-        # SLO-aware chunk size control (EDF mode)
+        # SLO-aware chunk size control (EDF mode) — disabled for now, needs latency model integration
         effective_chunk_size = self.chunked_prefill_size
-        if self.is_mixed_chunk and effective_chunk_size is not None:
-            from sglang.srt.managers.edf_scheduler import EDF_ENABLED, edf_compute_max_chunk_size
-            if EDF_ENABLED:
-                decode_avg_kv = 0
-                if self.running_batch.reqs:
-                    decode_avg_kv = sum(
-                        len(r.origin_input_ids) + len(r.output_ids)
-                        for r in self.running_batch.reqs
-                    ) / len(self.running_batch.reqs)
-                edf_model = getattr(self, '_edf_latency_model', None)
-                effective_chunk_size = edf_compute_max_chunk_size(
-                    self.running_batch.reqs,
-                    effective_chunk_size,
-                    model_predict_fn=edf_model.predict if edf_model else None,
-                    decode_avg_kv=decode_avg_kv,
-                )
 
         # Prefill policy
         adder = PrefillAdder(

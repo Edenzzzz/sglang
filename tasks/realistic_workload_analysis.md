@@ -144,6 +144,29 @@ All trace datasets now have inference output measured with Qwen3-8B thinking mod
 - **openhands-feedback is bursty**: mostly tiny turns with occasional large tool outputs (400-7K tokens). Less predictable for benchmarking.
 - **Context growth is linear** in all datasets — prefill cost grows linearly with turn number.
 
+### SLO Standards from Literature
+
+Survey of TTFT and TBT/ITL SLO targets used in recent LLM serving papers:
+
+| Paper | TTFT SLO | TBT/ITL SLO | How SLOs are set | Notes |
+|-------|----------|-------------|-----------------|-------|
+| **Tempo** (JITServe, arxiv 2504.20068) | ~2s | ~100ms | P95 from DeepSeek API calls | TTLT=20s for throughput requests. 3:1:1 latency:throughput:collective mix |
+| **Scorpio** (arxiv 2505.23022) | 0.5-7.5s (6 categories) | 30-50ms (Llama-8B), 60-100ms (Gemma-27B) | Per-application type (programming assistant = tight, chatbot = loose) | EDF reordering (Least Deadline First). TPOT Guard admits only if estimated TPOT ≤ min SLO |
+| **Ascendra** (arxiv 2504.20828) | 1.0s (7B/8B), 1.5s (14B) on ShareGPT; 2.5s (7B/8B), 3.0s (14B) on LongBench | 150ms (all models) | Model-size dependent. 150ms TBT ≈ 400 words/min (2-3× human reading speed) | EDF priority. Offloads urgent requests to high-priority instances |
+| **SOLA** (MLSys'25) | Varies | Varies | Balances TTFT vs TPOT distribution | State-aware scheduling. 45.5%→99.4% SLO attainment |
+| **DistServe** (OSDI'24) | Varies | Varies | Goodput = requests meeting both TTFT+TPOT SLOs | Disaggregated prefill-decode |
+| **SLOs-Serve** (arxiv 2504.08784) | Varies | Varies | Multi-SLO optimization | 2.2× capacity vs Sarathi-Serve/vLLM |
+
+**SLO targets for our benchmarks** (Qwen3-8B, H100):
+
+| Workload | TTFT SLO | ITL SLO | Rationale |
+|----------|----------|---------|-----------|
+| ShareGPT (chat) | 2.0s | 100ms | Tempo standard (interactive chat) |
+| Code-Feedback (code gen) | 3.0s | 150ms | Longer inputs, Ascendra's 150ms reading-speed target |
+| Nebius-SWE (agent) | 5.0s | 150ms | Long inputs (9K median), agent can tolerate higher TTFT |
+
+For input-length-dependent TTFT scaling: `TTFT_SLO = base + input_tokens / 5000` (i.e., +1s per 5K extra input tokens beyond baseline). This follows the pattern in Ascendra (ShareGPT 1s base → LongBench 2.5s for longer inputs).
+
 **Updated with model inference (Nebius-SWE only):**
 
 | Turn | Median Input | Median Output (thinking) | In:Out Ratio |

@@ -1611,6 +1611,9 @@ class Scheduler(
             self._prefetch_kvcache(req)
             self.waiting_queue.append(req)
             req.time_stats.wait_queue_entry_time = time.perf_counter()
+            # EDF: set priority to TTFT deadline if enabled
+            from sglang.srt.managers.edf_scheduler import edf_set_priority
+            edf_set_priority(req)
             trace_slice_end(RequestStage.REQUEST_PROCESS, req.rid, auto_next_anon=True)
         elif self.disaggregation_mode == DisaggregationMode.PREFILL:
             self._prefetch_kvcache(req)
@@ -1967,6 +1970,25 @@ class Scheduler(
             # in the waiting queue.
             return None
 
+        # SLO-aware chunk size control (EDF mode)
+        effective_chunk_size = self.chunked_prefill_size
+        if self.is_mixed_chunk and effective_chunk_size is not None:
+            from sglang.srt.managers.edf_scheduler import EDF_ENABLED, edf_compute_max_chunk_size
+            if EDF_ENABLED:
+                decode_avg_kv = 0
+                if self.running_batch.reqs:
+                    decode_avg_kv = sum(
+                        len(r.origin_input_ids) + len(r.output_ids)
+                        for r in self.running_batch.reqs
+                    ) / len(self.running_batch.reqs)
+                edf_model = getattr(self, '_edf_latency_model', None)
+                effective_chunk_size = edf_compute_max_chunk_size(
+                    self.running_batch.reqs,
+                    effective_chunk_size,
+                    model_predict_fn=edf_model.predict if edf_model else None,
+                    decode_avg_kv=decode_avg_kv,
+                )
+
         # Prefill policy
         adder = PrefillAdder(
             self.page_size,
@@ -1975,7 +1997,7 @@ class Scheduler(
             self.running_batch,
             self.new_token_ratio,
             self.max_prefill_tokens,
-            self.chunked_prefill_size,
+            effective_chunk_size,
             running_bs if self.is_mixed_chunk else 0,
             self.priority_scheduling_preemption_threshold,
         )

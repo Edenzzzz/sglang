@@ -121,35 +121,50 @@ def edf_compute_max_chunk_size(
 
 
 class LatencyPredictor:
-    """Wrapper for the trained MLP latency prediction model."""
+    """Wrapper for the trained MLP server latency prediction model.
 
-    def __init__(self, model_path: str, kernel_type: str = "lpt"):
-        """Load trained model.
+    Uses the existing overlap_profiler MLP (tasks/perf_model/model.pt).
+    Server step latency is dominated by MLP layers, so LPT and DMC have
+    very similar profiles. The same model works for both.
+    """
 
-        Args:
-            model_path: Path to dual_model.pt
-            kernel_type: "lpt" or "dmc"
-        """
+    def __init__(self, model_path: str):
+        """Load trained model from tasks/perf_model/model.pt."""
         import torch
+        import torch.nn as nn
 
-        checkpoint = torch.load(model_path, map_location="cpu", weights_only=True)
+        checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
         self.X_mean = checkpoint["X_mean"]
         self.X_std = checkpoint["X_std"]
-        self.input_dim = checkpoint["input_dim"]
-        self.hidden_dims = checkpoint["hidden_dims"]
 
-        from tasks.perf_model.train_perf_model_mlp import PerfMLP
+        # Reconstruct MLP: input_dim=5 (n_p, r_p, r_d, decode_bs, overlap)
+        hidden_dims = [128, 64, 32]
+        layers = []
+        prev = 5
+        for h in hidden_dims:
+            layers.extend([nn.Linear(prev, h), nn.ReLU()])
+            prev = h
+        layers.append(nn.Linear(prev, 1))
 
-        self.model = PerfMLP(self.input_dim, self.hidden_dims)
-        state_key = f"{kernel_type}_state_dict"
-        self.model.load_state_dict(checkpoint[state_key])
+        class _Net(nn.Module):
+            def __init__(self, layers):
+                super().__init__()
+                self.net = nn.Sequential(*layers)
+            def forward(self, x):
+                return self.net(x).squeeze(-1)
+
+        self.model = _Net(layers)
+        self.model.load_state_dict(checkpoint["model_state"])
         self.model.eval()
 
     def predict(self, n_p: int, r_p: float, r_d: float, decode_bs: int) -> float:
-        """Predict server step latency in milliseconds."""
+        """Predict server step latency in milliseconds.
+
+        Uses overlap=False (non-overlapped execution) for conservative estimate.
+        """
         import torch
 
-        x = np.array([[n_p, r_p, r_d, decode_bs]], dtype=np.float32)
+        x = np.array([[n_p, r_p, r_d, decode_bs, 0.0]], dtype=np.float32)
         x_norm = (x - self.X_mean) / self.X_std
         with torch.no_grad():
             pred_log = self.model(torch.tensor(x_norm))

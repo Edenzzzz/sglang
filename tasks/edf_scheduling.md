@@ -28,14 +28,16 @@ Key files:
 
 ### 3. SLO-Aware Chunk Size Control (DMC + LPT only)
 
-Use a latency prediction model to estimate: **how many prefill tokens can we admit in this step without violating the ITL SLO of any running decode request?**
+Use a **server-level** latency prediction model to estimate: **how many prefill tokens can we admit in this step without violating the ITL SLO of any running decode request?**
 
-- Retrain `tasks/server_perf_model.md` MLP model for BOTH LPT and DMC kernels
-- Input: (num_prefill_tokens, num_decode_requests, avg_decode_kv_length)
-- Output: predicted step latency (ms)
+- Retrain `tasks/server_perf_model.md` MLP model for BOTH LPT and DMC **server configurations**
+- Uses the existing `overlap_profiler.py` to profile full forward pass (MLP + attention + all layers)
+- Note: kernel-level latency is too noisy (L2 eviction effects) — server-level profiling smooths this out, which is why LPT exists
+- Input: (n_p, r_p, r_d, decode_bs)
+- Output: predicted server step latency (ms)
 - At batch formation time:
   1. For each candidate prefill chunk size C:
-     - Predict step_latency(C, decode_bs, avg_kv)
+     - Predict step_latency(C, prefix_len, decode_kv_avg, decode_bs)
      - Check: for ALL running decode requests, does `now + step_latency - last_token_time <= ITL_SLO`?
   2. Use largest C that satisfies all decode SLOs
   3. If no prefill can be admitted without violating SLOs, run pure decode
@@ -64,7 +66,8 @@ This applies to DMC and LPT (mixed batches). PP doesn't mix, so it only uses EDF
 ### Phase 1: SLO Research + Performance Model
 - Research TTFT/ITL SLO standards from Tempo, DistServe, Sarathi-Serve, vLLM papers
 - Define per-workload SLOs
-- Retrain MLP latency model for LPT and DMC kernels
+- Profile server-level latency for LPT and DMC configs using `overlap_profiler.py`
+- Retrain MLP to predict server step latency for both configs
 
 ### Phase 2: EDF Scheduler
 - Modify priority scheduling to use deadline timestamps

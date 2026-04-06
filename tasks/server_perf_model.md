@@ -12,11 +12,18 @@ Our method aims to achieve an optimal pareto curve: high throughput, stable deco
 
 - [ ] **Wire overlap_profiler into scheduler**: `ProfilingRunner` exists in `overlap_profiler.py` but is NOT integrated into the server. Options: (a) add `FlushCacheReqInput`-style special request type + API endpoint + handler in `scheduler.py`, (b) add `--run-profiler` flag to `launch_server` that runs profiling during scheduler init before entering event loop, (c) standalone script that creates `ModelRunner` directly (like tests). Option (b) is simplest. The profiler requires `--enable-piecewise-cuda-graph`.
 - [ ] **Fix profiler shape mismatch with persistent kernel**: Calling `/profile_seq_lens` on v3+PCG server crashes with `RuntimeError: output with shape [1] doesn't match the broadcast shape [389]`. The `ProfilingRunner.profile_one_seq_config` creates a ForwardBatch that's missing some fields the persistent kernel needs (possibly `extend_seq_lens` or `prefix_lens` tensor shapes). Need to debug the exact line and fix the ForwardBatch construction.
-- [x] **Profile with persistent v3 + CG + PCG**: Profiler ran 22,837/25,444 configs (90%) before server crash. Data: `Qwen_Qwen3-8B_6b6dccb5_20260329_220215_profile.csv`. Trained MLP (`tasks/perf_model/model.pt`):
-  - **MAPE: 3.4%**, MAE: 2.98ms, P90 error: 6.65ms
-  - Features: n_p (new prefill tokens), r_p (prefix KV), r_d (decode KV), decode_bs, overlap
-  - Target range: 12.6ms to 687ms
+- [x] **Profile with persistent v3 + CG + PCG (old)**: Profiler ran 22,837/25,444 configs (90%) before server crash. Data: `Qwen_Qwen3-8B_6b6dccb5_20260329_220215_profile.csv`. Trained MLP (`tasks/perf_model/model.pt`): 3.4% MAPE (now superseded)
+- [x] **Retrained LPT model** (commit 9544552f, 2026-04-06): Full 25,444 configs profiled with latest LPT kernel (static fallback + extra CG sizes). Data: `Qwen_Qwen3-8B_9544552f_20260406_005503_profile.csv`. Trained MLP (`tasks/perf_model/lpt_model.pt`):
+  - **MAPE: 2.4%**, MAE: 3.26ms, P90 error: 7.32ms
+  - Features: n_p, r_p, r_d, decode_bs, overlap
+  - Target range: 14.34ms to 1394.86ms
   - Architecture: 3-layer MLP [128, 64, 32] with log1p target transform
-  - Training: 100 epochs, Adam lr=1e-3, cosine schedule, 90/10 train/val split
+  - Training: 200 epochs, Adam lr=1e-3, cosine schedule
+  - Command: `python tasks/perf_model/train_perf_model_mlp.py --csv Qwen_Qwen3-8B_9544552f_20260406_005503_profile.csv --output tasks/perf_model/lpt_model.pt --epochs 200`
+- [x] **DMC model** (commit 9544552f, 2026-04-06): Full 25,241 configs profiled with DMC (no persistent). Data: `Qwen_Qwen3-8B_9544552f_20260405_185729_profile.csv`. Trained MLP (`tasks/perf_model/dmc_model.pt`):
+  - **MAPE: 2.3%**, MAE: 3.04ms, P90 error: 6.29ms
+  - Features: n_p, r_p, r_d, decode_bs, overlap
+  - Target range: 20.43ms to 1354.95ms
+  - Training: 200 epochs, command: `python tasks/perf_model/train_perf_model_mlp.py --csv Qwen_Qwen3-8B_9544552f_20260405_185729_profile.csv --output tasks/perf_model/dmc_model.pt --epochs 200`
 - [ ] Validate MLP predictions against actual server latency on representative workloads from `tasks/realistic_workload_analysis.md`
-- [ ] Use trained model to determine optimal prefill/decode admission policy given P/D SLO targets
+- [x] Use trained models for SLO-aware chunk size control (integrated in `edf_scheduler.py` via `SGLANG_EDF_LATENCY_MODEL` env var)

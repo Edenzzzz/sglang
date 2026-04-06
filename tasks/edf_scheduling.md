@@ -70,9 +70,12 @@ This applies to DMC and LPT (mixed batches). PP doesn't mix, so it only uses EDF
 - Retrain MLP to predict server step latency for both configs
 
 ### Phase 2: EDF Scheduler
-- Modify priority scheduling to use deadline timestamps
-- Add TTFT/ITL deadline fields to request metadata
-- Implement SLO-aware chunk size control using latency model
+- [x] Modify priority scheduling to use deadline timestamps
+- [x] Add TTFT/ITL deadline fields to request metadata
+- [x] Implement SLO-aware chunk size control using latency model
+- [x] Fix clock mismatch: `last_tic` uses `time.monotonic()`, EDF must use monotonic consistently (not perf_counter)
+- [x] Add `SGLANG_EDF_LATENCY_MODEL` env var to specify per-config model path
+- [x] Wire predictor into scheduler init and `get_new_batch_prefill`
 
 ### Phase 3: Benchmarking
 - Run 3 workloads × 3 methods × multiple request rates

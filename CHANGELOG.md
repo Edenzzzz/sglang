@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.3.0 — EDF Scheduling + SLO-Aware Chunk Control (2026-04-06)
+
+### EDF Scheduling
+- Implemented Earliest Deadline First scheduling: priority = TTFT deadline (arrival + SLO)
+- TTFT SLO scales with input length (base + extra for >4K tokens)
+- Enable via `SGLANG_EDF_SCHEDULING=1` + `--enable-priority-scheduling --schedule-low-priority-values-first`
+
+### SLO-Aware Chunk Size Control
+- Binary search for max prefill chunk size that fits within ITL SLO slack
+- Uses trained MLP latency model to predict server step latency
+- Configured via `SGLANG_EDF_LATENCY_MODEL=path/to/model.pt`
+- Fixed clock mismatch: all EDF code uses `time.monotonic()` consistently
+
+### Latency Prediction Models
+- Retrained both LPT and DMC server-level latency models (25K+ configs each)
+- LPT model: 2.4% MAPE, 3.26ms MAE (tasks/perf_model/lpt_model.pt)
+- DMC model: 2.3% MAPE, 3.04ms MAE (tasks/perf_model/dmc_model.pt)
+
+### Benchmark Status
+- Created benchmark scripts for PP vs LPT_CG vs DMC with EDF on 3 workloads
+- Blocked by pre-existing `req_to_token_pool memory leak` bug (available_size > total_size)
+
 ## v0.2.1 — CG25: data-driven mixed CG size optimization (2026-04-01)
 
 ### Mixed CG Size Optimization

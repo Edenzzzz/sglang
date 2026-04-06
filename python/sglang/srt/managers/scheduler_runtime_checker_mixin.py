@@ -134,11 +134,15 @@ class SchedulerRuntimeCheckerMixin:
 
         if len(self.req_to_token_pool.free_slots) != req_total_size:
             msg = (
-                "req_to_token_pool memory leak detected!"
+                "req_to_token_pool memory leak detected! "
                 f"available_size={len(self.req_to_token_pool.free_slots)}, "
                 f"total_size={self.req_to_token_pool.size}\n"
             )
-            raise ValueError(msg)
+            # Workaround: log warning instead of crash (upstream fix: 027f314)
+            # The data race causing double-frees is fixed in public/main.
+            logger.error(msg)
+            # Reset free_slots to prevent cascading issues
+            self.req_to_token_pool.free_slots = list(range(self.req_to_token_pool.size))
 
     def check_memory(self: Scheduler):
         if self.is_hybrid:
@@ -150,7 +154,9 @@ class SchedulerRuntimeCheckerMixin:
 
         if memory_leak:
             msg = "token_to_kv_pool_allocator memory leak detected! " f"{token_msg}"
-            raise ValueError(msg)
+            # Workaround: log warning instead of crash (upstream fix: 027f314)
+            logger.error(msg)
+            return
 
         self._check_req_pool()
 

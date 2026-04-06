@@ -78,6 +78,15 @@ This applies to DMC and LPT (mixed batches). PP doesn't mix, so it only uses EDF
 - [x] Wire predictor into scheduler init and `get_new_batch_prefill`
 
 ### Phase 3: Benchmarking
-- Run 3 workloads × 3 methods × multiple request rates
-- Generate Pareto curves (throughput vs ITL P99)
-- Analyze SLO attainment breakdown
+- [ ] Run 3 workloads × 3 methods × multiple request rates — **BLOCKED** by `req_to_token_pool memory leak` bug
+  - PP with EDF ran 1 rate (ShareGPT rate=1): TTFT P99=258s, ITL P99=8.6ms, throughput=406 tok/s
+  - Server hangs after ~200-1000 requests with `ValueError: req_to_token_pool memory leak detected! available_size=85260, total_size=4096`
+  - This is a pre-existing sglang bug (available_size > total_size), not EDF-related
+  - LPT_CG also hangs under load (cooperative kernel hang, separate from memory leak)
+  - DMC with EDF tested successfully on small load (5 concurrent requests), chunk control working
+- [ ] Generate Pareto curves (throughput vs ITL P99) — needs stable server first
+- [ ] Analyze SLO attainment breakdown
+
+### Blockers
+1. **req_to_token_pool memory leak**: Server crashes with `available_size > total_size` after processing several hundred ShareGPT requests. Affects all configs (PP, LPT, DMC). Need to investigate and fix in `token_to_kv_pool_allocator` code.
+2. **LPT cooperative kernel hang**: Persistent kernel hangs under load (~200+ requests). Known issue from v3 kernel. Only affects LPT_CG, not PP or DMC.

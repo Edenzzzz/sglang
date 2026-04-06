@@ -88,5 +88,8 @@ This applies to DMC and LPT (mixed batches). PP doesn't mix, so it only uses EDF
 - [ ] Analyze SLO attainment breakdown
 
 ### Blockers
-1. **req_to_token_pool memory leak**: Server crashes with `available_size > total_size` after processing several hundred ShareGPT requests. Affects all configs (PP, LPT, DMC). Need to investigate and fix in `token_to_kv_pool_allocator` code.
-2. **LPT cooperative kernel hang**: Persistent kernel hangs under load (~200+ requests). Known issue from v3 kernel. Only affects LPT_CG, not PP or DMC.
+1. **req_to_token_pool memory leak**: Fixed upstream in commit `027f314` on `public/main` — "[Fix] data race in req_to_token pool (#17850)". The fix changes `alloc()`/`free()` to be request-based, preventing double-frees. Need to cherry-pick into `attn_fuse_`. Touches 13 files including `memory_pool.py`, `radix_cache.py`, `scheduler.py`.
+2. **LPT cooperative kernel hang**: Persistent kernel hangs under load (~30+ concurrent requests). **DMC does NOT hang** under identical load — confirmed by side-by-side test (DMC completed all 50 requests in 180s, LPT hung at 163 requests). The hang happens when only 1-2 requests remain running (last decode batch shows `#running-req: 1`). No error messages — the scheduler loop simply freezes. Possible causes:
+   - Cooperative kernel deadlock during CG replay at a specific batch size
+   - State corruption from mixed CG replay that only manifests on the final request
+   - Stream interference from `non_blocking=True` operations (identified in `forward_batch_info.py:771` and `flashinfer_backend.py:1358,1381,1892`)

@@ -536,9 +536,15 @@ DMC's throughput is *higher* despite worse latency — chunk control admitted bi
   2. **Disaggregated prefill-decode** (DistServe-style) — give prefill its own GPU so it doesn't compete with decode for compute.
   Tracked here as a future direction; intentionally NOT in the active overnight task list (per user instruction).
 
-### [ ] Blockers
+### [x] Blockers (both resolved)
 
-#### LPT cooperative kernel hang — debug hypotheses (task #114, in progress)
+#### [x] LPT cooperative kernel hang — RESOLVED (task #114)
+
+**Resolution**: the `_ensure_positive_extend()` guard added in the schedule_policy fix (v0.3.3, commit `dcf000500`) eliminates the root cause. A request with `extend_input_len=0` (full prefix-cache hit) was entering the persistent kernel via the mixed-batch path, creating a malformed batch that caused `BatchAttention`'s cooperative `grid.sync()` to deadlock when batch size shrank to 1-2 remaining requests.
+
+**Verification**: LPT_CG now completes 500 prompts at rate=inf on nebius (9K-input) without hanging, and passed 18 separate 1000-prompt LPT_CG runs across 3 workloads × 6 rates during sweep #109. The blocker is resolved.
+
+**Original debug hypotheses** (kept for reference):
 
 Code-reading findings (no GPU repro yet — pending #109 freeing the GPU):
 1. **`BatchAttention` cooperative kernel** (`flashinfer_backend.py:976` `persistent_attn_forward`) calls `wrapper.run()` which dispatches to a flashinfer kernel that uses cooperative groups + `grid.sync()`. The cooperative model requires ALL launched blocks to reach the sync point. If a block returns early without syncing, the kernel deadlocks. This is the most likely culprit for the "hangs at #running-req: 1" symptom — when batch shrinks to 1 the kernel may launch more blocks than there's work for and the empty blocks don't reach `grid.sync()`.

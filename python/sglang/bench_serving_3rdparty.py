@@ -30,6 +30,8 @@ THIRD_PARTY_DATASETS = [
     "swe-gym",
     "swe-smith",
     "orca-agentinstruct",
+    "nebius-swe-traj",
+    "swe-bench-pro",
 ]
 
 # ============================================================
@@ -73,6 +75,60 @@ def _extract_orca(ex):
     return _extract_messages(ex, conv_field="messages")
 
 
+def _extract_nebius_swe_traj(ex):
+    """Sample a random AI-turn boundary from a Nebius SWE-agent trajectory.
+
+    The trajectory is a list of {role, system_prompt, text} entries with roles
+    'system', 'user', 'ai'. We pick a random AI-turn index and return:
+        input  = system_prompt + concatenation of all text up to that turn
+        output = the text of that AI turn
+    This faithfully recreates the realistic per-turn agent prefill load
+    (input grows with turn number — see tasks/realistic_workload_analysis.md
+    where median input is 9K tokens and the workload is the only prefill-heavy
+    one in the survey, 2.4:1 input/output ratio).
+    """
+    traj = ex.get("trajectory") or []
+    if not traj:
+        return "", ""
+    sys_prompt = ""
+    parts = []  # list of (role, text), only user/ai roles
+    ai_positions = []
+    for t in traj:
+        role = t.get("role")
+        text = t.get("text") or ""
+        if role == "system":
+            sys_prompt = t.get("system_prompt") or text
+        elif role == "user":
+            parts.append(("user", text))
+        elif role == "ai":
+            ai_positions.append(len(parts))
+            parts.append(("ai", text))
+    if not ai_positions:
+        return "", ""
+    pick = random.choice(ai_positions)
+    history = "\n".join(t for _, t in parts[:pick])
+    inp = (sys_prompt + "\n" + history) if sys_prompt else history
+    out = parts[pick][1]
+    return inp, out
+
+
+def _extract_swe_bench_pro(ex):
+    """Combine SWE-bench-Pro fields into a realistic-looking long prefill.
+
+    SWE-bench-Pro is single-step (problem_statement + requirements + interface
+    -> patch). Inputs are much longer than SWE-bench/SWE-Gym because of the
+    `requirements` and `interface` spec text. Output is the gold patch.
+    """
+    parts = [
+        ex.get("problem_statement", "") or "",
+        ex.get("requirements", "") or "",
+        ex.get("interface", "") or "",
+    ]
+    inp = "\n\n".join(p for p in parts if p)
+    out = ex.get("patch", "") or ""
+    return inp, out
+
+
 # ============================================================
 # Dataset registry
 # ============================================================
@@ -108,6 +164,17 @@ _DATASET_CONFIGS = {
         ],
         "extract": _extract_orca,
     },
+    "nebius-swe-traj": {
+        "hf_id": "nebius/SWE-agent-trajectories",
+        "splits": ["train"],
+        "extract": _extract_nebius_swe_traj,
+        "streaming_max": 4000,  # streaming load cap to avoid downloading the full dataset
+    },
+    "swe-bench-pro": {
+        "hf_id": "ScaleAI/SWE-bench_Pro",
+        "splits": ["test"],
+        "extract": _extract_swe_bench_pro,
+    },
 }
 
 
@@ -136,16 +203,26 @@ def sample_3rdparty_requests(
     """
     config = _DATASET_CONFIGS[dataset_name]
     extract = config["extract"]
+    streaming_max = config.get("streaming_max")
 
     # Load all splits and extract text pairs
     pairs = []
     for split_name in config["splits"]:
         try:
-            ds = load_dataset(config["hf_id"], split=split_name)
-            for ex in ds:
-                inp, out = extract(ex)
-                if inp:
-                    pairs.append((inp, out))
+            if streaming_max is not None:
+                ds = load_dataset(config["hf_id"], split=split_name, streaming=True)
+                for i, ex in enumerate(ds):
+                    if i >= streaming_max:
+                        break
+                    inp, out = extract(ex)
+                    if inp:
+                        pairs.append((inp, out))
+            else:
+                ds = load_dataset(config["hf_id"], split=split_name)
+                for ex in ds:
+                    inp, out = extract(ex)
+                    if inp:
+                        pairs.append((inp, out))
         except Exception as e:
             print(f"  Warning: failed to load {config['hf_id']} split '{split_name}': {e}")
 

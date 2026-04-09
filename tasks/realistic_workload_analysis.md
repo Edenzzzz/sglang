@@ -113,7 +113,9 @@ All trace datasets now have inference output measured with Qwen3-8B thinking mod
 
 | Dataset | N | Median Input | Inference Output Median | Output P95 | In:Out Ratio |
 |---------|--:|-------------|------------------------|-----------|-------------|
-| **Nebius-SWE-Traj** | 200 | 9,053 | **3,726** | 16,384 | **2.4:1** |
+| **Nebius-SWE-Traj** | 200 | 9,053 | **3,726** | 16,384 | **2.4:1** |  <!-- HF: nebius/SWE-agent-trajectories — loaded by bench_serving 'nebius-swe-traj' -->
+| SWE-bench-Pro | 731 | ~800 | **~7,300** (gold patch) | 154,033 | 0.11:1 |  <!-- HF: ScaleAI/SWE-bench_Pro test split — single-step problem→patch, longer than swe-gym but not multi-turn -->
+
 | Code-Feedback | 200 | 200 | **5,598** | 13,313 | 0.04:1 |
 | SWE-Gym | 200 | 412 | **2,344** | 5,828 | 0.18:1 |
 | openhands-feedback | 200 | 85 | **1,690** | 7,536 | 0.05:1 |

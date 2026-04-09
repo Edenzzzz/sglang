@@ -331,6 +331,13 @@ class SchedulerOutputProcessorMixin:
         if not batch.spec_algorithm.is_none():
             self.update_spec_metrics(batch.batch_size(), result.num_accepted_tokens)
 
+        # EDF: track per-req last decode step time for SLO-aware chunk control
+        if self.edf_latency_predictor is not None:
+            import time as _t
+            _now = _t.monotonic()
+            for req in batch.reqs:
+                req._edf_last_step_time = _now
+
         # Per-request lifecycle tracking
         if hasattr(batch.reqs[0], 'lifecycle_steps') and batch.reqs[0].lifecycle_steps is not None:
             import time as _time

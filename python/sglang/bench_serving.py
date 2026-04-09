@@ -2657,6 +2657,8 @@ if __name__ == "__main__":
             "swe-gym",
             "swe-smith",
             "orca-agentinstruct",
+            "nebius-swe-traj",
+            "swe-bench-pro",
         ],
         help="Name of the dataset to benchmark on.",
     )

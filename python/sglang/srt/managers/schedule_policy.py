@@ -447,8 +447,30 @@ class PrefillAdder:
         self.log_hit_tokens += prefix_len
         self.log_input_tokens += extend_input_len
 
+    @staticmethod
+    def _ensure_positive_extend(req: Req) -> bool:
+        """Make sure req has at least one token to extend by trimming one prefix
+        token if needed. A non-positive extend_input_len would produce 0 sampled
+        tokens for this request in a mixed batch, causing the overlap scheduler
+        to fail with a seq_lens/next_token_ids size mismatch. Returns False if
+        the req has nothing to extend even after trimming (caller should defer)."""
+        if req.extend_input_len > 0:
+            return True
+        if len(req.prefix_indices) > 0:
+            req.prefix_indices = req.prefix_indices[:-1]
+            req.extend_input_len = len(req.fill_ids) - len(req.prefix_indices)
+            req.last_matched_prefix_len = len(req.prefix_indices)
+        return req.extend_input_len > 0
+
     def add_chunked_req(self, req: Req):
+        # If either budget is non-positive (KV oversubscribed or chunk budget
+        # already consumed by mixed_decode_tokens), defer the chunked prefill
+        # to the next step.
         _rem_tokens = min(self.rem_chunk_tokens, int(self.rem_total_tokens))
+        if _rem_tokens <= 0:
+            return req  # keep chunked, no progress this step
+        if not self._ensure_positive_extend(req):
+            return req
         truncated = req.extend_input_len > _rem_tokens
         req.extend_input_len = min(req.extend_input_len, _rem_tokens)
         req.fill_ids = req.fill_ids[: len(req.prefix_indices) + req.extend_input_len]
@@ -569,6 +591,10 @@ class PrefillAdder:
         if req.sampling_params.ignore_eos and getattr(self.tree_cache, "disable", True):
             return self.add_one_req_ignore_eos(req, has_chunked_req)
 
+        # Mixed-batch sampler requires every req to produce ≥ 1 sampled token.
+        if not self._ensure_positive_extend(req):
+            return AddReqResult.OTHER
+
         total_tokens = req.extend_input_len + min(
             max(req.sampling_params.max_new_tokens - len(req.output_ids), 0),
             CLIP_MAX_NEW_TOKENS,
@@ -596,6 +622,9 @@ class PrefillAdder:
                 )
                 req.prefix_indices = torch.cat([req.prefix_indices, new_indices])
                 req.extend_input_len = len(req.fill_ids) - len(req.prefix_indices)
+                # Host cache may fully cover fill_ids — trim one prefix token so
+                # the mixed batch has a last position to sample.
+                self._ensure_positive_extend(req)
                 prefix_len = len(req.prefix_indices)
                 req.last_matched_prefix_len = prefix_len
 

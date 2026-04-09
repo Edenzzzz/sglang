@@ -223,8 +223,11 @@ class SchedulerRuntimeCheckerMixin:
             self.tree_cache.sanity_check()
 
     def self_check_during_idle(self: Scheduler):
-        self.check_memory()
-        self.check_tree_cache()
+        try:
+            self.check_memory()
+            self.check_tree_cache()
+        except Exception as e:
+            logger.error(f"self_check_during_idle error (non-fatal): {e}")
         self.new_token_ratio = self.init_new_token_ratio
         self.maybe_sleep_on_idle()
 

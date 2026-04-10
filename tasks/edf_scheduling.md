@@ -402,23 +402,24 @@ DMC's throughput is *higher* despite worse latency — chunk control admitted bi
 
 ### [x] Blockers (both resolved)
 
-#### [x] LPT_CG performance regressions vs DMC — root-caused (task #117)
+#### [ ] LPT_CG performance regressions vs DMC — kernel overhead on short-input workloads (task #117, in progress)
 
-**Root cause**: LPT_CG captures **58 mixed-batch CUDA graphs** using `BatchAttention` (persistent kernel) at startup, consuming **2.45 GB of GPU memory** that DMC doesn't use. DMC uses `BatchPrefillWithPagedKVCacheWrapper` for mixed batches, which doesn't need separate CG captures.
+**Root cause**: Both DMC and LPT_CG capture the same 58 piecewise CGs with identical memory (6.42 GB available after CGs, 366K KV tokens — `mem-fraction-static=0.85` makes the cache pool static, so CG memory does NOT reduce KV capacity). The difference is the **kernel replayed** during mixed-batch CG:
 
-| | DMC | LPT_CG | Delta |
-|--|--|--|--|
-| KV cache tokens | 366,821 | 366,821 | same |
-| Decode CGs (36 bs) | 1.89 GB | 1.89 GB | same |
-| **Piecewise mixed CGs** | **0** | **58 × BatchAttention** | **+2.45 GB** |
-| Available after all CGs | **8.87 GB** | **6.42 GB** | **-2.45 GB** |
+- **DMC** mixed CG replays `BatchPrefillWithPagedKVCacheWrapper` (FA3 kernel) — lightweight
+- **LPT_CG** mixed CG replays `BatchAttention` (cooperative kernel with `grid.sync()`) — heavier per-step overhead
 
-The 2.45 GB deficit reduces runtime headroom for dynamic allocations (workspace buffers, temp activations during large prefills). At high concurrency this causes more OOM-triggered evictions, explaining why LPT_CG regressions are worst on Code-Feedback rate 32/48 (high concurrency = peak memory pressure) and less visible at lower rates.
+On short-input workloads (Code-Feedback 200 tok, ShareGPT 150 tok), mixed batches have very few prefill tokens (~150-200 per step). The cooperative kernel's `grid.sync()` overhead and SM coordination cost dominates the actual attention computation, making LPT_CG slower per mixed step. This explains:
+- Regressions are worst on **Code-Feedback** (shortest inputs → most decode-dominated mixed batches → cooperative overhead hurts most)
+- Regressions are smallest on **SWE-Gym** (412 tok inputs → more prefill per step → cooperative kernel has more work to amortize overhead)
+- WL1-6 benchmarks (4K-16K inputs) showed LPT beating DMC because the cooperative kernel amortizes its overhead over large prefill chunks
 
 **Fix options**:
-1. **Reduce mixed CG sizes**: capture only the top ~10-15 most-used sizes instead of all 58. The WL1-6 benchmarks used CG29 (29 sizes) which was already optimized for padding waste — but even 29 is too many if each takes ~42 MB.
-2. **Lazy CG capture**: don't capture mixed CGs at startup. Instead, capture on first use and cache. This avoids paying memory for sizes that never appear in the workload.
-3. **Share workspace**: mixed CGs currently allocate their own `workspace_buffer` per wrapper. If they could share the decode CG workspace (they never run simultaneously), that halves the buffer memory.
+1. **Fall back to FA3 for small mixed batches**: if `num_prefill_tokens < threshold` (e.g., 512), use `BatchPrefillWithPagedKVCacheWrapper` instead of `BatchAttention` for that step. This gives LPT_CG the cooperative kernel's benefit on heavy prefills and FA3's speed on light ones.
+2. **Profile the crossover**: find the prefill-token count where `BatchAttention` becomes faster than FA3 on this model/GPU combo. Use that as the threshold.
+3. **Reduce piecewise CG sizes for small-token captures**: if sizes below 512 tokens always use FA3 (not cooperative), skip capturing those 28 sizes as mixed CGs entirely — saves ~1.2 GB and startup time.
+
+**Verification needed**: A/B latency profiling of DMC vs LPT_CG on Code-Feedback (in progress).
 
 #### [x] LPT cooperative kernel hang — RESOLVED (task #114)
 

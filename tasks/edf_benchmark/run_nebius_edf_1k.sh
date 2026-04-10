@@ -98,7 +98,7 @@ start_server() {
         --port $PORT --host 0.0.0.0 \
         --enable-priority-scheduling --schedule-low-priority-values-first \
         --priority-scheduling-preemption-threshold 999999 \
-        --watchdog-timeout 1200 > "$logfile" 2>&1 &
+        --watchdog-timeout 1200 --attention-backend flashinfer > "$logfile" 2>&1 &
     disown
 }
 

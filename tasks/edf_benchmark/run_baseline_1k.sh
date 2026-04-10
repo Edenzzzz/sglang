@@ -81,7 +81,7 @@ start_server() {
         nohup python -m sglang.launch_server --model $MODEL $extra_flags \
         --chunked-prefill-size 8192 --mem-fraction-static 0.85 \
         --port $PORT --host 0.0.0.0 \
-        --watchdog-timeout 1200 > "$logfile" 2>&1 &
+        --watchdog-timeout 1200 --attention-backend flashinfer > "$logfile" 2>&1 &
     disown
 }
 

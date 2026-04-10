@@ -402,6 +402,24 @@ DMC's throughput is *higher* despite worse latency — chunk control admitted bi
 
 ### [x] Blockers (both resolved)
 
+#### [x] LPT_CG performance regressions vs DMC — root-caused (task #117)
+
+**Root cause**: LPT_CG captures **58 mixed-batch CUDA graphs** using `BatchAttention` (persistent kernel) at startup, consuming **2.45 GB of GPU memory** that DMC doesn't use. DMC uses `BatchPrefillWithPagedKVCacheWrapper` for mixed batches, which doesn't need separate CG captures.
+
+| | DMC | LPT_CG | Delta |
+|--|--|--|--|
+| KV cache tokens | 366,821 | 366,821 | same |
+| Decode CGs (36 bs) | 1.89 GB | 1.89 GB | same |
+| **Piecewise mixed CGs** | **0** | **58 × BatchAttention** | **+2.45 GB** |
+| Available after all CGs | **8.87 GB** | **6.42 GB** | **-2.45 GB** |
+
+The 2.45 GB deficit reduces runtime headroom for dynamic allocations (workspace buffers, temp activations during large prefills). At high concurrency this causes more OOM-triggered evictions, explaining why LPT_CG regressions are worst on Code-Feedback rate 32/48 (high concurrency = peak memory pressure) and less visible at lower rates.
+
+**Fix options**:
+1. **Reduce mixed CG sizes**: capture only the top ~10-15 most-used sizes instead of all 58. The WL1-6 benchmarks used CG29 (29 sizes) which was already optimized for padding waste — but even 29 is too many if each takes ~42 MB.
+2. **Lazy CG capture**: don't capture mixed CGs at startup. Instead, capture on first use and cache. This avoids paying memory for sizes that never appear in the workload.
+3. **Share workspace**: mixed CGs currently allocate their own `workspace_buffer` per wrapper. If they could share the decode CG workspace (they never run simultaneously), that halves the buffer memory.
+
 #### [x] LPT cooperative kernel hang — RESOLVED (task #114)
 
 **Resolution**: the `_ensure_positive_extend()` guard added in the schedule_policy fix (v0.3.3, commit `dcf000500`) eliminates the root cause. A request with `extend_input_len=0` (full prefix-cache hit) was entering the persistent kernel via the mixed-batch path, creating a malformed batch that caused `BatchAttention`'s cooperative `grid.sync()` to deadlock when batch size shrank to 1-2 remaining requests.

@@ -389,6 +389,49 @@ Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares 
 
   **Key finding**: LPT's `cudaDeviceSynchronize` (2.4x more than DMC) is from `plan()` GPU→CPU sync (`torch.cuda.synchronize()` in `attention.py:200` to copy qo_indptr/kv_indptr/kv_len_arr to CPU). NOT from cooperative launch (single CUDA stream → all SMs available). Mixed CG helps by skipping `plan()` entirely for cached batch sizes.
 - [ ] **Investigate CG P99 ITL over-admission hypothesis**: CG's faster decode steps cause `new_token_ratio` to decay faster (more decay events per second) → scheduler admits more prefill sooner → decode pressure. Track requests that hit P99 ITL in CG29 vs noCG: log per-request lifecycle (admit time, each ITL, batch size at each step, prefill chunk size at each step). Determine if P99-hitting requests correlate with periods of high prefill admission (low `new_token_ratio` + large decode BS).
+
+- [x] **Barrier-reverted HEAD runs 35% faster on TTFT than pure `d9c01c81` — ROOT CAUSE: slower plan() causing artificial scheduler backpressure (NOT a real kernel speedup)**
+
+  **Three flashinfer commits involved:**
+  1. **A = `d9c01c81`** — pre-barrier; kernel uses `grid.sync()` + `cudaLaunchCooperativeKernel`. Reference for the WL1-6 table above.
+  2. **B = `a6ae8e32`** — "integrate barrier-based persistent kernel"; kernel uses per-output-row GmemBarrier semaphores; `Params` struct +32 bytes (4 extra pointer fields); host-side adds 15 MB `cudaMemcpyAsync` barrier reset per kernel launch. **Hangs on variable-length sharegpt/code-feedback workloads** due to a CG-invariance bug in the `barrier_vec` allocation.
+  3. **C = `cfca7c6f`** on top of B — reverts `persistent.cuh` + `persistent_template.cuh` to `d9c01c81`, keeps the host-side barrier scaffolding (Params struct, memcpy reset, extra int allocations), and bumps `int_workspace_buffer` 8→32 MB.
+
+  **Kernel-level (standalone, fixed input: 4 prefill@4096 + 16 decode@2048, 100 iters, torch.cuda.Event):**
+
+  | Build | kernel GPU median |
+  |---|---|
+  | A `d9c01c81` grid.sync | **1785 μs** |
+  | B `a6ae8e32` barriers | **1773 μs** |
+  | C `cfca7c6f` dead scaffolding | **1792 μs** |
+
+  All three within 1% noise. **The kernel itself runs at the same speed across all three builds** — confirming the `a6ae8e32` commit message that said the barrier approach gave "NO improvement over cooperative version".
+
+  **plan() wall-clock (standalone, 200 iters, two modes):**
+
+  | Build | plan() no-CG | plan() `enable_cuda_graph=True` |
+  |---|---|---|
+  | A `d9c01c81` | 1299 μs | **188 μs** |
+  | C `cfca7c6f` | 5862 μs (+4.5×) | **4623 μs (+24×)** |
+
+  C's plan() is **24× slower** in CG mode (which is what sglang uses at runtime). Cause: my `merged_barrier_idx.resize(barrier_max, 0)` and `barrier_vec.resize(barrier_max, 0)` in scheduler.cuh each pad to ~608K uint32_t (~2.4 MB), followed by two `CopyToPageLockedBuffer` calls into the pinned buffer. Plus the 32 MB `int_workspace_buffer` and the expanded `HolisticPlanInfo` serialization (5 extra fields) add CPU overhead.
+
+  **Server-level sglang bench (WL1 4096/1024 rate=8 N=400, SGLANG_FLASHINFER_USE_PERSISTENT=1, 3 runs each, warm GPU):**
+
+  | Build | Median TTFT (3 runs) | Mean ITL | P99 ITL | Throughput |
+  |---|---|---|---|---|
+  | A `d9c01c81` pure | 275, 290, 289 → **289 ms** | 32.9 ms | 187 ms | 6.02 req/s |
+  | C `cfca7c6f` scaffolded | 171, 195, 197 → **195 ms** | 30.6 ms | 164 ms | 6.20 req/s |
+
+  C is 32% faster on TTFT, 7% lower mean ITL, 12% lower P99 ITL, 3% higher throughput. Reproducible across runs.
+
+  **Contradiction resolution**: The kernel is identical. C's plan() is 24× slower. Yet C's sglang wall-clock is 32% faster. This is **artificial scheduler backpressure**: each time sglang calls `wrapper.plan()` before a forward, the extra ~4.4 ms CPU time lets the scheduler accumulate more requests into the next batch. Larger batches → better GPU utilization → lower wall-clock TTFT/P99 ITL despite the per-plan overhead. **It's a lucky scheduling side effect, not a kernel or host-side optimization.**
+
+  **Optimal kernel version = A (pure `d9c01c81`)** — identical kernel speed, 24× faster plan(), used for the WL1-6 reference table, no dead scaffolding. The "speedup at C" could be reproduced deliberately via a real scheduler change (e.g., a small wait before plan() to coalesce more requests, or larger min batch size) — that is a separate optimization, not a kernel improvement.
+
+  **Action**: re-run the 6 EDF Pareto curves at `d9c01c81` (tracked separately as task #119) so the EDF benchmark numbers are on the same kernel as this WL1-6 reference table.
+
+  **Expected discrimination**: NCU on the kernel will show IPC / stall / memory metrics directly. If A and C differ only on kernel metrics, the cause is (1). If they differ on nsys timeline (cudaMemcpyAsync or cudaLaunchKernel overhead), the cause is (3) or (4). If kernel metrics identical but overall wallclock differs, look for pipeline/overlap effects.
 - [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan. Verify in server context with nsys.
 - [ ] Realistic workload analysis — see `tasks/realistic_workload_analysis.md`
 

@@ -5,9 +5,9 @@ set -u
 
 MODEL="Qwen/Qwen3-8B"
 PORT=30000
-RESULTS_DIR="tasks/edf_benchmark/results_edf"
+RESULTS_DIR="tasks/edf_benchmark/results"
 mkdir -p "$RESULTS_DIR"
-RATES="${RATES:-4 8 12 16 24}"
+RATES="${RATES:-2 4 8 12 16 24 inf}"
 
 LPT_MODEL="/mlx_devbox/users/wenxuan.tan/playground/sglang/tasks/perf_model/lpt_model.pt"
 DMC_MODEL="/mlx_devbox/users/wenxuan.tan/playground/sglang/tasks/perf_model/dmc_model.pt"
@@ -87,6 +87,7 @@ start_server() {
         SGLANG_EDF_SCHEDULING=1 SGLANG_TTFT_SLO_MS=$ttft SGLANG_ITL_SLO_MS=$itl \
         $model_env \
         nohup python -m sglang.launch_server --model $MODEL $extra_flags \
+        --attention-backend flashinfer \
         --chunked-prefill-size 8192 --mem-fraction-static 0.85 \
         --port $PORT --host 0.0.0.0 \
         --enable-priority-scheduling --schedule-low-priority-values-first \

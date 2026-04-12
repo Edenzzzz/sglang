@@ -446,25 +446,33 @@ Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares 
 
   **ROOT CAUSE DIAGNOSED** (2026-04-12, sglang `081970b20`, flashinfer A=`d9c01c81` vs C=`cfca7c6f`):
 
-  The speedup comes from **C's CG-replayed forward pass running ~6ms/step faster than A's**, despite identical standalone kernel benchmark times. This was diagnosed by inserting `torch.cuda.synchronize()` before plan() to separate GPU-drain wait from CPU plan work:
+  The speedup comes from **C's host-side barrier scaffolding in scheduler.cuh and batch_attention.cu**, NOT from the Params struct layout alone. Diagnosed via sync/CPU split timing AND a padding-only ablation.
 
-  **Split timing (sync = GPU drain wait, cpu = plan C++ work):**
+  **Split timing** (inserting `torch.cuda.synchronize()` before plan() to separate GPU-drain wait from CPU plan work):
 
   | Build | sync median | cpu median | sync mean | cpu mean | bench throughput |
   |---|---|---|---|---|---|
   | A3 `d9c01c81` run2 (warm JIT) | ~8000 μs | 476 μs | 16750 μs | 508 μs | 5.99 req/s |
   | C4 `cfca7c6f` | 6051 μs | 2808 μs | 10805 μs | 5070 μs | 6.25 req/s |
 
-  Key observations:
-  1. **A's CPU plan work is 6× faster** (476 vs 2808 μs) — less host-side work without barrier scaffolding.
-  2. **A's GPU drain wait is ~2ms LONGER per step** — the CG-replayed forward pass takes longer at A.
-  3. **Net effect**: A's slower forward dominates its faster plan. C wins by ~4% throughput and 38% TTFT.
+  **Padding-only ablation** (flashinfer `padding_only` branch: A + 4 void* padding fields in PersistentParams + 32 MB workspace, NO scheduler.cuh or batch_attention.cu changes):
 
-  The forward pass difference comes from the **Params struct layout change** in `batch_attention_customize_config.jinja`. C adds 4 unused pointer fields (+32 bytes) to `PersistentParams`. Although the kernel never reads these fields (barrier code was reverted), the struct size change alters the `__grid_constant__` constant memory layout, affecting cache line alignment during CUDA graph replay. This produces measurable speedup on repeated CG replays with varied batch shapes, even though standalone kernel benchmarks with fixed inputs show no difference.
+  | Build | Throughput | Median TTFT | Mean ITL | P99 ITL |
+  |---|---|---|---|---|
+  | A `d9c01c81` | 5.99 req/s | 286 ms | 32.9 ms | 181 ms |
+  | Padding-only (A + struct pads + 32MB) | 6.01 req/s | 280 ms | 33.3 ms | 180 ms |
+  | C `cfca7c6f` full scaffolding | 6.22 req/s | 175 ms | 30.8 ms | 165 ms |
+
+  **Padding alone ≈ A.** The struct layout change is NOT the cause. The speedup comes from C's host-side changes:
+  - **scheduler.cuh**: Extra barrier_vec allocations + CopyToPageLockedBuffer calls change int_workspace data patterns
+  - **batch_attention.cu**: `cudaMemcpyAsync` D2D barrier reset (~2KB) before cooperative kernel launch acts as stream warmup
+  - These changes alter the GPU execution pipeline timing for CG-replayed forward passes, reducing per-step latency by ~6ms
+
+  The mechanism is likely: the D2D memcpy before `cudaLaunchCooperativeKernel` primes the DMA engine and ensures any residual stream state is flushed, reducing cooperative launch latency. The extra plan work (barrier_vec allocation) also changes the pinned-memory copy pattern, reducing DMA contention on subsequent H2D transfers.
 
   **Additional finding: `fast_decode_plan` is broken.** sglang assigns `decode_wrappers[i].plan = partial(fast_decode_plan, wrapper)` (line 712), but `call_begin_forward` calls `wrapper.begin_forward()` which resolves to the CLASS method (not the instance partial) because `begin_forward = plan` is a class-level alias. Fix: change line 712 to `decode_wrappers[i].begin_forward = partial(...)`.
 
-  **Action**: Use C (`cfca7c6f`) as the optimal kernel version for Pareto sweeps. The "dead" barrier scaffolding is a free performance win.
+  **Action**: Use C (`cfca7c6f`) as the optimal kernel version for Pareto sweeps. The barrier scaffolding is dead code that happens to improve performance; stripping it to just padding does NOT preserve the speedup.
 - [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan. Verify in server context with nsys.
 - [ ] Realistic workload analysis — see `tasks/realistic_workload_analysis.md`
 

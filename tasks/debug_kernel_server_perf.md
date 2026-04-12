@@ -390,7 +390,7 @@ Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares 
   **Key finding**: LPT's `cudaDeviceSynchronize` (2.4x more than DMC) is from `plan()` GPU→CPU sync (`torch.cuda.synchronize()` in `attention.py:200` to copy qo_indptr/kv_indptr/kv_len_arr to CPU). NOT from cooperative launch (single CUDA stream → all SMs available). Mixed CG helps by skipping `plan()` entirely for cached batch sizes.
 - [ ] **Investigate CG P99 ITL over-admission hypothesis**: CG's faster decode steps cause `new_token_ratio` to decay faster (more decay events per second) → scheduler admits more prefill sooner → decode pressure. Track requests that hit P99 ITL in CG29 vs noCG: log per-request lifecycle (admit time, each ITL, batch size at each step, prefill chunk size at each step). Determine if P99-hitting requests correlate with periods of high prefill admission (low `new_token_ratio` + large decode BS).
 
-- [x] **Barrier-reverted HEAD runs 35% faster on TTFT than pure `d9c01c81` — ROOT CAUSE: slower plan() causing artificial scheduler backpressure (NOT a real kernel speedup)**
+- [ ] **Barrier-reverted HEAD runs 35% faster on TTFT than pure `d9c01c81` — ROOT CAUSE STILL UNKNOWN**
 
   **Three flashinfer commits involved:**
   1. **A = `d9c01c81`** — pre-barrier; kernel uses `grid.sync()` + `cudaLaunchCooperativeKernel`. Reference for the WL1-6 table above.
@@ -425,11 +425,38 @@ Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares 
 
   C is 32% faster on TTFT, 7% lower mean ITL, 12% lower P99 ITL, 3% higher throughput. Reproducible across runs.
 
-  **Contradiction resolution**: The kernel is identical. C's plan() is 24× slower. Yet C's sglang wall-clock is 32% faster. This is **artificial scheduler backpressure**: each time sglang calls `wrapper.plan()` before a forward, the extra ~4.4 ms CPU time lets the scheduler accumulate more requests into the next batch. Larger batches → better GPU utilization → lower wall-clock TTFT/P99 ITL despite the per-plan overhead. **It's a lucky scheduling side effect, not a kernel or host-side optimization.**
+  **Re-verification (5 runs each with 3-run warmup, tight variance):**
 
-  **Optimal kernel version = A (pure `d9c01c81`)** — identical kernel speed, 24× faster plan(), used for the WL1-6 reference table, no dead scaffolding. The "speedup at C" could be reproduced deliberately via a real scheduler change (e.g., a small wait before plan() to coalesce more requests, or larger min batch size) — that is a separate optimization, not a kernel improvement.
+  | Build | Throughput | Median TTFT (5 runs) | Mean ITL (5 runs) | P99 ITL (5 runs) |
+  |---|---|---|---|---|
+  | A `d9c01c81` pure | 6.01 req/s | 249,281,286,301,302 → **286** | 31.5,32.9,32.9,33.0,33.0 → **32.93** | 168,168,181,186,199 → **181** |
+  | V1 = A + int_workspace 8→32 MB only | 5.99 req/s | 255,295,297,327,334 → **297** | 31.8,33.1,33.2,33.2,33.2 → **33.17** | 188,190,190,200,190 → **190** |
+  | C `cfca7c6f` scaffolded | 6.23 req/s (**+3.7%**) | 154,175,177,179,181 → **177** (**-38%**) | 29.2,30.4,30.4,30.4,30.4 → **30.40** (**-7.7%**) | 142,153,154,154,165 → **154** (**-15%**) |
 
-  **Action**: re-run the 6 EDF Pareto curves at `d9c01c81` (tracked separately as task #119) so the EDF benchmark numbers are on the same kernel as this WL1-6 reference table.
+  **V1 (d9c + workspace bump alone) is essentially = A** → the speedup at C is NOT from the `int_workspace_buffer` bump. It comes from the scheduler.cuh / batch_attention.cu / jinja changes (barrier infrastructure in host code).
+
+  **Backpressure hypothesis DEBUNKED**: checked decode_bs distributions in the actual scheduler logs:
+
+  | Build | Decode batches | Mean decode_bs | Max decode_bs |
+  |---|---|---|---|
+  | A | 417 | 58.77 | 154 |
+  | C | 428 | 56.62 | 153 |
+
+  C's batches are slightly SMALLER, not larger. Throughput is 3.7% HIGHER. Backpressure from slow plan() would reduce throughput — but it's higher. Original hypothesis is invalid.
+
+  **Current state of investigation:**
+  - Raw kernel GPU time is identical across A/B/C (standalone with fixed mixed batch, 100 iters: 1785/1773/1792 μs)
+  - Standalone plan() time: A 188 μs (fast CG path) vs C 4537 μs (**24× slower**)
+  - Sglang wall-clock: C is **38% faster** on TTFT, **3.7% higher** throughput, with nearly-identical decode batch sizes
+  - These three facts CANNOT coexist under any simple model — if plan is 24× slower and everything else is equal, throughput must drop, not rise
+  - **Either**: (i) my standalone plan() bench doesn't reflect sglang's plan() path (maybe sglang caches plan across replays), or (ii) something in the a6ae8e32 host-side scaffolding speeds up the decode path in a way I haven't pinpointed, or (iii) the measurements have a systematic bias I missed
+
+  **Next steps to pinpoint**:
+  - [ ] Instrument sglang's Python with nvtx ranges around `wrapper_paged.plan()` and `forward_extend` separately, run under nsys, compare A vs C time distribution
+  - [ ] Verify the kernel binary difference is really 0 by disassembling both `.so` files and diffing
+  - [ ] Check if a6ae8e32 on a FIXED-length workload (which doesn't trigger the variable-shape hang) gives numbers that match C — this isolates the jinja struct / kernel binary difference from the barrier fall-back code
+
+  **Pragmatic action for now (task #119)**: re-run the 6 EDF Pareto curves at `d9c01c81` so the numbers match the WL1-6 reference table in this same doc. If we later confirm C's speedup is real and reproducible, we can add a "configuration B" with the dead scaffolding as a deliberate optimization.
 
   **Expected discrimination**: NCU on the kernel will show IPC / stall / memory metrics directly. If A and C differ only on kernel metrics, the cause is (1). If they differ on nsys timeline (cudaMemcpyAsync or cudaLaunchKernel overhead), the cause is (3) or (4). If kernel metrics identical but overall wallclock differs, look for pipeline/overlap effects.
 - [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan. Verify in server context with nsys.

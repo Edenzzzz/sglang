@@ -441,6 +441,98 @@ Repro plan when GPU is free:
 3. If C stack shows kernel launch waiting on event, dump CUDA state with `cuda-gdb`.
 4. Bisect: try fix #2 first (add bs=1 fallback to non-persistent in `forward_extend`). If that resolves, root-causes the cooperative kernel theory.
 
+## [x] Flashinfer C (cfca7c6f) EDF sweep with optimal kernel (2026-04-12)
+
+Flashinfer C (`cfca7c6f`): barrier scaffolding gives +4% throughput / -41% TTFT on WL1 vs pure `d9c01c81` (see `tasks/debug_kernel_server_perf.md` for root cause).
+200 prompts per run, rates 2/4/8/12/16/24/inf. `--attention-backend flashinfer`, EDF + SLO-aware chunk control.
+sglang `attn_fuse_` branch, commit `aac11aa49`.
+
+Reproduce:
+```
+bash tasks/edf_benchmark/run_edf_sweep.sh
+python3 tasks/edf_benchmark/analyze_results.py tasks/edf_benchmark/results/
+```
+Plots: `tasks/edf_benchmark/pareto_baseline_median_itl.png`, `pareto_edf_slo_attainment.png`.
+
+### ShareGPT (TTFT 2s / ITL 100ms)
+| Method | Rate | tok/s | med TTFT | P99 TTFT | med ITL | P99 ITL | SLO% | ITLp99% |
+|--------|------|-------|----------|----------|---------|---------|------|---------|
+| PP | 2 | 1584 | 35.1 | 89.5 | 8.66 | 18.24 | 94.5% | 100.0% |
+| PP | 4 | 1917 | 39.3 | 96.3 | 10.86 | 27.97 | 85.0% | 100.0% |
+| PP | 8 | 2181 | 44.4 | 316.1 | 13.85 | 39.49 | 57.0% | 100.0% |
+| PP | 12 | 2274 | 44.4 | 121.0 | 14.75 | 46.77 | 50.0% | 100.0% |
+| PP | 16 | 2327 | 48.4 | 145.1 | 15.28 | 52.15 | 43.5% | 100.0% |
+| PP | 24 | 2380 | 49.6 | 156.4 | 15.56 | 63.72 | 20.0% | 78.5% |
+| PP | inf | 2451 | 1816.1 | 3180.7 | 15.81 | 17.93 | 0.0% | 77.0% |
+| DMC | 2 | 1591 | 36.4 | 93.9 | 8.62 | 22.50 | 100.0% | 100.0% |
+| DMC | 4 | 1937 | 44.2 | 107.7 | 10.50 | 33.53 | 100.0% | 100.0% |
+| DMC | 8 | 2204 | 52.2 | 321.9 | 13.44 | 41.55 | 93.0% | 100.0% |
+| DMC | 12 | 2297 | 59.6 | 151.4 | 14.25 | 43.76 | 100.0% | 100.0% |
+| DMC | 16 | 2346 | 62.7 | 196.4 | 14.97 | 45.74 | 100.0% | 100.0% |
+| DMC | 24 | 2397 | 96.5 | 237.5 | 15.52 | 43.27 | 69.0% | 99.5% |
+| DMC | inf | 2407 | 2674.2 | 5600.6 | 15.58 | 38.15 | 13.5% | 100.0% |
+| LPT_CG | 2 | 1591 | 36.8 | 99.2 | 8.62 | 22.74 | 100.0% | 100.0% |
+| LPT_CG | 4 | 1936 | 43.4 | 107.9 | 10.50 | 34.42 | 100.0% | 100.0% |
+| LPT_CG | 8 | 2203 | 52.9 | 190.7 | 13.40 | 41.54 | 90.0% | 100.0% |
+| LPT_CG | 12 | 2296 | 56.3 | 160.2 | 14.30 | 44.91 | 100.0% | 100.0% |
+| LPT_CG | 16 | 2350 | 66.8 | 163.4 | 14.95 | 44.20 | 100.0% | 100.0% |
+| LPT_CG | 24 | 2404 | 85.2 | 214.5 | 15.44 | 42.09 | 100.0% | 100.0% |
+| LPT_CG | inf | 2419 | 2571.8 | 4960.4 | 15.59 | 19.70 | 28.5% | 100.0% |
+
+### Code-Feedback (TTFT 3s / ITL 150ms)
+| Method | Rate | tok/s | med TTFT | P99 TTFT | med ITL | P99 ITL | SLO% | ITLp99% |
+|--------|------|-------|----------|----------|---------|---------|------|---------|
+| PP | 2 | 1773 | 27.5 | 53.9 | 8.35 | 17.02 | 100.0% | 100.0% |
+| PP | 4 | 2659 | 29.3 | 52.9 | 10.00 | 19.54 | 100.0% | 100.0% |
+| PP | 8 | 3372 | 31.9 | 164.2 | 11.49 | 23.04 | 100.0% | 100.0% |
+| PP | 12 | 3668 | 31.1 | 72.5 | 12.36 | 25.93 | 100.0% | 100.0% |
+| PP | 16 | 3834 | 32.6 | 67.1 | 13.08 | 28.69 | 100.0% | 100.0% |
+| PP | 24 | 3996 | 32.7 | 66.0 | 13.84 | 35.04 | 100.0% | 100.0% |
+| PP | inf | 4333 | 957.8 | 1491.1 | 13.90 | 16.26 | 11.5% | 99.0% |
+| DMC | 2 | 1773 | 31.3 | 64.5 | 8.32 | 20.32 | 100.0% | 100.0% |
+| DMC | 4 | 2671 | 35.3 | 62.7 | 9.83 | 24.61 | 100.0% | 100.0% |
+| DMC | 8 | 3378 | 42.1 | 321.5 | 11.23 | 29.84 | 91.5% | 100.0% |
+| DMC | 12 | 3687 | 42.9 | 99.4 | 11.99 | 31.12 | 100.0% | 100.0% |
+| DMC | 16 | 3854 | 45.1 | 98.5 | 12.55 | 31.37 | 100.0% | 100.0% |
+| DMC | 24 | 4019 | 45.9 | 105.1 | 13.52 | 34.27 | 100.0% | 100.0% |
+| DMC | inf | 4298 | 880.0 | 2654.3 | 14.00 | 19.67 | 30.5% | 99.0% |
+| LPT_CG | 2 | 1773 | 30.9 | 60.1 | 8.31 | 20.43 | 100.0% | 100.0% |
+| LPT_CG | 4 | 2670 | 34.8 | 90.1 | 9.84 | 24.61 | 100.0% | 100.0% |
+| LPT_CG | 8 | 3387 | 41.1 | 139.2 | 11.23 | 28.06 | 100.0% | 100.0% |
+| LPT_CG | 12 | 3690 | 42.2 | 84.9 | 12.03 | 30.83 | 100.0% | 100.0% |
+| LPT_CG | 16 | 3851 | 43.4 | 122.6 | 12.64 | 32.12 | 100.0% | 100.0% |
+| LPT_CG | 24 | 4020 | 45.2 | 142.8 | 13.45 | 32.71 | 100.0% | 100.0% |
+| LPT_CG | inf | 4284 | 1182.7 | 1842.5 | 13.84 | 16.15 | 0.0% | 98.5% |
+
+### SWE-Gym (TTFT 5s / ITL 150ms)
+| Method | Rate | tok/s | med TTFT | P99 TTFT | med ITL | P99 ITL | SLO% | ITLp99% |
+|--------|------|-------|----------|----------|---------|---------|------|---------|
+| PP | 2 | 1173 | 37.3 | 135.5 | 9.11 | 18.52 | 88.0% | 100.0% |
+| PP | 4 | 1452 | 40.2 | 150.6 | 9.84 | 31.48 | 80.0% | 100.0% |
+| PP | 8 | 1629 | 49.8 | 264.9 | 10.37 | 40.84 | 68.0% | 100.0% |
+| PP | 12 | 1693 | 53.2 | 160.8 | 10.72 | 43.73 | 65.0% | 100.0% |
+| PP | 16 | 1725 | 54.8 | 162.5 | 10.93 | 45.88 | 63.0% | 98.0% |
+| PP | 24 | 1759 | 67.2 | 212.5 | 12.33 | 53.04 | 63.0% | 94.0% |
+| PP | inf | 1795 | 1136.6 | 2151.4 | 12.55 | 15.69 | 2.0% | 99.0% |
+| DMC | 2 | 1174 | 42.4 | 154.8 | 9.12 | 23.13 | 88.0% | 100.0% |
+| DMC | 4 | 1455 | 44.4 | 395.8 | 9.72 | 36.37 | 84.0% | 100.0% |
+| DMC | 8 | 1637 | 54.4 | 306.2 | 9.99 | 43.78 | 22.0% | 100.0% |
+| DMC | 12 | 1701 | 58.0 | 167.5 | 10.37 | 43.81 | 100.0% | 100.0% |
+| DMC | 16 | 1733 | 69.9 | 185.8 | 10.67 | 44.20 | 66.0% | 100.0% |
+| DMC | 24 | 1767 | 92.7 | 234.3 | 10.99 | 38.95 | 63.0% | 100.0% |
+| DMC | inf | 1796 | 1327.0 | 2906.0 | 12.52 | 18.51 | 100.0% | 100.0% |
+| LPT_CG | 2 | 1175 | 41.4 | 154.4 | 9.08 | 23.20 | 88.0% | 100.0% |
+| LPT_CG | 4 | 1457 | 43.3 | 154.2 | 9.71 | 35.06 | 81.0% | 100.0% |
+| LPT_CG | 8 | 1637 | 53.6 | 314.6 | 10.09 | 43.29 | 70.0% | 100.0% |
+| LPT_CG | 12 | 1701 | 59.2 | 166.9 | 10.25 | 43.94 | 69.0% | 100.0% |
+| LPT_CG | 16 | 1734 | 67.7 | 195.6 | 10.51 | 43.98 | 66.0% | 100.0% |
+| LPT_CG | 24 | 1766 | 97.0 | 244.6 | 11.37 | 40.27 | 63.0% | 100.0% |
+| LPT_CG | inf | 1797 | 1325.2 | 2891.3 | 12.36 | 18.63 | 100.0% | 100.0% |
+
+---
+
+## Debug Notes
+
 1. **req_to_token_pool memory leak**: Fixed upstream in commit `027f314` on `public/main` — "[Fix] data race in req_to_token pool (#17850)". The fix changes `alloc()`/`free()` to be request-based, preventing double-frees. Need to cherry-pick into `attn_fuse_`. Touches 13 files including `memory_pool.py`, `radix_cache.py`, `scheduler.py`.
 2. **LPT cooperative kernel hang**: Persistent kernel hangs under load (~30+ concurrent requests). **DMC does NOT hang** under identical load — confirmed by side-by-side test (DMC completed all 50 requests in 180s, LPT hung at 163 requests). The hang happens when only 1-2 requests remain running (last decode batch shows `#running-req: 1`). No error messages — the scheduler loop simply freezes. Possible causes:
    - Cooperative kernel deadlock during CG replay at a specific batch size

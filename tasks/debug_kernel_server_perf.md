@@ -472,6 +472,22 @@ Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares 
 
   **Additional finding: `fast_decode_plan` is broken.** sglang assigns `decode_wrappers[i].plan = partial(fast_decode_plan, wrapper)` (line 712), but `call_begin_forward` calls `wrapper.begin_forward()` which resolves to the CLASS method (not the instance partial) because `begin_forward = plan` is a class-level alias. Fix: change line 712 to `decode_wrappers[i].begin_forward = partial(...)`.
 
+  **Verification at C (2026-04-12, flashinfer `cfca7c6f`, sglang `364241dc6`):**
+
+  **WL1-6 (LPT+CG, rate=8, N=400, `run_one_config.sh`):**
+  | WL | In | Out | A req/s | C req/s | A TTFT med | C TTFT med | A P99 ITL | C P99 ITL |
+  |----|---:|----:|--------:|--------:|-----------:|-----------:|----------:|----------:|
+  | 1 | 4096 | 1024 | 5.99 | **6.24** | 284ms | **167ms** | 174ms | **169ms** |
+  | 2 | 8192 | 2048 | 2.09 | 2.10 | 47196ms | 47128ms | 231ms | 232ms |
+  | 3 | 12000 | 1024 | 2.39 | **2.48** | 43542ms | **41839ms** | 298ms | 286ms |
+  | 4 | 16384 | 1024 | 1.75 | 1.75 | 81765ms | 81416ms | 296ms | 295ms |
+  | 5 | 4096 | 4096 | 1.62 | 1.62 | 57874ms | **55125ms** | 122ms | 102ms |
+  | 6 | 6000 | 6000 | 0.79 | 0.79 | 137571ms | 136761ms | 114ms | 101ms |
+
+  C wins WL1 (+4.2% tput, -41% TTFT) and WL3 (+3.8% tput). WL2/4/5/6 compute-bound — no meaningful difference.
+
+  **Kernel microbench** (`bench_mixed_attention.py`, 10 cases, no keepalive): all within 1-2% noise of A reference. C's kernel binary is identical in performance — the server-level speedup is purely from host-side scaffolding.
+
   **Action**: Use C (`cfca7c6f`) as the optimal kernel version for Pareto sweeps. The barrier scaffolding is dead code that happens to improve performance; stripping it to just padding does NOT preserve the speedup.
 - [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan. Verify in server context with nsys.
 - [ ] Realistic workload analysis — see `tasks/realistic_workload_analysis.md`

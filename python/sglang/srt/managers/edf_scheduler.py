@@ -37,6 +37,11 @@ LATENCY_MODEL_PATH = os.environ.get("SGLANG_EDF_LATENCY_MODEL", "")
 # under-predicts at large decode_bs (observed for DMC at nebius rate=inf:
 # 0.68% decode steps > 150ms vs LPT_CG's 0.34%, see task #110 analysis).
 LATENCY_SAFETY_MARGIN = float(os.environ.get("SGLANG_EDF_LATENCY_SAFETY", "1.0"))
+# Constant overhead (ms) added to model predictions for persistent kernel.
+# The barrier scaffolding in BatchAttention plan() adds ~3ms CPU + ~4ms
+# cooperative launch overhead per mixed batch step. Without this, chunk
+# control allows chunks that produce max ITL ~7ms above the SLO threshold.
+PLAN_OVERHEAD_MS = float(os.environ.get("SGLANG_EDF_PLAN_OVERHEAD_MS", "0"))
 
 
 def compute_ttft_slo_ms(input_len: int) -> float:
@@ -133,7 +138,7 @@ def edf_compute_max_chunk_size(
     # already-violated decodes catch up faster. (Verified on nebius-swe-traj
     # 1k sweep: the fall-back-to-default branch produced near-baseline P99 ITL
     # of ~290ms; the throttled branch is what makes chunk control useful.)
-    decode_only_ms = model_predict_fn(0, 0, decode_avg_kv, decode_bs) * LATENCY_SAFETY_MARGIN
+    decode_only_ms = model_predict_fn(0, 0, decode_avg_kv, decode_bs) * LATENCY_SAFETY_MARGIN + PLAN_OVERHEAD_MS
     if min_slack_ms <= 0 or decode_only_ms > min_slack_ms:
         return min(MIN_CHUNK, default_chunk_size)
 
@@ -142,7 +147,7 @@ def edf_compute_max_chunk_size(
     best = 0
     while lo <= hi:
         mid = (lo + hi) // 2
-        predicted_ms = model_predict_fn(mid, 0, decode_avg_kv, decode_bs) * LATENCY_SAFETY_MARGIN
+        predicted_ms = model_predict_fn(mid, 0, decode_avg_kv, decode_bs) * LATENCY_SAFETY_MARGIN + PLAN_OVERHEAD_MS
         if predicted_ms <= min_slack_ms:
             best = mid
             lo = mid + 1

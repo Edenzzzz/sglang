@@ -489,6 +489,21 @@ Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares 
   **Kernel microbench** (`bench_mixed_attention.py`, 10 cases, no keepalive): all within 1-2% noise of A reference. C's kernel binary is identical in performance — the server-level speedup is purely from host-side scaffolding.
 
   **Action**: Use C (`cfca7c6f`) as the optimal kernel version for Pareto sweeps. The barrier scaffolding is dead code that happens to improve performance; stripping it to just padding does NOT preserve the speedup.
+
+- [x] **LPT_CG vs DMC SLO attainment investigation** (2026-04-13)
+
+  LPT_CG appears to lag DMC on SLO% at some operating points (e.g. SWE rate=12: DMC 100% vs LPT 69%). Full analysis:
+
+  **Aggregate**: LPT wins 4 rates, DMC wins 4 rates, TIE on 13 across all 21 rate points (3 datasets × 7 rates). **They are essentially equal on aggregate.**
+
+  **Root cause of specific losses**: Both methods produce exactly the same number of spiky decode steps (e.g. SWE rate=12: both have 31 steps >130ms). DMC's spikes peak at 149.9ms (0.1ms below 150ms SLO), LPT's at 157.1ms (7ms above). The 7ms gap = persistent kernel host-side overhead (plan CPU + cooperative launch + D2D memcpy).
+
+  **Latency models**: LPT and DMC models predict within 0.1ms of each other — NOT the cause.
+
+  **Chunk control can't fix this**: The overhead is per-step (constant ~7ms regardless of chunk size). Reducing chunk sizes just creates MORE steps, each with the same overhead. Tested PLAN_OVERHEAD_MS=7: made SLO WORSE (60% vs 69%) because more aggressive chunking increased step count without reducing per-step overhead.
+
+  **Conclusion**: The ~7ms per-step overhead from barrier scaffolding is the inherent cost of the CG-replay speedup (which gives +4% throughput, -41% TTFT). At operating points where DMC is at 149ms (1ms below SLO), any per-step overhead pushes LPT over. At other operating points, LPT's throughput/TTFT advantage compensates (e.g. sharegpt rate=24: LPT 100% vs DMC 69%). No fix needed — the methods are competitive on aggregate.
+
 - [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan. Verify in server context with nsys.
 - [ ] Realistic workload analysis — see `tasks/realistic_workload_analysis.md`
 

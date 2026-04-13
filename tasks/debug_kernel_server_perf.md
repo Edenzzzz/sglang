@@ -33,6 +33,26 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 
 (Cases 1-8: flashinfer `a74bb2d4`, `bench_mixed_attention.py`. Cases 9-10: ratio threshold auto-fallback to static.)
 
+### LPT vs BatchPrefill (DMC's kernel) — the ACTUAL comparison that matters
+(flashinfer `cfca7c6f`, `bench_mixed_attention.py`, no keepalive, 2026-04-13)
+
+The original table compared LPT vs POD vs Static (all persistent variants). But DMC uses `BatchPrefillWithPagedKVCacheWrapper` — a different kernel entirely. Here is the direct comparison:
+
+| Case | Workload | BatchPrefill (ms) | LPT (ms) | LPT speedup |
+|------|----------|-------------------|----------|-------------|
+| 1 | 100d@kv2k+1p@512 | 0.32 | 0.32 | 1.00x |
+| 2 | 100d@kv2k+1p@1536 | 0.34 | 0.36 | 0.94x |
+| 3 | 100d@kv2k+2p@2048 | 0.56 | 0.49 | **1.14x** |
+| 4 | 100d@kv2k+1p@2048 | 0.46 | 0.38 | **1.21x** |
+| 5 | 100d@kv4k+1p@4096 | 1.11 | 0.83 | **1.34x** |
+| 6 | 100d@kv8k+1p@4096 | 1.75 | 1.27 | **1.38x** |
+| 7 | 100d@kv8k+1p@6000 | 2.49 | 1.91 | **1.30x** |
+| 8 | split-KV decode | 1.42 | 0.63 | **2.25x** |
+| 9 | split-KV prefill 24k | 4.67 | 4.62 | 1.01x |
+| 10 | split-KV prefill 12k | 2.34 | 2.21 | 1.06x |
+
+**LPT is 14-38% faster on Cases 3-7 and 2.25x on split-KV decode.** This advantage should translate to server-level throughput but currently doesn't (LPT_CG ≈ DMC). Investigation with nsys/ncu pending to find where the speedup is lost.
+
 Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Cases 6,8 over POD.** LPT beats static by 1.03-1.22x on Cases 2-8. **Cases 9-10: ratio threshold kicks in → static, 1.00x (zero regression).** Still loses to POD on Cases 2,4 (0.89x) — cause TBD (not cooperative launch overhead; single CUDA stream means all SMs available).
 
 **Note on old stale table**: An earlier table showed LPT beating POD by +3-18%. Those numbers were **contaminated by gpu_keepalive** (confirmed from conversation history). Keepalive inflates cooperative launch (persistent) more than POD, creating fake speedup.

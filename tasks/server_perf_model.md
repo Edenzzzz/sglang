@@ -73,5 +73,10 @@ noise), with exact output retokenization.
 
 The signal is fresh enough for routing, but is still only one-forward cost:
 the router's existing monitor defaults to 30-second polls and only updates
-power-of-two policies. Incremental request/queue cost must be validated before
-replacing request-count load inside the existing cache-imbalance guard.
+power-of-two policies. The router now parses the structured signal, including
+its snapshot timestamp and age, while retaining compatibility with legacy
+token-only workers. For multi-DP workers it uses the maximum predicted forward
+cost and the oldest timestamp so neither load nor staleness is understated.
+These fields are diagnostic only. Incremental request/queue cost must be
+validated before replacing request-count load inside the existing
+cache-imbalance guard.

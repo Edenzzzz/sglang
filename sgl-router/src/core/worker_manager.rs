@@ -3,7 +3,11 @@
 //! Handles all aspects of worker lifecycle including discovery, initialization,
 //! runtime management, and health monitoring.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use futures::future;
 use serde_json::Value;
@@ -22,7 +26,58 @@ use crate::{
 /// Unified worker management
 pub struct WorkerManager;
 
+#[derive(Debug, Default)]
+struct ServerLoadSnapshot {
+    load: isize,
+    num_decode_tokens: Option<isize>,
+    num_prefill_tokens: Option<isize>,
+    num_waiting_reqs: Option<isize>,
+    decode_batch_size: Option<isize>,
+    decode_kv_tokens: Option<isize>,
+    decode_remaining_tokens: Option<isize>,
+    prefill_prefix_tokens: Option<isize>,
+    predicted_forward_ms: Option<f64>,
+    snapshot_timestamp: Option<f64>,
+    snapshot_age_ms: Option<f64>,
+}
+
 impl WorkerManager {
+    fn parse_worker_load(json: &Value, now_secs: f64) -> Option<ServerLoadSnapshot> {
+        let array = json.as_array()?;
+
+        fn sum_field(array: &[Value], field: &str) -> Option<isize> {
+            let values: Vec<i64> = array
+                .iter()
+                .filter_map(|entry| entry.get(field).and_then(Value::as_i64))
+                .collect();
+            (!values.is_empty()).then(|| values.into_iter().sum::<i64>() as isize)
+        }
+
+        let snapshot_timestamp = array
+            .iter()
+            .filter_map(|entry| entry.get("snapshot_timestamp").and_then(Value::as_f64))
+            .reduce(f64::min);
+        let snapshot_age_ms =
+            snapshot_timestamp.map(|timestamp| ((now_secs - timestamp).max(0.0)) * 1000.0);
+
+        Some(ServerLoadSnapshot {
+            load: sum_field(array, "num_tokens").unwrap_or(0),
+            num_decode_tokens: sum_field(array, "num_decode_tokens"),
+            num_prefill_tokens: sum_field(array, "num_prefill_tokens"),
+            num_waiting_reqs: sum_field(array, "num_waiting_reqs"),
+            decode_batch_size: sum_field(array, "decode_batch_size"),
+            decode_kv_tokens: sum_field(array, "decode_kv_tokens"),
+            decode_remaining_tokens: sum_field(array, "decode_remaining_tokens"),
+            prefill_prefix_tokens: sum_field(array, "prefill_prefix_tokens"),
+            predicted_forward_ms: array
+                .iter()
+                .filter_map(|entry| entry.get("predicted_forward_ms").and_then(Value::as_f64))
+                .reduce(f64::max),
+            snapshot_timestamp,
+            snapshot_age_ms,
+        })
+    }
+
     pub fn get_worker_urls(registry: &Arc<WorkerRegistry>) -> Vec<String> {
         registry
             .get_all()
@@ -129,11 +184,11 @@ impl WorkerManager {
             message,
         })
     }
-    pub async fn get_worker_load(
+    async fn get_worker_load(
         url: &str,
         api_key: Option<&str>,
         client: &reqwest::Client,
-    ) -> Option<(isize, Option<isize>, Option<isize>)> {
+    ) -> Option<ServerLoadSnapshot> {
         let load_url = format!("{}/get_load", url);
         let mut request = client.get(&load_url);
 
@@ -145,36 +200,21 @@ impl WorkerManager {
             Ok(response) if response.status().is_success() => {
                 match response.json::<Value>().await {
                     Ok(json) => {
-                        // The /get_load endpoint returns an array of load info objects (one per DP rank)
-                        // Each object has: {dp_rank, num_reqs, num_waiting_reqs, num_tokens, num_decode_tokens, num_prefill_tokens}
-                        if let Some(array) = json.as_array() {
-                            let total_tokens: i64 = array
-                                .iter()
-                                .filter_map(|entry| {
-                                    entry.get("num_tokens").and_then(|v| v.as_i64())
-                                })
-                                .sum();
-                            let total_decode_tokens: i64 = array
-                                .iter()
-                                .filter_map(|entry| {
-                                    entry.get("num_decode_tokens").and_then(|v| v.as_i64())
-                                })
-                                .sum();
-                            let total_prefill_tokens: i64 = array
-                                .iter()
-                                .filter_map(|entry| {
-                                    entry.get("num_prefill_tokens").and_then(|v| v.as_i64())
-                                })
-                                .sum();
+                        let now_secs = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs_f64();
+                        if let Some(snapshot) = Self::parse_worker_load(&json, now_secs) {
                             debug!(
-                                "Worker {} load: total={}, decode={}, prefill={}",
-                                url, total_tokens, total_decode_tokens, total_prefill_tokens
+                                "Worker {} load: total={}, decode={:?}, prefill={:?}, predicted_ms={:?}, age_ms={:?}",
+                                url,
+                                snapshot.load,
+                                snapshot.num_decode_tokens,
+                                snapshot.num_prefill_tokens,
+                                snapshot.predicted_forward_ms,
+                                snapshot.snapshot_age_ms,
                             );
-                            Some((
-                                total_tokens as isize,
-                                Some(total_decode_tokens as isize),
-                                Some(total_prefill_tokens as isize),
-                            ))
+                            Some(snapshot)
                         } else {
                             warn!(
                                 "Invalid load response from {}: expected array, got {:?}",
@@ -225,20 +265,34 @@ impl WorkerManager {
             let client = client.clone();
 
             tasks.push(async move {
-                let (load, num_decode_tokens, num_prefill_tokens) = if is_http {
+                let snapshot = if is_http {
                     Self::get_worker_load(&url, api_key.as_deref(), &client)
                         .await
-                        .unwrap_or((-1, None, None))
+                        .unwrap_or_else(|| ServerLoadSnapshot {
+                            load: -1,
+                            ..Default::default()
+                        })
                 } else {
-                    (-1, None, None)
+                    ServerLoadSnapshot {
+                        load: -1,
+                        ..Default::default()
+                    }
                 };
 
                 WorkerLoadInfo {
                     worker: url,
                     worker_type,
-                    load,
-                    num_decode_tokens,
-                    num_prefill_tokens,
+                    load: snapshot.load,
+                    num_decode_tokens: snapshot.num_decode_tokens,
+                    num_prefill_tokens: snapshot.num_prefill_tokens,
+                    num_waiting_reqs: snapshot.num_waiting_reqs,
+                    decode_batch_size: snapshot.decode_batch_size,
+                    decode_kv_tokens: snapshot.decode_kv_tokens,
+                    decode_remaining_tokens: snapshot.decode_remaining_tokens,
+                    prefill_prefix_tokens: snapshot.prefill_prefix_tokens,
+                    predicted_forward_ms: snapshot.predicted_forward_ms,
+                    snapshot_timestamp: snapshot.snapshot_timestamp,
+                    snapshot_age_ms: snapshot.snapshot_age_ms,
                 }
             });
         }
@@ -387,5 +441,69 @@ impl Drop for LoadMonitor {
                 handle.abort();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::WorkerManager;
+
+    #[test]
+    fn parses_structured_load_and_uses_oldest_dp_timestamp() {
+        let response = json!([
+            {
+                "num_tokens": 100,
+                "num_decode_tokens": 4,
+                "num_prefill_tokens": 20,
+                "num_waiting_reqs": 2,
+                "decode_batch_size": 4,
+                "decode_kv_tokens": 8000,
+                "decode_remaining_tokens": 1000,
+                "prefill_prefix_tokens": 3000,
+                "predicted_forward_ms": 40.0,
+                "snapshot_timestamp": 99.9
+            },
+            {
+                "num_tokens": 200,
+                "num_decode_tokens": 8,
+                "num_prefill_tokens": 30,
+                "num_waiting_reqs": 3,
+                "decode_batch_size": 8,
+                "decode_kv_tokens": 16000,
+                "decode_remaining_tokens": 2000,
+                "prefill_prefix_tokens": 4000,
+                "predicted_forward_ms": 55.0,
+                "snapshot_timestamp": 99.8
+            }
+        ]);
+
+        let load = WorkerManager::parse_worker_load(&response, 100.0).unwrap();
+
+        assert_eq!(load.load, 300);
+        assert_eq!(load.num_decode_tokens, Some(12));
+        assert_eq!(load.num_prefill_tokens, Some(50));
+        assert_eq!(load.decode_batch_size, Some(12));
+        assert_eq!(load.decode_kv_tokens, Some(24000));
+        assert_eq!(load.predicted_forward_ms, Some(55.0));
+        assert_eq!(load.snapshot_timestamp, Some(99.8));
+        assert!((load.snapshot_age_ms.unwrap() - 200.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn remains_compatible_with_legacy_token_only_response() {
+        let response = json!([{"num_tokens": 123}]);
+
+        let load = WorkerManager::parse_worker_load(&response, 100.0).unwrap();
+
+        assert_eq!(load.load, 123);
+        assert_eq!(load.predicted_forward_ms, None);
+        assert_eq!(load.snapshot_age_ms, None);
+    }
+
+    #[test]
+    fn rejects_non_array_response() {
+        assert!(WorkerManager::parse_worker_load(&json!({"num_tokens": 1}), 1.0).is_none());
     }
 }

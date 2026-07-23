@@ -309,4 +309,22 @@ pub struct WorkerLoadInfo {
     /// Number of prefill tokens (-1 indicates failure to fetch)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub num_prefill_tokens: Option<isize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_waiting_reqs: Option<isize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decode_batch_size: Option<isize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decode_kv_tokens: Option<isize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decode_remaining_tokens: Option<isize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefill_prefix_tokens: Option<isize>,
+    /// Maximum predicted next-forward cost across DP ranks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicted_forward_ms: Option<f64>,
+    /// Oldest scheduler publication timestamp across DP ranks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_timestamp: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_age_ms: Option<f64>,
 }

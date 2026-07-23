@@ -426,6 +426,14 @@ async fn get_loads(State(state): State<Arc<AppState>>, _req: Request) -> Respons
                 "load": info.load,
                 "num_decode_tokens": info.num_decode_tokens,
                 "num_prefill_tokens": info.num_prefill_tokens,
+                "num_waiting_reqs": info.num_waiting_reqs,
+                "decode_batch_size": info.decode_batch_size,
+                "decode_kv_tokens": info.decode_kv_tokens,
+                "decode_remaining_tokens": info.decode_remaining_tokens,
+                "prefill_prefix_tokens": info.prefill_prefix_tokens,
+                "predicted_forward_ms": info.predicted_forward_ms,
+                "snapshot_timestamp": info.snapshot_timestamp,
+                "snapshot_age_ms": info.snapshot_age_ms,
             })
         })
         .collect();

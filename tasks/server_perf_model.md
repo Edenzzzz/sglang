@@ -47,11 +47,24 @@ load. A model-based router should preserve that gate but compare incremental
 predicted server cost inside the permitted imbalance region. `SelectWorkerInfo`
 already carries tokenized input. `/get_load` now reports decode batch size,
 aggregate decode KV, remaining expected decode tokens, pending prefill tokens,
-and aggregate prefix hits. It also falls back to the dispatched `last_batch`
-during overlap scheduling, rather than incorrectly reporting zero active
-decodes, and no longer classifies fresh waiting requests (whose
-`extend_input_len` is initially zero) as decode. These fields are sufficient
-for a server-cost snapshot, but synchronous `/get_load` can itself be delayed
-under saturation; production routing should publish the snapshot
-asynchronously before replacing request-count load inside the existing
-cache-imbalance guard.
+aggregate prefix hits, and `predicted_forward_ms`. The prediction is the
+checkpoint's full-model cost for the next admitted forward: pending prefill is
+capped at the server chunk size, while prefix and decode KV use per-request
+averages. It is explicitly `null` without a configured checkpoint and is not
+presented as an unvalidated queue-drain estimate.
+
+An H800 live check with the trained LPT checkpoint reported 291.87 ms for a
+mixed snapshot with 42,478 pending prefill tokens, one decode row, and 1,062
+decode KV tokens. This correctly predicts only the next 8,192-token admitted
+chunk; an idle server reports zero rather than the MLP's meaningless
+zero-feature intercept. `/get_load` also falls back to the
+dispatched `last_batch` during overlap scheduling, rather than incorrectly
+reporting zero active decodes, and no longer classifies fresh waiting requests
+(whose `extend_input_len` is initially zero) as decode.
+
+This signal is not yet safe to install in the router: under that same
+saturated smoke run a synchronous `/get_load` response was delayed by about
+six seconds, while the router's existing monitor defaults to 30-second polls
+and only updates power-of-two policies. Production routing should publish the
+snapshot asynchronously and validate incremental request/queue cost before
+replacing request-count load inside the existing cache-imbalance guard.

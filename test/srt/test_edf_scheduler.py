@@ -148,6 +148,86 @@ class TestEDFChunkControl(unittest.TestCase):
             self.assertTrue(edf_scheduler.edf_allow_prefill_at_kv_usage(0.949))
             self.assertFalse(edf_scheduler.edf_allow_prefill_at_kv_usage(0.95))
 
+    def test_forward_snapshot_uses_admitted_chunk_and_average_lengths(self):
+        seen = []
+
+        def predictor(n_p, r_p, r_d, decode_bs):
+            seen.append((n_p, r_p, r_d, decode_bs))
+            return 42.5
+
+        predicted = edf_scheduler.predict_forward_snapshot_ms(
+            predictor,
+            num_prefill_tokens=12000,
+            prefill_prefix_tokens=6000,
+            prefill_request_count=3,
+            decode_kv_tokens=24000,
+            decode_batch_size=8,
+            chunked_prefill_size=4096,
+        )
+
+        self.assertEqual(predicted, 42.5)
+        self.assertEqual(seen, [(4096.0, 2000.0, 3000.0, 8)])
+
+    def test_forward_snapshot_without_checkpoint_is_explicitly_missing(self):
+        self.assertIsNone(
+            edf_scheduler.predict_forward_snapshot_ms(
+                None,
+                num_prefill_tokens=100,
+                prefill_prefix_tokens=0,
+                prefill_request_count=1,
+                decode_kv_tokens=0,
+                decode_batch_size=0,
+                chunked_prefill_size=4096,
+            )
+        )
+
+    def test_forward_snapshot_can_report_pure_decode(self):
+        seen = []
+
+        def predictor(*features):
+            seen.append(features)
+            return 17
+
+        predicted = edf_scheduler.predict_forward_snapshot_ms(
+            predictor,
+            num_prefill_tokens=0,
+            prefill_prefix_tokens=0,
+            prefill_request_count=0,
+            decode_kv_tokens=9000,
+            decode_batch_size=3,
+            chunked_prefill_size=4096,
+        )
+
+        self.assertEqual(predicted, 17.0)
+        self.assertEqual(seen, [(0.0, 0.0, 3000.0, 3)])
+
+    def test_forward_snapshot_is_zero_when_server_is_idle(self):
+        predicted = edf_scheduler.predict_forward_snapshot_ms(
+            lambda *_: 99,
+            num_prefill_tokens=0,
+            prefill_prefix_tokens=0,
+            prefill_request_count=0,
+            decode_kv_tokens=0,
+            decode_batch_size=0,
+            chunked_prefill_size=4096,
+        )
+        self.assertEqual(predicted, 0.0)
+
+    def test_explicit_checkpoint_loads_without_enabling_edf(self):
+        sentinel = object()
+        with (
+            patch.object(edf_scheduler, "EDF_ENABLED", False),
+            patch.object(edf_scheduler, "LATENCY_MODEL_PATH", "/model.pt"),
+            patch.object(edf_scheduler.os.path, "exists", return_value=True),
+            patch.object(
+                edf_scheduler, "LatencyPredictor", return_value=sentinel
+            ) as constructor,
+        ):
+            predictor = edf_scheduler.try_load_latency_predictor()
+
+        self.assertIs(predictor, sentinel)
+        constructor.assert_called_once_with("/model.pt")
+
 
 if __name__ == "__main__":
     unittest.main()

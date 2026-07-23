@@ -2850,6 +2850,7 @@ class Scheduler(
         decode_kv_tokens = 0
         decode_remaining_tokens = 0
         prefill_prefix_tokens = 0
+        prefill_request_count = 0
 
         def remaining_decode_tokens(req):
             max_new_tokens = req.sampling_params.max_new_tokens
@@ -2885,6 +2886,7 @@ class Scheduler(
                             prefill_prefix_tokens += max(
                                 len(req.prefix_indices), req.host_hit_length
                             )
+                            prefill_request_count += 1
 
         # Also count tokens in waiting queue
         if self.waiting_queue:
@@ -2898,8 +2900,11 @@ class Scheduler(
                     len(req.origin_input_ids) + len(req.output_ids)
                 )
                 prefix_len = max(len(req.prefix_indices), req.host_hit_length)
-                num_prefill_tokens += max(total_len - prefix_len, 0)
-                prefill_prefix_tokens += prefix_len
+                pending_prefill = max(total_len - prefix_len, 0)
+                num_prefill_tokens += pending_prefill
+                if pending_prefill:
+                    prefill_prefix_tokens += prefix_len
+                    prefill_request_count += 1
                 decode_remaining_tokens += remaining_decode_tokens(req)
 
         for req in load_batch.reqs:
@@ -2921,6 +2926,7 @@ class Scheduler(
                     if prefill_mask.any()
                     else 0
                 )
+                prefill_request_count += int(prefill_mask.sum().item())
         elif self.disaggregation_mode == DisaggregationMode.DECODE:
             if self.disagg_decode_prealloc_queue.queue:
                 # DecodeRequest has req attribute
@@ -2940,8 +2946,25 @@ class Scheduler(
                     if prefill_mask.any()
                     else 0
                 )
+                prefill_request_count += int(prefill_mask.sum().item())
                 # Count decode tokens (extend_input_len == 1) if any
                 num_decode_tokens += int((decode_extend_lens == 1).sum())
+
+        from sglang.srt.managers.edf_scheduler import predict_forward_snapshot_ms
+
+        predicted_forward_ms = predict_forward_snapshot_ms(
+            (
+                self.edf_latency_predictor.predict
+                if self.edf_latency_predictor is not None
+                else None
+            ),
+            num_prefill_tokens=num_prefill_tokens,
+            prefill_prefix_tokens=prefill_prefix_tokens,
+            prefill_request_count=prefill_request_count,
+            decode_kv_tokens=decode_kv_tokens,
+            decode_batch_size=decode_batch_size,
+            chunked_prefill_size=self.chunked_prefill_size,
+        )
 
         return GetLoadReqOutput(
             dp_rank=self.dp_rank,
@@ -2954,6 +2977,7 @@ class Scheduler(
             decode_kv_tokens=decode_kv_tokens,
             decode_remaining_tokens=decode_remaining_tokens,
             prefill_prefix_tokens=prefill_prefix_tokens,
+            predicted_forward_ms=predicted_forward_ms,
         )
 
     def get_internal_state(self, recv_req: GetInternalStateReq):

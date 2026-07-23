@@ -150,6 +150,46 @@ def edf_allow_prefill_at_kv_usage(token_usage: float) -> bool:
     return token_usage < KV_ADMISSION_WATERMARK
 
 
+def predict_forward_snapshot_ms(
+    model_predict_fn,
+    num_prefill_tokens: int,
+    prefill_prefix_tokens: int,
+    prefill_request_count: int,
+    decode_kv_tokens: int,
+    decode_batch_size: int,
+    chunked_prefill_size: Optional[int],
+) -> Optional[float]:
+    """Predict the next full model-forward cost for a server load snapshot.
+
+    This deliberately reports one forward, not an unvalidated queue-drain
+    estimate. Pending prefill is capped at the server's admission chunk and
+    prefix/decode KV inputs use per-request averages, matching the profiler's
+    feature definitions.
+    """
+    if model_predict_fn is None:
+        return None
+
+    n_p = max(int(num_prefill_tokens), 0)
+    if chunked_prefill_size is not None:
+        n_p = min(n_p, max(int(chunked_prefill_size), 0))
+
+    prefill_count = max(int(prefill_request_count), 0)
+    prefill_prefix_len = (
+        max(float(prefill_prefix_tokens), 0.0) / prefill_count
+        if prefill_count
+        else 0.0
+    )
+    model_n_p, model_r_p = project_extreme_prefix_work(n_p, prefill_prefix_len)
+
+    decode_bs = max(int(decode_batch_size), 0)
+    decode_avg_kv = (
+        max(float(decode_kv_tokens), 0.0) / decode_bs if decode_bs else 0.0
+    )
+    if n_p == 0 and decode_bs == 0:
+        return 0.0
+    return float(model_predict_fn(model_n_p, model_r_p, decode_avg_kv, decode_bs))
+
+
 def edf_compute_max_chunk_size(
     decode_reqs: List["Req"],
     default_chunk_size: int,
@@ -294,15 +334,15 @@ class LatencyPredictor:
 def try_load_latency_predictor() -> Optional[LatencyPredictor]:
     """Attempt to load the latency predictor from SGLANG_EDF_LATENCY_MODEL.
 
-    Returns None if EDF is disabled or no model path is configured.
+    An explicitly configured checkpoint is also loaded when EDF scheduling is
+    disabled so /get_load can publish forward-cost telemetry independently.
     """
-    if not EDF_ENABLED:
-        return None
     if not LATENCY_MODEL_PATH:
-        logger.warning(
-            "EDF scheduling enabled but SGLANG_EDF_LATENCY_MODEL not set. "
-            "SLO-aware chunk size control will be disabled."
-        )
+        if EDF_ENABLED:
+            logger.warning(
+                "EDF scheduling enabled but SGLANG_EDF_LATENCY_MODEL not set. "
+                "SLO-aware chunk size control will be disabled."
+            )
         return None
     if not os.path.exists(LATENCY_MODEL_PATH):
         logger.warning(

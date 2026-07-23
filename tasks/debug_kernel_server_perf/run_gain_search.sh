@@ -10,6 +10,8 @@ cd "$REPO_ROOT"
 MODEL="${MODEL:-Qwen/Qwen3-8B}"
 PORT="${PORT:-30000}"
 NUM_PROMPTS="${NUM_PROMPTS:-100}"
+WARMUP_REQUESTS="${WARMUP_REQUESTS:-2}"
+SERVER_READY_TIMEOUT_S="${SERVER_READY_TIMEOUT_S:-900}"
 DATASET_PATH="${DATASET_PATH:-workloads/ShareGPT_V3_unfiltered_cleaned_split.json}"
 RESULTS_DIR="${RESULTS_DIR:-$SCRIPT_DIR/gain_search_results}"
 METHODS_SPEC="${METHODS_SPEC:-DMC LPT_CG}"
@@ -54,7 +56,8 @@ trap cleanup EXIT
 
 wait_server() {
     local logfile=$1
-    for _ in $(seq 1 180); do
+    local attempts=$((SERVER_READY_TIMEOUT_S / 2))
+    for _ in $(seq 1 "$attempts"); do
         if curl -sf "http://localhost:$PORT/health" >/dev/null; then
             return 0
         fi
@@ -70,16 +73,21 @@ wait_server() {
 
 start_server() {
     local method=$1 logfile="$RESULTS_DIR/server_${1}.log"
-    local -a method_env=() flags=(--enable-mixed-chunk --enable-piecewise-cuda-graph)
+    local -a method_env=() flags=()
     cleanup
     server_pid=""
     if [ "$method" = LPT_CG ]; then
+        flags+=(--enable-mixed-chunk --enable-piecewise-cuda-graph)
         method_env+=(
             SGLANG_FLASHINFER_USE_PERSISTENT=1
             SGLANG_EDF_PLAN_OVERHEAD_MS="$LPT_PLAN_OVERHEAD_MS"
         )
         [ -z "$EDF_ITL_MS" ] || method_env+=(SGLANG_EDF_LATENCY_MODEL="$LPT_MODEL")
     else
+        [ "$method" = DMC_NOCG ] || flags+=(--enable-piecewise-cuda-graph)
+        [ "$method" = DMC_PP ] || flags+=(--enable-mixed-chunk)
+        [ "$method" = DMC_SYNC ] && flags+=(--disable-overlap-schedule)
+        [ "$method" = DMC_NOCG ] && flags+=(--disable-cuda-graph)
         # A true DMC baseline must not capture mixed graphs through BatchAttention.
         method_env+=(SGLANG_DISABLE_MIXED_CG=1)
         [ -z "$EDF_ITL_MS" ] || method_env+=(SGLANG_EDF_LATENCY_MODEL="$DMC_MODEL")
@@ -116,7 +124,7 @@ for method in $METHODS_SPEC; do
             --dataset-name random --dataset-path "$DATASET_PATH" \
             --random-input "$input" --random-output "$output" \
             --request-rate "$rate" --num-prompts "$NUM_PROMPTS" \
-            --warmup-requests 2 \
+            --warmup-requests "$WARMUP_REQUESTS" \
             --output-file "$outfile" --output-details --disable-tqdm
     done
 done

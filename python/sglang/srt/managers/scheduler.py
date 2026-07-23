@@ -2081,13 +2081,19 @@ class Scheduler(
 
             if res != AddReqResult.CONTINUE:
                 if res == AddReqResult.NO_TOKEN:
-                    current_time = time.perf_counter() - self.forward_init_time
-                    print(
-                        f"Time: {current_time}, no token with real chunk size {adder.log_input_tokens}, rem_total_token_offset {adder.rem_total_token_offset}, cur_rem_tokens {adder.cur_rem_tokens}, running bs {running_bs}"
-                    )
-
                     # Also log cur_rem_tokens to the chunk size CSV so it can be plotted
                     if self.plot_chunk_size and self.is_entry_rank:
+                        current_time = time.perf_counter() - self.forward_init_time
+                        logger.info(
+                            "No prefill token admitted: time=%.3f, "
+                            "real_chunk_size=%s, rem_total_token_offset=%s, "
+                            "cur_rem_tokens=%s, running_bs=%s",
+                            current_time,
+                            adder.log_input_tokens,
+                            adder.rem_total_token_offset,
+                            adder.cur_rem_tokens,
+                            running_bs,
+                        )
                         try:
                             import pandas as pd
 

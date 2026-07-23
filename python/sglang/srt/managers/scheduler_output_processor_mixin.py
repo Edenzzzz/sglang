@@ -77,6 +77,18 @@ class SchedulerOutputProcessorMixin:
                         logits_output.input_token_logprobs.tolist()
                     )
 
+            # A mixed prefill batch also advances every request that was
+            # already decoding. Refresh their EDF progress timestamp just as a
+            # pure-decode result does. Without this, the next admission
+            # decision measures slack from the last pure-decode batch and can
+            # force a needless recovery step after successful mixed steps.
+            if self.edf_latency_predictor is not None and self.is_mixed_chunk:
+                from sglang.srt.managers.edf_scheduler import (
+                    edf_mark_decode_progress,
+                )
+
+                edf_mark_decode_progress(batch.reqs, only_started=True)
+
             hidden_state_offset = 0
 
             # Per-request lifecycle tracking for decode reqs in mixed batches
@@ -333,10 +345,11 @@ class SchedulerOutputProcessorMixin:
 
         # EDF: track per-req last decode step time for SLO-aware chunk control
         if self.edf_latency_predictor is not None:
-            import time as _t
-            _now = _t.monotonic()
-            for req in batch.reqs:
-                req._edf_last_step_time = _now
+            from sglang.srt.managers.edf_scheduler import (
+                edf_mark_decode_progress,
+            )
+
+            edf_mark_decode_progress(batch.reqs)
 
         # Per-request lifecycle tracking
         if hasattr(batch.reqs[0], 'lifecycle_steps') and batch.reqs[0].lifecycle_steps is not None:

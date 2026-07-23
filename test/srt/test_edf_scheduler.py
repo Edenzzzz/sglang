@@ -8,8 +8,9 @@ from sglang.srt.managers import edf_scheduler
 
 
 class _Req:
-    def __init__(self, elapsed_ms: float):
+    def __init__(self, elapsed_ms: float, output_ids=None):
         self._edf_last_step_time = time.monotonic() - elapsed_ms / 1000
+        self.output_ids = [] if output_ids is None else output_ids
 
 
 class TestEDFChunkControl(unittest.TestCase):
@@ -102,6 +103,18 @@ class TestEDFChunkControl(unittest.TestCase):
                     ).item()
                 )
             self.assertAlmostEqual(predictor.predict(*values), expected, places=3)
+
+    def test_mixed_progress_updates_only_decode_requests(self):
+        prefill_req = _Req(50)
+        decode_req = _Req(50, output_ids=[1])
+        original_prefill_time = prefill_req._edf_last_step_time
+
+        edf_scheduler.edf_mark_decode_progress(
+            [prefill_req, decode_req], only_started=True, now=123.0
+        )
+
+        self.assertEqual(prefill_req._edf_last_step_time, original_prefill_time)
+        self.assertEqual(decode_req._edf_last_step_time, 123.0)
 
 
 if __name__ == "__main__":

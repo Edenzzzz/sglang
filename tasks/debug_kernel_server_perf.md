@@ -63,20 +63,20 @@ continued-prefill prefix fix below.
 
 | WL | LPT/DMC total tok/s | LPT throughput gain | request-max P99 (LPT/DMC) |
 |----|--------------------:|--------------------:|--------------------------:|
-| 1 | 7,721 / 6,745 | **+14.5%** | **97/655 ms** |
-| 2 | 6,886 / 6,763 | +1.8% | 115/575 ms |
-| 3 | 11,095 / 10,864 | +2.1% | **102/486 ms** |
-| 4 | 11,958 / 11,406 | **+4.8%** | **116/607 ms** |
-| 5 | 3,567 / 3,457 | +3.2% | **86/496 ms** |
-| 6 | 3,011 / 2,931 | +2.7% | **95/1,206 ms** |
+| 1 | 7,713 / 6,745 | **+14.4%** | **90/655 ms** |
+| 2 | 6,892 / 6,763 | +1.9% | **116/575 ms** |
+| 3 | 11,115 / 10,864 | +2.3% | **104/486 ms** |
+| 4 | 11,973 / 11,406 | **+5.0%** | **118/607 ms** |
+| 5 | 3,564 / 3,457 | +3.1% | **94/496 ms** |
+| 6 | 3,012 / 2,931 | +2.8% | **85/1,206 ms** |
 
 Representative Pareto slices:
 
 | ITL target | WL1 gain | WL3 gain | WL5 gain |
 |-----------:|---------:|---------:|---------:|
-| 50 ms | **+14.6%** | +2.7% | +0.8% |
-| 100 ms | **+14.5%** | +2.1% | +3.2% |
-| 150 ms | **+10.8%** | **+16.5%** | +4.1% |
+| 50 ms | **+14.7%** | **+8.8%** | +0.9% |
+| 100 ms | **+14.4%** | +2.3% | +3.1% |
+| 150 ms | **+10.6%** | **+18.0%** | +4.2% |
 
 The persistent method shifts the throughput/latency curve rather than winning
 at only one target. The best regimes are short-to-medium prefills mixed with
@@ -110,6 +110,34 @@ All six throughput results are within 1% of the preceding PyTorch-predictor
 runs. Thus this removes scheduler CPU overhead without changing the SLO
 policy, but the saturated workloads remain GPU-bound and do not convert the
 CPU saving into a measurable token-throughput increase.
+
+### Mixed-result EDF progress accounting
+
+EDF originally refreshed each request's `_edf_last_step_time` after a
+pure-decode result only. A mixed prefill+decode step also delivers one token to
+every already-decoding request, but did not refresh their timestamps. The next
+admission decision therefore measured slack from the last pure-decode batch
+and inserted unnecessary recovery steps even after a successful mixed step.
+The fix updates only already-started requests after mixed results; a newly
+prefilling request is not incorrectly marked as decode progress.
+
+At the 100 ms target, matched WL1–6 runs show stable throughput (−0.5% to
++1.0%) and lower mean TTFT on every workload:
+
+| WL | Throughput change | Mean TTFT before/after | request-max P99 before/after |
+|----|------------------:|-----------------------:|-------------------------------:|
+| 1 | −0.5% | 121/114 ms | 98/90 ms |
+| 2 | +0.1% | 740/494 ms | 93/116 ms |
+| 3 | +0.8% | 1,235/948 ms | 103/104 ms |
+| 4 | +1.0% | 2,814/2,264 ms | 117/118 ms |
+| 5 | +0.1% | 121/112 ms | 84/94 ms |
+| 6 | +0.0% | 255/210 ms | 84/85 ms |
+
+The strongest Pareto improvement is WL3: at 50 ms, throughput rises 6.0%
+relative to the buggy LPT controller and mean TTFT falls 40%, while request-max
+P99 remains 55 ms. This raises LPT's throughput advantage over DMC from 2.7%
+to 8.8%. At 150 ms, WL3 throughput rises 1.2%, TTFT falls 22%, request-max P99
+is unchanged at 180 ms, and the advantage over DMC rises from 16.5% to 18.0%.
 
 ### EDF continued-prefill model bug
 

@@ -109,17 +109,19 @@ results below retokenize to at least 99.77% of the reported output count.
 | 1 (4096/1024) | 15,190 / 13,601 | **+11.7%** | **38 / 52 ms** | **56 / 81 ms** | **59 / 81 ms** |
 | 2 (8192/2048) | 10,505 / 9,909 | **+6.0%** | **37 / 50 ms** | **56 / 165 ms** | **57 / 165 ms** |
 | 3 (12000/1024) | 14,812 / 14,685 | +0.9% | **47 / 54 ms** | **69 / 344 ms** | **69 / 344 ms** |
-| 4 (16384/1024) | 13,795 / **13,900** | -0.8% | **45 / 55 ms** | **83 / 100 ms** | **83 / 100 ms** |
+| 4 (16384/1024) | 14,141 / 13,900 | **+1.7%** | **46 / 55 ms** | 101 / **100 ms** | 101 / **100 ms** |
 | 5 (4096/4096) | 7,105 / 6,041 | **+17.6%** | **33 / 46 ms** | **56 / 325 ms** | **56 ms / 144 s** |
 | 6 (6000/6000), safe | 4,874 / 4,398 | **+10.8%** | **33 / 45 ms** | **49 / 60 ms** | **49 ms / 385 s** |
 
-This bridges the kernel-to-serving gap on five of six workloads: LPT provides
-6–18% more throughput on WL1/2/5/6 and a small gain on WL3 while lowering
-pooled P99 ITL by 13–29%. WL4 is the saturated exception: it trades 0.8%
-throughput for an 18% lower pooled P99. Request-level tails expose larger
-benefits on WL3/5 that pooled token percentiles hide. WL2's former synchronized
-313 ms gap was caused by the zero-prefill stdout diagnostic; after gating it
-behind plotting, the worst gap is 57 ms and LPT dominates DMC on both axes.
+This bridges the kernel-to-serving gap on all six workloads: LPT provides
+6–18% more throughput on WL1/2/5/6 and smaller gains on WL3/4 while lowering
+pooled P99 ITL by 13–29%. On WL4, moving the long-prefix projection boundary
+from 12K to 14K recovers 2.5% LPT throughput, making it 1.7% faster than DMC
+with a 16% lower pooled P99 and essentially equal request-level tail.
+Request-level tails expose larger benefits on WL3/5 that pooled token
+percentiles hide. WL2's former synchronized 313 ms gap was caused by the
+zero-prefill stdout diagnostic; after gating it behind plotting, the worst
+gap is 57 ms and LPT dominates DMC on both axes.
 
 The matched prefill-prioritized (PP) baseline disables both mixed chunking and
 CUDA graphs. The private FlashInfer pure-decode graph path is not
@@ -142,11 +144,15 @@ prefill-induced stalls; the per-request maximum exposes them. The advantage
 is largest on input-heavy WL3/4, but remains material on output-heavy WL5/6.
 
 WL4 needs an additional predictor-domain guard: clamping every continued
-prefix to the model's 4K training boundary produced a 506 ms gap, while
-projecting causal attention work only after the real prefix exceeds 12K
-reduces it to 83 ms. This safe point costs 2.7% throughput versus the unsafe
-clamp, but is 4.2% faster than projecting every prefix beyond 4K. It can still
-choose a zero-token prefill step and introduces no minimum prefill chunk.
+prefix to the model's 4K training boundary produced a 506 ms gap. Projecting
+causal attention work only after the real prefix exceeds 14K reduces the worst
+gap to 101 ms while reaching 14,141 tok/s. A matched 13K boundary reached only
+13,938 tok/s with the same 101 ms tail and is dominated; the previous 12K
+boundary reached 13,795 tok/s and an 83 ms tail. The 14K default is therefore
+the higher-throughput nominal-50-ms point, while 12K remains available through
+`SGLANG_EDF_LONG_PREFIX_PROJECTION_THRESHOLD` when request-maximum tail is
+preferred. The controller can still choose a zero-token prefill step and
+introduces no minimum prefill chunk.
 
 The graph-enabled DMC result remains invalid. At N=20, disabling overlap while
 retaining mixed batching and decode graphs restores exact output, but at

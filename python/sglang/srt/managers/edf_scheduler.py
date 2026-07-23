@@ -50,11 +50,12 @@ MAX_PROFILED_PREFILL_PREFIX = float(
     os.environ.get("SGLANG_EDF_MAX_PROFILED_PREFILL_PREFIX", "4096")
 )
 # Clamping remains the best throughput/ITL point through the 12K workload, but
-# becomes severely optimistic on later chunks of 16K prompts.  Only project
-# attention work once the actual prefix crosses this empirically validated
-# boundary.
+# becomes severely optimistic on the last chunks of 16K prompts.  A 14K
+# boundary is the measured WL4 Pareto knee: earlier projection loses throughput
+# without improving its request tail, while never projecting causes 500ms+
+# decode gaps.
 LONG_PREFIX_PROJECTION_THRESHOLD = float(
-    os.environ.get("SGLANG_EDF_LONG_PREFIX_PROJECTION_THRESHOLD", "12288")
+    os.environ.get("SGLANG_EDF_LONG_PREFIX_PROJECTION_THRESHOLD", "14336")
 )
 # Stop admitting new prefill work only after live KV reaches this watermark.
 # Unlike static headroom, this does not shrink the usable pool during normal

@@ -107,7 +107,7 @@ results below retokenize to at least 99.77% of the reported output count.
 | WL | LPT/DMC total tok/s | LPT gain | pooled P99 ITL (LPT/DMC) | request-max P99 (LPT/DMC) | worst ITL (LPT/DMC) |
 |---:|--------------------:|---------:|-----------------------------:|------------------------------:|-------------------------:|
 | 1 (4096/1024), 5 ms guard | 15,374 / 13,601 | **+13.0%** | **41 / 52 ms** | **64 / 81 ms** | **64 / 81 ms** |
-| 2 (8192/2048) | 10,505 / 9,909 | **+6.0%** | **37 / 50 ms** | **56 / 165 ms** | **57 / 165 ms** |
+| 2 (8192/2048), 7.5 ms guard | 10,710 / 9,909 | **+8.1%** | **40 / 50 ms** | **62 / 165 ms** | **62 / 165 ms** |
 | 3 (12000/1024), 5 ms guard | 15,431 / 14,685 | **+5.1%** | **48 / 54 ms** | **76 / 344 ms** | **77 / 344 ms** |
 | 4 (16384/1024) | 14,141 / 13,900 | **+1.7%** | **46 / 55 ms** | 101 / **100 ms** | 101 / **100 ms** |
 | 5 (4096/4096) | 7,105 / 6,041 | **+17.6%** | **33 / 46 ms** | **56 / 325 ms** | **56 ms / 144 s** |
@@ -118,7 +118,10 @@ This bridges the kernel-to-serving gap on all six workloads: LPT provides
 planner guard is the better Pareto point for the short-output WL1/3 shapes:
 current-branch N=400 confirmations improve their preceding LPT throughput by
 1.2%/4.2%, retain 99.856%/99.993% output retokenization, and keep every decode
-gap below 77 ms. The more conservative 10 ms guard remains necessary for
+gap below 77 ms. WL2's current-branch 7.5 ms midpoint similarly raises
+throughput from 10,505 to 10,710 tok/s, retains 99.968% retokenization, and
+keeps its worst gap to 62 ms; the old 5 ms point reached a 329 ms request tail
+and remains rejected. The more conservative 10 ms guard remains necessary for
 long-output/memory-sensitive shapes. On WL4, moving the long-prefix projection
 boundary from 12K to 14K recovers 2.5% LPT throughput, making it 1.7% faster
 than DMC with a 16% lower pooled P99 and essentially equal request-level tail.
@@ -136,7 +139,7 @@ EDF target, and N=400 as the table above.
 | WL | LPT/PP total tok/s | LPT gain | pooled P99 ITL (LPT/PP) | request-max P99 (LPT/PP) | worst ITL (LPT/PP) |
 |---:|-------------------:|---------:|----------------------------:|-----------------------------:|------------------------:|
 | 1 | 15,374 / 14,146 | **+8.7%** | **41 / 218 ms** | **64 / 478 ms** | **64 / 478 ms** |
-| 2 | 10,505 / 9,808 | **+7.1%** | **37 / 241 ms** | **56 ms / 13.2 s** | **57 ms / 13.4 s** |
+| 2 | 10,710 / 9,808 | **+9.2%** | **40 / 241 ms** | **62 ms / 13.2 s** | **62 ms / 13.4 s** |
 | 3 | 15,431 / 11,435 | **+34.9%** | **48 / 883 ms** | **76 ms / 18.8 s** | **77 ms / 19.9 s** |
 | 4 | 14,141 / 8,749 | **+61.6%** | **46 ms / 1.64 s** | **101 ms / 23.4 s** | **101 ms / 23.6 s** |
 | 5 | 7,105 / 6,150 | **+15.5%** | **33 / 124 ms** | **56 / 452 ms** | **56 ms / 13.0 s** |

@@ -166,6 +166,14 @@ persistent mixed-graph failure sooner. The scheduler change was reverted; its
 small-run gains must not be used until the mixed-graph/workspace lifetime bug
 is fixed.
 
+A targeted non-graph fallback does not preserve the objective. With the
+timestamp correction enabled, falling back after an 8K prefix completed the
+N=100 WL3/50 ms run but lost 15.3% throughput to DMC and produced a 6.10 s
+request-level stall. Moving the boundary to 12K still lost 8.2% and produced a
+6.25 s stall. Early mixed graphs followed by late non-graph persistent steps
+are therefore not a viable workaround; the graph/workspace failure itself must
+be fixed.
+
 ---
 
 ## Kernel-Level Results

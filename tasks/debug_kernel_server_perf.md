@@ -130,6 +130,29 @@ domain. On matched runs:
 This improves both throughput and SLO attainment; it does not impose a minimum
 prefill chunk.
 
+#### Long-prefix retraining experiment (rejected)
+
+An H800 experiment extended random profiler prefixes to 16K and collected 300
+points. The old MLP cannot be used without a domain guard: unconstrained
+extrapolation had 784% MAPE overall and overpredicted 12K–16K samples by 7.8
+seconds on average. Clamping at 4K avoids that failure, but underpredicted
+86–97% of measured 8K–16K samples.
+
+A model trained on the extended data achieved 5.8% held-out profiler MAPE, but
+failed the serving gate across WL1–6. At the 100 ms target, WL3/WL4 throughput
+fell from 11,030/11,852 to 10,848/11,708 tok/s and request-max ITL worsened
+from 103/117 ms to 135/126 ms. The checkpoint was therefore rejected.
+
+The discrepancy exposed a profiler integration bug: `ProfilingRunner`
+explicitly disables CUDA graphs and starts GPU timing only after
+`init_forward_metadata`, excluding the persistent planner. An experimental
+production-path profiler fixed the stale `[1]` versus mixed-token replay shape,
+but then deterministically hit a CUDA illegal instruction at
+`(n_p=2775, r_p=14777, r_d=3495, decode_bs=41)`. Supplying valid synthetic page
+tables did not remove the trap. No profiler or checkpoint changes from this
+unsafe experiment are retained; production-path profiling and that mixed-graph
+shape need to be fixed before replacing the checked-in model.
+
 ---
 
 ## Kernel-Level Results

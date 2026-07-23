@@ -6,7 +6,8 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 ## Setup
 - Model: `Qwen/Qwen3-8B`, H100/H800 80GB
 - Server: `--enable-mixed-chunk --attention-backend flashinfer --mem-fraction-static 0.85 --enable-piecewise-cuda-graph`
-- Env vars: `SGLANG_FLASHINFER_USE_PERSISTENT=1`
+- Env vars: `SGLANG_FLASHINFER_USE_PERSISTENT=1`,
+  `SGLANG_EDF_PLAN_OVERHEAD_MS=auto` for the peak-load SLO-aware points
 - Benchmark: `bench_serving --dataset-name random --request-rate 8 --num-prompt 400`
 - Profile logs: `tasks/debug_kernel_server_perf/profile_logs/`
 - gpu_keepalive MUST be stopped before benchmarks (corrupts results — cooperative launch is especially sensitive to SM contention)
@@ -128,8 +129,8 @@ reaching 14,348 tok/s: 3.2% faster than DMC with an 11% lower pooled P99 and
 essentially equal request-level tail.
 Request-level tails expose larger benefits on WL3/5 that pooled token
 percentiles hide. WL2's former synchronized 313 ms gap was caused by the
-zero-prefill stdout diagnostic; after gating it behind plotting, the worst
-gap is 57 ms and LPT dominates DMC on both axes.
+zero-prefill stdout diagnostic; after gating it behind plotting, the adaptive
+point's worst gap is 62 ms and LPT dominates DMC on both axes.
 
 The matched prefill-prioritized (PP) baseline disables both mixed chunking and
 CUDA graphs. The private FlashInfer pure-decode graph path is not

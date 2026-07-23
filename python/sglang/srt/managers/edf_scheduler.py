@@ -352,7 +352,20 @@ def try_load_latency_predictor() -> Optional[LatencyPredictor]:
         )
         return None
     try:
-        return LatencyPredictor(LATENCY_MODEL_PATH)
+        predictor = LatencyPredictor(LATENCY_MODEL_PATH)
+        if EDF_ENABLED:
+            logger.info(
+                "EDF controller config: TTFT=%.1fms, ITL=%.1fms, "
+                "latency_safety=%.3f, plan_overhead=%.1fms, "
+                "prefix_projection=%.0f, KV_watermark=%.3f",
+                TTFT_SLO_MS,
+                ITL_SLO_MS,
+                LATENCY_SAFETY_MARGIN,
+                PLAN_OVERHEAD_MS,
+                LONG_PREFIX_PROJECTION_THRESHOLD,
+                KV_ADMISSION_WATERMARK,
+            )
+        return predictor
     except Exception as e:
         logger.error(f"Failed to load EDF latency model: {e}")
         return None

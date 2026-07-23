@@ -18,7 +18,9 @@ METHODS_SPEC="${METHODS_SPEC:-DMC LPT_CG}"
 EDF_ITL_MS="${EDF_ITL_MS:-}"
 EDF_TTFT_MS="${EDF_TTFT_MS:-2000}"
 EDF_KV_WATERMARK="${EDF_KV_WATERMARK:-}"
-LPT_PLAN_OVERHEAD_MS="${LPT_PLAN_OVERHEAD_MS:-0}"
+# Conservative LPT default for memory-sensitive and long-output workloads.
+# The WL1/3 short-output Pareto points explicitly set this to 5.
+LPT_PLAN_OVERHEAD_MS="${LPT_PLAN_OVERHEAD_MS:-10}"
 LPT_MODEL="${LPT_MODEL:-$REPO_ROOT/tasks/perf_model/lpt_model.pt}"
 DMC_MODEL="${DMC_MODEL:-$REPO_ROOT/tasks/perf_model/dmc_model.pt}"
 read -r -a SERVER_EXTRA_FLAGS <<<"${SERVER_EXTRA_ARGS:-}"

@@ -106,18 +106,22 @@ results below retokenize to at least 99.77% of the reported output count.
 
 | WL | LPT/DMC total tok/s | LPT gain | pooled P99 ITL (LPT/DMC) | request-max P99 (LPT/DMC) | worst ITL (LPT/DMC) |
 |---:|--------------------:|---------:|-----------------------------:|------------------------------:|-------------------------:|
-| 1 (4096/1024) | 15,190 / 13,601 | **+11.7%** | **38 / 52 ms** | **56 / 81 ms** | **59 / 81 ms** |
+| 1 (4096/1024), 5 ms guard | 15,374 / 13,601 | **+13.0%** | **41 / 52 ms** | **64 / 81 ms** | **64 / 81 ms** |
 | 2 (8192/2048) | 10,505 / 9,909 | **+6.0%** | **37 / 50 ms** | **56 / 165 ms** | **57 / 165 ms** |
-| 3 (12000/1024) | 14,812 / 14,685 | +0.9% | **47 / 54 ms** | **69 / 344 ms** | **69 / 344 ms** |
+| 3 (12000/1024), 5 ms guard | 15,431 / 14,685 | **+5.1%** | **48 / 54 ms** | **76 / 344 ms** | **77 / 344 ms** |
 | 4 (16384/1024) | 14,141 / 13,900 | **+1.7%** | **46 / 55 ms** | 101 / **100 ms** | 101 / **100 ms** |
 | 5 (4096/4096) | 7,105 / 6,041 | **+17.6%** | **33 / 46 ms** | **56 / 325 ms** | **56 ms / 144 s** |
 | 6 (6000/6000), safe | 4,874 / 4,398 | **+10.8%** | **33 / 45 ms** | **49 / 60 ms** | **49 ms / 385 s** |
 
 This bridges the kernel-to-serving gap on all six workloads: LPT provides
-6–18% more throughput on WL1/2/5/6 and smaller gains on WL3/4 while lowering
-pooled P99 ITL by 13–29%. On WL4, moving the long-prefix projection boundary
-from 12K to 14K recovers 2.5% LPT throughput, making it 1.7% faster than DMC
-with a 16% lower pooled P99 and essentially equal request-level tail.
+1.7–17.6% more throughput while lowering pooled P99 ITL by 11–29%. The 5 ms
+planner guard is the better Pareto point for the short-output WL1/3 shapes:
+current-branch N=400 confirmations improve their preceding LPT throughput by
+1.2%/4.2%, retain 99.856%/99.993% output retokenization, and keep every decode
+gap below 77 ms. The more conservative 10 ms guard remains necessary for
+long-output/memory-sensitive shapes. On WL4, moving the long-prefix projection
+boundary from 12K to 14K recovers 2.5% LPT throughput, making it 1.7% faster
+than DMC with a 16% lower pooled P99 and essentially equal request-level tail.
 Request-level tails expose larger benefits on WL3/5 that pooled token
 percentiles hide. WL2's former synchronized 313 ms gap was caused by the
 zero-prefill stdout diagnostic; after gating it behind plotting, the worst
@@ -131,14 +135,14 @@ EDF target, and N=400 as the table above.
 
 | WL | LPT/PP total tok/s | LPT gain | pooled P99 ITL (LPT/PP) | request-max P99 (LPT/PP) | worst ITL (LPT/PP) |
 |---:|-------------------:|---------:|----------------------------:|-----------------------------:|------------------------:|
-| 1 | 15,190 / 14,146 | **+7.4%** | **38 / 218 ms** | **56 / 478 ms** | **59 / 478 ms** |
+| 1 | 15,374 / 14,146 | **+8.7%** | **41 / 218 ms** | **64 / 478 ms** | **64 / 478 ms** |
 | 2 | 10,505 / 9,808 | **+7.1%** | **37 / 241 ms** | **56 ms / 13.2 s** | **57 ms / 13.4 s** |
-| 3 | 14,812 / 11,435 | **+29.5%** | **47 / 883 ms** | **69 ms / 18.8 s** | **69 ms / 19.9 s** |
-| 4 | 13,795 / 8,749 | **+57.7%** | **45 ms / 1.64 s** | **83 ms / 23.4 s** | **83 ms / 23.6 s** |
+| 3 | 15,431 / 11,435 | **+34.9%** | **48 / 883 ms** | **76 ms / 18.8 s** | **77 ms / 19.9 s** |
+| 4 | 14,141 / 8,749 | **+61.6%** | **46 ms / 1.64 s** | **101 ms / 23.4 s** | **101 ms / 23.6 s** |
 | 5 | 7,105 / 6,150 | **+15.5%** | **33 / 124 ms** | **56 / 452 ms** | **56 ms / 13.0 s** |
 | 6, safe | 4,874 / 4,460 | **+9.3%** | **33 / 96 ms** | **49 ms / 1.69 s** | **49 ms / 20.3 s** |
 
-Thus LPT also dominates valid PP on every workload: 7–58% more throughput and
+Thus LPT also dominates valid PP on every workload: 7–62% more throughput and
 2.9–36x lower pooled P99 ITL. PP's mean ITL obscures seconds-long
 prefill-induced stalls; the per-request maximum exposes them. The advantage
 is largest on input-heavy WL3/4, but remains material on output-heavy WL5/6.

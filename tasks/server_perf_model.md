@@ -27,3 +27,25 @@ Our method aims to achieve an optimal pareto curve: high throughput, stable deco
   - Training: 200 epochs, command: `python tasks/perf_model/train_perf_model_mlp.py --csv Qwen_Qwen3-8B_9544552f_20260405_185729_profile.csv --output tasks/perf_model/dmc_model.pt --epochs 200`
 - [ ] Validate MLP predictions against actual server latency on representative workloads from `tasks/realistic_workload_analysis.md`
 - [x] Use trained models for SLO-aware chunk size control (integrated in `edf_scheduler.py` via `SGLANG_EDF_LATENCY_MODEL` env var)
+
+### Production target and router integration audit (2026-07-23)
+
+The LPT/DMC checkpoints already time `model_runner.forward`, so their target
+includes the full GPU model forward rather than attention alone. The profiler
+still initializes attention metadata before timing, forcibly disables CUDA
+graphs, and stops before sampling/output readiness. Its saved `overlap` feature
+also has zero variance. The reported 2.4%/2.3% MAPE therefore validates the
+non-graph GPU-forward domain, not production token-ready server cost. The next
+calibration dataset must time the real graph/planner path through token
+readiness; fixed overhead should remain only an initial prior.
+
+Public upstream `main` at `b98a577f` retains the cache-aware imbalance gate:
+when both absolute and relative thresholds trigger it selects minimum
+`worker.load()`, otherwise it uses prefix affinity (and minimum load on a
+miss). `worker.load()` is the number of active requests, not token or predicted
+load. A model-based router should preserve that gate but compare incremental
+predicted server cost inside the permitted imbalance region. `SelectWorkerInfo`
+already carries tokenized input, while `/get_load` reports aggregate token
+counts; accurate inference additionally needs aggregate decode KV length,
+decode batch size, expected output length, and the candidate's prefix-token
+hit.

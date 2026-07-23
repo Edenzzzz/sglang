@@ -1996,15 +1996,19 @@ class Scheduler(
             # was computed before it re-entered the waiting queue.
             if self.chunked_req is not None:
                 prefill_prefix_len = len(self.chunked_req.fill_ids)
-            else:
+            elif self.waiting_queue:
+                # Priority calculation above fixes the next admission
+                # candidate. Match that request now so the latency model sees
+                # its actual device/host prefix hit rather than an unrelated
+                # maximum across the waiting queue. add_one_req() refreshes
+                # this match after taking the cache-node lock.
+                next_req = self.waiting_queue[0]
+                next_req.init_next_round_input(self.tree_cache)
                 prefill_prefix_len = max(
-                    (
-                        len(req.prefix_indices)
-                        for req in self.waiting_queue
-                        if req.prefix_indices is not None
-                    ),
-                    default=0,
+                    len(next_req.prefix_indices), next_req.host_hit_length
                 )
+            else:
+                prefill_prefix_len = 0
             edf_chunk = edf_compute_max_chunk_size(
                 decode_reqs=decode_reqs,
                 default_chunk_size=effective_chunk_size,

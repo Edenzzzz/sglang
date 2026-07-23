@@ -89,6 +89,40 @@ and ITL; WL4/6 are throughput-saturated but still sharply reduce decode-tail
 latency. At the 150 ms target, representative throughput gains remain +10.8%
 (WL1), +18.1% (WL3), and +4.3% (WL5).
 
+#### N=400 peak-load cache pressure
+
+Peak-load acceptance uses 400 requests. At the 50 ms target, WL1
+(4096/1024, rate 8) reaches 15,165 tok/s with 38.0 ms pooled P99 ITL,
+71.0 ms request-max P99, and no retractions. Initializing the next EDF
+candidate's radix match before prediction gives the model that request's
+actual device or HiCache prefix length; it is throughput-neutral on this
+zero-hit workload (the preceding implementation measured 15,166 tok/s).
+
+Long-output tests exposed a separate memory-capacity failure that pooled P99
+hides. WL5 with the normal 10 ms guard is stable at 7,105 tok/s and 56 ms
+worst ITL, but reducing the guard to 5 ms causes four KV retractions and a
+131-second stream gap. An 8K/8K, rate-4 stress test similarly produced a
+342-second gap from one retraction while pooled P99 remained 33 ms.
+
+The following mitigations were rejected after N=400 tests:
+
+- Raising future-output reservation removes retractions on WL5, but reduces
+  throughput to 6,652 tok/s; on the 8K stress test, a fully safe combination
+  of reservation plus headroom falls from 4,929 to 3,343 tok/s.
+- Withholding 10% KV headroom alone is safe on the 8K stress test, but still
+  reaches only 3,354 tok/s. Already-admitted decodes consume static headroom,
+  so smaller margins still retract.
+- A 100 GB HiCache host tier reaches 6,839 tok/s on WL5, but retracted active
+  KV is not inserted into the radix cache and the worst ITL remains 130
+  seconds. Immediate readmission reduces that gap to 8.14 seconds at 6,844
+  tok/s, but inserting/evicting active KV causes retraction thrashing.
+
+These experiments establish that request-count/token-ratio admission cannot
+simultaneously preserve the high-concurrency point and eliminate rare
+retractions. A server-cost/load predictor needs memory state and expected
+decode growth in addition to forward latency. None of the rejected policies
+or minimum-prefill constraints are retained.
+
 ### EDF controller hot path
 
 Exact chunk selection evaluates the latency MLP once for pure decode and
@@ -127,8 +161,8 @@ WL4.
 Passing the unbounded prefix length directly is also invalid: the checked-in
 models were trained only for `r_p ∈ [0, 4096]`. Extrapolating to 8K–12K makes
 the MLP predict hundreds of milliseconds even for `n_p=0`, starving prefill.
-The fix passes the actual continued-prefix length and clamps it to the profiled
-domain. On matched runs:
+The fix passes the selected request's actual device/host cache hit (or the
+continued-prefix length) and clamps it to the profiled domain. On matched runs:
 
 - WL3: throughput 10,955→11,095 tok/s and request-max P99 129→102 ms.
 - WL4: throughput 11,833→11,958 tok/s and request-max P99 151→116 ms.

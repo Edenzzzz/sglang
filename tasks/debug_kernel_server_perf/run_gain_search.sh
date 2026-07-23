@@ -18,6 +18,7 @@ EDF_TTFT_MS="${EDF_TTFT_MS:-2000}"
 LPT_PLAN_OVERHEAD_MS="${LPT_PLAN_OVERHEAD_MS:-0}"
 LPT_MODEL="${LPT_MODEL:-$REPO_ROOT/tasks/perf_model/lpt_model.pt}"
 DMC_MODEL="${DMC_MODEL:-$REPO_ROOT/tasks/perf_model/dmc_model.pt}"
+read -r -a SERVER_EXTRA_FLAGS <<<"${SERVER_EXTRA_ARGS:-}"
 mkdir -p "$RESULTS_DIR"
 
 # launch_server performs its warmup through the advertised host. Keep local
@@ -98,7 +99,8 @@ start_server() {
     env "${method_env[@]}" python3 -m sglang.launch_server \
         --model "$MODEL" --attention-backend flashinfer \
         --mem-fraction-static 0.85 --port "$PORT" --host 127.0.0.1 \
-        --watchdog-timeout 600 "${flags[@]}" >"$logfile" 2>&1 &
+        --watchdog-timeout 600 "${flags[@]}" "${SERVER_EXTRA_FLAGS[@]}" \
+        >"$logfile" 2>&1 &
     server_pid=$!
     wait_server "$logfile"
 }

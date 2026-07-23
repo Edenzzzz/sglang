@@ -74,6 +74,8 @@ def analyze(path):
     n_pass_itl_max = 0
     n_pass_tpot_only = 0
     n_pass_itl_p99 = 0   # Sarathi-Serve-style: per-request P99 ITL ≤ SLO
+    req_max_itls = []
+    req_p99_itls = []
     for i in range(n):
         ttft_ms = ttfts[i] * 1000.0
         ttft_budget = ttft_slo_for_input(base_ttft_ms, input_lens[i] if i < len(input_lens) else 0)
@@ -84,6 +86,8 @@ def analyze(path):
         max_itl = max(itl_ms_list) if itl_ms_list else 0
         mean_itl = (sum(itl_ms_list) / len(itl_ms_list)) if itl_ms_list else 0  # TPOT
         p99_itl = percentile(itl_ms_list, 99) if itl_ms_list else 0
+        req_max_itls.append(max_itl)
+        req_p99_itls.append(p99_itl)
         itl_max_ok = max_itl <= itl_slo_ms
         tpot_ok = mean_itl <= itl_slo_ms
         p99_ok = p99_itl <= itl_slo_ms
@@ -111,6 +115,13 @@ def analyze(path):
         "p99_ttft_ms": d.get("p99_ttft_ms", 0),
         "median_itl_ms": d.get("median_itl_ms", 0),
         "p99_itl_ms": d.get("p99_itl_ms", 0),
+        # Pooled token-level ITL percentiles can hide rare multi-second stalls.
+        # Summarize each request first so HOL blocking remains visible.
+        "median_req_max_itl_ms": median(req_max_itls) if req_max_itls else 0,
+        "p99_req_max_itl_ms": percentile(req_max_itls, 99),
+        "max_req_itl_ms": max(req_max_itls) if req_max_itls else 0,
+        "median_req_p99_itl_ms": median(req_p99_itls) if req_p99_itls else 0,
+        "p99_req_p99_itl_ms": percentile(req_p99_itls, 99),
         "n": n,
         # Strict: TTFT + max-ITL ≤ SLO
         "slo_attain_pct": 100.0 * n_pass_max / max(n, 1),
@@ -142,12 +153,13 @@ def main():
     # Group by workload then method
     rows.sort(key=lambda r: (r["workload"], r["method"], float(r["rate"]) if r["rate"] != "inf" else 1e9))
 
-    print(f"\n{'method':<8} {'wl':<14} {'rate':>5} {'tok/s':>8} {'med_TTFT':>9} {'p99_TTFT':>9} {'med_ITL':>8} {'p99_ITL':>8} {'SLO_max%':>9} {'TTFT%':>6} {'ITLmax%':>8} {'ITLp99%':>8} {'TPOT%':>6}")
-    print("-" * 130)
+    print(f"\n{'method':<8} {'wl':<14} {'rate':>5} {'tok/s':>8} {'med_TTFT':>9} {'p99_TTFT':>9} {'poolP99':>8} {'reqMax50':>9} {'reqMax99':>9} {'SLO_max%':>9} {'TTFT%':>6} {'ITLmax%':>8} {'ITLp99%':>8} {'TPOT%':>6}")
+    print("-" * 142)
     for r in rows:
         print(f"{r['method']:<8} {r['workload']:<14} {r['rate']:>5} {r['throughput']:>8.0f} "
               f"{r['median_ttft_ms']:>9.1f} {r['p99_ttft_ms']:>9.1f} "
-              f"{r['median_itl_ms']:>8.2f} {r['p99_itl_ms']:>8.2f} "
+              f"{r['p99_itl_ms']:>8.2f} "
+              f"{r['median_req_max_itl_ms']:>9.2f} {r['p99_req_max_itl_ms']:>9.2f} "
               f"{r['slo_attain_pct']:>8.1f}% "
               f"{r['ttft_attain_pct']:>5.1f}% {r['itl_attain_pct']:>7.1f}% "
               f"{r['itl_p99_attain_pct']:>7.1f}% {r['tpot_attain_pct']:>5.1f}%")

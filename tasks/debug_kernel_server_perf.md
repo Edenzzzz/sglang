@@ -11,6 +11,31 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 - Profile logs: `tasks/debug_kernel_server_perf/profile_logs/`
 - gpu_keepalive MUST be stopped before benchmarks (corrupts results — cooperative launch is especially sensitive to SM contention)
 
+## H800 SLO-aware validation (2026-07-23)
+
+Single-GPU Qwen3-8B, random 4096-token input / 512-token output, rate 16,
+100 requests. The EDF runs use a 2000 ms TTFT target and 100 ms ITL target.
+H800 and H100 have the same relevant single-GPU compute and memory
+characteristics; H800's lower NVLink bandwidth does not affect this test.
+
+| Method | Total tok/s | P99 TTFT | pooled P99 ITL | median request max ITL | worst request ITL |
+|--------|------------:|---------:|---------------:|-----------------------:|------------------:|
+| **LPT mixed CG + EDF, 10 ms guard** | **17,846** | **2,118 ms** | **87.0 ms** | **98.8 ms** | **99.3 ms** |
+| LPT mixed CG + EDF, unguarded | 17,902 | **1,990 ms** | 96.8 ms | 108.8 ms | 109.4 ms |
+| DMC + EDF | 15,753 | 3,728 ms | 104.5 ms | 509.5 ms | 549.2 ms |
+| Prefill-priority | 17,791 | **937 ms** | 22.8 ms | 3,087.0 ms | 4,675.0 ms |
+
+At the same nominal 100 ms decode SLO, guarded LPT provides **13.3% more
+throughput than DMC**, strictly keeps every observed decode gap below 100 ms,
+and has a tighter request-level tail. Against prefill-priority, guarded LPT is
+slightly faster (+0.3%) while reducing median per-request maximum ITL from
+3.09 seconds to 98.8 ms (31.2x).
+
+The pooled ITL percentile is misleading for prefill-priority: a small number of
+multi-second head-of-line stalls disappear below the pooled P99. Use
+`tasks/edf_benchmark/analyze_results.py`, which now reports per-request maximum
+ITL percentiles in addition to pooled token-level percentiles.
+
 ---
 
 ## Kernel-Level Results

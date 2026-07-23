@@ -95,21 +95,6 @@ def edf_set_priority(req: "Req") -> None:
     req.priority = compute_ttft_deadline(req)
 
 
-def edf_mark_decode_progress(
-    reqs: List["Req"], *, only_started: bool = False, now: Optional[float] = None
-) -> None:
-    """Refresh the last-token timestamp for requests advanced by a step.
-
-    Mixed batches can also contain a newly prefilling request, so callers use
-    ``only_started=True`` to update only requests that already have output.
-    """
-    if now is None:
-        now = time.monotonic()
-    for req in reqs:
-        if not only_started or len(req.output_ids) > 0:
-            req._edf_last_step_time = now
-
-
 def edf_compute_max_chunk_size(
     decode_reqs: List["Req"],
     default_chunk_size: int,

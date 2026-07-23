@@ -38,11 +38,15 @@ LATENCY_MODEL_PATH = os.environ.get("SGLANG_EDF_LATENCY_MODEL", "")
 # under-predicts at large decode_bs (observed for DMC at nebius rate=inf:
 # 0.68% decode steps > 150ms vs LPT_CG's 0.34%, see task #110 analysis).
 LATENCY_SAFETY_MARGIN = float(os.environ.get("SGLANG_EDF_LATENCY_SAFETY", "1.0"))
-# Constant overhead (ms) added to model predictions for persistent kernel.
-# The barrier scaffolding in BatchAttention plan() adds ~3ms CPU + ~4ms
-# cooperative launch overhead per mixed batch step. Without this, chunk
-# control allows chunks that produce max ITL ~7ms above the SLO threshold.
-PLAN_OVERHEAD_MS = float(os.environ.get("SGLANG_EDF_PLAN_OVERHEAD_MS", "0"))
+# Overhead (ms) added to model predictions for persistent-kernel planning and
+# launch. A numeric value preserves the fixed controller. "auto" interpolates
+# the validated 5/7.5/10ms Pareto points from live output budgets and protects
+# extreme continued prefixes with the conservative 10ms guard.
+PLAN_OVERHEAD_SETTING = os.environ.get("SGLANG_EDF_PLAN_OVERHEAD_MS", "0")
+ADAPTIVE_PLAN_OVERHEAD = PLAN_OVERHEAD_SETTING.lower() == "auto"
+PLAN_OVERHEAD_MS = (
+    0.0 if ADAPTIVE_PLAN_OVERHEAD else float(PLAN_OVERHEAD_SETTING)
+)
 # overlap_profiler.py trains the checked-in models with r_p in [0, 4096].
 # Clamp continued-prefill prefixes to that domain instead of allowing unstable
 # MLP extrapolation for later chunks of 8K+ prompts.
@@ -151,6 +155,32 @@ def edf_allow_prefill_at_kv_usage(token_usage: float) -> bool:
     return token_usage < KV_ADMISSION_WATERMARK
 
 
+def edf_plan_overhead_ms(
+    decode_reqs: List["Req"], prefill_prefix_len: float
+) -> float:
+    """Return the fixed or live-workload planner guard.
+
+    The adaptive curve is based on the accepted N=400 Pareto points: 5ms for
+    1K-output requests, 7.5ms for 2K, and 10ms from 3K onward. Unknown request
+    metadata and extreme continued prefixes use the conservative endpoint.
+    """
+    if not ADAPTIVE_PLAN_OVERHEAD:
+        return PLAN_OVERHEAD_MS
+    if prefill_prefix_len >= LONG_PREFIX_PROJECTION_THRESHOLD:
+        return 10.0
+
+    output_budgets = [
+        getattr(getattr(req, "sampling_params", None), "max_new_tokens", None)
+        for req in decode_reqs
+    ]
+    output_budgets = [value for value in output_budgets if value is not None]
+    if len(output_budgets) != len(decode_reqs) or not output_budgets:
+        return 10.0
+
+    max_output_tokens = max(float(value) for value in output_budgets)
+    return min(10.0, max(5.0, 2.5 + 2.5 * max_output_tokens / 1024.0))
+
+
 def predict_forward_snapshot_ms(
     model_predict_fn,
     num_prefill_tokens: int,
@@ -218,6 +248,7 @@ def edf_compute_max_chunk_size(
     now = time.monotonic()
     decode_bs = len(decode_reqs)
     prefill_prefix_len = max(prefill_prefix_len, 0)
+    plan_overhead_ms = edf_plan_overhead_ms(decode_reqs, prefill_prefix_len)
 
     # Slack budget for the next forward step. Decode loop runs continuously, so
     # the previous step's time-of-completion is essentially "now". We track an
@@ -236,7 +267,7 @@ def edf_compute_max_chunk_size(
     # refreshes their slack before the next admission decision.
     decode_only_ms = (
         model_predict_fn(0, 0, decode_avg_kv, decode_bs) * LATENCY_SAFETY_MARGIN
-        + PLAN_OVERHEAD_MS
+        + plan_overhead_ms
     )
     if min_slack_ms <= 0 or decode_only_ms > min_slack_ms:
         return 0
@@ -252,7 +283,7 @@ def edf_compute_max_chunk_size(
         predicted_ms = (
             model_predict_fn(model_n_p, model_r_p, decode_avg_kv, decode_bs)
             * LATENCY_SAFETY_MARGIN
-            + PLAN_OVERHEAD_MS
+            + plan_overhead_ms
         )
         if predicted_ms <= min_slack_ms:
             best = mid
@@ -356,12 +387,12 @@ def try_load_latency_predictor() -> Optional[LatencyPredictor]:
         if EDF_ENABLED:
             logger.info(
                 "EDF controller config: TTFT=%.1fms, ITL=%.1fms, "
-                "latency_safety=%.3f, plan_overhead=%.1fms, "
+                "latency_safety=%.3f, plan_overhead=%s, "
                 "prefix_projection=%.0f, KV_watermark=%.3f",
                 TTFT_SLO_MS,
                 ITL_SLO_MS,
                 LATENCY_SAFETY_MARGIN,
-                PLAN_OVERHEAD_MS,
+                PLAN_OVERHEAD_SETTING,
                 LONG_PREFIX_PROJECTION_THRESHOLD,
                 KV_ADMISSION_WATERMARK,
             )

@@ -1,5 +1,6 @@
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -8,8 +9,10 @@ from sglang.srt.managers import edf_scheduler
 
 
 class _Req:
-    def __init__(self, elapsed_ms: float):
+    def __init__(self, elapsed_ms: float, max_new_tokens=None):
         self._edf_last_step_time = time.monotonic() - elapsed_ms / 1000
+        if max_new_tokens is not None:
+            self.sampling_params = SimpleNamespace(max_new_tokens=max_new_tokens)
 
 
 class _PriorityReq:
@@ -147,6 +150,37 @@ class TestEDFChunkControl(unittest.TestCase):
         with patch.object(edf_scheduler, "KV_ADMISSION_WATERMARK", 0.95):
             self.assertTrue(edf_scheduler.edf_allow_prefill_at_kv_usage(0.949))
             self.assertFalse(edf_scheduler.edf_allow_prefill_at_kv_usage(0.95))
+
+    def test_adaptive_plan_overhead_scales_with_output_budget(self):
+        with patch.object(edf_scheduler, "ADAPTIVE_PLAN_OVERHEAD", True):
+            self.assertEqual(edf_scheduler.edf_plan_overhead_ms([_Req(0, 1024)], 0), 5)
+            self.assertEqual(
+                edf_scheduler.edf_plan_overhead_ms([_Req(0, 2048)], 0), 7.5
+            )
+            self.assertEqual(
+                edf_scheduler.edf_plan_overhead_ms([_Req(0, 4096)], 0), 10
+            )
+
+    def test_adaptive_plan_overhead_protects_extreme_or_unknown_work(self):
+        with (
+            patch.object(edf_scheduler, "ADAPTIVE_PLAN_OVERHEAD", True),
+            patch.object(
+                edf_scheduler, "LONG_PREFIX_PROJECTION_THRESHOLD", 14336
+            ),
+        ):
+            self.assertEqual(
+                edf_scheduler.edf_plan_overhead_ms([_Req(0, 1024)], 14336), 10
+            )
+            self.assertEqual(edf_scheduler.edf_plan_overhead_ms([_Req(0)], 0), 10)
+
+    def test_fixed_plan_overhead_remains_compatible(self):
+        with (
+            patch.object(edf_scheduler, "ADAPTIVE_PLAN_OVERHEAD", False),
+            patch.object(edf_scheduler, "PLAN_OVERHEAD_MS", 6.25),
+        ):
+            self.assertEqual(
+                edf_scheduler.edf_plan_overhead_ms([_Req(0, 4096)], 20000), 6.25
+            )
 
     def test_forward_snapshot_uses_admitted_chunk_and_average_lengths(self):
         seen = []

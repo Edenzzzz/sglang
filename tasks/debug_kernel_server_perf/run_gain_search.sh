@@ -18,9 +18,9 @@ METHODS_SPEC="${METHODS_SPEC:-DMC LPT_CG}"
 EDF_ITL_MS="${EDF_ITL_MS:-}"
 EDF_TTFT_MS="${EDF_TTFT_MS:-2000}"
 EDF_KV_WATERMARK="${EDF_KV_WATERMARK:-}"
-# Conservative LPT default for memory-sensitive and long-output workloads.
-# The WL1/3 short-output points use 5; the WL2 midpoint uses 7.5.
-LPT_PLAN_OVERHEAD_MS="${LPT_PLAN_OVERHEAD_MS:-10}"
+# Live-request default: 5ms for 1K outputs, 7.5ms for 2K, and 10ms for
+# long-output or extreme-prefix work. Set a number to reproduce a fixed guard.
+LPT_PLAN_OVERHEAD_MS="${LPT_PLAN_OVERHEAD_MS:-auto}"
 LPT_MODEL="${LPT_MODEL:-$REPO_ROOT/tasks/perf_model/lpt_model.pt}"
 DMC_MODEL="${DMC_MODEL:-$REPO_ROOT/tasks/perf_model/dmc_model.pt}"
 read -r -a SERVER_EXTRA_FLAGS <<<"${SERVER_EXTRA_ARGS:-}"

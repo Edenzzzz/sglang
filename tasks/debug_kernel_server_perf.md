@@ -109,22 +109,23 @@ results below retokenize to at least 99.77% of the reported output count.
 | 1 (4096/1024), 5 ms guard | 15,374 / 13,601 | **+13.0%** | **41 / 52 ms** | **64 / 81 ms** | **64 / 81 ms** |
 | 2 (8192/2048), 7.5 ms guard | 10,710 / 9,909 | **+8.1%** | **40 / 50 ms** | **62 / 165 ms** | **62 / 165 ms** |
 | 3 (12000/1024), 5 ms guard | 15,431 / 14,685 | **+5.1%** | **48 / 54 ms** | **76 / 344 ms** | **77 / 344 ms** |
-| 4 (16384/1024) | 14,141 / 13,900 | **+1.7%** | **46 / 55 ms** | 101 / **100 ms** | 101 / **100 ms** |
+| 4 (16384/1024), adaptive guard | 14,348 / 13,900 | **+3.2%** | **49 / 55 ms** | 104 / **100 ms** | 104 / **100 ms** |
 | 5 (4096/4096) | 7,105 / 6,041 | **+17.6%** | **33 / 46 ms** | **56 / 325 ms** | **56 ms / 144 s** |
 | 6 (6000/6000), safe | 4,874 / 4,398 | **+10.8%** | **33 / 45 ms** | **49 / 60 ms** | **49 ms / 385 s** |
 
 This bridges the kernel-to-serving gap on all six workloads: LPT provides
-1.7–17.6% more throughput while lowering pooled P99 ITL by 11–29%. The 5 ms
+3.2–17.6% more throughput while lowering pooled P99 ITL by 11–29%. The 5 ms
 planner guard is the better Pareto point for the short-output WL1/3 shapes:
 current-branch N=400 confirmations improve their preceding LPT throughput by
 1.2%/4.2%, retain 99.856%/99.993% output retokenization, and keep every decode
 gap below 77 ms. WL2's current-branch 7.5 ms midpoint similarly raises
 throughput from 10,505 to 10,710 tok/s, retains 99.968% retokenization, and
 keeps its worst gap to 62 ms; the old 5 ms point reached a 329 ms request tail
-and remains rejected. The more conservative 10 ms guard remains necessary for
-long-output/memory-sensitive shapes. On WL4, moving the long-prefix projection
-boundary from 12K to 14K recovers 2.5% LPT throughput, making it 1.7% faster
-than DMC with a 16% lower pooled P99 and essentially equal request-level tail.
+and remains rejected. The adaptive controller uses the conservative 10 ms
+endpoint for long-output/memory-sensitive work and once a continued prefix
+reaches 14K. On WL4 it uses 5 ms before that boundary and 10 ms afterward,
+reaching 14,348 tok/s: 3.2% faster than DMC with an 11% lower pooled P99 and
+essentially equal request-level tail.
 Request-level tails expose larger benefits on WL3/5 that pooled token
 percentiles hide. WL2's former synchronized 313 ms gap was caused by the
 zero-prefill stdout diagnostic; after gating it behind plotting, the worst
@@ -141,25 +142,25 @@ EDF target, and N=400 as the table above.
 | 1 | 15,374 / 14,146 | **+8.7%** | **41 / 218 ms** | **64 / 478 ms** | **64 / 478 ms** |
 | 2 | 10,710 / 9,808 | **+9.2%** | **40 / 241 ms** | **62 ms / 13.2 s** | **62 ms / 13.4 s** |
 | 3 | 15,431 / 11,435 | **+34.9%** | **48 / 883 ms** | **76 ms / 18.8 s** | **77 ms / 19.9 s** |
-| 4 | 14,141 / 8,749 | **+61.6%** | **46 ms / 1.64 s** | **101 ms / 23.4 s** | **101 ms / 23.6 s** |
+| 4 | 14,348 / 8,749 | **+64.0%** | **49 ms / 1.64 s** | **104 ms / 23.4 s** | **104 ms / 23.6 s** |
 | 5 | 7,105 / 6,150 | **+15.5%** | **33 / 124 ms** | **56 / 452 ms** | **56 ms / 13.0 s** |
 | 6, safe | 4,874 / 4,460 | **+9.3%** | **33 / 96 ms** | **49 ms / 1.69 s** | **49 ms / 20.3 s** |
 
-Thus LPT also dominates valid PP on every workload: 7–62% more throughput and
+Thus LPT also dominates valid PP on every workload: 9–64% more throughput and
 2.9–36x lower pooled P99 ITL. PP's mean ITL obscures seconds-long
 prefill-induced stalls; the per-request maximum exposes them. The advantage
 is largest on input-heavy WL3/4, but remains material on output-heavy WL5/6.
 
 WL4 needs an additional predictor-domain guard: clamping every continued
-prefix to the model's 4K training boundary produced a 506 ms gap. Projecting
-causal attention work only after the real prefix exceeds 14K reduces the worst
-gap to 101 ms while reaching 14,141 tok/s. A matched 13K boundary reached only
-13,938 tok/s with the same 101 ms tail and is dominated; the previous 12K
-boundary reached 13,795 tok/s and an 83 ms tail. The 14K default is therefore
-the higher-throughput nominal-50-ms point, while 12K remains available through
-`SGLANG_EDF_LONG_PREFIX_PROJECTION_THRESHOLD` when request-maximum tail is
-preferred. The controller can still choose a zero-token prefill step and
-introduces no minimum prefill chunk.
+prefix to the model's 4K training boundary produced a 506 ms gap. With a fixed
+10 ms guard, projecting causal attention work only after the real prefix
+exceeds 14K reduces the worst gap to 101 ms while reaching 14,141 tok/s. A
+matched 13K boundary reached only 13,938 tok/s with the same 101 ms tail and is
+dominated; the previous 12K boundary reached 13,795 tok/s and an 83 ms tail.
+The live adaptive guard improves the 14K point to 14,348 tok/s and a 104 ms
+worst gap by using 5 ms before the protected prefix boundary. The controller
+can still choose a zero-token prefill step and introduces no minimum prefill
+chunk.
 
 The graph-enabled DMC result remains invalid. At N=20, disabling overlap while
 retaining mixed batching and decode graphs restores exact output, but at

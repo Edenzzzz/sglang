@@ -121,6 +121,26 @@ benefits on WL3/5 that pooled token percentiles hide. WL2's former synchronized
 313 ms gap was caused by the zero-prefill stdout diagnostic; after gating it
 behind plotting, the worst gap is 57 ms and LPT dominates DMC on both axes.
 
+The matched prefill-prioritized (PP) baseline disables both mixed chunking and
+CUDA graphs. The private FlashInfer pure-decode graph path is not
+output-correct at peak load: PP+PCG retokenized only 86.7% of WL1 output. The
+graph-free PP runs below retokenize 99.81–100.00% and use the same seed, rate,
+EDF target, and N=400 as the table above.
+
+| WL | LPT/PP total tok/s | LPT gain | pooled P99 ITL (LPT/PP) | request-max P99 (LPT/PP) | worst ITL (LPT/PP) |
+|---:|-------------------:|---------:|----------------------------:|-----------------------------:|------------------------:|
+| 1 | 15,190 / 14,146 | **+7.4%** | **38 / 218 ms** | **56 / 478 ms** | **59 / 478 ms** |
+| 2 | 10,505 / 9,808 | **+7.1%** | **37 / 241 ms** | **56 ms / 13.2 s** | **57 ms / 13.4 s** |
+| 3 | 14,812 / 11,435 | **+29.5%** | **47 / 883 ms** | **69 ms / 18.8 s** | **69 ms / 19.9 s** |
+| 4 | 13,795 / 8,749 | **+57.7%** | **45 ms / 1.64 s** | **83 ms / 23.4 s** | **83 ms / 23.6 s** |
+| 5 | 7,105 / 6,150 | **+15.5%** | **33 / 124 ms** | **56 / 452 ms** | **56 ms / 13.0 s** |
+| 6, safe | 4,874 / 4,460 | **+9.3%** | **33 / 96 ms** | **49 ms / 1.69 s** | **49 ms / 20.3 s** |
+
+Thus LPT also dominates valid PP on every workload: 7–58% more throughput and
+2.9–36x lower pooled P99 ITL. PP's mean ITL obscures seconds-long
+prefill-induced stalls; the per-request maximum exposes them. The advantage
+is largest on input-heavy WL3/4, but remains material on output-heavy WL5/6.
+
 WL4 needs an additional predictor-domain guard: clamping every continued
 prefix to the model's 4K training boundary produced a 506 ms gap, while
 projecting causal attention work only after the real prefix exceeds 12K
@@ -532,22 +552,6 @@ CG25≈CG29 (identical within noise). First CG29 run was outlier from cold JIT c
 
 **WL1-6 rerun** (flashinfer `d9c01c81` with ratio threshold, same sglang): all within 2% of previous results. Ratio threshold has zero measurable server overhead.
 (CG25: sglang `090b86f5`, flashinfer `02b068f0`. CG29: flashinfer `d9c01c81`.)
-
-### WL1-6: LPT+CG29 vs PP (prefill-prioritized, no mixed chunk) (rate=8, N=400)
-
-PP = no `--enable-mixed-chunk`, WITH `--enable-piecewise-cuda-graph`, no persistent kernel. Prefill completes fully before decode interleaves.
-flashinfer `d9c01c81`, sglang `857603c2a`.
-
-| WL | In | Out | LPT+CG29 Total | PP+PCG Total | LPT TTFT med | PP TTFT med | LPT P99 ITL | PP P99 ITL |
-|----|---:|----:|:-:|:-:|:-:|:-:|:-:|:-:|
-| 1 | 4096 | 1024 | ~15,400 | ~15,100 | 291ms | **214ms** | **174ms** | 195ms |
-| 2 | 8192 | 2048 | ~10,640 | ~10,300 | **47,471ms** | 52,597ms | 240ms | **219ms** |
-| 3 | 12000 | 1024 | **~15,400** | ~14,200 | **42,236ms** | 69,194ms | **298ms** | 846ms |
-| 4 | 16384 | 1024 | **~14,920** | ~13,400 | **81,348ms** | 165,429ms | **297ms** | 1,696ms |
-| 5 | 4096 | 4096 | ~6,510 | ~6,510 | 58,189ms | 58,421ms | 124ms | **113ms** |
-| 6 | 6000 | 6000 | ~4,730 | ~4,740 | 137,718ms | 139,702ms | 112ms | **108ms** |
-
-**Key findings**: PP wins P99 ITL on output-heavy WL5-6 (no mixed-batch decode disruption). LPT+CG29 wins on input-heavy WL3-4 (chunked prefill + CG amortize large prefills, PP blocks decode during long prefills → massive P99 spikes). WL1: PP has lower TTFT (no CG capture overhead) but higher P99. CG makes no difference for PP (without mixed chunk, batches are pure prefill or decode).
 
 ### POD+CG vs LPT+CG29 (WL1, WL3, rate=8, N=400)
 

@@ -85,10 +85,25 @@ start_server() {
         )
         [ -z "$EDF_ITL_MS" ] || method_env+=(SGLANG_EDF_LATENCY_MODEL="$LPT_MODEL")
     else
-        [ "$method" = DMC_NOCG ] || flags+=(--enable-piecewise-cuda-graph)
-        [ "$method" = DMC_PP ] || flags+=(--enable-mixed-chunk)
+        case "$method" in
+            DMC_PP)
+                # Prefill-prioritized baseline with pure prefill/decode graphs.
+                flags+=(--enable-piecewise-cuda-graph)
+                ;;
+            PP_NOCG)
+                # Graph-free prefill-prioritized baseline.  This is the
+                # correctness reference when private FlashInfer decode graphs
+                # corrupt peak-load outputs.
+                flags+=(--disable-cuda-graph)
+                ;;
+            DMC_NOCG)
+                flags+=(--enable-mixed-chunk --disable-cuda-graph)
+                ;;
+            *)
+                flags+=(--enable-piecewise-cuda-graph --enable-mixed-chunk)
+                ;;
+        esac
         [ "$method" = DMC_SYNC ] && flags+=(--disable-overlap-schedule)
-        [ "$method" = DMC_NOCG ] && flags+=(--disable-cuda-graph)
         # A true DMC baseline must not capture mixed graphs through BatchAttention.
         method_env+=(SGLANG_DISABLE_MIXED_CG=1)
         [ -z "$EDF_ITL_MS" ] || method_env+=(SGLANG_EDF_LATENCY_MODEL="$DMC_MODEL")

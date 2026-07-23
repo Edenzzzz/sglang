@@ -42,6 +42,12 @@ LATENCY_SAFETY_MARGIN = float(os.environ.get("SGLANG_EDF_LATENCY_SAFETY", "1.0")
 # cooperative launch overhead per mixed batch step. Without this, chunk
 # control allows chunks that produce max ITL ~7ms above the SLO threshold.
 PLAN_OVERHEAD_MS = float(os.environ.get("SGLANG_EDF_PLAN_OVERHEAD_MS", "0"))
+# overlap_profiler.py trains the checked-in models with r_p in [0, 4096].
+# Clamp continued-prefill prefixes to that domain instead of allowing unstable
+# MLP extrapolation for later chunks of 8K+ prompts.
+MAX_PROFILED_PREFILL_PREFIX = float(
+    os.environ.get("SGLANG_EDF_MAX_PROFILED_PREFILL_PREFIX", "4096")
+)
 
 
 def compute_ttft_slo_ms(input_len: int) -> float:
@@ -94,6 +100,7 @@ def edf_compute_max_chunk_size(
     default_chunk_size: int,
     model_predict_fn=None,
     decode_avg_kv: float = 0,
+    prefill_prefix_len: float = 0,
 ) -> int:
     """Compute maximum prefill chunk size that won't violate decode ITL SLOs.
 
@@ -102,6 +109,9 @@ def edf_compute_max_chunk_size(
         default_chunk_size: Maximum chunk size (chunked_prefill_size)
         model_predict_fn: fn(n_p, r_p, r_d, decode_bs) -> predicted_ms
         decode_avg_kv: Average KV length of decode requests
+        prefill_prefix_len: Cached KV length preceding the pending prefill
+            chunk. This is nonzero for the second and later chunks of a long
+            prompt and materially affects attention latency.
 
     Returns:
         Adjusted chunk size (may be smaller than default if SLOs are tight)
@@ -111,6 +121,9 @@ def edf_compute_max_chunk_size(
 
     now = time.monotonic()
     decode_bs = len(decode_reqs)
+    prefill_prefix_len = min(
+        max(prefill_prefix_len, 0), MAX_PROFILED_PREFILL_PREFIX
+    )
 
     # Slack budget for the next forward step. Decode loop runs continuously, so
     # the previous step's time-of-completion is essentially "now". We track an
@@ -140,7 +153,7 @@ def edf_compute_max_chunk_size(
     while lo <= hi:
         mid = (lo + hi) // 2
         predicted_ms = (
-            model_predict_fn(mid, 0, decode_avg_kv, decode_bs)
+            model_predict_fn(mid, prefill_prefix_len, decode_avg_kv, decode_bs)
             * LATENCY_SAFETY_MARGIN
             + PLAN_OVERHEAD_MS
         )

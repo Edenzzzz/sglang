@@ -38,6 +38,46 @@ class TestEDFChunkControl(unittest.TestCase):
         chunk = self._compute([_Req(0)], lambda n_p, *_: 5 + n_p / 100)
         self.assertEqual(chunk, 8192)
 
+    def test_passes_continued_prefill_prefix_to_model(self):
+        seen_inputs = []
+
+        def predictor(n_p, r_p, *_):
+            seen_inputs.append((n_p, r_p))
+            return 5 + n_p / 100
+
+        with patch.object(edf_scheduler, "EDF_ENABLED", True):
+            edf_scheduler.edf_compute_max_chunk_size(
+                [_Req(0)],
+                8192,
+                predictor,
+                decode_avg_kv=2048,
+                prefill_prefix_len=2048,
+            )
+
+        self.assertTrue(seen_inputs)
+        self.assertTrue(all(r_p == 2048 for n_p, r_p in seen_inputs if n_p > 0))
+
+    def test_clamps_prefill_prefix_to_profiled_domain(self):
+        seen_inputs = []
+
+        def predictor(n_p, r_p, *_):
+            seen_inputs.append((n_p, r_p))
+            return 5 + n_p / 100
+
+        with (
+            patch.object(edf_scheduler, "EDF_ENABLED", True),
+            patch.object(edf_scheduler, "MAX_PROFILED_PREFILL_PREFIX", 4096),
+        ):
+            edf_scheduler.edf_compute_max_chunk_size(
+                [_Req(0)],
+                8192,
+                predictor,
+                decode_avg_kv=2048,
+                prefill_prefix_len=16384,
+            )
+
+        self.assertTrue(all(r_p == 4096 for n_p, r_p in seen_inputs if n_p > 0))
+
 
 if __name__ == "__main__":
     unittest.main()

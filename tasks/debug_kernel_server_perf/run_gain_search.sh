@@ -10,20 +10,36 @@ cd "$REPO_ROOT"
 MODEL="${MODEL:-Qwen/Qwen3-8B}"
 PORT="${PORT:-30000}"
 NUM_PROMPTS="${NUM_PROMPTS:-100}"
+DATASET_PATH="${DATASET_PATH:-workloads/ShareGPT_V3_unfiltered_cleaned_split.json}"
 RESULTS_DIR="${RESULTS_DIR:-$SCRIPT_DIR/gain_search_results}"
+METHODS_SPEC="${METHODS_SPEC:-DMC LPT_CG}"
+EDF_ITL_MS="${EDF_ITL_MS:-}"
+EDF_TTFT_MS="${EDF_TTFT_MS:-2000}"
+LPT_PLAN_OVERHEAD_MS="${LPT_PLAN_OVERHEAD_MS:-0}"
+LPT_MODEL="${LPT_MODEL:-$REPO_ROOT/tasks/perf_model/lpt_model.pt}"
+DMC_MODEL="${DMC_MODEL:-$REPO_ROOT/tasks/perf_model/dmc_model.pt}"
 mkdir -p "$RESULTS_DIR"
+
+# launch_server performs its warmup through the advertised host. Keep local
+# control traffic away from an inherited HTTP proxy.
+export no_proxy="${no_proxy:+$no_proxy,}localhost,127.0.0.1,0.0.0.0"
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}localhost,127.0.0.1,0.0.0.0"
 
 # input:output:request-rate. These emphasize moderate prefill chunks mixed with
 # enough long-lived decodes to approach the favorable kernel cases (3-8), while
 # including nearby points to locate where the advantage disappears.
-CASES=(
-    "2048:512:8" "2048:512:16"
-    "4096:512:8" "4096:512:16"
-    "4096:1024:8" "4096:1024:12"
-    "6144:1024:8" "6144:1024:12"
-    "8192:1024:8"
-    "8192:2048:4" "8192:2048:8"
-)
+if [ -n "${CASES_SPEC:-}" ]; then
+    read -r -a CASES <<<"$CASES_SPEC"
+else
+    CASES=(
+        "2048:512:8" "2048:512:16"
+        "4096:512:8" "4096:512:16"
+        "4096:1024:8" "4096:1024:12"
+        "6144:1024:8" "6144:1024:12"
+        "8192:1024:8"
+        "8192:2048:4" "8192:2048:8"
+    )
+fi
 
 server_pid=""
 cleanup() {
@@ -57,20 +73,37 @@ start_server() {
     cleanup
     server_pid=""
     if [ "$method" = LPT_CG ]; then
-        method_env+=(SGLANG_FLASHINFER_USE_PERSISTENT=1)
+        method_env+=(
+            SGLANG_FLASHINFER_USE_PERSISTENT=1
+            SGLANG_EDF_PLAN_OVERHEAD_MS="$LPT_PLAN_OVERHEAD_MS"
+        )
+        [ -z "$EDF_ITL_MS" ] || method_env+=(SGLANG_EDF_LATENCY_MODEL="$LPT_MODEL")
     else
         # A true DMC baseline must not capture mixed graphs through BatchAttention.
         method_env+=(SGLANG_DISABLE_MIXED_CG=1)
+        [ -z "$EDF_ITL_MS" ] || method_env+=(SGLANG_EDF_LATENCY_MODEL="$DMC_MODEL")
+    fi
+    if [ -n "$EDF_ITL_MS" ]; then
+        method_env+=(
+            SGLANG_EDF_SCHEDULING=1
+            SGLANG_TTFT_SLO_MS="$EDF_TTFT_MS"
+            SGLANG_ITL_SLO_MS="$EDF_ITL_MS"
+        )
+        flags+=(
+            --enable-priority-scheduling
+            --schedule-low-priority-values-first
+            --priority-scheduling-preemption-threshold 999999
+        )
     fi
     env "${method_env[@]}" python3 -m sglang.launch_server \
         --model "$MODEL" --attention-backend flashinfer \
-        --mem-fraction-static 0.85 --port "$PORT" --host 0.0.0.0 \
+        --mem-fraction-static 0.85 --port "$PORT" --host 127.0.0.1 \
         --watchdog-timeout 600 "${flags[@]}" >"$logfile" 2>&1 &
     server_pid=$!
     wait_server "$logfile"
 }
 
-for method in DMC LPT_CG; do
+for method in $METHODS_SPEC; do
     start_server "$method"
     for case_spec in "${CASES[@]}"; do
         IFS=: read -r input output rate <<<"$case_spec"
@@ -78,8 +111,10 @@ for method in DMC LPT_CG; do
         [ -f "$outfile" ] && continue
         curl -sf "http://localhost:$PORT/flush_cache" >/dev/null || true
         python3 -m sglang.bench_serving --backend sglang --port "$PORT" \
-            --dataset-name random --random-input "$input" --random-output "$output" \
+            --dataset-name random --dataset-path "$DATASET_PATH" \
+            --random-input "$input" --random-output "$output" \
             --request-rate "$rate" --num-prompts "$NUM_PROMPTS" \
+            --warmup-requests 2 \
             --output-file "$outfile" --output-details --disable-tqdm
     done
 done

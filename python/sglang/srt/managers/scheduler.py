@@ -1989,11 +1989,28 @@ class Scheduler(
                 if decode_reqs
                 else 0
             )
+            # A continued chunk has already materialized `fill_ids` into KV.
+            # Passing r_p=0 for every chunk makes the latency model increasingly
+            # optimistic on long prompts (e.g. the second 8K chunk of a 16K
+            # request). For a fresh request, retain any prefix-cache match that
+            # was computed before it re-entered the waiting queue.
+            if self.chunked_req is not None:
+                prefill_prefix_len = len(self.chunked_req.fill_ids)
+            else:
+                prefill_prefix_len = max(
+                    (
+                        len(req.prefix_indices)
+                        for req in self.waiting_queue
+                        if req.prefix_indices is not None
+                    ),
+                    default=0,
+                )
             edf_chunk = edf_compute_max_chunk_size(
                 decode_reqs=decode_reqs,
                 default_chunk_size=effective_chunk_size,
                 model_predict_fn=self.edf_latency_predictor.predict,
                 decode_avg_kv=decode_avg_kv,
+                prefill_prefix_len=prefill_prefix_len,
             )
             if edf_chunk == 0:
                 return None

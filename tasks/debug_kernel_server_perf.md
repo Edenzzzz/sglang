@@ -36,6 +36,72 @@ multi-second head-of-line stalls disappear below the pooled P99. Use
 `tasks/edf_benchmark/analyze_results.py`, which now reports per-request maximum
 ITL percentiles in addition to pooled token-level percentiles.
 
+### H800 WL1–6 diagnosis
+
+Matched 40-request exploratory runs at rate 8 use the same random seed and
+requested input/output lengths as WL1–6. Request-max P99 first computes the
+maximum decode gap within each request, then takes P99 across requests.
+
+| WL | Input/output | LPT throughput gain, no EDF | pooled P99 ITL gain | request-max P99 (LPT/DMC) |
+|----|-------------:|----------------------------:|--------------------:|--------------------------:|
+| 1 | 4096/1024 | +8.7% | +14.1% | 145/558 ms |
+| 2 | 8192/2048 | −0.0% | −7.4% | 247/247 ms |
+| 3 | 12000/1024 | −0.2% | +0.7% | 279/289 ms |
+| 4 | 16384/1024 | −0.2% | −1.1% | 375/767 ms |
+| 5 | 4096/4096 | +4.7% | +6.7% | 149/546 ms |
+| 6 | 6000/6000 | +1.6% | −3.2% | 157/581 ms |
+
+The apparently minimal ITL gains on WL4–6 are mostly a metric artifact. Pooled
+P99 changes by −3% to +7%, while request-level tail gaps improve by 51–73%.
+WL2 is the genuine weak saturated corner: LPT and DMC are tied in both
+throughput and request-level tail.
+
+### H800 SLO-aware WL1–6
+
+EDF target 100 ms, LPT with a 10 ms prediction guard. WL3–4 include the
+continued-prefill prefix fix below.
+
+| WL | LPT/DMC total tok/s | LPT throughput gain | request-max P99 (LPT/DMC) |
+|----|--------------------:|--------------------:|--------------------------:|
+| 1 | 7,721 / 6,745 | **+14.5%** | **97/655 ms** |
+| 2 | 6,886 / 6,763 | +1.8% | 115/575 ms |
+| 3 | 11,095 / 10,864 | +2.1% | **102/486 ms** |
+| 4 | 11,958 / 11,406 | **+4.8%** | **116/607 ms** |
+| 5 | 3,567 / 3,457 | +3.2% | **86/496 ms** |
+| 6 | 3,011 / 2,931 | +2.7% | **95/1,206 ms** |
+
+Representative Pareto slices:
+
+| ITL target | WL1 gain | WL3 gain | WL5 gain |
+|-----------:|---------:|---------:|---------:|
+| 50 ms | **+14.6%** | +2.7% | +0.8% |
+| 100 ms | **+14.5%** | +2.1% | +3.2% |
+| 150 ms | **+10.8%** | **+16.5%** | +4.1% |
+
+The persistent method shifts the throughput/latency curve rather than winning
+at only one target. The best regimes are short-to-medium prefills mixed with
+active decode (WL1 and the 2K–4K/512 search points, +9–16%); long decode-heavy
+WL5–6 gains are smaller in throughput but much larger in request-level ITL.
+
+### EDF continued-prefill model bug
+
+The controller previously called the latency model with `r_p=0` for every
+chunk. On later chunks of long prompts this under-predicted attention latency:
+at the 100 ms target, LPT request-max P99 rose from 97 ms on WL1 to 151 ms on
+WL4.
+
+Passing the unbounded prefix length directly is also invalid: the checked-in
+models were trained only for `r_p ∈ [0, 4096]`. Extrapolating to 8K–12K makes
+the MLP predict hundreds of milliseconds even for `n_p=0`, starving prefill.
+The fix passes the actual continued-prefix length and clamps it to the profiled
+domain. On matched runs:
+
+- WL3: throughput 10,955→11,095 tok/s and request-max P99 129→102 ms.
+- WL4: throughput 11,833→11,958 tok/s and request-max P99 151→116 ms.
+
+This improves both throughput and SLO attainment; it does not impose a minimum
+prefill chunk.
+
 ---
 
 ## Kernel-Level Results

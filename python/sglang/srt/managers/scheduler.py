@@ -94,6 +94,7 @@ from sglang.srt.managers.io_struct import (
     InitWeightsUpdateGroupReqInput,
     LoadLoRAAdapterReqInput,
     LoadLoRAAdapterReqOutput,
+    LoadSnapshotUpdate,
     OpenSessionReqInput,
     OpenSessionReqOutput,
     ProfileReq,
@@ -527,6 +528,13 @@ class Scheduler(
         # Init EDF latency predictor for SLO-aware chunk size control
         from sglang.srt.managers.edf_scheduler import try_load_latency_predictor
         self.edf_latency_predictor = try_load_latency_predictor()
+        # Avoid adding periodic queue scans to ordinary servers. Configuring a
+        # checkpoint explicitly opts this server into predicted-load telemetry.
+        self.enable_load_snapshot_publication = (
+            self.edf_latency_predictor is not None
+        )
+        self.load_snapshot_interval = max(float(server_args.load_watch_interval), 0.01)
+        self.next_load_snapshot_time = 0.0
 
         # Init the grammar backend for constrained generation
         self.grammar_queue: List[Req] = []
@@ -1164,6 +1172,7 @@ class Scheduler(
                 self.self_check_during_idle()
 
             self.last_batch = batch
+            self.publish_load_snapshot_if_due()
 
     @DynamicGradMode()
     def event_loop_overlap(self):
@@ -1192,6 +1201,7 @@ class Scheduler(
 
             self.launch_batch_sample_if_needed(batch_result)
             self.last_batch = batch
+            self.publish_load_snapshot_if_due()
 
             if envs.SGLANG_ENABLE_RUNTIME_MEM_LEAK_CHECK.get():
                 self._check_runtime_mem_leak()
@@ -2978,7 +2988,18 @@ class Scheduler(
             decode_remaining_tokens=decode_remaining_tokens,
             prefill_prefix_tokens=prefill_prefix_tokens,
             predicted_forward_ms=predicted_forward_ms,
+            snapshot_timestamp=time.time(),
         )
+
+    def publish_load_snapshot_if_due(self) -> None:
+        """Publish load without waiting for a tokenizer-originated control request."""
+        if not self.enable_load_snapshot_publication:
+            return
+        now = time.monotonic()
+        if now < self.next_load_snapshot_time:
+            return
+        self.next_load_snapshot_time = now + self.load_snapshot_interval
+        self.send_to_tokenizer.send_output(LoadSnapshotUpdate(load=self.get_load()))
 
     def get_internal_state(self, recv_req: GetInternalStateReq):
         ret = vars(get_global_server_args())

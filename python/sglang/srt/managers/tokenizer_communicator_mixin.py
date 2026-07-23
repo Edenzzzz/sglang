@@ -724,8 +724,18 @@ class TokenizerCommunicatorMixin:
         return [res.updated for res in responses]
 
     async def get_load(self: TokenizerManager) -> List[GetLoadReqOutput]:
+        if self.cached_load_snapshots:
+            return [
+                copy.deepcopy(load)
+                for _, load in sorted(self.cached_load_snapshots.items())
+            ]
+
         req = GetLoadReqInput()
-        return await self.get_load_communicator(req)
+        loads = await self.get_load_communicator(req)
+        for load in loads:
+            dp_rank = load.dp_rank if load.dp_rank is not None else 0
+            self.cached_load_snapshots[dp_rank] = load
+        return loads
 
     async def open_session(
         self, obj: OpenSessionReqInput, request: Optional[fastapi.Request] = None

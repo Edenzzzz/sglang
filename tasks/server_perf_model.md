@@ -62,9 +62,16 @@ dispatched `last_batch` during overlap scheduling, rather than incorrectly
 reporting zero active decodes, and no longer classifies fresh waiting requests
 (whose `extend_input_len` is initially zero) as decode.
 
-This signal is not yet safe to install in the router: under that same
-saturated smoke run a synchronous `/get_load` response was delayed by about
-six seconds, while the router's existing monitor defaults to 30-second polls
-and only updates power-of-two policies. Production routing should publish the
-snapshot asynchronously and validate incremental request/queue cost before
+The scheduler now publishes this snapshot over its existing tokenizer IPC at
+the server's 100 ms load-watch interval; `/get_load` serves the latest
+per-DP-rank copy without sending a control request back through the saturated
+scheduler. In a matched H800 N=20 peak-load run, 30 consecutive reads took
+0.78–1.13 ms and their timestamps advanced at roughly 100 ms, replacing the
+previous six-second synchronous delay. Total throughput was 2,921 tok/s versus
+2,959 tok/s in the preceding no-publication smoke run (-1.3%, within run
+noise), with exact output retokenization.
+
+The signal is fresh enough for routing, but is still only one-forward cost:
+the router's existing monitor defaults to 30-second polls and only updates
+power-of-two policies. Incremental request/queue cost must be validated before
 replacing request-count load inside the existing cache-imbalance guard.

@@ -58,7 +58,9 @@ from sglang.srt.managers.io_struct import (
     FreezeGCReq,
     GenerateReqInput,
     GetLoadReqInput,
+    GetLoadReqOutput,
     HealthCheckOutput,
+    LoadSnapshotUpdate,
     OpenSessionReqOutput,
     SessionParams,
     TokenizedEmbeddingReqInput,
@@ -331,6 +333,7 @@ class TokenizerManager(TokenizerCommunicatorMixin):
         # For load balancing
         self.current_load = 0
         self.current_load_lock = asyncio.Lock()
+        self.cached_load_snapshots: Dict[int, GetLoadReqOutput] = {}
 
         # Metrics
         if self.enable_metrics:
@@ -377,6 +380,7 @@ class TokenizerManager(TokenizerCommunicatorMixin):
                 ),
                 # For handling case when scheduler skips detokenizer and forwards back to the tokenizer manager, we ignore it.
                 (HealthCheckOutput, lambda x: None),
+                (LoadSnapshotUpdate, self._handle_load_snapshot_update),
             ]
         )
 
@@ -1380,6 +1384,12 @@ class TokenizerManager(TokenizerCommunicatorMixin):
             recv_obj = await self.recv_from_detokenizer.recv_pyobj()
             self._result_dispatcher(recv_obj)
             self.last_receive_tstamp = time.time()
+
+    def _handle_load_snapshot_update(self, recv_obj: LoadSnapshotUpdate):
+        dp_rank = recv_obj.load.dp_rank
+        self.cached_load_snapshots[
+            dp_rank if dp_rank is not None else 0
+        ] = recv_obj.load
 
     def _handle_batch_output(
         self,

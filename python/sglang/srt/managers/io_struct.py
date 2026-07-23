@@ -1544,6 +1544,15 @@ class GetLoadReqOutput(BaseReq):
     # Predicted milliseconds for the next full model forward. None means the
     # server has no latency checkpoint loaded; it is not a queue-drain estimate.
     predicted_forward_ms: Optional[float] = None
+    # Unix timestamp recorded by the scheduler that produced this snapshot.
+    snapshot_timestamp: Optional[float] = None
+
+
+@dataclass
+class LoadSnapshotUpdate(BaseReq):
+    """Unsolicited scheduler-to-tokenizer load publication."""
+
+    load: GetLoadReqOutput
 
 
 @dataclass

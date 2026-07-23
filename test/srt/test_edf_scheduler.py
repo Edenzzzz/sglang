@@ -12,6 +12,12 @@ class _Req:
         self._edf_last_step_time = time.monotonic() - elapsed_ms / 1000
 
 
+class _PriorityReq:
+    def __init__(self, priority=None):
+        self.priority = priority
+        self.last_tic = time.monotonic() - 1
+
+
 class TestEDFChunkControl(unittest.TestCase):
     def _compute(self, reqs, predictor, default=8192):
         with patch.object(edf_scheduler, "EDF_ENABLED", True):
@@ -120,6 +126,22 @@ class TestEDFChunkControl(unittest.TestCase):
                     ).item()
                 )
             self.assertAlmostEqual(predictor.predict(*values), expected, places=3)
+
+    def test_retracted_request_preserves_earlier_deadline(self):
+        req = _PriorityReq(priority=123.0)
+        with patch.object(edf_scheduler, "EDF_ENABLED", True):
+            edf_scheduler.edf_set_retracted_priority(req)
+        self.assertEqual(req.priority, 123.0)
+
+    def test_retracted_request_without_priority_uses_itl_deadline(self):
+        req = _PriorityReq()
+        with patch.object(edf_scheduler, "EDF_ENABLED", True):
+            edf_scheduler.edf_set_retracted_priority(req)
+        self.assertAlmostEqual(
+            req.priority,
+            req.last_tic + edf_scheduler.ITL_SLO_MS / 1000,
+            places=6,
+        )
 
 
 if __name__ == "__main__":

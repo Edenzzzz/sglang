@@ -1616,8 +1616,15 @@ class Scheduler(
             self.waiting_queue.append(req)
             req.time_stats.wait_queue_entry_time = time.perf_counter()
             # EDF: set priority to TTFT deadline if enabled
-            from sglang.srt.managers.edf_scheduler import edf_set_priority
-            edf_set_priority(req)
+            from sglang.srt.managers.edf_scheduler import (
+                edf_set_priority,
+                edf_set_retracted_priority,
+            )
+
+            if is_retracted:
+                edf_set_retracted_priority(req)
+            else:
+                edf_set_priority(req)
             trace_slice_end(RequestStage.REQUEST_PROCESS, req.rid, auto_next_anon=True)
         elif self.disaggregation_mode == DisaggregationMode.PREFILL:
             self._prefetch_kvcache(req)

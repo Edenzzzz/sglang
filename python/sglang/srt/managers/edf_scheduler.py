@@ -120,6 +120,25 @@ def edf_set_priority(req: "Req") -> None:
     req.priority = compute_ttft_deadline(req)
 
 
+def edf_set_retracted_priority(req: "Req") -> None:
+    """Keep an interrupted decode urgent when it returns to the wait queue.
+
+    A retracted request has already paid TTFT and may have a large generated
+    prefix to recompute. Resetting its arrival time assigns a new, late TTFT
+    deadline and can strand the stream behind the entire prefill backlog.
+    Preserve its original absolute deadline and only tighten it with the
+    already-missed/current ITL deadline.
+    """
+    if not EDF_ENABLED:
+        return
+
+    itl_deadline = compute_itl_deadline(req)
+    if req.priority is None:
+        req.priority = itl_deadline
+    else:
+        req.priority = min(req.priority, itl_deadline)
+
+
 def edf_compute_max_chunk_size(
     decode_reqs: List["Req"],
     default_chunk_size: int,

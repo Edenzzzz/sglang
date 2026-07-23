@@ -107,19 +107,19 @@ results below retokenize to at least 99.77% of the reported output count.
 | WL | LPT/DMC total tok/s | LPT gain | pooled P99 ITL (LPT/DMC) | request-max P99 (LPT/DMC) | worst ITL (LPT/DMC) |
 |---:|--------------------:|---------:|-----------------------------:|------------------------------:|-------------------------:|
 | 1 (4096/1024) | 15,190 / 13,601 | **+11.7%** | **38 / 52 ms** | **56 / 81 ms** | **59 / 81 ms** |
-| 2 (8192/2048) | 10,499 / 9,909 | **+6.0%** | **39 / 50 ms** | 313 / **165 ms** | 313 / **165 ms** |
+| 2 (8192/2048) | 10,505 / 9,909 | **+6.0%** | **37 / 50 ms** | **56 / 165 ms** | **57 / 165 ms** |
 | 3 (12000/1024) | 14,812 / 14,685 | +0.9% | **47 / 54 ms** | **69 / 344 ms** | **69 / 344 ms** |
 | 4 (16384/1024) | 13,795 / **13,900** | -0.8% | **45 / 55 ms** | **83 / 100 ms** | **83 / 100 ms** |
 | 5 (4096/4096) | 7,105 / 6,041 | **+17.6%** | **33 / 46 ms** | **56 / 325 ms** | **56 ms / 144 s** |
-| 6 (6000/6000) | 4,948 / 4,398 | **+12.5%** | **33 / 45 ms** | **54 / 60 ms** | **334 / 385 s** |
+| 6 (6000/6000) | 5,094 / 4,398 | **+15.8%** | **32 / 45 ms** | **52 / 60 ms** | **10.5 / 385 s** |
 
 This bridges the kernel-to-serving gap on five of six workloads: LPT provides
 6–18% more throughput on WL1/2/5/6 and a small gain on WL3 while lowering
 pooled P99 ITL by 13–29%. WL4 is the saturated exception: it trades 0.8%
 throughput for an 18% lower pooled P99. Request-level tails expose larger
-benefits on WL3/5 that pooled token percentiles hide. WL2 remains the genuine
-tail weakness: LPT is faster and has lower pooled P99, but one 313 ms request
-gap is worse than DMC's 165 ms maximum.
+benefits on WL3/5 that pooled token percentiles hide. WL2's former synchronized
+313 ms gap was caused by the zero-prefill stdout diagnostic; after gating it
+behind plotting, the worst gap is 57 ms and LPT dominates DMC on both axes.
 
 WL4 needs an additional predictor-domain guard: clamping every continued
 prefix to the model's 4K training boundary produced a 506 ms gap, while
@@ -137,9 +137,13 @@ workspace/indptr buffers did not repair it and were reverted. Only the
 no-graph DMC configuration is used above.
 
 Peak memory remains a separate limit. LPT is stable on WL5, while DMC retracts
-and stalls one stream for 144 seconds. Both methods retract on WL6, producing
-334–385 second maximum gaps even though their pooled P99 remains below 46 ms.
-These are admission/model failures, not attention-kernel failures.
+and stalls one stream for 144 seconds. On WL6, retracted requests previously
+received a fresh TTFT deadline and were demoted behind the entire prefill
+backlog. Preserving their original EDF priority reduces LPT's worst gap from
+334 seconds to 10.5 seconds despite two retractions, while increasing
+throughput from 4,948 to 5,094 tok/s. DMC still reaches a 385-second gap. The
+remaining 10.5-second recomputation penalty requires avoiding retraction or
+retaining active KV; it is no longer a queue-priority artifact.
 
 Long-output tests exposed a separate memory-capacity failure that pooled P99
 hides. WL5 with the normal 10 ms guard is stable at 7,105 tok/s and 56 ms

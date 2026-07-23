@@ -91,12 +91,41 @@ latency. At the 150 ms target, representative throughput gains remain +10.8%
 
 #### N=400 peak-load cache pressure
 
-Peak-load acceptance uses 400 requests. At the 50 ms target, WL1
-(4096/1024, rate 8) reaches 15,165 tok/s with 38.0 ms pooled P99 ITL,
-71.0 ms request-max P99, and no retractions. Initializing the next EDF
-candidate's radix match before prediction gives the model that request's
-actual device or HiCache prefix length; it is throughput-neutral on this
-zero-hit workload (the preceding implementation measured 15,166 tok/s).
+Peak-load acceptance uses 400 requests. A scheduler hot-path audit found that
+every mixed prefill chunk emitted an INFO record and that the non-fatal idle
+memory check could emit tens of thousands of identical ERROR records per
+second. Mixed-prefill logging now follows the existing decode interval, and
+memory-check failures are rate-limited. At the 50 ms target, LPT results on
+three distinct input-heavy workloads are:
+
+| WL | LPT total tok/s | pooled P99 ITL | request-max P99 |
+|---:|----------------:|---------------:|----------------:|
+| 1 (4096/1024) | 15,190 | 38 ms | 56 ms |
+| 3 (12000/1024) | 14,812 | 47 ms | 69 ms |
+| 4 (16384/1024) | 13,795 | 45 ms | 83 ms |
+
+WL1 and WL3 retain essentially all throughput while removing synchronized log
+stalls. WL4 needs an additional domain guard: clamping every continued prefix
+to the model's 4K training boundary produced a 506 ms gap, while projecting
+causal attention work only after the real prefix exceeds 12K reduces it to
+83 ms. This safe point costs 2.7% throughput versus the unsafe clamp, but is
+4.2% faster than projecting every prefix beyond 4K. It can still choose a
+zero-token prefill step and introduces no minimum prefill chunk.
+
+The attempted matched DMC sweep is excluded from this table: with the current
+private FlashInfer build, DMC plus decode CUDA graphs completes the nominal
+token count but emits repeated `!` tokens (only 12–24% of the reported output
+survives retokenization). Disabling CUDA graphs restores exact retokenization
+but roughly halves smoke-test throughput. Planner-hook and separate-workspace
+experiments did not repair the graph path and were reverted. A valid matched
+DMC rerun therefore requires fixing decode-graph correctness first; the
+earlier small-N DMC comparisons above remain the latest correctness-valid
+SLO comparison.
+
+The complete LPT sweep also confirms that peak memory remains a separate
+limit: WL2 retained a 313 ms outlier, WL5 a 351 ms outlier, and WL6 suffered a
+334-second gap after KV retraction. These are not hidden by the favorable
+WL1/3/4 table and remain admission/model work.
 
 Long-output tests exposed a separate memory-capacity failure that pooled P99
 hides. WL5 with the normal 10 ms guard is stable at 7,105 tok/s and 56 ms

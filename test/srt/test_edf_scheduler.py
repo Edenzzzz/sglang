@@ -80,6 +80,24 @@ class TestEDFChunkControl(unittest.TestCase):
 
         self.assertTrue(all(r_p == 4096 for n_p, r_p in seen_inputs if n_p > 0))
 
+    def test_projects_only_extreme_prefix_attention_work(self):
+        with (
+            patch.object(edf_scheduler, "MAX_PROFILED_PREFILL_PREFIX", 4096),
+            patch.object(edf_scheduler, "LONG_PREFIX_PROJECTION_THRESHOLD", 12288),
+        ):
+            ordinary_n, ordinary_r = edf_scheduler.project_extreme_prefix_work(
+                2048, 12000
+            )
+            extreme_n, extreme_r = edf_scheduler.project_extreme_prefix_work(
+                2048, 16384
+            )
+
+        self.assertEqual((ordinary_n, ordinary_r), (2048, 4096))
+        self.assertEqual(extreme_r, 4096)
+        original_work = 2048 * 16384 + 2048**2 / 2
+        projected_work = extreme_n * extreme_r + extreme_n**2 / 2
+        self.assertAlmostEqual(projected_work, original_work, places=5)
+
     def test_numpy_predictor_matches_checkpoint_model(self):
         predictor = edf_scheduler.LatencyPredictor(
             "tasks/perf_model/lpt_model.pt"

@@ -144,7 +144,18 @@ class SchedulerMetricsMixin:
             f += f"#inflight-req: {len(self.disagg_prefill_inflight_queue)}, "
             f += f"input throughput (token/s): {self.last_input_throughput:.2f}, "
 
-        logger.info(f)
+        # SLO-aware chunking can intentionally produce many small continued
+        # prefill batches.  Emitting an INFO line for every one puts file I/O
+        # directly on the scheduler hot path and has produced synchronized
+        # hundreds-of-milliseconds stream gaps under peak load.  Match decode
+        # logging cadence while retaining per-step DEBUG visibility.
+        if (
+            not self.is_mixed_chunk
+            or self.forward_ct % self.server_args.decode_log_interval == 0
+        ):
+            logger.info(f)
+        else:
+            logger.debug(f)
 
         if self.enable_metrics:
             # Basics

@@ -15,6 +15,7 @@ Usage:
 """
 
 import logging
+import math
 import os
 import time
 import numpy as np
@@ -48,6 +49,30 @@ PLAN_OVERHEAD_MS = float(os.environ.get("SGLANG_EDF_PLAN_OVERHEAD_MS", "0"))
 MAX_PROFILED_PREFILL_PREFIX = float(
     os.environ.get("SGLANG_EDF_MAX_PROFILED_PREFILL_PREFIX", "4096")
 )
+# Clamping remains the best throughput/ITL point through the 12K workload, but
+# becomes severely optimistic on later chunks of 16K prompts.  Only project
+# attention work once the actual prefix crosses this empirically validated
+# boundary.
+LONG_PREFIX_PROJECTION_THRESHOLD = float(
+    os.environ.get("SGLANG_EDF_LONG_PREFIX_PROJECTION_THRESHOLD", "12288")
+)
+
+
+def project_extreme_prefix_work(
+    n_p: int, prefill_prefix_len: float
+) -> tuple[float, float]:
+    """Map extreme-prefix causal attention work into the model's r_p domain."""
+    prefix = max(float(prefill_prefix_len), 0.0)
+    if n_p <= 0 or prefix <= LONG_PREFIX_PROJECTION_THRESHOLD:
+        return float(n_p), min(prefix, MAX_PROFILED_PREFILL_PREFIX)
+
+    # Preserve n*r + n^2/2 at the largest trained prefix.  This is
+    # conservative because it also increases the MLP-token feature, but unlike
+    # unconstrained MLP extrapolation it remains inside the r_p domain.
+    work = float(n_p) * prefix + float(n_p) * float(n_p) / 2.0
+    boundary = MAX_PROFILED_PREFILL_PREFIX
+    equivalent_n_p = math.sqrt(boundary * boundary + 2.0 * work) - boundary
+    return equivalent_n_p, boundary
 
 
 def compute_ttft_slo_ms(input_len: int) -> float:
@@ -121,9 +146,7 @@ def edf_compute_max_chunk_size(
 
     now = time.monotonic()
     decode_bs = len(decode_reqs)
-    prefill_prefix_len = min(
-        max(prefill_prefix_len, 0), MAX_PROFILED_PREFILL_PREFIX
-    )
+    prefill_prefix_len = max(prefill_prefix_len, 0)
 
     # Slack budget for the next forward step. Decode loop runs continuously, so
     # the previous step's time-of-completion is essentially "now". We track an
@@ -152,8 +175,11 @@ def edf_compute_max_chunk_size(
     best = 0
     while lo <= hi:
         mid = (lo + hi) // 2
+        model_n_p, model_r_p = project_extreme_prefix_work(
+            mid, prefill_prefix_len
+        )
         predicted_ms = (
-            model_predict_fn(mid, prefill_prefix_len, decode_avg_kv, decode_bs)
+            model_predict_fn(model_n_p, model_r_p, decode_avg_kv, decode_bs)
             * LATENCY_SAFETY_MARGIN
             + PLAN_OVERHEAD_MS
         )

@@ -2761,6 +2761,14 @@ class Scheduler(
 
     def get_load(self, recv_req: GetLoadReqInput = None) -> GetLoadReqOutput:
         # TODO(lsyin): use dynamically maintained num_waiting_tokens
+        # In overlap + mixed-chunk scheduling, get_new_batch_prefill moves the
+        # decode requests into the dispatched batch and temporarily clears
+        # running_batch.  Control requests are received before the next batch
+        # is merged back, so consult last_batch in that window; otherwise
+        # /get_load reports zero active decodes at peak load.
+        load_batch = self.running_batch
+        if load_batch.is_empty() and self.last_batch is not None:
+            load_batch = self.last_batch
 
         if self.is_hybrid:
             num_tokens_full = (
@@ -2798,34 +2806,70 @@ class Scheduler(
             )
             num_waiting_reqs += len(self.disagg_decode_prealloc_queue.queue)
 
-        # Compute decode and prefill token counts from running batch
-        # Use seq_lens - prefix_lens: == 1 for decode, > 1 for prefill
-        if not self.running_batch.is_empty():
-            if self.running_batch.forward_mode.is_decode():
-                num_decode_tokens = len(self.running_batch.reqs)
-                num_prefill_tokens = 0
+        # Describe the actual forward workload, not just request count.  These
+        # values feed server-cost-aware routing, where decode batch size and
+        # aggregate KV length have very different costs from the same number
+        # of uncached prefill tokens.
+        num_decode_tokens = 0
+        num_prefill_tokens = 0
+        decode_batch_size = 0
+        decode_kv_tokens = 0
+        decode_remaining_tokens = 0
+        prefill_prefix_tokens = 0
+
+        def remaining_decode_tokens(req):
+            max_new_tokens = req.sampling_params.max_new_tokens
+            return max(0, (max_new_tokens or 0) - len(req.output_ids))
+
+        def add_decode_req(req):
+            nonlocal decode_batch_size, decode_kv_tokens
+            decode_batch_size += 1
+            decode_kv_tokens += len(req.fill_ids)
+
+        # Compute decode and prefill token counts from the running batch.
+        # extend_len == 1 identifies a decode row in a mixed extend batch.
+        if not load_batch.is_empty():
+            if load_batch.forward_mode.is_decode():
+                num_decode_tokens = len(load_batch.reqs)
+                for req in load_batch.reqs:
+                    add_decode_req(req)
             else:
-                # prefix_lens should be set by prepare_for_extend() for prefill/extend batches
-                if self.running_batch.prefix_lens is not None:
-                    # Compute seq_lens - prefix_lens
-                    new_tokens = self.running_batch.extend_lens
-                    num_decode_tokens += int((new_tokens == 1).sum())
-                    num_prefill_tokens += int((new_tokens > 1).sum())
+                extend_lens = load_batch.extend_lens
+                if extend_lens is not None:
+                    extend_lens_list = (
+                        extend_lens.tolist()
+                        if hasattr(extend_lens, "tolist")
+                        else extend_lens
+                    )
+                    for req, extend_len in zip(load_batch.reqs, extend_lens_list):
+                        extend_len = int(extend_len)
+                        if extend_len == 1:
+                            num_decode_tokens += 1
+                            add_decode_req(req)
+                        elif extend_len > 1:
+                            num_prefill_tokens += extend_len
+                            prefill_prefix_tokens += max(
+                                len(req.prefix_indices), req.host_hit_length
+                            )
 
         # Also count tokens in waiting queue
         if self.waiting_queue:
-            waiting_extend_lens = torch.tensor(
-                [req.extend_input_len for req in self.waiting_queue],
-                dtype=torch.int32,
-            )
-            prefill_mask = waiting_extend_lens > 1
-            num_decode_tokens += int(waiting_extend_lens[~prefill_mask].sum())
+            for req in self.waiting_queue:
+                # Fresh and retracted requests both require an extend/prefill
+                # before they can join the running decode batch.  A fresh Req
+                # has extend_input_len=0 until prefix matching, so using that
+                # field here misclassifies the whole waiting queue as decode.
+                materialized_len = len(req.fill_ids)
+                total_len = materialized_len or (
+                    len(req.origin_input_ids) + len(req.output_ids)
+                )
+                prefix_len = max(len(req.prefix_indices), req.host_hit_length)
+                num_prefill_tokens += max(total_len - prefix_len, 0)
+                prefill_prefix_tokens += prefix_len
+                decode_remaining_tokens += remaining_decode_tokens(req)
 
-            num_prefill_tokens += (
-                int(waiting_extend_lens[prefill_mask].sum())
-                if prefill_mask.any()
-                else 0
-            )
+        for req in load_batch.reqs:
+            decode_remaining_tokens += remaining_decode_tokens(req)
 
         # Count tokens in disaggregation queues
         if self.disaggregation_mode == DisaggregationMode.PREFILL:
@@ -2867,11 +2911,15 @@ class Scheduler(
 
         return GetLoadReqOutput(
             dp_rank=self.dp_rank,
-            num_reqs=len(self.running_batch.reqs) + num_waiting_reqs,
+            num_reqs=len(load_batch.reqs) + num_waiting_reqs,
             num_waiting_reqs=num_waiting_reqs,
             num_tokens=num_tokens,
             num_decode_tokens=num_decode_tokens,
             num_prefill_tokens=num_prefill_tokens,
+            decode_batch_size=decode_batch_size,
+            decode_kv_tokens=decode_kv_tokens,
+            decode_remaining_tokens=decode_remaining_tokens,
+            prefill_prefix_tokens=prefill_prefix_tokens,
         )
 
     def get_internal_state(self, recv_req: GetInternalStateReq):

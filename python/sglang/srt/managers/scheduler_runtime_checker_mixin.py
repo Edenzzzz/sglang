@@ -19,6 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 class SchedulerRuntimeCheckerMixin:
+    def _log_memory_check_error(self: Scheduler, msg: str):
+        """Rate-limit non-fatal memory-check failures in the idle hot loop."""
+        now = time.monotonic()
+        last_log_time = getattr(self, "_last_memory_check_error_log_time", 0.0)
+        if now - last_log_time >= 30.0:
+            logger.error(msg)
+            self._last_memory_check_error_log_time = now
 
     def _check_hybrid_memory(self: Scheduler):
         (
@@ -140,7 +147,7 @@ class SchedulerRuntimeCheckerMixin:
             )
             # Workaround: log warning instead of crash (upstream fix: 027f314)
             # The data race causing double-frees is fixed in public/main.
-            logger.error(msg)
+            self._log_memory_check_error(msg)
             # Reset free_slots to prevent cascading issues
             self.req_to_token_pool.free_slots = list(range(self.req_to_token_pool.size))
 
@@ -155,7 +162,7 @@ class SchedulerRuntimeCheckerMixin:
         if memory_leak:
             msg = "token_to_kv_pool_allocator memory leak detected! " f"{token_msg}"
             # Workaround: log warning instead of crash (upstream fix: 027f314)
-            logger.error(msg)
+            self._log_memory_check_error(msg)
             return
 
         self._check_req_pool()

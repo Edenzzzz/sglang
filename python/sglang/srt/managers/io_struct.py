@@ -1533,8 +1533,14 @@ class GetLoadReqOutput(BaseReq):
     num_reqs: int
     num_waiting_reqs: int
     num_tokens: int
+    # Workload-shape telemetry for server-cost-aware routing.  Keep the
+    # existing token fields for wire compatibility with older routers.
     num_decode_tokens: int = 0
     num_prefill_tokens: int = 0
+    decode_batch_size: int = 0
+    decode_kv_tokens: int = 0
+    decode_remaining_tokens: int = 0
+    prefill_prefix_tokens: int = 0
 
 
 @dataclass

@@ -45,7 +45,13 @@ when both absolute and relative thresholds trigger it selects minimum
 miss). `worker.load()` is the number of active requests, not token or predicted
 load. A model-based router should preserve that gate but compare incremental
 predicted server cost inside the permitted imbalance region. `SelectWorkerInfo`
-already carries tokenized input, while `/get_load` reports aggregate token
-counts; accurate inference additionally needs aggregate decode KV length,
-decode batch size, expected output length, and the candidate's prefix-token
-hit.
+already carries tokenized input. `/get_load` now reports decode batch size,
+aggregate decode KV, remaining expected decode tokens, pending prefill tokens,
+and aggregate prefix hits. It also falls back to the dispatched `last_batch`
+during overlap scheduling, rather than incorrectly reporting zero active
+decodes, and no longer classifies fresh waiting requests (whose
+`extend_input_len` is initially zero) as decode. These fields are sufficient
+for a server-cost snapshot, but synchronous `/get_load` can itself be delayed
+under saturation; production routing should publish the snapshot
+asynchronously before replacing request-count load inside the existing
+cache-imbalance guard.

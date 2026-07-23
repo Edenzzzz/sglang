@@ -83,6 +83,34 @@ at only one target. The best regimes are short-to-medium prefills mixed with
 active decode (WL1 and the 2K–4K/512 search points, +9–16%); long decode-heavy
 WL5–6 gains are smaller in throughput but much larger in request-level ITL.
 
+### EDF controller hot path
+
+Exact chunk selection evaluates the latency MLP once for pure decode and
+roughly 12–14 more times during binary search. Evaluating this small CPU model
+through PyTorch cost 56.5 us per prediction on the H800 serving host, or about
+0.7 ms per admission decision. Extracting the four linear layers once at load
+time and evaluating them directly with NumPy reduces prediction latency to
+11.0 us (5.1x). Predictions across decode-only, maximum-profiled, and
+intermediate inputs agree within 0.001 ms. The exact integer binary search is
+unchanged and can still return a zero-token prefill chunk.
+
+A matched 40-request H800 safety run at the 100 ms target covered every
+workload rather than only the favorable WL1 case:
+
+| WL | Total tok/s | pooled P99 ITL | request-max P99 |
+|----|------------:|---------------:|----------------:|
+| 1 | 7,750 | 81.9 ms | 97.7 ms |
+| 2 | 6,886 | 79.0 ms | 93.2 ms |
+| 3 | 11,030 | 88.1 ms | 102.8 ms |
+| 4 | 11,852 | 102.0 ms | 117.2 ms |
+| 5 | 3,563 | 29.1 ms | 84.0 ms |
+| 6 | 3,012 | 20.5 ms | 84.1 ms |
+
+All six throughput results are within 1% of the preceding PyTorch-predictor
+runs. Thus this removes scheduler CPU overhead without changing the SLO
+policy, but the saturated workloads remain GPU-bound and do not convert the
+CPU saving into a measurable token-throughput increase.
+
 ### EDF continued-prefill model bug
 
 The controller previously called the latency model with `r_p=0` for every

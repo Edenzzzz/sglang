@@ -2,6 +2,8 @@ import time
 import unittest
 from unittest.mock import patch
 
+import numpy as np
+
 from sglang.srt.managers import edf_scheduler
 
 
@@ -77,6 +79,29 @@ class TestEDFChunkControl(unittest.TestCase):
             )
 
         self.assertTrue(all(r_p == 4096 for n_p, r_p in seen_inputs if n_p > 0))
+
+    def test_numpy_predictor_matches_checkpoint_model(self):
+        predictor = edf_scheduler.LatencyPredictor(
+            "tasks/perf_model/lpt_model.pt"
+        )
+        inputs = [
+            (0, 0, 100, 1),
+            (4096, 4096, 10000, 200),
+            (1173, 3000, 4000, 80),
+        ]
+
+        import torch
+
+        for values in inputs:
+            x = np.asarray([*values, 0.0], dtype=np.float32)
+            x_norm = (x - predictor.X_mean) / predictor.X_std
+            with torch.no_grad():
+                expected = float(
+                    torch.expm1(
+                        predictor.model(torch.from_numpy(x_norm).unsqueeze(0))
+                    ).item()
+                )
+            self.assertAlmostEqual(predictor.predict(*values), expected, places=3)
 
 
 if __name__ == "__main__":

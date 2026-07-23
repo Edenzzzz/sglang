@@ -202,6 +202,23 @@ class LatencyPredictor:
         self.model = _Net(layers)
         self.model.load_state_dict(checkpoint["model_state"])
         self.model.eval()
+
+        # This predictor is invoked once for pure decode and O(log(chunk_size))
+        # times by every EDF admission decision. Calling a tiny CPU MLP through
+        # PyTorch has substantially more dispatcher overhead than arithmetic
+        # (about 55 us per call on the serving host). Keep the loaded module for
+        # checkpoint compatibility, but extract the four Linear layers once and
+        # evaluate the hot path directly with NumPy.
+        self.X_mean = np.asarray(self.X_mean, dtype=np.float32)
+        self.X_std = np.asarray(self.X_std, dtype=np.float32)
+        self._linear_params = [
+            (
+                layer.weight.detach().cpu().numpy().astype(np.float32, copy=True),
+                layer.bias.detach().cpu().numpy().astype(np.float32, copy=True),
+            )
+            for layer in self.model.net
+            if isinstance(layer, nn.Linear)
+        ]
         logger.info(f"EDF latency model loaded: features={checkpoint.get('feature_names', 'unknown')}")
 
     def predict(self, n_p: int, r_p: float, r_d: float, decode_bs: int) -> float:
@@ -209,13 +226,13 @@ class LatencyPredictor:
 
         Uses overlap=False (non-overlapped execution) for conservative estimate.
         """
-        import torch
-
-        x = np.array([[n_p, r_p, r_d, decode_bs, 0.0]], dtype=np.float32)
+        x = np.asarray([n_p, r_p, r_d, decode_bs, 0.0], dtype=np.float32)
         x_norm = (x - self.X_mean) / self.X_std
-        with torch.no_grad():
-            pred_log = self.model(torch.tensor(x_norm))
-            return float(torch.expm1(pred_log).item())
+        for i, (weight, bias) in enumerate(self._linear_params):
+            x_norm = weight @ x_norm + bias
+            if i + 1 < len(self._linear_params):
+                np.maximum(x_norm, 0, out=x_norm)
+        return float(np.expm1(x_norm[0]))
 
 
 def try_load_latency_predictor() -> Optional[LatencyPredictor]:

@@ -1099,21 +1099,7 @@ class CudaGraphRunner:
 
         # Replay
         if self._is_mixed_replay:
-            if not hasattr(self, '_mixed_replay_count'):
-                self._mixed_replay_count = 0
-                self._decode_replay_count = 0
-                self._non_cg_mixed_count = 0
-            self._mixed_replay_count += 1
-            if self._mixed_replay_count % 50 == 1:
-                import sys
-                print(f"[MIXED CG] replay #{self._mixed_replay_count} bs={self.bs} raw_tokens={self.raw_num_token} raw_bs={self.raw_bs} (decode_cg: {self._decode_replay_count}, non_cg_mixed: {self._non_cg_mixed_count})", file=sys.stderr, flush=True)
             self.mixed_graphs[self.bs].replay()
-            try:
-                torch.cuda.synchronize()
-            except Exception as e:
-                import sys
-                print(f"[MIXED CG CRASH] bs={self.bs} raw_bs={self.raw_bs} raw_num_token={self.raw_num_token}", file=sys.stderr, flush=True)
-                raise
             output = self.mixed_output_buffers[self.bs]
             assert isinstance(output, LogitsProcessorOutput)
             hidden_states = output.hidden_states[: self.raw_num_token]
@@ -1131,8 +1117,6 @@ class CudaGraphRunner:
                 hidden_states=hidden_states,
             )
         else:
-            if hasattr(self, '_decode_replay_count'):
-                self._decode_replay_count += 1
             self.graphs[self.bs].replay()
 
             output = self.output_buffers[self.bs]

@@ -43,15 +43,29 @@ if envs.SGLANG_ENABLE_TORCH_COMPILE.get():
 
 
 if is_flashinfer_available():
+    import flashinfer
     from flashinfer import (
         BatchAttention,
         BatchDecodeWithPagedKVCacheWrapper,
-        BatchPODWithPagedKVCacheWrapper,
         BatchPrefillWithPagedKVCacheWrapper,
         BatchPrefillWithRaggedKVCacheWrapper,
-        fast_decode_plan,
     )
     from flashinfer.cascade import merge_state
+
+    fast_decode_plan = getattr(flashinfer, "fast_decode_plan", None)
+
+    # BatchPOD is not part of every FlashInfer build. Keep it optional so a
+    # persistent-only build does not fail at module import time.
+    _batch_pod_wrapper = getattr(
+        flashinfer, "BatchPODWithPagedKVCacheWrapper", None
+    )
+    _batch_pod_available = _batch_pod_wrapper is not None
+    if _batch_pod_available:
+        BatchPODWithPagedKVCacheWrapper = _batch_pod_wrapper
+    else:
+
+        class BatchPODWithPagedKVCacheWrapper:
+            pass
 
 
 class WrapperDispatch(Enum):
@@ -188,6 +202,11 @@ class FlashInferAttnBackend(AttentionBackend):
         self.use_persistent = envs.SGLANG_FLASHINFER_USE_PERSISTENT.get()
         self.use_pod = envs.SGLANG_FLASHINFER_USE_POD.get()
         self.no_flipped_schedule = envs.SGLANG_FLASHINFER_NO_FLIPPED_SCHEDULE.get()
+        if self.use_pod and not _batch_pod_available:
+            raise RuntimeError(
+                "SGLANG_FLASHINFER_USE_POD requires a FlashInfer build with "
+                "BatchPODWithPagedKVCacheWrapper"
+            )
         if self.use_pod and self.use_persistent:
             raise ValueError(
                 "SGLANG_FLASHINFER_USE_POD and SGLANG_FLASHINFER_USE_PERSISTENT cannot both be True"
@@ -285,12 +304,13 @@ class FlashInferAttnBackend(AttentionBackend):
                         "NHD",
                     )
                 )
-                self.pod_wrappers.append(
-                    BatchPODWithPagedKVCacheWrapper(
-                        self.workspace_buffer,
-                        "NHD",
+                if self.use_pod:
+                    self.pod_wrappers.append(
+                        BatchPODWithPagedKVCacheWrapper(
+                            self.workspace_buffer,
+                            "NHD",
+                        )
                     )
-                )
             self.decode_wrappers.append(
                 BatchDecodeWithPagedKVCacheWrapper(
                     self.workspace_buffer,
@@ -708,10 +728,11 @@ class FlashInferAttnBackend(AttentionBackend):
             self.forward_metadata = DecodeMetadata(decode_wrappers)
             # Enable fast_decode_plan for all configs (including persistent,
             # since decode steps now always use BatchDecodeWithPagedKVCacheWrapper)
-            for i in range(self.num_wrappers):
-                decode_wrappers[i].plan = partial(
-                    fast_decode_plan, decode_wrappers[i]
-                )
+            if fast_decode_plan is not None:
+                for i in range(self.num_wrappers):
+                    decode_wrappers[i].plan = partial(
+                        fast_decode_plan, decode_wrappers[i]
+                    )
 
         elif forward_mode.is_target_verify():
             prefill_wrappers = []
@@ -1339,7 +1360,8 @@ class FlashInferIndicesUpdaterDecode:
         # Check if this specific wrapper's begin_forward has been replaced with fast_decode_plan
         # by checking if it's a partial function with fast_decode_plan as the func
         wrapper_uses_fast_decode_plan = (
-            hasattr(wrapper.begin_forward, "func")
+            fast_decode_plan is not None
+            and hasattr(wrapper.begin_forward, "func")
             and wrapper.begin_forward.func == fast_decode_plan
         )
 

@@ -18,8 +18,7 @@ class TestEDFChunkControl(unittest.TestCase):
             )
 
     def test_uses_decode_only_when_decode_is_already_late(self):
-        with patch.object(edf_scheduler, "ALLOW_DECODE_ONLY", True):
-            chunk = self._compute([_Req(edf_scheduler.ITL_SLO_MS + 1)], lambda *_: 1)
+        chunk = self._compute([_Req(edf_scheduler.ITL_SLO_MS + 1)], lambda *_: 1)
         self.assertEqual(chunk, 0)
 
     def test_uses_decode_only_when_minimum_chunk_does_not_fit(self):
@@ -27,18 +26,16 @@ class TestEDFChunkControl(unittest.TestCase):
         def predictor(n_p, *_):
             return 5 if n_p == 0 else 200
 
-        with patch.object(edf_scheduler, "ALLOW_DECODE_ONLY", True):
-            chunk = self._compute([_Req(0)], predictor)
+        chunk = self._compute([_Req(0)], predictor)
         self.assertEqual(chunk, 0)
 
-    def test_legacy_minimum_chunk_is_available_for_ablation(self):
-        with patch.object(edf_scheduler, "ALLOW_DECODE_ONLY", False):
-            chunk = self._compute([_Req(edf_scheduler.ITL_SLO_MS + 1)], lambda *_: 1)
-        self.assertEqual(chunk, edf_scheduler.MIN_PREFILL_CHUNK_SIZE)
+    def test_returns_feasible_chunk_below_legacy_minimum(self):
+        chunk = self._compute([_Req(0)], lambda n_p, *_: 50 + n_p / 10)
+        self.assertGreaterEqual(chunk, 490)
+        self.assertLess(chunk, 512)
 
     def test_returns_largest_feasible_chunk(self):
-        with patch.object(edf_scheduler, "ALLOW_DECODE_ONLY", True):
-            chunk = self._compute([_Req(0)], lambda n_p, *_: 5 + n_p / 100)
+        chunk = self._compute([_Req(0)], lambda n_p, *_: 5 + n_p / 100)
         self.assertEqual(chunk, 8192)
 
 

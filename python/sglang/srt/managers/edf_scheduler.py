@@ -42,20 +42,6 @@ LATENCY_SAFETY_MARGIN = float(os.environ.get("SGLANG_EDF_LATENCY_SAFETY", "1.0")
 # cooperative launch overhead per mixed batch step. Without this, chunk
 # control allows chunks that produce max ITL ~7ms above the SLO threshold.
 PLAN_OVERHEAD_MS = float(os.environ.get("SGLANG_EDF_PLAN_OVERHEAD_MS", "0"))
-# When no prefill chunk fits the remaining decode slack, let the scheduler run
-# one pure-decode recovery step.  The next completion refreshes
-# `_edf_last_step_time`, so this does not permanently starve prefills.  The old
-# behavior forced a 512-token chunk even when the predictor said it would miss
-# the nearest ITL deadline, creating exactly the tail violations this
-# controller is meant to prevent.
-ALLOW_DECODE_ONLY = os.environ.get("SGLANG_EDF_ALLOW_DECODE_ONLY", "1") == "1"
-# Bound recovery bursts so a permanently overloaded decode batch cannot starve
-# queued prefills. Scheduler.get_new_batch_prefill enforces this limit and then
-# admits one minimum-sized chunk before another recovery burst.
-MAX_DECODE_ONLY_STEPS = int(os.environ.get("SGLANG_EDF_MAX_DECODE_ONLY_STEPS", "1"))
-MIN_PREFILL_CHUNK_SIZE = int(
-    os.environ.get("SGLANG_EDF_MIN_PREFILL_CHUNK_SIZE", "512")
-)
 
 
 def compute_ttft_slo_ms(input_len: int) -> float:
@@ -138,10 +124,6 @@ def edf_compute_max_chunk_size(
         if slack < min_slack_ms:
             min_slack_ms = slack
 
-    # Keep a practical lower bound for mixed steps. If it cannot fit, return 0
-    # and let Scheduler.get_next_batch choose a pure-decode recovery step.
-    min_chunk = min(MIN_PREFILL_CHUNK_SIZE, default_chunk_size)
-
     # If pure decode alone already exceeds slack, adding prefill can only deepen
     # the violation. A pure-decode step lets overdue requests catch up and
     # refreshes their slack before the next admission decision.
@@ -150,7 +132,7 @@ def edf_compute_max_chunk_size(
         + PLAN_OVERHEAD_MS
     )
     if min_slack_ms <= 0 or decode_only_ms > min_slack_ms:
-        return 0 if ALLOW_DECODE_ONLY else min_chunk
+        return 0
 
     # Binary search for max chunk size that fits within slack
     lo, hi = 0, default_chunk_size
@@ -168,8 +150,6 @@ def edf_compute_max_chunk_size(
         else:
             hi = mid - 1
 
-    if best < min_chunk:
-        return 0 if ALLOW_DECODE_ONLY else min_chunk
     return best
 
 

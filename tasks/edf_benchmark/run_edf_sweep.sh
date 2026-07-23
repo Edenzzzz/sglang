@@ -3,14 +3,21 @@
 # All runs with --enable-priority-scheduling + EDF env vars + SLO-aware chunk control
 set -u
 
-MODEL="Qwen/Qwen3-8B"
-PORT=30000
-RESULTS_DIR="tasks/edf_benchmark/results"
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
+cd "$REPO_ROOT"
+
+MODEL="${MODEL:-Qwen/Qwen3-8B}"
+PORT="${PORT:-30000}"
+RESULTS_DIR="${RESULTS_DIR:-$SCRIPT_DIR/results}"
 mkdir -p "$RESULTS_DIR"
 RATES="${RATES:-2 4 8 12 16 24 inf}"
+METHODS="${METHODS:-PP DMC LPT_CG}"
+WORKLOAD_FILTER="${WORKLOAD_FILTER:-}"
+NUM_PROMPTS_OVERRIDE="${NUM_PROMPTS_OVERRIDE:-}"
 
-LPT_MODEL="/mlx_devbox/users/wenxuan.tan/playground/sglang/tasks/perf_model/lpt_model.pt"
-DMC_MODEL="/mlx_devbox/users/wenxuan.tan/playground/sglang/tasks/perf_model/dmc_model.pt"
+LPT_MODEL="${LPT_MODEL:-$REPO_ROOT/tasks/perf_model/lpt_model.pt}"
+DMC_MODEL="${DMC_MODEL:-$REPO_ROOT/tasks/perf_model/dmc_model.pt}"
 
 kill_all() {
     pkill -9 -f "launch_server.*$PORT" 2>/dev/null || true
@@ -102,9 +109,15 @@ WORKLOADS=(
     "swe:swe-gym:100:5000:150:"
 )
 
-for METHOD in PP DMC LPT_CG; do
+for METHOD in $METHODS; do
     for wl_info in "${WORKLOADS[@]}"; do
         IFS=: read -r wl dataset num ttft itl extra <<< "$wl_info"
+        if [ -n "$WORKLOAD_FILTER" ] && [ "$wl" != "$WORKLOAD_FILTER" ]; then
+            continue
+        fi
+        if [ -n "$NUM_PROMPTS_OVERRIDE" ]; then
+            num=$NUM_PROMPTS_OVERRIDE
+        fi
         echo ""
         echo "===== $METHOD / $wl ====="
         kill_all

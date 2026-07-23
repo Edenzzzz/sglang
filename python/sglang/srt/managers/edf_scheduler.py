@@ -42,6 +42,20 @@ LATENCY_SAFETY_MARGIN = float(os.environ.get("SGLANG_EDF_LATENCY_SAFETY", "1.0")
 # cooperative launch overhead per mixed batch step. Without this, chunk
 # control allows chunks that produce max ITL ~7ms above the SLO threshold.
 PLAN_OVERHEAD_MS = float(os.environ.get("SGLANG_EDF_PLAN_OVERHEAD_MS", "0"))
+# When no prefill chunk fits the remaining decode slack, let the scheduler run
+# one pure-decode recovery step.  The next completion refreshes
+# `_edf_last_step_time`, so this does not permanently starve prefills.  The old
+# behavior forced a 512-token chunk even when the predictor said it would miss
+# the nearest ITL deadline, creating exactly the tail violations this
+# controller is meant to prevent.
+ALLOW_DECODE_ONLY = os.environ.get("SGLANG_EDF_ALLOW_DECODE_ONLY", "1") == "1"
+# Bound recovery bursts so a permanently overloaded decode batch cannot starve
+# queued prefills. Scheduler.get_new_batch_prefill enforces this limit and then
+# admits one minimum-sized chunk before another recovery burst.
+MAX_DECODE_ONLY_STEPS = int(os.environ.get("SGLANG_EDF_MAX_DECODE_ONLY_STEPS", "1"))
+MIN_PREFILL_CHUNK_SIZE = int(
+    os.environ.get("SGLANG_EDF_MIN_PREFILL_CHUNK_SIZE", "512")
+)
 
 
 def compute_ttft_slo_ms(input_len: int) -> float:
@@ -124,38 +138,38 @@ def edf_compute_max_chunk_size(
         if slack < min_slack_ms:
             min_slack_ms = slack
 
-    # MIN_CHUNK floor: a chunk smaller than this causes the adder to make zero
-    # progress, starving the queue and triggering watchdog timeout. 512 admits
-    # at least one short prompt while still throttling large prefills.
-    MIN_CHUNK = 512
+    # Keep a practical lower bound for mixed steps. If it cannot fit, return 0
+    # and let Scheduler.get_next_batch choose a pure-decode recovery step.
+    min_chunk = min(MIN_PREFILL_CHUNK_SIZE, default_chunk_size)
 
-    # If pure decode alone already exceeds slack, restricting prefills can't
-    # rescue already-violated requests — but we MUST still throttle to MIN_CHUNK
-    # rather than fall back to default_chunk_size. Falling back to the full
-    # default at saturation lets a 9K-token prefill block decodes for hundreds
-    # of ms, deepening the violation cascade. With MIN_CHUNK we cap added
-    # prefill latency to ~10-20ms so the not-yet-violated decodes stay safe and
-    # already-violated decodes catch up faster. (Verified on nebius-swe-traj
-    # 1k sweep: the fall-back-to-default branch produced near-baseline P99 ITL
-    # of ~290ms; the throttled branch is what makes chunk control useful.)
-    decode_only_ms = model_predict_fn(0, 0, decode_avg_kv, decode_bs) * LATENCY_SAFETY_MARGIN + PLAN_OVERHEAD_MS
+    # If pure decode alone already exceeds slack, adding prefill can only deepen
+    # the violation. A pure-decode step lets overdue requests catch up and
+    # refreshes their slack before the next admission decision.
+    decode_only_ms = (
+        model_predict_fn(0, 0, decode_avg_kv, decode_bs) * LATENCY_SAFETY_MARGIN
+        + PLAN_OVERHEAD_MS
+    )
     if min_slack_ms <= 0 or decode_only_ms > min_slack_ms:
-        return min(MIN_CHUNK, default_chunk_size)
+        return 0 if ALLOW_DECODE_ONLY else min_chunk
 
     # Binary search for max chunk size that fits within slack
     lo, hi = 0, default_chunk_size
     best = 0
     while lo <= hi:
         mid = (lo + hi) // 2
-        predicted_ms = model_predict_fn(mid, 0, decode_avg_kv, decode_bs) * LATENCY_SAFETY_MARGIN + PLAN_OVERHEAD_MS
+        predicted_ms = (
+            model_predict_fn(mid, 0, decode_avg_kv, decode_bs)
+            * LATENCY_SAFETY_MARGIN
+            + PLAN_OVERHEAD_MS
+        )
         if predicted_ms <= min_slack_ms:
             best = mid
             lo = mid + 1
         else:
             hi = mid - 1
 
-    if best < MIN_CHUNK:
-        return min(MIN_CHUNK, default_chunk_size)
+    if best < min_chunk:
+        return 0 if ALLOW_DECODE_ONLY else min_chunk
     return best
 
 

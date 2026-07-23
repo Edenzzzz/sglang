@@ -1946,6 +1946,9 @@ class Scheduler(
         if (
             self.running_batch.batch_is_full or len(self.waiting_queue) == 0
         ) and self.chunked_req is None:
+            # A recovery burst is consecutive only while prefill work is
+            # actually waiting. Do not carry stale state into a later arrival.
+            self._edf_decode_only_steps = 0
             return None
 
         running_bs = len(self.running_batch.reqs)
@@ -1976,10 +1979,23 @@ class Scheduler(
 
         # SLO-aware chunk size control (EDF mode)
         effective_chunk_size = self.chunked_prefill_size
-        if self.edf_latency_predictor is not None and self.is_mixed_chunk and len(self.running_batch.reqs) > 0:
-            from sglang.srt.managers.edf_scheduler import edf_compute_max_chunk_size
+        if (
+            self.edf_latency_predictor is not None
+            and self.is_mixed_chunk
+            and len(self.running_batch.reqs) > 0
+        ):
+            from sglang.srt.managers.edf_scheduler import (
+                MAX_DECODE_ONLY_STEPS,
+                MIN_PREFILL_CHUNK_SIZE,
+                edf_compute_max_chunk_size,
+            )
             decode_reqs = self.running_batch.reqs
-            decode_avg_kv = float(sum(len(r.fill_ids) for r in decode_reqs)) / max(len(decode_reqs), 1) if decode_reqs else 0
+            decode_avg_kv = (
+                float(sum(len(r.fill_ids) for r in decode_reqs))
+                / max(len(decode_reqs), 1)
+                if decode_reqs
+                else 0
+            )
             edf_chunk = edf_compute_max_chunk_size(
                 decode_reqs=decode_reqs,
                 default_chunk_size=effective_chunk_size,
@@ -1987,7 +2003,15 @@ class Scheduler(
                 decode_avg_kv=decode_avg_kv,
             )
             if edf_chunk == 0:
-                return None
+                decode_only_steps = getattr(self, "_edf_decode_only_steps", 0)
+                if decode_only_steps < MAX_DECODE_ONLY_STEPS:
+                    self._edf_decode_only_steps = decode_only_steps + 1
+                    return None
+                # Guarantee prefill progress under sustained decode overload.
+                # The following iteration may start another bounded recovery
+                # burst if the nearest decode deadline is still at risk.
+                edf_chunk = min(MIN_PREFILL_CHUNK_SIZE, effective_chunk_size)
+            self._edf_decode_only_steps = 0
             effective_chunk_size = edf_chunk
 
         # Prefill policy

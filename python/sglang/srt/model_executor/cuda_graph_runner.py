@@ -1010,13 +1010,22 @@ class CudaGraphRunner:
         raw_num_token = forward_batch.input_ids.shape[0]
         raw_bs = forward_batch.batch_size  # actual number of sequences
         index = bisect.bisect_left(self.mixed_capture_bs, raw_num_token)
+        # Keep one token of spare capacity for mixed replays. Exact-capacity
+        # persistent-attention graphs can corrupt memory at high aggregate KV
+        # lengths, while the identical workload is stable in the next graph.
+        if (
+            self.mixed_capture_bs[index] == raw_num_token
+            and index + 1 < len(self.mixed_capture_bs)
+        ):
+            index += 1
         bs = self.mixed_capture_bs[index]
 
         # Padding stats collection (env SGLANG_LOG_MIXED_CG_PADDING=1 to enable)
         if self._log_mixed_cg_padding:
+            import json
+
             self._mixed_cg_padding_log.append((raw_num_token, bs))
             if len(self._mixed_cg_padding_log) % 200 == 0:
-                import json
                 with open('/tmp/mixed_cg_padding.jsonl', 'w') as f:
                     for r, p in self._mixed_cg_padding_log:
                         f.write(json.dumps({"raw": r, "padded": p}) + '\n')

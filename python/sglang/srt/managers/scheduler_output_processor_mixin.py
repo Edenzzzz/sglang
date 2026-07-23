@@ -77,6 +77,12 @@ class SchedulerOutputProcessorMixin:
                         logits_output.input_token_logprobs.tolist()
                     )
 
+            if self.edf_latency_predictor is not None and self.is_mixed_chunk:
+                edf_now = time.monotonic()
+                for req in batch.reqs:
+                    if len(req.output_ids) > 0:
+                        req._edf_last_step_time = edf_now
+
             hidden_state_offset = 0
 
             # Per-request lifecycle tracking for decode reqs in mixed batches

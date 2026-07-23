@@ -692,6 +692,42 @@ Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares 
 
 ---
 
+## H800 EDF mixed-progress stability fix (2026-07-23)
+
+Refreshing decode progress after mixed batches improves EDF's TTFT/ITL tradeoff,
+but originally exposed a repeatable mixed-CUDA-graph illegal access at N=100
+(WL3, 50 ms ITL target). Two async traces failed immediately after an
+exact-capacity 384-token replay at high aggregate KV length. The same workload
+was stable with CUDA launch blocking, in a standalone non-graph persistent
+kernel, and in adjacent padded graph sizes. Disabling the flipped schedule did
+not prevent the failure.
+
+The replay selector now leaves spare capacity when an exact mixed token count
+has a larger captured graph available. This is graph padding only; it does not
+add a minimum prefill chunk.
+
+The previously failing WL3 N=100, 50 ms stress case then completed:
+
+- LPT: 13,447 tok/s, P99 ITL 41.7 ms, max ITL 63.3 ms.
+- DMC reference: 11,981 tok/s, P99 ITL 61.1 ms, max ITL 588 ms.
+- Result: +12.2% throughput with substantially better ITL.
+
+The 100 ms SLO validation covers all WL1-6 (N=40):
+
+| Workload | LPT tok/s | gain vs DMC | P99 ITL | mean TTFT |
+|---|---:|---:|---:|---:|
+| WL1 | 7,723 | +14.5% | 81.8 ms | 113 ms |
+| WL2 | 6,874 | +1.6% | 82.1 ms | 515 ms |
+| WL3 | 11,109 | +2.3% | 90.3 ms | 943 ms |
+| WL4 | 11,986 | +5.1% | 104.1 ms | 2,262 ms |
+| WL5 | 3,565 | +3.1% | 26.4 ms | 113 ms |
+| WL6 | 3,010 | +2.7% | 20.6 ms | 213 ms |
+
+Compared with the prior stable LPT run, throughput is within -0.2% to +1.4%
+on every workload, while P99 ITL improves on WL1-5 and is within 0.9 ms on WL6.
+
+---
+
 ## Implementation Details
 
 ### Design: FA3-style Runtime Dynamic Scheduler (v3)

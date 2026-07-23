@@ -143,6 +143,11 @@ class TestEDFChunkControl(unittest.TestCase):
             places=6,
         )
 
+    def test_kv_watermark_only_blocks_at_high_usage(self):
+        with patch.object(edf_scheduler, "KV_ADMISSION_WATERMARK", 0.95):
+            self.assertTrue(edf_scheduler.edf_allow_prefill_at_kv_usage(0.949))
+            self.assertFalse(edf_scheduler.edf_allow_prefill_at_kv_usage(0.95))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -56,6 +56,12 @@ MAX_PROFILED_PREFILL_PREFIX = float(
 LONG_PREFIX_PROJECTION_THRESHOLD = float(
     os.environ.get("SGLANG_EDF_LONG_PREFIX_PROJECTION_THRESHOLD", "12288")
 )
+# Stop admitting new prefill work only after live KV reaches this watermark.
+# Unlike static headroom, this does not shrink the usable pool during normal
+# operation. 1.0 preserves the upstream admission behavior.
+KV_ADMISSION_WATERMARK = float(
+    os.environ.get("SGLANG_EDF_KV_ADMISSION_WATERMARK", "1.0")
+)
 
 
 def project_extreme_prefix_work(
@@ -137,6 +143,11 @@ def edf_set_retracted_priority(req: "Req") -> None:
         req.priority = itl_deadline
     else:
         req.priority = min(req.priority, itl_deadline)
+
+
+def edf_allow_prefill_at_kv_usage(token_usage: float) -> bool:
+    """Return whether EDF may admit more prefill at the current live-KV usage."""
+    return token_usage < KV_ADMISSION_WATERMARK
 
 
 def edf_compute_max_chunk_size(

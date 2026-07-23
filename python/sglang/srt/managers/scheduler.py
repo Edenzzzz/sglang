@@ -1988,7 +1988,28 @@ class Scheduler(
             and self.is_mixed_chunk
             and len(self.running_batch.reqs) > 0
         ):
-            from sglang.srt.managers.edf_scheduler import edf_compute_max_chunk_size
+            from sglang.srt.managers.edf_scheduler import (
+                edf_allow_prefill_at_kv_usage,
+                edf_compute_max_chunk_size,
+            )
+
+            if self.is_hybrid:
+                (
+                    _,
+                    _,
+                    full_token_usage,
+                    swa_token_usage,
+                    _,
+                    _,
+                    _,
+                    _,
+                ) = self._get_swa_token_info()
+                token_usage = max(full_token_usage, swa_token_usage)
+            else:
+                _, token_usage, _, _ = self._get_token_info()
+            if not edf_allow_prefill_at_kv_usage(token_usage):
+                return None
+
             decode_reqs = self.running_batch.reqs
             decode_avg_kv = (
                 float(sum(len(r.fill_ids) for r in decode_reqs))

@@ -17,6 +17,7 @@ RESULTS_DIR="${RESULTS_DIR:-$SCRIPT_DIR/gain_search_results}"
 METHODS_SPEC="${METHODS_SPEC:-DMC LPT_CG}"
 EDF_ITL_MS="${EDF_ITL_MS:-}"
 EDF_TTFT_MS="${EDF_TTFT_MS:-2000}"
+EDF_KV_WATERMARK="${EDF_KV_WATERMARK:-}"
 LPT_PLAN_OVERHEAD_MS="${LPT_PLAN_OVERHEAD_MS:-0}"
 LPT_MODEL="${LPT_MODEL:-$REPO_ROOT/tasks/perf_model/lpt_model.pt}"
 DMC_MODEL="${DMC_MODEL:-$REPO_ROOT/tasks/perf_model/dmc_model.pt}"
@@ -97,6 +98,9 @@ start_server() {
             SGLANG_EDF_SCHEDULING=1
             SGLANG_TTFT_SLO_MS="$EDF_TTFT_MS"
             SGLANG_ITL_SLO_MS="$EDF_ITL_MS"
+        )
+        [ -z "$EDF_KV_WATERMARK" ] || method_env+=(
+            SGLANG_EDF_KV_ADMISSION_WATERMARK="$EDF_KV_WATERMARK"
         )
         flags+=(
             --enable-priority-scheduling

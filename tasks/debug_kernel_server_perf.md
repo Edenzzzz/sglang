@@ -111,7 +111,7 @@ results below retokenize to at least 99.77% of the reported output count.
 | 3 (12000/1024) | 14,812 / 14,685 | +0.9% | **47 / 54 ms** | **69 / 344 ms** | **69 / 344 ms** |
 | 4 (16384/1024) | 13,795 / **13,900** | -0.8% | **45 / 55 ms** | **83 / 100 ms** | **83 / 100 ms** |
 | 5 (4096/4096) | 7,105 / 6,041 | **+17.6%** | **33 / 46 ms** | **56 / 325 ms** | **56 ms / 144 s** |
-| 6 (6000/6000) | 5,094 / 4,398 | **+15.8%** | **32 / 45 ms** | **52 / 60 ms** | **10.5 / 385 s** |
+| 6 (6000/6000), safe | 4,874 / 4,398 | **+10.8%** | **33 / 45 ms** | **49 / 60 ms** | **49 ms / 385 s** |
 
 This bridges the kernel-to-serving gap on five of six workloads: LPT provides
 6–18% more throughput on WL1/2/5/6 and a small gain on WL3 while lowering
@@ -141,9 +141,16 @@ and stalls one stream for 144 seconds. On WL6, retracted requests previously
 received a fresh TTFT deadline and were demoted behind the entire prefill
 backlog. Preserving their original EDF priority reduces LPT's worst gap from
 334 seconds to 10.5 seconds despite two retractions, while increasing
-throughput from 4,948 to 5,094 tok/s. DMC still reaches a 385-second gap. The
-remaining 10.5-second recomputation penalty requires avoiding retraction or
-retaining active KV; it is no longer a queue-priority artifact.
+throughput from 4,948 to 5,094 tok/s.
+
+For a strict no-violation deployment, setting
+`SGLANG_EDF_KV_ADMISSION_WATERMARK=0.90` stops only new prefill admission once
+live KV reaches 90%; it does not statically shrink the pool. The WL6 run has
+zero retractions, an absolute maximum ITL of 49 ms, and 4,874 tok/s—10.8%
+faster than DMC. This is a better Pareto point than static 10% headroom, which
+previously fell to 3,354 tok/s. A 0.95 watermark still retracted once and was
+rejected. The default remains 1.0 for maximum throughput; the 0.90 setting is
+the strict-SLO point reported in the table.
 
 Long-output tests exposed a separate memory-capacity failure that pooled P99
 hides. WL5 with the normal 10 ms guard is stable at 7,105 tok/s and 56 ms

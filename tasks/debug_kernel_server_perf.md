@@ -4,7 +4,7 @@
 Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persistent attention kernel with mixed batch CUDA graphs in SGLang flashinfer backend.
 
 ## Setup
-- Model: `Qwen/Qwen3-8B`, H100 80GB
+- Model: `Qwen/Qwen3-8B`, H100/H800 80GB
 - Server: `--enable-mixed-chunk --attention-backend flashinfer --mem-fraction-static 0.85 --enable-piecewise-cuda-graph`
 - Env vars: `SGLANG_FLASHINFER_USE_PERSISTENT=1`
 - Benchmark: `bench_serving --dataset-name random --request-rate 8 --num-prompt 400`
@@ -58,30 +58,36 @@ throughput and request-level tail.
 
 ### H800 SLO-aware WL1–6
 
-EDF target 100 ms, LPT with a 10 ms prediction guard. WL3–4 include the
-continued-prefill prefix fix below.
+EDF target 100 ms, LPT with a 10 ms prediction guard. These results include
+the NumPy predictor, continued-prefix correction, mixed-result timestamp
+refresh, and exact-capacity graph fix described below.
 
 | WL | LPT/DMC total tok/s | LPT throughput gain | request-max P99 (LPT/DMC) |
 |----|--------------------:|--------------------:|--------------------------:|
-| 1 | 7,721 / 6,745 | **+14.5%** | **97/655 ms** |
-| 2 | 6,886 / 6,763 | +1.8% | 115/575 ms |
-| 3 | 11,095 / 10,864 | +2.1% | **102/486 ms** |
-| 4 | 11,958 / 11,406 | **+4.8%** | **116/607 ms** |
-| 5 | 3,567 / 3,457 | +3.2% | **86/496 ms** |
-| 6 | 3,011 / 2,931 | +2.7% | **95/1,206 ms** |
+| 1 | 7,723 / 6,745 | **+14.5%** | **84/655 ms** |
+| 2 | 6,874 / 6,763 | +1.6% | **123/575 ms** |
+| 3 | 11,109 / 10,864 | +2.3% | **103/486 ms** |
+| 4 | 11,986 / 11,406 | **+5.1%** | **118/607 ms** |
+| 5 | 3,565 / 3,457 | +3.1% | **94/496 ms** |
+| 6 | 3,010 / 2,931 | +2.7% | **94/1,206 ms** |
 
-Representative Pareto slices:
+At the tighter 50 ms target, a fresh matched DMC sweep shows that the
+request-level tail is the main advantage even where throughput is saturated:
 
-| ITL target | WL1 gain | WL3 gain | WL5 gain |
-|-----------:|---------:|---------:|---------:|
-| 50 ms | **+14.6%** | +2.7% | +0.8% |
-| 100 ms | **+14.5%** | +2.1% | +3.2% |
-| 150 ms | **+10.8%** | **+16.5%** | +4.1% |
+| WL | LPT/DMC total tok/s | throughput gain | pooled P99 ITL (LPT/DMC) | worst ITL (LPT/DMC) |
+|---:|--------------------:|----------------:|-----------------------------:|------------------------:|
+| 1 | 7,747 / 6,887 | **+12.5%** | 40/56 ms | **55/758 ms** |
+| 2 | 6,878 / 6,676 | +3.0% | 39/49 ms | **59/545 ms** |
+| 3 | 10,821 / 10,629 | +1.8% | 42/53 ms | **84/569 ms** |
+| 4 | 11,727 / 11,736 | −0.1% | 47/57 ms | **61/495 ms** |
+| 5 | 3,564 / 3,508 | +1.6% | 36/44 ms | **49/552 ms** |
+| 6 | 3,012 / 3,003 | +0.3% | 36/46 ms | **48/62 ms** |
 
-The persistent method shifts the throughput/latency curve rather than winning
-at only one target. The best regimes are short-to-medium prefills mixed with
-active decode (WL1 and the 2K–4K/512 search points, +9–16%); long decode-heavy
-WL5–6 gains are smaller in throughput but much larger in request-level ITL.
+The persistent method therefore shifts the curve across all six regimes:
+WL1 converts kernel efficiency into throughput; WL2/3/5 gain both throughput
+and ITL; WL4/6 are throughput-saturated but still sharply reduce decode-tail
+latency. At the 150 ms target, representative throughput gains remain +10.8%
+(WL1), +18.1% (WL3), and +4.3% (WL5).
 
 ### EDF controller hot path
 
@@ -153,26 +159,21 @@ tables did not remove the trap. No profiler or checkpoint changes from this
 unsafe experiment are retained; production-path profiling and that mixed-graph
 shape need to be fixed before replacing the checked-in model.
 
-#### Mixed-result timestamp experiment (rejected)
+#### Mixed-result timestamp and exact-capacity graph fix
 
-EDF did not refresh decode progress timestamps after a mixed step. Correcting
-that accounting improved the 40-request WL3 Pareto points substantially (at
-50 ms, +6.0% throughput and −40% mean TTFT versus the old LPT controller at
-unchanged request-max ITL). However, the required N=100 stability gate exposed
-an illegal memory access after hundreds of consecutive small mixed steps.
-This is consistent with the production-path profiler trap above: the corrected
-accounting admits mixed work more continuously and reaches a latent
-persistent mixed-graph failure sooner. The scheduler change was reverted; its
-small-run gains must not be used until the mixed-graph/workspace lifetime bug
-is fixed.
+EDF previously failed to refresh decode progress after mixed steps. Fixing the
+timestamp improved TTFT and chunk admission, but exposed a repeatable illegal
+access after exact-capacity 384-token graph replays at high aggregate KV. The
+same shapes were stable in the next larger graph and in standalone non-graph
+attention. Mixed replay now selects the next captured size on an exact match
+when one is available; this is graph padding, not a minimum prefill chunk.
 
-A targeted non-graph fallback does not preserve the objective. With the
-timestamp correction enabled, falling back after an 8K prefix completed the
-N=100 WL3/50 ms run but lost 15.3% throughput to DMC and produced a 6.10 s
-request-level stall. Moving the boundary to 12K still lost 8.2% and produced a
-6.25 s stall. Early mixed graphs followed by late non-graph persistent steps
-are therefore not a viable workaround; the graph/workspace failure itself must
-be fixed.
+The previously failing WL3 N=100, 50 ms gate then completed at 13,447 tok/s,
+versus 11,981 tok/s for DMC (+12.2%), with pooled P99 ITL 42/61 ms and worst
+ITL 63/588 ms. The WL1–6 tables above are the post-fix validation.
+
+Rejected alternatives are not retained: an 8K/12K non-graph fallback lost
+15.3%/8.2% throughput to DMC and caused 6.10/6.25 second stalls.
 
 ---
 
@@ -689,42 +690,6 @@ Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares 
 
 - [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan. Verify in server context with nsys.
 - [ ] Realistic workload analysis — see `tasks/realistic_workload_analysis.md`
-
----
-
-## H800 EDF mixed-progress stability fix (2026-07-23)
-
-Refreshing decode progress after mixed batches improves EDF's TTFT/ITL tradeoff,
-but originally exposed a repeatable mixed-CUDA-graph illegal access at N=100
-(WL3, 50 ms ITL target). Two async traces failed immediately after an
-exact-capacity 384-token replay at high aggregate KV length. The same workload
-was stable with CUDA launch blocking, in a standalone non-graph persistent
-kernel, and in adjacent padded graph sizes. Disabling the flipped schedule did
-not prevent the failure.
-
-The replay selector now leaves spare capacity when an exact mixed token count
-has a larger captured graph available. This is graph padding only; it does not
-add a minimum prefill chunk.
-
-The previously failing WL3 N=100, 50 ms stress case then completed:
-
-- LPT: 13,447 tok/s, P99 ITL 41.7 ms, max ITL 63.3 ms.
-- DMC reference: 11,981 tok/s, P99 ITL 61.1 ms, max ITL 588 ms.
-- Result: +12.2% throughput with substantially better ITL.
-
-The 100 ms SLO validation covers all WL1-6 (N=40):
-
-| Workload | LPT tok/s | gain vs DMC | P99 ITL | mean TTFT |
-|---|---:|---:|---:|---:|
-| WL1 | 7,723 | +14.5% | 81.8 ms | 113 ms |
-| WL2 | 6,874 | +1.6% | 82.1 ms | 515 ms |
-| WL3 | 11,109 | +2.3% | 90.3 ms | 943 ms |
-| WL4 | 11,986 | +5.1% | 104.1 ms | 2,262 ms |
-| WL5 | 3,565 | +3.1% | 26.4 ms | 113 ms |
-| WL6 | 3,010 | +2.7% | 20.6 ms | 213 ms |
-
-Compared with the prior stable LPT run, throughput is within -0.2% to +1.4%
-on every workload, while P99 ITL improves on WL1-5 and is within 0.9 ms on WL6.
 
 ---
 

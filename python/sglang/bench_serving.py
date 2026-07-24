@@ -786,7 +786,6 @@ def get_dataset(args, tokenizer, model_id=None):
             args=args,
         )
     elif args.dataset_name == "tracelab-claude":
-        assert not tokenize_prompt
         input_requests = sample_tracelab_claude_requests(
             dataset_path=args.dataset_path,
             num_requests=args.num_prompts,
@@ -795,6 +794,7 @@ def get_dataset(args, tokenizer, model_id=None):
             max_context_len=args.tracelab_max_context_len,
             min_output_len=args.tracelab_min_output_len,
             tokenizer=tokenizer,
+            return_text=not tokenize_prompt,
         )
     elif args.dataset_name == "mmmu":
         processor = get_processor(model_id)
@@ -1665,6 +1665,7 @@ def sample_tracelab_claude_requests(
     max_context_len: int,
     min_output_len: int,
     tokenizer: PreTrainedTokenizerBase,
+    return_text: bool = True,
 ) -> List[DatasetRow]:
     """Replay long-context Claude coding rounds from the TraceLab token trace.
 
@@ -1711,15 +1712,23 @@ def sample_tracelab_claude_requests(
     ]
 
     requests = []
+    available_tokens = list(tokenizer.get_vocab().values())
     for group in grouped:
         # All requests in a synthetic session share the conservative common
         # prefix. Per-round append and output lengths remain from the trace.
         shared_prefix_len = min(prefix_len for prefix_len, _, _ in group)
-        shared_prefix = gen_prompt(tokenizer, shared_prefix_len)
+        shared_prefix_ids = random.choices(
+            available_tokens, k=shared_prefix_len
+        )
         for _, append_len, output_len in group:
-            suffix = gen_prompt(tokenizer, append_len)
-            prompt = f"{shared_prefix}{suffix}"
-            actual_prompt_len = len(tokenizer.encode(prompt))
+            suffix_ids = random.choices(available_tokens, k=append_len)
+            prompt_ids = shared_prefix_ids + suffix_ids
+            if return_text:
+                prompt = tokenizer.decode(prompt_ids)
+                actual_prompt_len = len(tokenizer.encode(prompt))
+            else:
+                prompt = prompt_ids
+                actual_prompt_len = len(prompt_ids)
             requests.append(
                 DatasetRow(
                     prompt=prompt,

@@ -980,6 +980,7 @@ class DatasetRow:
     vision_prompt_len: Optional[int] = None
     image_data: Optional[List[str]] = None
     timestamp: Optional[float] = None
+    warmup_only: bool = False
 
     def __post_init__(self):
         if self.text_prompt_len is None:
@@ -1712,6 +1713,7 @@ def sample_tracelab_claude_requests(
     ]
 
     requests = []
+    warmup_requests = []
     available_tokens = list(tokenizer.get_vocab().values())
     for group in grouped:
         # All requests in a synthetic session share the conservative common
@@ -1719,6 +1721,20 @@ def sample_tracelab_claude_requests(
         shared_prefix_len = min(prefix_len for prefix_len, _, _ in group)
         shared_prefix_ids = random.choices(
             available_tokens, k=shared_prefix_len
+        )
+        if return_text:
+            warmup_prompt = tokenizer.decode(shared_prefix_ids)
+            warmup_prompt_len = len(tokenizer.encode(warmup_prompt))
+        else:
+            warmup_prompt = shared_prefix_ids
+            warmup_prompt_len = len(shared_prefix_ids)
+        warmup_requests.append(
+            DatasetRow(
+                prompt=warmup_prompt,
+                prompt_len=warmup_prompt_len,
+                output_len=1,
+                warmup_only=True,
+            )
         )
         for _, append_len, output_len in group:
             suffix_ids = random.choices(available_tokens, k=append_len)
@@ -1744,7 +1760,7 @@ def sample_tracelab_claude_requests(
         f"mean input={np.mean([r.prompt_len for r in requests]):.0f}, "
         f"mean output={np.mean([r.output_len for r in requests]):.0f}"
     )
-    return requests
+    return warmup_requests + requests
 
 
 async def get_request(
@@ -2024,6 +2040,17 @@ async def benchmark(
         async with semaphore:
             return await request_func(request_func_input=request_func_input, pbar=pbar)
 
+    timed_input_requests = [
+        request
+        for request in input_requests
+        if not getattr(request, "warmup_only", False)
+    ]
+    explicit_warmup_requests = [
+        request
+        for request in input_requests
+        if getattr(request, "warmup_only", False)
+    ]
+
     # Warmup
     print(f"Starting warmup with {warmup_requests} sequences...")
 
@@ -2066,7 +2093,11 @@ async def benchmark(
     warmup_tasks = []
     for i in range(warmup_requests):
         warmup_request = (
-            input_requests[i % len(input_requests)]
+            (
+                explicit_warmup_requests[i % len(explicit_warmup_requests)]
+                if explicit_warmup_requests
+                else timed_input_requests[i % len(timed_input_requests)]
+            )
             if args.dataset_name != "mooncake"
             else test_request
         )
@@ -2103,6 +2134,7 @@ async def benchmark(
         requests.post(base_url + "/flush_cache", headers=get_auth_headers())
 
     time.sleep(1.0)
+    input_requests = timed_input_requests
 
     # Build profile URLs for PD separated mode (do this once at the beginning)
     pd_profile_urls = []

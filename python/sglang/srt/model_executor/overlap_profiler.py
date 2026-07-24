@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -81,8 +82,10 @@ class ProfilingRunner:
         # Total batch size: 1 prefill + decode_bs decode
         total_bs = 1 + decode_bs
 
-        # Create seq_lens: [n_p + r_p, r_d, r_d, ...]
-        seq_lens = [n_p + r_p] + [r_d] * decode_bs
+        # Decode allocation advances each sequence by one before the model
+        # worker batch is built.  Therefore a request with r_d cached KV tokens
+        # has seq_len=r_d+1 and extend_len=1 in a mixed forward.
+        seq_lens = [n_p + r_p] + [r_d + 1] * decode_bs
         seq_lens_tensor = torch.tensor(seq_lens, dtype=torch.int64, device=self.device)
         seq_lens_cpu = torch.tensor(seq_lens, dtype=torch.int64)
 
@@ -101,21 +104,64 @@ class ProfilingRunner:
         )
 
         # Total numbers
-        seq_lens_sum = n_p + r_p + r_d * decode_bs
+        seq_lens_sum = n_p + r_p + (r_d + 1) * decode_bs
         extend_num_tokens = n_p + decode_bs
         assert (
             extend_num_tokens <= self.max_num_tokens
         ), f"extend_num_tokens {extend_num_tokens} > max_num_tokens {self.max_num_tokens}"
 
-        # Use pre-allocated buffers (slice to actual size)
+        required_kv_tokens = seq_lens_sum
+        if required_kv_tokens > self.model_runner.max_total_num_tokens:
+            raise ValueError(
+                f"Synthetic batch needs {required_kv_tokens} KV tokens, but the "
+                f"server has {self.model_runner.max_total_num_tokens}"
+            )
+        if total_bs > self.model_runner.req_to_token_pool.size:
+            raise ValueError(
+                f"Synthetic batch needs {total_bs} request slots, but the server "
+                f"has {self.model_runner.req_to_token_pool.size}"
+            )
+
+        # Use pre-allocated input buffers and realistic, disjoint request/KV
+        # mappings. Pointing every synthetic request at request/page zero gives
+        # attention an artificial perfect-locality workload and also routes all
+        # new KV writes to the allocator's padding slot.
         input_ids = self.input_ids[:extend_num_tokens]
         out_cache_loc = self.out_cache_loc[:extend_num_tokens]
         positions = self.positions[:extend_num_tokens]
-        out_cache_loc = self.out_cache_loc[:extend_num_tokens]
-        positions = self.positions[:extend_num_tokens]
-
-        # Dummy req_pool_indices (0..total_bs-1)
         req_pool_indices = self.req_pool_indices[:total_bs]
+        req_pool_indices.copy_(
+            torch.arange(total_bs, dtype=torch.int64, device=self.device)
+        )
+
+        physical_start = 1  # KV slot zero is reserved for graph padding.
+        extend_start = 0
+        for req_index, (seq_len, prefix_len, extend_len) in enumerate(
+            zip(seq_lens, extend_prefix_lens, extend_lens)
+        ):
+            physical_end = physical_start + seq_len
+            self.model_runner.req_to_token_pool.req_to_token[
+                req_index, :seq_len
+            ] = torch.arange(
+                physical_start,
+                physical_end,
+                dtype=torch.int32,
+                device=self.device,
+            )
+            out_cache_loc[extend_start : extend_start + extend_len] = torch.arange(
+                physical_start + prefix_len,
+                physical_end,
+                dtype=torch.int32,
+                device=self.device,
+            )
+            positions[extend_start : extend_start + extend_len] = torch.arange(
+                prefix_len,
+                seq_len,
+                dtype=torch.int64,
+                device=self.device,
+            )
+            physical_start = physical_end
+            extend_start += extend_len
 
         # Compute extend_start_loc: cumulative sum of extend_seq_lens
         # extend_start_loc[i] = sum(extend_seq_lens[0:i])
@@ -168,27 +214,22 @@ class ProfilingRunner:
             decoding_bs=decode_bs,
         )
 
-        # Initialize attention backend metadata
-        self.model_runner.attn_backend.init_forward_metadata(forward_batch)
-
-        # Temporarily disable CUDA graph runner to force non-CG forward path.
-        # The profiler needs to measure raw kernel time, not CG replay time.
-        saved_graph_runner = self.model_runner.graph_runner
-        self.model_runner.graph_runner = None
-
-        # CUDA timing
-        start_event = torch.cuda.Event(enable_timing=True)
-        end_event = torch.cuda.Event(enable_timing=True)
-
+        # Measure the deployed model-runner path, including attention metadata
+        # planning, CUDA-graph selection/replay, the full model forward, and
+        # host-side launch overhead.  The previous profiler initialized metadata
+        # once, disabled graph replay, and timed CUDA kernels only; models trained
+        # on that target systematically missed costs paid by the live server.
         times: List[float] = []
         for _ in range(repeat):
-            start_event.record()
-            self.model_runner.forward(forward_batch, skip_attn_backend_init=True)
-            end_event.record()
             torch.cuda.synchronize()
-            times.append(float(start_event.elapsed_time(end_event)))
-
-        self.model_runner.graph_runner = saved_graph_runner
+            start_time = time.perf_counter()
+            # Let ModelRunner prepare the backend itself.  In particular, mixed
+            # CUDA-graph replay_prepare selects and pads the capture by token
+            # count; pre-initializing and passing skip_attn_backend_init=True
+            # leaves stale replay dimensions from the preceding server batch.
+            self.model_runner.forward(forward_batch, skip_attn_backend_init=False)
+            torch.cuda.synchronize()
+            times.append((time.perf_counter() - start_time) * 1000)
 
         return float(np.median(times))
 
@@ -328,6 +369,24 @@ def profile_configs(
         A pandas DataFrame with columns: [n_p, r_p, r_d, decode_bs, time_ms]
         Feature computation (S_p, S_d, R_pd, term1-4) should be done in the training script.
     """
+    valid_configs = [
+        config
+        for config in configs
+        if config[0] + config[1] + (config[2] + 1) * config[3]
+        <= model_runner.max_total_num_tokens
+        and config[3] + 1 <= model_runner.req_to_token_pool.size
+        and config[0] + config[1] <= model_runner.req_to_token_pool.max_context_len
+        and config[2] + 1 <= model_runner.req_to_token_pool.max_context_len
+    ]
+    if len(valid_configs) != len(configs):
+        logger.info(
+            "Dropped %d synthetic configs that exceed this server's KV/request capacity",
+            len(configs) - len(valid_configs),
+        )
+    configs = valid_configs
+    if not configs:
+        raise ValueError("No profiling configs fit this server")
+
     # Configure attention backend mode
     if overlap:
         envs.SGLANG_FLASHINFER_USE_POD.set(True)

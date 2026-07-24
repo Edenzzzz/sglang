@@ -1,8 +1,8 @@
-"""Train MLP to predict mixed batch attention latency from sequence config.
+"""Train an MLP to predict a production model-runner step from sequence config.
 
 Input features: n_p (new prefill tokens), r_p (prefill prefix/cached KV),
     r_d (decode KV length), decode_bs (decode batch size), overlap (bool)
-Target: time_ms (attention kernel + plan time)
+Target: time_ms (metadata planning + graph selection/replay + full model forward)
 
 Usage:
     python tasks/perf_model/train_perf_model_mlp.py \
@@ -50,36 +50,51 @@ class PerfMLP(nn.Module):
         return self.net(x).squeeze(-1)
 
 
-def prepare_features(rows):
-    """Convert rows to feature matrix and target vector."""
+def raw_features(rows):
+    """Convert profiler rows to an unnormalized feature matrix and target."""
     X = np.array([
         [r["n_p"], r["r_p"], r["r_d"], r["decode_bs"], float(r["overlap"])]
         for r in rows
     ], dtype=np.float32)
     y = np.array([r["time_ms"] for r in rows], dtype=np.float32)
+    return X, y
 
-    # Log-transform targets (latency is log-normal)
-    y_log = np.log1p(y)
 
-    # Normalize features
+def prepare_features(rows):
+    """Fit feature normalization on training rows."""
+    X, y = raw_features(rows)
     X_mean = X.mean(axis=0)
     X_std = X.std(axis=0) + 1e-8
     X_norm = (X - X_mean) / X_std
+    return X_norm, np.log1p(y), X_mean, X_std, y
 
-    return X_norm, y_log, X_mean, X_std, y
 
-
-def train(X, y_log, y_raw, epochs=200, lr=1e-3, batch_size=512, val_frac=0.1):
+def train(
+    X,
+    y_log,
+    y_raw,
+    epochs=200,
+    lr=1e-3,
+    batch_size=512,
+    val_frac=0.1,
+    external_val=None,
+):
     n = len(X)
-    perm = np.random.permutation(n)
-    val_n = max(1, int(n * val_frac))
-    val_idx, train_idx = perm[:val_n], perm[val_n:]
-
-    X_train = torch.tensor(X[train_idx])
-    y_train = torch.tensor(y_log[train_idx])
-    X_val = torch.tensor(X[val_idx])
-    y_val_log = torch.tensor(y_log[val_idx])
-    y_val_raw = y_raw[val_idx]
+    if external_val is None:
+        perm = np.random.permutation(n)
+        val_n = max(1, int(n * val_frac))
+        val_idx, train_idx = perm[:val_n], perm[val_n:]
+        X_train = torch.tensor(X[train_idx])
+        y_train = torch.tensor(y_log[train_idx])
+        X_val = torch.tensor(X[val_idx])
+        y_val_log = torch.tensor(y_log[val_idx])
+        y_val_raw = y_raw[val_idx]
+    else:
+        X_train = torch.tensor(X)
+        y_train = torch.tensor(y_log)
+        X_val = torch.tensor(external_val[0])
+        y_val_raw = external_val[1]
+        y_val_log = torch.tensor(np.log1p(y_val_raw))
 
     model = PerfMLP(input_dim=X.shape[1])
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -141,6 +156,10 @@ def train(X, y_log, y_raw, epochs=200, lr=1e-3, batch_size=512, val_frac=0.1):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", required=True, help="Profiler CSV path")
+    parser.add_argument(
+        "--val-csv",
+        help="Disjoint profiler CSV used for checkpoint selection and reporting",
+    )
     parser.add_argument("--output", default="tasks/perf_model/model.pt", help="Output model path")
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -155,7 +174,23 @@ def main():
     print(f"  Features: {X_norm.shape}, Target range: [{y_raw.min():.2f}, {y_raw.max():.2f}] ms")
 
     np.random.seed(42)
-    model = train(X_norm, y_log, y_raw, epochs=args.epochs, lr=args.lr, batch_size=args.batch_size)
+    torch.manual_seed(42)
+    external_val = None
+    if args.val_csv:
+        val_rows = load_data(args.val_csv)
+        X_val, y_val = raw_features(val_rows)
+        X_val = (X_val - X_mean) / X_std
+        external_val = (X_val, y_val)
+        print(f"  External validation: {len(y_val)} samples from {args.val_csv}")
+    model = train(
+        X_norm,
+        y_log,
+        y_raw,
+        epochs=args.epochs,
+        lr=args.lr,
+        batch_size=args.batch_size,
+        external_val=external_val,
+    )
 
     # Save model + normalization params
     torch.save({
@@ -163,6 +198,7 @@ def main():
         "X_mean": X_mean,
         "X_std": X_std,
         "feature_names": ["n_p", "r_p", "r_d", "decode_bs", "overlap"],
+        "target": "production_model_runner_step_ms",
     }, args.output)
     print(f"\nSaved to {args.output}")
 

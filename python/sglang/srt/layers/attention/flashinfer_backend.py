@@ -73,6 +73,18 @@ class WrapperDispatch(Enum):
     CROSS_ATTENTION = auto()
 
 
+def select_persistent_flipped_schedule(
+    total_kv_tokens: int,
+    batch_size: int,
+    force_nonflipped: bool = False,
+) -> Optional[bool]:
+    """Select the persistent-kernel work ordering from server-level KV load."""
+    if force_nonflipped or total_kv_tokens >= batch_size * 32768:
+        return False
+    # None preserves FlashInfer's optimized flipped default.
+    return None
+
+
 @dataclass
 class MultiItemScoringParams:
     """Parameters for multi-item scoring in attention computation.
@@ -1860,7 +1872,16 @@ class FlashInferIndicesUpdaterPrefill:
             max_item_len_ptr = None
 
         if self.attn_backend.use_persistent and isinstance(wrapper_paged, BatchAttention):
-            flipped = None if not self.attn_backend.no_flipped_schedule else False
+            # The flipped work ordering favors the shorter contexts common in
+            # interactive serving, but is slower for long-context mixed
+            # batches (for example, 39 decodes around 80K tokens plus one
+            # continued prefill). Select from metadata already computed on the
+            # CPU instead of forcing one schedule for every workload.
+            flipped = select_persistent_flipped_schedule(
+                paged_kernel_lens_sum,
+                len(paged_kernel_lens),
+                self.attn_backend.no_flipped_schedule,
+            )
             # Enable CUDA graph mode for persistent kernel — sglang uses CG for
             # all BatchAttention calls. This forces invariant workspace layout so
             # capture and replay have consistent offsets regardless of batch composition.

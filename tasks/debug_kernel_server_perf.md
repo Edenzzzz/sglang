@@ -43,15 +43,16 @@ output tokens. All three results are output-valid:
 | Method | Total tok/s | Output tok/s | median TTFT | pooled P99 ITL | maximum ITL |
 |--------|------------:|-------------:|------------:|---------------:|------------:|
 | PP + decode CG | 16,190 | 394 | 710.9 s | 1,153 ms | 50.2 s |
-| DMC + decode CG | **26,752** | **651** | **362.0 s** | **229 ms** | — |
-| LPT + decode CG | 26,316 | 641 | 366.4 s | 245 ms | — |
+| DMC + decode CG | **26,753** | **651** | 362.0 s | 229 ms | — |
+| LPT + adaptive persistent | 26,740 | 651 | **357.4 s** | **221 ms** | — |
 
 LPT provides 62.5% more total throughput than PP and removes most
-prefill-induced decode stalls, but trails DMC by 1.6% at peak load. This result
-must not be presented as a throughput win over DMC. A deterministic N=20
-TraceLab diagnostic showed a 7.1% LPT gain, confirming that the kernel can win
-when mixed attention is a larger fraction of runtime; converting that into a
-peak-load Pareto gain remains open.
+prefill-induced decode stalls. Server-load-aware kernel dispatch removes the
+former 1.6% DMC regression: LPT is within 0.05% throughput while improving
+median TTFT by 1.27% and pooled P99 ITL by 3.56%. This is a peak-load Pareto
+improvement, not a throughput-win claim. At N=40, where mixed attention is a
+larger fraction of runtime, LPT provides 4.11% more throughput and 17.9% lower
+median TTFT than DMC.
 
 `tasks/edf_benchmark/analyze_results.py` reports request-level maximum-ITL
 percentiles because pooled token-level P99 hides rare multi-second stalls.

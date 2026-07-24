@@ -79,14 +79,16 @@ tokens, ten shared-prefix groups, N=400 and at most 40 running requests.
 | Method | Total tok/s | Output tok/s | median TTFT | pooled P99 ITL |
 |--------|------------:|-------------:|------------:|---------------:|
 | PP + decode CG | 16,190 | 394 | 710.9 s | 1,153 ms |
-| DMC + decode CG | **26,752** | **651** | **362.0 s** | **229 ms** |
-| LPT + decode CG | 26,316 | 641 | 366.4 s | 245 ms |
+| DMC + decode CG | **26,753** | **651** | 362.0 s | 229 ms |
+| LPT + adaptive persistent | 26,740 | 651 | **357.4 s** | **221 ms** |
 
 All results are output-valid. LPT improves total throughput over PP by 62.5%
-and greatly reduces prefill-induced decode stalls, but loses 1.6% throughput
-to DMC at peak load. A deterministic N=20 diagnostic gives LPT a 7.1%
-throughput advantage over DMC, showing that the kernel advantage exists at
-lower concurrency; it is not yet a peak-load paper claim.
+and greatly reduces prefill-induced decode stalls. Selecting the persistent
+work ordering from server-level KV load removes the former 1.6% DMC
+regression: LPT matches DMC throughput within 0.05%, improves median TTFT by
+1.27%, and improves pooled P99 ITL by 3.56%. At N=40 it provides 4.11% more
+throughput and 17.9% lower median TTFT than DMC. The defensible peak-load claim
+is a Pareto improvement, not higher throughput.
 
 ### Historical ratio sweep (pre-correctness isolation)
 

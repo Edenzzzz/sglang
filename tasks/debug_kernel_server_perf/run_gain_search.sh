@@ -24,6 +24,7 @@ LPT_PLAN_OVERHEAD_MS="${LPT_PLAN_OVERHEAD_MS:-auto}"
 LPT_MODEL="${LPT_MODEL:-$REPO_ROOT/tasks/perf_model/lpt_model.pt}"
 DMC_MODEL="${DMC_MODEL:-$REPO_ROOT/tasks/perf_model/dmc_model.pt}"
 read -r -a SERVER_EXTRA_FLAGS <<<"${SERVER_EXTRA_ARGS:-}"
+read -r -a BENCH_EXTRA_FLAGS <<<"${BENCH_EXTRA_ARGS:-}"
 mkdir -p "$RESULTS_DIR"
 
 # launch_server performs its warmup through the advertised host. Keep local
@@ -146,7 +147,8 @@ for method in $METHODS_SPEC; do
             --random-input "$input" --random-output "$output" \
             --request-rate "$rate" --num-prompts "$NUM_PROMPTS" \
             --warmup-requests "$WARMUP_REQUESTS" \
-            --output-file "$outfile" --output-details --disable-tqdm
+            --output-file "$outfile" --output-details --disable-tqdm \
+            "${BENCH_EXTRA_FLAGS[@]}"
     done
 done
 

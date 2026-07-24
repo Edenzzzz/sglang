@@ -1957,21 +1957,27 @@ async def benchmark(
     else:
         lora_name = None
 
-    # Create the test input once
-    test_input = RequestFuncInput(
-        model=model_id,
-        prompt=test_request.prompt,
-        api_url=api_url,
-        prompt_len=test_request.prompt_len,
-        output_len=min(test_request.output_len, 32),
-        lora_name=lora_name,
-        image_data=test_request.image_data,
-        extra_request_body=extra_request_body,
-    )
-
-    # Run warmup requests
+    # Run warmup requests. Use distinct dataset rows when available instead of
+    # launching the same prompt concurrently N times. Besides being a more
+    # representative warmup, this avoids measuring the main run against radix
+    # state created by an artificial duplicate-prefix race.
     warmup_tasks = []
-    for _ in range(warmup_requests):
+    for i in range(warmup_requests):
+        warmup_request = (
+            input_requests[i % len(input_requests)]
+            if args.dataset_name != "mooncake"
+            else test_request
+        )
+        test_input = RequestFuncInput(
+            model=model_id,
+            prompt=warmup_request.prompt,
+            api_url=api_url,
+            prompt_len=warmup_request.prompt_len,
+            output_len=min(warmup_request.output_len, 32),
+            lora_name=lora_name,
+            image_data=warmup_request.image_data,
+            extra_request_body=extra_request_body,
+        )
         warmup_tasks.append(
             asyncio.create_task(request_func(request_func_input=test_input))
         )

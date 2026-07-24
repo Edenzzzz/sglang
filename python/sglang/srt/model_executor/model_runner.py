@@ -330,6 +330,11 @@ class ModelRunner:
         if (
             self.server_args.enable_piecewise_cuda_graph
             and self.can_run_piecewise_cuda_graph()
+            # The piecewise EXTEND runner and regular decode runner are each
+            # output-correct in isolation, but sharing their graph state
+            # corrupts long N=400 runs. Prefer the regular decode graph and
+            # leave BatchPrefill eager when both are requested.
+            and self.graph_runner is None
         ):
             self.attention_layers = []
             for layer in self.model.model.layers:
@@ -345,6 +350,15 @@ class ModelRunner:
             else:
                 self.piecewise_cuda_graph_runner = PiecewiseCudaGraphRunner(self)
         else:
+            if (
+                self.server_args.enable_piecewise_cuda_graph
+                and self.graph_runner is not None
+            ):
+                log_info_on_rank0(
+                    logger,
+                    "Disable piecewise CUDA graph because it is unsafe together "
+                    "with the regular decode graph runner",
+                )
             self.piecewise_cuda_graph_runner = None
 
     def initialize(self, min_per_gpu_memory: float):

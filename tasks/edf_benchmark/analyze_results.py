@@ -25,6 +25,18 @@ SLO = {
     "swe_bench_pro": {"ttft_ms": 4000, "itl_ms": 150},
 }
 
+METHOD_PREFIXES = (
+    "PP_DECODE_CG",
+    "PP_EXTEND_CG",
+    "PP_NOCG",
+    "DMC_CG",
+    "DMC_NOCG",
+    "LPT_CG",
+    "LPT",
+    "DMC",
+    "PP",
+)
+
 # TTFT length scaling: matches edf_scheduler.compute_ttft_slo_ms
 def ttft_slo_for_input(base_ms: float, input_len: int,
                        scale_tokens: float = 5000, scale_ms: float = 1000) -> float:
@@ -49,12 +61,13 @@ def analyze(path):
     parts = fname.split("_rate")
     method_wl = parts[0]
     rate = parts[1]
-    # method is first token (PP/DMC/LPT_CG); LPT_CG has _ in it
-    if method_wl.startswith("LPT_CG_"):
-        method = "LPT_CG"
-        wl = method_wl[len("LPT_CG_"):]
+    for method in METHOD_PREFIXES:
+        prefix = f"{method}_"
+        if method_wl.startswith(prefix):
+            wl = method_wl[len(prefix):]
+            break
     else:
-        method, wl = method_wl.split("_", 1)
+        raise ValueError(f"unknown method prefix in {fname}")
 
     slo = SLO.get(wl, SLO["sharegpt"])
     base_ttft_ms = slo["ttft_ms"]
@@ -68,6 +81,9 @@ def analyze(path):
         input_lens = [0] * len(ttfts)
 
     n = len(ttfts)
+    generated = d.get("total_output_tokens", 0)
+    retokenized = d.get("total_output_tokens_retokenized", generated)
+    output_retokenize_ratio = retokenized / generated if generated else 1.0
     n_pass_max = 0       # strict: max ITL ≤ SLO
     n_pass_tpot = 0      # DistServe-style: mean ITL (TPOT) ≤ SLO
     n_pass_ttft = 0
@@ -111,6 +127,8 @@ def analyze(path):
         "rate": rate,
         "throughput": d.get("output_throughput", 0),
         "duration": d.get("duration", 0),
+        "output_retokenize_ratio": output_retokenize_ratio,
+        "output_valid": 0.98 <= output_retokenize_ratio <= 1.02,
         "median_ttft_ms": d.get("median_ttft_ms", 0),
         "p99_ttft_ms": d.get("p99_ttft_ms", 0),
         "median_itl_ms": d.get("median_itl_ms", 0),
@@ -153,10 +171,11 @@ def main():
     # Group by workload then method
     rows.sort(key=lambda r: (r["workload"], r["method"], float(r["rate"]) if r["rate"] != "inf" else 1e9))
 
-    print(f"\n{'method':<8} {'wl':<14} {'rate':>5} {'tok/s':>8} {'med_TTFT':>9} {'p99_TTFT':>9} {'poolP99':>8} {'reqMax50':>9} {'reqMax99':>9} {'SLO_max%':>9} {'TTFT%':>6} {'ITLmax%':>8} {'ITLp99%':>8} {'TPOT%':>6}")
-    print("-" * 142)
+    print(f"\n{'method':<13} {'wl':<14} {'rate':>5} {'valid':>7} {'tok/s':>8} {'med_TTFT':>9} {'p99_TTFT':>9} {'poolP99':>8} {'reqMax50':>9} {'reqMax99':>9} {'SLO_max%':>9} {'TTFT%':>6} {'ITLmax%':>8} {'ITLp99%':>8} {'TPOT%':>6}")
+    print("-" * 156)
     for r in rows:
-        print(f"{r['method']:<8} {r['workload']:<14} {r['rate']:>5} {r['throughput']:>8.0f} "
+        validity = "yes" if r["output_valid"] else f"{100*r['output_retokenize_ratio']:.1f}%"
+        print(f"{r['method']:<13} {r['workload']:<14} {r['rate']:>5} {validity:>7} {r['throughput']:>8.0f} "
               f"{r['median_ttft_ms']:>9.1f} {r['p99_ttft_ms']:>9.1f} "
               f"{r['p99_itl_ms']:>8.2f} "
               f"{r['median_req_max_itl_ms']:>9.2f} {r['p99_req_max_itl_ms']:>9.2f} "

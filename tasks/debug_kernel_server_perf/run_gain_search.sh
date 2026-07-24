@@ -80,8 +80,12 @@ start_server() {
     local -a method_env=() flags=()
     cleanup
     server_pid=""
-    if [ "$method" = LPT_CG ]; then
-        flags+=(--enable-mixed-chunk --enable-piecewise-cuda-graph)
+    if [ "$method" = LPT ] || [ "$method" = LPT_CG ]; then
+        # Persistent mixed attention plus the regular decode CUDA graph.
+        # Combining piecewise extend graphs with the decode graph runner is
+        # output-incorrect at N=400, even though either graph path is valid in
+        # isolation.
+        flags+=(--enable-mixed-chunk)
         method_env+=(
             SGLANG_FLASHINFER_USE_PERSISTENT=1
             SGLANG_EDF_PLAN_OVERHEAD_MS="$LPT_PLAN_OVERHEAD_MS"
@@ -90,13 +94,22 @@ start_server() {
     else
         case "$method" in
             DMC_PP)
-                # Prefill-prioritized baseline with pure prefill/decode graphs.
+                # Legacy combined-graph request. The runtime safety interlock
+                # retains the valid decode graph and disables piecewise EXTEND.
                 flags+=(--enable-piecewise-cuda-graph)
                 ;;
+            PP_DECODE_CG)
+                # Prefill-prioritized isolation: regular decode CUDA graphs,
+                # eager BatchPrefill. Used to distinguish decode corruption
+                # from piecewise pure-extend corruption.
+                ;;
+            PP_EXTEND_CG)
+                # Prefill-prioritized isolation: piecewise pure-extend graphs,
+                # with the regular decode graph runner disabled.
+                flags+=(--enable-piecewise-cuda-graph --disable-cuda-graph)
+                ;;
             PP_NOCG)
-                # Graph-free prefill-prioritized baseline.  This is the
-                # correctness reference when private FlashInfer decode graphs
-                # corrupt peak-load outputs.
+                # Graph-free prefill-prioritized correctness reference.
                 flags+=(--disable-cuda-graph)
                 ;;
             DMC_NOCG)

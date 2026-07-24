@@ -266,11 +266,20 @@ class CudaGraphRunner:
 
         # Mixed batch CUDA graph support (persistent kernel only)
         import os
+
+        # Exact-capacity private persistent graphs are unsafe, while padding
+        # executes extra full-model tokens. A zero budget therefore disables
+        # both replay and capture so the unused graph pool cannot reduce KV
+        # capacity or startup performance.
+        self._mixed_cg_max_padding_tokens = int(
+            os.environ.get("SGLANG_MIXED_CG_MAX_PADDING_TOKENS", "0")
+        )
         self.enable_mixed_cuda_graph = (
             hasattr(model_runner, "attn_backend")
             and hasattr(model_runner.attn_backend, "use_persistent")
             and model_runner.attn_backend.use_persistent
             and model_runner.server_args.enable_mixed_chunk
+            and self._mixed_cg_max_padding_tokens > 0
             and not os.environ.get("SGLANG_DISABLE_MIXED_CG", "")
         )
         self.mixed_graphs = {}
@@ -281,12 +290,6 @@ class CudaGraphRunner:
         # Skip mixed CG when padding exceeds this % of raw tokens (0 = disabled)
         self._mixed_cg_padding_pct = float(os.environ.get("SGLANG_MIXED_CG_PADDING_PCT", "0"))
         # Padding a mixed graph runs every padded token through the full model.
-        # Exact-capacity persistent graphs are unsafe (see
-        # _mixed_replay_index), so the safe default disables mixed replay.
-        # Padding remains an explicit opt-in for profiled deployments.
-        self._mixed_cg_max_padding_tokens = int(
-            os.environ.get("SGLANG_MIXED_CG_MAX_PADDING_TOKENS", "0")
-        )
         if self.enable_mixed_cuda_graph:
             self.mixed_capture_bs = sorted(
                 [1, 4, 8, 16, 32, 64, 128, 256, 384, 512, 640, 768, 1024, 1280, 1408, 1536, 1792, 1920, 2048, 2304, 2560, 2816, 3072, 3200, 3456, 3584, 3712, 3968, 4096]

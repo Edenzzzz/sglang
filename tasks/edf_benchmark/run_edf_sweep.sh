@@ -1,7 +1,7 @@
 #!/bin/bash
-# EDF benchmark sweep: PP / DMC / LPT_CG × ShareGPT/Code-Feedback/SWE-Gym × multiple rates
+# EDF benchmark sweep: PP / DMC / LPT × ShareGPT/Code-Feedback/SWE-Gym × multiple rates
 # All runs with --enable-priority-scheduling + EDF env vars + SLO-aware chunk control
-set -u
+set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
@@ -12,9 +12,10 @@ PORT="${PORT:-30000}"
 RESULTS_DIR="${RESULTS_DIR:-$SCRIPT_DIR/results}"
 mkdir -p "$RESULTS_DIR"
 RATES="${RATES:-2 4 8 12 16 24 inf}"
-METHODS="${METHODS:-PP DMC LPT_CG}"
+METHODS="${METHODS:-PP_DECODE_CG DMC_CG LPT}"
 WORKLOAD_FILTER="${WORKLOAD_FILTER:-}"
-NUM_PROMPTS_OVERRIDE="${NUM_PROMPTS_OVERRIDE:-}"
+NUM_PROMPTS_OVERRIDE="${NUM_PROMPTS_OVERRIDE:-400}"
+WARMUP_REQUESTS="${WARMUP_REQUESTS:-10}"
 
 LPT_MODEL="${LPT_MODEL:-$REPO_ROOT/tasks/perf_model/lpt_model.pt}"
 DMC_MODEL="${DMC_MODEL:-$REPO_ROOT/tasks/perf_model/dmc_model.pt}"
@@ -27,8 +28,8 @@ kill_all() {
 
 wait_server() {
     local logfile=$1
-    for i in $(seq 1 120); do
-        if grep -q "fired up" "$logfile" 2>/dev/null; then
+    for i in $(seq 1 450); do
+        if curl -sf "http://127.0.0.1:$PORT/health" >/dev/null; then
             echo "  Server ready after $((i*2))s"
             return 0
         fi
@@ -57,10 +58,11 @@ run_bench() {
     curl -s http://localhost:$PORT/flush_cache > /dev/null 2>&1 || true
     sleep 2
 
-    timeout 900 python3 -m sglang.bench_serving \
+    timeout 3600 python3 -m sglang.bench_serving \
         --backend sglang --port $PORT \
         --dataset-name $dataset $extra \
         --num-prompts $num \
+        --warmup-requests "$WARMUP_REQUESTS" \
         --request-rate $rate \
         --output-file "$outfile" \
         --output-details --disable-tqdm 2>&1 | tail -20
@@ -75,18 +77,21 @@ start_server() {
     local prefix_env=""
 
     case "$method" in
-        PP)
-            extra_flags="--enable-piecewise-cuda-graph"
+        PP_DECODE_CG)
+            # Unchanged BatchPrefill plus regular decode CUDA graphs.
+            extra_flags=""
             model_env=""  # PP doesn't use chunk control (no mixed batches)
             ;;
-        DMC)
-            extra_flags="--enable-mixed-chunk --enable-piecewise-cuda-graph"
+        DMC_CG)
+            # Unchanged mixed BatchPrefill plus regular decode CUDA graphs.
+            extra_flags="--enable-mixed-chunk"
             model_env="SGLANG_EDF_LATENCY_MODEL=$DMC_MODEL"
             ;;
-        LPT_CG)
-            extra_flags="--enable-mixed-chunk --enable-piecewise-cuda-graph"
+        LPT)
+            # Persistent mixed attention plus regular decode CUDA graphs.
+            extra_flags="--enable-mixed-chunk"
             model_env="SGLANG_EDF_LATENCY_MODEL=$LPT_MODEL"
-            prefix_env="SGLANG_FLASHINFER_USE_PERSISTENT=1"
+            prefix_env="SGLANG_FLASHINFER_USE_PERSISTENT=1 SGLANG_EDF_PLAN_OVERHEAD_MS=auto"
             ;;
     esac
 
@@ -98,6 +103,7 @@ start_server() {
         --chunked-prefill-size 8192 --mem-fraction-static 0.85 \
         --port $PORT --host 0.0.0.0 \
         --enable-priority-scheduling --schedule-low-priority-values-first \
+        --priority-scheduling-preemption-threshold 999999 \
         --watchdog-timeout 600 > "$logfile" 2>&1 &
     disown
 }

@@ -13,7 +13,7 @@ class TestMixedCudaGraphPadding(unittest.TestCase):
         self.runner.disable_padding = False
         self.runner.mixed_capture_bs = [2048, 2304, 4096]
         self.runner.mixed_max_bs = 4096
-        self.runner._mixed_cg_max_padding_tokens = 4
+        self.runner._mixed_cg_max_padding_tokens = 0
         self.runner._mixed_cg_padding_pct = 0
 
     @staticmethod
@@ -23,17 +23,18 @@ class TestMixedCudaGraphPadding(unittest.TestCase):
             input_ids=torch.empty(num_tokens),
         )
 
-    def test_gate_uses_actual_spare_replay_shape(self):
-        # An exact-size replay advances to the next graph for a safety slot.
-        # The gate must account for all 256 padded full-model tokens.
+    def test_exact_shape_falls_back_without_padding_budget(self):
         self.assertFalse(self.runner.can_run(self._batch(2048)))
 
-    def test_small_padding_is_allowed(self):
-        self.assertTrue(self.runner.can_run(self._batch(2045)))
+    def test_padding_is_disabled_by_default(self):
+        self.assertFalse(self.runner.can_run(self._batch(2045)))
 
     def test_largest_exact_graph_falls_back(self):
-        # There is no larger safe graph for the required spare slot.
         self.assertFalse(self.runner.can_run(self._batch(4096)))
+
+    def test_padding_remains_explicitly_opt_in(self):
+        self.runner._mixed_cg_max_padding_tokens = 256
+        self.assertTrue(self.runner.can_run(self._batch(2048)))
 
 
 if __name__ == "__main__":

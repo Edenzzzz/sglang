@@ -280,11 +280,12 @@ class CudaGraphRunner:
         self._mixed_cg_padding_log = [] if self._log_mixed_cg_padding else None
         # Skip mixed CG when padding exceeds this % of raw tokens (0 = disabled)
         self._mixed_cg_padding_pct = float(os.environ.get("SGLANG_MIXED_CG_PADDING_PCT", "0"))
-        # Padding a mixed graph runs every padded token through the full model,
-        # so a percentage-only limit can regress large batches. Keep the
-        # default conservative; users may raise it after profiling.
+        # Padding a mixed graph runs every padded token through the full model.
+        # Exact-capacity persistent graphs are unsafe (see
+        # _mixed_replay_index), so the safe default disables mixed replay.
+        # Padding remains an explicit opt-in for profiled deployments.
         self._mixed_cg_max_padding_tokens = int(
-            os.environ.get("SGLANG_MIXED_CG_MAX_PADDING_TOKENS", "4")
+            os.environ.get("SGLANG_MIXED_CG_MAX_PADDING_TOKENS", "0")
         )
         if self.enable_mixed_cuda_graph:
             self.mixed_capture_bs = sorted(
@@ -1018,9 +1019,11 @@ class CudaGraphRunner:
 
     def _mixed_replay_index(self, raw_num_token: int):
         index = bisect.bisect_left(self.mixed_capture_bs, raw_num_token)
-        # Keep one token of spare capacity for mixed replays. Exact-capacity
-        # persistent-attention graphs can corrupt memory at high aggregate KV
-        # lengths, while the identical workload is stable in the next graph.
+        # The private persistent kernel corrupts exact-capacity mixed replays.
+        # A safe replay therefore needs a larger graph with at least one real
+        # padding token.  The default padding budget is zero, so mixed graphs
+        # remain disabled unless the operator explicitly opts into that extra
+        # full-model work after profiling it.
         if self.mixed_capture_bs[index] == raw_num_token:
             if index + 1 == len(self.mixed_capture_bs):
                 return None
@@ -1047,12 +1050,10 @@ class CudaGraphRunner:
         if bs != raw_num_token:
             self.seq_lens.fill_(self.seq_len_fill_value)
             self.out_cache_loc.zero_()
-            if hasattr(self, 'prefix_lens'):
+            if hasattr(self, "prefix_lens"):
                 self.prefix_lens.zero_()
-            # Fill padding req_pool_indices with first real request's slot.
-            # Padding sequences have seq_len=1, so the kernel reads 1 KV page
-            # from this slot. Using a live request's slot guarantees the page
-            # index is valid (freed slots may contain garbage page indices).
+            # Padding sequences read one KV page. Use a live request slot so
+            # their page index cannot refer to a freed/garbage slot.
             self.req_pool_indices[:] = forward_batch.req_pool_indices[0]
 
         # Copy real data (token-indexed vs sequence-indexed)
@@ -1079,7 +1080,8 @@ class CudaGraphRunner:
         # that overflow the captured Q buffer (which only has bs tokens total).
         if hasattr(self, 'prefix_lens') and forward_batch.extend_prefix_lens is not None:
             self.prefix_lens[:raw_bs].copy_(forward_batch.extend_prefix_lens)
-            self.prefix_lens[raw_bs:bs] = self.seq_len_fill_value  # match seq_lens → qo_len=0
+            # qo_len = seq_len - prefix_len = 0 for padding sequences.
+            self.prefix_lens[raw_bs:bs] = self.seq_len_fill_value
 
         # Attention backend: padded_seq_lens_sum accounts for padding sequences
         padded_seq_lens_sum = (

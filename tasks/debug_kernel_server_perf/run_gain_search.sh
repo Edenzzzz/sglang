@@ -102,6 +102,11 @@ start_server() {
             DMC_NOCG)
                 flags+=(--enable-mixed-chunk --disable-cuda-graph)
                 ;;
+            DMC_CG)
+                # Default mixed BatchPrefill with decode CUDA graphs. Do not
+                # route mixed batches through the piecewise full-model graph.
+                flags+=(--enable-mixed-chunk)
+                ;;
             *)
                 flags+=(--enable-piecewise-cuda-graph --enable-mixed-chunk)
                 ;;

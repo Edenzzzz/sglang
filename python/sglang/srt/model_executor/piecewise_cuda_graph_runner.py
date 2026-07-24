@@ -264,6 +264,13 @@ class PiecewiseCudaGraphRunner:
         return torch.int64
 
     def can_run(self, forward_batch: ForwardBatch):
+        # Piecewise graphs are captured as a single-sequence EXTEND batch.
+        # A MIXED batch carries separate live prefill/decode metadata and cannot
+        # safely reuse that capture. Decode-only batches still use the regular
+        # CUDA graph runner.
+        if forward_batch.forward_mode.is_mixed():
+            return False
+
         num_tokens = len(forward_batch.input_ids)
         # TODO(yuwei): support return input_ids' logprob
         if forward_batch.return_logprob:

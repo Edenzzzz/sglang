@@ -280,6 +280,12 @@ class CudaGraphRunner:
         self._mixed_cg_padding_log = [] if self._log_mixed_cg_padding else None
         # Skip mixed CG when padding exceeds this % of raw tokens (0 = disabled)
         self._mixed_cg_padding_pct = float(os.environ.get("SGLANG_MIXED_CG_PADDING_PCT", "0"))
+        # Padding a mixed graph runs every padded token through the full model,
+        # so a percentage-only limit can regress large batches. Keep the
+        # default conservative; users may raise it after profiling.
+        self._mixed_cg_max_padding_tokens = int(
+            os.environ.get("SGLANG_MIXED_CG_MAX_PADDING_TOKENS", "4")
+        )
         if self.enable_mixed_cuda_graph:
             self.mixed_capture_bs = sorted(
                 [1, 4, 8, 16, 32, 64, 128, 256, 384, 512, 640, 768, 1024, 1280, 1408, 1536, 1792, 1920, 2048, 2304, 2560, 2816, 3072, 3200, 3456, 3584, 3712, 3968, 4096]
@@ -447,10 +453,14 @@ class CudaGraphRunner:
             )
             if not is_bs_supported:
                 return False
+            index = self._mixed_replay_index(num_tokens)
+            if index is None:
+                return False
+            padded = self.mixed_capture_bs[index]
+            if padded - num_tokens > self._mixed_cg_max_padding_tokens:
+                return False
             # Skip CG if padding % exceeds threshold (avoids P99 ITL regression)
             if self._mixed_cg_padding_pct > 0:
-                index = bisect.bisect_left(self.mixed_capture_bs, num_tokens)
-                padded = self.mixed_capture_bs[index]
                 padding_pct = (padded - num_tokens) / num_tokens * 100
                 if padding_pct > self._mixed_cg_padding_pct:
                     return False
@@ -1006,18 +1016,22 @@ class CudaGraphRunner:
         self.bs = bs
         self._is_mixed_replay = False
 
-    def _replay_prepare_mixed(self, forward_batch: ForwardBatch):
-        raw_num_token = forward_batch.input_ids.shape[0]
-        raw_bs = forward_batch.batch_size  # actual number of sequences
+    def _mixed_replay_index(self, raw_num_token: int):
         index = bisect.bisect_left(self.mixed_capture_bs, raw_num_token)
         # Keep one token of spare capacity for mixed replays. Exact-capacity
         # persistent-attention graphs can corrupt memory at high aggregate KV
         # lengths, while the identical workload is stable in the next graph.
-        if (
-            self.mixed_capture_bs[index] == raw_num_token
-            and index + 1 < len(self.mixed_capture_bs)
-        ):
+        if self.mixed_capture_bs[index] == raw_num_token:
+            if index + 1 == len(self.mixed_capture_bs):
+                return None
             index += 1
+        return index
+
+    def _replay_prepare_mixed(self, forward_batch: ForwardBatch):
+        raw_num_token = forward_batch.input_ids.shape[0]
+        raw_bs = forward_batch.batch_size  # actual number of sequences
+        index = self._mixed_replay_index(raw_num_token)
+        assert index is not None
         bs = self.mixed_capture_bs[index]
 
         # Padding stats collection (env SGLANG_LOG_MIXED_CG_PADDING=1 to enable)

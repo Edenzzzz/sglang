@@ -13,6 +13,7 @@ python3 -m sglang.bench_serving --backend sglang --dataset-name random --num-pro
 import argparse
 import asyncio
 import csv
+import gzip
 import io
 import json
 import os
@@ -783,6 +784,17 @@ def get_dataset(args, tokenizer, model_id=None):
             output_len=args.gsp_output_len,
             tokenizer=tokenizer,
             args=args,
+        )
+    elif args.dataset_name == "tracelab-claude":
+        assert not tokenize_prompt
+        input_requests = sample_tracelab_claude_requests(
+            dataset_path=args.dataset_path,
+            num_requests=args.num_prompts,
+            num_groups=args.tracelab_num_groups,
+            min_context_len=args.tracelab_min_context_len,
+            max_context_len=args.tracelab_max_context_len,
+            min_output_len=args.tracelab_min_output_len,
+            tokenizer=tokenizer,
         )
     elif args.dataset_name == "mmmu":
         processor = get_processor(model_id)
@@ -1643,6 +1655,87 @@ def sample_generated_shared_prefix_requests(
         pickle.dump(input_requests, f)
 
     return input_requests
+
+
+def sample_tracelab_claude_requests(
+    dataset_path: str,
+    num_requests: int,
+    num_groups: int,
+    min_context_len: int,
+    max_context_len: int,
+    min_output_len: int,
+    tokenizer: PreTrainedTokenizerBase,
+) -> List[DatasetRow]:
+    """Replay long-context Claude coding rounds from the TraceLab token trace.
+
+    TraceLab does not publish prompt text. We preserve its prefix-hit, append,
+    and output-length distributions by assigning sampled rounds to synthetic
+    sessions with a shared cached prefix and a unique appended suffix.
+    """
+    if not dataset_path:
+        raise ValueError("--dataset-path must point to the TraceLab JSONL(.gz)")
+    opener = gzip.open if dataset_path.endswith(".gz") else open
+    candidates = []
+    with opener(dataset_path, "rt") as f:
+        for line in f:
+            row = json.loads(line)
+            if row.get("provider") != "claude":
+                continue
+            context_len = int(row.get("input_tokens_total") or 0)
+            output_len = int(row.get("output_tokens") or 0)
+            prefix_len = int(row.get("prefix_tokens") or 0)
+            append_len = int(row.get("newly_append_tokens") or 0)
+            if (
+                min_context_len <= context_len <= max_context_len
+                and output_len >= min_output_len
+                and prefix_len >= min_context_len
+                and append_len > 0
+            ):
+                candidates.append((prefix_len, append_len, output_len))
+
+    if len(candidates) < num_requests:
+        raise ValueError(
+            f"TraceLab filter produced {len(candidates)} rows, fewer than "
+            f"--num-prompts={num_requests}"
+        )
+    if num_groups <= 0 or num_groups > num_requests:
+        raise ValueError("--tracelab-num-groups must be in [1, num_prompts]")
+
+    sampled = sorted(random.sample(candidates, num_requests))
+    grouped = [
+        sampled[
+            index * num_requests // num_groups :
+            (index + 1) * num_requests // num_groups
+        ]
+        for index in range(num_groups)
+    ]
+
+    requests = []
+    for group in grouped:
+        # All requests in a synthetic session share the conservative common
+        # prefix. Per-round append and output lengths remain from the trace.
+        shared_prefix_len = min(prefix_len for prefix_len, _, _ in group)
+        shared_prefix = gen_prompt(tokenizer, shared_prefix_len)
+        for _, append_len, output_len in group:
+            suffix = gen_prompt(tokenizer, append_len)
+            prompt = f"{shared_prefix}{suffix}"
+            actual_prompt_len = len(tokenizer.encode(prompt))
+            requests.append(
+                DatasetRow(
+                    prompt=prompt,
+                    prompt_len=actual_prompt_len,
+                    output_len=output_len,
+                )
+            )
+
+    random.shuffle(requests)
+    print(
+        "\nTraceLab Claude dataset statistics: "
+        f"{len(requests)} requests, {num_groups} shared-prefix groups, "
+        f"mean input={np.mean([r.prompt_len for r in requests]):.0f}, "
+        f"mean output={np.mean([r.output_len for r in requests]):.0f}"
+    )
+    return requests
 
 
 async def get_request(
@@ -2655,6 +2748,7 @@ if __name__ == "__main__":
             "random",
             "random-ids",
             "generated-shared-prefix",
+            "tracelab-claude",
             "mmmu",
             "image",
             "mooncake",
@@ -2909,6 +3003,31 @@ if __name__ == "__main__":
         type=int,
         default=256,
         help="Target length in tokens for outputs in generated-shared-prefix dataset",
+    )
+    tracelab_group = parser.add_argument_group("TraceLab Claude dataset arguments")
+    tracelab_group.add_argument(
+        "--tracelab-num-groups",
+        type=int,
+        default=20,
+        help="Number of synthetic sessions sharing cached prefixes",
+    )
+    tracelab_group.add_argument(
+        "--tracelab-min-context-len",
+        type=int,
+        default=16384,
+        help="Minimum full context length selected from the trace",
+    )
+    tracelab_group.add_argument(
+        "--tracelab-max-context-len",
+        type=int,
+        default=32768,
+        help="Maximum full context length selected from the trace",
+    )
+    tracelab_group.add_argument(
+        "--tracelab-min-output-len",
+        type=int,
+        default=512,
+        help="Minimum output length for decode-heavy trace selection",
     )
     mooncake_group = parser.add_argument_group("mooncake dataset arguments")
     mooncake_group.add_argument(

@@ -12,30 +12,57 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 - Profile logs: `tasks/debug_kernel_server_perf/profile_logs/`
 - gpu_keepalive MUST be stopped before benchmarks (corrupts results — cooperative launch is especially sensitive to SM contention)
 
-## H800 SLO-aware validation (2026-07-23)
+## Correctness-valid H800 results (2026-07-24)
 
-Single-GPU Qwen3-8B, random 4096-token input / 512-token output, rate 16,
-100 requests. The EDF runs use a 2000 ms TTFT target and 100 ms ITL target.
-H800 and H100 have the same relevant single-GPU compute and memory
-characteristics; H800's lower NVLink bandwidth does not affect this test.
+All methods use N=400, the same prompts and ordinary decode CUDA graphs.
+PP uses unchanged BatchPrefill without mixed chunking; DMC uses unchanged
+mixed BatchPrefill; LPT replaces only mixed-batch attention with the persistent
+kernel. Results are rejected unless retokenized output is within 2% of the
+server-reported output. Exact-capacity mixed graphs and the combination of
+piecewise EXTEND graphs with decode graphs are excluded because they corrupt
+output.
 
-| Method | Total tok/s | P99 TTFT | pooled P99 ITL | median request max ITL | worst request ITL |
-|--------|------------:|---------:|---------------:|-----------------------:|------------------:|
-| **LPT mixed CG + EDF, 10 ms guard** | **17,846** | **2,118 ms** | **87.0 ms** | **98.8 ms** | **99.3 ms** |
-| LPT mixed CG + EDF, unguarded | 17,902 | **1,990 ms** | 96.8 ms | 108.8 ms | 109.4 ms |
-| DMC + EDF | 15,753 | 3,728 ms | 104.5 ms | 509.5 ms | 549.2 ms |
-| Prefill-priority | 17,791 | **937 ms** | 22.8 ms | 3,087.0 ms | 4,675.0 ms |
+At rate 16, both realistic Qwen3-8B workloads meet their TTFT SLO. The table
+reports total-token throughput and the fraction of requests whose maximum
+decode gap meets the 150 ms ITL SLO:
 
-At the same nominal 100 ms decode SLO, guarded LPT provides **13.3% more
-throughput than DMC**, strictly keeps every observed decode gap below 100 ms,
-and has a tighter request-level tail. Against prefill-priority, guarded LPT is
-slightly faster (+0.3%) while reducing median per-request maximum ITL from
-3.09 seconds to 98.8 ms (31.2x).
+| Workload | PP tok/s / ITL attainment | DMC tok/s / ITL attainment | LPT tok/s / ITL attainment |
+|----------|---------------------------:|----------------------------:|----------------------------:|
+| Code-Feedback | 7,217 / 17.8% | **7,411 / 81.0%** | 7,404 / **74.8%** |
+| SWE-Gym | 3,005 / 21.0% | **3,017 / 78.5%** | 3,011 / **85.0%** |
 
-The pooled ITL percentile is misleading for prefill-priority: a small number of
-multi-second head-of-line stalls disappear below the pooled P99. Use
-`tasks/edf_benchmark/analyze_results.py`, which now reports per-request maximum
-ITL percentiles in addition to pooled token-level percentiles.
+The defensible claim is therefore narrower than the earlier one: mixed
+scheduling sharply improves request-level ITL over prefill-priority while
+matching or slightly improving its throughput. LPT improves the SWE-Gym ITL
+Pareto point over DMC, but does not yet improve DMC throughput.
+
+The 64K–100K TraceLab Claude coding slice uses Qwen2.5-7B-Instruct with 400
+requests, ten shared-prefix groups, 82,453 mean input tokens and 2,058 mean
+output tokens. All three results are output-valid:
+
+| Method | Total tok/s | Output tok/s | median TTFT | pooled P99 ITL | maximum ITL |
+|--------|------------:|-------------:|------------:|---------------:|------------:|
+| PP + decode CG | 16,190 | 394 | 710.9 s | 1,153 ms | 50.2 s |
+| DMC + decode CG | **26,752** | **651** | **362.0 s** | **229 ms** | — |
+| LPT + decode CG | 26,316 | 641 | 366.4 s | 245 ms | — |
+
+LPT provides 62.5% more total throughput than PP and removes most
+prefill-induced decode stalls, but trails DMC by 1.6% at peak load. This result
+must not be presented as a throughput win over DMC. A deterministic N=20
+TraceLab diagnostic showed a 7.1% LPT gain, confirming that the kernel can win
+when mixed attention is a larger fraction of runtime; converting that into a
+peak-load Pareto gain remains open.
+
+`tasks/edf_benchmark/analyze_results.py` reports request-level maximum-ITL
+percentiles because pooled token-level P99 hides rare multi-second stalls.
+
+## Historical H800 results (invalidated)
+
+The tables below predate the graph-isolation fixes. Several DMC/LPT runs
+retokenize only 22–98% of their reported outputs, PP combined incompatible
+piecewise and decode graph runners, and some comparisons disabled graphs only
+for a baseline. They are retained solely as debugging history and must not be
+used for a paper claim.
 
 ### H800 WL1–6 diagnosis
 

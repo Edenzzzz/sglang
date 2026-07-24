@@ -16,6 +16,7 @@ METHODS="${METHODS:-PP_DECODE_CG DMC_CG LPT}"
 WORKLOAD_FILTER="${WORKLOAD_FILTER:-}"
 NUM_PROMPTS_OVERRIDE="${NUM_PROMPTS_OVERRIDE:-400}"
 WARMUP_REQUESTS="${WARMUP_REQUESTS:-10}"
+LPT_PERSISTENT="${LPT_PERSISTENT:-1}"
 SERVER_PID=""
 
 LPT_MODEL="${LPT_MODEL:-$REPO_ROOT/tasks/perf_model/lpt_model.pt}"
@@ -114,7 +115,7 @@ start_server() {
             # Persistent mixed attention plus regular decode CUDA graphs.
             extra_flags="--enable-mixed-chunk"
             model_env="SGLANG_EDF_LATENCY_MODEL=$LPT_MODEL"
-            prefix_env="SGLANG_FLASHINFER_USE_PERSISTENT=1 SGLANG_EDF_PLAN_OVERHEAD_MS=auto"
+            prefix_env="SGLANG_FLASHINFER_USE_PERSISTENT=$LPT_PERSISTENT SGLANG_EDF_PLAN_OVERHEAD_MS=auto"
             ;;
     esac
 

@@ -17,10 +17,14 @@ python3 -m sglang.launch_server \
   --model-path Qwen/Qwen3-8B \
   --attention-backend flashinfer \
   --watchdog-timeout 999999 \
-  --mem-fraction-static 0.9 \
-  --enable-piecewise-cuda-graph \
+  --mem-fraction-static 0.85 \
   --enable-mixed-chunk
 ```
+
+Ordinary decode CUDA graphs remain enabled. Do not combine them with
+piecewise EXTEND graphs: each path is output-correct in isolation, but their
+combined replay corrupts output at N=400. LPT additionally sets
+`SGLANG_FLASHINFER_USE_PERSISTENT=1`.
 
 ## TODOs
 
@@ -51,7 +55,40 @@ python3 -m sglang.launch_server \
 
 ## Results
 
-### Ratio Sweep Results
+### Current correctness-valid results
+
+Matched H800/Qwen3-8B sweeps use 400 prompts, ordinary decode CUDA graphs for
+all methods, unchanged BatchPrefill for PP/DMC, and reject output-token
+mismatches larger than 2%.
+
+| Workload/rate | PP total tok/s | DMC total tok/s | LPT total tok/s | PP/DMC/LPT request-max ITL attainment |
+|---------------|---------------:|----------------:|----------------:|---------------------------------------:|
+| Code-Feedback / 16 | 7,217 | **7,411** | 7,404 | 17.8% / **81.0%** / 74.8% |
+| SWE-Gym / 16 | 3,005 | **3,017** | 3,011 | 21.0% / 78.5% / **85.0%** |
+
+On these decode-heavy workloads, persistent attention is active only during
+the relatively few mixed-prefill steps. An isolation run with the same LPT
+controller improves SWE-Gym throughput by 0.18% when the persistent kernel is
+enabled, so the small end-to-end difference is genuine rather than a disabled
+kernel.
+
+The TraceLab Claude coding slice from arXiv 2606.30560 is a stronger
+long-context test: Qwen2.5-7B-Instruct, 64K–100K inputs, at least 512 output
+tokens, ten shared-prefix groups, N=400 and at most 40 running requests.
+
+| Method | Total tok/s | Output tok/s | median TTFT | pooled P99 ITL |
+|--------|------------:|-------------:|------------:|---------------:|
+| PP + decode CG | 16,190 | 394 | 710.9 s | 1,153 ms |
+| DMC + decode CG | **26,752** | **651** | **362.0 s** | **229 ms** |
+| LPT + decode CG | 26,316 | 641 | 366.4 s | 245 ms |
+
+All results are output-valid. LPT improves total throughput over PP by 62.5%
+and greatly reduces prefill-induced decode stalls, but loses 1.6% throughput
+to DMC at peak load. A deterministic N=20 diagnostic gives LPT a 7.1%
+throughput advantage over DMC, showing that the kernel advantage exists at
+lower concurrency; it is not yet a peak-load paper claim.
+
+### Historical ratio sweep (pre-correctness isolation)
 
 H100 80GB, Qwen3-8B, `--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`, Poisson rate=8, 100 prompts, keepalive OFF.
 
@@ -242,4 +279,3 @@ Full CSV: `/tmp/workload_scan_results.csv`. Script: `tasks/realistic_workload_an
 
 **Runner-up: 6500/4000 (Nebius-SWE mid-turn)**
 - v3-fixed: +1.7% throughput, -11% TTFT, -27% P99 ITL vs default
-

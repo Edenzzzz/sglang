@@ -16,15 +16,28 @@ METHODS="${METHODS:-PP_DECODE_CG DMC_CG LPT}"
 WORKLOAD_FILTER="${WORKLOAD_FILTER:-}"
 NUM_PROMPTS_OVERRIDE="${NUM_PROMPTS_OVERRIDE:-400}"
 WARMUP_REQUESTS="${WARMUP_REQUESTS:-10}"
+SERVER_PID=""
 
 LPT_MODEL="${LPT_MODEL:-$REPO_ROOT/tasks/perf_model/lpt_model.pt}"
 DMC_MODEL="${DMC_MODEL:-$REPO_ROOT/tasks/perf_model/dmc_model.pt}"
 
 kill_all() {
-    pkill -9 -f "launch_server.*$PORT" 2>/dev/null || true
-    pkill -9 -f "bench_serving.*--port $PORT" 2>/dev/null || true
+    if [ -n "$SERVER_PID" ]; then
+        # launch_server creates scheduler/detokenizer children; terminate its
+        # process group so an orphaned child cannot retain the listening port.
+        kill -- "-$SERVER_PID" 2>/dev/null || kill "$SERVER_PID" 2>/dev/null || true
+        SERVER_PID=""
+    fi
+    local stale_pid
+    while read -r stale_pid; do
+        [ -n "$stale_pid" ] && kill -9 "$stale_pid" 2>/dev/null || true
+    done < <(pgrep -f "[s]glang.launch_server.*--port $PORT" 2>/dev/null || true)
+    while read -r stale_pid; do
+        [ -n "$stale_pid" ] && kill -9 "$stale_pid" 2>/dev/null || true
+    done < <(pgrep -f "[s]glang.bench_serving.*--port $PORT" 2>/dev/null || true)
     sleep 5
 }
+trap kill_all EXIT INT TERM
 
 wait_server() {
     local logfile=$1
@@ -32,6 +45,16 @@ wait_server() {
         if curl -sf "http://127.0.0.1:$PORT/health" >/dev/null; then
             echo "  Server ready after $((i*2))s"
             return 0
+        fi
+        if grep -Eq "address already in use|ERROR:.*bind|Address already in use" "$logfile" 2>/dev/null; then
+            echo "  ERROR: Server could not bind to port $PORT"
+            tail -20 "$logfile"
+            return 1
+        fi
+        if [ -n "$SERVER_PID" ] && ! kill -0 "$SERVER_PID" 2>/dev/null; then
+            echo "  ERROR: Server process exited before becoming healthy"
+            tail -20 "$logfile"
+            return 1
         fi
         sleep 2
     done
@@ -59,7 +82,7 @@ run_bench() {
     sleep 2
 
     timeout 3600 python3 -m sglang.bench_serving \
-        --backend sglang --port $PORT \
+        --backend sglang --host 127.0.0.1 --port $PORT \
         --dataset-name $dataset $extra \
         --num-prompts $num \
         --warmup-requests "$WARMUP_REQUESTS" \
@@ -98,13 +121,14 @@ start_server() {
     env $prefix_env \
         SGLANG_EDF_SCHEDULING=1 SGLANG_TTFT_SLO_MS=$ttft SGLANG_ITL_SLO_MS=$itl \
         $model_env \
-        nohup python -m sglang.launch_server --model $MODEL $extra_flags \
+        nohup setsid python -m sglang.launch_server --model $MODEL $extra_flags \
         --attention-backend flashinfer \
         --chunked-prefill-size 8192 --mem-fraction-static 0.85 \
-        --port $PORT --host 0.0.0.0 \
+        --port $PORT --host 127.0.0.1 \
         --enable-priority-scheduling --schedule-low-priority-values-first \
         --priority-scheduling-preemption-threshold 999999 \
         --watchdog-timeout 600 > "$logfile" 2>&1 &
+    SERVER_PID=$!
     disown
 }
 

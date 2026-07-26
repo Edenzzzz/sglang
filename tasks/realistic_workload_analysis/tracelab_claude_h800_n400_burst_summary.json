@@ -1,0 +1,47 @@
+{
+  "date": "2026-07-24",
+  "gpu": "H800 80GB",
+  "model": "Qwen2.5-7B-Instruct",
+  "workload": "Historical independent-round burst stress, 64K-100K context, output >=512",
+  "num_prompts": 400,
+  "shared_prefix_groups": 10,
+  "max_running_requests": 40,
+  "methods": {
+    "PP_DECODE_CG": {
+      "duration_s": 2087.9898960627615,
+      "input_tokens": 32981290,
+      "output_tokens": 823180,
+      "retokenized_output_tokens": 823158,
+      "total_throughput_tok_s": 16189.958612224958,
+      "output_throughput_tok_s": 394.245202791564,
+      "median_ttft_ms": 710885.0908493623,
+      "p99_ttft_ms": 1762129.3978193402,
+      "median_itl_ms": 40.89396167546511,
+      "p99_itl_ms": 1153.4926137886946
+    },
+    "DMC_CG": {
+      "duration_s": 1263.5574129745364,
+      "input_tokens": 32981290,
+      "output_tokens": 823180,
+      "retokenized_output_tokens": 822480,
+      "total_throughput_tok_s": 26753.410373669534,
+      "output_throughput_tok_s": 651.4781137345826,
+      "median_ttft_ms": 362017.47766602784,
+      "p99_ttft_ms": 842829.8236425035,
+      "median_itl_ms": 38.597168400883675,
+      "p99_itl_ms": 229.13849014788877
+    },
+    "LPT_ADAPTIVE": {
+      "duration_s": 1264.1954066399485,
+      "input_tokens": 32981290,
+      "output_tokens": 823180,
+      "retokenized_output_tokens": 823013,
+      "total_throughput_tok_s": 26739.908895767524,
+      "output_throughput_tok_s": 651.1493363101954,
+      "median_ttft_ms": 357424.80028327554,
+      "p99_ttft_ms": 841539.989896249,
+      "median_itl_ms": 38.57854753732681,
+      "p99_itl_ms": 220.97221113741398
+    }
+  }
+}

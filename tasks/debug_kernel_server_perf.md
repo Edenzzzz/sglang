@@ -36,23 +36,27 @@ scheduling sharply improves request-level ITL over prefill-priority while
 matching or slightly improving its throughput. LPT improves the SWE-Gym ITL
 Pareto point over DMC, but does not yet improve DMC throughput.
 
-The 64K–100K TraceLab Claude coding slice uses Qwen2.5-7B-Instruct with 400
-requests, ten shared-prefix groups, 82,453 mean input tokens and 2,058 mean
-output tokens. All three results are output-valid:
+The primary 64K–100K TraceLab Claude result is a causal session replay:
+Qwen2.5-7B-Instruct, 400 consecutive rounds from ten real sessions, mean
+3,812-token tool/user append, mean 481-token output, and recorded inter-round
+delays compressed 100x. Unlike the old independent-request burst, this
+continually injects sporadic prefills while other sessions decode.
 
-| Method | Total tok/s | Output tok/s | median TTFT | pooled P99 ITL | maximum ITL |
-|--------|------------:|-------------:|------------:|---------------:|------------:|
-| PP + decode CG | 16,190 | 394 | 710.9 s | 1,153 ms | 50.2 s |
-| DMC + decode CG | **26,753** | **651** | 362.0 s | 229 ms | — |
-| LPT + adaptive persistent | 26,740 | 651 | **357.4 s** | **221 ms** | — |
+| Method | Total tok/s | Mean / P99 TTFT | pooled P99 ITL | median / P99 request-max ITL |
+|--------|------------:|----------------:|---------------:|-----------------------------:|
+| PP + decode CG | 17,268 | 4,492 / 44,361 ms | **86.6 ms** | 1,737 / 77,111 ms |
+| DMC + decode CG | 30,424 | 1,683 / 31,662 ms | 88.8 ms | 165 / **989 ms** |
+| **LPT + adaptive persistent** | **31,192** | **1,011 / 12,731 ms** | 90.7 ms | **140** / 990 ms |
 
-LPT provides 62.5% more total throughput than PP and removes most
-prefill-induced decode stalls. Server-load-aware kernel dispatch removes the
-former 1.6% DMC regression: LPT is within 0.05% throughput while improving
-median TTFT by 1.27% and pooled P99 ITL by 3.56%. This is a peak-load Pareto
-improvement, not a throughput-win claim. At N=40, where mixed attention is a
-larger fraction of runtime, LPT provides 4.11% more throughput and 17.9% lower
-median TTFT than DMC.
+All results retokenize within 0.2% of the reported output. LPT provides 2.52%
+more throughput than DMC while reducing mean/P99 TTFT by 39.9%/59.8% and
+median request-max ITL by 15.0%. Pooled P99 ITL is 2.1% higher and
+request-max P99 is tied. Against PP, LPT provides 80.6% more throughput and
+91.9% lower median request-max ITL.
+
+The former N=400 result (400 independent long generations released as one
+burst) is retained only as a saturation stress test in
+`tasks/realistic_workload_analysis/tracelab_claude_h800_n400_burst_summary.json`.
 
 `tasks/edf_benchmark/analyze_results.py` reports request-level maximum-ITL
 percentiles because pooled token-level P99 hides rare multi-second stalls.

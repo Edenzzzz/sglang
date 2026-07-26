@@ -72,23 +72,37 @@ controller improves SWE-Gym throughput by 0.18% when the persistent kernel is
 enabled, so the small end-to-end difference is genuine rather than a disabled
 kernel.
 
-The TraceLab Claude coding slice from arXiv 2606.30560 is a stronger
-long-context test: Qwen2.5-7B-Instruct, 64K–100K inputs, at least 512 output
-tokens, ten shared-prefix groups, N=400 and at most 40 running requests.
+The primary TraceLab result now replays the Claude coding sessions from arXiv
+2606.30560 instead of sampling independent rounds. It preserves real
+`session_id`, consecutive round order, prefix/append lengths, short tool-call
+outputs, causal dependencies, and recorded inter-round delays. Human-idle and
+tool delays are compressed 100x while preserving their relative burst
+structure. The H800/Qwen2.5-7B-Instruct run contains 400 rounds from ten
+sessions, 64K–100K contexts, mean append 3,812 tokens, mean output 481 tokens,
+and ordinary decode CUDA graphs for every method.
 
-| Method | Total tok/s | Output tok/s | median TTFT | pooled P99 ITL |
-|--------|------------:|-------------:|------------:|---------------:|
-| PP + decode CG | 16,190 | 394 | 710.9 s | 1,153 ms |
-| DMC + decode CG | **26,753** | **651** | 362.0 s | 229 ms |
-| LPT + adaptive persistent | 26,740 | 651 | **357.4 s** | **221 ms** |
+| Method | Total tok/s | Mean / P99 TTFT | pooled P99 ITL | median / P99 request-max ITL |
+|--------|------------:|----------------:|---------------:|-----------------------------:|
+| PP + decode CG | 17,268 | 4,492 / 44,361 ms | **86.6 ms** | 1,737 / 77,111 ms |
+| DMC + decode CG | 30,424 | 1,683 / 31,662 ms | 88.8 ms | 165 / **989 ms** |
+| **LPT + adaptive persistent** | **31,192** | **1,011 / 12,731 ms** | 90.7 ms | **140** / 990 ms |
 
-All results are output-valid. LPT improves total throughput over PP by 62.5%
-and greatly reduces prefill-induced decode stalls. Selecting the persistent
-work ordering from server-level KV load removes the former 1.6% DMC
-regression: LPT matches DMC throughput within 0.05%, improves median TTFT by
-1.27%, and improves pooled P99 ITL by 3.56%. At N=40 it provides 4.11% more
-throughput and 17.9% lower median TTFT than DMC. The defensible peak-load claim
-is a Pareto improvement, not higher throughput.
+All three runs are output-valid (99.82–99.96% retokenization). Against DMC,
+LPT provides **2.52% higher throughput**, 39.9% lower mean TTFT, 59.8% lower
+P99 TTFT, and 15.0% lower median request-max ITL. Its pooled P99 ITL is 2.1%
+higher and request-max P99 is tied, so the supported claim is higher
+throughput with a substantially better TTFT/request-tail Pareto point, not
+universal dominance. Against PP, LPT provides 80.6% higher throughput and
+reduces median request-max ITL by 91.9%.
+
+The previous 400-independent-round burst with output >=512 is retained in
+`tracelab_claude_h800_n400_burst_summary.json` as a saturation stress test,
+not as a faithful agent replay.
+
+A four-session/40-round faithful smoke test showed the same direction before
+the full run: LPT was 2.45% faster than DMC and reduced mean TTFT from 1,287
+to 836 ms. The older independent-round N=40 diagnostic showed a 4.11%
+throughput gain; it is useful for kernel isolation but not agent-level claims.
 
 ### Historical ratio sweep (pre-correctness isolation)
 

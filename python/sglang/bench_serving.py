@@ -981,6 +981,9 @@ class DatasetRow:
     image_data: Optional[List[str]] = None
     timestamp: Optional[float] = None
     warmup_only: bool = False
+    session_id: Optional[str] = None
+    round_index: Optional[int] = None
+    inter_round_delay_s: float = 0.0
 
     def __post_init__(self):
         if self.text_prompt_len is None:
@@ -1668,16 +1671,11 @@ def sample_tracelab_claude_requests(
     tokenizer: PreTrainedTokenizerBase,
     return_text: bool = True,
 ) -> List[DatasetRow]:
-    """Replay long-context Claude coding rounds from the TraceLab token trace.
-
-    TraceLab does not publish prompt text. We preserve its prefix-hit, append,
-    and output-length distributions by assigning sampled rounds to synthetic
-    sessions with a shared cached prefix and a unique appended suffix.
-    """
+    """Build ordered synthetic-token sessions from the TraceLab Claude trace."""
     if not dataset_path:
         raise ValueError("--dataset-path must point to the TraceLab JSONL(.gz)")
     opener = gzip.open if dataset_path.endswith(".gz") else open
-    candidates = []
+    sessions: Dict[str, List[Dict[str, Any]]] = {}
     with opener(dataset_path, "rt") as f:
         for line in f:
             row = json.loads(line)
@@ -1690,74 +1688,118 @@ def sample_tracelab_claude_requests(
             if (
                 min_context_len <= context_len <= max_context_len
                 and output_len >= min_output_len
-                and prefix_len >= min_context_len
+                and prefix_len > 0
                 and append_len > 0
             ):
-                candidates.append((prefix_len, append_len, output_len))
+                sessions.setdefault(row["session_id"], []).append(row)
 
-    if len(candidates) < num_requests:
+    total_candidates = sum(len(rows) for rows in sessions.values())
+    if total_candidates < num_requests:
         raise ValueError(
-            f"TraceLab filter produced {len(candidates)} rows, fewer than "
+            f"TraceLab filter produced {total_candidates} rows, fewer than "
             f"--num-prompts={num_requests}"
         )
     if num_groups <= 0 or num_groups > num_requests:
         raise ValueError("--tracelab-num-groups must be in [1, num_prompts]")
-
-    sampled = sorted(random.sample(candidates, num_requests))
-    grouped = [
-        sampled[
-            index * num_requests // num_groups :
-            (index + 1) * num_requests // num_groups
-        ]
+    quotas = [
+        (index + 1) * num_requests // num_groups
+        - index * num_requests // num_groups
         for index in range(num_groups)
     ]
+    eligible_sessions = [
+        session_id
+        for session_id, rows in sessions.items()
+        if len(rows) >= max(quotas)
+    ]
+    if len(eligible_sessions) < num_groups:
+        raise ValueError(
+            f"TraceLab filter produced only {len(eligible_sessions)} sessions "
+            f"with enough rounds for --tracelab-num-groups={num_groups}"
+        )
+    selected_session_ids = random.sample(eligible_sessions, num_groups)
 
     requests = []
     warmup_requests = []
+    selected_append_lens = []
     available_tokens = list(tokenizer.get_vocab().values())
-    for group in grouped:
-        # All requests in a synthetic session share the conservative common
-        # prefix. Per-round append and output lengths remain from the trace.
-        shared_prefix_len = min(prefix_len for prefix_len, _, _ in group)
-        shared_prefix_ids = random.choices(
-            available_tokens, k=shared_prefix_len
-        )
+    for session_id, quota in zip(selected_session_ids, quotas):
+        rows = sorted(sessions[session_id], key=lambda row: row["round_index"])
+        window_start = random.randint(0, len(rows) - quota)
+        rows = rows[window_start : window_start + quota]
+
+        first_prefix_len = int(rows[0]["prefix_tokens"])
+        session_prompt_ids = random.choices(available_tokens, k=first_prefix_len)
         if return_text:
-            warmup_prompt = tokenizer.decode(shared_prefix_ids)
+            warmup_prompt = tokenizer.decode(session_prompt_ids)
             warmup_prompt_len = len(tokenizer.encode(warmup_prompt))
         else:
-            warmup_prompt = shared_prefix_ids
-            warmup_prompt_len = len(shared_prefix_ids)
+            warmup_prompt = session_prompt_ids
+            warmup_prompt_len = len(session_prompt_ids)
         warmup_requests.append(
             DatasetRow(
                 prompt=warmup_prompt,
                 prompt_len=warmup_prompt_len,
                 output_len=1,
                 warmup_only=True,
+                session_id=session_id,
             )
         )
-        for _, append_len, output_len in group:
+
+        previous_last_event_ms = None
+        for row in rows:
+            prefix_len = int(row["prefix_tokens"])
+            append_len = int(row["newly_append_tokens"])
+            selected_append_lens.append(append_len)
+            output_len = int(row["output_tokens"])
+            if len(session_prompt_ids) >= prefix_len:
+                prefix_ids = session_prompt_ids[:prefix_len]
+            else:
+                prefix_ids = session_prompt_ids + random.choices(
+                    available_tokens, k=prefix_len - len(session_prompt_ids)
+                )
             suffix_ids = random.choices(available_tokens, k=append_len)
-            prompt_ids = shared_prefix_ids + suffix_ids
+            prompt_ids = prefix_ids + suffix_ids
+            session_prompt_ids = prompt_ids
             if return_text:
                 prompt = tokenizer.decode(prompt_ids)
                 actual_prompt_len = len(tokenizer.encode(prompt))
             else:
                 prompt = prompt_ids
                 actual_prompt_len = len(prompt_ids)
+            timing_events = row.get("timing_events") or []
+            event_times_ms = [
+                datetime.fromisoformat(event["timestamp"].replace("Z", "+00:00"))
+                .timestamp()
+                * 1000
+                for event in timing_events
+                if event.get("timestamp")
+            ]
+            first_event_ms = min(event_times_ms) if event_times_ms else None
+            last_event_ms = max(event_times_ms) if event_times_ms else first_event_ms
+            inter_round_delay_s = (
+                max(0.0, (first_event_ms - previous_last_event_ms) / 1000)
+                if first_event_ms is not None and previous_last_event_ms is not None
+                else 0.0
+            )
+            previous_last_event_ms = last_event_ms
+
             requests.append(
                 DatasetRow(
                     prompt=prompt,
                     prompt_len=actual_prompt_len,
                     output_len=output_len,
+                    timestamp=first_event_ms,
+                    session_id=session_id,
+                    round_index=int(row["round_index"]),
+                    inter_round_delay_s=inter_round_delay_s,
                 )
             )
 
-    random.shuffle(requests)
     print(
         "\nTraceLab Claude dataset statistics: "
-        f"{len(requests)} requests, {num_groups} shared-prefix groups, "
+        f"{len(requests)} ordered rounds, {num_groups} real sessions, "
         f"mean input={np.mean([r.prompt_len for r in requests]):.0f}, "
+        f"mean append={np.mean(selected_append_lens):.0f}, "
         f"mean output={np.mean([r.output_len for r in requests]):.0f}"
     )
     return warmup_requests + requests
@@ -2175,17 +2217,23 @@ async def benchmark(
         )
         pbar_total *= args.mooncake_num_rounds
     else:
-        request_generator = get_request(input_requests, request_rate)
+        request_generator = get_request(
+            input_requests,
+            request_rate,
+            use_trace_timestamps,
+            mooncake_slowdown_factor,
+        )
 
     pbar = None if disable_tqdm else tqdm(total=pbar_total)
-    async for request in request_generator:
+
+    def build_request_func_input(request):
         if lora_names is not None and len(lora_names) != 0:
             idx = random.randint(0, len(lora_names) - 1)
             lora_name = lora_names[idx]
         else:
             lora_name = None
 
-        request_func_input = RequestFuncInput(
+        return RequestFuncInput(
             model=model_id,
             prompt=request.prompt,
             api_url=api_url,
@@ -2197,12 +2245,66 @@ async def benchmark(
             timestamp=request.timestamp,
         )
 
-        tasks.append(
-            asyncio.create_task(
-                limited_request_func(request_func_input=request_func_input, pbar=pbar)
-            )
+    is_session_trace = (
+        args.dataset_name == "tracelab-claude"
+        and use_trace_timestamps
+        and any(request.session_id for request in input_requests)
+    )
+    if is_session_trace:
+        session_requests: Dict[str, List[Tuple[int, DatasetRow]]] = {}
+        for index, request in enumerate(input_requests):
+            session_requests.setdefault(request.session_id, []).append((index, request))
+        for rows in session_requests.values():
+            rows.sort(key=lambda item: item[1].round_index)
+
+        session_start_delays = {}
+        next_start_delay = 0.0
+        for session_id in session_requests:
+            session_start_delays[session_id] = next_start_delay
+            if request_rate != float("inf"):
+                next_start_delay += np.random.exponential(1.0 / request_rate)
+
+        async def run_session(session_id, rows):
+            if session_start_delays[session_id] > 0:
+                await asyncio.sleep(session_start_delays[session_id])
+            session_outputs = []
+            for position, (index, request) in enumerate(rows):
+                if position > 0 and request.inter_round_delay_s > 0:
+                    await asyncio.sleep(
+                        request.inter_round_delay_s * mooncake_slowdown_factor
+                    )
+                output = await limited_request_func(
+                    request_func_input=build_request_func_input(request), pbar=pbar
+                )
+                session_outputs.append((index, output))
+            return session_outputs
+
+        grouped_outputs = await asyncio.gather(
+            *[
+                asyncio.create_task(run_session(session_id, rows))
+                for session_id, rows in session_requests.items()
+            ]
         )
-    outputs: List[RequestFuncOutput] = await asyncio.gather(*tasks)
+        outputs = [None] * len(input_requests)
+        for session_output in grouped_outputs:
+            for index, output in session_output:
+                outputs[index] = output
+    else:
+        request_generator = get_request(
+            input_requests,
+            request_rate,
+            use_trace_timestamps,
+            mooncake_slowdown_factor,
+        )
+        async for request in request_generator:
+            tasks.append(
+                asyncio.create_task(
+                    limited_request_func(
+                        request_func_input=build_request_func_input(request), pbar=pbar
+                    )
+                )
+            )
+        outputs = await asyncio.gather(*tasks)
 
     # Stop profiler
     if profile:
@@ -3050,7 +3152,7 @@ if __name__ == "__main__":
         "--tracelab-num-groups",
         type=int,
         default=20,
-        help="Number of synthetic sessions sharing cached prefixes",
+        help="Number of real ordered sessions to replay",
     )
     tracelab_group.add_argument(
         "--tracelab-min-context-len",

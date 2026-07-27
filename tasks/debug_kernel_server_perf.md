@@ -36,7 +36,11 @@ scheduling sharply improves request-level ITL over prefill-priority while
 matching or slightly improving its throughput. LPT improves the SWE-Gym ITL
 Pareto point over DMC, but does not yet improve DMC throughput.
 
-The primary 64K–100K TraceLab Claude result is a causal session replay:
+### Headline TraceLab result
+
+The primary 64K–100K TraceLab Claude result is a causal session replay at
+peak offered load: all ten sessions are admitted together
+(`--request-rate inf`). It uses
 Qwen2.5-7B-Instruct, 400 consecutive rounds from ten real sessions, mean
 3,812-token tool/user append, mean 481-token output, and recorded inter-round
 delays compressed 100x. Unlike the old independent-request burst, this
@@ -60,6 +64,10 @@ gap without changing DMC, throughput, or the absence of a minimum chunk.
 A 6,144-token ablation measured 89.01 ms and lower throughput, so it is
 rejected. Against PP, LPT provides 80.6% more throughput and 92.0% lower
 median request-max ITL.
+
+The arrival-rate sweep is supporting evidence and follows the headline in
+`tasks/realistic_workload_analysis.md`; its separate paper-facing curves are
+under `tasks/edf_benchmark/current_policy_n400/`.
 
 The former N=400 result (400 independent long generations released as one
 burst) is retained only as a saturation stress test in

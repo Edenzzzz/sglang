@@ -2355,9 +2355,18 @@ async def benchmark(
     metrics.accept_length = accept_length
 
     if not suppress_print:
+        request_rate_display = (
+            f"{request_rate:g} sessions/s (trace-causal)"
+            if is_session_trace and request_rate != float("inf")
+            else "inf sessions/s (trace-causal)"
+            if is_session_trace
+            else "trace"
+            if use_trace_timestamps
+            else request_rate
+        )
         _print_benchmark_summary(
             backend=backend,
-            request_rate_display=("trace" if use_trace_timestamps else request_rate),
+            request_rate_display=request_rate_display,
             max_concurrency=max_concurrency,
             metrics=metrics,
             benchmark_duration=metrics.duration,
@@ -2400,7 +2409,17 @@ async def benchmark(
             common = {
                 "backend": args.backend,
                 "dataset_name": args.dataset_name,
-                "request_rate": "trace" if use_trace_timestamps else request_rate,
+                "request_rate": (
+                    request_rate if is_session_trace else
+                    "trace" if use_trace_timestamps else request_rate
+                ),
+                "trace_causal_replay": is_session_trace,
+                "trace_session_arrival_rate": (
+                    request_rate if is_session_trace else None
+                ),
+                "trace_time_scale": (
+                    mooncake_slowdown_factor if is_session_trace else None
+                ),
                 "max_concurrency": max_concurrency,
                 "sharegpt_output_len": args.sharegpt_output_len,
                 "random_input_len": args.random_input_len,

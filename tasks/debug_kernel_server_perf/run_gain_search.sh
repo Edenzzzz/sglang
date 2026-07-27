@@ -14,6 +14,7 @@ WARMUP_REQUESTS="${WARMUP_REQUESTS:-2}"
 SERVER_READY_TIMEOUT_S="${SERVER_READY_TIMEOUT_S:-900}"
 DATASET_PATH="${DATASET_PATH:-workloads/ShareGPT_V3_unfiltered_cleaned_split.json}"
 RESULTS_DIR="${RESULTS_DIR:-$SCRIPT_DIR/gain_search_results}"
+RESULT_WORKLOAD_NAME="${RESULT_WORKLOAD_NAME:-}"
 METHODS_SPEC="${METHODS_SPEC:-DMC LPT_CG}"
 EDF_ITL_MS="${EDF_ITL_MS:-}"
 EDF_TTFT_MS="${EDF_TTFT_MS:-2000}"
@@ -164,7 +165,11 @@ for method in $METHODS_SPEC; do
     start_server "$method"
     for case_spec in "${CASES[@]}"; do
         IFS=: read -r input output rate <<<"$case_spec"
-        outfile="$RESULTS_DIR/${method}_in${input}_out${output}_rate${rate}.json"
+        if [ -n "$RESULT_WORKLOAD_NAME" ]; then
+            outfile="$RESULTS_DIR/${method}_${RESULT_WORKLOAD_NAME}_rate${rate}.json"
+        else
+            outfile="$RESULTS_DIR/${method}_in${input}_out${output}_rate${rate}.json"
+        fi
         [ -f "$outfile" ] && continue
         curl -sf "http://localhost:$PORT/flush_cache" >/dev/null || true
         python3 -m sglang.bench_serving --backend sglang --port "$PORT" \

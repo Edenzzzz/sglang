@@ -72,8 +72,13 @@ controller improves SWE-Gym throughput by 0.18% when the persistent kernel is
 enabled, so the small end-to-end difference is genuine rather than a disabled
 kernel.
 
-The primary TraceLab result now replays the Claude coding sessions from arXiv
-2606.30560 instead of sampling independent rounds. It preserves real
+#### Headline: faithful TraceLab at peak load (N=400)
+
+The primary TraceLab result replays the Claude coding sessions from arXiv
+2606.30560 instead of sampling independent rounds. This is the headline
+setting: all ten sessions are admitted together (`--request-rate inf`), and
+the server completes the 400 causal rounds at about 0.36–0.38 requests/s. It
+preserves real
 `session_id`, consecutive round order, prefix/append lengths, short tool-call
 outputs, causal dependencies, and recorded inter-round delays. Human-idle and
 tool delays are compressed 100x while preserving their relative burst
@@ -96,6 +101,34 @@ mixed-prefill interference window; the default 8,192-token run measured
 90.70 ms pooled P99. A 6,144-token ablation regressed throughput and P99, so
 it is rejected. Against PP, LPT provides 80.6% higher throughput and reduces
 median request-max ITL by 92.0%.
+
+#### Offered-load sweep (supporting result)
+
+The sweep changes the Poisson arrival rate of **new sessions**, not the rate
+of causally dependent rounds inside a session. At 0.01 sessions/s, overlap is
+sparse and LPT is tied with DMC. At 0.02 sessions/s, LPT starts to move the
+frontier through much lower TTFT. At 0.05 sessions/s it trades a small amount
+of throughput and pooled P99 ITL for better TTFT and median request-tail ITL.
+The largest throughput separation remains the simultaneous-session headline
+above, where overlap opportunities are most abundant.
+
+| Session arrivals/s | DMC / LPT total tok/s | DMC / LPT mean ITL | DMC / LPT P99 TTFT |
+|-------------------:|----------------------:|--------------------:|--------------------:|
+| 0.01 | 23,987 / 23,971 | 15.73 / **15.70 ms** | 15.60 / **15.59 s** |
+| 0.02 | 27,082 / **27,156** | **16.85** / 16.95 ms | 17.30 / **11.15 s** |
+| 0.05 | **29,816** / 29,678 | **16.89** / 16.98 ms | 18.41 / **15.89 s** |
+| simultaneous (`inf`) | 30,424 / **31,186** | **17.18** / 17.23 ms | 31.66 / **12.73 s** |
+
+Paper-facing figures keep TTFT and ITL separate:
+[capacity/interactivity](edf_benchmark/current_policy_n400/pareto_capacity_vs_mean_itl.png),
+[P99 ITL](edf_benchmark/current_policy_n400/p99_itl_vs_rate.png),
+[TTFT SLO attainment](edf_benchmark/current_policy_n400/slo_ttft_attainment_vs_rate.png),
+and [per-request P99-ITL SLO attainment](edf_benchmark/current_policy_n400/slo_itl_attainment_vs_rate.png).
+The same figures show a modest LPT frontier shift on Code-Feedback and
+essentially a DMC/LPT tie on SWE-Gym. Those independent-request datasets have
+mean prompts of only about 242 and 690 tokens, respectively, and omit the
+intermittent multi-turn tool-result prefills that make TraceLab a better
+kernel-level stressor.
 
 The previous 400-independent-round burst with output >=512 is retained in
 `tracelab_claude_h800_n400_burst_summary.json` as a saturation stress test,

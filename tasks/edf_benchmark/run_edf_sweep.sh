@@ -6,6 +6,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 cd "$REPO_ROOT"
+export PATH="$REPO_ROOT/.venv/bin:$PATH"
 
 MODEL="${MODEL:-Qwen/Qwen3-8B}"
 PORT="${PORT:-30000}"
@@ -17,6 +18,7 @@ WORKLOAD_FILTER="${WORKLOAD_FILTER:-}"
 NUM_PROMPTS_OVERRIDE="${NUM_PROMPTS_OVERRIDE:-400}"
 WARMUP_REQUESTS="${WARMUP_REQUESTS:-10}"
 LPT_PERSISTENT="${LPT_PERSISTENT:-1}"
+LPT_CHUNKED_PREFILL_SIZE="${LPT_CHUNKED_PREFILL_SIZE:-7168}"
 SERVER_PID=""
 
 LPT_MODEL="${LPT_MODEL:-$REPO_ROOT/tasks/perf_model/lpt_model.pt}"
@@ -99,6 +101,7 @@ start_server() {
     local extra_flags=""
     local model_env=""
     local prefix_env=""
+    local chunked_prefill_size=8192
 
     case "$method" in
         PP_DECODE_CG)
@@ -116,6 +119,7 @@ start_server() {
             extra_flags="--enable-mixed-chunk"
             model_env="SGLANG_EDF_LATENCY_MODEL=$LPT_MODEL"
             prefix_env="SGLANG_FLASHINFER_USE_PERSISTENT=$LPT_PERSISTENT SGLANG_EDF_PLAN_OVERHEAD_MS=auto"
+            chunked_prefill_size="$LPT_CHUNKED_PREFILL_SIZE"
             ;;
     esac
 
@@ -124,7 +128,7 @@ start_server() {
         $model_env \
         nohup setsid python -m sglang.launch_server --model $MODEL $extra_flags \
         --attention-backend flashinfer \
-        --chunked-prefill-size 8192 --mem-fraction-static 0.85 \
+        --chunked-prefill-size "$chunked_prefill_size" --mem-fraction-static 0.85 \
         --port $PORT --host 127.0.0.1 \
         --enable-priority-scheduling --schedule-low-priority-values-first \
         --priority-scheduling-preemption-threshold 999999 \

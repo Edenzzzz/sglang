@@ -23,6 +23,8 @@ SLO = {
     "swe":           {"ttft_ms": 5000, "itl_ms": 150},
     "nebius_swe":    {"ttft_ms": 5000, "itl_ms": 150},
     "swe_bench_pro": {"ttft_ms": 4000, "itl_ms": 150},
+    # Long-context TraceLab uses the same length-aware TTFT scaling below.
+    "tracelab_claude": {"ttft_ms": 3000, "itl_ms": 100},
 }
 
 METHOD_PREFIXES = (
@@ -126,12 +128,17 @@ def analyze(path):
         "workload": wl,
         "rate": rate,
         "throughput": d.get("output_throughput", 0),
+        "total_throughput": (
+            d.get("total_input_tokens", 0) + d.get("total_output_tokens", 0)
+        ) / max(d.get("duration", 0), 1e-9),
+        "request_throughput": d.get("request_throughput", 0),
         "duration": d.get("duration", 0),
         "output_retokenize_ratio": output_retokenize_ratio,
         "output_valid": 0.98 <= output_retokenize_ratio <= 1.02,
         "median_ttft_ms": d.get("median_ttft_ms", 0),
         "p99_ttft_ms": d.get("p99_ttft_ms", 0),
         "median_itl_ms": d.get("median_itl_ms", 0),
+        "mean_itl_ms": d.get("mean_itl_ms", 0),
         "p99_itl_ms": d.get("p99_itl_ms", 0),
         # Pooled token-level ITL percentiles can hide rare multi-second stalls.
         # Summarize each request first so HOL blocking remains visible.
@@ -171,11 +178,11 @@ def main():
     # Group by workload then method
     rows.sort(key=lambda r: (r["workload"], r["method"], float(r["rate"]) if r["rate"] != "inf" else 1e9))
 
-    print(f"\n{'method':<13} {'wl':<14} {'rate':>5} {'valid':>7} {'tok/s':>8} {'med_TTFT':>9} {'p99_TTFT':>9} {'poolP99':>8} {'reqMax50':>9} {'reqMax99':>9} {'SLO_max%':>9} {'TTFT%':>6} {'ITLmax%':>8} {'ITLp99%':>8} {'TPOT%':>6}")
+    print(f"\n{'method':<13} {'wl':<14} {'rate':>5} {'valid':>7} {'total/s':>8} {'med_TTFT':>9} {'p99_TTFT':>9} {'poolP99':>8} {'reqMax50':>9} {'reqMax99':>9} {'SLO_max%':>9} {'TTFT%':>6} {'ITLmax%':>8} {'ITLp99%':>8} {'TPOT%':>6}")
     print("-" * 156)
     for r in rows:
         validity = "yes" if r["output_valid"] else f"{100*r['output_retokenize_ratio']:.1f}%"
-        print(f"{r['method']:<13} {r['workload']:<14} {r['rate']:>5} {validity:>7} {r['throughput']:>8.0f} "
+        print(f"{r['method']:<13} {r['workload']:<14} {r['rate']:>5} {validity:>7} {r['total_throughput']:>8.0f} "
               f"{r['median_ttft_ms']:>9.1f} {r['p99_ttft_ms']:>9.1f} "
               f"{r['p99_itl_ms']:>8.2f} "
               f"{r['median_req_max_itl_ms']:>9.2f} {r['p99_req_max_itl_ms']:>9.2f} "

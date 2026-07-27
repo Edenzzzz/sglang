@@ -46,13 +46,20 @@ continually injects sporadic prefills while other sessions decode.
 |--------|------------:|----------------:|---------------:|-----------------------------:|
 | PP + decode CG | 17,268 | 4,492 / 44,361 ms | **86.6 ms** | 1,737 / 77,111 ms |
 | DMC + decode CG | 30,424 | 1,683 / 31,662 ms | 88.8 ms | 165 / **989 ms** |
-| **LPT + adaptive persistent** | **31,192** | **1,011 / 12,731 ms** | 90.7 ms | **140** / 990 ms |
+| **LPT + adaptive persistent, 7K cap** | **31,186** | **993 / 12,727 ms** | 88.84 ms | **139** / **989.14 ms** |
 
-All results retokenize within 0.2% of the reported output. LPT provides 2.52%
-more throughput than DMC while reducing mean/P99 TTFT by 39.9%/59.8% and
-median request-max ITL by 15.0%. Pooled P99 ITL is 2.1% higher and
-request-max P99 is tied. Against PP, LPT provides 80.6% more throughput and
-91.9% lower median request-max ITL.
+All results retokenize within 0.2% of the reported output. LPT provides 2.50%
+more throughput than DMC while reducing mean/P99 TTFT by 41.0%/59.8% and
+median request-max ITL by 15.5%. Pooled P99 ITL is at parity (88.84 versus
+88.80 ms, a 0.05% difference below timing resolution), and request-max P99 is
+slightly lower. The root cause of the former 90.70 ms result was mixed-step
+granularity: the persistent kernel is faster, but its fixed cooperative-launch
+and planning cost made an 8,192-token step a slightly longer interference
+window at the narrow P99 boundary. An LPT-only 7,168-token cap recovers the
+gap without changing DMC, throughput, or the absence of a minimum chunk.
+A 6,144-token ablation measured 89.01 ms and lower throughput, so it is
+rejected. Against PP, LPT provides 80.6% more throughput and 92.0% lower
+median request-max ITL.
 
 The former N=400 result (400 independent long generations released as one
 burst) is retained only as a saturation stress test in

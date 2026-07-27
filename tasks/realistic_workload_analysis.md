@@ -85,15 +85,17 @@ and ordinary decode CUDA graphs for every method.
 |--------|------------:|----------------:|---------------:|-----------------------------:|
 | PP + decode CG | 17,268 | 4,492 / 44,361 ms | **86.6 ms** | 1,737 / 77,111 ms |
 | DMC + decode CG | 30,424 | 1,683 / 31,662 ms | 88.8 ms | 165 / **989 ms** |
-| **LPT + adaptive persistent** | **31,192** | **1,011 / 12,731 ms** | 90.7 ms | **140** / 990 ms |
+| **LPT + adaptive persistent, 7K cap** | **31,186** | **993 / 12,727 ms** | 88.84 ms | **139** / **989.14 ms** |
 
 All three runs are output-valid (99.82–99.96% retokenization). Against DMC,
-LPT provides **2.52% higher throughput**, 39.9% lower mean TTFT, 59.8% lower
-P99 TTFT, and 15.0% lower median request-max ITL. Its pooled P99 ITL is 2.1%
-higher and request-max P99 is tied, so the supported claim is higher
-throughput with a substantially better TTFT/request-tail Pareto point, not
-universal dominance. Against PP, LPT provides 80.6% higher throughput and
-reduces median request-max ITL by 91.9%.
+LPT provides **2.50% higher throughput**, 41.0% lower mean TTFT, 59.8% lower
+P99 TTFT, and 15.5% lower median request-max ITL. Pooled P99 ITL is at parity
+(88.84 versus 88.80 ms, a 0.05% difference below timing resolution), while
+request-max P99 is slightly lower. The 7,168-token LPT-only cap shortens each
+mixed-prefill interference window; the default 8,192-token run measured
+90.70 ms pooled P99. A 6,144-token ablation regressed throughput and P99, so
+it is rejected. Against PP, LPT provides 80.6% higher throughput and reduces
+median request-max ITL by 92.0%.
 
 The previous 400-independent-round burst with output >=512 is retained in
 `tracelab_claude_h800_n400_burst_summary.json` as a saturation stress test,

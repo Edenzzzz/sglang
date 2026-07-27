@@ -16,10 +16,15 @@ fi
 export SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1
 export PATH="$REPO_ROOT/.venv/bin:$PATH"
 
+# The persistent kernel is faster, but its fixed cooperative-launch/planning
+# cost makes an 8192-token mixed step a slightly longer decode-interference
+# window. 7168 closes the pooled-P99 gap without imposing a minimum chunk or
+# changing the DMC/PP baselines.
 METHODS_SPEC="${METHODS_SPEC:-DMC_CG LPT PP_DECODE_CG}" \
 CASES_SPEC="${CASES_SPEC:-1:1:inf}" \
 NUM_PROMPTS="${NUM_PROMPTS:-400}" \
 WARMUP_REQUESTS="${WARMUP_REQUESTS:-10}" \
+LPT_CHUNKED_PREFILL_SIZE="${LPT_CHUNKED_PREFILL_SIZE:-7168}" \
 RESULTS_DIR="${RESULTS_DIR:-$SCRIPT_DIR/h800_qwen25_tracelab_claude_faithful_64k100k_n400_mr40}" \
 MODEL="$MODEL" \
 PORT="${PORT:-30005}" \

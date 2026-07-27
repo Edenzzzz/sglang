@@ -21,6 +21,10 @@ EDF_KV_WATERMARK="${EDF_KV_WATERMARK:-}"
 # Live-request default: 5ms for 1K outputs, 7.5ms for 2K, and 10ms for
 # long-output or extreme-prefix work. Set a number to reproduce a fixed guard.
 LPT_PLAN_OVERHEAD_MS="${LPT_PLAN_OVERHEAD_MS:-auto}"
+# Optional LPT-only cap. A slightly shorter mixed-prefill interference window
+# closes the narrow pooled-P99 gap on long-context decode-heavy traces without
+# changing the DMC baseline or imposing a minimum chunk size.
+LPT_CHUNKED_PREFILL_SIZE="${LPT_CHUNKED_PREFILL_SIZE:-}"
 LPT_MODEL="${LPT_MODEL:-$REPO_ROOT/tasks/perf_model/lpt_model.pt}"
 DMC_MODEL="${DMC_MODEL:-$REPO_ROOT/tasks/perf_model/dmc_model.pt}"
 read -r -a SERVER_EXTRA_FLAGS <<<"${SERVER_EXTRA_ARGS:-}"
@@ -89,6 +93,9 @@ start_server() {
         method_env+=(
             SGLANG_FLASHINFER_USE_PERSISTENT=1
             SGLANG_EDF_PLAN_OVERHEAD_MS="$LPT_PLAN_OVERHEAD_MS"
+        )
+        [ -z "$LPT_CHUNKED_PREFILL_SIZE" ] || flags+=(
+            --chunked-prefill-size "$LPT_CHUNKED_PREFILL_SIZE"
         )
         [ -z "$EDF_ITL_MS" ] || method_env+=(SGLANG_EDF_LATENCY_MODEL="$LPT_MODEL")
     else

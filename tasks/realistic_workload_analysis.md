@@ -1,332 +1,158 @@
-# Realistic Workload Analysis for v3 Persistent Kernel
+# Realistic Workload Analysis for the Persistent Overlap Kernel
 
-## Goal
-Identify which real-world agent workloads benefit most from v3 persistent kernel's prefill-decode overlap, and determine realistic serving parameters (arrival rates, input/output distributions) for benchmarking.
+## Scope
 
-## Context
-- v3 dynamic scheduler results: see `tasks/debug_kernel_server_perf.md` (Benchmark Summary section)
-- Workload survey & dataset catalog: `workloads/agent_workload_survey.md`
-- Dataset length stats & scripts: `workloads/AGENTS.md`
-- Length stats data: `workloads/length_stats.json`
-- Turn stats data: `workloads/turn_stats.json`
-- bench_serving 3rd-party support: `python/sglang/bench_serving_3rdparty.py`
+This document contains the current, correctness-valid evaluation of persistent
+prefill/decode overlap. Historical B200 scans, graph-incompatible runs,
+median-only latency tables, synthetic prioritization notes, and superseded
+arrival-rate surveys were removed; they remain available in Git history.
 
-## Server Launch Command
+The paper-facing comparison has three methods:
+
+- **PP:** prefill-prioritized scheduling with unchanged BatchPrefill.
+- **DMC:** default mixed-chunk scheduling with unchanged BatchPrefill.
+- **LPT:** mixed scheduling with the persistent overlap kernel, adaptive work
+  ordering, and a 7,168-token maximum prefill chunk.
+
+Ordinary decode CUDA graphs are enabled for every method. Piecewise EXTEND
+graphs are not combined with decode graphs because that combination is
+output-incorrect at N=400. LPT has no minimum prefill chunk. Every reported
+point retokenizes within 2% of its requested output.
+
+## Headline: faithful TraceLab at peak load
+
+The headline setting is one H800 with Qwen2.5-7B-Instruct, 400 causal rounds
+from ten real Claude coding sessions, 64K–100K contexts, mean 3,812-token
+append, mean 481-token output, and recorded think/tool gaps compressed 100x.
+All ten sessions are admitted together (`--request-rate inf`). Warmup uses
+same-length but token-disjoint prompts, so it exercises kernels and memory
+allocation without pre-populating the timed sessions' radix prefixes. The
+server seed is fixed to one.
+
+The replay preserves session identity, consecutive round ordering, prefix
+growth, tool-result prefills, output lengths, causal dependencies, and the
+relative timing of inter-round gaps. It is not a bag of independent prompts.
+
+| Method | Total tok/s | Mean / P99 TTFT | pooled P99 ITL |
+|--------|------------:|----------------:|---------------:|
+| DMC + decode CG | 28,965 | 2,583 / 64,253 ms | **93.56 ms** |
+| LPT + persistent, 7,168 cap | **29,093** | **2,459 / 57,708 ms** | 97.13 ms |
+
+LPT is 0.44% faster, reduces mean/P99 TTFT by 4.8%/10.2%, and increases pooled
+P99 ITL by 3.8%. This corrected result does **not** yet support the former
+claim of higher throughput at the same ITL SLO.
+
+The earlier 31,186 versus 30,424 tok/s result reused each timed session's exact
+prefix during warmup. Cache residency and eviction order then changed the
+first timed cohort's admission phase: in a fixed-seed reproduction, eight LPT
+requests shared a 24.16-second queue stall while the corresponding DMC cohort
+waited 2.75 seconds. Reversing the phase also reversed the apparent TTFT
+winner. The former +2.50% throughput, −41.0% mean TTFT, and −59.8% P99 TTFT
+numbers are retained in Git history as the observation that triggered this
+profile, but are superseded as paper evidence.
+
+## Offered-load sweep status
+
+For causal TraceLab replay, `--request-rate` is the Poisson arrival rate of
+**new sessions**; later rounds remain causal. The previous TraceLab sweep used
+the same exact-prefix warmup and is therefore removed from the current
+figures. It must be rerun with disjoint warmup before making a rate-dependent
+frontier claim. The independent Code-Feedback and SWE-Gym sweeps are
+unaffected.
+
+## Transfer to independent coding datasets
+
+Matched N=400 sweeps use Qwen3-8B and ordinary decode CUDA graphs for every
+method. Code-Feedback spans 4–24 req/s plus saturation; SWE-Gym spans
+0.5–4 req/s plus saturation.
+
+- **Code-Feedback:** LPT modestly shifts the capacity/interactivity frontier
+  around the load knee. At 16 req/s it is 0.4% faster and has 1.3% lower mean
+  ITL than DMC; at 24 req/s it is 0.28% faster with 1.4% lower mean ITL.
+- **SWE-Gym:** DMC and LPT are essentially tied on mean-ITL/capacity. At
+  4 req/s, LPT improves request-max P99 ITL (136.64 versus 145.77 ms), while
+  pooled P99 ITL is slightly worse.
+
+These datasets contain independent prompts averaging only about 242 and 690
+tokens. They omit the multi-turn intermittent tool-result prefills that create
+repeated mixed forwards in TraceLab, so the persistent kernel is active during
+too small a fraction of server time to materially shift the full curve.
+
+## Paper-facing figures
+
+- [Capacity versus mean ITL](edf_benchmark/current_policy_n400/pareto_capacity_vs_mean_itl.png)
+- [Pooled P99 ITL versus offered rate](edf_benchmark/current_policy_n400/p99_itl_vs_rate.png)
+- [TTFT SLO attainment](edf_benchmark/current_policy_n400/slo_ttft_attainment_vs_rate.png)
+- [Per-request P99-ITL SLO attainment](edf_benchmark/current_policy_n400/slo_itl_attainment_vs_rate.png)
+
+TTFT and ITL attainment are kept separate. The continuous P99-ITL and
+capacity/interactivity curves are the primary evidence; SLO attainment is a
+threshold-sensitive diagnostic. Pooled P99 ITL is accompanied by
+request-maximum ITL because pooled token percentiles hide rare multi-second
+stalls.
+
+## Reproduction
+
 ```bash
-python3 -m sglang.launch_server \
-  --model-path Qwen/Qwen3-8B \
-  --attention-backend flashinfer \
-  --watchdog-timeout 999999 \
-  --mem-fraction-static 0.85 \
-  --enable-mixed-chunk
+# Headline replay
+bash tasks/realistic_workload_analysis/run_tracelab_claude.sh
+
+# Offered session-rate sweep
+bash tasks/realistic_workload_analysis/run_tracelab_pareto.sh
+
+# Analyze and plot accepted results
+python tasks/edf_benchmark/analyze_results.py RESULTS_DIR
+python tasks/edf_benchmark/plot_serving_tradeoffs.py SUMMARY.json OUTDIR
+
+# Queue versus first-token service decomposition
+python tasks/realistic_workload_analysis/analyze_request_timing.py \
+  RESULTS_DIR/server_DMC_CG.log RESULTS_DIR/server_LPT.log
 ```
 
-Ordinary decode CUDA graphs remain enabled. Do not combine them with
-piecewise EXTEND graphs: each path is output-correct in isolation, but their
-combined replay corrupts output at N=400. LPT additionally sets
-`SGLANG_FLASHINFER_USE_PERSISTENT=1`.
+## Final conclusions and optimizations
 
-## TODOs
+1. The persistent kernel's isolated mixed-forward advantage is real, but the
+   clean end-to-end TraceLab gain is currently only 0.44% and comes with 3.8%
+   worse pooled P99 ITL. A same-SLO frontier claim requires more optimization
+   and repeated disjoint-warmup runs.
+2. Exact-prefix warmup was the primary evaluation bug. It made cache eviction
+   and initial-cohort admission dominate mean and P99 TTFT. Warmup is now
+   length-matched but token-disjoint from every timed prefix.
+3. A kernel speedup and a TTFT speedup are not numerically interchangeable.
+   TTFT includes admission delay and waiting behind earlier mixed chunks;
+   faster mixed forwards can drain that queue nonlinearly near saturation.
+   The matched request-timing profile below quantifies this amplification.
+4. The main implementation fixes were CUDA-graph correctness isolation,
+   ordinary decode graphs for all methods, removal of persistent decode
+   overhead, adaptive mixed-work ordering, and the 7,168-token LPT cap.
+5. No minimum prefill chunk was introduced. DMC retains its stock BatchPrefill
+   kernel and 8,192-token cap, so the comparison does not improve the baseline
+   by silently changing its kernel or disabling its CUDA graph.
 
-### 1. Prefill/decode ratio sweep
-- [x] Swept 6 workloads × 3 configs (Default-mixed-chunk, Persistent v3, POD). Results in table below (includes P99).
-- [x] Hypothesis partially confirmed: v3 benefits from **large absolute prefill** (>4096 tokens), not balanced ratios. v3 wins throughput only on 6500/7500, wins TTFT on 4096/1024 (-24%).
-- [x] v3 has consistent 0.5-4% throughput regression vs default — needs investigation (see `debug_kernel_server_perf.md` TODO)
-- [ ] **Must redo** with P95/P99 TTFT and ITL columns. Current results only have median. Also add prefill-prioritized config to show P99 ITL tail latency disadvantage. Redo again after kernel optimizations in `debug_kernel_server_perf.md` if performance changes.
+### Why TTFT improves more than raw kernel time
 
-### 2. Realistic arrival rates
-- [x] Research done — see Arrival Rate Research table below. Poisson rate=8 is stress test; realistic agent rate is 0.5-3 req/s.
+The request logger now records first-token time and directly decomposes:
 
-### 3. First-turn output length stats (with reasoning)
-- [x] Run `count_workload_lengths.py --run-inference --num-samples 200` on all trace datasets (200 samples each)
-- [x] Results in `output_length.json`: SWE-bench, CodeActInstruct, SWE-smith, AgentInstruct, Mind2Web, openhands-feedback, SWE-Gym, Code-Feedback, Nebius-SWE-Trajectories
-- [x] Skipped (no traces / single-step): Go-Browse, NNetNav-live, NNetNav-wa, Synatra, Orca-AgentInstruct, ShareGPT
+`TTFT = admission/queue delay + chunked-prefill service to the first token`.
 
-### 4. Per-turn context growth
-- [x] Ran Qwen3-8B with thinking on Nebius-SWE traces (3 traces, 8 turns each, via online server HTTP)
-- [x] Results in `workloads/per_turn_growth.json`
-- [ ] Run on remaining trace datasets (AgentInstruct, CodeActInstruct, openhands-feedback) if needed
+The compact machine-readable result is
+[`tracelab_claude_disjoint_warmup_profile_summary.json`](realistic_workload_analysis/tracelab_claude_disjoint_warmup_profile_summary.json).
 
-### 5. Prioritize workload for v3 kernel benchmark
-**Precondition:** Complete kernel optimization tasks in `tasks/debug_kernel_server_perf.md` first (FA3 tile pattern, v3 throughput regression). If performance improves, redo task 1 (ratio sweep) with updated kernel before prioritizing workloads.
-- [ ] Based on ratio sweep findings (task 1, possibly redone with improved kernel), identify input/output length sweet spot for v3
-- [ ] Match against real workload distributions (tasks 3-4) to find which workload/trace benefits most
-- [ ] Run full 5-config server benchmark on that workload using bench_serving_3rdparty.py
+| Method | Queue mean / P99 | admission-to-first-token mean / P99 | server TTFT mean / P99 |
+|--------|-----------------:|------------------------------------:|-----------------------:|
+| DMC | 1,415 / 58,123 ms | **998 / 16,243 ms** | 2,413 / 62,606 ms |
+| LPT | **1,289 / 51,747 ms** | 999 / **16,040 ms** | **2,288 / 56,441 ms** |
 
-## Results
+Admission-to-first-token service is effectively unchanged: 998 versus 999 ms
+on average. The corrected TTFT improvement comes almost entirely from queue
+time, which falls 8.9% at the mean and 11.0% at P99. Faster mixed forwards can
+finish earlier work and shift admission timing, but this is queue-drainage
+amplification, not a 60%-faster attention kernel. Near the KV/utilization
+knee, a small service-time or completion-order change can affect every request
+waiting behind it, and the sign is sensitive to cache and arrival phase.
 
-### Current correctness-valid results
-
-Matched H800/Qwen3-8B sweeps use 400 prompts, ordinary decode CUDA graphs for
-all methods, unchanged BatchPrefill for PP/DMC, and reject output-token
-mismatches larger than 2%.
-
-| Workload/rate | PP total tok/s | DMC total tok/s | LPT total tok/s | PP/DMC/LPT request-max ITL attainment |
-|---------------|---------------:|----------------:|----------------:|---------------------------------------:|
-| Code-Feedback / 16 | 7,217 | **7,411** | 7,404 | 17.8% / **81.0%** / 74.8% |
-| SWE-Gym / 16 | 3,005 | **3,017** | 3,011 | 21.0% / 78.5% / **85.0%** |
-
-On these decode-heavy workloads, persistent attention is active only during
-the relatively few mixed-prefill steps. An isolation run with the same LPT
-controller improves SWE-Gym throughput by 0.18% when the persistent kernel is
-enabled, so the small end-to-end difference is genuine rather than a disabled
-kernel.
-
-#### Headline: faithful TraceLab at peak load (N=400)
-
-The primary TraceLab result replays the Claude coding sessions from arXiv
-2606.30560 instead of sampling independent rounds. This is the headline
-setting: all ten sessions are admitted together (`--request-rate inf`), and
-the server completes the 400 causal rounds at about 0.36–0.38 requests/s. It
-preserves real
-`session_id`, consecutive round order, prefix/append lengths, short tool-call
-outputs, causal dependencies, and recorded inter-round delays. Human-idle and
-tool delays are compressed 100x while preserving their relative burst
-structure. The H800/Qwen2.5-7B-Instruct run contains 400 rounds from ten
-sessions, 64K–100K contexts, mean append 3,812 tokens, mean output 481 tokens,
-and ordinary decode CUDA graphs for every method.
-
-| Method | Total tok/s | Mean / P99 TTFT | pooled P99 ITL | median / P99 request-max ITL |
-|--------|------------:|----------------:|---------------:|-----------------------------:|
-| PP + decode CG | 17,268 | 4,492 / 44,361 ms | **86.6 ms** | 1,737 / 77,111 ms |
-| DMC + decode CG | 30,424 | 1,683 / 31,662 ms | 88.8 ms | 165 / **989 ms** |
-| **LPT + adaptive persistent, 7K cap** | **31,186** | **993 / 12,727 ms** | 88.84 ms | **139** / **989.14 ms** |
-
-All three runs are output-valid (99.82–99.96% retokenization). Against DMC,
-LPT provides **2.50% higher throughput**, 41.0% lower mean TTFT, 59.8% lower
-P99 TTFT, and 15.5% lower median request-max ITL. Pooled P99 ITL is at parity
-(88.84 versus 88.80 ms, a 0.05% difference below timing resolution), while
-request-max P99 is slightly lower. The 7,168-token LPT-only cap shortens each
-mixed-prefill interference window; the default 8,192-token run measured
-90.70 ms pooled P99. A 6,144-token ablation regressed throughput and P99, so
-it is rejected. Against PP, LPT provides 80.6% higher throughput and reduces
-median request-max ITL by 92.0%.
-
-#### Offered-load sweep (supporting result)
-
-The sweep changes the Poisson arrival rate of **new sessions**, not the rate
-of causally dependent rounds inside a session. At 0.01 sessions/s, overlap is
-sparse and LPT is tied with DMC. At 0.02 sessions/s, LPT starts to move the
-frontier through much lower TTFT. At 0.05 sessions/s it trades a small amount
-of throughput and pooled P99 ITL for better TTFT and median request-tail ITL.
-The largest throughput separation remains the simultaneous-session headline
-above, where overlap opportunities are most abundant.
-
-| Session arrivals/s | DMC / LPT total tok/s | DMC / LPT mean ITL | DMC / LPT P99 TTFT |
-|-------------------:|----------------------:|--------------------:|--------------------:|
-| 0.01 | 23,987 / 23,971 | 15.73 / **15.70 ms** | 15.60 / **15.59 s** |
-| 0.02 | 27,082 / **27,156** | **16.85** / 16.95 ms | 17.30 / **11.15 s** |
-| 0.05 | **29,816** / 29,678 | **16.89** / 16.98 ms | 18.41 / **15.89 s** |
-| simultaneous (`inf`) | 30,424 / **31,186** | **17.18** / 17.23 ms | 31.66 / **12.73 s** |
-
-Paper-facing figures keep TTFT and ITL separate:
-[capacity/interactivity](edf_benchmark/current_policy_n400/pareto_capacity_vs_mean_itl.png),
-[P99 ITL](edf_benchmark/current_policy_n400/p99_itl_vs_rate.png),
-[TTFT SLO attainment](edf_benchmark/current_policy_n400/slo_ttft_attainment_vs_rate.png),
-and [per-request P99-ITL SLO attainment](edf_benchmark/current_policy_n400/slo_itl_attainment_vs_rate.png).
-The same figures show a modest LPT frontier shift on Code-Feedback and
-essentially a DMC/LPT tie on SWE-Gym. Those independent-request datasets have
-mean prompts of only about 242 and 690 tokens, respectively, and omit the
-intermittent multi-turn tool-result prefills that make TraceLab a better
-kernel-level stressor.
-
-The previous 400-independent-round burst with output >=512 is retained in
-`tracelab_claude_h800_n400_burst_summary.json` as a saturation stress test,
-not as a faithful agent replay.
-
-A four-session/40-round faithful smoke test showed the same direction before
-the full run: LPT was 2.45% faster than DMC and reduced mean TTFT from 1,287
-to 836 ms. The older independent-round N=40 diagnostic showed a 4.11%
-throughput gain; it is useful for kernel isolation but not agent-level claims.
-
-### Historical ratio sweep (pre-correctness isolation)
-
-H100 80GB, Qwen3-8B, `--mem-fraction-static 0.85 --enable-piecewise-cuda-graph`, Poisson rate=8, 100 prompts, keepalive OFF.
-
-| Input | Output | Ratio | Default tok/s | v3 tok/s | POD tok/s | v3 vs Def | POD vs Def |
-|------:|-------:|------:|--------------:|---------:|----------:|----------:|-----------:|
-| 1024 | 1024 | 1.0 | 5068 | 4889 | 4989 | -3.5% | -1.6% |
-| 4096 | 1024 | 4.0 | 10784 | 10727 | 10670 | -0.5% | -1.1% |
-| 2048 | 2048 | 1.0 | 6490 | 6355 | 6429 | -2.1% | -0.9% |
-| 1024 | 4096 | 0.25 | 4300 | 4127 | 4291 | -4.0% | -0.2% |
-| 4096 | 4096 | 1.0 | 5451 | 5413 | 5461 | -0.7% | +0.2% |
-| 6500 | 7500 | 0.87 | 3612 | 3682 | 3601 | **+1.9%** | -0.3% |
-
-| Input | Output | Def TTFT med | v3 TTFT med | POD TTFT med | v3 vs Def | POD vs Def |
-|------:|-------:|-------------:|------------:|-------------:|----------:|-----------:|
-| 1024 | 1024 | 98ms | **84ms** | 302ms | -14% | +209% |
-| 4096 | 1024 | 206ms | **156ms** | 339ms | **-24%** | +65% |
-| 2048 | 2048 | 47ms | **46ms** | 51ms | -1% | +8% |
-| 1024 | 4096 | 36ms | 37ms | 41ms | +3% | +13% |
-| 4096 | 4096 | 138ms | **128ms** | 174ms | -7% | +26% |
-| 6500 | 7500 | 548ms | 610ms | 539ms | +11% | -2% |
-
-| Input | Output | Def ITL med | v3 ITL med | POD ITL med |
-|------:|-------:|------------:|-----------:|------------:|
-| 1024 | 1024 | 10.14 | 10.68 | 10.47 |
-| 4096 | 1024 | 16.15 | 16.25 | 16.32 |
-| 2048 | 2048 | 13.14 | 13.33 | 13.18 |
-| 1024 | 4096 | 13.08 | 13.36 | 13.17 |
-| 4096 | 4096 | 19.13 | 19.05 | 19.12 |
-| 6500 | 7500 | 26.17 | 25.05 | 26.15 |
-
-**Key findings (OUTDATED — from before decode overhead fix and mixed CG. See `debug_kernel_server_perf.md` for current results with v3+LPT+CG):**
-1. **v3 wins throughput only on longest workload** (6500/7500: +1.9%). On all others, v3 is 0.5-4% behind default. *(NOTE: the 0.5-4% regression was caused by BatchAttention decode overhead, now fixed.)*
-2. **v3 wins TTFT on prefill-heavy workloads**: 4096/1024 is the sweet spot (156ms vs 206ms, -24%).
-3. **POD consistently worse TTFT than both default and v3**, especially on prefill-heavy workloads.
-4. **ITL is nearly identical across all configs** (~±0.3ms). Decode performance is the same.
-5. ~~**v3 throughput regression is consistent** (-0.5% to -4%)~~ — **FIXED**: decode overhead eliminated by using regular decode wrapper. v3 now matches default-mc within ±0.1%.
-6. **Input/output ratio doesn't clearly predict v3 benefit**: v3 benefits from large absolute prefill tokens, not the ratio itself.
-
-### Arrival Rate Research
-
-| Paper | Arrival Model | Rate (req/s) | Model Size | Notes |
-|-------|--------------|-------------|------------|-------|
-| Cost of Dynamic Reasoning | Poisson | ShareGPT: 6.4 QPS peak; ReAct: 1.2-2.6 QPS peak | LLaMA-3.1-8B, single A100 40GB | Most comparable to our setup |
-| Continuum | Poisson | 0.13 jobs/s (×~10 turns = ~1.3 LLM calls/s) | LLaMA-3.1-8B, A100/B200 | Multi-turn agent programs |
-| SGLang Llama3 blog | Poisson | >10 RPS sustained for 8B | LLaMA-3-8B, single A100-80GB | vLLM degrades ~8 RPS |
-| NanoFlow (OSDI'25) | Poisson | 1-16 req/s sweep (70B/8GPU) | LLaMA-2-70B | NanoFlow sustains 1.64× higher than TRT-LLM |
-| ServeGen (Alibaba) | Bursty (CV>1) | Not disclosed (3.54B reqs / 4 months) | Qwen 14B-72B | **Poisson is unrealistic** — real arrivals are bursty |
-| BurstGPT (Azure) | Trace-driven | Chat: 0.019 RPS; API: 0.21 RPS avg | GPT-3.5/4 | Per-service, not per-GPU. Bursts >10× |
-| Autellix | Poisson | Not disclosed | LLaMA-3.1-8B/70B/180B | Each "program" = 6-160 LLM calls |
-
-**Conclusion for benchmarking:**
-- **Poisson rate=8 req/s** is a valid stress test (near saturation for 8B on single GPU) but ~3-8× higher than realistic agent workloads
-- Realistic ranges: chat 2-6 req/s, agent LLM calls 0.5-3 req/s, agent programs 0.1-0.5 programs/s
-- Should also test at rate=2-4 req/s for realistic load levels
-
-### Dataset Input Lengths & Inference Output with Thinking (from output_length.json)
-
-All trace datasets now have inference output measured with Qwen3-8B thinking mode (200 samples each unless noted).
-
-| Dataset | N | Median Input | Inference Output Median | Output P95 | In:Out Ratio |
-|---------|--:|-------------|------------------------|-----------|-------------|
-| **Nebius-SWE-Traj** | 200 | 9,053 | **3,726** | 16,384 | **2.4:1** |  <!-- HF: nebius/SWE-agent-trajectories — loaded by bench_serving 'nebius-swe-traj' -->
-| SWE-bench-Pro | 731 | ~800 | **~7,300** (gold patch) | 154,033 | 0.11:1 |  <!-- HF: ScaleAI/SWE-bench_Pro test split — single-step problem→patch, longer than swe-gym but not multi-turn -->
-
-| Code-Feedback | 200 | 200 | **5,598** | 13,313 | 0.04:1 |
-| SWE-Gym | 200 | 412 | **2,344** | 5,828 | 0.18:1 |
-| openhands-feedback | 200 | 85 | **1,690** | 7,536 | 0.05:1 |
-| Mind2Web | 200 | 17 | **1,289** | 2,387 | 0.01:1 |
-| AgentInstruct | 200 | 656 | **1,090** | 3,113 | 0.60:1 |
-| SWE-bench | 500 | 295 | **2,174** | 6,184 | 0.14:1 |
-| CodeActInstruct | 7,139 | 836 | **1,174** | 16,384 | 0.71:1 |
-| SWE-smith | 59,136 | 212 | **2,877** | 7,336 | 0.07:1 |
-
-**Key findings:**
-1. **Nebius-SWE is the only prefill-heavy dataset** (2.4:1 ratio). All others are decode-heavy with thinking mode.
-2. **Model output with thinking is 3-16× longer** than static field text. Code-Feedback: static median=887 vs inference=5,598 (6.3×). Nebius-SWE: static=1,764 vs inference=3,726 (2.1×).
-3. **Many samples hit the 16K max output cap** — Nebius-SWE P90=16,383, Code-Feedback P95=13,313. Real output would be even longer without the cap.
-4. **Nebius-SWE confirmed as best v3 candidate**: 9K input + 3.7K output (2.4:1 ratio), closest to the 4096/1024 workload where v3 had best TTFT advantage (-24%). Later turns accumulate more context, pushing input even higher.
-
-### Per-Turn Context Growth (Nebius-SWE, Qwen3-8B with thinking, 3 traces × 8 turns)
-
-| Dataset | Med Turns | Med Input/Turn | Med Output/Turn | Decode % | Growth tok/turn | Ctx@T5 | Ctx@T10 | Ctx@T20 | Turn >4096 |
-|---------|----------|---------------|----------------|---------|----------------|--------|---------|---------|------------|
-| AgentInstruct | 6 | 48 | 39 | 45% | 145 | 808 | N/A | N/A | never |
-| CodeActInstruct | 5 | 64 | 61 | 49% | 291 | 1,455 | N/A | N/A | never |
-| **Nebius-SWE** | **25** | **530** | 106 | **17%** | **607** | 2,201 | 6,193 | **15,302** | **turn 8** |
-| openhands-feedback | 7 | 47 | 18 | 28% | 344 | 972 | 4,940 | 4,427 | turn 15 |
-
-**Key findings:**
-- **Nebius-SWE is the best candidate**: ~607 tok/turn growth, hits 4K context by turn 8, 15K by turn 20. Heavy prefill bias (17% decode). Large per-turn input from SWE-agent tool outputs (file contents, command results).
-- **AgentInstruct/CodeActInstruct too short**: never exceed 4K context, median 5-6 turns. Not useful for long-context overlap testing.
-- **openhands-feedback is bursty**: mostly tiny turns with occasional large tool outputs (400-7K tokens). Less predictable for benchmarking.
-- **Context growth is linear** in all datasets — prefill cost grows linearly with turn number.
-
-### SLO Standards from Literature
-
-Survey of TTFT and TBT/ITL SLO targets used in recent LLM serving papers:
-
-| Paper | TTFT SLO | TBT/ITL SLO | How SLOs are set | Notes |
-|-------|----------|-------------|-----------------|-------|
-| **Tempo** (JITServe, arxiv 2504.20068) | ~2s | ~100ms | P95 from DeepSeek API calls | TTLT=20s for throughput requests. 3:1:1 latency:throughput:collective mix |
-| **Scorpio** (arxiv 2505.23022) | 0.5-7.5s (6 categories) | 30-50ms (Llama-8B), 60-100ms (Gemma-27B) | Per-application type (programming assistant = tight, chatbot = loose) | EDF reordering (Least Deadline First). TPOT Guard admits only if estimated TPOT ≤ min SLO |
-| **Ascendra** (arxiv 2504.20828) | 1.0s (7B/8B), 1.5s (14B) on ShareGPT; 2.5s (7B/8B), 3.0s (14B) on LongBench | 150ms (all models) | Model-size dependent. 150ms TBT ≈ 400 words/min (2-3× human reading speed) | EDF priority. Offloads urgent requests to high-priority instances |
-| **SOLA** (MLSys'25) | Varies | Varies | Balances TTFT vs TPOT distribution | State-aware scheduling. 45.5%→99.4% SLO attainment |
-| **DistServe** (OSDI'24) | Varies | Varies | Goodput = requests meeting both TTFT+TPOT SLOs | Disaggregated prefill-decode |
-| **SLOs-Serve** (arxiv 2504.08784) | Varies | Varies | Multi-SLO optimization | 2.2× capacity vs Sarathi-Serve/vLLM |
-
-**SLO targets for our benchmarks** (Qwen3-8B, H100):
-
-| Workload | TTFT SLO | ITL SLO | Rationale |
-|----------|----------|---------|-----------|
-| ShareGPT (chat) | 2.0s | 100ms | Tempo standard (interactive chat) |
-| Code-Feedback (code gen) | 3.0s | 150ms | Longer inputs, Ascendra's 150ms reading-speed target |
-| Nebius-SWE (agent) | 5.0s | 150ms | Long inputs (9K median), agent can tolerate higher TTFT |
-
-For input-length-dependent TTFT scaling: `TTFT_SLO = base + input_tokens / 5000` (i.e., +1s per 5K extra input tokens beyond baseline). This follows the pattern in Ascendra (ShareGPT 1s base → LongBench 2.5s for longer inputs).
-
-**Updated with model inference (Nebius-SWE only):**
-
-| Turn | Median Input | Median Output (thinking) | In:Out Ratio |
-|------|-------------|-------------------------|-------------|
-| T1 | 1,124 | 3,376 | 0.3:1 (decode-heavy, first turn) |
-| T2 | 1,505 | 1,418 | 1.1:1 (balanced) |
-| T3 | 2,802 | 2,070 | 1.4:1 |
-| T4 | 3,674 | 1,520 | **2.4:1** (enters v3 sweet spot) |
-| T5 | 4,364 | 1,681 | **2.6:1** (matches 4096/1024 workload) |
-| T6 | 4,936 | 410 | 12.0:1 (tool-call-only turn) |
-| T7 | 5,544 | 2,712 | 2.0:1 |
-| T8 | 6,167 | 259 | 23.8:1 (tool-call-only turn) |
-
-**Key findings:**
-- Context grows ~700 tokens/turn (1.1K → 6.2K over 8 turns)
-- By turn 4-5, input exceeds 4K — the v3 TTFT sweet spot (-24% vs default in ratio sweep)
-- Output varies wildly (132-3,424): tool-call-only turns produce very short responses, reasoning turns produce 1.5K-3.4K
-- Median across all 24 measurements: input=3,074, output=1,707 (1.8:1 ratio)
-- The 2-3:1 ratio at turns 4-7 closely matches the 4096/1024 and 2048/2048 ratio sweep workloads
-
-### Workload Scan Results (B200, 4 configs × 10 workloads, 200 prompts, rate=8, to be rerun on H100)
-
-Full CSV: `/tmp/workload_scan_results.csv`. Script: `tasks/realistic_workload_analysis/run_workload_scan.sh`.
-
-**Throughput (tok/s) — v3-fixed and POD vs Default-mixed-chunk:**
-
-| Input | Output | Prefill-prio | Default | v3-fixed | POD | v3 vs Def | POD vs Def |
-|------:|-------:|-------------:|--------:|---------:|----:|----------:|-----------:|
-| 512 | 512 | 3,883 | 3,880 | 3,879 | 3,873 | -0.0% | -0.2% |
-| 1024 | 1024 | 7,033 | 7,068 | 7,075 | 7,045 | +0.1% | -0.3% |
-| 2048 | 1024 | 10,792 | 10,821 | 10,868 | 10,818 | +0.4% | -0.0% |
-| **4096** | **1024** | **17,132** | 16,858 | **17,141** | 17,096 | **+1.7%** | +1.4% |
-| 2048 | 2048 | 10,812 | 10,852 | 10,831 | 10,782 | -0.2% | -0.6% |
-| 4096 | 4096 | 11,675 | 11,588 | 11,646 | 11,596 | +0.5% | +0.1% |
-| **6500** | **4000** | **12,552** | 12,150 | **12,360** | 12,349 | **+1.7%** | +1.6% |
-| **9000** | **4000** | **12,779** | 12,372 | **12,577** | 12,604 | **+1.7%** | **+1.9%** |
-| 6500 | 7500 | 8,455 | 8,344 | 8,375 | 8,385 | +0.4% | +0.5% |
-| 1024 | 4096 | 8,752 | 8,778 | 8,737 | 8,700 | -0.5% | -0.9% |
-
-**TTFT median (ms):**
-
-| Input | Output | Prefill-prio | Default | v3-fixed | POD |
-|------:|-------:|-------------:|--------:|---------:|----:|
-| 4096 | 1024 | **46** | 68 | **63** | 63 |
-| 6500 | 4000 | **51** | 108 | **95** | 110 |
-| 9000 | 4000 | **107** | **214** | **196** | 210 |
-| 6500 | 7500 | **74** | 129 | **114** | 145 |
-
-**P99 ITL (ms):**
-
-| Input | Output | Prefill-prio | Default | v3-fixed | POD |
-|------:|-------:|-------------:|--------:|---------:|----:|
-| 4096 | 1024 | **37** | 43 | **37** | 52 |
-| 6500 | 4000 | **54** | 88 | **65** | 89 |
-| 9000 | 4000 | **113** | 153 | **127** | 156 |
-| 6500 | 7500 | **44** | 62 | **57** | 70 |
-
-### Workload Prioritization
-
-**Key findings from workload scan:**
-1. **v3-fixed wins throughput on large-input workloads** (4096+): +1.7% at 4096/1024, 6500/4000, 9000/4000. No regression on small inputs.
-2. **v3-fixed has best TTFT among mixed-chunk configs**: 8-11% better than default on 6500/4000 and 9000/4000 (agent-realistic workloads).
-3. **v3-fixed has best P99 ITL among mixed-chunk configs**: matches prefill-prio at 4096/1024 (37ms), 27% better than default at 6500/4000 (65 vs 88ms).
-4. **POD matches v3 on throughput** but has worse TTFT and P99 ITL on all workloads.
-5. **Prefill-prioritized still wins all metrics** on all workloads due to CUDA graph advantage. Gap is 1.5-3.3% throughput.
-
-**Best workload for v3/POD evaluation: 9000/4000 (Nebius-SWE realistic)**
-- v3-fixed: +1.7% throughput, -8% TTFT, -17% P99 ITL vs default
-- POD: +1.9% throughput, similar TTFT/ITL to default
-- Matches real Nebius-SWE late-turn workload (input 9K, output 4K with thinking)
-
-**Runner-up: 6500/4000 (Nebius-SWE mid-turn)**
-- v3-fixed: +1.7% throughput, -11% TTFT, -27% P99 ITL vs default
+This is the reviewer-safe conclusion: the old 41%/59.8% TTFT reductions were
+not reproducible after removing prefix-warmup contamination. The clean
+4.8%/10.2% reductions are consistent with an indirect queueing effect, while
+the remaining ITL regression must be closed before making the headline
+same-SLO claim.

@@ -1,0 +1,52 @@
+{
+  "setting": {
+    "gpu": "H800 80GB",
+    "model": "Qwen2.5-7B-Instruct",
+    "requests": 400,
+    "sessions": 10,
+    "context_range_tokens": [65536, 100000],
+    "trace_time_scale": 0.01,
+    "session_arrival_rate": "inf",
+    "server_seed": 1,
+    "warmup": "10 same-length, token-disjoint prefixes",
+    "dmc_max_prefill_chunk": 8192,
+    "lpt_max_prefill_chunk": 7168
+  },
+  "DMC_CG": {
+    "total_throughput_tokens_per_s": 28964.57,
+    "mean_ttft_ms": 2583.28,
+    "p99_ttft_ms": 64252.79,
+    "mean_itl_ms": 18.15,
+    "p99_itl_ms": 93.56,
+    "queue_mean_ms": 1414.8,
+    "queue_p99_ms": 58123.0,
+    "admission_to_first_token_mean_ms": 997.8,
+    "admission_to_first_token_p99_ms": 16242.6,
+    "server_ttft_mean_ms": 2412.6,
+    "server_ttft_p99_ms": 62605.9,
+    "output_retokenize_ratio": 0.99984
+  },
+  "LPT": {
+    "total_throughput_tokens_per_s": 29092.85,
+    "mean_ttft_ms": 2458.90,
+    "p99_ttft_ms": 57708.12,
+    "mean_itl_ms": 18.13,
+    "p99_itl_ms": 97.13,
+    "queue_mean_ms": 1288.8,
+    "queue_p99_ms": 51746.5,
+    "admission_to_first_token_mean_ms": 999.1,
+    "admission_to_first_token_p99_ms": 16039.8,
+    "server_ttft_mean_ms": 2287.9,
+    "server_ttft_p99_ms": 56441.4,
+    "output_retokenize_ratio": 0.99977
+  },
+  "LPT_vs_DMC_percent": {
+    "total_throughput": 0.44,
+    "mean_ttft_reduction": 4.82,
+    "p99_ttft_reduction": 10.19,
+    "p99_itl_reduction": -3.82,
+    "queue_mean_reduction": 8.91,
+    "queue_p99_reduction": 10.97,
+    "admission_to_first_token_mean_reduction": -0.13
+  }
+}

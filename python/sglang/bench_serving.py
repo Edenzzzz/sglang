@@ -1729,12 +1729,22 @@ def sample_tracelab_claude_requests(
 
         first_prefix_len = int(rows[0]["prefix_tokens"])
         session_prompt_ids = random.choices(available_tokens, k=first_prefix_len)
+        # Exercise the same prompt lengths during warmup without pre-populating
+        # the exact radix prefixes used by the timed replay. Reusing
+        # session_prompt_ids here makes the first timed cohort's cache residency
+        # depend on warmup completion/eviction order and can dominate P99 TTFT.
+        warmup_rng = random.Random(
+            f"tracelab-warmup:{session_id}:{first_prefix_len}"
+        )
+        warmup_prompt_ids = warmup_rng.choices(
+            available_tokens, k=first_prefix_len
+        )
         if return_text:
-            warmup_prompt = tokenizer.decode(session_prompt_ids)
+            warmup_prompt = tokenizer.decode(warmup_prompt_ids)
             warmup_prompt_len = len(tokenizer.encode(warmup_prompt))
         else:
-            warmup_prompt = session_prompt_ids
-            warmup_prompt_len = len(session_prompt_ids)
+            warmup_prompt = warmup_prompt_ids
+            warmup_prompt_len = len(warmup_prompt_ids)
         warmup_requests.append(
             DatasetRow(
                 prompt=warmup_prompt,

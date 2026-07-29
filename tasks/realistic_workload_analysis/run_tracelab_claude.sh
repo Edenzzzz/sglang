@@ -29,6 +29,6 @@ RESULT_WORKLOAD_NAME=tracelab_claude \
 RESULTS_DIR="${RESULTS_DIR:-$SCRIPT_DIR/h800_qwen25_tracelab_claude_faithful_64k100k_n400_mr40}" \
 MODEL="$MODEL" \
 PORT="${PORT:-30005}" \
-SERVER_EXTRA_ARGS='--max-running-requests=40 --context-length=131072 --json-model-override-args={"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}' \
+SERVER_EXTRA_ARGS="--max-running-requests=40 --context-length=131072 --json-model-override-args={\"rope_scaling\":{\"factor\":4.0,\"original_max_position_embeddings\":32768,\"type\":\"yarn\"}} ${SERVER_EXTRA_ARGS_EXTRA:-}" \
 BENCH_EXTRA_ARGS="--tokenize-prompt --use-trace-timestamps --mooncake-slowdown-factor ${TRACELAB_TIME_SCALE:-0.01} --dataset-name tracelab-claude --dataset-path $TRACE_PATH --tracelab-num-groups ${TRACELAB_NUM_GROUPS:-10} --tracelab-min-context-len 65536 --tracelab-max-context-len 100000 --tracelab-min-output-len ${TRACELAB_MIN_OUTPUT_LEN:-1} ${BENCH_EXTRA_ARGS_EXTRA:-}" \
 bash "$REPO_ROOT/tasks/debug_kernel_server_perf/run_gain_search.sh"

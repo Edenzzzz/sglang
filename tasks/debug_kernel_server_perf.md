@@ -40,34 +40,31 @@ Pareto point over DMC, but does not yet improve DMC throughput.
 
 The primary 64K–100K TraceLab Claude result is a causal session replay at
 peak offered load: all ten sessions are admitted together
-(`--request-rate inf`). It uses
+(`--request-rate inf`). Warmup is length-matched but token-disjoint from the
+timed radix prefixes. It uses
 Qwen2.5-7B-Instruct, 400 consecutive rounds from ten real sessions, mean
 3,812-token tool/user append, mean 481-token output, and recorded inter-round
 delays compressed 100x. Unlike the old independent-request burst, this
 continually injects sporadic prefills while other sessions decode.
 
-| Method | Total tok/s | Mean / P99 TTFT | pooled P99 ITL | median / P99 request-max ITL |
-|--------|------------:|----------------:|---------------:|-----------------------------:|
-| PP + decode CG | 17,268 | 4,492 / 44,361 ms | **86.6 ms** | 1,737 / 77,111 ms |
-| DMC + decode CG | 30,424 | 1,683 / 31,662 ms | 88.8 ms | 165 / **989 ms** |
-| **LPT + adaptive persistent, 7K cap** | **31,186** | **993 / 12,727 ms** | 88.84 ms | **139** / **989.14 ms** |
+| Method | Total tok/s | Mean / P99 TTFT | pooled P99 ITL |
+|--------|------------:|----------------:|---------------:|
+| DMC + decode CG | 28,965 | 2,583 / 64,253 ms | **93.56 ms** |
+| LPT + persistent, 7K cap | **29,093** | **2,459 / 57,708 ms** | 97.13 ms |
 
-All results retokenize within 0.2% of the reported output. LPT provides 2.50%
-more throughput than DMC while reducing mean/P99 TTFT by 41.0%/59.8% and
-median request-max ITL by 15.5%. Pooled P99 ITL is at parity (88.84 versus
-88.80 ms, a 0.05% difference below timing resolution), and request-max P99 is
-slightly lower. The root cause of the former 90.70 ms result was mixed-step
-granularity: the persistent kernel is faster, but its fixed cooperative-launch
-and planning cost made an 8,192-token step a slightly longer interference
-window at the narrow P99 boundary. An LPT-only 7,168-token cap recovers the
-gap without changing DMC, throughput, or the absence of a minimum chunk.
-A 6,144-token ablation measured 89.01 ms and lower throughput, so it is
-rejected. Against PP, LPT provides 80.6% more throughput and 92.0% lower
-median request-max ITL.
+LPT is 0.44% faster and reduces mean/P99 TTFT by 4.8%/10.2%, but pooled
+P99 ITL is 3.8% worse. Request profiling attributes the TTFT change to queue
+time (mean 1,415→1,289 ms; P99 58.12→51.75 s), while admission-to-first-token
+service is unchanged at about 998–999 ms mean.
 
-The arrival-rate sweep is supporting evidence and follows the headline in
-`tasks/realistic_workload_analysis.md`; its separate paper-facing curves are
-under `tasks/edf_benchmark/current_policy_n400/`.
+The former +2.50% throughput, −41.0% mean TTFT, −59.8% P99 TTFT result reused
+each timed session's exact radix prefix during warmup. Its first-cohort
+admission phase was cache-order dependent and it is superseded. The clean
+result does not yet support a same-ITL-SLO frontier claim.
+
+The old TraceLab arrival-rate sweep has the same warmup confounder and must be
+rerun. Coding-dataset curves remain under
+`tasks/edf_benchmark/current_policy_n400/`.
 
 The former N=400 result (400 independent long generations released as one
 burst) is retained only as a saturation stress test in

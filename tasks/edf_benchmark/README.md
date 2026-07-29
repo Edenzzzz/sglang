@@ -6,10 +6,11 @@ The primary result and full experimental setting are documented first in
 [`../realistic_workload_analysis.md`](../realistic_workload_analysis.md):
 H800, Qwen2.5-7B-Instruct, 400 causal rounds from ten real TraceLab sessions,
 64K–100K contexts, 100x-compressed gaps, and all ten sessions admitted
-together (`--request-rate inf`). LPT reaches 31,186 token/s, 2.50% above DMC,
-while reducing P99 TTFT from 31.66 to 12.73 seconds and preserving pooled P99
-ITL parity. That is the headline; the sweeps below test robustness as offered
-load changes and transfer to independent coding datasets.
+together (`--request-rate inf`). Warmup is length-matched but token-disjoint
+from timed prefixes. In the corrected run, LPT is 0.44% above DMC, reduces
+mean/P99 TTFT by 4.8%/10.2%, and has 3.8% worse pooled P99 ITL. The former
+2.50%/ITL-parity result used exact timed prefixes during warmup and is
+superseded.
 
 ## Paper-facing figures
 
@@ -53,19 +54,11 @@ saturation. SWE-Gym has a much lower request-capacity knee because its outputs
 are longer, so its informative grid is 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, and
 saturation.
 
-TraceLab uses offered **session** arrival rate rather than breaking causal
-round ordering. The sweep rates are 0.01, 0.02, 0.05 sessions/s and
-saturation; later requests in each real session still wait for the preceding
-response and the scaled recorded think/tool delay. Achieved request and token
-throughput are measured in every run.
-
-The completed sweep shows why the headline must retain its load setting.
-TraceLab LPT is tied with DMC at 0.01 sessions/s, improves P99 TTFT by 35.6%
-at 0.02, and produces its 2.50% throughput gain when all sessions are offered
-together. Code-Feedback shows a modest outward LPT shift around its knee.
-SWE-Gym leaves DMC and LPT essentially tied: its independent requests have
-short prompts and do not preserve intermittent tool-result prefills, so few
-steps exercise persistent prefill/decode overlap.
+The old TraceLab rate sweep used exact-prefix warmup and has been removed from
+the canonical summary and figures. It must be rerun with disjoint warmup.
+Code-Feedback shows a modest outward LPT shift around its knee. SWE-Gym leaves
+DMC and LPT essentially tied because its short independent prompts expose few
+persistent prefill/decode overlap steps.
 
 ## Why older figures were removed
 

@@ -38,6 +38,7 @@ class TimeStats:
     lb_entry_time: float = 0.0
     wait_queue_entry_time: float = 0.0
     forward_entry_time: float = 0.0
+    first_token_time: float = 0.0
     completion_time: float = 0.0
     prefill_bootstrap_queue_entry_time: float = 0.0
     prefill_transfer_queue_entry_time: float = 0.0
@@ -50,14 +51,26 @@ class TimeStats:
     def convert_to_duration(self) -> str:
         if self.disagg_mode == DisaggregationMode.NULL:
             queue_duration = self.forward_entry_time - self.wait_queue_entry_time
+            prefill_duration = self.first_token_time - self.forward_entry_time
             forward_duration = self.completion_time - self.forward_entry_time
 
             if SGLANG_TEST_REQUEST_TIME_STATS:
                 assert (
-                    queue_duration >= 0 and forward_duration >= 0
-                ), f"queue_duration={queue_duration} < 0 or forward_duration={forward_duration} < 0"
+                    queue_duration >= 0
+                    and prefill_duration >= 0
+                    and forward_duration >= 0
+                ), (
+                    f"queue_duration={queue_duration}, "
+                    f"prefill_duration={prefill_duration}, "
+                    f"forward_duration={forward_duration}"
+                )
 
-            return f"queue_duration={self.format_duration(queue_duration)}, forward_duration={self.format_duration(forward_duration)}, start_time={self.wait_queue_entry_time:.3f}"
+            return (
+                f"queue_duration={self.format_duration(queue_duration)}, "
+                f"prefill_duration={self.format_duration(prefill_duration)}, "
+                f"forward_duration={self.format_duration(forward_duration)}, "
+                f"start_time={self.wait_queue_entry_time:.3f}"
+            )
         elif self.disagg_mode == DisaggregationMode.PREFILL:
             bootstrap_duration = (
                 self.wait_queue_entry_time - self.prefill_bootstrap_queue_entry_time

@@ -64,10 +64,19 @@ class TestTraceLabReplay(unittest.TestCase):
         self.assertEqual(len(warmups), 2)
         self.assertEqual(len(requests), 4)
         for session_id in {row.session_id for row in requests}:
+            warmup = next(
+                row for row in warmups if row.session_id == session_id
+            )
             session_rows = [
                 row for row in requests if row.session_id == session_id
             ]
             self.assertEqual(len(session_rows), 2)
+            self.assertEqual(warmup.prompt_len, len(warmup.prompt))
+            self.assertEqual(warmup.prompt_len, session_rows[0].prompt_len - 10)
+            self.assertNotEqual(
+                warmup.prompt,
+                session_rows[0].prompt[: warmup.prompt_len],
+            )
             self.assertEqual(
                 session_rows[1].round_index,
                 session_rows[0].round_index + 1,

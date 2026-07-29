@@ -126,6 +126,11 @@ class SchedulerOutputProcessorMixin:
                 if req.is_chunked <= 0:
                     # req output_ids are set here
                     req.output_ids.append(next_token_id)
+                    if (
+                        len(req.output_ids) == 1
+                        and req.time_stats.first_token_time == 0
+                    ):
+                        req.time_stats.first_token_time = time.perf_counter()
                     req.check_finished()
 
                     if req.finished():
@@ -403,6 +408,9 @@ class SchedulerOutputProcessorMixin:
                 # Only v2 eagle's output_ids are updated here.
                 req.output_ids.extend(next_token_id)
                 new_accepted_len = len(next_token_id)
+
+            if len(req.output_ids) > 0 and req.time_stats.first_token_time == 0:
+                req.time_stats.first_token_time = time.perf_counter()
 
             req.check_finished(new_accepted_len)
 

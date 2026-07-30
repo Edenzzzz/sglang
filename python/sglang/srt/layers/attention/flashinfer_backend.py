@@ -663,7 +663,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 if stats is None:
                     stats = self._mixed_gate_stats = [0, 0]
                 stats[0 if use_pa else 1] += 1
-                if (stats[0] + stats[1]) % 500 == 0:
+                if (stats[0] + stats[1]) == 1 or (stats[0] + stats[1]) % 500 == 0:
                     logger.info(
                         "mixed kernel gate: persistent=%d batch_prefill=%d",
                         stats[0],

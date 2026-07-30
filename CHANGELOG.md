@@ -22,6 +22,13 @@
   wrapper type instead of the global env flag. Cost-model constants pending the H800 gate
   sweep (see tasks/debug_kernel_server_perf.md).
 
+### DMC baselines were silently persistent
+- `SGLANG_FLASHINFER_USE_PERSISTENT` defaults to 1 and no DMC launcher overrode it, so every
+  H800 "DMC_CG" baseline since 2025-11-14 ran the persistent kernel for mixed batches. July
+  TraceLab LPT-vs-DMC deltas compared chunk caps/EDF guards on the same kernel. Both
+  `run_gain_search.sh` and `run_edf_sweep.sh` now set `SGLANG_FLASHINFER_USE_PERSISTENT=0`
+  for baseline methods.
+
 ### H800 kernel measurements (serving-matched non-causal prefix composition, Qwen2.5-7B heads)
 - Persistent kernel run() CPU dispatch is cheaper than BatchPrefill (16µs vs 26µs) —
   cooperative launch is not a CPU-side cost.

@@ -111,8 +111,11 @@ start_server() {
             ;;
         DMC_CG)
             # Unchanged mixed BatchPrefill plus regular decode CUDA graphs.
+            # USE_PERSISTENT defaults to 1 and must be disabled explicitly for
+            # a true BatchPrefill baseline.
             extra_flags="--enable-mixed-chunk"
             model_env="SGLANG_EDF_LATENCY_MODEL=$DMC_MODEL"
+            prefix_env="SGLANG_FLASHINFER_USE_PERSISTENT=0"
             ;;
         LPT)
             # Persistent mixed attention plus regular decode CUDA graphs.

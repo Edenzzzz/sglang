@@ -134,7 +134,10 @@ start_server() {
         esac
         [ "$method" = DMC_SYNC ] && flags+=(--disable-overlap-schedule)
         # A true DMC baseline must not capture mixed graphs through BatchAttention.
-        method_env+=(SGLANG_DISABLE_MIXED_CG=1)
+        # SGLANG_FLASHINFER_USE_PERSISTENT defaults to 1, so it must be disabled
+        # explicitly or the "baseline" silently runs the persistent kernel for
+        # mixed batches (this affected all pre-2026-07-30 DMC results).
+        method_env+=(SGLANG_DISABLE_MIXED_CG=1 SGLANG_FLASHINFER_USE_PERSISTENT=0)
         [ -z "$EDF_ITL_MS" ] || method_env+=(SGLANG_EDF_LATENCY_MODEL="$DMC_MODEL")
     fi
     if [ -n "$EDF_ITL_MS" ]; then

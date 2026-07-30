@@ -7,6 +7,7 @@ FlashInfer is faster and Triton is easier to customize.
 Each backend supports two operators: extend (i.e. prefill with cached prefix) and decode.
 """
 
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -86,44 +87,112 @@ def select_persistent_flipped_schedule(
     return None
 
 
+class MixedKernelGate:
+    """Per-batch kernel + schedule choice for mixed-batch prefix attention.
+
+    A k-NN lookup over a measured (BatchPrefill, persistent-flipped,
+    persistent-nonflipped) kernel-time sweep decides, from CPU-side batch
+    composition only, whether the persistent BatchAttention kernel should
+    replace BatchPrefill for the cached-prefix part of a mixed batch, and
+    which persistent work ordering to use. The persistent kernel is chosen
+    only where the sweep shows >=5% kernel-time gain with all three nearest
+    neighbors agreeing (leave-one-out worst-case regression 2.8% on the H800
+    sweep); everything else keeps the BatchPrefill baseline, so serving can
+    never regress beyond noise while decode-heavy batches keep 1.2-20x wins.
+
+    Tables are built by tasks/debug_kernel_server_perf/
+    build_mixed_kernel_gate_table.py from gate_sweep3 measurements.
+    """
+
+    _cache: dict = {}
+
+    def __init__(self, table_path: str):
+        with open(table_path) as f:
+            table = json.load(f)
+        self.mu = np.asarray(table["mu"], dtype=np.float64)
+        self.sd = np.asarray(table["sd"], dtype=np.float64)
+        self.points = np.asarray(table["points"], dtype=np.float64)
+        self.use_pa = np.asarray(table["use_pa"], dtype=bool)
+        self.flip = np.asarray(table["flip"], dtype=bool)
+
+    @classmethod
+    def for_gqa(cls, gqa_group_size: int) -> Optional["MixedKernelGate"]:
+        if gqa_group_size in cls._cache:
+            return cls._cache[gqa_group_size]
+        table_path = os.path.join(
+            os.path.dirname(__file__), f"mixed_kernel_gate_h800_gqa{gqa_group_size}.json"
+        )
+        gate = None
+        if os.path.exists(table_path):
+            gate = cls(table_path)
+        else:
+            logger.warning(
+                "No mixed-kernel gate table for gqa=%d (%s); "
+                "using conservative analytic fallback",
+                gqa_group_size,
+                table_path,
+            )
+        cls._cache[gqa_group_size] = gate
+        return gate
+
+    def decide(self, decode_kv: int, prefill_work: int, prefill_tokens: int, decode_bs: int):
+        x = np.array(
+            [
+                np.log1p(decode_kv),
+                np.log1p(prefill_work),
+                np.log1p(prefill_tokens),
+                np.log1p(decode_bs),
+                3.0 * decode_kv / (decode_kv + prefill_work + 1),
+            ]
+        )
+        d = self.points - (x - self.mu) / self.sd
+        dist = np.einsum("ij,ij->i", d, d)
+        nn = np.argpartition(dist, 3)[:3]
+        use_pa = bool(self.use_pa[nn].all())
+        flipped = bool(self.flip[nn].sum() >= 2)
+        return use_pa, flipped
+
+
 def select_mixed_attention_kernel(
     extend_seq_lens_cpu,
     extend_prefix_lens_cpu,
-) -> bool:
+    gqa_group_size: int,
+):
     """Choose the kernel for a mixed batch's cached-prefix attention.
 
-    Returns True for the persistent BatchAttention kernel, False for
-    BatchPrefill. Uses only CPU-side metadata; the H800-measured cost surface
-    (tasks/debug_kernel_server_perf.md, gate sweep 2026-07-30) shows the
+    Returns (use_persistent, flipped_schedule). Uses only CPU-side metadata.
+    The H800 sweep (tasks/debug_kernel_server_perf.md, 2026-07-30) shows the
     persistent kernel matches or beats BatchPrefill except when the decode
-    population is too small to overlap with a compute-bound prefill chunk.
+    population is too small to overlap with a compute-bound prefill chunk, or
+    the whole batch is tiny enough that fixed kernel overhead dominates.
     """
     mode = envs.SGLANG_MIXED_ATTENTION_KERNEL.get()
     if mode == "persistent":
-        return True
+        return True, None
     if mode == "batch_prefill":
-        return False
+        return False, None
 
     decode_kv = 0
     decode_bs = 0
-    prefill_paged_work = 0
+    prefill_work = 0
+    prefill_tokens = 0
     for e, c in zip(extend_seq_lens_cpu, extend_prefix_lens_cpu):
         if e <= 1:
             decode_bs += 1
             decode_kv += c
         else:
             # paged (cached-prefix) attention work for this chunk
-            prefill_paged_work += e * c
-    # Placeholder boundary; replaced by fitted constants below.
-    return _mixed_kernel_cost_gate(
-        decode_bs, decode_kv, prefill_paged_work
-    )
+            prefill_work += e * c
+            prefill_tokens += e
 
-
-def _mixed_kernel_cost_gate(
-    decode_bs: int, decode_kv: int, prefill_paged_work: int
-) -> bool:
-    return True
+    gate = MixedKernelGate.for_gqa(gqa_group_size)
+    if gate is None:
+        # Conservative analytic fallback: persistent only in the clearly
+        # decode-dominant region; non-flipped ordering is the safer default
+        # on the cached-prefix composition.
+        use_pa = decode_kv >= 500_000 and decode_kv * 20 >= prefill_work
+        return use_pa, False
+    return gate.decide(decode_kv, prefill_work, prefill_tokens, decode_bs)
 
 
 @dataclass
@@ -207,6 +276,13 @@ class FlashInferAttnBackend(AttentionBackend):
         self.max_context_len = model_runner.model_config.context_len
         self.skip_prefill = skip_prefill
         self.is_multimodal = model_runner.model_config.is_multimodal
+        self.num_qo_heads = (
+            model_runner.model_config.num_attention_heads // get_attention_tp_size()
+        )
+        self.num_kv_heads = model_runner.model_config.get_num_kv_heads(
+            get_attention_tp_size()
+        )
+        self._mixed_gate_flipped = None
 
         assert not (
             model_runner.sliding_window_size is not None
@@ -575,12 +651,15 @@ class FlashInferAttnBackend(AttentionBackend):
                 # fall back to BatchPrefill outside its winning region. Mixed
                 # CUDA graphs capture BatchAttention, so the gate must not
                 # switch kernels when they are enabled.
-                if getattr(
-                    self, "mixed_cuda_graph_max_bs", 0
-                ) > 0 or select_mixed_attention_kernel(
-                    forward_batch.extend_seq_lens_cpu,
-                    forward_batch.extend_prefix_lens_cpu,
-                ):
+                if getattr(self, "mixed_cuda_graph_max_bs", 0) > 0:
+                    use_pa, self._mixed_gate_flipped = True, None
+                else:
+                    use_pa, self._mixed_gate_flipped = select_mixed_attention_kernel(
+                        forward_batch.extend_seq_lens_cpu,
+                        forward_batch.extend_prefix_lens_cpu,
+                        self.num_qo_heads // self.num_kv_heads,
+                    )
+                if use_pa:
                     wrappers = self.prefill_wrappers_mixed
                 else:
                     wrappers = self.prefill_wrappers_paged
@@ -1948,16 +2027,17 @@ class FlashInferIndicesUpdaterPrefill:
             max_item_len_ptr = None
 
         if self.attn_backend.use_persistent and isinstance(wrapper_paged, BatchAttention):
-            # The flipped work ordering favors the shorter contexts common in
-            # interactive serving, but is slower for long-context mixed
-            # batches (for example, 39 decodes around 80K tokens plus one
-            # continued prefill). Select from metadata already computed on the
-            # CPU instead of forcing one schedule for every workload.
-            flipped = select_persistent_flipped_schedule(
-                paged_kernel_lens_sum,
-                len(paged_kernel_lens),
-                self.attn_backend.no_flipped_schedule,
-            )
+            # Work ordering comes from the same measured gate that picked the
+            # persistent kernel for this batch; the sweep shows the non-flipped
+            # ordering is the better default on the cached-prefix composition,
+            # with flipped winning only in a measured decode-dominant pocket.
+            flipped = getattr(self.attn_backend, "_mixed_gate_flipped", None)
+            if flipped is None:
+                flipped = select_persistent_flipped_schedule(
+                    paged_kernel_lens_sum,
+                    len(paged_kernel_lens),
+                    self.attn_backend.no_flipped_schedule,
+                )
             # Enable CUDA graph mode for persistent kernel — sglang uses CG for
             # all BatchAttention calls. This forces invariant workspace layout so
             # capture and replay have consistent offsets regardless of batch composition.

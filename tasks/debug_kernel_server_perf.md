@@ -686,6 +686,60 @@ Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares 
 
 ---
 
+## Sync-free plan + measured mixed-kernel gate (2026-07-30)
+
+Goal: eliminate the low-concurrency regressions of the persistent overlap
+kernel (LPT planning + cooperative-launch overhead) and guarantee zero
+regression via server-side kernel selection. sglang `9bbc82e28`+, flashinfer
+`f4d2a80`. Scripts: `tasks/debug_kernel_server_perf/gate_sweep3.py` (copy in
+scratchpad), `build_mixed_kernel_gate_table.py`.
+
+### Overhead diagnosis (H800, Qwen2.5-7B heads 28/4)
+
+- `BatchAttention.plan()` ran three D2H copies + `torch.cuda.synchronize()`
+  per mixed step. With ~40 ms of queued GPU work the plan call stalls
+  **56.5 ms**; this serialization (not cooperative launch) was the dominant
+  serving overhead. Fix: host-built indptrs from `seq_lens_cpu` +
+  double-buffered pinned staging fenced by CUDA events (the pinned-buffer
+  reuse race is why earlier naive sync removals hung). Plan wall time with a
+  busy GPU: **0.47 ms**, outputs bitwise identical
+  (`scratchpad/test_syncfree_plan.py`).
+- Persistent `run()` CPU dispatch is **cheaper** than BatchPrefill
+  (16 µs vs 26 µs/call); cooperative launch is not a CPU-side cost.
+  `persistent_attn_forward` now reuses out/lse buffers (was 2 allocs/layer).
+
+### Kernel cost surface (serving-matched: non-causal cached-prefix part)
+
+479-composition sweep, decode 1–128 req @2K–98K KV × prefill chunks
+128–8192 @512–81920 prefix, `bench_gpu_time` medians, both flipped and
+non-flipped persistent schedules vs BatchPrefill fa2
+(`scratchpad/gate_sweep3_qwen25.json`):
+
+- Persistent wins up to **20×** (decode-dominant; BatchPrefill pads decode
+  rows to one big CTA tile when the batch-average packed qo length pulls the
+  fa2 tile to 64/128) and 1.2–1.7× across most mixed regimes.
+- Inherent losses only where decode KV ≤ ~0.13M tokens with a compute-bound
+  chunk (0.89–0.91×) or sub-0.15 ms tiny batches (fixed overhead, 0.55–0.8×).
+- The old flip heuristic (`total_kv < bs*32768`) is wrong on this
+  composition: mean 6.1% loss, worst 1.52×, 228/479 cases >5% off. Non-flipped
+  is better on 336 of 368 cases where the schedule matters ≥5%.
+
+### Measured k-NN gate
+
+Features `[log1p(decode_kv), log1p(prefill_work=Σe·c), log1p(prefill_tokens),
+log1p(decode_bs), 3·D/(D+P+1)]`, k=3, persistent only on unanimous
+neighbors labeled `bp/pa_best ≥ 1.05`; flip by neighbor majority.
+Leave-one-out on the sweep: worst-case regression **1.028×** (zero cases
+>3%), win capture 68.7%, mean speedup 1.61× vs always-BatchPrefill; flip
+choice mean loss 0.29%. Deployed as
+`python/sglang/srt/layers/attention/mixed_kernel_gate_h800_gqa7.json`
+(+gqa4 for Qwen3-8B) behind `SGLANG_MIXED_ATTENTION_KERNEL=auto` with
+forced `persistent`/`batch_prefill` overrides; ~20 µs per decision, once
+per mixed step.
+
+- [ ] Validate zero-regression + retained gains end-to-end: TraceLab causal
+  replay at 10/16/20 sessions and WL screens, DMC vs gated LPT (task list).
+
 ## Open TODOs
 
 - [x] **Mixed CG padding threshold [INFEASIBLE]**: Swept `SGLANG_MIXED_CG_PADDING_PCT`=5/8/10% (clean rerun, no keepalive, rate=8).

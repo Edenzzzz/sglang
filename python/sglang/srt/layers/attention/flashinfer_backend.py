@@ -659,6 +659,16 @@ class FlashInferAttnBackend(AttentionBackend):
                         forward_batch.extend_prefix_lens_cpu,
                         self.num_qo_heads // self.num_kv_heads,
                     )
+                stats = getattr(self, "_mixed_gate_stats", None)
+                if stats is None:
+                    stats = self._mixed_gate_stats = [0, 0]
+                stats[0 if use_pa else 1] += 1
+                if (stats[0] + stats[1]) % 500 == 0:
+                    logger.info(
+                        "mixed kernel gate: persistent=%d batch_prefill=%d",
+                        stats[0],
+                        stats[1],
+                    )
                 if use_pa:
                     wrappers = self.prefill_wrappers_mixed
                 else:

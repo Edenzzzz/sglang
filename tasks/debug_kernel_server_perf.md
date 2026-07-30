@@ -811,8 +811,44 @@ retokenize 100%.
 
 Zero regression on the Qwen3-8B head config at both loads.
 
-- [ ] Paired g16/g10 cap-8192 repeat runs (mean-TTFT run-to-run variance):
-  pending below.
+### Paired repeat runs (default cap 8192, `*_cap8192_rep2_n100/`)
+
+| Screen | Run | LPT vs true DMC |
+|--------|-----|-----------------|
+| g16 | 1 | tput −0.43%, mean TTFT +6.8%, pooled P99 ITL −1.3%, reqmax P99 −23% |
+| g16 | 2 | tput **+2.10%**, mean TTFT **−6.0%**, pooled P99 ITL **−4.1%**, reqmax parity |
+| g10 | 1 | tput +0.07%, mean TTFT +3.2%, pooled P99 ITL −6.2%, reqmax parity |
+| g10 | 2 | tput −0.03%, mean TTFT −0.6%, pooled P99 ITL −0.7%, reqmax parity |
+
+Mean TTFT at saturation swings ±6% between identical-config runs, so the
+run-1 TTFT deltas were noise. Averaged, the default configuration is parity
+or better on every axis at both loads.
+
+### Conclusion
+
+The low-concurrency regression of the persistent overlap path is eliminated
+and the high-concurrency gains are retained against a strictly stronger
+(honest BatchPrefill) baseline:
+
+- **Default config** (gate auto, cap 8192): zero regression at 10 sessions
+  (all axes within noise, pooled P99 ITL −0.7–6.2% better), and at 16
+  sessions +0.8% mean throughput across paired runs with −1.3–4.1% pooled
+  P99 ITL and up to −23% request-max P99.
+- **Tail-optimized** (cap 6656): −14.6% pooled P99 ITL and +0.77% throughput
+  at 16 sessions; at 10 sessions request-max P99 −18% while pooled P99 pays
+  +11.6% (a cap tradeoff, not a kernel one).
+- Kernel level, the gate preserves up to 20× persistent-kernel wins on
+  decode-dominant mixed batches while capping any composition's regression
+  at 2.8% (leave-one-out); WL1 on Qwen3-8B is parity at both rates with 100%
+  retokenization everywhere.
+
+Mechanically, the three fixes were: (1) sync-free double-buffered planning
+(56.5 ms pipeline stall → 0.47 ms), (2) the measured per-batch kernel +
+schedule gate replacing always-persistent and the wrong flip heuristic, and
+(3) startup prewarm of both persistent module variants (a mid-replay JIT
+build froze all sessions for 18 s). The honest-baseline fix
+(`SGLANG_FLASHINFER_USE_PERSISTENT=0` for DMC) invalidates all July
+serving-level DMC comparisons.
 
 ## Open TODOs
 

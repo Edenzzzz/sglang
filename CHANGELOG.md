@@ -1,6 +1,17 @@
 # Changelog
 
-## v0.4.0 — Sync-Free Persistent Plan + Per-Batch Mixed Kernel Gate (2026-07-30, in progress)
+## v0.4.0 — Sync-Free Persistent Plan + Per-Batch Mixed Kernel Gate (2026-07-30)
+
+### Validation (TraceLab decode-heavy N=100 screens + WL1 Qwen3-8B, honest baselines)
+- 10 sessions (old +14.5% pooled-P99 regression point): parity on every axis across paired
+  runs at the matched cap; pooled P99 ITL −0.7% to −6.2% better than true DMC.
+- 16 sessions: +0.8% mean throughput across paired runs, pooled P99 ITL −1.3% to −4.1%,
+  request-max P99 up to −23%; cap 6656 option reaches −14.6% pooled P99 ITL / +0.77% tput.
+- WL1 (Qwen3-8B, rates 8 and 2): parity or slightly better on all metrics; 100%
+  retokenization on every accepted run.
+- Startup prewarm of both persistent module variants added after a mid-replay JIT build
+  froze all nine sessions for 18.3 s in the first g10 run (flashinfer `c6d2a00`,
+  sglang `313b97611`).
 
 ### Sync-free BatchAttention planning (flashinfer `f4d2a80` + backend host metadata)
 - `BatchAttention.plan()` no longer calls `torch.cuda.synchronize()`. The backend now

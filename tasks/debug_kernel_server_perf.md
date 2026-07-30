@@ -752,8 +752,49 @@ choice mean loss 0.29%. Deployed as
 forced `persistent`/`batch_prefill` overrides; ~20 µs per decision, once
 per mixed step.
 
-- [ ] Validate zero-regression + retained gains end-to-end: TraceLab causal
-  replay at 10/16/20 sessions and WL screens, DMC vs gated LPT (task list).
+### Validation screens (TraceLab decode-heavy, N=100, 2026-07-30)
+
+sglang `313b97611`, flashinfer `c6d2a00`. Command:
+`TRACELAB_MIN_OUTPUT_LEN=512 TRACELAB_NUM_GROUPS=<g> NUM_PROMPTS=100
+LPT_CHUNKED_PREFILL_SIZE=6656 METHODS_SPEC="DMC_CG LPT"
+bash tasks/realistic_workload_analysis/run_tracelab_claude.sh`, results in
+`tasks/realistic_workload_analysis/h800_tracelab_decodeheavy512_gated_g{10,16}_n100/`.
+DMC is now a true BatchPrefill baseline (explicit
+`SGLANG_FLASHINFER_USE_PERSISTENT=0`) and is *stronger* than the old
+contaminated one (g16: 7,882 vs 7,708 tok/s; g10: 6,382 vs 6,032 — the old
+"DMC" paid the persistent plan-sync stall).
+
+The first g10 LPT run exposed a mid-replay JIT compile of the second
+flipped-schedule module variant (18.3 s global stall freezing all nine active
+sessions; both variants' cached_ops rebuilt at 19:16/19:19 in the server
+process). Fixed by prewarming both variants at backend init
+(flashinfer `c6d2a00` + sglang `313b97611`); the polluted run is archived in
+the session scratchpad and was re-run.
+
+| Screen | Method (cap) | Total tok/s | Mean/P99 TTFT | Mean ITL | pooled P99 ITL | reqmax P99 |
+|--------|--------------|------------:|--------------:|---------:|---------------:|-----------:|
+| g16 (conc 10.9) | true DMC (8192) | 7,882 | 31.0 / 90.2 s | 42.88 ms | 775.97 ms | 1,367 ms |
+| g16 (conc 11.0) | gated LPT (6656) | **7,943 (+0.77%)** | 31.8 / 89.8 s | **42.28 ms** | **662.92 ms (−14.6%)** | **1,205 ms** |
+| g10 (conc 3.2) | true DMC (8192) | 6,382 | 3.27 / 40.2 s | 17.52 ms | 31.36 ms | 1,075 ms |
+| g10 (conc 3.2) | gated LPT (6656) | 6,375 (−0.11%) | 3.29 / 41.1 s | 17.57 ms | 35.01 ms (+11.6%) | **886 ms (−18%)** |
+| g10 (conc 3.2) | gated LPT (8192) | **6,386 (+0.07%)** | 3.37 / **40.0 s** | **17.48 ms** | **29.41 ms (−6.2%)** | 1,072 ms |
+
+At g16 the gate chose BatchPrefill for 482/500 mixed batches — the 6,656-token
+chunks against ~80K prefixes sit in BatchPrefill's win region, so the pooled
+P99 gain comes from the cap, the corrected schedule choices, and the 18
+persistent picks. Both methods retokenize 100% and share one 32-s KV-pressure
+outlier on a single request.
+
+The g10 pooled-P99 gap at cap 6656 is a **cap artifact, not a kernel
+artifact**: with the gate routing nearly all mixed batches to BatchPrefill,
+the only remaining config difference was the LPT-only 6,656-token cap (more,
+shorter interference windows). Matching the baseline cap (8192) turns the old
+"+14.5% pooled P99 ITL regression at 10 sessions" into **−6.2%** with parity
+on throughput/mean ITL/P99 TTFT/request-max. Cap 6656 remains the
+tail-optimized point (−18% request-max at g10, −14.6% pooled P99 at g16).
+
+- [ ] g16 gated LPT at cap 8192 (default-config win characterization), g10
+  mean-TTFT variance repeat, WL screens on Qwen3-8B: pending below.
 
 ## Open TODOs
 

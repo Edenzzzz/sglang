@@ -204,6 +204,14 @@ python tasks/realistic_workload_analysis/analyze_request_timing.py \
    cost for BatchPrefill and persistence using decode count/context, append
    work, prefix hits, and P/D ratio, then fall back to DMC when the predicted
    advantage does not cover planning and interference cost.
+   **Done (2026-07-30):** a measured k-NN gate now makes this per-batch
+   choice (`SGLANG_MIXED_ATTENTION_KERNEL=auto`), the plan()-synchronize
+   stall is removed, and the screens were re-run against a *true*
+   BatchPrefill baseline (the old DMC baselines silently ran the persistent
+   kernel — see `tasks/debug_kernel_server_perf.md`). Result: the 10-session
+   regression is eliminated (pooled P99 ITL −6.2% at the matched cap) and
+   the 16-session point keeps −14.6% pooled P99 ITL at cap 6656 or −23%
+   request-max P99 at the default cap.
 
 ### Why TTFT improves more than raw kernel time
 

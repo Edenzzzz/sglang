@@ -793,8 +793,26 @@ shorter interference windows). Matching the baseline cap (8192) turns the old
 on throughput/mean ITL/P99 TTFT/request-max. Cap 6656 remains the
 tail-optimized point (−18% request-max at g10, −14.6% pooled P99 at g16).
 
-- [ ] g16 gated LPT at cap 8192 (default-config win characterization), g10
-  mean-TTFT variance repeat, WL screens on Qwen3-8B: pending below.
+At the default cap 8192, g16 gated LPT is parity on throughput/pooled P99
+(−0.43%/−1.33%) with request-max P99 **−23%** (1,053 vs 1,367 ms) and no
+32-s outlier; the −14.6% pooled-P99 point requires cap 6656.
+
+### WL1 screens, Qwen3-8B / gqa4 table (N=100, `run_gain_search.sh`, 2026-07-30)
+
+`MODEL=/opt/tiger/models/Qwen3-8B CASES_SPEC="4096:1024:8 4096:1024:2"
+NUM_PROMPTS=100 METHODS_SPEC="DMC_CG LPT"`, results in
+`tasks/debug_kernel_server_perf/wl1_gated_check_n100/`. Both methods
+retokenize 100%.
+
+| Rate | LPT vs true DMC |
+|-----:|-----------------|
+| 8 | tput +0.16%, mean TTFT −2.6%, mean ITL −0.5%, pooled P99 ITL +0.5% |
+| 2 | tput −0.01%, mean TTFT −1.4%, mean ITL −0.1%, pooled P99 ITL −2.6% |
+
+Zero regression on the Qwen3-8B head config at both loads.
+
+- [ ] Paired g16/g10 cap-8192 repeat runs (mean-TTFT run-to-run variance):
+  pending below.
 
 ## Open TODOs
 

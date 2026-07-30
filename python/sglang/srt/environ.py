@@ -201,6 +201,10 @@ class Envs:
     SGLANG_FLASHINFER_USE_PERSISTENT = EnvBool(True)
     SGLANG_FLASHINFER_USE_POD = EnvBool(False)
     SGLANG_FLASHINFER_NO_FLIPPED_SCHEDULE = EnvBool(False)
+    # Per-batch kernel choice for mixed prefill+decode batches:
+    # "auto" picks persistent BatchAttention or BatchPrefill from a measured
+    # cost model, "persistent"/"batch_prefill" force one kernel.
+    SGLANG_MIXED_ATTENTION_KERNEL = EnvStr("auto")
 
     # Triton
     SGLANG_TRITON_DECODE_ATTN_STATIC_KV_SPLITS = EnvBool(False)

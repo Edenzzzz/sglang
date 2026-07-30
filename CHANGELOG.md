@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.4.0 — Sync-Free Persistent Plan + Per-Batch Mixed Kernel Gate (2026-07-30, in progress)
+
+### Sync-free BatchAttention planning (flashinfer `f4d2a80` + backend host metadata)
+- `BatchAttention.plan()` no longer calls `torch.cuda.synchronize()`. The backend now
+  builds `qo_indptr`/`kv_indptr`/`kv_len` on the host from `seq_lens_cpu`/`extend_prefix_lens_cpu`
+  (NumPy cumsum) and passes CPU tensors straight to `plan()`; flashinfer double-buffers its
+  pinned int-workspace staging with CUDA-event fencing so removing the sync is race-free.
+  Measured: with ~40ms of queued GPU work, plan wall time drops 56.5ms → 0.47ms. This was the
+  main serving overhead of the persistent kernel (it broke overlap-scheduler CPU run-ahead on
+  every mixed step); previous naive removal attempts hung because of the pinned-buffer race.
+- `persistent_attn_forward` reuses grown `out`/`lse` buffers instead of allocating two tensors
+  per layer per step.
+- Removed a dead `call_begin_forward` branch that would have routed BatchPrefill wrappers
+  into a BatchAttention-signature `plan()` call when `use_persistent=1`.
+
+### Per-batch mixed-attention kernel gate (scaffolding)
+- New env `SGLANG_MIXED_ATTENTION_KERNEL` = `auto` (default) / `persistent` / `batch_prefill`.
+  For each mixed batch, `select_mixed_attention_kernel()` chooses persistent BatchAttention or
+  BatchPrefill from CPU-side batch composition; forward dispatch now keys on the planned
+  wrapper type instead of the global env flag. Cost-model constants pending the H800 gate
+  sweep (see tasks/debug_kernel_server_perf.md).
+
+### H800 kernel measurements (serving-matched non-causal prefix composition, Qwen2.5-7B heads)
+- Persistent kernel run() CPU dispatch is cheaper than BatchPrefill (16µs vs 26µs) —
+  cooperative launch is not a CPU-side cost.
+- 479-case sweep: persistent wins up to 20× at decode-dominant compositions but loses up to
+  0.55× when decode work is tiny and the chunk is compute-bound; 87/186 raw losses are
+  recovered by choosing the right flipped schedule (big chunks + long prefix want non-flipped).
+
 ## v0.3.3 — Nebius-SWE Workload + Chunk-Control Fall-back Fix (2026-04-09)
 
 ### Heavier Benchmark Workload

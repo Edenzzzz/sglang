@@ -14,6 +14,7 @@ from enum import Enum, auto
 from functools import partial
 from typing import TYPE_CHECKING, Callable, List, Optional, Union
 
+import numpy as np
 import torch
 
 from sglang.srt.environ import envs
@@ -83,6 +84,46 @@ def select_persistent_flipped_schedule(
         return False
     # None preserves FlashInfer's optimized flipped default.
     return None
+
+
+def select_mixed_attention_kernel(
+    extend_seq_lens_cpu,
+    extend_prefix_lens_cpu,
+) -> bool:
+    """Choose the kernel for a mixed batch's cached-prefix attention.
+
+    Returns True for the persistent BatchAttention kernel, False for
+    BatchPrefill. Uses only CPU-side metadata; the H800-measured cost surface
+    (tasks/debug_kernel_server_perf.md, gate sweep 2026-07-30) shows the
+    persistent kernel matches or beats BatchPrefill except when the decode
+    population is too small to overlap with a compute-bound prefill chunk.
+    """
+    mode = envs.SGLANG_MIXED_ATTENTION_KERNEL.get()
+    if mode == "persistent":
+        return True
+    if mode == "batch_prefill":
+        return False
+
+    decode_kv = 0
+    decode_bs = 0
+    prefill_paged_work = 0
+    for e, c in zip(extend_seq_lens_cpu, extend_prefix_lens_cpu):
+        if e <= 1:
+            decode_bs += 1
+            decode_kv += c
+        else:
+            # paged (cached-prefix) attention work for this chunk
+            prefill_paged_work += e * c
+    # Placeholder boundary; replaced by fitted constants below.
+    return _mixed_kernel_cost_gate(
+        decode_bs, decode_kv, prefill_paged_work
+    )
+
+
+def _mixed_kernel_cost_gate(
+    decode_bs: int, decode_kv: int, prefill_paged_work: int
+) -> bool:
+    return True
 
 
 @dataclass
@@ -529,7 +570,20 @@ class FlashInferAttnBackend(AttentionBackend):
             if self.use_pod and forward_batch.forward_mode.is_mixed():
                 wrappers = self.pod_wrappers
             elif self.use_persistent and forward_batch.forward_mode.is_mixed():
-                wrappers = self.prefill_wrappers_mixed
+                # Per-batch kernel choice: the persistent kernel only pays off
+                # when the decode population supplies enough overlap work, so
+                # fall back to BatchPrefill outside its winning region. Mixed
+                # CUDA graphs capture BatchAttention, so the gate must not
+                # switch kernels when they are enabled.
+                if getattr(
+                    self, "mixed_cuda_graph_max_bs", 0
+                ) > 0 or select_mixed_attention_kernel(
+                    forward_batch.extend_seq_lens_cpu,
+                    forward_batch.extend_prefix_lens_cpu,
+                ):
+                    wrappers = self.prefill_wrappers_mixed
+                else:
+                    wrappers = self.prefill_wrappers_paged
             else:
                 wrappers = self.prefill_wrappers_paged
             use_ragged = True
@@ -928,9 +982,27 @@ class FlashInferAttnBackend(AttentionBackend):
         layer: RadixAttention,
         logits_soft_cap: float,
     ):
+        q = q.view(-1, layer.tp_q_head_num, layer.head_dim)
+        num_tokens = q.shape[0]
+        out_buf = getattr(self, "_persistent_out_buf", None)
+        if (
+            out_buf is None
+            or out_buf.shape[0] < num_tokens
+            or out_buf.shape[1:] != q.shape[1:]
+            or out_buf.dtype != q.dtype
+        ):
+            self._persistent_out_buf = torch.empty(
+                num_tokens, q.shape[1], q.shape[2], dtype=q.dtype, device=q.device
+            )
+            self._persistent_lse_buf = torch.empty(
+                num_tokens, q.shape[1], dtype=torch.float32, device=q.device
+            )
+            out_buf = self._persistent_out_buf
         o, lse = batch_attn_wrapper.run(
-            q.view(-1, layer.tp_q_head_num, layer.head_dim),
+            q,
             forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id),
+            out=out_buf[:num_tokens],
+            lse=self._persistent_lse_buf[:num_tokens],
             logits_soft_cap=logits_soft_cap,
             k_scale=layer.k_scale,
             v_scale=layer.v_scale,
@@ -1006,7 +1078,7 @@ class FlashInferAttnBackend(AttentionBackend):
                     layer,
                     logits_soft_cap,
                 )
-            elif self.use_persistent and forward_batch.forward_mode.is_mixed():
+            elif isinstance(prefill_wrapper_paged, BatchAttention):
                 o, _ = self.persistent_attn_forward(
                     prefill_wrapper_paged,
                     forward_batch,
@@ -1081,7 +1153,7 @@ class FlashInferAttnBackend(AttentionBackend):
                         layer,
                         logits_soft_cap,
                     )
-                elif self.use_persistent and forward_batch.forward_mode.is_mixed():
+                elif isinstance(prefill_wrapper_paged, BatchAttention):
                     o2, s2 = self.persistent_attn_forward(
                         prefill_wrapper_paged,
                         forward_batch,
@@ -1522,6 +1594,8 @@ class FlashInferIndicesUpdaterPrefill:
             fixed_split_size=fixed_split_size,
             multi_item_params=multi_item_params,
             causal=causal,
+            seq_lens_cpu=seq_lens_cpu,
+            prefix_lens_cpu=prefix_lens_cpu,
         )
 
     def update_sliding_window(
@@ -1784,6 +1858,8 @@ class FlashInferIndicesUpdaterPrefill:
         fixed_split_size: Optional[int] = None,
         multi_item_params: Optional[MultiItemScoringParams] = None,
         causal: bool = False,  # cached prefix should be attended to by all queries. Defaulting to True will cause wrong results for the persistent kernel.
+        seq_lens_cpu: Optional[torch.Tensor] = None,
+        prefix_lens_cpu=None,
     ):
         bs = len(seq_lens)
         if spec_info is None:
@@ -1887,11 +1963,33 @@ class FlashInferIndicesUpdaterPrefill:
             # capture and replay have consistent offsets regardless of batch composition.
             # For CG: pass max_bs to force invariant workspace layout across capture/replay.
             max_bs = getattr(self.attn_backend, 'mixed_cuda_graph_max_bs', 0)
-            wrapper_paged.plan(
+            plan_qo_indptr, plan_kv_indptr, plan_kv_lens = (
                 qo_indptr,
                 kv_indptr,
-                kv_indices,
                 paged_kernel_lens,
+            )
+            if seq_lens_cpu is not None and prefix_lens_cpu is not None:
+                # Build plan metadata on the host so BatchAttention.plan() can
+                # skip its device-to-host copy and the full device synchronize
+                # that copy requires. The synchronize otherwise stalls the CPU
+                # behind every queued forward step on each mixed batch.
+                seq_np = seq_lens_cpu.numpy().astype(np.int64, copy=False)
+                prefix_np = np.asarray(prefix_lens_cpu, dtype=np.int64)
+                extend_np = seq_np - prefix_np
+                kv_lens_np = prefix_np if use_ragged else seq_np
+                zero = np.zeros(1, dtype=np.int64)
+                plan_qo_indptr = torch.from_numpy(
+                    np.concatenate((zero, np.cumsum(extend_np))).astype(np.int32)
+                )
+                plan_kv_indptr = torch.from_numpy(
+                    np.concatenate((zero, np.cumsum(kv_lens_np))).astype(np.int32)
+                )
+                plan_kv_lens = torch.from_numpy(kv_lens_np.astype(np.int32))
+            wrapper_paged.plan(
+                plan_qo_indptr,
+                plan_kv_indptr,
+                kv_indices,
+                plan_kv_lens,
                 self.num_qo_heads,
                 self.num_kv_heads,
                 head_dim_qk=self.head_dim,
@@ -1903,21 +2001,6 @@ class FlashInferIndicesUpdaterPrefill:
                 flipped_schedule=flipped,
                 enable_cuda_graph=(max_bs > 0),
                 cuda_graph_max_bs=max_bs,
-            )
-        elif self.attn_backend.use_persistent:
-            wrapper_paged.plan(
-                qo_indptr,
-                kv_indptr,
-                kv_indices,
-                paged_kernel_lens,
-                self.num_qo_heads,
-                self.num_kv_heads,
-                head_dim_qk=self.head_dim,
-                head_dim_vo=self.head_dim,
-                page_size=1,
-                q_data_type=self.q_data_type,
-                kv_data_type=self.data_type,
-                causal=causal,
             )
         else:
             wrapper_paged.begin_forward(

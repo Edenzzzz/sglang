@@ -412,6 +412,20 @@ class FlashInferAttnBackend(AttentionBackend):
         self.prefill_wrappers_mixed = []
         self.decode_wrappers = []
         self.pod_wrappers = []
+        if self.use_persistent and not skip_prefill:
+            # Both work-ordering variants of the persistent module must be
+            # compiled before serving: the gate picks the schedule per batch,
+            # and a cold-cache JIT build mid-replay stalls every running
+            # request for ~20 seconds.
+            from flashinfer.attention import prewarm_holistic_attention_modules
+
+            prewarm_holistic_attention_modules(
+                model_runner.dtype,
+                model_runner.kv_cache_dtype,
+                torch.int32,
+                model_runner.model_config.head_dim,
+                model_runner.model_config.head_dim,
+            )
         for _ in range(self.num_wrappers):
             if not skip_prefill:
                 self.prefill_wrappers_mixed.append(

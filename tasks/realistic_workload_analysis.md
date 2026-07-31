@@ -145,6 +145,42 @@ optimization.
 The exact screen values are in
 [`tracelab_sweetspot_screen_summary.json`](realistic_workload_analysis/tracelab_sweetspot_screen_summary.json).
 
+### Gated-stack sweet-spot rescan (2026-07-31, honest baselines)
+
+The scan was repeated at g12/g14/g18/g20 with the fixed stack (sync-free
+plan, kernel gate, prewarm; sglang `f158e4b85`, flashinfer `c6d2a00`),
+true-BatchPrefill DMC, gated LPT at the tail-optimized 6,656 cap, plus the
+earlier validated g10/g16 screens. Results dirs:
+`h800_tracelab_decodeheavy512_gated_g*_n100/`.
+
+| Groups | Obs. conc | Mean ITL regime | LPT tput | pooled P99 ITL | reqmax P99 | worst ITL (LPT / DMC) |
+|-------:|----------:|-----------------|---------:|---------------:|-----------:|----------------------:|
+| 12 | 1.4 | 17.8 ms (light) | −0.07% | **+72%** (82 vs 47 ms) | −14% | 0.88 / 1.02 s |
+| 10 | 3.2 | 17.5 ms (light) | −0.11% | +11.6% | −18% | 0.89 / 1.08 s |
+| 14 | 2.7 | 44 ms (heavy) | −0.20% | **−15.7%** | −14% | 0.87 / 1.02 s |
+| 18 | 8.2 | 52 ms (heavy) | **+0.64%** | **−16.0%** | **−44%** | **0.89 s / 53 s** |
+| 16 | 10.9 | 43 ms (heavy) | **+0.77%** | **−14.6%** | −12% | 1.05 / 32 s |
+| 20 | 14.5 | 47 ms (heavy) | −0.39% | **−15.7%** | **−67%** | **0.89 s / 82 s** |
+
+The discriminator is the **mixed-step interference regime**, not raw
+concurrency: whenever the sample keeps mixed chunks colliding with decodes
+(mean ITL ≈ 43–52 ms; g14/g16/g18/g20), the gated stack delivers a uniform
+−15 to −16% pooled P99 ITL at parity-to-+0.8% throughput, cuts request-max
+tails by up to 67%, and replaces DMC's 32–82-second worst stalls with
+sub-second worst gaps. In light-mixing samples (mean ITL ≈ 17.5 ms;
+g10/g12), the 6,656 cap costs pooled P99 (absolute 35–82 ms, still under
+the 150 ms SLO) while request-max stays 14–18% better; the matched 8,192
+cap restores strict parity there (validated at g10: pooled P99 −6.2%).
+
+The sweet spot is therefore g16–g18 (concurrency ~8–11 under heavy mixing):
+simultaneous throughput, pooled-tail, and worst-stall wins. Notably the win
+region is much broader than the pre-fix scan suggested — g14 (conc 2.7) and
+g20 (conc 14.5) also win the tail decisively; the old "only wins near
+concurrency eleven" boundary was mostly plan-sync overhead and the
+contaminated baseline. Gate picks stay modest everywhere (1–4% of mixed
+batches persistent at long context), so the tail gains come from the gate
+keeping BatchPrefill where it is faster while the cap shapes interference.
+
 ## Transfer to independent coding datasets
 
 Matched N=400 sweeps use Qwen3-8B and ordinary decode CUDA graphs for every

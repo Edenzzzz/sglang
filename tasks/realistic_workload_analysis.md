@@ -74,6 +74,31 @@ ITL at 0.05 and saturation. The trace's first 100 selected rounds average 666
 output tokens; the full 400 average only 481, so the shorter screen spends a
 larger fraction of server time in the decode-heavy overlap regime.
 
+### Gated rerun with honest baselines (2026-07-31, supersedes the table above)
+
+The table above compared two servers that both ran the persistent kernel
+(the DMC launcher never disabled `SGLANG_FLASHINFER_USE_PERSISTENT`) and both
+paid the plan()-synchronize stall. The sweep was rerun with sglang
+`f158e4b85` / flashinfer `c6d2a00`: true BatchPrefill DMC versus gated LPT
+(`SGLANG_MIXED_ATTENTION_KERNEL=auto`, matched 8,192 cap), raw runs in
+`h800_qwen25_tracelab_claude_pareto_gated_n400/`. The honest baseline is
+itself 6.1–10.7% faster than the contaminated one.
+
+| Rate | Method | Total tok/s | Mean / P99 TTFT | Mean / pooled P99 ITL |
+|-----:|--------|------------:|----------------:|----------------------:|
+| 0.02 | true DMC | 28,907 | **725 ms** / 7.87 s | 17.83 / 96.12 ms |
+| 0.02 | gated LPT | 28,903 | 758 ms / **7.28 s** | **17.73 / 93.54 ms** |
+| 0.05 | true DMC | 30,775 | 892 ms / 9.92 s | **18.25** / 98.99 ms |
+| 0.05 | gated LPT | **30,794** | **816 ms / 9.55 s** | 18.38 / **98.59 ms** |
+| `inf` | true DMC | 31,558 | **1.29 s / 31.0 s** | 18.33 / 100.41 ms |
+| `inf` | gated LPT | **31,643 (+0.27%)** | 1.32 s / 33.0 s | **18.25 / 95.83 ms (−4.6%)** |
+
+The gated build is parity or better on throughput and pooled P99 ITL at every
+rate (P99 ITL −2.7%/−0.4%/−4.6%); saturation TTFT differences are within the
+±6% run-to-run band measured in paired repeats. The gate selected the
+persistent kernel for 63/500 (0.02) to 203/1500 (inf) mixed batches. The
+figures below are regenerated from this run.
+
 Current corrected TraceLab figures:
 
 - [Capacity versus mean ITL](realistic_workload_analysis/tracelab_current_n400/figures/pareto_capacity_vs_mean_itl.png)

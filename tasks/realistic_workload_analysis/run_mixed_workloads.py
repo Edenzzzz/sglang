@@ -42,10 +42,18 @@ PORT = int(os.environ.get("BENCH_PORT", "30013"))
 
 
 def codex(n, groups=12, min_ctx=32768, max_ctx=49152, min_out=512):
-    """Coding-agent tenant: causal session replay with tool-result appends."""
+    """Coding-agent tenant: causal session replay with tool-result appends.
+
+    Rounds are issued back to back (recorded think/tool gaps are not replayed).
+    A real cluster runs far more sessions than KV capacity allows to be
+    resident, so one session's think gap is filled by another's work; with the
+    dozen sessions that fit here, replaying gaps would instead leave the node
+    idle 88% of the time and measure nothing. Causal ordering and cumulative
+    prefix growth within each session are preserved.
+    """
     return [
         "--dataset-name", "tracelab-claude", "--dataset-path", TRACE,
-        "--tokenize-prompt", "--use-trace-timestamps", "--mooncake-slowdown-factor", "0.01",
+        "--tokenize-prompt",
         "--tracelab-num-groups", str(groups),
         "--tracelab-min-context-len", str(min_ctx),
         "--tracelab-max-context-len", str(max_ctx),
@@ -71,12 +79,12 @@ SCENARIOS = {
     # make a third of all forwards mixed.
     "agent_plus_shortchat": {
         "desc": "coding agent + high-rate short-answer chat (routing/classification traffic)",
-        "streams": {"codex": codex(40), "chat": chat(3500, 12, 512, 96)},
+        "streams": {"codex": codex(60), "chat": chat(2400, 12, 512, 96)},
     },
     # The user-facing version: chat contributes long decodes as well as prefills.
     "agent_plus_chat": {
         "desc": "coding agent + conversational chat (long decodes, moderate arrival rate)",
-        "streams": {"codex": codex(40), "chat": chat(700, 3, 1024, 512)},
+        "streams": {"codex": codex(60), "chat": chat(600, 3, 1024, 512)},
     },
     # Single tenant. Decode KV grows from generated tokens, so a long-CoT pool
     # reaches the starved regime on its own while prompts stay fresh.
@@ -88,7 +96,7 @@ SCENARIOS = {
     # steps whose early chunks still have small prefixes.
     "rag_plus_agent": {
         "desc": "cache-miss document/RAG traffic + coding agent",
-        "streams": {"codex": codex(40), "rag": chat(400, 2, 12288, 256)},
+        "streams": {"codex": codex(60), "rag": chat(300, 2, 12288, 256)},
     },
     # Control: the measured parity region. Many short rows give BatchPrefill
     # plenty of query tiles, so the gate should decline persistent throughout.

@@ -43,7 +43,9 @@ def main():
     a = ap.parse_args()
     d = Path(a.outdir)
 
-    streams = sorted({f.name.split("_", 1)[1].rsplit(".", 1)[0]
+    # Method names contain underscores (DMC_CG), so strip the exact prefix
+    # rather than splitting on the first separator.
+    streams = sorted({f.name[len(a.baseline) + 1:].rsplit(".", 1)[0]
                       for f in d.glob(f"{a.baseline}_*.json")})
     if not streams:
         print(f"no {a.baseline}_*.json in {d}")

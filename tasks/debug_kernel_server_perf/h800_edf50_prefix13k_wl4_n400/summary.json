@@ -1,0 +1,25 @@
+[
+  {
+    "method": "LPT_CG",
+    "workload": "in16384_out1024",
+    "rate": "8",
+    "throughput": 839.9572601427119,
+    "duration": 250.13296505622566,
+    "median_ttft_ms": 88906.20269440114,
+    "p99_ttft_ms": 187762.652915027,
+    "median_itl_ms": 31.267600134015083,
+    "p99_itl_ms": 45.471055433154106,
+    "median_req_max_itl_ms": 37.87369653582573,
+    "p99_req_max_itl_ms": 101.27394415438175,
+    "max_req_itl_ms": 101.42508335411549,
+    "median_req_p99_itl_ms": 36.06231804937124,
+    "p99_req_p99_itl_ms": 68.60033579412874,
+    "n": 400,
+    "slo_attain_pct": 5.0,
+    "slo_tpot_attain_pct": 5.25,
+    "ttft_attain_pct": 5.25,
+    "itl_attain_pct": 94.75,
+    "tpot_attain_pct": 100.0,
+    "itl_p99_attain_pct": 100.0
+  }
+]

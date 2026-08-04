@@ -137,7 +137,14 @@ class MixedKernelGate:
         cls._cache[gqa_group_size] = gate
         return gate
 
-    def decide(self, decode_kv: int, prefill_work: int, prefill_tokens: int, decode_bs: int):
+    def decide(
+        self,
+        decode_kv: int,
+        prefill_work: int,
+        prefill_tokens: int,
+        decode_bs: int,
+        kv_concentration: float,
+    ):
         x = np.array(
             [
                 np.log1p(decode_kv),
@@ -145,6 +152,7 @@ class MixedKernelGate:
                 np.log1p(prefill_tokens),
                 np.log1p(decode_bs),
                 3.0 * decode_kv / (decode_kv + prefill_work + 1),
+                np.log1p(kv_concentration),
             ]
         )
         d = self.points - (x - self.mu) / self.sd
@@ -179,27 +187,25 @@ def select_mixed_attention_kernel(
     if mode == "batch_prefill":
         return False, None
 
-    decode_kv = 0
-    decode_bs = 0
-    prefill_work = 0
-    prefill_tokens = 0
-    for e, c in zip(extend_seq_lens_cpu, extend_prefix_lens_cpu):
-        if e <= 1:
-            decode_bs += 1
-            decode_kv += c
-        else:
-            # paged (cached-prefix) attention work for this chunk
-            prefill_work += e * c
-            prefill_tokens += e
+    e = np.asarray(extend_seq_lens_cpu, dtype=np.int64)
+    c = np.asarray(extend_prefix_lens_cpu, dtype=np.int64)
+    is_decode = e <= 1
+    dec_kv = c[is_decode]
+    decode_bs = int(is_decode.sum())
+    decode_kv = int(dec_kv.sum())
+    prefill_work = int((e[~is_decode] * c[~is_decode]).sum())
+    prefill_tokens = int(e[~is_decode].sum())
+    # KV-weighted mean row length: separates a few long-context rows (which
+    # leave most SMs idle under BatchPrefill) from many short ones.
+    kv_conc = float((dec_kv * dec_kv).sum() / decode_kv) if decode_kv > 0 else 0.0
 
     gate = MixedKernelGate.for_gqa(gqa_group_size)
     if gate is None:
-        # Conservative analytic fallback: persistent only in the clearly
-        # decode-dominant region; non-flipped ordering is the safer default
-        # on the cached-prefix composition.
-        use_pa = decode_kv >= 500_000 and decode_kv * 20 >= prefill_work
+        # Conservative analytic fallback: persistent only where a small number
+        # of long-context rows would starve BatchPrefill of parallelism.
+        use_pa = kv_conc >= 16384 and decode_kv * 20 >= prefill_work
         return use_pa, False
-    return gate.decide(decode_kv, prefill_work, prefill_tokens, decode_bs)
+    return gate.decide(decode_kv, prefill_work, prefill_tokens, decode_bs, kv_conc)
 
 
 @dataclass

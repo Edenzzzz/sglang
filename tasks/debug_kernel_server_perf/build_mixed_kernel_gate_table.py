@@ -7,10 +7,11 @@ Output: compact k-NN reference table consumed by
 sglang.srt.layers.attention.flashinfer_backend.MixedKernelGate.
 
 Label policy: use the persistent kernel only where its best-schedule time
-beats BatchPrefill by >= 5%, and only when all K nearest samples agree.
-K=5 on the merged (base + fresh-prefix) H800 sweep gives leave-one-out
-worst-case regression 1.000 with 75% of the available win captured; K=3 was
-enough for the base sweep alone but admits 1.4-1.6x regressions on the
+beats BatchPrefill by >= 10%, and only when all K=5 nearest samples agree.
+On the merged H800 sweep (uniform + fresh-prefix + blended-KV, 1316 points)
+this gives leave-one-out worst-case regression 1.000 with 81% of the
+available win captured and a 2.71x mean speedup where persistent is chosen.
+A 5% label admits one 1.039x regression; k=3 admits 1.4-1.6x ones on the
 steep gradients of the fresh-prefix region. The flip label is the faster
 schedule per point.
 """
@@ -20,18 +21,40 @@ import json
 
 import numpy as np
 
-LABEL_SPEEDUP = 1.05
+LABEL_SPEEDUP = 1.10
 KNN_K = 5
 
 
-def features(D, P, Q, d_bs):
+def features(dec_kvs, p_lens, p_prefix):
+    """Feature vector for one mixed-batch composition.
+
+    The KV-concentration term is essential: BatchPrefill's cost tracks the
+    *per-row* context length, because a handful of long rows produce only a
+    handful of query tiles and leave most SMs idle while each streams its whole
+    KV. Total KV and batch size cannot tell "8 rows at 64K" from "128 rows at
+    4K" -- measured 8.2x versus 1.02x -- so both are needed.
+    """
+    dec = np.asarray(dec_kvs, dtype=np.float64)
+    D = float(dec.sum())
+    P = float(sum(q * c for q, c in zip(p_lens, p_prefix)))
+    Q = float(sum(p_lens))
+    n_dec = len(dec_kvs)
+    conc = float((dec * dec).sum() / D) if D > 0 else 0.0
     return [
         float(np.log1p(D)),
         float(np.log1p(P)),
         float(np.log1p(Q)),
-        float(np.log1p(d_bs)),
+        float(np.log1p(n_dec)),
         3.0 * D / (D + P + 1),
+        float(np.log1p(conc)),
     ]
+
+
+def row_decode_kvs(r):
+    """Uniform-KV sweep rows store (d_bs, d_kv); blended rows store dec_kvs."""
+    if "dec_kvs" in r:
+        return r["dec_kvs"]
+    return [r["d_kv"] - 1] * r["d_bs"]
 
 
 def main():
@@ -43,14 +66,13 @@ def main():
     ap.add_argument("--note", type=str, default="")
     args = ap.parse_args()
 
-    rs = json.load(open(args.sweep_json))
+    rs = []
+    for path in args.sweep_json.split(","):
+        rs.extend(json.load(open(path)))
     feats, use_pa, flip = [], [], []
     for r in rs:
-        D = r["d_bs"] * (r["d_kv"] - 1)
-        P = sum(q * c for q, c in zip(r["p_lens"], r["p_prefix"]))
-        Q = sum(r["p_lens"])
         best = min(r["pa_flip_ms"], r["pa_noflip_ms"])
-        feats.append(features(D, P, Q, r["d_bs"]))
+        feats.append(features(row_decode_kvs(r), r["p_lens"], r["p_prefix"]))
         use_pa.append(int(r["bp_ms"] / best >= LABEL_SPEEDUP))
         flip.append(int(r["pa_flip_ms"] <= r["pa_noflip_ms"]))
 
@@ -76,7 +98,10 @@ def main():
             "note": args.note,
         },
         "knn_k": KNN_K,
-        "feature_names": ["log1p_D", "log1p_P", "log1p_Q", "log1p_d_bs", "3*D/(D+P+1)"],
+        "feature_names": [
+            "log1p_D", "log1p_P", "log1p_Q", "log1p_n_dec",
+            "3*D/(D+P+1)", "log1p_kv_concentration",
+        ],
         "mu": [round(float(v), 6) for v in mu],
         "sd": [round(float(v), 6) for v in sd],
         "max_nn_dist_sq": round(max_d2, 6),

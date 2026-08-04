@@ -21,23 +21,23 @@ export SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1
 MODEL="${MODEL:-/opt/tiger/models/Qwen2.5-7B-Instruct}"
 TRACE_PATH="${TRACE_PATH:-$REPO_ROOT/workloads/tracelab/syfi_coding_trace.jsonl.gz}"
 CHAT_DATASET="${CHAT_DATASET:-$REPO_ROOT/workloads/ShareGPT_V3_unfiltered_cleaned_split.json}"
-PORT="${PORT:-30013}"
+PORT="30013"  # fixed: some shells export PORT
 RESULTS_DIR="${RESULTS_DIR:-$SCRIPT_DIR/h800_mixed_tenancy}"
 METHODS="${METHODS:-DMC_CG LPT}"
 
 # Coding tenant: causal session replay, moderate-long contexts so both tenants
 # fit the KV pool simultaneously.
 CODEX_GROUPS="${CODEX_GROUPS:-12}"
-CODEX_N="${CODEX_N:-72}"
+CODEX_N="${CODEX_N:-40}"
 CODEX_MIN_CTX="${CODEX_MIN_CTX:-32768}"
 CODEX_MAX_CTX="${CODEX_MAX_CTX:-49152}"
 # Chat tenant: fresh prompts (no shared prefix), sustained arrivals with
 # moderate outputs so they inject prefills continuously without crowding the
 # long-context sessions out of the decode pool.
-CHAT_N="${CHAT_N:-600}"
-CHAT_RATE="${CHAT_RATE:-3}"
-CHAT_IN="${CHAT_IN:-1024}"
-CHAT_OUT="${CHAT_OUT:-512}"
+CHAT_N="${CHAT_N:-3500}"
+CHAT_RATE="${CHAT_RATE:-12}"
+CHAT_IN="${CHAT_IN:-512}"
+CHAT_OUT="${CHAT_OUT:-96}"
 MAX_RUNNING="${MAX_RUNNING:-48}"
 
 mkdir -p "$RESULTS_DIR"

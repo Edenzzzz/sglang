@@ -739,6 +739,44 @@ attributed to the kernel was a cap/guard effect. Both runners now set
 `SGLANG_FLASHINFER_USE_PERSISTENT=0` explicitly for baseline methods; a true
 BatchPrefill-baseline comparison is part of the validation below.
 
+### Where the persistent kernel actually wins (2026-08-04)
+
+The original sweep sampled chunk prefixes down to 512 only, which hid the
+highest-value region. A direct probe plus a 477-case extension sweep
+(`sweep_fresh.py`, merged table 956 points) gives the real picture.
+
+**Mechanism.** FlashInfer's fa2 BatchPrefill selects one CTA tile size for the
+whole batch from the mean packed-qo length (`FA2DetermineCtaTileQ`). A prefill
+chunk of >=64/7 tokens pulls that tile to 128 rows, so every 1-token decode row
+is padded ~18x under GQA-7 *and still streams its entire KV*. The persistent
+kernel keeps a separate 16-row task for short-q work and skips the padding.
+The win therefore scales with total decode KV and vanishes once the chunk's own
+prefix work dominates.
+
+**Crossover, for decode pools >= 250K total KV tokens:**
+
+| chunk prefix | median speedup | fraction >1.5x |
+|-------------:|---------------:|---------------:|
+| 0 – 8K | 1.27 – 1.72x | 46 – 57% |
+| 16K | 1.17x | 36% |
+| >= 32K | 1.02 – 1.07x | 0 – 11% |
+
+So the rule is: **persistent wins when prefill chunks attend a prefix shorter
+than roughly 16K against a substantial decode pool.** Peak measured values are
+large — 8 decodes @80K plus a fresh 2,048-token chunk is 7.9x, and a realistic
+blended pool (8 codex decodes @80K + 48 chat decodes @2K + a 4,096-token fresh
+chunk) still gives 7.2x. Only 4–8 concurrent long-context decodes are needed;
+short-KV decodes flooding the batch barely dilute the gain.
+
+This explains the earlier null results directly. Pure TraceLab replay is the
+*worst* case for the kernel: every chunk is a session continuation attending a
+32–100K prefix, i.e. the >=32K row above (parity), and the causal replay rarely
+has a prefill and decodes pending at once. Favourable, and common in
+production: fresh arrivals into a busy decode pool (chat + coding agent on one
+node), reasoning/thinking traffic where decode KV grows from generated tokens
+while prompts stay short, and cache-miss RAG/document traffic whose early
+chunks still have small prefixes.
+
 ### Measured k-NN gate
 
 Features `[log1p(decode_kv), log1p(prefill_work=Σe·c), log1p(prefill_tokens),

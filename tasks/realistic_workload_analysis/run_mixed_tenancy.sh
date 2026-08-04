@@ -27,16 +27,18 @@ METHODS="${METHODS:-DMC_CG LPT}"
 
 # Coding tenant: causal session replay, moderate-long contexts so both tenants
 # fit the KV pool simultaneously.
-CODEX_GROUPS="${CODEX_GROUPS:-8}"
-CODEX_N="${CODEX_N:-60}"
+CODEX_GROUPS="${CODEX_GROUPS:-12}"
+CODEX_N="${CODEX_N:-72}"
 CODEX_MIN_CTX="${CODEX_MIN_CTX:-32768}"
-CODEX_MAX_CTX="${CODEX_MAX_CTX:-65536}"
-# Chat tenant: fresh prompts (no shared prefix) with long outputs.
-CHAT_N="${CHAT_N:-240}"
-CHAT_RATE="${CHAT_RATE:-6}"
+CODEX_MAX_CTX="${CODEX_MAX_CTX:-49152}"
+# Chat tenant: fresh prompts (no shared prefix), sustained arrivals with
+# moderate outputs so they inject prefills continuously without crowding the
+# long-context sessions out of the decode pool.
+CHAT_N="${CHAT_N:-600}"
+CHAT_RATE="${CHAT_RATE:-3}"
 CHAT_IN="${CHAT_IN:-1024}"
-CHAT_OUT="${CHAT_OUT:-2048}"
-MAX_RUNNING="${MAX_RUNNING:-64}"
+CHAT_OUT="${CHAT_OUT:-512}"
+MAX_RUNNING="${MAX_RUNNING:-48}"
 
 mkdir -p "$RESULTS_DIR"
 [ -f "$TRACE_PATH" ] || { echo "missing trace: $TRACE_PATH" >&2; exit 1; }

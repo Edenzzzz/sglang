@@ -1037,6 +1037,10 @@ class FlashInferAttnBackend(AttentionBackend):
         num_real_seq: int = 0,
     ):
         if forward_mode.is_decode_or_idle():
+            # Graph-replayed decodes never reach init_forward_metadata, so they
+            # must be tallied here or the mixed-batch share of a run looks far
+            # larger than it is.
+            self._count_forward("decode_cuda_graph")
             self.indices_updater_decode.update(
                 req_pool_indices[:bs],
                 seq_lens[:bs],

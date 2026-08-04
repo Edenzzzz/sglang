@@ -7,8 +7,12 @@ Output: compact k-NN reference table consumed by
 sglang.srt.layers.attention.flashinfer_backend.MixedKernelGate.
 
 Label policy: use the persistent kernel only where its best-schedule time
-beats BatchPrefill by >= 5% (leave-one-out worst-case regression 2.8% on the
-H800 sweep); flip label is the faster schedule per point.
+beats BatchPrefill by >= 5%, and only when all K nearest samples agree.
+K=5 on the merged (base + fresh-prefix) H800 sweep gives leave-one-out
+worst-case regression 1.000 with 75% of the available win captured; K=3 was
+enough for the base sweep alone but admits 1.4-1.6x regressions on the
+steep gradients of the fresh-prefix region. The flip label is the faster
+schedule per point.
 """
 
 import argparse
@@ -17,6 +21,7 @@ import json
 import numpy as np
 
 LABEL_SPEEDUP = 1.05
+KNN_K = 5
 
 
 def features(D, P, Q, d_bs):
@@ -53,6 +58,15 @@ def main():
     mu, sd = X.mean(0), X.std(0)
     Xs = (X - mu) / sd
 
+    # Out-of-support guard. A k-NN silently extrapolates for queries far from
+    # every sampled point, which produced exactly the wrong answer for
+    # fresh-prefix chunks before that region was swept. Record how far a query
+    # may sit from its nearest sample before the lookup stops being trusted.
+    d2 = ((Xs[:, None, :] - Xs[None, :, :]) ** 2).sum(-1)
+    np.fill_diagonal(d2, np.inf)
+    nn_d2 = d2.min(1)
+    max_d2 = float(np.percentile(nn_d2, 99) * 4.0)
+
     out = {
         "meta": {
             "gpu": args.gpu,
@@ -61,9 +75,11 @@ def main():
             "label_speedup": LABEL_SPEEDUP,
             "note": args.note,
         },
+        "knn_k": KNN_K,
         "feature_names": ["log1p_D", "log1p_P", "log1p_Q", "log1p_d_bs", "3*D/(D+P+1)"],
         "mu": [round(float(v), 6) for v in mu],
         "sd": [round(float(v), 6) for v in sd],
+        "max_nn_dist_sq": round(max_d2, 6),
         "points": [[round(float(v), 4) for v in row] for row in Xs],
         "use_pa": use_pa,
         "flip": flip,

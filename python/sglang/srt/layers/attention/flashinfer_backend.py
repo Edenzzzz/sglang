@@ -114,6 +114,8 @@ class MixedKernelGate:
         self.points = np.asarray(table["points"], dtype=np.float64)
         self.use_pa = np.asarray(table["use_pa"], dtype=bool)
         self.flip = np.asarray(table["flip"], dtype=bool)
+        self.max_nn_dist_sq = float(table.get("max_nn_dist_sq", float("inf")))
+        self.k = int(table.get("knn_k", 3))
 
     @classmethod
     def for_gqa(cls, gqa_group_size: int) -> Optional["MixedKernelGate"]:
@@ -147,9 +149,14 @@ class MixedKernelGate:
         )
         d = self.points - (x - self.mu) / self.sd
         dist = np.einsum("ij,ij->i", d, d)
-        nn = np.argpartition(dist, 3)[:3]
+        nn = np.argpartition(dist, self.k)[: self.k]
+        if dist[nn].min() > self.max_nn_dist_sq:
+            # Query sits outside the measured region; a k-NN answer here is an
+            # extrapolation, not a measurement. Keep the BatchPrefill baseline
+            # so an unswept composition can never cause a regression.
+            return False, False
         use_pa = bool(self.use_pa[nn].all())
-        flipped = bool(self.flip[nn].sum() >= 2)
+        flipped = bool(self.flip[nn].sum() * 2 >= self.k)
         return use_pa, flipped
 
 
@@ -599,6 +606,22 @@ class FlashInferAttnBackend(AttentionBackend):
             ),
         )
 
+    def _count_forward(self, kind: str):
+        """Tally forward passes by attention path so the mixed-batch share of
+        server time can be read off a run instead of inferred from
+        interval-gated scheduler logs."""
+        stats = getattr(self, "_forward_stats", None)
+        if stats is None:
+            stats = self._forward_stats = {}
+        stats[kind] = stats.get(kind, 0) + 1
+        total = sum(stats.values())
+        if total % 2000 == 0:
+            logger.info(
+                "forward mix (n=%d): %s",
+                total,
+                " ".join(f"{k}={v}({v/total*100:.1f}%)" for k, v in sorted(stats.items())),
+            )
+
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         # Update attn env var as it could be changed by profiler
         self.use_persistent = envs.SGLANG_FLASHINFER_USE_PERSISTENT.get()
@@ -609,6 +632,7 @@ class FlashInferAttnBackend(AttentionBackend):
             )
 
         if forward_batch.forward_mode.is_decode_or_idle():
+            self._count_forward("decode")
             self.indices_updater_decode.update(
                 forward_batch.req_pool_indices,
                 forward_batch.seq_lens,
@@ -673,21 +697,17 @@ class FlashInferAttnBackend(AttentionBackend):
                         forward_batch.extend_prefix_lens_cpu,
                         self.num_qo_heads // self.num_kv_heads,
                     )
-                stats = getattr(self, "_mixed_gate_stats", None)
-                if stats is None:
-                    stats = self._mixed_gate_stats = [0, 0]
-                stats[0 if use_pa else 1] += 1
-                if (stats[0] + stats[1]) == 1 or (stats[0] + stats[1]) % 500 == 0:
-                    logger.info(
-                        "mixed kernel gate: persistent=%d batch_prefill=%d",
-                        stats[0],
-                        stats[1],
-                    )
+                self._count_forward("mixed_persistent" if use_pa else "mixed_batch_prefill")
                 if use_pa:
                     wrappers = self.prefill_wrappers_mixed
                 else:
                     wrappers = self.prefill_wrappers_paged
             else:
+                self._count_forward(
+                    "mixed_other"
+                    if forward_batch.forward_mode.is_mixed()
+                    else "pure_prefill"
+                )
                 wrappers = self.prefill_wrappers_paged
             use_ragged = True
 

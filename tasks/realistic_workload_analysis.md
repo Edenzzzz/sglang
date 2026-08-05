@@ -224,6 +224,12 @@ mixed step stalls 13.9 s; the persistent kernel's per-instance max is
 0.9 ms). The coding tenant converts that directly into throughput; the chat
 tenant stops waiting behind slow mixed steps.
 
+The `shortchat_only` control (3,000 fresh 512-token prompts at 16 req/s, no
+long-context tenant) lands at parity — −0.02% throughput, −0.45% mean ITL —
+with the gate selecting persistent for only 6 of 2,566 mixed batches. The
+gate takes the win where the composition supports it and declines everywhere
+else, which is the zero-regression contract.
+
 One LPT trial (archived in `h800_mw_agent_plus_shortchat/run1_regressed/`)
 showed a −19% episode whose damage was concentrated in the first two
 arrival-deciles of the codex prefill storm (chat ITL 98.7 ms early vs

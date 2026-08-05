@@ -134,6 +134,13 @@ def run_method(method, scenario, outdir):
     env["SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN"] = "1"
     if method == "LPT":
         env["SGLANG_FLASHINFER_USE_PERSISTENT"] = "1"
+    elif method == "LPT_FORCE_BP":
+        # Ablation: the whole persistent host path (sync-free plan, reused
+        # out/lse buffers, gate evaluation) but every mixed batch routed to
+        # BatchPrefill. Should be indistinguishable from DMC_CG; any gap is
+        # host-side overhead rather than the kernel.
+        env["SGLANG_FLASHINFER_USE_PERSISTENT"] = "1"
+        env["SGLANG_MIXED_ATTENTION_KERNEL"] = "batch_prefill"
     else:
         # Defaults to 1; a true BatchPrefill baseline must disable it.
         env["SGLANG_FLASHINFER_USE_PERSISTENT"] = "0"

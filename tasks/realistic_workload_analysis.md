@@ -199,7 +199,39 @@ tokens. They omit the multi-turn intermittent tool-result prefills that create
 repeated mixed forwards in TraceLab, so the persistent kernel is active during
 too small a fraction of server time to materially shift the full curve.
 
-## Paper-facing figures
+## Mixed-tenancy workloads (2026-08-05): the win scenario, end to end
+
+`run_mixed_workloads.py --scenario agent_plus_shortchat`: one H800 serving a
+coding-agent tenant (12 causal TraceLab sessions @32–48K, rounds issued
+back-to-back, 60 requests) beside a chat tenant (2,400 fresh 512-token
+prompts at 12 req/s, 96-token outputs). True-BatchPrefill DMC baseline vs the
+gated persistent path (merged 1,316-point table with the KV-concentration
+feature). Identical token volumes, 100% retokenization on every stream.
+
+| Tenant | Metric | true DMC | gated LPT | delta |
+|--------|--------|---------:|----------:|------:|
+| codex  | total tok/s | 13,809 | **18,844** | **+36.5%** |
+| codex  | wall time   | 188 s | **138 s** | −27% |
+| codex  | mean ITL    | 43.4 ms | **40.5 ms** | −6.7% |
+| chat   | mean ITL    | 27.3 ms | **15.8 ms** | **−42.2%** |
+| chat   | P99 ITL     | 80.1 ms | **61.7 ms** | −23.0% |
+| chat   | mean TTFT   | 38.2 s | **24.1 s** | −37% |
+
+Mechanism, confirmed by full-run nsys captures of both methods: mixed
+forwards are 14–30% of all forwards in this scenario, and the gated path
+spends 112 s of mixed-step wall time where DMC spends 157 s (DMC's worst
+mixed step stalls 13.9 s; the persistent kernel's per-instance max is
+0.9 ms). The coding tenant converts that directly into throughput; the chat
+tenant stops waiting behind slow mixed steps.
+
+One LPT trial (archived in `h800_mw_agent_plus_shortchat/run1_regressed/`)
+showed a −19% episode whose damage was concentrated in the first two
+arrival-deciles of the codex prefill storm (chat ITL 98.7 ms early vs
+15–16 ms steady-state) with 98.5% retokenization, consistent with a
+KV-retraction cascade compounding at fixed arrival rate. The identical
+configuration reproduces the win in repeat trials and under nsys; the
+baseline is stable across all trials. Multi-trial runs are the suite's
+default defense against episode-vs-property confusion.
 
 - [Capacity versus mean ITL](edf_benchmark/current_policy_n400/pareto_capacity_vs_mean_itl.png)
 - [Pooled P99 ITL versus offered rate](edf_benchmark/current_policy_n400/p99_itl_vs_rate.png)

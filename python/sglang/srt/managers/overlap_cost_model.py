@@ -16,9 +16,11 @@ H800 sweep this law holds to 3.1% MAPE, so a closed-form controller can spend
 an ITL budget precisely: below the balance point (T_p <= T_d), prefill tokens
 cost only beta * dT_p — the overlap discount. The same construction fails for
 the split-kernel baseline: BatchPrefill's mixed cost is super-additive in its
-parts (up to 8.1x their sum, 25.5% MAPE for any parts-based model) because one
-chunk flips the batch-wide CTA tile and consumes the KV-split work budget, so
-no smooth cost model exists for a scheduler to consume.
+parts (up to 8.1x their sum; fitting max + beta*min yields beta=2.19). Its
+best parts-based fit -- a general affine form in (max, min) -- still has
+13.3% MAPE with 43% worst-case error, versus 3.1%/9% here, because one chunk
+flips the batch-wide CTA tile and consumes the KV-split work budget, so the
+cost surface has cliffs no smooth model can track.
 
 The whole forward step adds a linear non-attention term:
 

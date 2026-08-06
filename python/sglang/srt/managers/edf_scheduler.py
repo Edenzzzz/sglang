@@ -363,12 +363,24 @@ class LatencyPredictor:
         return float(np.expm1(x_norm[0]))
 
 
-def try_load_latency_predictor() -> Optional[LatencyPredictor]:
+def try_load_latency_predictor():
     """Attempt to load the latency predictor from SGLANG_EDF_LATENCY_MODEL.
 
-    An explicitly configured checkpoint is also loaded when EDF scheduling is
+    ``SGLANG_EDF_LATENCY_MODEL=analytic`` selects the closed-form overlap cost
+    model (managers/overlap_cost_model.py): no checkpoint, no per-workload
+    training, constants fit once per GPU from microbenchmarks. It exists
+    because the fused overlap kernel's mixed-step latency follows
+    max + beta*min of its parts (3.1% MAPE), which a scheduler can invert;
+    the split-kernel baseline's mixed cost is super-additive in its parts and
+    admits no such model.
+
+    An explicitly configured predictor is also loaded when EDF scheduling is
     disabled so /get_load can publish forward-cost telemetry independently.
     """
+    if LATENCY_MODEL_PATH == "analytic":
+        from sglang.srt.managers.overlap_cost_model import AnalyticOverlapPredictor
+
+        return AnalyticOverlapPredictor()
     if not LATENCY_MODEL_PATH:
         if EDF_ENABLED:
             logger.warning(

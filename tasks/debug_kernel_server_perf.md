@@ -745,13 +745,24 @@ The original sweep sampled chunk prefixes down to 512 only, which hid the
 highest-value region. A direct probe plus a 477-case extension sweep
 (`sweep_fresh.py`, merged table 956 points) gives the real picture.
 
-**Mechanism.** FlashInfer's fa2 BatchPrefill selects one CTA tile size for the
-whole batch from the mean packed-qo length (`FA2DetermineCtaTileQ`). A prefill
-chunk of >=64/7 tokens pulls that tile to 128 rows, so every 1-token decode row
-is padded ~18x under GQA-7 *and still streams its entire KV*. The persistent
-kernel keeps a separate 16-row task for short-q work and skips the padding.
-The win therefore scales with total decode KV and vanishes once the chunk's own
-prefix work dominates.
+**Mechanism (corrected 2026-08-06).** BatchPrefill's split-KV works: a
+decode-only batch of 8 rows @64K runs in 0.366 ms through it, matching the
+persistent kernel. The failure is a planner coupling in mixed batches. One
+prefill chunk (a) flips the batch-wide CTA tile from 16 to 128
+(`FA2DetermineCtaTileQ` uses the mean packed-qo length), and (b) consumes the
+split-work budget: `PrefillBinarySearchKVChunkSize` bounds total work units by
+the max grid size, and a 1,024-token chunk alone contributes ~56 of the ~66
+units per KV head, so the search stops splitting the decode rows' KV
+entirely. Eight rows x 4 KV heads then stream 32 MB each from 32 CTAs while
+~100 SMs idle: BP plateaus at 3.125 ms for any chunk >=1,024 tokens while the
+chunk's own attention work is negligible. The persistent planner partitions
+every row into (tile, head, kv-chunk) units with `kv_len_limit ~ total/264`
+regardless of batch heterogeneity, staying bandwidth-bound (~0.38 ms).
+Temporal prefill/decode overlap is a secondary contributor at these shapes;
+the win is heterogeneity-robust scheduling. Part of the gap is therefore an
+fa2 planner limitation upstream could shrink (lift the split budget, per-row
+tiles), which would narrow the decode-row penalty but not supply dual tiles
+or overlap; the gate re-measures if the baseline improves.
 
 **Crossover, for decode pools >= 250K total KV tokens:**
 

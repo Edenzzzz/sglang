@@ -788,6 +788,27 @@ node), reasoning/thinking traffic where decode KV grows from generated tokens
 while prompts stay short, and cache-miss RAG/document traffic whose early
 chunks still have small prefixes.
 
+### Overlap attribution (2026-08-06)
+
+`bench_overlap_attribution.py` isolates temporal prefill/decode overlap from
+planner effects by comparing, with the same persistent kernel and planner,
+the mixed launch against the two parts run separately:
+`ovl_eff = (T_decode + T_prefill) / T_mixed`.
+
+- Overlap contributes up to **1.26x**, only where the chunk's compute time
+  balances the decode pool's memory time (T_p/T_d in roughly [0.5, 3]):
+  2-4K short-prefix chunks against 16-32 long-context decodes. It decays to
+  ~1.0 on both flanks (chunk-dominated or decode-dominated batches).
+- The remainder of the mixed-batch win over BatchPrefill (up to ~2.4x at the
+  same points, 8x at decode-dominated ones) comes from heterogeneity-robust
+  scheduling, which upstream fa2 planner fixes could partially reclaim.
+- Framing: the fused persistent formulation is what makes kernel-level
+  overlap possible (dual tile classes co-resident in one launch; BP has one
+  tile class per batch and cannot overlap by construction); the planner
+  robustness is its prerequisite. An overlap-aware chunk-size controller
+  (choose chunk so T_p ~ T_d against the live decode pool) would hold serving
+  inside the 1.25x band instead of sampling it, and is the natural next step.
+
 ### Measured k-NN gate
 
 Features `[log1p(decode_kv), log1p(prefill_work=Σe·c), log1p(prefill_tokens),

@@ -72,6 +72,21 @@ def chat(n, rate, inp, out):
     ]
 
 
+def multiturn(n, rate, groups, sys_len, q_len, out):
+    """Follow-up-turn tenant: each request attends a cached shared prefix of
+    sys_len tokens with a fresh q_len-token turn. This is the overlap kernel's
+    balanced band (chunk compute ~ decode-pool memory time), where the
+    measured 1.2-1.26x temporal-overlap gain and the analytic cost model's
+    overlap discount both apply."""
+    return [
+        "--dataset-name", "generated-shared-prefix",
+        "--gsp-num-groups", str(groups), "--gsp-prompts-per-group", str(n // groups),
+        "--gsp-system-prompt-len", str(sys_len), "--gsp-question-len", str(q_len),
+        "--gsp-output-len", str(out),
+        "--request-rate", str(rate), "--num-prompts", str(n),
+    ]
+
+
 SCENARIOS = {
     # Primary: long-context agent sessions beside high-rate short-answer chat.
     # Short outputs keep chat from accumulating decode rows, which would push
@@ -97,6 +112,14 @@ SCENARIOS = {
     "rag_plus_agent": {
         "desc": "cache-miss document/RAG traffic + coding agent",
         "streams": {"codex": codex(60), "rag": chat(300, 2, 12288, 256)},
+    },
+    # In-band overlap scenario: follow-up turns (2K fresh tokens on an 8K
+    # cached prefix) arriving into the coding pool put mixed batches in the
+    # balanced band T_p ~ T_d, where temporal overlap itself is the dominant
+    # win and SLO-aware chunking has real slack to spend.
+    "agent_plus_multiturn": {
+        "desc": "coding agent + multi-turn follow-ups (2K turns on 8K shared prefixes)",
+        "streams": {"codex": codex(60), "turns": multiturn(600, 4, 60, 8192, 2048, 256)},
     },
     # Control: the measured parity region. Many short rows give BatchPrefill
     # plenty of query tiles, so the gate should decline persistent throughout.
@@ -134,6 +157,15 @@ def run_method(method, scenario, outdir):
     env["SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN"] = "1"
     if method == "LPT":
         env["SGLANG_FLASHINFER_USE_PERSISTENT"] = "1"
+    elif method == "LPT_EDF":
+        # Gated persistent kernel + SLO-aware chunk control driven by the
+        # closed-form overlap cost model. Same EDF policy as the MLP path;
+        # only the predictor differs (no checkpoints, no training).
+        env["SGLANG_FLASHINFER_USE_PERSISTENT"] = "1"
+        env["SGLANG_EDF_SCHEDULING"] = "1"
+        env["SGLANG_EDF_LATENCY_MODEL"] = "analytic"
+        env["SGLANG_TTFT_SLO_MS"] = os.environ.get("TTFT_SLO_MS", "5000")
+        env["SGLANG_ITL_SLO_MS"] = os.environ.get("ITL_SLO_MS", "100")
     elif method == "LPT_FORCE_BP":
         # Ablation: the whole persistent host path (sync-free plan, reused
         # out/lse buffers, gate evaluation) but every mixed batch routed to
@@ -148,16 +180,18 @@ def run_method(method, scenario, outdir):
 
     kill_server()
     with open(log, "w") as lf:
-        server = subprocess.Popen(
-            [VENV_PY, "-m", "sglang.launch_server", "--model", MODEL,
-             "--attention-backend", "flashinfer", "--enable-mixed-chunk",
-             "--mem-fraction-static", "0.85", "--port", str(PORT),
-             "--host", "127.0.0.1", "--max-running-requests", "48",
-             "--context-length", "131072", "--json-model-override-args",
-             '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}',
-             "--watchdog-timeout", "600"],
-            stdout=lf, stderr=subprocess.STDOUT, env=env,
-        )
+        args_srv = [VENV_PY, "-m", "sglang.launch_server", "--model", MODEL,
+                    "--attention-backend", "flashinfer", "--enable-mixed-chunk",
+                    "--mem-fraction-static", "0.85", "--port", str(PORT),
+                    "--host", "127.0.0.1", "--max-running-requests", "48",
+                    "--context-length", "131072", "--json-model-override-args",
+                    '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}',
+                    "--watchdog-timeout", "600"]
+        if method == "LPT_EDF":
+            args_srv += ["--enable-priority-scheduling",
+                         "--schedule-low-priority-values-first",
+                         "--priority-scheduling-preemption-threshold", "999999"]
+        server = subprocess.Popen(args_srv, stdout=lf, stderr=subprocess.STDOUT, env=env)
     if not wait_health(server):
         print(f"  server failed to start for {method}; see {log}", file=sys.stderr)
         server.kill()

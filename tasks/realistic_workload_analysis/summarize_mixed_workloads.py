@@ -28,6 +28,13 @@ def load(p):
         if mx:
             r["reqmax_p99"] = float(np.percentile(mx, 99))
             r["worst"] = float(max(mx))
+        # Sarathi-style SLO attainment: fraction of requests whose own P99
+        # ITL meets the budget (default matches SGLANG_ITL_SLO_MS=100).
+        import os
+        slo = float(os.environ.get("ITL_SLO_MS", "100"))
+        p99s = [np.percentile(x, 99) * 1000 for x in d["itls"] if len(x) >= 5]
+        if p99s:
+            r["itl_slo_attain"] = float(np.mean([v <= slo for v in p99s]))
     return r
 
 
@@ -64,6 +71,8 @@ def main():
             tot[m]["toks"] += r["tput"] * r["dur"]
             tot[m]["dur"] = max(tot[m]["dur"], r["dur"])
             extra = (f" reqmaxP99 {r['reqmax_p99']:7.0f}" if "reqmax_p99" in r else "")
+            if "itl_slo_attain" in r:
+                extra += f" sloAtt {r['itl_slo_attain']*100:5.1f}%"
             print(f"  {s:8} tput {r['tput']:7.0f}  TTFT {r['mean_ttft']:8.0f}/{r['p99_ttft']:8.0f}ms"
                   f"  ITL {r['mean_itl']:6.2f}/{r['p99_itl']:7.2f}ms{extra}"
                   f"  n={r['n']:5} retok {r['retok']*100:5.1f}%")

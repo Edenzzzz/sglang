@@ -33,6 +33,9 @@ The replay preserves session identity, consecutive round ordering, prefix
 growth, tool-result prefills, output lengths, causal dependencies, and the
 relative timing of inter-round gaps. It is not a bag of independent prompts.
 
+(Superseded 2026-07-30: the DMC row silently ran the persistent kernel;
+see the gated rerun below and the mixed-tenancy section for current results.)
+
 | Method | Total tok/s | Mean / P99 TTFT | pooled P99 ITL |
 |--------|------------:|----------------:|---------------:|
 | DMC + decode CG | 28,965 | 2,583 / 64,253 ms | **93.56 ms** |

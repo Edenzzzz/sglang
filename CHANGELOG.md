@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.5.0 — Mixed-Tenancy Win, Overlap Attribution, Analytic Cost Model (2026-08-04 → 2026-08-06)
+
+### Mixed-tenancy workloads (`run_mixed_workloads.py`)
+- New multi-tenant suite (coding agent + chat on one node, plus long-CoT / RAG / control
+  scenarios). `agent_plus_shortchat` vs honest BatchPrefill baseline: coding tenant
+  **+36.5% throughput**, chat tenant **−42% mean ITL / −23% P99 / −37% TTFT**;
+  `shortchat_only` control at parity with the gate declining persistent (6/2,566).
+- One −19% LPT trial archived as `run1_regressed/` (storm-phase retraction-cascade
+  signature); unreproduced across repeat + nsys trials with a stable baseline.
+
+### Gate v2 (KV concentration + out-of-support guard)
+- Root cause of the win region: few long-context decode rows starve BatchPrefill of
+  query tiles (8×64K = 8.2x vs 128×4K = 1.02x at equal aggregate KV); one chunk flips
+  its CTA tile and exhausts the KV-split budget (3.125 ms plateau for any chunk ≥1K).
+- Two k-NN blind spots fixed (fresh-prefix chunks; blended pools) via 837 new sampled
+  compositions and a KV-concentration feature (Σkv²/Σkv). Merged table 1,316 points,
+  k=5 unanimous, label ≥1.10: leave-one-out worst regression 1.000, capture 81%.
+
+### Overlap attribution + analytic cost model
+- Same-kernel ablation: temporal PD overlap contributes up to **1.26×** in the balanced
+  band (T_p ≈ T_d); heterogeneity-robust scheduling supplies the rest.
+- `SGLANG_EDF_LATENCY_MODEL=analytic`: `T_attn = max + 0.53·min` (3.1% MAPE / 9% max,
+  7 physical constants, no training) drops into the EDF chunk controller; BP's best
+  parts-based fit is 13.3% / 43% with fitted β=2.19 (super-additive) — the fused kernel
+  is what makes mixed-step cost predictable enough for SLO-aware chunking.
+
+### Docs
+- Superseded/contaminated 2026-07-24 serving tables flagged in place; conclusions and
+  TODOs consolidated to current results.
+
 ## v0.4.0 — Sync-Free Persistent Plan + Per-Batch Mixed Kernel Gate (2026-07-30)
 
 ### Validation (TraceLab decode-heavy N=100 screens + WL1 Qwen3-8B, honest baselines)

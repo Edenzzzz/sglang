@@ -12,7 +12,13 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 - Profile logs: `tasks/debug_kernel_server_perf/profile_logs/`
 - gpu_keepalive MUST be stopped before benchmarks (corrupts results — cooperative launch is especially sensitive to SM contention)
 
-## Correctness-valid H800 results (2026-07-24)
+## 2026-07-24 serving results (superseded)
+
+Superseded 2026-07-30: the DMC rows below silently ran the persistent kernel
+(`SGLANG_FLASHINFER_USE_PERSISTENT` defaults to 1 and no launcher disabled
+it), so LPT-vs-DMC deltas here compare caps/guards on the same kernel. PP
+rows (no mixed batches) are unaffected. Current results: see "Sync-free plan
++ measured mixed-kernel gate" and its Conclusion below.
 
 All methods use N=400, the same prompts and ordinary decode CUDA graphs.
 PP uses unchanged BatchPrefill without mixed chunking; DMC uses unchanged
@@ -52,6 +58,7 @@ continually injects sporadic prefills while other sessions decode.
 | DMC + decode CG | 28,965 | 2,583 / 64,253 ms | **93.56 ms** |
 | LPT + persistent, 7K cap | **29,093** | **2,459 / 57,708 ms** | 97.13 ms |
 
+(Superseded: both rows ran the persistent kernel for mixed batches.)
 LPT is 0.44% faster and reduces mean/P99 TTFT by 4.8%/10.2%, but pooled
 P99 ITL is 3.8% worse. Request profiling attributes the TTFT change to queue
 time (mean 1,415→1,289 ms; P99 58.12→51.75 s), while admission-to-first-token
@@ -920,6 +927,27 @@ build froze all sessions for 18 s). The honest-baseline fix
 (`SGLANG_FLASHINFER_USE_PERSISTENT=0` for DMC) invalidates all July
 serving-level DMC comparisons.
 
+**Phase 2 (2026-08-04..06), the current headline results:**
+
+- **Mixed tenancy is the win scenario** (`run_mixed_workloads.py
+  agent_plus_shortchat`, honest baseline, identical tokens, 100% retok):
+  coding tenant **+36.5% throughput** (188→138 s wall), chat tenant
+  **−42% mean ITL / −23% P99 / −37% TTFT**; `shortchat_only` control at
+  parity with the gate declining persistent on 2,560/2,566 mixed batches.
+  Details in `tasks/realistic_workload_analysis.md`.
+- **The win region is lawful**: per-request KV concentration × chunk prefix
+  (< ~16K) decide it; the gate table is 1,316 points with a KV-concentration
+  feature and an out-of-support guard (LOO worst regression 1.000).
+- **Overlap attribution**: temporal PD overlap contributes 1.2–1.26× in the
+  balanced band T_p ≈ T_d; the rest of the mixed-batch win is
+  heterogeneity-robust scheduling (BP's planner collapses under one chunk:
+  tile flip + split-budget exhaustion, 3.1 ms plateau).
+- **Analytic cost model** (`SGLANG_EDF_LATENCY_MODEL=analytic`):
+  `T_attn = max(T_p,T_d) + 0.53·min` at 3.1% MAPE/9% max, 7 physical
+  constants, no training; BP's best parts-based fit is 13.3%/43% with
+  fitted β=2.19 (super-additive). Predictable cost is what SLO scheduling
+  consumes; the fused kernel is what makes cost predictable.
+
 ## Open TODOs
 
 - [x] **Mixed CG padding threshold [INFEASIBLE]**: Swept `SGLANG_MIXED_CG_PADDING_PCT`=5/8/10% (clean rerun, no keepalive, rate=8).
@@ -1073,8 +1101,23 @@ serving-level DMC comparisons.
 
   **Conclusion**: The ~7ms per-step overhead from barrier scaffolding is the inherent cost of the CG-replay speedup (which gives +4% throughput, -41% TTFT). At operating points where DMC is at 149ms (1ms below SLO), any per-step overhead pushes LPT over. At other operating points, LPT's throughput/TTFT advantage compensates (e.g. sharegpt rate=24: LPT 100% vs DMC 69%). No fix needed — the methods are competitive on aggregate.
 
-- [ ] **GPU-side LPT plan kernel**: Microbenchmark showed 0.15ms C++ plan. Verify in server context with nsys.
-- [ ] Realistic workload analysis — see `tasks/realistic_workload_analysis.md`
+- [ ] **GPU-side LPT plan kernel** [DEPRIORITIZED 2026-08-06]: the sync-free
+  host plan removed this from the critical path (plan is hidden by
+  overlap-scheduler run-ahead); revisit only if nsys shows plan CPU cost
+  bounding step rate.
+- [x] Realistic workload analysis — see `tasks/realistic_workload_analysis.md`
+- [ ] **EDF end-to-end A/B with the analytic model** (in-band shared-prefix
+  scenario): DMC vs gated LPT vs gated LPT + `SGLANG_EDF_LATENCY_MODEL=analytic`;
+  metric = ITL-SLO attainment at matched throughput. Validates the
+  cost-model-for-SLO story in serving.
+- [ ] **Reduce β (non-overlappable fraction, 0.53)**: NCU a balanced
+  composition to attribute the unrealized half of the overlap (reduction
+  pass, queue-switch granularity, or L2 interference); each point of β is
+  direct overlap efficiency.
+- [ ] **Gate table: sample long-prefix chunks over blended pools** (the one
+  remaining unswept region) and refresh gqa4 with the blended sweep; also
+  root-cause the storm-phase retraction cascade archived in
+  `h800_mw_agent_plus_shortchat/run1_regressed/`.
 
 ---
 

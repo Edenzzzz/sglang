@@ -41,7 +41,7 @@ CHAT_DS = os.environ.get(
 PORT = int(os.environ.get("BENCH_PORT", "30013"))
 
 
-def codex(n, groups=12, min_ctx=32768, max_ctx=49152, min_out=512):
+def codex(n, groups=12, min_ctx=32768, max_ctx=49152, min_out=512, rate="inf"):
     """Coding-agent tenant: causal session replay with tool-result appends.
 
     Rounds are issued back to back (recorded think/tool gaps are not replayed).
@@ -58,7 +58,7 @@ def codex(n, groups=12, min_ctx=32768, max_ctx=49152, min_out=512):
         "--tracelab-min-context-len", str(min_ctx),
         "--tracelab-max-context-len", str(max_ctx),
         "--tracelab-min-output-len", str(min_out),
-        "--request-rate", "inf", "--num-prompts", str(n),
+        "--request-rate", str(rate), "--num-prompts", str(n),
     ]
 
 
@@ -127,6 +127,16 @@ SCENARIOS = {
     "agent_plus_multiturn_feasible": {
         "desc": "in-band multi-turn at SLO-feasible load",
         "streams": {"codex": codex(36, groups=8), "turns": multiturn(300, 1.5, 60, 8192, 2048, 256)},
+    },
+    # Clean SLO experiment: BOTH streams rate-limited. With any infinite-
+    # backlog tenant present, FCFS admission ordering (not compute) dominates
+    # the other tenant's latency, so attainment comparisons are confounded.
+    # Codex sessions arrive as a finite Poisson process; rounds within a
+    # session stay causal and back-to-back.
+    "multiturn_slo_clean": {
+        "desc": "in-band multi-turn, both tenants rate-limited (clean SLO A/B)",
+        "streams": {"codex": codex(36, groups=8, rate=0.06),
+                    "turns": multiturn(300, 1.5, 60, 8192, 2048, 256)},
     },
     # Control: the measured parity region. Many short rows give BatchPrefill
     # plenty of query tiles, so the gate should decline persistent throughout.

@@ -238,8 +238,19 @@ expected cost of TTFT/throughput for the deferred prefill (the correct
 tradeoff beyond capacity; no controller can also absorb an infeasible queue).
 The controller's guard is set to 0 for the analytic model, which already
 carries fixed overheads in `c0`; the adaptive 5–10 ms guard predates the
-plan-sync fix and would double-count. A feasible-load variant
-(`agent_plus_multiturn_feasible`) measures attainment at matched throughput.
+plan-sync fix and would double-count. The feasible-load variant
+(`agent_plus_multiturn_feasible`) replicates the controller property at a
+second operating point — pooled P99 ITL pinned at 104–105 ms against the
+100 ms budget (codex −77%, turns −51%; codex request-max P99 645→150 ms) at
+identical node-wide throughput (23,319 vs 23,317 tok/s) — but tenant-level
+TTFT/attainment comparisons there are confounded: the codex tenant runs at
+rate=inf, and with an infinite-backlog prefill source present, FCFS
+admission ordering rather than compute dominates the other tenant's latency
+(LPT's turns TTFT moves 0.7→6.6 s at identical node throughput and identical
+turns tput). The clean attainment-at-matched-throughput experiment requires
+both streams rate-limited; that design is the pending item. A recurring
+plain-LPT turns anomaly (request-max 1.4 s, retok 98.9%) matches the
+retraction-cascade signature — third sighting.
 
 The `shortchat_only` control (3,000 fresh 512-token prompts at 16 req/s, no
 long-context tenant) lands at parity — −0.02% throughput, −0.45% mean ITL —

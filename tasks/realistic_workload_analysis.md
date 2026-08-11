@@ -247,8 +247,18 @@ TTFT/attainment comparisons there are confounded: the codex tenant runs at
 rate=inf, and with an infinite-backlog prefill source present, FCFS
 admission ordering rather than compute dominates the other tenant's latency
 (LPT's turns TTFT moves 0.7→6.6 s at identical node throughput and identical
-turns tput). The clean attainment-at-matched-throughput experiment requires
-both streams rate-limited; that design is the pending item. A recurring
+turns tput). The clean experiment (`multiturn_slo_clean`, both streams rate-limited,
+2026-08-11) closes the loop: with identical arrivals and node throughput
+matched to four digits across all three arms (9,368/9,369/9,368 tok/s),
+the gated kernel alone improves codex pooled P99 ITL −28.3% (81→58 ms,
+turns −8.1%) at parity elsewhere, and adding the analytic-model controller
+pins turns pooled P99 at **100.24 ms against the 100 ms budget** while
+cutting request-max P99 ITL **−60% on both tenants** (519/522→208/208 ms),
+with unchanged throughput. Across the three operating points the achieved
+pooled P99 converges onto the configured budget (113 → 105 → 100.2 ms) as
+load moves from saturated to feasible — the controller delivers exactly the
+tail it is asked for whenever the load permits, which is the operational
+meaning of a 3%-accurate cost model. A recurring
 plain-LPT turns anomaly (request-max 1.4 s, retok 98.9%) matches the
 retraction-cascade signature — third sighting.
 

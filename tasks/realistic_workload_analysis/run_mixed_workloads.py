@@ -121,6 +121,13 @@ SCENARIOS = {
         "desc": "coding agent + multi-turn follow-ups (2K turns on 8K shared prefixes)",
         "streams": {"codex": codex(60), "turns": multiturn(600, 4, 60, 8192, 2048, 256)},
     },
+    # Same composition at SLO-feasible load: attainment-vs-throughput is only
+    # meaningful when the baseline is not queue-dominated (the saturated
+    # variant above has 18-77 s TTFTs in every arm).
+    "agent_plus_multiturn_feasible": {
+        "desc": "in-band multi-turn at SLO-feasible load",
+        "streams": {"codex": codex(36, groups=8), "turns": multiturn(300, 1.5, 60, 8192, 2048, 256)},
+    },
     # Control: the measured parity region. Many short rows give BatchPrefill
     # plenty of query tiles, so the gate should decline persistent throughout.
     "shortchat_only": {
@@ -166,6 +173,10 @@ def run_method(method, scenario, outdir):
         env["SGLANG_EDF_LATENCY_MODEL"] = "analytic"
         env["SGLANG_TTFT_SLO_MS"] = os.environ.get("TTFT_SLO_MS", "5000")
         env["SGLANG_ITL_SLO_MS"] = os.environ.get("ITL_SLO_MS", "100")
+        # The analytic model already carries all fixed overheads in c0; the
+        # adaptive planner guard was tuned before the plan-sync fix and would
+        # double-count 5-10 ms per step, over-throttling chunks.
+        env["SGLANG_EDF_PLAN_OVERHEAD_MS"] = "0"
     elif method == "LPT_FORCE_BP":
         # Ablation: the whole persistent host path (sync-free plan, reused
         # out/lse buffers, gate evaluation) but every mixed batch routed to

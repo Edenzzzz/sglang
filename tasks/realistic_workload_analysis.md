@@ -227,6 +227,20 @@ mixed step stalls 13.9 s; the persistent kernel's per-instance max is
 0.9 ms). The coding tenant converts that directly into throughput; the chat
 tenant stops waiting behind slow mixed steps.
 
+**In-band multi-turn + SLO control (2026-08-11).** `agent_plus_multiturn`
+(2K follow-up turns on 8K shared prefixes over the coding pool) drives 49% of
+forwards mixed — the balanced band. At deliberately saturated load (all arms
+queue 18–77 s of TTFT), adding the closed-form-model EDF controller
+(`LPT_EDF`: `SGLANG_EDF_LATENCY_MODEL=analytic`, ITL SLO 100 ms) pins P99 ITL
+almost exactly at the budget it was told to spend — codex 497→113 ms (−77%),
+turns 258→107 ms (−59%), turns per-request SLO attainment 1.3%→54.8% — at the
+expected cost of TTFT/throughput for the deferred prefill (the correct
+tradeoff beyond capacity; no controller can also absorb an infeasible queue).
+The controller's guard is set to 0 for the analytic model, which already
+carries fixed overheads in `c0`; the adaptive 5–10 ms guard predates the
+plan-sync fix and would double-count. A feasible-load variant
+(`agent_plus_multiturn_feasible`) measures attainment at matched throughput.
+
 The `shortchat_only` control (3,000 fresh 512-token prompts at 16 req/s, no
 long-context tenant) lands at parity — −0.02% throughput, −0.45% mean ITL —
 with the gate selecting persistent for only 6 of 2,566 mixed batches. The

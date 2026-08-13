@@ -69,7 +69,8 @@ BatchPrefill-baseline comparison is part of the validation below.
 
 The original sweep sampled chunk prefixes down to 512 only, which hid the
 highest-value region. A direct probe plus a 477-case extension sweep
-(`sweep_fresh.py`, merged table 956 points) gives the real picture.
+(`sweep_fresh.py`, merged table 956 points at this date; the blended-pool
+sweep later grew it to the deployed 1,316) gives the real picture.
 
 **Mechanism (corrected 2026-08-06).** BatchPrefill's split-KV works: a
 decode-only batch of 8 rows @64K runs in 0.366 ms through it, matching the
@@ -137,16 +138,24 @@ the mixed launch against the two parts run separately:
 
 ### Measured k-NN gate
 
-Features `[log1p(decode_kv), log1p(prefill_work=Σe·c), log1p(prefill_tokens),
-log1p(decode_bs), 3·D/(D+P+1)]`, k=3, persistent only on unanimous
-neighbors labeled `bp/pa_best ≥ 1.05`; flip by neighbor majority.
-Leave-one-out on the sweep: worst-case regression **1.028×** (zero cases
->3%), win capture 68.7%, mean speedup 1.61× vs always-BatchPrefill; flip
-choice mean loss 0.29%. Deployed as
+Deployed version (v2, 2026-08-05, built by `build_mixed_kernel_gate_table.py`):
+1,316 measured compositions, features `[log1p(decode_kv),
+log1p(prefill_work=Σe·c), log1p(prefill_tokens), log1p(decode_bs),
+3·D/(D+P+1), log1p(kv_concentration=Σkv²/Σkv)]`, k=5, persistent only on
+unanimous neighbors labeled `bp/pa_best ≥ 1.10`, flip by neighbor majority,
+plus an out-of-support guard (query farther than `max_nn_dist_sq` from every
+table point → BatchPrefill). Leave-one-out: worst-case regression **1.000**,
+win capture 81%, mean speedup 2.71× on accepted batches. The original v1
+(479 points, 5 features, k=3, label ≥1.05, LOO worst 1.028) is what the
+2026-07-30 validation screens below ran; v2 adds the fresh-prefix and
+blended-pool sweeps and is what every mixed-tenancy run uses. Deployed as
 `python/sglang/srt/layers/attention/mixed_kernel_gate_h800_gqa7.json`
 (+gqa4 for Qwen3-8B) behind `SGLANG_MIXED_ATTENTION_KERNEL=auto` with
-forced `persistent`/`batch_prefill` overrides; ~20 µs per decision, once
-per mixed step.
+forced `persistent`/`batch_prefill` overrides. Decision latency on the
+current 1,316-point/k=5 table (re-measured 2026-08-13): ~39 µs for the core
+k-NN, 52–69 µs for the full entry point including feature computation from
+per-request CPU lists (batch 16→256); once per mixed step, CPU-side, ~12x
+cheaper than the 0.47 ms sync-free plan it precedes.
 
 ### Validation screens (TraceLab decode-heavy, N=100, 2026-07-30)
 
@@ -155,6 +164,8 @@ sglang `313b97611`, flashinfer `c6d2a00`. Command:
 LPT_CHUNKED_PREFILL_SIZE=6656 METHODS_SPEC="DMC_CG LPT"
 bash tasks/realistic_workload_analysis/run_tracelab_claude.sh`, results in
 `tasks/realistic_workload_analysis/h800_tracelab_decodeheavy512_gated_g{10,16}_n100/`.
+These screens ran the v1 gate (479 points/k=3); their zero-regression
+conclusion was re-confirmed under the v2 gate by the mixed-tenancy controls.
 DMC is now a true BatchPrefill baseline (explicit
 `SGLANG_FLASHINFER_USE_PERSISTENT=0`) and is *stronger* than the old
 contaminated one (g16: 7,882 vs 7,708 tok/s; g10: 6,382 vs 6,032 — the old

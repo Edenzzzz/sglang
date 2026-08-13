@@ -95,10 +95,12 @@ class MixedKernelGate:
     composition only, whether the persistent BatchAttention kernel should
     replace BatchPrefill for the cached-prefix part of a mixed batch, and
     which persistent work ordering to use. The persistent kernel is chosen
-    only where the sweep shows >=5% kernel-time gain with all three nearest
-    neighbors agreeing (leave-one-out worst-case regression 2.8% on the H800
-    sweep); everything else keeps the BatchPrefill baseline, so serving can
-    never regress beyond noise while decode-heavy batches keep 1.2-20x wins.
+    only where all k nearest measured compositions agree it wins by the
+    table's label margin, and only inside the table's measured support
+    (max_nn_dist_sq guard); everything else keeps the BatchPrefill baseline,
+    so serving can never regress beyond noise while decode-heavy batches
+    keep 1.2-20x wins. k, the label margin, and the guard radius are
+    properties of the table file, not this class.
 
     Tables are built by tasks/debug_kernel_server_perf/
     build_mixed_kernel_gate_table.py from gate_sweep3 measurements.

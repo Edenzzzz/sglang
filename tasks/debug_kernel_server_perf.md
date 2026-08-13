@@ -12,687 +12,6 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 - Profile logs: `tasks/debug_kernel_server_perf/profile_logs/`
 - gpu_keepalive MUST be stopped before benchmarks (corrupts results — cooperative launch is especially sensitive to SM contention)
 
-## 2026-07-24 serving results (superseded)
-
-Superseded 2026-07-30: the DMC rows below silently ran the persistent kernel
-(`SGLANG_FLASHINFER_USE_PERSISTENT` defaults to 1 and no launcher disabled
-it), so LPT-vs-DMC deltas here compare caps/guards on the same kernel. PP
-rows (no mixed batches) are unaffected. Current results: see "Sync-free plan
-+ measured mixed-kernel gate" and its Conclusion below.
-
-All methods use N=400, the same prompts and ordinary decode CUDA graphs.
-PP uses unchanged BatchPrefill without mixed chunking; DMC uses unchanged
-mixed BatchPrefill; LPT replaces only mixed-batch attention with the persistent
-kernel. Results are rejected unless retokenized output is within 2% of the
-server-reported output. Exact-capacity mixed graphs and the combination of
-piecewise EXTEND graphs with decode graphs are excluded because they corrupt
-output.
-
-At rate 16, both realistic Qwen3-8B workloads meet their TTFT SLO. The table
-reports total-token throughput and the fraction of requests whose maximum
-decode gap meets the 150 ms ITL SLO:
-
-| Workload | PP tok/s / ITL attainment | DMC tok/s / ITL attainment | LPT tok/s / ITL attainment |
-|----------|---------------------------:|----------------------------:|----------------------------:|
-| Code-Feedback | 7,217 / 17.8% | **7,411 / 81.0%** | 7,404 / **74.8%** |
-| SWE-Gym | 3,005 / 21.0% | **3,017 / 78.5%** | 3,011 / **85.0%** |
-
-The defensible claim is therefore narrower than the earlier one: mixed
-scheduling sharply improves request-level ITL over prefill-priority while
-matching or slightly improving its throughput. LPT improves the SWE-Gym ITL
-Pareto point over DMC, but does not yet improve DMC throughput.
-
-### Headline TraceLab result
-
-The primary 64K–100K TraceLab Claude result is a causal session replay at
-peak offered load: all ten sessions are admitted together
-(`--request-rate inf`). Warmup is length-matched but token-disjoint from the
-timed radix prefixes. It uses
-Qwen2.5-7B-Instruct, 400 consecutive rounds from ten real sessions, mean
-3,812-token tool/user append, mean 481-token output, and recorded inter-round
-delays compressed 100x. Unlike the old independent-request burst, this
-continually injects sporadic prefills while other sessions decode.
-
-| Method | Total tok/s | Mean / P99 TTFT | pooled P99 ITL |
-|--------|------------:|----------------:|---------------:|
-| DMC + decode CG | 28,965 | 2,583 / 64,253 ms | **93.56 ms** |
-| LPT + persistent, 7K cap | **29,093** | **2,459 / 57,708 ms** | 97.13 ms |
-
-(Superseded: both rows ran the persistent kernel for mixed batches.)
-LPT is 0.44% faster and reduces mean/P99 TTFT by 4.8%/10.2%, but pooled
-P99 ITL is 3.8% worse. Request profiling attributes the TTFT change to queue
-time (mean 1,415→1,289 ms; P99 58.12→51.75 s), while admission-to-first-token
-service is unchanged at about 998–999 ms mean.
-
-The former +2.50% throughput, −41.0% mean TTFT, −59.8% P99 TTFT result reused
-each timed session's exact radix prefix during warmup. Its first-cohort
-admission phase was cache-order dependent and it is superseded. The clean
-result does not yet support a same-ITL-SLO frontier claim.
-
-The old TraceLab arrival-rate sweep has the same warmup confounder and must be
-rerun. Coding-dataset curves remain under
-`tasks/edf_benchmark/current_policy_n400/`.
-
-The former N=400 result (400 independent long generations released as one
-burst) is retained only as a saturation stress test in
-`tasks/realistic_workload_analysis/tracelab_claude_h800_n400_burst_summary.json`.
-
-`tasks/edf_benchmark/analyze_results.py` reports request-level maximum-ITL
-percentiles because pooled token-level P99 hides rare multi-second stalls.
-
-## Historical H800 results (invalidated)
-
-The tables below predate the graph-isolation fixes. Several DMC/LPT runs
-retokenize only 22–98% of their reported outputs, PP combined incompatible
-piecewise and decode graph runners, and some comparisons disabled graphs only
-for a baseline. They are retained solely as debugging history and must not be
-used for a paper claim.
-
-### H800 WL1–6 diagnosis
-
-Matched 40-request exploratory runs at rate 8 use the same random seed and
-requested input/output lengths as WL1–6. Request-max P99 first computes the
-maximum decode gap within each request, then takes P99 across requests.
-
-| WL | Input/output | LPT throughput gain, no EDF | pooled P99 ITL gain | request-max P99 (LPT/DMC) |
-|----|-------------:|----------------------------:|--------------------:|--------------------------:|
-| 1 | 4096/1024 | +8.7% | +14.1% | 145/558 ms |
-| 2 | 8192/2048 | −0.0% | −7.4% | 247/247 ms |
-| 3 | 12000/1024 | −0.2% | +0.7% | 279/289 ms |
-| 4 | 16384/1024 | −0.2% | −1.1% | 375/767 ms |
-| 5 | 4096/4096 | +4.7% | +6.7% | 149/546 ms |
-| 6 | 6000/6000 | +1.6% | −3.2% | 157/581 ms |
-
-The apparently minimal ITL gains on WL4–6 are mostly a metric artifact. Pooled
-P99 changes by −3% to +7%, while request-level tail gaps improve by 51–73%.
-WL2 is the genuine weak saturated corner: LPT and DMC are tied in both
-throughput and request-level tail.
-
-### H800 SLO-aware WL1–6
-
-EDF target 100 ms, LPT with a 10 ms prediction guard. These results include
-the NumPy predictor, continued-prefix correction, mixed-result timestamp
-refresh, and exact-capacity graph fix described below.
-
-| WL | LPT/DMC total tok/s | LPT throughput gain | request-max P99 (LPT/DMC) |
-|----|--------------------:|--------------------:|--------------------------:|
-| 1 | 7,723 / 6,745 | **+14.5%** | **84/655 ms** |
-| 2 | 6,874 / 6,763 | +1.6% | **123/575 ms** |
-| 3 | 11,109 / 10,864 | +2.3% | **103/486 ms** |
-| 4 | 11,986 / 11,406 | **+5.1%** | **118/607 ms** |
-| 5 | 3,565 / 3,457 | +3.1% | **94/496 ms** |
-| 6 | 3,010 / 2,931 | +2.7% | **94/1,206 ms** |
-
-At the tighter 50 ms target, a fresh matched DMC sweep shows that the
-request-level tail is the main advantage even where throughput is saturated:
-
-| WL | LPT/DMC total tok/s | throughput gain | pooled P99 ITL (LPT/DMC) | worst ITL (LPT/DMC) |
-|---:|--------------------:|----------------:|-----------------------------:|------------------------:|
-| 1 | 7,747 / 6,887 | **+12.5%** | 40/56 ms | **55/758 ms** |
-| 2 | 6,878 / 6,676 | +3.0% | 39/49 ms | **59/545 ms** |
-| 3 | 10,821 / 10,629 | +1.8% | 42/53 ms | **84/569 ms** |
-| 4 | 11,727 / 11,736 | −0.1% | 47/57 ms | **61/495 ms** |
-| 5 | 3,564 / 3,508 | +1.6% | 36/44 ms | **49/552 ms** |
-| 6 | 3,012 / 3,003 | +0.3% | 36/46 ms | **48/62 ms** |
-
-The persistent method therefore shifts the curve across all six regimes:
-WL1 converts kernel efficiency into throughput; WL2/3/5 gain both throughput
-and ITL; WL4/6 are throughput-saturated but still sharply reduce decode-tail
-latency. At the 150 ms target, representative throughput gains remain +10.8%
-(WL1), +18.1% (WL3), and +4.3% (WL5).
-
-#### N=400 peak-load comparison
-
-Peak-load acceptance uses 400 requests. A scheduler hot-path audit found that
-every mixed prefill chunk emitted an INFO record and that the non-fatal idle
-memory check could emit tens of thousands of identical ERROR records per
-second. Mixed-prefill logging now follows the existing decode interval, and
-memory-check failures are rate-limited. A second unconditional print on every
-zero-prefill EDF decision is now emitted only with `--plot-chunk-size`; tight
-SLO runs otherwise executed synchronous stdout on nearly every decode step.
-
-The table below uses the 50 ms target and the same random seed, rate 8, and
-400 requests for every point. DMC disables CUDA graphs because the graph path
-is not output-correct with this private FlashInfer build. All accepted DMC
-results below retokenize to at least 99.77% of the reported output count.
-
-| WL | LPT/DMC total tok/s | LPT gain | pooled P99 ITL (LPT/DMC) | request-max P99 (LPT/DMC) | worst ITL (LPT/DMC) |
-|---:|--------------------:|---------:|-----------------------------:|------------------------------:|-------------------------:|
-| 1 (4096/1024), 5 ms guard | 15,374 / 13,601 | **+13.0%** | **41 / 52 ms** | **64 / 81 ms** | **64 / 81 ms** |
-| 2 (8192/2048), 7.5 ms guard | 10,710 / 9,909 | **+8.1%** | **40 / 50 ms** | **62 / 165 ms** | **62 / 165 ms** |
-| 3 (12000/1024), 5 ms guard | 15,431 / 14,685 | **+5.1%** | **48 / 54 ms** | **76 / 344 ms** | **77 / 344 ms** |
-| 4 (16384/1024), adaptive guard | 14,348 / 13,900 | **+3.2%** | **49 / 55 ms** | 104 / **100 ms** | 104 / **100 ms** |
-| 5 (4096/4096) | 7,105 / 6,041 | **+17.6%** | **33 / 46 ms** | **56 / 325 ms** | **56 ms / 144 s** |
-| 6 (6000/6000), safe | 4,874 / 4,398 | **+10.8%** | **33 / 45 ms** | **49 / 60 ms** | **49 ms / 385 s** |
-
-This bridges the kernel-to-serving gap on all six workloads: LPT provides
-3.2–17.6% more throughput while lowering pooled P99 ITL by 11–29%. The 5 ms
-planner guard is the better Pareto point for the short-output WL1/3 shapes:
-current-branch N=400 confirmations improve their preceding LPT throughput by
-1.2%/4.2%, retain 99.856%/99.993% output retokenization, and keep every decode
-gap below 77 ms. WL2's current-branch 7.5 ms midpoint similarly raises
-throughput from 10,505 to 10,710 tok/s, retains 99.968% retokenization, and
-keeps its worst gap to 62 ms; the old 5 ms point reached a 329 ms request tail
-and remains rejected. The adaptive controller uses the conservative 10 ms
-endpoint for long-output/memory-sensitive work and once a continued prefix
-reaches 14K. On WL4 it uses 5 ms before that boundary and 10 ms afterward,
-reaching 14,348 tok/s: 3.2% faster than DMC with an 11% lower pooled P99 and
-essentially equal request-level tail.
-Request-level tails expose larger benefits on WL3/5 that pooled token
-percentiles hide. WL2's former synchronized 313 ms gap was caused by the
-zero-prefill stdout diagnostic; after gating it behind plotting, the adaptive
-point's worst gap is 62 ms and LPT dominates DMC on both axes.
-
-The matched prefill-prioritized (PP) baseline disables both mixed chunking and
-CUDA graphs. The private FlashInfer pure-decode graph path is not
-output-correct at peak load: PP+PCG retokenized only 86.7% of WL1 output. The
-graph-free PP runs below retokenize 99.81–100.00% and use the same seed, rate,
-EDF target, and N=400 as the table above.
-
-| WL | LPT/PP total tok/s | LPT gain | pooled P99 ITL (LPT/PP) | request-max P99 (LPT/PP) | worst ITL (LPT/PP) |
-|---:|-------------------:|---------:|----------------------------:|-----------------------------:|------------------------:|
-| 1 | 15,374 / 14,146 | **+8.7%** | **41 / 218 ms** | **64 / 478 ms** | **64 / 478 ms** |
-| 2 | 10,710 / 9,808 | **+9.2%** | **40 / 241 ms** | **62 ms / 13.2 s** | **62 ms / 13.4 s** |
-| 3 | 15,431 / 11,435 | **+34.9%** | **48 / 883 ms** | **76 ms / 18.8 s** | **77 ms / 19.9 s** |
-| 4 | 14,348 / 8,749 | **+64.0%** | **49 ms / 1.64 s** | **104 ms / 23.4 s** | **104 ms / 23.6 s** |
-| 5 | 7,105 / 6,150 | **+15.5%** | **33 / 124 ms** | **56 / 452 ms** | **56 ms / 13.0 s** |
-| 6, safe | 4,874 / 4,460 | **+9.3%** | **33 / 96 ms** | **49 ms / 1.69 s** | **49 ms / 20.3 s** |
-
-Thus LPT also dominates valid PP on every workload: 9–64% more throughput and
-2.9–36x lower pooled P99 ITL. PP's mean ITL obscures seconds-long
-prefill-induced stalls; the per-request maximum exposes them. The advantage
-is largest on input-heavy WL3/4, but remains material on output-heavy WL5/6.
-
-WL4 needs an additional predictor-domain guard: clamping every continued
-prefix to the model's 4K training boundary produced a 506 ms gap. With a fixed
-10 ms guard, projecting causal attention work only after the real prefix
-exceeds 14K reduces the worst gap to 101 ms while reaching 14,141 tok/s. A
-matched 13K boundary reached only 13,938 tok/s with the same 101 ms tail and is
-dominated; the previous 12K boundary reached 13,795 tok/s and an 83 ms tail.
-The live adaptive guard improves the 14K point to 14,348 tok/s and a 104 ms
-worst gap by using 5 ms before the protected prefix boundary. The controller
-can still choose a zero-token prefill step and introduces no minimum prefill
-chunk.
-
-The graph-enabled DMC result remains invalid. At N=20, disabling overlap while
-retaining mixed batching and decode graphs restores exact output, but at
-N=400 it falls from 94% retokenization on WL1 to 22% on WL2. Disabling graph
-padding, synchronizing mixed-result copies, synchronizing future resolution,
-resolving only the mixed decode suffix, planner-hook changes, and isolated
-workspace/indptr buffers did not repair it and were reverted. Only the
-no-graph DMC configuration is used above.
-
-Peak memory remains a separate limit. LPT is stable on WL5, while DMC retracts
-and stalls one stream for 144 seconds. On WL6, retracted requests previously
-received a fresh TTFT deadline and were demoted behind the entire prefill
-backlog. Preserving their original EDF priority reduces LPT's worst gap from
-334 seconds to 10.5 seconds despite two retractions, while increasing
-throughput from 4,948 to 5,094 tok/s.
-
-For a strict no-violation deployment, setting
-`SGLANG_EDF_KV_ADMISSION_WATERMARK=0.90` stops only new prefill admission once
-live KV reaches 90%; it does not statically shrink the pool. The WL6 run has
-zero retractions, an absolute maximum ITL of 49 ms, and 4,874 tok/s—10.8%
-faster than DMC. This is a better Pareto point than static 10% headroom, which
-previously fell to 3,354 tok/s. A 0.95 watermark still retracted once and was
-rejected. The default remains 1.0 for maximum throughput; the 0.90 setting is
-the strict-SLO point reported in the table.
-
-Long-output tests exposed a separate memory-capacity failure that pooled P99
-hides. WL5 with the normal 10 ms guard is stable at 7,105 tok/s and 56 ms
-worst ITL, but reducing the guard to 5 ms causes four KV retractions and a
-131-second stream gap. An 8K/8K, rate-4 stress test similarly produced a
-342-second gap from one retraction while pooled P99 remained 33 ms.
-
-The following mitigations were rejected after N=400 tests:
-
-- Raising future-output reservation removes retractions on WL5, but reduces
-  throughput to 6,652 tok/s; on the 8K stress test, a fully safe combination
-  of reservation plus headroom falls from 4,929 to 3,343 tok/s.
-- Withholding 10% KV headroom alone is safe on the 8K stress test, but still
-  reaches only 3,354 tok/s. Already-admitted decodes consume static headroom,
-  so smaller margins still retract.
-- A 100 GB HiCache host tier reaches 6,839 tok/s on WL5, but retracted active
-  KV is not inserted into the radix cache and the worst ITL remains 130
-  seconds. Immediate readmission reduces that gap to 8.14 seconds at 6,844
-  tok/s, but inserting/evicting active KV causes retraction thrashing.
-
-These experiments establish that request-count/token-ratio admission cannot
-simultaneously preserve the high-concurrency point and eliminate rare
-retractions. A server-cost/load predictor needs memory state and expected
-decode growth in addition to forward latency. None of the rejected policies
-or minimum-prefill constraints are retained.
-
-### EDF controller hot path
-
-Exact chunk selection evaluates the latency MLP once for pure decode and
-roughly 12–14 more times during binary search. Evaluating this small CPU model
-through PyTorch cost 56.5 us per prediction on the H800 serving host, or about
-0.7 ms per admission decision. Extracting the four linear layers once at load
-time and evaluating them directly with NumPy reduces prediction latency to
-11.0 us (5.1x). Predictions across decode-only, maximum-profiled, and
-intermediate inputs agree within 0.001 ms. The exact integer binary search is
-unchanged and can still return a zero-token prefill chunk.
-
-A matched 40-request H800 safety run at the 100 ms target covered every
-workload rather than only the favorable WL1 case:
-
-| WL | Total tok/s | pooled P99 ITL | request-max P99 |
-|----|------------:|---------------:|----------------:|
-| 1 | 7,750 | 81.9 ms | 97.7 ms |
-| 2 | 6,886 | 79.0 ms | 93.2 ms |
-| 3 | 11,030 | 88.1 ms | 102.8 ms |
-| 4 | 11,852 | 102.0 ms | 117.2 ms |
-| 5 | 3,563 | 29.1 ms | 84.0 ms |
-| 6 | 3,012 | 20.5 ms | 84.1 ms |
-
-All six throughput results are within 1% of the preceding PyTorch-predictor
-runs. Thus this removes scheduler CPU overhead without changing the SLO
-policy, but the saturated workloads remain GPU-bound and do not convert the
-CPU saving into a measurable token-throughput increase.
-
-### EDF continued-prefill model bug
-
-The controller previously called the latency model with `r_p=0` for every
-chunk. On later chunks of long prompts this under-predicted attention latency:
-at the 100 ms target, LPT request-max P99 rose from 97 ms on WL1 to 151 ms on
-WL4.
-
-Passing the unbounded prefix length directly is also invalid: the checked-in
-models were trained only for `r_p ∈ [0, 4096]`. Extrapolating to 8K–12K makes
-the MLP predict hundreds of milliseconds even for `n_p=0`, starving prefill.
-The fix passes the selected request's actual device/host cache hit (or the
-continued-prefix length) and clamps it to the profiled domain. On matched runs:
-
-- WL3: throughput 10,955→11,095 tok/s and request-max P99 129→102 ms.
-- WL4: throughput 11,833→11,958 tok/s and request-max P99 151→116 ms.
-
-This improves both throughput and SLO attainment; it does not impose a minimum
-prefill chunk.
-
-#### Long-prefix retraining experiment (rejected)
-
-An H800 experiment extended random profiler prefixes to 16K and collected 300
-points. The old MLP cannot be used without a domain guard: unconstrained
-extrapolation had 784% MAPE overall and overpredicted 12K–16K samples by 7.8
-seconds on average. Clamping at 4K avoids that failure, but underpredicted
-86–97% of measured 8K–16K samples.
-
-A model trained on the extended data achieved 5.8% held-out profiler MAPE, but
-failed the serving gate across WL1–6. At the 100 ms target, WL3/WL4 throughput
-fell from 11,030/11,852 to 10,848/11,708 tok/s and request-max ITL worsened
-from 103/117 ms to 135/126 ms. The checkpoint was therefore rejected.
-
-The discrepancy exposed a profiler integration bug: `ProfilingRunner`
-explicitly disables CUDA graphs and starts GPU timing only after
-`init_forward_metadata`, excluding the persistent planner. An experimental
-production-path profiler fixed the stale `[1]` versus mixed-token replay shape,
-but then deterministically hit a CUDA illegal instruction at
-`(n_p=2775, r_p=14777, r_d=3495, decode_bs=41)`. Supplying valid synthetic page
-tables did not remove the trap. No profiler or checkpoint changes from this
-unsafe experiment are retained; production-path profiling and that mixed-graph
-shape need to be fixed before replacing the checked-in model.
-
-#### Mixed-result timestamp and exact-capacity graph fix
-
-EDF previously failed to refresh decode progress after mixed steps. Fixing the
-timestamp improved TTFT and chunk admission, but exposed a repeatable illegal
-access after exact-capacity 384-token graph replays at high aggregate KV. The
-same shapes were stable in the next larger graph and in standalone non-graph
-attention. Mixed replay now selects the next captured size on an exact match
-when one is available; this is graph padding, not a minimum prefill chunk.
-
-The previously failing WL3 N=100, 50 ms gate then completed at 13,447 tok/s,
-versus 11,981 tok/s for DMC (+12.2%), with pooled P99 ITL 42/61 ms and worst
-ITL 63/588 ms. The WL1–6 tables above are the post-fix validation.
-
-Rejected alternatives are not retained: an 8K/12K non-graph fallback lost
-15.3%/8.2% throughput to DMC and caused 6.10/6.25 second stalls.
-
----
-
-## Kernel-Level Results
-
-### LPT vs POD vs Static Persistent 3-way comparison
-(H100 80GB, Qwen3-8B heads: num_kv=8 num_qo=32 dim=128, `bench_mixed_attention.py`, 100 decode each)
-
-| Case | Workload | POD (ms) | LPT (ms) | Static (ms) | LPT over POD | LPT over Static |
-|------|----------|----------|----------|-------------|-------------|-----------------|
-| 1 | 100d@kv2k + 1p@512 | 0.30 | 0.31 | 0.30 | 0.97x | 0.97x |
-| 2 | 100d@kv2k + 1p@1536 | 0.32 | 0.36 | 0.37 | 0.89x | 1.03x |
-| 3 | 100d@kv2k + 2p@2048 | 0.44 | 0.48 | 0.52 | 0.92x | **1.09x** |
-| 4 | 100d@kv2k + 1p@2048 | 0.34 | 0.38 | 0.42 | 0.89x | **1.11x** |
-| 5 | 100d@kv4k + 1p@4096 | 0.81 | 0.82 | 0.97 | 0.99x | **1.18x** |
-| 6 | 100d@kv8k + 1p@4096 | 1.28 | **1.24** | 1.51 | **1.03x** | **1.22x** |
-| 7 | 100d@kv8k + 1p@6000 | 1.85 | 1.89 | 2.18 | 0.98x | **1.15x** |
-| **8** | **95d@kv2k+5d@kv24k+1p@2k** *(split-KV decode)* | 0.69 | **0.64** | 0.71 | **1.08x** | **1.11x** |
-| **9** | **100d@kv2k+1p@kv24k,q4k** *(split-KV prefill, ratio≥2→static)* | 4.56 | 4.67 | 4.67 | 0.98x | **1.00x** |
-| 10 | 100d@kv2k+1p@kv12k,q4k *(ratio≥2→static)* | 2.14 | 2.17 | 2.17 | 0.99x | **1.00x** |
-
-(Cases 1-8: flashinfer `a74bb2d4`, `bench_mixed_attention.py`. Cases 9-10: ratio threshold auto-fallback to static.)
-
-### LPT vs BatchPrefill (DMC's kernel) — the ACTUAL comparison that matters
-(flashinfer `cfca7c6f`, `bench_mixed_attention.py`, no keepalive, 2026-04-13)
-
-The original table compared LPT vs POD vs Static (all persistent variants). But DMC uses `BatchPrefillWithPagedKVCacheWrapper` — a different kernel entirely. Here is the direct comparison:
-
-| Case | Workload | BatchPrefill (ms) | LPT (ms) | LPT speedup |
-|------|----------|-------------------|----------|-------------|
-| 1 | 100d@kv2k+1p@512 | 0.32 | 0.32 | 1.00x |
-| 2 | 100d@kv2k+1p@1536 | 0.34 | 0.36 | 0.94x |
-| 3 | 100d@kv2k+2p@2048 | 0.56 | 0.49 | **1.14x** |
-| 4 | 100d@kv2k+1p@2048 | 0.46 | 0.38 | **1.21x** |
-| 5 | 100d@kv4k+1p@4096 | 1.11 | 0.83 | **1.34x** |
-| 6 | 100d@kv8k+1p@4096 | 1.75 | 1.27 | **1.38x** |
-| 7 | 100d@kv8k+1p@6000 | 2.49 | 1.91 | **1.30x** |
-| 8 | split-KV decode | 1.42 | 0.63 | **2.25x** |
-| 9 | split-KV prefill 24k | 4.67 | 4.62 | 1.01x |
-| 10 | split-KV prefill 12k | 2.34 | 2.21 | 1.06x |
-
-**LPT is 14-38% faster on Cases 3-7 and 2.25x on split-KV decode.** This advantage should translate to server-level throughput but currently doesn't (LPT_CG ≈ DMC). Investigation with nsys/ncu pending to find where the speedup is lost.
-
-Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Cases 6,8 over POD.** LPT beats static by 1.03-1.22x on Cases 2-8. **Cases 9-10: ratio threshold kicks in → static, 1.00x (zero regression).** Still loses to POD on Cases 2,4 (0.89x) — cause TBD (not cooperative launch overhead; single CUDA stream means all SMs available).
-
-**Note on old stale table**: An earlier table showed LPT beating POD by +3-18%. Those numbers were **contaminated by gpu_keepalive** (confirmed from conversation history). Keepalive inflates cooperative launch (persistent) more than POD, creating fake speedup.
-
-**POD gap on Cases 2,4 (0.89x)**: LPT kernel=362μs vs POD=340μs. NOT from cooperative launch (single stream). NCU Case 4 stall breakdown (flashinfer `d9c01c81`):
-
-| Stall reason | Cycles/instr | % of total (10.42 cyc) |
-|-------------|:---:|:---:|
-| **wait (grid.sync)** | **1.78** | **17.1%** |
-| long_scoreboard (DRAM) | 1.62 | 15.6% |
-| no_instruction | 1.28 | 12.3% |
-| short_scoreboard (smem) | 1.14 | 10.9% |
-| barrier (__syncthreads) | 0.84 | 8.1% |
-
-**grid.sync() is the #1 stall — 17% of kernel time** (under NCU instrumentation). Attempted fix: replaced grid.sync with per-output-row semaphore barriers (flashinfer `a6ae8e32`). **Result: NO improvement** — barrier kernel matches cooperative exactly on all cases. The 17% NCU stall is likely inflated by instrumentation replay, or barrier reset + acquire-release overhead equals grid.sync cost. **The POD gap is inherent to the fused two-runner architecture** (shared memory reuse, runner switching, reduction overhead), not to any sync mechanism.
-
-### LPT Load-Balance Profiling
-Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (warmup + L2 flush). Qwen3-8B heads (8/32/128). flashinfer `daf646c3`, H100 80GB. Verified ±1-2% match with `bench_mixed_attention.py`.
-
-| Case | Workload | Static kernel | LPT kernel | LPT speedup | Static max sync | LPT max sync |
-|------|----------|-------------|----------|---------|----------------|-------------|
-| 1 | 100d@kv2k + 1p@512 | 0.302ms | 0.310ms | 0.97x | 26μs | 30μs |
-| 2 | 100d@kv2k + 1p@1536 | 0.368ms | 0.355ms | 1.04x | 21μs | 17μs |
-| 3 | 100d@kv2k + 2p@2048 | 0.519ms | **0.478ms** | **1.09x** | 25μs | **13μs** |
-| 4 | 100d@kv2k + 1p@2048 | 0.423ms | **0.377ms** | **1.12x** | 23μs | 20μs |
-| 5 | 100d@kv4k + 1p@4096 | 0.969ms | **0.822ms** | **1.18x** | 42μs | **16μs** |
-| 6 | 100d@kv8k + 1p@4096 | 1.507ms | **1.245ms** | **1.21x** | 88μs | 112μs |
-| 7 | 100d@kv8k + 1p@6000 | 2.175ms | **1.885ms** | **1.15x** | 1,510μs | **52μs** |
-| **8** | **95d@kv2k+5d@kv24k+1p@2k** *(split-KV decode)* | 0.708ms | **0.665ms** | **1.06x** | 176μs | 150μs |
-| **9** | **100d@kv2k+1p@kv24k,q4k** *(split-KV prefill)* | 4.335ms | 4.736ms | 0.92x | 121μs | 1,933μs |
-
-(Max sync converted from clock cycles at 1.83 GHz.)
-
-**Key findings**: LPT wins Cases 3-7 (9-21% speedup). Split-KV decode (Case 8) gets 6%. Split-KV prefill (Case 9) regresses 8%.
-
-**Case 9 regression investigation**:
-- Consistent ~8% across kv12k/16k/24k (0.92x, 0.93x, 0.92x vs static)
-- FA3-style stride sweep (commit `1fe946aa`, flashinfer `persistent_overlap_`):
-
-  Auto-stride = gridDim.y/2 static initial tiles (FA3-style, `is_first_runner` from per-SM `cta_counter`, predicated `atomicAdd(counter, 0/1)`). Zero improvement — atomic contention is not the bottleneck.
-- NCU: same instructions (0.3% diff), SM Busy 51.8% vs 55.9%, Warp Cycles/Instr 6.45 vs 5.99. grid.sync() max wait 940K vs 225K cycles.
-- Perfetto traces: `profile_logs/case9_lpt.perfetto-trace`, `case9_static.perfetto-trace`
-- Realistic split-KV prefill sweep (single + multi-request, commits `1fe946aa`..`e1d28595b`):
-
-| Config | Static (ms) | LPT (ms) | LPT speedup |
-|--------|------------|----------|-------------|
-| 100d@kv2k+1p@kv8k,q4k | 1.415 | 1.471 | 0.96x |
-| 100d@kv2k+1p@kv12k,q4k | 2.083 | 2.252 | 0.92x |
-| 100d@kv2k+1p@kv12k,q8k | 3.223 | 3.331 | 0.97x |
-| 100d@kv2k+1p@kv16k,q8k | 4.813 | 5.017 | 0.96x |
-| 100d@kv2k+4p@q2k,kv{2k,4k,8k,12k} | 2.320 | 2.488 | 0.93x |
-| 100d@kv2k+2p@q4k,kv{4k,12k} | 2.474 | 2.657 | 0.93x |
-| 100d@kv2k+8p@q1k,kv{1k..8k} | 1.787 | 1.937 | 0.92x |
-| 100d@kv4k+4p@q2k,kv{2k,4k,8k,12k} | 2.575 | 2.662 | 0.97x |
-| 100d@kv4k+2p@q4k,kv{4k,12k} | 2.729 | 2.806 | 0.97x |
-
-- **Root cause & fix**: Compute-bound prefill makes dynamic scheduling overhead pure loss. When prefill compute dominates, LPT's atomicAdd + tile mapping adds overhead with no load-balance opportunity to recoup it.
-  - **Fix** (commit `a74bb2d4`): When `prefill_kv_compute / decode_kv_compute >= 2.0`, set `flipped_schedule=false` (static for both tasks). Threshold found empirically:
-    - ratio ≤ 0.92 → LPT wins (1.03-1.22x)
-    - ratio ~2.0 → neutral (0.99x)
-    - ratio ≥ 3.5 → LPT loses (0.91-0.97x)
-  - **Result** (commit `a74bb2d4`, script: inline python with `bench_gpu_time`):
-
-| Config | Static (ms) | Auto (ms) | Mode | Speedup |
-|--------|------------|----------|------|---------|
-| Case1: 100d@kv2k+1p@512 | 0.303 | 0.310 | LPT | 0.98x |
-| Case2: 100d@kv2k+1p@1536 | 0.368 | 0.356 | LPT | 1.03x |
-| Case3: 100d@kv2k+2p@2048 | 0.518 | 0.477 | LPT | **1.09x** |
-| Case4: 100d@kv2k+1p@2048 | 0.423 | 0.379 | LPT | **1.12x** |
-| Case5: 100d@kv4k+1p@4096 | 0.968 | 0.822 | LPT | **1.18x** |
-| Case6: 100d@kv8k+1p@4096 | 1.506 | 1.239 | LPT | **1.22x** |
-| Case7: 100d@kv8k+1p@6000 | 2.174 | 1.876 | LPT | **1.16x** |
-| Case8: 95d@kv2k+5d@kv24k+1p@2k | 0.707 | 0.694 | LPT | 1.02x |
-| Case9: 100d@kv2k+1p@kv24k,q4k | 4.663 | 4.666 | static | **1.00x** |
-| 100d@kv2k+1p@kv8k,q4k | 1.446 | 1.440 | static | 1.00x |
-| 100d@kv2k+1p@kv12k,q4k | 2.171 | 2.171 | static | 1.00x |
-| 100d@kv2k+1p@kv12k,q8k | 3.400 | 3.411 | static | 1.00x |
-| 100d@kv2k+1p@kv16k,q8k | 5.151 | 5.163 | static | 1.00x |
-| 100d@kv2k+4p@q2k,kv{2k,4k,8k,12k} | 2.484 | 2.487 | static | 1.00x |
-| 100d@kv2k+8p@q1k,kv{1k..8k} | 1.909 | 1.911 | static | 1.00x |
-| 100d@kv4k+4p@q2k,kv{2k,4k,8k,12k} | 2.671 | 2.683 | static | 1.00x |
-
-**Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k, LPT assigns largest causal tiles first → early CTAs get top q_tiles (16K KV each), late CTAs get bottom q_tiles (~32 tokens). Kernel time tied (13.95 vs 14.0ms) — compute dominates.
-
-### Split-KV A/B Comparison
-Split enabled vs disabled within LPT, 2x kv_limit. Speedup = (nosplit - split) / nosplit.
-
-| Case | Split | No-split | Split speedup |
-|------|-------|----------|---------|
-| 3d@64k+1p@2k | **0.681ms** | 1.659ms | **59%** |
-| 5d@32k+1p@4k | 1.228ms | 1.223ms | 0% |
-| 10d@16k+1p@4k | 1.298ms | 1.303ms | 0% |
-| 20d@8k+2p@2k | 0.932ms | 0.931ms | 0% |
-| 100d@2k+2p@2k | 1.036ms | 1.030ms | 0% |
-
-Split-KV with 2x kv_limit: 59% speedup on severe imbalance (3d@64k), zero regression on balanced workloads. NCU confirms zero overhead when split not triggered (INT_MAX sentinel).
-
-### Kernel CG Overhead Analysis
-Profiled persistent kernel at 1k-8k tokens (90% decode@kv512 + 10% prefill):
-
-| Tokens | Kernel | CG saves ~50μs |
-|--------|--------|----------------|
-| 1024 | 0.68ms | **7.4%** |
-| 2048 | 1.27ms | **3.9%** |
-| 4096 | 5.05ms | 1.0% |
-| 8192 | 10.07ms | 0.5% |
-
-CG overhead savings meaningful at ≤2048 tokens. At 4k+, kernel dominates.
-
----
-
-## Server-Level Results
-
-*(Moved to consolidated table below: "Server Results: LPT+CG29 vs trueDMC")*
-
-**P99 ITL: noCG is lower on WL2-6** (216-266ms vs CG's 231-318ms). CG padding adds 10-13% extra compute on worst-case steps. WL1 is the exception — CG's P99 (173ms) beats noCG (468ms) because CG eliminates the run() overhead that dominates WL1's short-output decode steps.
-
-### WL1-6 Throughput (mixed rates, N=400, CG25)
-LPT+CG = persistent LPT kernel + mixed CG25 (25 sizes, max 4096, ~1.79GB). All runs same session, `--mem-fraction-static 0.85`.
-
-| WL | Input | Output | Rate | LPT+CG total | LPT noCG total | trueDMC total | CG benefit | LPT+CG vs DMC |
-|----|------:|-------:|-----:|-------------:|---------------:|--------------:|-----------:|---------------:|
-| 1 | 4096 | 1024 | 8 | **15,439** | 13,459 | 12,974 | **+14.7%** | **+19.0%** |
-| 2 | 8192 | 2048 | 4 | **10,610** | 10,584 | 10,304 | +0.2% | **+3.0%** |
-| 3 | 12000 | 1024 | 4 | **15,425** | 15,354 | 14,705 | +0.5% | **+4.9%** |
-| 4 | 16384 | 1024 | 3 | **15,121** | 15,009 | 14,171 | +0.7% | **+6.7%** |
-| 5 | 4096 | 4096 | 6 | **6,507** | 6,480 | 6,375 | +0.4% | **+2.1%** |
-| 6 | 6000 | 6000 | 3 | **4,720** | 4,714 | 4,645 | +0.1% | **+1.6%** |
-
-**Latency (CG25, mixed rates):**
-
-| WL | LPT+CG TTFT med | LPT noCG TTFT med | trueDMC TTFT med | LPT+CG Mean ITL | trueDMC Mean ITL | LPT+CG P99 ITL | LPT noCG P99 ITL | trueDMC P99 ITL |
-|----|----------------:|-----------------:|-----------------:|-----------------:|-----------------:|----------------:|-----------------:|----------------:|
-| 1 | **303ms** | 3,600ms | 6,306ms | **34ms** | 44ms | **180ms** | 485ms | 527ms |
-| 2 | **25,934ms** | 26,618ms | 28,513ms | **33ms** | 35ms | **218ms** | 202ms | 229ms |
-| 3 | **22,065ms** | 23,233ms | 25,409ms | **43ms** | 46ms | 320ms | **244ms** | 266ms |
-| 4 | **41,464ms** | 41,838ms | 48,489ms | **45ms** | 48ms | 301ms | **265ms** | 291ms |
-| 5 | 50,422ms | 50,937ms | 53,150ms | **27ms** | 28ms | 116ms | **101ms** | 116ms |
-| 6 | 105,056ms | 105,539ms | 108,174ms | **29ms** | 29ms | **113ms** | **98ms** | 119ms |
-
-**Key findings:**
-1. **LPT+CG beats true DMC on ALL workloads**: WL1 +19.0%, WL4 +6.7%, WL3 +4.9%, WL2 +3.0%, WL5 +2.1%, WL6 +1.6%.
-2. **Mixed CG is the main WL1 win**: CG benefit = +14.7% throughput. Without CG, LPT still beats DMC (+3.7%).
-3. **WL1 TTFT 21x better than DMC**: 303ms vs 6,306ms. Mixed CG eliminates Python run() overhead.
-4. **Mean ITL**: LPT+CG lower on all workloads (27-45ms vs 28-48ms).
-5. **P99 ITL**: LPT+CG wins big on WL1 (180ms vs 527ms). WL3 slightly worse (320ms vs 266ms) — CG padding: 51/200 replays pad 3073-4095 tokens to 3584/4096 (10-13% waste). Inherent CG tradeoff.
-
-**NOTE**: Previous "DMC" benchmarks were invalid — mixed CG capture always used `BatchAttention` (persistent kernel) regardless of `use_persistent` flag. Fixed by using `SGLANG_DISABLE_MIXED_CG=1` for true DMC baseline.
-
-### ShareGPT Benchmark
-(Qwen3-8B, `--reasoning-parser qwen3`, `--sharegpt-output-len 4096`, N=400, rate=4)
-
-| Config | Total tok/s | Out tok/s | TTFT med | Mean ITL | P99 ITL |
-|--------|------------|-----------|----------|----------|---------|
-| LPT+CG25 | **4,962** | **4,325** | **40,767ms** | **36ms** | **67ms** |
-| DMC | 4,794 | 4,178 | 53,298ms | 41ms | 96ms |
-
-LPT+CG vs DMC: +3.5% throughput, -23.5% TTFT, -12% mean ITL, -30% P99 ITL.
-
-### Mixed CG Size Optimization
-
-**CG19 → CG25 → CG29 progression:**
-
-CG19 (19 sizes, ~1.51GB): `[1,4,8,16,32,64,128,256,384,512,768,1024,1280,1536,1792,2048,2560,3072,4096]`
-
-Data-driven optimization: instrumented `_replay_prepare_mixed` with `SGLANG_LOG_MIXED_CG_PADDING=1`, collected 200 mixed CG replays per WL. Greedy selection by real waste reduction:
-
-| Rank | Size | Waste saved | Reason |
-|------|------|-------------|--------|
-| 1 | **3584** | 72,704 (28%) | Splits 3072→4096 gap (1024) |
-| 2 | **2816** | 18,688 (7%) | Splits 2560→3072 gap (512) |
-| 3 | **2304** | 13,056 (5%) | Splits 2048→2560 gap (512) |
-| 4 | 640 | 4,992 (2%) | Splits 512→768 gap (256) |
-| 5 | 1408 | 4,736 (2%) | Splits 1280→1536 gap (256) |
-| 6 | 1920 | 4,736 (2%) | Splits 1792→2048 gap (256) |
-
-CG25 = CG19 + {3584, 2816, 2304, 640, 1408, 1920} = 25 sizes, ~1.79GB. Padding: 11% → 6.5%.
-CG29 = CG25 + {3200, 3456, 3712, 3968} = 29 sizes, ~1.98GB. Fills 3072-4096 with 128-token granularity. Padding: 6.5% → 4.3%.
-
-**CG evolution** (all measured at rate=8 except CG19/CG25 which used mixed rates):
-- CG19 (19 sizes, ~1.51GB, padding 11%) → CG25 (+6 sizes, ~1.79GB, padding 6.5%) → **CG29** (+4 more in 3072-4096, ~1.98GB, **padding 4.3%**)
-- CG24 experiment (no 4096): hurt WL1 by -6%. 4096 needed for large mixed batches.
-
-### Server Stress Test Results: LPT+CG29 vs DMC (H100 80GB, Qwen3-8B, rate=8 all WLs)
-
-* **DMC** = default mixed chunk with batch prefill kernel (no persistent, no mixed CG).
-* **CG** = CUDA graph (CG29 = 29 sizes, max 4096, ~1.98GB, padding 4.3%).
-* Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / manual `bench_serving` at rate=8, N=400.
-
-**Throughput (tok/s):**
-| WL | Input | Output | LPT+CG29 total | LPT noCG total | DMC total | CG benefit | CG29 vs DMC |
-|----|------:|-------:|----------------:|---------------:|--------------:|-----------:|------------:|
-| 1 | 4096 | 1024 | **15,507** | 13,515 | 13,022 | **+14.7%** | **+19.1%** |
-| 2 | 8192 | 2048 | **10,755** | 10,692 | 10,393 | +0.6% | **+3.5%** |
-| 3 | 12000 | 1024 | **15,629** | 15,597 | 14,912 | +0.2% | **+4.8%** |
-| 4 | 16384 | 1024 | **15,218** | 15,054 | 14,251 | +1.1% | **+6.8%** |
-| 5 | 4096 | 4096 | **6,602** | 6,531 | 6,431 | +1.1% | **+2.7%** |
-| 6 | 6000 | 6000 | **4,728** | 4,719 | 4,671 | +0.2% | **+1.2%** |
-
-**Latency:**
-| WL | CG29 TTFT med | noCG TTFT med | DMC TTFT med | CG29 Mean ITL | noCG Mean ITL | DMC Mean ITL | CG29 P99 ITL | noCG P99 ITL | DMC P99 ITL |
-|----|---------------:|--------------:|-------------:|--------------:|--------------:|-------------:|-------------:|-------------:|------------:|
-| 1 | **284ms** | 3,469ms | 5,511ms | **34ms** | 42ms | 44ms | **173ms** | 468ms | 536ms |
-| 2 | **47,196ms** | 47,382ms | 49,826ms | **34ms** | **34ms** | 35ms | 231ms | **216ms** | 235ms |
-| 3 | **43,542ms** | 43,134ms | 46,415ms | **44ms** | **44ms** | 46ms | 318ms | **244ms** | 263ms |
-| 4 | **81,765ms** | 82,433ms | 88,004ms | **45ms** | **45ms** | 48ms | 296ms | **266ms** | 292ms |
-| 5 | **57,874ms** | 58,435ms | 59,637ms | **28ms** | **28ms** | 28ms | 122ms | **103ms** | 117ms |
-| 6 | **137,571ms** | 138,779ms | 140,771ms | **29ms** | **29ms** | 29ms | 114ms | **104ms** | 119ms |
-
-**Key findings:**
-1. **LPT+CG29 beats DMC on ALL workloads**: +19.1% (WL1), +6.8% (WL4), +4.8% (WL3), +3.5% (WL2), +2.7% (WL5), +1.2% (WL6).
-2. **WL1 TTFT: CG29 284ms vs noCG 3,469ms = 12.2x improvement.** Mixed CG eliminates Python run() overhead (~2.4ms per mixed batch) for chunked prefill steps. nsys shows 3,132 plan() calls eliminated by CG replay.
-3. **Mean ITL**: CG29 lower than DMC on all WLs (27-45ms vs 28-48ms).
-4. **P99 ITL tradeoff**: CG29 wins WL1 (173ms vs noCG 468ms, DMC 536ms). noCG has lower P99 on WL2-6 (216-266ms vs CG's 231-318ms) — CG padding adds 10-13% extra compute on worst-case steps. The throughput gain outweighs this on average.
-
-**ShareGPT (thinking, rate=4, max_out=4096, N=400):**
-| Config | Total tok/s | TTFT med | Mean ITL | P99 ITL |
-|--------|------------|----------|----------|---------|
-| LPT+CG25 | **4,962** | **40,767ms** | **36ms** | **67ms** |
-| LPT+CG29 | **4,975** | **40,756ms** | **36ms** | **67ms** |
-| trueDMC | 4,794 | 53,298ms | 41ms | 96ms |
-| **Δ CG29 vs DMC** | **+3.8%** | **-23.6%** | **-12%** | **-30%** |
-
-CG25≈CG29 (identical within noise). First CG29 run was outlier from cold JIT cache.
-
-**WL1-6 rerun** (flashinfer `d9c01c81` with ratio threshold, same sglang): all within 2% of previous results. Ratio threshold has zero measurable server overhead.
-(CG25: sglang `090b86f5`, flashinfer `02b068f0`. CG29: flashinfer `d9c01c81`.)
-
-### POD+CG vs LPT+CG29 (WL1, WL3, rate=8, N=400)
-
-POD = `SGLANG_FLASHINFER_USE_POD=1` (separate prefill+decode kernels) + `--enable-piecewise-cuda-graph`.
-flashinfer `d9c01c81`.
-
-| WL | Config | Total tok/s | TTFT med | Mean ITL | P99 ITL |
-|----|--------|:-----------:|:---------:|:---------:|:---------:|
-| 1 | LPT+CG29 | **~15,400** | **291ms** | **34ms** | **174ms** |
-| 1 | POD+CG | ~13,300 | 5,390ms | 43ms | 437ms |
-| 3 | LPT+CG29 | **~15,400** | **42,236ms** | 43ms | 298ms |
-| 3 | POD+CG | ~14,500 | 46,394ms | 45ms | **284ms** |
-
-**LPT+CG29 dominates WL1**: 18x better TTFT (mixed CG eliminates per-batch Python plan() overhead for chunked prefill), 2.5x better P99. **WL3**: LPT has better throughput (+6%), POD has slightly better P99 (284 vs 298ms). POD's main overhead: double plan() calls + GPU-CPU sync for index splitting in pod_forward per layer.
-
-**nsys overhead analysis** (WL1, 50 prompts, `pod_server.nsys-rep` vs `lpt_cg29_wl1.nsys-rep`):
-
-| Metric | LPT+CG29 | POD+PCG | Note |
-|--------|-----------|---------|------|
-| Attention GPU time | 694ms (618 persistent + 76 paged) | 427ms (237 prefill + 113 POD-decode + 77 paged) | POD 38% less |
-| cudaDeviceSynchronize | **2,812ms** (1,869 calls) | 1,162ms (2,448 calls) | plan() GPU→CPU sync |
-| cudaStreamSynchronize | 0ms | **2,360ms** (3,334 calls) | **POD plan() GPU-CPU sync per layer** |
-| cudaMemcpyAsync | 2,650ms | 3,312ms (+25%) | POD double plan indexing |
-| Total sync overhead | 2,812ms | 3,522ms | POD 25% more total |
-
-**POD's cudaStreamSynchronize (2,360ms) = 553% of its attention GPU time.** This is the dominant bottleneck — POD splits `qo_indptr_buf` into separate prefill/decode index arrays (cumsum, slice, `.to(device)`) per layer, requiring GPU-CPU sync each time. LPT reads the same `qo_indptr_buf` but passes it directly to the fused kernel without splitting — no per-layer sync needed.
-
-### Nebius-SWE-like workload (random in=9053, out=3726, N=200)
-
-flashinfer `d9c01c81`. Nebius-SWE median: 9K input, 3.7K output (2.4:1 prefill-heavy).
-
-| Config | Rate | Throughput | TTFT med | Mean ITL | P99 ITL |
-|--------|-----:|:---------:|:---------:|:---------:|:---------:|
-| LPT+CG29 | 2 | 0.99 req/s | 340ms | 27.40ms | 155ms |
-| DMC | 2 | 0.99 req/s | 340ms | 27.37ms | 155ms |
-| PP+PCG | 2 | 0.98 req/s | 330ms | 27.58ms | 153ms |
-| LPT+CG29 | 4 | 1.02 req/s | 11,014ms | 28.67ms | 164ms |
-| DMC | 4 | 1.02 req/s | 11,046ms | 28.68ms | 164ms |
-| PP+PCG | 4 | 1.02 req/s | 11,310ms | 28.81ms | 169ms |
-| LPT+CG29 | 8 | 1.03 req/s | 18,575ms | 28.95ms | 184ms |
-
-**All configs identical** — Nebius-SWE (9K+3.7K) is compute-bound at ~1 req/s. Scheduling strategy has no effect when prefill dominates and the system is fully saturated. Differences emerge only with shorter prefills (WL1-6) where decode overlapping matters.
-
-### P99 ITL Lifecycle Analysis (WL1, 200 prompts, rate=8)
-
-Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares batch conditions during P99-hitting steps vs normal steps.
-
-| | LPT+CG29 P99 steps | LPT normal | PP+PCG P99 steps | PP normal |
-|--|:---:|:---:|:---:|:---:|
-| P99 ITL threshold | 133ms | — | 191ms | — |
-| decode_bs | **91** | 55 | 88 | 87 |
-| prefill_tokens | **5,153** | 3,476 | 2,893 | 2,896 |
-| new_token_ratio | 0.160 | 0.240 | 0.143 | 0.144 |
-| is_mixed (%) | **37%** | 1% | 0% | 0% |
-
-**LPT P99 is driven by mixed batches with high decode_bs + high prefill_tokens** — 37% of P99 steps are mixed (vs 1% normal). High prefill admission (low ntr 0.16 vs 0.24) causes decode pressure. **Confirms CG over-admission hypothesis.**
-
-**PP P99 steps have identical batch conditions to normal steps** — decode_bs, prefill_tokens, and ntr are the same. PP's higher P99 (191ms) is NOT from scheduling but from chunked prefill blocking decode within each step (no mixed-chunk overlap).
-
-### PP WL3 P99 Regression Root Cause (lifecycle tracking)
-
-| | LPT+CG29 WL3 | PP+PCG WL3 |
-|--|:---:|:---:|
-| P99 ITL | 306ms | **720ms** |
-| Max ITL | 473ms | **21,644ms** |
-| P99 decode_bs | 59 | 59 |
-| P99 prefill_tokens | 4,420 | 4,185 |
-| Worst spike cause | decode_bs=66, prefill=7677 | **decode_bs=64, prefill=259, ntr=0.632** |
-
-**PP's worst spikes (21.6s!) happen early** (ntr=0.632) from decode starvation: after a request gets TTFT, the scheduler goes back to prefilling a backlog of newly-arrived requests (rate=8 × 12K input = continuous prefill work). Decode only runs when no prefills are pending, so already-prefilled requests starve for 21.6s while the scheduler drains the prefill queue. LPT's mixed chunk interleaves decode tokens within each prefill step, keeping max ITL at 473ms.
-
-**Why PP works on WL5-6 but not WL3-4**: WL5-6 have 4K-6K input (≤1 chunk per request). The prefill backlog clears quickly, so decode starvation is brief. WL3-4 have 12K-16K input (2-3 chunks per request) — at rate=8, new prefill work arrives faster than the scheduler can clear it, causing prolonged decode starvation.
-
----
-
 ## Sync-free plan + measured mixed-kernel gate (2026-07-30)
 
 Goal: eliminate the low-concurrency regressions of the persistent overlap
@@ -950,6 +269,379 @@ serving-level DMC comparisons.
 
 ## Open TODOs
 
+- [ ] **Reduce β (non-overlappable fraction, 0.53)**: NCU a balanced
+  composition to attribute the unrealized half of the overlap (reduction
+  pass, queue-switch granularity, or L2 interference); each point of β is
+  direct overlap efficiency.
+- [ ] **Gate table: sample long-prefix chunks over blended pools** (the one
+  remaining unswept region) and refresh gqa4 with the blended sweep; also
+  root-cause the storm-phase retraction cascade archived in
+  `h800_mw_agent_plus_shortchat/run1_regressed/`.
+- [ ] **Remaining mixed-workload suite scenarios**: `rag_plus_agent`,
+  `long_cot`, `agent_plus_chat` (`run_mixed_workloads.py`) to complete the
+  workload matrix.
+- [ ] **GPU-side LPT plan kernel** [DEPRIORITIZED 2026-08-06]: the sync-free
+  host plan removed this from the critical path (plan is hidden by
+  overlap-scheduler run-ahead); revisit only if nsys shows plan CPU cost
+  bounding step rate.
+- [x] **EDF end-to-end A/B with the analytic model**: done 2026-08-11
+  (`multiturn_slo_clean`, both tenants rate-limited, node throughput matched
+  to four digits across arms): kernel alone codex pooled P99 ITL −28.3%;
+  adding the analytic-model controller pins turns pooled P99 at 100.24 ms
+  against the 100 ms budget and cuts request-max P99 −60% on both tenants.
+  See `tasks/realistic_workload_analysis.md`.
+- [x] Realistic workload analysis — see `tasks/realistic_workload_analysis.md`
+
+---
+
+## Historical results (H100, Qwen3-8B, 2026-03/04 — pre-gate stack)
+
+The two sections below predate the sync-free plan, the measured kernel
+gate, and the H800 phase. They ran on H100 with Qwen3-8B at older sglang/
+flashinfer commits, and their runner (`run_one_config.sh`) set
+`SGLANG_FLASHINFER_USE_PERSISTENT` explicitly, so the DMC baselines here
+are honest. They are retained as machine-specific history; current
+paper-facing results are in the section above and in
+`tasks/realistic_workload_analysis.md`.
+
+## Kernel-Level Results (H100 era)
+
+### LPT vs POD vs Static Persistent 3-way comparison
+(H100 80GB, Qwen3-8B heads: num_kv=8 num_qo=32 dim=128, `bench_mixed_attention.py`, 100 decode each)
+
+| Case | Workload | POD (ms) | LPT (ms) | Static (ms) | LPT over POD | LPT over Static |
+|------|----------|----------|----------|-------------|-------------|-----------------|
+| 1 | 100d@kv2k + 1p@512 | 0.30 | 0.31 | 0.30 | 0.97x | 0.97x |
+| 2 | 100d@kv2k + 1p@1536 | 0.32 | 0.36 | 0.37 | 0.89x | 1.03x |
+| 3 | 100d@kv2k + 2p@2048 | 0.44 | 0.48 | 0.52 | 0.92x | **1.09x** |
+| 4 | 100d@kv2k + 1p@2048 | 0.34 | 0.38 | 0.42 | 0.89x | **1.11x** |
+| 5 | 100d@kv4k + 1p@4096 | 0.81 | 0.82 | 0.97 | 0.99x | **1.18x** |
+| 6 | 100d@kv8k + 1p@4096 | 1.28 | **1.24** | 1.51 | **1.03x** | **1.22x** |
+| 7 | 100d@kv8k + 1p@6000 | 1.85 | 1.89 | 2.18 | 0.98x | **1.15x** |
+| **8** | **95d@kv2k+5d@kv24k+1p@2k** *(split-KV decode)* | 0.69 | **0.64** | 0.71 | **1.08x** | **1.11x** |
+| **9** | **100d@kv2k+1p@kv24k,q4k** *(split-KV prefill, ratio≥2→static)* | 4.56 | 4.67 | 4.67 | 0.98x | **1.00x** |
+| 10 | 100d@kv2k+1p@kv12k,q4k *(ratio≥2→static)* | 2.14 | 2.17 | 2.17 | 0.99x | **1.00x** |
+
+(Cases 1-8: flashinfer `a74bb2d4`, `bench_mixed_attention.py`. Cases 9-10: ratio threshold auto-fallback to static.)
+
+### LPT vs BatchPrefill (DMC's kernel) — the ACTUAL comparison that matters
+(flashinfer `cfca7c6f`, `bench_mixed_attention.py`, no keepalive, 2026-04-13)
+
+The original table compared LPT vs POD vs Static (all persistent variants). But DMC uses `BatchPrefillWithPagedKVCacheWrapper` — a different kernel entirely. Here is the direct comparison:
+
+| Case | Workload | BatchPrefill (ms) | LPT (ms) | LPT speedup |
+|------|----------|-------------------|----------|-------------|
+| 1 | 100d@kv2k+1p@512 | 0.32 | 0.32 | 1.00x |
+| 2 | 100d@kv2k+1p@1536 | 0.34 | 0.36 | 0.94x |
+| 3 | 100d@kv2k+2p@2048 | 0.56 | 0.49 | **1.14x** |
+| 4 | 100d@kv2k+1p@2048 | 0.46 | 0.38 | **1.21x** |
+| 5 | 100d@kv4k+1p@4096 | 1.11 | 0.83 | **1.34x** |
+| 6 | 100d@kv8k+1p@4096 | 1.75 | 1.27 | **1.38x** |
+| 7 | 100d@kv8k+1p@6000 | 2.49 | 1.91 | **1.30x** |
+| 8 | split-KV decode | 1.42 | 0.63 | **2.25x** |
+| 9 | split-KV prefill 24k | 4.67 | 4.62 | 1.01x |
+| 10 | split-KV prefill 12k | 2.34 | 2.21 | 1.06x |
+
+**LPT is 14-38% faster on Cases 3-7 and 2.25x on split-KV decode.** (The server-level gap that motivated this table was later resolved: the plan()-synchronize stall and the win-region composition — see the sync-free plan + gate section.)
+
+Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Cases 6,8 over POD.** LPT beats static by 1.03-1.22x on Cases 2-8. **Cases 9-10: ratio threshold kicks in → static, 1.00x (zero regression).** Still loses to POD on Cases 2,4 (0.89x) — cause TBD (not cooperative launch overhead; single CUDA stream means all SMs available).
+
+**POD gap on Cases 2,4 (0.89x)**: LPT kernel=362μs vs POD=340μs. NOT from cooperative launch (single stream). NCU Case 4 stall breakdown (flashinfer `d9c01c81`):
+
+| Stall reason | Cycles/instr | % of total (10.42 cyc) |
+|-------------|:---:|:---:|
+| **wait (grid.sync)** | **1.78** | **17.1%** |
+| long_scoreboard (DRAM) | 1.62 | 15.6% |
+| no_instruction | 1.28 | 12.3% |
+| short_scoreboard (smem) | 1.14 | 10.9% |
+| barrier (__syncthreads) | 0.84 | 8.1% |
+
+**grid.sync() is the #1 stall — 17% of kernel time** (under NCU instrumentation). Attempted fix: replaced grid.sync with per-output-row semaphore barriers (flashinfer `a6ae8e32`). **Result: NO improvement** — barrier kernel matches cooperative exactly on all cases. The 17% NCU stall is likely inflated by instrumentation replay, or barrier reset + acquire-release overhead equals grid.sync cost. **The POD gap is inherent to the fused two-runner architecture** (shared memory reuse, runner switching, reduction overhead), not to any sync mechanism.
+
+### LPT Load-Balance Profiling
+Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (warmup + L2 flush). Qwen3-8B heads (8/32/128). flashinfer `daf646c3`, H100 80GB. Verified ±1-2% match with `bench_mixed_attention.py`.
+
+| Case | Workload | Static kernel | LPT kernel | LPT speedup | Static max sync | LPT max sync |
+|------|----------|-------------|----------|---------|----------------|-------------|
+| 1 | 100d@kv2k + 1p@512 | 0.302ms | 0.310ms | 0.97x | 26μs | 30μs |
+| 2 | 100d@kv2k + 1p@1536 | 0.368ms | 0.355ms | 1.04x | 21μs | 17μs |
+| 3 | 100d@kv2k + 2p@2048 | 0.519ms | **0.478ms** | **1.09x** | 25μs | **13μs** |
+| 4 | 100d@kv2k + 1p@2048 | 0.423ms | **0.377ms** | **1.12x** | 23μs | 20μs |
+| 5 | 100d@kv4k + 1p@4096 | 0.969ms | **0.822ms** | **1.18x** | 42μs | **16μs** |
+| 6 | 100d@kv8k + 1p@4096 | 1.507ms | **1.245ms** | **1.21x** | 88μs | 112μs |
+| 7 | 100d@kv8k + 1p@6000 | 2.175ms | **1.885ms** | **1.15x** | 1,510μs | **52μs** |
+| **8** | **95d@kv2k+5d@kv24k+1p@2k** *(split-KV decode)* | 0.708ms | **0.665ms** | **1.06x** | 176μs | 150μs |
+| **9** | **100d@kv2k+1p@kv24k,q4k** *(split-KV prefill)* | 4.335ms | 4.736ms | 0.92x | 121μs | 1,933μs |
+
+(Max sync converted from clock cycles at 1.83 GHz.)
+
+**Key findings**: LPT wins Cases 3-7 (9-21% speedup). Split-KV decode (Case 8) gets 6%. Split-KV prefill (Case 9) regresses 8%.
+
+**Case 9 regression investigation**:
+- Consistent ~8% across kv12k/16k/24k (0.92x, 0.93x, 0.92x vs static)
+- FA3-style stride sweep (commit `1fe946aa`, flashinfer `persistent_overlap_`):
+
+  Auto-stride = gridDim.y/2 static initial tiles (FA3-style, `is_first_runner` from per-SM `cta_counter`, predicated `atomicAdd(counter, 0/1)`). Zero improvement — atomic contention is not the bottleneck.
+- NCU: same instructions (0.3% diff), SM Busy 51.8% vs 55.9%, Warp Cycles/Instr 6.45 vs 5.99. grid.sync() max wait 940K vs 225K cycles.
+- Perfetto traces: `profile_logs/case9_lpt.perfetto-trace`, `case9_static.perfetto-trace`
+- Realistic split-KV prefill sweep (single + multi-request, commits `1fe946aa`..`e1d28595b`):
+
+| Config | Static (ms) | LPT (ms) | LPT speedup |
+|--------|------------|----------|-------------|
+| 100d@kv2k+1p@kv8k,q4k | 1.415 | 1.471 | 0.96x |
+| 100d@kv2k+1p@kv12k,q4k | 2.083 | 2.252 | 0.92x |
+| 100d@kv2k+1p@kv12k,q8k | 3.223 | 3.331 | 0.97x |
+| 100d@kv2k+1p@kv16k,q8k | 4.813 | 5.017 | 0.96x |
+| 100d@kv2k+4p@q2k,kv{2k,4k,8k,12k} | 2.320 | 2.488 | 0.93x |
+| 100d@kv2k+2p@q4k,kv{4k,12k} | 2.474 | 2.657 | 0.93x |
+| 100d@kv2k+8p@q1k,kv{1k..8k} | 1.787 | 1.937 | 0.92x |
+| 100d@kv4k+4p@q2k,kv{2k,4k,8k,12k} | 2.575 | 2.662 | 0.97x |
+| 100d@kv4k+2p@q4k,kv{4k,12k} | 2.729 | 2.806 | 0.97x |
+
+- **Root cause & fix**: Compute-bound prefill makes dynamic scheduling overhead pure loss. When prefill compute dominates, LPT's atomicAdd + tile mapping adds overhead with no load-balance opportunity to recoup it.
+  - **Fix** (commit `a74bb2d4`): When `prefill_kv_compute / decode_kv_compute >= 2.0`, set `flipped_schedule=false` (static for both tasks). Threshold found empirically:
+    - ratio ≤ 0.92 → LPT wins (1.03-1.22x)
+    - ratio ~2.0 → neutral (0.99x)
+    - ratio ≥ 3.5 → LPT loses (0.91-0.97x)
+  - **Result** (commit `a74bb2d4`, script: inline python with `bench_gpu_time`):
+
+| Config | Static (ms) | Auto (ms) | Mode | Speedup |
+|--------|------------|----------|------|---------|
+| Case1: 100d@kv2k+1p@512 | 0.303 | 0.310 | LPT | 0.98x |
+| Case2: 100d@kv2k+1p@1536 | 0.368 | 0.356 | LPT | 1.03x |
+| Case3: 100d@kv2k+2p@2048 | 0.518 | 0.477 | LPT | **1.09x** |
+| Case4: 100d@kv2k+1p@2048 | 0.423 | 0.379 | LPT | **1.12x** |
+| Case5: 100d@kv4k+1p@4096 | 0.968 | 0.822 | LPT | **1.18x** |
+| Case6: 100d@kv8k+1p@4096 | 1.506 | 1.239 | LPT | **1.22x** |
+| Case7: 100d@kv8k+1p@6000 | 2.174 | 1.876 | LPT | **1.16x** |
+| Case8: 95d@kv2k+5d@kv24k+1p@2k | 0.707 | 0.694 | LPT | 1.02x |
+| Case9: 100d@kv2k+1p@kv24k,q4k | 4.663 | 4.666 | static | **1.00x** |
+| 100d@kv2k+1p@kv8k,q4k | 1.446 | 1.440 | static | 1.00x |
+| 100d@kv2k+1p@kv12k,q4k | 2.171 | 2.171 | static | 1.00x |
+| 100d@kv2k+1p@kv12k,q8k | 3.400 | 3.411 | static | 1.00x |
+| 100d@kv2k+1p@kv16k,q8k | 5.151 | 5.163 | static | 1.00x |
+| 100d@kv2k+4p@q2k,kv{2k,4k,8k,12k} | 2.484 | 2.487 | static | 1.00x |
+| 100d@kv2k+8p@q1k,kv{1k..8k} | 1.909 | 1.911 | static | 1.00x |
+| 100d@kv4k+4p@q2k,kv{2k,4k,8k,12k} | 2.671 | 2.683 | static | 1.00x |
+
+**Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k, LPT assigns largest causal tiles first → early CTAs get top q_tiles (16K KV each), late CTAs get bottom q_tiles (~32 tokens). Kernel time tied (13.95 vs 14.0ms) — compute dominates.
+
+### Split-KV A/B Comparison
+Split enabled vs disabled within LPT, 2x kv_limit. Speedup = (nosplit - split) / nosplit.
+
+| Case | Split | No-split | Split speedup |
+|------|-------|----------|---------|
+| 3d@64k+1p@2k | **0.681ms** | 1.659ms | **59%** |
+| 5d@32k+1p@4k | 1.228ms | 1.223ms | 0% |
+| 10d@16k+1p@4k | 1.298ms | 1.303ms | 0% |
+| 20d@8k+2p@2k | 0.932ms | 0.931ms | 0% |
+| 100d@2k+2p@2k | 1.036ms | 1.030ms | 0% |
+
+Split-KV with 2x kv_limit: 59% speedup on severe imbalance (3d@64k), zero regression on balanced workloads. NCU confirms zero overhead when split not triggered (INT_MAX sentinel).
+
+### Kernel CG Overhead Analysis
+Profiled persistent kernel at 1k-8k tokens (90% decode@kv512 + 10% prefill):
+
+| Tokens | Kernel | CG saves ~50μs |
+|--------|--------|----------------|
+| 1024 | 0.68ms | **7.4%** |
+| 2048 | 1.27ms | **3.9%** |
+| 4096 | 5.05ms | 1.0% |
+| 8192 | 10.07ms | 0.5% |
+
+CG overhead savings meaningful at ≤2048 tokens. At 4k+, kernel dominates.
+
+---
+
+## Server-Level Results (H100 era)
+
+### WL1-6 Throughput (mixed rates, N=400, CG25)
+LPT+CG = persistent LPT kernel + mixed CG25 (25 sizes, max 4096, ~1.79GB). All runs same session, `--mem-fraction-static 0.85`.
+
+| WL | Input | Output | Rate | LPT+CG total | LPT noCG total | trueDMC total | CG benefit | LPT+CG vs DMC |
+|----|------:|-------:|-----:|-------------:|---------------:|--------------:|-----------:|---------------:|
+| 1 | 4096 | 1024 | 8 | **15,439** | 13,459 | 12,974 | **+14.7%** | **+19.0%** |
+| 2 | 8192 | 2048 | 4 | **10,610** | 10,584 | 10,304 | +0.2% | **+3.0%** |
+| 3 | 12000 | 1024 | 4 | **15,425** | 15,354 | 14,705 | +0.5% | **+4.9%** |
+| 4 | 16384 | 1024 | 3 | **15,121** | 15,009 | 14,171 | +0.7% | **+6.7%** |
+| 5 | 4096 | 4096 | 6 | **6,507** | 6,480 | 6,375 | +0.4% | **+2.1%** |
+| 6 | 6000 | 6000 | 3 | **4,720** | 4,714 | 4,645 | +0.1% | **+1.6%** |
+
+**Latency (CG25, mixed rates):**
+
+| WL | LPT+CG TTFT med | LPT noCG TTFT med | trueDMC TTFT med | LPT+CG Mean ITL | trueDMC Mean ITL | LPT+CG P99 ITL | LPT noCG P99 ITL | trueDMC P99 ITL |
+|----|----------------:|-----------------:|-----------------:|-----------------:|-----------------:|----------------:|-----------------:|----------------:|
+| 1 | **303ms** | 3,600ms | 6,306ms | **34ms** | 44ms | **180ms** | 485ms | 527ms |
+| 2 | **25,934ms** | 26,618ms | 28,513ms | **33ms** | 35ms | **218ms** | 202ms | 229ms |
+| 3 | **22,065ms** | 23,233ms | 25,409ms | **43ms** | 46ms | 320ms | **244ms** | 266ms |
+| 4 | **41,464ms** | 41,838ms | 48,489ms | **45ms** | 48ms | 301ms | **265ms** | 291ms |
+| 5 | 50,422ms | 50,937ms | 53,150ms | **27ms** | 28ms | 116ms | **101ms** | 116ms |
+| 6 | 105,056ms | 105,539ms | 108,174ms | **29ms** | 29ms | **113ms** | **98ms** | 119ms |
+
+**Key findings:**
+1. **LPT+CG beats true DMC on ALL workloads**: WL1 +19.0%, WL4 +6.7%, WL3 +4.9%, WL2 +3.0%, WL5 +2.1%, WL6 +1.6%.
+2. **Mixed CG is the main WL1 win**: CG benefit = +14.7% throughput. Without CG, LPT still beats DMC (+3.7%).
+3. **WL1 TTFT 21x better than DMC**: 303ms vs 6,306ms. Mixed CG eliminates Python run() overhead.
+4. **Mean ITL**: LPT+CG lower on all workloads (27-45ms vs 28-48ms).
+5. **P99 ITL**: LPT+CG wins big on WL1 (180ms vs 527ms). WL3 slightly worse (320ms vs 266ms) — CG padding: 51/200 replays pad 3073-4095 tokens to 3584/4096 (10-13% waste). Inherent CG tradeoff.
+
+**NOTE**: Previous "DMC" benchmarks were invalid — mixed CG capture always used `BatchAttention` (persistent kernel) regardless of `use_persistent` flag. Fixed by using `SGLANG_DISABLE_MIXED_CG=1` for true DMC baseline.
+
+### ShareGPT Benchmark
+(Qwen3-8B, `--reasoning-parser qwen3`, `--sharegpt-output-len 4096`, N=400, rate=4)
+
+| Config | Total tok/s | Out tok/s | TTFT med | Mean ITL | P99 ITL |
+|--------|------------|-----------|----------|----------|---------|
+| LPT+CG25 | **4,962** | **4,325** | **40,767ms** | **36ms** | **67ms** |
+| DMC | 4,794 | 4,178 | 53,298ms | 41ms | 96ms |
+
+LPT+CG vs DMC: +3.5% throughput, -23.5% TTFT, -12% mean ITL, -30% P99 ITL.
+
+### Mixed CG Size Optimization
+
+**CG19 → CG25 → CG29 progression:**
+
+CG19 (19 sizes, ~1.51GB): `[1,4,8,16,32,64,128,256,384,512,768,1024,1280,1536,1792,2048,2560,3072,4096]`
+
+Data-driven optimization: instrumented `_replay_prepare_mixed` with `SGLANG_LOG_MIXED_CG_PADDING=1`, collected 200 mixed CG replays per WL. Greedy selection by real waste reduction:
+
+| Rank | Size | Waste saved | Reason |
+|------|------|-------------|--------|
+| 1 | **3584** | 72,704 (28%) | Splits 3072→4096 gap (1024) |
+| 2 | **2816** | 18,688 (7%) | Splits 2560→3072 gap (512) |
+| 3 | **2304** | 13,056 (5%) | Splits 2048→2560 gap (512) |
+| 4 | 640 | 4,992 (2%) | Splits 512→768 gap (256) |
+| 5 | 1408 | 4,736 (2%) | Splits 1280→1536 gap (256) |
+| 6 | 1920 | 4,736 (2%) | Splits 1792→2048 gap (256) |
+
+CG25 = CG19 + {3584, 2816, 2304, 640, 1408, 1920} = 25 sizes, ~1.79GB. Padding: 11% → 6.5%.
+CG29 = CG25 + {3200, 3456, 3712, 3968} = 29 sizes, ~1.98GB. Fills 3072-4096 with 128-token granularity. Padding: 6.5% → 4.3%.
+
+**CG evolution** (all measured at rate=8 except CG19/CG25 which used mixed rates):
+- CG19 (19 sizes, ~1.51GB, padding 11%) → CG25 (+6 sizes, ~1.79GB, padding 6.5%) → **CG29** (+4 more in 3072-4096, ~1.98GB, **padding 4.3%**)
+- CG24 experiment (no 4096): hurt WL1 by -6%. 4096 needed for large mixed batches.
+
+### Server Stress Test Results: LPT+CG29 vs DMC (H100 80GB, Qwen3-8B, rate=8 all WLs)
+
+* **DMC** = default mixed chunk with batch prefill kernel (no persistent, no mixed CG).
+* **CG** = CUDA graph (CG29 = 29 sizes, max 4096, ~1.98GB, padding 4.3%).
+* Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / manual `bench_serving` at rate=8, N=400.
+
+**Throughput (tok/s):**
+| WL | Input | Output | LPT+CG29 total | LPT noCG total | DMC total | CG benefit | CG29 vs DMC |
+|----|------:|-------:|----------------:|---------------:|--------------:|-----------:|------------:|
+| 1 | 4096 | 1024 | **15,507** | 13,515 | 13,022 | **+14.7%** | **+19.1%** |
+| 2 | 8192 | 2048 | **10,755** | 10,692 | 10,393 | +0.6% | **+3.5%** |
+| 3 | 12000 | 1024 | **15,629** | 15,597 | 14,912 | +0.2% | **+4.8%** |
+| 4 | 16384 | 1024 | **15,218** | 15,054 | 14,251 | +1.1% | **+6.8%** |
+| 5 | 4096 | 4096 | **6,602** | 6,531 | 6,431 | +1.1% | **+2.7%** |
+| 6 | 6000 | 6000 | **4,728** | 4,719 | 4,671 | +0.2% | **+1.2%** |
+
+**Latency:**
+| WL | CG29 TTFT med | noCG TTFT med | DMC TTFT med | CG29 Mean ITL | noCG Mean ITL | DMC Mean ITL | CG29 P99 ITL | noCG P99 ITL | DMC P99 ITL |
+|----|---------------:|--------------:|-------------:|--------------:|--------------:|-------------:|-------------:|-------------:|------------:|
+| 1 | **284ms** | 3,469ms | 5,511ms | **34ms** | 42ms | 44ms | **173ms** | 468ms | 536ms |
+| 2 | **47,196ms** | 47,382ms | 49,826ms | **34ms** | **34ms** | 35ms | 231ms | **216ms** | 235ms |
+| 3 | **43,542ms** | 43,134ms | 46,415ms | **44ms** | **44ms** | 46ms | 318ms | **244ms** | 263ms |
+| 4 | **81,765ms** | 82,433ms | 88,004ms | **45ms** | **45ms** | 48ms | 296ms | **266ms** | 292ms |
+| 5 | **57,874ms** | 58,435ms | 59,637ms | **28ms** | **28ms** | 28ms | 122ms | **103ms** | 117ms |
+| 6 | **137,571ms** | 138,779ms | 140,771ms | **29ms** | **29ms** | 29ms | 114ms | **104ms** | 119ms |
+
+**Key findings:**
+1. **LPT+CG29 beats DMC on ALL workloads**: +19.1% (WL1), +6.8% (WL4), +4.8% (WL3), +3.5% (WL2), +2.7% (WL5), +1.2% (WL6).
+2. **WL1 TTFT: CG29 284ms vs noCG 3,469ms = 12.2x improvement.** Mixed CG eliminates Python run() overhead (~2.4ms per mixed batch) for chunked prefill steps. nsys shows 3,132 plan() calls eliminated by CG replay.
+3. **Mean ITL**: CG29 lower than DMC on all WLs (27-45ms vs 28-48ms).
+4. **P99 ITL tradeoff**: CG29 wins WL1 (173ms vs noCG 468ms, DMC 536ms). noCG has lower P99 on WL2-6 (216-266ms vs CG's 231-318ms) — CG padding adds 10-13% extra compute on worst-case steps. The throughput gain outweighs this on average.
+
+**ShareGPT (thinking, rate=4, max_out=4096, N=400):**
+| Config | Total tok/s | TTFT med | Mean ITL | P99 ITL |
+|--------|------------|----------|----------|---------|
+| LPT+CG25 | **4,962** | **40,767ms** | **36ms** | **67ms** |
+| LPT+CG29 | **4,975** | **40,756ms** | **36ms** | **67ms** |
+| trueDMC | 4,794 | 53,298ms | 41ms | 96ms |
+| **Δ CG29 vs DMC** | **+3.8%** | **-23.6%** | **-12%** | **-30%** |
+
+CG25≈CG29 (identical within noise). First CG29 run was outlier from cold JIT cache.
+
+**WL1-6 rerun** (flashinfer `d9c01c81` with ratio threshold, same sglang): all within 2% of previous results. Ratio threshold has zero measurable server overhead.
+(CG25: sglang `090b86f5`, flashinfer `02b068f0`. CG29: flashinfer `d9c01c81`.)
+
+### POD+CG vs LPT+CG29 (WL1, WL3, rate=8, N=400)
+
+POD = `SGLANG_FLASHINFER_USE_POD=1` (separate prefill+decode kernels) + `--enable-piecewise-cuda-graph`.
+flashinfer `d9c01c81`.
+
+| WL | Config | Total tok/s | TTFT med | Mean ITL | P99 ITL |
+|----|--------|:-----------:|:---------:|:---------:|:---------:|
+| 1 | LPT+CG29 | **~15,400** | **291ms** | **34ms** | **174ms** |
+| 1 | POD+CG | ~13,300 | 5,390ms | 43ms | 437ms |
+| 3 | LPT+CG29 | **~15,400** | **42,236ms** | 43ms | 298ms |
+| 3 | POD+CG | ~14,500 | 46,394ms | 45ms | **284ms** |
+
+**LPT+CG29 dominates WL1**: 18x better TTFT (mixed CG eliminates per-batch Python plan() overhead for chunked prefill), 2.5x better P99. **WL3**: LPT has better throughput (+6%), POD has slightly better P99 (284 vs 298ms). POD's main overhead: double plan() calls + GPU-CPU sync for index splitting in pod_forward per layer.
+
+**nsys overhead analysis** (WL1, 50 prompts, `pod_server.nsys-rep` vs `lpt_cg29_wl1.nsys-rep`):
+
+| Metric | LPT+CG29 | POD+PCG | Note |
+|--------|-----------|---------|------|
+| Attention GPU time | 694ms (618 persistent + 76 paged) | 427ms (237 prefill + 113 POD-decode + 77 paged) | POD 38% less |
+| cudaDeviceSynchronize | **2,812ms** (1,869 calls) | 1,162ms (2,448 calls) | plan() GPU→CPU sync |
+| cudaStreamSynchronize | 0ms | **2,360ms** (3,334 calls) | **POD plan() GPU-CPU sync per layer** |
+| cudaMemcpyAsync | 2,650ms | 3,312ms (+25%) | POD double plan indexing |
+| Total sync overhead | 2,812ms | 3,522ms | POD 25% more total |
+
+**POD's cudaStreamSynchronize (2,360ms) = 553% of its attention GPU time.** This is the dominant bottleneck — POD splits `qo_indptr_buf` into separate prefill/decode index arrays (cumsum, slice, `.to(device)`) per layer, requiring GPU-CPU sync each time. LPT reads the same `qo_indptr_buf` but passes it directly to the fused kernel without splitting — no per-layer sync needed.
+
+### Nebius-SWE-like workload (random in=9053, out=3726, N=200)
+
+flashinfer `d9c01c81`. Nebius-SWE median: 9K input, 3.7K output (2.4:1 prefill-heavy).
+
+| Config | Rate | Throughput | TTFT med | Mean ITL | P99 ITL |
+|--------|-----:|:---------:|:---------:|:---------:|:---------:|
+| LPT+CG29 | 2 | 0.99 req/s | 340ms | 27.40ms | 155ms |
+| DMC | 2 | 0.99 req/s | 340ms | 27.37ms | 155ms |
+| PP+PCG | 2 | 0.98 req/s | 330ms | 27.58ms | 153ms |
+| LPT+CG29 | 4 | 1.02 req/s | 11,014ms | 28.67ms | 164ms |
+| DMC | 4 | 1.02 req/s | 11,046ms | 28.68ms | 164ms |
+| PP+PCG | 4 | 1.02 req/s | 11,310ms | 28.81ms | 169ms |
+| LPT+CG29 | 8 | 1.03 req/s | 18,575ms | 28.95ms | 184ms |
+
+**All configs identical** — Nebius-SWE (9K+3.7K) is compute-bound at ~1 req/s. Scheduling strategy has no effect when prefill dominates and the system is fully saturated. Differences emerge only with shorter prefills (WL1-6) where decode overlapping matters.
+
+### P99 ITL Lifecycle Analysis (WL1, 200 prompts, rate=8)
+
+Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares batch conditions during P99-hitting steps vs normal steps.
+
+| | LPT+CG29 P99 steps | LPT normal | PP+PCG P99 steps | PP normal |
+|--|:---:|:---:|:---:|:---:|
+| P99 ITL threshold | 133ms | — | 191ms | — |
+| decode_bs | **91** | 55 | 88 | 87 |
+| prefill_tokens | **5,153** | 3,476 | 2,893 | 2,896 |
+| new_token_ratio | 0.160 | 0.240 | 0.143 | 0.144 |
+| is_mixed (%) | **37%** | 1% | 0% | 0% |
+
+**LPT P99 is driven by mixed batches with high decode_bs + high prefill_tokens** — 37% of P99 steps are mixed (vs 1% normal). High prefill admission (low ntr 0.16 vs 0.24) causes decode pressure. **Confirms CG over-admission hypothesis.**
+
+**PP P99 steps have identical batch conditions to normal steps** — decode_bs, prefill_tokens, and ntr are the same. PP's higher P99 (191ms) is NOT from scheduling but from chunked prefill blocking decode within each step (no mixed-chunk overlap).
+
+### PP WL3 P99 Regression Root Cause (lifecycle tracking)
+
+| | LPT+CG29 WL3 | PP+PCG WL3 |
+|--|:---:|:---:|
+| P99 ITL | 306ms | **720ms** |
+| Max ITL | 473ms | **21,644ms** |
+| P99 decode_bs | 59 | 59 |
+| P99 prefill_tokens | 4,420 | 4,185 |
+| Worst spike cause | decode_bs=66, prefill=7677 | **decode_bs=64, prefill=259, ntr=0.632** |
+
+**PP's worst spikes (21.6s!) happen early** (ntr=0.632) from decode starvation: after a request gets TTFT, the scheduler goes back to prefilling a backlog of newly-arrived requests (rate=8 × 12K input = continuous prefill work). Decode only runs when no prefills are pending, so already-prefilled requests starve for 21.6s while the scheduler drains the prefill queue. LPT's mixed chunk interleaves decode tokens within each prefill step, keeping max ITL at 473ms.
+
+**Why PP works on WL5-6 but not WL3-4**: WL5-6 have 4K-6K input (≤1 chunk per request). The prefill backlog clears quickly, so decode starvation is brief. WL3-4 have 12K-16K input (2-3 chunks per request) — at rate=8, new prefill work arrives faster than the scheduler can clear it, causing prolonged decode starvation.
+
+---
+
+### Closed investigations (H100 era)
+
 - [x] **Mixed CG padding threshold [INFEASIBLE]**: Swept `SGLANG_MIXED_CG_PADDING_PCT`=5/8/10% (clean rerun, no keepalive, rate=8).
 
   | WL | CG29 total | noCG P99 | pct=10% total | pct=10% TTFT | pct=10% P99 | pct=8% total | pct=8% P99 | pct=5% total | pct=5% P99 |
@@ -1101,25 +793,6 @@ serving-level DMC comparisons.
 
   **Conclusion**: The ~7ms per-step overhead from barrier scaffolding is the inherent cost of the CG-replay speedup (which gives +4% throughput, -41% TTFT). At operating points where DMC is at 149ms (1ms below SLO), any per-step overhead pushes LPT over. At other operating points, LPT's throughput/TTFT advantage compensates (e.g. sharegpt rate=24: LPT 100% vs DMC 69%). No fix needed — the methods are competitive on aggregate.
 
-- [ ] **GPU-side LPT plan kernel** [DEPRIORITIZED 2026-08-06]: the sync-free
-  host plan removed this from the critical path (plan is hidden by
-  overlap-scheduler run-ahead); revisit only if nsys shows plan CPU cost
-  bounding step rate.
-- [x] Realistic workload analysis — see `tasks/realistic_workload_analysis.md`
-- [ ] **EDF end-to-end A/B with the analytic model** (in-band shared-prefix
-  scenario): DMC vs gated LPT vs gated LPT + `SGLANG_EDF_LATENCY_MODEL=analytic`;
-  metric = ITL-SLO attainment at matched throughput. Validates the
-  cost-model-for-SLO story in serving.
-- [ ] **Reduce β (non-overlappable fraction, 0.53)**: NCU a balanced
-  composition to attribute the unrealized half of the overlap (reduction
-  pass, queue-switch granularity, or L2 interference); each point of β is
-  direct overlap efficiency.
-- [ ] **Gate table: sample long-prefix chunks over blended pools** (the one
-  remaining unswept region) and refresh gqa4 with the blended sweep; also
-  root-cause the storm-phase retraction cascade archived in
-  `h800_mw_agent_plus_shortchat/run1_regressed/`.
-
----
 
 ## Implementation Details
 

@@ -1,5 +1,15 @@
 # EDF (Earliest Deadline First) Scheduling for SLO-Aware Serving
 
+> **Validity note (2026-08-13).** The sweeps in this file predate the
+> 2026-07-30 honest-baseline fix: `SGLANG_FLASHINFER_USE_PERSISTENT`
+> defaults on, and pre-fix DMC arms may have silently run the persistent
+> kernel for mixed batches. Policy conclusions (EDF vs FCFS, chunk control
+> on/off) compare within the same kernel arm and stand; do not cite
+> LPT-vs-DMC *kernel* deltas from this file. Current kernel and SLO
+> results live in `tasks/debug_kernel_server_perf.md` and
+> `tasks/realistic_workload_analysis.md` (analytic-model EDF pins pooled
+> P99 ITL at 100.24 ms against a 100 ms budget).
+
 ## [x] Goal
 Implement deadline-aware scheduling in sglang to maximize SLO attainment under load. Compare PP vs LPT+CG vs DMC on real agent workloads with realistic SLOs and request rates.
 
@@ -402,7 +412,13 @@ DMC's throughput is *higher* despite worse latency — chunk control admitted bi
 
 ### [x] Blockers (both resolved)
 
-#### [ ] LPT_CG performance regressions vs DMC — kernel overhead on short-input workloads (task #117, in progress)
+#### [x] LPT_CG performance regressions vs DMC — kernel overhead on short-input workloads (task #117; resolved 2026-07-30 by the measured kernel gate)
+
+**Resolution**: "Fix option 1/2" below became the measured k-NN kernel gate
+(`SGLANG_MIXED_ATTENTION_KERNEL=auto`) — a per-batch measured choice between
+BatchPrefill and the persistent kernel with leave-one-out worst regression
+1.000. The dominant overhead also turned out to be the plan()-synchronize
+stall, not `grid.sync()`; see `tasks/debug_kernel_server_perf.md`.
 
 **Root cause**: Both DMC and LPT_CG capture the same 58 piecewise CGs with identical memory (6.42 GB available after CGs, 366K KV tokens — `mem-fraction-static=0.85` makes the cache pool static, so CG memory does NOT reduce KV capacity). The difference is the **kernel replayed** during mixed-batch CG:
 

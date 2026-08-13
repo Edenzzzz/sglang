@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.5.1 — Task-doc cleanup: invalidated results removed, story-order restructure (2026-08-13)
+
+- `tasks/debug_kernel_server_perf.md`: deleted the sections marked superseded/
+  invalidated (2026-07-24 serving results; Historical H800 WL1–6/EDF tables that
+  compared contaminated DMC baselines). Reordered: current story (sync-free plan +
+  gate + cost model + conclusion) and Open TODOs first; honest H100-era kernel/server
+  results and closed investigations behind them as labeled history. Open TODOs
+  rebuilt: EDF-analytic A/B marked done (multiturn_slo_clean), remaining suite
+  scenarios added.
+- `tasks/realistic_workload_analysis.md`: removed the superseded headline table,
+  contaminated offered-load sweep, and pre-fix sweet-spot table; rewrote Scope
+  (gate + LPT_EDF methods) and Final conclusions to the current story; added an
+  evaluation-hygiene section (baseline contamination, warmup, queue-vs-service TTFT
+  decomposition, rate=inf confound, episode defense) and mixed-workload repro
+  commands.
+- `tasks/edf_scheduling.md`: validity note (pre-fix DMC arms; policy conclusions
+  stand, kernel deltas do not); task #117 closed by the measured gate.
+- `tasks/server_perf_model.md`: status note — analytic model supersedes the MLP for
+  chunk control; MLP remains for the router `/get_load` signal only.
+- `tasks/README.md`: updated to the current document map.
+
 ## v0.5.0 — Mixed-Tenancy Win, Overlap Attribution, Analytic Cost Model (2026-08-04 → 2026-08-06)
 
 ### Mixed-tenancy workloads (`run_mixed_workloads.py`)

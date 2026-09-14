@@ -33,6 +33,35 @@ scratchpad), `build_mixed_kernel_gate_table.py`.
 - Persistent `run()` CPU dispatch is **cheaper** than BatchPrefill
   (16 µs vs 26 µs/call); cooperative launch is not a CPU-side cost.
   `persistent_attn_forward` now reuses out/lse buffers (was 2 allocs/layer).
+- **`non_blocking=True` is a no-op for the D2H half of that block.**
+  `qo_indptr.to(torch.device("cpu"), non_blocking=True)` allocates a
+  *pageable* destination; `cudaMemcpyAsync` D2H into pageable memory is
+  synchronous with respect to the host, so the call itself waits for every
+  prior op on the stream. Measured in the mixed-tenancy nsys captures
+  (`scratchpad/nsys_{LPT,DMC_CG}.sqlite`, 279 s span, single CUDA-issuing
+  thread), same direction and comparable sizes:
+
+  | run | D2H dest | n | avg bytes | avg host-blocked |
+  |-----|----------|--:|----------:|-----------------:|
+  | LPT | pageable | 46,064 | 65 | **3,607 µs** (max 564 ms) |
+  | LPT | pinned | 23,331 | 107 | **6.9 µs** |
+  | DMC | pageable | 36,175 | 102 | **4,910 µs** |
+  | DMC | pinned | 16,909 | 146 | **7.2 µs** |
+
+  Per-size, cost tracks queue depth rather than bytes (pageable 36 B →
+  4,237 µs, 196 B → 11,311 µs; pinned 8 B → 8.4 µs, 384 B → 7.0 µs), and the
+  pattern is identical in both arms, so it is a PyTorch/CUDA property, not a
+  kernel artifact. Implication for the old plan path: the *first* `.to()`
+  already paid the drain, and the explicit `torch.cuda.synchronize()` on the
+  next line was close to free — the 56.5 ms is attributable to the copies
+  themselves. (Attribution inferred from the contrast above, not from a
+  split measurement; see Open TODOs.) Query:
+  `sqlite3` join of `CUPTI_ACTIVITY_KIND_MEMCPY` to
+  `CUPTI_ACTIVITY_KIND_RUNTIME` on `correlationId`, grouped by
+  `copyKind`/`dstKind` (2026-09-14, sglang `368f5e6fe`, flashinfer `c6d2a00`).
+  The residual pageable D2H in both arms is the scheduler reading sampled
+  token ids back per step — an inherent wait for GPU results, not a
+  removable stall.
 
 ### Kernel cost surface (serving-matched: non-causal cached-prefix part)
 
@@ -280,6 +309,12 @@ serving-level DMC comparisons.
 
 ## Open TODOs
 
+- [ ] **Split the old plan stall into copy vs sync** (needs a GPU; none
+  visible in the 2026-09-14 session): time the three
+  `.to("cpu", non_blocking=True)` lines with and without the following
+  `torch.cuda.synchronize()` under ~40 ms of queued work. The nsys contrast
+  above predicts the copies carry essentially all of the 56.5 ms; confirm
+  before stating it as measured.
 - [ ] **Reduce β (non-overlappable fraction, 0.53)**: NCU a balanced
   composition to attribute the unrealized half of the overlap (reduction
   pass, queue-switch granularity, or L2 interference); each point of β is

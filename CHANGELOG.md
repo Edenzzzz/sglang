@@ -20,6 +20,12 @@
 - `tasks/server_perf_model.md`: status note — analytic model supersedes the MLP for
   chunk control; MLP remains for the router `/get_load` signal only.
 - `tasks/README.md`: updated to the current document map.
+- Profiling note added to the overhead diagnosis: `non_blocking=True` is not honored
+  for D2H into pageable memory. Mined from the mixed-tenancy nsys captures — pageable
+  D2H blocks the CUDA-issuing thread 3.6–4.9 ms on average (max 564 ms) versus ~7 µs
+  for pinned destinations at the same sizes, identically in both arms. Implies the old
+  plan() stall was paid by the `.to("cpu")` calls themselves, not the following
+  `torch.cuda.synchronize()`; split measurement queued as a TODO (needs a GPU).
 
 ## v0.5.0 — Mixed-Tenancy Win, Overlap Attribution, Analytic Cost Model (2026-08-04 → 2026-08-06)
 

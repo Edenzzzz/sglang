@@ -33,35 +33,68 @@ scratchpad), `build_mixed_kernel_gate_table.py`.
 - Persistent `run()` CPU dispatch is **cheaper** than BatchPrefill
   (16 µs vs 26 µs/call); cooperative launch is not a CPU-side cost.
   `persistent_attn_forward` now reuses out/lse buffers (was 2 allocs/layer).
-- **`non_blocking=True` is a no-op for the D2H half of that block.**
-  `qo_indptr.to(torch.device("cpu"), non_blocking=True)` allocates a
-  *pageable* destination; `cudaMemcpyAsync` D2H into pageable memory is
-  synchronous with respect to the host, so the call itself waits for every
-  prior op on the stream. Measured in the mixed-tenancy nsys captures
-  (`scratchpad/nsys_{LPT,DMC_CG}.sqlite`, 279 s span, single CUDA-issuing
-  thread), same direction and comparable sizes:
+- **`non_blocking=True` is a no-op for the D2H half of that block, and the
+  cost is a pipeline drain, not a copy.** `.to(torch.device("cpu"),
+  non_blocking=True)` allocates a *pageable* destination; `cudaMemcpyAsync`
+  D2H into pageable memory is synchronous with respect to the host, so the
+  call returns only after everything already queued on the stream has run.
+  Mined from the mixed-tenancy nsys captures (`scratchpad/nsys_{LPT,DMC_CG}.sqlite`,
+  279 s, one CUDA-issuing thread; join `CUPTI_ACTIVITY_KIND_MEMCPY` to
+  `CUPTI_ACTIVITY_KIND_RUNTIME` on `correlationId`; 2026-09-14, sglang
+  `368f5e6fe`, flashinfer `c6d2a00`):
 
   | run | D2H dest | n | avg bytes | avg host-blocked |
   |-----|----------|--:|----------:|-----------------:|
-  | LPT | pageable | 46,064 | 65 | **3,607 µs** (max 564 ms) |
+  | LPT | pageable | 46,064 | 65 | 3,607 µs (max 564 ms) |
   | LPT | pinned | 23,331 | 107 | **6.9 µs** |
-  | DMC | pageable | 36,175 | 102 | **4,910 µs** |
+  | DMC | pageable | 36,175 | 102 | 4,910 µs |
   | DMC | pinned | 16,909 | 146 | **7.2 µs** |
 
-  Per-size, cost tracks queue depth rather than bytes (pageable 36 B →
-  4,237 µs, 196 B → 11,311 µs; pinned 8 B → 8.4 µs, 384 B → 7.0 µs), and the
-  pattern is identical in both arms, so it is a PyTorch/CUDA property, not a
-  kernel artifact. Implication for the old plan path: the *first* `.to()`
-  already paid the drain, and the explicit `torch.cuda.synchronize()` on the
-  next line was close to free — the 56.5 ms is attributable to the copies
-  themselves. (Attribution inferred from the contrast above, not from a
-  split measurement; see Open TODOs.) Query:
-  `sqlite3` join of `CUPTI_ACTIVITY_KIND_MEMCPY` to
-  `CUPTI_ACTIVITY_KIND_RUNTIME` on `correlationId`, grouped by
-  `copyKind`/`dstKind` (2026-09-14, sglang `368f5e6fe`, flashinfer `c6d2a00`).
-  The residual pageable D2H in both arms is the scheduler reading sampled
-  token ids back per step — an inherent wait for GPU results, not a
-  removable stall.
+  These pageable copies arrive in back-to-back groups (92% are pairs), and
+  the cost is entirely positional — **all of it is the first copy in a
+  group**:
+
+  | run | pairs | 1st copy mean / median | 2nd copy mean | total 1st vs 2nd |
+  |-----|------:|-----------------------:|--------------:|-----------------:|
+  | LPT | 20,443 | 8,104 / 5,060 µs | **14.4 µs** | 165.7 s vs 0.3 s (562×) |
+  | DMC | 14,334 | 12,361 / 5,054 µs | **15.5 µs** | 177.2 s vs 0.2 s (795×) |
+
+  Same direction, same pageable destination, same size class, 560-800×
+  apart: the first call absorbs the queue, the rest are free. Applied to the
+  old plan path, essentially all of the 56.5 ms was the **first**
+  `.to("cpu")`; copies 2-3 and the following `torch.cuda.synchronize()` were
+  ~15 µs each. (Measured on a different call site in the same server, not on
+  plan() itself — the mechanism is CUDA's, not the call site's.)
+- **It does not starve the GPU here.** Steady-state 20 s window, union of all
+  kernel intervals across 12 streams:
+
+  | run | kernels | GPU busy | host blocked in pageable D2H | GPU idle *while* host blocked |
+  |-----|--------:|---------:|-----------------------------:|------------------------------:|
+  | LPT | 244,225 | **93.6%** | 74.7% of wall | 0.64% of wall (10% of idle) |
+  | DMC | 230,612 | **94.0%** | 74.6% of wall | 0.64% of wall (11% of idle) |
+
+  The host thread genuinely stops for three quarters of wall time, yet the
+  GPU stays ~94% busy: the run-ahead already queued covers the wait. So a
+  blocking readback is harmful only when it removes run-ahead the GPU needs
+  — which is the old plan() case (it blocked *before* issuing the step's own
+  work, on data available host-side) and is not the case for the scheduler's
+  end-of-step token readback (it is waiting for a result that genuinely is
+  not ready).
+- **Why the two arms' averages differ**: block duration measures queue depth,
+  not overhead. Medians are identical (5,060 vs 5,054 µs) and blocked wall
+  fraction is identical (74.7% vs 74.6%); LPT's lower mean is a thinner tail
+  spread over 43% more readbacks (more completed steps), i.e. the signature
+  of the faster server, not of lower overhead.
+- **Remaining D2H sites are in flashinfer's stock `plan()`, not ours.** Our
+  mixed path passes host tensors (`plan_qo_indptr`/`plan_kv_indptr`/
+  `plan_kv_lens` built by NumPy cumsum from `seq_lens_cpu`), and the capture
+  confirms it: `cudaDeviceSynchronize` appears **once** in 279 s (startup).
+  The residual pairs are int32 arrays sized `bs+1` then `bs` — the signature
+  of `decode.py:941-942` (`indptr.to("cpu")`, `last_page_len.to("cpu")`) and
+  `prefill.py:1711-1719`, which sglang still triggers because it passes
+  device tensors to `begin_forward()` without `max_token_per_sequence`/
+  `max_sequence_kv`. Exact attribution needs a capture with
+  `--cudabacktrace`; see Open TODOs.
 
 ### Kernel cost surface (serving-matched: non-causal cached-prefix part)
 
@@ -309,12 +342,27 @@ serving-level DMC comparisons.
 
 ## Open TODOs
 
-- [ ] **Split the old plan stall into copy vs sync** (needs a GPU; none
-  visible in the 2026-09-14 session): time the three
+- [ ] **Remove the baseline's own plan() drain** (makes DMC strictly
+  stronger *and* speeds the gate's BatchPrefill picks): sglang calls
+  `wrapper_paged.begin_forward(qo_indptr, kv_indptr, ...)` with device
+  tensors and no `max_token_per_sequence`/`max_sequence_kv`, so
+  `prefill.py:1711-1719` does pageable `.to("cpu")` per mixed step. All the
+  inputs exist host-side already (`seq_lens_cpu`, `extend_prefix_lens_cpu`).
+- [ ] **`fast_decode_plan` is still shadowed**: sglang sets
+  `decode_wrappers[i].plan = partial(fast_decode_plan, ...)` but
+  `call_begin_forward` calls `wrapper.begin_forward(...)`, and
+  `begin_forward = plan` is a *class* attribute in all three flashinfer
+  wrappers (`decode.py:1092`, `prefill.py:1915/2773`), so the instance
+  attribute is bypassed and the stock plan (with its D2H) runs. The
+  `wrapper_uses_fast_decode_plan` check at `flashinfer_backend.py:1581` is
+  dead for the same reason. First recorded 2026-04-12; confirm with
+  `--cudabacktrace` and fix by binding `begin_forward`.
+- [ ] **Confirm the copy-vs-sync split on plan() itself** (needs a GPU; none
+  visible in the 2026-09-14 session). The positional result above already
+  measures the mechanism (1st pageable D2H in a group: 5-8 ms median; 2nd:
+  14 µs), so only the on-plan() reproduction is outstanding: time the three
   `.to("cpu", non_blocking=True)` lines with and without the following
-  `torch.cuda.synchronize()` under ~40 ms of queued work. The nsys contrast
-  above predicts the copies carry essentially all of the 56.5 ms; confirm
-  before stating it as measured.
+  `torch.cuda.synchronize()` under ~40 ms of queued work.
 - [ ] **Reduce β (non-overlappable fraction, 0.53)**: NCU a balanced
   composition to attribute the unrealized half of the overlap (reduction
   pass, queue-switch granularity, or L2 interference); each point of β is

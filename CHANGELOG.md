@@ -20,12 +20,18 @@
 - `tasks/server_perf_model.md`: status note — analytic model supersedes the MLP for
   chunk control; MLP remains for the router `/get_load` signal only.
 - `tasks/README.md`: updated to the current document map.
-- Profiling note added to the overhead diagnosis: `non_blocking=True` is not honored
-  for D2H into pageable memory. Mined from the mixed-tenancy nsys captures — pageable
-  D2H blocks the CUDA-issuing thread 3.6–4.9 ms on average (max 564 ms) versus ~7 µs
-  for pinned destinations at the same sizes, identically in both arms. Implies the old
-  plan() stall was paid by the `.to("cpu")` calls themselves, not the following
-  `torch.cuda.synchronize()`; split measurement queued as a TODO (needs a GPU).
+- Profiling note added to the overhead diagnosis, mined from the mixed-tenancy nsys
+  captures: `non_blocking=True` is not honored for D2H into pageable memory, and the
+  cost is a pipeline drain rather than a copy. Within back-to-back groups of pageable
+  D2H copies the **first** costs 5–8 ms (median) and the rest ~14 µs — 560–800× apart
+  at identical size and destination — so the old plan() stall was paid by the first
+  `.to("cpu")`, not by the following `torch.cuda.synchronize()`. Steady-state window
+  analysis shows the host blocked 74.6% of wall in both arms while the GPU stays ~94%
+  busy (GPU-idle-while-host-blocked 0.64% of wall), so such readbacks hurt only when
+  they remove run-ahead the GPU needs. Two live optimizations filed: flashinfer's stock
+  `plan()` still does pageable D2H for the BatchPrefill path (baseline pays it every
+  mixed step), and sglang's `fast_decode_plan` remains shadowed by the class-level
+  `begin_forward = plan` alias.
 
 ## v0.5.0 — Mixed-Tenancy Win, Overlap Attribution, Analytic Cost Model (2026-08-04 → 2026-08-06)
 

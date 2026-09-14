@@ -354,15 +354,32 @@ serving-level DMC comparisons.
   ~95% of steps still go through the stock plan, and the run shows 22,141
   blocking D2H groups. The sync-free plan fix covers only the persistent
   slice; this TODO covers the rest.
-- [ ] **`fast_decode_plan` is still shadowed**: sglang sets
-  `decode_wrappers[i].plan = partial(fast_decode_plan, ...)` but
-  `call_begin_forward` calls `wrapper.begin_forward(...)`, and
-  `begin_forward = plan` is a *class* attribute in all three flashinfer
-  wrappers (`decode.py:1092`, `prefill.py:1915/2773`), so the instance
-  attribute is bypassed and the stock plan (with its D2H) runs. The
-  `wrapper_uses_fast_decode_plan` check at `flashinfer_backend.py:1581` is
-  dead for the same reason. First recorded 2026-04-12; confirm with
-  `--cudabacktrace` and fix by binding `begin_forward`.
+- [ ] **The whole `fast_decode_plan` path is dead code** (corrected
+  2026-09-14; supersedes the 2026-04-12 "it is shadowed" note). It is not
+  shadowed — it does not exist: `flashinfer.fast_decode_plan` is absent from
+  the pinned build, so `getattr(...)` at `flashinfer_backend.py:57` yields
+  `None`, the `partial` binding at :928 never runs, and
+  `wrapper_uses_fast_decode_plan` (:1581) is always False. Consequence per
+  decode step: sglang allocates `global_override_indptr_cpu`, host-cumsums
+  `seq_lens_cpu` into it (:1573-1577), never reads it (its only consumer is
+  the dead branch at :1604), resets it to None (:1630) — and then stock
+  `BatchDecodeWithPagedKVCacheWrapper.plan()` does the pageable D2H
+  (`decode.py:941-942`) anyway. Note the D2H runs on graph-replayed decodes
+  too, since replay still calls `indices_updater_decode.update()`. Fix by
+  passing host `indptr`/`last_page_len`, as the BatchAttention path already
+  does; the 2026-04-12 class-alias analysis (`begin_forward = plan` at
+  `decode.py:1092`, `prefill.py:1915/2773`) stays true and would matter again
+  if the symbol returned.
+- [ ] **Re-test the persistent kernel for pure-decode batches.** It was used
+  for decode (and decode CUDA graphs) until `b91b5afaf` (2026-03-25), removed
+  because `BatchAttention.plan()` ran per decode step with no fast path. That
+  reason is now obsolete — the sync-free host plan is 0.47 ms with a busy GPU.
+  The commit's supporting number ("B200 WL1 18,847 tok/s vs ~13K before fix on
+  H100") is **cross-machine and not a valid A/B**, and no sweep has ever
+  compared persistent against `BatchDecode` (gate_sweep3 and sweep_fresh both
+  use BatchPrefill as the baseline), so the removal currently rests on
+  mechanism alone. Needs: kernel-level persistent-vs-BatchDecode sweep over
+  decode-only compositions, then a matched serving A/B.
 - [ ] **Confirm the copy-vs-sync split on plan() itself** (needs a GPU; none
   visible in the 2026-09-14 session). The positional result above already
   measures the mechanism (1st pageable D2H in a group: 5-8 ms median; 2nd:

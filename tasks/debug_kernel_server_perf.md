@@ -348,6 +348,12 @@ serving-level DMC comparisons.
   tensors and no `max_token_per_sequence`/`max_sequence_kv`, so
   `prefill.py:1711-1719` does pageable `.to("cpu")` per mixed step. All the
   inputs exist host-side already (`seq_lens_cpu`, `extend_prefix_lens_cpu`).
+  Scale of the opportunity, from the same captures: the persistent kernel ran
+  on only 29,484/28 ≈ 1,053 steps of the LPT run (the gate declines most
+  compositions), while BatchPrefill kernels account for ~544k launches — so
+  ~95% of steps still go through the stock plan, and the run shows 22,141
+  blocking D2H groups. The sync-free plan fix covers only the persistent
+  slice; this TODO covers the rest.
 - [ ] **`fast_decode_plan` is still shadowed**: sglang sets
   `decode_wrappers[i].plan = partial(fast_decode_plan, ...)` but
   `call_begin_forward` calls `wrapper.begin_forward(...)`, and

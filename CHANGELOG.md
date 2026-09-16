@@ -20,6 +20,9 @@
 - `tasks/server_perf_model.md`: status note — analytic model supersedes the MLP for
   chunk control; MLP remains for the router `/get_load` signal only.
 - `tasks/README.md`: updated to the current document map.
+- Removed the "DMC baselines were silently persistent" post-mortem now that every result
+  it invalidated is gone from the docs; its one live invariant (baseline runners must set
+  `SGLANG_FLASHINFER_USE_PERSISTENT=0` — it defaults on) is promoted to Setup as a rule.
 - Cost-surface and win-region sections unified into one: adds a sweep-provenance table
   (479 uniform + 477 fresh → 956 merged, + 360 blended = the deployed 1,316 points) with
   every file checked in, and shows where the headline multiple comes from — at a fixed

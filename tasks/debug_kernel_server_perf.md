@@ -11,6 +11,14 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 - Benchmark: `bench_serving --dataset-name random --request-rate 8 --num-prompt 400`
 - Profile logs: `tasks/debug_kernel_server_perf/profile_logs/`
 - gpu_keepalive MUST be stopped before benchmarks (corrupts results — cooperative launch is especially sensitive to SM contention)
+- **Baseline runners MUST set `SGLANG_FLASHINFER_USE_PERSISTENT=0` explicitly.**
+  It defaults to **1**, so a "BatchPrefill baseline" that omits it silently runs
+  the persistent kernel for mixed batches and the comparison becomes
+  persistent-vs-persistent. This contaminated every H800 DMC baseline between
+  2025-11-14 and 2026-07-30; those results have been removed from this file and
+  `realistic_workload_analysis.md` (git history retains them). The honest
+  baseline is 6.1–10.7% *faster* than the contaminated one, so the bug
+  understated both sides.
 
 ## Sync-free plan + measured mixed-kernel gate (2026-07-30)
 
@@ -195,21 +203,6 @@ split budget, per-row tiles), which would narrow the decode-row penalty but
 not supply dual tiles or overlap; the gate re-measures if the baseline
 improves.
 
-### DMC baselines were silently persistent (invalidates July serving deltas)
-
-`SGLANG_FLASHINFER_USE_PERSISTENT` defaults to **1** and neither
-`run_gain_search.sh` nor `run_edf_sweep.sh` disabled it for DMC methods, and
-the codex shell exported no override. Every H800 "DMC_CG" server since the
-default flipped (2025-11-14) therefore ran the persistent BatchAttention
-kernel for its mixed batches too. The July TraceLab "LPT vs DMC" comparisons
-were really persistent-vs-persistent with different chunk caps
-(7168/6656 vs 8192) and EDF guard settings — which explains the ±1% deltas
-and why "LPT" showed no kernel benefit: both sides also paid the same
-plan()-synchronize stall. The 10-session "+14.5% pooled P99 ITL regression"
-attributed to the kernel was a cap/guard effect. Both runners now set
-`SGLANG_FLASHINFER_USE_PERSISTENT=0` explicitly for baseline methods; a true
-BatchPrefill-baseline comparison is part of the validation below.
-
 ### Overlap attribution (2026-08-06)
 
 `bench_overlap_attribution.py` isolates temporal prefill/decode overlap from
@@ -261,10 +254,8 @@ bash tasks/realistic_workload_analysis/run_tracelab_claude.sh`, results in
 `tasks/realistic_workload_analysis/h800_tracelab_decodeheavy512_gated_g{10,16}_n100/`.
 These screens ran the v1 gate (479 points/k=3); their zero-regression
 conclusion was re-confirmed under the v2 gate by the mixed-tenancy controls.
-DMC is now a true BatchPrefill baseline (explicit
-`SGLANG_FLASHINFER_USE_PERSISTENT=0`) and is *stronger* than the old
-contaminated one (g16: 7,882 vs 7,708 tok/s; g10: 6,382 vs 6,032 — the old
-"DMC" paid the persistent plan-sync stall).
+DMC is a true BatchPrefill baseline here (explicit
+`SGLANG_FLASHINFER_USE_PERSISTENT=0`, see Setup).
 
 The first g10 LPT run exposed a mid-replay JIT compile of the second
 flipped-schedule module variant (18.3 s global stall freezing all nine active
@@ -350,9 +341,8 @@ Mechanically, the three fixes were: (1) sync-free double-buffered planning
 (56.5 ms pipeline stall → 0.47 ms), (2) the measured per-batch kernel +
 schedule gate replacing always-persistent and the wrong flip heuristic, and
 (3) startup prewarm of both persistent module variants (a mid-replay JIT
-build froze all sessions for 18 s). The honest-baseline fix
-(`SGLANG_FLASHINFER_USE_PERSISTENT=0` for DMC) invalidates all July
-serving-level DMC comparisons.
+build froze all sessions for 18 s). Every number below is against an honest
+BatchPrefill baseline (see Setup).
 
 **Phase 2 (2026-08-04..06), the current headline results:**
 

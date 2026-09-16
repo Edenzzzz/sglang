@@ -17,8 +17,8 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
 Goal: eliminate the low-concurrency regressions of the persistent overlap
 kernel (LPT planning + cooperative-launch overhead) and guarantee zero
 regression via server-side kernel selection. sglang `9bbc82e28`+, flashinfer
-`f4d2a80`. Scripts: `tasks/debug_kernel_server_perf/gate_sweep3.py` (copy in
-scratchpad), `build_mixed_kernel_gate_table.py`.
+`f4d2a80`. Sweep scripts and data are inventoried in the cost-surface
+section below; the gate table is built by `build_mixed_kernel_gate_table.py`.
 
 ### Overhead diagnosis (H800, Qwen2.5-7B heads 28/4)
 
@@ -96,21 +96,104 @@ scratchpad), `build_mixed_kernel_gate_table.py`.
   `max_sequence_kv`. Exact attribution needs a capture with
   `--cudabacktrace`; see Open TODOs.
 
-### Kernel cost surface (serving-matched: non-causal cached-prefix part)
+### The cost surface: where the persistent kernel wins, and why
 
-479-composition sweep, decode 1–128 req @2K–98K KV × prefill chunks
-128–8192 @512–81920 prefix, `bench_gpu_time` medians, both flipped and
-non-flipped persistent schedules vs BatchPrefill fa2
-(`scratchpad/gate_sweep3_qwen25.json`):
+Serving-matched composition (the non-causal cached-prefix part of a mixed
+batch), `bench_gpu_time` medians, BatchPrefill fa2 vs both persistent
+schedules. Three sweeps, all checked in, which together are the deployed
+1,316-point gate table:
 
-- Persistent wins up to **20×** (decode-dominant; BatchPrefill pads decode
-  rows to one big CTA tile when the batch-average packed qo length pulls the
-  fa2 tile to 64/128) and 1.2–1.7× across most mixed regimes.
-- Inherent losses only where decode KV ≤ ~0.13M tokens with a compute-bound
-  chunk (0.89–0.91×) or sub-0.15 ms tiny batches (fixed overhead, 0.55–0.8×).
-- The old flip heuristic (`total_kv < bs*32768`) is wrong on this
-  composition: mean 6.1% loss, worst 1.52×, 228/479 cases >5% off. Non-flipped
-  is better on 336 of 368 cases where the schedule matters ≥5%.
+| sweep | script | data | n | covers |
+|-------|--------|------|--:|--------|
+| uniform | `gate_sweep3.py` | `gate_sweep3_qwen25_h800.json` | 479 | decode 1–128 req @2K–98K KV × chunks 128–8192 @512–81920 prefix |
+| fresh-prefix | `sweep_fresh.py` (+ `probe_fresh_qwen25_h800.json`) | `gate_sweep_merged_qwen25_h800.json` | 956 | adds chunk prefixes below 512 — the highest-value region the first sweep never sampled |
+| blended pools | `sweep_blend.py` | `gate_sweep_blend_qwen25_h800.json` | 360 | few long rows mixed with many short ones (uniform-KV sweeps cannot express this) |
+
+Peak speedup is **21.0×** in the uniform sweep and **28.2×** once fresh
+prefixes are sampled; the qwen3/gqa4 equivalent is
+`gate_sweep3_qwen3_h800.json`.
+
+**Mechanism (corrected 2026-08-06).** BatchPrefill's split-KV works on its
+own: a decode-only batch of 8 rows @64K runs in 0.366 ms through it, matching
+the persistent kernel. The failure is a planner coupling that appears only in
+mixed batches. One prefill chunk (a) flips the batch-wide CTA tile from 16 to
+128 (`FA2DetermineCtaTileQ` uses the mean packed-qo length), and (b) consumes
+the split-work budget: `PrefillBinarySearchKVChunkSize` bounds total work
+units by the max grid size, and a 1,024-token chunk alone contributes ~56 of
+the ~66 units per KV head, so the search stops splitting the decode rows' KV
+entirely. Eight rows × 4 KV heads then stream 32 MB each from 32 CTAs while
+~100 SMs idle. The persistent planner instead partitions every row into
+(tile, head, kv-chunk) units with `kv_len_limit ~ total/264` regardless of
+batch heterogeneity, staying bandwidth-bound.
+
+**This is the whole win region in one table.** Fresh 2,048-token chunk against
+rows @96K, sweeping the decode pool over 64× (`gate_sweep_merged_qwen25_h800.json`):
+
+| decode rows | total KV | BatchPrefill | persistent | speedup |
+|------------:|---------:|-------------:|-----------:|--------:|
+| 1 | 98K | 2.970 ms | 0.105 ms | **28.2×** |
+| 2 | 197K | 2.979 ms | 0.169 ms | 17.7× |
+| 4 | 393K | 2.983 ms | 0.298 ms | 10.0× |
+| 8 | 786K | 4.655 ms | 0.574 ms | 8.1× |
+| 16 | 1,573K | 4.709 ms | 1.093 ms | 4.3× |
+| 32 | 3,146K | 4.725 ms | 2.131 ms | 2.2× |
+| 64 | 6,291K | 5.049 ms | 4.274 ms | 1.2× |
+
+BatchPrefill is **flat** (2.97 → 5.05 ms) while the work grows 64×; the
+persistent kernel is **proportional** (0.105 → 4.274 ms), i.e. bandwidth-bound
+as it should be. So the headline multiple is not a separate "decode-dominant"
+phenomenon — it is just this ratio read at its left edge, where BP's plateau
+is divided by the smallest real workload. It follows that the multiple is
+largest with *few long* rows, not many: concentration, not aggregate KV, is
+the predictor, which is why the gate carries a KV-concentration feature.
+
+**Crossover by chunk prefix** (decode pools ≥ 250K total KV tokens):
+
+| chunk prefix | median speedup | fraction >1.5× |
+|-------------:|---------------:|---------------:|
+| 0 – 8K | 1.27 – 1.72× | 46 – 57% |
+| 16K | 1.17× | 36% |
+| ≥ 32K | 1.02 – 1.07× | 0 – 11% |
+
+So the rule is: **persistent wins when prefill chunks attend a prefix shorter
+than roughly 16K against a substantial decode pool.** Realistic anchors, from
+the fresh and blended data: 8 decodes @80K plus a fresh 2,048-token chunk is
+**7.92×** (`probe_fresh_qwen25_h800.json`), and blended pools of 40–56 decodes
+where only 4–8 are long (@64K, rest @2K) with a fresh 512–2,048-token chunk
+give **6.90–7.50×** (`gate_sweep_blend_qwen25_h800.json`, whose maximum is
+15.95× at 2 long rows @64K). Only 4–8 concurrent long-context decodes are
+needed; short-KV decodes flooding the batch barely dilute the gain.
+
+**Where persistent loses**, from the same merged table: 162/956 compositions
+below 1.0× and 80 below 0.95×, all of them tiny batches where fixed overhead
+dominates — worst cases are 1–4 decode rows @2–8K KV with a 512-token chunk
+(0.57–0.70×, e.g. 0.027 ms vs 0.048 ms). Distribution over the merged sweep:
+p10 = 0.97×, median = 1.24×, p90 = 4.88×, with 345/956 at ≥1.5×. These are the
+compositions the gate must decline, and the reason its label margin is 1.10
+with an out-of-support guard rather than a threshold rule.
+
+**Work ordering.** The old flip heuristic (`total_kv < bs*32768`) is wrong on
+this composition: mean 6.1% loss, worst 1.52×, 228/479 cases >5% off.
+Non-flipped is better on 336 of the 368 cases where the schedule matters ≥5%,
+so the gate learns the flip from the same neighbors.
+
+**What this explains.** Pure TraceLab replay is the *worst* case for the
+kernel: every chunk is a session continuation attending a 32–100K prefix —
+the ≥32K row above, i.e. parity — and causal replay rarely has a prefill and
+decodes pending at once. That is the whole reason the early serving results
+were null, and why the win had to be looked for in composition rather than in
+the kernel. Favourable and common in production: fresh arrivals into a busy
+decode pool (chat + coding agent on one node), reasoning/thinking traffic
+where decode KV grows from generated tokens while prompts stay short, and
+cache-miss RAG/document traffic whose early chunks still have small prefixes.
+
+How much of this is temporal prefill/decode overlap versus heterogeneity-
+robust scheduling is separated in **Overlap attribution** below: overlap is
+1.2–1.26× in the balanced band, scheduling supplies the rest. Part of the
+scheduling gap is an fa2 planner limitation upstream could shrink (lift the
+split budget, per-row tiles), which would narrow the decode-row penalty but
+not supply dual tiles or overlap; the gate re-measures if the baseline
+improves.
 
 ### DMC baselines were silently persistent (invalidates July serving deltas)
 
@@ -126,56 +209,6 @@ plan()-synchronize stall. The 10-session "+14.5% pooled P99 ITL regression"
 attributed to the kernel was a cap/guard effect. Both runners now set
 `SGLANG_FLASHINFER_USE_PERSISTENT=0` explicitly for baseline methods; a true
 BatchPrefill-baseline comparison is part of the validation below.
-
-### Where the persistent kernel actually wins (2026-08-04)
-
-The original sweep sampled chunk prefixes down to 512 only, which hid the
-highest-value region. A direct probe plus a 477-case extension sweep
-(`sweep_fresh.py`, merged table 956 points at this date; the blended-pool
-sweep later grew it to the deployed 1,316) gives the real picture.
-
-**Mechanism (corrected 2026-08-06).** BatchPrefill's split-KV works: a
-decode-only batch of 8 rows @64K runs in 0.366 ms through it, matching the
-persistent kernel. The failure is a planner coupling in mixed batches. One
-prefill chunk (a) flips the batch-wide CTA tile from 16 to 128
-(`FA2DetermineCtaTileQ` uses the mean packed-qo length), and (b) consumes the
-split-work budget: `PrefillBinarySearchKVChunkSize` bounds total work units by
-the max grid size, and a 1,024-token chunk alone contributes ~56 of the ~66
-units per KV head, so the search stops splitting the decode rows' KV
-entirely. Eight rows x 4 KV heads then stream 32 MB each from 32 CTAs while
-~100 SMs idle: BP plateaus at 3.125 ms for any chunk >=1,024 tokens while the
-chunk's own attention work is negligible. The persistent planner partitions
-every row into (tile, head, kv-chunk) units with `kv_len_limit ~ total/264`
-regardless of batch heterogeneity, staying bandwidth-bound (~0.38 ms).
-Temporal prefill/decode overlap is a secondary contributor at these shapes;
-the win is heterogeneity-robust scheduling. Part of the gap is therefore an
-fa2 planner limitation upstream could shrink (lift the split budget, per-row
-tiles), which would narrow the decode-row penalty but not supply dual tiles
-or overlap; the gate re-measures if the baseline improves.
-
-**Crossover, for decode pools >= 250K total KV tokens:**
-
-| chunk prefix | median speedup | fraction >1.5x |
-|-------------:|---------------:|---------------:|
-| 0 – 8K | 1.27 – 1.72x | 46 – 57% |
-| 16K | 1.17x | 36% |
-| >= 32K | 1.02 – 1.07x | 0 – 11% |
-
-So the rule is: **persistent wins when prefill chunks attend a prefix shorter
-than roughly 16K against a substantial decode pool.** Peak measured values are
-large — 8 decodes @80K plus a fresh 2,048-token chunk is 7.9x, and a realistic
-blended pool (8 codex decodes @80K + 48 chat decodes @2K + a 4,096-token fresh
-chunk) still gives 7.2x. Only 4–8 concurrent long-context decodes are needed;
-short-KV decodes flooding the batch barely dilute the gain.
-
-This explains the earlier null results directly. Pure TraceLab replay is the
-*worst* case for the kernel: every chunk is a session continuation attending a
-32–100K prefix, i.e. the >=32K row above (parity), and the causal replay rarely
-has a prefill and decodes pending at once. Favourable, and common in
-production: fresh arrivals into a busy decode pool (chat + coding agent on one
-node), reasoning/thinking traffic where decode KV grows from generated tokens
-while prompts stay short, and cache-miss RAG/document traffic whose early
-chunks still have small prefixes.
 
 ### Overlap attribution (2026-08-06)
 

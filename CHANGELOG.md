@@ -20,6 +20,16 @@
 - `tasks/server_perf_model.md`: status note — analytic model supersedes the MLP for
   chunk control; MLP remains for the router `/get_load` signal only.
 - `tasks/README.md`: updated to the current document map.
+- Cost-surface and win-region sections unified into one: adds a sweep-provenance table
+  (479 uniform + 477 fresh → 956 merged, + 360 blended = the deployed 1,316 points) with
+  every file checked in, and shows where the headline multiple comes from — at a fixed
+  fresh 2K chunk, BatchPrefill is flat (2.97 → 5.05 ms) while the decode pool grows 64×
+  and the persistent kernel scales with the work (0.105 → 4.274 ms), so the speedup runs
+  28.2× → 1.2×. Corrects "up to 20×" to the per-sweep maxima (21.0× uniform, 28.2×
+  merged) and records the loss region from the same data (162/956 below 1.0×, worst
+  0.57× at 1-4 tiny rows). New data files: `gate_sweep_blend_qwen25_h800.json` (was only
+  in an ephemeral scratchpad, though it is 360 of the deployed table's points) and
+  `probe_fresh_qwen25_h800.json`.
 - Profiling note added to the overhead diagnosis, mined from the mixed-tenancy nsys
   captures: `non_blocking=True` is not honored for D2H into pageable memory, and the
   cost is a pipeline drain rather than a copy. Within back-to-back groups of pageable

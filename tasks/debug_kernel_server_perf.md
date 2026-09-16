@@ -339,10 +339,12 @@ and the high-concurrency gains are retained against a strictly stronger
 - **Tail-optimized** (cap 6656): −14.6% pooled P99 ITL and +0.77% throughput
   at 16 sessions; at 10 sessions request-max P99 −18% while pooled P99 pays
   +11.6% (a cap tradeoff, not a kernel one).
-- Kernel level, the gate preserves up to 20× persistent-kernel wins on
-  decode-dominant mixed batches while capping any composition's regression
-  at 2.8% (leave-one-out); WL1 on Qwen3-8B is parity at both rates with 100%
-  retokenization everywhere.
+- Kernel level, the gate preserves the persistent kernel's wins where they
+  exist — up to 21.0× in the uniform sweep, 28.2× once fresh prefixes are
+  sampled, on batches with few long decode rows and a short-prefix chunk —
+  while capping any composition's regression (v1 gate: 2.8% leave-one-out;
+  deployed v2: 1.000, i.e. none). WL1 on Qwen3-8B is parity at both rates
+  with 100% retokenization everywhere.
 
 Mechanically, the three fixes were: (1) sync-free double-buffered planning
 (56.5 ms pipeline stall → 0.47 ms), (2) the measured per-batch kernel +

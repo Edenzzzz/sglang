@@ -33,8 +33,13 @@
   0.57× at 1-4 tiny rows). New data files: `gate_sweep_blend_qwen25_h800.json` (was only
   in an ephemeral scratchpad, though it is 360 of the deployed table's points) and
   `probe_fresh_qwen25_h800.json`.
-- Profiling note added to the overhead diagnosis, mined from the mixed-tenancy nsys
-  captures: `non_blocking=True` is not honored for D2H into pageable memory, and the
+- Profiling post-mortem added to the overhead diagnosis, mined from the mixed-tenancy
+  nsys captures. It leads with the conclusion — **our plan path does no D2H at all**
+  (host tensors only; verified by `cudaDeviceSynchronize` appearing once in 279 s, so
+  neither flashinfer's device-tensor branch nor the `seq_lens_cpu is None` fallback ever
+  fires) — and presents the rest as the mechanism behind the old 56.5 ms, measured on
+  the copies that remain elsewhere in the stack. Findings: `non_blocking=True` is not
+  honored for D2H into pageable memory, and the
   cost is a pipeline drain rather than a copy. Within back-to-back groups of pageable
   D2H copies the **first** costs 5–8 ms (median) and the rest ~14 µs — 560–800× apart
   at identical size and destination — so the old plan() stall was paid by the first

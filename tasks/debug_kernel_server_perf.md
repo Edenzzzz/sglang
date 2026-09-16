@@ -37,19 +37,32 @@ section below; the gate table is built by `build_mixed_kernel_gate_table.py`.
   double-buffered pinned staging fenced by CUDA events (the pinned-buffer
   reuse race is why earlier naive sync removals hung). Plan wall time with a
   busy GPU: **0.47 ms**, outputs bitwise identical
-  (`scratchpad/test_syncfree_plan.py`).
+  (`tasks/debug_kernel_server_perf/test_syncfree_plan.py`).
 - Persistent `run()` CPU dispatch is **cheaper** than BatchPrefill
   (16 µs vs 26 µs/call); cooperative launch is not a CPU-side cost.
   `persistent_attn_forward` now reuses out/lse buffers (was 2 allocs/layer).
-- **`non_blocking=True` is a no-op for the D2H half of that block, and the
-  cost is a pipeline drain, not a copy.** `.to(torch.device("cpu"),
-  non_blocking=True)` allocates a *pageable* destination; `cudaMemcpyAsync`
-  D2H into pageable memory is synchronous with respect to the host, so the
-  call returns only after everything already queued on the stream has run.
-  Mined from the mixed-tenancy nsys captures (`scratchpad/nsys_{LPT,DMC_CG}.sqlite`,
-  279 s, one CUDA-issuing thread; join `CUPTI_ACTIVITY_KIND_MEMCPY` to
-  `CUPTI_ACTIVITY_KIND_RUNTIME` on `correlationId`; 2026-09-14, sglang
-  `368f5e6fe`, flashinfer `c6d2a00`):
+
+**Post-mortem: why that D2H cost 56.5 ms, and where the pattern still lives.**
+*Our plan path no longer does any D2H.* It passes host tensors only —
+`plan_qo_indptr`/`plan_kv_indptr`/`plan_kv_lens` are built by NumPy cumsum
+from `seq_lens_cpu`/`extend_prefix_lens_cpu` — so flashinfer's device-tensor
+branch never runs. Verified in the mixed-tenancy captures: that branch ends in
+`torch.cuda.synchronize()`, and `cudaDeviceSynchronize` appears **once** in
+279 s (startup), so neither it nor the `seq_lens_cpu is None` fallback ever
+fired. What follows is the mechanism behind the old 56.5 ms, measured on the
+copies that remain *elsewhere* in the stack (2026-09-14, sglang `368f5e6fe`,
+flashinfer `c6d2a00`; full-run nsys captures of the `agent_plus_shortchat`
+scenario, 279 s span, one CUDA-issuing thread — 0.8–1.2 GB SQLite exports kept
+as local artifacts, not checked in; reproduce by joining
+`CUPTI_ACTIVITY_KIND_MEMCPY` to `CUPTI_ACTIVITY_KIND_RUNTIME` on
+`correlationId` and grouping by `copyKind`/`dstKind`).
+
+- **`non_blocking=True` is a no-op for a D2H copy, and the cost is a pipeline
+  drain, not a copy.** `.to(torch.device("cpu"), non_blocking=True)` allocates
+  a *pageable* destination; `cudaMemcpyAsync` D2H into pageable memory is
+  synchronous with respect to the host, so the call returns only after
+  everything already queued on the stream has run. Pinned destinations in the
+  same runs take the async fast path:
 
   | run | D2H dest | n | avg bytes | avg host-blocked |
   |-----|----------|--:|----------:|-----------------:|
@@ -58,51 +71,51 @@ section below; the gate table is built by `build_mixed_kernel_gate_table.py`.
   | DMC | pageable | 36,175 | 102 | 4,910 µs |
   | DMC | pinned | 16,909 | 146 | **7.2 µs** |
 
-  These pageable copies arrive in back-to-back groups (92% are pairs), and
-  the cost is entirely positional — **all of it is the first copy in a
-  group**:
+- **All of the cost is the first copy in a group.** These pageable copies
+  arrive back-to-back (92% in pairs), and position, not size, decides:
 
   | run | pairs | 1st copy mean / median | 2nd copy mean | total 1st vs 2nd |
   |-----|------:|-----------------------:|--------------:|-----------------:|
   | LPT | 20,443 | 8,104 / 5,060 µs | **14.4 µs** | 165.7 s vs 0.3 s (562×) |
   | DMC | 14,334 | 12,361 / 5,054 µs | **15.5 µs** | 177.2 s vs 0.2 s (795×) |
 
-  Same direction, same pageable destination, same size class, 560-800×
-  apart: the first call absorbs the queue, the rest are free. Applied to the
-  old plan path, essentially all of the 56.5 ms was the **first**
-  `.to("cpu")`; copies 2-3 and the following `torch.cuda.synchronize()` were
-  ~15 µs each. (Measured on a different call site in the same server, not on
-  plan() itself — the mechanism is CUDA's, not the call site's.)
-- **It does not starve the GPU here.** Steady-state 20 s window, union of all
-  kernel intervals across 12 streams:
+  Same direction, same pageable destination, same size class, 560–800× apart:
+  the first call absorbs the queue, the rest are free. Applied to the old plan
+  path, essentially all of the 56.5 ms was the **first** `.to("cpu")`; copies
+  2–3 and the following `torch.cuda.synchronize()` were ~15 µs each. (Measured
+  on other call sites in the same server, not on plan() itself — the mechanism
+  is CUDA's, not the call site's.)
+
+- **A blocking readback does not necessarily starve the GPU.** Steady-state
+  20 s window, union of all kernel intervals across 12 streams:
 
   | run | kernels | GPU busy | host blocked in pageable D2H | GPU idle *while* host blocked |
   |-----|--------:|---------:|-----------------------------:|------------------------------:|
   | LPT | 244,225 | **93.6%** | 74.7% of wall | 0.64% of wall (10% of idle) |
   | DMC | 230,612 | **94.0%** | 74.6% of wall | 0.64% of wall (11% of idle) |
 
-  The host thread genuinely stops for three quarters of wall time, yet the
-  GPU stays ~94% busy: the run-ahead already queued covers the wait. So a
-  blocking readback is harmful only when it removes run-ahead the GPU needs
-  — which is the old plan() case (it blocked *before* issuing the step's own
-  work, on data available host-side) and is not the case for the scheduler's
-  end-of-step token readback (it is waiting for a result that genuinely is
-  not ready).
-- **Why the two arms' averages differ**: block duration measures queue depth,
-  not overhead. Medians are identical (5,060 vs 5,054 µs) and blocked wall
-  fraction is identical (74.7% vs 74.6%); LPT's lower mean is a thinner tail
-  spread over 43% more readbacks (more completed steps), i.e. the signature
-  of the faster server, not of lower overhead.
-- **Remaining D2H sites are in flashinfer's stock `plan()`, not ours.** Our
-  mixed path passes host tensors (`plan_qo_indptr`/`plan_kv_indptr`/
-  `plan_kv_lens` built by NumPy cumsum from `seq_lens_cpu`), and the capture
-  confirms it: `cudaDeviceSynchronize` appears **once** in 279 s (startup).
-  The residual pairs are int32 arrays sized `bs+1` then `bs` — the signature
-  of `decode.py:941-942` (`indptr.to("cpu")`, `last_page_len.to("cpu")`) and
-  `prefill.py:1711-1719`, which sglang still triggers because it passes
-  device tensors to `begin_forward()` without `max_token_per_sequence`/
-  `max_sequence_kv`. Exact attribution needs a capture with
-  `--cudabacktrace`; see Open TODOs.
+  The host thread genuinely stops for three quarters of wall time, yet the GPU
+  stays ~94% busy: already-queued run-ahead covers the wait. So such a copy
+  hurts only when it removes run-ahead the GPU needs — which is exactly the
+  old plan() case (it blocked *before* issuing the step's own work, for data
+  that was available host-side all along), and is not the case for the
+  scheduler's end-of-step token readback (it waits for a result that genuinely
+  is not ready). This is also why removing the plan sync was worth more at low
+  concurrency than at saturation.
+
+- **Block duration measures queue depth, not overhead** — so it must not be
+  read as an arm-vs-arm cost comparison. Medians are identical (5,060 vs
+  5,054 µs) and blocked wall fraction is identical (74.7% vs 74.6%); LPT's
+  lower mean is a thinner tail spread over 43% more readbacks (more completed
+  steps), i.e. the signature of the faster server, not of lower overhead.
+
+- **Where the residual copies are.** Sized `bs+1` then `bs` int32 — the
+  signature of flashinfer's stock `plan()` (`decode.py:941-942`
+  `indptr.to("cpu")`/`last_page_len.to("cpu")`, and `prefill.py:1711-1719`),
+  which sglang still triggers by passing device tensors to `begin_forward()`
+  without `max_token_per_sequence`/`max_sequence_kv`. So the BatchPrefill and
+  decode paths still pay per step what the persistent path no longer does;
+  exact attribution needs a capture with `--cudabacktrace`. See Open TODOs.
 
 ### The cost surface: where the persistent kernel wins, and why
 

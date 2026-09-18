@@ -368,6 +368,43 @@ That interior is doing three jobs:
    instead of sampling it) requires the two terms *separately*, which the
    step total does not expose. Not implemented — see Open TODOs.
 
+**Is BatchPrefill just hard for *that form*? (learned-model check, 2026-09-19.)**
+Fitting `max + β·min` is a strong assumption, so the claim was re-tested with
+flexible learners on the **same 1,316 sweep compositions, same 6 gate features,
+same model class per row**, 5-fold CV × 3 seeds, log-target
+(`fit_learned_cost_model.py`):
+
+| features | model | target | MAPE | p95 | max |
+|----------|-------|--------|-----:|----:|----:|
+| composition (6) | MLP (128,64,32) | BatchPrefill | 9.9% | 27.2% | 85.3% |
+| composition (6) | MLP (128,64,32) | persistent | **5.7%** | 15.4% | 40.7% |
+| composition (6) | GBDT (400) | BatchPrefill | 10.1% | 30.5% | 102.7% |
+| composition (6) | GBDT (400) | persistent | **3.3%** | 11.0% | 62.8% |
+| + planner vars (10) | GBDT (400) | BatchPrefill | 8.6% | 25.7% | 101.1% |
+| + planner vars (10) | GBDT (400) | persistent | **3.5%** | 11.2% | 60.5% |
+
+Three conclusions, one of which corrects the earlier wording:
+
+- **"Unmodelable" was too strong.** An MLP reaches 9.9% MAPE on BatchPrefill,
+  better than the 13.3% of the best parts-based affine fit, so part of that
+  13.3% was the functional form, not the kernel. The defensible claim is the
+  *relative* one: on identical data, features and model class, BatchPrefill is
+  **1.7–3× harder to predict** than the persistent kernel, with a far worse
+  tail (85–103% max error vs 41–63%).
+- **The planner variables recover only part of it.** Adding the batch-average
+  packed-qo length and the CTA tile it implies — the exact quantity
+  `FA2DetermineCtaTileQ` branches on — moves GBDT from 10.1% to 8.6% and
+  leaves persistent unchanged. So the tile flip is a real but partial
+  explanation; the residual is consistent with `PrefillBinarySearchKVChunkSize`
+  depending on the full per-row KV vector, which no batch aggregate can carry.
+  Replicating the planner, not fitting a smoother function, is what would close
+  it — i.e. a simulator of one kernel version, not a portable model.
+- **Fitting BP well would cost exactly what the analytic model saves.** These
+  numbers need 1,316 measured compositions per GPU/model; the analytic law
+  needs 35. And at 8.6–10% MAPE with 25–30% p95, a controller binary-searching
+  chunk size against a 100 ms ITL budget would systematically over- or
+  undershoot, where 3.3%/11% is workable.
+
 Two scope limits:
 
 - **It models the persistent kernel only.** There is deliberately no

@@ -29,6 +29,15 @@
   arm vs 0.906 ms in DMC, i.e. the predicted routing is visible end to end. Documents the
   gaps too — contiguous `arange` KV pages vs a fragmented radix allocator, sustained-load
   clocks, flushed vs dirty L2, graph replay, shared GPUs.
+- Batch-mixture representativeness measured from the gated runs' scheduler logs and
+  recorded as a known weakness: the sweeps are a Cartesian grid, but realized mixed
+  batches form a narrow correlated cluster per workload (win scenario: 386-token chunks
+  p90 532 against 46 decode rows @189K KV; TraceLab: 8,182-token chunks against 10 rows
+  @904K). Chunk size and decode count are anti-correlated in serving because the chunk is
+  the leftover budget, so the product grid spends points on combinations the scheduler
+  cannot emit, and samples the actual operating region with two points. Notes that
+  leave-one-out 1.000 is therefore generalization within the grid, not to serving.
+  New TODO: rebuild the table by importance-sampling logged compositions.
 - Removed the "DMC baselines were silently persistent" post-mortem now that every result
   it invalidated is gone from the docs; its one live invariant (baseline runners must set
   `SGLANG_FLASHINFER_USE_PERSISTENT=0` — it defaults on) is promoted to Setup as a rule.

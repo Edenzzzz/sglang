@@ -188,6 +188,45 @@ the table is only ever used as a *decision* rule whose decisions were then
 validated end to end: parity controls, paired repeats, and the mixed-tenancy
 A/Bs below are what would expose a bench-to-serving mismatch.
 
+**The batch mixtures, though, are a grid — not the realized distribution.**
+This is the weaker part of the methodology. The sweeps enumerate a Cartesian
+product of (decode rows × per-row KV × chunk tokens × prefix); a real scheduler
+emits a narrow, correlated cluster that differs per workload. Parsed from the
+`Prefill batch` log lines of the gated runs (sampled at the decode log
+interval, so tens of steps per run, not all):
+
+| scenario | chunk tokens p50 (p90) | decode rows p50 | total decode KV p50 | gate → persistent |
+|----------|-----------------------:|----------------:|--------------------:|------------------:|
+| agent+shortchat (the win) | **386** (532) | 46 | 189K | 1,046/1,901 = **55%** |
+| shortchat_only (control) | 382 (496) | 25 | 11K | 6/2,566 = 0.2% |
+| multiturn_slo_clean | 2,151 (8,173) | 5 | 87K | — |
+| TraceLab g16 (parity) | 8,182 (8,191) | 10 | 904K | 18/500 = 3.6% |
+
+Three mismatches follow:
+
+- **Density.** The chunk grid is {128, 512, 1K, 2K, 4K, 7K, 8K}, but the win
+  scenario operates at 380–530 tokens — between the two lowest grid points —
+  while most sweep points sit at 2K–8K, where that scenario essentially never
+  runs. Realized decode rows (46) likewise fall between grid points 32 and 64.
+  k-NN interpolates, but both its accuracy and the out-of-support radius are
+  set by local sample density, which the grid, not the workload, determines.
+- **Correlation.** In serving the chunk is the token budget *left over* after
+  decodes are scheduled, so chunk size and decode count are strongly
+  anti-correlated (46 decodes → 386-token chunks; 10 decodes → 8.2K chunks).
+  The Cartesian sweep treats them as independent and spends points on
+  combinations the scheduler cannot produce.
+- **Heterogeneity.** Only the 360-point blended sweep has rows of differing
+  lengths inside one batch, and it covers just chunk ∈ {512, 2K} ×
+  prefix ∈ {0, 4K}. Every real decode pool is heterogeneous.
+
+So the leave-one-out worst-case of 1.000 is generalization *within the grid*,
+not to the serving distribution — the serving-level parity controls are what
+cover the latter, and they are the reason the zero-regression claim is
+defensible despite this. Measurement caveat: `#cached-token` is the radix hit
+at admission, so it is a valid prefix proxy only for a request's first chunk;
+for continued chunks the attended prefix is the already-processed portion and
+is not in the log line, which is why no prefix column appears above.
+
 **Mechanism (corrected 2026-08-06).** BatchPrefill's split-KV works on its
 own: a decode-only batch of 8 rows @64K runs in 0.366 ms through it, matching
 the persistent kernel. The failure is a planner coupling that appears only in
@@ -479,6 +518,16 @@ BatchPrefill baseline (see Setup).
   14 µs), so only the on-plan() reproduction is outstanding: time the three
   `.to("cpu", non_blocking=True)` lines with and without the following
   `torch.cuda.synchronize()` under ~40 ms of queued work.
+- [ ] **Rebuild the gate table from realized serving compositions.** The
+  current table is a uniform Cartesian grid, while the scheduler emits a
+  narrow correlated cluster per workload (see the cost-surface section): the
+  flagship win scenario runs at ~386-token chunks against 46 decode rows,
+  a region the grid samples with two points. Plan: log every mixed batch's
+  true composition (including the *attended* prefix, which `#cached-token`
+  does not give for continued chunks), then importance-sample the sweep from
+  that empirical distribution instead of the product grid. This should raise
+  win capture (fewer out-of-support declines) and make the leave-one-out
+  number mean generalization to serving rather than to the grid.
 - [ ] **Reduce β (non-overlappable fraction, 0.53)**: NCU a balanced
   composition to attribute the unrealized half of the overlap (reduction
   pass, queue-switch granularity, or L2 interference); each point of β is

@@ -29,6 +29,18 @@
   arm vs 0.906 ms in DMC, i.e. the predicted routing is visible end to end. Documents the
   gaps too — contiguous `arange` KV pages vs a fragmented radix allocator, sustained-load
   clocks, flushed vs dirty L2, graph replay, shared GPUs.
+- Mechanism arithmetic re-verified against flashinfer source, fixing one error: the
+  persistent planner's split was documented as `kv_len_limit ~ total/264`, but 264 is
+  fa2's `max_grid_size` (2 × 132 SMs) — the persistent side computes
+  `f(total_kv_lens × num_kv_heads / num_clusters)` with `num_clusters = num_sm = 132`,
+  i.e. ≈ total/33 here, halved again for the prefill tile class. The two BatchPrefill
+  numbers turn out exact rather than approximate for this config: the split budget is
+  exactly 66 units/KV head (`max_grid_size / num_kv_heads` = 264/4) and a 1,024-token
+  chunk's q-tiles are exactly 56 of them (`ceil(1024 × 7 / 128)`), so splitting the eight
+  decode rows two ways (+16) would exceed the budget and the search stops splitting
+  entirely. Also notes that the tile decision keys on the batch *mean* only in the
+  non-graph path (what the sweeps use) and on `max_qo_len` under CUDA graphs, and flags
+  that the 0.366 ms decode-only datapoint is not reproducible from saved artifacts.
 - **Corrected an overstatement**: "BatchPrefill's cost surface has cliffs no smooth model
   can track" was too strong. New `fit_learned_cost_model.py` fits MLP and GBDT to both
   kernels on the same 1,316 sweep compositions, features and model class (5-fold CV × 3

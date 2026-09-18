@@ -227,18 +227,51 @@ at admission, so it is a valid prefix proxy only for a request's first chunk;
 for continued chunks the attended prefix is the already-processed portion and
 is not in the log line, which is why no prefix column appears above.
 
-**Mechanism (corrected 2026-08-06).** BatchPrefill's split-KV works on its
-own: a decode-only batch of 8 rows @64K runs in 0.366 ms through it, matching
-the persistent kernel. The failure is a planner coupling that appears only in
-mixed batches. One prefill chunk (a) flips the batch-wide CTA tile from 16 to
-128 (`FA2DetermineCtaTileQ` uses the mean packed-qo length), and (b) consumes
-the split-work budget: `PrefillBinarySearchKVChunkSize` bounds total work
-units by the max grid size, and a 1,024-token chunk alone contributes ~56 of
-the ~66 units per KV head, so the search stops splitting the decode rows' KV
-entirely. Eight rows × 4 KV heads then stream 32 MB each from 32 CTAs while
-~100 SMs idle. The persistent planner instead partitions every row into
-(tile, head, kv-chunk) units with `kv_len_limit ~ total/264` regardless of
-batch heterogeneity, staying bandwidth-bound.
+**Mechanism (corrected 2026-08-06; arithmetic re-verified against flashinfer
+source 2026-09-19).** BatchPrefill's split-KV works on its own — a decode-only
+batch of 8 rows @64K runs in 0.366 ms through it, matching the persistent
+kernel. The failure is a planner coupling that appears only in mixed batches,
+and both halves of it are exact, not approximate, for this configuration
+(H800: `num_sm`=132, `num_kv_heads`=4, `gqa_group_size`=7):
+
+- **(a) One chunk flips the batch-wide CTA tile.** `scheduler.cuh:549-550`
+  computes `avg_packed_qo_len = sum_packed_qo_len / batch_size` and calls
+  `FA2DetermineCtaTileQ`, which returns 128 above 64, 64 above 16, else 16
+  (`utils.cuh:303`). Eight decode rows contribute 7 each; a 1,024-token chunk
+  contributes 7,168, so the mean is 802 and the tile is 128 — for *every* row,
+  including the decode rows that wanted 16. (This is the non-graph path, which
+  is what the sweeps and the mixed BatchPrefill path use. With
+  `enable_cuda_graph` the planner instead keys on `max_qo_len`
+  (`scheduler.cuh:534-537`), which a chunk raises just as surely.)
+- **(b) The same chunk exhausts the split budget.**
+  `max_batch_size_if_split = max_grid_size / num_kv_heads`, where
+  `max_grid_size = num_blocks_per_sm * num_sm = 2 × 132 = 264`
+  (`scheduler.cuh:716-718`) — so the budget is exactly **66 work units per KV
+  head**. `PrefillBinarySearchKVChunkSize` (`scheduler.cuh:101-130`) searches
+  for the smallest `kv_chunk_size` with
+  `Σ ceil(packed_qo_len_i / cta_tile_q) × ceil(kv_len_i / chunk) ≤ 66`. The
+  chunk's own q-tiles alone are `ceil(7168 / 128)` = exactly **56** of those
+  66. Splitting the eight decode rows even two ways would cost 16 more
+  (56 + 16 = 72 > 66), so the search terminates at `kv_chunk_size = max_kv_len`
+  and the decode rows are not split at all.
+
+Eight rows × 4 KV heads then stream 32 MB each (64K tokens × 128 dim × 2 bytes
+× K and V) from 32 CTAs while ~100 of the 132 SMs idle: BP plateaus near
+3.1 ms for any chunk ≥1,024 tokens, while the chunk's own attention work is
+negligible.
+
+The persistent planner has no such coupling. It sizes its KV split from the
+*total* work rather than from a fixed unit budget:
+`kv_len_limit = f(ceil_div(total_kv_lens × num_kv_heads, num_clusters))` with
+`cluster_size = 1`, `num_clusters = num_sm = 132` (`scheduler.cuh:1148-1149`,
+`1195`) — i.e. work per SM, ≈ `total_kv_lens / 33` for this head config, and
+halved again for the prefill tile class (`1196-1199`). Every row is then
+partitioned into (tile, head, kv-chunk) units regardless of batch
+heterogeneity, so it stays bandwidth-bound (~0.38 ms).
+
+*Caveat:* the 0.366 ms decode-only figure comes from an ad-hoc probe during the
+2026-08-06 investigation; every checked-in sweep point has a chunk, so that one
+number is not reproducible from saved artifacts.
 
 **This is the whole win region in one table.** Chunk held fixed at **2,048
 fresh tokens (prefix 0)**, decode rows @96K each, sweeping the pool over 64×

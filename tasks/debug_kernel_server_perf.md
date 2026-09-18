@@ -453,6 +453,59 @@ Two scope limits:
   which is the benign direction but is extrapolation. Same grid-vs-realized
   gap as the gate table above.
 
+### WGMMA tile-size mixing does not overlap (2026-09-19)
+
+Can wgmma of different tile sizes overlap, or be reordered by the compiler, so
+a mixed sequence costs less than the sum of its parts? This is the
+instruction-level version of the fused kernel's two tile classes. Tested
+directly on the H800 (sm_90a, `tasks/debug_kernel_server_perf/wgmma/`,
+`wgmma_overlap.cu` and `wgmma_two_warpgroups.cu`; min of 30 runs, marginal
+cost from a 32→256 iteration sweep so fixed overhead cancels):
+
+| sequence | marginal cycles/iter |
+|----------|---------------------:|
+| large only (`m64n64k16`) | **32.00** |
+| small only (`m64n16k16`) | **20.00** |
+| interleaved L,S,L,S… | **52.00** |
+| grouped L…L,S…S | **52.00** |
+| two warpgroups, one SM, L ‖ S | **52.10** |
+
+**Zero overlap, to the cycle.** 32.00 + 20.00 = 52.00. Issue order is
+irrelevant (interleaved vs grouped differ by a constant 16 cycles, 0.0%
+marginal), and giving the two shapes their own warpgroups on the same SM does
+not help either — the tensor-core pipe is a serial per-SM resource, and
+differently-shaped wgmma simply queue on it in proportion to their cost. The
+−13%/−3.6% that raw totals initially suggested was entirely fixed overhead
+being counted twice; it vanishes in the marginal.
+
+Sanity check against hardware peak (H800: 132 SM, 1.755 GHz, 989 TFLOP/s dense
+bf16): `m64n64k16` is 131,072 FLOP → 30.7 cycles theoretical vs 32.0 measured,
+**96% of peak**, so the benchmark is sound. `m64n16k16` is 32,768 FLOP → 7.7
+theoretical vs 20.0 measured, **38% of peak**: the cost is ≈ `16 + N/4` cycles,
+i.e. a fixed ~16-cycle issue overhead per instruction regardless of tile size.
+
+Two consequences:
+
+- **β cannot be attacked at the MMA level.** Prefill/decode overlap in the
+  fused kernel cannot come from overlapping MMA with MMA — only from
+  overlapping MMA with *memory* traffic (decode is bandwidth-bound, prefill
+  compute-bound), which is what the dual tile classes already do. Reordering
+  or co-scheduling the tile classes on one SM has no headroom to recover. The
+  remaining β budget is in the reduction pass, queue-switch granularity, or
+  L2 interference.
+- **Small query tiles are intrinsically inefficient on tensor cores**: 1.25
+  cycles per unit N at `n16` versus 0.50 at `n64`, a 2.5× penalty from that
+  fixed per-instruction cost. Decode rows are bandwidth-bound so this is
+  usually hidden, but it argues for packing GQA query heads into the largest
+  tile the group size allows before adding more small tiles.
+
+*Method caveat:* descriptors address valid aligned shared memory but the data
+is arbitrary — wgmma cost depends on shape and dependencies, not values, so
+this measures issue/pipeline throughput only. Accumulators are kept in
+registers and the first issue of each shape uses `scale-d=0`, without which
+ptxas emits C7515 and serializes the pipeline (which silently invalidated the
+first version of this benchmark).
+
 ### Measured k-NN gate
 
 Deployed version (v2, 2026-08-05, built by `build_mixed_kernel_gate_table.py`):
@@ -661,7 +714,8 @@ BatchPrefill baseline (see Setup).
 - [ ] **Reduce β (non-overlappable fraction, 0.53)**: NCU a balanced
   composition to attribute the unrealized half of the overlap (reduction
   pass, queue-switch granularity, or L2 interference); each point of β is
-  direct overlap efficiency.
+  direct overlap efficiency. **One hypothesis is now closed: it is not the
+  MMA pipe** — see "WGMMA tile-size mixing" below.
 - [ ] **Gate table: sample long-prefix chunks over blended pools** (the one
   remaining unswept region) and refresh gqa4 with the blended sweep; also
   root-cause the storm-phase retraction cascade archived in

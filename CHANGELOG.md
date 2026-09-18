@@ -29,6 +29,14 @@
   arm vs 0.906 ms in DMC, i.e. the predicted routing is visible end to end. Documents the
   gaps too — contiguous `arange` KV pages vs a fragmented radix allocator, sustained-load
   clocks, flushed vs dirty L2, graph replay, shared GPUs.
+- New WGMMA microbenchmark (`tasks/debug_kernel_server_perf/wgmma/`) answering whether
+  different tile sizes overlap or get reordered: they do not. Marginal cost is exactly
+  additive (m64n64k16 32.00 + m64n16k16 20.00 = 52.00 cycles/iter), issue order is
+  irrelevant, and two warpgroups on one SM give 52.10 — the tensor-core pipe is a serial
+  per-SM resource. Validated at 96% of H800 peak bf16 for the large tile. Closes one
+  hypothesis for the β TODO (overlap cannot come from MMA-with-MMA, only MMA-with-memory)
+  and quantifies a 2.5× per-unit-work penalty for small query tiles (cost ≈ 16 + N/4
+  cycles, so n16 runs at 38% of peak).
 - Mechanism arithmetic re-verified against flashinfer source, fixing one error: the
   persistent planner's split was documented as `kv_len_limit ~ total/264`, but 264 is
   fa2's `max_grid_size` (2 × 132 SMs) — the persistent side computes

@@ -20,6 +20,15 @@
 - `tasks/server_perf_model.md`: status note — analytic model supersedes the MLP for
   chunk control; MLP remains for the router `/get_load` signal only.
 - `tasks/README.md`: updated to the current document map.
+- External-validity subsection for the gate sweeps (are isolated-kernel benchmarks
+  representative of peak serving?): measured from the mixed-tenancy captures that exactly
+  one kernel is resident 93.25% of serving wall (≥2 only 0.36%), so the bench's
+  one-kernel-alone condition is the serving condition; serving kernel times (BP
+  0.007–16.6 ms, persistent 0.055–2.26 ms) sit inside the swept envelope (BP 0.019–28.6 ms,
+  PA 0.019–25.7 ms, decode KV 2K–6.3M); and BP's p90 kernel time is 0.267 ms in the gated
+  arm vs 0.906 ms in DMC, i.e. the predicted routing is visible end to end. Documents the
+  gaps too — contiguous `arange` KV pages vs a fragmented radix allocator, sustained-load
+  clocks, flushed vs dirty L2, graph replay, shared GPUs.
 - Removed the "DMC baselines were silently persistent" post-mortem now that every result
   it invalidated is gone from the docs; its one live invariant (baseline runners must set
   `SGLANG_FLASHINFER_USE_PERSISTENT=0` — it defaults on) is promoted to Setup as a rule.

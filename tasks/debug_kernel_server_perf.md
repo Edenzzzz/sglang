@@ -145,6 +145,49 @@ real co-tenancy pool looks like and what the KV-concentration feature keys on.
 Peak speedup is **21.0×** in the uniform sweep and **28.2×** once fresh
 prefixes are sampled.
 
+**Do these sweeps represent peak server load?** They are isolated-kernel
+benchmarks (`bench_gpu_time`: warmup + L2 flush, one kernel at a time on an
+idle GPU), so this was checked rather than assumed (2026-09-18, against the
+mixed-tenancy captures):
+
+- **Kernel isolation is the serving condition, not an artifact.** In a
+  steady-state 20 s window, exactly one kernel is resident for **93.25%** of
+  wall; two overlap for 0.36% and three or more for 0.00%. sglang issues
+  essentially everything on one stream, so an attention kernel gets the whole
+  GPU in serving just as it does in the bench. The sweep is not measuring an
+  unrealistically quiet device.
+- **Serving sits inside the swept envelope.** Sweep covers total decode KV
+  2K–6.3M tokens with BP 0.019–28.6 ms and persistent 0.019–25.7 ms; measured
+  in serving, BP kernels run 0.007–16.6 ms and persistent 0.055–2.26 ms
+  (p50 0.209 ms). No serving composition lands outside the sampled range.
+- **The predicted routing shows up in serving.** BatchPrefill's p90 kernel
+  time is **0.267 ms in the gated arm vs 0.906 ms in the DMC arm** — same
+  kernel, same workload, differing only in that the gate moved the
+  compositions the sweep flagged as pathological onto the persistent kernel.
+
+What the sweeps do *not* reproduce, in rough order of concern:
+
+- **Contiguous KV pages.** `Bench` uses `kv_indices = torch.arange(...)`,
+  while a long-lived server's radix allocator hands out fragmented pages. Both
+  kernels gather through that array, but they gather differently (persistent
+  splits one row's KV across CTAs; BP streams long runs from few CTAs), so
+  fragmentation need not penalise them equally. Untested.
+- **Sustained-load clocks.** The bench is short bursts on a cool GPU; serving
+  holds ~94% occupancy for minutes. No clock telemetry was captured.
+- **L2 residency.** `bench_gpu_time` flushes L2; in serving attention inherits
+  a dirty L2 from the preceding GEMM. Immaterial for long rows (working set
+  >> 50 MB) but potentially material for the small-batch compositions where
+  the measured 0.57–0.70× losses live.
+- **Eager launch vs CUDA-graph replay** (kernel time is the same; launch path
+  is not), and a **shared** GPU (MPS or a co-tenant process) would change
+  cooperative-launch timing specifically — both sweeps and serving runs assume
+  a dedicated device.
+
+The load-bearing defence is not that the microbenchmark is realistic, but that
+the table is only ever used as a *decision* rule whose decisions were then
+validated end to end: parity controls, paired repeats, and the mixed-tenancy
+A/Bs below are what would expose a bench-to-serving mismatch.
+
 **Mechanism (corrected 2026-08-06).** BatchPrefill's split-KV works on its
 own: a decode-only batch of 8 rows @64K runs in 0.366 ms through it, matching
 the persistent kernel. The failure is a planner coupling that appears only in

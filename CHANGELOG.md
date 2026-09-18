@@ -29,6 +29,17 @@
   arm vs 0.906 ms in DMC, i.e. the predicted routing is visible end to end. Documents the
   gaps too — contiguous `arange` KV pages vs a fragmented radix allocator, sustained-load
   clocks, flushed vs dirty L2, graph replay, shared GPUs.
+- **Corrected an overstatement**: "BatchPrefill's cost surface has cliffs no smooth model
+  can track" was too strong. New `fit_learned_cost_model.py` fits MLP and GBDT to both
+  kernels on the same 1,316 sweep compositions, features and model class (5-fold CV × 3
+  seeds): an MLP reaches 9.9% MAPE on BatchPrefill, beating the 13.3% of the analytic
+  parts-based fit, so part of that gap was the functional form. What survives is the
+  relative claim — BP is 1.7–3× harder than the persistent kernel (GBDT 10.1% vs 3.3%,
+  worst case 103% vs 63%) — plus two practical points: adding fa2's own tile-decision
+  variables recovers only 10.1%→8.6%, consistent with the residual living in the
+  split-budget search over the per-row KV vector; and fitting BP needs ~1,300 measured
+  compositions per GPU versus 35 for the analytic law, reintroducing exactly the
+  profiling campaign it removes. Docstring in `overlap_cost_model.py` updated to match.
 - Recorded why the kernel layer exists when only `predict()` is consumed: it is the
   interior of the one model in use, not a second model, and it is what makes the model
   training-free (35 kernel measurements vs the replaced MLP's 25,444 profiled configs),

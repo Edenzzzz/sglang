@@ -12,15 +12,21 @@ a mixed batch's attention time obeys
 
 where T_d is the decode pool's (bandwidth-bound) time, T_p the chunk's
 (compute-bound) time, and beta the measured non-overlappable fraction. On the
-H800 sweep this law holds to 3.1% MAPE, so a closed-form controller can spend
-an ITL budget precisely: below the balance point (T_p <= T_d), prefill tokens
+H800 sweep this law holds to 3.1% MAPE (3.2% leave-one-out), so a closed-form
+controller can spend an ITL budget precisely: below the balance point (T_p <= T_d), prefill tokens
 cost only beta * dT_p — the overlap discount. The same construction fails for
 the split-kernel baseline: BatchPrefill's mixed cost is super-additive in its
-parts (up to 8.1x their sum; fitting max + beta*min yields beta=2.19). Its
-best parts-based fit -- a general affine form in (max, min) -- still has
-13.3% MAPE with 43% worst-case error, versus 3.1%/9% here, because one chunk
-flips the batch-wide CTA tile and consumes the KV-split work budget, so the
-cost surface has cliffs no smooth model can track.
+parts (up to 8.1x their sum; fitting max + beta*min yields beta=2.19), because
+one chunk flips the batch-wide CTA tile and consumes the KV-split work budget.
+
+That is a statement about this functional form, not about learnability in
+general: a learned model does fit BatchPrefill (MLP 9.9% MAPE over 1,316
+measured compositions). What survives is the relative gap -- on identical
+data, features and model class, BatchPrefill is 1.7-3x harder to predict than
+this kernel (GBDT 10.1% vs 3.3% MAPE, 103% vs 63% worst case), and closing it
+needs per-GPU profiling of ~1,300 compositions rather than the 35 kernel
+measurements behind the constants below. See
+tasks/debug_kernel_server_perf/fit_learned_cost_model.py.
 
 The whole forward step adds a linear non-attention term:
 

@@ -124,15 +124,26 @@ batch), `bench_gpu_time` medians, BatchPrefill fa2 vs both persistent
 schedules. Three sweeps, all checked in, which together are the deployed
 1,316-point gate table:
 
-| sweep | script | data | n | covers |
-|-------|--------|------|--:|--------|
-| uniform | `gate_sweep3.py` | `gate_sweep3_qwen25_h800.json` | 479 | decode 1–128 req @2K–98K KV × chunks 128–8192 @512–81920 prefix |
-| fresh-prefix | `sweep_fresh.py` (+ `probe_fresh_qwen25_h800.json`) | `gate_sweep_merged_qwen25_h800.json` | 956 | adds chunk prefixes below 512 — the highest-value region the first sweep never sampled |
-| blended pools | `sweep_blend.py` | `gate_sweep_blend_qwen25_h800.json` | 360 | few long rows mixed with many short ones (uniform-KV sweeps cannot express this) |
+| sweep | n | decode rows | decode KV/row | **chunk tokens** | **chunk prefix** |
+|-------|--:|-------------|---------------|------------------|------------------|
+| uniform | 479 | 1–128 (all equal) | 2K–98K | 128, 512, 1K, 2K, 4K, 7K, 8K | 512, 2K, 4K, 8K, 16K, 32K, 64K, 80K |
+| fresh-prefix extension | +477 | 1–128 (all equal) | 2K–98K | 128, 512, 2K, 4K, 8K | **0, 128, 256** (+32K/64K controls) |
+| blended pools | 360 | 2–88 (**mixed lengths**) | 2K–64K within one batch | 512, 2K | 0, 4K |
+
+| sweep | script | data file |
+|-------|--------|-----------|
+| uniform | `gate_sweep3.py` | `gate_sweep3_qwen25_h800.json` (gqa4: `gate_sweep3_qwen3_h800.json`) |
+| fresh-prefix extension | `sweep_fresh.py`, `probe_fresh_qwen25_h800.json` | merged with the above into `gate_sweep_merged_qwen25_h800.json` (956) |
+| blended pools | `sweep_blend.py` | `gate_sweep_blend_qwen25_h800.json` |
+
+The fresh-prefix extension is the one that mattered: the uniform sweep never
+sampled a chunk prefix below 512, so the entire fresh-arrival region — where
+the kernel is worth 8–28× — was invisible to it. The blended sweep is the only
+one whose decode rows have *different* lengths within a batch, which is what a
+real co-tenancy pool looks like and what the KV-concentration feature keys on.
 
 Peak speedup is **21.0×** in the uniform sweep and **28.2×** once fresh
-prefixes are sampled; the qwen3/gqa4 equivalent is
-`gate_sweep3_qwen3_h800.json`.
+prefixes are sampled.
 
 **Mechanism (corrected 2026-08-06).** BatchPrefill's split-KV works on its
 own: a decode-only batch of 8 rows @64K runs in 0.366 ms through it, matching
@@ -147,11 +158,12 @@ entirely. Eight rows × 4 KV heads then stream 32 MB each from 32 CTAs while
 (tile, head, kv-chunk) units with `kv_len_limit ~ total/264` regardless of
 batch heterogeneity, staying bandwidth-bound.
 
-**This is the whole win region in one table.** Fresh 2,048-token chunk against
-rows @96K, sweeping the decode pool over 64× (`gate_sweep_merged_qwen25_h800.json`):
+**This is the whole win region in one table.** Chunk held fixed at **2,048
+fresh tokens (prefix 0)**, decode rows @96K each, sweeping the pool over 64×
+(`gate_sweep_merged_qwen25_h800.json`):
 
-| decode rows | total KV | BatchPrefill | persistent | speedup |
-|------------:|---------:|-------------:|-----------:|--------:|
+| decode rows @96K | total decode KV | BatchPrefill | persistent | speedup |
+|-----------------:|----------------:|-------------:|-----------:|--------:|
 | 1 | 98K | 2.970 ms | 0.105 ms | **28.2×** |
 | 2 | 197K | 2.979 ms | 0.169 ms | 17.7× |
 | 4 | 393K | 2.983 ms | 0.298 ms | 10.0× |

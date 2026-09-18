@@ -29,6 +29,13 @@
   arm vs 0.906 ms in DMC, i.e. the predicted routing is visible end to end. Documents the
   gaps too — contiguous `arange` KV pages vs a fragmented radix allocator, sustained-load
   clocks, flushed vs dirty L2, graph replay, shared GPUs.
+- Clarified that the analytic cost model is **kernel-level** (its per-layer attention law
+  is fit on 35 kernel measurements: T_d 2.04% MAPE, T_p 3.47%, composition law 3.10%
+  in-sample and newly 3.22%/9.7% leave-one-out, so the one-parameter law is not overfit);
+  only the `c0 + c1·tokens` step wrapper is server-level, and those two constants are
+  derived from hardware specs rather than fit, with a single serving anchor. Records the
+  two scope limits: persistent kernel only (no BatchPrefill equivalent by design), and a
+  fit grid that sits above the realized operating point of the SLO runs it drives.
 - Batch-mixture representativeness measured from the gated runs' scheduler logs and
   recorded as a known weakness: the sweeps are a Cartesian grid, but realized mixed
   batches form a narrow correlated cluster per workload (win scenario: 386-token chunks

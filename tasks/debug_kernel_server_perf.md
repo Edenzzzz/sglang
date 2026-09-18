@@ -331,6 +331,35 @@ the mixed launch against the two parts run separately:
   (choose chunk so T_p ~ T_d against the live decode pool) would hold serving
   inside the 1.25x band instead of sampling it, and is the natural next step.
 
+### The cost model is kernel-level; only its wrapper is server-level
+
+Worth stating explicitly, because the model's *use* (EDF chunk control) is
+server-level while its *fit* is not. `overlap_cost_model.py` is two layers:
+
+| layer | form | constants | fit from | error |
+|-------|------|-----------|----------|-------|
+| decode attention | `T_d = a_d·decode_kv + c_d` | 2 | kernel times (`overlap_attribution.json`, n=35) | 2.04% MAPE, 4.8% max |
+| chunk attention | `T_p = a_p·(n·prefix + n²/2) + c_p` | 2 | same, n=30 with a chunk | 3.47% MAPE, 7.0% max |
+| **mixed composition** | `T_attn = max(T_p,T_d) + β·min` | 1 (β=0.5285) | same | **3.10% MAPE / 9.1% max in-sample; 3.22% / 9.7% leave-one-out** |
+| step wrapper | `T_step = c0 + c1·tokens + L·T_attn` | 2 | **not fit** — derived from hardware (15.2 GB weights ÷ 3.35 TB/s + 0.6 ms; 2·params ÷ 600 TFLOP/s) | one serving anchor: 15.1 ms predicted vs 15.75 ms measured mean ITL |
+
+So the kernel layer is measured, fit, and cross-validated (LOO barely moves the
+error, so the one-parameter law is not overfit); the server layer is an
+analytic roofline with a single sanity check. Two scope limits:
+
+- **It models the persistent kernel only.** There is deliberately no
+  BatchPrefill equivalent — its mixed cost is super-additive in its parts
+  (fitted β=2.19; best parts-based affine fit 13.3% MAPE / 43% max), which is
+  why kernel *selection* needs a measured table rather than comparing two
+  formulas.
+- **Its fit grid is small and sits above the realized operating point**:
+  decode rows {8, 12, 16, 32}, per-row KV {32K, 40K, 64K}, chunk {2K, 4K, 8K},
+  prefix {0, 8K, 16K, 32K}. The SLO runs it actually drove operated at chunk
+  p50 2,151 (inside) but decode rows p50 5 and total decode KV 87K (both
+  *below* the grid) — extrapolation of a linear roofline below its fit range,
+  which is the benign direction but is extrapolation. Same grid-vs-realized
+  gap as the gate table above.
+
 ### Measured k-NN gate
 
 Deployed version (v2, 2026-08-05, built by `build_mixed_kernel_gate_table.py`):

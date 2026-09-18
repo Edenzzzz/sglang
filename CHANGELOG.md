@@ -29,6 +29,12 @@
   arm vs 0.906 ms in DMC, i.e. the predicted routing is visible end to end. Documents the
   gaps too — contiguous `arange` KV pages vs a fragmented radix allocator, sustained-load
   clocks, flushed vs dirty L2, graph replay, shared GPUs.
+- Recorded why the kernel layer exists when only `predict()` is consumed: it is the
+  interior of the one model in use, not a second model, and it is what makes the model
+  training-free (35 kernel measurements vs the replaced MLP's 25,444 profiled configs),
+  what makes the fused-vs-split predictability contrast visible at all (the step-level
+  `c0 + c1·tokens` term masks it), and what an overlap-aware chunk controller would need.
+  That controller is now an Open TODO rather than only prose.
 - Clarified that the analytic cost model is **kernel-level** (its per-layer attention law
   is fit on 35 kernel measurements: T_d 2.04% MAPE, T_p 3.47%, composition law 3.10%
   in-sample and newly 3.22%/9.7% leave-one-out, so the one-parameter law is not overfit);

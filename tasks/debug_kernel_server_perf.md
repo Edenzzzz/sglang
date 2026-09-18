@@ -345,7 +345,30 @@ server-level while its *fit* is not. `overlap_cost_model.py` is two layers:
 
 So the kernel layer is measured, fit, and cross-validated (LOO barely moves the
 error, so the one-parameter law is not overfit); the server layer is an
-analytic roofline with a single sanity check. Two scope limits:
+analytic roofline with a single sanity check.
+
+**Only `predict()` is consumed** — `attn_layer_ms()` has exactly one caller
+(line 114 of the same file), and the EDF controller asks only for whole-step
+ms. So there is one model in use, not two; the kernel law is its interior.
+That interior is doing three jobs:
+
+1. **It is why the model needs no training.** The MLP it replaced had to learn
+   `T_step(n_p, r_p, r_d, decode_bs)` end to end from **25,444 profiled
+   configs** per model/GPU. The analytic model needs **35 kernel
+   measurements** because the composition rule is known rather than learned —
+   the structure does the work the data used to. Re-fitting for a new GPU is
+   an afternoon, not a profiling campaign.
+2. **It is where the paper's predictability claim is even visible.** "The
+   split-kernel baseline has no closed form" is a *kernel-level* statement
+   (fitted β=2.19; 13.3%/43% for the best parts-based fit). At step level the
+   `c0 + c1·tokens` term is large enough to mask the attention pathology, so
+   measuring only whole steps would hide exactly the effect being claimed.
+3. **It is what an overlap-aware chunk controller would need.** Choosing a
+   chunk so `T_p ≈ T_d` (holding serving inside the 1.2–1.26× overlap band
+   instead of sampling it) requires the two terms *separately*, which the
+   step total does not expose. Not implemented — see Open TODOs.
+
+Two scope limits:
 
 - **It models the persistent kernel only.** There is deliberately no
   BatchPrefill equivalent — its mixed cost is super-additive in its parts
@@ -557,6 +580,14 @@ BatchPrefill baseline (see Setup).
   that empirical distribution instead of the product grid. This should raise
   win capture (fewer out-of-support declines) and make the leave-one-out
   number mean generalization to serving rather than to the grid.
+- [ ] **Overlap-aware chunk sizing (the one use that needs the kernel layer
+  directly).** The EDF controller currently sizes chunks against a whole-step
+  latency budget, so it *samples* the overlap band rather than aiming at it.
+  `attn_layer_ms` already computes `T_p` and `T_d` separately: pick the chunk
+  where `T_p ≈ T_d` against the live decode pool (subject to the SLO budget)
+  and serving would sit inside the measured 1.2–1.26× band instead of
+  drifting through it. This is the only consumer that would call the kernel
+  layer on its own rather than through `predict()`.
 - [ ] **Reduce β (non-overlappable fraction, 0.53)**: NCU a balanced
   composition to attribute the unrealized half of the overlap (reduction
   pass, queue-switch granularity, or L2 interference); each point of β is

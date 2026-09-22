@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.6.0 — Real-Workload Capture, Hopper Scheduling Study, Gate v3 (2026-09-19 → 09-22)
+
+### Workload capture (new)
+- `SGLANG_LOG_MIXED_COMPOSITION=<path>` records every mixed batch's real composition
+  from the gate: per-row decode KV, chunk tokens, the **true attended prefix** (the
+  scheduler's `#cached-token` is 0 for continued chunks), and the gate's decision.
+  Wired into `run_mixed_workloads.py`, plus four `loadsweep_{hi,med,lo,min}` scenarios.
+- Captured 3,493 mixed batches across a high→low co-tenancy load sweep. The realized
+  shape: chunk size barely moves with load (p50 395–446) because it is the leftover
+  token budget, while decode rows go 46 → 2 and the gate's persistent share 77% → 23%.
+  Prefixes are fresh 73–96% of the time.
+- **The sweep grid was badly mis-sampled**: 91.4% of real chunks fall in 128–512 tokens,
+  a bin the grid covers with one point, while five of its seven chunk values sit where
+  7% of traffic lands.
+
+### Kernel replay on real compositions (`sweep_from_capture.py`)
+- Time-weighted over the captured distribution: FA2 1.00×, **FA3 0.67×**, persistent
+  **2.60×**, deployed v2 gate 1.90×. FA3 loses to FA2 at every decode-row count
+  (0.28–0.84×) — its fixed `cta_tile_q = 64` pads a GQA-7 decode row ninefold, which
+  costs more than its better planner saves. Porting to FA3 is not the Hopper win.
+- Gate decline diagnosis over 3,520 batches: 55.1% accepted, **27.0% declined by the
+  out-of-support guard**, 17.9% non-unanimous — the grid mismatch, costing 14.2% of
+  total FA2 kernel time.
+
+### Gate v3 (deployed)
+- Rebuilt `mixed_kernel_gate_h800_gqa7.json` with 60 measured serving compositions
+  folded into the grid (1,376 points). On **held-out** buckets: accept 63.1% → 98.1%,
+  speedup vs FA2 **2.17× → 3.50×**, 99.6% of oracle. A 1.61× kernel-policy gain with
+  no kernel change.
+- Doing this at k=5 would have cost the zero-regression property (worst-case LOO
+  0.971×); **k=7 restores worst-case LOO to exactly 1.000×** with no loss of held-out
+  gain. `build_mixed_kernel_gate_table.py` gains `--k` / `--label`.
+
+### Hopper instruction-level study (`tasks/debug_kernel_server_perf/wgmma/`)
+- Five microbenchmarks, marginal cycles, validated at 96% of H800 peak bf16:
+  wgmma shape mixing does **not** overlap within a warpgroup (32.00 + 20.00 = 52.00,
+  order irrelevant) **or across warpgroups** on one SM (52.10) — the tensor core is a
+  serial per-SM resource. exp2 does **not** hide under an in-flight wgmma (+50.5 cyc/8
+  ops), but **hides 73% of the MMA when placed on a different warpgroup** (FA3's
+  ping-pong premise, quantified). Small tiles absorb 8 FFMA ops at **zero** cost where
+  large tiles pay 3.5 — cost is ≈ `16 + N/4`, so `n16` runs at 38% of peak.
+- Closes one β hypothesis: the non-overlappable 0.53 is not the MMA pipe.
+- Two measurement traps documented: ptxas C7515 (non-wgmma writes to accumulators)
+  silently serializes the pipeline, and any runtime branch in the issue loop inflates
+  the baseline 3× — both produced false "no overlap" readings in earlier drafts.
+
 ## v0.5.1 — Task-doc cleanup: invalidated results removed, story-order restructure (2026-08-13)
 
 - `tasks/debug_kernel_server_perf.md`: deleted the sections marked superseded/

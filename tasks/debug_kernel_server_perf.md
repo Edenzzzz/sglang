@@ -602,6 +602,11 @@ LOO to exactly 1.000×** with no loss of held-out gain, so v3 ships at k=7:
 This is a 1.61× kernel-policy improvement on real traffic with no kernel change
 — the payoff for sampling the workload instead of a grid.
 
+*Scope:* only the gqa7 (Qwen2.5-7B) table is rebuilt. `mixed_kernel_gate_h800_gqa4.json`
+(Qwen3-8B) is still grid-only and will have the same over-conservative decline
+behaviour until a capture is run on that head config. `k` is read from the table
+file, so the two can differ safely.
+
 ### FA3 as a target: what it already fixes, and what it still lacks (2026-09-22)
 
 Reading the three planners side by side (`flashinfer/include/flashinfer/attention/scheduler.cuh`)
@@ -821,16 +826,11 @@ BatchPrefill baseline (see Setup).
   14 µs), so only the on-plan() reproduction is outstanding: time the three
   `.to("cpu", non_blocking=True)` lines with and without the following
   `torch.cuda.synchronize()` under ~40 ms of queued work.
-- [ ] **Rebuild the gate table from realized serving compositions.** The
-  current table is a uniform Cartesian grid, while the scheduler emits a
-  narrow correlated cluster per workload (see the cost-surface section): the
-  flagship win scenario runs at ~386-token chunks against 46 decode rows,
-  a region the grid samples with two points. Plan: log every mixed batch's
-  true composition (including the *attended* prefix, which `#cached-token`
-  does not give for continued chunks), then importance-sample the sweep from
-  that empirical distribution instead of the product grid. This should raise
-  win capture (fewer out-of-support declines) and make the leave-one-out
-  number mean generalization to serving rather than to the grid.
+- [x] **Rebuild the gate table from realized serving compositions.** Done
+  2026-09-22 for gqa7: capture via `SGLANG_LOG_MIXED_COMPOSITION`, replay via
+  `sweep_from_capture.py`, rebuild at k=7. Held-out 2.17× → 3.50× vs FA2 with
+  worst-case LOO still 1.000. **Still open for gqa4** (Qwen3-8B), which needs
+  its own capture run.
 - [ ] **Overlap-aware chunk sizing (the one use that needs the kernel layer
   directly).** The EDF controller currently sizes chunks against a whole-step
   latency budget, so it *samples* the overlap band rather than aiming at it.

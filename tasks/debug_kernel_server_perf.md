@@ -453,6 +453,28 @@ Two scope limits:
   which is the benign direction but is extrapolation. Same grid-vs-realized
   gap as the gate table above.
 
+### Captured mixed-batch workload (2026-09-22)
+
+The gate table and every kernel sweep so far were built on a Cartesian grid.
+`SGLANG_LOG_MIXED_COMPOSITION=<path>` now records the **real** composition of
+every mixed batch from `select_mixed_attention_kernel` — per-row decode KV, the
+chunk's token count, its *true attended prefix* (not `#cached-token`, which is
+0 for continued chunks), and the gate's decision — so sweeps can be resampled
+from the realized distribution. Captured across a co-tenancy load sweep
+(`run_mixed_workloads.py --scenario loadsweep_{hi,med,lo,min}`, agent + chat
+at 16/8/4/1.5 chat req/s), analyzed by `analyze_captured_workload.py`, replayed
+by `sweep_from_capture.py`.
+
+<!-- LOADSWEEP_TABLE -->
+
+The shape of real mixed batches is not what the grid samples: at high load a
+mixed batch is **~46 decode rows against a ~400-token, zero-prefix chunk**,
+where the grid's chunk axis starts at 128 and jumps to 512, and its decode-row
+axis jumps 32 → 64. The mean relative distance from a realized chunk to the
+nearest grid point is >1, i.e. the typical real batch is *farther from the
+nearest sampled point than that point's own magnitude* — the gate is
+interpolating, and its out-of-support guard is what keeps that safe.
+
 ### Hopper instruction-level scheduling study (2026-09-19..22)
 
 What scheduling headroom exists for mixing the two tile classes on Hopper?
@@ -504,6 +526,38 @@ without that ptxas emits C7515 and serializes the pipeline. Any runtime branch
 inside the issue loop blocks unrolling and inflates the baseline 3× (32 → 105
 cycles), so all variants are compile-time template parameters. Both traps
 silently produced "no overlap" answers in earlier drafts of these benchmarks.
+
+### FA3 as a target: what it already fixes, and what it still lacks (2026-09-22)
+
+Reading the three planners side by side (`flashinfer/include/flashinfer/attention/scheduler.cuh`)
+changes the framing of the whole gate:
+
+| | q-tile selection | KV-split sizing | load balancing |
+|---|---|---|---|
+| **FA2** (`:537,550`) | batch-wide adaptive 16/64/128 via `FA2DetermineCtaTileQ` — **one chunk flips it for every row** | fixed budget `max_grid_size/num_kv_heads` = 66 units — **one chunk eats 56** | none (static split) |
+| **FA3** (`:1468`) | **fixed `cta_tile_q = 64`** (cluster 1–2), no flip | `f(total_kv_lens / num_clusters)` — from total work | **MinHeap cost scheduler** (`:1507`) |
+| **persistent** (`:1110`) | **dual classes `{128, 16}`**, chosen per row by `packed_qo_len > 16` | `f(total_kv×heads / num_clusters)` | MinHeap per task queue |
+
+So **FA3 has already fixed both FA2 pathologies** the gate was built around — no
+batch-wide tile flip, and a work-derived KV split with an LPT-style heap. The
+persistent kernel's remaining structural advantage over FA3 is narrower than
+over FA2, and it is specifically the **heterogeneous tile**: for a decode row
+with GQA 7, `packed_qo_len = 7`, so FA3 pads it into a 64-row tile (9× wasted
+q-dimension) where the persistent kernel uses its 16 tile (2.3×).
+
+That lines up with the instruction-level study above: `m64n64k16` runs at 96%
+of peak and `m64n16k16` at 38%, but the small tile does a quarter of the work
+for 20/32 of the cycles *and* absorbs 8 FFMA ops for free. For the captured
+workload — ~46 decode rows of 7 packed q-rows each against one ~400-token
+chunk — nearly all the work is rows that want the small tile.
+
+**Direction being tested:** graft the persistent kernel's second (small) tile
+class onto FA3's better mainloop and existing heap scheduler, rather than
+porting FA3's mainloop into the persistent kernel. FA3 supplies the Hopper
+pieces (TMA, warp-specialized softmax — worth ~73% MMA hiding per the
+cross-warpgroup measurement); what it lacks is the dual queue. The 4-way
+replay on captured compositions (`sweep_from_capture.py`: fa2 / fa3 /
+persistent-flip / persistent-noflip) quantifies the gap before any kernel work.
 
 ### Measured k-NN gate
 

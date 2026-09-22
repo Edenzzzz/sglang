@@ -15,6 +15,19 @@
   a bin the grid covers with one point, while five of its seven chunk values sit where
   7% of traffic lands.
 
+### Corrections (2026-09-23)
+- The captured ~400-token "chunks" are **not chunks**: the distribution is bimodal and the
+  small mode is the chat tenant's whole prompt (uniform[256,512], prefilled in one shot
+  since 512 ≪ chunked_prefill_size=8192). It is load-invariant because it is a scenario
+  parameter, not a leftover token budget; EDF was off (`fcfs`). The gate-v3 gain is
+  therefore established for this workload's prompt-length mix, not in general.
+- **Scope limit**: a decode row's `packed_qo_len` is `1 × gqa_ratio`, and the dual-tile
+  premise only exists at ratio ≤ 16. At ratio 64–128 (MLA: Kimi-K2, DeepSeek-V3/V4)
+  decode rows already sit in the large tile class — no heterogeneity to exploit and no
+  16→128 flip for a chunk to cause — and those models use separate MLA backends that
+  never call `select_mixed_attention_kernel`. The win region is low-GQA-ratio models
+  (Llama/Qwen dense, 7–16) on the standard flashinfer backend.
+
 ### Kernel replay on real compositions (`sweep_from_capture.py`)
 - Time-weighted over the captured distribution: FA2 1.00×, **FA3 0.67×**, persistent
   **2.60×**, deployed v2 gate 1.90×. FA3 loses to FA2 at every decode-row count

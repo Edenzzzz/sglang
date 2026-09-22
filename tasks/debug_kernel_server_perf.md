@@ -472,9 +472,23 @@ by `sweep_from_capture.py`.
 | lo (4/s, 6 sessions) | 512 | 1 / **4** / 46 | 283 / **398** / 502 | 1 | 2K | 31% |
 | min (1.5/s, 4 sessions) | 128 | 1 / **2** / 12 | 296 / **446** / 8186 | 1 | 1K | 23% |
 
-Chunk size barely moves with load (p50 395–446 everywhere) because it is the
-token budget left over after decodes are scheduled; what moves is the decode
-population (46 → 2 rows) and with it the gate's persistent share (77% → 23%).
+**Correction (2026-09-23): those ~400-token "chunks" are not chunks.** The
+distribution is bimodal — 4,113 samples at p10/p50/p90 = 278/**382**/484 and
+304 at p50 8,145. The small mode is the *chat tenant's entire prompt*
+(`--random-input 512 --random-range-ratio 0.5` → uniform[256,512], whose
+p10/p50/p90 is 280/385/489), prefilled in one shot because 512 ≪
+`chunked_prefill_size=8192`. The large mode is the codex tenant genuinely
+chunked at the 8,192 cap. So chunk size is load-invariant because **it is a
+scenario parameter I chose**, not because it is a leftover token budget — the
+earlier explanation here was wrong, and it was not EDF either (the capture runs
+used `schedule_policy='fcfs'`, `enable_priority_scheduling=False`). What
+genuinely moves with load is the decode population (46 → 2 rows) and with it
+the gate's persistent share (77% → 23%).
+
+This limits how far the capture generalizes: the chunk axis of the captured
+distribution is set by the chat prompt-length mix, so the gate-v3 gain is
+established *for this workload* and would need re-capturing under a different
+prompt-length profile.
 Prefixes are essentially always fresh (73–96% below 512 tokens) — this is the
 co-tenancy shape, not session replay.
 
@@ -626,6 +640,37 @@ claiming either the chat win or the codex regression. The kernel-level result
 (Qwen3-8B) is still grid-only and will have the same over-conservative decline
 behaviour until a capture is run on that head config. `k` is read from the table
 file, so the two can differ safely.
+
+### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
+
+A decode row's `packed_qo_len` is `1 × gqa_ratio`, and two thresholds decide
+whether any of the tile heterogeneity this work exploits exists at all:
+the persistent kernel routes to its small tile only when `packed_qo_len <= 16`
+(`CTA_TILE_Q_SIZES = {128, 16}`), and FA2 picks tile 16 for a decode-only batch
+only when the batch-average is ≤ 16.
+
+| model | qo/kv | ratio | decode packed_qo | FA2 tile | persistent tile |
+|-------|------:|------:|-----------------:|---------:|----------------:|
+| Qwen2.5-7B (ours) | 28/4 | 7 | 7 | 16 | **small (16)** |
+| Llama-3.3-70B | 64/8 | 8 | 8 | 16 | small (16) |
+| Qwen3-235B-A22B | 64/4 | 16 | 16 | 16 | small (16) — at the boundary |
+| Kimi-K2 (MLA) | 64/1 | 64 | 64 | 64 | **large (128)** |
+| DeepSeek-V3/V4 (MLA) | 128/1 | 128 | 128 | 128 | **large (128)** |
+
+**At ratio > 16 the entire premise disappears.** Decode rows already live in the
+large tile class, so there is no heterogeneity for the dual-tile kernel to
+exploit — and, symmetrically, no 16→128 flip for one prefill chunk to cause,
+which is the FA2 pathology the gate was built around. MLA models are also
+routed to different backends entirely (`flashinfer_mla_backend.py`,
+`flashmla_backend.py`, `trtllm_mla_backend.py`, `cutlass_mla_backend.py`);
+`select_mixed_attention_kernel` exists only in `flashinfer_backend.py` and is
+never reached from them.
+
+So the win region is **low-GQA-ratio models on the standard flashinfer
+backend**. That covers the Llama/Qwen-dense family (ratios 7–16), and excludes
+the MLA frontier models where most current serving attention is going. The
+`m64n16k16`-vs-`m64n64k16` instruction study is scoped the same way: with no
+small tiles, its small-tile slack finding does not apply.
 
 ### FA3 as a target: what it already fixes, and what it still lacks (2026-09-22)
 

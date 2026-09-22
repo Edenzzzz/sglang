@@ -465,7 +465,35 @@ from the realized distribution. Captured across a co-tenancy load sweep
 at 16/8/4/1.5 chat req/s), analyzed by `analyze_captured_workload.py`, replayed
 by `sweep_from_capture.py`.
 
-<!-- LOADSWEEP_TABLE -->
+| load point | mixed batches | decode rows p10/50/90 | chunk tokens p10/50/90 | attended prefix p50 | decode KV p50 | gate→persistent |
+|------------|--------------:|----------------------:|-----------------------:|--------------------:|--------------:|----------------:|
+| hi (chat 16/s, 12 sessions) | 1,792 | 33 / **46** / 47 | 288 / **411** / 501 | 2 | 145K | **77%** |
+| med (8/s, 8 sessions) | 1,088 | 2 / **7** / 47 | 280 / **395** / 496 | 2 | 45K | 34% |
+| lo (4/s, 6 sessions) | 512 | 1 / **4** / 46 | 283 / **398** / 502 | 1 | 2K | 31% |
+| min (1.5/s, 4 sessions) | 128 | 1 / **2** / 12 | 296 / **446** / 8186 | 1 | 1K | 23% |
+
+Chunk size barely moves with load (p50 395–446 everywhere) because it is the
+token budget left over after decodes are scheduled; what moves is the decode
+population (46 → 2 rows) and with it the gate's persistent share (77% → 23%).
+Prefixes are essentially always fresh (73–96% below 512 tokens) — this is the
+co-tenancy shape, not session replay.
+
+The mismatch with the sweep grid is stark once chunk mass is binned against
+the grid's own sample points:
+
+| chunk bin | grid sample points in bin | share of real chunks |
+|-----------|--------------------------:|---------------------:|
+| 0 – 128 | 0 | 1.3% |
+| **128 – 512** | **1** (just 128) | **91.4%** |
+| 512 – 2,048 | 2 | 0.8% |
+| 2,048 – 8,192 | 3 | 6.5% |
+| ≥ 8,192 | 1 | 0.0% |
+
+**Nine out of ten real chunks fall in a range the grid samples with a single
+point**, while five of the grid's seven chunk values sit where 7% of traffic
+lands. (An earlier "mean distance to nearest grid point" statistic read 1.5,
+but it is dominated by the 1.3% tail of 2–16-token chunks and overstates the
+problem; the binned mass above is the honest version.)
 
 The shape of real mixed batches is not what the grid samples: at high load a
 mixed batch is **~46 decode rows against a ~400-token, zero-prefix chunk**,

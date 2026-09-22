@@ -86,7 +86,7 @@ def main():
         p_kvl = [int(x) for x in r["p"]]
         q_lens = torch.tensor([1] * len(d_kvl) + p_lens, dtype=torch.int32)
         kv_lens = torch.tensor(d_kvl + p_kvl, dtype=torch.int32)
-        if int(kv_lens.sum()) > 7_900_000 or int(q_lens.sum()) > 65536:
+        if int(kv_lens.sum()) > 7_900_000 or int(q_lens.sum()) > 32768:
             continue
         q_indptr = torch.cat([torch.zeros(1, dtype=torch.int32), torch.cumsum(q_lens, 0).int()])
         kv_indptr = torch.cat([torch.zeros(1, dtype=torch.int32), torch.cumsum(kv_lens, 0).int()])

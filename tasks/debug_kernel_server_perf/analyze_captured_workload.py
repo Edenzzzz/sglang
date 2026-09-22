@@ -74,18 +74,26 @@ def main():
         print(f"{tag:<14} {len(F):>6} {fmt(bs):>18} {fmt(q):>20} {fmt(pf):>20} "
               f"{fmt(D/1e3)+'K':>18} {pa*100:>7.0f}%")
 
-    print("\n--- where the gate grid is vs where serving actually runs ---")
+    print("\n--- chunk-size mass vs gate-grid sample points ---")
+    # A mean distance-to-grid is dominated by a small tail of tiny chunks, so
+    # report where the mass actually is against how many grid points cover it.
     grid_q = [128, 512, 1024, 2048, 4096, 7168, 8192]
-    grid_bs = [1, 2, 4, 8, 16, 32, 64, 128]
+    bins = [(0, 128), (128, 512), (512, 2048), (2048, 8192), (8192, 1 << 30)]
+    print(f"  {'bin':<14} {'grid pts':>9} " + " ".join(f"{t:>8}" for t in allf) + f" {'all':>8}")
+    qs = {t: np.array([v for x in F for v in [x["q_max"]]]) for t, F in allf.items()}
+    alls = np.concatenate(list(qs.values())) if qs else np.array([])
+    for lo, hi in bins:
+        npts = sum(1 for g in grid_q if lo <= g < hi)
+        cols = " ".join(f"{100*((v>=lo)&(v<hi)).mean():7.1f}%" for v in qs.values())
+        allc = 100 * ((alls >= lo) & (alls < hi)).mean() if len(alls) else 0.0
+        print(f"  {str(lo)+'-'+str(hi if hi < (1<<30) else 'inf'):<14} {npts:>9} {cols} {allc:7.1f}%")
+    print()
     for tag, F in allf.items():
-        q = np.array([x["q_max"] for x in F]); bs = np.array([x["bs"] for x in F])
-        near_q = np.mean([min(abs(np.array(grid_q) - v)) / max(v, 1) for v in q])
-        near_bs = np.mean([min(abs(np.array(grid_bs) - v)) / max(v, 1) for v in bs])
         frac_fresh = np.mean([x["pfx_max"] < 512 for x in F])
         conc = np.array([x["conc"] for x in F])
-        print(f"  {tag:<12} mean rel. distance to nearest grid chunk {near_q:5.2f}, "
-              f"rows {near_bs:5.2f} | fresh-prefix {frac_fresh*100:4.0f}% | "
-              f"KV-conc p50 {np.median(conc)/1e3:6.1f}K")
+        pa = np.mean([x["pa"] for x in F])
+        print(f"  {tag:<12} fresh-prefix {frac_fresh*100:4.0f}% | KV-conc p50 "
+              f"{np.median(conc)/1e3:6.1f}K | gate picks persistent {pa*100:3.0f}%")
 
 
 if __name__ == "__main__":

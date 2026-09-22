@@ -641,6 +641,60 @@ claiming either the chat win or the codex regression. The kernel-level result
 behaviour until a capture is run on that head config. `k` is read from the table
 file, so the two can differ safely.
 
+### FA3 levers actually tried, and why none landed (2026-09-23)
+
+Three levers were proposed for mixed-size wgmma scheduling on Hopper. All were
+tested; **none produced an FA3 speedup**, and the reasons are structural rather
+than tuning.
+
+**1. Overlap differently-shaped wgmma.** Ruled out at the instruction level
+(above): costs are additive to the cycle within a warpgroup *and* across two
+warpgroups on one SM. The tensor core is a serial per-SM resource, so there is
+nothing to schedule.
+
+**2. Squeeze other ops into the small-tile shadow.** Real — `m64n16k16` absorbs
+8 FFMA ops at zero cost — but it needs a small tile class to exist. FA3 has
+none: `cta_tile_q = 64` is fixed in its scheduler (`scheduler.cuh:1468`), and
+`DISPATCH_CTA_TILE_Q` appears only in the FA2 (`prefill.cuh:1612`) and POD
+paths, never in the Hopper template. FA3's tile is not a dispatch parameter, so
+this lever cannot be applied without rewriting the FA3 mainloop's tile shapes
+and smem layout — not a scheduler tweak.
+
+**3. Load balancing / two-queue LPT.** FA3 already has a MinHeap cost
+scheduler, so the remaining question was whether its own batch-average decision
+(`cluster_size = 2` when `avg_packed_qo_len > 64`, doubling `cluster_tile_q` to
+128) reproduces FA2's flip. **Measured: it does not.** Sweeping chunk size
+across that exact boundary at 46 decode rows @3K KV
+(`fa3_cluster_flip.py`, boundary at chunk 383 — which is where the captured
+chunk p50 of 382 happens to sit):
+
+| chunk | avg packed qo | FA3 cluster | **FA3 µs** | **FA2 µs** | **persistent µs** |
+|------:|--------------:|------------:|-----------:|-----------:|------------------:|
+| 343 | 57 | 1 | 536.9 | 122.5 | 126.8 |
+| 381 | 63 | 1 | 564.1 | 123.7 | 127.7 |
+| 385 | 64 | 1 | 562.3 | 123.9 | 127.3 |
+| 391 | 65 | **2** | 569.1 | **160.1** | 127.7 |
+| 503 | 81 | 2 | 568.2 | 161.3 | 128.0 |
+
+Two clean readings. **FA2's tile flip is real and sharp: +29% (124 → 160 µs) at
+exactly `avg_packed_qo_len > 64`**, while the persistent kernel is flat to
+within 1% across the whole sweep — the dual-tile design doing precisely what it
+was built for, measured in isolation for the first time. **FA3 is flat too, but
+flat at ~4.5× the cost of both.** Its `cluster_size` flip costs nothing
+measurable; its deficit is elsewhere and is not a scheduling decision.
+
+`fixed_split_size` — the one FA3 scheduling knob exposed from Python — is inert
+here: 537 µs unset, 564–568 µs at 2048/1024/512/256/128. So FA3's 4.5× gap on
+GQA-7 decode-heavy mixed batches is inside its mainloop, unreachable from the
+scheduler or from any exposed parameter.
+
+**Conclusion for Hopper:** do not route this regime through FA3. The measured
+speedup on real compositions comes from the dual-tile persistent kernel
+(2.60× time-weighted vs FA2) and from gating it correctly (v3, held-out
+2.17× → 3.50×). Grafting a second tile class onto FA3 remains the interesting
+direction but is a kernel-template change, not the scheduler experiment it
+first appeared to be.
+
 ### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
 
 A decode row's `packed_qo_len` is `1 × gqa_ratio`, and two thresholds decide
@@ -654,6 +708,7 @@ only when the batch-average is ≤ 16.
 | Qwen2.5-7B (ours) | 28/4 | 7 | 7 | 16 | **small (16)** |
 | Llama-3.3-70B | 64/8 | 8 | 8 | 16 | small (16) |
 | Qwen3-235B-A22B | 64/4 | 16 | 16 | 16 | small (16) — at the boundary |
+| **Qwen3.8-Flash-Next** | **24/2** | **12** | 12 | 16 | **small (16)** |
 | Kimi-K2 (MLA) | 64/1 | 64 | 64 | 64 | **large (128)** |
 | DeepSeek-V3/V4 (MLA) | 128/1 | 128 | 128 | 128 | **large (128)** |
 
@@ -665,6 +720,16 @@ routed to different backends entirely (`flashinfer_mla_backend.py`,
 `flashmla_backend.py`, `trtllm_mla_backend.py`, `cutlass_mla_backend.py`);
 `select_mixed_attention_kernel` exists only in `flashinfer_backend.py` and is
 never reached from them.
+
+**Qwen3.8-Flash-Next (24/2, ratio 12) is the notable modern exception** — it
+keeps a small GQA ratio, so the dual-tile premise survives. But three details
+of its config blunt the win anyway: `head_dim = 256` makes FA2's 128 tile
+unreachable (`FA2DetermineCtaTileQ` requires `head_dim < 256`), so the flip
+there is 16→64 rather than 16→128; only **12 of 48 layers are full attention**
+(3 linear : 1 full), so attention is a quarter of the step it is for a dense
+model; and a DSA-style sparse indexer with `indexer_budget = 2048` caps how
+much KV any row attends, which flattens exactly the KV-concentration
+heterogeneity the gate keys on.
 
 So the win region is **low-GQA-ratio models on the standard flashinfer
 backend**. That covers the Llama/Qwen-dense family (ratios 7–16), and excludes

@@ -555,6 +555,53 @@ inside the issue loop blocks unrolling and inflates the baseline 3× (32 → 105
 cycles), so all variants are compile-time template parameters. Both traps
 silently produced "no overlap" answers in earlier drafts of these benchmarks.
 
+### Replaying real compositions: FA2 vs FA3 vs persistent (2026-09-22)
+
+`sweep_from_capture.py` buckets the 3,493 captured batches (log-spaced on rows,
+decode KV, chunk, prefix), benchmarks one representative per bucket through all
+four kernels, and weights by realized frequency — the top 60 buckets cover
+81.4% of batches. **Time-weighted** totals (what actually matters; the
+batch-count-weighted mean flatters cheap batches):
+
+| policy | total kernel ms | vs FA2 |
+|--------|----------------:|-------:|
+| FA2 BatchPrefill | 3,402,664 | 1.00× |
+| **FA3** | 5,070,015 | **0.67×** |
+| persistent (dual tile) | 1,310,164 | **2.60×** |
+| deployed v2 gate | 1,794,324 | 1.90× |
+
+**FA3 is 33% slower than FA2 on this workload, and loses at every decode-row
+count** — 0.50× at 1–3 rows, 0.28× at 4–15, 0.84× at 16–39, 0.67× at 40+. The
+persistent kernel beats FA3 by 1.29–6.12×. So the Hopper win here is *not*
+"port to FA3": FA3's fixed `cta_tile_q = 64` pads a GQA-7 decode row (7 packed
+q-rows) ninefold, and that costs more than its better planner saves. Its
+mainloop is the modern one, but on decode-heavy mixed batches the tile shape
+dominates.
+
+**The immediately available speedup was in the gate, not the kernel.** The
+deployed table realized 1.90× of an available 2.60×. Diagnosing the declines
+over all 3,520 captured batches: 55.1% accepted, **27.0% declined by the
+out-of-support guard**, 17.9% by non-unanimous neighbours — i.e. the dominant
+cause is real batches landing outside the grid's sampled region, exactly the
+mismatch quantified above. The 42.4% of weight sent to BatchPrefill would have
+run 1.747× faster on the persistent kernel, worth **14.2% of total FA2 kernel
+time**.
+
+Rebuilding the table with the 60 measured serving compositions folded in, on
+**held-out** buckets (30 never in the table):
+
+| gate | accept | speedup vs FA2 | share of oracle captured |
+|------|-------:|---------------:|-------------------------:|
+| v2 deployed (grid only, k=5) | 63.1% | 2.17× | 75.1% |
+| **v3 (grid + captured, k=7)** | **98.1%** | **3.50×** | **99.6%** |
+
+Adding real compositions at k=5 would have cost the zero-regression property
+(worst-case leave-one-out 0.971×, one case). Raising to **k=7 restores worst-case
+LOO to exactly 1.000×** with no loss of held-out gain, so v3 ships at k=7:
+1,376 points, and the deployed `mixed_kernel_gate_h800_gqa7.json` is updated.
+This is a 1.61× kernel-policy improvement on real traffic with no kernel change
+— the payoff for sampling the workload instead of a grid.
+
 ### FA3 as a target: what it already fixes, and what it still lacks (2026-09-22)
 
 Reading the three planners side by side (`flashinfer/include/flashinfer/attention/scheduler.cuh`)

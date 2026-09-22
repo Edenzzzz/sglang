@@ -58,13 +58,21 @@ def row_decode_kvs(r):
 
 
 def main():
+    global KNN_K, LABEL_SPEEDUP
     ap = argparse.ArgumentParser()
     ap.add_argument("sweep_json")
     ap.add_argument("out_json")
     ap.add_argument("--gqa", type=int, required=True)
     ap.add_argument("--gpu", type=str, default="H800")
     ap.add_argument("--note", type=str, default="")
+    ap.add_argument("--k", type=int, default=KNN_K,
+                    help="k-NN neighbours that must unanimously agree. Raising k "
+                         "tightens the accept region; k=7 is what keeps worst-case "
+                         "leave-one-out regression at 1.000 once real serving "
+                         "compositions are mixed into the grid.")
+    ap.add_argument("--label", type=float, default=LABEL_SPEEDUP)
     args = ap.parse_args()
+    KNN_K, LABEL_SPEEDUP = args.k, args.label
 
     rs = []
     for path in args.sweep_json.split(","):

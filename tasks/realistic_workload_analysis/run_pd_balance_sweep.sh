@@ -18,8 +18,12 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 cd "$REPO_ROOT"
 
 MODEL="${MODEL:-/opt/tiger/models/Qwen2.5-7B-Instruct}" \
-CASES_SPEC="${CASES_SPEC:-512:4096:6 1024:4096:4 2048:2048:4 8192:1024:2}" \
-NUM_PROMPTS="${NUM_PROMPTS:-120}" \
+# 4096:8192 grows each stream to ~12K KV, so a saturated batch holds a large
+# decode pool while every arriving prompt is a fresh zero-prefix chunk — the
+# measured win region. 8192:1024 is the prefill-dominant control that should
+# show parity.
+CASES_SPEC="${CASES_SPEC:-4096:8192:2 1024:4096:6 8192:1024:2}" \
+NUM_PROMPTS="${NUM_PROMPTS:-100}" \
 METHODS_SPEC="${METHODS_SPEC:-DMC_CG LPT}" \
 PORT="${PORT:-30014}" \
 RESULTS_DIR="${RESULTS_DIR:-$SCRIPT_DIR/h800_pd_balance}" \

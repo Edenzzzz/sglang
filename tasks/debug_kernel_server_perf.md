@@ -453,58 +453,57 @@ Two scope limits:
   which is the benign direction but is extrapolation. Same grid-vs-realized
   gap as the gate table above.
 
-### WGMMA tile-size mixing does not overlap (2026-09-19)
+### Hopper instruction-level scheduling study (2026-09-19..22)
 
-Can wgmma of different tile sizes overlap, or be reordered by the compiler, so
-a mixed sequence costs less than the sum of its parts? This is the
-instruction-level version of the fused kernel's two tile classes. Tested
-directly on the H800 (sm_90a, `tasks/debug_kernel_server_perf/wgmma/`,
-`wgmma_overlap.cu` and `wgmma_two_warpgroups.cu`; min of 30 runs, marginal
-cost from a 32→256 iteration sweep so fixed overhead cancels):
+What scheduling headroom exists for mixing the two tile classes on Hopper?
+Five microbenchmarks in `tasks/debug_kernel_server_perf/wgmma/`, all on H800
+sm_90a, all reporting *marginal* cycles (a 128→256 iteration delta, so fixed
+overhead cancels), min of 25–30 runs.
 
-| sequence | marginal cycles/iter |
-|----------|---------------------:|
-| large only (`m64n64k16`) | **32.00** |
-| small only (`m64n16k16`) | **20.00** |
-| interleaved L,S,L,S… | **52.00** |
-| grouped L…L,S…S | **52.00** |
-| two warpgroups, one SM, L ‖ S | **52.10** |
+| # | question | result |
+|---|----------|--------|
+| 1 | two wgmma **shapes**, one warpgroup, interleaved vs grouped | **no overlap**: 32.00 (n64) + 20.00 (n16) = 52.00 either way |
+| 2 | two wgmma shapes, **two warpgroups**, same SM | **no overlap**: 52.10 |
+| 3 | **exp2** co-issued under an in-flight wgmma, same warpgroup | **not hidden**: +50.5 cyc for 8 ops (large), +56.8 (small) |
+| 4 | **FFMA** co-issued under an in-flight wgmma, same warpgroup | **small tiles hide it free**: n16 20.00→20.00 for 8 ops; n64 pays +3.5 |
+| 5 | wgmma on wg0 ‖ **exp2 on wg1** (different pipes) | **overlaps**: ~23.5 of the 32 MMA cycles hide, 73% |
 
-**Zero overlap, to the cycle.** 32.00 + 20.00 = 52.00. Issue order is
-irrelevant (interleaved vs grouped differ by a constant 16 cycles, 0.0%
-marginal), and giving the two shapes their own warpgroups on the same SM does
-not help either — the tensor-core pipe is a serial per-SM resource, and
-differently-shaped wgmma simply queue on it in proportion to their cost. The
-−13%/−3.6% that raw totals initially suggested was entirely fixed overhead
-being counted twice; it vanishes in the marginal.
+Read together these say where the headroom is and is not:
 
-Sanity check against hardware peak (H800: 132 SM, 1.755 GHz, 989 TFLOP/s dense
-bf16): `m64n64k16` is 131,072 FLOP → 30.7 cycles theoretical vs 32.0 measured,
-**96% of peak**, so the benchmark is sound. `m64n16k16` is 32,768 FLOP → 7.7
-theoretical vs 20.0 measured, **38% of peak**: the cost is ≈ `16 + N/4` cycles,
-i.e. a fixed ~16-cycle issue overhead per instruction regardless of tile size.
+- **The tensor core is one serial per-SM resource.** Neither mixing wgmma
+  shapes nor splitting them across warpgroups buys anything (#1, #2) — costs
+  add to the cycle. Issue order is irrelevant (interleaved vs grouped differ
+  by a constant 16 cycles, 0.00% marginal). Validated against hardware peak:
+  `m64n64k16` = 131,072 FLOP → 30.7 cycles theoretical vs 32.0 measured,
+  **96% of peak**.
+- **Small tiles carry free issue slack, large ones nearly none (#4).** Cost is
+  ≈ `16 + N/4` cycles, so `n16` runs at 38% of peak (1.25 cyc per unit N vs
+  0.50 for `n64`) — but that fixed overhead is *usable*: a small tile absorbs
+  8 FFMA ops at **zero** added cost where a large tile pays 3.5. This is the
+  "squeeze other ops into the small-tile shadow" lever, and it is real but
+  bounded (~8 cycles of CUDA-core work per small wgmma).
+- **Softmax cannot hide inside a warpgroup, only beside one (#3 vs #5).**
+  exp2 under an in-flight wgmma costs nearly its full price, but exp2 on a
+  *different warpgroup* hides ~73% of the MMA. That asymmetry is exactly why
+  FA3 warp-specializes, and it is the one lever with double-digit headroom
+  here. The saving is ~23.5 cycles per MMA regardless of softmax size, i.e.
+  it is the MMA hiding under the SFU work, so the win is capped by how much
+  softmax the composition actually has.
 
-Two consequences:
+Consequence for β (the 0.53 non-overlappable fraction): **it is not the MMA
+pipe**, and no reordering of tile classes will recover it. Prefill/decode
+overlap must come from MMA-vs-memory and MMA-vs-SFU concurrency, which means
+the remaining budget is in the reduction pass, queue-switch granularity, L2
+interference, or in keeping *both* pipes fed — the last of which is what the
+FA3 direction below targets.
 
-- **β cannot be attacked at the MMA level.** Prefill/decode overlap in the
-  fused kernel cannot come from overlapping MMA with MMA — only from
-  overlapping MMA with *memory* traffic (decode is bandwidth-bound, prefill
-  compute-bound), which is what the dual tile classes already do. Reordering
-  or co-scheduling the tile classes on one SM has no headroom to recover. The
-  remaining β budget is in the reduction pass, queue-switch granularity, or
-  L2 interference.
-- **Small query tiles are intrinsically inefficient on tensor cores**: 1.25
-  cycles per unit N at `n16` versus 0.50 at `n64`, a 2.5× penalty from that
-  fixed per-instruction cost. Decode rows are bandwidth-bound so this is
-  usually hidden, but it argues for packing GQA query heads into the largest
-  tile the group size allows before adding more small tiles.
-
-*Method caveat:* descriptors address valid aligned shared memory but the data
-is arbitrary — wgmma cost depends on shape and dependencies, not values, so
-this measures issue/pipeline throughput only. Accumulators are kept in
-registers and the first issue of each shape uses `scale-d=0`, without which
-ptxas emits C7515 and serializes the pipeline (which silently invalidated the
-first version of this benchmark).
+*Method caveats:* descriptors address valid aligned smem but the data is
+arbitrary (wgmma cost depends on shape and dependencies, not values).
+Accumulators stay in registers and each shape's first issue uses `scale-d=0`;
+without that ptxas emits C7515 and serializes the pipeline. Any runtime branch
+inside the issue loop blocks unrolling and inflates the baseline 3× (32 → 105
+cycles), so all variants are compile-time template parameters. Both traps
+silently produced "no overlap" answers in earlier drafts of these benchmarks.
 
 ### Measured k-NN gate
 

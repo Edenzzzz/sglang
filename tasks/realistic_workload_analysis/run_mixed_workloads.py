@@ -92,6 +92,26 @@ SCENARIOS = {
     # Short outputs keep chat from accumulating decode rows, which would push
     # BatchPrefill back into its efficient many-tile regime; the arrivals still
     # make a third of all forwards mixed.
+    # Load sweep for workload capture: same co-tenancy shape at four offered
+    # loads, high to low. Used to record the realized mixed-batch composition
+    # distribution (tasks/debug_kernel_server_perf/wgmma + gate resampling),
+    # not as a performance comparison.
+    "loadsweep_hi": {
+        "desc": "co-tenancy at high offered load (chat 16/s, 12 sessions)",
+        "streams": {"codex": codex(60, groups=12), "chat": chat(2400, 16, 512, 96)},
+    },
+    "loadsweep_med": {
+        "desc": "co-tenancy at medium offered load (chat 8/s, 8 sessions)",
+        "streams": {"codex": codex(40, groups=8), "chat": chat(1200, 8, 512, 96)},
+    },
+    "loadsweep_lo": {
+        "desc": "co-tenancy at low offered load (chat 4/s, 6 sessions)",
+        "streams": {"codex": codex(24, groups=6), "chat": chat(600, 4, 512, 96)},
+    },
+    "loadsweep_min": {
+        "desc": "co-tenancy at minimal offered load (chat 1.5/s, 4 sessions)",
+        "streams": {"codex": codex(12, groups=4), "chat": chat(260, 1.5, 512, 96)},
+    },
     "agent_plus_shortchat": {
         "desc": "coding agent + high-rate short-answer chat (routing/classification traffic)",
         "streams": {"codex": codex(60), "chat": chat(2400, 12, 512, 96)},
@@ -172,6 +192,11 @@ def run_method(method, scenario, outdir):
     log = outdir / f"server_{method}.log"
     env = dict(os.environ)
     env["SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN"] = "1"
+    # Capture every mixed batch's real composition (per-row decode KV, chunk
+    # tokens, true attended prefix, gate decision) so kernel sweeps can be
+    # resampled from the realized distribution instead of a Cartesian grid.
+    # Only the persistent path calls the gate, so only those methods capture.
+    env["SGLANG_LOG_MIXED_COMPOSITION"] = str(outdir / f"composition_{method}.jsonl")
     if method == "LPT":
         env["SGLANG_FLASHINFER_USE_PERSISTENT"] = "1"
     elif method == "LPT_EDF":

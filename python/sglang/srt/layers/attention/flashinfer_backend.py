@@ -10,6 +10,7 @@ Each backend supports two operators: extend (i.e. prefill with cached prefix) an
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from enum import Enum, auto
 from functools import partial
@@ -170,6 +171,50 @@ class MixedKernelGate:
         return use_pa, flipped
 
 
+
+class _MixedCompositionLog:
+    """Append-only capture of every mixed batch's true composition.
+
+    Enabled with SGLANG_LOG_MIXED_COMPOSITION=<path>. Unlike the scheduler's
+    `Prefill batch` log lines this records the *attended* prefix per chunk
+    (not the radix hit at admission, which is 0 for continued chunks) and the
+    per-row decode KV vector, so a sweep can be resampled from the realized
+    distribution instead of a Cartesian grid.
+    """
+
+    _inst = None
+    _checked = False
+
+    @classmethod
+    def get(cls):
+        if not cls._checked:
+            cls._checked = True
+            path = os.environ.get("SGLANG_LOG_MIXED_COMPOSITION", "")
+            if path:
+                try:
+                    cls._inst = cls(path)
+                except Exception as e:  # never break serving for telemetry
+                    logger.warning(f"mixed-composition log disabled: {e}")
+        return cls._inst
+
+    def __init__(self, path):
+        self.f = open(path, "a", buffering=1024 * 1024)
+        self.n = 0
+
+    def record(self, dec_kvs, chunks, prefixes, use_pa, flipped):
+        try:
+            self.f.write(
+                '{"t":%.3f,"d":%s,"q":%s,"p":%s,"pa":%d,"fl":%d}\n'
+                % (time.time(), dec_kvs, chunks, prefixes,
+                   int(bool(use_pa)), int(bool(flipped)))
+            )
+            self.n += 1
+            if self.n % 64 == 0:
+                self.f.flush()
+        except Exception:
+            pass
+
+
 def select_mixed_attention_kernel(
     extend_seq_lens_cpu,
     extend_prefix_lens_cpu,
@@ -206,8 +251,21 @@ def select_mixed_attention_kernel(
         # Conservative analytic fallback: persistent only where a small number
         # of long-context rows would starve BatchPrefill of parallelism.
         use_pa = kv_conc >= 16384 and decode_kv * 20 >= prefill_work
-        return use_pa, False
-    return gate.decide(decode_kv, prefill_work, prefill_tokens, decode_bs, kv_conc)
+        flipped = False
+    else:
+        use_pa, flipped = gate.decide(
+            decode_kv, prefill_work, prefill_tokens, decode_bs, kv_conc
+        )
+    cap = _MixedCompositionLog.get()
+    if cap is not None:
+        cap.record(
+            dec_kv.tolist(),
+            e[~is_decode].tolist(),
+            c[~is_decode].tolist(),
+            use_pa,
+            flipped,
+        )
+    return use_pa, flipped
 
 
 @dataclass

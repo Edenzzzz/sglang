@@ -29,6 +29,11 @@
   folded into the grid (1,376 points). On **held-out** buckets: accept 63.1% → 98.1%,
   speedup vs FA2 **2.17× → 3.50×**, 99.6% of oracle. A 1.61× kernel-policy gain with
   no kernel change.
+- Serving validation (single run, `loadsweep_med`): live gate acceptance 34.1% → 89.3%,
+  100% retokenization, **node throughput +0.0%** — the kernel-policy gain does not
+  translate into node throughput. Chat tail improves (mean ITL −10.3%, P99 −43.1%);
+  codex P99 +7.2% / TTFT +8.3%, inside the documented ±6% saturation run-to-run band,
+  so neither direction is established without a paired repeat.
 - Doing this at k=5 would have cost the zero-regression property (worst-case LOO
   0.971×); **k=7 restores worst-case LOO to exactly 1.000×** with no loss of held-out
   gain. `build_mixed_kernel_gate_table.py` gains `--k` / `--label`.

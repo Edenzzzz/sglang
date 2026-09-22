@@ -602,6 +602,26 @@ LOO to exactly 1.000×** with no loss of held-out gain, so v3 ships at k=7:
 This is a 1.61× kernel-policy improvement on real traffic with no kernel change
 — the payoff for sampling the workload instead of a grid.
 
+**Serving validation (single run each, `loadsweep_med`, v2 vs v3 gate).** Live
+acceptance moved as designed — the gate picked persistent on **34.1% → 89.3%**
+of 1,088 mixed batches (`forward mix`: 1,000 persistent vs 117 BatchPrefill),
+100% retokenization on both streams. End-to-end the picture is mixed:
+
+| stream | throughput | mean ITL | P99 ITL | mean TTFT |
+|--------|-----------:|---------:|--------:|----------:|
+| chat | +0.0% | **−10.3%** | **−43.1%** | +0.1% |
+| codex | +1.7% | −2.7% | +7.2% | +8.3% |
+| node-wide | **+0.0%** | | | |
+
+So a 1.61× kernel-policy gain buys **no node throughput** — unsurprising given
+attention is a minority of step time and the node is bound elsewhere (the same
+lesson as the original kernel-vs-serving gap). The chat tenant's tail improves
+substantially; codex's P99 and TTFT move the wrong way by 7–8%, which is inside
+the ±6% run-to-run band this file already documents for saturation TTFT, so it
+is **not yet distinguishable from noise**. A paired repeat is needed before
+claiming either the chat win or the codex regression. The kernel-level result
+(held-out 2.17× → 3.50×) is solid; its serving translation is not established.
+
 *Scope:* only the gqa7 (Qwen2.5-7B) table is rebuilt. `mixed_kernel_gate_h800_gqa4.json`
 (Qwen3-8B) is still grid-only and will have the same over-conservative decline
 behaviour until a capture is run on that head config. `k` is read from the table

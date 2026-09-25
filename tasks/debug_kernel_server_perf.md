@@ -830,6 +830,42 @@ with `TARGET_VERIFY`/`DRAFT_EXTEND` rather than being disjoint forward modes;
 (1) and (2) hold. Only then does PD colocation reach functional parity with
 PD-disaggregation-plus-spec-dec.
 
+### Mixing wgmma with mma.sync: no overlap, and worse than additive (2026-09-26)
+
+A decode/draft row has `packed_qo_len = gqa_ratio` (4–16), but wgmma's M is
+fixed at 64, so such a row wastes 4–16× of the M dimension. `mma.sync`
+(`m16n8k16`) has M=16 and would waste far less — so: can small rows run on
+mma.sync *underneath* the large rows' wgmma? Measured with the same
+methodology as the other probes here (`wgmma_mma_sync.cu`, marginal cycles from
+a 128→256 iteration delta, one warpgroup, min of 25):
+
+| mma.sync per iter | mma alone | wgmma alone | sum | **interleaved** | excess |
+|------------------:|----------:|------------:|----:|----------------:|-------:|
+| 2 | 48.00 | 32.00 | 80.00 | **100.62** | **+20.6** |
+| 4 | 96.00 | 32.00 | 128.00 | **158.75** | **+30.8** |
+| 8 | 192.00 | 32.00 | 224.00 | **255.00** | **+31.0** |
+| 16 | 384.00 | 32.00 | 416.00 | **446.75** | **+30.8** |
+
+Not merely additive — **anti-additive**: interleaving the two instruction
+classes costs a roughly constant **~24–31 cycles extra** on top of the sum,
+consistent with a pipeline drain or mode switch between the async
+warpgroup-wide path and the synchronous warp-level one. There is no overlap to
+harvest.
+
+The idea fails on throughput grounds too, independently of the interference.
+`mma.sync m16n8k16` costs a flat 24 cycles per instruction; with 4 warps that
+is 683 FLOP/cycle, **16% of H800 peak**, against wgmma's 4,096 FLOP/cycle
+(**96% of peak**) — a 6× deficit. Accounting for M-padding, useful throughput
+for a row of `packed_qo = p` is `4096·p/64` for wgmma versus `683·p/16` for
+mma.sync, i.e. **wgmma wins by a constant 1.5× at every row size**: the 4×
+padding advantage never covers the 6× throughput deficit. So small rows are
+better served by a *padded wgmma* than by mma.sync, which is presumably why
+the persistent kernel's small tile class is 16 rows of wgmma rather than a
+different instruction.
+
+Consequence for the fused 3-mode kernel: the third (verify) tile class should
+be another wgmma tile, not an mma.sync path.
+
 ### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
 
 A decode row's `packed_qo_len` is `1 × gqa_ratio`, and two thresholds decide

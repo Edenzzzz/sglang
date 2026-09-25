@@ -16,6 +16,7 @@ KV buffer is allocated once at max size and reused across cases.
 import argparse
 import itertools
 import json
+import os
 
 import numpy as np
 import torch
@@ -42,7 +43,10 @@ class Bench:
         self.kv_indices = torch.arange(MAX_PAGES, dtype=torch.int32, device=device)
         self.out = torch.empty_like(self.qbuf)
         self.lse = torch.empty(MAX_Q, self.num_qo_heads, device=device, dtype=torch.float32)
-        ws = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=device)
+        # 128 MB is enough for <=32 qo heads; 64-head models (e.g. Qwen3-235B,
+        # gqa 16) overflow batch_prefill_tmp_s during plan().
+        ws_mb = int(os.environ.get("GATE_SWEEP_WS_MB", "128"))
+        ws = torch.empty(ws_mb * 1024 * 1024, dtype=torch.uint8, device=device)
         self.bp = flashinfer.BatchPrefillWithPagedKVCacheWrapper(ws, kv_layout="NHD", backend="fa2")
         self.pa = flashinfer.BatchAttention(kv_layout="NHD")
 

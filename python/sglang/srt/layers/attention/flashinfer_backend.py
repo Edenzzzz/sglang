@@ -201,6 +201,22 @@ class _MixedCompositionLog:
         self.f = open(path, "a", buffering=1024 * 1024)
         self.n = 0
 
+    def record_mode(self, mode, seq_lens_cpu, extend_lens):
+        """Record any forward mode's shape, so the composition a *fused*
+        draft+verify+prefill kernel would see can be reconstructed. Speculative
+        decoding forces enable_mixed_chunk=False, so these arrive as separate
+        launches and never appear in a MIXED batch today."""
+        try:
+            self.f.write(
+                '{"t":%.3f,"mode":"%s","kv":%s,"q":%s}\n'
+                % (time.time(), mode, list(seq_lens_cpu), list(extend_lens))
+            )
+            self.n += 1
+            if self.n % 64 == 0:
+                self.f.flush()
+        except Exception:
+            pass
+
     def record(self, dec_kvs, chunks, prefixes, use_pa, flipped):
         try:
             self.f.write(
@@ -697,6 +713,16 @@ class FlashInferAttnBackend(AttentionBackend):
                 "SGLANG_FLASHINFER_USE_POD and SGLANG_FLASHINFER_USE_PERSISTENT cannot both be True"
             )
 
+        cap = _MixedCompositionLog.get()
+        if cap is not None:
+            try:
+                sl = forward_batch.seq_lens_cpu
+                sl = sl.tolist() if sl is not None else []
+                el = getattr(forward_batch, "extend_seq_lens_cpu", None) or []
+                cap.record_mode(forward_batch.forward_mode.name,
+                                sl, list(el))
+            except Exception:
+                pass
         if forward_batch.forward_mode.is_decode_or_idle():
             self._count_forward("decode")
             self.indices_updater_decode.update(

@@ -695,6 +695,141 @@ speedup on real compositions comes from the dual-tile persistent kernel
 direction but is a kernel-template change, not the scheduler experiment it
 first appeared to be.
 
+### Fusing spec-dec (draft + verify + prefill) into one mixed-tile kernel (2026-09-25)
+
+Question: for GQA models, can a megakernel that fuses speculative draft,
+verify, and prefill give PD-colocation the functionality of PD-disaggregation
+with spec-dec on the decode nodes — and does mixed-tile buy anything there?
+
+**Prior art.** SparseSpec (Zhao, Tang, Zhu, Ye et al., *Accelerating Large-Scale
+Reasoning Model Inference with Sparse Self-Speculative Decoding*, MLSys 2026)
+already does two thirds of this and validates the premise. It is
+self-speculative (one model drafts sparsely via PillarAttn and verifies
+densely), and its two relevant contributions are exactly the shape of ours:
+
+- a **unified scheduler** that evenly mixes draft and verify requests in every
+  batch by greedy bin-packing into `k` buckets, rather than running `k` draft
+  steps then one verify step. Sequential costs
+  `k·T_GEMM(B) + T_GEMM((k+1)B)`; uniform costs `(k+1)·T_GEMM(((2k+1)/(k+1))B)`
+  — "up to 2× longer" for the naive order. Worth **1.23×** in their ablation.
+- a **fused attention kernel in persistent-kernel style** which "on-chip
+  dispatches verification and draft attention into their best template instead
+  of launching two kernels". Their motivation is our tile argument measured on
+  FlashInfer: a kernel tuned for verify/full attention hits ~85% of bandwidth
+  but **<50%** on draft/sparse, while a sparse-tuned kernel gets >80% but drops
+  to **50%** on full. The fused kernel is **1.3× over two sequential launches
+  and 1.8× over naive batching**.
+
+Evaluated on Qwen3-1.7B/8B/14B, DeepSeek-R1-Distill-Llama3-8B, QwQ-32B (all
+GQA, H100, TP1–4), k=8, sparsity s=0.05, up to 2.13× end-to-end.
+
+So mixed-tile benefit in a fused draft+verify kernel is real and published. The
+open part is adding **prefill** as a third class, which is what PD colocation
+needs and what SparseSpec does not do.
+
+**Spec-dec adds a genuinely third tile class.** A row's `packed_qo_len` is
+`qo_len × gqa_ratio`; a verify row carries `k+1` candidate tokens, so it lands
+*between* decode and prefill:
+
+| work type | qo_len | packed (r=7) | FA2 tile | our kernel `{128,16}` |
+|-----------|-------:|-------------:|---------:|----------------------:|
+| decode / draft step | 1 | 7 | 16 | 16 |
+| **verify (k=3)** | 4 | 28 | **64** | **128 ← rounded up** |
+| **verify (k=7)** | 8 | 56 | **64** | **128 ← rounded up** |
+| prefill chunk 400 | 400 | 2800 | 128 | 128 |
+
+The verify class is distinct exactly when `16 < (k+1)·r ≤ 64`:
+
+| model (ratio) | k=1 | k=2 | k=3 | k=4 | k=5 | k=7 | k=8 | k=11 |
+|---|---|---|---|---|---|---|---|---|
+| Qwen3-8B (4) | draft | draft | draft | **64** | **64** | **64** | **64** | **64** |
+| Qwen2.5-7B (7) | draft | **64** | **64** | **64** | **64** | **64** | **64** | prefill |
+| Llama-3.3-70B (8) | draft | **64** | **64** | **64** | **64** | **64** | prefill | prefill |
+| Qwen3-235B (16) | **64** | **64** | **64** | prefill | prefill | prefill | prefill | prefill |
+
+Typical depths (k=3–8) land in the band for ratios 5–16. **Our dual-tile
+`{128, 16}` is therefore insufficient for the fused kernel** — it must round
+verify rows up to the 128 tile, e.g. 4.6× padding for a `packed=28` verify row
+against FA2's 64. A third class is the concrete kernel change.
+
+**The fused batch is a *better* fit for the persistent kernel than the
+prefill/decode mix we have been studying**, because SparseSpec's own schedule
+builds in KV-length heterogeneity on top of tile heterogeneity: draft rows read
+`s·M` (5%) of the context while verify rows read all of `M`. Instantiating
+their parameters (B=128, k=8, s=0.05):
+
+| context M | draft rows | verify rows | total decode KV | KV-concentration | row-length spread |
+|----------:|-----------:|------------:|----------------:|-----------------:|------------------:|
+| 8K | 114 @409 | 14 @8,192 | 161K | 5.9K | **20×** |
+| 32K | 114 @1,638 | 14 @32,768 | 645K | 23.8K | **20×** |
+
+Few long rows among many short ones is precisely the composition that starves
+BatchPrefill of query tiles and that our KV-concentration gate feature keys on
+— here it arises by construction rather than by luck of co-tenancy.
+
+**Measured: the missing third tile class costs 13–27%, and it is exactly what
+makes fusion worth doing.** `specdec_tile_probe.py`, H800, 32 rows @8K KV,
+BatchPrefill (which picks tile 64) vs our persistent kernel (which must round
+to 128). The penalty appears *only* inside the predicted band and vanishes on
+both sides of it:
+
+| | k+1=1 | k+1=2 | k+1=4 | k+1=8 | k+1=16 |
+|---|---|---|---|---|---|
+| **Qwen3-8B** (r=4) | 1.03× | 1.03× | 1.03× | **1.23×** | **1.27×** |
+| **Qwen2.5-7B** (r=7) | 1.02× | 1.02× | **1.15×** | **1.13×** | 1.00× |
+| **Qwen3-235B** (r=16) | 1.01× | **1.16×** | **1.14×** | 1.04× | 0.96× |
+
+(persistent / BatchPrefill; >1 means our kernel is slower). Bold cells are
+exactly where `16 < (k+1)·r ≤ 64` predicts a distinct tile-64 class, and the
+band shifts left as `r` grows, as derived. Outside it the two kernels agree to
+within 1–4%.
+
+**Fusion itself pays only for a heterogeneity-robust kernel** (same probe,
+32 rows @8K, 24 draft + 8 verify(k=3) + one 400-token chunk):
+
+| | 3 separate launches | fused | fused / separate |
+|---|---:|---:|---:|
+| BatchPrefill | 235.1 µs | 400.2 µs | **0.59× (fusing hurts 1.7×)** |
+| persistent | 264.9 µs | 230.8 µs | **1.15× (fusing helps)** |
+
+Fusing a chunk into the batch flips FA2's batch-wide tile and wrecks it, which
+is the same pathology as the prefill/decode case — so a fused megakernel is
+only viable on a per-row-tile design. But the net today is
+`best fused 230.8 µs vs best separate 235.1 µs = 1.02×`: **the ~1.15× fusion
+gain is almost exactly cancelled by the ~1.13–1.15× verify-tile penalty.**
+Adding the third class is what converts this from break-even into a real win,
+and it is a bounded change — a third entry in `CTA_TILE_Q_SIZES` plus a third
+work queue, not a new mainloop.
+
+**Blocker, confirmed in this tree.** The fused batch cannot be expressed today:
+`ForwardMode` makes `MIXED`, `TARGET_VERIFY` and `DRAFT_EXTEND` disjoint enum
+values, each taking its own kernel launch, and **every speculative algorithm
+force-disables mixed chunking** — `server_args.py:1505` for
+EAGLE/EAGLE3/STANDALONE and `:1578` for NGRAM. The running server says so
+itself: *"The overlap scheduler and mixed chunked prefill are disabled because
+of using ngram speculative decoding."* So enabling spec-dec today costs you PD
+colocation outright, which is exactly why the standard deployment is
+PD-disaggregation with spec-dec confined to decode nodes. Fusing the three
+modes is what would give colocation parity.
+
+A capture attempt confirms it empirically: running Qwen2.5-7B with
+`--speculative-algorithm NGRAM --speculative-num-steps 3
+--speculative-num-draft-tokens 4` under a 300-request chat load logged **192
+EXTEND batches and zero MIXED batches** — prefill ran as standalone single-row
+launches throughout, never sharing a batch with decode/verify work. (Verify and
+draft steps execute through the CUDA-graph replay path, which bypasses
+`init_forward_metadata` and so the composition hook — the same graph-replay
+blind spot noted for decode above; capturing those needs the hook extended to
+`init_forward_metadata_replay_cuda_graph`.)
+
+**Proposed next step**, in dependency order: (1) add a third `CTA_TILE_Q_SIZES`
+entry (64) and a third work queue to the persistent planner — the measurements
+above bound the payoff at 13–27% on verify rows; (2) allow `MIXED` to coexist
+with `TARGET_VERIFY`/`DRAFT_EXTEND` rather than being disjoint forward modes;
+(3) lift the `enable_mixed_chunk = False` guard for speculative algorithms once
+(1) and (2) hold. Only then does PD colocation reach functional parity with
+PD-disaggregation-plus-spec-dec.
+
 ### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
 
 A decode row's `packed_qo_len` is `1 × gqa_ratio`, and two thresholds decide

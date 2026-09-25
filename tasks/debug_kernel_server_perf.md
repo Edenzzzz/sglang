@@ -584,13 +584,19 @@ batch-count-weighted mean flatters cheap batches):
 | persistent (dual tile) | 1,310,164 | **2.60×** |
 | deployed v2 gate | 1,794,324 | 1.90× |
 
-**FA3 is 33% slower than FA2 on this workload, and loses at every decode-row
-count** — 0.50× at 1–3 rows, 0.28× at 4–15, 0.84× at 16–39, 0.67× at 40+. The
-persistent kernel beats FA3 by 1.29–6.12×. So the Hopper win here is *not*
-"port to FA3": FA3's fixed `cta_tile_q = 64` pads a GQA-7 decode row (7 packed
-q-rows) ninefold, and that costs more than its better planner saves. Its
-mainloop is the modern one, but on decode-heavy mixed batches the tile shape
-dominates.
+**On this captured workload** FA3 is 33% slower than FA2 and loses at every
+decode-row count — 0.50× at 1–3 rows, 0.28× at 4–15, 0.84× at 16–39, 0.67× at
+40+, with the persistent kernel beating it 1.29–6.12×.
+
+**But that is a property of this workload, not of FA3 (corrected 2026-09-26).**
+Two things conspire here. First, these compositions are decode-heavy, where
+FA3's fixed `cta_tile_q = 64` pads a GQA-7 decode row (7 packed q-rows)
+ninefold. Second and more important, *their prefill work is almost nil*: the
+captured chunks attend a prefix of **2 tokens at p50, 94% below 512**, so the
+median chunk does ~550 token-pairs of attention work — about **30,000× less**
+than a 2,048-token chunk against an 8K prefix. FA3's fixed setup cost has
+nothing to amortize against. See "FA3 on prefill-dominant batches" below for
+the other end of the range, where FA3 wins by up to 1.54×.
 
 **The immediately available speedup was in the gate, not the kernel.** The
 deployed table realized 1.90× of an available 2.60×. Diagnosing the declines
@@ -865,6 +871,52 @@ different instruction.
 
 Consequence for the fused 3-mode kernel: the third (verify) tile class should
 be another wgmma tile, not an mma.sync path.
+
+### FA3 on prefill-dominant batches: it wins there (2026-09-26)
+
+The earlier FA3 comparison ran only on the captured co-tenancy compositions,
+which are decode-heavy *and* have near-zero prefill work. `fa3_prefill_probe.py`
+covers the opposite end. First, a premise worth correcting: **the persistent
+kernel uses tile 128 for prefill, not 16** — `scheduler.cuh:1141` routes
+`packed_qo_len > 16` to `CTA_TILE_Q_SIZES[0] = 128`, and the 16 tile only ever
+holds decode/draft rows. So against FA3 our prefill tile is the *larger* one.
+
+**Pure prefill, H800, gqa 7** (µs, and ratio vs FA2):
+
+| chunk @ attended prefix | FA2 | FA3 | persistent | FA3/FA2 |
+|---|---:|---:|---:|---:|
+| 512 @ 0 | 10.1 | 37.2 | 12.4 | 0.27× |
+| 2,048 @ 0 | 19.4 | 49.9 | 20.8 | 0.39× |
+| 8,192 @ 0 | 50.4 | 90.5 | 52.7 | 0.56× |
+| 2,048 @ 8,192 | 778.0 | **503.9** | 865.7 | **1.54×** |
+| 8,192 @ 8,192 | 2,653.5 | **1,824.4** | 2,675.5 | **1.45×** |
+| 8,192 @ 32,768 | 10,597.0 | **7,546.6** | 10,706.0 | **1.40×** |
+| 4,096 @ 65,536 | 10,841.3 | **7,109.6** | 12,133.7 | **1.52×** |
+
+Multi-chunk batches behave the same (1.35–1.44× for FA3 once the prefix is
+non-zero). **FA3 is 1.35–1.54× faster than FA2 on real prefill work**, and the
+persistent kernel is 0.89–1.00× of FA2 there — i.e. on prefill-dominant batches
+the ordering is **FA3 > FA2 ≥ persistent**, the reverse of the decode-heavy
+case. The prefix-0 rows are not a counter-example: with nothing to attend,
+there is no attention work to speed up and only fixed cost remains.
+
+**The crossover, sweeping decode rows against a fixed 4,096-token chunk:**
+
+| composition | FA2 | FA3 | persistent | FA3/FA2 | pers/FA2 |
+|---|---:|---:|---:|---:|---:|
+| 0 decode + chunk (prefix 0) | 29.5 | 63.3 | 32.3 | 0.47× | 0.91× |
+| 2 decode @8K + chunk | 274.9 | **178.3** | **53.5** | 1.54× | **5.13×** |
+| 8 decode @8K + chunk | 406.7 | **309.5** | **89.2** | 1.31× | **4.56×** |
+| 32 decode @8K + chunk | 421.5 | 1,060.4 | **219.0** | 0.40× | 1.92× |
+
+FA3 leads while decode rows are few and collapses as they accumulate — at 32
+rows its 9× q-padding on every decode row dominates. The persistent kernel wins
+across the whole middle of this range.
+
+**So neither kernel dominates, and that is the design point for the fused
+3-mode kernel**: it needs FA3-class prefill throughput *and* a small tile for
+decode/draft rows *and* the 64 tile for verify. Our kernel has the decode end,
+FA3 has the prefill end, and no existing kernel has all three.
 
 ### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
 

@@ -39,7 +39,10 @@ def load_rows(patterns):
                         r = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if r["d"] and r["q"]:
+                    # the log interleaves two record types: gate records
+                    # (with per-row decode KV "d") and per-forward-mode records
+                    # (with "mode"); only the former describe a mixed batch.
+                    if r.get("d") and r.get("q"):
                         r["_tag"] = tag
                         out.append(r)
     return out

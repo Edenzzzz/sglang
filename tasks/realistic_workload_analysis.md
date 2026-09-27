@@ -267,8 +267,54 @@ prefill-dominant batches"). So the ordering genuinely reverses by regime:
   at parity-or-worse than FA2
 - **crossover** around a handful of decode rows against a real chunk
 
-**Does our workload meet the "realistic mixed workload" bar?** Partly, and it
-should not be used alone to pick a kernel:
+**Verdict, measured on a workload that does have prefix reuse.** The above is
+settled by capturing `agent_plus_multiturn_feasible` (multi-turn on 8K shared
+prefixes + agent sessions, at the SLO-feasible operating point) and replaying
+it: 409 mixed batches with **attended prefix p50 8,592, 56% ≥ 8K, chunk p50
+2,598, 18.6M token-pairs of prefill work per chunk** — 34,000× the fresh
+capture — alongside a live decode population (rows p50 12, p90 47) and KV
+concentration 28.0K. Time-weighted over 365 replayed batches:
+
+| policy | total kernel ms | vs FA2 |
+|--------|----------------:|-------:|
+| FA2 | 958,499 | 1.00× |
+| **FA3** | 1,410,339 | **0.68×** |
+| **persistent** | 713,424 | **1.34×** |
+| deployed gate | 813,294 | 1.18× |
+| oracle per-batch best-of-3 | 664,749 | **1.44×** |
+
+**The persistent kernel still wins overall — but by 1.34×, half the 2.60× it
+showed on the fresh-prefix workload.** Adding real prefill work closes most of
+the gap, exactly as expected. FA3 remains 0.68× in aggregate because these
+batches still carry a decode population.
+
+The decode-row split is where the answer actually lives:
+
+| split | weight | FA3/FA2 | persistent/FA2 | persistent/FA3 |
+|-------|-------:|--------:|---------------:|---------------:|
+| 1–3 decode rows | 74 | **1.39×** | 0.98× | **0.70×** |
+| 4–15 rows | 127 | 1.30× | **1.48×** | 1.14× |
+| 16–47 rows | 164 | 0.55× | **1.34×** | 2.43× |
+| prefix < 512 | 76 | 0.52× | 3.26× | 6.22× |
+| prefix 512–8K | 83 | 0.53× | 1.43× | 2.68× |
+| prefix ≥ 8K | 206 | 0.78× | 1.20× | 1.55× |
+
+**FA3 wins outright on prefill-dominant batches** — at 1–3 decode rows it is
+1.39× over FA2 and **1.43× over ours** (persistent/FA3 = 0.70×). The crossover
+is around **four decode rows**; above it ours wins, decisively so past 16.
+FA3's aggregate loss is therefore not a statement that FA3 is a weak kernel, it
+is that this workload spends most of its time in batches with many decode rows.
+
+Two consequences. First, **the honest claim is regime-scoped**: ours wins the
+mixed-batch regime a busy colocated node actually occupies, FA3 wins the
+prefill-dominant corner. Second, **a three-way gate is worth building**: the
+oracle best-of-3 is 1.44× against 1.34× for always-persistent, so ~7% is left
+on the table by not considering FA3 at all — and the deployed gate only
+realizes 1.18×, so there is more headroom in selection than in any single
+kernel.
+
+**Does our workload meet the "realistic mixed workload" bar?** The co-tenancy
+capture alone does not; the prefix-reuse capture does. Both are needed:
 
 - *Realistic in composition* — co-tenancy of a coding agent with chat is a real
   deployment, the request stream is a real trace, and the decode-side mixture
@@ -279,6 +325,11 @@ should not be used alone to pick a kernel:
   sits much further right on the prefix axis. This is the same grid-vs-realized
   sampling problem found earlier, now on the prefix axis rather than the chunk
   axis.
+- *Fixed by the second capture* — `agent_plus_multiturn_feasible` supplies the
+  missing half (prefix p50 8,592, 56% ≥ 8K, SLO-feasible arrival rates), and it
+  is the one that should be quoted for kernel-selection claims. Reporting only
+  the fresh-prefix number overstates the persistent kernel by ~2× (2.60×
+  vs 1.34×).
 
 **Under common SLOs the kernel choice matters less than these ratios suggest.**
 The gate-v3 A/B is the cleanest evidence: a **1.90× → 3.50×** improvement in

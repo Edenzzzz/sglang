@@ -235,6 +235,61 @@ threshold-sensitive diagnostic. Pooled P99 ITL is accompanied by
 request-maximum ITL because pooled token percentiles hide rare multi-second
 stalls.
 
+## Which attention kernel wins, and does our workload answer that? (2026-09-27)
+
+Kernel-level replay of the realized mixed-batch distribution
+(`sweep_from_capture.py`, time-weighted over 2,845 real batches) gives
+**FA2 1.00× / FA3 0.67× / persistent 2.60×**. That reads as a decisive win for
+the persistent kernel, but it is a statement about *this* workload, and the
+workload has a bias that matters.
+
+**The bias: our captured chunks do almost no prefill work.** Attended prefix is
+2 tokens at p50 with **94% below 512**, so the median chunk performs ~550
+token-pairs of attention — about **30,000×** less than a 2,048-token chunk
+against an 8K prefix. That is a property of the scenario (fresh chat prompts,
+no prefix reuse), not of serving in general. Splitting the same replay by
+attended prefix shows the comparison inverting as prefill work appears:
+
+| attended prefix | weight | FA3/FA2 | persistent/FA2 | persistent/FA3 |
+|-----------------|-------:|--------:|---------------:|---------------:|
+| < 512 (fresh) | 2,793 | 0.63× | **3.95×** | **6.26×** |
+| ≥ 8K | 52 | 0.95× | 1.02× | **1.08×** |
+
+In the long-prefix band all three kernels are within 8% of each other — but it
+carries only 2% of the weight here, so the headline 2.60× is set almost
+entirely by the fresh-prefix band. Measured directly on prefill-dominant
+batches, **FA3 is 1.35–1.54× faster than FA2 while the persistent kernel is
+0.89–1.00× of FA2** (`tasks/debug_kernel_server_perf.md`, "FA3 on
+prefill-dominant batches"). So the ordering genuinely reverses by regime:
+
+- **decode-heavy, fresh/short chunks** → persistent wins, by a lot (3.2–5.1×)
+- **prefill-dominant, long attended prefix** → FA3 wins (1.35–1.54×), ours is
+  at parity-or-worse than FA2
+- **crossover** around a handful of decode rows against a real chunk
+
+**Does our workload meet the "realistic mixed workload" bar?** Partly, and it
+should not be used alone to pick a kernel:
+
+- *Realistic in composition* — co-tenancy of a coding agent with chat is a real
+  deployment, the request stream is a real trace, and the decode-side mixture
+  (46 rows, high KV concentration) is what a busy node looks like.
+- *Not realistic in prefix reuse* — 94% fresh prefixes means no prefix cache
+  hits and no multi-turn continuation, which is exactly the regime where FA3
+  earns its tile. A production node with radix-cache hits or multi-turn traffic
+  sits much further right on the prefix axis. This is the same grid-vs-realized
+  sampling problem found earlier, now on the prefix axis rather than the chunk
+  axis.
+
+**Under common SLOs the kernel choice matters less than these ratios suggest.**
+The gate-v3 A/B is the cleanest evidence: a **1.90× → 3.50×** improvement in
+kernel policy on mixed batches produced **+0.0% node throughput**, moving only
+tails (chat P99 ITL −43.1%; codex P99 +7.2%, inside the ±6% run-to-run band).
+Mixed batches are a minority of forwards and attention a fraction of step time,
+so kernel wins show up in the ITL tail — where an ITL SLO is actually spent —
+rather than in capacity. A kernel-selection decision aimed at an SLO should
+therefore be made on tail latency in the regime the node actually occupies, not
+on aggregate kernel speedups.
+
 ## Reproduction
 
 ```bash

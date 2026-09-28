@@ -841,18 +841,35 @@ run them back to back (`measure_4mode_dispatch.py`):
 
 | policy | total | vs today |
 |--------|------:|---------:|
-| monolithic persistent (today) | 18,104 µs | 1.00× |
-| monolithic best-of-3 | 15,625 µs | 1.16× |
-| **4-mode split** | **14,170 µs** | **1.28×** |
+| monolithic persistent (today) | 13,698 µs | 1.00× |
+| monolithic best-of-3 | 11,223 µs | 1.22× |
+| 3-group (small prefill + draft fused in ours) | 11,582 µs | 1.18× |
+| **4-group (draft peeled into its own launch)** | **10,591 µs** | **1.29×** |
 
-**Best kernel per class, measured:**
+Both groupings are measured with `mixed_decode` correctly containing chunk +
+draft rows (`measure_grouping.py`, 30 batches). Peeling draft into a fourth
+launch is worth 1.29× vs 1.18× for keeping it fused with the small chunk — so
+the fourth class does earn its place, but only by ~9%, and both are close to
+the 1.22× available from simply picking the best single kernel per batch. The
+gap between 1.29× (four launches) and what a single 3-tile kernel could reach
+is the part that does not pay four launch overheads.
+
+**Best kernel per class, measured (corrected 2026-09-29):**
 
 | class | winner | note |
 |-------|--------|------|
 | `large_prefill` | **FA3** | consistent with FA3's 1.35–1.54× on long-prefix chunks |
 | `spec_verify` | **BatchPrefill, 40/40** | fa2 natively picks the tile-64 this class wants |
-| `mixed_decode` | BatchPrefill (35/40) | fa3 3, persistent 1 |
+| `mixed_decode` | **persistent, 30/30** | small prefill **+ draft rows together** |
 | `spec_draft` | split: persistent 15, fa2 25 | tile-16 work, ours wins the long-KV rows |
+
+An earlier version of this table reported `mixed_decode → BatchPrefill (35/40)`.
+**That was a measurement error**: the class was timed as the small-prefill chunk
+*alone*, with no decode rows, which is pure prefill — the one regime the
+persistent kernel is not built for (0.89–1.00× of FA2, see above). Grouped
+correctly as "small prefill + draft rows", which is what the LPT kernel exists
+to serve, **persistent wins 30/30** (e.g. 518 µs vs fa2 1,067 µs on the largest
+batch, and 26–34 µs vs 30–38 µs on the small ones).
 
 **The verify result is the important one.** BatchPrefill beats the persistent
 kernel on *every* verify batch, purely because `FA2DetermineCtaTileQ` selects
@@ -885,16 +902,38 @@ splits rows into the four classes and reports the tile each wants;
 `DISPATCH_MIN_MONOLITHIC_US = 500`. The kernel side — a third
 `CTA_TILE_Q_SIZES` entry — is **not** implemented; feasibility notes below.
 
-**Third tile class: tractable but not free.** The per-tile mainloop already
-supports 64 (`csrc/batch_prefill_*_kernel_inst.jinja` instantiates 16/64/128 for
-FA2, and `BlockBatchPagedAttentionPersistent` is generic in `KTraits::CTA_TILE_Q`
-with `if constexpr (CTA_TILE_Q > 64)` branches). What is hardcoded to two:
-`NUM_TASKS = 2` and `CTA_TILE_Q_SIZES = {128, 16}` (`scheduler.cuh:1109-1110`),
-`HolisticPlanInfo<2>` (`csrc/batch_attention.cu:48,75`), the two-parameter
-kernel template `BlockBatchPagedAttentionPersistentKernel<CTA_TILE_Q_1,
-CTA_TILE_Q_2, ...>` (`persistent.cuh:598`), and its instantiation
-(`batch_attention_paged_kernel_inst.jinja:6`). Generalising to three tasks is a
-bounded change through those five points, not a mainloop rewrite.
+**Third tile class: mechanical, and cheaper than first assessed.** The per-tile
+mainloop already supports 64 (`csrc/batch_prefill_*_kernel_inst.jinja`
+instantiates 16/64/128 for FA2, and `BlockBatchPagedAttentionPersistent` is
+generic in `KTraits::CTA_TILE_Q`). The dispatch structure extends directly: in
+`persistent_template.cuh:91-102` each CTA simply **runs the task queues in
+sequence**, and the two CTAs resident per SM traverse them in **opposite order**
+via `cta_count % 2` —
+
+```
+cta_count even:  Runner1 (tile 128) then Runner2 (tile 16)
+cta_count odd:   Runner2 (tile 16)  then Runner1 (tile 128)
+```
+
+so one CTA drains the large-tile queue while its partner drains the small one.
+Three classes is the same pattern with a third queue: `128 → 64 → 16` forward
+on even CTAs and `16 → 64 → 128` on odd, which keeps the traversal binary and
+matches the 2-CTAs-per-SM occupancy (a `% 3` rotation would not). Smem and
+thread count are already `max()` over the traits, and tile 128 dominates both,
+so adding 64 should not cost occupancy.
+
+The edits are confined to: `NUM_TASKS = 2` and `CTA_TILE_Q_SIZES = {128, 16}`
+(`scheduler.cuh:1109-1110`), `HolisticPlanInfo<2>`
+(`csrc/batch_attention.cu:48,75`), the two-parameter kernel template and its
+`params_1/params_2` plumbing (`persistent.cuh:598`,
+`persistent_template.cuh:61-102`), and the instantiation
+(`batch_attention_paged_kernel_inst.jinja:6`). No mainloop change.
+
+Why it is worth more than dispatching around the gap: the verify class loses to
+BatchPrefill **40/40** solely because fa2 picks tile 64 and we round to 128, and
+a third queue removes that without paying a second launch — whereas the
+four-launch split above pays ~53 µs of fixed overhead and only wins above a
+~500 µs batch.
 
 ### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
 

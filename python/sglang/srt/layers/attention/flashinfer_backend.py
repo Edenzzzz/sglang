@@ -257,7 +257,7 @@ DISPATCH_SPLIT_FLOOR_US = 53.0
 DISPATCH_MIN_MONOLITHIC_US = 500.0
 LARGE_PREFILL_MIN_PREFIX = 8192
 
-# Best kernel per class, measured over 40 fused batches from
+# Best kernel per class, measured over fused batches from
 # tasks/fused_specdec_workload/sets/qwen_small_h800.jsonl (H800, gqa 7).
 # Note spec_verify goes to BatchPrefill on 40/40 batches: fa2 natively selects
 # the tile-64 the verify class wants and the persistent kernel, having only
@@ -266,7 +266,7 @@ LARGE_PREFILL_MIN_PREFIX = 8192
 DISPATCH_CLASS_KERNEL = {
     CLASS_LARGE_PREFILL: "fa3",           # long prefix: FA3 is 1.35-1.54x over fa2
     CLASS_SPEC_VERIFY: "batch_prefill",   # wants tile 64; fa2 picks it natively
-    CLASS_MIXED_DECODE: "batch_prefill",
+    CLASS_MIXED_DECODE: "persistent",     # small prefill + draft rows: ours wins 30/30
     CLASS_SPEC_DRAFT: "persistent",       # tile 16; split fa2/persistent, ours on the long-KV rows
 }
 

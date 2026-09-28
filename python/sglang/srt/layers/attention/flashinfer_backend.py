@@ -231,6 +231,102 @@ class _MixedCompositionLog:
             pass
 
 
+# Four work classes a mixed batch can contain once speculative decoding shares
+# the batch with chunked prefill. `packed_qo_len = qo_len * gqa_group_size`
+# decides the tile a row wants, so the classes are separated by qo_len:
+#
+#   LARGE_PREFILL  chunk with a long cached prefix   -> tile 128
+#   SPEC_VERIFY    (k+1) candidate tokens per row     -> tile 64 when 16<(k+1)*r<=64
+#   MIXED_DECODE   small/fresh-prefix chunk           -> tile 128, our LPT regime
+#   SPEC_DRAFT     one drafted token per row          -> tile 16, smallest work
+#
+# Measured on the H800 workload sets (tasks/fused_specdec_workload): routing the
+# classes to separate kernels beats one kernel only once the batch is large
+# enough to amortise four launches -- the split floor is ~53 us, so small
+# batches must stay monolithic. See DISPATCH_SPLIT_FLOOR_US.
+CLASS_LARGE_PREFILL = "large_prefill"
+CLASS_SPEC_VERIFY = "spec_verify"
+CLASS_MIXED_DECODE = "mixed_decode"
+CLASS_SPEC_DRAFT = "spec_draft"
+
+# Four separate kernel launches cost ~53 us of fixed overhead on H800 (median
+# split time of every batch where splitting lost). Splitting only wins once the
+# batch is big enough to amortise that: measured crossover is a monolithic cost
+# of ~500 us, below which the single launch wins on every sampled batch.
+DISPATCH_SPLIT_FLOOR_US = 53.0
+DISPATCH_MIN_MONOLITHIC_US = 500.0
+LARGE_PREFILL_MIN_PREFIX = 8192
+
+# Best kernel per class, measured over 40 fused batches from
+# tasks/fused_specdec_workload/sets/qwen_small_h800.jsonl (H800, gqa 7).
+# Note spec_verify goes to BatchPrefill on 40/40 batches: fa2 natively selects
+# the tile-64 the verify class wants and the persistent kernel, having only
+# {128, 16}, must round it up. That is the single strongest argument for adding
+# a third tile class rather than dispatching around the gap.
+DISPATCH_CLASS_KERNEL = {
+    CLASS_LARGE_PREFILL: "fa3",           # long prefix: FA3 is 1.35-1.54x over fa2
+    CLASS_SPEC_VERIFY: "batch_prefill",   # wants tile 64; fa2 picks it natively
+    CLASS_MIXED_DECODE: "batch_prefill",
+    CLASS_SPEC_DRAFT: "persistent",       # tile 16; split fa2/persistent, ours on the long-KV rows
+}
+
+
+def classify_mixed_batch(extend_seq_lens_cpu, extend_prefix_lens_cpu,
+                         gqa_group_size, draft_token_num=1):
+    """Split a batch's rows into the four work classes.
+
+    `draft_token_num` is the speculative candidate count (k+1); rows whose
+    qo_len equals it are verify rows, qo_len==1 rows are decode/draft steps.
+    Returns {class: [(qo_len, kv_len), ...]} plus the tile each class wants.
+    """
+    e = np.asarray(extend_seq_lens_cpu, dtype=np.int64)
+    c = np.asarray(extend_prefix_lens_cpu, dtype=np.int64)
+    out = {CLASS_LARGE_PREFILL: [], CLASS_SPEC_VERIFY: [],
+           CLASS_MIXED_DECODE: [], CLASS_SPEC_DRAFT: []}
+    for qo, pfx in zip(e.tolist(), c.tolist()):
+        if qo <= 1:
+            out[CLASS_SPEC_DRAFT].append((qo, pfx))
+        elif draft_token_num > 1 and qo == draft_token_num:
+            out[CLASS_SPEC_VERIFY].append((qo, pfx))
+        elif pfx >= LARGE_PREFILL_MIN_PREFIX:
+            out[CLASS_LARGE_PREFILL].append((qo, pfx))
+        else:
+            out[CLASS_MIXED_DECODE].append((qo, pfx))
+    tiles = {}
+    for k, rows in out.items():
+        if not rows:
+            continue
+        p = max(qo * gqa_group_size for qo, _ in rows)
+        tiles[k] = 128 if p > 64 else (64 if p > 16 else 16)
+    return out, tiles
+
+
+def plan_4mode_dispatch(extend_seq_lens_cpu, extend_prefix_lens_cpu,
+                        gqa_group_size, draft_token_num=1,
+                        est_monolithic_us=None):
+    """Decide whether to split a fused batch across kernels, and how.
+
+    Returns (should_split, {class: kernel}, classes). Splitting is refused below
+    DISPATCH_MIN_MONOLITHIC_US because four launches cost ~53 us of fixed
+    overhead: on the measured H800 set, splitting lost on every batch under
+    ~500 us monolithic (0.62-0.81x) and won above it (1.01-1.39x), for 1.28x
+    over monolithic persistent across the set.
+
+    This is the scheduler-side half of the 4-mode design. The kernel-side half
+    -- a third tile class so verify rows stop being rounded 128 -- is the larger
+    win and is not implemented here; see tasks/fused_specdec_workload.
+    """
+    classes, tiles = classify_mixed_batch(
+        extend_seq_lens_cpu, extend_prefix_lens_cpu, gqa_group_size, draft_token_num
+    )
+    populated = [k for k, v in classes.items() if v]
+    if len(populated) < 2:
+        return False, {}, classes
+    if est_monolithic_us is not None and est_monolithic_us < DISPATCH_MIN_MONOLITHIC_US:
+        return False, {}, classes
+    return True, {k: DISPATCH_CLASS_KERNEL[k] for k in populated}, classes
+
+
 def select_mixed_attention_kernel(
     extend_seq_lens_cpu,
     extend_prefix_lens_cpu,

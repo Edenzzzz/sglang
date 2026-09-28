@@ -829,6 +829,73 @@ across that exact boundary at 46 rows @3K KV, FA3 is flat at ~565 µs while
 564–568 µs at every setting). FA3's deficit on decode-heavy batches is inside
 its mainloop, unreachable from the scheduler.
 
+### 4-mode dispatch: measured headroom and what it says about the kernel (2026-09-28)
+
+Design under test: four co-resident work classes routed to the kernel that
+suits each, with persistent-SM proportions assigned from the live mixture.
+Measured on 40 fused batches from
+`tasks/fused_specdec_workload/sets/qwen_small_h800.jsonl` (H800, gqa 7, k=3),
+timing each class separately and summing — a *pessimistic* stand-in for a real
+dispatcher, which would overlap classes on disjoint SM partitions rather than
+run them back to back (`measure_4mode_dispatch.py`):
+
+| policy | total | vs today |
+|--------|------:|---------:|
+| monolithic persistent (today) | 18,104 µs | 1.00× |
+| monolithic best-of-3 | 15,625 µs | 1.16× |
+| **4-mode split** | **14,170 µs** | **1.28×** |
+
+**Best kernel per class, measured:**
+
+| class | winner | note |
+|-------|--------|------|
+| `large_prefill` | **FA3** | consistent with FA3's 1.35–1.54× on long-prefix chunks |
+| `spec_verify` | **BatchPrefill, 40/40** | fa2 natively picks the tile-64 this class wants |
+| `mixed_decode` | BatchPrefill (35/40) | fa3 3, persistent 1 |
+| `spec_draft` | split: persistent 15, fa2 25 | tile-16 work, ours wins the long-KV rows |
+
+**The verify result is the important one.** BatchPrefill beats the persistent
+kernel on *every* verify batch, purely because `FA2DetermineCtaTileQ` selects
+tile 64 while our `CTA_TILE_Q_SIZES = {128, 16}` must round verify rows up to
+128. That is the third-tile-class gap, showing up as a routing decision rather
+than a micro-benchmark. Dispatching around it recovers some of the loss;
+closing it in the kernel would remove the need to dispatch at all for that
+class.
+
+**Splitting only pays above a size floor.** Four launches cost ~53 µs of fixed
+overhead (median split time of every batch where splitting lost). Sorted by
+monolithic cost, splitting loses on every batch below ~500 µs (0.62–0.81×) and
+wins above it (1.01–1.39×):
+
+| monolithic | split | gain |
+|-----------:|------:|-----:|
+| 66 µs | 89 | 0.75× |
+| 105 µs | 130 | 0.81× |
+| 525 µs | 502 | 1.05× |
+| 1,156 µs | 892 | **1.30×** |
+| 2,299 µs | 1,650 | **1.39×** |
+
+So a dispatcher must be conditional on batch size — and the fact that small
+batches are launch-bound is itself an argument for a *single* persistent
+megakernel with four tile classes over four separate launches.
+
+**Implemented** (scheduler side, `flashinfer_backend.py`): `classify_mixed_batch`
+splits rows into the four classes and reports the tile each wants;
+`plan_4mode_dispatch` returns the routing, refusing to split below
+`DISPATCH_MIN_MONOLITHIC_US = 500`. The kernel side — a third
+`CTA_TILE_Q_SIZES` entry — is **not** implemented; feasibility notes below.
+
+**Third tile class: tractable but not free.** The per-tile mainloop already
+supports 64 (`csrc/batch_prefill_*_kernel_inst.jinja` instantiates 16/64/128 for
+FA2, and `BlockBatchPagedAttentionPersistent` is generic in `KTraits::CTA_TILE_Q`
+with `if constexpr (CTA_TILE_Q > 64)` branches). What is hardcoded to two:
+`NUM_TASKS = 2` and `CTA_TILE_Q_SIZES = {128, 16}` (`scheduler.cuh:1109-1110`),
+`HolisticPlanInfo<2>` (`csrc/batch_attention.cu:48,75`), the two-parameter
+kernel template `BlockBatchPagedAttentionPersistentKernel<CTA_TILE_Q_1,
+CTA_TILE_Q_2, ...>` (`persistent.cuh:598`), and its instantiation
+(`batch_attention_paged_kernel_inst.jinja:6`). Generalising to three tasks is a
+bounded change through those five points, not a mainloop rewrite.
+
 ### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
 
 A decode row's `packed_qo_len` is `1 × gqa_ratio`, and two thresholds decide

@@ -509,6 +509,19 @@ lands. (An earlier "mean distance to nearest grid point" statistic read 1.5,
 but it is dominated by the 1.3% tail of 2–16-token chunks and overstates the
 problem; the binned mass above is the honest version.)
 
+**On the low attended-prefix numbers above — this is *not* a cache-miss
+workload (corrected 2026-09-28).** The same runs show a **79.7% radix cache hit
+rate** in token terms (36,363 new vs 142,723 cached), with peak KV-pool
+occupancy only 0.61, so nothing is being evicted. The per-row prefix
+distribution is *bimodal*: the coding tenant's session continuations hit cache
+heavily but are a small fraction of prefill **rows** (only 3 of 43 sampled
+mixed batches carry `cached-token > 512`, yet those carry 3.8M of the cached
+tokens), while the chat tenant's fresh random prompts have no reusable prefix
+**by construction** and dominate the row count. So "prefix p50 = 2" is a true
+statement about rows and a misleading one about caching. The prefix-reuse
+capture (`h800_capture_prefixreuse`, multi-turn on 8K shared prefixes) is the
+counterpart with prefix p50 8,592 and 56% of rows ≥ 8K.
+
 The shape of real mixed batches is not what the grid samples: at high load a
 mixed batch is **~46 decode rows against a ~400-token, zero-prefix chunk**,
 where the grid's chunk axis starts at 128 and jumps to 512, and its decode-row
@@ -568,138 +581,6 @@ without that ptxas emits C7515 and serializes the pipeline. Any runtime branch
 inside the issue loop blocks unrolling and inflates the baseline 3× (32 → 105
 cycles), so all variants are compile-time template parameters. Both traps
 silently produced "no overlap" answers in earlier drafts of these benchmarks.
-
-### Replaying real compositions: FA2 vs FA3 vs persistent (2026-09-22)
-
-`sweep_from_capture.py` buckets the 3,493 captured batches (log-spaced on rows,
-decode KV, chunk, prefix), benchmarks one representative per bucket through all
-four kernels, and weights by realized frequency — the top 60 buckets cover
-81.4% of batches. **Time-weighted** totals (what actually matters; the
-batch-count-weighted mean flatters cheap batches):
-
-| policy | total kernel ms | vs FA2 |
-|--------|----------------:|-------:|
-| FA2 BatchPrefill | 3,402,664 | 1.00× |
-| **FA3** | 5,070,015 | **0.67×** |
-| persistent (dual tile) | 1,310,164 | **2.60×** |
-| deployed v2 gate | 1,794,324 | 1.90× |
-
-**On this captured workload** FA3 is 33% slower than FA2 and loses at every
-decode-row count — 0.50× at 1–3 rows, 0.28× at 4–15, 0.84× at 16–39, 0.67× at
-40+, with the persistent kernel beating it 1.29–6.12×.
-
-**But that is a property of this workload, not of FA3 (corrected 2026-09-26).**
-Two things conspire here. First, these compositions are decode-heavy, where
-FA3's fixed `cta_tile_q = 64` pads a GQA-7 decode row (7 packed q-rows)
-ninefold. Second and more important, *their prefill work is almost nil*: the
-captured chunks attend a prefix of **2 tokens at p50, 94% below 512**, so the
-median chunk does ~550 token-pairs of attention work — about **30,000× less**
-than a 2,048-token chunk against an 8K prefix. FA3's fixed setup cost has
-nothing to amortize against. See "FA3 on prefill-dominant batches" below for
-the other end of the range, where FA3 wins by up to 1.54×.
-
-**The immediately available speedup was in the gate, not the kernel.** The
-deployed table realized 1.90× of an available 2.60×. Diagnosing the declines
-over all 3,520 captured batches: 55.1% accepted, **27.0% declined by the
-out-of-support guard**, 17.9% by non-unanimous neighbours — i.e. the dominant
-cause is real batches landing outside the grid's sampled region, exactly the
-mismatch quantified above. The 42.4% of weight sent to BatchPrefill would have
-run 1.747× faster on the persistent kernel, worth **14.2% of total FA2 kernel
-time**.
-
-Rebuilding the table with the 60 measured serving compositions folded in, on
-**held-out** buckets (30 never in the table):
-
-| gate | accept | speedup vs FA2 | share of oracle captured |
-|------|-------:|---------------:|-------------------------:|
-| v2 deployed (grid only, k=5) | 63.1% | 2.17× | 75.1% |
-| **v3 (grid + captured, k=7)** | **98.1%** | **3.50×** | **99.6%** |
-
-Adding real compositions at k=5 would have cost the zero-regression property
-(worst-case leave-one-out 0.971×, one case). Raising to **k=7 restores worst-case
-LOO to exactly 1.000×** with no loss of held-out gain, so v3 ships at k=7:
-1,376 points, and the deployed `mixed_kernel_gate_h800_gqa7.json` is updated.
-This is a 1.61× kernel-policy improvement on real traffic with no kernel change
-— the payoff for sampling the workload instead of a grid.
-
-**Serving validation (single run each, `loadsweep_med`, v2 vs v3 gate).** Live
-acceptance moved as designed — the gate picked persistent on **34.1% → 89.3%**
-of 1,088 mixed batches (`forward mix`: 1,000 persistent vs 117 BatchPrefill),
-100% retokenization on both streams. End-to-end the picture is mixed:
-
-| stream | throughput | mean ITL | P99 ITL | mean TTFT |
-|--------|-----------:|---------:|--------:|----------:|
-| chat | +0.0% | **−10.3%** | **−43.1%** | +0.1% |
-| codex | +1.7% | −2.7% | +7.2% | +8.3% |
-| node-wide | **+0.0%** | | | |
-
-So a 1.61× kernel-policy gain buys **no node throughput** — unsurprising given
-attention is a minority of step time and the node is bound elsewhere (the same
-lesson as the original kernel-vs-serving gap). The chat tenant's tail improves
-substantially; codex's P99 and TTFT move the wrong way by 7–8%, which is inside
-the ±6% run-to-run band this file already documents for saturation TTFT, so it
-is **not yet distinguishable from noise**. A paired repeat is needed before
-claiming either the chat win or the codex regression. The kernel-level result
-(held-out 2.17× → 3.50×) is solid; its serving translation is not established.
-
-*Scope:* only the gqa7 (Qwen2.5-7B) table is rebuilt. `mixed_kernel_gate_h800_gqa4.json`
-(Qwen3-8B) is still grid-only and will have the same over-conservative decline
-behaviour until a capture is run on that head config. `k` is read from the table
-file, so the two can differ safely.
-
-### FA3 levers actually tried, and why none landed (2026-09-23)
-
-Three levers were proposed for mixed-size wgmma scheduling on Hopper. All were
-tested; **none produced an FA3 speedup**, and the reasons are structural rather
-than tuning.
-
-**1. Overlap differently-shaped wgmma.** Ruled out at the instruction level
-(above): costs are additive to the cycle within a warpgroup *and* across two
-warpgroups on one SM. The tensor core is a serial per-SM resource, so there is
-nothing to schedule.
-
-**2. Squeeze other ops into the small-tile shadow.** Real — `m64n16k16` absorbs
-8 FFMA ops at zero cost — but it needs a small tile class to exist. FA3 has
-none: `cta_tile_q = 64` is fixed in its scheduler (`scheduler.cuh:1468`), and
-`DISPATCH_CTA_TILE_Q` appears only in the FA2 (`prefill.cuh:1612`) and POD
-paths, never in the Hopper template. FA3's tile is not a dispatch parameter, so
-this lever cannot be applied without rewriting the FA3 mainloop's tile shapes
-and smem layout — not a scheduler tweak.
-
-**3. Load balancing / two-queue LPT.** FA3 already has a MinHeap cost
-scheduler, so the remaining question was whether its own batch-average decision
-(`cluster_size = 2` when `avg_packed_qo_len > 64`, doubling `cluster_tile_q` to
-128) reproduces FA2's flip. **Measured: it does not.** Sweeping chunk size
-across that exact boundary at 46 decode rows @3K KV
-(`fa3_cluster_flip.py`, boundary at chunk 383 — which is where the captured
-chunk p50 of 382 happens to sit):
-
-| chunk | avg packed qo | FA3 cluster | **FA3 µs** | **FA2 µs** | **persistent µs** |
-|------:|--------------:|------------:|-----------:|-----------:|------------------:|
-| 343 | 57 | 1 | 536.9 | 122.5 | 126.8 |
-| 381 | 63 | 1 | 564.1 | 123.7 | 127.7 |
-| 385 | 64 | 1 | 562.3 | 123.9 | 127.3 |
-| 391 | 65 | **2** | 569.1 | **160.1** | 127.7 |
-| 503 | 81 | 2 | 568.2 | 161.3 | 128.0 |
-
-Two clean readings. **FA2's tile flip is real and sharp: +29% (124 → 160 µs) at
-exactly `avg_packed_qo_len > 64`**, while the persistent kernel is flat to
-within 1% across the whole sweep — the dual-tile design doing precisely what it
-was built for, measured in isolation for the first time. **FA3 is flat too, but
-flat at ~4.5× the cost of both.** Its `cluster_size` flip costs nothing
-measurable; its deficit is elsewhere and is not a scheduling decision.
-
-`fixed_split_size` — the one FA3 scheduling knob exposed from Python — is inert
-here: 537 µs unset, 564–568 µs at 2048/1024/512/256/128. So FA3's 4.5× gap on
-GQA-7 decode-heavy mixed batches is inside its mainloop, unreachable from the
-scheduler or from any exposed parameter.
-
-**Conclusion for Hopper:** do not route this regime through FA3. The measured
-speedup on real compositions comes from the dual-tile persistent kernel
-(2.60× time-weighted vs FA2) and from gating it correctly (v3, held-out
-2.17× → 3.50×). Grafting a second tile class onto FA3 remains the interesting
-direction but is a kernel-template change, not the scheduler experiment it
-first appeared to be.
 
 ### Fusing spec-dec (draft + verify + prefill) into one mixed-tile kernel (2026-09-25)
 
@@ -872,51 +753,81 @@ different instruction.
 Consequence for the fused 3-mode kernel: the third (verify) tile class should
 be another wgmma tile, not an mma.sync path.
 
-### FA3 on prefill-dominant batches: it wins there (2026-09-26)
+### Ours vs FA3: the complete picture (2026-09-22..27)
 
-The earlier FA3 comparison ran only on the captured co-tenancy compositions,
-which are decode-heavy *and* have near-zero prefill work. `fa3_prefill_probe.py`
-covers the opposite end. First, a premise worth correcting: **the persistent
-kernel uses tile 128 for prefill, not 16** — `scheduler.cuh:1141` routes
-`packed_qo_len > 16` to `CTA_TILE_Q_SIZES[0] = 128`, and the 16 tile only ever
-holds decode/draft rows. So against FA3 our prefill tile is the *larger* one.
+All FA2 / FA3 / persistent comparisons live here; the serving-level verdict is
+in `realistic_workload_analysis.md`, which points back to this section.
 
-**Pure prefill, H800, gqa 7** (µs, and ratio vs FA2):
+**Planner structure.** Reading the three schedulers side by side
+(`flashinfer/include/flashinfer/attention/scheduler.cuh`) reframes the gate:
 
-| chunk @ attended prefix | FA2 | FA3 | persistent | FA3/FA2 |
-|---|---:|---:|---:|---:|
-| 512 @ 0 | 10.1 | 37.2 | 12.4 | 0.27× |
-| 2,048 @ 0 | 19.4 | 49.9 | 20.8 | 0.39× |
-| 8,192 @ 0 | 50.4 | 90.5 | 52.7 | 0.56× |
-| 2,048 @ 8,192 | 778.0 | **503.9** | 865.7 | **1.54×** |
-| 8,192 @ 8,192 | 2,653.5 | **1,824.4** | 2,675.5 | **1.45×** |
-| 8,192 @ 32,768 | 10,597.0 | **7,546.6** | 10,706.0 | **1.40×** |
-| 4,096 @ 65,536 | 10,841.3 | **7,109.6** | 12,133.7 | **1.52×** |
+| | q-tile selection | KV-split sizing | load balancing |
+|---|---|---|---|
+| **FA2** (`:537,550`) | batch-wide adaptive 16/64/128 via `FA2DetermineCtaTileQ` — **one chunk flips it for every row** | fixed budget `max_grid_size/num_kv_heads` = 66 units — **one chunk eats 56** | none (static split) |
+| **FA3** (`:1468`) | **fixed `cta_tile_q = 64`** (cluster 1–2), no flip | `f(total_kv_lens / num_clusters)` | **MinHeap cost scheduler** (`:1507`) |
+| **persistent** (`:1110`) | **dual `{128, 16}`**, per row by `packed_qo_len > 16` | `f(total_kv×heads / num_clusters)` | MinHeap per task queue |
 
-Multi-chunk batches behave the same (1.35–1.44× for FA3 once the prefix is
-non-zero). **FA3 is 1.35–1.54× faster than FA2 on real prefill work**, and the
-persistent kernel is 0.89–1.00× of FA2 there — i.e. on prefill-dominant batches
-the ordering is **FA3 > FA2 ≥ persistent**, the reverse of the decode-heavy
-case. The prefix-0 rows are not a counter-example: with nothing to attend,
-there is no attention work to speed up and only fixed cost remains.
+FA3 has already fixed both FA2 pathologies the gate was built around. Its
+remaining structural gap is the **heterogeneous tile**: a GQA-7 decode row has
+`packed_qo_len = 7`, which FA3 pads into a 64-row tile (9× waste) where the
+persistent kernel uses its 16 tile (2.3×). Note the persistent kernel uses tile
+**128 for prefill** (`:1141`), so against FA3 our prefill tile is the *larger*
+one — the 16 tile only ever holds decode/draft rows.
 
-**The crossover, sweeping decode rows against a fixed 4,096-token chunk:**
+**Who wins depends on the regime, not the kernel.** Measured on isolated
+compositions (`fa3_prefill_probe.py`, H800, gqa 7, µs):
 
 | composition | FA2 | FA3 | persistent | FA3/FA2 | pers/FA2 |
 |---|---:|---:|---:|---:|---:|
-| 0 decode + chunk (prefix 0) | 29.5 | 63.3 | 32.3 | 0.47× | 0.91× |
-| 2 decode @8K + chunk | 274.9 | **178.3** | **53.5** | 1.54× | **5.13×** |
-| 8 decode @8K + chunk | 406.7 | **309.5** | **89.2** | 1.31× | **4.56×** |
-| 32 decode @8K + chunk | 421.5 | 1,060.4 | **219.0** | 0.40× | 1.92× |
+| chunk 2,048 @ prefix 0 | 19.4 | 49.9 | 20.8 | 0.39× | 0.93× |
+| chunk 2,048 @ prefix 8,192 | 778.0 | **503.9** | 865.7 | **1.54×** | 0.90× |
+| chunk 8,192 @ prefix 32,768 | 10,597 | **7,547** | 10,706 | **1.40×** | 0.99× |
+| 2 decode @8K + chunk 4,096 | 274.9 | 178.3 | **53.5** | 1.54× | **5.13×** |
+| 8 decode @8K + chunk 4,096 | 406.7 | 309.5 | **89.2** | 1.31× | **4.56×** |
+| 32 decode @8K + chunk 4,096 | 421.5 | 1,060 | **219.0** | 0.40× | **1.92×** |
 
-FA3 leads while decode rows are few and collapses as they accumulate — at 32
-rows its 9× q-padding on every decode row dominates. The persistent kernel wins
-across the whole middle of this range.
+**FA3 is 1.35–1.54× faster than FA2 on real prefill work** (long attended
+prefix), where the persistent kernel is only 0.89–1.00× of FA2. With a prefix
+of 0 there is no attention work to speed up and only fixed cost remains, which
+is why FA3 looks bad there. The crossover is **~4 decode rows**.
 
-**So neither kernel dominates, and that is the design point for the fused
-3-mode kernel**: it needs FA3-class prefill throughput *and* a small tile for
-decode/draft rows *and* the 64 tile for verify. Our kernel has the decode end,
-FA3 has the prefill end, and no existing kernel has all three.
+**Time-weighted over real serving compositions.** Two captures, replayed
+through all three kernels (`sweep_from_capture.py`):
+
+| workload | FA2 | FA3 | persistent | gate | oracle best-of-3 |
+|---|---:|---:|---:|---:|---:|
+| co-tenancy, fresh chat prompts (2,845 batches) | 1.00× | 0.67× | **2.60×** | 1.90× | 2.60× |
+| multi-turn w/ 8K shared prefixes (365 batches) | 1.00× | 0.68× | **1.34×** | 1.18× | **1.44×** |
+
+**The persistent kernel wins both, but the margin halves** (2.60× → 1.34×) once
+the workload contains real prefill work. Decode-row split on the prefix-reuse
+workload:
+
+| split | weight | FA3/FA2 | pers/FA2 | pers/FA3 |
+|---|---:|---:|---:|---:|
+| 1–3 decode rows | 74 | **1.39×** | 0.98× | **0.70×** |
+| 4–15 rows | 127 | 1.30× | **1.48×** | 1.14× |
+| 16–47 rows | 164 | 0.55× | **1.34×** | 2.43× |
+
+So **FA3 wins outright on prefill-dominant batches** (1.43× over ours at 1–3
+decode rows) and loses as the decode population grows. Its aggregate 0.68× is
+not a verdict on FA3; it reflects where these workloads spend their time. The
+**oracle best-of-3 is 1.44× vs 1.34% for always-persistent**, so ~7% is left on
+the table by never considering FA3 — motivating multi-kernel dispatch.
+
+**Levers tried on FA3, none landed.** (1) Overlapping differently-shaped wgmma
+is ruled out at the instruction level (see the scheduling study above: costs are
+additive within a warpgroup *and* across warpgroups). (2) Squeezing work into
+small-tile slack is real but needs a small tile class; FA3's `cta_tile_q` is
+fixed in its scheduler and `DISPATCH_CTA_TILE_Q` appears only in the FA2 and
+POD paths, never the Hopper template — so it is a mainloop rewrite, not a
+scheduler tweak. (3) FA3's own batch-average decision (`cluster_size = 2` when
+`avg_packed_qo_len > 64`) does **not** reproduce FA2's flip: sweeping chunk size
+across that exact boundary at 46 rows @3K KV, FA3 is flat at ~565 µs while
+**FA2 steps +29% (124 → 160 µs)** and the persistent kernel is flat to within
+1%. `fixed_split_size`, the one exposed FA3 knob, is inert (537 µs unset,
+564–568 µs at every setting). FA3's deficit on decode-heavy batches is inside
+its mainloop, unreachable from the scheduler.
 
 ### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
 
@@ -959,38 +870,6 @@ backend**. That covers the Llama/Qwen-dense family (ratios 7–16), and excludes
 the MLA frontier models where most current serving attention is going. The
 `m64n16k16`-vs-`m64n64k16` instruction study is scoped the same way: with no
 small tiles, its small-tile slack finding does not apply.
-
-### FA3 as a target: what it already fixes, and what it still lacks (2026-09-22)
-
-Reading the three planners side by side (`flashinfer/include/flashinfer/attention/scheduler.cuh`)
-changes the framing of the whole gate:
-
-| | q-tile selection | KV-split sizing | load balancing |
-|---|---|---|---|
-| **FA2** (`:537,550`) | batch-wide adaptive 16/64/128 via `FA2DetermineCtaTileQ` — **one chunk flips it for every row** | fixed budget `max_grid_size/num_kv_heads` = 66 units — **one chunk eats 56** | none (static split) |
-| **FA3** (`:1468`) | **fixed `cta_tile_q = 64`** (cluster 1–2), no flip | `f(total_kv_lens / num_clusters)` — from total work | **MinHeap cost scheduler** (`:1507`) |
-| **persistent** (`:1110`) | **dual classes `{128, 16}`**, chosen per row by `packed_qo_len > 16` | `f(total_kv×heads / num_clusters)` | MinHeap per task queue |
-
-So **FA3 has already fixed both FA2 pathologies** the gate was built around — no
-batch-wide tile flip, and a work-derived KV split with an LPT-style heap. The
-persistent kernel's remaining structural advantage over FA3 is narrower than
-over FA2, and it is specifically the **heterogeneous tile**: for a decode row
-with GQA 7, `packed_qo_len = 7`, so FA3 pads it into a 64-row tile (9× wasted
-q-dimension) where the persistent kernel uses its 16 tile (2.3×).
-
-That lines up with the instruction-level study above: `m64n64k16` runs at 96%
-of peak and `m64n16k16` at 38%, but the small tile does a quarter of the work
-for 20/32 of the cycles *and* absorbs 8 FFMA ops for free. For the captured
-workload — ~46 decode rows of 7 packed q-rows each against one ~400-token
-chunk — nearly all the work is rows that want the small tile.
-
-**Direction being tested:** graft the persistent kernel's second (small) tile
-class onto FA3's better mainloop and existing heap scheduler, rather than
-porting FA3's mainloop into the persistent kernel. FA3 supplies the Hopper
-pieces (TMA, warp-specialized softmax — worth ~73% MMA hiding per the
-cross-warpgroup measurement); what it lacks is the dual queue. The 4-way
-replay on captured compositions (`sweep_from_capture.py`: fa2 / fa3 /
-persistent-flip / persistent-noflip) quantifies the gap before any kernel work.
 
 ### Measured k-NN gate
 

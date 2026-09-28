@@ -96,6 +96,14 @@ SCENARIOS = {
     # loads, high to low. Used to record the realized mixed-batch composition
     # distribution (tasks/debug_kernel_server_perf/wgmma + gate resampling),
     # not as a performance comparison.
+    # Pure session replay: every chunk continues a session whose prefix is
+    # already in the radix cache, so prefill rows should be ~100% cache hits.
+    # The co-tenancy scenarios mix in a fresh-prompt chat tenant, which has no
+    # reusable prefix by construction and dominates the prefill ROW population.
+    "codex_only": {
+        "desc": "coding-agent session replay only (near-100% prefix cache hits)",
+        "streams": {"codex": codex(80, groups=16)},
+    },
     "loadsweep_hi": {
         "desc": "co-tenancy at high offered load (chat 16/s, 12 sessions)",
         "streams": {"codex": codex(60, groups=12), "chat": chat(2400, 16, 512, 96)},

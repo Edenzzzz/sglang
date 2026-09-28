@@ -237,18 +237,29 @@ stalls.
 
 ## Which attention kernel wins, and does our workload answer that? (2026-09-27)
 
+Full kernel-level detail (planner structure, isolated-composition
+measurements, FA3 levers tried) is consolidated in
+`tasks/debug_kernel_server_perf.md` → "Ours vs FA3: the complete picture"; this
+section carries the serving-level verdict only.
+
 Kernel-level replay of the realized mixed-batch distribution
 (`sweep_from_capture.py`, time-weighted over 2,845 real batches) gives
 **FA2 1.00× / FA3 0.67× / persistent 2.60×**. That reads as a decisive win for
 the persistent kernel, but it is a statement about *this* workload, and the
 workload has a bias that matters.
 
-**The bias: our captured chunks do almost no prefill work.** Attended prefix is
-2 tokens at p50 with **94% below 512**, so the median chunk performs ~550
-token-pairs of attention — about **30,000×** less than a 2,048-token chunk
-against an 8K prefix. That is a property of the scenario (fresh chat prompts,
-no prefix reuse), not of serving in general. Splitting the same replay by
-attended prefix shows the comparison inverting as prefill work appears:
+**The bias: our captured chunks do almost no prefill work** — though *not*
+because the cache is missing. Those runs hit the radix cache **79.7%** in token
+terms with peak KV occupancy 0.61 (no eviction). The per-row distribution is
+bimodal: the coding tenant's continuations hit heavily but are few rows (3 of
+43 sampled mixed batches carry `cached-token > 512`, and they hold 3.8M of the
+cached tokens), while the chat tenant's fresh random prompts — which have no
+reusable prefix by construction — dominate the row count. Hence attended prefix
+2 tokens at p50, **94% of rows below 512**, and a median chunk doing ~550
+token-pairs of attention, ~**30,000×** less than a 2,048-token chunk against an
+8K prefix. It is a property of the scenario's tenant mix, not of caching and
+not of serving in general. Splitting the same replay by attended prefix shows
+the comparison inverting as prefill work appears:
 
 | attended prefix | weight | FA3/FA2 | persistent/FA2 | persistent/FA3 |
 |-----------------|-------:|--------:|---------------:|---------------:|
@@ -319,9 +330,10 @@ capture alone does not; the prefix-reuse capture does. Both are needed:
 - *Realistic in composition* — co-tenancy of a coding agent with chat is a real
   deployment, the request stream is a real trace, and the decode-side mixture
   (46 rows, high KV concentration) is what a busy node looks like.
-- *Not realistic in prefix reuse* — 94% fresh prefixes means no prefix cache
-  hits and no multi-turn continuation, which is exactly the regime where FA3
-  earns its tile. A production node with radix-cache hits or multi-turn traffic
+- *Not realistic in prefix reuse per row* — 94% of prefill rows attend <512
+  tokens (the chat tenant has no reusable prefix by construction), which is
+  exactly the regime where FA3 cannot earn its tile. Note this is a row-mix
+  effect, not a cache failure: token-level hit rate is 79.7%. A production node with radix-cache hits or multi-turn traffic
   sits much further right on the prefix axis. This is the same grid-vs-realized
   sampling problem found earlier, now on the prefix axis rather than the chunk
   axis.

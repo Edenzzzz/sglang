@@ -312,9 +312,11 @@ def plan_4mode_dispatch(extend_seq_lens_cpu, extend_prefix_lens_cpu,
     ~500 us monolithic (0.62-0.81x) and won above it (1.01-1.39x), for 1.28x
     over monolithic persistent across the set.
 
-    This is the scheduler-side half of the 4-mode design. The kernel-side half
-    -- a third tile class so verify rows stop being rounded 128 -- is the larger
-    win and is not implemented here; see tasks/fused_specdec_workload.
+    NOT WIRED IN: no caller dispatches on this yet. It exists to pin down the
+    classification and the measured thresholds in testable form. The numbers
+    behind DISPATCH_MIN_MONOLITHIC_US come from summing separately-timed class
+    launches with oracle kernel choice, which models a *serialized* split, not
+    the SM-partitioned design -- so treat the threshold as indicative.
     """
     classes, tiles = classify_mixed_batch(
         extend_seq_lens_cpu, extend_prefix_lens_cpu, gqa_group_size, draft_token_num

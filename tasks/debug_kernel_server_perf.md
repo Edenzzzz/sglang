@@ -835,24 +835,38 @@ Design under test: four co-resident work classes routed to the kernel that
 suits each, with persistent-SM proportions assigned from the live mixture.
 Measured on 40 fused batches from
 `tasks/fused_specdec_workload/sets/qwen_small_h800.jsonl` (H800, gqa 7, k=3),
-timing each class separately and summing — a *pessimistic* stand-in for a real
-dispatcher, which would overlap classes on disjoint SM partitions rather than
-run them back to back (`measure_4mode_dispatch.py`):
+timing each class separately and summing (`measure_4mode_dispatch.py`,
+superseded by `measure_grouping.py`). This is an estimate of a serialized,
+oracle-selected variant, not a measured dispatcher — see the caveats under the
+table:
 
-| policy | total | vs today |
-|--------|------:|---------:|
-| monolithic persistent (today) | 13,698 µs | 1.00× |
-| monolithic best-of-3 | 11,223 µs | 1.22× |
-| 3-group (small prefill + draft fused in ours) | 11,582 µs | 1.18× |
-| **4-group (draft peeled into its own launch)** | **10,591 µs** | **1.29×** |
+| row | what it is | total | vs today |
+|-----|-----------|------:|---------:|
+| monolithic persistent | **measured** — one launch over the whole batch, i.e. what runs today | 13,698 µs | 1.00× |
+| monolithic best-of-3 | **measured** per batch, oracle choice of one kernel for the whole batch | 11,223 µs | 1.22× |
+| 3-group | **estimate** — Σ of 3 class launches, oracle kernel per class | 11,582 µs | 1.18× |
+| 4-group | **estimate** — Σ of 4 class launches, oracle kernel per class | 10,591 µs | 1.29× |
 
-Both groupings are measured with `mixed_decode` correctly containing chunk +
-draft rows (`measure_grouping.py`, 30 batches). Peeling draft into a fourth
-launch is worth 1.29× vs 1.18× for keeping it fused with the small chunk — so
-the fourth class does earn its place, but only by ~9%, and both are close to
-the 1.22× available from simply picking the best single kernel per batch. The
-gap between 1.29× (four launches) and what a single 3-tile kernel could reach
-is the part that does not pay four launch overheads.
+**The two group rows are not measurements of a dispatcher — nothing was
+implemented.** They are `sum(min(fa2, fa3, persistent))` over the classes timed
+*separately* (`measure_grouping.py`: `g4 = sum(min(p.values()) for p in
+parts4)`). Read them as a rough bound on a *serialized, oracle-selected*
+variant, which is not the proposed design. Specifically the sum:
+
+- assumes **hindsight kernel choice** per class; a real gate mispredicts;
+- models the classes running **back-to-back**, so it captures neither the
+  concurrency of the intended SM-partitioned design nor its contention;
+- **pays four launch overheads** (~53 µs), which an SM-partitioned kernel would
+  not — so it *understates* the design;
+- **omits four `plan()` calls** and four sets of metadata, which a real
+  implementation must pay — so it *overstates* in the other direction;
+- times each class with its own warmup and L2 flush, so any cross-class cache
+  behaviour is absent.
+
+Only the first two rows are like-for-like. The honest reading is: picking the
+best *single* kernel per batch is worth a measured **1.22×**, and class-level
+routing looks worth roughly that much again at best, with the sign of the
+remaining error unresolved until something is built.
 
 **Best kernel per class, measured (corrected 2026-09-29):**
 
@@ -896,11 +910,14 @@ So a dispatcher must be conditional on batch size — and the fact that small
 batches are launch-bound is itself an argument for a *single* persistent
 megakernel with four tile classes over four separate launches.
 
-**Implemented** (scheduler side, `flashinfer_backend.py`): `classify_mixed_batch`
-splits rows into the four classes and reports the tile each wants;
-`plan_4mode_dispatch` returns the routing, refusing to split below
-`DISPATCH_MIN_MONOLITHIC_US = 500`. The kernel side — a third
-`CTA_TILE_Q_SIZES` entry — is **not** implemented; feasibility notes below.
+**Status: scaffolding only, not an active code path.**
+`flashinfer_backend.py` gains `classify_mixed_batch` (splits rows into the four
+classes, reports the tile each wants) and `plan_4mode_dispatch` (returns a
+routing, refusing to split below `DISPATCH_MIN_MONOLITHIC_US = 500`). Neither is
+called from `init_forward_metadata` — they are unit-testable helpers pinning
+down the classification and the measured thresholds, nothing more. No batch is
+dispatched differently today. The kernel side (a third `CTA_TILE_Q_SIZES` entry)
+is also not implemented; feasibility notes below.
 
 **Third tile class: mechanical, and cheaper than first assessed.** The per-tile
 mainloop already supports 64 (`csrc/batch_prefill_*_kernel_inst.jinja`

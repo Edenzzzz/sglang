@@ -954,6 +954,86 @@ BatchPrefill **40/40** solely because fa2 picks tile 64 and we round to 128, and
 a third queue removes that inside the existing single launch — no extra launch,
 no extra plan, and no dependence on the unresolved cost of splitting.
 
+### Implemented: a third q-tile class in the persistent kernel (2026-09-29)
+
+`CTA_TILE_Q_SIZES` goes from `{128, 16}` to **`{128, 64, 16}`**, giving
+speculative verify rows (`16 < packed_qo ≤ 64`) their own tile instead of
+rounding them up to 128. flashinfer branch `tri_tile_`, commits `e5dbc8e`+.
+
+**What changed.** `NUM_TASKS 2→3` and three-way routing (`scheduler.cuh`);
+`HolisticPlanInfo<3>` and `params[3]` (`csrc/batch_attention.cu`, already a
+loop); a third `KTraits`/runner and a `PersistentKernelTemplate3`
+(`persistent.cuh`, `persistent_template.cuh`) where the two CTAs per SM walk
+the queues `128→64→16` and `16→64→128` respectively — the existing
+`cta_count % 2` forward/reverse pattern, kept binary to match 2-CTA occupancy;
+a third tile in the jinja instantiation. The int workspace grows 8→24 MB for
+the extra task arrays. **Split-KV and the LPT heap are untouched** and
+validated below.
+
+**Correctness** vs BatchPrefill, both schedules, max rel err ≤ 6.3e-3 (bf16
+accumulation noise):
+
+| composition | tiles exercised | rel err |
+|---|---|---|
+| 2 rows @64K (forces split-KV) | [16] | 5.0e-3 |
+| 3 rows @64K + verify + chunk | [16, 64, 128] | 5.9e-3 |
+| LPT skew, KV 512..64K over 12 rows | [16] | 6.1e-3 |
+| LPT skew + verify(k=7) + 2 chunks | [16, 64, 128] | 6.1e-3 |
+| captured shape: 21 draft + 7 verify + chunk | [16, 64, 128] | 6.3e-3 |
+
+**Register pressure is the binding constraint, not scheduling.** Both builds
+sit at the 255-register ceiling; the third mainloop body pushes state to local
+memory:
+
+| build | registers | stack | spill st | spill ld |
+|---|---|---|---|---|
+| 2-class `{128,16}` | 255 | 16 B | 16 B | 16 B |
+| 3-class, `NUM_MMA_KV_2=4` | 255 | 32 B | 32 B | **72 B** |
+| 3-class, **`NUM_MMA_KV_2=2`** | 255 | 16 B | 16 B | **28 B** |
+
+Because this is a compile-time cost it is paid even when the middle queue is
+empty — measured: forcing every verify row back to the 128 tile
+(`FLASHINFER_TRI_TILE_MIN_KV=1e8`) was still slower than the 2-class build. So
+routing-level gating cannot recover it; shrinking the middle tile's KV pipeline
+(`NUM_MMA_KV_2` 4→2) can, and does.
+
+**Result: it depends on how much work the verify class carries.**
+
+| workload | 2-class | 3-class (tuned) | Δ |
+|----------|--------:|----------------:|---:|
+| Qwen2.5-7B, H800, gqa 7 (verify KV ~450/row, <10K/batch) | 40,077 µs | 40,194 µs | **−0.3%** |
+| Qwen3-235B shape, gqa 16 (verify KV ~11K/row, ~600K/batch) | 198,767 µs | **193,750 µs** | **+2.6%** |
+
+vs BatchPrefill the same runs give 1.302× → 1.298× (small) and 1.096× →
+**1.129×** (large). Untuned (`NUM_MMA_KV_2=4`) the small model was −2.1%, so
+the tuning is what buys parity there.
+
+The crossover matches the earlier per-batch correlation: the third tile costs
+~5% where the verify class holds <10K KV and breaks even above ~100K. The
+large-model mixture sits far above it because gqa 16 with k=1 puts 58 verify
+rows of ~11K KV in every batch. **So the third tile should ship enabled for
+high-GQA/large-context deployments and disabled for small-model low-verify
+ones** — `FLASHINFER_TRI_TILE_MIN_KV` (default 100000) makes that a per-batch
+decision, though note it only reroutes work and cannot avoid the register cost.
+
+**Measurement hazard worth recording:** flashinfer's JIT caches by *config
+name* (dtypes, head dims, flags), not source content, so switching the
+flashinfer branch does **not** invalidate a built module. An earlier 2-vs-3
+comparison here was invalid for that reason — and a `git checkout` that aborted
+on uncommitted changes left the wrong branch in place. Every number above was
+taken after `rm -rf ~/.cache/flashinfer/90a/{cached_ops,generated}/*head_dim_qk_128*`
+and confirming the loaded build via `len(plan_info)` (28 = 2 tasks, 38 = 3).
+
+**Acceptance-rate modelling** (`tasks/fused_specdec_workload/acceptance.py`):
+accepted length follows a truncated geometric law, `P(L=j)=(1-a)a^j` for `j<k`
+and `a^k` for `j=k`, giving mean accepted `a(1-a^k)/(1-a)`. Profiles span
+EAGLE-style heads (a=0.55–0.80, k=4 → 2.1–3.4 tokens/step) and deeper sparse
+self-speculation (a=0.72, k=8). **The mixture is insensitive to `a`**: under the
+SparseSpec unified schedule verify rows are `1/(k+1)` of the running set
+whatever the acceptance rate, which sets only how fast contexts grow. So the
+workload sets stand across acceptance scenarios, and `k` — not `a` — is the
+parameter that moves the tile mixture.
+
 ### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
 
 A decode row's `packed_qo_len` is `1 × gqa_ratio`, and two thresholds decide

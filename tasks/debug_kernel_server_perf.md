@@ -1079,6 +1079,67 @@ adds a launch to a fusion that is already 4–7% ahead. This also means the 4-wa
 draft and mixed-decode share tile 16 and differ only in scheduling class, not in
 tile shape.
 
+### 4-mode dispatch measured against sequential and dual-stream: our fused kernel loses (2026-09-30)
+
+**Result first: the single fused kernel is the wrong architecture for large
+prefill, and the goal's proposed design is right.** On 20 captured batches that
+actually contain a long-prefix chunk (built from the session-replay and
+prefix-reuse captures, attended prefix p50 16.3K,
+`sets/qwen_small_h800_largeprefill.jsonl`), timing every launch inside the
+measured region (`compare_dispatch_methods.py`):
+
+| method | SM_PARTITION=1 | SM_PARTITION=0 | vs sequential |
+|--------|---------------:|---------------:|--------------:|
+| **fused** (one persistent launch, 3 tile classes) | 192,158 µs | 191,529 µs | **0.69×** |
+| **sequential** (FA3 on prefill, then persistent on the rest — vLLM-style) | 132,896 µs | 131,575 µs | 1.00× |
+| **dual-stream** (same two kernels, overlapped) | 131,252 µs | **109,019 µs** | **1.21×** |
+
+So sequential is **1.45× faster than our fused kernel**, and dual-stream up to
+1.21× faster than sequential. The cause is exactly the one the design brief
+named: the fused kernel runs the large-prefill class on the FA2-lineage tile-128
+mainloop, never reaching FA3's wgmma path, and FA3 is 1.35–1.54× on long-prefix
+chunks (measured above). Tile *shape* and *which mainloop executes it* are
+different things; adding a 64 tile addressed the former and left the latter
+untouched.
+
+**SM partitioning is not the lever here.** The scheduler now apportions clusters
+per task by measured work (`FLASHINFER_SM_PARTITION=1`: per-task `MinHeap` over
+a contiguous cluster range, `kv_len_limit` scaled to the clusters a task owns,
+grid unchanged so it needs no green contexts and stays one graph). It moves the
+fused number by 0.3% — because the fused kernel's problem is the mainloop, not
+SM allocation. It *hurts* the dual-stream case (1.01× vs 1.21×), consistent with
+restricting the persistent kernel to fewer clusters while FA3 runs concurrently
+leaving SMs idle. A bug found on the way: the first version's remainder
+redistribution could push `task_hi` past `num_clusters`, an out-of-bounds write
+into the per-cluster work vectors — fixed and clamped, both partition modes
+revalidated on the 5 split-KV/LPT compositions.
+
+**The graph-compatibility argument does not hold up either.** Counting distinct
+shape buckets over 4,047 real mixed batches (sglang's bs ladder × token ladder):
+
+| method | graphs | why |
+|--------|-------:|-----|
+| ours, one fused launch | 92 | one capture per (tokens, bs) bucket |
+| sequential, both launches in one graph | **92** | same count — a fixed-shape pair captures fine |
+| sequential, captured independently | 120 | prefill ladder × decode ladder |
+| dual-stream | 92 | plus a cross-stream event inside the graph |
+
+Only 92 of 120 possible pairs actually co-occur (77%). A sequential pair can sit
+in a single graph at fixed shapes, so it needs the **same** number as ours — the
+`max_prefill_bs × max_decode_bs` blow-up only applies if the two are captured
+separately and composed at replay. What ours would avoid is the cross-stream
+event, not a graph multiplier.
+
+**Where that leaves the design.** Our method has **no measured advantage** over
+sequential today — it is 45% behind. The advantage the brief asks for requires
+routing large prefill to FA3 while the LPT kernel keeps mixed-decode and
+spec-draft, i.e. genuinely separate kernels with scheduler-assigned SM
+proportions. That is closer to the dual-stream baseline than to what is built,
+and the open question becomes whether scheduler-balanced partitioning can beat
+*naive* dual-stream (1.21×) — not whether a fused megakernel can. The harness
+for that comparison now exists; the SM-apportionment code is in place but is
+currently applied to the wrong architecture.
+
 ### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
 
 A decode row's `packed_qo_len` is `1 × gqa_ratio`, and two thresholds decide

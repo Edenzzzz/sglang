@@ -856,8 +856,9 @@ variant, which is not the proposed design. Specifically the sum:
 - assumes **hindsight kernel choice** per class; a real gate mispredicts;
 - models the classes running **back-to-back**, so it captures neither the
   concurrency of the intended SM-partitioned design nor its contention;
-- **pays four launch overheads** (~53 µs), which an SM-partitioned kernel would
-  not — so it *understates* the design;
+- **pays four launch overheads**, which an SM-partitioned kernel would not — so
+  it *understates* the design. How much is unknown: nothing here isolates
+  per-launch cost from per-class work;
 - **omits four `plan()` calls** and four sets of metadata, which a real
   implementation must pay — so it *overstates* in the other direction;
 - times each class with its own warmup and L2 flush, so any cross-class cache
@@ -893,10 +894,9 @@ than a micro-benchmark. Dispatching around it recovers some of the loss;
 closing it in the kernel would remove the need to dispatch at all for that
 class.
 
-**Splitting only pays above a size floor.** Four launches cost ~53 µs of fixed
-overhead (median split time of every batch where splitting lost). Sorted by
-monolithic cost, splitting loses on every batch below ~500 µs (0.62–0.81×) and
-wins above it (1.01–1.39×):
+**The estimate crosses over with batch size.** Sorted by monolithic cost, the
+summed-class estimate is worse than one launch on every batch below ~500 µs
+(0.62–0.81×) and better above it (1.01–1.39×):
 
 | monolithic | split | gain |
 |-----------:|------:|-----:|
@@ -906,9 +906,12 @@ wins above it (1.01–1.39×):
 | 1,156 µs | 892 | **1.30×** |
 | 2,299 µs | 1,650 | **1.39×** |
 
-So a dispatcher must be conditional on batch size — and the fact that small
-batches are launch-bound is itself an argument for a *single* persistent
-megakernel with four tile classes over four separate launches.
+The crossover is a property of *this estimate*, not a measured launch cost: the
+four summed times include four launches, four plans and the per-class work, and
+nothing here separates them. So it says a serialized split is unattractive for
+small batches, and nothing quantitative about launch overhead. Isolating that
+would need a per-launch measurement (e.g. empty-kernel or fixed-work launches at
+the same cadence), which has not been done.
 
 **Status: scaffolding only, not an active code path.**
 `flashinfer_backend.py` gains `classify_mixed_batch` (splits rows into the four
@@ -948,9 +951,8 @@ The edits are confined to: `NUM_TASKS = 2` and `CTA_TILE_Q_SIZES = {128, 16}`
 
 Why it is worth more than dispatching around the gap: the verify class loses to
 BatchPrefill **40/40** solely because fa2 picks tile 64 and we round to 128, and
-a third queue removes that without paying a second launch — whereas the
-four-launch split above pays ~53 µs of fixed overhead and only wins above a
-~500 µs batch.
+a third queue removes that inside the existing single launch — no extra launch,
+no extra plan, and no dependence on the unresolved cost of splitting.
 
 ### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
 

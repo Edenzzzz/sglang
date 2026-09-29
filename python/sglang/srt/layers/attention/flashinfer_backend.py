@@ -240,20 +240,20 @@ class _MixedCompositionLog:
 #   MIXED_DECODE   small/fresh-prefix chunk           -> tile 128, our LPT regime
 #   SPEC_DRAFT     one drafted token per row          -> tile 16, smallest work
 #
-# Measured on the H800 workload sets (tasks/fused_specdec_workload): routing the
-# classes to separate kernels beats one kernel only once the batch is large
-# enough to amortise four launches -- the split floor is ~53 us, so small
-# batches must stay monolithic. See DISPATCH_SPLIT_FLOOR_US.
+# On the H800 workload sets (tasks/fused_specdec_workload), an ESTIMATE built by
+# summing separately-timed class launches beats one launch only on larger
+# batches. That estimate bundles launch, plan() and per-class work together and
+# does not isolate a launch cost -- see DISPATCH_MIN_MONOLITHIC_US.
 CLASS_LARGE_PREFILL = "large_prefill"
 CLASS_SPEC_VERIFY = "spec_verify"
 CLASS_MIXED_DECODE = "mixed_decode"
 CLASS_SPEC_DRAFT = "spec_draft"
 
-# Four separate kernel launches cost ~53 us of fixed overhead on H800 (median
-# split time of every batch where splitting lost). Splitting only wins once the
-# batch is big enough to amortise that: measured crossover is a monolithic cost
-# of ~500 us, below which the single launch wins on every sampled batch.
-DISPATCH_SPLIT_FLOOR_US = 53.0
+# Indicative only. The summed-class estimate crossed over near a monolithic
+# cost of 500 us on the sampled batches, so that is used as a guard. It is NOT
+# a measured launch overhead: the summed times include four launches, four
+# plan() calls and the per-class work, with nothing separating them. Isolating
+# per-launch cost needs a dedicated measurement that has not been done.
 DISPATCH_MIN_MONOLITHIC_US = 500.0
 LARGE_PREFILL_MIN_PREFIX = 8192
 
@@ -306,17 +306,16 @@ def plan_4mode_dispatch(extend_seq_lens_cpu, extend_prefix_lens_cpu,
                         est_monolithic_us=None):
     """Decide whether to split a fused batch across kernels, and how.
 
-    Returns (should_split, {class: kernel}, classes). Splitting is refused below
-    DISPATCH_MIN_MONOLITHIC_US because four launches cost ~53 us of fixed
-    overhead: on the measured H800 set, splitting lost on every batch under
-    ~500 us monolithic (0.62-0.81x) and won above it (1.01-1.39x), for 1.28x
-    over monolithic persistent across the set.
+    Returns (should_split, {class: kernel}, classes). Splitting is refused
+    below DISPATCH_MIN_MONOLITHIC_US: on the H800 set the summed-class estimate
+    lost on every batch under ~500 us monolithic (0.62-0.81x) and won above it
+    (1.01-1.39x).
 
     NOT WIRED IN: no caller dispatches on this yet. It exists to pin down the
-    classification and the measured thresholds in testable form. The numbers
-    behind DISPATCH_MIN_MONOLITHIC_US come from summing separately-timed class
-    launches with oracle kernel choice, which models a *serialized* split, not
-    the SM-partitioned design -- so treat the threshold as indicative.
+    classification in testable form. The threshold comes from summing
+    separately-timed class launches with oracle kernel choice, which models a
+    *serialized* split rather than the SM-partitioned design and does not
+    isolate launch cost -- treat it as indicative, not measured.
     """
     classes, tiles = classify_mixed_batch(
         extend_seq_lens_cpu, extend_prefix_lens_cpu, gqa_group_size, draft_token_num

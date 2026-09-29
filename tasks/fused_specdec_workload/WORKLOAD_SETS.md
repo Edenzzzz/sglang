@@ -11,6 +11,12 @@ the live mixture.
 | `mixed_decode` | small/fresh-prefix chunks (our LPT regime) | chunk × r | 128 |
 | `spec_draft` | one drafted token per row, smallest work | r | 16 |
 
+`spec_draft` shares tile 16 with `mixed_decode` by design — measured: draft-only
+work saturates HBM at 85–91% of peak from ~8 rows, so a dedicated low-SM
+dispatch would throttle it, and fusing the two into one queue is already 4–7%
+cheaper than separate launches (`draft_dispatch_probe.py`). The four classes are
+four *scheduling* classes over **three** tile shapes.
+
 **`k` is per-model, not a free choice.** The verify class occupies its own tile
 only when `16 < (k+1)·r ≤ 64`. At r=16 that is `k+1 ∈ (1,4]`, so the intended
 "2 speculative steps" (k=1, packed 32 → tile 64) works. At r=7, k=1 gives

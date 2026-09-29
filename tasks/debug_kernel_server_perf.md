@@ -1034,6 +1034,51 @@ whatever the acceptance rate, which sets only how fast contexts grow. So the
 workload sets stand across acceptance scenarios, and `k` — not `a` — is the
 parameter that moves the tile mixture.
 
+### Spec-draft: fuse into tile 16, do not give it a low-SM dispatch (2026-09-29)
+
+The open design question was whether the smallest class (draft rows: `qo_len=1`,
+so `packed_qo` = the GQA ratio) deserves a dedicated low-SM kernel or should
+just share the tile-16 queue with plain decode rows. Measured both premises
+(`draft_dispatch_probe.py`, H800, gqa 7, draft rows @41K KV):
+
+**(1) Draft work saturates HBM from ~8 rows — it is not a low-occupancy class.**
+
+| draft rows | µs | GB moved | TB/s | % of 3.35 TB/s peak | µs/row |
+|-----------:|---:|---------:|-----:|--------------------:|-------:|
+| 1 | 56.1 | 0.08 | 1.50 | 45% | 56.1 |
+| 8 | 242.5 | 0.67 | 2.77 | **83%** | 30.3 |
+| 16 | 469.0 | 1.34 | 2.86 | 86% | 29.3 |
+| 64 | 1,789 | 5.37 | 3.00 | 90% | 28.0 |
+| 182 | 5,012 | 15.28 | 3.05 | **91%** | 27.5 |
+
+Cost per row flattens at ~27.5–29 µs from 8 rows on, at 85–91% of peak
+bandwidth. Realistic draft populations are 21 rows (small model) to 182
+(GB200 mixture) — all far above saturation. **A low-SM partition would throttle
+a class that already uses the whole machine**, cutting its bandwidth roughly in
+proportion to the SMs withheld. The "smallest tile" is smallest in *q*, not in
+work: each row still streams its entire KV.
+
+**(2) Fusing into the tile-16 queue already beats running them apart.**
+
+| composition | draft alone | decode alone | fused | fused/max | fused/sum |
+|---|---:|---:|---:|---:|---:|
+| 21 draft + 24 decode @41K | 621.7 | 786.6 | 1,354.9 | 1.72× | **0.96×** |
+| 48 draft + 48 decode @11K | 1,421.8 | 397.2 | 1,694.7 | 1.19× | **0.93×** |
+| 96 draft + 96 decode @11K | 2,756.6 | 757.9 | 3,375.7 | 1.22× | **0.96×** |
+
+Fused is 4–7% *cheaper* than the sum of separate launches, so one queue already
+wins. That `fused ≈ sum` rather than `≈ max` is not a scheduling failure: both
+populations are bandwidth-bound, so they contend for HBM and there is no
+concurrency to recover — splitting them across SM partitions would divide the
+same bottleneck, not parallelise it.
+
+**Decision: keep spec-draft fused into the tile-16 class.** A separate low-SM
+dispatch is worse on both counts — it throttles a bandwidth-saturating class and
+adds a launch to a fusion that is already 4–7% ahead. This also means the 4-way
+*tile* design collapses to **three tiles** (`{128, 64, 16}`, as implemented):
+draft and mixed-decode share tile 16 and differ only in scheduling class, not in
+tile shape.
+
 ### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
 
 A decode row's `packed_qo_len` is `1 × gqa_ratio`, and two thresholds decide

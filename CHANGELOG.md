@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.7.0 — 4-Mode Dispatch: Separate Kernels, Scheduler-Partitioned Grids (2026-09-30)
+
+### New: per-tile-class kernel dispatch with a grid-partitioning scheduler
+- `python/sglang/srt/layers/attention/mixed_dispatch.py` (new): picks per batch
+  between `fused` (one persistent launch), `seq` (FA3 then persistent) and `conc`
+  (both co-launched at a split grid), and returns the grid split in SMs.
+- flashinfer (`tri_tile_`): `FLASHINFER_FA3_MAX_CTAS` caps `PrefillSM90Plan`'s CTA
+  count and `FLASHINFER_PERSISTENT_MAX_CLUSTERS` caps the holistic planner's grid,
+  each rebalancing its own work over what it owns. Only the grid shrinks, so graph
+  capture still sees one shape per bucket — green contexts were rejected because
+  captures would multiply by the number of groups.
+- `plan_4mode_dispatch` in `flashinfer_backend.py` now delegates to the measured
+  scheduler; the unsupported `DISPATCH_MIN_MONOLITHIC_US` guard and the fixed
+  `DISPATCH_CLASS_KERNEL` table are removed (both are contradicted by measurement).
+
+### Results (held out on captured sets; see tasks/debug_kernel_server_perf.md)
+- vs sequential (vLLM-style): **1.015x** overall, **1.054x** (h200 TP8) and
+  **1.147x** (gb200 TP16); parity on the small-model long-prefix set, where the
+  scheduler correctly picks `seq` and becomes the baseline.
+- vs a fixed fused megakernel: **1.383x**. vs dual-stream: **1.000x** (no gain).
+- Graph compatibility is **not** better: only 27 of 41 shape buckets resolve to a
+  single mode, so parity (41 graphs) costs most of the gain and the full gain needs
+  55 captures.
+
+### Key measurements
+- FA3's wgmma mainloop is **1.86x** the persistent kernel's per-CTA compute rate,
+  but it reloads KV once per q head and its width is `h_qo * ceil(qo_len/128)` —
+  only 64 CTAs at the (8,1) TP8 shard. At 8 q heads per rank the persistent kernel
+  therefore **beats FA3 on pure prefill** (401us vs 507us at 256 KV tiles).
+- Co-launch does overlap (up to **1.65x** at a 64/68 split), but over-provisioning
+  the cooperative kernel stalls it behind FA3 (2286us at 88/44 vs 1470us).
+- Boundary fitted on 50 cells, **50/50** correctly classified; within 5% of the
+  per-batch oracle on 26/28 held-out batches.
+
+### Fixes
+- Routing tested KV length alone and sent 58 spec-verify rows to FA3, **14x slower**:
+  FA3 does not fuse group heads, so the test must be on `qo_len`, not `packed_qo_len`.
+- Split accounting mixed units — the persistent planner sets `num_sm *= 2`, so a
+  "96/36 split" subscribed 114 of 132 SMs. This invalidated four earlier `conc` wins.
+- Out-of-bounds write in the per-task SM apportionment's remainder redistribution
+  (`task_hi` could exceed `num_clusters`).
+
 ## v0.6.0 — Real-Workload Capture, Hopper Scheduling Study, Gate v3 (2026-09-19 → 09-22)
 
 ### Workload capture (new)

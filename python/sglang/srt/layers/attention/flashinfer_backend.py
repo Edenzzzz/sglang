@@ -172,6 +172,11 @@ class MixedKernelGate:
 
 
 
+from sglang.srt.layers.attention.mixed_dispatch import (
+    plan_split as md_plan_split,
+    route as md_route,
+)
+
 class _MixedCompositionLog:
     """Append-only capture of every mixed batch's true composition.
 
@@ -240,35 +245,16 @@ class _MixedCompositionLog:
 #   MIXED_DECODE   small/fresh-prefix chunk           -> tile 128, our LPT regime
 #   SPEC_DRAFT     one drafted token per row          -> tile 16, smallest work
 #
-# On the H800 workload sets (tasks/fused_specdec_workload), an ESTIMATE built by
-# summing separately-timed class launches beats one launch only on larger
-# batches. That estimate bundles launch, plan() and per-class work together and
-# does not isolate a launch cost -- see DISPATCH_MIN_MONOLITHIC_US.
+# Which kernel runs which class is decided per batch by mixed_dispatch, not by
+# a fixed table: measured on the captured sets, the best strategy flips with the
+# number of q heads per rank and with how the prefill and decode populations
+# balance. See plan_4mode_dispatch below.
 CLASS_LARGE_PREFILL = "large_prefill"
 CLASS_SPEC_VERIFY = "spec_verify"
 CLASS_MIXED_DECODE = "mixed_decode"
 CLASS_SPEC_DRAFT = "spec_draft"
 
-# Indicative only. The summed-class estimate crossed over near a monolithic
-# cost of 500 us on the sampled batches, so that is used as a guard. It is NOT
-# a measured launch overhead: the summed times include four launches, four
-# plan() calls and the per-class work, with nothing separating them. Isolating
-# per-launch cost needs a dedicated measurement that has not been done.
-DISPATCH_MIN_MONOLITHIC_US = 500.0
 LARGE_PREFILL_MIN_PREFIX = 8192
-
-# Best kernel per class, measured over fused batches from
-# tasks/fused_specdec_workload/sets/qwen_small_h800.jsonl (H800, gqa 7).
-# Note spec_verify goes to BatchPrefill on 40/40 batches: fa2 natively selects
-# the tile-64 the verify class wants and the persistent kernel, having only
-# {128, 16}, must round it up. That is the single strongest argument for adding
-# a third tile class rather than dispatching around the gap.
-DISPATCH_CLASS_KERNEL = {
-    CLASS_LARGE_PREFILL: "fa3",           # long prefix: FA3 is 1.35-1.54x over fa2
-    CLASS_SPEC_VERIFY: "batch_prefill",   # wants tile 64; fa2 picks it natively
-    CLASS_MIXED_DECODE: "persistent",     # small prefill + draft rows: ours wins 30/30
-    CLASS_SPEC_DRAFT: "persistent",       # tile 16; split fa2/persistent, ours on the long-KV rows
-}
 
 
 def classify_mixed_batch(extend_seq_lens_cpu, extend_prefix_lens_cpu,
@@ -302,30 +288,31 @@ def classify_mixed_batch(extend_seq_lens_cpu, extend_prefix_lens_cpu,
 
 
 def plan_4mode_dispatch(extend_seq_lens_cpu, extend_prefix_lens_cpu,
-                        gqa_group_size, draft_token_num=1,
-                        est_monolithic_us=None):
-    """Decide whether to split a fused batch across kernels, and how.
+                        num_qo_heads, num_kv_heads, draft_token_num=1,
+                        num_sm=None):
+    """Choose how to execute a fused batch. Returns (mode, c_fa3, c_pers, rows).
 
-    Returns (should_split, {class: kernel}, classes). Splitting is refused
-    below DISPATCH_MIN_MONOLITHIC_US: on the H800 set the summed-class estimate
-    lost on every batch under ~500 us monolithic (0.62-0.81x) and won above it
-    (1.01-1.39x).
+    Delegates to mixed_dispatch, whose thresholds were fitted on a 50-cell
+    boundary sweep and validated held-out on the captured sets. `rows` is
+    (fa3_rows, pers_rows) after per-row routing.
 
-    NOT WIRED IN: no caller dispatches on this yet. It exists to pin down the
-    classification in testable form. The threshold comes from summing
-    separately-timed class launches with oracle kernel choice, which models a
-    *serialized* split rather than the SM-partitioned design and does not
-    isolate launch cost -- treat it as indicative, not measured.
+    The routing test is on qo_len, not packed_qo_len: FA3 tiles over qo_len
+    alone at cta_tile_q 128 and does not fuse group heads, so a 4-token verify
+    row occupies 4/128 of a tile whatever the GQA ratio. Routing the verify
+    class to FA3 on a KV-length test alone measured 14x slower.
     """
-    classes, tiles = classify_mixed_batch(
-        extend_seq_lens_cpu, extend_prefix_lens_cpu, gqa_group_size, draft_token_num
+    gqa = max(num_qo_heads // max(num_kv_heads, 1), 1)
+    classes, _ = classify_mixed_batch(
+        extend_seq_lens_cpu, extend_prefix_lens_cpu, gqa, draft_token_num
     )
-    populated = [k for k, v in classes.items() if v]
-    if len(populated) < 2:
-        return False, {}, classes
-    if est_monolithic_us is not None and est_monolithic_us < DISPATCH_MIN_MONOLITHIC_US:
-        return False, {}, classes
-    return True, {k: DISPATCH_CLASS_KERNEL[k] for k in populated}, classes
+    fa3_rows, pers_rows = md_route(classes, gqa)
+    if num_sm is None:
+        num_sm = torch.cuda.get_device_properties(
+            torch.cuda.current_device()).multi_processor_count
+    mode, c_fa3, c_pers = md_plan_split(
+        fa3_rows, pers_rows, num_qo_heads, num_kv_heads, num_sm=num_sm
+    )
+    return mode, c_fa3, c_pers, (fa3_rows, pers_rows)
 
 
 def select_mixed_attention_kernel(

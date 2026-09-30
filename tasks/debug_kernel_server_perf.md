@@ -1079,66 +1079,168 @@ adds a launch to a fusion that is already 4–7% ahead. This also means the 4-wa
 draft and mixed-decode share tile 16 and differ only in scheduling class, not in
 tile shape.
 
-### 4-mode dispatch measured against sequential and dual-stream: our fused kernel loses (2026-09-30)
+### 4-mode dispatch: separate kernels per tile class, grid-partitioned by a scheduler (2026-09-30)
 
-**Result first: the single fused kernel is the wrong architecture for large
-prefill, and the goal's proposed design is right.** On 20 captured batches that
-actually contain a long-prefix chunk (built from the session-replay and
-prefix-reuse captures, attended prefix p50 16.3K,
-`sets/qwen_small_h800_largeprefill.jsonl`), timing every launch inside the
-measured region (`compare_dispatch_methods.py`):
+Commits: sglang `ed8383a3c`+ (this section), flashinfer `tri_tile_` `645b77e`+.
+Scripts, all under `tasks/fused_specdec_workload/`:
 
-| method | SM_PARTITION=1 | SM_PARTITION=0 | vs sequential |
-|--------|---------------:|---------------:|--------------:|
-| **fused** (one persistent launch, 3 tile classes) | 192,158 µs | 191,529 µs | **0.69×** |
-| **sequential** (FA3 on prefill, then persistent on the rest — vLLM-style) | 132,896 µs | 131,575 µs | 1.00× |
-| **dual-stream** (same two kernels, overlapped) | 131,252 µs | **109,019 µs** | **1.21×** |
+```bash
+# calibrate the two mainloops' scaling curves
+python calibrate_split.py sets/qwen_small_h800_largeprefill.jsonl 6
+# does co-launch overlap at all, given the cooperative launch?
+python overlap_probe.py
+# draw the boundary (25 cells per head config)
+python boundary_sweep.py --heads 28,4,128 --dec-kv 8000
+python boundary_sweep.py --heads 8,1,128  --dec-kv 11000
+# check the scheduler picks the measured winner, cell by cell
+python validate_scheduler.py
+# held-out: real captured batches, all strategies + oracle
+python bench_4mode.py --set sets/qwen_large_h200_tp8.jsonl   --heads 8,1,128 --n 14 --oracle
+python bench_4mode.py --set sets/qwen_large_gb200_tp16.jsonl --heads 4,1,128 --n 14 --oracle
+python bench_4mode.py --set sets/qwen_small_h800_largeprefill.jsonl --heads 28,4,128 --n 14 --oracle
+python graph_census.py        # modes and graph buckets over all 2,148 batches
+```
 
-So sequential is **1.45× faster than our fused kernel**, and dual-stream up to
-1.21× faster than sequential. The cause is exactly the one the design brief
-named: the fused kernel runs the large-prefill class on the FA2-lineage tile-128
-mainloop, never reaching FA3's wgmma path, and FA3 is 1.35–1.54× on long-prefix
-chunks (measured above). Tile *shape* and *which mainloop executes it* are
-different things; adding a 64 tile addressed the former and left the latter
-untouched.
+#### What was built
 
-**SM partitioning is not the lever here.** The scheduler now apportions clusters
-per task by measured work (`FLASHINFER_SM_PARTITION=1`: per-task `MinHeap` over
-a contiguous cluster range, `kv_len_limit` scaled to the clusters a task owns,
-grid unchanged so it needs no green contexts and stays one graph). It moves the
-fused number by 0.3% — because the fused kernel's problem is the mainloop, not
-SM allocation. It *hurts* the dual-stream case (1.01× vs 1.21×), consistent with
-restricting the persistent kernel to fewer clusters while FA3 runs concurrently
-leaving SMs idle. A bug found on the way: the first version's remainder
-redistribution could push `task_hi` past `num_clusters`, an out-of-bounds write
-into the per-cluster work vectors — fixed and clamped, both partition modes
-revalidated on the 5 split-KV/LPT compositions.
+Separate kernels per tile class, with the grid partitioned by the scheduler
+rather than by green contexts. Two planner caps were added so a split is a
+plan-time integer:
 
-**The graph-compatibility argument does not hold up either.** Counting distinct
-shape buckets over 4,047 real mixed batches (sglang's bs ladder × token ladder):
+* `FLASHINFER_FA3_MAX_CTAS` in `PrefillSM90Plan` — the MinHeap balances the same
+  work over fewer CTAs.
+* `FLASHINFER_PERSISTENT_MAX_CLUSTERS` in the holistic planner — `kv_len_limit`
+  is sized to the clusters actually owned.
 
-| method | graphs | why |
-|--------|-------:|-----|
-| ours, one fused launch | 92 | one capture per (tokens, bs) bucket |
-| sequential, both launches in one graph | **92** | same count — a fixed-shape pair captures fine |
-| sequential, captured independently | 120 | prefill ladder × decode ladder |
-| dual-stream | 92 | plus a cross-stream event inside the graph |
+Because only the grid shrinks, graph capture sees one shape per bucket, not one
+per split ratio — which is what ruled green contexts out.
 
-Only 92 of 120 possible pairs actually co-occur (77%). A sequential pair can sit
-in a single graph at fixed shapes, so it needs the **same** number as ours — the
-`max_prefill_bs × max_decode_bs` blow-up only applies if the two are captured
-separately and composed at replay. What ours would avoid is the cross-stream
-event, not a graph multiplier.
+Routing is per row, not per class, and the test is on **`qo_len`, not
+`packed_qo_len`**: `PrefillSM90Plan` uses `cta_tile_q = 128`, does no KV
+splitting, and does not fuse group heads ("the group_size in cost_function is
+always 1"). A 4-token verify row therefore occupies 4/128 of an FA3 tile
+whatever the GQA ratio. An earlier version tested KV length alone, sent 58
+verify rows to FA3, and **lost 14x** — that error is what made the first
+measurement of this design look hopeless.
 
-**Where that leaves the design.** Our method has **no measured advantage** over
-sequential today — it is 45% behind. The advantage the brief asks for requires
-routing large prefill to FA3 while the LPT kernel keeps mixed-decode and
-spec-draft, i.e. genuinely separate kernels with scheduler-assigned SM
-proportions. That is closer to the dual-stream baseline than to what is built,
-and the open question becomes whether scheduler-balanced partitioning can beat
-*naive* dual-stream (1.21×) — not whether a fused megakernel can. The harness
-for that comparison now exists; the SM-apportionment code is in place but is
-currently applied to the wrong architecture.
+Three execution modes, chosen per batch:
+
+| mode | what runs | wins when |
+|------|-----------|-----------|
+| `fused` | one persistent launch over all classes (tiles 128/64/16, split-KV + LPT) | FA3 cannot fill the grid, or the decode population dominates |
+| `seq` | FA3 on the eligible rows, then persistent on the rest, one stream | long prefix with a small decode population |
+| `conc` | both co-launched at a scheduler-chosen split grid | very long prefix **and** a balanced decode population |
+
+#### The two mainloops, measured
+
+Per-CTA compute rate, fitted on compute-bound cells:
+
+| mainloop | MAC/ns/CTA | relative |
+|----------|-----------:|---------:|
+| FA3 (wgmma, `cta_tile_q` 128) | 982 | 1.86x |
+| persistent (FA2 lineage) | 595 | 1.00 |
+
+So wgmma is worth 1.86x per CTA — the premise behind separate kernels holds. But
+FA3 pays for it twice: it **reloads KV once per q head** (no group-head fusion),
+and its work units are only (qo_head x qo_tile), so its parallel width is
+`h_qo * ceil(qo_len/128)`. That is 224 at (28,4) heads — device-filling — but
+only **64 at (8,1)**, the realistic TP8 shard of Qwen3-235B. The model predicts
+the measured plateau exactly (FA3 flat at 273us from 64 CTAs up) and reproduces
+its staircase: 32 and 48 CTAs both measure ~502us because both need
+`ceil(64/c) = 2` rounds. A smooth `W/(c*R)` cannot express that, so the
+scheduler simulates the planner's own MinHeap over its own
+`cost_function = 2*qo_len + kv_len`.
+
+Consequence, and it is the central finding: **at 8 q heads per rank the
+persistent kernel beats FA3 on pure prefill** — 401us vs 507us at 256 KV tiles
+with no decode rows at all. "Large tile" is not sufficient reason to leave the
+fused kernel; the question is whether FA3 can use the device for it.
+
+#### The boundary
+
+50 cells, `qo_len` 1024, sweeping KV tiles attended x co-resident decode rows:
+
+| head config | region | winner | margin |
+|-------------|--------|--------|-------:|
+| (28,4,128) | any tiles, no decode rows | `seq` (pure FA3) | up to 1.62x |
+| (28,4,128) | rho < 1.5 (prefill dominates) | `seq` | up to 1.43x |
+| (28,4,128) | rho >= 1.5 (decode dominates) | `fused` | up to 1.46x |
+| (8,1,128) | everything except the two longest-prefix cells | `fused` | up to 1.61x |
+| (8,1,128) | >= 256 KV tiles, rho >= 0.4 | `conc` | 1.18x |
+
+`rho = t_pers(decode side) / t_fa3(prefill side)` at the full grid. Two
+thresholds plus the width test classify **50/50 cells** correctly
+(`validate_scheduler.py`).
+
+Co-launch does overlap — `overlap_probe.py` measures
+`(t_fa3_alone + t_pers_alone) / t_colaunch` peaking at **1.65x** at a 64/68
+split — so the cooperative launch is not a barrier. But it must not be given a
+large grid share: the persistent kernel needs all its blocks co-resident, so
+over-provisioning makes the whole grid wait for FA3's CTAs to drain (2286us at
+88/44 SMs vs 1470us when the persistent side asked for a third of that). An
+earlier version of this sweep reported `conc` winning four cells it does not
+win; the cause was a **unit error** — the persistent planner sets `num_sm *= 2`
+for `head_dim < 256`, so its natural grid is 2 clusters per SM while FA3 runs 1
+CTA per SM, and a "96/36 split" was really subscribing 114 of 132 SMs. The
+scheduler now counts in SMs and converts on the way out.
+
+#### Held out on the captured sets
+
+14 batches per set, every launch and the fork/join events inside the timed
+region. Both `seq` and `conc` are charged the gather of q and scatter of o for
+the FA3 subset (measured 13.5-24.3us, 2.4-2.6% of split-mode cost); `fused`
+needs no permutation, and the sequential baseline pays it on every batch.
+
+| set | fused | seq (vLLM-style) | dual-stream | **ours** | oracle |
+|-----|------:|-----------------:|------------:|---------:|-------:|
+| qwen_large_h200_tp8 (8 q heads) | 1.03x | 1.00x | 1.01x | **1.054x** | 1.07x |
+| qwen_large_gb200_tp16 (4 q heads) | 1.07x | 1.00x | 1.00x | **1.147x** | 1.13x |
+| qwen_small_h800_largeprefill (28 q heads) | 0.69x | 1.00x | 1.02x | **1.000x** | 1.00x |
+| **total** | 0.76x | 1.00x | 1.01x | **1.015x** | — |
+
+Modes chosen: 4/7 fused on h200, 6/7 fused on gb200, 14/14 seq on the
+long-prefix set. Within 5% of the per-batch oracle on 26/28 batches.
+
+#### Against each baseline, plainly
+
+1. **vs sequential (vLLM-style split), on realistically captured workload:**
+   faster — 1.015x overall, 1.054x and 1.147x on the two large-model sets,
+   parity on the small-model long-prefix set (where the scheduler correctly
+   picks `seq`, i.e. it *becomes* the baseline). It wins on 23/28 batches. The
+   gain is not from a better kernel; it is from not using one fixed strategy
+   when the best one flips with `h_qo` and with the prefill/decode balance.
+2. **vs dual-stream:** 1.000x — parity overall, 1.05x and 1.15x on the
+   large-model sets, 0.98x on the long-prefix set. No advantage overall.
+3. **vs a fixed fused kernel (the previous design):** 1.383x. The fused kernel
+   alone is 0.69x of sequential on long-prefix batches, which is what sent this
+   work back to separate kernels in the first place.
+4. **Graph compatibility — no advantage, and this is the weakest point.** Over
+   all 2,148 captured batches there are 41 distinct (token, bs) buckets, but
+   only 27 (66%) resolve to a single mode; adding `n_fa3_rows` to the key gives
+   83 buckets and still only 80%, because the mode depends on `rho`, i.e. on KV
+   lengths, which no shape bucket captures. So either
+   * pin each bucket to its dominant mode: 41 graphs, parity with a
+     jointly-captured sequential pair, but the gain falls to 1.004x; or
+   * capture both variants where a bucket is mixed: 55 graphs for the full
+     1.015x, i.e. 1.34x more captures than sequential.
+
+   The `max_prefill_bs x max_decode_bs` blow-up feared for sequential does not
+   happen either: a fixed-shape pair captures in one graph (41), and only
+   independent capture gives the product (120). Conditional graph nodes would
+   let one capture cover both modes; that is the concrete path, not a claim.
+   A zero-work FA3 launch is not a usable substitute — it costs 44us and fails
+   TMA descriptor initialisation.
+
+#### Honest summary
+
+The design is right where it is right for a measurable reason, and it is not a
+general win. Separate kernels with scheduler-chosen grids buy 1.015x over
+sequential overall and up to 1.147x on the large-model shards, they beat a fixed
+fused megakernel by 1.383x, they tie dual-stream, and they are *worse* on graph
+count unless the gain is largely given back. The real content of the result is
+the boundary itself: FA3's 1.86x wgmma advantage per CTA is cancelled by
+per-head KV reload and a parallel width of `h_qo * ceil(qo_len/128)`, so on the
+TP8/TP16 shards that actually serve Qwen3-235B it loses even on pure prefill.
 
 ### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
 

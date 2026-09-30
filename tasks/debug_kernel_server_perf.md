@@ -3,6 +3,13 @@
 ## Goal
 Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persistent attention kernel with mixed batch CUDA graphs in SGLang flashinfer backend.
 
+**Reading map.** Part 1 is the sync-free plan and the measured gate. Part 2 is
+what the captured workload actually contains, plus the GQA-ratio scope limit that
+bounds everything. Part 3 compares the three Hopper kernels the dispatcher
+chooses between. Part 4 is the current work: mixed-tile fusion and the measured
+4-mode dispatch — its last section holds the live numbers. H100-era results are
+in [`archive_h100_era.md`](archive_h100_era.md).
+
 ## Setup
 - Model: `Qwen/Qwen3-8B`, H100/H800 80GB
 - Server: `--enable-mixed-chunk --attention-backend flashinfer --mem-fraction-static 0.85 --enable-piecewise-cuda-graph`
@@ -20,13 +27,15 @@ Implement and optimize LPT (Longest Processing Time) dynamic scheduler for persi
   baseline is 6.1–10.7% *faster* than the contaminated one, so the bug
   understated both sides.
 
-## Sync-free plan + measured mixed-kernel gate (2026-07-30)
+## Part 1 — Sync-free plan and the measured kernel gate
 
-Goal: eliminate the low-concurrency regressions of the persistent overlap
-kernel (LPT planning + cooperative-launch overhead) and guarantee zero
-regression via server-side kernel selection. sglang `9bbc82e28`+, flashinfer
-`f4d2a80`. Sweep scripts and data are inventoried in the cost-surface
-section below; the gate table is built by `build_mixed_kernel_gate_table.py`.
+The original thesis: pass host tensors so `plan()` never syncs, then gate
+between the persistent kernel and BatchPrefill per batch from a measured cost
+surface rather than a heuristic. Aim was to remove the low-concurrency
+regressions of the persistent overlap kernel (LPT planning + cooperative-launch
+overhead) with zero regression elsewhere. sglang `9bbc82e28`+, flashinfer
+`f4d2a80`; sweep scripts and data are inventoried in the cost-surface section,
+and the gate table is built by `build_mixed_kernel_gate_table.py`.
 
 ### Overhead diagnosis (H800, Qwen2.5-7B heads 28/4)
 
@@ -453,6 +462,152 @@ Two scope limits:
   which is the benign direction but is extrapolation. Same grid-vs-realized
   gap as the gate table above.
 
+### Measured k-NN gate
+
+Deployed version (v2, 2026-08-05, built by `build_mixed_kernel_gate_table.py`):
+1,316 measured compositions, features `[log1p(decode_kv),
+log1p(prefill_work=Σe·c), log1p(prefill_tokens), log1p(decode_bs),
+3·D/(D+P+1), log1p(kv_concentration=Σkv²/Σkv)]`, k=5, persistent only on
+unanimous neighbors labeled `bp/pa_best ≥ 1.10`, flip by neighbor majority,
+plus an out-of-support guard (query farther than `max_nn_dist_sq` from every
+table point → BatchPrefill). Leave-one-out: worst-case regression **1.000**,
+win capture 81%, mean speedup 2.71× on accepted batches. The original v1
+(479 points, 5 features, k=3, label ≥1.05, LOO worst 1.028) is what the
+2026-07-30 validation screens below ran; v2 adds the fresh-prefix and
+blended-pool sweeps and is what every mixed-tenancy run uses. Deployed as
+`python/sglang/srt/layers/attention/mixed_kernel_gate_h800_gqa7.json`
+(+gqa4 for Qwen3-8B) behind `SGLANG_MIXED_ATTENTION_KERNEL=auto` with
+forced `persistent`/`batch_prefill` overrides. Decision latency on the
+current 1,316-point/k=5 table (re-measured 2026-08-13): ~39 µs for the core
+k-NN, 52–69 µs for the full entry point including feature computation from
+per-request CPU lists (batch 16→256); once per mixed step, CPU-side, ~12x
+cheaper than the 0.47 ms sync-free plan it precedes.
+
+### Validation screens (TraceLab decode-heavy, N=100, 2026-07-30)
+
+sglang `313b97611`, flashinfer `c6d2a00`. Command:
+`TRACELAB_MIN_OUTPUT_LEN=512 TRACELAB_NUM_GROUPS=<g> NUM_PROMPTS=100
+LPT_CHUNKED_PREFILL_SIZE=6656 METHODS_SPEC="DMC_CG LPT"
+bash tasks/realistic_workload_analysis/run_tracelab_claude.sh`, results in
+`tasks/realistic_workload_analysis/h800_tracelab_decodeheavy512_gated_g{10,16}_n100/`.
+These screens ran the v1 gate (479 points/k=3); their zero-regression
+conclusion was re-confirmed under the v2 gate by the mixed-tenancy controls.
+DMC is a true BatchPrefill baseline here (explicit
+`SGLANG_FLASHINFER_USE_PERSISTENT=0`, see Setup).
+
+The first g10 LPT run exposed a mid-replay JIT compile of the second
+flipped-schedule module variant (18.3 s global stall freezing all nine active
+sessions; both variants' cached_ops rebuilt at 19:16/19:19 in the server
+process). Fixed by prewarming both variants at backend init
+(flashinfer `c6d2a00` + sglang `313b97611`); the polluted run is archived in
+the session scratchpad and was re-run.
+
+| Screen | Method (cap) | Total tok/s | Mean/P99 TTFT | Mean ITL | pooled P99 ITL | reqmax P99 |
+|--------|--------------|------------:|--------------:|---------:|---------------:|-----------:|
+| g16 (conc 10.9) | true DMC (8192) | 7,882 | 31.0 / 90.2 s | 42.88 ms | 775.97 ms | 1,367 ms |
+| g16 (conc 11.0) | gated LPT (6656) | **7,943 (+0.77%)** | 31.8 / 89.8 s | **42.28 ms** | **662.92 ms (−14.6%)** | **1,205 ms** |
+| g10 (conc 3.2) | true DMC (8192) | 6,382 | 3.27 / 40.2 s | 17.52 ms | 31.36 ms | 1,075 ms |
+| g10 (conc 3.2) | gated LPT (6656) | 6,375 (−0.11%) | 3.29 / 41.1 s | 17.57 ms | 35.01 ms (+11.6%) | **886 ms (−18%)** |
+| g10 (conc 3.2) | gated LPT (8192) | **6,386 (+0.07%)** | 3.37 / **40.0 s** | **17.48 ms** | **29.41 ms (−6.2%)** | 1,072 ms |
+
+At g16 the gate chose BatchPrefill for 482/500 mixed batches — the 6,656-token
+chunks against ~80K prefixes sit in BatchPrefill's win region, so the pooled
+P99 gain comes from the cap, the corrected schedule choices, and the 18
+persistent picks. Both methods retokenize 100% and share one 32-s KV-pressure
+outlier on a single request.
+
+The g10 pooled-P99 gap at cap 6656 is a **cap artifact, not a kernel
+artifact**: with the gate routing nearly all mixed batches to BatchPrefill,
+the only remaining config difference was the LPT-only 6,656-token cap (more,
+shorter interference windows). Matching the baseline cap (8192) turns the old
+"+14.5% pooled P99 ITL regression at 10 sessions" into **−6.2%** with parity
+on throughput/mean ITL/P99 TTFT/request-max. Cap 6656 remains the
+tail-optimized point (−18% request-max at g10, −14.6% pooled P99 at g16).
+
+At the default cap 8192, g16 gated LPT is parity on throughput/pooled P99
+(−0.43%/−1.33%) with request-max P99 **−23%** (1,053 vs 1,367 ms) and no
+32-s outlier; the −14.6% pooled-P99 point requires cap 6656.
+
+### WL1 screens, Qwen3-8B / gqa4 table (N=100, `run_gain_search.sh`, 2026-07-30)
+
+`MODEL=/opt/tiger/models/Qwen3-8B CASES_SPEC="4096:1024:8 4096:1024:2"
+NUM_PROMPTS=100 METHODS_SPEC="DMC_CG LPT"`, results in
+`tasks/debug_kernel_server_perf/wl1_gated_check_n100/`. Both methods
+retokenize 100%.
+
+| Rate | LPT vs true DMC |
+|-----:|-----------------|
+| 8 | tput +0.16%, mean TTFT −2.6%, mean ITL −0.5%, pooled P99 ITL +0.5% |
+| 2 | tput −0.01%, mean TTFT −1.4%, mean ITL −0.1%, pooled P99 ITL −2.6% |
+
+Zero regression on the Qwen3-8B head config at both loads.
+
+### Paired repeat runs (default cap 8192, `*_cap8192_rep2_n100/`)
+
+| Screen | Run | LPT vs true DMC |
+|--------|-----|-----------------|
+| g16 | 1 | tput −0.43%, mean TTFT +6.8%, pooled P99 ITL −1.3%, reqmax P99 −23% |
+| g16 | 2 | tput **+2.10%**, mean TTFT **−6.0%**, pooled P99 ITL **−4.1%**, reqmax parity |
+| g10 | 1 | tput +0.07%, mean TTFT +3.2%, pooled P99 ITL −6.2%, reqmax parity |
+| g10 | 2 | tput −0.03%, mean TTFT −0.6%, pooled P99 ITL −0.7%, reqmax parity |
+
+Mean TTFT at saturation swings ±6% between identical-config runs, so the
+run-1 TTFT deltas were noise. Averaged, the default configuration is parity
+or better on every axis at both loads.
+
+### Conclusion
+
+The low-concurrency regression of the persistent overlap path is eliminated
+and the high-concurrency gains are retained against a strictly stronger
+(honest BatchPrefill) baseline:
+
+- **Default config** (gate auto, cap 8192): zero regression at 10 sessions
+  (all axes within noise, pooled P99 ITL −0.7–6.2% better), and at 16
+  sessions +0.8% mean throughput across paired runs with −1.3–4.1% pooled
+  P99 ITL and up to −23% request-max P99.
+- **Tail-optimized** (cap 6656): −14.6% pooled P99 ITL and +0.77% throughput
+  at 16 sessions; at 10 sessions request-max P99 −18% while pooled P99 pays
+  +11.6% (a cap tradeoff, not a kernel one).
+- Kernel level, the gate preserves the persistent kernel's wins where they
+  exist — up to 21.0× in the uniform sweep, 28.2× once fresh prefixes are
+  sampled, on batches with few long decode rows and a short-prefix chunk —
+  while capping any composition's regression (v1 gate: 2.8% leave-one-out;
+  deployed v2: 1.000, i.e. none). WL1 on Qwen3-8B is parity at both rates
+  with 100% retokenization everywhere.
+
+Mechanically, the three fixes were: (1) sync-free double-buffered planning
+(56.5 ms pipeline stall → 0.47 ms), (2) the measured per-batch kernel +
+schedule gate replacing always-persistent and the wrong flip heuristic, and
+(3) startup prewarm of both persistent module variants (a mid-replay JIT
+build froze all sessions for 18 s). Every number below is against an honest
+BatchPrefill baseline (see Setup).
+
+**Phase 2 (2026-08-04..06), the current headline results:**
+
+- **Mixed tenancy is the win scenario** (`run_mixed_workloads.py
+  agent_plus_shortchat`, honest baseline, identical tokens, 100% retok):
+  coding tenant **+36.5% throughput** (188→138 s wall), chat tenant
+  **−42% mean ITL / −23% P99 / −37% TTFT**; `shortchat_only` control at
+  parity with the gate declining persistent on 2,560/2,566 mixed batches.
+  Details in `tasks/realistic_workload_analysis.md`.
+- **The win region is lawful**: per-request KV concentration × chunk prefix
+  (< ~16K) decide it; the gate table is 1,316 points with a KV-concentration
+  feature and an out-of-support guard (LOO worst regression 1.000).
+- **Overlap attribution**: temporal PD overlap contributes 1.2–1.26× in the
+  balanced band T_p ≈ T_d; the rest of the mixed-batch win is
+  heterogeneity-robust scheduling (BP's planner collapses under one chunk:
+  tile flip + split-budget exhaustion, 3.1 ms plateau).
+- **Analytic cost model** (`SGLANG_EDF_LATENCY_MODEL=analytic`):
+  `T_attn = max(T_p,T_d) + 0.53·min` at 3.1% MAPE/9% max, 7 physical
+  constants, no training; BP's best parts-based fit is 13.3%/43% with
+  fitted β=2.19 (super-additive). Predictable cost is what SLO scheduling
+  consumes; the fused kernel is what makes cost predictable.
+
+## Part 2 — What the real workload actually looks like
+
+Captured compositions, and the scope limit that bounds every result above and
+below.
+
 ### Captured mixed-batch workload (2026-09-22)
 
 The gate table and every kernel sweep so far were built on a Cartesian grid.
@@ -530,6 +685,53 @@ nearest grid point is >1, i.e. the typical real batch is *farther from the
 nearest sampled point than that point's own magnitude* — the gate is
 interpolating, and its out-of-support guard is what keeps that safe.
 
+### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
+
+A decode row's `packed_qo_len` is `1 × gqa_ratio`, and two thresholds decide
+whether any of the tile heterogeneity this work exploits exists at all:
+the persistent kernel routes to its small tile only when `packed_qo_len <= 16`
+(`CTA_TILE_Q_SIZES = {128, 16}`), and FA2 picks tile 16 for a decode-only batch
+only when the batch-average is ≤ 16.
+
+| model | qo/kv | ratio | decode packed_qo | FA2 tile | persistent tile |
+|-------|------:|------:|-----------------:|---------:|----------------:|
+| Qwen2.5-7B (ours) | 28/4 | 7 | 7 | 16 | **small (16)** |
+| Llama-3.3-70B | 64/8 | 8 | 8 | 16 | small (16) |
+| Qwen3-235B-A22B | 64/4 | 16 | 16 | 16 | small (16) — at the boundary |
+| **Qwen3.8-Flash-Next** | **24/2** | **12** | 12 | 16 | **small (16)** |
+| Kimi-K2 (MLA) | 64/1 | 64 | 64 | 64 | **large (128)** |
+| DeepSeek-V3/V4 (MLA) | 128/1 | 128 | 128 | 128 | **large (128)** |
+
+**At ratio > 16 the entire premise disappears.** Decode rows already live in the
+large tile class, so there is no heterogeneity for the dual-tile kernel to
+exploit — and, symmetrically, no 16→128 flip for one prefill chunk to cause,
+which is the FA2 pathology the gate was built around. MLA models are also
+routed to different backends entirely (`flashinfer_mla_backend.py`,
+`flashmla_backend.py`, `trtllm_mla_backend.py`, `cutlass_mla_backend.py`);
+`select_mixed_attention_kernel` exists only in `flashinfer_backend.py` and is
+never reached from them.
+
+**Qwen3.8-Flash-Next (24/2, ratio 12) is the notable modern exception** — it
+keeps a small GQA ratio, so the dual-tile premise survives. But three details
+of its config blunt the win anyway: `head_dim = 256` makes FA2's 128 tile
+unreachable (`FA2DetermineCtaTileQ` requires `head_dim < 256`), so the flip
+there is 16→64 rather than 16→128; only **12 of 48 layers are full attention**
+(3 linear : 1 full), so attention is a quarter of the step it is for a dense
+model; and a DSA-style sparse indexer with `indexer_budget = 2048` caps how
+much KV any row attends, which flattens exactly the KV-concentration
+heterogeneity the gate keys on.
+
+So the win region is **low-GQA-ratio models on the standard flashinfer
+backend**. That covers the Llama/Qwen-dense family (ratios 7–16), and excludes
+the MLA frontier models where most current serving attention is going. The
+`m64n16k16`-vs-`m64n64k16` instruction study is scoped the same way: with no
+small tiles, its small-tile slack finding does not apply.
+
+## Part 3 — Hopper kernels: FA2, FA3 and the persistent kernel
+
+Planner structure and instruction-level behaviour of the three kernels the
+dispatcher has to choose between.
+
 ### Hopper instruction-level scheduling study (2026-09-19..22)
 
 What scheduling headroom exists for mixing the two tile classes on Hopper?
@@ -581,6 +783,139 @@ without that ptxas emits C7515 and serializes the pipeline. Any runtime branch
 inside the issue loop blocks unrolling and inflates the baseline 3× (32 → 105
 cycles), so all variants are compile-time template parameters. Both traps
 silently produced "no overlap" answers in earlier drafts of these benchmarks.
+
+### Mixing wgmma with mma.sync: no overlap, and worse than additive (2026-09-26)
+
+A decode/draft row has `packed_qo_len = gqa_ratio` (4–16), but wgmma's M is
+fixed at 64, so such a row wastes 4–16× of the M dimension. `mma.sync`
+(`m16n8k16`) has M=16 and would waste far less — so: can small rows run on
+mma.sync *underneath* the large rows' wgmma? Measured with the same
+methodology as the other probes here (`wgmma_mma_sync.cu`, marginal cycles from
+a 128→256 iteration delta, one warpgroup, min of 25):
+
+| mma.sync per iter | mma alone | wgmma alone | sum | **interleaved** | excess |
+|------------------:|----------:|------------:|----:|----------------:|-------:|
+| 2 | 48.00 | 32.00 | 80.00 | **100.62** | **+20.6** |
+| 4 | 96.00 | 32.00 | 128.00 | **158.75** | **+30.8** |
+| 8 | 192.00 | 32.00 | 224.00 | **255.00** | **+31.0** |
+| 16 | 384.00 | 32.00 | 416.00 | **446.75** | **+30.8** |
+
+Not merely additive — **anti-additive**: interleaving the two instruction
+classes costs a roughly constant **~24–31 cycles extra** on top of the sum,
+consistent with a pipeline drain or mode switch between the async
+warpgroup-wide path and the synchronous warp-level one. There is no overlap to
+harvest.
+
+The idea fails on throughput grounds too, independently of the interference.
+`mma.sync m16n8k16` costs a flat 24 cycles per instruction; with 4 warps that
+is 683 FLOP/cycle, **16% of H800 peak**, against wgmma's 4,096 FLOP/cycle
+(**96% of peak**) — a 6× deficit. Accounting for M-padding, useful throughput
+for a row of `packed_qo = p` is `4096·p/64` for wgmma versus `683·p/16` for
+mma.sync, i.e. **wgmma wins by a constant 1.5× at every row size**: the 4×
+padding advantage never covers the 6× throughput deficit. So small rows are
+better served by a *padded wgmma* than by mma.sync, which is presumably why
+the persistent kernel's small tile class is 16 rows of wgmma rather than a
+different instruction.
+
+Consequence for the fused 3-mode kernel: the third (verify) tile class should
+be another wgmma tile, not an mma.sync path.
+
+### Ours vs FA3: the complete picture (2026-09-22..27)
+
+All FA2 / FA3 / persistent comparisons live here; the serving-level verdict is
+in `realistic_workload_analysis.md`, which points back to this section.
+
+**Planner structure.** Reading the three schedulers side by side
+(`flashinfer/include/flashinfer/attention/scheduler.cuh`) reframes the gate:
+
+| | q-tile selection | KV-split sizing | load balancing | group heads |
+|---|---|---|---|---|
+| **FA2** (`PrefillPlan :696`) | batch-wide adaptive 16/64/128 via `FA2DetermineCtaTileQ` — **one chunk flips it for every row** | fixed budget `max_grid_size/num_kv_heads` = 66 units — **one chunk eats 56** | none (static split) | fused (packed) |
+| **FA3** (`PrefillSM90Plan :869`) | **fixed `cta_tile_q = 128`** (192 iff `head_dim_vo == 64`), no flip | **none — no KV splitting at all** | MinHeap over `num_sm` CTAs | **not fused**, one CTA per qo head |
+| **persistent** (`TwoStageHolisticPlan :1111`) | **`{128, 64, 16}`**, per row by `packed_qo_len` | `f(total_kv×heads / num_clusters)` | MinHeap per task queue | fused (packed) |
+
+**Corrected 2026-09-30.** An earlier version of this table gave FA3
+`cta_tile_q = 64` and a `f(total_kv_lens / num_clusters)` KV split, citing
+`:1468` and `:1507`. Both of those lines are inside `TwoStageHolisticPlan` —
+*our* planner — so the row described the persistent kernel's traits and
+attributed them to FA3. FA3's actual planner is `PrefillSM90Plan`, and its two
+properties that matter are in the table above: a 128-wide q tile and **no KV
+splitting**.
+
+Consequences, all confirmed in Part 4's boundary section:
+
+* FA3 has fixed both FA2 pathologies the gate was built around (no batch-wide
+  tile flip, MinHeap balancing).
+* Its tile waste on short rows is **worse** than previously stated and for a
+  different reason: because it does not fuse group heads, a GQA-7 decode row
+  occupies `1/128` of a tile, not `7/64`, and a 4-token verify row `4/128`
+  regardless of the GQA ratio. That is why routing verify rows to FA3 measured
+  14× slower.
+* Our prefill tile is **equal** to FA3's (both 128), not larger as previously
+  claimed.
+* Having no KV split caps FA3's parallel width at `h_qo * ceil(qo_len/128)`,
+  which is the single reason it loses at low `h_qo` — see Part 4.
+
+**Who wins depends on the regime, not the kernel.** Measured on isolated
+compositions (`fa3_prefill_probe.py`, H800, gqa 7, µs):
+
+| composition | FA2 | FA3 | persistent | FA3/FA2 | pers/FA2 |
+|---|---:|---:|---:|---:|---:|
+| chunk 2,048 @ prefix 0 | 19.4 | 49.9 | 20.8 | 0.39× | 0.93× |
+| chunk 2,048 @ prefix 8,192 | 778.0 | **503.9** | 865.7 | **1.54×** | 0.90× |
+| chunk 8,192 @ prefix 32,768 | 10,597 | **7,547** | 10,706 | **1.40×** | 0.99× |
+| 2 decode @8K + chunk 4,096 | 274.9 | 178.3 | **53.5** | 1.54× | **5.13×** |
+| 8 decode @8K + chunk 4,096 | 406.7 | 309.5 | **89.2** | 1.31× | **4.56×** |
+| 32 decode @8K + chunk 4,096 | 421.5 | 1,060 | **219.0** | 0.40× | **1.92×** |
+
+**FA3 is 1.35–1.54× faster than FA2 on real prefill work** (long attended
+prefix), where the persistent kernel is only 0.89–1.00× of FA2. With a prefix
+of 0 there is no attention work to speed up and only fixed cost remains, which
+is why FA3 looks bad there. The crossover is **~4 decode rows**.
+
+**Time-weighted over real serving compositions.** Two captures, replayed
+through all three kernels (`sweep_from_capture.py`):
+
+| workload | FA2 | FA3 | persistent | gate | oracle best-of-3 |
+|---|---:|---:|---:|---:|---:|
+| co-tenancy, fresh chat prompts (2,845 batches) | 1.00× | 0.67× | **2.60×** | 1.90× | 2.60× |
+| multi-turn w/ 8K shared prefixes (365 batches) | 1.00× | 0.68× | **1.34×** | 1.18× | **1.44×** |
+
+**The persistent kernel wins both, but the margin halves** (2.60× → 1.34×) once
+the workload contains real prefill work. Decode-row split on the prefix-reuse
+workload:
+
+| split | weight | FA3/FA2 | pers/FA2 | pers/FA3 |
+|---|---:|---:|---:|---:|
+| 1–3 decode rows | 74 | **1.39×** | 0.98× | **0.70×** |
+| 4–15 rows | 127 | 1.30× | **1.48×** | 1.14× |
+| 16–47 rows | 164 | 0.55× | **1.34×** | 2.43× |
+
+So **FA3 wins outright on prefill-dominant batches** (1.43× over ours at 1–3
+decode rows) and loses as the decode population grows. Its aggregate 0.68× is
+not a verdict on FA3; it reflects where these workloads spend their time. The
+**oracle best-of-3 is 1.44× vs 1.34% for always-persistent**, so ~7% is left on
+the table by never considering FA3 — motivating multi-kernel dispatch.
+
+**Levers tried on FA3, none landed.** (1) Overlapping differently-shaped wgmma
+is ruled out at the instruction level (see the scheduling study above: costs are
+additive within a warpgroup *and* across warpgroups). (2) Squeezing work into
+small-tile slack is real but needs a small tile class; FA3's `cta_tile_q` is
+fixed in its scheduler and `DISPATCH_CTA_TILE_Q` appears only in the FA2 and
+POD paths, never the Hopper template — so it is a mainloop rewrite, not a
+scheduler tweak. (3) FA3's own batch-average decision (`cluster_size = 2` when
+`avg_packed_qo_len > 64`) does **not** reproduce FA2's flip: sweeping chunk size
+across that exact boundary at 46 rows @3K KV, FA3 is flat at ~565 µs while
+**FA2 steps +29% (124 → 160 µs)** and the persistent kernel is flat to within
+1%. `fixed_split_size`, the one exposed FA3 knob, is inert (537 µs unset,
+564–568 µs at every setting). FA3's deficit on decode-heavy batches is inside
+its mainloop, unreachable from the scheduler.
+
+## Part 4 — Mixed-tile fusion and 4-mode dispatch
+
+Speculative decoding puts four differently shaped work classes in one batch.
+This part covers the fused mixed-tile kernel, the third q-tile class, and the
+final measured answer on separate kernels with scheduler-partitioned grids.
 
 ### Fusing spec-dec (draft + verify + prefill) into one mixed-tile kernel (2026-09-25)
 
@@ -717,242 +1052,32 @@ with `TARGET_VERIFY`/`DRAFT_EXTEND` rather than being disjoint forward modes;
 (1) and (2) hold. Only then does PD colocation reach functional parity with
 PD-disaggregation-plus-spec-dec.
 
-### Mixing wgmma with mma.sync: no overlap, and worse than additive (2026-09-26)
+### 4-mode dispatch: the early estimate, and why it was replaced (2026-09-28)
 
-A decode/draft row has `packed_qo_len = gqa_ratio` (4–16), but wgmma's M is
-fixed at 64, so such a row wastes 4–16× of the M dimension. `mma.sync`
-(`m16n8k16`) has M=16 and would waste far less — so: can small rows run on
-mma.sync *underneath* the large rows' wgmma? Measured with the same
-methodology as the other probes here (`wgmma_mma_sync.cu`, marginal cycles from
-a 128→256 iteration delta, one warpgroup, min of 25):
+Superseded — kept only because it explains the shape of the design that followed.
 
-| mma.sync per iter | mma alone | wgmma alone | sum | **interleaved** | excess |
-|------------------:|----------:|------------:|----:|----------------:|-------:|
-| 2 | 48.00 | 32.00 | 80.00 | **100.62** | **+20.6** |
-| 4 | 96.00 | 32.00 | 128.00 | **158.75** | **+30.8** |
-| 8 | 192.00 | 32.00 | 224.00 | **255.00** | **+31.0** |
-| 16 | 384.00 | 32.00 | 416.00 | **446.75** | **+30.8** |
+The first pass at sizing the 4-mode idea summed **separately timed** class
+launches with **oracle** kernel choice per class over 40 batches from
+`sets/qwen_small_h800.jsonl` (`measure_4mode_dispatch.py`, then
+`measure_grouping.py`). It suggested 1.22-1.29x over a monolithic persistent
+launch, and it was never a dispatcher: it bundled four launches and four
+`plan()` calls into each row, chose kernels with hindsight, and modelled a
+serialized split rather than any real execution. It also produced an alleged
+~53 µs fixed launch overhead that no measurement supported; that figure and the
+`DISPATCH_SPLIT_FLOOR_US` constant built on it were removed.
 
-Not merely additive — **anti-additive**: interleaving the two instruction
-classes costs a roughly constant **~24–31 cycles extra** on top of the sum,
-consistent with a pipeline drain or mode switch between the async
-warpgroup-wide path and the synchronous warp-level one. There is no overlap to
-harvest.
+Two of its conclusions survived into the implementation and one was wrong:
 
-The idea fails on throughput grounds too, independently of the interference.
-`mma.sync m16n8k16` costs a flat 24 cycles per instruction; with 4 warps that
-is 683 FLOP/cycle, **16% of H800 peak**, against wgmma's 4,096 FLOP/cycle
-(**96% of peak**) — a 6× deficit. Accounting for M-padding, useful throughput
-for a row of `packed_qo = p` is `4096·p/64` for wgmma versus `683·p/16` for
-mma.sync, i.e. **wgmma wins by a constant 1.5× at every row size**: the 4×
-padding advantage never covers the 6× throughput deficit. So small rows are
-better served by a *padded wgmma* than by mma.sync, which is presumably why
-the persistent kernel's small tile class is 16 rows of wgmma rather than a
-different instruction.
+* survived — the verify class wants a tile of 64 (its `packed_qo_len` is
+  `(k+1) * gqa_ratio`), which motivated the third q-tile class below;
+* survived — the draft class is not worth a separate low-SM launch (measured
+  separately, next section but one);
+* **wrong** — that the large-prefill class should go to FA3 unconditionally.
+  That holds only when FA3 can fill the grid; see the measured boundary in
+  "4-mode dispatch: separate kernels per tile class" below.
 
-Consequence for the fused 3-mode kernel: the third (verify) tile class should
-be another wgmma tile, not an mma.sync path.
-
-### Ours vs FA3: the complete picture (2026-09-22..27)
-
-All FA2 / FA3 / persistent comparisons live here; the serving-level verdict is
-in `realistic_workload_analysis.md`, which points back to this section.
-
-**Planner structure.** Reading the three schedulers side by side
-(`flashinfer/include/flashinfer/attention/scheduler.cuh`) reframes the gate:
-
-| | q-tile selection | KV-split sizing | load balancing |
-|---|---|---|---|
-| **FA2** (`:537,550`) | batch-wide adaptive 16/64/128 via `FA2DetermineCtaTileQ` — **one chunk flips it for every row** | fixed budget `max_grid_size/num_kv_heads` = 66 units — **one chunk eats 56** | none (static split) |
-| **FA3** (`:1468`) | **fixed `cta_tile_q = 64`** (cluster 1–2), no flip | `f(total_kv_lens / num_clusters)` | **MinHeap cost scheduler** (`:1507`) |
-| **persistent** (`:1110`) | **dual `{128, 16}`**, per row by `packed_qo_len > 16` | `f(total_kv×heads / num_clusters)` | MinHeap per task queue |
-
-FA3 has already fixed both FA2 pathologies the gate was built around. Its
-remaining structural gap is the **heterogeneous tile**: a GQA-7 decode row has
-`packed_qo_len = 7`, which FA3 pads into a 64-row tile (9× waste) where the
-persistent kernel uses its 16 tile (2.3×). Note the persistent kernel uses tile
-**128 for prefill** (`:1141`), so against FA3 our prefill tile is the *larger*
-one — the 16 tile only ever holds decode/draft rows.
-
-**Who wins depends on the regime, not the kernel.** Measured on isolated
-compositions (`fa3_prefill_probe.py`, H800, gqa 7, µs):
-
-| composition | FA2 | FA3 | persistent | FA3/FA2 | pers/FA2 |
-|---|---:|---:|---:|---:|---:|
-| chunk 2,048 @ prefix 0 | 19.4 | 49.9 | 20.8 | 0.39× | 0.93× |
-| chunk 2,048 @ prefix 8,192 | 778.0 | **503.9** | 865.7 | **1.54×** | 0.90× |
-| chunk 8,192 @ prefix 32,768 | 10,597 | **7,547** | 10,706 | **1.40×** | 0.99× |
-| 2 decode @8K + chunk 4,096 | 274.9 | 178.3 | **53.5** | 1.54× | **5.13×** |
-| 8 decode @8K + chunk 4,096 | 406.7 | 309.5 | **89.2** | 1.31× | **4.56×** |
-| 32 decode @8K + chunk 4,096 | 421.5 | 1,060 | **219.0** | 0.40× | **1.92×** |
-
-**FA3 is 1.35–1.54× faster than FA2 on real prefill work** (long attended
-prefix), where the persistent kernel is only 0.89–1.00× of FA2. With a prefix
-of 0 there is no attention work to speed up and only fixed cost remains, which
-is why FA3 looks bad there. The crossover is **~4 decode rows**.
-
-**Time-weighted over real serving compositions.** Two captures, replayed
-through all three kernels (`sweep_from_capture.py`):
-
-| workload | FA2 | FA3 | persistent | gate | oracle best-of-3 |
-|---|---:|---:|---:|---:|---:|
-| co-tenancy, fresh chat prompts (2,845 batches) | 1.00× | 0.67× | **2.60×** | 1.90× | 2.60× |
-| multi-turn w/ 8K shared prefixes (365 batches) | 1.00× | 0.68× | **1.34×** | 1.18× | **1.44×** |
-
-**The persistent kernel wins both, but the margin halves** (2.60× → 1.34×) once
-the workload contains real prefill work. Decode-row split on the prefix-reuse
-workload:
-
-| split | weight | FA3/FA2 | pers/FA2 | pers/FA3 |
-|---|---:|---:|---:|---:|
-| 1–3 decode rows | 74 | **1.39×** | 0.98× | **0.70×** |
-| 4–15 rows | 127 | 1.30× | **1.48×** | 1.14× |
-| 16–47 rows | 164 | 0.55× | **1.34×** | 2.43× |
-
-So **FA3 wins outright on prefill-dominant batches** (1.43× over ours at 1–3
-decode rows) and loses as the decode population grows. Its aggregate 0.68× is
-not a verdict on FA3; it reflects where these workloads spend their time. The
-**oracle best-of-3 is 1.44× vs 1.34% for always-persistent**, so ~7% is left on
-the table by never considering FA3 — motivating multi-kernel dispatch.
-
-**Levers tried on FA3, none landed.** (1) Overlapping differently-shaped wgmma
-is ruled out at the instruction level (see the scheduling study above: costs are
-additive within a warpgroup *and* across warpgroups). (2) Squeezing work into
-small-tile slack is real but needs a small tile class; FA3's `cta_tile_q` is
-fixed in its scheduler and `DISPATCH_CTA_TILE_Q` appears only in the FA2 and
-POD paths, never the Hopper template — so it is a mainloop rewrite, not a
-scheduler tweak. (3) FA3's own batch-average decision (`cluster_size = 2` when
-`avg_packed_qo_len > 64`) does **not** reproduce FA2's flip: sweeping chunk size
-across that exact boundary at 46 rows @3K KV, FA3 is flat at ~565 µs while
-**FA2 steps +29% (124 → 160 µs)** and the persistent kernel is flat to within
-1%. `fixed_split_size`, the one exposed FA3 knob, is inert (537 µs unset,
-564–568 µs at every setting). FA3's deficit on decode-heavy batches is inside
-its mainloop, unreachable from the scheduler.
-
-### 4-mode dispatch: measured headroom and what it says about the kernel (2026-09-28)
-
-Design under test: four co-resident work classes routed to the kernel that
-suits each, with persistent-SM proportions assigned from the live mixture.
-Measured on 40 fused batches from
-`tasks/fused_specdec_workload/sets/qwen_small_h800.jsonl` (H800, gqa 7, k=3),
-timing each class separately and summing (`measure_4mode_dispatch.py`,
-superseded by `measure_grouping.py`). This is an estimate of a serialized,
-oracle-selected variant, not a measured dispatcher — see the caveats under the
-table:
-
-| row | what it is | total | vs today |
-|-----|-----------|------:|---------:|
-| monolithic persistent | **measured** — one launch over the whole batch, i.e. what runs today | 13,698 µs | 1.00× |
-| monolithic best-of-3 | **measured** per batch, oracle choice of one kernel for the whole batch | 11,223 µs | 1.22× |
-| 3-group | **estimate** — Σ of 3 class launches, oracle kernel per class | 11,582 µs | 1.18× |
-| 4-group | **estimate** — Σ of 4 class launches, oracle kernel per class | 10,591 µs | 1.29× |
-
-**The two group rows are not measurements of a dispatcher — nothing was
-implemented.** They are `sum(min(fa2, fa3, persistent))` over the classes timed
-*separately* (`measure_grouping.py`: `g4 = sum(min(p.values()) for p in
-parts4)`). Read them as a rough bound on a *serialized, oracle-selected*
-variant, which is not the proposed design. Specifically the sum:
-
-- assumes **hindsight kernel choice** per class; a real gate mispredicts;
-- models the classes running **back-to-back**, so it captures neither the
-  concurrency of the intended SM-partitioned design nor its contention;
-- **pays four launch overheads**, which an SM-partitioned kernel would not — so
-  it *understates* the design. How much is unknown: nothing here isolates
-  per-launch cost from per-class work;
-- **omits four `plan()` calls** and four sets of metadata, which a real
-  implementation must pay — so it *overstates* in the other direction;
-- times each class with its own warmup and L2 flush, so any cross-class cache
-  behaviour is absent.
-
-Only the first two rows are like-for-like. The honest reading is: picking the
-best *single* kernel per batch is worth a measured **1.22×**, and class-level
-routing looks worth roughly that much again at best, with the sign of the
-remaining error unresolved until something is built.
-
-**Best kernel per class, measured (corrected 2026-09-29):**
-
-| class | winner | note |
-|-------|--------|------|
-| `large_prefill` | **FA3** | consistent with FA3's 1.35–1.54× on long-prefix chunks |
-| `spec_verify` | **BatchPrefill, 40/40** | fa2 natively picks the tile-64 this class wants |
-| `mixed_decode` | **persistent, 30/30** | small prefill **+ draft rows together** |
-| `spec_draft` | split: persistent 15, fa2 25 | tile-16 work, ours wins the long-KV rows |
-
-An earlier version of this table reported `mixed_decode → BatchPrefill (35/40)`.
-**That was a measurement error**: the class was timed as the small-prefill chunk
-*alone*, with no decode rows, which is pure prefill — the one regime the
-persistent kernel is not built for (0.89–1.00× of FA2, see above). Grouped
-correctly as "small prefill + draft rows", which is what the LPT kernel exists
-to serve, **persistent wins 30/30** (e.g. 518 µs vs fa2 1,067 µs on the largest
-batch, and 26–34 µs vs 30–38 µs on the small ones).
-
-**The verify result is the important one.** BatchPrefill beats the persistent
-kernel on *every* verify batch, purely because `FA2DetermineCtaTileQ` selects
-tile 64 while our `CTA_TILE_Q_SIZES = {128, 16}` must round verify rows up to
-128. That is the third-tile-class gap, showing up as a routing decision rather
-than a micro-benchmark. Dispatching around it recovers some of the loss;
-closing it in the kernel would remove the need to dispatch at all for that
-class.
-
-**The estimate crosses over with batch size.** Sorted by monolithic cost, the
-summed-class estimate is worse than one launch on every batch below ~500 µs
-(0.62–0.81×) and better above it (1.01–1.39×):
-
-| monolithic | split | gain |
-|-----------:|------:|-----:|
-| 66 µs | 89 | 0.75× |
-| 105 µs | 130 | 0.81× |
-| 525 µs | 502 | 1.05× |
-| 1,156 µs | 892 | **1.30×** |
-| 2,299 µs | 1,650 | **1.39×** |
-
-The crossover is a property of *this estimate*, not a measured launch cost: the
-four summed times include four launches, four plans and the per-class work, and
-nothing here separates them. So it says a serialized split is unattractive for
-small batches, and nothing quantitative about launch overhead. Isolating that
-would need a per-launch measurement (e.g. empty-kernel or fixed-work launches at
-the same cadence), which has not been done.
-
-**Status: scaffolding only, not an active code path.**
-`flashinfer_backend.py` gains `classify_mixed_batch` (splits rows into the four
-classes, reports the tile each wants) and `plan_4mode_dispatch` (returns a
-routing, refusing to split below `DISPATCH_MIN_MONOLITHIC_US = 500`). Neither is
-called from `init_forward_metadata` — they are unit-testable helpers pinning
-down the classification and the measured thresholds, nothing more. No batch is
-dispatched differently today. The kernel side (a third `CTA_TILE_Q_SIZES` entry)
-is also not implemented; feasibility notes below.
-
-**Third tile class: mechanical, and cheaper than first assessed.** The per-tile
-mainloop already supports 64 (`csrc/batch_prefill_*_kernel_inst.jinja`
-instantiates 16/64/128 for FA2, and `BlockBatchPagedAttentionPersistent` is
-generic in `KTraits::CTA_TILE_Q`). The dispatch structure extends directly: in
-`persistent_template.cuh:91-102` each CTA simply **runs the task queues in
-sequence**, and the two CTAs resident per SM traverse them in **opposite order**
-via `cta_count % 2` —
-
-```
-cta_count even:  Runner1 (tile 128) then Runner2 (tile 16)
-cta_count odd:   Runner2 (tile 16)  then Runner1 (tile 128)
-```
-
-so one CTA drains the large-tile queue while its partner drains the small one.
-Three classes is the same pattern with a third queue: `128 → 64 → 16` forward
-on even CTAs and `16 → 64 → 128` on odd, which keeps the traversal binary and
-matches the 2-CTAs-per-SM occupancy (a `% 3` rotation would not). Smem and
-thread count are already `max()` over the traits, and tile 128 dominates both,
-so adding 64 should not cost occupancy.
-
-The edits are confined to: `NUM_TASKS = 2` and `CTA_TILE_Q_SIZES = {128, 16}`
-(`scheduler.cuh:1109-1110`), `HolisticPlanInfo<2>`
-(`csrc/batch_attention.cu:48,75`), the two-parameter kernel template and its
-`params_1/params_2` plumbing (`persistent.cuh:598`,
-`persistent_template.cuh:61-102`), and the instantiation
-(`batch_attention_paged_kernel_inst.jinja:6`). No mainloop change.
-
-Why it is worth more than dispatching around the gap: the verify class loses to
-BatchPrefill **40/40** solely because fa2 picks tile 64 and we round to 128, and
-a third queue removes that inside the existing single launch — no extra launch,
-no extra plan, and no dependence on the unresolved cost of splitting.
+Everything quantitative about this design is in that later section, which times
+real launches end to end.
 
 ### Implemented: a third q-tile class in the persistent kernel (2026-09-29)
 
@@ -1319,189 +1444,6 @@ the boundary itself: FA3's 1.86x wgmma advantage per CTA is cancelled by
 per-head KV reload and a parallel width of `h_qo * ceil(qo_len/128)`, so on the
 TP8/TP16 shards that actually serve Qwen3-235B it loses even on pure prefill.
 
-### Scope limit: all of this needs a GQA ratio ≤ 16 (2026-09-23)
-
-A decode row's `packed_qo_len` is `1 × gqa_ratio`, and two thresholds decide
-whether any of the tile heterogeneity this work exploits exists at all:
-the persistent kernel routes to its small tile only when `packed_qo_len <= 16`
-(`CTA_TILE_Q_SIZES = {128, 16}`), and FA2 picks tile 16 for a decode-only batch
-only when the batch-average is ≤ 16.
-
-| model | qo/kv | ratio | decode packed_qo | FA2 tile | persistent tile |
-|-------|------:|------:|-----------------:|---------:|----------------:|
-| Qwen2.5-7B (ours) | 28/4 | 7 | 7 | 16 | **small (16)** |
-| Llama-3.3-70B | 64/8 | 8 | 8 | 16 | small (16) |
-| Qwen3-235B-A22B | 64/4 | 16 | 16 | 16 | small (16) — at the boundary |
-| **Qwen3.8-Flash-Next** | **24/2** | **12** | 12 | 16 | **small (16)** |
-| Kimi-K2 (MLA) | 64/1 | 64 | 64 | 64 | **large (128)** |
-| DeepSeek-V3/V4 (MLA) | 128/1 | 128 | 128 | 128 | **large (128)** |
-
-**At ratio > 16 the entire premise disappears.** Decode rows already live in the
-large tile class, so there is no heterogeneity for the dual-tile kernel to
-exploit — and, symmetrically, no 16→128 flip for one prefill chunk to cause,
-which is the FA2 pathology the gate was built around. MLA models are also
-routed to different backends entirely (`flashinfer_mla_backend.py`,
-`flashmla_backend.py`, `trtllm_mla_backend.py`, `cutlass_mla_backend.py`);
-`select_mixed_attention_kernel` exists only in `flashinfer_backend.py` and is
-never reached from them.
-
-**Qwen3.8-Flash-Next (24/2, ratio 12) is the notable modern exception** — it
-keeps a small GQA ratio, so the dual-tile premise survives. But three details
-of its config blunt the win anyway: `head_dim = 256` makes FA2's 128 tile
-unreachable (`FA2DetermineCtaTileQ` requires `head_dim < 256`), so the flip
-there is 16→64 rather than 16→128; only **12 of 48 layers are full attention**
-(3 linear : 1 full), so attention is a quarter of the step it is for a dense
-model; and a DSA-style sparse indexer with `indexer_budget = 2048` caps how
-much KV any row attends, which flattens exactly the KV-concentration
-heterogeneity the gate keys on.
-
-So the win region is **low-GQA-ratio models on the standard flashinfer
-backend**. That covers the Llama/Qwen-dense family (ratios 7–16), and excludes
-the MLA frontier models where most current serving attention is going. The
-`m64n16k16`-vs-`m64n64k16` instruction study is scoped the same way: with no
-small tiles, its small-tile slack finding does not apply.
-
-### Measured k-NN gate
-
-Deployed version (v2, 2026-08-05, built by `build_mixed_kernel_gate_table.py`):
-1,316 measured compositions, features `[log1p(decode_kv),
-log1p(prefill_work=Σe·c), log1p(prefill_tokens), log1p(decode_bs),
-3·D/(D+P+1), log1p(kv_concentration=Σkv²/Σkv)]`, k=5, persistent only on
-unanimous neighbors labeled `bp/pa_best ≥ 1.10`, flip by neighbor majority,
-plus an out-of-support guard (query farther than `max_nn_dist_sq` from every
-table point → BatchPrefill). Leave-one-out: worst-case regression **1.000**,
-win capture 81%, mean speedup 2.71× on accepted batches. The original v1
-(479 points, 5 features, k=3, label ≥1.05, LOO worst 1.028) is what the
-2026-07-30 validation screens below ran; v2 adds the fresh-prefix and
-blended-pool sweeps and is what every mixed-tenancy run uses. Deployed as
-`python/sglang/srt/layers/attention/mixed_kernel_gate_h800_gqa7.json`
-(+gqa4 for Qwen3-8B) behind `SGLANG_MIXED_ATTENTION_KERNEL=auto` with
-forced `persistent`/`batch_prefill` overrides. Decision latency on the
-current 1,316-point/k=5 table (re-measured 2026-08-13): ~39 µs for the core
-k-NN, 52–69 µs for the full entry point including feature computation from
-per-request CPU lists (batch 16→256); once per mixed step, CPU-side, ~12x
-cheaper than the 0.47 ms sync-free plan it precedes.
-
-### Validation screens (TraceLab decode-heavy, N=100, 2026-07-30)
-
-sglang `313b97611`, flashinfer `c6d2a00`. Command:
-`TRACELAB_MIN_OUTPUT_LEN=512 TRACELAB_NUM_GROUPS=<g> NUM_PROMPTS=100
-LPT_CHUNKED_PREFILL_SIZE=6656 METHODS_SPEC="DMC_CG LPT"
-bash tasks/realistic_workload_analysis/run_tracelab_claude.sh`, results in
-`tasks/realistic_workload_analysis/h800_tracelab_decodeheavy512_gated_g{10,16}_n100/`.
-These screens ran the v1 gate (479 points/k=3); their zero-regression
-conclusion was re-confirmed under the v2 gate by the mixed-tenancy controls.
-DMC is a true BatchPrefill baseline here (explicit
-`SGLANG_FLASHINFER_USE_PERSISTENT=0`, see Setup).
-
-The first g10 LPT run exposed a mid-replay JIT compile of the second
-flipped-schedule module variant (18.3 s global stall freezing all nine active
-sessions; both variants' cached_ops rebuilt at 19:16/19:19 in the server
-process). Fixed by prewarming both variants at backend init
-(flashinfer `c6d2a00` + sglang `313b97611`); the polluted run is archived in
-the session scratchpad and was re-run.
-
-| Screen | Method (cap) | Total tok/s | Mean/P99 TTFT | Mean ITL | pooled P99 ITL | reqmax P99 |
-|--------|--------------|------------:|--------------:|---------:|---------------:|-----------:|
-| g16 (conc 10.9) | true DMC (8192) | 7,882 | 31.0 / 90.2 s | 42.88 ms | 775.97 ms | 1,367 ms |
-| g16 (conc 11.0) | gated LPT (6656) | **7,943 (+0.77%)** | 31.8 / 89.8 s | **42.28 ms** | **662.92 ms (−14.6%)** | **1,205 ms** |
-| g10 (conc 3.2) | true DMC (8192) | 6,382 | 3.27 / 40.2 s | 17.52 ms | 31.36 ms | 1,075 ms |
-| g10 (conc 3.2) | gated LPT (6656) | 6,375 (−0.11%) | 3.29 / 41.1 s | 17.57 ms | 35.01 ms (+11.6%) | **886 ms (−18%)** |
-| g10 (conc 3.2) | gated LPT (8192) | **6,386 (+0.07%)** | 3.37 / **40.0 s** | **17.48 ms** | **29.41 ms (−6.2%)** | 1,072 ms |
-
-At g16 the gate chose BatchPrefill for 482/500 mixed batches — the 6,656-token
-chunks against ~80K prefixes sit in BatchPrefill's win region, so the pooled
-P99 gain comes from the cap, the corrected schedule choices, and the 18
-persistent picks. Both methods retokenize 100% and share one 32-s KV-pressure
-outlier on a single request.
-
-The g10 pooled-P99 gap at cap 6656 is a **cap artifact, not a kernel
-artifact**: with the gate routing nearly all mixed batches to BatchPrefill,
-the only remaining config difference was the LPT-only 6,656-token cap (more,
-shorter interference windows). Matching the baseline cap (8192) turns the old
-"+14.5% pooled P99 ITL regression at 10 sessions" into **−6.2%** with parity
-on throughput/mean ITL/P99 TTFT/request-max. Cap 6656 remains the
-tail-optimized point (−18% request-max at g10, −14.6% pooled P99 at g16).
-
-At the default cap 8192, g16 gated LPT is parity on throughput/pooled P99
-(−0.43%/−1.33%) with request-max P99 **−23%** (1,053 vs 1,367 ms) and no
-32-s outlier; the −14.6% pooled-P99 point requires cap 6656.
-
-### WL1 screens, Qwen3-8B / gqa4 table (N=100, `run_gain_search.sh`, 2026-07-30)
-
-`MODEL=/opt/tiger/models/Qwen3-8B CASES_SPEC="4096:1024:8 4096:1024:2"
-NUM_PROMPTS=100 METHODS_SPEC="DMC_CG LPT"`, results in
-`tasks/debug_kernel_server_perf/wl1_gated_check_n100/`. Both methods
-retokenize 100%.
-
-| Rate | LPT vs true DMC |
-|-----:|-----------------|
-| 8 | tput +0.16%, mean TTFT −2.6%, mean ITL −0.5%, pooled P99 ITL +0.5% |
-| 2 | tput −0.01%, mean TTFT −1.4%, mean ITL −0.1%, pooled P99 ITL −2.6% |
-
-Zero regression on the Qwen3-8B head config at both loads.
-
-### Paired repeat runs (default cap 8192, `*_cap8192_rep2_n100/`)
-
-| Screen | Run | LPT vs true DMC |
-|--------|-----|-----------------|
-| g16 | 1 | tput −0.43%, mean TTFT +6.8%, pooled P99 ITL −1.3%, reqmax P99 −23% |
-| g16 | 2 | tput **+2.10%**, mean TTFT **−6.0%**, pooled P99 ITL **−4.1%**, reqmax parity |
-| g10 | 1 | tput +0.07%, mean TTFT +3.2%, pooled P99 ITL −6.2%, reqmax parity |
-| g10 | 2 | tput −0.03%, mean TTFT −0.6%, pooled P99 ITL −0.7%, reqmax parity |
-
-Mean TTFT at saturation swings ±6% between identical-config runs, so the
-run-1 TTFT deltas were noise. Averaged, the default configuration is parity
-or better on every axis at both loads.
-
-### Conclusion
-
-The low-concurrency regression of the persistent overlap path is eliminated
-and the high-concurrency gains are retained against a strictly stronger
-(honest BatchPrefill) baseline:
-
-- **Default config** (gate auto, cap 8192): zero regression at 10 sessions
-  (all axes within noise, pooled P99 ITL −0.7–6.2% better), and at 16
-  sessions +0.8% mean throughput across paired runs with −1.3–4.1% pooled
-  P99 ITL and up to −23% request-max P99.
-- **Tail-optimized** (cap 6656): −14.6% pooled P99 ITL and +0.77% throughput
-  at 16 sessions; at 10 sessions request-max P99 −18% while pooled P99 pays
-  +11.6% (a cap tradeoff, not a kernel one).
-- Kernel level, the gate preserves the persistent kernel's wins where they
-  exist — up to 21.0× in the uniform sweep, 28.2× once fresh prefixes are
-  sampled, on batches with few long decode rows and a short-prefix chunk —
-  while capping any composition's regression (v1 gate: 2.8% leave-one-out;
-  deployed v2: 1.000, i.e. none). WL1 on Qwen3-8B is parity at both rates
-  with 100% retokenization everywhere.
-
-Mechanically, the three fixes were: (1) sync-free double-buffered planning
-(56.5 ms pipeline stall → 0.47 ms), (2) the measured per-batch kernel +
-schedule gate replacing always-persistent and the wrong flip heuristic, and
-(3) startup prewarm of both persistent module variants (a mid-replay JIT
-build froze all sessions for 18 s). Every number below is against an honest
-BatchPrefill baseline (see Setup).
-
-**Phase 2 (2026-08-04..06), the current headline results:**
-
-- **Mixed tenancy is the win scenario** (`run_mixed_workloads.py
-  agent_plus_shortchat`, honest baseline, identical tokens, 100% retok):
-  coding tenant **+36.5% throughput** (188→138 s wall), chat tenant
-  **−42% mean ITL / −23% P99 / −37% TTFT**; `shortchat_only` control at
-  parity with the gate declining persistent on 2,560/2,566 mixed batches.
-  Details in `tasks/realistic_workload_analysis.md`.
-- **The win region is lawful**: per-request KV concentration × chunk prefix
-  (< ~16K) decide it; the gate table is 1,316 points with a KV-concentration
-  feature and an out-of-support guard (LOO worst regression 1.000).
-- **Overlap attribution**: temporal PD overlap contributes 1.2–1.26× in the
-  balanced band T_p ≈ T_d; the rest of the mixed-batch win is
-  heterogeneity-robust scheduling (BP's planner collapses under one chunk:
-  tile flip + split-budget exhaustion, 3.1 ms plateau).
-- **Analytic cost model** (`SGLANG_EDF_LATENCY_MODEL=analytic`):
-  `T_attn = max(T_p,T_d) + 0.53·min` at 3.1% MAPE/9% max, 7 physical
-  constants, no training; BP's best parts-based fit is 13.3%/43% with
-  fitted β=2.19 (super-additive). Predictable cost is what SLO scheduling
-  consumes; the fused kernel is what makes cost predictable.
-
 ## Open TODOs
 
 - [ ] **Remove the baseline's own plan() drain** (makes DMC strictly
@@ -1587,586 +1529,12 @@ BatchPrefill baseline (see Setup).
 
 ---
 
-## Historical results (H100, Qwen3-8B, 2026-03/04 — pre-gate stack)
-
-The two sections below predate the sync-free plan, the measured kernel
-gate, and the H800 phase. They ran on H100 with Qwen3-8B at older sglang/
-flashinfer commits, and their runner (`run_one_config.sh`) set
-`SGLANG_FLASHINFER_USE_PERSISTENT` explicitly, so the DMC baselines here
-are honest. They are retained as machine-specific history; current
-paper-facing results are in the section above and in
-`tasks/realistic_workload_analysis.md`.
-
-## Kernel-Level Results (H100 era)
-
-### LPT vs POD vs Static Persistent 3-way comparison
-(H100 80GB, Qwen3-8B heads: num_kv=8 num_qo=32 dim=128, `bench_mixed_attention.py`, 100 decode each)
-
-| Case | Workload | POD (ms) | LPT (ms) | Static (ms) | LPT over POD | LPT over Static |
-|------|----------|----------|----------|-------------|-------------|-----------------|
-| 1 | 100d@kv2k + 1p@512 | 0.30 | 0.31 | 0.30 | 0.97x | 0.97x |
-| 2 | 100d@kv2k + 1p@1536 | 0.32 | 0.36 | 0.37 | 0.89x | 1.03x |
-| 3 | 100d@kv2k + 2p@2048 | 0.44 | 0.48 | 0.52 | 0.92x | **1.09x** |
-| 4 | 100d@kv2k + 1p@2048 | 0.34 | 0.38 | 0.42 | 0.89x | **1.11x** |
-| 5 | 100d@kv4k + 1p@4096 | 0.81 | 0.82 | 0.97 | 0.99x | **1.18x** |
-| 6 | 100d@kv8k + 1p@4096 | 1.28 | **1.24** | 1.51 | **1.03x** | **1.22x** |
-| 7 | 100d@kv8k + 1p@6000 | 1.85 | 1.89 | 2.18 | 0.98x | **1.15x** |
-| **8** | **95d@kv2k+5d@kv24k+1p@2k** *(split-KV decode)* | 0.69 | **0.64** | 0.71 | **1.08x** | **1.11x** |
-| **9** | **100d@kv2k+1p@kv24k,q4k** *(split-KV prefill, ratio≥2→static)* | 4.56 | 4.67 | 4.67 | 0.98x | **1.00x** |
-| 10 | 100d@kv2k+1p@kv12k,q4k *(ratio≥2→static)* | 2.14 | 2.17 | 2.17 | 0.99x | **1.00x** |
-
-(Cases 1-8: flashinfer `a74bb2d4`, `bench_mixed_attention.py`. Cases 9-10: ratio threshold auto-fallback to static.)
-
-### LPT vs BatchPrefill (DMC's kernel) — the ACTUAL comparison that matters
-(flashinfer `cfca7c6f`, `bench_mixed_attention.py`, no keepalive, 2026-04-13)
-
-The original table compared LPT vs POD vs Static (all persistent variants). But DMC uses `BatchPrefillWithPagedKVCacheWrapper` — a different kernel entirely. Here is the direct comparison:
-
-| Case | Workload | BatchPrefill (ms) | LPT (ms) | LPT speedup |
-|------|----------|-------------------|----------|-------------|
-| 1 | 100d@kv2k+1p@512 | 0.32 | 0.32 | 1.00x |
-| 2 | 100d@kv2k+1p@1536 | 0.34 | 0.36 | 0.94x |
-| 3 | 100d@kv2k+2p@2048 | 0.56 | 0.49 | **1.14x** |
-| 4 | 100d@kv2k+1p@2048 | 0.46 | 0.38 | **1.21x** |
-| 5 | 100d@kv4k+1p@4096 | 1.11 | 0.83 | **1.34x** |
-| 6 | 100d@kv8k+1p@4096 | 1.75 | 1.27 | **1.38x** |
-| 7 | 100d@kv8k+1p@6000 | 2.49 | 1.91 | **1.30x** |
-| 8 | split-KV decode | 1.42 | 0.63 | **2.25x** |
-| 9 | split-KV prefill 24k | 4.67 | 4.62 | 1.01x |
-| 10 | split-KV prefill 12k | 2.34 | 2.21 | 1.06x |
-
-**LPT is 14-38% faster on Cases 3-7 and 2.25x on split-KV decode.** (The server-level gap that motivated this table was later resolved: the plan()-synchronize stall and the win-region composition — see the sync-free plan + gate section.)
-
-Speedup = baseline_time / LPT_time (>1x = LPT faster). **LPT wins Cases 6,8 over POD.** LPT beats static by 1.03-1.22x on Cases 2-8. **Cases 9-10: ratio threshold kicks in → static, 1.00x (zero regression).** Still loses to POD on Cases 2,4 (0.89x) — cause TBD (not cooperative launch overhead; single CUDA stream means all SMs available).
-
-**POD gap on Cases 2,4 (0.89x)**: LPT kernel=362μs vs POD=340μs. NOT from cooperative launch (single stream). NCU Case 4 stall breakdown (flashinfer `d9c01c81`):
-
-| Stall reason | Cycles/instr | % of total (10.42 cyc) |
-|-------------|:---:|:---:|
-| **wait (grid.sync)** | **1.78** | **17.1%** |
-| long_scoreboard (DRAM) | 1.62 | 15.6% |
-| no_instruction | 1.28 | 12.3% |
-| short_scoreboard (smem) | 1.14 | 10.9% |
-| barrier (__syncthreads) | 0.84 | 8.1% |
-
-**grid.sync() is the #1 stall — 17% of kernel time** (under NCU instrumentation). Attempted fix: replaced grid.sync with per-output-row semaphore barriers (flashinfer `a6ae8e32`). **Result: NO improvement** — barrier kernel matches cooperative exactly on all cases. The 17% NCU stall is likely inflated by instrumentation replay, or barrier reset + acquire-release overhead equals grid.sync cost. **The POD gap is inherent to the fused two-runner architecture** (shared memory reuse, runner switching, reduction overhead), not to any sync mechanism.
-
-### LPT Load-Balance Profiling
-Script: `flashinfer/profiler/profile_lpt_balance.py`. Uses `bench_gpu_time` (warmup + L2 flush). Qwen3-8B heads (8/32/128). flashinfer `daf646c3`, H100 80GB. Verified ±1-2% match with `bench_mixed_attention.py`.
-
-| Case | Workload | Static kernel | LPT kernel | LPT speedup | Static max sync | LPT max sync |
-|------|----------|-------------|----------|---------|----------------|-------------|
-| 1 | 100d@kv2k + 1p@512 | 0.302ms | 0.310ms | 0.97x | 26μs | 30μs |
-| 2 | 100d@kv2k + 1p@1536 | 0.368ms | 0.355ms | 1.04x | 21μs | 17μs |
-| 3 | 100d@kv2k + 2p@2048 | 0.519ms | **0.478ms** | **1.09x** | 25μs | **13μs** |
-| 4 | 100d@kv2k + 1p@2048 | 0.423ms | **0.377ms** | **1.12x** | 23μs | 20μs |
-| 5 | 100d@kv4k + 1p@4096 | 0.969ms | **0.822ms** | **1.18x** | 42μs | **16μs** |
-| 6 | 100d@kv8k + 1p@4096 | 1.507ms | **1.245ms** | **1.21x** | 88μs | 112μs |
-| 7 | 100d@kv8k + 1p@6000 | 2.175ms | **1.885ms** | **1.15x** | 1,510μs | **52μs** |
-| **8** | **95d@kv2k+5d@kv24k+1p@2k** *(split-KV decode)* | 0.708ms | **0.665ms** | **1.06x** | 176μs | 150μs |
-| **9** | **100d@kv2k+1p@kv24k,q4k** *(split-KV prefill)* | 4.335ms | 4.736ms | 0.92x | 121μs | 1,933μs |
-
-(Max sync converted from clock cycles at 1.83 GHz.)
-
-**Key findings**: LPT wins Cases 3-7 (9-21% speedup). Split-KV decode (Case 8) gets 6%. Split-KV prefill (Case 9) regresses 8%.
-
-**Case 9 regression investigation**:
-- Consistent ~8% across kv12k/16k/24k (0.92x, 0.93x, 0.92x vs static)
-- FA3-style stride sweep (commit `1fe946aa`, flashinfer `persistent_overlap_`):
-
-  Auto-stride = gridDim.y/2 static initial tiles (FA3-style, `is_first_runner` from per-SM `cta_counter`, predicated `atomicAdd(counter, 0/1)`). Zero improvement — atomic contention is not the bottleneck.
-- NCU: same instructions (0.3% diff), SM Busy 51.8% vs 55.9%, Warp Cycles/Instr 6.45 vs 5.99. grid.sync() max wait 940K vs 225K cycles.
-- Perfetto traces: `profile_logs/case9_lpt.perfetto-trace`, `case9_static.perfetto-trace`
-- Realistic split-KV prefill sweep (single + multi-request, commits `1fe946aa`..`e1d28595b`):
-
-| Config | Static (ms) | LPT (ms) | LPT speedup |
-|--------|------------|----------|-------------|
-| 100d@kv2k+1p@kv8k,q4k | 1.415 | 1.471 | 0.96x |
-| 100d@kv2k+1p@kv12k,q4k | 2.083 | 2.252 | 0.92x |
-| 100d@kv2k+1p@kv12k,q8k | 3.223 | 3.331 | 0.97x |
-| 100d@kv2k+1p@kv16k,q8k | 4.813 | 5.017 | 0.96x |
-| 100d@kv2k+4p@q2k,kv{2k,4k,8k,12k} | 2.320 | 2.488 | 0.93x |
-| 100d@kv2k+2p@q4k,kv{4k,12k} | 2.474 | 2.657 | 0.93x |
-| 100d@kv2k+8p@q1k,kv{1k..8k} | 1.787 | 1.937 | 0.92x |
-| 100d@kv4k+4p@q2k,kv{2k,4k,8k,12k} | 2.575 | 2.662 | 0.97x |
-| 100d@kv4k+2p@q4k,kv{4k,12k} | 2.729 | 2.806 | 0.97x |
-
-- **Root cause & fix**: Compute-bound prefill makes dynamic scheduling overhead pure loss. When prefill compute dominates, LPT's atomicAdd + tile mapping adds overhead with no load-balance opportunity to recoup it.
-  - **Fix** (commit `a74bb2d4`): When `prefill_kv_compute / decode_kv_compute >= 2.0`, set `flipped_schedule=false` (static for both tasks). Threshold found empirically:
-    - ratio ≤ 0.92 → LPT wins (1.03-1.22x)
-    - ratio ~2.0 → neutral (0.99x)
-    - ratio ≥ 3.5 → LPT loses (0.91-0.97x)
-  - **Result** (commit `a74bb2d4`, script: inline python with `bench_gpu_time`):
-
-| Config | Static (ms) | Auto (ms) | Mode | Speedup |
-|--------|------------|----------|------|---------|
-| Case1: 100d@kv2k+1p@512 | 0.303 | 0.310 | LPT | 0.98x |
-| Case2: 100d@kv2k+1p@1536 | 0.368 | 0.356 | LPT | 1.03x |
-| Case3: 100d@kv2k+2p@2048 | 0.518 | 0.477 | LPT | **1.09x** |
-| Case4: 100d@kv2k+1p@2048 | 0.423 | 0.379 | LPT | **1.12x** |
-| Case5: 100d@kv4k+1p@4096 | 0.968 | 0.822 | LPT | **1.18x** |
-| Case6: 100d@kv8k+1p@4096 | 1.506 | 1.239 | LPT | **1.22x** |
-| Case7: 100d@kv8k+1p@6000 | 2.174 | 1.876 | LPT | **1.16x** |
-| Case8: 95d@kv2k+5d@kv24k+1p@2k | 0.707 | 0.694 | LPT | 1.02x |
-| Case9: 100d@kv2k+1p@kv24k,q4k | 4.663 | 4.666 | static | **1.00x** |
-| 100d@kv2k+1p@kv8k,q4k | 1.446 | 1.440 | static | 1.00x |
-| 100d@kv2k+1p@kv12k,q4k | 2.171 | 2.171 | static | 1.00x |
-| 100d@kv2k+1p@kv12k,q8k | 3.400 | 3.411 | static | 1.00x |
-| 100d@kv2k+1p@kv16k,q8k | 5.151 | 5.163 | static | 1.00x |
-| 100d@kv2k+4p@q2k,kv{2k,4k,8k,12k} | 2.484 | 2.487 | static | 1.00x |
-| 100d@kv2k+8p@q1k,kv{1k..8k} | 1.909 | 1.911 | static | 1.00x |
-| 100d@kv4k+4p@q2k,kv{2k,4k,8k,12k} | 2.671 | 2.683 | static | 1.00x |
-
-**Prefill-heavy sync regression (39μs→80μs)**: With 1 prefill@16k, LPT assigns largest causal tiles first → early CTAs get top q_tiles (16K KV each), late CTAs get bottom q_tiles (~32 tokens). Kernel time tied (13.95 vs 14.0ms) — compute dominates.
-
-### Split-KV A/B Comparison
-Split enabled vs disabled within LPT, 2x kv_limit. Speedup = (nosplit - split) / nosplit.
-
-| Case | Split | No-split | Split speedup |
-|------|-------|----------|---------|
-| 3d@64k+1p@2k | **0.681ms** | 1.659ms | **59%** |
-| 5d@32k+1p@4k | 1.228ms | 1.223ms | 0% |
-| 10d@16k+1p@4k | 1.298ms | 1.303ms | 0% |
-| 20d@8k+2p@2k | 0.932ms | 0.931ms | 0% |
-| 100d@2k+2p@2k | 1.036ms | 1.030ms | 0% |
-
-Split-KV with 2x kv_limit: 59% speedup on severe imbalance (3d@64k), zero regression on balanced workloads. NCU confirms zero overhead when split not triggered (INT_MAX sentinel).
-
-### Kernel CG Overhead Analysis
-Profiled persistent kernel at 1k-8k tokens (90% decode@kv512 + 10% prefill):
-
-| Tokens | Kernel | CG saves ~50μs |
-|--------|--------|----------------|
-| 1024 | 0.68ms | **7.4%** |
-| 2048 | 1.27ms | **3.9%** |
-| 4096 | 5.05ms | 1.0% |
-| 8192 | 10.07ms | 0.5% |
-
-CG overhead savings meaningful at ≤2048 tokens. At 4k+, kernel dominates.
-
----
-
-## Server-Level Results (H100 era)
-
-### WL1-6 Throughput (mixed rates, N=400, CG25)
-LPT+CG = persistent LPT kernel + mixed CG25 (25 sizes, max 4096, ~1.79GB). All runs same session, `--mem-fraction-static 0.85`.
-
-| WL | Input | Output | Rate | LPT+CG total | LPT noCG total | trueDMC total | CG benefit | LPT+CG vs DMC |
-|----|------:|-------:|-----:|-------------:|---------------:|--------------:|-----------:|---------------:|
-| 1 | 4096 | 1024 | 8 | **15,439** | 13,459 | 12,974 | **+14.7%** | **+19.0%** |
-| 2 | 8192 | 2048 | 4 | **10,610** | 10,584 | 10,304 | +0.2% | **+3.0%** |
-| 3 | 12000 | 1024 | 4 | **15,425** | 15,354 | 14,705 | +0.5% | **+4.9%** |
-| 4 | 16384 | 1024 | 3 | **15,121** | 15,009 | 14,171 | +0.7% | **+6.7%** |
-| 5 | 4096 | 4096 | 6 | **6,507** | 6,480 | 6,375 | +0.4% | **+2.1%** |
-| 6 | 6000 | 6000 | 3 | **4,720** | 4,714 | 4,645 | +0.1% | **+1.6%** |
-
-**Latency (CG25, mixed rates):**
-
-| WL | LPT+CG TTFT med | LPT noCG TTFT med | trueDMC TTFT med | LPT+CG Mean ITL | trueDMC Mean ITL | LPT+CG P99 ITL | LPT noCG P99 ITL | trueDMC P99 ITL |
-|----|----------------:|-----------------:|-----------------:|-----------------:|-----------------:|----------------:|-----------------:|----------------:|
-| 1 | **303ms** | 3,600ms | 6,306ms | **34ms** | 44ms | **180ms** | 485ms | 527ms |
-| 2 | **25,934ms** | 26,618ms | 28,513ms | **33ms** | 35ms | **218ms** | 202ms | 229ms |
-| 3 | **22,065ms** | 23,233ms | 25,409ms | **43ms** | 46ms | 320ms | **244ms** | 266ms |
-| 4 | **41,464ms** | 41,838ms | 48,489ms | **45ms** | 48ms | 301ms | **265ms** | 291ms |
-| 5 | 50,422ms | 50,937ms | 53,150ms | **27ms** | 28ms | 116ms | **101ms** | 116ms |
-| 6 | 105,056ms | 105,539ms | 108,174ms | **29ms** | 29ms | **113ms** | **98ms** | 119ms |
-
-**Key findings:**
-1. **LPT+CG beats true DMC on ALL workloads**: WL1 +19.0%, WL4 +6.7%, WL3 +4.9%, WL2 +3.0%, WL5 +2.1%, WL6 +1.6%.
-2. **Mixed CG is the main WL1 win**: CG benefit = +14.7% throughput. Without CG, LPT still beats DMC (+3.7%).
-3. **WL1 TTFT 21x better than DMC**: 303ms vs 6,306ms. Mixed CG eliminates Python run() overhead.
-4. **Mean ITL**: LPT+CG lower on all workloads (27-45ms vs 28-48ms).
-5. **P99 ITL**: LPT+CG wins big on WL1 (180ms vs 527ms). WL3 slightly worse (320ms vs 266ms) — CG padding: 51/200 replays pad 3073-4095 tokens to 3584/4096 (10-13% waste). Inherent CG tradeoff.
-
-**NOTE**: Previous "DMC" benchmarks were invalid — mixed CG capture always used `BatchAttention` (persistent kernel) regardless of `use_persistent` flag. Fixed by using `SGLANG_DISABLE_MIXED_CG=1` for true DMC baseline.
-
-### ShareGPT Benchmark
-(Qwen3-8B, `--reasoning-parser qwen3`, `--sharegpt-output-len 4096`, N=400, rate=4)
-
-| Config | Total tok/s | Out tok/s | TTFT med | Mean ITL | P99 ITL |
-|--------|------------|-----------|----------|----------|---------|
-| LPT+CG25 | **4,962** | **4,325** | **40,767ms** | **36ms** | **67ms** |
-| DMC | 4,794 | 4,178 | 53,298ms | 41ms | 96ms |
-
-LPT+CG vs DMC: +3.5% throughput, -23.5% TTFT, -12% mean ITL, -30% P99 ITL.
-
-### Mixed CG Size Optimization
-
-**CG19 → CG25 → CG29 progression:**
-
-CG19 (19 sizes, ~1.51GB): `[1,4,8,16,32,64,128,256,384,512,768,1024,1280,1536,1792,2048,2560,3072,4096]`
-
-Data-driven optimization: instrumented `_replay_prepare_mixed` with `SGLANG_LOG_MIXED_CG_PADDING=1`, collected 200 mixed CG replays per WL. Greedy selection by real waste reduction:
-
-| Rank | Size | Waste saved | Reason |
-|------|------|-------------|--------|
-| 1 | **3584** | 72,704 (28%) | Splits 3072→4096 gap (1024) |
-| 2 | **2816** | 18,688 (7%) | Splits 2560→3072 gap (512) |
-| 3 | **2304** | 13,056 (5%) | Splits 2048→2560 gap (512) |
-| 4 | 640 | 4,992 (2%) | Splits 512→768 gap (256) |
-| 5 | 1408 | 4,736 (2%) | Splits 1280→1536 gap (256) |
-| 6 | 1920 | 4,736 (2%) | Splits 1792→2048 gap (256) |
-
-CG25 = CG19 + {3584, 2816, 2304, 640, 1408, 1920} = 25 sizes, ~1.79GB. Padding: 11% → 6.5%.
-CG29 = CG25 + {3200, 3456, 3712, 3968} = 29 sizes, ~1.98GB. Fills 3072-4096 with 128-token granularity. Padding: 6.5% → 4.3%.
-
-**CG evolution** (all measured at rate=8 except CG19/CG25 which used mixed rates):
-- CG19 (19 sizes, ~1.51GB, padding 11%) → CG25 (+6 sizes, ~1.79GB, padding 6.5%) → **CG29** (+4 more in 3072-4096, ~1.98GB, **padding 4.3%**)
-- CG24 experiment (no 4096): hurt WL1 by -6%. 4096 needed for large mixed batches.
-
-### Server Stress Test Results: LPT+CG29 vs DMC (H100 80GB, Qwen3-8B, rate=8 all WLs)
-
-* **DMC** = default mixed chunk with batch prefill kernel (no persistent, no mixed CG).
-* **CG** = CUDA graph (CG29 = 29 sizes, max 4096, ~1.98GB, padding 4.3%).
-* Commit: sglang `090b86f5`, flashinfer `02b068f0`. Script: `run_one_config.sh` / manual `bench_serving` at rate=8, N=400.
-
-**Throughput (tok/s):**
-| WL | Input | Output | LPT+CG29 total | LPT noCG total | DMC total | CG benefit | CG29 vs DMC |
-|----|------:|-------:|----------------:|---------------:|--------------:|-----------:|------------:|
-| 1 | 4096 | 1024 | **15,507** | 13,515 | 13,022 | **+14.7%** | **+19.1%** |
-| 2 | 8192 | 2048 | **10,755** | 10,692 | 10,393 | +0.6% | **+3.5%** |
-| 3 | 12000 | 1024 | **15,629** | 15,597 | 14,912 | +0.2% | **+4.8%** |
-| 4 | 16384 | 1024 | **15,218** | 15,054 | 14,251 | +1.1% | **+6.8%** |
-| 5 | 4096 | 4096 | **6,602** | 6,531 | 6,431 | +1.1% | **+2.7%** |
-| 6 | 6000 | 6000 | **4,728** | 4,719 | 4,671 | +0.2% | **+1.2%** |
-
-**Latency:**
-| WL | CG29 TTFT med | noCG TTFT med | DMC TTFT med | CG29 Mean ITL | noCG Mean ITL | DMC Mean ITL | CG29 P99 ITL | noCG P99 ITL | DMC P99 ITL |
-|----|---------------:|--------------:|-------------:|--------------:|--------------:|-------------:|-------------:|-------------:|------------:|
-| 1 | **284ms** | 3,469ms | 5,511ms | **34ms** | 42ms | 44ms | **173ms** | 468ms | 536ms |
-| 2 | **47,196ms** | 47,382ms | 49,826ms | **34ms** | **34ms** | 35ms | 231ms | **216ms** | 235ms |
-| 3 | **43,542ms** | 43,134ms | 46,415ms | **44ms** | **44ms** | 46ms | 318ms | **244ms** | 263ms |
-| 4 | **81,765ms** | 82,433ms | 88,004ms | **45ms** | **45ms** | 48ms | 296ms | **266ms** | 292ms |
-| 5 | **57,874ms** | 58,435ms | 59,637ms | **28ms** | **28ms** | 28ms | 122ms | **103ms** | 117ms |
-| 6 | **137,571ms** | 138,779ms | 140,771ms | **29ms** | **29ms** | 29ms | 114ms | **104ms** | 119ms |
-
-**Key findings:**
-1. **LPT+CG29 beats DMC on ALL workloads**: +19.1% (WL1), +6.8% (WL4), +4.8% (WL3), +3.5% (WL2), +2.7% (WL5), +1.2% (WL6).
-2. **WL1 TTFT: CG29 284ms vs noCG 3,469ms = 12.2x improvement.** Mixed CG eliminates Python run() overhead (~2.4ms per mixed batch) for chunked prefill steps. nsys shows 3,132 plan() calls eliminated by CG replay.
-3. **Mean ITL**: CG29 lower than DMC on all WLs (27-45ms vs 28-48ms).
-4. **P99 ITL tradeoff**: CG29 wins WL1 (173ms vs noCG 468ms, DMC 536ms). noCG has lower P99 on WL2-6 (216-266ms vs CG's 231-318ms) — CG padding adds 10-13% extra compute on worst-case steps. The throughput gain outweighs this on average.
-
-**ShareGPT (thinking, rate=4, max_out=4096, N=400):**
-| Config | Total tok/s | TTFT med | Mean ITL | P99 ITL |
-|--------|------------|----------|----------|---------|
-| LPT+CG25 | **4,962** | **40,767ms** | **36ms** | **67ms** |
-| LPT+CG29 | **4,975** | **40,756ms** | **36ms** | **67ms** |
-| trueDMC | 4,794 | 53,298ms | 41ms | 96ms |
-| **Δ CG29 vs DMC** | **+3.8%** | **-23.6%** | **-12%** | **-30%** |
-
-CG25≈CG29 (identical within noise). First CG29 run was outlier from cold JIT cache.
-
-**WL1-6 rerun** (flashinfer `d9c01c81` with ratio threshold, same sglang): all within 2% of previous results. Ratio threshold has zero measurable server overhead.
-(CG25: sglang `090b86f5`, flashinfer `02b068f0`. CG29: flashinfer `d9c01c81`.)
-
-### POD+CG vs LPT+CG29 (WL1, WL3, rate=8, N=400)
-
-POD = `SGLANG_FLASHINFER_USE_POD=1` (separate prefill+decode kernels) + `--enable-piecewise-cuda-graph`.
-flashinfer `d9c01c81`.
-
-| WL | Config | Total tok/s | TTFT med | Mean ITL | P99 ITL |
-|----|--------|:-----------:|:---------:|:---------:|:---------:|
-| 1 | LPT+CG29 | **~15,400** | **291ms** | **34ms** | **174ms** |
-| 1 | POD+CG | ~13,300 | 5,390ms | 43ms | 437ms |
-| 3 | LPT+CG29 | **~15,400** | **42,236ms** | 43ms | 298ms |
-| 3 | POD+CG | ~14,500 | 46,394ms | 45ms | **284ms** |
-
-**LPT+CG29 dominates WL1**: 18x better TTFT (mixed CG eliminates per-batch Python plan() overhead for chunked prefill), 2.5x better P99. **WL3**: LPT has better throughput (+6%), POD has slightly better P99 (284 vs 298ms). POD's main overhead: double plan() calls + GPU-CPU sync for index splitting in pod_forward per layer.
-
-**nsys overhead analysis** (WL1, 50 prompts, `pod_server.nsys-rep` vs `lpt_cg29_wl1.nsys-rep`):
-
-| Metric | LPT+CG29 | POD+PCG | Note |
-|--------|-----------|---------|------|
-| Attention GPU time | 694ms (618 persistent + 76 paged) | 427ms (237 prefill + 113 POD-decode + 77 paged) | POD 38% less |
-| cudaDeviceSynchronize | **2,812ms** (1,869 calls) | 1,162ms (2,448 calls) | plan() GPU→CPU sync |
-| cudaStreamSynchronize | 0ms | **2,360ms** (3,334 calls) | **POD plan() GPU-CPU sync per layer** |
-| cudaMemcpyAsync | 2,650ms | 3,312ms (+25%) | POD double plan indexing |
-| Total sync overhead | 2,812ms | 3,522ms | POD 25% more total |
-
-**POD's cudaStreamSynchronize (2,360ms) = 553% of its attention GPU time.** This is the dominant bottleneck — POD splits `qo_indptr_buf` into separate prefill/decode index arrays (cumsum, slice, `.to(device)`) per layer, requiring GPU-CPU sync each time. LPT reads the same `qo_indptr_buf` but passes it directly to the fused kernel without splitting — no per-layer sync needed.
-
-### Nebius-SWE-like workload (random in=9053, out=3726, N=200)
-
-flashinfer `d9c01c81`. Nebius-SWE median: 9K input, 3.7K output (2.4:1 prefill-heavy).
-
-| Config | Rate | Throughput | TTFT med | Mean ITL | P99 ITL |
-|--------|-----:|:---------:|:---------:|:---------:|:---------:|
-| LPT+CG29 | 2 | 0.99 req/s | 340ms | 27.40ms | 155ms |
-| DMC | 2 | 0.99 req/s | 340ms | 27.37ms | 155ms |
-| PP+PCG | 2 | 0.98 req/s | 330ms | 27.58ms | 153ms |
-| LPT+CG29 | 4 | 1.02 req/s | 11,014ms | 28.67ms | 164ms |
-| DMC | 4 | 1.02 req/s | 11,046ms | 28.68ms | 164ms |
-| PP+PCG | 4 | 1.02 req/s | 11,310ms | 28.81ms | 169ms |
-| LPT+CG29 | 8 | 1.03 req/s | 18,575ms | 28.95ms | 184ms |
-
-**All configs identical** — Nebius-SWE (9K+3.7K) is compute-bound at ~1 req/s. Scheduling strategy has no effect when prefill dominates and the system is fully saturated. Differences emerge only with shorter prefills (WL1-6) where decode overlapping matters.
-
-### P99 ITL Lifecycle Analysis (WL1, 200 prompts, rate=8)
-
-Per-request decode step tracking via `SGLANG_LOG_REQUEST_LIFECYCLE=1`. Compares batch conditions during P99-hitting steps vs normal steps.
-
-| | LPT+CG29 P99 steps | LPT normal | PP+PCG P99 steps | PP normal |
-|--|:---:|:---:|:---:|:---:|
-| P99 ITL threshold | 133ms | — | 191ms | — |
-| decode_bs | **91** | 55 | 88 | 87 |
-| prefill_tokens | **5,153** | 3,476 | 2,893 | 2,896 |
-| new_token_ratio | 0.160 | 0.240 | 0.143 | 0.144 |
-| is_mixed (%) | **37%** | 1% | 0% | 0% |
-
-**LPT P99 is driven by mixed batches with high decode_bs + high prefill_tokens** — 37% of P99 steps are mixed (vs 1% normal). High prefill admission (low ntr 0.16 vs 0.24) causes decode pressure. **Confirms CG over-admission hypothesis.**
-
-**PP P99 steps have identical batch conditions to normal steps** — decode_bs, prefill_tokens, and ntr are the same. PP's higher P99 (191ms) is NOT from scheduling but from chunked prefill blocking decode within each step (no mixed-chunk overlap).
-
-### PP WL3 P99 Regression Root Cause (lifecycle tracking)
-
-| | LPT+CG29 WL3 | PP+PCG WL3 |
-|--|:---:|:---:|
-| P99 ITL | 306ms | **720ms** |
-| Max ITL | 473ms | **21,644ms** |
-| P99 decode_bs | 59 | 59 |
-| P99 prefill_tokens | 4,420 | 4,185 |
-| Worst spike cause | decode_bs=66, prefill=7677 | **decode_bs=64, prefill=259, ntr=0.632** |
-
-**PP's worst spikes (21.6s!) happen early** (ntr=0.632) from decode starvation: after a request gets TTFT, the scheduler goes back to prefilling a backlog of newly-arrived requests (rate=8 × 12K input = continuous prefill work). Decode only runs when no prefills are pending, so already-prefilled requests starve for 21.6s while the scheduler drains the prefill queue. LPT's mixed chunk interleaves decode tokens within each prefill step, keeping max ITL at 473ms.
-
-**Why PP works on WL5-6 but not WL3-4**: WL5-6 have 4K-6K input (≤1 chunk per request). The prefill backlog clears quickly, so decode starvation is brief. WL3-4 have 12K-16K input (2-3 chunks per request) — at rate=8, new prefill work arrives faster than the scheduler can clear it, causing prolonged decode starvation.
-
----
-
-### Closed investigations (H100 era)
-
-- [x] **Mixed CG padding threshold [INFEASIBLE]**: Swept `SGLANG_MIXED_CG_PADDING_PCT`=5/8/10% (clean rerun, no keepalive, rate=8).
-
-  | WL | CG29 total | noCG P99 | pct=10% total | pct=10% TTFT | pct=10% P99 | pct=8% total | pct=8% P99 | pct=5% total | pct=5% P99 |
-  |----|-----------|---------|--------------|-------------|------------|-------------|-----------|-------------|-----------|
-  | 1 | **15,507** | 468ms | 14,380 (-7%) | 5,306ms (19x↑) | **215ms** ✓ | 14,021 (-10%) | **236ms** ✓ | 13,651 (-12%) | 499ms ✗ |
-  | 2 | **10,755** | 216ms | 10,704 | 48,210ms | 223ms ✗ | 10,789 | 221ms ✗ | 10,780 | **216ms** ✓ |
-  | 3 | **15,629** | 244ms | 15,890 | 42,357ms | 299ms ✗ | 15,916 | 294ms ✗ | 15,724 | 290ms ✗ |
-  | 4 | **15,218** | 266ms | 15,181 | 81,509ms | 296ms ✗ | 15,131 | 299ms ✗ | 15,099 | 296ms ✗ |
-  | 5 | **6,602** | 103ms | 6,559 | 58,713ms | 123ms ✗ | 6,540 | 123ms ✗ | 6,534 | 124ms ✗ |
-  | 6 | **4,728** | 104ms | 4,710 | 138,526ms | 113ms ✗ | 4,718 | 112ms ✗ | 4,721 | 115ms ✗ |
-
-  **All thresholds fail both constraints.** WL1 TTFT regresses 18-19x (CG skipped for prefill-heavy batches). WL2-6 P99 still exceeds noCG at every threshold — the padding is only 6% (CG29) but mixed-chunk scheduling inherently delays decode steps within padded batches. **Fundamental conflict**: TTFT needs CG for the same batches that cause P99 spikes.
-
-  **Scheduler analysis** (`--plot-chunk-size`, WL1 only, rate=8 N=400): CG29 completes in ~76s vs noCG ~91s (17% faster). Prefill chunks: CG29 mean 2,781 vs noCG 3,200 tokens. `new_token_ratio` decays faster with CG29 in both wallclock and step-count space — CG processes more decode steps per second, each applying one decay. noCG shows a plateau at ratio ~0.4 (steps 75-120) where fewer decode steps occurred. CG29 reaches `min_new_token_ratio` (0.098) sooner → scheduler admits more prefill earlier → possible over-admission causing decode pressure. **TODO**: track P99-hitting requests to confirm over-admission is the mechanism (see task below).
-
-  ![CG29 vs noCG scheduler WL1](./debug_kernel_server_perf/profile_logs/cg_vs_nocg_scheduler_wl1.png)
-
-- [x] **Unify LPT profile workloads**: Done — Cases 1-9 (100 decode), split-KV decode/prefill.
-- [x] **nsys profile LPT+CG29 vs trueDMC** (WL1, 50 prompts, rate=8):
-  Files: `profile_logs/lpt_cg29_wl1.nsys-rep` (40MB), `profile_logs/trueDMC_wl1.nsys-rep` (35MB).
-
-  | CUDA API | LPT+CG29 | trueDMC | Note |
-  |----------|----------|---------|------|
-  | cudaDeviceSynchronize | **2,812ms** (1,869 calls) | 1,181ms (2,176 calls) | plan() GPU→CPU sync (more calls in LPT due to mixed batches) |
-  | cudaMemcpyAsync | 2,650ms (4,538 calls) | 2,639ms (5,036 calls) | ~same |
-  | cudaLaunchKernel | 663ms (70,286 calls) | 670ms (56,213 calls) | LPT more launches, same total |
-  | cudaGraphInstantiate | 997ms (1,624 calls) | 752ms (1,997 calls) | LPT has more CG instantiations (29 mixed + decode) |
-
-  | Kernel | LPT+CG29 | trueDMC |
-  |--------|----------|---------|
-  | PersistentKernelTemplate | 618ms (2,088 calls, avg 296μs) | — |
-  | BatchPrefillWithPagedKVCache | 76ms (2,592 calls, avg 29μs) | (included in nvjet totals) |
-  | nvjet GEMM total | ~2.8s | ~1.6s |
-
-  **Key finding**: LPT's `cudaDeviceSynchronize` (2.4x more than DMC) is from `plan()` GPU→CPU sync (`torch.cuda.synchronize()` in `attention.py:200` to copy qo_indptr/kv_indptr/kv_len_arr to CPU). NOT from cooperative launch (single CUDA stream → all SMs available). Mixed CG helps by skipping `plan()` entirely for cached batch sizes.
-- [ ] **Investigate CG P99 ITL over-admission hypothesis**: CG's faster decode steps cause `new_token_ratio` to decay faster (more decay events per second) → scheduler admits more prefill sooner → decode pressure. Track requests that hit P99 ITL in CG29 vs noCG: log per-request lifecycle (admit time, each ITL, batch size at each step, prefill chunk size at each step). Determine if P99-hitting requests correlate with periods of high prefill admission (low `new_token_ratio` + large decode BS).
-
-- [x] **Barrier-reverted HEAD runs 35% faster on TTFT than pure `d9c01c81` — ROOT CAUSE DIAGNOSED**
-
-  **Three flashinfer commits involved:**
-  1. **A = `d9c01c81`** — pre-barrier; kernel uses `grid.sync()` + `cudaLaunchCooperativeKernel`. Reference for the WL1-6 table above.
-  2. **B = `a6ae8e32`** — "integrate barrier-based persistent kernel"; kernel uses per-output-row GmemBarrier semaphores; `Params` struct +32 bytes (4 extra pointer fields); host-side adds 15 MB `cudaMemcpyAsync` barrier reset per kernel launch. **Hangs on variable-length sharegpt/code-feedback workloads** due to a CG-invariance bug in the `barrier_vec` allocation.
-  3. **C = `cfca7c6f`** on top of B — reverts `persistent.cuh` + `persistent_template.cuh` to `d9c01c81`, keeps the host-side barrier scaffolding (Params struct, memcpy reset, extra int allocations), and bumps `int_workspace_buffer` 8→32 MB.
-
-  **Kernel-level (standalone, fixed input: 4 prefill@4096 + 16 decode@2048, 100 iters, torch.cuda.Event):**
-
-  | Build | kernel GPU median |
-  |---|---|
-  | A `d9c01c81` grid.sync | **1785 μs** |
-  | B `a6ae8e32` barriers | **1773 μs** |
-  | C `cfca7c6f` dead scaffolding | **1792 μs** |
-
-  All three within 1% noise. **The kernel itself runs at the same speed across all three builds** — confirming the `a6ae8e32` commit message that said the barrier approach gave "NO improvement over cooperative version".
-
-  **plan() wall-clock (standalone, 200 iters, two modes):**
-
-  | Build | plan() no-CG | plan() `enable_cuda_graph=True` |
-  |---|---|---|
-  | A `d9c01c81` | 1299 μs | **188 μs** |
-  | C `cfca7c6f` | 5862 μs (+4.5×) | **4623 μs (+24×)** |
-
-  C's plan() is **24× slower** in CG mode (which is what sglang uses at runtime). Cause: my `merged_barrier_idx.resize(barrier_max, 0)` and `barrier_vec.resize(barrier_max, 0)` in scheduler.cuh each pad to ~608K uint32_t (~2.4 MB), followed by two `CopyToPageLockedBuffer` calls into the pinned buffer. Plus the 32 MB `int_workspace_buffer` and the expanded `HolisticPlanInfo` serialization (5 extra fields) add CPU overhead.
-
-  **Server-level sglang bench (WL1 4096/1024 rate=8 N=400, SGLANG_FLASHINFER_USE_PERSISTENT=1, 3 runs each, warm GPU):**
-
-  | Build | Median TTFT (3 runs) | Mean ITL | P99 ITL | Throughput |
-  |---|---|---|---|---|
-  | A `d9c01c81` pure | 275, 290, 289 → **289 ms** | 32.9 ms | 187 ms | 6.02 req/s |
-  | C `cfca7c6f` scaffolded | 171, 195, 197 → **195 ms** | 30.6 ms | 164 ms | 6.20 req/s |
-
-  C is 32% faster on TTFT, 7% lower mean ITL, 12% lower P99 ITL, 3% higher throughput. Reproducible across runs.
-
-  **Re-verification (5 runs each with 3-run warmup, tight variance):**
-
-  | Build | Throughput | Median TTFT (5 runs) | Mean ITL (5 runs) | P99 ITL (5 runs) |
-  |---|---|---|---|---|
-  | A `d9c01c81` pure | 6.01 req/s | 249,281,286,301,302 → **286** | 31.5,32.9,32.9,33.0,33.0 → **32.93** | 168,168,181,186,199 → **181** |
-  | V1 = A + int_workspace 8→32 MB only | 5.99 req/s | 255,295,297,327,334 → **297** | 31.8,33.1,33.2,33.2,33.2 → **33.17** | 188,190,190,200,190 → **190** |
-  | C `cfca7c6f` scaffolded | 6.23 req/s (**+3.7%**) | 154,175,177,179,181 → **177** (**-38%**) | 29.2,30.4,30.4,30.4,30.4 → **30.40** (**-7.7%**) | 142,153,154,154,165 → **154** (**-15%**) |
-
-  **V1 (d9c + workspace bump alone) is essentially = A** → the speedup at C is NOT from the `int_workspace_buffer` bump. It comes from the scheduler.cuh / batch_attention.cu / jinja changes (barrier infrastructure in host code).
-
-  **Backpressure hypothesis DEBUNKED**: checked decode_bs distributions in the actual scheduler logs:
-
-  | Build | Decode batches | Mean decode_bs | Max decode_bs |
-  |---|---|---|---|
-  | A | 417 | 58.77 | 154 |
-  | C | 428 | 56.62 | 153 |
-
-  C's batches are slightly SMALLER, not larger. Throughput is 3.7% HIGHER. Backpressure from slow plan() would reduce throughput — but it's higher. Original hypothesis is invalid.
-
-  **ROOT CAUSE DIAGNOSED** (2026-04-12, sglang `081970b20`, flashinfer A=`d9c01c81` vs C=`cfca7c6f`):
-
-  The speedup comes from **C's host-side barrier scaffolding in scheduler.cuh and batch_attention.cu**, NOT from the Params struct layout alone. Diagnosed via sync/CPU split timing AND a padding-only ablation.
-
-  **Split timing** (inserting `torch.cuda.synchronize()` before plan() to separate GPU-drain wait from CPU plan work):
-
-  | Build | sync median | cpu median | sync mean | cpu mean | bench throughput |
-  |---|---|---|---|---|---|
-  | A3 `d9c01c81` run2 (warm JIT) | ~8000 μs | 476 μs | 16750 μs | 508 μs | 5.99 req/s |
-  | C4 `cfca7c6f` | 6051 μs | 2808 μs | 10805 μs | 5070 μs | 6.25 req/s |
-
-  **Padding-only ablation** (flashinfer `padding_only` branch: A + 4 void* padding fields in PersistentParams + 32 MB workspace, NO scheduler.cuh or batch_attention.cu changes):
-
-  | Build | Throughput | Median TTFT | Mean ITL | P99 ITL |
-  |---|---|---|---|---|
-  | A `d9c01c81` | 5.99 req/s | 286 ms | 32.9 ms | 181 ms |
-  | Padding-only (A + struct pads + 32MB) | 6.01 req/s | 280 ms | 33.3 ms | 180 ms |
-  | C `cfca7c6f` full scaffolding | 6.22 req/s | 175 ms | 30.8 ms | 165 ms |
-
-  **Padding alone ≈ A.** The struct layout change is NOT the cause. The speedup comes from C's host-side changes:
-  - **scheduler.cuh**: Extra barrier_vec allocations + CopyToPageLockedBuffer calls change int_workspace data patterns
-  - **batch_attention.cu**: `cudaMemcpyAsync` D2D barrier reset (~2KB) before cooperative kernel launch acts as stream warmup
-  - These changes alter the GPU execution pipeline timing for CG-replayed forward passes, reducing per-step latency by ~6ms
-
-  The mechanism is likely: the D2D memcpy before `cudaLaunchCooperativeKernel` primes the DMA engine and ensures any residual stream state is flushed, reducing cooperative launch latency. The extra plan work (barrier_vec allocation) also changes the pinned-memory copy pattern, reducing DMA contention on subsequent H2D transfers.
-
-  **Additional finding: `fast_decode_plan` is broken.** sglang assigns `decode_wrappers[i].plan = partial(fast_decode_plan, wrapper)` (line 712), but `call_begin_forward` calls `wrapper.begin_forward()` which resolves to the CLASS method (not the instance partial) because `begin_forward = plan` is a class-level alias. Fix: change line 712 to `decode_wrappers[i].begin_forward = partial(...)`.
-
-  **Verification at C (2026-04-12, flashinfer `cfca7c6f`, sglang `364241dc6`):**
-
-  **WL1-6 (LPT+CG, rate=8, N=400, `run_one_config.sh`):**
-  | WL | In | Out | A req/s | C req/s | A TTFT med | C TTFT med | A P99 ITL | C P99 ITL |
-  |----|---:|----:|--------:|--------:|-----------:|-----------:|----------:|----------:|
-  | 1 | 4096 | 1024 | 5.99 | **6.24** | 284ms | **167ms** | 174ms | **169ms** |
-  | 2 | 8192 | 2048 | 2.09 | 2.10 | 47196ms | 47128ms | 231ms | 232ms |
-  | 3 | 12000 | 1024 | 2.39 | **2.48** | 43542ms | **41839ms** | 298ms | 286ms |
-  | 4 | 16384 | 1024 | 1.75 | 1.75 | 81765ms | 81416ms | 296ms | 295ms |
-  | 5 | 4096 | 4096 | 1.62 | 1.62 | 57874ms | **55125ms** | 122ms | 102ms |
-  | 6 | 6000 | 6000 | 0.79 | 0.79 | 137571ms | 136761ms | 114ms | 101ms |
-
-  C wins WL1 (+4.2% tput, -41% TTFT) and WL3 (+3.8% tput). WL2/4/5/6 compute-bound — no meaningful difference.
-
-  **Kernel microbench** (`bench_mixed_attention.py`, 10 cases, no keepalive): all within 1-2% noise of A reference. C's kernel binary is identical in performance — the server-level speedup is purely from host-side scaffolding.
-
-  **Action**: Use C (`cfca7c6f`) as the optimal kernel version for Pareto sweeps. The barrier scaffolding is dead code that happens to improve performance; stripping it to just padding does NOT preserve the speedup.
-
-- [x] **LPT_CG vs DMC SLO attainment investigation** (2026-04-13)
-
-  LPT_CG appears to lag DMC on SLO% at some operating points (e.g. SWE rate=12: DMC 100% vs LPT 69%). Full analysis:
-
-  **Aggregate**: LPT wins 4 rates, DMC wins 4 rates, TIE on 13 across all 21 rate points (3 datasets × 7 rates). **They are essentially equal on aggregate.**
-
-  **Root cause of specific losses**: Both methods produce exactly the same number of spiky decode steps (e.g. SWE rate=12: both have 31 steps >130ms). DMC's spikes peak at 149.9ms (0.1ms below 150ms SLO), LPT's at 157.1ms (7ms above). The 7ms gap = persistent kernel host-side overhead (plan CPU + cooperative launch + D2D memcpy).
-
-  **Latency models**: LPT and DMC models predict within 0.1ms of each other — NOT the cause.
-
-  **Chunk control can't fix this**: The overhead is per-step (constant ~7ms regardless of chunk size). Reducing chunk sizes just creates MORE steps, each with the same overhead. Tested PLAN_OVERHEAD_MS=7: made SLO WORSE (60% vs 69%) because more aggressive chunking increased step count without reducing per-step overhead.
-
-  **Conclusion**: The ~7ms per-step overhead from barrier scaffolding is the inherent cost of the CG-replay speedup (which gives +4% throughput, -41% TTFT). At operating points where DMC is at 149ms (1ms below SLO), any per-step overhead pushes LPT over. At other operating points, LPT's throughput/TTFT advantage compensates (e.g. sharegpt rate=24: LPT 100% vs DMC 69%). No fix needed — the methods are competitive on aggregate.
-
-
-## Implementation Details
-
-### Design: FA3-style Runtime Dynamic Scheduler (v3)
-
-1. `atomicAdd(tile_counter, 1)` → get global `tile_idx`
-2. `tile_idx_to_work_tile(tile_idx)`: batch lookup via warp_prefix_sum → L2-aware LPT head/block mapping
-3. Queue switching via FlippedSchedule: even CTAs start prefill, odd start decode
-4. Split-KV: `(seq, head, chunk)` layout with per-q_tile chunk counts. INT_MAX sentinel for zero overhead when no split needed.
-
-**Key files:**
-- `flashinfer/include/flashinfer/attention/persistent.cuh` — `tile_idx_to_work_tile()`, split-KV code paths
-- `flashinfer/include/flashinfer/attention/scheduler.cuh` — `TwoStageHolisticPlan`, kv_limit, split-KV planner
-- `flashinfer/csrc/batch_attention.cu` — C++ run() path
-- `sglang/python/sglang/srt/model_executor/cuda_graph_runner.py` — mixed CG capture/replay
-
-### LPT Scheduler Fixes
-1. Removed `|| enable_cuda_graph` — dynamic scheduler only with `flipped_schedule`
-2. Merged two for-task loops into single loop with if/else
-3. Fixed causal kv_end clamping
-4. CG forces `flipped_schedule=true` in C++ plan
-5. Zero work_indptr for dynamic tasks prevents CG deadlock
-6. Added `enable_cuda_graph` + `cuda_graph_max_bs` to `plan()`
-
-### Split-KV Implementation
-- **Tile layout**: `(seq, head, chunk)` with per-q_tile chunk counts
-- **Key bugs fixed**: unsigned wrap in num_kv_chunks, kv_end not clamped to causal effective KV, num_m_blocks from wrong source, partial_o_offset per-sequence vs per-q_tile, stale JIT cache
-- All 6 test cases pass
-
-### Decode Overhead Fix
-nsys profiling found `BatchAttention.plan()` running on every decode step when `use_persistent=True`, plus no `fast_decode_plan` optimization. Fix: decode steps use regular `BatchDecodeWithPagedKVCacheWrapper`.
-
-### Mixed CG Bugs Fixed (6 total)
-1. Missing kv_indices copy in CG plan()
-2. plan_info[-1] wrong field after adding dyn_scalars_offset
-3. Module auto-switch breaks CG replay
-4. Padding overflow in `_replay_prepare_mixed`
-5. Shared indptr too small for large mixed CG
-6. LPT CG pointer initialization
-
-### How CG works with BatchAttention
-- **Frozen at capture**: Pointers to workspace buffers, kv_indices, q, out, lse, tile_counter, dyn_scalars
-- **Updated at replay**: Data at fixed addresses updated by `plan()` before `graph.replay()`
-- **Workspace layout invariant**: `max_total_num_works = 65536` (constant)
-- **LPT at runtime**: Kernel reads `dyn_scalars[0]` (num_seqs) — mixed batch → LPT, pure decode → static
-
----
-
-## Historical Debugging Notes
-
-### Early Findings (pre-LPT)
-1. **Decode path using persistent kernel unnecessarily** (commit 637d3889): Fixed — only use persistent for mixed batches. +7.2% throughput.
-2. **torch.arange allocation** (commit 34d5c728): Cached buffer.
-3. **POD attention launch overhead** (commit 6244007a): Cached kv_indices, reused extend_lens. +3.3% throughput, -31% TTFT.
-4. **POD vs DMC server throughput**: POD ~0.4% slower despite faster kernel — double plan(), GPU-CPU sync per layer, extra index computation, cudaMemsetAsync per layer.
-5. **Why prefill-prio has lowest P99 ITL**: Separation of concerns — pure decode steps are fast and consistent. Mixed-chunk makes every step slow.
-
-### GPU Launch Gap Analysis
-| Config | Gap % |
-|--------|-------|
-| Default | 65.7% |
-| Persistent (fixed) | 62.6% |
-| POD (fixed) | 85.4% |
-
-### v1/v2 Progress
-- v1 (static LPT atomic): Cases 6-7 improved ~10%
-- v2 (LPT sorting + relaxed FlippedSchedule): +4-27% over baseline, still 2x slower than POD → led to v3
-
-### Issues
-1. v2 static LPT + FlippedSchedule hurts small workloads
-2. Tile counter needs cudaMemsetAsync before each run()
-3. Non-contiguous sequences need separate dyn_qo_len array
-4. GPU preempted during B200 development
-
-### Questions & Answers
-1. KV splitting: pre-compute partial output slots per (seq, head, chunk) triple
-2. atomicAdd stride: sequential `atomicAdd(counter, 1)` optimal (tested FA3 pattern, worse)
-3. FlippedSchedule + dynamic: FlippedSchedule controls queue start order, dynamic fetches via atomicAdd
-4. L2 budget: query `cudaDevAttrL2CacheSize` at runtime
-5. L2-aware grouping: essential (user confirmed)
-6. 2 CTAs/SM: shared memory constraint
+## Historical results (H100 era) — archived
+
+Moved to [`archive_h100_era.md`](archive_h100_era.md) on 2026-09-30:
+H100/Qwen3-8B kernel and server results, the closed investigations, and the
+v3 scheduler / split-KV / mixed-CG implementation notes. They predate the
+gate stack and the H800 phase.
 
 ## GPU Keepalive
 ```bash

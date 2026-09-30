@@ -34,6 +34,17 @@
 - Boundary fitted on 50 cells, **50/50** correctly classified; within 5% of the
   per-batch oracle on 26/28 held-out batches.
 
+### Doc hygiene
+- `tasks/archive_h100_era.md` (new): 581 lines of H100/Qwen3-8B results, closed
+  investigations and v3-scheduler notes moved out of `debug_kernel_server_perf.md`,
+  which is reorganised into four story parts (gate -> workload -> kernels ->
+  dispatch) and shrinks 2,184 -> ~1,540 lines. The superseded 4-mode *estimate*
+  section collapses from 125 to 27 lines.
+- Corrected the FA2/FA3/persistent planner table: it had given FA3
+  `cta_tile_q = 64` and a `total_kv_lens/num_clusters` KV split, citing lines that
+  are actually inside `TwoStageHolisticPlan` (our planner). FA3 is
+  `PrefillSM90Plan`: `cta_tile_q = 128`, **no KV split**, no group-head fusion.
+
 ### Fixes
 - Routing tested KV length alone and sent 58 spec-verify rows to FA3, **14x slower**:
   FA3 does not fuse group heads, so the test must be on `qo_len`, not `packed_qo_len`.

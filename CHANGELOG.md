@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.7.1 — Split-KV and GQA Packing for FA3; Gate on Tile-Grid Quantities (2026-09-30)
+
+### Measured
+- **FA3 split-KV: 1.75x over FA3 as-is and 1.38x over the persistent kernel**
+  (507 -> 290 us, S=2, one 1024x32768 row at 8 q heads). Width, not KV traffic,
+  was FA3's problem, and it is a property of flashinfer's sm90 planner having no
+  KV split rather than of wgmma. Emulated via batch expansion + `merge_states`.
+- **GQA packing: 5.0x on the verify class** (2541 -> 511 us, 58 rows @ kv 11000),
+  moving it from 0.23x to 1.13x against the persistent kernel at packed_qo 56;
+  still 0.78x at packed_qo 32. Nothing on large prefill (509.8 vs 507.2 us).
+- **CUDA graphs: the fused path is strictly better.** At fixed tokens and batch
+  size, one captured fused graph replays correctly across p/d ratios 1/32 -> 8/25,
+  while FA3's `batch_size`/`qo_indptr` length change with the ratio and are baked
+  into the captured launch. Sequential needs a capture per (n_prefill, n_decode)
+  pair. This reverses the earlier parity claim.
+
+### Rewritten: mixed_dispatch gate
+- Routes on the two tile-grid quantities the measurements identify:
+  `packed_qo_len` vs `MIN_PACKED_QO = 48` (tile occupancy) and `kv_tiles` vs
+  `MIN_KV_TILES = 32`. Work is counted in (q tile x kv tile) pairs.
+- The two kernels get **disjoint SM sets** at the makespan balance point; FA3's
+  KV-split S is the smallest that covers the SMs it was given (returns S=2 for
+  the (8,1,128) chunk, the measured optimum).
+- A class folds into the persistent kernel unless one SM's worth of it is at
+  least half the makespan the rest of the device needs anyway -- no separate SM
+  set that cannot be kept busy.
+- Latency 2.15 us on decode-only batches (short-circuits on `max(qo)`) and
+  13.8-14.7 us when an FA3 row is present, once per forward.
+
+### Corrections
+- The gqa-7 verify figure was first reported as 2.72x; it packed one GQA group
+  while the persistent kernel processed all 4, so FA3 did a quarter of the work.
+  Matched-work value is 1.13x.
+
 ## v0.7.0 — 4-Mode Dispatch: Separate Kernels, Scheduler-Partitioned Grids (2026-09-30)
 
 ### New: per-tile-class kernel dispatch with a grid-partitioning scheduler

@@ -1377,61 +1377,31 @@ long-prefix set. Within 5% of the per-batch oracle on 26/28 batches.
    `ours` and `fused` totals in the table above (1.015 / 0.733). The fused kernel
    alone is 0.69x of sequential on long-prefix batches, which is what sent this
    work back to separate kernels in the first place.
-4. **Graph compatibility — no advantage, and this is the weakest point.** Over
-   all 2,148 captured batches there are 41 distinct (token, bs) buckets, but
-   only 27 (66%) resolve to a single mode; adding `n_fa3_rows` to the key gives
-   83 buckets and still only 80%, because the mode depends on `rho`, i.e. on KV
-   lengths, which no shape bucket captures. So either
-   * pin each bucket to its dominant mode: 41 graphs, parity with a
-     jointly-captured sequential pair, but the gain falls to 1.004x; or
-   * capture both variants where a bucket is mixed: 55 graphs for the full
-     1.015x, i.e. 1.34x more captures than sequential.
+4. **Graph compatibility — the fused path is strictly better, measured.**
+   Corrected: an earlier version of this section claimed parity, reasoning that a
+   sequential pair captures in one graph. It does not, and the experiment settles
+   it. At **fixed** total tokens (1,056) and batch size (33 rows), varying the
+   prefill/decode ratio 1/32 → 8/25:
 
-   The `max_prefill_bs x max_decode_bs` blow-up feared for sequential does not
-   happen either: a fixed-shape pair captures in one graph (41), and only
-   independent capture gives the product (120). Conditional graph nodes would
-   let one capture cover both modes; that is the concrete path, not a claim.
-   A zero-work FA3 launch is not a usable substitute — it costs 44us and fails
+   * **fused** — one captured graph replays correctly at every ratio (checksums
+     4.199e4 → 4.004e4, all correct). The ratio is invisible to the launch
+     config: the persistent kernel's grid is `num_clusters` regardless of
+     composition, and the whole p/d split lives in the plan buffers.
+   * **seq** — FA3's `batch_size` goes 1 → 8 and its `qo_indptr` length 2 → 9
+     with the ratio. Both are baked into the captured launch's params, so one
+     graph cannot cover several ratios: sequential needs a capture per
+     (n_prefill, n_decode) pair, which is the product blow-up predicted at the
+     outset.
+   * **conc** — capping a grid per batch makes the grid itself vary, so it needs
+     a capture per split ratio. That is the objection that ruled out green
+     contexts, in smaller form, and it is the remaining argument for folding FA3
+     into the persistent cooperative launch as a fourth task: a task-partitioned
+     launch keeps the grid fixed and moves the split into the plan buffers.
+
+   So the ranking is fused (one graph per (tokens, bs) bucket) > sequential
+   (prefill × decode buckets) > conc with per-batch grids. A zero-work FA3 launch
+   is not a way to give `seq` the fused path's property: it costs 44 µs and fails
    TMA descriptor initialisation.
-
-#### Split-KV for FA3, sharing the persistent kernel's reduction epilogue
-
-This is the open item with the largest measured headroom, and it also resolves
-where the reduction would live.
-
-Facts established by reading the code:
-
-* The sm90 prefill path does **no KV splitting at all** — grepping
-  `include/flashinfer/attention/hopper/` and `csrc/batch_prefill_sm90*.cu` for
-  merge/split/partial finds nothing. Each (qo_head, qo_tile) is computed by
-  exactly one CTA, so there are no partials and **no reduction kernel today**.
-  That is why FA3's width is capped at `h_qo * ceil(qo_len/128)`.
-* Its grid is fixed: the batch path uses the persistent tile scheduler, whose
-  `get_grid_dim` returns `{num_sm}` (`tile_scheduler.cuh:104`), with the MinHeap
-  handing different work to the same CTAs. (The other scheduler in that file
-  returns `{num_qo_tiles, num_qo_heads}` — a work-dependent grid — but the
-  batched paged path does not use it.)
-* The persistent kernel **already has the epilogue we would need**:
-  `persistent_template.cuh` does `grid.sync()` and then a merge over
-  `merge_indptr` / `gqa_group_size` / `num_kv_heads`, inside the same
-  cooperative launch.
-
-So adding split-KV to FA3 as a *separate* kernel would force a separate
-reduction launch, which is what the original FA3 does. Fusing the FA3 mainloop
-into the persistent cooperative launch instead — one kernel, grid partitioned by
-task, FA3's wgmma mainloop on the large-tile task — lets the split-KV partials
-fall straight through the existing post-`grid.sync()` merge. One launch, one
-reduction, no extra kernel.
-
-That also fixes the graph problem below: a task-partitioned cooperative launch
-has a *fixed* grid (all clusters, as today), so the split moves entirely into
-the plan buffers and stops being a launch-config change.
-
-Projected, not measured: FA3 plateaus at 64 CTAs at (8,1); filling 132 would put
-the same work near `271 * 64/132 = 131us` against the persistent kernel's 215us,
-about 1.6x. If that holds it flips the (8,1) column of the boundary from "fused
-everywhere" to "large tiles belong on the FA3 mainloop", which is the shape the
-design brief assumed from the start.
 
 #### Honest summary
 

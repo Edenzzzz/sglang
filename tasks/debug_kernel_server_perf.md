@@ -1112,8 +1112,16 @@ plan-time integer:
 * `FLASHINFER_PERSISTENT_MAX_CLUSTERS` in the holistic planner — `kv_len_limit`
   is sized to the clusters actually owned.
 
-Because only the grid shrinks, graph capture sees one shape per bucket, not one
-per split ratio — which is what ruled green contexts out.
+**Corrected:** for `seq` this is fine — both kernels keep their full, fixed
+grids (FA3 `{num_sm}`, persistent `num_clusters`), and the MinHeap merely assigns
+different work to the same CTAs, so the launch config does not depend on the
+prefill/decode ratio. For `conc` it is *not* fine: capping a grid per batch makes
+the grid itself vary, and a different grid is a different launch config, so a
+capture would be needed per split ratio — the same objection that ruled out green
+contexts, just smaller. Quantising the split to a few ratios, or moving the split
+into a task-partitioned cooperative launch with a fixed grid (see "Split-KV for
+FA3" below), are the two ways out. `conc` is chosen on 48/2,148 batches and on
+0/28 of the held-out batches, so nothing measured here depends on it.
 
 Routing is per row, not per class, and the test is on **`qo_len`, not
 `packed_qo_len`**: `PrefillSM90Plan` uses `cta_tile_q = 128`, does no KV
@@ -1140,9 +1148,25 @@ Per-CTA compute rate, fitted on compute-bound cells:
 | FA3 (wgmma, `cta_tile_q` 128) | 982 | 1.86x |
 | persistent (FA2 lineage) | 595 | 1.00 |
 
-So wgmma is worth 1.86x per CTA — the premise behind separate kernels holds. But
-FA3 pays for it twice: it **reloads KV once per q head** (no group-head fusion),
-and its work units are only (qo_head x qo_tile), so its parallel width is
+So wgmma is worth 1.86x per CTA — the premise behind separate kernels holds.
+
+**Corrected 2026-09-30: the reason FA3 loses at low `h_qo` is width alone, not
+KV traffic.** An earlier version of this section blamed per-q-head KV reload.
+That is measurably wrong. Running one `(1024, 32768)` row at matched FLOPs:
+
+| config | KV footprint | FA3 |
+|--------|-------------:|----:|
+| (8,1,128), gqa 8 — 8 qo heads share 1 kv head | 8.0 MB | 271.2 us |
+| (8,8,128), gqa 1 — every qo head its own kv head | 64.0 MB | 272.0 us |
+
+**1.00x.** An 8x change in KV footprint costs nothing, so FA3 is compute-bound
+here and the per-head reload is free (the shared KV fits L2). FA3's kernel does
+carry the group size — `cutlass::FastDivmod(num_qo_heads / num_kv_heads)` in
+`prefill_sm90.cuh` — it maps a qo head to its kv head; it just does not pack
+several q heads into one tile, which costs tile occupancy, not bandwidth.
+
+What actually hurts is that its work units are only (qo_head x qo_tile) with
+**no KV splitting anywhere in the sm90 path**, so its parallel width is
 `h_qo * ceil(qo_len/128)`. That is 224 at (28,4) heads — device-filling — but
 only **64 at (8,1)**, the realistic TP8 shard of Qwen3-235B. The model predicts
 the measured plateau exactly (FA3 flat at 273us from 64 CTAs up) and reproduces
@@ -1151,10 +1175,17 @@ its staircase: 32 and 48 CTAs both measure ~502us because both need
 scheduler simulates the planner's own MinHeap over its own
 `cost_function = 2*qo_len + kv_len`.
 
-Consequence, and it is the central finding: **at 8 q heads per rank the
-persistent kernel beats FA3 on pure prefill** — 401us vs 507us at 256 KV tiles
-with no decode rows at all. "Large tile" is not sufficient reason to leave the
-fused kernel; the question is whether FA3 can use the device for it.
+Consequence: **at 8 q heads per rank the persistent kernel beats FA3 on pure
+prefill** — 401us vs 507us at 256 KV tiles with no decode rows at all. "Large
+tile" is not sufficient reason to leave the fused kernel; the question is
+whether FA3 can use the device for it.
+
+But that is a property of **flashinfer's sm90 planner, not of wgmma**, and it is
+fixable. FA3 plateaus at 64 CTAs; if split-KV let it use all 132, the same work
+would land at roughly `271 * 64/132 = 131us` against the persistent kernel's
+215us — about **1.6x the other way**. That would move the boundary substantially
+and is the highest-value next step, not a footnote. See "Split-KV for FA3"
+below.
 
 #### The boundary
 
@@ -1195,8 +1226,14 @@ needs no permutation, and the sequential baseline pays it on every batch.
 |-----|------:|-----------------:|------------:|---------:|-------:|
 | qwen_large_h200_tp8 (8 q heads) | 1.03x | 1.00x | 1.01x | **1.054x** | 1.07x |
 | qwen_large_gb200_tp16 (4 q heads) | 1.07x | 1.00x | 1.00x | **1.147x** | 1.13x |
-| qwen_small_h800_largeprefill (28 q heads) | 0.69x | 1.00x | 1.02x | **1.000x** | 1.00x |
-| **total** | 0.76x | 1.00x | 1.01x | **1.015x** | — |
+| qwen_small_h800_largeprefill (28 q heads) | 0.693x | 1.00x | 1.017x | **1.000x** | 1.00x |
+| **total** | **0.733x** | 1.00x | 1.015x | **1.015x** | — |
+
+Every column is normalised to sequential, so read the fused column as "a fixed
+fused kernel is 0.733x of sequential overall". Ours against a fixed fused kernel
+is the reciprocal ratio of those two columns: **1.015 / 0.733 = 1.383x**. (An
+earlier draft printed 0.76x here from a stale intermediate; the totals above are
+recomputed from the saved per-batch JSON.)
 
 Modes chosen: 4/7 fused on h200, 6/7 fused on gb200, 14/14 seq on the
 long-prefix set. Within 5% of the per-batch oracle on 26/28 batches.
@@ -1211,7 +1248,8 @@ long-prefix set. Within 5% of the per-batch oracle on 26/28 batches.
    when the best one flips with `h_qo` and with the prefill/decode balance.
 2. **vs dual-stream:** 1.000x — parity overall, 1.05x and 1.15x on the
    large-model sets, 0.98x on the long-prefix set. No advantage overall.
-3. **vs a fixed fused kernel (the previous design):** 1.383x. The fused kernel
+3. **vs a fixed fused kernel (the previous design):** 1.383x — the ratio of the
+   `ours` and `fused` totals in the table above (1.015 / 0.733). The fused kernel
    alone is 0.69x of sequential on long-prefix batches, which is what sent this
    work back to separate kernels in the first place.
 4. **Graph compatibility — no advantage, and this is the weakest point.** Over
@@ -1230,6 +1268,45 @@ long-prefix set. Within 5% of the per-batch oracle on 26/28 batches.
    let one capture cover both modes; that is the concrete path, not a claim.
    A zero-work FA3 launch is not a usable substitute — it costs 44us and fails
    TMA descriptor initialisation.
+
+#### Split-KV for FA3, sharing the persistent kernel's reduction epilogue
+
+This is the open item with the largest measured headroom, and it also resolves
+where the reduction would live.
+
+Facts established by reading the code:
+
+* The sm90 prefill path does **no KV splitting at all** — grepping
+  `include/flashinfer/attention/hopper/` and `csrc/batch_prefill_sm90*.cu` for
+  merge/split/partial finds nothing. Each (qo_head, qo_tile) is computed by
+  exactly one CTA, so there are no partials and **no reduction kernel today**.
+  That is why FA3's width is capped at `h_qo * ceil(qo_len/128)`.
+* Its grid is fixed: the batch path uses the persistent tile scheduler, whose
+  `get_grid_dim` returns `{num_sm}` (`tile_scheduler.cuh:104`), with the MinHeap
+  handing different work to the same CTAs. (The other scheduler in that file
+  returns `{num_qo_tiles, num_qo_heads}` — a work-dependent grid — but the
+  batched paged path does not use it.)
+* The persistent kernel **already has the epilogue we would need**:
+  `persistent_template.cuh` does `grid.sync()` and then a merge over
+  `merge_indptr` / `gqa_group_size` / `num_kv_heads`, inside the same
+  cooperative launch.
+
+So adding split-KV to FA3 as a *separate* kernel would force a separate
+reduction launch, which is what the original FA3 does. Fusing the FA3 mainloop
+into the persistent cooperative launch instead — one kernel, grid partitioned by
+task, FA3's wgmma mainloop on the large-tile task — lets the split-KV partials
+fall straight through the existing post-`grid.sync()` merge. One launch, one
+reduction, no extra kernel.
+
+That also fixes the graph problem below: a task-partitioned cooperative launch
+has a *fixed* grid (all clusters, as today), so the split moves entirely into
+the plan buffers and stops being a launch-config change.
+
+Projected, not measured: FA3 plateaus at 64 CTAs at (8,1); filling 132 would put
+the same work near `271 * 64/132 = 131us` against the persistent kernel's 215us,
+about 1.6x. If that holds it flips the (8,1) column of the boundary from "fused
+everywhere" to "large tiles belong on the FA3 mainloop", which is the shape the
+design brief assumed from the start.
 
 #### Honest summary
 

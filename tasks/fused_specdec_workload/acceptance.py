@@ -28,6 +28,22 @@ PROFILES = {
     "sparse_self_k8": (0.72, 8, "sparse self-speculation, k=8"),
     # Short-depth conservative setting, the "2 spec steps" design point.
     "short_k1": (0.75, 1, "2 candidates (k=1)"),
+    # --- MTP (multi-token prediction) heads, the serving default we target ---
+    # DeepSeek-V3 ships ONE MTP module and reports 85-90% acceptance for the
+    # second token across generation topics. k=1 is therefore the canonical MTP
+    # point, not the k=4-7 of EAGLE-style drafts, and it changes the tile mix:
+    # a verify row is qo_len = k+1 = 2, so packed_qo_len = 2 * gqa_ratio.
+    #   gqa 7  (Qwen2.5-7B TP1)  -> 14  -> tile 16
+    #   gqa 8  (Qwen3-235B TP8)  -> 16  -> tile 16
+    #   gqa 128 (MLA: DeepSeek)  -> 256 -> tile 128
+    # So under MTP on GQA models the verify class COLLAPSES INTO THE DECODE
+    # TILE, and the "4 modes" are really 3 distinct tile shapes. On MLA it does
+    # the opposite and becomes a large tile. This is the single most important
+    # workload fact for the fused kernel's tile classes.
+    "mtp_dsv3": (0.85, 1, "DeepSeek-V3 MTP, 1 module, 85-90% reported"),
+    "mtp_conservative": (0.75, 1, "MTP, 1 module, harder traffic"),
+    "mtp_k2": (0.80, 2, "two stacked MTP modules, acceptance decays with depth"),
+    "mtp_k3": (0.75, 3, "three stacked MTP modules"),
 }
 
 

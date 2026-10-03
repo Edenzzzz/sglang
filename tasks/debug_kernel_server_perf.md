@@ -1414,6 +1414,75 @@ the boundary itself: FA3's 1.86x wgmma advantage per CTA is cancelled by
 per-head KV reload and a parallel width of `h_qo * ceil(qo_len/128)`, so on the
 TP8/TP16 shards that actually serve Qwen3-235B it loses even on pure prefill.
 
+### H200: JIT reduction and SM pre-assignment on an MTP schedule (2026-10-03)
+
+Hardware: 1x NVIDIA H200 143GB, 132 SMs, CUDA 13.1, torch 2.9.1 (merlin trial
+`vibecuda`, run `0f3a358f186d5fa4`). flashinfer `tri_tile_` + JIT reduction
+(`e702da10`). Driven over merlin-cli's webshell exec channel; ssh is unavailable
+on the i18n control plane.
+
+```bash
+# workload: MTP (k=1, a=0.85) over real bench_serving traces
+python simulate_fused_batches.py traces/*.json --k 1 --draft-tokens 2 --alpha 0.85 \
+    --max-running 64 --chunk-budget 8192 --out sets/mtp_h200.jsonl --max-steps 3000
+# kernel A/B, one build, env-selected
+FLASHINFER_SM_PARTITION=$P FLASHINFER_JIT_REDUCTION=$J python3 bench_jit_reduction.py --heads 28,4,128
+```
+
+**MTP collapses the tile taxonomy.** MTP ships one draft module, so a verify row
+is `qo_len = k+1 = 2` and `packed_qo_len = 2*gqa_ratio`. Over 3,000 simulated
+steps (76.6k verify+draft rows, 652 prefill rows):
+
+| config | tile mix | tile-64 class |
+|---|---|---|
+| gqa 7 (Qwen2.5-7B TP1) | tile16 **99.2%**, tile128 0.8% | **unused** |
+| gqa 8 (Qwen3-235B TP8) | tile16 99.2%, tile128 0.8% | unused |
+| gqa 128 (MLA) | tile128 100% | unused |
+
+The middle tile class added for EAGLE k=4-7 is dead under MTP on GQA models:
+verify and draft both land in tile 16. The "4 modes" are 2 tile shapes. Context
+is long (kv p50 34,452, 23 rows/step), so the tile-16 side is overwhelmingly
+split-KV -- which is where reduction cost lives. Prefill is 44.4% of total work
+but concentrated: **81.3% of steps contain no prefill at all**, 7% are
+prefill-dominated.
+
+**Correctness.** JIT vs barrier at a fixed seed: LSE bit-identical, output norms
+15.488681793 vs 15.488539696 (9.2e-6 relative, far below one bf16 ulp of
+7.8e-3) -- pure reduction-order rounding.
+
+**Measured, 2x2 (us, lower is better):**
+
+| bs/ctx/chunk | part0 jit1 | part0 jit0 | part1 jit1 | JIT gain | partition gain |
+|---|---:|---:|---:|---:|---:|
+| 32/8192/0 | 259.8 | 261.9 | 259.9 | 1.008x | 1.000x |
+| 32/32768/0 | 997.6 | 999.7 | 999.1 | 1.002x | 0.998x |
+| 64/8192/0 | 502.0 | 503.7 | 502.8 | 1.003x | 0.998x |
+| 64/32768/0 | 1940.5 | 1942.8 | 1939.0 | 1.001x | 1.001x |
+| 128/16384/0 | 1945.1 | 1945.2 | 1944.1 | 1.000x | 1.000x |
+| 32/32768/1024 | 2328.9 | 2396.7 | 2957.3 | **1.029x** | **0.788x** |
+| 64/32768/1024 | 3147.2 | 3157.8 | 4475.1 | 1.003x | **0.703x** |
+| 128/16384/1024 | 2699.9 | 2824.3 | 3803.9 | **1.046x** | **0.710x** |
+| **total** | **13821.0** | 14032.1 | 16881.2 | 1.015x | 0.819x |
+
+Two results, each only partly as expected:
+
+1. **JIT reduction pays only on mixed batches** -- up to 4.6% when a prefill
+   chunk is co-resident with decode rows, and exactly 1.000x when one tile class
+   owns the batch. That is the predicted shape (a barrier only costs something
+   when the work either side of it is heterogeneous) but the magnitude is small,
+   because unlike FlashMLA/NSA (combine = 37%/51% of runtime in a *separate
+   kernel*) our merge already ran inside the same launch. What JIT removes is
+   the barrier wait, not a kernel launch or an HBM round trip.
+2. **SM pre-assignment as currently implemented LOSES 21-30% on exactly the
+   batches it targets**, and is a no-op (1.000x) everywhere else. Proportional
+   work-share partitioning starves the tile-16 task: `kv_len_limit` is sized to
+   the clusters a task owns, so giving the rare tile-128 row its own SMs forces
+   the decode side into fewer, larger KV chunks and costs it parallelism. The
+   split has to be a measured makespan balance applied conditionally, not a
+   static proportional share applied always -- which is what the sglang-side
+   gate (`mixed_dispatch.plan_dispatch`) decides, and on this MTP workload it
+   picks the fused path for the 81.3% of steps that contain no prefill.
+
 ## Open TODOs
 
 - [ ] **Remove the baseline's own plan() drain** (makes DMC strictly

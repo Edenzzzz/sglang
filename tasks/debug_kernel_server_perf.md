@@ -1545,6 +1545,47 @@ is small, which is exactly what `mixed_dispatch.plan_dispatch` decides
 server-side. Under MTP that fallback is the common case: 81.3% of steps carry no
 prefill at all.
 
+#### The fused SM-pre-assigned co-launch, measured on the MTP schedule (2026-10-03, H200)
+
+`bench_fused_dispatch.py` runs four strategies over the captured MTP steps that
+are actually mixed (a large tile co-resident with small tiles -- 198 of 3,000
+steps, 6.6%; most steps are pure-decode or pure-prefill):
+
+| strategy | total us (20 mixed steps) | vs mono |
+|---|---:|---:|
+| mono -- one persistent launch over every row (today) | 94,195.9 | 1.000x |
+| **seq -- FA3 on the large tiles, then persistent on the rest** | **66,073.3** | **1.426x** |
+| fused -- the two co-launched, grids pre-assigned by the scheduler | 72,489.9 | 1.299x |
+
+**Routing by tile class is worth 1.43x.** That is the real win and it vindicates
+the premise the whole design started from: the large-tile class belongs on FA3's
+wgmma mainloop, not on the FA2-lineage tile-128 path.
+
+**But the SM pre-assignment loses to plain sequential by ~9%**, consistently,
+on every mixed step. The reason is structural and specific to MTP: a mixed step
+carries ONE prefill chunk against 1-5 small rows (verify `qo=2` + draft `qo=1`),
+so the scheduler hands FA3 124 of 132 SMs and the persistent side 8. There is
+almost nothing to overlap, and capping both grids only slows each side down --
+sequential lets each kernel use all 132 SMs in turn. Co-launching pays only when
+both classes can keep their own SM set busy for a whole step, which under MTP
+they cannot.
+
+Step 21 is the counter-example worth keeping: `mono` 312.4 us beats `seq` 673.3
+and `fused` 554.9, because its "large" row is small enough that FA3 is pure
+overhead. The routing gate must therefore test absolute work, not just tile
+occupancy -- which is what `mixed_dispatch.plan_dispatch`'s "fold the class in
+unless one SM's worth of it can stay busy" rule does.
+
+So the deliverable from this line of work is the **dispatch**, not the fusion:
+route large tiles to FA3 and run the two kernels back to back, gated per batch.
+The SM-partitioned co-launch, the three-tile fused kernel, and the static
+rate-weighted share are all measured and all lose to it on this workload.
+
+FA3 split-KV was also measured here and did not help (1.267x vs 1.289x for the
+plain co-launch): once the scheduler has already given FA3 124 SMs, width is not
+the constraint and the merge is pure overhead. It was worth 1.75x standalone
+only because unsplit FA3 was width-starved at 64 of 132 CTAs.
+
 ## Open TODOs
 
 - [ ] **Remove the baseline's own plan() drain** (makes DMC strictly

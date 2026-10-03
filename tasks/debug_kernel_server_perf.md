@@ -1464,6 +1464,12 @@ prefill-dominated.
 | 128/16384/1024 | 2699.9 | 2824.3 | 3803.9 | **1.046x** | **0.710x** |
 | **total** | **13821.0** | 14032.1 | 16881.2 | 1.015x | 0.819x |
 
+**Reproduced on a second H200 pod** (the first trial was killed mid-session;
+`3c57f94de4568319` replaced it, environment rebuilt in ~10 min once the webshell
+transfer moved to 1 MB chunks -- 3 min for a 6.6 MB bundle vs 31 min at 8 KB):
+part0/jit1 13877.4, part0/jit0 14122.1, part1/jit1 16899.0, part1/jit0 16868.5 us.
+JIT gain 1.018x, partition 0.82x -- both within 0.7% of the first pod.
+
 Two results, each only partly as expected:
 
 1. **JIT reduction pays only on mixed batches** -- up to 4.6% when a prefill

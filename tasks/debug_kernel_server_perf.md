@@ -1489,6 +1489,62 @@ Two results, each only partly as expected:
    gate (`mixed_dispatch.plan_dispatch`) decides, and on this MTP workload it
    picks the fused path for the 81.3% of steps that contain no prefill.
 
+#### Swept: when does SM pre-assignment actually pay? (2026-10-03, H200)
+
+`FLASHINFER_SM_SPLIT="a,b,c"` forces per-task cluster counts and
+`FLASHINFER_SM_TASK_RATE="r0,r1,r2"` divides each task's work by its mainloop's
+rate before shares are taken (flashinfer `c51aef742`). MTP shapes throughout
+(prefill chunk = tile 128; verify `qo=2` and draft `qo=1` both = tile 16).
+
+**Case 128 rows @ ctx 16384 + 1024-token chunk** -- partitioning wins here:
+
+| split (prefill / · / decode) | us |
+|---|---:|
+| part-OFF (shared LPT heap over all SMs) | 2518.2 |
+| 32,1,99 | 5292.8 |
+| 48,1,83 | 3824.0 |
+| 64,1,67 | 3062.2 |
+| 72,1,59 | 2812.8 |
+| **76,1,55** | **2323.2** |
+| 80,1,51 | 2369.2 |
+| 84,1,47 | 2331.0 |
+| 92,1,39 | 2437.5 |
+| auto, proportional-by-MAC | 3832.5 |
+| auto, rate-weighted r=2.0 | **2306.1** |
+
+The optimum is a broad plateau at 76-84 clusters (~1.08x over the shared heap),
+and the MAC-proportional share picks ~48 -- **0.66x of the optimum**. Dividing
+the small-tile task's work by r=2.0 before taking shares lands on the plateau
+automatically, so the share formula, not the idea, was the bug.
+
+**But one constant does not generalize**, and worse, one shape has no winning
+split at all:
+
+| case | part-OFF | rate r=2.0 | best forced split |
+|---|---:|---:|---|
+| 128 @16384 + 1024 | 2514.6 | **2446.1** (1.03x) | 76,1,55 |
+| 64 @32768 + 1024 | 3043.5 | **2978.4** (1.02x) | - |
+| 32 @32768 + 1024 | **2302.7** | 2937.2 (0.78x) | 112,1,19 -> 2950.0, still 0.78x |
+| 128 @16384, no chunk | 1944.0 | 1941.6 | n/a (one live task) |
+| 64 @32768, no chunk | 1942.3 | 1941.7 | n/a |
+
+On `32 @32768 + 1024` the full sweep (16/32/48/64/80/96/112) never reaches the
+shared-heap time and is still improving at 112 -- i.e. it converges toward
+giving prefill the whole device and running the rest after it, which is just
+sequential execution. Net over the three mixed shapes the rate-weighted
+partition is **0.94x**: still losing.
+
+**Mechanism.** The shared LPT heap is a strong baseline because it *backfills*:
+small tile-16 work items drop into SMs that would otherwise idle during the
+prefill tail. A static partition forbids that backfill. So pre-assignment pays
+only when both classes are large enough to keep their own SM set busy for the
+whole step -- true at 128 decode rows, false at 32 -- and a static share, even
+rate-weighted, is the wrong control. The split has to be chosen per batch from
+predicted makespans, with a fallback to the shared heap when the predicted gain
+is small, which is exactly what `mixed_dispatch.plan_dispatch` decides
+server-side. Under MTP that fallback is the common case: 81.3% of steps carry no
+prefill at all.
+
 ## Open TODOs
 
 - [ ] **Remove the baseline's own plan() drain** (makes DMC strictly

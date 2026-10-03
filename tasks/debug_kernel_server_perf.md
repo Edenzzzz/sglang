@@ -1586,6 +1586,41 @@ plain co-launch): once the scheduler has already given FA3 124 SMs, width is not
 the constraint and the merge is pure overhead. It was worth 1.75x standalone
 only because unsplit FA3 was width-starved at 64 of 132 CTAs.
 
+#### Server-side: the stage boundary dominates, not the kernel (2026-10-03, H200)
+
+Kernel-level numbers do not carry to a server step unchanged. Speculative
+decoding runs several stages per step -- draft, verify, and a prefill chunk when
+one is admitted -- and each stage pays its own `plan()`, host->device metadata,
+launch and sync. A 4-mode fused schedule (SparseSpec-style: verify of batch N-1
+and draft of batch N in the same batch) collapses those into one.
+
+Measured over 10 steps of the realistic MTP schedule, timing each stage the way a
+server does it (plan + launch + sync, CPU time included):
+
+| | us/step | of which plan() |
+|---|---:|---:|
+| staged -- draft, verify, prefill as separate stages | 19,388 | 7,597 (39%) |
+| unified -- one plan, one launch over every row | 9,794 | 3,313 (34%) |
+| | **1.980x** | |
+
+Excluding plan entirely it is still **1.82x** (11,791 -> 6,480 us), because a
+stage launched on its own under-fills the device: the draft stage is a handful of
+one-token rows and the verify stage not much more. Batching them is what fills
+the SMs, which is the argument SparseSpec's unified scheduler makes and the
+reason the 4-mode schedule exists at all.
+
+So the value decomposes as: **stage collapse ~1.98x** (available to any unified
+schedule, fused kernel or not) **times the kernel's 1.148x** over sequential
+within a step. The SM pre-assignment is the smaller term, and it only pays once
+the stages are already collapsed -- which is the right order to build them in.
+
+Caveat worth stating: this is the non-CUDA-graph path. A server that captures
+decode steps in graphs amortises much of the `plan()` cost, so the 39% shrinks.
+What does not shrink is the launch/sync boundary between stages and the
+under-filled device, i.e. the 1.82x GPU-side component -- and a graph cannot span
+a CPU-side metadata update between two stages, which is precisely what collapsing
+them removes.
+
 ## Open TODOs
 
 - [ ] **Remove the baseline's own plan() drain** (makes DMC strictly

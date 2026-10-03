@@ -1621,6 +1621,45 @@ under-filled device, i.e. the 1.82x GPU-side component -- and a graph cannot spa
 a CPU-side metadata update between two stages, which is precisely what collapsing
 them removes.
 
+#### End-to-end sglang server verification (2026-10-04, H200)
+
+Real server run, not a proxy: sglang 0.5.4.post2 (this branch) + torch 2.8.0 +
+the flashinfer fork carrying the fused kernel, Qwen2.5-1.5B-Instruct,
+`--attention-backend flashinfer`, `SGLANG_FLASHINFER_USE_PERSISTENT=1`,
+`--chunked-prefill-size 512 --max-running-requests 64 --disable-cuda-graph
+--disable-radix-cache`, `bench_serving --dataset-name random --random-input-len
+2048 --random-output-len 128 --num-prompts 150 --request-rate 10`.
+
+The composition logger recorded **1,344-1,408 mixed batches per run**, so the
+batch shape the kernel targets does occur on the real server path.
+
+| | JIT reduction ON | OFF |
+|---|---:|---:|
+| Output token throughput (tok/s) | 833.2 / 834.6 / 835.9 | 835.6 |
+| Request throughput (req/s) | 8.67 | 8.69 |
+| Median TTFT (ms) | 88.1 | 84.1 |
+| Median ITL (ms) | 11.5 / 11.0 / 11.2 | 10.9 |
+
+**Just-in-time reduction has no measurable end-to-end effect on this workload.**
+Three ON runs span 833.2-835.9 tok/s (0.3%), and the OFF run at 835.6 sits inside
+that band -- a 0.13% difference against a 0.3% noise floor. That is an honest
+negative result and it is consistent with what the kernel work showed once the
+counter-reset bug was fixed: the reduction phase is a small part of attention,
+attention is a fraction of a 1.5B model's step, and this run has no speculative
+decoding (Qwen2.5-1.5B has no MTP head), so there is no verify class and the
+split-KV population the reduction serves is small.
+
+The value of JIT reduction is therefore **not** a standalone speedup. It is what
+makes the FA3 fusion possible at all: FA3 is warp-specialised, a CTA holding a
+TMA producer can never join `grid.sync()`, and the persistent kernel used to end
+in exactly that. Removing the barrier is a precondition, and it should be
+reported as one rather than as a win.
+
+What this run does NOT yet cover: the fused FA3+FA2 kernel is not wired into the
+server's attention backend, so these numbers exercise the persistent kernel and
+the JIT reduction, not the fused dispatch. The kernel-level 1.148x over
+sequential and the 1.98x stage collapse are still measured off-server.
+
 ## Open TODOs
 
 - [ ] **Remove the baseline's own plan() drain** (makes DMC strictly

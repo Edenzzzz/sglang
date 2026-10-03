@@ -173,8 +173,7 @@ class MixedKernelGate:
 
 
 from sglang.srt.layers.attention.mixed_dispatch import (
-    plan_split as md_plan_split,
-    route as md_route,
+    plan_dispatch as md_plan_dispatch,
 )
 
 class _MixedCompositionLog:
@@ -290,29 +289,28 @@ def classify_mixed_batch(extend_seq_lens_cpu, extend_prefix_lens_cpu,
 def plan_4mode_dispatch(extend_seq_lens_cpu, extend_prefix_lens_cpu,
                         num_qo_heads, num_kv_heads, draft_token_num=1,
                         num_sm=None):
-    """Choose how to execute a fused batch. Returns (mode, c_fa3, c_pers, rows).
+    """Choose how to execute a fused batch.
 
-    Delegates to mixed_dispatch, whose thresholds were fitted on a 50-cell
-    boundary sweep and validated held-out on the captured sets. `rows` is
-    (fa3_rows, pers_rows) after per-row routing.
+    Returns the dict from mixed_dispatch.plan_dispatch:
+      mode      'fused' (persistent only) or 'split' (disjoint SM sets)
+      sm_fa3    SMs given to FA3, 0 when fused
+      sm_pers   SMs for the persistent kernel
+      kv_split  FA3's KV-split factor
+      fa3_mask  per-row mask selecting the FA3 class, None when fused
 
-    The routing test is on qo_len, not packed_qo_len: FA3 tiles over qo_len
-    alone at cta_tile_q 128 and does not fuse group heads, so a 4-token verify
-    row occupies 4/128 of a tile whatever the GQA ratio. Routing the verify
-    class to FA3 on a KV-length test alone measured 14x slower.
+    Routing is on packed_qo_len and kv_tiles -- tile occupancy, not KV length
+    alone, which is what an earlier version used and which measured 14x slower
+    by sending short verify rows to FA3.
     """
     gqa = max(num_qo_heads // max(num_kv_heads, 1), 1)
-    classes, _ = classify_mixed_batch(
-        extend_seq_lens_cpu, extend_prefix_lens_cpu, gqa, draft_token_num
-    )
-    fa3_rows, pers_rows = md_route(classes, gqa)
     if num_sm is None:
         num_sm = torch.cuda.get_device_properties(
             torch.cuda.current_device()).multi_processor_count
-    mode, c_fa3, c_pers = md_plan_split(
-        fa3_rows, pers_rows, num_qo_heads, num_kv_heads, num_sm=num_sm
+    return md_plan_dispatch(
+        np.asarray(extend_seq_lens_cpu, dtype=np.int64),
+        np.asarray(extend_prefix_lens_cpu, dtype=np.int64),
+        gqa, num_kv_heads, num_sm=num_sm,
     )
-    return mode, c_fa3, c_pers, (fa3_rows, pers_rows)
 
 
 def select_mixed_attention_kernel(

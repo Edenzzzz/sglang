@@ -2098,3 +2098,44 @@ not another probe but a bisection of the real kernel: start from
 `dsmem_kv_share.cu`, which clusters, and add the fused kernel's elements one at a
 time until it breaks -- rather than starting from the fused kernel and removing
 them, which is what the last several probes effectively attempted.
+
+#### Bisecting from the known-good base: 384 threads and `__launch_bounds__` cluster fine
+
+Rather than removing elements from the fused kernel with hand-written probes --
+which kept failing their own control rows -- the question was re-asked by adding the
+fused kernel's distinguishing features to `dsmem_kv_share.cu`, which clusters
+successfully. Same kernel body, 384 threads, `__launch_bounds__(384, 1)`:
+
+```
+redundant gather : 1579.338 us
+DSMEM shared     : 1157.636 us     speedup 1.364x
+384 threads + __launch_bounds__(384,1), clustered: launch=ok sync=ok   <= CLUSTERS FINE
+```
+
+The control arms pass and the wide arm passes, so this measurement can be trusted
+where the earlier probes could not. **Thread count and `__launch_bounds__` are
+definitively not the cause.**
+
+That matters because of what it leaves. The `SKIP_FA3` matrix already showed the
+fused kernel clusters cleanly with FA3's body skipped and fails with it active, and
+inside that body the following are excluded: `TMA_Q`, `ClusterTransactionBarrier`,
+`PipelineTmaAsync` (not compiled), the epilogue store (not TMA), memory violations,
+sync violations, occupancy, smem size, thread count, launch bounds.
+
+**The one major element of FA3's body never tested under a cluster is its warp
+specialisation -- `setmaxnreg`**, i.e. `cutlass::arch::warpgroup_reg_dealloc<24>()`
+on the producer and `warpgroup_reg_alloc<240>()` on the consumers. That fits every
+observation: dynamic register reallocation is invisible to memcheck and synccheck,
+costs no occupancy, and would fail at execution rather than launch.
+
+It is also the element this task has already been bitten by three times -- the
+`__noinline__` FA3 body, `MergeGroupJIT`, and the symmetric-drain attempt all broke
+on `setmaxnreg` semantics. A fourth interaction, this time with cluster
+co-scheduling, is the natural hypothesis.
+
+Next bisection step, from the same known-good base: add
+`warpgroup_reg_dealloc<24>` / `warpgroup_reg_alloc<240>` to the wide arm and launch
+it clustered. If that breaks, the cause is found and the design question becomes
+whether FA3's warp specialisation can coexist with clustering at all -- which would
+be a genuine constraint on combining SM pre-assignment with DSMEM sharing, not a
+bug to fix.

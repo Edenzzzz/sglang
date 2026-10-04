@@ -3335,3 +3335,63 @@ framing got wrong:
    planner must co-assign them -- it is a scheduling change as much as a kernel one.
 
 Command: `nvcc -std=c++17 -arch=sm_90a -O3 -o /tmp/dsmem tests/dsmem_kv_share.cu && /tmp/dsmem`
+
+#### Multicast and SM-pre-assignment fusion are in tension: the cluster dim is grid-wide
+
+The DSMEM win (1.587x) needs a thread-block cluster. Adding the cluster launch
+(`FLASHINFER_FUSED_CLUSTER=N`, flashinfer `610d8d7`) and running the regression:
+
+```
+CLUSTER=1   rc=0   PASS, 0/512 unwritten, rel err 0.00025 / 0.00205 / 0.00266
+CLUSTER=2   rc=1   CUDA error: unspecified launch failure
+CLUSTER=4   rc=1   CUDA error: unspecified launch failure
+```
+
+The launch is *accepted* and the kernel then crashes, so something inside is
+cluster-sensitive. It is FA3's CUTLASS pipeline, and the mechanism is exact:
+
+- `hopper/prefill_sm90.cuh:113,123` constructs the pipeline with a **hardcoded**
+  `cluster_shape = Shape<_1,_1,_1>{}`;
+- `cutlass/pipeline/sm90_pipeline.hpp:313-316` derives the mbarrier arrival count
+  from that declared shape:
+
+```cpp
+uint32_t multicast_consumer_arrival_count = params.num_consumers;  // If cluster_size is 1
+if (cute::size(cluster_shape) > 1) {
+  multicast_consumer_arrival_count = (size<0>(cluster_shape) + size<1>(cluster_shape) - 1)
+                                     * num_consumer_warpgroups_per_cluster;
+}
+```
+
+So under a real cluster of 2 the barriers are initialised for 1-CTA arrivals while
+the hardware has clustered the CTAs. Passing the *true* shape instead does not fix
+it -- it makes CUTLASS expect `2 x num_warpgroups` arrivals per barrier, which only
+materialise if FA3's TMA loads actually multicast. FA3's KV cannot multicast
+(`page_size=1` gather, no tensormap), so those arrivals never come and it hangs
+instead of crashing.
+
+**The structural point.** `clusterDim` is a property of the *launch*, so it applies
+to every CTA in the grid. This kernel's whole premise is that one grid holds two
+different roles. DSMEM is wanted only by the FA2 role (which gathers with
+`cp.async` and has no CUTLASS pipeline); it is actively harmful to the FA3 role.
+CUDA offers no per-role cluster shape, so:
+
+| option | consequence |
+|---|---|
+| cluster the whole grid | breaks FA3's pipeline, as measured |
+| give FA3 a true cluster shape | CUTLASS then demands multicast arrivals FA3 cannot produce |
+| launch the two roles as separate clustered/unclustered kernels | that **is** the sequential co-launch baseline -- already 1.338x faster than this kernel |
+| implement TMA multicast in FA3 as well | the full job: tensormap-able KV (`page_size >= 128`) plus mcast masks plus cluster-consistent pipelines |
+
+That last row is the only route that keeps the fusion *and* gets multicast, and it
+is substantially more than "add DSMEM to the FA2 mainloop" -- which is what the
+1.587x microbenchmark appeared to license. Worth stating plainly because it is a
+real cost of the SM-pre-assignment design, not an implementation detail: **the
+single-grid, two-role structure is what forecloses per-role use of cluster
+features.** Any paper claim about combining SM pre-assignment with multicast has
+to confront this.
+
+What is established: multicast's benefit for our access pattern is real and
+measured (1.587x, `tests/dsmem_kv_share.cu`); the cluster launch is implemented and
+verified to be output-neutral at N=1; and N>1 is blocked on FA3's pipeline for a
+reason that is now precisely located rather than suspected.

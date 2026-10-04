@@ -1,5 +1,75 @@
 # Changelog
 
+## v0.7.3 — Hopper 4-Mode Fused Kernel: Multicast Tested, Doc Split (2026-10-05)
+
+### Docs: split by effort, with lineage
+`tasks/debug_kernel_server_perf.md` had reached 3428 lines spanning two unrelated
+efforts. Split:
+
+| doc | covers |
+|---|---|
+| `debug_kernel_server_perf.md` (1783 lines, closed) | Parts 1-4: sync-free plan, measured mixed-kernel gate, workload stats, mixed-tile 4-mode *dispatch* |
+| `debug_kernel_server_perf_4_mode.md` (new, active) | the fused FA3 + FA2 SM pre-assignment **kernel**: correctness, server integration, split/cluster-cap tuning, backfill, multicast |
+
+Each carries a lineage header pointing at the other, and the old file ends with a
+forward pointer. Corrections to earlier claims are kept in place in both rather
+than edited away — several conclusions were reversed by later measurement and the
+reversals are the useful part.
+
+### Measured: multicast tested on hardware (flashinfer `4eb41c6`, `88fc805`)
+Multicast had been written off as needing a `sparse_mainloop.cuh` gather→TMA
+rewrite. That conflated multicast with *TMA* multicast: Hopper DSMEM gives the same
+load-once-consume-in-N-CTAs property with no tensormap and no KV-pool change, via
+`cg::cluster_group::map_shared_rank` (already used in-tree by
+`trtllm/fused_moe/RoutingKernel.cuh`).
+
+`tests/dsmem_kv_share.cu`, built to match the redundancy this kernel has — CTAs
+paired on the same KV tile, since every q-tile of a prefill row re-gathers the same
+KV:
+
+| working set | redundant gather | DSMEM shared | speedup |
+|---|---|---|---|
+| 16 MB (**L2-resident, in-situ**) | 682.436 us | 514.583 us | **1.326x** |
+| 256 MB (cold) | 1325.362 us | 835.079 us | 1.587x |
+
+L2 halves the baseline but costs DSMEM only 1.587x → 1.326x, because a
+`page_size=1` gather is bound by *transaction count*, not by which level answers
+it. L2 shortens a repeat; DSMEM removes it.
+
+### Added: real cluster launch, opt-in (flashinfer `610d8d7`, `986270d`)
+`FLASHINFER_FUSED_CLUSTER=N` switches the fused dispatch to `cudaLaunchKernelExC`
+with a real `clusterDim`, default 1 so the shipped path is byte-identical. It
+refuses rather than reshapes when N does not divide the SM count, since rounding
+the grid would break the CTA count FA3's contract checks.
+
+Isolation matrix via `FLASHINFER_FUSED_SKIP_FA3=1`:
+
+```
+CLUSTER=1 SKIP_FA3=0   rc=0  PASS
+CLUSTER=2 SKIP_FA3=0   rc=1  CUDA error: unspecified launch failure
+CLUSTER=1 SKIP_FA3=1   rc=1  424/512 unwritten (expected), no CUDA error
+CLUSTER=2 SKIP_FA3=1   rc=1  424/512 unwritten (expected), no CUDA error
+```
+
+**The FA2 side is cluster-safe; FA3 alone is cluster-hostile.** This overturns an
+earlier conclusion in this work that the single-grid two-role design forecloses
+per-role cluster features — the side that wants DSMEM is already cluster-ready, and
+the remaining work is making FA3 tolerate a cluster it does not use.
+
+### Resource correction
+Two H20 trials had been allocated for the PD-colocation experiments before the
+single-GPU kernel work finished, and both sat idle for the session:
+`81d861acb7b7c964` (4 nodes x 8 = **32 GPUs**, over the 16-GPU cap) and
+`a1edeb8114365af4` (8 x 2 = 16 GPUs, within cap). Both now `STOPPED`. The
+multi-node work is gated behind the kernel work by the goal's own ordering, so
+allocating ahead of it was wrong regardless of the cap.
+
+### Still open
+4-mode MTP **serving** schedule unreachable (`forward_batch_speculative_generation`
+would need reordering against the scheduler), so every server number remains
+spec-decoding-off. Multicast measured but not integrated. Best server
+configuration is the confirmed +0.7-0.8% win from v0.7.2.
+
 ## v0.7.2 — The Fused Kernel Reaches the Serving Path: Three Bugs, and a Measured 8.1% Regression (2026-10-04)
 
 ### Fixed: the page-index array handed to the fused kernel was wrong

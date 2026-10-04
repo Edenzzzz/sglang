@@ -2383,6 +2383,15 @@ class Scheduler(
                 with self.forward_stream_ctx:
                     self.forward_stream.wait_stream(self.default_stream)
                     self.future_map.resolve_future(model_worker_batch)
+                    if os.environ.get("SGLANG_STEP_TRACE") == "1":
+                        import time as _t
+
+                        _m = getattr(batch.forward_mode, "name", str(batch.forward_mode))
+                        _et = getattr(batch, "extend_num_tokens", None) or 0
+                        logger.info(
+                            "STEPTRACE %s %d %d %.6f", _m, int(_et), int(batch.batch_size()),
+                            _t.perf_counter(),
+                        )
                     batch_result = self.model_worker.forward_batch_generation(
                         model_worker_batch
                     )
@@ -2420,6 +2429,15 @@ class Scheduler(
                 batch_result = self.tp_worker.forward_batch_split_prefill(batch)
                 future_indices_or_next_token_ids = batch_result.next_token_ids
             else:
+                if os.environ.get("SGLANG_STEP_TRACE") == "1":
+                    import time as _t
+
+                    _m = getattr(batch.forward_mode, "name", str(batch.forward_mode))
+                    _et = getattr(batch, "extend_num_tokens", None) or 0
+                    logger.info(
+                        "STEPTRACE %s %d %d %.6f", _m, int(_et), int(batch.batch_size()),
+                        _t.perf_counter(),
+                    )
                 batch_result = self.model_worker.forward_batch_generation(
                     batch_or_worker_batch
                 )

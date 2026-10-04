@@ -2272,3 +2272,48 @@ Throughput in these two runs (10198 / 10708 tok/s) is far below the +0.7-0.8% A/
 numbers because per-step logging is expensive. The overhead is identical in both
 arms so the predictability comparison is fair, but these figures must not be
 compared against the 25155 / 24946 results.
+
+#### EDF perf model on MIXED steps: the fused kernel is HARDER to predict, not easier
+
+The decode-only fit was a tie, but it could not see mixed steps. With a per-step
+trace in the scheduler (`SGLANG_STEP_TRACE=1`, logging mode / extend-tokens /
+batch-size / `perf_counter` once per `run_batch`; step time is the timestamp delta,
+i.e. wall-clock per iteration, which is what an EDF admission controller actually
+predicts), 2121 steps per arm, same fit `t = c0 + c1*tokens + c2*bs`:
+
+| arm | ALL | **MIXED (n=1901)** | EXTEND (23) | DECODE (197) |
+|---|---|---|---|---|
+| fused (`sm_fa3=8`, symmetric) | 16.91% | **13.54%** | 15.08% | 51.98% |
+| baseline (fused off) | 13.36% | **9.79%** | 14.88% | 51.76% |
+
+**The baseline is 1.38x more predictable than the fused kernel on mixed steps**
+(9.79% vs 13.54% MAPE; p90 18.97% vs 23.39%). Same direction over all steps. The
+pure-EXTEND and pure-DECODE classes are indistinguishable between arms, as expected
+-- the fused kernel only acts on mixed batches.
+
+**This falsifies the goal's point 3 as applied to this kernel.** The hypothesis was
+that the fused attention kernel is *easier* to perf-model, giving a better EDF
+predictor and tighter SLO control. Measured, it is the reverse.
+
+A coherent mechanism, consistent with everything else in this document: the fused
+kernel's step cost contains a **makespan** term -- `max(FA3 role, FA2 role)` over a
+static SM partition -- which is not linear in total tokens, so a linear model fits
+it worse. The persistent baseline has one shared work queue, so its cost stays
+closer to linear in work. The same structure that made the split so sharply tuned
+(16 -> -22.4%, 64 -> -3.6%, 112 -> -22.0%) is what makes the cost non-linear.
+
+Note also that the earlier decode-only null (0.39% vs 0.40%) was an **artefact of a
+smoothed metric**: it derived step time from `gen throughput` averaged over
+`decode_log_interval` steps. Per-step wall-clock is noisier and far more
+discriminative, and it separates the arms clearly. Two methods disagreeing that way
+is a reason to trust the less-smoothed one, not to average them.
+
+Consequence for `pd_colocation_vs_disagg.md` section 3: it rests on the **overlap**
+kernel's 3.1% MAPE closed form and explicitly says the story depends on that rather
+than on the SM-pre-assignment kernel winning. That caution is now vindicated --
+section 3 must not be re-attributed to this kernel, because for this kernel the
+claim is measured false.
+
+Throughput in these runs (10197 / 10738 tok/s) is depressed by per-step logging;
+identical overhead in both arms, so the fit comparison is fair, but not comparable
+to the 25155 / 24946 A/B figures.

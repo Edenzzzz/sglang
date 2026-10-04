@@ -2051,3 +2051,50 @@ The next step is to fix the probe -- complete config, plus a known-good control 
 -- before drawing any further conclusion about cluster schedulability. Seven
 overturned hypotheses here all share one shape: a measurement or reading that was
 not validated against something known to work first.
+
+#### Occupancy is not the blocker: clusters are schedulable at the fused kernel's shape
+
+With `cfg.gridDim` set before the query (the defect that invalidated the earlier
+probes) `cudaOccupancyMaxActiveClusters` answers cleanly:
+
+```
+no __launch_bounds__      threads=128 | maxActiveClusters=528 (ok) | sync=cudaErrorLaunchFailure
+__launch_bounds__(128)    threads=128 | maxActiveClusters=528 (ok) | sync=cudaErrorLaunchFailure
+__launch_bounds__(128, 1) threads=128 | maxActiveClusters=528 (ok) | sync=cudaErrorLaunchFailure
+__launch_bounds__(384, 1) threads=384 | maxActiveClusters=330 (ok) | sync=cudaErrorLaunchFailure
+```
+
+**528 and 330 active clusters are available**, so a cluster of 2 is comfortably
+schedulable at 384 threads -- the fused kernel's shape -- and the
+scheduling/resource hypothesis is eliminated by a correct measurement. That also
+retires the `cudaErrorInvalidClusterSize` seen earlier: it was the malformed query,
+not a property of any kernel.
+
+**The probe still cannot speak to the fused kernel**, because all four rows
+including the control fail at sync, and the control (no launch bounds, 128 threads,
+16 KB, `cluster.sync()` + `map_shared_rank`) is meant to mirror
+`dsmem_kv_share.cu`'s `gather_dsmem`, which clusters successfully. The remaining
+difference between the two is unidentified; candidates not yet separated are the
+template-wrapped `cudaLaunchKernelEx` call, the single-argument kernel signature,
+and writing the shared buffer from one thread rather than in a loop.
+
+Net candidate list for the fused kernel's `CLUSTER=2` failure, all by test:
+
+| candidate | status |
+|---|---|
+| FA2 / persistent side | cluster-safe |
+| dynamic shared memory | cluster-safe to 200 KB |
+| `PipelineTmaAsync` | not compiled here |
+| `TMA_Q` | ruled out |
+| epilogue store | plain tiled, not TMA |
+| `ClusterTransactionBarrier` | ruled out |
+| memory violation | none (memcheck) |
+| sync violation | none (synccheck) |
+| `__launch_bounds__` | ruled out |
+| **cluster schedulability / occupancy** | **ruled out -- 330 clusters available at 384 threads** |
+
+Nine candidates eliminated, cause still unidentified. The productive next move is
+not another probe but a bisection of the real kernel: start from
+`dsmem_kv_share.cu`, which clusters, and add the fused kernel's elements one at a
+time until it breaks -- rather than starting from the fused kernel and removing
+them, which is what the last several probes effectively attempted.

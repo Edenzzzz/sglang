@@ -3036,3 +3036,44 @@ original blocker and gates everything here including a dynamic FA3 queue.
 (a) is one env-var-sized experiment and should be done first. It was skipped
 because the 3-warpgroup drain was built on top of the barrier-0 fix in the same
 step -- the two changes were not separated, which is the process error here.
+
+#### The symmetric FA2 -> FA3 backfill kernel is CORRECT
+
+```
+symmetric  (WG0-only drain + rendezvous on named barrier 15)   rc=0
+  sm_split=64: unwritten (NaN) rows = 0/512
+  row 0 (FA3    qo= 424 kv= 4001) rel err 0.00020  ok
+  row 1 (task0  qo=  87 kv=   87) rel err 0.00194  ok
+  row 2 (task2  qo=   1 kv=   14) rel err 0.00282  ok
+  PASS
+asymmetric control                                             rc=0  PASS
+```
+
+So the missing backfill direction works: **FA2-role CTAs now execute FA3 work**,
+with FA3 planned across the whole grid, every output row correct against the fp32
+reference and nothing left unwritten.
+
+The whole fault was the **barrier 0 collision** -- `__syncthreads()` compiles to
+`barrier.sync 0` and FA3 uses barrier 0 as `kQueryEmpty`. Nothing else. The four
+other mechanisms investigated were all wrong:
+
+| mechanism | verdict |
+|---|---|
+| register budget (`alloc<240>` unsatisfiable) | falsified -- 168 registers in both kernels |
+| warpgroups entering FA3 from asymmetric states | falsified -- symmetric drain still failed |
+| queue/mdo barrier id collision (`8/9/10` vs `9`) | real but not the cause; fix verified harmless |
+| the 3-warpgroup drain | **actively harmful** -- deadlocks, because it requires warpgroup-reentrant FA2 |
+
+And the process lesson, since it cost the most: the barrier-0 fix and the
+3-warpgroup drain were committed **together**, so when the pair still failed, the
+barrier-0 fix looked insufficient when in fact it was the entire answer and the
+drain change was the new problem. Separating those two would have found this
+several cycles earlier. The per-warpgroup mdo barriers and relocated queue ids are
+kept -- they are verified harmless and are a prerequisite if warpgroup-reentrant
+FA2 is ever done -- but they were not what fixed it.
+
+Next: the throughput A/B. The symmetric kernel is the mechanism identified as the
+cause of the residual -2.0%, so this is the measurement that says whether the gap
+closes. `FLASHINFER_FUSED_SYMMETRIC=1` with `fa3_num_ctas == num_sm`; the server
+plumbing passes `sm_fa3` as the planned count, so it needs the full grid passed
+there before a server run.

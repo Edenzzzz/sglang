@@ -3077,3 +3077,48 @@ cause of the residual -2.0%, so this is the measurement that says whether the ga
 closes. `FLASHINFER_FUSED_SYMMETRIC=1` with `fa3_num_ctas == num_sm`; the server
 plumbing passes `sm_fa3` as the planned count, so it needs the full grid passed
 there before a server run.
+
+#### Symmetric backfill transforms the kernel: 0.687x -> 1.003x of the monolithic kernel
+
+Kernel-level 4-mode MTP benchmark (`tests/bench_mtp_fused.py`, 40 mixed MTP steps,
+H200), asymmetric vs symmetric, everything else identical:
+
+| | asymmetric | symmetric | change |
+|---|---|---|---|
+| fused (fixed split) | 84202.5 us (0.408x mono) | **35082.3 us (0.974x mono)** | **2.40x faster** |
+| best split | 50051.8 us (0.687x mono) | **34071.3 us (1.003x mono)** | **1.47x faster** |
+| steps where fused beats mono | **0 / 40** | **21 / 40** | — |
+| steps where fused beats seq | 0 / 40 | 0 / 40 | unchanged |
+| mono (reference) | 34392.2 us | 34168.4 us | — |
+| seq co-launch | 25483.0 us (1.350x) | 25532.6 us (1.338x) | — |
+
+**The one-directional backfill was the whole structural deficit.** Letting FA2-role
+CTAs execute FA3 work moves the kernel from 0.687x to **1.003x** of the monolithic
+persistent kernel -- from a 1.5x loss to parity, winning outright on 21 of 40
+steps where it previously won none. That is the single largest improvement in this
+task, and it confirms the diagnosis the chunk-2048 experiment pointed to: the
+makespan was set by whichever role finished last, and the idle role could not help.
+
+Sequential co-launch is still ahead at 1.338x, so the fused kernel is not yet the
+fastest option at kernel level; it is now competitive rather than structurally
+beaten.
+
+**The optimal split moved, and the host default is now wrong.** Best-split
+distribution over the 40 steps:
+
+```
+asymmetric:  {64: 20, 80: 7, 16: 6, 48: 5, 32: 1, 8: 1}   -> favours 64
+symmetric:   {8: 26, 24: 6, 32: 4, 16: 3, 96: 1}          -> favours 8
+```
+
+That reversal is the mechanism working as intended: once every CTA can reach FA3's
+queue, a *small* dedicated FA3 set is best and the rest of the device backfills.
+`MAX_SM_FA3 = 64`, which was measured correct for the asymmetric kernel, is
+therefore wrong for symmetric mode -- it should be near 8, and the server-side
+sweep must be redone before quoting any symmetric end-to-end number.
+
+Next, in order: (1) re-sweep `sm_fa3` server-side under symmetric mode around 8,
+(2) thread `num_sm` as `fa3_num_ctas` through `_plan_fused_split_inner` (it
+currently passes `sm_fa3`, which symmetric mode's contract rejects), (3) rerun the
+server A/B. The -2.0% figure predates all of this and should not be carried
+forward as the kernel's standing result.

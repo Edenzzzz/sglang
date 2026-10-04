@@ -237,26 +237,43 @@ and the honest framing is robustness to acceptance drift rather than accuracy.
 
 ## 4. Network: a complete graph beats a bipartite one
 
-### The structural argument
+### The structural argument, stated as a bounded constant and not a scaling law
 
-Disaggregation's KV transfers form a **bipartite** graph: prefill nodes to decode
-nodes. Colocation's form a **complete** graph: any node may pull from any other.
-Two consequences:
+Disaggregation's KV transfers form a **bipartite** graph (prefill nodes to decode
+nodes); colocation's form a **complete** graph. The arithmetic of that difference
+matters, because it is smaller and flatter than "scales better with #nodes"
+suggests:
 
-1. **Bisection usage.** With `n` nodes split `n/2` prefill and `n/2` decode,
-   disagg's KV traffic crosses a single `n/2 x n/2` cut, and every transfer uses
-   it. Colocation's traffic is spread over all `n(n-1)/2` node pairs. The
-   per-link load for the same total bytes is lower by construction.
-2. **Two-way utilization.** Disagg links carry KV in one direction (P to D);
-   the reverse direction is idle. Colocation uses both directions, since any
-   node both serves and seeds.
+| n | colocation pairs `n(n-1)/2` | disagg cut `(n/2)^2` | ratio `2(n-1)/n` |
+|---|---|---|---|
+| 2 | 1 | 1 | **1.00** -- degenerate, bipartite *is* complete |
+| 4 | 6 | 4 | 1.50 |
+| 6 | 15 | 9 | 1.67 |
+| 8 | 28 | 16 | 1.75 |
+| 16 | 120 | 64 | 1.88 |
+| inf | -- | -- | 2.00 |
 
-3. **Scaling in `n`.** This is the part that should matter most as the cluster
-   grows. Under disagg, a prefix lives in the prefill tier, so requests for it
-   converge on a few nodes and that convergence does not improve with more
-   nodes — adding decode nodes adds demand on the same prefill holders. Under
-   colocation the replica set grows with demand (point 2), so the number of
-   viable sources per prefix grows with `n`.
+The ratio **asymptotes at 2x and is 88% of the way there by n = 8**. The same
+holds for viable sources per prefix: disagg caps at `|prefill tier|` = n/2,
+colocation at n, so again 2x. So this is a *bounded constant-factor* advantage,
+not growth in n, and the step from n = 4 to n = 6 is 1.50 -> 1.67 -- about 11%,
+comfortably inside serving-measurement noise.
+
+An earlier draft of this document claimed the approach "scales better as #nodes
+increases". That was wrong, and no node count available to us could have shown
+it, because there is no unbounded trend to show.
+
+**What is actually measurable, and is the real claim: hotspot formation.** As
+offered load rises, disagg's prefill tier saturates while colocation spreads the
+same bytes over more pairs. The quantity to report is therefore the *distribution*
+of per-link load and its tail, not a slope in n:
+
+- p99 / max per-link utilization at matched offered load
+- whether disagg's busiest link saturates before colocation's does
+- two-way usage: fraction of bytes on the reverse direction of each link, which
+  is structurally 0 for disagg and nonzero for colocation
+
+Those separate the two topologies at any n >= 4 and get sharper at 8.
 
 ### Choosing among multiple hit nodes
 
@@ -318,7 +335,8 @@ main risk in this section.
 | Best-effort migration makes replication net-positive | **Hypothesis** | 4 x H20 repeated-prefix trace, hit rate vs KV displaced |
 | Acceptance-length input improves TPOT prediction | **Hypothesis** (mechanically must; size unknown) | fit with/without `alpha_hat` on the MTP trace |
 | Randomized source selection suffices vs congestion modelling | **Hypothesis** | 4 x H20, link utilization spread |
-| Approach scales better as #nodes grows | **Not testable at 4 nodes** | simulator, or drop as an empirical claim |
+| Complete-vs-bipartite is a bounded ~2x constant, 88% saturated by n=8 | **Derived** (arithmetic; corrects an earlier "scales with n" claim) | state as analysis |
+| Disagg forms link hotspots that colocation does not, at matched load | **Hypothesis** | 8 x 2 H20 with verified distinct hosts; p99/max per-link utilization |
 
 ### Experiment order
 

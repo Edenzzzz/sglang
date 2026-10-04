@@ -1766,3 +1766,73 @@ bash ../VibeCUDA/scripts/gpu_keepalive.sh start   # restart after benchmarks
 | Default | `default_bt.nsys-rep` | `default_kernel.sqlite` |
 | Persistent | `persistent_bt.nsys-rep` | `persistent_kernel.sqlite` |
 | POD | `pod_bt.nsys-rep` | `pod_kernel.sqlite` |
+
+## H200 server-side kernel A/B (2026-10-04)
+
+Hardware: 1x NVIDIA H200 143GB, 132 SMs, sm_90a (merlin trial `vibecuda`, job
+`e59d6e2974d3ed90`, queue `h100-sxm-80gb.vmss-eastus2-vlmh200.agent.merge`).
+sglang `c0dfe0419` (branch tree on PYTHONPATH), flashinfer `tri_tile_` @
+`94909aa` in-tree. Qwen2.5-7B-Instruct, TP1, 28 qo / 4 kv heads.
+
+```bash
+# server
+SGLANG_FLASHINFER_USE_PERSISTENT=1 SGLANG_MIXED_ATTENTION_KERNEL=$K \
+python -m sglang.launch_server --model-path qwen7b --port 31000 \
+  --mem-fraction-static 0.80 --attention-backend flashinfer \
+  --enable-mixed-chunk --chunked-prefill-size 512 \
+  --max-running-requests 64 --disable-radix-cache --log-level info
+# load
+python -m sglang.bench_serving --backend sglang --port 31000 \
+  --dataset-name random-ids --random-input-len 4096 --random-output-len 512 \
+  --num-prompts 300 --request-rate inf --max-concurrency 64
+```
+
+`K` in {`persistent`, `batch_prefill`}. Both arms logged an **identical forward
+composition** -- 3016 mixed, 969 `decode_cuda_graph`, 15 `pure_prefill` -- so
+only the mixed-batch attention kernel differs.
+
+| | persistent overlap | BatchPrefill | delta |
+|---|---|---|---|
+| Total token throughput | **23,594 tok/s** | 22,576 | **+4.5%** |
+| Output token throughput | 2,660 | 2,545 | +4.5% |
+| Request throughput | 10.10 req/s | 9.67 | +4.4% |
+| Mean TTFT | 1,327 ms | 1,373 | -3.4% |
+| P99 TTFT | 4,846 ms | 5,017 | -3.4% |
+| Mean ITL | 17.63 ms | 18.54 | -4.9% |
+| P99 ITL | **21.20 ms** | 22.84 | **-7.2%** |
+
+### Three method errors worth not repeating
+
+Forcing `SGLANG_MIXED_ATTENTION_KERNEL` is not a convenience, it is what makes
+this an A/B at all. Three earlier attempts produced arms that agreed to 0.1% on
+both throughput and P99 TTFT, which is not a null result about the kernels:
+
+1. **Unsaturated operating point.** 8 req/s at concurrency 32 leaves the GPU idle
+   most of the wall clock, so no kernel difference can surface. `--request-rate
+   inf` with concurrency 64 was needed before anything was being measured.
+2. **`--log-level warning` discarded the diagnostic.** `_count_forward` logs the
+   path mix every 2000 forwards at INFO, which is exactly the instrument that
+   catches error 3; running at warning threw it away.
+3. **The gate routed both arms to the same kernel.** With
+   `SGLANG_FLASHINFER_USE_PERSISTENT=1` and the gate active, the mix was
+   `mixed_batch_prefill=3811 (63.5%)` against `mixed_persistent=83 (1.4%)` --
+   both arms were running BatchPrefill. `select_mixed_attention_kernel`'s
+   out-of-support guard defaults there, and a synthetic `random-ids` workload is
+   outside the fitted 1,316-point region. Moving to the KV-concentration regime
+   (32K x 8) only raised it to 1.85% of forwards, so 32K is still short of the
+   64K the gate wants.
+
+Each was catchable up front with one question: is the machine busy, is the code
+path executing, am I varying what I think I am varying. Always read the forward
+mix before believing a server A/B.
+
+### Scope
+
+This verifies the **persistent overlap kernel**, which is what the analytic cost
+model and the PD-colocation story in `tasks/pd_colocation_vs_disagg.md` rest on.
+It does **not** verify the fused FA3+FA2 SM-pre-assignment kernel: `fused_run`
+has no call site in `flashinfer_backend.py`, so that kernel never executes in
+the server. Wiring it needs the four constraints the standalone harness
+established -- FA3's plan capped to `sm_split`, the FA2 side's KV indices
+rebased past the FA3 rows' pages, FA3 given vector-sparse offsets rather than
+page ids, and FA3 confined to a contiguous batch prefix.

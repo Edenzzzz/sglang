@@ -2848,3 +2848,43 @@ whole kernel while 1-2 wait and then run FA3 as a 256-thread configuration (whic
 needs FA3 retuned for two warpgroups), or giving FA3 a dynamic work queue so no
 CTA ever changes role mid-kernel -- which is the design the earlier sections point
 at and the only one that avoids the register protocol entirely.
+
+#### Final attempt: symmetric 3-warpgroup drain — UNVERIFIED, verify before relying on it
+
+Acting on the resolved diagnosis, the symmetric kernel was changed so **all three**
+warpgroups drain the FA2 queue before FA3 (each with its own cursor, merge flag and
+named barrier), making the pre-FA3 instruction stream identical across them -- the
+condition the 168/168 register measurement says is violated.
+
+**The correctness result was not obtained.** The build completed but the test run
+did not return before the session ended.
+
+**This matters more than an unfinished experiment usually would, because the change
+touches shared code on the default path.** `fused_drain_queue` now derives its
+named-barrier id from `kTidBase` (`kFusedQueueBarrier + kTidBase/128`) and offsets
+its shared cursor/merge slots by `kWg * 16`, and the reserved shared tail grew from
+16 to 48 bytes. The asymmetric kernel uses the same function.
+
+By inspection that is equivalent-or-safer for the asymmetric path: only one
+warpgroup drains per CTA there, so distinct barrier ids and distinct slots cannot
+collide, and the tail only grew (and `smem_size` was updated to match). **But
+"sound by inspection" is exactly what produced two of this session's bugs** -- the
+`kCursorOff` sizing taken from the wrong runner, and the fixed-rank KV stride
+assumption. So it is not to be trusted without the test.
+
+First action for whoever picks this up, before anything else:
+
+```
+FLASHINFER_FUSED_SYMMETRIC=0 SPLITS=64,48,32 \
+  python tests/test_fused_server_batch.py        # asymmetric path MUST still PASS
+```
+
+If that fails, revert flashinfer to `a94f412` (which has the verified asymmetric
+path and the symmetric variant's earlier, single-warpgroup form) and re-apply the
+3-warpgroup drain as a change confined to the symmetric kernel only, rather than to
+`fused_drain_queue` which both share. Then run the symmetric arm:
+
+```
+FLASHINFER_FUSED_SYMMETRIC=1 FA3_PLAN_CTAS=132 SPLITS=64 \
+  python tests/test_fused_server_batch.py
+```

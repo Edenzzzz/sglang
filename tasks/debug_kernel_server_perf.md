@@ -3253,3 +3253,40 @@ One simplification that does hold for whoever takes it on: with
 masking over the verify rows is correct and no tree-mask plumbing is needed. That
 removes the attention-backend half of the problem, leaving the scheduling reorder
 as the whole of it.
+
+#### Multicast is absent from flashinfer's Hopper attention entirely, not just the paged path
+
+An earlier section said multicast was blocked because the *sparse* mainloop
+gathers KV (`sparse_mainloop.cuh:87`, `USE_TMA_LOAD_KV = false`), implying the
+dense path had it and the fix was to reach that path. **That was under-evidenced
+and the implication is wrong.** Checking `hopper/mainloop.cuh`, the dense path:
+
+```
+:61   SmemLayoutQ{}, select<0,2>(TileShape_QKD{}), _1{});   // no mcast for Q
+:67   take<0,2>(SmemLayoutK{}), select<1,2>(...), _1{});    // no mcast
+:73   take<0,2>(SmemLayoutV{}), select<2,1>(...), _1{});    // no mcast
+:121,124,127   same three, rebuilt                          // no mcast
+:205,219,234,239,248   copy(..., /*mcast_mask=*/0)
+```
+
+Every TMA descriptor is constructed with a cluster dimension of `_1{}` and every
+`copy()` passes a zero mcast mask. `hopper/kernel_traits.cuh` contains no cluster
+configuration at all.
+
+So there is **no runnable multicast path anywhere in this attention stack** --
+dense or sparse, Q or KV. The distinction matters for sizing the work:
+
+- what the earlier note implied: route the fused kernel to the dense mainloop
+  (page_size >= 128) and multicast comes along -- **false**;
+- what is actually required: *add* multicast to flashinfer's Hopper attention --
+  a cluster dimension in the TMA descriptors, a non-zero mcast mask on the copies,
+  cluster-scoped mbarriers, and a cluster launch config -- and only then route the
+  fused kernel through it.
+
+That is why no multicast number appears in this document: there is nothing to
+measure yet, and the honest statement is that the feature does not exist here
+rather than that it is switched off. Testing it means implementing it first.
+
+This is the correct characterisation to hand over, and it supersedes the earlier
+"needs a `sparse_mainloop.cuh` gather->TMA rewrite" framing, which was necessary
+but not sufficient.

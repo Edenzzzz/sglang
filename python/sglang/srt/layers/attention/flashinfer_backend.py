@@ -1424,7 +1424,9 @@ class FlashInferAttnBackend(AttentionBackend):
             layer.scaling,
             fused["sm_fa3"],
             fused["n_tok"],
-            fused["sm_fa3"],
+            # fa3_num_ctas, and it must match what the plan was built for: num_sm
+            # for the symmetric kernel, sm_split for the asymmetric one.
+            self._fused_num_sm() if self._fused_symmetric() else fused["sm_fa3"],
             0,  # pers_kv_page_offset: the plan's indptr is already global
             fused["fa3_sparse"],
             out,
@@ -1693,7 +1695,11 @@ class FlashInferAttnBackend(AttentionBackend):
         # a per-step decision.
         hd = self.head_dim
         _prev = os.environ.get("FLASHINFER_FA3_MAX_CTAS")
-        os.environ["FLASHINFER_FA3_MAX_CTAS"] = str(int(sm_fa3))
+        # Whole grid in symmetric mode: every CTA owns an FA3 slice there, while
+        # sm_split only decides who starts on FA3 rather than who may reach it.
+        os.environ["FLASHINFER_FA3_MAX_CTAS"] = str(
+            self._fused_num_sm() if self._fused_symmetric() else int(sm_fa3)
+        )
         try:
             st["fa3"].plan(
                 qi_f, ki_f, kv_indices, torch.ones(n_rows, dtype=torch.int32),
@@ -1731,6 +1737,17 @@ class FlashInferAttnBackend(AttentionBackend):
             # the -8.7% actually lives.
             return None
         return plan
+
+    def _fused_symmetric(self):
+        """Whether the symmetric (FA2-role CTAs also run FA3) kernel is selected.
+
+        Read from the environment on every call rather than cached: the flag is
+        also read per-launch inside the kernel dispatch, and an A/B that flips it
+        between runs must not measure one variant twice.
+        """
+        import os
+
+        return os.environ.get("FLASHINFER_FUSED_SYMMETRIC", "0") == "1"
 
     def _fused_num_sm(self):
         n = getattr(FlashInferAttnBackend, "_sm_count", None)

@@ -22,21 +22,27 @@ import argparse, re, sys
 import numpy as np
 
 FEATS = ["et", "bs", "np", "ptok", "pf", "nd", "dkv", "kv", "mx"]
-LINE = re.compile(r"STEPTRACE (\w+) " + " ".join(f"{f}=(-?\\d+)" for f in FEATS) + r" t=([0-9.]+)")
+_BODY = " ".join(f"{f}=(-?\\d+)" for f in FEATS)
+GPU = re.compile(r"STEPTRACE (\w+) " + _BODY + r" gpu=([0-9.]+)")
+WALL = re.compile(r"STEPTRACE (\w+) " + _BODY + r" t=([0-9.]+)")
 
 
 def parse(path):
-    """Rows of (mode, features, dt_ms). dt is to the NEXT step of any mode."""
-    recs = []
-    for ln in open(path, errors="replace"):
-        m = LINE.search(ln)
-        if m:
-            recs.append((m.group(1), [int(m.group(i + 2)) for i in range(len(FEATS))],
-                         float(m.group(len(FEATS) + 2))))
-    out = []
-    for (mode, f, t), (_, _, t_next) in zip(recs, recs[1:]):
-        out.append((mode, f, (t_next - t) * 1e3))
-    return out
+    """Rows of (mode, features, target_ms).
+
+    A trace carrying `gpu=` gives the step's own GPU span, measured with CUDA
+    events read a step later. A trace carrying only `t=` gives launch
+    timestamps, and the target is then the launch-to-launch interval -- which
+    under a finite request rate also contains the arrival gap, so the two are
+    not interchangeable and the file decides which is used.
+    """
+    text = open(path, errors="replace").read()
+    if GPU.search(text):
+        return [(m.group(1), [int(m.group(i + 2)) for i in range(len(FEATS))],
+                 float(m.group(len(FEATS) + 2))) for m in GPU.finditer(text)]
+    recs = [(m.group(1), [int(m.group(i + 2)) for i in range(len(FEATS))],
+             float(m.group(len(FEATS) + 2))) for m in WALL.finditer(text)]
+    return [(mode, f, (t2 - t) * 1e3) for (mode, f, t), (_, _, t2) in zip(recs, recs[1:])]
 
 
 def select(rows, mode, lo=0.05, hi=1000.0):
@@ -76,26 +82,44 @@ def fit_gbt(Xtr, ytr, Xte):
 
 
 def _torch_fit(Xtr, ytr, Xte, build, epochs, lr, log_target):
+    """Train one torch regressor. Targets are scaled, which is not cosmetic:
+    fitting ~40 ms values directly makes the gated mixture diverge, and
+    exponentiating an unscaled log-space prediction overflows."""
     import torch
+
     torch.manual_seed(0)
     mu, sd = Xtr.mean(0), Xtr.std(0) + 1e-8
     xt = torch.tensor((Xtr - mu) / sd, dtype=torch.float32)
     xe = torch.tensor((Xte - mu) / sd, dtype=torch.float32)
-    tt = torch.tensor(np.log1p(ytr) if log_target else ytr, dtype=torch.float32)
+    if log_target:
+        # MSE in log space is relative error in ms, so no extra weighting.
+        t = np.log1p(ytr)
+        tm, ts = t.mean(), t.std() + 1e-8
+        tt = torch.tensor((t - tm) / ts, dtype=torch.float32)
+    else:
+        # Keep the target near 1 so a relative loss stays well-scaled.
+        tm, ts = 0.0, float(ytr.mean())
+        tt = torch.tensor(ytr / ts, dtype=torch.float32)
     net = build(Xtr.shape[1])
     opt = torch.optim.Adam(net.parameters(), lr=lr)
     sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
     for _ in range(epochs):
         opt.zero_grad()
         pred = net(xt)
-        # relative loss: MAPE is the reported metric, so optimise its smooth kin
-        loss = ((pred - tt).abs() / tt.abs().clamp_min(1e-6)).mean()
+        loss = ((pred - tt) ** 2).mean() if log_target else \
+            ((pred - tt).abs() / tt.abs().clamp_min(1e-6)).mean()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(net.parameters(), 5.0)
         opt.step()
         sch.step()
     with torch.no_grad():
-        p = net(xe).numpy()
-    return np.expm1(p) if log_target else p
+        p = net(xe).numpy().astype(np.float64)
+    out = np.expm1(np.clip(p * ts + tm, -30.0, 30.0)) if log_target else p * ts
+    # Clamp to the envelope the training fold actually observed. A cost model
+    # that extrapolates orders of magnitude past its data is not a prediction,
+    # and without this a single diverged test point dominates the MAPE while
+    # leaving p90 untouched -- which is what made these two classes look broken.
+    return np.clip(out, 0.5 * ytr.min(), 2.0 * ytr.max())
 
 
 def fit_mlp(Xtr, ytr, Xte):
@@ -115,7 +139,7 @@ def fit_mlp(Xtr, ytr, Xte):
         def forward(self, x):
             return self.net(x).squeeze(-1)
 
-    return _torch_fit(Xtr, ytr, Xte, MLP, 400, 2e-3, True)
+    return _torch_fit(Xtr, ytr, Xte, MLP, 1500, 3e-3, True)
 
 
 def fit_moe(Xtr, ytr, Xte, n_experts=4):
@@ -139,7 +163,7 @@ def fit_moe(Xtr, ytr, Xte, n_experts=4):
             w = torch.softmax(self.gate(x), dim=-1)
             return (w * self.experts(x)).sum(-1)
 
-    return _torch_fit(Xtr, ytr, Xte, lambda d: MoE(d, n_experts), 3000, 5e-3, False)
+    return _torch_fit(Xtr, ytr, Xte, lambda d: MoE(d, n_experts), 4000, 3e-3, False)
 
 
 MODELS = {

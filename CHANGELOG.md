@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.7.4 — One Scheduler for Both Roles (2026-10-05)
+
+### Refactor: the wgmma role becomes a task in our own plan, not `PrefillSM90Plan`
+
+The FA3 role was planned by flashinfer's `PrefillSM90Plan`, which measurement
+showed cannot serve this kernel: it emits one work item per (q-tile x qo head x
+row) carrying the **full** `kv_len`, with no partial-O/LSE buffers and no merge
+map. Concretely, as the server planned it, the wgmma role had
+
+- **no GQA packing** — `num_qo_tiles = ceil_div(qo_len, cta_tile_q)`
+  (`scheduler.cuh:939`) plus upstream's own note that FA3 "do[es] not fuse query
+  and group heads", against `qo_len * gqa_group_size` in the persistent plan
+  (`scheduler.cuh:1199`);
+- **no KV splitting** — one CTA walks a whole KV range.
+
+At the measured serving shapes (median 11 decode rows totalling 47,935 KV, one
+500-token prefill chunk over a 2,595-token prefix) that leaves the role almost no
+parallel width, which is why fusing it changed a mixed step by -0.21% and
+end-to-end throughput by -0.65%: parity was the *expected* result, not a tuning
+failure.
+
+`TwoStageHolisticPlan` is now generic in its task count. A 4-task plan adds the
+wgmma class as task 3, which therefore inherits, with no new machinery:
+
+- packed-GQA tiling (every class in this plan tiles packed rows),
+- split-KV via the existing `kv_len_limit` chunk loop,
+- a JIT-reduction group (`group_id`, `partial_indptr`, `merge_indptr`,
+  `group_counter`) so partials are merged in-kernel by whichever work item
+  arrives last, with no grid barrier and no second launch.
+
+A 3-task `plan_info` selects exactly the previous behaviour, so `BatchAttention`
+cannot silently drop task-3 work. Admission is `packed_qo_len >=
+FLASHINFER_FA3_MIN_PACKED_QO` (default 128 = fills one packed tile), tunable for
+the boundary sweep rather than asserted. Both instantiations compile for sm_90a.
+
+### Measured: the symmetric flag is worth 1.59x on the serving path
+At `sm_fa3=8`, asymmetric (8 CTAs own all FA3 work) vs symmetric: 6,279 vs
+9,990 tok/s, mean ITL 73.05 vs 46.08 ms, p99 ITL 170.84 vs 63.44 ms, on identical
+batch shapes (p10/p50 step time matched to 2%; only the tail moved). Previously
+this was a kernel-level number (0.687x -> 1.003x of monolithic) only.
+
+### Measurement hygiene: a stale diagnostic invalidated a day of numbers
+A detached `compute-sanitizer synccheck` from the CLUSTER=2 investigation was
+still resident after 2h54m at 100% CPU, holding 2,760 MiB. Every arm measured
+alongside it ran 2.45x slow (fused 9,990 vs 24,431 tok/s on the same command) and
+*stayed consistent with its own control*, so no A/B looked wrong. Killing it
+restored yesterday's scale. The measurement driver now refuses to start while
+`nvidia-smi --query-compute-apps` is non-empty, and synccheck is recorded as
+non-viable on this kernel (3 hours without reaching a launch result).
+
+### Per-step trace carries features and GPU time
+`SGLANG_STEP_TRACE=1` now logs per-step row classes (prefill rows, chunk tokens,
+prefix, decode rows, decode KV, total KV, max chunk) and the step's own GPU span
+from CUDA events read a step later, so nothing synchronises on the measured path.
+Cost: 0.02% (24,668 vs 24,431 tok/s traced/untraced), which corrects the earlier
+claim that these runs were "depressed by per-step logging".
+
 ## v0.7.3 — Hopper 4-Mode Fused Kernel: Multicast Tested, Doc Split (2026-10-05)
 
 ### Docs: split by effort, with lineage

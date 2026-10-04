@@ -2774,16 +2774,37 @@ extension) was made twice and did not produce them: first an include-path error
 for the JIT-generated `batch_attention_config.inc`, then, with that located via
 `find`, a standalone compile that emitted no `Compiling entry function` blocks --
 this translation unit does not build cleanly outside the torch JIT environment
-that normally assembles its flags. So **the cause is not established**. Adding `-Xptxas -v` to the
-`extra_cuda_cflags` in the test's own `load()` (now wired, via `PTXAS_V=1`) was
-tried as well and also did not yield them: the kernel's abort truncates the run's
-output before the build log is flushed. Three attempts, three different reasons.
+that normally assembles its flags. So **the cause is not established**. The counts were finally obtained with
+`tests/build_only_fused.py`, which builds with `-Xptxas -v` and never launches a
+kernel (the earlier attempts failed on an include path, on the TU not compiling
+standalone, and on the kernel's abort truncating the log):
 
-So the register counts need a run that **does not launch the faulting kernel** --
-build the extension in one process (import and `load()` only, no `fused_run`) with
-`PTXAS_V=1`, capture that log, and read the counts there. `PTXAS_V=1` is committed
-and ready; only the build-without-launch driver is missing. Until that is done the
-choice between the two mechanisms is open, and the symmetric variant stays off. The two candidate mechanisms it would distinguish are a protocol
+| kernel | registers | spill stores (per instantiation) |
+|---|---|---|
+| asymmetric | **168** | 2508 / 30752 / 2296 / 1988 / 1988 |
+| SYMMETRIC | **168** | 2568 / 19264 / 2264 / 3020 / 3020 |
+
+**This falsifies the register-budget hypothesis.** Both kernels compile to an
+identical 168 registers per thread, and the symmetric variant does not spill more
+(in the heaviest instantiation it spills *less*, 19264 against 30752). So the
+fault is not `alloc<240>` becoming unsatisfiable through a larger footprint, and
+the surviving explanation is a **`setmaxnreg` protocol violation**.
+
+The arithmetic says why that protocol has no margin here. At a 168-register
+baseline over three warpgroups, FA3's producer deallocating to 24 releases 144
+registers, and its two consumers allocating to 240 claim 72 each -- exactly 144.
+The protocol balances to the register, so it tolerates no deviation in which
+warpgroup issues which instruction or in what order. In symmetric mode warpgroup 0
+executes the FA2 mainloop, with its own named-barrier syncs that warpgroups 1-2
+(parked at `__syncthreads()`) never reach, so the three warpgroups enter FA3's
+body having run different instruction streams before its dec/inc sequence begins.
+
+That makes the fix direction concrete rather than speculative: the FA2 drain
+cannot happen on a warpgroup that afterwards participates in FA3's register
+protocol. Either FA3 must be retuned so the drain uses a warpgroup it excludes, or
+FA3 needs a dynamic work queue so no CTA changes role mid-kernel -- the second
+being the option that removes the protocol constraint entirely rather than working
+around it. The two candidate mechanisms it would distinguish are a protocol
 violation (a warpgroup joining FA3's dec/inc sequence after running unrelated
 code) and a register *budget* problem (the combined FA2+FA3 footprint forcing a
 baseline that makes `alloc<240>` unsatisfiable). Confirming which is the first

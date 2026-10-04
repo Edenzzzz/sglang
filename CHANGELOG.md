@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.7.2 — Two Real Bugs on the Fused Serving Path, Found by Dumping the Launch (2026-10-04)
+## v0.7.2 — The Fused Kernel Reaches the Serving Path: Three Bugs, and a Measured 8.1% Regression (2026-10-04)
 
 ### Fixed: the page-index array handed to the fused kernel was wrong
 The previous session's planning optimisation reused `wrappers[0]._kv_indices` on
@@ -70,9 +70,56 @@ slice of a reused buffer, the index array built by concatenating `req_to_token`
 rows. All pass, so provenance was never the cause, contrary to the hypothesis
 recorded in the previous session.
 
+### Fixed: the KV cache does not have a fixed rank (flashinfer `4d59914`)
+The extension read `k_cache.stride(1)` as the token stride and `stride(2)` as the
+head stride. The standalone harness slices a `[pages, 2, page_size, H, D]` buffer
+and so passes **rank 4**; sglang's pool passes **rank 3** `[tokens, H, D]`. On the
+dumped batch that gave `k_stride_h = 1`, so all four KV heads aliased one head's
+memory and `get_gmem_layout` built a degenerate layout whose tensor map made
+`cudaLaunchKernel` **itself** fail with "misaligned address". The failed launch
+poisoned the CUDA context, so the next unrelated attention call failed too and
+killed the server — which is what earlier runs mistook for a fault inside
+flashinfer's own persistent kernel.
+
+The page step survived both layouts by accident (`ratio * k_stride_n` is
+2*512 for rank 4 and 4*128 for rank 3, both correct), which is why only the head
+stride was wrong and the symptom was a launch rejection rather than wrong numbers.
+
+`kv_strides()` now derives `(page, n, h)` from the rank and rejects any other
+rank; `_fa3_sparse_indices` picks the matching vector-sparse ratio.
+
+Ruled out by measurement, not argument: tensor provenance (`tests/align_fused.py`)
+and the CUDA 12.8 vs 13.1 toolchain split (`tests/test_fused_server_batch.py`
+passes under the server's own venv python).
+
+### Measured: the fused kernel runs server-side, and costs 8.1%
+First valid server-side A/B. `--random-input-len 8192 --random-output-len 192
+--num-prompts 300 --request-rate 12 --max-concurrency 32`, qwen7b on H200,
+CUDA 12.8 / torch 2.8.0, sglang this commit + flashinfer `4d59914`:
+
+| metric | fused | base | delta |
+|---|---|---|---|
+| total token throughput (tok/s) | 23250.44 | **25291.44** | **-8.1%** |
+| mean TTFT (ms) | 3443.97 | 3150.61 | +9.3% |
+| mean ITL (ms) | 20.18 | 18.54 | +8.8% |
+| p99 ITL (ms) | 31.87 | 31.62 | +0.8% |
+| `mixed_fused_fa3` share | 29540/32400 (**91.2%**) | absent | — |
+
+300/300 requests succeeded in both arms, 0 misaligned, 0 launch failures. The
+direction agrees with the kernel-level result (0.410x the sequential co-launch,
+0.709x at the best split on H200), so the remaining deficit is the structural one,
+not wiring.
+
+An earlier A/B at `--random-input-len 2048` showed a null result (18182 vs 18203
+tok/s) and was **invalid**: at that length no row clears the FA3 gate's
+`kv_tiles >= 32` (>= 4096 KV) requirement, so `mixed_fused_fa3` was absent from
+both arms and they ran the same kernel. Every fused measurement must carry its
+`mixed_fused_fa3` share or it is not evidence about this kernel.
+
 ### Still open
-Server-side throughput for the fused path is **not** measured. `SGLANG_FUSED_FA3_SM_SPLIT`
-stays 0 by default.
+The fused path is a measured regression, so `SGLANG_FUSED_FA3_SM_SPLIT` stays 0 by
+default. Closing the gap needs warpgroup-reentrant FA2, not a split sweep: the
+kernel-level sweep already caps the best split at 0.709x.
 
 ## v0.7.1 — Split-KV and GQA Packing for FA3; Gate on Tile-Grid Quantities (2026-09-30)
 

@@ -2171,3 +2171,114 @@ taken after the fix shows `kv_indices len = 8192, pages needed = 8192, 0 invalid
 entries` (previously 3846 vs 4102 with 256 garbage entries), and every base
 pointer 16-byte aligned. That bug is fixed; the launch rejection is a separate
 one.
+
+#### The fused kernel now runs on the serving path
+
+With the rank-derived KV strides (flashinfer `4d59914`) and the matching
+vector-sparse ratio (sglang `ca09078ab`), the first clean serving run:
+
+```
+16/16 concurrent ~4000-token requests served (max_new_tokens 48)
+misaligned=0   fatal=0   launch_failed=0   server alive at the end
+forward mix (n=600): mixed_fused_fa3=448 (74.7%)  mixed_persistent=118 (19.7%)
+                     decode_cuda_graph=25 (4.2%)  pure_prefill=9 (1.5%)
+```
+
+Command: `bash /tmp/run5.sh 1 fix2` on the H200 pod (`serve.sh` with
+`SGLANG_FUSED_FA3_SM_SPLIT=1`, `SGLANG_MIXED_ATTENTION_KERNEL=persistent`,
+`--enable-mixed-chunk --chunked-prefill-size 512 --max-running-requests 64
+--disable-radix-cache`, qwen7b).
+
+The `mixed_fused_fa3` count is taken at the launch site, not at plan time, so it
+counts launches rather than accepted plans -- the instrument whose earlier
+mis-placement produced the retracted numbers.
+
+Two operational notes from this session worth keeping:
+
+- `CUDA_LAUNCH_BLOCKING=1` is usable for attribution but **not** for a serving
+  run: it slowed startup enough that the detokenizer heartbeat timed out and the
+  server wedged before any traffic was processed. Use it only to locate a fault.
+- `pkill -f` patterns must bracket a character (`sglan[g]::`) or the webshell
+  kills itself, because the pattern string appears in its own command line. This
+  cost several cycles earlier and recurred once this session.
+
+#### A fifth invalid A/B, caught by the composition line
+
+The first throughput A/B on the now-working path produced a clean-looking null
+result:
+
+| arm | total tok/s | mean ITL | p99 ITL | `mixed_fused_fa3` |
+|---|---|---|---|---|
+| `SM_SPLIT=1` | 18182.03 | 11.31 | 29.99 | **absent** |
+| `SM_SPLIT=0` | 18203.29 | 11.05 | 28.88 | absent |
+
+It is invalid, and the reason is in the composition line rather than the numbers:
+`mixed_fused_fa3` never appears in either arm, so **both arms ran the same
+kernel** and the 0.1% difference is run-to-run noise.
+
+The cause is the workload, and the gate was behaving correctly. `bench.sh` used
+`--random-input-len 2048`, while the FA3 gate needs `packed_qo >= 48` **and**
+`kv_tiles >= 32`, i.e. at least 4096 accumulated KV. At `chunked-prefill-size 512`
+a 2048-token prompt never accumulates more than 2048, so `kv_tiles <= 16` and no
+row ever qualifies. The hand-driven traffic that first exercised the kernel used
+~4000-word prompts, which is why it engaged there and not here.
+
+So the fused path only engages on long-context prefill, which is worth stating as
+a property of the gate rather than discovering again: the A/B must use
+`--random-input-len` of at least ~4096, and **every** fused measurement must carry
+its `mixed_fused_fa3` share or it is not evidence about this kernel.
+
+That makes five invalid A/Bs on this path, all from the same root cause -- the arms
+were not actually running different kernels. The composition counter is the only
+thing that has reliably caught it, which is why it is checked before the numbers.
+
+#### First valid server-side measurement of the fused kernel: a 8.1% regression
+
+Same script with `--random-input-len 8192 --random-output-len 192
+--num-prompts 300 --request-rate 12 --max-concurrency 32`, which clears the FA3
+gate. The compositions now differ, so the two arms really did run different
+kernels:
+
+| metric | fused (`SM_SPLIT=1`) | base (`SM_SPLIT=0`) | delta |
+|---|---|---|---|
+| total token throughput (tok/s) | 23250.44 | **25291.44** | **-8.1%** |
+| benchmark duration (s) | 54.83 | 50.40 | +8.8% |
+| output token throughput (tok/s) | 556.62 | 605.48 | -8.1% |
+| mean TTFT (ms) | 3443.97 | 3150.61 | +9.3% |
+| p99 TTFT (ms) | 4679.48 | 4221.87 | +10.8% |
+| mean ITL (ms) | 20.18 | 18.54 | +8.8% |
+| p99 ITL (ms) | 31.87 | 31.62 | +0.8% |
+| `mixed_fused_fa3` share | **29540 / 32400 (91.2%)** | absent | — |
+| `mixed_persistent` share | 2796 (8.6%) | 2750 (98.2%) | — |
+| misaligned / fatal / launch failures | 0 / 0 / 0 | 0 / 0 / 0 | — |
+
+300/300 requests succeeded in both arms and both servers were alive at the end.
+
+Commits: sglang `ca09078ab`, flashinfer `4d59914`. Command:
+`bash /tmp/ab.sh` on the H200 pod (both arms from one `serve.sh`, toggled by
+`SGLANG_FUSED_FA3_SM_SPLIT`), model qwen7b, `--chunked-prefill-size 512
+--max-running-requests 64 --disable-radix-cache`,
+`SGLANG_MIXED_ATTENTION_KERNEL=persistent`, `FLASHINFER_FUSED_BACKFILL=0`,
+CUDA 12.8 / torch 2.8.0 (the venv the server uses).
+
+**Reading.** The kernel is now correct and genuinely running on the serving path
+at 91.2% of forwards, and it is **slower than the persistent kernel it replaces
+by 8.1% of end-to-end throughput.** That is one run per arm, but the gap is two
+orders of magnitude larger than the 0.1% spread between the two arms of the
+earlier A/B where both ran the same kernel, so it is a real effect rather than
+noise.
+
+The direction agrees with the kernel-level measurements rather than contradicting
+them: on H200 the fused kernel is 0.410x the sequential co-launch over 40 mixed
+MTP steps, and 0.709x at its best split. A -8.1% end-to-end cost from a kernel
+that is ~0.7x on the attention it replaces is the expected magnitude once the
+rest of the step is accounted for.
+
+So the remaining deficit is not a wiring bug; it is the structural one already
+recorded above. `sm_fa3` is fixed at 48 here by `plan_dispatch_prefix`
+(`MIN_SM_FA3, MAX_SM_FA3 = 8, 48`), and a split sweep is worth doing, but the
+kernel-level sweep already showed the best split reaching only 0.709x, so a sweep
+is very unlikely to turn -8.1% into a win on its own. The thing that would is
+warpgroup-reentrant FA2, which is narrowed to a 3-line region (threading
+`barrier_id` through `Run` and scoping `threadblock_sync_mdo_states`) and has been
+attempted and reverted twice.

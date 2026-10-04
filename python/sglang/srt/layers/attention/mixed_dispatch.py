@@ -53,7 +53,35 @@ BW_PEAK = 2.87e3                      # B/ns at saturation
 # crossover after GQA packing: 0.78x at packed_qo 32, 1.13x at 56.
 MIN_PACKED_QO = 48
 # ... and only if there is enough KV behind it to amortise the mainloop.
-MIN_KV_TILES = 32
+#
+# MEASURED 2026-10-05 and this was wrong, expensively. At the serving head shape
+# (28/4/128) on an exclusively-held H200, one row, both mainloops planned from the
+# same rows (tasks/fused_specdec_workload/row_cmp.py):
+#
+#   qo x kv        persistent        FA3     FA3 wins by
+#   500 x  3095    194.5 us      74.0 us        2.63x
+#   500 x  8192    304.5 us     148.1 us        2.06x
+#   500 x 32768    939.2 us     499.8 us        1.88x
+#   128 x  3095    236.0 us      73.2 us        3.22x
+#  2048 x  3095    362.9 us     215.0 us        1.69x
+#
+# FA3 wins at EVERY kv length once the row has real q work, and wins by MORE at
+# short kv, not less -- the opposite of what a `kv_tiles >= 32` floor assumes.
+# The modal serving mixed batch is one 500-token chunk over a 2595-token prefix
+# (kv 3095 = 25 tiles) plus 11 decode rows, and that chunk is 93% of the step's
+# attention. The old floor excluded exactly it, so every fused step ran the whole
+# batch on the slower mainloop and the fused path measured parity (-0.21% on a
+# mixed step, -0.65% end to end) while the kernel underneath was 2.6x faster.
+#
+# The floor is now 1 (no KV condition) and admission is carried by q work alone.
+# Decode-shaped rows are still excluded, by MIN_QO_LEN below rather than by KV.
+MIN_KV_TILES = int(os.environ.get("SGLANG_FUSED_MIN_KV_TILES", "1"))
+# FA3 is planned UNPACKED (one work item per qo head, tiles on qo_len -- see
+# scheduler.cuh:939), so a packed-unit threshold alone admits rows as short as
+# qo_len 7 at gqa 7 into a 128-row tile. This floor is in the units FA3 is
+# actually planned in. Measured: qo_len 1/2/4 lose to the persistent kernel,
+# qo_len >= 16 wins everywhere tested.
+MIN_QO_LEN = int(os.environ.get("SGLANG_FUSED_MIN_QO_LEN", "16"))
 # Fold the FA3 class in unless one SM's worth of it is at least this fraction of
 # the makespan the rest of the device needs. Below that, a separate SM set would
 # sit idle -- the class is too small to own hardware.
@@ -90,7 +118,8 @@ def split_classes(qo_lens, kv_lens, gqa_ratio):
     packed_qo = qo * gqa_ratio
     q_tiles = (packed_qo + (TILE_Q - 1)) >> Q_SHIFT
     kv_tiles = (np.maximum(kv, 1) + (TILE_KV - 1)) >> KV_SHIFT
-    fa3 = (packed_qo >= MIN_PACKED_QO) & (kv_tiles >= MIN_KV_TILES)
+    fa3 = ((packed_qo >= MIN_PACKED_QO) & (kv_tiles >= MIN_KV_TILES)
+           & (qo >= MIN_QO_LEN))
     return fa3, q_tiles, kv_tiles
 
 
@@ -114,7 +143,7 @@ def plan_dispatch(qo_lens, kv_lens, gqa_ratio, num_kv_heads, num_sm=NUM_SM):
         return fused
     # Short-circuit: most batches contain no row that could fill a 128-wide
     # tile, and they must not pay for the rest of the arithmetic.
-    min_qo = -(-MIN_PACKED_QO // gqa_ratio)
+    min_qo = max(-(-MIN_PACKED_QO // gqa_ratio), MIN_QO_LEN)
     if int(qo.max()) < min_qo:
         return fused
 

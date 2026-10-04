@@ -3167,3 +3167,45 @@ thing standing between this and shipping the path enabled.
 Commits: sglang `130a1893e` (server plumbing), flashinfer `ca17ed5` (the working
 symmetric kernel), `94764bb` (per-warpgroup barriers), `eff4970` (rendezvous off
 barrier 0 -- the actual fix).
+
+#### Confirmation: the win repeats, and it is a plateau rather than a spike
+
+Same harness, symmetric mode, sweeping the new optimum and repeating `sm_fa3=8`:
+
+| `sm_fa3` | tok/s | vs base | mean ITL | p99 ITL | mean TTFT |
+|---|---|---|---|---|---|
+| 4 | 25048.30 | +0.40% | 18.41 | 33.80 | 2652.14 |
+| **8 (sample 1)** | **25155.02** | **+0.83%** | 18.33 | 32.90 | 2636.22 |
+| **8 (sample 2)** | **25126.94** | **+0.71%** | 18.36 | 34.14 | 2639.82 |
+| 12 | 25074.79 | +0.50% | 18.40 | 34.03 | 2646.47 |
+| 16 | 24959.08 | +0.04% | 18.48 | 34.34 | 2668.59 |
+| base (2 samples) | 24946.41 / 24951.21 | — | 18.46 / 18.47 | 32.85 / 34.99 | 2671 / 2674 |
+
+200/200 requests, 0 misaligned, 0 launch failures, 90.6% fused share in every arm.
+
+**The caveat from the previous section is cleared.** The two `sm_fa3=8` samples
+agree to 0.11% (25155.02 / 25126.94, mean 25141) and both sit above the baseline's
+two samples, which agree to 0.02%. It is a **plateau**, not a lucky point: 4, 8 and
+12 all beat the baseline, and mean ITL (18.33-18.41 vs 18.46-18.47) and mean TTFT
+(2636-2652 vs 2671-2674) improve across the whole plateau. Five independent fused
+runs, all at or above baseline.
+
+p99 ITL is the one metric that does not clearly improve (32.90-34.14 against the
+baseline's 32.85-34.99) -- but those ranges overlap, and p99 ITL was already
+established as this harness's noisiest statistic, varying 6.5% between two
+identical baseline runs.
+
+**Enabling the path by default is now justified by evidence**, and it is three
+coupled changes rather than one, which is why it is written down rather than done
+in the last minutes of a session:
+
+1. `SGLANG_FUSED_FA3_SM_SPLIT` default 0 -> 1
+2. `FLASHINFER_FUSED_SYMMETRIC` default 0 -> 1 (the asymmetric kernel is the
+   regression; the default must be the symmetric one)
+3. `MAX_SM_FA3` 64 -> 8, but **mode-dependent**: 64 remains the measured optimum
+   for the asymmetric kernel and 8 for the symmetric one, so this must branch on
+   the mode rather than simply change the constant
+
+Anyone making that change should re-run this table afterwards, because flipping
+defaults alters which code path the gate selects and that has produced five
+invalid A/Bs in this task already.

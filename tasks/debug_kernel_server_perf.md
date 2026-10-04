@@ -2449,3 +2449,40 @@ This is also the directly relevant answer to the goal's perf-model question for
 EDF: the overlap cost model's **balance-point output must not be used to set this
 split.** Its step-time prediction is a separate matter and still rests on the 3.1%
 MAPE result for the overlap kernel, which this kernel does not inherit.
+
+#### Lifting the persistent cluster cap: -3.6% -> -2.0%
+
+The persistent role's cluster count was `max(16, min(2*(num_sm - sm_fa3), 96))`.
+The 96 was mine, chosen to keep the float workspace inside 160 MB -- not because
+96 was right. At the measured-optimal `sm_fa3 = 64` the persistent role gets 68
+CTAs, so `2*(132-64) = 136` clusters is what matches its grid, and the cap was
+truncating that by 30%.
+
+`SGLANG_FUSED_PERS_CLUSTER_CAP` and `SGLANG_FUSED_PERS_WS_MB` make this testable.
+At `sm_fa3 = 64`, chunk 512, cap 136 with a 320 MB workspace:
+
+| arm | tok/s | mean ITL | p99 ITL | mean TTFT | fused share |
+|---|---|---|---|---|---|
+| cap 96 (old default) | 24055.80 | 19.18 | 34.74 | 2821.14 | 90.5% |
+| cap 136, sample 1 | 24446.95 | 18.85 | 33.18 | 2757.48 | 90.5% |
+| cap 136, sample 2 | 24395.78 | 18.90 | 35.07 | 2763.73 | 90.5% |
+| base (fused off) | 24946.41 | 18.47 | 32.85 | 2671.04 | absent |
+
+200/200 requests, 0 misaligned, 0 plan declines in every arm. Two samples at cap
+136 agree to 0.2%, so the **+1.5%** is larger than the repeat spread, and it
+improves throughput *and* every latency statistic -- mean ITL 18.85-18.90 against
+the baseline's 18.47 is now within 2.3%.
+
+**The gap is now -2.0%** (24421 mean vs 24946), down from -8.1% at the start of
+this round. Defaults moved to cap 160 and a 320 MB persistent workspace; the
+extra ~160 MB is the price, and it is allocated lazily on the first accepted
+mixed batch.
+
+Progression of the fused path on this workload, all matched, all with the
+`mixed_fused_fa3` share checked:
+
+| configuration | tok/s | vs base |
+|---|---|---|
+| heuristic `sm_fa3=48`, cap 96 | 23250.44 | -8.1% |
+| swept `sm_fa3=64`, cap 96 | 24055.80 | -3.6% |
+| swept `sm_fa3=64`, cap 136 | 24421 (2 samples) | **-2.0%** |

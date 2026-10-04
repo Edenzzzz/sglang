@@ -1644,7 +1644,13 @@ class FlashInferAttnBackend(AttentionBackend):
             # clusters shrinks the buffer proportionally and is correct rather
             # than a workaround.
             fa3_mb = int(os.environ.get("SGLANG_FUSED_FA3_WS_MB", "64"))
-            pers_mb = int(os.environ.get("SGLANG_FUSED_PERS_WS_MB", "160"))
+            # 320, matching the lifted cluster cap above: the float workspace is
+            # max_num_kv_splits * (2*head_dim*num_kv_heads + 4) and scales with
+            # the cluster count, so 136 clusters does not fit in 160 MB. Leaving
+            # it at 160 made every plan fail the allocator check and the guard
+            # then declined the path silently -- the failure mode that once made
+            # a control arm look like a result.
+            pers_mb = int(os.environ.get("SGLANG_FUSED_PERS_WS_MB", "320"))
             st = self._fused_state = dict(
                 fa3=flashinfer.BatchPrefillWithPagedKVCacheWrapper(
                     torch.empty(fa3_mb << 20, dtype=torch.uint8, device=dev),
@@ -1656,7 +1662,17 @@ class FlashInferAttnBackend(AttentionBackend):
         # Cap the persistent side's cluster count to what can actually run it.
         # This both matches reality and keeps its float workspace within the
         # budget allocated above.
-        pers_clusters = max(16, min(2 * (self._fused_num_sm() - int(sm_fa3)), 96))
+        # Default 160, not 96. The old 96 was chosen to keep the float workspace
+        # inside 160 MB, not because 96 was right: at the measured-optimal
+        # sm_fa3 = 64 the persistent role gets 68 CTAs, so 2*(132-64) = 136
+        # clusters is what matches its grid, and 96 truncated that by 30%.
+        # Lifting the cap to 136 is worth +1.5% end-to-end and improves every
+        # latency percentile (two samples: 24446.95 / 24395.78 tok/s, mean ITL
+        # 18.85 / 18.90, p99 ITL 33.18 / 35.07, against 24055.80 / 19.18 / 34.74
+        # at cap 96). It costs ~160 MB more workspace, which is why the default
+        # workspace moves with it.
+        cluster_cap = int(os.environ.get("SGLANG_FUSED_PERS_CLUSTER_CAP", "160"))
+        pers_clusters = max(16, min(2 * (self._fused_num_sm() - int(sm_fa3)), cluster_cap))
         os.environ["FLASHINFER_PERSISTENT_MAX_CLUSTERS"] = str(pers_clusters)
 
         # Re-planning is the dominant cost of this path: two full plans, each

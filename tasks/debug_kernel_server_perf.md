@@ -2914,3 +2914,39 @@ Reproduce either arm with:
 FLASHINFER_FUSED_SYMMETRIC=0 SPLITS=64,48,32 python tests/test_fused_server_batch.py
 FLASHINFER_FUSED_SYMMETRIC=1 FA3_PLAN_CTAS=132 SPLITS=64 python tests/test_fused_server_batch.py
 ```
+
+#### Moving the rendezvous off barrier 0 changes the failure mode
+
+`__syncthreads()` compiles to `barrier.sync 0` and FA3 uses barrier 0 as
+`NamedBarriers::kQueryEmpty`, so the symmetric kernel's pre-FA3 rendezvous was
+moved to `kFusedQueueBarrier + 3` (flashinfer `eff4970`; confined to the symmetric
+kernel, so the asymmetric path is untouched by this edit).
+
+The symptom changed:
+
+| rendezvous | symptom |
+|---|---|
+| `__syncthreads()` (barrier 0) | `CUDA error: an illegal instruction was encountered`, reproduced in 3 runs |
+| named barrier 11 | no traceback and **no result table** -- the test printed its 3 header lines and produced nothing further under a 400 s timeout |
+
+Stated carefully, because the distinction matters: the absence of a traceback is
+**consistent with a hang**, and a hang is what a `NamedBarrier::sync(384, ...)`
+produces when fewer than 384 threads arrive. It is not proof of one -- the run was
+under `timeout 400` and no explicit timeout message was captured.
+
+What this does establish is that **barrier 0 was genuinely implicated** -- the
+illegal instruction is gone -- but that it was not the only problem. The most
+likely remaining issue is arrival count at the new barrier: all three warpgroups
+call `fused_drain_queue` before the rendezvous, and that function's own loop exits
+via `break` when its cursor passes `n_clusters`, so warpgroups can leave the drain
+at different iterations but should all still reach the rendezvous. Any path where
+one does not -- an early `return` inside a `Runner::Run`, for instance -- deadlocks
+all 384.
+
+Next step, and it is now a narrow one: confirm hang vs fault by running the
+symmetric arm with no timeout and `CUDA_LAUNCH_BLOCKING=1`, and if it hangs, dump
+the stack with `cuda-gdb` or add a counter to verify all three warpgroups reach
+the rendezvous. This is a materially smaller question than either of the two
+hypotheses that were falsified, and it is the fourth distinct mechanism this fault
+has presented -- which is itself the reason to instrument rather than hypothesise
+a fifth.

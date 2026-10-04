@@ -500,3 +500,27 @@ What remains for (2) in §12 is therefore mechanical rather than structural:
 warpgroup-relative warp and thread indices inside the mainloop (the `ltid`
 distinction the merge path already had to make), the three barrier ids from
 §12.1, and three smem slots carved from the aliased region.
+
+### 12.3 Correction to 12.1: the barrier budget was not the blocker
+
+12.1 said three per-warpgroup mainloop sync ids were needed and none were free.
+Reading the code rather than the id table: `threadblock_sync_mdo_states` is
+**already** per-warpgroup -- `kPersistentMainloopBarrier + int(tid_base / 128u)`,
+i.e. 9/10/11 -- and `prefill.cuh:1120` documents the exact deadlock (exit 124,
+GPU at 99%) that forced it. The only syncs still hard-coded to one shared id
+were `persistent_block_sync()` (8 call sites) and the JIT merge's last-arrival
+broadcast.
+
+Both now take the warpgroup's own id, reusing its mdo id rather than asking for
+a new one. That is sound for the same reason `__syncthreads()` can reuse barrier
+0 throughout a kernel: both are full-warpgroup rendezvous reached in program
+order, so they cannot interleave within a warpgroup. No new barrier ids, option 2
+of 12.1 for free, and option 3 (dropping the symmetric rendezvous) is not needed.
+
+What actually had to change was shared memory: all three warpgroups' mainloop
+storage pointed at one base, so concurrent drains overwrote each other's Q/K/V
+tiles and mdo scratch while the cursor and merge flag had already been split per
+warpgroup. The drain now carves one `kPersSlotBytes` slot per warpgroup (sized
+from the largest tile class, tile 16 at 69632 B), moves the cursor/merge tail
+past all three slots, and the launch's dynamic smem request covers
+`base + 3 * slot + 48` instead of one slot's worth.

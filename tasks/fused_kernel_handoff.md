@@ -396,3 +396,41 @@ fails on the fused kernel and the open route is incremental reconstruction from
 `__launch_bounds__`; note that `compute-sanitizer synccheck` is not viable here
 (3 hours without reaching a launch result, and it silently cost a day of
 measurements, §7).
+
+## 12. Why pre-assignment could not win: launch geometry, not the split
+
+The FA2 role is crippled inside the fused launch at **every** split, for a reason
+independent of how the SMs are divided:
+
+| | FA2 native (`BatchAttention`) | FA2 role inside the fused kernel |
+|---|---|---|
+| CTAs per SM | 2 (`num_sm *= 2`, "two cta per sm", `scheduler.cuh:1189`) | **1** (`__launch_bounds__(384, 1)`, and ~164 KB smem forces it) |
+| threads per CTA for the mainloop | ~128 | 128 of 384 (WG0-only drain) |
+| **FA2 threads per SM** | **~256** | **128** |
+
+mma.sync saturates by occupancy -- many warps issuing to hide latency -- while
+warp-specialised wgmma is one CTA per SM by construction (384 threads, 3
+warpgroups, ~164 KB). A single launch has one block shape and one occupancy for
+the whole grid, so the two roles cannot both have native geometry in one kernel.
+That is the real reason SM pre-assignment was chosen, and it is correct about the
+constraint.
+
+But pre-assignment also freezes the *work fraction*, and §9 measured that a fixed
+fraction cannot fit a 93/7 chunk/decode mix that moves every step. Both
+constraints are satisfiable at once, and this is the design to build:
+
+1. Keep the uniform geometry: 1 CTA/SM, 384 threads.
+2. Make the FA2 role **warpgroup-reentrant** so an SM doing FA2 work uses all
+   three warpgroups -- 384 threads/SM against a native 256, which more than
+   recovers the lost CTA.
+3. Every SM pulls from one queue (`cluster_cursor`), so the chunk/decode split is
+   dynamic per step instead of a constant.
+
+The blocker is known and was paid for once already: the persistent mainloop
+synchronises block-wide, so running it on three warpgroups deadlocked (exit 124,
+GPU at 99%) and the drain was reverted to WG0-only. It needs per-warpgroup named
+barriers, and the groundwork exists -- `kPersistentMainloopBarrier + 3 + kWg` are
+already allocated for exactly this. Converting the mainloop's `__syncthreads()`
+to those barriers is the next piece of device work, ahead of §11(b) and (c),
+because without it the wgmma role's 2.63x is collected on one third of the FA2
+role's threads.

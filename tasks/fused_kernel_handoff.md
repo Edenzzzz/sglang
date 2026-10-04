@@ -339,3 +339,60 @@ single launch, one queue over the whole device, the wgmma mainloop as task 3 of
 `TwoStageHolisticPlan` (flashinfer `ca31e08`) with packed-GQA tiling (worth
 1.70-2.40x on the short-q classes, §8), split-KV from the plan's
 `kv_start`/`kv_end`, and the JIT reduction the FA2 runners already perform.
+
+## 11. Next step, specified: the wgmma role driven by task 3 of the unified plan
+
+The plan side is done and compiles for both task counts (flashinfer `ca31e08`).
+What remains is device-side, and it is three separable pieces. Order matters:
+each is measurable on its own with `test_fused_server_batch.py` (numerics) and
+`pack_class_boundary.py` / `row_cmp.py` (speed).
+
+**(a) A tile scheduler over task 3.** The FA3 mainloop's scheduler contract is
+small (`hopper/tile_scheduler.cuh`): `Params` of device arrays,
+`get_initial_work` / `get_next_work`, and a `WorkTileInfo` whose
+`get_block_coord()` returns `{q_tile_idx, qo_head_idx, kv_head_idx, qo_indptr,
+kv_indptr, qo_len, kv_len, batch_idx}`. Build one reading task 3 of
+`HolisticPlanInfo<4>`, i.e. `tasks[3].{work_indptr, q_indptr, kv_indptr, q_len,
+kv_len, q_start, kv_start, kv_end, kv_head_idx, partial_indptr, group_id}`.
+
+**Split-KV needs no mainloop change**: set `kv_indptr += kv_start` and
+`kv_len = kv_end - kv_start`. The mainloop walks `[0, kv_len)` of the pointer it
+is given, and this path is non-causal (`causal=false`), so a chunk is just a
+shifted base with a shorter length. This is the piece to land first -- it is the
+one the user is right about costing nothing to try.
+
+**(b) Packed-GQA addressing.** The plan tiles *packed* rows
+(`qo_len * gqa_group_size`), so a task-3 work item covers packed rows
+`[q_start, q_start + tile)` of one kv head, spanning several qo heads. The
+mainloop must map packed row `p` -> `(token = p / G, head = kv_head * G + p % G)`
+for both the Q load and the O store. Q therefore cannot come through TMA as a
+dense `[CTA_TILE_Q, D]` block: use the existing `FLASHINFER_SKIP_TMAQ` path
+(`cp.async`), which exists precisely as this diagnostic and is how the sparse KV
+path already loads. Worth 1.70-2.40x on the short-q classes (§8) and ~1.00x on
+chunks, so it is what moves the verify class over -- do not expect it to help the
+chunk class.
+
+**(c) JIT reduction, shared with the FA2 runners.** When `group_id >= 0` the
+epilogue writes `partial_o` / `partial_lse` at `partial_indptr` instead of `o`,
+then `atomicAdd` on `group_counter[group_id]`; the work item that observes the
+last arrival reduces the group's `merge_indptr` rows in place. `persistent.cuh`
+around lines 240-620 is the reference, including the two bugs already paid for
+there: the merge must use the *real linear tid* (not `threadIdx`) and needs a
+fence before reading partials, or it intermittently merges stale data. The fused
+kernel already threads an `s_merge` flag through `fused_drain_queue`, so the FA3
+role joins an existing mechanism rather than adding one.
+
+Then, and only then, the two things this exists for: every CTA pulls from one
+queue over the whole device (no `sm_split` fraction, which §9 measured as the
+wrong structure), and a single launch holds prefill chunk + draft + verify +
+decode -- which §10 is the reason not to serialise.
+
+Multicast (§6 of `debug_kernel_server_perf_4_mode.md`) layers on top of (c): the
+DSMEM handoff measured 1.33-1.59x in isolation is the same handoff a split-KV
+group needs when its chunks sit in one cluster, so the plan should prefer
+assigning a group's chunks to cluster-mates. `FLASHINFER_FUSED_CLUSTER=2` still
+fails on the fused kernel and the open route is incremental reconstruction from
+`dsmem_kv_share.cu`, which clusters fine at 384 threads with the fused kernel's
+`__launch_bounds__`; note that `compute-sanitizer synccheck` is not viable here
+(3 hours without reaching a launch result, and it silently cost a day of
+measurements, §7).

@@ -2927,7 +2927,11 @@ The symptom changed:
 | rendezvous | symptom |
 |---|---|
 | `__syncthreads()` (barrier 0) | `CUDA error: an illegal instruction was encountered`, reproduced in 3 runs |
-| named barrier 11 | no traceback and **no result table** -- the test printed its 3 header lines and produced nothing further under a 400 s timeout |
+| named barrier 11 | no traceback and **no result table** -- the test printed its 3 header lines and produced nothing further under a 400 s timeout, reproduced in 2 independent runs (so deterministic, not flaky) |
+
+The asymmetric control passes in the same build (0/512 unwritten, rel err 0.00029 /
+0.00240 / 0.00288), as expected since this edit is confined to the symmetric
+kernel -- worth stating because the previous change *did* touch the shared helper.
 
 Stated carefully, because the distinction matters: the absence of a traceback is
 **consistent with a hang**, and a hang is what a `NamedBarrier::sync(384, ...)`

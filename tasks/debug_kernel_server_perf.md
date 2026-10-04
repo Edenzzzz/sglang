@@ -2377,3 +2377,39 @@ mainloop's gather with a TMA load so there is a descriptor to multicast from.
 (b) is a rewrite of `sparse_mainloop.cuh`, not a configuration change. This is
 recorded as the precise blocker rather than as "page_size=1 is a gather", which
 was true but not actionable.
+
+#### Larger prefill chunks make the fused kernel worse, not better
+
+Hypothesis: FA3's advantage is large q tiles, and `chunked-prefill-size 512` caps
+the FA3 role's q tile at 512 tokens, so raising it should favour the fused
+kernel. `--chunked-prefill-size` is now settable via `CHUNK` in `serve.sh`.
+Same matched harness, `sm_fa3 = 64`:
+
+| chunk | arm | tok/s | vs base | mean ITL | p99 ITL | mean TTFT |
+|---|---|---|---|---|---|---|
+| 512 | fused | 24055.80 | **-3.6%** | 19.18 | 34.74 | 2821.14 |
+| 512 | base | 24946.41 | — | 18.47 | 32.85 | 2671.04 |
+| 2048 | fused | 24739.03 | **-17.8%** | 45.17 | **207.74** | 572.88 |
+| 2048 | base | 30081.02 | — | 36.34 | 73.47 | 395.52 |
+
+200/200 requests, 0 faults, ~90% fused share in both fused arms.
+
+**The hypothesis is falsified, and the direction is diagnostic.** Raising the
+chunk helps the baseline a lot (24946 -> 30081, +20.6%) and the fused kernel
+barely at all (24056 -> 24739, +2.8%), so the gap widens from -3.6% to -17.8%.
+p99 ITL is the clearest signal: 207.74 ms against the baseline's 73.47, a 2.8x
+tail.
+
+That is the static-partition cost showing up directly. FA3 and FA2 own disjoint
+SM ranges for the whole launch, so the step's makespan is set by whichever role
+finishes last; a bigger chunk makes the FA3 side's work per step much larger and
+the imbalance grows with it. The persistent kernel has one shared work queue, so
+the same imbalance is absorbed by whichever CTA is free. Backfill is supposed to
+be the answer to exactly this and is measured at +0.04% (above), because it only
+reclaims SMs *after* a CTA has finished its own role's queue -- it cannot move
+work off the critical role mid-flight.
+
+So `chunked-prefill-size 512` with `sm_fa3 = 64` remains the best fused
+configuration found, at -3.6%, and this result is further evidence that the
+remaining deficit is the static role partition rather than any per-kernel
+inefficiency.

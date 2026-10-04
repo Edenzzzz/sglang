@@ -2139,3 +2139,53 @@ it clustered. If that breaks, the cause is found and the design question becomes
 whether FA3's warp specialisation can coexist with clustering at all -- which would
 be a genuine constraint on combining SM pre-assignment with DSMEM sharing, not a
 bug to fix.
+
+#### `setmaxnreg` is cluster-safe too: single-element isolation is exhausted
+
+```
+setmaxnreg warp-spec, 384 threads, cluster=1 | launch=ok sync=ok   <= OK
+setmaxnreg warp-spec, 384 threads, cluster=2 | launch=ok sync=ok   <= OK
+setmaxnreg warp-spec, 384 threads, cluster=4 | launch=ok sync=ok   <= OK
+```
+
+`warpgroup_reg_dealloc<24>` on one warpgroup and `warpgroup_reg_alloc<240>` on two,
+at 384 threads, clusters cleanly -- with the cluster=1 control passing, so this is
+not a toy-register-math artefact. The natural prior was wrong: three earlier bugs in
+this task were `setmaxnreg` interactions, but this is not a fourth.
+
+**Full elimination record for the `CLUSTER=2` failure, every row by test:**
+
+| candidate | verdict |
+|---|---|
+| FA2 / persistent side | cluster-safe |
+| dynamic shared memory (to 200 KB) | cluster-safe |
+| `PipelineTmaAsync` arrival counts | not compiled here |
+| `TMA_Q` load + `barrier_Q` | ruled out |
+| epilogue store | plain tiled, not TMA |
+| `ClusterTransactionBarrier` | ruled out |
+| memory violation | none (memcheck) |
+| sync / barrier violation | none (synccheck) |
+| `__launch_bounds__`, `minBlocksPerMultiprocessor` | ruled out (from known-good base) |
+| thread count (384) | ruled out (from known-good base) |
+| cluster schedulability / occupancy | ruled out -- 330 clusters available |
+| `setmaxnreg` warp specialisation | **ruled out** |
+
+Eleven candidates, no cause. Each element of FA3's body that can be isolated is
+cluster-safe in isolation, so the failure is most likely an **interaction** between
+elements rather than any one of them -- which single-element isolation cannot find
+by construction.
+
+**Where that leaves multicast.** The benefit is measured and real (1.326-1.364x in
+situ on the paged-gather pattern, 1.587x cold), the cluster launch is implemented
+and output-neutral at N=1, and the blocker is characterised to the point of having
+eliminated everything separable. It is **not integrated**, and the remaining route
+is incremental reconstruction: keep adding fused-kernel elements to
+`dsmem_kv_share.cu` until it breaks, which amounts to rebuilding FA3's mainloop
+piece by piece. That is a substantial piece of work and the right place for a fresh
+session to start, with eleven dead ends already ruled out rather than waiting to be
+rediscovered.
+
+**Method, finally.** Eight hypotheses were asserted and overturned in this thread.
+The two that were overturned *cheaply* were the ones tested from a configuration
+known to work; the ones that cost most were reasoned from code without a control.
+The elimination table above is the durable artefact -- not the hypotheses.

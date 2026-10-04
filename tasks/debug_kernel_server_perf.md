@@ -2766,8 +2766,19 @@ missing direction as `FusedFA3PersistentSymmetricKernel`
 torch.AcceleratorError: CUDA error: an illegal instruction was encountered
 ```
 
-"Illegal instruction" is the signature of a `setmaxnreg` protocol violation, and
-this is the **third** instance of that hazard class in this kernel: the first was
+"Illegal instruction" is **consistent with** a `setmaxnreg` protocol violation,
+which would make this the third instance of that hazard class in this kernel --
+but that attribution is a hypothesis, not a measurement. An attempt to confirm it
+by reading ptxas register counts for the two kernels (`nvcc -Xptxas -v` on the
+extension) failed on an include-path error for the JIT-generated
+`batch_attention_config.inc` and was not retried, so **the cause is not
+established**. The two candidate mechanisms it would distinguish are a protocol
+violation (a warpgroup joining FA3's dec/inc sequence after running unrelated
+code) and a register *budget* problem (the combined FA2+FA3 footprint forcing a
+baseline that makes `alloc<240>` unsatisfiable). Confirming which is the first
+thing to do before changing the design.
+
+For context, the prior two instances of the hazard class were: the first was
 `setmaxnreg` across an ABI boundary (the `__noinline__` FA3 body, which corrupted
 adjacent output row pairs), the second was `MergeGroupJIT` behind a call. Here
 warpgroup 0 runs the FA2 mainloop -- with its own register pressure, at the

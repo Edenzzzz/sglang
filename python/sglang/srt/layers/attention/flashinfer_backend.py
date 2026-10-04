@@ -455,6 +455,11 @@ class FlashInferAttnBackend(AttentionBackend):
             get_attention_tp_size()
         )
         self._mixed_gate_flipped = None
+        # Kept for the fused FA3+FA2 planner, which needs the geometry and
+        # dtypes that this backend otherwise only reads off a layer.
+        self.head_dim = model_runner.model_config.head_dim
+        self.q_data_type = model_runner.dtype
+        self.kv_data_type = model_runner.kv_cache_dtype
 
         assert not (
             model_runner.sliding_window_size is not None
@@ -780,7 +785,8 @@ class FlashInferAttnBackend(AttentionBackend):
             stats = self._forward_stats = {}
         stats[kind] = stats.get(kind, 0) + 1
         total = sum(stats.values())
-        if total % 2000 == 0:
+        every = int(os.environ.get("SGLANG_FORWARD_MIX_EVERY", "2000"))
+        if every > 0 and total % every == 0:
             logger.info(
                 "forward mix (n=%d): %s",
                 total,
@@ -1470,17 +1476,33 @@ class FlashInferAttnBackend(AttentionBackend):
         if not self._load_fused_ext():
             return None
 
+        try:
+            return self._plan_fused_split_inner(forward_batch)
+        except Exception as e:
+            # Degrade to the ordinary persistent path rather than killing the
+            # server. Logged at WARNING once per distinct message so a
+            # systematic planning failure is visible instead of silent.
+            key = str(e)[:120]
+            seen = getattr(self, "_fused_plan_warned", None)
+            if seen is None:
+                seen = self._fused_plan_warned = set()
+            if key not in seen:
+                seen.add(key)
+                logger.warning("fused plan unavailable, using persistent: %s", key)
+            return None
+
+    def _plan_fused_split_inner(self, forward_batch):
+        import os
+
+        import numpy as np
+
         qo = np.asarray(forward_batch.extend_seq_lens_cpu, dtype=np.int64)
         prefix = np.asarray(forward_batch.extend_prefix_lens_cpu, dtype=np.int64)
         kv = prefix + qo
         gqa = self.num_qo_heads // self.num_kv_heads
-        try:
-            mode, sm_fa3, sm_pers, _kv_split, n_rows, n_tok, n_pages = md_plan_prefix(
-                qo, kv, gqa, self.num_kv_heads, self._fused_num_sm()
-            )
-        except Exception as e:  # planning must never take the server down
-            logger.warning("fused plan failed, falling back: %s", e)
-            return None
+        mode, sm_fa3, sm_pers, _kv_split, n_rows, n_tok, n_pages = md_plan_prefix(
+            qo, kv, gqa, self.num_kv_heads, self._fused_num_sm()
+        )
         if mode != "split" or n_rows == 0:
             return None
 

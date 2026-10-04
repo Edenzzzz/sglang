@@ -1836,3 +1836,59 @@ the server. Wiring it needs the four constraints the standalone harness
 established -- FA3's plan capped to `sm_split`, the FA2 side's KV indices
 rebased past the FA3 rows' pages, FA3 given vector-sparse offsets rather than
 page ids, and FA3 confined to a contiguous batch prefix.
+
+### Fused FA3+FA2 on the serving path (2026-10-04)
+
+Same H200 trial. sglang `859ff75b8`+ (fused call site), flashinfer `tri_tile_`
+in-tree. Qwen2.5-7B TP1, 150 prompts, 4096/512, `--request-rate inf`,
+concurrency 64, `SGLANG_MIXED_ATTENTION_KERNEL=persistent`,
+`SGLANG_FORWARD_MIX_EVERY=200`.
+
+```bash
+/dev/shm/w/abf2.sh {1,0}   # SGLANG_FUSED_FA3_SM_SPLIT
+/dev/shm/w/runb.sh {fusedB,ctrl}
+```
+
+| | fused path ON | control (OFF) | delta |
+|---|---|---|---|
+| Total token throughput | 20,260 tok/s | **22,203** | **-8.7%** |
+| Output token throughput | 2,306 | 2,527 | -8.7% |
+| Mean TTFT | 2,066 ms | 1,896 | +9.0% |
+| P99 TTFT | 5,426 ms | 5,028 | +7.9% |
+| Mean ITL | 17.30 ms | 15.52 | +11.5% |
+| P99 ITL | 25.67 ms | **21.55** | **+19.1%** |
+
+Forward mix proves what served each arm, and the arms are matched:
+`mixed_persistent=796` and `pure_prefill=8` in both, with
+`mixed_fused_fa3=39 (3.2%)` present only in the fused arm.
+
+**The integration works and the kernel executes**: the extension builds through
+the server's JIT, planning succeeds, and there were **0 launch failures** across
+the run -- so every batch the contract accepted was served by the fused kernel
+without falling back.
+
+**This workload cannot isolate the fused kernel.** It claimed only 3.2% of
+forwards, because at `--chunked-prefill-size 512` a prefill row needs >=4096
+accumulated KV to clear `kv_tiles >= 32`, so a request's early chunks never
+qualify. 66.3% of forwards went to the persistent kernel in both arms.
+
+**The -8.7% is mostly planning cost, not kernel time.** Decomposing: the
+end-to-end time ratio is 1.096, and if only 3.2% of forwards changed cost then
+those forwards were **3.9x** more expensive. That is far worse than the
+kernel-level deficit (1.345x behind a sequential co-launch), which points at
+`_plan_fused_split`: it runs two extra full plans **every step** -- an FA3 plan
+and a persistent plan, each with its own ~10 MB H2D copy -- while the kernel it
+is planning for serves 3.2% of steps. Planning per step to use a kernel on 3% of
+steps is the wrong shape; the plans should be built only when the contract has
+already accepted the batch, and ideally cached across steps whose layout is
+unchanged.
+
+A prediction made before the run, recorded for calibration: 15-25% end-to-end
+loss. Actual -8.7%, so the prediction was too pessimistic -- but for the wrong
+reason. It assumed the fused kernel would serve all mixed forwards; it served
+3.2%. Had it served all of them the loss would have been much larger than 25%.
+
+To isolate the kernel server-side one would need prefill chunks clearing the gate
+from the first chunk: a large `--chunked-prefill-size` over long prefixes. That
+is the shape `tests/bench_mtp_fused.py` already drives directly and more
+cleanly, which is why the kernel-level numbers remain the stronger evidence.

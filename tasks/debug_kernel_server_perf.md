@@ -1969,3 +1969,39 @@ numbers, correctness (72/72 rows over 6 matrices against fp32), the backfill A/B
 the persistent-overlap server A/B (counted at the right site), and the ablation
 showing the kernel contributes -0.05% server-side while the -8.5% was leaked
 `FLASHINFER_FA3_MAX_CTAS` and 768 MB of late-allocated workspace.
+
+#### Status: fused kernel launches in the server and faults in-kernel
+
+After fixing the `(k, v)` tuple assumption in both the sparse-index helper and
+the launch path, and removing the misaligned index slice (the persistent side's
+`kv_indptr` is now global and the index array is passed unsliced, so
+`pers_kv_page_offset` is 0):
+
+```
+plan declines: 0    python-level launch failures: 0    misaligned/abort: 1
+```
+
+So the plan succeeds, the launch is attempted with no Python error, and the
+kernel faults **inside** with `CUDA error: misaligned address`, aborting the
+server before the first forward-mix log. That is the first genuine launch of this
+kernel in the server, and it does not survive it.
+
+The slice was a real hazard -- measured, `int32[n]` is 16-byte aligned only for
+`n % 4 == 0`, and the standalone harness's page count of 8704 is divisible by 4
+so it never hit it -- but fixing it did not fix the fault, so it was not the
+cause. What distinguishes the two environments is now the open question:
+
+- the standalone harness builds `q`, `o` and the page array as fresh contiguous
+  tensors; in the server `q` is a view of the model's fused QKV output and `o` is
+  a slice of a reused buffer, so neither base pointer is guaranteed to share the
+  harness's alignment
+- the harness plans both sides over one synthetic batch, while the server's
+  persistent plan is built from a global `kv_indptr` over the real paged pool
+
+Next step is compute-sanitizer against the server process to get the faulting
+instruction and operand, rather than more hypotheses -- this bug has already
+survived two plausible ones.
+
+`SGLANG_FUSED_FA3_SM_SPLIT` stays 0 by default. A misaligned-address fault
+corrupts the CUDA context, so this path cannot be guarded at the Python level and
+must not be enabled until the fault is understood.

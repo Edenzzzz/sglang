@@ -1393,7 +1393,7 @@ class FlashInferAttnBackend(AttentionBackend):
             fused["sm_fa3"],
             fused["n_tok"],
             fused["sm_fa3"],
-            fused["n_pages"],
+            0,  # pers_kv_page_offset: the plan's indptr is already global
             fused["fa3_sparse"],
             out,
         )
@@ -1547,7 +1547,15 @@ class FlashInferAttnBackend(AttentionBackend):
         qi_f = torch.from_numpy(qo_c[: n_rows + 1].copy())
         ki_f = torch.from_numpy(kv_c[: n_rows + 1].copy())
         qi_r = torch.from_numpy((qo_c[n_rows:] - qo_c[n_rows]).copy())
-        ki_r = torch.from_numpy((kv_c[n_rows:] - kv_c[n_rows]).copy())
+        # NOT rebased to 0, and the KV index array is NOT sliced. Giving the plan
+        # kv_indices[n_pages:] put its base at base + 4*n_pages bytes, which is
+        # 16-byte aligned only when n_pages % 4 == 0; the mainloop gathers those
+        # indices with vectorised loads, so an odd page count produced
+        # "CUDA error: misaligned address" and aborted the server. The standalone
+        # harness never hit it because its page count happened to be a multiple
+        # of 4. Keeping the indptr global means the plan and the launch agree on
+        # one addressing scheme instead of offsetting twice.
+        ki_r = torch.from_numpy(kv_c[n_rows:].copy())
         kl_r = torch.from_numpy(np.maximum(kv[n_rows:], 1).astype(np.int32))
 
         # The page index array for this batch, in request order. The mixed
@@ -1630,9 +1638,10 @@ class FlashInferAttnBackend(AttentionBackend):
                 os.environ.pop("FLASHINFER_FA3_MAX_CTAS", None)
             else:
                 os.environ["FLASHINFER_FA3_MAX_CTAS"] = _prev
-        # Constraint 2: the persistent side's pages start after FA3's.
+        # Constraint 2: the persistent side's pages start after FA3's -- expressed
+        # in its indptr (ki_r is global), not by slicing the index array.
         st["pers"].plan(
-            qi_r, ki_r, kv_indices[int(n_pages):], kl_r,
+            qi_r, ki_r, kv_indices, kl_r,
             self.num_qo_heads, self.num_kv_heads, hd, hd, 1, causal=False,
             q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
         )

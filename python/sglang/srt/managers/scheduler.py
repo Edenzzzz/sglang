@@ -2384,17 +2384,47 @@ class Scheduler(
                     self.forward_stream.wait_stream(self.default_stream)
                     self.future_map.resolve_future(model_worker_batch)
                     if os.environ.get("SGLANG_STEP_TRACE") == "1":
-                        import time as _t
-
+                        _tr = getattr(self, "_steptrace", None)
+                        if _tr is None:
+                            _tr = self._steptrace = []
                         _m = getattr(batch.forward_mode, "name", str(batch.forward_mode))
-                        _et = getattr(batch, "extend_num_tokens", None) or 0
-                        logger.info(
-                            "STEPTRACE %s %d %d %.6f", _m, int(_et), int(batch.batch_size()),
-                            _t.perf_counter(),
+                        _et = int(getattr(batch, "extend_num_tokens", None) or 0)
+                        _sl = (
+                            batch.seq_lens_cpu.tolist()
+                            if getattr(batch, "seq_lens_cpu", None) is not None
+                            else []
                         )
+                        _is_ext = batch.forward_mode.is_extend()
+                        # A mixed batch carries its decode rows as extend rows of length 1, so the
+                        # row classes split on that length rather than on the batch's mode.
+                        _np = _ptok = _pf = _nd = _dkv = _mx = 0
+                        for _i, _r in enumerate(batch.reqs):
+                            _e = int(getattr(_r, "extend_input_len", 0) or 0) if _is_ext else 0
+                            _s = int(_sl[_i]) if _i < len(_sl) else 0
+                            if _e > 1:
+                                _np += 1
+                                _ptok += _e
+                                _pf += max(_s - _e, 0)
+                                _mx = max(_mx, _e)
+                            else:
+                                _nd += 1
+                                _dkv += _s
+                        _feat = (
+                            "STEPTRACE %s et=%d bs=%d np=%d ptok=%d pf=%d nd=%d dkv=%d kv=%d mx=%d"
+                            % (_m, _et, int(batch.batch_size()), _np, _ptok, _pf, _nd, _dkv, sum(_sl), _mx)
+                        )
+                        _beg = torch.cuda.Event(enable_timing=True)
+                        _end = torch.cuda.Event(enable_timing=True)
+                        while _tr and _tr[0][2].query():
+                            _f, _b, _e2 = _tr.pop(0)
+                            logger.info("%s gpu=%.4f", _f, _b.elapsed_time(_e2))
+                        _tr.append((_feat, _beg, _end))
+                        _beg.record()
                     batch_result = self.model_worker.forward_batch_generation(
                         model_worker_batch
                     )
+                    if os.environ.get("SGLANG_STEP_TRACE") == "1":
+                        self._steptrace[-1][2].record()
                     # FIXME(lsyin): maybe move this to forward_batch_generation
                     batch_result.copy_done = torch.get_device_module(
                         self.device
@@ -2430,17 +2460,47 @@ class Scheduler(
                 future_indices_or_next_token_ids = batch_result.next_token_ids
             else:
                 if os.environ.get("SGLANG_STEP_TRACE") == "1":
-                    import time as _t
-
+                    _tr = getattr(self, "_steptrace", None)
+                    if _tr is None:
+                        _tr = self._steptrace = []
                     _m = getattr(batch.forward_mode, "name", str(batch.forward_mode))
-                    _et = getattr(batch, "extend_num_tokens", None) or 0
-                    logger.info(
-                        "STEPTRACE %s %d %d %.6f", _m, int(_et), int(batch.batch_size()),
-                        _t.perf_counter(),
+                    _et = int(getattr(batch, "extend_num_tokens", None) or 0)
+                    _sl = (
+                        batch.seq_lens_cpu.tolist()
+                        if getattr(batch, "seq_lens_cpu", None) is not None
+                        else []
                     )
+                    _is_ext = batch.forward_mode.is_extend()
+                    # A mixed batch carries its decode rows as extend rows of length 1, so the
+                    # row classes split on that length rather than on the batch's mode.
+                    _np = _ptok = _pf = _nd = _dkv = _mx = 0
+                    for _i, _r in enumerate(batch.reqs):
+                        _e = int(getattr(_r, "extend_input_len", 0) or 0) if _is_ext else 0
+                        _s = int(_sl[_i]) if _i < len(_sl) else 0
+                        if _e > 1:
+                            _np += 1
+                            _ptok += _e
+                            _pf += max(_s - _e, 0)
+                            _mx = max(_mx, _e)
+                        else:
+                            _nd += 1
+                            _dkv += _s
+                    _feat = (
+                        "STEPTRACE %s et=%d bs=%d np=%d ptok=%d pf=%d nd=%d dkv=%d kv=%d mx=%d"
+                        % (_m, _et, int(batch.batch_size()), _np, _ptok, _pf, _nd, _dkv, sum(_sl), _mx)
+                    )
+                    _beg = torch.cuda.Event(enable_timing=True)
+                    _end = torch.cuda.Event(enable_timing=True)
+                    while _tr and _tr[0][2].query():
+                        _f, _b, _e2 = _tr.pop(0)
+                        logger.info("%s gpu=%.4f", _f, _b.elapsed_time(_e2))
+                    _tr.append((_feat, _beg, _end))
+                    _beg.record()
                 batch_result = self.model_worker.forward_batch_generation(
                     batch_or_worker_batch
                 )
+                if os.environ.get("SGLANG_STEP_TRACE") == "1":
+                    self._steptrace[-1][2].record()
                 future_indices_or_next_token_ids = batch_result.next_token_ids
                 self.update_cache_from_scheduler(batch, batch_result)
 

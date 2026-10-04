@@ -2317,3 +2317,39 @@ claim is measured false.
 Throughput in these runs (10197 / 10738 tok/s) is depressed by per-step logging;
 identical overhead in both arms, so the fit comparison is fair, but not comparable
 to the 25155 / 24946 A/B figures.
+
+#### The two roles do not measure q in the same units: FA3 does not pack GQA
+
+The dispatch gate routes a row to the FA3 role on `packed_qo = qo_len * gqa >= 48`
+and `kv_tiles >= 32` (`mixed_dispatch.py`). Those are *packed* units. The two
+plans behind the two roles disagree about that:
+
+- persistent / FA2 lineage, `TwoStageHolisticPlan` (`scheduler.cuh:1199`):
+  `int packed_qo_len = qo_len * gqa_group_size;` and the three tile classes
+  {128, 64, 16} are measured against that packed length. GQA is packed.
+- FA3, `PrefillSM90Plan` (`scheduler.cuh:939`):
+  `int num_qo_tiles = ceil_div(qo_len, cta_tile_q);` with one work item per qo
+  head, carrying upstream's own note two lines down:
+  `// NOTE(Zihao): our current FA3 implementation do not fuse query and group`
+  `// heads so the group_size in cost_function is always 1`.
+
+The serving path plans the FA3 role unpacked: `_plan_fused_split_inner` passes
+`qi_f = cumsum(extend_seq_lens)` with `self.num_qo_heads, self.num_kv_heads`, so
+FA3 tiles on token count, not on packed rows.
+
+Consequence for the gate: at gqa 7, `packed_qo >= 48` admits a row with
+`qo_len >= 7`, which FA3 then runs as a 128-row tile per qo head -- 7 of 128 tile
+rows used, 28 times over. The 5.0x packing win quoted in that module's docstring
+was measured on the standalone harness where q was packed by hand; it does not
+describe the role as the server plans it. So the answer to "why keep the 128 and
+64 tile classes in FA2 instead of routing them to FA3's wgmma" is not a free
+choice between two packing-capable mainloops: only one of the two packs, and the
+64 class (packed_qo in (16, 64], i.e. the spec-verify shapes) is exactly where
+packing matters most.
+
+Two things follow, and both are measurements rather than arguments: the boundary
+has to be drawn in the units FA3 is actually planned in, and `MIN_KV_TILES = 32`
+has never been measured at all -- unlike `MIN_PACKED_QO`, which has a crossover
+behind it (0.78x at 32, 1.13x at 56). `tasks/fused_specdec_workload/gate_boundary.py`
+sweeps both roles over (qo_len x kv_len) at the serving head shape and prints
+where each wins, which is the gate the dispatcher should encode.

@@ -1512,13 +1512,18 @@ class FlashInferAttnBackend(AttentionBackend):
             k = kv_cache[:, 0]
         else:
             k = kv_cache
+        # FA3 addresses a page as ratio * k_stride_n, and the extension derives
+        # k_stride_n by rank, so the ratio has to match. sglang's pool is rank 3
+        # [tokens, H, D] with one token per page, where stride(0) // stride(1)
+        # would be num_kv_heads, not the page size.
+        ratio = k.stride(0) // k.stride(1) if k.dim() >= 4 else 1
         return block_sparse_indices_to_vector_sparse_offsets(
             w._paged_kv_indices_buf,
             w._paged_kv_indptr_buf,
             w._vector_sparse_indices_buffer,
             w._vector_sparse_indptr_buffer,
             w._kv_lens_buffer,
-            k.stride(0) // k.stride(1),
+            ratio,
             1,
             page_size,
         )

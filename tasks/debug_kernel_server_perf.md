@@ -2078,3 +2078,96 @@ unaffected — tile 128 needs 49152 bytes of `SharedStorage` against tile 16's
 Regression test: `tests/test_fused_server_batch.py` replays the dumped batch
 shape exactly, so it covers FA3, task 0 and task 2 in one launch and asserts no
 output row is left unwritten.
+
+#### The fault is at launch, not in the kernel -- and the two environments use different toolchains
+
+Re-running the server under `CUDA_LAUNCH_BLOCKING=1` moved the error from the
+next sync point to the call that caused it:
+
+```
+CUDA Error: misaligned address  persistent_fa3_fused.cuh: line 420
+  at function cudaLaunchKernel(kernel, grid_dims, block_dims, args, smem_size, stream)
+fused FA3+FA2 launch failed, using persistent: fused kernel failed: misaligned address
+...
+flashinfer_backend.py line 1339, in persistent_attn_forward
+    o, lse = batch_attn_wrapper.run(...)
+RuntimeError: Failed to run persistent paged attention, error: misaligned address
+```
+
+So it is **`cudaLaunchKernel` itself** that rejects the launch -- the kernel never
+starts -- and the Python-level guard then falls back to `batch_attn_wrapper.run`,
+which fails too because a failed launch has already poisoned the CUDA context.
+That second failure is what killed the server and what made earlier runs look
+like a fault in flashinfer's ordinary persistent kernel. It is a consequence, not
+the cause.
+
+A launch-time misaligned address is the failure mode this header already
+documents: FA3's mainloop params carry TMA descriptors that must sit 64-byte
+aligned in the kernel parameter buffer.
+
+Matched controls, concurrent traffic, `CUDA_LAUNCH_BLOCKING=1`, 16 requests of
+~4000 tokens each at `chunked-prefill-size 512`:
+
+| arm | requests | misaligned | server at end |
+|---|---|---|---|
+| `SGLANG_FUSED_FA3_SM_SPLIT=0` | 16/16 ok | 0 | alive |
+| `SGLANG_FUSED_FA3_SM_SPLIT=1` | 0/16 | yes, at `cudaLaunchKernel` | dead |
+
+Two earlier attempts at this control were invalid and are recorded so the mistake
+is not repeated: the first sent its requests **serially**, so almost no mixed
+batches formed and the fused path was never exercised; the second was not a
+control at all, because `serve.sh` contained a hard `export
+SGLANG_FUSED_FA3_SM_SPLIT=1` that overrode the per-run value. `serve.sh` now uses
+`${SGLANG_FUSED_FA3_SM_SPLIT:-1}` so the flag is actually togglable.
+
+**The toolchain difference is real but is not the cause.** There are two torch
+extension build directories on the pod:
+
+```
+~/.cache/torch_extensions/py312_cu131/fused_fa3   <- system python3, torch 2.9.1, CUDA 13.1
+~/.cache/torch_extensions/py312_cu128/fused_fa3   <- /dev/shm/w/venv, torch 2.8.0, CUDA 12.8
+```
+
+`serve.sh` activates the venv, so the server compiles and runs under CUDA 12.8
+while the kernel tests had all been run under 13.1. That gap was worth closing
+and is closed: `tests/test_fused_server_batch.py` run with
+`/dev/shm/w/venv/bin/python` **passes** at splits 48/32/16, 0 unwritten rows,
+every row within 0.0035 of the fp32 reference. So the launch is fine on the
+server's own toolchain and the toolchain was not the cause.
+
+#### Root cause: the KV cache does not have a fixed rank
+
+The extension read `k_cache.stride(1)` as the token stride and
+`k_cache.stride(2)` as the head stride. That is correct for exactly one of the
+two layouts it is given:
+
+| caller | KV tensor | strides | k_stride_n | k_stride_h |
+|---|---|---|---|---|
+| standalone harness | rank 4 `[pages, page_size, H, D]` | `[1024, 512, 128, 1]` | 512 | 128 (correct) |
+| sglang paged pool | rank 3 `[tokens, H, D]` | `[512, 128, 1]` | 128 | **1 (wrong)** |
+
+The harness slices a `[pages, 2, page_size, H, D]` buffer, so it is rank 4;
+sglang's pool hands over a rank-3 tensor at `page_size 1`. With
+`k_stride_h = 1` all four KV heads alias one head's memory, and
+`get_gmem_layout(0, num_kv_heads, HEAD_DIM, 128, 1)` builds a degenerate layout
+whose tensor map `cudaLaunchKernel` rejects as misaligned.
+
+Note the page step happened to survive both layouts by accident
+(`ratio * k_stride_n` is 2*512 = 1024 for rank 4 and 4*128 = 512 for rank 3,
+both the correct page step), which is why only the head stride was wrong and why
+the symptom was a launch rejection rather than wrong numbers.
+
+This is a difference no harness built on the harness's own KV layout could ever
+catch, which is the same structural blind spot as the tile-128 task: both bugs
+exist precisely where the test fixture differs from sglang.
+
+Fix: `kv_strides()` in the extension derives `(page, n, h)` from the tensor rank
+and rejects any other rank outright, and `_fa3_sparse_indices` picks the matching
+vector-sparse ratio (`stride(0)//stride(1)` for rank 4, `1` for rank 3) so the
+two stay consistent.
+
+The `kv_indices` fix is independently confirmed on the serving path: a second dump
+taken after the fix shows `kv_indices len = 8192, pages needed = 8192, 0 invalid
+entries` (previously 3846 vs 4102 with 256 garbage entries), and every base
+pointer 16-byte aligned. That bug is fixed; the launch rejection is a separate
+one.

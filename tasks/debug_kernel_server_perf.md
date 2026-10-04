@@ -2994,3 +2994,45 @@ This is the fifth mechanism this fault has presented, but unlike the previous fo
 it is identified rather than hypothesised: the hang is confirmed by exit code and
 GPU state, and the id collision is a matter of arithmetic on two constants that
 are both in the tree.
+
+#### The barrier fix is verified safe but does not resolve the hang — and the approach is self-defeating
+
+```
+asymmetric   rc=0     PASS, 0/512 unwritten, rel err 0.00024 / 0.00207 / 0.00253
+symmetric    rc=124   still deadlocked
+```
+
+The shared-path risk is retired: per-warpgroup mdo barriers (9/10/11) and queue
+ids moved to 12/13/14 leave the asymmetric default path correct. But the symmetric
+variant still hangs, so the barrier-id collision was not the cause -- or not the
+only one.
+
+**The reason is structural, and it makes this whole approach self-defeating.** The
+3-warpgroup drain has all three warpgroups executing `Runner::Run` *concurrently
+and on different work items*. The persistent mainloop uses **block-wide**
+synchronisation internally (`__syncthreads()`, and the JIT merge's block-wide
+arrival logic). Block-wide means all 384 live threads: warpgroup 0 at its first
+queue slot and warpgroup 1 at its third would both arrive at the same block-wide
+barrier and pair up with each other, desynchronising the two and deadlocking.
+
+That is precisely the **warpgroup-reentrant FA2** problem recorded at the very
+start of this task as the blocker -- the one attempted and reverted twice. So the
+3-warpgroup drain does not avoid that problem; it *requires* it to be solved
+first. It was the wrong fix, and the hang is the mainloop refusing to be run by
+three independent warpgroups, not a barrier id.
+
+This closes the loop on the whole line of attack:
+
+| variant | requires | outcome |
+|---|---|---|
+| drain on warpgroup 0 only, then FA3 | nothing extra | faulted (illegal instruction) and that was barrier 0; after fixing it, untested in this form |
+| drain on all three warpgroups, then FA3 | **warpgroup-reentrant FA2** | deadlocks, because the mainloop syncs block-wide |
+
+So the two routes are: (a) revert to the single-warpgroup drain now that barrier 0
+is fixed and see whether it still faults -- cheap, and it was never retested after
+that fix; or (b) make the persistent mainloop warpgroup-reentrant, which is the
+original blocker and gates everything here including a dynamic FA3 queue.
+
+(a) is one env-var-sized experiment and should be done first. It was skipped
+because the 3-warpgroup drain was built on top of the barrier-0 fix in the same
+step -- the two changes were not separated, which is the process error here.

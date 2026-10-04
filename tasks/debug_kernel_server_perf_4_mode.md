@@ -1903,8 +1903,24 @@ the clustered fused kernel, which was avoided earlier as expensive but is now th
 only tool left with the search space exhausted:
 
 ```
-FLASHINFER_FUSED_CLUSTER=2 compute-sanitizer --tool memcheck \
-  python tests/test_fused_server_batch.py
+FLASHINFER_FUSED_CLUSTER=2 /usr/local/cuda/bin/compute-sanitizer --tool memcheck \
+  /dev/shm/w/venv/bin/python tests/test_fused_server_batch.py
+```
+
+memcheck (sanitizer 2025.4.1.0) attaches and reports **no device-side violation**
+-- only the host-side `cudaErrorLaunchFailure (719)` propagating through
+`cudaDeviceSynchronize` / `cudaGetLastError`, 4 errors all of that kind. No
+"Invalid __global__ read", no out-of-bounds, no misaligned access.
+
+That is itself a narrowing: the clustered launch is **not** failing on a memory
+access. `unspecified launch failure` with a clean memcheck points at an illegal
+instruction or a barrier/sync violation, which is `synccheck`'s domain -- and this
+kernel is dense with named barriers plus FA3's warp specialisation, so that is the
+tool to run next:
+
+```
+FLASHINFER_FUSED_CLUSTER=2 /usr/local/cuda/bin/compute-sanitizer --tool synccheck \
+  /dev/shm/w/venv/bin/python tests/test_fused_server_batch.py
 ```
 
 Multicast therefore stands as: benefit measured on hardware (1.326x in situ,

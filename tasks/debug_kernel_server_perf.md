@@ -1924,3 +1924,48 @@ kernel never runs. If throughput stays near 20.3k the cost is environmental
 (1 or 2) and the kernel is exonerated; if it returns to 22.2k the cost is the
 kernel (3). That single run separates all three and should precede any further
 tuning of this path.
+
+#### Retraction: the fused kernel never ran on the serving path
+
+Every "fused server-side" figure above (-8.7%, and the 20,314 / 20,967 / 20,880
+tok/s follow-ups) was **the persistent kernel plus integration overhead**. The
+fused kernel did not execute once.
+
+The certification was broken, not just the result. `_count_forward` fired at
+*plan* time, one step upstream of the launch, so 39 plans that each failed while
+building the plan dict were reported as `mixed_fused_fa3=39` and read as 39
+successful launches. Warning deduplication (one log per distinct message) hid the
+39 failures behind a single line. Moving the counter to the launch site exposed
+the truth: **declines 0, launch failures 39, `mixed_fused_fa3` absent.**
+
+Root cause of the failures: `get_kv_buffer` returns a `(k, v)` tuple for this
+pool layout rather than a fused `[N,2,...]` tensor. The same wrong assumption
+appeared twice -- in `_fa3_sparse_indices` and again in the launch path -- and
+fixing only the first left the second raising `tuple indices must be integers or
+slices` on every launch.
+
+With both fixed, the first genuine launch produced:
+
+```
+CUDA error: misaligned address
+Fatal Python error: Aborted
+```
+
+and killed the server. A misaligned-address fault corrupts the CUDA context, so
+no Python-level guard can contain it; the path must stay disabled
+(`SGLANG_FUSED_FA3_SM_SPLIT` defaults to 0) until the alignment is found.
+
+Leading hypothesis, untested: the rebased KV index pointer. `pers.plan` is given
+`kv_indices[n_pages:]`, and slicing an int32 tensor at an arbitrary `n_pages`
+puts the base at `base + 4*n_pages` bytes, which is only 16-byte aligned when
+`n_pages % 4 == 0`. The standalone harness never caught this because its
+`kvF = 8704` happens to be a multiple of 4. The launch separately passes the full
+array plus `pers_kv_page_offset`, so the C++ side offsets again -- the two paths
+need reconciling, and the plan should take the full array with an offset rather
+than a slice.
+
+What stands, because none of it depends on the server: the kernel-level H200
+numbers, correctness (72/72 rows over 6 matrices against fp32), the backfill A/B,
+the persistent-overlap server A/B (counted at the right site), and the ablation
+showing the kernel contributes -0.05% server-side while the -8.5% was leaked
+`FLASHINFER_FA3_MAX_CTAS` and 768 MB of late-allocated workspace.

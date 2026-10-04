@@ -1359,7 +1359,20 @@ class FlashInferAttnBackend(AttentionBackend):
         import flashinfer
 
         kv_cache = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
-        k_cache, v_cache = kv_cache[:, 0], kv_cache[:, 1]
+        # get_kv_buffer returns either a fused [N,2,...] tensor or a (k, v)
+        # tuple depending on the pool layout. Assuming the tensor form made every
+        # launch raise "tuple indices must be integers or slices" and fall back,
+        # so the kernel never actually ran on the serving path even though the
+        # plan succeeded.
+        if isinstance(kv_cache, (tuple, list)):
+            k_cache, v_cache = kv_cache[0], kv_cache[1]
+        else:
+            k_cache, v_cache = kv_cache[:, 0], kv_cache[:, 1]
+        # Counted here, at the launch, not at plan time. Counting the plan made
+        # the forward mix unable to distinguish "the contract accepted this
+        # batch" from "the kernel ran", and a later failure in building the plan
+        # dict then showed up as 39 fused forwards that never launched.
+        self._count_forward("mixed_fused_fa3")
         fa3 = fused["fa3_wrapper"]
         pers = fused["pers_wrapper"]
         torch.ops.fused_fa3.fused_run(
@@ -1459,7 +1472,14 @@ class FlashInferAttnBackend(AttentionBackend):
         """The index array flashinfer's own fa3 path feeds the kernel."""
         from flashinfer.page import block_sparse_indices_to_vector_sparse_offsets
 
-        k = kv_cache[:, 0] if kv_cache.dim() >= 4 else kv_cache
+        # get_kv_buffer returns either a fused [N,2,...] tensor or a (k, v)
+        # tuple depending on the pool layout; only the strides are needed here.
+        if isinstance(kv_cache, (tuple, list)):
+            k = kv_cache[0]
+        elif kv_cache.dim() >= 4:
+            k = kv_cache[:, 0]
+        else:
+            k = kv_cache
         return block_sparse_indices_to_vector_sparse_offsets(
             w._paged_kv_indices_buf,
             w._paged_kv_indptr_buf,
@@ -1545,13 +1565,40 @@ class FlashInferAttnBackend(AttentionBackend):
         st = getattr(self, "_fused_state", None)
         if st is None:
             dev = q_device = kv_indices.device
+            # Sized deliberately, not copied from the standalone test. These are
+            # allocated lazily on the first accepted batch -- after the KV pool
+            # was already sized from --mem-fraction-static -- so every byte here
+            # competes with activations rather than coming out of a budget. The
+            # original 256+512 MB cost 8.5% of server throughput on its own,
+            # with the kernel contributing nothing measurable.
+            # The persistent side's float workspace is
+            # max_num_kv_splits * (2*head_dim*num_kv_heads + 4) bytes, and
+            # max_num_kv_splits = 4 * num_clusters * (CTA_TILE_Q[0]+CTA_TILE_Q[1]).
+            # At the default 264 clusters that is ~201 MB, which is why the
+            # original 512 MB was not arbitrary -- cutting it to 64 MB simply
+            # made every plan fail with an allocator buffer overflow, and the
+            # guard then disabled the path silently.
+            #
+            # The right lever is the cluster count, not the buffer: this path
+            # only ever gives the persistent side num_sm - sm_fa3 CTAs, so
+            # planning it for 264 clusters is overprovisioning by ~4x. Capping
+            # clusters shrinks the buffer proportionally and is correct rather
+            # than a workaround.
+            fa3_mb = int(os.environ.get("SGLANG_FUSED_FA3_WS_MB", "64"))
+            pers_mb = int(os.environ.get("SGLANG_FUSED_PERS_WS_MB", "160"))
             st = self._fused_state = dict(
                 fa3=flashinfer.BatchPrefillWithPagedKVCacheWrapper(
-                    torch.empty(256 << 20, dtype=torch.uint8, device=dev),
+                    torch.empty(fa3_mb << 20, dtype=torch.uint8, device=dev),
                     kv_layout="NHD", backend="fa3"),
                 pers=BatchAttention(
-                    torch.empty(512 << 20, dtype=torch.uint8, device=dev), "NHD"),
+                    torch.empty(pers_mb << 20, dtype=torch.uint8, device=dev), "NHD"),
             )
+
+        # Cap the persistent side's cluster count to what can actually run it.
+        # This both matches reality and keeps its float workspace within the
+        # budget allocated above.
+        pers_clusters = max(16, min(2 * (self._fused_num_sm() - int(sm_fa3)), 96))
+        os.environ["FLASHINFER_PERSISTENT_MAX_CLUSTERS"] = str(pers_clusters)
 
         # Re-planning is the dominant cost of this path: two full plans, each
         # with its own H2D copy. Skip it when the layout that determines both
@@ -1559,26 +1606,36 @@ class FlashInferAttnBackend(AttentionBackend):
         key = (n_rows, int(sm_fa3), int(qo[:n_rows].sum()), int(kv[:n_rows].sum()),
                int(qo[n_rows:].sum()), int(kv[n_rows:].sum()), int(qo.size))
         if st.get("key") == key and st.get("plan") is not None:
-            self._count_forward("mixed_fused_fa3")
             cached = dict(st["plan"])
             cached["kv_indices"] = kv_indices
             return cached
 
         # Constraint 1: FA3's plan must be built for exactly sm_fa3 CTAs.
-        os.environ["FLASHINFER_FA3_MAX_CTAS"] = str(int(sm_fa3))
+        #
+        # Scoped to this one call, not left in os.environ. PrefillSM90Plan reads
+        # the variable at plan time, so leaving it set capped CTAs for every
+        # later flashinfer fa3 plan in the process -- a global side effect from
+        # a per-step decision.
         hd = self.head_dim
-        st["fa3"].plan(
-            qi_f, ki_f, kv_indices, torch.ones(n_rows, dtype=torch.int32),
-            self.num_qo_heads, self.num_kv_heads, hd, 1, causal=False,
-            q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
-        )
+        _prev = os.environ.get("FLASHINFER_FA3_MAX_CTAS")
+        os.environ["FLASHINFER_FA3_MAX_CTAS"] = str(int(sm_fa3))
+        try:
+            st["fa3"].plan(
+                qi_f, ki_f, kv_indices, torch.ones(n_rows, dtype=torch.int32),
+                self.num_qo_heads, self.num_kv_heads, hd, 1, causal=False,
+                q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
+            )
+        finally:
+            if _prev is None:
+                os.environ.pop("FLASHINFER_FA3_MAX_CTAS", None)
+            else:
+                os.environ["FLASHINFER_FA3_MAX_CTAS"] = _prev
         # Constraint 2: the persistent side's pages start after FA3's.
         st["pers"].plan(
             qi_r, ki_r, kv_indices[int(n_pages):], kl_r,
             self.num_qo_heads, self.num_kv_heads, hd, hd, 1, causal=False,
             q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
         )
-        self._count_forward("mixed_fused_fa3")
         plan = dict(
             sm_fa3=int(sm_fa3), n_rows=int(n_rows), n_tok=int(n_tok),
             n_pages=int(n_pages), fa3_wrapper=st["fa3"], pers_wrapper=st["pers"],
@@ -1589,6 +1646,14 @@ class FlashInferAttnBackend(AttentionBackend):
             ),
         )
         st["key"], st["plan"] = key, plan
+        if os.environ.get("SGLANG_FUSED_FA3_DRYRUN", "0") == "1":
+            # Everything above still happened -- both workspaces allocated, both
+            # sides planned, FLASHINFER_FA3_MAX_CTAS set -- but returning None
+            # means the kernel never launches. Comparing this against the full
+            # path isolates the kernel's own cost from the cost of merely
+            # enabling the path, which the planning optimization showed is where
+            # the -8.7% actually lives.
+            return None
         return plan
 
     def _fused_num_sm(self):

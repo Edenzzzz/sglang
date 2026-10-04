@@ -307,3 +307,35 @@ which is what §6.3's `cluster_cursor` backfill approximates and what the
 class becomes task 3 of the same plan, inheriting packed-GQA tiling, split-KV and
 the JIT-reduction group, and every CTA pulls from the shared queue rather than
 owning a slice.
+
+## 10. Serial dispatch: measured, and it is a dead end twice over
+
+§9 showed SM pre-assignment loses, and the per-kernel times suggested the two
+mainloops run back-to-back on the whole device would give 1.74x on attention
+(123.7 vs 215.4 us/layer, launch cost only +1.0 us). That was a **projection from
+isolated kernels, and the server measurement killed it**: two repeats of serial
+dispatch, same workload, exclusive GPU, gate as corrected:
+
+| arm | tok/s | mean ITL | mean TTFT |
+|---|---|---|---|
+| baseline, fused off | 24,861.9 | 18.53 ms | 2,684 ms |
+| serial dispatch, run 1 | **12,923.9 (-48.0%)** | 18.73 ms | 7,255 ms |
+| serial dispatch, run 2 | **12,905.5 (-48.1%)** | 18.75 ms | 7,264 ms |
+
+Mean ITL barely moves while throughput halves and TTFT nearly triples, which is
+the signature of a host-bound path, not a slower kernel: serial dispatch plans
+*both* wrappers for the full device every step and issues two paged runs per
+layer, and this path was already the host-bound one. The projection ignored all
+of that because it timed launches with the plans held fixed.
+
+The code is reverted rather than left behind a flag. Beyond the measurement, it
+is the wrong structure for this work on principle: **spec draft and verify cannot
+be fused if the dispatch is serial.** One launch holding prefill chunk, draft,
+verify and decode is the claim; serialising the roles gives it up to collect a
+projected gain that does not exist.
+
+So the remaining path is the one the measurements point at from both sides: a
+single launch, one queue over the whole device, the wgmma mainloop as task 3 of
+`TwoStageHolisticPlan` (flashinfer `ca31e08`) with packed-GQA tiling (worth
+1.70-2.40x on the short-q classes, §8), split-KV from the plan's
+`kv_start`/`kv_end`, and the JIT reduction the FA2 runners already perform.

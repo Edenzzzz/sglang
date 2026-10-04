@@ -434,3 +434,33 @@ already allocated for exactly this. Converting the mainloop's `__syncthreads()`
 to those barriers is the next piece of device work, ahead of §11(b) and (c),
 because without it the wgmma role's 2.63x is collected on one third of the FA2
 role's threads.
+
+### 12.1 First obstacle for warpgroup-reentrant FA2: the named-barrier budget is full
+
+Hopper has 16 named barriers. Current allocation in the fused kernel:
+
+| ids | owner |
+|---|---|
+| 0-7 | FA3 / CUTLASS reserved (`kQueryEmpty` is 0, which is also `__syncthreads()`) |
+| 8 | `kFusedQueueBarrier` (`FirstUserBarrier`) |
+| 9-11 | `kPersistentMainloopBarrier + 0..2`, the mdo barriers |
+| 12-14 | `kPersistentMainloopBarrier + 3 + kWg`, per-warpgroup queue barriers |
+| 15 | `kPersistentMainloopBarrier + 6`, symmetric-mode rendezvous |
+
+So there is **no free id** for three per-warpgroup mainloop syncs, and
+`persistent_block_sync` currently hard-codes one id with width 128. Three options,
+in the order they should be tried:
+
+1. Reuse each warpgroup's queue barrier (12-14) for its mainloop sync, after
+   proving the two are never pending simultaneously inside one warpgroup -- the
+   queue barrier is held while pulling work, the mainloop sync while computing a
+   tile. If that holds it costs nothing.
+2. Make the mdo barriers (9-11) per-warpgroup instead of per-stage, since their
+   three ids are already a per-stage split that a reentrant mainloop would have
+   to rework anyway.
+3. Drop the symmetric rendezvous (15) and re-derive it from the queue barriers,
+   freeing one id.
+
+Do not add a fourth warpgroup's worth of ids without re-auditing 0-7: the
+`__syncthreads()` == barrier 0 == `kQueryEmpty` collision is what broke symmetric
+mode once already, and it is silent -- it shows up as a hang, not an error.

@@ -1883,22 +1883,11 @@ was reasoned from code that looked relevant; every one fell to a two-line
 compile-time or runtime switch that isolated it. The switches cost minutes and the
 reasoning cost hours. On this kernel, isolate first.
 
-#### Correction: there is no epilogue TMA store either, and that changes the backfill story
+#### Elimination state for the cluster blocker
 
-The previous section concluded by elimination that the epilogue's TMA store of O
-must be the cluster blocker. **There is no epilogue TMA store on this path.**
-`epilogue.cuh:203` calls `write_O<NUM_COPY_THREADS>(...)` with a plain
-`TiledCopyO`, which forwards to `write_tiled` (`epilogue.cuh:62`); `TMA_O` is
-declared at line 97 but unused here; and `store_tail()` at line 209 is
-
-```cpp
-CUTLASS_DEVICE void store_tail() {
-  // tma_store_wait<0>();
-}
-```
-
-So the elimination table was wrong in its last row. Corrected state of what has
-been **tested**:
+The epilogue stores O with a plain `TiledCopyO` (`epilogue.cuh:203`), not TMA --
+the store is sparse, so TMA would need a descriptor per page. So there is no
+epilogue TMA store to blame.
 
 | candidate | status |
 |---|---|
@@ -1906,25 +1895,12 @@ been **tested**:
 | dynamic shared memory size | cluster-safe at 100 / 165 / 200 KB |
 | `PipelineTmaAsync` arrival counts | never compiled (`USE_TMA_LOAD_KV = false`) |
 | `TMA_Q` load | ruled out (`SKIP_TMAQ` matrix) |
-| epilogue TMA store | **does not exist** -- plain tiled store |
-| `ClusterTransactionBarrier` barrier_Q / barrier_O | **untested, now the leading candidate** |
-| `prefetch_tma_descriptor` (still called under `SKIP_TMAQ`) | untested |
+| epilogue store | plain tiled, not TMA |
+| `ClusterTransactionBarrier` barrier_Q / barrier_O | leading candidate; `tests/cluster_barrier_repro.cu` isolates it |
 
-`kernel_traits.cuh:35` declares both handshake barriers as
-`cutlass::arch::ClusterTransactionBarrier`, and `SKIP_TMAQ` kept using them
-(`barrier_Q.arrive()` plus the consumer wait, and `barrier_O` throughout). Those
-compile to cluster-scoped `mbarrier` operations, which is the obvious next thing
-to isolate -- **stated as a candidate, not a mechanism**, because five such
-mechanisms have now been asserted and overturned in this task.
-
-**And a separate consequence worth flagging, because the goal names it.** The goal
-describes cross-role backfill as "needs `tma_store_wait`". On this path it does
-not: the epilogue issues no TMA stores, so the `cute::tma_store_wait<0>()` in
-`persistent_fa3_fused.cuh:236` guards nothing. The guard that actually matters
-there is `cp_async::wait_group<0>()` at line 246, which covers the in-flight
-`cp.async` stores the plain tiled epilogue does issue. The kernel's own comments at
-lines 224-240 already noticed `store_tail()` was commented out and kept both calls
-as belt-and-braces; that was the right instinct, but the reason should be recorded
-plainly -- backfill is correct because of `wait_group`, not because of
-`tma_store_wait`, and the measured backfill results (+0.04% server, 1.2% H200
-kernel-level) stand on that.
+One consequence that is worth recording because the goal states otherwise:
+cross-role backfill does **not** need `tma_store_wait`. With a plain tiled store
+there are no TMA stores to drain, so `cute::tma_store_wait<0>()` at
+`persistent_fa3_fused.cuh:236` guards nothing; the guard that matters is
+`cp_async::wait_group<0>()` at line 246. The measured backfill numbers (+0.04%
+server, 1.2% H200 kernel-level) rest on `wait_group`.

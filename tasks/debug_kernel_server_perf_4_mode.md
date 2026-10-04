@@ -1727,3 +1727,51 @@ transaction completes against it. If that is it, the fix is a `cute::cluster_syn
 after init under a clustered launch -- not a multicast implementation. Then: planner
 co-assignment of cluster-mates to q-tiles of one row, and the DSMEM gather split in
 the FA2 mainloop.
+
+#### Narrowing the cluster blocker: not the FA2 side, not shared memory -- it is FA3's TMA pipeline
+
+Two candidate causes eliminated by measurement rather than argument.
+
+**Shared memory is not it.** The fused kernel asks for ~165 KB (FA3's
+`SharedStorage` at one K/V stage plus the persistent mainloop's), while
+`dsmem_kv_share.cu` clusters happily at 16 KB -- so smem size was a live
+hypothesis. Padding the benchmark's dynamic smem request to match:
+
+| dynamic smem | cluster launch | speedup |
+|---|---|---|
+| 16 KB (natural) | ok | 1.325x |
+| 100 KB | ok | 1.326x |
+| **165 KB** (the fused kernel's footprint) | **ok** | 1.327x |
+| 200 KB | ok | 1.326x |
+
+A clustered launch tolerates the full footprint. Combined with the `SKIP_FA3`
+matrix (FA2-only clusters cleanly), the cause is isolated to **FA3's CUTLASS TMA
+pipeline** -- three of the four candidates are now excluded by test.
+
+**Why both cluster_shape choices fail.** FA3 declares
+`cluster_shape = Shape<_1,_1,_1>` (`prefill_sm90.cuh:113,123`):
+
+- declaring **1** under a real cluster: CUTLASS takes its `__syncthreads()` branch
+  for barrier init and computes cta-local mbarrier addresses, while the hardware
+  encodes mbarrier arrives cluster-relatively -- a TMA completion can signal the
+  wrong CTA's barrier. Crashes, as measured.
+- declaring the **true shape**: `sm90_pipeline.hpp:313-316` then sets
+  `multicast_consumer_arrival_count = (size<0> + size<1> - 1) * num_consumer_warpgroups`,
+  i.e. it expects consumers from *both* CTAs to arrive on each barrier. They only
+  do if the TMA load actually multicasts, and FA3's KV cannot (`page_size=1`
+  gather). It would hang rather than crash.
+
+So FA3 cannot simply be told about the cluster. Three routes remain, and the third
+is new and the cheapest:
+
+1. implement real TMA multicast in FA3 -- needs tensormap-able KV
+   (`page_size >= CTA_TILE_KV`), mcast masks and cluster-consistent pipelines;
+2. leave FA3 unclustered by splitting the roles into separate launches -- which is
+   the sequential co-launch baseline, already 1.338x ahead of this kernel;
+3. **drop TMA from the FA3 role.** The sparse mainloop already gathers KV with
+   `cp.async`; only Q goes through TMA (`sparse_mainloop.cuh:80-87`, `TMA_Q`). Load
+   Q with `cp.async` too and FA3 has no CUTLASS pipeline, hence no cluster
+   conflict, and the whole grid can cluster. The cost is Q-load efficiency on a
+   tile that is small next to the KV stream -- and the gain is the measured 1.326x
+   on the KV gather, which is the dominant traffic. This is the option to try
+   first, and it was invisible until smem and the FA2 side were ruled out.

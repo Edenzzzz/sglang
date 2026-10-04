@@ -1835,3 +1835,50 @@ enough to be worth naming: each time, the error was reasoning from code that loo
 relevant without checking which `if constexpr` / template specialisation this build
 selects. `USE_TMA_LOAD_KV = false` is the single fact that decides most of FA3's
 behaviour here, and it needs checking first, not last.
+
+#### The Q TMA load is NOT the cluster blocker -- it is the epilogue's TMA store
+
+Tested rather than assumed, with `FLASHINFER_SKIP_TMAQ` replacing the Q TMA
+producer by a bare `barrier_Q.arrive()`:
+
+| `CLUSTER` | `SKIP_TMAQ` | result |
+|---|---|---|
+| 1 | 0 | rc=0, PASS |
+| 2 | 0 | rc=1, unspecified launch failure |
+| 1 | 1 | rc=1, 424/512 unwritten -- expected with garbage Q, **no CUDA error** |
+| 2 | 1 | rc=1, **still unspecified launch failure** |
+
+Removing the only TMA *load* on the sparse path does not fix the clustered launch.
+So `TMA_Q` and its `ClusterTransactionBarrier` are **not** the blocker, and the
+"replace `TMA_Q` with `cp.async`" route recorded two sections ago would have been
+wasted work -- the fifth asserted cause in this task to be overturned by actually
+testing it.
+
+By elimination the remaining TMA on the FA3 path is **the epilogue's TMA store of
+O**, and that is now the only candidate left:
+
+| candidate | status |
+|---|---|
+| FA2 / persistent side | cluster-safe (`SKIP_FA3` matrix) |
+| dynamic shared memory size | cluster-safe at 100 / 165 / 200 KB |
+| `PipelineTmaAsync` arrival counts | never compiled here (`USE_TMA_LOAD_KV = false`) |
+| `TMA_Q` + `barrier_Q` | **ruled out above** |
+| **epilogue TMA store of O** | **only one left** |
+
+That is a more consequential finding than the Q result would have been, because the
+epilogue store is not incidental to this kernel: `cute::tma_store_wait<0>()` is
+precisely what cross-role backfill had to wait on before an FA3 CTA could drain the
+FA2 queue. So the store is load-bearing for the backfill design, and making it
+cluster-safe is not a matter of swapping it for a plain store without re-examining
+that interaction.
+
+Next test, and it completes the elimination: skip the epilogue TMA store the same
+way and re-run `CLUSTER=2`. If it then runs, the blocker is confirmed and the
+design question becomes whether O can be written without TMA (losing the
+`tma_store_wait` handle that backfill uses) or whether the store can be made
+cluster-correct.
+
+**Method note, now that five causes have been overturned.** Every one of the five
+was reasoned from code that looked relevant; every one fell to a two-line
+compile-time or runtime switch that isolated it. The switches cost minutes and the
+reasoning cost hours. On this kernel, isolate first.

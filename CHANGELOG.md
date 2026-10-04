@@ -116,10 +116,57 @@ tok/s) and was **invalid**: at that length no row clears the FA3 gate's
 both arms and they ran the same kernel. Every fused measurement must carry its
 `mixed_fused_fa3` share or it is not evidence about this kernel.
 
+### Optimized: sweeping the SM split recovers more than half the regression
+`sm_fa3` was pinned at 48 on every serving run by `plan_dispatch_prefix`'s
+`MAX_SM_FA3`, so the kernel's main knob had never been varied server-side.
+`SGLANG_FUSED_SM_FA3` now pins it. Matched sweep, 200 prompts, input 8192, H200:
+
+| `sm_fa3` | tok/s | vs base | mean ITL | p99 ITL |
+|---|---|---|---|---|
+| 16 | 19369.38 | -22.4% | 23.77 | 45.46 |
+| 32 | 22034.74 | -11.7% | 20.93 | 35.94 |
+| **64** | **24055.80** | **-3.6%** | 19.18 | 34.74 |
+| 80 | 23800.46 | -4.6% | 19.38 | 35.72 |
+| 96 | 22856.25 | -8.4% | 20.26 | 37.05 |
+| 112 | 19457.78 | -22.0% | 23.95 | 44.89 |
+| base (fused off) | 24946.41 | — | 18.47 | 32.85 |
+
+200/200 requests in every arm, 0 faults, fused share ~90.6% throughout. The curve
+is sharply peaked at 64, and the old ceiling of 48 sat below it: **-8.1% -> -3.6%**.
+`MAX_SM_FA3` is now 64 so the default lands on the measured optimum.
+
+**The analytic balance point is not usable for this knob.** Unclamped,
+`plan_dispatch` returns 115-131 for real serving batch shapes — nearly the whole
+device on FA3 — and the sweep measures 112 as one of the two *worst* settings.
+The clamp, not the model, was choosing the value. That cost model was fit for the
+overlap kernel and does not transfer to this kernel's makespan.
+
+### Tested: cross-role backfill on the server
+`FLASHINFER_FUSED_BACKFILL=1` at `sm_fa3=64`: 24064.65 vs 24055.80 tok/s,
+**+0.04% — within noise**, against 1.2% (H200) / 1.9-6.9% (H20) at kernel level.
+Consistent rather than contradictory: backfill reclaims the prefill tail of one
+mixed step, and at 32 concurrent requests the server already has other work to
+overlap it with.
+
+Correctness with backfill on is now clean under the server's own toolchain on the
+dumped server batch shape, at splits 64/48/32: 0/512 unwritten, rel err
+0.00028/0.00218/0.00282 (vs 0.00032/0.00245/0.00313 with it off). Scope: that is
+one shape, and it is not the one the earlier backfill fault was recorded on, so it
+does not retire that fault. The default stays off, now for a measured reason.
+
+### Multicast: the precise blocker
+Not a flag. The fused kernel's FA3 side uses `hopper/sparse_mainloop.cuh`, where
+`USE_TMA_LOAD_KV = false` (line 87) — KV is gathered with `cp.async`, so there is
+no TMA descriptor to multicast from — and the Q descriptor is built with `_1{}`
+and the comment "no mcast for Q". Enabling it needs `page_size >= CTA_TILE_KV`
+(128) threaded through the fused launch (currently hardcoded to 1) **and** the
+sparse mainloop's gather replaced by a TMA load. The second is a rewrite, not
+configuration.
+
 ### Still open
-The fused path is a measured regression, so `SGLANG_FUSED_FA3_SM_SPLIT` stays 0 by
-default. Closing the gap needs warpgroup-reentrant FA2, not a split sweep: the
-kernel-level sweep already caps the best split at 0.709x.
+Best fused configuration is -3.6% against the persistent kernel, so
+`SGLANG_FUSED_FA3_SM_SPLIT` stays 0 by default. Closing the last 3.6% needs
+warpgroup-reentrant FA2; the split is now tuned and backfill is measured at zero.
 
 ## v0.7.1 — Split-KV and GQA Packing for FA3; Gate on Tile-Grid Quantities (2026-09-30)
 

@@ -2282,3 +2282,98 @@ is very unlikely to turn -8.1% into a win on its own. The thing that would is
 warpgroup-reentrant FA2, which is narrowed to a 3-line region (threading
 `barrier_id` through `Run` and scoping `threadblock_sync_mdo_states`) and has been
 attempted and reverted twice.
+
+#### Optimizing the split on the real serving workload: -8.1% -> -3.6%
+
+`sm_fa3` was pinned at 48 on every serving run because `plan_dispatch_prefix`
+clamps it to `[MIN_SM_FA3, MAX_SM_FA3] = [8, 48]`, so the kernel's single most
+important knob had never been varied server-side. `SGLANG_FUSED_SM_FA3` now pins
+it (clamped only to `[1, num_sm-1]`, since the point of a sweep is to reach
+values the heuristic would not choose).
+
+Matched sweep, 200 prompts, `--random-input-len 8192 --random-output-len 192
+--request-rate 12 --max-concurrency 32`, H200, `FLASHINFER_FUSED_BACKFILL=0`:
+
+| `sm_fa3` | tok/s | vs base | mean ITL | p99 ITL | mean TTFT | fused share |
+|---|---|---|---|---|---|---|
+| 16 | 19369.38 | -22.4% | 23.77 | 45.46 | 3757.37 | 90.6% |
+| 32 | 22034.74 | -11.7% | 20.93 | 35.94 | 3186.79 | 90.6% |
+| **64** | **24055.80** | **-3.6%** | **19.18** | **34.74** | **2821.14** | 90.5% |
+| 96 | 22856.25 | -8.4% | 20.26 | 37.05 | 3024.53 | 90.6% |
+| 112 | 19457.78 | -22.0% | 23.95 | 44.89 | 3700.06 | 90.6% |
+| base (fused off) | 24946.41 | — | 18.47 | 32.85 | 2671.04 | absent |
+
+200/200 requests in every arm, 0 misaligned, 0 launch failures.
+
+**There is a clear interior optimum at `sm_fa3 = 64`, and the heuristic's clamp
+sat below it.** Moving from the heuristic's 48 to 64 recovers more than half the
+regression: **-8.1% -> -3.6%**, with mean ITL 19.18 vs 18.47 ms (+3.8%) and p99
+ITL 34.74 vs 32.85 (+5.8%). The curve is sharply peaked -- both 16 and 112 cost
+~22% -- which is why leaving this knob unswept was costing so much.
+
+**The analytic balance point is not usable for this knob.** Unclamped,
+`plan_dispatch` returns `sm_fa3 = 131` and `115` for the two dumped serving batch
+shapes, i.e. essentially the whole device on FA3 -- and the sweep measures 112 as
+one of the two *worst* settings (-22.0%). So the clamp, not the model, was
+choosing the value, and the model's own preference points the wrong way. Any
+future tuning of this split should be measured, not derived from the overlap cost
+model, which was fit for the *overlap* kernel and does not transfer to the
+SM-pre-assignment kernel's makespan.
+
+`sm_fa3 = 80` was added to bracket the peak: 23800.46 tok/s, mean ITL 19.38,
+p99 ITL 35.72 -- worse than 64 on all three, so 64 is the peak and not an
+artefact of the grid. `MAX_SM_FA3` is now 64 in
+`python/sglang/srt/layers/attention/mixed_dispatch.py`, so the default lands on
+the measured optimum instead of 4.5 points below it.
+
+#### Cross-role backfill, tested on the server
+
+`FLASHINFER_FUSED_BACKFILL=1` at the best split, same matched harness:
+
+| arm | tok/s | mean ITL | p99 ITL | mean TTFT | fused share | misaligned | launch failures |
+|---|---|---|---|---|---|---|---|
+| `sm_fa3=64`, backfill **off** | 24055.80 | 19.18 | 34.74 | 2821.14 | 90.5% | 0 | 0 |
+| `sm_fa3=64`, backfill **on** | 24064.65 | 19.18 | 34.90 | 2816.70 | 90.6% | 0 | 0 |
+
+**+0.04% throughput -- within noise.** Backfill is worth 1.2% (H200) to 1.9-6.9%
+(H20) at kernel level, and essentially nothing end-to-end here. That is
+consistent rather than contradictory: backfill recovers idle SMs in the prefill
+tail of a single mixed step, and at `chunked-prefill-size 512` with 32 concurrent
+requests the server almost always has another step's work to overlap, so the tail
+it reclaims is already covered.
+
+**Correctness with backfill on is now clean**, which it previously was not. Under
+the server's own toolchain (CUDA 12.8), on the dumped server batch shape, at
+splits 64 / 48 / 32:
+
+```
+backfill=0:  0/512 unwritten, rel err 0.00032 / 0.00245 / 0.00313  PASS
+backfill=1:  0/512 unwritten, rel err 0.00028 / 0.00218 / 0.00282  PASS
+```
+
+Scope of that claim: this is one batch shape -- the dumped serving one, which
+covers FA3 + task 0 + task 2. The earlier backfill fault was recorded on "the one
+batch shape whose FA2-class rows split their KV", which this shape does not
+exercise, so **this does not retire that fault**; it shows backfill is correct on
+the shape the server actually produces. `FLASHINFER_FUSED_BACKFILL` stays 0 by
+default, now for a measured reason (no benefit) rather than only a correctness
+one.
+
+#### Multicast: what it actually requires
+
+Multicast is not a flag on this path, and the reason is specific. The fused
+kernel's FA3 side uses `hopper/sparse_mainloop.cuh` (paged/sparse KV), where:
+
+- line 87: `static constexpr bool USE_TMA_LOAD_KV = false;` -- KV is gathered
+  with `cp.async` per page, not loaded by TMA, so there is no TMA multicast to
+  enable. The dense sibling `hopper/mainloop.cuh:75` has it `true`.
+- the Q descriptor is built with `select<0,2>(TileShape_QKD{}), _1{}` and the
+  comment `// no mcast for Q`, i.e. a cluster dim of 1.
+
+So enabling cluster multicast needs (a) `page_size >= CTA_TILE_KV` (128) in
+sglang's KV pool, which also means threading the real page size through the fused
+launch, where it is currently hardcoded to 1, and (b) replacing the sparse
+mainloop's gather with a TMA load so there is a descriptor to multicast from.
+(b) is a rewrite of `sparse_mainloop.cuh`, not a configuration change. This is
+recorded as the precise blocker rather than as "page_size=1 is a gather", which
+was true but not actionable.

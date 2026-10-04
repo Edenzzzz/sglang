@@ -29,6 +29,8 @@ keep it busy.
 Constants fitted on H800 bf16 head_dim 128; refit with
 tasks/fused_specdec_workload/{boundary_sweep,fa3_split_pack}.py elsewhere.
 """
+import os
+
 import numpy as np
 
 TILE_Q = 128                 # both mainloops' large q tile
@@ -58,7 +60,18 @@ MIN_KV_TILES = 32
 MIN_SM_UTIL = 0.5
 # Measured band for the FA3 role's SM count: a work-proportional split
 # hands it most of the device and loses; capping it wins.
-MIN_SM_FA3, MAX_SM_FA3 = 8, 48
+# Measured on the serving path, not derived. A matched sweep at
+# --random-input-len 8192 (200 prompts, H200, qwen7b) gives a sharply peaked
+# curve in sm_fa3: 16 -> -22.4%, 32 -> -11.7%, 64 -> -3.6%, 96 -> -8.4%,
+# 112 -> -22.0% against the fused-off baseline. The optimum is 64, and the old
+# ceiling of 48 sat below it and cost 4.5 points of throughput.
+#
+# The ceiling is doing the actual choosing here: unclamped, plan_dispatch's
+# analytic balance point returns 115-131 for real serving batch shapes, i.e.
+# nearly the whole device on FA3, which the same sweep measures as one of the
+# two worst settings. That cost model was fit for the overlap kernel and does
+# not transfer to this kernel's makespan, so this bound must stay measured.
+MIN_SM_FA3, MAX_SM_FA3 = 8, 64
 
 
 def _as_i64(a):
@@ -204,7 +217,15 @@ def plan_dispatch_prefix(qo_lens, kv_lens, gqa_ratio, num_kv_heads, num_sm=NUM_S
         return "fused", 0, num_sm, 1, 0, 0, 0
 
     base = plan_dispatch(qo[:n_fa3_rows], kv[:n_fa3_rows], gqa_ratio, num_kv_heads, num_sm)
-    sm_fa3 = int(np.clip(base["sm_fa3"] or MIN_SM_FA3, MIN_SM_FA3, MAX_SM_FA3))
+    # SGLANG_FUSED_SM_FA3 pins the split so it can be swept on a real serving
+    # workload; the analytic balance point is the default. Clamped to
+    # [1, num_sm - 1] rather than to [MIN_SM_FA3, MAX_SM_FA3], because the point
+    # of a sweep is to reach values the heuristic would not choose.
+    _pin = os.environ.get("SGLANG_FUSED_SM_FA3")
+    if _pin:
+        sm_fa3 = int(np.clip(int(_pin), 1, max(1, num_sm - 1)))
+    else:
+        sm_fa3 = int(np.clip(base["sm_fa3"] or MIN_SM_FA3, MIN_SM_FA3, MAX_SM_FA3))
     n_fa3_tokens = int(qo[:n_fa3_rows].sum())
     n_fa3_pages = int(np.maximum(kv[:n_fa3_rows], 1).sum())
     return ("split", sm_fa3, max(1, num_sm - sm_fa3), base["kv_split"],

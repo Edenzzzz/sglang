@@ -2003,3 +2003,51 @@ on it: three separate processes, one each for `__launch_bounds__(128, 1)`,
 the only failure, the fix in the fused kernel is to drop the
 `minBlocksPerMultiprocessor` argument -- a one-token change -- and then the whole
 grid can cluster and the DSMEM gather split becomes implementable.
+
+#### `__launch_bounds__` is not the cause either -- and that probe is unsound
+
+Four variants, one process each, cluster 2, 128 threads / 16 KB except where noted:
+
+```
+__launch_bounds__(128, 1)   maxActiveClusters=-1 (cudaErrorInvalidClusterSize)  sync=cudaErrorLaunchFailure  FAILS
+__launch_bounds__(128)      maxActiveClusters=-1 (cudaErrorInvalidClusterSize)  sync=cudaErrorLaunchFailure  FAILS
+no __launch_bounds__        maxActiveClusters=-1 (cudaErrorInvalidClusterSize)  sync=cudaErrorLaunchFailure  FAILS
+__launch_bounds__(384, 1)   maxActiveClusters=-1 (cudaErrorInvalidClusterSize)  sync=cudaErrorLaunchFailure  FAILS
+```
+
+So `minBlocksPerMultiprocessor` is **not** the cause -- the hypothesis is
+falsified, the seventh in this task.
+
+**But the more useful reading is that this probe does not measure what it claims.**
+The third row -- no launch bounds, 128 threads, 16 KB, `cluster.sync()` plus
+`map_shared_rank` -- is essentially `dsmem_kv_share.cu`'s `gather_dsmem`, which
+clusters successfully and has produced every multicast number in this document. A
+probe that fails on a configuration known to work is broken, not informative.
+
+The likely defect is mine: `cudaOccupancyMaxActiveClusters` is called before
+`cfg.gridDim` is assigned, so the config passed to the query is incomplete, which
+is consistent with `cudaErrorInvalidClusterSize` appearing in *every* row
+regardless of kernel shape. Whether that failed query then perturbs the subsequent
+launch is not established.
+
+**So both `cluster_occupancy_probe.cu` and `cluster_lb_probe.cu` should be treated
+as unreliable until the query is given a complete config and each row is
+independently shown to reproduce `dsmem_kv_share.cu`'s success as a control.** That
+control is the thing both probes lacked -- neither included a configuration known
+to work, so neither could detect its own breakage.
+
+What still stands, unaffected by these two probes:
+
+| fact | source |
+|---|---|
+| DSMEM sharing is worth 1.326x in situ, 1.587x cold | `dsmem_kv_share.cu` |
+| the fused kernel fails at `CLUSTER=2`, passes at 1 | `test_fused_server_batch.py` |
+| the FA2-only path clusters cleanly | `SKIP_FA3` matrix |
+| `TMA_Q` is not the cause | `SKIP_TMAQ` matrix |
+| `ClusterTransactionBarrier` is not the cause | `cluster_barrier_repro.cu` |
+| no memory violation, no sync violation | memcheck, synccheck |
+
+The next step is to fix the probe -- complete config, plus a known-good control row
+-- before drawing any further conclusion about cluster schedulability. Seven
+overturned hypotheses here all share one shape: a measurement or reading that was
+not validated against something known to work first.

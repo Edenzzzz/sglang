@@ -56,6 +56,9 @@ MIN_KV_TILES = 32
 # the makespan the rest of the device needs. Below that, a separate SM set would
 # sit idle -- the class is too small to own hardware.
 MIN_SM_UTIL = 0.5
+# Measured band for the FA3 role's SM count: a work-proportional split
+# hands it most of the device and loses; capping it wins.
+MIN_SM_FA3, MAX_SM_FA3 = 8, 48
 
 
 def _as_i64(a):
@@ -168,3 +171,41 @@ def _kv_split(n_q_tiles, sm_fa3):
     if n <= 0:
         return 1
     return max(1, min(8, -(-int(sm_fa3) // n)))
+
+
+def plan_dispatch_prefix(qo_lens, kv_lens, gqa_ratio, num_kv_heads, num_sm=NUM_SM):
+    """Like plan_dispatch, but constrained to what the fused kernel can express.
+
+    The fused kernel runs FA3 on ``blockIdx.x < sm_split`` over one contiguous
+    range of rows and the persistent mainloop over the rest, with the two sides
+    planned independently. That makes the row layout part of the contract: FA3's
+    rows must be a PREFIX of the batch, because its q/o pointers start at 0 while
+    the persistent side's are advanced by ``pers_row_offset``.
+
+    sglang's mixed batches cooperate with that -- ``ScheduleBatch.mix_with_running``
+    appends decode rows after prefill rows, and only prefill rows can clear the
+    FA3 gate -- but not unconditionally: a short chunk in the middle of the
+    prefill run fails the gate and breaks contiguity. Rather than reorder the
+    batch (which would mean permuting q, o and the KV indices), take the longest
+    qualifying prefix and leave the rest to the persistent side.
+
+    Returns (mode, sm_fa3, sm_pers, kv_split, n_fa3_rows, n_fa3_tokens,
+             n_fa3_pages) where n_fa3_rows is a row COUNT, so rows
+             [0, n_fa3_rows) go to FA3 and the rest to the persistent kernel.
+    """
+    qo, kv = _as_i64(qo_lens), _as_i64(kv_lens)
+    fa3_mask, q_tiles, kv_tiles = split_classes(qo, kv, gqa_ratio)
+
+    # Longest prefix that is entirely FA3-class.
+    n_fa3_rows = int(np.argmin(fa3_mask)) if not fa3_mask.all() else int(fa3_mask.size)
+    if n_fa3_rows == 0 or n_fa3_rows == fa3_mask.size:
+        # Nothing for one of the two roles: the fused kernel has no advantage
+        # over simply running that role's kernel alone.
+        return "fused", 0, num_sm, 1, 0, 0, 0
+
+    base = plan_dispatch(qo[:n_fa3_rows], kv[:n_fa3_rows], gqa_ratio, num_kv_heads, num_sm)
+    sm_fa3 = int(np.clip(base["sm_fa3"] or MIN_SM_FA3, MIN_SM_FA3, MAX_SM_FA3))
+    n_fa3_tokens = int(qo[:n_fa3_rows].sum())
+    n_fa3_pages = int(np.maximum(kv[:n_fa3_rows], 1).sum())
+    return ("split", sm_fa3, max(1, num_sm - sm_fa3), base["kv_split"],
+            n_fa3_rows, n_fa3_tokens, n_fa3_pages)

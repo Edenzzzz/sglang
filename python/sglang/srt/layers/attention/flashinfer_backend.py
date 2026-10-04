@@ -1356,6 +1356,8 @@ class FlashInferAttnBackend(AttentionBackend):
         _plan_fused_split and reused across layers, like every other wrapper
         here; only the launch is per layer.
         """
+        import os
+
         import flashinfer
 
         kv_cache = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
@@ -1375,6 +1377,36 @@ class FlashInferAttnBackend(AttentionBackend):
         self._count_forward("mixed_fused_fa3")
         fa3 = fused["fa3_wrapper"]
         pers = fused["pers_wrapper"]
+        if os.environ.get("SGLANG_FUSED_DUMP") and not getattr(
+            FlashInferAttnBackend, "_fused_dumped", False
+        ):
+            FlashInferAttnBackend._fused_dumped = True
+            import numpy as _np
+
+            _d = dict(
+                num_qo_heads=self.num_qo_heads, num_kv_heads=self.num_kv_heads,
+                scaling=layer.scaling,
+                sm_fa3=fused["sm_fa3"], n_tok=fused["n_tok"],
+                n_rows=fused.get("n_rows", -1), n_pages=fused.get("n_pages", -1),
+                q_shape=_np.array(tuple(q.shape)), q_stride=_np.array(tuple(q.stride())),
+                o_shape=_np.array(tuple(out.shape)), o_stride=_np.array(tuple(out.stride())),
+                k_shape=_np.array(tuple(k_cache.shape)), k_stride=_np.array(tuple(k_cache.stride())),
+                v_shape=_np.array(tuple(v_cache.shape)), v_stride=_np.array(tuple(v_cache.stride())),
+                fa3_plan=_np.array(list(fa3._plan_info), dtype=_np.int64),
+                pers_plan=_np.array(list(pers._plan_info), dtype=_np.int64),
+                kv_indices=fused["kv_indices"].detach().cpu().numpy(),
+                fa3_sparse=fused["fa3_sparse"].detach().cpu().numpy(),
+                qo=_np.asarray(forward_batch.extend_seq_lens_cpu, dtype=_np.int64),
+                prefix=_np.asarray(forward_batch.extend_prefix_lens_cpu, dtype=_np.int64),
+                q_ptr_mod=q.data_ptr() % 16, o_ptr_mod=out.data_ptr() % 16,
+                kvi_ptr_mod=fused["kv_indices"].data_ptr() % 16,
+                sparse_ptr_mod=fused["fa3_sparse"].data_ptr() % 16,
+                fa3_ws=fa3._int_workspace_buffer.numel(),
+                pers_iws=pers.int_workspace_buffer.numel(),
+                pers_fws=pers.float_workspace_buffer.numel(),
+            )
+            _np.savez(os.environ["SGLANG_FUSED_DUMP"], **_d)
+            logger.error("fused launch dump written to %s", os.environ["SGLANG_FUSED_DUMP"])
         torch.ops.fused_fa3.fused_run(
             q,
             k_cache,
@@ -1558,16 +1590,30 @@ class FlashInferAttnBackend(AttentionBackend):
         ki_r = torch.from_numpy(kv_c[n_rows:].copy())
         kl_r = torch.from_numpy(np.maximum(kv[n_rows:], 1).astype(np.int32))
 
-        # The page index array for this batch, in request order. The mixed
-        # wrapper was just planned over the whole batch, so it already holds
-        # exactly this array, built on the GPU; rebuilding it here with a
-        # per-request Python loop was costing more than the kernel saved.
-        kv_indices = None
-        if wrappers:
-            kv_indices = getattr(wrappers[0], "_kv_indices", None)
+        # The page index array for this batch, in request order.
+        #
+        # This used to reuse wrappers[0]._kv_indices on the assumption that the
+        # mixed wrapper, planned over the whole batch moments earlier, already
+        # held exactly this array. It does not: on a measured faulting step that
+        # buffer held 3846 entries where the batch needed 4102, and its tail 256
+        # entries were uninitialised (page ids up to 1.1e9 against a 1.8e6 pool).
+        # The kernel gathered those as page ids and died in-kernel with
+        # "CUDA error: misaligned address", taking the server with it.
+        #
+        # So build it, but vectorised on the GPU -- the reuse existed to avoid a
+        # per-request Python loop, and that cost does not have to come back for
+        # the sake of correctness.
+        kv_indices = self._fused_kv_indices(forward_batch, kv_c)
         if kv_indices is None:
-            kv_indices = self._fused_kv_indices(forward_batch, kv_c)
-        if kv_indices is None:
+            return None
+        # A wrong-length array is a declined plan, not a GPU fault. The absence
+        # of this check is what let the bug above reach the kernel at all.
+        need = int(kv_c[-1])
+        if kv_indices.numel() < need:
+            logger.warning(
+                "fused: kv_indices has %d entries but the batch needs %d; declining",
+                kv_indices.numel(), need,
+            )
             return None
 
         st = getattr(self, "_fused_state", None)
@@ -1674,16 +1720,35 @@ class FlashInferAttnBackend(AttentionBackend):
         return n
 
     def _fused_kv_indices(self, forward_batch, kv_cumsum):
-        """Page ids for every row of this batch, concatenated in request order."""
+        """Page ids for every row of this batch, concatenated in request order.
+
+        Vectorised on the GPU: one repeat_interleave to get each output slot's
+        row, one subtraction to get its offset within that row, one gather from
+        req_to_token. No Python loop and no per-request host sync, which is what
+        made the earlier buffer-reuse shortcut tempting in the first place.
+        """
         try:
             req_pool = forward_batch.req_pool_indices
             seq_lens = forward_batch.seq_lens
             r2t = forward_batch.req_to_token_pool.req_to_token
-            parts = [
-                r2t[int(req_pool[i]), : int(seq_lens[i])]
-                for i in range(int(req_pool.shape[0]))
-            ]
-            return torch.cat(parts).to(torch.int32)
+            dev = r2t.device
+            B = int(req_pool.shape[0])
+            lens = seq_lens[:B].to(dev, torch.int64)
+            total = int(kv_cumsum[-1])
+            # kv_cumsum comes from the host-side plan; it must agree with the
+            # device-side seq_lens or the two sides disagree about addressing.
+            if int(lens.sum()) != total:
+                logger.warning(
+                    "fused: seq_lens sum %d != plan page total %d; declining",
+                    int(lens.sum()), total,
+                )
+                return None
+            row = torch.repeat_interleave(
+                torch.arange(B, device=dev, dtype=torch.int64), lens
+            )
+            starts = torch.cumsum(lens, 0) - lens
+            off = torch.arange(total, device=dev, dtype=torch.int64) - starts[row]
+            return r2t[req_pool.to(dev, torch.int64)[row], off].to(torch.int32)
         except Exception as e:
             logger.warning("fused: could not build kv_indices: %s", e)
             return None

@@ -1,5 +1,79 @@
 # Changelog
 
+## v0.7.2 — Two Real Bugs on the Fused Serving Path, Found by Dumping the Launch (2026-10-04)
+
+### Fixed: the page-index array handed to the fused kernel was wrong
+The previous session's planning optimisation reused `wrappers[0]._kv_indices` on
+the assumption that the mixed wrapper, planned over the whole batch moments
+earlier, already held exactly the page-id array the launch needs. It does not.
+
+Found by dumping the launch arguments to disk immediately before the faulting
+launch (`SGLANG_FUSED_DUMP=<path>`, written at the launch site so it survives the
+abort) rather than by a third hypothesis. On the faulting step:
+
+```
+qo = [424, 87, 1]   prefix = [3577, 0, 13]   ->  kv = [4001, 87, 14]
+kv_indices: 3846 entries, batch needs 4102
+            256 entries outside the valid page range [0, 1816955]
+            first invalid at index 3590, value 1085595437
+q, o, kv_indices, fa3_sparse base pointers: all 16-byte aligned
+```
+
+So nothing was misaligned. The kernel was gathering garbage page ids — up to
+1.1e9 against a 1.8e6 page pool — from an array both too short and partly
+uninitialised, and faulted on the resulting address. The optimisation it replaced
+was worth ~0.3% of throughput.
+
+- `_fused_kv_indices` now builds the array vectorised on the GPU (one
+  `repeat_interleave` for each output slot's row, one subtract for its offset,
+  one gather from `req_to_token`), so correctness does not cost the planning time
+  back, and no per-request Python loop returns.
+- It is checked against the plan's own page total before launch. The absence of
+  that check is why a wrong buffer reached the GPU as a fault rather than a
+  declined plan.
+
+### Fixed: the tile-128 task was never executed (flashinfer `b43e50b`)
+The fused extension built persistent params for tasks 1 and 2 only, on the
+comment "task 0 went to FA3". The persistent plan is built over the FA2
+sub-batch *after* the FA3 rows are removed, so its task 0 is ordinary FA2 work:
+`TwoStageHolisticPlan` sends every row with `packed_qo_len > 64` there, and folds
+the whole tile-64 mid class in too whenever that class carries less than
+`FLASHINFER_TRI_TILE_MIN_KV` total KV. Nothing executed it.
+
+No harness could have caught it: they all use MTP decode rows for the FA2 side,
+whose `packed_qo = 2 * gqa = 14` lands in task 2, so task 0 was always empty. In
+the dumped batch row 1 (`packed_qo = 609`) landed in task 0 and was skipped.
+
+Adds `R128 = PKT<128, 2>` threaded through `fused_drain_queue`,
+`FusedFA3PersistentKernel` and `FusedFA3PersistentDispatched`. Shared memory is
+unchanged — tile 128 needs 49152 bytes against tile 16's 69632, so `Runner3`
+still sets the bound.
+
+### Measured (H200, flashinfer `b43e50b`, sglang this commit)
+`tests/test_fused_server_batch.py`, which replays the dumped batch shape verbatim
+so one launch covers FA3, task 0 and task 2:
+
+| kernel | unwritten rows | FA3 row | task-0 row | task-16 row |
+|---|---|---|---|---|
+| pre-fix | **87 / 512** at every split | 0.00029 | **nan** | 0.00293 |
+| fixed | 0 / 512 | 0.00023 | 0.00196 | 0.00271 |
+
+87 is exactly row 1's token count — the task-0 row. Relative error is against an
+fp32 reference, at `sm_split` 48 / 32 / 16.
+
+Command: `FI_ROOT=/dev/shm/w/fi python3 tests/test_fused_server_batch.py`
+
+### Ruled out
+`tests/align_fused.py` reproduces each server-side tensor provenance in the
+standalone harness — `q` as a non-contiguous view of a fused QKV buffer, `o` as a
+slice of a reused buffer, the index array built by concatenating `req_to_token`
+rows. All pass, so provenance was never the cause, contrary to the hypothesis
+recorded in the previous session.
+
+### Still open
+Server-side throughput for the fused path is **not** measured. `SGLANG_FUSED_FA3_SM_SPLIT`
+stays 0 by default.
+
 ## v0.7.1 — Split-KV and GQA Packing for FA3; Gate on Tile-Grid Quantities (2026-09-30)
 
 ### Measured

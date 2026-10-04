@@ -2005,3 +2005,76 @@ survived two plausible ones.
 `SGLANG_FUSED_FA3_SM_SPLIT` stays 0 by default. A misaligned-address fault
 corrupts the CUDA context, so this path cannot be guarded at the Python level and
 must not be enabled until the fault is understood.
+
+#### Root cause: the page-index array, found by dumping the launch arguments
+
+Rather than a third hypothesis, the launch arguments were dumped to disk
+immediately before the faulting launch (the dump survives the abort) and read
+back. Instrumentation added at the launch site in
+`python/sglang/srt/layers/attention/flashinfer_backend.py`, enabled with
+`SGLANG_FUSED_DUMP=<path>`.
+
+The faulting step:
+
+```
+qo      = [424, 87, 1]        prefix = [3577, 0, 13]   ->  kv = [4001, 87, 14]
+gqa     = 7                   packed_qo = [2968, 609, 7]
+n_rows  = 1 (FA3)             sm_fa3 = 48
+q, o, kv_indices, fa3_sparse base pointers: all 16-byte aligned
+kv_indices: 3846 entries, but the batch needs 4102
+            256 of those entries outside the valid page range [0, 1816955]
+            first invalid at index 3590, value 1085595437
+```
+
+So no pointer was misaligned at all. The kernel was gathering **garbage page
+ids** — values up to 1.1e9 against a 1.8e6 page pool — from an array that was
+both too short and partly uninitialised, and faulted on the resulting address.
+
+The cause was mine, and it was the planning optimisation from the previous
+session: `_plan_fused_split_inner` reused `wrappers[0]._kv_indices` on the
+stated assumption that "the mixed wrapper was just planned over the whole batch,
+so it already holds exactly this array". It does not. That assumption replaced a
+correct per-request build to save planning time, and the saving was ~0.3% of
+throughput.
+
+Two separate reasons this was not caught earlier, both worth recording:
+
+- the tensor-provenance hypothesis was tested and is **false**. A new test
+  (`tests/align_fused.py`) reproduces each server-side provenance in the
+  standalone harness — `q` as a non-contiguous view of a fused QKV buffer, `o`
+  as a slice of a reused buffer, the index array built by concatenating
+  `req_to_token` rows — and all of them pass. Provenance was never the issue.
+- nothing checked the array's length against the plan's own page total, so a
+  wrong buffer reached the GPU as a fault instead of a declined plan.
+
+Fix: build the array, but vectorised on the GPU (one `repeat_interleave` for the
+row of each output slot, one subtract for its offset, one gather from
+`req_to_token`) so correctness does not cost the planning time back, plus a hard
+length check that declines the plan loudly.
+
+#### Second bug, found while reading the dump: the tile-128 task was never run
+
+The persistent plan is a `HolisticPlanInfo<3>` over three q-tile classes
+(128 / 64 / 16). `TwoStageHolisticPlan` (`scheduler.cuh:1161`) sends every row
+with `packed_qo_len > 64` to task 0, and also folds the whole tile-64 mid class
+into task 0 whenever that class carries less than `FLASHINFER_TRI_TILE_MIN_KV`
+(default 100000) total KV.
+
+`tests/fused_fa3_persistent_ext.cu` built params for tasks 1 and 2 only, with
+the comment "task 0 went to FA3". That is wrong: the persistent plan is built
+over the FA2 sub-batch *after* the FA3 rows have been removed, so its task 0 is
+ordinary FA2 work and nothing else executed it.
+
+In the dumped batch row 1 (`qo=87`, `packed_qo=609`) lands in task 0 and was
+silently skipped. Every previous harness used MTP decode rows for the FA2 side,
+whose `packed_qo = 2*gqa = 14` lands in task 2, so task 0 was always empty and
+the omission could not show.
+
+Fix: a third runner `R128 = PKT<128, 2>` threaded through `fused_drain_queue`,
+`FusedFA3PersistentKernel` and `FusedFA3PersistentDispatched`. Shared memory is
+unaffected — tile 128 needs 49152 bytes of `SharedStorage` against tile 16's
+69632, so `Runner3` still sets the bound.
+
+Regression test: `tests/test_fused_server_batch.py` replays the dumped batch
+shape exactly, so it covers FA3, task 0 and task 2 in one launch and asserts no
+output row is left unwritten.

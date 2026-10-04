@@ -2849,15 +2849,51 @@ needs FA3 retuned for two warpgroups), or giving FA3 a dynamic work queue so no
 CTA ever changes role mid-kernel -- which is the design the earlier sections point
 at and the only one that avoids the register protocol entirely.
 
-#### Final attempt: symmetric 3-warpgroup drain — UNVERIFIED, verify before relying on it
+#### Final attempt: symmetric 3-warpgroup drain — default path verified, variant still faults
 
 Acting on the resolved diagnosis, the symmetric kernel was changed so **all three**
 warpgroups drain the FA2 queue before FA3 (each with its own cursor, merge flag and
 named barrier), making the pre-FA3 instruction stream identical across them -- the
 condition the 168/168 register measurement says is violated.
 
-**The correctness result was not obtained.** The build completed but the test run
-did not return before the session ended.
+**Both results did arrive, and they settle two things.**
+
+*The shared-path risk is retired.* The asymmetric control **passes** with the
+changed `fused_drain_queue`: `sm_split=64`, 0/512 unwritten, rel err 0.00024 /
+0.00209 / 0.00294. The derived barrier ids, the `kWg * 16` slot offsets and the
+16 -> 48 byte tail do not disturb the default path, as inspection suggested but
+had not established. No revert is needed.
+
+*And the protocol hypothesis is falsified too.* With all three warpgroups draining
+-- so the pre-FA3 instruction stream **is** identical across them -- the symmetric
+kernel still faults with the same `illegal instruction`, reproduced in two
+independent runs. That was the surviving explanation after the register
+measurement, and it is now gone:
+
+| hypothesis | status |
+|---|---|
+| register budget (`alloc<240>` unsatisfiable through a larger footprint) | **falsified** -- 168 registers in both kernels, symmetric spills no more |
+| warpgroups entering FA3's dec/inc sequence from asymmetric states | **falsified** -- made symmetric, still faults |
+
+So the cause is none of what was proposed, and the remaining candidates are
+different in kind:
+
+1. **`setmaxnreg` may not be legal after *any* prior code in the kernel** -- i.e.
+   a warpgroup's register protocol must begin at entry, not mid-kernel. If so the
+   whole FA2-then-FA3 ordering is impossible regardless of symmetry, and the
+   dynamic FA3 queue is the only route left.
+2. **`__syncthreads()` is `barrier.sync 0`, which FA3 also uses as
+   `kQueryEmpty = 0`.** The rendezvous completes before FA3's body starts, but
+   FA3's mbarrier initialisation may assume a pristine barrier-0 state.
+3. **The FA2 mainloop writes FA3's shared-memory region** (they overlap unless
+   `FLASHINFER_FUSED_DISJOINT_SMEM`), and FA3's body may not re-initialise every
+   mbarrier it then waits on.
+
+(2) and (3) are both cheap to test -- move the rendezvous to a named barrier above
+`FirstUserBarrier` instead of `__syncthreads()`, and separately try the disjoint
+shared-memory layout -- and they would discriminate (1) from the rest. That is the
+next step, and it is a different and smaller question than the two that were just
+ruled out.
 
 **This matters more than an unfinished experiment usually would, because the change
 touches shared code on the default path.** `fused_drain_queue` now derives its
@@ -2872,19 +2908,9 @@ collide, and the tail only grew (and `smem_size` was updated to match). **But
 `kCursorOff` sizing taken from the wrong runner, and the fixed-rank KV stride
 assumption. So it is not to be trusted without the test.
 
-First action for whoever picks this up, before anything else:
+Reproduce either arm with:
 
 ```
-FLASHINFER_FUSED_SYMMETRIC=0 SPLITS=64,48,32 \
-  python tests/test_fused_server_batch.py        # asymmetric path MUST still PASS
-```
-
-If that fails, revert flashinfer to `a94f412` (which has the verified asymmetric
-path and the symmetric variant's earlier, single-warpgroup form) and re-apply the
-3-warpgroup drain as a change confined to the symmetric kernel only, rather than to
-`fused_drain_queue` which both share. Then run the symmetric arm:
-
-```
-FLASHINFER_FUSED_SYMMETRIC=1 FA3_PLAN_CTAS=132 SPLITS=64 \
-  python tests/test_fused_server_batch.py
+FLASHINFER_FUSED_SYMMETRIC=0 SPLITS=64,48,32 python tests/test_fused_server_batch.py
+FLASHINFER_FUSED_SYMMETRIC=1 FA3_PLAN_CTAS=132 SPLITS=64 python tests/test_fused_server_batch.py
 ```

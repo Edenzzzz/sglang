@@ -2652,3 +2652,55 @@ This was found by running it rather than by reading the scheduler, which is why 
 is recorded with the forward-composition evidence: `pure_prefill=100%` is
 unambiguous, and the composition counter caught it the same way it caught the five
 invalid A/Bs.
+
+#### Forcing the 4-mode schedule: the exact blocker in sglang's scheduler
+
+The three config gates were relaxed behind `SGLANG_ALLOW_MIXED_CHUNK_SPEC=1`
+(default off, so stock behaviour is untouched):
+
+| gate | site | kind |
+|---|---|---|
+| EAGLE / EAGLE3 / STANDALONE | `server_args.py:1505` | assignment `enable_mixed_chunk = False` |
+| NGRAM | `server_args.py:1578` | assignment `enable_mixed_chunk = False` |
+| validation | `server_args.py:3673` | `assert not self.enable_mixed_chunk` -- **and its message is written backwards**, reading "enable_mixed_chunk is required for speculative decoding" while asserting it must be off |
+
+With all three relaxed the server **starts** cleanly (`KEPT ON with ngram
+speculative decoding`, no assertion, no fatal, no misaligned) and then **dies on
+the first real request**:
+
+```
+scheduler.py:2247        new_batch.mix_with_running(self.running_batch)
+schedule_batch.py:1410   out_cache_loc = torch.cat(
+                             [self.out_cache_loc, running_batch.out_cache_loc])
+TypeError: expected Tensor as element 1 in argument 0, but got NoneType
+```
+
+So the blocker is concrete and named: **`mix_with_running` assumes the running
+batch has `out_cache_loc` allocated, and under speculative decoding it is
+`None`** -- the spec worker allocates KV slots during draft/verify rather than
+through the scheduler's normal decode path, so there is nothing for the mixed
+batch to concatenate.
+
+This is a much more actionable statement than "sglang disables the combination":
+the gates are not merely conservative, they guard a real unimplemented path, and
+the work needed to reach the goal's 4-mode schedule is to teach
+`mix_with_running` how to merge a spec-decoding running batch -- deciding where
+the verify rows' KV slots come from when their batch is folded into a chunked
+prefill batch.
+
+Not attempted here, deliberately: getting KV slot allocation wrong in that merge
+corrupts the cache silently rather than crashing, and validating it needs the
+greedy-equivalence harness plus per-row KV auditing. The equivalence harness is
+built and was used for this run (`/tmp/mode4.sh`: the no-spec greedy reference is
+captured first and compared against the 4-mode output; here the 4-mode output was
+empty because the scheduler died, which the comparison correctly reported as a
+mismatch rather than a pass).
+
+**Status of the goal's MTP requirement, stated plainly.** The 4-mode MTP serving
+schedule is unreachable on sglang today: not by configuration, and not by
+relaxing the gates either. It needs a scheduler fix at
+`schedule_batch.py:1410`. Every server-side number in this document is therefore
+from the prefill-chunk + decode mixed regime with speculative decoding off, which
+is the only regime in which this kernel currently runs at all. The kernel-level
+4-mode MTP validation (`tests/bench_mtp_fused.py`, verify rows at
+`packed_qo = 14`) remains the only 4-mode evidence, and it stands.

@@ -200,6 +200,19 @@ def add_radix_eviction_policy_choices(choices):
     RADIX_EVICTION_POLICY_CHOICES.extend(choices)
 
 
+
+def _allow_mixed_chunk_with_spec() -> bool:
+    """Whether to keep mixed chunked prefill enabled under speculative decoding.
+
+    Off by default: sglang disables the combination, and the fused FA3+FA2 kernel
+    needs it on to see a 4-mode batch at all. Gated so the default schedule is
+    untouched while the combination is being validated.
+    """
+    import os
+
+    return os.environ.get("SGLANG_ALLOW_MIXED_CHUNK_SPEC", "0") == "1"
+
+
 @dataclasses.dataclass
 class ServerArgs:
     """
@@ -1501,11 +1514,16 @@ class ServerArgs:
                     "Overlap scheduler is disabled because of using eagle3 or standalone speculative decoding."
                 )
 
-            if self.enable_mixed_chunk:
+            if self.enable_mixed_chunk and not _allow_mixed_chunk_with_spec():
                 self.enable_mixed_chunk = False
                 logger.warning(
                     "Mixed chunked prefill is disabled because of using "
                     "eagle speculative decoding."
+                )
+            elif self.enable_mixed_chunk:
+                logger.warning(
+                    "Mixed chunked prefill KEPT ON with eagle speculative decoding "
+                    "by SGLANG_ALLOW_MIXED_CHUNK_SPEC=1."
                 )
 
             model_arch = self.get_hf_config().architectures[0]
@@ -1575,7 +1593,13 @@ class ServerArgs:
                 )
 
             self.disable_overlap_schedule = True
-            self.enable_mixed_chunk = False
+            if not _allow_mixed_chunk_with_spec():
+                self.enable_mixed_chunk = False
+            elif self.enable_mixed_chunk:
+                logger.warning(
+                    "Mixed chunked prefill KEPT ON with ngram speculative decoding "
+                    "by SGLANG_ALLOW_MIXED_CHUNK_SPEC=1."
+                )
             self.speculative_eagle_topk = self.speculative_ngram_max_bfs_breadth
             if self.speculative_num_draft_tokens is None:
                 self.speculative_num_draft_tokens = (
@@ -3647,9 +3671,13 @@ class ServerArgs:
 
         # Check speculative decoding
         if self.speculative_algorithm is not None:
-            assert (
-                not self.enable_mixed_chunk
-            ), "enable_mixed_chunk is required for speculative decoding"
+            # NOTE: the original message read "enable_mixed_chunk is required for
+            # speculative decoding" while asserting the opposite; it requires
+            # mixed chunked prefill to be OFF.
+            assert not self.enable_mixed_chunk or _allow_mixed_chunk_with_spec(), (
+                "mixed chunked prefill must be off with speculative decoding; set "
+                "SGLANG_ALLOW_MIXED_CHUNK_SPEC=1 to override"
+            )
 
         # Check chunked prefill
         # Skip validation if chunked prefill is disabled (i.e., size <= 0).

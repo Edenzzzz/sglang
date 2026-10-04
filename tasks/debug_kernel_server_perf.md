@@ -3290,3 +3290,48 @@ rather than that it is switched off. Testing it means implementing it first.
 This is the correct characterisation to hand over, and it supersedes the earlier
 "needs a `sparse_mainloop.cuh` gather->TMA rewrite" framing, which was necessary
 but not sufficient.
+
+#### Multicast, tested on hardware: DSMEM cluster sharing is 1.59x over redundant gather
+
+The earlier sections concluded multicast was untestable because TMA multicast
+needs a tensormap over a dense strided region and paged KV at `page_size=1` is a
+gather. That is true of **TMA** multicast and it was the wrong place to stop:
+Hopper's distributed shared memory gives the same "load once, consume in N CTAs"
+property without TMA at all. One CTA's gathered tile is readable by its cluster
+peers through `cg::cluster_group::map_shared_rank`, which flashinfer already uses
+in `trtllm/fused_moe/RoutingKernel.cuh` and `comm/trtllm_allreduce*.cuh`.
+
+`tests/dsmem_kv_share.cu` measures it against the redundancy our kernel actually
+has. Both arms pair CTAs on the **same** KV tile -- which is the real case, since
+every q-tile of a prefill row attends to the same KV range, so the CTAs holding
+those q-tiles gather identical KV. The only difference is whether each CTA gathers
+the whole tile or half of it and reads the peer's half over DSMEM:
+
+```
+H200, 132 blocks = 66 clusters of 2, 4096 tiles of 128 tokens x 128 dims (bf16),
+1M scattered pages (256 MB, past L2), page_size=1 gather pattern
+
+  redundant gather : 1325.249 us    202.6 GB/s global
+  DSMEM shared     :  835.249 us    160.7 GB/s global (half the bytes)
+  speedup          :    1.587x
+```
+
+**1.587x**, against a 2.0x ceiling (half the global traffic); the gap is
+`cluster.sync()` plus DSMEM read latency. The absolute 202.6 GB/s is far below
+H200's HBM ceiling because a 256-byte scattered gather is transaction-bound rather
+than bandwidth-bound -- which is exactly why halving the number of gathers helps
+this much.
+
+Three things this establishes that the earlier "needs a gather->TMA rewrite"
+framing got wrong:
+
+1. multicast's *benefit* is reachable at `page_size=1`, with no KV-pool change and
+   no tensormap;
+2. it needs a **real cluster launch**, which flashinfer's attention does not do
+   anywhere -- `cudaLaunchKernelEx` / `clusterDim` appear only in `sampling.cuh`,
+   `norm.cuh` and vendored trtllm code, and `persistent.cuh:192` states its own
+   "cluster" is logical with `cluster_size` pinned to 1;
+3. the sharing only pays where cluster-mates hold q-tiles of the same row, so the
+   planner must co-assign them -- it is a scheduling change as much as a kernel one.
+
+Command: `nvcc -std=c++17 -arch=sm_90a -O3 -o /tmp/dsmem tests/dsmem_kv_share.cu && /tmp/dsmem`

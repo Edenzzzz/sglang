@@ -1892,3 +1892,35 @@ To isolate the kernel server-side one would need prefill chunks clearing the gat
 from the first chunk: a large `--chunked-prefill-size` over long prefixes. That
 is the shape `tests/bench_mtp_fused.py` already drives directly and more
 cleanly, which is why the kernel-level numbers remain the stronger evidence.
+
+#### The -8.7% is not planning overhead (correction)
+
+| | tok/s | vs control |
+|---|---|---|
+| control, fused path off | 22,203 | - |
+| fused, original wiring | 20,260 | -8.7% |
+| fused, planning deferred + indices reused + plan cached | 20,314 | **-8.5%** |
+
+The planning optimization recovered 0.3%, i.e. nothing. **The decomposition
+above it was wrong**: inferring "3.9x per affected forward, therefore planning"
+from an end-to-end ratio and a 3.2% share was arithmetic applied to an
+unverified assumption, namely that the only thing enabling the path changes is
+the cost of the forwards it serves. Removing the planning cost falsified it.
+
+Remaining candidates, in order of suspicion:
+
+1. **768 MB of extra workspace** (256 MB FA3 + 512 MB persistent) allocated
+   lazily on first fused plan, *after* the KV pool was sized at startup from
+   `--mem-fraction-static`. It therefore competes with activations rather than
+   coming out of a budget.
+2. **`FLASHINFER_FA3_MAX_CTAS` leaks.** It is set in `os.environ` and never
+   cleared, so after the first fused plan it caps CTAs for *every* later
+   flashinfer fa3 plan in the process, not only the fused one.
+3. The kernel itself, on the 39 forwards it serves.
+
+**The decisive test, not yet run**: enable the path but force the planner to
+return None. The workspaces still allocate and the env var is still set, but the
+kernel never runs. If throughput stays near 20.3k the cost is environmental
+(1 or 2) and the kernel is exonerated; if it returns to 22.2k the cost is the
+kernel (3). That single run separates all three and should precede any further
+tuning of this path.

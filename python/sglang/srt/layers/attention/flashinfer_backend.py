@@ -892,7 +892,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 # None whenever the batch does not satisfy the kernel's layout
                 # contract, in which case persistent_attn_forward runs the
                 # ordinary path.
-                self._fused_plan = self._plan_fused_split(forward_batch) if use_pa else None
+                self._fused_want = bool(use_pa)
             else:
                 self._count_forward(
                     "mixed_other"
@@ -994,6 +994,12 @@ class FlashInferAttnBackend(AttentionBackend):
                     multi_item_params=multi_item_params,
                     prefix_lens_cpu=forward_batch.extend_prefix_lens_cpu,
                 )
+            # Planned here, not before the update above: the updater has just
+            # built the batch's page index array on the GPU, and reusing it is
+            # far cheaper than rebuilding it with a per-request Python loop.
+            if getattr(self, "_fused_want", False):
+                self._fused_plan = self._plan_fused_split(forward_batch, wrappers)
+                self._fused_want = False
             try:
                 self.forward_metadata = PrefillMetadata(
                     wrappers,
@@ -1465,7 +1471,7 @@ class FlashInferAttnBackend(AttentionBackend):
             page_size,
         )
 
-    def _plan_fused_split(self, forward_batch):
+    def _plan_fused_split(self, forward_batch, wrappers=None):
         """Plan both roles for this step, or return None to use the plain path."""
         import os
 
@@ -1477,7 +1483,7 @@ class FlashInferAttnBackend(AttentionBackend):
             return None
 
         try:
-            return self._plan_fused_split_inner(forward_batch)
+            return self._plan_fused_split_inner(forward_batch, wrappers)
         except Exception as e:
             # Degrade to the ordinary persistent path rather than killing the
             # server. Logged at WARNING once per distinct message so a
@@ -1491,7 +1497,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 logger.warning("fused plan unavailable, using persistent: %s", key)
             return None
 
-    def _plan_fused_split_inner(self, forward_batch):
+    def _plan_fused_split_inner(self, forward_batch, wrappers=None):
         import os
 
         import numpy as np
@@ -1524,8 +1530,15 @@ class FlashInferAttnBackend(AttentionBackend):
         ki_r = torch.from_numpy((kv_c[n_rows:] - kv_c[n_rows]).copy())
         kl_r = torch.from_numpy(np.maximum(kv[n_rows:], 1).astype(np.int32))
 
-        # The page index array for this batch, in request order.
-        kv_indices = self._fused_kv_indices(forward_batch, kv_c)
+        # The page index array for this batch, in request order. The mixed
+        # wrapper was just planned over the whole batch, so it already holds
+        # exactly this array, built on the GPU; rebuilding it here with a
+        # per-request Python loop was costing more than the kernel saved.
+        kv_indices = None
+        if wrappers:
+            kv_indices = getattr(wrappers[0], "_kv_indices", None)
+        if kv_indices is None:
+            kv_indices = self._fused_kv_indices(forward_batch, kv_c)
         if kv_indices is None:
             return None
 
@@ -1539,6 +1552,17 @@ class FlashInferAttnBackend(AttentionBackend):
                 pers=BatchAttention(
                     torch.empty(512 << 20, dtype=torch.uint8, device=dev), "NHD"),
             )
+
+        # Re-planning is the dominant cost of this path: two full plans, each
+        # with its own H2D copy. Skip it when the layout that determines both
+        # plans is unchanged from the previous step.
+        key = (n_rows, int(sm_fa3), int(qo[:n_rows].sum()), int(kv[:n_rows].sum()),
+               int(qo[n_rows:].sum()), int(kv[n_rows:].sum()), int(qo.size))
+        if st.get("key") == key and st.get("plan") is not None:
+            self._count_forward("mixed_fused_fa3")
+            cached = dict(st["plan"])
+            cached["kv_indices"] = kv_indices
+            return cached
 
         # Constraint 1: FA3's plan must be built for exactly sm_fa3 CTAs.
         os.environ["FLASHINFER_FA3_MAX_CTAS"] = str(int(sm_fa3))
@@ -1555,7 +1579,7 @@ class FlashInferAttnBackend(AttentionBackend):
             q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
         )
         self._count_forward("mixed_fused_fa3")
-        return dict(
+        plan = dict(
             sm_fa3=int(sm_fa3), n_rows=int(n_rows), n_tok=int(n_tok),
             n_pages=int(n_pages), fa3_wrapper=st["fa3"], pers_wrapper=st["pers"],
             kv_indices=kv_indices,
@@ -1564,6 +1588,8 @@ class FlashInferAttnBackend(AttentionBackend):
                 st["fa3"], forward_batch.token_to_kv_pool.get_kv_buffer(0)
             ),
         )
+        st["key"], st["plan"] = key, plan
+        return plan
 
     def _fused_num_sm(self):
         n = getattr(FlashInferAttnBackend, "_sm_count", None)

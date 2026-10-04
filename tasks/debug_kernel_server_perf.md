@@ -2774,10 +2774,16 @@ extension) was made twice and did not produce them: first an include-path error
 for the JIT-generated `batch_attention_config.inc`, then, with that located via
 `find`, a standalone compile that emitted no `Compiling entry function` blocks --
 this translation unit does not build cleanly outside the torch JIT environment
-that normally assembles its flags. So **the cause is not established**. The
-practical way to get the numbers is to add `-Xptxas -v` to the
-`extra_cuda_cflags` list in the test's own `load()` call and read the build log,
-rather than reconstructing the compile by hand. The two candidate mechanisms it would distinguish are a protocol
+that normally assembles its flags. So **the cause is not established**. Adding `-Xptxas -v` to the
+`extra_cuda_cflags` in the test's own `load()` (now wired, via `PTXAS_V=1`) was
+tried as well and also did not yield them: the kernel's abort truncates the run's
+output before the build log is flushed. Three attempts, three different reasons.
+
+So the register counts need a run that **does not launch the faulting kernel** --
+build the extension in one process (import and `load()` only, no `fused_run`) with
+`PTXAS_V=1`, capture that log, and read the counts there. `PTXAS_V=1` is committed
+and ready; only the build-without-launch driver is missing. Until that is done the
+choice between the two mechanisms is open, and the symmetric variant stays off. The two candidate mechanisms it would distinguish are a protocol
 violation (a warpgroup joining FA3's dec/inc sequence after running unrelated
 code) and a register *budget* problem (the combined FA2+FA3 footprint forcing a
 baseline that makes `alloc<240>` unsatisfiable). Confirming which is the first

@@ -173,6 +173,32 @@ fails.
 
 ## 3. A better EDF predictor, with acceptance length as an input
 
+> **MEASURED 2026-10-05, and it contradicts this section's premise for the
+> SM-pre-assignment kernel.** Per-step tracing on mixed batches
+> (`SGLANG_STEP_TRACE=1`, 2121 steps per arm, fit `t = c0 + c1*tokens + c2*bs`)
+> gives, on the MIXED steps that matter:
+>
+> | arm | MIXED MAPE | p90 |
+> |---|---|---|
+> | fused FA3+FA2 (`sm_fa3=8`, symmetric) | **13.54%** | 23.39% |
+> | unfused baseline | **9.79%** | 18.97% |
+>
+> The baseline is **1.38x more predictable**, not less. Pure-EXTEND and
+> pure-DECODE classes are indistinguishable between arms, as expected since the
+> fused kernel only acts on mixed batches.
+>
+> Mechanism: the fused kernel's step cost contains a makespan term,
+> `max(FA3 role, FA2 role)` over a *static* SM partition, which is not linear in
+> tokens. The persistent baseline's single shared work queue keeps cost closer to
+> linear. The same structure that makes the split sharply tuned (16 -> -22.4%,
+> 64 -> -3.6%, 112 -> -22.0%) is what makes the cost non-linear.
+>
+> **This section therefore stands only on the *overlap* kernel's closed form
+> (3.1% MAPE), as section 0 already states.** It must not be re-attributed to the
+> SM-pre-assignment kernel. Details in
+> `debug_kernel_server_perf_4_mode.md`, commit `613c54016`.
+
+
 ### Why the predictor is better here
 
 Already measured, and it is the strongest single result behind this story: the
@@ -334,6 +360,7 @@ main risk in this section.
 | Affinity-first + SLO veto beats disagg placement on TTFT | **Hypothesis** | 4 x H20, veto rate + counterfactual regret |
 | Best-effort migration makes replication net-positive | **Hypothesis** | 4 x H20 repeated-prefix trace, hit rate vs KV displaced |
 | Acceptance-length input improves TPOT prediction | **Hypothesis** (mechanically must; size unknown) | fit with/without `alpha_hat` on the MTP trace |
+| Fused kernel is easier to perf-model than unfused (section 3's premise) | **MEASURED FALSE** for the SM-pre-assignment kernel -- mixed-step MAPE 13.54% vs baseline 9.79% | done; section 3 now rests on the overlap kernel only |
 | Randomized source selection suffices vs congestion modelling | **Hypothesis** | 4 x H20, link utilization spread |
 | Complete-vs-bipartite is a bounded ~2x constant, 88% saturated by n=8 | **Derived** (arithmetic; corrects an earlier "scales with n" claim) | state as analysis |
 | Disagg forms link hotspots that colocation does not, at matched load | **Hypothesis** | 8 x 2 H20 with verified distinct hosts; p99/max per-link utilization |

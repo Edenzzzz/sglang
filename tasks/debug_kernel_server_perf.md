@@ -3122,3 +3122,48 @@ Next, in order: (1) re-sweep `sm_fa3` server-side under symmetric mode around 8,
 currently passes `sm_fa3`, which symmetric mode's contract rejects), (3) rerun the
 server A/B. The -2.0% figure predates all of this and should not be carried
 forward as the kernel's standing result.
+
+#### Server-side: symmetric backfill turns the regression into a WIN (+0.8%)
+
+Matched harness, 200 prompts, `--random-input-len 8192 --random-output-len 192
+--request-rate 12 --max-concurrency 32`, chunk 512, cap 160 / 320 MB,
+`FLASHINFER_FUSED_SYMMETRIC=1`, H200:
+
+| configuration | tok/s | vs base | mean ITL | p99 ITL | mean TTFT | fused share |
+|---|---|---|---|---|---|---|
+| **symmetric, `sm_fa3=8`** | **25155.02** | **+0.8%** | **18.33** | 32.90 | **2636.22** | 90.6% |
+| symmetric, `sm_fa3=16` | 24959.08 | +0.04% | 18.48 | 34.34 | 2668.59 | 90.5% |
+| base (fused off), 2 samples | 24946.41 / 24951.21 | — | 18.46 / 18.47 | 32.85 / 34.99 | 2671 / 2674 | absent |
+| asymmetric best (`sm_fa3=64`) | 24421 | -2.0% | 18.87 | 33.18-35.07 | 2757-2764 | 90.5% |
+
+200/200 requests, 0 misaligned, 0 launch failures in both symmetric arms.
+
+**The fused path is no longer a regression.** At `sm_fa3 = 8` it beats the
+persistent kernel on throughput (+0.8%), on mean ITL (18.33 vs 18.46-18.47) and on
+mean TTFT (2636 vs 2671-2674), with p99 ITL inside the baseline's own run-to-run
+range (32.85-34.99).
+
+Full progression on this workload, every row with its `mixed_fused_fa3` share
+checked:
+
+| configuration | tok/s | vs base |
+|---|---|---|
+| heuristic `sm_fa3=48`, cap 96, asymmetric | 23250.44 | -8.1% |
+| swept `sm_fa3=64`, cap 96, asymmetric | 24055.80 | -3.6% |
+| `sm_fa3=64`, cap 136, asymmetric | 24421 | -2.0% |
+| **`sm_fa3=8`, cap 160, SYMMETRIC** | **25155.02** | **+0.8%** |
+
+And the split optimum moved exactly as the kernel benchmark predicted: 64 for the
+asymmetric kernel, ~8 for the symmetric one, because once every CTA can reach FA3's
+queue a small dedicated FA3 set is best and the rest of the device backfills.
+
+**Caveat, stated rather than buried: this is one sample at `sm_fa3 = 8`.** The
+baseline has two samples agreeing to 0.02% (~5 tok/s), so the +209 tok/s gap is far
+outside the *baseline's* repeat spread -- but the symmetric arm itself has not been
+repeated. Before `SGLANG_FUSED_FA3_SM_SPLIT` is flipped on by default, repeat the
+`sm_fa3=8` arm 2-3 times and sweep 4/8/12 to confirm the optimum. That is the only
+thing standing between this and shipping the path enabled.
+
+Commits: sglang `130a1893e` (server plumbing), flashinfer `ca17ed5` (the working
+symmetric kernel), `94764bb` (per-warpgroup barriers), `eff4970` (rendezvous off
+barrier 0 -- the actual fix).

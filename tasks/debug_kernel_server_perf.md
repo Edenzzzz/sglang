@@ -2704,3 +2704,41 @@ from the prefill-chunk + decode mixed regime with speculative decoding off, whic
 is the only regime in which this kernel currently runs at all. The kernel-level
 4-mode MTP validation (`tests/bench_mtp_fused.py`, verify rows at
 `packed_qo = 14`) remains the only 4-mode evidence, and it stands.
+
+#### Why the `mix_with_running` fix is a feature, not a patch
+
+Reading `schedule_batch.py:1400-1427` after the crash shows the `out_cache_loc`
+`None` is the *first* of four assumptions that all encode "one new token per
+running request", which is true for ordinary decode and false for a spec verify
+batch (each running request contributes `num_draft_tokens`, 2 at MTP k=1):
+
+| line | assumption | why it breaks under spec decoding |
+|---|---|---|
+| `req.extend_input_len = 1` | one token per running req | a verify row has `num_draft_tokens` |
+| `torch.cat([..., running_batch.out_cache_loc])` | slots already allocated | `None`; the spec worker allocates at verify time |
+| `self.extend_lens.extend([1] * running_bs)` | one token per running req | same as above |
+| `prefix_lens` from `len(origin_input_ids) + len(output_ids) + delta` | exactly one new token | off by `num_draft_tokens - 1` |
+
+And beyond those four, the merged batch carries **no `spec_info`** -- the draft
+tree and its verification mask -- so even with the lengths fixed the attention
+backend would have no way to build the correct causal mask for the verify rows
+inside a `ForwardMode.MIXED` forward.
+
+So making the goal's 4-mode schedule real means: allocating verify rows' KV slots
+inside the mixed batch, generalising four length computations from 1 to
+`num_draft_tokens`, threading `spec_info` through `ForwardMode.MIXED`, and teaching
+the attention backend to apply a tree mask to a subset of rows in a mixed batch.
+That is a feature in sglang's scheduler and attention path, upstream of this
+kernel.
+
+**I am not attempting it**, and the reason is specific rather than budgetary
+reluctance: every one of those four is a silent-corruption failure mode -- wrong
+`prefix_lens` or wrong KV slots produce plausible tokens from the wrong cache
+rather than a crash, and a short greedy probe can pass while a loaded run is
+quietly wrong. Doing it properly needs the equivalence harness (built, at
+`/tmp/mode4.sh`) plus per-row KV auditing, and it should be a separate, focused
+change with its own validation rather than a tail-end addition to this one.
+
+The override that exposes the path stays in the tree, defaulted off
+(`SGLANG_ALLOW_MIXED_CHUNK_SPEC=1`), because it is the instrument that located all
+of this and whoever picks the feature up will need it.

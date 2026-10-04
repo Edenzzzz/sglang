@@ -2536,3 +2536,57 @@ a shared cursor rather than bound to `blockIdx.x`, i.e. a dynamic FA3 queue --
 which also removes the `fa3_num_ctas == sm_split` contract that currently guards
 against silently dropping FA3 work. That is a redesign of the FA3 side's
 scheduling, not a parameter.
+
+#### Does the fused kernel help EDF predictability? Measured: no
+
+The goal asks how well the model-level perf model works with this kernel for EDF
+against the unfused baseline. The operational form of that question is whether the
+fused kernel produces a **tighter step-time distribution** -- a deadline predictor
+can only be as accurate as the dispersion of what it predicts.
+
+Matched runs, chunk 512, `sm_fa3 = 64` / cap 136 vs fused off, 200 prompts each:
+
+| metric | fused | base | ratio |
+|---|---|---|---|
+| mean ITL (ms) | 18.854 | 18.459 | 1.021 |
+| median ITL (ms) | 18.988 | 18.373 | 1.033 |
+| std ITL (ms) | 5.025 | 4.727 | 1.063 |
+| p95 ITL (ms) | 24.593 | 22.645 | 1.086 |
+| p99 ITL (ms) | 33.182 | 34.994 | **0.948** |
+| **CV = std/mean ITL** | **0.266** | **0.256** | 1.041 |
+| **CV = std/mean TPOT** | **0.101** | **0.099** | 1.020 |
+| p99 / median ITL | 1.747 | 1.905 | 0.918 |
+| p95 / median ITL | 1.295 | 1.232 | 1.051 |
+
+**The answer is no, and it is a clean null rather than a loss.** The coefficient
+of variation is 0.266 vs 0.256 on ITL and 0.101 vs 0.099 on TPOT -- a 2-4%
+difference. The tail ratios disagree in sign (p99/median 8.2% *tighter* fused,
+p95/median 5.1% wider), which is the signature of noise rather than an effect.
+
+For calibration on what counts as noise here: two identical baseline runs gave
+24946.41 and 24951.21 tok/s (0.02% apart) but p99 ITL of 32.85 and 34.99 -- a
+6.5% spread. **p99 ITL is the noisiest statistic in this harness**, so none of the
+p99 differences above are interpretable, including the fused arm's apparent
+advantage.
+
+**This corrects an earlier statement in this document.** The fused arm's p99 ITL
+was reported as worse than the baseline's (34.74 / 33.18 against 32.85). With the
+second baseline sample at 34.99, p99 ITL is **indistinguishable between the two
+arms**; only throughput (-2.1%, far outside its 0.02-0.21% repeat spread) and mean
+ITL (+2.1%) separate them.
+
+**Consequence for the colocation story.** `tasks/pd_colocation_vs_disagg.md` section
+3 rests on the *overlap* kernel's closed-form predictability (3.1% MAPE), and that
+document already states explicitly that "everything below depends on the
+predictability property, not on the SM-pre-assignment kernel winning." This
+measurement is direct evidence for keeping those separate: **the SM-pre-assignment
+kernel does not inherit the overlap kernel's predictability advantage**, and the
+EDF argument must not be re-attributed to it.
+
+Limitation, stated rather than glossed: ITL dispersion is an end-to-end proxy for
+step-cost predictability, not a measurement of model error. A direct test fits a
+cost model to per-step (batch composition -> step time) samples and reports MAPE,
+which needs per-step instrumentation in the scheduler that does not exist yet.
+What is established here is that the fused kernel's end-to-end latency dispersion
+is not better, which is the necessary condition for the stronger claim and it
+fails.

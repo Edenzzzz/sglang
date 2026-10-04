@@ -2413,3 +2413,39 @@ So `chunked-prefill-size 512` with `sm_fa3 = 64` remains the best fused
 configuration found, at -3.6%, and this result is further evidence that the
 remaining deficit is the static role partition rather than any per-kernel
 inefficiency.
+
+#### The split optimum does not track the work mix, so an adaptive split will not help
+
+The static-partition reading above predicts something testable: if the makespan is
+set by whichever role is longer, then at `chunk 2048` -- where FA3's share of the
+step's work is much larger -- the best `sm_fa3` should shift *upward* from 64.
+
+It does not. Split sweep at `chunk 2048`, same matched harness:
+
+| `sm_fa3` | tok/s | mean ITL | p99 ITL | mean TTFT | fused share |
+|---|---|---|---|---|---|
+| 64 | 24739.03 | 45.17 | 207.74 | 572.88 | 90.0% |
+| 96 | 23087.85 | 48.70 | 271.04 | 619.93 | 90.3% |
+| 112 | 18505.54 | 60.78 | 422.41 | 889.56 | 89.9% |
+| base | 30081.02 | 36.34 | 73.47 | 395.52 | absent |
+
+Monotonically worse above 64, exactly as at `chunk 512`. **The optimum is
+insensitive to the work mix**, which falsifies the prediction and changes the
+conclusion in two ways:
+
+1. **A per-batch adaptive split is not the fix.** `plan_dispatch`'s balance point
+   already computes the work ratio and returns 115-131 for real batch shapes; the
+   sweep measures 112 as one of the worst settings at *both* chunk sizes. The
+   model's error is therefore **not calibration** -- the quantity it optimizes
+   (work balance between the roles) is not the quantity that determines the
+   optimum. Feeding it better constants would not move it toward 64.
+2. `sm_fa3 ~ 64` -- about half the device -- behaves like a property of the two
+   kernels' own saturation points rather than of the batch: FA3 stops gaining from
+   extra CTAs while FA2's decode rows still need roughly half the device to hold
+   ITL. That is why a fixed measured constant is the right choice for this knob,
+   and why `MAX_SM_FA3 = 64` is stated as measured rather than derived.
+
+This is also the directly relevant answer to the goal's perf-model question for
+EDF: the overlap cost model's **balance-point output must not be used to set this
+split.** Its step-time prediction is a separate matter and still rests on the 3.1%
+MAPE result for the overlap kernel, which this kernel does not inherit.

@@ -174,6 +174,7 @@ class MixedKernelGate:
 
 from sglang.srt.layers.attention.mixed_dispatch import (
     plan_dispatch as md_plan_dispatch,
+    plan_dispatch_prefix as md_plan_prefix,
 )
 
 class _MixedCompositionLog:
@@ -787,6 +788,9 @@ class FlashInferAttnBackend(AttentionBackend):
             )
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
+        # A fused plan is valid for exactly one step. Clear it up front so a
+        # stale plan can never be applied to a different batch.
+        self._fused_plan = None
         # Update attn env var as it could be changed by profiler
         self.use_persistent = envs.SGLANG_FLASHINFER_USE_PERSISTENT.get()
         self.use_pod = envs.SGLANG_FLASHINFER_USE_POD.get()
@@ -876,6 +880,13 @@ class FlashInferAttnBackend(AttentionBackend):
                     wrappers = self.prefill_wrappers_mixed
                 else:
                     wrappers = self.prefill_wrappers_paged
+                # Plan the fused FA3+FA2 split for this step, if enabled. Both
+                # roles are planned once here and reused across layers, like
+                # every other wrapper; only the launch is per layer. Returns
+                # None whenever the batch does not satisfy the kernel's layout
+                # contract, in which case persistent_attn_forward runs the
+                # ordinary path.
+                self._fused_plan = self._plan_fused_split(forward_batch) if use_pa else None
             else:
                 self._count_forward(
                     "mixed_other"
@@ -1299,6 +1310,20 @@ class FlashInferAttnBackend(AttentionBackend):
                 num_tokens, q.shape[1], dtype=torch.float32, device=q.device
             )
             out_buf = self._persistent_out_buf
+        fused = getattr(self, "_fused_plan", None)
+        if fused is not None:
+            try:
+                return self._fused_attn_forward(
+                    fused, batch_attn_wrapper, forward_batch, q, layer,
+                    out_buf[:num_tokens], num_tokens,
+                )
+            except Exception as e:
+                # A failure here must not take the server down, but it must be
+                # loud: silently serving the non-fused path would make an A/B
+                # measure the wrong kernel, which is exactly the error that
+                # wasted a day of server benchmarking.
+                logger.error("fused FA3+FA2 launch failed, using persistent: %s", e)
+                self._fused_plan = None
         o, lse = batch_attn_wrapper.run(
             q,
             forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id),
@@ -1309,6 +1334,237 @@ class FlashInferAttnBackend(AttentionBackend):
             v_scale=layer.v_scale,
         )
         return o, lse
+
+    def _fused_attn_forward(
+        self, fused, batch_attn_wrapper, forward_batch, q, layer, out, num_tokens
+    ):
+        """Launch the fused kernel for this layer.
+
+        The FA3 and persistent plans are built once per step by
+        _plan_fused_split and reused across layers, like every other wrapper
+        here; only the launch is per layer.
+        """
+        import flashinfer
+
+        kv_cache = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
+        k_cache, v_cache = kv_cache[:, 0], kv_cache[:, 1]
+        fa3 = fused["fa3_wrapper"]
+        pers = fused["pers_wrapper"]
+        torch.ops.fused_fa3.fused_run(
+            q,
+            k_cache,
+            v_cache,
+            fused["kv_indices"],
+            out,
+            fa3._int_workspace_buffer,
+            list(fa3._plan_info),
+            pers.int_workspace_buffer,
+            pers.float_workspace_buffer,
+            list(pers._plan_info),
+            self.num_qo_heads,
+            self.num_kv_heads,
+            1,
+            layer.scaling,
+            fused["sm_fa3"],
+            fused["n_tok"],
+            fused["sm_fa3"],
+            fused["n_pages"],
+            fused["fa3_sparse"],
+            out,
+        )
+        return out, self._persistent_lse_buf[:num_tokens]
+
+
+    # ---- fused FA3 + FA2 SM pre-assignment -------------------------------
+    #
+    # Four constraints, every one of which was a bug in the standalone harness
+    # that produced plausible-looking wrong output rather than a crash:
+    #
+    #  1. FA3's plan must be built for exactly sm_fa3 CTAs. Its scheduler reads
+    #     work_indptr[blockIdx.x] over whatever count it was planned for, and
+    #     the kernel only gives it blockIdx.x < sm_split, so a mismatch silently
+    #     drops the rest of its work (~88% at sm_split=16 against a 132-CTA
+    #     plan). The launch refuses a mismatch, so this is enforced twice.
+    #  2. The persistent side's KV indices must be rebased past the FA3 rows'
+    #     pages: the two plans are independent, so its kv_indptr restarts at 0
+    #     while its pages begin after FA3's (1.52 relative error without).
+    #  3. FA3 takes vector-sparse offsets, not page ids, because the kernel
+    #     multiplies the index by k_stride_n (0.60 relative error without).
+    #  4. FA3 must own a contiguous row prefix; see plan_dispatch_prefix.
+
+    def _load_fused_ext(self):
+        """Build the fused extension once per process."""
+        ext = getattr(FlashInferAttnBackend, "_fused_ext_loaded", None)
+        if ext is not None:
+            return ext
+        import glob
+        import os
+
+        from torch.utils.cpp_extension import load
+
+        src = os.environ.get("SGLANG_FUSED_FA3_SRC")
+        if not src or not os.path.exists(src):
+            logger.warning(
+                "SGLANG_FUSED_FA3_SRC unset or missing; fused FA3+FA2 path disabled"
+            )
+            FlashInferAttnBackend._fused_ext_loaded = False
+            return False
+        root = os.path.dirname(os.path.dirname(os.path.abspath(src)))
+        gen = glob.glob(
+            os.path.expanduser("~/.cache/flashinfer/*/generated/batch_attention_with*")
+        )
+        if not gen:
+            logger.warning("no generated flashinfer config; fused path disabled")
+            FlashInferAttnBackend._fused_ext_loaded = False
+            return False
+        load(
+            name="fused_fa3",
+            sources=[src],
+            extra_include_paths=[
+                gen[0],
+                f"{root}/include",
+                f"{root}/csrc",
+                f"{root}/3rdparty/cutlass/include",
+                f"{root}/3rdparty/cutlass/tools/util/include",
+                f"{root}/3rdparty/spdlog/include",
+            ],
+            extra_cuda_cflags=[
+                "-std=c++17", "--expt-relaxed-constexpr", "-arch=sm_90a", "-O3",
+                "--threads", "32",
+                "-U__CUDA_NO_HALF_OPERATORS__", "-U__CUDA_NO_HALF_CONVERSIONS__",
+                "-U__CUDA_NO_HALF2_OPERATORS__", "-U__CUDA_NO_BFLOAT16_OPERATORS__",
+                "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+                "-U__CUDA_NO_BFLOAT162_OPERATORS__",
+            ],
+            is_python_module=False,
+            verbose=False,
+        )
+        logger.info("fused FA3+FA2 extension loaded from %s", src)
+        FlashInferAttnBackend._fused_ext_loaded = True
+        return True
+
+    def _fa3_sparse_indices(self, w, kv_cache, page_size=1):
+        """The index array flashinfer's own fa3 path feeds the kernel."""
+        from flashinfer.page import block_sparse_indices_to_vector_sparse_offsets
+
+        k = kv_cache[:, 0] if kv_cache.dim() >= 4 else kv_cache
+        return block_sparse_indices_to_vector_sparse_offsets(
+            w._paged_kv_indices_buf,
+            w._paged_kv_indptr_buf,
+            w._vector_sparse_indices_buffer,
+            w._vector_sparse_indptr_buffer,
+            w._kv_lens_buffer,
+            k.stride(0) // k.stride(1),
+            1,
+            page_size,
+        )
+
+    def _plan_fused_split(self, forward_batch):
+        """Plan both roles for this step, or return None to use the plain path."""
+        import os
+
+        if os.environ.get("SGLANG_FUSED_FA3_SM_SPLIT", "0") != "1":
+            return None
+        if not forward_batch.forward_mode.is_mixed():
+            return None
+        if not self._load_fused_ext():
+            return None
+
+        qo = np.asarray(forward_batch.extend_seq_lens_cpu, dtype=np.int64)
+        prefix = np.asarray(forward_batch.extend_prefix_lens_cpu, dtype=np.int64)
+        kv = prefix + qo
+        gqa = self.num_qo_heads // self.num_kv_heads
+        try:
+            mode, sm_fa3, sm_pers, _kv_split, n_rows, n_tok, n_pages = md_plan_prefix(
+                qo, kv, gqa, self.num_kv_heads, self._fused_num_sm()
+            )
+        except Exception as e:  # planning must never take the server down
+            logger.warning("fused plan failed, falling back: %s", e)
+            return None
+        if mode != "split" or n_rows == 0:
+            return None
+
+        import flashinfer
+        from flashinfer.attention import BatchAttention
+
+        B = int(qo.size)
+        if n_rows >= B:
+            return None  # nothing left for the persistent role
+
+        # Per-side indptrs. Both restart at 0 because the two plans are
+        # independent; the launch is told the row and page offsets so it can
+        # advance the persistent side's base pointers (constraints 2 and 4).
+        qo_c = np.concatenate([[0], np.cumsum(qo)]).astype(np.int32)
+        kv_c = np.concatenate([[0], np.cumsum(np.maximum(kv, 1))]).astype(np.int32)
+        qi_f = torch.from_numpy(qo_c[: n_rows + 1].copy())
+        ki_f = torch.from_numpy(kv_c[: n_rows + 1].copy())
+        qi_r = torch.from_numpy((qo_c[n_rows:] - qo_c[n_rows]).copy())
+        ki_r = torch.from_numpy((kv_c[n_rows:] - kv_c[n_rows]).copy())
+        kl_r = torch.from_numpy(np.maximum(kv[n_rows:], 1).astype(np.int32))
+
+        # The page index array for this batch, in request order.
+        kv_indices = self._fused_kv_indices(forward_batch, kv_c)
+        if kv_indices is None:
+            return None
+
+        st = getattr(self, "_fused_state", None)
+        if st is None:
+            dev = q_device = kv_indices.device
+            st = self._fused_state = dict(
+                fa3=flashinfer.BatchPrefillWithPagedKVCacheWrapper(
+                    torch.empty(256 << 20, dtype=torch.uint8, device=dev),
+                    kv_layout="NHD", backend="fa3"),
+                pers=BatchAttention(
+                    torch.empty(512 << 20, dtype=torch.uint8, device=dev), "NHD"),
+            )
+
+        # Constraint 1: FA3's plan must be built for exactly sm_fa3 CTAs.
+        os.environ["FLASHINFER_FA3_MAX_CTAS"] = str(int(sm_fa3))
+        hd = self.head_dim
+        st["fa3"].plan(
+            qi_f, ki_f, kv_indices, torch.ones(n_rows, dtype=torch.int32),
+            self.num_qo_heads, self.num_kv_heads, hd, 1, causal=False,
+            q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
+        )
+        # Constraint 2: the persistent side's pages start after FA3's.
+        st["pers"].plan(
+            qi_r, ki_r, kv_indices[int(n_pages):], kl_r,
+            self.num_qo_heads, self.num_kv_heads, hd, hd, 1, causal=False,
+            q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
+        )
+        self._count_forward("mixed_fused_fa3")
+        return dict(
+            sm_fa3=int(sm_fa3), n_rows=int(n_rows), n_tok=int(n_tok),
+            n_pages=int(n_pages), fa3_wrapper=st["fa3"], pers_wrapper=st["pers"],
+            kv_indices=kv_indices,
+            # Constraint 3: FA3 takes vector-sparse offsets, not page ids.
+            fa3_sparse=self._fa3_sparse_indices(
+                st["fa3"], forward_batch.token_to_kv_pool.get_kv_buffer(0)
+            ),
+        )
+
+    def _fused_num_sm(self):
+        n = getattr(FlashInferAttnBackend, "_sm_count", None)
+        if n is None:
+            n = FlashInferAttnBackend._sm_count = torch.cuda.get_device_properties(
+                0
+            ).multi_processor_count
+        return n
+
+    def _fused_kv_indices(self, forward_batch, kv_cumsum):
+        """Page ids for every row of this batch, concatenated in request order."""
+        try:
+            req_pool = forward_batch.req_pool_indices
+            seq_lens = forward_batch.seq_lens
+            r2t = forward_batch.req_to_token_pool.req_to_token
+            parts = [
+                r2t[int(req_pool[i]), : int(seq_lens[i])]
+                for i in range(int(req_pool.shape[0]))
+            ]
+            return torch.cat(parts).to(torch.int32)
+        except Exception as e:
+            logger.warning("fused: could not build kv_indices: %s", e)
+            return None
 
     def pod_forward(
         self,

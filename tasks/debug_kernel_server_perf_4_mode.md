@@ -1775,3 +1775,63 @@ is new and the cheapest:
    tile that is small next to the KV stream -- and the gain is the measured 1.326x
    on the KV gather, which is the dominant traffic. This is the option to try
    first, and it was invisible until smem and the FA2 side were ruled out.
+
+#### Correction: the pipeline mechanism above is wrong -- that `if constexpr` branch is not taken
+
+The previous two sections blamed FA3's cluster crash on
+`PipelineTmaAsync`'s arrival-count arithmetic
+(`cutlass/pipeline/sm90_pipeline.hpp:313-316`) reached through a hardcoded
+`cluster_shape = Shape<_1,_1,_1>`. **This configuration never instantiates that
+pipeline.** Reading `prefill_sm90.cuh:109-127` properly:
+
+```cpp
+MainloopPipeline pipeline_k = [&] {
+  if constexpr (use_tma_load_kv) {
+    pipeline_params.transaction_bytes = CollectiveMainloop::TmaTransactionBytesK;
+    return MainloopPipeline(shared_storage.pipeline_k, pipeline_params,
+                            /*cluster_shape=*/Shape<_1, _1, _1>{});
+  } else {
+    return MainloopPipeline(shared_storage.pipeline_k, pipeline_params);   // <-- ours
+  }
+}();
+```
+
+and `kernel_traits.cuh:112-113`:
+
+```cpp
+using MainloopPipeline =
+    std::conditional_t<USE_TMA_LOAD_KV, cutlass::PipelineTmaAsync<NUM_STAGES>,
+                       cutlass::PipelineAsync<NUM_STAGES>>;
+```
+
+The fused kernel runs the **sparse** mainloop, where `USE_TMA_LOAD_KV = false`. So
+`MainloopPipeline` is `PipelineAsync`, the `cluster_shape` argument is never
+passed, and the multicast arrival-count branch is dead code here. Both the
+"declaring 1 computes cta-local addresses" and the "declaring the true shape
+demands multicast arrivals" arguments were about code this build does not compile.
+
+**What is actually left to suspect**, having read the right branch: the sparse FA3
+path still uses TMA in exactly two places, and nowhere else.
+
+1. `TMA_Q` -- Q is TMA-loaded (`sparse_mainloop.cuh:80-87`), signalling
+   `shared_storage.barrier_Q`, which `prefill_sm90.cuh:105` initialises with
+   `init(/*num_threads=*/1)`.
+2. the epilogue's TMA **store** of O, which is why cross-role backfill needed
+   `cute::tma_store_wait<0>()` in the first place.
+
+A TMA operation's mbarrier completion is cluster-relative on Hopper, and
+`barrier_Q` is initialised and waited on as a CTA-local barrier. That is the
+remaining candidate, and it is consistent with the crash being a launch-time
+addressing fault rather than a hang.
+
+Usefully, this makes the route recorded in the previous section *more* attractive
+rather than less: replacing `TMA_Q` with a `cp.async` Q load removes the only TMA
+load on this path, and the only remaining TMA is the epilogue store. The fix is
+smaller than "implement TMA multicast in FA3", and the claim it rests on is now
+read from the branch that is actually compiled.
+
+**Fourth correction of an asserted cause in this task.** The pattern is consistent
+enough to be worth naming: each time, the error was reasoning from code that looked
+relevant without checking which `if constexpr` / template specialisation this build
+selects. `USE_TMA_LOAD_KV = false` is the single fact that decides most of FA3's
+behaviour here, and it needs checking first, not last.

@@ -1896,7 +1896,20 @@ epilogue TMA store to blame.
 | `PipelineTmaAsync` arrival counts | never compiled (`USE_TMA_LOAD_KV = false`) |
 | `TMA_Q` load | ruled out (`SKIP_TMAQ` matrix) |
 | epilogue store | plain tiled, not TMA |
-| `ClusterTransactionBarrier` barrier_Q / barrier_O | leading candidate; `tests/cluster_barrier_repro.cu` isolates it |
+| `ClusterTransactionBarrier` barrier_Q / barrier_O | ruled out -- `tests/cluster_barrier_repro.cu` reproduces FA3's init(1)/arrive/wait pattern and is OK at cluster 1, 2 and 4 |
+
+Every cheap hypothesis is now excluded. The next step is compute-sanitizer against
+the clustered fused kernel, which was avoided earlier as expensive but is now the
+only tool left with the search space exhausted:
+
+```
+FLASHINFER_FUSED_CLUSTER=2 compute-sanitizer --tool memcheck \
+  python tests/test_fused_server_batch.py
+```
+
+Multicast therefore stands as: benefit measured on hardware (1.326x in situ,
+1.587x cold), cluster launch implemented and output-neutral at N=1, integration
+blocked at N=1 -> N=2 by a fault whose cause is not yet identified.
 
 One consequence that is worth recording because the goal states otherwise:
 cross-role backfill does **not** need `tma_store_wait`. With a plain tiled store

@@ -2227,3 +2227,48 @@ python edf_fit.py fused=<fused.log> baseline=<base.log>
 (The fitter's label parsing splits on the first `=`, so labels must not contain
 one.) This is a materially smaller task than the doc previously implied, and it is
 the only one of the three outstanding goal items that does not require a rewrite.
+
+#### EDF perf-model check, done properly: both arms equally predictable (null, second method)
+
+With `--decode-log-interval 1` (199 decode-batch samples per arm) and the step-cost
+fit `t_step = c0 + c1*T + c2*R` per arm:
+
+| arm | n | MAPE | p90 | worst |
+|---|---|---|---|---|
+| fused (`sm_fa3=8`, symmetric) | 193 | **0.39%** | 0.86% | 3.37% |
+| baseline (fused off) | 193 | **0.40%** | 0.96% | 3.50% |
+| ratio fused/baseline | — | **0.987** | — | — |
+
+**The fused kernel is not measurably more predictable.** A 1.3% relative difference
+in MAPE is a tie, and this is the **second independent method** to say so -- the ITL
+dispersion proxy gave CV 0.266 vs 0.256, a 4% difference in the same direction and
+equally inside noise.
+
+Two caveats that bound what this measures, both of which matter:
+
+1. **MAPE of 0.4% is suspiciously good, and that is the tell.** In decode-only
+   steady state at `--decode-log-interval 1`, `T` and `R` barely vary between
+   steps, so a linear model fits an almost-constant signal. The fit is well-posed
+   but the question it answers is easy.
+2. **The goal's question is about mixed steps, and these are decode-only.** sglang
+   logs a throughput figure only on `Decode batch` lines; mixed prefill+decode steps
+   appear as `Prefill batch` lines with no throughput, so they are absent from this
+   dataset -- and they are exactly the steps where composition varies and where the
+   fused kernel's cost model would have to earn its advantage.
+
+So the honest state of the claim: **the "better EDF predictability" argument is not
+supported for the SM-pre-assignment kernel by either method tried.** The 3.1% MAPE
+closed-form result quoted in `pd_colocation_vs_disagg.md` section 3 belongs to the
+*overlap* kernel and does not transfer -- which that document already says, and this
+is now direct evidence for keeping them separate rather than an argument for it.
+
+Closing the remaining gap needs per-step timing on **mixed** batches, which the
+existing logs cannot provide. That is a small scheduler patch (time `run_batch` and
+log the composition on every step, not just decode ones) rather than the "does not
+exist" instrumentation this doc once claimed -- but it is a code change, unlike the
+flag that produced the table above.
+
+Throughput in these two runs (10198 / 10708 tok/s) is far below the +0.7-0.8% A/B
+numbers because per-step logging is expensive. The overhead is identical in both
+arms so the predictability comparison is fair, but these figures must not be
+compared against the 25155 / 24946 results.

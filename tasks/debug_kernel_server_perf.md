@@ -2804,7 +2804,23 @@ cannot happen on a warpgroup that afterwards participates in FA3's register
 protocol. Either FA3 must be retuned so the drain uses a warpgroup it excludes, or
 FA3 needs a dynamic work queue so no CTA changes role mid-kernel -- the second
 being the option that removes the protocol constraint entirely rather than working
-around it. The two candidate mechanisms it would distinguish are a protocol
+around it.
+
+A third option follows directly from the 144 = 144 arithmetic and looks cheaper
+than either: make the pre-FA3 phase **symmetric across all three warpgroups**
+instead of giving it to warpgroup 0 alone. `fused_drain_queue` is already
+parameterised by `tid_base`, so warpgroups 0/1/2 can each drain the FA2 queue
+independently at `tid_base` 0/128/256, after which all three have executed the
+same instruction stream and FA3's dec/inc sequence begins from a symmetric state
+-- which is precisely the condition the measurement says is violated.
+
+One prerequisite if that is tried: `fused_drain_queue` currently does
+`NamedBarrier::sync(128, kFusedQueueBarrier)`, and a named barrier is CTA-wide, so
+three warpgroups arriving at the same id each expecting 128 arrivals would
+mis-match. Each warpgroup needs its own barrier id (`kFusedQueueBarrier + wg`),
+which is why this is a real change and not a one-liner -- but it is a much smaller
+change than retuning FA3's warp specialisation or writing a dynamic FA3 queue, and
+it is the one most directly implied by the register measurement. The two candidate mechanisms it would distinguish are a protocol
 violation (a warpgroup joining FA3's dec/inc sequence after running unrelated
 code) and a register *budget* problem (the combined FA2+FA3 footprint forcing a
 baseline that makes `alloc<240>` unsatisfiable). Confirming which is the first

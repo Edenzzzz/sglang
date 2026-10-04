@@ -2954,3 +2954,43 @@ the rendezvous. This is a materially smaller question than either of the two
 hypotheses that were falsified, and it is the fourth distinct mechanism this fault
 has presented -- which is itself the reason to instrument rather than hypothesise
 a fifth.
+
+#### Confirmed: it is a hang, and the barrier ids collide
+
+```
+exit_code=124   (timeout)        GPU utilization 99%
+```
+
+A 124 exit with the GPU pegged at 99% is a spin on a barrier, not a fault. So the
+symmetric variant's remaining problem is a **deadlock**, and the illegal
+instruction really was the barrier-0 collision (now fixed).
+
+The deadlock has an identified cause, and it is in the ids I assigned:
+
+- the three per-warpgroup queue barriers were given `kFusedQueueBarrier + 0..2`,
+  i.e. **8, 9, 10**;
+- but `kPersistentMainloopBarrier = kFusedQueueBarrier + 1` = **9**
+  (`prefill.cuh`), and `threadblock_sync_mdo_states` syncs on it with
+  `NamedBarrier::sync(KTraits::NUM_THREADS = 128, kPersistentMainloopBarrier)`.
+
+So warpgroup 1's queue barrier is the same id the persistent mainloop uses, and
+with three warpgroups now running the mainloop concurrently they all arrive at
+that one id each expecting 128 arrivals. A named barrier is CTA-wide, so the
+counts mis-match and the CTA spins -- exactly what 99% utilization with no
+progress looks like.
+
+Two things are needed, not one, and both are now specified:
+
+1. Move the per-warpgroup queue barriers clear of `kPersistentMainloopBarrier` --
+   e.g. base them at `kPersistentMainloopBarrier + 1` so the three occupy 10, 11,
+   12, with the rendezvous at 13. (There are 16 hardware barriers, so this fits.)
+2. Make `kPersistentMainloopBarrier` itself per-warpgroup, since three warpgroups
+   now run `threadblock_sync_mdo_states` at once. That means threading a barrier
+   id into it the same way `barrier_id` was threaded through `Run` earlier, and it
+   is the part that was attempted and reverted twice before -- but the reason is
+   now concrete (concurrent warpgroups sharing one id) rather than exploratory.
+
+This is the fifth mechanism this fault has presented, but unlike the previous four
+it is identified rather than hypothesised: the hang is confirmed by exit code and
+GPU state, and the id collision is a matter of arithmetic on two constants that
+are both in the tree.

@@ -464,3 +464,39 @@ in the order they should be tried:
 Do not add a fourth warpgroup's worth of ids without re-auditing 0-7: the
 `__syncthreads()` == barrier 0 == `kQueryEmpty` collision is what broke symmetric
 mode once already, and it is silent -- it shows up as a hang, not an error.
+
+### 12.2 Is warpgroup-reentrant FA2 even possible? Measured: yes, by aliasing
+
+Two things had to be checked before building it.
+
+**Instruction scope.** `mma.sync` is a *warp*-level instruction -- its fragments
+are defined across a warp's 32 lanes -- so three warpgroups can issue it
+independently. This is unlike `wgmma`, which is warpgroup-scoped and needs its
+own fence / commit_group / wait_group across 128 threads in lockstep. Nothing in
+the ISA prevents three warpgroups each running an FA2 mainloop on its own work
+item.
+
+**Shared memory**, which is the binding constraint (`/tmp/smem_budget.cu`,
+compiled for sm_90a against the JIT-generated config):
+
+| region | bytes |
+|---|---|
+| FA3 `SharedStorage` (1 K/V stage) | 98,352 |
+| persistent tile128 | 49,152 |
+| persistent tile64 | 32,768 |
+| persistent **tile16** | **69,632** (the largest class) |
+| H200 per-CTA budget | 232,448 |
+| 3 warpgroups x largest class | **208,896 -> fits, 89.9% of budget** |
+| FA3 + 3 x largest, disjoint | 307,248 -> **does not fit** |
+
+So three concurrent mainloop instances fit only if they **alias FA3's region**,
+which is what the kernel already does by default (`FLASHINFER_FUSED_DISJOINT_SMEM`
+is the opt-out). That is sound because the roles are time-multiplexed within a
+CTA: an SM runs FA3 work or FA2 work, never both at once. Note tile16 is the
+largest class, not tile128, so the worst case is three tile-16 instances and the
+sizing must come from the max over classes rather than from tile128.
+
+What remains for (2) in §12 is therefore mechanical rather than structural:
+warpgroup-relative warp and thread indices inside the mainloop (the `ltid`
+distinction the merge path already had to make), the three barrier ids from
+§12.1, and three smem slots carved from the aliased region.

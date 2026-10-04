@@ -3395,3 +3395,34 @@ What is established: multicast's benefit for our access pattern is real and
 measured (1.587x, `tests/dsmem_kv_share.cu`); the cluster launch is implemented and
 verified to be output-neutral at N=1; and N>1 is blocked on FA3's pipeline for a
 reason that is now precisely located rather than suspected.
+
+#### How much of the DSMEM win survives L2? Most of it -- the gather is transaction-bound
+
+The 1.587x above was measured with a 256 MB working set, deliberately past L2. That
+overstates the in-situ case: in the real kernel the CTAs that redundantly gather a
+row's KV run concurrently, so L2 serves most of the repeats ("locality means
+concurrency in time", as the LPT work in this task established). Re-running with an
+L2-resident working set bounds the honest upside:
+
+| working set | redundant gather | DSMEM shared | speedup |
+|---|---|---|---|
+| 16 MB (**inside L2** -- the in-situ case) | 682.436 us / 393.3 GB/s | 514.583 us / 260.8 GB/s | **1.326x** |
+| 256 MB (past L2 -- cold) | 1325.362 us / 202.5 GB/s | 835.079 us / 160.7 GB/s | 1.587x |
+
+L2 absorbs part of the redundancy -- the baseline nearly halves, 1325 -> 682 us --
+but **the DSMEM advantage only falls from 1.587x to 1.326x**, it does not
+disappear. The reason is worth stating because it is the non-obvious part: a
+`page_size=1` gather is bound by the *number of 256-byte transactions* each CTA
+issues, not by which memory level answers them. L2 shortens the latency of a repeat
+but still charges for the transaction and its own bandwidth; DSMEM removes the
+repeat entirely. So sharing wins even when the KV is already resident.
+
+That makes the integration genuinely worth wanting -- ~1.33x on the KV-gather
+portion of a prefill row's work, in the regime the server actually runs in -- and it
+is exactly what the grid-wide `clusterDim` forecloses for this kernel's two-role
+design (previous section). The two findings together are the honest state of
+multicast here: **the benefit is real and quantified in the realistic regime, and
+the fused single-grid structure is what prevents collecting it.**
+
+Command: `/tmp/dsmem 65536` (L2-resident) and `/tmp/dsmem 1048576` (cold), from
+`tests/dsmem_kv_share.cu`.

@@ -2770,9 +2770,14 @@ torch.AcceleratorError: CUDA error: an illegal instruction was encountered
 which would make this the third instance of that hazard class in this kernel --
 but that attribution is a hypothesis, not a measurement. An attempt to confirm it
 by reading ptxas register counts for the two kernels (`nvcc -Xptxas -v` on the
-extension) failed on an include-path error for the JIT-generated
-`batch_attention_config.inc` and was not retried, so **the cause is not
-established**. The two candidate mechanisms it would distinguish are a protocol
+extension) was made twice and did not produce them: first an include-path error
+for the JIT-generated `batch_attention_config.inc`, then, with that located via
+`find`, a standalone compile that emitted no `Compiling entry function` blocks --
+this translation unit does not build cleanly outside the torch JIT environment
+that normally assembles its flags. So **the cause is not established**. The
+practical way to get the numbers is to add `-Xptxas -v` to the
+`extra_cuda_cflags` list in the test's own `load()` call and read the build log,
+rather than reconstructing the compile by hand. The two candidate mechanisms it would distinguish are a protocol
 violation (a warpgroup joining FA3's dec/inc sequence after running unrelated
 code) and a register *budget* problem (the combined FA2+FA3 footprint forcing a
 baseline that makes `alloc<240>` unsatisfiable). Confirming which is the first

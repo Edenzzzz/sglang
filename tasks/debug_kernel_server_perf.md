@@ -2486,3 +2486,53 @@ Progression of the fused path on this workload, all matched, all with the
 | heuristic `sm_fa3=48`, cap 96 | 23250.44 | -8.1% |
 | swept `sm_fa3=64`, cap 96 | 24055.80 | -3.6% |
 | swept `sm_fa3=64`, cap 136 | 24421 (2 samples) | **-2.0%** |
+
+#### The split optimum is robust to the cluster cap
+
+The two knobs interact arithmetically -- the cluster count is
+`min(2*(num_sm - sm_fa3), cap)`, so a lower split buys more clusters -- which
+made it worth re-checking whether lifting the cap moved the optimum. It does not.
+Re-sweep at `cap 160`, chunk 512:
+
+| `sm_fa3` | clusters it gets | tok/s | mean ITL | p99 ITL | mean TTFT |
+|---|---|---|---|---|---|
+| 48 | 160 (of 168 wanted) | 23347.53 | 19.72 | **32.43** | 2949.07 |
+| **64** | 136 | **24421** (2 samples) | **18.85-18.90** | 33.18-35.07 | 2757-2764 |
+| 80 | 104 | 23873.03 | 19.33 | 33.60 | 2852.68 |
+| base | — | 24946.41 | 18.47 | 32.85 | 2671.04 |
+
+200/200 requests, 0 faults, ~90.6% fused share throughout. `sm_fa3 = 64` wins on
+throughput, mean ITL and TTFT despite getting *fewer* clusters than 48, which
+reinforces the earlier reading that 64 is about the two kernels' saturation
+points rather than about resource balance. `sm_fa3 = 48` does take the best p99
+ITL (32.43, slightly under the baseline's 32.85), so a deployment optimizing p99
+rather than throughput would pick 48 -- worth noting, but the default stays 64.
+
+### Final state of the fused path on this workload
+
+| configuration | tok/s | vs base | mean ITL | p99 ITL |
+|---|---|---|---|---|
+| heuristic `sm_fa3=48`, cap 96 | 23250.44 | -8.1% | 20.18 | 31.87 |
+| swept `sm_fa3=64`, cap 96 | 24055.80 | -3.6% | 19.18 | 34.74 |
+| **`sm_fa3=64`, cap 136 (default)** | **24421** | **-2.0%** | 18.87 | 33.18-35.07 |
+| base (fused off) | 24946.41 | — | 18.47 | 32.85 |
+
+Everything above is matched, 200 prompts, `--random-input-len 8192
+--random-output-len 192 --request-rate 12 --max-concurrency 32`, qwen7b on H200,
+CUDA 12.8, `FLASHINFER_FUSED_BACKFILL=0`, and every row's `mixed_fused_fa3` share
+was checked before its numbers were read.
+
+Commits: sglang `725af14b3` (and `5b7d13c13`, `576d5d611`, `31b5289dd`),
+flashinfer `4d59914`.
+
+**What is left, and why it needs a kernel change rather than tuning.** Both host
+knobs are now at measured optima and the two falsified predictions above
+(larger chunks, adaptive split) rule out the remaining host-side ideas. The
+residual -2.0% is the static role partition: backfill runs FA3 -> FA2 only,
+because an FA2-role CTA returns two of its three warpgroups
+(`if (threadIdx.x >= 128u) return;`) and so can never execute FA3's warp-specialised
+body. Making the reverse direction possible needs FA3's work to be claimable from
+a shared cursor rather than bound to `blockIdx.x`, i.e. a dynamic FA3 queue --
+which also removes the `fa3_num_ctas == sm_split` contract that currently guards
+against silently dropping FA3 work. That is a redesign of the FA3 side's
+scheduling, not a parameter.

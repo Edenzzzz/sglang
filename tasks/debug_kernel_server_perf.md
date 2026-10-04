@@ -3209,3 +3209,47 @@ in the last minutes of a session:
 Anyone making that change should re-run this table afterwards, because flipping
 defaults alters which code path the gate selects and that has produced five
 invalid A/Bs in this task already.
+
+#### Why the 4-mode MTP schedule is a control-flow restructuring, not four edits
+
+Reading `prepare_for_decode` (`schedule_batch.py:1571`) settles the size of this
+work, and my earlier "four length-assumption edits" estimate was wrong:
+
+```python
+if not self.spec_algorithm.is_none():
+    # if spec decoding is used, the decode batch is prepared inside
+    # `forward_batch_speculative_generation` after running draft models.
+    return
+```
+
+Under speculative decoding the running batch is **not prepared at batch-formation
+time at all**. Its `out_cache_loc` is `None` and its `input_ids` do not yet exist
+because the verify rows' contents *are the draft model's output*, produced by a
+separate forward inside the spec worker, after the scheduler has already formed
+the batch. `mix_with_running` runs at formation time, before any of that.
+
+So the `torch.cat([..., running_batch.out_cache_loc])` crash is not a missing
+allocation to be patched in. Mixing a prefill chunk with verify rows requires the
+order of operations to change:
+
+1. form the chunked-prefill batch,
+2. run the draft model for the running requests,
+3. merge the resulting verify rows into the prefill batch,
+4. run one fused target forward over both.
+
+Today steps 1 and 4 are the scheduler's and steps 2-3 are the spec worker's, with
+no interleaving point between them. That is a restructuring of
+`forward_batch_speculative_generation` and its contract with the scheduler -- not
+four edits to a merge helper, and not something to attempt behind a guard.
+
+**This also explains why sglang disables the combination at three separate config
+sites.** Those gates are not conservatism about an untested path; the control flow
+genuinely cannot produce such a batch. Recording that distinction matters, because
+"the gates are overly cautious" and "the data the merge needs does not exist yet"
+imply very different amounts of work.
+
+One simplification that does hold for whoever takes it on: with
+`--speculative-eagle-topk 1` the draft is a **chain**, not a tree, so causal
+masking over the verify rows is correct and no tree-mask plumbing is needed. That
+removes the attention-backend half of the problem, leaving the scheduling reorder
+as the whole of it.

@@ -1923,20 +1923,39 @@ FLASHINFER_FUSED_CLUSTER=2 /usr/local/cuda/bin/compute-sanitizer --tool syncchec
   /dev/shm/w/venv/bin/python tests/test_fused_server_batch.py
 ```
 
-synccheck **attaches** (the `========= COMPUTE-SANITIZER` header appears) but did
-not finish inside the webshell window -- the log ends after the harness's own
-prints with no `ERROR SUMMARY`, so there is no finding either way. It is markedly
-slower than memcheck on this kernel. Next attempt should give it a longer window
-and, if possible, shrink the work: a single `sm_split` and a single small FA3 row,
-since the question is only whether a barrier violation is reported at all.
+synccheck, run **detached on the pod** to get past the webshell's hard 25-minute
+ceiling (which killed the first attempt -- a tooling limit, not a result), reports
+**`ERROR SUMMARY: 0 errors`**.
 
-Two practical notes so the next attempt does not re-lose time:
-- invoke `/usr/local/cuda/bin/compute-sanitizer` explicitly; bare
+So both sanitizer tools are clean:
+
+| tool | result |
+|---|---|
+| memcheck | 0 device-side violations (only host `cudaErrorLaunchFailure` propagating) |
+| synccheck | **0 errors** |
+
+A clean memcheck *and* a clean synccheck alongside `unspecified launch failure`
+rules out the two large classes -- bad memory access and illegal
+barrier/synchronisation. What is left is an illegal instruction or a runtime
+resource/scheduling failure, neither of which either tool reports.
+
+The next probe is therefore a host-side one rather than another sanitizer run:
+`cudaOccupancyMaxActiveClusters` for this kernel at cluster size 2. If it returns
+0, the cluster is simply not schedulable at this kernel's 384 threads and ~165 KB
+of shared memory, and the launch failure is explained without any device-side
+defect -- the fix would then be reducing per-CTA resources rather than hunting a
+bug. Note the microbenchmark clusters fine at 165 KB but uses only 128 threads, so
+thread count is the untested difference, not smem.
+
+Practical notes so the next attempt does not re-lose time:
+- run the sanitizer **detached** (`nohup ... &` on the pod) and poll a done-marker;
+  a foreground webshell call is capped at 25 minutes and synccheck exceeds it;
+- invoke `/usr/local/cuda/bin/compute-sanitizer` explicitly -- bare
   `compute-sanitizer` resolved to a build that never attached (no header), and the
-  venv runs CUDA 12.8 while the default sanitizer is 13.1;
-- run it on the standalone harness, never on the server -- a sanitizer-wrapped
-  sglang server trips the detokenizer heartbeat long before the kernel is reached,
-  which is the same trap `CUDA_LAUNCH_BLOCKING=1` set earlier.
+  venv runs CUDA 12.8 against a 13.1 default;
+- run it on the standalone harness, never the server, which trips the detokenizer
+  heartbeat long before the kernel is reached -- the same trap
+  `CUDA_LAUNCH_BLOCKING=1` set earlier in this task.
 
 Multicast therefore stands as: benefit measured on hardware (1.326x in situ,
 1.587x cold), cluster launch implemented and output-neutral at N=1, integration

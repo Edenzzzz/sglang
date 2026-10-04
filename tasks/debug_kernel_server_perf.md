@@ -2590,3 +2590,65 @@ which needs per-step instrumentation in the scheduler that does not exist yet.
 What is established here is that the fused kernel's end-to-end latency dispersion
 is not better, which is the necessary condition for the stronger claim and it
 fails.
+
+#### The 4-mode MTP schedule does not exist in sglang today
+
+The goal specifies that real-serving validation assume "an MTP spec model with
+common acceptance rate in a 4-mode fused schedule". Every server run recorded
+above had `speculative_algorithm=None`, so this was tested directly, using NGRAM
+speculative decoding (no draft checkpoint needed) with
+`--speculative-num-draft-tokens 2`, which gives a verify row the MTP k=1 shape
+`packed_qo = 2 * gqa = 14` -- the tile-16 class the kernel-level MTP benchmarks
+used.
+
+The server came up and served, and the forward composition was:
+
+```
+forward mix (n=1400): pure_prefill=1400(100.0%)
+batch kinds scheduled: 1463 Prefill batch, 11 Decode batch
+mixed_fused_fa3: absent -- zero fused launches
+```
+
+The reason is in sglang, not in the kernel or the configuration:
+
+```
+WARNING server_args.py:1584: The overlap scheduler and mixed chunked prefill are
+disabled because of using ngram speculative decoding.
+-> enable_mixed_chunk=False, despite --enable-mixed-chunk being passed
+```
+
+This is **not ngram-specific**. `enable_mixed_chunk = False` is set
+unconditionally on every speculative path:
+
+| site | applies to |
+|---|---|
+| `server_args.py:1505` | EAGLE / EAGLE3 / STANDALONE ("Mixed chunked prefill is disabled because of using eagle speculative decoding") |
+| `server_args.py:1578` | NGRAM |
+
+**So with any speculative algorithm, sglang never puts a prefill chunk and a spec
+verify row in the same batch.** The fused FA3 + FA2 kernel exists precisely to
+serve that batch -- a large-tile prefill row on the FA3 side and small-tile
+verify/decode rows on the FA2 side -- so on the real MTP serving path it currently
+has no workload at all.
+
+Consequences, stated plainly because they bound every server-side number in this
+document:
+
+1. The **-2.0%** result and the whole split/cluster/backfill tuning above were
+   measured in the only regime where this kernel can run today: mixed chunked
+   prefill with speculative decoding **off**. That is a prefill-chunk + decode
+   mix, not the 4-mode MTP mix the goal specifies.
+2. The kernel-level 4-mode MTP validation does exist and stands
+   (`tests/bench_mtp_fused.py`, verify rows at `packed_qo = 14` mixed with
+   prefill; H200 mono 34,301 / seq 25,503 / fused 83,612 / best-split 48,397).
+   The gap is specifically the server path.
+3. Getting the goal's regime requires making mixed chunked prefill and speculative
+   decoding coexist in sglang's scheduler -- removing those two assignments and
+   handling a batch that contains chunked prefill rows *and* verify rows. That is
+   a scheduler change upstream of this kernel, and it is a prerequisite for the
+   kernel's intended workload rather than an optimization of it.
+
+This was found by running it rather than by reading the scheduler, which is why it
+is recorded with the forward-composition evidence: `pure_prefill=100%` is
+unambiguous, and the composition counter caught it the same way it caught the five
+invalid A/Bs.

@@ -1967,3 +1967,39 @@ there are no TMA stores to drain, so `cute::tma_store_wait<0>()` at
 `persistent_fa3_fused.cuh:236` guards nothing; the guard that matters is
 `cp_async::wait_group<0>()` at line 246. The measured backfill numbers (+0.04%
 server, 1.2% H200 kernel-level) rest on `wait_group`.
+
+#### Strong lead: `__launch_bounds__(N, 1)` may be what blocks the cluster launch
+
+`tests/cluster_occupancy_probe.cu` asked the driver directly. The probe has a flaw
+-- the first failure leaves a sticky CUDA error, so only its **first row is valid**
+and rows 2-6 merely echo `cudaErrorLaunchFailure`; each config needs its own
+process. Row 1 is still the useful one:
+
+```
+threads=128 smem=16KB cluster=2 | maxActiveClusters=-1 (cudaErrorInvalidClusterSize)
+                                | launch=ok sync=cudaErrorLaunchFailure
+```
+
+That is the **same shape that works** in `dsmem_kv_share.cu` (128 threads, 16 KB,
+cluster 2, `map_shared_rank` + `cluster.sync()`). The one structural difference
+between the two kernels: this probe declares `__launch_bounds__(128, 1)`, and the
+working benchmark declares no launch bounds at all.
+
+The fused kernel declares
+`__launch_bounds__(FA3Traits::NUM_WARPS * cutlass::NumThreadsPerWarp, 1)`.
+
+So the hypothesis is that the explicit **`minBlocksPerMultiprocessor = 1`** in
+`__launch_bounds__` conflicts with cluster scheduling -- the driver is being told
+to guarantee one block per SM while also being asked to co-schedule a cluster, and
+`cudaOccupancyMaxActiveClusters` rejecting the size with
+`cudaErrorInvalidClusterSize` is consistent with that. It would also explain the
+whole picture: both sanitizers clean, no memory or sync violation, launch accepted,
+kernel fails -- a scheduling constraint, not a device-side defect.
+
+**This is a hypothesis, stated as one.** Six previous asserted causes in this task
+were overturned by test, so it needs the clean experiment before anything is built
+on it: three separate processes, one each for `__launch_bounds__(128, 1)`,
+`__launch_bounds__(128)` and no launch bounds, at cluster 2. If the `, 1` variant is
+the only failure, the fix in the fused kernel is to drop the
+`minBlocksPerMultiprocessor` argument -- a one-token change -- and then the whole
+grid can cluster and the DSMEM gather split becomes implementable.

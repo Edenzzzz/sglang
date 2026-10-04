@@ -2189,3 +2189,41 @@ rediscovered.
 The two that were overturned *cheaply* were the ones tested from a configuration
 known to work; the ones that cost most were reasoned from code without a control.
 The elimination table above is the durable artefact -- not the hypotheses.
+
+#### The EDF perf-model check needs no new instrumentation -- just `--decode-log-interval 1`
+
+Earlier this document recorded that a direct per-step MAPE fit "needs per-step
+instrumentation that does not exist", and settled for an ITL-dispersion proxy that
+returned a null (CV 0.266 vs 0.256). That claim was wrong. sglang's existing
+decode-batch log line already carries everything required:
+
+```
+Decode batch, #running-req: R, #token: T, ..., gen throughput (token/s): G
+```
+
+`G` is averaged over `decode_log_interval` steps, so mean seconds per step over the
+window is `R / G` -- R tokens emitted per step at R running requests. Coarse, but
+identical in both arms, so the fused-vs-baseline comparison is fair. Fitting
+`t_step = c0 + c1*T + c2*R` per arm and comparing MAPE answers the goal's question
+directly: lower MAPE means a more predictable step cost, hence tighter EDF deadline
+control.
+
+`tests/` has the fitter (`/tmp/edf_fit.py`, normal-equations least squares, no
+numpy). What blocks it is **sample count, not instrumentation**: the existing A/B
+logs hold only **4** `Decode batch` lines each, because `decode_log_interval`
+defaults to 40 and those runs were prefill-bound. The fit needs a few dozen.
+
+So the remaining work is one flag and two short runs, not a code change:
+
+```
+# add to serve.sh, both arms
+--decode-log-interval 1
+# then, as before
+SGLANG_FUSED_FA3_SM_SPLIT=1 SGLANG_FUSED_SM_FA3=8 FLASHINFER_FUSED_SYMMETRIC=1   # fused
+SGLANG_FUSED_FA3_SM_SPLIT=0                                                      # baseline
+python edf_fit.py fused=<fused.log> baseline=<base.log>
+```
+
+(The fitter's label parsing splits on the first `=`, so labels must not contain
+one.) This is a materially smaller task than the doc previously implied, and it is
+the only one of the three outstanding goal items that does not require a rewrite.

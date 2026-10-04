@@ -2742,3 +2742,50 @@ change with its own validation rather than a tail-end addition to this one.
 The override that exposes the path stays in the tree, defaulted off
 (`SGLANG_ALLOW_MIXED_CHUNK_SPEC=1`), because it is the instrument that located all
 of this and whoever picks the feature up will need it.
+
+#### Attempt at symmetric backfill (FA2-role CTAs running FA3): implemented, faults, gated off
+
+The measured residual is the one-directional backfill, so this implements the
+missing direction as `FusedFA3PersistentSymmetricKernel`
+(`FLASHINFER_FUSED_SYMMETRIC=1`, default off):
+
+- CTAs `>= sm_split` drain the FA2 queue on warpgroup 0 while warpgroups 1-2 park
+  at `__syncthreads()`, then all 384 threads enter `fa3_prefill_body` together.
+  The order is FA2-**first** deliberately: a rendezvous *after* the FA3 body is
+  undefined because its warp specialisation lets warpgroups exit at different
+  times, while before the body nothing has exited.
+- FA3 is planned for the whole grid so those CTAs have a slice to execute, and the
+  dispatch's contract switches from `fa3_num_ctas == sm_split` to
+  `fa3_num_ctas == num_sm`. That check fired correctly on the first two attempts
+  (the harness was still declaring `sm_split` as the planned count), which is the
+  guard working as intended rather than a failure.
+
+**Result: it launches and then faults in-kernel.**
+
+```
+torch.AcceleratorError: CUDA error: an illegal instruction was encountered
+```
+
+"Illegal instruction" is the signature of a `setmaxnreg` protocol violation, and
+this is the **third** instance of that hazard class in this kernel: the first was
+`setmaxnreg` across an ABI boundary (the `__noinline__` FA3 body, which corrupted
+adjacent output row pairs), the second was `MergeGroupJIT` behind a call. Here
+warpgroup 0 runs the FA2 mainloop -- with its own register pressure, at the
+default allocation -- and then joins FA3's `warpgroup_reg_dealloc<24>` /
+`warpgroup_reg_alloc<240>` protocol mid-kernel. `.inc` can only take registers
+another warpgroup released with a matching `.dec`, so a warpgroup that arrives
+having already executed unrelated code does not satisfy the protocol's
+precondition.
+
+The asymmetric default path is **unaffected and still correct**: the same build
+passes the regression test at `sm_split = 64` (0/512 unwritten, rel err 0.00021 /
+0.00163 / 0.00241), so this is an additive, gated variant rather than a regression.
+
+Next step for whoever picks it up, now that the failure is specific: the FA2
+mainloop and FA3's body cannot share a warpgroup's register protocol, so the
+parked warpgroups must enter FA3 *without* warpgroup 0 having run FA2 first.
+That means either dedicating warpgroup 0 of an FA2-role CTA to the queue for the
+whole kernel while 1-2 wait and then run FA3 as a 256-thread configuration (which
+needs FA3 retuned for two warpgroups), or giving FA3 a dynamic work queue so no
+CTA ever changes role mid-kernel -- which is the design the earlier sections point
+at and the only one that avoids the register protocol entirely.

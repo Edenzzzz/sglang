@@ -1,8 +1,45 @@
 
-## Catalogue
+# Hopper 4-mode fused attention: FA3 + FA2 SM pre-assignment
 
-Checked = measured, or implemented and validated. Unchecked = never run. Links
-jump to the detail; items without a section here name the file that holds them.
+**Lineage.** Split out of `debug_kernel_server_perf.md` on 2026-10-05, which had
+reached 3428 lines spanning two unrelated efforts. That document keeps the earlier
+work -- the sync-free plan, the measured mixed-kernel gate, the workload
+characterisation and the mixed-tile 4-mode *dispatch*. This one continues from it
+and covers only the **fused FA3 + FA2 SM pre-assignment kernel**: one launch, two
+roles split by `blockIdx.x < sm_split`, just-in-time reduction in place of a grid
+sync.
+
+| doc | covers | status |
+|---|---|---|
+| `debug_kernel_server_perf.md` | Parts 1-4: sync-free plan, kernel gate, workload stats, mixed-tile dispatch | complete, archived |
+| **`debug_kernel_server_perf_4_mode.md`** (this) | fused FA3+FA2 kernel: correctness, server integration, split/cluster tuning, backfill, multicast | active |
+| `pd_colocation_vs_disagg.md` | global PD colocation vs disaggregation, the four routing/caching/EDF/network points | written, experiments pending |
+| `server_perf_model.md` | MLP latency prediction for prefill-decode colocation | prior work |
+| `realistic_workload_analysis.md` | dataset length stats, arrival rates, per-turn growth | prior work |
+
+Read the sections below in order; each records what was measured, and corrections
+to earlier claims are kept in place rather than edited away, because several
+conclusions here were reversed by later measurement and the reversals are the
+useful part.
+
+---
+
+## Catalogue — the index for this effort
+
+This is the master list for the 4-mode fused-kernel effort. Every item is either
+measured or it is not, and the boxes say which: **checked** = measured, or
+implemented and validated against a reference; **unchecked** = never run. Links
+jump to the detail in this file; items without a section here name the file that
+owns them.
+
+Sibling docs, each owning one thing:
+[`fused_kernel_handoff.md`](fused_kernel_handoff.md) the kernel interface,
+CUDA-graph status and workload corpus ·
+[`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md) the multi-node
+argument and its four points ·
+[`server_perf_model.md`](server_perf_model.md) the latency models ·
+[`debug_kernel_server_perf.md`](debug_kernel_server_perf.md) the closed
+predecessor effort (sync-free plan, mixed-kernel gate, 4-mode dispatch).
 
 ### Kernel optimisations
 - [x] [Packed GQA for the wgmma role — class boundary](#packed-gqa-class-boundary) — 2.40x decode/draft, 1.70x verify, 1.00x chunks
@@ -49,30 +86,6 @@ All four points are written up in [`pd_colocation_vs_disagg.md`](pd_colocation_v
 - [ ] Real online **4-mode** trace with draft+verify co-resident — the stated gap; blocked with the 4-mode schedule
 - [ ] Long-context (>64k, tracelab) A/B — written, not yet run; this is where attention dominates the step
 
-# Hopper 4-mode fused attention: FA3 + FA2 SM pre-assignment
-
-**Lineage.** Split out of `debug_kernel_server_perf.md` on 2026-10-05, which had
-reached 3428 lines spanning two unrelated efforts. That document keeps the earlier
-work -- the sync-free plan, the measured mixed-kernel gate, the workload
-characterisation and the mixed-tile 4-mode *dispatch*. This one continues from it
-and covers only the **fused FA3 + FA2 SM pre-assignment kernel**: one launch, two
-roles split by `blockIdx.x < sm_split`, just-in-time reduction in place of a grid
-sync.
-
-| doc | covers | status |
-|---|---|---|
-| `debug_kernel_server_perf.md` | Parts 1-4: sync-free plan, kernel gate, workload stats, mixed-tile dispatch | complete, archived |
-| **`debug_kernel_server_perf_4_mode.md`** (this) | fused FA3+FA2 kernel: correctness, server integration, split/cluster tuning, backfill, multicast | active |
-| `pd_colocation_vs_disagg.md` | global PD colocation vs disaggregation, the four routing/caching/EDF/network points | written, experiments pending |
-| `server_perf_model.md` | MLP latency prediction for prefill-decode colocation | prior work |
-| `realistic_workload_analysis.md` | dataset length stats, arrival rates, per-turn growth | prior work |
-
-Read the sections below in order; each records what was measured, and corrections
-to earlier claims are kept in place rather than edited away, because several
-conclusions here were reversed by later measurement and the reversals are the
-useful part.
-
----
 ## H200 server-side kernel A/B (2026-10-04)
 
 Hardware: 1x NVIDIA H200 143GB, 132 SMs, sm_90a (merlin trial `vibecuda`, job

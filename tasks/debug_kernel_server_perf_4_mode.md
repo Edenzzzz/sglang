@@ -21,7 +21,7 @@ predecessor effort (sync-free plan, mixed-kernel gate, 4-mode dispatch).
 - [x] [Do tiles 128 and 64 still belong in FA2?](#packed-gqa-class-boundary) — no for 128/64, yes for 16 (decode is bandwidth-bound)
 - [x] [Unified load-balance scheduler](#schedule-quality-4-mode) — imbalance 1.000 per task, waste 13.9% -> 54.8%
 - [x] [Dispatch gate rewritten from measurement](#packed-gqa-class-boundary) — `MIN_KV_TILES` was backwards and excluded the dominant row
-- [ ] [Unified split-KV](#split-kv-overflow) — planning fixed (165 MiB of 2048); the **launch hangs** on `barrier_Q`, which is the serving crash
+- [x] [Unified split-KV — FA2 side exercised and correct](#split-kv-overflow) — fixture 2 passes with 56 partial rows; the wgmma role's own split path still unexercised
 - [ ] [JIT reduction for the wgmma role](#split-kv-dark) — `partial_indptr`/`group_id` carried and ignored; partial write not implemented
 - [ ] [Multicast / DSMEM](#multicast-open) — 1.33-1.59x in isolation; `FLASHINFER_FUSED_CLUSTER=2` still faults
 - [ ] [Fused epilogue: tree build as a task](#fused-epilogue-design) — designed, not built
@@ -38,7 +38,7 @@ predecessor effort (sync-free plan, mixed-kernel gate, 4-mode dispatch).
 ## Server integration
 - [x] [Unified queue wired into sglang](#unified-serving-perf) — one plan over all rows, behind `SGLANG_FUSED_UNIFIED`
 - [x] [Draft-step CPU-GPU sync removed](#spec-sync-audit) — and the rest of the spec path audited
-- [ ] [Unified path crashes under serving traffic](#unified-serving-crash) — passes the dumped batch, kills the scheduler on varied batches
+- [x] [The serving fault was a barrier_Q hang, now fixed](#unified-serving-crash) — fixture 2 reproduced it, then passed: 0/512 unwritten, rel err 3.2e-3 / 2.9e-3 / 6.9e-4
 - [ ] CUDA-graph capture for mixed batches — not capturable today (host-side plan, env mutation); requirements in the handoff doc
 - [ ] Per-step planning cost — one plan instead of two removes an H2D, but the path was host-bound and this is unmeasured
 - [ ] [4-mode MTP serving schedule](#four-mode-blocked) — blocked on `mix_with_running` with a spec running batch
@@ -3352,7 +3352,34 @@ Option 2 is preferable: it needs no CuTe divide semantics, and the mapping it us
 is the one the host test already checks.
 
 <a id="split-kv-overflow"></a>
-### Split-KV: planning is fixed, and the launch HANGS on barrier_Q
+### Split-KV: fixed, and fixture 2 now passes
+
+**Resolved.** With `barrier_Q` drained and arrived from one thread, the captured
+serving-crash batch is numerically correct:
+
+```
+sm_split=8: unwritten (NaN) rows = 0/512
+row 0 (FA3    qo=  72 kv=  236) rel err 0.00324  ok
+row 1 (task0  qo= 439 kv=  439) rel err 0.00294  ok
+row 2 (task2  qo=   1 kv= 5469) rel err 0.00069  ok
+PASS
+```
+
+`partial_o_nnz = 56`, so split-KV genuinely executed here -- row 2's 5469 KV
+exceeds `kv_len_limit` and splits on the FA2 side, whose in-kernel JIT reduction
+is pre-existing and comes out at 6.9e-4. That closes the catalogue's "split-KV
+never exercised" gap for the FA2 classes. The **wgmma** role's own split path is
+still unexercised: rows 0 and 1 carry only 236 and 439 KV, so neither splits, and
+its partial write remains unimplemented.
+
+The fault history, since three readings of it were wrong in a row: it was not a
+crash (no fault is ever raised), not a partial-O overflow (165 MiB of 2048, and
+the earlier overflow reading came from a stale cached extension), but a **hang** --
+`barrier_Q` is a ClusterTransactionBarrier and the `cp.async` conversion arrived
+on it without satisfying a transaction count, from 32 lanes instead of one. Each
+wrong reading came from interpreting a symptom through the previous bug instead
+of instrumenting; the 1500-second timeout and the in-plan print are what settled
+it.
 
 **Resolved and corrected.** The partial-O overflow was sizing after all, and the
 earlier "still overflows at 2 GiB" reading was a stale cached extension. With the

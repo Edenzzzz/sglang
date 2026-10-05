@@ -281,14 +281,24 @@ Read off it:
   bandwidth-bound, and FA2's split-KV + LPT is the right engine for them. So the
   FA2 overlap machinery is still wanted -- scoped to the 1-token class.
 
-## 9. The static SM split is the wrong structure — VERDICT SUSPENDED
+## 9. The static SM split is the wrong structure — CONFIRMED on exact numerics
 
-> **The table below was measured in symmetric mode, which computes FA3 wrong
-> (rel err 3-4, nondeterministic). Those arms did less valid work than the
-> baseline, so the -6% figures cannot support the conclusion this section draws,
-> and the conclusion is suspended until the same sweep is run in asymmetric mode,
-> which is exact (2.3e-4). The arithmetic about a 93/7 mix not fitting a fixed
-> fraction still stands on its own; the numbers do not.**
+> **The original table here was measured in symmetric mode, which computes FA3
+> wrong, so it was withdrawn. The sweep was re-run in asymmetric mode, which is
+> exact (2.3e-4), and it reaches the same verdict with valid data:**
+>
+> | arm | tok/s | vs base | mean ITL | mean TTFT |
+> |---|---|---|---|---|
+> | base, fused off | 24,892.7 | — | 18.50 ms | 2,684 ms |
+> | asymmetric, `sm_fa3=64` | 21,305.8 | **-14.4%** | 21.69 ms (+17%) | 3,336 ms (+24%) |
+> | asymmetric, `sm_fa3=96` | 21,411.2 | **-14.0%** | 21.58 ms | 3,317 ms |
+> | asymmetric, `sm_fa3=116` | 22,034.3 | **-11.5%** | 21.13 ms | 3,176 ms |
+>
+> **The loss shrinks monotonically as FA3 takes more of the device** -- 64 -> 96
+> -> 116 gives -14.4% -> -14.0% -> -11.5% -- which is what a 93/7 chunk/decode
+> work mix predicts, and it extrapolates to an optimum of "give FA3 everything",
+> i.e. do not split. A static fraction has no winning setting here, with the
+> correct kernel, with the corrected gate, at any split tested.
 
 
 With the gate corrected so the modal chunk reaches the wgmma role (fused dispatch

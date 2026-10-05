@@ -543,7 +543,28 @@ from the largest tile class, tile 16 at 69632 B), moves the cursor/merge tail
 past all three slots, and the launch's dynamic smem request covers
 `base + 3 * slot + 48` instead of one slot's worth.
 
-## 13. The JIT builds against a second copy of the headers
+## 13. WITHDRAWN: there is no second header copy — the file was never pushed
+
+> **This section's conclusion was wrong and is kept only because the reasoning
+> error is instructive.** The 4-task plan failed to build and the diagnostic
+> named the pre-refactor `TwoStageHolisticPlan` signature under
+> `~/.cache/flashinfer/90a/generated/...`, which I read as flashinfer's JIT
+> compiling a stale copy of the headers. It was not: that path was just the
+> include chain in the error context. `grep -c "NUM_TASKS, typename IdType"` on
+> the pod's own `include/flashinfer/attention/scheduler.cuh` returned **0**, and
+> `find` over the venv and the JIT cache turned up **no** second copy of that
+> header. The refactor had only ever existed on the local machine -- I pushed
+> `persistent_fa3_fused.cuh`, `unified_wgmma_scheduler.cuh`,
+> `batch_attention.cu` and the harness, and never the one header the build
+> actually needed.
+>
+> The lesson is narrower than the one I drew, and more useful: when editing
+> across two machines, verify the remote file contains the change before reading
+> anything into a build error. One `grep -c` of a distinctive token would have
+> replaced the whole investigation. The genuine inert-flag mechanisms recorded
+> elsewhere -- env vars standing in for compile-time switches, and torch JIT
+> reuse of a cached `.so` -- are unaffected and still stand.
+
 
 The 4-task plan refuses to build from `BatchAttention.plan()`, and the diagnostic
 names the old signature inside

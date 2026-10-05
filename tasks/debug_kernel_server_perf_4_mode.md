@@ -4178,6 +4178,49 @@ result for a different routing.
    to re-measuring the 66% regression.
 
 
+<a id="wgmma-role-unreachable"></a>
+### The wgmma role cannot currently run real work at all
+
+This is the fact that governs everything else in this file, and it was established
+last: **every fused measurement recorded here was taken with the wgmma role idle,
+because that is the only state the kernel can reach.**
+
+Any row large enough to be FA3-eligible (packed qo >= 128) is also long enough that
+the plan KV-splits it, and split task-3 rows are refused by the guard since the
+reduction does not exist. Two attempts to find a configuration without splitting
+both failed with the *same* count:
+
+```
+fused plan: 200 task-3 (wgmma) work items carry a JIT-reduction group id
+```
+
+at `SPLITS=8 FA3_PLAN_CTAS=8` and at `SPLITS=1 FA3_PLAN_CTAS=1`. The count is
+identical, so task 3's `kv_len_limit` does not derive from its own cluster count and
+cannot be raised by shrinking the FA3 pool. There is no routing threshold that
+helps either: any threshold low enough to send the short row to FA3 also sends the
+long one.
+
+**Consequences, and they are large.**
+
+1. The 3.02x fused-vs-unfused ratio, the 1.38x CTA/SM cost, and the register
+   starvation finding are all real, but they are **costs measured with the benefit
+   switched off**. They are not a verdict on fusion.
+2. Whether fusion wins is **not currently measurable**. The break-even arithmetic
+   below says it needs f > 0.40-0.48 of attention work on the FA3 path and the real
+   serving batch has f ~ 0.9, but that rests on the catalogue's 1.7-2.4x class
+   boundary numbers, not on a fused run.
+3. The wgmma JIT reduction is therefore not one item among several -- it is the
+   single gate on every remaining question, including whether the uniform-CTA
+   penalty matters.
+
+**Break-even, for when the reduction lands.** With `W` the attention work in
+FA2-native SM-time, `f` the FA3-eligible fraction, `s` FA3's per-tile speedup, and
+1.38 the one-CTA/SM penalty: unfused costs `W`, fused costs
+`f*W/s + 1.38*(1-f)*W`, so fusion wins when `f > 0.38 / (1.38 - 1/s)`. At
+s = 1.7-2.4 that is f > 0.40-0.48. At f = 0.9, s = 2.0 the attention-side gain is
+~1.7x, which against attention at 31.76% of a step is ~15% end to end -- positive,
+and short of the 30% bar, which is why the register fix (3x -> 1.38x) matters.
+
 <a id="why-fused-is-slow"></a>
 ### Why the fused kernel is slow: register starvation, not scheduling
 

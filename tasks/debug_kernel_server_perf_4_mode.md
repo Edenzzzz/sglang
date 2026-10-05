@@ -188,10 +188,28 @@ measured. The unified split-KV reduction is the gate.
         replaces"; its cost is being measured now with a skip-the-load diagnostic.
       - the final O store is likewise a single-warp, per-row copy.
 
-      So the honest statement is that FA3's per-class deficit is an optimisation
-      backlog, not a structural cost, and three named items account for an unknown
-      but plausibly large share of it. My earlier framing of this as "the
-      precondition for the whole approach" overclaimed from an unoptimised kernel.
+      **Measured 2026-10-06, and it changes the plan.** The packed-Q load costs
+      **nothing** on this fixture: 767.8 us with it against 769.5 us with the
+      gather skipped (`SKIP_PACKED_Q=1`, output garbage by construction). At
+      kv=16823 the mainloop is KV-dominated and Q is fully amortised. With stages=2
+      worth ~15%, the three named handicaps together account for roughly 15% of the
+      1.83x -- not most of it.
+
+      So the remaining ~1.6x is **the mainloop itself**: flashinfer's
+      `prefill_sm90` is a simplified FA3 port, not FA3. Upstream
+      flash-attention is present at `/opt/tiger/flash-attention` and already
+      contains everything we hand-rolled, in better form --
+      `hopper/pack_gqa.h`, `hopper/paged_kv.h`, and
+      `mainloop_fwd_sm90_tma_gmma_ws.hpp` templated on `Stages`, wired together in
+      `flash_fwd_kernel_sm90.h`. Our element-wise packed-Q gather and sparse KV
+      path are reimplementations of that code.
+
+      **The correct task is therefore to port upstream FA3's mainloop and epilogue
+      into the fused launch template**, keeping only what fusion actually requires
+      (the role branch on `blockIdx.x`, our plan's work items, and the smem
+      budget shared with the FA2 roles), rather than continuing to optimise a
+      simplified port one flag at a time. Chasing stages, Q load and O store
+      separately was treating symptoms.
 - [x] **The serving regression was mostly the pinned split** — 2026-10-06: sweeping
       `SGLANG_FUSED_SM_FA3` on the real workload (8192/192, 200 prompts, rate 12,
       conc 32), unified arm against a 586.42 tok/s / 18.39 ms ITL baseline:

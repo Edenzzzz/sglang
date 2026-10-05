@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.8.5 — The kernel-level ratio: 3.01x, and the confound in it (2026-10-05)
+
+With a separate 3-task plan as the reference, the fused kernel runs 132.2 us against
+the unfused persistent kernel's 43.9 us on identical work -- 3.01x, matching the
+serving ITL ratio of 3.00 to within noise. That settles host versus device: the cost
+is in the kernel, and one fused plan replacing two is not the problem.
+
+The confound: this configuration routes every row to an FA2 class, so the wgmma role
+has no work, yet sm_split=8 still reserves 8 clusters for it. Idle reserved SMs are
+part of that 3.01x and are a property of static pre-assignment, not of fusion. This
+also qualifies the earlier decomposition -- the "fused FA2 path costs 1.50x" arm had
+the same 8 idle clusters, so that figure is reservation waste plus something else,
+not the intrinsic FA2-path cost I presented it as.
+
+An sm_split sweep on the fixed batch separates the two, and the harness now has both
+the timing loop and the reference to do it.
+
+
 ## v0.8.4 — More threads are slower; width 3 is numerically fine (2026-10-05)
 
 Fixed-batch kernel timing settles the thread-count question against my hypothesis:

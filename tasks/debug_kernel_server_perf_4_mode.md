@@ -4400,3 +4400,42 @@ cost is on the host side -- per-step plan construction, which the catalogue list
 as never measured and which a single fused plan replacing two unfused plans was
 supposed to *improve*. Those two possibilities call for completely different
 fixes, and I have been assuming the first without evidence.
+
+
+<a id="kernel-ratio-measured"></a>
+### The reference, measured: 3.01x at kernel level -- with one confound
+
+Same fixed batch, same 200-iteration event loop, identical inputs. The baseline is
+a **separate 3-task** `BatchAttention` planned without `FLASHINFER_FA3_TASK` over
+the same rows, i.e. the unfused persistent kernel doing the same work:
+
+| | kernel time |
+|---|---|
+| fused, `sm_split=8` | 132.2 us |
+| unfused persistent | **43.9 us** |
+| ratio | **3.01x** |
+
+That ratio matches the serving ITL ratio (54.86 / 18.26 = 3.00) to within noise,
+which settles the host-vs-device question: **the cost is in the kernel**, not in
+per-step plan construction. One fused plan replacing two is not what hurts.
+
+**The confound, which must be resolved before this is read as the fused kernel's
+intrinsic cost.** This run sets `FLASHINFER_FA3_MIN_PACKED_QO=4096`, so every row
+is an FA2 class and the wgmma role has **no work** -- yet `sm_split=8` still
+reserves 8 clusters for it. Those SMs sit idle while the baseline uses the whole
+GPU. So some unknown part of the 3.01x is simply reserved-but-idle SMs, which is
+not a property of fusion at all; it is the known hazard of static pre-assignment
+that [#static-split-confirmed](#static-split-confirmed) already measured from a
+different angle.
+
+This also retroactively qualifies the [decomposition](#deficit-decomposed): the
+"fused FA2 path costs 1.50x" arm had the same 8 idle FA3 clusters, so that 1.50x
+is reservation waste plus whatever else, not an intrinsic FA2-path cost. I
+presented it as the latter.
+
+**The one measurement that separates them** is a sweep of `sm_split` on this
+fixed batch with the wgmma role empty: at `sm_split=0` no SMs are reserved, so
+whatever gap remains against 43.9 us is the fused kernel's real overhead, and the
+difference between that and 132.2 us is the price of reserving 8 clusters for an
+idle role. That is a single parameter sweep on a harness that now has the timing
+and the reference in place.

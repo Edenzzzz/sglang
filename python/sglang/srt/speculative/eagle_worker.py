@@ -451,7 +451,17 @@ class EAGLEWorker(TpModelWorker):
             ]
 
         batch.out_cache_loc = out_cache_loc
-        batch.seq_lens_sum = torch.sum(batch.seq_lens).item()
+        # From the CPU mirror, not from the device tensor. torch.sum(seq_lens)
+        # followed by .item() is a device synchronisation on every draft step,
+        # which serialises the draft against whatever the compute stream is still
+        # running and makes the step un-capturable. seq_lens_cpu is maintained
+        # alongside seq_lens for exactly this, and is already preferred at the
+        # draft-extend site below.
+        batch.seq_lens_sum = (
+            int(batch.seq_lens_cpu.sum())
+            if getattr(batch, "seq_lens_cpu", None) is not None
+            else int(torch.sum(batch.seq_lens).item())
+        )
         batch.return_hidden_states = False
         spec_info.positions = batch.seq_lens.repeat_interleave(self.topk, dim=0)
         self.token_to_kv_pool_allocator.restore_state(token_to_kv_pool_state_backup)

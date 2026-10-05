@@ -1036,3 +1036,30 @@ Worth stating as a rule rather than an incident: in a warp-specialised mainloop
 with a software pipeline, any blanket `cp_async_wait<N>` is a cross-pipeline
 barrier. Completion must be expressed per consumer, through that consumer's
 barrier.
+
+## 18. Spec path: where the CPU-GPU syncs actually are
+
+Audited rather than assumed, because the v1 and v2 workers differ sharply.
+
+**`eagle_worker_v2.py` (the overlap path) has none.** No `.item()`, `.cpu()` or
+`tolist()` in the file. `draft()` writes the tree mask and positions straight into
+the verify CUDA-graph buffers with `build_tree_kernel_efficient`, returns
+`seq_lens_sum=None, seq_lens_cpu=None`, and plans verify on a side stream the
+compute stream waits on. Verify metadata is already device-resident there.
+
+**`eagle_worker.py` (v1) had one on the hot path**, now fixed:
+
+| site | what it was | status |
+|---|---|---|
+| `:454` draft step | `torch.sum(batch.seq_lens).item()` — a device sync **every draft step** | **fixed**: reads the `seq_lens_cpu` mirror |
+| `:926-928` draft extend | already prefers `seq_lens_cpu`, falls back to a device sum | fine |
+| `:643-647` verify | `retrive_next_token.cpu()` and friends — but only under `if batch.has_grammar` | not on the default path |
+| `:310` | `global_need_forward[0].item()` after an all-reduce on the **CPU** group | not a device sync |
+| `:812-813` | `.tolist()` on logprobs and verified ids, at output assembly | after the step, not in it |
+
+So the structural claim behind a 4-mode schedule holds: with
+`--speculative-eagle-topk 1` the draft is a chain, every row grows by exactly
+`k+1`, and the verify metadata is length-deterministic — it needs nothing from
+the draft's output except the token ids, which stay on device through the future
+map. The remaining blocker to measuring it is not a sync but
+`mix_with_running` crashing when the running batch is a spec batch.

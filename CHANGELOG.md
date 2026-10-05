@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.8.7 — Aliased smem: the first measured win, 11% (2026-10-05)
+
+With width held at 1 and smem the only variable: aliased 118.1 us against disjoint
+132.4 us, baseline 43.8-44.0 us in the same runs. 11% faster and free -- disjoint
+slots take ~208 KB of the 232 KB budget and cap the kernel at 1 CTA/SM. This is the
+first change here measured to make the fused kernel faster rather than just correct,
+and the default should flip: disjoint was chosen for a correctness bug that was
+since fixed by indexing the slot from the drain ordinal, and aliasing is also what
+width 3 needs to launch.
+
+It does not explain the 3x. 2.68x remains. Measured contributions on identical work
+now read: SM reservation ~6% over an 8x sweep, smem layout 11%, residual ~2.7x
+uncaused.
+
+The queue protocol is the primary suspect, from two independent results: adding
+warpgroups made the kernel slower (147.9 vs 132.4 us), which is contention rather
+than capacity, and the penalty barely moves with the number of reserved SMs, which
+fits a serialised hand-off. Next measurement is the per-task profiler events in
+`persistent.cuh` -- queue acquire versus mainloop, per role.
+
+
 ## v0.8.6 — The 3x is intrinsic to the fused kernel (2026-10-05)
 
 Sweeping sm_split with the wgmma role empty and plan_ctas matched at every point:

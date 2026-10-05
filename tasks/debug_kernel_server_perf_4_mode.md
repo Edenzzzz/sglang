@@ -4487,3 +4487,38 @@ measured here. Then the element-wise packed-GQA O store, and the queue protocol
 itself (the per-warpgroup named barriers and the shared work queue), which the
 width-3 result already hinted is the binding constraint: adding warpgroups made
 it slower, which is what a contended queue does.
+
+
+<a id="smem-aliasing-win"></a>
+### Aliased smem is an 11% win, and the first real optimisation found
+
+Width held at 1 so smem is the only variable, wgmma role empty, fixed batch,
+200 iterations, reference in the same runs:
+
+| smem layout | fused kernel | unfused baseline | ratio |
+|---|---|---|---|
+| disjoint (current default) | 132.4 us | 43.8 us | 3.02x |
+| **aliased** (`FLASHINFER_FUSED_ALIAS_SMEM=1`) | **118.1 us** | 44.0 us | **2.68x** |
+
+**11% faster, and it is free.** Disjoint slots cost ~208 KB of the 232 KB budget,
+which caps the kernel at 1 CTA/SM; aliasing shrinks the footprint. This is the
+first change in this effort measured to make the fused kernel faster rather than
+merely correct, and it argues the default should flip: disjoint smem was made the
+default earlier for a correctness reason (a narrow drain writing past a one-slot
+allocation), but that bug was fixed by indexing the slot from the drain ordinal,
+so the layout no longer carries that risk. Aliasing is also what width 3 needs to
+launch at all.
+
+**But it is not the 3x.** 2.68x remains after it, so occupancy via smem footprint
+explains roughly an eighth of the penalty and no more. The ordering of causes so
+far, all measured on identical work: SM reservation ~6% across an 8x sweep, smem
+layout 11%, and a residual ~2.7x with no identified cause.
+
+**The queue protocol is now the primary suspect**, and two independent results
+point at it rather than at compute: adding warpgroups made the kernel *slower*
+(147.9 us at width 3 against 132.4 at width 1), which is what contention on a
+shared work queue does, not what more compute capacity does; and the penalty is
+insensitive to how many SMs are reserved, which fits a serialised hand-off rather
+than a capacity shortfall. The concrete next measurement is the per-task profiler
+events already wired in `persistent.cuh` -- time spent in the queue acquire
+versus the mainloop, per role -- which distinguishes contention from work.

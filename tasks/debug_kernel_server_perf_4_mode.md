@@ -78,6 +78,29 @@ measured. The unified split-KV reduction is the gate.
 - [ ] **2. Per-role parity vs standalone SOTA** — FA3 vs flash-attention, FA2 vs
       the stock persistent kernel, on fixed-input kernel timing with L2-swizzled
       LPT retained. This is the real success criterion and has never been run.
+      **The vehicle is the upstream FA3 port**, not further patching of
+      flashinfer's simplified mainloop: parity with flash-attention is most
+      credibly shown by running flash-attention's own mainloop in our launch
+      template. Status 2026-10-06: **the port compiles end to end** with
+      `FLASHINFER_FA3_UPSTREAM=1` — a TU that forces instantiation of
+      `FusedFA3PersistentDispatched` builds the whole upstream kernel body at 0
+      errors, and the default path builds unchanged from the same TU. Verified by
+      forced instantiation, because four earlier commits in this port claimed
+      "compile-checked" on code the upstream scheduler's `if constexpr` false
+      branch never instantiated.
+      Done since: every guessed params field name reconciled against the real
+      structs (they had been read off the *FA2* role's `PersistentParams`, which
+      has no such members and is the wrong source besides); `max_splits_fa3`
+      exported through `plan_info` so the float partial O/LSE can be sized exactly
+      rather than by a bound that would ask for gigabytes; the three workspace
+      buffers allocated in the ext with `num_requests`/`max_pages_per_seq` threaded
+      from both call sites; the dense page table padded with -1 because 0 is a
+      valid page id.
+      **Not yet validated at runtime** — this machine has no GPU, so the next step
+      is fixture 2 on the pod against the fp32 reference, then the parity timing.
+      Also still open: the FA2 role's register starvation (168 regs with
+      720–816 B spill against a standalone 255 / 56–288 B), which is what has to
+      be fixed for the *FA2* half of this bullet.
 - [ ] **3. KV multicast / DSMEM** — 1.33-1.59x in isolation; carries the partials
       between cluster peers instead of through global memory, so it layers onto
       task 1. `FLASHINFER_FUSED_CLUSTER=2` still faults.

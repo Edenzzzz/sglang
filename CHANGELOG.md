@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.9.1 — The upstream FA3 port compiles, and the planner exports its split count (2026-10-06)
+
+The port's dispatch now instantiates end to end with `FLASHINFER_FA3_UPSTREAM=1`:
+a TU that takes the address of `FusedFA3PersistentDispatched` compiles the whole
+upstream kernel body with 0 errors, and the default path compiles from the same TU
+unchanged. Previous commits in this port claimed "compile-checked" on code that the
+upstream scheduler's `if constexpr` false branch never instantiated, so everything
+here is verified by forcing instantiation rather than by the header parsing.
+
+Every params field name in the dispatch had been guessed, and every guess was wrong
+in the same way: the KV pointers and strides were read off `params_1`, the FA2
+role's `PersistentParams`, as `k_data`/`v_data`/`kv_stride_n`. Those members do not
+exist (they are `k`/`v`/`k_stride_n`), but the deeper error is that the wgmma role
+was reading the other role's params at all -- `FA3Params` carries its own
+`k_ptr`/`v_ptr`/`k_stride_n`/`k_stride_h`/`kv_indices`/`page_size`, and taking them
+from the FA2 role would have been correct only because this harness happens to hand
+both roles the same cache.
+
+`max_splits_fa3` is now exported through `plan_info`. Upstream sizes its float
+partial O/LSE as `total_q * num_splits`, so the buffers cannot be sized by a
+conservative bound -- the obvious one, pages per sequence, asks for
+`8192 * 32 * 8192 * 4` bytes of LSE alone at a 8192-token batch. The planner knows
+the exact value, because it is the `num_kv_tiles` it just chose, and nothing
+downstream can recompute it. It is placed *before* `num_fa3_clusters` in the
+serialised vector so that stays last: the harness reads the chosen split as
+`plan_info[-1]`, and appending would have handed it the split count instead -- a
+plausible small integer that would have planned FA3 for the wrong CTA count with no
+error anywhere.
+
+The export is guarded by `NUM_TASKS > kFA3Task`. I first wrote it unguarded on the
+assumption that the enclosing block was already that guard; it is a bare scope, and
+`task_max_kv_splits` has `NUM_TASKS` entries, so every `HolisticPlanInfo<3>` plan
+would have read index 3 out of range.
+
+The three workspace buffers are allocated in the ext, and `num_requests` /
+`max_pages_per_seq` are threaded from both call sites (the harness and the serving
+backend). The dense page table is filled with -1, not 0, because 0 is a valid page
+id and zero padding would make every short sequence read page 0 for its tail blocks
+instead of being masked.
+
+Still unvalidated at runtime: this machine has no GPU, so no number from the
+upstream path means anything yet.
+
 ## v0.9.0 — Register pressure is the leading candidate for the 2.19x (2026-10-05)
 
 Grounded in ptxas numbers already in `persistent_fa3_fused.cuh`, not in new

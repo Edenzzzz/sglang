@@ -1432,6 +1432,8 @@ class FlashInferAttnBackend(AttentionBackend):
             0,  # pers_kv_page_offset: the plan's indptr is already global
             fused["fa3_sparse"],
             out,
+            fused["n_req"],
+            fused["max_pages"],
         )
         return out, self._persistent_lse_buf[:num_tokens]
 
@@ -1786,6 +1788,10 @@ class FlashInferAttnBackend(AttentionBackend):
             sm_fa3=int(sm_fa3), n_rows=int(n_rows), n_tok=int(n_tok),
             n_pages=int(n_pages), fa3_wrapper=st["fa3"], pers_wrapper=st["pers"],
             kv_indices=kv_indices,
+            # Sizes the upstream FA3 port's dense page table, which is
+            # [n_req, max_pages_per_seq]. page_size is 1 on this path, so pages per
+            # sequence is just the KV length.
+            n_req=int(len(kl_r)), max_pages=int(kl_r.max()) if len(kl_r) else 0,
             # Constraint 3: FA3 takes vector-sparse offsets, not page ids.
             fa3_sparse=self._fa3_sparse_indices(
                 st["fa3"], forward_batch.token_to_kv_pool.get_kv_buffer(0)

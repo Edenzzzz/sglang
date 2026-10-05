@@ -2597,3 +2597,44 @@ compiles to 168 registers with up to 4.4 KB of spill loads, so FA3's
 is to compile the fused build with those calls removed -- which costs FA3 its
 240-register consumer budget, and so is a measurement of what the fusion is worth
 once the protocol is honest, not a free fix.
+
+##### All four hypotheses eliminated: symmetric mode is retired, asymmetric is the correct path
+
+Removing FA3's warpgroup register protocol from the fused translation unit
+(`FLASHINFER_FUSED_NO_SETMAXNREG`, defined in the ext's own source so no flag
+plumbing is involved) does **not** fix it: FA3 rel err 3.78 FAIL, FA2 rows exact,
+and `ptxas` reports the same 168 registers / 16 barriers / 2.3-4.4 KB spills --
+expected, since `setmaxnreg` is a runtime hint rather than an allocation
+directive, so its removal changes instructions and not the register count.
+
+The complete elimination record for symmetric mode's nondeterministic FA3
+corruption:
+
+| hypothesis | how it was eliminated |
+|---|---|
+| the 132-CTA FA3 plan | `sm_split = num_sm`: same plan, nobody drains -> FA3 exact at 2.2e-4 |
+| FA2 storage aliasing over FA3's `SharedStorage` | disjoint layout made the source default -> still fails (3.04 / 3.03 / 4.34) |
+| drain running on FA3's TMA-producer warpgroup | moved to consumer warpgroup 1 -> worse, and FA2 breaks too (1.34 / 0.95 / 1.22) |
+| FA3's `dealloc<72>` / `alloc<216>` protocol | protocol removed -> still fails (3.78) |
+
+What is established rather than guessed: the corruption needs a CTA to drain FA2
+and then enter FA3's body; it is a race; it never touches the FA2 rows; and none
+of the four candidate couplings is responsible.
+
+**Consequences, which are decisions and not further debugging:**
+
+1. **Asymmetric mode is the only correct fused path today** and it is exact
+   (2.3e-4). Every symmetric number in this document stays void.
+2. Asymmetric's problem is the one measured in section 12: its FA2 role gets
+   ~128 threads per SM against ~256 native, because a single launch has one
+   block shape and FA3's warp specialisation fixes it at 1 CTA/SM.
+3. Those two facts together point at the shape the evidence has been converging
+   on from both directions: **two kernels, concurrently co-launched on disjoint
+   SM sets, each with its native geometry** -- FA2 at 2 CTAs/SM with mma.sync
+   occupancy, FA3 at 1 CTA/SM with its register protocol intact and honest. That
+   is not serial dispatch (measured at -48%, section 10); it is the
+   `dual`/`ours` arm of `bench_4mode.py`, where both kernels are resident and the
+   scheduler splits the grids.
+4. It does cost the single-launch property, and with it the ability to fuse spec
+   draft and verify inside one kernel. That is a real loss and it has to be
+   weighed against a symmetric path that four experiments could not make correct.

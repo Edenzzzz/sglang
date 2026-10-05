@@ -632,3 +632,46 @@ behaviour given the measured boundary -- tile 128 and tile 64 both belong on
 wgmma once packed -- but it means `test_fused_server_batch.py`'s `task[]` labels
 and its `N_FA3_ROWS` assumption need updating in the same change, or the test
 will mislabel correct output.
+
+## 15. First unified run: the two work-index spaces do not line up
+
+The unified path builds, runs, and the FA2 side of it is correct. With
+`UNIFIED=1` (one plan over all rows, `pers_row_offset=0`, `-D` confirmed present
+in the generated `build.ninja`), asymmetric, `sm_split=8`:
+
+| row | packed_qo | plan task | result |
+|---|---|---|---|
+| 0 (qo 424, kv 4001) | 2968 | 3 (wgmma) | **nan, unwritten** |
+| 1 (qo 87, kv 87) | 609 | 3 (wgmma) | **nan, unwritten** |
+| 2 (qo 1, kv 14) | 7 | 2 (tile 16) | **rel err 2.8e-3, exact** |
+
+511 of 512 q rows unwritten. So task-3 work items are produced by the plan and
+executed by nobody, while the FA2 tasks run correctly from the same plan -- which
+confirms the plan, the scheduler plumbing and the ext wiring, and isolates the
+remaining defect to **who executes task 3**.
+
+Two index spaces have to be reconciled:
+
+- `TwoStageHolisticPlan` distributes work over **clusters**:
+  `num_clusters = num_sm * 2 / cluster_size`, i.e. 264 entries in `work_indptr`
+  at `cluster_size = 1`, because the FA2 mainloop is planned at two CTAs per SM.
+- FA3's tile scheduler indexes `work_indptr[blockIdx.x]` over the **grid**, which
+  is 132 CTAs, and in asymmetric mode only CTAs `< sm_split` reach FA3 at all.
+
+So task-3 items landing in clusters 8..263 are never pulled: the CTAs that could
+run them either index a different slot or never enter FA3. Nothing is wrong with
+the work items themselves.
+
+Fixes, in the order worth trying:
+
+1. **Make the index spaces identical for a 4-task plan**: force `cluster_size = 1`
+   and cap `num_clusters` to `num_sm` so cluster index == `blockIdx.x`, then give
+   task 3 the cluster range `[0, sm_fa3)` through the plan's existing per-task
+   ranges (`FLASHINFER_SM_PARTITION`, `FLASHINFER_SM_SPLIT`). This keeps the FA2
+   tasks on the remaining range and costs the FA2 side its 2-CTAs-per-SM
+   planning, which is the geometry penalty section 12 already measures.
+2. Let every CTA pull its own task-3 items, which is the symmetric structure and
+   is blocked by the FA3 corruption of section 12.3.
+3. Keep two CTAs per SM for FA2 and have FA3's scheduler index
+   `work_indptr[2 * blockIdx.x]`-style, i.e. teach it the cluster mapping rather
+   than changing the plan.

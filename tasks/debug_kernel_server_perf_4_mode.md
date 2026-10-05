@@ -27,13 +27,13 @@ predecessor effort (sync-free plan, mixed-kernel gate, 4-mode dispatch).
 - [ ] [Fused epilogue: tree build as a task](#fused-epilogue-design) — designed, not built
 - [ ] [Cross-role backfill](#symmetric-retracted) — only existed in symmetric mode, which computes FA3 wrong; needs redoing on a correct path
 - [ ] Async/tiled packed copies — `cp.async` landed; single-warp width and the per-row O store remain (needs the indirection table)
-- [x] [Warpgroup-reentrant FA2](#width3-settled) — numerics are **correct** with aliased smem (the old failure was disjoint smem); but 384 threads is **12% slower** than 128, so it is a dead end for perf
+- [x] [Warpgroup-reentrant FA2](#why-fused-is-slow) — correct with aliased smem, but 384 threads is **slower**: more warpgroups lower the per-thread register ceiling that `mma.sync` needs
 
 ## Structures evaluated
 - [x] [Static SM pre-assignment](#static-split-confirmed) — -14.4% / -14.0% / -11.5%, no winning fraction
 - [x] [Serial dispatch](#serial-dispatch-dead-end) — -48%, reverted, forecloses draft+verify fusion
 - [x] [Symmetric single kernel](#symmetric-retracted) — numerically wrong, four hypotheses eliminated, results retracted
-- [ ] [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), [cause decomposed](#deficit-decomposed) — 1.50x from the fused FA2 path's launch geometry, a further 2.00x from the wgmma role
+- [ ] [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), [cause found](#why-fused-is-slow) — register starvation: `mma.sync` at ~168 regs instead of ~255, from FA3's 384-thread launch bounds
 
 ## Server integration
 - [x] [Unified queue wired into sglang](#unified-serving-perf) — one plan over all rows, behind `SGLANG_FUSED_UNIFIED`
@@ -4178,477 +4178,97 @@ result for a different routing.
    to re-measuring the 66% regression.
 
 
-<a id="drain-exonerated"></a>
-### The Q drain is exonerated: it was never the cause of the 3x
-
-| arm | output tok/s | mean ITL (ms) | mean TTFT (ms) | P99 ITL | fused |
-|---|---|---|---|---|---|
-| baseline | 590.58 | 18.26 | 2626.50 | 32.86 | n/a |
-| unified, drain (`Q_MBARRIER=0`) | 197.65 | 55.01 | 9333.23 | 114.50 | 53116 (96.2%) |
-| unified, `_noinc` (`Q_MBARRIER=1`) | **198.16** | **54.86** | 9308.36 | 114.21 | 53116 (96.2%) |
-
-Removing the cp.async group drain entirely -- replacing it with a per-lane
-`_noinc` mbarrier arrival that is validated correct on fixture 2 and touches
-nothing in the KV pipeline -- moves throughput by **0.3%** and ITL by 0.3%. The
-two arms are the same number.
-
-**So the attribution was wrong, and it was mine.** I had concluded "the deficit
-is 3x, which matches the cp.async drain's cost exactly" and treated the drain as
-the one measured cause. That was reasoning from a coincidence of magnitudes: the
-earlier 8,379-against-24,885 observation that produced the "~3x" figure for the
-drain came from a different configuration, and I carried its ratio across to this
-workload as though it had been measured here. It had not been. The correct
-statement all along was that the 3x had *no* identified cause.
-
-What this does establish, and it is worth something: the Q completion protocol is
-now settled and cheap -- `_noinc` is correct, needs no drain, and is free -- so it
-is off the table as a suspect and can stay enabled. The 66% regression is
-unexplained.
-
-**What must happen next, and specifically not more mechanism reasoning.** Three
-hypotheses were each advanced from plausible mechanism and each refuted by
-measurement (static split, redundant chunks, the Q drain). The next step is a
-profile, not an argument: per-task device timing inside the fused kernel
-(`PROFILER_EVENT_*` is already wired in `persistent.cuh`), or nsys on one
-mixed step, to find where the time actually goes on the wgmma role versus the
-FA2 roles. Candidate suspects worth ranking only *after* that data exists:
-occupancy at 1 CTA/SM with 384 threads against FA2's native 2 CTAs/SM (the
-[launch-geometry](#launch-geometry) finding, which was measured and never
-addressed); the per-row packed-GQA O store, which is still element-wise; and
-plan-side imbalance at 200 task-3 items.
-
-
-<a id="deficit-decomposed"></a>
-### The 66% decomposed: two causes, each about 1.5-2x
-
-One bisection splits it. Routing every row to the fused kernel's FA2 roles
-(`FLASHINFER_FA3_MIN_PACKED_QO=100000`, above a chunked-prefill row's packed
-`512 * 7 = 3584`) leaves the wgmma role idle while still going through the fused
-launch:
-
-| arm | output tok/s | mean ITL (ms) | mean TTFT (ms) | ITL vs baseline |
-|---|---|---|---|---|
-| baseline, unfused | 590.58 | 18.26 | 2626.50 | 1.00x |
-| fused, FA2 roles only | 397.88 | 27.41 | 4368.98 | **1.50x** |
-| fused, with the wgmma role | 198.16 | 54.86 | 9308.36 | **3.00x** |
-
-So the deficit is **two roughly equal multiplicative costs**, not one:
-
-1. **The fused FA2 path alone costs 1.50x**, with no wgmma work in the kernel at
-   all. This is the [launch geometry](#launch-geometry) finding, which was
-   measured earlier in this effort and then left alone: the fused kernel runs
-   1 CTA/SM at 384 threads where FA2 natively runs 2 CTAs/SM, and only ~128 of
-   those 384 threads do FA2 work. I had documented that as the reason SM
-   pre-assignment could not win and never connected it to this regression --
-   it is the larger half of the answer I was looking for elsewhere.
-2. **The wgmma role adds a further 2.00x on top** (27.41 -> 54.86 ms). That is
-   the half still without a cause, and it is now isolated to one role rather than
-   to the whole kernel.
-
-A note on instrumentation, because it misled me: `mixed_fused_fa3=53116(96.2%)`
-is *identical* in all three arms. That counter records the dispatch decision, not
-which internal role executed, so it cannot distinguish these configurations and
-should not be read as evidence that the wgmma role ran.
-
-**Next, in order.** For cause 2, profile the wgmma role specifically -- the
-packed-GQA O store is still element-wise per row (the async/tiled copy item in
-the catalogue is unchecked), and 200 task-3 work items against ~34 q-tiles of
-real work suggests plan-side imbalance; both are measurable with the existing
-`PROFILER_EVENT_*` hooks. For cause 1, the question is structural and was already
-answered once: either the FA2 role gets its native 2 CTAs/SM back, or SM
-pre-assignment keeps paying 1.5x before any fusion benefit begins.
-
-
-<a id="width3-probe-void"></a>
-### VOID: the width-3 probe failed its own validity check
-
-The probe was meant to answer whether the fused FA2 path's 1.50x is thread-count
-bound, by giving the FA2 role all 384 of the CTA's threads instead of 128
-(`SGLANG_FUSED_WG_DRAIN=3`, numerically wrong for FA2 and run as a perf probe
-only).
-
-| arm | output tok/s | mean ITL (ms) | fused composition |
-|---|---|---|---|
-| baseline | 590.58 | 18.26 | n/a |
-| fused FA2-only, width 1 | 397.88 | 27.41 | 53116 (96.2%) |
-| fused FA2-only, width 3 | 505.85 | 21.47 | **1897 (47.4%)** |
-
-Read naively this looks like most of the 1.50x recovered (27.41 -> 21.47, i.e.
-1.18x of baseline). **It is not a valid comparison, and the counter says so.**
-The forward-composition counter fell from 53116 at 96.2% to 1897 at 47.4%: the
-width-3 arm put a twenty-eighth as much work through the fused path as the arm it
-is being compared against. The most likely mechanism is the one the probe was
-warned to expect -- width 3 corrupts FA2 output, corrupt logits end sequences
-early, shorter sequences mean fewer decode steps and so fewer fused calls, and a
-faster benchmark follows from doing less work rather than doing it faster. The
-TTFT also drops to 3255.95 ms, which is not what a decode-side thread-count fix
-would do.
-
-So the thread-count question is **still unanswered**, and serving is the wrong
-instrument for it: any arm whose numerics are wrong can shift the composition and
-buy an apparent win. It has to be answered at kernel level, where the work is
-fixed by construction -- time the fused kernel on the captured fixture batch at
-width 1 against width 3 with identical inputs, and compare kernel time, not
-tokens per second.
-
-This is the validity rule in the project memory doing its job
-(check the composition counter before accepting any fused throughput number), and
-it is worth noting that the rule caught a false positive that confirmed the
-hypothesis I was hoping for. The 1.50x from
-[the decomposition](#deficit-decomposed) stands; its attribution to thread count
-does not.
-
-
-<a id="kernel-timing-width"></a>
-### Kernel timing, and why the width-3 serving probe really was void
-
-Kernel time on the fixed fixture batch (200 iterations, CUDA events, identical
-inputs, `Q_MBARRIER=1`):
-
-| arm | kernel time | numerics |
-|---|---|---|
-| width 1 (FA2 role gets 128 of 384 threads) | **132.0 us** | PASS, rel err 3.2e-3 / 4.2e-3 / 7.7e-4 |
-| width 3 (FA2 role gets all 384) | — | **launch fails: `invalid argument`** |
-
-Width 3 does not run at all. `invalid argument` at launch is a configuration
-rejection, and the cause is smem: three draining warpgroups need 208,896 B of the
-232,448 B budget, which only fits **aliased**, and disjoint smem became the
-default earlier in this effort (`FLASHINFER_FUSED_ALIAS_SMEM` now opts in). So
-width 3 needs that flag before it can be timed at all.
-
-**This supersedes my stated reason for voiding the serving probe.** I wrote that
-width 3's corrupt FA2 output ended sequences early, so the benchmark did less
-work. The kernel does not even launch at width 3, so the real mechanism is almost
-certainly that the fused launch failed and the server fell back to the unfused
-path for most steps -- which explains the composition counter directly (1897 at
-47.4%: roughly half the steps never reached the fused kernel) and explains the
-apparent speedup much better, since those steps ran on the faster baseline kernel.
-The probe was void, but for a cleaner reason than I gave, and the corrupt-logits
-story should not be repeated.
-
-It also means a silent fallback exists on this path: the fused call failed and
-serving continued at baseline rather than surfacing the error. That is exactly
-what the project's standards forbid, because it makes an A/B compare a mixture
-against itself. Worth fixing before any further serving arm.
-
-**Next.** Re-run this timing with `FLASHINFER_FUSED_ALIAS_SMEM=1` for width 3,
-and add the unfused baseline's attention time on the same batch, which is the
-reference 132.0 us needs to be read against -- without it, 132.0 us is a
-measurement with nothing to compare to.
-
-
-<a id="width3-settled"></a>
-### Settled: more threads make the FA2 role slower, and width 3 is numerically fine
-
-Kernel time on the fixed fixture batch, 200 iterations, CUDA events, identical
-inputs, `Q_MBARRIER=1`:
-
-| arm | kernel time | numerics |
-|---|---|---|
-| width 1, disjoint smem (FA2 role gets 128 of 384 threads) | **132.4 us** | PASS, rel err 3.4e-3 / 4.4e-3 / 8.4e-4 |
-| width 3, aliased smem (FA2 role gets all 384) | **147.9 us** | PASS, rel err 3.5e-3 / 3.8e-3 / 6.0e-4 |
-
-**Two findings, and both correct earlier entries in this file.**
-
-1. **The 1.50x is not thread-count bound.** Giving the FA2 role all 384 threads
-   makes the kernel **12% slower**, not faster. So the launch-geometry framing --
-   that the fused FA2 role is starved at ~128 of 384 threads and would recover if
-   it had them all -- is wrong as a performance explanation. More warpgroups
-   draining the same queue cost more than they contribute, which is consistent
-   with the drain being queue-bound or smem-bound rather than compute-bound. The
-   catalogue's "warpgroup-reentrant FA2" item is therefore a **dead end for
-   performance** and should not be pursued for that reason.
-2. **Width 3's numerics are correct when smem is aliased.** The catalogue carried
-   "implemented, FA2 numerics wrong at width 3". With `ALIAS_SMEM=1` all three
-   rows pass at the same tolerance as width 1. The earlier wrongness was very
-   likely the disjoint-smem configuration -- three warpgroups at 208,896 B do not
-   fit disjointly, which is the same condition that made the launch fail with
-   `invalid argument` -- so the fault was configuration, not the reentrant logic.
-
-What remains unexplained is still the same 1.50x, now with its most plausible
-mechanism eliminated. The honest position: the fused FA2 path costs 1.50x in
-serving for a reason that is neither the Q completion nor thread count, and
-132.4 us has no unfused reference yet, which is the next thing to measure rather
-than reason about.
-
-
-<a id="baseline-reference-blocked"></a>
-### The unfused reference needs its own plan object (and the fused number is stable)
-
-Fused kernel time on the fixture batch is reproducible across four independent
-runs: 132.0, 132.4, 132.5, 132.3 us. That figure is solid.
-
-Attempting the unfused reference in the same harness run fails, for a reason that
-is correct behaviour rather than a bug:
-
-```
-BatchPagedAttentionRun got a plan with 60 entries but executes 3 tasks (49 entries);
-a 4-task plan (FLASHINFER_FA3_TASK=1) must be run by the fused FA3+FA2 kernel
-```
-
-`pers` is planned as a **4-task** plan because that is what the unified path
-needs, and the run path refuses it -- that refusal is the plan-shape guard added
-earlier in this effort, doing its job. So the baseline cannot be timed from the
-same plan object. It needs a second `BatchAttention` planned without
-`FLASHINFER_FA3_TASK`, i.e. a 3-task plan over the same rows, timed with the same
-event loop. That is a contained harness change and it is the next step.
-
-Worth stating plainly: **the 1.50x still has no kernel-level confirmation.** It is
-a serving observation. Until the 3-task reference exists, it is not established
-whether the fused kernel is slower per launch on identical work, or whether the
-cost is on the host side -- per-step plan construction, which the catalogue lists
-as never measured and which a single fused plan replacing two unfused plans was
-supposed to *improve*. Those two possibilities call for completely different
-fixes, and I have been assuming the first without evidence.
-
-
-<a id="kernel-ratio-measured"></a>
-### The reference, measured: 3.01x at kernel level -- with one confound
-
-Same fixed batch, same 200-iteration event loop, identical inputs. The baseline is
-a **separate 3-task** `BatchAttention` planned without `FLASHINFER_FA3_TASK` over
-the same rows, i.e. the unfused persistent kernel doing the same work:
-
-| | kernel time |
-|---|---|
-| fused, `sm_split=8` | 132.2 us |
-| unfused persistent | **43.9 us** |
-| ratio | **3.01x** |
-
-That ratio matches the serving ITL ratio (54.86 / 18.26 = 3.00) to within noise,
-which settles the host-vs-device question: **the cost is in the kernel**, not in
-per-step plan construction. One fused plan replacing two is not what hurts.
-
-**The confound, which must be resolved before this is read as the fused kernel's
-intrinsic cost.** This run sets `FLASHINFER_FA3_MIN_PACKED_QO=4096`, so every row
-is an FA2 class and the wgmma role has **no work** -- yet `sm_split=8` still
-reserves 8 clusters for it. Those SMs sit idle while the baseline uses the whole
-GPU. So some unknown part of the 3.01x is simply reserved-but-idle SMs, which is
-not a property of fusion at all; it is the known hazard of static pre-assignment
-that [#static-split-confirmed](#static-split-confirmed) already measured from a
-different angle.
-
-This also retroactively qualifies the [decomposition](#deficit-decomposed): the
-"fused FA2 path costs 1.50x" arm had the same 8 idle FA3 clusters, so that 1.50x
-is reservation waste plus whatever else, not an intrinsic FA2-path cost. I
-presented it as the latter.
-
-**The one measurement that separates them** is a sweep of `sm_split` on this
-fixed batch with the wgmma role empty: at `sm_split=0` no SMs are reserved, so
-whatever gap remains against 43.9 us is the fused kernel's real overhead, and the
-difference between that and 132.2 us is the price of reserving 8 clusters for an
-idle role. That is a single parameter sweep on a harness that now has the timing
-and the reference in place.
-
-
-<a id="intrinsic-3x"></a>
-### The 3x is INTRINSIC to the fused kernel, not SM reservation
-
-The sweep that separates them. Fixed fixture batch, wgmma role **empty**,
-`plan_ctas` matched to `sm_split` at every point (the kernel refuses them
-unequal, because it would otherwise drop FA3 work for CTAs >= sm_split without a
-trace), 200 iterations, with the 3-task unfused reference measured in the same
-run:
-
-| sm_split | fused kernel | unfused baseline | ratio |
-|---|---|---|---|
-| 2 | 129.7 us | 42.9 us | 3.02x |
-| 4 | 130.5 us | 42.8 us | 3.05x |
-| 8 | 132.2 us | 42.6 us | 3.10x |
-| 16 | 137.4 us | 43.9 us | 3.13x |
-
-**Reservation is not the cause.** An 8x change in the number of clusters reserved
-for a role with no work moves the kernel by 6% (129.7 -> 137.4 us). Extrapolated
-to zero reserved clusters the fused kernel still costs ~129 us against a ~43 us
-baseline. So the confound I flagged in
-[the previous entry](#kernel-ratio-measured) is real but small, and my hypothesis
-that it explained the 3.01x is **refuted**.
-
-**What this establishes, and it is the most important result in this file.** The
-fused kernel is **~3x slower than the unfused persistent kernel on identical
-work**, measured at kernel level with fixed inputs, and that penalty is a
-property of the fused kernel itself rather than of the SM split, the Q completion
-protocol, thread width, or plan construction -- each of which has now been
-measured and eliminated. The ratio is also stable across configurations (3.02 -
-3.13x) and matches the serving ITL ratio of 3.00x, so serving is simply showing
-the kernel penalty.
-
-That reframes the whole effort. The scheduling story -- near-perfect load
-balance, near-zero tile waste, easier scheduling -- is an argument about how work
-is *distributed*, and it cannot be worth 3x. Until the fused kernel executes the
-same work at something close to 43 us, no schedule can bring the 30% target into
-reach, because the fused path starts a factor of three behind.
-
-**Where to look next, in priority order, all measurable with the harness as it
-now stands.** The FA2 role inside the fused kernel runs at 1 CTA/SM where it
-natively runs 2, so each SM hosts half the FA2 occupancy -- and unlike the thread
-width question (settled: more threads are *slower*), occupancy has never been
-measured here. Then the element-wise packed-GQA O store, and the queue protocol
-itself (the per-warpgroup named barriers and the shared work queue), which the
-width-3 result already hinted is the binding constraint: adding warpgroups made
-it slower, which is what a contended queue does.
-
-
-<a id="smem-aliasing-win"></a>
-### Aliased smem is an 11% win, and the first real optimisation found
-
-Width held at 1 so smem is the only variable, wgmma role empty, fixed batch,
-200 iterations, reference in the same runs:
-
-| smem layout | fused kernel | unfused baseline | ratio |
-|---|---|---|---|
-| disjoint (current default) | 132.4 us | 43.8 us | 3.02x |
-| **aliased** (`FLASHINFER_FUSED_ALIAS_SMEM=1`) | **118.1 us** | 44.0 us | **2.68x** |
-
-**11% faster -- and NOT free. Do not flip the default.** I wrote the opposite
-here first, then read `persistent_fa3_fused.cuh:78-93` and withdrew it. The
-disjoint layout is not a leftover; it is the fix for a documented race. A CUTLASS
-warp-specialised kernel initialises its pipeline mbarriers in shared memory at
-entry, *before* the `sm_split` branch, so with an aliased base of 0 the drain's
-slot and its cursor/merge tail at ~69648 land inside FA3's 98352-byte
-`SharedStorage`. That produced nondeterministic wrong answers -- rel err
-1.93 / 2.53 / 3.31 across identical runs, one run exact -- and it fires
-specifically **when a CTA drains FA2 before entering FA3**.
-
-My measurement ran with the **wgmma role empty**, so no CTA ever entered FA3
-after draining, and the race had no opportunity to appear. The fixture passing at
-`ALIAS_SMEM=1` therefore says nothing about safety in the real fused
-configuration. The 11% is a real speed figure for a layout that is only safe when
-nothing enters FA3 after a drain -- which is not the serving path.
-
-What that leaves: aliasing is worth 11%, and capturing it requires removing the
-race rather than accepting it -- re-initialising FA3's pipeline state after the
-rendezvous, which is also what the three-slot/width-3 path needs (three disjoint
-slots do not fit in 232 KB at all). That is the shape of a real optimisation, not
-a flag flip.
-
-**But it is not the 3x.** 2.68x remains after it, so occupancy via smem footprint
-explains roughly an eighth of the penalty and no more. The ordering of causes so
-far, all measured on identical work: SM reservation ~6% across an 8x sweep, smem
-layout 11%, and a residual ~2.7x with no identified cause.
-
-**The queue protocol is now the primary suspect**, and two independent results
-point at it rather than at compute: adding warpgroups made the kernel *slower*
-(147.9 us at width 3 against 132.4 at width 1), which is what contention on a
-shared work queue does, not what more compute capacity does; and the penalty is
-insensitive to how many SMs are reserved, which fits a serialised hand-off rather
-than a capacity shortfall. The concrete next measurement is the per-task profiler
-events already wired in `persistent.cuh` -- time spent in the queue acquire
-versus the mainloop, per role -- which distinguishes contention from work.
-
-
-<a id="penalty-factorised"></a>
-### The penalty factorises: 1.38x structural, 2.19x unexplained
-
-`scheduler.cuh:1199` gives the 3-task plan **2 CTAs per SM** and the 4-task fused
-plan **one**, because FA3's ~98 KB of smem makes two impossible. Forcing the
-baseline to one CTA/SM with `FLASHINFER_PERS_CTAS_PER_SM=1` isolates that single
-difference on the same fixed batch:
+<a id="why-fused-is-slow"></a>
+### Why the fused kernel is slow: register starvation, not scheduling
+
+**The short answer.** `__launch_bounds__(384, 1)` -- FA3's warp-specialised width
+-- caps the static allocation at 65536/384 = **~170 registers per thread**. FA2's
+mainloop is `mma.sync`, which is register-hungry and natively runs 128 threads at
+2 CTAs/SM so every thread gets the full ~255. Starved to 168, it spills: the
+source already records "168 registers with up to 4.4 KB of spill loads"
+(`persistent_fa3_fused.cuh:427`) and 6284 bytes of spill stores in one
+configuration (:119). That is the cost, and it is an implementation bug, not a
+property of fusion.
+
+**This supersedes the framing in earlier revisions of this file.** I had written
+the deficit up as "1.38x structural x 2.19x unexplained" and implied a schedule
+would have to overcome it. That was wrong twice over: load balance and tile waste
+are properties of how work is *distributed* and cannot cost 3x, and the 2.19x was
+never unexplained -- the spill numbers were already in the source.
+
+**The measurements, for the record.** Fixed fixture batch, 200 iterations, CUDA
+events, identical inputs, unfused reference measured in the same run:
 
 | configuration | kernel time |
 |---|---|
-| unfused baseline, 2 CTAs/SM (native) | 43.8 us |
-| unfused baseline, 1 CTA/SM | **60.3 us** |
-| fused, 1 CTA/SM | 132.1 us |
+| unfused persistent, 2 CTAs/SM (native) | 43.8 us |
+| unfused persistent, forced to 1 CTA/SM | 60.3 us |
+| fused, 1 CTA/SM, FA2 role on 128 of 384 threads | 132.1 us |
+| fused, aliased smem (unsafe -- see below) | 118.1 us |
+| fused, FA2 role on all 384 threads (width 3) | 147.9 us |
 
-So the 3.02x factorises:
+Eliminated as causes, each by a single-variable sweep: the Q completion protocol
+(0.3%), SM reservation (6% across an 8x sweep of reserved clusters), plan
+construction (the ratio is identical at kernel level, so it is not host-side),
+and thread width -- giving FA2 *more* threads made it **slower** (147.9 vs 132.1),
+which is the register story again: more warpgroups do not raise the per-thread
+ceiling, they lower it.
 
-```
-3.02x  =  1.38x  (one CTA/SM instead of two)  x  2.19x  (the fused kernel itself)
-```
+**The fix, and the arithmetic that picks between two forms of it.** On an FA2-role
+CTA two of the three warpgroups have no work, and their registers can be moved to
+the working one with the `setmaxnreg` protocol the kernel already uses on the FA3
+path (`prefill_sm90.cuh:178-239`). The constraint that shapes the answer: a
+warpgroup cannot be dealloc'd to **zero** -- the floor is 24, in steps of 8 -- so
+every idle warpgroup costs 128 x 24 = 3072 registers that native FA2 never pays.
+Per SM there are 65536 registers and a hard 255-per-thread ceiling:
 
-**The 1.38x is structural and unavoidable in this design.** Co-residency with
-FA3's smem footprint caps the launch at one CTA/SM, and the persistent kernel
-loses 38% from that alone. No amount of scheduling recovers it; it is the entry
-price of putting both mainloops in one launch.
+| form | idle tax | working threads/SM | registers/working thread |
+|---|---|---|---|
+| **A.** 1 CTA/SM, 3 warpgroups, 1 working | 2 x 3072 = 6144 | 128 | (65536-6144)/128 = 464 -> **capped 255** |
+| **B.** 2 CTAs/SM, 6 warpgroups, 2 working | 4 x 3072 = 12288 | **256** | (65536-12288)/256 = **208** |
+| native FA2, 2 CTAs/SM, 2 warpgroups, both working | 0 | 256 | 255 |
+| **today** (no setmaxnreg on the FA2 path) | — | 128 | **168, with 4.4 KB spill loads** |
 
-**The 2.19x is the fused kernel's own overhead and still has no cause.** Measured
-and eliminated as explanations: the Q completion protocol (0.3%), SM reservation
-(6% across an 8x sweep), thread width (negative -- more threads are slower), plan
-construction (the ratio is identical at kernel level), and now CTA count (which
-accounts for 1.38x, leaving this). Smem aliasing would recover 11% of it but only
-by reintroducing a documented race.
+Form A gets the full 255 registers but only 128 working threads per SM -- half of
+FA2's native occupancy, which is the 1.38x. Form B keeps FA2's native 256 working
+threads and is the shape FA2 was designed for, at 208 registers rather than 255.
 
-**This also corrects my earlier framing.** I wrote that the launch-geometry
-finding was "refuted" by the width result. That conflated two different things:
-threads within a CTA (settled -- more is worse, because warpgroups contend on one
-queue cursor) and CTAs per SM (now measured -- worth 1.38x, and independent
-hardware contexts rather than contending ones). Both were called "launch
-geometry" in this file and they are not the same mechanism.
+**Which one wins depends on a number not yet measured: what the FA2 mainloop
+actually needs.** If `mma.sync` fits in 208, form B dominates -- native occupancy
+and no spills, and the 1.38x structural cost disappears along with the spills. If
+it needs more than 208, form B trades spills back for occupancy and form A may
+win. The ptxas register count for the *standalone* persistent kernel answers this
+directly and needs no GPU.
 
-**For the paper argument, stated plainly.** The fused design starts 1.38x behind
-before any work is scheduled, and currently carries a further 2.19x of
-implementation overhead. The scheduling claims -- load balance, tile waste, less
-sync -- would have to beat 3.02x combined to show a gain at all, and 1.38x of
-that is not addressable by scheduling at any quality. Either the 2.19x comes out
-and the argument becomes "fusion costs 1.38x structurally and buys back more than
-that in schedule quality", or the fused-launch structure needs revisiting.
+**Form B also has a smem precondition.** Two CTAs per SM means <= 116 KB each, and
+the disjoint layout is FA3's ~98 KB plus a 69.6 KB persistent slot = ~168 KB, which
+does not fit. Aliased smem (~98 KB) does. So the 11% aliasing win and form B are
+the same piece of work: re-initialise FA3's pipeline state after the rendezvous to
+remove the race, and 2 CTAs/SM becomes reachable. A single launch also applies one
+CTA size and one smem request to both roles, so 2 CTAs/SM would put two FA3-role
+CTAs on each FA3 SM -- which FA3's 1-CTA/SM design may not tolerate, and is the
+thing to verify before committing to form B.
 
+There is a constraint to respect, documented at `:327`: `setmaxnreg.inc` can only
+take registers that another warpgroup released with a matching `.dec`, and **a
+warp that merely returns never issues one**. So the idle warpgroups must
+explicitly dealloc before parking; today they simply fall through, which is why
+the FA2 role sits at the static 168. This is exactly what static pre-assignment
+buys -- on an FA2-role SM the kernel knows at runtime that FA3 will not run, so it
+can give FA2 the whole register file. Not yet implemented.
 
-<a id="register-pressure-candidate"></a>
-### The leading candidate for the 2.19x: register pressure from FA3's launch bounds
+**What remains genuinely structural** is only the 1 CTA/SM cap: FA3's ~98 KB of
+smem leaves no room for a second CTA, and the unfused kernel loses 1.38x
+(43.8 -> 60.3 us) when forced to one. That is the honest entry price of a single
+launch. Against 43.8 us it means the fused kernel's floor is ~60 us, not ~132 --
+so removing the spills should close most of the gap, and the schedule-quality
+argument then has to beat 1.38x rather than 3x.
 
-This one is not a new hypothesis from mechanism; it rests on ptxas numbers already
-recorded in `persistent_fa3_fused.cuh`.
+**Aliased smem is worth 11% and is NOT safe today.** 118.1 vs 132.4 us, but
+disjoint smem is the fix for a race: CUTLASS initialises pipeline mbarriers before
+the `sm_split` branch, so an aliased base of 0 puts the drain's slot inside FA3's
+`SharedStorage` (nondeterministic rel err 1.93 / 2.53 / 3.31). It fires only when
+a CTA drains FA2 before entering FA3, which the measurement configuration -- wgmma
+role empty -- could not trigger. Capturing the 11% means re-initialising FA3's
+pipeline state after the rendezvous.
 
-The fused kernel is declared
-`__launch_bounds__(FA3Traits::NUM_WARPS * 32, 1)` -- 384 threads, one CTA per SM,
-because that is FA3's warp-specialised width. With 65536 registers per SM, 384
-threads cap the allocation at **~170 registers per thread**. The standalone
-persistent kernel runs 128 threads per CTA at 2 CTAs/SM, i.e. 256 threads per SM,
-leaving roughly 256 per thread.
-
-The file already records what that costs: "the fused body compiles to 168
-registers with up to 4.4 KB of spill loads" (line 427), and separately "ptxas
-reported 6284 bytes of spill stores in this function against 604 when the base
-was provably zero" (line 119). So the FA2 mainloop inside the fused kernel runs
-the same code under a register budget roughly a third smaller, spilling kilobytes
-per thread.
-
-**Why this fits every measurement so far, where the other candidates did not:**
-
-- it is independent of how many SMs are reserved (6% over an 8x sweep) -- the
-  budget is per-thread and set by the launch bounds, not by the grid;
-- it is independent of the Q completion protocol (0.3%);
-- it predicts that **more** warpgroups make things **worse**, which is what width
-  3 measured (147.9 against 132.4 us): extra warpgroups do not raise the register
-  ceiling, they only add contention and spill traffic;
-- it survives at equal thread count per SM, which is the decisive one. The
-  baseline forced to 1 CTA/SM has 128 FA2 threads per SM, the same as the fused
-  kernel's FA2 role, and is still 2.19x faster (60.3 against 132.1 us). Equal
-  threads, equal CTAs, different register budget and different spill volume.
-
-**The test needs no GPU, and here is how far it got.** Compiling
-`tests/fused_fa3_persistent_ext.cu` locally with `-Xptxas -v` (torch 2.9.1 and
-nvcc are both present on the CPU box) fails for a reason worth recording, because
-it is a trap:
-
-```
-error: class "PersistentParams" has no member "group_id"   (and group_counter,
-group_nchunks, group_row_begin, group_nrows, group_kv_head, cluster_cursor,
-num_pers_clusters)
-```
-
-`PersistentParams` is defined by the **generated** `batch_attention_config.inc`,
-and the only copies in the local JIT cache
-(`~/.cache/flashinfer/90a/generated/...`) were produced by the **upstream**
-flashinfer installed in site-packages -- which has none of this fork's
-JIT-reduction fields. So the local cache cannot be used to compile this fork, and
-the include that looks like the obvious fix produces a header describing a
-different struct.
-
-The way through is to generate the `.inc` from **our** fork's codegen (its
-`flashinfer/jit` path with this fork's `persistent_params`), or to copy the one
-the pod already generated under its own JIT cache, and only then compile with
-`-Xptxas -v`. Compare the reported registers and spill stores/loads between
-`__launch_bounds__(128, 2)` and `__launch_bounds__(384, 1)`. If the
-384-thread form spills kilobytes where the 128-thread form spills hundreds of
-bytes, this is the 2.19x and the fix is structural: the FA2 role needs its own
-launch bounds, which a single fused launch cannot give it -- or FA3's width has
-to come down.
-
-That last point is the one that matters for the design. A single launch forces one
-set of launch bounds on both roles, and the role with the wider warp
-specialisation sets them. If this candidate holds, SM pre-assignment inside one
-kernel cannot be made free, and the structural cost is not the 1.38x from
-CTAs/SM alone but 1.38x times whatever the register ceiling costs.

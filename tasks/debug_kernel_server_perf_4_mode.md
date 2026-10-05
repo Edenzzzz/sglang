@@ -3870,11 +3870,27 @@ and no merge. The chunks overwrite each other and the surviving row is one
 chunk's answer -- softmax-renormalised against only its own slice, so wrong in
 value, not merely stale.
 
-Why the test suite is quiet about it: fixture 2's FA3-class row is
-`qo=72, kv=236`, far below any `kv_len_limit` the plan picks for that batch, so
-it is never split. `partial_o_nnz=56` in that fixture is the FA2 classes'
-splits, which do reduce correctly. The wgmma role has simply never been handed a
-long row.
+**CORRECTED, and this is the important correction in this entry.** I wrote that
+fixture 2 was quiet because its FA3 row is `kv=236` and never splits. Running the
+guard against fixture 2 refutes that: it fires, in both completion-protocol arms,
+at `scheduler.cuh:1495`. The arithmetic I should have done: fixture 2 routes
+*two* rows to task 3, `qo=72` (packed 504) and `qo=439` (packed 3073), whose KV
+totals 236 + 439 = 675 over 8 FA3 clusters, giving a `kv_len_limit` near 84 -- so
+the 439-long row splits into roughly six chunks.
+
+The consequence is that **fixture 2's earlier PASS is now suspect**, not
+reassuring. It reported rel err 3.2e-3 / 2.9e-3 / 6.9e-4 while, by this analysis,
+its task-3 rows were being split with no reduction behind them. One of two things
+is true and they are not equally good: either the `partial_o_nnz=56` I attributed
+to the FA2 classes was partly task 3's and the overwrite happened to be benign for
+this shape, or the guard's predicate over-fires relative to what the chunk loop
+actually emits. Resolving that is the first step of the reduction work, not an
+afterthought -- and either way the earlier claim that the wgmma role "has never
+been handed a long row" is withdrawn.
+
+This also makes the reduction the hard blocker rather than one item among several:
+with the guard in, fixture 2 itself no longer runs, so there is currently no
+fixture on which to validate the Q completion protocol either.
 
 **CORRECTED: it did not bind at 8192.** I predicted this would also break the
 ordinary serving workload, reasoning that at `--random-input-len 8192` with

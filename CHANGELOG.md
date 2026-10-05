@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.7.8 — The guard fires on fixture 2 (2026-10-05)
+
+Ran the plan guard against fixture 2 to validate Q's completion protocol and got
+a more useful answer than expected: the guard fires, in both arms, at
+`scheduler.cuh:1495`. Fixture 2 routes two rows to task 3 (`qo=72` packed 504 and
+`qo=439` packed 3073), 675 KV over 8 clusters gives a `kv_len_limit` near 84, and
+the 439-long row splits about six ways. So my claim that fixture 2's FA3 row is
+`kv=236` and never splits was wrong, and its earlier PASS at rel err 3.2e-3 is
+suspect rather than reassuring -- either the overwrite was benign for that shape
+or the guard over-fires relative to the chunk loop. Resolving which is step one of
+the reduction work.
+
+Net effect: the wgmma JIT reduction is now the hard blocker. With the guard in,
+fixture 2 does not run, so there is no fixture left on which to settle the Q
+completion protocol (`_noinc` vs drain) either.
+
+
 ## v0.7.7 — The first valid unified serving number: -66% (2026-10-05)
 
 Measured on a tree verified byte-exact against our fork, both arms back to back:

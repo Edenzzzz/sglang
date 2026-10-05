@@ -710,3 +710,39 @@ from `FLASHINFER_SM_PARTITION` inside the plan, and the default is **false** --
 so if that variable did not reach the plan process the ranges stayed
 `[0, num_clusters)` for every task and the MinHeap spread task 3 across all 132
 clusters, of which only 8 run FA3.
+
+### 15.2 Work items are now consumed; the fault moves to Q addressing
+
+With the q extent presented in packed units, the same configuration stops
+silently skipping and starts faulting:
+
+```
+CUDA error: operation not supported on global/shared address space
+```
+
+That is a TMA access outside its descriptor's mapped region, which is what a
+packed tile index does to a Q tensormap built over token-indexed rows: tile 15 of
+a 424-token row addresses row 1920, far past the descriptor. So the sequence is
+now fully explained end to end --
+
+| stage | state |
+|---|---|
+| plan emits task-3 items | **correct**: 116 items, clusters [0, 7] |
+| items reach the FA3 CTAs | **correct** |
+| tiles pass the range check | **correct** after the packed-extent fix |
+| Q/O addressing | **wrong**: packed rows addressed as tokens -> TMA fault |
+
+The remaining work is the packed row -> (token, head) map, and the fault tells us
+where it has to live. FA3 loads Q through TMA, and a tensormap is a dense
+strided region, so a packed tile -- whose rows are `(t, g)` pairs with `t = p / G`
+and `head = kv_head * G + p % G` -- cannot be expressed as one descriptor at
+gqa 7. Q must come in through `cp.async` instead, which is precisely what
+`FLASHINFER_SKIP_TMAQ` already does on this path (`sparse_mainloop.cuh` sets
+`USE_TMA_LOAD_KV = false` for KV for the same reason: a page gather is not a
+dense region).
+
+So the concrete remaining change is: compile the wgmma role with the Q TMA load
+replaced by a `cp.async` gather that maps packed row `p` to
+`(token = qo_indptr + p / G, head = kv_head * G + p % G)` for both the load and
+the epilogue's store. The epilogue's partial-write path for split-KV groups rides
+on the same mapping, so the two land together.

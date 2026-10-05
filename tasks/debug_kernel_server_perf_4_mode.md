@@ -38,7 +38,7 @@ predecessor effort (sync-free plan, mixed-kernel gate, 4-mode dispatch).
 ## Server integration
 - [x] [Unified queue wired into sglang](#unified-serving-perf) — one plan over all rows, behind `SGLANG_FUSED_UNIFIED`
 - [x] [Draft-step CPU-GPU sync removed](#spec-sync-audit) — and the rest of the spec path audited
-- [ ] Fused path's fused-counter regression — last A/B declined every batch silently; cause not yet found
+- [ ] [Unified path crashes under serving traffic](#unified-serving-crash) — passes the dumped batch, kills the scheduler on varied batches
 - [ ] CUDA-graph capture for mixed batches — not capturable today (host-side plan, env mutation); requirements in the handoff doc
 - [ ] Per-step planning cost — one plan instead of two removes an H2D, but the path was host-bound and this is unmeasured
 - [ ] [4-mode MTP serving schedule](#four-mode-blocked) — blocked on `mix_with_running` with a spec running batch
@@ -3414,6 +3414,30 @@ Next, in order: serving-path wiring in sglang (one plan over all rows,
 `FLASHINFER_FA3_TASK=1`, the two `-D`s in the ext build, `pers_row_offset = 0`),
 then the A/B against the 24,892.7 tok/s baseline with no `sm_fa3` fraction in
 play, then the async copies, then split-KV on a long-KV batch.
+
+<a id="unified-serving-crash"></a>
+### Unified path crashes under serving traffic
+
+The unified queue passes the dumped batch exactly and survived two full serving
+runs when its copies were slow (7,693 and 8,379 tok/s). After the
+`cp_async`/`barrier_Q` change it comes up, serves briefly, and the scheduler dies:
+the bench sees truncated HTTP payloads
+(`ClientPayloadError: Response payload is not completed`), the server log has one
+batch line and no further progress, and no `mixed_fused_fa3` composition line is
+ever printed. No `CUDA error` reaches the log, which is what a hard process death
+looks like here rather than a caught fault.
+
+So the standalone regression is necessary and not sufficient: it replays ONE
+batch shape (`qo=[424, 87, 1]`), while the server presents many -- several prefill
+rows, decode-only steps, varying page counts, and the `kv_c[-1] % 4` alignment
+that already caused a misaligned-address fault once on this path.
+
+Route, the one that found the previous three blocking bugs: `SGLANG_FUSED_DUMP`
+already exists and writes the first launch's shapes, strides, plan vectors and
+index arrays to an `.npz`. Run the unified arm under it, take the faulting batch
+into `test_fused_server_batch.py` as a second fixture alongside the current one,
+and fix against that. Until then the serving number is unobtainable rather than
+bad, and the two slow runs stand as the only honest unified measurements.
 
 <a id="unified-serving-perf"></a>
 ### Unified queue on the serving path: correct, and copy-bound

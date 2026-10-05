@@ -2518,3 +2518,50 @@ Next, cheapest first: `PTXAS_V=1` on the symmetric build to read the actual
 register counts per kernel (the 168 figure predates the warpgroup-barrier and
 slot changes); then make all three warpgroups run the same pre-FA3 code, which is
 what the width-3 drain does and is the fix this hypothesis predicts.
+
+##### Mechanism found: the fused body spills, so FA3's setmaxnreg contract is a lie
+
+`PTXAS_V=1` on the current symmetric build (disjoint smem, width 1):
+
+```
+ptxas info : Used 168 registers, used 16 barriers, 464 bytes cumulative stack size
+             464-744 bytes stack frame, 2296-2572 B spill stores, 2456-4392 B spill loads
+```
+
+Two facts, both measured rather than inferred:
+
+1. **All 16 hardware barriers are in use.** The id budget is not merely tight,
+   it is exhausted, which is why warpgroup-reentrant FA2 had to reuse ids.
+2. **The kernel spills**, up to 4.4 KB of spill loads against a 744-byte stack
+   frame.
+
+That is the race. Register allocation in CUDA is **per kernel**, not per
+warpgroup, and this kernel's body contains FA3's warp-specialised mainloop *and*
+the FA2 persistent mainloop, which is register-hungry. So every warpgroup is
+compiled at 168 registers with spill slots, and then FA3's producer executes
+`warpgroup_reg_dealloc<24>`, asserting it needs no more than 24. Code compiled
+for 168 registers plus spills, running after a dealloc to 24, reads whatever is
+there. The signature matches exactly: nondeterministic, magnitude varying run to
+run, FA3 only, FA2 rows untouched (they run before the dealloc).
+
+It also explains the asymmetry. In asymmetric mode the CTAs that run FA3 never
+execute the drain, so all three of their warpgroups reach the dealloc/alloc
+protocol in the same state and the lie is consistent; in symmetric mode warpgroup
+0 arrives having run the FA2 mainloop and spilled, and the others do not.
+
+**This is a structural argument against this fusion shape**, not a bug to patch:
+co-locating a register-hungry FA2 mainloop with FA3's warp-specialised body in
+one kernel forces one register allocation over both, and FA3's occupancy protocol
+depends on its producer path being small. Three ways forward, and the choice
+decides the kernel's architecture:
+
+1. Remove `setmaxnreg` from the fused kernel. FA3 then runs at the fused body's
+   allocation, losing the consumer warpgroups' 240-register budget -- i.e. giving
+   up some of FA3's own throughput to make the fusion sound.
+2. Shrink the FA2 mainloop's register footprint until the common allocation fits
+   FA3's protocol. The spill figures say that is a large gap, not a tuning knob.
+3. Keep the roles in separate kernels and co-schedule them, which is what the
+   measured class boundary already argues for on performance grounds -- but §10
+   showed serial dispatch costs -48%, so this means concurrent co-launch on
+   disjoint SM sets, i.e. the original pre-assignment shape with the geometry
+   problem of §12 rather than one kernel.

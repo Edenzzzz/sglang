@@ -60,65 +60,65 @@ measured. The unified split-KV reduction is the gate.
 - [x] 2026-10-05: **Serving fallback is strict** — a failed fused plan raises
       instead of silently comparing a mixture.
 
-## Kernel optimisations
-- [x] `2026-10-04` [Packed GQA for the wgmma role — class boundary](#packed-gqa-class-boundary) — 2.40x decode/draft, 1.70x verify, 1.00x chunks
-- [x] `2026-10-05` [Packed GQA — implemented and numerically exact](#unified-queue-numerically-correct) — 0/512 unwritten on the real batch
-- [x] `2026-10-04` [Do tiles 128 and 64 still belong in FA2?](#packed-gqa-class-boundary) — no for 128/64, yes for 16 (decode is bandwidth-bound)
-- [x] `2026-10-05` [Unified load-balance scheduler](#schedule-quality-4-mode) — imbalance 1.000 per task, waste 13.9% -> 54.8%
-- [x] `2026-10-04` [Dispatch gate rewritten from measurement](#packed-gqa-class-boundary) — `MIN_KV_TILES` was backwards and excluded the dominant row
-- [x] `2026-10-05` [Unified split-KV — FA2 side exercised and correct](#split-kv-overflow) — fixture 2 passes with 56 partial rows; the wgmma role's own split path still unexercised
-- [ ] `2026-10-06` [JIT reduction for the wgmma role](#split-kv-dark) — `partial_indptr`/`group_id` carried and ignored; a wrong answer for any split task-3 row, though no split was observed at 8192 and the guard has not yet been shown to fire
-- [ ] `2026-10-05` [Multicast / DSMEM](#multicast-open) — 1.33-1.59x in isolation; `FLASHINFER_FUSED_CLUSTER=2` still faults
-- [ ] `2026-10-05` [Fused epilogue: tree build as a task](#fused-epilogue-design) — designed, not built
-- [ ] `2026-10-05` [Cross-role backfill](#symmetric-retracted) — only existed in symmetric mode, which computes FA3 wrong; needs redoing on a correct path
-- [ ] `2026-10-05` Async/tiled packed copies — `cp.async` landed; single-warp width and the per-row O store remain (needs the indirection table)
-- [x] `2026-10-06` [Warpgroup-reentrant FA2](#why-fused-is-slow) — correct with aliased smem, but 384 threads is **slower**: more warpgroups lower the per-thread register ceiling that `mma.sync` needs
+## Kernel optimisations — 2026-10-06
+- [x] [Packed GQA for the wgmma role — class boundary](#packed-gqa-class-boundary) — 2.40x decode/draft, 1.70x verify, 1.00x chunks
+- [x] [Packed GQA — implemented and numerically exact](#unified-queue-numerically-correct) — 0/512 unwritten on the real batch
+- [x] [Do tiles 128 and 64 still belong in FA2?](#packed-gqa-class-boundary) — no for 128/64, yes for 16 (decode is bandwidth-bound)
+- [x] [Unified load-balance scheduler](#schedule-quality-4-mode) — imbalance 1.000 per task, waste 13.9% -> 54.8%
+- [x] [Dispatch gate rewritten from measurement](#packed-gqa-class-boundary) — `MIN_KV_TILES` was backwards and excluded the dominant row
+- [x] [Unified split-KV — FA2 side exercised and correct](#split-kv-overflow) — fixture 2 passes with 56 partial rows; the wgmma role's own split path still unexercised
+- [ ] [JIT reduction for the wgmma role](#split-kv-dark) — `partial_indptr`/`group_id` carried and ignored; a wrong answer for any split task-3 row, though no split was observed at 8192 and the guard has not yet been shown to fire
+- [ ] [Multicast / DSMEM](#multicast-open) — 1.33-1.59x in isolation; `FLASHINFER_FUSED_CLUSTER=2` still faults
+- [ ] [Fused epilogue: tree build as a task](#fused-epilogue-design) — designed, not built
+- [ ] [Cross-role backfill](#symmetric-retracted) — only existed in symmetric mode, which computes FA3 wrong; needs redoing on a correct path
+- [ ] Async/tiled packed copies — `cp.async` landed; single-warp width and the per-row O store remain (needs the indirection table)
+- [x] [Warpgroup-reentrant FA2](#why-fused-is-slow) — correct with aliased smem, but 384 threads is **slower**: more warpgroups lower the per-thread register ceiling that `mma.sync` needs
 
-## Structures evaluated
-- [x] `2026-10-04` [Static SM pre-assignment](#static-split-confirmed) — -14.4% / -14.0% / -11.5%, no winning fraction
-- [x] `2026-10-04` [Serial dispatch](#serial-dispatch-dead-end) — -48%, reverted, forecloses draft+verify fusion
-- [x] `2026-10-04` [Symmetric single kernel](#symmetric-retracted) — numerically wrong, four hypotheses eliminated, results retracted
-- [ ] `2026-10-06` [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), [cause found](#why-fused-is-slow) — register starvation: `mma.sync` at ~168 regs instead of ~255, from FA3's 384-thread launch bounds
+## Structures evaluated — 2026-10-06
+- [x] [Static SM pre-assignment](#static-split-confirmed) — -14.4% / -14.0% / -11.5%, no winning fraction
+- [x] [Serial dispatch](#serial-dispatch-dead-end) — -48%, reverted, forecloses draft+verify fusion
+- [x] [Symmetric single kernel](#symmetric-retracted) — numerically wrong, four hypotheses eliminated, results retracted
+- [ ] [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), [cause found](#why-fused-is-slow) — register starvation: `mma.sync` at ~168 regs instead of ~255, from FA3's 384-thread launch bounds
 
-## Server integration
-- [x] `2026-10-06` [Unified queue wired into sglang](#unified-serving-perf) — one plan over all rows, behind `SGLANG_FUSED_UNIFIED`
-- [x] `2026-10-05` [Draft-step CPU-GPU sync removed](#spec-sync-audit) — and the rest of the spec path audited
-- [x] `2026-10-05` [The serving fault was a barrier_Q hang, now fixed](#unified-serving-crash) — fixture 2 reproduced it, then passed: 0/512 unwritten, rel err 3.2e-3 / 2.9e-3 / 6.9e-4
-- [ ] `—` CUDA-graph capture for mixed batches — not capturable today (host-side plan, env mutation); requirements in the handoff doc
-- [ ] `—` Per-step planning cost — one plan instead of two removes an H2D, but the path was host-bound and this is unmeasured
-- [ ] `—` [4-mode MTP serving schedule](#four-mode-blocked) — blocked on `mix_with_running` with a spec running batch
+## Server integration — 2026-10-05
+- [x] [Unified queue wired into sglang](#unified-serving-perf) — one plan over all rows, behind `SGLANG_FUSED_UNIFIED`
+- [x] [Draft-step CPU-GPU sync removed](#spec-sync-audit) — and the rest of the spec path audited
+- [x] [The serving fault was a barrier_Q hang, now fixed](#unified-serving-crash) — fixture 2 reproduced it, then passed: 0/512 unwritten, rel err 3.2e-3 / 2.9e-3 / 6.9e-4
+- [ ] CUDA-graph capture for mixed batches — not capturable today (host-side plan, env mutation); requirements in the handoff doc
+- [ ] Per-step planning cost — one plan instead of two removes an H2D, but the path was host-bound and this is unmeasured
+- [ ] [4-mode MTP serving schedule](#four-mode-blocked) — blocked on `mix_with_running` with a spec running batch
 
-## Schedule exploration
-- [x] `2026-10-05` [EDF predictability, fused vs baseline](#edf-model-classes) — parity at ~1.5% MAPE with an adequate model class; the linear-fit falsification was an artefact
-- [ ] `—` SM-split / cluster-cap / chunk-size sweeps on a correct kernel — all prior sweeps used symmetric mode and are void
-- [ ] `—` Acceptance-length (EWMA) as a perf-model input — needs an MTP trace
+## Schedule exploration — 2026-10-05
+- [x] [EDF predictability, fused vs baseline](#edf-model-classes) — parity at ~1.5% MAPE with an adequate model class; the linear-fit falsification was an artefact
+- [ ] SM-split / cluster-cap / chunk-size sweeps on a correct kernel — all prior sweeps used symmetric mode and are void
+- [ ] Acceptance-length (EWMA) as a perf-model input — needs an MTP trace
 
-## Multi-node schedule tests (H20 only, <= 16 GPUs, trial `vibecuda`)
+## Multi-node schedule tests (H20 only, <= 16 GPUs, trial `vibecuda`) — not started
 All four points are written up in [`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md); none is measured.
-- [ ] `—` Route to highest cache-hit node first, with an SLO veto from EDF queue-head requests
-- [ ] `—` Best-effort cache migration, and whether colocation encourages replication (ThunderAgent argument)
-- [ ] `—` EDF predictor with acceptance length — note the premise is measured false for this kernel, true only for the overlap kernel
-- [ ] `—` Two-way RDMA / congestion: complete graph vs bipartite, randomised source among multi-hit nodes
+- [ ] Route to highest cache-hit node first, with an SLO veto from EDF queue-head requests
+- [ ] Best-effort cache migration, and whether colocation encourages replication (ThunderAgent argument)
+- [ ] EDF predictor with acceptance length — note the premise is measured false for this kernel, true only for the overlap kernel
+- [ ] Two-way RDMA / congestion: complete graph vs bipartite, randomised source among multi-hit nodes
 
-## Correctness and bring-up record
-- [x] `2026-10-05` [Bringing the unified queue up: four faults, in order](#unified-bringup) — index spaces, packed extent, TMA addressing, plan coverage
-- [x] `2026-10-04` [Why pre-assignment could not win: launch geometry](#launch-geometry) — one CTA/SM vs two, ~128 vs ~256 FA2 threads
-- [x] `2026-10-05` [Device-side spec for the wgmma role](#unified-device-spec)
-- [x] `2026-10-05` [The unified plan covers all rows](#unified-plan-coverage) — no row split, no `pers_row_offset`
-- [x] `2026-10-05` [WITHDRAWN: no stale header copy](#withdrawn-stale-headers) — a partial push, misread as a JIT include tree
-- [x] `2026-10-04` [H200 server-side A/B, 2026-10-04](#h200-ab-2026-10-04) — earlier split/cap/backfill tuning, symmetric-mode and therefore void
-- [x] `2026-10-05` [Lineage and sibling documents](#lineage)
-- [x] `2026-10-05` [Audit, superseded by this catalogue](#audit-superseded)
+## Correctness and bring-up record — 2026-10-06
+- [x] [Bringing the unified queue up: four faults, in order](#unified-bringup) — index spaces, packed extent, TMA addressing, plan coverage
+- [x] [Why pre-assignment could not win: launch geometry](#launch-geometry) — one CTA/SM vs two, ~128 vs ~256 FA2 threads
+- [x] [Device-side spec for the wgmma role](#unified-device-spec)
+- [x] [The unified plan covers all rows](#unified-plan-coverage) — no row split, no `pers_row_offset`
+- [x] [WITHDRAWN: no stale header copy](#withdrawn-stale-headers) — a partial push, misread as a JIT include tree
+- [x] [H200 server-side A/B, 2026-10-04](#h200-ab-2026-10-04) — earlier split/cap/backfill tuning, symmetric-mode and therefore void
+- [x] [Lineage and sibling documents](#lineage)
+- [x] [Audit, superseded by this catalogue](#audit-superseded)
 
-## Pod and environment
-- [ ] `2026-10-05` [Re-establish the GPU working set](#pod-restore) — fork tree pushed (805 files, byte-exact); three mechanical gaps left, listed in `drivers/provision_trees.sh`: spdlog unpushed, stale absolute symlinks in `flashinfer/data`, and the csrc jinja unreadable — the 2026-10-05 trial expired; a replacement single-GPU `vibecuda` is running and empty
+## Pod and environment — 2026-10-05
+- [ ] [Re-establish the GPU working set](#pod-restore) — fork tree pushed (805 files, byte-exact); three mechanical gaps left, listed in `drivers/provision_trees.sh`: spdlog unpushed, stale absolute symlinks in `flashinfer/data`, and the csrc jinja unreadable — the 2026-10-05 trial expired; a replacement single-GPU `vibecuda` is running and empty
 
-- [ ] `2026-10-05` [The restored pod's serving tree was upstream, not our fork](#env-contamination) — rebuild in flight; no serving number may be read from it until then
+- [ ] [The restored pod's serving tree was upstream, not our fork](#env-contamination) — rebuild in flight; no serving number may be read from it until then
 
-## Workload capture for handoff
-- [x] `2026-10-05` [Real online 2-mode trace](fused_kernel_handoff.md#5-the-workloads) — 2121 steps/arm, JSON corpus in `fused_specdec_workload/sets/`
-- [ ] `—` Real online **4-mode** trace with draft+verify co-resident — the stated gap; blocked with the 4-mode schedule
-- [ ] `—` Long-context (>64k, tracelab) A/B — written, not yet run; this is where attention dominates the step.
+## Workload capture for handoff — 2026-10-05
+- [x] [Real online 2-mode trace](fused_kernel_handoff.md#5-the-workloads) — 2121 steps/arm, JSON corpus in `fused_specdec_workload/sets/`
+- [ ] Real online **4-mode** trace with draft+verify co-resident — the stated gap; blocked with the 4-mode schedule
+- [ ] Long-context (>64k, tracelab) A/B — written, not yet run; this is where attention dominates the step.
   Gated on [the wgmma JIT reduction](#split-kv-dark): at >64k the FA3-class rows are exactly the ones the
   plan splits, so the run would produce wrong numbers before it produced slow ones
 
@@ -129,7 +129,7 @@ that have one: measurements, the faults behind them, and the reasoning that was
 checked. Items without a detail section name the file that owns them.
 
 <a id="lineage"></a>
-### Lineage and sibling documents
+### Lineage and sibling documents — 2026-10-05
 
 **Lineage.** Split out of `debug_kernel_server_perf.md` on 2026-10-05, which had
 reached 3428 lines spanning two unrelated efforts. That document keeps the earlier
@@ -156,7 +156,7 @@ useful part.
 
 
 <a id="h200-ab-2026-10-04"></a>
-### H200 server-side kernel A/B (2026-10-04)
+### H200 server-side kernel A/B — 2026-10-04
 
 Hardware: 1x NVIDIA H200 143GB, 132 SMs, sm_90a (merlin trial `vibecuda`, job
 `e59d6e2974d3ed90`, queue `h100-sxm-80gb.vmss-eastus2-vlmh200.agent.merge`).
@@ -2779,7 +2779,7 @@ of the four candidate couplings is responsible.
 
 
 <a id="packed-gqa-class-boundary"></a>
-### Which class belongs on which mainloop, measured with packing
+### Which class belongs on which mainloop, measured with packing — 2026-10-04
 
 The question "why not give tile 64 and tile 128 to the wgmma mainloop" had no
 honest answer while FA3 ran unpacked, because unpacked FA3 loses the short-q
@@ -2812,7 +2812,7 @@ Read off it:
   FA2 overlap machinery is still wanted -- scoped to the 1-token class.
 
 <a id="static-split-confirmed"></a>
-### The static SM split is the wrong structure, confirmed on exact numerics
+### The static SM split is the wrong structure, confirmed on exact numerics — 2026-10-04
 
 > **The original table here was measured in symmetric mode, which computes FA3
 > wrong, so it was withdrawn. The sweep was re-run in asymmetric mode, which is
@@ -2858,7 +2858,7 @@ the JIT-reduction group, and every CTA pulls from the shared queue rather than
 owning a slice.
 
 <a id="serial-dispatch-dead-end"></a>
-### Serial dispatch: a dead end twice over
+### Serial dispatch: a dead end twice over — 2026-10-04
 
 §9 showed SM pre-assignment loses, and the per-kernel times suggested the two
 mainloops run back-to-back on the whole device would give 1.74x on attention
@@ -2891,7 +2891,7 @@ single launch, one queue over the whole device, the wgmma mainloop as task 3 of
 `kv_start`/`kv_end`, and the JIT reduction the FA2 runners already perform.
 
 <a id="unified-device-spec"></a>
-### Device-side spec for the wgmma role on task 3
+### Device-side spec for the wgmma role on task 3 — 2026-10-05
 
 The plan side is done and compiles for both task counts (flashinfer `ca31e08`).
 What remains is device-side, and it is three separable pieces. Order matters:
@@ -2949,7 +2949,7 @@ fails on the fused kernel and the open route is incremental reconstruction from
 measurements, §7).
 
 <a id="launch-geometry"></a>
-### Why pre-assignment could not win: launch geometry, not the split
+### Why pre-assignment could not win: launch geometry, not the split — 2026-10-04
 
 The FA2 role is crippled inside the fused launch at **every** split, for a reason
 independent of how the SMs are divided:
@@ -3078,7 +3078,7 @@ past all three slots, and the launch's dynamic smem request covers
 `base + 3 * slot + 48` instead of one slot's worth.
 
 <a id="withdrawn-stale-headers"></a>
-### WITHDRAWN: there was no stale header copy
+### WITHDRAWN: there was no stale header copy — 2026-10-05
 
 > **This section's conclusion was wrong and is kept only because the reasoning
 > error is instructive.** The 4-task plan failed to build and the diagnostic
@@ -3135,7 +3135,7 @@ memory covers all four: prove the change is in the binary before believing a
 number.
 
 <a id="unified-plan-coverage"></a>
-### The unified plan covers all rows, not the FA2 tail
+### The unified plan covers all rows, not the FA2 tail — 2026-10-05
 
 Verified on the pod: `BatchAttention.plan()` with `FLASHINFER_FA3_TASK=1` emits a
 **60-entry** 4-task plan (49 for 3 tasks), and the default asymmetric path still
@@ -3170,7 +3170,7 @@ and its `N_FA3_ROWS` assumption need updating in the same change, or the test
 will mislabel correct output.
 
 <a id="unified-bringup"></a>
-### Bringing the unified queue up: four faults, in order
+### Bringing the unified queue up: four faults, in order — 2026-10-05
 
 The unified path builds, runs, and the FA2 side of it is correct. With
 `UNIFIED=1` (one plan over all rows, `pers_row_offset=0`, `-D` confirmed present
@@ -3407,7 +3407,7 @@ Option 2 is preferable: it needs no CuTe divide semantics, and the mapping it us
 is the one the host test already checks.
 
 <a id="split-kv-overflow"></a>
-### Split-KV: fixed, and fixture 2 now passes
+### Split-KV: fixed, and fixture 2 now passes — 2026-10-05
 
 **Resolved.** With `barrier_Q` drained and arrived from one thread, the captured
 serving-crash batch is numerically correct:
@@ -3532,7 +3532,7 @@ So the remaining device work is not on the critical path to a first correct
 unified run, which reorders it behind validating what is already built.
 
 <a id="unified-queue-numerically-correct"></a>
-### The unified queue is numerically correct
+### The unified queue is numerically correct — 2026-10-05
 
 ```
 sm_split=8: unwritten (NaN) rows = 0/512
@@ -3578,7 +3578,7 @@ then the A/B against the 24,892.7 tok/s baseline with no `sm_fa3` fraction in
 play, then the async copies, then split-KV on a long-KV batch.
 
 <a id="pod-restore"></a>
-### Re-establishing the GPU working set
+### Re-establishing the GPU working set — 2026-10-05
 
 The trial `e59d6e2974d3ed90` reached `done` mid-investigation, taking
 `/dev/shm/w` with it: the venv, the Qwen2.5-7B weights, the flashinfer tree, the
@@ -3613,7 +3613,7 @@ the expiry interrupted is fixture 2 (the captured crash batch), and it is a sing
 command once the set above exists.
 
 <a id="unified-serving-crash"></a>
-### The faulting serving batch, captured
+### The faulting serving batch, captured — 2026-10-05
 
 `SGLANG_FUSED_DUMP` on the unified arm, first launch:
 
@@ -3647,7 +3647,7 @@ This batch is the second fixture to add to `test_fused_server_batch.py`; the
 current one cannot reproduce the crash because it has one task-3 row and
 `kv >> packed_qo` on every row.
 
-### Unified path crashes under serving traffic
+### Unified path crashes under serving traffic — 2026-10-05
 
 The unified queue passes the dumped batch exactly and survived two full serving
 runs when its copies were slow (7,693 and 8,379 tok/s). After the
@@ -4028,7 +4028,7 @@ Until that lands, the honest statement about long context is that the kernel has
 no correct long-context path at all on the wgmma role.
 
 <a id="env-contamination"></a>
-### The restored pod's serving tree was upstream sglang, not our fork
+### The restored pod's serving tree was upstream sglang, not our fork — 2026-10-05
 
 Worth recording because it invalidates a class of measurement rather than one
 number, and because the previous entry in this file says the fork tree was
@@ -4086,7 +4086,7 @@ through another five-minute server start.
 
 
 <a id="clean-tree-ab-2026-10-05"></a>
-### Unified vs baseline on a verified tree, 2026-10-05
+### Unified vs baseline on a verified tree, 2026-10-05 — 2026-10-05
 
 The first serving A/B whose software stack is known to be ours (manifest-checked
 `EXTRA=0 MISSING=0 MISMATCH=0` against our 725 files -- see
@@ -4136,7 +4136,7 @@ run, which additionally needs [the wgmma reduction](#split-kv-dark).
 
 
 <a id="task3-redundant-work"></a>
-### 200 chunks, a correct answer, and the hypothesis that reconciles them
+### 200 chunks, a correct answer, and the hypothesis that reconciles them — 2026-10-06
 
 The exact guard -- keyed on emitted group ids rather than the `split_kv`
 predicate -- reports **200 task-3 work items carrying a JIT-reduction group id**
@@ -4186,7 +4186,7 @@ creating.
 
 
 <a id="task3-dump-resolved"></a>
-### RESOLVED: the chunks are genuine partials, and the spec stands
+### RESOLVED: the chunks are genuine partials, and the spec stands — 2026-10-06
 
 The dump settles it, and against my hypothesis. Task 3's items on fixture 2 carry
 true slices, not full-row copies:
@@ -4230,7 +4230,7 @@ result for a different routing.
 
 
 <a id="wgmma-role-unreachable"></a>
-### The unified split-KV reduction is unwired on the wgmma role, and that blocks every fused measurement
+### The unified split-KV reduction is unwired on the wgmma role, and that blocks every fused measurement — 2026-10-06
 
 **Framing corrected.** Earlier revisions said "FA3 cannot run split rows" and "the
 wgmma role cannot run real work". Both are wrong. FA3 processes a KV chunk
@@ -4295,7 +4295,7 @@ s = 1.7-2.4 that is f > 0.40-0.48. At f = 0.9, s = 2.0 the attention-side gain i
 and short of the 30% bar, which is why the register fix (3x -> 1.38x) matters.
 
 <a id="why-fused-is-slow"></a>
-### Why the fused kernel is slow: register starvation, not scheduling
+### Why the fused kernel is slow: register starvation, not scheduling — 2026-10-06
 
 **The short answer.** `__launch_bounds__(384, 1)` -- FA3's warp-specialised width
 -- caps the static allocation at 65536/384 = **~170 registers per thread**. FA2's

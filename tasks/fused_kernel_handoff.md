@@ -789,3 +789,43 @@ This is the whole remaining gap between the unified queue running and being
 measurable: everything upstream is verified (plan emits 116 items into the right
 clusters, items reach the FA3 CTAs, tiles pass the range check), and the one
 fault left is this addressing.
+
+### 15.4 The packed Q layout is affine — no gather needed
+
+Reading `get_local_tile_tensor` (`hopper/utils.cuh:65`) changes the shape of the
+remaining work. It builds Q's tile tensor as `m_tensor(_, _, head_idx)`, tiled at
+`offset = qo_indptr` over `seq_len` — i.e. one head's token-major slab.
+
+For one kv head's group, a packed row `p = t * G + g` maps to
+`token = qo_indptr + t`, `head = kv_head * G + g`. **Both are affine strides**, so
+the packed view is one CuTe layout with a nested row mode, not a gather:
+
+```
+shape  ( (G, seq_len), D )
+stride ( (q_stride_h, q_stride_n), _1 )
+```
+
+with the base pointer at `(qo_indptr, kv_head * G)`. Flattening the row mode gives
+exactly `p = g + G * t` in CuTe's left-fastest order, which is the packed index the
+plan's `q_start` already uses. `local_tile` by `CTA_TILE_Q` then works unchanged.
+
+That matters for three reasons:
+
+1. **No `cp.async` gather and no predicate machinery** — the earlier framing
+   (mirror the KV page gather) was heavier than necessary. The KV gather needs
+   indirection because page ids come from an array; the packed Q view does not,
+   because the head is a stride, not a lookup.
+2. **TMA is not fundamentally excluded either.** A 3-mode descriptor over
+   `(G, seq_len, D)` is dense and strided, so the "a tensormap cannot express
+   this" conclusion in 15.2/15.3 was wrong. Keeping TMA would preserve
+   `barrier_Q`'s transaction semantics and avoid the consumer-wait coupling
+   entirely, which is the cheaper route to try first.
+3. The epilogue's O store takes the same layout with `o_stride_n` / `o_stride_h`,
+   and the split-KV partial write indexes `partial_o` by packed row already, so
+   the three stay consistent by construction rather than by matching three hand
+   written maps.
+
+Correction to 15.2 and 15.3: they framed this as needing `cp.async` because a
+packed tile "cannot be expressed as one descriptor at gqa 7". That is false — the
+confusion was with the KV *page* gather, which genuinely cannot, since its row
+indices come from an index array rather than from a stride.

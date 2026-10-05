@@ -868,3 +868,23 @@ Two ways forward, both small:
 
 Option 2 is preferable: it needs no CuTe divide semantics, and the mapping it uses
 is the one the host test already checks.
+
+### 15.6 The regression batch has no split-KV groups, so it isolates the packed mapping
+
+Read back from the plan: task 3 holds 116 work items and **0 of them carry a
+group id** (`group_id >= 0` count is zero, distinct groups zero). The batch's KV
+lengths (4001 / 87 / 14) sit under the chunking limit, so every wgmma work item is
+write-through.
+
+Two consequences worth keeping:
+
+1. The unified regression now running tests the **packed-GQA mapping alone**. If
+   it passes, the unified queue is functionally correct for non-split batches,
+   and nothing about the epilogue's partial path is implicated either way.
+2. The split-KV partial write and in-kernel reduce therefore need their own test
+   with a long-KV batch -- `kv_len_limit` has to be exceeded for any group to
+   exist. The microbenches already have the shapes: `row_cmp.py`'s
+   `500 x 32768` row is 256 KV tiles and will split.
+
+So the remaining device work is not on the critical path to a first correct
+unified run, which reorders it behind validating what is already built.

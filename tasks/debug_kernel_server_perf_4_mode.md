@@ -16,13 +16,26 @@ measured. The unified split-KV reduction is the gate.
 
 ## Tasks, in priority order — 2026-10-06
 
-- [ ] **1. Unified JIT split-KV reduction** — 2026-10-06: two of four pieces
-      landed and compiling. `store_partial` + shared `partial_o`/`partial_lse`
-      params (`eb6b5e2`); work-tile trait + dispatch (`082cb84`). Remaining: the
-      release/acquire handshake and `MergeGroupJIT` call from
-      `persistent.cuh:575-640`, and passing the group tables/merge maps into the
-      epilogue params. Gate: fixture 2 (200 task-3 items today) must match the
-      reference at ~3e-3 with `partial_o_nnz` > 56.
+- [ ] **1. Unified JIT split-KV reduction** — 2026-10-06: all five pieces written,
+      one compile error left in the fused instantiation.
+      Landed: `store_partial` + shared `partial_o`/`partial_lse` params (`eb6b5e2`);
+      work-tile SFINAE trait + dispatch (`082cb84`); group tables in the epilogue
+      params (`b3f173b`); `MergeGroupJIT` extracted to `jit_merge.cuh` so one
+      implementation serves both roles (`01d0c2f`); the release/acquire handshake
+      (`f55e3a2`).
+      **Blocker:** `prefill_sm90.cuh:331` — "no instance of function template
+      `CollectiveEpilogue<FA3Traits>::store_partial` matches the argument list".
+      The signature and the call agree on all nine arguments by inspection, so it
+      is an overload-resolution detail not yet found. Note the trap that hid it:
+      compiling `prefill_sm90.cuh` standalone passes, because the upstream
+      scheduler takes the `if constexpr` false branch and `store_partial` is never
+      instantiated. Only the fused TU with `kUnifiedWgmma=true` instantiates it, so
+      **the local compile check is not sufficient for this path** — build
+      `tests/fused_fa3_persistent_ext.cu` on the pod, or generate this fork's
+      `batch_attention_config.inc` locally (the cached one is upstream's and lacks
+      our `PersistentParams` fields).
+      Gate once it builds: fixture 2 reports 200 task-3 items today and must return
+      matching the reference at ~3e-3 with `partial_o_nnz` > 56.
       [detail](#wgmma-role-unreachable)
 - [ ] **2. Per-role parity vs standalone SOTA** — FA3 vs flash-attention, FA2 vs
       the stock persistent kernel, on fixed-input kernel timing with L2-swizzled

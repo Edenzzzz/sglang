@@ -829,3 +829,42 @@ Correction to 15.2 and 15.3: they framed this as needing `cp.async` because a
 packed tile "cannot be expressed as one descriptor at gqa 7". That is false — the
 confusion was with the KV *page* gather, which genuinely cannot, since its row
 indices come from an index array rather than from a stride.
+
+### 15.5 The packed view indexes correctly but cannot be tiled with `local_tile`
+
+Two separate facts, and only the first is settled.
+
+**Indexing works.** A host test over a 28-head, gqa-7, token-major Q layout walks
+every `(t, g)` of the nested view — shape `((G, seq_len), D)`, stride
+`((head_stride, token_stride), 1)` — and every packed row lands on
+`(off + t) * H * D + (kv * G + g) * D`. So `p = g + G * t` addresses exactly the
+right row, with no gather.
+
+**Tiling it does not.** Wrapping that view in `local_tile(..., tile_shape,
+make_coord(_, _0{}))` fails to compile:
+
+```
+cute/layout.hpp(1572): error: static assertion failed
+  "logical_divide: Too many modes in tiler."
+```
+
+`local_tile` wants a tiler whose rank matches the tensor's, and mode 0 here is
+itself rank 2, so dividing it by a scalar `CTA_TILE_Q` is not the operation it
+expects. The underlying reason is real rather than cosmetic: at `G = 7` a
+128-row packed tile **straddles heads unevenly** — it spans 18 tokens plus 2 rows,
+so no uniform `(G, n)` sub-shape describes a tile. A flat row mode is not
+available either, since `G * head_stride = 7D` while `token_stride = 28D`, so the
+packed rows are genuinely non-contiguous.
+
+Two ways forward, both small:
+
+1. `zipped_divide` the nested view and index the resulting tile mode, which is
+   what `local_tile` does internally but without requiring rank agreement.
+2. Skip tiling entirely: the copy already loops over rows of the tile, so give it
+   the verified nested view plus `tile_base = q_tile_idx * CTA_TILE_Q` and let each
+   row compute `make_coord(make_coord((tile_base + i) % G, (tile_base + i) / G), _)`.
+   Predicate off rows past `packed_qo_len`. This keeps the one verified mapping as
+   the single source of truth, and the same expression serves the epilogue's store.
+
+Option 2 is preferable: it needs no CuTe divide semantics, and the mapping it uses
+is the one the host test already checks.

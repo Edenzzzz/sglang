@@ -65,6 +65,9 @@ All four points are written up in [`pd_colocation_vs_disagg.md`](pd_colocation_v
 - [x] [Lineage and sibling documents](#lineage)
 - [x] [Audit, superseded by this catalogue](#audit-superseded)
 
+## Pod and environment
+- [ ] [Re-establish the GPU working set](#pod-restore) — the 2026-10-05 trial expired; a replacement single-GPU `vibecuda` is running and empty
+
 ## Workload capture for handoff
 - [x] [Real online 2-mode trace](fused_kernel_handoff.md#5-the-workloads) — 2121 steps/arm, JSON corpus in `fused_specdec_workload/sets/`
 - [ ] Real online **4-mode** trace with draft+verify co-resident — the stated gap; blocked with the 4-mode schedule
@@ -3414,6 +3417,34 @@ Next, in order: serving-path wiring in sglang (one plan over all rows,
 `FLASHINFER_FA3_TASK=1`, the two `-D`s in the ext build, `pers_row_offset = 0`),
 then the A/B against the 24,892.7 tok/s baseline with no `sm_fa3` fraction in
 play, then the async copies, then split-KV on a long-KV batch.
+
+<a id="pod-restore"></a>
+### Re-establishing the GPU working set
+
+The trial `e59d6e2974d3ed90` reached `done` mid-investigation, taking
+`/dev/shm/w` with it: the venv, the Qwen2.5-7B weights, the flashinfer tree, the
+sglang `python/` tree and every driver script. A replacement was forked to
+`f393156fcc0614b3` -- same name `vibecuda`, 1 GPU, same queue
+`h100-sxm-80gb.vmss-eastus2-vlmh200.agent.merge` -- and `runs fork` needs
+`overrides.attachments: []`, because the inherited attachments come back in a
+shape the create endpoint rejects. It lands on the same node (`n125-071-090`) but
+with an empty `/dev/shm` and no repo checkouts.
+
+What has to be restored, in order:
+
+1. a venv with torch 2.8/cu128 (the system python is 2.9.1/cu131 and the two are
+   not interchangeable here -- `serve.sh` used the venv deliberately);
+2. the flashinfer tree at `/dev/shm/w/fi`, which `tests/sync_to_pod.sh` populates
+   from the committed source with per-file sentinels;
+3. the sglang `python/` tree at `/dev/shm/w/python`;
+4. the model weights;
+5. the driver scripts -- `serve.sh`, the A/B drivers, `uab.sh`, `dmp.sh` -- which
+   are reproducible from this document but were never committed, which is the
+   avoidable loss here. They belong in `tasks/fused_specdec_workload/` next time.
+
+Nothing in either repository was lost; both are committed. The measurement that
+the expiry interrupted is fixture 2 (the captured crash batch), and it is a single
+command once the set above exists.
 
 <a id="unified-serving-crash"></a>
 ### The faulting serving batch, captured

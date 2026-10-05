@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.8.3 — The width-3 probe is void by its own validity check (2026-10-05)
+
+Giving the fused FA2 role all 384 threads (`SGLANG_FUSED_WG_DRAIN=3`, numerically
+wrong, perf probe only) appeared to recover most of the 1.50x: 505.85 tok/s / 21.47
+ms ITL against width 1's 397.88 / 27.41. The composition counter refutes it --
+1897 (47.4%) against 53116 (96.2%), so the arm pushed a twenty-eighth as much work
+through the fused path. Corrupt FA2 output ends sequences early, fewer decode steps
+follow, and the benchmark finishes faster by doing less; TTFT dropping to 3255.95 ms
+is not what a decode-side thread-count fix looks like.
+
+The thread-count attribution is therefore unproven and serving is the wrong
+instrument for it -- a wrong-numerics arm can always shift composition and buy an
+apparent win. It needs a kernel-level timing on a fixed fixture batch instead. The
+1.50x itself stands; its cause does not.
+
+
 ## v0.8.2 — The 66% decomposes into two causes (2026-10-05)
 
 Routing every row to the fused kernel's FA2 roles, leaving the wgmma role idle,

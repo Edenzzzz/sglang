@@ -1507,6 +1507,12 @@ class FlashInferAttnBackend(AttentionBackend):
                 # fixture 2 (rel err 3.3e-3, 0/512 unwritten).
                 f"-DFLASHINFER_FUSED_Q_MBARRIER="
                 f"{os.environ.get('SGLANG_FUSED_Q_MBARRIER', '0')}",
+                # Drain width. 1 gives the FA2 role 128 of the CTA's 384 threads
+                # and has known-good numerics; 3 gives it all 384 but corrupts
+                # FA2. Exposed so the thread-count question can be measured --
+                # any width-3 number is a PERF PROBE ONLY and is not a result.
+                f"-DFLASHINFER_FUSED_WG_DRAIN="
+                f"{os.environ.get('SGLANG_FUSED_WG_DRAIN', '1')}",
                 "-U__CUDA_NO_HALF_OPERATORS__", "-U__CUDA_NO_HALF_CONVERSIONS__",
                 "-U__CUDA_NO_HALF2_OPERATORS__", "-U__CUDA_NO_BFLOAT16_OPERATORS__",
                 "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",

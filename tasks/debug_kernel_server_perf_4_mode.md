@@ -4257,3 +4257,43 @@ real work suggests plan-side imbalance; both are measurable with the existing
 `PROFILER_EVENT_*` hooks. For cause 1, the question is structural and was already
 answered once: either the FA2 role gets its native 2 CTAs/SM back, or SM
 pre-assignment keeps paying 1.5x before any fusion benefit begins.
+
+
+<a id="width3-probe-void"></a>
+### VOID: the width-3 probe failed its own validity check
+
+The probe was meant to answer whether the fused FA2 path's 1.50x is thread-count
+bound, by giving the FA2 role all 384 of the CTA's threads instead of 128
+(`SGLANG_FUSED_WG_DRAIN=3`, numerically wrong for FA2 and run as a perf probe
+only).
+
+| arm | output tok/s | mean ITL (ms) | fused composition |
+|---|---|---|---|
+| baseline | 590.58 | 18.26 | n/a |
+| fused FA2-only, width 1 | 397.88 | 27.41 | 53116 (96.2%) |
+| fused FA2-only, width 3 | 505.85 | 21.47 | **1897 (47.4%)** |
+
+Read naively this looks like most of the 1.50x recovered (27.41 -> 21.47, i.e.
+1.18x of baseline). **It is not a valid comparison, and the counter says so.**
+The forward-composition counter fell from 53116 at 96.2% to 1897 at 47.4%: the
+width-3 arm put a twenty-eighth as much work through the fused path as the arm it
+is being compared against. The most likely mechanism is the one the probe was
+warned to expect -- width 3 corrupts FA2 output, corrupt logits end sequences
+early, shorter sequences mean fewer decode steps and so fewer fused calls, and a
+faster benchmark follows from doing less work rather than doing it faster. The
+TTFT also drops to 3255.95 ms, which is not what a decode-side thread-count fix
+would do.
+
+So the thread-count question is **still unanswered**, and serving is the wrong
+instrument for it: any arm whose numerics are wrong can shift the composition and
+buy an apparent win. It has to be answered at kernel level, where the work is
+fixed by construction -- time the fused kernel on the captured fixture batch at
+width 1 against width 3 with identical inputs, and compare kernel time, not
+tokens per second.
+
+This is the validity rule in the project memory doing its job
+(check the composition counter before accepting any fused throughput number), and
+it is worth noting that the rule caught a false positive that confirmed the
+hypothesis I was hoping for. The 1.50x from
+[the decomposition](#deficit-decomposed) stands; its attribution to thread count
+does not.

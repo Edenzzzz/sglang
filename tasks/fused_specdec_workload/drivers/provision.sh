@@ -17,12 +17,19 @@ if [ ! -x $W/venv/bin/python ]; then
   # The full set, learned by running into them one at a time: a freshly cloned
   # flashinfer wants apache-tvm-ffi, and sglang's server path wants pynvml before
   # it will even import. Installing them together saves a build cycle per miss.
+  # Install the deps FIRST, then pin torch LAST. Installing them after torch
+  # silently upgraded it to a version that requires C++20, which surfaced as
+  # "#error C++20 or later compatible compiler is required to use PyTorch" when
+  # the fused extension built with -std=c++17 -- and a drifted torch would have
+  # made every number incomparable with the earlier runs, so this ordering is not
+  # cosmetic. compressed-tensors will complain it wants torch>=2.10; ignore it.
   pip install -q numpy ninja transformers tokenizers safetensors huggingface_hub \
                  apache-tvm-ffi pynvml nvidia-ml-py cuda-python \
                  pybase64 orjson uvloop pyzmq fastapi uvicorn aiohttp requests tqdm \
                  pillow psutil einops sentencepiece setproctitle \
                  interegular partial_json_parser llguidance msgspec compressed_tensors \
                  python-multipart soundfile scipy torchao blobfile hf_transfer
+  pip install -q torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
 else
   . $W/venv/bin/activate
 fi

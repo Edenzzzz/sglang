@@ -7,7 +7,30 @@ should beat it) and FA2 matches the stock persistent kernel, then the fused
 design's scheduling freedom is pure upside. Target: >=30% TTFT/ITL and >=10%
 throughput on mixed chat + tracelab.
 
-**Status 2026-10-06: not met, and not yet measurable.** Every fused number in this
+**Status 2026-10-06 (late): the wgmma role works, and the split is the big lever.**
+Task-3 items were being assigned to clusters outside the FA3 role's range and
+silently dropped, because the harness runs never set `FLASHINFER_SM_PARTITION=1` /
+`FLASHINFER_FA3_SM_SPLIT_CLUSTERS`. With those set, fixture 2 **passes** with the
+wgmma role carrying real work -- 100 items over 25 q-tiles x 4 kv heads, 0/512
+unwritten -- and a 16 823-token-KV FA3 row passes at rel err 4.3e-4.
+
+The `sm_split` sweep on that long-prefix fixture is the first informative kernel
+measurement here: 8 -> 7892 us, 32 -> 2506, 64 -> 1342, 96 -> 1006, 124 -> **772**,
+131 -> 796, against a 421 us FA2-on-everything baseline. The batch is ~99% task-3
+work, so the fixed `sm_split=8` starves the role holding almost all of it: an
+**18.6x penalty that is pure scheduling**. The serving A/B ran at
+`SGLANG_FUSED_SM_FA3=8`, so a large part of that 3x regression is likely this.
+After tuning the split, 1.83x remains, and `-DFUSED_FA3_STAGES=1` -- one K/V
+stage, chosen to fit smem beside the persistent slots, which removes FA3's
+load/compute pipelining -- is the next suspect under measurement.
+
+Also corrected: the "200 task-3 items carrying group ids" that drove a day of
+reduction debugging was an artefact of the same missing partitioning, which made
+`kv_len_limit` divide total KV by all 132 clusters. With partitioning on, these
+rows do not split at all (`with_group_id=0`), so the unified reduction is
+implemented and correct-by-construction but currently unexercised.
+
+**Earlier status, superseded:** Every fused number in this
 doc was taken with the wgmma role idle and tiles 128/64 forced onto FA2 via
 `FLASHINFER_FA3_MIN_PACKED_QO=4096` -- the routing the class boundary explicitly
 rejects. So the recorded 3.02x kernel penalty and 1.38x CTA/SM cost describe a

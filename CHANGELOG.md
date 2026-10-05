@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.8.2 — The 66% decomposes into two causes (2026-10-05)
+
+Routing every row to the fused kernel's FA2 roles, leaving the wgmma role idle,
+splits the deficit: baseline 590.58 tok/s / 18.26 ms ITL, fused-FA2-only 397.88 /
+27.41 (1.50x ITL), fused-with-wgmma 198.16 / 54.86 (3.00x ITL).
+
+Two roughly equal multiplicative costs, not one. The first is the launch geometry
+already measured in this effort and never connected to this regression: 1 CTA/SM at
+384 threads where FA2 natively runs 2 CTAs/SM, ~128 of 384 threads doing FA2 work.
+The second, a further 2.00x, is isolated to the wgmma role and still uncaused;
+the element-wise packed-GQA O store and 200 task-3 items against ~34 q-tiles of real
+work are the measurable candidates.
+
+Also noted: `mixed_fused_fa3=53116(96.2%)` is identical across all three arms. It
+records the dispatch decision, not which internal role ran, and must not be read as
+evidence the wgmma role executed.
+
+
 ## v0.8.1 — The Q drain is exonerated; the 66% has no known cause (2026-10-05)
 
 Replacing the cp.async group drain with the validated per-lane `_noinc` mbarrier

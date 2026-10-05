@@ -33,7 +33,7 @@ predecessor effort (sync-free plan, mixed-kernel gate, 4-mode dispatch).
 - [x] [Static SM pre-assignment](#static-split-confirmed) — -14.4% / -14.0% / -11.5%, no winning fraction
 - [x] [Serial dispatch](#serial-dispatch-dead-end) — -48%, reverted, forecloses draft+verify fusion
 - [x] [Symmetric single kernel](#symmetric-retracted) — numerically wrong, four hypotheses eliminated, results retracted
-- [ ] [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), [cause UNKNOWN](#drain-exonerated) — the Q drain was exonerated by measurement
+- [ ] [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), [cause decomposed](#deficit-decomposed) — 1.50x from the fused FA2 path's launch geometry, a further 2.00x from the wgmma role
 
 ## Server integration
 - [x] [Unified queue wired into sglang](#unified-serving-perf) — one plan over all rows, behind `SGLANG_FUSED_UNIFIED`
@@ -4216,3 +4216,44 @@ occupancy at 1 CTA/SM with 384 threads against FA2's native 2 CTAs/SM (the
 [launch-geometry](#launch-geometry) finding, which was measured and never
 addressed); the per-row packed-GQA O store, which is still element-wise; and
 plan-side imbalance at 200 task-3 items.
+
+
+<a id="deficit-decomposed"></a>
+### The 66% decomposed: two causes, each about 1.5-2x
+
+One bisection splits it. Routing every row to the fused kernel's FA2 roles
+(`FLASHINFER_FA3_MIN_PACKED_QO=100000`, above a chunked-prefill row's packed
+`512 * 7 = 3584`) leaves the wgmma role idle while still going through the fused
+launch:
+
+| arm | output tok/s | mean ITL (ms) | mean TTFT (ms) | ITL vs baseline |
+|---|---|---|---|---|
+| baseline, unfused | 590.58 | 18.26 | 2626.50 | 1.00x |
+| fused, FA2 roles only | 397.88 | 27.41 | 4368.98 | **1.50x** |
+| fused, with the wgmma role | 198.16 | 54.86 | 9308.36 | **3.00x** |
+
+So the deficit is **two roughly equal multiplicative costs**, not one:
+
+1. **The fused FA2 path alone costs 1.50x**, with no wgmma work in the kernel at
+   all. This is the [launch geometry](#launch-geometry) finding, which was
+   measured earlier in this effort and then left alone: the fused kernel runs
+   1 CTA/SM at 384 threads where FA2 natively runs 2 CTAs/SM, and only ~128 of
+   those 384 threads do FA2 work. I had documented that as the reason SM
+   pre-assignment could not win and never connected it to this regression --
+   it is the larger half of the answer I was looking for elsewhere.
+2. **The wgmma role adds a further 2.00x on top** (27.41 -> 54.86 ms). That is
+   the half still without a cause, and it is now isolated to one role rather than
+   to the whole kernel.
+
+A note on instrumentation, because it misled me: `mixed_fused_fa3=53116(96.2%)`
+is *identical* in all three arms. That counter records the dispatch decision, not
+which internal role executed, so it cannot distinguish these configurations and
+should not be read as evidence that the wgmma role ran.
+
+**Next, in order.** For cause 2, profile the wgmma role specifically -- the
+packed-GQA O store is still element-wise per row (the async/tiled copy item in
+the catalogue is unchecked), and 200 task-3 work items against ~34 q-tiles of
+real work suggests plan-side imbalance; both are measurable with the existing
+`PROFILER_EVENT_*` hooks. For cause 1, the question is structural and was already
+answered once: either the FA2 role gets its native 2 CTAs/SM back, or SM
+pre-assignment keeps paying 1.5x before any fusion benefit begins.

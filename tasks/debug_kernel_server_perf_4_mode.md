@@ -27,13 +27,22 @@ measured. The unified split-KV reduction is the gate.
       list — `store()` templates `SharedStorage` as a method template parameter,
       not a class member type, so declaring only four parameters made that
       argument unmatchable. Fixed; the list is now identical to `store()`'s.
-      The second is live: the fused build now fails with
-      `vec_t<FDT, 4>::ptr` / `::cast_from` "referenced but not defined" from
-      `vec_dtypes.cuh`. This comes from the `jit_merge.cuh` extraction — the new
-      header includes `../vec_dtypes.cuh` and `state.cuh`, but `MergeGroupJIT`'s
-      `state_t`/`vec_t` specialisations previously arrived through
-      `persistent.cuh`'s own include set and order. Match that set rather than
-      guessing a minimal one. Note the trap that hid it:
+      The second is live and is **not** a code error. After matching
+      `persistent.cuh`'s full include set in `jit_merge.cuh`, the fused build
+      fails with **no `error:` line at all** — only macro-redefinition warnings
+      (`REGISTER_QUERY_TRANSFORM` etc., from `hopper/variant_helper.cuh` against
+      `attention/variant_helper.cuh`, which predate this work) and then a nonzero
+      exit. That is the signature of the compiler being **killed**, not rejecting
+      the source, and this pod has a cgroup OOM history. The command uses
+      `--threads 32` on a TU whose include graph just grew, so the first thing to
+      try is lowering `--threads` or trimming the include set back to what
+      `MergeGroupJIT` actually needs.
+      Also visible in the failing command line, and worth fixing independently:
+      the pod compiles against
+      `/home/tiger/.cache/flashinfer/90a/generated/.../batch_attention_config.inc`
+      — the **upstream** generated config, not one generated from this fork. That
+      is the same mismatch that blocked the local `-Xptxas` attempt, and it means
+      the pod build has been taking `PersistentParams` from upstream's generator. Note the trap that hid it:
       compiling `prefill_sm90.cuh` standalone passes, because the upstream
       scheduler takes the `if constexpr` false branch and `store_partial` is never
       instantiated. Only the fused TU with `kUnifiedWgmma=true` instantiates it, so

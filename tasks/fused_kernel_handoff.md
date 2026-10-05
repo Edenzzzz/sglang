@@ -281,7 +281,15 @@ Read off it:
   bandwidth-bound, and FA2's split-KV + LPT is the right engine for them. So the
   FA2 overlap machinery is still wanted -- scoped to the 1-token class.
 
-## 9. The static SM split is the wrong structure (measured, not argued)
+## 9. The static SM split is the wrong structure — VERDICT SUSPENDED
+
+> **The table below was measured in symmetric mode, which computes FA3 wrong
+> (rel err 3-4, nondeterministic). Those arms did less valid work than the
+> baseline, so the -6% figures cannot support the conclusion this section draws,
+> and the conclusion is suspended until the same sweep is run in asymmetric mode,
+> which is exact (2.3e-4). The arithmetic about a 93/7 mix not fitting a fixed
+> fraction still stands on its own; the numbers do not.**
+
 
 With the gate corrected so the modal chunk reaches the wgmma role (fused dispatch
 share 90.6% -> 96.2%), the serving A/B got **worse**, at every split:

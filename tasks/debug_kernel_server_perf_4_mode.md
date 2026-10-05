@@ -2447,3 +2447,40 @@ Note the ordering consequence: width 3 is not merely a performance change, it ma
 be the correctness fix for symmetric mode. Its own FA2 numerics have to be right
 first (currently rel err 1.39 / 2.38 on the FA2 rows at width 3, against 0.0021 /
 0.0026 at width 1).
+
+##### The symmetric FA3 corruption is a RACE, and the aliasing hypothesis is back
+
+Three runs of one unchanged binary, symmetric / width 1 / SPLITS=8 / plan 132:
+
+| repeat | FA3 row | FA2 rows |
+|---|---|---|
+| 1 | rel err 1.93 FAIL | ok |
+| 2 | rel err 2.53 FAIL | ok |
+| 3 | rel err 3.31 FAIL | ok |
+| (an earlier run of the same binary) | **0.00021 ok** | ok |
+
+Every failure value differs and one run passed, so this is **not** a deterministic
+logic error -- wrong addressing or a wrong plan would reproduce exactly. It is a
+race, which is why months of counter-, stability- and throughput-based validation
+never caught it, and it is confined to FA3: the FA2 rows are exact in every run.
+
+That also means the two flag-based probes proved nothing and the earlier
+"aliasing is ruled out" line is withdrawn: `grep -c DFLASHINFER_FUSED_* build.ninja`
+returns **0** for both the disjoint and the noop builds, so neither `-D` reached
+the compiler even with a fresh `TORCH_EXTENSIONS_DIR`. The harness has a second
+build path that ignores the `extra_cuda_cflags` list those were added to.
+
+Leading mechanism, which a race fits better than anything else: a CUTLASS
+warp-specialised kernel initialises its pipeline mbarriers in shared memory at
+kernel entry, *before* the `blockIdx.x >= sm_split` branch. The FA2 drain then
+writes its mainloop slot and, at width 1, its cursor/merge tail at offset 69648 --
+inside FA3's 98352-byte `SharedStorage`. FA3 is entered after the rendezvous, so
+whether it observes clobbered barrier state depends on timing. Predictions this
+makes, in order of cost:
+
+1. A genuinely disjoint layout fixes it. Requires finding the harness's real
+   compile path first -- that is the next action, not another env-var run.
+2. Moving only the cursor/merge tail past FA3's storage (16 bytes of the 48-byte
+   tail is all that is written at width 1) fixes it or narrows it to the slot.
+3. Re-initialising FA3's shared state after the rendezvous fixes it regardless of
+   layout, and is what width 3 would need anyway.

@@ -4132,3 +4132,47 @@ Until this is settled, the reduction spec in [#split-kv-dark](#split-kv-dark)
 should not be implemented as written: it assumes the chunks are genuine partials,
 and if they are not, the partial write would be solving a problem the plan is
 creating.
+
+
+<a id="task3-dump-resolved"></a>
+### RESOLVED: the chunks are genuine partials, and the spec stands
+
+The dump settles it, and against my hypothesis. Task 3's items on fixture 2 carry
+true slices, not full-row copies:
+
+```
+cluster=3  i=0 q_start=768  kv_start=0   kv_end=384 span=384 kv_len=439 group_id=29  partial_indptr=1592
+cluster=3  i=1 q_start=3072 kv_start=384 kv_end=439 span=55  kv_len=439 group_id=101 partial_indptr=6200
+cluster=5  i=0 q_start=0    kv_start=0   kv_end=236 span=236 kv_len=236 group_id=-1  partial_indptr=56
+```
+
+A clean two-way split of the `kv_len=439` row (384 + 55 = 439), each chunk with
+its own `group_id` and `partial_indptr`, while the `kv_len=236` row carries
+`group_id=-1` and is not split. So the redundant-work hypothesis is **refuted**:
+the wgmma role is not duplicating attention, and there is no second hidden cause
+of the serving deficit hiding here. The Q completion remains the one measured
+cause of the 3x.
+
+**And the contradiction dissolves without any benign-overwrite mystery.** The
+fixture-2 pass I had been treating as evidence reported its rows as
+`row 1 (task0 qo=439 kv=439)` -- that row was on an **FA2 class** at the time,
+which reduces correctly, which is also what `partial_o_nnz=56` was. It is routed
+to task 3 now (packed qo = 439 * 7 = 3073, above the 128 threshold), so the
+hazard is live *now* and was not live *then*. Nothing about that old pass needs
+explaining, and my note that it was "suspect" is withdrawn -- it was a correct
+result for a different routing.
+
+**Consequences, in order:**
+
+1. The reduction spec in [#split-kv-dark](#split-kv-dark) stands exactly as
+   written. The chunks are genuine partials, so `store_partial` plus the
+   `persistent.cuh` handshake is the right shape, and the earlier worry that it
+   would be "solving a problem the plan is creating" does not apply.
+2. The guard is correct and keyed correctly, and its count (200 items) is the
+   real work the reduction must merge.
+3. The `_noinc` Q completion is still unvalidated, because the guard legitimately
+   blocks fixture 2. Validating it needs either a fixture whose task-3 rows do
+   not split (raise `FLASHINFER_FA3_MIN_PACKED_QO` above 3073 so the 439 row goes
+   to FA2, reproducing the routing of the original fixture-2 pass) or the
+   reduction itself. The former is one environment variable and is the cheap path
+   to re-measuring the 66% regression.

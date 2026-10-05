@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.8.0 — The chunks are real partials; hypothesis refuted (2026-10-05)
+
+The per-item dump shows task 3's chunks are genuine slices (`span=384` + `span=55`
+against `kv_len=439`, each with its own group id and partial_indptr), not full-row
+copies. So the redundant-work hypothesis is refuted and there is no second hidden
+cause of the serving deficit -- the Q completion remains the one measured cause.
+
+It also dissolves the contradiction: the old fixture-2 pass reported that row as
+`task0`, an FA2 class that reduces correctly, and it is routed to task 3 only now
+that packed qo = 3073 exceeds the threshold. So the old pass was correct for a
+different routing, and calling it "suspect" is withdrawn.
+
+Net: the reduction spec stands as written, the guard and its 200-item count are
+correct, and the cheap path to re-measuring the regression is to raise
+`FLASHINFER_FA3_MIN_PACKED_QO` above 3073 so the split row goes to FA2 -- which
+reproduces the original routing and unblocks validating `_noinc` against the drain.
+
+
 ## v0.7.9 — 200 split chunks and a correct answer (2026-10-05)
 
 The exact guard reports 200 task-3 work items carrying JIT-reduction group ids on

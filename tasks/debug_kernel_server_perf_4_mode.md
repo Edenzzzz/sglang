@@ -66,7 +66,7 @@ All four points are written up in [`pd_colocation_vs_disagg.md`](pd_colocation_v
 - [x] [Audit, superseded by this catalogue](#audit-superseded)
 
 ## Pod and environment
-- [ ] [Re-establish the GPU working set](#pod-restore) — the 2026-10-05 trial expired; a replacement single-GPU `vibecuda` is running and empty
+- [ ] [Re-establish the GPU working set](#pod-restore) — **blocked**: upstream flashinfer is API-incompatible with the fork, so the fork's tree must be pushed — the 2026-10-05 trial expired; a replacement single-GPU `vibecuda` is running and empty
 
 ## Workload capture for handoff
 - [x] [Real online 2-mode trace](fused_kernel_handoff.md#5-the-workloads) — 2121 steps/arm, JSON corpus in `fused_specdec_workload/sets/`
@@ -3432,6 +3432,13 @@ with an empty `/dev/shm` and no repo checkouts.
 
 What has to be restored, in order:
 
+0. **the fork's flashinfer tree.** Cloning upstream does not substitute for it:
+   `BatchAttention(workspace, kv_layout)` in the fork against a different
+   signature upstream, failing with `TypeError: attribute name must be string,
+   not 'Tensor'`, plus dependencies upstream has gained (`apache-tvm-ffi`) that
+   the fork does not need. The eight-file overlay only applies on top of the
+   fork, so the fork's `include/`, `csrc/`, `tests/` and python package have to
+   be pushed or kept in a durable tarball;
 1. a venv with torch 2.8/cu128 (the system python is 2.9.1/cu131 and the two are
    not interchangeable here -- `serve.sh` used the venv deliberately);
 2. the flashinfer tree at `/dev/shm/w/fi`, which `tests/sync_to_pod.sh` populates

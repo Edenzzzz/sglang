@@ -1,10 +1,18 @@
 #!/bin/bash
 # Step 2 of provisioning: the flashinfer and sglang trees.
 #
-# Cloned from upstream and then overlaid with the changed files, rather than
-# copied wholesale from the local checkout. The trees are too large to push
-# through the webshell in base64 chunks, and a clone plus overlay is
-# reproducible, which the old hand-assembled copy was not.
+# DOES NOT WORK as written, and the reason is recorded rather than patched over.
+#
+# Cloning upstream flashinfer and overlaying the changed files was an attempt to
+# avoid pushing a large tree through the webshell. Upstream is NOT API-compatible
+# with the fork this work uses: `BatchAttention(workspace, kv_layout)` in the fork
+# against a different signature upstream, which fails immediately with
+# "TypeError: attribute name must be string, not 'Tensor'". Upstream has also
+# gained dependencies the fork does not have (apache-tvm-ffi).
+#
+# So the fork's own include/, csrc/, tests/ and python package are required, and
+# a durable tarball of them is the actual fix. The eight-file overlay only works
+# on top of the fork.
 set -ex
 W=/dev/shm/w
 . $W/venv/bin/activate

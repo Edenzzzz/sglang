@@ -4500,14 +4500,27 @@ Width held at 1 so smem is the only variable, wgmma role empty, fixed batch,
 | disjoint (current default) | 132.4 us | 43.8 us | 3.02x |
 | **aliased** (`FLASHINFER_FUSED_ALIAS_SMEM=1`) | **118.1 us** | 44.0 us | **2.68x** |
 
-**11% faster, and it is free.** Disjoint slots cost ~208 KB of the 232 KB budget,
-which caps the kernel at 1 CTA/SM; aliasing shrinks the footprint. This is the
-first change in this effort measured to make the fused kernel faster rather than
-merely correct, and it argues the default should flip: disjoint smem was made the
-default earlier for a correctness reason (a narrow drain writing past a one-slot
-allocation), but that bug was fixed by indexing the slot from the drain ordinal,
-so the layout no longer carries that risk. Aliasing is also what width 3 needs to
-launch at all.
+**11% faster -- and NOT free. Do not flip the default.** I wrote the opposite
+here first, then read `persistent_fa3_fused.cuh:78-93` and withdrew it. The
+disjoint layout is not a leftover; it is the fix for a documented race. A CUTLASS
+warp-specialised kernel initialises its pipeline mbarriers in shared memory at
+entry, *before* the `sm_split` branch, so with an aliased base of 0 the drain's
+slot and its cursor/merge tail at ~69648 land inside FA3's 98352-byte
+`SharedStorage`. That produced nondeterministic wrong answers -- rel err
+1.93 / 2.53 / 3.31 across identical runs, one run exact -- and it fires
+specifically **when a CTA drains FA2 before entering FA3**.
+
+My measurement ran with the **wgmma role empty**, so no CTA ever entered FA3
+after draining, and the race had no opportunity to appear. The fixture passing at
+`ALIAS_SMEM=1` therefore says nothing about safety in the real fused
+configuration. The 11% is a real speed figure for a layout that is only safe when
+nothing enters FA3 after a drain -- which is not the serving path.
+
+What that leaves: aliasing is worth 11%, and capturing it requires removing the
+race rather than accepting it -- re-initialising FA3's pipeline state after the
+rendezvous, which is also what the three-slot/width-3 path needs (three disjoint
+slots do not fit in 232 KB at all). That is the shape of a real optimisation, not
+a flag flip.
 
 **But it is not the 3x.** 2.68x remains after it, so occupancy via smem footprint
 explains roughly an eighth of the penalty and no more. The ordering of causes so

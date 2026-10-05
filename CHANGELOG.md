@@ -3,12 +3,14 @@
 ## v0.8.7 — Aliased smem: the first measured win, 11% (2026-10-05)
 
 With width held at 1 and smem the only variable: aliased 118.1 us against disjoint
-132.4 us, baseline 43.8-44.0 us in the same runs. 11% faster and free -- disjoint
-slots take ~208 KB of the 232 KB budget and cap the kernel at 1 CTA/SM. This is the
-first change here measured to make the fused kernel faster rather than just correct,
-and the default should flip: disjoint was chosen for a correctness bug that was
-since fixed by indexing the slot from the drain ordinal, and aliasing is also what
-width 3 needs to launch.
+132.4 us, baseline 43.8-44.0 us in the same runs. 11% faster but NOT free, and the default must NOT flip --
+corrected after reading persistent_fa3_fused.cuh:78-93. Disjoint is the fix for a
+documented race: CUTLASS initialises pipeline mbarriers before the sm_split branch,
+so an aliased base of 0 puts the drain's slot inside FA3's SharedStorage, which gave
+nondeterministic rel err 1.93 / 2.53 / 3.31 -- and it fires only when a CTA drains
+FA2 before entering FA3. My run had the wgmma role EMPTY, so nothing entered FA3
+after a drain and the race could not appear. Capturing the 11% means removing the
+race (re-initialising FA3 pipeline state after the rendezvous), not setting a flag.
 
 It does not explain the 3x. 2.68x remains. Measured contributions on identical work
 now read: SM reservation ~6% over an 8x sweep, smem layout 11%, residual ~2.7x

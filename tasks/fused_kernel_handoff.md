@@ -598,3 +598,37 @@ after plain env vars for compile-time switches, torch JIT reuse of a cached `.so
 and a stale `compute-sanitizer` process skewing every arm. The pre-flight rule in
 memory covers all four: prove the change is in the binary before believing a
 number.
+
+## 14. Host side is complete; the unified path changes who the plan covers
+
+Verified on the pod: `BatchAttention.plan()` with `FLASHINFER_FA3_TASK=1` emits a
+**60-entry** 4-task plan (49 for 3 tasks), and the default asymmetric path still
+computes the dumped serving batch exactly (FA3 3.4e-4, task0 2.2e-3, task2
+2.9e-3) with the scheduler switch, the params wrapper and both plan-length guards
+in place.
+
+Before the unified path can be exercised, one structural consequence has to be
+handled, and it is not a detail:
+
+**Today the two plans cover disjoint row ranges.** `_plan_fused_split_inner`
+builds FA3's plan over rows `[0, n_fa3_rows)` and the persistent plan over
+`[n_fa3_rows, B)`, which is why the launch takes `pers_row_offset` and why the
+FA2 side's q/o pointers are advanced. Under the unified plan there is **one** plan
+over **all** rows, with the wgmma class and the FA2 classes as tasks inside it.
+So:
+
+- the persistent plan must be built over the whole batch, not the tail;
+- `pers_row_offset` becomes 0, and the FA2 params must stop advancing q/o;
+- `n_fa3_rows` stops being a row split and becomes purely informational -- row
+  membership is the plan's `idx_qo_kv_len_vec[3]`, decided by
+  `packed_qo_len >= FLASHINFER_FA3_MIN_PACKED_QO`;
+- FA3's own `PrefillSM90Plan` call disappears from the serving path, which also
+  removes one of the two per-step H2D copies that made this path host-bound.
+
+Note what the admission threshold does to the regression batch: rows have
+`packed_qo = [2968, 609, 7]`, so at the default 128 **rows 0 and 1 both join the
+wgmma class** and only row 2 stays on FA2 (tile 16). That is the intended
+behaviour given the measured boundary -- tile 128 and tile 64 both belong on
+wgmma once packed -- but it means `test_fused_server_batch.py`'s `task[]` labels
+and its `N_FA3_ROWS` assumption need updating in the same change, or the test
+will mislabel correct output.

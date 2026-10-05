@@ -33,7 +33,7 @@ predecessor effort (sync-free plan, mixed-kernel gate, 4-mode dispatch).
 - [x] [Static SM pre-assignment](#static-split-confirmed) — -14.4% / -14.0% / -11.5%, no winning fraction
 - [x] [Serial dispatch](#serial-dispatch-dead-end) — -48%, reverted, forecloses draft+verify fusion
 - [x] [Symmetric single kernel](#symmetric-retracted) — numerically wrong, four hypotheses eliminated, results retracted
-- [ ] [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), and the Q completion is the cause
+- [ ] [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), [cause UNKNOWN](#drain-exonerated) — the Q drain was exonerated by measurement
 
 ## Server integration
 - [x] [Unified queue wired into sglang](#unified-serving-perf) — one plan over all rows, behind `SGLANG_FUSED_UNIFIED`
@@ -4176,3 +4176,43 @@ result for a different routing.
    to FA2, reproducing the routing of the original fixture-2 pass) or the
    reduction itself. The former is one environment variable and is the cheap path
    to re-measuring the 66% regression.
+
+
+<a id="drain-exonerated"></a>
+### The Q drain is exonerated: it was never the cause of the 3x
+
+| arm | output tok/s | mean ITL (ms) | mean TTFT (ms) | P99 ITL | fused |
+|---|---|---|---|---|---|
+| baseline | 590.58 | 18.26 | 2626.50 | 32.86 | n/a |
+| unified, drain (`Q_MBARRIER=0`) | 197.65 | 55.01 | 9333.23 | 114.50 | 53116 (96.2%) |
+| unified, `_noinc` (`Q_MBARRIER=1`) | **198.16** | **54.86** | 9308.36 | 114.21 | 53116 (96.2%) |
+
+Removing the cp.async group drain entirely -- replacing it with a per-lane
+`_noinc` mbarrier arrival that is validated correct on fixture 2 and touches
+nothing in the KV pipeline -- moves throughput by **0.3%** and ITL by 0.3%. The
+two arms are the same number.
+
+**So the attribution was wrong, and it was mine.** I had concluded "the deficit
+is 3x, which matches the cp.async drain's cost exactly" and treated the drain as
+the one measured cause. That was reasoning from a coincidence of magnitudes: the
+earlier 8,379-against-24,885 observation that produced the "~3x" figure for the
+drain came from a different configuration, and I carried its ratio across to this
+workload as though it had been measured here. It had not been. The correct
+statement all along was that the 3x had *no* identified cause.
+
+What this does establish, and it is worth something: the Q completion protocol is
+now settled and cheap -- `_noinc` is correct, needs no drain, and is free -- so it
+is off the table as a suspect and can stay enabled. The 66% regression is
+unexplained.
+
+**What must happen next, and specifically not more mechanism reasoning.** Three
+hypotheses were each advanced from plausible mechanism and each refuted by
+measurement (static split, redundant chunks, the Q drain). The next step is a
+profile, not an argument: per-task device timing inside the fused kernel
+(`PROFILER_EVENT_*` is already wired in `persistent.cuh`), or nsys on one
+mixed step, to find where the time actually goes on the wgmma role versus the
+FA2 roles. Candidate suspects worth ranking only *after* that data exists:
+occupancy at 1 CTA/SM with 384 threads against FA2's native 2 CTAs/SM (the
+[launch-geometry](#launch-geometry) finding, which was measured and never
+addressed); the per-row packed-GQA O store, which is still element-wise; and
+plan-side imbalance at 200 task-3 items.

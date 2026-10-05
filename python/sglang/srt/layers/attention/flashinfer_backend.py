@@ -1500,6 +1500,13 @@ class FlashInferAttnBackend(AttentionBackend):
                 *(["-DFLASHINFER_FUSED_UNIFIED_WGMMA=1",
                    f"-DFLASHINFER_FUSED_PACKED_Q={self.num_qo_heads // self.num_kv_heads}"]
                   if os.environ.get("SGLANG_FUSED_UNIFIED") == "1" else []),
+                # Q's completion protocol. 0 is the cp.async group drain, which is
+                # correct and ~3x slow because commit_group sweeps the producer's
+                # in-flight KV copies into Q's group. 1 is the per-lane _noinc
+                # mbarrier arrival, which has Q's exact scope and is validated on
+                # fixture 2 (rel err 3.3e-3, 0/512 unwritten).
+                f"-DFLASHINFER_FUSED_Q_MBARRIER="
+                f"{os.environ.get('SGLANG_FUSED_Q_MBARRIER', '0')}",
                 "-U__CUDA_NO_HALF_OPERATORS__", "-U__CUDA_NO_HALF_CONVERSIONS__",
                 "-U__CUDA_NO_HALF2_OPERATORS__", "-U__CUDA_NO_BFLOAT16_OPERATORS__",
                 "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",

@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.8.1 — The Q drain is exonerated; the 66% has no known cause (2026-10-05)
+
+Replacing the cp.async group drain with the validated per-lane `_noinc` mbarrier
+arrival moves serving by 0.3%: 198.16 tok/s against 197.65, ITL 54.86 against
+55.01, identical 96.2% fused composition, baseline 590.58 / 18.26. The drain was
+not the cause of the 3x.
+
+The attribution was mine and it was wrong. I had written that the deficit "matches
+the cp.async drain's cost exactly", carrying a ~3x ratio from a different
+configuration into this workload as though it had been measured here. It had not.
+The 66% regression has no identified cause.
+
+What is settled: the Q completion protocol. `_noinc` is correct (fixture 2, rel err
+3.3e-3, 0/512 unwritten), needs no drain, costs nothing, and can stay on. Next step
+is a profile rather than another mechanism argument -- three mechanism hypotheses
+have now each been refuted by measurement (static split, redundant chunks, the
+drain).
+
+
 ## v0.8.0 — The chunks are real partials; hypothesis refuted (2026-10-05)
 
 The per-item dump shows task 3's chunks are genuine slices (`span=384` + `span=55`

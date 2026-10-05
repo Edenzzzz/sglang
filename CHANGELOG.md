@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.8.8 — The penalty factorises: 1.38x structural, 2.19x unexplained (2026-10-05)
+
+`scheduler.cuh:1199` gives the 3-task plan 2 CTAs/SM and the fused 4-task plan one,
+since FA3's ~98 KB of smem makes two impossible. Forcing the baseline to one CTA/SM
+isolates it: 43.8 us at two, 60.3 us at one, against the fused kernel's 132.1 us. So
+3.02x = 1.38x (one CTA/SM) x 2.19x (the fused kernel itself).
+
+The 1.38x is the structural entry price of co-residency with FA3's smem and is not
+addressable by scheduling at any quality. The 2.19x remains uncaused, with the Q
+protocol (0.3%), SM reservation (6%), thread width (negative), plan construction
+(none) and now CTA count (1.38x) all measured and eliminated.
+
+It also corrects an earlier framing error here: I called the launch-geometry finding
+"refuted" by the width result, conflating threads within a CTA (more is worse --
+warpgroups contend on one queue cursor) with CTAs per SM (worth 1.38x -- independent
+contexts). This file used "launch geometry" for both; they are different mechanisms.
+
+
 ## v0.8.7 — Aliased smem: the first measured win, 11% (2026-10-05)
 
 With width held at 1 and smem the only variable: aliased 118.1 us against disjoint

@@ -4535,3 +4535,51 @@ insensitive to how many SMs are reserved, which fits a serialised hand-off rathe
 than a capacity shortfall. The concrete next measurement is the per-task profiler
 events already wired in `persistent.cuh` -- time spent in the queue acquire
 versus the mainloop, per role -- which distinguishes contention from work.
+
+
+<a id="penalty-factorised"></a>
+### The penalty factorises: 1.38x structural, 2.19x unexplained
+
+`scheduler.cuh:1199` gives the 3-task plan **2 CTAs per SM** and the 4-task fused
+plan **one**, because FA3's ~98 KB of smem makes two impossible. Forcing the
+baseline to one CTA/SM with `FLASHINFER_PERS_CTAS_PER_SM=1` isolates that single
+difference on the same fixed batch:
+
+| configuration | kernel time |
+|---|---|
+| unfused baseline, 2 CTAs/SM (native) | 43.8 us |
+| unfused baseline, 1 CTA/SM | **60.3 us** |
+| fused, 1 CTA/SM | 132.1 us |
+
+So the 3.02x factorises:
+
+```
+3.02x  =  1.38x  (one CTA/SM instead of two)  x  2.19x  (the fused kernel itself)
+```
+
+**The 1.38x is structural and unavoidable in this design.** Co-residency with
+FA3's smem footprint caps the launch at one CTA/SM, and the persistent kernel
+loses 38% from that alone. No amount of scheduling recovers it; it is the entry
+price of putting both mainloops in one launch.
+
+**The 2.19x is the fused kernel's own overhead and still has no cause.** Measured
+and eliminated as explanations: the Q completion protocol (0.3%), SM reservation
+(6% across an 8x sweep), thread width (negative -- more threads are slower), plan
+construction (the ratio is identical at kernel level), and now CTA count (which
+accounts for 1.38x, leaving this). Smem aliasing would recover 11% of it but only
+by reintroducing a documented race.
+
+**This also corrects my earlier framing.** I wrote that the launch-geometry
+finding was "refuted" by the width result. That conflated two different things:
+threads within a CTA (settled -- more is worse, because warpgroups contend on one
+queue cursor) and CTAs per SM (now measured -- worth 1.38x, and independent
+hardware contexts rather than contending ones). Both were called "launch
+geometry" in this file and they are not the same mechanism.
+
+**For the paper argument, stated plainly.** The fused design starts 1.38x behind
+before any work is scheduled, and currently carries a further 2.19x of
+implementation overhead. The scheduling claims -- load balance, tile waste, less
+sync -- would have to beat 3.02x combined to show a gain at all, and 1.38x of
+that is not addressable by scheduling at any quality. Either the 2.19x comes out
+and the argument becomes "fusion costs 1.38x structurally and buys back more than
+that in schedule quality", or the fused-launch structure needs revisiting.

@@ -973,3 +973,41 @@ Recorded as a negative result with its cause rather than as a verdict on the
 architecture, because the two are separable here and the evidence separates them:
 same kernel, same plan, exact numerics, and a copy that is two orders of magnitude
 off the instruction count it replaced.
+
+### 17.1 Why the tiled copy needs an indirection table (or a G-aligned tile)
+
+The obvious fix for 17 is to replace the single-warp loop with the tiled
+`cp.async` the KV path uses. That needs a `(CTA_TILE_Q, D)` source tensor to
+partition across the producer threads — and the packed view cannot provide one at
+`CTA_TILE_Q = 128` with `G = 7`:
+
+- address of packed row `p` is `(p / G) * token_stride + (p % G) * head_stride`,
+  which is affine in `(t, g)` but **not** in `p`, because of the wrap at `G`;
+- a tile is a contiguous range of `p`, so over a tile the address is piecewise
+  affine with a discontinuity every 7 rows — no single stride, which is the same
+  reason `local_tile` refused it (15.5);
+- it *would* be expressible as `((G, n), D)` if every tile were G-aligned, i.e.
+  if the tile covered whole tokens.
+
+So two real options, and they trade different things:
+
+1. **Indirection table, the KV pattern.** Compute 128 row offsets per work item
+   into smem (cheap: 32 threads, one divmod each), then do the tiled `cp.async`
+   through that table exactly as the paged KV read does through `kv_indices`.
+   Keeps `CTA_TILE_Q = 128` and the existing mma shape. Costs one small smem
+   array and a divmod per row, amortised over 128 x 128 elements.
+2. **Make the wgmma class's tile a multiple of G.** At gqa 7 that is 126 instead
+   of 128, and then the packed view tiles directly as `((7, 18), D)` with no
+   indirection at all. But `CTA_TILE_Q` is a kernel-traits constant bound to the
+   mma tile shape, so this changes the wgmma geometry per GQA ratio — fine for a
+   fixed deployment, awkward as a general kernel.
+
+Option 1 is the one to build: it is local to the load, uses a pattern already
+proven in the same function, and does not make the tile shape depend on the
+model. Option 2 is worth remembering if a single deployment ever justifies
+specialising.
+
+Note this is the same obstacle in a third guise -- 15.5 met it as `local_tile`
+refusing a scalar tiler, 15.2 as a TMA descriptor fault, and now as a tiled copy
+needing a partitionable source. The underlying fact each time: at gqa 7 a 128-row
+packed tile straddles heads unevenly.

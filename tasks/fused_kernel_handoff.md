@@ -888,3 +888,48 @@ Two consequences worth keeping:
 
 So the remaining device work is not on the critical path to a first correct
 unified run, which reorders it behind validating what is already built.
+
+## 16. The unified queue is numerically correct
+
+```
+sm_split=8: unwritten (NaN) rows = 0/512
+row 0 (FA3    qo= 424 kv= 4001) rel err 0.00020  ok
+row 1 (task0  qo=  87 kv=   87) rel err 0.00145  ok
+row 2 (task2  qo=   1 kv=   14) rel err 0.00255  ok
+PASS: every row correct at every split, nothing left unwritten
+```
+
+The wgmma role is driven entirely by task 3 of our own plan -- packed-GQA tiling,
+KV chunking and the JIT-reduction group id -- with `PrefillSM90Plan` out of the
+picture. Rows 0 and 1 both execute as packed task-3 tiles (one straddling a head
+boundary), row 2 on the FA2 tile-16 task, and every row lands in the right place.
+
+Reproduce (flashinfer `e9d3ef8` + the commits following it, sglang `24dceca2d`):
+
+```
+bash tests/sync_to_pod.sh          # all sentinels must be non-zero
+FLASHINFER_SM_PARTITION=1 FLASHINFER_FA3_SM_SPLIT_CLUSTERS=8 \
+UNIFIED=1 SPLITS=8 FA3_PLAN_CTAS=8 \
+TORCH_EXTENSIONS_DIR=<fresh dir> python tests/test_fused_server_batch.py
+```
+
+`UNIFIED=1` sets `FLASHINFER_FA3_TASK=1`, plans one pass over the whole batch,
+passes `pers_row_offset = 0`, and compiles with
+`-DFLASHINFER_FUSED_UNIFIED_WGMMA=1 -DFLASHINFER_FUSED_PACKED_Q=7`.
+
+What this does and does not establish:
+
+- **Does**: the plan, the scheduler, the packed Q load, the packed O store and the
+  ext wiring are correct together, on a real dumped serving batch, at the
+  measured class boundary (rows with packed_qo 2968 and 609 on wgmma, 7 on FA2).
+- **Does not**: say anything about speed. Both the load and the store are per-row
+  loops through registers rather than TMA or `cp.async`, chosen so the mapping
+  could be validated first. The async forms are the optimisation, and they do not
+  change the mapping.
+- **Does not**: exercise split-KV. This batch produces 0 groups (15.6), so the
+  partial write and in-kernel reduce remain untested and need a long-KV batch.
+
+Next, in order: serving-path wiring in sglang (one plan over all rows,
+`FLASHINFER_FA3_TASK=1`, the two `-D`s in the ext build, `pers_row_offset = 0`),
+then the A/B against the 24,892.7 tok/s baseline with no `sm_fa3` fraction in
+play, then the async copies, then split-KV on a long-KV batch.

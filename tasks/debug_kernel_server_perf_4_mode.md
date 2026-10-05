@@ -162,12 +162,24 @@ measured. The unified split-KV reduction is the gate.
       | 16 | 296.02 | 6085 | 36.65 |
       | 32 | 390.60 | 4489 | 27.73 |
       | 64 | **482.19** | **3507** | **22.39** |
+      | 80 | 464.49 | 3665 | 23.29 |
+      | 96 | 110.52 | 16672 | 103.00 |
+      | 112 | 110.76 | 16636 | 102.78 |
       | ~131 (unpinned, ceiling raised) | 100.41 | 18416 | 113.35 |
 
-      Monotone up to 64, then collapsing by ~131, so the optimum is between. At 64
-      the unified arm is 0.82x throughput and 1.22x ITL -- against the 0.335x /
-      3.00x I reported all day, which was an artefact of the pinned 8. 80/96/112
-      are being measured.
+      **The optimum is 64**, which is exactly the existing `MAX_SM_FA3` ceiling, so
+      that constant is well chosen for this workload after all. At 64 the unified
+      arm is **0.82x throughput and 1.22x ITL** -- against the 0.335x / 3.00x I
+      reported all day, which was an artefact of the pinned 8, not the kernel.
+      Note the shape: monotone improvement to 64, a slight dip at 80, then a
+      **cliff** between 80 and 96 (482 -> 465 -> 110 tok/s). A cliff rather than a
+      slope points at a structural threshold on the FA2 side -- the persistent plan
+      gets 2*(132-sm_fa3) clusters, so 96 leaves it 72 -- and is worth
+      understanding before any adaptive policy picks values in that range.
+
+      Against the goal: at the best setting the fused path still loses 18% of
+      throughput and 22% of ITL, where the bar is +10% and +30%. The identified
+      recoverable piece is K/V pipelining (~15% at kernel level).
       **Correction:** I first read the unpinned collapse as "more SMs to FA3 hurts
       serving" and reverted the ceiling to 64 on that basis. The sweep shows the
       opposite -- more is better up to at least 64 -- so the collapse at ~131 is

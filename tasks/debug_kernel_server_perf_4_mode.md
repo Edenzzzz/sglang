@@ -2353,3 +2353,28 @@ has never been measured at all -- unlike `MIN_PACKED_QO`, which has a crossover
 behind it (0.78x at 32, 1.13x at 56). `tasks/fused_specdec_workload/gate_boundary.py`
 sweeps both roles over (qo_len x kv_len) at the serving head shape and prints
 where each wins, which is the gate the dispatcher should encode.
+
+#### RETRACTION: symmetric mode computes FA3 wrong, so its speed numbers are void
+
+Per-row accuracy against the reference on the dumped serving batch (qo=[424, 87, 1]),
+`test_fused_server_batch.py`, 2026-10-05:
+
+| config | FA3 row | task0 | task2 |
+|---|---|---|---|
+| asymmetric, SPLITS=8 | **0.00023 ok** | 0.0021 ok | 0.0026 ok |
+| symmetric, SPLITS=8 | **4.04 FAIL** | 0.0029 ok | 0.0031 ok |
+| symmetric, SPLITS=64 | 3.81 FAIL | ok | ok |
+| symmetric + disjoint smem | 3.92 FAIL | ok | ok |
+
+The FA2 rows are correct everywhere; only symmetric mode's FA3 output is wrong,
+and disjoint shared memory does not fix it, so the cause is in the symmetric FA3
+path rather than in FA2 aliasing over FA3's `SharedStorage`.
+
+**Everything measured in symmetric mode is therefore void**, including this
+document's 0.687x -> 1.003x backfill result and today's 1.59x end-to-end figure
+(9,990 vs 6,279 tok/s at sm_fa3=8). A kernel that corrupts a role's output does
+less valid work, which is a speedup that cannot be banked. Asymmetric is the only
+correct fused path today, and it is exact (2.3e-4).
+
+This also explains the shape of the asymmetric-vs-symmetric gap: it was never a
+backfill win of that size, it was partly missing FA3 work.

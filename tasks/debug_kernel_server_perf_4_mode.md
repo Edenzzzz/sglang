@@ -152,6 +152,27 @@ measured. The unified split-KV reduction is the gate.
 - [ ] [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), [cause found](#why-fused-is-slow) — register starvation: `mma.sync` at ~168 regs instead of ~255, from FA3's 384-thread launch bounds
 
 ## Server integration — 2026-10-05
+- [x] **The serving regression was mostly the pinned split** — 2026-10-06: sweeping
+      `SGLANG_FUSED_SM_FA3` on the real workload (8192/192, 200 prompts, rate 12,
+      conc 32), unified arm against a 586.42 tok/s / 18.39 ms ITL baseline:
+
+      | split | tok/s | TTFT ms | ITL ms |
+      |---|---|---|---|
+      | 8 (what every earlier A/B used) | 186.95 | 9889 | 58.17 |
+      | 16 | 296.02 | 6085 | 36.65 |
+      | 32 | 390.60 | 4489 | 27.73 |
+      | 64 | **482.19** | **3507** | **22.39** |
+      | ~131 (unpinned, ceiling raised) | 100.41 | 18416 | 113.35 |
+
+      Monotone up to 64, then collapsing by ~131, so the optimum is between. At 64
+      the unified arm is 0.82x throughput and 1.22x ITL -- against the 0.335x /
+      3.00x I reported all day, which was an artefact of the pinned 8. 80/96/112
+      are being measured.
+      **Correction:** I first read the unpinned collapse as "more SMs to FA3 hurts
+      serving" and reverted the ceiling to 64 on that basis. The sweep shows the
+      opposite -- more is better up to at least 64 -- so the collapse at ~131 is
+      starving the FA2 side, not a sign that 8 was right. The ceiling needs to sit
+      at the measured optimum, not at either edge.
 - [x] Serving fallback is strict — a failed fused plan raises instead of silently comparing a mixture against the baseline
 - [x] [Unified queue wired into sglang](#unified-serving-perf) — one plan over all rows, behind `SGLANG_FUSED_UNIFIED`
 - [x] [Draft-step CPU-GPU sync removed](#spec-sync-audit) — and the rest of the spec path audited

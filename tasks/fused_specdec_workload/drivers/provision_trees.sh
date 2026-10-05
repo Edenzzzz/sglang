@@ -52,3 +52,26 @@ echo "python/sglang/srt/managers/scheduler.py and python/sglang/srt/speculative/
 #              /dev/shm/w/fi/flashinfer/data/{csrc,include,cutlass}
 # 2. Clear `~/.cache/flashinfer` after replacing the tree, or the JIT serves
 #    objects built against the previous headers.
+
+# --- Remaining gaps in the restore, as of 2026-10-05 13:35 -----------------
+#
+# The chunked push landed 805 files (include, csrc, flashinfer, tests) and the
+# byte count matched exactly, but the environment is still not serving. Three
+# things are known to be missing or unverified, in the order they block:
+#
+# 1. 3rdparty/spdlog was never pushed. flashinfer/data/spdlog still points at
+#    /opt/tiger/flashinfer/3rdparty/spdlog, which does not exist on the pod, and
+#    the ext build includes it. It is 1.6 MB, so push it the same way:
+#      tar czf spdlog.tgz 3rdparty/spdlog   # then chunked base64 as above
+#
+# 2. flashinfer/data/{spdlog,tvm_binding} still carry absolute local symlinks.
+#    Re-point or remove them along with csrc/include/cutlass.
+#
+# 3. `flashinfer/data/csrc/batch_attention_customize_config.jinja` was not
+#    readable after re-pointing, although the file exists in the fork's csrc/ and
+#    the tar included it. Verify directly that /dev/shm/w/fi/csrc contains it --
+#    if it does, the symlink is wrong; if it does not, the extraction did not
+#    replace csrc and the push needs redoing with the directory removed first.
+#
+# Nothing here is conceptual; it is all mechanical, and it is written down so the
+# next session starts from step 1 instead of rediscovering the chain.

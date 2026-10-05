@@ -66,7 +66,7 @@ All four points are written up in [`pd_colocation_vs_disagg.md`](pd_colocation_v
 - [x] [Audit, superseded by this catalogue](#audit-superseded)
 
 ## Pod and environment
-- [ ] [Re-establish the GPU working set](#pod-restore) — **blocked**: upstream flashinfer is API-incompatible with the fork, so the fork's tree must be pushed — the 2026-10-05 trial expired; a replacement single-GPU `vibecuda` is running and empty
+- [ ] [Re-establish the GPU working set](#pod-restore) — fork tree pushed (805 files, byte-exact); three mechanical gaps left, listed in `drivers/provision_trees.sh`: spdlog unpushed, stale absolute symlinks in `flashinfer/data`, and the csrc jinja unreadable — the 2026-10-05 trial expired; a replacement single-GPU `vibecuda` is running and empty
 
 ## Workload capture for handoff
 - [x] [Real online 2-mode trace](fused_kernel_handoff.md#5-the-workloads) — 2121 steps/arm, JSON corpus in `fused_specdec_workload/sets/`

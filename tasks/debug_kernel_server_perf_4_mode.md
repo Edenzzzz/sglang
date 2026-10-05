@@ -2378,3 +2378,72 @@ correct fused path today, and it is exact (2.3e-4).
 
 This also explains the shape of the asymmetric-vs-symmetric gap: it was never a
 backfill win of that size, it was partly missing FA3 work.
+
+##### Correction: the first disjoint-smem check was inert; the second one is real
+
+`FLASHINFER_FUSED_DISJOINT_SMEM` is a compile-time `#ifdef`, and the harness had
+no `-D` plumbing for it, so setting it as an environment variable measured the
+aliased layout and ruled out nothing. Two fixes were needed to ask the question
+at all: the harness now translates `DISJOINT_SMEM=1` and `WG_DRAIN=n` into `-D`
+flags, and the per-warpgroup slot count follows the drain width instead of always
+reserving three -- three disjoint slots need 98352 + 3x69632 = 307248 B against
+the 232448-byte opt-in limit, i.e. the configuration could not be built.
+
+With the flag genuinely compiled in (`base = 98352`, one slot, total 168032 B):
+
+| config | FA3 row | task0 | task2 |
+|---|---|---|---|
+| symmetric, aliased, width 1 | 4.04 FAIL | ok | ok |
+| symmetric, **truly disjoint**, width 1 | **2.60 FAIL** | ok | ok |
+| asymmetric, aliased, width 1 | **0.00023 ok** | ok | ok |
+
+So shared-memory aliasing over FA3's `SharedStorage` is **not** the cause: the
+symmetric FA3 path is wrong with disjoint storage too. What still differs between
+the two modes is the FA3 plan's CTA count (132 vs `sm_split`) and the fact that a
+symmetric CTA executes the FA2 drain *before* entering FA3's warp-specialised
+body, so its three warpgroups reach that body having run different code. The
+register-budget version of that hypothesis was tested and eliminated (both
+kernels compile to 168 registers); the ordering version -- FA3's producer
+warpgroup entering with its pipeline state already advanced -- has not been.
+
+Next probe, cheapest first: run symmetric with `sm_split = num_sm` so that no CTA
+drains FA2 before FA3. If FA3 is then exact, the fault is in entering FA3 after
+the drain, not in the 132-CTA plan; if it is still wrong, the plan's CTA count is
+implicated and `FLASHINFER_FA3_MAX_CTAS` is the lever.
+
+##### Localized: the drain corrupts FA3, not the plan and not shared memory
+
+Symmetric mode with `sm_split = num_sm`, which keeps the 132-CTA FA3 plan but
+leaves no CTA draining FA2 beforehand:
+
+| row | rel err |
+|---|---|
+| FA3, qo=424 kv=4001 | **0.00022 ok** |
+| task0 / task2 | nan (expected: nothing drains FA2, 88 rows unwritten) |
+
+So the 132-CTA plan is innocent, and with the earlier disjoint-smem result the
+cause is neither the plan nor storage aliasing. What is left: **a CTA that runs
+the FA2 drain and then enters FA3's warp-specialised body computes FA3 wrong.**
+
+The three remaining mechanisms, and how to separate them:
+
+1. *Warp-specialisation entry state.* FA3's producer warpgroup does
+   `warpgroup_reg_dealloc<24>` while its consumers do `warpgroup_reg_alloc<240>`;
+   at the 168-register baseline the released 144 exactly match the claimed 144,
+   so the protocol has no margin for warpgroups arriving from different code. At
+   width 1 only warpgroup 0 drains, so the three arrive divergent. This is the
+   hypothesis the 3-warpgroup drain was built to remove ("makes the pre-FA3
+   instruction stream identical"), and it predicts that fixing width 3's FA2
+   numerics also fixes FA3 here.
+2. *Named barriers.* All 16 are allocated and the roles do not share ids (FA3
+   0-7, drain 8, mdo 9-11, queue 12-14, rendezvous 15), so this is unlikely but
+   is the cheapest to re-audit with `cuobjdump` on the compiled kernel.
+3. *FA3 pipeline state not in the dynamic region.* Disjoint smem moves only the
+   dynamic allocation. If any FA3 mbarrier lives in a static `__shared__`
+   declaration, disjoint storage would not protect it and the drain could still
+   clobber it. Checkable from the SASS/PTX shared-memory map.
+
+Note the ordering consequence: width 3 is not merely a performance change, it may
+be the correctness fix for symmetric mode. Its own FA2 numerics have to be right
+first (currently rel err 1.39 / 2.38 on the FA2 rows at width 3, against 0.0021 /
+0.0026 at width 1).

@@ -32,3 +32,21 @@ fi
 echo "TREESDONE  overlay next: bash tests/sync_to_pod.sh from the local checkout,"
 echo "then push python/sglang/srt/layers/attention/{flashinfer_backend,mixed_dispatch}.py,"
 echo "python/sglang/srt/managers/scheduler.py and python/sglang/srt/speculative/eagle_worker.py"
+
+# --- Pushing the fork's tree (the approach that actually works) -------------
+#
+#   tar czf fork_core.tgz include csrc flashinfer tests     # 1.9 MB compressed
+#   base64 -w0 | split into ~90 KB chunks                   # webshell arg limit
+#   per chunk: printf %s '<chunk>' >> /dev/shm/fork.b64
+#   base64 -d | tar xzf - -C /dev/shm/w/fi
+#
+# Two traps, both hit:
+#
+# 1. `flashinfer/data/` holds ABSOLUTE symlinks into the local checkout
+#    (`csrc -> /opt/tiger/flashinfer/csrc`, same for cutlass). They survive the
+#    tar and point at nothing on the pod, and the package then dies at import
+#    with `FileExistsError: .../flashinfer/data/csrc` when it tries to recreate
+#    them. Delete `flashinfer/data/{csrc,include,cutlass}` after extracting, or
+#    tar with --dereference.
+# 2. Clear `~/.cache/flashinfer` after replacing the tree, or the JIT serves
+#    objects built against the previous headers.

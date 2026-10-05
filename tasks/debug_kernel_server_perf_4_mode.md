@@ -21,7 +21,7 @@ predecessor effort (sync-free plan, mixed-kernel gate, 4-mode dispatch).
 - [x] [Do tiles 128 and 64 still belong in FA2?](#packed-gqa-class-boundary) — no for 128/64, yes for 16 (decode is bandwidth-bound)
 - [x] [Unified load-balance scheduler](#schedule-quality-4-mode) — imbalance 1.000 per task, waste 13.9% -> 54.8%
 - [x] [Dispatch gate rewritten from measurement](#packed-gqa-class-boundary) — `MIN_KV_TILES` was backwards and excluded the dominant row
-- [ ] [Unified split-KV](#split-kv-dark) — plumbed; every test batch yields 0 groups, so never exercised
+- [ ] [Unified split-KV](#split-kv-overflow) — **first batch that splits overflows partial-O at 2 GiB; a planning bug, not sizing**
 - [ ] [JIT reduction for the wgmma role](#split-kv-dark) — `partial_indptr`/`group_id` carried and ignored; partial write not implemented
 - [ ] [Multicast / DSMEM](#multicast-open) — 1.33-1.59x in isolation; `FLASHINFER_FUSED_CLUSTER=2` still faults
 - [ ] [Fused epilogue: tree build as a task](#fused-epilogue-design) — designed, not built
@@ -3351,7 +3351,42 @@ Two ways forward, both small:
 Option 2 is preferable: it needs no CuTe divide semantics, and the mapping it uses
 is the one the host test already checks.
 
-<a id="split-kv-dark"></a>
+<a id="split-kv-overflow"></a>
+### Split-KV on the wgmma class overflows partial-O, and it is not sizing
+
+Fixture 2 -- the captured serving batch, `qo [72, 439, 1]`,
+`prefix [164, 0, 5468]` -- is the first batch tested that actually splits KV, and
+it cannot plan:
+
+```
+RuntimeError: aligned_alloc ... Buffer overflow when allocating memory for
+holistic_partial_o
+```
+
+Three attempts, each ruled out as the cause:
+
+1. `max_num_kv_splits` summed `CTA_TILE_Q` over tasks 0 and 1 only, so the wgmma
+   class's groups were unaccounted. Fixed to sum every splitting task
+   (128 + 64 + 128 against 128 + 64, 1.67x). **Still overflows.**
+2. The harness's float workspace was 512 MiB, sized for the 3-task plan at two
+   CTAs per SM. Raised to **2 GiB**. **Still overflows.**
+3. One cluster per SM halves `kv_len_limit` (132 clusters to spread over instead
+   of 264), which roughly doubles splits per row -- real, but 2 GiB is ~4x the
+   original budget and covers that.
+
+So the demand is not merely larger, it is wrong: task 3 registers more partial-O
+rows than its geometry justifies. The likely mechanism, and the thing to
+instrument rather than reason about: `partial_o_nnz` accumulates
+`row_tile_size * num_kv_tiles * num_kv_heads` per group, and for the wgmma class
+`row_tile_size` is now counted in **packed** rows (row 1 is 3073 packed rows =
+25 tiles) while `num_kv_heads` multiplies on top -- which double-counts the head
+dimension that packing already folded into the rows.
+
+Next step is a print of `partial_o_nnz`, the per-group `nchunks` and the byte
+requirement under an env flag, from inside the plan. This is also why fixture 1
+passed: it yields zero split groups, so it never allocated a task-3 partial row
+and the bug stayed latent behind exactly the gap this catalogue flagged.
+
 #### The regression batch has no split-KV groups
 
 Read back from the plan: task 3 holds 116 work items and **0 of them carry a

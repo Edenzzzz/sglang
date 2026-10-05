@@ -94,6 +94,28 @@ measured. The unified split-KV reduction is the gate.
       [`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md); none measured.
 
 ## Kernel optimisations — 2026-10-06
+- [x] **`sm_split` is the dominant lever, and a constant is the wrong choice** —
+      2026-10-06: on a long-prefix fixture (qo 439/439/1, prefix 16384/0/5468) with
+      partitioning on: 8 -> 7892 us, 32 -> 2506, 64 -> 1342, 96 -> 1006,
+      124 -> **772**, 130 -> 775, 131 -> 796, against 421 us for FA2-on-everything.
+      All PASS. The batch is ~99% task-3 work, so `sm_split=8` costs **18.6x**
+      purely by starving the role that holds the work. Serving ran at
+      `SGLANG_FUSED_SM_FA3=8`. Size the split from the plan's per-task work.
+- [ ] **K/V pipelining: worth ~15%, blocked by an smem byte count** — 2026-10-06:
+      `-DFUSED_FA3_STAGES=1` removes FA3's load/compute overlap. Aliased
+      measurements: stages 1 -> 703.6 us, 2 -> 600.5, 3 -> 653.2. Disjoint smem
+      cannot fit a second stage: `cudaFuncSetAttribute` fails at 234544 against the
+      232448 opt-in limit (FA3 98352 + the 69632 persistent slot, 1-2 KB over).
+      So the 15% needs aliasing, and aliasing is currently unsafe.
+- [ ] **The aliasing race is mis-described in the source, and the fix is narrow** —
+      2026-10-06: the comment says it fires "when a CTA drains FA2 before entering
+      FA3", i.e. only under backfill. But backfill defaults **off** and aliased runs
+      still failed (rel err 16.6 / 18.6, intermittently passing at stages=3 — the
+      documented 3-in-10 flakiness). The real mechanism: the kernel initialises
+      FA3's pipeline mbarriers at entry, **before** the `sm_split` branch, so every
+      CTA does it -- including FA2-role CTAs, which then reuse that memory as their
+      persistent slot. Fix: initialise those mbarriers only on FA3-role CTAs. That
+      makes aliasing safe, which makes stages=2 fit, which is the ~15%.
 - [ ] **Task 3's `kv_len_limit` uses the wrong cluster count** — 2026-10-06: it is
       `f(total_kv_lens / num_clusters)` with `num_clusters` = **all 132**, not task
       3's own 8 under SM partitioning. So every task-3 row splits regardless of

@@ -1423,7 +1423,9 @@ class FlashInferAttnBackend(AttentionBackend):
             1,
             layer.scaling,
             fused["sm_fa3"],
-            fused["n_tok"],
+            # pers_row_offset: the unified plan covers every row, so the FA2 side
+            # starts at 0 rather than after the FA3 rows
+            0 if os.environ.get("SGLANG_FUSED_UNIFIED") == "1" else fused["n_tok"],
             # fa3_num_ctas, and it must match what the plan was built for: num_sm
             # for the symmetric kernel, sm_split for the asymmetric one.
             self._fused_num_sm() if self._fused_symmetric() else fused["sm_fa3"],
@@ -1490,6 +1492,14 @@ class FlashInferAttnBackend(AttentionBackend):
             extra_cuda_cflags=[
                 "-std=c++17", "--expt-relaxed-constexpr", "-arch=sm_90a", "-O3",
                 "--threads", "32",
+                # SGLANG_FUSED_UNIFIED drives the wgmma role from task 3 of the
+                # SAME plan the FA2 classes use, which is what gives it packed
+                # GQA and split-KV. Compile-time, so it must be a -D, and the
+                # extension must be rebuilt (fresh TORCH_EXTENSIONS_DIR) when the
+                # flag changes -- torch reuses a cached .so otherwise.
+                *(["-DFLASHINFER_FUSED_UNIFIED_WGMMA=1",
+                   f"-DFLASHINFER_FUSED_PACKED_Q={self.num_qo_heads // self.num_kv_heads}"]
+                  if os.environ.get("SGLANG_FUSED_UNIFIED") == "1" else []),
                 "-U__CUDA_NO_HALF_OPERATORS__", "-U__CUDA_NO_HALF_CONVERSIONS__",
                 "-U__CUDA_NO_HALF2_OPERATORS__", "-U__CUDA_NO_BFLOAT16_OPERATORS__",
                 "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
@@ -1713,11 +1723,26 @@ class FlashInferAttnBackend(AttentionBackend):
                 os.environ["FLASHINFER_FA3_MAX_CTAS"] = _prev
         # Constraint 2: the persistent side's pages start after FA3's -- expressed
         # in its indptr (ki_r is global), not by slicing the index array.
-        st["pers"].plan(
-            qi_r, ki_r, kv_indices, kl_r,
-            self.num_qo_heads, self.num_kv_heads, hd, hd, 1, causal=False,
-            q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
-        )
+        if os.environ.get("SGLANG_FUSED_UNIFIED") == "1":
+            # ONE plan over the WHOLE batch: the wgmma class is task 3 of it, so
+            # there is no row split, no second plan and no per-side offset. This
+            # also removes one of the two per-step H2D copies that made this path
+            # host-bound.
+            os.environ["FLASHINFER_FA3_TASK"] = "1"
+            qi_all = torch.from_numpy(qo_c.copy())
+            ki_all = torch.from_numpy(kv_c.copy())
+            kl_all = torch.from_numpy(np.maximum(kv, 1).astype(np.int32))
+            st["pers"].plan(
+                qi_all, ki_all, kv_indices, kl_all,
+                self.num_qo_heads, self.num_kv_heads, hd, hd, 1, causal=False,
+                q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
+            )
+        else:
+            st["pers"].plan(
+                qi_r, ki_r, kv_indices, kl_r,
+                self.num_qo_heads, self.num_kv_heads, hd, hd, 1, causal=False,
+                q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
+            )
         plan = dict(
             sm_fa3=int(sm_fa3), n_rows=int(n_rows), n_tok=int(n_tok),
             n_pages=int(n_pages), fa3_wrapper=st["fa3"], pers_wrapper=st["pers"],

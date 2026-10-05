@@ -173,11 +173,25 @@ measured. The unified split-KV reduction is the gate.
       all 132 SMs with perfect sharing -- which is why it leads at 18.39 ms against
       22.39 ms.
 
-      **So the fused design can only win if FA3 beats FA2 on FA3's own class**, by
-      enough to pay for partitioning the grid. Measured, it currently does not:
-      772 us against 421 us on a long-prefix fixture, i.e. 1.83x slower. That makes
-      per-role parity (task 2) not just the next item but the precondition for the
-      whole approach, and K/V pipelining (~15%) only part of the distance.
+      **The fused design needs FA3 to beat FA2 on FA3's own class**, by enough to
+      pay for partitioning the grid. Measured today it does not (772 us against
+      421 us on a long-prefix fixture, 1.83x), but **that figure is from an FA3
+      carrying three known, non-intrinsic handicaps** and should not be read as a
+      property of the design:
+
+      - `-DFUSED_FA3_STAGES=1`: one K/V stage, so no load/compute pipelining.
+        Already measured worth ~15% (600 us at stages=2), blocked only on an smem
+        byte count and the unexplained aliasing fault.
+      - the packed-GQA Q load gathers with `cp.async` and writes smem
+        **element-wise on a single warp**, where the path it replaced used TMA. The
+        source itself says "correctness first ... slower than the TMA path it
+        replaces"; its cost is being measured now with a skip-the-load diagnostic.
+      - the final O store is likewise a single-warp, per-row copy.
+
+      So the honest statement is that FA3's per-class deficit is an optimisation
+      backlog, not a structural cost, and three named items account for an unknown
+      but plausibly large share of it. My earlier framing of this as "the
+      precondition for the whole approach" overclaimed from an unoptimised kernel.
 - [x] **The serving regression was mostly the pinned split** — 2026-10-06: sweeping
       `SGLANG_FUSED_SM_FA3` on the real workload (8192/192, 200 prompts, rate 12,
       conc 32), unified arm against a 586.42 tok/s / 18.39 ms ITL baseline:

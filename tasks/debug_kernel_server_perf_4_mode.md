@@ -152,6 +152,32 @@ measured. The unified split-KV reduction is the gate.
 - [ ] [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), [cause found](#why-fused-is-slow) — register starvation: `mma.sync` at ~168 regs instead of ~255, from FA3's 384-thread launch bounds
 
 ## Server integration — 2026-10-05
+- [x] **Per-step tracing: the whole gap is in MIXED steps, and it is a real
+      tradeoff, not a bug** — 2026-10-06, `SGLANG_STEP_TRACE=1`, 2121 steps:
+
+      | step class | n | split 64 p50 | split 96 p50 |
+      |---|---|---|---|
+      | DECODE | 197 | 5.11 ms | 5.10 ms |
+      | EXTEND | 23 | 16.50 ms | 16.40 ms |
+      | MIXED | **1901** | **21.27 ms** | **102.97 ms** |
+
+      DECODE and EXTEND are identical across splits: pure-decode steps never reach
+      the fused kernel, which is why backfill changed nothing and why the idle-SM
+      theory was wrong. The cliff is entirely in MIXED steps, which dominate.
+
+      **What this says about the design.** In a mixed step the fused kernel must
+      divide SMs between the 512-token prefill chunk (FA3 class, 28 packed q-tiles
+      at gqa 7) and up to 64 decode rows (FA2 class). Starve either side and that
+      side's latency dominates, so 64/68 is a compromise rather than a win. The
+      baseline has no such tradeoff -- the persistent kernel runs both classes over
+      all 132 SMs with perfect sharing -- which is why it leads at 18.39 ms against
+      22.39 ms.
+
+      **So the fused design can only win if FA3 beats FA2 on FA3's own class**, by
+      enough to pay for partitioning the grid. Measured, it currently does not:
+      772 us against 421 us on a long-prefix fixture, i.e. 1.83x slower. That makes
+      per-role parity (task 2) not just the next item but the precondition for the
+      whole approach, and K/V pipelining (~15%) only part of the distance.
 - [x] **The serving regression was mostly the pinned split** — 2026-10-06: sweeping
       `SGLANG_FUSED_SM_FA3` on the real workload (8192/192, 200 prompts, rate 12,
       conc 32), unified arm against a 586.42 tok/s / 18.39 ms ITL baseline:

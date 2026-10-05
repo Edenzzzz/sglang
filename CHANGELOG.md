@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.8.9 — The serving fallback is strict by default (2026-10-05)
+
+A fused planning failure used to degrade to the persistent path with a warning. That
+is how the width-3 arm produced an apparent win -- 505.85 tok/s against 397.88 --
+while the fused launch was actually being rejected and roughly half the steps ran on
+the faster unfused kernel (composition 1897 at 47.4% against 53116 at 96.2%). The
+warning did not help, because the number was still produced and believed.
+
+`_plan_fused_split` now raises, naming the cause and saying that a run with a
+fallback compares a mixture rather than the fused path.
+`SGLANG_FUSED_ALLOW_FALLBACK=1` restores degradation for keeping a server alive, and
+never for measurement.
+
+
 ## v0.8.8 — The penalty factorises: 1.38x structural, 2.19x unexplained (2026-10-05)
 
 `scheduler.cuh:1199` gives the 3-task plan 2 CTAs/SM and the fused 4-task plan one,

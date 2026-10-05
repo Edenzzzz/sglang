@@ -1567,9 +1567,22 @@ class FlashInferAttnBackend(AttentionBackend):
         try:
             return self._plan_fused_split_inner(forward_batch, wrappers)
         except Exception as e:
-            # Degrade to the ordinary persistent path rather than killing the
-            # server. Logged at WARNING once per distinct message so a
-            # systematic planning failure is visible instead of silent.
+            # Strict by default. A fallback here makes an A/B compare a MIXTURE
+            # against the baseline instead of comparing the fused path: the
+            # width-3 arm looked like a 505.85 tok/s win over 397.88 purely
+            # because the fused launch was being rejected and roughly half the
+            # steps ran on the faster unfused kernel (composition counter 1897 at
+            # 47.4% against 53116 at 96.2%). A warning did not prevent that,
+            # because the number still got produced and believed.
+            #
+            # So raise unless SGLANG_FUSED_ALLOW_FALLBACK=1 is set explicitly,
+            # which is for keeping a server alive, never for measurement.
+            if os.environ.get("SGLANG_FUSED_ALLOW_FALLBACK", "0") != "1":
+                raise RuntimeError(
+                    f"fused plan failed and fallback is disabled: {e}. Any benchmark "
+                    f"run with a fallback compares a mixture, not the fused path. Set "
+                    f"SGLANG_FUSED_ALLOW_FALLBACK=1 only to keep a server up."
+                ) from e
             key = str(e)[:120]
             seen = getattr(self, "_fused_plan_warned", None)
             if seen is None:

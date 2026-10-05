@@ -4224,26 +4224,32 @@ ceiling, they lower it.
 FA2's mainloop already uses the 255 ceiling and still spills a little. In the fused
 kernel it gets 168 and spills about 10x as much.
 
-**Why FA2-role SMs need 2 CTAs, and which layouts can give them that.** Native FA2
-is 2 CTAs x 128 threads x 255 = 65,280 of the SM's 65,536 registers. It fills the
-register file and has no idle warps. A fused CTA always carries idle warpgroups,
-and a warpgroup cannot be dealloc'd below 24, so each idle warpgroup costs at
-least 3,072 registers that native FA2 never pays. In a single launch every CTA has
-the same size, so occupancy is the same on every SM.
+**Why FA2-only SMs need 2 CTAs, and what that implies for the design.** Native FA2
+has no warp specialization: it runs two symmetric 128-thread CTAs per SM, each
+thread at 255 registers, with no `setmaxnreg`. That is 65,280 of the SM's 65,536
+registers. FA3 prefill is one CTA of three warpgroups whose consumers hold ~240
+registers each, so it occupies the whole SM and cannot share it with FA2 tiles.
 
-| layout | FA2 threads/SM | regs/FA2 thread | FA3 |
-|---|---|---|---|
-| native FA2 | 256 | 255 | n/a |
-| today: 1 x 384, no setmaxnreg on the FA2 path | 128 | 168, spills | ok |
-| A: 1 x 384, idle warpgroups dealloc<24>, worker alloc<240> | 128 | 240 | ok |
-| B: 2 x 384 | 256 | 208 | breaks: consumers get ~112, need 240 |
-| C: 2 x 256, FA3's 8-warp config (dealloc<32>/alloc<160>) | 256 | 232 | fits |
+In a single fused launch every CTA has the same shape, so FA2 work inherits FA3's
+384-thread CTA. That is the entire cause of the slowdown: the two extra warpgroups
+pull the ceiling to 168 registers, and FA2 runs at half its native occupancy.
+`setmaxnreg` on the FA2 path would patch the registers but not the occupancy
+(the 1.38x, 60.3 vs 43.8 us), so it is not the fix.
 
-- **A** is the immediate fix. It removes the spills, and the expected kernel time
-  is about the 60.3 us that unfused FA2 runs at when forced to 1 CTA/SM.
-- **C** is the target. FA2-role SMs get native occupancy at 232 registers. It needs
-  FA3's 8-warp variant to perform acceptably, and smem of at most ~113 KB per CTA,
-  which requires the aliasing race fix. Neither is verified yet.
+**The design that follows.** Keep both kernels unmodified and put the fusion in the
+plan rather than the launch:
+
+- FA2-only SMs run the stock persistent kernel: 2 x 128-thread CTAs, 255 registers.
+- FA3-only SMs run stock FA3: 1 CTA x 3 warpgroups.
+- One unified scheduler sizes the two SM pools and pre-assigns tiles so both pools
+  finish together. This is the paper's pre-scheduling, adapted: the paper balances
+  by mixing small, interchangeable tiles on one SM, which FA3 prefill cannot do, so
+  the balancing unit becomes the pool size.
+
+Implementation: two concurrent launches pinned to disjoint SM partitions with green
+contexts (CUDA 12.4+), driven by one plan. Not yet built. The first measurement is
+whether the concurrent launch adds enough overhead to eat the gain, on the fixture
+against the 43.8 us unfused baseline.
 
 **What remains genuinely structural** is only the 1 CTA/SM cap: FA3's ~98 KB of
 smem leaves no room for a second CTA, and the unfused kernel loses 1.38x

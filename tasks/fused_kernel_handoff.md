@@ -542,3 +542,38 @@ warpgroup. The drain now carves one `kPersSlotBytes` slot per warpgroup (sized
 from the largest tile class, tile 16 at 69632 B), moves the cursor/merge tail
 past all three slots, and the launch's dynamic smem request covers
 `base + 3 * slot + 48` instead of one slot's worth.
+
+## 13. The JIT builds against a second copy of the headers
+
+The 4-task plan refuses to build from `BatchAttention.plan()`, and the diagnostic
+names the old signature inside
+`~/.cache/flashinfer/90a/generated/batch_attention_.../`:
+
+```
+RuntimeError: Ninja build failed.
+  .../generated/batch_attention_.../...
+  inline cudaError_t TwoStageHolisticPlan(void* float_buffer, size_t ...
+```
+
+That declaration is the pre-refactor one, without the `NUM_TASKS` template
+parameter. So flashinfer's JIT does not compile `TwoStageHolisticPlan` from the
+source tree on `PYTHONPATH`; it compiles against a generated/cached include tree
+of its own. Two consequences, and the second is the bigger one:
+
+1. Emitting a 4-task plan from the server path needs that copy refreshed -- purge
+   `~/.cache/flashinfer/90a/{cached_ops,generated}` for the affected module, or
+   point the JIT's include path at the edited tree -- before the unified queue can
+   run from sglang at all.
+2. **It explains the inert compile flags.** The standalone harness passes
+   `-I $FI/include` explicitly in its `load()` call, so header edits reach it --
+   which is why every numerics result in this document is trustworthy. The sglang
+   path goes through the JIT, so a header edit there may compile against the
+   cached copy instead. Any sglang-side measurement of a *header* change needs
+   the cache purged first, and `grep -c` of the generated `build.ninja` for the
+   expected `-D` or a sentinel is the only way to know it took.
+
+This is the fourth distinct way a change here has silently failed to take effect,
+after plain env vars for compile-time switches, torch JIT reuse of a cached `.so`,
+and a stale `compute-sanitizer` process skewing every arm. The pre-flight rule in
+memory covers all four: prove the change is in the binary before believing a
+number.

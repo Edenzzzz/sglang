@@ -1126,3 +1126,27 @@ What this buys, in the paper's terms: the tree build stops being a kernel bounda
 and becomes a task, so the 4-mode step is one launch with no host round trip -- the
 property section 18's audit shows is otherwise already within reach but still
 split across two kernels.
+
+## 20. Audit: which individual optimisations are actually tested
+
+| optimisation | state | evidence |
+|---|---|---|
+| **FA3 packed GQA** | **tested and implemented** | boundary measured (`pack_class_boundary.py`): 2.40x decode/draft, 1.70x verify, 1.00-1.01x chunks. Implemented in the unified role and numerically exact on the real batch (0/512 unwritten, 2.0e-4 / 1.45e-3 / 2.55e-3) |
+| **do we still need tile 128 and 64 in FA2** | **tested, answered: no for 128/64, yes for 16** | tile 128 -> wgmma by 1.69-3.23x; tile 64 (verify) loses unpacked (0.60x) and wins packed (1.47x at k=7, 1.03x at k=3); tile 16 stays on FA2 at 1.9x even packed, because decode is bandwidth-bound |
+| **unified load-balance scheduler** | **tested** | per-task imbalance 1.000 on every live task; tile waste 13.9% -> 54.8% overall, 6.2% -> 43.8% on verify; sync surface 1 plan / 1 H2D / 1 launch vs 2/2/1 and 2/2/2 |
+| **unified split-KV** | **plumbed, never exercised** | scheduler carries `kv_start`/`kv_end` and the chunk is a shifted `kv_indptr`; but every test batch yields **0 split groups** (KV under `kv_len_limit`), so no run has used it. Needs a long-KV batch -- `500 x 32768` is 256 tiles and will split |
+| **JIT reduction** | **untested for the wgmma role** | the FA2 runners' in-kernel merge is pre-existing and exercised; the wgmma role's partial write is **not implemented** -- `partial_indptr` and `group_id` are carried to it and ignored. Blocked behind split-KV producing a group at all |
+| **multicast (DSMEM)** | **measured in isolation, not integrated** | 1.587x cold, 1.326-1.364x L2-resident in `dsmem_kv_share.cu`; `FLASHINFER_FUSED_CLUSTER=2` still faults on the fused kernel, 11 candidates eliminated, cause unresolved |
+| **fused epilogue (tree build as a task)** | **designed, not built** | 19.1: keyed off a plan flag the way the reduction is keyed off `group_id`, writing into the CUDA-graph buffers that already exist, no new barrier |
+| **4-mode serving schedule** | **not reached** | blocked on `mix_with_running` crashing when the running batch is a spec batch; the sync audit (18) shows nothing else in the verify-metadata path forces a host round trip |
+
+So: two of the individual questions are fully answered with measurements, the
+scheduler's three claimed properties are measured, and three items -- split-KV,
+the wgmma JIT reduction, and multicast integration -- have **never run**. The
+fused epilogue and the 4-mode serving schedule sit behind those.
+
+Honest consequence for the order of work: testing the fused epilogue and the
+serving schedule "after all these individual optimisations are visited" means
+split-KV and the JIT reduction have to be exercised first on a long-KV batch,
+because they are the two that are plumbed-but-dark, and a serving number measured
+before then would again be measuring an incomplete kernel.

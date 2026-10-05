@@ -71,6 +71,14 @@ measured. The unified split-KV reduction is the gate.
       [`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md); none measured.
 
 ## Kernel optimisations — 2026-10-06
+- [ ] **Task 3's `kv_len_limit` uses the wrong cluster count** — 2026-10-06: it is
+      `f(total_kv_lens / num_clusters)` with `num_clusters` = **all 132**, not task
+      3's own 8 under SM partitioning. So every task-3 row splits regardless of
+      length: `qo=439, kv=439` became 25 q-tiles x 2 chunks x 4 kv-heads = 200 work
+      items, and `FA3_PLAN_CTAS=1` changes nothing because the divisor is global.
+      Consequences: partial-O traffic that need not exist, the reduction forced
+      onto the critical path, and a split count that undercuts the load-balance
+      claim. The limit should come from the task's own cluster allocation.
 - [x] [The reduction is unwired, not FA3-incapable](#wgmma-role-unreachable) — FA3 processes KV chunks fine; only the partial write and merge trigger were missing. Dynamic `kv_len_limit` splitting is the LPT balancer working correctly and stays
 - [x] [Q completion protocol](#why-fused-is-slow) — per-lane `cpasync_barrier_arrive_noinc` is correct and free; the hang was the increment variant inflating the expected arrival count. Fixture 2 rel err 3.3e-3, 0/512 unwritten
 - [x] [Register starvation measured](#why-fused-is-slow) — fused 168 regs / 720-816 B spill against standalone 255 / 56-288 B (`cuobjdump -res-usage`). Applies to `mma.sync` on large tiles, which belong on wgmma, so likely moot for the intended routing

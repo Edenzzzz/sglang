@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.9.0 — Register pressure is the leading candidate for the 2.19x (2026-10-05)
+
+Grounded in ptxas numbers already in `persistent_fa3_fused.cuh`, not in new
+reasoning. The fused kernel is `__launch_bounds__(384, 1)` because that is FA3's
+warp-specialised width, capping ~170 registers per thread; the standalone persistent
+kernel at 128 threads x 2 CTAs/SM has roughly 256. The file records the consequence:
+the fused body compiles to 168 registers with up to 4.4 KB of spill loads, and 6284
+bytes of spill stores in one configuration.
+
+It fits every measurement the other candidates failed. It is grid-independent (SM
+reservation 6%), protocol-independent (Q completion 0.3%), predicts that more
+warpgroups are worse (width 3: 147.9 vs 132.4 us, since extra warpgroups do not
+raise the ceiling), and survives at equal threads per SM -- the baseline forced to 1
+CTA/SM has the same 128 FA2 threads per SM and is still 2.19x faster.
+
+The test needs no GPU: compile the persistent mainloop under `__launch_bounds__(128,
+2)` against `(384, 1)` with `-Xptxas -v` and compare registers and spills. If it
+holds, the design implication is sharp -- one launch forces one set of launch bounds
+on both roles, the wider warp specialisation sets them, and SM pre-assignment inside
+a single kernel cannot be made free.
+
+
 ## v0.8.9 — The serving fallback is strict by default (2026-10-05)
 
 A fused planning failure used to degrade to the persistent path with a warning. That

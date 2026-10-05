@@ -4583,3 +4583,51 @@ sync -- would have to beat 3.02x combined to show a gain at all, and 1.38x of
 that is not addressable by scheduling at any quality. Either the 2.19x comes out
 and the argument becomes "fusion costs 1.38x structurally and buys back more than
 that in schedule quality", or the fused-launch structure needs revisiting.
+
+
+<a id="register-pressure-candidate"></a>
+### The leading candidate for the 2.19x: register pressure from FA3's launch bounds
+
+This one is not a new hypothesis from mechanism; it rests on ptxas numbers already
+recorded in `persistent_fa3_fused.cuh`.
+
+The fused kernel is declared
+`__launch_bounds__(FA3Traits::NUM_WARPS * 32, 1)` -- 384 threads, one CTA per SM,
+because that is FA3's warp-specialised width. With 65536 registers per SM, 384
+threads cap the allocation at **~170 registers per thread**. The standalone
+persistent kernel runs 128 threads per CTA at 2 CTAs/SM, i.e. 256 threads per SM,
+leaving roughly 256 per thread.
+
+The file already records what that costs: "the fused body compiles to 168
+registers with up to 4.4 KB of spill loads" (line 427), and separately "ptxas
+reported 6284 bytes of spill stores in this function against 604 when the base
+was provably zero" (line 119). So the FA2 mainloop inside the fused kernel runs
+the same code under a register budget roughly a third smaller, spilling kilobytes
+per thread.
+
+**Why this fits every measurement so far, where the other candidates did not:**
+
+- it is independent of how many SMs are reserved (6% over an 8x sweep) -- the
+  budget is per-thread and set by the launch bounds, not by the grid;
+- it is independent of the Q completion protocol (0.3%);
+- it predicts that **more** warpgroups make things **worse**, which is what width
+  3 measured (147.9 against 132.4 us): extra warpgroups do not raise the register
+  ceiling, they only add contention and spill traffic;
+- it survives at equal thread count per SM, which is the decisive one. The
+  baseline forced to 1 CTA/SM has 128 FA2 threads per SM, the same as the fused
+  kernel's FA2 role, and is still 2.19x faster (60.3 against 132.1 us). Equal
+  threads, equal CTAs, different register budget and different spill volume.
+
+**The test needs no GPU.** Compile the persistent mainloop in isolation under
+`__launch_bounds__(128, 2)` and under `__launch_bounds__(384, 1)` with
+`-Xptxas -v` and compare the reported registers and spill stores/loads. If the
+384-thread form spills kilobytes where the 128-thread form spills hundreds of
+bytes, this is the 2.19x and the fix is structural: the FA2 role needs its own
+launch bounds, which a single fused launch cannot give it -- or FA3's width has
+to come down.
+
+That last point is the one that matters for the design. A single launch forces one
+set of launch bounds on both roles, and the role with the wider warp
+specialisation sets them. If this candidate holds, SM pre-assignment inside one
+kernel cannot be made free, and the structural cost is not the 1.38x from
+CTAs/SM alone but 1.38x times whatever the register ceiling costs.

@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.7.5 — Q's drain stops draining K/V (2026-10-05)
+
+### The packed-GQA Q load is now issued before the first K tile
+
+The packed-GQA Q load on the sparse path finishes with a cp.async group drain
+(`cp_async_fence` + `cp_async_wait<0>`) and then a single-thread arrive on
+`barrier_Q`. That drain is what made the correct unified kernel ~3x slow
+(8,379 against 24,885 tok/s), and the reason was mis-stated in the code: the
+comment claimed narrowing the wait needed the KV pipeline's outstanding group
+count.
+
+There is no such count to learn. The KV copies signal completion through
+`cpasync_barrier_arrive`, the mbarrier mechanism, and are never committed to a
+cp.async group at all -- so `cp.async.commit_group` sweeps them, still
+uncommitted, into the very group it closes for Q. Committed groups also retire
+in order, so no `wait_group N` bound can retire Q's group while an older group
+is outstanding. Both facts point the same way: the only way for Q's drain to
+cover Q alone is for nothing older to be in flight when it runs.
+
+So the Q load moves above the last-k-tile load, as a `load_q_tile` lambda
+called from one of two sites (`FLASHINFER_FUSED_Q_LATE` restores the old
+ordering for A/B). A per-lane `cpasync_barrier_arrive` on `barrier_Q` was the
+other candidate and cannot work: that instruction tracks only the cp.async of
+its own issuing thread, so all 32 lanes would have to arrive on a barrier whose
+arrival count is 1 -- which is exactly the 1500 s hang already paid for once.
+
+Compile-checked in three configurations (plain, packed-GQA, and `Q_LATE`).
+Not yet measured on device: the serving A/B is what decides whether the ~3x
+comes back, and it is reported in
+`tasks/debug_kernel_server_perf_4_mode.md`.
+
+### Fix: the lambda no longer captures structured bindings
+
+Hoisting the block into a lambda made it capture `q_tile_idx`, `kv_head_idx`,
+`qo_indptr`, `qo_len` and the Q tensors, all of which come from structured
+bindings -- capturing those is C++20 and this builds as C++17 (nvcc only warns).
+They are passed as init-captures over plain aliases instead, keeping the
+original names so the body is unchanged.
+
+### Provisioning: install sglang's dependency closure from the released package
+
+Hand-listing dependencies cost several server-start cycles (pynvml, IPython,
+`sgl_kernel`, one at a time), and `sgl_kernel` cannot come from a source tree.
+`drivers/install_deps.sh` installs `sglang[srt]` for the closure and then
+re-pins `torch==2.8.0+cu128`, which is mandatory rather than cosmetic: that
+install drags torch forward, the fused extension needs 2.8.0, and a drifted
+torch would quietly make measurements incomparable.
+
 ## v0.7.4 — One Scheduler for Both Roles (2026-10-05)
 
 ### Refactor: the wgmma role becomes a task in our own plan, not `PrefillSM90Plan`

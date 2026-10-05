@@ -933,3 +933,43 @@ Next, in order: serving-path wiring in sglang (one plan over all rows,
 `FLASHINFER_FA3_TASK=1`, the two `-D`s in the ext build, `pers_row_offset = 0`),
 then the A/B against the 24,892.7 tok/s baseline with no `sm_fa3` fraction in
 play, then the async copies, then split-KV on a long-KV batch.
+
+## 17. Unified queue on the serving path: correct, and 3.2x slower
+
+| arm | tok/s | mean ITL | mean TTFT |
+|---|---|---|---|
+| baseline, fused off | 24,800.1 | 18.57 ms | 2,697 ms |
+| unified queue (`SGLANG_FUSED_UNIFIED=1`) | **7,693.5 (-69%)** | 60.45 ms | 10,275 ms |
+
+The fused share is 96.2%, so the path really is running, and the standalone
+regression says it is numerically exact. The loss is the copy implementation, and
+the size of it is arithmetic rather than mystery:
+
+- The packed Q load is issued by **one warp** (`warp_idx_in_warpgroup == 0`),
+  which must move a 128 x 128 bf16 tile = 32 KB. Vectorised at 16 B that is 2,048
+  transactions across 32 threads, 64 serialised round trips per thread, against
+  **one** TMA instruction before. The O store is similar, spread over
+  `NUM_COPY_THREADS` but still a per-row scalar read of swizzled smem.
+- There are 116 wgmma work items per layer in this batch, so that cost is paid
+  116 times per layer, 28 layers per step.
+
+So the measurement does not indict the unified queue; it indicts a deliberately
+naive copy that was written to validate the mapping. The mapping is validated.
+
+What must change, in order:
+
+1. **Tiled `cp.async` for the packed Q load**, issued by the whole producer
+   warpgroup rather than one warp, with the gather expressed through the same
+   packed view. The KV path in the same function is the template:
+   `copy_if(gmem_tiled_copy_k, predicate, src, dst)` committed with
+   `cpasync_barrier_arrive`. This is where the 69% lives.
+2. **Tiled store for O**, same reasoning, using `tiled_copy_O` with the packed
+   view as destination instead of the per-row loop.
+3. Re-measure. Only then is the unified queue's real cost known, and only then
+   does the comparison against -11.5% (static split) and the +20% Amdahl ceiling
+   mean anything.
+
+Recorded as a negative result with its cause rather than as a verdict on the
+architecture, because the two are separable here and the evidence separates them:
+same kernel, same plan, exact numerics, and a copy that is two orders of magnitude
+off the instruction count it replaced.

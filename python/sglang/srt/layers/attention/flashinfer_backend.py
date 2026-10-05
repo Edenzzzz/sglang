@@ -1728,15 +1728,28 @@ class FlashInferAttnBackend(AttentionBackend):
             # there is no row split, no second plan and no per-side offset. This
             # also removes one of the two per-step H2D copies that made this path
             # host-bound.
-            os.environ["FLASHINFER_FA3_TASK"] = "1"
+            # Scoped to THIS plan call, like FLASHINFER_FA3_MAX_CTAS above.
+            # Left set, it makes every later BatchAttention.plan() in the process
+            # emit a 4-task plan -- including the ordinary non-fused path, whose
+            # run() has three runners and correctly refuses one:
+            #   "got a plan with 60 entries but executes 3 tasks (49 entries)".
+            # The refusal is the guard working; the bug was the global write.
             qi_all = torch.from_numpy(qo_c.copy())
             ki_all = torch.from_numpy(kv_c.copy())
             kl_all = torch.from_numpy(np.maximum(kv, 1).astype(np.int32))
-            st["pers"].plan(
-                qi_all, ki_all, kv_indices, kl_all,
-                self.num_qo_heads, self.num_kv_heads, hd, hd, 1, causal=False,
-                q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
-            )
+            _prev_task = os.environ.get("FLASHINFER_FA3_TASK")
+            os.environ["FLASHINFER_FA3_TASK"] = "1"
+            try:
+                st["pers"].plan(
+                    qi_all, ki_all, kv_indices, kl_all,
+                    self.num_qo_heads, self.num_kv_heads, hd, hd, 1, causal=False,
+                    q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
+                )
+            finally:
+                if _prev_task is None:
+                    os.environ.pop("FLASHINFER_FA3_TASK", None)
+                else:
+                    os.environ["FLASHINFER_FA3_TASK"] = _prev_task
         else:
             st["pers"].plan(
                 qi_r, ki_r, kv_indices, kl_r,

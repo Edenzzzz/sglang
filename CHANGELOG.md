@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.8.6 — The 3x is intrinsic to the fused kernel (2026-10-05)
+
+Sweeping sm_split with the wgmma role empty and plan_ctas matched at every point:
+129.7 / 130.5 / 132.2 / 137.4 us at 2 / 4 / 8 / 16 reserved clusters, against a
+42.6-43.9 us unfused baseline measured in the same runs. An 8x change in reserved
+clusters costs 6%, so SM reservation is not the cause and the confound flagged last
+entry is real but small -- my hypothesis that it explained the 3.01x is refuted.
+
+What stands: the fused kernel is ~3x slower than the unfused persistent kernel on
+identical work (3.02-3.13x across configurations, matching the 3.00x serving ITL
+ratio), and that penalty belongs to the fused kernel itself. The SM split, the Q
+completion protocol, thread width, and plan construction have each now been measured
+and eliminated.
+
+This reframes the effort: the scheduling argument is about how work is distributed
+and cannot be worth 3x. No schedule reaches the 30% target while the fused path
+starts a factor of three behind. Next, and never yet measured here: FA2 occupancy
+inside the fused kernel (1 CTA/SM where it natively runs 2), the element-wise
+packed-GQA O store, and the queue protocol -- which the width-3 result hinted at,
+since adding warpgroups made it slower, as a contended queue would.
+
+
 ## v0.8.5 — The kernel-level ratio: 3.01x, and the confound in it (2026-10-05)
 
 With a separate 3-task plan as the reference, the fused kernel runs 132.2 us against

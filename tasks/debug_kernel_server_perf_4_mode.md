@@ -4439,3 +4439,51 @@ whatever gap remains against 43.9 us is the fused kernel's real overhead, and th
 difference between that and 132.2 us is the price of reserving 8 clusters for an
 idle role. That is a single parameter sweep on a harness that now has the timing
 and the reference in place.
+
+
+<a id="intrinsic-3x"></a>
+### The 3x is INTRINSIC to the fused kernel, not SM reservation
+
+The sweep that separates them. Fixed fixture batch, wgmma role **empty**,
+`plan_ctas` matched to `sm_split` at every point (the kernel refuses them
+unequal, because it would otherwise drop FA3 work for CTAs >= sm_split without a
+trace), 200 iterations, with the 3-task unfused reference measured in the same
+run:
+
+| sm_split | fused kernel | unfused baseline | ratio |
+|---|---|---|---|
+| 2 | 129.7 us | 42.9 us | 3.02x |
+| 4 | 130.5 us | 42.8 us | 3.05x |
+| 8 | 132.2 us | 42.6 us | 3.10x |
+| 16 | 137.4 us | 43.9 us | 3.13x |
+
+**Reservation is not the cause.** An 8x change in the number of clusters reserved
+for a role with no work moves the kernel by 6% (129.7 -> 137.4 us). Extrapolated
+to zero reserved clusters the fused kernel still costs ~129 us against a ~43 us
+baseline. So the confound I flagged in
+[the previous entry](#kernel-ratio-measured) is real but small, and my hypothesis
+that it explained the 3.01x is **refuted**.
+
+**What this establishes, and it is the most important result in this file.** The
+fused kernel is **~3x slower than the unfused persistent kernel on identical
+work**, measured at kernel level with fixed inputs, and that penalty is a
+property of the fused kernel itself rather than of the SM split, the Q completion
+protocol, thread width, or plan construction -- each of which has now been
+measured and eliminated. The ratio is also stable across configurations (3.02 -
+3.13x) and matches the serving ITL ratio of 3.00x, so serving is simply showing
+the kernel penalty.
+
+That reframes the whole effort. The scheduling story -- near-perfect load
+balance, near-zero tile waste, easier scheduling -- is an argument about how work
+is *distributed*, and it cannot be worth 3x. Until the fused kernel executes the
+same work at something close to 43 us, no schedule can bring the 30% target into
+reach, because the fused path starts a factor of three behind.
+
+**Where to look next, in priority order, all measurable with the harness as it
+now stands.** The FA2 role inside the fused kernel runs at 1 CTA/SM where it
+natively runs 2, so each SM hosts half the FA2 occupancy -- and unlike the thread
+width question (settled: more threads are *slower*), occupancy has never been
+measured here. Then the element-wise packed-GQA O store, and the queue protocol
+itself (the per-warpgroup named barriers and the shared work queue), which the
+width-3 result already hinted is the binding constraint: adding warpgroups made
+it slower, which is what a contended queue does.

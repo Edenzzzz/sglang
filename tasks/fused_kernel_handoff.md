@@ -675,3 +675,38 @@ Fixes, in the order worth trying:
 3. Keep two CTAs per SM for FA2 and have FA3's scheduler index
    `work_indptr[2 * blockIdx.x]`-style, i.e. teach it the cluster mapping rather
    than changing the plan.
+
+### 15.1 Aligning the index spaces did not change the outcome
+
+With a 4-task plan now indexing one slot per CTA (`num_sm *= 1`) and the wgmma
+task pinned to the low cluster range (`FLASHINFER_SM_PARTITION=1`,
+`FLASHINFER_FA3_SM_SPLIT_CLUSTERS=8`, both sentinels verified on the pod), the
+result is unchanged: 511 of 512 q rows unwritten, tile-16 row exact at 2.5e-3.
+
+That is informative. FA3 writing *nothing* -- rather than writing to wrong
+addresses -- means `get_initial_work` returned invalid on every CTA, i.e.
+`work_indptr[blockIdx.x] == work_indptr[blockIdx.x + 1]` everywhere. Wrong
+packed-row addressing would still have written garbage somewhere. So the
+hypothesis to test next is upstream of the scheduler: **task 3 may be receiving
+no work items at all.**
+
+Concrete next check, and it is an inspection rather than another theory: dump the
+plan. `tasks[3].work_indptr` over its cluster range, plus the per-task item
+counts, printed from the ext or read back from the int workspace. Three things it
+will distinguish:
+
+1. the routing branch never ran -- `FLASHINFER_FA3_TASK` not seen by the plan
+   call, so `NUM_TASKS` was 3 and `idx_qo_kv_len_vec[3]` does not exist (the
+   60-entry vector says otherwise, but the ext and the plan are separate calls
+   and only the plan's length was checked);
+2. routing ran but admitted nothing -- `packed_qo_len >= 128` not satisfied
+   because `gqa_group_size` inside the plan differs from the ext's view;
+3. items exist but the cluster override put them outside `[0, 8)`, e.g. because
+   `sm_partition` was false in that call so the override's guard
+   (`sm_partition && task_work[3] > 0`) did not fire.
+
+Case 3 is the most likely: the override is gated on `sm_partition`, which is read
+from `FLASHINFER_SM_PARTITION` inside the plan, and the default is **false** --
+so if that variable did not reach the plan process the ranges stayed
+`[0, num_clusters)` for every task and the MinHeap spread task 3 across all 132
+clusters, of which only 8 run FA3.

@@ -4618,9 +4618,30 @@ per thread.
   kernel's FA2 role, and is still 2.19x faster (60.3 against 132.1 us). Equal
   threads, equal CTAs, different register budget and different spill volume.
 
-**The test needs no GPU.** Compile the persistent mainloop in isolation under
-`__launch_bounds__(128, 2)` and under `__launch_bounds__(384, 1)` with
-`-Xptxas -v` and compare the reported registers and spill stores/loads. If the
+**The test needs no GPU, and here is how far it got.** Compiling
+`tests/fused_fa3_persistent_ext.cu` locally with `-Xptxas -v` (torch 2.9.1 and
+nvcc are both present on the CPU box) fails for a reason worth recording, because
+it is a trap:
+
+```
+error: class "PersistentParams" has no member "group_id"   (and group_counter,
+group_nchunks, group_row_begin, group_nrows, group_kv_head, cluster_cursor,
+num_pers_clusters)
+```
+
+`PersistentParams` is defined by the **generated** `batch_attention_config.inc`,
+and the only copies in the local JIT cache
+(`~/.cache/flashinfer/90a/generated/...`) were produced by the **upstream**
+flashinfer installed in site-packages -- which has none of this fork's
+JIT-reduction fields. So the local cache cannot be used to compile this fork, and
+the include that looks like the obvious fix produces a header describing a
+different struct.
+
+The way through is to generate the `.inc` from **our** fork's codegen (its
+`flashinfer/jit` path with this fork's `persistent_params`), or to copy the one
+the pod already generated under its own JIT cache, and only then compile with
+`-Xptxas -v`. Compare the reported registers and spill stores/loads between
+`__launch_bounds__(128, 2)` and `__launch_bounds__(384, 1)`. If the
 384-thread form spills kilobytes where the 128-thread form spills hundreds of
 bytes, this is the 2.19x and the fix is structural: the FA2 role needs its own
 launch bounds, which a single fused launch cannot give it -- or FA3's width has

@@ -99,13 +99,16 @@ MIN_SM_UTIL = 0.5
 # nearly the whole device on FA3, which the same sweep measures as one of the
 # two worst settings. That cost model was fit for the overlap kernel and does
 # not transfer to this kernel's makespan, so this bound must stay measured.
-# The ceiling used to be 64 of 132, which caps FA3 at half the GPU no matter how
-# much of the batch is FA3-class. Measured on a long-prefix fixture that is ~99%
-# FA3 work: 64 clusters ran 1342 us where 124 ran 772 us and FA2-on-everything ran
-# 421 us -- a 1.74x penalty from the clamp alone. The analytic balance point should
-# be free to reach the whole grid; the floor stays so a tiny FA3 share still gets
-# enough CTAs to be worth splitting for.
-MIN_SM_FA3, MAX_SM_FA3 = 8, 131
+# REVERTED to 64 after measuring. I raised the ceiling to 131 on the strength of a
+# long-prefix fixture that is ~99% FA3 work, where 64 clusters cost 1.74x against
+# 124. On the actual serving workload it made things ~2x WORSE: 100.41 tok/s and
+# 113.35 ms ITL against 198.16 / 54.86 at the pinned 8, with the same 586 tok/s
+# baseline. The reason is that the fixture is unrepresentative -- at 8192 input with
+# chunked-prefill 512 the FA3-class rows are 512-token chunks, so FA3 does not hold
+# most of the work and the decode side dominates ITL. Giving FA3 most of the grid
+# starves it. The clamp was protecting serving, and the right ceiling is an
+# empirical question per workload shape, not a work-share identity.
+MIN_SM_FA3, MAX_SM_FA3 = 8, 64
 
 
 def _as_i64(a):

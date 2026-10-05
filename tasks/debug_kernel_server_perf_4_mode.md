@@ -94,6 +94,25 @@ measured. The unified split-KV reduction is the gate.
       [`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md); none measured.
 
 ## Kernel optimisations — 2026-10-06
+- [ ] **Port upstream FA3 into the fused launch template** — 2026-10-06, viability
+      established. `/opt/tiger/flash-attention/hopper` compiles clean against our
+      cutlass v4.1.0 (zero errors; include order is `utils.h` ->
+      `tile_scheduler.hpp` -> `mainloop_fwd_sm90_tma_gmma_ws.hpp`).
+      `CollectiveMainloopFwdSm90` is templated on exactly the features we
+      hand-rolled worse: `PagedKVNonTMA_` (our sparse gather), `PackGQA_` (our
+      packed-Q load), `Split_` (our partial/merge path), `Varlen_`, `Stages`, and
+      `IntraWGOverlap` (S/P ping-pong, which we do not have at all).
+      **Smem fits.** Upstream `TensorStorage`: stages1 132096, stages2 197632,
+      stages3 263168. With the FA2 slot at 69632 against the 232448 opt-in limit,
+      stages=1 fits **disjointly** at 201728 with 30720 spare -- so the port needs
+      no aliasing and avoids that unexplained fault. stages=2 would need aliasing
+      (197632 alone fits); stages=3 never fits.
+      Starting at stages=1 still captures the gap, because stages was measured at
+      only ~15% while the mainloop difference is ~1.6x.
+      Plan: instantiate upstream's mainloop + `CollectiveEpilogueFwd` inside the
+      `blockIdx.x < sm_split` branch, feed it our plan's work items through a
+      scheduler adapter, keep the FA2 role and the shared smem budget untouched,
+      and delete our packed-Q gather / sparse path / partial write once it is live.
 - [x] **`sm_split` is the dominant lever, and a constant is the wrong choice** —
       2026-10-06: on a long-prefix fixture (qo 439/439/1, prefix 16384/0/5468) with
       partitioning on: 8 -> 7892 us, 32 -> 2506, 64 -> 1342, 96 -> 1006,

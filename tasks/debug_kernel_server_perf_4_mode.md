@@ -35,10 +35,22 @@ measured. The unified split-KV reduction is the gate.
       `group_counter != nullptr`, so every split chunk writes a partial and
       nothing merges. Earlier commits said "group tables in the epilogue params"
       when only the declarations existed.
-      **Next:** populate `partial_o`, `partial_lse`, the merge maps and the group
-      tables there, from the same persistent params the FA2 roles already use.
-      Gate: fixture 2 must reach 0 unwritten rows, ~3e-3 on the FA3 row, and
-      `partial_o_nnz` > 56.
+      **Isolated 2026-10-06.** The same build **passes** with
+      `FLASHINFER_FA3_MIN_PACKED_QO=4096` (all rows on FA2): 0/512 unwritten, rel
+      err 3.7e-3 / 4.4e-3 / 8.3e-4. So the shared-merge extraction and the epilogue
+      changes did **not** break the FA2 path — the fault is specific to task-3 rows
+      being split. It also explains the confusing row labels: with default routing
+      `qo=439` (packed 3073) goes to **task 3**, so the harness's "task0" text is
+      static, not actual routing, and both failing rows were wgmma rows.
+      **The live suspect is a row-space mismatch.** `store_partial` writes a dense
+      `[nrows, HEAD_DIM]` slab indexed from `partial_indptr`, and `MergeGroupJIT`
+      reads partials and writes final O through `merge_indptr`/`merge_o_indices`
+      in the FA2 roles' row space. The wgmma role's rows are **packed GQA**
+      `(G, seq)`, so its `partial_indptr` rows and the merge's expected row
+      ordering may not correspond. Next: dump, for one task-3 group,
+      `partial_indptr`, `group_row_begin`, `group_nrows` and the `merge_indptr`
+      span, and check whether the rows the epilogue wrote are the rows the merge
+      reads.
       [detail](#wgmma-role-unreachable)
 - [ ] **2. Per-role parity vs standalone SOTA** — FA3 vs flash-attention, FA2 vs
       the stock persistent kernel, on fixed-input kernel timing with L2-swizzled

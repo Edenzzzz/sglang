@@ -5,6 +5,19 @@
 - It MUST be running when launching sglang servers — without it the GPU gets reclaimed and the server subprocess dies silently.
 - Script: `bash /mlx_devbox/users/wenxuan.tan/playground/VibeCUDA/scripts/gpu_keepalive.sh start|stop`
 
+# Documentation Format
+
+- Always keep task docs as a **structured, dated checklist**, so progress is
+  visible at a glance rather than buried in prose.
+- Each doc opens with a single `# Current goal` section at the top: what is being
+  chased right now, and the tasks **in priority order**.
+- Every checklist item carries a date and a one-line outcome. `[x]` means measured
+  or validated against a reference; `[ ]` means not run. Never mark an item done
+  because code was written.
+- Condense and merge as findings supersede each other. A doc that accumulates
+  every intermediate hypothesis is unreadable; keep the conclusion and the
+  evidence, delete the path.
+
 # Task Checklists
 
 - Check `tasks/*.md` files for unchecked `- [ ]` TODOs — these are usually overnight/long-running tasks.

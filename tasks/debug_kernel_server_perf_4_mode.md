@@ -3926,6 +3926,29 @@ on the FA2 side):
   `group_nrows`/`group_kv_head`, which the FA3 params do not currently carry and
   which must come in alongside `wgmma_plan`.
 
+**The fixture that gates it.** Fixture 2 cannot validate this work because its
+FA3 row never splits, so the validation gate is a third fixture whose task-3 row
+is long enough to be chunked. Driving `fixture_run.sh` with
+
+```
+FIXTURE='qo:512,1 prefix:16384,0' UNIFIED=1 SPLITS=8 FA3_PLAN_CTAS=8
+```
+
+puts a `qo=512` row (packed `512 * 7 = 3584`, so task 3) against a 16 K prefix,
+which the plan splits at a `kv_len_limit` on the order of 2 K across 8 FA3
+clusters, while the second row keeps an FA2 class in the batch so the two
+reduction paths are exercised in one launch.
+
+The gate has two sides, and both matter:
+
+- **today** it must fail at plan time with the guard's message
+  ("a task-3 (wgmma) row needs KV splitting"). If it instead runs, the guard's
+  predicate is wrong and the plan is still capable of emitting a silently wrong
+  answer;
+- **after the fix** it must match the reference to the same tolerance fixture 2
+  holds (rel err ~3e-3 for the FA3 row) *and* report `partial_o_nnz` larger than
+  fixture 2's 56, since the FA3 chunks now claim partial rows of their own.
+
 Until that lands, the honest statement about long context is that the kernel has
 no correct long-context path at all on the wgmma role.
 

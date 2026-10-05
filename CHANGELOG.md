@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.7.9 — 200 split chunks and a correct answer (2026-10-05)
+
+The exact guard reports 200 task-3 work items carrying JIT-reduction group ids on
+fixture 2, in both arms. Fixture 2 nevertheless passed at rel err 3.2e-3 with 0/512
+unwritten rows, and 200 unmerged distinct slices sharing final O rows cannot produce
+that. Leading hypothesis: the plan emits each chunk's `kv_start`/`kv_end` as the
+row's full range, so the chunks are redundant rather than partial -- identical
+overwrites, invisible to a correctness check, and roughly 6x duplicated attention on
+the wgmma role. That is the same order as the 3x serving deficit and independent of
+the Q drain, so it may be a second and larger cause the drain estimate was masking.
+
+Consequence for the plan of record: do not implement the reduction as specced until
+this is settled by dumping task 3's per-item ranges, because the spec assumes the
+chunks are genuine partials.
+
+
 ## v0.7.8 — The guard fires on fixture 2 (2026-10-05)
 
 Ran the plan guard against fixture 2 to validate Q's completion protocol and got

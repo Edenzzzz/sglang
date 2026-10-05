@@ -4082,3 +4082,53 @@ settled on fixture 2 -- which reproduced the earlier `barrier_Q` hang in seconds
 anything besides the producer arrives on `barrier_Q`, because arming it for 32
 breaks the phase bookkeeping if so. (2) Re-run this A/B. (3) Only then the >64k
 run, which additionally needs [the wgmma reduction](#split-kv-dark).
+
+
+<a id="task3-redundant-work"></a>
+### 200 chunks, a correct answer, and the hypothesis that reconciles them
+
+The exact guard -- keyed on emitted group ids rather than the `split_kv`
+predicate -- reports **200 task-3 work items carrying a JIT-reduction group id**
+on fixture 2, in both completion-protocol arms (`scheduler.cuh:1601`). So the
+splitting is real and heavy, not an artefact of a wide predicate.
+
+That sharpens the contradiction rather than resolving it. Fixture 2 passed at rel
+err 3.2e-3 / 2.9e-3 / 6.9e-4 with `0/512` unwritten rows. If 200 task-3 items
+were each computing a distinct KV slice and writing it to shared final O rows
+with no merge, row 0 would hold the attention over one slice only -- an error of
+order 1, not 3e-3. Both observations are solid, so one of my assumptions about
+what those items contain must be wrong.
+
+**Leading hypothesis: the chunks are redundant, not partial.** The unified
+scheduler derives each item's range from `params.kv_start[work_idx]` and
+`params.kv_end[work_idx]`. If the plan emits those as the row's *full* range for
+every chunk of a group -- rather than the chunk's slice -- then all 200 items
+compute the same complete attention and write the same correct values. Identical
+overwrites are invisible to a correctness check, which is exactly what fixture 2
+reports.
+
+This would explain both results at once, and it carries a large performance
+consequence: fixture 2's task 3 would be doing on the order of 200 work items
+where ~34 q-tiles of genuine work exist, i.e. roughly 6x redundant attention on
+the wgmma role. That is the same order as the 3x end-to-end serving deficit, and
+it is *independent of* the Q-completion drain -- which would make it a second,
+larger cause that the drain's 3x estimate has been masking.
+
+**How to settle it, cheaply and before any more kernel work.** Dump
+`kv_start`/`kv_end`/`group_id`/`partial_indptr` for task 3 on fixture 2 (the plan
+already has `FLASHINFER_PLAN_VERBOSE`; this needs a per-item print, not a
+summary) and compare against the row's true range. Three outcomes:
+
+- ranges are the row's full extent -> redundant work confirmed. The fix is in the
+  plan, not the epilogue, and the reduction becomes *cheaper* than specced
+  because correct partial ranges plus a merge replace 6x duplicated work;
+- ranges are true slices -> then fixture 2's pass is the thing to distrust, and
+  the overwrite must be benign for a reason not yet identified. Do not build on
+  that fixture until the reason is known;
+- ranges are slices for some groups and full for others -> the plan is
+  inconsistent between tasks, which is its own bug.
+
+Until this is settled, the reduction spec in [#split-kv-dark](#split-kv-dark)
+should not be implemented as written: it assumes the chunks are genuine partials,
+and if they are not, the partial write would be solving a problem the plan is
+creating.

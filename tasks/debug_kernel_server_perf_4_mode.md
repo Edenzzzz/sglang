@@ -21,7 +21,7 @@ predecessor effort (sync-free plan, mixed-kernel gate, 4-mode dispatch).
 - [x] [Do tiles 128 and 64 still belong in FA2?](#packed-gqa-class-boundary) — no for 128/64, yes for 16 (decode is bandwidth-bound)
 - [x] [Unified load-balance scheduler](#schedule-quality-4-mode) — imbalance 1.000 per task, waste 13.9% -> 54.8%
 - [x] [Dispatch gate rewritten from measurement](#packed-gqa-class-boundary) — `MIN_KV_TILES` was backwards and excluded the dominant row
-- [ ] [Unified split-KV](#split-kv-overflow) — **first batch that splits overflows partial-O at 2 GiB; a planning bug, not sizing**
+- [ ] [Unified split-KV](#split-kv-overflow) — planning fixed (165 MiB of 2048); the **launch hangs** on `barrier_Q`, which is the serving crash
 - [ ] [JIT reduction for the wgmma role](#split-kv-dark) — `partial_indptr`/`group_id` carried and ignored; partial write not implemented
 - [ ] [Multicast / DSMEM](#multicast-open) — 1.33-1.59x in isolation; `FLASHINFER_FUSED_CLUSTER=2` still faults
 - [ ] [Fused epilogue: tree build as a task](#fused-epilogue-design) — designed, not built
@@ -3352,7 +3352,49 @@ Option 2 is preferable: it needs no CuTe divide semantics, and the mapping it us
 is the one the host test already checks.
 
 <a id="split-kv-overflow"></a>
-### Split-KV on the wgmma class overflows partial-O, and it is not sizing
+### Split-KV: planning is fixed, and the launch HANGS on barrier_Q
+
+**Resolved and corrected.** The partial-O overflow was sizing after all, and the
+earlier "still overflows at 2 GiB" reading was a stale cached extension. With the
+2 GiB workspace, instrumentation from inside the plan says:
+
+```
+tasks=4 clusters=132 cluster_size=1 sum_tile_q=320 max_num_kv_splits=168960 partial_o_nnz=56
+partial_o wants 165.0 MiB, partial_lse 2.6 MiB, float workspace has 2048.0 MiB
+```
+
+`partial_o_nnz` is 56. The head-dimension double-count hypothesised below is NOT
+in play, and that section is superseded.
+
+**What the fixture actually does is hang.** Fixture 2 runs the plan, routes
+correctly (`row 0 -> FA3; rows 1.. -> persistent tasks [0, 2]`), and then never
+returns: `exit=124` from a 1500-second timeout. A hang, not a fault -- which also
+explains the serving symptom exactly, where the scheduler stalls, HTTP payloads
+truncate, and the process is killed without a CUDA error ever reaching the log.
+
+The cause is the `barrier_Q` protocol, and the kernel's own comment predicted it.
+`barrier_Q` is a `ClusterTransactionBarrier`: the TMA path arms it with
+`arrive_and_expect_tx(TmaTransactionBytesQ)` and the consumer waits for that
+transaction count to be satisfied. The packed load replaced TMA with `cp.async`
+and signals `cpasync_barrier_arrive`, which arrives **without** satisfying an
+expected-transaction count -- so the consumer's wait never completes. The
+`FLASHINFER_SKIP_TMAQ` branch says exactly this: "The consumer's barrier_Q.wait
+is skipped to match, or it hangs."
+
+Two ways to fix, and the choice is not arbitrary:
+
+1. **Keep the transaction protocol.** Arm `barrier_Q` with
+   `arrive_and_expect_tx(bytes)` for the cp.async bytes the packed gather will
+   write, so the consumer's existing wait is satisfied. Smallest change, keeps
+   the consumer untouched.
+2. **Switch Q to an arrival-count barrier.** Use a plain mbarrier or named
+   barrier for the packed path and change the consumer's wait to match. Larger,
+   and it diverges the two paths' synchronisation.
+
+Option 1 first. Note this is the same class of error as the barrier-0 collision
+that broke symmetric mode: a synchronisation primitive used with the wrong
+completion semantics, presenting as a hang rather than an error.
+
 
 Fixture 2 -- the captured serving batch, `qo [72, 439, 1]`,
 `prefix [164, 0, 5468]` -- is the first batch tested that actually splits KV, and

@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.8.4 — More threads are slower; width 3 is numerically fine (2026-10-05)
+
+Fixed-batch kernel timing settles the thread-count question against my hypothesis:
+width 1 (FA2 role on 128 of 384 threads, disjoint smem) runs 132.4 us; width 3 (all
+384, aliased smem) runs 147.9 us. Giving the FA2 role every thread makes the kernel
+12% slower, so the launch-geometry framing is wrong as a performance explanation and
+the warpgroup-reentrant path is a dead end for perf.
+
+Separately it corrects a standing catalogue claim: width 3's numerics are CORRECT
+with aliased smem (rel err 3.5e-3 / 3.8e-3 / 6.0e-4, all rows pass). The recorded
+"FA2 numerics wrong at width 3" was almost certainly the disjoint-smem config -- the
+same condition that makes the launch fail with 'invalid argument', since three
+warpgroups need 208,896 of 232,448 B and only fit aliased. The fault was
+configuration, not the reentrant logic.
+
+The 1.50x fused-FA2 cost remains unexplained, now with its most plausible mechanism
+eliminated, and 132.4 us still lacks an unfused reference.
+
+
 ## v0.8.3 — The width-3 probe is void by its own validity check (2026-10-05)
 
 Giving the fused FA2 role all 384 threads (`SGLANG_FUSED_WG_DRAIN=3`, numerically

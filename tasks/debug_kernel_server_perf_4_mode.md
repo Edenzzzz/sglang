@@ -27,7 +27,7 @@ predecessor effort (sync-free plan, mixed-kernel gate, 4-mode dispatch).
 - [ ] [Fused epilogue: tree build as a task](#fused-epilogue-design) — designed, not built
 - [ ] [Cross-role backfill](#symmetric-retracted) — only existed in symmetric mode, which computes FA3 wrong; needs redoing on a correct path
 - [ ] Async/tiled packed copies — `cp.async` landed; single-warp width and the per-row O store remain (needs the indirection table)
-- [ ] Warpgroup-reentrant FA2 — implemented, FA2 numerics wrong at width 3
+- [x] [Warpgroup-reentrant FA2](#width3-settled) — numerics are **correct** with aliased smem (the old failure was disjoint smem); but 384 threads is **12% slower** than 128, so it is a dead end for perf
 
 ## Structures evaluated
 - [x] [Static SM pre-assignment](#static-split-confirmed) — -14.4% / -14.0% / -11.5%, no winning fraction
@@ -4335,3 +4335,38 @@ against itself. Worth fixing before any further serving arm.
 and add the unfused baseline's attention time on the same batch, which is the
 reference 132.0 us needs to be read against -- without it, 132.0 us is a
 measurement with nothing to compare to.
+
+
+<a id="width3-settled"></a>
+### Settled: more threads make the FA2 role slower, and width 3 is numerically fine
+
+Kernel time on the fixed fixture batch, 200 iterations, CUDA events, identical
+inputs, `Q_MBARRIER=1`:
+
+| arm | kernel time | numerics |
+|---|---|---|
+| width 1, disjoint smem (FA2 role gets 128 of 384 threads) | **132.4 us** | PASS, rel err 3.4e-3 / 4.4e-3 / 8.4e-4 |
+| width 3, aliased smem (FA2 role gets all 384) | **147.9 us** | PASS, rel err 3.5e-3 / 3.8e-3 / 6.0e-4 |
+
+**Two findings, and both correct earlier entries in this file.**
+
+1. **The 1.50x is not thread-count bound.** Giving the FA2 role all 384 threads
+   makes the kernel **12% slower**, not faster. So the launch-geometry framing --
+   that the fused FA2 role is starved at ~128 of 384 threads and would recover if
+   it had them all -- is wrong as a performance explanation. More warpgroups
+   draining the same queue cost more than they contribute, which is consistent
+   with the drain being queue-bound or smem-bound rather than compute-bound. The
+   catalogue's "warpgroup-reentrant FA2" item is therefore a **dead end for
+   performance** and should not be pursued for that reason.
+2. **Width 3's numerics are correct when smem is aliased.** The catalogue carried
+   "implemented, FA2 numerics wrong at width 3". With `ALIAS_SMEM=1` all three
+   rows pass at the same tolerance as width 1. The earlier wrongness was very
+   likely the disjoint-smem configuration -- three warpgroups at 208,896 B do not
+   fit disjointly, which is the same condition that made the launch fail with
+   `invalid argument` -- so the fault was configuration, not the reentrant logic.
+
+What remains unexplained is still the same 1.50x, now with its most plausible
+mechanism eliminated. The honest position: the fused FA2 path costs 1.50x in
+serving for a reason that is neither the Q completion nor thread count, and
+132.4 us has no unfused reference yet, which is the next thing to measure rather
+than reason about.

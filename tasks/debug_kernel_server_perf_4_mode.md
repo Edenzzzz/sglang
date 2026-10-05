@@ -4297,3 +4297,41 @@ it is worth noting that the rule caught a false positive that confirmed the
 hypothesis I was hoping for. The 1.50x from
 [the decomposition](#deficit-decomposed) stands; its attribution to thread count
 does not.
+
+
+<a id="kernel-timing-width"></a>
+### Kernel timing, and why the width-3 serving probe really was void
+
+Kernel time on the fixed fixture batch (200 iterations, CUDA events, identical
+inputs, `Q_MBARRIER=1`):
+
+| arm | kernel time | numerics |
+|---|---|---|
+| width 1 (FA2 role gets 128 of 384 threads) | **132.0 us** | PASS, rel err 3.2e-3 / 4.2e-3 / 7.7e-4 |
+| width 3 (FA2 role gets all 384) | — | **launch fails: `invalid argument`** |
+
+Width 3 does not run at all. `invalid argument` at launch is a configuration
+rejection, and the cause is smem: three draining warpgroups need 208,896 B of the
+232,448 B budget, which only fits **aliased**, and disjoint smem became the
+default earlier in this effort (`FLASHINFER_FUSED_ALIAS_SMEM` now opts in). So
+width 3 needs that flag before it can be timed at all.
+
+**This supersedes my stated reason for voiding the serving probe.** I wrote that
+width 3's corrupt FA2 output ended sequences early, so the benchmark did less
+work. The kernel does not even launch at width 3, so the real mechanism is almost
+certainly that the fused launch failed and the server fell back to the unfused
+path for most steps -- which explains the composition counter directly (1897 at
+47.4%: roughly half the steps never reached the fused kernel) and explains the
+apparent speedup much better, since those steps ran on the faster baseline kernel.
+The probe was void, but for a cleaner reason than I gave, and the corrupt-logits
+story should not be repeated.
+
+It also means a silent fallback exists on this path: the fused call failed and
+serving continued at baseline rather than surfacing the error. That is exactly
+what the project's standards forbid, because it makes an A/B compare a mixture
+against itself. Worth fixing before any further serving arm.
+
+**Next.** Re-run this timing with `FLASHINFER_FUSED_ALIAS_SMEM=1` for width 3,
+and add the unfused baseline's attention time on the same batch, which is the
+reference 132.0 us needs to be read against -- without it, 132.0 us is a
+measurement with nothing to compare to.

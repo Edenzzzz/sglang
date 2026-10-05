@@ -4370,3 +4370,33 @@ mechanism eliminated. The honest position: the fused FA2 path costs 1.50x in
 serving for a reason that is neither the Q completion nor thread count, and
 132.4 us has no unfused reference yet, which is the next thing to measure rather
 than reason about.
+
+
+<a id="baseline-reference-blocked"></a>
+### The unfused reference needs its own plan object (and the fused number is stable)
+
+Fused kernel time on the fixture batch is reproducible across four independent
+runs: 132.0, 132.4, 132.5, 132.3 us. That figure is solid.
+
+Attempting the unfused reference in the same harness run fails, for a reason that
+is correct behaviour rather than a bug:
+
+```
+BatchPagedAttentionRun got a plan with 60 entries but executes 3 tasks (49 entries);
+a 4-task plan (FLASHINFER_FA3_TASK=1) must be run by the fused FA3+FA2 kernel
+```
+
+`pers` is planned as a **4-task** plan because that is what the unified path
+needs, and the run path refuses it -- that refusal is the plan-shape guard added
+earlier in this effort, doing its job. So the baseline cannot be timed from the
+same plan object. It needs a second `BatchAttention` planned without
+`FLASHINFER_FA3_TASK`, i.e. a 3-task plan over the same rows, timed with the same
+event loop. That is a contained harness change and it is the next step.
+
+Worth stating plainly: **the 1.50x still has no kernel-level confirmation.** It is
+a serving observation. Until the 3-task reference exists, it is not established
+whether the fused kernel is slower per launch on identical work, or whether the
+cost is on the host side -- per-step plan construction, which the catalogue lists
+as never measured and which a single fused plan replacing two unfused plans was
+supposed to *improve*. Those two possibilities call for completely different
+fixes, and I have been assuming the first without evidence.

@@ -23,10 +23,17 @@ measured. The unified split-KV reduction is the gate.
       params (`b3f173b`); `MergeGroupJIT` extracted to `jit_merge.cuh` so one
       implementation serves both roles (`01d0c2f`); the release/acquire handshake
       (`f55e3a2`).
-      **Blocker:** `prefill_sm90.cuh:331` — "no instance of function template
-      `CollectiveEpilogue<FA3Traits>::store_partial` matches the argument list".
-      The signature and the call agree on all nine arguments by inspection, so it
-      is an overload-resolution detail not yet found. Note the trap that hid it:
+      **Blocker (2 of 2 found, 1 fixed):** the first was `store_partial`'s template
+      list — `store()` templates `SharedStorage` as a method template parameter,
+      not a class member type, so declaring only four parameters made that
+      argument unmatchable. Fixed; the list is now identical to `store()`'s.
+      The second is live: the fused build now fails with
+      `vec_t<FDT, 4>::ptr` / `::cast_from` "referenced but not defined" from
+      `vec_dtypes.cuh`. This comes from the `jit_merge.cuh` extraction — the new
+      header includes `../vec_dtypes.cuh` and `state.cuh`, but `MergeGroupJIT`'s
+      `state_t`/`vec_t` specialisations previously arrived through
+      `persistent.cuh`'s own include set and order. Match that set rather than
+      guessing a minimal one. Note the trap that hid it:
       compiling `prefill_sm90.cuh` standalone passes, because the upstream
       scheduler takes the `if constexpr` false branch and `store_partial` is never
       instantiated. Only the fused TU with `kUnifiedWgmma=true` instantiates it, so

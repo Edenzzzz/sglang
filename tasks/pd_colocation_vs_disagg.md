@@ -36,10 +36,21 @@ On identical data, features and model class, the baseline is **1.7-3x harder to
 predict** (GBDT 10.1% vs 3.3% MAPE, 103% vs 63% worst case), and closing the gap
 needs ~1,300 profiled compositions per GPU rather than 35 kernel measurements.
 
-**Not established.** The *fused FA3+FA2 SM-pre-assignment* kernel — the one this
-goal is about — is currently a measured regression on its own benchmark
-(H20: fused 127.8 ms best-split vs 88.6 ms for a sequential co-launch over 40
-mixed MTP steps) and is being re-measured on H200. **Everything below depends on
+**Not established, and now measured on H200 (2026-10-06).** The *fused FA3+FA2
+SM-pre-assignment* kernel — the one this goal is about — is a regression at its
+best configuration: at `sm_fa3=64`, 482.19 tok/s and 22.39 ms ITL against a
+586.42 / 18.39 baseline (0.82x throughput, 1.22x ITL, 1.32x TTFT). Earlier
+reports of 0.335x / 3.00x were an artefact of a pinned split of 8, which the
+sweep showed to be far from optimal.
+
+Per-step tracing places the entire gap in MIXED steps (1901 of 2121; p50 21.27 ms
+at split 64 against 5.11 ms for DECODE and 16.50 ms for EXTEND, the latter two
+unchanged across splits). The cause is structural rather than a defect: a mixed
+step must divide SMs between the prefill chunk and the decode rows, while the
+baseline runs both classes across all 132 SMs with perfect sharing. So the fused
+design can only win if FA3 beats FA2 on FA3's own class by enough to pay for
+partitioning the grid, and at kernel level it is currently 1.83x slower there
+(772 us against 421 us on a long-prefix fixture). **Everything below depends on
 the predictability property, not on the SM-pre-assignment kernel winning.** The
 predictability already holds for the shipped overlap kernel. If the
 SM-pre-assignment kernel ends up slower, the scheduling story survives; if it
@@ -200,6 +211,16 @@ fails.
 
 
 ### Why the predictor is better here
+
+> **Caveat added 2026-10-06, from measurement on this kernel.** The 1.7-3x
+> predictability advantage quoted above is from the *overlap* kernel's
+> microbenchmark sweep. Fitting the SM-pre-assignment kernel's own serving trace
+> (2121 steps, six model classes, out-of-fold CV) found fused and baseline at
+> **parity** — roughly 1.5% MAPE for either with an adequate class — and the
+> earlier "1.38x harder" reading was a model-class plus contaminated-target
+> artefact. So for *this* kernel the predictability edge is not yet demonstrated,
+> and point 3's argument currently rests on the overlap kernel, where it is.
+> Worth resolving before the claim is made about the fused SM-split design.
 
 Already measured, and it is the strongest single result behind this story: the
 fused overlap kernel's step cost is closed-form at 3.1% MAPE where the

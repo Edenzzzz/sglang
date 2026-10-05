@@ -746,3 +746,46 @@ replaced by a `cp.async` gather that maps packed row `p` to
 `(token = qo_indptr + p / G, head = kv_head * G + p % G)` for both the load and
 the epilogue's store. The epilogue's partial-write path for split-KV groups rides
 on the same mapping, so the two land together.
+
+### 15.3 The packed-Q gather, concretely
+
+The Q load sits at `hopper/sparse_mainloop.cuh:275`, one TMA `copy` issued by
+`warp_idx_in_warpgroup == 0` under `elect_one_sync`, with
+`shared_storage.barrier_Q.arrive_and_expect_tx(TmaTransactionBytesQ)` for
+completion. Immediately above it the KV loads already do the thing Q now needs:
+`copy_if(gmem_tiled_copy_k, k_predicate_fn, tKgKiGroup, tKsKiGroup)` over a
+gathered layout, committed with `pipeline_k.producer_commit(...,
+cpasync_barrier_arrive)`.
+
+So the change has a working template in the same function. What it must compute,
+for packed row `p` inside a tile of `CTA_TILE_Q` packed rows belonging to kv head
+`h` of a row whose q tokens begin at `qo_indptr`:
+
+```
+token = qo_indptr + (tile_base + p) / G        // G = gqa_group_size
+head  = h * G + (tile_base + p) % G
+offset = token * q_stride_n + head * q_stride_h
+```
+
+with `tile_base = q_tile_idx * CTA_TILE_Q` and the row predicated off when
+`tile_base + p >= packed_qo_len`. Three consequences to carry:
+
+1. **`barrier_Q` changes kind.** TMA completion is a transaction barrier; a
+   `cp.async` gather completes through `cpasync_barrier_arrive`, as the KV path
+   does. The consumer's `barrier_Q.wait` has to match, which is the same
+   coupling the `SKIP_TMAQ` branch notes when it says skipping the wait is
+   required or the kernel hangs.
+2. **The epilogue needs the identical map** for its O store, and the split-KV
+   partial write needs it too, so all three move together. Getting one wrong
+   shows up as misplaced rows rather than a fault, which is harder to see than
+   the fault we have now -- so the regression must check row *placement*, not
+   just magnitudes.
+3. **`TmaTransactionBytesQ` and the Q tensormap become dead** on this path for
+   the wgmma role. They stay live for the ordinary FA3 prefill entry points,
+   which keep their dense descriptor, so the change has to be scoped to the
+   unified role rather than applied to the shared mainloop unconditionally.
+
+This is the whole remaining gap between the unified queue running and being
+measurable: everything upstream is verified (plan emits 116 items into the right
+clusters, items reach the FA3 CTAs, tiles pass the range check), and the one
+fault left is this addressing.

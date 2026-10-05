@@ -1063,3 +1063,66 @@ So the structural claim behind a 4-mode schedule holds: with
 the draft's output except the token ids, which stay on device through the future
 map. The remaining blocker to measuring it is not a sync but
 `mix_with_running` crashing when the running batch is a spec batch.
+
+## 19. Schedule quality on a 4-mode batch — the three properties, measured
+
+`tasks/fused_specdec_workload/schedule_quality.py`, read back from the plan the
+kernel runs. Batch: 1 chunked-prefill row (500 over a 2595 prefix), 8 verify rows
+at k=3, 8 draft rows, 11 decode rows, gqa 7, 132 clusters.
+
+**Near-zero tile waste** (occupied / allocated tile rows):
+
+| tiling | all four modes | verify class alone |
+|---|---|---|
+| unpacked, as `PrefillSM90Plan` tiles it | **13.9%** | **6.2%** |
+| packed, as the unified plan tiles it | **54.8%** | **43.8%** |
+
+3.9x less waste overall and 7.1x on the verify class, which is the mode the
+unpacked tiling hurts most: a 4-token verify row occupies 4 of 128 tile rows and
+pays that 28 times, once per qo head, against 28 of 128 in a single packed item.
+
+**Near-perfect load balance**, with a caveat that matters:
+
+| task | items | live clusters | imbalance (max/mean) | idle |
+|---|---|---|---|---|
+| 0 (tile 128) | 64 | 64 | **1.000** | 68 |
+| 2 (tile 16) | 76 | 76 | **1.000** | 56 |
+| 3 (wgmma) | 112 | 8 | **1.000** | 124 |
+
+Every live task is balanced exactly. But no single task fills the device -- 68,
+56 and 124 clusters sit idle respectively -- which is the quantitative reason the
+classes have to **co-reside** rather than each owning a slice, and why the
+measured static split loses at every ratio (section 9). The union saturates; no
+member does.
+
+**Smaller sync surface**: unified pays 1 plan, 1 H2D and 1 launch per step. The
+split design pays 2 plans and 2 H2D copies and must keep two schedules mutually
+consistent; serial dispatch pays 2 of each plus a second launch, measured at -48%.
+On the spec side, the draft step's device sync is now gone (section 18) and v2's
+verify metadata is already device-resident, so a 4-mode step needs no host round
+trip between draft and verify.
+
+### 19.1 Next: the tree build as an optional epilogue task
+
+The JIT-reduction framing makes this natural. A split-KV group's last arrival
+already runs a *second kind of work* in the epilogue -- the reduction -- chosen per
+work item rather than per kernel. `build_tree_kernel_efficient` is the same shape
+of thing: it consumes the verify group's output and produces the next step's tree
+mask and positions, it is data-parallel over rows, and today it is a separate
+launch between draft and verify.
+
+So represent it as an **optional epilogue stage**, keyed off the work item the way
+`group_id >= 0` keys the reduction:
+
+- the plan marks the verify class's groups with a flag meaning "after reducing
+  this group, build its tree";
+- the last arrival, already holding the reduced O and LSE in registers and smem,
+  writes the mask and positions into the same CUDA-graph buffers
+  `get_verify_buffers_to_fill_after_draft()` hands out today;
+- nothing else changes: the reduction's completion ordering is the ordering the
+  tree build needs, so no new barrier appears.
+
+What this buys, in the paper's terms: the tree build stops being a kernel boundary
+and becomes a task, so the 4-mode step is one launch with no host round trip -- the
+property section 18's audit shows is otherwise already within reach but still
+split across two kernels.

@@ -3416,6 +3416,40 @@ then the A/B against the 24,892.7 tok/s baseline with no `sm_fa3` fraction in
 play, then the async copies, then split-KV on a long-KV batch.
 
 <a id="unified-serving-crash"></a>
+### The faulting serving batch, captured
+
+`SGLANG_FUSED_DUMP` on the unified arm, first launch:
+
+```
+rows 3   qo [72, 439, 1]   prefix [164, 0, 5468]   kv [236, 439, 5469]
+packed_qo [504, 3073, 7]   n_fa3_rows 2   n_tok 511   n_pages 675   sm_fa3 8
+total pages 6144 (% 4 = 0)   q/o/kv_indices/fa3_sparse pointers all 16B aligned
+q shape [512, 28, 128] stride [3584, 128, 1]
+```
+
+What this rules out: the page-count alignment that caused the earlier
+misaligned-address fault (`% 4 == 0` here) and any pointer misalignment (all four
+are 0 mod 16). What it introduces, against the single fixture that passes:
+
+1. **Two rows in task 3**, not one. `packed_qo` 504 and 3073 both clear the
+   threshold, so the wgmma role has two independent q ranges in one launch, with
+   the second starting at `qo_indptr = 72`.
+2. **A row with `prefix = 0`** — row 1 is a fresh chunk where `kv == qo`, so its
+   KV extent is shorter than its packed q extent (439 against 3073). Every shape
+   the fixture exercises has `kv >> packed_qo`.
+3. Row 0 is similar in kind: `kv = 236` against `packed_qo = 504`.
+
+Both of those are untested combinations, and the second is the kind that breaks
+bound arithmetic: `get_packed_gqa_tensor` takes its row extent from
+`qo_len / G` and `write_packed` from `packed_qo_len / group_size + 1`, which are
+fine when the q extent is small relative to the tensor but need checking at a
+row that begins mid-tensor and runs to its end (`offset 72 + 440 = 512`, exactly
+`nnz_qo`).
+
+This batch is the second fixture to add to `test_fused_server_batch.py`; the
+current one cannot reproduce the crash because it has one task-3 row and
+`kv >> packed_qo` on every row.
+
 ### Unified path crashes under serving traffic
 
 The unified queue passes the dumped batch exactly and survived two full serving

@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.7.7 — The first valid unified serving number: -66% (2026-10-05)
+
+Measured on a tree verified byte-exact against our fork, both arms back to back:
+baseline 590.58 output tok/s against unified 197.65 (0.335x), mean ITL 18.26 against
+55.01 (3.01x), mean TTFT 2626.50 against 9333.23, with 96.2% of rows through the
+fused path -- so this measures the kernel, not a dispatch accident. Full table,
+commits and command in `tasks/debug_kernel_server_perf_4_mode.md`.
+
+The 3x matches the packed-GQA Q drain exactly, and the Q-before-K hoist was
+verifiably compiled in, which rules out ordering: the fence sweeps every cp.async
+the producer has uncommitted from earlier work items, and groups retire in order.
+The per-lane `cp.async.mbarrier.arrive` that has the right scope hung the server on
+its first fused batch and is now gated off behind `FLASHINFER_FUSED_Q_MBARRIER`,
+to be settled on fixture 2 rather than in another serving run.
+
+
 ## v0.7.6 — Two findings that invalidate measurements, not numbers (2026-10-05)
 
 ### The wgmma role's split-KV path is a latent wrong answer

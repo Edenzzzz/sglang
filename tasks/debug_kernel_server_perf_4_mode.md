@@ -33,7 +33,7 @@ predecessor effort (sync-free plan, mixed-kernel gate, 4-mode dispatch).
 - [x] [Static SM pre-assignment](#static-split-confirmed) — -14.4% / -14.0% / -11.5%, no winning fraction
 - [x] [Serial dispatch](#serial-dispatch-dead-end) — -48%, reverted, forecloses draft+verify fusion
 - [x] [Symmetric single kernel](#symmetric-retracted) — numerically wrong, four hypotheses eliminated, results retracted
-- [ ] [Unified queue](#unified-serving-perf) — numerically correct, copy-bound at -66%, under repair
+- [ ] [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), and the Q completion is the cause
 
 ## Server integration
 - [x] [Unified queue wired into sglang](#unified-serving-perf) — one plan over all rows, behind `SGLANG_FUSED_UNIFIED`
@@ -4016,3 +4016,53 @@ to build `flashinfer_python` from source and fails, and we do not want its
 flashinfer anyway. An ABI sweep over every torch-dependent import is the cheap
 way to confirm the result (`ABI_BAD=none`) instead of discovering the next gap
 through another five-minute server start.
+
+
+<a id="clean-tree-ab-2026-10-05"></a>
+### Unified vs baseline on a verified tree, 2026-10-05
+
+The first serving A/B whose software stack is known to be ours (manifest-checked
+`EXTRA=0 MISSING=0 MISMATCH=0` against our 725 files -- see
+[#env-contamination](#env-contamination)). Both arms, same pod, same binary,
+back to back.
+
+| | baseline | unified | ratio |
+|---|---|---|---|
+| output throughput (tok/s) | 590.58 | 197.65 | **0.335x** |
+| mean TTFT (ms) | 2626.50 | 9333.23 | 3.55x |
+| mean ITL (ms) | 18.26 | 55.01 | 3.01x |
+| P99 ITL (ms) | 32.86 | 114.50 | 3.48x |
+| benchmark duration (s) | 33.21 | 99.22 | 2.99x |
+| rows through the fused path | n/a | 53116 (96.2%) | — |
+
+Reproduce: `drivers/uab.sh` on pod `f393156fcc0614b3`, Qwen2.5-7B,
+`--dataset-name random-ids --random-input-len 8192 --random-output-len 192
+--num-prompts 200 --request-rate 12 --max-concurrency 32`, server
+`--chunked-prefill-size 512 --max-running-requests 64 --disable-radix-cache
+--enable-mixed-chunk --mem-fraction-static 0.80`. sglang `88eff4a78`
+(tree = `origin/attn_fuse_` plus the six locally-modified python files);
+flashinfer `b1a888e` (Q hoisted above the first K tile, plan guard in).
+
+**What this establishes.** The 96.2% composition means the fused path really did
+carry the work, so this is a measurement of the kernel and not of a dispatch
+accident. The deficit is 3x, which matches the cp.async drain's cost exactly,
+and the hoist was verifiably in the build (`.so` newer than the header,
+`load_q_tile` present, `FLASHINFER_FUSED_Q_LATE` unset) -- so **ordering is
+ruled out as the cause**. The fence sweeps every cp.async the producer still has
+uncommitted from earlier work items, not merely the one K tile that was moved
+past it, and in-order group retirement means no `wait_group` bound can exclude
+them.
+
+**What it does not establish.** Nothing about the >=30% target. At 8192/192 with
+attention at ~32% of a step, a 3x attention regression dominates everything else
+and no amount of scheduling quality shows through. The target regime remains the
+>64k long-context run, and that is still gated on the Q completion first.
+
+**Next, in order.** (1) Fix Q's completion so it costs nothing: the per-lane
+`cp.async.mbarrier.arrive` is the right scope but hung the server on its first
+fused batch, so it is gated off behind `FLASHINFER_FUSED_Q_MBARRIER` and must be
+settled on fixture 2 -- which reproduced the earlier `barrier_Q` hang in seconds
+-- rather than in another serving run. The specific thing to check is whether
+anything besides the producer arrives on `barrier_Q`, because arming it for 32
+breaks the phase bookkeeping if so. (2) Re-run this A/B. (3) Only then the >64k
+run, which additionally needs [the wgmma reduction](#split-kv-dark).

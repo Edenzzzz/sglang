@@ -46,7 +46,9 @@ echo "python/sglang/srt/managers/scheduler.py and python/sglang/srt/speculative/
 #    (`csrc -> /opt/tiger/flashinfer/csrc`, same for cutlass). They survive the
 #    tar and point at nothing on the pod, and the package then dies at import
 #    with `FileExistsError: .../flashinfer/data/csrc` when it tries to recreate
-#    them. Delete `flashinfer/data/{csrc,include,cutlass}` after extracting, or
-#    tar with --dereference.
+#    them. Do NOT simply delete them -- the package reads
+#    `flashinfer/data/csrc/*.jinja` through that path. RE-POINT them at the pod:
+#      ln -sfn /dev/shm/w/fi/{csrc,include,3rdparty/cutlass} \
+#              /dev/shm/w/fi/flashinfer/data/{csrc,include,cutlass}
 # 2. Clear `~/.cache/flashinfer` after replacing the tree, or the JIT serves
 #    objects built against the previous headers.

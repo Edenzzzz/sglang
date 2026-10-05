@@ -111,11 +111,16 @@ measured. The unified split-KV reduction is the gate.
       2026-10-06: the comment says it fires "when a CTA drains FA2 before entering
       FA3", i.e. only under backfill. But backfill defaults **off** and aliased runs
       still failed (rel err 16.6 / 18.6, intermittently passing at stages=3 — the
-      documented 3-in-10 flakiness). The real mechanism: the kernel initialises
-      FA3's pipeline mbarriers at entry, **before** the `sm_split` branch, so every
-      CTA does it -- including FA2-role CTAs, which then reuse that memory as their
-      persistent slot. Fix: initialise those mbarriers only on FA3-role CTAs. That
-      makes aliasing safe, which makes stages=2 fit, which is the ~15%.
+      documented 3-in-10 flakiness). What is established: with backfill off,
+      aliasing corrupts the **FA2-class row** (rel err 15.3 / 15.1) while the FA3
+      row and the tile-16 row pass, at stages=1 as well as 2.
+      **Mechanism NOT established.** I recorded "FA3's mbarriers are initialised
+      before the sm_split branch so FA2-role CTAs clobber their own slot" and then
+      withdrew it: smem is per-CTA, with backfill off each CTA runs exactly one
+      role, and at stages=1 the aliased request (98352) covers the slot at
+      0..69632 with room to spare. So an aliased base alone should be harmless and
+      something else is at work. Needs its own investigation; do not act on the
+      withdrawn explanation.
 - [ ] **Task 3's `kv_len_limit` uses the wrong cluster count** — 2026-10-06: it is
       `f(total_kv_lens / num_clusters)` with `num_clusters` = **all 132**, not task
       3's own 8 under SM partitioning. So every task-3 row splits regardless of

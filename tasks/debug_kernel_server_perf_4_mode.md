@@ -14,7 +14,7 @@ rejects. So the recorded 3.02x kernel penalty and 1.38x CTA/SM cost describe a
 configuration the design does not use, and fusion's benefit has never been
 measured. The unified split-KV reduction is the gate.
 
-## Tasks, in priority order
+## Tasks, in priority order — 2026-10-06
 
 - [ ] **1. Unified JIT split-KV reduction** — 2026-10-06: two of four pieces
       landed and compiling. `store_partial` + shared `partial_o`/`partial_lse`
@@ -42,25 +42,10 @@ measured. The unified split-KV reduction is the gate.
       `vibecuda`. Written up in
       [`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md); none measured.
 
-## Settled, and why it matters
-
-- [x] 2026-10-06: **The reduction is unwired, not FA3-incapable.** FA3 processes KV
-      chunks fine; only the partial write and merge trigger were missing. Dynamic
-      `kv_len_limit` splitting is the LPT balancer working correctly and should stay.
-- [x] 2026-10-06: **Q completion settled.** Per-lane `cpasync_barrier_arrive_noinc`
-      is correct and free; the earlier hang was the increment variant inflating the
-      expected arrival count. Fixture 2: rel err 3.3e-3, 0/512 unwritten.
-- [x] 2026-10-06: **Register starvation measured** — fused 168 regs / 720-816 B
-      spill vs standalone 255 / 56-288 B (`cuobjdump -res-usage`). Applies to
-      `mma.sync` on large tiles, which the class boundary says belong on wgmma, so
-      this is likely moot for the intended routing. [detail](#why-fused-is-slow)
-- [x] 2026-10-05: **The pod ran upstream sglang, not our fork** — 4140 files vs our
-      725, 514 differing including `bench_serving.py`. Now byte-exact.
-      [detail](#env-contamination)
-- [x] 2026-10-05: **Serving fallback is strict** — a failed fused plan raises
-      instead of silently comparing a mixture.
-
 ## Kernel optimisations — 2026-10-06
+- [x] [The reduction is unwired, not FA3-incapable](#wgmma-role-unreachable) — FA3 processes KV chunks fine; only the partial write and merge trigger were missing. Dynamic `kv_len_limit` splitting is the LPT balancer working correctly and stays
+- [x] [Q completion protocol](#why-fused-is-slow) — per-lane `cpasync_barrier_arrive_noinc` is correct and free; the hang was the increment variant inflating the expected arrival count. Fixture 2 rel err 3.3e-3, 0/512 unwritten
+- [x] [Register starvation measured](#why-fused-is-slow) — fused 168 regs / 720-816 B spill against standalone 255 / 56-288 B (`cuobjdump -res-usage`). Applies to `mma.sync` on large tiles, which belong on wgmma, so likely moot for the intended routing
 - [x] [Packed GQA for the wgmma role — class boundary](#packed-gqa-class-boundary) — 2.40x decode/draft, 1.70x verify, 1.00x chunks
 - [x] [Packed GQA — implemented and numerically exact](#unified-queue-numerically-correct) — 0/512 unwritten on the real batch
 - [x] [Do tiles 128 and 64 still belong in FA2?](#packed-gqa-class-boundary) — no for 128/64, yes for 16 (decode is bandwidth-bound)
@@ -81,6 +66,7 @@ measured. The unified split-KV reduction is the gate.
 - [ ] [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), [cause found](#why-fused-is-slow) — register starvation: `mma.sync` at ~168 regs instead of ~255, from FA3's 384-thread launch bounds
 
 ## Server integration — 2026-10-05
+- [x] Serving fallback is strict — a failed fused plan raises instead of silently comparing a mixture against the baseline
 - [x] [Unified queue wired into sglang](#unified-serving-perf) — one plan over all rows, behind `SGLANG_FUSED_UNIFIED`
 - [x] [Draft-step CPU-GPU sync removed](#spec-sync-audit) — and the rest of the spec path audited
 - [x] [The serving fault was a barrier_Q hang, now fixed](#unified-serving-crash) — fixture 2 reproduced it, then passed: 0/512 unwritten, rel err 3.2e-3 / 2.9e-3 / 6.9e-4
@@ -111,6 +97,7 @@ All four points are written up in [`pd_colocation_vs_disagg.md`](pd_colocation_v
 - [x] [Audit, superseded by this catalogue](#audit-superseded)
 
 ## Pod and environment — 2026-10-05
+- [x] [The pod ran upstream sglang, not our fork](#env-contamination) — 4140 files against our 725, 514 differing including `bench_serving.py`; now byte-exact
 - [ ] [Re-establish the GPU working set](#pod-restore) — fork tree pushed (805 files, byte-exact); three mechanical gaps left, listed in `drivers/provision_trees.sh`: spdlog unpushed, stale absolute symlinks in `flashinfer/data`, and the csrc jinja unreadable — the 2026-10-05 trial expired; a replacement single-GPU `vibecuda` is running and empty
 
 - [ ] [The restored pod's serving tree was upstream, not our fork](#env-contamination) — rebuild in flight; no serving number may be read from it until then
@@ -122,7 +109,7 @@ All four points are written up in [`pd_colocation_vs_disagg.md`](pd_colocation_v
   Gated on [the wgmma JIT reduction](#split-kv-dark): at >64k the FA3-class rows are exactly the ones the
   plan splits, so the run would produce wrong numbers before it produced slow ones
 
-## Detail sections
+## Detail sections — 2026-10-06
 
 The dated checklist above is the index. What follows is evidence for the items
 that have one: measurements, the faults behind them, and the reasoning that was
@@ -3671,7 +3658,7 @@ and fix against that. Until then the serving number is unobtainable rather than
 bad, and the two slow runs stand as the only honest unified measurements.
 
 <a id="unified-serving-perf"></a>
-### Unified queue on the serving path: correct, and copy-bound
+### Unified queue on the serving path: correct, and copy-bound — 2026-10-05
 
 | arm | tok/s | mean ITL | mean TTFT |
 |---|---|---|---|
@@ -3775,7 +3762,7 @@ barrier. Completion must be expressed per consumer, through that consumer's
 barrier.
 
 <a id="spec-sync-audit"></a>
-### Spec path: where the CPU-GPU syncs actually are
+### Spec path: where the CPU-GPU syncs actually are — 2026-10-05
 
 Audited rather than assumed, because the v1 and v2 workers differ sharply.
 
@@ -3803,7 +3790,7 @@ map. The remaining blocker to measuring it is not a sync but
 `mix_with_running` crashing when the running batch is a spec batch.
 
 <a id="schedule-quality-4-mode"></a>
-### Schedule quality on a 4-mode batch: the three properties, measured
+### Schedule quality on a 4-mode batch: the three properties, measured — 2026-10-05
 
 `tasks/fused_specdec_workload/schedule_quality.py`, read back from the plan the
 kernel runs. Batch: 1 chunked-prefill row (500 over a 2595 prefix), 8 verify rows
@@ -3868,7 +3855,7 @@ property section 18's audit shows is otherwise already within reach but still
 split across two kernels.
 
 <a id="audit-superseded"></a>
-### Audit (superseded by the catalogue at the top)
+### Audit (superseded by the catalogue at the top) — 2026-10-05
 
 | optimisation | state | evidence |
 |---|---|---|
@@ -3894,7 +3881,7 @@ before then would again be measuring an incomplete kernel.
 
 
 <a id="split-kv-dark"></a>
-### The wgmma role's split-KV path is a latent wrong answer, not just unexercised
+### The wgmma role's split-KV path is a latent wrong answer, not just unexercised — 2026-10-06
 
 The catalogue carried this as "the wgmma role's own split path still
 unexercised", which understated it. Unexercised would be safe. This is a wrong

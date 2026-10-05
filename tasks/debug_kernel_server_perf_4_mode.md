@@ -22,7 +22,7 @@ predecessor effort (sync-free plan, mixed-kernel gate, 4-mode dispatch).
 - [x] [Unified load-balance scheduler](#schedule-quality-4-mode) — imbalance 1.000 per task, waste 13.9% -> 54.8%
 - [x] [Dispatch gate rewritten from measurement](#packed-gqa-class-boundary) — `MIN_KV_TILES` was backwards and excluded the dominant row
 - [x] [Unified split-KV — FA2 side exercised and correct](#split-kv-overflow) — fixture 2 passes with 56 partial rows; the wgmma role's own split path still unexercised
-- [ ] [JIT reduction for the wgmma role](#split-kv-dark) — `partial_indptr`/`group_id` carried and ignored; partial write not implemented
+- [ ] [JIT reduction for the wgmma role](#split-kv-dark) — `partial_indptr`/`group_id` carried and ignored; **a latent wrong answer**, not merely unexercised: the plan does chunk task 3
 - [ ] [Multicast / DSMEM](#multicast-open) — 1.33-1.59x in isolation; `FLASHINFER_FUSED_CLUSTER=2` still faults
 - [ ] [Fused epilogue: tree build as a task](#fused-epilogue-design) — designed, not built
 - [ ] [Cross-role backfill](#symmetric-retracted) — only existed in symmetric mode, which computes FA3 wrong; needs redoing on a correct path
@@ -68,10 +68,14 @@ All four points are written up in [`pd_colocation_vs_disagg.md`](pd_colocation_v
 ## Pod and environment
 - [ ] [Re-establish the GPU working set](#pod-restore) — fork tree pushed (805 files, byte-exact); three mechanical gaps left, listed in `drivers/provision_trees.sh`: spdlog unpushed, stale absolute symlinks in `flashinfer/data`, and the csrc jinja unreadable — the 2026-10-05 trial expired; a replacement single-GPU `vibecuda` is running and empty
 
+- [ ] [The restored pod's serving tree was upstream, not our fork](#env-contamination) — rebuild in flight; no serving number may be read from it until then
+
 ## Workload capture for handoff
 - [x] [Real online 2-mode trace](fused_kernel_handoff.md#5-the-workloads) — 2121 steps/arm, JSON corpus in `fused_specdec_workload/sets/`
 - [ ] Real online **4-mode** trace with draft+verify co-resident — the stated gap; blocked with the 4-mode schedule
-- [ ] Long-context (>64k, tracelab) A/B — written, not yet run; this is where attention dominates the step
+- [ ] Long-context (>64k, tracelab) A/B — written, not yet run; this is where attention dominates the step.
+  Gated on [the wgmma JIT reduction](#split-kv-dark): at >64k the FA3-class rows are exactly the ones the
+  plan splits, so the run would produce wrong numbers before it produced slow ones
 
 <a id="lineage"></a>
 ### Lineage and sibling documents
@@ -3836,3 +3840,114 @@ serving schedule "after all these individual optimisations are visited" means
 split-KV and the JIT reduction have to be exercised first on a long-KV batch,
 because they are the two that are plumbed-but-dark, and a serving number measured
 before then would again be measuring an incomplete kernel.
+
+
+<a id="split-kv-dark"></a>
+### The wgmma role's split-KV path is a latent wrong answer, not just unexercised
+
+The catalogue carried this as "the wgmma role's own split path still
+unexercised", which understated it. Unexercised would be safe. This is a wrong
+answer waiting for a long enough row, and the >64k A/B is precisely the run that
+would find it.
+
+Three facts, each checked in the source rather than inferred:
+
+1. **The plan does chunk task 3.** The chunking loop in `scheduler.cuh`
+   (~1451-1530) runs over every task in the plan, `kFA3Task` included. A task-3
+   row whose `kv_len` exceeds `kv_len_limit` is therefore split into
+   `ceil_div(remaining_len, kv_len_limit)` work items, and each gets its own
+   `partial_indptr` and a shared `group_id`.
+2. **The unified scheduler faithfully carries the split.** `UnifiedWgmmaTileScheduler`
+   returns `partial_indptr` and `group_id` in its `WorkTileInfo`, and even defines
+   `is_split_kv()` as `group_id >= 0`.
+3. **The kernel consumes none of it.** `persistent_fa3_fused.cuh` contains no
+   reference to `partial_o`, `partial_lse`, `partial_indptr`, `group_id` or
+   `final_o`, and nothing anywhere calls `is_split_kv()`.
+
+So every chunk of a split task-3 row computes attention over its own KV slice and
+writes that slice's output straight to the final O rows, with no partial buffer
+and no merge. The chunks overwrite each other and the surviving row is one
+chunk's answer -- softmax-renormalised against only its own slice, so wrong in
+value, not merely stale.
+
+Why the test suite is quiet about it: fixture 2's FA3-class row is
+`qo=72, kv=236`, far below any `kv_len_limit` the plan picks for that batch, so
+it is never split. `partial_o_nnz=56` in that fixture is the FA2 classes'
+splits, which do reduce correctly. The wgmma role has simply never been handed a
+long row.
+
+**What the fix has to do** (mirroring `persistent.cuh` ~575-640, which is the
+working reference on the FA2 side):
+
+- epilogue: when `partial_indptr >= 0`, store to
+  `partial_o + partial_indptr * HEAD_DIM_VO` and `partial_lse + partial_indptr`
+  instead of the final O rows, keeping the packed-GQA row mapping;
+- then the release/acquire handshake in that order and no other --
+  `__threadfence()` per lane, block rendezvous, `atomicAdd(group_counter[gid])`,
+  broadcast "am I last" over the warpgroup's own named barrier (not
+  `__syncthreads_or`, which traps with one warpgroup alive), `__threadfence()`
+  on the acquire side, `MergeGroupJIT`, and hand the counter back at zero so the
+  next layer's producers can win it;
+- the merge needs `merge_indptr`/`merge_o_indices`/`group_row_begin`/
+  `group_nrows`/`group_kv_head`, which the FA3 params do not currently carry and
+  which must come in alongside `wgmma_plan`.
+
+Until that lands, the honest statement about long context is that the kernel has
+no correct long-context path at all on the wgmma role.
+
+<a id="env-contamination"></a>
+### The restored pod's serving tree was upstream sglang, not our fork
+
+Worth recording because it invalidates a class of measurement rather than one
+number, and because the previous entry in this file says the fork tree was
+"pushed (805 files, byte-exact)" -- which was true of a tarball and false of the
+tree the server actually imported.
+
+`/dev/shm/w/sgl_src` on the replacement pod is a git clone of **upstream**
+sglang at `1818db4`, and `/dev/shm/w/python/sglang` -- the tree on `PYTHONPATH`
+-- was built from it with my four modified files copied on top. An md5 manifest
+of our fork's `python/sglang` (725 `.py` files) compared against it:
+
+| | files |
+|---|---|
+| ours | 725 |
+| on the pod | 4140 |
+| extra on pod | 3573 |
+| missing on pod | 158 |
+| present in both, different contents | 514 |
+
+`sglang/bench_serving.py` is in that mismatched set, so the benchmark client was
+not ours either. The practical consequence is that the serving arms launched on
+this pod were upstream 0.5.21 plus four overlay files: the fused kernel path
+would have been exercised, but none of our fork's other sglang changes --
+including the gains the predecessor effort is built on -- were present. No
+serving number may be read from the pod until the tree is rebuilt.
+
+What is **not** affected: the fixture tests, including fixture 2's pass and the
+`barrier_Q` diagnosis. Those import `flashinfer` and `torch` only, never
+`sglang`, and `/dev/shm/w/fi` is our flashinfer fork.
+
+The repair is a chunked transfer of our 725-file tree over the webshell
+(2.96 MB of base64 in 38 pieces, each written to its own numbered file so a
+retried piece overwrites rather than appends, with an md5 check on the assembled
+tarball). It is chunked because both forks are private and this machine has no
+push credentials: `git push` and a pod-side `git clone` both fail with
+`could not read Username for 'https://github.com'`.
+
+**The dependency chase that preceded it**, recorded so it is not repeated: the
+restored venv needed `sglang[srt]` for its closure, which cannot come from a
+source tree (`sgl_kernel` especially). Installing plain `sglang[srt]` brings the
+**latest** release and drags torch forward, so every compiled torch extension
+then mismatches the pinned torch 2.8.0 -- surfacing one failed server start at a
+time as `operator torchvision::nms does not exist`,
+`_torchaudio.abi3.so: undefined symbol: torch_library_impl`, and
+`sgl_kernel/sm90/common_ops.abi3.so: undefined symbol:
+c10_cuda_check_implementation`. Pinning the family to our tree's own pins fixes
+it: `torch==2.8.0+cu128`, `torchvision==0.23.0`, `torchaudio==2.8.0`,
+`torchao==0.9.0`, and `sgl-kernel==0.3.16.post4` (the package pip installs by
+default is named `sglang-kernel`, a different distribution). Installing the
+pinned *release* `sglang[srt]==0.5.4.post2` does not work as a shortcut: it tries
+to build `flashinfer_python` from source and fails, and we do not want its
+flashinfer anyway. An ABI sweep over every torch-dependent import is the cheap
+way to confirm the result (`ABI_BAD=none`) instead of discovering the next gap
+through another five-minute server start.

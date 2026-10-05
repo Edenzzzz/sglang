@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.7.6 — Two findings that invalidate measurements, not numbers (2026-10-05)
+
+### The wgmma role's split-KV path is a latent wrong answer
+
+Recorded as "unexercised" before, which was too kind. `scheduler.cuh`'s chunking
+loop covers every task including `kFA3Task`, the unified scheduler carries
+`partial_indptr`/`group_id` per work item, and `persistent_fa3_fused.cuh`
+references neither -- nor anything else about partials -- so each chunk of a
+split task-3 row writes its own slice straight to the final O rows and the
+chunks overwrite each other. Fixture 2 is quiet about it only because its
+FA3-class row is `kv=236` and never splits. This gates the >64k A/B: at that
+length the FA3-class rows are exactly the ones that split.
+
+### The restored pod's serving tree was upstream sglang, not our fork
+
+`/dev/shm/w/sgl_src` is a clone of upstream at `1818db4`, and the tree on
+`PYTHONPATH` was built from it with four of our files copied on top. Against an
+md5 manifest of our fork's 725 `.py` files: 4140 files on the pod, 3573 extra,
+158 missing, 514 present in both with different contents -- `bench_serving.py`
+among them. Fixtures are unaffected (they import `flashinfer` and `torch`, never
+`sglang`), so fixture 2's pass and the `barrier_Q` diagnosis stand. Both forks
+are private and this machine has no push credentials, so the repair is a chunked
+webshell transfer of the real tree. Details, and the torch-ABI dependency chase
+that preceded it, in `tasks/debug_kernel_server_perf_4_mode.md`.
+
 ## v0.7.5 — Q's drain stops draining K/V (2026-10-05)
 
 ### The packed-GQA Q load is now issued before the first K tile

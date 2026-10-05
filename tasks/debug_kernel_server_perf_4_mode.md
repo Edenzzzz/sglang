@@ -172,10 +172,20 @@ measured. The unified split-KV reduction is the gate.
       arm is **0.82x throughput and 1.22x ITL** -- against the 0.335x / 3.00x I
       reported all day, which was an artefact of the pinned 8, not the kernel.
       Note the shape: monotone improvement to 64, a slight dip at 80, then a
-      **cliff** between 80 and 96 (482 -> 465 -> 110 tok/s). A cliff rather than a
-      slope points at a structural threshold on the FA2 side -- the persistent plan
-      gets 2*(132-sm_fa3) clusters, so 96 leaves it 72 -- and is worth
-      understanding before any adaptive policy picks values in that range.
+      **cliff** between 80 and 96 (482 -> 465 -> 110 tok/s).
+      **Cliff cause NOT established, and backfill is not the fix.** I predicted it
+      was idle FA3 SMs during decode-dominated steps -- at 96 only 36 SMs serve the
+      decode rows -- and that cross-role backfill, which exists precisely to let an
+      idle FA3 CTA drain the FA2 queue, would recover it. Measured as a perf probe
+      with `FLASHINFER_FUSED_BACKFILL=1` (numerics known wrong, so timing only):
+      split 64 gave 480.26 tok/s / 22.47 ms against 482.19 / 22.39 with backfill
+      off, and split 96 gave 110.76 / 102.76 against 110.52 / 103.00. Identical to
+      three digits at both points. The flag is genuinely live (read at
+      `persistent_fa3_fused.cuh:602`, passed at 683, consumed at 466), so this is a
+      real null result, not an inert switch. Either the FA3-role CTAs are not
+      reaching the drain in this path, or the cliff is not idle SMs at all.
+      Next instrument: per-step tracing (which steps are fused, and their GPU
+      spans) rather than another hypothesis.
 
       Against the goal: at the best setting the fused path still loses 18% of
       throughput and 22% of ITL, where the bar is +10% and +30%. The identified

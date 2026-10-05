@@ -4179,15 +4179,29 @@ result for a different routing.
 
 
 <a id="wgmma-role-unreachable"></a>
-### The wgmma role cannot currently run real work at all
+### The unified split-KV reduction is unwired on the wgmma role, and that blocks every fused measurement
 
-This is the fact that governs everything else in this file, and it was established
-last: **every fused measurement recorded here was taken with the wgmma role idle,
-because that is the only state the kernel can reach.**
+**Framing corrected.** Earlier revisions said "FA3 cannot run split rows" and "the
+wgmma role cannot run real work". Both are wrong. FA3 processes a KV chunk
+perfectly well -- `UnifiedWgmmaTileScheduler` already hands it `kv_start`/`kv_end`
+and the mainloop honours them. The gap is narrower: **the partial-O/LSE write and
+the merge trigger were never wired into the FA3 epilogue.**
 
-Any row large enough to be FA3-eligible (packed qo >= 128) is also long enough that
-the plan KV-splits it, and split task-3 rows are refused by the guard since the
-reduction does not exist. Two attempts to find a configuration without splitting
+The dynamic `kv_len_limit` split is also *correct and wanted*. It is the FA2 LPT
+balancer doing its job on long sequences, which is the load balancing the whole
+argument rests on. Looking for configurations that avoid splitting was a mistake --
+a way of dodging missing wiring rather than writing it.
+
+**One reduction, not two.** The single plan already emits the group tables for
+every task (`group_id`, `group_counter`, `group_nchunks`, `group_row_begin`,
+`group_nrows`, `group_kv_head`, `merge_indptr`, `merge_o_indices`) and
+`MergeGroupJIT` is already generic over `HEAD_DIM`. So the FA3 epilogue must write
+into the *same* partial buffers with the same `partial_indptr` and trigger the
+*same* handshake and merge -- a unified reduction shared by both roles, with
+cluster/DSMEM transfer of partials as a later optimisation on top, not a parallel
+FA3-specific implementation.
+
+Until that wiring exists the guard refuses split task-3 plans, which is why Two attempts to find a configuration without splitting
 both failed with the *same* count:
 
 ```
@@ -4209,9 +4223,17 @@ long one.
    below says it needs f > 0.40-0.48 of attention work on the FA3 path and the real
    serving batch has f ~ 0.9, but that rests on the catalogue's 1.7-2.4x class
    boundary numbers, not on a fused run.
-3. The wgmma JIT reduction is therefore not one item among several -- it is the
-   single gate on every remaining question, including whether the uniform-CTA
-   penalty matters.
+3. The unified reduction's wiring is therefore the single gate on every remaining
+   question. It is also the only thing standing between the existing plan and a
+   measurable fused kernel: the balancer, the group tables and the merge are all
+   already there.
+4. **The FA2 register/occupancy work is probably moot.** The class boundary
+   measured that tiles 128 and 64 belong on wgmma and only tile-16 decode stays on
+   FA2 (decode is bandwidth-bound). Every fused timing here forced tile-128/64 work
+   onto FA2 via `FLASHINFER_FA3_MIN_PACKED_QO=4096`, i.e. exactly the routing the
+   design rejects. So the 3.02x, the 1.38x and the register starvation are all
+   measured on a workload FA2 is not meant to carry, and `setmaxnreg` or a softmax
+   offload would be optimising a configuration that should not occur.
 
 **Break-even, for when the reduction lands.** With `W` the attention work in
 FA2-native SM-time, `f` the FA3-eligible fraction, `s` FA3's per-tile speedup, and

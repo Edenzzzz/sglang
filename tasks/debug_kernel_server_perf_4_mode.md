@@ -22,7 +22,7 @@ predecessor effort (sync-free plan, mixed-kernel gate, 4-mode dispatch).
 - [x] [Unified load-balance scheduler](#schedule-quality-4-mode) — imbalance 1.000 per task, waste 13.9% -> 54.8%
 - [x] [Dispatch gate rewritten from measurement](#packed-gqa-class-boundary) — `MIN_KV_TILES` was backwards and excluded the dominant row
 - [x] [Unified split-KV — FA2 side exercised and correct](#split-kv-overflow) — fixture 2 passes with 56 partial rows; the wgmma role's own split path still unexercised
-- [ ] [JIT reduction for the wgmma role](#split-kv-dark) — `partial_indptr`/`group_id` carried and ignored; **a latent wrong answer**, not merely unexercised: the plan does chunk task 3
+- [ ] [JIT reduction for the wgmma role](#split-kv-dark) — `partial_indptr`/`group_id` carried and ignored; a wrong answer for any split task-3 row, though no split was observed at 8192 and the guard has not yet been shown to fire
 - [ ] [Multicast / DSMEM](#multicast-open) — 1.33-1.59x in isolation; `FLASHINFER_FUSED_CLUSTER=2` still faults
 - [ ] [Fused epilogue: tree build as a task](#fused-epilogue-design) — designed, not built
 - [ ] [Cross-role backfill](#symmetric-retracted) — only existed in symmetric mode, which computes FA3 wrong; needs redoing on a correct path
@@ -3876,14 +3876,22 @@ it is never split. `partial_o_nnz=56` in that fixture is the FA2 classes'
 splits, which do reduce correctly. The wgmma role has simply never been handed a
 long row.
 
-**It also blocks the ordinary workload, not only >64k.** At `--random-input-len
-8192` with `--chunked-prefill-size 512` and gqa 7, a task-3 row has
-`packed_qo = 512 * 7 = 3584` and `kv_len` up to 8192, while task 3's own
-`kv_len_limit` is `f(ceil_div(total_kv_lens, num_clusters))` over 8 FA3 clusters
--- on the order of 1024. So the prefill rows in the serving A/B split too, which
-means the earlier unified serving numbers were not merely slow: the prefill rows'
-attention was wrong. The plan guard added with this entry turns that into a
-refusal, so no unified serving number can be read until the reduction exists.
+**CORRECTED: it did not bind at 8192.** I predicted this would also break the
+ordinary serving workload, reasoning that at `--random-input-len 8192` with
+`--chunked-prefill-size 512` and gqa 7 a task-3 row carries `packed_qo = 3584`
+and `kv_len` up to 8192 against a `kv_len_limit` of roughly 1024 over 8 FA3
+clusters. The measurement says otherwise: with the guard compiled in, the
+unified arm ran all 200 prompts to completion (96.2% of rows through the fused
+path), so no task-3 row was split. The earlier unified serving numbers are
+therefore **not** impeached on this account -- they are slow, not wrong.
+
+What remains open is *why*, and there are two possibilities with very different
+consequences: either no task-3 row in this workload exceeds its
+`kv_len_limit`, or the guard is inert because its predicate does not evaluate
+where I think it does -- in which case the silent wrong answer is still
+reachable and simply was not triggered. A guard that has never fired proves
+nothing. The gate fixture below is what distinguishes them, and it has not yet
+been run.
 
 **What the fix has to do.** The partial write is smaller than it looks, because
 `CollectiveEpilogue::store` (`hopper/epilogue.cuh:204-258`) already stages the

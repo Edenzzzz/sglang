@@ -10,8 +10,14 @@ loop covers every task including `kFA3Task`, the unified scheduler carries
 references neither -- nor anything else about partials -- so each chunk of a
 split task-3 row writes its own slice straight to the final O rows and the
 chunks overwrite each other. Fixture 2 is quiet about it only because its
-FA3-class row is `kv=236` and never splits. This gates the >64k A/B: at that
-length the FA3-class rows are exactly the ones that split.
+FA3-class row is `kv=236` and never splits.
+
+Corrected after measuring: I expected this to break the 8192 workload too, but
+the unified arm ran all 200 prompts with the guard compiled in, so nothing
+split there and the earlier unified numbers are slow rather than wrong. Whether
+that is because no task-3 row exceeds its `kv_len_limit` or because the guard is
+inert is still open -- the gate fixture decides it, and a guard that has never
+fired proves nothing.
 
 ### The restored pod's serving tree was upstream sglang, not our fork
 

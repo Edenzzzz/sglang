@@ -2565,3 +2565,35 @@ decides the kernel's architecture:
    showed serial dispatch costs -48%, so this means concurrent co-launch on
    disjoint SM sets, i.e. the original pre-assignment shape with the geometry
    problem of §12 rather than one kernel.
+
+##### Draining on FA3's consumer warpgroup is worse, and the phases are not interchangeable
+
+The asymmetric backfill deliberately runs on warpgroup 1 because warpgroup 0 is
+FA3's TMA producer sitting at `warpgroup_reg_dealloc<24>`. Applying the same
+choice to the symmetric drain makes everything worse, consistently over three
+repeats:
+
+| drain warpgroup | FA3 row | task0 | task2 |
+|---|---|---|---|
+| 0 (current) | 3.04 / 3.03 / 4.34 FAIL | **exact** | **exact** |
+| 1 (backfill's choice) | 3.57 / 4.13 / 4.41 FAIL | **1.34 / 0.95 / 1.22 FAIL** | **3.59 / 3.03 / 3.62 FAIL** |
+
+The reason the two cannot be copied across: the backfill runs **after** FA3's
+body, when warpgroup 1 is a wgmma consumer holding ~240 registers, while the
+symmetric drain runs **before** it, when no `setmaxnreg` has executed at all and
+every warpgroup holds the compiled 168. Same warpgroup, different phase,
+different correctness.
+
+En route this exposed a real bug in the per-warpgroup slots: the slot index was
+`kTidBase / 128`, so a narrow drain on warpgroup 1 addressed slot 1 of a
+one-slot allocation and faulted with an illegal access 69632 bytes past the end.
+The index is now the drain ordinal. Width 3 was in bounds, but width 1 had been
+writing its cursor/merge tail by the same rule, which is a second reason the
+earlier width-1 symmetric numbers cannot be trusted.
+
+Remaining hypothesis is unchanged and now the only one standing: the fused body
+compiles to 168 registers with up to 4.4 KB of spill loads, so FA3's
+`dealloc<24>` / `alloc<240>` protocol is unsatisfiable in this kernel. The test
+is to compile the fused build with those calls removed -- which costs FA3 its
+240-register consumer budget, and so is a measurement of what the fusion is worth
+once the protocol is honest, not a free fix.

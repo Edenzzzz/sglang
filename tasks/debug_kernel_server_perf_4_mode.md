@@ -16,42 +16,29 @@ measured. The unified split-KV reduction is the gate.
 
 ## Tasks, in priority order — 2026-10-06
 
-- [ ] **1. Unified JIT split-KV reduction** — 2026-10-06: all five pieces written,
-      one compile error left in the fused instantiation.
-      Landed: `store_partial` + shared `partial_o`/`partial_lse` params (`eb6b5e2`);
-      work-tile SFINAE trait + dispatch (`082cb84`); group tables in the epilogue
-      params (`b3f173b`); `MergeGroupJIT` extracted to `jit_merge.cuh` so one
-      implementation serves both roles (`01d0c2f`); the release/acquire handshake
-      (`f55e3a2`).
-      **Blocker (2 of 2 found, 1 fixed):** the first was `store_partial`'s template
-      list — `store()` templates `SharedStorage` as a method template parameter,
-      not a class member type, so declaring only four parameters made that
-      argument unmatchable. Fixed; the list is now identical to `store()`'s.
-      The second is live and is **not** a code error. After matching
-      `persistent.cuh`'s full include set in `jit_merge.cuh`, the fused build
-      fails with **no `error:` line at all** — only macro-redefinition warnings
-      (`REGISTER_QUERY_TRANSFORM` etc., from `hopper/variant_helper.cuh` against
-      `attention/variant_helper.cuh`, which predate this work) and then a nonzero
-      exit. That is the signature of the compiler being **killed**, not rejecting
-      the source, and this pod has a cgroup OOM history. The command uses
-      `--threads 32` on a TU whose include graph just grew, so the first thing to
-      try is lowering `--threads` or trimming the include set back to what
-      `MergeGroupJIT` actually needs.
-      Also visible in the failing command line, and worth fixing independently:
-      the pod compiles against
-      `/home/tiger/.cache/flashinfer/90a/generated/.../batch_attention_config.inc`
-      — the **upstream** generated config, not one generated from this fork. That
-      is the same mismatch that blocked the local `-Xptxas` attempt, and it means
-      the pod build has been taking `PersistentParams` from upstream's generator. Note the trap that hid it:
-      compiling `prefill_sm90.cuh` standalone passes, because the upstream
-      scheduler takes the `if constexpr` false branch and `store_partial` is never
-      instantiated. Only the fused TU with `kUnifiedWgmma=true` instantiates it, so
-      **the local compile check is not sufficient for this path** — build
-      `tests/fused_fa3_persistent_ext.cu` on the pod, or generate this fork's
-      `batch_attention_config.inc` locally (the cached one is upstream's and lacks
-      our `PersistentParams` fields).
-      Gate once it builds: fixture 2 reports 200 task-3 items today and must return
-      matching the reference at ~3e-3 with `partial_o_nnz` > 56.
+- [ ] **1. Unified JIT split-KV reduction** — 2026-10-06: builds and runs; one
+      wiring gap left. Four build blockers cleared (`8d9c889`, `26bfc5b`):
+      `store_partial`'s template list was missing `SharedStorage`, which `store()`
+      templates as a method parameter rather than it being a class member type;
+      `jit_merge.cuh`'s include set was too narrow; `vec_t` specialises for
+      `__nv_bfloat16` not CUTLASS's `bfloat16_t`, so the shared merge hit
+      `ptxas fatal: Unresolved extern function vec_t<cutlass::bfloat16_t, 4>::load`
+      at **link** time, which no grep for `error:` can see; and the plan guard
+      still refused split task-3 rows after the reduction existed (now lifted,
+      `FLASHINFER_FA3_NO_SPLIT_REDUCE` kept as a bisect switch).
+      **Fixture 2 result: 511/512 rows unwritten**, only the unsplit decode row
+      correct. The cause is a gap of mine, not the handshake: the new epilogue
+      fields were added last and defaulted to `nullptr` so existing positional
+      initialisation stayed valid, and were then never populated at the
+      `CollectiveEpilogue::to_underlying_arguments` call in
+      `persistent_fa3_fused.cuh`. `store_partial` gates its handshake on
+      `group_counter != nullptr`, so every split chunk writes a partial and
+      nothing merges. Earlier commits said "group tables in the epilogue params"
+      when only the declarations existed.
+      **Next:** populate `partial_o`, `partial_lse`, the merge maps and the group
+      tables there, from the same persistent params the FA2 roles already use.
+      Gate: fixture 2 must reach 0 unwritten rows, ~3e-3 on the FA3 row, and
+      `partial_o_nnz` > 56.
       [detail](#wgmma-role-unreachable)
 - [ ] **2. Per-role parity vs standalone SOTA** — FA3 vs flash-attention, FA2 vs
       the stock persistent kernel, on fixed-input kernel timing with L2-swizzled

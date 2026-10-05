@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.9.2 — Measured: single-kernel co-compilation, not the register cap, is what starves FA3 (2026-10-06)
+
+The register-pressure hypothesis from v0.9.0 is confirmed in outline and wrong in
+its mechanism, and the corrected version is sharper.
+
+`-Xptxas -v` on three builds of the same kernel, all `__launch_bounds__(384, 1)`:
+
+| build | regs | stack | spill stores | spill loads |
+|---|---|---|---|---|
+| upstream FA3 alone, our template | 168 | 32 B | 52 B | 40 B |
+| upstream FA3 + the three FA2 runners | 168 | 2 976 B | 33 676 B | 37 852 B |
+| flashinfer FA3 + the three FA2 runners | 168 | 848 B | 3 232 B | 5 028 B |
+
+I had predicted that upstream would be starved because it asks for 232 registers per
+MMA warpgroup through `warpgroup_reg_alloc` while `__launch_bounds__(384, 1)` caps
+the uniform allocation near 170, and that the fix was to make the FA2 role
+participate in the same register protocol. That prediction is refuted: upstream
+compiled **alone** in exactly the same template, with the same bounds and the same
+168 registers, spills 52 bytes. The cap is not the problem.
+
+What costs the 33 KB is that both roles are one function. ptxas allocates registers
+per kernel, so the FA2 mainloop's live ranges and upstream's share a single
+allocation, and at equal register count the fused build spills 648x more than the
+standalone. The default path shows the same effect an order of magnitude smaller
+(3 232 B), which is why it was visible but not fatal there.
+
+This is a property of single-kernel fusion itself, not of the split policy, the
+thread width, or the stage count -- none of which differ between the two rows that
+matter. It is also why ptxas emits C7510 (wgmma serialized across a function
+boundary) only on the upstream path.
+
+The consequence for the goal is direct: per-role parity cannot be reached by tuning
+the split while both roles share one register allocation. Either the roles must be
+separated in a way that gives each its own allocation, or the FA2 role's live ranges
+must be cut down. No parity number should be quoted until this is resolved, and the
+1.83x gap already measured is most likely this.
+
 ## v0.9.1 — The upstream FA3 port compiles, and the planner exports its split count (2026-10-06)
 
 The port's dispatch now instantiates end to end with `FLASHINFER_FA3_UPSTREAM=1`:

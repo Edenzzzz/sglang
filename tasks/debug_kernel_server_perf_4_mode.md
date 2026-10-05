@@ -4214,48 +4214,36 @@ and thread width -- giving FA2 *more* threads made it **slower** (147.9 vs 132.1
 which is the register story again: more warpgroups do not raise the per-thread
 ceiling, they lower it.
 
-**The fix, and the arithmetic that picks between two forms of it.** On an FA2-role
-CTA two of the three warpgroups have no work, and their registers can be moved to
-the working one with the `setmaxnreg` protocol the kernel already uses on the FA3
-path (`prefill_sm90.cuh:178-239`). The constraint that shapes the answer: a
-warpgroup cannot be dealloc'd to **zero** -- the floor is 24, in steps of 8 -- so
-every idle warpgroup costs 128 x 24 = 3072 registers that native FA2 never pays.
-Per SM there are 65536 registers and a hard 255-per-thread ceiling:
+**Confirmed from the compiled binaries** (`cuobjdump -res-usage` on the pod):
 
-| form | idle tax | working threads/SM | registers/working thread |
+| kernel | registers/thread | stack (spill) |
+|---|---|---|
+| standalone persistent FA2 (the 43.8 us baseline) | **255** | 56-288 B |
+| fused kernel | **168** | **720-816 B** |
+
+FA2's mainloop already uses the 255 ceiling and still spills a little. In the fused
+kernel it gets 168 and spills about 10x as much.
+
+**Why FA2-role SMs need 2 CTAs, and which layouts can give them that.** Native FA2
+is 2 CTAs x 128 threads x 255 = 65,280 of the SM's 65,536 registers. It fills the
+register file and has no idle warps. A fused CTA always carries idle warpgroups,
+and a warpgroup cannot be dealloc'd below 24, so each idle warpgroup costs at
+least 3,072 registers that native FA2 never pays. In a single launch every CTA has
+the same size, so occupancy is the same on every SM.
+
+| layout | FA2 threads/SM | regs/FA2 thread | FA3 |
 |---|---|---|---|
-| **A.** 1 CTA/SM, 3 warpgroups, 1 working | 2 x 3072 = 6144 | 128 | (65536-6144)/128 = 464 -> **capped 255** |
-| **B.** 2 CTAs/SM, 6 warpgroups, 2 working | 4 x 3072 = 12288 | **256** | (65536-12288)/256 = **208** |
-| native FA2, 2 CTAs/SM, 2 warpgroups, both working | 0 | 256 | 255 |
-| **today** (no setmaxnreg on the FA2 path) | — | 128 | **168, with 4.4 KB spill loads** |
+| native FA2 | 256 | 255 | n/a |
+| today: 1 x 384, no setmaxnreg on the FA2 path | 128 | 168, spills | ok |
+| A: 1 x 384, idle warpgroups dealloc<24>, worker alloc<240> | 128 | 240 | ok |
+| B: 2 x 384 | 256 | 208 | breaks: consumers get ~112, need 240 |
+| C: 2 x 256, FA3's 8-warp config (dealloc<32>/alloc<160>) | 256 | 232 | fits |
 
-Form A gets the full 255 registers but only 128 working threads per SM -- half of
-FA2's native occupancy, which is the 1.38x. Form B keeps FA2's native 256 working
-threads and is the shape FA2 was designed for, at 208 registers rather than 255.
-
-**Which one wins depends on a number not yet measured: what the FA2 mainloop
-actually needs.** If `mma.sync` fits in 208, form B dominates -- native occupancy
-and no spills, and the 1.38x structural cost disappears along with the spills. If
-it needs more than 208, form B trades spills back for occupancy and form A may
-win. The ptxas register count for the *standalone* persistent kernel answers this
-directly and needs no GPU.
-
-**Form B also has a smem precondition.** Two CTAs per SM means <= 116 KB each, and
-the disjoint layout is FA3's ~98 KB plus a 69.6 KB persistent slot = ~168 KB, which
-does not fit. Aliased smem (~98 KB) does. So the 11% aliasing win and form B are
-the same piece of work: re-initialise FA3's pipeline state after the rendezvous to
-remove the race, and 2 CTAs/SM becomes reachable. A single launch also applies one
-CTA size and one smem request to both roles, so 2 CTAs/SM would put two FA3-role
-CTAs on each FA3 SM -- which FA3's 1-CTA/SM design may not tolerate, and is the
-thing to verify before committing to form B.
-
-There is a constraint to respect, documented at `:327`: `setmaxnreg.inc` can only
-take registers that another warpgroup released with a matching `.dec`, and **a
-warp that merely returns never issues one**. So the idle warpgroups must
-explicitly dealloc before parking; today they simply fall through, which is why
-the FA2 role sits at the static 168. This is exactly what static pre-assignment
-buys -- on an FA2-role SM the kernel knows at runtime that FA3 will not run, so it
-can give FA2 the whole register file. Not yet implemented.
+- **A** is the immediate fix. It removes the spills, and the expected kernel time
+  is about the 60.3 us that unfused FA2 runs at when forced to 1 CTA/SM.
+- **C** is the target. FA2-role SMs get native occupancy at 232 registers. It needs
+  FA3's 8-warp variant to perform acceptably, and smem of at most ~113 KB per CTA,
+  which requires the aliasing race fix. Neither is verified yet.
 
 **What remains genuinely structural** is only the 1 CTA/SM cap: FA3's ~98 KB of
 smem leaves no room for a second CTA, and the unfused kernel loses 1.38x

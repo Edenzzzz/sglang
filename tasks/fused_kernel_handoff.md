@@ -1011,3 +1011,28 @@ Note this is the same obstacle in a third guise -- 15.5 met it as `local_tile`
 refusing a scalar tiler, 15.2 as a TMA descriptor fault, and now as a tiled copy
 needing a partitionable source. The underlying fact each time: at gqa 7 a 128-row
 packed tile straddles heads unevenly.
+
+### 17.2 cp.async alone recovered 9%; the rest was a self-inflicted pipeline drain
+
+| unified arm | tok/s | mean ITL | TTFT |
+|---|---|---|---|
+| register round trips | 7,693.5 | 60.45 ms | 10,275 ms |
+| cp.async + `cp_async_wait<0>` | 8,379.5 (+8.9%) | 55.42 ms | 9,400 ms |
+| baseline | 24,885.3 | 18.51 ms | 2,681 ms |
+
+Converting the load to `cp.async` moved it 9%, which is far too little, and the
+residual does not fit the copy volume: 116 work items x 32 KB is 3.7 MB per
+layer, under 2 us at HBM bandwidth, against a step that is **+37 ms**.
+
+The cause is in the completion signal I used, not the copy. `cp_async_wait<0>`
+drains **every** outstanding cp.async group in the thread, and this producer has
+already committed the K and V stages through `pipeline_k`/`pipeline_v` with
+`cpasync_barrier_arrive`. So each of the 116 work items per layer flushed the KV
+prefetch pipeline and serialised the mainloop against it. The fix is to signal
+through `barrier_Q` with `cpasync_barrier_arrive`, which is precisely what the KV
+loads next to it already do.
+
+Worth stating as a rule rather than an incident: in a warp-specialised mainloop
+with a software pipeline, any blanket `cp_async_wait<N>` is a cross-pipeline
+barrier. Completion must be expressed per consumer, through that consumer's
+barrier.

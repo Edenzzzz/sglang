@@ -3876,8 +3876,42 @@ it is never split. `partial_o_nnz=56` in that fixture is the FA2 classes'
 splits, which do reduce correctly. The wgmma role has simply never been handed a
 long row.
 
-**What the fix has to do** (mirroring `persistent.cuh` ~575-640, which is the
-working reference on the FA2 side):
+**It also blocks the ordinary workload, not only >64k.** At `--random-input-len
+8192` with `--chunked-prefill-size 512` and gqa 7, a task-3 row has
+`packed_qo = 512 * 7 = 3584` and `kv_len` up to 8192, while task 3's own
+`kv_len_limit` is `f(ceil_div(total_kv_lens, num_clusters))` over 8 FA3 clusters
+-- on the order of 1024. So the prefill rows in the serving A/B split too, which
+means the earlier unified serving numbers were not merely slow: the prefill rows'
+attention was wrong. The plan guard added with this entry turns that into a
+refusal, so no unified serving number can be read until the reduction exists.
+
+**What the fix has to do.** The partial write is smaller than it looks, because
+`CollectiveEpilogue::store` (`hopper/epilogue.cuh:204-258`) already stages the
+output tile into smem `sO` and already has LSE in registers. The partial
+destination is a dense row-major slab, not the packed `(G, seq)` layout, so
+`store_partial` is `store` with two destination substitutions and nothing else:
+
+| | final path | partial path |
+|---|---|---|
+| O | `write_O<...>(epilogue_params.O_ptr, ..., layout_O, ..., qo_head_idx, qo_indptr, qo_len, ...)` scattering into `(G, seq)` | dense copy from the same `sO` to `partial_o + partial_indptr * HEAD_DIM_VO`, `row_tile_size = min(CTA_Q, qo_len - qo_tile_idx * CTA_Q)` rows of `HEAD_DIM_VO` |
+| LSE | `gLSE(row) = lse(mi)` via `get_lse_local_tile_tensor` | `partial_lse[partial_indptr + row] = lse(mi)`, same `tOcO_row` loop and the same `row < qo_len - qo_tile_idx * CTA_Q` bound |
+
+`partial_o` is `DTypeO` and `partial_lse` is `float`, matching
+`MergeGroupJIT<HEAD_DIM>(partial_o, partial_lse, final_o, final_lse,
+merge_indptr, merge_o_indices, row_begin, nrows, kv_head_idx, num_kv_heads,
+gqa_group_size, tid, nthreads)` in `persistent.cuh:250`.
+
+**The seam for the per-work-item fields.** `block_coord` is destructured with
+fixed arity 8 by the shared FA3 body, so `partial_indptr`/`group_id` cannot ride
+along it without breaking the other scheduler. They are already on
+`WorkTileInfo`, which `fa3_prefill_body` holds, so the route is a C++17 SFINAE
+trait over `decltype(std::declval<typename S::WorkTileInfo>().group_id)` --
+false for the upstream scheduler, true for ours -- and an `if constexpr` at the
+`collective_epilogue.store(...)` call in `hopper/prefill_sm90.cuh:299`. That
+needs no upstream edit.
+
+**And the handshake** (mirroring `persistent.cuh` ~575-640, the working reference
+on the FA2 side):
 
 - epilogue: when `partial_indptr >= 0`, store to
   `partial_o + partial_indptr * HEAD_DIM_VO` and `partial_lse + partial_indptr`

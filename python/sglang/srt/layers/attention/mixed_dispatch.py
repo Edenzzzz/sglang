@@ -99,7 +99,13 @@ MIN_SM_UTIL = 0.5
 # nearly the whole device on FA3, which the same sweep measures as one of the
 # two worst settings. That cost model was fit for the overlap kernel and does
 # not transfer to this kernel's makespan, so this bound must stay measured.
-MIN_SM_FA3, MAX_SM_FA3 = 8, 64
+# The ceiling used to be 64 of 132, which caps FA3 at half the GPU no matter how
+# much of the batch is FA3-class. Measured on a long-prefix fixture that is ~99%
+# FA3 work: 64 clusters ran 1342 us where 124 ran 772 us and FA2-on-everything ran
+# 421 us -- a 1.74x penalty from the clamp alone. The analytic balance point should
+# be free to reach the whole grid; the floor stays so a tiny FA3 share still gets
+# enough CTAs to be worth splitting for.
+MIN_SM_FA3, MAX_SM_FA3 = 8, 131
 
 
 def _as_i64(a):

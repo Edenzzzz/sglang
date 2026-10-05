@@ -2484,3 +2484,37 @@ makes, in order of cost:
    tail is all that is written at width 1) fixes it or narrows it to the slot.
 3. Re-initialising FA3's shared state after the rendezvous fixes it regardless of
    layout, and is what width 3 would need anyway.
+
+##### Shared memory is genuinely ruled out; what is left is the FA3 entry state
+
+The disjoint layout is now the source default (`fused_pers_smem_base` returns
+`align(kFA3Bytes)` unless `FLASHINFER_FUSED_ALIAS_SMEM`), so this test involves no
+compile flag and cannot be defeated by JIT caching. Symmetric, width 1, SPLITS=8,
+three repeats: FA3 rel err **3.04 / 3.03 / 4.34, all FAIL**, FA2 rows exact.
+
+So the drain does not corrupt FA3 through shared memory. Combined with the
+earlier probes this leaves a short list:
+
+- the **132-CTA FA3 plan is innocent** (`sm_split = num_sm`, same plan, no drain
+  -> FA3 exact at 2.2e-4),
+- **storage aliasing is innocent** (this test),
+- the FA2 rows are correct in every configuration ever run,
+- and the corruption is **nondeterministic**, so it is a race rather than wrong
+  addressing.
+
+What remains is the state in which a CTA enters FA3's warp-specialised body after
+draining: the `warpgroup_reg_dealloc<24>` / `warpgroup_reg_alloc<240>` protocol
+has no margin at the 168-register baseline, and at width 1 only warpgroup 0 has
+run the drain, so the three warpgroups reach that protocol from different code
+and in different register states. That is the one hypothesis consistent with a
+race whose magnitude varies run to run.
+
+Note the kernel's own guard blocks the obvious isolation
+(`FA3_PLAN_CTAS=8` with symmetric mode is refused, by design, because the mode
+needs one slice per CTA), so separating plan size from drain in that direction
+requires relaxing the guard behind a diagnostic rather than an env var.
+
+Next, cheapest first: `PTXAS_V=1` on the symmetric build to read the actual
+register counts per kernel (the 168 figure predates the warpgroup-barrier and
+slot changes); then make all three warpgroups run the same pre-FA3 code, which is
+what the width-3 drain does and is the fix this hypothesis predicts.

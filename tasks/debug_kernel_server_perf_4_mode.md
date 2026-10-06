@@ -741,6 +741,43 @@ reserve partial space at full-tile granularity so an overrun is harmless. The fi
 the second only hides it. The two-row pair `qo:128,512` (PASS) and `qo:127,512` (FAIL) at
 `prefix:65536,512` is the regression test, and it is cheap.
 
+**Write path located, with one concrete inconsistency (NOT yet verified as the fault).**
+`persistent.cuh:503-509` takes the split branch and calls `write_o_`, whose gmem store is
+guarded by `if (o_idx < qo_upper_bound)` (`persistent.cuh:133`) with
+
+    qo_upperbound = min(q_len, ceil_div(qo_packed_idx_base + CTA_TILE_Q, gqa_group_size))
+
+That guard is in **token** units (`o_idx = q`, the de-packed token index) while the write
+offset is in **packed-row** units. Walking the failing shapes by hand, the guard does appear
+to block the surplus rows: for `qo=1, gqa=7, CTA_TILE_Q=16`, packed row 7 maps to `q=1` and
+`qo_upperbound=1`, so it is rejected; for `qo=127`, packed 889 maps to `q=127` against
+`q_len=127`, also rejected. So on inspection the partial-O guard looks correct, and the
+producer-overrun mechanism above is **not yet confirmed at the source level** even though the
+measurements it predicts all hold.
+
+**The inconsistency worth testing first.** `partial_o` is indexed tile-relative:
+
+    o_ptr_base + (o_packed_idx - o_packed_idx_base_cta) * o_stride_n        // CTA tile base
+
+while `partial_lse` is indexed row-relative (`persistent.cuh:535-538`):
+
+    partial_lse[(o_indptr + (packed_qo_idx - packed_qo_start) * num_kv_chunks + kv_chunk_idx) ...]
+                                             ^^^^^^^^^^^^^^^^ the ROW's start, not the tile's
+
+For a row's **first** tile these coincide; for any later tile they diverge by the tile offset.
+Every failing fixture has a leading row that splits, and a row large enough to span multiple
+q-tiles would then write its LSE partials to the wrong rows while writing O partials to the
+right ones -- which corrupts the merge for rows whose LSE came from elsewhere. That is a
+testable, local discrepancy and it is where the next session should start: make the two agree
+(both tile-relative or both row-relative, whichever matches `merge_indptr`'s construction) and
+run the `qo:128,512` / `qo:127,512` pair.
+
+**Not implemented here deliberately.** Changing an indexing expression in the FA2 epilogue on
+the strength of an unverified reading is exactly the move that produced the last six dead
+hypotheses, and a wrong change here would silently corrupt a path the TraceLab A/B depends on.
+The regression pair makes verification cheap, so the fix should be made *with* a measurement,
+not before one.
+
 **This also retracts my earlier "no threshold, so not the split machinery" refutation.** That
 prefix sweep ran 1024, 4096, 8192, 16384, 32768, 65536 -- every point at or above the limit,
 so everything failed and I read a flat result as "no threshold". The threshold was one step

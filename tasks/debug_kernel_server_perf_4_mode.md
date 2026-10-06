@@ -666,12 +666,51 @@ ordering/offset fault in plan construction, not a data race and not a masking er
 - the combine, FA3, `num_splits`, page alignment, row order, task class: all refuted by
   measurement above.
 
-**Still live:** `cluster_partial_indptr` is pushed for **every** work item including
-non-split ones, so a row following a split row carries a non-zero `partial_indptr`; and
-`merge_o_indices` is built from `qo_indptr_h[i]` while `partial_o` is indexed by
-`partial_o_nnz`. One of those two couplings is the likely seat, and the three-row reproducer
-distinguishes them cheaply by dumping the plan's arrays for the PASS and FAIL cases and
-diffing -- which is the next step, rather than another code reading.
+**`cluster_partial_indptr` is REFUTED by experiment.** Zeroing it for non-split work items
+(`PI_ZERO=1`) leaves the corruption intact: 0.566 on the two-row reproducer and 0.512 on the
+three-row one, against 0.472 for the unmodified control. So the kernel does not consume that
+value for non-split items.
+
+**PLAN DUMP (the measurement, not a reading).** Dumping the 4-task plan's arrays for the PASS
+and FAIL fixtures and diffing corrected two of my own rules:
+
+| | PASS `kv=[1024,1024]` | FAIL `kv=[1025,1024]` |
+|---|---|---|
+| task2 work items | 4 -- **one chunk**, kv 0->1024 | 8 -- **two chunks**, 0->1024 and 1024->1025 |
+| `group_row_begin` | 0, **128**, 256, 384, 512 | 0, **7**, 135, 263, 391 |
+| `group_nrows` | all **128** | **7**, then 128 ... |
+| `num_groups` | 112 | 116 (= 112 + 4) |
+| `merge_o_indices` | starts at **28** (token 1) | starts at **0** (token 0) |
+
+Corrections this forces:
+
+- **`len_kv_chunk` is 512, not 1024.** The per-task limits differ; task 2's is 1024, which is
+  why the measured boundary sat at 1024 -- `kv=1024` is one chunk, `kv=1025` is two. The
+  threshold rule was right about the number and wrong about the quantity it named.
+- **The follower row *does* split.** The `qo=512 kv=1024` row is itself two chunks of 512 in
+  both cases, so "a split row corrupts a non-split follower" was wrong. Both rows split in
+  the FAIL case; only the follower splits in the PASS case.
+
+**What actually distinguishes the two:** in FAIL the leading row contributes a group with
+**`nrows=7`** -- a *partial* q-tile, since `packed_qo_len = 1 x 7 = 7` against
+`cluster_tile_q = 16`. Every group in the PASS case is a full 128-row tile. So the live
+candidate is a **partial q-tile group** reaching the JIT merge, which is also what every
+failing fixture has in common (`qo=1` -> packed 7; `qo=4` -> packed 28, also partial) and what
+TraceLab's failing decode rows have (`qo=1`, packed 7, long KV so they split and reach the
+merge).
+
+**Eliminated by reading, added to the list so it is not re-spent:** `MergeGroupJIT` does not
+overrun a partial group -- its loop is `for (r = row_begin + warp_id; r < row_begin + nrows;
+...)` (`jit_merge.cuh:40`), correctly bounded, and its output index
+`merge_o_indices[r] + kv_head_idx * gqa_group_size` matches the
+`[token, kv_head, gqa_group, dim]` layout exactly.
+
+**Next, and it should again be an experiment:** force the leading row's packed length to a
+full tile (e.g. `qo:16 prefix:1024` so `packed = 112`, or `qo:2 prefix:1024` -> packed 14,
+still partial) and sweep `packed_qo_len` across the `cluster_tile_q` boundary. If the
+corruption tracks partiality rather than the split count, that isolates it to the partial-tile
+path in one run. Reading has now eliminated six suspects and identified none; the dump
+localised more in one run than all six readings combined.
 
 **This also retracts my earlier "no threshold, so not the split machinery" refutation.** That
 prefix sweep ran 1024, 4096, 8192, 16384, 32768, 65536 -- every point at or above the limit,

@@ -44,6 +44,42 @@ read from per-work-item arrays (fixing this took fixture 2 from 439/512 unwritte
 executor's correct rows (an FA2 decode row went 5.8e-4 → 0.155). The third fix is
 written and under test.
 
+### TWO EXECUTORS BEAT FA2-ON-EVERYTHING, AND PASS — 2026-10-06
+
+sglang `d9be55b53`, flashinfer `c035c23`. Baseline and split measured through the **same** code
+path, build and fixture: `n_fa3:0` gives the FA3 executor no requests so every row goes to
+FA2, which is FA2-on-everything by construction rather than a separate control arm.
+
+    TWO_EXEC=1 TWO_EXEC_OVERLAP=0 FA3_UPSTREAM=1 TIME_ITERS=50 UNIFIED=1 SPLITS=auto \
+      FLASHINFER_SM_PARTITION=1 FLASHINFER_FA3_SM_SPLIT_CLUSTERS=124 \
+      FIXTURE='<shape> n_fa3:{0|2}' python tests/test_fused_server_batch.py
+
+| batch | baseline, FA2 all | split, sequential | fa3 half | fa2 half | |
+|---|---|---|---|---|---|
+| `qo:72,439,100,1` 612 tok | 72.2 us | 72.5 us | 38.2 | 33.8 | parity |
+| `qo:512,512,100,1` 1125 tok | **94.2 us** | **79.5 us** | 45.2 | 33.0 | **1.19x** |
+
+Every arm PASSes: rel err 1.6e-3 to 3.7e-3 across all rows, 0 unwritten, both FA3 rows and
+both FA2 tile classes exercised.
+
+**This is the first measured win in the project**, and it is sequential -- no overlap, no
+concurrency, no admission control. The mechanism is the flat-cost observation: FA3 went
+38.2 -> 45.2 us for 2.3x the prefill work, so its fixed floor amortises and it overtakes FA2
+on prefill-heavy batches. On the light batch the floor exactly eats the advantage, hence
+parity.
+
+**Headroom from here.** The halves are independent, so with working overlap the floor is
+`max(45.2, 33.0) = 45.2` us against the 94.2 us baseline -- about **2.1x** -- rather than
+the 79.5 us sum. Naive concurrent streams do NOT get there (111.3 us, worse than
+sequential) because two full persistent grids contend for SMs; that needs device-side
+admission control, which is rung 1.
+
+**Why the fused kernel could never show this.** Its 2.16x regression was co-residency:
+either role could have its native register allocation but not both (33 676 B of FA3 spill
+against 52 B alone), and its shared memory exceeded the opt-in limit by 1 120 B. The split
+removes both, and the baseline is the FA2 kernel itself, so the split hands it strictly less
+work. The regression could not survive the split, and did not.
+
 ### First two-executor numbers — 2026-10-06
 
 Two executors, one plan: flash-attention's FA3 on its own `VarlenDynamicPersistentTileScheduler`

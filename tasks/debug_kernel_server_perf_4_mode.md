@@ -7133,6 +7133,28 @@ mechanism claims are void:
   (`o_indptr` steps by `row_tile_size x nchunks` in both N).
 - "precision loss from bf16 partials, tracking chunk size" -- refuted here.
 
+**SEPARATION RUN (N vs total KV), and both of my axes were wrong:**
+
+| arm | rows | kv/row | total KV | rel err |
+|---|---|---|---|---|
+| A | 18 | 4 096 | **73 K (smallest)** | **1.205 (worst)** |
+| B | 2 | 65 536 | 131 K | 0.058 |
+| C | 18 | 65 536 | 1.18 M (largest) | 0.313 |
+| D | 4 | 32 768 | 131 K | 0.117 |
+
+- **Total KV refuted**: A has the smallest total and the worst error.
+- **Row count alone refuted**: A and C share N=18 and differ 4x.
+- Anchor: B -> D doubles rows, halves kv, and the error doubles exactly (0.058 -> 0.117).
+  Error grows with N and with 1/kv_per_row.
+- A's rel err 1.2 is the "right magnitude, uncorrelated values" regime -- the signature of
+  rows attending the WRONG KV, not of accumulated noise. A roughly fixed number of
+  misdirected chunks fits: at A's ~2 chunks/row one wrong chunk is ~50% of the output
+  (err ~1.2); at C's 4 chunks/row, ~25% (err ~0.31).
+
+**Next is a forensic probe, not a hypothesis**: `KV_ROWCONST=1` fills each row's V with the
+constant `(j+1)/100`, so `got[r]` under `DUMP_ROWS` *is* the weighted average of the row-ids
+row r attended. One run names exactly whose KV each wrong row read.
+
 **What survives is the original characterisation, now better supported:** the error grows with
 the number of rows in the batch (0.0495 at N=2, ~0.30-0.39 at N=18), is independent of chunk
 size, appears in FA2-only with no FA3 executor present, and leaves row 0 clean. Something

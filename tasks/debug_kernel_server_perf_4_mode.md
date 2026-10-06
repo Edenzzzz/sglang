@@ -6779,15 +6779,34 @@ under 4% and the FA2 set is flat, so stacking them onto the split moves the ceil
   come from somewhere the kernel work does not touch -- scheduling (EDF admission, better
   batching), cache hits avoiding prefill entirely, or spec-decode acceptance raising tokens
   per step. Those are the *scheduling* items in this plan, not the kernel items.
-- Two measured facts sharpen where the attention headroom actually is: on identical append
-  rows FA3 takes 11 164 us against FA2's 15 437 us, and the mixed batch's FA2 half is
-  15 394 us of a 15 396 us total. The decode rows dominate, and they are on FA2 because the
-  FA3 executor cannot serve `qo=1` rows at all (5632/5650 unwritten when tried). **Making FA3
-  serve decode rows is worth more than every remaining trait item combined** -- it is the
-  difference between 11.2k and 15.4k on the work that dominates the batch.
+- On identical append rows FA3 takes 11 164 us against FA2's 15 437 us, and the mixed batch's
+  FA2 half is 15 394 us of a 15 396 us total.
 
-That last point is the one actionable kernel direction left with a large payoff, and it is not
-on the current item list.
+**RETRACTED, same day, by arithmetic on the unwritten count: FA3 does NOT fail on decode rows
+-- it fails on the LARGE ones.** I wrote that "the FA3 executor cannot serve `qo=1` rows at
+all (5632/5650 unwritten)" and built a recommendation on it. The split is the exact opposite:
+
+    total output rows            = 2048+2048+512+1024 + 18x1 = 5650
+    unwritten                    = 5632 = 2048+2048+512+1024   <- the four LARGE rows
+    written                      = 5650 - 5632 = 18            <- the 18 decode rows
+
+So with all 22 rows routed to FA3, it wrote **only** the decode rows and dropped every
+large-q row. The capability is the reverse of what I claimed, and the "make FA3 serve decode
+rows" direction is void -- it already does.
+
+What the real failure is remains open: the four dropped rows are exactly those with
+`qo > 1`, which are the rows FA3 serves correctly when `n_fa3=2`. So the fault appears when a
+22-request plan is built rather than being a property of the row shape -- a plan-capacity or
+`num_blocks` limit, not a missing capability. `num_blocks` is
+`ceil_div(max_seqlen_q * qhead_per_khead, 128)` = 112 here, which is sized from the LARGEST
+row, so a plan holding 22 requests may be exhausting per-request work-item capacity for the
+large ones.
+
+The honest version of the headroom point: FA3 is **1.38x faster than FA2 on identical append
+rows**, and decode rows dominate the mixed batch's time. Whether FA3 can be made faster than
+FA2 *on decode rows* is unmeasured -- it serves them, but no FA3-vs-FA2 decode-only timing
+exists. That measurement is cheap (a decode-only fixture, both executors) and is the thing
+that would actually settle where the remaining attention headroom is.
 
 ## FA3 optimisation items, measured per-executor on the fixed kernel — 2026-10-07
 

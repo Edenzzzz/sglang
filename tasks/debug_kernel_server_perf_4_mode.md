@@ -4637,9 +4637,27 @@ So the accumulator is the binding constraint, and it scales with
 cannot be reached by splitting Q (`12 * num_mma_q * 16 = 128` has no integer
 solution), which is why the winning configuration uses 256 of the 384 threads.
 
-Not yet measured: whether this configuration is numerically correct and what it does
-to kernel time. The probes are compile-only. It also has to be re-checked inside the
-full fused kernel, where the FA3 role shares the allocation.
+**Tried in the full kernel, and it is invalid as wired — the reason is structural.**
+`FA2_QSPLIT=1` on fixture 2 gave rel err **8.94 on row 0, the FA3 row**, with both
+FA2 rows correct (4.1e-3, 4.8e-4). FA2 rows right and the FA3 row wrong points at the
+role boundary, not at the Q-split arithmetic, and there is a concrete cause: the
+8-warp runner needs **256 threads**, but the kernel's FA2 gate admits 128
+(`persistent_fa3_fused.cuh:409`, `if (threadIdx.x >= 128u) return;`), and the backfill
+path admits only warpgroup 1 (`:405`). Half the threads the mainloop's barriers expect
+never arrive, and its named barriers then overlap FA3's. The measured 158.0 us from
+that arm is meaningless.
+
+What it needs, and it is more than a gate widening: **all three runners must be the
+same width**, because one gated thread region hosts whichever runner the work item's
+tile class selects. At 8 warps that is
+
+    tile 128:  8 warps_q x 1 warp_kv, num_mma_q=1   (16 q rows per warp)
+    tile  64:  4 warps_q x 2 warps_kv, num_mma_q=1  (8 warps_q is impossible: 64/(8*16) = 0.5)
+    tile  16:  1 warp_q  x 8 warps_kv, num_mma_q=1
+
+all 8 warps / 256 threads, with the gate at 256 and backfill taking warpgroups 1-2
+(threads 128..383) rather than warpgroup 1 alone. The smem slot sizing also has to be
+re-derived, since each runner's `SharedStorage` changes with its warp counts.
 
 ### The two roles' register costs, separated — 2026-10-06
 

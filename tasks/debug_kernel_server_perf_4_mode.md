@@ -6746,6 +6746,41 @@ pipeline state after the rendezvous.
 
 
 <a id="split-row-race-handoff"></a>
+## Decode-only: FA2 beats FA3 by 1.30x, so the routing is already right — 2026-10-07
+
+The measurement that locates the remaining attention headroom, since decode is effectively the
+whole cost of the mixed batch (its FA2 half is 15 394 of 15 396 us). 18 decode rows,
+65-98K contexts, identical work, 0 unwritten and 0 fallbacks in both arms:
+
+| arm | total |
+|---|---|
+| **`dec_fa2`** (n_fa3=0) | **732.6 us** |
+| `dec_fa3` (n_fa3=18) | 955.2 us |
+
+**FA2 is 1.30x faster than FA3 on decode rows.** Combined with FA3 being 1.38x faster on
+append rows, the split's existing routing -- appends to FA3, decode to FA2 -- is **already the
+correct assignment in both directions**. There is no headroom to recover by moving decode to
+FA3, which closes the question the previous entry left open and leaves the **19.3% ceiling
+standing**.
+
+That also explains the shape of the split's win: it is not that FA3 is a better kernel, it is
+that each executor is faster on one row class and the split routes accordingly. FA3 wins
+large-q (many packed rows per tile, wgmma-friendly); FA2 wins q=1 (its 16-wide q tile wastes
+far less than FA3's 128-wide one on a 7-row packed decode).
+
+**CAVEAT, and it is serious: both arms fail numerics on this fixture.** rel err runs 0.047 to
+0.31, growing monotonically with row index, in the **FA2-only** arm as much as the FA3-only
+one. That is the same index-growing signature as the open corruption, far stronger here than
+the 0.021-0.031 seen on the mixed batch. So:
+
+- the **timings are between two equally-corrupted runs**, which makes the 1.30x suggestive
+  rather than conclusive -- though both arms do identical work and fail similarly, so a
+  directional read is defensible;
+- more usefully, **this fixture is a much better reproducer than the one used for the
+  corruption hunt**: 17 of 18 rows fail, errors up to 0.31, and no FA3 executor is involved in
+  the `dec_fa2` arm at all. Any future work on that bug should start here rather than from the
+  two-row `qo:1,512` case.
+
 ## The split cannot reach the 30% bar on attention alone — 2026-10-07
 
 Arithmetic on the measured numbers, before spending more time on serving runs.

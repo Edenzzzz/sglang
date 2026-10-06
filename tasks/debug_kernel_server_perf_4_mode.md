@@ -1135,6 +1135,23 @@ arrives, so decode rows routinely precede prefill rows. That makes this a blocke
 serving A/B rather than a curiosity, and it must be fixed before serving numbers mean
 anything.
 
+**CONFIRMED FROM THE SERVING CODE, not inferred -- and the two arms do not even use the same
+plan shape.** `flashinfer_backend.py:1945-1946` sets `FLASHINFER_FA3_TASK=1` on the
+`SGLANG_TWO_EXEC` path, so the split arm plans **4 tasks** -- the configuration the corruption
+requires. The baseline arm takes the `else` branch at :1958 and plans **3 tasks**, which the
+corruption does not affect. And the fault is not page-size dependent: the reproducer fails at
+`PAGE_SIZE=1` (0.589), which is what serving uses.
+
+So an A/B run today would compare a **clean 3-task baseline** against a **corrupted 4-task
+split arm**. That is not a slow arm or a noisy arm, it is an arm computing wrong attention
+outputs, and any TTFT/ITL/throughput number from it would be measuring a different
+computation. This is the apples-to-oranges failure the project's own standing rule forbids, so
+the gate is correct and is now established by reading the serving path rather than by analogy
+to the harness.
+
+It also means the eventual A/B needs a third check beyond fallback counts: **both arms must
+plan the same number of tasks**, or the comparison is invalid even once the race is fixed.
+
 Arm (b) did not test what I intended: `SPLITS=1` sets `sm_split`, not `num_splits`, so (b) is
 a second combine-enabled arm rather than a combine-disabled one. Arm (a) carries the
 conclusion on its own, and the label is corrected here rather than quietly reused.

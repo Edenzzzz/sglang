@@ -473,11 +473,40 @@ kernels. And the counts reconcile: 74.3M dynamic / 32 static = 2.3M passes = ~36
 x 262 144 FLOP = 9.4 MFLOP against the 8.4 MFLOP a tile-pair needs. The 7 282 figure came from
 treating a per-warp metric as per-wgmma. `-arch=sm_90a` was correct all along.
 
-**So the 31x is now localised, for the first time by measurement rather than inference: the mma
-is right, the memory system is idle, nothing stalls, and the kernel issues ~10-20x more scalar
-instructions per softmax element than the softmax needs.** The next step is source-line
-attribution (`--section SourceCounters`), which names the lines responsible instead of
-inviting a sixth guess about which they are.
+**MEASURED: FA3's cost is `Theta(kv^2)`.** KV sweep at fixed q=2048 (one append row plus a
+small FA2 row, `num_splits=1` throughout, **every row PASS**):
+
+| kv | fa3 half | us/kv | us/kv^2 (x1e9) |
+|---|---|---|---|
+| 10 240 | 3 268.1 us | 319.2 | 31 167 |
+| 18 432 | 10 583.7 us | 574.2 | 31 152 |
+| 34 816 | 37 811.2 us | 1 086.0 | 31 193 |
+| 67 584 | 142 434.4 us | 2 107.5 | 31 184 |
+| 100 352 | 320 401.6 us | 3 192.8 | 31 816 |
+
+**`us/kv^2` is constant to 2.1% across a 9.8x KV range, while `us/kv` varies by 197%.** For
+fixed q the cost must be `Theta(kv)` -- each m-block walks the KV once -- so a clean quadratic
+means something inside the per-KV-block loop does work proportional to the *whole* KV.
+
+This also rules out a cache explanation: at kv=10 240 the KV working set is ~21 MB (inside
+H200's ~60 MB L2) and at kv=100 352 it is ~205 MB (far outside), yet the quadratic constant does
+not move across that boundary. A capacity effect would shift it. So the quadratic is
+algorithmic.
+
+**It also retroactively explains why every hypothesis so far returned ~2%.** Traits, pipeline
+depth, gather granularity and SM budget are all *constant-factor* knobs; none of them can change
+an exponent. The 1.21x on `kv=512` fixtures and the 31x at 65-100K are the same kernel at two
+points on a quadratic -- which is why the short-KV result never generalised, and why I should
+have measured the exponent before hunting constants.
+
+Ruled out as the O(kv) culprit so far: upstream's `load_page_table` (`paged_kv.h:135`) is a
+fixed `#pragma unroll` over `kPageEntryPerThread`, O(1) per block.
+
+**Open: whether the instruction COUNT is quadratic** (an O(kv) loop in the block body) or linear
+with efficiency collapsing. Running `ncu` instruction counts at kv=8192 vs 32768 to settle it;
+combined with the 98.1%-non-mma mix above, a quadratic instruction count would point at
+per-element index or softmax work that rescans KV. Source-line attribution
+(`--section SourceCounters`) is the follow-up that names the lines.
 
 **Earlier framing, now superseded**, and what is now known about it is narrower than before:
 not the gather (TMA measured slower), not pipeline depth (2 is upstream's and 3 barely fits),

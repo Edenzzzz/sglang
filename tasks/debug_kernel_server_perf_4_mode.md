@@ -4700,6 +4700,31 @@ exactly this case, and the bug was passing the whole-batch default instead. Wort
 the pattern -- all three faults were "upstream has a field for the subset/per-item case
 and I handed it the aggregate".
 
+### G=1 rules out GQA packing as the port's fault — 2026-10-06
+
+`HEADS=4,4` makes packed and unpacked row spaces identical. Run with
+`FA3_UPSTREAM=1 FLASHINFER_FA3_FORCE_ONE_SPLIT=1 HEADS=4,4 DUMP_ROWS=1` on fixture 2:
+
+| row | qo | routed to at G=1 | rel err |
+|---|---|---|---|
+| 0 | 72 | **FA2 tile 128** (packed 72 < 128 threshold) | 0.00335 ok |
+| 1 | 439 | **wgmma** | **1.112 FAIL** |
+| 2 | 1 | FA2 tile 16 | 0.00058 ok |
+
+Read with care: the harness's "FA3" label on row 0 is static, not the routing. At G=1
+row 0 falls below the 128-packed-row wgmma threshold and runs on FA2, so its pass says
+nothing about upstream. The only wgmma row is row 1, and it fails with the same
+signature as at G=7 -- full magnitude (absmax 0.132 vs 0.091), every element nonzero,
+values uncorrelated.
+
+**So the wgmma path is wrong with no packing at all, and packing is ruled out.** The fault
+is in the adapter's work-item semantics. `PackGQA=false` was deliberately not used for
+this test: it would also have made `bidh` index qo heads and `m_block` index unpacked
+tokens against the plan's kv-head / packed values, failing for a new reason.
+
+Next split, running: the same 439-row wgmma request placed first (`bidb 0`), second
+(`bidb 1`), and alone -- per-request offset fault versus within-request fault.
+
 ### The split path is exonerated; the wgmma result is still wrong — 2026-10-06
 
 Two runs, both with `FLASHINFER_FA3_FORCE_ONE_SPLIT=1` so the plan reports

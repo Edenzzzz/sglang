@@ -44,6 +44,35 @@ read from per-work-item arrays (fixing this took fixture 2 from 439/512 unwritte
 executor's correct rows (an FA2 decode row went 5.8e-4 → 0.155). The third fix is
 written and under test.
 
+## Optimization ladder on the two-executor base — 2026-10-06
+
+Order matters: each rung needs the rung below it measured, or its effect is not
+attributable. The base is **two executors, one plan** -- flash-attention's FA3 on its own
+scheduler over the wgmma requests, flashinfer's persistent LPT unmodified over tasks 0-2.
+
+- [ ] **0. Base number.** Sequential launches, no overlap. The floor this has to clear is
+      72.3 us (FA2 over ALL rows). It should not be able to regress: the split hands FA2
+      strictly less work and gives the rest to a kernel at native register quality
+      (44-52 B spill against the fused kernel's 33 676 B).
+- [ ] **1. PDL between the two launches.** `cudaLaunchAttributeProgrammaticStreamSerialization`
+      so FA2 starts on SMs FA3 vacates instead of waiting for the grid to drain. This is
+      what recovers, temporally, the cross-role backfill the split gives up -- and backfill
+      inside a CTA is exactly what caused the co-compilation spill, so this is the better
+      trade.
+- [ ] **2. Unified JIT split-KV reduction with smem handoff.** Intra-role by construction:
+      a split row's chunks are all items of one task, so a partial never crosses executors.
+      Replaces upstream's second combine launch and its global round-trip, which is the
+      actual claim -- flash-attention pays that launch too.
+- [ ] **3. KV multicast / DSMEM.** 1.587x in isolation on the access pattern the wgmma role
+      has (every q-tile of a prefill row re-gathering the same KV). Also intra-role, so a
+      cluster inside the FA3 executor provides it. `FLASHINFER_FUSED_CLUSTER=2` currently
+      faults.
+- [ ] **4. Spec tree-build epilogue.** Fused into whichever executor writes the verify
+      output; needs the 4-mode MTP batch, which needs `mix_with_running` fixed.
+
+Each rung keeps the plan as the single source of routing, which is what the scheduling
+story rests on -- none of 1-4 requires the roles to share a `__global__`.
+
 ## Tasks, in priority order — 2026-10-06
 
 - [ ] **1. Split-KV reduction for the wgmma role** — 2026-10-06: reframed. The

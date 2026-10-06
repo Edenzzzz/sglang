@@ -6699,6 +6699,48 @@ pipeline state after the rendezvous.
 
 
 <a id="split-row-race-handoff"></a>
+## CRITICAL: several eliminations tested code that does not run — 2026-10-06
+
+The per-work-item trace (`FLASHINFER_TRACE_WORK=1`, a `printf` in `persistent.cuh`'s work
+loop) produced **zero lines** while the corruption reproduced normally (0.527). The printf
+compiled -- verified locally with `-DFLASHINFER_TRACE_WORK=1` -- so it is not in the kernel
+that executed.
+
+**Why: under `TWO_EXEC=1` the FA2 side runs `BatchAttention.run()`, i.e. flashinfer's own
+JIT-compiled module from `~/.cache/flashinfer/90a/generated/...`, not our extension's
+translation unit.** The harness says so in its own comment ("FA2 on the rest via the
+UNMODIFIED persistent LPT kernel (BatchAttention.run)"), and flashinfer's JIT caches on the
+generated source plus flags -- **editing `include/` does not invalidate it**.
+
+**This invalidates, as tests, every arm whose switch lives in a header the JIT module compiles
+separately:**
+
+| arm | switch location | status |
+|---|---|---|
+| `LSE_TILE_REL` 0 vs 1 | `persistent.cuh` | **tested nothing** on the FA2 path |
+| `PI_ZERO` | `scheduler.cuh` | **suspect** -- the plan is also built by the JIT module (`wk.plan` -> `module.plan`) |
+| `NO_JIT_REDUCE` | ext sets `P.group_id = nullptr` | **suspect** -- those params feed our kernel, not `BatchAttention.run()` |
+| `TRACE_WORK` | `persistent.cuh` | confirmed inert: zero output |
+
+The trait A/B (`MmaPV_is_RS`, `LPT`, `UP_STAGES`) and the `seqused` fix are **not** affected --
+those live in `fa3_upstream.cuh`, which only the ext compiles, and the FA3 half is the ext's
+own kernel. The 42.8x and the 1.23-1.25x results stand.
+
+But the reducer-swap bisect, the `partial_lse` A/B and the `partial_indptr` A/B must be treated
+as **unperformed**, not as eliminations. That is 3 of the ~24 candidates returned to the open
+list, and it explains why the corruption was so stubborn: part of the search was editing a copy
+of the code that never ran.
+
+**What this changes about method.** Every arm needs a positive control that the switch reached
+the running kernel -- a printed marker, a changed smem size, a deliberate crash. "It compiled
+and the number moved/did not move" is not evidence the switch took effect. This is the fourth
+instance this session of a check not touching the thing under test, and the most costly.
+
+**Next, before any further elimination:** determine which kernel actually executes the FA2
+rows under `TWO_EXEC=1`, and get the switches into *that* build -- either by forcing a JIT
+cache rebuild (clear `~/.cache/flashinfer/90a`) or by routing the FA2 rows through the ext's
+own runners instead of `BatchAttention.run()`. Until then, no FA2-side arm is interpretable.
+
 ## Split-row race: consolidated state — 2026-10-06
 
 **Reproducer** (one token flips it, `n_fa3:0`, page 128 or 1, `UNIFIED=1`):

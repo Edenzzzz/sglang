@@ -581,11 +581,42 @@ landing on a later row, and the "global partial round-trip" mechanism is not it.
 | TraceLab | [0,0,0,0,2x18] | `task0` rows pass; only the last `task2` rows are marginal |
 
 **A `task0` row placed after a `task2` row is corrupted.** Not shape, not length, not
-split count, not the combine, not FA3 -- the queue the preceding row was assigned to. The
-suspect is the unified plan's per-task work-queue construction (the `QUEUE_EXEC` mapping and
-the per-task q offsets in `scheduler.cuh`): a `task0` row's output offset computed from a
-cumulative counter that mis-handles preceding `task2` rows would produce exactly a partially
-correct row.
+split count, not the combine, not FA3 -- the queue the preceding row was assigned to.
+
+**And the bug is OURS, not flashinfer's.** A standalone script using only flashinfer's own
+`BatchAttention` API -- no fused extension, no 4-task plan, no `QUEUE_EXEC`, with an
+independent fp32 reference -- handles the failing order correctly:
+
+| case (pure flashinfer) | row 0 | row 1 |
+|---|---|---|
+| BAD order, decode first `qo=[1,512] kv=[65537,1024]` | 0.00048 ok | **0.00587 ok** |
+| GOOD order `qo=[512,1] kv=[1024,65537]` | 0.00594 ok | 0.00044 ok |
+| BAD order, short lead `kv=[1025,1024]` | 0.00290 ok | 0.00428 ok |
+
+Our path gives **0.39-0.60** on that same row. Two things follow: upstream flashinfer's
+persistent kernel and plan are fine on this ordering, and the independent reference agrees
+with flashinfer, so the harness's `exact()` is not the thing that is wrong either. The fault
+is in **our 4-task unified plan path**, which is entered even at `n_fa3=0` because `UNIFIED=1`
+plans four tasks with the FA3 task empty.
+
+This also retracts, by implication, the framing that this is a "baseline correctness problem"
+that "taints the control arm of every comparison". The *true* baseline -- unmodified
+flashinfer -- is correct. What is broken is our unified plan, which the control arm of the
+TraceLab A/B also uses, so the control is still implicated; but the defect is ours to fix and
+is not evidence against flashinfer's kernel.
+
+**Next, concretely.** The suspect is the `plan_info` argument layout rather than the queue
+construction: `cluster_q_indptr` pushes absolute `qo_indptr_h[i]`
+(`scheduler.cuh:1649`), which is correct, so the offsets going *in* are right. But the port
+grew `NUM_SHARED_ARGS` from 18 to 20 (`max_splits_fa3`, `fa3_batch_list_offset`,
+`num_fa3_requests`, with `num_fa3_clusters` kept last so `plan_info[-1]` still works), while
+per-task arguments are read at `vec[2 + i * NUM_TASK_ARGS + k]`
+(`scheduler.cuh:1148-1153`). If that base or stride did not move with the shared-arg count,
+per-task slices are read from the wrong positions -- and which positions are wrong depends on
+which tasks hold work, which is exactly an order-dependent symptom. The `[2,0]` two-row
+fixture is a minimal reproducer, and `UNIFIED=0` cannot be used as a control because the
+closed fused path's non-unified branch no longer compiles (it references `wgmma_plan`, which
+only exists in unified params -- dead code, but it blocks that route).
 
 **Scoping, in the 1.225x measurement's favour -- stated because it would be convenient to
 leave unexamined.** TraceLab's natural ordering is `[0,0,0,0,2,2,...]`, i.e. every `task0` row

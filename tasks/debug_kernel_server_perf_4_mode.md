@@ -4520,6 +4520,46 @@ s = 1.7-2.4 that is f > 0.40-0.48. At f = 0.9, s = 2.0 the attention-side gain i
 and short of the 30% bar, which is why the register fix (3x -> 1.38x) matters.
 
 <a id="why-fused-is-slow"></a>
+### Fixture 2, three arms: the upstream port runs but writes nothing — 2026-10-06
+
+sglang `9ad9dd45d`, flashinfer `960b65d` (arms taken at the commit before the combine pass).
+Command, per arm, each in its own `TORCH_EXTENSIONS_DIR` so the `-D` flags take
+effect:
+
+    FA3_UPSTREAM={0,1} DRAIN_NOINLINE={0,1} TIME_ITERS=50 \
+      FIXTURE='qo:72,439,1 prefix:164,0,5468' UNIFIED=1 SPLITS=auto \
+      FLASHINFER_SM_PARTITION=1 FLASHINFER_FA3_SM_SPLIT_CLUSTERS=124 \
+      python tests/test_fused_server_batch.py
+
+| arm | kernel | numerics |
+|---|---|---|
+| `def` flashinfer FA3, inlined | **156.8 us** | PASS, 0/512 unwritten, rel err 4.1e-3 / 4.0e-3 / 5.8e-4 |
+| `up` upstream FA3, inlined | 315.4 us | **511/512 unwritten** |
+| `upni` upstream FA3, FA2 outlined | 434.3 us | **511/512 unwritten** |
+
+**The two upstream timings mean nothing yet** and are recorded only so they are not
+re-measured: with `max_splits_fa3=2` the port's epilogue takes upstream's
+`is_split` branch and writes partials instead of final O, so those kernels skip the
+output path entirely. The one correct row in both is the FA2 decode row (task 2);
+rows 0 and 1 are both wgmma rows under default routing, so the failure is exactly
+co-extensive with the wgmma role. This is the predicted consequence of upstream
+reducing split partials in a separate kernel that the port did not launch.
+
+What the arms do establish:
+
+- The three fixes landed: the port no longer faults. The previous run died with an
+  illegal access from feeding upstream FA3's vector-sparse offsets as page ids, a
+  null `lse_ptr`, and `num_splits` pinned to 1 under partials sized for 2.
+- `max_splits_fa3=2` on this fixture, so the split path is live here and cannot be
+  sidestepped.
+- **156.8 us is fixture 2, not the 772 us configuration.** The 772 belongs to the
+  16 823-token-KV long-prefix fixture; fixture 2's longest row is kv=5469. No
+  regression — two different workloads.
+- `upni` is *slower* than `up` (434 vs 315) even though outlining cuts FA3's spill
+  to 64 B, which is consistent with the register table: outlining moves 17.5 KB of
+  spill onto the FA2 role, and this fixture has real FA2 work. Both numbers are
+  still from invalid runs, so this is a hint, not a result.
+
 ### What parity means on a SPLIT batch — 2026-10-06
 
 flash-attention's own split-KV path is **two kernel launches**: the attention

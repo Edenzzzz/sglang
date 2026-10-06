@@ -583,9 +583,24 @@ landing on a later row, and the "global partial round-trip" mechanism is not it.
 **A `task0` row placed after a `task2` row is corrupted.** Not shape, not length, not
 split count, not the combine, not FA3 -- the queue the preceding row was assigned to.
 
-**And the bug is OURS, not flashinfer's.** A standalone script using only flashinfer's own
-`BatchAttention` API -- no fused extension, no 4-task plan, no `QUEUE_EXEC`, with an
-independent fp32 reference -- handles the failing order correctly:
+**CONFOUNDED -- this comparison does not establish what I claimed.** The standalone script
+omitted `FLASHINFER_FA3_TASK`, so it planned **3 tasks** while the harness plans **4**. It
+therefore varied the plan *and* the kernel together, and cannot attribute the fault to either.
+Re-running it with `FLASHINFER_FA3_TASK=1` produces **no output at all**: flashinfer's
+`BatchAttention.run()` refuses a 4-task plan, which the harness's own comment already records
+("BatchPagedAttentionRun correctly refuses to execute one"). So the 3-task configuration is
+the *only* one upstream can run, and "upstream is correct on this ordering" is a statement
+about a different plan, not a control for ours.
+
+What the script does still establish: the independent fp32 reference agrees with flashinfer on
+these fixtures, so the harness's `exact()` is not the thing that is wrong. The claim it does
+**not** establish is "the bug is ours rather than upstream's" -- that remains open, and no
+clean control for it exists through this API, because upstream cannot execute the plan shape
+the fault requires.
+
+**Original (confounded) result, retained for the trace.** A standalone script using only
+flashinfer's own `BatchAttention` API -- no fused extension, **3-task plan**, no `QUEUE_EXEC`,
+with an independent fp32 reference -- handles the failing order correctly:
 
 | case (pure flashinfer) | row 0 | row 1 |
 |---|---|---|

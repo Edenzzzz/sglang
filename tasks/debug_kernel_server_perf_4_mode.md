@@ -241,114 +241,20 @@ One line each; detail in [`realistic_workload_analysis.md`](realistic_workload_a
       ordinary-looking numbers; the backend now raises instead of degrading.
 
 ## Server integration — 2026-10-05
-- [x] **Per-step tracing: the whole gap is in MIXED steps, and it is a real
-      tradeoff, not a bug** — 2026-10-06, `SGLANG_STEP_TRACE=1`, 2121 steps:
 
-      | step class | n | split 64 p50 | split 96 p50 |
-      |---|---|---|---|
-      | DECODE | 197 | 5.11 ms | 5.10 ms |
-      | EXTEND | 23 | 16.50 ms | 16.40 ms |
-      | MIXED | **1901** | **21.27 ms** | **102.97 ms** |
-
-      DECODE and EXTEND are identical across splits: pure-decode steps never reach
-      the fused kernel, which is why backfill changed nothing and why the idle-SM
-      theory was wrong. The cliff is entirely in MIXED steps, which dominate.
-
-      **What this says about the design.** In a mixed step the fused kernel must
-      divide SMs between the 512-token prefill chunk (FA3 class, 28 packed q-tiles
-      at gqa 7) and up to 64 decode rows (FA2 class). Starve either side and that
-      side's latency dominates, so 64/68 is a compromise rather than a win. The
-      baseline has no such tradeoff -- the persistent kernel runs both classes over
-      all 132 SMs with perfect sharing -- which is why it leads at 18.39 ms against
-      22.39 ms.
-
-      **The fused design needs FA3 to beat FA2 on FA3's own class**, by enough to
-      pay for partitioning the grid. Measured today it does not (772 us against
-      421 us on a long-prefix fixture, 1.83x), but **that figure is from an FA3
-      carrying three known, non-intrinsic handicaps** and should not be read as a
-      property of the design:
-
-      - `-DFUSED_FA3_STAGES=1`: one K/V stage, so no load/compute pipelining.
-        Already measured worth ~15% (600 us at stages=2), blocked only on an smem
-        byte count and the unexplained aliasing fault.
-      - the packed-GQA Q load gathers with `cp.async` and writes smem
-        **element-wise on a single warp**, where the path it replaced used TMA. The
-        source itself says "correctness first ... slower than the TMA path it
-        replaces"; its cost is being measured now with a skip-the-load diagnostic.
-      - the final O store is likewise a single-warp, per-row copy.
-
-      **Measured 2026-10-06, and it changes the plan.** The packed-Q load costs
-      **nothing** on this fixture: 767.8 us with it against 769.5 us with the
-      gather skipped (`SKIP_PACKED_Q=1`, output garbage by construction). At
-      kv=16823 the mainloop is KV-dominated and Q is fully amortised. With stages=2
-      worth ~15%, the three named handicaps together account for roughly 15% of the
-      1.83x -- not most of it.
-
-      So the remaining ~1.6x is **the mainloop itself**: flashinfer's
-      `prefill_sm90` is a simplified FA3 port, not FA3. Upstream
-      flash-attention is present at `/opt/tiger/flash-attention` and already
-      contains everything we hand-rolled, in better form --
-      `hopper/pack_gqa.h`, `hopper/paged_kv.h`, and
-      `mainloop_fwd_sm90_tma_gmma_ws.hpp` templated on `Stages`, wired together in
-      `flash_fwd_kernel_sm90.h`. Our element-wise packed-Q gather and sparse KV
-      path are reimplementations of that code.
-
-      **The correct task is therefore to port upstream FA3's mainloop and epilogue
-      into the fused launch template**, keeping only what fusion actually requires
-      (the role branch on `blockIdx.x`, our plan's work items, and the smem
-      budget shared with the FA2 roles), rather than continuing to optimise a
-      simplified port one flag at a time. Chasing stages, Q load and O store
-      separately was treating symptoms.
-- [x] **The serving regression was mostly the pinned split** — 2026-10-06: sweeping
-      `SGLANG_FUSED_SM_FA3` on the real workload (8192/192, 200 prompts, rate 12,
-      conc 32), unified arm against a 586.42 tok/s / 18.39 ms ITL baseline:
-
-      | split | tok/s | TTFT ms | ITL ms |
-      |---|---|---|---|
-      | 8 (what every earlier A/B used) | 186.95 | 9889 | 58.17 |
-      | 16 | 296.02 | 6085 | 36.65 |
-      | 32 | 390.60 | 4489 | 27.73 |
-      | 64 | **482.19** | **3507** | **22.39** |
-      | 80 | 464.49 | 3665 | 23.29 |
-      | 96 | 110.52 | 16672 | 103.00 |
-      | 112 | 110.76 | 16636 | 102.78 |
-      | ~131 (unpinned, ceiling raised) | 100.41 | 18416 | 113.35 |
-
-      **The optimum is 64**, which is exactly the existing `MAX_SM_FA3` ceiling, so
-      that constant is well chosen for this workload after all. At 64 the unified
-      arm is **0.82x throughput and 1.22x ITL** -- against the 0.335x / 3.00x I
-      reported all day, which was an artefact of the pinned 8, not the kernel.
-      Note the shape: monotone improvement to 64, a slight dip at 80, then a
-      **cliff** between 80 and 96 (482 -> 465 -> 110 tok/s).
-      **Cliff cause NOT established, and backfill is not the fix.** I predicted it
-      was idle FA3 SMs during decode-dominated steps -- at 96 only 36 SMs serve the
-      decode rows -- and that cross-role backfill, which exists precisely to let an
-      idle FA3 CTA drain the FA2 queue, would recover it. Measured as a perf probe
-      with `FLASHINFER_FUSED_BACKFILL=1` (numerics known wrong, so timing only):
-      split 64 gave 480.26 tok/s / 22.47 ms against 482.19 / 22.39 with backfill
-      off, and split 96 gave 110.76 / 102.76 against 110.52 / 103.00. Identical to
-      three digits at both points. The flag is genuinely live (read at
-      `persistent_fa3_fused.cuh:602`, passed at 683, consumed at 466), so this is a
-      real null result, not an inert switch. Either the FA3-role CTAs are not
-      reaching the drain in this path, or the cliff is not idle SMs at all.
-      Next instrument: per-step tracing (which steps are fused, and their GPU
-      spans) rather than another hypothesis.
-
-      Against the goal: at the best setting the fused path still loses 18% of
-      throughput and 22% of ITL, where the bar is +10% and +30%. The identified
-      recoverable piece is K/V pipelining (~15% at kernel level).
-      **Correction:** I first read the unpinned collapse as "more SMs to FA3 hurts
-      serving" and reverted the ceiling to 64 on that basis. The sweep shows the
-      opposite -- more is better up to at least 64 -- so the collapse at ~131 is
-      starving the FA2 side, not a sign that 8 was right. The ceiling needs to sit
-      at the measured optimum, not at either edge.
-- [x] Serving fallback is strict — a failed fused plan raises instead of silently comparing a mixture against the baseline
-- [x] [Unified queue wired into sglang](#unified-serving-perf) — one plan over all rows, behind `SGLANG_FUSED_UNIFIED`
-- [x] [Draft-step CPU-GPU sync removed](#spec-sync-audit) — and the rest of the spec path audited
-- [x] [The serving fault was a barrier_Q hang, now fixed](#unified-serving-crash) — fixture 2 reproduced it, then passed: 0/512 unwritten, rel err 3.2e-3 / 2.9e-3 / 6.9e-4
-- [ ] CUDA-graph capture for mixed batches — not capturable today (host-side plan, env mutation); requirements in the handoff doc
-- [ ] Per-step planning cost — one plan instead of two removes an H2D, but the path was host-bound and this is unmeasured
-- [ ] [4-mode MTP serving schedule](#four-mode-blocked) — blocked on `mix_with_running` with a spec running batch
+- [x] **Two-executor split is the default** — fused path opt-in via `SGLANG_FUSED_KERNEL=1`.
+      [detail](#two-executors-beat-fa2-on-everything-and-pass--2026-10-06)
+- [x] **Silent fallback removed** — the backend raises instead of degrading.
+      [detail](#workload-and-measurement-setup--2026-10-06)
+- [ ] **Long-context A/B on the real workload** — no valid serving number yet; both prior
+      A/Bs were invalid.
+- [ ] **4-mode MTP serving run** — EAGLE draft built, unused; blocked on `mix_with_running`.
+      [detail](#four-mode-blocked)
+- [ ] **The bar: >=30% TTFT/ITL, >=10% throughput** — zero data.
+- [ ] **CUDA-graph capture** — needs the routing decision in device memory with exit-early
+      CTAs so grid dims stay fixed.
+- [x] **Per-step tracing** — `SGLANG_STEP_TRACE=1` localises the gap to MIXED steps.
+      [detail](#spec-path-where-the-cpu-gpu-syncs-actually-are--2026-10-05)
 
 ## Schedule exploration — 2026-10-05
 - [x] [EDF predictability, fused vs baseline](#edf-model-classes) — parity at ~1.5% MAPE with an adequate model class; the linear-fit falsification was an artefact

@@ -765,6 +765,35 @@ page 128, 3 iters:
 the partial-tile fault needing a *split* leading row, which TraceLab's ordering puts after the
 `task0` rows.
 
+**NEXT LEAD, from the victim row's character (`DUMP_ROWS=1`).** The corrupted row is not
+zeroed, not skipped and not garbage:
+
+| | victim row (`task0 qo=512 kv=1024`) |
+|---|---|
+| nonzero elements | **1 835 008 / 1 835 008** -- every element written |
+| absmax | **0.0703** against ref **0.0715** |
+| element 0 | -0.0154 against ref -0.0087 (wrong, same order) |
+
+The same holds for the `qo=127` case (absmax 0.0625 vs 0.0646). Fully written and **in range**
+but wrong rules out a skipped store, a zeroed region, and uncorrelated data. It is the
+signature of a **merge combining correct O partials with wrong LSE weights**: a convex
+combination with bad weights stays inside the correct magnitude envelope while being wrong
+elementwise.
+
+So the seat is most likely the victim's **`partial_lse`** values, not its `partial_o` values.
+That is consistent with the tile-relative change failing -- the index *base* was not the
+problem, so an overrun or stride fault in the LSE write is the remaining candidate. Note
+`partial_lse` is indexed `(o_indptr + local*nt + chunk) * num_kv_heads + kv_head_idx` while
+`partial_o` reaches the same row-chunk pair via
+`((o_indptr + chunk) * num_kv_heads + kv_head) * HEAD_DIM + local * (nt * num_kv_heads *
+HEAD_DIM)`; those agree on the row-chunk index, so the next thing to check by measurement is
+whether the **LSE guard** admits rows the O guard rejects, which would let the leading row's
+LSE writes run past its 455-entry region into the victim's.
+
+A direct test exists and is cheap: zero `partial_lse` before the launch and see whether the
+victim's error changes character (if the merge is reading clobbered LSE, pre-zeroing changes
+the wrongness; if it is reading its own correct LSE, nothing changes).
+
 **Write path located, with one concrete inconsistency (now refuted as the fault).**
 `persistent.cuh:503-509` takes the split branch and calls `write_o_`, whose gmem store is
 guarded by `if (o_idx < qo_upper_bound)` (`persistent.cuh:133`) with

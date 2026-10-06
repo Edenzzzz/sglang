@@ -1435,6 +1435,7 @@ class FlashInferAttnBackend(AttentionBackend):
             fused["n_req"],
             fused["max_pages"],
             fused["max_qlen"],
+            fused["kv_lens_req"],
         )
         return out, self._persistent_lse_buf[:num_tokens]
 
@@ -1795,6 +1796,9 @@ class FlashInferAttnBackend(AttentionBackend):
             n_req=int(len(kl_r)), max_pages=int(kl_r.max()) if len(kl_r) else 0,
             # The combine pass's grid uses the varlen MAX q length.
             max_qlen=int(qi_r.diff().max()) if len(qi_r) > 1 else 1,
+            # Per-request KV lengths in tokens, for the split count the combine pass
+            # reduces. Not derivable from the plan's kv_indptr, which is per work item.
+            kv_lens_req=kl_r.to(kv_indices.device, dtype=torch.int32),
             # Constraint 3: FA3 takes vector-sparse offsets, not page ids.
             fa3_sparse=self._fa3_sparse_indices(
                 st["fa3"], forward_batch.token_to_kv_pool.get_kv_buffer(0)

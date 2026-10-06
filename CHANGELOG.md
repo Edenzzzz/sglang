@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.9.6 — One kernel can give either role its native registers, never both (2026-10-06)
+
+The Q-split was the experiment that would have kept single-kernel fusion. It does not:
+
+| FA2 configuration | isolated | inside the fused kernel |
+|---|---|---|
+| 4 warps, `num_mma_q=2` (today) | 1 136 B spill | 3 232 B spill |
+| 8 warps, `num_mma_q=1` | **88 B** | **1 504 B** |
+
+Halving the per-thread O accumulator is worth keeping -- it takes the fused kernel from
+3 232 to 1 504 B -- but ~1.4 KB survives that no FA2-side change can reach, because the
+FA3 role's live ranges share the allocation. With the converse already measured
+(outlining FA2 puts FA3 at 64 B and moves 17 500 B onto FA2), the result is symmetric:
+one `__global__` can give either role its native allocation, not both.
+
+Decision: **the kernel splits, the plan does not.** The 4-mode tile assignment, the
+work-proportional SM allocation, the unified JIT split-KV reduction and the fused
+tree-build epilogue all live in `HolisticPlanInfo<4>`, which both executors read, so
+none of them depends on the roles sharing a `__global__`. What is given up is
+cross-role backfill inside a CTA -- itself the cause of the co-compilation spill -- and
+cross-role smem multicast.
+
+Graph count does not multiply, provided the split lives in device memory and both
+executors launch fixed grids with unadmitted CTAs exiting early. This is required for
+the fused kernel too: `sm_split` is a kernel argument today, which a graph would bake
+at capture. sglang's graph layer already uses the same bucket-and-pad idea a level up
+and treats prefill and decode as separate capture ladders, so two executors add no
+PD-ratio combinations.
+
+Also fixed here: the combine pass's per-request split count was derived from the plan's
+`kv_indptr`, which is pushed once per WORK ITEM (`scheduler.cuh:1583`), so differencing
+adjacent entries subtracted two unrelated items instead of bounding a request's pages.
+That is what left 439/512 rows unwritten with the combine otherwise correctly wired.
+Per-request KV lengths now come from the caller.
+
 ## v0.9.5 — FA2's spill is the O accumulator; the parity gap is 2.16x (2026-10-06)
 
 Two measurements and one fix.

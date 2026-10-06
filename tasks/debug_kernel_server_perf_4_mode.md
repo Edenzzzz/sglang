@@ -4650,10 +4650,24 @@ are already **separate runners with separate capture ladders**, so two executors
 PD-ratio graph combinations; and it covers no graph-update or device-side-launch-param
 APIs at all, so a device-memory split does not conflict with anything there.
 
-**What this means for the open work.** The Q-split experiment decides the kernel count
-and nothing else: if the FA2 role reaches parity at 8 warps inside one kernel, fusion
-keeps backfill and multicast for free; if it does not, two executors are acceptable and
-the only losses are the two listed above.
+**Decided by measurement, 2026-10-06: two executors.** The Q-split was the experiment
+that would have kept fusion, and it does not reach parity inside one kernel:
+
+| FA2 configuration | isolated, no FA3 in the kernel | inside the fused kernel |
+|---|---|---|
+| 4 warps, `num_mma_q=2` (today) | 1 136 B spill | 3 232 B spill |
+| 8 warps, `num_mma_q=1` (Q-split) | **88 B** | **1 504 B** |
+
+Fixing the accumulator is worth keeping on its own -- it halves the fused kernel's
+spill, 3 232 -> 1 504 B -- but roughly 1.4 KB survives that no FA2-side change can
+touch, because the FA3 role's live ranges still share the allocation. Together with the
+converse measurement (outlining the FA2 body takes FA3 to 64 B and moves 17 500 B onto
+FA2), the conclusion is symmetric: **one kernel can give either role its native
+allocation, never both.**
+
+So the kernel splits, the plan does not. Both executors read one `HolisticPlanInfo<4>`,
+and the two things given up are cross-role backfill inside a CTA and cross-role smem
+multicast -- the first of which is itself the cause of the co-compilation spill.
 
 ### FA2's spill is the O accumulator, and splitting Q removes it — 2026-10-06
 

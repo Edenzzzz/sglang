@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.9.3 — The two roles cannot both have their native register allocation in one launch (2026-10-06)
+
+Five builds, `-Xptxas -v`, attributing every spill count to a named function. This
+supersedes v0.9.2's conclusion, which was right that co-compilation causes FA3's
+spill and wrong to imply outlining removes it -- it moves it.
+
+| configuration | FA3 role | FA2 role |
+|---|---|---|
+| both roles inlined (today's default) | 33 676 B, shared allocation | shared |
+| FA2 body outlined (`FLASHINFER_FUSED_DRAIN_NOINLINE=1`) | **64 B** | **17 500 / 17 664 B** |
+| upstream FA3 alone, 384 thr | 52 B | — |
+| FA2 alone, 384 thr, 168 regs | — | 1 136 B |
+| FA2 alone, 128 thr x 2 CTA, 255 regs | — | **0 B** |
+
+Two independent costs, now separated:
+
+1. **Co-compilation.** FA3's 33 676 B is not intrinsic. Move the FA2 body out of the
+   function and FA3 spills 64 B -- the standalone figure. ptxas allocates per
+   function, so while both roles are inlined their live ranges share one
+   allocation even though the roles sit in mutually exclusive `blockIdx` branches.
+
+2. **Launch geometry.** Outlining does not make the spill disappear; the FA2 body
+   then spills 17 500 B in its own ABI frame, because an ABI callee cannot use the
+   caller's allocation. And FA2's floor inside *any* 384-thread launch is 1 136 B at
+   168 registers, against 0 B at 255 registers in its native 128x2 geometry --
+   measured with no FA3 in the kernel at all, so this is the geometry alone.
+
+The arithmetic behind the second: 384 threads at 1 CTA/SM leaves 65536/384 = 170
+registers per thread. FA2's mainloop uses 255 when it can, which requires at most
+256 threads per SM. One launch has one blockDim, so the FA2 role cannot be given
+its native allocation while the FA3 role needs 384 threads in one CTA for warp
+specialisation. `FLASHINFER_FUSED_WG_DRAIN=1` does not help: only 128 of the 384
+threads run FA2 work, but registers are allocated for all 384 regardless.
+
+So the per-role parity bar is not reachable by scheduling, thread width, stage
+count or split policy -- all of which were held constant across the rows above.
+FA3 parity is reachable, by outlining the other role. FA2 parity is not, inside a
+single 384-thread launch, and the residual is bounded and now quantified.
+
+`FLASHINFER_FUSED_DRAIN_NOINLINE` is kept as a switch rather than turned on,
+because it is a trade whose sign depends on the work mix: it should win where FA3
+dominates (fixture 2 is ~99% task-3 work) and lose on decode-heavy batches. Which
+way it goes is a measurement, not a choice, and has not been run yet.
+
 ## v0.9.2 — Measured: single-kernel co-compilation, not the register cap, is what starves FA3 (2026-10-06)
 
 The register-pressure hypothesis from v0.9.0 is confirmed in outline and wrong in

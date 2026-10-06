@@ -155,48 +155,18 @@ FA2 does the same row inside a 72.3 us whole-batch pass. Two tiles of work shoul
 dominating when the queue is nearly empty. Worth isolating before reading any parity
 number, because it will swamp small batches either way.
 
-## Optimization ladder on the two-executor base — 2026-10-06
-
-Order matters: each rung needs the rung below it measured, or its effect is not
-attributable. The base is **two executors, one plan** -- flash-attention's FA3 on its own
-scheduler over the wgmma requests, flashinfer's persistent LPT unmodified over tasks 0-2.
-
-- [ ] **0. Base number.** Sequential launches, no overlap. The floor this has to clear is
-      72.3 us (FA2 over ALL rows). It should not be able to regress: the split hands FA2
-      strictly less work and gives the rest to a kernel at native register quality
-      (44-52 B spill against the fused kernel's 33 676 B).
-- [ ] **1. PDL between the two launches.** `cudaLaunchAttributeProgrammaticStreamSerialization`
-      so FA2 starts on SMs FA3 vacates instead of waiting for the grid to drain. This is
-      what recovers, temporally, the cross-role backfill the split gives up -- and backfill
-      inside a CTA is exactly what caused the co-compilation spill, so this is the better
-      trade.
-- [ ] **2. Unified JIT split-KV reduction with smem handoff.** Intra-role by construction:
-      a split row's chunks are all items of one task, so a partial never crosses executors.
-      Replaces upstream's second combine launch and its global round-trip, which is the
-      actual claim -- flash-attention pays that launch too.
-- [ ] **3. KV multicast / DSMEM.** 1.587x in isolation on the access pattern the wgmma role
-      has (every q-tile of a prefill row re-gathering the same KV). Also intra-role, so a
-      cluster inside the FA3 executor provides it. `FLASHINFER_FUSED_CLUSTER=2` currently
-      faults.
-- [ ] **4. Spec tree-build epilogue.** Fused into whichever executor writes the verify
-      output; needs the 4-mode MTP batch, which needs `mix_with_running` fixed.
-
-Each rung keeps the plan as the single source of routing, which is what the scheduling
-story rests on -- none of 1-4 requires the roles to share a `__global__`.
-
 ## Tasks, in priority order — 2026-10-06
 
-Titles only. Each points into a feature category below, which carries the one-line status
-and in turn points to the detail section holding the evidence.
-
-1. [K/V pipelining on both executors](#kernel-optimisations--2026-10-06)
+1. [K/V pipelining, FA2](#kernel-optimisations--2026-10-06)
 2. [Smem-handoff JIT split-KV reduction, both executors](#kernel-optimisations--2026-10-06)
-3. [Long-context TraceLab A/B](#server-integration--2026-10-05)
-4. [4-mode MTP serving run](#server-integration--2026-10-05)
-5. [DSMEM / KV multicast](#kernel-optimisations--2026-10-06)
-6. [Fused spec tree-build epilogue](#kernel-optimisations--2026-10-06)
-7. [Perf model and EDF vs unfused](#schedule-exploration--2026-10-05)
-8. [Multi-node PD colocation, four points](#multi-node-schedule-tests-h20-only--16-gpus-trial-vibecuda--not-started)
+3. [Context length where attention is >50% of e2e](#workload-and-measurement-setup--2026-10-06)
+4. [TraceLab mixed scenarios instead of random](#workload-and-measurement-setup--2026-10-06)
+5. [Long-context A/B on the real workload](#server-integration--2026-10-05)
+6. [4-mode MTP serving run](#server-integration--2026-10-05)
+7. [DSMEM / KV multicast](#kernel-optimisations--2026-10-06)
+8. [Fused spec tree-build epilogue](#kernel-optimisations--2026-10-06)
+9. [Perf model and EDF vs unfused](#schedule-exploration--2026-10-05)
+10. [Multi-node PD colocation, four points](#multi-node-schedule-tests-h20-only--16-gpus-trial-vibecuda--not-started)
 
 ## Kernel optimisations — 2026-10-06
 
@@ -248,6 +218,27 @@ One line each; the evidence is in the linked detail section. Every item must be 
 - [x] [Serial dispatch](#serial-dispatch-dead-end) — -48%, reverted, forecloses draft+verify fusion
 - [x] [Symmetric single kernel](#symmetric-retracted) — numerically wrong, four hypotheses eliminated, results retracted
 - [ ] [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), [cause found](#why-fused-is-slow) — register starvation: `mma.sync` at ~168 regs instead of ~255, from FA3's 384-thread launch bounds
+
+## Workload and measurement setup — 2026-10-06
+
+One line each; detail in [`realistic_workload_analysis.md`](realistic_workload_analysis.md).
+
+- [ ] **Context length where attention is >50% of e2e** — either force-extrapolate RoPE up
+      to TraceLab's max session length (agentic sessions reach 300-400k and stay under 1M,
+      so extrapolating past the trained window is fair for a cost measurement) or use a
+      larger model with a natively longer context.
+- [ ] **TraceLab mixed scenarios, not `--dataset-name random`** — `run_mixed_workloads.py`
+      carries the real shapes (`agent_plus_shortchat`, `loadsweep_*`); a `SPLIT` method is
+      wired into it. Independent-prompt datasets average 242-690 tokens and omit the
+      multi-turn tool-result prefills that create the repeated mixed forwards this kernel
+      exists for.
+- [x] **Why the 2048-token runs could not show the bar** — attention is a small fraction of
+      the forward there, so a 1.21x attention win is invisible end to end regardless of
+      correctness. Those runs measured in a regime where >=30% is unreachable by
+      construction.
+- [ ] **Validity gate on every arm** — report the fallback count beside the timings. Two
+      serving A/Bs were invalid (121 then 122 silent fallbacks) and both printed
+      ordinary-looking numbers; the backend now raises instead of degrading.
 
 ## Server integration — 2026-10-05
 - [x] **Per-step tracing: the whole gap is in MIXED steps, and it is a real

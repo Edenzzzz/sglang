@@ -7189,6 +7189,13 @@ gives ~sqrt(128/65536) ~= 0.045 ~= the observed row-1 error, rising to ~0.3 by r
 **FIX-READY STATEMENT: some KV tiles on the cp.async paged path are addressed at HALF their
 correct page offset** -- a /2, a >>1, or a byte-vs-element (bf16 = 2 bytes) confusion in one
 tile-address expression, hitting ~1-2 tiles per row plus roughly half the final row's chunks.
+Two located starting points: `persistent.cuh:354` sizes the per-thread offset array with a
+`/ 2` (`thr_local_kv_offset[NUM_MMA_KV * KV_THR_LAYOUT_COL / 2 / NUM_WARPS_Q]`) -- check that
+the gather loop's index space matches that sizing, since a mismatch reads stale offsets for
+the tail iterations, which would hit the LAST tiles of a row's walk (matching the tail-row
+chunk-scale miss); and `persistent.cuh:53-71` is the page-table consumption
+(`block_size.divmod(packed_block_iter, page_iter, entry_idx)`; `indices[page_iter] *
+kv_stride_page`) that any halved `packed_block_iter` base flows through.
 Search the V (and K) gather address computation for the persistent kernel's paged path; the
 plan values are verified correct, so the fault is in the kernel-side expression consuming
 them. Verification gate: `KV_ROWCONST=2` decodes every row to its own page-range mean, then

@@ -28,16 +28,30 @@ Two independent costs, now separated:
    measured with no FA3 in the kernel at all, so this is the geometry alone.
 
 The arithmetic behind the second: 384 threads at 1 CTA/SM leaves 65536/384 = 170
-registers per thread. FA2's mainloop uses 255 when it can, which requires at most
-256 threads per SM. One launch has one blockDim, so the FA2 role cannot be given
-its native allocation while the FA3 role needs 384 threads in one CTA for warp
-specialisation. `FLASHINFER_FUSED_WG_DRAIN=1` does not help: only 128 of the 384
-threads run FA2 work, but registers are allocated for all 384 regardless.
+registers per thread, and FA2's mainloop uses 255 when it can, which requires at
+most 256 threads per SM. One launch has one blockDim, so the FA2 role cannot hold
+255 registers per thread while the FA3 role needs 384 threads in one CTA for its
+warp specialisation.
 
-So the per-role parity bar is not reachable by scheduling, thread width, stage
-count or split policy -- all of which were held constant across the rows above.
-FA3 parity is reachable, by outlining the other role. FA2 parity is not, inside a
-single 384-thread launch, and the residual is bounded and now quantified.
+**Correction, same day.** I first concluded from that that FA2 parity is
+unreachable in one launch. That does not follow, and the arithmetic says so:
+
+    native FA2   255 regs x 256 threads/SM = 65 280
+    fused FA2    170 regs x 384 threads/SM = 65 280
+
+The SM-wide register budget is *identical*. What changes is the partition, not the
+total, so the deficit is only real if FA2's work cannot be spread across three
+warpgroups instead of two CTAs. That makes it an engineering question about work
+distribution, not a hardware limit -- and `FLASHINFER_FUSED_WG_DRAIN=3` is exactly
+that redistribution, currently producing wrong FA2 output. The honest status is that
+FA2 parity is unproven and blocked on WG_DRAIN=3 being made correct, which is also
+what "offload some softmax work to the remaining threads" asks for.
+
+What the rows above *do* establish: the parity bar is not reachable by scheduling,
+stage count or split policy, all held constant across them. FA3 parity is reachable
+by outlining the other role. FA2's penalty at `WG_DRAIN=1` is 1 136 B of spill and
+87 registers per thread, and that figure is the cost of leaving 256 of 384 threads
+idle, not a floor.
 
 `FLASHINFER_FUSED_DRAIN_NOINLINE` is kept as a switch rather than turned on,
 because it is a trade whose sign depends on the work mix: it should win where FA3

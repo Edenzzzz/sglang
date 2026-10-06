@@ -741,7 +741,31 @@ reserve partial space at full-tile granularity so an overrun is harmless. The fi
 the second only hides it. The two-row pair `qo:128,512` (PASS) and `qo:127,512` (FAIL) at
 `prefix:65536,512` is the regression test, and it is cheap.
 
-**Write path located, with one concrete inconsistency (NOT yet verified as the fault).**
+**RETRACTED by the A/B: the `partial_lse` indexing is not the fault.** Making it tile-relative
+to match `partial_o` (`LSE_TILE_REL=1`) leaves the reproducer failing at **0.431**, against
+**0.491** for the unmodified control -- within the run-to-run spread already seen on this
+fixture (0.39-0.70). The `qo=127` partial-tile case is likewise unchanged at 0.067. So the
+tile- vs row-relative divergence is real in the source but is not what corrupts the following
+row. Twelfth dead hypothesis, and the fourth to die after careful source reasoning.
+
+The change is **kept** (`LSE_TILE_REL=1` is the default): tile-relative matches `partial_o`
+and the plan's per-tile `partial_indptr`, so the two indexings now agree, which is correct on
+its own terms even though it fixes nothing here. The old expression stays behind the switch.
+
+**The win reproduces a third time, with the corruption still present.** Same run, TraceLab at
+page 128, 3 iters:
+
+| arm | total |
+|---|---|
+| FA2 on everything | 15 360.2 us |
+| **split, appends to FA3** | **12 316.3 us** |
+
+**1.247x, 19.8% lower** -- against 1.225x measured earlier on the same fixture at 5 iters. The
+`task0` and visible `task2` rows are correct in both arms (0.00021-0.00545), consistent with
+the partial-tile fault needing a *split* leading row, which TraceLab's ordering puts after the
+`task0` rows.
+
+**Write path located, with one concrete inconsistency (now refuted as the fault).**
 `persistent.cuh:503-509` takes the split branch and calls `write_o_`, whose gmem store is
 guarded by `if (o_idx < qo_upper_bound)` (`persistent.cuh:133`) with
 

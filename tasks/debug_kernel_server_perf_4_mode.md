@@ -4665,6 +4665,27 @@ directly and the combine never runs, so
 Either way one run separates them, which is cheaper than reasoning about the layouts
 further.
 
+**Refinement before the result, recorded so the reading is honest.** My stated split-path
+candidate is probably wrong. Upstream derives each slice itself from
+`(seqused_k, num_splits, split_idx)` and ignores the plan's `kv_start`/`kv_end`, so an
+even division by `n` with distinct ordinals `0..n-1` still covers `[0, L)` exactly, with
+no gap or overlap. Our `split_idx = kv_start / len_kv_chunk` does yield those ordinals.
+So a mismatched chunk boundary changes *which* KV each item processes but not the union,
+and the result should still be correct -- only balanced differently than the planner
+intended.
+
+That makes the stronger candidate the **packed-Q block index**. The adapter computes
+`block_idx = q_start / cta_tile_q`, and the plan's `q_start` is a **global** packed-row
+offset across the whole batch, while upstream's `m_block` is a tile index *within* the
+request -- it adds `cu_seqlens_q[bidb]` itself. Every request after the first would then
+be offset twice. The one thing that does not fit cleanly is that row 0 is request 0 with
+`cu_seqlens_q[0] == 0`, so it should escape the double offset, yet it is also wrong
+(10.88). So either that reasoning is incomplete or there are two faults.
+
+Both readings are testable from the same run: at one split, a correct result rules out
+everything split-related and leaves the Q-indexing question, and an incorrect result
+points straight at it.
+
 **The fix is upstream's own mechanism.** `FlashAttnFwdCombine::Arguments` takes
 `varlen_batch_idx_ptr`, which remaps the scheduler's batch index onto a real batch index
 precisely so the pass can run over a SUBSET of batches. So:

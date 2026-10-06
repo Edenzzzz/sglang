@@ -221,8 +221,38 @@ since the current buffer is a latent heap overflow the moment splits do take eff
 ### FA3 is 31x SLOWER than FA2 at realistic context, and the 1.21x does not generalise — 2026-10-06
 
 TraceLab-shaped batch at one H200's token budget (1.58M KV, 64-100K contexts, 2048-token
-appends off the 3812-token mean, 18 decode rows, chat + math co-tenants). All rows correct in
-every arm below (rel err 2.4e-4 to 4.2e-3), 0 fallbacks.
+appends off the 3812-token mean, 18 decode rows, chat + math co-tenants).
+
+**RETRACTED: "all rows correct in every arm (rel err 2.4e-4 to 4.2e-3)" was an artifact of
+output truncation, and the correctness gate was never actually met.** The driver piped the
+harness through `... | head -12`. With 22 rows that budget is consumed by the header, `[nsplit]`,
+three `[time]` lines and the first **six** `rel err` lines -- so rows 6-21 and the trailing
+`FAILURES:` summary were cut off and never seen. The range I quoted, 2.4e-4 to 4.2e-3, is
+exactly the range of rows 0-5. I reported the visible rows as if they were all of them.
+
+Re-run on the rebuilt pod with the full log kept, the FA2-on-everything control gives:
+
+| | value |
+|---|---|
+| total | **15 197.3 us** (old pod: 15 301 -- reproduces within 1%) |
+| fa2_half | 15 204.0 us |
+| unwritten rows | 0 / 5650 |
+| rows 0-5 rel err | 0.00037 - 0.00483 (what `head -12` used to show) |
+| rows 6-20 rel err | 0.0049 - 0.0177 (never previously displayed) |
+| **row 21** | **0.02618 -- FAIL against `TOL=0.02`** |
+
+So the *baseline itself* fails a row on this fixture, and every "all rows PASS" gate I recorded
+for the page-128 arms is unsupported: I never saw the rows that fail. The timings stand as
+timings -- and the control reproducing 15.2 ms against 15.3 ms says the rebuilt pod is
+comparable -- but the validity criterion I claimed to be enforcing was not being enforced.
+
+**Unexplained and under investigation: the error grows monotonically with ROW INDEX, not with
+KV length.** The decode rows with identical `kv=65537` and `qo=1` give 0.0088, 0.0101, 0.0113,
+0.0138, 0.0169, 0.0164, 0.0177 at rows 7, 8, 10, 13, 16, 17, 20. Same shape, same work, error
+rising with position in the batch. That is systematic, not bf16 noise, so "the tolerance is too
+tight for 100K-context decode" is a hypothesis and not yet the answer. This is the unmodified
+persistent LPT kernel -- the baseline -- so whatever it is predates every change in this
+entry.
 
 | arm | page | total | fa3 half | fa2 half |
 |---|---|---|---|---|

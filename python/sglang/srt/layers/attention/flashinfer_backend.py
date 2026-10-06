@@ -1421,14 +1421,24 @@ class FlashInferAttnBackend(AttentionBackend):
         if os.environ.get("SGLANG_TWO_EXEC") == "1":
             n_fa3_rows = fused["n_rows"]
             if n_fa3_rows > 0:
+                # Scratch is cached on the backend and the page table is scattered ONCE per
+                # step, not per layer. Allocating these inside the op cost ~140 allocations
+                # and 28 extra scatter launches per forward, which turned a 1.21x faster
+                # kernel into a serving regression (TTFT 64.6 -> 89.7 ms).
+                sc = self._two_exec_scratch(q, fused, n_fa3_rows)
                 torch.ops.fused_fa3.fa3_only_run(
                     q, k_cache, v_cache, out, self._persistent_lse_buf[:num_tokens],
                     fused["kv_indices"], fused["kv_indptr_req"], fused["q_indptr_req"],
-                    fused["kv_lens_req"],
-                    torch.arange(n_fa3_rows, dtype=torch.int32, device=q.device),
+                    fused["kv_lens_req"], sc["reqs"],
                     self.num_qo_heads, self.num_kv_heads, 1, layer.scaling,
                     fused["max_qlen"], fused["max_pages"],
+                    sc["pt"], sc["po"], sc["plse"], sc["nsd"], sc["sem"],
+                    # One scatter per STEP, not per call. fused is rebuilt by
+                    # _plan_fused_split each step, so it is the correct place to track
+                    # this -- a per-call flag would refill on every layer.
+                    not fused.get("_pt_done", False),
                 )
+                fused["_pt_done"] = True
             n_tok_fa3 = fused["n_tok"]
             if n_tok_fa3 < q.shape[0]:
                 pers.run(q[n_tok_fa3:], (k_cache, v_cache), out=out[n_tok_fa3:])
@@ -1468,6 +1478,34 @@ class FlashInferAttnBackend(AttentionBackend):
         )
         return out, self._persistent_lse_buf[:num_tokens]
 
+
+    def _two_exec_scratch(self, q, fused, n_fa3_rows):
+        """Per-step scratch for the two-executor FA3 launch, cached across layers.
+
+        Keyed on the shapes that determine the buffer sizes. ``fill`` is True only for the
+        first layer of a step: every layer shares one KV layout, so the ragged->dense page
+        table is scattered once and reused, which removes 27 of the 28 scatter launches.
+        """
+        n_req = int(fused["q_indptr_req"].numel() - 1)
+        max_pages = int(fused["max_pages"])
+        total_q = int(q.shape[0])
+        key = (n_req, max_pages, total_q, n_fa3_rows, self.num_qo_heads)
+        sc = getattr(self, "_two_exec_sc", None)
+        if sc is None or sc.get("key") != key:
+            dev = q.device
+            hd = self.head_dim
+            sc = {
+                "key": key,
+                "pt": torch.full((n_req * max_pages,), -1, dtype=torch.int32, device=dev),
+                # upstream's varlen partial layout: [num_splits, num_heads, total_q, hd]
+                "po": torch.empty(total_q * hd * self.num_qo_heads, dtype=torch.float32, device=dev),
+                "plse": torch.empty(total_q * self.num_qo_heads, dtype=torch.float32, device=dev),
+                "nsd": torch.ones(n_fa3_rows, dtype=torch.int32, device=dev),
+                "sem": torch.zeros(1, dtype=torch.int32, device=dev),
+                "reqs": torch.arange(n_fa3_rows, dtype=torch.int32, device=dev),
+            }
+            self._two_exec_sc = sc
+        return sc
 
     # ---- fused FA3 + FA2 SM pre-assignment -------------------------------
     #

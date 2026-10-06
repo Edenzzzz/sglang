@@ -7110,10 +7110,36 @@ Larger chunks -> fewer, bigger partials -> more loss. That fits both numbers, an
 re-reads the "grows with row index" signature: later rows are assigned later, larger chunk
 spans by the LPT-ordered scheduler, not corrupted by their predecessors.
 
-**So this may not be a correctness bug at all, but precision loss from storing partials in
-bf16.** That would explain why ~24 structural candidates all died, why both sanitizers are
-clean, why the plan verified correct twice, and why the magnitude varies run to run (chunk
-assignment varies with scheduling).
+**RETRACTED by the chunk sweep: the error does NOT track chunk size.** Holding N=18 fixed and
+forcing the chunk (`FLASHINFER_FORCE_KV_CHUNK`):
+
+| chunk at N=18 | rel err |
+|---|---|
+| auto (17 920) | 0.305 |
+| 4 096 | 0.391 |
+| 1 024 | 0.375 |
+
+Flat to slightly worse as the chunk shrinks, so chunk size is **not** the variable. Against
+N=2's 0.0495 at chunk 2 048, that leaves **row count** as the driver -- which is what the
+cumulative sweep said in the first place. My previous conclusion inverted it: N=2 and N=18
+differed in *both* row count and chunk size, and I attributed the error to the wrong one
+without holding either fixed. This sweep holds N fixed and the chunk dependence disappears.
+
+So **bf16 partial precision is not the primary explanation either** -- it cannot produce
+row-count dependence, since decode rows are independent of one another. Both of my last two
+mechanism claims are void:
+
+- "cumulative via the partial_o cursor" -- refuted, the cursor arithmetic is exact
+  (`o_indptr` steps by `row_tile_size x nchunks` in both N).
+- "precision loss from bf16 partials, tracking chunk size" -- refuted here.
+
+**What survives is the original characterisation, now better supported:** the error grows with
+the number of rows in the batch (0.0495 at N=2, ~0.30-0.39 at N=18), is independent of chunk
+size, appears in FA2-only with no FA3 executor present, and leaves row 0 clean. Something
+per-batch-size is wrong -- a shared workspace sized or indexed from the row count, or the
+scheduler's distribution of identical rows across clusters -- and it is not the cursor, not
+the chunk, not the reduction path, not the plan arrays, and not a memory-safety or
+shared-memory race.
 
 **The decisive test is cheap:** make `partial_o` `float` (upstream's own choice) and re-run
 this fixture at N=2 and N=18. If the errors collapse to ~1e-3, it is precision and the fix is

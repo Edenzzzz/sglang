@@ -431,7 +431,55 @@ everything else here.
 the derivation-not-literal change prevents the next drift -- but it was never capable of finding
 a 31x. That is the honest summary of this whole line of work.
 
-**So the 31x is still UNEXPLAINED**, and what is now known about it is narrower than before:
+<a id="fa3-profile-2026-10-06"></a>
+**PROFILED (ncu, `-k device_kernel`, one 2048-q row against 18 432 KV, `num_splits=1` so the
+`partial_o` overflow cannot contaminate it).** The kernel is **not latency-bound**, which
+retracts the inference this entry was built on:
+
+| metric | value | reading |
+|---|---|---|
+| Duration | 13.95 ms | vs 1.35 ms at roofline, 10.3x |
+| Compute (SM) throughput | **47.4%** | pipes half busy, not idle |
+| Warp cycles per issued instruction | **7.65** | a stall-bound kernel shows 30-100+ |
+| DRAM throughput | 0.10% | fits in L2 at this size |
+| Largest stall | CTA barrier, 2.9 of 7.65 cycles | present but small |
+
+So warps issue efficiently and the pipes are busy. The kernel is not waiting -- it is executing
+the wrong instructions, in enormous numbers:
+
+| pipe | warp-instructions | share |
+|---|---|---|
+| total | 3 869 179 648 | |
+| **tensor** | **74 317 824** | **1.9%** |
+| FMA | 1 690 885 788 | 43.7% |
+| ALU | 990 407 553 | 25.6% |
+| XU | 306 805 440 | 7.9% |
+| LSU | 213 841 800 | 5.5% |
+
+**98.1% of issued instructions are not the mma.** Per tile-pair (64 512 of them) that is
+58 824 non-tensor warp-instructions, i.e. **~115 instructions per softmax element**, where the
+softmax itself needs roughly 5-10 (scale, max, subtract, exp, accumulate).
+
+**RETRACTED before it was claimed: the mma is NOT falling back to Ampere `mma.sync`.** The
+FLOP-per-tensor-instruction figure (7 282 against wgmma's 262 144) looked exactly like an
+`mma.sync` fallback, which would have explained the whole 31x. Per-function SASS refutes it:
+
+    device_kernel<FlashAttnFwdSm90<...>>        HGMMA=32   HMMA=0
+    FusedFA3PersistentKernel                    HGMMA=32   HMMA=1584
+    FusedFA3PersistentSymmetricKernel           HGMMA=32   HMMA=1584
+
+FA3 uses wgmma exclusively; the 3 168 `HMMA.16816` in the `.so` belong to the **closed fused**
+kernels. And the counts reconcile: 74.3M dynamic / 32 static = 2.3M passes = ~36 per tile-pair
+x 262 144 FLOP = 9.4 MFLOP against the 8.4 MFLOP a tile-pair needs. The 7 282 figure came from
+treating a per-warp metric as per-wgmma. `-arch=sm_90a` was correct all along.
+
+**So the 31x is now localised, for the first time by measurement rather than inference: the mma
+is right, the memory system is idle, nothing stalls, and the kernel issues ~10-20x more scalar
+instructions per softmax element than the softmax needs.** The next step is source-line
+attribution (`--section SourceCounters`), which names the lines responsible instead of
+inviting a sixth guess about which they are.
+
+**Earlier framing, now superseded**, and what is now known about it is narrower than before:
 not the gather (TMA measured slower), not pipeline depth (2 is upstream's and 3 barely fits),
 not parallelism (linear to 132 SMs), not per-tile work (same FLOPs), and not `MmaPV_is_RS`.
 Arithmetic on the measurement: 896 work tiles x ~657 KV blocks = ~589k tile-block steps, i.e.

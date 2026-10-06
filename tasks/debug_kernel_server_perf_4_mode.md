@@ -517,7 +517,41 @@ runs kv-proportionally too many times. Since the n-block count must be proportio
 **m-block** count has to be too, despite q being fixed.
 
 <a id="combine-corrupts-fa2-rows"></a>
-### Split-KV now works on FA3 and corrupts FA2's rows — 2026-10-06
+### Split-KV now works on FA3; the FA2 rows were never the combine's fault — 2026-10-06
+
+**RETRACTED, by the isolation arm: the combine does not corrupt FA2's rows.** Three arms on
+`qo:1,512 prefix:65536,512`, all other settings equal:
+
+| arm | FA3 kernel | combine | row 1 (`task0 qo=512 kv=1024`) |
+|---|---|---|---|
+| **a) `n_fa3=0`, every row to FA2** | **no** | **no** | **0.385 FAIL** |
+| b) `n_fa3=1`, `sm_split=1` | yes | yes | 0.552 FAIL |
+| c) `n_fa3=1`, splits auto (29) | yes | yes | 0.600 FAIL |
+
+Arm (a) runs **no FA3 kernel and no combine**, and the FA2 row still fails. So the whole
+"the combine walks into FA2's rows" story is wrong -- including the `varlen_batch_idx_ptr`
+reasoning, the `total_q` fix, and the inference from "same shape as the previously fixed
+combine fault". The shape did match a known fault; that resemblance is what made me stop
+looking.
+
+**The `num_splits` correlation was also wrong.** Arm (a) reports `num_splits = 1` and fails.
+What actually distinguishes the passing TraceLab `task0` rows from these is **prefix**: there
+they are `qo:512,1024 prefix:0,0`, i.e. `kv == qo`, pure prefill; here row 1 is
+`qo=512 prefix=512`, an append. So the candidate is "FA2 append rows", which is being measured
+now rather than asserted.
+
+Arm (b) did not test what I intended: `SPLITS=1` sets `sm_split`, not `num_splits`, so (b) is
+a second combine-enabled arm rather than a combine-disabled one. Arm (a) carries the
+conclusion on its own, and the label is corrected here rather than quietly reused.
+
+**This is the same bug family as the TraceLab row-20/21 failures**, which are also FA2 rows,
+also unexplained, and were already noted as predating this work. Both now point at
+flashinfer's persistent LPT kernel as we drive it, not at the FA3 port. That matters for
+priority: it is a **baseline correctness** problem, so it taints the control arm of every
+comparison, not just the split.
+
+<a id="split-kv-fa3-correct"></a>
+#### Split-KV on FA3 is correct after the seqused fix
 
 With the `seqused` fix in, the split-KV fixtures were re-run (`drivers`-style, page 128,
 `SPLITS=auto`, `num_splits=29` in all three). **FA3's own rows are now correct**, which they

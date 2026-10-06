@@ -1407,6 +1407,33 @@ class FlashInferAttnBackend(AttentionBackend):
             )
             _np.savez(os.environ["SGLANG_FUSED_DUMP"], **_d)
             logger.error("fused launch dump written to %s", os.environ["SGLANG_FUSED_DUMP"])
+        # SGLANG_TWO_EXEC=1 takes the two-executor path instead of the fused kernel:
+        # flash-attention's FA3 on its own scheduler over the prefill rows, then
+        # flashinfer's persistent LPT kernel over the rest. Measured at kernel level on a
+        # prefill-heavy batch: 79.5 us against 94.0 us for FA2-on-everything (1.19x), with
+        # FA3 1.32x faster than FA2 on its own tile class, every row numerically correct.
+        # The fused kernel is 2.16x SLOWER on the same comparison because co-residency
+        # denies both roles their native registers.
+        #
+        # Sequential by design. An SM-budget sweep showed concurrency loses at every budget
+        # (112-235 us against 80.7) because neither executor leaves SMs idle, so there is no
+        # overlap to win and splitting the machine only slows both.
+        if os.environ.get("SGLANG_TWO_EXEC") == "1":
+            n_fa3_rows = fused["n_rows"]
+            if n_fa3_rows > 0:
+                torch.ops.fused_fa3.fa3_only_run(
+                    q, k_cache, v_cache, out, self._persistent_lse_buf[:num_tokens],
+                    fused["kv_indices"], fused["kv_indptr_req"], fused["q_indptr_req"],
+                    fused["kv_lens_req"],
+                    torch.arange(n_fa3_rows, dtype=torch.int32, device=q.device),
+                    self.num_qo_heads, self.num_kv_heads, 1, layer.scaling,
+                    fused["max_qlen"], fused["max_pages"],
+                )
+            n_tok_fa3 = fused["n_tok"]
+            if n_tok_fa3 < q.shape[0]:
+                pers.run(q[n_tok_fa3:], (k_cache, v_cache), out=out[n_tok_fa3:])
+            return out, self._persistent_lse_buf[:num_tokens]
+
         torch.ops.fused_fa3.fused_run(
             q,
             k_cache,

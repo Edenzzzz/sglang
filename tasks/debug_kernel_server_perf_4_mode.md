@@ -184,6 +184,124 @@ scheduler over the wgmma requests, flashinfer's persistent LPT unmodified over t
 Each rung keeps the plan as the single source of routing, which is what the scheduling
 story rests on -- none of 1-4 requires the roles to share a `__global__`.
 
+## Tasks by category — 2026-10-06
+
+Ordered within each category by dependency, not by appeal. The fused single-kernel design
+is closed (see the co-residency measurements); everything below sits on the **two-executor**
+base: flash-attention's FA3 on its own scheduler over the wgmma requests, flashinfer's
+persistent LPT unmodified over the rest, one routing decision from our plan.
+
+### A. FA3 executor (the wgmma half)
+
+- [x] **Drive it with upstream's own scheduler, not an adapter** — 2026-10-06. Every
+      numerical fault in the port was in the adapter I substituted for
+      `VarlenDynamicPersistentTileScheduler`, or in the descriptors handed to it. Dropping
+      it made all four rows correct at once. `TileSchedulerArguments` already accepts the
+      request subset, per-request `cu_seqlens`/`seqused` and split counts, and does its own
+      L2 swizzle with `LPT=true` — so nothing was gained by the adapter.
+- [x] **Numerics** — rel err 1.5e-3 to 3.7e-3, 0 unwritten, reproduced across fixtures.
+- [x] **Beats FA2 on its own tile class** — 45.9 us against ~60.5 us for FA2 on the same
+      prefill rows, **1.32x**. This is per-role parity met and exceeded.
+- [ ] **K/V pipelining, stages=2** — recorded as worth ~15% and "blocked by an smem byte
+      count". That count was the FUSED kernel's: stages2 `TensorStorage` 197 632 B plus the
+      FA2 slot 69 632 is 267 264 against a 232 448 limit, over by exactly 34 816. The FA3
+      executor alone has exactly 34 816 B spare, so the split unlocks it. **Measuring now**
+      (`UP_STAGES=2`).
+- [ ] **DSMEM / KV multicast** — 1.33-1.59x in isolation on this role's own access pattern
+      (every q-tile of a prefill row re-gathering the same KV). Intra-role, so a cluster
+      inside this executor provides it; `FLASHINFER_FUSED_CLUSTER=2` still faults.
+- [ ] **Async/tiled packed copies** — `cp.async` landed; single-warp width and the per-row O
+      store remain, and the latter needs the indirection table.
+
+### B. FA2 executor (the persistent half)
+
+- [x] **Use it unmodified** — it is already correct and already the baseline, so the split
+      needs no FA2 work at all. This is what makes the split safe by construction: the
+      baseline kernel is handed strictly less work.
+- [x] **Register starvation is not an FA2 problem** — it was co-residency. At its native
+      128 threads x 2 CTAs/SM it holds 255 registers and spills 0 B.
+- [ ] **Q-split (8 warps, `num_mma_q=1`)** — halves the per-thread O accumulator, 1 136 ->
+      88 B spill in isolation. **Only relevant if FA2 ever shares a kernel again**; on the
+      two-executor base it is moot, and it overflowed smem by 1 120 B inside the fused
+      kernel anyway. Keep the switch, do not pursue.
+
+### C. Cross-executor fusions
+
+- [ ] **Split-KV reduction** — upstream's own combine kernel is wired and is the parity
+      reference (flash-attention pays that second launch too). The **improvement** is the
+      smem-handoff JIT reduction, which removes the launch and the global round-trip.
+      Intra-role: a split row's chunks are all one task's items, so no partial crosses
+      executors. Two silent-wrong traps are closed and documented — per-item `num_splits` in
+      `split_idx`'s high 16 bits, and per-request `num_splits_dynamic_ptr`.
+- [ ] **Spec tree-build epilogue** — designed, not built. Belongs to whichever executor
+      writes the verify output. Needs the 4-mode MTP batch, hence blocked on
+      `mix_with_running`.
+- [x] **Cross-role backfill — closed as not worth it.** It only ever existed in symmetric
+      mode, which computes FA3 wrong, and it is the construct that forces both mainloops
+      into one `__global__` and costs 33 676 B of spill. The split gives it up deliberately.
+      Overlap cannot substitute: an SM-budget sweep shows concurrency losing at every budget
+      because neither executor leaves SMs idle.
+
+### D. Serving integration
+
+- [ ] **Point the sglang path at the two-executor launch** — `SGLANG_TWO_EXEC=1` added to
+      `flashinfer_backend.py`; not yet exercised against a server.
+- [ ] **4-mode MTP serving run** — the simulated EAGLE draft is built
+      (`drivers/make_eagle_draft.py`, 233 M params, 3.1% of 7.6 B) and unused. Blocked on
+      `mix_with_running` crashing on a spec running batch.
+- [ ] **The actual bar: >=30% TTFT/ITL, >=10% throughput** on mixed chat + tracelab. Nothing
+      here is measured; the 1.19x is a kernel microbenchmark on a synthetic fixture.
+- [ ] **CUDA-graph capture** — needs the routing decision in device memory with
+      exit-early CTAs, so grid dims stay fixed and one graph serves every PD ratio. sglang's
+      graph layer already uses the same bucket-and-pad idea a level up.
+
+### E. Scheduling and the perf model (EDF)
+
+- [ ] **The SM budget is a latency knob, not a throughput knob** — established by the sweep:
+      capping FA3 costs it proportionally (1.63x at budget 64) and buys decode SMs. That
+      exchange rate is exactly what an EDF policy should set, which is the hook for the
+      perf model.
+- [ ] **Perf model vs the baseline unfused schedule** — the two-executor design should be
+      *easier* to model than the fused one: each kernel's cost is a function of its own
+      queue, with no register-starvation term that varies with what it is compiled beside.
+      Use predicted acceptance length (EWMA, fixed draft model) as an input to predict TPOT.
+- [ ] **EDF comparison** — not started.
+
+### F. Multi-node PD colocation
+
+- [ ] **Four points, written and unmeasured** — [`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md)
+      covers all four with its premise re-grounded on the two-executor decision. Gated on
+      "do not allocate h20 yet"; H20 only, <=16 GPUs, trial `vibecuda`.
+
+## Optimization ladder on the two-executor base — 2026-10-06
+
+Order matters: each rung needs the rung below it measured, or its effect is not
+attributable. The base is **two executors, one plan** -- flash-attention's FA3 on its own
+scheduler over the wgmma requests, flashinfer's persistent LPT unmodified over tasks 0-2.
+
+- [ ] **0. Base number.** Sequential launches, no overlap. The floor this has to clear is
+      72.3 us (FA2 over ALL rows). It should not be able to regress: the split hands FA2
+      strictly less work and gives the rest to a kernel at native register quality
+      (44-52 B spill against the fused kernel's 33 676 B).
+- [ ] **1. PDL between the two launches.** `cudaLaunchAttributeProgrammaticStreamSerialization`
+      so FA2 starts on SMs FA3 vacates instead of waiting for the grid to drain. This is
+      what recovers, temporally, the cross-role backfill the split gives up -- and backfill
+      inside a CTA is exactly what caused the co-compilation spill, so this is the better
+      trade.
+- [ ] **2. Unified JIT split-KV reduction with smem handoff.** Intra-role by construction:
+      a split row's chunks are all items of one task, so a partial never crosses executors.
+      Replaces upstream's second combine launch and its global round-trip, which is the
+      actual claim -- flash-attention pays that launch too.
+- [ ] **3. KV multicast / DSMEM.** 1.587x in isolation on the access pattern the wgmma role
+      has (every q-tile of a prefill row re-gathering the same KV). Also intra-role, so a
+      cluster inside the FA3 executor provides it. `FLASHINFER_FUSED_CLUSTER=2` currently
+      faults.
+- [ ] **4. Spec tree-build epilogue.** Fused into whichever executor writes the verify
+      output; needs the 4-mode MTP batch, which needs `mix_with_running` fixed.
+
+Each rung keeps the plan as the single source of routing, which is what the scheduling
+story rests on -- none of 1-4 requires the roles to share a `__global__`.
+
 ## Tasks, in priority order — 2026-10-06
 
 - [ ] **1. Split-KV reduction for the wgmma role** — 2026-10-06: reframed. The

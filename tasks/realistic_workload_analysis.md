@@ -435,3 +435,31 @@ python tasks/realistic_workload_analysis/summarize_mixed_workloads.py OUTDIR \
   retains its stock kernel, 8,192-token cap, and CUDA graphs. Multi-trial
   runs are the default defense against episode-vs-property confusion
   (the −19% retraction-cascade episode reproduced nowhere in repeats).
+
+## Context length for the kernel A/B — 2026-10-06
+
+**Decision (user, 2026-10-06): the A/B must run at a context length where attention is
+>50% of end-to-end time, by one of two routes.**
+
+1. **Force-extrapolate RoPE** up to TraceLab's maximum session length. Normal agentic
+   sessions (Claude/Codex-style) reach 300-400k tokens and stay under 1M, so extrapolating
+   beyond the trained window is a fair simulation of the real regime even though
+   perplexity is not meaningful there -- this measurement is about attention cost, not
+   output quality.
+2. **Or use a larger model with a natively longer context**, if extrapolation muddies the
+   result.
+
+**Why this matters, and why earlier runs could not show the bar.** At
+`--random-input-len 2048` attention is a small fraction of the forward, so an attention-only
+speedup is invisible end to end: a 1.21x kernel win cannot produce a >=30% TTFT/ITL gain
+there no matter how correct it is. Those runs were measuring in a regime where the bar is
+unreachable by construction. At 64k+ attention dominates, and at 300-400k it is >50% of
+e2e, where the same kernel win translates directly.
+
+**Also decided: use the TraceLab-derived mixed scenarios, not `--dataset-name random`.**
+`run_mixed_workloads.py` has the real shapes (`agent_plus_shortchat`, `loadsweep_*`), whose
+multi-turn tool-result prefills create the repeated mixed forwards this kernel exists for.
+Independent-prompt random datasets omit exactly that structure -- this doc already records
+that they average 242-690 tokens and cannot show the effect. A `SPLIT` method is now wired
+into that driver.
+

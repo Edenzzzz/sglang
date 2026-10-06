@@ -7151,9 +7151,21 @@ mechanism claims are void:
   misdirected chunks fits: at A's ~2 chunks/row one wrong chunk is ~50% of the output
   (err ~1.2); at C's 4 chunks/row, ~25% (err ~0.31).
 
-**Next is a forensic probe, not a hypothesis**: `KV_ROWCONST=1` fills each row's V with the
-constant `(j+1)/100`, so `got[r]` under `DUMP_ROWS` *is* the weighted average of the row-ids
-row r attended. One run names exactly whose KV each wrong row read.
+**PROBE RESULT (arm A, N=18, kv=4096): the fault is ONE chunk of ONE row reading the wrong
+pages.** Per-head attended-row decode, all 28 heads:
+
+- rows 0-16: every head attends exactly its own row (decode = r +- 0.04, bf16 rounding).
+  Their sub-0.03 rel errs are quantisation noise, not misdirection.
+- **row 17, the LAST row: all 28 heads identically wrong**, mixture ~= 12.7 instead of 17.
+
+Uniform across heads exonerates `kv_head_idx`. The broken coordinate is the KV source of a
+chunk. And the number decodes: 12.7 ~= (17 + 8.5)/2 -- about half the mass on a chunk whose
+pages sit at row 8.5's offset. Row 17's `kv_indptr` is 544 pages; **halved = 272 = row 8.5's
+pages exactly**. So the working hypothesis -- one datapoint, needs arm C -- is a **halved page
+offset on the tail work item**.
+
+Arm C (kv=65536, where random-V showed graded errors on all rows) distinguishes in one
+printout: "tail item only" vs "every row reads ~r/2" vs graded mass. Running now.
 
 **What survives is the original characterisation, now better supported:** the error grows with
 the number of rows in the batch (0.0495 at N=2, ~0.30-0.39 at N=18), is independent of chunk

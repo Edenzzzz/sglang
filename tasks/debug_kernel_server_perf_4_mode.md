@@ -6778,6 +6778,31 @@ nothing. So both arms that the JIT-cache defect invalidated reach the *same* con
 did before -- but they are now supported, and that distinction matters: before this they were
 claims about a kernel that never ran.
 
+**The reduction-path A/B is INFEASIBLE: the classic reducer is non-functional.** Forcing it on
+inside the JIT-compiled headers (`FLASHINFER_FORCE_CLASSIC_REDUCE=1`, both gates mirrored,
+`cached_ops` cleared) gives **`rel err = nan` on every row**, including the leading row that
+is otherwise always correct. The classic pass calls `grid.sync()`
+(`persistent_template.cuh:109`), which requires a **cooperative launch**; this kernel is not
+launched cooperatively, so the barrier is undefined and the reduction produces NaN.
+
+So the "two mutually exclusive reducers" structure is real in the source but has only **one
+working branch**. Three consequences:
+
+1. The reduction path **cannot be exonerated or implicated by swapping reducers** -- that
+   experiment does not exist. My earlier claim that both reducers produce the corruption was
+   doubly wrong: the arm did not reach the kernel, *and* the alternative it was supposed to
+   select cannot run.
+2. The JIT reduction is therefore the **only** reducer, which makes the earlier framing
+   ("the JIT reduction replaces the classic grid.sync pass") accurate but for a different
+   reason than stated -- the classic pass is not a working fallback, it is dead code.
+3. Testing the reduction's involvement needs a different lever: suppress the merge's *writes*
+   while leaving the rendezvous intact (so the kernel still completes), and check whether the
+   victim's rows change. That isolates "does the reduction write where it should not" from
+   "does the reduction run at all".
+
+`FLASHINFER_FORCE_CLASSIC_REDUCE` reverted to 0. The switch is kept, with this result recorded
+next to it, so nobody re-runs the arm expecting it to work.
+
 **`NO_JIT_REDUCE` cannot be re-run by clearing the cache.** It sets `P.group_id` in the
 **ext's** params, and those params do not feed `BatchAttention.run()`, which is what executes
 the FA2 rows. Testing it requires routing the FA2 rows through the ext's own runners first --

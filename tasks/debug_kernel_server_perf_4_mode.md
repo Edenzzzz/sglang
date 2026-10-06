@@ -932,11 +932,41 @@ enqueued before the victim's work items, so the merge and the victim's write-thr
 with the split row second, the victim's work completes first and the race window closes. That
 is an ordering effect, exactly as a race predicts, and it needed no appeal to indexing.
 
-**Next, and it is now a targeted question rather than a search:** re-check the rendezvous
-under `compute-sanitizer --tool racecheck` on the two-row reproducer, or bisect by disabling
-the JIT reduction (set `params.group_id = nullptr`, which the gate at `persistent.cuh:551`
-already honours) and confirming the corruption disappears -- that would pin it to the
-rendezvous in one run without needing to find the specific unsynchronised access first.
+**MEASURED: the JIT-reduction rendezvous is EXONERATED.** Nulling `group_id` disables it at
+its own gate (`persistent.cuh:551`). Four runs each side:
+
+| arm | victim rel err | split row |
+|---|---|---|
+| `NO_JIT_REDUCE=0` (rendezvous on) | 0.729, 0.635, 0.616, 0.720 | 0.00024-0.00029 ok |
+| `NO_JIT_REDUCE=1` (**rendezvous off**) | **0.765, 0.585, 0.702, 0.696** | 0.00021-0.00029 ok |
+
+Identical distributions, so the race is not in the rendezvous. Twentieth candidate eliminated,
+and the one the code's own comments pointed at.
+
+**The unexpected part, and the better lead: the split row stays CORRECT with its JIT reduction
+disabled.** Its KV is split into 26 chunks, no rendezvous runs, and it still comes back at
+2.1e-4. That is only possible if a **second reduction path** is reducing those partials -- i.e.
+flashinfer's original `merge_indptr`/`merge_o_indices` pass is still executing alongside (or
+instead of) ours. Two reducers over the same `partial_o`/`merge_indptr` arrays, one of them
+ours and neither aware of the other, is a far better fit for every property measured:
+
+- **nondeterministic** -- two writers, no ordering between them;
+- **damage total and in-range** -- the victim's correct direct-write output is overwritten by a
+  reduction that believes it owns those rows;
+- **request-order dependent** -- which rows the second reducer walks depends on the plan's
+  global row ordering, which is what request order changes;
+- **leading row always fine** -- it is the row the reduction legitimately owns.
+
+That also reframes the smem-handoff JIT reduction item: if the original pass still runs, the
+JIT reduction is not *replacing* it, so any speedup attributed to "replacing the grid.sync
+reduction" was never actually replacing anything.
+
+**Next measurement:** find and instrument the second reducer. `grep` for the launch that
+consumes `merge_indptr`/`merge_o_indices` outside `persistent.cuh` (flashinfer's standalone
+merge/reduction kernel), confirm whether the ext launches it, and disable **it** instead of
+ours on the reproducer. If the corruption disappears with the original pass off and our JIT
+reduction on, the fault is that pass walking rows it no longer owns -- and the fix is to stop
+launching it, which is what the JIT reduction was supposed to achieve.
 
 **Superseded candidate: the per-task cluster-slot/cursor computation**, which the PASS arm
 above refutes in its simple form. `num_pers_clusters = 132` and the plan carries a `cluster_cursor_offset`; the next

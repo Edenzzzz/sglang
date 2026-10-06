@@ -1,5 +1,61 @@
 # Changelog
 
+## v0.10.1 — ROOT CAUSE: the scheduler was handed `seqused_k` where it needs the query length; the split now beats FA2 (2026-10-06)
+
+**FA3's long-context slowness was `Theta(kv^2)`, from one wrong argument.**
+`MakeUpstreamOwnSchedArgs` passed `p.seqused_k` into `TileSchedulerArguments::seqused`,
+which is the **query** length per request: the scheduler computes
+`num_m_blocks = ceil_div(seqused[b] * qhead_per_khead, kBlockM)` from it
+(`tile_scheduler.hpp:599-621`, `Prepared=false`). So m-blocks were sized from KV --
+112 correct at q=2048 against **5 488** emitted at kv=100 352, a 49x bloat -- and
+multiplied by an n-block count itself proportional to KV, the work became quadratic.
+
+Fixed by passing `nullptr`: the scheduler then differences `cu_seqlens`, and `cu_seqlens_q`
+is already supplied per-request, so it yields the exact query length with no new buffer.
+
+**Verified.** Same fixtures before and after, every row PASS:
+
+| kv | before | after | speedup | predicted |
+|---|---|---|---|---|
+| 10 240 | 3 268.1 us | **792.4 us** | 4.1x | 5.0x |
+| 18 432 | 10 583.7 us | **1 396.0 us** | 7.6x | 9.0x |
+| 34 816 | 37 811.2 us | **2 610.8 us** | 14.5x | 17.0x |
+| 67 584 | 142 434.4 us | **5 023.3 us** | 28.4x | 33.0x |
+| 100 352 | 320 401.6 us | **7 425.4 us** | 43.1x | 49.0x |
+
+`us/kv` constant to 4.5% (was a 197% spread); `us/kv^2` now varies 218% (was 2.1%). Linear,
+as it must be. Speedups track predicted bloat at ~87% across a 10x range.
+
+**TraceLab batch: the split finally wins.** FA2-on-everything 15 190.9 us against the split's
+**12 399.7 us** -- **1.225x, 18.4% lower** -- with the FA3 half going 476 684 -> 11 127 us
+(**42.8x**). This retires the v0.9.9/v0.10.0 finding that FA3 is 31x slower and the split
+loses on long context.
+
+**Why it hid behind every gate.** The surplus m-blocks address q rows past each request's end,
+which the epilogue masks, so output was always bit-correct and only the clock was wrong. A
+numerics-only validity gate cannot see this, and that was the gate in use.
+
+**Why six hypotheses each returned ~2%.** `MmaPV_is_RS`, `LPT`, pipeline depth, cp.async vs
+TMA, page 1 vs 128, SM budget -- all constant-factor knobs, and **none can change an
+exponent**. Each was correctly measured and uninformative. Procedural lesson: measure the
+exponent before hunting constants; a five-point KV sweep costs minutes.
+
+**RETRACTED: the 400 TFLOP/s peak behind every roofline figure in the docs.** H200 SXM bf16
+dense peak is **989.4 TFLOP/s**. Recomputed, FA2 achieves 325 TFLOP/s = **33% of peak**, not
+the "1.2x off roofline, essentially at peak" claimed in v0.10.0; fixed FA3 achieves
+443 TFLOP/s = 45%, above FA2. The earlier "39x off roofline" was ~95x.
+
+Consequence: **priority item 1 is reopened on its explanation.** The flat FA2 K/V-pipelining
+measurement (depths 2/3/4 within 0.5%) stands, but it was explained by FA2 being at roofline,
+which is false at 33% of peak. The flatness is unexplained.
+
+This is the fifth bug of one class in this port -- per-request vs per-item, or q vs k, given
+to a parameter wanting the other. The other four were found by which rows were wrong; this one
+produced no wrong rows and was reachable only through a scaling measurement.
+
+flashinfer `e4dfa82`, sglang `7749120b2`.
+Command: `/dev/shm/w/verify.sh` on vibecuda trial `444d5bc154bd9050`.
+
 ## v0.10.0 — The FA3 trait audit is worth 2.4%, not 31x; FA2 pipelining is flat; two gates were never gating (2026-10-06)
 
 Ten-arm A/B on a rebuilt pod (trial `444d5bc154bd9050`), `drivers/ab_fa3_traits.sh`,

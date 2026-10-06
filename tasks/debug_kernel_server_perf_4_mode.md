@@ -6765,10 +6765,29 @@ running kernel -- the trace run established that edits take effect once `cached_
 cleared. Default restored to **1**, which matches `partial_o` and the plan's per-tile
 `partial_indptr` and is correct on its own terms.
 
-Two arms still owed a valid re-run: `PI_ZERO` (`scheduler.cuh`) and `NO_JIT_REDUCE`. Note
-`NO_JIT_REDUCE` sets `P.group_id` in the **ext's** params, which do not feed
-`BatchAttention.run()`, so re-running it needs the FA2 rows routed through the ext's own
-runners first -- it is not merely a cache-clearing issue.
+**`PI_ZERO` re-run and also genuinely eliminated.** Same method -- header default
+(`FLASHINFER_PI_ZERO_DEFAULT`) plus `cached_ops` cleared:
+
+| `PI_ZERO` | victim rel err |
+|---|---|
+| 0 (upstream: `partial_indptr = partial_o_nnz` always) | 0.561, 0.520, 0.432 |
+| **1** (zero it for non-split work items) | **0.380, 0.560, 0.482** |
+
+Same distribution. Default restored to **0**, upstream's behaviour, since the change buys
+nothing. So both arms that the JIT-cache defect invalidated reach the *same* conclusions they
+did before -- but they are now supported, and that distinction matters: before this they were
+claims about a kernel that never ran.
+
+**`NO_JIT_REDUCE` cannot be re-run by clearing the cache.** It sets `P.group_id` in the
+**ext's** params, and those params do not feed `BatchAttention.run()`, which is what executes
+the FA2 rows. Testing it requires routing the FA2 rows through the ext's own runners first --
+a structural change, not a cache clear. Until then its earlier result (both reducers corrupt)
+is **unsupported**, and with it the claim that the whole reduction path is exonerated. That
+claim should be treated as open.
+
+**Net effect of the JIT-cache discovery on the candidate list:** two candidates return as
+*confirmed* eliminations, one (`NO_JIT_REDUCE`, and the reduction-path exoneration that rested
+on it) returns to *open*. The reduction machinery is therefore back on the suspect list.
 
 **First real data from the trace, on the victim's work items:**
 

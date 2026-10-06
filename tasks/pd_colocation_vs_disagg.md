@@ -57,6 +57,53 @@ SM-pre-assignment kernel ends up slower, the scheduling story survives; if it
 wins, the story gets a throughput term as well. Keeping those separate is what
 stops this document from being contingent on an unfinished kernel.
 
+### Update 2026-10-06: two executors, and why that *helps* the predictability argument
+
+The single-kernel design was abandoned on measurement, not preference. Co-residency
+constrains it twice, and neither constraint comes from either role's own work:
+
+- **registers** — 384 threads at 1 CTA/SM caps the allocation at 170/thread and the two
+  roles' live ranges share it. Upstream FA3 spills 33 676 B inside the fused kernel
+  against **52 B** compiled alone in the identical template. Outlining the FA2 body
+  takes FA3 to 64 B but moves 17 500 B onto FA2. Halving FA2's O accumulator (8 warps_q,
+  `num_mma_q=1`) takes its isolated spill to **88 B** but only to 1 504 B inside the
+  fused kernel. So one `__global__` can give *either* role its native allocation, never
+  both.
+- **shared memory** — FA3's 98 352 B leaves 134 048 B of the 232 448 B opt-in limit, and
+  the FA2 role's natural tile-16 configuration needs 135 168 B. Over by 1 120 bytes;
+  `cudaFuncSetAttribute` refuses it.
+
+The kernel therefore splits into two executors — flash-attention's FA3 and the
+persistent LPT FA2, each at native geometry (measured standalone at 52 B and **0 B**
+spill, 168 and **255** registers) — ordered by PDL, reading **one** plan. The
+scheduling contribution is unaffected, because all of it lives in the plan rather than
+in sharing a `__global__`: 4-mode tile-class assignment, per-queue split length now
+sized by each queue's executor geometry, the smem-handoff JIT reduction (intra-role, as
+a split row's chunks are all one task's items), and the spec tree-build epilogue.
+
+**Consequence for §3.** The predictability claim gets *stronger*, not weaker. §3 argued
+the EDF predictor is more accurate "because the fused kernel is easier to model". Two
+executors at native geometry are easier still:
+
+- each kernel's cost is a function of its own queue's work, with no register-starvation
+  term that varies with what the other role happens to be compiled alongside;
+- the queue assignment and per-queue chunk length are explicit plan outputs, so the
+  model's inputs are known before the step runs rather than inferred;
+- with PDL the step cost is close to the closed form already fitted at 3.1% MAPE:
+  `T_step ≈ c0 + c1 * tokens + n_layers * (T_fa3 + max(0, T_fa2 - overlap))`, which is
+  the same `max`-plus-residual shape as `max(T_p, T_d) + beta * min(T_p, T_d)`.
+
+What is **given up** is cross-role backfill inside a CTA — which is itself the construct
+that forces both mainloops into one function and causes the 33 676 B — and PDL recovers
+part of it temporally. Cross-role multicast is *not* given up: the measured 1.587x DSMEM
+result is q-tiles of one prefill row re-gathering the same KV, all FA3-role items.
+
+**Still a regression as of this date**, and the figure is worse than the one above on
+the harder fixture: 155.9 us fused against 72.3 us for FA2-on-everything on fixture 2,
+**2.16x**, both numerics-correct from one build. The 1.83x cited above is the
+16 823-token-KV long-prefix fixture, so the gap is workload-dependent and the shorter
+fixture is the harder case. Nothing in §§1-4 depends on this number turning around.
+
 ---
 
 ## 1. Route to the highest cache-hit node first, and let SLO prediction veto it

@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.9.7 — Per-queue split length follows the executor; planning cost is not the bottleneck (2026-10-06)
+
+The scheduler's per-queue split length now accounts for which executor drains that
+queue. The FA2 persistent kernel runs 128 threads at 2 CTAs/SM and the wgmma executor
+384 threads at 1 CTA/SM, so the same SM count gives them different concurrency;
+`kv_len_limit` was being divided by a bare cluster count, under-splitting the FA2 queues
+by 2x against their real slot count. `QUEUE_EXEC` also makes the queue -> executor
+mapping explicit instead of leaving task 3 implicitly special.
+
+The rest of the "unified scheduler" asked for already existed: tile classes are routed
+to queues by packed row count (>= 128 fills a wgmma tile, else 128/64/16), each queue
+gets its own `cluster_len_kv_chunk`, and LPT min-heap assignment runs inside each queue.
+
+**A device-side scheduler is not justified by the evidence.** Measured earlier:
+
+| | tok/s | vs control |
+|---|---|---|
+| control, fused off | 22 203 | - |
+| fused, original wiring | 20 260 | -8.7% |
+| fused, planning deferred + indices reused + plan cached | 20 314 | **-8.5%** |
+
+Removing essentially all host-side planning recovered 0.3%. That measurement had two
+plans per step serving a kernel used on 3.2% of forwards, so the single unified plan's
+per-step cost is still un-isolated -- which is the thing to measure before writing a GPU
+scheduler, rather than assuming either way.
+
 ## v0.9.6 — One kernel can give either role its native registers, never both (2026-10-06)
 
 The Q-split was the experiment that would have kept single-kernel fusion. It does not:

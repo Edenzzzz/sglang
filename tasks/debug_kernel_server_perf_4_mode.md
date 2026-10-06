@@ -502,11 +502,69 @@ have measured the exponent before hunting constants.
 Ruled out as the O(kv) culprit so far: upstream's `load_page_table` (`paged_kv.h:135`) is a
 fixed `#pragma unroll` over `kPageEntryPerThread`, O(1) per block.
 
-**Open: whether the instruction COUNT is quadratic** (an O(kv) loop in the block body) or linear
-with efficiency collapsing. Running `ncu` instruction counts at kv=8192 vs 32768 to settle it;
-combined with the 98.1%-non-mma mix above, a quadratic instruction count would point at
-per-element index or softmax work that rescans KV. Source-line attribution
-(`--section SourceCounters`) is the follow-up that names the lines.
+**The instruction count is quadratic in EVERY pipe, including tensor.** `ncu` at kv=10 240 vs
+34 816 (a 3.40x KV ratio):
+
+| pipe | ratio | exponent |
+|---|---|---|
+| total | 11.44x | 1.99 |
+| **tensor** | 11.56x | **2.00** |
+| ALU | 11.34x | 1.98 |
+| FMA | 11.50x | 2.00 |
+
+The **mma count itself** is quadratic, so this is not extra scalar work -- the whole mainloop
+runs kv-proportionally too many times. Since the n-block count must be proportional to KV, the
+**m-block** count has to be too, despite q being fixed.
+
+<a id="fa3-root-cause-seqused"></a>
+### ROOT CAUSE: the scheduler was handed `seqused_k` where it needs the QUERY length — 2026-10-06
+
+`MakeUpstreamOwnSchedArgs` passed `p.seqused_k` into `TileSchedulerArguments::seqused`. That
+field is the **query** length per request, and the scheduler feeds it straight into
+
+    num_m_blocks = ceil_div(seqused[b] * qhead_per_khead, kBlockM)
+
+(`tile_scheduler.hpp:599-621`, the `Prepared=false` branch). So m-blocks were sized from the KV
+length:
+
+| kv | m_blocks emitted | correct (q=2048) | bloat | measured gap |
+|---|---|---|---|---|
+| 10 240 | 560 | 112 | 5.0x | |
+| 18 432 | 1 008 | 112 | 9.0x | **8.1x** |
+| 34 816 | 1 904 | 112 | 17.0x | |
+| 67 584 | 3 696 | 112 | 33.0x | |
+| 100 352 | 5 488 | 112 | 49.0x | |
+| ~84 000 (TraceLab mean) | 4 592 | 112 | 41.0x | **39x** |
+
+Multiplied by the n-block count, which is itself proportional to KV, total work becomes
+`Theta(kv^2)`. The model predicts both the exponent (2.00, measured 1.98-2.00 in every pipe)
+and the constant (41x predicted against 39x measured on TraceLab), so this is the whole effect,
+not a contributor to it.
+
+**Why it survived every correctness gate.** The surplus m-blocks address q rows past the
+request's end, which the epilogue masks. The output was always *correct*; only the time was
+wrong. A kernel that is 31x slow and bit-accurate defeats a numerics-only validity gate, which
+is exactly the gate this work was using.
+
+**Why six hypotheses in a row returned ~2%.** Traits (`MmaPV_is_RS`, `LPT`), pipeline depth,
+gather granularity (cp.async vs TMA, page 1 vs 128) and SM budget are all *constant-factor*
+knobs. **None of them can change an exponent.** Every one of them had to measure ~2% against a
+quadratic, and each ~2% result was correctly measured and completely uninformative about the
+cause. The lesson is procedural: **measure the exponent before hunting constants.** A
+five-point KV sweep costs minutes and would have redirected this investigation at the start.
+
+**The fix** passes `nullptr` instead of a `seqused_q` array: with `seqused == nullptr` the
+scheduler differences `cu_seqlens` (`tile_scheduler.hpp:610-613`), and `cu_seqlens_q` is already
+supplied and already per-request, so it yields the exact query length with no new buffer. The
+mainloop keeps receiving `seqused_k` through its own arguments; this was only the scheduler's
+copy. flashinfer `e4dfa82`.
+
+**Fifth bug of this class in the port** -- per-request vs per-item, or q vs k, handed to a
+parameter that wanted the other. See [upstream FA3 param mismatches](#upstream-fa3-param-mismatches).
+Four were found by which rows were wrong; this one produced no wrong rows at all and was only
+reachable through a scaling measurement.
+
+
 
 **Earlier framing, now superseded**, and what is now known about it is narrower than before:
 not the gather (TMA measured slower), not pipeline depth (2 is upstream's and 3 barely fits),

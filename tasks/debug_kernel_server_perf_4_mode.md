@@ -4764,6 +4764,35 @@ Q and KV *descriptions* rather than their indexing:
 Both are checkable without a GPU by printing the strides the dispatch assembles against
 the tensor's actual strides, which is the next step and is cheaper than another arm.
 
+**ROOT CAUSE FOUND, without a GPU — the KV page stride was 0.** `shape_K` is
+`{page_size, head_dim, num_kv_heads, num_pages}`, so the fourth element of `stride_K` is
+the stride over **pages**, and the dispatch passed `0`:
+
+    {p.page_size, p.head_dim, p.num_kv_heads, p.num_pages},   // shape_K
+    {p.kv_stride_tok, _1{}, p.kv_stride_head, 0},             // stride_K  <-- page = 0
+
+Upstream indexes `K[page_token, d, kv_head, page]`, so a zero page stride makes every
+lookup read the first page. Same tuple for V. `kv_stride_page` was computed in the
+dispatch as `k_stride_n * page_size` and then **never referenced**.
+
+This accounts for all the evidence rather than part of it, which is what distinguishes it
+from the two refuted guesses: a single aliased KV source corrupts the whole wgmma path
+**uniformly** and touches nothing the FA2 executor reads — matching every wgmma row wrong
+by ~10x and equally, the FA2 decode row exact to 5e-4, at one split, with the split path,
+the combine, the partial layouts, the varlen descriptors, the page-table scatter and the Q
+tile index each independently eliminated.
+
+Two process points, since both refuted guesses shared one cause:
+
+- Both were reasoning from upstream's *conventions* instead of reading what our code
+  passes. One grep of the field settles each in seconds; the `m_block` guess cost a
+  15-minute build and an illegal-access fault, and the plan's own comment already said
+  `q_start` was request-local.
+- A positional tuple hid this for five rounds. `{kv_stride_tok, _1{}, kv_stride_head, 0}`
+  reads as complete, and the unused `kv_stride_page` field was visible evidence the whole
+  time. **Grep every field of a POD for use before assuming the tuple that consumes it is
+  right.**
+
 ### Co-residency constrains the fused kernel twice: registers AND shared memory — 2026-10-06
 
 The Q-split arm never reached the kernel. It failed at

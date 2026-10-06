@@ -6736,10 +6736,35 @@ the running kernel -- a printed marker, a changed smem size, a deliberate crash.
 and the number moved/did not move" is not evidence the switch took effect. This is the fourth
 instance this session of a check not touching the thing under test, and the most costly.
 
-**Next, before any further elimination:** determine which kernel actually executes the FA2
-rows under `TWO_EXEC=1`, and get the switches into *that* build -- either by forcing a JIT
-cache rebuild (clear `~/.cache/flashinfer/90a`) or by routing the FA2 rows through the ext's
-own runners instead of `BatchAttention.run()`. Until then, no FA2-side arm is interpretable.
+**CONFIRMED and FIXED: clearing the JIT cache makes edits take effect.** Deleting
+`~/.cache/flashinfer/90a/cached_ops` (the compiled `.so` only -- **keep `generated/`**, which
+the harness globs for its include path) and rerunning produced **3 616 trace lines** where the
+same build produced **0** before. So:
+
+- the stale JIT module was the reason, confirmed by a positive control rather than inferred;
+- **`rm -rf ~/.cache/flashinfer/90a/cached_ops` is now mandatory before any FA2-side arm**,
+  and every such arm needs a marker proving the switch reached the running kernel;
+- the trace had to be made **unconditional** (`#if 1`) because the JIT module never receives
+  our `-D` flags -- an `#if`'d switch stays inert there even after a rebuild. That is a
+  diagnostic edit to revert, marked `TEMPORARILY UNCONDITIONAL` in the source.
+
+**Three arms must be re-run before they count as eliminations:** `LSE_TILE_REL`, `PI_ZERO`,
+`NO_JIT_REDUCE`.
+
+**First real data from the trace, on the victim's work items:**
+
+    work=9  q_indptr=1 q_len=512 packed_qo_start=512  kv_indptr=9 kv_len=1024
+            kv_start=0 kv_end=256 kvh=1 chunk=0 nchunks=4
+
+The victim is split into **4 chunks of 256** (`len_kv_chunk=256` for its task here), which
+again contradicts the earlier "the follower does not split" reading and matches the plan dump.
+`q_indptr=1`, `kv_indptr=9` and `q_len=512` are all correct.
+
+**Caveat on my own first pass at the analysis:** the "8 duplicates per work item" the script
+reported is **not** a finding. The harness launches the kernel several times (numerics checks
+at multiple `sm_split` values, then timing) and the `sort | uniq -c` collapsed across launches.
+Per-launch separation is needed before any claim about double execution -- the trace should
+carry a launch counter.
 
 ## Split-row race: consolidated state — 2026-10-06
 

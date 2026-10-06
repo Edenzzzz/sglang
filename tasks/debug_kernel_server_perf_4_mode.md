@@ -4520,6 +4520,32 @@ s = 1.7-2.4 that is f > 0.40-0.48. At f = 0.9, s = 2.0 the attention-side gain i
 and short of the 30% bar, which is why the register fix (3x -> 1.38x) matters.
 
 <a id="why-fused-is-slow"></a>
+### What parity means on a SPLIT batch — 2026-10-06
+
+flash-attention's own split-KV path is **two kernel launches**: the attention
+kernel writes float partials, and `flash_fwd_combine_kernel.h` reduces them in a
+separate pass (`run_mha_fwd_combine`). Our port inherits that structure, since it
+instantiates upstream's mainloop and epilogue with `Split=true` -- and it does
+**not** launch the combine kernel, which is why `max_splits_fa3 > 1` currently means
+the wgmma role's partials are never reduced.
+
+This resolves what looked like a conflict between tasks 1 and 2. Parity with
+flash-attention on a split batch does not require the in-kernel JIT reduction: it
+requires *a* reduction, and upstream's own answer is a second launch. So the
+sequence is
+
+1. validate the port where the plan does not split (`max_splits_fa3 == 1`), which
+   isolates the mainloop and epilogue;
+2. make split batches correct, either by launching upstream's combine kernel (the
+   faithful baseline, and the fair comparison against flash-attention, which pays
+   the same second launch) or by our JIT reduction;
+3. the JIT reduction is then an **improvement over** the parity reference, not a
+   precondition for it -- it removes the second launch and the global round-trip
+   that upstream pays, which is the actual claim worth making.
+
+Recording this because it changes what the parity number has to be measured
+against: a two-launch flash-attention baseline, not a single-kernel one.
+
 ### The two roles' register costs, separated — 2026-10-06
 
 Five `-Xptxas -v` builds, every spill attributed to a named function, holding the

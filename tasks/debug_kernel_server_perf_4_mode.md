@@ -4700,6 +4700,48 @@ exactly this case, and the bug was passing the whole-batch default instead. Wort
 the pattern -- all three faults were "upstream has a field for the subset/per-item case
 and I handed it the aggregate".
 
+### The whole KV-range chain is verified; the -1 page padding is what is left — 2026-10-06
+
+Read end to end, no GPU needed:
+
+- `block.h:23` -- `n_block_max = ceil_div(seqlen_k, kBlockN)`, and with `Is_causal` and
+  `Is_local` both false for this path nothing narrows it, so an unsplit tile gets the full
+  KV range;
+- `block.h:47-54` -- at `num_splits_actual == 1` the split arithmetic is the identity:
+  `num_n_blocks_per_split = n_block_max - n_block_min`, so `n_block_min` is unchanged and
+  `n_block_max` clamps to itself;
+- `seqlen.h:52` -- `seqlen_k = seqused_k ? seqused_k[bidb] : ...`, which is our
+  `kv_lens_per_req`, and `seqlen_q` falls back to
+  `cu_seqlens_q[bidb+1] - cu_seqlens_q[bidb]`, which is our true per-request `q_indptr`.
+
+So every link from our descriptors to the KV block range is correct. Ten candidates are now
+eliminated.
+
+**What that leaves is the dense page table's -1 padding.** For row 0, `seqlen_k = 200` and
+`kBlockN = 128`, so `n_block_max = 2` and block 1 spans KV positions 128..255 -- but only
+128..199 exist. The table is padded with **-1** (deliberately, since 0 is a valid page id),
+so the paged gather for that block requests pages 200..255 and finds -1. Upstream masks the
+out-of-range *logits* by `seqlen_k`, which keeps the softmax correct, but the gather itself
+still dereferences the padded entries: address = base + (-1) * page_stride.
+
+That is consistent with the signature in a way nothing else left is: the excess is small
+(rel err 0.52-0.70, not orders of magnitude), one-directional (absmax always above the
+reference), present on every wgmma row, and absent on FA2 rows -- which gather through
+flashinfer's own path and never see this table.
+
+Two checks, in order, both cheap:
+
+1. What does upstream pad its own page table with? `flash_api.cpp` builds
+   `page_table` for the paged path; if it pads with 0 or with a clamped last valid page
+   rather than -1, our -1 is simply the wrong sentinel and the fix is one line in
+   `ScatterRaggedPageTable`.
+2. Failing that, size `max_pages_per_seq` per request instead of to the batch maximum, so
+   no block extends past a request's real pages. For this fixture that is 2 pages for row 0
+   against the current 5469, which would make the problem disappear and confirm it.
+
+Note the first fix would also be the cheaper one to carry into serving, where
+`max_pages_per_seq` is the batch maximum and most requests are far shorter.
+
 ### The plan and the split encoding are both verified correct — 2026-10-06
 
 Item dump on the failing fixture, against a prediction stated beforehand

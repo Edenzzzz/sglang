@@ -1,77 +1,51 @@
 #!/bin/bash
-# Step 2 of provisioning: the flashinfer and sglang trees.
+# Step 2 of provisioning: the source trees the fused/split kernel builds against.
 #
-# DOES NOT WORK as written, and the reason is recorded rather than patched over.
+# Rewritten 2026-10-06 after the third trial expiry. The previous version cloned
+# UPSTREAM flashinfer, which is not API-compatible with the fork this work uses
+# (`BatchAttention(workspace, kv_layout)` differs, and upstream has gained
+# apache-tvm-ffi), so it never actually restored a usable tree.
 #
-# Cloning upstream flashinfer and overlaying the changed files was an attempt to
-# avoid pushing a large tree through the webshell. Upstream is NOT API-compatible
-# with the fork this work uses: `BatchAttention(workspace, kv_layout)` in the fork
-# against a different signature upstream, which fails immediately with
-# "TypeError: attribute name must be string, not 'Tensor'". Upstream has also
-# gained dependencies the fork does not have (apache-tvm-ffi).
-#
-# So the fork's own include/, csrc/, tests/ and python package are required, and
-# a durable tarball of them is the actual fix. The eight-file overlay only works
-# on top of the fork.
+# Division of labour, by size:
+#   pushed from the dev box  : the flashinfer FORK's include/csrc/tests/package (~1.9 MB)
+#                              and sglang's python/ (~5.8 MB) -- small enough for the
+#                              webshell's ~60 KB-per-call base64 channel
+#   cloned here, at a PINNED SHA : cutlass (151 MB) and flash-attention, which are
+#                              unmodified upstream and must not drift, since a different
+#                              cutlass silently changes codegen and makes numbers
+#                              incomparable with earlier runs
 set -ex
 W=/dev/shm/w
 . $W/venv/bin/activate
 
-# flashinfer: the fused kernel needs include/, csrc/ and 3rdparty/cutlass
-if [ ! -d $W/fi/include ]; then
-  git clone --depth 50 https://github.com/flashinfer-ai/flashinfer $W/fi
-  cd $W/fi && git submodule update --init --depth 1 3rdparty/cutlass
+CUTLASS_SHA=a49a78ffefc86a87160dfe0ccc3a3a2d1622c918
+FA_SHA=e9515d5dee6ade134a33d6020d38d01ef0596996
+
+# `git fetch --depth 1 <sha>` is REJECTED by GitHub for an arbitrary SHA (the server must
+# allow reachable-sha1-in-want, and it does not), which cost a cycle last time. A
+# blob-filtered full clone plus a checkout is the form that works and still avoids pulling
+# every blob in history.
+if [ ! -d $W/fi/3rdparty/cutlass/include ]; then
+  mkdir -p $W/fi/3rdparty
+  git clone --filter=blob:none --no-checkout \
+      https://github.com/NVIDIA/cutlass $W/fi/3rdparty/cutlass
+  git -C $W/fi/3rdparty/cutlass checkout $CUTLASS_SHA
 fi
 
-# sglang: only the python tree is used, via PYTHONPATH
-if [ ! -d $W/python/sglang ]; then
-  git clone --depth 50 https://github.com/sgl-project/sglang $W/sgl_src
-  cp -r $W/sgl_src/python $W/python
+if [ ! -d $W/flash-attention/hopper ]; then
+  git clone --filter=blob:none --no-checkout \
+      https://github.com/Dao-AILab/flash-attention $W/flash-attention
+  git -C $W/flash-attention checkout $FA_SHA
 fi
 
-echo "TREESDONE  overlay next: bash tests/sync_to_pod.sh from the local checkout,"
-echo "then push python/sglang/srt/layers/attention/{flashinfer_backend,mixed_dispatch}.py,"
-echo "python/sglang/srt/managers/scheduler.py and python/sglang/srt/speculative/eagle_worker.py"
+# The fork's own trees arrive by push; fail loudly rather than silently building against
+# a half-restored tree, which is how a run gets measured on the wrong base.
+for p in $W/fi/include/flashinfer $W/fi/tests $W/python/sglang; do
+  [ -d "$p" ] || { echo "MISSING $p -- push it from the dev box (drivers/px.py)"; exit 1; }
+done
 
-# --- Pushing the fork's tree (the approach that actually works) -------------
-#
-#   tar czf fork_core.tgz include csrc flashinfer tests     # 1.9 MB compressed
-#   base64 -w0 | split into ~90 KB chunks                   # webshell arg limit
-#   per chunk: printf %s '<chunk>' >> /dev/shm/fork.b64
-#   base64 -d | tar xzf - -C /dev/shm/w/fi
-#
-# Two traps, both hit:
-#
-# 1. `flashinfer/data/` holds ABSOLUTE symlinks into the local checkout
-#    (`csrc -> /opt/tiger/flashinfer/csrc`, same for cutlass). They survive the
-#    tar and point at nothing on the pod, and the package then dies at import
-#    with `FileExistsError: .../flashinfer/data/csrc` when it tries to recreate
-#    them. Do NOT simply delete them -- the package reads
-#    `flashinfer/data/csrc/*.jinja` through that path. RE-POINT them at the pod:
-#      ln -sfn /dev/shm/w/fi/{csrc,include,3rdparty/cutlass} \
-#              /dev/shm/w/fi/flashinfer/data/{csrc,include,cutlass}
-# 2. Clear `~/.cache/flashinfer` after replacing the tree, or the JIT serves
-#    objects built against the previous headers.
-
-# --- Remaining gaps in the restore, as of 2026-10-05 13:35 -----------------
-#
-# The chunked push landed 805 files (include, csrc, flashinfer, tests) and the
-# byte count matched exactly, but the environment is still not serving. Three
-# things are known to be missing or unverified, in the order they block:
-#
-# 1. 3rdparty/spdlog was never pushed. flashinfer/data/spdlog still points at
-#    /opt/tiger/flashinfer/3rdparty/spdlog, which does not exist on the pod, and
-#    the ext build includes it. It is 1.6 MB, so push it the same way:
-#      tar czf spdlog.tgz 3rdparty/spdlog   # then chunked base64 as above
-#
-# 2. flashinfer/data/{spdlog,tvm_binding} still carry absolute local symlinks.
-#    Re-point or remove them along with csrc/include/cutlass.
-#
-# 3. `flashinfer/data/csrc/batch_attention_customize_config.jinja` was not
-#    readable after re-pointing, although the file exists in the fork's csrc/ and
-#    the tar included it. Verify directly that /dev/shm/w/fi/csrc contains it --
-#    if it does, the symlink is wrong; if it does not, the extraction did not
-#    replace csrc and the push needs redoing with the directory removed first.
-#
-# Nothing here is conceptual; it is all mechanical, and it is written down so the
-# next session starts from step 1 instead of rediscovering the chain.
+# fa3_upstream.cuh includes flash-attention by a ../../../../../ relative path, so the
+# layout matters as much as the contents.
+test -f $W/flash-attention/hopper/flash_fwd_kernel_sm90.h
+test -f $W/fi/3rdparty/cutlass/include/cutlass/cutlass.h
+echo TREESDONE

@@ -208,6 +208,46 @@ confirm the pointer is ignored; (2) size `partial_o` with the `num_splits` facto
 since the current buffer is a latent heap overflow the moment splits do take effect;
 (3) only then re-measure long KV.
 
+### FA3 is 31x SLOWER than FA2 at realistic context, and the 1.21x does not generalise — 2026-10-06
+
+TraceLab-shaped batch at one H200's token budget (1.58M KV, 64-100K contexts, 2048-token
+appends off the 3812-token mean, 18 decode rows, chat + math co-tenants). All rows correct in
+both arms.
+
+| arm | total | fa3 half | fa2 half |
+|---|---|---|---|
+| baseline, FA2 on everything | **15 364 us** | 7.0 | 15 301 |
+| split, appends to FA3 | **476 581 us** | **477 949** | 1 238 |
+
+**FA3 takes 478 ms for work FA2 does in 15.3 ms — 31x slower.** Against roofline: FA3 is
+**155x** off on 1.23 TFLOP of work, FA2 is **5x** off on the same rows plus the rest of the
+batch. So this is not a tuning gap, it is a structural one.
+
+**The cause is `page_size = 1` on upstream's non-TMA paged path.** We instantiate with
+`PagedKVNonTMA=true`, so KV is gathered with `cp.async` through the page table, and sglang
+pages at **token** granularity. The gather therefore performs one index lookup per KV token:
+512 of them on the old fixtures, **100 352** on this one. flashinfer's FA2 gather is written
+for `page_size=1`; upstream's is written for real pages where the load is contiguous within a
+page.
+
+**This retracts the significance of the 1.21x.** That number came from rows at `kv=512`, where
+the per-token lookup cost is negligible. It does not survive to the target workload, and
+quoting it as a win for agentic serving would have been wrong. The honest statement is: the
+split wins on short-KV batches and loses badly on long-KV ones, because of the gather, not
+because of the mainloop.
+
+**Two routes, and they converge.**
+
+- **Larger `page_size` for the FA3 executor.** Gathers whole pages contiguously. Needs the
+  executor to see a different page size than the rest of sglang, or sglang to page coarser.
+- **Upstream's TMA paged path (`PagedKVNonTMA=false`).** Upstream supports it when a page
+  table is supplied (`mainloop_fwd_sm90:536`), and `Use_TMA_KV = !PagedKVNonTMA` — so this is
+  also the prerequisite the multicast item needs, since TMA multicast only applies to TMA
+  loads. One change unblocks both.
+
+Next: switch the FA3 executor to `PagedKVNonTMA=false` and re-measure this exact batch. If TMA
+paged requires `page_size > 1`, the two routes are the same change.
+
 ## Kernel optimisations — 2026-10-06
 
 One line each; the evidence is in the linked detail section. Every item must be tested on

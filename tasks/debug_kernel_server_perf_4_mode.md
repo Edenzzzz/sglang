@@ -1532,7 +1532,21 @@ One line each; the evidence is in the linked detail section. Every item must be 
       split-heavy shapes (few q rows, long KV); every fixture used so far has
       `num_splits=1`, where it saves nothing.
       [detail](#what-parity-means-on-a-split-batch--2026-10-06)
-- [ ] **DSMEM / KV multicast** — 1.33-1.59x in isolation. **No TMA prerequisite**: DSMEM
+- [ ] **DSMEM / KV multicast** — the real prerequisite, found 2026-10-07: **our FA3 launcher
+      does not launch clusters at all.** `LaunchUpstreamFA3OwnSched` ends in a plain
+      `kernel<<<grid, block, smem_size, stream>>>` (`fa3_upstream.cuh`), and DSMEM requires a
+      cluster, so `mapa.shared::cluster` has nothing to address. Upstream launches via
+      `cutlass::launch_kernel_on_cluster(launch_params, kernel, kernel_params)`
+      (`flash_fwd_launch_template.h:189`) precisely because its `ClusterShape` can exceed 1;
+      our alias hardcodes `cute::Shape<_1,_1,_1>`.
+      So the work is, in order: (1) make `ClusterShape` switchable in `UpstreamFA3Mainloop`;
+      (2) replace the plain launch with `launch_kernel_on_cluster` when the cluster is > 1;
+      (3) verify a cluster-2 run is still numerically correct and measure it as an FA3-vs-FA3
+      arm -- a cluster alone changes scheduling, so that cost must be known before multicast
+      is layered on; (4) only then add the peer-smem KV read.
+      This is mechanical rather than exploratory, and it is the one FA3-side item with a
+      plausibly large payoff left (recorded 1.33-1.59x in isolation).
+- [ ] **(superseded) DSMEM / KV multicast, TMA framing** — 1.33-1.59x in isolation. **No TMA prerequisite**: DSMEM
       peer reads (`mapa.shared::cluster`) work regardless of how KV reached smem, so one CTA
       can `cp.async` the KV block and the rest of the cluster reads it from that CTA's smem.
       TMA multicast is one *implementation*, not a requirement, and since cp.async beats TMA

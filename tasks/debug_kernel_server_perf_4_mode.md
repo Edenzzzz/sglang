@@ -6764,9 +6764,19 @@ writing the same `final_o` rows with no ordering between them -- or a read of `f
 1. Try to reproduce with a **3-task** plan (`FLASHINFER_FA3_TASK` unset, `UNIFIED=0` is not
    available because that path no longer compiles -- it references `wgmma_plan`). If it
    reproduces, the fault is in flashinfer's kernel, not our plan, and upstream can own it.
-2. ~~`compute-sanitizer --tool racecheck`~~ -- **done, clean**. No shared-memory hazard.
-   `--tool memcheck` is the remaining sanitizer worth running, for an out-of-bounds global
-   write rather than a race.
+2. ~~`compute-sanitizer --tool racecheck`~~ and ~~`--tool memcheck`~~ -- **both done, both
+   clean**. racecheck: no shared-memory hazard. memcheck: `ERROR SUMMARY: 0 errors`, i.e. no
+   out-of-bounds or misaligned global access. The corruption reproduced under each
+   (0.568 and 0.487 respectively), so neither is a case of the tool not attaching -- the
+   instrumented runs were 1400x and 22x slower than normal.
+
+   **Together these are a strong joint constraint:** the damaging write is *in bounds* and
+   *not racing on shared memory*, so it is a correct-looking store to the **wrong rows** --
+   an indexing or work-assignment fault, not a memory-safety or synchronisation one. Note the
+   tension with the nondeterminism (eight runs, eight errors): an indexing fault that is
+   nondeterministic means the *index* varies run to run, which points at something derived
+   from scheduling order -- which CTA picked up which work item -- rather than from the plan,
+   which is known correct and identical between runs.
 3. If racecheck is clean, instrument the victim's work items to record which `(q_start,
    kv_start, kv_head)` each CTA actually executed, and diff against the plan -- the plan is
    known good, so a divergence localises the work-distribution side.

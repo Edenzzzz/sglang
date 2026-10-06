@@ -226,7 +226,19 @@ One line each; the evidence is in the linked detail section. Every item must be 
       zero spill, so it is not pipeline-starved, and doubling
       `s_frag[NUM_MMA_Q][NUM_MMA_KV][8]` eats the registers `mma.sync` needs. So this
       optimisation is FA3-only: 6.0% there, nothing here. Switch kept at 2.
-- [ ] **Smem-handoff JIT split-KV reduction** — the contribution over stock on both sides:
+- [ ] **Smem-handoff JIT split-KV reduction — it pays on FA2, not FA3** (2026-10-06). Which
+      shape splits is decided by upstream's heuristic, and on the TraceLab shape it answers
+      cleanly: a 2048-token append at 64K KV already has `4 * ceil(2048*7/128) = 448`
+      m-blocks against `0.8 * 132 = 106`, so no split is needed and the heuristic returns 1.
+      A long-context **decode** row (q=1) has 4 m-blocks against 106, so it must split.
+      Those decode rows route to **FA2** (tile 16, where the class boundary put decode
+      because it is bandwidth-bound), and FA2 reduces its split partials through **global**
+      memory. So the smem handoff is an FA2-side optimisation for long-context decode, and
+      measuring it on FA3 prefill -- which is what every fixture so far did -- can only ever
+      show nothing.
+- [ ] **(context) The same reduction on FA3** — only reachable on low-q/high-KV rows, which
+      the router deliberately sends to FA2. Keep as the comparison point against upstream's
+      combine launch, not as the main claim.
       replaces upstream FA3's separate combine launch and FA2's **global** partial
       round-trip. Intra-role, so no partial crosses executors. Only measurable on
       split-heavy shapes (few q rows, long KV); every fixture used so far has

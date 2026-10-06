@@ -401,9 +401,18 @@ The trait change is still correct and is kept -- it matches upstream, costs no r
 | `rs0` RS=0 stages2 LPT=1 (old) | 476 684 us | - |
 | `rs1` RS=1 stages2 LPT=0 | 465 577 us | -2.3% |
 | `rs1s3` RS=1 stages3 LPT=0 | 472 889 us | -0.8% |
+| `rs1l1` RS=1 stages2 LPT=1 | 472 865 us | -0.8% |
 
 Against a 31x gap, a 2.4% spread means the traits are simply not where the time goes. Keep
-`rs1` (upstream's values, free, frees smem), drop stages=3.
+`rs1` (upstream's values, free, frees smem), drop stages=3. `LPT=0` -- upstream's value for
+non-causal -- is 1.5% faster than the `LPT=1` we had, so the L2-ordering question that could
+not be settled by reading the code resolves in upstream's favour, by the same small margin as
+everything else here.
+
+**All three trait deviations found by the upstream audit were real, and together they are worth
+2.4%.** The audit was worth running -- the deviations existed, `rs1` and `LPT=0` are free, and
+the derivation-not-literal change prevents the next drift -- but it was never capable of finding
+a 31x. That is the honest summary of this whole line of work.
 
 **So the 31x is still UNEXPLAINED**, and what is now known about it is narrower than before:
 not the gather (TMA measured slower), not pipeline depth (2 is upstream's and 3 barely fits),

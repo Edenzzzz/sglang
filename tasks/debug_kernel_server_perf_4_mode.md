@@ -1259,6 +1259,16 @@ split-heavy shapes.
 <a id="fa3-root-cause-seqused"></a>
 ### ROOT CAUSE: the scheduler was handed `seqused_k` where it needs the QUERY length — 2026-10-06
 
+> **FRAMING CORRECTION (2026-10-07).** The "42.8x" below is **the magnitude of a defect in our
+> port, not a performance gain**, and it should not be quoted as an achievement. Upstream FA3
+> was never 42x slower than FA2 -- that is not a plausible number for a tuned Hopper kernel,
+> and treating it as one is what sent this investigation through six constant-factor
+> hypotheses (traits, pipeline depth, gather granularity, SM budget) that could not possibly
+> produce a 49x m-block inflation. The honest statement: `MakeUpstreamOwnSchedArgs` passed the
+> wrong parameter, FA3 was unusable at long context as a result, and removing it restored
+> roughly what upstream would have done from the start. The only defensible performance claim
+> is **split vs FA2-on-everything, 1.23-1.25x**.
+
 `MakeUpstreamOwnSchedArgs` passed `p.seqused_k` into `TileSchedulerArguments::seqused`. That
 field is the **query** length per request, and the scheduler feeds it straight into
 

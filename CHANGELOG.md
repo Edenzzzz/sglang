@@ -59,6 +59,29 @@ point carries the measurement that would falsify it. None of the four is measure
 **Still no serving data** against the >=30% TTFT/ITL and >=10% throughput bar. Multicast,
 cross-role backfill, the 4-mode MTP run and the EDF comparison are unstarted.
 
+## v0.10.3 — Framing correction: the 42.8x was our bug's size, not a gain (2026-10-07)
+
+Upstream FA3 was never 42x slower than FA2; that is not a plausible figure for a tuned Hopper
+kernel. The 476 ms came entirely from our adapter -- `MakeUpstreamOwnSchedArgs` passing
+`seqused_k` where the scheduler wants the query length, inflating m-blocks up to 49x and making
+the cost `Theta(kv^2)`. So **"FA3's half 42.8x faster" measures the defect, not an
+optimisation**, and v0.10.1/v0.10.2 quote it as a headline result where they should not.
+
+Treating 476 ms as a believable FA3 number is also what cost six hypotheses: traits, pipeline
+depth, gather granularity and SM budget are all constant factors and none can produce a 49x
+work inflation. The exponent should have been measured first, and an implausible baseline
+should have been read as a port bug immediately.
+
+Post-fix sanity check supports that: FA3 now reaches 443 TFLOP/s (45% of H200's 989 peak)
+against FA2's 325 (33%), which is the expected ordering for a wgmma kernel against an
+Ampere-style `mma.sync` one.
+
+**The only defensible performance claim is split vs FA2-on-everything, 1.23-1.25x** (kernel
+batch, not serving). There is still no baseline-FA3 arm; the three-arm driver
+(`drivers/ab_three_arm.sh`, sglang `1d8897736`) exists to supply it, and it is also the test
+for whether further adapter defects remain -- a 49x inflation went undetected because every
+row stayed bit-correct, the surplus m-blocks landing on masked q rows.
+
 ## v0.10.1 — ROOT CAUSE: the scheduler was handed `seqused_k` where it needs the query length; the split now beats FA2 (2026-10-06)
 
 **FA3's long-context slowness was `Theta(kv^2)`, from one wrong argument.**

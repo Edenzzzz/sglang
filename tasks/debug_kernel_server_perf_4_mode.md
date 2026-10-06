@@ -44,6 +44,47 @@ read from per-work-item arrays (fixing this took fixture 2 from 439/512 unwritte
 executor's correct rows (an FA2 decode row went 5.8e-4 → 0.155). The third fix is
 written and under test.
 
+### RETRACTED: FA3's cost is not fixed, and there is no overlap headroom — 2026-10-06
+
+SM-budget sweep on `qo:512,512,100,1`, concurrent streams, every arm PASSing:
+
+| FA3 SM budget | fa3 half | split total |
+|---|---|---|
+| 16 | 223.7 us | 234.7 |
+| 32 | 119.4 us | 127.3 |
+| 64 | 74.9 us | 112.0 |
+| 96 | 60.0 us | 115.1 |
+| 132 uncapped | 45.9 us | 111-112 |
+| **sequential, no overlap** | **45.9 us** | **80.7** |
+| baseline, FA2 all | - | 94.0 |
+
+**Two of my claims are wrong and are withdrawn.**
+
+1. *"FA3's cost is nearly flat in work, so most of it is fixed launch and handshake
+   overhead."* No. fa3_half scales near-inversely with the SM budget, so FA3 uses its SMs
+   productively. The flatness I saw (38.2 us at ~28 tiles, 45.2 at ~64) was **parallelism**:
+   at 132 SMs with fewer than ~132 tiles, extra tiles are nearly free because they run
+   concurrently. I fitted a cost floor to two points on a parallel-scaling curve -- the
+   same error I had just flagged as a risk before running the sweep.
+2. *"The halves are independent, so overlap floors at max(45.9, 33.5) ~ 45 us, about 2.1x."*
+   Withdrawn. Overlap requires at least one kernel to leave SMs idle, and neither does.
+   Concurrency loses at every budget, 112-235 us against 80.7 sequential, because splitting
+   the machine makes each kernel proportionally slower. **Sequential is optimal here**, and
+   the 1.19x is the result rather than a stepping stone.
+
+**What the sweep does establish, and it is the number the goal asked for.** Decomposing the
+baseline: FA2 does all four rows in 94.0 us and the two FA2-only rows in 33.5 us, so FA2 on
+the prefill rows costs about **60.5 us against FA3's 45.9 us**. FA3 is **1.32x faster than
+FA2 on its own tile class**, which is per-role parity met and exceeded -- and it is the
+mechanism behind the 1.19x end-to-end split win.
+
+**Consequence for the design.** The SM split is not a throughput knob on these batch sizes;
+it is only a *latency policy* knob, which is where EDF plugs in -- capping FA3 trades prefill
+throughput for decode latency, and the sweep quantifies the exchange rate (budget 64 costs
+FA3 1.63x for 68 SMs handed to decode). Rung 1 of the ladder is therefore not "add
+admission control for overlap" but "decide the cap from predicted deadlines", and rungs 2-4
+(smem-handoff reduction, DSMEM multicast, spec epilogue) are unaffected.
+
 ### TWO EXECUTORS BEAT FA2-ON-EVERYTHING, AND PASS — 2026-10-06
 
 sglang `d9be55b53`, flashinfer `c035c23`. Baseline and split measured through the **same** code

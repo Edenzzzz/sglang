@@ -6757,7 +6757,28 @@ Reading them as optimisations against baseline FA3:
   (2 stages, `LPT=0`) stand. `stages=3` fits only because `MmaPV_is_RS=1` frees exactly one
   32 768 B P tile, landing on 232 448 B -- it fits and does not pay.
 
-**Honest scale.** The whole FA3 item set is worth **under 4%** against its own baseline. The
+## FA2 optimisation items, same fixture, same method — 2026-10-07
+
+| arm | total | vs baseline |
+|---|---|---|
+| **`fa2_base`** (`FA2_MMA_KV=2`) | **15 437.0 us** | - |
+| `fa2_kv3` | 15 370.9 us | -0.43% |
+| `fa2_kv4` | 15 366.0 us | -0.46% |
+
+All PASS, 0 unwritten, 0 fallbacks. **Flat at noise level**, which confirms on the fixed
+kernel what the local `SharedStorage` check already showed: `FA2_MMA_KV` sizes the
+register-side `s_frag` accumulator, not the KV pipeline depth (133 120 B at N = 2, 3, 4). So
+item 1, K/V pipelining on FA2, is **still untested** -- it needs the real staging-depth knob,
+and a candidate knob must be shown to move `SharedStorage` before any arm is spent on it.
+
+**Routing rationale, stated once and not as an optimisation claim.** On this fixture both
+executors do *identical* work -- the same two append rows -- and FA3 takes **11 164 us**
+against FA2's **15 437 us**. That ratio is why the split routes appends to FA3, and it is the
+mechanism behind the 1.239x the split shows on the full mixed batch. It is a routing fact, not
+a per-executor optimisation result.
+
+**Honest scale.** The whole FA3 item set is worth **under 4%** against its own baseline, and
+the FA2 item set is worth **nothing measurable**. The
 publishability bar is >=30% TTFT/ITL and >=10% throughput. Nothing in this list approaches it,
 and the items were the plan for getting there. The only large number in this work remains the
 `seqused` fix, which was repairing my own port defect rather than an optimisation.

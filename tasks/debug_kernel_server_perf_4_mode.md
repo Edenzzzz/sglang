@@ -7072,7 +7072,33 @@ carry a launch counter.
 
 ## Split-row race: consolidated state — 2026-10-06
 
-**Reproducer** (one token flips it, `n_fa3:0`, page 128 or 1, `UNIFIED=1`):
+**BEST REPRODUCER (2026-10-07), replacing the two-row one below.** Decode-only, FA2 only,
+no FA3 executor involved at all:
+
+    qo:1 x N   prefix:65536 x N   n_fa3:0   UNIFIED=1   page 128
+
+    N=2  -> last row 0.058      N=8  -> last row 0.137
+    N=4  -> last row 0.100      N=18 -> last row 0.367
+
+Row 0 is clean (~0.003) at every N. Rows are **identical**, so nothing varies but how many
+split rows precede. 17 of 18 rows fail at N=18, against 0.021-0.031 on the mixed batch -- a
+far stronger signal, and it removes FA3, the split and the task-class question from the
+picture entirely.
+
+**What it says about the mechanism:** the damage is **cumulative in the number of preceding
+split rows**, not positional and not a single mis-index. The only quantity that accumulates
+that way is the partial-buffer cursor: the plan advances `partial_o_nnz` by
+`row_tile_size * num_kv_tiles` per split row, and each row's merge reads its partials back
+through `partial_indptr` plus a stride built from `num_kv_chunks`. A mismatch between the
+*host's* `num_kv_tiles`/`kv_len_limit` and the *device's* `num_kv_chunks`/`len_kv_chunk` would
+stride each row's partials slightly wrong and compound across rows -- which is exactly the
+observed shape. **That pair is the thing to instrument next:** print both per work item and
+compare, on this fixture, at N=2 and N=18.
+
+Note the earlier `PI_ZERO` arm cannot have tested this: it zeroed `partial_indptr` only for
+**non-split** items, and here every item splits.
+
+**Superseded reproducer** (one token flips it, `n_fa3:0`, page 128 or 1, `UNIFIED=1`):
 
     FAIL  qo:1,512   prefix:65536,0     victim rel err 0.58-0.85, varies per run
     PASS  qo:512,1   prefix:0,65536     both rows correct

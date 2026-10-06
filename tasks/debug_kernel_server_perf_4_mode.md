@@ -848,8 +848,39 @@ victim is fine whenever it is the first row (nothing consumed clusters ahead of 
 two unsplit rows are fine (a single unsplit row generates few work items and both rows live in
 task 3, sharing one cursor).
 
-**The live candidate is therefore the per-task cluster-slot/cursor computation**, not any plan
-array. `num_pers_clusters = 132` and the plan carries a `cluster_cursor_offset`; the next
+**SHARPENED by three more arms -- the rule is REQUEST ORDER of the split row:**
+
+| fixture | split row's request index | `task0` rows |
+|---|---|---|
+| `qo:512,1 prefix:0,65536` | **1 (after)** | both **PASS** (0.00364, 0.00024) |
+| `qo:1,512 prefix:65536,0` | **0 (before)** | **0.845 FAIL** |
+| `qo:1,512,512 prefix:65536,0,0` | **0 (before)** | **both FAIL** (0.625, 0.607) |
+
+**A split row with a lower request index corrupts every subsequent `task0` row.** Two things
+this settles:
+
+- `q_indptr` is **not** the variable: the two victims in the three-row fixture sit at
+  `q_indptr` 1 and 513 and both fail.
+- Cluster consumption alone is **not** sufficient: in the PASS fixture the split row exists and
+  generates the same ~104 work items, yet nothing is corrupted. So the plain
+  "task 2 consumed clusters ahead of task 3" form of the cluster-slot story is **refuted** --
+  the plan iterates tasks in index order regardless of request order, so task 2's consumption
+  is identical in both fixtures.
+
+What remains must be something indexed by **request order across tasks**. The candidates with
+that property are the globally-accumulated arrays built in task order: `merge_indptr`,
+`merge_o_indices` and the per-work-item `partial_indptr` (`o_indptr`). Note the earlier
+`PI_ZERO` experiment only zeroed `partial_indptr` for **non-split** work items, so it did not
+test the split row's own values -- that experiment does not clear this candidate.
+
+**Next measurement:** dump `merge_indptr`, `merge_o_indices` and each task's
+`partial_indptr` for the PASS fixture (`qo:512,1 prefix:0,65536`) and the FAIL one
+(`qo:1,512 prefix:65536,0`) -- the same two-fixture diff that has worked twice now -- and check
+whether the `task0` row's `partial_indptr` or the `merge_o_indices` range overlaps the split
+row's only in the FAIL ordering. The tooling is `dump.py` with changed fixtures.
+
+**Superseded candidate: the per-task cluster-slot/cursor computation**, which the PASS arm
+above refutes in its simple form. `num_pers_clusters = 132` and the plan carries a `cluster_cursor_offset`; the next
 measurement is to dump `cluster_cursor` alongside `work_indptr` for both fixtures and check
 whether the victim's slot values start from zero or continue from task 2's consumption. The
 plan dump already reads these arrays, so this is a fixture change, not new tooling.

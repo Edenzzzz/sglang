@@ -1419,6 +1419,18 @@ class FlashInferAttnBackend(AttentionBackend):
         # (112-235 us against 80.7) because neither executor leaves SMs idle, so there is no
         # overlap to win and splitting the machine only slows both.
         if os.environ.get("SGLANG_TWO_EXEC") == "1":
+            # Refuse rather than fall back. The first serving A/B measured the baseline
+            # against itself because fa3_only_run did not exist in the build and every
+            # forward quietly degraded to the persistent path -- 121 fallbacks read as a
+            # 38.8% TTFT regression of a path that never ran. An arm that cannot run the
+            # thing under test must fail loudly.
+            if not hasattr(torch.ops.fused_fa3, "fa3_only_run"):
+                raise RuntimeError(
+                    "SGLANG_TWO_EXEC=1 but torch.ops.fused_fa3.fa3_only_run is absent: the "
+                    "extension was built without -DFLASHINFER_FA3_UPSTREAM=1, so the op and "
+                    "its registration are compiled out. Rebuild with SGLANG_TWO_EXEC=1 set "
+                    "before the extension loads, or unset it to use the fused path."
+                )
             n_fa3_rows = fused["n_rows"]
             if n_fa3_rows > 0:
                 # Scratch is cached on the backend and the page table is scattered ONCE per
@@ -1571,6 +1583,18 @@ class FlashInferAttnBackend(AttentionBackend):
                 *(["-DFLASHINFER_FUSED_UNIFIED_WGMMA=1",
                    f"-DFLASHINFER_FUSED_PACKED_Q={self.num_qo_heads // self.num_kv_heads}"]
                   if os.environ.get("SGLANG_FUSED_UNIFIED") == "1" else []),
+                # The two-executor path needs the upstream FA3 build: fa3_only_run and its
+                # TORCH_LIBRARY registration both sit behind #if FLASHINFER_FA3_UPSTREAM.
+                # Without this the op simply does not exist, every forward throws
+                # "'fused_fa3' object has no attribute 'fa3_only_run'", the backend falls
+                # back to the persistent path, and the A/B silently measures the baseline
+                # against itself plus one exception per layer per step. That is exactly what
+                # the first serving run did -- 121 fallbacks, read as a 38.8% TTFT
+                # regression of a path that never executed.
+                *(["-DFLASHINFER_FA3_UPSTREAM=1"]
+                  if os.environ.get("SGLANG_TWO_EXEC") == "1" else []),
+                f"-DFLASHINFER_FA3_UPSTREAM_STAGES="
+                f"{os.environ.get('UP_STAGES', '1')}",
                 # Q's completion protocol. 0 is the cp.async group drain, which is
                 # correct and ~3x slow because commit_group sweeps the producer's
                 # in-flight KV copies into Q's group. 1 is the per-lane _noinc

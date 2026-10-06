@@ -292,8 +292,45 @@ pipeline depth: we instantiate with `UP_STAGES=2`, and 2 stages of 128-token KV 
 blocks long. On the old `kv=512` fixtures the whole KV fit in a handful of blocks, so depth
 never mattered — which is also why the 1.21x looked real there.
 
-Next: sweep `UP_STAGES` 2/3/4 on a single long append row, plus KV- and q-scaling sweeps to
-confirm the cost is linear in KV (latency per block) rather than superlinear.
+**Pipeline depth is NOT the lever, and 2 is already upstream's value.** `UP_STAGES=3` fails at
+launch -- `cudaFuncSetAttribute(..., MaxDynamicSharedMemorySize)` returns `invalid argument`
+(`fa3_upstream.cuh:683`), i.e. 3 stages of 128-token KV exceeds the 232 448 B opt-in limit. And
+upstream itself uses 2 unconditionally on Sm90 (`flash_fwd_launch_template.h:47`,
+`kStages = Arch >= 90 ? 2 : ...`). So we were already at upstream's depth and at the hardware
+ceiling; the earlier note calling stages "worth ~15% and blocked by the fused smem budget" is
+superseded -- the split did free the budget, and 2 stages is all that fits anyway.
+
+**ROOT CAUSE: `MmaPV_is_RS=false`, which upstream sets `true` for this exact config.**
+Upstream's own tuner, `tile_size_fwd_sm90` (`tile_size.h:33`), for head_dim 128 / bf16 returns
+
+    {kBlockM=128, kBlockN=128, MmaPV_is_RS=true, IntraWGOverlap=true}
+
+(`kBlockN=128` because `use_blockN_128` is true when `paged_kv_non_TMA` is set -- which is also
+why our hardcoded 128 is right). We match it on `kBlockM`, `kBlockN` and `IntraWGOverlap`, and
+differ on exactly one trait: we pass `MmaPV_is_RS=false`. It has been `false` since the first
+port commit (`a13e87d`), where it was a guess -- never derived from upstream, never measured.
+
+With `MmaPV_is_RS` false the softmax result P does not stay in registers for the PV mma; it
+round-trips through smem, which needs a barrier per KV block and serialises the softmax against
+the mma. That is precisely a mainloop that cannot overlap loads with math, and it predicts every
+symptom measured above: 3% of peak FLOPs, 1.7% of HBM, and throughput perfectly linear in SM
+count because each SM is independently stalled rather than contending for anything.
+
+This is the same defect class as the four already recorded in
+[upstream FA3 subset/per-item params](#upstream-fa3-param-mismatches) -- a ported template
+argument set from assumption instead of from upstream.
+
+The fix defaults both traits to upstream's values and keeps the old behaviour only as an A/B
+switch (`FLASHINFER_FA3_MMA_PV_RS`, env `MMA_PV_RS`; `FLASHINFER_FA3_UPSTREAM_STAGES` default
+1 -> 2). Also worth testing: `MmaPV_is_RS=true` uses *less* smem than false (upstream's comment
+at `tile_size.h:35` notes 128x192 is the smem limit with RS and 128x144 without), so stages=3
+may become legal once RS is on.
+
+**Pending measurement**, launched as `/dev/shm/w/rs.sh`: control FA2-all, RS=0 stages2,
+RS=1 stages2, RS=1 stages3, on the full TraceLab batch at page 128, 5 iters. The merlin
+control-plane API went down (`EOF` on every call, including a bare `runs get`) between launch
+and collection, so the numbers are not in yet -- the run is nohup'd on the pod and the log is
+`/dev/shm/w/rs.log`.
 
 **Multicast is now unblocked but unmotivated by this entry.** TMA paged does work at
 `page_size=128` (all rows PASS in the TMA arm), which was the stated prerequisite for the DSMEM

@@ -1664,7 +1664,12 @@ class FlashInferAttnBackend(AttentionBackend):
                                     "0" if os.environ.get("SGLANG_FUSED_KERNEL") == "1"
                                     else "1") == "1" else []),
                 f"-DFLASHINFER_FA3_UPSTREAM_STAGES="
-                f"{os.environ.get('UP_STAGES', '1')}",
+                f"{os.environ.get('UP_STAGES', '2')}",
+                # See fa3_upstream.cuh: upstream's tuner picks MmaPV_is_RS=true for
+                # head_dim 128, and running it false left the FA3 mainloop
+                # latency-bound on long KV.
+                f"-DFLASHINFER_FA3_MMA_PV_RS="
+                f"{os.environ.get('MMA_PV_RS', '1')}",
                 # Q's completion protocol. 0 is the cp.async group drain, which is
                 # correct and ~3x slow because commit_group sweeps the producer's
                 # in-flight KV copies into Q's group. 1 is the per-lane _noinc

@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.9.9 — FA3's long-context 31x traced to one wrong template argument; two retractions (2026-10-06)
+
+**Root cause of the 31x: `MmaPV_is_RS=false`.** Upstream's own tuner for head_dim 128 /
+bf16 returns `{kBlockM=128, kBlockN=128, MmaPV_is_RS=true, IntraWGOverlap=true}`
+(`tile_size.h:33`). We matched three of the four and passed `MmaPV_is_RS=false`, set as a
+guess in the first port commit and never measured. With it false the softmax result P
+round-trips through smem with a barrier per KV block rather than staying in registers for
+the PV mma, serialising softmax against the mma. Now defaulted to upstream's value, with
+the old behaviour kept only as an A/B switch (`MMA_PV_RS`).
+
+The diagnosis came from an `FA3_SM_BUDGET` sweep on the TraceLab batch:
+
+| SM budget | 16 | 32 | 64 | 96 | 132 |
+|---|---|---|---|---|---|
+| fa3 half (us) | 3 826 892 | 1 918 061 | 950 664 | 634 346 | **480 467** |
+| budget x time | 61 230 | 61 378 | 60 843 | 60 897 | 63 422 |
+
+Constant within 4% over an 8x range, so throughput is perfectly linear in SM count to 132
+with nothing saturated -- at 132 SMs FA3 hits 10.3 TFLOP/s and 80 GB/s against FA2's
+322 TFLOP/s and 2 518 GB/s on the identical 4.93 TFLOP / 39 GB. That rules out both
+standing hypotheses (under-parallelised; more work per tile) and leaves a latency-bound
+mainloop, which is what the wrong trait produces.
+
+`FLASHINFER_FA3_UPSTREAM_STAGES` also goes 1 -> 2, upstream's unconditional Sm90 value.
+The 1-stage default was there to fit beside the FA2 slot in the fused kernel, which is
+closed. 3 stages does not fit at all -- it fails
+`cudaFuncSetAttribute(MaxDynamicSharedMemorySize)` against the 232 448 B limit -- so depth
+was never the lever.
+
+**Retraction 1: the 31x is not the gather, and not `page_size = 1`.** v0.9.8's entry
+claimed upstream's non-TMA paged gather cost one index lookup per KV token and predicted
+`PagedKVNonTMA=false` at `page_size=128` would fix it. Measured, all rows PASS, 0
+fallbacks: FA2-all baseline 15 301 us; split cp.async 480 459 us; split **TMA** 496 978 us.
+TMA paged is *slower*, and coarser paging does nothing for cp.async either (480 ms at page
+128 vs 477 ms at page 1). Coarser paging costs the FA2 baseline nothing, so the fixture is
+not at fault. The multicast item's TMA prerequisite is now met in passing, but it must pay
+back TMA's own 16 ms deficit before it can show a win.
+
+**Retraction 2: the roofline figures were wrong.** "155x off on 1.23 TFLOP" omitted the
+QO-head factor -- all 28 heads attend the whole KV, so the two append rows are 4.93 TFLOP,
+12.3 ms at 400 TFLOP/s. Corrected: **FA2 at 15.3 ms is 1.2x off roofline**, not 5x, and
+FA3 is 39x off, not 155x. The material part is FA2: it is already at the roofline on this
+workload, so there is no FA2-side headroom to chase and any win must come from FA3's own
+39x.
+
 ## v0.9.8 — Port's row-ownership faults all closed; a self-inflicted baseline regression caught (2026-10-06)
 
 **The upstream FA3 port no longer loses or overwrites rows.** Three faults, all the same

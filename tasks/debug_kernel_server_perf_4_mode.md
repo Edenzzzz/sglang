@@ -1532,10 +1532,12 @@ One line each; the evidence is in the linked detail section. Every item must be 
       split-heavy shapes (few q rows, long KV); every fixture used so far has
       `num_splits=1`, where it saves nothing.
       [detail](#what-parity-means-on-a-split-batch--2026-10-06)
-- [ ] **DSMEM / KV multicast** — 1.33-1.59x in isolation. Prerequisite is **met**: the TMA
-      paged path builds and is numerically correct at `page_size=128`, so KV rides TMA and a
-      cluster can multicast it. Note TMA paged is *slower* than `cp.async` on its own
-      (496 ms vs 480 ms), so multicast has to pay for that gap before it shows a win.
+- [ ] **DSMEM / KV multicast** — 1.33-1.59x in isolation. **No TMA prerequisite**: DSMEM
+      peer reads (`mapa.shared::cluster`) work regardless of how KV reached smem, so one CTA
+      can `cp.async` the KV block and the rest of the cluster reads it from that CTA's smem.
+      TMA multicast is one *implementation*, not a requirement, and since cp.async beats TMA
+      paged by 9.12% the item should be built on the cp.async path. Earlier entries calling
+      TMA paged a prerequisite are retracted; that mistake is why this looked blocked.
       The old `FLASHINFER_FUSED_CLUSTER` flag belongs to the closed fused dispatch.
       [detail](#fa3-is-31x-slower-than-fa2-at-realistic-context-and-the-121x-does-not-generalise--2026-10-06)
 - [ ] **Fused spec tree-build epilogue** — designed, not built; belongs to whichever executor
@@ -6732,11 +6734,25 @@ Reading them as optimisations against baseline FA3:
 
 - **`MmaPV_is_RS=1` is worth 3.84%** -- the one real gain, and it is upstream's own value for
   this config. Keeping P in registers for the PV mma instead of round-tripping through smem.
-- **cp.async beats TMA paged by 9.12%.** This is now measured on the fixed kernel, and it
-  confirms the earlier page-128 observation that survived the retraction. It also prices the
-  multicast prerequisite: TMA paged is the gateway to DSMEM multicast, so multicast must beat
-  a **9.1% handicap** before it is worth anything. That is a materially worse starting point
-  than the item's recorded "1.33-1.59x in isolation" assumed.
+- **cp.async beats TMA paged by 9.12%**, measured on the fixed kernel, confirming the earlier
+  page-128 observation that survived the retraction. **Keep cp.async.**
+
+  **RETRACTED, immediately and before it propagated: this does NOT price the multicast item.**
+  I wrote that TMA paged is the gateway to DSMEM multicast and that multicast therefore starts
+  9.1% behind. That conflates two separate mechanisms:
+
+  - **TMA multicast** (`cp.async.bulk.tensor ... multicast::cluster`) loads global -> several
+    CTAs' smem in one hardware op. That one does require TMA.
+  - **DSMEM** does not care how the data arrived. One CTA loads KV with `cp.async` into its
+    own smem; the other CTAs in the cluster read it directly via distributed shared memory
+    (`mapa.shared::cluster`). The HBM saving -- one global load serving the whole cluster --
+    is identical; TMA multicast merely does it in one instruction rather than explicit peer
+    reads plus a cluster barrier.
+
+  So **KV multicast is implementable on the cp.async path with no TMA penalty**, and the
+  9.12% is irrelevant to it. The earlier entry that recorded "needs upstream's TMA paged path"
+  as the multicast prerequisite is wrong for the same reason, and that is also why the item
+  looked blocked for so long: it never was.
 - **`stages=3` and `LPT=1` are both marginally worse** (0.5%, 0.7%), so upstream's values
   (2 stages, `LPT=0`) stand. `stages=3` fits only because `MmaPV_is_RS=1` frees exactly one
   32 768 B P tile, landing on 232 448 B -- it fits and does not pay.

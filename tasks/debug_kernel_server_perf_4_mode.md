@@ -7,35 +7,42 @@ should beat it) and FA2 matches the stock persistent kernel, then the fused
 design's scheduling freedom is pure upside. Target: >=30% TTFT/ITL and >=10%
 throughput on mixed chat + tracelab.
 
-**Status 2026-10-06 (late): the wgmma role works, and the split is the big lever.**
-Task-3 items were being assigned to clusters outside the FA3 role's range and
-silently dropped, because the harness runs never set `FLASHINFER_SM_PARTITION=1` /
-`FLASHINFER_FA3_SM_SPLIT_CLUSTERS`. With those set, fixture 2 **passes** with the
-wgmma role carrying real work -- 100 items over 25 q-tiles x 4 kv heads, 0/512
-unwritten -- and a 16 823-token-KV FA3 row passes at rel err 4.3e-4.
+**Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
+measurement.** Co-residency constrains the single fused kernel twice, and neither
+constraint is a cost of the work:
 
-The `sm_split` sweep on that long-prefix fixture is the first informative kernel
-measurement here: 8 -> 7892 us, 32 -> 2506, 64 -> 1342, 96 -> 1006, 124 -> **772**,
-131 -> 796, against a 421 us FA2-on-everything baseline. The batch is ~99% task-3
-work, so the fixed `sm_split=8` starves the role holding almost all of it: an
-**18.6x penalty that is pure scheduling**. The serving A/B ran at
-`SGLANG_FUSED_SM_FA3=8`, so a large part of that 3x regression is likely this.
-After tuning the split, 1.83x remains, and `-DFUSED_FA3_STAGES=1` -- one K/V
-stage, chosen to fit smem beside the persistent slots, which removes FA3's
-load/compute pipelining -- is the next suspect under measurement.
+- **registers** — 384 threads at 1 CTA/SM caps the allocation at 170/thread and the two
+  roles share it. Upstream FA3 spills 33 676 B in the fused kernel against **52 B**
+  alone in the identical template; outlining FA2 takes FA3 to 64 B but moves 17 500 B
+  onto FA2; halving FA2's O accumulator reaches **88 B** isolated but only 1 504 B
+  fused. One `__global__` can give *either* role native registers, never both.
+- **shared memory** — FA3's 98 352 B leaves 134 048 B of the 232 448 B limit; the FA2
+  role's tile-16 configuration at 8 warps needs 135 168 B. Over by 1 120 bytes.
 
-Also corrected: the "200 task-3 items carrying group ids" that drove a day of
-reduction debugging was an artefact of the same missing partitioning, which made
-`kv_len_limit` divide total KV by all 132 clusters. With partitioning on, these
-rows do not split at all (`with_group_id=0`), so the unified reduction is
-implemented and correct-by-construction but currently unexercised.
+Both executors already exist as measured probes at native quality: flash-attention's
+FA3 at 168 regs / 52 B spill, the persistent LPT at **255 regs / 0 B**. What is missing
+is the plan wiring and a PDL launch, not kernels.
 
-**Earlier status, superseded:** Every fused number in this
-doc was taken with the wgmma role idle and tiles 128/64 forced onto FA2 via
-`FLASHINFER_FA3_MIN_PACKED_QO=4096` -- the routing the class boundary explicitly
-rejects. So the recorded 3.02x kernel penalty and 1.38x CTA/SM cost describe a
-configuration the design does not use, and fusion's benefit has never been
-measured. The unified split-KV reduction is the gate.
+**The scheduling contribution is unaffected**, because it lives in the plan: 4-mode
+tile-class assignment, per-queue split length (now sized by each queue's executor
+geometry), the smem-handoff JIT reduction (intra-role — a split row's chunks are all one
+task's items), and the spec tree epilogue. Only cross-role backfill *inside a CTA* is
+given up, which is itself what causes the 33 676 B; PDL recovers part of it temporally.
+Cross-role multicast is **not** given up: the 1.587x DSMEM result is q-tiles of one
+prefill row re-gathering the same KV, all FA3-role items.
+
+**Where the numbers stand.** Fixture 2: 155.9 us fused against **72.3 us** for
+FA2-on-everything, both numerics-correct from one build — a **2.16x regression**, worse
+than the 1.83x on the 16 823-token-KV fixture, so the shorter workload is the harder
+case. Nothing is near the >=30% TTFT/ITL and >=10% throughput bar.
+
+**The upstream FA3 port is close but not yet correct.** Three faults found, all the same
+shape — upstream carries a per-item or per-subset field and was handed the whole-batch
+aggregate: per-item `num_splits` in `split_idx`'s high bits; `cu_seqlens_q`/`seqused_k`
+read from per-work-item arrays (fixing this took fixture 2 from 439/512 unwritten to
+**0/512**); and the combine pass walking every request, which overwrote the FA2
+executor's correct rows (an FA2 decode row went 5.8e-4 → 0.155). The third fix is
+written and under test.
 
 ## Tasks, in priority order — 2026-10-06
 

@@ -7085,15 +7085,40 @@ split rows precede. 17 of 18 rows fail at N=18, against 0.021-0.031 on the mixed
 far stronger signal, and it removes FA3, the split and the task-class question from the
 picture entirely.
 
-**What it says about the mechanism:** the damage is **cumulative in the number of preceding
-split rows**, not positional and not a single mis-index. The only quantity that accumulates
-that way is the partial-buffer cursor: the plan advances `partial_o_nnz` by
-`row_tile_size * num_kv_tiles` per split row, and each row's merge reads its partials back
-through `partial_indptr` plus a stride built from `num_kv_chunks`. A mismatch between the
-*host's* `num_kv_tiles`/`kv_len_limit` and the *device's* `num_kv_chunks`/`len_kv_chunk` would
-stride each row's partials slightly wrong and compound across rows -- which is exactly the
-observed shape. **That pair is the thing to instrument next:** print both per work item and
-compare, on this fixture, at N=2 and N=18.
+**MEASURED: the partial-buffer cursor is CORRECT, and the real variable is `len_kv_chunk`.**
+Tracing `o_indptr` and `len_kv_chunk` per work item on this fixture:
+
+| | `len_kv_chunk` | nchunks | `o_indptr` step per row | expected `row_tile_size x nchunks` |
+|---|---|---|---|---|
+| N=2 | **2 048** | 33 | 231 | 7 x 33 = **231** ok |
+| N=18 | **17 920** | 4 | 28 | 7 x 4 = **28** ok |
+
+Exact in both, so `partial_o_nnz` / `o_indptr` is **refuted** -- the cursor hypothesis from the
+previous entry is wrong.
+
+What the trace shows instead is that **the plan adapts `len_kv_chunk` to the batch size**:
+2 048 at N=2, 17 920 at N=18 (more rows already supply parallelism, so each row is split into
+fewer, larger chunks). And the error tracks the **chunk size**, not the row count:
+
+    chunk  2 048 -> rel err 0.0495
+    chunk 17 920 -> rel err 0.3058
+
+**Which points at a known property of this port: `partial_o` is `DTypeO` (bf16), while
+upstream's `ElementPartial` is `float`.** Each chunk's partial output is rounded to bf16
+before the merge, so the error per partial grows with how much KV that chunk accumulated.
+Larger chunks -> fewer, bigger partials -> more loss. That fits both numbers, and it also
+re-reads the "grows with row index" signature: later rows are assigned later, larger chunk
+spans by the LPT-ordered scheduler, not corrupted by their predecessors.
+
+**So this may not be a correctness bug at all, but precision loss from storing partials in
+bf16.** That would explain why ~24 structural candidates all died, why both sanitizers are
+clean, why the plan verified correct twice, and why the magnitude varies run to run (chunk
+assignment varies with scheduling).
+
+**The decisive test is cheap:** make `partial_o` `float` (upstream's own choice) and re-run
+this fixture at N=2 and N=18. If the errors collapse to ~1e-3, it is precision and the fix is
+a buffer dtype, not a race. If they persist, precision is excluded and the structural hunt
+resumes with the cursor eliminated.
 
 Note the earlier `PI_ZERO` arm cannot have tested this: it zeroed `partial_indptr` only for
 **non-split** items, and here every item splits.

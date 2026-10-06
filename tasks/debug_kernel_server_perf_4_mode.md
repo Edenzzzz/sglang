@@ -157,7 +157,7 @@ number, because it will swamp small batches either way.
 
 ## Tasks, in priority order — 2026-10-06
 
-1. [K/V pipelining, FA2](#fa2-kv-pipelining-measured-flat--2026-10-06) -- **done, no effect**
+1. [K/V pipelining, FA2](#fa2-kv-pipelining-measured-flat--2026-10-06) -- measured flat, but the **explanation is retracted**; reopened
 2. [Smem-handoff JIT split-KV reduction, both executors](#kernel-optimisations--2026-10-06)
 3. [Context length where attention is >50% of e2e](#workload-and-measurement-setup--2026-10-06)
 4. [TraceLab mixed scenarios instead of random](#workload-and-measurement-setup--2026-10-06)
@@ -559,6 +559,49 @@ supplied and already per-request, so it yields the exact query length with no ne
 mainloop keeps receiving `seqused_k` through its own arguments; this was only the scheduler's
 copy. flashinfer `e4dfa82`.
 
+**VERIFIED: the quadratic is gone and the split now beats the FA2-only baseline.**
+
+| kv | before | after | speedup | predicted | us/kv after |
+|---|---|---|---|---|---|
+| 10 240 | 3 268.1 us | **792.4 us** | 4.1x | 5.0x | 77.38 |
+| 18 432 | 10 583.7 us | **1 396.0 us** | 7.6x | 9.0x | 75.74 |
+| 34 816 | 37 811.2 us | **2 610.8 us** | 14.5x | 17.0x | 74.99 |
+| 67 584 | 142 434.4 us | **5 023.3 us** | 28.4x | 33.0x | 74.33 |
+| 100 352 | 320 401.6 us | **7 425.4 us** | 43.1x | 49.0x | 73.99 |
+
+`us/kv` is now constant to **4.5%** where it previously varied 197%, and `us/kv^2` varies 218%
+where it was constant to 2.1%. **The cost is linear in KV, as it must be.** Every row PASS.
+Speedups track the predicted bloat at a consistent ~87%, the residual being the fixed per-tile
+cost that never scaled.
+
+**TraceLab batch, the headline comparison** (page 128, 5 iters):
+
+| arm | total | fa3 half |
+|---|---|---|
+| FA2 on everything (control) | 15 190.9 us | 7.7 |
+| **split, appends to FA3** | **12 399.7 us** | 11 127.0 |
+
+**1.225x faster than FA2-on-everything, an 18.4% reduction**, with the FA3 half going
+476 684 -> 11 127 us (**42.8x**). This is the first time the two-executor split has beaten the
+baseline on a realistic batch, and it retires the "FA3 is 31x slower, the split loses on long
+context" result entirely.
+
+**RETRACTED: the 400 TFLOP/s peak I used for every roofline figure in this document.** H200 SXM
+bf16 dense tensor peak is **989.4 TFLOP/s**, not 400. Recomputing this batch's append rows:
+
+| | achieved | % of real peak | what I claimed before |
+|---|---|---|---|
+| FA2 | 325 TFLOP/s | **33%** | "1.2x off roofline, at peak" |
+| FA3 (fixed) | 443 TFLOP/s | **45%** | - |
+
+So **FA2 is at a third of peak, not at it.** That invalidates the *explanation* I gave for
+closing priority item 1: I attributed the flat FA2 K/V-pipelining result to "FA2 is already at
+roofline, so there is no latency to hide." The measurement stands -- depths 2/3/4 are flat to
+0.5% -- but the reason does not, and the flatness is now **unexplained**. Item 1 should be
+reopened on the explanation, not on the measurement. It also means the earlier "FA3 is 39x off
+roofline" was really ~95x, and FA3 now sits *above* FA2 in efficiency rather than merely
+catching up.
+
 **Fifth bug of this class in the port** -- per-request vs per-item, or q vs k, handed to a
 parameter that wanted the other. See [upstream FA3 param mismatches](#upstream-fa3-param-mismatches).
 Four were found by which rows were wrong; this one produced no wrong rows at all and was only
@@ -669,10 +712,11 @@ iters, `drivers/ab_fa3_traits.sh` arms `fa2k2/3/4`):
 | 3 | 15 298.6 us | 15 296.6 us |
 | 4 | 15 243.3 us | 15 219.5 us |
 
-**Flat to 0.5%.** Deepening FA2's K/V pipeline buys nothing here, and the reason is the
-corrected roofline: FA2 does this batch at **322 TFLOP/s, 1.2x off peak**, so there is no
-memory latency left to hide. A deeper pipeline pays only when the loop is waiting, and this
-one is not.
+**Flat to 0.5%.** Deepening FA2's K/V pipeline buys nothing here. **The explanation below is
+RETRACTED**: I wrote that FA2 was "at 322 TFLOP/s, 1.2x off peak, no latency left to hide",
+using 400 TFLOP/s as the H200 peak. The real bf16 dense peak is **989.4 TFLOP/s**, so FA2 is at
+**33% of peak** and does have headroom in principle. The flat result is therefore
+**unexplained**, not explained. The measurement stands; the reason does not.
 
 This supersedes the earlier note carrying it as "worth ~15% and blocked by an smem byte
 count". That estimate came from the *fused* kernel's constraints, where the FA2 slot was

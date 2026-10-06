@@ -765,7 +765,39 @@ page 128, 3 iters:
 the partial-tile fault needing a *split* leading row, which TraceLab's ordering puts after the
 `task0` rows.
 
-**NEXT LEAD, from the victim row's character (`DUMP_ROWS=1`).** The corrupted row is not
+**RETRACTED: the victim does NOT need to be merged, so wrong LSE weights are not the fault.**
+`task0`'s chunk limit is 512, so a victim with `kv=512` is a single chunk that writes through
+to `final_o` directly -- no partials, no merge, no LSE weights involved. It still fails:
+
+| arm | victim row |
+|---|---|
+| victim `kv=512`, **one chunk, write-through** | **0.807 FAIL** |
+| victim `kv=1024`, two chunks, merged | 0.648 FAIL |
+| victim `kv=256`, **alone** (no leading row) | 0.00433 PASS |
+| victim `kv=512` after a `qo=127` leader | 0.105 FAIL |
+
+A row that never enters the merge cannot be corrupted by the merge's weights, so the
+LSE-weight reading of the `DUMP_ROWS` evidence was wrong. What that evidence actually
+established -- fully written, in range, wrong elementwise -- is still true and still rules out
+a skipped store and a zeroed region; it just does not single out LSE.
+
+**What this leaves.** The victim's *direct* `final_o` write is being corrupted by something
+the leading split row does. The leading row's only writes to `final_o` are through
+`MergeGroupJIT` at `merge_o_indices[r] + kv_head_idx * gqa_group_size`, so that index is the
+remaining candidate: if it overshoots the leading row's own token range it lands on the
+victim's rows, which would explain forward-only damage, in-range values (the leading row's
+merged output has similar magnitude), and the dependence on a partial tile. Hand-checking the
+plan's construction for `qo=1, gqa=7, cluster_tile_q=16` gives `row_tile_size=7` and
+`q = row/7 = 0` for rows 0-6, i.e. token 0 only, which looks correct -- so the overshoot, if
+it exists, is in the kernel's use of those indices rather than in their construction.
+
+**Cheapest next measurement**, and it needs no hypothesis: zero `final_o` before the launch and
+dump which **token rows** of the victim differ from the reference. The set of damaged tokens
+names the writer directly -- a contiguous run starting at the victim's first token implicates
+`merge_o_indices` overshoot; a strided or head-aligned pattern implicates the stride; damage
+confined to one `kv_head` implicates the `kv_head_idx * gqa_group_size` term.
+
+**Superseded lead, from the victim row's character (`DUMP_ROWS=1`).** The corrupted row is not
 zeroed, not skipped and not garbage:
 
 | | victim row (`task0 qo=512 kv=1024`) |

@@ -6740,13 +6740,33 @@ the `SGLANG_TWO_EXEC` path (4 tasks, affected) while `:1958` plans 3 for the bas
 attention. The eventual run needs a **third validity check beyond fallback counts: both arms
 must plan the same task count.**
 
+**RACECHECK IS CLEAN -- it is not a shared-memory race.** `compute-sanitizer --tool racecheck
+--racecheck-detect-level info` on the minimal reproducer (`qo:1,512 prefix:1024,512`, leading
+row splitting into 2 chunks) reports **no hazards at all**, while the corruption still
+reproduces under instrumentation (row 1 rel err **0.568**). The run was genuinely instrumented
+-- `fa2_half` went from ~250 us to **350 562 us**, a ~1400x slowdown -- so the clean result is
+not a case of the tool failing to attach.
+
+`racecheck` detects **shared-memory** hazards only. Combined with the nondeterminism (eight
+runs, eight errors), that localises the nondeterminism to **global memory ordering between
+CTAs**, not to anything in a block's shared memory. Every fence-ordering suspect in the JIT
+rendezvous operates on shared memory or block-scope barriers, which is consistent with the
+rendezvous already having been exonerated by the reducer-swap bisect.
+
+So the picture is now: correct plan, correct reduction machinery (both paths), no shared-memory
+race, total in-range damage to a row that writes through directly, nondeterministic, triggered
+by a *preceding* split row. What remains is an unsynchronised **global** write -- two CTAs
+writing the same `final_o` rows with no ordering between them -- or a read of `final_o` /
+`partial_o` that is not ordered against another CTA's write.
+
 **Next experiments, in order of cost:**
 
 1. Try to reproduce with a **3-task** plan (`FLASHINFER_FA3_TASK` unset, `UNIFIED=0` is not
    available because that path no longer compiles -- it references `wgmma_plan`). If it
    reproduces, the fault is in flashinfer's kernel, not our plan, and upstream can own it.
-2. `compute-sanitizer --tool racecheck` on the reproducer. The fault is near-100% per run, so
-   one run should name the unsynchronised access directly.
+2. ~~`compute-sanitizer --tool racecheck`~~ -- **done, clean**. No shared-memory hazard.
+   `--tool memcheck` is the remaining sanitizer worth running, for an out-of-bounds global
+   write rather than a race.
 3. If racecheck is clean, instrument the victim's work items to record which `(q_start,
    kv_start, kv_head)` each CTA actually executed, and diff against the plan -- the plan is
    known good, so a divergence localises the work-distribution side.

@@ -369,10 +369,33 @@ from this whole episode: every one of these -- and the four earlier param faults
 literal written from assumption where upstream had a derivation.
 
 **Pending measurement**, launched as `/dev/shm/w/rs.sh`: control FA2-all, RS=0 stages2,
-RS=1 stages2, RS=1 stages3, on the full TraceLab batch at page 128, 5 iters. The merlin
-control-plane API went down (`EOF` on every call, including a bare `runs get`) between launch
-and collection, so the numbers are not in yet -- the run is nohup'd on the pod and the log is
-`/dev/shm/w/rs.log`.
+RS=1 stages2, RS=1 stages3, on the full TraceLab batch at page 128, 5 iters. **These results
+are lost: trial `40802be244f0ee7e` reached status `done` mid-run** and took `/dev/shm` with it.
+They have to be re-run on a fresh pod.
+
+**RETRACTED: there was no control-plane outage.** I diagnosed one and spent about an hour on
+it -- a 25s-interval monitor, a 5-minute-interval watcher, a rate-limit theory, a token-expiry
+check. The actual cause of every `EOF` was simpler, and twofold:
+
+1. **The pod expired.** `execute-script` against a dead pod returns a bare
+   `{"error": "EOF"}`, indistinguishable from a network fault. Nothing in the message says
+   "gone".
+2. **My manual shell calls had proxy vars set, which `px.py` strips.** `NO_PROXY`
+   (uppercase) does not list `.bytedance.net` or `.byteintl.net` while lowercase `no_proxy`
+   does, and Go's `ProxyFromEnvironment` prefers the uppercase one -- so merlin-cli routed
+   these hosts through a proxy that fails TLS, and Go surfaced it as `EOF`. That is why a
+   bare `runs get` "also failed" and convinced me the whole control plane was down. With the
+   proxy vars stripped, the same `runs get` answers immediately -- which is how the expiry
+   was finally found.
+
+The two failure modes produced an identical error string, and I let the second one corroborate
+a wrong conclusion about the first. `px.py` now carries `probe_trial()` and a comment on the
+proxy rule, so the next `EOF` is one call away from being correctly attributed. The lesson for
+the pod-restore driver: **check trial status before diagnosing the network.**
+
+This is the third trial to expire mid-measurement (`f393156fcc0614b3`, then
+`40802be244f0ee7e`). Long measurement runs need their results pulled off the pod incrementally
+rather than collected at the end, since `/dev/shm` dies with the trial.
 
 **Multicast is now unblocked but unmotivated by this entry.** TMA paged does work at
 `page_size=128` (all rows PASS in the TMA arm), which was the stated prerequisite for the DSMEM

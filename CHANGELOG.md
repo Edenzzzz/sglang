@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.9.8 — Port's row-ownership faults all closed; a self-inflicted baseline regression caught (2026-10-06)
+
+**The upstream FA3 port no longer loses or overwrites rows.** Three faults, all the same
+shape -- upstream carries a per-item or per-subset field and was handed the whole-batch
+aggregate:
+
+1. per-item `num_splits` in `split_idx`'s top 16 bits;
+2. `cu_seqlens_q` / `seqused_k` read from the plan's per-WORK-ITEM arrays instead of
+   per-request ones (fixing this took fixture 2 from 439/512 unwritten to **0/512**);
+3. the combine pass walking every request, which reduced never-written partials over the
+   FA2 executor's rows (an FA2 decode row went 5.8e-4 -> 0.155, and back to **0.00072**
+   once restricted via upstream's `varlen_batch_idx_ptr`).
+
+Each produced plausible numbers rather than an error, and two were located only by which
+rows failed. Remaining: both wgmma rows are still wrong (10.88, 11.06) while the FA2 row
+is correct, so the fault is now inside the upstream path's own result. The isolating
+experiment is recorded -- force `max_splits_fa3 == 1` so the epilogue writes final O and
+the combine never runs.
+
+**A regression I introduced, and the control arm caught it.** v0.9.7's executor-aware
+split denominator is reverted:
+
+| | fused | baseline |
+|---|---|---|
+| before | 155.9 us | **72.3 us** |
+| with the change | 156.3 us | **134.6 us** |
+
+Dividing `kv_len_limit` by `clusters * ctas_per_sm` splits the FA2 queues twice as
+finely; each extra split costs a partial write and a reduction pass that outweighs the
+added concurrency. The fused path did not move, so the fused/baseline ratio would have
+read as "improved from 2.16x to 1.16x" purely because the baseline got worse. That is
+exactly what the control arm is for. Kept behind `FLASHINFER_SPLIT_BY_EXEC_SLOTS=1` for
+reproducibility only; `QUEUE_EXEC` stays, since the explicit queue -> executor mapping is
+not implicated.
+
 ## v0.9.7 — Per-queue split length follows the executor; planning cost is not the bottleneck (2026-10-06)
 
 The scheduler's per-queue split length now accounts for which executor drains that

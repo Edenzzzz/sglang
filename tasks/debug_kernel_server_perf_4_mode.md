@@ -516,6 +516,53 @@ The **mma count itself** is quadratic, so this is not extra scalar work -- the w
 runs kv-proportionally too many times. Since the n-block count must be proportional to KV, the
 **m-block** count has to be too, despite q being fixed.
 
+<a id="combine-corrupts-fa2-rows"></a>
+### Split-KV now works on FA3 and corrupts FA2's rows — 2026-10-06
+
+With the `seqused` fix in, the split-KV fixtures were re-run (`drivers`-style, page 128,
+`SPLITS=auto`, `num_splits=29` in all three). **FA3's own rows are now correct**, which they
+were not before:
+
+| fixture | FA3 rows | FA2 rows | fa3 half |
+|---|---|---|---|
+| `qo:8,8,100,1 prefix:16384,16384,0,0` | 0.00004, 0.00127 **ok** | 0.205, **1.392 FAIL** | 57.4 us |
+| `qo:1,512 prefix:65536,512` | 0.00036 **ok** | **0.493 FAIL** | 80.5 us |
+| `qo:1,512 prefix:98304,512` | 0.00032 **ok** | **0.509 FAIL** | 109.0 us |
+
+Two things follow. First, **split-KV on FA3 is correct now** -- the `num_splits=29` garbage
+recorded earlier (row 3 rel err 1.33) was the m-block bloat, not a partial-buffer sizing bug.
+The harness does size `partial_o`/`partial_lse` with `_NSPLIT`
+(`test_fused_server_batch.py:440-441`), so the doc's earlier "no `num_splits` factor" concern
+does not apply to the harness and the prerequisite I listed for these fixtures was wrong.
+Also note `fa3_half` here is 57-109 us, i.e. the 1604x entry's 17 358 us is gone too.
+
+Second, **the combine pass corrupts the FA2 executor's rows, and only when it runs.** Every
+arm with `num_splits=1` passes (the whole KV sweep, both TraceLab arms); every arm with
+`num_splits>1` has correct FA3 rows and wrong FA2 rows. This is the same *shape* as the
+already-fixed fault where the combine reduced never-written partials over FA2's rows, so the
+`varlen_batch_idx_ptr` restriction is necessary but evidently not sufficient.
+
+**Localised, not yet fixed.** The combine scheduler sizes its grid as
+
+    num_blocks_m = ceil_div(args.total_q * args.num_heads, kBlockM) + args.b
+    (flash_fwd_combine_kernel.h:326,330; also lower_bound_on_non_empty_tiles at :294)
+
+and `LaunchUpstreamCombine` passes `p.total_q` -- the token count for the **whole** batch,
+FA2 rows included -- while passing `b = p.num_fa3_requests`. So the scheduler is told a token
+range spanning all rows but a batch count covering only the FA3 subset, and its tile ->
+(batch, row) mapping is derived from both. A mismatch there walks tiles into token ranges the
+FA3 subset does not own, which is exactly the observed signature.
+
+The candidate fix is to make `total_q` and `b` describe the same subset, but the partial
+buffers are indexed by **absolute** token offsets through `cu_seqlens_q`, so changing one
+without the other moves the corruption rather than removing it. Next diagnostic: dump the
+(bidb, m_block) pairs the combine actually visits for the `dec64k` fixture and check which
+land outside the FA3 rows -- the previous four faults of this class were each found by
+identifying which rows were touched, and guessing the parameter has a poor record here.
+
+This blocks the smem-handoff JIT split-KV reduction item, which is only measurable on
+split-heavy shapes.
+
 <a id="fa3-root-cause-seqused"></a>
 ### ROOT CAUSE: the scheduler was handed `seqused_k` where it needs the QUERY length — 2026-10-06
 

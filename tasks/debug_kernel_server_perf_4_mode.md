@@ -535,10 +535,34 @@ combine fault". The shape did match a known fault; that resemblance is what made
 looking.
 
 **The `num_splits` correlation was also wrong.** Arm (a) reports `num_splits = 1` and fails.
-What actually distinguishes the passing TraceLab `task0` rows from these is **prefix**: there
-they are `qo:512,1024 prefix:0,0`, i.e. `kv == qo`, pure prefill; here row 1 is
-`qo=512 prefix=512`, an append. So the candidate is "FA2 append rows", which is being measured
-now rather than asserted.
+**RETRACTED immediately, by the characterisation run: it is not "append rows" either.** Every
+isolated shape passes, including the append:
+
+| fixture (all `n_fa3=0`) | result |
+|---|---|
+| `qo:512 prefix:0` (pure prefill) | 0.00464 **PASS** |
+| `qo:512 prefix:512` (append alone) | 0.00507 **PASS** |
+| `qo:512 prefix:4096` (longer prefix) | 0.00417 **PASS** |
+| `qo:512,1024 prefix:0,0` (two prefills) | 0.00375, 0.00329 **PASS** |
+| `qo:512,1 prefix:512,65536` (append, then long decode) | 0.00416, 0.00036 **PASS** |
+| **`qo:1,512 prefix:65536,512`** (long decode, **then** append) | 0.00035, **0.385 FAIL** |
+
+**It is ROW ORDER.** The last two fixtures contain the *same two rows* and differ only in
+which comes first. Reversed, both pass; with the long-KV row first, the second row is wrong.
+Nothing is wrong with any shape in isolation.
+
+That lines up with the TraceLab signature already recorded -- error rising with row index
+across rows of identical shape (`kv=65537, qo=1` giving 0.0088 -> 0.0177 at rows 7 -> 20) --
+and makes both the same finding: **a row is corrupted by what precedes it.**
+
+The live hypothesis, now being measured rather than asserted: the FA2 side's split-KV
+workspace. A long-KV row is split across many CTAs and reduced through a global partial
+buffer; if that buffer is indexed per-CTA or per-work-tile without accounting for the earlier
+rows' splits, a long row's partials land on a later row's output. The doc already records a
+"**global** partial round-trip" on the FA2 side, which is exactly the mechanism that would do
+this. Sweeping the leading row's prefix (1024 -> 65536) in the failing order to find the
+threshold; a clean threshold where the long row starts splitting would confirm it, and no
+threshold would refute it.
 
 Arm (b) did not test what I intended: `SPLITS=1` sets `sm_split`, not `num_splits`, so (b) is
 a second combine-enabled arm rather than a combine-disabled one. Arm (a) carries the

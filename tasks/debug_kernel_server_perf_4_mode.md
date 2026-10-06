@@ -7176,6 +7176,24 @@ and the last row additionally misses at CHUNK scale (half its mass in arm A; 16.
 arm C). This also retro-fits the random-V magnitudes: one wrong 128-token tile out of 65 536
 gives ~sqrt(128/65536) ~= 0.045 ~= the observed row-1 error, rising to ~0.3 by row 17.
 
+**PAGE-RAMP DECODE (KV_ROWCONST=2) -- the wrong tiles sit at HALF the correct page offset.**
+
+- Row 17 attends mean page ~434.6 against an own-range mean of ~560. A 50/50 mixture solves
+  the wrong half to pages ~280-310, and **half of row 17's page base is 561/2 = 280.5** --
+  the misread tiles are at exactly half the correct offset.
+- Rows 0-2 drift toward earlier pages by amounts growing with r: 1-2 tiles per row read at
+  half-base (distance ~ r/2 rows) reproduces the measured const-V slope.
+- Damage spans 25-28 of 28 heads uniformly, reconfirming the broken coordinate is the tile's
+  PAGE ADDRESS, not any head index.
+
+**FIX-READY STATEMENT: some KV tiles on the cp.async paged path are addressed at HALF their
+correct page offset** -- a /2, a >>1, or a byte-vs-element (bf16 = 2 bytes) confusion in one
+tile-address expression, hitting ~1-2 tiles per row plus roughly half the final row's chunks.
+Search the V (and K) gather address computation for the persistent kernel's paged path; the
+plan values are verified correct, so the fault is in the kernel-side expression consuming
+them. Verification gate: `KV_ROWCONST=2` decodes every row to its own page-range mean, then
+the mixed-batch numerics pass at TOL=0.02, then the regression pair `qo:128,512`/`qo:127,512`.
+
 **Unified statement after 25 candidates: the kernel attends ~r wrong KV TILES for row r
 (sourced near the batch start) plus one chunk-scale miss on the final row.** Not a race, not
 precision, not the merge, not kv_head -- wrong 128-token tiles in the KV walk, count growing

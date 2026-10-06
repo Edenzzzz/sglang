@@ -231,6 +231,15 @@ predicted that `PagedKVNonTMA=false` at `page_size=128` would fix it. Both halve
 prediction are now measured and both are wrong:
 
 - TMA paged at 128-token pages is **slower**, not faster: 496 ms against cp.async's 480 ms.
+  One genuine caveat does apply: upstream's tuner picks `kBlockN = 176` when
+  `paged_kv_non_TMA` is false and 128 when it is true (`tile_size.h:32`), so the TMA arm
+  ran at 128 where upstream would use 176 -- it is off upstream's tune for that path. We
+  cannot simply follow it, because TMA paged also requires `page_size % kBlockN == 0`
+  (`mainloop_fwd_sm90:537`), and 176-token pages are not a sane KV-cache granularity. So
+  upstream's TMA tuning implicitly assumes unpaged KV, and a paged TMA path is constrained
+  to a block size upstream does not tune for. Worth remembering before reading much into
+  the TMA-vs-cp.async gap either way.
+
   (I briefly suspected this arm was invalid because the scheduler hardcodes
   `NumProducerThreads = 128` where upstream's expression can give 32 on a TMA path. It
   cannot give 32 here: `Use_TMA_Q = !PackGQA` (`mainloop_fwd_sm90:56`) and we run

@@ -13,7 +13,11 @@ if [ ! -x $W/venv/bin/python ]; then
   python3 -m venv $W/venv
   . $W/venv/bin/activate
   pip install -q --upgrade pip
-  pip install -q torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+  # torchvision MUST be pinned in the same command: the deps install pulls a torchvision built
+  # for the upgraded torch, and after re-pinning torch alone its C++ ops fail to register
+  # ("operator torchvision::nms does not exist", surfacing as AutoProcessor import failure).
+  pip install -q torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
+  pip uninstall -y -q torchaudio 2>/dev/null || true
   # The full set, learned by running into them one at a time: a freshly cloned
   # flashinfer wants apache-tvm-ffi, and sglang's server path wants pynvml before
   # it will even import. Installing them together saves a build cycle per miss.
@@ -43,7 +47,11 @@ if [ ! -x $W/venv/bin/python ]; then
   # 2.8.0 -> 2.14.1+cu130), and torch >= 2.9 requires C++20 while the fused harness compiles
   # at -std=c++17, so every extension build then dies with
   #   #error C++20 or later compatible compiler is required to use PyTorch
-  pip install -q torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+  # torchvision MUST be pinned in the same command: the deps install pulls a torchvision built
+  # for the upgraded torch, and after re-pinning torch alone its C++ ops fail to register
+  # ("operator torchvision::nms does not exist", surfacing as AutoProcessor import failure).
+  pip install -q torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
+  pip uninstall -y -q torchaudio 2>/dev/null || true
 else
   . $W/venv/bin/activate
 fi

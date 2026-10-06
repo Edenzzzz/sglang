@@ -30,6 +30,15 @@ if [ ! -x $W/venv/bin/python ]; then
                  interegular partial_json_parser llguidance msgspec compressed_tensors \
                  python-multipart soundfile scipy torchao blobfile hf_transfer \
                  ipython openai
+  # The hand-picked list above kept missing modules the server needs at init (IPython,
+  # openai, dill each cost a failed boot). Install sglang's OWN declared dependencies
+  # instead, kernel stack excluded -- this needs the python/ tree in place, so on a fresh
+  # pod run it after build_sglang_tree.sh. It upgrades torch transitively (seen: 2.8.0 ->
+  # 2.14.1) even with torch excluded, which is exactly why the re-pin below must stay last.
+  if [ -f $W/python/pyproject.toml ]; then
+    python $W/drivers/sgl_deps_from_pyproject.py && pip install -q -r $W/sgl_deps.txt
+  fi
+  pip install -q "torchao==0.13.0"   # newer torchao imports ScalingType, absent in torch 2.8
   # RE-PIN torch LAST, and keep it last. The dependency list above upgrades torch (seen:
   # 2.8.0 -> 2.14.1+cu130), and torch >= 2.9 requires C++20 while the fused harness compiles
   # at -std=c++17, so every extension build then dies with

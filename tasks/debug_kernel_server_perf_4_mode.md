@@ -184,224 +184,29 @@ scheduler over the wgmma requests, flashinfer's persistent LPT unmodified over t
 Each rung keeps the plan as the single source of routing, which is what the scheduling
 story rests on -- none of 1-4 requires the roles to share a `__global__`.
 
-## Tasks by category — 2026-10-06
-
-Ordered within each category by dependency, not by appeal. The fused single-kernel design
-is closed (see the co-residency measurements); everything below sits on the **two-executor**
-base: flash-attention's FA3 on its own scheduler over the wgmma requests, flashinfer's
-persistent LPT unmodified over the rest, one routing decision from our plan.
-
-### A. FA3 executor (the wgmma half)
-
-- [x] **Drive it with upstream's own scheduler, not an adapter** — 2026-10-06. Every
-      numerical fault in the port was in the adapter I substituted for
-      `VarlenDynamicPersistentTileScheduler`, or in the descriptors handed to it. Dropping
-      it made all four rows correct at once. `TileSchedulerArguments` already accepts the
-      request subset, per-request `cu_seqlens`/`seqused` and split counts, and does its own
-      L2 swizzle with `LPT=true` — so nothing was gained by the adapter.
-- [x] **Numerics** — rel err 1.5e-3 to 3.7e-3, 0 unwritten, reproduced across fixtures.
-- [x] **Beats FA2 on its own tile class** — 45.9 us against ~60.5 us for FA2 on the same
-      prefill rows, **1.32x**. This is per-role parity met and exceeded.
-- [ ] **K/V pipelining, stages=2** — recorded as worth ~15% and "blocked by an smem byte
-      count". That count was the FUSED kernel's: stages2 `TensorStorage` 197 632 B plus the
-      FA2 slot 69 632 is 267 264 against a 232 448 limit, over by exactly 34 816. The FA3
-      executor alone has exactly 34 816 B spare, so the split unlocks it. **Measuring now**
-      (`UP_STAGES=2`).
-- [ ] **DSMEM / KV multicast** — 1.33-1.59x in isolation on this role's own access pattern
-      (every q-tile of a prefill row re-gathering the same KV). Intra-role, so a cluster
-      inside this executor provides it; `FLASHINFER_FUSED_CLUSTER=2` still faults.
-- [ ] **Async/tiled packed copies** — `cp.async` landed; single-warp width and the per-row O
-      store remain, and the latter needs the indirection table.
-
-### B. FA2 executor (the persistent half)
-
-- [x] **Use it unmodified** — it is already correct and already the baseline, so the split
-      needs no FA2 work at all. This is what makes the split safe by construction: the
-      baseline kernel is handed strictly less work.
-- [x] **Register starvation is not an FA2 problem** — it was co-residency. At its native
-      128 threads x 2 CTAs/SM it holds 255 registers and spills 0 B.
-- [ ] **Q-split (8 warps, `num_mma_q=1`)** — halves the per-thread O accumulator, 1 136 ->
-      88 B spill in isolation. **Only relevant if FA2 ever shares a kernel again**; on the
-      two-executor base it is moot, and it overflowed smem by 1 120 B inside the fused
-      kernel anyway. Keep the switch, do not pursue.
-
-### C. Cross-executor fusions
-
-- [ ] **Split-KV reduction** — upstream's own combine kernel is wired and is the parity
-      reference (flash-attention pays that second launch too). The **improvement** is the
-      smem-handoff JIT reduction, which removes the launch and the global round-trip.
-      Intra-role: a split row's chunks are all one task's items, so no partial crosses
-      executors. Two silent-wrong traps are closed and documented — per-item `num_splits` in
-      `split_idx`'s high 16 bits, and per-request `num_splits_dynamic_ptr`.
-- [ ] **Spec tree-build epilogue** — designed, not built. Belongs to whichever executor
-      writes the verify output. Needs the 4-mode MTP batch, hence blocked on
-      `mix_with_running`.
-- [x] **Cross-role backfill — closed as not worth it.** It only ever existed in symmetric
-      mode, which computes FA3 wrong, and it is the construct that forces both mainloops
-      into one `__global__` and costs 33 676 B of spill. The split gives it up deliberately.
-      Overlap cannot substitute: an SM-budget sweep shows concurrency losing at every budget
-      because neither executor leaves SMs idle.
-
-### D. Serving integration
-
-- [ ] **Point the sglang path at the two-executor launch** — `SGLANG_TWO_EXEC=1` added to
-      `flashinfer_backend.py`; not yet exercised against a server.
-- [ ] **4-mode MTP serving run** — the simulated EAGLE draft is built
-      (`drivers/make_eagle_draft.py`, 233 M params, 3.1% of 7.6 B) and unused. Blocked on
-      `mix_with_running` crashing on a spec running batch.
-- [ ] **The actual bar: >=30% TTFT/ITL, >=10% throughput** on mixed chat + tracelab. Nothing
-      here is measured; the 1.19x is a kernel microbenchmark on a synthetic fixture.
-- [ ] **CUDA-graph capture** — needs the routing decision in device memory with
-      exit-early CTAs, so grid dims stay fixed and one graph serves every PD ratio. sglang's
-      graph layer already uses the same bucket-and-pad idea a level up.
-
-### E. Scheduling and the perf model (EDF)
-
-- [ ] **The SM budget is a latency knob, not a throughput knob** — established by the sweep:
-      capping FA3 costs it proportionally (1.63x at budget 64) and buys decode SMs. That
-      exchange rate is exactly what an EDF policy should set, which is the hook for the
-      perf model.
-- [ ] **Perf model vs the baseline unfused schedule** — the two-executor design should be
-      *easier* to model than the fused one: each kernel's cost is a function of its own
-      queue, with no register-starvation term that varies with what it is compiled beside.
-      Use predicted acceptance length (EWMA, fixed draft model) as an input to predict TPOT.
-- [ ] **EDF comparison** — not started.
-
-### F. Multi-node PD colocation
-
-- [ ] **Four points, written and unmeasured** — [`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md)
-      covers all four with its premise re-grounded on the two-executor decision. Gated on
-      "do not allocate h20 yet"; H20 only, <=16 GPUs, trial `vibecuda`.
-
-## Optimization ladder on the two-executor base — 2026-10-06
-
-Order matters: each rung needs the rung below it measured, or its effect is not
-attributable. The base is **two executors, one plan** -- flash-attention's FA3 on its own
-scheduler over the wgmma requests, flashinfer's persistent LPT unmodified over tasks 0-2.
-
-- [ ] **0. Base number.** Sequential launches, no overlap. The floor this has to clear is
-      72.3 us (FA2 over ALL rows). It should not be able to regress: the split hands FA2
-      strictly less work and gives the rest to a kernel at native register quality
-      (44-52 B spill against the fused kernel's 33 676 B).
-- [ ] **1. PDL between the two launches.** `cudaLaunchAttributeProgrammaticStreamSerialization`
-      so FA2 starts on SMs FA3 vacates instead of waiting for the grid to drain. This is
-      what recovers, temporally, the cross-role backfill the split gives up -- and backfill
-      inside a CTA is exactly what caused the co-compilation spill, so this is the better
-      trade.
-- [ ] **2. Unified JIT split-KV reduction with smem handoff.** Intra-role by construction:
-      a split row's chunks are all items of one task, so a partial never crosses executors.
-      Replaces upstream's second combine launch and its global round-trip, which is the
-      actual claim -- flash-attention pays that launch too.
-- [ ] **3. KV multicast / DSMEM.** 1.587x in isolation on the access pattern the wgmma role
-      has (every q-tile of a prefill row re-gathering the same KV). Also intra-role, so a
-      cluster inside the FA3 executor provides it. `FLASHINFER_FUSED_CLUSTER=2` currently
-      faults.
-- [ ] **4. Spec tree-build epilogue.** Fused into whichever executor writes the verify
-      output; needs the 4-mode MTP batch, which needs `mix_with_running` fixed.
-
-Each rung keeps the plan as the single source of routing, which is what the scheduling
-story rests on -- none of 1-4 requires the roles to share a `__global__`.
-
 ## Tasks, in priority order — 2026-10-06
 
-- [ ] **1. Split-KV reduction for the wgmma role** — 2026-10-06: reframed. The
-      parity reference is **upstream's own combine kernel**, a second launch, now
-      wired for the upstream path (`b3408d0`); the unified JIT reduction is the
-      improvement over that, since it removes the extra launch and the global
-      round-trip. Measured need: at `max_splits_fa3=2` both upstream arms left
-      511/512 rows unwritten before the combine pass existed.
-      Two silent-wrong traps found and closed: upstream carries per-item
-      `num_splits` in the top 16 bits of `split_idx`, and the combine pass needs the
-      same per request via `num_splits_dynamic_ptr` — a zero in either place makes
-      unsplit rows reduce against uninitialised memory rather than erroring.
-      [detail](#what-parity-means-on-a-split-batch--2026-10-06)
-      The flashinfer-FA3 path's own gap is unchanged and described below. Four build blockers cleared (`8d9c889`, `26bfc5b`):
-      `store_partial`'s template list was missing `SharedStorage`, which `store()`
-      templates as a method parameter rather than it being a class member type;
-      `jit_merge.cuh`'s include set was too narrow; `vec_t` specialises for
-      `__nv_bfloat16` not CUTLASS's `bfloat16_t`, so the shared merge hit
-      `ptxas fatal: Unresolved extern function vec_t<cutlass::bfloat16_t, 4>::load`
-      at **link** time, which no grep for `error:` can see; and the plan guard
-      still refused split task-3 rows after the reduction existed (now lifted,
-      `FLASHINFER_FA3_NO_SPLIT_REDUCE` kept as a bisect switch).
-      **Fixture 2 result: 511/512 rows unwritten**, only the unsplit decode row
-      correct. The cause is a gap of mine, not the handshake: the new epilogue
-      fields were added last and defaulted to `nullptr` so existing positional
-      initialisation stayed valid, and were then never populated at the
-      `CollectiveEpilogue::to_underlying_arguments` call in
-      `persistent_fa3_fused.cuh`. `store_partial` gates its handshake on
-      `group_counter != nullptr`, so every split chunk writes a partial and
-      nothing merges. Earlier commits said "group tables in the epilogue params"
-      when only the declarations existed.
-      **Isolated 2026-10-06.** The same build **passes** with
-      `FLASHINFER_FA3_MIN_PACKED_QO=4096` (all rows on FA2): 0/512 unwritten, rel
-      err 3.7e-3 / 4.4e-3 / 8.3e-4. So the shared-merge extraction and the epilogue
-      changes did **not** break the FA2 path — the fault is specific to task-3 rows
-      being split. It also explains the confusing row labels: with default routing
-      `qo=439` (packed 3073) goes to **task 3**, so the harness's "task0" text is
-      static, not actual routing, and both failing rows were wgmma rows.
-      **The live suspect is a row-space mismatch.** `store_partial` writes a dense
-      `[nrows, HEAD_DIM]` slab indexed from `partial_indptr`, and `MergeGroupJIT`
-      reads partials and writes final O through `merge_indptr`/`merge_o_indices`
-      in the FA2 roles' row space. The wgmma role's rows are **packed GQA**
-      `(G, seq)`, so its `partial_indptr` rows and the merge's expected row
-      ordering may not correspond. Next: dump, for one task-3 group,
-      `partial_indptr`, `group_row_begin`, `group_nrows` and the `merge_indptr`
-      span, and check whether the rows the epilogue wrote are the rows the merge
-      reads.
-      [detail](#wgmma-role-unreachable)
-- [ ] **2. Per-role parity vs standalone SOTA** — FA3 vs flash-attention, FA2 vs
-      the stock persistent kernel, on fixed-input kernel timing with L2-swizzled
-      LPT retained. This is the real success criterion and has never been run.
-      **The vehicle is the upstream FA3 port**, not further patching of
-      flashinfer's simplified mainloop: parity with flash-attention is most
-      credibly shown by running flash-attention's own mainloop in our launch
-      template. Status 2026-10-06: **the port compiles end to end** with
-      `FLASHINFER_FA3_UPSTREAM=1` — a TU that forces instantiation of
-      `FusedFA3PersistentDispatched` builds the whole upstream kernel body at 0
-      errors, and the default path builds unchanged from the same TU. Verified by
-      forced instantiation, because four earlier commits in this port claimed
-      "compile-checked" on code the upstream scheduler's `if constexpr` false
-      branch never instantiated.
-      Done since: every guessed params field name reconciled against the real
-      structs (they had been read off the *FA2* role's `PersistentParams`, which
-      has no such members and is the wrong source besides); `max_splits_fa3`
-      exported through `plan_info` so the float partial O/LSE can be sized exactly
-      rather than by a bound that would ask for gigabytes; the three workspace
-      buffers allocated in the ext with `num_requests`/`max_pages_per_seq` threaded
-      from both call sites; the dense page table padded with -1 because 0 is a
-      valid page id.
-      **Not yet validated at runtime** — this machine has no GPU, so the next step
-      is fixture 2 on the pod against the fp32 reference, then the parity timing.
-      **FA3's half is explained and recoverable as of 2026-10-06.** Its spill is
-      co-compilation, not the mainloop: 33 676 B inside the fused kernel against
-      52 B compiled alone in the same template at the same 168 registers and the
-      same launch bounds. Outlining the FA2 body brings it to 64 B — but relocates
-      17 500 B onto FA2, so `FLASHINFER_FUSED_DRAIN_NOINLINE` is a work-mix trade,
-      left off pending measurement.
-      **FA2's half is a work-distribution problem, not a register shortfall.** At
-      384 threads FA2 holds 168 regs and spills 1 136 B against 0 B / 255 regs
-      natively, but the SM-wide budget is identical (255x256 = 170x384 = 65 280),
-      so the penalty is the cost of 256 idle threads at `WG_DRAIN=1`, and
-      `WG_DRAIN=3` — currently producing wrong FA2 output — is what reclaims it.
-      [detail](#the-two-roles-register-costs-separated--2026-10-06)
-- [ ] **3. KV multicast / DSMEM** — 1.33-1.59x in isolation; carries the partials
-      between cluster peers instead of through global memory, so it layers onto
-      task 1. `FLASHINFER_FUSED_CLUSTER=2` still faults.
-      **Unaffected by the two-executor decision** (2026-10-06): the measured access
-      pattern is q-tiles of one prefill row re-gathering the same KV, all of which are
-      FA3-role items, so the cluster lives inside one executor.
-      [detail](#multicast-open)
-- [ ] **4. Optional epilogue: tree build after reduction** — designed, not built.
-      [detail](#fused-epilogue-design)
-- [ ] **5. Serving A/B on the intended routing** — tiles 128/64 on wgmma, tile-16
-      decode on FA2. Needs task 1. The fallback is now strict, so an arm cannot
-      silently compare a mixture.
-- [ ] **6. 4-mode MTP serving schedule** — blocked on `mix_with_running` with a
-      spec running batch. [detail](#four-mode-blocked)
-- [ ] **7. Multi-node PD colocation, four points** — H20 only, <=16 GPUs, trial
-      `vibecuda`. Written up in
-      [`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md); none measured.
+Pointers into the category sections below; the detail and evidence live there. The fused
+single-kernel design is closed, so everything here sits on the **two-executor** base.
+
+1. [x] [K/V pipelining, stages=2](#kernel-optimisations--2026-10-06) — **measured 6.0%** on
+   the FA3 half (45.2 -> 42.5 us), split total 76.7 vs 93.0 baseline = **1.21x**. The ~15%
+   estimate was optimistic. The smem count that blocked it was the fused kernel's.
+2. [Point the serving path at the two-executor launch](#server-integration--2026-10-05) —
+   `SGLANG_TWO_EXEC=1` is wired, never run against a server. This is the gate on the whole
+   >=30%/>=10% bar.
+3. [4-mode MTP serving run](#server-integration--2026-10-05) — EAGLE draft built and unused;
+   blocked on `mix_with_running`.
+4. [Smem-handoff JIT split-KV reduction](#kernel-optimisations--2026-10-06) — upstream's
+   combine launch is the parity reference; removing it is the claim.
+5. [DSMEM / KV multicast](#kernel-optimisations--2026-10-06) — needs upstream's TMA paged
+   path, not our cluster flag; see the note there.
+6. [Perf model and EDF vs the unfused schedule](#schedule-exploration--2026-10-05) — the SM
+   budget is a latency knob, and the sweep gives its exchange rate.
+7. [Spec tree-build epilogue](#kernel-optimisations--2026-10-06) — designed, not built;
+   needs item 3.
+8. [Multi-node PD colocation, four points](#multi-node-schedule-tests-h20-only--16-gpus-trial-vibecuda--not-started) —
+   written, unmeasured, gated on "do not allocate h20 yet".
 
 ## Kernel optimisations — 2026-10-06
 - [ ] **Port upstream FA3 into the fused launch template** — 2026-10-06, viability
@@ -430,7 +235,17 @@ story rests on -- none of 1-4 requires the roles to share a `__global__`.
       All PASS. The batch is ~99% task-3 work, so `sm_split=8` costs **18.6x**
       purely by starving the role that holds the work. Serving ran at
       `SGLANG_FUSED_SM_FA3=8`. Size the split from the plan's per-task work.
-- [ ] **K/V pipelining: worth ~15%, blocked by an smem byte count** — 2026-10-06:
+- [x] **K/V pipelining (stages=2): MEASURED 6.0%, and the split unlocked it** — 2026-10-06,
+      flashinfer `6c7e26f`. On `qo:512,512,100,1`, `UP_STAGES=2` vs `1` on the FA3 executor:
+      fa3 half **45.2 -> 42.5 us (6.0%)**, split total **79.6 -> 76.7 us**, against a 93.0 us
+      FA2-on-everything baseline — so **1.21x** overall. All rows PASS.
+      The blocking smem count was the FUSED kernel's: stages2 `TensorStorage` 197 632 B plus
+      the FA2 slot 69 632 is 267 264 against the 232 448 limit, over by exactly 34 816, and
+      the FA3 executor alone has exactly 34 816 B spare. So this is a gain the single-kernel
+      design could not have taken at all.
+      **The ~15% estimate below was optimistic**; measured is 6.0% on the FA3 half. Recorded
+      as measured rather than as estimated.
+- [ ] **(superseded) K/V pipelining: estimated ~15%, blocked by an smem byte count** — 2026-10-06:
       `-DFUSED_FA3_STAGES=1` removes FA3's load/compute overlap. Aliased
       measurements: stages 1 -> 703.6 us, 2 -> 600.5, 3 -> 653.2. Disjoint smem
       cannot fit a second stage: `cudaFuncSetAttribute` fails at 234544 against the

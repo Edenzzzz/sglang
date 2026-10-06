@@ -191,6 +191,16 @@ So there are two separate problems. **Under-parallelisation**: 8 work tiles cann
 SMs, which is exactly what split-KV exists to fix. **And something pathological on top**,
 since 8-CTA serialisation only accounts for 270 us of the 17 358.
 
+**PREDICTION, recorded 2026-10-06 before the measurement that tests it.** The "something
+pathological on top" here should be the same `MmaPV_is_RS=false` fault found on the TraceLab
+batch -- a mainloop that serialises softmax against the PV mma stalls per KV block, so the
+penalty scales with KV length and is worst exactly where this entry measures it (16384 KV
+against 8 q rows). If that is right, the `rs1` arm should cut this fixture's 17 358 us by
+roughly the same factor it cuts the TraceLab batch, and the residual should land near the
+~270 us that 8-CTA serialisation alone predicts. If the `rs1` arm leaves this fixture
+unchanged, the two slowdowns are independent and this entry still has its own unexplained
+cause -- which would also mean the SM-budget evidence was over-generalised from one shape.
+
 **Evidence that our split count never reaches the kernel.** The harness's `partial_o`
 scratch is `total_q * head_dim * num_heads` floats, with **no `num_splits` factor** — 419 328
 against the 12 160 512 the epilogue would need at 29 splits, a 29x shortfall. If the epilogue

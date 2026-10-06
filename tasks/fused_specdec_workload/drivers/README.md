@@ -13,6 +13,18 @@ on 2026-10-05; they live here now so that costs nothing next time.
 | `noproxy.sh` | strips proxy variables; `merlin-cli` fails with EOF through the proxy |
 | `px.py` | chunked base64 push + `execute-script` exec helper (set `SID` to the trial). Strips proxy vars itself, and `probe_trial()` reports trial status |
 
+## Restore order: the kernel A/B does not need the sglang tree
+
+`tests/test_fused_server_batch.py` imports only `os`, `sys`, `glob`, `numpy` and `torch` --
+**not sglang**. So the kernel-level arms can run as soon as the flashinfer tree, cutlass,
+flash-attention and the venv are in place. The sglang `python/` tree (5.8 MB, the slowest
+push at ~13 s per 60 KB chunk, roughly 30 min) is needed only for the server-integration
+items. Push it *after* launching the kernel A/B, or in parallel -- not before, which idles
+the GPU for half an hour behind a dependency the harness does not have.
+
+Push order that respects this: venv -> cutlass/flash-attention clones (pod-side, fast) ->
+flashinfer fork tree -> **launch kernel A/B** -> sglang tree.
+
 ## `{"error": "EOF"}` has TWO causes, and they look identical
 
 1. **Proxy.** `NO_PROXY` (uppercase) omits `.bytedance.net` / `.byteintl.net` while lowercase

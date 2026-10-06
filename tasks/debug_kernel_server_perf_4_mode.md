@@ -553,12 +553,35 @@ range spanning all rows but a batch count covering only the FA3 subset, and its 
 (batch, row) mapping is derived from both. A mismatch there walks tiles into token ranges the
 FA3 subset does not own, which is exactly the observed signature.
 
-The candidate fix is to make `total_q` and `b` describe the same subset, but the partial
-buffers are indexed by **absolute** token offsets through `cu_seqlens_q`, so changing one
-without the other moves the corruption rather than removing it. Next diagnostic: dump the
-(bidb, m_block) pairs the combine actually visits for the `dec64k` fixture and check which
-land outside the FA3 rows -- the previous four faults of this class were each found by
-identifying which rows were touched, and guessing the parameter has a poor record here.
+**RETRACTED: narrowing `total_q` to the FA3 subset is NOT the fix.** I added
+`UpstreamFA3Plan::fa3_total_q` (= `cu_seqlens_q[n_fa3]`) and passed it in place of
+`p.total_q`, on the reasoning that the scheduler's token extent and batch count must describe
+the same subset while addressing stays absolute. That reasoning about the code is still
+correct as far as it goes, and it changed nothing measurable:
+
+| fixture | FA2 rel err before | after the `total_q` change |
+|---|---|---|
+| `sh16k` rows 2,3 | 0.205, 1.392 | 0.153, **1.421** |
+| `dec64k` row 1 | 0.493 | **0.479** |
+| `dec98k` row 1 | 0.509 | **0.473** |
+
+Unchanged within noise, so the grid-sizing mismatch was not the mechanism. The change is kept
+(it makes the two arguments consistent and is harmless) but it is not a fix for anything, and
+claiming the diagnosis from a code reading was premature -- that is the seventh hypothesis in
+this investigation to die, and the second to die *after* I had reasoned carefully about the
+source rather than guessed.
+
+**Now isolating instead of theorising.** Three arms on `qo:1,512 prefix:65536,512`:
+`n_fa3=0` (no FA3 kernel, no combine), `n_fa3=1` with splits forced to 1 (FA3 runs, combine
+does not), and `n_fa3=1` with splits auto = 29 (both run). That partitions the possibilities
+without needing a guess: if the first arm fails, the FA2 rows are wrong independently of FA3;
+if the first two pass and the third fails, the combine is the writer; if the second fails, it
+is the FA3 kernel or the plan.
+
+Worth noting what the TraceLab arms already say: the same `task0 qo=512 kv=1024` shape is
+**correct** there (rel err 0.0022) at `num_splits=1`, and wrong here at `num_splits=29`. So the
+correlation with the split count is real even though the combine's grid arguments are not the
+cause.
 
 This blocks the smem-handoff JIT split-KV reduction item, which is only measurable on
 split-heavy shapes.

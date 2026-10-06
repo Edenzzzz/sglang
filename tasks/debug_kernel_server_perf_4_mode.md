@@ -791,11 +791,34 @@ plan's construction for `qo=1, gqa=7, cluster_tile_q=16` gives `row_tile_size=7`
 `q = row/7 = 0` for rows 0-6, i.e. token 0 only, which looks correct -- so the overshoot, if
 it exists, is in the kernel's use of those indices rather than in their construction.
 
-**Cheapest next measurement**, and it needs no hypothesis: zero `final_o` before the launch and
-dump which **token rows** of the victim differ from the reference. The set of damaged tokens
-names the writer directly -- a contiguous run starting at the victim's first token implicates
-`merge_o_indices` overshoot; a strided or head-aligned pattern implicates the stride; damage
-confined to one `kv_head` implicates the `kv_head_idx * gqa_group_size` term.
+**MEASURED: the damage is TOTAL, which eliminates the whole write-collision class.** Per-token
+and per-head diff on the victim (`DUMP_ROWS=1`, harness extended to report the damaged sets):
+
+| fixture | victim | damaged tokens | damaged qo_heads |
+|---|---|---|---|
+| `qo:1,512 prefix:65536,0` | `qo=512 kv=512` | **512 / 512** (0 ... 511) | **28 / 28** |
+| `qo:127,512 prefix:65536,0` | `qo=512 kv=512` | **512 / 512** | **28 / 28** |
+
+Every token and every head is wrong, while the leading row is perfect (0 / 1 and 0 / 127
+damaged). An overshoot from the preceding row would damage a **bounded prefix** -- the surplus
+rows only -- and a stride fault would leave a periodic pattern. Neither is what this is. So
+`merge_o_indices` overshoot, the `kv_head_idx * gqa_group_size` term, and write collisions in
+general are all refuted.
+
+**What total, in-range, fully-written damage means:** the victim is not being overwritten, it
+is **computing with the wrong inputs**. Combined with the earlier arms, the victim is correct
+whenever it is the *first* row (`qo:512,1 prefix:512,65536` passes; `qo:256 prefix:0` alone
+passes) and wrong whenever a **split** row precedes it -- while two *unsplit* rows in sequence
+are fine (`qo:512,1024 prefix:0,0` passes, and there the second row's `kv_indptr` is non-zero).
+So the live candidate is the victim's **KV base** (`kv_indptr` / page offset) or its
+`kv_start`/`kv_end` chunk bounds being computed wrong when a split row precedes it -- which
+would make it attend the wrong KV and produce exactly a fully-wrong, in-range result.
+
+**Next measurement, again hypothesis-free:** the plan dump already works
+(`drivers`-side `dump.py`). Dump `kv_indptr`, `kv_start`, `kv_end` and `batch_idx` for the
+victim's work items in a PASS fixture (`qo:512,1024 prefix:0,0`) and a FAIL one
+(`qo:1,512 prefix:65536,0`) and diff them. If the victim's KV bounds differ from
+`cumsum(ceil(kv/page))` in the FAIL case, that is the bug and the dump shows it directly.
 
 **Superseded lead, from the victim row's character (`DUMP_ROWS=1`).** The corrupted row is not
 zeroed, not skipped and not garbage:

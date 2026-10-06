@@ -29,6 +29,10 @@ if [ ! -x $W/venv/bin/python ]; then
                  pillow psutil einops sentencepiece setproctitle \
                  interegular partial_json_parser llguidance msgspec compressed_tensors \
                  python-multipart soundfile scipy torchao blobfile hf_transfer
+  # RE-PIN torch LAST, and keep it last. The dependency list above upgrades torch (seen:
+  # 2.8.0 -> 2.14.1+cu130), and torch >= 2.9 requires C++20 while the fused harness compiles
+  # at -std=c++17, so every extension build then dies with
+  #   #error C++20 or later compatible compiler is required to use PyTorch
   pip install -q torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
 else
   . $W/venv/bin/activate

@@ -186,108 +186,62 @@ story rests on -- none of 1-4 requires the roles to share a `__global__`.
 
 ## Tasks, in priority order — 2026-10-06
 
-Pointers into the category sections below; the detail and evidence live there. The fused
-single-kernel design is closed, so everything here sits on the **two-executor** base.
+Titles only. Each points into a feature category below, which carries the one-line status
+and in turn points to the detail section holding the evidence.
 
-1. [x] [K/V pipelining, stages=2](#kernel-optimisations--2026-10-06) — **measured 6.0%** on
-   the FA3 half (45.2 -> 42.5 us), split total 76.7 vs 93.0 baseline = **1.21x**. The ~15%
-   estimate was optimistic. The smem count that blocked it was the fused kernel's.
-2. [Point the serving path at the two-executor launch](#server-integration--2026-10-05) —
-   `SGLANG_TWO_EXEC=1` is wired, never run against a server. This is the gate on the whole
-   >=30%/>=10% bar.
-3. [4-mode MTP serving run](#server-integration--2026-10-05) — EAGLE draft built and unused;
-   blocked on `mix_with_running`.
-4. [Smem-handoff JIT split-KV reduction](#kernel-optimisations--2026-10-06) — upstream's
-   combine launch is the parity reference; removing it is the claim.
-5. [DSMEM / KV multicast](#kernel-optimisations--2026-10-06) — needs upstream's TMA paged
-   path, not our cluster flag; see the note there.
-6. [Perf model and EDF vs the unfused schedule](#schedule-exploration--2026-10-05) — the SM
-   budget is a latency knob, and the sweep gives its exchange rate.
-7. [Spec tree-build epilogue](#kernel-optimisations--2026-10-06) — designed, not built;
-   needs item 3.
-8. [Multi-node PD colocation, four points](#multi-node-schedule-tests-h20-only--16-gpus-trial-vibecuda--not-started) —
-   written, unmeasured, gated on "do not allocate h20 yet".
+1. [K/V pipelining on both executors](#kernel-optimisations--2026-10-06)
+2. [Smem-handoff JIT split-KV reduction, both executors](#kernel-optimisations--2026-10-06)
+3. [Long-context TraceLab A/B](#server-integration--2026-10-05)
+4. [4-mode MTP serving run](#server-integration--2026-10-05)
+5. [DSMEM / KV multicast](#kernel-optimisations--2026-10-06)
+6. [Fused spec tree-build epilogue](#kernel-optimisations--2026-10-06)
+7. [Perf model and EDF vs unfused](#schedule-exploration--2026-10-05)
+8. [Multi-node PD colocation, four points](#multi-node-schedule-tests-h20-only--16-gpus-trial-vibecuda--not-started)
 
 ## Kernel optimisations — 2026-10-06
-- [ ] **Port upstream FA3 into the fused launch template** — 2026-10-06, viability
-      established. `/opt/tiger/flash-attention/hopper` compiles clean against our
-      cutlass v4.1.0 (zero errors; include order is `utils.h` ->
-      `tile_scheduler.hpp` -> `mainloop_fwd_sm90_tma_gmma_ws.hpp`).
-      `CollectiveMainloopFwdSm90` is templated on exactly the features we
-      hand-rolled worse: `PagedKVNonTMA_` (our sparse gather), `PackGQA_` (our
-      packed-Q load), `Split_` (our partial/merge path), `Varlen_`, `Stages`, and
-      `IntraWGOverlap` (S/P ping-pong, which we do not have at all).
-      **Smem fits.** Upstream `TensorStorage`: stages1 132096, stages2 197632,
-      stages3 263168. With the FA2 slot at 69632 against the 232448 opt-in limit,
-      stages=1 fits **disjointly** at 201728 with 30720 spare -- so the port needs
-      no aliasing and avoids that unexplained fault. stages=2 would need aliasing
-      (197632 alone fits); stages=3 never fits.
-      Starting at stages=1 still captures the gap, because stages was measured at
-      only ~15% while the mainloop difference is ~1.6x.
-      Plan: instantiate upstream's mainloop + `CollectiveEpilogueFwd` inside the
-      `blockIdx.x < sm_split` branch, feed it our plan's work items through a
-      scheduler adapter, keep the FA2 role and the shared smem budget untouched,
-      and delete our packed-Q gather / sparse path / partial write once it is live.
-- [x] **`sm_split` is the dominant lever, and a constant is the wrong choice** —
-      2026-10-06: on a long-prefix fixture (qo 439/439/1, prefix 16384/0/5468) with
-      partitioning on: 8 -> 7892 us, 32 -> 2506, 64 -> 1342, 96 -> 1006,
-      124 -> **772**, 130 -> 775, 131 -> 796, against 421 us for FA2-on-everything.
-      All PASS. The batch is ~99% task-3 work, so `sm_split=8` costs **18.6x**
-      purely by starving the role that holds the work. Serving ran at
-      `SGLANG_FUSED_SM_FA3=8`. Size the split from the plan's per-task work.
-- [x] **K/V pipelining (stages=2): MEASURED 6.0%, and the split unlocked it** — 2026-10-06,
-      flashinfer `6c7e26f`. On `qo:512,512,100,1`, `UP_STAGES=2` vs `1` on the FA3 executor:
-      fa3 half **45.2 -> 42.5 us (6.0%)**, split total **79.6 -> 76.7 us**, against a 93.0 us
-      FA2-on-everything baseline — so **1.21x** overall. All rows PASS.
-      The blocking smem count was the FUSED kernel's: stages2 `TensorStorage` 197 632 B plus
-      the FA2 slot 69 632 is 267 264 against the 232 448 limit, over by exactly 34 816, and
-      the FA3 executor alone has exactly 34 816 B spare. So this is a gain the single-kernel
-      design could not have taken at all.
-      **The ~15% estimate below was optimistic**; measured is 6.0% on the FA3 half. Recorded
-      as measured rather than as estimated.
-- [ ] **(superseded) K/V pipelining: estimated ~15%, blocked by an smem byte count** — 2026-10-06:
-      `-DFUSED_FA3_STAGES=1` removes FA3's load/compute overlap. Aliased
-      measurements: stages 1 -> 703.6 us, 2 -> 600.5, 3 -> 653.2. Disjoint smem
-      cannot fit a second stage: `cudaFuncSetAttribute` fails at 234544 against the
-      232448 opt-in limit (FA3 98352 + the 69632 persistent slot, 1-2 KB over).
-      So the 15% needs aliasing, and aliasing is currently unsafe.
-- [ ] **The aliasing race is mis-described in the source, and the fix is narrow** —
-      2026-10-06: the comment says it fires "when a CTA drains FA2 before entering
-      FA3", i.e. only under backfill. But backfill defaults **off** and aliased runs
-      still failed (rel err 16.6 / 18.6, intermittently passing at stages=3 — the
-      documented 3-in-10 flakiness). What is established: with backfill off,
-      aliasing corrupts the **FA2-class row** (rel err 15.3 / 15.1) while the FA3
-      row and the tile-16 row pass, at stages=1 as well as 2.
-      **Mechanism NOT established.** I recorded "FA3's mbarriers are initialised
-      before the sm_split branch so FA2-role CTAs clobber their own slot" and then
-      withdrew it: smem is per-CTA, with backfill off each CTA runs exactly one
-      role, and at stages=1 the aliased request (98352) covers the slot at
-      0..69632 with room to spare. So an aliased base alone should be harmless and
-      something else is at work. Needs its own investigation; do not act on the
-      withdrawn explanation.
-- [ ] **Task 3's `kv_len_limit` uses the wrong cluster count** — 2026-10-06: it is
-      `f(total_kv_lens / num_clusters)` with `num_clusters` = **all 132**, not task
-      3's own 8 under SM partitioning. So every task-3 row splits regardless of
-      length: `qo=439, kv=439` became 25 q-tiles x 2 chunks x 4 kv-heads = 200 work
-      items, and `FA3_PLAN_CTAS=1` changes nothing because the divisor is global.
-      Consequences: partial-O traffic that need not exist, the reduction forced
-      onto the critical path, and a split count that undercuts the load-balance
-      claim. The limit should come from the task's own cluster allocation.
-- [x] [The reduction is unwired, not FA3-incapable](#wgmma-role-unreachable) — FA3 processes KV chunks fine; only the partial write and merge trigger were missing. Dynamic `kv_len_limit` splitting is the LPT balancer working correctly and stays
-- [x] [Q completion protocol](#why-fused-is-slow) — per-lane `cpasync_barrier_arrive_noinc` is correct and free; the hang was the increment variant inflating the expected arrival count. Fixture 2 rel err 3.3e-3, 0/512 unwritten
-- [x] [Register starvation measured](#why-fused-is-slow) — fused 168 regs / 720-816 B spill against standalone 255 / 56-288 B (`cuobjdump -res-usage`). Applies to `mma.sync` on large tiles, which belong on wgmma, so likely moot for the intended routing
-- [x] [Packed GQA for the wgmma role — class boundary](#packed-gqa-class-boundary) — 2.40x decode/draft, 1.70x verify, 1.00x chunks
-- [x] [Packed GQA — implemented and numerically exact](#unified-queue-numerically-correct) — 0/512 unwritten on the real batch
-- [x] [Do tiles 128 and 64 still belong in FA2?](#packed-gqa-class-boundary) — no for 128/64, yes for 16 (decode is bandwidth-bound)
-- [x] [Unified load-balance scheduler](#schedule-quality-4-mode) — imbalance 1.000 per task, waste 13.9% -> 54.8%
-- [x] [Dispatch gate rewritten from measurement](#packed-gqa-class-boundary) — `MIN_KV_TILES` was backwards and excluded the dominant row
-- [x] [Unified split-KV — FA2 side exercised and correct](#split-kv-overflow) — fixture 2 passes with 56 partial rows; the wgmma role's own split path still unexercised
-- [ ] [JIT reduction for the wgmma role](#split-kv-dark) — `partial_indptr`/`group_id` carried and ignored; a wrong answer for any split task-3 row, though no split was observed at 8192 and the guard has not yet been shown to fire
-- [ ] [Multicast / DSMEM](#multicast-open) — 1.33-1.59x in isolation; `FLASHINFER_FUSED_CLUSTER=2` still faults
-- [ ] [Fused epilogue: tree build as a task](#fused-epilogue-design) — designed, not built
-- [ ] [Cross-role backfill](#symmetric-retracted) — only existed in symmetric mode, which computes FA3 wrong; needs redoing on a correct path
-- [ ] Async/tiled packed copies — `cp.async` landed; single-warp width and the per-row O store remain (needs the indirection table)
-- [x] [Warpgroup-reentrant FA2](#why-fused-is-slow) — correct with aliased smem, but 384 threads is **slower**: more warpgroups lower the per-thread register ceiling that `mma.sync` needs
+
+One line each; the evidence is in the linked detail section. Every item must be tested on
+**both** executors — a win on FA3 says nothing about FA2.
+
+- [x] **Two executors instead of one kernel** — split beats FA2-on-everything 1.21x and
+      passes; the fused kernel was 2.16x slower. Now the default.
+      [detail](#two-executors-beat-fa2-on-everything-and-pass--2026-10-06)
+- [x] **Drive FA3 with upstream's own scheduler** — fixed every numerical fault at once.
+      [detail](#the-plan-and-the-split-encoding-are-both-verified-correct--2026-10-06)
+- [x] **K/V pipelining, FA3** — stages=2, **6.0%** on the FA3 half; the smem count that had
+      it blocked was the fused kernel's.
+      [detail](#kv-pipelining-stages2-measured-60-and-the-split-unlocked-it)
+- [ ] **K/V pipelining, FA2** — `FLASHINFER_FA2_MMA_KV` now sweepable (depth 2 today); trades
+      the `s_frag[NUM_MMA_Q][NUM_MMA_KV][8]` register budget for pipeline depth, so it will
+      not improve monotonically. Untested.
+- [ ] **Smem-handoff JIT split-KV reduction** — the contribution over stock on both sides:
+      replaces upstream FA3's separate combine launch and FA2's **global** partial
+      round-trip. Intra-role, so no partial crosses executors. Only measurable on
+      split-heavy shapes (few q rows, long KV); every fixture used so far has
+      `num_splits=1`, where it saves nothing.
+      [detail](#what-parity-means-on-a-split-batch--2026-10-06)
+- [ ] **DSMEM / KV multicast** — 1.33-1.59x in isolation. Needs upstream's **TMA paged**
+      path: our `PagedKVNonTMA=true` gathers KV with `cp.async` and
+      `Use_TMA_KV = !PagedKVNonTMA`, so a cluster would multicast Q only. The old
+      `FLASHINFER_FUSED_CLUSTER` flag belongs to the closed fused dispatch.
+- [ ] **Fused spec tree-build epilogue** — designed, not built; belongs to whichever executor
+      writes the verify output. Needs the 4-mode MTP batch.
+      [detail](#fused-epilogue-design)
+- [ ] **Async/tiled packed copies** — `cp.async` landed; single-warp width and the per-row O
+      store remain, the latter needing the indirection table.
+- [x] **Packed GQA** — upstream provides it for FA3 (`PackGQA=true`); FA2's persistent kernel
+      already had it. Nothing to add on either side.
+      [detail](#packed-gqa-class-boundary)
+- [x] **`sm_split` is a latency knob, not a throughput knob** — the budget sweep gives the
+      exchange rate (1.63x FA3 cost at 64 SMs); concurrency loses at every budget because
+      neither executor leaves SMs idle.
+      [detail](#retracted-fa3s-cost-is-not-fixed-and-there-is-no-overlap-headroom--2026-10-06)
+- [x] **Cross-role backfill — closed.** It only existed in symmetric mode, which computes FA3
+      wrong, and it is the construct that costs 33 676 B of spill.
+      [detail](#symmetric-retracted)
+- [x] **Register and smem co-residency limits** — either role native, never both; smem over
+      the opt-in limit by 1 120 B. This is what closed the fused design.
+      [detail](#the-two-roles-register-costs-separated--2026-10-06)
 
 ## Structures evaluated — 2026-10-06
 - [x] [Static SM pre-assignment](#static-split-confirmed) — -14.4% / -14.0% / -11.5%, no winning fraction

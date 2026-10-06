@@ -4607,6 +4607,47 @@ sequence is
 Recording this because it changes what the parity number has to be measured
 against: a two-launch flash-attention baseline, not a single-kernel one.
 
+### The combine pass must be restricted to the wgmma queue's requests — 2026-10-06
+
+Two fixes landed and the third fault is now isolated.
+
+**Fixed, and confirmed by the result:** upstream indexes `cu_seqlens_q[bidb]` and
+`seqused_k[bidb]` as *request* boundaries, while the plan's `q_indptr` and `kv_len` are
+pushed once per WORK ITEM (`scheduler.cuh:1582`). Passing the per-item arrays made
+upstream read arbitrary work items as request offsets. With true per-request arrays,
+fixture 2 goes from **439/512 unwritten to 0/512** -- every row is now written.
+
+**Remaining fault, precisely located.** All three rows are now wrong, and the telling
+one is row 2:
+
+| row | before the descriptor fix | after |
+|---|---|---|
+| 0, wgmma, qo=72 | nan (unwritten) | 11.13 |
+| 1, wgmma, qo=439 | nan (unwritten) | 11.42 |
+| 2, **FA2 decode**, qo=1 | **0.00058 ok** | **0.155 FAIL** |
+
+Row 2 had been correct in every previous arm, because it is an FA2-role row the wgmma
+executor never touches. It is wrong now, so something in the upstream path writes
+outside the wgmma queue's rows -- and that something is the combine pass. It is launched
+with `b = num_requests` and walks every request, because in upstream *all* rows go
+through FA3 and every request therefore has partials. In our split only task-3 rows do,
+so for request 2 the combine reduces partial buffers that were never written and stores
+the result over the FA2 executor's correct output.
+
+**The fix is upstream's own mechanism.** `FlashAttnFwdCombine::Arguments` takes
+`varlen_batch_idx_ptr`, which remaps the scheduler's batch index onto a real batch index
+precisely so the pass can run over a SUBSET of batches. So:
+
+1. build a compact device array of the request indices that have wgmma work -- the
+   planner knows them, they are the rows it routed to `idx_qo_kv_len_vec[kFA3Task]`;
+2. pass it as `varlen_batch_idx_ptr` and set `b` to its length;
+3. the grid then covers only those requests and the FA2 rows are never touched.
+
+This is the same shape as the two fixes before it: upstream carries a parameter for
+exactly this case, and the bug was passing the whole-batch default instead. Worth noting
+the pattern -- all three faults were "upstream has a field for the subset/per-item case
+and I handed it the aggregate".
+
 ### Co-residency constrains the fused kernel twice: registers AND shared memory — 2026-10-06
 
 The Q-split arm never reached the kernel. It failed at

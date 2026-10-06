@@ -157,7 +157,7 @@ number, because it will swamp small batches either way.
 
 ## Tasks, in priority order — 2026-10-06
 
-1. [K/V pipelining, FA2](#kernel-optimisations--2026-10-06)
+1. [K/V pipelining, FA2](#fa2-kv-pipelining-measured-flat--2026-10-06) -- **done, no effect**
 2. [Smem-handoff JIT split-KV reduction, both executors](#kernel-optimisations--2026-10-06)
 3. [Context length where attention is >50% of e2e](#workload-and-measurement-setup--2026-10-06)
 4. [TraceLab mixed scenarios instead of random](#workload-and-measurement-setup--2026-10-06)
@@ -504,6 +504,32 @@ rather than collected at the end, since `/dev/shm` dies with the trial.
 `page_size=128` (all rows PASS in the TMA arm), which was the stated prerequisite for the DSMEM
 multicast item, so that item can proceed. What is retracted is the claim that the same change
 "addresses the 31x long-context regression" — it does not address it at all.
+
+<a id="fa2-kv-pipelining-measured-flat--2026-10-06"></a>
+### FA2 K/V pipelining is flat on long context, because FA2 is already at roofline — 2026-10-06
+
+Priority item 1, measured on the TraceLab batch (1.58M KV, page 128, FA2 on every row, 5
+iters, `drivers/ab_fa3_traits.sh` arms `fa2k2/3/4`):
+
+| `FA2_MMA_KV` | total | fa2 half |
+|---|---|---|
+| 2 (default) | 15 301.9 us | 15 218.8 us |
+| 3 | 15 298.6 us | 15 296.6 us |
+| 4 | 15 243.3 us | 15 219.5 us |
+
+**Flat to 0.5%.** Deepening FA2's K/V pipeline buys nothing here, and the reason is the
+corrected roofline: FA2 does this batch at **322 TFLOP/s, 1.2x off peak**, so there is no
+memory latency left to hide. A deeper pipeline pays only when the loop is waiting, and this
+one is not.
+
+This supersedes the earlier note carrying it as "worth ~15% and blocked by an smem byte
+count". That estimate came from the *fused* kernel's constraints, where the FA2 slot was
+competing for smem with FA3; the split removed the constraint, and with it the premise. The
+item is closed: **no change to make.**
+
+Caveat on scope: this is the long-context regime. A short-KV batch, where FA2's own tiles
+are latency-bound rather than compute-bound, could still respond to depth -- that is a
+different fixture and is not claimed either way here.
 
 ## Kernel optimisations — 2026-10-06
 

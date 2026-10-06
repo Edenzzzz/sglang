@@ -306,13 +306,25 @@ pipeline depth: we instantiate with `UP_STAGES=2`, and 2 stages of 128-token KV 
 blocks long. On the old `kv=512` fixtures the whole KV fit in a handful of blocks, so depth
 never mattered — which is also why the 1.21x looked real there.
 
-**Pipeline depth is NOT the lever, and 2 is already upstream's value.** `UP_STAGES=3` fails at
-launch -- `cudaFuncSetAttribute(..., MaxDynamicSharedMemorySize)` returns `invalid argument`
-(`fa3_upstream.cuh:683`), i.e. 3 stages of 128-token KV exceeds the 232 448 B opt-in limit. And
-upstream itself uses 2 unconditionally on Sm90 (`flash_fwd_launch_template.h:47`,
-`kStages = Arch >= 90 ? 2 : ...`). So we were already at upstream's depth and at the hardware
-ceiling; the earlier note calling stages "worth ~15% and blocked by the fused smem budget" is
-superseded -- the split did free the budget, and 2 stages is all that fits anyway.
+**Pipeline depth: 3 stages is illegal at RS=0 and fits EXACTLY at RS=1.** `UP_STAGES=3` fails
+at launch -- `cudaFuncSetAttribute(..., MaxDynamicSharedMemorySize)` returns `invalid argument`
+(`fa3_upstream.cuh:683`). Measured smem per configuration (`tests/fa3_port/compile_check.sh`
+machinery, `K::SharedStorageSize`, limit 232 448 B):
+
+| | stages=2 | stages=3 |
+|---|---|---|
+| `MmaPV_is_RS=0` | 199 680 | 265 216 -- **over by 32 768** |
+| `MmaPV_is_RS=1` | 166 912 | **232 448 -- fits to the byte** |
+
+RS=1 saves exactly 32 768 B, which is one 128x128 bf16 P tile -- direct confirmation that the
+trait removes P's smem round-trip rather than merely renaming something. And the saving is
+exactly the amount that made stages=3 overflow, so **one trait buys both the removed round-trip
+and a 50% deeper KV pipeline**, and the depth lands precisely at the opt-in limit.
+
+This qualifies the claim made a moment earlier in this entry that depth "is not the lever": it
+was not a lever *at RS=0*, where 3 stages cannot fit. Upstream uses 2 unconditionally on Sm90
+(`flash_fwd_launch_template.h:47`), so stages=3 is beyond upstream's own configuration and has
+to be measured on its own merits, not assumed good. The `rs.sh` A/B includes it as a fourth arm.
 
 **ROOT CAUSE: `MmaPV_is_RS=false`, which upstream sets `true` for this exact config.**
 Upstream's own tuner, `tile_size_fwd_sm90` (`tile_size.h:33`), for head_dim 128 / bf16 returns

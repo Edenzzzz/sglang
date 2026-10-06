@@ -1434,6 +1434,7 @@ class FlashInferAttnBackend(AttentionBackend):
             out,
             fused["n_req"],
             fused["max_pages"],
+            fused["max_qlen"],
         )
         return out, self._persistent_lse_buf[:num_tokens]
 
@@ -1792,6 +1793,8 @@ class FlashInferAttnBackend(AttentionBackend):
             # [n_req, max_pages_per_seq]. page_size is 1 on this path, so pages per
             # sequence is just the KV length.
             n_req=int(len(kl_r)), max_pages=int(kl_r.max()) if len(kl_r) else 0,
+            # The combine pass's grid uses the varlen MAX q length.
+            max_qlen=int(qi_r.diff().max()) if len(qi_r) > 1 else 1,
             # Constraint 3: FA3 takes vector-sparse offsets, not page ids.
             fa3_sparse=self._fa3_sparse_indices(
                 st["fa3"], forward_batch.token_to_kv_pool.get_kv_buffer(0)

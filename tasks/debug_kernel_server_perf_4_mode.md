@@ -4596,6 +4596,43 @@ sequence is
 Recording this because it changes what the parity number has to be measured
 against: a two-launch flash-attention baseline, not a single-kernel one.
 
+### FA2's spill is the O accumulator, and splitting Q removes it — 2026-10-06
+
+The register table showed FA2 losing 87 registers and spilling 1 136 B at the fused
+kernel's 384-thread geometry, with the SM-wide budget unchanged (255x256 == 170x384
+== 65 280). That made it a work-partition question. Three compile-only probes answer
+which partition, each a `__launch_bounds__(384, 1)` kernel containing only the FA2
+runners:
+
+| FA2 configuration | threads | regs | spill stores | stack |
+|---|---|---|---|---|
+| `num_warps_q=4, num_warps_kv=1, num_mma_q=2` (today, `WG_DRAIN=1`) | 128 of 384 | 168 | 1 136 B | 552 B |
+| `num_warps_q=4, num_warps_kv=3, num_mma_q=2` (KV split, all 384) | 384 | 168 | **1 276 B** | 648 B |
+| `num_warps_q=8, num_warps_kv=1, num_mma_q=1` (Q split) | 256 of 384 | 168 | **88 B** | 88 B |
+| native, for reference | 128 x 2 CTA | 255 | 0 B | 0 B |
+
+**Splitting KV does not help — it is slightly worse.** Using all 384 threads by
+raising `num_warps_kv` to 3 costs *more* spill than leaving 256 threads idle. Each
+KV-warp still accumulates a full O tile over its q rows, so per-thread registers do
+not fall, and the cross-warp reduction adds work. This is the direct answer to
+"offload some softmax work to the remaining threads": the softmax is not what
+occupies the registers.
+
+**Splitting Q removes almost all of it.** Eight warps over Q with `num_mma_q=1` still
+covers 128 q rows (8 x 1 x 16), but each warp owns 16 rows instead of 32, halving the
+per-thread O accumulator: spill drops 1 136 -> 88 B, 12.9x, and the stack frame
+552 -> 88 B. Registers stay at 168 because that is the launch bound, but the kernel
+no longer needs more than it has.
+
+So the accumulator is the binding constraint, and it scales with
+`CTA_TILE_Q / num_warps_q` and the head dim -- not with `num_warps_kv`. 12 warps
+cannot be reached by splitting Q (`12 * num_mma_q * 16 = 128` has no integer
+solution), which is why the winning configuration uses 256 of the 384 threads.
+
+Not yet measured: whether this configuration is numerically correct and what it does
+to kernel time. The probes are compile-only. It also has to be re-checked inside the
+full fused kernel, where the FA3 role shares the allocation.
+
 ### The two roles' register costs, separated — 2026-10-06
 
 Five `-Xptxas -v` builds, every spill attributed to a named function, holding the

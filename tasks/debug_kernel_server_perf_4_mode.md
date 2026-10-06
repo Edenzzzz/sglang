@@ -633,6 +633,46 @@ and a split row corrupts the row that follows it. `kv=1` is the one arm the rule
 cover, and its 0.023 is a different magnitude class -- the same borderline band as TraceLab's
 0.021-0.030 -- so it is probably a separate, milder issue rather than this one.
 
+**The interference is strictly FORWARD, and position-dependent.** Three-row arm, with
+identical `task0` rows on both sides of the split row:
+
+| fixture | row 0 | row 1 | row 2 |
+|---|---|---|---|
+| split first, plain second | 0.00291 ok | **0.472 FAIL** | - |
+| plain first, split **second** | 0.00569 ok | 0.00238 ok | - |
+| **plain, split, plain** | 0.00471 **ok** | 0.00254 ok | **0.482 FAIL** |
+
+The `task0` row *before* the split row is clean; the identical `task0` row *after* it is
+corrupted. A split row also computes its **own** output correctly every time. So a split row
+advances some cumulative quantity that work items created later consume wrongly -- it is an
+ordering/offset fault in plan construction, not a data race and not a masking error.
+
+**Minimal reproducer** (two rows, flips on a one-token change):
+
+    FAIL : qo:1,512 prefix:1024,512 n_fa3:0   (leading kv=1025, splits)
+    PASS : qo:1,512 prefix:1023,512 n_fa3:0   (leading kv=1024, does not split)
+
+**Suspects eliminated by reading, so the next attempt does not re-spend them:**
+
+- `plan_info` argument layout: `ToVector`/`FromVector` match exactly (2 + `NUM_TASKS`*12 + 18
+  = `NUM_SHARED_ARGS` 20); the 18 -> 20 growth was done correctly.
+- `partial_o_nnz` and `merge_indptr` scope: both declared at `scheduler.cuh:1520-1521`,
+  *before* the task loop at 1533, so they accumulate across tasks rather than resetting.
+- `group_row_begin` vs `partial_o_nnz` unit mismatch: `group_row_begin` indexes
+  `merge_indptr`/`merge_o_indices`, which are row-indexed and themselves hold the partial
+  offsets, so the units are consistent.
+- stale `gid_base` leaking to a later row: declared *inside* the `qo_tile_idx` loop, reset
+  per tile.
+- the combine, FA3, `num_splits`, page alignment, row order, task class: all refuted by
+  measurement above.
+
+**Still live:** `cluster_partial_indptr` is pushed for **every** work item including
+non-split ones, so a row following a split row carries a non-zero `partial_indptr`; and
+`merge_o_indices` is built from `qo_indptr_h[i]` while `partial_o` is indexed by
+`partial_o_nnz`. One of those two couplings is the likely seat, and the three-row reproducer
+distinguishes them cheaply by dumping the plan's arrays for the PASS and FAIL cases and
+diffing -- which is the next step, rather than another code reading.
+
 **This also retracts my earlier "no threshold, so not the split machinery" refutation.** That
 prefix sweep ran 1024, 4096, 8192, 16384, 32768, 65536 -- every point at or above the limit,
 so everything failed and I read a flat result as "no threshold". The threshold was one step

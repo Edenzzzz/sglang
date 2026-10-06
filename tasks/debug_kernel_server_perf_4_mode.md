@@ -814,11 +814,45 @@ So the live candidate is the victim's **KV base** (`kv_indptr` / page offset) or
 `kv_start`/`kv_end` chunk bounds being computed wrong when a split row precedes it -- which
 would make it attend the wrong KV and produce exactly a fully-wrong, in-range result.
 
-**Next measurement, again hypothesis-free:** the plan dump already works
-(`drivers`-side `dump.py`). Dump `kv_indptr`, `kv_start`, `kv_end` and `batch_idx` for the
-victim's work items in a PASS fixture (`qo:512,1024 prefix:0,0`) and a FAIL one
-(`qo:1,512 prefix:65536,0`) and diff them. If the victim's KV bounds differ from
-`cumsum(ceil(kv/page))` in the FAIL case, that is the bug and the dump shows it directly.
+**MEASURED: the plan is CORRECT, so the KV-base candidate is refuted.** Dumping the victim's
+work items in the FAIL fixture (`qo:[1,512] kv:[65537,512]`):
+
+| field | victim (task 3) | expected |
+|---|---|---|
+| `q_indptr` | 1 | 1 (one token in the leading row) |
+| `kv_indptr` | **513** | 513 (`ceil(65537/128)`) |
+| `kv_len` | 512 | 512 |
+| `kv_start` / `kv_end` | 0 / 512 | 0 / 512 (one chunk) |
+| `batch_idx` | 1 | 1 |
+
+Every value is right, and the leading row's are too (`kv_indptr=0`, `kv_len=65537`, chunks of
+2560 at `len_kv_chunk=1280`). So nothing in the plan's KV addressing is wrong and the victim
+is not being pointed at the wrong KV.
+
+**What the dump did reveal: task 3's `work_indptr` begins `[0, 0, 0, 0, 0, 0]`** with 112 work
+items, i.e. the first several clusters receive **no** task-3 work because task 2 (the split
+leader, 104 work items) consumed them. In the PASS fixture task 2 is empty and task 3's
+`work_indptr` is `[0, 3, 6, 9, 11, 13]`, distributing from cluster 0.
+
+That matters because the kernel derives its q-tile position from the cluster slot:
+
+    qo_packed_idx_base = packed_qo_start
+                       + persistent_cluster_slot<KTraits>() * CTA_TILE_Q
+                       + get_warp_idx_q<KTraits>(tid.y) * NUM_MMA_Q * 16
+
+If `persistent_cluster_slot` is computed from a cursor that does not account for an earlier
+task having consumed clusters, every one of the victim's work items lands on the **wrong q
+tile** -- which produces exactly the measured signature: all 512 tokens and all 28 heads
+wrong, fully written, in range, with the leading row untouched. It also explains why the
+victim is fine whenever it is the first row (nothing consumed clusters ahead of it) and why
+two unsplit rows are fine (a single unsplit row generates few work items and both rows live in
+task 3, sharing one cursor).
+
+**The live candidate is therefore the per-task cluster-slot/cursor computation**, not any plan
+array. `num_pers_clusters = 132` and the plan carries a `cluster_cursor_offset`; the next
+measurement is to dump `cluster_cursor` alongside `work_indptr` for both fixtures and check
+whether the victim's slot values start from zero or continue from task 2's consumption. The
+plan dump already reads these arrays, so this is a fixture change, not new tooling.
 
 **Superseded lead, from the victim row's character (`DUMP_ROWS=1`).** The corrupted row is not
 zeroed, not skipped and not garbage:

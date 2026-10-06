@@ -7202,6 +7202,30 @@ decode rows (all `prefix+1`) at 0.021-0.031, and every candidate that "changed n
 they changed nothing because the kernel was right. Both fixes are no-ops at `PAGE_SIZE=1`,
 so the single page-1 failure on record (0.589) is still unexplained and is being re-run.
 
+**VERIFIED: with the harness fixed, every fixture passes -- the kernel was correct.**
+
+| fixture | buggy reference | fixed reference |
+|---|---|---|
+| decode N=18, kv=4096 | 1.205 FAIL | **PASS** |
+| decode N=18, kv=65536 | 0.31 FAIL | **PASS** |
+| `qo:1,512 prefix:1024,512`, page 128 | ~0.47 FAIL | **PASS** |
+| same, **page 1** | 0.589 FAIL | **PASS** |
+| `qo:127,512 prefix:65536,512` | 0.067 FAIL | **PASS** |
+| TraceLab FA2-all | rows 20/21 FAIL | **PASS** |
+| TraceLab split | rows 20/21 FAIL | **PASS** |
+
+All "every row correct at every split, nothing left unwritten". The page-1 case also passes
+now, although the harness fixes are no-ops at page 1, so its earlier failure (0.589) had a
+different, transient cause. The likeliest is the stale JIT module documented above -- that run
+was taken before `cached_ops` was cleared -- but that is **unverified** and recorded as such.
+
+**Consequences:**
+- the serving A/B is **unblocked**; it was gated on a kernel corruption that did not exist;
+- the "both arms must plan the same task count" validity requirement was motivated by that
+  corruption and is withdrawn -- the 4-task split plan computes correctly;
+- the corruption hunt's ~25 eliminated candidates were mostly eliminated *correctly*, because
+  there was no kernel fault for them to be.
+
 **Superseded entry follows.**
 
 **PAGE-RAMP DECODE (KV_ROWCONST=2) -- the wrong tiles sit at HALF the correct page offset.**

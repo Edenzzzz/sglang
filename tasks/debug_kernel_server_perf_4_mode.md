@@ -4604,6 +4604,57 @@ sequence is
 Recording this because it changes what the parity number has to be measured
 against: a two-launch flash-attention baseline, not a single-kernel one.
 
+### One plan, one or two executors — what the kernel count actually decides — 2026-10-06
+
+Settled as a design position after the register measurements, because it changes what
+the remaining work has to prove.
+
+**The contribution is the plan, not the kernel count.** Four things carry the story
+and all of them live in the plan's data structures, which both executors read:
+
+- 4-mode tile-class assignment (prefill chunk / decode / draft / verify) with
+  L2-swizzled LPT, in `HolisticPlanInfo<4>`;
+- work-proportional SM allocation, already exported as `num_fa3_clusters`;
+- the unified JIT split-KV reduction, keyed on the plan's group tables
+  (`group_nchunks` / `group_row_begin` / `group_nrows` / `group_counter`);
+- the fused tree-build epilogue, which belongs to whichever executor writes the verify
+  output.
+
+None of these requires the two roles to be in one `__global__`. So "one plan, two
+executors" keeps the whole story; the kernel count decides only two things:
+
+1. **cross-role backfill inside a CTA** — an FA3 CTA draining FA2 work. This is also
+   exactly what forces both mainloops into one function and causes the measured
+   33 676 B co-compilation spill, so it is the thing being traded for register parity.
+   PDL recovers part of it temporally: the FA2 executor starts on SMs the FA3
+   executor vacates.
+2. **cross-role smem multicast** — a gathered KV tile shared between roles cannot
+   cross a kernel boundary. Worth 1.33-1.59x *within* a role in isolation; never
+   demonstrated across roles.
+
+**The SM split must move into device memory either way.** It is currently a kernel
+*argument* (`sm_split`), which a CUDA graph bakes at capture, so a per-step split would
+need one graph per split value. With a fixed grid and the split read from the plan,
+a CTA that is not admitted exits in a few hundred ns and the grid dims stay constant:
+one graph per batch bucket, split free to change every step. This is required for the
+fused kernel too and has not been paid yet -- the fused path is not currently in the
+graph-capture path.
+
+sglang's own graph infrastructure already works this way one level up
+([advanced CUDA graph](https://www.lmsys.org/blog/2026-08-17-advanced-cuda-graph/)):
+shape variation is absorbed by bucketing and padding, with unused request slots
+"rewritten as zero-length sentinels" that cost almost nothing under the varlen
+scheduler. Exit-early CTAs are the same trick a level down, so this is additive rather
+than a new mechanism. Two further points from that post matter here: prefill and decode
+are already **separate runners with separate capture ladders**, so two executors add no
+PD-ratio graph combinations; and it covers no graph-update or device-side-launch-param
+APIs at all, so a device-memory split does not conflict with anything there.
+
+**What this means for the open work.** The Q-split experiment decides the kernel count
+and nothing else: if the FA2 role reaches parity at 8 warps inside one kernel, fusion
+keeps backfill and multicast for free; if it does not, two executors are acceptable and
+the only losses are the two listed above.
+
 ### FA2's spill is the O accumulator, and splitting Q removes it — 2026-10-06
 
 The register table showed FA2 losing 87 registers and spilling 1 136 B at the fused

@@ -231,11 +231,11 @@ predicted that `PagedKVNonTMA=false` at `page_size=128` would fix it. Both halve
 prediction are now measured and both are wrong:
 
 - TMA paged at 128-token pages is **slower**, not faster: 496 ms against cp.async's 480 ms.
-  Caveat added after the trait audit below: that TMA arm ran with the scheduler's
-  `NumProducerThreads` hardcoded to 128 while upstream drops to **32** on the TMA path, so
-  its barriers were mis-sized and the 496 ms is not a clean TMA number. It needs re-running.
-  The retraction does not rest on it -- the cp.async page-128-vs-page-1 comparison below has
-  no TMA involvement and is what kills the gather hypothesis.
+  (I briefly suspected this arm was invalid because the scheduler hardcodes
+  `NumProducerThreads = 128` where upstream's expression can give 32 on a TMA path. It
+  cannot give 32 here: `Use_TMA_Q = !PackGQA` (`mainloop_fwd_sm90:56`) and we run
+  PackGQA=true, so the single-producer-warp form is unreachable and 128 is correct on both
+  paths. The TMA number stands.)
 - Coarser paging does nothing for cp.async either (480 ms at page 128 vs 477 ms at page 1), so
   gather granularity is not what FA3 is spending its time on.
 - Coarser paging costs the FA2 baseline nothing (15 301 us at page 128 vs 15 364 us at page 1),
@@ -337,7 +337,7 @@ Having found one hardcoded trait wrong, I checked the rest against
 
 | trait | ours was | upstream computes | consequence |
 |---|---|---|---|
-| `NumProducerThreads` | `128` | `(!Transpose_V && Use_TMA_KV && Use_TMA_Q) ? 32 : 128` | right for cp.async, **wrong for TMA** -- barriers sized for 128 producers against 32 actual |
+| `NumProducerThreads` | `128` | `(!Transpose_V && Use_TMA_KV && Use_TMA_Q) ? 32 : 128` | **no bug**: resolves to 128 on both paths, since `Use_TMA_Q = !PackGQA` and we pack GQA. Derived anyway -- it breaks the moment PackGQA is off |
 | `LPT` | `true` | `Is_causal \|\| Is_local` -> **false** | an L2-locality ordering, not longest-processing-time; which wins is a measurement |
 | `Sort` | `false` | `!Is_local` -> **true** | inert: only read under `Prepared && Sort`, and we run `Prepared=false` |
 

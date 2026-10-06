@@ -4700,6 +4700,49 @@ exactly this case, and the bug was passing the whole-batch default instead. Wort
 the pattern -- all three faults were "upstream has a field for the subset/per-item case
 and I handed it the aggregate".
 
+### Within-request iteration, and the output is too LARGE — 2026-10-06
+
+Discriminator: two wgmma rows at `bidb` 0 and 1 in one batch, at G=1, with a task-0 and a
+task-2 row present so the harness's `assert 0 in task[N_FA3_ROWS:]` guard is satisfied.
+`FIXTURE='qo:200,439,100,1 prefix:0,0,0,5468 n_fa3:2'`:
+
+| row | bidb | rel err | absmax | ref absmax |
+|---|---|---|---|---|
+| 0 wgmma qo=200 | 0 | **0.699 FAIL** | 0.155 | 0.134 |
+| 1 wgmma qo=439 | 1 | **0.563 FAIL** | 0.107 | 0.091 |
+| 2 FA2 task 0 qo=100 | 2 | 0.00331 ok | 0.195 | 0.196 |
+| 3 FA2 task 2 qo=1 | 3 | 0.00050 ok | 0.023 | 0.023 |
+
+**Per-request base arithmetic is ruled out:** `bidb=0` has a zero base and fails anyway. So
+the fault is in within-request tile iteration and hits every wgmma item alike.
+
+**And the direction of the error is informative.** The output absmax exceeds the reference
+in both wgmma rows (0.155 vs 0.134, 0.107 vs 0.091) while rel err is now *below* 1
+(0.56-0.70, against ~1.0 on the earlier fixtures). Too-large output with partial
+correlation is **over-accumulation** -- attending over more KV than the row owns, or
+counting tiles twice -- not the permutation I inferred from the earlier dump. The
+permutation reading came from a fixture where the magnitudes happened to be comparable;
+with two wgmma rows side by side the excess is consistent and in one direction.
+
+That reorients the search to how many KV tiles each item iterates:
+
+- the per-item `nsplits` encoded in `split_idx`'s high bits is `ceil_div(kv_len, chunk_len)`
+  from the **adapter**, while `num_splits_dynamic` for the combine comes from the **planner**
+  path; under `FORCE_ONE_SPLIT` both should be 1, but the mainloop derives its KV range from
+  `(seqused_k, num_splits, split_idx)` and any disagreement there changes the range, not the
+  destination;
+- `work_indptr` ranges: if a CTA's `[begin, end)` overlaps another's, two CTAs process the
+  same (q-tile, kv_head) and both write final O -- the second does not overwrite cleanly
+  since FA3's epilogue accumulates through smem, which would show as exactly this excess;
+- the 4 kv_heads x 4 q-tiles item count per row: if `kv_head_idx` repeats a head across
+  items that should differ, that head's contribution lands twice.
+
+The cheap instrument for all three is the existing `FLASHINFER_FA3_DUMP_ITEMS` per-item dump
+plus `FLASHINFER_PLAN_ITEMS` counts: print task 3's items for this fixture and check that
+the (q_start, kv_head_idx, batch_idx) triples are unique and that their count is
+`sum_over_rows(ceil_div(packed_qo, 128) * num_kv_heads)` = (2 + 4) * 4 = 24. A duplicate or
+an overlap is visible directly, with no rebuild.
+
 ### G=1 rules out GQA packing as the port's fault — 2026-10-06
 
 `HEADS=4,4` makes packed and unpacked row spaces identical. Run with

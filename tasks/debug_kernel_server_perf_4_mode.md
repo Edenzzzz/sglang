@@ -6709,6 +6709,43 @@ pipeline state after the rendezvous.
 
 
 <a id="split-row-race-handoff"></a>
+## FA3 optimisation items, measured per-executor on the fixed kernel — 2026-10-07
+
+First **valid** optimisation data in this work. Every earlier trait number was measured before
+the `seqused` fix, against a `Theta(kv^2)` baseline the defect dominated, and is void -- a
+constant-factor knob cannot be assessed against a quadratic. These replace them.
+
+Method: FA3 against **FA3**, one item changed per arm, on a fixture the FA3 executor can serve
+in full (`qo:2048,2048 prefix:65536,98304`, the two TraceLab append rows; the 22-row mixed
+batch leaves 5632/5650 rows unwritten under FA3 and cannot produce an FA3 baseline at all).
+5 iters, own extension dir per arm. **Every arm: PASS, 0 unwritten, 0 fallbacks.**
+
+| arm | total | vs baseline |
+|---|---|---|
+| **`fa3_base`** (stages 2, `MmaPV_is_RS=1`, `LPT=0`, cp.async) | **11 164.0 us** | - |
+| `fa3_stage3` (`UP_STAGES=3`) | 11 224.5 us | **+0.54%** slower |
+| `fa3_lpt1` (`SCHED_LPT=1`) | 11 239.9 us | **+0.68%** slower |
+| `fa3_rs0` (`MmaPV_is_RS=0`) | 11 609.8 us | **+3.99%** slower |
+| `fa3_tma` (`FA3_PAGED_TMA=1`) | 12 284.0 us | **+10.03%** slower |
+
+Reading them as optimisations against baseline FA3:
+
+- **`MmaPV_is_RS=1` is worth 3.84%** -- the one real gain, and it is upstream's own value for
+  this config. Keeping P in registers for the PV mma instead of round-tripping through smem.
+- **cp.async beats TMA paged by 9.12%.** This is now measured on the fixed kernel, and it
+  confirms the earlier page-128 observation that survived the retraction. It also prices the
+  multicast prerequisite: TMA paged is the gateway to DSMEM multicast, so multicast must beat
+  a **9.1% handicap** before it is worth anything. That is a materially worse starting point
+  than the item's recorded "1.33-1.59x in isolation" assumed.
+- **`stages=3` and `LPT=1` are both marginally worse** (0.5%, 0.7%), so upstream's values
+  (2 stages, `LPT=0`) stand. `stages=3` fits only because `MmaPV_is_RS=1` frees exactly one
+  32 768 B P tile, landing on 232 448 B -- it fits and does not pay.
+
+**Honest scale.** The whole FA3 item set is worth **under 4%** against its own baseline. The
+publishability bar is >=30% TTFT/ITL and >=10% throughput. Nothing in this list approaches it,
+and the items were the plan for getting there. The only large number in this work remains the
+`seqused` fix, which was repairing my own port defect rather than an optimisation.
+
 ## CRITICAL: several eliminations tested code that does not run — 2026-10-06
 
 The per-work-item trace (`FLASHINFER_TRACE_WORK=1`, a `printf` in `persistent.cuh`'s work

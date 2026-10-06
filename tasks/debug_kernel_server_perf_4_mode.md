@@ -366,7 +366,37 @@ was not a lever *at RS=0*, where 3 stages cannot fit. Upstream uses 2 unconditio
 (`flash_fwd_launch_template.h:47`), so stages=3 is beyond upstream's own configuration and has
 to be measured on its own merits, not assumed good. The `rs.sh` A/B includes it as a fourth arm.
 
-**ROOT CAUSE: `MmaPV_is_RS=false`, which upstream sets `true` for this exact config.**
+**RETRACTED 2026-10-06, by the measurement below: `MmaPV_is_RS` is NOT the cause.** With the
+reproduction gate passing (`rs0` = 476 684 us against the old pod's 480 ms), turning the trait
+to upstream's value gives **465 577 us -- a 2.3% improvement, not a 31x one**:
+
+| arm | fa3 half | vs rs0 |
+|---|---|---|
+| `rs0` (RS=0, stages 2, LPT=1) -- the old configuration | 476 684 us | reproduces |
+| `rs1` (RS=1, stages 2, LPT=0) -- upstream's traits | **465 577 us** | **-2.3%** |
+
+**Where the reasoning went wrong.** From perfect SM scaling plus low utilisation I inferred a
+latency-bound mainloop, then searched upstream's traits for one that could serialise softmax
+against the PV mma, found a real deviation, and treated it as the explanation. The smem
+measurement that followed (32 768 B freed, exactly one P tile) confirmed that the trait
+*changes storage* -- and I read it as confirming the trait *explains the time*. It never did:
+the two claims are independent, and only the second was the root-cause claim. A mechanism being
+real and a mechanism being load-bearing are different facts, and the smem delta only established
+the first.
+
+The trait change is still correct and is kept -- it matches upstream, costs no registers, frees
+32 KB, and legalises stages=3. It is a 2.3% optimisation, not a root cause.
+
+**So the 31x is still UNEXPLAINED**, and what is now known about it is narrower than before:
+not the gather (TMA measured slower), not pipeline depth (2 is upstream's and 3 barely fits),
+not parallelism (linear to 132 SMs), not per-tile work (same FLOPs), and not `MmaPV_is_RS`.
+Arithmetic on the measurement: 896 work tiles x ~657 KV blocks = ~589k tile-block steps, i.e.
+~4 464 per SM, so 476 ms is **~106 us per 128x128x128 step against the ~2.8 us** one SM should
+need -- roughly 38x per step. The next move is a profiler on a single tile, not another trait
+audit; this entry has now spent four hypotheses on inference from aggregate counters and should
+stop doing that.
+
+**Superseded hypothesis, retained for the reasoning trace: `MmaPV_is_RS=false`.**
 Upstream's own tuner, `tile_size_fwd_sm90` (`tile_size.h:33`), for head_dim 128 / bf16 returns
 
     {kBlockM=128, kBlockN=128, MmaPV_is_RS=true, IntraWGOverlap=true}

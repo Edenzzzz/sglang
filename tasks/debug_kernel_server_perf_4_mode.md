@@ -320,6 +320,24 @@ All four points are written up in [`pd_colocation_vs_disagg.md`](pd_colocation_v
 - [x] [Lineage and sibling documents](#lineage)
 - [x] [Audit, superseded by this catalogue](#audit-superseded)
 
+## Pod and environment — 2026-10-06
+
+- [x] **Trial `f393156fcc0614b3` expired mid-measurement** — status `done`; the H200 pod and
+      its entire `/dev/shm/w` working set are gone, taking the in-flight TraceLab-shaped
+      run with it. SSH/WebShell failing was the symptom, not the cause.
+- [x] **Switched to `vibecuda-h200-2gpu-replacement-20261006`** (`40802be244f0ee7e`), 2x
+      H200 in the same queue, both GPUs idle, reachable. `/tmp/px.py` retargeted.
+- [ ] **Re-provision the working set** — `/dev/shm/w` is empty: venv (torch 2.8/cu128),
+      flashinfer tree, sglang `python/`, qwen7b weights, and flash-attention's hopper
+      headers at `/dev/shm/w/flash-attention/hopper`. Drivers exist under
+      `tasks/fused_specdec_workload/drivers/` (`provision.sh`, `provision_trees.sh`,
+      `install_deps.sh`); the known traps are recorded there — absolute symlinks in
+      `flashinfer/data`, and clearing `~/.cache/flashinfer` so the JIT does not serve stale
+      objects.
+- [x] **Lesson: trials expire without warning.** Every measurement should be committed as
+      soon as it lands rather than batched, and a long sweep should checkpoint per arm. The
+      arms lost here were re-runnable, but the TraceLab fixture had taken real work to size.
+
 ## Pod and environment — 2026-10-05
 - [x] [The pod ran upstream sglang, not our fork](#env-contamination) — 4140 files against our 725, 514 differing including `bench_serving.py`; now byte-exact
 - [ ] [Re-establish the GPU working set](#pod-restore) — fork tree pushed (805 files, byte-exact); three mechanical gaps left, listed in `drivers/provision_trees.sh`: spdlog unpushed, stale absolute symlinks in `flashinfer/data`, and the csrc jinja unreadable — the 2026-10-05 trial expired; a replacement single-GPU `vibecuda` is running and empty

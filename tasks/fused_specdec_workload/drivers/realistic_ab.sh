@@ -25,5 +25,5 @@ echo "--- fallbacks per arm (must be 0):"
 for m in LPT SPLIT; do
   echo "$m: $(grep -ci 'fallback' $W/real_ab/server_$m.log 2>/dev/null)"
 done
-python summarize_mixed_workloads.py $W/real_ab 2>&1 | tail -30
+python summarize_mixed_workloads.py $W/real_ab --baseline LPT --method SPLIT 2>&1 | tail -30
 echo REALABDONE

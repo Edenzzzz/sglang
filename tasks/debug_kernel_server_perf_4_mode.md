@@ -4793,6 +4793,39 @@ Two process points, since both refuted guesses shared one cause:
   time. **Grep every field of a POD for use before assuming the tuple that consumes it is
   right.**
 
+**Measured: a real 10x improvement, and a different failure now.** With the page stride
+wired, at one split:
+
+| | row 0 | row 1 | row 2 (FA2) |
+|---|---|---|---|
+| page stride 0 | 10.58 | 10.53 | 0.00054 ok |
+| page stride wired | **1.022** | **1.033** | 0.00056 ok |
+
+So the aliasing was genuine and is fixed. But ~1.0 is a *characteristic* value, not a
+near-miss: `|0 - ref| / |ref| == 1`, so the wgmma output is now approximately **zero or
+uncorrelated** rather than wrongly-computed. The path went from reading one page for
+everything to producing almost nothing.
+
+That reframes the remaining candidates toward "the mainloop accumulates no KV" rather
+than "it accumulates the wrong KV":
+
+- `seqused_k` per request — if a request's KV length arrives as 0, the mainloop has no
+  tiles to iterate and the epilogue stores zeros. `kv_lens_per_req` is supplied by the
+  caller in TOKENS; worth asserting it is non-zero on device rather than trusting it.
+- the **dense page table's -1 padding**. It is padded with -1 deliberately (0 is a valid
+  page id), but upstream must then never index a padded slot. If `max_pages_per_seq` is
+  larger than a request's real page count and upstream iterates to the shape's extent
+  rather than to `seqused_k`, it reads -1 and may mask everything off.
+- `page_size == 1` interaction: `shape_K`'s first dimension is `page_size`, so with 1
+  token per page the within-page token axis has extent 1 and all iteration happens on
+  the page axis. Any off-by-one in `num_pages` vs the table's extent shows up as
+  no-contribution rather than wrong-contribution.
+
+The next cheap discriminator is to dump the wgmma rows' raw output and check whether it
+is exactly zero (epilogue stored nothing) or small-but-nonzero (accumulated a fraction of
+the KV). Those point at different halves of the list above, and it needs no new build --
+the harness already has the output tensor.
+
 ### Co-residency constrains the fused kernel twice: registers AND shared memory — 2026-10-06
 
 The Q-split arm never reached the kernel. It failed at

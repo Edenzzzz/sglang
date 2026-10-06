@@ -7176,6 +7176,34 @@ and the last row additionally misses at CHUNK scale (half its mass in arm A; 16.
 arm C). This also retro-fits the random-V magnitudes: one wrong 128-token tile out of 65 536
 gives ~sqrt(128/65536) ~= 0.045 ~= the observed row-1 error, rising to ~0.3 by row 17.
 
+**RETRACTED (2026-10-07): the "half page offset, fix-ready" entry below.** Its key number --
+"row 17 attends mean page ~434.6" -- was **not decoded from output**; the ramp run's per-head
+lines never printed, and I back-computed the figure from the rel err. The actual got/ref
+values, pulled afterwards, show something else entirely:
+
+| row | kernel mean page | reference mean page |
+|---|---|---|
+| 0 | 15.56 | 15.55 |
+| 1 | 48.52 | 47.49 |
+| 2 | 81.18 | 79.53 |
+| 8 | 279.54 | 271.70 |
+| 16 | 541.99 | 527.63 |
+
+The **kernel** advances ~33 pages per row -- correct, since 4097 tokens occupy 33 pages in the
+page-aligned layout. The **reference** advances ~32, i.e. it reads token-contiguous KV.
+**The fault is in the test harness, not the kernel:** `exact()` did `kvb += kl` while each
+request actually starts on a page boundary, so every row after a non-page-multiple row was
+compared against the wrong reference. A second harness bug under-allocated pages
+(`ceil(sum/PS)` instead of `sum(ceil/PS)`: 585 vs 594 at N=18), which is the last-row miss.
+
+That one finding re-explains most of the "corruption" record: error growing with row index,
+`kv=1024` passing and `kv=1025` failing, `qo:128` passing and `qo:127` failing, the TraceLab
+decode rows (all `prefix+1`) at 0.021-0.031, and every candidate that "changed nothing" --
+they changed nothing because the kernel was right. Both fixes are no-ops at `PAGE_SIZE=1`,
+so the single page-1 failure on record (0.589) is still unexplained and is being re-run.
+
+**Superseded entry follows.**
+
 **PAGE-RAMP DECODE (KV_ROWCONST=2) -- the wrong tiles sit at HALF the correct page offset.**
 
 - Row 17 attends mean page ~434.6 against an own-range mean of ~560. A 50/50 mixture solves

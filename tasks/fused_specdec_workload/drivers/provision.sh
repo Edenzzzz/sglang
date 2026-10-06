@@ -43,6 +43,10 @@ if [ ! -x $W/venv/bin/python ]; then
     python $W/drivers/sgl_deps_from_pyproject.py && pip install -q -r $W/sgl_deps.txt
   fi
   pip install -q "torchao==0.13.0"   # newer torchao imports ScalingType, absent in torch 2.8
+  # The kernel-stack packages excluded above are still REQUIRED by the server -- excluded
+  # only so the deps install cannot pull a torch with them. Install the versions this
+  # sglang's pyproject pins, with --no-deps for the same reason.
+  pip install -q --no-deps sgl-kernel==0.3.16.post4 xgrammar==0.1.25
   # RE-PIN torch LAST, and keep it last. The dependency list above upgrades torch (seen:
   # 2.8.0 -> 2.14.1+cu130), and torch >= 2.9 requires C++20 while the fused harness compiles
   # at -std=c++17, so every extension build then dies with

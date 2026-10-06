@@ -4886,6 +4886,42 @@ value can land wrong while keeping its magnitude:
   `kv_head_idx` is a KV head index, so these should agree -- but that is an assumption of
   the same kind as the three already refuted, and the check is one grep at the push site.
 
+**All three checked, all three correct.** Against the declarations in
+`epilogue_fwd.hpp:82-84` and upstream's launch template:
+
+| passed | declared | |
+|---|---|---|
+| `{total_q, head_dim, num_qo_heads, 1, num_splits}` | `(seqlen_q, d, head, batch, num_splits)` | ok |
+| `{o_stride_tok, _1, o_stride_head, 0, 0}` | `(int64, _1, int64, int64, int64)` | ok (batch extent 1) |
+| `{total_q, head_dim, num_qo_heads, 1}` / `{q_stride_tok, _1, q_stride_head, 0}` | `{total_q, d, h, 1}` | ok |
+| `bidh <- kv_head_idx` | epilogue indexes `shape_O_packed`'s head axis by KV head | ok |
+
+So the descriptor tuples are not the fault either, and the cheap inspection candidates are
+exhausted. Six have now been eliminated by reading and three by measurement.
+
+**The decisive experiment left is one template flag: turn PackGQA OFF.**
+`UpstreamFA3Mainloop` / `UpstreamFA3Epilogue` are instantiated with `PackGQA=true`
+(`fa3_upstream.cuh:50`). Setting it false makes upstream treat each qo head as its own
+row-space, which the plan can feed by routing one work item per (row, qo_head) instead of
+per (row, kv_head) -- the arrangement `PrefillSM90Plan` already used before the unified
+plan replaced it.
+
+That is worth doing before anything subtler because it splits the remaining space cleanly:
+
+- **rows correct with PackGQA off** -> the fault is in the packing interaction, and the
+  search narrows to how our packed row space is fed to upstream rather than to anything in
+  the mainloop. Note this would also mean the port loses packed GQA, which was one of the
+  two reasons to expect it to *beat* flash-attention, so it is a diagnosis rather than a
+  fix.
+- **rows still wrong** -> the fault is independent of packing and lies in the work-item
+  semantics the adapter supplies (`q_start`, `kv_head_idx`, `batch_idx`, `work_indptr`
+  ranges), which is where a direct comparison against upstream's own scheduler on the same
+  batch becomes the cheapest instrument.
+
+The dump also stands as evidence for whichever branch: full magnitude, every element
+nonzero, a minority matching to bf16 precision. Any explanation has to produce that, which
+is what ruled out the three "accumulates no KV" candidates.
+
 ### Co-residency constrains the fused kernel twice: registers AND shared memory — 2026-10-06
 
 The Q-split arm never reached the kernel. It failed at

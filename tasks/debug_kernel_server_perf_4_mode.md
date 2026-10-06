@@ -4854,6 +4854,38 @@ the output being small, which no "missing KV" story does.
    `pack_gqa.h` against `packed_coord` / `FLASHINFER_FUSED_PACKED_Q` -- since those are the
    two definitions that have to agree.
 
+**Step 2 done, and it REFUTES the packing hypothesis.** `pack_gqa.h:69` reads
+`m_idx = qhead_per_khead_divmod.divmod(h_idx, idx)`, and CUTLASS's signature
+(`fast_math.h:420`) is `int divmod(int &remainder, int dividend)` -- the reference
+parameter receives the **remainder** and the function **returns the quotient**. So
+upstream computes `h_idx = idx % G` and `m_idx = idx / G`, which is exactly our
+`packed_coord(p, G) = (p % G, p / G)`. The two conventions **agree**, so the packed-row
+mapping is not the fault.
+
+That is the third hypothesis of mine refuted by checking rather than by running
+(page-table scatter as root cause, per-request `m_block`, now packed-row mapping), and all
+three were refuted cheaply. The pattern is consistent: I keep proposing the mechanism that
+would explain the symptom and not verifying the premise first. The 1 120-byte smem
+overflow, the per-item vs per-request arrays and the zero page stride were all found the
+other way -- by reading what the code passes and comparing it to what the consumer
+declares.
+
+**So the permutation is real but not in the row mapping.** Still true from the dump: full
+magnitude, all elements nonzero, a minority matching to bf16 precision. Remaining places a
+value can land wrong while keeping its magnitude:
+
+- `stride_O` / `shape_O` on the **output** side, which the epilogue uses to scatter packed
+  rows back. The 5-element `ShapeO` is `(seqlen_q, d, head, batch, num_splits)` and we pass
+  `{p.total_q, p.head_dim, p.num_qo_heads, 1, p.num_splits}` with
+  `{p.o_stride_tok, _1{}, p.o_stride_head, 0, 0}` -- the same positional-tuple shape that
+  hid the zero page stride for five rounds, and worth checking element by element against
+  the declaration.
+- the **Q** side mirror of it, `shape_Q` / `stride_Q`, where a wrong head stride would feed
+  each packed row the wrong head's Q and produce exactly this signature.
+- `kv_head_idx` as `bidh`: under PackGQA upstream's `bidh` indexes KV heads, and the plan's
+  `kv_head_idx` is a KV head index, so these should agree -- but that is an assumption of
+  the same kind as the three already refuted, and the check is one grep at the push site.
+
 ### Co-residency constrains the fused kernel twice: registers AND shared memory — 2026-10-06
 
 The Q-split arm never reached the kernel. It failed at

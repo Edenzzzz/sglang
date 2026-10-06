@@ -958,8 +958,32 @@ its own gate (`persistent.cuh:551`). Four runs each side:
 Identical distributions, so the race is not in the rendezvous. Twentieth candidate eliminated,
 and the one the code's own comments pointed at.
 
-**The unexpected part, and the better lead: the split row stays CORRECT with its JIT reduction
-disabled.** Its KV is split into 26 chunks, no rendezvous runs, and it still comes back at
+**RETRACTED, by reading the gate I should have checked before interpreting the bisect: there is
+no second reducer.** `persistent_template.cuh:108` runs the classic single-shot reduction
+**only when `group_id == nullptr`**:
+
+    if (params_1.group_id == nullptr) {
+      grid.sync();
+      BlockReductionRunner::Run(..., merge_indptr, merge_o_indices, smem);
+    }
+
+The two reducers are **mutually exclusive by construction** -- the comment right above says so
+("the classic barrier + single-shot reduction is kept for A/B measurement and is selected
+host-side by nulling group_id"). So nulling `group_id` did not disable reduction, it
+**swapped** to the classic path, which is why the split row stayed correct. My reading of that
+result -- "a second reducer must be running alongside ours" -- was wrong, and the four
+properties I claimed it explained were explained by nothing.
+
+**What the bisect actually established, which is stronger:** the corruption occurs with
+**either** reducer, at the same magnitude and spread. That exonerates the reduction machinery
+as a whole, not merely the JIT rendezvous -- both the JIT path and the classic `grid.sync` path
+produce it. Any remaining explanation has to be upstream of reduction entirely.
+
+It also retires the reframing I attached to the earlier reading: the JIT reduction **does**
+replace the classic pass rather than running beside it, so the "replacing the grid.sync
+reduction" description of that item is accurate after all.
+
+**Superseded reading of the same data.** Its KV is split into 26 chunks, no rendezvous runs, and it still comes back at
 2.1e-4. That is only possible if a **second reduction path** is reducing those partials -- i.e.
 flashinfer's original `merge_indptr`/`merge_o_indices` pass is still executing alongside (or
 instead of) ours. Two reducers over the same `partial_o`/`merge_indptr` arrays, one of them

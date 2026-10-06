@@ -7164,8 +7164,24 @@ pages sit at row 8.5's offset. Row 17's `kv_indptr` is 544 pages; **halved = 272
 pages exactly**. So the working hypothesis -- one datapoint, needs arm C -- is a **halved page
 offset on the tail work item**.
 
-Arm C (kv=65536, where random-V showed graded errors on all rows) distinguishes in one
-printout: "tail item only" vs "every row reads ~r/2" vs graded mass. Running now.
+**Arm C result, and the slopes crack it.** Rows 0-16 decode clean at 2 d.p.; row 17 = 16.68.
+But the const-V rel-err slopes across rows are linear in r with
+
+    arm A (kv=4096):  rel err ~= r x 1.8e-3
+    arm C (kv=65536): rel err ~= r x 1.1e-4      ratio ~= 16 = 65536/4096
+
+So the per-row deviation scales as **r x 128/kv**: each row leaks attention mass equal to
+about **one 128-token page -- one KV tile -- per preceding row**, drawn from the batch start,
+and the last row additionally misses at CHUNK scale (half its mass in arm A; 16.68 vs 17 in
+arm C). This also retro-fits the random-V magnitudes: one wrong 128-token tile out of 65 536
+gives ~sqrt(128/65536) ~= 0.045 ~= the observed row-1 error, rising to ~0.3 by row 17.
+
+**Unified statement after 25 candidates: the kernel attends ~r wrong KV TILES for row r
+(sourced near the batch start) plus one chunk-scale miss on the final row.** Not a race, not
+precision, not the merge, not kv_head -- wrong 128-token tiles in the KV walk, count growing
+with row index. The page-ramp probe (`KV_ROWCONST=2`: V[page p] = p x 1e-4, output decodes to
+mean attended page) runs next and names the exact wrong pages per row; from there the fix is
+whichever index computes those tile addresses.
 
 **What survives is the original characterisation, now better supported:** the error grows with
 the number of rows in the batch (0.0495 at N=2, ~0.30-0.39 at N=18), is independent of chunk

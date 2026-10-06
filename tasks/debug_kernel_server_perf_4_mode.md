@@ -705,12 +705,41 @@ overrun a partial group -- its loop is `for (r = row_begin + warp_id; r < row_be
 `merge_o_indices[r] + kv_head_idx * gqa_group_size` matches the
 `[token, kv_head, gqa_group, dim]` layout exactly.
 
-**Next, and it should again be an experiment:** force the leading row's packed length to a
-full tile (e.g. `qo:16 prefix:1024` so `packed = 112`, or `qo:2 prefix:1024` -> packed 14,
-still partial) and sweep `packed_qo_len` across the `cluster_tile_q` boundary. If the
-corruption tracks partiality rather than the split count, that isolates it to the partial-tile
-path in one run. Reading has now eliminated six suspects and identified none; the dump
-localised more in one run than all six readings combined.
+**CONFIRMED by controlled experiment: a PARTIAL q-tile is the trigger.** With `gqa_group_size
+= 7` and `cluster_tile_q = 128`, `qo=128` gives `packed_qo_len = 896 = 7 x 128` exactly while
+`qo=127` gives 889 = 6 tiles + 121. Both rows split (`kv = 65 664` / `65 663`), so split count
+is held constant and only partiality varies:
+
+| leading row | `packed_qo_len` | tiles | leading row | following `task0` row |
+|---|---|---|---|---|
+| `qo=128` | 896 | **7 exact** | 0.00051 ok | **0.00307 PASS** |
+| `qo=127` | 889 | 6 + **121 partial** | 0.00051 ok | **0.0657 FAIL** |
+| `qo=1` | 7 | **7 of 16, partial** | 0.00039 ok | **0.700 FAIL** |
+
+A one-token change in the leading row's q length flips PASS to FAIL with everything else
+equal. And the **error magnitude scales with the overrun**: a tile missing 7 of 128 rows gives
+0.0657, one missing 9 of 16 gives 0.700.
+
+**Mechanism this implies.** `MergeGroupJIT` consumes only `nrows` (verified above), and
+`partial_o_nnz` advances by `row_tile_size * num_kv_tiles`, which is also correct. So the
+overrun is on the **producer** side: a work item for a partial tile appears to write a
+**full** `cluster_tile_q` worth of partial rows, of which only `row_tile_size` are valid. The
+surplus rows land in the next group's partial region, so the next group merges clobbered
+partials. That accounts for every observation at once -- forward-only (the surplus runs past,
+never before), only with partial tiles, never affecting the partial row's own output (its own
+`nrows` are written correctly before the overrun), and a magnitude set by overrun size
+relative to the victim.
+
+**Why serving hits this constantly.** Every decode row has `packed_qo_len = 1 x
+gqa_group_size`, which is partial for any `cluster_tile_q > gqa_group_size` -- i.e. always. So
+any batch with a long-KV decode row (which splits, reaching the merge) followed by another row
+corrupts that row. TraceLab is exactly this shape, which is why its decode rows fail and why
+the error grows across 18 consecutive partial-tile rows.
+
+**The fix is to bound the partial-O write by `row_tile_size`** rather than the tile size, or to
+reserve partial space at full-tile granularity so an overrun is harmless. The first is correct;
+the second only hides it. The two-row pair `qo:128,512` (PASS) and `qo:127,512` (FAIL) at
+`prefix:65536,512` is the regression test, and it is cheap.
 
 **This also retracts my earlier "no threshold, so not the split machinery" refutation.** That
 prefix sweep ran 1024, 4096, 8192, 16384, 32768, 65536 -- every point at or above the limit,

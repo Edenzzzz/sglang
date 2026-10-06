@@ -13,6 +13,28 @@ on 2026-10-05; they live here now so that costs nothing next time.
 | `noproxy.sh` | strips proxy variables; `merlin-cli` fails with EOF through the proxy |
 | `px.py` | chunked base64 push + `execute-script` exec helper (set `SID` to the trial). Strips proxy vars itself, and `probe_trial()` reports trial status |
 
+## After pushing the flashinfer tree, RELINK `flashinfer/data/`
+
+`flashinfer/data/{csrc,cutlass,include,spdlog,tvm_binding}` are **absolute** symlinks into
+the dev box's `/opt/tiger/flashinfer`. `tar` preserves them as symlinks, so on the pod they
+dangle. The failure is not a missing-file error but:
+
+    FileExistsError: [Errno 17] File exists: '/dev/shm/w/fi/flashinfer/data/csrc'
+
+because `jit/core.py:17-18` calls `os.makedirs(..., exist_ok=True)`, and `exist_ok` only
+suppresses the error when the path is a *directory* -- a dangling symlink exists but is not
+one. Every arm fails instantly and identically, which looks like a harness bug rather than a
+restore defect. Fix after each flashinfer push:
+
+    cd /dev/shm/w/fi/flashinfer/data
+    rm -f csrc cutlass include spdlog tvm_binding
+    ln -s /dev/shm/w/fi/csrc csrc
+    ln -s /dev/shm/w/fi/3rdparty/cutlass cutlass
+    ln -s /dev/shm/w/fi/include include
+    ln -s /dev/shm/w/fi/3rdparty/spdlog spdlog
+    ln -s /dev/shm/w/fi/tvm_binding tvm_binding
+    for l in csrc cutlass include; do readlink -e $l >/dev/null || echo "DANGLING $l"; done
+
 ## Restore order: the kernel A/B does not need the sglang tree
 
 `tests/test_fused_server_batch.py` imports only `os`, `sys`, `glob`, `numpy` and `torch` --

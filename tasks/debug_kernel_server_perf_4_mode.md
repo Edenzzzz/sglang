@@ -245,8 +245,27 @@ because of the mainloop.
   also the prerequisite the multicast item needs, since TMA multicast only applies to TMA
   loads. One change unblocks both.
 
-Next: switch the FA3 executor to `PagedKVNonTMA=false` and re-measure this exact batch. If TMA
-paged requires `page_size > 1`, the two routes are the same change.
+**They ARE the same change, and it is a server flag.** Upstream asserts
+`page_size % kBlockN == 0` with `kBlockN = 128` before taking the TMA paged path
+(`mainloop_fwd_sm90:537`), so TMA paged needs pages that are a multiple of **128 tokens**.
+sglang pages at **1** by default, which is exactly why we are on the non-TMA path and paying
+one index lookup per KV token.
+
+sglang already exposes `--page-size` ("The number of tokens in a page"), so the fix is
+configuration rather than a kernel rewrite:
+
+    --page-size 128    ->  TMA paged KV becomes legal for the FA3 executor
+                       ->  Use_TMA_KV = !PagedKVNonTMA turns true
+                       ->  TMA multicast becomes available, which is what the DSMEM item needs
+
+So one flag plus `PagedKVNonTMA=false` addresses the 31x long-context regression **and**
+unblocks multicast. What it costs is KV-cache granularity: at 128 tokens per page, prefix
+sharing and eviction work in 128-token units, which matters for the radix cache and for the PD
+cache-migration argument -- that trade has to be measured, not assumed.
+
+Next, in order: (1) rebuild the FA3 executor with `PagedKVNonTMA=false`; (2) re-measure this
+exact TraceLab batch at `page_size=128`; (3) only then revisit multicast, which the same change
+enables.
 
 ## Kernel optimisations — 2026-10-06
 

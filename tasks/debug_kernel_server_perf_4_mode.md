@@ -260,11 +260,40 @@ own short-KV behaviour, with the per-tile work identical (`num_splits = 1` in ev
 correctly — 2048-token appends give 448 m-blocks against the 106 threshold). So either FA3 is
 under-parallelised on this shape, or it does pathologically more work per tile.
 
-Next: the discriminator is an `FA3_SM_BUDGET` sweep on *this* fixture. On a short-KV fixture
-FA3's cost scaled near-inversely with the budget (223.7 / 119.4 / 74.9 / 60.0 / 45.9 us at
-16 / 32 / 64 / 96 / 132 SMs), i.e. it was occupancy-bound and scaling cleanly. If the same
-sweep on the long-context batch is flat, FA3 is already filling the machine and the 39x is
-per-tile work; if it still scales, the 896 work tiles are not reaching the SMs.
+**ANSWERED: FA3 is latency-bound in the mainloop.** The `FA3_SM_BUDGET` sweep on this exact
+fixture (page 128, cp.async, 2 iters, all rows PASS):
+
+| SM budget | fa3 half | budget x time |
+|---|---|---|
+| 16 | 3 826 892 us | 61 230 |
+| 32 | 1 918 061 us | 61 378 |
+| 64 | 950 664 us | 60 843 |
+| 96 | 634 346 us | 60 897 |
+| 132 | **480 467 us** | 63 422 |
+
+`budget x time` is constant to within 4% across an 8x range, so throughput is **perfectly
+linear in SM count all the way to 132**. That kills both of the candidates above:
+
+- Not under-parallelised. Adding SMs keeps paying off linearly; the 896 work tiles reach the
+  machine fine, and there is no load-imbalance or tail effect to recover.
+- Not bandwidth-bound, and not doing more work per tile. At 132 SMs FA3 achieves
+  **10.3 TFLOP/s and 80 GB/s** of KV traffic, against FA2's **322 TFLOP/s and 2 518 GB/s** on
+  the identical 4.93 TFLOP / 39 GB of KV. Nothing is saturated: 80 GB/s is 1.7% of HBM and
+  10.3 TFLOP/s is 3% of peak. The *work* is the same, the *rate* is 31x apart.
+
+Perfect linear SM scaling with nothing saturated is the signature of a **memory-latency-bound**
+loop — each SM sits waiting on KV arrivals instead of overlapping them with the wgmma, and more
+SMs simply buys more independent waiting. FA2's persistent kernel hides the same latency and
+lands at 80% of roofline.
+
+So the defect is in the FA3 mainloop's load/compute overlap on long KV, which points at
+pipeline depth: we instantiate with `UP_STAGES=2`, and 2 stages of 128-token KV blocks is
+~0.5 MB of in-flight KV per CTA, far too little to cover HBM latency when the walk is 657
+blocks long. On the old `kv=512` fixtures the whole KV fit in a handful of blocks, so depth
+never mattered — which is also why the 1.21x looked real there.
+
+Next: sweep `UP_STAGES` 2/3/4 on a single long append row, plus KV- and q-scaling sweeps to
+confirm the cost is linear in KV (latency per block) rather than superlinear.
 
 **Multicast is now unblocked but unmotivated by this entry.** TMA paged does work at
 `page_size=128` (all rows PASS in the TMA arm), which was the stated prerequisite for the DSMEM

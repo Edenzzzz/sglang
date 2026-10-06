@@ -29,6 +29,12 @@ run_arm () {
     export SGLANG_FLASHINFER_USE_PERSISTENT=1 SGLANG_MIXED_ATTENTION_KERNEL=persistent
     export SGLANG_FUSED_FA3_SRC=/dev/shm/w/fi/tests/fused_fa3_persistent_ext.cu
     export SGLANG_TWO_EXEC=$TWO
+    # Qwen2.5-7B is natively 32K; sglang refuses a longer --context-length unless this is set.
+    # Extrapolated RoPE: timings are valid, generated text is not (see header).
+    export SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1
+    # The FA2 half runs flashinfer's JIT module, which caches across header edits; a stale
+    # module silently ignores source changes (see task doc). Each arm starts clean.
+    rm -rf ~/.cache/flashinfer/90a/cached_ops
     # upstream's own trait values, as measured: see the trait A/B in the task doc
     export UP_STAGES=2 MMA_PV_RS=1 SCHED_LPT=0
     # a silent fallback would make this an apples-to-oranges comparison, so it must raise

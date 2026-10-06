@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.11.0 — The "split-row corruption" was a test-harness bug; per-executor items measured; the 30% ceiling (2026-10-07)
+
+**The kernel was correct.** The long-running "split-row corruption" was two bugs in the test
+harness, both introduced with its `PAGE_SIZE` support: the reference `exact()` read KV
+token-contiguously (`kvb += kl`) while the paged layout starts each request on a page
+boundary, and `NPAGES` was `ceil(sum/PS)` instead of `sum(ceil/PS)`. A page-ramp probe
+(`KV_ROWCONST=2`, V[page p] = p x 1e-4) exposed it: the kernel's decoded mean page advances
+~33 per row (correct for 4097 tokens), the reference ~32. With both fixed (flashinfer
+`333902e`), every fixture on record passes -- decode N=18 at kv=4096 and 65536, the two-row
+reproducer at page 128 and page 1, `qo:127`, and both TraceLab arms.
+
+This retracts a long chain of kernel-side diagnoses (row order, partial pages, chunk limits,
+partial-tile overrun, partial_lse indexing, races, the partial_o cursor, bf16 partials, a
+"half page offset"), several of which were reported as confirmed. The last of those rested on
+a number back-computed from a rel err rather than decoded from output. The serving A/B is
+unblocked.
+
+**Per-executor optimisation items, measured on the fixed kernel** (each executor against its
+own baseline; all PASS, 0 unwritten, 0 fallbacks):
+
+| FA3 vs FA3 | | FA2 vs FA2 | |
+|---|---|---|---|
+| `MmaPV_is_RS=0` | +3.99% slower | `MMA_KV=3` | -0.43% |
+| `stages=3` | +0.54% slower | `MMA_KV=4` | -0.46% |
+| `LPT=1` | +0.68% slower | | |
+| TMA paged | +10.03% slower | | |
+
+Upstream's defaults win every FA3 comparison; `FA2_MMA_KV` is register tiling, not pipeline
+depth (SharedStorage identical at 2/3/4), so FA2 pipelining remains untested.
+
+**Routing is already optimal both ways:** FA3 is 1.38x faster on identical append rows, FA2
+1.30x faster on identical decode rows, and the split routes exactly that way. On the mixed
+TraceLab batch the split cuts attention 19.3% (15 395.8 -> 12 425.4 us, 1.239x).
+
+**That 19.3% is a ceiling on TTFT/ITL from attention**: even at 100% attention share, e2e
+gain cannot exceed it. >=10% throughput is reachable; >=30% TTFT/ITL has to come from
+scheduling (EDF admission, cache-hit routing, spec acceptance), not from this kernel.
+
+**Multicast:** cluster launch implemented (`FLASHINFER_FA3_CLUSTER_M`,
+`launch_kernel_on_cluster`), but upstream asserts `Use_TMA_KV || ClusterShape == 1`, so it
+needs either TMA KV (measured 10% slower) or a cluster-aware cp.async gather of our own.
+
+Also retracted this release: "42.8x" as a performance gain (it is the size of a defect in our
+own port), and the claim that KV multicast requires TMA (DSMEM peer reads do not; upstream's
+implementation couples them).
+
 ## v0.10.2 — The split-row corruption is a RACE in our JIT reduction; nineteen candidates eliminated (2026-10-06)
 
 **The split now beats FA2-on-everything, reproduced three times.** TraceLab at page 128:

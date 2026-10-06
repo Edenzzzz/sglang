@@ -12,8 +12,13 @@ export PYTHONPATH=/dev/shm/w/python:/dev/shm/w/fi HF_HOME=/dev/shm/w/hf FI_ROOT=
 export TORCH_CUDA_ARCH_LIST=9.0a
 mkdir -p /dev/shm/w/resx
 
-TL='qo:2048,2048,512,1024,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 prefix:65536,98304,0,0,81920,73728,90112,65536,65536,98304,65536,81920,98304,65536,98304,73728,65536,65536,90112,90112,65536,73728'
-NROWS=22
+# FA3-SHAPED fixture: the two TraceLab append rows only. The full 22-row mixed batch CANNOT
+# produce an FA3 baseline -- pointing the FA3 executor at it leaves 5632 of 5650 rows
+# unwritten, because that executor is planned for the leading n_fa3 rows and does not serve
+# qo=1 decode rows. So per-executor comparison uses a fixture BOTH executors can serve in
+# full, and the two arms then do identical work.
+TL='qo:2048,2048 prefix:65536,98304'
+NROWS=2
 
 # $1 tag  $2 n_fa3  $3.. env overrides
 run() {

@@ -1428,7 +1428,15 @@ class FlashInferAttnBackend(AttentionBackend):
         # Sequential by design. An SM-budget sweep showed concurrency loses at every budget
         # (112-235 us against 80.7) because neither executor leaves SMs idle, so there is no
         # overlap to win and splitting the machine only slows both.
-        if os.environ.get("SGLANG_TWO_EXEC") == "1":
+        # DEFAULT as of 2026-10-06. The fused single-kernel design is closed on
+        # measurement: co-residency denies both roles their native allocation at once
+        # (upstream FA3 spills 33 676 B co-compiled against 52 B alone; FA2 holds 168
+        # registers against 255 natively) and its shared memory exceeds the opt-in limit by
+        # 1 120 B. It measured 2.16x SLOWER than FA2-on-everything. The split measures
+        # 1.21x FASTER on the same comparison, so it is the default and the fused kernel is
+        # opt-in via SGLANG_FUSED_KERNEL=1 for A/B only.
+        _two_exec_default = os.environ.get("SGLANG_FUSED_KERNEL") != "1"
+        if os.environ.get("SGLANG_TWO_EXEC", "1" if _two_exec_default else "0") == "1":
             # Refuse rather than fall back. The first serving A/B measured the baseline
             # against itself because fa3_only_run did not exist in the build and every
             # forward quietly degraded to the persistent path -- 121 fallbacks read as a
@@ -1603,7 +1611,9 @@ class FlashInferAttnBackend(AttentionBackend):
                 # the first serving run did -- 121 fallbacks, read as a 38.8% TTFT
                 # regression of a path that never executed.
                 *(["-DFLASHINFER_FA3_UPSTREAM=1"]
-                  if os.environ.get("SGLANG_TWO_EXEC") == "1" else []),
+                  if os.environ.get("SGLANG_TWO_EXEC",
+                                    "0" if os.environ.get("SGLANG_FUSED_KERNEL") == "1"
+                                    else "1") == "1" else []),
                 f"-DFLASHINFER_FA3_UPSTREAM_STAGES="
                 f"{os.environ.get('UP_STAGES', '1')}",
                 # Q's completion protocol. 0 is the cp.async group drain, which is
@@ -1861,7 +1871,9 @@ class FlashInferAttnBackend(AttentionBackend):
         # executes 3 tasks and rejects a 4-task plan outright. Relying on the launch script
         # to leave SGLANG_FUSED_UNIFIED unset is what made the second serving A/B invalid
         # too -- 122 silent fallbacks on exactly that mismatch.
-        _two_exec = os.environ.get("SGLANG_TWO_EXEC") == "1"
+        _two_exec = os.environ.get(
+            "SGLANG_TWO_EXEC",
+            "0" if os.environ.get("SGLANG_FUSED_KERNEL") == "1" else "1") == "1"
         if os.environ.get("SGLANG_FUSED_UNIFIED") == "1" and not _two_exec:
             # ONE plan over the WHOLE batch: the wgmma class is task 3 of it, so
             # there is no row split, no second plan and no per-side offset. This

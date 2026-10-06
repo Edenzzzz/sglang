@@ -205,7 +205,23 @@ def run_method(method, scenario, outdir):
     # resampled from the realized distribution instead of a Cartesian grid.
     # Only the persistent path calls the gate, so only those methods capture.
     env["SGLANG_LOG_MIXED_COMPOSITION"] = str(outdir / f"composition_{method}.jsonl")
-    if method == "LPT":
+    if method == "SPLIT":
+        # Two-executor split: flash-attention's FA3 on its own scheduler over the wgmma
+        # requests, flashinfer's persistent LPT over the rest. This is the kernel under
+        # test; the fused single-kernel design is closed (it cannot reach per-role parity,
+        # being denied native registers and smem by co-residency).
+        #
+        # SGLANG_TWO_EXEC must be in the env BEFORE the extension loads: it selects
+        # -DFLASHINFER_FA3_UPSTREAM=1, without which fa3_only_run is compiled out and every
+        # forward silently falls back -- which invalidated two serving A/Bs.
+        env["SGLANG_FLASHINFER_USE_PERSISTENT"] = "1"
+        env["SGLANG_MIXED_ATTENTION_KERNEL"] = "persistent"
+        env["SGLANG_TWO_EXEC"] = "1"
+        env["SGLANG_FUSED_FA3_SM_SPLIT"] = "1"
+        env["FLASHINFER_SM_PARTITION"] = "1"
+        env["UP_STAGES"] = "2"
+        env["SGLANG_FUSED_FA3_SRC"] = "/dev/shm/w/fi/tests/fused_fa3_persistent_ext.cu"
+    elif method == "LPT":
         env["SGLANG_FLASHINFER_USE_PERSISTENT"] = "1"
     elif method == "LPT_EDF":
         # Gated persistent kernel + SLO-aware chunk control driven by the

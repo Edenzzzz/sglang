@@ -358,8 +358,15 @@ machinery, `K::SharedStorageSize`, limit 232 448 B):
 
 RS=1 saves exactly 32 768 B, which is one 128x128 bf16 P tile -- direct confirmation that the
 trait removes P's smem round-trip rather than merely renaming something. And the saving is
-exactly the amount that made stages=3 overflow, so **one trait buys both the removed round-trip
-and a 50% deeper KV pipeline**, and the depth lands precisely at the opt-in limit.
+exactly the amount that made stages=3 overflow, so the trait also legalises a 50% deeper KV
+pipeline, landing precisely at the opt-in limit.
+
+**MEASURED: the deeper pipeline does not pay.** `rs1s3` gives **472 890 us against `rs1`'s
+465 577 us -- 1.6% SLOWER**. So stages=3 is legal at RS=1 and is not worth enabling. The
+"fits to the byte" result was a real and tidy smem fact that turned out to predict nothing
+about performance, which is the same error as the root-cause claim above: I was reading
+elegance as evidence. Depth is now ruled out by measurement rather than by the earlier
+inference.
 
 This qualifies the claim made a moment earlier in this entry that depth "is not the lever": it
 was not a lever *at RS=0*, where 3 stages cannot fit. Upstream uses 2 unconditionally on Sm90
@@ -386,6 +393,17 @@ the first.
 
 The trait change is still correct and is kept -- it matches upstream, costs no registers, frees
 32 KB, and legalises stages=3. It is a 2.3% optimisation, not a root cause.
+
+**Consolidated: every trait hypothesis lands within 2.4% of the others.**
+
+| arm | fa3 half | vs rs0 |
+|---|---|---|
+| `rs0` RS=0 stages2 LPT=1 (old) | 476 684 us | - |
+| `rs1` RS=1 stages2 LPT=0 | 465 577 us | -2.3% |
+| `rs1s3` RS=1 stages3 LPT=0 | 472 889 us | -0.8% |
+
+Against a 31x gap, a 2.4% spread means the traits are simply not where the time goes. Keep
+`rs1` (upstream's values, free, frees smem), drop stages=3.
 
 **So the 31x is still UNEXPLAINED**, and what is now known about it is narrower than before:
 not the gather (TMA measured slower), not pipeline depth (2 is upstream's and 3 barely fits),

@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.9.5 — FA2's spill is the O accumulator; the parity gap is 2.16x (2026-10-06)
+
+Two measurements and one fix.
+
+**The gap, on one build.** Fixture 2: 155.9 us fused against 72.3 us for
+FA2-on-everything, both numerics-correct from the same build and inputs. 2.16x, which
+is larger than the 1.83x recorded on the 16 823-token-KV fixture -- so the gap is
+workload-dependent and the *shorter* fixture is the harder case. Worth knowing,
+because the split sweep that produced the 1.83x ran on the easier one.
+
+**What FA2's share of it is.** Three compile-only probes, each a 384-thread kernel
+containing only the FA2 runners:
+
+| FA2 configuration | threads used | spill stores |
+|---|---|---|
+| `4 warps_q, num_mma_q=2` (today) | 128 of 384 | 1 136 B |
+| `4 warps_q, 3 warps_kv` (all threads busy) | 384 | **1 276 B** |
+| `8 warps_q, num_mma_q=1` | 256 of 384 | **88 B** |
+| native `128 x 2 CTA`, for reference | 256 | 0 B |
+
+Occupying all 384 threads by splitting KV is *slightly worse* than leaving 256 idle:
+every KV-warp still accumulates a full O tile over its q rows, so per-thread registers
+do not fall and the cross-warp reduction adds work. That is a direct answer to
+"offload some softmax work to the remaining threads" -- the softmax is not what holds
+the registers. Splitting **Q** is: 8 warps with `num_mma_q=1` covers the same 128 rows
+with 16 per warp instead of 32, halving the accumulator, and spill falls 12.9x to
+within 88 B of native. Available as `FLASHINFER_FA2_QSPLIT=1`; tile 128 only, since
+tile 64 already has 16 rows per warp and neither 64 nor 16 divides into 8 warps.
+
+**Fix.** The combine launch failed with "invalid argument" because its grid is
+`ceil_div(seqlen_q * num_heads, kBlockM)` and I passed `seqlen_q = 0`, making grid.x
+zero. Upstream documents the field as the varlen *maximum* q length
+(`flash_fwd_combine_kernel.h:292`); it now travels on the plan from both call sites.
+
+Correctness and timing of the Q-split configuration inside the full fused kernel are
+not yet measured -- the probes are compile-only.
+
 ## v0.9.4 — The port's split-KV path: upstream's combine pass, and two silent-wrong traps (2026-10-06)
 
 Fixture 2 measured the predicted failure: with `max_splits_fa3=2`, both upstream arms

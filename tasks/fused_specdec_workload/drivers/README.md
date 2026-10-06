@@ -55,6 +55,23 @@ restore defect. Fix after each flashinfer push:
     ln -s /dev/shm/w/fi/tvm_binding tvm_binding
     for l in csrc cutlass include; do readlink -e $l >/dev/null || echo "DANGLING $l"; done
 
+## Do NOT push the sglang tree -- push the diff (2 chunks instead of 135)
+
+The 5.8 MB `python/` tarball took over an hour through the webshell, and running a second
+push in parallel throttled both rather than doubling throughput. The fork's python changes
+since its last upstream base commit are only **34 files, 103 KB gzipped**:
+
+    BASE=$(git log --format='%H %ae' | awk '$2 != "wtan45@wisc.edu" {print $1; exit}')
+    git diff --binary $BASE HEAD -- python | gzip -9 > fork_python.diff.gz
+
+Push that, then run `build_sglang_tree.sh` on the pod: blob-filtered clone of public
+upstream sglang (fetch-by-SHA is rejected by GitHub), sparse-checkout `python`, check out
+BASE, `git apply` the diff. The fork itself is private, so the pod cannot clone it directly,
+and cross-region HDFS (local `haruna` vs pod `harunava`) is unreachable.
+
+The same trick applies to data: `make_tracelab_min.py` cuts the 52 MB TraceLab trace to 4 MB
+(verified identical sampler output), and ShareGPT is pulled pod-side from HuggingFace.
+
 ## Restore order: the kernel A/B does not need the sglang tree
 
 `tests/test_fused_server_batch.py` imports only `os`, `sys`, `glob`, `numpy` and `torch` --

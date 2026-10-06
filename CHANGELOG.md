@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.10.2 — The split-row corruption is a RACE in our JIT reduction; nineteen candidates eliminated (2026-10-06)
+
+**The split now beats FA2-on-everything, reproduced three times.** TraceLab at page 128:
+12 316.3 us against 15 360.2 us = **1.247x**, after 12 399.7 / 15 190.9 = 1.225x earlier on
+the same fixture. Kernel-batch time, **not serving** -- the serving A/B has still never run.
+
+**The remaining blocker is a race, not an indexing bug.** Eight consecutive runs of the
+two-row reproducer, nothing changed between them:
+
+    rel err  0.77292  0.65776  0.72528  0.68167  0.68027  0.68413  0.67000  0.68319
+
+Nondeterministic. This **retracts** the previous entry's assertion that it was deterministic
+(stated without testing), and reclassifies two earlier readings: the error magnitude varying
+across fixtures (0.39-0.84) is run-to-run variance, not a function of overrun size, so the
+apparent correlation with tile partiality was noise.
+
+The suspect is the port's own **JIT-reduction rendezvous** (`group_counter`, the
+`__threadfence()` / `persistent_block_sync` ordering, the counter zero-reset), whose comments
+already record *intermittent* wrong merges -- 3 runs in 10 -- on exactly "the one batch shape
+whose FA2-class rows split their KV". It now fails on nearly every run, which is why it read as
+deterministic and sent the investigation after indexing for a dozen candidates.
+
+**What the reproducer is:** `qo:1,512 prefix:65536,0` fails; `qo:512,1 prefix:0,65536` passes.
+A split row with a **lower request index** corrupts every later `task0` row. Damage is total
+(512/512 tokens, 28/28 heads), fully written and in range.
+
+**Eliminated, with the measurement that did it:**
+
+| candidate | eliminated by |
+|---|---|
+| partial final KV page | fails at `page_size=1` too |
+| the chunk limit being 1024 | plan dump: `len_kv_chunk` is 512, per-task |
+| follower must be unsplit | plan dump: the follower splits in both cases |
+| the combine pass | `n_fa3=0` arm: no FA3, no combine, still fails |
+| `partial_indptr` for unsplit items | `PI_ZERO=1` changes nothing |
+| `partial_lse` row- vs tile-relative | `LSE_TILE_REL=1` changes nothing |
+| wrong LSE weights | victim with `kv=512` never merges, still fails |
+| write collisions / `merge_o_indices` overshoot | damage is total, not a bounded prefix |
+| the victim's KV base | plan dump: `kv_indptr=513` is correct |
+| per-task cluster-slot/cursor | the PASS ordering has identical cluster consumption |
+| every plan array | dumped twice on different fixture pairs, correct both times |
+| upstream flashinfer | pure `BatchAttention` handles the failing order at 0.00587 |
+
+**Priority item 1 reopened then demoted to not started.** `FA2_MMA_KV` does not change
+`PKT<128,N>::SharedStorage` -- 133 120 bytes at N = 2, 3 and 4 -- so it sizes the register-side
+`s_frag` accumulator, not pipeline depth. The flat 15 218.8 / 15 296.6 / 15 219.5 us sweep
+therefore measured a register-tiling knob and said nothing about K/V pipelining. Also retracts
+the earlier explanation that FA2 was "at roofline": at the real 989.4 TFLOP/s peak it is at
+**33%**, not 83%.
+
+**The four-point PD colocation doc is written** (`tasks/pd_colocation_vs_disagg.md`), covering
+cache-hit-first routing with an EDF/SLO veto, best-effort cache migration and the replication
+argument, an EDF predictor with EWMA acceptance length, and complete-vs-bipartite RDMA with
+random-among-ties source selection. Every claim is labelled measured or predicted and each
+point carries the measurement that would falsify it. None of the four is measured yet.
+
+**Still no serving data** against the >=30% TTFT/ITL and >=10% throughput bar. Multicast,
+cross-role backfill, the 4-mode MTP run and the EDF comparison are unstarted.
+
 ## v0.10.1 — ROOT CAUSE: the scheduler was handed `seqused_k` where it needs the query length; the split now beats FA2 (2026-10-06)
 
 **FA3's long-context slowness was `Theta(kv^2)`, from one wrong argument.**

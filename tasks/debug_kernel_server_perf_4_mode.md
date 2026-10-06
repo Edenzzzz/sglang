@@ -6781,6 +6781,31 @@ the 0.021-0.031 seen on the mixed batch. So:
   the `dec_fa2` arm at all. Any future work on that bug should start here rather than from the
   two-row `qo:1,512` case.
 
+**The corruption ACCUMULATES with the number of preceding split rows.** Every row identical
+(`qo=1, kv=65537`), FA2 only, so nothing varies but the count:
+
+| decode rows in batch | last row's rel err |
+|---|---|
+| 2 | 0.058 |
+| 4 | 0.100 |
+| 8 | 0.137 |
+| 18 | **0.367** |
+
+Row 0 is clean in every case (~0.003). So this is not a fixed mis-index that hits one row --
+**each preceding split row degrades the next a little more**, monotonically, on identical work.
+
+**That revives a candidate I wrongly treated as eliminated.** The `PI_ZERO` arm zeroed
+`partial_indptr` only for **non-split** work items. In this fixture *every* item is split, so
+that arm changed nothing here and never tested the split path's offset at all. The quantity
+that accumulates across rows is exactly `partial_o_nnz` -- the running partial-buffer cursor
+that each split row advances -- so a drift in how split items index `partial_o` would produce
+precisely this signature: clean first row, error growing with the number of rows that have
+already advanced the cursor.
+
+That is the sharpest lead this bug has had, and it is a different quantity from everything
+ruled out so far (the plan's arrays were verified correct as *values*; this is about the
+offset each row's merge *reads back* from them).
+
 ## The split cannot reach the 30% bar on attention alone — 2026-10-07
 
 Arithmetic on the measured numbers, before spending more time on serving runs.

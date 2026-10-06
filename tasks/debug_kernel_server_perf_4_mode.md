@@ -555,14 +555,51 @@ That lines up with the TraceLab signature already recorded -- error rising with 
 across rows of identical shape (`kv=65537, qo=1` giving 0.0088 -> 0.0177 at rows 7 -> 20) --
 and makes both the same finding: **a row is corrupted by what precedes it.**
 
-The live hypothesis, now being measured rather than asserted: the FA2 side's split-KV
-workspace. A long-KV row is split across many CTAs and reduced through a global partial
-buffer; if that buffer is indexed per-CTA or per-work-tile without accounting for the earlier
-rows' splits, a long row's partials land on a later row's output. The doc already records a
-"**global** partial round-trip" on the FA2 side, which is exactly the mechanism that would do
-this. Sweeping the leading row's prefix (1024 -> 65536) in the failing order to find the
-threshold; a clean threshold where the long row starts splitting would confirm it, and no
-threshold would refute it.
+**The split-KV workspace hypothesis is REFUTED: there is no threshold.** Sweeping the leading
+row's prefix in the failing order, the second row is wrong at every length, including
+`kv=1025` where the leading row barely splits at all:
+
+| leading row prefix | leading row (task2) | second row (task0, `qo=512 kv=1024`) |
+|---|---|---|
+| 1 024 | 0.00263 ok | **0.465 FAIL** |
+| 4 096 | 0.00154 ok | **0.482 FAIL** |
+| 8 192 | 0.00133 ok | **0.530 FAIL** |
+| 16 384 | 0.00077 ok | **0.596 FAIL** |
+| 32 768 | 0.00053 ok | **0.391 FAIL** |
+| 65 536 | 0.00035 ok | **0.459 FAIL** |
+
+Flat, with no dependence on the leading row's length. So it is not a long row's partials
+landing on a later row, and the "global partial round-trip" mechanism is not it.
+
+**It is TASK ORDER.** Collecting every arm by the per-row task assignment the harness prints:
+
+| fixture | task order | outcome |
+|---|---|---|
+| `qo:1,512 prefix:*,512` | **[2, 0]** | the `task0` row fails, 0.39-0.60, at every prefix |
+| `qo:512,1 prefix:512,65536` | [0, 2] | both pass |
+| `qo:512,1024 prefix:0,0` | [0, 0] | both pass |
+| TraceLab | [0,0,0,0,2x18] | `task0` rows pass; only the last `task2` rows are marginal |
+
+**A `task0` row placed after a `task2` row is corrupted.** Not shape, not length, not
+split count, not the combine, not FA3 -- the queue the preceding row was assigned to. The
+suspect is the unified plan's per-task work-queue construction (the `QUEUE_EXEC` mapping and
+the per-task q offsets in `scheduler.cuh`): a `task0` row's output offset computed from a
+cumulative counter that mis-handles preceding `task2` rows would produce exactly a partially
+correct row.
+
+**Scoping, in the 1.225x measurement's favour -- stated because it would be convenient to
+leave unexamined.** TraceLab's natural ordering is `[0,0,0,0,2,2,...]`, i.e. every `task0` row
+precedes every `task2` row, which is the **safe** order. Both arms of that A/B used it, and
+the `task0` rows were correct in both (0.0022-0.0039). So this bug does not explain the
+1.225x and does not invalidate it. What remains unexplained there is the marginal
+`task2` failures at rows 20-21 (0.021-0.030 against `TOL=0.02`), which are a different
+signature -- gradual with index rather than a hard 0.4-0.6 corruption -- and may well be a
+separate issue or simply a tolerance that is too tight for 100K-context bf16 decode.
+
+But a real serving workload does **not** guarantee the safe order: sglang batches whatever
+arrives, so decode rows routinely precede prefill rows. That makes this a blocker for the
+serving A/B rather than a curiosity, and it must be fixed before serving numbers mean
+anything.
 
 Arm (b) did not test what I intended: `SPLITS=1` sets `sm_split`, not `num_splits`, so (b) is
 a second combine-enabled arm rather than a combine-disabled one. Arm (a) carries the

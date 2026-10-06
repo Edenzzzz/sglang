@@ -4700,6 +4700,50 @@ exactly this case, and the bug was passing the whole-batch default instead. Wort
 the pattern -- all three faults were "upstream has a field for the subset/per-item case
 and I handed it the aggregate".
 
+### The plan and the split encoding are both verified correct — 2026-10-06
+
+Item dump on the failing fixture, against a prediction stated beforehand
+(`FIXTURE='qo:200,439,100,1 prefix:0,0,0,5468 n_fa3:2'`, G=1, FORCE_ONE_SPLIT):
+
+    predicted: 24 items, with_group_id=0, every (q_start, kv_head_idx, batch_idx) distinct
+               row 0 packed 200 -> 2 q-tiles x 4 kv_heads = 8,  q_start {0,128}
+               row 1 packed 439 -> 4 q-tiles x 4 kv_heads = 16, q_start {0,128,256,384}
+    measured:  [plan] task=3 items=24 with_group_id=0
+               [fa3-item] task=3 items_with_group_id=0 total_items=24
+
+Exact match. **The plan is not the fault** -- no duplicate items, no over-count, no
+stray split groups. That removes the "two CTAs process the same (q-tile, kv_head)"
+candidate.
+
+**The split_idx encoding is also verified**, by reading upstream's own producer and
+consumer rather than inferring:
+
+- `tile_scheduler.hpp:115` -- upstream's scheduler does
+  `work_info.split_idx |= (num_splits_dynamic << 16)`, with the value taken from
+  `num_splits_dynamic_ptr[work_info.bidb]`, and `:113` additionally asserts
+  `split_idx < num_splits_dynamic`;
+- `block.h:48-51` -- the mainloop decodes it (`>> 16` for the count, `& 0x0000FFFF` for the
+  index) when deriving its KV block range.
+
+So our adapter's `(nsplits << 16) | chunk` matches the contract on both sides, and the
+mainloop is not reading an undecoded 65536. One difference worth noting for later: upstream
+validates `split_idx < num_splits_dynamic` and our adapter does not, which is moot at one
+split but would matter once splitting is re-enabled.
+
+**State of the search.** Eliminated so far: the split path and combine pass, the partial
+layouts, the per-request varlen descriptors, the page-table scatter indptr, the Q tile
+index, GQA packing, the per-request base arithmetic, the plan's item set, and the split_idx
+encoding. The measured signature is unchanged and specific: both wgmma rows wrong, every
+element nonzero, output absmax consistently **above** the reference (0.155 vs 0.134 and
+0.107 vs 0.091 on the two-row fixture), rel err 0.52-0.70. FA2 rows on the same batch are
+exact to 3e-3.
+
+What has not been examined is `block.h`'s own `n_block_min/max` arithmetic given
+`seqused_k[bidb]`, `num_splits_actual = 1` and `split_idx = 0` -- i.e. whether the KV block
+range it derives for an unsplit tile really is `[0, ceil_div(seqlen_k, kBlockN))` for our
+descriptor values. That is the first thing a reader should check, and it is a code read
+rather than a run.
+
 ### Within-request iteration, and the output is too LARGE — 2026-10-06
 
 Discriminator: two wgmma rows at `bidb` 0 and 1 in one batch, at G=1, with a task-0 and a

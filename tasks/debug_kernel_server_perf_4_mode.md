@@ -4821,10 +4821,38 @@ than "it accumulates the wrong KV":
   the page axis. Any off-by-one in `num_pages` vs the table's extent shows up as
   no-contribution rather than wrong-contribution.
 
-The next cheap discriminator is to dump the wgmma rows' raw output and check whether it
-is exactly zero (epilogue stored nothing) or small-but-nonzero (accumulated a fraction of
-the KV). Those point at different halves of the list above, and it needs no new build --
-the harness already has the output tensor.
+**Dump run, and it refutes the list above.** `DUMP_ROWS=1` against the prebuilt
+extension (harness-only change, so no recompile):
+
+    row 1  got[0,:4] = [-0.054443, -0.017700,  0.030029, -0.009705]
+           ref[0,:4] = [-0.054236, -0.001193,  0.010781, -0.009634]
+           nonzero = 1573376/1573376   absmax 0.0986 vs ref 0.1055
+
+    row 0  got[0,:4] = [ 0.061279, -0.031738,  0.026978,  0.019287]
+           ref[0,:4] = [-0.026557, -0.015640, -0.014690, -0.011900]
+           nonzero =  258048/258048    absmax 0.1416 vs ref 0.1214
+
+Every element is nonzero, the magnitudes are right, and in row 1 elements **0 and 3 match
+to bf16 precision** while 1 and 2 do not. So the mainloop is not failing to accumulate --
+`seqused_k == 0`, the `-1` padding and the `num_pages` off-by-one are all out. It computes
+correct-magnitude values that land in the **wrong places**.
+
+That is the signature of a **permutation**, and the obvious suspect is the packed-GQA
+output mapping. The wgmma role writes packed `((G, seq), D)` rows that must be unpacked to
+`(seq, H, D)`; if our `packed_coord(p, G) = (p % G, p / G)` convention disagrees with
+upstream's, each value is computed correctly and stored at the wrong `(token, qo_head)`.
+With `G = 7` that scatters most elements while leaving a minority coincidentally in place,
+which is exactly the pattern above -- and it explains why rel err sits near 1.0 without
+the output being small, which no "missing KV" story does.
+
+**Next, in order, both cheap:**
+
+1. Confirm the permutation: compare *sorted* |values| of `got` and `ref` for one row. A
+   close match proves the value set is right and only the placement is wrong, which would
+   settle it without touching the kernel.
+2. Then diff our packed-row convention against upstream's `PackGQA` unpacking --
+   `pack_gqa.h` against `packed_coord` / `FLASHINFER_FUSED_PACKED_Q` -- since those are the
+   two definitions that have to agree.
 
 ### Co-residency constrains the fused kernel twice: registers AND shared memory — 2026-10-06
 

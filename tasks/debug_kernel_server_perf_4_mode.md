@@ -6697,3 +6697,56 @@ a CTA drains FA2 before entering FA3, which the measurement configuration -- wgm
 role empty -- could not trigger. Capturing the 11% means re-initialising FA3's
 pipeline state after the rendezvous.
 
+
+<a id="split-row-race-handoff"></a>
+## Split-row race: consolidated state — 2026-10-06
+
+**Reproducer** (one token flips it, `n_fa3:0`, page 128 or 1, `UNIFIED=1`):
+
+    FAIL  qo:1,512   prefix:65536,0     victim rel err 0.58-0.85, varies per run
+    PASS  qo:512,1   prefix:0,65536     both rows correct
+
+**Established, each by measurement:**
+
+1. **Nondeterministic.** Eight identical runs: 0.773 0.658 0.725 0.682 0.680 0.684 0.670 0.683.
+   So it is a race. Error magnitude across fixtures is this variance, not a signal.
+2. **Damage is total**: 512/512 tokens, 28/28 heads, every element written, magnitude in range
+   (absmax 0.0703 vs ref 0.0715). Not a bounded overrun, not zeros, not garbage.
+3. **The victim need not split.** A victim with `kv=512` (one chunk, direct write-through, no
+   partials) is corrupted. So it is not a merge-weight or partial-buffer fault.
+4. **The whole reduction path is exonerated.** The JIT rendezvous and the classic
+   `grid.sync` + `BlockReductionRunner` path are mutually exclusive
+   (`persistent_template.cuh:108`), and the corruption appears identically under **both**.
+   The cause is upstream of reduction.
+5. **The plan is correct**, dumped on two different fixture pairs: `q_indptr`, `kv_indptr`
+   (513 = `ceil(65537/128)`), `kv_len`, `kv_start`/`kv_end`, `batch_idx`, `merge_indptr`,
+   `merge_o_indices`, `group_row_begin`/`nrows`, `partial_indptr` all as expected, and
+   structurally identical between PASS and FAIL.
+6. **Trigger**: a row that **splits** (`kv >` its task's `len_kv_chunk`) at a **lower request
+   index** than the victim. Same-task pairs fail too (`qo:127,512`), so it is not cross-task.
+   Both victims fail in a three-row fixture, so it is not `q_indptr`-specific.
+7. **Not page alignment** (fails at `page_size=1`), **not** `MmaPV_is_RS`/`LPT`/stages,
+   **not** the FA3 executor or the combine (`n_fa3=0` reproduces it).
+
+**Open question, and no clean control exists for it.** Whether the defect is in our 4-task plan
+path or in flashinfer's persistent kernel is **undetermined**: the `fi_only.py` comparison that
+appeared to settle it was confounded (3-task vs 4-task), and `BatchAttention.run()` refuses a
+4-task plan, so upstream cannot execute the configuration the fault requires. Building a
+3-task reproducer -- if one exists -- would be the way to separate them.
+
+**Serving is genuinely gated.** `flashinfer_backend.py:1945` sets `FLASHINFER_FA3_TASK=1` on
+the `SGLANG_TWO_EXEC` path (4 tasks, affected) while `:1958` plans 3 for the baseline
+(unaffected), so an A/B today compares a clean baseline against an arm computing wrong
+attention. The eventual run needs a **third validity check beyond fallback counts: both arms
+must plan the same task count.**
+
+**Next experiments, in order of cost:**
+
+1. Try to reproduce with a **3-task** plan (`FLASHINFER_FA3_TASK` unset, `UNIFIED=0` is not
+   available because that path no longer compiles -- it references `wgmma_plan`). If it
+   reproduces, the fault is in flashinfer's kernel, not our plan, and upstream can own it.
+2. `compute-sanitizer --tool racecheck` on the reproducer. The fault is near-100% per run, so
+   one run should name the unsynchronised access directly.
+3. If racecheck is clean, instrument the victim's work items to record which `(q_start,
+   kv_start, kv_head)` each CTA actually executed, and diff against the plan -- the plan is
+   known good, so a divergence localises the work-distribution side.

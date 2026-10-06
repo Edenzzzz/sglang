@@ -9,6 +9,7 @@ Each backend supports two operators: extend (i.e. prefill with cached prefix) an
 
 import json
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -1510,6 +1511,54 @@ class FlashInferAttnBackend(AttentionBackend):
         return out, self._persistent_lse_buf[:num_tokens]
 
 
+    @staticmethod
+    def _num_splits_heuristic(total_mblocks, num_sm, num_n_blocks, num_m_blocks,
+                              size_one_kv_head, is_causal_or_local, max_splits=128):
+        """Port of flash-attention's num_splits_heuristic (hopper/heuristics.h:25).
+
+        Pinning num_splits_dynamic to 1 disabled upstream's split-KV entirely, which is
+        catastrophic on long KV: a 16392-token row has 129 KV blocks but only 4 m-blocks of
+        work, so without splitting it occupies 4 CTAs of 132 and runs serially -- measured
+        17.5 ms for one such row, and 68.9 ms at 32768. Upstream would pick tens of splits.
+        """
+        if total_mblocks >= 0.8 * num_sm:
+            size_l2 = 50 * 1024 * 1024
+            if (size_one_kv_head > size_l2 and num_m_blocks >= num_sm * 2
+                    and not is_causal_or_local):
+                return min((size_one_kv_head + size_l2 - 1) // size_l2, max_splits)
+            return 1
+        if num_n_blocks <= 4:
+            return 1
+        max_splits = min(max_splits, num_sm, num_n_blocks)
+        best, best_eff = 1, 0.0
+        effs = []
+        for ns in range(1, max_splits + 1):
+            n_waves = float(total_mblocks * ns) / num_sm
+            eff = n_waves / math.ceil(n_waves)
+            effs.append(eff)
+            best_eff = max(best_eff, eff)
+        for ns in range(1, max_splits + 1):
+            if effs[ns - 1] >= 0.85 * best_eff:
+                return ns
+        return 1
+
+    def _nsd_for(self, fused, n_fa3_rows, dev):
+        """Per-request split counts from upstream's own heuristic, not all-ones."""
+        import math as _m
+        kv = fused["kv_lens_req"][:n_fa3_rows].tolist()
+        qlens = fused["q_indptr_req"].diff()[:n_fa3_rows].tolist()
+        g = self.num_qo_heads // self.num_kv_heads
+        nsm = self._fused_num_sm()
+        out = []
+        for ql, kl in zip(qlens, kv):
+            num_m = max(1, -(-(int(ql) * g) // 128))
+            num_n = max(1, -(-int(kl) // 128))
+            size_one_kv_head = int(kl) * (self.head_dim * 2) * 2
+            out.append(self._num_splits_heuristic(
+                1 * self.num_kv_heads * num_m, nsm, num_n, num_m,
+                size_one_kv_head, False))
+        return torch.tensor(out or [1], dtype=torch.int32, device=dev)
+
     def _two_exec_scratch(self, q, fused, n_fa3_rows):
         """Per-step scratch for the two-executor FA3 launch, cached across layers.
 
@@ -1531,7 +1580,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 # upstream's varlen partial layout: [num_splits, num_heads, total_q, hd]
                 "po": torch.empty(total_q * hd * self.num_qo_heads, dtype=torch.float32, device=dev),
                 "plse": torch.empty(total_q * self.num_qo_heads, dtype=torch.float32, device=dev),
-                "nsd": torch.ones(n_fa3_rows, dtype=torch.int32, device=dev),
+                "nsd": self._nsd_for(fused, n_fa3_rows, dev),
                 "sem": torch.zeros(1, dtype=torch.int32, device=dev),
                 "reqs": torch.arange(n_fa3_rows, dtype=torch.int32, device=dev),
             }

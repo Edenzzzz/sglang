@@ -221,9 +221,11 @@ One line each; the evidence is in the linked detail section. Every item must be 
 - [x] **K/V pipelining, FA3** — stages=2, **6.0%** on the FA3 half; the smem count that had
       it blocked was the fused kernel's.
       [detail](#kv-pipelining-stages2-measured-60-and-the-split-unlocked-it)
-- [ ] **K/V pipelining, FA2** — `FLASHINFER_FA2_MMA_KV` now sweepable (depth 2 today); trades
-      the `s_frag[NUM_MMA_Q][NUM_MMA_KV][8]` register budget for pipeline depth, so it will
-      not improve monotonically. Untested.
+- [x] **K/V pipelining, FA2 — NEGATIVE, 0%** — `mma_kv` 2 -> 4 moves the FA2 half 34.5 ->
+      34.7 us, inside noise. FA2 at 128 threads x 2 CTAs already holds 255 registers with
+      zero spill, so it is not pipeline-starved, and doubling
+      `s_frag[NUM_MMA_Q][NUM_MMA_KV][8]` eats the registers `mma.sync` needs. So this
+      optimisation is FA3-only: 6.0% there, nothing here. Switch kept at 2.
 - [ ] **Smem-handoff JIT split-KV reduction** — the contribution over stock on both sides:
       replaces upstream FA3's separate combine launch and FA2's **global** partial
       round-trip. Intra-role, so no partial crosses executors. Only measurable on

@@ -4641,6 +4641,30 @@ through FA3 and every request therefore has partials. In our split only task-3 r
 so for request 2 the combine reduces partial buffers that were never written and stores
 the result over the FA2 executor's correct output.
 
+**Confirmed fixed, 2026-10-06.** With the combine restricted to the wgmma queue's
+requests, row 2 returns to **0.00072 ok** from 0.155 and 0/512 unwritten holds. All three
+row-ownership faults are closed.
+
+**What remains is the wgmma computation itself**, not coverage: rows 0 and 1 are wrong at
+10.88 and 11.06. Both are FA3-role rows; the FA2 row is now correct, so the failure is
+inside the upstream path's own result rather than in who writes where.
+
+The next experiment isolates it in one run: **force the plan not to split** (raise the
+chunk length so `max_splits_fa3 == 1`, or use the existing
+`FLASHINFER_FA3_NO_SPLIT_REDUCE` bisect switch). At one split the epilogue writes final O
+directly and the combine never runs, so
+
+- if the wgmma rows are then **correct**, the fault is in the split path — the leading
+  candidate being that upstream derives each split's KV slice internally by dividing
+  `seqused_k` evenly by `num_splits`, while our planner chunks by a fixed
+  `len_kv_chunk` with a short last chunk, so the slice a work item computes need not be
+  the slice the plan assigned it;
+- if they are still **wrong**, the fault is in the mainloop's addressing or the packed-Q
+  path, independent of splitting.
+
+Either way one run separates them, which is cheaper than reasoning about the layouts
+further.
+
 **The fix is upstream's own mechanism.** `FlashAttnFwdCombine::Arguments` takes
 `varlen_batch_idx_ptr`, which remaps the scheduler's batch index onto a real batch index
 precisely so the pass can run over a SUBSET of batches. So:

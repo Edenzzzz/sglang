@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.9.4 — The port's split-KV path: upstream's combine pass, and two silent-wrong traps (2026-10-06)
+
+Fixture 2 measured the predicted failure: with `max_splits_fa3=2`, both upstream arms
+left **511 of 512 rows unwritten**, the single correct row being the FA2 decode row.
+The port instantiates upstream with `Split=true`, so its epilogue takes the
+`is_split` branch (`epilogue_fwd.hpp:232`) and writes partials instead of final O,
+and flash-attention reduces those in a *separate* kernel
+(`flash_fwd_combine_kernel.h`) that the port never launched. It does now, guarded on
+`num_splits > 1` because at 1 the epilogue writes final O directly -- the same guard
+upstream's own `flash_api` uses.
+
+Two traps found while wiring it. Both would have produced plausible wrong numbers
+rather than an error, which is the only reason they are worth writing down:
+
+1. **Per-item `num_splits` lives in the top 16 bits of `split_idx`.** Upstream packs
+   it there and masks the index to the low 16 (`epilogue_fwd.hpp:226-231`). Leaving
+   the high bits zero makes every row fall back to the plan-wide maximum, so a row
+   that did *not* split writes one partial, still takes the `is_split` branch, and
+   the combine pass averages it against uninitialised memory. The adapter now encodes
+   each row's own chunk count, which is what the field exists for.
+2. **The combine pass needs the same per REQUEST**, through
+   `num_splits_dynamic_ptr`; `nullptr` means "use the maximum for everyone" with the
+   same consequence. A small kernel fills it from `kv_indptr` and `len_kv_chunk` --
+   the same two quantities the epilogue derives from, so writer and reader cannot
+   disagree.
+
+The partials also now use upstream's own varlen layout,
+`out_accum[num_splits, num_heads, total_q, head_dim]` (`flash_api.cpp:1102`), instead
+of the equally dense but differently ordered layout I first wrote; the combine kernel
+is written against upstream's, so mine would have reduced the wrong elements. Strides
+and element counts come from shared helpers and the ext sizes its buffers from those
+same helpers. Two sizing bugs fixed on the way: the O-partial split stride omitted
+the `num_heads` factor, and O's strides were being taken from Q.
+
+Also recorded: fixture 2's `def` arm is 156.8 us, and that is **not** a regression
+against the 772 us in the status section -- the 772 belongs to the 16 823-token-KV
+long-prefix fixture, while fixture 2's longest row is kv=5469. Two workloads, not a
+change.
+
+The default path builds unchanged throughout (0 errors).
+
 ## v0.9.3 — The two roles cannot both have their native register allocation in one launch (2026-10-06)
 
 Five builds, `-Xptxas -v`, attributing every spill count to a named function. This

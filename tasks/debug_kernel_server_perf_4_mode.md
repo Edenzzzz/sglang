@@ -39,8 +39,18 @@ measured. The unified split-KV reduction is the gate.
 
 ## Tasks, in priority order — 2026-10-06
 
-- [ ] **1. Unified JIT split-KV reduction** — 2026-10-06: builds and runs; one
-      wiring gap left. Four build blockers cleared (`8d9c889`, `26bfc5b`):
+- [ ] **1. Split-KV reduction for the wgmma role** — 2026-10-06: reframed. The
+      parity reference is **upstream's own combine kernel**, a second launch, now
+      wired for the upstream path (`b3408d0`); the unified JIT reduction is the
+      improvement over that, since it removes the extra launch and the global
+      round-trip. Measured need: at `max_splits_fa3=2` both upstream arms left
+      511/512 rows unwritten before the combine pass existed.
+      Two silent-wrong traps found and closed: upstream carries per-item
+      `num_splits` in the top 16 bits of `split_idx`, and the combine pass needs the
+      same per request via `num_splits_dynamic_ptr` — a zero in either place makes
+      unsplit rows reduce against uninitialised memory rather than erroring.
+      [detail](#what-parity-means-on-a-split-batch--2026-10-06)
+      The flashinfer-FA3 path's own gap is unchanged and described below. Four build blockers cleared (`8d9c889`, `26bfc5b`):
       `store_partial`'s template list was missing `SharedStorage`, which `store()`
       templates as a method parameter rather than it being a class member type;
       `jit_merge.cuh`'s include set was too narrow; `vec_t` specialises for

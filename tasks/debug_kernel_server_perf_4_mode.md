@@ -191,7 +191,24 @@ So there are two separate problems. **Under-parallelisation**: 8 work tiles cann
 SMs, which is exactly what split-KV exists to fix. **And something pathological on top**,
 since 8-CTA serialisation only accounts for 270 us of the 17 358.
 
-**PREDICTION, recorded 2026-10-06 before the measurement that tests it.** The "something
+**PREDICTION OUTCOME: UNTESTED, not refuted -- the test arms are invalid.** Both arms
+(`sh_rs0`, `sh_rs1`, `drivers/ab_fa3_traits.sh`) ran at `num_splits = 29` and returned
+**garbage**: row 2 rel err 0.164/0.200 and row 3 rel err **1.334/1.287**. The cause is the
+latent bug this same entry already identified below -- `partial_o` is sized
+`total_q * head_dim * num_heads` with **no `num_splits` factor**, so the moment splits take
+effect the epilogue writes past the buffer. It predicted exactly this and the prediction held.
+
+The timings (`sh_rs0` 20 933 us, `sh_rs1` 20 691 us, 1.2% apart) are from a kernel writing out
+of bounds and are not usable for anything, so they neither confirm nor refute the prediction
+below. Prerequisite before this fixture can be measured at all: **size `partial_o` and
+`partial_lse` with the `num_splits` factor.** Until then any arm on a fixture where
+`num_splits > 1` is invalid, which also retroactively covers any earlier number taken on this
+fixture with the heuristic enabled.
+
+(For the record, the expectation after the TraceLab result would be that the prediction fails:
+`rs1` moved that batch by 2.3%, so there is no 31x for it to explain here either.)
+
+**PREDICTION as recorded 2026-10-06 before the measurement.** The "something
 pathological on top" here should be the same `MmaPV_is_RS=false` fault found on the TraceLab
 batch -- a mainloop that serialises softmax against the PV mma stalls per KV block, so the
 penalty scales with KV length and is worst exactly where this entry measures it (16384 KV

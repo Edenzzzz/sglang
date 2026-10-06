@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.10.0 — The FA3 trait audit is worth 2.4%, not 31x; FA2 pipelining is flat; two gates were never gating (2026-10-06)
+
+Ten-arm A/B on a rebuilt pod (trial `444d5bc154bd9050`), `drivers/ab_fa3_traits.sh`,
+TraceLab batch (1.58M KV, page 128, 5 iters). **Both reproduction gates pass**: the
+FA2-all control gives 15 197 us against the old pod's 15 301, and `rs0` (the old
+configuration) gives 476 684 us against 480 459 -- so the rebuilt pod is comparable and
+every delta below is attributable.
+
+**RETRACTED: `MmaPV_is_RS` is not the cause of FA3's 31x.** It is worth 2.3%.
+
+| arm | fa3 half | vs `rs0` |
+|---|---|---|
+| `rs0` RS=0 stages2 LPT=1 (old) | 476 684 us | - |
+| `rs1` RS=1 stages2 LPT=0 | 465 577 us | -2.3% |
+| `rs1s3` RS=1 stages3 LPT=0 | 472 889 us | -0.8% |
+| `rs1l1` RS=1 stages2 LPT=1 | 472 865 us | -0.8% |
+
+All three deviations the upstream audit found were real and together are worth **2.4%**.
+Kept: `rs1` and `LPT=0` (free, and `rs1` frees 32 KB). Dropped: stages=3, which is 1.6%
+*slower* despite fitting the 232 448 B limit exactly.
+
+How the claim went wrong: from perfect SM scaling plus low utilisation I inferred a
+latency-bound mainloop, found a genuine trait deviation that could serialise softmax
+against the PV mma, and treated it as the explanation. The smem measurement that followed
+(32 768 B freed = exactly one P tile) confirmed the trait changes *storage*, and I read it
+as confirming the trait explains the *time*. Independent claims; only the second was the
+root-cause claim. The same error repeated with stages=3 -- "fits to the byte" was elegant
+and predicted nothing.
+
+**The 31x is unexplained, and now tightly bounded.** Ruled out: the gather (TMA slower),
+pipeline depth on both executors, parallelism (linear to 132 SMs), per-tile work (identical
+FLOPs), and every upstream trait divergence. What remains is per-iteration: ~589k
+tile-block steps, ~4 464 per SM, so 476 ms is **~106 us per 128x128x128 step against ~2.8 us
+expected**, invariant across nine arms with a stable control. That is a profiler question,
+not a fifth trait hypothesis.
+
+**Priority item 1 closed, no change: FA2 K/V pipelining is flat.** `FA2_MMA_KV` 2/3/4 give
+15 218.8 / 15 296.6 / 15 219.5 us -- within 0.5%. FA2 runs this batch at 322 TFLOP/s, 1.2x
+off peak, so there is no latency to hide. This supersedes the standing "worth ~15%, blocked
+by an smem byte count" estimate, which came from the fused kernel where FA2's slot competed
+with FA3 for smem; the split removed the constraint and nobody rechecked the premise.
+
+**RETRACTED: the "all rows PASS" validity gate was output truncation.** The page-128 arms'
+recorded "rel err 2.4e-4 to 4.2e-3, all rows correct" came from a driver piping through
+`| head -12`, which on a 22-row fixture shows only rows 0-5 -- exactly that range. Rows 6-21
+and the `FAILURES:` summary were never printed. With full logs kept, **row 21 fails in every
+arm** (control 0.0262, `rs0` 0.0296, `rs1` 0.0344, `rs1s3` 0.0308) against `TOL=0.02`, and
+the error tracks **row index, not KV length** -- rows 7/8/10/13/16/17/20 are all
+`kv=65537, qo=1` yet give 0.0088 -> 0.0177. This is the unmodified persistent LPT kernel, so
+it predates every change here, and it is unexplained.
+
+**The 16384-KV prediction arms are invalid, so that prediction is untested.** Both ran at
+`num_splits=29` and returned garbage (row 3 rel err 1.33), because `partial_o` is sized with
+no `num_splits` factor -- the latent overflow the doc had already identified. Fixing that
+sizing is a prerequisite for any fixture where `num_splits > 1`.
+
+Five pod-restore defects were fixed and committed as drivers rather than left in /tmp:
+dangling absolute `flashinfer/data` symlinks, the empty JIT generated-sources cache,
+`python -I` ignoring PYTHONPATH, `provision_trees.sh` having never worked, and `px.py`
+itself having survived three trial expiries only in /tmp.
+
 ## v0.9.9 — FA3's long-context 31x traced to one wrong template argument; two retractions (2026-10-06)
 
 **Root cause of the 31x: `MmaPV_is_RS=false`.** Upstream's own tuner for head_dim 128 /

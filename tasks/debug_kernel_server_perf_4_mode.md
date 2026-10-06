@@ -4544,6 +4544,7 @@ effect:
 | arm | kernel | numerics |
 |---|---|---|
 | `def` flashinfer FA3, inlined | **156.8 us** | PASS, 0/512 unwritten, rel err 4.1e-3 / 4.0e-3 / 5.8e-4 |
+| `def` again, with `TIME_BASELINE=1` | 155.9 us, **baseline 72.3 us** | PASS |
 | `up` upstream FA3, inlined | 315.4 us | **511/512 unwritten** |
 | `upni` upstream FA3, FA2 outlined | 434.3 us | **511/512 unwritten** |
 
@@ -4554,6 +4555,13 @@ output path entirely. The one correct row in both is the FA2 decode row (task 2)
 rows 0 and 1 are both wgmma rows under default routing, so the failure is exactly
 co-extensive with the wgmma role. This is the predicted consequence of upstream
 reducing split partials in a separate kernel that the port did not launch.
+
+**The parity gap on fixture 2 is 2.16x** (155.9 us fused against 72.3 us for
+FA2-on-everything), both numerics-correct, both from the same build and the same
+inputs. That is the number the goal is measured against, and it is larger than the
+1.83x recorded on the long-prefix fixture — so the gap is workload-dependent and the
+smaller fixture is the harder case. Reproduce with `TIME_BASELINE=1` added to the
+`def` arm above.
 
 What the arms do establish:
 

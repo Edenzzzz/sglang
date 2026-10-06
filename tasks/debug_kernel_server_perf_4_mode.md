@@ -896,15 +896,47 @@ the victim is corrupted exactly when its `q_indptr` is **greater** than the spli
 entries are right, so some kernel-side state carried between work items -- or a write whose
 extent is derived from the wrong row -- depends on that relative order.
 
-**Where to look next, given the plan is clean.** The remaining kernel-side state shared across
-tasks is the JIT-reduction rendezvous: `group_counter`, the `__threadfence()` /
-`persistent_block_sync` ordering, and the "hand the counter back at zero" reset at
-`persistent.cuh:611`. The existing comments record that this path has already produced
-*intermittent* wrong merges (3 runs in 10) fixed by fence ordering -- but this corruption is
-**deterministic**, which argues against a race and for a counter or group id being consumed by
-the wrong work item. A cheap discriminator: run the FAIL fixture 10 times and confirm the error
-is bit-identical each time (deterministic -> indexing; varying -> ordering/race). That
-distinguishes the two remaining classes in one run and needs no code change.
+**MEASURED: it is a RACE, not an indexing bug.** Eight consecutive runs of the FAIL fixture,
+nothing changed between them:
+
+    rel err  0.77292  0.65776  0.72528  0.68167  0.68027  0.68413  0.67000  0.68319
+
+Not bit-identical, so the corruption is **nondeterministic**. That **retracts the assumption I
+recorded one turn earlier** -- "this corruption is deterministic, which argues against a race"
+-- which I asserted without testing. It is a race, and the class flips from indexing to
+synchronisation.
+
+Two things this reclassifies in hindsight:
+
+- The magnitude varying across fixtures (0.39 to 0.84) is **run-to-run variance**, not a
+  function of overrun size as I had read it. The apparent correlation between error size and
+  tile partiality was noise.
+- Treating `LSE_TILE_REL=1`'s 0.431 against the control's 0.491 as "within spread" was the
+  right call, and is now confirmed: the spread is the race, not a signal.
+
+**This is our code.** The JIT-reduction rendezvous is the port's own addition, and its
+comments already record *intermittent* wrong merges on "the one batch shape whose FA2-class
+rows split their KV" -- 3 runs in 10, fixed by fence ordering. What we have now is the same
+path failing on essentially every run, which is why it read as deterministic. The remaining
+suspects are all in that rendezvous:
+
+- `group_counter[gid]` and the "hand the counter back at zero" reset
+  (`persistent.cuh:611`). One plan is shared by every layer, so a counter released early lets
+  a merge run on partials that are not all published.
+- the `__threadfence()` then `persistent_block_sync` ordering (`persistent.cuh:567-570`).
+- whether a **backfilling** CTA reaches the rendezvous with only one warpgroup alive, which
+  the code comments flag as a trap already worked around once.
+
+**Why the ordering dependence now makes sense:** with the split row at request 0 its merge is
+enqueued before the victim's work items, so the merge and the victim's write-through overlap;
+with the split row second, the victim's work completes first and the race window closes. That
+is an ordering effect, exactly as a race predicts, and it needed no appeal to indexing.
+
+**Next, and it is now a targeted question rather than a search:** re-check the rendezvous
+under `compute-sanitizer --tool racecheck` on the two-row reproducer, or bisect by disabling
+the JIT reduction (set `params.group_id = nullptr`, which the gate at `persistent.cuh:551`
+already honours) and confirming the corruption disappears -- that would pin it to the
+rendezvous in one run without needing to find the specific unsynchronised access first.
 
 **Superseded candidate: the per-task cluster-slot/cursor computation**, which the PASS arm
 above refutes in its simple form. `num_pers_clusters = 132` and the plan carries a `cluster_cursor_offset`; the next

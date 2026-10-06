@@ -1539,11 +1539,32 @@ One line each; the evidence is in the linked detail section. Every item must be 
       `cutlass::launch_kernel_on_cluster(launch_params, kernel, kernel_params)`
       (`flash_fwd_launch_template.h:189`) precisely because its `ClusterShape` can exceed 1;
       our alias hardcodes `cute::Shape<_1,_1,_1>`.
-      So the work is, in order: (1) make `ClusterShape` switchable in `UpstreamFA3Mainloop`;
-      (2) replace the plain launch with `launch_kernel_on_cluster` when the cluster is > 1;
-      (3) verify a cluster-2 run is still numerically correct and measure it as an FA3-vs-FA3
-      arm -- a cluster alone changes scheduling, so that cost must be known before multicast
-      is layered on; (4) only then add the peer-smem KV read.
+      Steps (1) and (2) are **done** (`FLASHINFER_FA3_CLUSTER_M`, and
+      `cutlass::launch_kernel_on_cluster` when it exceeds 1). Step (3) then hit a hard stop.
+
+      **UPSTREAM FORBIDS A CLUSTER ON THE cp.async PATH.** `mainloop_fwd_sm90:58`:
+
+          static_assert(Use_TMA_KV || CUTE_STATIC_V(size(ClusterShape{})) == 1,
+                        "If not using TMA for KV, ClusterShape must be 1");
+
+      and `Use_TMA_KV = !PagedKVNonTMA`, so with cp.async KV the cluster must be 1. Compiling
+      `FLASHINFER_FA3_CLUSTER_M=2` fails on exactly that assert. The mechanism argument stands
+      -- DSMEM peer reads (`mapa.shared::cluster`) do not require TMA -- but upstream's gather
+      **implementation** is not cluster-aware, and it asserts rather than misbehaving.
+
+      So the choice is explicit, and neither branch is free:
+
+      - **(a) TMA KV + cluster.** Legal immediately, but TMA paged measured **10.03% slower**
+        than cp.async on the fixed kernel, so multicast must clear that before it nets
+        anything. The 9.1% handicap I first claimed is real after all -- not because DSMEM
+        needs TMA, but because upstream couples them.
+      - **(b) Make the cp.async gather cluster-aware ourselves**, lifting the assert and
+        adding peer-smem KV reads. This keeps the faster gather and is the version that is
+        actually *our* contribution rather than a vendored feature, but it means modifying
+        upstream's mainloop rather than configuring it.
+
+      (b) is the one worth doing if multicast is pursued: it is the only path where the
+      1.33-1.59x is not immediately taxed 10%. It is also real kernel work, not a flag.
       This is mechanical rather than exploratory, and it is the one FA3-side item with a
       plausibly large payoff left (recorded 1.33-1.59x in isolation).
 - [ ] **(superseded) DSMEM / KV multicast, TMA framing** — 1.33-1.59x in isolation. **No TMA prerequisite**: DSMEM

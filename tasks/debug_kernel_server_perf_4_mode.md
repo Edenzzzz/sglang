@@ -388,6 +388,12 @@ check. The actual cause of every `EOF` was simpler, and twofold:
    proxy vars stripped, the same `runs get` answers immediately -- which is how the expiry
    was finally found.
 
+**And the proxy half was already written down.** `tasks/fused_specdec_workload/drivers/README.md`
+lists `noproxy.sh` with the note "strips proxy variables; `merlin-cli` fails with EOF through the
+proxy". It was recorded from a previous encounter, in the directory I was already using, and I
+rediscovered it from scratch instead of reading it. Checking the drivers README is cheaper than
+re-deriving its contents.
+
 The two failure modes produced an identical error string, and I let the second one corroborate
 a wrong conclusion about the first. `px.py` now carries `probe_trial()` and a comment on the
 proxy rule, so the next `EOF` is one call away from being correctly attributed. The lesson for

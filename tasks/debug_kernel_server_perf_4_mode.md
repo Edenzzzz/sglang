@@ -212,60 +212,64 @@ since the current buffer is a latent heap overflow the moment splits do take eff
 
 TraceLab-shaped batch at one H200's token budget (1.58M KV, 64-100K contexts, 2048-token
 appends off the 3812-token mean, 18 decode rows, chat + math co-tenants). All rows correct in
-both arms.
+every arm below (rel err 2.4e-4 to 4.2e-3), 0 fallbacks.
 
-| arm | total | fa3 half | fa2 half |
-|---|---|---|---|
-| baseline, FA2 on everything | **15 364 us** | 7.0 | 15 301 |
-| split, appends to FA3 | **476 581 us** | **477 949** | 1 238 |
+| arm | page | total | fa3 half | fa2 half |
+|---|---|---|---|---|
+| baseline, FA2 on everything | 1 | **15 364 us** | 7.0 | 15 301 |
+| split, appends to FA3, cp.async | 1 | **476 581 us** | **477 949** | 1 238 |
+| baseline, FA2 on everything | 128 | **15 301 us** | — | 15 470 |
+| split, appends to FA3, cp.async | 128 | **480 459 us** | 480 012 | — |
+| split, appends to FA3, **TMA** | 128 | **496 978 us** | **496 028** | — |
 
-**FA3 takes 478 ms for work FA2 does in 15.3 ms — 31x slower.** Against roofline: FA3 is
-**155x** off on 1.23 TFLOP of work, FA2 is **5x** off on the same rows plus the rest of the
-batch. So this is not a tuning gap, it is a structural one.
+**FA3 takes 480 ms for work FA2 does in 15.3 ms — 31x slower.** This part stands, and it is
+structural, not a tuning gap.
 
-**The cause is `page_size = 1` on upstream's non-TMA paged path.** We instantiate with
-`PagedKVNonTMA=true`, so KV is gathered with `cp.async` through the page table, and sglang
-pages at **token** granularity. The gather therefore performs one index lookup per KV token:
-512 of them on the old fixtures, **100 352** on this one. flashinfer's FA2 gather is written
-for `page_size=1`; upstream's is written for real pages where the load is contiguous within a
-page.
+**RETRACTED: the cause is not `page_size = 1`, and not the gather.** The previous version of
+this entry claimed the non-TMA paged path's per-token index lookup was the root cause, and
+predicted that `PagedKVNonTMA=false` at `page_size=128` would fix it. Both halves of that
+prediction are now measured and both are wrong:
 
-**This retracts the significance of the 1.21x.** That number came from rows at `kv=512`, where
-the per-token lookup cost is negligible. It does not survive to the target workload, and
-quoting it as a win for agentic serving would have been wrong. The honest statement is: the
-split wins on short-KV batches and loses badly on long-KV ones, because of the gather, not
-because of the mainloop.
+- TMA paged at 128-token pages is **slower**, not faster: 496 ms against cp.async's 480 ms.
+- Coarser paging does nothing for cp.async either (480 ms at page 128 vs 477 ms at page 1), so
+  gather granularity is not what FA3 is spending its time on.
+- Coarser paging costs the FA2 baseline nothing (15 301 us at page 128 vs 15 364 us at page 1),
+  so the fixture is not distorting the comparison.
 
-**Two routes, and they converge.**
+The gather hypothesis was built on the fact that the lookup count scales with KV (512 on the
+old fixtures, 100 352 here) — a real correlation that turned out not to be causal.
 
-- **Larger `page_size` for the FA3 executor.** Gathers whole pages contiguously. Needs the
-  executor to see a different page size than the rest of sglang, or sglang to page coarser.
-- **Upstream's TMA paged path (`PagedKVNonTMA=false`).** Upstream supports it when a page
-  table is supplied (`mainloop_fwd_sm90:536`), and `Use_TMA_KV = !PagedKVNonTMA` — so this is
-  also the prerequisite the multicast item needs, since TMA multicast only applies to TMA
-  loads. One change unblocks both.
+**RETRACTED: the roofline figures in the previous version were wrong.** It read "FA3 is 155x
+off on 1.23 TFLOP, FA2 is 5x off". The 1.23 TFLOP omitted the QO-head factor: every one of the
+28 QO heads attends the whole KV, so the two append rows are
 
-**They ARE the same change, and it is a server flag.** Upstream asserts
-`page_size % kBlockN == 0` with `kBlockN = 128` before taking the TMA paged path
-(`mainloop_fwd_sm90:537`), so TMA paged needs pages that are a multiple of **128 tokens**.
-sglang pages at **1** by default, which is exactly why we are on the non-TMA path and paying
-one index lookup per KV token.
+    2 * 2 * 28 heads * q * kv * 128   =  4.93 TFLOP   ->  12.3 ms at 400 TFLOP/s
 
-sglang already exposes `--page-size` ("The number of tokens in a page"), so the fix is
-configuration rather than a kernel rewrite:
+Corrected: **FA2 at 15.3 ms is 1.2x off roofline** — essentially at peak, and that includes the
+other 20 rows — while **FA3 at 480 ms is 39x off**. The direction of the finding is unchanged
+but the magnitudes were overstated, and the important correction is about FA2: it is not "5x
+off" with headroom to chase, it is already at the roofline on this workload. Any FA3-side win
+here has to come from FA3's own 39x, not from out-running FA2.
 
-    --page-size 128    ->  TMA paged KV becomes legal for the FA3 executor
-                       ->  Use_TMA_KV = !PagedKVNonTMA turns true
-                       ->  TMA multicast becomes available, which is what the DSMEM item needs
+**This retraction stands for the 1.21x as well.** That number came from rows at `kv=512`. It
+does not survive to the target workload. The honest statement remains: the split wins on
+short-KV batches and loses badly on long-KV ones.
 
-So one flag plus `PagedKVNonTMA=false` addresses the 31x long-context regression **and**
-unblocks multicast. What it costs is KV-cache granularity: at 128 tokens per page, prefix
-sharing and eviction work in 128-token units, which matters for the radix cache and for the PD
-cache-migration argument -- that trade has to be measured, not assumed.
+**What the measurements leave as candidates.** FA3's cost is superlinear in KV relative to its
+own short-KV behaviour, with the per-tile work identical (`num_splits = 1` in every arm above,
+correctly — 2048-token appends give 448 m-blocks against the 106 threshold). So either FA3 is
+under-parallelised on this shape, or it does pathologically more work per tile.
 
-Next, in order: (1) rebuild the FA3 executor with `PagedKVNonTMA=false`; (2) re-measure this
-exact TraceLab batch at `page_size=128`; (3) only then revisit multicast, which the same change
-enables.
+Next: the discriminator is an `FA3_SM_BUDGET` sweep on *this* fixture. On a short-KV fixture
+FA3's cost scaled near-inversely with the budget (223.7 / 119.4 / 74.9 / 60.0 / 45.9 us at
+16 / 32 / 64 / 96 / 132 SMs), i.e. it was occupancy-bound and scaling cleanly. If the same
+sweep on the long-context batch is flat, FA3 is already filling the machine and the 39x is
+per-tile work; if it still scales, the 896 work tiles are not reaching the SMs.
+
+**Multicast is now unblocked but unmotivated by this entry.** TMA paged does work at
+`page_size=128` (all rows PASS in the TMA arm), which was the stated prerequisite for the DSMEM
+multicast item, so that item can proceed. What is retracted is the claim that the same change
+"addresses the 31x long-context regression" — it does not address it at all.
 
 ## Kernel optimisations — 2026-10-06
 
@@ -303,10 +307,12 @@ One line each; the evidence is in the linked detail section. Every item must be 
       split-heavy shapes (few q rows, long KV); every fixture used so far has
       `num_splits=1`, where it saves nothing.
       [detail](#what-parity-means-on-a-split-batch--2026-10-06)
-- [ ] **DSMEM / KV multicast** — 1.33-1.59x in isolation. Needs upstream's **TMA paged**
-      path: our `PagedKVNonTMA=true` gathers KV with `cp.async` and
-      `Use_TMA_KV = !PagedKVNonTMA`, so a cluster would multicast Q only. The old
-      `FLASHINFER_FUSED_CLUSTER` flag belongs to the closed fused dispatch.
+- [ ] **DSMEM / KV multicast** — 1.33-1.59x in isolation. Prerequisite is **met**: the TMA
+      paged path builds and is numerically correct at `page_size=128`, so KV rides TMA and a
+      cluster can multicast it. Note TMA paged is *slower* than `cp.async` on its own
+      (496 ms vs 480 ms), so multicast has to pay for that gap before it shows a win.
+      The old `FLASHINFER_FUSED_CLUSTER` flag belongs to the closed fused dispatch.
+      [detail](#fa3-is-31x-slower-than-fa2-at-realistic-context-and-the-121x-does-not-generalise--2026-10-06)
 - [ ] **Fused spec tree-build epilogue** — designed, not built; belongs to whichever executor
       writes the verify output. Needs the 4-mode MTP batch.
       [detail](#fused-epilogue-design)

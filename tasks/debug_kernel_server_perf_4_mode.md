@@ -4607,6 +4607,47 @@ sequence is
 Recording this because it changes what the parity number has to be measured
 against: a two-launch flash-attention baseline, not a single-kernel one.
 
+### Co-residency constrains the fused kernel twice: registers AND shared memory — 2026-10-06
+
+The Q-split arm never reached the kernel. It failed at
+`cudaFuncSetAttribute(..., MaxDynamicSharedMemorySize)` with `invalid argument`, and the
+budget says why exactly:
+
+| tile-16 runner | SharedStorage |
+|---|---|
+| 1 x 4 warps (today) | 69 632 B |
+| 1 x 8 warps (Q-split) | **135 168 B** |
+| opt-in limit | 232 448 B |
+| FA3's SharedStorage + the 48 B cursor region | 98 400 B |
+| therefore available to the FA2 slot | **134 048 B** |
+
+135 168 against 134 048: over by **1 120 bytes**. Tile 128 is not the problem -- at 8
+warps it is the same 49 152 B as at 4 -- it is tile 16, whose 8 KV warps double its K/V
+staging.
+
+So the fused kernel is constrained twice over by co-residency, and neither constraint
+comes from either role's own needs:
+
+- **registers**: 384 threads at 1 CTA/SM caps the allocation at 170/thread, and the two
+  roles' live ranges share it;
+- **shared memory**: FA3's 98 352 B leaves 134 048 B, which the FA2 role's natural
+  configuration exceeds.
+
+A standalone FA2 kernel has the whole 232 448 B, so 135 168 fits with 95 KB spare, and
+it gets 255 registers at 128 threads x 2 CTAs. Both constraints are artifacts of
+sharing a `__global__`, not costs of the work.
+
+**The two executors already exist as measured probes.** The parity probes compiled
+earlier are the two kernels:
+
+| probe | geometry | regs | spill stores |
+|---|---|---|---|
+| `standalone_upstream` (flash-attention's FA3) | 384 thr, 1 CTA/SM | 168 | **52 B** |
+| `fa2_only_128x2` (persistent LPT) | 128 thr, 2 CTA/SM | **255** | **0 B** |
+
+Both at native quality. What is missing is the plan wiring and the PDL launch, not the
+kernels.
+
 ### One plan, one or two executors — what the kernel count actually decides — 2026-10-06
 
 Settled as a design position after the register measurements, because it changes what

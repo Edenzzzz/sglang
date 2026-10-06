@@ -605,8 +605,51 @@ flashinfer -- is correct. What is broken is our unified plan, which the control 
 TraceLab A/B also uses, so the control is still implicated; but the defect is ours to fix and
 is not evidence against flashinfer's kernel.
 
-**ROOT CAUSE (characterised): a PARTIAL FINAL KV PAGE on a row corrupts the NEXT row.**
-Neither row order nor task class, both of which were proxies. The boundary is exact:
+**RETRACTED: it is not a partial final page.** Running the two-row reproducer at
+`PAGE_SIZE=1`, where no row can have a partial final page, the following row **still fails at
+0.589**. Page alignment is therefore not the mechanism, and the page-128 framing below is
+wrong.
+
+**Corrected rule: the preceding row's KV exceeding the chunk limit (~1024).** Collecting every
+arm against both candidates:
+
+| leading `kv` | > 1024 | multiple of 128 | following `task0` row |
+|---|---|---|---|
+| 1 | no | no | FAIL **0.023** (marginal) |
+| 128 | no | yes | PASS |
+| 1 024 | no | yes | PASS |
+| 1 025 | **yes** | no | **FAIL 0.465** (page 128) / **0.589** (page 1) |
+| 1 027 | **yes** | no | **FAIL 0.501** |
+| 4 097 | **yes** | no | **FAIL 0.482** |
+| 8 193 | **yes** | no | **FAIL 0.530** |
+| 16 385 | **yes** | no | **FAIL 0.596** |
+| 32 769 | **yes** | no | **FAIL 0.391** |
+| 65 537 | **yes** | no | **FAIL 0.459** |
+
+Every **hard** failure (0.39-0.60) has leading `kv > 1024`; both `kv <= 1024` arms with a full
+page pass. That is the KV **chunk limit**: above it a row is split into chunks and reduced
+through the merge path (`partial_indptr`, `merge_indptr`, `merge_o_indices`, `partial_o_nnz`),
+and a split row corrupts the row that follows it. `kv=1` is the one arm the rule does not
+cover, and its 0.023 is a different magnitude class -- the same borderline band as TraceLab's
+0.021-0.030 -- so it is probably a separate, milder issue rather than this one.
+
+**This also retracts my earlier "no threshold, so not the split machinery" refutation.** That
+prefix sweep ran 1024, 4096, 8192, 16384, 32768, 65536 -- every point at or above the limit,
+so everything failed and I read a flat result as "no threshold". The threshold was one step
+below where I started sampling. A sweep that brackets a boundary only finds it if it spans
+both sides, and mine did not.
+
+**And it retracts my "serving is not blocked" claim from the previous turn.** I argued serving
+runs at `page_size=1` where no partial page exists, so the A/B could proceed. Page size is
+irrelevant to the actual mechanism, and serving decode rows carry exactly the long KV that
+splits -- 64-100K contexts are far above 1024. So serving **is** affected, the A/B would run
+on a corrupted baseline, and this must be fixed first after all. My reason for unblocking was
+wrong even though the frustration behind it was reasonable.
+
+**Superseded diagnosis, kept for the trace: "a partial final KV page corrupts the next row".**
+The page-128 boundary data below is real but coincidental -- at page 128 the lengths I swept
+that were multiples of 128 (128, 1024) also happened to be the ones at or below the chunk
+limit:
 
 | leading row `kv` | pages | last page | following `task0` row |
 |---|---|---|---|

@@ -166,7 +166,7 @@ number, because it will swamp small batches either way.
 7. [DSMEM / KV multicast](#kernel-optimisations--2026-10-06)
 8. [Fused spec tree-build epilogue](#kernel-optimisations--2026-10-06)
 9. [Perf model and EDF vs unfused](#schedule-exploration--2026-10-05)
-10. [Multi-node PD colocation, four points](#multi-node-schedule-tests-h20-only--16-gpus-trial-vibecuda--not-started)
+10. [Multi-node PD colocation, four points](../tasks/pd_colocation_vs_disagg.md) -- **design doc written**, experiments pending
 
 ### Long-KV is 1604x off roofline, and our split count is being IGNORED — 2026-10-06
 

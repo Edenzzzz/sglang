@@ -168,6 +168,46 @@ number, because it will swamp small batches either way.
 9. [Perf model and EDF vs unfused](#schedule-exploration--2026-10-05)
 10. [Multi-node PD colocation, four points](#multi-node-schedule-tests-h20-only--16-gpus-trial-vibecuda--not-started)
 
+### Long-KV is 1604x off roofline, and our split count is being IGNORED — 2026-10-06
+
+`qo:8,8,100,1 prefix:16384,16384` on the two-executor base, FA3 half only:
+
+| arm | num_splits passed | fa3 half |
+|---|---|---|
+| splits pinned to 1 | 1 | 17 452 us |
+| splits from upstream's heuristic | **29** | **17 358 us** |
+
+**The split count changed and the time did not.** So pinning `num_splits_dynamic` to 1 was a
+real bug and fixing it was right, but it is *not* what makes long KV slow. Retracting the
+implication in the previous commit that it would be.
+
+Two numbers frame what is left:
+
+    work tiles = 1 m_block x 4 kv_heads x 2 rows = 8        (on a 132-SM GPU)
+    ~8.6 GFLOP total -> ~10.8 us at roofline; measured 17 358 us = 1604x off
+    even granting only 8 CTAs of serial KV: ~270 us expected, still 64x off
+
+So there are two separate problems. **Under-parallelisation**: 8 work tiles cannot fill 132
+SMs, which is exactly what split-KV exists to fix. **And something pathological on top**,
+since 8-CTA serialisation only accounts for 270 us of the 17 358.
+
+**Evidence that our split count never reaches the kernel.** The harness's `partial_o`
+scratch is `total_q * head_dim * num_heads` floats, with **no `num_splits` factor** — 419 328
+against the 12 160 512 the epilogue would need at 29 splits, a 29x shortfall. If the epilogue
+were taking its `is_split` branch it would be writing far past that buffer, and the arm
+would be corrupt. It PASSES at rel err 2.2e-4. The only consistent reading is that upstream
+is still running `num_splits == 1` internally and writing final O directly, i.e.
+`num_splits_dynamic_ptr` is not being honoured on this path.
+
+Prime suspect: `VarlenDynamicPersistentTileScheduler` is instantiated with
+`Prepared=false`, and `TileSchedulerArguments` also carries `num_m_blocks_ptr`, which that
+path may require before it will consult the dynamic split pointer.
+
+**Next, in order:** (1) print the split_idx the kernel actually sees for one work tile to
+confirm the pointer is ignored; (2) size `partial_o` with the `num_splits` factor regardless,
+since the current buffer is a latent heap overflow the moment splits do take effect;
+(3) only then re-measure long KV.
+
 ## Kernel optimisations — 2026-10-06
 
 One line each; the evidence is in the linked detail section. Every item must be tested on

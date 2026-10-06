@@ -6746,6 +6746,49 @@ pipeline state after the rendezvous.
 
 
 <a id="split-row-race-handoff"></a>
+## The split cannot reach the 30% bar on attention alone — 2026-10-07
+
+Arithmetic on the measured numbers, before spending more time on serving runs.
+
+The split cuts attention time by **19.3%** on the mixed TraceLab batch (15 395.8 -> 12 425.4 us,
+both 0 fallbacks / 0 unwritten). End-to-end TTFT/ITL gain is that reduction times attention's
+share of the step:
+
+| attention share of step | e2e gain |
+|---|---|
+| 50% | 9.6% |
+| 70% | 13.5% |
+| 90% | 17.4% |
+| **100%** | **19.3%** |
+
+To reach **30%** e2e the attention share would have to be **1.55**, i.e. more than the whole
+step. **So the split as measured cannot hit the 30% TTFT/ITL bar, even if attention were 100%
+of the step.** The ceiling is 19.3%.
+
+This is not a statement about serving noise or integration overhead -- it is an upper bound
+that no serving measurement can exceed, so running the serving A/B cannot change it. It also
+prices the remaining kernel items against the gap: the whole validly-measured FA3 item set is
+under 4% and the FA2 set is flat, so stacking them onto the split moves the ceiling to roughly
+**22-23%**, still short.
+
+**What this means for the plan, stated plainly:**
+
+- The **>=10% throughput** half of the bar is reachable: 19.3% attention reduction at a 50-90%
+  attention share gives 9.6-17.4%, and throughput tracks step time directly.
+- The **>=30% TTFT/ITL** half is **not** reachable from the attention kernel alone. It has to
+  come from somewhere the kernel work does not touch -- scheduling (EDF admission, better
+  batching), cache hits avoiding prefill entirely, or spec-decode acceptance raising tokens
+  per step. Those are the *scheduling* items in this plan, not the kernel items.
+- Two measured facts sharpen where the attention headroom actually is: on identical append
+  rows FA3 takes 11 164 us against FA2's 15 437 us, and the mixed batch's FA2 half is
+  15 394 us of a 15 396 us total. The decode rows dominate, and they are on FA2 because the
+  FA3 executor cannot serve `qo=1` rows at all (5632/5650 unwritten when tried). **Making FA3
+  serve decode rows is worth more than every remaining trait item combined** -- it is the
+  difference between 11.2k and 15.4k on the work that dominates the batch.
+
+That last point is the one actionable kernel direction left with a large payoff, and it is not
+on the current item list.
+
 ## FA3 optimisation items, measured per-executor on the fixed kernel — 2026-10-07
 
 First **valid** optimisation data in this work. Every earlier trait number was measured before

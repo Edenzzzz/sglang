@@ -123,6 +123,9 @@ measured. The unified split-KV reduction is the gate.
 - [ ] **3. KV multicast / DSMEM** — 1.33-1.59x in isolation; carries the partials
       between cluster peers instead of through global memory, so it layers onto
       task 1. `FLASHINFER_FUSED_CLUSTER=2` still faults.
+      **Unaffected by the two-executor decision** (2026-10-06): the measured access
+      pattern is q-tiles of one prefill row re-gathering the same KV, all of which are
+      FA3-role items, so the cluster lives inside one executor.
       [detail](#multicast-open)
 - [ ] **4. Optional epilogue: tree build after reduction** — designed, not built.
       [detail](#fused-epilogue-design)
@@ -4665,9 +4668,30 @@ converse measurement (outlining the FA2 body takes FA3 to 64 B and moves 17 500 
 FA2), the conclusion is symmetric: **one kernel can give either role its native
 allocation, never both.**
 
-So the kernel splits, the plan does not. Both executors read one `HolisticPlanInfo<4>`,
-and the two things given up are cross-role backfill inside a CTA and cross-role smem
-multicast -- the first of which is itself the cause of the co-compilation spill.
+So the kernel splits, the plan does not. Both executors read one `HolisticPlanInfo<4>`.
+
+**Correction to the loss list above: only ONE thing is actually given up.** I had
+counted cross-role smem multicast as a casualty. It is not, because the measured
+benefit was never cross-role:
+
+- **DSMEM multicast** (1.587x in `tests/dsmem_kv_share.cu`) is for *q-tiles of the same
+  prefill row re-gathering the same KV*. Every one of those tiles is in the FA3 role, so
+  the sharing is intra-role and a cluster inside one executor still provides it.
+- **The smem-handoff JIT reduction** is also intra-role: a split row's chunks are all
+  items of the same task, so a partial never has to travel between executors.
+- **The spec tree-build epilogue** belongs to whichever executor writes the verify
+  output, so it does not straddle anything.
+
+What remains given up is **cross-role backfill inside a CTA** -- an FA3 CTA draining FA2
+work -- and that is precisely the construct that forces both mainloops into one function
+and costs the 33 676 B. PDL recovers part of it temporally, with the FA2 executor
+starting on SMs the FA3 executor vacates.
+
+So the fusion worth keeping is the fusion that was never about sharing a `__global__`:
+the unified 4-mode scheduler, the smem-handoff JIT reduction, and the spec epilogue.
+Register parity per role then comes for free, which is what makes the scheduling work
+downstream (EDF, perf model, PD colocation) rest on a kernel advantage rather than on a
+kernel handicap.
 
 ### FA2's spill is the O accumulator, and splitting Q removes it — 2026-10-06
 

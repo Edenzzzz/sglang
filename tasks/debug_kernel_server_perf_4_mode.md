@@ -98,9 +98,18 @@ measured. The unified split-KV reduction is the gate.
       valid page id.
       **Not yet validated at runtime** — this machine has no GPU, so the next step
       is fixture 2 on the pod against the fp32 reference, then the parity timing.
-      Also still open: the FA2 role's register starvation (168 regs with
-      720–816 B spill against a standalone 255 / 56–288 B), which is what has to
-      be fixed for the *FA2* half of this bullet.
+      **FA3's half is explained and recoverable as of 2026-10-06.** Its spill is
+      co-compilation, not the mainloop: 33 676 B inside the fused kernel against
+      52 B compiled alone in the same template at the same 168 registers and the
+      same launch bounds. Outlining the FA2 body brings it to 64 B — but relocates
+      17 500 B onto FA2, so `FLASHINFER_FUSED_DRAIN_NOINLINE` is a work-mix trade,
+      left off pending measurement.
+      **FA2's half is a work-distribution problem, not a register shortfall.** At
+      384 threads FA2 holds 168 regs and spills 1 136 B against 0 B / 255 regs
+      natively, but the SM-wide budget is identical (255x256 = 170x384 = 65 280),
+      so the penalty is the cost of 256 idle threads at `WG_DRAIN=1`, and
+      `WG_DRAIN=3` — currently producing wrong FA2 output — is what reclaims it.
+      [detail](#the-two-roles-register-costs-separated--2026-10-06)
 - [ ] **3. KV multicast / DSMEM** — 1.33-1.59x in isolation; carries the partials
       between cluster peers instead of through global memory, so it layers onto
       task 1. `FLASHINFER_FUSED_CLUSTER=2` still faults.
@@ -4511,6 +4520,56 @@ s = 1.7-2.4 that is f > 0.40-0.48. At f = 0.9, s = 2.0 the attention-side gain i
 and short of the 30% bar, which is why the register fix (3x -> 1.38x) matters.
 
 <a id="why-fused-is-slow"></a>
+### The two roles' register costs, separated — 2026-10-06
+
+Five `-Xptxas -v` builds, every spill attributed to a named function, holding the
+split policy, stage count and thread width constant. This replaces the v0.9.0
+hypothesis ("register pressure is the leading candidate") with two measured and
+independent causes.
+
+| configuration | FA3 role | FA2 role |
+|---|---|---|
+| both roles inlined (today's default) | 33 676 B, one shared allocation | shared |
+| FA2 body outlined (`FLASHINFER_FUSED_DRAIN_NOINLINE=1`) | **64 B** | **17 500 / 17 664 B** |
+| upstream FA3 alone, 384 thr, same bounds | 52 B | — |
+| FA2 alone, 384 thr (no FA3 in the kernel) | — | 1 136 B, 168 regs |
+| FA2 alone, 128 thr x 2 CTA (native) | — | **0 B, 255 regs** |
+
+**1. Co-compilation, and it is recoverable.** FA3's 33 676 B is not intrinsic to
+upstream's mainloop: compiled alone in the *same* template, with the same
+`__launch_bounds__(384, 1)` and the same 168 registers, it spills 52 B. ptxas
+allocates per function, so while both bodies are inlined their live ranges share one
+allocation even though the roles sit in mutually exclusive `blockIdx` branches.
+Outlining the FA2 body brings FA3 to 64 B.
+
+Two predictions of mine were refuted here. I expected the cause to be
+`__launch_bounds__` capping the uniform allocation near 170 while upstream requests
+232 per MMA warpgroup through `warpgroup_reg_alloc` — refuted, because the
+standalone build has the identical cap and does not spill. And I expected outlining
+to remove the spill — it relocates it: the outlined FA2 body then spills 17 500 B of
+its own, because an ABI callee cannot use the caller's register allocation.
+
+**2. Launch geometry, and the budget is not the limit.** FA2 at 384 threads spills
+1 136 B and holds 168 registers against 0 B and 255 natively, measured with no FA3
+compiled into the kernel at all. But the SM-wide budget is unchanged:
+
+    native FA2   255 regs x 256 threads/SM = 65 280
+    fused FA2    170 regs x 384 threads/SM = 65 280
+
+So this is a partition, not a shortfall. The 1 136 B is the cost of running FA2 on
+128 of the CTA's 384 threads (`WG_DRAIN=1`) while registers are allocated for all
+384 — i.e. the cost of 256 idle threads, not a floor. `WG_DRAIN=3` is the
+redistribution that would reclaim it, and it currently produces wrong FA2 output.
+That is the same thing as "offload some softmax work to the remaining threads".
+
+**Consequences for the parity bar.** FA3 parity is reachable, by outlining the other
+role. FA2 parity is unproven and blocked on `WG_DRAIN=3` being made correct, not on
+hardware. `FLASHINFER_FUSED_DRAIN_NOINLINE` is left OFF, because it is a trade whose
+sign depends on the work mix — it should win where FA3 dominates (fixture 2 is ~99%
+task-3 work) and lose on decode-heavy batches — and that measurement has not been
+run.
+
+
 ### Why the fused kernel is slow: register starvation, not scheduling — 2026-10-06
 
 **The short answer.** `__launch_bounds__(384, 1)` -- FA3's warp-specialised width

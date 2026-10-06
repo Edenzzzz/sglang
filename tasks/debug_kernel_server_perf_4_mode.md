@@ -605,8 +605,46 @@ flashinfer -- is correct. What is broken is our unified plan, which the control 
 TraceLab A/B also uses, so the control is still implicated; but the defect is ours to fix and
 is not evidence against flashinfer's kernel.
 
-**Next, concretely.** The suspect is the `plan_info` argument layout rather than the queue
-construction: `cluster_q_indptr` pushes absolute `qo_indptr_h[i]`
+**ROOT CAUSE (characterised): a PARTIAL FINAL KV PAGE on a row corrupts the NEXT row.**
+Neither row order nor task class, both of which were proxies. The boundary is exact:
+
+| leading row `kv` | pages | last page | following `task0` row |
+|---|---|---|---|
+| 1 | 1 | **partial**, 1/128 | **FAIL 0.023** |
+| 128 | 1 | full | PASS |
+| **1 024** | 8 | **full** | **PASS** |
+| **1 025** | 9 | **partial**, 1/128 | **FAIL 0.465** |
+| 1 027 (a `task1` row) | 9 | **partial**, 3/128 | **FAIL 0.501** |
+| 4 097 / 65 537 | - | **partial** | **FAIL 0.48 / 0.46** |
+| 1 024 + 1 024 (two rows) | 8, 8 | full, full | PASS |
+
+`kv=1024` passes and `kv=1025` fails, so it is page alignment, not length, order or class --
+and the earlier "task2 before task0" rule was an artifact of every decode fixture I built
+having `prefix+1` lengths, which are never multiples of 128.
+
+**It explains the TraceLab failures too.** Those `task0` rows are `kv=512` and `kv=1024`,
+exact multiples of 128, and they pass. The rows that fail are the decode rows at
+`kv=65537, 73729, 81921, 90113, 98305` -- every one `prefix+1`, every one a partial final
+page. The "error grows with row index" signature is then just accumulation across 18
+consecutive partial-page rows, not an index effect.
+
+**Mechanism, and why it is ours.** Page offsets are built page-granular on both sides
+(`kv_c_pg = cumsum(ceil(kvl / PAGE))` in the harness; the same in the pure-flashinfer
+script). With exact multiples, `cumsum(kv_len)` and `cumsum(pages) * PAGE` coincide; with a
+partial page they diverge, which is exactly the observed boundary. So something in our path
+derives a following row's KV base token-granularly where it must be page-granular. Pure
+flashinfer handles the identical fixture correctly (`kv=65537` leading, row 1 at 0.00587), so
+the divergence is in our 4-task plan or our ext's runner parameters, not upstream.
+
+Note this also means **`page_size=1` would hide the bug entirely** (every length is a
+multiple of 1), which is why it never appeared before the page-128 work, and why the serving
+default of 1 has been masking it.
+
+**Superseded suspect, kept for the trace: the `plan_info` argument layout.** It is in fact
+consistent -- `ToVector` writes 2 leading + `NUM_TASKS * 12` + 18 trailing = 20 shared, and
+`FromVector` reads tasks at base 2 and the trailing block at `2 + NUM_TASKS * NUM_TASK_ARGS`,
+matching exactly. The `18 -> 20` growth was done correctly. Refuted by reading, before
+costing a measurement: `cluster_q_indptr` pushes absolute `qo_indptr_h[i]`
 (`scheduler.cuh:1649`), which is correct, so the offsets going *in* are right. But the port
 grew `NUM_SHARED_ARGS` from 18 to 20 (`max_splits_fa3`, `fa3_batch_list_offset`,
 `num_fa3_requests`, with `num_fa3_clusters` kept last so `plan_info[-1]` still works), while

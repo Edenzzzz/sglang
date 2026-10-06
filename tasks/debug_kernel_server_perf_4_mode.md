@@ -6751,6 +6751,25 @@ same build produced **0** before. So:
 **Three arms must be re-run before they count as eliminations:** `LSE_TILE_REL`, `PI_ZERO`,
 `NO_JIT_REDUCE`.
 
+**`LSE_TILE_REL` re-run and now genuinely eliminated.** A/B'd the way the JIT module requires
+-- by moving the **header default** and clearing `cached_ops` each time, not by passing `-D`:
+
+| `FLASHINFER_PARTIAL_LSE_TILE_REL` | victim rel err |
+|---|---|
+| **0** (row-relative, original) | 0.561, 0.520, 0.432 |
+| **1** (tile-relative, matches `partial_o`) | 0.527 |
+
+Same distribution, so the `partial_lse` index base is not the fault. This repeats the earlier
+*conclusion* but is the first time it rests on a build where the switch provably reached the
+running kernel -- the trace run established that edits take effect once `cached_ops` is
+cleared. Default restored to **1**, which matches `partial_o` and the plan's per-tile
+`partial_indptr` and is correct on its own terms.
+
+Two arms still owed a valid re-run: `PI_ZERO` (`scheduler.cuh`) and `NO_JIT_REDUCE`. Note
+`NO_JIT_REDUCE` sets `P.group_id` in the **ext's** params, which do not feed
+`BatchAttention.run()`, so re-running it needs the FA2 rows routed through the ext's own
+runners first -- it is not merely a cache-clearing issue.
+
 **First real data from the trace, on the victim's work items:**
 
     work=9  q_indptr=1 q_len=512 packed_qo_start=512  kv_indptr=9 kv_len=1024

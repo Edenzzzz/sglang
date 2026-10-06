@@ -44,6 +44,40 @@ read from per-work-item arrays (fixing this took fixture 2 from 439/512 unwritte
 executor's correct rows (an FA2 decode row went 5.8e-4 → 0.155). The third fix is
 written and under test.
 
+### First two-executor numbers — 2026-10-06
+
+Two executors, one plan: flash-attention's FA3 on its own `VarlenDynamicPersistentTileScheduler`
+over the wgmma requests, flashinfer's persistent LPT unmodified over the rest.
+
+| arm | total | fa3 half | fa2 half |
+|---|---|---|---|
+| rung 0, sequential | 94.5 us | 32.0 | 70.5 |
+| rung 1, concurrent streams | **112.5 us** | 32.3 | 72.1 |
+| baseline, FA2 over ALL rows | **72.3 us** | - | - |
+
+**The split measured here is not the one the router would pick.** `fa2_half` is 70.5 us,
+essentially the whole baseline, because the harness's `n_fa3` defaults to 1: FA3 got only
+row 0 (72 tokens) while FA2 kept the 439-token row. The actual routing sends both prefill
+rows to wgmma (packed 504 and 3073, both over the 128-row threshold). Rerunning with
+`n_fa3:2`.
+
+Two findings that survive the wrong split, though:
+
+**1. Concurrent streams are WORSE than sequential, 112.5 against 94.5.** Both executors
+launch full persistent grids, so on separate streams they contend for SMs instead of
+overlapping -- each one's CTAs occupy SMs the other wants, and neither can make progress at
+its planned width. This refutes the reasoning I used to put streams ahead of PDL on the
+ladder: I argued that with no data dependency, concurrency strictly dominates PDL's
+serialised ramp. That ignored SM contention, which is the whole reason the fused kernel
+needed an `sm_split` in the first place. Rung 1 needs **admission control** -- a device-side
+cap on how many SMs each executor admits -- or PDL ordering, not naive concurrency.
+
+**2. FA3's fixed cost looks large at this scale.** 32 us for a 504-packed-row slice, where
+FA2 does the same row inside a 72.3 us whole-batch pass. Two tiles of work should not cost
+32 us; that points at the persistent grid's launch and scheduler-handshake overhead
+dominating when the queue is nearly empty. Worth isolating before reading any parity
+number, because it will swamp small batches either way.
+
 ## Optimization ladder on the two-executor base — 2026-10-06
 
 Order matters: each rung needs the rung below it measured, or its effect is not

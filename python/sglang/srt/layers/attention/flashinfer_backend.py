@@ -1335,6 +1335,16 @@ class FlashInferAttnBackend(AttentionBackend):
                 # measure the wrong kernel, which is exactly the error that
                 # wasted a day of server benchmarking.
                 logger.error("fused FA3+FA2 launch failed, using persistent: %s", e)
+                # Logging loudly is not enough, and this handler's own comment says why:
+                # a silent fallback makes the A/B measure the wrong kernel. It did exactly
+                # that twice -- 121 fallbacks on a missing op, then 122 on a 4-task plan
+                # handed to the 3-task persistent kernel -- and both runs printed normal
+                # timings that I read as real regressions. Under SGLANG_TWO_EXEC the arm
+                # exists to measure that path, so failing to take it is a failed run, not a
+                # degraded one.
+                if (os.environ.get("SGLANG_TWO_EXEC") == "1"
+                        and os.environ.get("SGLANG_FUSED_ALLOW_FALLBACK") != "1"):
+                    raise
                 self._fused_plan = None
         o, lse = batch_attn_wrapper.run(
             q,
@@ -1474,7 +1484,8 @@ class FlashInferAttnBackend(AttentionBackend):
             fused["sm_fa3"],
             # pers_row_offset: the unified plan covers every row, so the FA2 side
             # starts at 0 rather than after the FA3 rows
-            0 if os.environ.get("SGLANG_FUSED_UNIFIED") == "1" else fused["n_tok"],
+            0 if (os.environ.get("SGLANG_FUSED_UNIFIED") == "1"
+                  and os.environ.get("SGLANG_TWO_EXEC") != "1") else fused["n_tok"],
             # fa3_num_ctas, and it must match what the plan was built for: num_sm
             # for the symmetric kernel, sm_split for the asymmetric one.
             self._fused_num_sm() if self._fused_symmetric() else fused["sm_fa3"],
@@ -1844,7 +1855,14 @@ class FlashInferAttnBackend(AttentionBackend):
                 os.environ["FLASHINFER_FA3_MAX_CTAS"] = _prev
         # Constraint 2: the persistent side's pages start after FA3's -- expressed
         # in its indptr (ki_r is global), not by slicing the index array.
-        if os.environ.get("SGLANG_FUSED_UNIFIED") == "1":
+        # The two-executor path must NOT use the unified 4-task plan. Task 3 exists so the
+        # fused kernel can drive the wgmma role from one plan; here upstream's own scheduler
+        # schedules its own tiles and the FA2 executor is the stock persistent kernel, which
+        # executes 3 tasks and rejects a 4-task plan outright. Relying on the launch script
+        # to leave SGLANG_FUSED_UNIFIED unset is what made the second serving A/B invalid
+        # too -- 122 silent fallbacks on exactly that mismatch.
+        _two_exec = os.environ.get("SGLANG_TWO_EXEC") == "1"
+        if os.environ.get("SGLANG_FUSED_UNIFIED") == "1" and not _two_exec:
             # ONE plan over the WHOLE batch: the wgmma class is task 3 of it, so
             # there is no row split, no second plan and no per-side offset. This
             # also removes one of the two per-step H2D copies that made this path

@@ -4742,6 +4742,32 @@ Two checks, in order, both cheap:
 Note the first fix would also be the cheaper one to carry into serving, where
 `max_pages_per_seq` is the batch maximum and most requests are far shorter.
 
+**REFUTED -- upstream already guards the read.** `paged_kv.h:148`:
+
+    int const page = (...) && (!Seqlenk_mask || row_idx < seqlen_k) ? mPageTable[page_idx] : 0;
+
+Past `seqlen_k` it substitutes page 0 instead of reading the table, and `:227`, `:231`
+and `:269` then mask those rows out of the K and V loads. The mainloop iterates from
+`n_block_max - 1` downward, so the first iteration is the HIGHEST block and is the one
+called with `Seqlenk_mask=true` (`mainloop_fwd_sm90_tma_gmma_ws.hpp:802`), while interior
+blocks use `false` (`:866`) because they cannot exceed `seqlen_k`. Our `-1` padding is
+therefore never dereferenced, and the sentinel choice is irrelevant.
+
+Eleventh elimination, and the fifth of my own hypotheses to fall. The pattern across all
+five is the same and worth stating plainly: I propose a mechanism that would produce the
+observed signature, then find on reading that upstream already handles it. The faults
+actually found came from the opposite direction -- comparing a value our code passes
+against the declaration of the thing that consumes it (the zero page stride, the per-item
+vs per-request arrays, the 1 120-byte smem overflow).
+
+**So the next step should not be another hypothesis.** The remaining honest instrument is
+differential: run upstream's FA3 standalone -- `tuS.cu` already builds it in our template
+at 52 B spill -- on the SAME Q/K/V and the same single work item, and diff its output
+against the port's. Everything our adapter supplies is then held against a reference that
+is known to work, which localises the disagreement to a concrete field rather than to a
+guess. That is more setup than any check so far, and it is the thing that will actually
+close this out.
+
 ### The plan and the split encoding are both verified correct — 2026-10-06
 
 Item dump on the failing fixture, against a prediction stated beforehand

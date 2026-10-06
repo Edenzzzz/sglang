@@ -4736,6 +4736,34 @@ second fault is expected — and the ~10x error on *both* wgmma rows with the FA
 to 5e-4 is consistent with something affecting the whole wgmma path, not only the
 later requests.
 
+**Tried, and REFUTED — the premise was false.** Subtracting the request's packed base
+faulted with an illegal memory access. `q_start` is **already request-local**: the planner
+pushes `qo_tile_idx * cluster_tile_q` (`scheduler.cuh:1655`), the tile's offset within its
+request, so `q_start / cta_tile_q` was already the `m_block` upstream wants and the
+subtraction drove it negative for every request after the first. Reverted.
+
+Two things worth keeping from that. The adapter's own comment already said "PACKED row
+offset -> block_idx = q_start / 128", and one grep at the push site would have settled it
+before a 15-minute build — the four earlier faults were *all* fixed by reading the push
+site, and here I reasoned from upstream's convention instead. And the packed-Q tile index
+is now exonerated along with everything else.
+
+**Candidate set after five eliminations.** Ruled out: the split path (combine pass,
+partial O/LSE layouts, per-item `num_splits`, split-count arrays), the per-request varlen
+descriptors, the page-table scatter's indptr, and the Q tile index. What remains is the
+Q and KV *descriptions* rather than their indexing:
+
+- `shape_Q` / `stride_Q` as handed to upstream's PackGQA view — the nested `((G, seq), D)`
+  layout is derived from these, and a wrong head stride would corrupt every wgmma row
+  equally while leaving FA2 untouched, which matches the symptom shape;
+- the KV descriptors at `page_size == 1`: `shape_K {page_size, d, h_k, num_pages}` with
+  `kv_stride_page` derived as `k_stride_n * page_size`, `kv_stride_tok`, `kv_stride_head`.
+  A rank-3 `[tokens, H, D]` cache has caught this code before (recorded in the ext's
+  `kv_strides` comment, where reading stride(1)/stride(2) aliased all four KV heads).
+
+Both are checkable without a GPU by printing the strides the dispatch assembles against
+the tensor's actual strides, which is the next step and is cheaper than another arm.
+
 ### Co-residency constrains the fused kernel twice: registers AND shared memory — 2026-10-06
 
 The Q-split arm never reached the kernel. It failed at

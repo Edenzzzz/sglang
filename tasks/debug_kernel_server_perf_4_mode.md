@@ -157,7 +157,7 @@ number, because it will swamp small batches either way.
 
 ## Tasks, in priority order — 2026-10-06
 
-1. [K/V pipelining, FA2](#fa2-kv-pipelining-measured-flat--2026-10-06) -- measured flat, but the **explanation is retracted**; reopened
+1. [K/V pipelining, FA2](#fa2-kv-pipelining-measured-flat--2026-10-06) -- **not started**: the knob swept was register tiling, not pipeline depth
 2. [Smem-handoff JIT split-KV reduction, both executors](#kernel-optimisations--2026-10-06)
 3. [Context length where attention is >50% of e2e](#workload-and-measurement-setup--2026-10-06)
 4. [TraceLab mixed scenarios instead of random](#workload-and-measurement-setup--2026-10-06)
@@ -1134,11 +1134,30 @@ iters, `drivers/ab_fa3_traits.sh` arms `fa2k2/3/4`):
 | 3 | 15 298.6 us | 15 296.6 us |
 | 4 | 15 243.3 us | 15 219.5 us |
 
-**Flat to 0.5%.** Deepening FA2's K/V pipeline buys nothing here. **The explanation below is
-RETRACTED**: I wrote that FA2 was "at 322 TFLOP/s, 1.2x off peak, no latency left to hide",
-using 400 TFLOP/s as the H200 peak. The real bf16 dense peak is **989.4 TFLOP/s**, so FA2 is at
-**33% of peak** and does have headroom in principle. The flat result is therefore
-**unexplained**, not explained. The measurement stands; the reason does not.
+**Flat to 0.5% -- because `FA2_MMA_KV` is not a pipeline-depth knob.** Measured locally with
+`nvcc`: `PKT<128, NUM_MMA_KV>::SharedStorage` is **133 120 bytes at `NUM_MMA_KV` = 2, 3 and
+4** -- byte-identical. A deeper K/V *pipeline* would need more smem staging for in-flight KV;
+unchanged smem means the knob does not add stages. `NUM_MMA_KV` sizes the register-side
+`s_frag` accumulator (`[NUM_MMA_Q][NUM_MMA_KV][8]` floats per thread), i.e. how many KV MMA
+steps are batched into registers per iteration -- not how deep the load pipeline is. The
+comment in `fused_fa3_persistent_ext.cu:86-88` claiming it "costs shared memory" is wrong on
+that point.
+
+So **the flatness is explained, and the item is not actually tested.** The three arms varied
+a register-tiling parameter, which has no reason to help a loop that is not register-starved,
+and said nothing about K/V pipelining. The item goes back to **not started**, not "done, no
+effect".
+
+**Also RETRACTED, separately:** I first explained the flatness as "FA2 is at 322 TFLOP/s,
+1.2x off peak, no latency left to hide", using 400 TFLOP/s as the H200 peak. The real bf16
+dense peak is **989.4 TFLOP/s**, so FA2 sits at **33% of peak** and does have headroom. Both
+of my explanations for this item were wrong before this one: the first used a bad peak, the
+second ("unexplained") was an honest placeholder.
+
+**To actually test the item** requires finding the real staging depth in the persistent
+kernel's KV load path (the `cp.async` stage count in `SharedStorage`, which is what would have
+to grow), and confirming smem moves with it before measuring any timing. A knob that does not
+change `SharedStorage` cannot be the one.
 
 This supersedes the earlier note carrying it as "worth ~15% and blocked by an smem byte
 count". That estimate came from the *fused* kernel's constraints, where the FA2 slot was

@@ -873,11 +873,38 @@ that property are the globally-accumulated arrays built in task order: `merge_in
 `PI_ZERO` experiment only zeroed `partial_indptr` for **non-split** work items, so it did not
 test the split row's own values -- that experiment does not clear this candidate.
 
-**Next measurement:** dump `merge_indptr`, `merge_o_indices` and each task's
-`partial_indptr` for the PASS fixture (`qo:512,1 prefix:0,65536`) and the FAIL one
-(`qo:1,512 prefix:65536,0`) -- the same two-fixture diff that has worked twice now -- and check
-whether the `task0` row's `partial_indptr` or the `merge_o_indices` range overlaps the split
-row's only in the FAIL ordering. The tooling is `dump.py` with changed fixtures.
+**MEASURED: the plan is correct in BOTH orderings, so every plan-array candidate is refuted.**
+
+| | FAIL (split row = request 0) | PASS (split row = request 1) |
+|---|---|---|
+| `merge_o_indices` | `[0,1,...,6]` | `[14336,...,14342]` |
+| expected | `(0 + 0)*28 + r` = 0..6 **correct** | `(512 + 0)*28 + r` = 14336..14342 **correct** |
+| `merge_indptr` | `[0,26,52,...,182]` | identical |
+| `group_row_begin` / `group_nrows` | 0 / 7 | identical |
+| victim's `partial_indptr` | **182** | **182** -- identical |
+| victim `q_indptr` / `batch_idx` | 1 / 1 | 0 / 0 |
+
+The two plans are structurally identical and individually correct; `partial_indptr` is even
+the same number (182 = 7 rows x 26 chunks), so it cannot be the differentiator. That retires
+`merge_indptr`, `merge_o_indices`, `partial_indptr`, `group_row_begin`/`nrows` and the KV
+bounds -- i.e. **the plan is fully exonerated**, having now been dumped and checked twice on
+different fixture pairs.
+
+**So the fault is in the kernel's execution, and the distinguishing condition is precise:**
+the victim is corrupted exactly when its `q_indptr` is **greater** than the split row's
+(FAIL: victim at 1, split row at 0; PASS: victim at 0, split row at 512). Both rows' plan
+entries are right, so some kernel-side state carried between work items -- or a write whose
+extent is derived from the wrong row -- depends on that relative order.
+
+**Where to look next, given the plan is clean.** The remaining kernel-side state shared across
+tasks is the JIT-reduction rendezvous: `group_counter`, the `__threadfence()` /
+`persistent_block_sync` ordering, and the "hand the counter back at zero" reset at
+`persistent.cuh:611`. The existing comments record that this path has already produced
+*intermittent* wrong merges (3 runs in 10) fixed by fence ordering -- but this corruption is
+**deterministic**, which argues against a race and for a counter or group id being consumed by
+the wrong work item. A cheap discriminator: run the FAIL fixture 10 times and confirm the error
+is bit-identical each time (deterministic -> indexing; varying -> ordering/race). That
+distinguishes the two remaining classes in one run and needs no code change.
 
 **Superseded candidate: the per-task cluster-slot/cursor computation**, which the PASS arm
 above refutes in its simple form. `num_pers_clusters = 132` and the plan carries a `cluster_cursor_offset`; the next

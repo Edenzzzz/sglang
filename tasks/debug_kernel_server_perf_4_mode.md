@@ -6777,6 +6777,18 @@ writing the same `final_o` rows with no ordering between them -- or a read of `f
    nondeterministic means the *index* varies run to run, which points at something derived
    from scheduling order -- which CTA picked up which work item -- rather than from the plan,
    which is known correct and identical between runs.
-3. If racecheck is clean, instrument the victim's work items to record which `(q_start,
-   kv_start, kv_head)` each CTA actually executed, and diff against the plan -- the plan is
-   known good, so a divergence localises the work-distribution side.
+3. Instrument the victim's work items to record which `(q_start, kv_start, kv_head)` each CTA
+   actually executed, and diff against the plan -- the plan is known good, so a divergence
+   localises the work-distribution side. **Both sanitizers now point here**, since an
+   in-bounds store to the wrong rows whose index varies per run is precisely a
+   work-assignment fault.
+
+   **Do not try to approach this with `FA3_SM_BUDGET`.** I attempted a cheap proxy -- sweep
+   the SM budget (132/32/8/1) and look for the error becoming deterministic -- and it was
+   **ineffective by construction**: `FA3_SM_BUDGET` caps the **FA3** executor, and these
+   fixtures run `n_fa3=0`, so FA3 has no work and the knob cannot affect the FA2 path under
+   test. The eight values (0.39-0.53) are the run-to-run spread already measured, not a
+   signal. This is the same mistake as the `FA2_MMA_KV` sweep: varying a knob that does not
+   touch the path being measured. The check that catches it is cheap and should be habitual
+   -- confirm the knob changes something observable on the path (a `SharedStorage` size, a
+   work-item count, a generated symbol) **before** spending arms on it.

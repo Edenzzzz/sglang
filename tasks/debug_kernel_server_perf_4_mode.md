@@ -4700,6 +4700,42 @@ exactly this case, and the bug was passing the whole-batch default instead. Wort
 the pattern -- all three faults were "upstream has a field for the subset/per-item case
 and I handed it the aggregate".
 
+### The split path is exonerated; the wgmma result is still wrong — 2026-10-06
+
+Two runs, both with `FLASHINFER_FA3_FORCE_ONE_SPLIT=1` so the plan reports
+`max_splits_fa3 == 1`, the epilogue writes final O directly (`epilogue_fwd.hpp:232`) and
+the combine pass never launches:
+
+| | row 0 (wgmma) | row 1 (wgmma) | row 2 (FA2) | baseline |
+|---|---|---|---|---|
+| before the page-table fix | 13.21 | 13.23 | 0.00052 ok | 72.8 us |
+| with per-request page offsets | **10.58** | **10.53** | 0.00054 ok | 73.0 us |
+
+**What this establishes.** The entire split path is off the critical path for this fault:
+the combine pass, the partial O/LSE layouts, the per-item `num_splits` encoding and the
+split-count arrays are all inactive at one split, and the rows are still wrong. One run
+removed four candidate areas.
+
+**What I got wrong.** I called the page-table scatter the root cause before this
+measurement returned. It was a genuine bug — the scatter built a
+`[num_requests, max_pages]` table from the plan's per-work-item `kv_indptr`, so each
+request's page range came from an arbitrary item — and fixing it moved the error
+(13.2 -> 10.5) without fixing it. "The only remaining explanation I can see" is not a
+diagnosis.
+
+**Leading candidate, and why it is incomplete.** The packed-Q block index. The adapter
+computes `block_idx = q_start / cta_tile_q`, and the plan's `q_start` is a **global**
+packed-row offset, while upstream's `m_block` is a tile index *within* the request since
+it adds `cu_seqlens_q[bidb]` itself. For this fixture request 1 starts at packed offset
+504, which is not a multiple of 128, so its tiles are both offset and **misaligned** to
+the tile grid. The fix is to subtract the request's packed base:
+`(q_start[idx] - q_indptr_per_req[batch_idx[idx]] * G) / cta_tile_q`.
+
+That cannot explain row 0, whose request has offset 0 and should already be correct, so a
+second fault is expected — and the ~10x error on *both* wgmma rows with the FA2 row exact
+to 5e-4 is consistent with something affecting the whole wgmma path, not only the
+later requests.
+
 ### Co-residency constrains the fused kernel twice: registers AND shared memory — 2026-10-06
 
 The Q-split arm never reached the kernel. It failed at

@@ -13,6 +13,26 @@ on 2026-10-05; they live here now so that costs nothing next time.
 | `noproxy.sh` | strips proxy variables; `merlin-cli` fails with EOF through the proxy |
 | `px.py` | chunked base64 push + `execute-script` exec helper (set `SID` to the trial). Strips proxy vars itself, and `probe_trial()` reports trial status |
 
+## Warm the JIT cache before any arm
+
+`test_fused_server_batch.py` globs `~/.cache/flashinfer/*/generated/batch_attention_with*`
+and indexes `gen[0]` at `load()` time (line ~191). A fresh pod has no such cache, so every
+arm dies with `IndexError: list index out of range` before a kernel runs -- an error that
+names neither flashinfer nor the cache. Run `warm_jit_cache.py` once first; it drives one
+tiny `BatchAttention` plan+run to generate those sources and asserts the glob is non-empty.
+
+Run it with plain `python`, NOT `python -I`: isolated mode ignores `PYTHONPATH`, so the
+flashinfer package on `PYTHONPATH` becomes unimportable and it fails with
+`ModuleNotFoundError: No module named 'flashinfer'`.
+
+## Capture full logs, not grep lines
+
+`ab_fa3_traits.sh` writes each arm's complete output to `res/<arm>.full` and derives the
+summary from it. An earlier version piped through
+`grep -iE '...|Traceback|...'`, which matched the word `Traceback` but dropped the frames
+after it -- so a real fault showed as a bare exception with no location and needed a manual
+unfiltered re-run to diagnose. On a fault the driver now prints the tail of the full log.
+
 ## After pushing the flashinfer tree, RELINK `flashinfer/data/`
 
 `flashinfer/data/{csrc,cutlass,include,spdlog,tvm_binding}` are **absolute** symlinks into

@@ -201,8 +201,10 @@ Workload and serving:
       computed the WRONG requests on FA3: the split plan handed `fa3_only_run` the FA2 rows'
       per-request arrays. Fixed; serving correctness gate added. No valid SPLIT serving number
       exists yet. [detail](#split-serving-void--2026-10-07)
-- [ ] **4-mode MTP serving run** -- the 4-mode step is BUILT and gate-PASSES (2026-10-07); serving A/B queued.
-      [detail](#four-mode-mtp-step--2026-10-07)
+- [x] **4-mode MTP serving run** (2026-10-07) -- 3 interleaved rounds, gate PASS, 0 fallbacks. 4-mode + split vs
+      stock MTP: codex throughput **+27.8%**, ITL -17.4%, P99 TTFT -14.6%; chat ITL **-35.0%**, chat TTFT
+      >=-50%. Clears the bar on chat latency and codex throughput, not on codex TTFT/ITL. Stock-MTP baseline
+      overloaded in 1 of 3 rounds; load sweep queued. [detail](#four-mode-mtp-serving--2026-10-07)
 - [x] **Perf model: is the split easier to predict?** (2026-10-07) -- yes, modestly. Mixed-step cost, 5-fold CV,
       traced serving (one round each): linear(all) MAPE 13.4% SPLIT vs 16.9% LPT; MLP 6.0% vs 6.4%; RF 6.2% vs
       6.7%. Large gain for simple models, small for nonlinear ones. EDF-vs-unfused scheduling comparison
@@ -211,6 +213,45 @@ Workload and serving:
 Cluster:
 - [ ] **Multi-node PD colocation, four points** -- design doc written, nothing measured.
       Delta: at most 4 nodes, so baselines are 2P2D and 1P3D.
+
+<a id="four-mode-mtp-serving--2026-10-07"></a>
+### 4-mode MTP serving A/B: stock MTP vs the 4-mode step (FA2 / split) — 2026-10-07
+
+Code: sglang `1191c70b3` on the pod (4-mode step `868025d6c` + fixes); flashinfer `b0563ae`.
+EAGLE3 draft (thoughtworks/Qwen2.5-7B-Instruct-Eagle3), 3 steps, topk 1, 4 verify tokens.
+Command: `bash tasks/fused_specdec_workload/drivers/mtp_repeats.sh` (3 interleaved rounds of
+MTP_LPT, MTPMIX_LPT, MTPMIX_SPLIT; scenario agent_plus_shortchat). Every arm: **0 fallbacks,
+0 tracebacks**. The mixed arms ran 1 600-1 800+ 4-mode steps each. Acceptance length (windowed
+log mean) is 2.04-2.32 in every arm, equal within noise. Summary:
+`python3 repsum.py --root /dev/shm/w/mtprep --base MTP_LPT` (mean, [min-max] over 3 rounds):
+
+| stream | metric | MTP_LPT (stock) | MTPMIX_LPT | MTPMIX_SPLIT |
+|---|---|---|---|---|
+| codex | output tok/s | 395.6 [364.7-426.5] | 407.4 (+3.0%) | **505.6 [494.1-525.9] (+27.8%)** |
+| codex | mean ITL ms | 59.1 [55.6-61.2] | 52.6 (-11.0%) | **48.8 [47.8-49.6] (-17.4%)** |
+| codex | P99 ITL ms | 222.0 [197.0-260.6] | 189.8 (-14.5%) | 182.7 [181.6-183.8] (-17.7%) |
+| codex | mean TTFT ms | 28 792 [26 889-32 151] | 29 248 (+1.6%) | 26 036 [25 125-26 894] (-9.6%) |
+| codex | P99 TTFT ms | 73 302 | 68 613 (-6.4%) | 62 631 (-14.6%) |
+| chat | mean TTFT ms | 34 542 [9 270-82 698] | 6 558 | **4 965 [4 171-5 751]** |
+| chat | P99 TTFT ms | 62 435 | 25 062 (-59.9%) | 21 668 (-65.3%) |
+| chat | mean ITL ms | 24.9 [21.4-30.2] | 18.7 (-24.9%) | **16.2 [15.1-16.8] (-35.0%)** |
+| chat | P99 ITL ms | 139.0 | 110.6 (-20.4%) | 100.7 (-27.6%) |
+| chat | output tok/s | 821.4 [748.6-857.9] | 857.4 | 857.8 |
+
+**Caveat on the chat TTFT row.** Stock MTP fell behind the offered chat rate in round 1 (748.6
+< 858 tok/s; TTFT 82.7 s), so its mean is an overload artefact. Excluding that round, chat mean
+TTFT is 9.3-11.7 s for stock MTP against 4.2-5.8 s for the split: **-50% to -60%**. The
+overload is itself a finding: stock MTP cannot fold prefill into verify steps, so at this load it
+sits at a queueing cliff that the 4-mode step stays clear of. That is a capacity statement, and
+it needs the load sweep (`drivers/mtp_load_sweep.sh`, queued) to measure properly.
+
+**Decomposition.** Mixing alone (MTPMIX_LPT) gives most of the chat gains but only +3% codex
+throughput. The split kernel adds codex throughput (+3% -> +28%) and about 10 points of ITL on
+both streams.
+
+**Against the bar** (>=30% TTFT and ITL, >=10% throughput): met for chat ITL (-35%), chat TTFT
+(-50% or better) and codex throughput (+28%). **Not met** for codex ITL (-17%) and codex mean
+TTFT (-10%; ranges touch).
 
 <a id="perf-model-fit--2026-10-07"></a>
 ### Perf model: per-step cost of mixed steps, SPLIT vs LPT — 2026-10-07

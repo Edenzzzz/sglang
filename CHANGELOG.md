@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.15.0 — 4-mode MTP serving result; kernel catalogue closed on measurement (2026-10-07)
+
+- **4-mode MTP serving A/B** (3 interleaved rounds, gate PASS, 0 fallbacks; `drivers/mtp_repeats.sh`):
+  4-mode step + split vs stock sglang MTP -- codex throughput +27.8%, ITL -17.4%, P99 TTFT -14.6%;
+  chat ITL -35.0%, chat TTFT -50% or better (stock MTP overloaded in one round). Mixing alone
+  gives most of the chat gain; the split adds codex throughput.
+- 4-mode MTP gate PASSES (stock, mixed-FA2, mixed-split); fork bugs fixed (`10b378d89`, `5ab463414`).
+- Fused tree build wired into the EAGLE worker (`f1985ca8f`, `SGLANG_FUSED_TREE_BUILD=1`), gate PASS.
+- Kernel catalogue: SM/cluster-cap sweep (serving's cap already optimal; FA3 budget must stay full),
+  CUDA-graph ceiling via step traces (split host gap +0.83 ms/mixed step -> FA3 plan skipped in
+  two-executor mode, `e237ab8bc`), packed copies superseded, stale boxes closed.
+- Perf model: split mixed steps modestly easier to predict (MLP 6.0% vs 6.4% MAPE; linear 13.4% vs
+  16.9%).
+
 ## v0.14.0 — SPLIT serving made correct; first valid serving result; 4-mode MTP step (2026-10-07)
 
 - **Three correctness faults in the serving split, fixed:** (1) FA3 was handed the FA2 rows'

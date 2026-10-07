@@ -273,6 +273,22 @@ Workload and serving:
       rounds), so the cap costs nothing where it does not bind. Next: bound the chunk's predicted
       TIME, c_tok*n + c_attn*n*(r + n/2) with the fitted step coefficients
       (`SGLANG_CHUNK_MS_BUDGET=47`, e75b2466e), which covers both terms.
+      **Predicted-time chunk budget, 3 rounds** (`SGLANG_CHUNK_MS_BUDGET=47 SGLANG_CHUNK_COST=0.0216,1.3765`, the
+      fitted H200 MTP step coefficients; 2 042 tokens at prefix 0, floor 1 024 at long prefixes;
+      `TAG=_long_ms*`, 0 fallbacks, all completed):
+
+      | metric (3-round mean) | stock MTP @8192 (its best) | full stack, ms budget | change |
+      |---|---|---|---|
+      | chat / codex output tok/s | 586.6 / 140.0 | 830.4 / 191.6 | **+41.6% / +36.9%** |
+      | chat / codex TTFT ms | 54 242 / 37 095 | 10 512 / 24 035 | **-80.6% / -35.2%** |
+      | chat / codex mean ITL ms | 67.1 / 36.7 | 34.5 / 20.3 | **-48.7% / -44.6%** |
+      | chat / codex P99 ITL ms | 167.9 / 150.9 | 118.1 / 105.4 | **-29.7% / -30.2%** |
+
+      Bounding both terms fixes both tails: chat P99 259 -> 118 ms, codex 160 -> 105 ms. Against stock
+      MTP's best configuration, every metric clears 30% except chat P99 ITL, which misses by 0.3
+      points (-29.7%). Against stock at chunk 2 048 both P99s clear it (-31.5% / -33.0%). The cost is
+      TTFT: these chunks are small at long prefixes (the 1 024 floor), so codex TTFT keeps only
+      -35%. The budget is the knob trading TTFT for tail ITL.
       **Chat 8/s, default chunk, 3 rounds** (`TAG=_long{,_r2,_r3} mtp_edf.sh 8 2000 30`, 0 fallbacks, all
       completed). Stock MTP still cannot keep up (chat 487 of ~576 offered tok/s); the full stack can:
 

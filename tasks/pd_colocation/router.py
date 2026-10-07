@@ -130,9 +130,14 @@ class Router:
             cands = [i for i, h in enumerate(hits) if h == best]
             i = min(cands, key=lambda j: len(self.workers[j].inflight))
             return i, {"hit": best * blk}
-        # Order by hit length; within --rand-thresh blocks of each other, order randomly.
+        # Order by hit length bucket (--rand-thresh blocks), then by load, then randomly. Pure
+        # random within a bucket (measured on H20, coloc_rand) sent prefix-less chat requests --
+        # for which EVERY worker ties at hit 0 -- to busy workers: chat TTFT 109 -> 487 ms vs the
+        # load-aware tie-break of `cache`. Randomness is for spreading pulls among near-equal
+        # cache holders; it must not override load.
         order = sorted(range(len(self.workers)),
-                       key=lambda j: (-(hits[j] // max(1, self.a.rand_thresh)), random.random()))
+                       key=lambda j: (-(hits[j] // max(1, self.a.rand_thresh)),
+                                      len(self.workers[j].inflight), random.random()))
         if pol == "cache_rand":
             return order[0], {"hit": hits[order[0]] * blk}
         vetoed = 0

@@ -1482,9 +1482,13 @@ class FlashInferAttnBackend(AttentionBackend):
                     not fused.get("_pt_done", False),
                 )
                 fused["_pt_done"] = True
+                if os.environ.get("SGLANG_SPLIT_FAULT_DUMP"):
+                    self._split_fault_check("fa3_only_run", forward_batch, fused, q, sc)
             n_tok_fa3 = fused["n_tok"]
             if n_tok_fa3 < q.shape[0]:
                 pers.run(q[n_tok_fa3:], (k_cache, v_cache), out=out[n_tok_fa3:])
+                if os.environ.get("SGLANG_SPLIT_FAULT_DUMP"):
+                    self._split_fault_check("persistent_fa2", forward_batch, fused, q, None)
             return out, self._persistent_lse_buf[:num_tokens]
 
         torch.ops.fused_fa3.fused_run(
@@ -1570,6 +1574,36 @@ class FlashInferAttnBackend(AttentionBackend):
                 1 * self.num_kv_heads * num_m, nsm, num_n, num_m,
                 size_one_kv_head, False))
         return torch.tensor(out or [1], dtype=torch.int32, device=dev)
+
+    def _split_fault_check(self, which, forward_batch, fused, q, sc):
+        """Debug-only (SGLANG_SPLIT_FAULT_DUMP=<path>): synchronise after an executor and,
+        if it faulted, save the batch that faulted and name the executor.
+
+        An illegal memory access is reported asynchronously, at whatever API call happens
+        next, so the serving traceback names a destructor rather than the kernel. Syncing
+        here pins the fault to one of the two executors and keeps its exact batch, which
+        the kernel harness can then replay. Off unless the env var is set -- the sync costs
+        the overlap the split exists to provide."""
+        try:
+            torch.cuda.synchronize()
+        except Exception as e:
+            import numpy as _np
+            _np.savez(
+                os.environ["SGLANG_SPLIT_FAULT_DUMP"],
+                which=which, err=str(e)[:500],
+                qo=_np.asarray(forward_batch.extend_seq_lens_cpu, dtype=_np.int64),
+                prefix=_np.asarray(forward_batch.extend_prefix_lens_cpu, dtype=_np.int64),
+                n_tok_fa3=int(fused["n_tok"]), max_qlen=int(fused["max_qlen"]),
+                max_pages=int(fused["max_pages"]), q_shape=_np.array(tuple(q.shape)),
+                n_req=int(fused["q_indptr_req"].numel() - 1),
+                # Host-side values only: after an illegal access the CUDA context is
+                # poisoned and any device->host copy here would itself throw. The qo and
+                # prefix lengths above are enough to rebuild the batch in the harness.
+                scratch_key=_np.array(sc["key"] if sc else (), dtype=_np.int64),
+            )
+            logger.error("SPLIT FAULT in %s; batch saved to %s", which,
+                         os.environ["SGLANG_SPLIT_FAULT_DUMP"])
+            raise
 
     def _two_exec_scratch(self, q, fused, n_fa3_rows):
         """Per-step scratch for the two-executor FA3 launch, cached across layers.

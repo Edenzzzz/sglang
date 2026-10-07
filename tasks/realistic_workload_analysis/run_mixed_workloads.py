@@ -26,6 +26,7 @@ import json
 import os
 import shutil
 import signal
+import re
 import subprocess
 import sys
 import time
@@ -194,6 +195,14 @@ def kill_server():
     subprocess.run(["pkill", "-9", "-f", f"launch_server.*--port {PORT}"],
                    capture_output=True)
     time.sleep(3)
+    # sglang renames its children (sglang::scheduler etc.) and one can survive the pattern
+    # kill still holding the port; the next arm's warmup then talks to the stale server.
+    out = subprocess.run(["ss", "-ltnp"], capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        if f":{PORT} " in line:
+            for pid in re.findall(r"pid=(\d+)", line):
+                subprocess.run(["kill", "-9", pid], capture_output=True)
+    time.sleep(3)
 
 
 def run_method(method, scenario, outdir):
@@ -223,6 +232,22 @@ def run_method(method, scenario, outdir):
         env["SGLANG_FUSED_FA3_SRC"] = "/dev/shm/w/fi/tests/fused_fa3_persistent_ext.cu"
     elif method == "LPT":
         env["SGLANG_FLASHINFER_USE_PERSISTENT"] = "1"
+    elif method.startswith("MTP"):
+        # MTP-style speculative decoding (EAGLE3 chain draft, 4 verify tokens).
+        #   MTP_LPT       stock sglang: prefill chunks and verify rows never share a step
+        #   MTPMIX_LPT    the 4-mode step (prefill + verify in one target forward), FA2 only
+        #   MTPMIX_SPLIT  the 4-mode step on the two-executor split
+        env["SGLANG_FLASHINFER_USE_PERSISTENT"] = "1"
+        if method.startswith("MTPMIX"):
+            env["SGLANG_ALLOW_MIXED_CHUNK_SPEC"] = "1"
+            env["SGLANG_MIXED_SPEC"] = "1"
+        if method.endswith("SPLIT"):
+            env["SGLANG_MIXED_ATTENTION_KERNEL"] = "persistent"
+            env["SGLANG_TWO_EXEC"] = "1"
+            env["SGLANG_FUSED_FA3_SM_SPLIT"] = "1"
+            env["FLASHINFER_SM_PARTITION"] = "1"
+            env["UP_STAGES"] = "2"
+            env["SGLANG_FUSED_FA3_SRC"] = "/dev/shm/w/fi/tests/fused_fa3_persistent_ext.cu"
     elif method == "LPT_EDF":
         # Gated persistent kernel + SLO-aware chunk control driven by the
         # closed-form overlap cost model. Same EDF policy as the MLP path;
@@ -257,6 +282,11 @@ def run_method(method, scenario, outdir):
                     "--context-length", "131072", "--json-model-override-args",
                     '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}',
                     "--watchdog-timeout", "600"]
+        if method.startswith("MTP"):
+            args_srv += ["--speculative-algorithm", "EAGLE3",
+                         "--speculative-draft-model-path", "/dev/shm/w/qwen7b_eagle3_sgl",
+                         "--speculative-num-steps", "3", "--speculative-eagle-topk", "1",
+                         "--speculative-num-draft-tokens", "4"]
         if method == "LPT_EDF":
             args_srv += ["--enable-priority-scheduling",
                          "--schedule-low-priority-values-first",

@@ -201,12 +201,60 @@ Workload and serving:
       computed the WRONG requests on FA3: the split plan handed `fa3_only_run` the FA2 rows'
       per-request arrays. Fixed; serving correctness gate added. No valid SPLIT serving number
       exists yet. [detail](#split-serving-void--2026-10-07)
-- [ ] **4-mode MTP serving run** -- not started.
+- [ ] **4-mode MTP serving run** -- the 4-mode step is BUILT and gate-PASSES (2026-10-07); serving A/B queued.
+      [detail](#four-mode-mtp-step--2026-10-07)
 - [ ] **Perf model and EDF vs unfused** -- not started.
 
 Cluster:
 - [ ] **Multi-node PD colocation, four points** -- design doc written, nothing measured.
       Delta: at most 4 nodes, so baselines are 2P2D and 1P3D.
+
+<a id="four-mode-mtp-step--2026-10-07"></a>
+### The 4-mode MTP step exists: prefill chunks and verify rows in ONE target forward — 2026-10-07
+
+Supersedes the "4-mode MTP schedule does not exist in sglang" entries below: the reorder
+they called for is now built (sglang `868025d6c`, fixes `10b378d89` and `5ab463414`, behind
+`SGLANG_ALLOW_MIXED_CHUNK_SPEC=1 SGLANG_MIXED_SPEC=1`).
+
+**How.** When the scheduler forms a chunked-prefill batch and a speculative running batch
+exists, it attaches the running batch instead of calling `mix_with_running`, which is the
+call that crashed. `EAGLEWorker.forward_mixed_spec` then does:
+1. `draft(running)`;
+2. `prepare_for_verify`, which allocates the verify slots and writes `req_to_token`;
+3. ONE `ForwardMode.MIXED` target forward over [prefill tokens | draft tokens];
+4. samples the prefill rows from their last-token logits;
+5. runs sglang's own acceptance on the verify rows (`verify()` was split into forward +
+   `_verify_post`, so this is the same code, not a copy);
+6. runs both draft extends.
+
+The scheduler then processes the prefill result and the decode result separately. The logits
+processor keeps every verify token via `mixed_spec_verify_tokens`. Chain draft only
+(topk 1): each verify row is then a causal extend, which is what the split kernel computes.
+
+**Fork bugs found on the way** (stock sglang never reached them): the decode-only draft
+backend lacked `qo_indptr`; the draft CUDA-graph runners borrow `capture()` without
+mixed-CG state; the mixed-CG logits shortcut returned no logits for MIXED + FULL capture.
+
+**Draft model:** `thoughtworks/Qwen2.5-7B-Instruct-Eagle3` (EAGLE3, draft vocab 32 000). Its
+config declares `LlamaForCausalLM`; sglang needs `LlamaForCausalLMEagle3`, so the pod uses a
+copy with that one field changed (`/dev/shm/w/qwen7b_eagle3_sgl`, weights symlinked). 3 steps,
+topk 1, 4 verify tokens.
+
+**Gate** (`drivers/srv_correctness.py`, greedy, against LPT without speculative decoding;
+common prefix out of 101 tokens):
+
+| arm | long prompts | short prompts | gate |
+|---|---|---|---|
+| LPT2 (noise floor) | 101, 52, 101, 101 | 101, 74, 11, 101, 101, 45, 45, 7 | PASS |
+| MTP (stock EAGLE3) | 101, 52, 101, 101 | 101, 73, 11, 101, 82, 22, 36, 7 | PASS |
+| MTPMIX (4-mode step, FA2) | 101, 101, 101, 42 | 101, 76, 11, 101, 101, 22, 36, 7 | PASS |
+| MTPMIX_SPLIT | 101, 57, 101, 43 | 101, 74, 101, 24, 101, 5, 101, 7 | PASS |
+
+0 fallbacks, 0 tracebacks in every arm. Mixing leaves stock MTP's short-prompt divergence
+points (22, 36, 7) unchanged. **Thin coverage, stated plainly:** the gate's traffic produced
+between 1 and 9 mixed steps per arm (the counter logs at 1, 10, then every 200). The serving
+A/B (`drivers/mtp_repeats.sh`: MTP_LPT vs MTPMIX_LPT vs MTPMIX_SPLIT, 3 interleaved rounds)
+exercises thousands and reports each arm's MIXED_SPEC count beside its timings.
 
 <a id="realistic-serving-valid--2026-10-07"></a>
 ### Realistic serving, SPLIT vs LPT -- first VALID result, 3 interleaved rounds — 2026-10-07

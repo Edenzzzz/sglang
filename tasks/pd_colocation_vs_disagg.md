@@ -237,8 +237,33 @@ Traced run: `SGLANG_STEP_TRACE=1 SGLANG_EDF_ACCEPT_TRACE=1`, 0 fallbacks, 0 trac
         order-statistic bias. Being checked with an `EDF_BIND` log (binding request's estimate vs
         global). This is the design section's warning in concrete form: better MAPE that does not
         improve attainment is not a result.
-- [ ] **Binding ITL SLO (30 ms per token)**, where the no-EDF baseline does violate ITL, with the
-      binding-estimate log. Running: `TAG=_itl30 STEP_MODEL=.../rate24/mtp_step.json mtp_edf.sh 24 2000 30`.
+- [x] **Binding ITL SLO (30 ms per token) — the strict per-step controller loses (2026-10-07).**
+      `TAG=_itl30 STEP_MODEL=/dev/shm/w/mtpedf/rate24/mtp_step.json mtp_edf.sh 24 2000 30`
+      (commit 937792218). 0 fallbacks and 0 tracebacks in every arm. Scored with
+      `slo_attain.py --scaled --itl 30`.
+
+      | arm | chat SLO | chat ITL ok | chat TTFT ms | codex SLO | queue mean | running mean |
+      |---|---|---|---|---|---|---|
+      | no EDF | **0.706** | **0.723** | **433** | **0.833** | 3 | 16.3 |
+      | EDF, a=1 | 0.019 | 0.575 | 163 063 | 0.000 | 1 345 | 20.3 |
+      | EDF, global EWMA | 0.359 | 0.409 | 1 637 | 0.250 | 23 | 21.3 |
+      | EDF, per-request EWMA | 0.016 | 0.478 | 90 187 | 0.000 | 234 | 24.3 |
+
+      - **The order-statistic bias is confirmed.** `EDF_BIND` logs the tokens/step estimate of
+        the request that sets the budget. Under the per-request EWMA it averages 1.12-1.19,
+        while the global mean is 1.57-1.91. The minimum over ~20 running requests' noisy
+        estimates is close to 1, so the arm behaves like a=1 and collapses the same way. Under
+        the global EWMA the two are equal by construction (2.04).
+      - **Even the global EWMA makes ITL worse than no EDF** (ITL attainment 0.409 vs 0.723),
+        with a short queue (mean 23). So the cause is not queueing. The running batch grows
+        (21.3 vs 16.3 rows) at about the same token throughput, and mixed steps rise 19%
+        (3 800 vs 3 200). The per-step cap spreads the same prefill over more mixed steps. Each
+        pays a fixed cost and slows every decode row, while the cap only sees this step's slack
+        and ignores that deferred prefill still has to run later.
+- [ ] **Ablations and a quantile-aware controller.** EDFP: deadline priority only. EDFGC: chunk
+      cap with FCFS admission. EDFGQ: a request constrains the cap only once its own over-SLO
+      steps exceed the P90 allowance (`SGLANG_EDF_ITL_QUANTILE=0.9`). Running, same command
+      with `ARMS=...`.
 
 ## 4. Two-way RDMA: a complete graph instead of a bipartite one
 

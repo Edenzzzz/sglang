@@ -2203,17 +2203,15 @@ One line each; the evidence is in the linked detail section. Every item must be 
 - [x] [Static SM pre-assignment](#static-split-confirmed) — -14.4% / -14.0% / -11.5%, no winning fraction
 - [x] [Serial dispatch](#serial-dispatch-dead-end) — -48%, reverted, forecloses draft+verify fusion
 - [x] [Symmetric single kernel](#symmetric-retracted) — numerically wrong, four hypotheses eliminated, results retracted
-- [ ] [Unified queue](#unified-serving-perf) — numerically correct; **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), [cause found](#why-fused-is-slow) — register starvation: `mma.sync` at ~168 regs instead of ~255, from FA3's 384-thread launch bounds
+- [x] [Unified queue](#unified-serving-perf) — closed, superseded by the two-executor split (2026-10-06): numerically correct but **-66% measured on a clean tree** (0.335x throughput, 3.01x ITL), [cause found](#why-fused-is-slow) — register starvation: `mma.sync` at ~168 regs instead of ~255, from FA3's 384-thread launch bounds
 
 ## Workload and measurement setup — 2026-10-06
 
 One line each; detail in [`realistic_workload_analysis.md`](realistic_workload_analysis.md).
 
-- [ ] **Context length where attention is >50% of e2e** — either force-extrapolate RoPE up
-      to TraceLab's max session length (agentic sessions reach 300-400k and stay under 1M,
-      so extrapolating past the trained window is fair for a cost measurement) or use a
-      larger model with a natively longer context.
-- [ ] **TraceLab mixed scenarios, not `--dataset-name random`** — `run_mixed_workloads.py`
+- (merged) **Context length where attention is >50% of e2e** — tracked in the task list at
+      the top (`drivers/context_share.sh`, yarn x4 to 131 072 as in serving).
+- [x] (2026-10-07) every serving A/B since runs `agent_plus_shortchat` / `agent_chat_rated` / `agent_chat_saturate`. **TraceLab mixed scenarios, not `--dataset-name random`** — `run_mixed_workloads.py`
       carries the real shapes (`agent_plus_shortchat`, `loadsweep_*`); a `SPLIT` method is
       wired into it. Independent-prompt datasets average 242-690 tokens and omit the
       multi-turn tool-result prefills that create the repeated mixed forwards this kernel
@@ -2222,7 +2220,7 @@ One line each; detail in [`realistic_workload_analysis.md`](realistic_workload_a
       the forward there, so a 1.21x attention win is invisible end to end regardless of
       correctness. Those runs measured in a regime where >=30% is unreachable by
       construction.
-- [ ] **Validity gate on every arm** — report the fallback count beside the timings. Two
+- [x] (2026-10-07) every arm since reports fallbacks + tracebacks, and serving arms pass `srv_correctness.py`. **Validity gate on every arm** — report the fallback count beside the timings. Two
       serving A/Bs were invalid (121 then 122 silent fallbacks) and both printed
       ordinary-looking numbers; the backend now raises instead of degrading.
 
@@ -2234,9 +2232,11 @@ One line each; detail in [`realistic_workload_analysis.md`](realistic_workload_a
       [detail](#workload-and-measurement-setup--2026-10-06)
 - [ ] **Long-context A/B on the real workload** — no valid serving number yet; both prior
       A/Bs were invalid.
-- [ ] **4-mode MTP serving run** — EAGLE draft built, unused; blocked on `mix_with_running`.
-      [detail](#four-mode-blocked)
-- [ ] **The bar: >=30% TTFT/ITL, >=10% throughput** — zero data.
+- [x] **4-mode MTP serving run** — unblocked and measured 2026-10-07 (`forward_mixed_spec`), see the
+      task list at the top. The original block on `mix_with_running`: [detail](#four-mode-blocked)
+- [x] **The bar: >=30% TTFT/ITL, >=10% throughput** (2026-10-08). Full stack vs stock MTP, 3 rounds, chat
+      24/s: TTFT -95%/-51% and ITL -42%/-38% (chat/codex). Capacity +19.8% closed-loop (v0.16.0). At
+      chat 16/s every ITL metric still clears it, but codex TTFT is only -19%.
 - [x] **CUDA-graph capture -- ceiling measured, then a host-cost finding** (2026-10-07). Traced serving, one
       round each (`SGLANG_STEP_TRACE=1`, `tasks/perf_model/steptrace_gap.py`, sglang `c1d2bceda`):
 
@@ -2271,14 +2271,16 @@ One line each; detail in [`realistic_workload_analysis.md`](realistic_workload_a
       `min(2*(132-sm_fa3), 160)` cap is already at the best point. Capping FA3 is harmful: 96 SMs +35%, 64 SMs
       +87%. Overlap's net gain on this batch is within noise (-0.6%). Chunk size is a serving knob; see
       the chunked-prefill sweep.
-- [ ] Acceptance-length (EWMA) as a perf-model input — needs an MTP trace
+- [x] Acceptance-length (EWMA) as a perf-model input (2026-10-07): 2.10 tokens/step. a=1 collapses EDF; a
+      per-request EWMA is biased low through the min over requests; a global EWMA is right, but
+      chunk caps lose anyway. See pd_colocation_vs_disagg.md point 3.
 
-## Multi-node schedule tests (H20 only, <= 16 GPUs, trial `vibecuda`) — not started
-All four points are written up in [`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md); none is measured.
-- [ ] Route to highest cache-hit node first, with an SLO veto from EDF queue-head requests
-- [ ] Best-effort cache migration, and whether colocation encourages replication (ThunderAgent argument)
-- [ ] EDF predictor with acceptance length — note the premise is measured false for this kernel, true only for the overlap kernel
-- [ ] Two-way RDMA / congestion: complete graph vs bipartite, randomised source among multi-hit nodes
+## Multi-node schedule tests (H20 only, <= 16 GPUs, trial `vibecuda`) — 2026-10-08
+Measurements live in [`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md).
+- [ ] Route to highest cache-hit node first, with an SLO veto -- affinity measured (TTFT -93%/-99.5% vs 2P2D); the calibrated veto + worker EDF arms are running
+- [x] Best-effort cache migration (2026-10-08) -- L3 store lifts round-robin's hit rate 12.7 -> 22.3% (chat TTFT -41%); idle under affinity
+- [x] EDF predictor with acceptance length (2026-10-08) -- measured on the MTP server; deadline order wins, chunk caps lose
+- [ ] Two-way RDMA / congestion -- no contention at 16 GPUs; hot-prefix experiment queued
 
 ## Correctness and bring-up record — 2026-10-06
 - [x] [Bringing the unified queue up: four faults, in order](#unified-bringup) — index spaces, packed extent, TMA addressing, plan coverage
@@ -2297,7 +2299,7 @@ All four points are written up in [`pd_colocation_vs_disagg.md`](pd_colocation_v
       run with it. SSH/WebShell failing was the symptom, not the cause.
 - [x] **Switched to `vibecuda-h200-2gpu-replacement-20261006`** (`40802be244f0ee7e`), 2x
       H200 in the same queue, both GPUs idle, reachable. `/tmp/px.py` retargeted.
-- [ ] **Re-provision the working set** — `/dev/shm/w` is empty: venv (torch 2.8/cu128),
+- [x] (closed: every measurement since 2026-10-06 ran on the restored `f5f0b2f6d81d1e33` tree) **Re-provision the working set** — `/dev/shm/w` is empty: venv (torch 2.8/cu128),
       flashinfer tree, sglang `python/`, qwen7b weights, and flash-attention's hopper
       headers at `/dev/shm/w/flash-attention/hopper`. Drivers exist under
       `tasks/fused_specdec_workload/drivers/` (`provision.sh`, `provision_trees.sh`,
@@ -2310,16 +2312,16 @@ All four points are written up in [`pd_colocation_vs_disagg.md`](pd_colocation_v
 
 ## Pod and environment — 2026-10-05
 - [x] [The pod ran upstream sglang, not our fork](#env-contamination) — 4140 files against our 725, 514 differing including `bench_serving.py`; now byte-exact
-- [ ] [Re-establish the GPU working set](#pod-restore) — fork tree pushed (805 files, byte-exact); three mechanical gaps left, listed in `drivers/provision_trees.sh`: spdlog unpushed, stale absolute symlinks in `flashinfer/data`, and the csrc jinja unreadable — the 2026-10-05 trial expired; a replacement single-GPU `vibecuda` is running and empty
+- [x] (closed, see above) [Re-establish the GPU working set](#pod-restore) — fork tree pushed (805 files, byte-exact); three mechanical gaps left, listed in `drivers/provision_trees.sh`: spdlog unpushed, stale absolute symlinks in `flashinfer/data`, and the csrc jinja unreadable — the 2026-10-05 trial expired; a replacement single-GPU `vibecuda` is running and empty
 
-- [ ] [The restored pod's serving tree was upstream, not our fork](#env-contamination) — rebuild in flight; no serving number may be read from it until then
+- [x] [The restored pod's serving tree was upstream, not our fork](#env-contamination) — rebuilt and verified by manifest before any serving number was taken
 
 ## Workload capture for handoff — 2026-10-05
 - [x] [Real online 2-mode trace](fused_kernel_handoff.md#5-the-workloads) — 2121 steps/arm, JSON corpus in `fused_specdec_workload/sets/`
-- [ ] Real online **4-mode** trace with draft+verify co-resident — the stated gap; blocked with the 4-mode schedule
-- [ ] Long-context (>64k, tracelab) A/B — written, not yet run; this is where attention dominates the step.
-  Gated on [the wgmma JIT reduction](#split-kv-dark): at >64k the FA3-class rows are exactly the ones the
-  plan splits, so the run would produce wrong numbers before it produced slow ones
+- [x] Real online **4-mode** trace with draft+verify co-resident (2026-10-07) — `mtpedf/rate24/trace_MTPMIX_SPLIT` (STEPTRACE, 11 837 steps)
+- [ ] Long-context (>64k, tracelab) A/B — not yet run; sized by the context-share measurement. The old gate
+  (split FA3 rows) is gone: the router sends FA3 no split rows, and the "corruption" was the harness
+  reference.
 
 ## Detail sections — 2026-10-06
 

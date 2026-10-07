@@ -195,7 +195,9 @@ Workload and serving:
 - [ ] **Context length where attention is >50% of e2e** -- not run.
 - [x] **TraceLab mixed scenario wired** (2026-10-07) -- agent_plus_shortchat on the pod; trace verified identical after shrinking.
 - [x] **Realistic serving, LPT baseline** (2026-10-07) -- clean, 0 fallbacks. [detail](#realistic-serving-ab-lpt-baseline-tracelab-agent--short-chat--2026-10-07)
-- [ ] **Realistic serving, SPLIT arm** -- gate PASSES as of `4e3bde083`; interleaved repeats running. **Earlier run VOID (2026-10-07).** The -39.8% TTFT / +16.9% tput run
+- [x] **Realistic serving, SPLIT arm** (2026-10-07) -- 3 interleaved rounds, gate PASS, 0 fallbacks:
+      codex TTFT -10.3%, ITL -7.6%, P99 ITL -18.5%, tput +5.6%; chat TTFT -16.2%. **Below the
+      30% / 10% bar.** [detail](#realistic-serving-valid--2026-10-07) **Earlier run VOID (2026-10-07).** The -39.8% TTFT / +16.9% tput run
       computed the WRONG requests on FA3: the split plan handed `fa3_only_run` the FA2 rows'
       per-request arrays. Fixed; serving correctness gate added. No valid SPLIT serving number
       exists yet. [detail](#split-serving-void--2026-10-07)
@@ -205,6 +207,37 @@ Workload and serving:
 Cluster:
 - [ ] **Multi-node PD colocation, four points** -- design doc written, nothing measured.
       Delta: at most 4 nodes, so baselines are 2P2D and 1P3D.
+
+<a id="realistic-serving-valid--2026-10-07"></a>
+### Realistic serving, SPLIT vs LPT -- first VALID result, 3 interleaved rounds — 2026-10-07
+
+Code: sglang `4e3bde083` (causal + non-ragged split, two-stream overlap on) on the pod;
+flashinfer `b0563ae` (causal FA3, FA2 K/V ring 2/3/1). Correctness: the serving gate
+(`drivers/srv_correctness.py`) PASSES for this build. Command:
+`bash tasks/fused_specdec_workload/drivers/realistic_repeats.sh`. Rounds are interleaved
+LPT, SPLIT, LPT, ... and each arm gets its own outdir. Scenario `agent_plus_shortchat`:
+TraceLab codex agent replay + ShareGPT short chat at 12 req/s, Qwen2.5-7B-Instruct, H200,
+no speculative decoding. Every arm: **0 fallbacks, 0 tracebacks.**
+Summarised by `/dev/shm/w/repsum.py` (mean, [min-max]):
+
+| stream | metric | LPT | SPLIT | delta |
+|---|---|---|---|---|
+| codex | mean TTFT ms | 25 069 [23 724-25 933] | 22 497 [21 250-23 309] | **-10.3%** |
+| codex | P99 TTFT ms | 54 693 [54 585-54 761] | 49 045 [48 226-50 629] | -10.3% |
+| codex | mean ITL ms | 35.9 [35.0-37.2] | 33.1 [32.3-33.6] | **-7.6%** |
+| codex | P99 ITL ms | 501 [478-533] | 409 [404-411] | **-18.5%** |
+| codex | output tok/s | 628.1 [621.7-633.4] | 663.6 [658.9-671.6] | **+5.6%** |
+| chat | mean TTFT ms | 18 759 [18 600-19 030] | 15 720 [15 457-16 237] | **-16.2%** |
+| chat | P99 TTFT ms | 60 758 | 54 130 | -10.9% |
+| chat | mean ITL ms | 12.3 | 12.0 | -2.6% |
+| chat | output tok/s | 858.2 | 858.3 | 0.0% (fixed offered rate) |
+
+The ranges do not overlap on codex TTFT, ITL, P99 ITL, throughput or chat TTFT, so these are
+real effects. **They do not meet the goal's bar** (>=30% TTFT and ITL, >=10% throughput).
+That matches the arithmetic in the 30%-ceiling entry: the kernel cuts attention by 24% at
+most, and the end-to-end gain is that cut times attention's share of the step. Reaching the
+bar has to come from the schedule (4-mode MTP mixing, EDF), not from a faster attention
+kernel alone.
 
 <a id="split-serving-void--2026-10-07"></a>
 ### RETRACTION: the SPLIT serving result is void -- FA3 computed the wrong requests — 2026-10-07

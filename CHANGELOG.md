@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.14.0 — SPLIT serving made correct; first valid serving result; 4-mode MTP step (2026-10-07)
+
+- **Three correctness faults in the serving split, fixed:** (1) FA3 was handed the FA2 rows'
+  per-request arrays (`748f44553`); (2) both executors ran non-causal, and so did the harness
+  reference (flashinfer `b0563ae`, sglang `2b92b58bb`); (3) in ragged mode the split read the
+  step's not-yet-written K/V. Split steps now use non-ragged mode (`4e3bde083`). The earlier
+  -40% TTFT result is **void**.
+- **Serving correctness gate** (`drivers/srv_correctness.py`): greedy outputs against LPT, with
+  LPT-vs-LPT as the noise floor. It catches the pre-fix build and PASSES the fixed one. Also
+  added: `SGLANG_SPLIT_VERIFY=1`, an in-server fp32 recompute per executor.
+- **Causal kernel:** split 1.309x over FA2-on-everything on the TraceLab batch, 1.324x with
+  two-stream overlap (now the serving default). Multicast ceiling 1.8% / 1.6% causal.
+- **First valid serving A/B** (3 interleaved rounds, 0 fallbacks): codex TTFT -10.3%, ITL
+  -7.6%, P99 ITL -18.5%, throughput +5.6%; chat TTFT -16.2%. Below the 30% / 10% bar.
+- **4-mode MTP step** (`868025d6c`, `SGLANG_MIXED_SPEC=1`): prefill chunk rows and EAGLE
+  verify rows in ONE target forward. Untested; gate queued. Draft:
+  thoughtworks/Qwen2.5-7B-Instruct-Eagle3, topk 1.
+
 ## v0.13.0 — Kernel items closed: FA2 K/V ring, split-reduction ceiling, fused tree build (2026-10-07)
 
 - **FA2 K/V smem ring** (flashinfer `3e41c2d`, defaults `f54745e`): an S-slot ring per tile

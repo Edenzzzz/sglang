@@ -70,7 +70,7 @@ def run_arm(arm, outdir):
     if arm.startswith("MTP"):
         # MTP-style chain draft: EAGLE3 head, 3 steps, topk 1 -> 4 verify tokens per row.
         args += ["--speculative-algorithm", "EAGLE3",
-                 "--speculative-draft-model-path", f"{W}/qwen7b_eagle3",
+                 "--speculative-draft-model-path", f"{W}/qwen7b_eagle3_sgl",
                  "--speculative-num-steps", "3", "--speculative-eagle-topk", "1",
                  "--speculative-num-draft-tokens", "4"]
     srv = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, env=env_for(arm))

@@ -374,9 +374,12 @@ class LogitsProcessor(nn.Module):
         # without logits computation. The extend-mode pruning (cumsum of
         # extend_seq_lens) is data-dependent and can't be captured in a graph.
         # Logits will be computed outside the graph during replay.
+        # Not for the mixed spec step, which is MIXED with FULL capture too but needs the
+        # logits (and EAGLE3's aux hidden states) from this pass.
         if (
             logits_metadata.capture_hidden_mode.is_full()
             and logits_metadata.forward_mode.is_mixed()
+            and not logits_metadata.mixed_spec_verify_tokens
         ):
             return LogitsProcessorOutput(
                 next_token_logits=None,

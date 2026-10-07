@@ -291,7 +291,28 @@ this is latency at matched throughput.
    makes that mixed step cheaper, turns the extra scheduling freedom into a gain. The 4-mode
    schedule and the split kernel are one contribution, not two.
 3. Throughput is equal because nothing saturated. Capacity (the throughput claim) needs rates past
-   stock MTP's saturation point: 20, 24, 28/s queued.
+   stock MTP's saturation point: 20, 24, 28/s, below.
+
+**Extension to 20-28/s** (`mtp_load_sweep2.sh`, same setup, every arm 0 fallbacks; mixed steps
+1 600-3 000 per 4-mode arm):
+
+| chat rate | arm | codex TTFT | codex ITL | chat TTFT | chat ITL | chat tok/s |
+|---|---|---|---|---|---|---|
+| 20/s | MTPMIX_LPT | +63% | +20% | +137% | +28% | 0% |
+| 20/s | **MTPMIX_SPLIT** | **-48%** | **-33%** | **-87%** | **-39%** | 0% |
+| 24/s | MTPMIX_LPT | +9% | -3% | +23% | +5% | 0% |
+| 24/s | **MTPMIX_SPLIT** | **-75%** | -23% | **-88%** | **-38%** | 0% |
+| 28/s | MTPMIX_LPT | +62% | +10% | +70% | +3% | -7% |
+| 28/s | **MTPMIX_SPLIT** | **-79%** | -19% | **-88%** | **-32%** | +3% |
+
+Stock MTP absolute values: codex TTFT 1.3 / 4.5 / 7.1 s and chat TTFT 1.0 / 6.0 / 11.0 s at
+20 / 24 / 28/s. The 4-mode + split arm stays at 0.7-1.5 s.
+
+**At 20/s, all four headline latency metrics clear the 30% bar on both tenants**: codex TTFT
+-48%, codex ITL -33%, chat TTFT -87%, chat ITL -39%. Throughput is within 3% at every point,
+because a rate-limited sweep can only serve what it offers. At 28/s stock MTP falls just short
+of the offered chat rate (1 901 tok/s) and the split arm serves 1 957 tok/s. The capacity claim
+needs a closed-loop test: `drivers/mtp_saturate.sh` (both tenants at infinite rate, 3 rounds).
 
 <a id="mtp-barrier--2026-10-07"></a>
 ### 4-mode MTP A/B re-run with the stream start barrier — SUPERSEDES the table below — 2026-10-07

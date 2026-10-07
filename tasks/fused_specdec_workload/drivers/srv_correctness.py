@@ -102,6 +102,7 @@ def run_arm(arm, outdir):
             for f in cf.as_completed(futs):
                 r = f.result()
                 results[futs[f]] = r.get("output_ids") or r["meta_info"].get("output_ids")
+                results["_verify_ct_" + futs[f]] = r["meta_info"].get("spec_verify_ct")
         log.flush()
         txt = open(f"{outdir}/server_{arm}.log").read()
         results["_fallbacks"] = txt.lower().count("fallback")
@@ -128,7 +129,14 @@ def compare(outdir, base, arm):
     for k in sorted(x for x in a if not x.startswith("_")):
         x, y = a[k], b[k]
         n = next((i for i, (p, q) in enumerate(zip(x, y)) if p != q), min(len(x), len(y)))
-        print(f"  {k}: first-token {'==' if x[:1] == y[:1] else '!='}  common prefix {n}/{len(x)}")
+        va, vb = a.get("_verify_ct_" + k), b.get("_verify_ct_" + k)
+        acc = ""
+        if va and vb:
+            # Tokens per verify step. On IDENTICAL outputs the drafts must have been identical,
+            # so a difference here means the draft model saw different inputs.
+            acc = f"  tok/verify {len(x) / va:.2f} vs {len(y) / vb:.2f}" + (
+                "  <-- identical output, different acceptance" if x == y and va != vb else "")
+        print(f"  {k}: first-token {'==' if x[:1] == y[:1] else '!='}  common prefix {n}/{len(x)}{acc}")
         worst[k[0]] = min(worst.get(k[0], 10 ** 9), n)
     # Greedy bf16 kernels with different reduction orders may legitimately diverge late;
     # a wrong attention diverges at or near the first token of the long (FA3) prompts.

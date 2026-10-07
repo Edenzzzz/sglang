@@ -172,14 +172,19 @@ Kernel, per executor (each item A/B'd against its own executor's baseline):
       round trip is not the cost. Side finding: our JIT rendezvous is 2.2% slower than classic
       grid.sync there. FA3 side: the router sends it no split rows (append rows have >=448
       m-blocks), so it has nothing to reduce. [detail](#fa2-kv-ring--2026-10-07)
-- [ ] **DSMEM / KV multicast** -- cluster launch built; blocked by upstream's
-      `Use_TMA_KV || ClusterShape==1` assert. Needs a cluster-aware cp.async gather.
+- [x] **DSMEM / KV multicast** (2026-10-07) -- ceiling measured, NOT built: FA3 with EVERY K/V
+      gather skipped is only 0.8% faster (2048-token appends at 64-98K) and 2.1% faster (512 at
+      24-49K). FA3-routed rows are compute-bound, so multicast, which only cuts KV traffic,
+      cannot pay. [detail](#multicast-backfill-ceilings--2026-10-07)
 - [x] **Fused spec tree-build epilogue** (2026-10-07) -- built as ONE kernel replacing
       organize_draft_results + build_tree (+ their fills/cat). 0 mismatches over ~150 cases vs
       sglang's own path; graph-captured 31 -> 10 us (MTP chain), eager 120 -> 52 us. Not an
       attention epilogue: the data dependencies forbid it. Not yet wired into the worker.
       [detail](#fused-tree-build--2026-10-07)
-- [ ] **Cross-role backfill (`tma_store_wait`)** -- not run.
+- [x] **Cross-role backfill** (2026-10-07) -- in the split it is temporal: FA2's grid on SMs that
+      FA3's tail vacates. Two-stream overlap on the TraceLab batch: 12 282.5 -> 11 954.7 us
+      (**-2.7%**), both PASS. `tma_store_wait` guards nothing here (plain tiled store). Not yet
+      in the serving path, which is sequential. [detail](#multicast-backfill-ceilings--2026-10-07)
 
 Correctness and routing:
 - [x] **Split-row "corruption"** (2026-10-07) -- was the harness reference, not the kernel; all fixtures pass.
@@ -190,13 +195,104 @@ Workload and serving:
 - [ ] **Context length where attention is >50% of e2e** -- not run.
 - [x] **TraceLab mixed scenario wired** (2026-10-07) -- agent_plus_shortchat on the pod; trace verified identical after shrinking.
 - [x] **Realistic serving, LPT baseline** (2026-10-07) -- clean, 0 fallbacks. [detail](#realistic-serving-ab-lpt-baseline-tracelab-agent--short-chat--2026-10-07)
-- [ ] **Realistic serving, SPLIT arm** (2026-10-07) -- one clean run: codex TTFT -39.8%, ITL -16.8%, tput +16.9%; chat TTFT -41.5%. PRELIMINARY: needs repeats; intermittent illegal access (1/2 runs) open.
+- [ ] **Realistic serving, SPLIT arm** -- **VOID (2026-10-07).** The -39.8% TTFT / +16.9% tput run
+      computed the WRONG requests on FA3: the split plan handed `fa3_only_run` the FA2 rows'
+      per-request arrays. Fixed; serving correctness gate added. No valid SPLIT serving number
+      exists yet. [detail](#split-serving-void--2026-10-07)
 - [ ] **4-mode MTP serving run** -- not started.
 - [ ] **Perf model and EDF vs unfused** -- not started.
 
 Cluster:
 - [ ] **Multi-node PD colocation, four points** -- design doc written, nothing measured.
       Delta: at most 4 nodes, so baselines are 2P2D and 1P3D.
+
+<a id="split-serving-void--2026-10-07"></a>
+### RETRACTION: the SPLIT serving result is void -- FA3 computed the wrong requests — 2026-10-07
+
+**What was wrong.** `_plan_fused_split_inner` built the per-request arrays that `fa3_only_run`
+consumes (`kv_lens_req`, `q_indptr_req`, `kv_indptr_req`, `n_req`, `max_pages`, `max_qlen`)
+from `kl_r` / `qi_r` / `ki_r`. Those are the **persistent (FA2) side's** rows, `[n_rows:]`,
+with the Q indptr rebased to 0. The FA3 executor selects its requests with
+`reqs = arange(n_fa3_rows)`, so in serving it ran requests 0..n-1 **of the FA2 rows**: decode
+queries at decode KV lengths, written into the first tokens of the output, while the real
+prefill appends were never computed. The kernel harness never saw this because it passes
+whole-batch arrays (`kv_c_pg`, `qo_c`, `kvl` over every row), and it gates every arm on PASS
+against an fp32 reference. Serving had **no correctness gate**, so nothing caught it.
+
+**Consequence.**
+- The preliminary result below (codex TTFT -39.8%, P99 ITL -52.6%, throughput +16.9%;
+  chat TTFT -41.5%) measured an arm that skipped most of its prefill attention. It is
+  **void**, not preliminary. Skipped work is also the natural explanation for a gain larger
+  than the kernel's own 19% ceiling, which the queueing-amplification story was invented to
+  explain. That story is retracted too.
+- The intermittent illegal memory access fits the same bug. The page table was sized
+  `len(kl_r) * max(kl_r)` from FA2 rows, while the FA3 scheduler read Q and page offsets
+  through mismatched arrays.
+
+**Fix** (`flashinfer_backend.py`, this commit): whole-batch arrays, as in the harness:
+`kv_lens_req = max(kv, 1)`, `q_indptr_req = qo_c`, `kv_indptr_req = kv_c`, `n_req = B`,
+`max_pages = max(kv)`, `max_qlen = max(qo[:n_rows])`. The opt-in fused path reads the same
+fields with the same whole-batch meaning.
+
+**Gate added:** `tasks/fused_specdec_workload/drivers/srv_correctness.py`. One server per arm
+with the A/B's exact args and env. Eight 2K-token prompts decode while four ~12K-token
+prompts arrive, so the long prompts' final chunks land in mixed batches. Greedy, 96 tokens,
+compared per request against LPT. LPT2 (a second LPT run) gives the noise floor. The
+pre-fix build is run too, to show the gate catches it.
+
+Result (common prefix with LPT, of 101 greedy tokens):
+
+| arm | long prompts (FA3-routed chunks) | short prompts | gate |
+|---|---|---|---|
+| LPT2 (noise floor) | 101, 52, 101, 101 | 7-101 | PASS |
+| SPLIT, pre-fix | 6, 6, 6, 5 | 5-7 | **FAIL** |
+| SPLIT, plan fix | 7, 7, 6, 6 | 5-45 | **FAIL** |
+
+The gate catches the pre-fix build, and **the plan fix alone does not pass it.** Every SPLIT
+request keeps its first token, then diverges around token 6, which is when the long
+prompts' chunks start sharing mixed batches with decodes. A second fault remains in the
+serving split. Next: `SGLANG_SPLIT_VERIFY=1` recomputes every row of the first split steps
+in fp32 inside the server and logs the FA3-row and FA2-row errors separately.
+
+(`fa3_only_run`'s `q_indptr_per_req.index({n_fa3}).item<int>()` host sync is only on the
+`num_splits > 1` combine branch; serving passes 1, so it never runs there.)
+
+<a id="multicast-backfill-ceilings--2026-10-07"></a>
+### Multicast and cross-role backfill, measured as ceilings first — 2026-10-07
+
+**Multicast ceiling.** `FLASHINFER_FA3_SKIP_KV_LOAD=1`
+(`drivers/flash_attention_skip_kv_load.patch` on the pinned flash-attention `e9515d5`) keeps
+the cp.async pipeline's commits but issues no K/V gathers, so FA3 runs at its compute-only
+speed. Multicast can only remove part of the gather traffic, so this bounds it from above.
+`drivers/ab_parallel.sh` (TWO_EXEC, upstream FA3, RS=1, stages 2), harness `EXTRA_DEFS`,
+flashinfer `b13aa2a`:
+
+| fixture | base total | KV loads skipped | ceiling |
+|---|---|---|---|
+| `qo:2048,2048 prefix:65536,98304 n_fa3:2` | 11 161.0 us (PASS, 0 unwritten) | 11 074.9 us | **0.8%** |
+| `qo:512x4 prefix:32768,40960,49152,24576 n_fa3:4` | 2 639.0 us (PASS) | 2 583.6 us | **2.1%** |
+
+0 fallbacks in all four. The skip arms are garbage by construction (NaN rows), which also
+proves the switch took effect. **Reading:** append rows at gqa 7 are 112 m-blocks per KV
+head re-reading the same KV, mostly from L2, and FA3 is compute-bound on them. The 1.33-1.59x
+DSMEM result was for an isolated, load-bound microbenchmark and does not transfer. Not
+built: the upper bound is below the run-to-run noise of a serving A/B.
+
+**Cross-role backfill.** With two executors, backfill is temporal: FA2's CTAs taking SMs as
+FA3's tail CTAs retire. FA2 rows do not depend on FA3 rows, so no grid-dependency wait is
+needed, and two streams overlap at least as much as PDL on one. On the TraceLab mixed batch
+(`TL n_fa3:2`, FA2 now at ring depth 2/3/1):
+
+| arm | total | |
+|---|---|---|
+| sequential | 12 282.5 us | PASS, 0 unwritten, 0 fallbacks |
+| **two-stream overlap** | **11 954.7 us (-2.7%)** | PASS, 0 unwritten, 0 fallbacks |
+
+This contradicts the 2026-10-06 note "concurrency loses at every budget". That note was
+measured with SM budgets imposed, before the Theta(kv^2) fix. Without budgets, the overlap
+fills FA3's tail. `cute::tma_store_wait` is not needed: the FA3 epilogue store is plain
+tiled, not TMA. Serving still runs the executors sequentially. Moving them to two streams
+is a server item.
 
 <a id="fused-tree-build--2026-10-07"></a>
 ### Fused spec tree build: one kernel at the draft tail, not an attention epilogue — 2026-10-07
@@ -6881,6 +6977,10 @@ pipeline state after the rendezvous.
 
 <a id="split-row-race-handoff"></a>
 ## Realistic serving A/B, SPLIT vs LPT -- PRELIMINARY, single run each — 2026-10-07
+
+> **VOID (2026-10-07).** This run's SPLIT arm computed the wrong requests on FA3 (the split plan
+> passed the FA2 rows' per-request arrays). Every SPLIT number below measures skipped prefill
+> attention, not the split. See [split-serving-void](#split-serving-void--2026-10-07).
 
 Same scenario as the LPT baseline below (`agent_plus_shortchat`, 1x H200, Qwen2.5-7B, RoPE
 extrapolated -- timings valid, text not). Both arms 0 fallbacks.

@@ -1451,12 +1451,34 @@ class FlashInferAttnBackend(AttentionBackend):
                     "before the extension loads, or unset it to use the fused path."
                 )
             n_fa3_rows = fused["n_rows"]
+            n_tok_fa3 = fused["n_tok"]
+            # SGLANG_TWO_EXEC_OVERLAP=1 (default) runs FA3 on a side stream while FA2 runs on
+            # the current one: their output rows are disjoint and neither reads the other's,
+            # so FA2's CTAs fill the SMs FA3's tail vacates. Measured on the TraceLab batch at
+            # kernel level: 12 282.5 -> 11 954.7 us. Event fork/join keeps it capturable.
+            overlap = (os.environ.get("SGLANG_TWO_EXEC_OVERLAP", "1") == "1"
+                       and n_fa3_rows > 0 and n_tok_fa3 < q.shape[0]
+                       and not os.environ.get("SGLANG_SPLIT_FAULT_DUMP"))
+            main_stream = torch.cuda.current_stream()
+            if overlap:
+                side = getattr(self, "_two_exec_side_stream", None)
+                if side is None:
+                    side = self._two_exec_side_stream = torch.cuda.Stream()
+                fa3_ctx = torch.cuda.stream(side)
+            else:
+                import contextlib
+                fa3_ctx = contextlib.nullcontext()
             if n_fa3_rows > 0:
                 # Scratch is cached on the backend and the page table is scattered ONCE per
                 # step, not per layer. Allocating these inside the op cost ~140 allocations
                 # and 28 extra scatter launches per forward, which turned a 1.21x faster
                 # kernel into a serving regression (TTFT 64.6 -> 89.7 ms).
                 sc = self._two_exec_scratch(q, fused, n_fa3_rows)
+                if overlap:
+                    # fork AFTER the scratch exists: a re-keyed scratch is allocated and
+                    # filled on the main stream just above
+                    self._two_exec_side_stream.wait_stream(main_stream)
+                fa3_ctx.__enter__()
                 torch.ops.fused_fa3.fa3_only_run(
                     q, k_cache, v_cache, out, self._persistent_lse_buf[:num_tokens],
                     fused["kv_indices"], fused["kv_indptr_req"], fused["q_indptr_req"],
@@ -1481,14 +1503,18 @@ class FlashInferAttnBackend(AttentionBackend):
                     # this -- a per-call flag would refill on every layer.
                     not fused.get("_pt_done", False),
                 )
+                fa3_ctx.__exit__(None, None, None)
                 fused["_pt_done"] = True
                 if os.environ.get("SGLANG_SPLIT_FAULT_DUMP"):
                     self._split_fault_check("fa3_only_run", forward_batch, fused, q, sc)
-            n_tok_fa3 = fused["n_tok"]
             if n_tok_fa3 < q.shape[0]:
                 pers.run(q[n_tok_fa3:], (k_cache, v_cache), out=out[n_tok_fa3:])
                 if os.environ.get("SGLANG_SPLIT_FAULT_DUMP"):
                     self._split_fault_check("persistent_fa2", forward_batch, fused, q, None)
+            if overlap:
+                main_stream.wait_stream(self._two_exec_side_stream)
+            if os.environ.get("SGLANG_SPLIT_VERIFY") == "1":
+                self._split_verify(q, out, k_cache, v_cache, fused, layer)
             return out, self._persistent_lse_buf[:num_tokens]
 
         torch.ops.fused_fa3.fused_run(
@@ -1604,6 +1630,56 @@ class FlashInferAttnBackend(AttentionBackend):
             logger.error("SPLIT FAULT in %s; batch saved to %s", which,
                          os.environ["SGLANG_SPLIT_FAULT_DUMP"])
             raise
+
+    def _split_verify(self, q, out, k_cache, v_cache, fused, layer):
+        """Debug-only (SGLANG_SPLIT_VERIFY=1): recompute every row of a split step in fp32
+        from the paged cache and log the worst relative error of the FA3 rows and of the FA2
+        rows separately. Layers 0 and 14, first 6 split steps per layer. The serving gate
+        showed SPLIT diverging from LPT; this names the executor and the rows."""
+        lid = int(getattr(layer, "layer_id", -1))
+        if lid not in (0, 14):
+            return
+        cnt = self.__dict__.setdefault("_split_verify_count", {})
+        if cnt.get(lid, 0) >= 6:
+            return
+        cnt[lid] = cnt.get(lid, 0) + 1
+        torch.cuda.synchronize()
+        qo_c = fused["q_indptr_req"].tolist()
+        kv_c = fused["kv_indptr_req"].tolist()
+        kvl = fused["kv_lens_req"].tolist()
+        idx = fused["kv_indices"]
+        n_fa3 = int(fused["n_rows"])
+        hq, hkv = self.num_qo_heads, self.num_kv_heads
+        g = hq // hkv
+        kc = k_cache.view(-1, hkv, k_cache.shape[-1])
+        vc = v_cache.view(-1, hkv, v_cache.shape[-1])
+        worst = {"fa3": 0.0, "fa2": 0.0}
+        worst_row = {"fa3": -1, "fa2": -1}
+        for i in range(len(qo_c) - 1):
+            n = qo_c[i + 1] - qo_c[i]
+            if n == 0:
+                continue
+            kl = kvl[i]
+            slots = idx[kv_c[i]: kv_c[i] + kl].long()
+            k = kc[slots].float().repeat_interleave(g, dim=1)
+            v = vc[slots].float().repeat_interleave(g, dim=1)
+            qi = q[qo_c[i]: qo_c[i + 1]].view(n, hq, -1).float()
+            sc = torch.einsum("nhd,khd->hnk", qi, k) * layer.scaling
+            pos = torch.arange(kl - n, kl, device=q.device)
+            sc.masked_fill_(torch.arange(kl, device=q.device)[None, None] > pos[None, :, None],
+                            float("-inf"))
+            ref = torch.einsum("hnk,khd->nhd", sc.softmax(-1), v)
+            got = out[qo_c[i]: qo_c[i + 1]].view(n, hq, -1).float()
+            err = float((got - ref).abs().max() / ref.abs().max().clamp_min(1e-6))
+            side = "fa3" if i < n_fa3 else "fa2"
+            if err > worst[side] or err != err:
+                worst[side], worst_row[side] = err, i
+        logger.warning(
+            "SPLIT_VERIFY layer=%d step=%d rows=%d n_fa3=%d n_tok_fa3=%d T=%d "
+            "fa3_worst=%.3e (row %d) fa2_worst=%.3e (row %d) qo=%s kv=%s",
+            lid, cnt[lid], len(qo_c) - 1, n_fa3, int(fused["n_tok"]), int(q.shape[0]),
+            worst["fa3"], worst_row["fa3"], worst["fa2"], worst_row["fa2"],
+            [qo_c[j + 1] - qo_c[j] for j in range(min(len(qo_c) - 1, 12))], kvl[:12])
 
     def _two_exec_scratch(self, q, fused, n_fa3_rows):
         """Per-step scratch for the two-executor FA3 launch, cached across layers.
@@ -2029,16 +2105,25 @@ class FlashInferAttnBackend(AttentionBackend):
             # Sizes the upstream FA3 port's dense page table, which is
             # [n_req, max_pages_per_seq]. page_size is 1 on this path, so pages per
             # sequence is just the KV length.
-            n_req=int(len(kl_r)), max_pages=int(kl_r.max()) if len(kl_r) else 0,
+            #
+            # The per-request arrays below are WHOLE-BATCH, indexed by request id, and the
+            # FA3 executor selects its rows with reqs = arange(n_rows) -- the addressing the
+            # kernel harness validates. They were built from the persistent side's
+            # (qi_r, ki_r, kl_r) until 2026-10-07, so fa3_only_run computed requests
+            # 0..n_rows-1 OF THE FA2 ROWS: decode queries at decode KV lengths, written over
+            # the prefill rows' output. That is both wrong and far cheaper than the real
+            # appends, which voids every SPLIT serving number taken before the fix.
+            n_req=int(B), max_pages=int(np.maximum(kv, 1).max()),
             # The combine pass's grid uses the varlen MAX q length.
-            max_qlen=int(qi_r.diff().max()) if len(qi_r) > 1 else 1,
+            max_qlen=int(qo[:n_rows].max()),
             # Per-request KV lengths in tokens, for the split count the combine pass
             # reduces. Not derivable from the plan's kv_indptr, which is per work item.
-            kv_lens_req=kl_r.to(kv_indices.device, dtype=torch.int32),
+            kv_lens_req=torch.from_numpy(np.maximum(kv, 1).astype(np.int32)).to(
+                kv_indices.device),
             # True per-request Q prefix sum; upstream reads cu_seqlens_q[bidb].
-            q_indptr_req=qi_r.to(kv_indices.device, dtype=torch.int32),
-            # Per-request PAGE offsets for the dense page-table scatter.
-            kv_indptr_req=ki_r.to(kv_indices.device, dtype=torch.int32),
+            q_indptr_req=torch.from_numpy(qo_c.copy()).to(kv_indices.device),
+            # Per-request PAGE offsets for the dense page-table scatter (page_size 1).
+            kv_indptr_req=torch.from_numpy(kv_c.copy()).to(kv_indices.device),
             # Constraint 3: FA3 takes vector-sparse offsets, not page ids.
             fa3_sparse=self._fa3_sparse_indices(
                 st["fa3"], forward_batch.token_to_kv_pool.get_kv_buffer(0)

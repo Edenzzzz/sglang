@@ -32,7 +32,7 @@ for a in "$@"; do
   tag=${a%%:*}; envs=${a#*:}; [ "$envs" = "$a" ] && envs=""
   env $BASE $envs TORCH_EXTENSIONS_DIR=$W/pb_$tag TIME_ITERS=5 FIXTURE="$FIX" \
     timeout 1800 python tests/test_fused_server_batch.py > $W/abp/$tag.full 2>&1
-  t=$(grep -oE 'TWO_EXEC iters=[0-9]+ total=[0-9.]+' $W/abp/$tag.full | grep -oE '[0-9.]+$')
+  t=$(grep -oE 'TWO_EXEC(_OVERLAP)? iters=[0-9]+ total=[0-9.]+' $W/abp/$tag.full | grep -oE '[0-9.]+$')
   ok=$(grep -c '^PASS' $W/abp/$tag.full)
   unw=$(grep -oE 'unwritten \(NaN\) rows = [0-9]+' $W/abp/$tag.full | head -1 | grep -oE '[0-9]+$')
   printf "%-14s total=%-10s us  PASS=%s  unwritten=%s  fallbacks=%s  [%s]\n" \

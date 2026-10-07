@@ -2211,6 +2211,18 @@ async def benchmark(
             if profile_output.success:
                 print("Profiler started")
 
+    # BENCH_BARRIER_DIR: multi-stream runs start every stream together. Each stream
+    # announces it is ready (dataset tokenised, warmup done) and waits for the runner's "go".
+    # Without this, a stream that tokenises long prompts started 12-45 s after a light one,
+    # and that uncontrolled offset decided how much of the light stream queued behind the
+    # heavy one's prefill backlog -- a 15x swing in chat TTFT between sessions.
+    _barrier = os.environ.get("BENCH_BARRIER_DIR")
+    if _barrier:
+        os.makedirs(_barrier, exist_ok=True)
+        open(os.path.join(_barrier, f"ready_{os.getpid()}"), "w").close()
+        while not os.path.exists(os.path.join(_barrier, "go")):
+            await asyncio.sleep(0.05)
+
     # Run all requests
     benchmark_start_time = time.perf_counter()
     tasks: List[asyncio.Task] = []

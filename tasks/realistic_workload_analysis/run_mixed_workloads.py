@@ -313,6 +313,13 @@ def run_method(method, scenario, outdir):
                    capture_output=True)
 
     procs = {}
+    # Start barrier (bench_serving reads BENCH_BARRIER_DIR): every stream tokenises and warms
+    # up first, then all are released together, so stream start offsets no longer depend on
+    # how long each one took to tokenise. Set BENCH_NO_BARRIER=1 to reproduce the old race.
+    barrier = outdir / "barrier"
+    shutil.rmtree(barrier, ignore_errors=True)
+    if not os.environ.get("BENCH_NO_BARRIER"):
+        env["BENCH_BARRIER_DIR"] = str(barrier)
     for sname, sargs in scenario["streams"].items():
         out = outdir / f"{method}_{sname}.json"
         blog = open(outdir / f"bench_{method}_{sname}.log", "w")
@@ -322,6 +329,16 @@ def run_method(method, scenario, outdir):
              *sargs, "--warmup-requests", "4", "--output-file", str(out),
              "--output-details", "--disable-tqdm"],
             stdout=blog, stderr=subprocess.STDOUT, env=env), blog)
+    if env.get("BENCH_BARRIER_DIR"):
+        t0 = time.time()
+        while time.time() - t0 < 1800:
+            ready = len(list(barrier.glob("ready_*"))) if barrier.exists() else 0
+            if ready >= len(procs) or any(p.poll() is not None for p, _ in procs.values()):
+                break
+            time.sleep(0.2)
+        barrier.mkdir(parents=True, exist_ok=True)
+        (barrier / "go").touch()
+        print(f"  barrier: {ready}/{len(procs)} streams ready after {time.time() - t0:.1f} s; released")
     for sname, (p, blog) in procs.items():
         p.wait()
         blog.close()

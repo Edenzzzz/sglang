@@ -174,13 +174,33 @@ class Router:
                 resp.set_status(up.status)
                 await resp.prepare(request)
                 first = True
+                tail = b""
                 async for chunk in up.content.iter_any():
                     if first:
                         w.inflight[rid]["prefill"] = 0
                         first = False
                     w.inflight[rid]["decode_left"] = max(0, w.inflight[rid]["decode_left"] - 1)
+                    tail = (tail + chunk)[-65536:]
                     await resp.write(chunk)
                 await resp.write_eof()
+            if self.log:
+                # The worker's own account of this request's prefix hit: the last data chunk's
+                # meta_info carries cached_tokens and prompt_tokens. This, not the router's
+                # block-hash estimate, is the cache-hit rate the replication argument rests on.
+                meta = {}
+                for line in reversed(tail.decode("utf-8", "replace").splitlines()):
+                    line = line.strip()
+                    if line.startswith("data:") and "meta_info" in line:
+                        try:
+                            meta = json.loads(line[5:].strip()).get("meta_info", {})
+                        except ValueError:
+                            pass
+                        break
+                if meta:
+                    self.log.write(json.dumps(dict(rid=rid, worker=i, done=time.time(),
+                                                   cached_tokens=meta.get("cached_tokens"),
+                                                   prompt_tokens=meta.get("prompt_tokens"))) + "\n")
+                    self.log.flush()
         finally:
             w.inflight.pop(rid, None)
         return resp

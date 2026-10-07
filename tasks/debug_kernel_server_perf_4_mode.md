@@ -195,13 +195,13 @@ Workload and serving:
 - [ ] **Context length where attention is >50% of e2e** -- not run.
 - [x] **TraceLab mixed scenario wired** (2026-10-07) -- agent_plus_shortchat on the pod; trace verified identical after shrinking.
 - [x] **Realistic serving, LPT baseline** (2026-10-07) -- clean, 0 fallbacks. [detail](#realistic-serving-ab-lpt-baseline-tracelab-agent--short-chat--2026-10-07)
-- [x] **Realistic serving, SPLIT arm** (2026-10-07) -- 3 interleaved rounds, gate PASS, 0 fallbacks:
+- [ ] **Realistic serving, SPLIT arm** -- RE-RUNNING with a stream start barrier: the absolute TTFTs below had an uncontrolled stream offset ([retraction](#stream-offset-confound--2026-10-07)). Earlier, 3 interleaved rounds, gate PASS, 0 fallbacks:
       codex TTFT -10.3%, ITL -7.6%, P99 ITL -18.5%, tput +5.6%; chat TTFT -16.2%. **Below the
       30% / 10% bar.** [detail](#realistic-serving-valid--2026-10-07) **Earlier run VOID (2026-10-07).** The -39.8% TTFT / +16.9% tput run
       computed the WRONG requests on FA3: the split plan handed `fa3_only_run` the FA2 rows'
       per-request arrays. Fixed; serving correctness gate added. No valid SPLIT serving number
       exists yet. [detail](#split-serving-void--2026-10-07)
-- [x] **4-mode MTP serving run** (2026-10-07) -- 3 interleaved rounds, gate PASS, 0 fallbacks. 4-mode + split vs
+- [ ] **4-mode MTP serving run** -- RE-RUNNING with the start barrier ([retraction](#stream-offset-confound--2026-10-07)). Earlier: 3 interleaved rounds, gate PASS, 0 fallbacks. 4-mode + split vs
       stock MTP: codex throughput **+27.8%**, ITL -17.4%, P99 TTFT -14.6%; chat ITL **-35.0%**, chat TTFT
       >=-50%. Clears the bar on chat latency and codex throughput, not on codex TTFT/ITL. Stock-MTP baseline
       overloaded in 1 of 3 rounds; load sweep queued. [detail](#four-mode-mtp-serving--2026-10-07)
@@ -213,6 +213,30 @@ Workload and serving:
 Cluster:
 - [ ] **Multi-node PD colocation, four points** -- design doc written, nothing measured.
       Delta: at most 4 nodes, so baselines are 2P2D and 1P3D.
+
+<a id="stream-offset-confound--2026-10-07"></a>
+### METHODOLOGY RETRACTION: multi-stream serving runs had an uncontrolled start offset — 2026-10-07
+
+**Found** while checking a non-monotonic chunk sweep. LPT chat mean TTFT measured 406 ms at
+chunk 4096, **18 759 ms** at 8192 (the 3-round repeats), and 221 ms at 16384. Rerunning 8192 on
+the same code today gave **1 205 ms**. Server arguments are identical except the random seed,
+and every server served its own requests (no bind failures). The difference is the client:
+`run_mixed_workloads.py` launches each stream as its own `bench_serving` process, and the codex
+stream tokenises 60 prompts of 32-49K tokens before it sends anything. The first big codex
+prefill therefore reached the server **36-45 s** after chat started in the repeats (one round
+190 s), but **12-25 s** after it today (`/dev/shm/w/startorder.py` over the server logs). Where
+the codex backlog of about 2.4M prefill tokens lands inside the 200-second chat stream decides
+how many chat requests queue behind it.
+
+**What this invalidates.** Absolute TTFT values in every multi-stream serving table here --
+the SPLIT vs LPT repeats, the 4-mode MTP A/B and the chunk sweep -- and therefore the size of
+the chat TTFT gains. Arms within a session were interleaved and mostly saw similar offsets, so
+the direction of each comparison is probably right, but its magnitude is not established.
+ITL and throughput are less offset-sensitive. They are not exempt.
+
+**Fix** (`d2fc14f8c`): a start barrier. Each stream tokenises and warms up, signals ready, and
+waits; the runner releases all streams together (`BENCH_BARRIER_DIR`; `BENCH_NO_BARRIER=1`
+reproduces the old race). All three serving A/Bs are being re-run with it.
 
 <a id="four-mode-mtp-serving--2026-10-07"></a>
 ### 4-mode MTP serving A/B: stock MTP vs the 4-mode step (FA2 / split) — 2026-10-07

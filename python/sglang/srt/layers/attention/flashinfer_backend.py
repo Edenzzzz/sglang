@@ -945,6 +945,18 @@ class FlashInferAttnBackend(AttentionBackend):
                 # NOTE(Wenxuan): on some H100 machines this throws fail to initialize TMA descriptor error. See https://github.com/flashinfer-ai/flashinfer/issues/2150
                 use_ragged = False
                 extend_no_prefix = False
+            # The two-executor split computes the WHOLE extend attention, prefix and new
+            # tokens, causal, from the paged cache -- the computation its kernel harness
+            # validates. In ragged mode the paged half sees the PREFIX only (non-causal) and
+            # the step's own K/V are written AFTER attention, so the split read unwritten
+            # (zero) slots: |got| = |ref| = 0 on prefix-free rows, measured in-server. Take
+            # the non-ragged mode (K/V saved first, one paged causal pass) for these steps,
+            # the mode sglang already uses whenever a step has <= 1 new token.
+            if getattr(self, "_fused_want", False) and os.environ.get(
+                "SGLANG_FUSED_FA3_SM_SPLIT", "0"
+            ) == "1":
+                use_ragged = False
+                extend_no_prefix = False
 
             # Process multi-item scoring in attention backend instead of ForwardBatch
             multi_item_params = MultiItemScoringParams()

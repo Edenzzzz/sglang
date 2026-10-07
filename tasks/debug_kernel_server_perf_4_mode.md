@@ -254,6 +254,40 @@ prompts' chunks start sharing mixed batches with decodes. A second fault remains
 serving split. Next: `SGLANG_SPLIT_VERIFY=1` recomputes every row of the first split steps
 in fp32 inside the server and logs the FA3-row and FA2-row errors separately.
 
+**Second and third faults (2026-10-07), found with `SGLANG_SPLIT_VERIFY=1`:**
+
+1. **Non-causal.** The FA3 port was `Is_causal=false`, the split planned FA2 `causal=False`,
+   and the harness reference was non-causal, so every kernel PASS validated the wrong mask.
+   Append rows (qo 3809 onto kv 12000): rel err 0.14 (layer 0) / 0.76 (layer 14). Fixed:
+   `FLASHINFER_FA3_CAUSAL=1` by default, causal harness reference and plans (flashinfer
+   `b0563ae`), causal split plans (sglang `2b92b58bb`).
+2. **Ragged mode.** After the causal fix the append row read 3.5e-3, but prefix-free FA3
+   rows reported |got| = |ref| = **0 exactly**: the reference read zeros too. sglang's normal
+   extend is *ragged*: a ragged causal kernel over the new tokens, plus the paged wrapper
+   over the **prefix only** (non-causal), merged by LSE. The step's own K/V are written
+   **after** attention. The split ran as that paged half but planned prefix+new causal, so
+   it read the step's unwritten slots. The verify shared the same cache, so it agreed with
+   the kernel; that is why the append row "passed". Fix: split steps take sglang's
+   non-ragged mode (K/V saved first, one paged causal pass over prefix+new), which is what
+   the kernel harness validates. sglang already uses that mode for steps with <=1 new token.
+   Steps where the split plan then declines run FA2 non-ragged, which is still correct.
+
+**Causal kernel numbers, TraceLab mixed batch** (`TL n_fa3:2` / `n_fa3:0`,
+`drivers/ab_parallel.sh`, flashinfer `b0563ae`, FA2 ring 2/3/1; all PASS against the causal
+fp32 reference, 0 unwritten, 0 fallbacks):
+
+| arm | total | vs FA2-all |
+|---|---|---|
+| FA2 on everything | 14 943.8 us | |
+| split, sequential | 11 419.2 us | **-23.6% (1.309x)** |
+| split, two-stream overlap | 11 286.5 us | **-24.5% (1.324x)** |
+| 512-token appends at 24-49K + 2 decode rows (`n_fa3:4`) | 2 582.6 us | PASS |
+| no-prefix prefill + appends (`qo:2048,3809,1,1 prefix:0,8191,12000,5000 n_fa3:2`) | 1 425.9 us | PASS |
+
+These supersede the non-causal 1.239x. With causal masking the overlap is worth -1.2%,
+not -2.7%. Every other non-causal kernel number in this doc (FA2 ring, multicast and
+reduction ceilings) still has to be re-measured causal.
+
 (`fa3_only_run`'s `q_indptr_per_req.index({n_fa3}).item<int>()` host sync is only on the
 `num_splits > 1` combine branch; serving passes 1, so it never runs there.)
 

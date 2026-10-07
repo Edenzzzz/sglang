@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.17.1 — EDF on the MTP server: order by deadline, do not cap chunks (2026-10-07)
+
+- Ablations at ITL SLO 30 ms (H200, chat 24/s; `mtp_edf.sh` with `ARMS=`). Every per-step
+  chunk-cap variant loses to no EDF: global EWMA, FCFS + cap, and the P90 slow-step allowance
+  (`SGLANG_EDF_ITL_QUANTILE`). Splitting prefill adds fixed-cost mixed steps that every decode row
+  waits through. Per-request EWMA collapses because the binding request's estimate is ~1.15 vs a
+  global ~1.6-1.9 (`EDF_BIND`).
+- **Deadline ordering alone (EDFP), 3 rounds:** chat TTFT -62%, codex P99 ITL -27%, chat P99 ITL
+  -10%, chat SLO attainment and goodput +8.6% (ranges disjoint); codex mean TTFT +43%, inside its
+  length-scaled SLO.
+
 ## v0.17.0 — EDF on the MTP server: acceptance length in the ITL budget (2026-10-07)
 
 - `edf_scheduler.py`: the per-step ITL budget is `ITL_SLO * tokens/step`, with three estimators

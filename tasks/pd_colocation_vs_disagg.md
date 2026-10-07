@@ -272,7 +272,23 @@ Traced run: `SGLANG_STEP_TRACE=1 SGLANG_EDF_ACCEPT_TRACE=1`, 0 fallbacks, 0 trac
       | EDFGQ | deadline | global EWMA, P90 allowance | 0.301 | 0.357 | 2 227 | 57.8 | 0.389 | 53.3 |
 
       - **Deadline ordering alone wins on every metric**: chat TTFT -59%, codex P99 ITL -34%,
-        chat SLO 0.706 -> 0.750, codex 0.972 -> 1.000. Replication (2 more rounds) running.
+        chat SLO 0.706 -> 0.750, codex 0.972 -> 1.000.
+      - [x] **Replicated, 3 rounds** (`rate24_itl30{,_r2,_r3}`; rounds 2-3 used
+        `ARMS="MTPMIX_SPLIT MTPMIX_SPLIT_EDFP"`, commit 863fb3212; 0 fallbacks and 0 tracebacks in all
+        six runs). Mean [min-max] over the rounds:
+
+        | metric | no EDF | EDFP (deadline order) | change |
+        |---|---|---|---|
+        | chat SLO attainment | 0.677 [0.658-0.706] | **0.735** [0.714-0.750] | +8.6%, ranges disjoint |
+        | chat goodput /s | 15.93 | **17.31** | +8.6% |
+        | chat mean TTFT ms | 479 [433-534] | **180** [172-191] | **-62%** |
+        | chat P99 ITL ms | 60.3 | **54.1** | -10% |
+        | codex P99 ITL ms | 49.2 [43.5-54.8] | **35.8** [28.9-39.7] | **-27%** |
+        | codex mean TTFT ms | 1 018 | 1 457 | +43%, still inside its length-scaled SLO |
+        | codex SLO attainment | 0.981 | **1.000** | |
+
+        Codex pays in TTFT for chat's TTFT. That is the trade the SLO definition licenses: a
+        40K-token prompt is allowed ~9 s.
       - **Any per-step chunk cap loses, with either ordering.** Splitting a chunk into k pieces
         adds k-1 mixed steps. Each costs ~7 ms plus 0.32 ms per running row (`mtp_step.json`) and
         delays every decode row. The deferred prefill still has to run, and under steady load

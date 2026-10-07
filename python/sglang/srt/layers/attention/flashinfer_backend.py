@@ -2449,7 +2449,9 @@ class FlashInferIndicesUpdaterDecode:
         self.kv_indptr = attn_backend.kv_indptr
         self.kv_last_page_len = attn_backend.kv_last_page_len
         self.req_to_token = model_runner.req_to_token_pool.req_to_token
-        self.qo_indptr = attn_backend.qo_indptr
+        # Absent on a decode-only backend (skip_prefill=True, e.g. the EAGLE multi-step draft
+        # backend), which never allocates prefill buffers.
+        self.qo_indptr = getattr(attn_backend, "qo_indptr", None)
         self.token_to_kv_pool_allocator = model_runner.token_to_kv_pool_allocator
 
         # Dispatch the update function

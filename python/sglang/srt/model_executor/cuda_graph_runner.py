@@ -586,7 +586,11 @@ class CudaGraphRunner:
                     # Save gemlite cache after each capture
                     save_gemlite_cache()
 
-                if self.enable_mixed_cuda_graph and self.mixed_capture_bs:
+                # getattr: the EAGLE draft runners borrow this method unbound
+                # (CudaGraphRunner.capture(self)) and never set up mixed-CG state.
+                if getattr(self, "enable_mixed_cuda_graph", False) and getattr(
+                    self, "mixed_capture_bs", None
+                ):
                     mixed_range = (
                         tqdm.tqdm(list(reversed(self.mixed_capture_bs)))
                         if get_tensor_model_parallel_rank() == 0

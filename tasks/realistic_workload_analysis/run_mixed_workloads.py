@@ -275,8 +275,18 @@ def run_method(method, scenario, outdir):
             env["SGLANG_TTFT_SLO_MS"] = os.environ.get("TTFT_SLO_MS", "5000")
             env["SGLANG_ITL_SLO_MS"] = os.environ.get("ITL_SLO_MS", "100")
             env["SGLANG_EDF_PLAN_OVERHEAD_MS"] = "0"
-            env["SGLANG_EDF_ACCEPT_MODE"] = {"EDF0": "none", "EDFG": "global",
-                                             "EDFR": "req"}[method.split("_")[-1]]
+            # Ablations: EDFP = deadline priority only (no latency model, so no chunk control);
+            # EDFGC = global-EWMA chunk control with FCFS admission (no priority scheduling);
+            # EDFGQ = global EWMA, quantile-aware chunk control (edf_scheduler.ITL_QUANTILE).
+            suf = method.split("_")[-1]
+            env["SGLANG_EDF_ACCEPT_MODE"] = {"EDF0": "none", "EDFG": "global", "EDFR": "req",
+                                             "EDFP": "none", "EDFGC": "global",
+                                             "EDFGQ": "global"}[suf]
+            if suf == "EDFGQ":
+                # chunk control only for requests past their P90 slow-step allowance
+                env["SGLANG_EDF_ITL_QUANTILE"] = "0.9"
+            if suf == "EDFP":
+                env["SGLANG_EDF_LATENCY_MODEL"] = ""
     elif method == "LPT_EDF":
         # Gated persistent kernel + SLO-aware chunk control driven by the
         # closed-form overlap cost model. Same EDF policy as the MLP path;
@@ -319,7 +329,7 @@ def run_method(method, scenario, outdir):
                          "--speculative-draft-model-path", "/dev/shm/w/qwen7b_eagle3_sgl",
                          "--speculative-num-steps", "3", "--speculative-eagle-topk", "1",
                          "--speculative-num-draft-tokens", "4"]
-        if method == "LPT_EDF" or "_EDF" in method:
+        if method == "LPT_EDF" or ("_EDF" in method and not method.endswith("_EDFGC")):
             args_srv += ["--enable-priority-scheduling",
                          "--schedule-low-priority-values-first",
                          "--priority-scheduling-preemption-threshold", "999999"]

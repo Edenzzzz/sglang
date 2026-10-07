@@ -83,6 +83,12 @@ _acc_global: Optional[float] = None
 # sums of absolute error for a=1, the global EWMA and the per-request EWMA.
 _acc_err = {"n": 0, "obs": 0.0, "one": 0.0, "global": 0.0, "req": 0.0}
 _bind = {"n": 0, "a": 0.0, "g": 0.0}
+# ITL attainment is usually a per-request quantile (P90 of a request's per-token gaps), so a
+# request can absorb a (1 - q) share of slow steps. With SGLANG_EDF_ITL_QUANTILE=q, a request
+# constrains the chunk budget only once its own over-SLO steps have used that allowance; until
+# then prefill is admitted in full chunks, which also avoids splitting it into more fixed-cost
+# mixed steps. Unset: every request constrains every step (the strict per-step controller).
+ITL_QUANTILE = float(os.environ.get("SGLANG_EDF_ITL_QUANTILE", "0") or 0)
 _ACC_LOG_EVERY = int(os.environ.get("SGLANG_EDF_ACCEPT_LOG_EVERY", "20000"))
 
 
@@ -95,9 +101,16 @@ def edf_observe_tokens(req: "Req") -> None:
     n = len(req.output_ids)
     prev = getattr(req, "_edf_prev_out", None)
     req._edf_prev_out = n
+    now = time.monotonic()
+    prev_t = getattr(req, "_edf_prev_obs_t", None)
+    req._edf_prev_obs_t = now
     if prev is None or n <= prev:
         return
     a = float(n - prev)
+    if prev_t is not None:
+        req._edf_steps = getattr(req, "_edf_steps", 0) + 1
+        if (now - prev_t) * 1000.0 / a > ITL_SLO_MS:
+            req._edf_slow = getattr(req, "_edf_slow", 0) + 1
     g = _acc_global
     r = getattr(req, "_edf_acc_hat", None)
     if g is not None:
@@ -315,6 +328,10 @@ def edf_compute_max_chunk_size(
     min_slack_ms = math.inf
     bind_a = 1.0
     for req in decode_reqs:
+        if ITL_QUANTILE > 0 and getattr(req, "_edf_slow", 0) + 1 <= (1.0 - ITL_QUANTILE) * (
+            getattr(req, "_edf_steps", 0) + 1
+        ):
+            continue
         last_t = getattr(req, "_edf_last_step_time", now)
         elapsed_ms = (now - last_t) * 1000.0
         a = edf_tokens_per_step(req)
@@ -329,6 +346,9 @@ def edf_compute_max_chunk_size(
     if _bind["n"] % 2000 == 0:
         logger.info("EDF_BIND decisions=%d mean_binding_a=%.3f mean_global_a=%.3f",
                     _bind["n"], _bind["a"] / _bind["n"], _bind["g"] / _bind["n"])
+
+    if min_slack_ms == math.inf:
+        return default_chunk_size  # no request is out of its slow-step allowance
 
     # If pure decode alone already exceeds slack, adding prefill can only deepen
     # the violation. A pure-decode step lets overdue requests catch up and

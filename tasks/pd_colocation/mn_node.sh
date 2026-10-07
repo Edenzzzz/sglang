@@ -60,6 +60,13 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
     export MOONCAKE_DEVICE=mlx5_$(( 1 + (ROLE * 2 + g) % 4 )) MOONCAKE_GLOBAL_SEGMENT_SIZE=${HC_SEGMENT:-32gb}
     ARGS+=(--enable-hierarchical-cache --hicache-storage-backend mooncake)
   fi
+  # Worker-side EDF: deadline-ordered admission with no chunk cap (no latency model), the
+  # configuration that won on the MTP server (pd_colocation_vs_disagg.md point 3).
+  if [ "${EDF:-0}" = 1 ]; then
+    export SGLANG_EDF_SCHEDULING=1 SGLANG_TTFT_SLO_MS=${TTFT_SLO_MS:-2000} SGLANG_EDF_LATENCY_MODEL=
+    ARGS+=(--enable-priority-scheduling --schedule-low-priority-values-first
+           --priority-scheduling-preemption-threshold 999999)
+  fi
   case $MODE in
     coloc) ARGS+=(--enable-mixed-chunk) ;;
     prefill|decode)

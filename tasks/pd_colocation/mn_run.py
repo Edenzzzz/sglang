@@ -58,16 +58,22 @@ KILL = ("for p in $(ps -eo pid,cmd | grep -E 'sglang.launch_server|sglang::|sgla
 
 
 def run_arm(arm):
-    # <arm>_hc: the same arm with a cluster-wide mooncake L3 prefix store (mn_node.sh HC_MASTER).
-    hc = arm.endswith("_hc")
-    layout, router = ARMS[arm[:-3] if hc else arm]
+    # Suffixes: _hc adds a cluster-wide mooncake L3 prefix store (mn_node.sh HC_MASTER);
+    # _edf runs deadline-ordered admission on every worker (mn_node.sh EDF).
+    base, hc, edf = arm, False, False
+    while base.endswith(("_hc", "_edf")):
+        if base.endswith("_hc"):
+            hc, base = True, base[:-3]
+        else:
+            edf, base = True, base[:-4]
+    layout, router = ARMS[base]
     log = f"{W}/mn/{arm}"
-    print(f"=== {arm}: layout={layout} router={router} l3_store={hc}", flush=True)
+    print(f"=== {arm}: layout={layout} router={router} l3_store={hc} worker_edf={edf}", flush=True)
     C.run_all(KILL)
     # bench_serving APPENDS to its output file and mn_summary reads the last line, so a stale
     # directory would let a failed arm report the previous run's numbers.
     C.run_all(f"rm -rf {log}")
-    env = f"KERNEL={os.environ.get('KERNEL', 'lpt')}"
+    env = f"KERNEL={os.environ.get('KERNEL', 'lpt')} EDF={int(edf)} TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')}"
     if hc:
         rc, out = C.run(0, f"mkdir -p {log}; ip=$(hostname -I | tr ' ' '\\n' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1); "
                            "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\")); "
@@ -147,7 +153,36 @@ def run_arm(arm):
     C.run_all(KILL)
 
 
+def calibrate():
+    """Fit router.py's PerfModel on one H20 colocated worker (pod 0, GPU 0) with
+    calibrate_h20.py; prints the ROUTER_ARGS line for the cache_slo arms."""
+    log = f"{W}/mn/calibrate"
+    print("=== calibrate", flush=True)
+    C.run_all(KILL)
+    C.run(0, f"rm -rf {log}; mkdir -p {log}; KERNEL=lpt EDF=0 bash {W}/tasks/pd_colocation/mn_node.sh coloc {log}")
+    hs = hosts()
+    t0 = time.time()
+    while time.time() - t0 < 900:
+        time.sleep(20)
+        rc, out = C.run(0, f"cat {log}/ports_r0_g0.txt 2>/dev/null")
+        rows = [l.split() for l in out.splitlines() if len(l.split()) == 3]
+        if not rows:
+            continue
+        url = f"http://[{hs[0]}]:{rows[-1][1]}"
+        rc, out = C.run(0, f"curl -sg -o /dev/null -w '%{{http_code}}' --max-time 3 {url}/health")
+        if out.strip().endswith("200"):
+            break
+    C.run(0, f"setsid -f {W}/venv/bin/python {W}/tasks/pd_colocation/calibrate_h20.py {url} > {log}/calibrate.log 2>&1 < /dev/null; echo started")
+    while time.time() - t0 < 2400:
+        time.sleep(30)
+        rc, out = C.run(0, f"cat {log}/calibrate.log")
+        if "ROUTER_ARGS=" in out or "Traceback" in out:
+            break
+    print("  " + "\n  ".join(l for l in out.splitlines() if l.startswith(("prefill", "decode", "ROUTER_ARGS", "Trace"))), flush=True)
+    C.run_all(KILL)
+
+
 if __name__ == "__main__":
     for arm in sys.argv[1:]:
-        run_arm(arm)
+        calibrate() if arm == "calibrate" else run_arm(arm)
     print("MNRUNDONE", flush=True)

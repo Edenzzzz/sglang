@@ -157,7 +157,10 @@ class Router:
         payload = await request.json()
         hashes, blk, n_tok = block_hashes(payload)
         out_tok = int((payload.get("sampling_params") or {}).get("max_new_tokens", 128))
-        deadline = time.time() + self.a.ttft_slo_ms / 1000.0
+        # Same length-scaled TTFT SLO the workers' EDF schedules against
+        # (edf_scheduler.compute_ttft_slo_ms): base + 1 s per 5 000 prompt tokens beyond 4 096.
+        slo_ms = self.a.ttft_slo_ms + max(0, n_tok - 4096) / 5000.0 * 1000.0
+        deadline = time.time() + slo_ms / 1000.0
         i, info = self.choose(hashes, blk, n_tok, deadline)
         w = self.workers[i]
         self.rid += 1

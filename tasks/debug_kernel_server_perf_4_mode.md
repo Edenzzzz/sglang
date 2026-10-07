@@ -314,6 +314,27 @@ because a rate-limited sweep can only serve what it offers. At 28/s stock MTP fa
 of the offered chat rate (1 901 tok/s) and the split arm serves 1 957 tok/s. The capacity claim
 needs a closed-loop test: `drivers/mtp_saturate.sh` (both tenants at infinite rate, 3 rounds).
 
+**Capacity, closed loop** (`drivers/mtp_saturate.sh`: scenario `agent_chat_saturate`, 36 codex
+sessions and 3 200 chat requests all submitted at once; 3 interleaved rounds with the start
+barrier; every arm 0 fallbacks, 0 tracebacks; acceptance 2.13-2.18 in every arm;
+`repsum.py --root /dev/shm/w/mtpsat --base MTP_LPT`):
+
+| metric | MTP_LPT (stock) | MTPMIX_LPT | **MTPMIX_SPLIT** |
+|---|---|---|---|
+| chat output tok/s | 1 364.9 [1 302.0-1 419.6] | 1 398.0 (+2.4%) | **1 645.1 [1 622.1-1 666.9] (+20.5%)** |
+| codex output tok/s | 315.9 [287.9-338.8] | 295.8 (-6.3%) | **369.3 [351.1-389.3] (+16.9%)** |
+| **total output tok/s** | 1 680.8 | 1 693.8 (+0.8%) | **2 014.4 (+19.8%)** |
+| codex mean ITL ms | 49.8 | 41.3 (-17.2%) | **34.8 (-30.2%)** |
+| chat mean ITL ms | 22.4 | 22.0 (-1.8%) | 18.6 (-16.9%) |
+| chat P99 ITL ms | 120.3 | 103.0 (-14.4%) | 92.6 (-23.0%) |
+| chat mean TTFT s | 124.7 | 119.9 (-3.9%) | 100.8 (-19.2%) |
+| codex mean TTFT s | 15.5 | 17.8 (+15.0%) | 18.8 (**+21.3%**) |
+
+**Capacity rises ~20%**, with non-overlapping ranges on both tenants -- double the 10% bar.
+Codex TTFT is worse because under a closed loop TTFT is queue position: the split arm drains
+20% more chat through the same queue ahead of codex turns. It is reported as measured, not
+excluded. Mixing without the split adds no capacity (+0.8%).
+
 <a id="mtp-barrier--2026-10-07"></a>
 ### 4-mode MTP A/B re-run with the stream start barrier — SUPERSEDES the table below — 2026-10-07
 

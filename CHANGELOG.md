@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.16.0 — 4-mode MTP clears the bar: latency under load, ~20% capacity (2026-10-07)
+
+- **MTP load sweep** (chat 4-28/s, both tenants rate-limited, barrier, 0 fallbacks): the
+  4-mode + split gain grows with load. At 20/s all four headline latency metrics beat stock MTP
+  by >=30% on both tenants (codex TTFT -48%, ITL -33%; chat TTFT -87%, ITL -39%). Mixing without
+  the split regresses at every load.
+- **MTP capacity, closed loop** (3 rounds): total output throughput **+19.8%** (chat +20.5%,
+  codex +16.9%, non-overlapping ranges); codex ITL -30%. Codex TTFT is +21% under saturation
+  (queue position), reported as measured.
+- H20 multi-node study: cache-affinity routing beats round-robin by 8.4x on agent TTFT and
+  ~90x on chat TTFT (72.9% worker-reported cache hit). sglang's own `cache_aware` router is a
+  strong baseline: better chat TTFT tails, worse ITL tails than ours. The SLO veto needs
+  calibrated H20 constants (0 vetoes with placeholders).
+
 ## v0.15.1 — Stream start barrier; serving results re-measured (2026-10-07)
 
 - **Methodology fix:** multi-stream serving runs had an uncontrolled stream start offset (12-45 s,

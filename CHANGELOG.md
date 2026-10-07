@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.17.2 — Full stack vs stock MTP: every TTFT/ITL metric >=30% better, 3 rounds (2026-10-08)
+
+- 4-mode split + deadline order vs stock sglang MTP at chat 24/s + codex: chat TTFT -95%,
+  chat ITL -42% (P99 -35%), codex TTFT -51%, codex ITL -38% (P99 -34%). Chat SLO attainment and
+  goodput 3.4x. Output throughput is equal, since both arms serve the offered rate; the capacity
+  gain is the v0.16.0 closed-loop +19.8%. Commands and SHAs are in pd_colocation_vs_disagg.md
+  point 3.
+
 ## v0.17.1 — EDF on the MTP server: order by deadline, do not cap chunks (2026-10-07)
 
 - Ablations at ITL SLO 30 ms (H200, chat 24/s; `mtp_edf.sh` with `ARMS=`). Every per-step

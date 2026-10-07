@@ -289,6 +289,29 @@ Traced run: `SGLANG_STEP_TRACE=1 SGLANG_EDF_ACCEPT_TRACE=1`, 0 fallbacks, 0 trac
 
         Codex pays in TTFT for chat's TTFT. That is the trade the SLO definition licenses: a
         40K-token prompt is allowed ~9 s.
+      - [x] **Full stack vs stock sglang MTP, 3 rounds (2026-10-08).** The stack is the 4-mode step
+        on the FA3/FA2 split plus deadline order (EDFP). Stock is `MTP_LPT`: same EAGLE3 draft, no
+        prefill/verify mixing, FCFS. Same load (chat 24/s + codex 0.1 sessions/s), barrier. Stock
+        rounds: `TAG=_itl30{,_r2,_r3} ARMS=MTP_LPT mtp_edf.sh 24 2000 30` (commit bf96b6cd3).
+        0 fallbacks and 0 tracebacks; every request completed in every run. Means:
+
+        | metric | stock MTP | full stack | change |
+        |---|---|---|---|
+        | chat TTFT ms | 3 684 | **180** | **-95.1%** |
+        | chat mean ITL ms | 22.15 | **12.86** | **-41.9%** |
+        | chat P99 ITL ms | 83.2 | **54.1** | **-35.0%** |
+        | codex TTFT ms | 2 991 | **1 457** | **-51.3%** |
+        | codex mean ITL ms | 11.25 | **7.01** | **-37.7%** |
+        | codex P99 ITL ms | 54.5 | **35.8** | **-34.3%** |
+        | chat SLO attainment (TTFT scaled, ITL 30 ms) | 0.216 | **0.735** | 3.4x |
+        | chat goodput /s | 5.08 | **17.31** | 3.4x |
+        | output tok/s (chat / codex) | 1 686.7 / 126.1 | 1 691.2 / 125.8 | equal: both serve the offered rate |
+
+        Every TTFT and ITL metric clears the 30% bar on both tenants. Throughput cannot differ at
+        a fixed offered rate below both arms' capacity. The throughput claim is the closed-loop
+        capacity run (debug_kernel_server_perf_4_mode.md, v0.16.0: +19.8% total). Correctness: the
+        4-mode split passed `drivers/srv_correctness.py`. EDFP changes only admission order, not
+        the computation.
       - **Any per-step chunk cap loses, with either ordering.** Splitting a chunk into k pieces
         adds k-1 mixed steps. Each costs ~7 ms plus 0.32 ms per running row (`mtp_step.json`) and
         delays every decode row. The deferred prefill still has to run, and under steady load

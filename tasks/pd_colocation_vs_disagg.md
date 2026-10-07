@@ -45,6 +45,41 @@ predictable from the batch's shape**. Two measured results support that, and one
 
 ---
 
+## Multi-node measurements (H20, 8 pods x 2 GPUs = 16 workers) — 2026-10-07, in progress
+
+Setup: merlin job `c2fb3965f36cd15f` (cn-seed, trial vibecuda), 8 pods x 2 H20, one
+Qwen2.5-7B-Instruct TP1 worker per GPU (persistent FA2 kernel in every arm, so arms differ only
+in placement and routing). Pods 0/5/6/7 share one physical host. Workload
+(`tasks/pd_colocation/mn_bench.sh`, start barrier): 64 TraceLab sessions x 6 turns at
+0.5 sessions/s, replaying recorded inter-turn gaps x0.1, where each turn extends the previous
+prompt (16-49K tokens); plus random-ids chat at 16 req/s (3 200 requests, 512 -> 128 tokens).
+Driver: `SESSIONS=64 TURNS=6 SESSION_RATE=0.5 SLOWDOWN=0.1 CHAT_RATE=16 CHAT_N=3200 python
+tasks/pd_colocation/mn_run.py <arms>`; audit: `mn_audit.py` (every pod's worker logs).
+"Worker-reported hit" is the sum of sglang's own `meta_info.cached_tokens` over the sum of
+`prompt_tokens`, recorded per request by the router.
+
+| arm | agent TTFT ms (mean / P99) | agent ITL ms | chat TTFT ms (mean / P99) | chat ITL ms | worker-reported hit | requests/worker |
+|---|---|---|---|---|---|---|
+| coloc_rr (round-robin) | 13 185 / 60 744 | 24.2 | 9 832 / 58 533 | 27.1 | (not logged; re-run queued) | 224-226 |
+| coloc_cache (affinity, load tie-break) | **1 573 / 8 693** | **7.4** | **109 / 1 473** | **6.3** | **72.9%** (router predicted 71.4%) | 117-365 |
+| coloc_rand (affinity, RANDOM tie-break) | 1 705 / 11 011 | 9.5 | 487 / 7 931 | 8.7 | 72.8% | 203-250 |
+
+All arms: 0 tracebacks, 0 fallbacks across all 16 workers.
+
+**Reading so far.**
+- **Cache affinity is the dominant effect**: agent TTFT 8.4x lower and chat TTFT 90x lower than
+  round-robin, with about 73% of all prompt tokens served from cache. Round-robin recomputes every
+  session's prefix wherever its next turn lands, and that prefill interferes with decode
+  everywhere (ITL 24-27 ms vs 6-7 ms).
+- The router's block-hash prefix estimate matches the workers' own count within 1.5 points, so
+  it is good enough to route on.
+- **Affinity concentrates load** (117-365 requests per worker) -- the hotspot the SLO veto exists
+  to bound.
+- **coloc_rand result is from a flawed tie-break and is superseded.** Purely random choice
+  among equal-hit workers sent prefix-less chat requests (all workers tie at hit 0) to busy
+  workers. Load is spread better (203-250), but chat TTFT is 4.5x worse. The router now breaks
+  ties by load, then randomly (`router.py`); coloc_rand will be re-run with it.
+
 ## 1. Route to the highest cache-hit node first, with an EDF/SLO veto
 
 **The disagg baseline.** PD disaggregation picks a *prefill* node first, because prefill and

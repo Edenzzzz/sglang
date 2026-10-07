@@ -177,6 +177,13 @@ SCENARIOS = {
                     "chat": chat(int(200 * float(os.environ.get("CHAT_RATE", "8"))),
                                  float(os.environ.get("CHAT_RATE", "8")), 512, 96)},
     },
+    # Capacity: BOTH tenants submit everything at once (closed loop to the server's queue), so
+    # served throughput IS the capacity. A rate-limited sweep cannot show a throughput gain
+    # until the baseline saturates, and then only up to the offered rate.
+    "agent_chat_saturate": {
+        "desc": "capacity: agent + short chat, both tenants at infinite rate",
+        "streams": {"codex": codex(36, groups=8), "chat": chat(3200, "inf", 512, 96)},
+    },
     # Control: the measured parity region. Many short rows give BatchPrefill
     # plenty of query tiles, so the gate should decline persistent throughout.
     "shortchat_only": {

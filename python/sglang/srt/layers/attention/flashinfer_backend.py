@@ -1599,8 +1599,9 @@ class FlashInferAttnBackend(AttentionBackend):
     def _nsd_for(self, fused, n_fa3_rows, dev):
         """Per-request split counts from upstream's own heuristic, not all-ones."""
         import math as _m
-        kv = fused["kv_lens_req"][:n_fa3_rows].tolist()
-        qlens = fused["q_indptr_req"].diff()[:n_fa3_rows].tolist()
+        # Host arrays from the plan: .tolist() on the device tensors synced every step.
+        kv = fused["kv_lens_host"][:n_fa3_rows].tolist()
+        qlens = fused["q_lens_host"][:n_fa3_rows].tolist()
         g = self.num_qo_heads // self.num_kv_heads
         nsm = self._fused_num_sm()
         out = []
@@ -1637,7 +1638,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 # Host-side values only: after an illegal access the CUDA context is
                 # poisoned and any device->host copy here would itself throw. The qo and
                 # prefix lengths above are enough to rebuild the batch in the harness.
-                scratch_key=_np.array(sc["key"] if sc else (), dtype=_np.int64),
+                scratch_key=_np.array([sc["pt"].numel(), sc["plse"].numel()] if sc else (), dtype=_np.int64),
             )
             logger.error("SPLIT FAULT in %s; batch saved to %s", which,
                          os.environ["SGLANG_SPLIT_FAULT_DUMP"])
@@ -1699,31 +1700,46 @@ class FlashInferAttnBackend(AttentionBackend):
         logger.warning("SPLIT_VERIFY rows (i, side, qo, kv, err, |got|, |ref|): %s", rows_dbg)
 
     def _two_exec_scratch(self, q, fused, n_fa3_rows):
-        """Per-step scratch for the two-executor FA3 launch, cached across layers.
+        """Scratch for the two-executor FA3 launch, grow-only across steps.
 
-        Keyed on the shapes that determine the buffer sizes. ``fill`` is True only for the
-        first layer of a step: every layer shares one KV layout, so the ragged->dense page
-        table is scattered once and reused, which removes 27 of the 28 scatter launches.
+        It used to be keyed on the exact (n_req, max_pages, total_q) of the step, which
+        changes almost every mixed step, so each one reallocated and -1-filled the page
+        table. Buffers now grow geometrically and are reused. A larger page table is safe:
+        the launch passes the row stride (max_pages) explicitly, and entries left from
+        earlier steps lie beyond each row's length, so they are never read. The per-step
+        parts (split counts, request list) are rebuilt from host arrays without a sync.
         """
-        n_req = int(fused["q_indptr_req"].numel() - 1)
-        max_pages = int(fused["max_pages"])
-        total_q = int(q.shape[0])
-        key = (n_req, max_pages, total_q, n_fa3_rows, self.num_qo_heads)
+        dev = q.device
+        hd = self.head_dim
+        need_pt = int(fused["q_indptr_req"].numel() - 1) * int(fused["max_pages"])
+        need_q = int(q.shape[0])
         sc = getattr(self, "_two_exec_sc", None)
-        if sc is None or sc.get("key") != key:
-            dev = q.device
-            hd = self.head_dim
-            sc = {
-                "key": key,
-                "pt": torch.full((n_req * max_pages,), -1, dtype=torch.int32, device=dev),
-                # upstream's varlen partial layout: [num_splits, num_heads, total_q, hd]
-                "po": torch.empty(total_q * hd * self.num_qo_heads, dtype=torch.float32, device=dev),
-                "plse": torch.empty(total_q * self.num_qo_heads, dtype=torch.float32, device=dev),
-                "nsd": self._nsd_for(fused, n_fa3_rows, dev),
-                "sem": torch.zeros(1, dtype=torch.int32, device=dev),
-                "reqs": torch.arange(n_fa3_rows, dtype=torch.int32, device=dev),
-            }
-            self._two_exec_sc = sc
+        if sc is None or sc["pt"].numel() < need_pt:
+            pt = torch.full((max(need_pt, 1) * 3 // 2 + 1,), -1, dtype=torch.int32, device=dev)
+        else:
+            pt = sc["pt"]
+        if sc is None or sc["plse"].numel() < need_q * self.num_qo_heads:
+            cap_q = need_q * 3 // 2 + 1
+            # upstream's varlen partial layout: [num_splits, num_heads, total_q, hd]
+            po = torch.empty(cap_q * hd * self.num_qo_heads, dtype=torch.float32, device=dev)
+            plse = torch.empty(cap_q * self.num_qo_heads, dtype=torch.float32, device=dev)
+        else:
+            po, plse = sc["po"], sc["plse"]
+        if sc is None or sc["reqs_all"].numel() < n_fa3_rows:
+            reqs_all = torch.arange(max(n_fa3_rows, 64) * 2, dtype=torch.int32, device=dev)
+        else:
+            reqs_all = sc["reqs_all"]
+        sem = sc["sem"] if sc is not None else torch.zeros(1, dtype=torch.int32, device=dev)
+        step_key = id(fused)
+        if sc is None or sc.get("step") != step_key:
+            nsd = self._nsd_for(fused, n_fa3_rows, dev)
+        else:
+            nsd = sc["nsd"]
+        sc = {
+            "step": step_key, "pt": pt, "po": po, "plse": plse, "sem": sem,
+            "reqs_all": reqs_all, "reqs": reqs_all[:n_fa3_rows], "nsd": nsd,
+        }
+        self._two_exec_sc = sc
         return sc
 
     # ---- fused FA3 + FA2 SM pre-assignment -------------------------------
@@ -2040,8 +2056,10 @@ class FlashInferAttnBackend(AttentionBackend):
         # Re-planning is the dominant cost of this path: two full plans, each
         # with its own H2D copy. Skip it when the layout that determines both
         # plans is unchanged from the previous step.
-        key = (n_rows, int(sm_fa3), int(qo[:n_rows].sum()), int(kv[:n_rows].sum()),
-               int(qo[n_rows:].sum()), int(kv[n_rows:].sum()), int(qo.size))
+        # Exact per-row lengths, not sums. A key of sums lets a later step with the same
+        # totals but a different row distribution reuse this step's per-request arrays and
+        # FA2 plan -- silently wrong attention, with nothing to flag it.
+        key = (n_rows, int(sm_fa3), qo.tobytes(), kv.tobytes())
         if st.get("key") == key and st.get("plan") is not None:
             cached = dict(st["plan"])
             cached["kv_indices"] = kv_indices
@@ -2146,6 +2164,9 @@ class FlashInferAttnBackend(AttentionBackend):
             q_indptr_req=torch.from_numpy(qo_c.copy()).to(kv_indices.device),
             # Per-request PAGE offsets for the dense page-table scatter (page_size 1).
             kv_indptr_req=torch.from_numpy(kv_c.copy()).to(kv_indices.device),
+            # Host copies, so per-step helpers never read the device tensors back.
+            kv_lens_host=np.maximum(kv, 1).astype(np.int64),
+            q_lens_host=qo.astype(np.int64),
             # Constraint 3: FA3 takes vector-sparse offsets, not page ids.
             fa3_sparse=None if _two_exec else self._fa3_sparse_indices(
                 st["fa3"], forward_batch.token_to_kv_pool.get_kv_buffer(0)
@@ -2198,15 +2219,20 @@ class FlashInferAttnBackend(AttentionBackend):
             lens = seq_lens[:B].to(dev, torch.int64)
             total = int(kv_cumsum[-1])
             # kv_cumsum comes from the host-side plan; it must agree with the
-            # device-side seq_lens or the two sides disagree about addressing.
-            if int(lens.sum()) != total:
+            # batch's seq_lens or the two sides disagree about addressing. Checked
+            # against the HOST copy: summing the device tensor was a device-to-host
+            # sync on every mixed step, part of the split's +0.58 ms host gap over LPT.
+            host_lens = forward_batch.seq_lens_cpu
+            host_total = int(host_lens[:B].sum()) if host_lens is not None else total
+            if host_total != total:
                 logger.warning(
                     "fused: seq_lens sum %d != plan page total %d; declining",
-                    int(lens.sum()), total,
+                    host_total, total,
                 )
                 return None
+            # output_size given, so repeat_interleave needs no sync to size its output.
             row = torch.repeat_interleave(
-                torch.arange(B, device=dev, dtype=torch.int64), lens
+                torch.arange(B, device=dev, dtype=torch.int64), lens, output_size=total
             )
             starts = torch.cumsum(lens, 0) - lens
             off = torch.arange(total, device=dev, dtype=torch.int64) - starts[row]

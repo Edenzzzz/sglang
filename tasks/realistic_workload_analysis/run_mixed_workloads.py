@@ -282,6 +282,9 @@ def run_method(method, scenario, outdir):
                     "--context-length", "131072", "--json-model-override-args",
                     '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}',
                     "--watchdog-timeout", "600"]
+        if os.environ.get("BENCH_CHUNK"):
+            # Chunked-prefill size sweep; unset keeps sglang's default (8192 here).
+            args_srv += ["--chunked-prefill-size", os.environ["BENCH_CHUNK"]]
         if method.startswith("MTP"):
             args_srv += ["--speculative-algorithm", "EAGLE3",
                          "--speculative-draft-model-path", "/dev/shm/w/qwen7b_eagle3_sgl",

@@ -2010,8 +2010,9 @@ One line each; the evidence is in the linked detail section. Every item must be 
 - [x] **Fused spec tree-build epilogue — built 2026-10-07** as a draft-tail kernel (the attention-epilogue design is retracted), exact vs sglang, and wired into the worker behind `SGLANG_FUSED_TREE_BUILD=1` (`f1985ca8f`). Serving gate (2026-10-07): PASS vs
       LPT (long 101/52/101/43); vs stock MTP **10 of 12 requests identical to 101 tokens**, l3 diverges at 43
       and s1 at 77. Late divergences of this kind also appear LPT-vs-LPT (batching timing), so they are
-      not evidence against the kernel's bit-exactness (~150 cases, kernel level). An MTP-vs-MTP rerun is
-      queued to establish that floor. 0 fallbacks. [detail](#fused-tree-build--2026-10-07)
+      not evidence against the kernel's bit-exactness (~150 cases, kernel level). **Confirmed 2026-10-07:** a
+      second stock-MTP run diverges from the first at exactly the same points (long 43, short 77), so the
+      fused build is serving-level exact, within the spec path's own run-to-run noise. 0 fallbacks. [detail](#fused-tree-build--2026-10-07)
       [detail](#fused-epilogue-design)
 - [x] **Async/tiled packed copies — SUPERSEDED 2026-10-07.** These were the fused kernel's wgmma-role
       copies (single-warp width, per-row O store). The fused design is closed on measurement, and the

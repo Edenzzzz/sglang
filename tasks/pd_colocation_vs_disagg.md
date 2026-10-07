@@ -6,8 +6,13 @@ appends, ~480-token outputs, mixed with chat and math).
 
 Tasks, in priority order:
 
-- [ ] **1. Cache-hit-first routing with an SLO veto** — design below; needs a router
-      experiment to validate.
+- [ ] **1. Cache-hit-first routing with an SLO veto** — router BUILT (2026-10-07,
+      `tasks/pd_colocation/router.py`; policies rr / cache / cache_rand / cache_slo, optional EDF
+      priorities). Fake-worker check (`router_test.py`): cache sends all 24 requests to the holder
+      (the hotspot); cache_slo keeps the holder while predicted TTFT stays under budget
+      (220 -> 295 ms), vetoes at 300 ms, and the request goes to another worker, which then holds the
+      prefix too. That is a second replica, created by the veto without any migration step (point
+      2). Needs the multi-node run.
 - [ ] **2. Best-effort cache migration and why colocation replicates better** — design below;
       the replication claim needs measurement.
 - [ ] **3. EDF predictor using EWMA acceptance length to predict TPOT** — perf model fitted

@@ -256,6 +256,23 @@ Workload and serving:
       ITL (-45% to -48%). P99 ITL also improves (-15% / -31%); codex clears 30%, chat does not.
       The small chunk is the fix for the 4-mode step's tail: it bounds how much prefill attention
       any one verify step waits behind.
+      **Prefix-aware chunk (attention budget), 3 rounds** (`SGLANG_CHUNK_ATTN_BUDGET=166000000`, c23101d1d: cap
+      n so n*(r + n/2) <= budget; floor 1 024; only while rows are running). Full stack, `TAG=_long_budget*`:
+
+      | full stack | chunk 8 192 | chunk 2 048 | attention budget |
+      |---|---|---|---|
+      | chat / codex P99 ITL ms | 259.6 / 159.7 | **143.2** / 104.3 | 258.1 / **91.1** |
+      | chat / codex TTFT ms | **1 815 / 10 690** | 3 708 / 16 586 | 2 039 / 12 747 |
+      | chat / codex tok/s | 854 / 214 | 851 / 203 | 854 / 212 |
+
+      **The budget fixes codex's tail (91 ms, the best of any setting) at little TTFT cost, but not
+      chat's.** Chat prompts have no prefix, so the budget leaves their chunks at full size, and
+      a full chunk of fresh 512-token prompts is GEMM-bound, not attention-bound. So "attention
+      stalls the verify rows" was half the story. The chat tail is chunk TOKEN count. Short
+      context (chat 24/s, ITL 30 ms): unchanged (chat SLO 0.735 vs 0.714-0.750 over 3 earlier
+      rounds), so the cap costs nothing where it does not bind. Next: bound the chunk's predicted
+      TIME, c_tok*n + c_attn*n*(r + n/2) with the fitted step coefficients
+      (`SGLANG_CHUNK_MS_BUDGET=47`, e75b2466e), which covers both terms.
       **Chat 8/s, default chunk, 3 rounds** (`TAG=_long{,_r2,_r3} mtp_edf.sh 8 2000 30`, 0 fallbacks, all
       completed). Stock MTP still cannot keep up (chat 487 of ~576 offered tok/s); the full stack can:
 

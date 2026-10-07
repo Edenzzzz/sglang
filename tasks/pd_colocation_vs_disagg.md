@@ -260,10 +260,31 @@ Traced run: `SGLANG_STEP_TRACE=1 SGLANG_EDF_ACCEPT_TRACE=1`, 0 fallbacks, 0 trac
         (3 800 vs 3 200). The per-step cap spreads the same prefill over more mixed steps. Each
         pays a fixed cost and slows every decode row, while the cap only sees this step's slack
         and ignores that deferred prefill still has to run later.
-- [ ] **Ablations and a quantile-aware controller.** EDFP: deadline priority only. EDFGC: chunk
-      cap with FCFS admission. EDFGQ: a request constrains the cap only once its own over-SLO
-      steps exceed the P90 allowance (`SGLANG_EDF_ITL_QUANTILE=0.9`). Running, same command
-      with `ARMS=...`.
+- [x] **Ablations: deadline ORDER helps; the per-step chunk CAP is what hurts (2026-10-07).**
+      Same load, same SLO (ITL 30 ms, scaled TTFT), same command with `ARMS=...`; one round each.
+
+      | arm | priority | chunk cap | chat SLO | chat ITL ok | chat TTFT ms | chat P99 ITL ms | codex SLO | codex P99 ITL ms |
+      |---|---|---|---|---|---|---|---|---|
+      | no EDF | FCFS | none | 0.706 | 0.723 | 433 | 58.8 | 0.972 | 43.5 |
+      | **EDFP** | deadline | none | **0.750** | **0.750** | **178** | **53.6** | **1.000** | **28.9** |
+      | EDFGC | FCFS | global EWMA | 0.381 | 0.499 | 2 657 | 58.4 | 0.861 | 43.3 |
+      | EDFG | deadline | global EWMA | 0.359 | 0.409 | 1 637 | 56.5 | 0.417 | 52.3 |
+      | EDFGQ | deadline | global EWMA, P90 allowance | 0.301 | 0.357 | 2 227 | 57.8 | 0.389 | 53.3 |
+
+      - **Deadline ordering alone wins on every metric**: chat TTFT -59%, codex P99 ITL -34%,
+        chat SLO 0.706 -> 0.750, codex 0.972 -> 1.000. Replication (2 more rounds) running.
+      - **Any per-step chunk cap loses, with either ordering.** Splitting a chunk into k pieces
+        adds k-1 mixed steps. Each costs ~7 ms plus 0.32 ms per running row (`mtp_step.json`) and
+        delays every decode row. The deferred prefill still has to run, and under steady load
+        there is no idle step to defer it into.
+      - **Gating the cap on a P90 slow-step allowance does not rescue it.** More than 10% of steps
+        already exceed 30 ms per token, so most requests use up their allowance early. From then
+        on the cap applies, and it creates more slow steps.
+      - **What this means for point 3.** The predictor does not earn its keep by throttling chunks
+        inside a node. The accurate step model and acceptance EWMA matter where a decision is a
+        real choice between alternatives, not a delay of work that must happen anyway: the
+        router's admission/SLO veto across nodes (point 1). The in-node scheduler should order by
+        deadline and stay work-conserving.
 
 ## 4. Two-way RDMA: a complete graph instead of a bipartite one
 

@@ -2001,7 +2001,21 @@ One line each; detail in [`realistic_workload_analysis.md`](realistic_workload_a
 - [ ] **4-mode MTP serving run** — EAGLE draft built, unused; blocked on `mix_with_running`.
       [detail](#four-mode-blocked)
 - [ ] **The bar: >=30% TTFT/ITL, >=10% throughput** — zero data.
-- [ ] **CUDA-graph capture** — needs the routing decision in device memory with exit-early
+- [x] **CUDA-graph capture -- ceiling measured, then a host-cost finding** (2026-10-07). Traced serving, one
+      round each (`SGLANG_STEP_TRACE=1`, `tasks/perf_model/steptrace_gap.py`, sglang `c1d2bceda`):
+
+      | mixed steps | LPT | SPLIT |
+      |---|---|---|
+      | steps | 2 144 | 2 154 |
+      | GPU per step | 38.7 ms | 36.7 ms (-5.2%) |
+      | host gap per step | 0.96 ms (2.4%) | **1.79 ms (4.6%)** |
+
+      Decode steps are already graphed (gap ~0). The split's extra host work, two plans and the
+      page-table scatter, costs +0.83 ms per mixed step, about 40% of its 2.0 ms GPU saving. Graph
+      capture or a cheaper split plan can recover at most that, ~2% of mixed-step time. The step-span
+      events include in-step launch stalls, so this understates launch cost; the clean ceiling is LPT
+      with its mixed CUDA graphs on vs off (queued).
+      Original note: needs the routing decision in device memory with exit-early
       CTAs so grid dims stay fixed.
 - [x] **Per-step tracing** — `SGLANG_STEP_TRACE=1` localises the gap to MIXED steps.
       [detail](#spec-path-where-the-cpu-gpu-syncs-actually-are--2026-10-05)

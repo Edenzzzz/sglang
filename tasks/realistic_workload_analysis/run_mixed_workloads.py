@@ -184,6 +184,16 @@ SCENARIOS = {
         "desc": "capacity: agent + short chat, both tenants at infinite rate",
         "streams": {"codex": codex(36, groups=8), "chat": chat(3200, "inf", 512, 96)},
     },
+    # Long context (>64K): the codex sessions start at 64K and run to 96K, where attention is
+    # 61-73% of a decode step at 8 concurrent requests (debug_kernel_server_perf_4_mode.md,
+    # context share), so attention-kernel and scheduling gains reach end to end.
+    "long_agent_chat": {
+        "desc": "long-context agent (64-96K sessions) + short chat, both rate-limited",
+        "streams": {"codex": codex(24, groups=8, min_ctx=65536, max_ctx=98304,
+                                   rate=float(os.environ.get("CODEX_RATE", "0.1"))),
+                    "chat": chat(int(200 * float(os.environ.get("CHAT_RATE", "8"))),
+                                 float(os.environ.get("CHAT_RATE", "8")), 512, 96)},
+    },
     # Control: the measured parity region. Many short rows give BatchPrefill
     # plenty of query tiles, so the gate should decline persistent throughout.
     "shortchat_only": {

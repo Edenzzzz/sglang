@@ -23,7 +23,7 @@ if [ -n "${STEP_MODEL:-}" ]; then mkdir -p $R; cp $STEP_MODEL $R/mtp_step.json; 
 if [ ! -s $R/mtp_step.json ]; then
   rm -rf $o
   SGLANG_STEP_TRACE=1 SGLANG_EDF_ACCEPT_TRACE=1 SGLANG_EDF_ACCEPT_LOG_EVERY=5000 CHAT_RATE=$RATE \
-    python run_mixed_workloads.py --scenario agent_chat_rated --methods MTPMIX_SPLIT --outdir $o > $R.trace.log 2>&1
+    python run_mixed_workloads.py --scenario ${SCENARIO:-agent_chat_rated} --methods MTPMIX_SPLIT --outdir $o > $R.trace.log 2>&1
   summ $o MTPMIX_SPLIT
   python3 $W/tasks/perf_model/fit_mtp_step.py $o/server_MTPMIX_SPLIT.log --out $R/mtp_step.json | grep -E "mape|n_steps"
 fi
@@ -31,7 +31,7 @@ export MTP_STEP_MODEL=$R/mtp_step.json
 for m in ${ARMS:-MTPMIX_SPLIT MTPMIX_SPLIT_EDF0 MTPMIX_SPLIT_EDFG MTPMIX_SPLIT_EDFR}; do
   o=$R/r1_$m; rm -rf $o
   SGLANG_EDF_ACCEPT_LOG_EVERY=5000 CHAT_RATE=$RATE \
-    python run_mixed_workloads.py --scenario agent_chat_rated --methods $m --outdir $o > $R.$m.log 2>&1
+    python run_mixed_workloads.py --scenario ${SCENARIO:-agent_chat_rated} --methods $m --outdir $o > $R.$m.log 2>&1
   summ $o $m
 done
 for f in "" --scaled; do python3 $W/slo_attain.py --root $R --ttft $TTFT_SLO_MS --itl $ITL_SLO_MS $f; done

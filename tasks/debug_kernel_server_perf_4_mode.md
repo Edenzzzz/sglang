@@ -192,7 +192,22 @@ Correctness and routing:
 - [x] **Kernel A/B, TraceLab batch** (2026-10-07) -- split 12 425 vs FA2-all 15 396 us = 1.239x.
 
 Workload and serving:
-- [ ] **Context length where attention is >50% of e2e** -- not run.
+- [x] **Context length where attention is >50% of e2e** (2026-10-08, H200, Qwen2.5-7B, yarn x4 to 131 072). Decode
+      step: whole step (batch 1 from `bench_one_batch`; batches 8 and 32 from a server via
+      `context_share_srv.py`, whose chunked prefill fits them) against the decode kernel sglang runs for the
+      same shapes x 28 layers. `drivers/context_share.sh`, `drivers/context_share_srv.sh`; commit 5ad1f0d2c.
+
+      | batch | 4K | 16K | 32K | 64K | 120K |
+      |---|---|---|---|---|---|
+      | 1 | 8.3% (5.52 ms) | 13.3% | 17.8% | 24.2% | 31.9% (7.18 ms) |
+      | 8 | 19.0% (5.66 ms) | 34.6% | 46.8% | 61.1% | 72.6% (17.97 ms) |
+      | 32 | 34.1% (7.16 ms) | 60.6% | 73.7% (19.25 ms) | - | - |
+
+      **Attention crosses half the step at ~40K tokens with 8 requests and ~10K with 32. A single
+      request never gets there** (32% at 120K). The codex tenant (8-12 sessions at 32-49K) sits at
+      ~47-55%: attention is half its decode step, which is why the kernel work shows up end to end
+      there and not in the 2K-context runs. Both tables are pure decode; a mixed step adds the
+      chunk's attention on top.
 - [x] **TraceLab mixed scenario wired** (2026-10-07) -- agent_plus_shortchat on the pod; trace verified identical after shrinking.
 - [x] **Realistic serving, LPT baseline** (2026-10-07) -- clean, 0 fallbacks. [detail](#realistic-serving-ab-lpt-baseline-tracelab-agent--short-chat--2026-10-07)
 - [x] **Realistic serving, SPLIT arm** (2026-10-07) -- CONFIRMED with a stream start barrier (3 rounds, tight ranges): chat TTFT -17.4%, codex TTFT -10.5%, ITL -7.9%, P99 ITL -15.9%, tput +7.0% ([detail](#stream-offset-confound--2026-10-07)). Original run, 3 interleaved rounds, gate PASS, 0 fallbacks:

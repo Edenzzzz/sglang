@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.17.3 — Attention share of a decode step vs context length (2026-10-08)
+
+- H200, Qwen2.5-7B, yarn to 131K: attention exceeds half of a decode step at ~40K tokens with 8
+  requests (72.6% at 120K) and ~10K with 32 (73.7% at 32K). A single request never does (31.9% at
+  120K). The codex tenant (8-12 sessions at 32-49K) is ~47-55%. Drivers `context_share.sh`
+  (bench_one_batch, batch 1) and `context_share_srv.sh` (server, batches 8/32: bench_one_batch's
+  one-shot prefill OOMs there).
+
 ## v0.17.2 — Full stack vs stock MTP: every TTFT/ITL metric >=30% better, 3 rounds (2026-10-08)
 
 - 4-mode split + deadline order vs stock sglang MTP at chat 24/s + codex: chat TTFT -95%,

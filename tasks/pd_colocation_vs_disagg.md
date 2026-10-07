@@ -4,27 +4,32 @@ Make the case for **PD colocation with an EDF/SLO-aware router** against **PD di
 for a 4x8 H100/H200 cluster serving agentic traffic (TraceLab-shaped: 64-100K contexts, ~3.8K
 appends, ~480-token outputs, mixed with chat and math).
 
-Tasks, in priority order:
+Tasks, in priority order (status 2026-10-08; evidence in the sections below):
 
-- [ ] **1. Cache-hit-first routing with an SLO veto** — router BUILT (2026-10-07,
-      `tasks/pd_colocation/router.py`; policies rr / cache / cache_rand / cache_slo, optional EDF
-      priorities). Fake-worker check (`router_test.py`): cache sends all 24 requests to the holder
-      (the hotspot); cache_slo keeps the holder while predicted TTFT stays under budget
-      (220 -> 295 ms), vetoes at 300 ms, and the request goes to another worker, which then holds the
-      prefix too. That is a second replica, created by the veto without any migration step (point
-      2). Needs the multi-node run.
-- [ ] **2. Best-effort cache migration and why colocation replicates better** — design below;
-      the replication claim needs measurement.
-- [ ] **3. EDF predictor using EWMA acceptance length to predict TPOT** — perf model fitted
-      (2026-10-07, *measured*): mixed-step MLP MAPE 6.0% (split) vs 6.4% (LPT), linear 13.4% vs
-      16.9%, so a cheap predictor suffices. See debug_kernel_server_perf_4_mode.md#perf-model-fit--2026-10-07.
-      Still needed: the acceptance-length input (MTP traces) and the EDF-vs-baseline scheduling run.
-- [ ] **4. Two-way RDMA, complete vs bipartite graph, randomized source selection** — design
-      below; needs a multi-node congestion measurement (H20 only, <=16 GPUs, trial `vibecuda`).
+- [x] **1. Cache-hit-first routing with an SLO veto** (2026-10-08, H20 16 GPUs) — cache-affinity
+      colocation vs the best disagg (2P2D): agent TTFT -93% (21.6 -> 1.6 s), chat TTFT -99.5%,
+      prefix hit 73% vs 23-31%. Disagg keeps lower ITL (3.7 vs 6.4 ms). The calibrated veto fires on 2% of
+      requests and trims chat P99 TTFT 15%. A hot-prefix stress run (4 shared 16K prompts piled on
+      their holders) is under way: veto vs affinity vs veto + L3 store vs disagg.
+- [x] **2. Best-effort cache migration / replication** (2026-10-08) — a cluster-wide mooncake L3
+      store (write-through, best-effort prefetch) lifts round-robin's hit rate 12.7% -> 22.3% (chat
+      TTFT -41%, P99 ITL -83%). Under affinity it sits idle (16 pulls): affinity already serves 73%
+      locally, so migration pays only where routing must place a request elsewhere.
+- [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
+      collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
+      right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex
+      P99 ITL -27%. Full stack vs stock MTP: TTFT -95%/-51%, ITL -42%/-38% (chat/codex, 24/s, 3 rounds).
+- [ ] **4. Two-way RDMA / congestion, randomized source selection** — random tie-break among
+      near-equal hits costs nothing at 16 GPUs, and there is no link contention to relieve there.
+      The hot-prefix run is the remaining test; a real congestion result needs more nodes than the
+      16-GPU cap.
+- [x] **MTP on every role** (2026-10-08) — colocation + MTP + 4-mode keeps TTFT and cuts agent ITL
+      47%, and vs disagg + MTP cuts TTFT 94% / 99.6%. (An apparent regression was a router
+      tie-break hotspot, retracted and fixed.) A fixed-router rerun is queued.
 
-**Nothing in this document is measured yet.** It is the design and the argument, written so the
-experiments have something to confirm or refute. Every quantitative claim is labelled either
-*measured* (with a pointer) or *predicted*. Treat the predictions as hypotheses.
+**Labels.** Every quantitative claim below is either *measured* (with the run and commit) or
+*predicted*. The design sections that predate the measurements say so where the measurements
+contradicted them.
 
 ---
 

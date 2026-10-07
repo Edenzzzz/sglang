@@ -71,8 +71,8 @@ def run_arm(arm):
         else:
             edf, base = True, base[:-4]
     layout, router = ARMS[base]
-    log = f"{W}/mn/{arm}"
-    print(f"=== {arm}: layout={layout} router={router} l3_store={hc} worker_edf={edf} mtp={spec}", flush=True)
+    log = f"{W}/mn/{arm}{os.environ.get('RUN_TAG', '')}"
+    print(f"=== {arm}{os.environ.get('RUN_TAG', '')}: layout={layout} router={router} l3_store={hc} worker_edf={edf} mtp={spec}", flush=True)
     C.run_all(KILL)
     # bench_serving APPENDS to its output file and mn_summary reads the last line, so a stale
     # directory would let a failed arm report the previous run's numbers.
@@ -144,7 +144,7 @@ def run_arm(arm):
              f"curl -s -o /dev/null -w 'router %{{http_code}}\\n' http://127.0.0.1:{RPORT}/health")
     knobs = " ".join(f"{k}={os.environ[k]}" for k in
                      ("SESSIONS", "TURNS", "SESSION_RATE", "SLOWDOWN", "CHAT_RATE", "CHAT_N", "CHAT_IN",
-                      "CHAT_OUT", "MIN_CTX", "MAX_CTX") if k in os.environ)
+                      "CHAT_OUT", "MIN_CTX", "MAX_CTX", "HOT", "HOT_GROUPS", "HOT_PREFIX") if k in os.environ)
     C.run(0, f"setsid -f env {knobs} bash {W}/tasks/pd_colocation/mn_bench.sh {log} {RPORT} > {log}/mn_bench.log 2>&1 < /dev/null; echo started")
     t0 = time.time()
     while time.time() - t0 < 5400:

@@ -177,7 +177,17 @@ class Router:
             self.log.flush()
         resp = web.StreamResponse()
         try:
-            async with self.session.post(w.url + "/generate", json=payload) as up:
+            # One retry when the worker drops a reused keep-alive connection before answering
+            # (aiohttp ServerDisconnectedError): nothing has been streamed yet, so it is safe.
+            # The stock router retries likewise; without it 1 in ~3 600 requests failed.
+            for attempt in (0, 1):
+                try:
+                    up = await self.session.post(w.url + "/generate", json=payload)
+                    break
+                except aiohttp.ServerDisconnectedError:
+                    if attempt:
+                        raise
+            async with up:
                 resp.content_type = up.headers.get("Content-Type", "application/json")
                 resp.set_status(up.status)
                 await resp.prepare(request)

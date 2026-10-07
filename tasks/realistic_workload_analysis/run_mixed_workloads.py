@@ -167,6 +167,16 @@ SCENARIOS = {
         "streams": {"codex": codex(36, groups=8, rate=0.06),
                     "turns": multiturn(300, 1.5, 60, 8192, 2048, 256)},
     },
+    # Load sweep: the same agent + short-chat mix with BOTH tenants rate-limited, the chat
+    # rate set by CHAT_RATE (env). Latency comparisons are only fair below every arm's
+    # saturation point. agent_plus_shortchat fires all codex sessions at once and runs chat at
+    # 12/s, which pushed stock MTP past its capacity (chat throughput 748.6 < 858 offered).
+    "agent_chat_rated": {
+        "desc": "agent + short chat, both rate-limited; chat rate from CHAT_RATE",
+        "streams": {"codex": codex(36, groups=8, rate=float(os.environ.get("CODEX_RATE", "0.1"))),
+                    "chat": chat(int(200 * float(os.environ.get("CHAT_RATE", "8"))),
+                                 float(os.environ.get("CHAT_RATE", "8")), 512, 96)},
+    },
     # Control: the measured parity region. Many short rows give BatchPrefill
     # plenty of query tiles, so the gate should decline persistent throughout.
     "shortchat_only": {

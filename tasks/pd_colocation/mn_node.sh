@@ -38,7 +38,7 @@ for _ in range(500):
         continue
 PY
 }
-: > $LOG/ports_r${ROLE}.txt
+rm -f $LOG/ports_r${ROLE}_g*.txt
 launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   local g=$1
   PORT=$(pick $((ROLE * 2 + g + RANDOM)))
@@ -53,8 +53,9 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
       ARGS+=(--disaggregation-mode $MODE --disaggregation-transfer-backend mooncake
              --disaggregation-ib-device $IB --disaggregation-bootstrap-port $BOOT) ;;
   esac
-  grep -v "^$g " $LOG/ports_r${ROLE}.txt > $LOG/ports_r${ROLE}.tmp 2>/dev/null
-  echo "$g $PORT $BOOT" >> $LOG/ports_r${ROLE}.tmp && mv $LOG/ports_r${ROLE}.tmp $LOG/ports_r${ROLE}.txt
+  # One file per GPU: the two supervisors run concurrently, and a shared file rewritten via
+  # one temp name lost an entry (pods 0, 2, 6 in coloc_cache), stalling the arm for 25 min.
+  echo "$g $PORT $BOOT" > $LOG/ports_r${ROLE}_g${g}.tmp && mv $LOG/ports_r${ROLE}_g${g}.tmp $LOG/ports_r${ROLE}_g${g}.txt
   CUDA_VISIBLE_DEVICES=$g setsid nohup $W/venv/bin/python -m sglang.launch_server "${ARGS[@]}" \
     > $LOG/worker_r${ROLE}_g${g}.log 2>&1 < /dev/null &
   echo $! > $LOG/pid_r${ROLE}_g${g}
@@ -84,4 +85,4 @@ for g in 0 1; do
   disown
 done
 sleep 3
-cat $LOG/ports_r${ROLE}.txt
+cat $LOG/ports_r${ROLE}_g*.txt 2>/dev/null

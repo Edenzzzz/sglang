@@ -39,7 +39,7 @@ PORTS = {}  # role -> [(http_port, bootstrap_port) for gpu 0, 1], read from each
 
 
 def read_ports(log):
-    for r, (rc, out) in enumerate(C.run_all(f"cat {log}/ports_r$ARNOLD_ID.txt")):
+    for r, (rc, out) in enumerate(C.run_all(f"cat {log}/ports_r${{ARNOLD_ID}}_g*.txt 2>/dev/null")):
         rows = [l.split() for l in out.splitlines() if len(l.split()) == 3 and l.split()[0] in ("0", "1")]
         PORTS[r] = [(int(p), int(b)) for _, p, b in sorted(rows)]
 

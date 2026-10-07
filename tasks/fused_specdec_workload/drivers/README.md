@@ -106,3 +106,13 @@ GPU working set" in `../../debug_kernel_server_perf_4_mode.md`: a torch
 The arms they define are only valid with the three pre-flight checks in memory:
 the fused composition counter is non-empty, the numerics pass in that exact mode
 and split, and the compile flags are present in the generated `build.ninja`.
+
+
+## Stale JIT build lock (2026-10-07)
+
+`kill -9` on a server while torch's cpp_extension is building the fused extension leaves
+`~/.cache/torch_extensions/py312_cu128/fused_fa3/lock` behind. Every later server then blocks
+forever in `torch/utils/file_baton.py: wait` during `init_forward_metadata`. It looks like a
+GPU hang: 0% utilisation, no log lines after "fired up", client timeouts. `py-spy dump` on the
+`sglang::scheduler` process names it at once. Fix: make sure no nvcc/ninja is running, then
+delete the lock.

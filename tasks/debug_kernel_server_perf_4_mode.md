@@ -285,8 +285,9 @@ fp32 reference, 0 unwritten, 0 fallbacks):
 | no-prefix prefill + appends (`qo:2048,3809,1,1 prefix:0,8191,12000,5000 n_fa3:2`) | 1 425.9 us | PASS |
 
 These supersede the non-causal 1.239x. With causal masking the overlap is worth -1.2%,
-not -2.7%. Every other non-causal kernel number in this doc (FA2 ring, multicast and
-reduction ceilings) still has to be re-measured causal.
+not -2.7%. The FA2 ring and split-reduction numbers were measured with
+`fa2_stage_bench.py`, which was causal from the start, so they stand. The multicast
+ceiling went through the non-causal harness and has to be re-measured causal.
 
 (`fa3_only_run`'s `q_indptr_per_req.index({n_fa3}).item<int>()` host sync is only on the
 `num_splits > 1` combine branch; serving passes 1, so it never runs there.)

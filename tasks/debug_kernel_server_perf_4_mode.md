@@ -201,7 +201,10 @@ Workload and serving:
       computed the WRONG requests on FA3: the split plan handed `fa3_only_run` the FA2 rows'
       per-request arrays. Fixed; serving correctness gate added. No valid SPLIT serving number
       exists yet. [detail](#split-serving-void--2026-10-07)
-- [ ] **4-mode MTP serving run** -- RE-RUNNING with the start barrier ([retraction](#stream-offset-confound--2026-10-07)). Earlier: 3 interleaved rounds, gate PASS, 0 fallbacks. 4-mode + split vs
+- [x] **4-mode MTP serving run** (2026-10-07, barrier re-run, 3 rounds, 0 fallbacks) -- 4-mode + split vs stock MTP:
+      codex tput **+17.6%** (rounds +28/+29/-3%: one straggler-dominated round), ITL -16.2%, P99 ITL **-52.8%**,
+      TTFT -8.5%; chat TTFT **-37.3%**, ITL -27.7%, P99 ITL **-30.5%**. SUPERSEDES the original numbers below,
+      which had the uncontrolled stream offset. [detail](#mtp-barrier--2026-10-07) Original (offset-confounded): 4-mode + split vs
       stock MTP: codex throughput **+27.8%**, ITL -17.4%, P99 TTFT -14.6%; chat ITL **-35.0%**, chat TTFT
       >=-50%. Clears the bar on chat latency and codex throughput, not on codex TTFT/ITL. Stock-MTP baseline
       overloaded in 1 of 3 rounds; load sweep queued. [detail](#four-mode-mtp-serving--2026-10-07)
@@ -254,6 +257,40 @@ With all streams released together, absolute values match the original repeats (
 19.3 s vs 18.8 s), so those repeats were effectively a simultaneous start. **The original
 SPLIT-vs-LPT result stands**, now with tight ranges. The low absolute TTFTs belonged to the
 chunk sweep, which ran in a later-start regime; its relative deltas are single-round only.
+
+<a id="mtp-barrier--2026-10-07"></a>
+### 4-mode MTP A/B re-run with the stream start barrier — SUPERSEDES the table below — 2026-10-07
+
+`mtp_repeats_b.sh` (= `mtp_repeats.sh` with the start barrier, outdir `mtprepb`); 3 interleaved
+rounds; every arm 0 fallbacks, 0 tracebacks; mixed arms 800-1 200+ 4-mode steps each;
+acceptance 2.14-2.33 in every arm. `repsum.py --root /dev/shm/w/mtprepb --base MTP_LPT`:
+
+| stream | metric | MTP_LPT (stock) | MTPMIX_LPT | **MTPMIX_SPLIT** |
+|---|---|---|---|---|
+| codex | output tok/s | 402.5 [398.6-409.1] | 438.7 (+9.0%) | **473.3 [390.4-516.8] (+17.6%)** |
+| codex | mean ITL ms | 57.6 [56.4-58.9] | 50.7 (-12.0%) | 48.3 [47.1-49.1] (-16.2%) |
+| codex | P99 ITL ms | 384.8 [329.8-441.9] | 182.2 (-52.7%) | **181.6 [180.8-182.0] (-52.8%)** |
+| codex | mean TTFT ms | 28 291 | 28 544 (+0.9%) | 25 898 (-8.5%) |
+| codex | P99 TTFT ms | 71 067 | 67 399 (-5.2%) | 63 295 (-10.9%) |
+| chat | mean TTFT ms | 70 252 [67 672-72 652] | 56 659 (-19.3%) | **44 015 [41 836-45 247] (-37.3%)** |
+| chat | P99 TTFT ms | 110 192 | 97 446 (-11.6%) | 88 509 (-19.7%) |
+| chat | mean ITL ms | 28.5 | 24.2 (-15.3%) | 20.6 (-27.7%) |
+| chat | P99 ITL ms | 143.5 | 109.9 (-23.4%) | **99.7 (-30.5%)** |
+| chat | output tok/s | 818.6 [809.4-832.4] | 856.9 | 857.3 |
+
+**What changed vs the original run:**
+- With simultaneous starts, stock MTP falls behind the offered chat rate in **every** round (818.6 <
+  858 tok/s), not just one. All chat TTFTs are high (44-70 s) because the codex burst lands at t=0
+  for every arm.
+- The codex throughput gain is +17.6%, not +27.8%. Per round the split arm gives 512.5 / 516.8 /
+  390.4 tok/s; the third is a makespan straggler (its ITL and TTFT are normal). Rounds 1-2 alone
+  would be +28%; the honest number is the 3-round mean with its range.
+- Codex P99 ITL is **-52.8%**, not -17.7%. Stock MTP's tail is much worse when prefills land
+  together, because it cannot fold prefill into verify steps.
+
+**Against the bar** (>=30% TTFT and ITL, >=10% throughput): met for chat TTFT (-37.3%), chat P99
+ITL (-30.5%), codex P99 ITL (-52.8%) and codex throughput (+17.6%). **Not met** for chat mean ITL
+(-27.7%), codex mean ITL (-16.2%) or codex TTFT (-8.5%).
 
 <a id="four-mode-mtp-serving--2026-10-07"></a>
 ### 4-mode MTP serving A/B: stock MTP vs the 4-mode step (FA2 / split) — 2026-10-07

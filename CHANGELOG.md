@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.15.1 — Stream start barrier; serving results re-measured (2026-10-07)
+
+- **Methodology fix:** multi-stream serving runs had an uncontrolled stream start offset (12-45 s,
+  set by how long each `bench_serving` took to tokenise). It swung chat TTFT 15x between
+  sessions. Fixed with a start barrier (`d2fc14f8c`). All serving A/Bs re-run with it.
+- **SPLIT vs LPT: confirmed** (3 rounds, tight ranges): chat TTFT -17.4%, codex TTFT -10.5%,
+  ITL -7.9%, P99 ITL -15.9%, throughput +7.0%. Essentially the original result.
+- **4-mode MTP: CORRECTED.** v0.15.0's figures were offset-confounded. Barrier re-run, 4-mode +
+  split vs stock MTP: codex throughput **+17.6%** (not +27.8%), codex P99 ITL **-52.8%**, ITL
+  -16.2%, TTFT -8.5%; chat TTFT **-37.3%**, P99 ITL -30.5%, ITL -27.7%.
+- Kernel catalogue closed: chunk sweep, host-overhead fixes (~1.6 ms per mixed step, stopped at a
+  ~2% bound), the plan cache keyed on exact row lengths.
+- H20 multi-node study started: 8 pods x 2 H20 (16 GPUs, trial vibecuda); ablatable router;
+  per-pod port probing with bind-race supervisor; session-replay workload.
+
 ## v0.15.0 — 4-mode MTP serving result; kernel catalogue closed on measurement (2026-10-07)
 
 - **4-mode MTP serving A/B** (3 interleaved rounds, gate PASS, 0 fallbacks; `drivers/mtp_repeats.sh`):

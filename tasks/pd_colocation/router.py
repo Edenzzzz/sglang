@@ -127,8 +127,12 @@ class Router:
         hits = [w.hit(hashes) for w in self.workers]
         best = max(hits)
         if pol == "cache":
+            # Ties on load are broken at random. A bare min() returned the lowest-index worker
+            # whenever loads tied, and every session's first turn (and every chat request) ties at
+            # hit 0, so workers 0 and 1 collected the sessions that affinity then pinned there:
+            # 811 and 565 requests vs <=297 elsewhere in coloc_cache_mtp (2026-10-08).
             cands = [i for i, h in enumerate(hits) if h == best]
-            i = min(cands, key=lambda j: len(self.workers[j].inflight))
+            i = min(cands, key=lambda j: (len(self.workers[j].inflight), random.random()))
             return i, {"hit": best * blk}
         # Order by hit length bucket (--rand-thresh blocks), then by load, then randomly. Pure
         # random within a bucket (measured on H20, coloc_rand) sent prefix-less chat requests --

@@ -156,7 +156,9 @@ every request completed.
   each sees a light queue, and admission order matters only when work queues up. On a single
   saturated H200 it cut chat TTFT 62% (point 3).
 
-**MTP on every worker (`_mtp`), 2026-10-08: colocation REGRESSES on H20, under investigation.**
+**MTP on every worker (`_mtp`), 2026-10-08.** *Correction, same day: the "colocation regresses
+with MTP" reading below is RETRACTED. The cause was a router tie-break hotspot, not MTP; see the
+resolution after the table.*
 EAGLE3 (3 steps, topk 1, 4 verify tokens) runs on every role. Colocated workers also run the
 4-mode step on the FA3/FA2 split (`KERNEL=split`). Before any MTP arm, the H20 serving gate
 (`h20_gate.sh`) passed both comparisons with 0 fallbacks, weakly: the split's run had only ONE
@@ -177,10 +179,26 @@ mixed step, and one short prompt agreed with stock MTP for 5 tokens (noise floor
   TTFT is 37-93 s over the first 60% of requests, then recovers. Agent TTFT stays at 12-23 s for
   the whole 30-minute run, against a flat 1.4-1.8 s without MTP. One worker takes 812 requests
   (329 max without MTP).
-- Not yet separated: speculation's cost on an H20 (78 SMs, ~1/7 of an H200's dense compute,
-  where verify's 4x query rows are no longer free), the 4-mode split on H20 (its SM partition and
-  tile sizes were tuned on an H200), and the load imbalance. Next arm: `coloc_cache_mtps`, stock
-  MTP without the 4-mode step, same routing (8134f09c1).
+- **Resolution: router hotspot, not MTP.** The `cache` policy broke load ties with a bare
+  `min()`, which returns the LOWEST-INDEX worker. Every session's first turn and every chat
+  request ties at hit 0, so ties went to workers 0 and 1, and affinity then pinned those sessions
+  there: workers 1 and 0 took 811 and 565 requests (61 and 91 agent turns, vs at most 36
+  per worker otherwise). The next arm, coloc_cache_edf_mtp, ran the same code with the same bias.
+  It happened to spread evenly (max 341 requests, 37 agent turns per worker) and is healthy:
+
+  | arm | agent TTFT ms mean / P99 | chat TTFT ms mean / P99 | ITL ms agent / chat | max requests/worker |
+  |---|---|---|---|---|
+  | coloc_cache (no MTP) | 1 596 / 8 371 | 101 / 1 539 | 7.2 / 6.4 | 328 |
+  | coloc_cache_mtp (hotspot) | 18 456 / 142 986 | 42 361 / 142 796 | 14.5 / 24.3 | 811 |
+  | **coloc_cache_edf_mtp** | **1 561 / 8 067** | 114 / 1 382 | **3.8** / 5.7 | 341 |
+  | disagg_2p2d_mtp | 27 423 / 77 995 | 26 470 / 78 841 | 2.9 / 4.1 | 919 |
+
+  With MTP + the 4-mode split, colocation keeps its TTFT and cuts agent ITL 47% (7.2 -> 3.8 ms)
+  against colocation without MTP. Against disagg with MTP on both sides: TTFT -94% (agent) and
+  -99.6% (chat). Disagg's dedicated decode GPUs still give lower ITL (2.9 / 4.1 vs 3.8 / 5.7 ms).
+  The tie-break is now randomized among equally loaded workers. The stock-MTP arm and a rerun of
+  coloc_cache_mtp run on the fixed router.
+
 
 ## 1. Route to the highest cache-hit node first, with an EDF/SLO veto
 

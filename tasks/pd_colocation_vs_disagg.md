@@ -244,10 +244,10 @@ Traced run: `SGLANG_STEP_TRACE=1 SGLANG_EDF_ACCEPT_TRACE=1`, 0 fallbacks, 0 trac
 
       | arm | chat SLO | chat ITL ok | chat TTFT ms | codex SLO | queue mean | running mean |
       |---|---|---|---|---|---|---|
-      | no EDF | **0.706** | **0.723** | **433** | **0.833** | 3 | 16.3 |
-      | EDF, a=1 | 0.019 | 0.575 | 163 063 | 0.000 | 1 345 | 20.3 |
-      | EDF, global EWMA | 0.359 | 0.409 | 1 637 | 0.250 | 23 | 21.3 |
-      | EDF, per-request EWMA | 0.016 | 0.478 | 90 187 | 0.000 | 234 | 24.3 |
+      | no EDF | **0.706** | **0.723** | **433** | **0.972** | 3 | 16.3 |
+      | EDF, a=1 | 0.019 | 0.575 | 163 063 | 0.028 | 1 345 | 20.3 |
+      | EDF, global EWMA | 0.359 | 0.409 | 1 637 | 0.417 | 23 | 21.3 |
+      | EDF, per-request EWMA | 0.016 | 0.478 | 90 187 | 0.028 | 234 | 24.3 |
 
       - **The order-statistic bias is confirmed.** `EDF_BIND` logs the tokens/step estimate of
         the request that sets the budget. Under the per-request EWMA it averages 1.12-1.19,

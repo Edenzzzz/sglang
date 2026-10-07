@@ -12,6 +12,10 @@ ROLE=${ARNOLD_ID:-0}
 mkdir -p $LOG
 export PYTHONPATH=$W/python:$W/fi HF_HOME=$W/hf FI_ROOT=$W/fi TORCH_CUDA_ARCH_LIST=9.0a
 export SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 SGLANG_FLASHINFER_USE_PERSISTENT=1
+# mooncake (PD-disagg KV transfer) links libcudart.so.12; the pods' system toolkit is CUDA 13,
+# but the torch cu128 wheels ship the 12.x runtime inside site-packages.
+CUDART=$(python3 -c "import nvidia.cuda_runtime as m, os; print(os.path.dirname(m.__file__))" 2>/dev/null)
+export LD_LIBRARY_PATH=$CUDART:$CUDART/lib:${LD_LIBRARY_PATH:-}
 if [ "${KERNEL:-lpt}" = split ]; then
   export SGLANG_MIXED_ATTENTION_KERNEL=persistent SGLANG_TWO_EXEC=1 SGLANG_FUSED_FA3_SM_SPLIT=1
   export FLASHINFER_SM_PARTITION=1 UP_STAGES=2 SGLANG_FUSED_FA3_SRC=$W/fi/tests/fused_fa3_persistent_ext.cu

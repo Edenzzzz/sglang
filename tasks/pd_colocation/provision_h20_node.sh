@@ -6,7 +6,7 @@ set -x
 W=/dev/shm/w
 mkdir -p $W && cd $W
 if [ ! -x $W/venv/bin/python ]; then
-  python3 -m venv $W/venv
+  python3 -m venv --system-site-packages $W/venv
   . $W/venv/bin/activate
   pip install -q --upgrade pip
   pip install -q torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128

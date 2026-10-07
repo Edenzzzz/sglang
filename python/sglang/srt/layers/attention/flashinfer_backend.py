@@ -1463,6 +1463,18 @@ class FlashInferAttnBackend(AttentionBackend):
                     fused["kv_lens_req"], sc["reqs"],
                     self.num_qo_heads, self.num_kv_heads, 1, layer.scaling,
                     fused["max_qlen"], fused["max_pages"],
+                    # num_splits. This argument was added to fa3_only_run for the harness
+                    # and never threaded through here, so the first serving SPLIT arm died
+                    # at its first forward ("Expected int for argument 16, found Tensor").
+                    # 1 = FA3 rows run unsplit. That is required, not a choice, with the
+                    # scratch as sized in _two_exec_scratch: sc["po"]/sc["plse"] hold
+                    # total_q * heads rows with NO split factor, so any value > 1 would
+                    # write past them. It is also what upstream's num_splits_heuristic
+                    # returns for these rows -- FA3 only gets large-q (wgmma-class) rows,
+                    # e.g. 448 m-blocks against the 106-tile threshold on TraceLab appends.
+                    # Enabling split-KV on FA3 in serving needs the scratch sized by the
+                    # split count and nsd recomputed per step (it is cached by shape here).
+                    1,
                     sc["pt"], sc["po"], sc["plse"], sc["nsd"], sc["sem"],
                     # One scatter per STEP, not per call. fused is rebuilt by
                     # _plan_fused_split each step, so it is the correct place to track

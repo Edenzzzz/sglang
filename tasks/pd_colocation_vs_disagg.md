@@ -99,6 +99,38 @@ for disagg, the prefill workers' own logged cache hit. The disagg arms' failed c
   The earlier purely random tie-break, which sent hit-0 chat to busy workers, is fixed by breaking
   ties on in-flight load first.
 
+**Shared L3 prefix store: cross-node pulls on a complete graph (points 2 and 4), 2026-10-08.**
+`<arm>_hc` arms add a cluster-wide mooncake store. One `mooncake_master` runs on pod 0. Every
+worker contributes 32 GB of host DRAM over RDMA on the back-end NICs and runs
+`--enable-hierarchical-cache --hicache-storage-backend mooncake` (write-through, best-effort
+prefetch). Any worker can therefore pull a prefix that any other worker computed. Commands:
+`python mn_run.py coloc_rr_hc coloc_cache_hc` (commits 5eae86c26, a8465ecc7). 0 tracebacks and
+0 fallbacks.
+
+| arm | completed agent / chat | agent TTFT ms mean / P99 | chat TTFT ms mean / P99 | chat ITL ms mean / P99 | worker-reported hit | store gets (batched) |
+|---|---|---|---|---|---|---|
+| coloc_rr | 384 / 3 200 | 11 702 / 61 465 | 8 783 / 68 555 | 25.5 / 909.5 | 12.7% | - |
+| coloc_rr_hc | 384 / 3 199 | 9 982 / 37 938 | 5 163 / 38 004 | 20.7 / 153.6 | **22.3%** | 12 649 (3.2 M items) |
+| coloc_cache | 384 / 3 200 | 1 596 / 8 371 | 101 / 1 539 | 6.4 / 11.8 | 72.9% | - |
+| coloc_cache_hc | 384 / 3 200 | 1 631 / 8 224 | 122 / 1 549 | 6.3 / 11.7 | 72.9% | 16 |
+
+- **Migration works where routing cannot keep a prefix local.** Under round-robin the store
+  lifts the hit rate from 12.7% to 22.3% by pulling prefixes other nodes computed. Chat TTFT
+  falls 41%, chat P99 ITL 83%, and agent P99 TTFT 38%. Replication happens as a side effect of
+  serving (write-through), with no migration step and no knowledge of the holder.
+- **With affinity routing the store is idle (16 pulls in the whole run) and changes nothing.**
+  Affinity already serves 73% of tokens locally. This is the intended ordering: route to the
+  holder first (point 1), and pull from the store only when the router must place a request
+  elsewhere (an SLO veto or an overloaded holder, point 2).
+- **Not yet shown: the congestion advantage (point 4).** At 16 GPUs on 4 hosts the store moved
+  ~236 GB without measurable link contention, so random vs load-aware source choice cannot
+  differ yet. That needs either more nodes than the 16-GPU cap allows, or a deliberately
+  hot-prefix workload where many nodes pull one session's prefix at once. The bipartite
+  disagg design forces exactly that on its few prefill nodes.
+- The single failed chat request in coloc_rr_hc was a worker dropping a reused keep-alive
+  connection (`ServerDisconnectedError`). The router now retries once before streaming starts
+  (a8465ecc7), as the stock router does.
+
 ## 1. Route to the highest cache-hit node first, with an EDF/SLO veto
 
 **The disagg baseline.** PD disaggregation picks a *prefill* node first, because prefill and

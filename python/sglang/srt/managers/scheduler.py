@@ -2063,9 +2063,15 @@ class Scheduler(
         # step every decode/verify row waits for it. Cap n so that work stays under the budget:
         # short prefixes keep the full chunk, long ones shrink. Measured on 64-96K sessions, a fixed
         # 2048 chunk cut P99 ITL 15-31% but cost TTFT at short prefixes, which this avoids.
+        # SGLANG_CHUNK_MS_BUDGET + SGLANG_CHUNK_COST="c_tok,c_attn" instead bounds the chunk's
+        # PREDICTED TIME, c_tok*n + c_attn*n*(r + n/2)/1e6 ms (coefficients from
+        # tasks/perf_model/fit_mtp_step.py). The attention-only budget left prefix-0 chunks at full
+        # size, and a full chunk of fresh chat prompts is GEMM-bound: chat P99 ITL stayed at the
+        # chunk-8192 level (259 ms) while codex, whose chunks sit on long prefixes, improved.
+        ms_budget = float(os.environ.get("SGLANG_CHUNK_MS_BUDGET", "0") or 0)
         attn_budget = float(os.environ.get("SGLANG_CHUNK_ATTN_BUDGET", "0") or 0)
         if (
-            attn_budget > 0
+            (attn_budget > 0 or ms_budget > 0)
             and effective_chunk_size
             and effective_chunk_size > 0
             and len(self.running_batch.reqs) > 0  # only when decode/verify rows would wait
@@ -2078,8 +2084,14 @@ class Scheduler(
                 r = max(len(nr.prefix_indices), nr.host_hit_length)
             else:
                 r = 0
-            # largest n with n*(r + n/2) <= budget:  n = -r + sqrt(r^2 + 2*budget)
-            n = int(-r + (r * r + 2.0 * attn_budget) ** 0.5)
+            if ms_budget > 0:
+                c_tok, c_attn = (float(x) for x in os.environ["SGLANG_CHUNK_COST"].split(","))
+                # c_attn/2e6 * n^2 + (c_tok + c_attn*r/1e6) * n - ms_budget = 0
+                a2, b1 = c_attn / 2e6, c_tok + c_attn * r / 1e6
+                n = int((-b1 + (b1 * b1 + 4 * a2 * ms_budget) ** 0.5) / (2 * a2))
+            else:
+                # largest n with n*(r + n/2) <= budget:  n = -r + sqrt(r^2 + 2*budget)
+                n = int(-r + (r * r + 2.0 * attn_budget) ** 0.5)
             floor = int(os.environ.get("SGLANG_CHUNK_ATTN_MIN", "1024"))
             effective_chunk_size = max(min(effective_chunk_size, n), min(floor, effective_chunk_size))
 

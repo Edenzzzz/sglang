@@ -39,7 +39,7 @@ def urls(hs, roles=None):
     out = []
     for r in (range(NPODS) if roles is None else roles):
         for g in (0, 1):
-            out.append((f"http://[{hs[r]}]:{30001 + 100 * r + g}", 32001 + 100 * r + g, r))
+            out.append((f"http://[{hs[r]}]:{30001 + 100 * r + 50 * g}", 32001 + 100 * r + 50 * g, r))
     return out
 
 

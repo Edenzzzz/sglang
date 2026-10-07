@@ -2,7 +2,8 @@
 # Start this pod's two sglang workers (one per GPU) for one multi-node arm.
 #   mn_node.sh <mode: coloc|prefill|decode> <logdir>
 # Ports are unique per pod because pods on one host share its network namespace:
-#   http 30000+100*role+{1,2}, disagg bootstrap 32000+100*role+{1,2}.
+#   http 30000+100*role+{1,51}, disagg bootstrap 32000+100*role+{1,51} -- 50 apart, because
+#   sglang reserves internal (IPC/NCCL) ports just above its http port, and 1 apart collided.
 # The attention kernel is the same in every arm (persistent FA2/LPT unless KERNEL=split), so
 # arms differ only in routing / placement -- the variable under test.
 set -u
@@ -21,8 +22,8 @@ if [ "${KERNEL:-lpt}" = split ]; then
   export FLASHINFER_SM_PARTITION=1 UP_STAGES=2 SGLANG_FUSED_FA3_SRC=$W/fi/tests/fused_fa3_persistent_ext.cu
 fi
 for g in 0 1; do
-  PORT=$((30000 + 100 * ROLE + 1 + g))
-  BOOT=$((32000 + 100 * ROLE + 1 + g))
+  PORT=$((30000 + 100 * ROLE + 1 + 50 * g))
+  BOOT=$((32000 + 100 * ROLE + 1 + 50 * g))
   ARGS=(--model $W/qwen7b --attention-backend flashinfer --mem-fraction-static 0.85
         --host :: --port $PORT --context-length 131072 --watchdog-timeout 600
         --json-model-override-args '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}')

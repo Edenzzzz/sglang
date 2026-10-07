@@ -155,18 +155,38 @@ FA2 does the same row inside a 72.3 us whole-batch pass. Two tiles of work shoul
 dominating when the queue is nearly empty. Worth isolating before reading any parity
 number, because it will swamp small batches either way.
 
-## Tasks, in priority order — 2026-10-06
+## Tasks, in priority order — 2026-10-07
 
-1. [K/V pipelining, FA2](#fa2-kv-pipelining-measured-flat--2026-10-06) -- **not started**: the knob swept was register tiling, not pipeline depth
-2. [Smem-handoff JIT split-KV reduction, both executors](#kernel-optimisations--2026-10-06)
-3. [Context length where attention is >50% of e2e](#workload-and-measurement-setup--2026-10-06)
-4. [TraceLab mixed scenarios instead of random](#workload-and-measurement-setup--2026-10-06)
-5. [Long-context A/B on the real workload](#server-integration--2026-10-05)
-6. [4-mode MTP serving run](#server-integration--2026-10-05)
-7. [DSMEM / KV multicast](#kernel-optimisations--2026-10-06)
-8. [Fused spec tree-build epilogue](#kernel-optimisations--2026-10-06)
-9. [Perf model and EDF vs unfused](#schedule-exploration--2026-10-05)
-10. [Multi-node PD colocation, four points](../tasks/pd_colocation_vs_disagg.md) -- **design doc written**, experiments pending
+`[x]` = measured or validated against a reference; `[ ]` = not run. Nothing is checked
+because code was written.
+
+Kernel, per executor (each item A/B'd against its own executor's baseline):
+- [x] **FA3 traits** (2026-10-07) -- MmaPV_is_RS=1 worth 3.84%; stages=3 +0.54%, LPT=1 +0.68%,
+      TMA paged +10.03% slower. Upstream defaults win. [detail](#fa3-optimisation-items-measured-per-executor-on-the-fixed-kernel--2026-10-07)
+- [x] **FA2 `MMA_KV` 2/3/4** (2026-10-07) -- flat (<0.5%); it is register tiling, SharedStorage identical.
+- [ ] **K/V pipelining, FA2** -- not run: needs the real staging-depth knob, shown to move SharedStorage first.
+- [ ] **Smem-handoff JIT split-KV reduction, both executors** -- not run.
+- [ ] **DSMEM / KV multicast** -- cluster launch built; blocked by upstream's
+      `Use_TMA_KV || ClusterShape==1` assert. Needs a cluster-aware cp.async gather.
+- [ ] **Fused spec tree-build epilogue (4-mode, verify + draft)** -- not built.
+- [ ] **Cross-role backfill (`tma_store_wait`)** -- not run.
+
+Correctness and routing:
+- [x] **Split-row "corruption"** (2026-10-07) -- was the harness reference, not the kernel; all fixtures pass.
+- [x] **Routing** (2026-10-07) -- FA3 1.38x faster on append rows, FA2 1.30x on decode rows; split routes accordingly.
+- [x] **Kernel A/B, TraceLab batch** (2026-10-07) -- split 12 425 vs FA2-all 15 396 us = 1.239x.
+
+Workload and serving:
+- [ ] **Context length where attention is >50% of e2e** -- not run.
+- [x] **TraceLab mixed scenario wired** (2026-10-07) -- agent_plus_shortchat on the pod; trace verified identical after shrinking.
+- [x] **Realistic serving, LPT baseline** (2026-10-07) -- clean, 0 fallbacks. [detail](#realistic-serving-ab-lpt-baseline-tracelab-agent--short-chat--2026-10-07)
+- [ ] **Realistic serving, SPLIT arm** -- crashes with an illegal memory access mid-run; being localised.
+- [ ] **4-mode MTP serving run** -- not started.
+- [ ] **Perf model and EDF vs unfused** -- not started.
+
+Cluster:
+- [ ] **Multi-node PD colocation, four points** -- design doc written, nothing measured.
+      Delta: at most 4 nodes, so baselines are 2P2D and 1P3D.
 
 ### Long-KV is 1604x off roofline, and our split count is being IGNORED — 2026-10-06
 

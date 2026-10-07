@@ -2343,7 +2343,7 @@ One line each; detail in [`realistic_workload_analysis.md`](realistic_workload_a
       [detail](#two-executors-beat-fa2-on-everything-and-pass--2026-10-06)
 - [x] **Silent fallback removed** — the backend raises instead of degrading.
       [detail](#workload-and-measurement-setup--2026-10-06)
-- [ ] **Long-context A/B on the real workload** — no valid serving number yet; both prior
+- [x] (2026-10-08, 3 rounds, see the task list at the top: full stack beats stock MTP's best on every metric at chunk 2 048) **Long-context A/B on the real workload** — no valid serving number yet; both prior
       A/Bs were invalid.
 - [x] **4-mode MTP serving run** — unblocked and measured 2026-10-07 (`forward_mixed_spec`), see the
       task list at the top. The original block on `mix_with_running`: [detail](#four-mode-blocked)
@@ -2390,7 +2390,7 @@ One line each; detail in [`realistic_workload_analysis.md`](realistic_workload_a
 
 ## Multi-node schedule tests (H20 only, <= 16 GPUs, trial `vibecuda`) — 2026-10-08
 Measurements live in [`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md).
-- [ ] Route to highest cache-hit node first, with an SLO veto -- affinity measured (TTFT -93%/-99.5% vs 2P2D); the calibrated veto + worker EDF arms are running
+- [x] Route to highest cache-hit node first, with an SLO veto (2026-10-08) -- affinity cuts TTFT 93% / 99.5% vs 2P2D; the calibrated veto fires on 2% of requests and trims chat P99 TTFT 15%. A hot-prefix stress test is running.
 - [x] Best-effort cache migration (2026-10-08) -- L3 store lifts round-robin's hit rate 12.7 -> 22.3% (chat TTFT -41%); idle under affinity
 - [x] EDF predictor with acceptance length (2026-10-08) -- measured on the MTP server; deadline order wins, chunk caps lose
 - [ ] Two-way RDMA / congestion -- no contention at 16 GPUs; hot-prefix experiment queued

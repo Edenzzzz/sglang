@@ -1655,6 +1655,7 @@ class FlashInferAttnBackend(AttentionBackend):
         vc = v_cache.view(-1, hkv, v_cache.shape[-1])
         worst = {"fa3": 0.0, "fa2": 0.0}
         worst_row = {"fa3": -1, "fa2": -1}
+        rows_dbg = []
         for i in range(len(qo_c) - 1):
             n = qo_c[i + 1] - qo_c[i]
             if n == 0:
@@ -1672,6 +1673,9 @@ class FlashInferAttnBackend(AttentionBackend):
             got = out[qo_c[i]: qo_c[i + 1]].view(n, hq, -1).float()
             err = float((got - ref).abs().max() / ref.abs().max().clamp_min(1e-6))
             side = "fa3" if i < n_fa3 else "fa2"
+            if i < 8:
+                rows_dbg.append((i, side, n, kl, round(err, 5), round(float(got.abs().max()), 4),
+                                 round(float(ref.abs().max()), 4)))
             if err > worst[side] or err != err:
                 worst[side], worst_row[side] = err, i
         logger.warning(
@@ -1680,6 +1684,7 @@ class FlashInferAttnBackend(AttentionBackend):
             lid, cnt[lid], len(qo_c) - 1, n_fa3, int(fused["n_tok"]), int(q.shape[0]),
             worst["fa3"], worst_row["fa3"], worst["fa2"], worst_row["fa2"],
             [qo_c[j + 1] - qo_c[j] for j in range(min(len(qo_c) - 1, 12))], kvl[:12])
+        logger.warning("SPLIT_VERIFY rows (i, side, qo, kv, err, |got|, |ref|): %s", rows_dbg)
 
     def _two_exec_scratch(self, q, fused, n_fa3_rows):
         """Per-step scratch for the two-executor FA3 launch, cached across layers.
@@ -2046,7 +2051,7 @@ class FlashInferAttnBackend(AttentionBackend):
         try:
             st["fa3"].plan(
                 qi_f, ki_f, kv_indices, torch.ones(n_rows, dtype=torch.int32),
-                self.num_qo_heads, self.num_kv_heads, hd, 1, causal=False,
+                self.num_qo_heads, self.num_kv_heads, hd, 1, causal=True,
                 q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
             )
         finally:
@@ -2084,7 +2089,7 @@ class FlashInferAttnBackend(AttentionBackend):
             try:
                 st["pers"].plan(
                     qi_all, ki_all, kv_indices, kl_all,
-                    self.num_qo_heads, self.num_kv_heads, hd, hd, 1, causal=False,
+                    self.num_qo_heads, self.num_kv_heads, hd, hd, 1, causal=True,
                     q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
                 )
             finally:
@@ -2095,7 +2100,7 @@ class FlashInferAttnBackend(AttentionBackend):
         else:
             st["pers"].plan(
                 qi_r, ki_r, kv_indices, kl_r,
-                self.num_qo_heads, self.num_kv_heads, hd, hd, 1, causal=False,
+                self.num_qo_heads, self.num_kv_heads, hd, hd, 1, causal=True,
                 q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
             )
         plan = dict(

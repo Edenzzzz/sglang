@@ -2058,6 +2058,31 @@ class Scheduler(
                 return None
             effective_chunk_size = edf_chunk
 
+        # Prefix-aware chunk (SGLANG_CHUNK_ATTN_BUDGET, in units of query x key token pairs): a
+        # chunk of n tokens over a cached prefix r costs attention ~ n*(r + n/2), and in a mixed
+        # step every decode/verify row waits for it. Cap n so that work stays under the budget:
+        # short prefixes keep the full chunk, long ones shrink. Measured on 64-96K sessions, a fixed
+        # 2048 chunk cut P99 ITL 15-31% but cost TTFT at short prefixes, which this avoids.
+        attn_budget = float(os.environ.get("SGLANG_CHUNK_ATTN_BUDGET", "0") or 0)
+        if (
+            attn_budget > 0
+            and effective_chunk_size
+            and effective_chunk_size > 0
+            and len(self.running_batch.reqs) > 0  # only when decode/verify rows would wait
+        ):
+            if self.chunked_req is not None:
+                r = len(self.chunked_req.fill_ids)
+            elif self.waiting_queue:
+                nr = self.waiting_queue[0]
+                nr.init_next_round_input(self.tree_cache)
+                r = max(len(nr.prefix_indices), nr.host_hit_length)
+            else:
+                r = 0
+            # largest n with n*(r + n/2) <= budget:  n = -r + sqrt(r^2 + 2*budget)
+            n = int(-r + (r * r + 2.0 * attn_budget) ** 0.5)
+            floor = int(os.environ.get("SGLANG_CHUNK_ATTN_MIN", "1024"))
+            effective_chunk_size = max(min(effective_chunk_size, n), min(floor, effective_chunk_size))
+
         # Prefill policy
         adder = PrefillAdder(
             self.page_size,

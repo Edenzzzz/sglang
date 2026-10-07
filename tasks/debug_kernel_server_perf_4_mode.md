@@ -2087,7 +2087,14 @@ One line each; detail in [`realistic_workload_analysis.md`](realistic_workload_a
       page-table scatter, costs +0.83 ms per mixed step, about 40% of its 2.0 ms GPU saving. Graph
       capture or a cheaper split plan can recover at most that, ~2% of mixed-step time. The step-span
       events include in-step launch stalls, so this understates launch cost; the clean ceiling is LPT
-      with its mixed CUDA graphs on vs off (queued).
+      with its mixed CUDA graphs on vs off.
+      **Host-overhead fixes, measured** (one traced round each, all gate PASS, 0 fallbacks): (1) skip
+      flashinfer's FA3 plan + sparse indices in two-executor mode (`e237ab8bc`): 1.79 -> **1.54 ms**/mixed
+      step; (2) no device syncs in the kv-index build, grow-only scratch, host-side split counts
+      (`144a73dc8`): **1.71 ms**, the same as (1) within single-round noise (+/-0.2 ms). The ~0.6 ms that
+      remains over LPT is mostly the FA2 plan the split needs every step. Stopped here: the whole bound
+      is ~2% of mixed-step time. (2) is kept for its correctness part: the plan cache is now keyed on
+      exact row lengths, so a sum collision can no longer reuse a stale plan.
       Original note: needs the routing decision in device memory with exit-early
       CTAs so grid dims stay fixed.
 - [x] **Per-step tracing** — `SGLANG_STEP_TRACE=1` localises the gap to MIXED steps.

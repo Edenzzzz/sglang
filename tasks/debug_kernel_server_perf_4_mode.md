@@ -2004,7 +2004,12 @@ One line each; detail in [`realistic_workload_analysis.md`](realistic_workload_a
 
 ## Schedule exploration — 2026-10-05
 - [x] [EDF predictability, fused vs baseline](#edf-model-classes) — parity at ~1.5% MAPE with an adequate model class; the linear-fit falsification was an artefact
-- [ ] SM-split / cluster-cap / chunk-size sweeps on a correct kernel — all prior sweeps used symmetric mode and are void
+- [x] **SM-split / cluster-cap sweep on the correct causal split** (2026-10-07). TraceLab batch, `drivers/ab_parallel.sh`,
+      flashinfer `b0563ae`, all PASS, 0 fallbacks. Sequential: FA2 cap 264 = 11 388.6 us, 160 = +1.0%, 136 = +2.1%.
+      With overlap (the serving default): 264 = 11 393.8, **160 = 11 318.9 (best)**, 136 = 11 327.3, so serving's
+      `min(2*(132-sm_fa3), 160)` cap is already at the best point. Capping FA3 is harmful: 96 SMs +35%, 64 SMs
+      +87%. Overlap's net gain on this batch is within noise (-0.6%). Chunk size is a serving knob; see
+      the chunked-prefill sweep.
 - [ ] Acceptance-length (EWMA) as a perf-model input — needs an MTP trace
 
 ## Multi-node schedule tests (H20 only, <= 16 GPUs, trial `vibecuda`) — not started

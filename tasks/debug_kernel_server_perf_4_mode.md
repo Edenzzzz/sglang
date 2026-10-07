@@ -195,7 +195,7 @@ Workload and serving:
 - [ ] **Context length where attention is >50% of e2e** -- not run.
 - [x] **TraceLab mixed scenario wired** (2026-10-07) -- agent_plus_shortchat on the pod; trace verified identical after shrinking.
 - [x] **Realistic serving, LPT baseline** (2026-10-07) -- clean, 0 fallbacks. [detail](#realistic-serving-ab-lpt-baseline-tracelab-agent--short-chat--2026-10-07)
-- [ ] **Realistic serving, SPLIT arm** -- RE-RUNNING with a stream start barrier: the absolute TTFTs below had an uncontrolled stream offset ([retraction](#stream-offset-confound--2026-10-07)). Earlier, 3 interleaved rounds, gate PASS, 0 fallbacks:
+- [x] **Realistic serving, SPLIT arm** (2026-10-07) -- CONFIRMED with a stream start barrier (3 rounds, tight ranges): chat TTFT -17.4%, codex TTFT -10.5%, ITL -7.9%, P99 ITL -15.9%, tput +7.0% ([detail](#stream-offset-confound--2026-10-07)). Original run, 3 interleaved rounds, gate PASS, 0 fallbacks:
       codex TTFT -10.3%, ITL -7.6%, P99 ITL -18.5%, tput +5.6%; chat TTFT -16.2%. **Below the
       30% / 10% bar.** [detail](#realistic-serving-valid--2026-10-07) **Earlier run VOID (2026-10-07).** The -39.8% TTFT / +16.9% tput run
       computed the WRONG requests on FA3: the split plan handed `fa3_only_run` the FA2 rows'
@@ -237,6 +237,23 @@ ITL and throughput are less offset-sensitive. They are not exempt.
 **Fix** (`d2fc14f8c`): a start barrier. Each stream tokenises and warms up, signals ready, and
 waits; the runner releases all streams together (`BENCH_BARRIER_DIR`; `BENCH_NO_BARRIER=1`
 reproduces the old race). All three serving A/Bs are being re-run with it.
+
+**Outcome (2026-10-07), SPLIT vs LPT, barrier, 3 interleaved rounds, gate PASS, 0 fallbacks**
+(`realistic_repeats_b.sh`; `repsum.py --root /dev/shm/w/repb --base LPT`):
+
+| metric | barrier: LPT -> SPLIT | delta | original repeats |
+|---|---|---|---|
+| chat mean TTFT | 19 279 [19 169-19 339] -> 15 917 [15 865-15 958] ms | **-17.4%** | -16.2% |
+| chat P99 TTFT | 61 455 -> 54 709 ms | -11.0% | -10.9% |
+| codex mean TTFT | 25 672 -> 22 974 ms | -10.5% | -10.3% |
+| codex mean ITL | 36.2 -> 33.4 ms | -7.9% | -7.6% |
+| codex P99 ITL | 512 -> 431 ms | -15.9% | -18.5% |
+| codex output tok/s | 620.7 -> 664.0 | **+7.0%** | +5.6% |
+
+With all streams released together, absolute values match the original repeats (LPT chat TTFT
+19.3 s vs 18.8 s), so those repeats were effectively a simultaneous start. **The original
+SPLIT-vs-LPT result stands**, now with tight ranges. The low absolute TTFTs belonged to the
+chunk sweep, which ran in a later-start regime; its relative deltas are single-round only.
 
 <a id="four-mode-mtp-serving--2026-10-07"></a>
 ### 4-mode MTP serving A/B: stock MTP vs the 4-mode step (FA2 / split) — 2026-10-07

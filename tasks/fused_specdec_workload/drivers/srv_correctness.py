@@ -75,7 +75,11 @@ def run_arm(arm, outdir):
                  "--speculative-draft-model-path", f"{W}/qwen7b_eagle3_sgl",
                  "--speculative-num-steps", "3", "--speculative-eagle-topk", "1",
                  "--speculative-num-draft-tokens", "4"]
-    srv = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, env=env_for(arm))
+    # Own session, so teardown can kill sglang's children (scheduler, detokenizer, the HTTP
+    # process) as a group. srv.kill() alone left one listening on the port, and the next
+    # arm's warmup request went to that stale server and timed out.
+    srv = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, env=env_for(arm),
+                           start_new_session=True)
     try:
         for _ in range(300):
             try:
@@ -107,9 +111,13 @@ def run_arm(arm, outdir):
         print(f"{arm}: {len(results) - 2} requests, fallbacks={results['_fallbacks']} "
               f"tracebacks={results['_tracebacks']} mixed={results['_mixed_spec_lines']}", flush=True)
     finally:
-        srv.kill()
+        import signal
+        try:
+            os.killpg(srv.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         srv.wait()
-        time.sleep(5)
+        time.sleep(8)
 
 
 def compare(outdir, base, arm):

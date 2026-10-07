@@ -195,7 +195,7 @@ Workload and serving:
 - [x] **Context length where attention is >50% of e2e** (2026-10-08, H200, Qwen2.5-7B, yarn x4 to 131 072). Decode
       step: whole step (batch 1 from `bench_one_batch`; batches 8 and 32 from a server via
       `context_share_srv.py`, whose chunked prefill fits them) against the decode kernel sglang runs for the
-      same shapes x 28 layers. `drivers/context_share.sh`, `drivers/context_share_srv.sh`; commit 5ad1f0d2c.
+      same shapes x 28 layers. `drivers/context_share.sh`, `drivers/context_share_srv.sh`; commits b94e1c7de, 33bea018e.
 
       | batch | 4K | 16K | 32K | 64K | 120K |
       |---|---|---|---|---|---|

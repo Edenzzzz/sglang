@@ -225,8 +225,21 @@ Workload and serving:
       the step at these lengths, and the 4-mode step keeps decode moving through prefill.
       **P99 ITL regresses**, worst on chat. The suspect is the 8 192-token chunk at a 64-96K
       prefix: in the 4-mode step its attention runs inside the same forward as every verify row,
-      so every decoding request stalls together. A chunk sweep (4 096, 2 048) and a below-
-      saturation rate (chat 8/s, 3 rounds) are running.
+      so every decoding request stalls together.
+      **Chunk sweep, full stack only, one run each (2026-10-08)** (`BENCH_CHUNK=<c> TAG=_long_chunk<c>`): the
+      stall is the chunk.
+
+      | full stack | chunk 8 192 (3-round mean) | 4 096 | **2 048** | stock MTP (8 192) |
+      |---|---|---|---|---|
+      | chat / codex P99 ITL ms | 259.6 / 159.7 | 207.0 / 117.0 | **145.4 / 105.5** | 167.9 / 150.9 |
+      | chat / codex mean ITL ms | 35.6 / 19.4 | 37.7 / 21.8 | 35.4 / 20.6 | 67.1 / 36.7 |
+      | chat / codex TTFT ms | 1 815 / 10 690 | 2 149 / 13 169 | 4 306 / 17 740 | 54 242 / 37 095 |
+      | chat / codex tok/s | 854 / 214 | 854 / 207 | 854 / 207 | 587 / 140 |
+
+      At chunk 2 048 the full stack beats stock MTP on every metric: P99 ITL -13% / -30%, mean ITL
+      -47% / -44%, TTFT -92% / -52%, throughput +46% / +48%. Stock MTP has the same knob, so the
+      fair comparison tunes both. Queued: 3 rounds of BOTH arms at chunk 2 048, plus 3 rounds of both
+      at chat 8/s (below saturation).
 - [x] **TraceLab mixed scenario wired** (2026-10-07) -- agent_plus_shortchat on the pod; trace verified identical after shrinking.
 - [x] **Realistic serving, LPT baseline** (2026-10-07) -- clean, 0 fallbacks. [detail](#realistic-serving-ab-lpt-baseline-tracelab-agent--short-chat--2026-10-07)
 - [x] **Realistic serving, SPLIT arm** (2026-10-07) -- CONFIRMED with a stream start barrier (3 rounds, tight ranges): chat TTFT -17.4%, codex TTFT -10.5%, ITL -7.9%, P99 ITL -15.9%, tput +7.0% ([detail](#stream-offset-confound--2026-10-07)). Original run, 3 interleaved rounds, gate PASS, 0 fallbacks:

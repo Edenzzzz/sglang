@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.12.0 — First realistic serving comparison: SPLIT vs LPT, preliminary (2026-10-07)
+
+TraceLab coding-agent replay plus 12/s short chat on 1x H200, both arms 0 fallbacks, single
+run each:
+
+- codex: mean TTFT -39.8%, P99 TTFT -32.9%, mean ITL -16.8%, P99 ITL -52.6%, throughput +16.9%
+- chat: mean TTFT -41.5%, P99 TTFT -29.7%, ITL flat, throughput flat (open-loop fixed rate)
+
+Contradicts my earlier "low single-digit gain" prediction, which is retracted. Likely
+mechanism is queueing amplification near saturation (unverified). Preliminary: no repeats,
+an intermittent illegal memory access in the SPLIT arm (1 of 2 async runs), no MTP.
+
+Getting here took three serving-path fixes that no kernel-level test could see: the
+two-exec build dropped -DFLASHINFER_FUSED_UNIFIED_WGMMA=1 (one env var gated a runtime and a
+compile decision), sglang's fa3_only_run call lacked the num_splits argument, and the pod's
+dependency chain needed eight fixes. Also: priority list rewritten as a dated checklist, and
+ab_parallel.sh builds A/B arms concurrently.
+
 ## v0.11.0 — The "split-row corruption" was a test-harness bug; per-executor items measured; the 30% ceiling (2026-10-07)
 
 **The kernel was correct.** The long-running "split-row corruption" was two bugs in the test

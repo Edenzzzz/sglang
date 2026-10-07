@@ -180,7 +180,7 @@ Workload and serving:
 - [ ] **Context length where attention is >50% of e2e** -- not run.
 - [x] **TraceLab mixed scenario wired** (2026-10-07) -- agent_plus_shortchat on the pod; trace verified identical after shrinking.
 - [x] **Realistic serving, LPT baseline** (2026-10-07) -- clean, 0 fallbacks. [detail](#realistic-serving-ab-lpt-baseline-tracelab-agent--short-chat--2026-10-07)
-- [ ] **Realistic serving, SPLIT arm** -- crashes with an illegal memory access mid-run; being localised.
+- [ ] **Realistic serving, SPLIT arm** (2026-10-07) -- one clean run: codex TTFT -39.8%, ITL -16.8%, tput +16.9%; chat TTFT -41.5%. PRELIMINARY: needs repeats; intermittent illegal access (1/2 runs) open.
 - [ ] **4-mode MTP serving run** -- not started.
 - [ ] **Perf model and EDF vs unfused** -- not started.
 
@@ -6766,6 +6766,47 @@ pipeline state after the rendezvous.
 
 
 <a id="split-row-race-handoff"></a>
+## Realistic serving A/B, SPLIT vs LPT -- PRELIMINARY, single run each — 2026-10-07
+
+Same scenario as the LPT baseline below (`agent_plus_shortchat`, 1x H200, Qwen2.5-7B, RoPE
+extrapolated -- timings valid, text not). Both arms 0 fallbacks.
+
+| codex (agent replay) | LPT | SPLIT | delta |
+|---|---|---|---|
+| mean TTFT | 25 330 ms | 15 241 ms | **-39.8%** |
+| P99 TTFT | 55 143 ms | 36 976 ms | **-32.9%** |
+| mean ITL | 35.85 ms | 29.83 ms | -16.8% |
+| P99 ITL | 525.6 ms | 249.3 ms | **-52.6%** |
+| output throughput | 625.8 tok/s | 731.6 tok/s | **+16.9%** |
+
+| chat (open-loop, 12/s) | LPT | SPLIT | delta |
+|---|---|---|---|
+| mean TTFT | 18 661 ms | 10 922 ms | **-41.5%** |
+| P99 TTFT | 60 088 ms | 42 215 ms | -29.7% |
+| mean ITL | 12.07 ms | 11.90 ms | -1.4% |
+| P99 ITL | 40.62 ms | 41.79 ms | +2.9% |
+| output throughput | 858.2 | 858.3 | flat -- open-loop at a fixed rate, cannot move |
+
+**This contradicts my own prediction** ("low single-digit gain", retracted above). Likely
+mechanism, unverified: queueing amplification. TTFT in the tens of seconds says the server
+runs near saturation, where a ~19% faster mixed step removes far more than 19% of queueing.
+
+**Against the bar:** mean TTFT >=30% on both streams; throughput >=10% on the closed-loop
+codex stream (chat cannot show it); mean ITL is NOT at 30% (-16.8% codex, flat chat), though
+codex P99 ITL halves.
+
+**Why this is preliminary, not a result:**
+- one run per arm, not interleaved -- variance unknown, and queue-dominated metrics are the
+  ones most sensitive to run-to-run differences. Needs >= 3 interleaved repeats;
+- the SPLIT arm crashed with an illegal memory access in 1 of 2 asynchronous runs (it also
+  passed once under CUDA_LAUNCH_BLOCKING with per-executor syncs) -- intermittent, open;
+- no MTP; the forward-mix counter is not comparable across arms (the fused path counts per
+  layer, LPT per step).
+
+Command: drivers/realistic_ab.sh (LPT arm) and its SPLIT-only variant, vibecuda trial
+f5f0b2f6d81d1e33 (1x H200). flashinfer b45b0ec, sglang 91055ec2d (+ fault-dump debug code,
+inactive unless SGLANG_SPLIT_FAULT_DUMP is set).
+
 ## Realistic serving A/B, LPT baseline (TraceLab agent + short chat) — 2026-10-07
 
 Scenario `agent_plus_shortchat` (`run_mixed_workloads.py`): coding-agent TraceLab replay

@@ -164,11 +164,21 @@ Kernel, per executor (each item A/B'd against its own executor's baseline):
 - [x] **FA3 traits** (2026-10-07) -- MmaPV_is_RS=1 worth 3.84%; stages=3 +0.54%, LPT=1 +0.68%,
       TMA paged +10.03% slower. Upstream defaults win. [detail](#fa3-optimisation-items-measured-per-executor-on-the-fixed-kernel--2026-10-07)
 - [x] **FA2 `MMA_KV` 2/3/4** (2026-10-07) -- flat (<0.5%); it is register tiling, SharedStorage identical.
-- [ ] **K/V pipelining, FA2** -- not run: needs the real staging-depth knob, shown to move SharedStorage first.
-- [ ] **Smem-handoff JIT split-KV reduction, both executors** -- not run.
+- [x] **K/V pipelining, FA2** (2026-10-07) -- real S-slot K/V smem ring, per tile class. 2/3/1 is
+      **-7.4%** on MTP-verify rows, **-10.3%** at 64-128K, -2.0% on appends; decode flat. Now the
+      default. [detail](#fa2-kv-ring--2026-10-07)
+- [x] **Smem-handoff JIT split-KV reduction** (2026-10-07) -- ceiling measured, NOT built: deleting the
+      whole rendezvous + merge saves at most **2.9%** (longmtp), 0.8% (longdec). The global
+      round trip is not the cost. Side finding: our JIT rendezvous is 2.2% slower than classic
+      grid.sync there. FA3 side: the router sends it no split rows (append rows have >=448
+      m-blocks), so it has nothing to reduce. [detail](#fa2-kv-ring--2026-10-07)
 - [ ] **DSMEM / KV multicast** -- cluster launch built; blocked by upstream's
       `Use_TMA_KV || ClusterShape==1` assert. Needs a cluster-aware cp.async gather.
-- [ ] **Fused spec tree-build epilogue (4-mode, verify + draft)** -- not built.
+- [x] **Fused spec tree-build epilogue** (2026-10-07) -- built as ONE kernel replacing
+      organize_draft_results + build_tree (+ their fills/cat). 0 mismatches over ~150 cases vs
+      sglang's own path; graph-captured 31 -> 10 us (MTP chain), eager 120 -> 52 us. Not an
+      attention epilogue: the data dependencies forbid it. Not yet wired into the worker.
+      [detail](#fused-tree-build--2026-10-07)
 - [ ] **Cross-role backfill (`tma_store_wait`)** -- not run.
 
 Correctness and routing:
@@ -187,6 +197,110 @@ Workload and serving:
 Cluster:
 - [ ] **Multi-node PD colocation, four points** -- design doc written, nothing measured.
       Delta: at most 4 nodes, so baselines are 2P2D and 1P3D.
+
+<a id="fused-tree-build--2026-10-07"></a>
+### Fused spec tree build: one kernel at the draft tail, not an attention epilogue — 2026-10-07
+
+**RETRACTION of the design in [fused-epilogue-design](#fused-epilogue-design).** It said the
+verify group's last arrival "already holding the reduced O and LSE" could build the tree.
+The tree does not depend on attention output at all, and no attention kernel sits between
+its producer and its consumer:
+- inputs: `parent_list` and `selected_index` come from top-k over the draft scores, after
+  the last draft step's LM head;
+- outputs: `positions` feeds RoPE **before** the verify forward's first attention, and
+  `tree_mask` is that attention's input.
+
+So the epilogue it can legitimately be is the **draft step's**: the work between the draft
+graph's last top-k and the verify forward. Today that is `organize_draft_results` (cat x3,
+topk, sort, gather; inside the draft CUDA graph) followed by `build_tree_kernel_efficient`,
+run **eagerly**: `fill_` or `full` of the mask, which in FULL_MASK mode is
+O(seq_lens_sum x n) bytes; `full` of the retrive buffer; `empty`; `cat(verified_id)`; and
+the kernel.
+
+**What was built.** `python/sglang/srt/speculative/csrc/fused_tree_build.cu`: one CTA per
+request does the top-(n-1) selection with torch.topk's ordering (NaN first, ties to the lower
+index), the ascending sort, the token gather with `verified_id` prepended, and the full
+build_tree semantics in all three mask modes. It also writes the mask prefix and the -1
+retrive defaults that the reference gets from separate fill launches. Bit-packed mode is
+capped at n<=32, as sglang's own dtype table is.
+
+**Check.** `tasks/fused_specdec_workload/drivers/tree_build_check.py` (pod, Qwen env). The
+reference is sglang's own `select_top_k_tokens` -> `organize_draft_results` ->
+`build_tree_kernel_efficient` (sgl-kernel 0.3.16.post4). Fused outputs go into
+garbage-filled buffers, so any byte left unwritten shows up as a mismatch. Configs (topk,
+steps, n) = (1,3,4) (1,5,6) (4,3,8) (8,5,16) (4,5,32) (10,8,64) x bs 1/8/64 x modes x 3
+seeds: **0 mismatching cases** across tree_mask, positions, retrive x3, draft_tokens and
+top_scores_index.
+
+| topk/steps/n | bs, seqlen | ref eager | fused eager | ref graph | fused graph (us) |
+|---|---|---|---|---|---|
+| 1/3/4 (MTP chain) | 32, 4096, FULL | 120.5 | 52.2 | 31.5 | **11.7** |
+| 1/3/4 | 128, 8192, FULL | 121.8 | 52.2 | 34.8 | 14.1 |
+| 4/3/8 | 32, 32768, FULL | 120.5 | 51.6 | 39.7 | 18.7 |
+| 8/5/16 | 32, 4096, FULL | 122.6 | 53.6 | 45.0 | 37.4 |
+| 8/5/16 | 128, 8192, QLEN | 123.0 | 54.2 | 49.1 | 34.4 |
+
+"ref graph" captures both halves, which sglang does not do today. sglang runs build_tree
+eagerly, so the saving it actually gets is roughly eager-ref minus graph-fused: about 100 us
+per decode step. **Scale:** that is about 0.3% of a ~30 ms ITL. It removes a host
+round-trip segment, which is what the 4-mode single-launch step needs, but it is not an ITL
+lever on its own. At topk=8 the O(L^2) rank selection (L=264) is the kernel's own cost; a
+warp bitonic select would cut it if that config is ever served.
+
+**Not done yet:** wiring into `eagle_worker.draft_forward` (return the tree from the draft
+graph). That is a server item, and it waits behind the MTP-in-4-mode blocker.
+
+<a id="fa2-kv-ring--2026-10-07"></a>
+### FA2 executor: K/V smem ring, and the split-reduction ceiling — 2026-10-07
+
+**What was built.** `NUM_STAGES = 1` in FA2's traits was not a staging knob: SharedStorage
+holds one K and one V tile, and the mainloop overlaps K(t-1)'s load with PV(t). The ring is
+real: `KVStagedTraits<KT, S>` stacks S KV tiles along the row axis (slot boundary is a
+multiple of 8 rows, so the 128B swizzle is unchanged), and the mainloop issues tile t-S into
+the slot PV(t) just released, with exactly two commit groups per iteration so the waits are
+`wait_group<2S-1>` (K) / `<2S-2>` (V). Per class, because the FA2 plan runs **2 CTAs/SM**
+(~113 KB each): tile 128 fits 2 stages (96 KB), tile 64 up to 4, tile 16 none at its 128-row
+KV tile (68 KB at depth 1).
+
+**Method.** `tests/fa2_stage_bench.py`: the FA2 executor alone (`BatchAttention`, causal,
+Qwen2.5-7B heads 28/4/128, page 128) against an fp32 reference. Each arm builds its own JIT
+module (`FLASHINFER_EXTRA_CUDAFLAGS` + its own `FLASHINFER_WORKSPACE_BASE`), so no arm can
+reuse a stale module. That was the failure that voided earlier FA2 items. 3 reps per arm.
+
+flashinfer `3e41c2d` (ring) / `f54745e` (defaults); driver
+`tasks/fused_specdec_workload/drivers/fa2_ab.sh` with `FIXTURES=decode,mid,prefill,agent,longdec,longmtp`.
+
+| arm | decode | mid (MTP w4) | prefill | agent | longdec | longmtp |
+|---|---|---|---|---|---|---|
+| base (1/1/1), us | 914.3 | 651.8 | 3621.8 | 4624.4 | 805.8 | 1036.2 |
+| **stages 2/3/1** | -0.5% | **-7.4%** | **-2.0%** | -0.5% | -0.2% | **-10.3%** |
+| tile 64 only, 2 / 3 stages (2 reps) | -0.5 / -0.4% | -6.9 / -9.0% | -0.2 / +0.6% | +0.6 / +1.6% | | |
+| tile 16 at MMA_KV=1, 1 / 2 stages (2 reps) | +5.0 / +2.0% | | | +3.3 / +1.6% | | |
+| JIT rendezvous off (classic grid.sync) | +1.4% | -0.6% | +0.4% | -0.6% | +0.2% | -2.2% |
+| **rendezvous + merge skipped (bound)** | +0.9% | -1.7% | +0.9% | +0.9% | -0.8% | **-2.9%** |
+| no split (`FORCE_KV_CHUNK=1e6`) | -1.6% | +71.5% | +0.2% | -0.2% | +104.5% | +306.9% |
+
+Fixtures: decode 96 x q1 at 2-32K; mid 48 x q4 at 2-32K; prefill 4 appends (512-2048 onto
+8-32K); agent 64 decode + 12 tool-call prefills (40-600) at 4-48K; longdec 16 x q1 at
+64-128K; longmtp 16 x q4 at 64-128K. Every arm 0 unwritten, PASS (rel err <= 4.6e-3), 0
+fallbacks, except the skip arm, which is wrong on split rows by construction. Spread across
+reps <= 1.6%.
+
+**Reading it.**
+- The tile-64 class (MTP verify) was latency-bound on its 32-row KV tile, and a 3-deep ring
+  fixes most of it. Decode (tile 16) already moves 1.72 M tokens x 2 KB in 914 us = 3.85
+  TB/s, ~80% of H200 HBM, so a deeper ring has nothing left to hide. The only way to fit
+  one is a 64-row KV tile, which costs more than it hides.
+- **Smem-handoff reduction: not built, because the ceiling is 2.9%.** Removing every
+  rendezvous and every merge saves 2.9% on the most split-heavy shape and under 1% on
+  plain long decode. A DSMEM handoff removes strictly less, since partials still have to
+  meet, and it would add a co-scheduling constraint: a group's chunks would have to run on
+  cluster-mates at the same time. Splitting itself is essential (2-4x without it). It is
+  the merge's global round trip that is cheap: 28 x 128 x 4 B of partial per chunk against
+  MBs of KV.
+- Side finding: on longmtp the classic grid.sync + reduction pass beats our JIT rendezvous
+  by 2.2%. The JIT merge runs on one CTA's 4 warps per group; classic spreads it over the
+  grid. Not acted on: 2.2% of the FA2 half of an attention kernel.
 
 ### Long-KV is 1604x off roofline, and our split count is being IGNORED — 2026-10-06
 

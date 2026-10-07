@@ -1,0 +1,27 @@
+diff --git a/hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp b/hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp
+index 536ff85..2ca343c 100644
+--- a/hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp
++++ b/hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp
+@@ -754,7 +754,12 @@ struct CollectiveMainloopFwdSm90 {
+                     tKgK_TMA(_, n_block_idx, bidb_kv_idx), tKsK_TMA(_, smem_pipe_write.index()));
+             } else {
+                 constexpr bool Seqlenk_mask = decltype(need_seqlenk_masking_type)::value;
++                // FLASHINFER_FA3_SKIP_KV_LOAD=1: timing bound only (output garbage). The pipeline
++                // still commits, so the mainloop runs at its compute-only speed: the most any
++                // reduction in KV traffic (e.g. cluster multicast) could recover.
++#if !defined(FLASHINFER_FA3_SKIP_KV_LOAD) || !FLASHINFER_FA3_SKIP_KV_LOAD
+                 paged_kv_manager.template load_K<Seqlenk_mask>(n_block, sK_pi(_, _, smem_pipe_write.index()));
++#endif
+                 pipeline_k.producer_commit(smem_pipe_write, cutlass::arch::cpasync_barrier_arrive);
+             }
+         };
+@@ -768,7 +773,9 @@ struct CollectiveMainloopFwdSm90 {
+                     tVgVt_TMA(_, n_block_idx, bidb_kv_idx), tVsVt_TMA(_, smem_pipe_write.index()));
+             } else {
+                 constexpr bool Seqlenk_mask = decltype(need_seqlenk_masking_type)::value;
++#if !defined(FLASHINFER_FA3_SKIP_KV_LOAD) || !FLASHINFER_FA3_SKIP_KV_LOAD
+                 paged_kv_manager.template load_V<Seqlenk_mask>(n_block, sVcpasync(_, _, smem_pipe_write.index()));
++#endif
+                 pipeline_v_load.producer_commit(smem_pipe_write, cutlass::arch::cpasync_barrier_arrive);
+             }
+         };

@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.13.0 — Kernel items closed: FA2 K/V ring, split-reduction ceiling, fused tree build (2026-10-07)
+
+- **FA2 K/V smem ring** (flashinfer `3e41c2d`, defaults `f54745e`): an S-slot ring per tile
+  class (`FLASHINFER_FA2_KV_STAGES_{1,2,3}`), now 2/3/1 by default. MTP-verify rows -7.4%,
+  64-128K verify -10.3%, appends -2.0%, decode flat (already ~80% of HBM). 3 reps, all PASS,
+  0 fallbacks. `drivers/fa2_ab.sh` + `tests/fa2_stage_bench.py`.
+- **Smem-handoff split reduction: ceiling measured, not built.** Skipping every rendezvous and
+  merge saves <=2.9%; splitting itself is worth 2-4x. Classic grid.sync beats our JIT
+  rendezvous by 2.2% on long verify.
+- **Fused draft tree build** (`speculative/csrc/fused_tree_build.cu`): organize_draft_results +
+  build_tree in one kernel, 0 mismatches vs sglang over ~150 cases; 31 -> 10 us graph-captured
+  (MTP chain). The doc's "attention epilogue" design is retracted: the data dependencies forbid
+  it.
+- Tooling: `FLASHINFER_EXTRA_CUDAFLAGS` (per-arm -D for flashinfer's JIT), harness `EXTRA_DEFS`,
+  `FLASHINFER_SPLIT_MERGE_SKIP` and `FLASHINFER_FA3_SKIP_KV_LOAD` timing-bound switches
+  (default off; the latter is a patch to the pinned flash-attention, in
+  `drivers/flash_attention_skip_kv_load.patch`).
+- Serving repeats (realistic_repeats.sh) stopped mid-round-1 to close kernel items first.
+
 ## v0.12.0 — First realistic serving comparison: SPLIT vs LPT, preliminary (2026-10-07)
 
 TraceLab coding-agent replay plus 12/s short chat on 1x H200, both arms 0 fallbacks, single

@@ -106,12 +106,14 @@ def run_arm(arm):
         p_args = " ".join(f"--prefill {u} {b}" for u, b, _ in urls(hs, pre))
         d_args = " ".join(f"--decode {u}" for u, _, _ in urls(hs, dec))
         rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --pd-disaggregation {p_args} {d_args} --host :: --port {RPORT}"
-    C.run(0, f"(cd {W} && PYTHONPATH={W}/python setsid nohup {rcmd} > {log}/router.log 2>&1 < /dev/null &); sleep 8; "
+    # setsid -f with every fd redirected: a backgrounded "cd && cmd" list keeps a subshell whose
+    # stdout is the webshell pipe, which held each launch call open for its 100 s timeout.
+    C.run(0, f"cd {W} && PYTHONPATH={W}/python setsid -f {rcmd} > {log}/router.log 2>&1 < /dev/null; sleep 8; "
              f"curl -s -o /dev/null -w 'router %{{http_code}}\\n' http://127.0.0.1:{RPORT}/health")
     knobs = " ".join(f"{k}={os.environ[k]}" for k in
                      ("SESSIONS", "TURNS", "SESSION_RATE", "SLOWDOWN", "CHAT_RATE", "CHAT_N", "CHAT_IN",
                       "CHAT_OUT", "MIN_CTX", "MAX_CTX") if k in os.environ)
-    C.run(0, f"(setsid nohup env {knobs} bash {W}/tasks/pd_colocation/mn_bench.sh {log} {RPORT} > {log}/mn_bench.log 2>&1 < /dev/null &); echo started")
+    C.run(0, f"setsid -f env {knobs} bash {W}/tasks/pd_colocation/mn_bench.sh {log} {RPORT} > {log}/mn_bench.log 2>&1 < /dev/null; echo started")
     t0 = time.time()
     while time.time() - t0 < 5400:
         time.sleep(60)

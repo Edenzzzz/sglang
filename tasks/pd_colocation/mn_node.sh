@@ -80,7 +80,8 @@ supervise() {
   done
 }
 for g in 0 1; do
-  (supervise $g > $LOG/supervise_r${ROLE}_g${g}.log 2>&1 &)
+  supervise $g > $LOG/supervise_r${ROLE}_g${g}.log 2>&1 < /dev/null &
+  disown
 done
 sleep 3
 cat $LOG/ports_r${ROLE}.txt

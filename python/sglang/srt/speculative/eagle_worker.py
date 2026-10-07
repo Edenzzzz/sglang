@@ -255,6 +255,8 @@ class EAGLEWorker(TpModelWorker):
             A tuple of the final logit output of the target model, next tokens accepted,
             the batch id (used for overlap schedule), and number of accepted tokens.
         """
+        if getattr(batch, "mixed_spec_running", None) is not None:
+            return self.forward_mixed_spec(batch, batch.mixed_spec_running)
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
             logits_output, next_token_ids, seq_lens_cpu = self.forward_target_extend(
                 batch
@@ -292,6 +294,122 @@ class EAGLEWorker(TpModelWorker):
                 num_accepted_tokens=sum(verify_output.accept_length_per_req_cpu),
                 can_run_cuda_graph=can_run_cuda_graph,
             )
+
+    def forward_mixed_spec(
+        self, batch: ScheduleBatch, running: ScheduleBatch
+    ) -> GenerationBatchResult:
+        """One 4-mode step: a chunked-prefill batch and the running batch's verify rows in
+        ONE target forward (SGLANG_MIXED_SPEC=1).
+
+        Stock sglang never forms this batch: under speculative decoding the running batch's
+        verify rows only exist after the draft model has run, inside this worker, which is
+        after the scheduler has formed the step. So the order here is draft(running) ->
+        prepare_for_verify (slots allocated, req_to_token written) -> one MIXED target
+        forward over [prefill tokens | draft tokens] -> sample the prefill rows -> sglang's
+        own verify acceptance on the verify rows -> both draft extends.
+
+        Requires a chain draft (topk == 1): each verify row is then a causal extend of
+        num_draft_tokens onto its prefix, which is exactly what the extend attention path
+        computes, so no tree mask enters the shared forward.
+        """
+        import dataclasses
+        from types import SimpleNamespace
+
+        assert self.topk == 1, "mixed spec step requires --speculative-eagle-topk 1"
+        self._mixed_spec_steps = getattr(self, "_mixed_spec_steps", 0) + 1
+        if self._mixed_spec_steps in (1, 10) or self._mixed_spec_steps % 200 == 0:
+            logger.info(
+                "MIXED_SPEC steps=%d (this: %d prefill rows, %d verify rows)",
+                self._mixed_spec_steps, len(batch.reqs), running.batch_size(),
+            )
+        assert not batch.return_logprob and not running.return_logprob
+        assert not running.has_grammar
+
+        with self.draft_tp_context(self.draft_model_runner.tp_group):
+            spec_info = self.draft(running)
+        spec_info.prepare_for_verify(running, self.page_size)
+        n = spec_info.draft_token_num
+        bs_r = running.batch_size()
+
+        p_mwb = batch.get_model_worker_batch()
+        r_seq, r_seq_cpu = running.seq_lens, running.seq_lens_cpu
+        n_pre_rows = len(p_mwb.seq_lens)
+        t_pre = int(p_mwb.extend_num_tokens)
+
+        def _cat(a, b):
+            return None if a is None or b is None else torch.cat([a, b])
+
+        mwb = dataclasses.replace(
+            p_mwb,
+            forward_mode=ForwardMode.MIXED,
+            input_ids=torch.cat([p_mwb.input_ids, running.input_ids]),
+            req_pool_indices=torch.cat([p_mwb.req_pool_indices, running.req_pool_indices]),
+            seq_lens=torch.cat([p_mwb.seq_lens, r_seq + n]),
+            out_cache_loc=torch.cat([p_mwb.out_cache_loc, running.out_cache_loc]),
+            seq_lens_cpu=torch.cat([p_mwb.seq_lens_cpu, r_seq_cpu + n]),
+            seq_lens_sum=int(p_mwb.seq_lens_sum) + int(r_seq_cpu.sum()) + bs_r * n,
+            orig_seq_lens=_cat(p_mwb.orig_seq_lens, r_seq + n),
+            extend_num_tokens=t_pre + bs_r * n,
+            extend_seq_lens=list(p_mwb.extend_seq_lens) + [n] * bs_r,
+            extend_prefix_lens=list(p_mwb.extend_prefix_lens) + r_seq_cpu.tolist(),
+            prefix_lens_sum=int(p_mwb.prefix_lens_sum or 0) + int(r_seq_cpu.sum()),
+            extend_logprob_start_lens=list(p_mwb.extend_logprob_start_lens) + [n] * bs_r,
+            return_logprob=False,
+            decoding_reqs=running.reqs,
+            spec_info=None,
+            capture_hidden_mode=CaptureHiddenMode.FULL,
+            mixed_spec_verify_tokens=bs_r * n,
+        )
+        runner = self.target_worker.model_runner
+        fb = ForwardBatch.init_new(mwb, runner)
+        logits_output, _ = runner.forward(fb)
+        logits = logits_output.next_token_logits
+        hidden = logits_output.hidden_states
+
+        # Prefill rows: last-token logits, sampled with the prefill batch's own params.
+        pre_out = LogitsProcessorOutput(
+            next_token_logits=logits[:n_pre_rows], hidden_states=hidden[:t_pre]
+        )
+        view = SimpleNamespace(
+            sampling_info=p_mwb.sampling_info,
+            return_logprob=False,
+            top_logprobs_nums=p_mwb.top_logprobs_nums,
+            token_ids_logprobs=p_mwb.token_ids_logprobs,
+            forward_mode=ForwardMode.EXTEND,
+            seq_lens=p_mwb.seq_lens,
+            positions=None,
+        )
+        next_token_ids = runner.sample(pre_out, view)
+
+        # Verify rows: every draft token's logits, then sglang's own acceptance.
+        running.return_hidden_states = False
+        running.forward_mode = ForwardMode.TARGET_VERIFY
+        running.spec_info = spec_info
+        ver_out = LogitsProcessorOutput(
+            next_token_logits=logits[n_pre_rows:], hidden_states=hidden[t_pre:]
+        )
+        ver_out, res = self._verify_post(running, spec_info, ver_out, None)
+
+        with self.draft_tp_context(self.draft_model_runner.tp_group):
+            self.forward_draft_extend(
+                batch, pre_out.hidden_states, next_token_ids, p_mwb.seq_lens_cpu
+            )
+            if running.spec_info.verified_id.shape[0] > 0:
+                self.forward_draft_extend_after_decode(running)
+
+        result = GenerationBatchResult(
+            logits_output=pre_out,
+            next_token_ids=next_token_ids,
+            num_accepted_tokens=0,
+            can_run_cuda_graph=False,
+        )
+        result.mixed_running_result = GenerationBatchResult(
+            logits_output=ver_out,
+            next_token_ids=res.verified_id,
+            num_accepted_tokens=sum(res.accept_length_per_req_cpu),
+            can_run_cuda_graph=False,
+        )
+        return result
 
     def check_forward_draft_extend_after_decode(self, batch: ScheduleBatch):
         local_need_forward = batch.spec_info.verified_id.shape[0] > 0
@@ -664,7 +782,22 @@ class EAGLEWorker(TpModelWorker):
             batch_result.logits_output,
             batch_result.can_run_cuda_graph,
         )
+        logits_output, res = self._verify_post(
+            batch,
+            spec_info,
+            logits_output,
+            (retrieve_next_token_cpu, retrieve_next_sibling_cpu, draft_tokens_cpu)
+            if batch.has_grammar
+            else None,
+        )
+        return logits_output, res, model_worker_batch, can_run_cuda_graph
 
+    def _verify_post(self, batch, spec_info, logits_output, grammar_cpu):
+        """Everything verify() does after the target forward: grammar mask, acceptance,
+        KV bookkeeping, and the next draft input. Shared with the mixed spec step, whose
+        verify logits come out of a forward that also carried prefill rows."""
+        if grammar_cpu is not None:
+            retrieve_next_token_cpu, retrieve_next_sibling_cpu, draft_tokens_cpu = grammar_cpu
         vocab_mask = None
         if batch.has_grammar:
             # Generate the logit mask for structured output.
@@ -754,7 +887,7 @@ class EAGLEWorker(TpModelWorker):
         )
         batch.spec_info = res.draft_input
 
-        return logits_output, res, model_worker_batch, can_run_cuda_graph
+        return logits_output, res
 
     def add_logprob_values(
         self,

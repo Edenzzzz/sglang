@@ -25,7 +25,15 @@ def env_for(arm):
     env["SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN"] = "1"
     env["SGLANG_FLASHINFER_USE_PERSISTENT"] = "1"
     env["SGLANG_LOG_MIXED_COMPOSITION"] = f"/tmp/comp_{arm}.jsonl"
-    if arm.startswith("SPLIT"):
+    if arm.startswith("MTP"):
+        if "MIX" in arm:
+            env.update(SGLANG_ALLOW_MIXED_CHUNK_SPEC="1", SGLANG_MIXED_SPEC="1")
+        if "SPLIT" in arm:
+            env.update(SGLANG_MIXED_ATTENTION_KERNEL="persistent", SGLANG_TWO_EXEC="1",
+                       SGLANG_FUSED_FA3_SM_SPLIT="1", FLASHINFER_SM_PARTITION="1",
+                       UP_STAGES="2",
+                       SGLANG_FUSED_FA3_SRC=f"{W}/fi/tests/fused_fa3_persistent_ext.cu")
+    elif arm.startswith("SPLIT"):
         env.update(SGLANG_MIXED_ATTENTION_KERNEL="persistent", SGLANG_TWO_EXEC="1",
                    SGLANG_FUSED_FA3_SM_SPLIT="1", FLASHINFER_SM_PARTITION="1", UP_STAGES="2",
                    SGLANG_FUSED_FA3_SRC=f"{W}/fi/tests/fused_fa3_persistent_ext.cu")
@@ -59,6 +67,12 @@ def run_arm(arm, outdir):
             "--json-model-override-args",
             '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}',
             "--watchdog-timeout", "600"]
+    if arm.startswith("MTP"):
+        # MTP-style chain draft: EAGLE3 head, 3 steps, topk 1 -> 4 verify tokens per row.
+        args += ["--speculative-algorithm", "EAGLE3",
+                 "--speculative-draft-model-path", f"{W}/qwen7b_eagle3",
+                 "--speculative-num-steps", "3", "--speculative-eagle-topk", "1",
+                 "--speculative-num-draft-tokens", "4"]
     srv = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, env=env_for(arm))
     try:
         for _ in range(300):
@@ -86,9 +100,10 @@ def run_arm(arm, outdir):
         txt = open(f"{outdir}/server_{arm}.log").read()
         results["_fallbacks"] = txt.lower().count("fallback")
         results["_tracebacks"] = txt.count("Traceback")
+        results["_mixed_spec_lines"] = [l[-120:] for l in txt.splitlines() if "MIXED_SPEC steps" in l][-3:]
         json.dump(results, open(f"{outdir}/{arm}.json", "w"))
         print(f"{arm}: {len(results) - 2} requests, fallbacks={results['_fallbacks']} "
-              f"tracebacks={results['_tracebacks']}", flush=True)
+              f"tracebacks={results['_tracebacks']} mixed={results['_mixed_spec_lines']}", flush=True)
     finally:
         srv.kill()
         srv.wait()

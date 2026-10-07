@@ -2235,6 +2235,24 @@ class Scheduler(
         avg_kv_length_for_log = None
 
         if (
+            os.environ.get("SGLANG_MIXED_SPEC", "0") == "1"
+            and not self.spec_algorithm.is_none()
+            and not self.running_batch.is_empty()
+            and not (new_batch.return_logprob or self.running_batch.return_logprob)
+            and not new_batch.has_grammar
+            and not self.running_batch.has_grammar
+        ):
+            # 4-mode step: the running batch keeps its identity and spec state; its verify
+            # rows are built by the spec worker and appended to this prefill's target
+            # forward (EAGLEWorker.forward_mixed_spec). The prefill batch merges into the
+            # running batch on the next step, as it does after any spec prefill.
+            self.running_batch.filter_batch()
+            if not self.running_batch.is_empty():
+                self.running_batch = self.update_running_batch(self.running_batch)
+            if not self.running_batch.is_empty():
+                new_batch.mixed_spec_running = self.running_batch
+            new_batch.decoding_reqs = None
+        elif (
             self.is_mixed_chunk
             and not self.running_batch.is_empty()
             and not (new_batch.return_logprob or self.running_batch.return_logprob)
@@ -2503,6 +2521,12 @@ class Scheduler(
                     self._steptrace[-1][2].record()
                 future_indices_or_next_token_ids = batch_result.next_token_ids
                 self.update_cache_from_scheduler(batch, batch_result)
+                rr = batch_result.mixed_running_result
+                if rr is not None:
+                    running = batch.mixed_spec_running
+                    running.output_ids = rr.next_token_ids
+                    rr.extend_input_len_per_req = [r.extend_input_len for r in running.reqs]
+                    self.update_cache_from_scheduler(running, rr)
 
             # NOTE: future_indices_or_next_token_ids is used in ScheduleBatch,
             #       which can probably be replaced by future_indices later [TODO(lsyin)].
@@ -2562,6 +2586,10 @@ class Scheduler(
 
         elif batch.forward_mode.is_extend():
             self.process_batch_result_prefill(batch, result)
+            if getattr(result, "mixed_running_result", None) is not None:
+                self.process_batch_result_decode(
+                    batch.mixed_spec_running, result.mixed_running_result
+                )
 
         elif batch.forward_mode.is_idle():
             if self.enable_overlap:

@@ -45,6 +45,9 @@ class GenerationBatchResult:
     # relay path: forward stream -> next step forward
     next_draft_input: Optional[EagleDraftInput] = None
 
+    # Mixed spec step: the running batch's verify result, carried beside the prefill one.
+    mixed_running_result: Optional["GenerationBatchResult"] = None
+
     def copy_to_cpu(self, return_logprob: bool = False):
         """Copy tensors to CPU in overlap scheduling.
         Only the tensors which are needed for processing results are copied,

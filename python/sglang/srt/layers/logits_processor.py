@@ -97,6 +97,7 @@ class LogitsMetadata:
     next_token_logits_buffer: Optional[torch.Tensor] = None
 
     extend_return_logprob: bool = False
+    mixed_spec_verify_tokens: int = 0
     extend_return_top_logprob: bool = False
     extend_token_ids_logprob: bool = False
     extend_seq_lens: Optional[torch.Tensor] = None
@@ -173,6 +174,7 @@ class LogitsMetadata:
             token_ids_logprobs=forward_batch.token_ids_logprobs,
             extend_input_logprob_token_ids_gpu=forward_batch.extend_input_logprob_token_ids_gpu,
             padded_static_len=forward_batch.padded_static_len,
+            mixed_spec_verify_tokens=getattr(forward_batch, "mixed_spec_verify_tokens", 0),
             is_prefill_only=forward_batch.is_prefill_only,
             global_num_tokens_gpu=forward_batch.global_num_tokens_gpu,
             dp_local_start_pos=forward_batch.dp_local_start_pos,
@@ -411,6 +413,23 @@ class LogitsProcessor(nn.Module):
                     idx * logits_metadata.padded_static_len
                     + logits_metadata.extend_seq_lens
                     - 1
+                )
+            nv = logits_metadata.mixed_spec_verify_tokens
+            if nv > 0:
+                # Mixed spec step: prefill rows first (last token each), then verify rows,
+                # whose every token is scored by the verify step.
+                n_tok = hidden_states.shape[0]
+                n_verify_rows, acc = 0, 0
+                for ln in reversed(logits_metadata.extend_seq_lens_cpu):
+                    if acc >= nv:
+                        break
+                    acc += int(ln)
+                    n_verify_rows += 1
+                last_index = torch.cat(
+                    [
+                        last_index[: last_index.numel() - n_verify_rows],
+                        torch.arange(n_tok - nv, n_tok, device=last_index.device),
+                    ]
                 )
             pruned_states = hidden_states[last_index]
             if aux_hidden_states is not None:

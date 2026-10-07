@@ -1036,6 +1036,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     extend_lens: List[int] = None
     extend_num_tokens: Optional[int] = None
     decoding_reqs: List[Req] = None
+    # Mixed spec step: the speculative running batch whose verify rows ride in this
+    # prefill batch's target forward (SGLANG_MIXED_SPEC=1).
+    mixed_spec_running: Optional["ScheduleBatch"] = None
     extend_logprob_start_lens: List[int] = None
     # It comes empty list if logprob is not required.
     extend_input_logprob_token_ids: Optional[torch.Tensor] = None
@@ -1933,5 +1936,8 @@ class ModelWorkerBatch:
 
     # Whether this batch is prefill-only (no token generation needed)
     is_prefill_only: bool = False
+    # Mixed spec step (SGLANG_MIXED_SPEC=1): the batch ends with this many verify tokens,
+    # every one of which needs logits; earlier rows are prefill rows (last token only).
+    mixed_spec_verify_tokens: int = 0
 
     decoding_reqs: List[Req] = None

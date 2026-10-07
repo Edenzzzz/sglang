@@ -131,6 +131,31 @@ prefetch). Any worker can therefore pull a prefix that any other worker computed
   connection (`ServerDisconnectedError`). The router now retries once before streaming starts
   (a8465ecc7), as the stock router does.
 
+**The SLO veto, calibrated, with worker-side EDF (point 1), 2026-10-08.** The router's
+`PerfModel` was fitted on one H20 worker (`mn_run.py calibrate`, `calibrate_h20.py`): prefill
+9.0K tok/s at 4-8K falling to 4.9K at 49K, so 5 531 tok/s over 16-49K, and decode ITL 5.05 ms +
+0.065 ms per running sequence. The router uses the same length-scaled TTFT deadline as the
+workers (2 s + 1 s per 5K tokens beyond 4 096). Workers run deadline-ordered admission with no
+chunk cap (`_edf` suffix; the configuration that won on the H200). Command:
+`ROUTER_ARGS="--prefill-tok-s 5531 --decode-step-ms 5.05 --decode-ms-per-seq 0.065 --ttft-slo-ms 2000"
+python mn_run.py coloc_cache_edf coloc_slo_edf` (commit bf96b6cd3). 0 tracebacks and 0 fallbacks;
+every request completed.
+
+| arm | agent TTFT ms mean / P99 | chat TTFT ms mean / P99 | ITL ms agent / chat | vetoes |
+|---|---|---|---|---|
+| coloc_cache | 1 596 / 8 371 | 101 / 1 539 | 7.2 / 6.4 | - |
+| coloc_cache_edf (worker EDF) | 1 611 / 8 102 | 117 / 2 269 | 7.4 / 6.4 | - |
+| **coloc_slo_edf** (veto + worker EDF) | **1 582** / 8 132 | 108 / **1 313** | 7.2 / 6.4 | 71 of 3 587 (2.0%) |
+
+- **The veto fires once calibrated** (the uncalibrated run vetoed nothing). It moves 2% of
+  requests off their highest-hit node and trims the chat TTFT tail (P99 -15% vs affinity alone),
+  with means unchanged. At this load affinity rarely pushes a worker past its SLO, so there is
+  little to correct. The veto is a tail guard, and its value should grow with hotspots, which the
+  HOT experiment below creates.
+- **Worker-side EDF does nothing here** (agent +1%, chat +16 ms, within noise). With 16 workers,
+  each sees a light queue, and admission order matters only when work queues up. On a single
+  saturated H200 it cut chat TTFT 62% (point 3).
+
 ## 1. Route to the highest cache-hit node first, with an EDF/SLO veto
 
 **The disagg baseline.** PD disaggregation picks a *prefill* node first, because prefill and

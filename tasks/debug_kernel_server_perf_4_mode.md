@@ -173,8 +173,8 @@ Kernel, per executor (each item A/B'd against its own executor's baseline):
       grid.sync there. FA3 side: the router sends it no split rows (append rows have >=448
       m-blocks), so it has nothing to reduce. [detail](#fa2-kv-ring--2026-10-07)
 - [x] **DSMEM / KV multicast** (2026-10-07) -- ceiling measured, NOT built: FA3 with EVERY K/V
-      gather skipped is only 0.8% faster (2048-token appends at 64-98K) and 2.1% faster (512 at
-      24-49K). FA3-routed rows are compute-bound, so multicast, which only cuts KV traffic,
+      gather skipped is only 1.8% faster (2048-token appends at 64-98K) and 1.6% faster (512 at
+      24-49K), causal. FA3-routed rows are compute-bound, so multicast, which only cuts KV traffic,
       cannot pay. [detail](#multicast-backfill-ceilings--2026-10-07)
 - [x] **Fused spec tree-build epilogue** (2026-10-07) -- built as ONE kernel replacing
       organize_draft_results + build_tree (+ their fills/cat). 0 mismatches over ~150 cases vs
@@ -320,6 +320,10 @@ flashinfer `b13aa2a`:
 |---|---|---|---|
 | `qo:2048,2048 prefix:65536,98304 n_fa3:2` | 11 161.0 us (PASS, 0 unwritten) | 11 074.9 us | **0.8%** |
 | `qo:512x4 prefix:32768,40960,49152,24576 n_fa3:4` | 2 639.0 us (PASS) | 2 583.6 us | **2.1%** |
+
+**Causal re-run** (flashinfer `b0563ae`, causal reference): fixture 1 10 694.9 -> 10 504.4 us
+(**1.8%**), fixture 2 2 519.8 -> 2 480.1 us (**1.6%**); base arms PASS, 0 fallbacks. Conclusion
+unchanged: below 2%.
 
 0 fallbacks in all four. The skip arms are garbage by construction (NaN rows), which also
 proves the switch took effect. **Reading:** append rows at gqa 7 are 112 m-blocks per KV

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.17.4 — Long-context (64-96K) A/B: throughput +46/+53%, P99 ITL regresses (2026-10-08)
+
+- Full stack vs stock MTP, TraceLab sessions at 64-96K + chat 12/s, 3 rounds: output throughput
+  +45.6% (chat) / +52.6% (codex), TTFT -96.7% / -71.2%, mean ITL -46.9% / -47.2%. P99 ITL is
+  worse: +54.6% chat, +5.8% codex. Chunk sweep and below-saturation rounds are queued.
+- `long_agent_chat` scenario; `mtp_edf.sh` honours `TRACE_PATH` and `SCENARIO`.
+
 ## v0.17.3 — Attention share of a decode step vs context length (2026-10-08)
 
 - H200, Qwen2.5-7B, yarn to 131K: attention exceeds half of a decode step at ~40K tokens with 8

@@ -208,6 +208,25 @@ Workload and serving:
       ~47-55%: attention is half its decode step, which is why the kernel work shows up end to end
       there and not in the 2K-context runs. Both tables are pure decode; a mixed step adds the
       chunk's attention on top.
+- [x] **Long-context A/B: full stack vs stock MTP, codex sessions at 64-96K** (2026-10-08, H200, 3 rounds,
+      chat 12/s + codex 0.1 sessions/s, 0 fallbacks, every request completed). Trace: 300-session subset of the
+      full TraceLab trace with rows at 64-96K (`tracelab_long_64k_96k.jsonl.gz`; the pod's default copy stops
+      at 49K). `SCENARIO=long_agent_chat TRACE_PATH=... TAG=_long{,_r2,_r3} ARMS="MTP_LPT MTPMIX_SPLIT_EDFP"
+      mtp_edf.sh 12 2000 30` (commits 95af60b18, 0be840a42). Both arms are past capacity at this load.
+
+      | metric (3-round mean) | stock MTP | full stack | change |
+      |---|---|---|---|
+      | chat / codex output tok/s | 586.6 / 140.0 | **854.4 / 213.7** | **+45.6% / +52.6%** |
+      | chat / codex TTFT ms | 54 242 / 37 095 | **1 815 / 10 690** | **-96.7% / -71.2%** |
+      | chat / codex mean ITL ms | 67.1 / 36.7 | **35.6 / 19.4** | **-46.9% / -47.2%** |
+      | chat / codex P99 ITL ms | 167.9 / 150.9 | 259.6 / 159.7 | **+54.6% / +5.8% (worse)** |
+
+      Throughput, TTFT and mean ITL clear the bar by a wide margin here. Attention is 61-73% of
+      the step at these lengths, and the 4-mode step keeps decode moving through prefill.
+      **P99 ITL regresses**, worst on chat. The suspect is the 8 192-token chunk at a 64-96K
+      prefix: in the 4-mode step its attention runs inside the same forward as every verify row,
+      so every decoding request stalls together. A chunk sweep (4 096, 2 048) and a below-
+      saturation rate (chat 8/s, 3 rounds) are running.
 - [x] **TraceLab mixed scenario wired** (2026-10-07) -- agent_plus_shortchat on the pod; trace verified identical after shrinking.
 - [x] **Realistic serving, LPT baseline** (2026-10-07) -- clean, 0 fallbacks. [detail](#realistic-serving-ab-lpt-baseline-tracelab-agent--short-chat--2026-10-07)
 - [x] **Realistic serving, SPLIT arm** (2026-10-07) -- CONFIRMED with a stream start barrier (3 rounds, tight ranges): chat TTFT -17.4%, codex TTFT -10.5%, ITL -7.9%, P99 ITL -15.9%, tput +7.0% ([detail](#stream-offset-confound--2026-10-07)). Original run, 3 interleaved rounds, gate PASS, 0 fallbacks:
@@ -2334,7 +2353,7 @@ Measurements live in [`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md).
 ## Workload capture for handoff — 2026-10-05
 - [x] [Real online 2-mode trace](fused_kernel_handoff.md#5-the-workloads) — 2121 steps/arm, JSON corpus in `fused_specdec_workload/sets/`
 - [x] Real online **4-mode** trace with draft+verify co-resident (2026-10-07) — `mtpedf/rate24/trace_MTPMIX_SPLIT` (STEPTRACE, 11 837 steps)
-- [ ] Long-context (>64k, tracelab) A/B — not yet run; sized by the context-share measurement. The old gate
+- [x] Long-context (64-96K, tracelab) A/B — 2026-10-08, see the task list at the top (`long_agent_chat`). Sized by the context-share measurement. The old gate
   (split FA3 rows) is gone: the router sends FA3 no split rows, and the "corruption" was the harness
   reference.
 

@@ -60,14 +60,17 @@ KILL = ("for p in $(ps -eo pid,cmd | grep -E 'sglang.launch_server|sglang::|sgla
 def run_arm(arm):
     # Suffixes: _hc adds a cluster-wide mooncake L3 prefix store (mn_node.sh HC_MASTER);
     # _edf runs deadline-ordered admission on every worker (mn_node.sh EDF); _mtp runs EAGLE3 MTP
-    # on every worker, colocated ones with the 4-mode step (mn_node.sh SPEC).
+    # on every worker, colocated ones with the 4-mode step (mn_node.sh SPEC=1); _mtps is stock MTP
+    # without the 4-mode step (SPEC=2).
     base, hc, edf = arm, False, False
     spec = False
-    while base.endswith(("_hc", "_edf", "_mtp")):
+    while base.endswith(("_hc", "_edf", "_mtp", "_mtps")):
         if base.endswith("_hc"):
             hc, base = True, base[:-3]
+        elif base.endswith("_mtps"):
+            spec, base = 2, base[:-5]
         elif base.endswith("_mtp"):
-            spec, base = True, base[:-4]
+            spec, base = 1, base[:-4]
         else:
             edf, base = True, base[:-4]
     layout, router = ARMS[base]

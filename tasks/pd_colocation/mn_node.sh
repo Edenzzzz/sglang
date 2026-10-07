@@ -70,10 +70,12 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # MTP serving (EAGLE3 chain draft, 3 steps, 4 verify tokens) on every role. Colocated workers
   # also run the 4-mode step (prefill chunk + verify rows in one target forward); disagg prefill
   # workers forward the draft hidden states to decode, so both arms speculate.
-  if [ "${SPEC:-0}" = 1 ]; then
+  # SPEC=2: the same EAGLE3 MTP without the 4-mode step (stock sglang MTP), to separate the cost
+  # of speculation on this GPU from that of mixing prefill with verify.
+  if [ "${SPEC:-0}" != 0 ]; then
     ARGS+=(--speculative-algorithm EAGLE3 --speculative-draft-model-path $W/qwen7b_eagle3_sgl
            --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4)
-    [ "$MODE" = coloc ] && export SGLANG_ALLOW_MIXED_CHUNK_SPEC=1 SGLANG_MIXED_SPEC=1
+    [ "$MODE" = coloc ] && [ "$SPEC" = 1 ] && export SGLANG_ALLOW_MIXED_CHUNK_SPEC=1 SGLANG_MIXED_SPEC=1
   fi
   case $MODE in
     coloc) ARGS+=(--enable-mixed-chunk) ;;

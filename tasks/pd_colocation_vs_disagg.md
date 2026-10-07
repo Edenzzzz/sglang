@@ -10,8 +10,10 @@ Tasks, in priority order:
       experiment to validate.
 - [ ] **2. Best-effort cache migration and why colocation replicates better** — design below;
       the replication claim needs measurement.
-- [ ] **3. EDF predictor using EWMA acceptance length to predict TPOT** — design below; needs
-      the perf model fitted and compared against a baseline scheduler.
+- [ ] **3. EDF predictor using EWMA acceptance length to predict TPOT** — perf model fitted
+      (2026-10-07, *measured*): mixed-step MLP MAPE 6.0% (split) vs 6.4% (LPT), linear 13.4% vs
+      16.9%, so a cheap predictor suffices. See debug_kernel_server_perf_4_mode.md#perf-model-fit--2026-10-07.
+      Still needed: the acceptance-length input (MTP traces) and the EDF-vs-baseline scheduling run.
 - [ ] **4. Two-way RDMA, complete vs bipartite graph, randomized source selection** — design
       below; needs a multi-node congestion measurement (H20 only, <=16 GPUs, trial `vibecuda`).
 

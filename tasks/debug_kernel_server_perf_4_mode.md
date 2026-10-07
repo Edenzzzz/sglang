@@ -203,11 +203,38 @@ Workload and serving:
       exists yet. [detail](#split-serving-void--2026-10-07)
 - [ ] **4-mode MTP serving run** -- the 4-mode step is BUILT and gate-PASSES (2026-10-07); serving A/B queued.
       [detail](#four-mode-mtp-step--2026-10-07)
-- [ ] **Perf model and EDF vs unfused** -- not started.
+- [x] **Perf model: is the split easier to predict?** (2026-10-07) -- yes, modestly. Mixed-step cost, 5-fold CV,
+      traced serving (one round each): linear(all) MAPE 13.4% SPLIT vs 16.9% LPT; MLP 6.0% vs 6.4%; RF 6.2% vs
+      6.7%. Large gain for simple models, small for nonlinear ones. EDF-vs-unfused scheduling comparison
+      still to run. [detail](#perf-model-fit--2026-10-07)
 
 Cluster:
 - [ ] **Multi-node PD colocation, four points** -- design doc written, nothing measured.
       Delta: at most 4 nodes, so baselines are 2P2D and 1P3D.
+
+<a id="perf-model-fit--2026-10-07"></a>
+### Perf model: per-step cost of mixed steps, SPLIT vs LPT — 2026-10-07
+
+Traces: one serving round each, `SGLANG_STEP_TRACE=1`, agent_plus_shortchat, sglang
+`c1d2bceda`; 2 154 SPLIT and 2 144 LPT mixed steps. Target: the GPU span of the step. Fit:
+`python tasks/perf_model/fit_steptrace.py fused=trace/SPLIT/server_SPLIT.log
+baseline=trace/LPT/server_LPT.log --mode MIXED` (5-fold CV; features et bs np ptok pf nd dkv kv mx).
+
+| model class | SPLIT MAPE / p90 | LPT MAPE / p90 |
+|---|---|---|
+| linear(tokens, bs) | 24.8% / 49.4% | 30.7% / 61.9% |
+| linear(all) | 13.4% / 25.0% | 16.9% / 31.1% |
+| random forest | 6.2% / 15.3% | 6.7% / 17.6% |
+| gradient boosting | 6.6% / 16.8% | 7.0% / 17.7% |
+| MLP [128,64,32] | **6.0% / 15.6%** | 6.4% / 15.9% |
+| MoE-4 linear | 5.7% / 18.1% | 5.7% / 18.7% |
+
+**Reading.** The split's steps are more predictable in every class, but the margin is large
+only for simple models: 20% lower error for linear, 0-8% for nonlinear ones. Goal point 3's
+claim, "easier perf modelling with the fused/split kernel", holds in the weak form: a cheap
+model is good enough. It does not hold in the strong form, that the split unlocks accuracy LPT
+cannot reach. A lightweight MLP is about 6% on both. Mean mixed step: 36.7 ms SPLIT vs 38.7 ms
+LPT.
 
 <a id="four-mode-mtp-step--2026-10-07"></a>
 ### The 4-mode MTP step exists: prefill chunks and verify rows in ONE target forward — 2026-10-07

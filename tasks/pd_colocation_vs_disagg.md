@@ -156,6 +156,32 @@ every request completed.
   each sees a light queue, and admission order matters only when work queues up. On a single
   saturated H200 it cut chat TTFT 62% (point 3).
 
+**MTP on every worker (`_mtp`), 2026-10-08: colocation REGRESSES on H20, under investigation.**
+EAGLE3 (3 steps, topk 1, 4 verify tokens) runs on every role. Colocated workers also run the
+4-mode step on the FA3/FA2 split (`KERNEL=split`). Before any MTP arm, the H20 serving gate
+(`h20_gate.sh`) passed both comparisons with 0 fallbacks, weakly: the split's run had only ONE
+mixed step, and one short prompt agreed with stock MTP for 5 tokens (noise floor 101). Commands:
+`KERNEL=split python mn_run.py disagg_2p2d_mtp coloc_cache_mtp coloc_cache_edf_mtp` (6561caf51).
+
+| arm | completed agent / chat | agent TTFT ms mean / P99 | chat TTFT ms mean / P99 | ITL ms agent / chat | prefix hit | requests/worker |
+|---|---|---|---|---|---|---|
+| disagg_2p2d (no MTP) | 384 / 3 173 | 21 581 / 77 164 | 20 147 / 77 131 | 5.8 / 3.7 | 23.3% | 19-885 |
+| disagg_2p2d_mtp | 384 / 3 178 | 27 423 / 77 995 | 26 470 / 78 841 | **2.9 / 4.1** | 20.5% | 22-919 |
+| coloc_cache (no MTP) | 384 / 3 200 | **1 596** / 8 371 | **101** / 1 539 | 7.2 / 6.4 | 72.9% | 88-329 |
+| coloc_cache_mtp | 384 / 3 200 | 18 456 / 142 986 | 42 361 / 142 796 | 14.5 / 24.3 | 72.9% | 90-**812** |
+
+- MTP halves disagg's agent ITL, as expected, and worsens its TTFT: the prefill pods also run
+  the draft.
+- **Colocation with MTP + 4-mode is ~12x worse on agent TTFT and 2-4x worse on ITL than without
+  MTP.** Cache hit is unchanged (72.9%), and per-worker queues stay tiny (max 9 waiting). Chat
+  TTFT is 37-93 s over the first 60% of requests, then recovers. Agent TTFT stays at 12-23 s for
+  the whole 30-minute run, against a flat 1.4-1.8 s without MTP. One worker takes 812 requests
+  (329 max without MTP).
+- Not yet separated: speculation's cost on an H20 (78 SMs, ~1/7 of an H200's dense compute,
+  where verify's 4x query rows are no longer free), the 4-mode split on H20 (its SM partition and
+  tile sizes were tuned on an H200), and the load imbalance. Next arm: `coloc_cache_mtps`, stock
+  MTP without the 4-mode step, same routing (8134f09c1).
+
 ## 1. Route to the highest cache-hit node first, with an EDF/SLO veto
 
 **The disagg baseline.** PD disaggregation picks a *prefill* node first, because prefill and

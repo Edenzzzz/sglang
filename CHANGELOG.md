@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.17.5 — Long context, both arms tuned: full stack wins on every metric (2026-10-08)
+
+- Chunk 2 048, 3 rounds, 64-96K TraceLab + chat 12/s. Against stock MTP at its own best chunk
+  (8 192): throughput +45% / +45%, TTFT -93% / -55%, mean ITL -48% / -45%, P99 ITL -15% / -31%
+  (chat / codex). The chunk-8 192 P99 regression is fixed by the chunk size; stock MTP does not
+  benefit from the smaller chunk.
+- Chat 8/s at the default chunk, 3 rounds: throughput +18% / +30%, TTFT -96% / -75%, mean ITL
+  -58% / -49%; chat P99 ITL +27% (the chunk effect again).
+- H20: the colocated-MTP "regression" is retracted. The router's `min()` tie-break sent every
+  hit-0 request to workers 0/1 and affinity pinned sessions there. The tie-break is now
+  randomized. With even load, colocation + MTP + 4-mode keeps TTFT and cuts agent ITL 47%.
+
 ## v0.17.4 — Long-context (64-96K) A/B: throughput +46/+53%, P99 ITL regresses (2026-10-08)
 
 - Full stack vs stock MTP, TraceLab sessions at 64-96K + chat 12/s, 3 rounds: output throughput

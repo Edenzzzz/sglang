@@ -238,7 +238,24 @@ Workload and serving:
 
       At chunk 2 048 the full stack beats stock MTP on every metric: P99 ITL -13% / -30%, mean ITL
       -47% / -44%, TTFT -92% / -52%, throughput +46% / +48%. Stock MTP has the same knob, so the
-      fair comparison tunes both. 3 rounds of BOTH arms at chunk 2 048 are running.
+      fair comparison tunes both.
+      **Both arms at chunk 2 048, 3 rounds** (`BENCH_CHUNK=2048 TAG=_long_c2048{,_r2,_r3} ARMS="MTP_LPT
+      MTPMIX_SPLIT_EDFP" mtp_edf.sh 12 2000 30`, 0 fallbacks, all completed): **the full stack wins on every
+      metric.**
+
+      | metric (3-round mean) | stock MTP @2048 | full stack @2048 | change | vs stock @8192 (its best) |
+      |---|---|---|---|---|
+      | chat / codex output tok/s | 565.6 / 131.8 | **850.6 / 203.3** | **+50.4% / +54.2%** | +45.0% / +45.2% |
+      | chat / codex TTFT ms | 64 402 / 45 073 | **3 708 / 16 586** | **-94.2% / -63.2%** | -93.2% / -55.3% |
+      | chat / codex mean ITL ms | 70.6 / 38.4 | **34.9 / 20.3** | **-50.6% / -47.2%** | -48.1% / -44.8% |
+      | chat / codex P99 ITL ms | 172.5 / 157.2 | **143.2 / 104.3** | **-17.0% / -33.7%** | -14.7% / -30.9% |
+
+      Stock MTP does not gain from the smaller chunk (it is worse on every metric than at 8 192),
+      so stock's best configuration is the fair baseline: the right-hand column. Against it, the
+      full stack at chunk 2 048 clears the bar on throughput (+45%), TTFT (-55% to -93%) and mean
+      ITL (-45% to -48%). P99 ITL also improves (-15% / -31%); codex clears 30%, chat does not.
+      The small chunk is the fix for the 4-mode step's tail: it bounds how much prefill attention
+      any one verify step waits behind.
       **Chat 8/s, default chunk, 3 rounds** (`TAG=_long{,_r2,_r3} mtp_edf.sh 8 2000 30`, 0 fallbacks, all
       completed). Stock MTP still cannot keep up (chat 487 of ~576 offered tok/s); the full stack can:
 

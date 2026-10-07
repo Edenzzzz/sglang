@@ -258,6 +258,41 @@ With all streams released together, absolute values match the original repeats (
 SPLIT-vs-LPT result stands**, now with tight ranges. The low absolute TTFTs belonged to the
 chunk sweep, which ran in a later-start regime; its relative deltas are single-round only.
 
+<a id="mtp-load-sweep--2026-10-07"></a>
+### 4-mode MTP load sweep: the gain grows with load, and needs the split — 2026-10-07
+
+`drivers/mtp_load_sweep.sh`: scenario `agent_chat_rated`, with BOTH tenants rate-limited (36
+codex sessions at 0.1 sessions/s, 8 groups; chat 512->96 tokens at the rate shown), stream start
+barrier, one round per point, every arm 0 fallbacks, 0 tracebacks. Mixed steps per 4-mode arm:
+600 at 4/s, 1 400 at 8/s, 2 000 at 12/s, 2 200-2 400 at 16/s. Table:
+`python3 drivers/mtp_loadtab.py`. Delta vs stock MTP (MTP_LPT):
+
+| chat rate | arm | chat TTFT | chat ITL | chat P99 ITL | codex TTFT | codex ITL | codex P99 ITL |
+|---|---|---|---|---|---|---|---|
+| 4/s | MTPMIX_LPT | +9% | -2% | -5% | +4% | +1% | +31% |
+| 4/s | **MTPMIX_SPLIT** | +1% | -3% | -3% | -7% | +2% | +12% |
+| 8/s | MTPMIX_LPT | +13% | -4% | -18% | +3% | -3% | +15% |
+| 8/s | **MTPMIX_SPLIT** | -2% | -5% | -16% | -8% | -6% | -2% |
+| 12/s | MTPMIX_LPT | +22% | -4% | +12% | +5% | -6% | +33% |
+| 12/s | **MTPMIX_SPLIT** | -21% | -24% | **-42%** | -10% | -23% | **-38%** |
+| 16/s | MTPMIX_LPT | +16% | +2% | +13% | +8% | -2% | +63% |
+| 16/s | **MTPMIX_SPLIT** | **-48%** | **-34%** | **-45%** | -14% | **-35%** | **-36%** |
+
+Absolute stock-MTP values at 16/s: chat TTFT 204.8 ms, chat ITL 13.3 ms, codex TTFT 763.6 ms,
+codex ITL 8.1 ms. Every arm keeps up with the offered load at every point (throughput equal), so
+this is latency at matched throughput.
+
+**Reading.**
+1. The 4-mode + split gain grows monotonically with load: none at 4/s, large at 16/s. At 16/s it
+   clears the 30% bar on chat TTFT (-48%), chat ITL (-34%), codex ITL (-35%) and both P99 ITLs.
+   Codex TTFT (-14%) does not clear it.
+2. **Mixing without the split is a regression**, and a growing one (codex P99 ITL +63% at 16/s).
+   Folding prefill chunks into verify steps makes each verify step heavier; only the split, which
+   makes that mixed step cheaper, turns the extra scheduling freedom into a gain. The 4-mode
+   schedule and the split kernel are one contribution, not two.
+3. Throughput is equal because nothing saturated. Capacity (the throughput claim) needs rates past
+   stock MTP's saturation point: 20, 24, 28/s queued.
+
 <a id="mtp-barrier--2026-10-07"></a>
 ### 4-mode MTP A/B re-run with the stream start barrier — SUPERSEDES the table below — 2026-10-07
 

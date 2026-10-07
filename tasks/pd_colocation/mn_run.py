@@ -59,21 +59,25 @@ KILL = ("for p in $(ps -eo pid,cmd | grep -E 'sglang.launch_server|sglang::|sgla
 
 def run_arm(arm):
     # Suffixes: _hc adds a cluster-wide mooncake L3 prefix store (mn_node.sh HC_MASTER);
-    # _edf runs deadline-ordered admission on every worker (mn_node.sh EDF).
+    # _edf runs deadline-ordered admission on every worker (mn_node.sh EDF); _mtp runs EAGLE3 MTP
+    # on every worker, colocated ones with the 4-mode step (mn_node.sh SPEC).
     base, hc, edf = arm, False, False
-    while base.endswith(("_hc", "_edf")):
+    spec = False
+    while base.endswith(("_hc", "_edf", "_mtp")):
         if base.endswith("_hc"):
             hc, base = True, base[:-3]
+        elif base.endswith("_mtp"):
+            spec, base = True, base[:-4]
         else:
             edf, base = True, base[:-4]
     layout, router = ARMS[base]
     log = f"{W}/mn/{arm}"
-    print(f"=== {arm}: layout={layout} router={router} l3_store={hc} worker_edf={edf}", flush=True)
+    print(f"=== {arm}: layout={layout} router={router} l3_store={hc} worker_edf={edf} mtp={spec}", flush=True)
     C.run_all(KILL)
     # bench_serving APPENDS to its output file and mn_summary reads the last line, so a stale
     # directory would let a failed arm report the previous run's numbers.
     C.run_all(f"rm -rf {log}")
-    env = f"KERNEL={os.environ.get('KERNEL', 'lpt')} EDF={int(edf)} TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')}"
+    env = f"KERNEL={os.environ.get('KERNEL', 'lpt')} EDF={int(edf)} SPEC={int(spec)} TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')}"
     if hc:
         rc, out = C.run(0, f"mkdir -p {log}; ip=$(hostname -I | tr ' ' '\\n' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1); "
                            "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\"); "

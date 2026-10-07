@@ -49,9 +49,19 @@ def post(path, body, timeout=600):
 
 
 def prompts():
+    path = f"{W}/workloads/ShareGPT_V3_unfiltered_cleaned_split.json"
+    if not os.path.exists(path):
+        # Pods without the dataset (the H20 multi-node pods): fixed-seed random token ids of the
+        # same lengths. The gate compares greedy outputs of two arms on identical inputs, which
+        # needs determinism, not natural text.
+        import random
+        rng = random.Random(1234)
+        short = [[rng.randrange(1000, 30000) for _ in range(2048)] for _ in range(8)]
+        long_ = [[rng.randrange(1000, 30000) for _ in range(12_000)] for _ in range(4)]
+        return short, long_
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained(MODEL)
-    data = json.load(open(f"{W}/workloads/ShareGPT_V3_unfiltered_cleaned_split.json"))
+    data = json.load(open(path))
     text = "\n".join(t["value"] for d in data[:3000] for t in d.get("conversations", []))
     ids = tok(text[:4_000_000])["input_ids"]
     short = [ids[i * 50_000: i * 50_000 + 2048] for i in range(8)]

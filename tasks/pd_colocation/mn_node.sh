@@ -67,6 +67,14 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
     ARGS+=(--enable-priority-scheduling --schedule-low-priority-values-first
            --priority-scheduling-preemption-threshold 999999)
   fi
+  # MTP serving (EAGLE3 chain draft, 3 steps, 4 verify tokens) on every role. Colocated workers
+  # also run the 4-mode step (prefill chunk + verify rows in one target forward); disagg prefill
+  # workers forward the draft hidden states to decode, so both arms speculate.
+  if [ "${SPEC:-0}" = 1 ]; then
+    ARGS+=(--speculative-algorithm EAGLE3 --speculative-draft-model-path $W/qwen7b_eagle3_sgl
+           --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4)
+    [ "$MODE" = coloc ] && export SGLANG_ALLOW_MIXED_CHUNK_SPEC=1 SGLANG_MIXED_SPEC=1
+  fi
   case $MODE in
     coloc) ARGS+=(--enable-mixed-chunk) ;;
     prefill|decode)

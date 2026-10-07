@@ -6767,7 +6767,27 @@ to start with any diagnostic switch in its non-production state.
 **Forward-step mix under LPT (n = 18 000 steps):** `decode_cuda_graph` 88.3%,
 `mixed_persistent` 10.6%, `mixed_batch_prefill` 0.9%, `pure_prefill` 0.1%.
 
-**That mix bounds what the split can do here, well below the 19.3% kernel ceiling.** The split
+**RETRACTED (2026-10-07, user correction): the "split only touches ~11% of steps, so expect a
+low single-digit gain" reading below.** Two errors:
+
+1. It generalised from one replay. `agent_plus_shortchat` issues agent rounds back to back and
+   dilutes them with 12/s short chats. A real TraceLab-style turn carries several small
+   tool-result prefills, so mixed steps are the common case, not 11%.
+2. It ignored spec decoding. Under MTP every "decode" step is a VERIFY step with
+   q = draft_len + 1 per request -- the small-q class the 4-mode kernel is designed for, with
+   the draft step and the tree-build epilogue fused as well. The 88% pure-decode CUDA-graph
+   share exists only because this run had no spec decoding; it is not a property of the
+   workload the goal specifies.
+
+What still stands: 1.239x is the measured gain of the SPLIT ALONE on one TraceLab batch. The
+4-mode kernel (verify + tree epilogue) is not built, so its gain is unmeasured and no ceiling
+should be placed on it from this run. The forward mix here bounds THIS scenario without MTP,
+nothing more.
+
+Multi-node context recorded: at most 4 Delta nodes are available, so the disagg baselines are
+2P2D and 1P3D.
+
+**Superseded reading: that mix bounds what the split can do here, well below the 19.3% kernel ceiling.** The split
 kernel only runs on mixed attention steps -- about 11% of forwards. The other 88% are
 pure-decode CUDA-graph steps, which the split does not touch. And TTFT in the tens of seconds
 means this load is queue-dominated, so TTFT moves with throughput and admission policy more

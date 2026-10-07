@@ -53,7 +53,10 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   case $MODE in
     coloc) ARGS+=(--enable-mixed-chunk) ;;
     prefill|decode)
-      IB=mlx5_$(( (ROLE * 2 + g) % 4 ))
+      # Back-end RDMA NICs only. mlx5_0 is the front-end NIC (eth0) whose RoCEv2 GID is the IPv6
+      # management address, while mlx5_1..4 (eth1-4) carry IPv4-mapped RoCEv2 GIDs; a worker on
+      # mlx5_0 could not bring up a QP to one on mlx5_1..4 ("Failed to modify QP to RTR").
+      IB=mlx5_$(( 1 + (ROLE * 2 + g) % 4 ))
       ARGS+=(--disaggregation-mode $MODE --disaggregation-transfer-backend mooncake
              --disaggregation-ib-device $IB --disaggregation-bootstrap-port $BOOT) ;;
   esac

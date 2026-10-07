@@ -1648,9 +1648,24 @@ class FlashInferAttnBackend(AttentionBackend):
                 # GQA and split-KV. Compile-time, so it must be a -D, and the
                 # extension must be rebuilt (fresh TORCH_EXTENSIONS_DIR) when the
                 # flag changes -- torch reuses a cached .so otherwise.
+                #
+                # The COMPILE flag is also needed whenever the two-executor path is on, and
+                # that must not be tied to SGLANG_FUSED_UNIFIED: two-exec deliberately
+                # leaves that env var unset because at RUNTIME it plans 3 tasks, not the
+                # unified 4. Without the -D, the extension still instantiates the closed
+                # fused dispatch's non-unified branch, which under -DFLASHINFER_FA3_UPSTREAM
+                # dereferences params.wgmma_plan and does not compile -- the first serving
+                # SPLIT arm died at first request with ninja exit 255 on exactly that. The
+                # harness, where every two-exec number was measured, compiles WITH this flag
+                # and plans 3 tasks at runtime; this matches it.
                 *(["-DFLASHINFER_FUSED_UNIFIED_WGMMA=1",
                    f"-DFLASHINFER_FUSED_PACKED_Q={self.num_qo_heads // self.num_kv_heads}"]
-                  if os.environ.get("SGLANG_FUSED_UNIFIED") == "1" else []),
+                  if (os.environ.get("SGLANG_FUSED_UNIFIED") == "1"
+                      or os.environ.get(
+                          "SGLANG_TWO_EXEC",
+                          "0" if os.environ.get("SGLANG_FUSED_KERNEL") == "1" else "1")
+                      == "1")
+                  else []),
                 # The two-executor path needs the upstream FA3 build: fa3_only_run and its
                 # TORCH_LIBRARY registration both sit behind #if FLASHINFER_FA3_UPSTREAM.
                 # Without this the op simply does not exist, every forward throws

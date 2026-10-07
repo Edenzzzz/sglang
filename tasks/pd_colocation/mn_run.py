@@ -93,22 +93,28 @@ def run_arm(arm):
     RPORT = int([l for l in out.splitlines() if l.startswith("RPORT")][-1].split()[1])
     print(f"  router port {RPORT}", flush=True)
     kind, pol = router.split(":")
+    # The stock router's circuit breaker opens on a prefill worker that is merely slow under a
+    # saturating load and then rejects requests outright ("No available prefill"), which dropped
+    # ~60% of disagg_2p2d's requests. A baseline must serve every request, so breaker and
+    # health-check ejection are off for every sglang_router arm.
+    lenient = ("--disable-circuit-breaker --health-failure-threshold 1000000 "
+               "--health-check-timeout-secs 60 --queue-size 100000")
     if kind == "ours":
         ws = " ".join(u for u, _, _ in all_w)
         rcmd = (f"{W}/venv/bin/python {W}/tasks/pd_colocation/router.py --workers {ws} --port {RPORT} "
                 f"--policy {pol} --log {log}/router_decisions.jsonl {os.environ.get('ROUTER_ARGS', '')}")
     elif pol == "cache_aware":
         ws = " ".join(u for u, _, _ in all_w)
-        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --worker-urls {ws} --policy cache_aware --host :: --port {RPORT}"
+        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --worker-urls {ws} --policy cache_aware {lenient} --host :: --port {RPORT}"
     else:
         pre = [i for i, m in enumerate(layout) if m == "prefill"]
         dec = [i for i, m in enumerate(layout) if m == "decode"]
         p_args = " ".join(f"--prefill {u} {b}" for u, b, _ in urls(hs, pre))
         d_args = " ".join(f"--decode {u}" for u, _, _ in urls(hs, dec))
-        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --pd-disaggregation {p_args} {d_args} --host :: --port {RPORT}"
+        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --pd-disaggregation {p_args} {d_args} --prefill-policy cache_aware --decode-policy power_of_two {lenient} --host :: --port {RPORT}"
     # setsid -f with every fd redirected: a backgrounded "cd && cmd" list keeps a subshell whose
     # stdout is the webshell pipe, which held each launch call open for its 100 s timeout.
-    C.run(0, f"cd {W} && PYTHONPATH={W}/python setsid -f {rcmd} > {log}/router.log 2>&1 < /dev/null; sleep 8; "
+    C.run(0, f"ulimit -n 1048576; cd {W} && PYTHONPATH={W}/python setsid -f {rcmd} > {log}/router.log 2>&1 < /dev/null; sleep 8; "
              f"curl -s -o /dev/null -w 'router %{{http_code}}\\n' http://127.0.0.1:{RPORT}/health")
     knobs = " ".join(f"{k}={os.environ[k]}" for k in
                      ("SESSIONS", "TURNS", "SESSION_RATE", "SLOWDOWN", "CHAT_RATE", "CHAT_N", "CHAT_IN",

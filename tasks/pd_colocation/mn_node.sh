@@ -44,6 +44,7 @@ PY
 }
 rm -f $LOG/ports_r${ROLE}_g*.txt
 launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
+  ulimit -n 1048576
   local g=$1
   PORT=$(pick $((ROLE * 2 + g + RANDOM)))
   BOOT=$(pick $((ROLE * 2 + g + 7919 + RANDOM)))

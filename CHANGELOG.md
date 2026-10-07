@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.16.1 — multi-node runs: 1024-fd limit was dropping requests (2026-10-07)
+
+- **Retraction:** every earlier H20 multi-node arm ran with the pods' soft `ulimit -n` of 1024.
+  Under the 3200-request chat burst the router ran out of sockets ("error sending request").
+  For the stock sglang_router this then opened its circuit breaker, which rejected ~5.7k
+  requests ("No available prefill"). disagg_2p2d served only 163/384 agent and 2265/3200 chat
+  requests. Those numbers, and the coloc arm numbers from the same harness, are void pending
+  re-runs.
+- `mn_run.py`, `mn_bench.sh` and `mn_node.sh` raise `ulimit -n` to 1048576. Stock-router arms
+  run with the circuit breaker and health ejection off, and the PD arms use
+  `--prefill-policy cache_aware --decode-policy power_of_two`.
+
 ## v0.16.0 — 4-mode MTP clears the bar: latency under load, ~20% capacity (2026-10-07)
 
 - **MTP load sweep** (chat 4-28/s, both tenants rate-limited, barrier, 0 fallbacks): the

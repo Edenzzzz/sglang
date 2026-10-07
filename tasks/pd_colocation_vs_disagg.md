@@ -324,6 +324,21 @@ Traced run: `SGLANG_STEP_TRACE=1 SGLANG_EDF_ACCEPT_TRACE=1`, 0 fallbacks, 0 trac
         capacity run (debug_kernel_server_perf_4_mode.md, v0.16.0: +19.8% total). Correctness: the
         4-mode split passed `drivers/srv_correctness.py`. EDFP changes only admission order, not
         the computation.
+      - [x] **Same comparison at a moderate load, chat 16/s, 3 rounds (2026-10-08).**
+        `TAG=_itl30{,_r2,_r3} ARMS="MTP_LPT MTPMIX_SPLIT_EDFP" mtp_edf.sh 16 2000 30`. All requests
+        completed, 0 fallbacks. Means:
+
+        | metric | stock MTP | full stack | change |
+        |---|---|---|---|
+        | chat TTFT ms | 256 | **104** | **-59%** |
+        | chat mean / P99 ITL ms | 13.95 / 82.7 | **8.95 / 44.3** | **-36% / -46%** |
+        | codex TTFT ms | 824 | 667 | **-19% (below the 30% bar)** |
+        | codex mean / P99 ITL ms | 8.53 / 48.1 | **5.44 / 27.1** | **-36% / -44%** |
+        | chat SLO attainment | 0.740 | **0.907** | |
+
+        At this load stock MTP is not yet queueing codex, so there is less TTFT to remove. Codex
+        TTFT misses the bar here and clears it at 24/s (-51%). Every ITL metric clears it at both
+        loads.
       - **Any per-step chunk cap loses, with either ordering.** Splitting a chunk into k pieces
         adds k-1 mixed steps. Each costs ~7 ms plus 0.32 ms per running row (`mtp_step.json`) and
         delays every decode row. The deferred prefill still has to run, and under steady load

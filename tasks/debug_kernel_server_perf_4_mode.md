@@ -222,7 +222,11 @@ EAGLE3 draft (thoughtworks/Qwen2.5-7B-Instruct-Eagle3), 3 steps, topk 1, 4 verif
 Command: `bash tasks/fused_specdec_workload/drivers/mtp_repeats.sh` (3 interleaved rounds of
 MTP_LPT, MTPMIX_LPT, MTPMIX_SPLIT; scenario agent_plus_shortchat). Every arm: **0 fallbacks,
 0 tracebacks**. The mixed arms ran 1 600-1 800+ 4-mode steps each. Acceptance length (windowed
-log mean) is 2.04-2.32 in every arm, equal within noise. Summary:
+log mean) is 2.04-2.32 in every arm, equal within noise. **Per-request check**
+(`srv_correctness.py`, MTPMIXacc vs MTPacc, 2026-10-07): every request with an IDENTICAL greedy output
+(l0, l2, s0, s3, s5) has exactly equal tokens-per-verify (2.20, 2.30, 2.89, 2.46, 2.20), so the draft
+model sees identical inputs after mixed steps. Differences appear only where the text itself diverged
+late (the batching noise floor). Summary:
 `python3 repsum.py --root /dev/shm/w/mtprep --base MTP_LPT` (mean, [min-max] over 3 rounds):
 
 | stream | metric | MTP_LPT (stock) | MTPMIX_LPT | MTPMIX_SPLIT |

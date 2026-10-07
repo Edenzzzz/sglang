@@ -84,6 +84,11 @@ def run_arm(arm):
             return
         time.sleep(20)
     print(f"  {len(all_w)} workers healthy after {time.time() - t0:.0f} s", flush=True)
+    global RPORT
+    rc, out = C.run(0, "python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        s = socket.socket(socket.AF_INET6); s.bind(('::', p)); s.close(); print('RPORT', p); break\n    except OSError:\n        pass\""
+                       )
+    RPORT = int([l for l in out.splitlines() if l.startswith("RPORT")][-1].split()[1])
+    print(f"  router port {RPORT}", flush=True)
     kind, pol = router.split(":")
     if kind == "ours":
         ws = " ".join(u for u, _, _ in all_w)

@@ -39,10 +39,10 @@ for _ in range(500):
 PY
 }
 : > $LOG/ports_r${ROLE}.txt
-for g in 0 1; do
+launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
+  local g=$1
   PORT=$(pick $((ROLE * 2 + g + RANDOM)))
   BOOT=$(pick $((ROLE * 2 + g + 7919 + RANDOM)))
-  echo "$g $PORT $BOOT" >> $LOG/ports_r${ROLE}.txt
   ARGS=(--model $W/qwen7b --attention-backend flashinfer --mem-fraction-static 0.85
         --host :: --port $PORT --context-length 131072 --watchdog-timeout 600
         --json-model-override-args '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}')
@@ -53,7 +53,34 @@ for g in 0 1; do
       ARGS+=(--disaggregation-mode $MODE --disaggregation-transfer-backend mooncake
              --disaggregation-ib-device $IB --disaggregation-bootstrap-port $BOOT) ;;
   esac
+  grep -v "^$g " $LOG/ports_r${ROLE}.txt > $LOG/ports_r${ROLE}.tmp 2>/dev/null
+  echo "$g $PORT $BOOT" >> $LOG/ports_r${ROLE}.tmp && mv $LOG/ports_r${ROLE}.tmp $LOG/ports_r${ROLE}.txt
   CUDA_VISIBLE_DEVICES=$g setsid nohup $W/venv/bin/python -m sglang.launch_server "${ARGS[@]}" \
     > $LOG/worker_r${ROLE}_g${g}.log 2>&1 < /dev/null &
+  echo $! > $LOG/pid_r${ROLE}_g${g}
   echo "worker role=$ROLE gpu=$g port=$PORT boot=$BOOT mode=$MODE pid=$!"
+}
+# Supervisor: a port probed free can still be taken by another job before sglang binds it
+# (seen: role 3 gpu 1, port 57000). On a bind failure, kill that worker and relaunch it on a
+# freshly probed port; mn_run.py re-reads ports_r<role>.txt on every health poll.
+supervise() {
+  local g=$1
+  for attempt in 1 2 3 4 5; do
+    launch $g
+    for t in $(seq 1 90); do
+      sleep 4
+      grep -q "address already in use" $LOG/worker_r${ROLE}_g${g}.log && break
+      grep -q "fired up" $LOG/worker_r${ROLE}_g${g}.log && return 0
+    done
+    grep -q "fired up" $LOG/worker_r${ROLE}_g${g}.log && return 0
+    pkill -9 -P $(cat $LOG/pid_r${ROLE}_g${g}) 2>/dev/null; kill -9 $(cat $LOG/pid_r${ROLE}_g${g}) 2>/dev/null
+    for p in $(ps -eo pid,cmd | grep "[s]glang" | grep -- "--port $PORT " | awk '{print $1}'); do kill -9 $p; done
+    sleep 5
+    mv $LOG/worker_r${ROLE}_g${g}.log $LOG/worker_r${ROLE}_g${g}.bindfail$attempt.log
+  done
+}
+for g in 0 1; do
+  (supervise $g > $LOG/supervise_r${ROLE}_g${g}.log 2>&1 &)
 done
+sleep 3
+cat $LOG/ports_r${ROLE}.txt

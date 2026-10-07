@@ -74,9 +74,12 @@ def run_arm(arm):
     check = " ".join(f"'{u}/health'" for u, _, _ in all_w)
     t0 = time.time()
     while True:
+        read_ports(log)  # a supervisor may have moved a worker to a new port
+        all_w = urls(hs)
+        check = " ".join(f"'{u}/health'" for u, _, _ in all_w)
         rc, out = C.run(0, f"n=0; for u in {check}; do [ \"$(curl -sg -o /dev/null -w '%{{http_code}}' --max-time 3 $u)\" = 200 ] && n=$((n+1)); done; echo UP=$n")
         up = int([l for l in out.splitlines() if l.startswith("UP=")][-1][3:])
-        if up == len(all_w):
+        if up == len(all_w) == 2 * NPODS:
             break
         if time.time() - t0 > 1500:
             print(f"  only {up}/{len(all_w)} workers healthy after 25 min; aborting arm", flush=True)

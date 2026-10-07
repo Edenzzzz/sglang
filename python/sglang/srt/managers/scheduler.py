@@ -2428,8 +2428,8 @@ class Scheduler(
                                 _nd += 1
                                 _dkv += _s
                         _feat = (
-                            "STEPTRACE %s et=%d bs=%d np=%d ptok=%d pf=%d nd=%d dkv=%d kv=%d mx=%d"
-                            % (_m, _et, int(batch.batch_size()), _np, _ptok, _pf, _nd, _dkv, sum(_sl), _mx)
+                            "STEPTRACE %s et=%d bs=%d np=%d ptok=%d pf=%d nd=%d dkv=%d kv=%d mx=%d t=%.6f"
+                            % (_m, _et, int(batch.batch_size()), _np, _ptok, _pf, _nd, _dkv, sum(_sl), _mx, time.perf_counter())
                         )
                         _beg = torch.cuda.Event(enable_timing=True)
                         _end = torch.cuda.Event(enable_timing=True)
@@ -2504,8 +2504,8 @@ class Scheduler(
                             _nd += 1
                             _dkv += _s
                     _feat = (
-                        "STEPTRACE %s et=%d bs=%d np=%d ptok=%d pf=%d nd=%d dkv=%d kv=%d mx=%d"
-                        % (_m, _et, int(batch.batch_size()), _np, _ptok, _pf, _nd, _dkv, sum(_sl), _mx)
+                        "STEPTRACE %s et=%d bs=%d np=%d ptok=%d pf=%d nd=%d dkv=%d kv=%d mx=%d t=%.6f"
+                        % (_m, _et, int(batch.batch_size()), _np, _ptok, _pf, _nd, _dkv, sum(_sl), _mx, time.perf_counter())
                     )
                     _beg = torch.cuda.Event(enable_timing=True)
                     _end = torch.cuda.Event(enable_timing=True)

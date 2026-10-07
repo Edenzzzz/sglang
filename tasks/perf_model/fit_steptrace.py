@@ -23,7 +23,8 @@ import numpy as np
 
 FEATS = ["et", "bs", "np", "ptok", "pf", "nd", "dkv", "kv", "mx"]
 _BODY = " ".join(f"{f}=(-?\\d+)" for f in FEATS)
-GPU = re.compile(r"STEPTRACE (\w+) " + _BODY + r" gpu=([0-9.]+)")
+# A line may carry both: "... mx=N t=<launch> gpu=<span>"; t is optional for the GPU form.
+GPU = re.compile(r"STEPTRACE (\w+) " + _BODY + r"(?: t=[0-9.]+)? gpu=([0-9.]+)")
 WALL = re.compile(r"STEPTRACE (\w+) " + _BODY + r" t=([0-9.]+)")
 
 

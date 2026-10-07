@@ -288,7 +288,12 @@ Workload and serving:
       MTP's best configuration, every metric clears 30% except chat P99 ITL, which misses by 0.3
       points (-29.7%). Against stock at chunk 2 048 both P99s clear it (-31.5% / -33.0%). The cost is
       TTFT: these chunks are small at long prefixes (the 1 024 floor), so codex TTFT keeps only
-      -35%. The budget is the knob trading TTFT for tail ITL.
+      -35%. The budget is the knob trading TTFT for tail ITL. **It is not a safe default:** at short context
+      (chat 24/s, ITL 30 ms, `TAG=_itl30_ms`, one round) it REGRESSES. Chat SLO 0.641 vs 0.714-0.750, chat
+      TTFT 286 vs ~180 ms, codex TTFT 2 184 vs ~1 450 ms. The ~2K chunk at prefix 0 splits short-context
+      prefill into more fixed-cost mixed steps, the same mechanism that sank EDF's chunk cap. The
+      attention budget is neutral there because it only binds at long prefixes. Use: attention
+      budget always on; the predicted-time budget only for long-context deployments.
       **Chat 8/s, default chunk, 3 rounds** (`TAG=_long{,_r2,_r3} mtp_edf.sh 8 2000 30`, 0 fallbacks, all
       completed). Stock MTP still cannot keep up (chat 487 of ~576 offered tok/s); the full stack can:
 

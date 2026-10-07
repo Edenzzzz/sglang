@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.17.6 — Prefix-aware chunk sizing (2026-10-08)
+
+- `SGLANG_CHUNK_ATTN_BUDGET` caps a chunk's attention work n*(r + n/2) while rows are running. At
+  64-96K it fixes codex's tail (P99 ITL 91 ms, the best of any setting) at little TTFT cost, and it
+  is neutral at short context. It does not fix chat's tail: fresh-prompt chunks are GEMM-bound.
+- `SGLANG_CHUNK_MS_BUDGET` + `SGLANG_CHUNK_COST` cap the chunk's predicted time with the fitted step
+  coefficients. At 64-96K, 3 rounds, vs stock MTP's best: throughput +42/+37%, TTFT -81/-35%,
+  mean ITL -49/-45%, P99 ITL -29.7/-30.2% (chat/codex). It regresses at short context (chat SLO
+  0.641 vs ~0.735), so it is a long-context setting only.
+
 ## v0.17.5 — Long context, both arms tuned: full stack wins on every metric (2026-10-08)
 
 - Chunk 2 048, 3 rounds, 64-96K TraceLab + chat 12/s. Against stock MTP at its own best chunk

@@ -45,7 +45,7 @@ predictable from the batch's shape**. Two measured results support that, and one
 
 ---
 
-## Multi-node measurements (H20, 8 pods x 2 GPUs = 16 workers) — 2026-10-07, in progress
+## Multi-node measurements (H20, 8 pods x 2 GPUs = 16 workers) — 2026-10-08
 
 Setup: merlin job `c2fb3965f36cd15f` (cn-seed, trial vibecuda), 8 pods x 2 H20, one
 Qwen2.5-7B-Instruct TP1 worker per GPU (persistent FA2 kernel in every arm, so arms differ only
@@ -58,34 +58,46 @@ tasks/pd_colocation/mn_run.py <arms>`; audit: `mn_audit.py` (every pod's worker 
 "Worker-reported hit" is the sum of sglang's own `meta_info.cached_tokens` over the sum of
 `prompt_tokens`, recorded per request by the router.
 
-**RETRACTED pending re-run (2026-10-07):** every arm below ran with the pods' soft
-`ulimit -n` of 1024 and the table does not record completed-request counts. Under the chat burst
-the stock sglang_router ran out of sockets. Its circuit breaker then rejected most requests:
-disagg_2p2d served 163/384 agent and 2 265/3 200 chat requests. The coloc arms used the same
-harness, so their completeness is unverified. All arms are being re-run with the limit raised
-(commit a8bd07337), with completed counts recorded.
+**Re-run with the fd limit fixed (2026-10-08).** The first table (2026-10-07) ran with the pods' soft
+`ulimit -n` of 1024. Under the chat burst the stock router ran out of sockets, its circuit breaker
+opened, and it rejected most requests: disagg_2p2d served 163/384 agent and 2 265/3 200 chat. That
+table is withdrawn. The re-run raises the limit to the hard limit (`ulimit -n $(ulimit -Hn)`, verified
+1 024 768 in the router process) and gives disaggregation its best stock configuration: circuit
+breaker off, health ejection off, `--prefill-policy cache_aware --decode-policy power_of_two`
+(commits a8bd07337, b6ac0c2ad). Command:
+`python mn_run.py disagg_2p2d disagg_1p3d coloc_cache coloc_rr coloc_rand` with the knobs above.
+Audit: `mn_audit.py <arms>`. 0 tracebacks and 0 fallbacks on all 16 workers in every arm.
 
-| arm | agent TTFT ms (mean / P99) | agent ITL ms | chat TTFT ms (mean / P99) | chat ITL ms | worker-reported hit | requests/worker |
-|---|---|---|---|---|---|---|
-| coloc_rr (round-robin) | 13 185 / 60 744 | 24.2 | 9 832 / 58 533 | 27.1 | (not logged; re-run queued) | 224-226 |
-| coloc_cache (affinity, load tie-break) | **1 573 / 8 693** | **7.4** | **109 / 1 473** | **6.3** | **72.9%** (router predicted 71.4%) | 117-365 |
-| coloc_rand (affinity, RANDOM tie-break) | 1 705 / 11 011 | 9.5 | 487 / 7 931 | 8.7 | 72.8% | 203-250 |
+| arm | completed agent / chat | agent TTFT ms mean / P99 | agent ITL ms | chat TTFT ms mean / P99 | chat ITL ms | chat out tok/s | prefix hit | requests/worker |
+|---|---|---|---|---|---|---|---|---|
+| disagg_2p2d (8 prefill + 8 decode GPUs) | 384 / 3 173 | 21 581 / 77 164 | 5.8 | 20 147 / 77 131 | **3.7** | 152.5 | 23.3% | 19-885 |
+| disagg_1p3d (4 prefill + 12 decode GPUs) | 384 / 3 176 | 49 257 / 97 041 | **5.2** | 50 301 / 94 592 | **3.5** | 152.6 | 30.8% | 19-936 |
+| coloc_rr (round-robin) | 384 / 3 200 | 11 702 / 61 465 | 22.4 | 8 783 / 68 555 | 25.5 | 1 338.2 | 12.7% | 225-226 |
+| **coloc_cache** (affinity, load tie-break) | 384 / 3 200 | **1 596 / 8 371** | 7.2 | **101 / 1 539** | 6.4 | **1 481.6** | **72.9%** | 88-329 |
+| coloc_rand (affinity, load then random tie-break) | 384 / 3 200 | **1 530 / 8 190** | 7.5 | 121 / 2 613 | 6.3 | 1 481.1 | 72.8% | 111-307 |
 
-All arms: 0 tracebacks, 0 fallbacks across all 16 workers.
+Prefix hit: for coloc, the worker-reported `cached_tokens / prompt_tokens` summed over requests;
+for disagg, the prefill workers' own logged cache hit. The disagg arms' failed chat requests
+(27 and 24) were all streams cut off mid-response, consistent with aborted KV transfers.
 
-**Reading so far.**
-- **Cache affinity is the dominant effect**: agent TTFT 8.4x lower and chat TTFT 90x lower than
-  round-robin, with about 73% of all prompt tokens served from cache. Round-robin recomputes every
-  session's prefix wherever its next turn lands, and that prefill interferes with decode
-  everywhere (ITL 24-27 ms vs 6-7 ms).
-- The router's block-hash prefix estimate matches the workers' own count within 1.5 points, so
-  it is good enough to route on.
-- **Affinity concentrates load** (117-365 requests per worker) -- the hotspot the SLO veto exists
-  to bound.
-- **coloc_rand result is from a flawed tie-break and is superseded.** Purely random choice
-  among equal-hit workers sent prefix-less chat requests (all workers tie at hit 0) to busy
-  workers. Load is spread better (203-250), but chat TTFT is 4.5x worse. The router now breaks
-  ties by load, then randomly (`router.py`); coloc_rand will be re-run with it.
+**Reading.**
+- **Against the best disaggregated layout, cache-affinity colocation cuts mean TTFT 93% for the
+  agent (21.6 s -> 1.6 s) and 99.5% for chat (20.1 s -> 0.10 s).** It serves the full offered chat
+  rate (1 482 vs 153 output tok/s over the run) and completes every request.
+- **Disagg is prefill-bound here, and its cache-aware prefill routing finds little cache.** It hits
+  23-31% of prompt tokens against colocation's 73%. With 4-8 prefill GPUs serving all 64 sessions'
+  appends, each turn's prefix is on a prefill node only if the last turn ran there and survived
+  eviction. Colocation can place a turn on any of 16 GPUs: point 1's flexibility, measured.
+- **Disagg keeps the lower ITL** (3.5-5.8 ms vs 6.3-7.5 ms). Its decode GPUs never run prefill.
+  This is the price of colocation on this kernel stack, and it is what the 4-mode kernel and
+  deadline ordering attack on a single node (point 3: -38% to -42% ITL vs stock MTP).
+- **Routing is most of colocation's win.** Round-robin colocation is only 1.8-2.3x better than
+  disagg on TTFT and 4-7x worse on ITL. With 12.7% hit, every node recomputes session prefixes, and
+  that prefill stalls decode everywhere.
+- **Random choice among near-equal hits costs nothing at this scale** (agent TTFT -4%, chat TTFT
+  +20%, ITL equal). It does not help yet either: 16 workers on 4 hosts do not congest links (point 4).
+  The earlier purely random tie-break, which sent hit-0 chat to busy workers, is fixed by breaking
+  ties on in-flight load first.
 
 ## 1. Route to the highest cache-hit node first, with an EDF/SLO veto
 

@@ -76,7 +76,7 @@ def run_arm(arm):
     env = f"KERNEL={os.environ.get('KERNEL', 'lpt')} EDF={int(edf)} TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')}"
     if hc:
         rc, out = C.run(0, f"mkdir -p {log}; ip=$(hostname -I | tr ' ' '\\n' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1); "
-                           "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\")); "
+                           "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\"); "
                            "CUDART=$(" + W + "/venv/bin/python -c 'import nvidia.cuda_runtime as m, os; print(os.path.dirname(m.__file__))'); "
                            "LD_LIBRARY_PATH=$CUDART/lib:$CUDART "
                            f"setsid -f /home/tiger/.local/lib/python3.12/site-packages/mooncake/mooncake_master --rpc_port $p --metrics_port $((p + 1)) "

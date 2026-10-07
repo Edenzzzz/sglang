@@ -381,3 +381,90 @@ def verify_tree_greedy_func(
         )
 
     return predicts, accept_index, accept_token_num
+
+
+_FUSED_TREE_EXT = None
+
+
+def fused_tree_build_enabled() -> bool:
+    import os
+
+    return os.environ.get("SGLANG_FUSED_TREE_BUILD", "0") == "1"
+
+
+def _fused_tree_ext():
+    """JIT-build csrc/fused_tree_build.cu once per process."""
+    global _FUSED_TREE_EXT
+    if _FUSED_TREE_EXT is None:
+        import os
+
+        from torch.utils.cpp_extension import load
+
+        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc", "fused_tree_build.cu")
+        _FUSED_TREE_EXT = load(
+            name="fused_tree_build", sources=[src], extra_cuda_cflags=["-O3"]
+        )
+    return _FUSED_TREE_EXT
+
+
+def fused_build_tree(
+    verified_id: torch.Tensor,
+    scores: torch.Tensor,
+    tokens: torch.Tensor,
+    parent_list: torch.Tensor,
+    seq_lens: torch.Tensor,
+    seq_lens_sum: int,
+    topk: int,
+    spec_steps: int,
+    num_verify_tokens: int,
+    tree_mask_mode: TreeMaskMode = TreeMaskMode.FULL_MASK,
+):
+    """organize_draft_results + build_tree_kernel_efficient in ONE launch.
+
+    Same return tuple as build_tree_kernel_efficient. ``scores``/``tokens`` are the
+    concatenated score_list / token_list ([bs, L]) and ``parent_list`` the concatenated
+    parents_list[:-1], all produced inside the draft CUDA graph. Checked element for
+    element against the two-function reference by drivers/tree_build_check.py.
+    """
+    bs = seq_lens.numel()
+    device = seq_lens.device
+    n = num_verify_tokens
+    if tree_mask_mode == TreeMaskMode.QLEN_ONLY_BITPACKING:
+        dt = [torch.uint8, torch.uint16, torch.uint32][(n > 8) + (n > 16)]
+        tree_mask = torch.empty(n * bs, dtype=dt, device=device)
+    elif tree_mask_mode == TreeMaskMode.QLEN_ONLY:
+        tree_mask = torch.empty(n * n * bs, dtype=torch.bool, device=device)
+    else:
+        tree_mask = torch.empty(
+            seq_lens_sum * n + n * n * bs, dtype=torch.bool, device=device
+        )
+    positions = torch.empty(bs * n, dtype=torch.long, device=device)
+    retrive_buf = torch.empty(3, bs, n, dtype=torch.long, device=device)
+    top_scores_index = torch.empty(bs, n - 1, dtype=torch.long, device=device)
+    draft_tokens = torch.empty(bs * n, dtype=torch.long, device=device)
+    _fused_tree_ext().fused_draft_tree_build(
+        scores.float().contiguous(),
+        tokens.contiguous(),
+        parent_list.contiguous(),
+        verified_id.to(torch.long).contiguous(),
+        seq_lens.to(torch.long).contiguous(),
+        top_scores_index,
+        draft_tokens,
+        tree_mask,
+        positions,
+        retrive_buf[0],
+        retrive_buf[1],
+        retrive_buf[2],
+        topk,
+        spec_steps,
+        n,
+        int(tree_mask_mode),
+    )
+    return (
+        tree_mask,
+        positions,
+        retrive_buf[0],
+        retrive_buf[1],
+        retrive_buf[2],
+        draft_tokens,
+    )

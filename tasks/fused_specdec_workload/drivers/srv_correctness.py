@@ -26,6 +26,8 @@ def env_for(arm):
     env["SGLANG_FLASHINFER_USE_PERSISTENT"] = "1"
     env["SGLANG_LOG_MIXED_COMPOSITION"] = f"/tmp/comp_{arm}.jsonl"
     if arm.startswith("MTP"):
+        if "TREE" in arm:
+            env["SGLANG_FUSED_TREE_BUILD"] = "1"
         if "MIX" in arm:
             env.update(SGLANG_ALLOW_MIXED_CHUNK_SPEC="1", SGLANG_MIXED_SPEC="1")
         if "SPLIT" in arm:

@@ -35,6 +35,9 @@ from sglang.srt.speculative.eagle_info import (
     EagleVerifyOutput,
 )
 from sglang.srt.speculative.eagle_utils import (
+    _fused_tree_ext,
+    fused_build_tree,
+    fused_tree_build_enabled,
     build_tree_kernel_efficient,
     organize_draft_results,
 )
@@ -174,6 +177,8 @@ class EAGLEWorker(TpModelWorker):
         self.draft_tp_context = (
             draft_tp_context if server_args.enable_dp_attention else empty_context
         )
+        if fused_tree_build_enabled():
+            _fused_tree_ext()  # build before CUDA-graph capture, not on the first draft
         with self.draft_tp_context(self.draft_model_runner.tp_group):
             self.init_attention_backend()
             self.init_cuda_graphs()
@@ -648,7 +653,9 @@ class EAGLEWorker(TpModelWorker):
             retrive_next_token,
             retrive_next_sibling,
             draft_tokens,
-        ) = build_tree_kernel_efficient(
+        # Under SGLANG_FUSED_TREE_BUILD the three draft outputs are (scores, tokens, parents),
+        # which is fused_build_tree's positional order after verified_id.
+        ) = (fused_build_tree if fused_tree_build_enabled() else build_tree_kernel_efficient)(
             spec_info.verified_id,
             parent_list,
             top_scores_index,
@@ -741,6 +748,19 @@ class EAGLEWorker(TpModelWorker):
             if self.hot_token_id is not None:
                 topk_index = self.hot_token_id[topk_index]
             hidden_states = logits_output.hidden_states
+
+        if fused_tree_build_enabled():
+            # Hand the raw concatenations out of the graph; draft() runs organize +
+            # build_tree as one fused launch on them.
+            scores = torch.cat(score_list, dim=1).flatten(1)
+            tokens = torch.cat(token_list, dim=1)
+            if len(parents_list) > 1:
+                parents = torch.cat(parents_list[:-1], dim=1)
+            else:
+                parents = torch.zeros(
+                    scores.shape[0], 1, dtype=torch.long, device=scores.device
+                )
+            return scores, tokens, parents
 
         parent_list, top_scores_index, draft_tokens = organize_draft_results(
             score_list, token_list, parents_list, self.speculative_num_draft_tokens

@@ -157,6 +157,37 @@ every request completed.
   with means unchanged. At this load affinity rarely pushes a worker past its SLO, so there is
   little to correct. The veto is a tail guard, and its value should grow with hotspots, which the
   HOT experiment below creates.
+
+**Hot-prefix stress (points 1, 2, 4), 2026-10-08.** `HOT=1`: the chat tenant becomes 4 groups
+sharing 16K-token system prompts (`generated-shared-prefix`, 512-token questions, 16/s, 3 200
+requests); the agent tenant is unchanged. Command: `HOT=1 RUN_TAG=_hot ROUTER_ARGS="<calibrated>
+--ttft-slo-ms 2000" python mn_run.py coloc_cache coloc_slo_edf coloc_slo_edf_hc disagg_2p2d`
+(commits 498d60155, daaedef6a; the cache tie-break was already randomized). 0 tracebacks, 0
+fallbacks, every request completed.
+
+| arm | agent TTFT ms mean / P99 | chat TTFT ms mean / P99 | ITL ms agent / chat (chat P99) | prefix hit | vetoes | max requests/worker |
+|---|---|---|---|---|---|---|
+| coloc_cache_hot | 1 673 / 8 602 | 340 / 2 263 | 7.1 / 23.4 (224) | 93.5% | - | 803 |
+| coloc_slo_edf_hot | 1 605 / 8 408 | 347 / 3 290 | 7.8 / 19.1 (230) | 93.5% | 96 (2.7%) | 808 |
+| coloc_slo_edf_hc_hot | 1 648 / 8 189 | 377 / 3 414 | 7.5 / **18.9 (200)** | 93.4% | 87 (2.4%) | 802 |
+| disagg_2p2d_hot | 27 776 / 76 129 | 29 513 / 85 682 | 6.3 / **3.8 (30.5)** | 81.9% | - | 861 |
+
+- **Colocation still wins TTFT by an order of magnitude** (agent -94%, chat -99%), even when the
+  workload is designed to create hotspots.
+- **Disagg wins chat ITL by 5x here.** A hot group's decode concentrates on its holder in
+  colocation (~800 requests on the busiest worker), while disagg spreads decode over 8 dedicated
+  GPUs. This is colocation's real weakness, and the veto is too weak to fix it: it moves only
+  ~2.5% of requests, because the calibrated model predicts TTFT, and TTFT stays fine on a holder
+  whose prefix is cached. The overload shows up as ITL, which the veto does not price. The veto
+  plus store trims chat ITL 19% (23.4 -> 18.9 ms) and P99 to 200 ms, and does not close the gap.
+- **What point 4 needs and does not yet have:** a veto that prices the decode (TPOT) slowdown a
+  request causes on its holder. The router's TPOT model exists (`decode_step_ms`,
+  `decode_ms_per_seq`), but with the calibrated slope (0.065 ms/seq) it never crosses the
+  100 ms ITL budget. Calibration measured ITL vs concurrency at short contexts, while the holders'
+  ITL is driven by 16K-prefix decode rows plus their prefill.
+- **Disagg's prefill pods hit 82%** because 4 hot prefixes replicate across 8 prefill GPUs, so the
+  bipartite graph is not the bottleneck at 16 GPUs either. No congestion effect is measurable
+  within the cap.
 - **Worker-side EDF does nothing here** (agent +1%, chat +16 ms, within noise). With 16 workers,
   each sees a light queue, and admission order matters only when work queues up. On a single
   saturated H200 it cut chat TTFT 62% (point 3).

@@ -195,7 +195,7 @@ Workload and serving:
 - [ ] **Context length where attention is >50% of e2e** -- not run.
 - [x] **TraceLab mixed scenario wired** (2026-10-07) -- agent_plus_shortchat on the pod; trace verified identical after shrinking.
 - [x] **Realistic serving, LPT baseline** (2026-10-07) -- clean, 0 fallbacks. [detail](#realistic-serving-ab-lpt-baseline-tracelab-agent--short-chat--2026-10-07)
-- [ ] **Realistic serving, SPLIT arm** -- **VOID (2026-10-07).** The -39.8% TTFT / +16.9% tput run
+- [ ] **Realistic serving, SPLIT arm** -- gate PASSES as of `4e3bde083`; interleaved repeats running. **Earlier run VOID (2026-10-07).** The -39.8% TTFT / +16.9% tput run
       computed the WRONG requests on FA3: the split plan handed `fa3_only_run` the FA2 rows'
       per-request arrays. Fixed; serving correctness gate added. No valid SPLIT serving number
       exists yet. [detail](#split-serving-void--2026-10-07)
@@ -283,6 +283,20 @@ fp32 reference, 0 unwritten, 0 fallbacks):
 | split, two-stream overlap | 11 286.5 us | **-24.5% (1.324x)** |
 | 512-token appends at 24-49K + 2 decode rows (`n_fa3:4`) | 2 582.6 us | PASS |
 | no-prefix prefill + appends (`qo:2048,3809,1,1 prefix:0,8191,12000,5000 n_fa3:2`) | 1 425.9 us | PASS |
+
+**Serving gate after both fixes (sglang `4e3bde083`): PASS.** In-server fp32 check, layers 0 and 14,
+first 4 split steps: every FA3 row at 2.5-3.8e-3, including prefix-free rows (previously 0/0)
+and the 3809-onto-12000 append; every FA2 row at 1.7-3.4e-3. Greedy common prefix with LPT,
+of 101 tokens:
+
+| arm | long (FA3-routed) | short |
+|---|---|---|
+| LPT2 (noise floor) | 101, 52, 101, 101 | 101, 74, 11, 101, 101, 45, 45, 7 |
+| **SPLIT, non-ragged** | **101, 52, 101, 101** | 101, 76, 38, 101, 101, 5, 101, 101 |
+| **SPLIT + overlap** | **101, 52, 101, 101** | identical to the row above |
+
+0 fallbacks, 0 tracebacks. SPLIT agrees with LPT as closely as LPT agrees with itself, so a
+SPLIT serving number can now mean something.
 
 These supersede the non-causal 1.239x. With causal masking the overlap is worth -1.2%,
 not -2.7%. The FA2 ring and split-reduction numbers were measured with

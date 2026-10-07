@@ -58,6 +58,13 @@ tasks/pd_colocation/mn_run.py <arms>`; audit: `mn_audit.py` (every pod's worker 
 "Worker-reported hit" is the sum of sglang's own `meta_info.cached_tokens` over the sum of
 `prompt_tokens`, recorded per request by the router.
 
+**RETRACTED pending re-run (2026-10-07):** every arm below ran with the pods' soft
+`ulimit -n` of 1024 and the table does not record completed-request counts. Under the chat burst
+the stock sglang_router ran out of sockets. Its circuit breaker then rejected most requests:
+disagg_2p2d served 163/384 agent and 2 265/3 200 chat requests. The coloc arms used the same
+harness, so their completeness is unverified. All arms are being re-run with the limit raised
+(commit a8bd07337), with completed counts recorded.
+
 | arm | agent TTFT ms (mean / P99) | agent ITL ms | chat TTFT ms (mean / P99) | chat ITL ms | worker-reported hit | requests/worker |
 |---|---|---|---|---|---|---|
 | coloc_rr (round-robin) | 13 185 / 60 744 | 24.2 | 9 832 / 58 533 | 27.1 | (not logged; re-run queued) | 224-226 |

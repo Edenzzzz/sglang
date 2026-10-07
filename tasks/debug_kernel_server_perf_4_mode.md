@@ -238,8 +238,19 @@ Workload and serving:
 
       At chunk 2 048 the full stack beats stock MTP on every metric: P99 ITL -13% / -30%, mean ITL
       -47% / -44%, TTFT -92% / -52%, throughput +46% / +48%. Stock MTP has the same knob, so the
-      fair comparison tunes both. Queued: 3 rounds of BOTH arms at chunk 2 048, plus 3 rounds of both
-      at chat 8/s (below saturation).
+      fair comparison tunes both. 3 rounds of BOTH arms at chunk 2 048 are running.
+      **Chat 8/s, default chunk, 3 rounds** (`TAG=_long{,_r2,_r3} mtp_edf.sh 8 2000 30`, 0 fallbacks, all
+      completed). Stock MTP still cannot keep up (chat 487 of ~576 offered tok/s); the full stack can:
+
+      | metric (3-round mean) | stock MTP | full stack | change |
+      |---|---|---|---|
+      | chat / codex output tok/s | 487.3 / 164.9 | **574.8 / 213.7** | **+18.0% / +29.6%** |
+      | chat / codex TTFT ms | 27 616 / 20 651 | **986 / 5 259** | **-96.4% / -74.5%** |
+      | chat / codex mean ITL ms | 75.8 / 34.5 | **32.2 / 17.7** | **-57.5% / -48.6%** |
+      | chat / codex P99 ITL ms | 193.3 / 159.2 | 245.8 / 158.2 | **+27.2% (worse)** / -0.6% |
+
+      The chat P99 regression at the default chunk repeats at the lower load. It is a property of
+      the 8 192-token chunk, not of overload.
 - [x] **TraceLab mixed scenario wired** (2026-10-07) -- agent_plus_shortchat on the pod; trace verified identical after shrinking.
 - [x] **Realistic serving, LPT baseline** (2026-10-07) -- clean, 0 fallbacks. [detail](#realistic-serving-ab-lpt-baseline-tracelab-agent--short-chat--2026-10-07)
 - [x] **Realistic serving, SPLIT arm** (2026-10-07) -- CONFIRMED with a stream start barrier (3 rounds, tight ranges): chat TTFT -17.4%, codex TTFT -10.5%, ITL -7.9%, P99 ITL -15.9%, tput +7.0% ([detail](#stream-offset-confound--2026-10-07)). Original run, 3 interleaved rounds, gate PASS, 0 fallbacks:

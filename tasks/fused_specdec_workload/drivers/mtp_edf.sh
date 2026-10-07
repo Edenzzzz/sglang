@@ -7,7 +7,7 @@ set -u
 W=/dev/shm/w
 . $W/venv/bin/activate
 export PYTHONPATH=$W/python:$W/fi HF_HOME=$W/hf FI_ROOT=$W/fi TORCH_CUDA_ARCH_LIST=9.0a
-export MODEL=$W/qwen7b TRACE_PATH=$W/workloads/tracelab/syfi_coding_trace.jsonl.gz
+export MODEL=$W/qwen7b TRACE_PATH=${TRACE_PATH:-$W/workloads/tracelab/syfi_coding_trace.jsonl.gz}
 export CHAT_DATASET=$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json
 export UP_STAGES=2 MMA_PV_RS=1 SCHED_LPT=0
 RATE=${1:-24}; export TTFT_SLO_MS=${2:-2000} ITL_SLO_MS=${3:-50}

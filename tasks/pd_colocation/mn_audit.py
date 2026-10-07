@@ -1,0 +1,35 @@
+"""Cross-pod audit of finished multi-node arms (runs locally via px_multi).
+
+  python mn_audit.py <arm> [<arm> ...]
+
+Per arm: tracebacks and fallbacks summed over EVERY pod's worker logs (mn_run's own summary only
+sees pod 0), requests served per worker (from each worker's access log), and from the router's
+decision log the cache-hit token share and veto counts.
+"""
+import json, os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from px_multi import Cluster
+
+C = Cluster(os.environ.get("SID", "c2fb3965f36cd15f"), "cn-seed", nodes=[f"worker-{i}" for i in range(8)])
+W = "/dev/shm/w"
+for arm in sys.argv[1:]:
+    d = f"{W}/mn/{arm}"
+    tb = fb = 0
+    served = []
+    for r, (rc, out) in enumerate(C.run_all(
+            f"for f in {d}/worker_r*_g?.log; do echo \"$(basename $f) $(grep -c Traceback $f) "
+            f"$(grep -ci fallback $f) $(grep -c 'POST /generate' $f)\"; done")):
+        for line in out.splitlines():
+            p = line.split()
+            if len(p) == 4 and p[0].startswith("worker_"):
+                tb += int(p[1]); fb += int(p[2]); served.append(int(p[3]))
+    rc, out = C.run(0, f"python3 -c \"import json\nn=h=v=t=0\nfor l in open('{d}/router_decisions.jsonl'):\n"
+                       f"    r=json.loads(l); n+=1; h+=r.get('hit',0); t+=r.get('n_tok',0); v+=r.get('vetoed',0) or 0\n"
+                       f"print('ROUTER', n, h, t, v)\" 2>/dev/null")
+    rl = [l for l in out.splitlines() if l.startswith("ROUTER")]
+    rinfo = ""
+    if rl:
+        _, n, h, t, v = rl[-1].split()
+        rinfo = f"decisions={n} hit_token_share={int(h) / max(1, int(t)):.3f} vetoes={v}"
+    spread = f"min={min(served)} max={max(served)}" if served else "n/a"
+    print(f"{arm:<12} workers={len(served)} tracebacks={tb} fallbacks={fb} requests/worker {spread} {rinfo}")

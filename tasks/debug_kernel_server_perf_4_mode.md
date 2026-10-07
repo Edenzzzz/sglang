@@ -210,12 +210,20 @@ Workload and serving:
       overloaded in 1 of 3 rounds; load sweep queued. [detail](#four-mode-mtp-serving--2026-10-07)
 - [x] **Perf model: is the split easier to predict?** (2026-10-07) -- yes, modestly. Mixed-step cost, 5-fold CV,
       traced serving (one round each): linear(all) MAPE 13.4% SPLIT vs 16.9% LPT; MLP 6.0% vs 6.4%; RF 6.2% vs
-      6.7%. Large gain for simple models, small for nonlinear ones. EDF-vs-unfused scheduling comparison
-      still to run. [detail](#perf-model-fit--2026-10-07)
+      6.7%. Large gain for simple models, small for nonlinear ones. [detail](#perf-model-fit--2026-10-07)
+- [x] **EDF on the 4-mode MTP server vs the unfused schedule** (2026-10-08, 3 rounds) -- deadline ORDER
+      wins (chat TTFT -62%, codex P99 ITL -27% vs no EDF), and every per-step chunk CAP loses. The
+      per-request acceptance EWMA collapses through a min-over-noisy-estimates bias. Full stack vs stock
+      MTP at chat 24/s: chat TTFT -95%, ITL -42%; codex TTFT -51%, ITL -38%. At 16/s: ITL -36..-46%,
+      codex TTFT only -19%. Details in pd_colocation_vs_disagg.md point 3 (v0.17.0-v0.17.2).
 
 Cluster:
-- [ ] **Multi-node PD colocation, four points** -- design doc written, nothing measured.
-      Delta: at most 4 nodes, so baselines are 2P2D and 1P3D.
+- [ ] **Multi-node PD colocation, four points** (H20, 8 pods x 2 GPUs, `tasks/pd_colocation_vs_disagg.md`).
+      Measured 2026-10-08 (non-MTP workers): cache-affinity colocation vs the best disagg (2P2D)
+      cuts TTFT 93% (agent) and 99.5% (chat), with 73% vs 23-31% prefix hit. Disagg keeps lower ITL
+      (3.7 vs 6.4 ms). The L3 store lifts round-robin's hit rate 12.7 -> 22.3% and sits idle under
+      affinity. Remaining: the calibrated SLO veto + worker EDF arms, MTP arms on both sides
+      (gated), and a hot-prefix experiment for point 4 (all queued).
 
 <a id="stream-offset-confound--2026-10-07"></a>
 ### METHODOLOGY RETRACTION: multi-stream serving runs had an uncontrolled start offset — 2026-10-07

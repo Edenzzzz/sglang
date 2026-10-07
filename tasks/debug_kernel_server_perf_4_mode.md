@@ -1830,7 +1830,7 @@ One line each; the evidence is in the linked detail section. Every item must be 
       zero spill, so it is not pipeline-starved, and doubling
       `s_frag[NUM_MMA_Q][NUM_MMA_KV][8]` eats the registers `mma.sync` needs. So this
       optimisation is FA3-only: 6.0% there, nothing here. Switch kept at 2.
-- [ ] **Smem-handoff JIT split-KV reduction — it pays on FA2, not FA3** (2026-10-06). Which
+- [x] **Smem-handoff JIT split-KV reduction — CLOSED 2026-10-07: ceiling 2.9%, not built** ([detail](#fa2-kv-ring--2026-10-07)). Original note (2026-10-06): Which
       shape splits is decided by upstream's heuristic, and on the TraceLab shape it answers
       cleanly: a 2048-token append at 64K KV already has `4 * ceil(2048*7/128) = 448`
       m-blocks against `0.8 * 132 = 106`, so no split is needed and the heuristic returns 1.
@@ -1840,7 +1840,7 @@ One line each; the evidence is in the linked detail section. Every item must be 
       memory. So the smem handoff is an FA2-side optimisation for long-context decode, and
       measuring it on FA3 prefill -- which is what every fixture so far did -- can only ever
       show nothing.
-- [ ] **(context) The same reduction on FA3** — only reachable on low-q/high-KV rows, which
+- [x] **(context) The same reduction on FA3** — CLOSED: the router sends FA3 no split rows. Original note: only reachable on low-q/high-KV rows, which
       the router deliberately sends to FA2. Keep as the comparison point against upstream's
       combine launch, not as the main claim.
       replaces upstream FA3's separate combine launch and FA2's **global** partial
@@ -1848,7 +1848,7 @@ One line each; the evidence is in the linked detail section. Every item must be 
       split-heavy shapes (few q rows, long KV); every fixture used so far has
       `num_splits=1`, where it saves nothing.
       [detail](#what-parity-means-on-a-split-batch--2026-10-06)
-- [ ] **DSMEM / KV multicast** — the real prerequisite, found 2026-10-07: **our FA3 launcher
+- [x] **DSMEM / KV multicast — CLOSED 2026-10-07: causal ceiling 1.8% / 1.6%, not built** ([detail](#multicast-backfill-ceilings--2026-10-07)). Earlier note: the real prerequisite, found 2026-10-07: **our FA3 launcher
       does not launch clusters at all.** `LaunchUpstreamFA3OwnSched` ends in a plain
       `kernel<<<grid, block, smem_size, stream>>>` (`fa3_upstream.cuh`), and DSMEM requires a
       cluster, so `mapa.shared::cluster` has nothing to address. Upstream launches via
@@ -1883,7 +1883,7 @@ One line each; the evidence is in the linked detail section. Every item must be 
       1.33-1.59x is not immediately taxed 10%. It is also real kernel work, not a flag.
       This is mechanical rather than exploratory, and it is the one FA3-side item with a
       plausibly large payoff left (recorded 1.33-1.59x in isolation).
-- [ ] **(superseded) DSMEM / KV multicast, TMA framing** — 1.33-1.59x in isolation. **No TMA prerequisite**: DSMEM
+- [x] **(superseded) DSMEM / KV multicast, TMA framing** — 1.33-1.59x in isolation. **No TMA prerequisite**: DSMEM
       peer reads (`mapa.shared::cluster`) work regardless of how KV reached smem, so one CTA
       can `cp.async` the KV block and the rest of the cluster reads it from that CTA's smem.
       TMA multicast is one *implementation*, not a requirement, and since cp.async beats TMA
@@ -1891,11 +1891,12 @@ One line each; the evidence is in the linked detail section. Every item must be 
       TMA paged a prerequisite are retracted; that mistake is why this looked blocked.
       The old `FLASHINFER_FUSED_CLUSTER` flag belongs to the closed fused dispatch.
       [detail](#fa3-is-31x-slower-than-fa2-at-realistic-context-and-the-121x-does-not-generalise--2026-10-06)
-- [ ] **Fused spec tree-build epilogue** — designed, not built; belongs to whichever executor
-      writes the verify output. Needs the 4-mode MTP batch.
+- [x] **Fused spec tree-build epilogue — built 2026-10-07** as a draft-tail kernel (the attention-epilogue design is retracted), exact vs sglang, and wired into the worker behind `SGLANG_FUSED_TREE_BUILD=1` (`f1985ca8f`); serving gate arm MTPTREE queued. [detail](#fused-tree-build--2026-10-07)
       [detail](#fused-epilogue-design)
-- [ ] **Async/tiled packed copies** — `cp.async` landed; single-warp width and the per-row O
-      store remain, the latter needing the indirection table.
+- [x] **Async/tiled packed copies — SUPERSEDED 2026-10-07.** These were the fused kernel's wgmma-role
+      copies (single-warp width, per-row O store). The fused design is closed on measurement, and the
+      two-executor FA3 is upstream's own kernel with its own PackGQA copy path, so the item has no
+      code left to apply to. Not skipped: there is nothing to build.
 - [x] **Packed GQA** — upstream provides it for FA3 (`PackGQA=true`); FA2's persistent kernel
       already had it. Nothing to add on either side.
       [detail](#packed-gqa-class-boundary)

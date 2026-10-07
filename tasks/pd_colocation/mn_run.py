@@ -52,17 +52,33 @@ def urls(hs, roles=None):
     return out
 
 
-KILL = ("for p in $(ps -eo pid,cmd | grep -E 'sglang.launch_server|sglang::|sglang_router|router.py|bench_serving|mn_bench' "
+KILL = ("for p in $(ps -eo pid,cmd | grep -E 'sglang.launch_server|sglang::|sglang_router|router.py|bench_serving|mn_bench|mooncake_master' "
         "| grep -v grep | awk '{print $1}'); do kill -9 $p 2>/dev/null; done; sleep 2; "
         "rm -f ~/.cache/torch_extensions/py312_cu128/fused_fa3/lock; echo killed")
 
 
 def run_arm(arm):
-    layout, router = ARMS[arm]
+    # <arm>_hc: the same arm with a cluster-wide mooncake L3 prefix store (mn_node.sh HC_MASTER).
+    hc = arm.endswith("_hc")
+    layout, router = ARMS[arm[:-3] if hc else arm]
     log = f"{W}/mn/{arm}"
-    print(f"=== {arm}: layout={layout} router={router}", flush=True)
+    print(f"=== {arm}: layout={layout} router={router} l3_store={hc}", flush=True)
     C.run_all(KILL)
+    # bench_serving APPENDS to its output file and mn_summary reads the last line, so a stale
+    # directory would let a failed arm report the previous run's numbers.
+    C.run_all(f"rm -rf {log}")
     env = f"KERNEL={os.environ.get('KERNEL', 'lpt')}"
+    if hc:
+        rc, out = C.run(0, f"mkdir -p {log}; ip=$(hostname -I | tr ' ' '\\n' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1); "
+                           "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\")); "
+                           "CUDART=$(" + W + "/venv/bin/python -c 'import nvidia.cuda_runtime as m, os; print(os.path.dirname(m.__file__))'); "
+                           "LD_LIBRARY_PATH=$CUDART/lib:$CUDART "
+                           f"setsid -f /home/tiger/.local/lib/python3.12/site-packages/mooncake/mooncake_master --rpc_port $p --metrics_port $((p + 1)) "
+                           f"--eviction_high_watermark_ratio=0.95 > {log}/mooncake_master.log 2>&1 < /dev/null; sleep 3; "
+                           "echo HC_MASTER=$ip:$p")
+        master = [l for l in out.splitlines() if l.startswith("HC_MASTER=")][-1][10:]
+        print(f"  mooncake master {master}", flush=True)
+        env += f" HC_MASTER={master}"
     import concurrent.futures as cf
     with cf.ThreadPoolExecutor(NPODS) as ex:
         list(ex.map(lambda i: C.run(i, f"mkdir -p {log}; {env} bash {W}/tasks/pd_colocation/mn_node.sh {layout[i]} {log}"),
@@ -114,7 +130,7 @@ def run_arm(arm):
         rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --pd-disaggregation {p_args} {d_args} --prefill-policy cache_aware --decode-policy power_of_two {lenient} --host :: --port {RPORT}"
     # setsid -f with every fd redirected: a backgrounded "cd && cmd" list keeps a subshell whose
     # stdout is the webshell pipe, which held each launch call open for its 100 s timeout.
-    C.run(0, f"ulimit -n 1048576; cd {W} && PYTHONPATH={W}/python setsid -f {rcmd} > {log}/router.log 2>&1 < /dev/null; sleep 8; "
+    C.run(0, f"ulimit -n $(ulimit -Hn); cd {W} && PYTHONPATH={W}/python setsid -f {rcmd} > {log}/router.log 2>&1 < /dev/null; sleep 8; "
              f"curl -s -o /dev/null -w 'router %{{http_code}}\\n' http://127.0.0.1:{RPORT}/health")
     knobs = " ".join(f"{k}={os.environ[k]}" for k in
                      ("SESSIONS", "TURNS", "SESSION_RATE", "SLOWDOWN", "CHAT_RATE", "CHAT_N", "CHAT_IN",

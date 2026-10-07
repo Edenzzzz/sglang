@@ -191,6 +191,55 @@ TraceLab). Report predictor MAPE, then the thing that actually matters: SLO atta
 EDF with this predictor against EDF with a naive linear model and against the unfused baseline
 schedule. A better MAPE that does not improve attainment is not a result.
 
+### Measured on the 4-mode MTP server — 2026-10-07 (H200, one GPU)
+
+Setup: Qwen2.5-7B + EAGLE3 draft (3 steps, topk 1, 4 verify tokens), 4-mode step on the FA3/FA2
+split (`MTPMIX_SPLIT`), `agent_chat_rated` at chat 24/s + codex 0.1 sessions/s, start barrier.
+Driver `tasks/fused_specdec_workload/drivers/mtp_edf.sh 24 2000 50`.
+Traced run: `SGLANG_STEP_TRACE=1 SGLANG_EDF_ACCEPT_TRACE=1`, 0 fallbacks, 0 tracebacks.
+
+- [x] **Tokens per decode row per step are 2.10 on average, not 1.** bench_serving (and a user)
+      measure ITL per token: a chunk's gap divided by its tokens. A step-time budget of
+      `ITL_SLO` (a=1) is therefore about 2.1x too tight under MTP.
+- [x] **Online estimators, scored against the tokens each step then emitted** (175 000
+      row-steps, mean absolute error in tokens): a=1 **1.10**, global EWMA (alpha 0.2) **1.00**,
+      per-request EWMA **0.89**. Per-step acceptance is noisy (1-4 tokens), so no estimator gets
+      close to zero, but the per-request EWMA removes the 2.1x bias and is 19% closer than a=1.
+- [x] **Step model** (`tasks/perf_model/fit_mtp_step.py`: linear in chunk tokens, chunk
+      attention work, verify rows and verify KV; fit on the first half of 11 837 back-to-back
+      steps, scored on the second): held-out MAPE **21.9%**, against **98.6%** for a constant
+      (mixed steps 14.8%, pure-decode steps 23.4%).
+- [x] **EDF attainment at a non-binding ITL SLO (2026-10-07).** A request attains its SLO when its
+      TTFT and its P90 per-token ITL both meet target. ITL SLO 50 ms. The TTFT SLO is the one EDF
+      schedules against: 2 s + 1 s per 5 000 prompt tokens beyond 4 096
+      (`slo_attain.py --scaled`). Under a flat 2 s TTFT SLO, codex looks worse for every arm
+      (baseline 0.861). One round per arm; 0 fallbacks and 0 tracebacks in every arm.
+
+      | arm (tokens/step estimate) | chat SLO | chat goodput /s | chat TTFT ms | chat P99 ITL ms | codex SLO | codex TTFT ms | codex P99 ITL ms |
+      |---|---|---|---|---|---|---|---|
+      | no EDF | **0.876** | **20.62** | **446** | 59.4 | **1.000** | **978** | 49.6 |
+      | EDF, a=1 | 0.117 | 2.07 | 40 883 | 56.8 | 0.111 | 55 815 | 69.3 |
+      | EDF, global EWMA | 0.866 | 20.37 | 637 | 64.6 | 0.861 | 3 399 | **36.6** |
+      | EDF, per-request EWMA | 0.696 | 16.36 | 1 264 | **53.5** | 0.778 | 4 468 | 47.3 |
+
+      Reading:
+      - **Without the acceptance term, EDF collapses on an MTP server.** a=1 spends the 50 ms
+        per-token budget on one token per step. It refuses almost every prefill chunk, and chat TTFT
+        reaches 41 s. The global EWMA restores attainment from 0.117 to 0.866. That is the
+        ablation the design asked for, and the gain is large.
+      - **EDF does not beat no-EDF at this SLO.** Without EDF, 93-100% of requests already meet
+        the 50 ms ITL target, so the controller has almost no violations to prevent. It pays in
+        TTFT and buys ITL headroom that the metric does not reward (codex P99 ITL 49.6 -> 36.6 ms).
+      - **The lower-error estimator schedules worse.** Per-request EWMA has the lowest MAE (0.84
+        vs 0.95 global in its own run), yet attainment is lower. The chunk budget is a MINIMUM
+        over ~40 running requests' slack, and a minimum over noisy per-request estimates picks
+        whichever request just saw a run of rejected drafts. The global estimate has no such
+        order-statistic bias. Being checked with an `EDF_BIND` log (binding request's estimate vs
+        global). This is the design section's warning in concrete form: better MAPE that does not
+        improve attainment is not a result.
+- [ ] **Binding ITL SLO (30 ms per token)**, where the no-EDF baseline does violate ITL, with the
+      binding-estimate log. Running: `TAG=_itl30 STEP_MODEL=.../rate24/mtp_step.json mtp_edf.sh 24 2000 30`.
+
 ## 4. Two-way RDMA: a complete graph instead of a bipartite one
 
 **The topology argument.** Disagg's KV traffic is structurally **bipartite**: prefill nodes

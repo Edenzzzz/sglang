@@ -44,13 +44,22 @@ PY
 }
 rm -f $LOG/ports_r${ROLE}_g*.txt
 launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
-  ulimit -n 1048576
+  ulimit -n $(ulimit -Hn)
   local g=$1
   PORT=$(pick $((ROLE * 2 + g + RANDOM)))
   BOOT=$(pick $((ROLE * 2 + g + 7919 + RANDOM)))
   ARGS=(--model $W/qwen7b --attention-backend flashinfer --mem-fraction-static 0.85
         --host :: --port $PORT --context-length 131072 --watchdog-timeout 600
         --json-model-override-args '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}')
+  # Shared L3 prefix cache (goal points 2 and 4): every colocated worker writes the prefixes it
+  # computes through to a cluster-wide mooncake store (RDMA, host DRAM) and prefetches a request's
+  # prefix from it on a local miss, so any node can pull from any other -- a complete graph, with
+  # replication happening as a side effect of serving rather than as a migration step.
+  if [ -n "${HC_MASTER:-}" ]; then
+    export MOONCAKE_MASTER=$HC_MASTER LOCAL_HOSTNAME=$SGLANG_HOST_IP MOONCAKE_PROTOCOL=rdma
+    export MOONCAKE_DEVICE=mlx5_$(( 1 + (ROLE * 2 + g) % 4 )) MOONCAKE_GLOBAL_SEGMENT_SIZE=${HC_SEGMENT:-32gb}
+    ARGS+=(--enable-hierarchical-cache --hicache-storage-backend mooncake)
+  fi
   case $MODE in
     coloc) ARGS+=(--enable-mixed-chunk) ;;
     prefill|decode)

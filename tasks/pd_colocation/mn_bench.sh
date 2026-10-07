@@ -5,7 +5,7 @@
 # SESSIONS sessions arriving at SESSION_RATE/s; each turn's prompt extends the previous one,
 # so a turn hits cache only where the session's previous turn ran. Chat: random-ids, CHAT_RATE/s.
 set -u
-ulimit -n 1048576  # 1024 soft limit: a burst of concurrent requests runs the client out of sockets
+ulimit -n $(ulimit -Hn)  # 1024 soft limit: a burst of concurrent requests runs the client out of sockets
 OUT=$1; RPORT=$2
 W=/dev/shm/w
 export PYTHONPATH=$W/python:$W/fi

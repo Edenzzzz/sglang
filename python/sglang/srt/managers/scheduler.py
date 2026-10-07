@@ -2503,6 +2503,13 @@ class Scheduler(
                         else:
                             _nd += 1
                             _dkv += _s
+                    # 4-mode MTP step: the running batch's verify rows ride in the same forward
+                    _run = getattr(batch, "mixed_spec_running", None)
+                    if _run is not None:
+                        _rsl = _run.seq_lens_cpu.tolist()
+                        _nd += len(_rsl)
+                        _dkv += int(sum(_rsl))
+                        _sl = _sl + _rsl
                     _feat = (
                         "STEPTRACE %s et=%d bs=%d np=%d ptok=%d pf=%d nd=%d dkv=%d kv=%d mx=%d t=%.6f"
                         % (_m, _et, int(batch.batch_size()), _np, _ptok, _pf, _nd, _dkv, sum(_sl), _mx, time.perf_counter())

@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.17.0 — EDF on the MTP server: acceptance length in the ITL budget (2026-10-07)
+
+- `edf_scheduler.py`: the per-step ITL budget is `ITL_SLO * tokens/step`, with three estimators
+  of tokens/step (`SGLANG_EDF_ACCEPT_MODE`): `none` (a=1), `global`, or per-request `req` EWMA
+  (`SGLANG_EDF_ACCEPT_ALPHA`). The estimators are scored online against delivered tokens
+  (`EDF_ACCEPT` log; `SGLANG_EDF_ACCEPT_TRACE=1` scores them without EDF). Also added: an
+  `EDF_BIND` log and a `linear:<json>` step model (`LinearStepPredictor`).
+- STEPTRACE counts a 4-mode step's verify rows as decode rows. New:
+  `tasks/perf_model/fit_mtp_step.py` (held-out step MAPE 21.9% vs 98.6% for a constant), and
+  drivers `mtp_edf.sh` and `slo_attain.py` (with `--scaled`, the length-scaled TTFT SLO EDF
+  schedules against).
+- Measured (H200, chat 24/s, ITL SLO 50 ms): mean tokens/step is 2.10. EDF with a=1 collapses
+  (chat SLO attainment 0.117, TTFT 41 s); the global EWMA restores it to 0.866. That still does
+  not beat no-EDF (0.876), because this SLO barely binds. The per-request EWMA has a lower
+  estimator error but worse attainment (0.696).
+
 ## v0.16.1 — multi-node runs: 1024-fd limit was dropping requests (2026-10-07)
 
 - **Retraction:** every earlier H20 multi-node arm ran with the pods' soft `ulimit -n` of 1024.

@@ -258,13 +258,25 @@ def run_method(method, scenario, outdir):
         if method.startswith("MTPMIX"):
             env["SGLANG_ALLOW_MIXED_CHUNK_SPEC"] = "1"
             env["SGLANG_MIXED_SPEC"] = "1"
-        if method.endswith("SPLIT"):
+        if "SPLIT" in method:
             env["SGLANG_MIXED_ATTENTION_KERNEL"] = "persistent"
             env["SGLANG_TWO_EXEC"] = "1"
             env["SGLANG_FUSED_FA3_SM_SPLIT"] = "1"
             env["FLASHINFER_SM_PARTITION"] = "1"
             env["UP_STAGES"] = "2"
             env["SGLANG_FUSED_FA3_SRC"] = "/dev/shm/w/fi/tests/fused_fa3_persistent_ext.cu"
+        if "_EDF" in method:
+            # EDF + SLO chunk control on the speculative server, step model fit from its own
+            # STEPTRACE (tasks/perf_model/fit_mtp_step.py). The suffix picks the tokens/step
+            # estimate that scales the per-step ITL budget: EDF0 a=1, EDFG global EWMA,
+            # EDFR per-request EWMA.
+            env["SGLANG_EDF_SCHEDULING"] = "1"
+            env["SGLANG_EDF_LATENCY_MODEL"] = "linear:" + os.environ["MTP_STEP_MODEL"]
+            env["SGLANG_TTFT_SLO_MS"] = os.environ.get("TTFT_SLO_MS", "5000")
+            env["SGLANG_ITL_SLO_MS"] = os.environ.get("ITL_SLO_MS", "100")
+            env["SGLANG_EDF_PLAN_OVERHEAD_MS"] = "0"
+            env["SGLANG_EDF_ACCEPT_MODE"] = {"EDF0": "none", "EDFG": "global",
+                                             "EDFR": "req"}[method.split("_")[-1]]
     elif method == "LPT_EDF":
         # Gated persistent kernel + SLO-aware chunk control driven by the
         # closed-form overlap cost model. Same EDF policy as the MLP path;
@@ -307,7 +319,7 @@ def run_method(method, scenario, outdir):
                          "--speculative-draft-model-path", "/dev/shm/w/qwen7b_eagle3_sgl",
                          "--speculative-num-steps", "3", "--speculative-eagle-topk", "1",
                          "--speculative-num-draft-tokens", "4"]
-        if method == "LPT_EDF":
+        if method == "LPT_EDF" or "_EDF" in method:
             args_srv += ["--enable-priority-scheduling",
                          "--schedule-low-priority-values-first",
                          "--priority-scheduling-preemption-threshold", "999999"]

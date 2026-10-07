@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
@@ -35,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_FORCE_STREAM_INTERVAL = 50
 
+
+_EDF_ACCEPT_TRACE = os.environ.get("SGLANG_EDF_ACCEPT_TRACE") == "1"
 
 class SchedulerOutputProcessorMixin:
     """
@@ -348,6 +351,17 @@ class SchedulerOutputProcessorMixin:
             _now = _t.monotonic()
             for req in batch.reqs:
                 req._edf_last_step_time = _now
+        # Tokens/step estimates for the EDF budget (also scored without EDF via
+        # SGLANG_EDF_ACCEPT_TRACE=1). Spec v1 appended this step's accepted tokens in verify.
+        if (
+            not batch.spec_algorithm.is_none()
+            and not batch.is_v2_eagle
+            and (self.edf_latency_predictor is not None or _EDF_ACCEPT_TRACE)
+        ):
+            from sglang.srt.managers.edf_scheduler import edf_observe_tokens
+
+            for req in batch.reqs:
+                edf_observe_tokens(req)
 
         # Per-request lifecycle tracking
         if hasattr(batch.reqs[0], 'lifecycle_steps') and batch.reqs[0].lifecycle_steps is not None:

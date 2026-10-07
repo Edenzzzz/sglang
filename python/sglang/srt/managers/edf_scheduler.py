@@ -69,6 +69,64 @@ KV_ADMISSION_WATERMARK = float(
 )
 
 
+# Tokens a decode row emits per step. bench_serving and users measure ITL per TOKEN (a chunk's
+# gap divided by its token count), so with speculative decoding a step that emits `a` tokens per
+# row may take up to a * ITL_SLO before any row misses. The scheduler cannot know the next step's
+# acceptance, but the draft model is fixed online, so the recent past estimates it:
+#   none   a = 1 (the step-time budget of a non-speculative server)
+#   global one EWMA over every row's observed tokens/step
+#   req    a per-request EWMA, falling back to the global one until the request has history
+ACCEPT_MODE = os.environ.get("SGLANG_EDF_ACCEPT_MODE", "none")
+ACCEPT_ALPHA = float(os.environ.get("SGLANG_EDF_ACCEPT_ALPHA", "0.2"))
+_acc_global: Optional[float] = None
+# Online scoring of each estimator against the tokens the step then actually emitted:
+# sums of absolute error for a=1, the global EWMA and the per-request EWMA.
+_acc_err = {"n": 0, "obs": 0.0, "one": 0.0, "global": 0.0, "req": 0.0}
+_bind = {"n": 0, "a": 0.0, "g": 0.0}
+_ACC_LOG_EVERY = int(os.environ.get("SGLANG_EDF_ACCEPT_LOG_EVERY", "20000"))
+
+
+def edf_observe_tokens(req: "Req") -> None:
+    """Fold the tokens `req` emitted in the step that just finished into the estimates.
+
+    Called once per decode step per request, after the step's tokens were appended.
+    """
+    global _acc_global
+    n = len(req.output_ids)
+    prev = getattr(req, "_edf_prev_out", None)
+    req._edf_prev_out = n
+    if prev is None or n <= prev:
+        return
+    a = float(n - prev)
+    g = _acc_global
+    r = getattr(req, "_edf_acc_hat", None)
+    if g is not None:
+        e = _acc_err
+        e["n"] += 1
+        e["obs"] += a
+        e["one"] += abs(a - 1.0)
+        e["global"] += abs(a - g)
+        e["req"] += abs(a - (r if r is not None else g))
+        if e["n"] % _ACC_LOG_EVERY == 0:
+            logger.info(
+                "EDF_ACCEPT n=%d mean_tokens=%.3f mae_one=%.3f mae_global=%.3f mae_req=%.3f",
+                e["n"], e["obs"] / e["n"], e["one"] / e["n"], e["global"] / e["n"],
+                e["req"] / e["n"],
+            )
+    _acc_global = a if g is None else (1 - ACCEPT_ALPHA) * g + ACCEPT_ALPHA * a
+    req._edf_acc_hat = a if r is None else (1 - ACCEPT_ALPHA) * r + ACCEPT_ALPHA * a
+
+
+def edf_tokens_per_step(req: "Req") -> float:
+    if ACCEPT_MODE == "none":
+        return 1.0
+    g = _acc_global if _acc_global is not None else 1.0
+    if ACCEPT_MODE == "global":
+        return g
+    r = getattr(req, "_edf_acc_hat", None)
+    return r if r is not None else g
+
+
 def project_extreme_prefix_work(
     n_p: int, prefill_prefix_len: float
 ) -> tuple[float, float]:
@@ -254,13 +312,23 @@ def edf_compute_max_chunk_size(
     # the previous step's time-of-completion is essentially "now". We track an
     # optional per-req `_edf_last_step_time` (updated by scheduler) to account
     # for stalls; if absent, fall back to now (full ITL_SLO budget).
-    min_slack_ms = ITL_SLO_MS
+    min_slack_ms = math.inf
+    bind_a = 1.0
     for req in decode_reqs:
         last_t = getattr(req, "_edf_last_step_time", now)
         elapsed_ms = (now - last_t) * 1000.0
-        slack = ITL_SLO_MS - elapsed_ms
+        a = edf_tokens_per_step(req)
+        slack = ITL_SLO_MS * a - elapsed_ms
         if slack < min_slack_ms:
-            min_slack_ms = slack
+            min_slack_ms, bind_a = slack, a
+    # The budget is set by the request with the least slack; record that request's tokens/step
+    # estimate beside the global one to show what the minimum selects.
+    _bind["n"] += 1
+    _bind["a"] += bind_a
+    _bind["g"] += _acc_global if _acc_global is not None else 1.0
+    if _bind["n"] % 2000 == 0:
+        logger.info("EDF_BIND decisions=%d mean_binding_a=%.3f mean_global_a=%.3f",
+                    _bind["n"], _bind["a"] / _bind["n"], _bind["g"] / _bind["n"])
 
     # If pure decode alone already exceeds slack, adding prefill can only deepen
     # the violation. A pure-decode step lets overdue requests catch up and
@@ -363,6 +431,34 @@ class LatencyPredictor:
         return float(np.expm1(x_norm[0]))
 
 
+class LinearStepPredictor:
+    """Whole-step latency, linear in the step's work terms, fit from STEPTRACE logs
+    (tasks/perf_model/fit_mtp_step.py). Used for the speculative server, whose step (draft
+    steps + one target forward + draft extends) none of the non-speculative models describe:
+
+        ms = c0 + c_tok*n_p + c_attn*(n_p*r_p + n_p^2/2)/1e6 + c_bs*bs + c_kv*bs*avg_kv/1e3
+
+    Interface-compatible with LatencyPredictor.predict().
+    """
+
+    def __init__(self, path: str):
+        import json
+
+        with open(path) as f:
+            self.c = json.load(f)["coef"]
+        logger.info("EDF linear step model loaded from %s: %s", path, self.c)
+
+    def predict(self, n_p: float, r_p: float, decode_avg_kv: float, decode_bs: float) -> float:
+        c = self.c
+        return (
+            c["c0"]
+            + c["c_tok"] * n_p
+            + c["c_attn"] * (n_p * r_p + 0.5 * n_p * n_p) / 1e6
+            + c["c_bs"] * decode_bs
+            + c["c_kv"] * decode_bs * decode_avg_kv / 1e3
+        )
+
+
 def try_load_latency_predictor():
     """Attempt to load the latency predictor from SGLANG_EDF_LATENCY_MODEL.
 
@@ -377,6 +473,8 @@ def try_load_latency_predictor():
     An explicitly configured predictor is also loaded when EDF scheduling is
     disabled so /get_load can publish forward-cost telemetry independently.
     """
+    if LATENCY_MODEL_PATH.startswith("linear:"):
+        return LinearStepPredictor(LATENCY_MODEL_PATH[len("linear:"):])
     if LATENCY_MODEL_PATH == "analytic":
         from sglang.srt.managers.overlap_cost_model import AnalyticOverlapPredictor
 

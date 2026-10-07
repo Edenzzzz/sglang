@@ -6,7 +6,8 @@ for s in ("agent", "chat"):
     p = os.path.join(d, f"{s}.json")
     if not os.path.exists(p):
         print(s, "MISSING"); continue
-    j = json.load(open(p))
+    # bench_serving APPENDS one JSON line per run; the last line is this run.
+    j = json.loads([l for l in open(p) if l.strip()][-1])
     print(s, " ".join(f"{k}={float(j.get(k) or 0):.1f}" for k in K))
 tb = sum(open(f, errors="replace").read().count("Traceback") for f in glob.glob(os.path.join(d, "worker_*.log")))
 fb = sum(open(f, errors="replace").read().lower().count("fallback") for f in glob.glob(os.path.join(d, "worker_*.log")))

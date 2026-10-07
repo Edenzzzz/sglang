@@ -6746,6 +6746,35 @@ pipeline state after the rendezvous.
 
 
 <a id="split-row-race-handoff"></a>
+## Realistic serving A/B, LPT baseline (TraceLab agent + short chat) — 2026-10-07
+
+Scenario `agent_plus_shortchat` (`run_mixed_workloads.py`): coding-agent TraceLab replay
+(60 requests, 12 sessions, 32-49K contexts, >=512 output) concurrent with 2400 short-chat
+requests at 12/s. Qwen2.5-7B, 1x H200, `--context-length 131072` (RoPE extrapolated past the
+native 32K: timings valid, generated text not). Driver: `drivers/realistic_ab.sh`.
+
+**VOID first attempt.** The first LPT arm ran with the device-side TRACE printf still enabled
+(3.8 GB server log, mean TTFT 26-36 s measuring printf). Discarded; the runner now refuses
+to start with any diagnostic switch in its non-production state.
+
+**LPT (persistent FA2 on everything), clean, fallbacks 0:**
+
+| stream | requests | duration | output tok/s | mean TTFT | P99 TTFT | mean ITL | P99 ITL |
+|---|---|---|---|---|---|---|---|
+| codex | 60 | 120.1 s | 625.8 | 25 330 ms | 55 143 ms | 35.85 ms | 525.6 ms |
+| chat | 2400 | 200.4 s | 858.2 | 18 661 ms | 60 088 ms | 12.07 ms | 40.62 ms |
+
+**Forward-step mix under LPT (n = 18 000 steps):** `decode_cuda_graph` 88.3%,
+`mixed_persistent` 10.6%, `mixed_batch_prefill` 0.9%, `pure_prefill` 0.1%.
+
+**That mix bounds what the split can do here, well below the 19.3% kernel ceiling.** The split
+kernel only runs on mixed attention steps -- about 11% of forwards. The other 88% are
+pure-decode CUDA-graph steps, which the split does not touch. And TTFT in the tens of seconds
+means this load is queue-dominated, so TTFT moves with throughput and admission policy more
+than with per-step kernel time. The SPLIT arm (running) measures the actual effect; the
+expectation it is checked against is "small", and if it comes back large that needs
+explaining, not celebrating.
+
 ## Decode-only: FA2 beats FA3 by 1.30x, so the routing is already right — 2026-10-07
 
 The measurement that locates the remaining attention headroom, since decode is effectively the

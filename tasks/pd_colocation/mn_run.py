@@ -35,11 +35,20 @@ def hosts():
     return [h.rsplit(":", 1)[0].strip("[]") for h in line.split(",")]
 
 
+PORTS = {}  # role -> [(http_port, bootstrap_port) for gpu 0, 1], read from each pod
+
+
+def read_ports(log):
+    for r, (rc, out) in enumerate(C.run_all(f"cat {log}/ports_r$ARNOLD_ID.txt")):
+        rows = [l.split() for l in out.splitlines() if len(l.split()) == 3 and l.split()[0] in ("0", "1")]
+        PORTS[r] = [(int(p), int(b)) for _, p, b in sorted(rows)]
+
+
 def urls(hs, roles=None):
     out = []
     for r in (range(NPODS) if roles is None else roles):
-        for g in (0, 1):
-            out.append((f"http://[{hs[r]}]:{30001 + 100 * r + 50 * g}", 32001 + 100 * r + 50 * g, r))
+        for g, (p, b) in enumerate(PORTS[r]):
+            out.append((f"http://[{hs[r]}]:{p}", b, r))
     return out
 
 
@@ -59,7 +68,9 @@ def run_arm(arm):
         list(ex.map(lambda i: C.run(i, f"mkdir -p {log}; {env} bash {W}/tasks/pd_colocation/mn_node.sh {layout[i]} {log}"),
                     range(NPODS)))
     hs = hosts()
+    read_ports(log)
     all_w = urls(hs)
+    print(f"  ports: {PORTS}", flush=True)
     check = " ".join(f"'{u}/health'" for u, _, _ in all_w)
     t0 = time.time()
     while True:

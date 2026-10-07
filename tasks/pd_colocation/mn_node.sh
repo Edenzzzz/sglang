@@ -21,9 +21,28 @@ if [ "${KERNEL:-lpt}" = split ]; then
   export SGLANG_MIXED_ATTENTION_KERNEL=persistent SGLANG_TWO_EXEC=1 SGLANG_FUSED_FA3_SM_SPLIT=1
   export FLASHINFER_SM_PARTITION=1 UP_STAGES=2 SGLANG_FUSED_FA3_SRC=$W/fi/tests/fused_fa3_persistent_ext.cu
 fi
+# Free ports are FOUND, not assumed: pods use host networking on hosts shared with other
+# jobs, which hold ports this container cannot even see (a bare bind of [::]:30301 failed with
+# no sglang process alive). Each port is probed by binding it, 50 apart so sglang's internal
+# ports above it stay clear, and published in ports_r<role>.txt for mn_run.py.
+pick() { python3 - "$1" <<'PY'
+import random, socket, sys
+rng = random.Random(int(sys.argv[1]))
+for _ in range(500):
+    p = rng.randrange(40000, 59000, 50)
+    try:
+        for q in (p, p + 1, p + 2, p + 3):
+            s = socket.socket(socket.AF_INET6); s.bind(("::", q)); s.close()
+        print(p); break
+    except OSError:
+        continue
+PY
+}
+: > $LOG/ports_r${ROLE}.txt
 for g in 0 1; do
-  PORT=$((30000 + 100 * ROLE + 1 + 50 * g))
-  BOOT=$((32000 + 100 * ROLE + 1 + 50 * g))
+  PORT=$(pick $((ROLE * 2 + g + RANDOM)))
+  BOOT=$(pick $((ROLE * 2 + g + 7919 + RANDOM)))
+  echo "$g $PORT $BOOT" >> $LOG/ports_r${ROLE}.txt
   ARGS=(--model $W/qwen7b --attention-backend flashinfer --mem-fraction-static 0.85
         --host :: --port $PORT --context-length 131072 --watchdog-timeout 600
         --json-model-override-args '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}')

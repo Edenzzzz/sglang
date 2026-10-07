@@ -2054,6 +2054,9 @@ class FlashInferAttnBackend(AttentionBackend):
         # later flashinfer fa3 plan in the process -- a global side effect from
         # a per-step decision.
         hd = self.head_dim
+        _two_exec = os.environ.get(
+            "SGLANG_TWO_EXEC",
+            "0" if os.environ.get("SGLANG_FUSED_KERNEL") == "1" else "1") == "1"
         _prev = os.environ.get("FLASHINFER_FA3_MAX_CTAS")
         # Whole grid in symmetric mode: every CTA owns an FA3 slice there, while
         # sm_split only decides who starts on FA3 rather than who may reach it.
@@ -2061,11 +2064,16 @@ class FlashInferAttnBackend(AttentionBackend):
             self._fused_num_sm() if self._fused_symmetric() else int(sm_fa3)
         )
         try:
-            st["fa3"].plan(
-                qi_f, ki_f, kv_indices, torch.ones(n_rows, dtype=torch.int32),
-                self.num_qo_heads, self.num_kv_heads, hd, 1, causal=True,
-                q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
-            )
+            # Only the fused kernel consumes flashinfer's FA3 plan. The two-executor FA3 is
+            # upstream's kernel on its own scheduler, fed the per-request arrays below; this
+            # plan was a full plan + H2D copy per step for nothing (traced: the split's
+            # mixed steps carried +0.83 ms of host gap over LPT's).
+            if not _two_exec:
+                st["fa3"].plan(
+                    qi_f, ki_f, kv_indices, torch.ones(n_rows, dtype=torch.int32),
+                    self.num_qo_heads, self.num_kv_heads, hd, 1, causal=True,
+                    q_data_type=self.q_data_type, kv_data_type=self.kv_data_type,
+                )
         finally:
             if _prev is None:
                 os.environ.pop("FLASHINFER_FA3_MAX_CTAS", None)
@@ -2079,9 +2087,6 @@ class FlashInferAttnBackend(AttentionBackend):
         # executes 3 tasks and rejects a 4-task plan outright. Relying on the launch script
         # to leave SGLANG_FUSED_UNIFIED unset is what made the second serving A/B invalid
         # too -- 122 silent fallbacks on exactly that mismatch.
-        _two_exec = os.environ.get(
-            "SGLANG_TWO_EXEC",
-            "0" if os.environ.get("SGLANG_FUSED_KERNEL") == "1" else "1") == "1"
         if os.environ.get("SGLANG_FUSED_UNIFIED") == "1" and not _two_exec:
             # ONE plan over the WHOLE batch: the wgmma class is task 3 of it, so
             # there is no row split, no second plan and no per-side offset. This
@@ -2142,7 +2147,7 @@ class FlashInferAttnBackend(AttentionBackend):
             # Per-request PAGE offsets for the dense page-table scatter (page_size 1).
             kv_indptr_req=torch.from_numpy(kv_c.copy()).to(kv_indices.device),
             # Constraint 3: FA3 takes vector-sparse offsets, not page ids.
-            fa3_sparse=self._fa3_sparse_indices(
+            fa3_sparse=None if _two_exec else self._fa3_sparse_indices(
                 st["fa3"], forward_batch.token_to_kv_pool.get_kv_buffer(0)
             ),
         )

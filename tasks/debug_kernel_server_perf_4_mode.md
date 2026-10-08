@@ -9276,3 +9276,18 @@ broken link -- `flashinfer/jit/core.py` does `os.makedirs(FLASHINFER_CSRC_DIR, e
 `exist_ok=True` still raises `FileExistsError` when the path exists but is not a directory, which a
 dangling symlink is. Repointed them at `/dev/shm/w/fi/...`. Add this to the restore recipe.
 Runner: `/dev/shm/kerneltest.sh` (verifies the seven paths, then runs the test under `venv_up`).
+
+**Kernel test on the restored pod: two more setup gates cleared, one in flight (2026-10-08).**
+`import flashinfer` works and the test now gets as far as building the batch
+(`qo=[424, 87, 1] kv=[4001, 87, 14] packed_qo=[2968, 609, 7]`, `row 0 -> FA3; rows 1.. ->
+persistent tasks [0, 2]`, 4102 pages) -- so fixture 1 is being set up correctly from the restored
+tree. It then dies at `gen[0]` with `IndexError`: the test globs
+`~/.cache/flashinfer/*/generated/batch_attention_with*` for `batch_attention_config.inc`, and
+flashinfer's JIT codegen has never run on this pod, so the glob is empty.
+Fix: `/dev/shm/jitwarm.sh` exercises `BatchAttention.plan/run` once to force codegen (first attempt
+failed because I passed a batch_size positional that `plan()` does not take -- its signature is
+`(qo_indptr, kv_indptr, kv_indices, kv_len_arr, num_qo_heads, num_kv_heads, head_dim_qk,
+head_dim_vo, page_size, causal=...)`; corrected). Re-running; the first JIT build is slow.
+Sequence for any future pod restore, all four steps needed before the fused test can run:
+clone third-party -> push the fork's sources -> repoint `flashinfer/data/*` symlinks -> warm the
+BatchAttention JIT so `generated/batch_attention_with*` exists.

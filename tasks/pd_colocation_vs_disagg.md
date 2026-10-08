@@ -9,8 +9,18 @@ Tasks, in priority order (status 2026-10-08; evidence in the sections below):
 - [x] **1. Cache-hit-first routing with an SLO veto** (2026-10-08, H20 16 GPUs) — cache-affinity
       colocation vs the best disagg (2P2D): agent TTFT -93% (21.6 -> 1.6 s), chat TTFT -99.5%,
       prefix hit 73% vs 23-31%. Disagg keeps lower ITL (3.7 vs 6.4 ms). The calibrated veto fires on 2% of
-      requests and trims chat P99 TTFT 15%. A hot-prefix stress run (4 shared 16K prompts piled on
-      their holders) is under way: veto vs affinity vs veto + L3 store vs disagg.
+      requests and trims chat P99 TTFT 15%.
+      Hot-prefix stress (4 shared 16K prompts piled on their holders): a TTFT-only veto barely
+      fires, because a cache holder's PREFILL stays fast while its DECODE degrades. Pricing the
+      decode slowdown (`--decode-grid`) cuts chat ITL **-65%** and P99 **-80%** for a 25% chat TTFT
+      cost (v0.18.0). Sub-items of this point:
+      - [x] route to the highest-hit node first (affinity beats rr and disagg by 8-99x on TTFT)
+      - [x] veto on predicted SLO violation, counting only EARLIER-deadline in-flight requests
+            (`router.py feasible()`: it sums the prefill ahead of this request's deadline, and
+            re-checks that admitting it does not push later-deadline requests past their own)
+      - [x] the veto must price the term the overload appears in (TPOT, not just TTFT)
+      - [x] load balancing: tie-break on hit bucket, then in-flight load, then random (a bare
+            `min()` created a 2-worker hotspot; retracted and fixed, daaedef6a)
 - [x] **2. Best-effort cache migration / replication** (2026-10-08) — a cluster-wide mooncake L3
       store (write-through, best-effort prefetch) lifts round-robin's hit rate 12.7% -> 22.3% (chat
       TTFT -41%, P99 ITL -83%). Under affinity it sits idle (16 pulls): affinity already serves 73%
@@ -19,15 +29,26 @@ Tasks, in priority order (status 2026-10-08; evidence in the sections below):
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex
       P99 ITL -27%. Full stack vs stock MTP: TTFT -95%/-51%, ITL -42%/-38% (chat/codex, 24/s, 3 rounds).
-- [x] **4. Two-way RDMA / congestion, randomized source selection** (2026-10-08) — **not
-      demonstrated, and reported as such.** No congestion exists to relieve at 16 GPUs on 4 hosts:
-      random tie-break among near-equal hits is neutral, the L3 store moved ~236 GB without
+- [ ] **4. Two-way RDMA / congestion, randomized source selection** — **not demonstrated on the
+      full 4-NIC fabric, and reported as such.** No congestion exists to relieve at 16 GPUs on 4
+      hosts: random tie-break among near-equal hits is neutral, the L3 store moved ~236 GB without
       measurable contention, and disagg's 8 prefill GPUs replicate 4 hot prefixes to 82% hit. The
-      store also COSTS ~19% chat ITL once the veto spreads load. The claim needs more nodes than
-      the cap allows.
+      store also COSTS ~19% chat ITL once the veto spreads load. Sub-items:
+      - [x] randomized pull among near-equal-hit nodes (`cache_rand`): neutral at 16 GPUs
+      - [ ] the same on a NARROWED fabric (`ONE_NIC=1` pins every pod's store traffic to mlx5_1,
+            ~4x less aggregate bandwidth) so source selection has contention to relieve within the
+            GPU cap -- RUNNING: coloc_rr_hc / coloc_cache_hc / coloc_rand_hc
+      - [ ] congestion modelled from router-observed past link latency (the alternative in the
+            goal). NOT built, and the measurements argue against building it here: with no
+            contention to observe there is nothing to fit, and a per-request router query would add
+            latency to every decision. Revisit only if the narrowed-fabric run shows an effect.
+      - [ ] scaling with node count (the actual claim) -- needs more nodes than the 16-GPU cap
 - [x] **MTP on every role** (2026-10-08) — colocation + MTP + 4-mode keeps TTFT and cuts agent ITL
       47%, and vs disagg + MTP cuts TTFT 94% / 99.6%. (An apparent regression was a router
-      tie-break hotspot, retracted and fixed.) A fixed-router rerun is queued.
+      tie-break hotspot, retracted and fixed.) The fixed-router rerun confirms it: agent ITL -46%
+      (7.2 -> 3.9 ms) at unchanged TTFT, and the 4-mode split edges stock MTP on every metric.
+      - [ ] the H20 serving gate for the split passed only WEAKLY (one mixed step); the H20 MTP
+            numbers rest on it, so it needs a workload that forces many mixed prefill+verify steps
 
 **Labels.** Every quantitative claim below is either *measured* (with the run and commit) or
 *predicted*. The design sections that predate the measurements say so where the measurements

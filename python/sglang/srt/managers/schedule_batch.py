@@ -3278,14 +3278,6 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         seq_lens = self.seq_lens.clone()
         seq_lens[pre_rows:] = verify_base_seq_lens.to(seq_lens.dtype) + n
         self.seq_lens = seq_lens
-        # orig_seq_lens tracks the row's true length and is NOT one of the fields
-        # mix_with_running widens; leaving it at the pre-verify value while seq_lens grows
-        # is a candidate for the illegal access the first attempt hit.
-        if getattr(self, "orig_seq_lens", None) is not None:
-            orig = self.orig_seq_lens.clone()
-            if orig.numel() == seq_lens.numel():
-                orig[pre_rows:] = verify_base_seq_lens.to(orig.dtype) + n
-                self.orig_seq_lens = orig
         if self.seq_lens_cpu is not None and verify_base_seq_lens_cpu is not None:
             seq_lens_cpu = self.seq_lens_cpu.clone()
             seq_lens_cpu[pre_rows:] = verify_base_seq_lens_cpu.to(seq_lens_cpu.dtype) + n

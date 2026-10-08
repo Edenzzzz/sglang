@@ -43,6 +43,23 @@ Tasks, in priority order (status 2026-10-08; evidence in the sections below):
             contention to observe there is nothing to fit, and a per-request router query would add
             latency to every decision. Revisit only if the narrowed-fabric run shows an effect.
       - [ ] scaling with node count (the actual claim) -- needs more nodes than the 16-GPU cap
+      - [ ] **Simulated-node topology (user proposal, 2026-10-08): treat each GPU as a node and
+            shape its interconnect.** 2x8 or 1x8 H200, one TP1 worker per GPU = 8 independent cache
+            holders instead of 16 workers paired on 4 host NICs. More holders means hit lengths tie
+            more often, which is the only case the random-pull policy differs at all.
+            *User authorized H200 for this despite the standing "H20 only / H200 is scarce" note in
+            the goal; record it as an explicit exception.*
+            **Caveat that decides the implementation: `tc qdisc ... netem` cannot shape RoCE.**
+            RDMA bypasses the kernel network stack, so delay/rate rules on the interface do not
+            touch mooncake's RDMA transport. Two workable knobs instead:
+            (a) run the store over TCP (`MOONCAKE_PROTOCOL=tcp`), which puts transfers back in the
+                kernel path where `tc qdisc add dev <if> root netem delay <d> rate <r>` applies
+                per node -- this is the way to emulate cross-node RDMA latency AND bandwidth;
+            (b) keep RDMA and vary the NIC count as a coarse bandwidth divisor (`ONE_NIC=1`,
+                measured: tails 2.3-3.2x worse at unchanged means), which is real contention but
+                only one point on the curve.
+            Prefer (a) for a latency/bandwidth sweep, and cross-check one point against (b) so the
+            TCP emulation is anchored to a real RDMA measurement.
 - [x] **MTP on every role** (2026-10-08) — colocation + MTP + 4-mode keeps TTFT and cuts agent ITL
       47%, and vs disagg + MTP cuts TTFT 94% / 99.6%. (An apparent regression was a router
       tie-break hotspot, retracted and fixed.) The fixed-router rerun confirms it: agent ITL -46%

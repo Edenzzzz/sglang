@@ -8957,3 +8957,31 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   widened, and whether the chunk rows and verify rows can share one `cu_seqlens_k` when the verify
   rows' prefix is not their `seq_lens`. This is squarely in the FA3 path the goal's split kernel
   also has to satisfy, so the work is not wasted on a detour.
+
+- **[x] The illegal access is fixed, and the prefix was ONE real cause -- but the verify rows are
+  still wrong.** Port 57 lands `seq_lens[tail] = committed_prefix + n` TOGETHER with
+  `self.seq_lens_sum = None`. The second half is what stopped the crash: `mix_with_running`
+  reassigns `self.seq_lens` but never resets `seq_lens_sum`, and `ForwardBatch.init_new` recomputes
+  it ONLY when it is None -- so the merged batch carried the PREFILL batch's sum, which does not
+  include the decode rows at all, and FA3 metadata sized from that total read out of bounds.
+  (`mix_with_running`'s own decode path sets it to None for exactly this reason; the 4-mode merge
+  had to do the same.) Result: 5 mixed steps, 0 tracebacks, no illegal access.
+
+  | gate (b) v2 | before port 57 | after port 57 |
+  |---|---|---|
+  | argmax flips per step | 2/4, 6/8, 7/12, 4/12, 5/12 | **1/4, 2/8, 2/12, 2/12, 1/12** |
+  | `merged_vs_ref` err | 4.8e-01 .. 1.10 | **2.5e-01 .. 6.4e-01** |
+  | NULL prefill case | err=0.0, flips=0 | err=0.0, flips=0 (gate still valid) |
+  | `flips_by_pos` | flat across all 4 positions | sparser, no longer concentrated |
+
+  So the prefix really was a cause -- flips roughly halved and the error fell -- but a residual
+  ~0.25-0.64 remains, which is still ~100x bf16 noise. **Port 57 is KEPT** (strictly closer to the
+  measured contract, and it removes a genuine out-of-bounds), while correctness remains unestablished.
+
+  Candidates for the residual, in the order they should be checked: (a) the attention MASK -- the
+  production path is TARGET_VERIFY with a tree/custom mask, the merged path gives a verify row plain
+  causal attention, which is equivalent for a chain (topk=1) only if the mask does not also gate the
+  bonus token; (b) whether the n draft tokens' KV is visible to their own row in the merged forward
+  in the same order the verify path assumes; (c) `extend_start_loc`/`cu_seqlens` when a 2047-token
+  chunk row shares the batch with n-token verify rows. Check (a) first -- it is the one structural
+  difference between the two paths that the fields alone cannot express.

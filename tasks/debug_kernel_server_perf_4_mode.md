@@ -9135,3 +9135,21 @@ recompute -- that IS the fp32 gate upstream still lacks).
 (worktree `/opt/tiger/sglang-up`), 4-mode step runs (14 mixed steps, ver_rows to 7, 0 tracebacks on
 `portcorr3`), fields correct under triton, one open stability bug under shared-prefix workloads, and
 gate (b) + the always-on counter in place. Nothing is half-edited; both reverts were deployed.
+
+**THE REAL BLOCKER for the kernel A/B, found while acting on the pivot:** the vibecuda H200 pod has
+the fork's python tree (`/dev/shm/w/python`), its venv (`/dev/shm/w/venv`) and the tracelab subset
+(`/dev/shm/w/tracelab_trace.jsonl.gz`), but **`/dev/shm/w/fi` does not exist** -- the flashinfer
+fused/split-kernel build is NOT on this pod. The split kernel therefore cannot be run here at all,
+which is the concrete reason this session's work kept landing on upstream scheduling instead of the
+kernel. It is not a priorities problem alone; the kernel had no runnable binary on the only GPU.
+
+So step 1 of the pivot is **restore the fused extension on the pod**, before any kernel A/B:
+- the fork's `drivers/build_sglang_tree.sh` is what provisions `/dev/shm/w`; check whether it also
+  builds/copies `fi`, and whether a prebuilt wheel/`.so` exists to avoid a long nvcc build;
+- the extension must be built against the pod's torch (the venv the fork uses, NOT `venv_up`'s
+  torch 2.14.1 -- see [[fused-two-register-costs]] and the earlier wrong "imports cleanly" lesson:
+  verify `import flashinfer` AND that the `.so` loads, not just the Python import);
+- then confirm the arm is really fused via `mixed_fused_fa3=N(xx%)` per [[fused-ab-validity-rule]]
+  before quoting any number.
+Only after that does the ON-vs-OFF split-kernel A/B on chat+tracelab become runnable -- and that
+A/B is what the 30% TTFT/ITL + 10% throughput bar needs.

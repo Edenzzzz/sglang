@@ -1637,12 +1637,19 @@ class EAGLEWorkerV2(BaseSpecWorker):
             can_run_cuda_graph=False,
         )
         result.mixed_running_batch = running
+        # next_token_ids must be `predict` (the full n-wide draft prediction), exactly as
+        # `run_eagle_verify` returns it -- NOT the bonus token. `prepare_for_draft_extend` rebinds
+        # `input_ids` from this field and the eager runner takes
+        # `raw_num_tokens = input_ids.shape[0]`, so a 1-element bonus made the batch report 1 token
+        # while its other fields were built n-wide: `positions (dst 1, src 4)`. That mismatch was
+        # the symptom; four commits of resizing tensors were chasing it from the wrong end.
         result.mixed_running_result = GenerationBatchResult(
             logits_output=ver_out,
-            next_token_ids=bonus_tokens,
+            next_token_ids=predict,
             accept_length_per_req_cpu=accept_lens.tolist(),
             can_run_cuda_graph=False,
         )
+        result.mixed_running_result.bonus_tokens = bonus_tokens
         result.mixed_running_result.new_seq_lens = new_seq_lens
         result.mixed_running_result.accept_lens = accept_lens
 

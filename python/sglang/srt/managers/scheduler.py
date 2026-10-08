@@ -4166,6 +4166,12 @@ class Scheduler(
                 )
             if not running_batch.is_empty():
                 running_batch.prepare_for_decode()
+                # ALWAYS-ON counter. Three A/B runs in this project reported a pass while
+                # exercising nothing, because the only evidence the path ran was a debug log
+                # line that perf runs switch off. One integer, no formatting, no env gate.
+                self.mixed_spec_steps = getattr(self, "mixed_spec_steps", 0) + 1
+                if self.mixed_spec_steps % 50 == 1:
+                    logger.info("MIXEDSPEC_STEPS %d", self.mixed_spec_steps)
                 new_batch.mixed_spec_running = running_batch
                 # Unlike upstream's mixed chunk, the decode rows do NOT live inside the
                 # batch we return -- forward_mixed_spec merges them onto a private copy.

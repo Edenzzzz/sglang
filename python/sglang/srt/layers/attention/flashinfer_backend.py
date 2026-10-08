@@ -1004,6 +1004,33 @@ class FlashInferAttnBackend(AttentionBackend):
         else:
             prefix_lens = forward_batch.extend_prefix_lens
 
+            # FA3/FA2 row partition for the SM-pre-assigned split kernel. Computed HERE, in
+            # upstream's own metadata hook, from upstream's own per-row lengths -- so
+            # forward_extend stays a dispatch rather than becoming a planner. Carried on the
+            # backend (not on ForwardBatch) because it is backend state, and left as None when
+            # the split is off so every existing path is untouched.
+            # The partition itself is `mixed_dispatch.split_classes`, whose batch-level
+            # decode-population guard is validated against the measured boundary surface
+            # (tasks/fused_specdec_workload/boundary_28x4x128.json: 11/25 -> 23/25).
+            self.fused_split_mask = None
+            if os.environ.get("SGLANG_FUSED_FA3_SM_SPLIT", "0") != "0":
+                try:
+                    from sglang.srt.layers.attention.mixed_dispatch import split_classes
+
+                    _qo = (forward_batch.extend_seq_lens_cpu
+                           if forward_batch.extend_seq_lens_cpu is not None else None)
+                    if _qo is not None and forward_batch.seq_lens_cpu is not None:
+                        _gqa = max(1, self.num_qo_heads // self.num_kv_heads)
+                        _m, _qt, _kvt = split_classes(
+                            _qo, forward_batch.seq_lens_cpu.tolist(), _gqa
+                        )
+                        # Store the mask and the tile counts the launch budget is derived from.
+                        self.fused_split_mask = (_m, _qt, _kvt)
+                except Exception as _e:
+                    # A partition failure must not degrade the ordinary path silently; log and
+                    # fall through to the standard single-wrapper dispatch.
+                    logger.warning("fused split partition skipped: %s", _e)
+
             # Disable ragged wrapper and ensure prefix handling for multimodal and multi-item scoring
             if self.is_multimodal or self.enable_mis:
                 # use_ragged = False: Multi-item scoring requires the paged wrapper because:

@@ -156,6 +156,43 @@ layer: two executor calls plus the scatter, no host work), commit `9abe91e25`.
       `SGLANG_FUSED_SPLIT_VERIFY=1`, verdict keyed on both the error magnitude and
       `FUSED_SPLIT_CALLS > 0`.
 
+### Structural risk to the acceptance bar, derived from the measured boundary (2026-10-09)
+
+This follows from numbers already in this doc and should not wait for the serving A/B.
+
+The decode-population guard fuses only while `kv_tiles <= decode_rows / 2`, and its own measured
+basis says that with **zero co-resident decode rows the fused kernel LOSES on every measured kv
+(0.617-0.704x)**. So the split's win is confined to decode-heavy batches. Consequences for the
+bar ("at least 30% on TTFT & ITL in realistic workloads (e.g. our mixed chat + tracelab) and at
+least 10% throughput"):
+
+| regime | typical shape | guard | expected effect |
+|---|---|---|---|
+| chat, many concurrent short turns | ~10 kv tiles, 20-60 decode rows | satisfied | split fires; this is where any gain must come from |
+| tracelab / agent, long prefills | 32-256 kv tiles, few decode rows | refuses | split inert by design -- no gain, and correctly so, since fusing would cost 30-38% |
+| prefill-only burst | no decode rows | refuses (`zeros_like`) | inert |
+
+Two honest readings, and they are distinguishable by measurement rather than argument:
+
+1. **The bar is reachable but only through the chat half.** Then the mixed-workload number is a
+   weighted average, and a 30% TTFT/ITL gain on the mixed stream requires something well above
+   30% on the chat portion. Worth computing the required chat-side gain from the mix ratio
+   before running anything.
+2. **The boundary is mismeasured for serving.** It came from kernel microbenchmarks
+   (`boundary_28x4x128.json`, 25 points) where "decode rows" was a sweep parameter. In the
+   server, a long-prefill batch under mixed-chunk also carries whatever decode rows happen to be
+   resident, and the relevant cost is the step's critical path, not the kernel's isolated time.
+   The guard may therefore be refusing batches that would in fact win end-to-end.
+
+**Action:** when the correctness gate passes, run the A/B with the guard ON and again with
+`SGLANG_FUSED_DECODE_GUARD=0` on the SAME workload. That separates the two readings directly:
+if the unguarded arm wins on long-prefill traffic, reading 2 holds and the boundary needs
+re-fitting at the serving level; if it loses, reading 1 holds and the bar has to be met from
+the chat side alone. Either way this is measured, not argued.
+
+- [ ] 2026-10-09 **guard ON vs `SGLANG_FUSED_DECODE_GUARD=0` on one workload** -- decides
+      whether the kernel-level boundary transfers to serving.
+
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither
 constraint is a cost of the work:

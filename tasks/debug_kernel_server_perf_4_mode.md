@@ -8477,3 +8477,55 @@ writing the same `final_o` rows with no ordering between them -- or a read of `f
    touch the path being measured. The check that catches it is cheap and should be habitual
    -- confirm the knob changes something observable on the path (a `SharedStorage` size, a
    work-item count, a generated symbol) **before** spending arms on it.
+
+**Port commits 29-32 (2026-10-08): the verify half now delegates to upstream, and the real
+remaining gap is a SCHEDULER-side one -- the running half never returns to `running_batch`.**
+Branch `upstream_port`, worktree `/opt/tiger/sglang-up`, driver `/dev/shm/portchk.sh` on the
+vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
+
+- **Commit 29** stopped the field-chasing. Hand-rolling sample+commit+result meant one failed run
+  per field upstream sets (`accept_lens`, `new_seq_lens`, `bonus_tokens`, `next_draft_input`, ...).
+  `run_eagle_verify` now takes `precomputed_logits_output`, so the merged forward's verify slice is
+  injected and upstream runs the whole post-forward half. Same commit cut an absorbed upstream PP
+  tail-draft block that had made the method end in `return batch_output` -- any success would have
+  returned the WRONG object. Second damage from slice-based editing this session (after the
+  triplicated method); both times the check that caught it was a symbol/structure count, not a run.
+- **Commit 30** fixed `UnboundLocalError: forward_batch_output` -- commit 29 gated the
+  prepare+forward but only the two uses INSIDE that branch; the result block 120 lines below still
+  read `.routed_experts_output` / `.indexer_topk_output`. Threaded the merged forward output through
+  rather than defaulting those to None: for an MoE target they carry the step's routing/indexer
+  outputs, and nulling them would silently drop EPLB stats on exactly the 4-mode steps.
+- **Baseline control run, and it is now on record:** the identical workload with
+  `SGLANG_MIXED_SPEC=0` PASSES (`ok [1777, 400, 400]`, 0 tracebacks). So every failure below is in
+  the 4-mode path, not an upstream limitation. (Caveat found the hard way: the sed that built the
+  baseline script did not rewrite the `O=` line, so the control overwrote the 4-mode `server.log`.
+  Separate the output dirs before trusting a comparison of two runs.)
+- **The failure, located by logged slot names rather than inference** (`SGLANG_DBG_DRAFT_COPY=1`,
+  diagnostic in `eagle_draft_cuda_graph_runner.execute` + at the scheduler gate):
+
+  | step | gate `reqs` | `spec_info.topk_p` | draft copy |
+  |---|---|---|---|
+  | 1st mixed | 1 | (1,1) | `raw_bs=1` OK |
+  | 2nd mixed | 3 | **(4,1)** | `raw_bs=3`, mismatch `topk_p dst(3,1) src(4,1)`, `topk_index` same |
+
+  The batch arrives at the gate ALREADY inconsistent -- 3 reqs with a 4-row draft input, BEFORE the
+  gate's own `filter_batch`, which is a no-op here because all 3 reqs are kept
+  (`len(keep_indices) == len(self.reqs)` early-returns, so `spec_info.filter_batch` never runs).
+  `prepare_for_decode` -> `spec_prepare_for_decode` and `prepare_for_draft` are both correct:
+  `prepare_for_draft` rebuilds `out_cache_loc` as `bs*topk*num_steps`, so the earlier
+  `out_cache_loc`-width theory (commits 19-22) is NOT what is failing now.
+- **Root cause, structural, in my own gate.** The gate hands the decode reqs off via
+  `mixed_spec_running` / `decoding_reqs` and replaces the scheduler's `running_batch` with an empty
+  one. On the next iteration `running_batch` is empty and `last_batch` is my prefill batch, so
+  `running_batch = last_batch` (scheduler.py:3716-3722) -- a batch whose `reqs` are the PREFILL reqs
+  and whose `spec_info` is the PREFILL half's `next_draft_input` (set at scheduler.py:4519). The
+  decode half's reqs and its verify result never return, so the running request is also LEAKED.
+  This is the pending "wire the scheduler to process `result.mixed_running_result`" item: it is not
+  a missing call but a missing second commit path.
+- **Next step (concrete):** after `run_batch`, when `batch_result.mixed_running_batch` is set,
+  commit BOTH halves -- process the verify result for the running batch (accepted tokens, seq_lens,
+  finished reqs), set `running.spec_info = mixed_running_result.next_draft_input`, and merge the
+  running batch back into `self.running_batch` instead of letting `last_batch` become it. The hard
+  part is the overlap loop's per-batch `future_indices` / relay machinery (scheduler.py:4500-4520),
+  which assumes ONE batch per forward; the merged forward produces one set of futures for two
+  logical batches.

@@ -1,11 +1,43 @@
 # Current goal
 
-**Make the fused FA3+FA2 kernel reach parity with each standalone SOTA kernel per
-role, then show scheduling flexibility on top.** Parity first is the bar: if FA3
-matches flash-attention (we add packed GQA and a dynamic split-KV threshold, so it
-should beat it) and FA2 matches the stock persistent kernel, then the fused
-design's scheduling freedom is pure upside. Target: >=30% TTFT/ITL and >=10%
-throughput on mixed chat + tracelab.
+**Land the fused FA3+FA2 SM-pre-assignment kernel ON UPSTREAM, alongside the 4-mode MTP step
+already there, then measure the combined arm.** Target: >=30% TTFT and ITL, >=10% throughput on
+mixed chat + tracelab. Corrected 2026-10-09 (user): the kernel must be on upstream and its
+*interfaces and fusion boundaries must fit upstream* -- a 4-mode schedule running upstream's own
+attention measures the scheduling change alone and cannot show the thesis.
+
+## Tasks, in priority order (as of 2026-10-09)
+
+1. **[ ] `forward_extend` dispatch on `upstream_port`** -- the last piece of the kernel wiring.
+   Two executor calls over the disjoint row subsets, combined by SCATTER (not an LSE merge: our
+   subsets are disjoint, unlike upstream's ragged+paged pair which covers the same rows). Use the
+   three CPU-verified builders already committed: `self.fused_split_mask` (commit 62),
+   `dense_block_table` (63), `fa3_subset_varlen` (64). The SM budget is the ONLY non-standard
+   argument -- flashinfer derives `sm_count` from the device (`prefill.py:204`) so the wrapper
+   cannot carry one. Then: fp32-reference PASS on the upstream build.
+2. **[ ] Always-on composition counter before ANY serving A/B.** The `MIXEDSPEC_STEPS` pattern
+   caught a false pass on first use; the fork driver's `two_exec_calls` greps a string the code
+   never emits and proves nothing.
+3. **[ ] Combined arm: fused kernel + 4-mode vs upstream baseline**, on a workload with a REAL
+   decode population -- the decode-population guard refuses pure long-prefill batches by design,
+   which is why the IN=32768 A/B could never have shown a gain. Every serving arm passes
+   `drivers/srv_correctness.py` and reports fallback counts.
+4. **[ ] `tma_store_wait` multicast and cross-role backfill** -- never tested.
+5. **[ ] EDF perf-model vs baseline unfused schedule** -- never run; the fused kernel's flatter
+   cost should make the model more accurate, which is the claim to test.
+6. **[ ] PD-colocation point 4** (two-way RDMA / congestion / randomized source selection) --
+   still `- [ ]` in `tasks/pd_colocation_vs_disagg.md`; points 1-3 are measured there. Needs the
+   simulated-node topology (H200 exception authorized) or H20 nodes.
+
+**Done and verified** (details below, with SHAs and commands): fused kernel PASSES the causal fp32
+reference on fixture 1 at every sm_split (0 unwritten; FA3 0.00628, task0 0.00250, tile16 0.00071)
+after two fixes (`MaskMode::kCausal`; `cluster_tile_q` guarded under `FUSED_GRID`); **1.30x** over
+the unfused persistent kernel on identical work (133.5 us @ sm_split 112 vs 174.0 us), optimum split
+OUTSIDE the harness's built-in 48/32/16 sweep; `upstream_port` rebased onto live main `3fef129ff`
+(64 commits) with the decode-population guard re-verified there (11/25 -> 23/25) and the full
+upstream-facing data path CPU-verified.
+
+**Not demonstrated:** the >=30%/>=10% bar. Only baseline serving numbers exist.
 
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither

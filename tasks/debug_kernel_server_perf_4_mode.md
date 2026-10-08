@@ -440,7 +440,35 @@ Evaluation completeness (added 2026-10-08, user-requested):
         through the webshell (that timed out at 900 s). Pin the clone to the commit the port was
         read against: upstream main moved `b7b2975b5` -> `54b551df8` within hours.
 
-      **GATING CHECK ANSWERED 2026-10-08: upstream mixes a chunk with 1-token DECODE TAILS, not with
+      **4-mode port on upstream: merge + single forward RUN; failure is the documented missing commit
+step (2026-10-08).** Four commits on branch `upstream_port` (worktree `/opt/tiger/sglang-up`):
+`mix_with_verify` (85562edfa), the scheduler's deferred merge + `forward_mixed_spec` (47720d9c1),
+the logits split into upstream's `eagle_sample` (9450daf39). Smoke test `drivers/portchk.sh` on the
+clean upstream venv:
+
+- **the server comes up and the ported path executes** -- requests are served, so the merge
+  (`mix_with_verify`), the single target forward over `[chunk | verify]`, and the slice into
+  `eagle_sample` all work against upstream's APIs.
+- it then fails with `ValueError: pool memory leak detected! total=1597048, available=1593134,
+  evictable=1834, protected=2044` -- **36 tokens unaccounted = 4 draft tokens x 9 rows.**
+- **Cause is exactly TODO 2 (commit accepted tokens), not a merge bug.** Upstream reclaims
+  rejected draft slots as *overshoot* from each request's committed seqlen
+  (`eagle_worker_common.py`: "trailing unaccepted slots stay and are freed as overshoot"), via
+  `new_seq_lens = batch.seq_lens + accept_lens` and `prepare_verify_commit_outputs`. My path calls
+  `eagle_sample` but never commits, so the unaccepted slots belong to no request.
+
+**CORRECTION to an earlier claim in this doc:** finishing the 4-mode port is NOT blocked on
+rebuilding the fused extension against torch 2.14.1. The 4-mode step is a scheduling/batching
+change that runs on upstream's DEFAULT attention backend; the FA3+FA2 split is a separate layer
+beneath it. The rebuild gates re-validating the SPLIT KERNEL upstream, nothing else. Conflating the
+two invented a blocker and briefly stopped work.
+
+Next, in order: (1) commit accepted tokens via `prepare_verify_commit_outputs` + `new_seq_lens`;
+(2) sample the prefill half explicitly (`is_verify=True` returns raw logits); (3) both draft
+extends and a result carrying the running batch's outcome; then the serving A/B against upstream's
+own mixed-chunk+spec baseline.
+
+**GATING CHECK ANSWERED 2026-10-08: upstream mixes a chunk with 1-token DECODE TAILS, not with
 verify rows -- so the 4-mode step is still our contribution.** Pinned upstream `b7b2975b5`, clean
 venv (recipe above), `--enable-mixed-chunk --chunked-prefill-size 2048 --speculative-algorithm
 EAGLE3 --speculative-num-draft-tokens 4`, 8 background decode rows plus 8 x 9 000-token prompts

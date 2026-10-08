@@ -459,8 +459,67 @@ roughly 32+ spec rows are co-resident.** It strengthens the earlier prediction t
 informative remaining measurement.
 
 - [x] 2026-10-09 **dispatch PASSES the fp32 causal reference, 5/5** -- see table and command above.
-- [ ] 2026-10-09 **`sm_margin` sweep against the same reference** -- correctness must hold at
-      every SM budget, not only at 0.
+- [x] 2026-10-09 **`sm_margin` sweep: correctness holds at every budget, best 1.224x** -- see below.
+
+## 2026-10-09 -- SM pre-assignment measured: 1.22x on attention, and the bar arithmetic closes
+
+Harness `/dev/shm/w/drv/split_margin.py`, code `sglang-up@b8b405822`, H200, torch 2.14.1,
+flashinfer-python 0.7.0.post1, qwen7b shape (GQA 4), bf16, page_size 1, 30 iters after 5 warmup.
+Command: `cd /dev/shm/w && PYTHONPATH=/dev/shm/w/up/python venv/bin/python drv/split_margin.py`
+
+Batch: one 1024-token prefill chunk + 40 verify rows (kv 1000..2443). **The guard ACCEPTS it**
+(`fa3=1 fa2=40`), which confirms the coverage arithmetic from the other direction: 8 KV tiles
+against 40 decode rows gives a budget of 20 >= 8.
+
+Baseline = ONE planned flashinfer wrapper over all 41 rows, i.e. exactly the work the unsplit
+path does: **186.7 us**, err 0.00256.
+
+| `sm_margin` | us | vs baseline | err_all | err_fa3 | err_fa2 | |
+|---|---|---|---|---|---|---|
+| 0 | 153.1 | 1.220x | 0.00236 | 0.00236 | 0.00020 | PASS |
+| **8** | **152.6** | **1.224x** | 0.00236 | 0.00236 | 0.00020 | PASS |
+| 16 | 152.7 | 1.223x | 0.00236 | 0.00236 | 0.00020 | PASS |
+| 32 | 159.6 | 1.170x | 0.00236 | 0.00236 | 0.00020 | PASS |
+| 64 | 168.7 | 1.107x | 0.00236 | 0.00236 | 0.00020 | PASS |
+| 96 | 195.4 | 0.956x | 0.00236 | 0.00236 | 0.00020 | PASS |
+
+Three results in one run:
+
+1. **Correctness is invariant in the SM budget** -- the error is bit-identical across all six
+   margins, as it must be, since `sm_margin` changes launch geometry and not arithmetic. So the
+   SM pre-assignment is a free tuning knob, not a correctness risk.
+2. **The split is worth 1.22x on the attention step** for a batch the guard accepts, against the
+   unsplit single-wrapper path.
+3. **Withholding too many SMs loses**: 96 is 0.956x, below baseline. The optimum is a SMALL
+   margin (0-16, flat within 0.3%), i.e. FA3 wants nearly the whole GPU and the benefit comes
+   from the two executors sharing the grid rather than from a careful SM carve-up. That is a
+   substantive finding about the mechanism and it contradicts the "pre-assignment ratio matters"
+   framing: the plateau at 0-16 and monotone decay after 32 say the win is co-residency.
+
+### What this does to the acceptance bar -- now arithmetic, not precedent
+
+A 1.22x attention speedup is an **18% reduction in attention time**. With attention a fraction
+`a` of step time on accepted batches and the guard accepting a fraction `g` of steps, the
+end-to-end ITL gain is `g * a * 0.18`. **Even at `g = 1` and a generous `a = 0.3`, that is 5.4%.**
+To reach 30% ITL from attention alone would need `a > 1`, which is impossible.
+
+So the >=30% TTFT/ITL target is **not reachable from this kernel**, and this is now settled by
+measurement on our own code rather than inferred from the TraceLab precedent (which independently
+put a singly-gated kernel at +0.27% throughput / -4.6% P99 ITL). The earlier 1.30x figure from
+the standalone fused harness does not change this: 1.30x is a 23% attention reduction, so the
+ceiling moves from 5.4% to 6.9%.
+
+**Where a 30% TTFT gain can come from:** queueing, not attention. The TraceLab numbers in
+`realistic_workload_analysis.md` show P99 TTFT of 7.28-33.0 s against a mean of 0.73-1.32 s --
+an order of magnitude of pure waiting. That is the EDF/admission-order lever, and
+[[edf-order-not-cap]] already records that deadline ordering wins on the MTP server while every
+per-step chunk cap loses. The honest project claim is therefore: the fused kernel is a correct,
+1.22x attention optimisation with a narrow acceptance region, and the publishable serving win
+has to come from the scheduling side.
+
+- [ ] 2026-10-09 **re-point the serving effort at the scheduling lever** -- EDF ordering +
+      cache-hit-first routing measured on TTFT percentiles, with the split enabled where the
+      guard accepts it. The kernel is no longer the critical path to the bar.
 
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither

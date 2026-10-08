@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.30.0 — SM pre-assignment measured: 1.22x attention, and the bar arithmetic closes (2026-10-09)
+
+`sglang-up@b8b405822`, harness `/dev/shm/w/drv/split_margin.py`, H200, torch 2.14.1,
+flashinfer-python 0.7.0.post1, qwen7b shape (GQA 4), bf16, page_size 1, 30 iters / 5 warmup.
+Batch: one 1024-token chunk + 40 verify rows — a shape the guard ACCEPTS (`fa3=1 fa2=40`).
+
+- Baseline (one planned wrapper over all 41 rows, i.e. the unsplit path): 186.7 us.
+- Best split: **152.6 us at `sm_margin=8` → 1.224x**. Flat within 0.3% over margins 0–16, then
+  monotone decay; `sm_margin=96` is 0.956x, i.e. **below baseline**.
+- Correctness is bit-identical across all six margins (err 0.00236), as it must be — `sm_margin`
+  changes launch geometry, not arithmetic. The SM budget is a free tuning knob.
+- Mechanism finding: the optimum is a SMALL margin, so FA3 wants nearly the whole GPU and the
+  win comes from the two executors sharing the grid, not from a careful SM carve-up. This
+  contradicts the "pre-assignment ratio matters" framing.
+- **Bar arithmetic, now measured rather than inferred:** 1.22x attention = 18% less attention
+  time, so end-to-end ITL gain is `g * a * 0.18`. At `g=1` and a generous `a=0.3` that is 5.4%;
+  reaching 30% from attention alone would need `a > 1`. The ≥30% TTFT/ITL target is therefore not
+  reachable from this kernel. A 30% TTFT win has to come from queueing (P99 TTFT 7.3–33 s vs a
+  0.73–1.32 s mean), i.e. the EDF/admission-order lever.
+
 ## v0.29.0 — Fused split dispatch PASSES the causal fp32 reference, 5/5 (2026-10-09)
 
 `sglang-up@b8b405822`. Harness `/dev/shm/w/drv/split_unit.py`; command

@@ -8692,3 +8692,39 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   step and rewrites the same KV slots with the same values; gate-only, never on by default.
   Until this exists, **no perf number for the 4-mode step on upstream is worth recording** -- and
   none has been taken.
+
+- **[ ] Gate (b) built (port 42-44) and it now validates its own reference, but its VERDICT is
+  still not trustworthy -- and it conflicts with `portcorr2`. Do not act on either yet.**
+  `portcorr3.sh 1 x`, 5 mixed steps spanning ver_rows 1/2/3, 0 tracebacks:
+
+  | ver_rows | rows | ref_vs_ref | merged_vs_ref | argmax flips | scale (ref/got absmax) |
+  |---|---|---|---|---|---|
+  | 1 | 4 | **0.000e+00**, 0 flips | 4.756e-01 | 2/4 | 28.1 / 33.2 |
+  | 2 | 8 | **0.000e+00**, 0 flips | 1.103e+00 | 6/8 | 37.8 / 33.5 |
+  | 3 | 12 | **0.000e+00**, 0 flips | 8.170e-01 | 7/12 | 35.0 / 35.2 |
+  | 3 | 12 | **0.000e+00**, 0 flips | 9.014e-01 | 4/12 | 26.0 / 31.5 |
+  | 3 | 12 | **0.000e+00**, 0 flips | 8.312e-01 | 5/12 | 27.4 / 26.9 |
+
+  Read naively this says the merged forward computes the verify rows wrong (disagreement ~15-30 in
+  absolute logits, argmax flipped on about half the rows -- nowhere near bf16 noise). **But it
+  contradicts the `portcorr2` result**, where with exactly ONE verify row the 4-mode arm's greedy
+  output was byte-identical to the control over 400 tokens; flipping 2 of 4 verify-row argmaxes
+  could not leave the emitted text untouched. Both cannot hold.
+
+  Most likely the reference is still the broken side, for a reason `ref_vs_ref` cannot catch:
+  `eagle_prepare_for_verify` PLANS the attention backend for the verify batch, and the merged
+  forward then re-plans that same shared backend state. So the reference forward runs with the
+  MERGED batch's attention metadata -- reproducibly (hence err exactly 0.0 twice) but invalidly.
+  A bit-exact self-comparison proves stability, not validity; that is a fifth way for a gate to
+  look authoritative while measuring nothing.
+
+  **Next step, concrete:** re-plan immediately before the reference forward (call
+  `eagle_prepare_for_verify` again, or the backend's plan for `_vfb`, right before it) and re-read
+  the table. If `merged_vs_ref` then drops to ~1e-3, the merged forward is correct and `portcorr2`
+  stands; if it stays ~1e0 with flips, the merged forward's verify rows are genuinely wrong and the
+  prime suspects are the EXTEND-vs-TARGET_VERIFY convention mismatches: `seq_lens` for a verify row
+  (prefix vs prefix+n), `extend_prefix_lens`, and `positions` (must be prefix+i for the i-th draft
+  token, which drives RoPE).
+  Until this is resolved, no perf number is meaningful. `perfab.sh` is staged on the pod (realistic
+  arm: 4000-session tracelab subset at `/dev/shm/w/tracelab_trace.jsonl.gz` + a chat stream, debug
+  and verify envs deliberately OFF) but has NOT been run.

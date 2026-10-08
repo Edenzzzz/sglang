@@ -9434,3 +9434,18 @@ Combined with "rel err ~1.0 at qo1 <= 64 with NOTHING unwritten", the task0 path
 offset AND wrong values; both are consistent with one bug in how task0 work items are addressed,
 which is the single thing to fix next. The FA3 row's PASS (0.00662, split-KV active) and the task2
 decode row's PASS (0.00070) are unaffected by this and stand.
+
+**Task class is PACKED-based, so the whole qo sweep stayed in task0.**
+`task = [0 if p > 64 else (1 if p > 16 else 2) for p in packed]`, `packed = qo * GQA` (GQA 7). So
+qo1 = 16 already gives packed 112 > 64 -> task0, and every point in the sweep was the same class.
+The sweep therefore varied SIZE within task0, not the class, which is why the written count moves
+(qo for qo <= 64, qo - 55 for qo >= 87) while the class verdict never changes. In packed space the
+boundary sits between packed 448 (qo 64, all written) and packed 609 (qo 87, 32 written) -- i.e.
+between 4 and 5 tiles of 128. That is the granularity to read the plan against.
+
+**Exact next step, and it must be read not inferred** (the last two readings here were both wrong
+from arithmetic): dump the persistent executor's work items for this fixture -- per item, the
+(request index, q tile index, q_start, q_len, kv extent) -- and compare the set covering row 1
+against its true span 424-510 / packed 609. Expected signatures: 4 items instead of 5 means the
+tile count is truncated; 5 items with q_start biased by +55 unpacked (+385 packed) means the offset
+is wrong; items present and correct means the fault is inside the kernel's write path, not the plan.

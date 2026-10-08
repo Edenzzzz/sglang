@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.23.2 — Second fused fault identified as the FA2 split-KV merge (2026-10-09)
+
+- A store probe showed NO work item of fixture 1's failing row reaches the write-through store, and
+  its trace reads `nchunks=2`: that row takes the `partial_o` + merge path, while the `qo=64`
+  fixture (`nchunks=1`) takes write-through and PASSES after the MaskMode fix.
+- So the 55 unwritten rows are a split-KV merge defect on the persistent side, not a q-tile
+  coverage problem. The earlier "5th tile" arithmetic is retracted: the sweep's 0-to-55 transition
+  tracks `kv_len` crossing `len_kv_chunk = 64`, because the fixture moves qo and kv together.
+
 ## v0.23.1 — Fused kernel PASSES the causal fp32 reference on all three classes (2026-10-09)
 
 - Fix: the persistent runners' shared `KernelTraits` used `MaskMode::kNone`, so the FA2 side applied

@@ -10105,3 +10105,34 @@ loop body) and re-run with the q_len==87 filter. If the leading tiles appear at 
 store, the exit is inside the mainloop and its guard is the target; if they appear at both, the
 store executes and the addressing is wrong after all. One run, and it cannot come out ambiguous.
 Thirteen candidates eliminated. The `MaskMode::kCausal` fix is unaffected and stands.
+
+## [x] SECOND FAULT IDENTIFIED: it is the FA2 split-KV MERGE path, not q tiles — 2026-10-09
+
+The store probe (printf immediately before the write-through store, filtered `q_len == 87`) printed
+**zero lines**: no work item of fixture 1's row 1 reaches the `num_kv_chunks == 1` branch at all.
+Checking the trace already captured, every one of its 17 lines reads **`nchunks=2`**
+(`kv_len=87`, `len_kv_chunk=64`). So that row takes the OTHER branch -- `partial_o` + merge:
+```
+if (num_kv_chunks > 1) { ...partial_o...  write_o_<KTraits>(...); }   // fixture 1 row 1 (nchunks=2)
+else                   { ...final_o...    write_o_reg_gmem<KTraits>(...); }  // qo<=64 (nchunks=1)
+```
+**The two fixtures exercise different code paths, which I had conflated:**
+
+| fixture | kv_len | chunks | path | result |
+|---|---|---|---|---|
+| `qo:424,64,1` | 64 | 1 | write-through to `final_o` | **PASSES** after the mask fix (0.00221) |
+| `qo:424,87,1` (fixture 1) | 87 | 2 | `partial_o` + merge | 55 leading rows never written |
+
+**This explains the qo sweep exactly, and corrects my reading of it.** The fixture sets
+`kv = qo + prefix` with `prefix[1] = 0`, so qo and kv moved TOGETHER; the 0-unwritten-to-55
+transition between qo1 64 and 87 is the point where `kv_len` crosses `len_kv_chunk = 64` and a
+second KV chunk appears. It was never a q-tile-count boundary -- the "5th tile" arithmetic in the
+earlier entries is retracted, as is "tiles 0/1/2 are not executed" (they are entered AND they store,
+just to `partial_o`).
+So the second fault is in the **FA2 side's split-KV merge**: partials are written but the merge does
+not produce `final_o` for the leading rows. That is the same failure FAMILY as
+[[fused-wgmma-splitkv-wrong]] (split rows overwriting each other), now on the persistent side.
+**Next, and it is cheap and decisive:** re-run the sweep holding qo FIXED at 87 while varying only
+the PREFIX so `kv_len` crosses 64 (e.g. `prefix[1]` = 0 vs a value giving kv < 64 and kv > 128).
+If unwritten tracks `kv_len > 64` and not qo, the chunk-count diagnosis is confirmed outright and
+the target is `write_o_` + the merge/reduction, not anything q-tile related.

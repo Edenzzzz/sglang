@@ -4578,6 +4578,14 @@ class Scheduler(
                                     return_logprob=_mix_run.return_logprob,
                                     return_hidden_states=_mix_run.return_hidden_states,
                                 )
+                        # Hand result processing a SNAPSHOT. _mix_run IS self.running_batch,
+                        # and in overlap mode get_next_batch_to_run merges the next prefill
+                        # into it before pop_and_process runs -- so by then it had 6 reqs
+                        # against 4 accept_lens (IndexError in _resolve_spec_v2_tokens).
+                        # Upstream enqueues batch.copy() for the same reason. Reqs are
+                        # shared by reference, so committed tokens still land on the real
+                        # requests; the live object keeps the spec_info set above.
+                        batch_result.mixed_running_batch = _mix_run.copy()
             elif self.enable_pdmux and batch.forward_mode.is_split_prefill():
                 resolve_forward_inputs(batch, self.future_map)
                 batch_result = self.tp_worker.forward_batch_split_prefill(batch)

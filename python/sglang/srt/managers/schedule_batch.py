@@ -3250,14 +3250,27 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         # (`AttributeError: 'NoneType' object has no attribute 'merge'`). Lend ours for the merge;
         # the PREFILL rows' own sampling_info is preserved below for sampling them.
         self.mixed_pre_sampling_info = self.sampling_info
-        if (
-            running_batch.sampling_info is not None
-            and running_batch.sampling_info.penalizer_orchestrator is None
-            and self.sampling_info is not None
-        ):
-            running_batch.sampling_info.penalizer_orchestrator = (
-                self.sampling_info.penalizer_orchestrator
-            )
+        # `merge_batch` does `self.sampling_info.penalizer_orchestrator.merge(other...)` with no
+        # None check. MEASURED (MIX_DEBUG, 2026-10-08): on a 4-mode step it is the PREFILL batch
+        # whose orchestrator is None, while the running (decode) batch carries a real one -- the
+        # opposite of the first guess. A chunked-prefill batch under spec reaches here without one;
+        # the decode batch has had one since its own prepare. Borrow from whichever side has it, so
+        # the merge is a no-op on penalties (unused at temperature 0) rather than a crash.
+        if self.sampling_info is not None and running_batch.sampling_info is not None:
+            if (
+                self.sampling_info.penalizer_orchestrator is None
+                and running_batch.sampling_info.penalizer_orchestrator is not None
+            ):
+                self.sampling_info.penalizer_orchestrator = (
+                    running_batch.sampling_info.penalizer_orchestrator
+                )
+            elif (
+                running_batch.sampling_info.penalizer_orchestrator is None
+                and self.sampling_info.penalizer_orchestrator is not None
+            ):
+                running_batch.sampling_info.penalizer_orchestrator = (
+                    self.sampling_info.penalizer_orchestrator
+                )
 
         self.merge_batch(running_batch)
         self.out_cache_loc = out_cache_loc

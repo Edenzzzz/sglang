@@ -10482,3 +10482,33 @@ chat+tracelab shape. The serving A/B remains the only thing that can settle the 
 Also still missing: the FA3-ROLE per-executor baseline (blocked on the wgmma `params.wgmma_plan`
 plumbing), so "parity with each standalone SOTA kernel per role" is half-answered -- this is the
 FA2-role comparison only.
+
+## The serving A/B: two paths, two different blockers — DECISION NEEDED — 2026-10-09
+
+The kernel gate is cleared (PASS, and 1.30x over the unfused persistent kernel at sm_split 112), so
+the only thing between here and the goal's >=30% TTFT/ITL + >=10% throughput bar is a serving A/B.
+There are exactly two ways to run one on this pod, and each is blocked differently:
+
+**Path A -- fork + split kernel (the arm the goal describes).** `/dev/shm/w/python` (fork tree) with
+`/dev/shm/w/venv`. BLOCKED: `import torch` fails with
+`libtorch_cuda.so: undefined symbol: ncclCommResume`. Diagnosed further this round -- the venv has
+BOTH `nvidia-nccl-cu12 2.27.5` and `nvidia-nccl-cu13 2.30.7`, `nvidia/nccl/lib/libnccl.so.2` exists,
+and pointing `LD_LIBRARY_PATH` at it does NOT help, so it is a symbol-level version mismatch rather
+than a lookup problem. pip shows NO `torch` in that venv (it is a direct copy), so the matching
+nccl version cannot be read off the environment. Repair = identify the fork torch build and install
+the nccl it was linked against. This path has the tracelab dataset and `--dataset-name
+tracelab-claude`, i.e. the realistic workload the bar names.
+
+**Path B -- upstream 4-mode (venv_up).** Works and has produced the only valid serving numbers so
+far (the baseline arm). BLOCKED differently: the 4-mode ON arm fires the mixed path
+(`mixed_spec_steps: 1`) and then crashes in
+`cuda_graph_buffer_registry.fill_from -> triton _small_copy_kernel` under the 8192-token
+shared-prefix workload, with no shape mismatch. Does NOT reproduce in `portcorr3` at NBG=12 /
+ver_rows 7, so the remaining variable is the shared-prefix cache-hit shape. Upstream lacks the
+tracelab dataset, so its realistic arm must use `generated-shared-prefix`.
+
+**Recommendation, stated so the next session does not re-derive it:** fix Path A. The goal's bar is
+about the fused kernel on a realistic serving workload, and Path A is the only one that exercises
+the split kernel at all -- Path B measures the 4-mode scheduling change with upstream's own
+attention. Path A's blocker is a dependency version to pin, which is bounded work; Path B's is an
+unreproduced crash in a code path we do not control. Do A, keep B as the scheduling-only arm.

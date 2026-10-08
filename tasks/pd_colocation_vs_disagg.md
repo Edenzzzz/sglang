@@ -235,6 +235,19 @@ fabric. The source-selection comparison (`coloc_cache_hc_1nic` deterministic bes
 better with node count. One NIC at 16 GPUs emulates per-link pressure, not a larger cluster's
 topology.
 
+**That pair could not isolate source selection -- design flaw, found on the second arm.** With
+affinity the narrowed fabric changes nothing (`coloc_cache_hc_1nic`: agent TTFT 1 589 ms, chat P99
+ITL 11.8 ms, against 1 631 ms / 11.7 ms on 4 NICs), because affinity keeps 93% of tokens local and
+the store is idle. So the only arm that congests (`rr`) ignores cache hits entirely, while the
+arms that select on hits never pull. Randomized source selection has no choice to make in either.
+The isolating configuration needs both at once: several workers holding the SAME prefix (so hit
+lengths genuinely tie) and local misses that pull cross-node. `HOT=1 ONE_NIC=1` with the
+decode-aware veto does that -- the veto spreads each shared-prefix group over several workers, which
+both replicates the prefix and forces the spread requests to pull. New policy `cache_slo_rand`
+(c87aa83b9) is `cache_slo` with the load term dropped inside a hit bucket, i.e. the goal's "pick
+randomly among near-equal holders"; it differs from `cache_slo` only when holders really tie.
+Running: `HOT=1 ONE_NIC=1 mn_run.py coloc_slo_edf_hc coloc_slo_rand_hc`.
+
 A first attempt at this run was DISCARDED before use: the node script was pushed to the pods in
 the background while the arms launched, and the push is sequential, so the last pod's workers
 started on the old 4-NIC assignment (2 of 16 workers). The identical script mtime on every pod

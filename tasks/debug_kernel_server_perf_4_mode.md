@@ -8997,3 +8997,22 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   single-request mixed step (`NBG=1`) and compare against the SAME request's verify logits in the
   OFF arm, which removes the chunk row from the batch entirely and so isolates whether the residual
   needs a chunk row present at all.
+
+- **[x] After port 57 the merged batch's FIELDS are correct; the remaining verify-row disagreement
+  is FA3-specific.** Same build, same screen, only `--attention-backend` changed:
+
+  | backend | argmax flips per step | `merged_vs_ref` err | NULL prefill |
+  |---|---|---|---|
+  | fa3 (default) | 1/4, 2/8, 2/12, 2/12, 1/12 | 2.5e-01 .. 6.4e-01 | err=0.0 |
+  | **triton** | **1/4, 0/8, 0/12, 0/12, 0/12** | 2.1e-01 .. 3.1e-01 | err=0.0 |
+
+  Under triton the merged verify rows reproduce the production verify path's argmax on every row of
+  four of the five steps (and 3/4 of the first), so the batch the 4-mode step builds is right and
+  the earlier uniform error really was the prefix (port 57). The residual ~0.2-0.3 with ZERO flips
+  is the scale of a bf16 reduction-order difference between two different kernels (MIXED extend vs
+  TARGET_VERIFY) over a ~2500-token prefix, not a field error.
+  **FA3 adds flips that triton does not**, which fits the paged-length hypothesis: if FA3's extend
+  path takes its paged-KV length from `seq_lens` (= P+n after port 57) instead of
+  `extend_prefix_lens` (= P), the n draft tokens are counted twice -- once in the paged prefix and
+  again in the causal tail. Next: read FA3's metadata construction for an extend batch and confirm
+  which field feeds `seqused_k`; this is the same FA3 path the goal's split kernel must satisfy.

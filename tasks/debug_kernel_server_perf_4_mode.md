@@ -9999,3 +9999,27 @@ absent if the tiles are simply never emitted; if all five appear, the items exis
 target is wrong instead.
 Remember the launch-id caveat recorded above: the harness runs three sm_split launches, so do NOT
 `sort -u` across them without printing a launch discriminator.
+
+### Row-1 tile trace (fixture 1, post mask fix): the tiles EXECUTE, so it is output addressing
+
+`[TRACE]` filtered to `q_len == 87`, cache cleared, mask fix in. `packed_qo_start` occurrences
+(17 lines total, across the harness's three sm_split launches):
+```
+packed_qo_start=128 : 3      packed_qo_start=384 : 6
+packed_qo_start=256 : 4      packed_qo_start=512 : 4
+```
+**Tiles at packed 128 and 256 execute**, and those tiles cover q 18-54 -- which is inside the NaN
+range. By the prediction committed before the run, that selects the second branch: the work items
+exist and run, so the fault is WHERE they write, not whether they are emitted. The emission/cap
+theory is out.
+Two caveats that bound what this says, both recorded rather than glossed:
+1. **The FIFO truncated at 17 lines again** (same cap as the two earlier printf runs), so the
+   ABSENCE of `packed_qo_start=0` is not evidence -- it may simply have been dropped. Only presence
+   is reliable here. Raise `cudaLimitPrintfFifoSize` before counting anything.
+2. **My tile arithmetic in the previous entry used the PRE-fix NaN indices** (424-478). The mask fix
+   changed what the kernel computes, so the NaN set must be re-measured post-fix before the
+   tiles-0/1/2-vs-3/4 mapping is trusted. Re-run with the NaN-index diagnostic (added earlier,
+   prints `NaN idx first/last` and `NaN by row`) on fixture 1 and confirm the span is still
+   424-478 before building on it.
+Do (2) first; it is one run and it either confirms the mapping or invalidates the arithmetic that
+the next hypothesis would rest on.

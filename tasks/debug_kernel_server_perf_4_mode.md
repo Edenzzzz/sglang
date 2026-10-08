@@ -325,6 +325,43 @@ ragged+paged LSE merge restricted to those rows.
 - [ ] 2026-10-09 **cost of `SGLANG_FLASHINFER_USE_PAGED=1`** -- paged vs ragged baseline, both
       split OFF. Sets the deficit the split must overcome in the default configuration.
 
+### `SGLANG_FLASHINFER_USE_PAGED=1` confirmed working; the 4-mode width bug narrowed (2026-10-09)
+
+`SGLANG_FLASHINFER_USE_PAGED=1` does take effect -- the failure moved from
+`prefill_wrapper_ragged.forward_return_lse` to `prefill_wrapper_paged.forward`
+(`flashinfer_backend.py:1687`), which is the branch the split dispatch lives in. So the
+reachability problem is solved; the 4-mode port's width bug now blocks the gate.
+
+**Narrowing, from three measured deficits.** `qo_indptr[-1] - q.shape[0]` was 2 and 3 on the
+ragged path and is **exactly 4 = `num_draft_tokens`** on the paged path -- one verify row's
+draft tokens counted twice. Meanwhile `mix_with_verify`'s own seam check reports **0
+mismatches**, so at the merge `input_ids == sum(extend_lens) == extend_num_tokens`. The planner
+does not read `extend_lens`; it builds
+
+```python
+qo_indptr[1 : bs + 1] = torch.cumsum(seq_lens - prefix_lens, dim=0)   # spec_info is None branch
+```
+
+so the disagreement is in **`extend_prefix_lens` for the verify rows**, introduced between the
+merge and `init_forward_metadata`, not in the merge itself. Ruled out along the way:
+`generate_attn_arg_prefill` (the spec-aware builder) is NOT in play -- it assumes every row is a
+verify row and would yield `bs * draft_token_num`, a multiple of 4, whereas the observed total
+2055 is not.
+
+Mechanism consistent with all three numbers: for a verify row `mix_with_verify` sets
+`seq_lens = P + n` with `extend_lens = n`, so the prefix must be `P`. A prefix of `P - n` makes
+that row contribute `2n` instead of `n`, i.e. a deficit of exactly `n` per affected row -- which
+is what the paged path shows with one verify row. Instrumented at the planner's own read site
+(commit `723e42343`) to name the stale array rather than infer it; the ragged path's smaller
+deficits are consistent with its different indptr construction.
+
+- [x] 2026-10-09 **the split dispatch branch is now reachable** -- `SGLANG_FLASHINFER_USE_PAGED=1`
+      moves the extend path into the paged branch, confirmed by the traceback moving to
+      `flashinfer_backend.py:1687`.
+- [ ] 2026-10-09 **4-mode verify-row prefix width** -- `extend_prefix_lens` for verify rows is
+      `n` too small on the merged batch; reproduces with the split OFF, so it is a port defect.
+      Blocks every 4-mode serving arm, the split's correctness gate included.
+
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither
 constraint is a cost of the work:

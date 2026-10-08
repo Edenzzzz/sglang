@@ -1544,6 +1544,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
         # endless tail (`index 4 out of bounds`, then `tensor a (4) vs b (5)`). A shallow copy with
         # its own reqs list is enough: merge_batch reassigns attributes on the copy, and the
         # original keeps the prefill-only view the fork relied on.
+        n = int(verify_input.draft_token_num)
         merged = copy.copy(batch)
         merged.reqs = list(batch.reqs)
         merged.mix_with_verify(running, verify_input)
@@ -1659,6 +1660,21 @@ class EAGLEWorkerV2(BaseSpecWorker):
             result.next_draft_input = self.draft_worker._draft_extend_for_prefill(
                 batch, pre_out.hidden_states, pre_next_token_ids
             )
+            # The verify rows' draft extend consumes ONE row-slot per ACCEPTED token, but
+            # `eagle_prepare_for_verify` left `out_cache_loc`/`positions` n-wide (n = draft tokens).
+            # `prepare_for_draft_extend` only rewrites them on its widen path, which this call does
+            # not take, so the stale n-wide tensors reach the graph buffers: measured as
+            # `positions (dst 1, src 4)` and `out_cache_loc (dst 1, src 4)`. With a chain draft the
+            # accepted tokens are the first accept_lens[i] of each row's n slots.
+            bs_v = running.batch_size()
+            keep = (
+                torch.arange(n, device=accept_lens.device).unsqueeze(0)
+                < accept_lens.unsqueeze(1)
+            )
+            if running.out_cache_loc is not None and running.out_cache_loc.numel() == bs_v * n:
+                running.out_cache_loc = running.out_cache_loc.view(bs_v, n)[keep]
+            if getattr(running, "positions", None) is not None and running.positions.numel() == bs_v * n:
+                running.positions = running.positions.view(bs_v, n)[keep]
             self.draft_worker._draft_extend_for_decode(
                 running, result.mixed_running_result
             )

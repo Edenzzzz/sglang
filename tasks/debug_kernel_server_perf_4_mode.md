@@ -456,6 +456,25 @@ sequence IS the list of upstream contracts the fork never had to satisfy:
 | 14 | relay stash: `payload.topk_p` is None | both draft extends must run, or the next step has no draft input. (Predicted in the previous commit, then observed.) |
 | 15-17 | `index 4 out of bounds`, `tensor a (4) vs b (5)`, `shape [1] vs broadcast [4]` | upstream's merge MUTATES the prefill batch (the fork built a separate worker batch). Fixed structurally twice: merge onto a COPY, and DELEGATE to `mix_with_running` + widen the tail to n tokens, so upstream owns the field list. |
 
+**Where the port stands (18 commits) and the EXACT next step.** The step runs end to end through
+draft -> merge -> one target forward -> logits split -> verify accept -> commit -> prefill draft
+extend. The remaining failure is in the VERIFY rows' draft extend:
+
+- `RuntimeError: output with shape [1] doesn't match the broadcast shape [4]`, and a temporary
+  three-line diagnostic in `cuda_graph_buffer_registry.fill_from` named the slots:
+  **`positions` (dst 1, src 4)` and `out_cache_loc` (dst 1, src 4)`**. (Technique worth reusing:
+  shapes alone never identify which field is wrong; log `slot.name` with both shapes on the
+  `RuntimeError` and re-raise. Reverted afterwards to keep the port diff clean.)
+- Diagnosis: `running` has ONE row but its `out_cache_loc` still holds the n=4 verify slots that
+  `eagle_prepare_for_verify` assigned. Upstream resets those via `prepare_for_draft_extend`
+  (eagle_worker_common.py:113), which takes `widened_out_cache_loc` / `widened_positions` and is
+  reached from `_draft_extend_for_decode`; it derives them from `GenerationBatchResult` fields that
+  my hand-built result does not populate (candidates: `prepared_draft_extend_inputs`,
+  `allocate_lens`, `next_draft_input`).
+- Next step: read what `_draft_extend_for_decode` requires off `batch_result` in the non-fused
+  branch and populate those fields in `result.mixed_running_result`, rather than hand-resetting
+  `out_cache_loc`/`positions` -- the same delegate-to-upstream lesson as commit 17.
+
 **Method note, recorded because it cost three rounds:** when fixes start arriving one field or one
 attribute at a time, the structure is wrong, not nearly right. That applied to the sampler view
 (11-12) and to the merge (15-17); in both cases the restructured version is SHORTER than the

@@ -187,9 +187,15 @@ class Router:
         # for which EVERY worker ties at hit 0 -- to busy workers: chat TTFT 109 -> 487 ms vs the
         # load-aware tie-break of `cache`. Randomness is for spreading pulls among near-equal
         # cache holders; it must not override load.
-        order = sorted(range(len(self.workers)),
-                       key=lambda j: (-(hits[j] // max(1, self.a.rand_thresh)),
-                                      len(self.workers[j].inflight), random.random()))
+        # cache_slo_rand drops the load term inside a hit bucket, so equal-hit holders are tried in
+        # random order: the goal's "randomly pull from one of them" for congestion spreading.
+        if pol == "cache_slo_rand":
+            order = sorted(range(len(self.workers)),
+                           key=lambda j: (-(hits[j] // max(1, self.a.rand_thresh)), random.random()))
+        else:
+            order = sorted(range(len(self.workers)),
+                           key=lambda j: (-(hits[j] // max(1, self.a.rand_thresh)),
+                                          len(self.workers[j].inflight), random.random()))
         if pol == "cache_rand":
             return order[0], {"hit": hits[order[0]] * blk}
         vetoed = 0
@@ -293,7 +299,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", nargs="+", required=True)
     ap.add_argument("--port", type=int, default=31000)
-    ap.add_argument("--policy", choices=["rr", "cache", "cache_rand", "cache_slo"], default="cache_slo")
+    ap.add_argument("--policy", choices=["rr", "cache", "cache_rand", "cache_slo", "cache_slo_rand"],
+                    default="cache_slo")
     ap.add_argument("--rand-thresh", type=int, default=4, help="blocks within which hits tie")
     ap.add_argument("--edf", action="store_true")
     ap.add_argument("--ttft-slo-ms", type=float, default=5000)

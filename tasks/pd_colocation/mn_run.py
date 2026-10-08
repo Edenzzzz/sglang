@@ -23,6 +23,10 @@ ARMS = {
     "coloc_cache": (["coloc"] * NPODS, "ours:cache"),
     "coloc_rand":  (["coloc"] * NPODS, "ours:cache_rand"),
     "coloc_slo":   (["coloc"] * NPODS, "ours:cache_slo"),
+    # cache_slo_rand: the SLO veto, but among workers whose hit length ties within --rand-thresh
+    # blocks it picks RANDOMLY rather than by lowest load. This is the point-4 algorithm the goal
+    # proposes; it only differs from cache_slo when several workers really hold the same prefix.
+    "coloc_slo_rand": (["coloc"] * NPODS, "ours:cache_slo_rand"),
     "coloc_sgl":   (["coloc"] * NPODS, "sgl:cache_aware"),
     "disagg_2p2d": (["prefill"] * (NPODS // 2) + ["decode"] * (NPODS // 2), "sgl:pd"),
     "disagg_1p3d": (["prefill"] * (NPODS // 4) + ["decode"] * (NPODS - NPODS // 4), "sgl:pd"),

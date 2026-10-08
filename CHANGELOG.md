@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.24.2 — Split optimum found (sm_split 112, 133.5 us); baseline arm still missing (2026-10-09)
+
+- Extending the sweep past the harness's built-in 48/32/16 found the optimum at sm_split 112:
+  133.5 us vs 383.3 us at 48 (2.87x), with a ~258 us plateau at 64/80/96 and a cliff at 112.
+  Every split PASSES the reference.
+- The `TWO_EXEC=1` per-executor baseline arm does not run: the extension does not export
+  `fa3_only_run`. So the fused times have nothing to divide by and **no speedup is claimed**.
+
 ## v0.24.1 — First valid fused kernel timings (2026-10-09)
 
 - With the kernel passing, `TIME_ITERS=50` on fixture 1 gives 383.3 us at sm_split 48, 505.1 us at

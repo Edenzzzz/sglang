@@ -10385,3 +10385,21 @@ Caveat on generalisation, repeated because it matters for the serving A/B: fixtu
 (one 424x4001 row against an 87-row and a 1-row FA2 request), so a split leaving only 20 SMs for FA2
 being optimal is specific to this shape. The decode-population guard already in the serving dispatch
 is the mechanism that should pick the split per batch; this number is not a serving recommendation.
+
+**No baseline yet, so NO speedup can be claimed.** The `TWO_EXEC=1` comparison arm fails to run in
+this build:
+```
+File ".../tests/test_fused_server_batch.py", line 525, in _run_split
+  torch.ops.fused_fa3.fa3_only_run(*_args3)
+AttributeError: '_OpNamespace' 'fused_fa3' object has no attribute 'fa3_only_run'
+```
+The extension compiled from `fused_fa3_persistent_ext.cu` does not export `fa3_only_run`, so the
+two-executor arm (FA3 alone on its SM partition, the per-executor baseline) cannot be measured here.
+That means every number in the table above is a fused ABSOLUTE time with nothing to divide by --
+**the 133.5 us at sm_split 112 is not a speedup claim**, and per [[fused-ab-validity-rule]] it must
+not be quoted as one.
+To fix, next session: find what registers `fa3_only_run` (a second TORCH_LIBRARY_FRAGMENT /
+`m.def` in the ext, possibly behind a `-D`, or a separate .cu the harness expects to be loaded
+alongside). `grep -n "fa3_only_run\|TORCH_LIBRARY" tests/fused_fa3_persistent_ext.cu` is the first
+read. Until that arm runs, the per-executor baselines the goal asks for ("parity with each
+standalone SOTA kernel per role") are unmeasurable on this pod.

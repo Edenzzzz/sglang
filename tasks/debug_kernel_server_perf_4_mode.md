@@ -9565,3 +9565,29 @@ plan struct alongside `num_pers_clusters` if they can differ -- if they are lite
 variable, then `work_indptr` cannot exceed the drain bound and **this mechanism is refuted**, which
 is itself the answer and is checkable by reading those three lines in context rather than running
 anything. Do that read FIRST next session; it is cheaper than the memcpy and may settle it outright.
+
+**The cheap read LARGELY REFUTES my own mechanism — recording that before it hardens into a
+"finding".** `scheduler.cuh:1324-1337`:
+```
+int cluster_size = 1;
+int num_clusters = num_sm / cluster_size;
+const char* cap_env = std::getenv("FLASHINFER_PERSISTENT_MAX_CLUSTERS");
+if (cap_env) { int cap = std::atoi(cap_env); if (cap > 0 && cap < num_clusters) num_clusters = cap; }
+plan_info.num_blks_x = cluster_size;
+plan_info.num_blks_y = num_clusters;
+```
+The SAME `num_clusters` sets `num_blks_y` (the cluster dimension the work assignment is built
+against) and, in the 3-task builder, `plan_info.num_pers_clusters` (line 1902). If one variable
+drives both, `work_indptr` cannot have non-empty ranges past the drain's bound, and "plan work
+beyond num_pers_clusters is never executed" is WRONG.
+Caveat that keeps it from being fully settled: there are **two** such computations
+(`scheduler.cuh:1325` and `:2096`), so the fused 3-task path's builder has to be identified before
+the refutation is final -- if the plan is built by one and `num_pers_clusters` set from the other,
+the mismatch is back on the table. That identification is the first thing to do, and it is a read,
+not a run.
+So the task0 gap remains UNEXPLAINED, with five hypotheses now eliminated (32-row window,
+other-row attribution, SM partitioning, narrow-drain under-consumption, and -- pending the
+two-builder check -- plan/drain cluster-count mismatch). The measurements that any explanation must
+fit are unchanged and all recorded above: prefix 424-478 NaN with suffix 479-510 written, unwritten
+saturating at exactly 55 for qo1 >= 87, rel err ~1.0 with nothing unwritten at qo1 <= 64, and
+invariance across sm_split 48/32/16.

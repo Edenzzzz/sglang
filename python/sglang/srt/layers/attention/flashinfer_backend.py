@@ -1555,6 +1555,7 @@ class FlashInferAttnBackend(AttentionBackend):
             non_blocking=True,
         )
         self.fused_split_plan = dict(
+            tok_total=_tok_total,
             fa3_tok=tok_idx(fa3_rows),
             fa2_tok=tok_idx(fa2_rows),
             cu_q=indptr(qo_lens[fa3_rows]),
@@ -1609,6 +1610,18 @@ class FlashInferAttnBackend(AttentionBackend):
 
         hq, hd = layer.tp_q_head_num, layer.head_dim
         qv = q.view(-1, hq, hd)
+        # The plan's token indices were built from extend_seq_lens_cpu, but the tensor actually
+        # indexed is this layer's q. If the two extents disagree -- a padded graph replay, say --
+        # every index op here can run out of bounds, which raises a device-side assert from
+        # IndexKernel.cu at whatever CUDA call comes next rather than at the fault. Compared as
+        # ints (the plan carries its extent) so this costs no sync.
+        if qv.shape[0] != pl["tok_total"]:
+            logger.error(
+                "FUSED_SPLIT BOUNDS q rows=%d != plan token extent=%d -- refusing the split "
+                "for this layer (layer=%d)",
+                int(qv.shape[0]), pl["tok_total"], layer.layer_id,
+            )
+            return None
         o = torch.empty_like(qv)
 
         from sglang.kernels.ops.attention.flash_attention import flash_attn_with_kvcache

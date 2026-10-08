@@ -39,6 +39,74 @@ upstream-facing data path CPU-verified.
 
 **Not demonstrated:** the >=30%/>=10% bar. Only baseline serving numbers exist.
 
+---
+
+## 2026-10-09 -- step (c) complete: the `forward_extend` dispatch is written on upstream
+
+`sglang-up@86e375375` (branch `upstream_port`, 65 commits on upstream main `3fef129ff`).
+Code written and CPU-verified; **not yet GPU-verified**, so the box stays open.
+
+**What landed.** `FlashInferAttnBackend._fused_split_dispatch` in
+`python/sglang/srt/layers/attention/flashinfer_backend.py`, called from the paged branch of
+`forward_extend`. It takes the row partition `self.fused_split_mask` (commit 62), forms the two
+disjoint row subsets, runs one executor on each, and combines with `index_copy_`.
+
+**Interface finding that removes the bypass.** Upstream FA3's `flash_attn_with_kvcache` already
+takes **`sm_margin`** -- "can be tuned if some SMs are used for communication"
+(`python/sglang/kernels/ops/attention/flash_attention.py:39`). That is exactly the SM
+pre-assignment knob, as a public upstream parameter. So the FA3 half of the split needs **no
+private entry point at all**. This corrects the earlier claim in this doc that the SM budget
+"cannot pass through upstream's wrapper API": that is true only of flashinfer's persistent
+wrapper, which derives `sm_count` from the device (`prefill.py:204`). The budget is
+`SGLANG_FUSED_SM_MARGIN`.
+
+**The combine is a scatter, not an LSE merge.** Upstream's ragged+paged pair covers the *same*
+rows and therefore merges via LSE. Our two subsets are *disjoint*, so an `index_copy_` per
+subset is both correct and cheaper -- no merge kernel.
+
+**FA2 subset planning needs no second `KVLocPlan`.** flashinfer's public `begin_forward` takes
+explicit `qo_indptr`/`kv_indptr`/`kv_indices`, so the subset plan is built directly from
+`req_to_token` -- the same source the FA3 page table is gathered from.
+
+**Page table: a gather, not a conversion.** Upstream FA3 documents `page_table` as
+`[batch, max_blocks]`, and `req_to_token` is already in that shape, so the FA3 subset table is
+`req_to_token[req_pool_indices[fa3_rows], :max_k]`. `mixed_dispatch.dense_block_table`
+(commit 63) converts flashinfer's *flat vector-sparse* layout and is not needed on this path;
+it stays for the flashinfer-side consumer.
+
+**Index arithmetic CPU-verified 400/400 random batches** (`/tmp/t_idx.py`): the two token sets
+partition every q row exactly once; both subsets' `cu_seqlens_q` are densely renumbered and
+row-ordered; the FA2 kv gather and the FA3 page table agree row-by-row with the reference.
+That test **caught a real bug**: the FA3 page table was indexed by *batch row* instead of
+*req_pool_index* -- i.e. it would have read another request's pages whenever the two orders
+differed. Fixed before commit.
+
+**Refused, not approximated.** Four features return `None` (caller takes the ordinary
+single-wrapper path), each with a concrete TODO naming the mechanism, because the alternative
+is silently wrong attention that a throughput A/B would not reveal:
+sliding-window layers (need `_swa_kv_pool`'s own page table + `window_size=(sws,0)` as derived
+at `flashattention_backend.py:2030`); fp8 KV (FA3 wants `k_descale`, this backend carries
+`k_scale_float`, and the two conventions are unverified); multi-item scoring (item-aware mask
+outranks the uniform causal mask); cross-attention / encoder-only.
+A one-sided partition also returns `None` and increments `fused_split_onesided` -- that is the
+decode-population guard working as designed, not a failure.
+
+**Always-on counter**: `FUSED_SPLIT_CALLS n (fa3_rows= fa2_rows= sm_margin= onesided=)`.
+Required by [[gate-needs-noise-floor-and-reference]] -- a debug-gated counter has already
+produced one false pass on this project. This satisfies priority item 2.
+
+- [x] 2026-10-09 **(c) `forward_extend` dispatch written and CPU-verified** -- two executors
+      over disjoint row subsets, scatter combine, `sm_margin` as the SM budget, 400/400 on the
+      index arithmetic (one real bug caught: page table indexed by batch row).
+- [ ] 2026-10-09 **(c2) GPU-verify the dispatch** -- greedy ON vs OFF with a self-vs-self noise
+      floor, asserting `FUSED_SPLIT_CALLS > 0`. In progress; pod `/dev/shm/w` survived intact
+      (venv torch 2.14.1, flashinfer 0.7.0.post1, qwen7b + qwen7b_eagle3_sgl, `fi`,
+      `flash-attention`), but the pod's `up` tree sits at upstream `b7b2975`, an **ancestor** of
+      my base `3fef129ff`, with the 4-mode port as uncommitted working-tree edits. Pushing a
+      single `b7b2975..86e375375` patch (987K, 23 chunks) rather than per-file drops, because
+      `flashinfer_backend.py` alone differs by 92 lines across that drift and mixing bases there
+      is how the last illegal-access was introduced.
+
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither
 constraint is a cost of the work:

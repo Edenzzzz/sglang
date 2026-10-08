@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.28.0 — forward_extend dispatch: the fused FA3+FA2 split is wired on upstream (2026-10-09)
+
+`sglang-up@86e375375` (`upstream_port`, 65 commits on upstream main `3fef129ff`).
+
+- `FlashInferAttnBackend._fused_split_dispatch` runs the two executors over the disjoint row
+  subsets and combines them with `index_copy_` -- a scatter, not an LSE merge, because the subsets
+  are disjoint (unlike upstream's ragged+paged pair, which covers the same rows).
+- **The SM budget needs no private entry point.** Upstream FA3's `flash_attn_with_kvcache` already
+  exposes `sm_margin` ("can be tuned if some SMs are used for communication"). This corrects the
+  earlier claim that the SM budget cannot cross upstream's API: that holds only for flashinfer's
+  persistent wrapper, which derives `sm_count` from the device.
+- FA2's subset is planned through flashinfer's public `begin_forward` with explicit
+  indptr/indices, so no second `KVLocPlan` is needed; the FA3 page table is a gather from
+  `req_to_token`, which is already in upstream's documented `[batch, max_blocks]` shape.
+- Index arithmetic CPU-verified 400/400 random batches. The test caught a real bug: the FA3 page
+  table was indexed by batch row instead of `req_pool_index`, so it would have read another
+  request's pages whenever the two orders differed.
+- Four features are refused rather than approximated, each with a concrete TODO naming the
+  mechanism (sliding-window, fp8 KV descale convention, multi-item scoring, cross-attention) --
+  silently wrong attention would not show up in a throughput A/B.
+- Always-on `FUSED_SPLIT_CALLS` counter; default OFF via `SGLANG_FUSED_FA3_SM_SPLIT`.
+- Not yet GPU-verified; the correctness gate (greedy ON vs OFF with an OFF-vs-OFF noise floor) is
+  running on the pod.
+
 ## v0.27.4 — Dispatch contract grounded: upstream already has a two-executor forward_extend (2026-10-09)
 
 - `forward_extend`'s ragged path already runs TWO executors and combines their `(o, lse)` returns,

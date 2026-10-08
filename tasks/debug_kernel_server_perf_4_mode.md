@@ -564,15 +564,52 @@ This is the third independent line of evidence for the same conclusion, now from
 itself: the kernel is correct and 1.22x faster on batches it accepts, and it essentially never
 gets to run in a real 4-mode schedule under the measured boundary.
 
-- [x] 2026-10-09 **4-mode MTP step runs clean on upstream** -- 151 merges, 0/56 client errors,
-      0 tracebacks, 0 width mismatches. The `prefix_lens` fix was the blocker.
-- [x] 2026-10-09 **the earlier flashinfer device-side assert was a symptom, not a defect** -- it
-      vanished with the width fix; no separate CUDA bug.
+- [x] 2026-10-09 **4-mode MTP step runs clean on upstream UNDER `CUDA_LAUNCH_BLOCKING=1`** --
+      151 merges, 0/56 client errors, 0 tracebacks, 0 width mismatches. The `prefix_lens` fix was
+      the blocker.
+      **QUALIFIED 2026-10-09:** that run carried `CUDA_LAUNCH_BLOCKING=1 TORCH_USE_CUDA_DSA=1`
+      (`drv/split_verify_blk.sh`), which I had added to locate the device assert and did not
+      account for when reporting the result. "Runs clean on upstream" unqualified was an
+      overstatement on my part. A no-blocking control is required before the claim stands,
+      because launch-blocking serialises the stream and would mask a genuine race.
+- [ ] 2026-10-09 **no-blocking control for the 4-mode step** -- same config, split effectively
+      off (guard ON), without `CUDA_LAUNCH_BLOCKING`. Distinguishes "the width fix made it
+      correct" from "launch-blocking hid a race".
+- [~] 2026-10-09 **the earlier flashinfer device-side assert** -- it did not recur once the
+      widths were fixed, but the run that showed that also had launch-blocking on, so "symptom,
+      not defect" is not yet established. Held open pending the control above.
 - [x] 2026-10-09 **guard refuses real 4-mode batches** -- `rows=7`, `kv_tiles=60`,
       `need_decode_rows>=120`. `g ~= 0` in serving.
-- [ ] 2026-10-09 **guard-OFF in-server arm running** (`drv/split_verify_noguard.sh`,
-      `SGLANG_FUSED_DECODE_GUARD=0`) -- forces the split to fire on real merged batches, with the
-      in-step fp32-style reference on, to answer whether fusing anyway helps or hurts end to end.
+### Guard OFF: the split FIRES on real merged batches, and faulted in my own code
+
+`SGLANG_FUSED_DECODE_GUARD=0` made the partition two-sided on real merged 4-mode batches and the
+dispatch executed -- the first time any of this ran in a server. It crashed there:
+
+```
+flashinfer_backend.py:1561 in _fused_split_dispatch
+  k_buf = forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id).view(
+AttributeError: 'ForwardBatch' object has no attribute 'token_to_kv_pool'
+```
+
+The KV pool hangs off the **backend** (upstream's own `forward_extend` does
+`pool = self.token_to_kv_pool`). Fixed in `sglang-up@41273f944`; the FA2 half now also stops
+refetching the cache, since the caller already passes the resolved `kv_cache` -- refetching
+would additionally have bypassed the fp4-dequant workspace path.
+
+**Why the standalone fp32 gate did not catch it:** that harness builds its own K/V buffers and
+never touches the pool. It validates the dispatch's *arithmetic*, which is what it was scoped
+to, and says nothing about in-server plumbing. Worth stating because a 5/5 PASS invites the
+inference that the dispatch is correct in the server, and it does not support that.
+
+**Confound I introduced and am recording:** I derived the guard-OFF script from the
+launch-blocking one and dropped `CUDA_LAUNCH_BLOCKING` in the same edit, so that run changed two
+variables at once (guard OFF *and* blocking off). The crash is attributable anyway -- it is a
+Python `AttributeError` in my dispatch, not a CUDA fault -- but the comparison to the 151-merge
+run is not clean, and the no-blocking control above is needed regardless.
+
+- [ ] 2026-10-09 **guard-OFF arm re-running with `41273f944`** -- split fires on real merged
+      batches with the in-step reference on; answers whether fusing where the guard refuses
+      helps or hurts end to end.
 
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither

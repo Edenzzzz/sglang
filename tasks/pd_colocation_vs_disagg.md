@@ -229,8 +229,20 @@ mixed step, and one short prompt agreed with stock MTP for 5 tokens (noise floor
   | **coloc_cache_edf_mtp** | **1 561 / 8 067** | 114 / 1 382 | **3.8** / 5.7 | 341 |
   | disagg_2p2d_mtp | 27 423 / 77 995 | 26 470 / 78 841 | 2.9 / 4.1 | 919 |
 
-  With MTP + the 4-mode split, colocation keeps its TTFT and cuts agent ITL 47% (7.2 -> 3.8 ms)
-  against colocation without MTP. Against disagg with MTP on both sides: TTFT -94% (agent) and
+  **Rerun on the fixed router (`RUN_TAG=_fixtie`, 7010f40fe), plus stock MTP without the 4-mode step
+  (`_mtps`):**
+
+  | arm | agent TTFT ms mean / P99 | chat TTFT ms mean / P99 | ITL ms agent / chat |
+  |---|---|---|---|
+  | coloc_cache (no MTP) | 1 596 / 8 371 | **101** / 1 539 | 7.2 / 6.4 |
+  | coloc_cache_mtps (stock MTP) | 1 629 / 8 719 | 135 / 3 586 | 4.2 / 5.8 |
+  | **coloc_cache_mtp (4-mode, fixed router)** | **1 569** / 8 516 | 122 / 2 607 | **3.9 / 5.7** |
+  | coloc_cache_edf_mtp (4-mode + worker EDF) | 1 561 / **8 067** | 114 / **1 382** | 3.8 / 5.7 |
+
+  MTP cuts agent ITL **46%** (7.2 -> 3.9 ms) at unchanged TTFT, and the 4-mode split is slightly
+  ahead of stock MTP on every metric (agent TTFT -3.7%, agent ITL -7%, chat P99 TTFT -27%). Worker
+  EDF adds a little more in the chat TTFT tail. With MTP + the 4-mode split, colocation keeps its
+  TTFT and cuts agent ITL 46% against colocation without MTP. Against disagg with MTP on both sides: TTFT -94% (agent) and
   -99.6% (chat). Disagg's dedicated decode GPUs still give lower ITL (2.9 / 4.1 vs 3.8 / 5.7 ms).
   The tie-break is now randomized among equally loaded workers. The stock-MTP arm and a rerun of
   coloc_cache_mtp run on the fixed router.

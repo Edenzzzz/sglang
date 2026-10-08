@@ -9321,3 +9321,18 @@ choice, and should be made conditional (or the fork venv repaired) rather than c
 the flashinfer tree.
 Lesson that generalises: "could not open input file" from nvcc is almost never the real error --
 grep the whole log for the FIRST `error:` before theorising about resources.
+
+**The C++20 requirement bites in TWO places, not one (2026-10-08).** After switching the fused
+`load()` to `-std=c++20`, the fused TU itself compiled and the next 100 errors came from a
+DIFFERENT file -- `batch_prefill_paged_sm90_kernel_mask_0.cu` in flashinfer's own JIT cache, i.e.
+flashinfer's INTERNAL JIT build, which sets its flags independently in
+`flashinfer/jit/core.py:265,268` (`cflags`/`cuda_cflags`, both `-std=c++17`). Symptom there is
+`c10/core/SymBool.h(59): error: identifier "SymBool" is undefined` plus a cascade -- torch 2.14's
+headers are not parseable at C++17, and the error never names the standard.
+Patched both occurrences to `-std=c++20` on the pod copy. So the full toolchain rule for this pod:
+**torch 2.14 + nvcc 13.1 requires C++20 in the harness `load()` AND in flashinfer's jit core.**
+This is a consequence of validating against `venv_up`'s torch; it should be made conditional (or
+the fork venv repaired) rather than committed to the flashinfer tree as-is.
+Pattern worth remembering: each fix exposed the next build stage, and in every case the real cause
+was named only by grepping for the FIRST `error:` -- the trailing lines ("could not open .ii",
+"Error limit reached", "ninja: build stopped") named the symptom, never the cause.

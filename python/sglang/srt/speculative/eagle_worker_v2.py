@@ -1616,11 +1616,27 @@ class EAGLEWorkerV2(BaseSpecWorker):
         #     can process both halves of the step.
         # Shapes for these are only observable with the server up; the commit above was written the
         # same way and the leak is the check that it works.
-        return GenerationBatchResult(
+        # The scheduler expects a GenerationBatchResult, not a tuple (`'tuple' object has no
+        # attribute 'extra_keep_alive_refs'`). Return the PREFILL half's result and hang the verify
+        # half off it, mirroring the fork's `mixed_running_result`, so the scheduler can process
+        # both halves of the one step.
+        result = GenerationBatchResult(
             logits_output=pre_out,
             next_token_ids=pre_next_token_ids,
             can_run_cuda_graph=False,
-        ), (new_seq_lens, bonus_tokens, accept_lens), running
+        )
+        result.mixed_running_batch = running
+        result.mixed_running_result = GenerationBatchResult(
+            logits_output=ver_out,
+            next_token_ids=bonus_tokens,
+            accept_length_per_req_cpu=accept_lens.tolist(),
+            can_run_cuda_graph=False,
+        )
+        result.mixed_running_result.new_seq_lens = new_seq_lens
+        # TODO: both draft extends (`_draft_extend_for_prefill` for the chunk rows,
+        # `_draft_extend_for_decode` for the verify rows) are still missing; without them the next
+        # step has no draft input for these requests. Next failure should surface exactly that.
+        return result
 
     def _forward_prefill_batch(
         self, batch, on_publish=None, pp_proxy_tensors=None, coordination_plan=None

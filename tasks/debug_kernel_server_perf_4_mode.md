@@ -8887,3 +8887,36 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   party: upstream's own non-mixed spec decode. Log `positions[0]` and `seq_lens` for a verify row on
   the OFF arm (ordinary spec decode, no merge) and compare against both. Whichever side matches the
   OFF arm defines the contract. Only then change `mix_with_verify`'s `positions` for the tail rows.
+
+- **[x] ROOT CAUSE FOUND for the verify-row logit error, confirmed against the production contract.**
+  Two measurements settle it:
+  - `OFFCONV` (logged inside `run_eagle_verify`, so it is the path ordinary spec decode AND the OFF
+    arm take): `n=4 seq_lens=[12] pos_head=[12,13,14,15]`, and likewise `[6]->[6..9]`,
+    `[512]->[512..515]`. So at verify time **`seq_lens` IS the committed prefix** and the n draft
+    tokens occupy `prefix .. prefix+n-1`.
+  - `SLTRACE`: `before_prep = after_prep = vfb_seq = merged_tail_seq = 1497` with `vfb_pos0=1497`.
+    So `running_batch.seq_lens` is that committed prefix, `eagle_prepare_for_verify` does not move
+    it, and the merge leaves the tail rows' `seq_lens` EQUAL to the prefix.
+
+  Since `extend_prefix_lens` is derived as `seq_lens - extend_lens`, a tail row with
+  `seq_lens = P` and `extend_lens = n` presents its prefix as **P - n**: every draft token in the
+  row attends to a prefix n tokens short and gets positions `P-n .. P-1`. That is exactly the
+  signature gate (b) measured -- uniform error across all n positions including position 0, while
+  the prefill rows in the SAME batch are bit-exact. `mix_with_verify`'s `seq_lens[tail] = seq_lens
+  - 1 + n` infers the base from whatever `mix_with_running` left instead of from the committed
+  prefix. (The earlier "seq_lens prefix vs prefix+n" guess was right about the field and wrong
+  about which value was off; only the three-point trace pinned it.)
+
+- **[ ] The one-line form of the fix is NOT sufficient: it trades the wrong answer for a crash.**
+  Port 52 set `seq_lens[tail] = committed_prefix + n` (so `extend_prefix_lens` = P and positions
+  run P..P+n-1, matching production). Result: `CUDA_ERROR_ILLEGAL_ADDRESS` /
+  `torch.AcceleratorError: an illegal memory access`, 0 mixed steps. **Reverted (port 53)** so the
+  tree and pod stay runnable; the fix is kept in history at port 52 for the next attempt.
+  Reading: raising the row to P+n makes the attention read `req_to_token[req, :P+n]`, so the KV
+  index coverage for `[P, P+n)` must be established for the MERGED batch, not just inside the
+  verify batch that `eagle_prepare_for_verify` builds. Next: check what
+  `assign_extend_cache_locs_uniform_func` writes into `req_to_token` for the verify rows and when,
+  and whether the merged batch's attention plan (`max_seq_len` / page table built from
+  `seq_lens`) is computed before or after that write. Fix the index coverage and the length
+  together, then re-read gate (b) -- the null case plus `BYPOS` will say immediately whether the
+  uniform error is gone.

@@ -35,9 +35,9 @@ Tasks, in priority order (status 2026-10-08; evidence in the sections below):
       measurable contention, and disagg's 8 prefill GPUs replicate 4 hot prefixes to 82% hit. The
       store also COSTS ~19% chat ITL once the veto spreads load. Sub-items:
       - [x] randomized pull among near-equal-hit nodes (`cache_rand`): neutral at 16 GPUs
-      - [ ] the same on a NARROWED fabric (`ONE_NIC=1` pins every pod's store traffic to mlx5_1,
-            ~4x less aggregate bandwidth) so source selection has contention to relieve within the
-            GPU cap -- RUNNING: coloc_rr_hc / coloc_cache_hc / coloc_rand_hc
+      - [x] the same on a NARROWED fabric (`ONE_NIC=1`) -- **randomized selection LOSES even under
+            deliberate contention.** Measured below; this is a negative result for the proposed
+            algorithm, in the regime built to favour it.
       - [ ] congestion modelled from router-observed past link latency (the alternative in the
             goal). NOT built, and the measurements argue against building it here: with no
             contention to observe there is nothing to fit, and a per-request router query would add
@@ -265,7 +265,37 @@ both replicates the prefix and forces the spread requests to pull. New policy `c
 randomly among near-equal holders"; it differs from `cache_slo` only when holders really tie.
 Running: `HOT=1 ONE_NIC=1 mn_run.py coloc_slo_edf_hc coloc_slo_rand_hc`.
 
-Arm 3 of the flawed pair closes it as predicted: `coloc_rand_hc_1nic` (randomized tie-break,
+**Randomized source selection under contention: measured, and it LOSES (2026-10-08).** The
+isolating pair, both arms identical except the policy -- hot shared prefixes, `ONE_NIC=1`,
+decode-aware veto (`--decode-grid`, 12 points), L3 store, worker EDF on both sides. Command:
+`HOT=1 ONE_NIC=1 RUN_TAG=_hotnic ROUTER_ARGS="<grid> --ttft-slo-ms 2000 --itl-slo-ms 40"
+mn_run.py coloc_slo_edf_hc` then `coloc_slo_rand_edf_hc` (commits c87aa83b9, f6eab46b3).
+0 tracebacks, 0 fallbacks, all requests completed in both.
+
+| arm | chat ITL mean / P99 ms | chat TTFT mean / P99 ms | agent ITL mean / P99 ms | agent TTFT ms |
+|---|---|---|---|---|
+| `coloc_slo_edf_hc_hotnic` (load-ordered within a hit bucket) | **8.9 / 66.5** | **484 / 6 196** | **9.5 / 52.2** | **1 985** |
+| `coloc_slo_rand_edf_hc_hotnic` (random within a hit bucket) | 11.0 / 108.1 | 558 / 6 512 | 10.4 / 95.5 | 2 099 |
+
+**Randomizing among near-equal holders is worse on every metric**: chat mean ITL +24%, chat P99 ITL
++63%, agent P99 ITL +83%, chat TTFT +15%. **Why, and why this is the third time:** dropping the
+load term is what the policy DOES -- and load, not link bandwidth, is the binding constraint even
+on a 4x-narrowed fabric. A holder chosen at random may already be decoding a dozen 16K rows, and
+that costs far more than the pull it saves. The same mechanism appeared twice before at full
+fabric width (`coloc_rand`, where purely random choice sent hit-0 chat to busy workers, and the
+`min()` tie-break hotspot). The fix each time was to order by in-flight load first and use
+randomness only to break what remains.
+
+**Point 4's algorithm, as proposed, is therefore refuted at this scale**: "when several nodes have
+hit lengths within a threshold, pull from one at random" is dominated by "pull from the least
+loaded of them". Randomness is not harmless here; it discards the signal that matters. What the
+goal's underlying intuition gets RIGHT is that concentration is the risk -- but the measured cure
+is the load-aware tie-break plus the decode-aware veto (chat ITL -65%, P99 -80%, v0.18.0), not
+randomization. A congestion-dominated regime where randomization wins would need link cost to
+exceed holder-compute cost; one NIC at 16 GPUs does not reach it, and the simulated-node sweep
+below is the way to look for it.
+
+Arm 3 of the flawed pair closes it as predicted:Arm 3 of the flawed pair closes it as predicted: `coloc_rand_hc_1nic` (randomized tie-break,
 narrowed fabric) measures agent TTFT 1 611 ms / ITL 7.3 ms / P99 13.2 ms and chat 134 ms / 6.5 /
 12.2 -- indistinguishable from `coloc_cache_hc_1nic`'s 1 589 / 7.3 / 13.5 and 148 / 6.5 / 11.8.
 With affinity keeping 93% of tokens local, neither policy pulls, so the tie-break has nothing to

@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.19.0 — Randomized source selection refuted under contention (2026-10-08)
+
+- Point 4's proposed algorithm ("pull at random among nodes whose hit lengths are within a
+  threshold") LOSES on every metric against ordering by in-flight load, even on a deliberately
+  narrowed 1-NIC fabric built to favour it: chat mean ITL +24%, chat P99 ITL +63%, agent P99 ITL
+  +83%, chat TTFT +15%. Load, not link bandwidth, is the binding constraint at 16 GPUs.
+- Narrowing the fabric DOES create real contention (tails 2.3-3.2x worse at unchanged means), so
+  the test was valid; randomization simply discards the load signal.
+- New router policy `cache_slo_rand` exists for this test and should NOT be a default.
+- Two earlier experiment designs were discarded before use and are recorded: a partially-pinned
+  fabric (sequential push raced the arm launch) and an asymmetric pair (worker EDF on one side).
+
 ## v0.18.1 — Long context at a 20 ms chunk budget clears 30% on every metric (2026-10-08)
 
 - 3 rounds, 64-96K TraceLab + chat 12/s, vs stock MTP at its own best chunk: throughput +45.0% /

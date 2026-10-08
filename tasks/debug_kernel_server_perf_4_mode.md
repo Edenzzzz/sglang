@@ -643,9 +643,31 @@ a mask. The no-blocking control is therefore no longer needed for that question 
 151-merge clean run should still be reproduced without blocking before being quoted
 unqualified.
 
-- [x] 2026-10-09 **the device-side assert is a real defect, now fixed** -- shared flashinfer
-      workspace clobbered by the split's mid-step plan (`370c511f3`). Not a 4-mode bug, not a
-      launch-blocking artifact.
+- [~] 2026-10-09 **the device-side assert is a real defect in the split, NOT yet fixed.**
+      **RETRACTED: the shared-workspace diagnosis was wrong.** Giving the FA2 wrapper its own
+      workspace (`370c511f3`) did **not** fix it -- the assert reproduced unchanged. The actual
+      assert text is from torch, not flashinfer:
+      `IndexKernel.cu:111 Assertion -sizes[i] <= index && index < sizes[i] && "index out of
+      bounds" failed`, i.e. an out-of-range index in one of the **dispatch's own** indexing ops.
+      Such an assert surfaces at whatever CUDA call happens next, which was a flashinfer `plan()`
+      several frames away -- so **the traceback named the victim twice, and I mistook the second
+      victim for a new cause.**
+      Where the reasoning failed: I read "the assert appears only when `FUSED_SPLIT_CALLS >= 1`"
+      as evidence for *clobbering*. That correlation only localises the fault to the split; it is
+      equally explained by "the split ran and indexed out of bounds". Correlation localised, it
+      did not identify the mechanism, and I over-read it -- the same error the memory note I had
+      just written warns about.
+      `370c511f3` is **kept** on independent grounds: a wrapper planning mid-step into the shared
+      buffer is unsound regardless, since upstream's sharing is only safe under plan-then-run
+      ordering. It is simply not this bug.
+- [x] 2026-10-09 **construction-time bounds checks added** (`c163f427d`) --
+      `sum(extend_seq_lens_cpu)` vs `input_ids`, `req_pool_index` vs `req_to_token` rows,
+      `max seq_len` vs its columns. **All three PASSED while the assert still fired**, which
+      rules out the plan's own arrays and is itself the useful result.
+- [ ] 2026-10-09 **q-extent check** (`3777ee81a`) -- the one bound left unchecked: the plan's
+      token indices come from `extend_seq_lens_cpu`, but the tensor actually indexed is the
+      layer's `q`. Different objects, nothing guaranteeing they agree (a padded graph replay
+      would make them differ). Carried as an int so the per-layer check needs no sync.
 - [ ] 2026-10-09 **guard-OFF arm re-running with `370c511f3`** -- in-server correctness of the
       split on real merged 4-mode batches, via the in-step reference.
 

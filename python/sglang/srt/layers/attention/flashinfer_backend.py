@@ -1558,10 +1558,13 @@ class FlashInferAttnBackend(AttentionBackend):
 
         from sglang.kernels.ops.attention.flash_attention import flash_attn_with_kvcache
 
-        k_buf = forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id).view(
+        # The pool hangs off the BACKEND, not off ForwardBatch (upstream's own forward_extend
+        # does `pool = self.token_to_kv_pool`). Reading it from forward_batch raised
+        # AttributeError the first time the split actually fired.
+        k_buf = self.token_to_kv_pool.get_key_buffer(layer.layer_id).view(
             -1, self.page_size, layer.tp_k_head_num, hd
         )
-        v_buf = forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id).view(
+        v_buf = self.token_to_kv_pool.get_value_buffer(layer.layer_id).view(
             -1, self.page_size, layer.tp_v_head_num, hd
         )
         o_fa3 = flash_attn_with_kvcache(
@@ -1581,7 +1584,8 @@ class FlashInferAttnBackend(AttentionBackend):
 
         o_fa2 = self.fused_fa2_wrapper.forward(
             qv[pl["fa2_tok"]],
-            forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id),
+            # Already resolved by the caller, including the fp4-dequant workspace case.
+            kv_cache,
             causal=causal,
             sm_scale=layer.scaling,
             logits_soft_cap=logits_soft_cap,

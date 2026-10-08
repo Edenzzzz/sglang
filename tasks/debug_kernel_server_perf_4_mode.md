@@ -521,6 +521,59 @@ has to come from the scheduling side.
       cache-hit-first routing measured on TTFT percentiles, with the split enabled where the
       guard accepts it. The kernel is no longer the critical path to the bar.
 
+## 2026-10-09 -- the 4-mode step RUNS CLEAN on upstream, and the guard refuses real batches
+
+Same server config as the gate (`drv/split_verify_blk.sh`), `sglang-up@b8b405822` applied to pod
+tree `/dev/shm/w/up`:
+`--speculative-algorithm EAGLE3 --speculative-draft-model-path /dev/shm/w/qwen7b_eagle3_sgl
+--speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4
+--attention-backend flashinfer --enable-mixed-chunk --chunked-prefill-size 2048 --page-size 1
+--max-running-requests 64`, env `SGLANG_MIXED_SPEC=1 SGLANG_FLASHINFER_USE_PAGED=1
+SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1`, 56 staggered requests.
+
+**Result -- the 4-mode MTP step is working end to end on upstream:**
+
+| metric | value |
+|---|---|
+| `MIXEDSPEC_STEPS` (4-mode merges) | **151** |
+| client errors | **0 / 56** |
+| tracebacks | **0** |
+| `PLANWIDTH` width mismatches | **0** |
+| `fused split partition skipped` | **0** |
+
+So the `prefix_lens` fix (`b8b405822`) cleared the blocker, and the earlier
+`device-side assert triggered` in flashinfer's `plan` was a downstream artifact of the bad
+widths, not an independent defect -- it disappeared once the widths were right. Recorded as such
+rather than left as an open "CUDA assert" item.
+
+**And the split still does not fire, with the server stating the reason:**
+
+```
+FUSED_SPLIT_ONESIDED: fa3=0 fa2=7 rows=7 max_kv_tiles=60 need_decode_rows>=120
+FUSED_SPLIT_ONESIDED: fa3=0 fa2=1 rows=1 max_kv_tiles=16 need_decode_rows>=32
+```
+
+A real merged 4-mode batch here is **7 rows** -- one prefill chunk plus ~6 verify rows -- against
+~60 KV tiles, so the ratio guard wants 120 co-resident decode rows and gets 6. **This is `g ~= 0`
+measured in the server**, not inferred from the TraceLab precedent or from the harness shapes.
+The reason is structural: a verify row contributes `num_draft_tokens = 4` tokens, so the running
+batch would need ~30 concurrent spec requests to supply 120 "decode rows", while the merged batch
+at this concurrency carries 6.
+
+This is the third independent line of evidence for the same conclusion, now from the server
+itself: the kernel is correct and 1.22x faster on batches it accepts, and it essentially never
+gets to run in a real 4-mode schedule under the measured boundary.
+
+- [x] 2026-10-09 **4-mode MTP step runs clean on upstream** -- 151 merges, 0/56 client errors,
+      0 tracebacks, 0 width mismatches. The `prefix_lens` fix was the blocker.
+- [x] 2026-10-09 **the earlier flashinfer device-side assert was a symptom, not a defect** -- it
+      vanished with the width fix; no separate CUDA bug.
+- [x] 2026-10-09 **guard refuses real 4-mode batches** -- `rows=7`, `kv_tiles=60`,
+      `need_decode_rows>=120`. `g ~= 0` in serving.
+- [ ] 2026-10-09 **guard-OFF in-server arm running** (`drv/split_verify_noguard.sh`,
+      `SGLANG_FUSED_DECODE_GUARD=0`) -- forces the split to fire on real merged batches, with the
+      in-step fp32-style reference on, to answer whether fusing anyway helps or hurts end to end.
+
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither
 constraint is a cost of the work:

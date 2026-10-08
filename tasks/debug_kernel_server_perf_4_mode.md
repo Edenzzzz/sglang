@@ -10229,3 +10229,36 @@ to have contributed. Separately, the 3-chunk case (every row written, rel err 0.
 weighting/LSE error in the same reduction and needs its own fix -- do not expect one change to cover
 both. Fourteen candidates eliminated on the way here; the two real causes (`MaskMode::kNone`, and
 this) were both found by reading code and existing diagnostics, not by inference.
+
+### [x] FIX SITE AT LINE LEVEL: the merge's arrival counter waits for chunks that never run
+
+`persistent.cuh:686-688`, inside the JIT reduction:
+```
+int last = 0;
+if (ltid == 0) {
+  last = (atomicAdd(&params.group_counter[gid], 1) == params.group_nchunks[gid] - 1);
+}
+... run_merge = (last broadcast over the warpgroup)
+```
+The merge fires only when a group's arrivals reach `group_nchunks[gid]`. Under causal masking a
+chunk's work item can be absent entirely (`kv_start = 64 > kv_end` for a row whose bound sits in
+chunk 0), so that group's counter never reaches `group_nchunks - 1`, `run_merge` never becomes true,
+and `final_o` is never written for its rows. **This is the mechanism confirmed by all six
+measurements**: 55 unwritten at prefix 0, 19 at prefix 41, 0 at prefix 105 (every row needs a later
+chunk, so every group completes), and 87 with the reduction disabled.
+
+**Qualification to my earlier "plan exonerated".** The `NO_JIT_REDUCE` A/B established that the
+REDUCTION writes these rows, which rules out "the rows are missing from `merge_indptr`". But
+`group_nchunks` is itself a PLAN array, so the root may still be plan-side: if the plan counts
+chunks geometrically (`ceil(kv_len / len_kv_chunk)`) without accounting for causal masking, it
+over-counts for exactly these groups. So the two candidate fixes are:
+1. **plan-side (preferred if true):** make `group_nchunks[gid]` the number of work items actually
+   EMITTED for that group, which is what the counter is compared against;
+2. **kernel-side:** have the merge fire when the arrivals equal the number of chunks that produced
+   partials, e.g. by having absent chunks still bump the counter, or by deriving the expected count
+   from the causal bound.
+Check (1) first: read how `group_nchunks` is filled in `TwoStageHolisticPlan` and compare it against
+the emitted work items for a causally-confined group. `CopyToPageLockedBuffer(..., group_nchunks)`
+near `scheduler.cuh:1893` is the write; the value's provenance is the thing to read.
+Separately, the 3-chunk weighting error (rel err 0.51436, every row written) lives in the merge body
+AFTER this gate and still needs its own fix.

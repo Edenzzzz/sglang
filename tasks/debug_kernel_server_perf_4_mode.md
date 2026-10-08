@@ -9884,3 +9884,42 @@ Lesson for this file, since it has now cost two write-ups: when a trace is aggre
 `sort -u`, check how many launches produced it BEFORE drawing any per-launch conclusion. Trace lines
 need a launch id (sm_split or a counter) printed on them to be read safely; add that before the next
 trace run.
+
+## [x] ROOT CAUSE of the task0 fault: the CAUSAL MASK is not applied in the tile128 path — 2026-10-09
+
+The per-token profile from `DUMP_ROWS=1` (already in `/dev/shm/ktdr.log`; I had greped it away
+twice) settles it with no new run:
+```
+row 1 (task0 qo=64 kv=64) rel err 1.02823 FAIL
+  damaged tokens: 63/64  first=[0,1,2,...,11]  last=[57,...,62]
+  damaged qo_heads: 28/28
+  got[0,:4]=[0.2402, -0.0547, 0.0386, -0.1416]
+  ref[0,:4]=[0.1357,  0.3848, 0.2119, -1.3672]
+```
+**Token 63 is the ONLY correct token**, and `got` is not a scaled `ref` -- it is a different
+attention result. With `kv_len = 64`, token 63 is exactly the q token that legitimately attends to
+all 64 KV positions. So every token is being computed as though it attended to the FULL KV range:
+the per-token causal mask is missing in the task0 (tile128 persistent) path.
+
+Every prior observation follows from this one cause, which is why it is worth more than the ten
+eliminated candidates:
+- **3.40x magnitude deficit** -- averaging over ~64 KV positions instead of the causal k dilutes the
+  output; the deficit is a consequence, not a scale bug (and `got`/`ref` being non-proportional is
+  what rules a scale factor OUT).
+- **token 63 exact** -- no masking needed there.
+- **all 28 qo heads damaged** -- masking is per-token, not per-head.
+- **task2 (qo=1) PASSES** -- a single q token attends to all of its 14 KV positions, so a missing
+  causal mask is invisible in that class. The tile16 runner's PASS never exonerated the mask.
+- **FA3 PASSES** -- it has its own causal path, built here with `-DFLASHINFER_FA3_CAUSAL=1`.
+- **tile-level `kv_end` bounds are correct** (19/37/55/64 for packed_qo_start 0/128/256/384), so the
+  fault is specifically the mask WITHIN the KV tile, not the tile bound. Those two being separate is
+  why the correct-looking bounds misled me for several rounds.
+This also matches the failure family recorded in [[fused-harness-vs-sglang-layout]], which lists
+"causal mask" explicitly among the places fused bugs live.
+
+**Next (a fix, not a diagnostic):** find how causality reaches the persistent runners. The harness
+has `CAUSAL = os.environ.get("CAUSAL", "1") == "1"` and passes `-DFLASHINFER_FA3_CAUSAL=1` for the
+FA3 side; the persistent side takes its masking from the `AttentionVariant` / mask mode in its
+KTraits or plan. Check whether the fused build instantiates the task0 Runner with a NON-causal
+variant while FA3 gets a causal one -- that asymmetry would be the whole bug, and it is a read of
+the Runner1 instantiation in `tests/fused_fa3_persistent_ext.cu`.

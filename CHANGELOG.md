@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.23.0 — Root cause of the fused task0 failure: missing causal mask in the tile128 path (2026-10-09)
+
+- The failing task0 row has exactly ONE correct token -- the last one, which is the only q token
+  that legitimately attends to all of its KV. Every other token is computed against the full KV
+  range, so the per-token causal mask is not applied in the tile128 persistent path.
+- This single cause explains the whole evidence set: the 3.40x magnitude deficit (dilution, not
+  scaling -- got is not proportional to ref), all 28 heads damaged, the tile16 row passing (its
+  single q token needs no mask), FA3 passing (separate causal path), and the tile-level kv_end
+  bounds being provably correct while the in-tile mask is not.
+- Ten earlier candidates were eliminated and recorded in place, including one attempted fix
+  (`cluster_tile_q`, refuted and reverted) and one retracted "duplicate work item" anomaly that was
+  an artifact of aggregating traces across the harness's three sm_split launches.
+
 ## v0.22.1 — task0 fused fault characterised; cluster_tile_q candidate refuted (2026-10-09)
 
 - The fused kernel's failing task0 row writes EVERY element (229376/229376 nonzero) but at

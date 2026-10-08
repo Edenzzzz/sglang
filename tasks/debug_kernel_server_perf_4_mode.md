@@ -9705,3 +9705,18 @@ Under test now; the predictions to check against, so the result cannot be read l
 - the 55 NaN rows may well REMAIN -- this candidate explains wrong VALUES, not missing writes, so
   if they persist there is a second, independent fault and that is the expected outcome rather than
   a failure of the fix.
+
+**`cluster_tile_q` fix: fixture-1 numbers UNCHANGED, and the test was the wrong one.**
+With the fix in and the printf out: `unwritten = 55/512`, row 0 FA3 **0.00710 ok**, row 2 task2
+**0.00089 ok**, row 1 task0 **nan FAIL** -- at sm_split 48/32/16 alike. Predictions 2 and 3 held
+(FA3 and task2 untouched, as intended). Prediction 1 could not be evaluated at all: `rel err` is
+computed over the row's span, so **any unwritten row makes it `nan` regardless of whether the
+written values improved**. Fixture 1 therefore cannot measure this fix -- the NaN rows mask it.
+The discriminating case is `qo1 = 64`, where the sweep showed 0 unwritten and `rel err 1.03446`:
+there the number is meaningful. Running `FIXTURE="qo:424,64,1 prefix:3577,0,13"` now.
+If it drops to ~1e-3 the fix is real and the remaining 55-row fault is separate and independent;
+if it stays ~1.0 the `cluster_tile_q` candidate is refuted too and should be reverted rather than
+left in as a plausible-looking change.
+Method note for this file: I committed the predictions BEFORE the run, which is what exposed that
+the headline metric could not test the hypothesis -- worth keeping as the habit, since five earlier
+rounds here read whatever number appeared as if it bore on the question.

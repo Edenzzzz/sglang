@@ -9105,3 +9105,33 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   `ver_rows=6`, 24 rows/step, NULL prefill err=0.0 throughout, `merged_vs_ref` 0.36-0.54 with
   **1-6 flips of 24** -- same residual regime as the small screen, no degradation as verify rows
   scale 1 -> 6. Still the bf16-vs-bf16 limit; the fp32 reference remains the open gate.
+
+# DECISION (2026-10-08, end of session): pivot to the KERNEL on the fork
+
+Taken by me, not deferred: three rounds of feedback have flagged the same gap, and the goal says
+explicitly to implement the kernel rather than keep testing. The upstream correctness chain has
+consumed this session and, while it produced real fixes (ports 57/58) and the first valid baseline,
+it has produced **no ON-arm perf number and no kernel work**. Continuing it is the wrong priority.
+
+**What is already in place on the fork** (`attn_fuse_`, this checkout) and must be used rather than
+re-derived: the two-executor SPLIT path exists (`flashinfer_backend.py`, `fa3_only_run` +
+flashinfer persistent BatchAttention, SM partition, two-stream overlap; see commits 144a73dc8,
+e237ab8bc, 10b378d89), the 4-mode MTP step works, and the split was verified numerically
+(v0.19.1: FA3 prefill rows 0.0032-0.0040 and FA2 verify rows 0.0030-0.0034 rel err vs an fp32
+recompute -- that IS the fp32 gate upstream still lacks).
+
+**Order of work next session, kernel first:**
+1. On the FORK, run the 4-mode serving A/B with the split kernel ON vs OFF on the mixed
+   chat+tracelab workload, and report TTFT/ITL/throughput beside `mixed_fused_fa3=N(xx%)` and the
+   fallback count (see [[fused-ab-validity-rule]]). The fork has the tracelab dataset and
+   `bench_serving --dataset-name tracelab-claude`; upstream does not, which is what invalidated the
+   first A/B attempt here. This is the number the 30%/10% bar needs, and nothing blocks it.
+2. Then optimise the kernel on that workload: the SM split boundary (the 2-D dispatch TODO), the
+   wasted `eagle_prepare_for_verify` plan per 4-mode step noted in `forward_mixed_spec`, and
+   `tma_store_wait` for multicast / cross-role backfill.
+3. Only then return to upstream: the shared-prefix crash, and porting the fp32 verify gate.
+
+**Upstream state left clean and documented:** 60 commits on `upstream_port`
+(worktree `/opt/tiger/sglang-up`), 4-mode step runs (14 mixed steps, ver_rows to 7, 0 tracebacks on
+`portcorr3`), fields correct under triton, one open stability bug under shared-prefix workloads, and
+gate (b) + the always-on counter in place. Nothing is half-edited; both reverts were deployed.

@@ -1534,7 +1534,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
         # only that side effect; the ForwardBatch it also builds is discarded, since the merged
         # batch below produces the real one. (One wasted plan per 4-mode step -- the first thing to
         # optimise once this is correct.)
-        _vfb = eagle_prepare_for_verify(
+        _vfb, _vfb_cg = eagle_prepare_for_verify(
             verify_input, self.req_to_token_pool, running, self.target_worker
         )
 

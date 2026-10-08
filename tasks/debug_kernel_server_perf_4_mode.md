@@ -9720,3 +9720,30 @@ left in as a plausible-looking change.
 Method note for this file: I committed the predictions BEFORE the run, which is what exposed that
 the headline metric could not test the hypothesis -- worth keeping as the habit, since five earlier
 rounds here read whatever number appeared as if it bore on the question.
+
+**`cluster_tile_q` REFUTED and REVERTED (candidate 7).** The discriminating run
+(`FIXTURE="qo:424,64,1 prefix:3577,0,13"`, 0 unwritten rows so `rel err` is meaningful):
+
+| | before fix | after fix |
+|---|---|---|
+| row 1 task0 (qo=64) | 1.03446 FAIL | **1.04120 FAIL** |
+| row 0 FA3 | ~0.0066 ok | 0.00660 ok |
+| row 2 task2 | ~0.0008 ok | 0.00082 ok |
+
+No effect. Per the criterion committed BEFORE the run, the change is reverted rather than left in
+as a plausible-looking edit; the pod copy is back to `cluster_tile_q = gridDim.x * CTA_TILE_Q`.
+(The `gridDim.x`-under-FUSED_GRID asymmetry may still be a latent bug worth raising separately --
+`persistent_cluster_slot` IS guarded and this is not -- but it is demonstrably NOT the cause here,
+and an unvalidated "fix" in the tree is worse than none.)
+
+**Where that leaves the task0 fault, stated as what must now be explained:** with EVERY row written
+(qo1 <= 64) the task0 row's output is still wrong at rel err ~1.0, which is the signature of output
+~= 0 against a nonzero reference, while the tile16 runner (task2) is exact at ~8e-4 in the SAME
+kernel launch. So the fault is specific to the **tile128 runner's** production of output, not to
+scheduling, coverage, bounds, slots, or the drain -- seven candidates now eliminated with evidence.
+**Next, and it is one cheap read of existing output:** the harness's failure branch already prints
+`nonzero=N/total absmax=...` for the failing block (`test_fused_server_batch.py` ~line 706). Run
+qo1=64 WITHOUT the grep filter and read it: `nonzero = 0` proves the tile128 runner never writes
+its accumulator (an epilogue/store fault), while `nonzero > 0` with a wrong absmax means it writes
+computed-but-wrong values (a mainloop/accumulator fault). Those two point at opposite halves of
+Runner1 and the existing print distinguishes them without any new instrumentation.

@@ -8628,3 +8628,31 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   `mix_with_verify` snapshots `mixed_pre_sampling_info` for. Found by grepping for that field and
   seeing it was set but never read -- it had been dropped in the commit-29 restructure, the same
   class of loss as the triplicated method and the absorbed PP block.
+
+- **[ ] 2026-10-08: with `ver_rows > 1` the 4-mode step is NONDETERMINISTIC run to run. Real
+  defect, and this screen is not confounded.** Driver `/dev/shm/portcorr3.sh <arm> <tag>`
+  (`NBG=3` background rows, fixed 1.5 s stagger, each 512 tok asking 6000 out; then one 6000-token
+  prompt chunk-prefilled against them). ON arm: 5 mixed steps spanning `ver_rows` 1, 2 AND 3;
+  OFF arm: 0 mixed steps; 0 tracebacks in all four runs. Two runs per arm:
+
+  | comparison | requests differing (of bg0,bg1,bg2,long) |
+  |---|---|
+  | control vs control | **IDENTICAL** -- zero noise floor in this screen |
+  | **4-mode vs itself** | `bg0, bg1` |
+  | control vs 4-mode | `bg0, bg1` (the same two) |
+  | of the requests stable in BOTH arms (`bg2`, `long`) | 4-mode differs on **NONE** |
+
+  Why this is different from the confounded gate above: there, BOTH arms varied run to run, so a
+  diff could not be attributed. Here the control reproduces itself exactly under the same arrival
+  schedule, and only the 4-mode arm varies -- and only on the rows that pass through the verify
+  half (bg0/bg1 are decoding during the mixed steps; bg2 starts after them). So the verify half
+  itself is nondeterministic. Note this does NOT contradict the `portcorr2` result, which had
+  exactly ONE verify row and was self-identical; the defect appears with multiple verify rows.
+  Commit 40's stranded keep-alive refs were real but evidently not the whole story.
+
+  Next diagnostic (chosen to localise, not to guess): per mixed step, log a checksum of the
+  verify-row logit slice and of `ver_hidden`, run twice and diff by step index. If the checksums
+  already differ, the nondeterminism is in the merged forward or the batch handed to it; if they
+  match while outputs diverge, it is downstream in accept/commit/draft-extend. Prime suspects for a
+  multi-row-only fault: per-row ordering in `mix_with_verify`'s widening, and anything indexed as
+  though there were a single verify row.

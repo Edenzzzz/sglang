@@ -9091,3 +9091,17 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   perf driver deliberately has none).
   Standing: **baseline measured, ON arm unmeasurable until this crash is fixed.** The 30%/10% bar
   therefore still has no ON-arm number, and the honest reason is a stability bug, not a missing run.
+
+- **[x] Crash does NOT reproduce at NBG=12 (14 mixed steps, `ver_rows` up to 7, 0 tracebacks).**
+  So concurrency and verify-row count are NOT the trigger. What still differs in the perf workload:
+  `generated-shared-prefix` gives every row an 8192-token SHARED system prompt, so the radix cache
+  serves most of each prefix and a verify row's prefix is largely *cached* rather than freshly
+  written. That is the remaining variable to test -- run `portcorr3` with a shared prefix across the
+  background rows (or point it at `generated-shared-prefix`) rather than independent random prompts.
+  Note also the perf run used FA3's own default earlier but triton here; the crash is in triton's
+  `_small_copy_kernel`, so re-test the perf workload on fa3 as well to see whether the crash follows
+  the backend or the workload.
+  Correctness coverage extended for free by this run (gate (b), triton, port 57):
+  `ver_rows=6`, 24 rows/step, NULL prefill err=0.0 throughout, `merged_vs_ref` 0.36-0.54 with
+  **1-6 flips of 24** -- same residual regime as the small screen, no degradation as verify rows
+  scale 1 -> 6. Still the bf16-vs-bf16 limit; the fp32 reference remains the open gate.

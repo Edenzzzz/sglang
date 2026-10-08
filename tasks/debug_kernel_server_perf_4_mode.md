@@ -10735,3 +10735,32 @@ but it was answering a question the data could not pose.
 Until (1) exists, no serving number from this driver can be quoted for or against the >=30%/>=10%
 bar. The long-context baseline numbers remain usable as a baseline only
 (32768 in/256 out/16 prompts/conc 8: ~127 tok/s, mean TTFT ~5.5 s, mean ITL ~40.7 ms, 0 fallbacks).
+
+**Settled by logic, not by a proxy: the two-executor branch was NEVER ENTERED in the split arm.**
+`flashinfer_backend.py:~1452`:
+```
+_two_exec_default = os.environ.get("SGLANG_FUSED_KERNEL") != "1"
+if os.environ.get("SGLANG_TWO_EXEC", "1" if _two_exec_default else "0") == "1":
+    ...
+    if not hasattr(torch.ops.fused_fa3, "fa3_only_run"):
+        raise ...("SGLANG_TWO_EXEC=1 but torch.ops.fused_fa3.fa3_only_run is absent: ...")
+```
+We know independently that `fa3_only_run` is NOT in the built extension (it is gated behind
+`#if FLASHINFER_FA3_UPSTREAM`, and that path fails to compile on `params.wgmma_plan`). So **if the
+split arm had entered this branch it would have raised** -- and the driver deliberately
+`unset SGLANG_FUSED_ALLOW_FALLBACK` so the raise could not be downgraded. The split arm's server log
+contains ZERO occurrences of `fa3_only_run` and the run completed normally. Therefore the branch was
+never reached, and both arms ran the ordinary attention path.
+So the ORIGINAL verdict ("the split kernel never ran") was right, the "unverifiable" correction was
+over-cautious, and the reason is neither the decode guard nor the counter: **the server never got as
+far as the two-executor dispatch at all.** Corroborating detail: the split server log mentions
+`persistent|flashinfer` on only ONE line, far fewer than a server actually driving that backend
+would produce.
+**So the serving blocker reduces to the SAME root cause as the missing per-executor baseline:**
+`fa3_only_run` requires `FLASHINFER_FA3_UPSTREAM`, which does not compile
+(`BatchPrefillPagedParams has no member "wgmma_plan"`). Finishing that wgmma params plumbing is
+therefore on the critical path for BOTH the kernel-parity baseline AND any fork serving A/B of the
+split kernel -- it is one blocker, not two, and it is the next thing to fix.
+Everything else needed is in place and verified: fused kernel PASSES, optimum split known
+(112 SMs, 133.5 us, 1.30x over unfused persistent), fork server boots with the fork tree and the
+pip flashinfer, tracelab dataset present, drivers staged.

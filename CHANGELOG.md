@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.25.8 — Serving blocker reduced to ONE root cause: the wgmma params plumbing (2026-10-09)
+
+- The two-executor branch RAISES if `fa3_only_run` is absent, and the driver unsets the fallback
+  escape, so a completed split arm with no such error proves the branch was never entered. Both
+  arms ran the ordinary attention path; the earlier "unverifiable" correction was over-cautious.
+- `fa3_only_run` is gated behind `FLASHINFER_FA3_UPSTREAM`, which fails to compile on
+  `BatchPrefillPagedParams has no member "wgmma_plan"`. That single defect blocks BOTH the
+  per-executor kernel baseline AND any fork serving A/B of the split kernel -- one blocker, not two.
+- Everything else is verified in place: kernel PASSES, optimum split 112 (133.5 us, 1.30x), fork
+  server boots correctly, dataset and drivers staged.
+
 ## v0.25.7 — Serving A/B verdicts corrected: unverifiable, not invalid (2026-10-09)
 
 - The driver's `two_exec_calls` is `grep -co 'two_exec'` over the server log, and that string is

@@ -9373,3 +9373,34 @@ write window from a tile-rounding bug; (2) check whether the harness or the kern
 reading how task0 work items are enumerated for a 609-packed-row request; (3) only then re-run the
 sm_split sweep for perf, since a kernel that leaves rows unwritten is doing less work and any
 timing from it would be invalid ([[fused-ab-validity-rule]]).
+
+### qo sweep on the task0 row: my "32-row write window" reading was WRONG — 2026-10-08
+
+`bash /dev/shm/qosweep.sh` (varies ONLY row 1's qo; `FIXTURE="qo:424,$Q1,1 prefix:3577,0,13"`,
+same build as above):
+
+| qo1 | unwritten rows | row 1 rel err | verdict |
+|---|---|---|---|
+| 16 | 0/441 | 1.08682 | FAIL |
+| 32 | 0/457 | 0.99129 | FAIL |
+| 33 | 0/458 | 1.07390 | FAIL |
+| 64 | 0/489 | 1.03446 | FAIL |
+| 87 | **55**/512 | nan | FAIL |
+| 96 | **55**/521 | nan | FAIL |
+| 128 | **55**/553 | nan | FAIL |
+
+**Both of my earlier readings are retracted.** `55 = 87 - 32` was a coincidence: the unwritten count
+stays at exactly 55 for qo1 = 87, 96 AND 128, so it does not scale with row 1 at all -- the
+unwritten rows are **not row 1's**, and they appear only once the batch's total row count crosses
+~512 (0 unwritten at 489 total, 55 at 512). And "the task0 row is merely unwritten" is wrong too:
+at qo1 <= 64 **nothing is unwritten yet row 1 still FAILS at rel err ~1.0**, which is the signature
+of output ~= 0 against a nonzero reference -- written, but not computed. So there are TWO
+independent defects, and the NaN one was masking the arithmetic one.
+
+Next, and both are cheap: (1) print WHICH row indices are NaN and attribute them to a row/class --
+the hypothesis to kill or confirm is that they belong to the FA3 row (qo 424, split-KV) and are
+exposed by a ~512-row buffer or tile bound, not to the persistent half at all; (2) for the task0
+arithmetic, check whether its work items are enumerated with the right q offsets for a row whose
+prefix is 0 (every failing case here has `prefix[1] = 0`, which is also the shape my notes flag as
+the unified serving crash's distinguishing feature: `prefix 0 where kv is shorter than the packed q
+extent`). Do NOT take any fused timing until both are fixed.

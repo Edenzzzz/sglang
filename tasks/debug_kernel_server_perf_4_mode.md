@@ -9790,3 +9790,20 @@ All three are testable cheaply: run the SAME fixture with splitting forced off f
 one work item per row) -- if the deficit disappears, it is (2)/(3); if it persists, it is (1).
 Do NOT guess between them; the ratio 3.40 is itself a clue worth checking against the number of
 chunks the plan gave row 1.
+
+**Refinement: the `num_splits=[4]` in these logs is FA3's, not task0's.** `_nsd_tensor(QO, kvl,
+N_FA3_ROWS, ...)` is computed for the FA3 rows only (`test_fused_server_batch.py:140-148`), and it
+prints a one-element list because fixture 1 has one FA3 row. So hypothesis (2) as phrased -- "the
+split/merge path averages partial results" -- was about the wrong path. The task0 row's chunking is
+the PERSISTENT runner's own `kv_chunk_idx / num_kv_chunks / partial_o` merge (those fields appear in
+the pre-existing `[TRACE]` work-item print), and in the fused kernel that merge is driven through
+the `s_merge_flag` the drain passes into `Runner::Run` -- a per-warpgroup flag, per the drain's own
+comment that "the cursor and merge flag were already split this way, the storage was not".
+So the live question is specifically: **for a task0 row covered by several KV chunks, does the fused
+drain's per-warpgroup merge combine the partials correctly?** A uniform ~3.4x magnitude deficit with
+every element present is what a merge that drops or under-weights partial contributions produces,
+and it would spare task2 (kv 14, one chunk) and FA3 (its own split path) exactly as observed.
+Next run, and it is a single number: print `num_kv_chunks` and `len_kv_chunk` for row 1 from the
+existing `[TRACE]` print (find its guard; it is not `DUMP_ROWS` and not `FLASHINFER_TRACE_WORK`) and
+check whether it is ~3-4 -- matching the 3.40 deficit -- or 1, which would refute the merge story
+outright and send this back to the mainloop.

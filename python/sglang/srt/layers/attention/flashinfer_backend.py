@@ -323,6 +323,13 @@ class FlashInferAttnBackend(AttentionBackend):
         self.fused_split_mask = None
         self.fused_split_plan = None
         self.fused_sm_margin = int(os.environ.get("SGLANG_FUSED_SM_MARGIN", "0"))
+        # Counters initialised here, not lazily via getattr: the verify block reads
+        # fused_split_calls, so a lazy counter made the FIRST successful dispatch raise
+        # AttributeError after both executors and the scatter had already run.
+        self.fused_split_calls = 0
+        self.fused_split_onesided = 0
+        self.fused_split_plans = 0
+        self.fused_split_err = 0.0
 
         self.req_to_token_pool = model_runner.req_to_token_pool
         self.token_to_kv_pool = model_runner.token_to_kv_pool
@@ -1412,12 +1419,12 @@ class FlashInferAttnBackend(AttentionBackend):
         mask, _q_tiles, _kv_tiles = self.fused_split_mask
         mask = np.asarray(mask, dtype=bool)
         fa3_rows, fa2_rows = np.nonzero(mask)[0], np.nonzero(~mask)[0]
-        self.fused_split_plans = getattr(self, "fused_split_plans", 0) + 1
+        self.fused_split_plans += 1
         if len(fa3_rows) == 0 or len(fa2_rows) == 0:
             # One-sided partition: nothing to split. The decode-population guard refuses
             # fusion for pure long-prefill batches by design, so on a prefill-only workload
             # this is the common case and must not be read as a failure.
-            self.fused_split_onesided = getattr(self, "fused_split_onesided", 0) + 1
+            self.fused_split_onesided += 1
             if self.fused_split_onesided % 200 == 1:
                 # Say WHY, with the numbers the guard decided on. A bare "never fired" is
                 # indistinguishable from a broken hook, and cost one full gate cycle.
@@ -1439,7 +1446,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 self.fused_split_plans,
                 len(fa3_rows),
                 len(fa2_rows),
-                getattr(self, "fused_split_onesided", 0),
+                self.fused_split_onesided,
             )
 
         qo_lens = np.asarray(forward_batch.extend_seq_lens_cpu, dtype=np.int64)
@@ -1592,6 +1599,9 @@ class FlashInferAttnBackend(AttentionBackend):
         )
         o.index_copy_(0, pl["fa2_tok"], o_fa2.view(-1, hq, hd).to(o.dtype))
 
+        # Counted here, ahead of the verify block below that reads it.
+        self.fused_split_calls += 1
+
         if FUSED_SPLIT_VERIFY and ref_wrapper is not None and kv_cache is not None:
             # Self-check against the ordinary planned wrapper, computed in THIS step on THESE
             # inputs. A server-level ON-vs-OFF text diff cannot settle this: greedy output
@@ -1618,7 +1628,7 @@ class FlashInferAttnBackend(AttentionBackend):
             err_fa2 = (
                 (o[pl["fa2_tok"]] - ref[pl["fa2_tok"]]).abs().max() / denom
             ).item()
-            self.fused_split_err = max(getattr(self, "fused_split_err", 0.0), err_all)
+            self.fused_split_err = max(self.fused_split_err, err_all)
             if err_all > FUSED_SPLIT_TOL:
                 logger.error(
                     "FUSED_SPLIT_VERIFY FAIL layer=%d err=%.5f (fa3=%.5f fa2=%.5f) "
@@ -1634,7 +1644,6 @@ class FlashInferAttnBackend(AttentionBackend):
         # Always-on composition counter. A serving A/B whose split never fired is
         # indistinguishable from a null result, and a counter logged only under a debug flag
         # has already produced one false pass on this project.
-        self.fused_split_calls = getattr(self, "fused_split_calls", 0) + 1
         if self.fused_split_calls % 500 == 1:
             logger.info(
                 "FUSED_SPLIT_CALLS %d (fa3_rows=%d fa2_rows=%d sm_margin=%d onesided=%d)",
@@ -1642,7 +1651,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 pl["n_fa3"],
                 pl["n_fa2"],
                 self.fused_sm_margin,
-                getattr(self, "fused_split_onesided", 0),
+                self.fused_split_onesided,
             )
         # The caller flattens to [-1, hq*hd]; hand back the head-shaped tensor.
         return o

@@ -9923,3 +9923,26 @@ FA3 side; the persistent side takes its masking from the `AttentionVariant` / ma
 KTraits or plan. Check whether the fused build instantiates the task0 Runner with a NON-causal
 variant while FA3 gets a causal one -- that asymmetry would be the whole bug, and it is a read of
 the Runner1 instantiation in `tests/fused_fa3_persistent_ext.cu`.
+
+**CONFIRMED IN SOURCE, and it is a one-token change.** `tests/fused_fa3_persistent_ext.cu:72-75`:
+```
+template <uint32_t CTA_TILE_Q, uint32_t NUM_MMA_KV>
+using PKT = FusedWarpgroupTraits<
+    KernelTraits<MaskMode::kNone, CTA_TILE_Q, fa2_mma_q<CTA_TILE_Q>(), NUM_MMA_KV, 8, 8,
+                 fa2_warps_q<CTA_TILE_Q>(), fa2_warps_kv<CTA_TILE_Q>(),
+                 PosEncodingMode::kNone, PDT, PDT, PDT, float, IdT, StandardAttention<false>>>;
+```
+Every persistent runner (all three q-tile classes) is instantiated with **`MaskMode::kNone`** -- no
+causal mask -- and `StandardAttention<false>`. The token-63 evidence predicted exactly this before I
+read it. The FA3 side is separate and built with `-DFLASHINFER_FA3_CAUSAL=1`, which is why it passes
+while task0 does not.
+Fix under test: `MaskMode::kNone` -> `MaskMode::kCausal` in `PKT`.
+Predictions, committed BEFORE the run:
+- task0 row 1 (qo=64) rel err should fall from ~0.98-1.04 to bf16 noise (~1e-3);
+- task2 row 2 should STAY passing (~8e-4): its single q token needs no mask, so a change there would
+  mean kCausal altered something it should not;
+- FA3 row 0 should stay ~0.007 (different code path entirely);
+- on fixture 1 (qo1=87) the 55 unwritten rows may REMAIN -- the mask explains wrong VALUES, not
+  missing writes, so a second fault is still possible and that outcome would not refute this fix;
+- if `StandardAttention<false>` also gates masking, rel err may only partially improve -- that would
+  point at the variant's own causal flag rather than at MaskMode.

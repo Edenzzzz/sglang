@@ -1654,6 +1654,12 @@ class EAGLEWorkerV2(BaseSpecWorker):
         result.mixed_running_result.accept_lens = accept_lens
         result.mixed_running_result.new_seq_lens = new_seq_lens
         result.mixed_running_result.bonus_tokens = bonus_tokens
+        # `_draft_extend_for_decode` reads `batch_result.next_draft_input.topk_p`, so the result must
+        # already carry one -- upstream's `run_eagle_verify` returns
+        # `next_draft_input=EagleDraftInput(bonus_tokens=bonus_tokens)` for exactly this.
+        result.mixed_running_result.next_draft_input = EagleDraftInput(
+            bonus_tokens=bonus_tokens
+        )
 
         # Both draft extends. Without them the next step has no draft input and the relay stash
         # fails on `payload.topk_p` being None (measured) -- the draft model must see this step's

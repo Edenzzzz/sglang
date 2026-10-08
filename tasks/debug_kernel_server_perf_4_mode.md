@@ -10403,3 +10403,23 @@ To fix, next session: find what registers `fa3_only_run` (a second TORCH_LIBRARY
 alongside). `grep -n "fa3_only_run\|TORCH_LIBRARY" tests/fused_fa3_persistent_ext.cu` is the first
 read. Until that arm runs, the per-executor baselines the goal asks for ("parity with each
 standalone SOTA kernel per role") are unmeasurable on this pod.
+
+**The per-executor baseline needs a THIRD tree on the pod: flash-attention.**
+`fa3_only_run` is registered only under `#if FLASHINFER_FA3_UPSTREAM` (`fused_fa3_persistent_ext.cu:506-510`),
+which the harness gates on `FA3_UPSTREAM=1` (`test_fused_server_batch.py:295`). Building with it set
+fails:
+```
+include/flashinfer/attention/hopper/fa3_upstream.cuh:31:10: fatal error:
+  ../../../../../flash-attention/hopper/utils.h: No such file or directory
+```
+That path resolves to a **sibling of the flashinfer root** (`<fi_parent>/flash-attention/hopper/`),
+i.e. outside the `flashinfer/ csrc/ include/ tests/` set I pushed, and outside `3rdparty/` which was
+cloned. Local source `/opt/tiger/flash-attention/hopper` is 3.2 M, so it pushes like the others.
+Pushing it to `/dev/shm/w/flash-attention` now (the include is relative to the fi root's parent,
+which is `/dev/shm/w`, so that is the correct destination).
+**Restore recipe for this pod is therefore FIVE steps, not four** -- add: push
+`flash-attention/hopper` as a sibling of `fi`. Without it the fused kernel builds and passes, but
+the per-executor FA3 baseline the goal asks for ("parity with each standalone SOTA kernel per role")
+cannot be built at all, so no speedup is computable.
+Until that lands: the kernel PASSES and the best measured fused time is 133.5 us at sm_split 112,
+but **no gain is demonstrated** and none should be quoted.

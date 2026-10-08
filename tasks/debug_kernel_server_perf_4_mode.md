@@ -409,17 +409,21 @@ Evaluation completeness (added 2026-10-08, user-requested):
         time is the slow way to find the rest -- install the dep LIST from its pyproject instead.
       - `pip install -e python/ --no-build-isolation` FAILS: upstream's build backend
         (`wheel_stub.buildapi`) is not installed.
-      - **upstream now needs torch >= 2.9** (`torchao` imports `ScalingType` from
-        `torch.nn.functional`, added in 2.9), while our fork pins **torch 2.8.0** because the fused
-        FA3+FA2 extension was built against it. So the ported extension must be REBUILT against
-        torch 2.9+, and that rebuild is part of the port, not a detail. A pure-upstream baseline
-        venv can simply take torch 2.9.
-      - **upstream's unpinned dep set does not resolve to a working environment.** pip picked a
-        `torchao` newer than ANY released torch (it imports `ScalingType` from
-        `torch.nn.functional`, absent in both 2.8.0 and 2.9.1). Known-good combination, found by
-        walking torchao releases and testing `import sglang` after each:
-        **torch 2.9.1+cu128 + torchao 0.14.1**. Re-validating on latest main therefore needs a
-        pinned dep set, not just the pyproject; four provisioning attempts were spent on this.
+      - **upstream main pins `torch==2.14.1`** (python/pyproject.toml:6), while our fork pins
+        **torch 2.8.0** because the fused FA3+FA2 extension was built against it. That is a SIX
+        minor-version jump, and the ported extension must be rebuilt against 2.14.1 -- a much larger
+        ABI move than a 2.8->2.9 bump, and the single biggest risk item in the port.
+        *CORRECTION (same day): an earlier version of this entry said "upstream needs torch >= 2.9"
+        and recorded torch 2.9.1 + torchao 0.14.1 as "known-good". That is WRONG. 2.9.1 lets
+        `import sglang` succeed but `sgl_kernel`'s prebuilt `common_ops.abi3.so` then fails with
+        `undefined symbol: _ZN3c104cuda19CUDAErrorLogCaptureC1Ev` -- the wheel is built for 2.14.
+        The lesson generalises: on this stack "imports cleanly" is NOT evidence of a working
+        environment, because the native extensions load later. Read the pin, do not bisect wheels.*
+      - **The dep set DOES resolve -- to upstream's own pin, `torch==2.14.1`.** Six provisioning
+        attempts were wasted holding torch at our fork's 2.8/2.9 and bisecting `torchao` and
+        `flashinfer` around it; every wheel pip chose (torchao, sgl_kernel) was built for 2.14, so
+        each "fix" moved the failure one import later. Install upstream's pinned torch FIRST and let
+        the rest follow.
       - the pod can `git clone` github directly, which is far faster than base64-pushing 15 MB
         through the webshell (that timed out at 900 s). Pin the clone to the commit the port was
         read against: upstream main moved `b7b2975b5` -> `54b551df8` within hours.

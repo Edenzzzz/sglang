@@ -424,11 +424,43 @@ Evaluation completeness (added 2026-10-08, user-requested):
         `flashinfer` around it; every wheel pip chose (torchao, sgl_kernel) was built for 2.14, so
         each "fix" moved the failure one import later. Install upstream's pinned torch FIRST and let
         the rest follow.
+      - **WORKING RECIPE for a current-upstream venv** (seven failed attempts preceded it; their
+        failure modes are listed above). The order is forced, not stylistic:
+        1. a CLEAN venv -- one that has held torch 2.8 then 2.9 then 2.14 is unrecoverable
+           (torchvision stays pinned to the old torch, and nccl mismatch surfaces as
+           `libtorch_cuda.so: undefined symbol: ncclCommResume`);
+        2. `pip install torch==2.14.1` from default PyPI so torch brings its own consistent
+           `nvidia-*` wheels (resolves to 2.14.1+cu130);
+        3. `pip install wheel_stub` -- upstream's build backend, needed by step 4;
+        4. `pip install --no-build-isolation <clone>/python` -- isolation OFF, because the backend
+           imports torch while GETTING requirements and isolation hides it.
+        Verify with `import sgl_kernel`, NOT `import sglang`: the former loads the native .so and is
+        the check that actually fails when the torch pin is wrong.
       - the pod can `git clone` github directly, which is far faster than base64-pushing 15 MB
         through the webshell (that timed out at 900 s). Pin the clone to the commit the port was
         read against: upstream main moved `b7b2975b5` -> `54b551df8` within hours.
 
-      **Port cost, measured 2026-10-08** (`git fetch --depth=1 upstream main`, head `b7b2975b5`):
+      **GATING CHECK ANSWERED 2026-10-08: upstream mixes a chunk with 1-token DECODE TAILS, not with
+verify rows -- so the 4-mode step is still our contribution.** Pinned upstream `b7b2975b5`, clean
+venv (recipe above), `--enable-mixed-chunk --chunked-prefill-size 2048 --speculative-algorithm
+EAGLE3 --speculative-num-draft-tokens 4`, 8 background decode rows plus 8 x 9 000-token prompts
+(`drivers/compcheck.sh`). Evidence from the server's own batch log:
+- **mixed chunked prefill DOES run under spec**: 36 `Prefill batch` lines carrying `#running-req`
+  3-8 (five steps at 8), with spec live (`accept len` 2.42-3.14).
+- **but `accept len` appears ONLY on the 9 `Decode batch` lines, never on a `Prefill batch` line.**
+  If a chunk and its verify rows shared one target forward, acceptance would be reported on that
+  step. Verification is therefore a separate forward, and the mixed prefill step carries its
+  running rows as 1-token tails -- matching `mix_with_running`'s spec branch, which gathers "each
+  tail's bonus slot at the committed length".
+*Caveat on strength:* this is an inference from log structure, not instrumented per-step token
+accounting. The definitive check logs `forward_batch.input_ids.shape[0]` against `#new-token` on a
+mixed step: a difference of `draft_token_num * #running-req` means verify rows. It agrees with the
+independent code read, so it is enough to proceed, and the instrumented version is worth one run
+during the port.
+**Consequence:** modes 1-3 (chunk, tail, draft extend) are upstream's; the 4-mode delta -- routing
+the chunk into the VERIFY forward -- is ours, and is what the serving win measured.
+
+**Port cost, measured 2026-10-08** (`git fetch --depth=1 upstream main`, head `b7b2975b5`):
       | file we patch | upstream state | diff vs ours |
       |---|---|---|
       | `layers/attention/flashinfer_backend.py` | exists, heavily changed | 2 280+ / 1 355- |

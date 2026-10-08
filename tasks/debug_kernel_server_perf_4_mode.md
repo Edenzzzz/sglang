@@ -9617,3 +9617,36 @@ for coverage questions only and its rel errs must be ignored. That is consistent
 documented register sensitivity (168 regs with ~4.4 KB spill).
 Re-running with the printf gated on non-empty ranges, which drops the volume ~100x and should fit
 the FIFO.
+
+### Work-item trace (non-empty ranges only): task0 items ARE executed — the gap is OUTPUT ADDRESSING
+
+`TRACE_WORK=1` with the printf gated on `work_indptr[c+1] > work_indptr[c]`:
+```
+[WI] tileQ=128 cls=0   range=[0,1)   n=1     [WI] tileQ=128 cls=243 range=[15,16) n=1
+[WI] tileQ=128 cls=6   range=[2,3)   n=1     [WI] tileQ=128 cls=244 range=[16,17) n=1
+[WI] tileQ=128 cls=60  range=[6,7)   n=1     [WI] tileQ=128 cls=248 range=[20,21) n=1
+[WI] tileQ=128 cls=61  range=[7,8)   n=1     [WI] tileQ=128 cls=249..254 ...
+[WI] tileQ=128 cls=62  range=[8,9)   n=1     [WI] tileQ=16  cls=59, 241, 242 ...
+```
+Three things established, all measured:
+1. **The task0 (tileQ=128) class HAS work items and Runner1 executes them** -- these printfs are
+   emitted from inside Runner1's work loop. One item per cluster, `work_idx` spanning 0..26.
+2. **The drain reaches cluster 243+**, so `n_clusters` (`num_pers_clusters`) is ~258, NOT the ~132
+   I had assumed from the H200's SM count when reasoning about coverage. Every cluster holding a
+   task0 item is therefore visited, which independently confirms the refutation above: coverage is
+   complete and the plan/drain mismatch is dead for a second, measured reason.
+3. **So the fault is in WHERE the executed items write, not in whether they run.** That is a
+   different code region from everything examined so far: the output/epilogue addressing in
+   Runner1's work-item handling (the `q_indptr` / `partial_o` / row-offset computation for a
+   tile128 work item), not the queue, the plan, the SM split, or the drain.
+
+Instrument caveat, unchanged and important: exactly 17 printf lines survived again, while
+`work_idx` up to 26 implies >= 27 task0 items, so the FIFO is still truncating and this list is a
+SAMPLE -- it proves items execute, it does NOT enumerate them. Raise
+`cudaLimitPrintfFifoSize` before drawing any count-based conclusion from it. And the printf build
+still corrupts FA3 numerics, so it stays coverage-only.
+
+Next: read Runner1's output addressing for a tile128 work item and compare the row offset it
+computes against the request's true `qo` span (424-510 for row 1). The suffix-written/prefix-NaN
+shape (479-510 written, 424-478 not) is what an offset computed from the wrong base, or a span
+clipped to the last tile, would produce.

@@ -214,6 +214,33 @@ fallbacks, every request completed.
   bipartite graph is not the bottleneck at 16 GPUs either. No congestion effect is measurable
   within the cap.
 
+**Narrowing the fabric makes congestion measurable within the GPU cap (point 4), 2026-10-08.**
+`ONE_NIC=1` pins every pod's store traffic to mlx5_1 instead of spreading over mlx5_1..4, cutting
+aggregate cross-node bandwidth ~4x (verified per worker from `/proc/<pid>/environ`:
+`MOONCAKE_DEVICE=mlx5_1`, `MC_MS_AUTO_DISC=0`). Same workload, same arm, 4 NICs vs 1:
+
+| coloc_rr_hc (the heaviest puller, ~12.6K batched gets) | 4 NICs | 1 NIC |
+|---|---|---|
+| agent TTFT ms mean / P99 | 9 982 / 37 938 | 9 861 / 34 510 |
+| chat TTFT ms mean / P99 | 5 163 / 38 004 | 4 787 / 31 849 |
+| agent ITL ms mean / **P99** | 20.1 / **110.7** | 21.9 / **358.1** |
+| chat ITL ms mean / **P99** | 20.7 / **153.6** | 21.5 / **351.4** |
+
+**Tails degrade 2.3-3.2x while means and TTFT are unchanged** -- the signature of link contention,
+not compute: a pull that queues behind others stalls one decode step badly rather than slowing
+every step. This is the regime point 4's argument is about, and it did not exist on the full
+fabric. The source-selection comparison (`coloc_cache_hc_1nic` deterministic best-holder vs
+`coloc_rand_hc_1nic` randomized among near-equal holders) runs on this narrowed fabric.
+*Caveat on scope:* this shows randomized selection can be tested, not that colocation scales
+better with node count. One NIC at 16 GPUs emulates per-link pressure, not a larger cluster's
+topology.
+
+A first attempt at this run was DISCARDED before use: the node script was pushed to the pods in
+the background while the arms launched, and the push is sequential, so the last pod's workers
+started on the old 4-NIC assignment (2 of 16 workers). The identical script mtime on every pod
+was misleading -- `tar` preserves mtimes, so it showed the local file's time, not extraction time.
+Later arms would have been fully pinned, making the A/B inconsistent.
+
 **The veto has to price TPOT, not TTFT (point 1, resolved 2026-10-08).** The hot-prefix holders'
 overload shows up as slow decode, not slow prefill, so a TTFT-only veto never fired on them. Two
 fixes, in order:

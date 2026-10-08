@@ -10977,3 +10977,29 @@ general shape of the error to avoid in the upstream port.
 The kernel's own correctness result is unaffected and transfers: it was obtained through the
 flashinfer harness with `FI_ROOT` only, no sglang in the loop (PASS on fixture 1, 1.30x over the
 unfused persistent kernel at sm_split 112).
+
+### Step 3 measured: the upstream re-pin is CHEAP, so do it before the kernel port — 2026-10-09
+
+Upstream main is now `3fef129ff` against our pin `b7b2975b5`: **46 commits** of drift
+(pin 2026-10-07 21:37 -> main 2026-10-08 12:54 PDT). Network reaches github from the dev box, so
+`git fetch upstream main` works locally.
+Conflict forecast, measured rather than assumed -- of the ~13 files `upstream_port` touches, only
+FIVE were changed upstream in those 46 commits, and only 1-2 commits each:
+```
+1 upstream commit : model_executor/forward_batch_info.py
+2 upstream commits: model_executor/runner/prefill_cuda_graph_runner.py
+1 upstream commit : speculative/eagle_draft_cuda_graph_runner.py
+1 upstream commit : speculative/eagle_worker_common.py
+2 upstream commits: speculative/eagle_worker_v2.py
+```
+`managers/scheduler.py`, `managers/schedule_batch.py`, `layers/logits_processor.py` and
+`model_executor/cuda_graph_buffer_registry.py` -- the files carrying the bulk of the 4-mode port --
+were NOT touched upstream in that window. So the rebase is tractable: a handful of localised
+conflicts in the spec-v2 files, which are exactly the ones whose upstream contracts the port already
+had to learn, so the conflicts should be legible rather than structural.
+Doing the re-pin FIRST is therefore the right order: it is cheap now and gets more expensive every
+day, and porting the kernel onto a 46-commit-stale base would mean doing the interface work twice.
+Note `mixed_dispatch.py` appears in the port's own diff -- it is a file WE added to upstream, not an
+upstream file, so the dispatch module is already across and the kernel port's remaining sglang-side
+surface is the backend hooks (`SGLANG_TWO_EXEC`, `SGLANG_FUSED_FA3_SM_SPLIT`) expressed against
+upstream's 2540-line `flashinfer_backend.py`.

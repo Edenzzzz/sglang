@@ -9682,3 +9682,26 @@ my instrumentation; find its guard, it is NOT `FLASHINFER_TRACE_WORK`). If `clus
 `cluster_size` (or `num_blks_x`) rather than `gridDim.x` under `FUSED_GRID`.
 Remember to raise `cudaLimitPrintfFifoSize` first -- the FIFO truncated at 17 lines twice, and this
 trace prints far more per item.
+
+### FIX APPLIED (under test): `cluster_tile_q` must not use `gridDim.x` under FUSED_GRID
+
+`persistent.cuh:327`, changed on the pod copy from
+`const uint32_t cluster_tile_q = gridDim.x * CTA_TILE_Q;` to
+`const uint32_t cluster_tile_q = (KTraits::FUSED_GRID ? 1u : gridDim.x) * CTA_TILE_Q;`
+
+Rationale, and why the asymmetry is the tell: `persistent_cluster_slot()` IS guarded
+(`FUSED_GRID ? 0u : blockIdx.x`, line 200) because the fused layout runs ONE CTA per cluster.
+`cluster_tile_q` three lines earlier is NOT guarded, so it still reads `gridDim.x` -- which in the
+fused kernel is the whole fused grid (measured: the drain reaches cluster 243+), overstating a
+cluster's q extent by ~130-260x. It feeds the causal kv bound (line 375) and the qo upperbound
+(line 416). The fused path was taught about the slot and not about this.
+My device printf was REVERTED in the same edit, so this run's rel errs are valid (the instrumented
+build corrupted FA3 from 0.0059 to 1.19).
+Under test now; the predictions to check against, so the result cannot be read loosely:
+- task0 row 1's rel err should drop from `nan` / ~1.0 toward bf16 noise (~1e-3);
+- the task2 decode row should stay PASS (its bound saturates at `kv_len` either way, so a change
+  there would mean the fix did something unintended);
+- FA3 row 0 should stay PASS at ~0.006 (it does not go through this code);
+- the 55 NaN rows may well REMAIN -- this candidate explains wrong VALUES, not missing writes, so
+  if they persist there is a second, independent fault and that is the expected outcome rather than
+  a failure of the fix.

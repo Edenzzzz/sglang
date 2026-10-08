@@ -1506,10 +1506,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
 
         import copy
 
-        from sglang.kernels.ops.speculative.eagle import (
-            fill_bonus_tokens_func,
-            prepare_verify_commit_outputs,
-        )
+        from sglang.srt.speculative.eagle_worker_common import run_eagle_verify
         from sglang.srt.managers.utils import GenerationBatchResult
         from sglang.srt.speculative.eagle_utils import (
             eagle_prepare_for_verify,
@@ -1581,89 +1578,33 @@ class EAGLEWorkerV2(BaseSpecWorker):
         # (eagle_sample reads batch.seq_lens and verify_input fields sized to that batch, not to
         # the merged one).
         running.forward_mode = ForwardMode.TARGET_VERIFY
-        predict, accept_lens, accept_index = eagle_sample(
-            verify_input, running, ver_out, None
+        # Hand-rolling sample + commit + result meant chasing every field upstream sets, one
+        # failed run each: accept_lens, new_seq_lens, bonus_tokens, next_draft_input, ... So run
+        # upstream's OWN verify with the merged forward's verify slice injected, and let it do
+        # the whole post-forward half.
+        running.spec_info = verify_input
+        ver_result = run_eagle_verify(
+            running,
+            target_worker=self.target_worker,
+            req_to_token_pool=self.req_to_token_pool,
+            token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
+            plan_stream=self.plan_stream,
+            plan_stream_ctx=self.plan_stream_ctx,
+            topk=self.topk,
+            num_draft_tokens=self.speculative_num_draft_tokens,
+            device=self.device,
+            metadata_ready_pre_pad=False,
+            finalize_tree_path=True,
+            precomputed_logits_output=ver_out,
         )
-
-        # Commit the accepted tokens. Without this the pool leaks: upstream reclaims REJECTED draft
-        # slots as overshoot from each request's committed seqlen ("trailing unaccepted slots stay
-        # and are freed as overshoot"), so a path that samples but never commits leaves those slots
-        # owned by nobody -- measured as `pool memory leak detected`, 36 tokens = 4 draft x 9 rows.
-        if predict.is_cuda and not running.forward_mode.is_idle():
-            new_seq_lens, bonus_tokens = prepare_verify_commit_outputs(
-                predict, accept_index, accept_lens, running.seq_lens
-            )
-        else:
-            new_seq_lens = running.seq_lens + accept_lens
-            accept_tokens = predict[accept_index]
-            bonus_tokens = torch.empty_like(accept_lens, dtype=torch.int32)
-            fill_bonus_tokens_func(
-                accept_tokens, accept_lens, bonus_tokens, accept_index.shape[1],
-                running.batch_size(),
-            )
-        running.seq_lens = new_seq_lens
-
-        # Prefill rows: is_verify=True returned raw logits, so sample them explicitly with the
-        # prefill batch's own sampling parameters.
-        # Sample with the PREFILL batch's own sampling_info (saved by mix_with_verify): the merged
-        # batch's covers chunk + verify rows, while pre_out holds only the chunk rows' logits.
-        # Sample the prefill half. A hand-built SimpleNamespace view does NOT work: the sampler
-        # reaches for a long tail of fields (seq_lens, then ngram_embedding_info, ...), and
-        # enumerating them is both fragile and a silent-wrong-answer risk if one is left merged-size.
-        # Reuse the REAL merged ForwardBatch and swap in only the prefill rows' sampling_info, which
-        # is the single field that must not be merged-size (pre_out holds just the chunk rows).
-        prev_si = fb.sampling_info
-        fb.sampling_info = merged.mixed_pre_sampling_info
-        try:
-            pre_next_token_ids = self.target_worker.model_runner.sample(pre_out, fb)
-        finally:
-            fb.sampling_info = prev_si
-
-        # TODO(needs one more GPU run): the two draft extends and the paired result.
-        #   - `_draft_extend_for_prefill(batch, ...)` for the chunk rows and
-        #     `_draft_extend_for_decode(running, running_output)` for the verify rows;
-        #   - return a GenerationBatchResult for the prefill half carrying the running batch's
-        #     result alongside it (the fork used `result.mixed_running_result`), so the scheduler
-        #     can process both halves of the step.
-        # Shapes for these are only observable with the server up; the commit above was written the
-        # same way and the leak is the check that it works.
-        # The scheduler expects a GenerationBatchResult, not a tuple (`'tuple' object has no
-        # attribute 'extra_keep_alive_refs'`). Return the PREFILL half's result and hang the verify
-        # half off it, mirroring the fork's `mixed_running_result`, so the scheduler can process
-        # both halves of the one step.
+        pre_next_token_ids = self.target_worker.model_runner.sample(pre_out, fb)
         result = GenerationBatchResult(
             logits_output=pre_out,
             next_token_ids=pre_next_token_ids,
             can_run_cuda_graph=False,
         )
         result.mixed_running_batch = running
-        # next_token_ids must be `predict` (the full n-wide draft prediction), exactly as
-        # `run_eagle_verify` returns it -- NOT the bonus token. `prepare_for_draft_extend` rebinds
-        # `input_ids` from this field and the eager runner takes
-        # `raw_num_tokens = input_ids.shape[0]`, so a 1-element bonus made the batch report 1 token
-        # while its other fields were built n-wide: `positions (dst 1, src 4)`. That mismatch was
-        # the symptom; four commits of resizing tensors were chasing it from the wrong end.
-        result.mixed_running_result = GenerationBatchResult(
-            logits_output=ver_out,
-            next_token_ids=predict,
-            accept_length_per_req_cpu=accept_lens.tolist(),
-            can_run_cuda_graph=False,
-        )
-        # `_draft_extend_for_decode` reads these off the result: `accept_lens` (it branches on
-        # `.is_cuda`), `new_seq_lens`, and the bonus tokens for the committed output.
-        result.mixed_running_result.accept_lens = accept_lens
-        result.mixed_running_result.new_seq_lens = new_seq_lens
-        result.mixed_running_result.bonus_tokens = bonus_tokens
-        # `_draft_extend_for_decode` reads `batch_result.next_draft_input.topk_p`, so the result must
-        # already carry one -- upstream's `run_eagle_verify` returns
-        # `next_draft_input=EagleDraftInput(bonus_tokens=bonus_tokens)` for exactly this.
-        result.mixed_running_result.next_draft_input = EagleDraftInput(
-            bonus_tokens=bonus_tokens
-        )
-
-        # Both draft extends. Without them the next step has no draft input and the relay stash
-        # fails on `payload.topk_p` being None (measured) -- the draft model must see this step's
-        # accepted tokens for the verify rows and the chunk's last token for the prefill rows.
+        result.mixed_running_result = ver_result
         with (
             draft_tp_context(self.draft_worker.draft_owns_attention),
             speculative_moe_backend_context(),
@@ -1691,47 +1632,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
             self.draft_worker._draft_extend_for_decode(
                 running, result.mixed_running_result
             )
-
-            if (
-                get_parallel().pp_size > 1
-                and not batch.forward_mode.is_idle()
-                and self.speculative_num_steps > 0
-            ):
-                # PP tail-draft: draft the NEXT round's chain now — earlier
-                # stages must have the tokens before running their half of the
-                # next verify forward, so drafting cannot wait for the next
-                # iteration. Mimic the head-of-iteration state draft() expects;
-                # the scheduler's forward isolation reverts these SB edits, and
-                # the chain rides out on batch_output.
-                batch.spec_info = batch_output.next_draft_input
-                batch.seq_lens = batch_output.new_seq_lens
-                batch.forward_mode = ForwardMode.DECODE
-                # eagle_prepare_for_verify left the verify tokens here; the
-                # head-of-iteration draft always sees None (the scheduler
-                # clears it), so mirror that state.
-                batch.input_ids = None
-                # Attention metadata planning reads the CPU copies; one D2H
-                # per round (TODO: async or upper-bound estimate).
-                batch.seq_lens_cpu = batch_output.new_seq_lens.to("cpu")
-                batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
-                with (
-                    draft_tp_context(self.draft_worker.draft_owns_attention),
-                    speculative_moe_backend_context(),
-                    speculative_moe_a2a_backend_context(),
-                    spec_stage_span("draft"),
-                ):
-                    next_verify_input, parent_list, top_scores_index = (
-                        self.draft_worker.draft(batch, with_topology=True)
-                    )
-                batch_output.next_verify_chain = next_verify_input.draft_token
-                # The tree shape is data-dependent once topk > 1, so the other
-                # stages cannot re-derive it; relay it alongside the tokens.
-                # clone(): both come out of cuda-graph-owned buffers under
-                # decode replay and would be overwritten before the relay.
-                batch_output.next_verify_parent_list = parent_list.clone()
-                batch_output.next_verify_top_scores_index = top_scores_index.clone()
-
-            return batch_output
+        return result
 
     def _forward_prefill_batch(
         self, batch, on_publish=None, pp_proxy_tensors=None, coordination_plan=None

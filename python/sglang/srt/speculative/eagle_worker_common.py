@@ -578,6 +578,7 @@ def run_eagle_verify(
     pp_proxy_tensors: Optional[PPProxyTensors] = None,
     grammar_barrier=None,
     uno_target_max_top_k: Optional[int] = None,
+    precomputed_logits_output: Optional[Any] = None,
 ) -> GenerationBatchResult:
     """Shared verify step: target-verify forward, sampling, acceptance bookkeeping.
 
@@ -591,6 +592,10 @@ def run_eagle_verify(
       the front of each per-req block for topk > 1; multi-layer has never run
       this compaction.
     """
+    # 4-mode step: the caller already ran ONE target forward over [prefill chunk | verify rows] and
+    # passes the verify rows' slice here, so the prepare + forward below are skipped and ONLY the
+    # post-forward half runs (sample, accept, commit, bonus tokens, next_draft_input, mamba hooks).
+    # Hand-rolling that half meant discovering each field it sets one failed run at a time.
     fwd_stream = torch.get_device_module(device).current_stream()
     verify_input: EagleVerifyInput = batch.spec_info
     record_stream_for_v2_verify(batch, verify_input, fwd_stream)
@@ -669,13 +674,16 @@ def run_eagle_verify(
     # eagle_prepare_for_verify marked the batch in exactly that case; the
     # non-cuda-graph path stays unmarked and gets forward_extend's init
     # (post-pad).
-    forward_batch_output = target_worker.forward_batch_generation(
-        batch=None,
-        forward_batch=verify_forward_batch,
-        is_verify=True,
-        pp_proxy_tensors=pp_proxy_tensors,
-    )
-    logits_output = forward_batch_output.logits_output
+    if precomputed_logits_output is not None:
+        logits_output = precomputed_logits_output
+    else:
+        forward_batch_output = target_worker.forward_batch_generation(
+            batch=None,
+            forward_batch=verify_forward_batch,
+            is_verify=True,
+            pp_proxy_tensors=pp_proxy_tensors,
+        )
+        logits_output = forward_batch_output.logits_output
 
     # Generate vocab mask for constrained decoding
     grammar_mask = None

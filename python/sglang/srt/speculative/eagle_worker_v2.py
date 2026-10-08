@@ -1667,19 +1667,11 @@ class EAGLEWorkerV2(BaseSpecWorker):
             result.next_draft_input = self.draft_worker._draft_extend_for_prefill(
                 batch, pre_out.hidden_states, pre_next_token_ids
             )
-            keep = (
-                torch.arange(n, device=accept_lens.device).unsqueeze(0)
-                < accept_lens.unsqueeze(1)
-            )
-            if running.out_cache_loc is not None and running.out_cache_loc.numel() == bs_v * n:
-                running.out_cache_loc = running.out_cache_loc.view(bs_v, n)[keep]
-            # The verify rows' draft extend consumes one slot per ACCEPTED token, while
-            # `eagle_prepare_for_verify` left these n-wide (n = draft tokens). Narrowing
-            # `out_cache_loc` alone left exactly one slot mismatching -- `positions (dst 1, src 4)`
-            # -- so build `positions` accept-wide too: row i's accepted tokens sit at
-            # [new_seq_len - accept_len, new_seq_len). (Commit 19 did the out_cache_loc half and was
-            # wrongly reverted in commit 20 on the strength of `positions=None` at this point;
-            # running BOTH the narrowing and the slot-name diagnostic together is what settled it.)
+            # No tensor narrowing here. Once `next_token_ids = predict` makes the draft-extend batch
+            # report n tokens (raw_num_tokens = input_ids.shape[0]), EVERY field is correctly n-wide
+            # and the earlier out_cache_loc narrowing (commits 19/21) becomes the bug -- the two are
+            # mutually exclusive, and keeping both active reproduced the same shape error from the
+            # opposite side.
             # positions: NOT settable here -- `prepare_for_draft_extend` overwrites it n-wide
             # unconditionally (assigning it accept-wide was a no-op; the mismatch stayed
             # `positions (dst 1, src 4)`). So the n-wide field is intended, and the real

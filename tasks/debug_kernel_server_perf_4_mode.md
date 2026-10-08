@@ -10595,3 +10595,23 @@ Three ways out, in order of preference:
 Do (1). And record the general lesson: restoring a tree from a LOCAL copy can satisfy the build and
 still mismatch the consumer; the manifest check in [[pod-tree-verify-manifest]] should compare
 VERSIONS of the two trees against each other, not just confirm both import.
+
+**Option (1) is NOT viable: the skew is systemic.** Guarding the first missing symbol
+(`trtllm_mxint4_block_scale_moe`) immediately exposed a second from a different module --
+`ImportError: cannot import name 'fp8_blockscale_gemm_sm90' from 'flashinfer.gemm'` -- so the fork's
+sglang expects a materially newer flashinfer across several subpackages, not one optional scheme.
+Guarding them individually would be whack-a-mole and would leave the serving arm running against a
+patched tree of unknown fidelity, which is worse than no number.
+**Revised plan, and the likely shape of the pod's original setup:** `/dev/shm/w/fi` was probably a
+NEWER flashinfer (pip-installed or a newer checkout) with our fused-kernel sources overlaid in
+`tests/` -- that reconciles "sglang needs new flashinfer APIs" with "the fused kernel builds from
+`tests/fused_fa3_persistent_ext.cu`". My restore pushed only the older local tree, satisfying the
+kernel build while breaking the sglang consumer.
+So: install a flashinfer release new enough for the fork's sglang INTO the fork venv (the pod has
+network), and keep `/dev/shm/w/fi` as the `FI_ROOT` the kernel harness builds from -- the two roles
+are separate (`PYTHONPATH` for sglang's imports vs `FI_ROOT`/`extra_include_paths` for nvcc). Verify
+after: `import sglang` succeeds, AND the kernel test still PASSES from `FI_ROOT`, AND the server log
+shows `mixed_fused_fa3=N(xx%)`.
+What is NOT affected by any of this: the kernel results above were produced entirely through the
+harness with `FI_ROOT=/dev/shm/w/fi` and no sglang involvement, so the PASS and the 1.30x stand
+regardless of how the serving import path is resolved.

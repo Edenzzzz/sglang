@@ -10615,3 +10615,31 @@ shows `mixed_fused_fa3=N(xx%)`.
 What is NOT affected by any of this: the kernel results above were produced entirely through the
 harness with `FI_ROOT=/dev/shm/w/fi` and no sglang involvement, so the PASS and the 1.30x stand
 regardless of how the serving import path is resolved.
+
+### [x] RETRACTION + FIX: the "flashinfer/sglang version skew" was MY OWN PYTHONPATH shadowing
+
+`pip list` in BOTH venvs shows **`flashinfer-python 0.7.0.post1`**, and that pip copy HAS both
+symbols (`hasattr(flashinfer.gemm, "fp8_blockscale_gemm_sm90") == True`,
+`hasattr(flashinfer.fused_moe, "trtllm_mxint4_block_scale_moe") == True`). So there is **no version
+skew in the project**. The pod's topology is:
+- **pip-installed flashinfer 0.7.0.post1** -> what sglang imports at runtime;
+- **`/dev/shm/w/fi`** -> `FI_ROOT` for the KERNEL build only (nvcc include paths and
+  `SGLANG_FUSED_FA3_SRC`), never on `PYTHONPATH`.
+The driver had `PYTHONPATH=/dev/shm/w/python:/dev/shm/w/fi`, so my restored (older) tree SHADOWED the
+pip install and sglang lost APIs that were present all along. Fixes: reverted the MoE import guard
+(it treated a symptom), and dropped `/dev/shm/w/fi` from `PYTHONPATH` in both arms of
+`srv_two_exec_ab.sh`. **The previous entry's "upgrade flashinfer" plan is RETRACTED** -- following it
+would have replaced a working pip install and risked the local-only fused-kernel tree for no reason.
+Verified after the fix:
+```
+PYTHONPATH=/dev/shm/w/python python -c 'import sglang, flashinfer'
+-> sglang      /dev/shm/w/python/sglang            (fork tree)
+-> flashinfer  .../venv/lib/python3.12/site-packages/flashinfer   (pip 0.7.0.post1)
+```
+and the fork server now starts: `Application startup complete`, `Uvicorn running on
+http://127.0.0.1:31000`, `GET /model_info 200 OK` (`/dev/shm/w/srv_base.log`).
+**Lesson, sharper than the earlier manifest note:** when a tree serves two roles (import path vs
+build root), restoring it into the IMPORT path can break a consumer that was happily using a
+packaged copy. Check which flashinfer `import flashinfer` actually resolves to before blaming
+versions -- `os.path.dirname(flashinfer.__file__)` is the one-line check that would have saved this
+detour.

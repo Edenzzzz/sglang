@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.25.4 — Serving path unblocked; the "version skew" was PYTHONPATH shadowing (2026-10-09)
+
+- RETRACTED the version-skew diagnosis. Both venvs already have `flashinfer-python 0.7.0.post1` with
+  the symbols sglang needs; the driver's `PYTHONPATH=/dev/shm/w/python:/dev/shm/w/fi` let the older
+  restored tree shadow the pip install. Dropped `fi` from `PYTHONPATH` (it is only needed as
+  `FI_ROOT` for the kernel build) and reverted the symptom-treating import guard.
+- The fork server with the split kernel now starts (`Application startup complete`, Uvicorn on
+  :31000), so the serving A/B can run.
+
 ## v0.25.3 — Serving A/B blocked on a flashinfer/sglang version skew (2026-10-09)
 
 - With the venv repaired, `srv_two_exec_ab.sh` runs but the server dies at import:

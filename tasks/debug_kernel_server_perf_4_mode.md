@@ -8656,3 +8656,39 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   match while outputs diverge, it is downstream in accept/commit/draft-extend. Prime suspects for a
   multi-row-only fault: per-row ordering in `mix_with_verify`'s widening, and anything indexed as
   though there were a single verify row.
+
+- **CORRECTION to the bullet above (same day): the `ver_rows > 1` nondeterminism is NOT a defect,
+  and calling it "unconfounded" was wrong.** The checksum diagnostic settles it in one pair of runs
+  (`portcorr3.sh 1 p` / `1 q`, 5 mixed steps each, 0 tracebacks):
+
+  | per mixed step | run p | run q | |
+  |---|---|---|---|
+  | `pre_logits_sum` (all 5 steps) | -260182.92, -343168.63, 165197.42, -317355.38, -276766.63 | **identical** | prefill half is deterministic |
+  | `ver_logits_sum` | -772890.1, -445390.1, -3024070.0, ... | -344340.4, -2091862.5, -4305244.5, ... | differs |
+  | `running.seq_lens` at the step | `[1541]`, `[2563,...]`, `[4957,...]` | `[1545]`, `[2566,...]`, `[4966,...]` | **differs by ~4 = num_draft_tokens** |
+
+  The verify rows are at DIFFERENT decode positions when the merge happens -- one extra accepted
+  batch had landed in run q before the long prompt's chunk arrived. So the step's inputs genuinely
+  differ between runs; identical `pre_logits_sum` proves the forward itself is reproducible given
+  the same inputs. And this explains the control's zero noise floor without any appeal to a bug:
+  in the control, decode rows are NEVER merged with a prefill chunk, so when the prefill interleaves
+  cannot perturb the decode tokens. In the 4-mode arm it necessarily can.
+  My error was treating "control is deterministic" as proof that the arms are comparable; the
+  control is deterministic for a reason that does not transfer.
+
+  **Consequence: greedy-token equality cannot validate this feature under ANY concurrent workload.**
+  The merge point is timing-dependent by construction, so the one-verify-row agreement in
+  `portcorr2` was luck of a short window, not a stronger guarantee. Both of this file's greedy
+  comparisons are therefore screens for crashes and gross faults only.
+
+- **[ ] Build gate (b), the batching-invariant correctness gate** -- the only one that can settle
+  this. Inside ONE run, per mixed step, compare the merged forward's verify-row logit slice against
+  a reference computed for the SAME inputs by the normal (unmerged) verify forward, and report
+  per-row relative error; gate on it the way `SGLANG_SPLIT_VERIFY` gates the split kernel
+  (that precedent: 0.003-0.004 rel err = bf16 noise, ~4.0 = a real fault). Self-contained per step,
+  so timing cannot confound it. Sketch: under `SGLANG_MIXED_VERIFY_CHECK=1`, after
+  `eagle_prepare_for_verify` has built the verify batch, run `target_worker.forward_batch_generation`
+  on it separately and diff against `ver_out.next_token_logits`. Costs one extra forward per mixed
+  step and rewrites the same KV slots with the same values; gate-only, never on by default.
+  Until this exists, **no perf number for the 4-mode step on upstream is worth recording** -- and
+  none has been taken.

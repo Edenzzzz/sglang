@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.18.1 — Long context at a 20 ms chunk budget clears 30% on every metric (2026-10-08)
+
+- 3 rounds, 64-96K TraceLab + chat 12/s, vs stock MTP at its own best chunk: throughput +45.0% /
+  +43.3%, TTFT -85.3% / -39.6%, mean ITL -53.2% / -52.4%, **P99 ITL -32.9% / -48.0%** (chat /
+  codex). The earlier -29.7% chat P99 miss at a 47 ms budget was budget tuning, not a ceiling.
+- Chat P99 ITL saturates near 112 ms for 20-30 ms budgets; codex keeps improving to 78 ms.
+
 ## v0.18.0 — The SLO veto prices decode, not just prefill (2026-10-08)
 
 - Hot-prefix workload (4 groups sharing 16K prompts, H20 16 GPUs): a TTFT-only veto never fired on

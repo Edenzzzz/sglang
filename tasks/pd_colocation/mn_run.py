@@ -80,7 +80,7 @@ def run_arm(arm):
     # bench_serving APPENDS to its output file and mn_summary reads the last line, so a stale
     # directory would let a failed arm report the previous run's numbers.
     C.run_all(f"rm -rf {log}")
-    env = f"KERNEL={os.environ.get('KERNEL', 'lpt')} EDF={int(edf)} SPEC={int(spec)} TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')}"
+    env = f"ONE_NIC={os.environ.get('ONE_NIC', '0')} KERNEL={os.environ.get('KERNEL', 'lpt')} EDF={int(edf)} SPEC={int(spec)} TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')}"
     if hc:
         rc, out = C.run(0, f"mkdir -p {log}; ip=$(hostname -I | tr ' ' '\\n' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1); "
                            "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\"); "

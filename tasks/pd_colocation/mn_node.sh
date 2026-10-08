@@ -57,7 +57,16 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # replication happening as a side effect of serving rather than as a migration step.
   if [ -n "${HC_MASTER:-}" ]; then
     export MOONCAKE_MASTER=$HC_MASTER LOCAL_HOSTNAME=$SGLANG_HOST_IP MOONCAKE_PROTOCOL=rdma
-    export MOONCAKE_DEVICE=mlx5_$(( 1 + (ROLE * 2 + g) % 4 )) MOONCAKE_GLOBAL_SEGMENT_SIZE=${HC_SEGMENT:-32gb}
+    # ONE_NIC=1 pins every pod's store traffic to a single back-end NIC instead of spreading over
+    # mlx5_1..4. At 16 GPUs on 4 hosts the 4-NIC fabric showed no contention (~236 GB moved, no
+    # measurable effect), so point 4's congestion claim had nothing to bite on; this narrows
+    # aggregate cross-node bandwidth ~4x to make source selection observable within the GPU cap.
+    if [ "${ONE_NIC:-0}" = 1 ]; then
+      export MC_MS_AUTO_DISC=0 MOONCAKE_DEVICE=mlx5_1
+    else
+      export MOONCAKE_DEVICE=mlx5_$(( 1 + (ROLE * 2 + g) % 4 ))
+    fi
+    export MOONCAKE_GLOBAL_SEGMENT_SIZE=${HC_SEGMENT:-32gb}
     ARGS+=(--enable-hierarchical-cache --hicache-storage-backend mooncake)
   fi
   # Worker-side EDF: deadline-ordered admission with no chunk cap (no latency model), the

@@ -288,7 +288,22 @@ Workload and serving:
       MTP's best configuration, every metric clears 30% except chat P99 ITL, which misses by 0.3
       points (-29.7%). Against stock at chunk 2 048 both P99s clear it (-31.5% / -33.0%). The cost is
       TTFT: these chunks are small at long prefixes (the 1 024 floor), so codex TTFT keeps only
-      -35%. The budget is the knob trading TTFT for tail ITL. **It is not a safe default:** at short context
+      -35%. The budget is the knob trading TTFT for tail ITL.
+      **Tightening the budget clears the bar on every metric, 3 rounds at 20 ms**
+      (`SGLANG_CHUNK_MS_BUDGET=20`, `TAG=_long_ms20{,_r2,_r3}`, 0 fallbacks, all completed). The
+      -29.7% chat P99 miss above was a budget-tuning artefact, not a ceiling:
+
+      | metric (3-round mean) | stock MTP @8192 (its best) | full stack, 20 ms budget | change |
+      |---|---|---|---|
+      | chat / codex output tok/s | 586.6 / 140.0 | 850.8 / 200.6 | **+45.0% / +43.3%** |
+      | chat / codex TTFT ms | 54 242 / 37 095 | 7 947 / 22 424 | **-85.3% / -39.6%** |
+      | chat / codex mean ITL ms | 67.1 / 36.7 | 31.4 / 17.5 | **-53.2% / -52.4%** |
+      | chat / codex P99 ITL ms | 167.9 / 150.9 | 112.7 / 78.4 | **-32.9% / -48.0%** |
+
+      Chat P99 ITL plateaus near 112 ms for budgets of 20-30 ms (118 ms at 47), so -33% is where
+      that metric saturates; codex keeps improving (105 -> 78 ms). Sweep, one run each: budget 47 /
+      30 / 20 gives chat P99 118.1 / 112.3 / 112.5 and codex P99 105.4 / 91.2 / 70.2 ms, with codex
+      throughput 191.6 / 175.1 / 199.2 tok/s -- the 30 ms dip is round noise, not a trend. **It is not a safe default:** at short context
       (chat 24/s, ITL 30 ms, `TAG=_itl30_ms`, one round) it REGRESSES. Chat SLO 0.641 vs 0.714-0.750, chat
       TTFT 286 vs ~180 ms, codex TTFT 2 184 vs ~1 450 ms. The ~2K chunk at prefix 0 splits short-context
       prefill into more fixed-cost mixed steps, the same mechanism that sank EDF's chunk cap. The

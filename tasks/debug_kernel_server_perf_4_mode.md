@@ -9044,3 +9044,34 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   Re-running with upstream's own `generated-shared-prefix` (6 groups x 8 prompts, 8192-token shared
   system prompt) as the long-context arm plus the chat stream, both arms on triton (the backend
   where the verify rows reproduce the production argmaxes).
+
+- **[x] FIRST VALID BASELINE NUMBERS on upstream (arm 0), and the 4-mode arm CRASHES on this
+  workload (2026-10-08).** `perfab.sh <arm> g`, upstream `b7b2975b5` + port 57, `venv_up`,
+  one H200, `--attention-backend triton`, EAGLE3 MTP (3 steps, topk 1, 4 draft tokens),
+  `--enable-mixed-chunk --chunked-prefill-size 2048`. Workload: `generated-shared-prefix`
+  (6 groups x 8 prompts, 8192-token shared system prompt, 64 out) + `random-ids` chat
+  (512 in / 128 out, 400 prompts, 8/s), released together.
+
+  | arm | stream | completed | mean TTFT | p99 TTFT | mean ITL | p99 ITL | out tok/s |
+  |---|---|---|---|---|---|---|---|
+  | **0 (baseline: upstream mixed-chunk + spec)** | agent (gsp) | 48 | 116.4 ms | 475.9 ms | 9.84 ms | 48.3 ms | 37.1 |
+  | **0 (baseline)** | chat | 400 | 53.5 ms | 286.4 ms | 7.18 ms | 36.4 ms | 741.4 |
+  | 1 (`SGLANG_MIXED_SPEC=1`) | — | — | **server crashed** | | | | |
+
+  Baseline: 0 tracebacks, 0 fallbacks. **This is the reference the 4-mode arm has to beat by 30%
+  TTFT/ITL and 10% throughput; there is still no ON-arm number.**
+
+  The ON arm died in `cuda_graph_buffer_registry.fill_from` -> `_grouped_foreach_copy_` ->
+  triton `_small_copy_kernel`, reached from the ORDINARY `verify()` path
+  (`eagle_worker_v2.py:1397`), during warmup. `FILL_DEBUG mismatch: []` means **no shape
+  mismatch**, so it is a kernel-launch/CUDA-level failure, not a field-width bug -- a different
+  failure from everything above, and it does not reproduce in `portcorr3.sh` (5 mixed steps,
+  0 tracebacks on the same build). The difference is the workload: 8192-token shared prefixes and
+  48 concurrent gsp rows vs 3 background rows.
+
+  **Caveat that invalidates my own guard:** the driver printed "mixed-gate fires: 0" for both arms,
+  but `MIXEDGATE` only logs under `SGLANG_DBG_DRAFT_COPY=1`, which `perfab.sh` deliberately does not
+  set (it would skew timings). So that count is meaningless here and the ON arm may well have taken
+  the mixed path before crashing. The gate-exercised check needs a counter that is ALWAYS on and
+  cheap (a scheduler-side integer reported at the end), not a debug log line. Fix that before the
+  next A/B, or the same "it passed but ran nothing" trap recurs a fourth time.

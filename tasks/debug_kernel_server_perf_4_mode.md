@@ -10512,3 +10512,31 @@ about the fused kernel on a realistic serving workload, and Path A is the only o
 the split kernel at all -- Path B measures the 4-mode scheduling change with upstream's own
 attention. Path A's blocker is a dependency version to pin, which is bounded work; Path B's is an
 unreproduced crash in a code path we do not control. Do A, keep B as the scheduling-only arm.
+
+### [x] PATH A UNBLOCKED: the fork venv's torch now imports — it was an nccl library mismatch
+
+Diagnosis chain (each step a read or a one-line check, no guessing):
+1. The fork venv's torch is **2.14.1+cu130** -- the SAME build as `venv_up`, so this was never an
+   "old fork torch" problem.
+2. `nm -D --defined-only .../nvidia/nccl/lib/libnccl.so.2 | grep -c ncclCommResume`: **0** in the
+   fork venv, **2** in `venv_up`. The fork venv has both `nvidia-nccl-cu12 2.27.5` and
+   `nvidia-nccl-cu13 2.30.7` installed to the SAME path, and the cu12 build (which predates that
+   symbol) had won.
+3. `LD_LIBRARY_PATH` pointing at `venv_up`'s copy does NOT help -- torch resolves nccl through its
+   own RPATH, so the bundled file must be replaced, not shadowed.
+Fix applied on the pod: backed up `libnccl.so.2` as `libnccl.so.2.bak` and copied `venv_up`'s cu13
+build over it. Result: `torch OK 2.14.1+cu130 cuda_avail= True`.
+```
+cd /dev/shm/w/venv/lib/python3.12/site-packages/nvidia/nccl/lib
+cp -a libnccl.so.2 libnccl.so.2.bak
+cp -f /dev/shm/w/venv_up/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2 libnccl.so.2
+```
+Add this to the pod restore recipe (now six steps). Note for later: the clean fix is
+`pip uninstall nvidia-nccl-cu12` in that venv rather than a file copy, but the copy is verified
+working and does not touch the resolver.
+**This opens the serving A/B on the fork**, which is the arm that exercises the split kernel and has
+the tracelab dataset -- the only path that can address the goal's >=30% TTFT/ITL + >=10% throughput
+bar on a realistic workload. Next: launch the fork server with the split kernel enabled
+(`SGLANG_TWO_EXEC` / `SGLANG_FUSED_FA3_SM_SPLIT`), confirm `mixed_fused_fa3=N(xx%)` in the log and
+the fallback count ([[fused-ab-validity-rule]]), run `drivers/srv_correctness.py`, then the
+chat+tracelab A/B against the same build with the split off.

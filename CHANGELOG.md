@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.25.1 — Fork venv repaired: nccl library mismatch, serving A/B path unblocked (2026-10-09)
+
+- The fork venv's `import torch` failure (`undefined symbol: ncclCommResume`) was an nccl build
+  conflict: both `nvidia-nccl-cu12 2.27.5` and `cu13 2.30.7` install to the same path and the cu12
+  build (lacking that symbol) had won. `LD_LIBRARY_PATH` cannot fix it -- torch resolves nccl via
+  RPATH -- so the bundled `libnccl.so.2` was replaced with the cu13 build (original kept as .bak).
+- `torch OK 2.14.1+cu130, cuda_avail=True`. This unblocks the fork serving A/B, the only arm that
+  exercises the split kernel and has the tracelab dataset.
+
 ## v0.25.0 — First validated kernel speedup: fused 1.30x over the unfused persistent kernel (2026-10-09)
 
 - `TIME_BASELINE=1` provides a like-for-like baseline (the harness plans a separate 3-task object

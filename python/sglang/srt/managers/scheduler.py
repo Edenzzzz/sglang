@@ -4558,6 +4558,26 @@ class Scheduler(
                             _mix_run.req_pool_indices, _mix_res.new_seq_lens
                         )
                         _mix_run.spec_info.future_indices = _mix_run.req_pool_indices
+                        # Stash the verify half's relay payload, or next iter's
+                        # resolve_forward_inputs for this batch finds nothing to resolve.
+                        self._relay_forward_payload(
+                            _mix_run, _mix_run.req_pool_indices, _mix_res
+                        )
+                        # ... and give it the same D2H as the batch that ran:
+                        # _resolve_spec_v2_tokens asserts next_token_ids.is_cpu.
+                        _mix_res.copy_done = self.device_module.Event()
+                        if _is_hip:
+                            _mix_res.copy_to_cpu(
+                                return_logprob=_mix_run.return_logprob,
+                                return_hidden_states=_mix_run.return_hidden_states,
+                            )
+                        else:
+                            self.copy_stream.wait_stream(self.forward_stream)
+                            with self.copy_stream_ctx:
+                                _mix_res.copy_to_cpu(
+                                    return_logprob=_mix_run.return_logprob,
+                                    return_hidden_states=_mix_run.return_hidden_states,
+                                )
             elif self.enable_pdmux and batch.forward_mode.is_split_prefill():
                 resolve_forward_inputs(batch, self.future_map)
                 batch_result = self.tp_worker.forward_batch_split_prefill(batch)

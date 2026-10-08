@@ -10262,3 +10262,36 @@ the emitted work items for a causally-confined group. `CopyToPageLockedBuffer(..
 near `scheduler.cuh:1893` is the write; the value's provenance is the thing to read.
 Separately, the 3-chunk weighting error (rel err 0.51436, every row written) lives in the merge body
 AFTER this gate and still needs its own fix.
+
+### [!] RETRACTION OF A REFUTATION: `cluster_tile_q` WAS the right fix, tested on the wrong fixture
+
+The kernel computes the chunk count causally (`persistent.cuh:372-378`):
+```
+num_kv_chunks = ceil_div(
+    CAUSAL ? min((kv_len - q_len) + ceil_div(packed_qo_start + cluster_tile_q, gqa_group_size), kv_len)
+           : kv_len,
+    len_kv_chunk);
+```
+while the PLAN counts geometrically (`scheduler.cuh:1619,1631`):
+`num_kv_tiles = ceil_div(remaining_len, kv_len_limit)` -> `group_nchunks.push_back(num_kv_tiles)`.
+The kernel's expression depends on **`cluster_tile_q`** -- the value I showed is UNGUARDED under
+`FUSED_GRID` (`gridDim.x * CTA_TILE_Q`, with gridDim.x the whole fused grid, ~130-260x too large).
+That inflation saturates the `min()` at `kv_len`, so `num_kv_chunks` collapses to the geometric
+maximum for EVERY tile -- which is precisely why the trace read `nchunks=2` even for the tile with
+`kv_end=37`, and why causally-confined rows take the split path and then never complete the merge.
+
+**So candidate 7 (`cluster_tile_q = (FUSED_GRID ? 1u : gridDim.x) * CTA_TILE_Q`) was correct, and my
+refutation of it was invalid**: I tested it only on the `qo=64 / kv=64` fixture, which is
+SINGLE-CHUNK, where `cluster_tile_q` cannot affect anything (the min saturates either way and
+`ceil_div(<=64, 64) = 1`). Rel err stayed ~1.0 there because the MASK bug was still present -- the
+mask fix came later. Testing a fix on a fixture that cannot exercise it, and reading "no change" as
+refutation, is the same error class as the earlier `rel err = nan` masking (a metric that could not
+respond to the hypothesis).
+With `cluster_tile_q = CTA_TILE_Q = 128` the predicted behaviour on fixture 1's row 1 is:
+- `packed_qo_start=128`: bound `ceil(256/7) = 37` -> `num_kv_chunks = 1` -> WRITE-THROUGH (written);
+- `packed_qo_start=384`: bound `ceil(512/7) = 74` -> `num_kv_chunks = 2` -> split path (merged).
+i.e. exactly the rows that are currently NaN would switch to the write-through path that the mask
+fix already proved correct.
+Re-applying it and testing on FIXTURE 1 this time. Predictions: unwritten 55 -> 0; row 1 rel err
+from `nan` to ~1e-3; FA3 and task2 unchanged. If unwritten goes to 0 but rel err lands near 0.5,
+the remaining error is the separate 3-chunk merge weighting defect, already recorded.

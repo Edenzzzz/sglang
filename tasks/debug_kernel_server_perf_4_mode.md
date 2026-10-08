@@ -303,7 +303,12 @@ Workload and serving:
       Chat P99 ITL plateaus near 112 ms for budgets of 20-30 ms (118 ms at 47), so -33% is where
       that metric saturates; codex keeps improving (105 -> 78 ms). Sweep, one run each: budget 47 /
       30 / 20 gives chat P99 118.1 / 112.3 / 112.5 and codex P99 105.4 / 91.2 / 70.2 ms, with codex
-      throughput 191.6 / 175.1 / 199.2 tok/s -- the 30 ms dip is round noise, not a trend. **It is not a safe default:** at short context
+      throughput 191.6 / 175.1 / 199.2 tok/s -- the 30 ms dip is round noise, not a trend.
+      **Short context still regresses at 20 ms** (chat 24/s, `TAG=_itl30_ms20`, one round): chat SLO
+      0.626 vs 0.714-0.750 unbudgeted, chat TTFT 311 vs ~180 ms, codex TTFT 2 480 vs ~1 450 ms --
+      slightly worse than the 47 ms budget's 0.641. So the predicted-time budget stays a
+      long-context-only setting, and a deployment serving both shapes on one node needs the budget
+      gated on the batch's actual prefix lengths rather than set globally. **It is not a safe default:** at short context
       (chat 24/s, ITL 30 ms, `TAG=_itl30_ms`, one round) it REGRESSES. Chat SLO 0.641 vs 0.714-0.750, chat
       TTFT 286 vs ~180 ms, codex TTFT 2 184 vs ~1 450 ms. The ~2K chunk at prefix 0 splits short-context
       prefill into more fixed-cost mixed steps, the same mechanism that sank EDF's chunk cap. The

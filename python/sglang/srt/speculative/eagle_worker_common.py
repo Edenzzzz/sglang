@@ -579,6 +579,7 @@ def run_eagle_verify(
     grammar_barrier=None,
     uno_target_max_top_k: Optional[int] = None,
     precomputed_logits_output: Optional[Any] = None,
+    precomputed_forward_output: Optional[Any] = None,
 ) -> GenerationBatchResult:
     """Shared verify step: target-verify forward, sampling, acceptance bookkeeping.
 
@@ -675,7 +676,12 @@ def run_eagle_verify(
     # non-cuda-graph path stays unmarked and gets forward_extend's init
     # (post-pad).
     if precomputed_logits_output is not None:
+        # The mixed 4-mode step already ran ONE merged forward over
+        # [prefill chunk | draft tokens]; the verify slice of its logits is
+        # injected here. The merged forward output carries this step's routing
+        # and indexer outputs, so they still reach the result below.
         logits_output = precomputed_logits_output
+        forward_batch_output = precomputed_forward_output
     else:
         forward_batch_output = target_worker.forward_batch_generation(
             batch=None,

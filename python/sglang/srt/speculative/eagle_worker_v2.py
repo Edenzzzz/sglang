@@ -1596,6 +1596,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
             metadata_ready_pre_pad=False,
             finalize_tree_path=True,
             precomputed_logits_output=ver_out,
+            precomputed_forward_output=batch_output,
         )
         pre_next_token_ids = self.target_worker.model_runner.sample(pre_out, fb)
         result = GenerationBatchResult(

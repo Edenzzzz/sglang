@@ -1534,6 +1534,10 @@ class EAGLEWorkerV2(BaseSpecWorker):
         # only that side effect; the ForwardBatch it also builds is discarded, since the merged
         # batch below produces the real one. (One wasted plan per 4-mode step -- the first thing to
         # optimise once this is correct.)
+        _sl_before_prep = (
+            [int(v) for v in running.seq_lens[:3]]
+            if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1" else None
+        )
         _vfb, _vfb_cg = eagle_prepare_for_verify(
             verify_input, self.req_to_token_pool, running, self.target_worker
         )
@@ -1561,9 +1565,26 @@ class EAGLEWorkerV2(BaseSpecWorker):
         # its own reqs list is enough: merge_batch reassigns attributes on the copy, and the
         # original keeps the prefill-only view the fork relied on.
         n = int(verify_input.draft_token_num)
+        _sl_after_prep = (
+            [int(v) for v in running.seq_lens[:3]]
+            if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1" else None
+        )
         merged = copy.copy(batch)
         merged.reqs = list(batch.reqs)
         merged.mix_with_verify(running, verify_input)
+        if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
+            # The three values that decide the off-by-n: the row's seq_lens before prepare,
+            # after prepare, and what the merge produced for the tail. Production (OFFCONV)
+            # puts a verify row's first draft token AT the committed prefix.
+            logger.error(
+                "SLTRACE n=%s before_prep=%s after_prep=%s merged_tail_seq=%s "
+                "vfb_seq=%s vfb_pos0=%s",
+                n, _sl_before_prep, _sl_after_prep,
+                [int(v) for v in merged.seq_lens[-(merged.mixed_verify_rows or 1):]],
+                None if getattr(_vfb, "seq_lens", None) is None
+                else [int(v) for v in _vfb.seq_lens[:3]],
+                None if getattr(_vfb, "positions", None) is None else int(_vfb.positions[0]),
+            )
         n_pre_rows = merged.batch_size() - merged.mixed_verify_rows
         t_pre = merged.extend_num_tokens - merged.mixed_verify_tokens
 

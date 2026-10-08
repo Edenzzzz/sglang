@@ -10566,3 +10566,32 @@ Next, in order, and all of it now reachable: (1) launch the fork server with the
 `mixed_fused_fa3=N(xx%)` plus the fallback count in the log; (2) `drivers/srv_correctness.py`;
 (3) the chat+tracelab A/B, split ON vs OFF in the same build, reporting TTFT/ITL/throughput beside
 the composition counter and fallbacks. That sequence is what the >=30%/>=10% bar needs.
+
+### Serving A/B blocked again, on a flashinfer/sglang VERSION SKEW — 2026-10-09
+
+`srv_two_exec_ab.sh` runs (it writes per-arm server logs to `/dev/shm/w/srv_<arm>.log` and clears
+`~/.cache/flashinfer/90a/cached_ops` per arm, so each arm rebuilds the JIT -- that is why it looks
+silent for minutes). The baseline arm's server then dies at import:
+```
+sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_w4a4_mxint4_moe.py:39
+  from flashinfer.fused_moe import (
+ImportError: cannot import name 'trtllm_mxint4_block_scale_moe' from 'flashinfer.fused_moe'
+  (/dev/shm/w/fi/flashinfer/fused_moe/__init__.py)
+```
+**The fork's sglang tree on the pod expects a NEWER flashinfer than `/opt/tiger/flashinfer @
+b0563ae`, which is what I pushed when restoring `fi`.** So the restore reconstructed a *working
+fused-kernel* flashinfer (it builds, passes the fp32 reference, and gives the 1.30x) but not the
+version this sglang tree was developed against. The pod's original `fi` must have been newer.
+Three ways out, in order of preference:
+1. **Patch the import** -- the symbol is used by a w4a4-mxint4 MoE quantization scheme that this
+   Qwen2.5-7B bf16 run cannot need. If `schemes/__init__.py` imports it eagerly, guarding that one
+   import restores the serving path without touching the kernel. Smallest change, and reversible.
+2. Upgrade the pushed flashinfer to a revision that has `trtllm_mxint4_block_scale_moe` -- but that
+   risks losing the fused-kernel work in `/opt/tiger/flashinfer`, which is local-only and is the
+   whole point; do NOT do this without first checking whether that revision contains
+   `tests/fused_fa3_persistent_ext.cu`.
+3. Run the serving A/B on upstream instead -- but upstream does not have the split kernel, so it
+   cannot answer the kernel question at all.
+Do (1). And record the general lesson: restoring a tree from a LOCAL copy can satisfy the build and
+still mismatch the consumer; the manifest check in [[pod-tree-verify-manifest]] should compare
+VERSIONS of the two trees against each other, not just confirm both import.

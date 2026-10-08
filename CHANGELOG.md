@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.25.3 — Serving A/B blocked on a flashinfer/sglang version skew (2026-10-09)
+
+- With the venv repaired, `srv_two_exec_ab.sh` runs but the server dies at import:
+  `cannot import name 'trtllm_mxint4_block_scale_moe' from 'flashinfer.fused_moe'`. The fork's
+  sglang tree expects a newer flashinfer than `/opt/tiger/flashinfer @ b0563ae`, which is what the
+  `fi` restore pushed.
+- Preferred fix is to guard that one eager import (a w4a4-mxint4 MoE scheme a bf16 Qwen2.5-7B run
+  cannot need) rather than upgrade flashinfer, since the fused-kernel work is local-only.
+- Lesson: a tree restored from a local copy can build correctly and still mismatch its consumer;
+  verify the two trees' versions against each other, not just that both import.
+
 ## v0.25.2 — Fork serving environment fully restored (2026-10-09)
 
 - Second dependency fault fixed: `torchvision 0.24.1+cu128` against torch 2.14.1 caused a circular

@@ -295,6 +295,10 @@ def fast_prefill_plan(
 # inputs. Off by default; it doubles attention work when on.
 FUSED_SPLIT_VERIFY = os.environ.get("SGLANG_FUSED_SPLIT_VERIFY", "0") == "1"
 FUSED_SPLIT_TOL = float(os.environ.get("SGLANG_FUSED_SPLIT_TOL", "0.02"))
+# Localiser for the device-side index assert: synchronises and validates every index tensor
+# the split builds, so the fault is attributed to the plan or the dispatch with real values
+# instead of being inferred from a traceback that names an unrelated later CUDA call.
+FUSED_SPLIT_DEBUG = os.environ.get("SGLANG_FUSED_SPLIT_DEBUG", "0") == "1"
 
 
 class FlashInferAttnBackend(AttentionBackend):
@@ -1404,6 +1408,58 @@ class FlashInferAttnBackend(AttentionBackend):
     def get_cuda_graph_seq_len_fill_value(self):
         return 1
 
+    def _fused_split_debug_check(self, where: str) -> None:
+        """Synchronise, then report every split index tensor's actual device-side range.
+
+        Four mechanism hypotheses for the IndexKernel.cu out-of-bounds assert were wrong in a
+        row (shared workspace, launch-blocking, plan-copy lifetime, FA2 plan-array lifetime).
+        Each was inferred from a traceback that names whatever CUDA call ran next, never the
+        faulting op. This stops inferring: the synchronise pins the fault to a point in OUR
+        code, and the min/max print the offending numbers.
+        """
+        pl = self.fused_split_plan
+        if pl is None:
+            return
+        try:
+            torch.cuda.synchronize()
+        except Exception as e:  # noqa: BLE001 - diagnostic path
+            logger.error(
+                "FUSED_SPLIT_DEBUG[%s] device had ALREADY faulted before validation: %s",
+                where, e,
+            )
+            raise
+        r2t = self.req_to_token_pool.req_to_token
+        kv_sz = None
+        for attr in ("size", "max_total_num_tokens"):
+            v = getattr(self.token_to_kv_pool, attr, None)
+            if isinstance(v, int):
+                kv_sz = v
+                break
+        logger.error(
+            "FUSED_SPLIT_DEBUG[%s] tok_total=%s r2t=%s kv_pool_size=%s",
+            where, pl.get("tok_total"), tuple(r2t.shape), kv_sz,
+        )
+        named = [
+            ("fa3_tok", pl.get("fa3_tok"), pl.get("tok_total")),
+            ("fa2_tok", pl.get("fa2_tok"), pl.get("tok_total")),
+            ("cu_q", pl.get("cu_q"), None),
+            ("cache_seqlens", pl.get("cache_seqlens"), None),
+            ("page_table", pl.get("page_table"), kv_sz),
+        ]
+        keep = pl.get("_keep") or ()
+        for i, t in enumerate(keep):
+            named.append((f"_keep[{i}]", t, kv_sz if i == 2 else None))
+        for name, t, bound in named:
+            if t is None or not torch.is_tensor(t) or t.numel() == 0:
+                continue
+            mn, mx = int(t.min()), int(t.max())
+            bad = bound is not None and (mn < 0 or mx >= bound)
+            logger.error(
+                "FUSED_SPLIT_DEBUG[%s] %-14s n=%-8d min=%-12d max=%-12d bound=%-12s %s",
+                where, name, t.numel(), mn, mx, bound,
+                "OUT_OF_RANGE" if bad else "ok",
+            )
+
     def _fused_split_plan(self, forward_batch: ForwardBatch) -> bool:
         """Build the split's index tensors and plan its FA2 wrapper ONCE per step.
 
@@ -1616,6 +1672,8 @@ class FlashInferAttnBackend(AttentionBackend):
             n_fa3=len(fa3_rows),
             n_fa2=n2,
         )
+        if FUSED_SPLIT_DEBUG:
+            self._fused_split_debug_check("plan")
         return True
 
     def _fused_split_dispatch(
@@ -1671,6 +1729,8 @@ class FlashInferAttnBackend(AttentionBackend):
                 int(qv.shape[0]), pl["tok_total"], layer.layer_id,
             )
             return None
+        if FUSED_SPLIT_DEBUG:
+            self._fused_split_debug_check(f"dispatch:L{layer.layer_id}")
         o = torch.empty_like(qv)
 
         from sglang.kernels.ops.attention.flash_attention import flash_attn_with_kvcache

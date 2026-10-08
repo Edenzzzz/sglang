@@ -10877,3 +10877,29 @@ That is the complete remaining work for the per-executor FA3 baseline, and it is
 the fork serving A/B needs. Nothing else in the chain is outstanding: kernel PASSES, split optimum
 known, environment restored and documented, drivers staged, composition counter identified as the
 one instrument to add.
+
+**The five sources ALREADY EXIST in the extension, with the right semantics.** The `fa3_only_run`
+call site (`fused_fa3_persistent_ext.cu:276-288`) already passes exactly what the non-unified
+FA3_UPSTREAM path needs, and its comment names the third trap:
+```
+// RAW page ids. fa3.kv_indices is the VECTOR-SPARSE array, which upstream
+// must not see: its paged path treats the entry as a page number.
+static_cast<IdT*>(kv_indices.data_ptr()),          // -> up.page_table
+static_cast<IdT*>(kv_lens_per_req.data_ptr()),     // -> up.seqused_k      (PER-REQUEST)
+static_cast<IdT*>(q_indptr_per_req.data_ptr()),    // -> up.cu_seqlens_q   (PER-REQUEST)
+static_cast<IdT*>(kv_indptr_per_req.data_ptr()),
+int(pp.num_fa3_requests),
+```
+So `kv_indices` (raw), `kv_lens_per_req`, `q_indptr_per_req`, `kv_indptr_per_req` and
+`pp.num_fa3_requests` are all constructed already -- the non-unified build does not need new plan
+machinery, it needs those existing pointers routed to the fused path's `up.*` assignment instead of
+`params.wgmma_plan.*`. Mechanically: carry them on the params struct the fused dispatch receives
+(the extension fills it a few lines above) and read them under `if constexpr (!kUnifiedWgmma)`.
+**Three traps, all now documented with their source lines:**
+1. per-REQUEST vs per-work-item for `cu_seqlens_q`/`seqused_k` ([[upstream-fa3-subset-params]]);
+2. `total_q` (varlen Q extent) must not be conflated with `num_pages` (`fa3_upstream.cuh:147`);
+3. `page_table` needs RAW page ids -- `fa3.kv_indices` is vector-sparse and upstream treats the
+   entry as a page number (`fused_fa3_persistent_ext.cu:279`).
+That completes the specification: no design question remains, the data exists, and the change is a
+routing one. This is the last outstanding item before the per-executor FA3 baseline and the fork
+serving A/B can both run.

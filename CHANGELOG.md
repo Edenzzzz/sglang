@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.29.0 — Fused split dispatch PASSES the causal fp32 reference, 5/5 (2026-10-09)
+
+`sglang-up@b8b405822`. Harness `/dev/shm/w/drv/split_unit.py`; command
+`cd /dev/shm/w && PYTHONPATH=/dev/shm/w/up/python venv/bin/python drv/split_unit.py`;
+H200, torch 2.14.1, flashinfer-python 0.7.0.post1, qwen7b shape (GQA 4), bf16, page_size 1.
+
+- Scale-normalised error 0.00232–0.00424 against a row-by-row fp32 causal reference, tolerance
+  0.02, across five shapes including the 4-mode shape and non-round ragged lengths. Each row
+  subset is scored separately, so neither half masks the other.
+- Validates the FA3 subset's page-table gather, `cache_seqlens` and per-subset `cu_seqlens_q`;
+  the FA2 subset's plan through flashinfer's public API with explicit indptr/indices; and the
+  `index_copy_` scatter combine. Does NOT validate `sm_margin` or any perf claim.
+- Deterministic, so the noise floor is zero — which is why this gate yields a verdict where
+  three server-level ON/OFF attempts returned INCONCLUSIVE or NOT EXERCISED.
+- **Coverage measured at the shape level:** the decode-population guard declined 4 of the 5
+  shapes (`fa3=0`). A 2048-token chunk is 16 KV tiles and needs ≥32 co-resident decode rows, so
+  the canonical 4-mode step is refused. This strengthens the prediction that the ≥30%/≥10% bar
+  is unreachable under the current gating and makes the guard-OFF arm the most informative
+  remaining measurement.
+
 ## v0.28.1 — 4-mode root cause: a stale CPU seq_lens mirror (2026-10-09)
 
 `sglang-up@b8b405822`. Found while trying to gate the fused split, which could not run until

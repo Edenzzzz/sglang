@@ -408,6 +408,60 @@ Ruled out along the way: the merge itself (its own seam check reports **0** mism
 (it assumes every row is a verify row and would give a multiple of `draft_token_num`; 2055 is
 not).
 
+---
+
+## 2026-10-09 -- the split dispatch PASSES the causal fp32 reference (5/5)
+
+**First actual verification of the dispatch.** Deterministic, so the noise floor is zero -- which
+is why this gate works where three server-level ON/OFF attempts returned INCONCLUSIVE or
+NOT EXERCISED.
+
+- Code: `sglang-up@b8b405822` (`upstream_port`), pod tree `/dev/shm/w/up` = upstream `b7b2975`
+  + the `b7b2975..b8b405822` patch series.
+- Harness: `/dev/shm/w/drv/split_unit.py` (fp32 causal reference, computed row by row).
+- Command:
+  `cd /dev/shm/w && PYTHONPATH=/dev/shm/w/up/python venv/bin/python drv/split_unit.py`
+- Env: H200, venv `/dev/shm/w/venv` (torch 2.14.1, flashinfer-python 0.7.0.post1),
+  qwen7b shape H_Q=28 H_KV=7 D=128 (GQA 4), bf16 q/kv, page_size 1.
+- Metric: scale-normalised `max|o - ref| / max|ref|`, tolerance 0.02, reported for the whole
+  tensor AND each row subset separately so a one-sided defect is attributable.
+
+| case | rows | fa3/fa2 | err_all | err_fa3 | err_fa2 | |
+|---|---|---|---|---|---|---|
+| one chunk + 3 verify rows (4-mode shape) | 4 | 2/2 | 0.00241 | 0.00241 | 0.00048 | PASS |
+| short chunk + 5 verify | 6 | 3/3 | 0.00424 | 0.00157 | 0.00424 | PASS |
+| two prefills | 2 | 1/1 | 0.00232 | 0.00232 | 0.00016 | PASS |
+| decode-like rows | 5 | 1/4 | 0.00341 | 0.00341 | 0.00063 | PASS |
+| ragged odd lengths (333/7/11 q, 1777/513/129 kv) | 3 | 1/2 | 0.00323 | 0.00130 | 0.00323 | PASS |
+
+What this validates: the FA3 subset's page-table gather by row, `cache_seqlens`, per-subset
+`cu_seqlens_q` and causal flag; the FA2 subset's plan through flashinfer's public
+`begin_forward`/`plan` with explicit indptr/indices; and the `index_copy_` scatter combine --
+on five shapes including the 4-mode shape and non-round ragged lengths. Both halves are correct
+independently, so neither subset masks the other.
+
+What it does NOT validate: `sm_margin` (unset here), the in-server metadata path, or any
+performance claim.
+
+### The guard declined 4 of the 5 shapes -- direct evidence for the coverage bound
+
+Measured, not argued: with the natural partition, `fa3=0` on four of five cases. Only the
+decode-heavy case (`qo=[64,1,1,1,1]`, `kv=[64,300,500,120,90]`) partitioned two-sided on its
+own. The arithmetic is the guard's own: a 2048-token chunk is 16 KV tiles and needs
+`decode_rows >= 32`, so the canonical 4-mode shape (one chunk + a handful of verify rows) is
+refused. The gate forces a two-sided split for the correctness cases, which is legitimate here
+because it tests the dispatch's arithmetic, not the routing policy.
+
+This is the `g` in the `g * a` ceiling, now measured at the shape level rather than inferred
+from the TraceLab precedent: **the realistic 4-mode step does not satisfy the guard unless
+roughly 32+ spec rows are co-resident.** It strengthens the earlier prediction that the
+>=30%/>=10% bar is not reachable under this gating, and makes the guard-OFF arm the single most
+informative remaining measurement.
+
+- [x] 2026-10-09 **dispatch PASSES the fp32 causal reference, 5/5** -- see table and command above.
+- [ ] 2026-10-09 **`sm_margin` sweep against the same reference** -- correctness must hold at
+      every SM budget, not only at 0.
+
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither
 constraint is a cost of the work:

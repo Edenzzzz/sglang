@@ -9826,3 +9826,38 @@ Reading rule, fixed in advance again:
   in the tile128 mainloop;
 - several work items for the same row with overlapping `kv_start/kv_end` => double counting in the
   denominator, which would also shrink the output.
+
+### [x] `[TRACE]` on row 1: merge REFUTED, bounds CORRECT, and the same work item runs on TWO CTAs
+
+`#if 1` on the pre-existing trace (filtered to `q_len==64`), fixture `qo:424,64,1 prefix:3577,0,13`,
+cache cleared. Representative lines (sorted, deduped):
+```
+blk=118 work=2  packed_qo_start=0   kv_start=0 kv_end=19 kvh=2 chunk=0 nchunks=1 len_kv_chunk=64
+blk=110 work=4  packed_qo_start=128 kv_start=0 kv_end=37 kvh=0 chunk=0 nchunks=1
+blk=114 work=4  packed_qo_start=128 kv_start=0 kv_end=37 kvh=0 chunk=0 nchunks=1   <-- same item
+blk=111 work=13 packed_qo_start=256 kv_start=0 kv_end=55 kvh=1 chunk=0 nchunks=1
+blk=115 work=13 packed_qo_start=256 kv_start=0 kv_end=55 kvh=1 chunk=0 nchunks=1   <-- same item
+blk=105 work=10 packed_qo_start=384 kv_start=0 kv_end=64 kvh=3 chunk=0 nchunks=1
+blk=103 work=14 packed_qo_start=128 kv_end=37 kvh=3 ...   (all four kv heads present)
+```
+Three results, two of them refutations of my own hypotheses:
+1. **`nchunks == 1` on every row-1 item -> the merge story is REFUTED** (rule fixed before the run).
+   No partial/`s_merge` path is involved, so the 3.40x deficit is not an under-weighting merge.
+2. **The causal bounds are CORRECT.** `packed_qo_start` 0/128/256/384 gives `kv_end` 19/37/55/64,
+   which is exactly `ceil_div(packed_qo_start + 128, 7)` clipped to `kv_len=64`. So the bound
+   arithmetic -- including everything the reverted `cluster_tile_q` change touched -- is right, which
+   independently re-confirms that refutation.
+3. **NEW: the same work item is executed by TWO different CTAs** (`work=4` on blk 110 and 114;
+   `work=13` on blk 111 and 115). The earlier per-cluster trace showed exactly one distinct item per
+   cluster (`cls=60 -> [6,7)`, `cls=61 -> [7,8)`, ...), so two CTAs must have been handed the SAME
+   cluster index by `atomicAdd(params_2.cluster_cursor, 1)`.
+
+Honest limit on (3): a duplicated PLAIN write is idempotent and would not change the result, so
+duplication alone cannot explain a 3.40x magnitude deficit -- there must be accumulation or a
+denominator that double counts for it to matter. So (3) is a real anomaly and a plausible partner to
+the deficit, not yet a demonstrated cause. The next step is to check whether the cursor can hand out
+duplicates: `*s_cluster` is written by `ltid == 0` then read after a 128-thread barrier, and the
+drain runs per warpgroup with `kWgSlot = FLASHINFER_FUSED_WG_DRAIN == 1 ? 0u : kTidBase / 128u` --
+i.e. in the narrow form ALL warpgroups share slot 0, so if more than one warpgroup per CTA (or the
+FA3 side) reaches the drain, they share one `s_cluster` and can read each other's claim.
+That is a concrete, local, checkable mechanism and it is where to look next.

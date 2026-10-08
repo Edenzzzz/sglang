@@ -1660,13 +1660,29 @@ class EAGLEWorkerV2(BaseSpecWorker):
             result.next_draft_input = self.draft_worker._draft_extend_for_prefill(
                 batch, pre_out.hidden_states, pre_next_token_ids
             )
-            # NOTE: do NOT narrow out_cache_loc/positions here. MEASURED (VX_DEBUG): at this point
-            # bs=1, n=4, accept_lens=[1], out_cache_loc=4, positions=None, seq_lens=[513] -- i.e.
-            # `positions` does not exist yet; `prepare_for_draft_extend` CREATES it n-wide from
-            # num_draft_tokens and derives the accepted layout itself. It therefore expects the
-            # n-wide tensors, and pre-narrowing them (commit 19) was wrong. The real gap is the
-            # result fields it reads: `allocate_lens` / `prepared_draft_extend_inputs`, which this
-            # hand-built mixed_running_result does not populate.
+            keep = (
+                torch.arange(n, device=accept_lens.device).unsqueeze(0)
+                < accept_lens.unsqueeze(1)
+            )
+            if running.out_cache_loc is not None and running.out_cache_loc.numel() == bs_v * n:
+                running.out_cache_loc = running.out_cache_loc.view(bs_v, n)[keep]
+            # The verify rows' draft extend consumes one slot per ACCEPTED token, while
+            # `eagle_prepare_for_verify` left these n-wide (n = draft tokens). Narrowing
+            # `out_cache_loc` alone left exactly one slot mismatching -- `positions (dst 1, src 4)`
+            # -- so build `positions` accept-wide too: row i's accepted tokens sit at
+            # [new_seq_len - accept_len, new_seq_len). (Commit 19 did the out_cache_loc half and was
+            # wrongly reverted in commit 20 on the strength of `positions=None` at this point;
+            # running BOTH the narrowing and the slot-name diagnostic together is what settled it.)
+            pos_rows = [
+                torch.arange(
+                    int(new_seq_lens[i]) - int(accept_lens[i]),
+                    int(new_seq_lens[i]),
+                    device=running.seq_lens.device,
+                    dtype=torch.int64,
+                )
+                for i in range(bs_v)
+            ]
+            running.positions = torch.cat(pos_rows) if pos_rows else None
             self.draft_worker._draft_extend_for_decode(batch, batch_output)
 
             if (

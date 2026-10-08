@@ -9970,3 +9970,32 @@ investigation that cost ten refuted candidates. The decisive evidence was the pe
 (`DUMP_ROWS=1`, token 63 the only correct token) -- output the harness had been printing all along.
 Next: fixture 1 (`qo:424,87,1`), which additionally had 55 unwritten rows. The mask fix explains
 wrong VALUES, not missing writes, so that may still fail -- recorded as a prediction, not a hope.
+
+### Fixture 1 after the mask fix: values FIXED, the 55 unwritten rows are a SECOND fault — 2026-10-09
+
+`bash /dev/shm/kerneltest.sh` (default fixture 1, `qo:424,87,1 prefix:3577,0,13`), mask fix in:
+
+| sm_split | unwritten | FA3 | task0 | task2 |
+|---|---|---|---|---|
+| 48 | 55/512 | 0.00714 ok | nan FAIL | 0.00074 ok |
+| 32 | 55/512 | 0.00714 ok | nan FAIL | 0.00074 ok |
+| 16 | 55/512 | 0.00714 ok | nan FAIL | 0.00074 ok |
+
+Exactly as predicted before the run: the mask fix cures wrong VALUES (proved on the qo1=64 fixture,
+task0 0.00221 ok) and does nothing for MISSING WRITES, so fixture 1's 55 NaN rows are an
+independent second defect. `rel err` stays `nan` only because NaN rows poison the row's max.
+
+**Tile arithmetic for the remaining fault, which is now exact:** row 1 spans output rows 424-510
+(87 q tokens; packed 87*7 = 609; `CTA_TILE_Q = 128` so 5 tiles at packed 0/128/256/384/512).
+NaN rows are 424-478 = q 0-54 = packed 0-383 = **tiles 0, 1, 2**. Written rows are 479-510 =
+q 55-86 = packed 385-608 = **tiles 3, 4**. So the LAST TWO tiles execute and the FIRST THREE do not.
+Cross-check against the qo1 sweep: at qo1 <= 64 the row needs only 4 tiles (packed <= 448) and
+NOTHING is unwritten, so the deficit appears exactly when a 5th tile is required -- consistent with
+a cap or an off-by-one that drops the leading tiles once the tile count exceeds 4.
+That is a concrete, checkable next step and the instrument already exists: re-run the `[TRACE]`
+print (`#if 1` in `persistent.cuh`, filter `q_len == 87`, clear `~/.cache/torch_extensions/*/fused_fa3`)
+and list which `packed_qo_start` values appear for row 1. Expect 384 and 512 present with 0/128/256
+absent if the tiles are simply never emitted; if all five appear, the items exist and the write
+target is wrong instead.
+Remember the launch-id caveat recorded above: the harness runs three sm_split launches, so do NOT
+`sort -u` across them without printing a launch discriminator.

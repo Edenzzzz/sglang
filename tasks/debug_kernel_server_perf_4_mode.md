@@ -10329,3 +10329,29 @@ Cost of getting here: fourteen eliminated candidates, one invalid refutation (th
 fix was right but tested on a single-chunk fixture that could not exercise it), and two retractions.
 Both real causes came from reading source and from diagnostics the harness already had
 (`DUMP_ROWS`, the `[TRACE]` print, `NO_JIT_REDUCE`).
+
+### [x] FIRST VALID FUSED TIMINGS (kernel PASSES, so these are real) — 2026-10-09
+
+`TIME_ITERS=50` on fixture 1 with both fixes; the harness prints its own verdict
+**`PASS: every row correct at every split, nothing left unwritten`**.
+Command: `FI_ROOT=/dev/shm/w/fi PYTHONPATH=/dev/shm/w/fi TORCH_CUDA_ARCH_LIST=9.0a NVCC_THREADS=4
+TIME_ITERS=50 /dev/shm/w/venv_up/bin/python tests/test_fused_server_batch.py`.
+sglang `attn_fuse_` @ dc1d2dbec, flashinfer @ b0563ae + the two fixes.
+
+| sm_split (FA3 SMs) | kernel | unwritten | FA3 | task0 | task2 |
+|---|---|---|---|---|---|
+| **48** | **383.3 us** | 0/512 | 0.00746 | 0.00320 | 0.00098 |
+| 32 | 505.1 us | 0/512 | 0.00746 | 0.00320 | 0.00098 |
+| 16 | 877.5 us | 0/512 | 0.00746 | 0.00320 | 0.00098 |
+
+**Monotonic in FA3's SM share** (16 -> 32 -> 48 gives 877 -> 505 -> 383 us, i.e. 2.29x from the
+worst split to the best), so the optimum is probably ABOVE 48 and the harness's built-in sweep
+(48/32/16) does not reach it. This fixture is FA3-heavy (one 424x4001 row against an 87-row and a
+1-row FA2 request), so an FA3-favouring split being best is expected and does NOT generalise -- the
+2-D boundary work above says the split should follow the decode population, and this batch has
+almost none.
+Next, in order: (1) extend the split sweep upward (64/80/96/112) to locate the optimum on this
+fixture; (2) get the per-executor baselines printed in the same run (the harness has
+`BASELINE persistent-only` and `TWO_EXEC` arms) so the fused number has something to beat --
+a fused time alone is not a speedup; (3) only then the serving A/B, reporting
+`mixed_fused_fa3=N(xx%)` and fallbacks beside TTFT/ITL ([[fused-ab-validity-rule]]).

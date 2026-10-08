@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.24.1 — First valid fused kernel timings (2026-10-09)
+
+- With the kernel passing, `TIME_ITERS=50` on fixture 1 gives 383.3 us at sm_split 48, 505.1 us at
+  32, 877.5 us at 16 (0 unwritten, every row within bf16 noise at every split; the harness prints
+  `PASS: every row correct at every split`).
+- Monotonic in FA3's SM share, so the optimum is likely above the harness's 48-SM ceiling. This
+  fixture is FA3-heavy, so the FA3-favouring split is expected and does not generalise.
+- Per-executor baselines are still needed before any of this can be called a speedup.
+
 ## v0.24.0 — FUSED FA3+FA2 KERNEL PASSES THE CAUSAL fp32 REFERENCE (2026-10-09)
 
 - Fixture 1 is green at sm_split 48/32/16: **0 unwritten rows**, FA3 0.00628, task0 **0.00250**,

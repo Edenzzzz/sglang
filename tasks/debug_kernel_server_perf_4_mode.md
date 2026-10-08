@@ -9807,3 +9807,22 @@ Next run, and it is a single number: print `num_kv_chunks` and `len_kv_chunk` fo
 existing `[TRACE]` print (find its guard; it is not `DUMP_ROWS` and not `FLASHINFER_TRACE_WORK`) and
 check whether it is ~3-4 -- matching the 3.40 deficit -- or 1, which would refute the merge story
 outright and send this back to the mainloop.
+
+**Found the pre-existing `[TRACE]` print's guard: `#if 0` with the note "flip to 1 AND clear
+cached_ops to re-enable"** (`persistent.cuh:384`). That is why neither `TRACE_WORK=1` nor
+`DUMP_ROWS=1` ever produced it -- it is compiled out by default and needs the extension cache
+cleared, because `torch.utils.cpp_extension.load` keys on flags and would otherwise reuse the old
+object. Enabled it, filtered to `q_len == 64` (the discriminating task0 row) so the ~17-line device
+printf FIFO cannot truncate it, and cleared
+`/home/tiger/.cache/torch_extensions/*/fused_fa3`.
+It prints exactly the fields this question needs, per work item:
+`blk, work, q_indptr, q_len, packed_qo_start, kv_indptr, kv_len, kv_start, kv_end, kvh, chunk,
+nchunks, o_indptr, len_kv_chunk`.
+Reading rule, fixed in advance again:
+- `nchunks` ~3-4 for row 1 => the 3.40x magnitude deficit lines up with a merge that under-weights
+  partial contributions, and the fused drain's per-warpgroup `s_merge_flag` is the place to look;
+- `nchunks == 1` => no merge is involved at all, the merge story is REFUTED, and a uniform 3.4x
+  deficit on a single-chunk row points instead at the softmax denominator or an output scale applied
+  in the tile128 mainloop;
+- several work items for the same row with overlapping `kv_start/kv_end` => double counting in the
+  denominator, which would also shrink the output.

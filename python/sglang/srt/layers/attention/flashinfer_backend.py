@@ -1454,6 +1454,28 @@ class FlashInferAttnBackend(AttentionBackend):
             # Partition computed for a different batch shape than the one that arrived
             # (e.g. a padded graph replay). Refuse rather than mis-slice.
             return False
+        # Row-count agreement across every per-request array the plan indexes. The check above
+        # only compares qo_lens against the mask, both derived from extend_seq_lens_cpu; the
+        # plan also gathers forward_batch.seq_lens and req_pool_indices by the SAME row ids. If
+        # those carry fewer rows (a padded extend_seq_lens_cpu, say), the gather runs off the end
+        # and raises IndexKernel.cu's out-of-bounds assert -- a device-side fault that surfaces
+        # at an unrelated later CUDA call, which is precisely how this presented.
+        _rows = len(qo_lens)
+        if (
+            int(forward_batch.seq_lens.numel()) != _rows
+            or int(forward_batch.seq_lens_cpu.numel()) != _rows
+            or int(forward_batch.req_pool_indices.numel()) != _rows
+        ):
+            logger.error(
+                "FUSED_SPLIT BOUNDS row-count disagreement: extend_seq_lens_cpu=%d "
+                "seq_lens=%d seq_lens_cpu=%d req_pool_indices=%d -- refusing the split",
+                _rows,
+                int(forward_batch.seq_lens.numel()),
+                int(forward_batch.seq_lens_cpu.numel()),
+                int(forward_batch.req_pool_indices.numel()),
+            )
+            return False
+
         seq_lens_cpu = forward_batch.seq_lens_cpu.to(torch.int64)
         dev = forward_batch.seq_lens.device
         rp_cpu = forward_batch.req_pool_indices.tolist()

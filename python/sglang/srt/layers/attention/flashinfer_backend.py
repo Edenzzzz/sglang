@@ -1483,15 +1483,24 @@ class FlashInferAttnBackend(AttentionBackend):
         tok_off = np.zeros(len(qo_lens) + 1, dtype=np.int64)
         np.cumsum(qo_lens, out=tok_off[1:])
 
+        # These copies are SYNCHRONOUS on purpose. A non-blocking H2D copy requires the host
+        # source to stay alive until the copy completes, but the sources here are Python
+        # temporaries (`torch.from_numpy(np.concatenate(...))`, a local `out`) that are freed as
+        # soon as the expression returns -- a use-after-free that copies garbage. The garbage
+        # lands in INDEX tensors, so it surfaced as IndexKernel.cu's out-of-bounds assert at
+        # whatever CUDA call came next, and only with CUDA_LAUNCH_BLOCKING unset: with blocking
+        # on, the split ran 4501 times clean; with it off, it asserted after one call.
+        # These are a few KB at most, so the sync costs nothing worth reclaiming. Making them
+        # non-blocking again requires pinned staging buffers the plan owns across the step.
         def tok_idx(rows):
             return torch.from_numpy(
                 np.concatenate([np.arange(tok_off[r], tok_off[r + 1]) for r in rows])
-            ).to(dev, non_blocking=True)
+            ).to(dev)
 
         def indptr(vals):
             out = torch.zeros(len(vals) + 1, dtype=torch.int32)
             out[1:] = torch.from_numpy(np.cumsum(vals).astype(np.int32))
-            return out.to(dev, non_blocking=True)
+            return out.to(dev)
 
         # Bounds checks at the point of construction. Every index this plan builds is consumed
         # by a torch indexing op (`qv[tok]`, `index_copy_`, `r2t[rows]`), and an out-of-range

@@ -9153,3 +9153,19 @@ So step 1 of the pivot is **restore the fused extension on the pod**, before any
   before quoting any number.
 Only after that does the ON-vs-OFF split-kernel A/B on chat+tracelab become runnable -- and that
 A/B is what the 30% TTFT/ITL + 10% throughput bar needs.
+
+**Restore recipe for `fi`, executed (2026-10-08).** The fused extension is JIT-built at runtime
+(`flashinfer/jit/`) from `csrc` + `include`, so the pod only needs the source tree, not a built
+`.so`: `flashinfer` (3.1M) + `csrc` (3.7M) + `include` (3.2M) = **1.7M compressed**, pushed with
+`px.py` to `/dev/shm/w/fi` (the default `FI_ROOT` that both `tests/test_fused_server_batch.py` and
+the fork's `flashinfer_backend.py` import). Local source: `/opt/tiger/flashinfer` @ `b0563ae`
+("FA3 upstream port: causal (bottom-right) by default"), which carries the FA2-persistent and
+FA3-port work. Do NOT push the whole 170M tree; the three dirs above are sufficient.
+After it lands, in order: (1) `FI_ROOT=/dev/shm/w/fi` + the pod venv, run
+`tests/test_fused_server_batch.py` on fixture 1 to confirm the kernel BUILDS and PASSES there --
+first JIT build will be slow; (2) check the `.so` actually loads, not just `import flashinfer`
+([[fused-two-register-costs]]); (3) only then the ON/OFF split-kernel serving A/B on chat+tracelab,
+reporting `mixed_fused_fa3=N(xx%)` and fallbacks beside the timings ([[fused-ab-validity-rule]]).
+Caveat to check first: `wgmma split-KV is wrong, not unexercised` ([[fused-wgmma-splitkv-wrong]])
+and the retracted symmetric mode ([[fused-symmetric-backfill-is-the-fix]]) -- the A/B must use a
+split/mode those memories do not invalidate.

@@ -193,6 +193,49 @@ the chat side alone. Either way this is measured, not argued.
 - [ ] 2026-10-09 **guard ON vs `SGLANG_FUSED_DECODE_GUARD=0` on one workload** -- decides
       whether the kernel-level boundary transfers to serving.
 
+### The Amdahl bound, from the closest measured precedent (2026-10-09)
+
+`tasks/realistic_workload_analysis.md` already contains the relevant measurement, and it bounds
+what any gated attention kernel can do on this workload. On the fork, the **gated** persistent
+kernel (`SGLANG_MIXED_ATTENTION_KERNEL=auto`, k-NN gate) engaged on **63/500 to 203/1500 mixed
+batches, i.e. 12.6-13.5%**, and the end-to-end result on TraceLab was:
+
+| Rate | Throughput | Pooled P99 ITL |
+|---|---|---|
+| 0.02 | -0.01% | -2.7% |
+| 0.05 | +0.06% | -0.4% |
+| `inf` | **+0.27%** | **-4.6%** |
+
+Scope: that is a *different* kernel (persistent LPT) under a *different* gate (k-NN, not the
+ratio guard), so the numbers do not transfer directly. The **mechanism** does: a gate that
+engages on a minority of batches is Amdahl-bounded regardless of how good the kernel is on the
+batches it takes.
+
+The arithmetic: with the kernel engaged on a fraction `g` of batches and attention a fraction
+`a` of step time there, the end-to-end ceiling -- reached only if attention became **free** --
+is `g * a`. At `g = 0.13` and a generous `a = 0.3`, the ceiling is **~4%**. Measured was
++0.27% throughput, consistent with that bound and with a per-batch win in the 1.0-1.3x range.
+
+**So the >=30% TTFT/ITL and >=10% throughput bar cannot be met by this kernel under a gate that
+engages on ~13% of batches, no matter how well the kernel is optimized.** The 1.30x kernel-level
+speedup already measured is not the binding constraint; coverage is. Reaching the bar requires
+at least one of:
+
+1. **Coverage**: the split must engage on most steps, not a minority. That is reading 2 above --
+   the ratio guard, fitted on kernel microbenchmarks, may be refusing batches that win
+   end-to-end. The guard-ON vs guard-OFF A/B settles it.
+2. **An attention-dominated regime**: `a` near 1, i.e. long context at high concurrency, where
+   attention is the step's critical path rather than ~30% of it. This is a workload choice and
+   must be stated as such, not slipped in.
+3. **A different lever**: the scheduling half of this project (4-mode step, EDF ordering,
+   cache-hit-first routing) acts on queueing delay, which is where TTFT at saturation actually
+   lives -- note the P99 TTFT of 7.28-33.0 s above against a mean of 0.73-1.32 s. A 30% TTFT
+   gain is far more plausible from admission order than from attention math.
+
+This is recorded now, before the serving A/B, so the A/B is a test of a stated prediction rather
+than a search for a number. If the measured combined arm lands near +4% rather than +10%, that
+is the predicted outcome of the coverage bound and not a new surprise.
+
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither
 constraint is a cost of the work:

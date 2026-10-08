@@ -19,10 +19,12 @@ Tasks, in priority order (status 2026-10-08; evidence in the sections below):
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex
       P99 ITL -27%. Full stack vs stock MTP: TTFT -95%/-51%, ITL -42%/-38% (chat/codex, 24/s, 3 rounds).
-- [ ] **4. Two-way RDMA / congestion, randomized source selection** — random tie-break among
-      near-equal hits costs nothing at 16 GPUs, and there is no link contention to relieve there.
-      The hot-prefix run is the remaining test; a real congestion result needs more nodes than the
-      16-GPU cap.
+- [x] **4. Two-way RDMA / congestion, randomized source selection** (2026-10-08) — **not
+      demonstrated, and reported as such.** No congestion exists to relieve at 16 GPUs on 4 hosts:
+      random tie-break among near-equal hits is neutral, the L3 store moved ~236 GB without
+      measurable contention, and disagg's 8 prefill GPUs replicate 4 hot prefixes to 82% hit. The
+      store also COSTS ~19% chat ITL once the veto spreads load. The claim needs more nodes than
+      the cap allows.
 - [x] **MTP on every role** (2026-10-08) — colocation + MTP + 4-mode keeps TTFT and cuts agent ITL
       47%, and vs disagg + MTP cuts TTFT 94% / 99.6%. (An apparent regression was a router
       tie-break hotspot, retracted and fixed.) A fixed-router rerun is queued.
@@ -212,6 +214,7 @@ fixes, in order:
 | coloc_cache_hot (affinity) | 23.4 / 224 | **340** / 2 263 | **7.1** | - |
 | coloc_slo_edf_hot (TTFT-only veto) | 19.1 / 230 | 347 / 3 290 | 7.8 | 96 (2.7%) |
 | **coloc_slo_edf_hot2 (decode-aware veto, ITL SLO 40 ms)** | **8.3 / 44.3** | 424 / 5 161 | 8.7 | **192 (5.4%)**, 20 least-bad |
+| coloc_slo_edf_hc_hot2 (decode-aware veto + L3 store) | 9.9 / 80.0 | 468 / 6 304 | 9.8 | - |
 | disagg_2p2d_hot | 3.8 / 30.5 | 29 513 / 85 682 | 6.3 | - |
 
 **Pricing the decode cost cuts chat mean ITL 65% (23.4 -> 8.3 ms) and P99 80% (224 -> 44 ms)**,
@@ -219,6 +222,24 @@ closing most of the gap to disaggregation, for a 25% chat TTFT cost (340 -> 424 
 worse agent ITL. Colocation keeps a ~70x TTFT advantage. This is point 1's mechanism working as
 designed: route to the cache holder first, and veto it only when the load it would carry is
 predicted to break the SLO -- with the SLO term that the overload actually appears in.
+
+**The L3 store does not help once the veto spreads the load, and costs ~19% chat mean ITL / 80%
+P99** (8.3 -> 9.9 ms, 44 -> 80 ms; agent ITL 8.7 -> 9.8 ms). Its write-through traffic and
+prefetches compete with decode on the same GPUs, while the vetoed requests already replicate the
+hot prefixes by recomputing them. Together with the earlier result that the store is idle under
+affinity routing (16 pulls), the rule is: **the store pays only where routing CANNOT place a
+request near its prefix** -- round-robin, or a cold cluster -- and is a cost where the router is
+already doing that job.
+
+**Point 4, honest conclusion.** The congestion argument is **not demonstrated within the 16-GPU
+cap**, in either direction:
+- Random choice among near-equal cache holders costs nothing and gains nothing (coloc_rand).
+- Disagg's own prefill pods reached 81.9-82% prefix hit on the hot workload, because 4 hot
+  prefixes replicate across 8 prefill GPUs. The bipartite graph is not a bottleneck at this size.
+- The L3 store moved ~236 GB between nodes with no measurable link contention.
+The prediction that colocation's complete graph scales better as nodes increase is therefore
+**untested, not supported**: at 16 GPUs on 4 hosts there is no congestion to relieve. Testing it
+needs either more nodes than the cap allows or an artificially narrowed interconnect.
 - **Worker-side EDF does nothing here** (agent +1%, chat +16 ms, within noise). With 16 workers,
   each sees a light queue, and admission order matters only when work queues up. On a single
   saturated H200 it cut chat TTFT 62% (point 3).

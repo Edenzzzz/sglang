@@ -174,7 +174,9 @@ fallbacks, every request completed.
 
 - **Colocation still wins TTFT by an order of magnitude** (agent -94%, chat -99%), even when the
   workload is designed to create hotspots.
-- **Disagg wins chat ITL by 5x here.** A hot group's decode concentrates on its holder in
+- **CORRECTED 2026-10-08 (see the decode-aware veto below): the "veto is too weak" reading in
+  this bullet held only while the veto priced TTFT alone. Pricing the decode slowdown cuts chat
+  mean ITL to 8.3 ms and P99 to 44 ms.** Original reading: **Disagg wins chat ITL by 5x here.** A hot group's decode concentrates on its holder in
   colocation (~800 requests on the busiest worker), while disagg spreads decode over 8 dedicated
   GPUs. This is colocation's real weakness, and the veto is too weak to fix it: it moves only
   ~2.5% of requests, because the calibrated model predicts TTFT, and TTFT stays fine on a holder
@@ -188,6 +190,35 @@ fallbacks, every request completed.
 - **Disagg's prefill pods hit 82%** because 4 hot prefixes replicate across 8 prefill GPUs, so the
   bipartite graph is not the bottleneck at 16 GPUs either. No congestion effect is measurable
   within the cap.
+
+**The veto has to price TPOT, not TTFT (point 1, resolved 2026-10-08).** The hot-prefix holders'
+overload shows up as slow decode, not slow prefill, so a TTFT-only veto never fired on them. Two
+fixes, in order:
+
+1. *Calibration.* `calibrate_h20.py` measured decode ITL at 256-token context only, fitting
+   0.065 ms/seq. Re-measured at 256 / 4K / 16K context x 1 / 8 / 32 / 64 concurrency, ITL is
+   **flat to ~131K resident tokens** (9.1 ms at 32x4K, 8.3 ms at 8x16K) and then jumps to
+   **136.6 ms at 524K** (32x16K) and 347.8 ms at 64x16K. That is ~15x over a 4x KV increase, far
+   steeper than a bandwidth bound (29 GB/step is ~7 ms at HBM speed), so it is a capacity effect
+   -- eviction/retraction or an attention-path change -- **whose root cause is not yet found.**
+2. *Model form.* No closed form fitted that surface: a 3-term linear fit returned a NEGATIVE base
+   cost (-4.64 ms), and `max(flat, kv/bw)` overpredicted the middle of the grid 3-4x. The router
+   now **interpolates the measured grid** (`--decode-grid`, bilinear, KV-scaled past the corner;
+   reproduces every measured point). 16 rows x 16K predicts 51 ms where the old slope predicted
+   ~6 ms. Commits 7010f40fe, f6eab46b3.
+
+| hot-prefix arm | chat ITL mean / P99 ms | chat TTFT mean / P99 ms | agent ITL mean ms | vetoes |
+|---|---|---|---|---|
+| coloc_cache_hot (affinity) | 23.4 / 224 | **340** / 2 263 | **7.1** | - |
+| coloc_slo_edf_hot (TTFT-only veto) | 19.1 / 230 | 347 / 3 290 | 7.8 | 96 (2.7%) |
+| **coloc_slo_edf_hot2 (decode-aware veto, ITL SLO 40 ms)** | **8.3 / 44.3** | 424 / 5 161 | 8.7 | **192 (5.4%)**, 20 least-bad |
+| disagg_2p2d_hot | 3.8 / 30.5 | 29 513 / 85 682 | 6.3 | - |
+
+**Pricing the decode cost cuts chat mean ITL 65% (23.4 -> 8.3 ms) and P99 80% (224 -> 44 ms)**,
+closing most of the gap to disaggregation, for a 25% chat TTFT cost (340 -> 424 ms) and slightly
+worse agent ITL. Colocation keeps a ~70x TTFT advantage. This is point 1's mechanism working as
+designed: route to the cache holder first, and veto it only when the load it would carry is
+predicted to break the SLO -- with the SLO term that the overload actually appears in.
 - **Worker-side EDF does nothing here** (agent +1%, chat +16 ms, within noise). With 16 workers,
   each sees a light queue, and admission order matters only when work queues up. On a single
   saturated H200 it cut chat TTFT 62% (point 3).

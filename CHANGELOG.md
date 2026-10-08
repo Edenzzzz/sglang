@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.18.0 — The SLO veto prices decode, not just prefill (2026-10-08)
+
+- Hot-prefix workload (4 groups sharing 16K prompts, H20 16 GPUs): a TTFT-only veto never fired on
+  an overloaded cache holder, because its prefill stays fast. The veto now prices the decode
+  slowdown a request would cause: chat mean ITL **-65%** (23.4 -> 8.3 ms), P99 **-80%** (224 -> 44 ms)
+  for a 25% chat TTFT cost. Colocation keeps a ~70x TTFT advantage over disagg 2P2D.
+- `calibrate_h20.py` measures decode ITL over context x concurrency (was 256-token context only,
+  fitting an unusably small 0.065 ms/seq). The router interpolates that grid (`--decode-grid`); two
+  closed forms were rejected and the rejections are recorded in the code.
+- OPEN: ITL is flat to ~131K resident tokens then jumps 15x by 524K, too steep for a bandwidth
+  bound. Root cause not yet found.
+
 ## v0.17.6 — Prefix-aware chunk sizing (2026-10-08)
 
 - `SGLANG_CHUNK_ATTN_BUDGET` caps a chunk's attention work n*(r + n/2) while rows are running. At

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.23.4 — Split-KV defect attributed to the reduction, with the fix located (2026-10-09)
+
+- `NO_JIT_REDUCE=1` A/B: unwritten rows jump 55 -> 87 (row 1's full length) when the reduction is
+  disabled, so the reduction is what writes these rows and the plan is exonerated. It completes 32
+  rows and skips 55 -- precisely the rows whose only partial is chunk 0's.
+- Fix located: the reduction must finalise a row whose partials come from a single chunk instead of
+  requiring every chunk to contribute. The separate 3-chunk weighting error (rel err 0.514) needs
+  its own fix in the same reduction.
+
 ## v0.23.3 — Split-KV merge mechanism pinned on the FA2 side (2026-10-09)
 
 - kv-length sweep at fixed qo: single-chunk rows PASS at two different qo (0.00152, 0.00269);

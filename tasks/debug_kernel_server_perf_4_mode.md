@@ -10197,3 +10197,35 @@ chunks that actually produce work under causal masking -- that single comparison
 the fix belongs in the plan or in the reduction.
 `FLASHINFER_NO_JIT_REDUCE=1` is the ready-made A/B: if disabling the JIT reduction changes which
 rows are NaN, the reduction owns it; if not, the plan does.
+
+### [x] A/B settles ownership: the REDUCTION writes these rows, and it skips the chunk-0-only ones
+
+`NO_JIT_REDUCE=1` (nulls `group_id`, disabling the JIT-reduction rendezvous; store probe removed,
+cache cleared), fixture 1:
+
+| config | unwritten | row 1 |
+|---|---|---|
+| reduction ON | 55/512 | nan FAIL |
+| **reduction OFF** | **87/512** | nan FAIL |
+
+87 is exactly row 1's full q length, so with the reduction disabled NONE of its rows are written.
+By the rule stated before the run, the jump means **the reduction is what produces `final_o` for
+this row** -- it writes 32 of the 87 and skips 55. The plan is exonerated: it is not that the rows
+are missing from `merge_indptr`, it is that the reduction does not complete rows whose only partial
+is chunk 0's. (FA3 0.00747 and task2 0.00075 are unaffected either way, as expected -- neither goes
+through this path.)
+
+**Confirmed diagnosis, end to end, for the second fault:**
+`num_kv_chunks` is a per-REQUEST property, so every work item of a 2-chunk request takes the
+`partial_o` branch -- including tiles whose causal bound sits entirely inside chunk 0. For those
+rows the chunk-1 work item has `kv_start = 64 > kv_end` and writes no partial, so the reduction sees
+an incomplete partial set and leaves `final_o` untouched. Rows whose bound reaches chunk 1 get a
+complete set and are written. Hence 55 unwritten at prefix 0, 19 at prefix 41, 0 at prefix 105, and
+87 with the reduction off.
+
+**The fix, located:** in the reduction, a row with partials only from chunk 0 must still be
+finalised (normalise and copy that single partial into `final_o`) rather than requiring every chunk
+to have contributed. Separately, the 3-chunk case (every row written, rel err 0.51436) is a
+weighting/LSE error in the same reduction and needs its own fix -- do not expect one change to cover
+both. Fourteen candidates eliminated on the way here; the two real causes (`MaskMode::kNone`, and
+this) were both found by reading code and existing diagnostics, not by inference.

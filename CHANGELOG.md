@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.20.0 — The 4-mode step runs end to end on current upstream (2026-10-08)
+
+- Branch `upstream_port` (worktree `/opt/tiger/sglang-up`) against upstream pinned `b7b2975b5`,
+  torch 2.14.1: `portchk.sh` reaches **11 mixed steps with 0 tracebacks**, where a
+  `SGLANG_MIXED_SPEC=0` control on the same script also passes. Correctness (greedy-output
+  equality) is NOT yet gated -- the smoke script's prompts are drawn inside worker threads, so its
+  output lengths are not comparable between arms.
+- The verify half now delegates to upstream's own `run_eagle_verify` via a new
+  `precomputed_logits_output` / `precomputed_forward_output` pair, instead of hand-rolling sample +
+  commit + result (which cost one failed run per field upstream sets).
+- The scheduler commits BOTH halves of a 4-mode step: the gate keeps `running_batch` (emptying it
+  let the prefill batch take the decode rows' place and leaked a request), the verify half gets its
+  own future wiring, relay stash and D2H copy, and result processing receives a snapshot batch
+  because overlap merges the next prefill into the live one first.
+- Two latent bugs fixed on the way, both of which would have corrupted output silently rather than
+  crashing: the dispatch branch dropped the scheduler's `on_publish`, so a 4-mode step published no
+  futures at all; and the verify-row logit slice indexed from the padded end of `hidden_states`
+  under a prefill-graph bucket, selecting padding rows instead of verify rows.
+
 ## v0.19.1 — The 4-mode split verified numerically; MTP results confirmed (2026-10-08)
 
 - `SGLANG_SPLIT_VERIFY=1` fp32 recompute on a real mixed step: FA3 prefill rows 0.0032-0.0040 and

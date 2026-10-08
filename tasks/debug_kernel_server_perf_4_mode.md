@@ -8529,3 +8529,29 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   part is the overlap loop's per-batch `future_indices` / relay machinery (scheduler.py:4500-4520),
   which assumes ONE batch per forward; the merged forward produces one set of futures for two
   logical batches.
+
+- **[x] 2026-10-08: the 4-mode step RUNS END TO END on current upstream** (port commits 29-38,
+  branch `upstream_port`, upstream pinned `b7b2975b5`, torch 2.14.1, venv `venv_up`).
+  `/dev/shm/portchk.sh` on the vibecuda H200 pod: **11 mixed steps, `ok [1966, 400, 1892]`, 0
+  tracebacks/exceptions**, against `SGLANG_MIXED_SPEC=0` on the same script as the control.
+  Commits 35-38 were four more upstream contracts, each named by one measured failure:
+
+  | # | failure | contract the fork never had to satisfy |
+  |---|---|---|
+  | 35 | `build_chain_tree`: `bonus_tokens.numel() == seq_lens.numel() == bs` | in overlap mode a draft input's tensors are FUTURES; `resolve_seq_lens_cpu`/`resolve_forward_inputs` only ever take the batch being run, so the verify half reached `draft()` unresolved. |
+  | 36 | `shape '[4,4]' invalid for input of size 4` | the merged batch padded into a prefill-graph bucket (529 real tokens -> 576). `static_forward_batch` is built field-by-field, so `mixed_verify_tokens` took its default 0 and verify got ONE logit per row. Found a second bug in the same path: my verify-row slice indexed from `hidden_states.shape[0]`, i.e. the PADDED end, which would have selected padding rows and fed verify garbage **without failing**. |
+  | 37 | `_resolve_spec_v2_tokens`: `assert result.next_token_ids.is_cpu` | the verify half needs the same D2H `copy_to_cpu` and relay stash as the batch that ran. |
+  | 38 | `IndexError: accept_lens[i]` | the attached running batch IS `self.running_batch`, and in overlap mode `get_next_batch_to_run` merges the next prefill into it BEFORE `pop_and_process` runs -- 6 reqs against 4 accept_lens. Upstream enqueues `batch.copy()` for exactly this reason; hand result processing a snapshot. |
+
+  Method note that generalises: every one of 33-38 was found by LOGGING THE WIDTHS, not by
+  reasoning about them. Two diagnostics did all the work -- slot names + both shapes at the failing
+  copy, and one line per mixed step with every row/token count. The width log also *cleared* the
+  split and both draft extends (`ntl=(8,V)` = 4 chunk + 4 verify, draft inputs (4,1) and (1,1)),
+  which three earlier commits had wrongly suspected. A control run with the feature OFF, on the
+  same script, is what made "this is my bug" a measurement rather than an assumption.
+
+  **NOT yet validated:** correctness. The smoke script's prompts are drawn by `rng.randrange`
+  INSIDE worker threads, so prompt-to-index assignment is not deterministic and its output lengths
+  are NOT comparable between arms -- they say nothing about whether the 4-mode step produces the
+  same tokens. Greedy-output equality vs the `SGLANG_MIXED_SPEC=0` arm is the next gate, before any
+  timing number is worth taking.

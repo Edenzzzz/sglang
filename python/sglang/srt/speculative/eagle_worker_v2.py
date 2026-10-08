@@ -1495,6 +1495,11 @@ class EAGLEWorkerV2(BaseSpecWorker):
             ForwardBatch,
             ForwardMode,
         )
+        from sglang.kernels.ops.speculative.eagle import (
+            fill_bonus_tokens_func,
+            prepare_verify_commit_outputs,
+        )
+        from sglang.srt.managers.utils import GenerationBatchResult
         from sglang.srt.speculative.eagle_utils import (
             eagle_prepare_for_verify,
             eagle_sample,
@@ -1560,19 +1565,41 @@ class EAGLEWorkerV2(BaseSpecWorker):
             verify_input, running, ver_out, None
         )
 
-        # TODO(untested, needs a GPU run to finish): three pieces remain before this is usable --
-        #   1. sample the PREFILL rows with `batch`'s own sampling_info (upstream samples inside
-        #      forward_batch_generation when is_verify=False; here is_verify=True returned raw
-        #      logits, so the prefill half must be sampled explicitly);
-        #   2. commit the accepted tokens the way run_eagle_verify does after eagle_sample
-        #      (new_seq_lens = batch.seq_lens + accept_lens, mamba/c128 cleanup hooks);
-        #   3. run BOTH draft extends -- `_draft_extend_for_prefill` for the chunk rows and
-        #      `_draft_extend_for_decode` for the verify rows -- and return a GenerationBatchResult
-        #      carrying the running batch's result alongside the prefill one (the fork used
-        #      `result.mixed_running_result` for this).
-        # Each of 1-3 is mechanical but needs the server up to verify shapes, which is blocked on
-        # the extension rebuild against torch 2.14.1.
-        return batch_output, pre_out, (predict, accept_lens, accept_index), running
+        # Commit the accepted tokens. Without this the pool leaks: upstream reclaims REJECTED draft
+        # slots as overshoot from each request's committed seqlen ("trailing unaccepted slots stay
+        # and are freed as overshoot"), so a path that samples but never commits leaves those slots
+        # owned by nobody -- measured as `pool memory leak detected`, 36 tokens = 4 draft x 9 rows.
+        if predict.is_cuda and not running.forward_mode.is_idle():
+            new_seq_lens, bonus_tokens = prepare_verify_commit_outputs(
+                predict, accept_index, accept_lens, running.seq_lens
+            )
+        else:
+            new_seq_lens = running.seq_lens + accept_lens
+            accept_tokens = predict[accept_index]
+            bonus_tokens = torch.empty_like(accept_lens, dtype=torch.int32)
+            fill_bonus_tokens_func(
+                accept_tokens, accept_lens, bonus_tokens, accept_index.shape[1],
+                running.batch_size(),
+            )
+        running.seq_lens = new_seq_lens
+
+        # Prefill rows: is_verify=True returned raw logits, so sample them explicitly with the
+        # prefill batch's own sampling parameters.
+        pre_next_token_ids = self.target_worker.model_runner.sample(pre_out, fb)
+
+        # TODO(needs one more GPU run): the two draft extends and the paired result.
+        #   - `_draft_extend_for_prefill(batch, ...)` for the chunk rows and
+        #     `_draft_extend_for_decode(running, running_output)` for the verify rows;
+        #   - return a GenerationBatchResult for the prefill half carrying the running batch's
+        #     result alongside it (the fork used `result.mixed_running_result`), so the scheduler
+        #     can process both halves of the step.
+        # Shapes for these are only observable with the server up; the commit above was written the
+        # same way and the leak is the check that it works.
+        return GenerationBatchResult(
+            logits_output=pre_out,
+            next_token_ids=pre_next_token_ids,
+            can_run_cuda_graph=False,
+        ), (new_seq_lens, bonus_tokens, accept_lens), running
 
     def _forward_prefill_batch(
         self, batch, on_publish=None, pp_proxy_tensors=None, coordination_plan=None

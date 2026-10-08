@@ -10355,3 +10355,33 @@ fixture; (2) get the per-executor baselines printed in the same run (the harness
 `BASELINE persistent-only` and `TWO_EXEC` arms) so the fused number has something to beat --
 a fused time alone is not a speedup; (3) only then the serving A/B, reporting
 `mixed_fused_fa3=N(xx%)` and fallbacks beside TTFT/ITL ([[fused-ab-validity-rule]]).
+
+### [x] Split sweep extended upward: the optimum was OUTSIDE the harness's built-in range
+
+`SPLITS=112,96,80,64 TIME_ITERS=50`, fixture 1, both fixes, kernel PASSING at every split
+(`PASS: every row correct at every split, nothing left unwritten`):
+
+| sm_split (FA3 SMs, of 132) | kernel | vs best |
+|---|---|---|
+| **112** | **133.5 us** | 1.00x |
+| 96 | 259.9 us | 1.95x |
+| 80 | 257.5 us | 1.93x |
+| 64 | 258.3 us | 1.93x |
+| 48 | 383.3 us | 2.87x |
+| 32 | 505.1 us | 3.78x |
+| 16 | 877.5 us | 6.57x |
+
+Two things worth keeping:
+1. **The harness's default sweep (48/32/16) never reached the optimum.** 112 is 2.87x faster than 48,
+   the best of the default range, so every earlier timing taken with the built-in list understated
+   the fused kernel on this shape. Any historical fused-vs-baseline number in this file that used
+   the default splits should be re-read with that in mind.
+2. **The curve is not monotone-smooth: 64/80/96 form a ~258 us plateau, then 112 drops to 133.5.**
+   A flat region followed by a cliff suggests a discrete effect (occupancy / CTA-per-SM or the FA2
+   side fitting in the leftover 20 SMs) rather than a smooth work-balance tradeoff. Worth one probe
+   before modelling the boundary: sweep 100..128 in steps of 4 to find where the cliff is, since the
+   2-D boundary fit above will need the right functional form, not just the argmin.
+Caveat on generalisation, repeated because it matters for the serving A/B: fixture 1 is FA3-heavy
+(one 424x4001 row against an 87-row and a 1-row FA2 request), so a split leaving only 20 SMs for FA2
+being optimal is specific to this shape. The decode-population guard already in the serving dispatch
+is the mechanism that should pick the split per batch; this number is not a serving recommendation.

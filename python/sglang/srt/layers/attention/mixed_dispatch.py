@@ -303,3 +303,58 @@ def plan_dispatch_prefix(qo_lens, kv_lens, gqa_ratio, num_kv_heads, num_sm=NUM_S
     n_fa3_pages = int(np.maximum(kv[:n_fa3_rows], 1).sum())
     return ("split", sm_fa3, max(1, num_sm - sm_fa3), base["kv_split"],
             n_fa3_rows, n_fa3_tokens, n_fa3_pages)
+
+
+def dense_block_table(kv_indptr, kv_indices, rows, page_size=1, out=None):
+    """Build upstream FA3's block table from sglang's flat paged KV indices.
+
+    Upstream documents this tensor as "the block table of each prompt", shape
+    ``[batch_size, max_num_blocks_per_seq]`` (flashinfer/prefill.py:1646, constructed at :1861).
+    sglang instead stores KV indices flat, with per-request extents given by ``kv_indptr``. The
+    two representations are NOT interchangeable, and aliasing one as the other is a real fault,
+    not a type nuisance: passing the flat (vector-sparse) array where the dense table is expected
+    produced ``CUDA error: an illegal memory access`` on the fused path. So the seam owns an
+    explicit conversion, and this is it.
+
+    Fill value is -1, never 0: page id 0 is valid, so zero padding would make every short
+    sequence read page 0 for its tail blocks instead of being masked off.
+
+    Args:
+        kv_indptr: length ``batch+1`` prefix sums into ``kv_indices``.
+        kv_indices: flat page (or token) ids for all requests.
+        rows: row indices to include, in output order. Rows absent here are not emitted, so the
+            FA3 subset gets a table whose batch dimension matches the subset's request count --
+            which upstream's combine scheduler requires (it derives its tile mapping from the
+            pair (token extent, batch count)).
+        page_size: tokens per page; >1 divides token offsets down to page granularity.
+        out: optional preallocated ``[len(rows), max_blocks]`` int32 array to fill.
+
+    Returns:
+        ``(table, max_blocks)`` where ``table`` is ``[len(rows), max_blocks]`` int32, -1 padded.
+    """
+    indptr = _as_i64(kv_indptr)
+    indices = _as_i64(kv_indices)
+    rows = list(rows)
+    if not rows:
+        return np.zeros((0, 0), dtype=np.int32), 0
+    lens = [int(indptr[r + 1] - indptr[r]) for r in rows]
+    if page_size > 1:
+        lens = [(n + page_size - 1) // page_size for n in lens]
+    max_blocks = max(lens) if lens else 0
+    if out is None:
+        table = np.full((len(rows), max_blocks), -1, dtype=np.int32)
+    else:
+        table = out
+        table[:] = -1
+    for i, r in enumerate(rows):
+        lo = int(indptr[r])
+        n = lens[i]
+        if n == 0:
+            continue
+        if page_size > 1:
+            # one entry per page: take the first token id of each page and divide down
+            sel = indices[lo : lo + n * page_size : page_size] // page_size
+        else:
+            sel = indices[lo : lo + n]
+        table[i, :n] = sel.astype(np.int32)
+    return table, max_blocks

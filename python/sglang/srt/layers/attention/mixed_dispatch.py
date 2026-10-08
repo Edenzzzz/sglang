@@ -358,3 +358,37 @@ def dense_block_table(kv_indptr, kv_indices, rows, page_size=1, out=None):
             sel = indices[lo : lo + n]
         table[i, :n] = sel.astype(np.int32)
     return table, max_blocks
+
+
+def fa3_subset_varlen(qo_lens, kv_lens, rows):
+    """Per-request varlen arrays for upstream FA3 over a row SUBSET.
+
+    Upstream indexes ``cu_seqlens_q`` and ``seqused_k`` by ``bidb`` -- the request index within the
+    batch it was given -- so both must be PER-REQUEST and must cover exactly the subset, densely
+    renumbered. sglang's persistent plan instead carries per-WORK-ITEM ``q_indptr``/``kv_len``;
+    handing those over is the error family that produced four separate port bugs (see
+    upstream-fa3-subset-params), because the arrays look right and index wrong.
+
+    ``total_q`` is the varlen Q extent of the subset (``cu_seqlens_q[-1]``), NOT a page count: the
+    upstream header warns that conflating it with ``num_pages`` mis-shapes the Q tensor and reads
+    out of range (fa3_upstream.cuh:147). It is returned explicitly so the caller never has to
+    guess which quantity it is.
+
+    Args:
+        qo_lens: per-row query lengths for the whole batch.
+        kv_lens: per-row KV lengths for the whole batch.
+        rows: the FA3 row indices, in the order they are handed to upstream.
+
+    Returns:
+        ``(cu_seqlens_q, seqused_k, total_q)`` -- ``cu_seqlens_q`` is ``len(rows)+1`` int32 prefix
+        sums starting at 0; ``seqused_k`` is ``len(rows)`` int32; ``total_q`` is a python int.
+    """
+    qo = _as_i64(qo_lens)
+    kv = _as_i64(kv_lens)
+    rows = list(rows)
+    cu = np.zeros(len(rows) + 1, dtype=np.int32)
+    if rows:
+        sel = qo[rows]
+        np.cumsum(sel, out=cu[1:], dtype=np.int32)
+    seqused = (kv[rows] if rows else np.zeros(0, dtype=np.int64)).astype(np.int32)
+    return cu, seqused, int(cu[-1])

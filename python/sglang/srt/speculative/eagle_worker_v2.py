@@ -1582,35 +1582,45 @@ class EAGLEWorkerV2(BaseSpecWorker):
         )
 
         if os.environ.get("SGLANG_MIXED_VERIFY_CHECK") == "1" and _vfb is not None:
-            # Gate (b): the SAME verify rows, forwarded WITHOUT the prefill chunk. Both sides
+            # Gate (b): the SAME verify rows forwarded WITHOUT the prefill chunk. Both sides
             # see identical inputs within this one step, so timing cannot confound it --
             # unlike greedy-token equality, where the merge point moves between runs.
-            # Costs one extra forward per mixed step and rewrites the same KV slots with the
-            # same values. Gate only, never on by default.
-            _ref = self.target_worker.forward_batch_generation(
+            #
+            # The reference is validated IN PLACE before it is believed: _vfb holds
+            # references to `running`'s tensors, and the merge rebinds some of them
+            # (mix_with_running nulls input_ids for the relay), so a stale _vfb would make
+            # any disagreement meaningless. Two things are therefore reported first -- the
+            # reference's own run-to-run stability, and _vfb's input_ids -- and the verdict
+            # is only readable if ref_vs_ref is ~0 and the ids are the draft tokens.
+            _ids = getattr(_vfb, "input_ids", None)
+            _r1 = self.target_worker.forward_batch_generation(
+                batch=None, forward_batch=_vfb, is_verify=True
+            ).logits_output.next_token_logits
+            _r1 = _r1.detach().clone()
+            _r2 = self.target_worker.forward_batch_generation(
                 batch=None, forward_batch=_vfb, is_verify=True
             ).logits_output.next_token_logits
             _got = ver_logits
-            if tuple(_ref.shape) != tuple(_got.shape):
-                logger.error(
-                    "VERIFYCHECK SHAPE MISMATCH ref=%s merged=%s",
-                    tuple(_ref.shape), tuple(_got.shape),
-                )
-            else:
-                _d = (_ref.float() - _got.float()).abs()
-                _den = _ref.float().abs().clamp_min(1e-6)
-                _rel = (_d / _den).max().item()
-                _rowmax = (_d / _den).amax(dim=-1)
-                _arg_ref = _ref.float().argmax(dim=-1)
-                _arg_got = _got.float().argmax(dim=-1)
-                _flips = int((_arg_ref != _arg_got).sum())
-                logger.error(
-                    "VERIFYCHECK ver_rows=%s rows=%d max_rel=%.6f per_row_max=%s "
-                    "argmax_flips=%d/%d",
-                    merged.mixed_verify_rows, _got.shape[0], _rel,
-                    [round(float(x), 5) for x in _rowmax[:8]],
-                    _flips, _got.shape[0],
-                )
+            # Scale-normalised, NOT elementwise relative: a near-zero reference logit makes
+            # elementwise relative error meaningless over a 152k vocab (the first version of
+            # this gate reported 1e5 for exactly that reason).
+            def _err(a, b):
+                a = a.float(); b = b.float()
+                if tuple(a.shape) != tuple(b.shape):
+                    return float("nan")
+                return float((a - b).abs().max() / a.abs().max().clamp_min(1e-6))
+            _flips = lambda a, b: int((a.float().argmax(-1) != b.float().argmax(-1)).sum())
+            logger.error(
+                "VERIFYCHECK2 ver_rows=%s rows=%s ids=%s ids_sum=%s | "
+                "ref_vs_ref err=%.3e flips=%s | merged_vs_ref err=%.3e flips=%s/%s | "
+                "scale ref_absmax=%.3f got_absmax=%.3f",
+                merged.mixed_verify_rows,
+                tuple(_got.shape), None if _ids is None else tuple(_ids.shape),
+                None if _ids is None else int(_ids.sum()),
+                _err(_r1, _r2), _flips(_r1, _r2),
+                _err(_r1, _got), _flips(_r1, _got), _got.shape[0],
+                float(_r1.float().abs().max()), float(_got.float().abs().max()),
+            )
 
         if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
             logger.error(

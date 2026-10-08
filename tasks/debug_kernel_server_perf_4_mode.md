@@ -9449,3 +9449,23 @@ from arithmetic): dump the persistent executor's work items for this fixture -- 
 against its true span 424-510 / packed 609. Expected signatures: 4 items instead of 5 means the
 tile count is truncated; 5 items with q_start biased by +55 unpacked (+385 packed) means the offset
 is wrong; items present and correct means the fault is inside the kernel's write path, not the plan.
+
+**`TRACE_WORK=1` emits nothing useful** (rebuilt the fused TU with `-DFLASHINFER_TRACE_WORK=1`;
+zero work/wi/WORK lines in the log, same 55/512 result). So the plan dump has to come from a print
+added to the harness or the plan builder, not from that flag -- do not retry it.
+
+**Live hypothesis for the task0 gap, from the kernel source rather than arithmetic:** the build
+carries `-DFLASHINFER_FUSED_WG_DRAIN=1`, the "narrow" drain form in which **only warpgroup 0 drains
+the FA2 work queue** (`persistent_fa3_fused.cuh` ~line 556: `kNarrowWg = 0u`, and when
+`FLASHINFER_FUSED_WG_DRAIN == 1` the other warpgroups skip the drain entirely). If that one
+warpgroup does not consume every queued item, the unconsumed items never execute and their rows stay
+NaN-prefilled -- which is precisely "rows never written", and it explains why the count is
+insensitive to the SM split (the drain structure, not the partition, bounds it). The surrounding
+comment block also documents that this choice is load-bearing and asymmetric: draining on warpgroup
+1 instead "breaks FA2 as well when it runs BEFORE FA3's body" (all three rows fail, FA3
+3.57/4.13/4.41, task0 1.34/0.95/1.22, task2 3.59/3.03/3.62), so the two phases are not
+interchangeable and this is not a free knob.
+Test in flight: `WG_DRAIN=0` (every warpgroup drains). If the 55 unwritten rows vanish, the gap is
+in the narrow drain's item consumption; if they persist, it is in how task0 items are addressed and
+the drain is exonerated. Either way the next action is determined, which is why this flip comes
+before any further reading.

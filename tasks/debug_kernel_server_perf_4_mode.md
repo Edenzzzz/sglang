@@ -10023,3 +10023,32 @@ Two caveats that bound what this says, both recorded rather than glossed:
    424-478 before building on it.
 Do (2) first; it is one run and it either confirms the mapping or invalidates the arithmetic that
 the next hypothesis would rest on.
+
+**Caveat (2) discharged: the NaN span is UNCHANGED by the mask fix**, so the tile mapping is
+validated rather than assumed. Post-fix, trace off, numerics clean:
+```
+unwritten (NaN) rows = 55/512
+NaN idx first/last = [424..429] ... [473..478]
+NaN by row: row1(task0, span 424-510): 55
+row 0 FA3 0.00494 ok | row 1 task0 nan FAIL | row 2 task2 0.00061 ok
+```
+Same 424-478 as before the fix. So: **unwritten = q 0-54 = packed 0-383 = tiles 0/1/2; written =
+q 55-86 = packed 385-608 = tiles 3/4**, and the trace proves the tiles at packed 128 and 256 DO
+execute. Two statements that must both be true, and together they pin the fault:
+the work for q 18-54 runs, and the output rows for q 18-54 are never written.
+
+**The two expressions that decide this, for the next session to read (not guess):**
+```
+qo_packed_idx_base = packed_qo_start + persistent_cluster_slot<KTraits>() * CTA_TILE_Q;  // slot=0 under FUSED_GRID
+qo_upperbound      = min(q_len, ceil_div(qo_packed_idx_base + CTA_TILE_Q, gqa_group_size));
+```
+(`persistent.cuh:398` and `:400`.) For the packed-128 tile these give base 128 and upperbound
+min(87, ceil(256/7)) = 37, i.e. it should write q rows 18..36 -- which are NaN. So either the write
+loop's lower bound is not `qo_packed_idx_base / gqa_group_size`, or the store is gated by a
+condition that excludes all but the last tiles. Read the epilogue's row loop and its guard; the
+numbers above give the expected and actual spans to compare against, so this is a bounded check.
+Note `o_indptr = 0` for row 1 in the trace while `kv_indptr = 4001` is absolute -- the FA2 plan is
+built over the FA2 sub-batch (q/o offsets relative, kv absolute), so the extension must be adding
+the 424-row base; confirm that base is applied on the STORE path and not only on the load path,
+since a missing base would write q 18-36 into rows 18-36 (inside row 0's span, where FA3 later
+overwrites them) and leave 442-478 NaN -- which is exactly the observed shape.

@@ -8828,3 +8828,30 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
     is the EXTEND-vs-TARGET_VERIFY convention mismatch to check first).
   Also worth one line: mean accept_len, 4-mode vs control, since that quantifies the cost and is
   the number a reviewer will ask for.
+
+- **[x] Defect localised: the error is UNIFORM across draft positions, including position 0, which
+  implicates the verify rows' prefix KV length -- not RoPE and not intra-row causality.**
+  `portcorr3.sh 1 g3`, 5 mixed steps, 0 tracebacks (`BYPOS`, n=4):
+
+  | step (ver_rows) | flips by position [0,1,2,3] | err by position [0,1,2,3] |
+  |---|---|---|
+  | 1 | [1, 1, 0, 0] | [0.578, 0.481, 0.401, 0.334] |
+  | 2 | [2, 2, 1, 1] | [1.156, 1.069, 0.723, 0.911] |
+  | 3 | [1, 1, 2, 2] | [0.604, 0.746, 0.765, 0.711] |
+  | 3 | [1, 1, 2, 0] | [0.603, 0.508, 0.525, 0.522] |
+  | 3 | [0, 1, 2, 1] | [0.518, 0.360, 0.588, 0.519] |
+
+  Position 0 is wrong as often as the others and the error magnitude is flat across positions. By
+  the signature recorded before this run, "position 0 wrong too" rules out the RoPE-offset and
+  intra-row-causal-structure hypotheses (those spare position 0) and points at the row's prefix:
+  every draft token in the row attends to a wrong prefix, so all n are wrong by a similar amount.
+
+  **The one thing to check next, with the numbers to compare:** the verify rows' `seq_lens` in the
+  MERGED batch versus the reference verify batch. `mix_with_verify` widens `seq_lens`/`seq_lens_cpu`,
+  and EXTEND and TARGET_VERIFY disagree on what that field means -- EXTEND wants prefix + extend_len
+  (= prefix + n) with `extend_prefix_lens` = prefix, while the verify path keeps `seq_lens` at the
+  committed prefix and masks the tree itself. Observed running-batch `seq_lens` at the steps above:
+  `[1545]`, `[2534, 1191]`, `[4916, 2622, 2894]`. Log, for the verify rows only, `seq_lens`,
+  `extend_prefix_lens`, `extend_seq_lens` and `positions[0]` from BOTH the merged batch and `_vfb`,
+  and make the merged batch satisfy the EXTEND contract. If that is it, this single convention has
+  been behind every "verify rows look off" symptom in this file.

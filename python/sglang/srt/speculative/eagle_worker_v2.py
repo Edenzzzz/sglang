@@ -1654,8 +1654,6 @@ class EAGLEWorkerV2(BaseSpecWorker):
         result.mixed_running_result.accept_lens = accept_lens
         result.mixed_running_result.new_seq_lens = new_seq_lens
         result.mixed_running_result.bonus_tokens = bonus_tokens
-        result.mixed_running_result.new_seq_lens = new_seq_lens
-        result.mixed_running_result.accept_lens = accept_lens
 
         # Both draft extends. Without them the next step has no draft input and the relay stash
         # fails on `payload.topk_p` being None (measured) -- the draft model must see this step's
@@ -1684,7 +1682,9 @@ class EAGLEWorkerV2(BaseSpecWorker):
             # num_tokens_per_req = speculative_num_draft_tokens. Next: find what the runner derives
             # raw_num_tokens from for this batch (input_ids.numel() / extend_num_tokens /
             # num_accept_tokens) and make it bs*n, rather than resizing the tensors.
-            self.draft_worker._draft_extend_for_decode(batch, batch_output)
+            self.draft_worker._draft_extend_for_decode(
+                running, result.mixed_running_result
+            )
 
             if (
                 get_parallel().pp_size > 1

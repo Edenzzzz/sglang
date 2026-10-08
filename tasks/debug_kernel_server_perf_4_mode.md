@@ -9201,3 +9201,40 @@ the kernel can be validated against the causal fp32 reference using `venv_up`'s 
 repairing the fork venv first. That is the goal's "implement/validate the kernel" step, unblocked
 by a path that does not depend on the broken fork environment. Repairing the fork venv (a
 torch/nccl ABI mismatch) is only needed later for the fork SERVING A/B.
+
+## 2-D dispatch boundary: WHY it bends, and the rule it implies — 2026-10-08
+
+Re-analysis of the existing measured surface (`tasks/fused_specdec_workload/boundary_28x4x128.json`,
+25 points, speedup = min(seq, conc) / fused; no new GPU time needed). The boundary is a **RATIO**,
+not two independent thresholds, and that is why thresholding two axes separately could never fit it:
+
+| kv | nd at which fused starts winning | kv / nd |
+|---|---|---|
+| 512 | 8 | 64 |
+| 2048 | 32 | 64 |
+| 8192 | 115 | 71 |
+| 16384 | 365 | 45 |
+| 32768 | 365 | 90 |
+
+- **Monotone in both axes, opposite directions**: mean speedup by `nd` is
+  0.642 / 0.902 / 0.934 / 0.982 / 1.013 for nd = 0 / 8 / 32 / 115 / 365; by `kv` it is
+  1.086 / 0.949 / 0.853 / 0.815 / 0.770 for kv = 512 ... 32768.
+- **At `nd = 0` the fused kernel ALWAYS loses** (0.617-0.704x across every kv). No rule phrased on
+  `qo_len`/`kv` alone can represent that, which is precisely the defect in the harness rule
+  (`four_mode_dispatch.route`: `qo_len >= 128 and kv >= 4096`) and in the serving rule
+  (`mixed_dispatch.py`: `packed_qo >= 16, kv_tiles >= 1`). Both omit the decode population, which
+  the data says is the deciding variable.
+- **Derived rule: dispatch fused iff `kv <= 64 * nd`** (equivalently `kv_tiles <= nd` at a 64-wide
+  KV tile -- one decode row per KV tile of the FA3 row). It reproduces the flip at kv 512 and 2048
+  exactly and kv 16384 correctly; its two misses (kv 8192 at nd 115, kv 32768 at nd 365) are both
+  in the flat region where measured speedup is 1.008-1.026, i.e. where the choice does not matter.
+- **Mechanism this supports** (the candidate named in the item, now quantified): the fused win is
+  bounded by whether the co-resident decode population can fill the SMs FA3 would otherwise leave
+  idle, at roughly ONE 64-wide KV tile of decode work per decode row. KV length only matters through
+  how many tiles the FA3 row needs -- hence a ratio.
+
+Still to do on this item (needs the GPU, blocked on the `fi` restore): fit the boundary on the full
+(packed_qo, kv_tiles, decode_rows, decode_kv) instead of the 2-D (kv, nd) slice; re-check
+`MIN_QO_LEN=16` against the measured 32 -> 56 crossover (FA3 0.78x at packed_qo 32, 1.13x at 56, so
+a floor of 16 admits rows where FA3 LOSES); then make the harness and serving rules agree on the
+ratio form, since they currently disagree with each other AND with the data.

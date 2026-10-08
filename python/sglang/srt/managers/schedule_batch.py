@@ -3228,9 +3228,12 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             req.refresh_fill_ids()
             req.extend_end = prefix_len + n
 
-        # The draft tokens ARE the running rows' input; unlike the tail path there is no pending
-        # relay token to resolve, because draft() has already produced them.
-        self.input_ids = torch.cat([self.input_ids, verify_input.draft_token])
+        # The draft tokens ARE the running rows' input, and `eagle_prepare_for_verify` has already
+        # set `running_batch.input_ids = verify_input.draft_token`. `merge_batch` concatenates
+        # input_ids itself, so concatenating them HERE too double-adds them: measured as
+        # `tensor a (2055) must match tensor b (2051)` -- off by exactly draft_token_num against
+        # out_cache_loc, which is concatenated only once. Leave input_ids to merge_batch.
+        # (Upstream's tail path sets `input_ids = None` for the same reason: the merge owns it.)
         self.mix_running_indices = running_batch.req_pool_indices
         self.mix_running_indices_cpu = running_batch.req_pool_indices_cpu
 

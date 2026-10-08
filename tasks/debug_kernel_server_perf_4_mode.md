@@ -9306,3 +9306,18 @@ change: the harness already has an `EXTRA_DEFS` passthrough (flashinfer commit b
 would need the same treatment through its own flag env if any sglang path needs them -- but the
 standalone kernel test does not, which is why validating the kernel this way stays viable.
 Recorded before the result so the next session does not re-derive it.
+
+**The fused build's real blocker was the C++ standard, not CUDA 13.1.** The `double4` deprecation
+notes and the `REGISTER_*` macro redefinitions in the log are warnings and pre-existing; the
+`fatal : Could not open input file ...compute_90.cpp1.ii` was a downstream symptom, and the pod has
+ample room (3.3 TB disk free, 1.6 TB RAM), so the earlier cgroup/space theory was wrong. Grepping
+for the first hard error:
+`torch/all.h:5: error: #error C++20 or later compatible compiler is required to use PyTorch.`
+(and the same for `ATen.h`). **torch 2.14 requires C++20 while the harness passes `-std=c++17`.**
+Fixed by switching the fused `load()`'s `extra_cuda_cflags` to `-std=c++20` (one occurrence in
+`tests/test_fused_server_batch.py`). Note this is a consequence of validating the kernel against
+`venv_up`'s torch 2.14 instead of the fork's older torch -- the flag change belongs with that
+choice, and should be made conditional (or the fork venv repaired) rather than committed blindly to
+the flashinfer tree.
+Lesson that generalises: "could not open input file" from nvcc is almost never the real error --
+grep the whole log for the FIRST `error:` before theorising about resources.

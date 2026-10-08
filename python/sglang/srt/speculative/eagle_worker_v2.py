@@ -1488,9 +1488,17 @@ class EAGLEWorkerV2(BaseSpecWorker):
 
         Chain draft only (topk == 1): each verify row is then a plain n-token causal extend.
         """
+        from sglang.srt.layers.logits_processor import LogitsProcessorOutput
         from sglang.srt.managers.schedule_batch import ScheduleBatch
-        from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode, ForwardBatch
-        from sglang.srt.speculative.eagle_utils import eagle_prepare_for_verify
+        from sglang.srt.model_executor.forward_batch_info import (
+            CaptureHiddenMode,
+            ForwardBatch,
+            ForwardMode,
+        )
+        from sglang.srt.speculative.eagle_utils import (
+            eagle_prepare_for_verify,
+            eagle_sample,
+        )
 
         assert self.topk == 1, "4-mode step requires --speculative-eagle-topk 1"
         running: ScheduleBatch = batch.mixed_spec_running
@@ -1527,11 +1535,44 @@ class EAGLEWorkerV2(BaseSpecWorker):
         batch_output = self.target_worker.forward_batch_generation(
             batch=None, forward_batch=fb, is_verify=True, pp_proxy_tensors=pp_proxy_tensors
         )
-        # Split the single forward's output: prefill rows take last-token logits and their own
-        # hidden states; the verify rows' slice feeds upstream's existing accept path.
-        # TODO(untested): confirm upstream's logits_output lays prefill rows first -- it follows the
-        # merged batch's row order, which mix_with_verify builds as [chunk | verify].
-        return batch_output, verify_input, running, (n_pre_rows, t_pre)
+        # Split the single forward's output. Row order follows the merged batch, which
+        # mix_with_verify builds as [chunk rows | verify rows], so the prefill rows are the first
+        # n_pre_rows of next_token_logits and the first t_pre of hidden_states.
+        lo = batch_output.logits_output
+        pre_logits = lo.next_token_logits[:n_pre_rows]
+        ver_logits = lo.next_token_logits[n_pre_rows:]
+        pre_hidden = ver_hidden = None
+        if lo.hidden_states is not None:
+            pre_hidden = lo.hidden_states[:t_pre]
+            ver_hidden = lo.hidden_states[t_pre:]
+        pre_out = LogitsProcessorOutput(
+            next_token_logits=pre_logits, hidden_states=pre_hidden
+        )
+        ver_out = LogitsProcessorOutput(
+            next_token_logits=ver_logits, hidden_states=ver_hidden
+        )
+
+        # Verify rows: hand the slice to upstream's own accept path, paired with the RUNNING batch
+        # (eagle_sample reads batch.seq_lens and verify_input fields sized to that batch, not to
+        # the merged one).
+        running.forward_mode = ForwardMode.TARGET_VERIFY
+        predict, accept_lens, accept_index = eagle_sample(
+            verify_input, running, ver_out, None
+        )
+
+        # TODO(untested, needs a GPU run to finish): three pieces remain before this is usable --
+        #   1. sample the PREFILL rows with `batch`'s own sampling_info (upstream samples inside
+        #      forward_batch_generation when is_verify=False; here is_verify=True returned raw
+        #      logits, so the prefill half must be sampled explicitly);
+        #   2. commit the accepted tokens the way run_eagle_verify does after eagle_sample
+        #      (new_seq_lens = batch.seq_lens + accept_lens, mamba/c128 cleanup hooks);
+        #   3. run BOTH draft extends -- `_draft_extend_for_prefill` for the chunk rows and
+        #      `_draft_extend_for_decode` for the verify rows -- and return a GenerationBatchResult
+        #      carrying the running batch's result alongside the prefill one (the fork used
+        #      `result.mixed_running_result` for this).
+        # Each of 1-3 is mechanical but needs the server up to verify shapes, which is blocked on
+        # the extension rebuild against torch 2.14.1.
+        return batch_output, pre_out, (predict, accept_lens, accept_index), running
 
     def _forward_prefill_batch(
         self, batch, on_publish=None, pp_proxy_tensors=None, coordination_plan=None

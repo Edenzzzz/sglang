@@ -9747,3 +9747,16 @@ qo1=64 WITHOUT the grep filter and read it: `nonzero = 0` proves the tile128 run
 its accumulator (an epilogue/store fault), while `nonzero > 0` with a wrong absmax means it writes
 computed-but-wrong values (a mainloop/accumulator fault). Those two point at opposite halves of
 Runner1 and the existing print distinguishes them without any new instrumentation.
+
+**The harness already had the right diagnostic; it is behind `DUMP_ROWS=1`.**
+`test_fused_server_batch.py:671` guards the failure-branch dump, and its own comment states the
+discriminator I had been planning to build: *"small-but-nonzero means the mainloop accumulated part
+of the KV"*. It prints the per-token error profile, which heads/tokens are bad, and the reference
+values. So the store-fault vs compute-fault question needs no new instrumentation at all -- only
+`DUMP_ROWS=1`, which nothing in this investigation had set.
+Running it on the discriminating fixture (`qo:424,64,1 prefix:3577,0,13`, 0 unwritten rows, task0
+rel err 0.93-1.04 across repeats while FA3 holds ~0.0066-0.0074 and task2 ~0.0008).
+Reading rule, fixed in advance: all-zero output => the tile128 runner's epilogue never stores;
+small-but-nonzero => its mainloop accumulated only part of the KV; full-magnitude-but-wrong => the
+accumulation or the mask is wrong. Those are three different halves of Runner1 and the dump
+separates them in one run.

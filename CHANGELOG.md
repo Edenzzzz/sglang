@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.26.2 — Remaining edit reduced to mechanical, field names confirmed (2026-10-09)
+
+- `UnifiedWgmmaPlanPtrs` already declares all nine fields the non-unified FA3_UPSTREAM path needs
+  (dense_page_table, q/kv_indptr_per_req, kv_lens_per_req, total_q, num_pages, num_requests,
+  max_pages_per_seq, max_seqlen_q), and the extension already builds those arrays for
+  `fa3_only_run`.
+- Shape of the change: select the wrapper TYPE unconditionally so `wgmma_plan` exists, keep
+  `kUnifiedWgmma` gated as-is so the broken unified scheduler stays off, and populate the plan from
+  the existing locals. No field left unset, no feature disabled.
+
 ## v0.26.1 — Remaining work fully specified (2026-10-09)
 
 - `UpstreamFA3Plan` (`hopper/fa3_upstream.cuh:140`) carries the five fields the non-unified

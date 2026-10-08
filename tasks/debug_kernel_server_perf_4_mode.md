@@ -10903,3 +10903,34 @@ machinery, it needs those existing pointers routed to the fused path's `up.*` as
 That completes the specification: no design question remains, the data exists, and the change is a
 routing one. This is the last outstanding item before the per-executor FA3 baseline and the fork
 serving A/B can both run.
+
+### The edit, now mechanical: field names confirmed on both sides — 2026-10-09
+
+`UnifiedWgmmaPlanPtrs` (`unified_wgmma_scheduler.cuh:186-233`) already declares every field needed:
+```
+IdType* dense_page_table;    // :202   <- raw kv_indices
+int     max_pages_per_seq;   // :203
+int     total_q;             // :204
+int     num_requests;        // :208
+int     num_pages;           // :209
+int     max_seqlen_q;        // :211
+IdType* kv_lens_per_req;     // :228
+IdType* q_indptr_per_req;    // :229
+IdType* kv_indptr_per_req;   // :233
+```
+and the extension already builds exactly those arrays for `fa3_only_run`
+(`fused_fa3_persistent_ext.cu:276-288`).
+**So the change is purely mechanical, and the shape that avoids enabling the broken path is:**
+always select the WRAPPER TYPE (`using FA3ParamsSel = UnifiedWgmmaParams<FA3Params, IdT>;`
+unconditionally, so `wgmma_plan` exists) while leaving `constexpr bool kUnifiedWgmma` driven by
+`FLASHINFER_FUSED_UNIFIED_WGMMA` as it is today -- the SCHEDULER choice stays off, only the params
+struct gains a field. Then populate `fa3.wgmma_plan.{dense_page_table, q_indptr_per_req,
+kv_lens_per_req, kv_indptr_per_req, total_q, num_pages, num_requests, max_pages_per_seq,
+max_seqlen_q}` from the same locals the `fa3_only_run` site uses. That makes `FA3_UPSTREAM=1`
+compile with the non-unified scheduler, which is what the per-executor FA3 baseline needs, WITHOUT
+touching [[fused-wgmma-splitkv-wrong]]'s broken unified route and without leaving any field unset
+(the objection that stopped the guard-only fix).
+Verification sequence after the edit, in order: (1) `FA3_UPSTREAM=1` compiles; (2) the kernel test
+still PASSES fixture 1 (`0 unwritten`, three rows ok) -- the wrapper must not perturb the fused
+path; (3) `TWO_EXEC=1` runs and prints a per-executor FA3 time to divide against; (4) only then the
+fork serving A/B, with an always-on composition counter added first.

@@ -9515,3 +9515,38 @@ device-side `printf` guarded by the existing `-DFLASHINFER_TRACE_WORK` define is
 referenced NOWHERE in the kernel -- `persistent.cuh:379` only mentions it in a comment, which is
 exactly why `TRACE_WORK=1` printed nothing). Adding the printf there makes that flag do what its
 name says, for this and every future coverage bug.
+
+### Task0 gap: the mechanism, read off the code — 2026-10-09
+
+`persistent.cuh:273` `Runner::Run` takes a `cluster_override` and does:
+```
+const uint32_t cluster_idx = (cluster_override != kNoClusterOverride)
+                                 ? cluster_override : persistent_cluster_idx<KTraits>();
+for (IdType work_idx = work_indptr[cluster_idx]; work_idx < work_indptr[cluster_idx + 1]; ...)
+```
+So a Runner executes exactly the work range the SCHEDULER assigned to cluster `cluster_idx` via
+`work_indptr`. In the fused kernel the override is the drain's claimed slot `c`, and the drain stops
+at `c >= n_clusters` where `n_clusters = params_2.num_pers_clusters = num_sm / cluster_size`
+(`scheduler.cuh:1325`).
+
+**Therefore: any work the plan placed in `work_indptr[c]` for `c >= num_pers_clusters` is never
+executed, and its output rows stay NaN-prefilled.** This fits every measurement collected:
+- it is invariant to `sm_split` (48/32/16) because `num_pers_clusters` is derived from `num_sm`, not
+  from the FA2 SM allocation;
+- it is insensitive to row 1's `qo` beyond the point where the plan starts using the out-of-range
+  clusters, which is why unwritten saturated at 55 for qo1 = 87, 96 AND 128;
+- it writes a SUFFIX of the row (the tiles that landed in low-numbered clusters) and leaves the
+  prefix NaN, matching NaN idx 424-478 with 479-510 written;
+- and it explains `rel err ~1.0` with nothing unwritten at qo1 <= 64: with fewer tiles the plan fits
+  inside range, so rows get written, but a task0 row whose tiles are split across clusters that the
+  fused drain visits in a different order than the plan assumed still merges wrongly.
+
+**Next action (host-side, no kernel edit needed):** print the plan's `work_indptr` for the task0
+runner next to `num_pers_clusters` for fixture 1 -- if `work_indptr` has non-empty ranges at
+`c >= num_pers_clusters`, this is confirmed and the fix is to build the FA2 plan with exactly the
+cluster count the fused drain will iterate (or to have the drain iterate the plan's count). The
+harness already holds the plan object (`pp`), so this is a print in
+`tests/fused_fa3_persistent_ext.cu` around line 353 where `P.num_pers_clusters` is set, not a device
+change. That also makes the `-DFLASHINFER_TRACE_WORK` flag earn its name if wired there.
+Four hypotheses are now eliminated with evidence and recorded above: 32-row write window,
+rows-belong-to-another-row, SM partitioning, and narrow-drain under-consumption.

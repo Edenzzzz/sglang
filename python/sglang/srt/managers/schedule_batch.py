@@ -3288,6 +3288,29 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         else:
             self.input_ids = verify_input_ids
 
+        # Seam self-check. The ragged wrapper derives qo_indptr from extend_lens and compares it
+        # against q.shape[0], so any disagreement here surfaces far away as
+        # "q.shape[0] (X) does not match qo_indptr[-1] (Y)" inside flashinfer. Checking it at the
+        # seam names the offending width instead.
+        _ids_n = self.input_ids.numel()
+        _ext_sum = int(sum(self.extend_lens))
+        if _ids_n != _ext_sum or _ext_sum != int(self.extend_num_tokens):
+            logger.error(
+                "MIXVERIFY WIDTH MISMATCH input_ids=%d sum(extend_lens)=%d extend_num_tokens=%d "
+                "| pre_rows=%d running_bs=%d n=%d prefill_ids=%d draft_token=%d "
+                "| pre_extend_lens=%s tail_extend_lens=%s",
+                _ids_n,
+                _ext_sum,
+                int(self.extend_num_tokens),
+                pre_rows,
+                running_bs,
+                n,
+                -1 if prefill_input_ids is None else prefill_input_ids.numel(),
+                verify_input_ids.numel(),
+                list(self.extend_lens[:pre_rows])[:8],
+                list(self.extend_lens[pre_rows:])[:8],
+            )
+
         # The merge left seq_lens_sum at the PREFILL batch's value -- it does not include the
         # decode rows at all, and ForwardBatch.init_new only recomputes it when it is None
         # (so a stale sum survives). FA3 metadata sized from a too-small total reads out of

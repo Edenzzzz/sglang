@@ -301,6 +301,11 @@ class LogitsProcessorOutput:
 @dataclasses.dataclass
 class LogitsMetadata:
     forward_mode: ForwardMode
+    # 4-mode step: tokens contributed by VERIFY rows at the tail of a MIXED batch. Those rows need
+    # a logit per draft token (verify compares all of them), while the chunk rows need only their
+    # last. A MIXED batch otherwise takes the last-token path, which gave verify 1 logit instead of
+    # draft_token_num and failed as `shape '[1, 4]' is invalid for input of size 1`.
+    mixed_verify_tokens: int = 0
     capture_hidden_mode: CaptureHiddenMode = CaptureHiddenMode.NULL
     next_token_logits_buffer: Optional[torch.Tensor] = None
 
@@ -385,6 +390,7 @@ class LogitsMetadata:
 
         return cls(
             forward_mode=forward_mode,
+            mixed_verify_tokens=getattr(forward_batch, "mixed_verify_tokens", 0) or 0,
             capture_hidden_mode=forward_batch.capture_hidden_mode,
             next_token_logits_buffer=forward_batch.next_token_logits_buffer,
             extend_return_logprob=extend_return_logprob,
@@ -682,6 +688,16 @@ class LogitsProcessor(nn.Module):
         ):
             # Prefill without input logprobs.
             last_index = torch.cumsum(logits_metadata.extend_seq_lens, dim=0) - 1
+            if logits_metadata.mixed_verify_tokens:
+                # 4-mode step: keep the chunk rows' last token, then EVERY token of the verify rows
+                # (they are the final mixed_verify_tokens positions of the batch).
+                n_ver = logits_metadata.mixed_verify_tokens
+                total = hidden_states.shape[0]
+                keep_chunk = last_index[last_index < total - n_ver]
+                keep_verify = torch.arange(
+                    total - n_ver, total, device=hidden_states.device
+                )
+                last_index = torch.cat([keep_chunk, keep_verify])
             pruned_states = hidden_states[last_index]
             if hidden_states_before_norm is not None:
                 pruned_states_before_norm = hidden_states_before_norm[last_index]

@@ -646,6 +646,8 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
     # For extend
     extend_num_tokens: Optional[int] = None
+    # 4-mode step: tokens contributed by VERIFY rows at the tail (see mix_with_verify).
+    mixed_verify_tokens: int = 0
     extend_seq_lens: Optional[torch.Tensor] = None
     extend_prefix_lens: Optional[torch.Tensor] = None
     extend_start_loc: Optional[torch.Tensor] = None
@@ -989,6 +991,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         ret = cls(
             # Required core inputs
             forward_mode=batch.forward_mode,
+            mixed_verify_tokens=getattr(batch, "mixed_verify_tokens", 0) or 0,
             batch_size=len(batch.seq_lens),
             input_ids=batch.input_ids,
             req_pool_indices=batch.req_pool_indices,

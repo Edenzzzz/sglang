@@ -557,6 +557,21 @@ model is good enough. It does not hold in the strong form, that the split unlock
 cannot reach. A lightweight MLP is about 6% on both. Mean mixed step: 36.7 ms SPLIT vs 38.7 ms
 LPT.
 
+**Where this left point 3 (settled 2026-10-08).** The claim was a chain: the split is easier to
+model -> a better predictor -> better SLO control. Link one holds weakly (above). Link two is
+**measured false in-node**: on the 4-mode MTP server, every predictor-driven chunk cap LOST to no
+EDF at all, and the arm that won -- deadline ORDER -- uses no latency model whatsoever
+(pd_colocation_vs_disagg.md point 3; chat TTFT -62%, codex P99 ITL -27%). Splitting prefill to
+respect a predicted budget adds fixed-cost mixed steps that every decode row waits through, and
+under steady load the deferred work has nowhere to go. So an "EDF-on-SPLIT vs EDF-on-LPT"
+attainment comparison was not run: the in-node predictor has no decision left to make, which
+makes the comparison vacuous rather than pending.
+
+The predictor does earn its keep one level up, where a decision is a real choice between
+alternatives rather than a delay of work that must happen anyway: the router's SLO veto. There it
+is decisive, and only once it predicts the right quantity -- pricing decode rather than prefill
+cut hot-prefix chat ITL 65% and its P99 80% (pd_colocation_vs_disagg.md point 1, v0.18.0).
+
 <a id="four-mode-mtp-step--2026-10-07"></a>
 ### The 4-mode MTP step exists: prefill chunks and verify rows in ONE target forward — 2026-10-07
 

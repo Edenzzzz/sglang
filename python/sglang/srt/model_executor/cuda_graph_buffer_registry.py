@@ -429,6 +429,7 @@ class CudaGraphBufferRegistry:
 
         # Phase 2: collect (dst, src) pairs and dispatch a grouped copy.
         gpu_dsts: List[torch.Tensor] = []
+        gpu_names: List[str] = []
         gpu_srcs: List[torch.Tensor] = []
         cpu_dsts: List[torch.Tensor] = []
         cpu_srcs: List[torch.Tensor] = []
@@ -466,8 +467,22 @@ class CudaGraphBufferRegistry:
             else:
                 gpu_dsts.append(dst)
                 gpu_srcs.append(src)
+                gpu_names.append(getattr(slot, "name", "?"))
         if gpu_dsts:
-            _grouped_foreach_copy_(gpu_dsts, gpu_srcs)
+            try:
+                _grouped_foreach_copy_(gpu_dsts, gpu_srcs)
+            except RuntimeError:
+                import logging as _lg
+
+                _lg.getLogger(__name__).error(
+                    "FILL_DEBUG mismatch: %s",
+                    [
+                        (nm, tuple(d.shape), tuple(sv.shape))
+                        for nm, d, sv in zip(gpu_names, gpu_dsts, gpu_srcs)
+                        if tuple(d.shape) != tuple(sv.shape)
+                    ],
+                )
+                raise
         for dst, src in zip(cpu_dsts, cpu_srcs):
             dst.copy_(src)
 

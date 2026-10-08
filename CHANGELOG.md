@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.25.2 — Fork serving environment fully restored (2026-10-09)
+
+- Second dependency fault fixed: `torchvision 0.24.1+cu128` against torch 2.14.1 caused a circular
+  import; installed the matching `0.29.1`. With the earlier nccl swap, the fork venv now imports
+  both the fork's sglang (`/dev/shm/w/python/sglang`) and our fused flashinfer (`/dev/shm/w/fi`).
+- Pod restore is a seven-step recipe, all documented. The fork serving A/B -- the only arm that
+  exercises the split kernel on the realistic tracelab workload -- is now reachable.
+
 ## v0.25.1 — Fork venv repaired: nccl library mismatch, serving A/B path unblocked (2026-10-09)
 
 - The fork venv's `import torch` failure (`undefined symbol: ncclCommResume`) was an nccl build

@@ -10540,3 +10540,29 @@ bar on a realistic workload. Next: launch the fork server with the split kernel 
 (`SGLANG_TWO_EXEC` / `SGLANG_FUSED_FA3_SM_SPLIT`), confirm `mixed_fused_fa3=N(xx%)` in the log and
 the fallback count ([[fused-ab-validity-rule]]), run `drivers/srv_correctness.py`, then the
 chat+tracelab A/B against the same build with the split off.
+
+### [x] PATH A FULLY UNBLOCKED: fork sglang + fused flashinfer both import — 2026-10-09
+
+Second dependency fault after the nccl one: the fork venv had **torchvision 0.24.1+cu128** against
+torch 2.14.1, which fails as
+`AttributeError: partially initialized module 'torchvision' has no attribute 'extension'
+(most likely due to a circular import)`. `venv_up` has the compatible 0.29.1, and the pod has
+network, so: `/dev/shm/w/venv/bin/pip install --no-deps "torchvision==0.29.1"`.
+Verified afterwards:
+```
+PYTHONPATH=/dev/shm/w/python:/dev/shm/w/fi /dev/shm/w/venv/bin/python -c 'import sglang, flashinfer'
+-> sglang 0.0.0.dev0 from /dev/shm/w/python/sglang
+-> flashinfer /dev/shm/w/fi/flashinfer
+```
+**The import paths are the point of that check, not a formality**: it confirms the FORK's sglang and
+OUR fused flashinfer are what load, which is exactly the failure [[pod-tree-verify-manifest]]
+records from the earlier restore (an upstream sglang silently on PYTHONPATH). Verify this before any
+serving number, every time.
+Pod restore recipe is now **seven** steps: clone cutlass+spdlog -> push fork sources -> push
+`flash-attention/hopper` as a sibling of `fi` -> repoint `flashinfer/data/*` symlinks -> warm the
+BatchAttention JIT -> swap `libnccl.so.2` to the cu13 build -> install `torchvision==0.29.1`.
+Next, in order, and all of it now reachable: (1) launch the fork server with the split kernel
+(`SGLANG_TWO_EXEC=1`, `SGLANG_FUSED_FA3_SM_SPLIT`, split 112 from the sweep above) and CONFIRM
+`mixed_fused_fa3=N(xx%)` plus the fallback count in the log; (2) `drivers/srv_correctness.py`;
+(3) the chat+tracelab A/B, split ON vs OFF in the same build, reporting TTFT/ITL/throughput beside
+the composition counter and fallbacks. That sequence is what the >=30%/>=10% bar needs.

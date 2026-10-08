@@ -3246,11 +3246,16 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         # Measured (OFFCONV / SLTRACE): running_batch.seq_lens IS the committed prefix at
         # verify time and eagle_prepare_for_verify does not move it.
         verify_base_seq_lens = running_batch.seq_lens.clone()
-        verify_base_seq_lens_cpu = (
-            running_batch.seq_lens_cpu.clone()
-            if running_batch.seq_lens_cpu is not None
-            else None
-        )
+        # Derive the host copy from the DEVICE tensor, not from running_batch.seq_lens_cpu.
+        # Measured: at this point the CPU mirror is STALE relative to the device seq_lens --
+        # eagle_prepare_for_verify advances the device tensor and does not refresh the mirror.
+        # One 4-mode step showed device seq_lens = 6699 against a mirror of 6696, and using the
+        # mirror put both seq_lens_cpu and prefix_lens 3 tokens off the tensor the attention
+        # planner actually reads.
+        # TODO(sync): this is a per-4-mode-step D2H of bs ints. It is here because correctness
+        #   comes first; removing it means refreshing seq_lens_cpu where the device tensor is
+        #   advanced, which is outside this merge.
+        verify_base_seq_lens_cpu = verify_base_seq_lens.cpu()
         # mix_with_running sets input_ids = None on purpose (the relay rebuilds the DECODE tokens
         # from the future map). For a 4-mode step the draft tokens are already known, so keep the
         # chunk's ids and append them -- taking the None branch instead replaced the whole tensor
@@ -3271,17 +3276,15 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         # derived from `seq_lens - extend_lens` as an earlier comment here claimed. mix_with_running
         # filled it with decode semantics (`seq_len - 1`, correct for a 1-token extend), and a
         # verify row extends n tokens from the committed prefix P, so it must be P.
-        # Left at P-1, the attention planner builds qo_indptr as cumsum(seq_lens - prefix_lens)
-        # and gets (P+n)-(P-1) = n+1 for each verify row -- one token too many per row. That
-        # surfaced far away as flashinfer's
-        #   "q.shape[0] (2051) does not match qo_indptr[-1] (2055)"
-        # with the deficit equal to the VERIFY ROW COUNT (measured 4, 3 and 2 across three runs,
-        # on both the paged and ragged wrappers), and it reproduced with the fused split OFF.
-        if verify_base_seq_lens_cpu is not None:
-            self.prefix_lens[pre_rows:] = [int(x) for x in verify_base_seq_lens_cpu.tolist()]
-        else:
-            # Same availability fallback mix_with_running uses; P = (P-1) + 1.
-            self.prefix_lens[pre_rows:] = [p + 1 for p in self.prefix_lens[pre_rows:]]
+        # The attention planner builds qo_indptr as cumsum(seq_lens - prefix_lens), so a prefix
+        # that disagrees with extend_lens silently resizes the step. Measured before the fix:
+        #   tail seq_lens=[2047, 6703] prefix=[0, 6695] qo=[2047, 8] extend_seq_lens=[2047, 4]
+        # i.e. the verify row claimed qo = 2n, surfacing several frames away as flashinfer's
+        #   "q.shape[0] (2051) does not match qo_indptr[-1] (2055)".
+        # It reproduced with the fused split OFF, which is what attributed it to this merge.
+        # The committed prefix P, taken from the same tensor seq_lens is built from, so that
+        # seq_lens - prefix_lens == extend_lens == n exactly.
+        self.prefix_lens[pre_rows:] = [int(x) for x in verify_base_seq_lens_cpu.tolist()]
 
         # 4. EXTEND semantics for the tail rows: seq_lens = committed_prefix + n, so that
         # the row's n draft tokens sit at positions prefix .. prefix+n-1. That is the contract ordinary spec decode uses:

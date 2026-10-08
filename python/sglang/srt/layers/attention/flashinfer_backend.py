@@ -1471,6 +1471,40 @@ class FlashInferAttnBackend(AttentionBackend):
             out[1:] = torch.from_numpy(np.cumsum(vals).astype(np.int32))
             return out.to(dev, non_blocking=True)
 
+        # Bounds checks at the point of construction. Every index this plan builds is consumed
+        # by a torch indexing op (`qv[tok]`, `index_copy_`, `r2t[rows]`), and an out-of-range
+        # value there raises a DEVICE-SIDE assert from IndexKernel.cu that surfaces at whatever
+        # unrelated CUDA call happens next -- in practice a flashinfer plan() several frames
+        # away, naming the victim rather than the cause. Checking here converts that into a
+        # message that names the offending width.
+        _tok_total = int(tok_off[-1])
+        _q_rows = (
+            int(forward_batch.input_ids.numel())
+            if forward_batch.input_ids is not None
+            else -1
+        )
+        if _q_rows >= 0 and _tok_total != _q_rows:
+            logger.error(
+                "FUSED_SPLIT BOUNDS sum(extend_seq_lens_cpu)=%d != input_ids=%d "
+                "(rows=%d qo_lens tail=%s) -- refusing the split for this batch",
+                _tok_total, _q_rows, len(qo_lens), qo_lens[-4:].tolist(),
+            )
+            return False
+        _rp_max = max(rp_cpu) if rp_cpu else -1
+        if _rp_max >= int(self.req_to_token_pool.req_to_token.shape[0]):
+            logger.error(
+                "FUSED_SPLIT BOUNDS req_pool_index max=%d >= req_to_token rows=%d",
+                _rp_max, int(self.req_to_token_pool.req_to_token.shape[0]),
+            )
+            return False
+        _max_kv_needed = int(seq_lens_cpu.max())
+        if _max_kv_needed > int(self.req_to_token_pool.req_to_token.shape[1]):
+            logger.error(
+                "FUSED_SPLIT BOUNDS max seq_len=%d > req_to_token cols=%d",
+                _max_kv_needed, int(self.req_to_token_pool.req_to_token.shape[1]),
+            )
+            return False
+
         r2t = self.req_to_token_pool.req_to_token
         # Head counts and dtypes live on the indices updater (see _fused_split_plan's caller).
         iu = self.indices_updater_prefill

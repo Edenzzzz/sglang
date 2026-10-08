@@ -10052,3 +10052,29 @@ built over the FA2 sub-batch (q/o offsets relative, kv absolute), so the extensi
 the 424-row base; confirm that base is applied on the STORE path and not only on the load path,
 since a missing base would write q 18-36 into rows 18-36 (inside row 0's span, where FA3 later
 overwrites them) and leave 442-478 NaN -- which is exactly the observed shape.
+
+**Sub-batch-base hypothesis REFUTED (candidate 12).** The extension offsets BOTH the load and the
+store pointer by the same amount:
+```
+P.q       = static_cast<PDT*>(q.data_ptr())      + pers_row_offset * q.stride(0);       // :300
+P.final_o = static_cast<PDT*>(pers_o.data_ptr()) + pers_row_offset * pers_o.stride(0);  // :323
+```
+so the FA2 sub-batch base is symmetric and "applied on load but not store" cannot happen. The store
+itself is, for `num_kv_chunks == 1` (our case):
+```
+o_ptr_base = params.final_o + q_indptr * o_stride_n + (kv_head_idx * gqa_group_size) * o_stride_h;
+write_o_reg_gmem<KTraits>(o_frag, &q_smem, o_ptr_base, qo_packed_idx_base, q_len,
+                          o_stride_n, o_stride_h, gqa_group_size, tid);   // persistent.cuh:596-600
+```
+With `q_indptr = 0` (row 1 is the sub-batch's first request) and `pers_row_offset` supplying the
+424-row base, the packed-128 tile should write q rows 18..36 -- absolute 442..460, inside the NaN
+range. It executes (proved by the trace) and those rows stay NaN, so the remaining suspect is
+**`write_o_reg_gmem`'s own row bounds**: it receives `qo_packed_idx_base` and `q_len` but NOT a
+lower bound, so whether it writes `[qo_packed_idx_base/gqa, qo_upperbound)` or something
+tile-relative is the thing to read. Note the comment at `:396` says tile-relative is the layout the
+MERGE expects -- i.e. the partial_o path -- so a tile-relative index leaking into the
+write-through path would write each tile at rows 0..18 of its own base instead of at its true
+offset, which would leave the leading rows NaN exactly as observed and is the first thing to check
+in that function.
+Twelve candidates eliminated. The confirmed `MaskMode::kCausal` fix stands and is independent of
+this.

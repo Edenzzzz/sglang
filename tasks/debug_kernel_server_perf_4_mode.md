@@ -107,6 +107,55 @@ produced one false pass on this project. This satisfies priority item 2.
       `flashinfer_backend.py` alone differs by 92 lines across that drift and mixing bases there
       is how the last illegal-access was introduced.
 
+### First GPU gate, 2026-10-09: two failures, both of which the gate was built to catch
+
+Command: `bash /dev/shm/w/drv/split_gate.sh` on the vibecuda H200 pod (job `f393156fcc0614b3`),
+pod tree `/dev/shm/w/up` at upstream `b7b2975` + patch `b7b2975..86e375375`, venv
+`/dev/shm/w/venv` (torch 2.14.1, flashinfer-python 0.7.0.post1), model `/dev/shm/w/qwen7b`,
+server: `--attention-backend flashinfer --enable-mixed-chunk --chunked-prefill-size 2048
+--page-size 1 --max-running-requests 64 --mem-fraction-static 0.8`.
+
+**Result: `VERDICT: INCONCLUSIVE`, `FUSED_SPLIT_CALLS lines: 0` in the ON arm.**
+
+1. **The partition never ran.** 78/78 steps logged
+   `fused split partition skipped: 'FlashInferAttnBackend' object has no attribute
+   'num_qo_heads'`. `num_qo_heads`, `num_kv_heads`, `head_dim`, `q_data_type` and `data_type`
+   all live on `FlashInferIndicesUpdaterPrefill`, **not** on the backend; commit 62 and the new
+   plan both read them off `self`. Nothing was computed wrongly -- the warning fired and the
+   ordinary path ran -- but **the ON arm was measuring the baseline**. Had the gate been
+   text-equality only, it would have returned a clean PASS for a split that never executed.
+   This is precisely the failure mode [[gate-needs-noise-floor-and-reference]] ends on ("assert
+   the gate EXERCISED the path"), and the always-on counter is what exposed it. Fixed in
+   `ce6cf5670` by reading from `self.indices_updater_prefill`, with a `getattr` guard for
+   `skip_prefill`.
+
+2. **The server-level ON-vs-OFF comparison has no noise floor.** The OFF arm did not reproduce
+   **itself** across two runs of one unchanged binary, so no ON/OFF diff is attributable.
+   Greedy output under a concurrent workload depends on batch composition, which depends on
+   arrival timing. This is noise-floor item 1 of the same memory, hit again.
+
+   **Fix: move the reference inside the step.** `SGLANG_FUSED_SPLIT_VERIFY=1` compares the
+   split's output against the ordinary planned wrapper on the **same inputs in the same step** --
+   the read-only call the OFF path already makes, so the reference cannot drift from the thing
+   under test (memory item 5) and there is no run-to-run noise to confound it. Error is
+   **scale-normalised** (`max|o-ref| / max|ref|`), not clamped elementwise relative, which
+   returns ~1e5 on any near-zero activation (memory item 4). Whole-tensor, FA3-rows and
+   FA2-rows errors are reported separately so a one-sided defect is attributable, and the
+   verdict distinguishes FAIL / NOT EXERCISED / PASS rather than collapsing them.
+
+### Also fixed before that gate: a 28x host-cost bug in the first dispatch
+
+`forward_extend` runs **per layer**. The first version built the token index tensors, three
+indptrs, the per-row `req_to_token` gather, an H2D copy and a flashinfer `begin_forward` inside
+it -- so ~num_layers times per step. A throughput A/B on that version would have measured the
+host overhead rather than the kernel. Split into `_fused_split_plan` (once per step, from
+`init_forward_metadata` -- the division upstream already uses) and `_fused_split_dispatch` (per
+layer: two executor calls plus the scatter, no host work), commit `9abe91e25`.
+
+- [ ] 2026-10-09 **in-step self-check running** (`drv/split_verify.sh`): split ON with
+      `SGLANG_FUSED_SPLIT_VERIFY=1`, verdict keyed on both the error magnitude and
+      `FUSED_SPLIT_CALLS > 0`.
+
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither
 constraint is a cost of the work:

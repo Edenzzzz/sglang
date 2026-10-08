@@ -4429,6 +4429,13 @@ class Scheduler(
                 # Self-gates on batch.spec_info.future_indices; non-spec_v2
                 # no-ops (ForwardBatch.init_new lazily computes the sum).
                 self.future_map.resolve_seq_lens_cpu(batch)
+                # 4-mode step: the verify half is a SECOND logical batch whose draft input
+                # is also a future. Nothing else resolves it -- these calls take the batch
+                # being run -- so draft() would read placeholder tensors (measured:
+                # build_chain_tree's bonus_tokens/seq_lens/bs assert).
+                _mix_pre = getattr(batch, "mixed_spec_running", None)
+                if _mix_pre is not None:
+                    self.future_map.resolve_seq_lens_cpu(_mix_pre)
                 if self._confidence_budget_prepare is not None:
                     self._confidence_budget_prepare(batch, self.future_map)
 
@@ -4439,6 +4446,8 @@ class Scheduler(
                     # snapshot captures the post-consume state — restoring
                     # post-forward must not un-consume staging.
                     resolve_forward_inputs(batch, self.future_map)
+                    if _mix_pre is not None:
+                        resolve_forward_inputs(_mix_pre, self.future_map)
 
                     with self._forward_isolation(batch, overlap=True):
                         future_indices = batch.req_pool_indices

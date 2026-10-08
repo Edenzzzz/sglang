@@ -9075,3 +9075,19 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   the mixed path before crashing. The gate-exercised check needs a counter that is ALWAYS on and
   cheap (a scheduler-side integer reported at the end), not a debug log line. Fix that before the
   next A/B, or the same "it passed but ran nothing" trap recurs a fourth time.
+
+- **[ ] BLOCKER for any ON-arm number: the 4-mode step is not stable under the perf workload.**
+  Re-ran arm 1 with the new always-on counter (port 58, `MIXEDSPEC_STEPS` at INFO):
+  **`mixed_spec_steps: 1`, `tracebacks: 1`, agent json absent.** The counter proves the mixed path
+  DID fire (so this is not another "exercised nothing" false pass -- the new guard worked on its
+  first use), and the server then died in
+  `cuda_graph_buffer_registry.fill_from -> _grouped_foreach_copy_ -> triton _small_copy_kernel`,
+  reached from the ordinary `verify()` (`eagle_worker_v2.py:1397`), with `FILL_DEBUG mismatch: []`
+  (no shape mismatch).
+  It does NOT reproduce under `portcorr3.sh` (5 mixed steps, 0 tracebacks, same build). The
+  workload is the difference: 8192-token shared prefixes and 48 concurrent gsp rows vs 3 background
+  rows. So the next step is to shrink the gap -- raise `portcorr3`'s `NBG` and prefix length until
+  the crash reproduces in the small screen, then read it there (the screen has the diagnostics; the
+  perf driver deliberately has none).
+  Standing: **baseline measured, ON arm unmeasurable until this crash is fixed.** The 30%/10% bar
+  therefore still has no ON-arm number, and the honest reason is a stability bug, not a missing run.

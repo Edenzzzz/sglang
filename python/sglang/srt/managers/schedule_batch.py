@@ -3288,6 +3288,12 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         else:
             self.input_ids = verify_input_ids
 
+        # The merge left seq_lens_sum at the PREFILL batch's value -- it does not include the
+        # decode rows at all, and ForwardBatch.init_new only recomputes it when it is None
+        # (so a stale sum survives). FA3 metadata sized from a too-small total reads out of
+        # bounds, which is the illegal access the first prefix fix hit.
+        self.seq_lens_sum = None
+
         self.mixed_verify_rows = running_bs
         self.mixed_verify_tokens = running_bs * n
 

@@ -10709,3 +10709,29 @@ every row in this shape.
 (b) is the cheapest to test and the most likely, given the sweep above showed the SM split is a
 first-class parameter the kernel needs -- an unset split may mean "no split", i.e. no two-executor
 work by construction.
+
+**CORRECTION to the two A/B verdicts above: the arms are UNVERIFIABLE, not proven invalid.**
+The driver's counter is `two_exec_calls: $(grep -co 'two_exec' "$LOG")`
+(`srv_two_exec_ab.sh:63`) -- it counts occurrences of the literal string `two_exec` in the SERVER
+LOG, not kernel invocations. And `two_exec_calls` appears nowhere in
+`flashinfer_backend.py`, so nothing in the split path necessarily emits it. A zero therefore means
+"the server never logged that string", which is NOT evidence that the split kernel did not run.
+I checked the real signal this project uses ([[fused-ab-validity-rule]]): `mixed_fused_fa3=N(xx%)`
+is absent from BOTH server logs, as is any `two_exec` mention. So there is no composition evidence
+in either direction.
+Net: **all four arms (2 runs x 2 arms) are unusable** -- not because fusion provably did not run,
+but because nothing in the run establishes whether it did. The ~1% spread across arms is consistent
+with either explanation. My "the split kernel never ran" and "the decode guard is the prime suspect"
+statements both overstated the evidence; the guard refutation stands (disabling it changed nothing),
+but it was answering a question the data could not pose.
+**What a usable serving arm needs, concretely:**
+1. a composition signal that is actually emitted -- find what the fork's split path logs (or add an
+   always-on counter, as was done for `MIXEDSPEC_STEPS` on the upstream side, which worked on its
+   first use);
+2. then the arms, on a workload with a real decode population (the guard refuses pure long-prefill
+   batches BY DESIGN per the measured boundary, so chat+tracelab rather than IN=32768 alone);
+3. `drivers/srv_correctness.py` beside it, per the standing rule that every serving arm passes it
+   and reports fallbacks.
+Until (1) exists, no serving number from this driver can be quoted for or against the >=30%/>=10%
+bar. The long-context baseline numbers remain usable as a baseline only
+(32768 in/256 out/16 prompts/conc 8: ~127 tok/s, mean TTFT ~5.5 s, mean ITL ~40.7 ms, 0 fallbacks).

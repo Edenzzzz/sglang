@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.25.7 — Serving A/B verdicts corrected: unverifiable, not invalid (2026-10-09)
+
+- The driver's `two_exec_calls` is `grep -co 'two_exec'` over the server log, and that string is
+  emitted nowhere in `flashinfer_backend.py`, so a zero proves nothing about execution. The real
+  composition signal (`mixed_fused_fa3=`) is absent from both arms' logs too.
+- So all four measured arms are UNUSABLE for the fused question -- no composition evidence either
+  way -- rather than demonstrating that fusion did not run. Both earlier verdicts are corrected in
+  place; the decode-guard refutation stands but answered an unanswerable question.
+- A usable serving arm needs an always-on composition counter first (the `MIXEDSPEC_STEPS` approach
+  worked immediately upstream), then a workload with a real decode population.
+
 ## v0.25.6 — Decode-guard hypothesis refuted; split kernel still not reached in serving (2026-10-09)
 
 - Re-ran the A/B with `SGLANG_FUSED_DECODE_GUARD=0`: the split arm still reports

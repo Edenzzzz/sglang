@@ -8590,3 +8590,32 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   Two genuine bugs WERE found and fixed while chasing this, both of the same shape -- an
   open-ended slice of a tensor that a graph bucket pads, which corrupts silently instead of
   failing: the verify-row logit slice (commit 36) and the verify hidden-state slice (commit 39).
+
+- **[x] 2026-10-08: the ported 4-mode step is numerically EQUIVALENT to the control under a
+  controlled batch composition.** Driver `/dev/shm/portcorr2.sh <arm> <tag>` (upstream `b7b2975b5`,
+  port commit 40, `venv_up`, H200 vibecuda pod). Serialized workload: one 512-token background row
+  asking 6000 tokens (`ignore_eos`) reaches steady decode, THEN one 6000-token prompt is
+  chunk-prefilled against it, so every mixed step is exactly (1 chunk row + 1 verify row) and the
+  composition no longer depends on arrival timing. 3 mixed steps in the ON arm, 0 in the OFF arm,
+  0 tracebacks in all four runs. Two runs per arm:
+
+  | comparison | result |
+  |---|---|
+  | 4-mode vs itself (1a vs 1b) | **IDENTICAL** |
+  | control vs itself (0a vs 0b) | **IDENTICAL** |
+  | control vs 4-mode (0a vs 1a) | **IDENTICAL** |
+
+  This settles the previous bullet: with composition held fixed, both arms are self-reproducible
+  AND agree byte for byte, so the earlier 6-of-10 divergence was timing-dependent batch
+  composition (bf16 reduction order), not a defect. The retraction there was correct.
+
+  **Scope of what this proves, honestly:** 3 mixed steps, each 1 chunk row + 1 verify row, no
+  prefill-graph padding on those steps (`hs` summed exactly), single sequence per side. It does NOT
+  yet cover multi-verify-row steps (the concurrent run reached 4), the padded-bucket path, or
+  acceptance > 1. Next: the same serialized screen with N background rows for `ver_rows > 1`, and a
+  case sized to land in a padded bucket -- those are where commits 36/39 bit.
+  Gate (b), the fp32 per-row recompute, is still the stronger check and still unbuilt on upstream.
+
+  First caught by this screen: a gate with `mixed_steps: 0`. The background row asked 400 tokens
+  and finished before the long prompt arrived -- the SAME mistake as the H20 gate earlier in this
+  file. A correctness run must assert it exercised the path before its result means anything.

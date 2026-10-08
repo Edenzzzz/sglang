@@ -664,10 +664,50 @@ unqualified.
       `sum(extend_seq_lens_cpu)` vs `input_ids`, `req_pool_index` vs `req_to_token` rows,
       `max seq_len` vs its columns. **All three PASSED while the assert still fired**, which
       rules out the plan's own arrays and is itself the useful result.
-- [ ] 2026-10-09 **q-extent check** (`3777ee81a`) -- the one bound left unchecked: the plan's
-      token indices come from `extend_seq_lens_cpu`, but the tensor actually indexed is the
-      layer's `q`. Different objects, nothing guaranteeing they agree (a padded graph replay
-      would make them differ). Carried as an int so the per-layer check needs no sync.
+- [x] 2026-10-09 **q-extent and row-count checks** (`3777ee81a`, `056f28667`) -- neither
+      fired. Kept as cheap guards; neither was the cause.
+
+### 2026-10-09 -- the split PASSES in-server, and the device assert was a use-after-free
+
+**In-server PASS, guard OFF, under `CUDA_LAUNCH_BLOCKING=1`** (`drv/split_verify_ngblk.sh`,
+`sglang-up@056f28667`, same server flags as the 4-mode gate above plus
+`SGLANG_FUSED_DECODE_GUARD=0 SGLANG_FUSED_SPLIT_VERIFY=1`):
+
+| metric | value |
+|---|---|
+| `MIXEDSPEC_STEPS` | 151 |
+| `FUSED_SPLIT_CALLS` | **4501** |
+| partition on real merged batches | `fa3=2 fa2=25` (two-sided) |
+| `FUSED_SPLIT_VERIFY` | **9 ok / 0 FAIL**, err 0.0041-0.0062, worst 0.0078, tol 0.02 |
+| client errors | **0 / 56** |
+
+The reference is the ordinary planned wrapper on the same inputs in the same step, so this is
+the in-server counterpart of the standalone 5/5 fp32 PASS: the dispatch's plumbing (pool,
+`kv_cache`, counters, workspace) is right and the output matches.
+
+**Root cause of the device assert: a use-after-free in my own async copies.** With blocking
+ON the split ran 4501 times clean; with blocking OFF and everything else identical it asserted
+after **one** call. With the split firing in *both* arms, that difference is decisive. The
+mechanism was in `_fused_split_plan`: `tok_idx` and `indptr` did `.to(dev, non_blocking=True)`
+from **Python temporaries** (`torch.from_numpy(np.concatenate(...))`, a local `out`). A
+non-blocking H2D copy needs its host source alive until it completes; these were freed as soon
+as the expression returned, so the copy could read freed memory and land garbage in **index**
+tensors -- hence `IndexKernel.cu ... index out of bounds`, raised at whatever CUDA call came next.
+Fixed in `sglang-up@f53707f53` by making those copies synchronous (a few KB; restoring async
+needs pinned staging buffers owned by the plan).
+
+**REINSTATED, on new evidence: the asynchrony hypothesis I retracted earlier today.** The
+retraction was right for the evidence then -- the blocking run it rested on had the decode guard
+ON, so the split never fired and the comparison was vacuous. Only once the split fired in both
+arms did blocking become decisive. Recorded in that order deliberately: a retraction that was
+correct on its evidence and a reinstatement on better evidence are both part of the trail.
+
+- [x] 2026-10-09 **split PASSES in-server under launch-blocking** -- 4501 calls, 9/0 verify,
+      0/56 errors.
+- [x] 2026-10-09 **device assert root-caused** -- use-after-free in non-blocking H2D copies from
+      temporaries (`f53707f53`).
+- [ ] 2026-10-09 **no-blocking re-run with `f53707f53`** -- the claim stands only if the split
+      stays clean WITHOUT launch-blocking.
 - [ ] 2026-10-09 **guard-OFF arm re-running with `370c511f3`** -- in-server correctness of the
       split on real merged 4-mode batches, via the in-step reference.
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.31.0 — Fused split PASSES in-server; the device assert was a use-after-free (2026-10-09)
+
+`sglang-up@056f28667` for the PASS, `f53707f53` for the fix. Driver `drv/split_verify_ngblk.sh`
+(4-mode MTP server, EAGLE3 chain draft topk=1 / 4 draft tokens, `SGLANG_MIXED_SPEC=1
+SGLANG_FLASHINFER_USE_PAGED=1 SGLANG_FUSED_DECODE_GUARD=0 SGLANG_FUSED_SPLIT_VERIFY=1
+CUDA_LAUNCH_BLOCKING=1`).
+
+- In-server: 151 4-mode merges, **4501 split calls**, two-sided partitions on real merged batches
+  (`fa3=2 fa2=25`), in-step reference **9 ok / 0 FAIL** (err 0.0041–0.0062, worst 0.0078, tol
+  0.02), **0/56** client errors.
+- Root cause of the device-side assert: `_fused_split_plan` did `non_blocking=True` H2D copies
+  from Python temporaries, a use-after-free that wrote garbage into index tensors. Blocking ON →
+  4501 clean calls; blocking OFF → assert after one. Fixed by making the copies synchronous.
+- Four in-server bugs in the dispatch, all invisible to the standalone fp32 gate (which never
+  builds a backend): pool read off `ForwardBatch`, lazily created counter read before its
+  increment, mid-step wrapper on the shared workspace, and the async copies above.
+- Retractions recorded in place: the shared-workspace diagnosis (not the cause; the fix is kept
+  on its own merits) and the earlier retraction of the asynchrony hypothesis (right for its
+  evidence, overturned once the split fired in both arms).
+- No-blocking confirmation run pending; the claim is not quoted unqualified until it passes.
+
 ## v0.30.0 — SM pre-assignment measured: 1.22x attention, and the bar arithmetic closes (2026-10-09)
 
 `sglang-up@b8b405822`, harness `/dev/shm/w/drv/split_margin.py`, H200, torch 2.14.1,

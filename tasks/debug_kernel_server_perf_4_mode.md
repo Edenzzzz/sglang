@@ -9169,3 +9169,19 @@ reporting `mixed_fused_fa3=N(xx%)` and fallbacks beside the timings ([[fused-ab-
 Caveat to check first: `wgmma split-KV is wrong, not unexercised` ([[fused-wgmma-splitkv-wrong]])
 and the retracted symmetric mode ([[fused-symmetric-backfill-is-the-fix]]) -- the A/B must use a
 split/mode those memories do not invalidate.
+
+**`fi` restore, corrected and in progress (2026-10-08).** Two corrections to the recipe above,
+both found before wasting the push:
+1. The fused kernel is **`{FI}/tests/fused_fa3_persistent_ext.cu`** (30 KB) -- it lives in
+   `tests/`, which the first tarball omitted. That push would have completed and still failed.
+   `tests/test_fused_server_batch.py` compiles it with `torch.utils.cpp_extension.load`.
+2. It needs `3rdparty/cutlass/include`, `3rdparty/cutlass/tools/util/include` and
+   `3rdparty/spdlog/include` (from the `load()` call's `extra_include_paths`), plus a generated
+   `batch_attention_config.inc`.
+**The pod HAS network access** (`git ls-remote` to GitHub succeeds), so the bulk is cloned there
+rather than pushed: cutlass @ `a49a78ffefc86a87160dfe0ccc3a3a2d1622c918` (186 M) and spdlog @
+`c3aed4b68373955e1cc94307683d44dca1515d2b` (5.2 M) are now in `/dev/shm/w/fi/3rdparty/` (pins read
+from `git submodule status` in `/opt/tiger/flashinfer`). Only our delta --
+`flashinfer csrc include tests` = 1.94 MB compressed, 44 base64 chunks -- goes over the webshell.
+Use this split for any future pod restore: clone third-party, push only the fork's own sources.
+Local flashinfer: `/opt/tiger/flashinfer` @ `b0563ae`.

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.23.3 — Split-KV merge mechanism pinned on the FA2 side (2026-10-09)
+
+- kv-length sweep at fixed qo: single-chunk rows PASS at two different qo (0.00152, 0.00269);
+  every multi-chunk row FAILS. The unwritten count tracks the CAUSAL BOUND, not qo -- with a prefix
+  large enough that every row needs a chunk beyond the first, nothing is unwritten.
+- Mechanism: the merge produces `final_o` only for rows with partials beyond chunk 0; a row whose
+  causal bound lies entirely in chunk 0 is never merged and stays NaN. At 3 chunks every row is
+  written but wrong (0.514), so the same merge also has a weighting error -- two defects, one path.
+
 ## v0.23.2 — Second fused fault identified as the FA2 split-KV merge (2026-10-09)
 
 - A store probe showed NO work item of fixture 1's failing row reaches the write-through store, and

@@ -10136,3 +10136,38 @@ not produce `final_o` for the leading rows. That is the same failure FAMILY as
 the PREFIX so `kv_len` crosses 64 (e.g. `prefix[1]` = 0 vs a value giving kv < 64 and kv > 128).
 If unwritten tracks `kv_len > 64` and not qo, the chunk-count diagnosis is confirmed outright and
 the target is `write_o_` + the merge/reduction, not anything q-tile related.
+
+### [x] MECHANISM of the second fault: the split merge skips rows served entirely by chunk 0
+
+`bash /dev/shm/kvsweep.sh` -- qo held at 87, prefix varied so `kv_len` crosses `len_kv_chunk = 64`,
+plus two single-chunk controls at different qo:
+
+| qo1 | prefix | kv_len | chunks | unwritten | row 1 rel err |
+|---|---|---|---|---|---|
+| 87 | 0 | 87 | 2 | 55/512 | nan FAIL |
+| 87 | 41 | 128 | 2 | **19**/512 | nan FAIL |
+| 87 | 105 | 192 | 3 | **0**/512 | 0.51436 FAIL |
+| 40 | 0 | 40 | 1 | 0/465 | **0.00152 ok** |
+| 60 | 4 | 64 | 1 | 0/485 | **0.00269 ok** |
+
+1. **Single chunk always PASSES** (0.00152, 0.00269) -- at two different qo, so the `MaskMode::kCausal`
+   fix is solid and the write-through path is correct. Multi-chunk always FAILS.
+2. **The unwritten count tracks the CAUSAL BOUND, not qo.** With `prefix = 105` every row's causal
+   bound is >= 106 > 64, so every row needs a contribution from chunk 1 or later -- and NOTHING is
+   unwritten. With `prefix = 41` the rows whose bound is <= 64 number ~23 (observed 19); with
+   `prefix = 0`, ~64 (observed 55). The deficit shrinks exactly as the prefix pushes more rows past
+   the first chunk boundary.
+   => **The merge only produces `final_o` for rows that have partials from more than the first
+   chunk; a row whose causal bound lies entirely inside chunk 0 is never merged and stays
+   NaN-prefilled.** That is one mechanism fitting all five points, and it explains why fixture 1
+   (prefix 0 on the task0 row) is the worst case.
+3. **At 3 chunks every row is written but WRONG (0.51436).** So there is a second defect in the same
+   merge -- a weighting/LSE error -- visible only once no row is skipped. Expect to fix both in
+   `write_o_` + the reduction; do not assume one fix covers the other.
+
+This is the family [[fused-wgmma-splitkv-wrong]] already records on the FA3 side ("split rows
+overwrite each other"), now demonstrated on the FA2/persistent side with a different signature
+(skipped rows rather than overwrites). Worth updating that memory once fixed.
+Target for the fix: the `num_kv_chunks > 1` branch at `persistent.cuh:586-592` (`partial_o` +
+`write_o_`) and whatever consumes `partial_lse` / `partial_o` to produce `final_o` -- find the
+reduction's row loop and check its condition for rows with a single contributing chunk.

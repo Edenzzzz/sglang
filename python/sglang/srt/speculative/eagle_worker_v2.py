@@ -1504,6 +1504,8 @@ class EAGLEWorkerV2(BaseSpecWorker):
             ForwardMode,
         )
 
+        import copy
+
         from sglang.kernels.ops.speculative.eagle import (
             fill_bonus_tokens_func,
             prepare_verify_commit_outputs,
@@ -1536,12 +1538,20 @@ class EAGLEWorkerV2(BaseSpecWorker):
             verify_input, self.req_to_token_pool, running, self.target_worker
         )
 
-        batch.mix_with_verify(running, verify_input)
-        n_pre_rows = batch.batch_size() - batch.mixed_verify_rows
-        t_pre = batch.extend_num_tokens - batch.mixed_verify_tokens
+        # Merge onto a COPY, leaving `batch` as the pure prefill batch. Mutating `batch` in place
+        # (upstream's merge does) meant every later consumer of the prefill rows -- the prefill draft
+        # extend above all -- saw merged-size fields, and patching that field by field produced an
+        # endless tail (`index 4 out of bounds`, then `tensor a (4) vs b (5)`). A shallow copy with
+        # its own reqs list is enough: merge_batch reassigns attributes on the copy, and the
+        # original keeps the prefill-only view the fork relied on.
+        merged = copy.copy(batch)
+        merged.reqs = list(batch.reqs)
+        merged.mix_with_verify(running, verify_input)
+        n_pre_rows = merged.batch_size() - merged.mixed_verify_rows
+        t_pre = merged.extend_num_tokens - merged.mixed_verify_tokens
 
         fb = ForwardBatch.init_new(
-            batch,
+            merged,
             self.target_worker.model_runner,
             capture_hidden_mode=CaptureHiddenMode.FULL,
             return_hidden_states_before_norm=False,
@@ -1602,7 +1612,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
         # Reuse the REAL merged ForwardBatch and swap in only the prefill rows' sampling_info, which
         # is the single field that must not be merged-size (pre_out holds just the chunk rows).
         prev_si = fb.sampling_info
-        fb.sampling_info = batch.mixed_pre_sampling_info
+        fb.sampling_info = merged.mixed_pre_sampling_info
         try:
             pre_next_token_ids = self.target_worker.model_runner.sample(pre_out, fb)
         finally:
@@ -1644,18 +1654,11 @@ class EAGLEWorkerV2(BaseSpecWorker):
             speculative_moe_a2a_backend_context(),
             spec_stage_span("draft_extend"),
         ):
-            # Restore the prefill-only view: this call iterates batch.extend_lens and takes one
-            # tail token per row, so it must not see the merged batch's verify rows.
-            merged_view = {k: getattr(batch, k) for k in batch.mixed_pre_view}
-            for k, v in batch.mixed_pre_view.items():
-                setattr(batch, k, v)
-            try:
-                result.next_draft_input = self.draft_worker._draft_extend_for_prefill(
-                    batch, pre_out.hidden_states, pre_next_token_ids
-                )
-            finally:
-                for k, v in merged_view.items():
-                    setattr(batch, k, v)
+            # `batch` is still the pure prefill batch (the merge went onto `merged`), so this needs
+            # no snapshot/restore dance.
+            result.next_draft_input = self.draft_worker._draft_extend_for_prefill(
+                batch, pre_out.hidden_states, pre_next_token_ids
+            )
             self.draft_worker._draft_extend_for_decode(
                 running, result.mixed_running_result
             )

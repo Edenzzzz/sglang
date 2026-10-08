@@ -76,6 +76,11 @@ MIN_PACKED_QO = 48
 # The floor is now 1 (no KV condition) and admission is carried by q work alone.
 # Decode-shaped rows are still excluded, by MIN_QO_LEN below rather than by KV.
 MIN_KV_TILES = int(os.environ.get("SGLANG_FUSED_MIN_KV_TILES", "1"))
+
+# Batch-level ratio guard; see _apply_decode_population_guard. Measured kv <= 64*nd becomes
+# kv_tiles <= nd/2 at TILE_KV=128, so one decode row buys half a KV tile.
+DECODE_POPULATION_GUARD = os.environ.get("SGLANG_FUSED_DECODE_GUARD", "1") == "1"
+DECODE_TILES_PER_ROW = float(os.environ.get("SGLANG_FUSED_DECODE_TILES_PER_ROW", "2"))
 # FA3 is planned UNPACKED (one work item per qo head, tiles on qo_len -- see
 # scheduler.cuh:939), so a packed-unit threshold alone admits rows as short as
 # qo_len 7 at gqa 7 into a 128-row tile. This floor is in the units FA3 is
@@ -129,7 +134,37 @@ def split_classes(qo_lens, kv_lens, gqa_ratio):
     kv_tiles = (np.maximum(kv, 1) + (TILE_KV - 1)) >> KV_SHIFT
     fa3 = ((packed_qo >= MIN_PACKED_QO) & (kv_tiles >= MIN_KV_TILES)
            & (qo >= MIN_QO_LEN))
+    fa3 = _apply_decode_population_guard(fa3, kv_tiles)
     return fa3, q_tiles, kv_tiles
+
+
+def _apply_decode_population_guard(fa3, kv_tiles):
+    """Un-route FA3 rows the co-resident decode population cannot cover.
+
+    The measured boundary (tasks/fused_specdec_workload/boundary_28x4x128.json, 25 points) is a
+    RATIO, not a threshold on either axis: the fused win holds while kv <= 64 * decode_rows, i.e.
+    kv_tiles <= decode_rows / 2 at TILE_KV=128 -- about one 64-wide KV tile of decode work per
+    decode row to fill the SMs FA3 leaves idle. Flip points: kv 512 at nd 8, 2048 at 32, 8192 at
+    115, 16384 at 365 (kv/nd = 64, 64, 71, 45).
+
+    With NO decode rows the fused kernel loses on EVERY measured kv (0.617-0.704x), and the per-row
+    conditions above cannot see that: they read only one row's own shape. So the guard is
+    batch-level, and rows it un-routes go to the persistent class -- the same kernel the sequential
+    arm would have run for them.
+
+    Replaying all 25 measured points through this code: agreement with the measured winner rises
+    from 11/25 (per-row rule alone, which routes FA3 everywhere including the nd=0 losing region)
+    to 23/25; the two misses are kv 8192 @ nd 115 and kv 32768 @ nd 365, measured 1.026x and
+    1.016x, i.e. the flat region where the choice is worth <3%.
+    """
+    if not DECODE_POPULATION_GUARD or not fa3.any():
+        return fa3
+    decode_rows = int((~fa3).sum())
+    if decode_rows == 0:
+        # Nothing to overlap with: measured 0.617-0.704x across every kv.
+        return np.zeros_like(fa3)
+    budget = decode_rows / DECODE_TILES_PER_ROW
+    return fa3 & (kv_tiles <= budget)
 
 
 def plan_dispatch(qo_lens, kv_lens, gqa_ratio, num_kv_heads, num_sm=NUM_SM):

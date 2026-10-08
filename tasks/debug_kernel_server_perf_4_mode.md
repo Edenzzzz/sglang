@@ -11153,3 +11153,33 @@ IN=32768 A/B could never have shown a gain). Add an always-on composition counte
 `tma_store_wait` multicast/cross-role backfill, EDF perf-model vs baseline, PD-colocation point 4.
 Nothing is pushed: `git push` needs interactive auth here (`! git -C /opt/tiger/sglang push`,
 `! git -C /opt/tiger/sglang-up push -u origin upstream_port`).
+
+### [x] Step (c) increment 2: the seam conversion, implemented and CPU-verified — 2026-10-09
+
+`upstream_port` commit 63 (now 63 commits on live `3fef129ff`). `mixed_dispatch.dense_block_table`
+converts sglang's flat paged KV indices into upstream FA3's documented
+`[batch_size, max_num_blocks_per_seq]` block table. This is the fusion boundary stated earlier,
+built as an explicit conversion instead of a pointer hand-off -- the aliasing version is what
+produced `CUDA error: an illegal memory access`.
+Verified on CPU (index math, no GPU needed), **11/11 properties**, with the two that caused real
+faults covered explicitly:
+```
+ok  row0 exact (incl. page id 0)        ok  subset batch dim == len(rows)
+ok  empty row is all -1                 ok  subset keeps row order
+ok  short row padded with -1 not 0      ok  page_size>1 one entry per page, ids divided down
+ok  shape / max_blocks / int32 dtype    ok  empty rows -> empty table
+```
+Why those two matter and are not style points:
+- **-1 fill, never 0** -- page id 0 is VALID, so zero padding would make every short sequence read
+  page 0 for its tail blocks instead of being masked off;
+- **batch dim == FA3 SUBSET size, in row order** -- upstream's combine scheduler derives its tile
+  mapping from the (token extent, batch count) pair, so handing it the full-batch count with a
+  subset's tokens mis-maps tiles (this is the `num_pages`/`total_q` conflation the header warns
+  about at `fa3_upstream.cuh:147-153`).
+
+Step (c) now has: row partition in upstream's metadata hook (commit 62) and the seam conversion
+(commit 63), both default-inert and both verified without a GPU. What remains is the dispatch
+itself in `forward_extend` -- two executor calls over the row subsets, with the SM budget as the
+only non-standard element -- plus `total_q`/`seqused_k`/`cu_seqlens_q` assembled per-request from
+the same partition. That step needs the pod (build + fp32 reference + combined arm), which is why
+it is where this session stops.

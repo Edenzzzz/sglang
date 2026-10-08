@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.27.3 — Seam conversion landed on upstream, CPU-verified (2026-10-09)
+
+- `mixed_dispatch.dense_block_table` converts sglang's flat paged KV indices into upstream FA3's
+  documented `[batch_size, max_num_blocks_per_seq]` block table -- the fusion boundary built as an
+  explicit conversion, since aliasing the two representations caused an illegal memory access.
+- 11/11 CPU-verified properties, including the two load-bearing ones: -1 fill (page id 0 is valid,
+  so zero padding would make short sequences read page 0), and a batch dimension equal to the FA3
+  subset size in row order (upstream's combine scheduler maps tiles from the token-extent/batch-count
+  pair).
+- `upstream_port` is now 63 commits on live main, with the row partition (62) and seam conversion
+  (63) both default-inert and verified without a GPU.
+
 ## v0.27.2 — Upstream fusion boundary specified end to end (2026-10-09)
 
 - Answered the last design unknown from flashinfer's code: `prefill.py:204` derives `sm_count` from

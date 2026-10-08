@@ -9291,3 +9291,18 @@ head_dim_vo, page_size, causal=...)`; corrected). Re-running; the first JIT buil
 Sequence for any future pod restore, all four steps needed before the fused test can run:
 clone third-party -> push the fork's sources -> repoint `flashinfer/data/*` symlinks -> warm the
 BatchAttention JIT so `generated/batch_attention_with*` exists.
+
+**Codegen cleared; a CUDA 13.1 toolchain risk is now the live question.** The warmup produced
+`~/.cache/flashinfer/90a/generated/batch_attention_with_kv_cache_..._flipped_schedule_false`, which
+is what the fused test globs for `batch_attention_config.inc` -- so `gen[0]` resolves now.
+But flashinfer's OWN ninja build for that module then FAILED on this pod's nvcc 13.1:
+`vector_types.h:561: typedef ... double4 __VECTOR_TYPE_DEPRECATED__("use double4_16a or
+double4_32a")` -> `ninja: build stopped: subcommand failed`. The pod has **nvcc 13.1 with torch
+2.14.1+cu130**; flashinfer `b0563ae` predates CUDA 13's `double4` deprecation.
+So the fused `load()` may hit the same wall. If it does, the fix is a compile flag, not a code
+change: the harness already has an `EXTRA_DEFS` passthrough (flashinfer commit b13aa2a) and
+`load()` takes `extra_cuda_cflags`, so `-Wno-deprecated-declarations` (or
+`-D__VECTOR_TYPE_DEPRECATED__=`) can be injected for the fused TU. Flashinfer's internal JIT builds
+would need the same treatment through its own flag env if any sglang path needs them -- but the
+standalone kernel test does not, which is why validating the kernel this way stays viable.
+Recorded before the result so the next session does not re-derive it.

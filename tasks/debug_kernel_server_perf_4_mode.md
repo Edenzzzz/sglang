@@ -8728,3 +8728,37 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   Until this is resolved, no perf number is meaningful. `perfab.sh` is staged on the pod (realistic
   arm: 4000-session tracelab subset at `/dev/shm/w/tracelab_trace.jsonl.gz` + a chat stream, debug
   and verify envs deliberately OFF) but has NOT been run.
+
+- **Re-plan (port 45) REFUTES the stale-plan hypothesis; the contradiction is unresolved.**
+  `portcorr3.sh 1 y`, 5 mixed steps, 0 tracebacks, with `eagle_prepare_for_verify` re-run
+  immediately before each reference forward:
+
+  | ver_rows | merged_vs_ref | flips | vs previous run |
+  |---|---|---|---|
+  | 1 | 4.756e-01 | 2/4 | **bit-identical** (same ids_sum=254, same err, same scales) |
+  | 2 | 9.825e-01 | 6/8 | same magnitude |
+  | 3 | 7.203e-01 / 6.194e-01 / 8.825e-01 | 5/12, 3/12, 6/12 | same magnitude |
+
+  So re-planning changes nothing: either the plan was never stale or the re-plan is idempotent.
+  Two further facts worth keeping: `ref_vs_ref` stays exactly 0 with a fresh plan each time, and
+  the ver_rows=1 step reproduces bit-for-bit across runs -- the merged verify path is
+  deterministic given identical inputs.
+
+  **The standing contradiction** (do not resolve it by preference): gate (b) says the merged
+  forward's verify logits disagree with an unmerged verify forward far beyond bf16, flipping ~half
+  the argmaxes; `portcorr2` says that with one verify row the 4-mode arm reproduced the control's
+  greedy text bit-for-bit over 400 tokens through 3 mixed steps, which an argmax flip on 2 of 4
+  verify rows could not survive. Exactly one of these is measuring something else.
+
+  **Next step: a NULL test, not another hypothesis.** Compare the merged forward's PREFILL-row
+  logits against a prefill-only reference, in the same step and with the same machinery. The
+  prefill half is independently known-good (identical `pre_logits_sum` across runs; the control's
+  own prefill path). So:
+  - prefill rows also ~0.5 with flips -> the GATE is wrong (its reference or its row mapping), and
+    the merged forward is exonerated, consistent with `portcorr2`;
+  - prefill rows ~1e-3 while verify rows stay ~0.5 -> the gate is sound and the merged batch's
+    VERIFY rows are genuinely wrong, and `portcorr2`'s agreement was luck (then chase the
+    EXTEND-vs-TARGET_VERIFY conventions: `seq_lens` prefix vs prefix+n, `extend_prefix_lens`,
+    `positions` for RoPE).
+  This is one run and it cannot come out ambiguous, which is why it is the next thing and not
+  more reasoning about which side "should" be right.

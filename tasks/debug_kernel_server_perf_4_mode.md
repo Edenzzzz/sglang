@@ -8920,3 +8920,18 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   `seq_lens`) is computed before or after that write. Fix the index coverage and the length
   together, then re-read gate (b) -- the null case plus `BYPOS` will say immediately whether the
   uniform error is gone.
+
+  **Refinement after reading the code (changes the next step):** `eagle_prepare_for_verify` calls
+  `assign_extend_cache_locs_uniform_func(start_offset=batch.seq_lens, draft_token_num=n)`, which
+  writes `req_to_token[req, P : P+n]` for the n verify slots -- and it runs BEFORE the merge in
+  `forward_mixed_spec`. So the KV index coverage for `[P, P+n)` already exists, and the "coverage
+  is missing" reading above is wrong. The illegal access therefore points at the merged batch's
+  attention metadata rather than at the index table. Concretely, next:
+  (1) re-run port 52 with `CUDA_LAUNCH_BLOCKING=1` to name the faulting kernel instead of inferring
+      it from an async report;
+  (2) log, for the merged batch, `seq_lens_sum`, `max_seq_len_k/q` and `extend_start_loc` alongside
+      the per-row `seq_lens`/`extend_prefix_lens`, since a length raised after some cached maximum
+      was derived is the likeliest out-of-bounds;
+  (3) check whether raising a tail row's `seq_lens` also requires `orig_seq_lens` (and the
+      page-table width used by the chunk rows' plan) to move with it -- the merge currently widens
+      five fields and `orig_seq_lens` is not one of them.

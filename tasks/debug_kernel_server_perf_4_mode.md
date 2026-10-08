@@ -9185,3 +9185,19 @@ from `git submodule status` in `/opt/tiger/flashinfer`). Only our delta --
 `flashinfer csrc include tests` = 1.94 MB compressed, 44 base64 chunks -- goes over the webshell.
 Use this split for any future pod restore: clone third-party, push only the fork's own sources.
 Local flashinfer: `/opt/tiger/flashinfer` @ `b0563ae`.
+
+**Second pod-restore casualty found: the FORK's venv torch is broken.**
+`/dev/shm/w/venv/bin/python -c "import torch"` fails with
+`ImportError: /dev/shm/w/venv/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so: undefined
+symbol: ncclCommResume`. So the fork could not have served on this pod even with `fi` present --
+two independent casualties of the same restore (cf. [[pod-tree-verify-manifest]], which is exactly
+this failure mode and says to verify the tree by manifest before trusting any arm).
+`venv_up` (upstream, torch 2.14.1) imports fine; `nvcc` is CUDA 13.1 and the GPU is an H200 (sm_90a,
+which the fused `load()` targets with `-arch=sm_90a`).
+
+**Consequence, and it is good news for the goal's ordering:** the fused kernel test
+(`tests/test_fused_server_batch.py`) is STANDALONE -- torch + flashinfer + cutlass, no sglang -- so
+the kernel can be validated against the causal fp32 reference using `venv_up`'s python without
+repairing the fork venv first. That is the goal's "implement/validate the kernel" step, unblocked
+by a path that does not depend on the broken fork environment. Repairing the fork venv (a
+torch/nccl ABI mismatch) is only needed later for the fork SERVING A/B.

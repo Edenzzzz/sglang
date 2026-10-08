@@ -428,7 +428,24 @@ Evaluation completeness (added 2026-10-08, user-requested):
         is_verify=True, ...)` (:639). A single, explicit target-forward call site taking a
         caller-supplied `ForwardBatch` is a better seam than our fork's method, which we had to
         split into forward + `_verify_post` by hand.
-      Derivation: add an optional prefill-row injection to `run_eagle_verify` (extend
+      **Upstream has already removed the original blocker (read 2026-10-08).**
+      `ScheduleBatch.mix_with_running` (schedule_batch.py:3114) now has an explicit
+      `if not self.spec_algorithm.is_none()` path: spec rows take their prefix from
+      `r.seqlen - 1` at the committed base, the tail's bonus slot is gathered from
+      `req_to_token` at `tail_base`, and `seq_lens_cpu` is rebuilt from request state because the
+      spec relay is unresolved at schedule time. In our fork this method crashed on a spec running
+      batch -- the reason recorded in [[mtp-4mode-blocked-in-sglang]] and the reason we hand-built a
+      MIXED `ModelWorkerBatch` with `dataclasses.replace`. So the fork's central workaround is
+      DEAD CODE upstream, and the port is smaller than the fork's implementation, not larger.
+      Also note `eagle_prepare_for_verify` (eagle_utils.py:522) builds the verify batch with
+      `ForwardBatch.init_new(batch, ...)` straight from the ScheduleBatch, so a merged
+      ScheduleBatch flows through it unchanged.
+      Revised derivation: let the scheduler merge the prefill chunk with the spec running batch via
+      the now-spec-aware `mix_with_running`, let `eagle_prepare_for_verify` build ONE ForwardBatch
+      from it, and split `logits_output` after the single target forward (prefill rows -> sample,
+      verify rows -> the existing accept path). Fall back to the fork's explicit concatenation only
+      if the merged path cannot express the verify rows' `extend_seq_lens = [n] * bs`.
+      Original fork-shaped derivation, kept for comparison: add an optional prefill-row injection to `run_eagle_verify` (extend
       `verify_forward_batch` with the chunk's rows, run the one target forward, split
       `logits_output` into prefill rows -> sample and verify rows -> the existing accept path), then
       a `forward_mixed_spec` on `EAGLEWorkerV2` that calls `draft(running)`, that extended verify,

@@ -4533,6 +4533,22 @@ class Scheduler(
                         _mix_run.spec_info.future_dsa_topk_indices_available = (
                             _mix_run.spec_info.dsa_topk_indices is not None
                         )
+                        # The verify half needs its OWN future wiring. Futures are keyed by
+                        # req_pool_indices, and the worker's on_publish is bound to the
+                        # prefill batch's rows, so publish the verify rows here. Without the
+                        # future_indices below, EagleDraftInput.filter_batch/merge_batch take
+                        # their tensor path for this input and their futures path for the
+                        # prefill one, so topk_p stops tracking reqs (measured: 4 reqs vs a
+                        # 5-row topk_p) and the draft graph copy fails.
+                        # NOTE: upstream publishes mid-worker, before draft_extend, so the
+                        # fence sits at target-end; this publish lands after the draft
+                        # extends. Correct for the next iteration's resolve, but it gives up
+                        # that overlap -- revisit once the step is green (perf, not
+                        # correctness).
+                        self.future_map.publish(
+                            _mix_run.req_pool_indices, _mix_res.new_seq_lens
+                        )
+                        _mix_run.spec_info.future_indices = _mix_run.req_pool_indices
             elif self.enable_pdmux and batch.forward_mode.is_split_prefill():
                 resolve_forward_inputs(batch, self.future_map)
                 batch_result = self.tp_worker.forward_batch_split_prefill(batch)

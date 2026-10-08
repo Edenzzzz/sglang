@@ -1,4 +1,5 @@
 import contextlib
+import os
 import logging
 import time
 from typing import List, Optional
@@ -1354,7 +1355,9 @@ class EAGLEWorkerV2(BaseSpecWorker):
         # measured as `pool memory leak detected`, identical byte-for-byte across two runs because
         # the dispatch was simply missing.
         if getattr(batch, "mixed_spec_running", None) is not None:
-            return self.forward_mixed_spec(batch, pp_proxy_tensors=pp_proxy_tensors)
+            return self.forward_mixed_spec(
+                batch, on_publish=on_publish, pp_proxy_tensors=pp_proxy_tensors
+            )
 
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
             if not (
@@ -1481,7 +1484,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
 
             return batch_output
 
-    def forward_mixed_spec(self, batch, pp_proxy_tensors=None):
+    def forward_mixed_spec(self, batch, on_publish=None, pp_proxy_tensors=None):
         """4-mode step on upstream: ONE target forward over [prefill chunk | verify rows].
 
         Upstream already fuses a chunk with 1-token decode tails (scheduler mixed-chunk +
@@ -1604,6 +1607,12 @@ class EAGLEWorkerV2(BaseSpecWorker):
             next_token_ids=pre_next_token_ids,
             can_run_cuda_graph=False,
         )
+        # Spec_v2 convention (see _forward_prefill_batch): a prefill row's new_seq_lens is
+        # batch.seq_lens. on_publish is bound to THIS batch's req_pool_indices, so it covers
+        # the prefill half only; the scheduler publishes the verify half against its own rows.
+        result.new_seq_lens = batch.seq_lens
+        if on_publish is not None:
+            on_publish(batch.seq_lens)
         result.mixed_running_batch = running
         result.mixed_running_result = ver_result
         with (
@@ -1632,6 +1641,22 @@ class EAGLEWorkerV2(BaseSpecWorker):
             # num_accept_tokens) and make it bs*n, rather than resizing the tensors.
             self.draft_worker._draft_extend_for_decode(
                 running, result.mixed_running_result
+            )
+        if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
+            def _sh(x):
+                return None if x is None else tuple(x.shape)
+            _pre_di = result.next_draft_input
+            _run_di = getattr(result.mixed_running_result, "next_draft_input", None)
+            logger.error(
+                "MIXEDSPLIT pre_reqs=%d run_reqs=%d merged_bs=%s ver_rows=%s ver_toks=%s "
+                "n_pre_rows=%d t_pre=%d ntl=%s pre_ids=%s pre_di_topk_p=%s run_di_topk_p=%s "
+                "accept_lens=%s",
+                len(batch.reqs), len(running.reqs), merged.batch_size(),
+                merged.mixed_verify_rows, merged.mixed_verify_tokens,
+                n_pre_rows, t_pre, _sh(lo.next_token_logits), _sh(pre_next_token_ids),
+                _sh(getattr(_pre_di, "topk_p", None)),
+                _sh(getattr(_run_di, "topk_p", None)),
+                getattr(result.mixed_running_result, "accept_lens", None),
             )
         return result
 

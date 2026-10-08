@@ -11044,3 +11044,43 @@ Remaining upstream work: (b) express the split kernel's interface in upstream's 
 one explicit conversion at the seam; (c) wire the backend hooks against upstream's
 `flashinfer_backend.py`; (d) measure the combined fused-kernel + 4-mode arm. (b) is the real design
 piece and the one the "interfaces and fusion boundaries must fit upstream" constraint governs.
+
+### Step (b) started: the upstream interface mismatch, stated from the code — 2026-10-09
+
+Read of `upstream_port`'s `layers/attention/flashinfer_backend.py` (now on live main):
+- the seam is `forward_extend` (`:1317`) / `forward_decode` (`:1481`), fed by
+  `init_forward_metadata` (`:962`);
+- it dispatches to flashinfer's STANDARD wrapper API --
+  `BatchPrefillWithPagedKVCacheWrapper` / `BatchPrefillWithRaggedKVCacheWrapper` (`:79-80`,
+  instantiated `:498-504`) -- i.e. **one planned wrapper per batch**, with the plan built in
+  `init_forward_metadata`.
+
+**That is the mismatch, precisely:** upstream's contract is "one wrapper, one plan, whole batch",
+while the split kernel is "two executors over disjoint ROW SUBSETS of one batch, with an SM
+partition between them". The fork resolved this by replacing the wrapper path outright (its
+`flashinfer_backend.py` is 3465 lines vs upstream's 2540). That is what must NOT be transplanted --
+it is the fork's shape, not upstream's.
+
+**Interface the port should expose instead, in upstream's own terms:**
+1. **Row partition belongs in metadata, not in the kernel call.** `init_forward_metadata` already
+   computes per-batch plan data; the FA3/FA2 row classes (which `mixed_dispatch.split_classes` now
+   produces on this branch, guard included) should be computed there and carried on the metadata
+   object -- so `forward_extend` stays a dispatch, not a planner.
+2. **Two plans, one per executor, each built through the upstream wrapper it belongs to**, rather
+   than one bespoke plan serving both. The FA3 subset needs upstream FA3's paged contract (dense
+   `[batch, max_pages]` page table, per-request `cu_seqlens_q`, per-request `seqused_k`, `total_q`,
+   `num_pages`); the FA2 subset needs the persistent/BatchAttention plan. Each is a supported
+   upstream object.
+3. **ONE explicit conversion at the seam**, materialising the dense per-request page table from our
+   paged KV indices -- built, never aliased. The illegal access recorded above came from aliasing a
+   flat vector-sparse array into that field, and the harness already shows the correct construction
+   (`up_pt = at::full({num_requests * max_pages_per_seq}, -1)`, then scatter; -1 because 0 is a
+   valid page id).
+4. **The SM split stays a launch parameter**, not an interface concept: both executors are ordinary
+   upstream calls; only the grid/SM budget differs. That keeps the fusion boundary at the launch,
+   which is where the measured 1.30x and the sm_split-112 optimum live.
+
+Open question for (b), to settle by reading before coding: whether upstream's wrapper API permits a
+caller-supplied SM/grid budget, or whether the split must be expressed one level down at the
+flashinfer module call. That determines whether (c) is "add a budget argument" or "bypass the
+wrapper for the FA3 subset only" -- and it is the last unknown before the port can be written.

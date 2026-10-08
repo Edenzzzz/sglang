@@ -9550,3 +9550,18 @@ harness already holds the plan object (`pp`), so this is a print in
 change. That also makes the `-DFLASHINFER_TRACE_WORK` flag earn its name if wired there.
 Four hypotheses are now eliminated with evidence and recorded above: 32-row write window,
 rows-belong-to-another-row, SM partitioning, and narrow-drain under-consumption.
+
+**Probe attempt reverted; here is the shape it actually needs.** My first version used
+`work_indptr_t.to(at::kCPU)` with a tensor accessor, but the extension holds work_indptr only as a
+DEVICE pointer: `P.work_indptr = GetPtrFromBaseOffset<IdT>(pers_ib, pp.tasks[i].work_indptr_offset)`
+(`fused_fa3_persistent_ext.cu:318`, inside the per-task loop). Reverted so the TU still compiles --
+the pod copy is clean, `#if FLASHINFER_TRACE_WORK` blocks: 0.
+The working form is a `cudaMemcpy` of `(num_clusters_in_plan + 1)` ints from that device pointer for
+task index 0, where the length must come from the PLAN (not from `num_pers_clusters`, since the
+whole question is whether the plan is longer than that bound). So the probe needs the plan's own
+cluster count: read it where the plan is built (`scheduler.cuh`, the `num_clusters` at line 1325 /
+cap at 1334 that feeds `plan_info.num_pers_clusters = num_clusters` at 1902) and carry it into the
+plan struct alongside `num_pers_clusters` if they can differ -- if they are literally the same
+variable, then `work_indptr` cannot exceed the drain bound and **this mechanism is refuted**, which
+is itself the answer and is checkable by reading those three lines in context rather than running
+anything. Do that read FIRST next session; it is cheaper than the memcpy and may settle it outright.

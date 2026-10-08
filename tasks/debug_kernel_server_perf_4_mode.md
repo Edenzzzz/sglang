@@ -236,6 +236,45 @@ This is recorded now, before the serving A/B, so the A/B is a test of a stated p
 than a search for a number. If the measured combined arm lands near +4% rather than +10%, that
 is the predicted outcome of the coverage bound and not a new surprise.
 
+### Why the split can ONLY be tested on the 4-mode arm, and what that does to coverage (2026-10-09)
+
+Measured, from the plain-server gate's own diagnostics:
+
+```
+FUSED_SPLIT_ONESIDED 1/1:     fa3=0 fa2=1 rows=1  max_kv_tiles=16 need_decode_rows>=32
+FUSED_SPLIT_ONESIDED 201/201: fa3=0 fa2=3 rows=3  max_kv_tiles=61 need_decode_rows>=122
+```
+
+`rows=1` and `rows=3`. The extend batches contain almost no rows -- so the guard was never the
+obstacle on a plain server; **there were no decode rows in `forward_extend` to begin with.** In
+sglang a decode batch goes through `forward_decode`, a separate entry point. `forward_extend`
+sees prefill (and chunked-prefill) rows. The two populations the split exists to overlap are not
+co-resident there at all, whatever the arrival pattern -- which is why staggering arrivals over
+25 s changed nothing, and why `--enable-mixed-chunk` alone is not sufficient.
+
+The configuration that *does* put them in one forward is the **4-mode MTP step**: a prefill
+chunk plus the running batch's verify rows in a single target forward. That is precisely what
+this project built, and it is the only place on upstream where the split has anything to do.
+Row classes fall out correctly: with qwen7b's 28/7 heads, GQA = 4, so a verify row's
+`packed_qo = num_draft_tokens * 4 = 16`, below `MIN_PACKED_QO = 48` and below `MIN_QO_LEN` --
+FA2 class; the prefill chunk packs to 8192 -- FA3 class. Two-sided by construction.
+
+**This tightens the coverage bound rather than relieving it.** The split's coverage is now
+bounded by the 4-mode gate's own firing rate, which requires simultaneously: `SGLANG_MIXED_SPEC=1`,
+mixed chunk on, a spec algorithm, a non-empty running batch, no logprob request, no input embeds
+and no beam groups -- *and then* the ratio guard on top. So `g` in the `g * a` ceiling is the
+product of two gates, not one. The honest prediction stands and gets stronger: a double-gated
+kernel cannot carry a 30%/10% end-to-end bar, and the measured `MIXEDSPEC_STEPS` / `FUSED_SPLIT_CALLS`
+pair is what quantifies `g` directly -- both counters are always-on for this reason.
+
+**Correction to the plan recorded earlier today:** the perf A/B driver I staged for a plain
+server would have measured nothing, for this reason. Superseded by the MTP arm.
+
+- [x] 2026-10-09 **the plain-server split test is structurally void** -- decode never enters
+      `forward_extend`; measured `rows=1..3`, fa3=0 on every step. Not a guard issue.
+- [ ] 2026-10-09 **4-mode MTP self-check running** (`drv/split_verify_mtp.sh`): EAGLE3 chain
+      draft (topk=1, 4 draft tokens) + `SGLANG_MIXED_SPEC=1` + split ON + in-step verify.
+
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither
 constraint is a cost of the work:

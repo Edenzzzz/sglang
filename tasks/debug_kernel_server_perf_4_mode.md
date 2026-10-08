@@ -402,6 +402,22 @@ Evaluation completeness (added 2026-10-08, user-requested):
       - [ ] router: cache affinity + decode-aware SLO veto, and the L3-store migration arm
       Any optimization that no longer gains gets recorded as superseded-by-upstream IN PLACE, with
       the upstream commit that closed it, rather than quietly dropped.
+      **Environment cost, measured 2026-10-08 (separate from the code port, and NOT optional).**
+      Our fork's environment cannot even import current upstream:
+      - upstream declares **66 runtime deps** (torch/cuda/sgl-kernel/flashinfer excluded) against our
+        fork's much smaller set; `msgspec` was the first miss, and iterating one import error at a
+        time is the slow way to find the rest -- install the dep LIST from its pyproject instead.
+      - `pip install -e python/ --no-build-isolation` FAILS: upstream's build backend
+        (`wheel_stub.buildapi`) is not installed.
+      - **upstream now needs torch >= 2.9** (`torchao` imports `ScalingType` from
+        `torch.nn.functional`, added in 2.9), while our fork pins **torch 2.8.0** because the fused
+        FA3+FA2 extension was built against it. So the ported extension must be REBUILT against
+        torch 2.9+, and that rebuild is part of the port, not a detail. A pure-upstream baseline
+        venv can simply take torch 2.9.
+      - the pod can `git clone` github directly, which is far faster than base64-pushing 15 MB
+        through the webshell (that timed out at 900 s). Pin the clone to the commit the port was
+        read against: upstream main moved `b7b2975b5` -> `54b551df8` within hours.
+
       **Port cost, measured 2026-10-08** (`git fetch --depth=1 upstream main`, head `b7b2975b5`):
       | file we patch | upstream state | diff vs ours |
       |---|---|---|

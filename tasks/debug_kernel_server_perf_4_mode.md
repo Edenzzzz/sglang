@@ -10826,3 +10826,26 @@ is instantiated against params that have no `wgmma_plan`.
 Do (2). It is a guard placement, not a port -- materially smaller than the "finish the wgmma params
 plumbing" framing I used in the previous entries, which is hereby narrowed: nothing needs to be
 populated for the non-unified build, because that build never reads the field.
+
+**STOP before the "one-line guard" fix: it would silently leave five fields unset.**
+The `wgmma_plan` reads sit inside `#if FLASHINFER_FA3_UPSTREAM` in the HOST function
+`FusedFA3PersistentDispatched` (`persistent_fa3_fused.cuh:610`, block at 801-821), and they are not
+a diagnostic -- they POPULATE the upstream FA3 launch descriptor:
+`up.page_table`, `up.cu_seqlens_q`, `up.seqused_k`, `up.total_q`, `up.num_pages`.
+Wrapping them in `if constexpr (kUnifiedWgmma)` would compile the non-unified build but leave those
+five fields at their default, i.e. the FA3 role would launch with no page table and no sequence
+bounds. That is a silent wrong-answer (or illegal-access) path, not a fix -- precisely the class of
+"make it build by disabling the feature" change the project's standards forbid.
+**So the real question, and it is a design question rather than a mechanical one:** where should the
+non-unified FA3_UPSTREAM path get its per-request page table / cu_seqlens_q / seqused_k / total_q /
+num_pages from? Two candidates visible from here:
+- the `UpstreamFA3Plan shape_only{}` object already constructed in the extension
+  (`fused_fa3_persistent_ext.cu:234`) -- its name suggests it carries exactly this shape data and may
+  be the intended non-unified source;
+- or they must be built per-request in the extension, which is the work the earlier "finish the
+  plumbing" framing described, and which [[upstream-fa3-subset-params]] warns is where four port
+  bugs already lived (per-item data passed where per-request was wanted).
+Read `UpstreamFA3Plan` and how `shape_only` is filled FIRST. If it already has the five fields, the
+fix is to source them from it under `#if FLASHINFER_FA3_UPSTREAM` when `kUnifiedWgmma` is false --
+a real fix, still small, and no feature disabled. I am NOT applying a guard-only change, because an
+FA3 baseline launched with an empty page table would produce a number worse than no number.

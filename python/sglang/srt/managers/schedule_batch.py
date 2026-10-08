@@ -3242,6 +3242,15 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
 
         verify_out_cache_loc = running_batch.out_cache_loc
         verify_input_ids = verify_input.draft_token
+        # The tail rows' COMMITTED prefix, captured before the delegation rebinds fields.
+        # Measured (OFFCONV / SLTRACE): running_batch.seq_lens IS the committed prefix at
+        # verify time and eagle_prepare_for_verify does not move it.
+        verify_base_seq_lens = running_batch.seq_lens.clone()
+        verify_base_seq_lens_cpu = (
+            running_batch.seq_lens_cpu.clone()
+            if running_batch.seq_lens_cpu is not None
+            else None
+        )
         # mix_with_running sets input_ids = None on purpose (the relay rebuilds the DECODE tokens
         # from the future map). For a 4-mode step the draft tokens are already known, so keep the
         # chunk's ids and append them -- taking the None branch instead replaced the whole tensor
@@ -3257,13 +3266,21 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         self.out_cache_loc = torch.cat(
             [self.out_cache_loc[: self.out_cache_loc.numel() - running_bs], verify_out_cache_loc]
         )
-        # 4. their row lengths end n tokens past the committed base
+        # 4. EXTEND semantics for the tail rows: seq_lens = committed_prefix + n, so that
+        # extend_prefix_lens (derived as seq_lens - extend_lens) IS the committed prefix and
+        # positions run prefix .. prefix+n-1. That is the contract ordinary spec decode uses:
+        # a verify row's first draft token sits AT the committed prefix (measured, OFFCONV:
+        # `seq_lens=[12] pos_head=[12,13,14,15]`).
+        # Deriving it from whatever mix_with_running left (`- 1 + n`) yielded seq_lens ==
+        # prefix, hence a prefix n too SMALL -- so every draft token in the row attended to a
+        # shifted prefix. That showed up as a uniform, position-independent logit error
+        # (gate (b): argmax flipped on 2/4..6/12 rows, err by position flat across all n).
         seq_lens = self.seq_lens.clone()
-        seq_lens[pre_rows:] = seq_lens[pre_rows:] - 1 + n
+        seq_lens[pre_rows:] = verify_base_seq_lens.to(seq_lens.dtype) + n
         self.seq_lens = seq_lens
-        if self.seq_lens_cpu is not None:
+        if self.seq_lens_cpu is not None and verify_base_seq_lens_cpu is not None:
             seq_lens_cpu = self.seq_lens_cpu.clone()
-            seq_lens_cpu[pre_rows:] = seq_lens_cpu[pre_rows:] - 1 + n
+            seq_lens_cpu[pre_rows:] = verify_base_seq_lens_cpu.to(seq_lens_cpu.dtype) + n
             self.seq_lens_cpu = seq_lens_cpu
         # 5. input is [chunk ids | draft tokens]; see the note above the delegation.
         if prefill_input_ids is not None:

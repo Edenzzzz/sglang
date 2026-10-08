@@ -74,37 +74,47 @@ class PerfModel:
     """Step-cost model for admission. Coefficients come from a fitted step trace of the
     serving node type (tasks/perf_model); defaults are placeholders until calibrated."""
 
-    def __init__(self, prefill_tok_s, decode_step_ms, decode_ms_per_seq):
+    def __init__(self, prefill_tok_s, decode_step_ms, decode_ms_per_seq,
+                 decode_ms_per_seq_ktok=0.0):
         self.prefill_tok_s = prefill_tok_s
         self.decode_step_ms = decode_step_ms
         self.decode_ms_per_seq = decode_ms_per_seq
+        # A decode row's cost grows with its OWN KV, so a per-sequence slope fitted at short
+        # context under-predicts a holder running 16K-prefix rows by ~an order of magnitude.
+        self.decode_ms_per_seq_ktok = decode_ms_per_seq_ktok
 
     def ttft_ms(self, uncached_tokens_ahead):
         return uncached_tokens_ahead / self.prefill_tok_s * 1000.0
 
-    def tpot_ms(self, running):
-        return self.decode_step_ms + self.decode_ms_per_seq * running
+    def tpot_ms(self, running, kv_tokens=0.0):
+        """kv_tokens: total KV over the rows that would be resident, in tokens."""
+        return (self.decode_step_ms + self.decode_ms_per_seq * running
+                + self.decode_ms_per_seq_ktok * kv_tokens / 1e3)
 
 
 class Router:
     def __init__(self, a):
         self.a = a
         self.workers = [Worker(u, a.kv_tokens, BLOCK_TOK) for u in a.workers]
-        self.pm = PerfModel(a.prefill_tok_s, a.decode_step_ms, a.decode_ms_per_seq)
+        self.pm = PerfModel(a.prefill_tok_s, a.decode_step_ms, a.decode_ms_per_seq,
+                            a.decode_ms_per_seq_ktok)
         self.rr = 0
         self.rid = 0
         self.log = open(a.log, "a") if a.log else None
         self.session = None
 
-    def predict(self, w, uncached, deadline):
+    def predict(self, w, uncached, deadline, n_tok_self=0):
         # Under EDF only requests with EARLIER deadlines are served ahead of this one.
         ahead = sum(r["prefill"] for r in w.inflight.values() if r["deadline"] <= deadline)
         ttft = self.pm.ttft_ms(ahead + uncached)
-        tpot = self.pm.tpot_ms(len(w.inflight) + 1)
+        # Every resident row's KV, including this request's prompt: the decode slowdown this
+        # request would cause on w, which is what the hot-prefix holders actually suffer.
+        kv = sum(r.get("kv", 0) for r in w.inflight.values()) + n_tok_self
+        tpot = self.pm.tpot_ms(len(w.inflight) + 1, kv)
         return ttft, tpot
 
-    def feasible(self, w, uncached, deadline, now):
-        ttft, tpot = self.predict(w, uncached, deadline)
+    def feasible(self, w, uncached, deadline, now, n_tok_self=0):
+        ttft, tpot = self.predict(w, uncached, deadline, n_tok_self)
         if now + ttft / 1000.0 > deadline or tpot > self.a.itl_slo_ms:
             return False, ttft, tpot
         # Admitting this request delays LATER-deadline requests queued here; it must not
@@ -148,7 +158,7 @@ class Router:
         best_slack, best_i = None, order[0]
         for i in order:
             uncached = max(0, n_tok - hits[i] * blk)
-            ok, ttft, tpot = self.feasible(self.workers[i], uncached, deadline, now)
+            ok, ttft, tpot = self.feasible(self.workers[i], uncached, deadline, now, n_tok)
             slack = deadline - (now + ttft / 1000.0)
             if best_slack is None or slack > best_slack:
                 best_slack, best_i = slack, i
@@ -171,7 +181,7 @@ class Router:
         rid = self.rid
         uncached = max(0, n_tok - info.get("hit", 0))
         w.inflight[rid] = dict(prefill=uncached, decode_left=out_tok, decode_total=out_tok,
-                               deadline=deadline, t0=time.time())
+                               deadline=deadline, t0=time.time(), kv=n_tok)
         w.insert(hashes)
         if self.a.edf:
             payload["priority"] = int(deadline * 1000) % 2_000_000_000
@@ -254,6 +264,7 @@ def main():
     ap.add_argument("--prefill-tok-s", type=float, default=20000)
     ap.add_argument("--decode-step-ms", type=float, default=15)
     ap.add_argument("--decode-ms-per-seq", type=float, default=0.3)
+    ap.add_argument("--decode-ms-per-seq-ktok", type=float, default=0.0)
     ap.add_argument("--log", default="")
     a = ap.parse_args()
     r = Router(a)

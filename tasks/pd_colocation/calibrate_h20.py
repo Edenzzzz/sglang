@@ -37,19 +37,36 @@ for n in (4096, 8192, 16384, 32768, 49152):
     ttft, _ = gen(ids, 1, True)
     pre.append((n, ttft))
     print(f"prefill {n:6d} tok: TTFT {ttft * 1000:8.1f} ms  -> {n / ttft:8.0f} tok/s", flush=True)
+# Decode ITL vs concurrency at SEVERAL context lengths. The first calibration used 256-token
+# prompts only, which fits a slope of 0.065 ms/seq -- so the router's TPOT prediction never
+# crossed a 100 ms budget, and the SLO veto never fired on an overloaded hot-prefix holder
+# (coloc_slo_edf_hot, 2026-10-08). A decode row's cost grows with its KV, so the slope has to be
+# per KV token, not per sequence.
 dec = []
-for conc in (1, 8, 32, 64):
-    def one(_):
-        _, ts = gen([rng.randrange(1000, 30000) for _ in range(256)], 256, True)
-        return [(b - a) * 1000 for a, b in zip(ts, ts[1:])]
-    with cf.ThreadPoolExecutor(conc) as ex:
-        itls = [x for lst in ex.map(one, range(conc)) for x in lst[20:]]
-    m = sum(itls) / max(1, len(itls))
-    dec.append((conc, m))
-    print(f"decode conc {conc:3d}: mean ITL {m:6.2f} ms", flush=True)
-# least squares ITL = a + b * conc
-n = len(dec); sx = sum(c for c, _ in dec); sy = sum(m for _, m in dec)
-sxx = sum(c * c for c, _ in dec); sxy = sum(c * m for c, m in dec)
-b = (n * sxy - sx * sy) / (n * sxx - sx * sx); a = (sy - b * sx) / n
+for ctx in (256, 4096, 16384):
+    for conc in (1, 8, 32, 64):
+        def one(_):
+            _, ts = gen([rng.randrange(1000, 30000) for _ in range(ctx)], 192, True)
+            return [(b - a) * 1000 for a, b in zip(ts, ts[1:])]
+        with cf.ThreadPoolExecutor(conc) as ex:
+            itls = [x for lst in ex.map(one, range(conc)) for x in lst[20:]]
+        m = sum(itls) / max(1, len(itls))
+        dec.append((ctx, conc, m))
+        print(f"decode ctx {ctx:6d} conc {conc:3d}: mean ITL {m:6.2f} ms", flush=True)
+
+# ITL = a + b*conc + c*conc*ctx/1e3 (least squares on the three terms)
+X = [[1.0, float(c), c * x / 1e3] for x, c, _ in dec]
+y = [m for _, _, m in dec]
+# normal equations, 3x3, solved by Gaussian elimination
+A = [[sum(X[k][i] * X[k][j] for k in range(len(X))) for j in range(3)] + [sum(X[k][i] * y[k] for k in range(len(X)))] for i in range(3)]
+for i in range(3):
+    pv = max(range(i, 3), key=lambda r: abs(A[r][i])); A[i], A[pv] = A[pv], A[i]
+    for r in range(3):
+        if r != i and A[i][i]:
+            f = A[r][i] / A[i][i]
+            A[r] = [A[r][j] - f * A[i][j] for j in range(4)]
+a, b, c = (A[i][3] / A[i][i] for i in range(3))
 long_rate = sum(n_ for n_, _ in pre[2:]) / sum(t for _, t in pre[2:])
-print(f"ROUTER_ARGS=--prefill-tok-s {long_rate:.0f} --decode-step-ms {a:.2f} --decode-ms-per-seq {b:.3f}")
+print(f"fit: ITL = {a:.2f} + {b:.4f}*conc + {c:.5f}*conc*kv/1e3 ms")
+print(f"ROUTER_ARGS=--prefill-tok-s {long_rate:.0f} --decode-step-ms {a:.2f} "
+      f"--decode-ms-per-seq {b:.3f} --decode-ms-per-seq-ktok {c:.5f}")

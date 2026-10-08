@@ -9650,3 +9650,35 @@ Next: read Runner1's output addressing for a tile128 work item and compare the r
 computes against the request's true `qo` span (424-510 for row 1). The suffix-written/prefix-NaN
 shape (479-510 written, 424-478 not) is what an offset computed from the wrong base, or a span
 clipped to the last tile, would produce.
+
+### Strongest candidate yet, from reading the output/bound addressing — 2026-10-09
+
+Two reads in `persistent.cuh`'s work-item body:
+- **Ruled OUT (candidate 6):** the output row base is
+  `qo_packed_idx_base = packed_qo_start + persistent_cluster_slot<KTraits>() * CTA_TILE_Q`
+  (line 398), and `persistent_cluster_slot()` is `KTraits::FUSED_GRID ? 0u : blockIdx.x`
+  (line 200-202). So the fused path deliberately forces slot 0, which is right for the
+  one-CTA-per-cluster fused layout, and `cluster_idx` separately takes the drain's override
+  (line 358). No slot/idx mismatch -- this was my first guess on seeing line 398 and it is wrong.
+- **CANDIDATE (not yet tested):** `const uint32_t cluster_tile_q = gridDim.x * CTA_TILE_Q;`
+  In the STANDALONE persistent kernel `gridDim.x` is the cluster size (CTAs per cluster, and the
+  plan sets `cluster_size = 1`), so `cluster_tile_q == CTA_TILE_Q`. In the FUSED kernel `gridDim.x`
+  is the whole fused grid (the drain reaches cluster 243+, so it is O(258)), which makes
+  `cluster_tile_q` ~130-260x too large. It feeds the causal/kv bound
+  `min((kv_len - q_len) + ceil_div(packed_qo_start + cluster_tile_q, gqa_group_size), kv_len)`,
+  so an inflated value pushes `kv_end` to `kv_len` for rows where it should be clipped.
+  Why this fits the evidence better than anything so far: it corrupts VALUES without touching
+  coverage (explaining `rel err ~1.0` at qo1 <= 64 where every row is written), it is independent
+  of `sm_split` (gridDim is the fused grid, not the split), and it would hurt a task0 row
+  (packed 609, multi-tile, causal clipping matters) far more than a task2 decode row
+  (packed 7, kv 14, where the bound saturates at `kv_len` anyway and the row PASSES at 7e-4).
+  It does NOT by itself explain the 55 NaN rows, so there may still be two faults.
+
+**Check, cheap and decisive:** print `gridDim.x`, `cluster_tile_q` and `CTA_TILE_Q` from the
+existing `[TRACE]` printf already present at line ~386 (it prints the full work-item coord tuple --
+`q_indptr, q_len, packed_qo_start, o_indptr, kv_start, kv_end, ...` -- and was already there before
+my instrumentation; find its guard, it is NOT `FLASHINFER_TRACE_WORK`). If `cluster_tile_q` is
+~33 000 instead of 128, the candidate is confirmed and the fix is to derive it from the plan's
+`cluster_size` (or `num_blks_x`) rather than `gridDim.x` under `FUSED_GRID`.
+Remember to raise `cudaLimitPrintfFifoSize` first -- the FIFO truncated at 17 lines twice, and this
+trace prints far more per item.

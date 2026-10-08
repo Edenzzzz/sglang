@@ -8935,3 +8935,25 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   (3) check whether raising a tail row's `seq_lens` also requires `orig_seq_lens` (and the
       page-table width used by the chunk rows' plan) to move with it -- the merge currently widens
       five fields and `orig_seq_lens` is not one of them.
+
+- **The faulting kernel is named: FA3's hopper forward.** Re-ran port 52 (+ `orig_seq_lens` widened,
+  port 54) with `CUDA_LAUNCH_BLOCKING=1`:
+  `CUDA error (_deps/repo-flash-attention-src/hopper/flash_fwd_launch_template.h:209): an illegal
+  memory access was encountered`. `MIXEDGATE` fired twice while `MIXEDPRE` never logged, so the
+  crash is INSIDE the merged forward, before the logits split -- i.e. raising a tail row's
+  `seq_lens` to P+n makes **FA3** read out of bounds for that row. Widening `orig_seq_lens` did not
+  help, so that was not it.
+  That run reported `mixed_steps: 0` and `tracebacks: 0` purely because the crash preceded the
+  counter; note also that `CUDA_LAUNCH_BLOCKING=1` serialises every kernel and badly perturbs the
+  arrival timing this screen depends on, so it is a debugging tool here, not a measurement
+  configuration.
+  **Reverted ports 52 and 54 (ports 53, 55, 56); the tree and the pod are back to the known-runnable
+  state** -- which still has the wrong prefix, i.e. the defect is understood but NOT yet fixed.
+
+  Next, with the kernel now known: FA3 takes `cu_seqlens_k` / `seqused_k` and a page table built
+  from `req_to_token`. The index coverage for `[P, P+n)` exists (prepare_for_verify writes it), so
+  the suspect is the merged batch's FA3 metadata -- specifically whether the page table / kv-indices
+  buffer for the MERGED batch is sized from a seq-len total captured before the tail rows were
+  widened, and whether the chunk rows and verify rows can share one `cu_seqlens_k` when the verify
+  rows' prefix is not their `seq_lens`. This is squarely in the FA3 path the goal's split kernel
+  also has to satisfy, so the work is not wasted on a detour.

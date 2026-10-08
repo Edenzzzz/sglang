@@ -9264,3 +9264,15 @@ Repro: `python3` replay snippet against `tasks/fused_specdec_workload/boundary_2
 sglang `attn_fuse_` @ this commit, flashinfer `/opt/tiger/flashinfer` @ `b0563ae`.
 NOT yet A/B'd on a live server -- that needs the `fi` restore to finish; the harness/serving rule
 reconciliation and the `MIN_QO_LEN=16` recheck remain open on the item above.
+
+**`fi` restore COMPLETE on the pod (2026-10-08).** All seven paths the fused build needs verify
+present: `flashinfer/`, `csrc/`, `include/`, `tests/fused_fa3_persistent_ext.cu`,
+`3rdparty/cutlass/{include,tools/util/include}`, `3rdparty/spdlog/include`. Total cost: one 2.59 MB
+base64 push (44 chunks) plus two pod-side git clones.
+One more restore gotcha, worth the line because it is invisible until the test runs:
+`flashinfer/data/{csrc,include,cutlass,spdlog,tvm_binding}` are **absolute** symlinks into
+`/opt/tiger/flashinfer/...`, so on the pod they are all broken. The failure does not look like a
+broken link -- `flashinfer/jit/core.py` does `os.makedirs(FLASHINFER_CSRC_DIR, exist_ok=True)`, and
+`exist_ok=True` still raises `FileExistsError` when the path exists but is not a directory, which a
+dangling symlink is. Repointed them at `/dev/shm/w/fi/...`. Add this to the restore recipe.
+Runner: `/dev/shm/kerneltest.sh` (verifies the seven paths, then runs the test under `venv_up`).

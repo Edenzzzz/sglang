@@ -9016,3 +9016,17 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   `extend_prefix_lens` (= P), the n draft tokens are counted twice -- once in the paged prefix and
   again in the causal tail. Next: read FA3's metadata construction for an extend batch and confirm
   which field feeds `seqused_k`; this is the same FA3 path the goal's split kernel must satisfy.
+
+  **Correction to the paged-length hypothesis, from reading FA3's metadata build:** the extend path
+  sets `metadata.cache_seqlens_int32 = forward_batch.seq_lens` directly
+  (`flashattention_backend.py`, extend branch). That is the standard varlen-with-KV-cache
+  formulation -- one causal attention over `[0, seq_lens)` whose queries are the last `extend_len`
+  positions -- so `seq_lens = P + n` after port 57 is CORRECT for FA3 and there is no double count.
+  The FA3-vs-triton gap is therefore numerical (FA3's split-KV / num_splits choices), not a second
+  field bug: the residual is simply larger under FA3 (0.25-0.64 vs 0.21-0.31), which is enough to
+  flip 1-2 near-tied argmaxes per step. Both backends agree the fields are right.
+  Settling whether 0.2-0.6 absolute (~1-2% of a ~30 logit scale) is acceptable bf16 variation needs
+  an **fp32 reference**, which is the standard this project already uses for the split kernel
+  (`SGLANG_SPLIT_VERIFY`, where 0.003-0.004 was bf16 noise and ~4.0 a real fault). Porting that fp32
+  recompute to upstream is the remaining correctness task -- NOT another bf16-vs-bf16 comparison,
+  which cannot distinguish "wrong" from "different kernel".

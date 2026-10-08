@@ -10078,3 +10078,30 @@ offset, which would leave the leading rows NaN exactly as observed and is the fi
 in that function.
 Twelve candidates eliminated. The confirmed `MaskMode::kCausal` fix stands and is independent of
 this.
+
+**Candidate 13 refuted, AND a conflation in my own evidence corrected.**
+`write_o_reg_gmem` (`prefill.cuh:1289-1302`):
+```
+group_size.divmod(o_packed_idx_base + lane_idx / 4 + mma_q * 16 + j * 8, q, r);
+const uint32_t o_idx = q;
+if (o_idx < qo_upper_bound) {
+  *(o_ptr_base + q * o_stride_n + r * o_stride_h + ...) = ...;
+}
+```
+`q` is an ABSOLUTE q index within the request (`o_packed_idx_base / gqa`), not tile-relative, and the
+only guard is an upper bound. So the "tile-relative index leaks into the write-through path" idea is
+wrong, and with `o_ptr_base = final_o + q_indptr*stride` (q_indptr 0, `pers_row_offset` supplying the
+424 base) the packed-128 tile should write absolute rows 442-460. The store path is correct as
+written.
+
+**The conflation:** the `[TRACE]` printf is at the TOP of the work loop, before the mainloop. So it
+proves a work item was ENTERED -- it does NOT prove the item reached its store. My statement that
+"tiles 128 and 256 execute" was over-claimed; what is established is that they are entered. Every
+hypothesis built on "they execute yet their rows are NaN" therefore rested on a weaker fact than I
+stated, and the gap between entry and store is now the prime suspect: something between the two
+skips the write for the leading tiles.
+**Next:** move/add one printf immediately BEFORE the `write_o_reg_gmem` call (or at the end of the
+loop body) and re-run with the q_len==87 filter. If the leading tiles appear at entry but not at the
+store, the exit is inside the mainloop and its guard is the target; if they appear at both, the
+store executes and the addressing is wrong after all. One run, and it cannot come out ambiguous.
+Thirteen candidates eliminated. The `MaskMode::kCausal` fix is unaffected and stands.

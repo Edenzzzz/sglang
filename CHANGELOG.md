@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.21.0 — Dispatch boundary is a ratio, and the decode-population guard (2026-10-08)
+
+- Re-analysed the measured 2-D boundary (`boundary_28x4x128.json`): the fused win is set by a RATIO,
+  `kv <= 64 * decode_rows` (one 64-wide KV tile of decode work per decode row), not by thresholds on
+  `qo_len`/`kv`. With no co-resident decode rows the fused kernel loses on every measured kv
+  (0.617-0.704x), which no per-row rule can express.
+- `mixed_dispatch.split_classes` now applies a batch-level decode-population guard
+  (`SGLANG_FUSED_DECODE_GUARD`, `SGLANG_FUSED_DECODE_TILES_PER_ROW`). Replaying all 25 measured
+  points through the real dispatch code: agreement with the measured winner rises from **11/25 to
+  23/25**, and the `nd = 0` losing region is no longer routed to FA3.
+- Pod restore: found TWO casualties of the earlier restore -- the flashinfer tree (`/dev/shm/w/fi`)
+  was absent, so the split kernel had no runnable binary, and the fork venv's torch is broken
+  (nccl ABI). Recorded a restore split that clones third-party on the pod (it has network) and
+  pushes only the fork's ~2 MB of sources.
+
 ## v0.20.1 — Correctness evidence for the ported 4-mode step, and two invalid gates retired (2026-10-08)
 
 - The merged forward's PREFILL rows are bit-exact against a prefill-only reference (err 0.0, 0

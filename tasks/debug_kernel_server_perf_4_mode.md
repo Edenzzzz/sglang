@@ -9238,3 +9238,29 @@ Still to do on this item (needs the GPU, blocked on the `fi` restore): fit the b
 `MIN_QO_LEN=16` against the measured 32 -> 56 crossover (FA3 0.78x at packed_qo 32, 1.13x at 56, so
 a floor of 16 admits rows where FA3 LOSES); then make the harness and serving rules agree on the
 ratio form, since they currently disagree with each other AND with the data.
+
+### Implemented: the decode-population guard in the serving dispatch — 2026-10-08
+
+`python/sglang/srt/layers/attention/mixed_dispatch.py`: `split_classes` now applies
+`_apply_decode_population_guard`, a batch-level ratio test. The per-row conditions
+(`packed_qo >= 48`, `kv_tiles >= 1`, `qo >= MIN_QO_LEN`) read only one row's own shape and so
+cannot see the decode population at all -- which the surface says is the deciding variable.
+Guard: with no decode rows, no row goes to FA3 (measured 0.617-0.704x on every kv); otherwise a row
+goes to FA3 only while `kv_tiles <= decode_rows / 2` (the measured `kv <= 64*nd` at TILE_KV=128).
+Env: `SGLANG_FUSED_DECODE_GUARD=0` disables it, `SGLANG_FUSED_DECODE_TILES_PER_ROW` retunes the
+ratio, so the next GPU session can A/B the guard itself rather than trusting this fit.
+
+**Validated by replaying all 25 measured points through the real dispatch code** (one qo=424 prefill
+row + nd qo=1 decode rows at each kv, GQA 7):
+
+| rule | agrees with measured winner |
+|---|---|
+| old (per-row only) | **11 / 25** -- it routes FA3 for every point, including all five `nd = 0` cases where fused loses 30-38% |
+| new (with the guard) | **23 / 25** |
+
+The two misses are kv 8192 @ nd 115 and kv 32768 @ nd 365, measured 1.026x and 1.016x -- the flat
+region where the choice is worth <3%, which is where a ratio fit is expected to be soft.
+Repro: `python3` replay snippet against `tasks/fused_specdec_workload/boundary_28x4x128.json`;
+sglang `attn_fuse_` @ this commit, flashinfer `/opt/tiger/flashinfer` @ `b0563ae`.
+NOT yet A/B'd on a live server -- that needs the `fi` restore to finish; the harness/serving rule
+reconciliation and the `MIN_QO_LEN=16` recheck remain open on the item above.

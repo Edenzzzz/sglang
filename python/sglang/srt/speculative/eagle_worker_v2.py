@@ -1538,6 +1538,22 @@ class EAGLEWorkerV2(BaseSpecWorker):
             verify_input, self.req_to_token_pool, running, self.target_worker
         )
 
+        # Gate (b), v2: take the reference BEFORE the merged forward, reusing the verify batch
+        # the step already prepared. v1 called eagle_prepare_for_verify again for the
+        # reference, which REALLOCATES cache locs and mutates `running` -- two identical
+        # references then disagreed as much as merged-vs-reference, so the gate was measuring
+        # its own side effects. prepare -> forward here is exactly the normal verify path, and
+        # the merged forward rewrites the same KV slots with the same values afterwards.
+        _ref_ver = None
+        if os.environ.get("SGLANG_MIXED_VERIFY_CHECK") == "1" and _vfb is not None:
+            _ref_ver = (
+                self.target_worker.forward_batch_generation(
+                    batch=None, forward_batch=_vfb, is_verify=True
+                )
+                .logits_output.next_token_logits.detach()
+                .clone()
+            )
+
         # Merge onto a COPY, leaving `batch` as the pure prefill batch. Mutating `batch` in place
         # (upstream's merge does) meant every later consumer of the prefill rows -- the prefill draft
         # extend above all -- saw merged-size fields, and patching that field by field produced an
@@ -1581,51 +1597,18 @@ class EAGLEWorkerV2(BaseSpecWorker):
             next_token_logits=ver_logits, hidden_states=ver_hidden
         )
 
-        if os.environ.get("SGLANG_MIXED_VERIFY_CHECK") == "1" and _vfb is not None:
-            # Gate (b): the SAME verify rows forwarded WITHOUT the prefill chunk. Both sides
-            # see identical inputs within this one step, so timing cannot confound it --
-            # unlike greedy-token equality, where the merge point moves between runs.
-            #
-            # The reference is validated IN PLACE before it is believed: _vfb holds
-            # references to `running`'s tensors, and the merge rebinds some of them
-            # (mix_with_running nulls input_ids for the relay), so a stale _vfb would make
-            # any disagreement meaningless. Two things are therefore reported first -- the
-            # reference's own run-to-run stability, and _vfb's input_ids -- and the verdict
-            # is only readable if ref_vs_ref is ~0 and the ids are the draft tokens.
-            _ids = getattr(_vfb, "input_ids", None)
-            # RE-PLAN before the reference forward. eagle_prepare_for_verify planned the
-            # attention backend for this batch, and the merged forward then re-planned the
-            # same shared state -- so without this the reference runs on the MERGED batch's
-            # metadata, reproducibly (ref_vs_ref was exactly 0.0) but invalidly.
-            _vfb2, _ = eagle_prepare_for_verify(
-                verify_input, self.req_to_token_pool, running, self.target_worker
-            )
-            _vfb = _vfb2
-            _r1 = self.target_worker.forward_batch_generation(
-                batch=None, forward_batch=_vfb, is_verify=True
-            ).logits_output.next_token_logits
-            _r1 = _r1.detach().clone()
-            _vfb3, _ = eagle_prepare_for_verify(
-                verify_input, self.req_to_token_pool, running, self.target_worker
-            )
-            _r2 = self.target_worker.forward_batch_generation(
-                batch=None, forward_batch=_vfb3, is_verify=True
-            ).logits_output.next_token_logits
-            _got = ver_logits
-            # Scale-normalised, NOT elementwise relative: a near-zero reference logit makes
-            # elementwise relative error meaningless over a 152k vocab (the first version of
-            # this gate reported 1e5 for exactly that reason).
+        if _ref_ver is not None:
             def _err(a, b):
                 a = a.float(); b = b.float()
                 if tuple(a.shape) != tuple(b.shape):
                     return float("nan")
                 return float((a - b).abs().max() / a.abs().max().clamp_min(1e-6))
-            _flips = lambda a, b: int((a.float().argmax(-1) != b.float().argmax(-1)).sum())
-            # NULL TEST: the same comparison for the PREFILL rows, whose path is
-            # independently known-good (identical pre_logits_sum across runs, and the
-            # control's own prefill path). If these also disagree by ~0.5 the GATE is wrong;
-            # if they agree to ~1e-3 while the verify rows do not, the gate is sound and the
-            # merged batch's verify rows are genuinely wrong. Cannot come out ambiguous.
+            _flips = lambda a, b: (
+                int((a.float().argmax(-1) != b.float().argmax(-1)).sum())
+                if tuple(a.shape) == tuple(b.shape) else -1
+            )
+            # Null case: the same comparison on the prefill rows, which are known good.
+            # The verdict is only readable while this reads 0.
             _pre_err = _pre_flips = None
             try:
                 _pfb = ForwardBatch.init_new(
@@ -1638,28 +1621,18 @@ class EAGLEWorkerV2(BaseSpecWorker):
                     batch=None, forward_batch=_pfb, is_verify=True
                 ).logits_output.next_token_logits
                 _pre_err = _err(_pref, pre_logits)
-                _pre_flips = (
-                    _flips(_pref, pre_logits)
-                    if tuple(_pref.shape) == tuple(pre_logits.shape)
-                    else -1
-                )
-                _pre_shapes = (tuple(_pref.shape), tuple(pre_logits.shape))
+                _pre_flips = _flips(_pref, pre_logits)
             except Exception as _e:
-                _pre_shapes = ("EXC", repr(_e)[:80])
+                _pre_err = repr(_e)[:60]
             logger.error(
-                "NULLTEST prefill_rows err=%s flips=%s shapes=%s",
-                _pre_err, _pre_flips, _pre_shapes,
-            )
-            logger.error(
-                "VERIFYCHECK2 ver_rows=%s rows=%s ids=%s ids_sum=%s | "
-                "ref_vs_ref err=%.3e flips=%s | merged_vs_ref err=%.3e flips=%s/%s | "
-                "scale ref_absmax=%.3f got_absmax=%.3f",
-                merged.mixed_verify_rows,
-                tuple(_got.shape), None if _ids is None else tuple(_ids.shape),
-                None if _ids is None else int(_ids.sum()),
-                _err(_r1, _r2), _flips(_r1, _r2),
-                _err(_r1, _got), _flips(_r1, _got), _got.shape[0],
-                float(_r1.float().abs().max()), float(_got.float().abs().max()),
+                "VERIFYCHECK3 ver_rows=%s rows=%s | NULL prefill err=%s flips=%s | "
+                "merged_vs_ref err=%.3e flips=%s/%s | scale ref=%.3f got=%.3f",
+                merged.mixed_verify_rows, tuple(ver_logits.shape),
+                _pre_err, _pre_flips,
+                _err(_ref_ver, ver_logits), _flips(_ref_ver, ver_logits),
+                ver_logits.shape[0],
+                float(_ref_ver.float().abs().max()),
+                float(ver_logits.float().abs().max()),
             )
 
         if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":

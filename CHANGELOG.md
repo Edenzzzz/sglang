@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.26.1 — Remaining work fully specified (2026-10-09)
+
+- `UpstreamFA3Plan` (`hopper/fa3_upstream.cuh:140`) carries the five fields the non-unified
+  FA3_UPSTREAM build needs, with in-header comments mapping them to our plan's arrays
+  (page_table/kv_indices, cu_seqlens_q/qo_indptr, seqused_k/kv_lens, total_q, num_pages). So the
+  fix is to source them from the extension's FA3 plan under `if constexpr (!kUnifiedWgmma)` --
+  a real fix, no feature disabled.
+- Two documented traps flagged: cu_seqlens_q/seqused_k must be PER-REQUEST (the persistent plan's
+  are per work item -- the known four-bug family), and total_q must not be conflated with num_pages.
+
 ## v0.26.0 — Blocker narrowed from "finish the wgmma port" to a guard placement (2026-10-09)
 
 - The extension selects `UnifiedWgmmaParams` only under `FLASHINFER_FUSED_UNIFIED_WGMMA`, but the

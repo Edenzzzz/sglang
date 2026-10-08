@@ -10849,3 +10849,31 @@ Read `UpstreamFA3Plan` and how `shape_only` is filled FIRST. If it already has t
 fix is to source them from it under `#if FLASHINFER_FA3_UPSTREAM` when `kUnifiedWgmma` is false --
 a real fix, still small, and no feature disabled. I am NOT applying a guard-only change, because an
 FA3 baseline launched with an empty page table would produce a number worse than no number.
+
+**The fix is now fully specified (and it IS a fix, not a disable).** `UpstreamFA3Plan`
+(`hopper/fa3_upstream.cuh:140-154`) carries exactly the five fields, and its own comments give the
+mapping to our plan's arrays:
+```
+int const* page_table;    // our kv_indices
+int const* cu_seqlens_q;  // our qo_indptr     <-- PER-REQUEST
+int const* seqused_k;     // our kv_lens       <-- PER-REQUEST
+int total_q;              // varlen Q extent (shape_Q[0]); NOT num_pages -- conflating them
+                          // mis-shapes the Q tensor and reads out of range (comment at :147)
+int num_pages;            // token count of the FA3 SUBSET only; must match num_fa3_requests,
+                          // because choose_scheduling_algo and LINEARIZE_M_AND_BATCH derive from
+                          // that pair (comment at :150-153)
+```
+So for the non-unified `FLASHINFER_FA3_UPSTREAM` build, those five come from the extension's own
+FA3 plan arrays -- the same data the fused path already has -- rather than from
+`params.wgmma_plan`. Concretely: replace the five `params.wgmma_plan.*` reads with the equivalent
+plan pointers under `if constexpr (!kUnifiedWgmma)`, keeping the wgmma_plan source for the unified
+case.
+**The two traps, both already documented in this repo, so do not rediscover them:**
+1. `cu_seqlens_q` and `seqused_k` must be **per-REQUEST**; the persistent plan's `q_indptr`/`kv_len`
+   are per WORK ITEM. [[upstream-fa3-subset-params]] records four port bugs of exactly this shape.
+2. `total_q` vs `num_pages` are different quantities (Q extent vs FA3-subset token count) and the
+   header warns conflating them reads out of range.
+That is the complete remaining work for the per-executor FA3 baseline, and it is the same unblock
+the fork serving A/B needs. Nothing else in the chain is outstanding: kernel PASSES, split optimum
+known, environment restored and documented, drivers staged, composition counter identified as the
+one instrument to add.

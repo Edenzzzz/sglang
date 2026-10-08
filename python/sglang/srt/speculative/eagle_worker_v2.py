@@ -1636,6 +1636,16 @@ class EAGLEWorkerV2(BaseSpecWorker):
             on_publish(batch.seq_lens)
         result.mixed_running_batch = running
         result.mixed_running_result = ver_result
+        # The scheduler parks ONLY the returned result's refs (scheduler.py:4481), and we
+        # return the prefill half -- so the verify half's keep-alive refs were stranded and
+        # its verify-time GPU tensors (draft_token / out_cache_loc, held transitively by the
+        # verify ForwardBatch) could be recycled inside the 2-iter window. Measured as
+        # run-to-run NONDETERMINISM in the 4-mode arm on requests the control reproduces
+        # exactly. The merged ForwardBatch is pinned for the same reason.
+        _refs = list(result.extra_keep_alive_refs or [])
+        _refs.append(fb)
+        _refs.extend(ver_result.extra_keep_alive_refs or [])
+        result.extra_keep_alive_refs = _refs
         with (
             draft_tp_context(self.draft_worker.draft_owns_attention),
             speculative_moe_backend_context(),

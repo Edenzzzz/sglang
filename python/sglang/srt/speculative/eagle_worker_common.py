@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
+import logging
+import os
+
 import torch
 
 from sglang.kernels.ops.speculative.cache_locs import (
@@ -63,6 +66,9 @@ if TYPE_CHECKING:
         EAGLEDraftCudaGraphRunner,
     )
     from sglang.srt.speculative.eagle_info import EagleDraftExtendInput
+
+
+logger = logging.getLogger(__name__)
 
 
 def duplicate_prefix_tail_to_draft_branches(
@@ -683,6 +689,25 @@ def run_eagle_verify(
         logits_output = precomputed_logits_output
         forward_batch_output = precomputed_forward_output
     else:
+        if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
+            # The PRODUCTION verify contract, from the path both the OFF arm and the normal
+            # spec decode take. This is the third party that decides whether the merged
+            # batch's verify-row `positions` (seq_lens - n) or gate (b)'s reference
+            # (seq_lens) is correct -- the two differ by exactly num_draft_tokens.
+            _vb = verify_forward_batch
+            _sl = getattr(_vb, "seq_lens", None)
+            _ps = getattr(_vb, "positions", None)
+            logger.error(
+                "OFFCONV n=%s seq_lens=%s pos_first=%s pos_head=%s ext_prefix=%s ext_seq=%s",
+                num_draft_tokens,
+                None if _sl is None else [int(v) for v in _sl[:3]],
+                None if _ps is None else int(_ps[0]),
+                None if _ps is None else [int(v) for v in _ps[:8]],
+                None if getattr(_vb, "extend_prefix_lens", None) is None
+                else [int(v) for v in _vb.extend_prefix_lens[:3]],
+                None if getattr(_vb, "extend_seq_lens", None) is None
+                else [int(v) for v in _vb.extend_seq_lens[:3]],
+            )
         forward_batch_output = target_worker.forward_batch_generation(
             batch=None,
             forward_batch=verify_forward_batch,

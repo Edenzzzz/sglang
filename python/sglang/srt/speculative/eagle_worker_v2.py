@@ -1503,6 +1503,8 @@ class EAGLEWorkerV2(BaseSpecWorker):
             ForwardBatch,
             ForwardMode,
         )
+        from types import SimpleNamespace
+
         from sglang.kernels.ops.speculative.eagle import (
             fill_bonus_tokens_func,
             prepare_verify_commit_outputs,
@@ -1593,7 +1595,17 @@ class EAGLEWorkerV2(BaseSpecWorker):
 
         # Prefill rows: is_verify=True returned raw logits, so sample them explicitly with the
         # prefill batch's own sampling parameters.
-        pre_next_token_ids = self.target_worker.model_runner.sample(pre_out, fb)
+        # Sample with the PREFILL batch's own sampling_info (saved by mix_with_verify): the merged
+        # batch's covers chunk + verify rows, while pre_out holds only the chunk rows' logits.
+        pre_view = SimpleNamespace(
+            sampling_info=batch.mixed_pre_sampling_info,
+            return_logprob=False,
+            top_logprobs_nums=getattr(fb, "top_logprobs_nums", None),
+            token_ids_logprobs=getattr(fb, "token_ids_logprobs", None),
+            forward_mode=ForwardMode.EXTEND,
+            positions=None,
+        )
+        pre_next_token_ids = self.target_worker.model_runner.sample(pre_out, pre_view)
 
         # TODO(needs one more GPU run): the two draft extends and the paired result.
         #   - `_draft_extend_for_prefill(batch, ...)` for the chunk rows and

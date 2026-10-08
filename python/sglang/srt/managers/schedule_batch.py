@@ -2387,6 +2387,10 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     # the merge needs draft tokens that only exist after draft() runs in the worker).
     mixed_spec_running: Optional["ScheduleBatch"] = None
 
+    # The prefill half's own sampling_info, kept across mix_with_verify so the prefill rows are
+    # sampled with their parameters rather than the merged batch's.
+    mixed_pre_sampling_info: Optional[Any] = None
+
     mixed_verify_rows: int = 0
     mixed_verify_tokens: int = 0
     input_embeds: torch.Tensor = None  # shape: [b, hidden_size], float32
@@ -3239,6 +3243,21 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             else torch.cat([self.seq_lens_cpu, running_seq_lens_cpu])
         )
         out_cache_loc = torch.cat([self.out_cache_loc, running_batch.out_cache_loc])
+
+        # The verify rows are sampled by `eagle_sample`, not by the batch sampler, so a spec
+        # running batch legitimately carries no penalizer orchestrator -- and `merge_batch` ->
+        # `sampling_info.merge_batch` dereferences it unconditionally
+        # (`AttributeError: 'NoneType' object has no attribute 'merge'`). Lend ours for the merge;
+        # the PREFILL rows' own sampling_info is preserved below for sampling them.
+        self.mixed_pre_sampling_info = self.sampling_info
+        if (
+            running_batch.sampling_info is not None
+            and running_batch.sampling_info.penalizer_orchestrator is None
+            and self.sampling_info is not None
+        ):
+            running_batch.sampling_info.penalizer_orchestrator = (
+                self.sampling_info.penalizer_orchestrator
+            )
 
         self.merge_batch(running_batch)
         self.out_cache_loc = out_cache_loc

@@ -11028,3 +11028,19 @@ kernel's interface in upstream's two contracts (dense `[batch, max_pages]` page 
 conversion at the seam -- never a pointer alias, which is what caused the illegal access; (c) wire
 the backend hooks against upstream's 2540-line `flashinfer_backend.py`; (d) measure the combined
 fused-kernel + 4-mode arm against upstream baseline, which is the arm the >=30%/>=10% bar refers to.
+
+### [x] Step (a) DONE: decode-population guard ported to upstream and re-verified — 2026-10-09
+
+`upstream_port` commit 61 (`/opt/tiger/sglang-up`, now based on live `3fef129ff`). The upstream copy
+of `mixed_dispatch.py` was structurally identical at the `split_classes` tail, so the guard applied
+cleanly. **Re-ran the acceptance test against the UPSTREAM copy rather than assuming it transfers**
+-- replaying all 25 points of `boundary_28x4x128.json` through that code:
+```
+UPSTREAM copy: per-row rule 11/25   with guard 23/25
+```
+identical to the fork's result, so the guard's measured value holds on upstream. Env-gated
+(`SGLANG_FUSED_DECODE_GUARD`, `SGLANG_FUSED_DECODE_TILES_PER_ROW`).
+Remaining upstream work: (b) express the split kernel's interface in upstream's two contracts with
+one explicit conversion at the seam; (c) wire the backend hooks against upstream's
+`flashinfer_backend.py`; (d) measure the combined fused-kernel + 4-mode arm. (b) is the real design
+piece and the one the "interfaces and fusion boundaries must fit upstream" constraint governs.

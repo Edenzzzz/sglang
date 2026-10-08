@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.23.1 — Fused kernel PASSES the causal fp32 reference on all three classes (2026-10-09)
+
+- Fix: the persistent runners' shared `KernelTraits` used `MaskMode::kNone`, so the FA2 side applied
+  no causal mask. Changed to `MaskMode::kCausal`. task0 rel err **0.98-1.04 FAIL -> 0.00221 ok**,
+  with FA3 (0.00709) and tile16 (0.00134) unchanged and 0 unwritten rows, at sm_split 48 and 32.
+- First run where every class passes the reference. Found from the per-token profile already
+  available behind `DUMP_ROWS=1`: token 63 of 64 was the sole correct token, i.e. every token was
+  attending to the full KV range.
+
 ## v0.23.0 — Root cause of the fused task0 failure: missing causal mask in the tile128 path (2026-10-09)
 
 - The failing task0 row has exactly ONE correct token -- the last one, which is the only q token

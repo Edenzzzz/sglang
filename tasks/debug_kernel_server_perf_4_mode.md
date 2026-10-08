@@ -9946,3 +9946,27 @@ Predictions, committed BEFORE the run:
   missing writes, so a second fault is still possible and that outcome would not refute this fix;
 - if `StandardAttention<false>` also gates masking, rel err may only partially improve -- that would
   point at the variant's own causal flag rather than at MaskMode.
+
+## [x] FIX CONFIRMED: `MaskMode::kCausal` makes ALL THREE classes PASS the fp32 reference — 2026-10-09
+
+One-token change, `tests/fused_fa3_persistent_ext.cu:73`, `MaskMode::kNone` -> `MaskMode::kCausal`
+in `PKT` (the traits shared by all three persistent q-tile runners). TRACE disabled and
+`~/.cache/torch_extensions/*/fused_fa3` cleared so the numerics are clean.
+Command: `FIXTURE="qo:424,64,1 prefix:3577,0,13"` (0 unwritten rows, the discriminating fixture),
+`FI_ROOT=/dev/shm/w/fi PYTHONPATH=/dev/shm/w/fi TORCH_CUDA_ARCH_LIST=9.0a NVCC_THREADS=4
+/dev/shm/w/venv_up/bin/python tests/test_fused_server_batch.py`.
+sglang `attn_fuse_` @ 71047a4c3, flashinfer `/opt/tiger/flashinfer` @ b0563ae + this change.
+
+| row | class | before | **after** |
+|---|---|---|---|
+| 0 | FA3 (split-KV 4) | 0.00735 ok | **0.00709 ok** |
+| 1 | **task0 (tile128)** | **0.98-1.04 FAIL** | **0.00221 ok** |
+| 2 | task2 (tile16) | 0.00089 ok | **0.00134 ok** |
+
+0 unwritten rows; identical at sm_split 48 and 32; 0 compile errors. **Every prediction committed
+before the run held**: task0 to bf16 noise, task2 still passing, FA3 untouched.
+This is the first run in which all three classes PASS the causal fp32 reference, and it closes an
+investigation that cost ten refuted candidates. The decisive evidence was the per-token profile
+(`DUMP_ROWS=1`, token 63 the only correct token) -- output the harness had been printing all along.
+Next: fixture 1 (`qo:424,87,1`), which additionally had 55 unwritten rows. The mask fix explains
+wrong VALUES, not missing writes, so that may still fail -- recorded as a prediction, not a hope.

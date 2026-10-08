@@ -402,6 +402,22 @@ Evaluation completeness (added 2026-10-08, user-requested):
       - [ ] router: cache affinity + decode-aware SLO veto, and the L3-store migration arm
       Any optimization that no longer gains gets recorded as superseded-by-upstream IN PLACE, with
       the upstream commit that closed it, rather than quietly dropped.
+      **Port cost, measured 2026-10-08** (`git fetch --depth=1 upstream main`, head `b7b2975b5`):
+      | file we patch | upstream state | diff vs ours |
+      |---|---|---|
+      | `layers/attention/flashinfer_backend.py` | exists, heavily changed | 2 280+ / 1 355- |
+      | `managers/scheduler.py` | exists, restructured | 2 443+ / 4 876- |
+      | `bench_serving.py` | exists, changed | 3 264+ / 14- (ours is mostly additive) |
+      | `layers/attention/mixed_dispatch.py` | **absent** (ours) | ports clean |
+      | `managers/edf_scheduler.py` | **absent** (ours) | ports clean |
+      | `speculative/eagle_worker.py` | **GONE upstream** | the 4-mode MTP patch has no host file |
+      The last row is the blocker: upstream's `speculative/` is now 51 files
+      (`eagle_worker_common.py`, `eagle_worker_v2.py`, `multi_layer_eagle_*`, `dflash_*`,
+      `dspark_*`), and the single `eagle_worker.py` our `forward_mixed_spec` patches no longer
+      exists. So the 4-mode step -- the largest serving win -- must be re-derived against
+      `eagle_worker_v2`/`eagle_worker_common`, not rebased. Plan: port the two new files first
+      (free), then the additive bench changes, then re-derive the 4-mode step, and re-measure each
+      row above in that order.
 
 Cluster:
 - [ ] **Multi-node PD colocation, four points** (H20, 8 pods x 2 GPUs, `tasks/pd_colocation_vs_disagg.md`).

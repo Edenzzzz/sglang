@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.26.0 — Blocker narrowed from "finish the wgmma port" to a guard placement (2026-10-09)
+
+- The extension selects `UnifiedWgmmaParams` only under `FLASHINFER_FUSED_UNIFIED_WGMMA`, but the
+  kernel's `wgmma_plan` reads (`persistent_fa3_fused.cuh:815-821`) sit outside the
+  `if constexpr (kUnifiedWgmma)` guard at `:692`, so `FA3_UPSTREAM=1` instantiates them against
+  params lacking the member. A comment at `:932` shows this trap was hit before in this file.
+- Correct fix is to move those reads inside the `if constexpr` guard, making `FA3_UPSTREAM=1`
+  buildable WITHOUT enabling the unified wgmma path that is recorded as numerically wrong. Nothing
+  needs populating for the non-unified build. This unblocks both the per-executor FA3 baseline and
+  the fork serving A/B.
+
 ## v0.25.9 — Blocker located to the type level (2026-10-09)
 
 - The FA3_UPSTREAM role reads `params.wgmma_plan`, supplied by an EXISTING wrapper

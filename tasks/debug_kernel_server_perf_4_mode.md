@@ -10797,3 +10797,32 @@ Everything else is ready: fused kernel PASSES the fp32 reference, optimum split 
 (112 SMs -> 133.5 us, 1.30x over unfused persistent), fork server boots with the right trees,
 tracelab dataset present, seven-step pod restore documented, and an always-on composition counter is
 the one piece of instrumentation to add alongside (the `MIXEDSPEC_STEPS` pattern worked first time).
+
+**The blocker is a GUARD MISMATCH, and there are two one-line fixes.**
+Extension (`fused_fa3_persistent_ext.cu:173-179`):
+```
+#ifdef FLASHINFER_FUSED_UNIFIED_WGMMA
+  using FA3ParamsSel = UnifiedWgmmaParams<FA3Params, IdT>;
+  constexpr bool kUnifiedWgmma = true;
+#else
+  using FA3ParamsSel = FA3Params;          // <-- no wgmma_plan member
+  constexpr bool kUnifiedWgmma = false;
+#endif
+```
+Kernel: the `wgmma_plan` reads live at `persistent_fa3_fused.cuh:815-821`, while the
+`if constexpr (kUnifiedWgmma)` guard is at `:692` -- and there is already a comment at `:932`
+noting that "a plain `if` made the non-unified instantiation" fail, i.e. this exact trap has been
+hit before in this file. So with `FA3_UPSTREAM=1` and `FUSED_UNIFIED_WGMMA` undefined, the 815 block
+is instantiated against params that have no `wgmma_plan`.
+**Two fixes, and the choice matters:**
+1. **also define `FLASHINFER_FUSED_UNIFIED_WGMMA`** -- compiles, but routes FA3 through the unified
+   wgmma scheduler, which [[fused-wgmma-splitkv-wrong]] records as NUMERICALLY WRONG ("split FA3
+   rows overwrite each other"). Any baseline measured this way would be invalid, so this is only
+   acceptable as a compile check, never as a measurement.
+2. **move the 815-821 block inside `if constexpr (kUnifiedWgmma)`** (or guard it equivalently) so
+   the non-unified instantiation never sees `wgmma_plan`. This is the correct fix: it makes
+   `FA3_UPSTREAM=1` buildable WITHOUT enabling the broken unified path, which is exactly what the
+   per-executor FA3 baseline and the fork serving A/B need.
+Do (2). It is a guard placement, not a port -- materially smaller than the "finish the wgmma params
+plumbing" framing I used in the previous entries, which is hereby narrowed: nothing needs to be
+populated for the non-unified build, because that build never reads the field.

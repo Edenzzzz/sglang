@@ -10295,3 +10295,37 @@ fix already proved correct.
 Re-applying it and testing on FIXTURE 1 this time. Predictions: unwritten 55 -> 0; row 1 rel err
 from `nan` to ~1e-3; FA3 and task2 unchanged. If unwritten goes to 0 but rel err lands near 0.5,
 the remaining error is the separate 3-chunk merge weighting defect, already recorded.
+
+## [x] FUSED KERNEL PASSES THE CAUSAL fp32 REFERENCE END TO END — fixture 1 green, 2026-10-09
+
+Two fixes together, both in the pod copy of flashinfer (`/opt/tiger/flashinfer` @ b0563ae + these):
+1. `tests/fused_fa3_persistent_ext.cu:73` -- `KernelTraits<MaskMode::kNone, ...>` ->
+   `MaskMode::kCausal` for `PKT` (all three persistent q-tile runners had NO causal mask);
+2. `include/flashinfer/attention/persistent.cuh:327` --
+   `cluster_tile_q = (KTraits::FUSED_GRID ? 1u : gridDim.x) * CTA_TILE_Q` (under FUSED_GRID
+   `gridDim.x` is the whole fused grid, and the inflated value saturated the CAUSAL
+   `num_kv_chunks` min() at `kv_len`, forcing every tile -- including causally-confined ones --
+   onto the split path, where their merge never completed).
+
+Command: `NVCC_THREADS=4 bash /dev/shm/kerneltest.sh` (default fixture 1,
+`qo=[424,87,1] kv=[4001,87,14]`, packed_qo `[2968,609,7]`, GQA 28/4, H200 sm90a, nvcc 13.1,
+torch 2.14.1+cu130, `-std=c++20` in both the harness `load()` and `flashinfer/jit/core.py`).
+sglang `attn_fuse_` @ 405b4554b.
+
+| sm_split | unwritten | FA3 (qo424 kv4001) | task0 (qo87 kv87) | task2 (qo1 kv14) |
+|---|---|---|---|---|
+| 48 | **0/512** | 0.00628 ok | **0.00250 ok** | 0.00071 ok |
+| 32 | **0/512** | 0.00628 ok | **0.00250 ok** | 0.00071 ok |
+| 16 | **0/512** | 0.00628 ok | **0.00250 ok** | 0.00071 ok |
+
+Every prediction committed before the run held: unwritten 55 -> 0, task0 `nan` -> ~1e-3, FA3 and
+task2 unchanged. The separate 3-chunk weighting error (rel err 0.514 at `prefix=105`) was predicted
+as possibly remaining; it does NOT appear on fixture 1, so re-check it explicitly on the
+`qo:424,87,1 prefix:3577,105,13` case before assuming it is gone.
+**This clears the kernel-arm gate.** Fused timing is now meaningful for the first time: next is the
+sm_split sweep for perf (`TIME_ITERS`), then the serving A/B with `mixed_fused_fa3=N(xx%)` and
+fallback counts beside the numbers ([[fused-ab-validity-rule]]).
+Cost of getting here: fourteen eliminated candidates, one invalid refutation (the `cluster_tile_q`
+fix was right but tested on a single-chunk fixture that could not exercise it), and two retractions.
+Both real causes came from reading source and from diagnostics the harness already had
+(`DUMP_ROWS`, the `[TRACE]` print, `NO_JIT_REDUCE`).

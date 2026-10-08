@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.24.0 — FUSED FA3+FA2 KERNEL PASSES THE CAUSAL fp32 REFERENCE (2026-10-09)
+
+- Fixture 1 is green at sm_split 48/32/16: **0 unwritten rows**, FA3 0.00628, task0 **0.00250**,
+  tile16 0.00071 -- all three classes within bf16 noise of the causal fp32 reference.
+- Two fixes: (1) the persistent runners' `KernelTraits` used `MaskMode::kNone`, so the FA2 side
+  applied no causal mask; (2) `cluster_tile_q` used `gridDim.x` unguarded under `FUSED_GRID`, and
+  since the kernel's CAUSAL `num_kv_chunks` depends on it, the inflated value forced every tile onto
+  the split-KV path where causally-confined rows never completed their merge.
+- One invalid refutation corrected in place: fix (2) had been tested only on a single-chunk fixture
+  that could not exercise it, and "no change" was wrongly read as refutation.
+- Fused timing is meaningful for the first time; the serving A/B is the next step.
+
 ## v0.23.4 — Split-KV defect attributed to the reduction, with the fix located (2026-10-09)
 
 - `NO_JIT_REDUCE=1` A/B: unwritten rows jump 55 -> 87 (row 1's full length) when the reduction is

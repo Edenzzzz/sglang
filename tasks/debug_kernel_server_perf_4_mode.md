@@ -8985,3 +8985,15 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   in the same order the verify path assumes; (c) `extend_start_loc`/`cu_seqlens` when a 2047-token
   chunk row shares the batch with n-token verify rows. Check (a) first -- it is the one structural
   difference between the two paths that the fields alone cannot express.
+
+  Candidate (a) narrowed by reading the code: the merged batch's `forward_mode` is `MIXED` and its
+  `spec_info` is inherited from the PREFILL batch (only `running.spec_info` is set to
+  `verify_input`), so no `custom_mask` is applied to the merged forward at all -- the verify rows
+  get plain causal extend attention. For a chain (topk=1) that is the same mask the tree encodes,
+  so "the wrong mask is applied" and "a verify-sized mask is applied to a bigger batch" are both
+  ruled out. That leaves (b) KV visibility/order for the draft tokens within their own row and
+  (c) `extend_start_loc`/`cu_seqlens` when a 2047-token chunk row shares the batch with n-token
+  verify rows -- plus a new one worth testing first because it is cheap: run gate (b) with a
+  single-request mixed step (`NBG=1`) and compare against the SAME request's verify logits in the
+  OFF arm, which removes the chunk row from the batch entirely and so isolates whether the residual
+  needs a chunk row present at all.

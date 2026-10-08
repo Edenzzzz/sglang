@@ -9,8 +9,11 @@
 - `calibrate_h20.py` measures decode ITL over context x concurrency (was 256-token context only,
   fitting an unusably small 0.065 ms/seq). The router interpolates that grid (`--decode-grid`); two
   closed forms were rejected and the rejections are recorded in the code.
-- OPEN: ITL is flat to ~131K resident tokens then jumps 15x by 524K, too steep for a bandwidth
-  bound. Root cause not yet found.
+- RESOLVED (2026-10-08): the 15x ITL jump by 524K resident tokens is prefill interference in the
+  calibration (all requests submitted at once, so 16K prefills share steps with decode), not a
+  capacity or bandwidth effect: a server held at 32x16K logs pure-decode steps at ~18.6 ms, 7x
+  faster, with no retraction. The grid stays valid for routing as a loaded-worker cost, but it is
+  not a decode-only model.
 
 ## v0.17.6 — Prefix-aware chunk sizing (2026-10-08)
 

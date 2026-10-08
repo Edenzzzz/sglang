@@ -200,9 +200,21 @@ fixes, in order:
 1. *Calibration.* `calibrate_h20.py` measured decode ITL at 256-token context only, fitting
    0.065 ms/seq. Re-measured at 256 / 4K / 16K context x 1 / 8 / 32 / 64 concurrency, ITL is
    **flat to ~131K resident tokens** (9.1 ms at 32x4K, 8.3 ms at 8x16K) and then jumps to
-   **136.6 ms at 524K** (32x16K) and 347.8 ms at 64x16K. That is ~15x over a 4x KV increase, far
-   steeper than a bandwidth bound (29 GB/step is ~7 ms at HBM speed), so it is a capacity effect
-   -- eviction/retraction or an attention-path change -- **whose root cause is not yet found.**
+   **136.6 ms at 524K** (32x16K) and 347.8 ms at 64x16K.
+   **CORRECTED 2026-10-08: that knee is PREFILL INTERFERENCE in the measurement, not a capacity or
+   bandwidth effect.** (The earlier reading in this bullet -- "a capacity effect, eviction/
+   retraction or an attention-path change, root cause not yet found" -- was wrong.) The calibration
+   submits all N requests at once, so with 16K prompts the later requests' prefill chunks share
+   steps with the earlier ones' decode; at 256-token context prefill is trivial and no
+   interference appears. Checked directly: a server held at 32 concurrent requests and 543K
+   resident tokens logs **pure-decode** steps at 1 716 tok/s = **~18.6 ms per step**, with token
+   usage 0.44 and CUDA graphs on -- 7x faster than the 136 ms the grid records for that shape, and
+   no retraction. (The confirming script's own summary was lost: the chain's `KILL` sweep matches
+   `launch_server` and killed its server mid-run. The server log carries the numbers.)
+   **This does not invalidate the grid for routing**, which needs "what ITL will a request see on
+   this worker", and a worker serving a hot prefix really is running prefill beside decode. It
+   does mean the grid is a *loaded-worker* cost, not a pure decode cost, so it should not be reused
+   as a decode-only model.
 2. *Model form.* No closed form fitted that surface: a 3-term linear fit returned a NEGATIVE base
    cost (-4.64 ms), and `max(flat, kv/bw)` overpredicted the middle of the grid 3-4x. The router
    now **interpolates the measured grid** (`--decode-grid`, bilinear, KV-scaled past the corner;

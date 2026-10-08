@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.25.6 — Decode-guard hypothesis refuted; split kernel still not reached in serving (2026-10-09)
+
+- Re-ran the A/B with `SGLANG_FUSED_DECODE_GUARD=0`: the split arm still reports
+  `two_exec_calls: 0`, so the guard added this session is NOT what suppresses the split kernel.
+  Prime-suspect claim withdrawn. All four arms measured (2 runs x 2 arms) are the same path,
+  consistent to ~1%.
+- Next: read where `two_exec_calls` is incremented and what gates `SGLANG_TWO_EXEC`; the leading
+  candidate is that the driver never exports `SGLANG_FUSED_FA3_SM_SPLIT`, so there is no SM split
+  and hence no two-executor work by construction.
+
 ## v0.25.5 — First fork serving A/B ran but is INVALID (composition counter 0) (2026-10-09)
 
 - Both arms completed (0 fallbacks) with near-identical numbers, but `two_exec_calls: 0` in the

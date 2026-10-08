@@ -10680,3 +10680,32 @@ split kernel cannot be exercised by a long-prefill, low-decode benchmark at all.
    prefills (the mixed chat+tracelab shape the goal names, or `srv_two_exec_ab.sh` with a background
    decode stream). A split-kernel A/B on a batch with ~no decode rows was never going to show a
    fused gain even if the kernel were perfect.
+
+**Guard hypothesis REFUTED: `SGLANG_FUSED_DECODE_GUARD=0` changes nothing.** Re-ran the same A/B
+with the guard disabled; the split arm STILL reports `two_exec_calls: 0`:
+
+| metric | base (guard off) | split (guard off) |
+|---|---|---|
+| output tok/s | 127.88 | 127.41 |
+| total tok/s | 16496.44 | 16435.84 |
+| mean TTFT | 5429.82 ms | 5496.37 ms |
+| mean TPOT / ITL | 40.74 ms | 40.71 ms |
+| **`two_exec_calls`** | **0** | **0** |
+
+So the decode-population guard I added this session is NOT what suppresses the split kernel, and the
+previous entry's "prime suspect" is withdrawn. Something else prevents `SGLANG_TWO_EXEC=1` from
+reaching the two-executor path, and all four arms measured so far (two runs x two arms) are the same
+code path -- consistent to ~1%, which is itself the tell.
+**Next check, and it must be a read before another run:** find where `two_exec_calls` is incremented
+and what gates it. `grep -rn "two_exec_calls" python/sglang/srt/layers/attention/flashinfer_backend.py`
+plus the conditions around `SGLANG_TWO_EXEC` at `flashinfer_backend.py:1358,1433` (seen earlier).
+Candidates to check in that order: (a) the counter is incremented in a branch the server never
+reaches (so fusion may be running but uncounted -- check a second signal such as
+`mixed_fused_fa3=`); (b) the two-exec path additionally requires `SGLANG_FUSED_FA3_SM_SPLIT` to be
+set, which this driver does NOT export (it exports `SGLANG_TWO_EXEC`,
+`SGLANG_FLASHINFER_USE_PERSISTENT`, `SGLANG_MIXED_ATTENTION_KERNEL=persistent`,
+`SGLANG_FUSED_FA3_SRC`); (c) the per-row dispatch rule (`packed_qo >= 48`, `MIN_QO_LEN`) excludes
+every row in this shape.
+(b) is the cheapest to test and the most likely, given the sweep above showed the SM split is a
+first-class parameter the kernel needs -- an unset split may mean "no split", i.e. no two-executor
+work by construction.

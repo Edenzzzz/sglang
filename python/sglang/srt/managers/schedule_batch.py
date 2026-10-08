@@ -2380,6 +2380,11 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     # CPU twin of mix_running_indices; lets the overlap tail resolve gather
     # pinned mirrors without a device sync.
     mix_running_indices_cpu: Optional[torch.Tensor] = None
+
+    # 4-mode step (mix_with_verify): how many of the merged rows at the TAIL are verify rows, and
+    # how many tokens they contribute, so the single forward's logits can be split afterwards.
+    mixed_verify_rows: int = 0
+    mixed_verify_tokens: int = 0
     input_embeds: torch.Tensor = None  # shape: [b, hidden_size], float32
 
     # Token replacement embeddings and absolute positions (optional).
@@ -3185,6 +3190,74 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             self.extend_logprob_start_lens + [0] * running_bs
         )
         self.is_prefill_only = False
+
+    def mix_with_verify(self, running_batch: ScheduleBatch, verify_input):
+        """4-mode step: merge this chunked-prefill batch with the running batch's VERIFY rows, so a
+        prefill chunk and `draft_token_num` draft tokens per running row share ONE target forward.
+
+        `mix_with_running` already merges a chunk with a spec running batch, but contributes ONE
+        token per running row (the tail's bonus slot at the committed length). That is modes 1-3:
+        chunk + tail + draft extend. This method is the 4-mode delta: the running rows arrive as
+        `n = verify_input.draft_token_num`-wide causal extends, which is what the serving win
+        measured (ported from the fork's `eagle_worker.forward_mixed_spec`, where the same thing had
+        to be done by hand-building a MIXED ModelWorkerBatch because upstream's merge refused spec
+        batches at all).
+
+        Requires a CHAIN draft (topk == 1): each verify row is then a plain causal extend of n
+        tokens onto its prefix, which the extend attention path already expresses. Tree drafts need
+        the custom mask and are not handled here.
+
+        Call AFTER `verify_input.prepare_for_verify`-equivalent slot allocation, so
+        `running_batch.out_cache_loc` already points at the n slots per row.
+        """
+        n = int(verify_input.draft_token_num)
+        running_bs = running_batch.batch_size()
+        self.forward_mode = ForwardMode.MIXED
+
+        # Spec rows sit at the committed base; the verify rows extend n tokens onto it.
+        running_prefix_lens = [r.seqlen - 1 for r in running_batch.reqs]
+        for req, prefix_len in zip(running_batch.reqs, running_prefix_lens, strict=True):
+            req.refresh_fill_ids()
+            req.extend_end = prefix_len + n
+
+        # The draft tokens ARE the running rows' input; unlike the tail path there is no pending
+        # relay token to resolve, because draft() has already produced them.
+        self.input_ids = torch.cat([self.input_ids, verify_input.draft_token])
+        self.mix_running_indices = running_batch.req_pool_indices
+        self.mix_running_indices_cpu = running_batch.req_pool_indices_cpu
+
+        running_seq_lens_cpu = torch.tensor(
+            [int(r.seqlen) - 1 + n for r in running_batch.reqs], dtype=torch.int64
+        )
+        merged_seq_lens_cpu = (
+            running_seq_lens_cpu
+            if self.seq_lens_cpu is None
+            else torch.cat([self.seq_lens_cpu, running_seq_lens_cpu])
+        )
+        out_cache_loc = torch.cat([self.out_cache_loc, running_batch.out_cache_loc])
+
+        self.merge_batch(running_batch)
+        self.out_cache_loc = out_cache_loc
+        self.seq_lens_cpu = merged_seq_lens_cpu
+        merged = self.seq_lens.clone()
+        merged[-running_bs:] = torch.tensor(
+            [r.seqlen - 1 + n for r in running_batch.reqs],
+            dtype=merged.dtype,
+            device=merged.device,
+        )
+        self.seq_lens = merged
+
+        self.prefix_lens = self.prefix_lens + running_prefix_lens
+        self.extend_lens = self.extend_lens + [n] * running_bs
+        self.extend_num_tokens = self.extend_num_tokens + running_bs * n
+        self.extend_logprob_start_lens = (
+            self.extend_logprob_start_lens + [0] * running_bs
+        )
+        self.is_prefill_only = False
+        # The verify rows' logits must be sliced back out after the single forward; record where
+        # they start so the caller does not have to recompute it.
+        self.mixed_verify_rows = running_bs
+        self.mixed_verify_tokens = running_bs * n
 
     def convert_decode_to_extend(self):
         """View every decode request as a 1-token extend with its context as

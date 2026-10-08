@@ -1,0 +1,90 @@
+{
+  "status": "N=100 workload-selection screen; not a paper headline",
+  "common": {
+    "gpu": "H800",
+    "model": "Qwen2.5-7B-Instruct",
+    "context_tokens": [65536, 100000],
+    "minimum_output_tokens": 512,
+    "request_rate": "inf",
+    "server_seed": 1,
+    "warmup": "same-length, token-disjoint",
+    "dmc_chunk_cap": 8192,
+    "lpt_chunk_cap": 6656,
+    "minimum_prefill_chunk": null,
+    "decode_cuda_graphs": "enabled for both methods"
+  },
+  "points": [
+    {
+      "sessions": 10,
+      "mean_input_tokens": 82708,
+      "mean_append_tokens": 5016,
+      "mean_output_tokens": 2875,
+      "dmc": {
+        "concurrency": 3.20,
+        "total_tokens_per_second": 6032.14,
+        "mean_ttft_ms": 6413.53,
+        "p99_ttft_ms": 65957.68,
+        "mean_itl_ms": 17.44,
+        "p99_itl_ms": 29.85,
+        "max_itl_ms": 1072.71
+      },
+      "lpt": {
+        "concurrency": 3.21,
+        "total_tokens_per_second": 6027.31,
+        "mean_ttft_ms": 6636.26,
+        "p99_ttft_ms": 67331.54,
+        "mean_itl_ms": 17.43,
+        "p99_itl_ms": 34.19,
+        "max_itl_ms": 883.94
+      }
+    },
+    {
+      "sessions": 16,
+      "mean_input_tokens": 82602,
+      "mean_append_tokens": 3383,
+      "mean_output_tokens": 2013,
+      "dmc": {
+        "concurrency": 10.85,
+        "total_tokens_per_second": 7707.87,
+        "mean_ttft_ms": 37370.27,
+        "p99_ttft_ms": 128317.58,
+        "mean_itl_ms": 40.62,
+        "p99_itl_ms": 746.89,
+        "max_itl_ms": 1049.94
+      },
+      "lpt": {
+        "concurrency": 10.81,
+        "total_tokens_per_second": 7873.17,
+        "mean_ttft_ms": 34687.97,
+        "p99_ttft_ms": 115128.89,
+        "mean_itl_ms": 40.52,
+        "p99_itl_ms": 642.49,
+        "max_itl_ms": 888.82
+      }
+    },
+    {
+      "sessions": 20,
+      "mean_input_tokens": 82984,
+      "mean_append_tokens": 5126,
+      "mean_output_tokens": 2682,
+      "dmc": {
+        "concurrency": 14.07,
+        "total_tokens_per_second": 7436.82,
+        "mean_ttft_ms": 71673.07,
+        "p99_ttft_ms": 149261.03,
+        "mean_itl_ms": 44.30,
+        "p99_itl_ms": 750.84,
+        "max_itl_ms": 1075.27
+      },
+      "lpt": {
+        "concurrency": 14.19,
+        "total_tokens_per_second": 7481.43,
+        "mean_ttft_ms": 72079.61,
+        "p99_ttft_ms": 156004.41,
+        "mean_itl_ms": 44.26,
+        "p99_itl_ms": 644.76,
+        "max_itl_ms": 891.59
+      }
+    }
+  ]
+}

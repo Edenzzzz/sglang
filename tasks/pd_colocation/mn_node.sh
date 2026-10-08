@@ -1,0 +1,131 @@
+#!/bin/bash
+# Start this pod's two sglang workers (one per GPU) for one multi-node arm.
+#   mn_node.sh <mode: coloc|prefill|decode> <logdir>
+# Ports are unique per pod because pods on one host share its network namespace:
+#   http 30000+100*role+{1,51}, disagg bootstrap 32000+100*role+{1,51} -- 50 apart, because
+#   sglang reserves internal (IPC/NCCL) ports just above its http port, and 1 apart collided.
+# The attention kernel is the same in every arm (persistent FA2/LPT unless KERNEL=split), so
+# arms differ only in routing / placement -- the variable under test.
+set -u
+MODE=$1; LOG=$2
+W=/dev/shm/w
+ROLE=${ARNOLD_ID:-0}
+mkdir -p $LOG
+export PYTHONPATH=$W/python:$W/fi HF_HOME=$W/hf FI_ROOT=$W/fi TORCH_CUDA_ARCH_LIST=9.0a
+export SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 SGLANG_FLASHINFER_USE_PERSISTENT=1
+# mooncake (PD-disagg KV transfer) links libcudart.so.12; the pods' system toolkit is CUDA 13,
+# but the torch cu128 wheels ship the 12.x runtime inside site-packages.
+CUDART=$(python3 -c "import nvidia.cuda_runtime as m, os; print(os.path.dirname(m.__file__))" 2>/dev/null)
+export LD_LIBRARY_PATH=$CUDART:$CUDART/lib:${LD_LIBRARY_PATH:-}
+# Mooncake's handshake cannot parse an unbracketed IPv6 host:port ("failed to get IP address of
+# peer server 2605:...:16743 ... use IPv4 address instead"), so every disagg request failed. The
+# pods also carry IPv4 addresses, all mutually reachable; advertise the first one.
+export SGLANG_HOST_IP=$(hostname -I | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+if [ "${KERNEL:-lpt}" = split ]; then
+  export SGLANG_MIXED_ATTENTION_KERNEL=persistent SGLANG_TWO_EXEC=1 SGLANG_FUSED_FA3_SM_SPLIT=1
+  export FLASHINFER_SM_PARTITION=1 UP_STAGES=2 SGLANG_FUSED_FA3_SRC=$W/fi/tests/fused_fa3_persistent_ext.cu
+fi
+# Free ports are FOUND, not assumed: pods use host networking on hosts shared with other
+# jobs, which hold ports this container cannot even see (a bare bind of [::]:30301 failed with
+# no sglang process alive). Each port is probed by binding it, 50 apart so sglang's internal
+# ports above it stay clear, and published in ports_r<role>.txt for mn_run.py.
+pick() { python3 - "$1" <<'PY'
+import random, socket, sys
+rng = random.Random(int(sys.argv[1]))
+for _ in range(500):
+    p = rng.randrange(40000, 59000, 50)
+    try:
+        for q in (p, p + 1, p + 2, p + 3):
+            s = socket.socket(socket.AF_INET6); s.bind(("::", q)); s.close()
+        print(p); break
+    except OSError:
+        continue
+PY
+}
+rm -f $LOG/ports_r${ROLE}_g*.txt
+launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
+  ulimit -n $(ulimit -Hn)
+  local g=$1
+  PORT=$(pick $((ROLE * 2 + g + RANDOM)))
+  BOOT=$(pick $((ROLE * 2 + g + 7919 + RANDOM)))
+  ARGS=(--model $W/qwen7b --attention-backend flashinfer --mem-fraction-static 0.85
+        --host :: --port $PORT --context-length 131072 --watchdog-timeout 600
+        --json-model-override-args '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}')
+  # Shared L3 prefix cache (goal points 2 and 4): every colocated worker writes the prefixes it
+  # computes through to a cluster-wide mooncake store (RDMA, host DRAM) and prefetches a request's
+  # prefix from it on a local miss, so any node can pull from any other -- a complete graph, with
+  # replication happening as a side effect of serving rather than as a migration step.
+  if [ -n "${HC_MASTER:-}" ]; then
+    export MOONCAKE_MASTER=$HC_MASTER LOCAL_HOSTNAME=$SGLANG_HOST_IP MOONCAKE_PROTOCOL=rdma
+    # ONE_NIC=1 pins every pod's store traffic to a single back-end NIC instead of spreading over
+    # mlx5_1..4. At 16 GPUs on 4 hosts the 4-NIC fabric showed no contention (~236 GB moved, no
+    # measurable effect), so point 4's congestion claim had nothing to bite on; this narrows
+    # aggregate cross-node bandwidth ~4x to make source selection observable within the GPU cap.
+    if [ "${ONE_NIC:-0}" = 1 ]; then
+      export MC_MS_AUTO_DISC=0 MOONCAKE_DEVICE=mlx5_1
+    else
+      export MOONCAKE_DEVICE=mlx5_$(( 1 + (ROLE * 2 + g) % 4 ))
+    fi
+    export MOONCAKE_GLOBAL_SEGMENT_SIZE=${HC_SEGMENT:-32gb}
+    ARGS+=(--enable-hierarchical-cache --hicache-storage-backend mooncake)
+  fi
+  # Worker-side EDF: deadline-ordered admission with no chunk cap (no latency model), the
+  # configuration that won on the MTP server (pd_colocation_vs_disagg.md point 3).
+  if [ "${EDF:-0}" = 1 ]; then
+    export SGLANG_EDF_SCHEDULING=1 SGLANG_TTFT_SLO_MS=${TTFT_SLO_MS:-2000} SGLANG_EDF_LATENCY_MODEL=
+    ARGS+=(--enable-priority-scheduling --schedule-low-priority-values-first
+           --priority-scheduling-preemption-threshold 999999)
+  fi
+  # MTP serving (EAGLE3 chain draft, 3 steps, 4 verify tokens) on every role. Colocated workers
+  # also run the 4-mode step (prefill chunk + verify rows in one target forward); disagg prefill
+  # workers forward the draft hidden states to decode, so both arms speculate.
+  # SPEC=2: the same EAGLE3 MTP without the 4-mode step (stock sglang MTP), to separate the cost
+  # of speculation on this GPU from that of mixing prefill with verify.
+  if [ "${SPEC:-0}" != 0 ]; then
+    ARGS+=(--speculative-algorithm EAGLE3 --speculative-draft-model-path $W/qwen7b_eagle3_sgl
+           --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4)
+    [ "$MODE" = coloc ] && [ "$SPEC" = 1 ] && export SGLANG_ALLOW_MIXED_CHUNK_SPEC=1 SGLANG_MIXED_SPEC=1
+  fi
+  case $MODE in
+    coloc) ARGS+=(--enable-mixed-chunk) ;;
+    prefill|decode)
+      # Back-end RDMA NICs only. mlx5_0 is the front-end NIC (eth0) whose RoCEv2 GID is the IPv6
+      # management address, while mlx5_1..4 (eth1-4) carry IPv4-mapped RoCEv2 GIDs; a worker on
+      # mlx5_0 could not bring up a QP to one on mlx5_1..4 ("Failed to modify QP to RTR").
+      IB=mlx5_$(( 1 + (ROLE * 2 + g) % 4 ))
+      ARGS+=(--disaggregation-mode $MODE --disaggregation-transfer-backend mooncake
+             --disaggregation-ib-device $IB --disaggregation-bootstrap-port $BOOT) ;;
+  esac
+  # One file per GPU: the two supervisors run concurrently, and a shared file rewritten via
+  # one temp name lost an entry (pods 0, 2, 6 in coloc_cache), stalling the arm for 25 min.
+  echo "$g $PORT $BOOT" > $LOG/ports_r${ROLE}_g${g}.tmp && mv $LOG/ports_r${ROLE}_g${g}.tmp $LOG/ports_r${ROLE}_g${g}.txt
+  CUDA_VISIBLE_DEVICES=$g setsid nohup $W/venv/bin/python -m sglang.launch_server "${ARGS[@]}" \
+    > $LOG/worker_r${ROLE}_g${g}.log 2>&1 < /dev/null &
+  echo $! > $LOG/pid_r${ROLE}_g${g}
+  echo "worker role=$ROLE gpu=$g port=$PORT boot=$BOOT mode=$MODE pid=$!"
+}
+# Supervisor: a port probed free can still be taken by another job before sglang binds it
+# (seen: role 3 gpu 1, port 57000). On a bind failure, kill that worker and relaunch it on a
+# freshly probed port; mn_run.py re-reads ports_r<role>.txt on every health poll.
+supervise() {
+  local g=$1
+  for attempt in 1 2 3 4 5; do
+    launch $g
+    for t in $(seq 1 90); do
+      sleep 4
+      grep -q "address already in use" $LOG/worker_r${ROLE}_g${g}.log && break
+      grep -q "fired up" $LOG/worker_r${ROLE}_g${g}.log && return 0
+    done
+    grep -q "fired up" $LOG/worker_r${ROLE}_g${g}.log && return 0
+    pkill -9 -P $(cat $LOG/pid_r${ROLE}_g${g}) 2>/dev/null; kill -9 $(cat $LOG/pid_r${ROLE}_g${g}) 2>/dev/null
+    for p in $(ps -eo pid,cmd | grep "[s]glang" | grep -- "--port $PORT " | awk '{print $1}'); do kill -9 $p; done
+    sleep 5
+    mv $LOG/worker_r${ROLE}_g${g}.log $LOG/worker_r${ROLE}_g${g}.bindfail$attempt.log
+  done
+}
+for g in 0 1; do
+  supervise $g > $LOG/supervise_r${ROLE}_g${g}.log 2>&1 < /dev/null &
+  disown
+done
+sleep 3
+cat $LOG/ports_r${ROLE}_g*.txt 2>/dev/null

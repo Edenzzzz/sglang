@@ -1,0 +1,27 @@
+[
+  {
+    "method": "LPT",
+    "workload": "swe",
+    "rate": "16",
+    "throughput": 1888.1046040632987,
+    "duration": 245.26766102015972,
+    "output_retokenize_ratio": 0.9994450334815403,
+    "output_valid": true,
+    "median_ttft_ms": 106.69013392180204,
+    "p99_ttft_ms": 488.9390510134398,
+    "median_itl_ms": 17.887791618704796,
+    "p99_itl_ms": 66.30125660449264,
+    "median_req_max_itl_ms": 379.56429179757833,
+    "p99_req_max_itl_ms": 380.9048893675208,
+    "max_req_itl_ms": 380.9281289577484,
+    "median_req_p99_itl_ms": 74.27774950861945,
+    "p99_req_p99_itl_ms": 114.55701142959305,
+    "n": 400,
+    "slo_attain_pct": 38.0,
+    "slo_tpot_attain_pct": 100.0,
+    "ttft_attain_pct": 100.0,
+    "itl_attain_pct": 38.0,
+    "tpot_attain_pct": 100.0,
+    "itl_p99_attain_pct": 100.0
+  }
+]

@@ -1,0 +1,58 @@
+{
+  "date": "2026-07-26",
+  "gpu": "H800 80GB",
+  "model": "Qwen2.5-7B-Instruct",
+  "workload": "TraceLab Claude coding session replay, 64K-100K context",
+  "num_rounds": 400,
+  "num_sessions": 10,
+  "time_scale": 0.01,
+  "mean_input_tokens": 82158,
+  "mean_append_tokens": 3812,
+  "mean_output_tokens": 481,
+  "max_running_requests": 40,
+  "methods": {
+    "PP_DECODE_CG": {
+      "duration_s": 1914.27,
+      "input_tokens": 32863270,
+      "output_tokens": 192215,
+      "retokenized_output_tokens": 191867,
+      "total_throughput_tok_s": 17267.96,
+      "output_throughput_tok_s": 100.41,
+      "mean_ttft_ms": 4492.48,
+      "median_ttft_ms": 1282.08,
+      "p99_ttft_ms": 44361.02,
+      "p99_itl_ms": 86.59,
+      "median_request_max_itl_ms": 1736.76,
+      "p99_request_max_itl_ms": 77110.75
+    },
+    "DMC_CG": {
+      "duration_s": 1086.48,
+      "input_tokens": 32863270,
+      "output_tokens": 192215,
+      "retokenized_output_tokens": 192144,
+      "total_throughput_tok_s": 30424.43,
+      "output_throughput_tok_s": 176.92,
+      "mean_ttft_ms": 1682.83,
+      "median_ttft_ms": 252.63,
+      "p99_ttft_ms": 31661.95,
+      "p99_itl_ms": 88.80,
+      "median_request_max_itl_ms": 164.97,
+      "p99_request_max_itl_ms": 989.25
+    },
+    "LPT_ADAPTIVE_7K_CAP": {
+      "prefill_chunk_cap": 7168,
+      "duration_s": 1059.95,
+      "input_tokens": 32863270,
+      "output_tokens": 192215,
+      "retokenized_output_tokens": 192099,
+      "total_throughput_tok_s": 31186.02,
+      "output_throughput_tok_s": 181.34,
+      "mean_ttft_ms": 992.84,
+      "median_ttft_ms": 248.82,
+      "p99_ttft_ms": 12727.41,
+      "p99_itl_ms": 88.84,
+      "median_request_max_itl_ms": 139.37,
+      "p99_request_max_itl_ms": 989.14
+    }
+  }
+}

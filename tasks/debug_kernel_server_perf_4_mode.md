@@ -8619,3 +8619,12 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   First caught by this screen: a gate with `mixed_steps: 0`. The background row asked 400 tokens
   and finished before the long prompt arrived -- the SAME mistake as the H20 gate earlier in this
   file. A correctness run must assert it exercised the path before its result means anything.
+
+- **[x] 2026-10-08: commit 41 (prefill rows sampled with the prefill batch's own `sampling_info`)
+  validated through the screen above.** `portcorr2.sh 1 c` vs the stored control: **IDENTICAL**, and
+  vs port 40: **IDENTICAL** (3 mixed steps, 0 tracebacks). Neutral on this workload because every
+  request runs temperature 0, so the merged-width info happened to agree on the rows it touched;
+  the fix matters once requests in one step carry DIFFERENT sampling params, and it restores what
+  `mix_with_verify` snapshots `mixed_pre_sampling_info` for. Found by grepping for that field and
+  seeing it was set but never read -- it had been dropped in the commit-29 restructure, the same
+  class of loss as the triplicated method and the absorbed PP block.

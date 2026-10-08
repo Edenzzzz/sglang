@@ -299,6 +299,12 @@ FUSED_SPLIT_TOL = float(os.environ.get("SGLANG_FUSED_SPLIT_TOL", "0.02"))
 # the split builds, so the fault is attributed to the plan or the dispatch with real values
 # instead of being inferred from a traceback that names an unrelated later CUDA call.
 FUSED_SPLIT_DEBUG = os.environ.get("SGLANG_FUSED_SPLIT_DEBUG", "0") == "1"
+# One-bit bisect for the post-forward index assert. The dispatch does exactly two new things:
+# an FA3 call, and planning+running an EXTRA flashinfer wrapper mid-step. With this set, the
+# FA2 rows are computed from the batch-wide reference wrapper and scattered instead, so the
+# extra wrapper is never planned. Output stays correct either way, so a clean run isolates the
+# fault to that extra plan rather than to the FA3 half.
+FUSED_SPLIT_NO_FA2_WRAPPER = os.environ.get("SGLANG_FUSED_SPLIT_NOFA2", "0") == "1"
 
 
 class FlashInferAttnBackend(AttentionBackend):
@@ -1641,6 +1647,26 @@ class FlashInferAttnBackend(AttentionBackend):
         # Upstream can pass non_blocking=True here because its indptr buffers
         # (self.kv_indptr[...]) are preallocated and owned for the process lifetime; these are
         # built per step, so the same call is not safe for them.
+        if FUSED_SPLIT_NO_FA2_WRAPPER:
+            # Bisect mode: no extra wrapper. Record what the dispatch needs and stop here.
+            self.fused_split_plan = dict(
+                tok_total=_tok_total,
+                fa3_tok=tok_idx(fa3_rows),
+                fa2_tok=tok_idx(fa2_rows),
+                cu_q=indptr(qo_lens[fa3_rows]),
+                max_q=int(qo_lens[fa3_rows].max()),
+                page_table=page_table,
+                cache_seqlens=forward_batch.seq_lens[
+                    torch.as_tensor(fa3_rows, dtype=torch.int64, device=dev)
+                ].to(torch.int32),
+                n_fa3=len(fa3_rows),
+                n_fa2=n2,
+                no_fa2_wrapper=True,
+            )
+            if FUSED_SPLIT_DEBUG:
+                self._fused_split_debug_check("plan")
+            return True
+
         fa2_qo_indptr = indptr(qo_lens[fa2_rows])
         fa2_kv_indptr = indptr(seq_lens_cpu[fa2_rows].numpy())
         fa2_last_page = self.kv_last_page_len[:n2]
@@ -1758,6 +1784,27 @@ class FlashInferAttnBackend(AttentionBackend):
             sm_margin=self.fused_sm_margin,
         )
         o.index_copy_(0, pl["fa3_tok"], o_fa3.view(-1, hq, hd).to(o.dtype))
+
+        if pl.get("no_fa2_wrapper"):
+            if ref_wrapper is None or kv_cache is None:
+                return None
+            ref_all = ref_wrapper.forward(
+                qv,
+                kv_cache,
+                causal=causal,
+                sm_scale=layer.scaling,
+                logits_soft_cap=logits_soft_cap,
+                k_scale=layer.k_scale_float,
+                v_scale=layer.v_scale_float,
+            ).view(-1, hq, hd)
+            o.index_copy_(0, pl["fa2_tok"], ref_all[pl["fa2_tok"]].to(o.dtype))
+            self.fused_split_calls += 1
+            if self.fused_split_calls % 500 == 1:
+                logger.info(
+                    "FUSED_SPLIT_CALLS %d (NOFA2 bisect: fa3_rows=%d fa2_rows=%d)",
+                    self.fused_split_calls, pl["n_fa3"], pl["n_fa2"],
+                )
+            return o
 
         o_fa2 = self.fused_fa2_wrapper.forward(
             qv[pl["fa2_tok"]],

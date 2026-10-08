@@ -9861,3 +9861,26 @@ drain runs per warpgroup with `kWgSlot = FLASHINFER_FUSED_WG_DRAIN == 1 ? 0u : k
 i.e. in the narrow form ALL warpgroups share slot 0, so if more than one warpgroup per CTA (or the
 FA3 side) reaches the drain, they share one `s_cluster` and can read each other's claim.
 That is a concrete, local, checkable mechanism and it is where to look next.
+
+**RETRACTION, same day: the "same work item on two CTAs" anomaly is an artifact of my own
+aggregation.** The harness loops `for sp in _splits:` over sm_split 48/32/16
+(`test_fused_server_batch.py:385`), so a single run performs at least three kernel launches -- and I
+collected the trace with `grep TRACE ... | sort -u`, which merges lines ACROSS launches. `work=4` on
+blk 110 and blk 114 are the same item in two different launches, which is expected and means
+nothing. No duplicate execution was observed.
+Two further reasons it was never a viable mechanism, both readable: `s_cluster` and `s_merge` are
+per-warpgroup (`pers_smem_base + kCursorOff + kWg * 16u`, lines 233/237) with
+`kWg = FLASHINFER_FUSED_WG_DRAIN == 1 ? 0u : kTidBase / 128u` (line 226), so in the narrow form only
+warpgroup 0 drains and there is no shared-slot race; and `atomicAdd` cannot return the same value
+twice within a launch. I had already flagged that duplicated plain writes are idempotent and so
+could not produce a magnitude deficit -- that doubt was correct and I should have resolved it before
+writing the anomaly up.
+**Net state of the task0 fault, unexplained, with what is now PROVEN about it:**
+coverage complete (items exist and execute), `nchunks == 1` (no merge), causal bounds exact
+(kv_end 19/37/55/64 for packed_qo_start 0/128/256/384), all four kv heads present, every output
+element written and nonzero, magnitude uniformly **3.40x short** (0.42773 vs 1.45312), tile16 exact
+and FA3 passing in the same launch. Ten candidates eliminated.
+Lesson for this file, since it has now cost two write-ups: when a trace is aggregated with
+`sort -u`, check how many launches produced it BEFORE drawing any per-launch conclusion. Trace lines
+need a launch id (sm_split or a counter) printed on them to be read safely; add that before the next
+trace run.

@@ -1490,8 +1490,22 @@ class FlashInferAttnBackend(AttentionBackend):
             [r2t[rp_cpu[r], : int(seq_lens_cpu[r])] for r in fa2_rows]
         )
         if self.fused_fa2_wrapper is None:
+            # DEDICATED workspace, never self.workspace_buffer. A flashinfer wrapper writes its
+            # scheduler metadata into the workspace it was given, so planning this extra wrapper
+            # mid-step into the SHARED buffer clobbers the plans of the wrappers already planned
+            # for this step. The symptom was a device-side assert raised later, inside an
+            # unrelated `plan` call reached from init_forward_metadata_out_graph, and it appeared
+            # ONLY in runs where the split actually fired (FUSED_SPLIT_CALLS >= 1); with the
+            # guard on, the split never fired and 151 merges ran clean. Upstream shares one
+            # workspace across its wrappers safely because it plans them in a fixed order before
+            # any of them runs -- this wrapper plans after that, so it needs its own.
+            self.fused_fa2_workspace = torch.empty(
+                envs.SGLANG_FLASHINFER_WORKSPACE_SIZE.get(),
+                dtype=torch.uint8,
+                device=forward_batch.seq_lens.device,
+            )
             self.fused_fa2_wrapper = BatchPrefillWithPagedKVCacheWrapper(
-                self.workspace_buffer, "NHD", backend=self.prefill_backend
+                self.fused_fa2_workspace, "NHD", backend=self.prefill_backend
             )
         self.fused_fa2_wrapper.begin_forward(
             indptr(qo_lens[fa2_rows]),

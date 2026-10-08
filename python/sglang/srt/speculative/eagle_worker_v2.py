@@ -1624,6 +1624,31 @@ class EAGLEWorkerV2(BaseSpecWorker):
                 _pre_flips = _flips(_pref, pre_logits)
             except Exception as _e:
                 _pre_err = repr(_e)[:60]
+            # Per-POSITION agreement: a verify row holds n draft tokens, and only the
+            # accepted prefix affects emitted text. Which position flips localises the fault --
+            # position 0 wrong means the row's prefix KV length is wrong (seq_lens convention);
+            # only positions >= 1 wrong means the intra-row causal structure or the RoPE
+            # offsets (positions must be prefix + i).
+            _nrows = ver_logits.shape[0]
+            _n = int(verify_input.draft_token_num)
+            _ar = _ref_ver.float().argmax(-1)
+            _ag = ver_logits.float().argmax(-1)
+            _bypos = [
+                int((_ar[i::_n] != _ag[i::_n]).sum()) if _nrows >= _n else -1
+                for i in range(_n)
+            ]
+            _errpos = [
+                round(float((_ref_ver[i::_n].float() - ver_logits[i::_n].float()).abs().max()
+                            / _ref_ver[i::_n].float().abs().max().clamp_min(1e-6)), 4)
+                if _nrows >= _n else -1.0
+                for i in range(_n)
+            ]
+            # accept_lens is not available yet here (run_eagle_verify runs below); it is
+            # logged per step by MIXEDSUM.
+            logger.error(
+                "BYPOS n=%s rows=%s flips_by_pos=%s err_by_pos=%s",
+                _n, _nrows, _bypos, _errpos,
+            )
             logger.error(
                 "VERIFYCHECK3 ver_rows=%s rows=%s | NULL prefill err=%s flips=%s | "
                 "merged_vs_ref err=%.3e flips=%s/%s | scale ref=%.3f got=%.3f",

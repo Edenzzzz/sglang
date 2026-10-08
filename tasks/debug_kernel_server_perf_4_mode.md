@@ -8855,3 +8855,35 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   `extend_prefix_lens`, `extend_seq_lens` and `positions[0]` from BOTH the merged batch and `_vfb`,
   and make the merged batch satisfy the EXTEND contract. If that is it, this single convention has
   been behind every "verify rows look off" symptom in this file.
+
+- **[x] The mismatched field is NAMED: the verify rows' `positions` (and the implied prefix end)
+  differ from the reference by exactly n.** `portcorr3.sh 1 g4`, 5 mixed steps, 0 tracebacks:
+
+  | step | merged | reference |
+  |---|---|---|
+  | 1 | `seq_lens=[1545] ext_prefix=[1541] ext_seq=[4]` **pos0=1541** | `seq_lens=[1545]` **pos0=1545** |
+  | 2 | `seq_lens=[2530,1191] ext_prefix=[2526,1187]` pos0=2526 | `seq_lens=[2530,1188]` pos0=2530 |
+  | 3 | `seq_lens=[4915,2665,2894] ext_prefix=[4911,2661,2890]` pos0=4911 | `seq_lens=[4915,2662,2894]` pos0=4915 |
+  | 4 | `seq_lens=[4919,2666,2898] ext_prefix=[4915,2662,2894]` pos0=4915 | `seq_lens=[4919,2663,2898]` pos0=4919 |
+  | 5 | `seq_lens=[4923,2667,2902] ext_prefix=[4919,2663,2898]` pos0=4919 | `seq_lens=[4922,2665,2902]` pos0=4922 |
+
+  `seq_lens` AGREES (1545 = 1541 + 4), so the EXTEND contract on that field is met and the earlier
+  "seq_lens prefix vs prefix+n" hypothesis is **not** the fault. What differs is `positions`: the
+  merged batch puts the row's first draft token at `seq_lens - n`, the reference puts it at
+  `seq_lens`. Off by exactly n = `draft_token_num`, consistently, on every step. A prefix/RoPE
+  offset wrong by a constant for every token of the row is exactly the uniform,
+  position-independent error `BYPOS` measured -- including position 0.
+
+  Secondary observation, NOT yet explained and worth keeping: rows 2-3 also drift by ~3 between the
+  two views (`merged [...,2665,...]` vs `ref [...,2662,...]`, and `[2530,1191]` vs `[2530,1188]`).
+  The reference's `_vfb` is built before the merge, so a later advance would make the merged view
+  newer; 3 is not n, so it looks like acceptance bookkeeping rather than the same off-by-n. Resolve
+  the off-by-n first, then re-read this -- it may disappear with it.
+
+  **Next action (do NOT fix blind):** establish which side is right before changing anything, since
+  both readings are defensible from these numbers alone -- either the merged batch's positions are n
+  too small, or `eagle_prepare_for_verify` had already advanced `running.seq_lens` by n before
+  `_vfb` captured positions, making the REFERENCE the shifted one. The decisive check is a third
+  party: upstream's own non-mixed spec decode. Log `positions[0]` and `seq_lens` for a verify row on
+  the OFF arm (ordinary spec decode, no merge) and compare against both. Whichever side matches the
+  OFF arm defines the contract. Only then change `mix_with_verify`'s `positions` for the tail rows.

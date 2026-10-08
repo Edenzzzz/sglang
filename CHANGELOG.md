@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.27.1 — upstream_port rebased onto live upstream main, zero conflicts (2026-10-09)
+
+- All 60 commits replayed onto `3fef129ff` (was pinned 46 commits back at `b7b2975b5`) with no
+  conflicts; backup branch `upstream_port_backup_20261009` and tag `pre_rebase_20261009` retained.
+  Port markers verified present after replay rather than inferred from the exit code.
+- Gap found by that verification: the decode-population guard lives only on the fork, not on
+  `upstream_port`. It ports first -- self-contained Python with a measured acceptance test
+  (11/25 -> 23/25 against the boundary surface).
+
 ## v0.27.0 — Direction corrected: kernel must land on upstream with upstream-shaped interfaces (2026-10-09)
 
 - Per the user: the kernel must land on upstream, and its interfaces and fusion boundaries must FIT

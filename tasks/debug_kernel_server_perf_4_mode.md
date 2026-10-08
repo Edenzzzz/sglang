@@ -11003,3 +11003,28 @@ Note `mixed_dispatch.py` appears in the port's own diff -- it is a file WE added
 upstream file, so the dispatch module is already across and the kernel port's remaining sglang-side
 surface is the backend hooks (`SGLANG_TWO_EXEC`, `SGLANG_FUSED_FA3_SM_SPLIT`) expressed against
 upstream's 2540-line `flashinfer_backend.py`.
+
+### [x] STEP 3 DONE: `upstream_port` rebased onto LIVE upstream main, zero conflicts — 2026-10-09
+
+`git rebase upstream/main` on `/opt/tiger/sglang-up`: **all 60 commits replayed, exit 0, no
+conflicts**, despite the 46-commit drift. The forecast above (only 5 touched files changed upstream,
+1-2 commits each, the heavy 4-mode files untouched) held exactly.
+- new base `3fef129ff` == `upstream/main`; 60 commits on top
+- safety refs kept at the old head: branch `upstream_port_backup_20261009`, tag
+  `pre_rebase_20261009` (old head `fea0174e0`)
+- port markers verified present after the replay, not just assumed from exit 0:
+  `mixed_spec_running` (3 files), `MIXEDSPEC_STEPS` (1), `mix_with_verify` (4),
+  `mixed_verify_tokens` (5)
+
+**Gap the verification caught: `_apply_decode_population_guard` is in 0 files on `upstream_port`.**
+The decode-population guard (the measured `kv_tiles <= decode_rows/2` ratio, validated 11/25 ->
+23/25 against `boundary_28x4x128.json`) was committed to the FORK's
+`layers/attention/mixed_dispatch.py`, not to the upstream port. It is part of the kernel's dispatch
+behaviour, so it must come across with the kernel -- and it is a good first piece to port, because
+it is self-contained Python with a measured acceptance test and no upstream-interface question.
+Remaining upstream work, in order: (a) port the decode-population guard; (b) express the split
+kernel's interface in upstream's two contracts (dense `[batch, max_pages]` page table + per-request
+`cu_seqlens_q`/`seqused_k` for FA3; upstream's own plan for the FA2 side) with ONE explicit
+conversion at the seam -- never a pointer alias, which is what caused the illegal access; (c) wire
+the backend hooks against upstream's 2540-line `flashinfer_backend.py`; (d) measure the combined
+fused-kernel + 4-mode arm against upstream baseline, which is the arm the >=30%/>=10% bar refers to.

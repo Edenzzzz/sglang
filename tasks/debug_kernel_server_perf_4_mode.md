@@ -11114,3 +11114,42 @@ backend.
 Step (b) is therefore specified end to end. Remaining: (c) implement that narrow bypass on
 `upstream_port` against upstream's contracts, then (d) measure the combined fused-kernel + 4-mode
 arm, which is the arm the >=30%/>=10% bar refers to.
+
+## HANDOFF STATE — 2026-10-09
+
+**Upstream port (`/opt/tiger/sglang-up`, branch `upstream_port`, 62 commits on live `3fef129ff`):**
+- rebased onto live upstream main, zero conflicts, port markers verified post-replay;
+  safety refs `upstream_port_backup_20261009` / tag `pre_rebase_20261009`
+- 4-mode MTP step: runs (16 mixed steps under load, 0 tracebacks)
+- decode-population guard: ported and re-verified ON THAT COPY (11/25 -> 23/25)
+- FA3/FA2 row partition: in `init_forward_metadata` (commit 62), default OFF, lazy import,
+  logs-and-falls-through on failure, so flag-off paths are byte-identical
+
+**Kernel (flashinfer, `/opt/tiger/flashinfer` + pod `FI_ROOT=/dev/shm/w/fi`):**
+- PASSES the causal fp32 reference on fixture 1, every sm_split: 0 unwritten,
+  FA3 0.00628, task0 0.00250, tile16 0.00071
+- 1.30x over the unfused persistent kernel on identical work (133.5 us @ sm_split 112 vs 174.0 us);
+  optimum split 112 lies OUTSIDE the harness's built-in 48/32/16 sweep
+- two fixes required: `MaskMode::kNone -> kCausal` on the persistent runners, and
+  `cluster_tile_q = (FUSED_GRID ? 1u : gridDim.x) * CTA_TILE_Q`
+- obtained through the harness alone (no sglang), so the result transfers to the upstream wiring
+
+**THE NEXT INCREMENT, fully specified:** the kernel call in upstream's `forward_extend`, consuming
+`self.fused_split_mask` from commit 62. It must hand over upstream's DOCUMENTED contracts --
+dense `[batch_size, max_num_blocks_per_seq]` block table (`flashinfer/prefill.py:1646`, built at
+`:1861`), per-request `cu_seqlens_q` and `seqused_k` -- with the SM budget as the ONLY non-standard
+element, because `prefill.py:204` derives `sm_count` from the device and the wrapper cannot carry
+one. Build the dense table (`at::full({num_requests * max_pages_per_seq}, -1)` then scatter; -1
+because 0 is a valid page id), never alias a flat vector-sparse array into it -- that aliasing is
+what produced `CUDA error: an illegal memory access` and was reverted.
+
+**Then measure (d):** combined fused-kernel + 4-mode arm vs upstream baseline, on a workload with a
+real decode population (the guard refuses pure long-prefill batches BY DESIGN, which is why the
+IN=32768 A/B could never have shown a gain). Add an always-on composition counter FIRST -- the
+`MIXEDSPEC_STEPS` pattern caught a false pass on its first use, and the fork driver's
+`two_exec_calls` greps a string the code never emits, so it proves nothing.
+
+**NOT DONE, and these are the goal's criteria:** >=30% TTFT/ITL, >=10% throughput,
+`tma_store_wait` multicast/cross-role backfill, EDF perf-model vs baseline, PD-colocation point 4.
+Nothing is pushed: `git push` needs interactive auth here (`! git -C /opt/tiger/sglang push`,
+`! git -C /opt/tiger/sglang-up push -u origin upstream_port`).

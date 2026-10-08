@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.20.1 — Correctness evidence for the ported 4-mode step, and two invalid gates retired (2026-10-08)
+
+- The merged forward's PREFILL rows are bit-exact against a prefill-only reference (err 0.0, 0
+  argmax flips, all 5 mixed steps), which validates the merged batch, the logits split and the
+  comparison machinery at once.
+- Greedy-output equality was retired as a gate for this feature: the merge point is
+  timing-dependent, so the verify rows sit at different decode positions each run (identical
+  `pre_logits_sum` with `seq_lens` differing by `num_draft_tokens`). Under a FIXED composition the
+  4-mode arm is byte-identical to the control.
+- Gate (b), comparing the merged verify slice against an unmerged verify forward, was found to
+  measure its own side effects: `eagle_prepare_for_verify` plus a verify forward is destructive and
+  non-idempotent, so two identical references disagree as much as merged-vs-reference. Needs a
+  non-destructive reference (run it before the merged forward).
+- Port commits 39-46: bounded the verify hidden-state slice (padding rows were reaching the draft
+  extend), parked the verify half's keep-alive refs, and restored the prefill rows' own
+  `sampling_info`, which had been dropped in an earlier restructure.
+
 ## v0.20.0 — The 4-mode step runs end to end on current upstream (2026-10-08)
 
 - Branch `upstream_port` (worktree `/opt/tiger/sglang-up`) against upstream pinned `b7b2975b5`,

@@ -8762,3 +8762,33 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
     `positions` for RoPE).
   This is one run and it cannot come out ambiguous, which is why it is the next thing and not
   more reasoning about which side "should" be right.
+
+- **[x] NULL TEST RESOLVES IT: gate (b)'s verify reference is invalid; the merged forward is
+  exonerated, and `portcorr2` stands.** `portcorr3.sh 1 z`, 5 mixed steps, 0 tracebacks:
+
+  | probe | result | reading |
+  |---|---|---|
+  | `NULLTEST prefill_rows` (all 5 steps) | **err=0.0, flips=0**, shapes match | the merged forward's PREFILL rows are bit-exact vs a prefill-only reference -- the merged forward, the logits slicing and the gate's comparison mechanism are all sound |
+  | `ref_vs_ref` in the SAME run | **4.84e-01 to 8.89e-01, flips=1** | two supposedly identical verify references disagree by the SAME magnitude as `merged_vs_ref` (6.1e-01 to 9.7e-01) |
+
+  `ref_vs_ref` was exactly 0 in the earlier runs only because both reference forwards reused one
+  `_vfb`; once each one re-plans (port 45), they diverge from each other. So
+  `eagle_prepare_for_verify` + a verify forward is **destructive and non-idempotent** -- it
+  reallocates cache locs and mutates `running` -- and my "reference" was never a read-only probe.
+  `merged_vs_ref ~= 0.5-1.0` is that instability, not a verify-row defect. Gate (b) as built
+  measures its own side effects.
+
+  Net correctness position, stated with its limits: the merged forward's prefill rows are bit-exact;
+  its verify rows have no evidence against them and one positive result for them (`portcorr2`:
+  byte-identical greedy text over 400 tokens through 3 mixed steps at ver_rows=1); and no gate yet
+  covers verify rows at ver_rows > 1. The "merged verify rows are wrong" reading of the previous two
+  bullets is **RETRACTED** -- it was my gate's side effects.
+
+- **[ ] Rebuild gate (b) with a NON-DESTRUCTIVE verify reference.** The reference must not
+  reallocate or mutate `running`. Options, cheapest first: (a) run the reference FIRST, before the
+  merged forward, and compare the merged slice to it (one `eagle_prepare_for_verify` total, which
+  the step already does -- no extra mutation); (b) deep-copy the batch and give the reference its
+  own KV slots; (c) snapshot and restore `running.out_cache_loc`/`seq_lens` plus the touched KV
+  pages around the probe. (a) is nearly free and is what the step's own structure already affords.
+  Validity check that must accompany it: the prefill-row null test (already err=0.0) stays at 0,
+  AND `ref_vs_ref` stays at 0 with a fresh plan each time.

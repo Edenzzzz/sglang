@@ -3205,81 +3205,25 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         """4-mode step: merge this chunked-prefill batch with the running batch's VERIFY rows, so a
         prefill chunk and `draft_token_num` draft tokens per running row share ONE target forward.
 
-        `mix_with_running` already merges a chunk with a spec running batch, but contributes ONE
-        token per running row (the tail's bonus slot at the committed length). That is modes 1-3:
-        chunk + tail + draft extend. This method is the 4-mode delta: the running rows arrive as
-        `n = verify_input.draft_token_num`-wide causal extends, which is what the serving win
-        measured (ported from the fork's `eagle_worker.forward_mixed_spec`, where the same thing had
-        to be done by hand-building a MIXED ModelWorkerBatch because upstream's merge refused spec
-        batches at all).
+        DELEGATES to `mix_with_running` and then widens the running rows from 1 token to n. Writing
+        the merge from scratch meant re-deriving every field upstream's merge sets, and the misses
+        surfaced one run at a time (`index 4 out of bounds`, `tensor a (4) vs b (5)`, `output with
+        shape [1] doesn't match the broadcast shape [4]`). Delegating keeps upstream as the owner of
+        that field list; only the five fields below genuinely differ for verify rows.
 
-        Requires a CHAIN draft (topk == 1): each verify row is then a plain causal extend of n
-        tokens onto its prefix, which the extend attention path already expresses. Tree drafts need
-        the custom mask and are not handled here.
-
-        Call AFTER `verify_input.prepare_for_verify`-equivalent slot allocation, so
-        `running_batch.out_cache_loc` already points at the n slots per row.
+        Chain draft only (topk == 1): each verify row is then a plain n-token causal extend.
+        Call AFTER verify-slot allocation, so `running_batch.out_cache_loc` holds the n slots/row.
         """
         n = int(verify_input.draft_token_num)
         running_bs = running_batch.batch_size()
-        self.forward_mode = ForwardMode.MIXED
 
-        # Spec rows sit at the committed base; the verify rows extend n tokens onto it.
-        running_prefix_lens = [r.seqlen - 1 for r in running_batch.reqs]
-        for req, prefix_len in zip(running_batch.reqs, running_prefix_lens, strict=True):
-            req.refresh_fill_ids()
-            req.extend_end = prefix_len + n
-
-        # The draft tokens ARE the running rows' input, and `eagle_prepare_for_verify` has already
-        # set `running_batch.input_ids = verify_input.draft_token`. `merge_batch` concatenates
-        # input_ids itself, so concatenating them HERE too double-adds them: measured as
-        # `tensor a (2055) must match tensor b (2051)` -- off by exactly draft_token_num against
-        # out_cache_loc, which is concatenated only once. Leave input_ids to merge_batch.
-        # (Upstream's tail path sets `input_ids = None` for the same reason: the merge owns it.)
-        self.mix_running_indices = running_batch.req_pool_indices
-        self.mix_running_indices_cpu = running_batch.req_pool_indices_cpu
-
-        running_seq_lens_cpu = torch.tensor(
-            [int(r.seqlen) - 1 + n for r in running_batch.reqs], dtype=torch.int64
-        )
-        merged_seq_lens_cpu = (
-            running_seq_lens_cpu
-            if self.seq_lens_cpu is None
-            else torch.cat([self.seq_lens_cpu, running_seq_lens_cpu])
-        )
-        out_cache_loc = torch.cat([self.out_cache_loc, running_batch.out_cache_loc])
-
-        # Snapshot the PREFILL-only view before merge_batch mutates this object. The fork never
-        # needed this: it built a separate MIXED ModelWorkerBatch and left the prefill ScheduleBatch
-        # intact, whereas upstream's merge mutates `self`. `_draft_extend_for_prefill` iterates
-        # `batch.extend_lens` and indexes one tail token per row, so running it on the merged batch
-        # walks off the end of the prefill tokens (`index 4 is out of bounds for dimension 0 with
-        # size 4`). Restore this view for that call.
-        self.mixed_pre_view = {
-            "reqs": list(self.reqs),
-            "input_ids": self.input_ids,
-            "extend_lens": list(self.extend_lens),
-            "prefix_lens": list(self.prefix_lens),
-            "seq_lens": self.seq_lens,
-            "seq_lens_cpu": self.seq_lens_cpu,
-            "out_cache_loc": self.out_cache_loc,
-            "req_pool_indices": self.req_pool_indices,
-            "extend_num_tokens": self.extend_num_tokens,
-            "forward_mode": self.forward_mode,
-        }
-
-        # The verify rows are sampled by `eagle_sample`, not by the batch sampler, so a spec
-        # running batch legitimately carries no penalizer orchestrator -- and `merge_batch` ->
-        # `sampling_info.merge_batch` dereferences it unconditionally
-        # (`AttributeError: 'NoneType' object has no attribute 'merge'`). Lend ours for the merge;
-        # the PREFILL rows' own sampling_info is preserved below for sampling them.
+        # Snapshot what the 1-token merge is about to produce for the tail rows.
+        pre_rows = self.batch_size()
         self.mixed_pre_sampling_info = self.sampling_info
-        # `merge_batch` does `self.sampling_info.penalizer_orchestrator.merge(other...)` with no
-        # None check. MEASURED (MIX_DEBUG, 2026-10-08): on a 4-mode step it is the PREFILL batch
-        # whose orchestrator is None, while the running (decode) batch carries a real one -- the
-        # opposite of the first guess. A chunked-prefill batch under spec reaches here without one;
-        # the decode batch has had one since its own prepare. Borrow from whichever side has it, so
-        # the merge is a no-op on penalties (unused at temperature 0) rather than a crash.
+
+        # merge_batch dereferences self.sampling_info.penalizer_orchestrator with no None check.
+        # MEASURED: on a 4-mode step the PREFILL batch is the one missing it, the running decode
+        # batch has it. Borrow from whichever side does.
         if self.sampling_info is not None and running_batch.sampling_info is not None:
             if (
                 self.sampling_info.penalizer_orchestrator is None
@@ -3296,26 +3240,34 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
                     self.sampling_info.penalizer_orchestrator
                 )
 
-        self.merge_batch(running_batch)
-        self.out_cache_loc = out_cache_loc
-        self.seq_lens_cpu = merged_seq_lens_cpu
-        merged = self.seq_lens.clone()
-        merged[-running_bs:] = torch.tensor(
-            [r.seqlen - 1 + n for r in running_batch.reqs],
-            dtype=merged.dtype,
-            device=merged.device,
-        )
-        self.seq_lens = merged
+        verify_out_cache_loc = running_batch.out_cache_loc
+        verify_input_ids = verify_input.draft_token
+        self.mix_with_running(running_batch)
 
-        self.prefix_lens = self.prefix_lens + running_prefix_lens
-        self.extend_lens = self.extend_lens + [n] * running_bs
-        self.extend_num_tokens = self.extend_num_tokens + running_bs * n
-        self.extend_logprob_start_lens = (
-            self.extend_logprob_start_lens + [0] * running_bs
+        # --- the five fields that differ for n-token verify rows ---
+        # 1/2. each tail row extends n tokens, not 1
+        self.extend_lens[pre_rows:] = [n] * running_bs
+        self.extend_num_tokens = self.extend_num_tokens - running_bs + running_bs * n
+        # 3. the tail rows' KV slots are the n allocated verify slots
+        self.out_cache_loc = torch.cat(
+            [self.out_cache_loc[: self.out_cache_loc.numel() - running_bs], verify_out_cache_loc]
         )
-        self.is_prefill_only = False
-        # The verify rows' logits must be sliced back out after the single forward; record where
-        # they start so the caller does not have to recompute it.
+        # 4. their row lengths end n tokens past the committed base
+        seq_lens = self.seq_lens.clone()
+        seq_lens[pre_rows:] = seq_lens[pre_rows:] - 1 + n
+        self.seq_lens = seq_lens
+        if self.seq_lens_cpu is not None:
+            seq_lens_cpu = self.seq_lens_cpu.clone()
+            seq_lens_cpu[pre_rows:] = seq_lens_cpu[pre_rows:] - 1 + n
+            self.seq_lens_cpu = seq_lens_cpu
+        # 5. their input is the draft tokens (mix_with_running leaves input_ids to the relay)
+        if self.input_ids is None:
+            self.input_ids = verify_input_ids
+        else:
+            self.input_ids = torch.cat(
+                [self.input_ids[: self.input_ids.numel() - running_bs], verify_input_ids]
+            )
+
         self.mixed_verify_rows = running_bs
         self.mixed_verify_tokens = running_bs * n
 

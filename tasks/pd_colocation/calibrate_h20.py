@@ -54,6 +54,18 @@ for ctx in (256, 4096, 16384):
         dec.append((ctx, conc, m))
         print(f"decode ctx {ctx:6d} conc {conc:3d}: mean ITL {m:6.2f} ms", flush=True)
 
+# Emit the measured grid for the router to interpolate. No parametric fit: on H20 the surface has
+# a knee no closed form matched (2026-10-08). ITL is flat to ~131K total resident tokens (9.1 ms at
+# 32x4K, 8.3 ms at 8x16K) and then jumps 15x by 524K (136.6 ms at 32x16K) -- too steep for a
+# bandwidth bound (29 GB per step would be ~7 ms at HBM speed), so it is a capacity effect
+# (eviction/retraction or an attention-backend path change) that still needs a root cause.
+# Both a 3-term linear fit and a max(flat, kv/bw) form were rejected: the linear one returned a
+# NEGATIVE base cost, the max form overpredicted the middle of the grid by 3-4x.
+import json
+json.dump([{"ctx": x, "conc": c, "itl_ms": m} for x, c, m in dec],
+          open("/dev/shm/w/mn/decode_grid.json", "w"), indent=1)
+print("decode grid -> /dev/shm/w/mn/decode_grid.json")
+
 # ITL = a + b*conc + c*conc*ctx/1e3 (least squares on the three terms)
 X = [[1.0, float(c), c * x / 1e3] for x, c, _ in dec]
 y = [m for _, _, m in dec]
@@ -67,6 +79,5 @@ for i in range(3):
             A[r] = [A[r][j] - f * A[i][j] for j in range(4)]
 a, b, c = (A[i][3] / A[i][i] for i in range(3))
 long_rate = sum(n_ for n_, _ in pre[2:]) / sum(t for _, t in pre[2:])
-print(f"fit: ITL = {a:.2f} + {b:.4f}*conc + {c:.5f}*conc*kv/1e3 ms")
-print(f"ROUTER_ARGS=--prefill-tok-s {long_rate:.0f} --decode-step-ms {a:.2f} "
-      f"--decode-ms-per-seq {b:.3f} --decode-ms-per-seq-ktok {c:.5f}")
+print(f"rejected linear fit (kept for the record): ITL = {a:.2f} + {b:.4f}*conc + {c:.5f}*conc*kv/1e3 ms")
+print(f"ROUTER_ARGS=--prefill-tok-s {long_rate:.0f} --decode-grid /dev/shm/w/mn/decode_grid.json")

@@ -82,14 +82,48 @@ class PerfModel:
         # A decode row's cost grows with its OWN KV, so a per-sequence slope fitted at short
         # context under-predicts a holder running 16K-prefix rows by ~an order of magnitude.
         self.decode_ms_per_seq_ktok = decode_ms_per_seq_ktok
+        self.grid = {}
 
     def ttft_ms(self, uncached_tokens_ahead):
         return uncached_tokens_ahead / self.prefill_tok_s * 1000.0
 
     def tpot_ms(self, running, kv_tokens=0.0):
         """kv_tokens: total KV over the rows that would be resident, in tokens."""
+        if self.grid:
+            return self.grid_tpot_ms(running, kv_tokens)
         return (self.decode_step_ms + self.decode_ms_per_seq * running
                 + self.decode_ms_per_seq_ktok * kv_tokens / 1e3)
+
+    def grid_tpot_ms(self, running, kv_tokens):
+        """Interpolate the calibrated (concurrency, mean context) -> ITL grid.
+
+        Measured rather than fitted: no closed form matched H20's knee (see calibrate_h20.py).
+        Bilinear inside the grid, and beyond its largest point, scale by total resident KV, which
+        is the direction the measurements grow in.
+        """
+        conc = max(running, 1)
+        ctx = kv_tokens / conc
+        cs = sorted({c for c, _ in self.grid})
+        xs = sorted({x for _, x in self.grid})
+
+        def at(c, x):
+            return self.grid[(c, x)]
+
+        def bracket(v, vals):
+            lo = max([u for u in vals if u <= v], default=vals[0])
+            hi = min([u for u in vals if u >= v], default=vals[-1])
+            return lo, hi
+
+        if conc > cs[-1] or ctx > xs[-1]:
+            # past the grid: hold the corner's KV-rate and scale by resident KV
+            corner = at(cs[-1], xs[-1])
+            return corner * (conc * ctx) / (cs[-1] * xs[-1])
+        c0, c1 = bracket(conc, cs)
+        x0, x1 = bracket(ctx, xs)
+        fc = 0.0 if c1 == c0 else (conc - c0) / (c1 - c0)
+        fx = 0.0 if x1 == x0 else (ctx - x0) / (x1 - x0)
+        return ((1 - fc) * ((1 - fx) * at(c0, x0) + fx * at(c0, x1))
+                + fc * ((1 - fx) * at(c1, x0) + fx * at(c1, x1)))
 
 
 class Router:
@@ -98,6 +132,10 @@ class Router:
         self.workers = [Worker(u, a.kv_tokens, BLOCK_TOK) for u in a.workers]
         self.pm = PerfModel(a.prefill_tok_s, a.decode_step_ms, a.decode_ms_per_seq,
                             a.decode_ms_per_seq_ktok)
+        if a.decode_grid:
+            rows = json.load(open(a.decode_grid))
+            self.pm.grid = {(r["conc"], r["ctx"]): r["itl_ms"] for r in rows}
+            print(f"decode grid: {len(self.pm.grid)} points", flush=True)
         self.rr = 0
         self.rid = 0
         self.log = open(a.log, "a") if a.log else None
@@ -265,6 +303,7 @@ def main():
     ap.add_argument("--decode-step-ms", type=float, default=15)
     ap.add_argument("--decode-ms-per-seq", type=float, default=0.3)
     ap.add_argument("--decode-ms-per-seq-ktok", type=float, default=0.0)
+    ap.add_argument("--decode-grid", default="", help="calibrate_h20.py decode_grid.json")
     ap.add_argument("--log", default="")
     a = ap.parse_args()
     r = Router(a)

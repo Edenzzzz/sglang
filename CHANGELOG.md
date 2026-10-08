@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.19.1 — The 4-mode split verified numerically; MTP results confirmed (2026-10-08)
+
+- `SGLANG_SPLIT_VERIFY=1` fp32 recompute on a real mixed step: FA3 prefill rows 0.0032-0.0040 and
+  FA2 **verify** rows 0.0030-0.0034 relative error -- bf16 noise. The 5-token greedy divergence from
+  stock MTP is argmax flips from that noise, not a fault, so the MTP serving numbers stand.
+- Min-common-prefix is a weak cross-kernel discriminator (it only catches gross faults, which show
+  rel err ~4.0); the fp32 per-row check is the real gate. New driver `verify_gate.sh`.
+- The H20 gate's earlier one-mixed-step pass was the GATE's fault: 96-token background rows
+  finished before the long prefills arrived. Fixed -> 10 mixed steps, one with 2 prefill + 11
+  verify rows.
+
 ## v0.19.0 — Randomized source selection refuted under contention (2026-10-08)
 
 - Point 4's proposed algorithm ("pull at random among nodes whose hit lengths are within a

@@ -69,15 +69,29 @@ Tasks, in priority order (status 2026-10-08; evidence in the sections below):
             decoding before the long prefills arrived, so nothing mixed. Fixed (1 200-token
             background rows with `ignore_eos`, staggered long prompts): **10 mixed steps, one with
             2 prefill + 11 verify rows**, vs 1 before. Both comparisons PASS, 0 fallbacks.
-      - [ ] **BUT the pass margin is weak and looks systematic, not noise.** Split-vs-stock min
-            common prefix is **5 (short) / 15 (long)** against a stock-vs-stock noise floor of
-            **285 / 101** -- and the H200 gate produced the SAME 5/15. Greedy MTP should be
-            output-identical to non-spec greedy, so a systematic early divergence needs a cause:
-            candidates are batch-composition-dependent attention reduction order (benign) or a real
-            fault in the mixed path (not benign). Next: re-run with `SGLANG_SPLIT_VERIFY=1` (the
-            in-server fp32 recompute that caught the per-request-array bug) and compare per-row,
-            and gate on the SHORT prompts too rather than only the long ones. Until that resolves,
-            treat every MTP serving number as provisional.
+      - [x] **The weak pass margin is bf16 noise, not a fault -- RESOLVED 2026-10-08, MTP numbers
+            stand.** Split-vs-stock min common prefix is 5 (short) / 15 (long) against a
+            stock-vs-stock floor of 285 / 101, identically on H200 and H20, so it is systematic.
+            `SGLANG_SPLIT_VERIFY=1` (in-server fp32 recompute of every row of every split step from
+            the paged cache, `drivers/verify_gate.sh`) gives the answer:
+
+            | rows | side | qo | kv | rel err vs fp32 |
+            |---|---|---|---|---|
+            | 0-3 | FA3 (prefill chunks) | 2 048 | 2 048 | 0.0032-0.0040 |
+            | 4 | FA2 (**verify rows**) | 4 | 2 052 | 0.0030-0.0034 |
+
+            0.3-0.4% is bf16 accumulation noise, and `|got|` tracks `|ref|` (2.8906 vs 2.8921). Row
+            4 at `qo=4` is a VERIFY row beside 2 048-token prefill chunks, so a real 4-mode step was
+            verified on both sides. A 0.3% logit difference flips a greedy argmax whenever the top
+            two are close, after which sequences separate completely -- which is why the floor is
+            high (identical kernels -> identical numerics) and why min-common-prefix is a WEAK
+            discriminator across kernel paths. The fp32 per-row check, not prefix length, is the
+            real gate; prefix length only catches gross faults like the voided per-request-array bug
+            (which showed rel err ~4.0, three orders of magnitude worse).
+            *Caveat:* this run logged 1 mixed step (4 verified split steps), because the fp32
+            recompute slows the server enough to shift the gate's overlap timing. The step count
+            came from the separate strengthened-gate run (10 mixed steps); use that for coverage and
+            this for numerics.
 
 **Labels.** Every quantitative claim below is either *measured* (with the run and commit) or
 *predicted*. The design sections that predate the measurements say so where the measurements

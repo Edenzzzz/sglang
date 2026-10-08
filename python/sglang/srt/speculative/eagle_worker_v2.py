@@ -1644,9 +1644,18 @@ class EAGLEWorkerV2(BaseSpecWorker):
             speculative_moe_a2a_backend_context(),
             spec_stage_span("draft_extend"),
         ):
-            result.next_draft_input = self.draft_worker._draft_extend_for_prefill(
-                batch, pre_out.hidden_states, pre_next_token_ids
-            )
+            # Restore the prefill-only view: this call iterates batch.extend_lens and takes one
+            # tail token per row, so it must not see the merged batch's verify rows.
+            merged_view = {k: getattr(batch, k) for k in batch.mixed_pre_view}
+            for k, v in batch.mixed_pre_view.items():
+                setattr(batch, k, v)
+            try:
+                result.next_draft_input = self.draft_worker._draft_extend_for_prefill(
+                    batch, pre_out.hidden_states, pre_next_token_ids
+                )
+            finally:
+                for k, v in merged_view.items():
+                    setattr(batch, k, v)
             self.draft_worker._draft_extend_for_decode(
                 running, result.mixed_running_result
             )

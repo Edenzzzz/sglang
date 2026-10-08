@@ -2390,6 +2390,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     # The prefill half's own sampling_info, kept across mix_with_verify so the prefill rows are
     # sampled with their parameters rather than the merged batch's.
     mixed_pre_sampling_info: Optional[Any] = None
+    # Prefill-only field snapshot taken by mix_with_verify (see there).
+    mixed_pre_view: Optional[dict] = None
 
     mixed_verify_rows: int = 0
     mixed_verify_tokens: int = 0
@@ -3246,6 +3248,25 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             else torch.cat([self.seq_lens_cpu, running_seq_lens_cpu])
         )
         out_cache_loc = torch.cat([self.out_cache_loc, running_batch.out_cache_loc])
+
+        # Snapshot the PREFILL-only view before merge_batch mutates this object. The fork never
+        # needed this: it built a separate MIXED ModelWorkerBatch and left the prefill ScheduleBatch
+        # intact, whereas upstream's merge mutates `self`. `_draft_extend_for_prefill` iterates
+        # `batch.extend_lens` and indexes one tail token per row, so running it on the merged batch
+        # walks off the end of the prefill tokens (`index 4 is out of bounds for dimension 0 with
+        # size 4`). Restore this view for that call.
+        self.mixed_pre_view = {
+            "reqs": list(self.reqs),
+            "input_ids": self.input_ids,
+            "extend_lens": list(self.extend_lens),
+            "prefix_lens": list(self.prefix_lens),
+            "seq_lens": self.seq_lens,
+            "seq_lens_cpu": self.seq_lens_cpu,
+            "out_cache_loc": self.out_cache_loc,
+            "req_pool_indices": self.req_pool_indices,
+            "extend_num_tokens": self.extend_num_tokens,
+            "forward_mode": self.forward_mode,
+        }
 
         # The verify rows are sampled by `eagle_sample`, not by the batch sampler, so a spec
         # running batch legitimately carries no penalizer orchestrator -- and `merge_batch` ->

@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.28.1 — 4-mode root cause: a stale CPU seq_lens mirror (2026-10-09)
+
+`sglang-up@b8b405822`. Found while trying to gate the fused split, which could not run until
+this was fixed. Reproduces with the split OFF, so it is a port defect, and it blocked every
+4-mode serving arm.
+
+- `ForwardBatch.init_new` passes `extend_prefix_lens = batch.prefix_lens` directly; that field is
+  an independent list, NOT derived from `seq_lens - extend_lens` as a comment in
+  `mix_with_verify` claimed. The planner builds `qo_indptr = cumsum(seq_lens - prefix_lens)`, so
+  a disagreeing prefix silently resizes the step and surfaced as flashinfer's
+  `q.shape[0] (2051) does not match qo_indptr[-1] (2055)` several frames away.
+- Measured: `tail seq_lens=[2047, 6703] prefix=[0, 6695] qo=[2047, 8] extend_seq_lens=[2047, 4]`.
+  `running_batch.seq_lens_cpu` (6696) is stale against the device `seq_lens` (6699) --
+  `eagle_prepare_for_verify` advances the tensor without refreshing the mirror -- so `seq_lens`
+  came from the tensor and `prefix_lens` from the mirror.
+- Fix: derive the host copy from the device tensor, repairing `seq_lens_cpu` and `prefix_lens`
+  together. One D2H of `bs` ints per 4-mode step, marked `TODO(sync)`.
+- **Retraction:** the first fix (`6f6ea6c10`) acted on an inferred "deficit = 1 per verify row"
+  theory and used the stale mirror. The deficit is `n` per row; the ragged path's smaller
+  deficits are a different construction, and forcing one theory across both paths produced the
+  wrong fix.
+- Also: `SGLANG_FLASHINFER_USE_PAGED=1` is required for the split dispatch to be reachable at
+  all — upstream defaults `use_ragged` True, and the dispatch lives in the paged branch.
+
 ## v0.28.0 — forward_extend dispatch: the fused FA3+FA2 split is wired on upstream (2026-10-09)
 
 `sglang-up@86e375375` (`upstream_port`, 65 commits on upstream main `3fef129ff`).

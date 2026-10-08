@@ -358,9 +358,55 @@ deficits are consistent with its different indptr construction.
 - [x] 2026-10-09 **the split dispatch branch is now reachable** -- `SGLANG_FLASHINFER_USE_PAGED=1`
       moves the extend path into the paged branch, confirmed by the traceback moving to
       `flashinfer_backend.py:1687`.
-- [ ] 2026-10-09 **4-mode verify-row prefix width** -- `extend_prefix_lens` for verify rows is
-      `n` too small on the merged batch; reproduces with the split OFF, so it is a port defect.
-      Blocks every 4-mode serving arm, the split's correctness gate included.
+- [x] 2026-10-09 **4-mode verify-row prefix width -- ROOT CAUSE FOUND AND FIXED**
+      (`sglang-up@b8b405822`). Reproduces with the split OFF, so it is a port defect, and it
+      blocked every 4-mode serving arm including the split's own gate.
+
+### Root cause: a stale CPU seq_lens mirror, not an off-by-one (2026-10-09)
+
+`ForwardBatch.init_new` passes `extend_prefix_lens = batch.prefix_lens` **directly**
+(`forward_batch_info.py:967`). `prefix_lens` is an independent `List[int]`, **not** derived from
+`seq_lens - extend_lens` -- a comment in `mix_with_verify` asserted the latter and was wrong.
+The attention planner then builds
+
+```python
+qo_indptr[1 : bs + 1] = torch.cumsum(seq_lens - prefix_lens, dim=0)
+```
+
+so a prefix that disagrees with `extend_lens` silently resizes the step.
+
+**The measurement that settled it** (planner diagnostic, commit `723e42343`):
+
+```
+PLANWIDTH MISMATCH cumsum(seq_lens-prefix)=2055 input_ids=2051 extend_num_tokens=2051
+  | tail seq_lens=[2047, 6703] prefix=[0, 6695] qo=[2047, 8] extend_seq_lens=[2047, 4]
+```
+
+The verify row claims `qo = 8 = 2n` against `extend_lens = 4`, so its prefix is `n` too small.
+Working back: the committed prefix is `6703 - 4 = 6699`, while the observed `6695 = 6696 - 1`
+came from `mix_with_running` computing `[s - 1 for s in running_batch.seq_lens_cpu]`. So
+**`running_batch.seq_lens_cpu` (6696) is STALE against the device `seq_lens` (6699)** --
+`eagle_prepare_for_verify` advances the tensor without refreshing the mirror -- and
+`mix_with_verify` captured the *device* value for `seq_lens` while `prefix_lens` came from the
+*mirror*. The two disagreed by 3, which also left `seq_lens_cpu` inconsistent with `seq_lens`.
+
+Fix: derive the host copy from the device tensor (`verify_base_seq_lens.cpu()`), which repairs
+`seq_lens_cpu` and `prefix_lens` together, and set `prefix_lens[tail]` from it so
+`seq_lens - prefix_lens == extend_lens == n` exactly. Costs one D2H of `bs` ints per 4-mode
+step, marked `TODO(sync)`.
+
+**RETRACTED (recorded in place, not amended away):** my first fix, committed as `6f6ea6c10`,
+set the prefix from `running_batch.seq_lens_cpu` on an inferred "prefix = P-1, deficit = 1 per
+verify row" theory, which I had claimed fit all three measured deficits (4, 3, 2). The planner
+diagnostic refuted it: the deficit is `n` per verify row, not 1, and the mirror that theory
+relied on is the stale array itself. The earlier ragged-path deficits of 2 and 3 are NOT the
+same arithmetic -- the ragged wrapper builds its indptr differently -- and forcing one theory
+across both paths is what produced the wrong fix. Corrected in `b8b405822`.
+
+Ruled out along the way: the merge itself (its own seam check reports **0** mismatches, so
+`input_ids == sum(extend_lens) == extend_num_tokens` there) and `generate_attn_arg_prefill`
+(it assumes every row is a verify row and would give a multiple of `draft_token_num`; 2055 is
+not).
 
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither

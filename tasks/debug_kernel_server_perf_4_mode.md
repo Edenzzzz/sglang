@@ -476,11 +476,20 @@ extend. The remaining failure is in the VERIFY rows' draft extend:
   **bs=1, n=4, accept_lens=[1], out_cache_loc=4, positions=None, seq_lens=[513]**. `positions` does
   not exist yet -- `prepare_for_draft_extend` CREATES it n-wide from `num_draft_tokens` and derives
   the accepted layout itself, so it expects the n-wide tensors.
-- **Next step (narrowed by that measurement):** the gap is the `GenerationBatchResult` fields
-  `_draft_extend_for_decode` reads that a hand-built result does not populate --
-  `allocate_lens` and/or `prepared_draft_extend_inputs`. Populate those (or obtain the result from
-  upstream's own `run_eagle_verify` so they come for free) instead of touching the tensors. This is
-  the delegate-to-upstream lesson again, which commits 19 and 15 both violated.
+- Resolved by running the narrowing AND the slot diagnostic TOGETHER (commits 21-22): with
+  `out_cache_loc` narrowed, **only `positions` mismatched**, so commit 19 was right and commit 20's
+  revert was wrong -- I had generalised from one field (`positions=None`) to both. Reverting the fix
+  and the diagnostic separately destroyed the comparison that settles it; keep both active.
+- `positions` is NOT settable at the call site either: `prepare_for_draft_extend` overwrites it
+  n-wide unconditionally. So n-wide fields are INTENDED, built from
+  `num_tokens_per_req = speculative_num_draft_tokens`.
+- **The actual inconsistency, and the next step:** the draft-extend batch reports a token count of
+  **1** (this is `raw_n`, which sizes the graph buffer) while its fields are built **n-wide (4)**.
+  The fix belongs in what the batch reports, not in the tensors: find what the runner derives
+  `raw_num_tokens` from for this batch (`input_ids.numel()`, `extend_num_tokens`, or
+  `num_accept_tokens`) and make it `bs * n`. Resizing tensors to match a wrong count is what the
+  last four commits kept doing.
+- Commit 22 keeps the proven `out_cache_loc` narrowing and drops the no-op `positions` assignment.
 - Honest note on the loop: three of the last five commits were wrong-direction fixes corrected by a
   one-run diagnostic. Where a field's provenance is not obvious, LOG IT FIRST -- the two diagnostics
   used here (slot names in `fill_from`, tensor sizes at the call site) each resolved in one run what

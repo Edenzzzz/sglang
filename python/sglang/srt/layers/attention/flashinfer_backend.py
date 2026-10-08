@@ -291,6 +291,12 @@ def fast_prefill_plan(
     self._plan_info = self._cached_module.plan(*args)
 
 
+# Self-check of the split against the ordinary planned wrapper, in the same step on the same
+# inputs. Off by default; it doubles attention work when on.
+FUSED_SPLIT_VERIFY = os.environ.get("SGLANG_FUSED_SPLIT_VERIFY", "0") == "1"
+FUSED_SPLIT_TOL = float(os.environ.get("SGLANG_FUSED_SPLIT_TOL", "0.02"))
+
+
 class FlashInferAttnBackend(AttentionBackend):
     """Flashinfer attention kernels."""
 
@@ -1021,14 +1027,21 @@ class FlashInferAttnBackend(AttentionBackend):
             # decode-population guard is validated against the measured boundary surface
             # (tasks/fused_specdec_workload/boundary_28x4x128.json: 11/25 -> 23/25).
             self.fused_split_mask = None
-            if os.environ.get("SGLANG_FUSED_FA3_SM_SPLIT", "0") != "0":
+            if (
+                os.environ.get("SGLANG_FUSED_FA3_SM_SPLIT", "0") != "0"
+                and getattr(self, "indices_updater_prefill", None) is not None
+            ):
                 try:
                     from sglang.srt.layers.attention.mixed_dispatch import split_classes
 
                     _qo = (forward_batch.extend_seq_lens_cpu
                            if forward_batch.extend_seq_lens_cpu is not None else None)
                     if _qo is not None and forward_batch.seq_lens_cpu is not None:
-                        _gqa = max(1, self.num_qo_heads // self.num_kv_heads)
+                        # Head counts and dtypes live on the indices updater, not on the
+                        # backend. Reading them off `self` silently skipped the partition on
+                        # every step (78/78 on the first GPU gate).
+                        _iu = self.indices_updater_prefill
+                        _gqa = max(1, _iu.num_qo_heads // _iu.num_kv_heads)
                         _m, _qt, _kvt = split_classes(
                             _qo, forward_batch.seq_lens_cpu.tolist(), _gqa
                         )
@@ -1398,6 +1411,8 @@ class FlashInferAttnBackend(AttentionBackend):
             return out.to(dev, non_blocking=True)
 
         r2t = self.req_to_token_pool.req_to_token
+        # Head counts and dtypes live on the indices updater (see _fused_split_plan's caller).
+        iu = self.indices_updater_prefill
         # FA3 side. page_table is indexed by REQ POOL index, not batch row: req_to_token is a
         # pool-sized table (upstream does the same at flashattention_backend.py:1028).
         max_k = int(seq_lens_cpu[fa3_rows].max())
@@ -1422,12 +1437,12 @@ class FlashInferAttnBackend(AttentionBackend):
             indptr(seq_lens_cpu[fa2_rows].numpy()),
             kv2_indices,
             self.kv_last_page_len[:n2],
-            self.num_qo_heads,
-            self.num_kv_heads,
-            self.head_dim,
+            iu.num_qo_heads,
+            iu.num_kv_heads,
+            iu.head_dim,
             1,
-            q_data_type=self.q_data_type,
-            kv_data_type=self.data_type,
+            q_data_type=iu.q_data_type,
+            kv_data_type=iu.data_type,
             non_blocking=True,
         )
         self.fused_split_plan = dict(
@@ -1444,7 +1459,9 @@ class FlashInferAttnBackend(AttentionBackend):
         )
         return True
 
-    def _fused_split_dispatch(self, q, layer, forward_batch, causal, logits_soft_cap):
+    def _fused_split_dispatch(
+        self, q, layer, forward_batch, causal, logits_soft_cap, ref_wrapper=None, kv_cache=None
+    ):
         """Run the FA3/FA2 SM-pre-assigned split for one layer, or return None.
 
         The two row subsets are DISJOINT, so the outputs combine by SCATTER (`index_copy_`) --
@@ -1516,6 +1533,45 @@ class FlashInferAttnBackend(AttentionBackend):
             logits_soft_cap=logits_soft_cap,
         )
         o.index_copy_(0, pl["fa2_tok"], o_fa2.view(-1, hq, hd).to(o.dtype))
+
+        if FUSED_SPLIT_VERIFY and ref_wrapper is not None and kv_cache is not None:
+            # Self-check against the ordinary planned wrapper, computed in THIS step on THESE
+            # inputs. A server-level ON-vs-OFF text diff cannot settle this: greedy output
+            # under a concurrent workload does not reproduce run-to-run even for one unchanged
+            # binary, so that comparison has no noise floor (the first GPU gate came back
+            # INCONCLUSIVE for exactly this reason). Same step, same inputs, and the reference
+            # is the read-only call the OFF path already makes.
+            ref = ref_wrapper.forward(
+                qv,
+                kv_cache,
+                causal=causal,
+                sm_scale=layer.scaling,
+                logits_soft_cap=logits_soft_cap,
+                k_scale=layer.k_scale_float,
+                v_scale=layer.v_scale_float,
+            ).view(-1, hq, hd)
+            # Scale-normalised, not elementwise-relative: a clamped relative error returns
+            # ~1e5 on any near-zero activation and says nothing.
+            denom = ref.abs().max().clamp_min(1e-6)
+            err_all = ((o - ref).abs().max() / denom).item()
+            err_fa3 = (
+                (o[pl["fa3_tok"]] - ref[pl["fa3_tok"]]).abs().max() / denom
+            ).item()
+            err_fa2 = (
+                (o[pl["fa2_tok"]] - ref[pl["fa2_tok"]]).abs().max() / denom
+            ).item()
+            self.fused_split_err = max(getattr(self, "fused_split_err", 0.0), err_all)
+            if err_all > FUSED_SPLIT_TOL:
+                logger.error(
+                    "FUSED_SPLIT_VERIFY FAIL layer=%d err=%.5f (fa3=%.5f fa2=%.5f) "
+                    "rows fa3=%d fa2=%d",
+                    layer.layer_id, err_all, err_fa3, err_fa2, pl["n_fa3"], pl["n_fa2"],
+                )
+            elif self.fused_split_calls % 500 == 0:
+                logger.info(
+                    "FUSED_SPLIT_VERIFY ok layer=%d err=%.5f (fa3=%.5f fa2=%.5f) worst=%.5f",
+                    layer.layer_id, err_all, err_fa3, err_fa2, self.fused_split_err,
+                )
 
         # Always-on composition counter. A serving A/B whose split never fired is
         # indistinguishable from a null result, and a counter logged only under a debug flag
@@ -1596,7 +1652,13 @@ class FlashInferAttnBackend(AttentionBackend):
             o = None
             if getattr(self, "fused_split_mask", None) is not None:
                 o = self._fused_split_dispatch(
-                    q, layer, forward_batch, causal, logits_soft_cap
+                    q,
+                    layer,
+                    forward_batch,
+                    causal,
+                    logits_soft_cap,
+                    ref_wrapper=prefill_wrapper_paged,
+                    kv_cache=kv_cache,
                 )
             if o is None:
                 o = prefill_wrapper_paged.forward(

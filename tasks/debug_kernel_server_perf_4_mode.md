@@ -384,6 +384,24 @@ Evaluation completeness (added 2026-10-08, user-requested):
       prefill, PD, and the flashinfer backend all moved), which would shrink or invalidate our
       deltas. Rebase or cherry-pick our kernel/scheduler patches onto a current upstream and re-run
       at least the headline arms there.
+- [ ] **Does EVERY optimization still gain on latest main?** Re-validate each one individually
+      against the CURRENT upstream baseline, not against our fork's baseline -- a gain measured over
+      a 10-month-old baseline is not a gain if upstream already closed it. One row per
+      optimization, each with its own A/B, gate pass and fallback count:
+      - [ ] FA3+FA2 two-executor split (`SGLANG_TWO_EXEC` + `SGLANG_FUSED_FA3_SM_SPLIT`) -- 1.239x
+            on the TraceLab kernel batch, chat TTFT -17.4% in serving
+      - [ ] two-stream overlap (`SGLANG_TWO_EXEC_OVERLAP`) -- -2.7% on the kernel batch
+      - [ ] 4-mode MTP step (`SGLANG_MIXED_SPEC`) -- the largest serving effect; upstream may have
+            changed `mix_with_running` or the EAGLE verify path under us
+      - [ ] fused spec tree build (`SGLANG_FUSED_TREE_BUILD`) -- 31 -> 10 us graphed
+      - [ ] host-overhead fixes (skip the flashinfer FA3 plan + sparse indices in two-exec mode; no
+            device syncs in the kv-index build) -- 1.79 -> ~1.6 ms/mixed step
+      - [ ] deadline-ordered admission (EDFP) -- chat TTFT -62%; check upstream's scheduler still
+            has the priority hooks this uses
+      - [ ] prefix-aware chunk budgets (`SGLANG_CHUNK_ATTN_BUDGET`, `SGLANG_CHUNK_MS_BUDGET`)
+      - [ ] router: cache affinity + decode-aware SLO veto, and the L3-store migration arm
+      Any optimization that no longer gains gets recorded as superseded-by-upstream IN PLACE, with
+      the upstream commit that closed it, rather than quietly dropped.
 
 Cluster:
 - [ ] **Multi-node PD colocation, four points** (H20, 8 pods x 2 GPUs, `tasks/pd_colocation_vs_disagg.md`).

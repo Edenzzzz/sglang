@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.27.0 — Direction corrected: kernel must land on upstream with upstream-shaped interfaces (2026-10-09)
+
+- Per the user: the kernel must land on upstream, and its interfaces and fusion boundaries must FIT
+  upstream. The 4-mode-only port cannot demonstrate the thesis; the combined arm is the only
+  meaningful one. The earlier fork-first plan is superseded.
+- My params-routing edit is REVERTED: it aliased our flat vector-sparse `kv_indices` into
+  `wgmma_plan.dense_page_table`, which upstream expects as a dense `[batch, max_pages]` table
+  (-1-filled, since 0 is a valid page id) -- producing an illegal memory access. The seam is a
+  representation CONVERSION, not a pointer hand-off.
+- Revised plan recorded: express the split kernel's interface in upstream's two contracts with one
+  explicit conversion, port onto `upstream_port` (which already carries the 4-mode step and
+  `mixed_dispatch.py`), re-pin the stale base, then measure the combined arm.
+
 ## v0.26.2 — Remaining edit reduced to mechanical, field names confirmed (2026-10-09)
 
 - `UnifiedWgmmaPlanPtrs` already declares all nine fields the non-unified FA3_UPSTREAM path needs

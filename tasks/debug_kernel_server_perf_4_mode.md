@@ -10934,3 +10934,46 @@ Verification sequence after the edit, in order: (1) `FA3_UPSTREAM=1` compiles; (
 still PASSES fixture 1 (`0 unwritten`, three rows ok) -- the wrapper must not perturb the fused
 path; (3) `TWO_EXEC=1` runs and prints a per-executor FA3 time to divide against; (4) only then the
 fork serving A/B, with an always-on composition counter added first.
+
+## DIRECTION CORRECTED BY THE USER: the kernel must land on UPSTREAM, and its interfaces and
+## fusion boundaries must FIT upstream — 2026-10-09
+
+User, verbatim in substance: the kernel must land on upstream -- "what's the point of tweaking
+schedule without the kernel" -- and "especially the kernel interfaces and fusion boundaries must fit
+upstream". My earlier framing (asking whether the kernel should go to main) was wrong: the 4-mode
+port on `upstream_port` measures the SCHEDULING change against upstream's own attention, which
+cannot demonstrate the project's thesis. The combined arm is the only meaningful one.
+
+**My params-routing edit was exactly the mistake this constraint names, and it is REVERTED.**
+I set `wgmma_plan.dense_page_table = kv_indices.data_ptr()` -- our FLAT, VECTOR-SPARSE array --
+into a field whose own comment says it is "the [batch, max_pages] table upstream believes it owns".
+Result: `CUDA error: an illegal memory access`. The extension builds the correct thing for the
+`fa3_only_run` path:
+```
+up_pt = at::full({num_requests * max_pages_per_seq}, -1, iopt);   // :268  dense, per-request
+up_page_table = up_pt.data_ptr<int32_t>();                        // :271
+// -1, not 0: 0 is a valid page id, so zero padding would make every short
+// sequence read page 0 for its tail blocks instead of being masked off.
+```
+So the boundary is a REPRESENTATION CONVERSION, not a pointer hand-off: our per-work-item,
+vector-sparse KV indexing -> upstream's dense per-request page table plus per-request
+`cu_seqlens_q`/`seqused_k`. Aliasing one into the other is what produced the fault, and it is the
+general shape of the error to avoid in the upstream port.
+
+**Revised plan, replacing the fork-first plan above:**
+1. Define the fusion boundary in UPSTREAM's terms first: upstream FA3 paged attention consumes
+   (dense `[batch, max_pages]` page table, per-request `cu_seqlens_q`, per-request `seqused_k`,
+   `total_q`, `num_pages`); upstream's persistent/FA2 side consumes its own plan. The split kernel's
+   interface should be expressed as those two contracts, with ONE explicit conversion at the seam --
+   built, not aliased.
+2. Port onto `upstream_port` (which already has the 4-mode step AND `mixed_dispatch.py`), not onto
+   the fork. Surface to reconcile: fork `flashinfer_backend.py` is 3465 lines vs upstream's 2540,
+   and the fork's hooks (`SGLANG_TWO_EXEC`, `SGLANG_FUSED_FA3_SM_SPLIT`) must be re-expressed
+   against upstream's backend structure rather than transplanted.
+3. Re-pin the upstream base: `b7b2975b5` is stale (upstream moved to `54b551df8` within hours of
+   the pin), so rebase before adding the kernel.
+4. Only then measure: combined fused-kernel + 4-mode arm vs upstream baseline, which is the arm the
+   >=30%/>=10% bar actually refers to.
+The kernel's own correctness result is unaffected and transfers: it was obtained through the
+flashinfer harness with `FI_ROOT` only, no sglang in the loop (PASS on fixture 1, 1.30x over the
+unfused persistent kernel at sm_split 112).

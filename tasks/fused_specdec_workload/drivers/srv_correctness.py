@@ -100,14 +100,23 @@ def run_arm(arm, outdir):
                     raise RuntimeError(f"server died, see {outdir}/server_{arm}.log")
                 time.sleep(2)
         short, long_ = prompts()
+        # The background rows must STILL BE DECODING when the long prefills arrive, or the step
+        # mixes nothing: at 96 output tokens they finished in <1 s and the 2026-10-08 H20 gate saw
+        # ONE mixed step, so the split was never exercised. ignore_eos keeps the length (and so the
+        # greedy comparison) deterministic while they decode long enough to overlap every chunk.
         sp = {"temperature": 0, "max_new_tokens": 96}
+        sp_bg = {"temperature": 0, "max_new_tokens": 1200, "ignore_eos": True}
         results = {}
-        with cf.ThreadPoolExecutor(16) as ex:
-            futs = {ex.submit(post, "/generate", {"input_ids": p, "sampling_params": sp}): f"s{i}"
+        with cf.ThreadPoolExecutor(24) as ex:
+            # Background: long-running decode rows, compared on their first 96 tokens.
+            futs = {ex.submit(post, "/generate", {"input_ids": p, "sampling_params": sp_bg}): f"s{i}"
                     for i, p in enumerate(short)}
-            time.sleep(1.5)  # short ones are decoding when the long prefills arrive
-            for i, p in enumerate(long_):
+            time.sleep(2.0)
+            # Foreground: long prompts STAGGERED, so a chunked prefill keeps arriving into a
+            # steady decode/verify population instead of all landing in one window.
+            for i, p in enumerate(long_ * 2):
                 futs[ex.submit(post, "/generate", {"input_ids": p, "sampling_params": sp})] = f"l{i}"
+                time.sleep(1.0)
                 time.sleep(0.3)
             for f in cf.as_completed(futs):
                 r = f.result()

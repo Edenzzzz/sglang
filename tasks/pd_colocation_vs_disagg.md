@@ -64,8 +64,20 @@ Tasks, in priority order (status 2026-10-08; evidence in the sections below):
       47%, and vs disagg + MTP cuts TTFT 94% / 99.6%. (An apparent regression was a router
       tie-break hotspot, retracted and fixed.) The fixed-router rerun confirms it: agent ITL -46%
       (7.2 -> 3.9 ms) at unchanged TTFT, and the 4-mode split edges stock MTP on every metric.
-      - [ ] the H20 serving gate for the split passed only WEAKLY (one mixed step); the H20 MTP
-            numbers rest on it, so it needs a workload that forces many mixed prefill+verify steps
+      - [x] the H20 serving gate now forces real mixed steps (2026-10-08). Cause of the weak pass
+            was the GATE, not the kernel: background rows asked for 96 output tokens and finished
+            decoding before the long prefills arrived, so nothing mixed. Fixed (1 200-token
+            background rows with `ignore_eos`, staggered long prompts): **10 mixed steps, one with
+            2 prefill + 11 verify rows**, vs 1 before. Both comparisons PASS, 0 fallbacks.
+      - [ ] **BUT the pass margin is weak and looks systematic, not noise.** Split-vs-stock min
+            common prefix is **5 (short) / 15 (long)** against a stock-vs-stock noise floor of
+            **285 / 101** -- and the H200 gate produced the SAME 5/15. Greedy MTP should be
+            output-identical to non-spec greedy, so a systematic early divergence needs a cause:
+            candidates are batch-composition-dependent attention reduction order (benign) or a real
+            fault in the mixed path (not benign). Next: re-run with `SGLANG_SPLIT_VERIFY=1` (the
+            in-server fp32 recompute that caught the per-request-array bug) and compare per-row,
+            and gate on the SHORT prompts too rather than only the long ones. Until that resolves,
+            treat every MTP serving number as provisional.
 
 **Labels.** Every quantitative claim below is either *measured* (with the run and commit) or
 *predicted*. The design sections that predate the measurements say so where the measurements

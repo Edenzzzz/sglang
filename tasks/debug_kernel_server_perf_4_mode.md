@@ -414,6 +414,12 @@ Evaluation completeness (added 2026-10-08, user-requested):
         FA3+FA2 extension was built against it. So the ported extension must be REBUILT against
         torch 2.9+, and that rebuild is part of the port, not a detail. A pure-upstream baseline
         venv can simply take torch 2.9.
+      - **upstream's unpinned dep set does not resolve to a working environment.** pip picked a
+        `torchao` newer than ANY released torch (it imports `ScalingType` from
+        `torch.nn.functional`, absent in both 2.8.0 and 2.9.1). Known-good combination, found by
+        walking torchao releases and testing `import sglang` after each:
+        **torch 2.9.1+cu128 + torchao 0.14.1**. Re-validating on latest main therefore needs a
+        pinned dep set, not just the pyproject; four provisioning attempts were spent on this.
       - the pod can `git clone` github directly, which is far faster than base64-pushing 15 MB
         through the webshell (that timed out at 900 s). Pin the clone to the commit the port was
         read against: upstream main moved `b7b2975b5` -> `54b551df8` within hours.

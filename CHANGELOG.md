@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.25.9 — Blocker located to the type level (2026-10-09)
+
+- The FA3_UPSTREAM role reads `params.wgmma_plan`, supplied by an EXISTING wrapper
+  `UnifiedWgmmaParams<Base, IdType>` (`unified_wgmma_scheduler.cuh:274`). The extension passes the
+  plain `BatchPrefillPagedParams`, hence the compile error. The type exists and is simply unused.
+- Fix shape recorded: declare the FA3 role's params as the wrapper under the `#if`, and populate
+  `wgmma_plan`'s five pointers with PER-REQUEST q_indptr/kv_lens (not the persistent plan's
+  per-work-item arrays -- the known port-bug family).
+- This one defect gates both the per-executor FA3 baseline and the fork serving A/B.
+
 ## v0.25.8 — Serving blocker reduced to ONE root cause: the wgmma params plumbing (2026-10-09)
 
 - The two-executor branch RAISES if `fa3_only_run` is absent, and the driver unsets the fallback

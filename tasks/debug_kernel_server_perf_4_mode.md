@@ -10764,3 +10764,36 @@ split kernel -- it is one blocker, not two, and it is the next thing to fix.
 Everything else needed is in place and verified: fused kernel PASSES, optimum split known
 (112 SMs, 133.5 us, 1.30x over unfused persistent), fork server boots with the fork tree and the
 pip flashinfer, tracelab dataset present, drivers staged.
+
+### The single blocker, located to the type level: the extension passes the wrong params type
+
+`persistent_fa3_fused.cuh:815-821` (the FA3_UPSTREAM role) reads:
+```
+up.page_table   = params.wgmma_plan.dense_page_table;
+up.cu_seqlens_q = params.wgmma_plan.q_indptr_per_req;   // PER-REQUEST, not per work item
+up.seqused_k    = params.wgmma_plan.kv_lens_per_req;
+up.total_q      = params.wgmma_plan.total_q;
+up.num_pages    = params.wgmma_plan.num_pages;
+```
+and the member comes from a wrapper that ALREADY EXISTS
+(`unified_wgmma_scheduler.cuh:186,274-277`):
+```
+template <typename Base, typename IdType>
+struct UnifiedWgmmaParams : Base { UnifiedWgmmaPlanPtrs<IdType> wgmma_plan; };
+```
+So the FA3_UPSTREAM path wants `UnifiedWgmmaParams<BatchPrefillPagedParams<...>, IdType>`, and
+`tests/fused_fa3_persistent_ext.cu` passes the plain `BatchPrefillPagedParams` -- hence
+`has no member "wgmma_plan"`. **The type exists; the extension does not use it and never populates
+the plan.** That is the whole blocker, and it gates BOTH the per-executor FA3 baseline
+(`fa3_only_run` is behind the same `#if`) and any fork serving A/B of the split kernel.
+Fix shape, for whoever picks this up: in the extension, (1) declare the FA3 role's params as
+`UnifiedWgmmaParams<...>` under `#if FLASHINFER_FA3_UPSTREAM`, and (2) fill `wgmma_plan`'s five
+pointers from the plan -- noting the comment in the kernel that `q_indptr_per_req` and
+`kv_lens_per_req` must be PER-REQUEST while the persistent plan's `q_indptr`/`kv_len` are per WORK
+ITEM. That per-request-vs-per-item distinction is exactly the family of four port bugs recorded in
+[[upstream-fa3-subset-params]], so build those two arrays explicitly rather than reusing the
+persistent plan's.
+Everything else is ready: fused kernel PASSES the fp32 reference, optimum split known
+(112 SMs -> 133.5 us, 1.30x over unfused persistent), fork server boots with the right trees,
+tracelab dataset present, seven-step pod restore documented, and an always-on composition counter is
+the one piece of instrumentation to add alongside (the `MIXEDSPEC_STEPS` pattern worked first time).

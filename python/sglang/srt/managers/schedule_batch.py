@@ -3242,6 +3242,11 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
 
         verify_out_cache_loc = running_batch.out_cache_loc
         verify_input_ids = verify_input.draft_token
+        # mix_with_running sets input_ids = None on purpose (the relay rebuilds the DECODE tokens
+        # from the future map). For a 4-mode step the draft tokens are already known, so keep the
+        # chunk's ids and append them -- taking the None branch instead replaced the whole tensor
+        # with just the 4 draft tokens and dropped the chunk (`tensor a (4) vs b (2051)`).
+        prefill_input_ids = self.input_ids
         self.mix_with_running(running_batch)
 
         # --- the five fields that differ for n-token verify rows ---
@@ -3260,13 +3265,11 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             seq_lens_cpu = self.seq_lens_cpu.clone()
             seq_lens_cpu[pre_rows:] = seq_lens_cpu[pre_rows:] - 1 + n
             self.seq_lens_cpu = seq_lens_cpu
-        # 5. their input is the draft tokens (mix_with_running leaves input_ids to the relay)
-        if self.input_ids is None:
-            self.input_ids = verify_input_ids
+        # 5. input is [chunk ids | draft tokens]; see the note above the delegation.
+        if prefill_input_ids is not None:
+            self.input_ids = torch.cat([prefill_input_ids, verify_input_ids])
         else:
-            self.input_ids = torch.cat(
-                [self.input_ids[: self.input_ids.numel() - running_bs], verify_input_ids]
-            )
+            self.input_ids = verify_input_ids
 
         self.mixed_verify_rows = running_bs
         self.mixed_verify_tokens = running_bs * n

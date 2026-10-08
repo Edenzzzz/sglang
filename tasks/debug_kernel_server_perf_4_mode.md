@@ -10446,3 +10446,39 @@ the FA3-side per-executor baseline cannot be built on this pod without finishing
   `test_fused_server_batch.py` ~line 657, `[time] BASELINE persistent-only iters=...`), which
   measures the FA2 side alone and does NOT appear to need `FA3_UPSTREAM`. Find its guard and run it:
   that gives the FA2-role baseline, which is half of the parity question and is reachable now.
+
+## [x] FIRST VALIDATED KERNEL SPEEDUP: fused 1.30x over the unfused persistent kernel — 2026-10-09
+
+`TIME_BASELINE=1` (which does NOT need `FA3_UPSTREAM`, unlike the blocked `TWO_EXEC` arm) gives a
+like-for-like baseline. The harness's own comment establishes the comparison is valid:
+*"the baseline needs its own object planned WITHOUT `FLASHINFER_FA3_TASK` over the same rows --
+which is exactly the unfused persistent kernel on identical work."*
+
+| arm | kernel time | correctness |
+|---|---|---|
+| **fused, sm_split 112** | **133.5 us** | PASS (0 unwritten, FA3 0.0075, task0 0.0032, task2 0.0010) |
+| unfused persistent (baseline) | **174.0 us** | n/a (reference arm) |
+| fused, sm_split 96 | 260.9 us | PASS |
+| baseline (same run) | 176.7 us | n/a |
+| fused, sm_split 64 | 257.9 us | PASS |
+| baseline (same run) | 173.1 us | n/a |
+
+**Fused at its optimum split is 1.30x the unfused persistent kernel on identical work**
+(174.0 / 133.5), i.e. 23% less kernel time, and the harness prints
+`PASS: every row correct at every split, nothing left unwritten`. The baseline is stable at
+173-177 us across the three runs, which is the consistency check that it is measuring the same
+thing each time.
+Command: `FI_ROOT=/dev/shm/w/fi PYTHONPATH=/dev/shm/w/fi TORCH_CUDA_ARCH_LIST=9.0a NVCC_THREADS=4
+TIME_ITERS=50 TIME_BASELINE=1 SPLITS=112,96,64 /dev/shm/w/venv_up/bin/python
+tests/test_fused_server_batch.py`. sglang `attn_fuse_` @ 11066774c; flashinfer
+`/opt/tiger/flashinfer` @ b0563ae + the two fixes (`MaskMode::kCausal`, FUSED_GRID `cluster_tile_q`).
+
+**What this is and is NOT.** It IS a validated kernel-level gain on a correct kernel, which is the
+thing this file has been unable to produce all session. It is **NOT** the goal's acceptance bar:
+that asks for >=30% TTFT & ITL and >=10% throughput on a realistic serving workload, and a 1.30x
+attention-kernel time on one fixture does not imply either -- attention is a fraction of step time,
+and this fixture (one 424x4001 row + an 87-row + a 1-row) is FA3-heavy and not the mixed
+chat+tracelab shape. The serving A/B remains the only thing that can settle the bar.
+Also still missing: the FA3-ROLE per-executor baseline (blocked on the wgmma `params.wgmma_plan`
+plumbing), so "parity with each standalone SOTA kernel per role" is half-answered -- this is the
+FA2-role comparison only.

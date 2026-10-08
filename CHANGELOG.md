@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.25.0 — First validated kernel speedup: fused 1.30x over the unfused persistent kernel (2026-10-09)
+
+- `TIME_BASELINE=1` provides a like-for-like baseline (the harness plans a separate 3-task object
+  over the SAME rows without `FLASHINFER_FA3_TASK` -- the unfused persistent kernel on identical
+  work). Fused at sm_split 112: **133.5 us** vs baseline **174.0 us** = **1.30x**, 23% less kernel
+  time, with the kernel PASSING the causal fp32 reference at every split.
+- Baseline stable at 173-177 us across three runs. Fixture is FA3-heavy, so this does not
+  generalise to the mixed serving workload, and it does NOT satisfy the >=30% TTFT/ITL or >=10%
+  throughput bar -- only the serving A/B can.
+- The FA3-role per-executor baseline is still blocked on the wgmma `params.wgmma_plan` plumbing.
+
 ## v0.24.3 — flash-attention tree restored; FA3 baseline blocked on the wgmma params path (2026-10-09)
 
 - Pushed `flash-attention/hopper` (249 KB) as a sibling of the flashinfer root, clearing the

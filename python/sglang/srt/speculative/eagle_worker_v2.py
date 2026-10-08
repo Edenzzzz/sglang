@@ -1622,7 +1622,17 @@ class EAGLEWorkerV2(BaseSpecWorker):
             precomputed_logits_output=ver_out,
             precomputed_forward_output=batch_output,
         )
-        pre_next_token_ids = self.target_worker.model_runner.sample(pre_out, fb)
+        # Sample the prefill rows with the PREFILL batch's own sampling_info, not the merged
+        # one. mix_with_verify snapshots it as mixed_pre_sampling_info precisely because the
+        # merge overwrites self.sampling_info with a merged-width object; this swap was lost
+        # in the commit-29 restructure, leaving the merged info in place.
+        _saved_si = fb.sampling_info
+        if merged.mixed_pre_sampling_info is not None:
+            fb.sampling_info = merged.mixed_pre_sampling_info
+        try:
+            pre_next_token_ids = self.target_worker.model_runner.sample(pre_out, fb)
+        finally:
+            fb.sampling_info = _saved_si
         result = GenerationBatchResult(
             logits_output=pre_out,
             next_token_ids=pre_next_token_ids,

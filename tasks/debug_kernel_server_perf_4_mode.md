@@ -9030,3 +9030,17 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   (`SGLANG_SPLIT_VERIFY`, where 0.003-0.004 was bf16 noise and ~4.0 a real fault). Porting that fp32
   recompute to upstream is the remaining correctness task -- NOT another bf16-vs-bf16 comparison,
   which cannot distinguish "wrong" from "different kernel".
+
+- **First perf A/B attempt INVALID, discarded (2026-10-08).** `perfab.sh` drove the long-context arm
+  with `--dataset-name tracelab-claude`, which is a **fork-only** dataset: upstream's
+  `bench_serving` rejects it (`invalid choice: 'tracelab-claude'`). So the agent stream never ran,
+  only the 512-token chat stream did, and the mixed gate fired **0 times** -- the arm measured
+  ordinary spec decode, not the 4-mode step. The chat numbers it produced
+  (TTFT 38.6 ms, ITL 4.57 ms, 751 tok/s on the ON arm) are therefore NOT a 4-mode result and are
+  recorded here only so they are not mistaken for one later.
+  Lesson, and the third time this exact thing has bitten in this file: a perf arm must report that
+  it EXERCISED the path (mixed-gate count) beside its timings, exactly as the correctness screens
+  must. The driver now prints the gate count per arm.
+  Re-running with upstream's own `generated-shared-prefix` (6 groups x 8 prompts, 8192-token shared
+  system prompt) as the long-context arm plus the chat stream, both arms on triton (the backend
+  where the verify rows reproduce the production argmaxes).

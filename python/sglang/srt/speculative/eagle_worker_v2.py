@@ -1649,6 +1649,10 @@ class EAGLEWorkerV2(BaseSpecWorker):
             accept_length_per_req_cpu=accept_lens.tolist(),
             can_run_cuda_graph=False,
         )
+        # `_draft_extend_for_decode` reads these off the result: `accept_lens` (it branches on
+        # `.is_cuda`), `new_seq_lens`, and the bonus tokens for the committed output.
+        result.mixed_running_result.accept_lens = accept_lens
+        result.mixed_running_result.new_seq_lens = new_seq_lens
         result.mixed_running_result.bonus_tokens = bonus_tokens
         result.mixed_running_result.new_seq_lens = new_seq_lens
         result.mixed_running_result.accept_lens = accept_lens

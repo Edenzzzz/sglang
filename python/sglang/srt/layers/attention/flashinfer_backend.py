@@ -1764,12 +1764,21 @@ class FlashInferAttnBackend(AttentionBackend):
         # The pool hangs off the BACKEND, not off ForwardBatch (upstream's own forward_extend
         # does `pool = self.token_to_kv_pool`). Reading it from forward_batch raised
         # AttributeError the first time the split actually fired.
-        k_buf = self.token_to_kv_pool.get_key_buffer(layer.layer_id).view(
-            -1, self.page_size, layer.tp_k_head_num, hd
-        )
-        v_buf = self.token_to_kv_pool.get_value_buffer(layer.layer_id).view(
-            -1, self.page_size, layer.tp_v_head_num, hd
-        )
+        #
+        # Use upstream's OWN accessor, not a reshape. `paged_kv_view` splits pages from the
+        # buffer's STRIDES: a slot-major pool buffer need not be densely packed, and
+        # flashattention_backend's own assertion spells out that such a view "carries the pool's
+        # slot stride ... which no reshape of the head dimension can express". A plain
+        # `.view(-1, page_size, heads, dim)` therefore silently reinterprets the buffer, so FA3
+        # reads and WRITES at wrong offsets -- out of bounds of the real rows. That corrupts
+        # whatever memory follows, which later surfaced as an IndexKernel.cu out-of-bounds
+        # assert in unrelated code, and it produced correct numerics under
+        # CUDA_LAUNCH_BLOCKING=1 only because the timing changed what occupied that memory.
+        from sglang.srt.mem_cache.layout.paged_view import paged_kv_view
+
+        _k_raw, _v_raw = self.token_to_kv_pool.get_kv_buffer(layer.layer_id)
+        k_buf = paged_kv_view(_k_raw, self.page_size, layer.tp_k_head_num, hd)
+        v_buf = paged_kv_view(_v_raw, self.page_size, layer.tp_v_head_num, layer.v_head_dim)
         o_fa3 = flash_attn_with_kvcache(
             q=qv[pl["fa3_tok"]],
             k_cache=k_buf,

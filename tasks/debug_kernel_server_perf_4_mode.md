@@ -11183,3 +11183,24 @@ itself in `forward_extend` -- two executor calls over the row subsets, with the 
 only non-standard element -- plus `total_q`/`seqused_k`/`cu_seqlens_q` assembled per-request from
 the same partition. That step needs the pod (build + fp32 reference + combined arm), which is why
 it is where this session stops.
+
+### [x] Step (c) increment 3: per-request varlen assembly, CPU-verified — 2026-10-09
+
+`upstream_port` commit 64 (64 commits on live main). `mixed_dispatch.fa3_subset_varlen` returns
+`(cu_seqlens_q, seqused_k, total_q)` for the FA3 row subset. Verified **10/10** on a deliberately
+NON-contiguous subset (rows [0,3] of 4), with the three trap properties covered:
+```
+ok  densely renumbered over the SUBSET (not the batch)   ok  order follows the rows arg
+ok  total_q == cu[-1], Q extent not a page count         ok  total_q invariant under reorder
+ok  subset total != whole-batch total                    ok  int32 dtypes, empty-subset case
+```
+With commits 62-64 the entire upstream-facing data path is now implemented and verified WITHOUT a
+GPU: row partition in upstream's metadata hook, the dense block table, and the per-request varlen
+arrays. Each encodes a documented upstream contract, and the three properties that previously caused
+faults (-1 fill vs valid page id 0; subset batch dim for the combine scheduler; per-request vs
+per-work-item indexing) are now covered by tests rather than by comments.
+
+**Remaining and genuinely pod-bound:** the `forward_extend` dispatch -- call the two executors over
+the row subsets using these three builders, with the SM budget as the only non-standard element --
+then the fp32-reference check on the upstream build and the combined 4-mode + fused arm. That
+sequence needs build/verify cycles on the GPU, which is the honest reason it is not done here.

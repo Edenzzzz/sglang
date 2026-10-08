@@ -1572,20 +1572,38 @@ class FlashInferAttnBackend(AttentionBackend):
             self.fused_fa2_wrapper = BatchPrefillWithPagedKVCacheWrapper(
                 self.fused_fa2_workspace, "NHD", backend=self.prefill_backend
             )
+        # The plan arrays are BOUND TO NAMES and retained on the plan below, and the copy is
+        # blocking. Both are required, for two separate reasons:
+        #  * lifetime: this wrapper is planned once per step and then run once per LAYER, so the
+        #    arrays must outlive this function. Passing them as inline temporaries let the
+        #    caching allocator hand that memory to the next allocation while the wrapper was
+        #    still using it.
+        #  * ordering: with non_blocking=True flashinfer's internal copies may still be in
+        #    flight when the tensors are released, so the copy can read reused memory. Garbage
+        #    in an indptr then faults inside flashinfer's own plan maths -- which is why the
+        #    traceback kept landing in _compute_page_mask_indptr.
+        # Upstream can pass non_blocking=True here because its indptr buffers
+        # (self.kv_indptr[...]) are preallocated and owned for the process lifetime; these are
+        # built per step, so the same call is not safe for them.
+        fa2_qo_indptr = indptr(qo_lens[fa2_rows])
+        fa2_kv_indptr = indptr(seq_lens_cpu[fa2_rows].numpy())
+        fa2_last_page = self.kv_last_page_len[:n2]
         self.fused_fa2_wrapper.begin_forward(
-            indptr(qo_lens[fa2_rows]),
-            indptr(seq_lens_cpu[fa2_rows].numpy()),
+            fa2_qo_indptr,
+            fa2_kv_indptr,
             kv2_indices,
-            self.kv_last_page_len[:n2],
+            fa2_last_page,
             iu.num_qo_heads,
             iu.num_kv_heads,
             iu.head_dim,
             1,
             q_data_type=iu.q_data_type,
             kv_data_type=iu.data_type,
-            non_blocking=True,
+            non_blocking=False,
         )
         self.fused_split_plan = dict(
+            # Retained so the planned FA2 wrapper's arrays outlive this call; see above.
+            _keep=(fa2_qo_indptr, fa2_kv_indptr, kv2_indices, fa2_last_page),
             tok_total=_tok_total,
             fa3_tok=tok_idx(fa3_rows),
             fa2_tok=tok_idx(fa2_rows),

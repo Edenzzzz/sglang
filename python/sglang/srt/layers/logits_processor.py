@@ -15,6 +15,7 @@
 
 import dataclasses
 import logging
+import os
 from contextlib import contextmanager
 from enum import IntEnum
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -688,11 +689,24 @@ class LogitsProcessor(nn.Module):
         ):
             # Prefill without input logprobs.
             last_index = torch.cumsum(logits_metadata.extend_seq_lens, dim=0) - 1
+            if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
+                logger.error(
+                    "LOGITSBR mode=%s mvt=%s total=%s nlast=%s esl=%s",
+                    logits_metadata.forward_mode,
+                    logits_metadata.mixed_verify_tokens,
+                    hidden_states.shape[0], last_index.numel(),
+                    None if logits_metadata.extend_seq_lens is None
+                    else logits_metadata.extend_seq_lens.tolist(),
+                )
             if logits_metadata.mixed_verify_tokens:
                 # 4-mode step: keep the chunk rows' last token, then EVERY token of the verify rows
                 # (they are the final mixed_verify_tokens positions of the batch).
                 n_ver = logits_metadata.mixed_verify_tokens
-                total = hidden_states.shape[0]
+                # The REAL token count, not hidden_states.shape[0]: under a prefill graph
+                # bucket the tensor is padded (measured 529 real -> 576 padded), and
+                # indexing from the padded end would select padding rows instead of the
+                # verify rows and feed verify pure garbage.
+                total = int(last_index[-1]) + 1
                 keep_chunk = last_index[last_index < total - n_ver]
                 keep_verify = torch.arange(
                     total - n_ver, total, device=hidden_states.device

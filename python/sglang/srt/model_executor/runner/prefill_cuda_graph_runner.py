@@ -1933,6 +1933,12 @@ class PrefillCudaGraphRunner(BaseCudaGraphRunner):
         # The n-gram hasher runs outside the graph and reads this at replay.
         static_forward_batch.ngram_embedding_info = forward_batch.ngram_embedding_info
         static_forward_batch.engram_history = forward_batch.engram_history
+        # 4-mode step: static_forward_batch is built field-by-field above, so a scalar the
+        # logits processor needs takes its default here. Measured: the merged batch's
+        # verify rows got ONE logit each instead of draft_token_num (mvt=0 in
+        # LogitsMetadata) on exactly the steps that padded into a graph bucket, while the
+        # unpadded step was correct.
+        static_forward_batch.mixed_verify_tokens = forward_batch.mixed_verify_tokens
         static_forward_batch = self.model_runner.prepare_dummy_forward_batch(
             static_forward_batch
         )

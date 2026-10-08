@@ -1577,6 +1577,17 @@ class EAGLEWorkerV2(BaseSpecWorker):
             next_token_logits=ver_logits, hidden_states=ver_hidden
         )
 
+        if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
+            logger.error(
+                "MIXEDPRE pre_reqs=%d run_reqs=%d merged_bs=%s ver_rows=%s ver_toks=%s n=%s "
+                "n_pre_rows=%d t_pre=%d ntl=%s pre_logits=%s ver_logits=%s dtn=%s",
+                len(batch.reqs), len(running.reqs), merged.batch_size(),
+                merged.mixed_verify_rows, merged.mixed_verify_tokens, n,
+                n_pre_rows, t_pre, tuple(lo.next_token_logits.shape),
+                tuple(pre_logits.shape), tuple(ver_logits.shape),
+                verify_input.draft_token_num,
+            )
+
         # Verify rows: hand the slice to upstream's own accept path, paired with the RUNNING batch
         # (eagle_sample reads batch.seq_lens and verify_input fields sized to that batch, not to
         # the merged one).

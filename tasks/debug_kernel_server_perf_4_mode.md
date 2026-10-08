@@ -10643,3 +10643,40 @@ build root), restoring it into the IMPORT path can break a consumer that was hap
 packaged copy. Check which flashinfer `import flashinfer` actually resolves to before blaming
 versions -- `os.path.dirname(flashinfer.__file__)` is the one-line check that would have saved this
 detour.
+
+### [!] First fork serving A/B ran, and is INVALID: `two_exec_calls: 0` in BOTH arms — 2026-10-09
+
+`IN=32768 OUT=256 NP=16 CONC=8 bash /dev/shm/srv_two_exec_ab.sh` (fork build, split kernel,
+PYTHONPATH fixed). Both arms completed cleanly, 0 fallbacks:
+
+| metric | base (TWO_EXEC=0) | split (TWO_EXEC=1) |
+|---|---|---|
+| req/s | 0.49 | 0.50 |
+| output tok/s | 126.46 | 127.33 |
+| total tok/s | 16313.36 | 16425.38 |
+| mean TTFT | 5582.83 ms | 5520.26 ms |
+| median TTFT | 3543.62 ms | 3442.09 ms |
+| mean TPOT / ITL | 40.84 ms | 40.65 ms |
+| median ITL | 8.55 ms | 8.55 ms |
+| **`two_exec_calls`** | **0** | **0** |
+
+**`two_exec_calls: 0` in the SPLIT arm means the two-executor kernel never ran**, so this measures
+the same path twice and the ~1% deltas are noise. Per [[fused-ab-validity-rule]] the numbers are
+void as a fused result -- recorded here only so they are not mistaken for one. (They are, however, a
+valid long-context BASELINE for this shape: 32768-token input, 256 out, 16 prompts, conc 8.)
+
+**Prime suspect is the decode-population guard I added THIS SESSION** to the fork's
+`mixed_dispatch.split_classes` (validated 11/25 -> 23/25 against `boundary_28x4x128.json`). Its rule
+is `kv_tiles <= decode_rows / 2`, and with `IN=32768` a prefill row has `kv_tiles = 256`, needing
+>= 512 co-resident decode rows -- never true in this workload. So the guard would reject FA3
+dispatch for every row here and silently collapse the split arm onto the FA2 path.
+That is the guard behaving exactly as the measured surface says it should (fused LOSES with few
+decode rows), which makes this a WORKLOAD/arm-design problem, not a guard bug -- but it means the
+split kernel cannot be exercised by a long-prefill, low-decode benchmark at all.
+**Two corrections for the next run, in order:**
+1. re-run with `SGLANG_FUSED_DECODE_GUARD=0` to confirm the guard is the suppressor (one run, and
+   `two_exec_calls` > 0 settles it);
+2. then measure on a workload the guard admits -- i.e. with a real decode population alongside the
+   prefills (the mixed chat+tracelab shape the goal names, or `srv_two_exec_ab.sh` with a background
+   decode stream). A split-kernel A/B on a batch with ~no decode rows was never going to show a
+   fused gain even if the kernel were perfect.

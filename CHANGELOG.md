@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.25.5 — First fork serving A/B ran but is INVALID (composition counter 0) (2026-10-09)
+
+- Both arms completed (0 fallbacks) with near-identical numbers, but `two_exec_calls: 0` in the
+  SPLIT arm: the two-executor kernel never ran, so the A/B measured one path twice. Void as a fused
+  result per the project's validity rule; kept as a long-context baseline for the shape
+  (32768 in / 256 out / 16 prompts / conc 8: 126.5 tok/s, mean TTFT 5582 ms, mean ITL 40.8 ms).
+- Prime suspect: the decode-population guard added this session (`kv_tiles <= decode_rows/2`). At
+  IN=32768 a prefill row has 256 kv_tiles and would need >=512 decode rows, so the guard correctly
+  refuses fusion -- meaning a long-prefill/low-decode benchmark cannot exercise the split kernel.
+  Next: confirm with `SGLANG_FUSED_DECODE_GUARD=0`, then measure on a workload with a real decode
+  population.
+
 ## v0.25.4 — Serving path unblocked; the "version skew" was PYTHONPATH shadowing (2026-10-09)
 
 - RETRACTED the version-skew diagnosis. Both venvs already have `flashinfer-python 0.7.0.post1` with

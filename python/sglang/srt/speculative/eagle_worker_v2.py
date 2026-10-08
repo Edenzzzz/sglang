@@ -1593,12 +1593,23 @@ class EAGLEWorkerV2(BaseSpecWorker):
             # reference's own run-to-run stability, and _vfb's input_ids -- and the verdict
             # is only readable if ref_vs_ref is ~0 and the ids are the draft tokens.
             _ids = getattr(_vfb, "input_ids", None)
+            # RE-PLAN before the reference forward. eagle_prepare_for_verify planned the
+            # attention backend for this batch, and the merged forward then re-planned the
+            # same shared state -- so without this the reference runs on the MERGED batch's
+            # metadata, reproducibly (ref_vs_ref was exactly 0.0) but invalidly.
+            _vfb2, _ = eagle_prepare_for_verify(
+                verify_input, self.req_to_token_pool, running, self.target_worker
+            )
+            _vfb = _vfb2
             _r1 = self.target_worker.forward_batch_generation(
                 batch=None, forward_batch=_vfb, is_verify=True
             ).logits_output.next_token_logits
             _r1 = _r1.detach().clone()
+            _vfb3, _ = eagle_prepare_for_verify(
+                verify_input, self.req_to_token_pool, running, self.target_worker
+            )
             _r2 = self.target_worker.forward_batch_generation(
-                batch=None, forward_batch=_vfb, is_verify=True
+                batch=None, forward_batch=_vfb3, is_verify=True
             ).logits_output.next_token_logits
             _got = ver_logits
             # Scale-normalised, NOT elementwise relative: a near-zero reference logit makes

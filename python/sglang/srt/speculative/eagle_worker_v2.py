@@ -1503,7 +1503,6 @@ class EAGLEWorkerV2(BaseSpecWorker):
             ForwardBatch,
             ForwardMode,
         )
-        from types import SimpleNamespace
 
         from sglang.kernels.ops.speculative.eagle import (
             fill_bonus_tokens_func,
@@ -1597,30 +1596,17 @@ class EAGLEWorkerV2(BaseSpecWorker):
         # prefill batch's own sampling parameters.
         # Sample with the PREFILL batch's own sampling_info (saved by mix_with_verify): the merged
         # batch's covers chunk + verify rows, while pre_out holds only the chunk rows' logits.
-        # The sampler reads more off this view than sampling_info: `seq_lens` at least
-        # (AttributeError on the first attempt). Give it the PREFILL rows' slice of each field, so
-        # nothing is sized to the merged batch.
-        pre_view = SimpleNamespace(
-            sampling_info=batch.mixed_pre_sampling_info,
-            return_logprob=False,
-            top_logprobs_nums=getattr(fb, "top_logprobs_nums", None),
-            token_ids_logprobs=getattr(fb, "token_ids_logprobs", None),
-            forward_mode=ForwardMode.EXTEND,
-            positions=None,
-            seq_lens=batch.seq_lens[:n_pre_rows],
-            seq_lens_cpu=(
-                batch.seq_lens_cpu[:n_pre_rows]
-                if batch.seq_lens_cpu is not None
-                else None
-            ),
-            batch_size=n_pre_rows,
-            extend_seq_lens=None,
-            spec_info=None,
-            spec_algorithm=self.speculative_algorithm,
-            next_token_logits_buffer=None,
-            req_pool_indices=batch.req_pool_indices[:n_pre_rows],
-        )
-        pre_next_token_ids = self.target_worker.model_runner.sample(pre_out, pre_view)
+        # Sample the prefill half. A hand-built SimpleNamespace view does NOT work: the sampler
+        # reaches for a long tail of fields (seq_lens, then ngram_embedding_info, ...), and
+        # enumerating them is both fragile and a silent-wrong-answer risk if one is left merged-size.
+        # Reuse the REAL merged ForwardBatch and swap in only the prefill rows' sampling_info, which
+        # is the single field that must not be merged-size (pre_out holds just the chunk rows).
+        prev_si = fb.sampling_info
+        fb.sampling_info = batch.mixed_pre_sampling_info
+        try:
+            pre_next_token_ids = self.target_worker.model_runner.sample(pre_out, fb)
+        finally:
+            fb.sampling_info = prev_si
 
         # TODO(needs one more GPU run): the two draft extends and the paired result.
         #   - `_draft_extend_for_prefill(batch, ...)` for the chunk rows and

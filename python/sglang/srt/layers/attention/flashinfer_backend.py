@@ -1018,6 +1018,37 @@ class FlashInferAttnBackend(AttentionBackend):
         else:
             prefix_lens = forward_batch.extend_prefix_lens
 
+            # The planner builds qo_indptr as cumsum(seq_lens - prefix_lens), while the batch's
+            # token tensor is sized by extend_lens. mix_with_verify keeps those consistent at the
+            # seam (its own check passes), so a disagreement here is introduced between the merge
+            # and this point -- report the per-row arrays rather than leave flashinfer to compare
+            # two totals several frames later.
+            if os.environ.get("SGLANG_MIXED_SPEC") == "1" and prefix_lens is not None:
+                _qo_from_plan = (forward_batch.seq_lens - prefix_lens)
+                _plan_sum = int(_qo_from_plan.sum())
+                _tok_n = (
+                    int(forward_batch.input_ids.numel())
+                    if forward_batch.input_ids is not None
+                    else -1
+                )
+                if _tok_n >= 0 and _plan_sum != _tok_n:
+                    logger.error(
+                        "PLANWIDTH MISMATCH cumsum(seq_lens-prefix)=%d input_ids=%d "
+                        "extend_num_tokens=%s | tail seq_lens=%s prefix=%s qo=%s "
+                        "extend_seq_lens=%s",
+                        _plan_sum,
+                        _tok_n,
+                        getattr(forward_batch, "extend_num_tokens", None),
+                        forward_batch.seq_lens[-4:].tolist(),
+                        prefix_lens[-4:].tolist(),
+                        _qo_from_plan[-4:].tolist(),
+                        (
+                            forward_batch.extend_seq_lens[-4:].tolist()
+                            if forward_batch.extend_seq_lens is not None
+                            else None
+                        ),
+                    )
+
             # FA3/FA2 row partition for the SM-pre-assigned split kernel. Computed HERE, in
             # upstream's own metadata hook, from upstream's own per-row lengths -- so
             # forward_extend stays a dispatch rather than becoming a planner. Carried on the

@@ -1633,9 +1633,23 @@ class EAGLEWorkerV2(BaseSpecWorker):
             can_run_cuda_graph=False,
         )
         result.mixed_running_result.new_seq_lens = new_seq_lens
-        # TODO: both draft extends (`_draft_extend_for_prefill` for the chunk rows,
-        # `_draft_extend_for_decode` for the verify rows) are still missing; without them the next
-        # step has no draft input for these requests. Next failure should surface exactly that.
+        result.mixed_running_result.accept_lens = accept_lens
+
+        # Both draft extends. Without them the next step has no draft input and the relay stash
+        # fails on `payload.topk_p` being None (measured) -- the draft model must see this step's
+        # accepted tokens for the verify rows and the chunk's last token for the prefill rows.
+        with (
+            draft_tp_context(self.draft_worker.draft_owns_attention),
+            speculative_moe_backend_context(),
+            speculative_moe_a2a_backend_context(),
+            spec_stage_span("draft_extend"),
+        ):
+            result.next_draft_input = self.draft_worker._draft_extend_for_prefill(
+                batch, pre_out.hidden_states, pre_next_token_ids
+            )
+            self.draft_worker._draft_extend_for_decode(
+                running, result.mixed_running_result
+            )
         return result
 
     def _forward_prefill_batch(

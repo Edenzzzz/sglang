@@ -607,9 +607,47 @@ variables at once (guard OFF *and* blocking off). The crash is attributable anyw
 Python `AttributeError` in my dispatch, not a CUDA fault -- but the comparison to the 151-merge
 run is not clean, and the no-blocking control above is needed regardless.
 
-- [ ] 2026-10-09 **guard-OFF arm re-running with `41273f944`** -- split fires on real merged
-      batches with the in-step reference on; answers whether fusing where the guard refuses
-      helps or hurts end to end.
+### The split fired in serving, and then clobbered the shared flashinfer workspace
+
+`FUSED_SPLIT_CALLS 1 (fa3_rows=1 fa2_rows=1 sm_margin=0 onesided=47)` -- the dispatch ran on a
+real merged 4-mode batch. The server then died with:
+
+```
+flashinfer_backend.py:778 in init_forward_metadata_out_graph
+  -> update_single_wrapper -> call_begin_forward -> flashinfer/prefill.py:2496 in plan
+     -> prefill.py:1599 in _compute_page_mask_indptr
+AcceleratorError: CUDA error: device-side assert triggered
+```
+
+**Root cause: a shared flashinfer workspace.** A wrapper writes its scheduler metadata into the
+workspace buffer it was constructed with. The split's extra FA2 wrapper was built on
+`self.workspace_buffer` -- the same buffer the backend's other wrappers use -- and it plans
+**mid-step**, after those wrappers have already been planned for the step, so it overwrote their
+plans. The assert is raised later, in an unrelated `plan` call: **the traceback points at the
+victim, not the cause.**
+
+What actually identified it was the correlation, not the traceback: the assert appears only in
+runs where the split fired (`FUSED_SPLIT_CALLS >= 1`), and with the decode guard ON the split
+never fired and 151 merges ran clean. Fixed in `sglang-up@370c511f3` with a dedicated workspace.
+
+**RETRACTION of my own earlier reasoning.** When writing the dispatch I noticed this exact
+hazard and dismissed it, on the grounds that upstream also shares one workspace across its
+wrappers. That reasoning was wrong: what makes upstream's sharing safe is that it plans all its
+wrappers in a fixed order *before any of them runs*. This wrapper plans after that point, so the
+sharing is not safe for it. Sharing is not the property that matters; plan-then-run ordering is.
+
+**This also corrects the earlier `CUDA_LAUNCH_BLOCKING` interpretation.** I had suspected
+launch-blocking was masking a race. It was not: the blocking run had the guard ON, so the split
+never fired and the workspace was never clobbered. Blocking was a confound in my comparison, not
+a mask. The no-blocking control is therefore no longer needed for that question -- though the
+151-merge clean run should still be reproduced without blocking before being quoted
+unqualified.
+
+- [x] 2026-10-09 **the device-side assert is a real defect, now fixed** -- shared flashinfer
+      workspace clobbered by the split's mid-step plan (`370c511f3`). Not a 4-mode bug, not a
+      launch-blocking artifact.
+- [ ] 2026-10-09 **guard-OFF arm re-running with `370c511f3`** -- in-server correctness of the
+      split on real merged 4-mode batches, via the in-step reference.
 
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither

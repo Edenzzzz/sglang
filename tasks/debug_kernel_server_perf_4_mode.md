@@ -10423,3 +10423,26 @@ the per-executor FA3 baseline the goal asks for ("parity with each standalone SO
 cannot be built at all, so no speedup is computable.
 Until that lands: the kernel PASSES and the best measured fused time is 133.5 us at sm_split 112,
 but **no gain is demonstrated** and none should be quoted.
+
+**The FA3 per-executor baseline is blocked on the FA3_UPSTREAM path, which does not compile.**
+With `flash-attention/hopper` now present (the previous blocker, resolved -- 249 KB pushed to
+`/dev/shm/w/flash-attention`), `FA3_UPSTREAM=1` gets further and then fails on a params mismatch:
+```
+persistent_fa3_fused.cuh(815,818,819): error: class
+  "flashinfer::BatchPrefillPagedParams<FDT, FDT, FDT, IdT>" has no member "wgmma_plan"
+```
+So the upstream-FA3 (wgmma) route expects an extended params struct this build does not supply.
+That is the same area [[fused-wgmma-splitkv-wrong]] records as broken and blocking ("split FA3 rows
+overwrite each other ... blocks all unified work"), so this is a known-incomplete path rather than a
+fresh regression -- and `fa3_only_run` being gated behind it (`#if FLASHINFER_FA3_UPSTREAM`) means
+the FA3-side per-executor baseline cannot be built on this pod without finishing that port.
+**Consequences, stated plainly:**
+- the DEFAULT build (no `FA3_UPSTREAM`) still PASSES and still times -- 133.5 us at sm_split 112 --
+  so the kernel result stands;
+- but there is still **no baseline to divide by, so no speedup is demonstrated** and none should be
+  quoted. The goal's "parity with each standalone SOTA kernel per role" is unmeasurable until either
+  the wgmma params plumbing is finished or another baseline is used.
+- The available alternative is the harness's **`BASELINE persistent-only`** arm (seen at
+  `test_fused_server_batch.py` ~line 657, `[time] BASELINE persistent-only iters=...`), which
+  measures the FA2 side alone and does NOT appear to need `FA3_UPSTREAM`. Find its guard and run it:
+  that gives the FA2-role baseline, which is half of the parity question and is reachable now.

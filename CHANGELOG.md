@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.24.3 — flash-attention tree restored; FA3 baseline blocked on the wgmma params path (2026-10-09)
+
+- Pushed `flash-attention/hopper` (249 KB) as a sibling of the flashinfer root, clearing the
+  `fa3_upstream.cuh -> ../../../../../flash-attention/hopper/utils.h` build failure. The pod restore
+  recipe is five steps, not four.
+- `FA3_UPSTREAM=1` now fails later, on `BatchPrefillPagedParams has no member "wgmma_plan"` -- the
+  upstream-FA3/wgmma route is incomplete in this build, and `fa3_only_run` is gated behind it. So the
+  FA3 per-executor baseline is unbuildable here and **no speedup is demonstrated**; the default
+  build still PASSES and times at 133.5 us (sm_split 112).
+
 ## v0.24.2 — Split optimum found (sm_split 112, 133.5 us); baseline arm still missing (2026-10-09)
 
 - Extending the sweep past the harness's built-in 48/32/16 found the optimum at sm_split 112:

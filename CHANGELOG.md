@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.27.2 — Upstream fusion boundary specified end to end (2026-10-09)
+
+- Answered the last design unknown from flashinfer's code: `prefill.py:204` derives `sm_count` from
+  the device, so upstream's wrapper API cannot carry a caller-supplied SM budget -- the SM split must
+  be expressed at the module call. Upstream's dense block-table contract is confirmed verbatim at
+  `:1646` / `:1861` as `[batch_size, max_num_blocks_per_seq]`.
+- So the upstream-fitting boundary is: standard upstream API for metadata, row partition and the
+  per-class data contracts, with a NARROW bypass for the launch budget only -- not the fork's
+  900-line divergent backend. Also noted honestly: some bypass is unavoidable, so the fork's
+  replacement was not purely sloppiness.
+- Step (a) (decode guard) is ported and re-verified upstream (11/25 -> 23/25 on that copy).
+
 ## v0.27.1 — upstream_port rebased onto live upstream main, zero conflicts (2026-10-09)
 
 - All 60 commits replayed onto `3fef129ff` (was pinned 46 commits back at `b7b2975b5`) with no

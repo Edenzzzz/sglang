@@ -11084,3 +11084,33 @@ Open question for (b), to settle by reading before coding: whether upstream's wr
 caller-supplied SM/grid budget, or whether the split must be expressed one level down at the
 flashinfer module call. That determines whether (c) is "add a budget argument" or "bypass the
 wrapper for the FA3 subset only" -- and it is the last unknown before the port can be written.
+
+### [x] Step (b) open question ANSWERED: the SM split cannot go through upstream's wrapper API
+
+Read of flashinfer 0.7-era `flashinfer/prefill.py`:
+- **`:204` `sm_count = get_device_sm_count(query.device)`** -- the wrapper derives the SM count
+  INTERNALLY from the device and passes it down (`:227`). There is no caller-supplied SM/grid budget
+  anywhere in `BatchPrefillWithPagedKVCacheWrapper`'s surface.
+- **`:1646`** documents the block table as *"a uint32 2D tensor indicating the block table of each
+  prompt. shape: `[batch_size, max_num_blocks_per_seq]`"*, and `:1861-1863` constructs exactly that
+  `(batch_size, max_num_blocks_per_seq)` tensor. So upstream's dense per-request page-table contract
+  is confirmed verbatim -- and it is precisely the shape my reverted edit violated by aliasing a
+  flat vector-sparse array into it.
+
+**So (c) is settled as a design question:** the SM split must be expressed at the MODULE call, not
+through the wrapper. Which means the upstream-fitting split is:
+- metadata and row partition: upstream objects and upstream call sites (`init_forward_metadata`,
+  `split_classes` + guard, already on this branch);
+- per-row-class data handed over in upstream's documented contracts -- dense
+  `[batch_size, max_num_blocks_per_seq]` block table, per-request `cu_seqlens_q`/`seqused_k`;
+- the two executors invoked as module-level calls carrying an SM budget, which is the one place the
+  wrapper abstraction genuinely cannot express the design. That is a defensible fusion boundary to
+  argue for upstream: everything above it is standard upstream API, and the only non-standard part
+  is the launch budget, which is inherent to SM pre-assignment.
+This also reframes the earlier framing honestly: "the fork replaced the wrapper path" was not purely
+fork sloppiness -- the wrapper API cannot carry an SM budget, so SOME bypass is unavoidable. The
+difference is that the bypass should be narrow (launch budget only) instead of a 900-line divergent
+backend.
+Step (b) is therefore specified end to end. Remaining: (c) implement that narrow bypass on
+`upstream_port` against upstream's contracts, then (d) measure the combined fused-kernel + 4-mode
+arm, which is the arm the >=30%/>=10% bar refers to.

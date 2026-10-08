@@ -1381,12 +1381,35 @@ class FlashInferAttnBackend(AttentionBackend):
         mask, _q_tiles, _kv_tiles = self.fused_split_mask
         mask = np.asarray(mask, dtype=bool)
         fa3_rows, fa2_rows = np.nonzero(mask)[0], np.nonzero(~mask)[0]
+        self.fused_split_plans = getattr(self, "fused_split_plans", 0) + 1
         if len(fa3_rows) == 0 or len(fa2_rows) == 0:
             # One-sided partition: nothing to split. The decode-population guard refuses
             # fusion for pure long-prefill batches by design, so on a prefill-only workload
             # this is the common case and must not be read as a failure.
             self.fused_split_onesided = getattr(self, "fused_split_onesided", 0) + 1
+            if self.fused_split_onesided % 200 == 1:
+                # Say WHY, with the numbers the guard decided on. A bare "never fired" is
+                # indistinguishable from a broken hook, and cost one full gate cycle.
+                logger.info(
+                    "FUSED_SPLIT_ONESIDED %d/%d: fa3=%d fa2=%d rows=%d "
+                    "max_kv_tiles=%d need_decode_rows>=%d (guard: kv_tiles<=decode_rows/2)",
+                    self.fused_split_onesided,
+                    self.fused_split_plans,
+                    len(fa3_rows),
+                    len(fa2_rows),
+                    len(mask),
+                    int(max(_kv_tiles)) if len(_kv_tiles) else -1,
+                    2 * int(max(_kv_tiles)) if len(_kv_tiles) else -1,
+                )
             return False
+        if self.fused_split_plans % 200 == 1:
+            logger.info(
+                "FUSED_SPLIT_PLAN ok %d: fa3=%d fa2=%d (onesided so far %d)",
+                self.fused_split_plans,
+                len(fa3_rows),
+                len(fa2_rows),
+                getattr(self, "fused_split_onesided", 0),
+            )
 
         qo_lens = np.asarray(forward_batch.extend_seq_lens_cpu, dtype=np.int64)
         if len(qo_lens) != len(mask):

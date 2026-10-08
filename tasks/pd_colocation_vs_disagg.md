@@ -248,6 +248,13 @@ both replicates the prefix and forces the spread requests to pull. New policy `c
 randomly among near-equal holders"; it differs from `cache_slo` only when holders really tie.
 Running: `HOT=1 ONE_NIC=1 mn_run.py coloc_slo_edf_hc coloc_slo_rand_hc`.
 
+Arm 3 of the flawed pair closes it as predicted: `coloc_rand_hc_1nic` (randomized tie-break,
+narrowed fabric) measures agent TTFT 1 611 ms / ITL 7.3 ms / P99 13.2 ms and chat 134 ms / 6.5 /
+12.2 -- indistinguishable from `coloc_cache_hc_1nic`'s 1 589 / 7.3 / 13.5 and 148 / 6.5 / 11.8.
+With affinity keeping 93% of tokens local, neither policy pulls, so the tie-break has nothing to
+spread and the narrowed fabric nothing to congest. Both arms: 0 tracebacks, 0 fallbacks, all
+requests completed.
+
 A first attempt at this run was DISCARDED before use: the node script was pushed to the pods in
 the background while the arms launched, and the push is sequential, so the last pod's workers
 started on the old 4-NIC assignment (2 of 16 workers). The identical script mtime on every pod

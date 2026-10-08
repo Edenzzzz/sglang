@@ -21,7 +21,9 @@
 # Task Checklists
 
 - Check `tasks/*.md` files for unchecked `- [ ]` TODOs — these are usually overnight/long-running tasks.
-- Main task file: `tasks/debug_kernel_server_perf.md` — persistent kernel v3 + LPT + mixed batch CUDA graphs.
+- Main task file: `tasks/debug_kernel_server_perf_4_mode.md` — FA3+FA2 split, 4-mode MTP step, serving A/Bs. (Predecessor, H100/H800 era: `tasks/archive/debug_kernel_server_perf.md`.)
+- Multi-node scheduling: `tasks/pd_colocation_vs_disagg.md` — the four PD-colocation points.
+- Index of all task docs: `tasks/README.md`.
 - Perf model: `tasks/server_perf_model.md` — MLP-based latency prediction for prefill-decode colocation.
 - Workload context: `tasks/realistic_workload_analysis.md` — dataset length stats, arrival rates, per-turn growth.
 - Write results directly into the relevant `.md` file under the TODO bullet, not into separate files.

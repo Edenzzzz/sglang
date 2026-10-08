@@ -415,9 +415,29 @@ Evaluation completeness (added 2026-10-08, user-requested):
       (`eagle_worker_common.py`, `eagle_worker_v2.py`, `multi_layer_eagle_*`, `dflash_*`,
       `dspark_*`), and the single `eagle_worker.py` our `forward_mixed_spec` patches no longer
       exists. So the 4-mode step -- the largest serving win -- must be re-derived against
-      `eagle_worker_v2`/`eagle_worker_common`, not rebased. Plan: port the two new files first
-      (free), then the additive bench changes, then re-derive the 4-mode step, and re-measure each
-      row above in that order.
+      `eagle_worker_v2`/`eagle_worker_common`, not rebased.
+      **Re-derivation plan for the 4-mode step (studied 2026-10-08; the seam is CLEANER upstream,
+      so this is tractable, not a fallback case).** Upstream hook points:
+      - `EAGLEWorkerV2.forward_batch_generation` (eagle_worker_v2.py:1319) branches extend ->
+        `_forward_prefill_batch` (:1449) vs decode -> `draft_worker.draft(batch)` -> `verify(batch)`
+        (:1871) -> `draft_worker._draft_extend_for_decode(batch, batch_output)`. Those are exactly
+        the four stages our `forward_mixed_spec` fuses.
+      - `verify()` is now a thin wrapper over the FREE function `run_eagle_verify(...)` in
+        `eagle_worker_common.py`, which builds `verify_forward_batch` and runs ONE
+        `target_worker.forward_batch_generation(batch=None, forward_batch=verify_forward_batch,
+        is_verify=True, ...)` (:639). A single, explicit target-forward call site taking a
+        caller-supplied `ForwardBatch` is a better seam than our fork's method, which we had to
+        split into forward + `_verify_post` by hand.
+      Derivation: add an optional prefill-row injection to `run_eagle_verify` (extend
+      `verify_forward_batch` with the chunk's rows, run the one target forward, split
+      `logits_output` into prefill rows -> sample and verify rows -> the existing accept path), then
+      a `forward_mixed_spec` on `EAGLEWorkerV2` that calls `draft(running)`, that extended verify,
+      and both draft extends. No `mix_with_running` patch needed: upstream already accepts an
+      explicit `forward_batch`, which is what that patch existed to work around.
+      Order: (1) this re-derivation, since the 4-mode step is the largest serving win; (2) the two
+      new files (free); (3) additive bench changes; (4) re-measure every row above. Only if the
+      re-derived step shows NO gain on current upstream does the fork result stand as the
+      published one, and that would itself need recording with the upstream commit responsible.
 
 Cluster:
 - [ ] **Multi-node PD colocation, four points** (H20, 8 pods x 2 GPUs, `tasks/pd_colocation_vs_disagg.md`).

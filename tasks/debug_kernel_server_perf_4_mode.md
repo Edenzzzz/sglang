@@ -706,8 +706,55 @@ correct on its evidence and a reinstatement on better evidence are both part of 
       0/56 errors.
 - [x] 2026-10-09 **device assert root-caused** -- use-after-free in non-blocking H2D copies from
       temporaries (`f53707f53`).
-- [ ] 2026-10-09 **no-blocking re-run with `f53707f53`** -- the claim stands only if the split
-      stays clean WITHOUT launch-blocking.
+- [x] 2026-10-09 **split is CORRECT in-server without launch-blocking** -- see below. The
+      remaining defect is a CUDA-graph interaction, isolated by environment bisect.
+
+### 2026-10-09 -- the blocker is a CUDA-graph interaction, found by bisecting the ENVIRONMENT
+
+Five consecutive code-level mechanism hypotheses were wrong (shared flashinfer workspace;
+launch-blocking masking a race; plan-copy use-after-free; FA2 plan-array lifetime; a
+stride-ignoring KV reshape). Four were real latent bugs and their fixes are kept on independent
+grounds; none was this fault. All five were inferred from a traceback that, for an **async
+device-side assert, carries no location information** -- so each inference was unfalsifiable by
+construction. Two of them I reported as root causes before confirming, which was wrong of me.
+
+What produced the answer was a one-bit **environment** bisect, not more code reading.
+
+**`--disable-cuda-graph`, split ON, guard OFF, NO launch-blocking** (`drv/split_nocg.sh`,
+`sglang-up@69595708c`):
+
+| metric | value |
+|---|---|
+| `MIXEDSPEC_STEPS` | 151 |
+| `FUSED_SPLIT_CALLS` | **5001** |
+| `FUSED_SPLIT_VERIFY` | **10 ok / 0 FAIL**, err 0.0035-0.0066, worst **0.0112** (tol 0.02) |
+| client errors | **0 / 56** |
+
+So the dispatch is correct in a real 4-mode server, with no launch-blocking crutch. The fault is
+specifically the CUDA-graph path, which the misread trace had been pointing at for several
+cycles: `eagle_prepare_for_verify` runs BEFORE the merged forward, so the crash was never
+downstream of the dispatch within a step -- it was the NEXT iteration, entered through
+`decode_cuda_graph_runner.load_batch` -> `init_forward_metadata_out_graph`.
+
+**Concrete fix direction (not yet implemented).** `_fused_split_plan` allocates fresh index
+tensors every step; upstream preallocates persistent buffers at init (`self.kv_indptr`,
+`self.qo_indptr`, `self.cuda_graph_kv_indices`) and hands out slices. A captured CUDA graph
+holds absolute addresses, so per-step allocations interleaved with replays can collide with
+graph-visible memory -- which also explains the timing dependence and why launch-blocking
+appeared to "fix" it. The fix is to preallocate, the way upstream already does, and that is the
+sixth instance today of the same class: **a call that looks equivalent to upstream's but drops
+an invariant upstream's own machinery maintains.** The others were plan-then-run ordering for a
+shared workspace, process-lifetime buffers for `non_blocking=True`, and stride-aware paging for
+the KV view. "Same shape" is not "same contract".
+
+- [x] 2026-10-09 **CUDA-graph interaction isolated** -- graphs off: 5001 calls, 10/0 verify,
+      0/56 errors, no blocking. Graphs on: device assert.
+- [ ] 2026-10-09 **preallocate the plan's index buffers** -- removes the per-step allocations
+      that collide with captured graphs; required before the split can run in the production
+      (graphs-on) configuration.
+- [ ] 2026-10-09 **perf A/B, graphs OFF on BOTH arms** -- running. Matched config, so the
+      comparison is fair; graphs-off is not production, which is a stated limitation of the
+      number rather than a hidden one.
 - [ ] 2026-10-09 **guard-OFF arm re-running with `370c511f3`** -- in-server correctness of the
       split on real merged 4-mode batches, via the in-step reference.
 

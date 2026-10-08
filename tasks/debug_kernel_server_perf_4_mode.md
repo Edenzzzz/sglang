@@ -11204,3 +11204,45 @@ per-work-item indexing) are now covered by tests rather than by comments.
 the row subsets using these three builders, with the SM budget as the only non-standard element --
 then the fp32-reference check on the upstream build and the combined 4-mode + fused arm. That
 sequence needs build/verify cycles on the GPU, which is the honest reason it is not done here.
+
+### [x] The dispatch contract, grounded — upstream ALREADY has a two-executor forward_extend
+
+Read of `upstream_port`'s `flashinfer_backend.forward_extend` (`:1317`):
+```
+def forward_extend(self, q, k, v, layer: RadixAttention, forward_batch, save_kv_cache=True):
+    prefill_wrapper_paged = self.forward_metadata.prefill_wrappers[self._get_wrapper_idx(layer)]
+    ...
+    if not self.forward_metadata.use_ragged:
+        o = prefill_wrapper_paged.forward(...)          # single executor
+    else:
+        o1, s1 = self.prefill_wrapper_ragged.forward_return_lse(...)   # TWO executors
+        o2, s2 = prefill_wrapper_paged.forward_return_lse(...)
+        # ... combined via the LSE state merge
+```
+**So a two-executor `forward_extend` that takes `(o, lse)` from each and combines is IDIOMATIC
+upstream, not a foreign shape.** That materially lowers the bar for landing the split kernel
+upstream, and it corrects my earlier framing ("one planned wrapper per batch") -- upstream's
+single-wrapper assumption is the `use_ragged=False` path, not the whole contract.
+
+**The one structural difference, stated precisely:** upstream's two executors run over the SAME rows
+(ragged = the new tokens, paged = the prefix) and therefore MERGE via LSE. Our FA3/FA2 split runs
+over DISJOINT ROW SUBSETS, so the combine is a SCATTER, not a merge -- each executor's output goes
+to its own rows and no LSE combination is needed. That is strictly simpler than what upstream
+already does, and it means `forward_return_lse` is not even required for our path: plain `forward`
+per subset plus an index_copy into the output is enough.
+So the dispatch to write is:
+```
+mask, q_tiles, kv_tiles = self.fused_split_mask            # commit 62
+fa3_rows  = rows where mask;  fa2_rows = rows where ~mask
+table, _  = dense_block_table(kv_indptr, kv_indices, fa3_rows, page_size)   # commit 63
+cu_q, used_k, total_q = fa3_subset_varlen(qo_lens, kv_lens, fa3_rows)       # commit 64
+o = empty_like(q-shaped output)
+o[fa3_rows] = <FA3 executor>(q[fa3_rows], ..., table, cu_q, used_k, total_q, sm_budget)
+o[fa2_rows] = <persistent executor>(q[fa2_rows], ... upstream plan ...)
+return o
+```
+with the SM budget the only non-standard argument (flashinfer's wrapper derives `sm_count` from the
+device, `prefill.py:204`, so it cannot carry one). Everything above that line is upstream API plus
+the three verified builders from commits 62-64.
+**Still pod-bound:** writing the two executor calls and verifying them -- the fp32 reference on the
+upstream build, then the combined 4-mode + fused arm. Not done, and that is the gap to the bar.

@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.27.4 — Dispatch contract grounded: upstream already has a two-executor forward_extend (2026-10-09)
+
+- `forward_extend`'s ragged path already runs TWO executors and combines their `(o, lse)` returns,
+  so a multi-executor forward_extend is idiomatic upstream. Corrects the earlier "one planned
+  wrapper per batch" framing -- that is only the `use_ragged=False` path.
+- Our split differs in a way that is strictly SIMPLER: the two executors cover disjoint row subsets,
+  so the combine is a scatter, not an LSE merge, and `forward_return_lse` is not needed.
+- With commits 62-64 (row partition, dense_block_table, fa3_subset_varlen) the full data path is
+  implemented and CPU-verified; the remaining work is the two executor calls plus GPU verification.
+
 ## v0.27.3 — Seam conversion landed on upstream, CPU-verified (2026-10-09)
 
 - `mixed_dispatch.dense_block_table` converts sglang's flat paged KV indices into upstream FA3's

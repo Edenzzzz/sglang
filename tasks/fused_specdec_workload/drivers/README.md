@@ -116,3 +116,23 @@ forever in `torch/utils/file_baton.py: wait` during `init_forward_metadata`. It 
 GPU hang: 0% utilisation, no log lines after "fired up", client timeouts. `py-spy dump` on the
 `sglang::scheduler` process names it at once. Fix: make sure no nvcc/ninja is running, then
 delete the lock.
+
+## Allocating a replacement single-GPU H200 trial (2026-10-08)
+
+Trials expire without warning, and `runs stop` releases one deliberately. Fork the last known
+config rather than hand-writing a resource spec:
+
+```bash
+env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+  merlin-cli --control-plane i18n-bd job-v2 runs fork \
+  --json '{"source_sid":"<previous sid>","name":"vibecuda","overrides":{"attachments":[]}}'
+```
+
+Two traps:
+- `"overrides":{}` is REJECTED with `field "attachments" must be array`. Pass
+  `{"attachments":[]}` explicitly.
+- The proxy vars must be stripped or Go surfaces a TLS failure as a bare `EOF` (same reason
+  `px.py` strips them).
+
+Then point `/tmp/px.py`'s `SID` at the new run and re-provision `/dev/shm/w` with
+`provision.sh` + `provision_trees.sh`.

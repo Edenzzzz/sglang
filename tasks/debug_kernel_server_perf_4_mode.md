@@ -428,7 +428,28 @@ Evaluation completeness (added 2026-10-08, user-requested):
         is_verify=True, ...)` (:639). A single, explicit target-forward call site taking a
         caller-supplied `ForwardBatch` is a better seam than our fork's method, which we had to
         split into forward + `_verify_post` by hand.
-      **Upstream has already removed the original blocker (read 2026-10-08).**
+      **Upstream supports mixed chunked prefill WITH spec natively -- so part of the 4-mode step may
+      already exist there (read 2026-10-08).** `scheduler.py:4137`'s mixed-chunk gate has NO
+      `spec_algorithm.is_none()` exclusion; it requires only `is_mixed_chunk`, a non-empty running
+      batch, no logprobs, no input_embeds and no beam rows. Inside it even handles spec explicitly
+      ("Non-overlap spec never writes the relay; stash the tails' pending tokens for the mixed input
+      resolve"). The merged batch then takes `EAGLEWorkerV2.forward_batch_generation`'s
+      `is_extend_in_batch` branch into `_forward_prefill_batch`, which runs ONE
+      `target_worker.forward_batch_generation(batch, ...)` and then `_draft_extend_for_prefill`.
+      **What that is, and is not.** `mix_with_running`'s spec branch gathers "each tail's bonus slot
+      at the committed length" -- ONE token per running row -- so upstream fuses a prefill chunk with
+      spec decode TAILS, not with N-token verify rows. Our 4-mode step fuses the chunk with the
+      full `[draft_token_num]`-wide verify rows in the same target forward, which is the step that
+      produced the serving win. So the port is narrower than feared AND narrower than the fork:
+      upstream already owns modes 1-3 (chunk + tail + draft extend); what must be derived is
+      routing the chunk into the VERIFY forward rather than the tail forward.
+      **TO VERIFY BEFORE BUILDING** (cheap, and it decides the whole item): run upstream as-is with
+      `--enable-mixed-chunk --speculative-algorithm EAGLE3` and log the realized step composition.
+      If upstream already puts chunk + verify rows in one forward, the 4-mode step is upstream
+      functionality and our contribution reduces to the split kernel underneath it -- which would be
+      a genuine (and publishable) narrowing of the claim, and must be recorded as such.
+
+      **Upstream has also removed the original blocker (read 2026-10-08).**
       `ScheduleBatch.mix_with_running` (schedule_batch.py:3114) now has an explicit
       `if not self.spec_algorithm.is_none()` path: spec rows take their prefix from
       `r.seqlen - 1` at the committed base, the tail's bonus slot is gathered from

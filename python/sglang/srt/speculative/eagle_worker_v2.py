@@ -1473,6 +1473,66 @@ class EAGLEWorkerV2(BaseSpecWorker):
 
             return batch_output
 
+    def forward_mixed_spec(self, batch, pp_proxy_tensors=None):
+        """4-mode step on upstream: ONE target forward over [prefill chunk | verify rows].
+
+        Upstream already fuses a chunk with 1-token decode tails (scheduler mixed-chunk +
+        `mix_with_running`'s spec branch) and runs verify as a SEPARATE forward -- measured
+        2026-10-08 via the batch log (`accept len` appears only on Decode batch lines). This method
+        is the remaining delta, the one the fork's serving win measured: the chunk rides in the
+        VERIFY forward instead.
+
+        Order is forced: draft() must run before the merge, because the draft tokens are the verify
+        rows' input and do not exist until then -- which is why the scheduler only ATTACHES the
+        running batch (`mixed_spec_running`) rather than merging it.
+
+        Chain draft only (topk == 1): each verify row is then a plain n-token causal extend.
+        """
+        from sglang.srt.managers.schedule_batch import ScheduleBatch
+        from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode, ForwardBatch
+        from sglang.srt.speculative.eagle_utils import eagle_prepare_for_verify
+
+        assert self.topk == 1, "4-mode step requires --speculative-eagle-topk 1"
+        running: ScheduleBatch = batch.mixed_spec_running
+        batch.mixed_spec_running = None
+
+        with (
+            draft_tp_context(self.draft_worker.draft_owns_attention),
+            speculative_moe_backend_context(),
+            speculative_moe_a2a_backend_context(),
+            spec_stage_span("draft"),
+        ):
+            verify_input = self.draft_worker.draft(running)
+        assert verify_input.is_verify_input()
+        running.spec_info = verify_input
+
+        # Allocate the n KV slots per verify row and point running.out_cache_loc at them. We want
+        # only that side effect; the ForwardBatch it also builds is discarded, since the merged
+        # batch below produces the real one. (One wasted plan per 4-mode step -- the first thing to
+        # optimise once this is correct.)
+        eagle_prepare_for_verify(
+            verify_input, self.req_to_token_pool, running, self.target_worker
+        )
+
+        batch.mix_with_verify(running, verify_input)
+        n_pre_rows = batch.batch_size() - batch.mixed_verify_rows
+        t_pre = batch.extend_num_tokens - batch.mixed_verify_tokens
+
+        fb = ForwardBatch.init_new(
+            batch,
+            self.target_worker.model_runner,
+            capture_hidden_mode=CaptureHiddenMode.FULL,
+            return_hidden_states_before_norm=False,
+        )
+        batch_output = self.target_worker.forward_batch_generation(
+            batch=None, forward_batch=fb, is_verify=True, pp_proxy_tensors=pp_proxy_tensors
+        )
+        # Split the single forward's output: prefill rows take last-token logits and their own
+        # hidden states; the verify rows' slice feeds upstream's existing accept path.
+        # TODO(untested): confirm upstream's logits_output lays prefill rows first -- it follows the
+        # merged batch's row order, which mix_with_verify builds as [chunk | verify].
+        return batch_output, verify_input, running, (n_pre_rows, t_pre)
+
     def _forward_prefill_batch(
         self, batch, on_publish=None, pp_proxy_tensors=None, coordination_plan=None
     ):

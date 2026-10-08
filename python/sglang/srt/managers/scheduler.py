@@ -4134,6 +4134,29 @@ class Scheduler(
             ),
         )
 
+        # 4-mode step: a chunk and the running batch's VERIFY rows in one target forward. The merge
+        # CANNOT happen here -- the draft tokens do not exist until draft() runs inside the spec
+        # worker, which is after the scheduler has formed the step. So attach the running batch and
+        # let EAGLEWorkerV2.forward_mixed_spec draft, merge (mix_with_verify) and split.
+        if (
+            os.environ.get("SGLANG_MIXED_SPEC") == "1"
+            and self.is_mixed_chunk
+            and not self.spec_algorithm.is_none()
+            and not running_batch.is_empty()
+            and not (new_batch.return_logprob or running_batch.return_logprob)
+            and new_batch.input_embeds is None
+            and all(r.beam_group is None for r in running_batch.reqs)
+        ):
+            running_batch.filter_batch()
+            if not running_batch.is_empty():
+                running_batch.prepare_for_decode()
+                new_batch.mixed_spec_running = running_batch
+                new_batch.decoding_reqs = running_batch.reqs
+                running_batch = ScheduleBatch(
+                    reqs=[], batch_is_full=running_batch.batch_is_full
+                )
+                return new_batch, running_batch
+
         # Mixed-style chunked prefill
         if (
             self.is_mixed_chunk

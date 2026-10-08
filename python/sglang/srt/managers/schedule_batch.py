@@ -2383,6 +2383,10 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
 
     # 4-mode step (mix_with_verify): how many of the merged rows at the TAIL are verify rows, and
     # how many tokens they contribute, so the single forward's logits can be split afterwards.
+    # The running batch deferred to the spec worker for a 4-mode step (set by the scheduler, since
+    # the merge needs draft tokens that only exist after draft() runs in the worker).
+    mixed_spec_running: Optional["ScheduleBatch"] = None
+
     mixed_verify_rows: int = 0
     mixed_verify_tokens: int = 0
     input_embeds: torch.Tensor = None  # shape: [b, hidden_size], float32

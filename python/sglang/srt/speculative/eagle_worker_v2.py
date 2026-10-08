@@ -1621,6 +1621,35 @@ class EAGLEWorkerV2(BaseSpecWorker):
                     return float("nan")
                 return float((a - b).abs().max() / a.abs().max().clamp_min(1e-6))
             _flips = lambda a, b: int((a.float().argmax(-1) != b.float().argmax(-1)).sum())
+            # NULL TEST: the same comparison for the PREFILL rows, whose path is
+            # independently known-good (identical pre_logits_sum across runs, and the
+            # control's own prefill path). If these also disagree by ~0.5 the GATE is wrong;
+            # if they agree to ~1e-3 while the verify rows do not, the gate is sound and the
+            # merged batch's verify rows are genuinely wrong. Cannot come out ambiguous.
+            _pre_err = _pre_flips = None
+            try:
+                _pfb = ForwardBatch.init_new(
+                    batch,
+                    self.target_worker.model_runner,
+                    capture_hidden_mode=CaptureHiddenMode.FULL,
+                    return_hidden_states_before_norm=False,
+                )
+                _pref = self.target_worker.forward_batch_generation(
+                    batch=None, forward_batch=_pfb, is_verify=True
+                ).logits_output.next_token_logits
+                _pre_err = _err(_pref, pre_logits)
+                _pre_flips = (
+                    _flips(_pref, pre_logits)
+                    if tuple(_pref.shape) == tuple(pre_logits.shape)
+                    else -1
+                )
+                _pre_shapes = (tuple(_pref.shape), tuple(pre_logits.shape))
+            except Exception as _e:
+                _pre_shapes = ("EXC", repr(_e)[:80])
+            logger.error(
+                "NULLTEST prefill_rows err=%s flips=%s shapes=%s",
+                _pre_err, _pre_flips, _pre_shapes,
+            )
             logger.error(
                 "VERIFYCHECK2 ver_rows=%s rows=%s ids=%s ids_sum=%s | "
                 "ref_vs_ref err=%.3e flips=%s | merged_vs_ref err=%.3e flips=%s/%s | "

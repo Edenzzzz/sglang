@@ -253,5 +253,5 @@ does not transfer.
 
 Kept out of this file on purpose: this one is the interface and the workloads.
 Every measurement, elimination and open item lives in the catalogue at the top of
-[`debug_kernel_server_perf_4_mode.md`](debug_kernel_server_perf_4_mode.md), with
+[`debug_kernel_server_perf_4_mode.md`](../debug_kernel_server_perf_4_mode.md), with
 a checkbox per item and a jump link to its detail.

@@ -350,6 +350,41 @@ Workload and serving:
       MTP at chat 24/s: chat TTFT -95%, ITL -42%; codex TTFT -51%, ITL -38%. At 16/s: ITL -36..-46%,
       codex TTFT only -19%. Details in pd_colocation_vs_disagg.md point 3 (v0.17.0-v0.17.2).
 
+Evaluation completeness (added 2026-10-08, user-requested):
+- [ ] **Re-derive the 2-D dispatch boundary and make it fine-grained.** The measured surface
+      (`boundary_28x4x128.json`) is 2-D: FA3 wins at kv 512 with NO co-resident decode rows (1.42x)
+      and loses at kv 32768 with 365 of them (0.98x). The harness encodes a 1-D approximation
+      (`four_mode_dispatch.route`: `qo_len >= 128 and kv >= 4096`), which is both stale (it predates
+      packed GQA) and coarser than the data. Serving uses a different rule
+      (`mixed_dispatch.py`: packed_qo >= 16, kv_tiles >= 1), so harness and server now DISAGREE.
+      Figure out WHY the boundary bends -- the candidate is that the decode population, not KV
+      length, sets whether FA3's SMs have anything left to overlap -- then fit the boundary on
+      (packed_qo, kv_tiles, decode_rows, decode_kv) instead of thresholding two axes separately.
+      Also re-check `MIN_QO_LEN=16`: FA3 measured 0.78x at packed_qo 32 and 1.13x at 56, so a floor
+      of 16 admits rows in the region where FA3 was measured LOSING.
+- [ ] **Workloads from the recent serving literature, beyond our mixed 32K-1M TraceLab + chat.**
+      Our transfer check so far is Code-Feedback and SWE-Gym (242 / 690-token prompts, parity, see
+      realistic_workload_analysis.md#transfer-to-independent-coding-datasets). Add the datasets that
+      accepted papers actually report, so reviewers can place our numbers: ShareGPT (in-tree:
+      `--dataset-name sharegpt`), the Mooncake conversation/tool traces (`--dataset-name mooncake`,
+      already wired), generated-shared-prefix (wired), and long-context sets (LooGLE / LongBench).
+      Report each at matched offered load with the same gate and fallback counts.
+- [ ] **Direct baselines, the comparisons a reviewer will demand.**
+      - [ ] PD multiplexing, ASPLOS 2025 (https://arxiv.org/html/2504.14489v2) -- the closest prior
+            work to our colocation argument. Read its mechanism and either run it or state precisely
+            why its setting differs from ours.
+      - [ ] sglang mixed chunked prefill on ALL FOUR nodes (`--enable-mixed-chunk`, no split, no
+            4-mode) -- the unfused colocation baseline at full cluster scale, not just 1 GPU.
+      - [ ] sglang PD disaggregation -- measured (disagg_2p2d / 1p3d), but re-run alongside the
+            above two so all three baselines share one harness and one workload set.
+- [ ] **Run server-level tests on CURRENT sglang, not only this fork.** Every serving number so far
+      is on `Edenzzzz/sglang-dev` at base `0.5.4.post2`; the local `main` ref is from 2025-12-05 and
+      upstream `sgl-project/sglang` main is 7 512 commits ahead (reachable: `git ls-remote` works,
+      head b7b2975b5 as of 2026-10-08). Risk: baselines may already be faster upstream (chunked
+      prefill, PD, and the flashinfer backend all moved), which would shrink or invalidate our
+      deltas. Rebase or cherry-pick our kernel/scheduler patches onto a current upstream and re-run
+      at least the headline arms there.
+
 Cluster:
 - [ ] **Multi-node PD colocation, four points** (H20, 8 pods x 2 GPUs, `tasks/pd_colocation_vs_disagg.md`).
       Measured 2026-10-08 (non-MTP workers): cache-affinity colocation vs the best disagg (2P2D)
@@ -2465,7 +2500,7 @@ Measurements live in [`pd_colocation_vs_disagg.md`](pd_colocation_vs_disagg.md).
 - [x] [The restored pod's serving tree was upstream, not our fork](#env-contamination) — rebuilt and verified by manifest before any serving number was taken
 
 ## Workload capture for handoff — 2026-10-05
-- [x] [Real online 2-mode trace](fused_kernel_handoff.md#5-the-workloads) — 2121 steps/arm, JSON corpus in `fused_specdec_workload/sets/`
+- [x] [Real online 2-mode trace](archive/fused_kernel_handoff.md#5-the-workloads) — 2121 steps/arm, JSON corpus in `fused_specdec_workload/sets/`
 - [x] Real online **4-mode** trace with draft+verify co-resident (2026-10-07) — `mtpedf/rate24/trace_MTPMIX_SPLIT` (STEPTRACE, 11 837 steps)
 - [x] Long-context (64-96K, tracelab) A/B — 2026-10-08, see the task list at the top (`long_agent_chat`). Sized by the context-share measurement. The old gate
   (split FA3 rows) is gone: the router sends FA3 no split rows, and the "corruption" was the harness

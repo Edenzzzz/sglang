@@ -9469,3 +9469,18 @@ Test in flight: `WG_DRAIN=0` (every warpgroup drains). If the 55 unwritten rows 
 in the narrow drain's item consumption; if they persist, it is in how task0 items are addressed and
 the drain is exonerated. Either way the next action is determined, which is why this flip comes
 before any further reading.
+
+**`WG_DRAIN=0` is not a usable diagnostic: it crashes.** `torch.AcceleratorError: CUDA error: an
+illegal memory access` / `CUDA_ERROR_ILLEGAL_ADDRESS from cuCtxSynchronize_v2`. So the wide drain
+form cannot even run on this fixture, which independently confirms the source comment that the
+narrow form (`kNarrowWg = 0`) is load-bearing rather than a tunable. The drain-consumption
+hypothesis therefore stands UNTESTED -- flipping the flag cannot isolate it.
+
+**Next step, now that the cheap flips are exhausted: instrument the drain itself.** Add a global
+counter the narrow drain bumps per consumed queue item (and one the plan bumps per enqueued item),
+then compare enqueued vs consumed for this fixture. That is a few lines in
+`fused_drain_queue` + a tensor the harness reads, and it answers the question the flag flip could
+not: whether the 55 unwritten rows correspond to items that were enqueued but never consumed, or to
+items consumed with a wrong q offset. Everything cheaper has now been tried and recorded
+(`TRACE_WORK` emits nothing; `WG_DRAIN=0` crashes; the qo sweep and NaN-index attribution are done),
+so the counter is the smallest remaining step that can still settle it.

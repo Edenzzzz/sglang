@@ -471,9 +471,20 @@ extend. The remaining failure is in the VERIFY rows' draft extend:
   reached from `_draft_extend_for_decode`; it derives them from `GenerationBatchResult` fields that
   my hand-built result does not populate (candidates: `prepared_draft_extend_inputs`,
   `allocate_lens`, `next_draft_input`).
-- Next step: read what `_draft_extend_for_decode` requires off `batch_result` in the non-fused
-  branch and populate those fields in `result.mixed_running_result`, rather than hand-resetting
-  `out_cache_loc`/`positions` -- the same delegate-to-upstream lesson as commit 17.
+- Attempted fix (commit 19) and RETRACTED (commit 20): narrowing `out_cache_loc`/`positions` to the
+  accepted tokens before the call. Measurement at the call site (`VX_DEBUG`) shows why it is wrong:
+  **bs=1, n=4, accept_lens=[1], out_cache_loc=4, positions=None, seq_lens=[513]**. `positions` does
+  not exist yet -- `prepare_for_draft_extend` CREATES it n-wide from `num_draft_tokens` and derives
+  the accepted layout itself, so it expects the n-wide tensors.
+- **Next step (narrowed by that measurement):** the gap is the `GenerationBatchResult` fields
+  `_draft_extend_for_decode` reads that a hand-built result does not populate --
+  `allocate_lens` and/or `prepared_draft_extend_inputs`. Populate those (or obtain the result from
+  upstream's own `run_eagle_verify` so they come for free) instead of touching the tensors. This is
+  the delegate-to-upstream lesson again, which commits 19 and 15 both violated.
+- Honest note on the loop: three of the last five commits were wrong-direction fixes corrected by a
+  one-run diagnostic. Where a field's provenance is not obvious, LOG IT FIRST -- the two diagnostics
+  used here (slot names in `fill_from`, tensor sizes at the call site) each resolved in one run what
+  inference had failed twice to get.
 
 **Method note, recorded because it cost three rounds:** when fixes start arriving one field or one
 attribute at a time, the structure is wrong, not nearly right. That applied to the sampler view

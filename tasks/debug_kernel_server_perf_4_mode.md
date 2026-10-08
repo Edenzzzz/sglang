@@ -9760,3 +9760,33 @@ Reading rule, fixed in advance: all-zero output => the tile128 runner's epilogue
 small-but-nonzero => its mainloop accumulated only part of the KV; full-magnitude-but-wrong => the
 accumulation or the mask is wrong. Those are three different halves of Runner1 and the dump
 separates them in one run.
+
+### [x] task0 fault CHARACTERISED: output fully written, magnitude ~3.4x too small — 2026-10-09
+
+`DUMP_ROWS=1 FIXTURE="qo:424,64,1 prefix:3577,0,13"` (0 unwritten rows, so every number is
+meaningful), same build as above with `cluster_tile_q` reverted:
+
+| row | class | rel err | nonzero | absmax | ref_absmax | ratio |
+|---|---|---|---|---|---|---|
+| 0 | FA3 | 0.00682 ok | 1519616/1519616 | 0.03320 | 0.03611 | 0.92 |
+| 1 | **task0** | **1.02823 FAIL** | **229376/229376** | **0.42773** | **1.45312** | **0.29** |
+| 2 | task2 | 0.00089 ok | 3584/3584 | 0.48242 | 0.48178 | 1.00 |
+
+By the rule fixed BEFORE the run: all-zero would mean the epilogue never stores; full-magnitude-wrong
+would mean a bad mask/accumulation; **small-but-nonzero means the mainloop accumulated only part of
+the KV**. Every one of task0's 229376 elements is written and nonzero, and the magnitude is
+**3.40x short** (1.45312 / 0.42773), while task2 is exact to 3 decimal places in the SAME launch.
+So the tile128 runner stores fine and computes a systematically UNDER-weighted result.
+
+That narrows the remaining space to the softmax/accumulation balance rather than coverage or
+addressing -- eight candidates now eliminated. The specific shapes that produce a uniform
+magnitude deficit with every element present:
+1. numerator accumulated over a subset of KV while the denominator (row sum of exp) covers the full
+   range -- i.e. V-accumulation and the LSE disagree about how much KV was visited;
+2. a split/merge path that AVERAGES partial results instead of combining them LSE-weighted (note
+   `[nsd] per-request num_splits = [4]` appears in these runs, so splitting IS active);
+3. an output scale applied once per work item on a row that is covered by several.
+All three are testable cheaply: run the SAME fixture with splitting forced off for the FA2 half (or
+one work item per row) -- if the deficit disappears, it is (2)/(3); if it persists, it is (1).
+Do NOT guess between them; the ratio 3.40 is itself a clue worth checking against the number of
+chunks the plan gave row 1.

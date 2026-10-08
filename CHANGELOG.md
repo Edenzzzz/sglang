@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.22.1 — task0 fused fault characterised; cluster_tile_q candidate refuted (2026-10-09)
+
+- The fused kernel's failing task0 row writes EVERY element (229376/229376 nonzero) but at
+  **3.40x too small a magnitude** (absmax 0.428 vs reference 1.453), while the tile16 row is exact
+  and FA3 passes in the same launch. So the tile128 runner's epilogue is fine and its
+  softmax/accumulation balance is not -- the fault is an under-weighted result, not a missing write.
+- The `cluster_tile_q = gridDim.x * CTA_TILE_Q` candidate (unguarded under FUSED_GRID, unlike
+  `persistent_cluster_slot`) was tested on the discriminating fixture and **refuted** (rel err
+  1.03446 -> 1.04120), then reverted rather than left in the tree.
+- Harness note: the store-vs-compute discriminator already existed behind `DUMP_ROWS=1`; and an
+  instrumented (device-printf) build corrupts FA3 numerics (0.0059 -> 1.19), so coverage runs and
+  numerics runs must stay separate.
+
 ## v0.22.0 — Fused FA3+FA2 kernel builds and runs again; FA3 half validated (2026-10-08)
 
 - Restored the flashinfer tree on the vibecuda pod (it was absent, so the split kernel had no

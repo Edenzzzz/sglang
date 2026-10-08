@@ -275,6 +275,56 @@ server would have measured nothing, for this reason. Superseded by the MTP arm.
 - [ ] 2026-10-09 **4-mode MTP self-check running** (`drv/split_verify_mtp.sh`): EAGLE3 chain
       draft (topk=1, 4 draft tokens) + `SGLANG_MIXED_SPEC=1` + split ON + in-step verify.
 
+### The dispatch was installed in a branch the default config never takes (2026-10-09)
+
+The MTP gate came back `NOT EXERCISED` again, and the server died with a shape error. Reading
+the traceback gave the real answer:
+
+```
+flashinfer_backend.py:1753 in forward_extend
+  o1, s1 = self.prefill_wrapper_ragged.forward_return_lse(...)
+ValueError: q.shape[0] (2051) does not match qo_indptr[-1] (2054)
+```
+
+That is the **ragged** branch. And upstream chooses it by default:
+
+```python
+use_ragged = (not self.enable_deterministic
+              and not is_in_tc_piecewise_cuda_graph()
+              and not self.use_paged)          # self.use_paged = envs.SGLANG_FLASHINFER_USE_PAGED
+```
+
+**So the dispatch lives in the `not use_ragged` branch, which the default configuration never
+enters.** The partition could have been perfect and the dispatch would still never have run.
+This also explains the plain-server result more completely than the guard did: the plan runs
+from `init_forward_metadata` (always), which is why `FUSED_SPLIT_ONESIDED` appeared, while
+`FUSED_SPLIT_CALLS` stayed 0 because the dispatch branch was unreachable.
+
+Fix: `SGLANG_FLASHINFER_USE_PAGED=1`, an **upstream-defined** env var, not a private hook.
+
+**This changes the A/B design, and the change matters.** Both arms must set
+`SGLANG_FLASHINFER_USE_PAGED=1`, or the comparison confounds the split with ragged-versus-paged
+attention -- two different algorithms over different KV regions. The cost of forcing paged mode
+is then its own measurement (paged baseline vs ragged baseline), and it is a real cost to carry:
+the ragged path exists because it is faster for the new-token region. If forcing paged mode is
+itself a regression, the split has to beat the ragged baseline from a deficit, which is a
+stiffer bar than beating the paged one.
+
+**Separately: a 4-mode port bug on the ragged path.** `qo_indptr[-1] - q.shape[0] = 3 =
+speculative_num_steps`, a *constant total* deficit, so one verify row contributed 1 token where
+the merged metadata promised `num_draft_tokens = 4`. A split-OFF control at the same settings is
+running to establish whether this is pre-existing in the port or caused by my second wrapper
+sharing `workspace_buffer`. Either way it is a defect to fix, not to route around: the ragged
+path is upstream's default, so the split ultimately needs to work there too -- as a row-wise
+split whose FA3 subset takes one `flash_attn_with_kvcache` call (its page table plus
+`cache_seqlens` already span prefix and new tokens) while the FA2 subset keeps upstream's
+ragged+paged LSE merge restricted to those rows.
+
+- [ ] 2026-10-09 **split on the ragged path** -- required for the default config; currently
+      paged-only.
+- [ ] 2026-10-09 **cost of `SGLANG_FLASHINFER_USE_PAGED=1`** -- paged vs ragged baseline, both
+      split OFF. Sets the deficit the split must overcome in the default configuration.
+
 **Status 2026-10-06 (end of day): the kernel splits into two executors, decided by
 measurement.** Co-residency constrains the single fused kernel twice, and neither
 constraint is a cost of the work:

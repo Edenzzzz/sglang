@@ -1643,6 +1643,30 @@ class EAGLEWorkerV2(BaseSpecWorker):
                 if _nrows >= _n else -1.0
                 for i in range(_n)
             ]
+            # The verify rows' field conventions, merged batch vs the reference verify batch.
+            # EXTEND wants seq_lens = prefix + n with extend_prefix_lens = prefix;
+            # TARGET_VERIFY keeps seq_lens at the committed prefix and masks the tree itself.
+            def _tail(x, k):
+                if x is None:
+                    return None
+                try:
+                    return [int(v) for v in (x[-k:] if hasattr(x, "__getitem__") else [])]
+                except Exception:
+                    return "?"
+            _k = merged.mixed_verify_rows or 1
+            logger.error(
+                "CONV merged: seq_lens=%s ext_prefix=%s ext_seq=%s pos0=%s || "
+                "ref: seq_lens=%s ext_prefix=%s ext_seq=%s pos0=%s",
+                _tail(getattr(fb, "seq_lens", None), _k),
+                _tail(getattr(fb, "extend_prefix_lens", None), _k),
+                _tail(getattr(fb, "extend_seq_lens", None), _k),
+                None if getattr(fb, "positions", None) is None else int(fb.positions[-_k * _n]),
+                _tail(getattr(_vfb, "seq_lens", None), _k),
+                _tail(getattr(_vfb, "extend_prefix_lens", None), _k),
+                _tail(getattr(_vfb, "extend_seq_lens", None), _k),
+                None if getattr(_vfb, "positions", None) is None else int(_vfb.positions[0]),
+            )
+
             # accept_lens is not available yet here (run_eagle_verify runs below); it is
             # logged per step by MIXEDSUM.
             logger.error(

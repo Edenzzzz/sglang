@@ -9336,3 +9336,40 @@ the fork venv repaired) rather than committed to the flashinfer tree as-is.
 Pattern worth remembering: each fix exposed the next build stage, and in every case the real cause
 was named only by grepping for the FIRST `error:` -- the trailing lines ("could not open .ii",
 "Error limit reached", "ninja: build stopped") named the symptom, never the cause.
+
+## [x] FUSED KERNEL BUILDS AND RUNS on the restored pod; FA3 half PASSES, task0 row FAILS — 2026-10-08
+
+First kernel-arm result since the pod restore. Command:
+`NVCC_THREADS=4 bash /dev/shm/kerneltest.sh` (= `FI_ROOT=/dev/shm/w/fi PYTHONPATH=/dev/shm/w/fi
+TORCH_CUDA_ARCH_LIST=9.0a /dev/shm/w/venv_up/bin/python tests/test_fused_server_batch.py`), fixture 1
+`qo=[424, 87, 1] kv=[4001, 87, 14]`, packed_qo `[2968, 609, 7]`, GQA 28/4, H200 sm90a, nvcc 13.1,
+torch 2.14.1+cu130. sglang `attn_fuse_` @ 54ae76a33, flashinfer `/opt/tiger/flashinfer` @ b0563ae
+(+ the two local `-std=c++20` patches on the pod copy).
+
+| row | class | shape | rel err vs causal fp32 | verdict |
+|---|---|---|---|---|
+| 0 | FA3, split-KV `num_splits=[4]` | qo=424 kv=4001 | **0.00662** | **ok** |
+| 1 | persistent task0 | qo=87 kv=87 | nan | **FAIL** |
+| 2 | persistent task2 | qo=1 kv=14 | **0.00070** | **ok** |
+
+`FAILURES: [(48, -1, 'unwritten rows', 55), (32, ...), (16, ...)]` -- 55 of 512 output rows are
+never written (NaN), at **every** sm_split tried (48/32/16).
+
+What this establishes and what it does not:
+- **The FA3 executor computes correctly inside the fused kernel**, and it does so WITH split-KV
+  active (4 splits). That is the first evidence on this pod against the standing worry in
+  [[fused-wgmma-splitkv-wrong]]; it does NOT clear that memory, which concerns fixture 2 -- this is
+  fixture 1, whose rows have kv >> packed_qo and one task-3 row.
+- **The FA2 persistent executor computes correctly for a decode row** (task2, 7e-4).
+- **The task0 (append/extend) row is not fully written.** Deterministic, and INDEPENDENT of the SM
+  split -- identical 55 rows at 48, 32 and 16 -- so it is not SM partitioning, not work-stealing,
+  not a race. `87 - 32 = 55` suggests the row's q extent is covered only to a 32-row granularity,
+  i.e. a q-tile class / work-item mapping gap, which is exactly the failure family in
+  [[fused-harness-vs-sglang-layout]].
+
+Next, in order: (1) confirm the arithmetic by varying ONLY row 1's qo (e.g. 32, 33, 64, 87, 96) and
+seeing whether unwritten == qo - 32 each time -- that single sweep distinguishes a fixed 32-row
+write window from a tile-rounding bug; (2) check whether the harness or the kernel owns the gap by
+reading how task0 work items are enumerated for a 609-packed-row request; (3) only then re-run the
+sm_split sweep for perf, since a kernel that leaves rows unwritten is doing less work and any
+timing from it would be invalid ([[fused-ab-validity-rule]]).

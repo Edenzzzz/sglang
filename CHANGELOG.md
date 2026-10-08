@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.22.0 — Fused FA3+FA2 kernel builds and runs again; FA3 half validated (2026-10-08)
+
+- Restored the flashinfer tree on the vibecuda pod (it was absent, so the split kernel had no
+  runnable binary at all) and got the fused TU compiling: five sequential blockers, the last being
+  that torch 2.14 needs **C++20** in both the harness `load()` and `flashinfer/jit/core.py`.
+- First kernel-arm result on fixture 1: the **FA3 executor PASSES** the causal fp32 reference at
+  rel err 0.00662 with split-KV active (4 splits), and a persistent decode row passes at 0.00070.
+- Open kernel bug: the persistent **task0** row (qo=87) leaves **55/512 output rows unwritten**
+  (NaN), identically at sm_split 48/32/16 -- so it is a q-tile/work-item coverage gap, not an SM
+  partitioning or race effect. No fused timing is valid until this is fixed.
+
 ## v0.21.0 — Dispatch boundary is a ratio, and the decode-population guard (2026-10-08)
 
 - Re-analysed the measured 2-D boundary (`boundary_28x4x128.json`): the fused win is set by a RATIO,

@@ -10171,3 +10171,29 @@ overwrite each other"), now demonstrated on the FA2/persistent side with a diffe
 Target for the fix: the `num_kv_chunks > 1` branch at `persistent.cuh:586-592` (`partial_o` +
 `write_o_`) and whatever consumes `partial_lse` / `partial_o` to produce `final_o` -- find the
 reduction's row loop and check its condition for rows with a single contributing chunk.
+
+**Mechanism completed, and it names where the fix goes.** The merge is an in-kernel JIT reduction
+driven by plan arrays: `P.merge_indptr` / `P.merge_o_indices`
+(`fused_fa3_persistent_ext.cu:327-328`, with `FLASHINFER_NO_JIT_REDUCE=1` as the bisect switch at
+:338). Combining that with the trace:
+- Every row-1 work item reports `nchunks = 2`, **including the ones whose causal bound is far below
+  the first chunk boundary** (`packed_qo_start=128` has `kv_end=37`). `num_kv_chunks` is a property
+  of the REQUEST's kv length, not of the tile's causal extent.
+- So those items take the `num_kv_chunks > 1` branch and write to `partial_o` -- but the chunk-1
+  work item for those same rows has `kv_start = 64 > kv_end`, i.e. there is no work and no partial.
+- The reduction then expects `num_kv_chunks` partials per row and finds only chunk 0's. Rows whose
+  causal bound lies entirely in chunk 0 therefore never get a complete partial set, and `final_o`
+  is never written for them -- exactly the NaN set, and exactly why a large prefix (every row
+  needing chunk >= 1) makes the deficit vanish.
+**Two fixes, both in this path, and they are separable:**
+1. rows whose causal bound confines them to chunk 0 must either take the write-through path or have
+   the reduction treat a missing later partial as absent rather than required (the skipped-row
+   defect, 55/19/0 unwritten);
+2. the 3-chunk case writes every row but at rel err 0.514, so the reduction's weighting is also
+   wrong once it does run over several partials (the LSE/accumulation defect).
+Start by reading how `merge_indptr`/`merge_o_indices` are built in the plan
+(`scheduler.cuh`, `TwoStageHolisticPlan`) and whether the entry count per row matches the number of
+chunks that actually produce work under causal masking -- that single comparison decides whether
+the fix belongs in the plan or in the reduction.
+`FLASHINFER_NO_JIT_REDUCE=1` is the ready-made A/B: if disabling the JIT reduction changes which
+rows are NaN, the reduction owns it; if not, the plan does.

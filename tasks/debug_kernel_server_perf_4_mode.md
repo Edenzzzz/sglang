@@ -8792,3 +8792,39 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   pages around the probe. (a) is nearly free and is what the step's own structure already affords.
   Validity check that must accompany it: the prefill-row null test (already err=0.0) stays at 0,
   AND `ref_vs_ref` stays at 0 with a fresh plan each time.
+
+- **[x] GATE (b) v2 IS SOUND, AND IT FINDS A REAL DEFECT: the merged batch's VERIFY rows are
+  computed wrong while its PREFILL rows are bit-exact.** Port 47 takes the reference BEFORE the
+  merged forward, reusing the verify batch the step already prepared (prepare -> forward is the
+  normal verify path), so nothing extra is mutated. `portcorr3.sh 1 g2`, 5 mixed steps, 0 tracebacks,
+  null case on the SAME log line:
+
+  | ver_rows | NULL prefill | merged_vs_ref | argmax flips | scale ref/got |
+  |---|---|---|---|---|
+  | 1 | **err=0.0, flips=0** | 4.756e-01 | 2/4 | 28.1 / 33.2 |
+  | 2 | **err=0.0, flips=0** | 9.721e-01 | 6/8 | 31.4 / 36.2 |
+  | 3 | **err=0.0, flips=0** | 7.180e-01 | 6/12 | 33.2 / 31.8 |
+  | 3 | **err=0.0, flips=0** | 5.249e-01 | 4/12 | 26.4 / 26.9 |
+  | 3 | **err=0.0, flips=0** | 5.875e-01 | 4/12 | 25.0 / 21.4 |
+
+  The null case is what makes this readable: identical machinery, identical step, prefill rows agree
+  to the bit while verify rows disagree by ~15-30 absolute logits. Not bf16, not the gate's side
+  effects (v1's failure), not a stale plan (port 45 refuted that).
+
+  **This RECONCILES with `portcorr2` instead of contradicting it.** Only the accepted prefix of a
+  verify row affects emitted text; `accept_lens=[1]` throughout these runs. If the flips sit at
+  draft positions >= 1, they are discarded whenever acceptance is short, so greedy text can match
+  bit-for-bit while the step is still wrong -- and acceptance is silently depressed, which is a
+  PERF loss that would quietly cap any speedup the 4-mode step could show. Both measurements stand.
+
+- **[ ] Next, and narrow: find which draft POSITION goes wrong.** Log per-position argmax agreement
+  (position 0..n-1 separately) plus the accepted length, and compare mean accept_len against the
+  control arm. Expected signatures, each pointing somewhere specific:
+  - flips only at positions >= 1, position 0 exact -> the n draft tokens' intra-row causal
+    structure or their `positions` (RoPE offset must be prefix+i); the merged EXTEND path gives a
+    verify row plain causal attention, which is right for a chain (topk=1) ONLY if positions and
+    `extend_prefix_lens` are right;
+  - flips at position 0 too -> the row's prefix KV length is wrong (`seq_lens` prefix vs prefix+n
+    is the EXTEND-vs-TARGET_VERIFY convention mismatch to check first).
+  Also worth one line: mean accept_len, 4-mode vs control, since that quantifies the cost and is
+  the number a reviewer will ask for.

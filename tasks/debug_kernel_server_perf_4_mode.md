@@ -9591,3 +9591,13 @@ two-builder check -- plan/drain cluster-count mismatch). The measurements that a
 fit are unchanged and all recorded above: prefix 424-478 NaN with suffix 479-510 written, unwritten
 saturating at exactly 55 for qo1 >= 87, rel err ~1.0 with nothing unwritten at qo1 <= 64, and
 invariance across sm_split 48/32/16.
+
+**Two-builder caveat closed: the mechanism is DEFINITIVELY REFUTED.** `scheduler.cuh:1325`
+(`num_clusters = num_sm / cluster_size`) and `:1902`
+(`plan_info.num_pers_clusters = num_clusters`) are both inside **`TwoStageHolisticPlan`**
+(declared line 1187); the other computation at `:2096` is in `MLAPlan`, which this path does not
+use. One variable, one function -- so `work_indptr` is built against exactly the cluster count the
+fused drain iterates, and no work can be stranded past the bound. Hypothesis 5 is dead, by a read
+rather than a run, and the plan/drain coverage question is closed.
+That leaves the fault inside the per-cluster WORK ASSIGNMENT or Runner1's execution of it, which is
+where the device `printf` goes -- the instrument deferred five times in favour of cheaper guesses.

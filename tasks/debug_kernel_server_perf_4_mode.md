@@ -8555,3 +8555,38 @@ vibecuda H200 pod (upstream pinned `b7b2975b5`, venv `venv_up`, torch 2.14.1).
   are NOT comparable between arms -- they say nothing about whether the 4-mode step produces the
   same tokens. Greedy-output equality vs the `SGLANG_MIXED_SPEC=0` arm is the next gate, before any
   timing number is worth taking.
+
+- **[ ] 2026-10-08: correctness of the ported 4-mode step is NOT established, and the first gate
+  design was confounded.** Driver `/dev/shm/portcorr.sh <0|1>` (deterministic prompt set built in
+  the main thread; 4 background rows of 512 tok/256 out + 6 long rows of 6000 tok/48 out;
+  temperature 0, `ignore_eos`; 16 mixed steps in the ON arm, 0 in the OFF arm, 0 tracebacks both).
+
+  | comparison | requests whose greedy output differs (of 10) |
+  |---|---|
+  | control vs control (same config, noise floor) | `long4` |
+  | 4-mode vs itself, before the keep-alive fix | `long0, long1, long2` |
+  | 4-mode vs itself, AFTER the keep-alive fix | `bg2, bg3, long0, long1, long2, long3, long4, long5` |
+  | control vs 4-mode | 6-7 requests, set varies per run |
+
+  Three things follow, and the third invalidates the gate:
+  1. The control is self-consistent on 9/10, so the harness itself is stable.
+  2. Commit 40 (parking the verify half's `extra_keep_alive_refs`) is right by upstream's own
+     contract -- the scheduler parks only the RETURNED result's refs, and we return the prefill
+     half, so `run_eagle_verify`'s refs were being dropped. But it did NOT reduce the
+     nondeterminism (3 -> 8 self-inconsistent requests). **No claim that it fixed anything.**
+  3. The 4-mode arm disagrees WITH ITSELF across runs. Which requests are in the running batch when
+     a prefill arrives is timing-dependent, so the 4-mode arm's batch composition -- and hence the
+     bf16 reduction order -- changes run to run. Greedy-token equality under a CONCURRENT workload
+     therefore cannot separate "wrong" from "batched differently". The earlier conclusion drawn
+     from it ("5 stable outputs changed, so there is a real bug") is RETRACTED as unproven; it may
+     be true, but this experiment cannot show it.
+
+  **The gate this needs instead** (in order): (a) a serialized workload where the mixed step's
+  composition is forced identical across runs, so greedy equality is meaningful; and/or (b) the
+  fp32 per-row recompute already used for the split kernel (`SGLANG_SPLIT_VERIFY`), which compares
+  the merged forward's verify-row logits against a reference and is invariant to batching. (b) is
+  the real gate; (a) is the cheap screen.
+
+  Two genuine bugs WERE found and fixed while chasing this, both of the same shape -- an
+  open-ended slice of a tensor that a graph bucket pads, which corrupts silently instead of
+  failing: the verify-row logit slice (commit 36) and the verify hidden-state slice (commit 39).

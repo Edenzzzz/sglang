@@ -1534,7 +1534,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
         # only that side effect; the ForwardBatch it also builds is discarded, since the merged
         # batch below produces the real one. (One wasted plan per 4-mode step -- the first thing to
         # optimise once this is correct.)
-        eagle_prepare_for_verify(
+        _vfb = eagle_prepare_for_verify(
             verify_input, self.req_to_token_pool, running, self.target_worker
         )
 
@@ -1581,6 +1581,37 @@ class EAGLEWorkerV2(BaseSpecWorker):
             next_token_logits=ver_logits, hidden_states=ver_hidden
         )
 
+        if os.environ.get("SGLANG_MIXED_VERIFY_CHECK") == "1" and _vfb is not None:
+            # Gate (b): the SAME verify rows, forwarded WITHOUT the prefill chunk. Both sides
+            # see identical inputs within this one step, so timing cannot confound it --
+            # unlike greedy-token equality, where the merge point moves between runs.
+            # Costs one extra forward per mixed step and rewrites the same KV slots with the
+            # same values. Gate only, never on by default.
+            _ref = self.target_worker.forward_batch_generation(
+                batch=None, forward_batch=_vfb, is_verify=True
+            ).logits_output.next_token_logits
+            _got = ver_logits
+            if tuple(_ref.shape) != tuple(_got.shape):
+                logger.error(
+                    "VERIFYCHECK SHAPE MISMATCH ref=%s merged=%s",
+                    tuple(_ref.shape), tuple(_got.shape),
+                )
+            else:
+                _d = (_ref.float() - _got.float()).abs()
+                _den = _ref.float().abs().clamp_min(1e-6)
+                _rel = (_d / _den).max().item()
+                _rowmax = (_d / _den).amax(dim=-1)
+                _arg_ref = _ref.float().argmax(dim=-1)
+                _arg_got = _got.float().argmax(dim=-1)
+                _flips = int((_arg_ref != _arg_got).sum())
+                logger.error(
+                    "VERIFYCHECK ver_rows=%s rows=%d max_rel=%.6f per_row_max=%s "
+                    "argmax_flips=%d/%d",
+                    merged.mixed_verify_rows, _got.shape[0], _rel,
+                    [round(float(x), 5) for x in _rowmax[:8]],
+                    _flips, _got.shape[0],
+                )
+
         if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
             logger.error(
                 "MIXEDPRE pre_reqs=%d run_reqs=%d merged_bs=%s ver_rows=%s ver_toks=%s n=%s "
@@ -1590,6 +1621,19 @@ class EAGLEWorkerV2(BaseSpecWorker):
                 n_pre_rows, t_pre, tuple(lo.next_token_logits.shape),
                 tuple(pre_logits.shape), tuple(ver_logits.shape),
                 verify_input.draft_token_num,
+            )
+            # Checksums localise run-to-run nondeterminism: if these already differ between
+            # two runs at the same step index, the merged forward (or its batch) is the
+            # source; if they match while outputs diverge, the fault is downstream in
+            # accept/commit/draft-extend.
+            logger.error(
+                "MIXEDSUM step_ver_rows=%s ver_logits_sum=%.6f ver_hidden_sum=%.6f "
+                "pre_logits_sum=%.6f seq_lens=%s",
+                merged.mixed_verify_rows,
+                float(ver_logits.float().sum()),
+                -1.0 if ver_hidden is None else float(ver_hidden.float().sum()),
+                float(pre_logits.float().sum()),
+                running.seq_lens.tolist(),
             )
             logger.error(
                 "MIXEDHS hs=%s pre_hidden=%s ver_hidden=%s",

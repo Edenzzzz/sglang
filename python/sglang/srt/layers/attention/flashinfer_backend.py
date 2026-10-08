@@ -315,6 +315,7 @@ class FlashInferAttnBackend(AttentionBackend):
         # held back from FA3 and passed through upstream FA3's public `sm_margin`.
         self.fused_fa2_wrapper = None
         self.fused_split_mask = None
+        self.fused_split_plan = None
         self.fused_sm_margin = int(os.environ.get("SGLANG_FUSED_SM_MARGIN", "0"))
 
         self.req_to_token_pool = model_runner.req_to_token_pool
@@ -1033,9 +1034,14 @@ class FlashInferAttnBackend(AttentionBackend):
                         )
                         # Store the mask and the tile counts the launch budget is derived from.
                         self.fused_split_mask = (_m, _qt, _kvt)
+                        # Build the index tensors and plan the FA2 wrapper once for the
+                        # whole step; forward_extend then runs per layer with no host work.
+                        if not self._fused_split_plan(forward_batch):
+                            self.fused_split_mask = None
                 except Exception as _e:
                     # A partition failure must not degrade the ordinary path silently; log and
                     # fall through to the standard single-wrapper dispatch.
+                    self.fused_split_mask = None
                     logger.warning("fused split partition skipped: %s", _e)
 
             # Disable ragged wrapper and ensure prefix handling for multimodal and multi-item scoring
@@ -1347,26 +1353,112 @@ class FlashInferAttnBackend(AttentionBackend):
     def get_cuda_graph_seq_len_fill_value(self):
         return 1
 
-    def _fused_split_dispatch(
-        self, q, layer, forward_batch, causal, logits_soft_cap
-    ):
-        """Run the FA3/FA2 SM-pre-assigned split over the row partition, or return None.
+    def _fused_split_plan(self, forward_batch: ForwardBatch) -> bool:
+        """Build the split's index tensors and plan its FA2 wrapper ONCE per step.
 
-        The partition is `self.fused_split_mask`, computed in `init_forward_metadata`. The two
-        row subsets are DISJOINT, so the two executors' outputs combine by SCATTER -- unlike
-        upstream's ragged+paged pair, which covers the same rows and therefore merges via LSE.
+        `forward_extend` runs per layer, so anything built there is paid ~num_layers times per
+        step. All of this is layer-independent, so it belongs in the metadata hook -- the same
+        division upstream already uses (plan per step, forward per layer).
 
-        FA3's share of the GPU goes through upstream FA3's OWN public parameter, `sm_margin`
-        ("can be tuned if some SMs are used for communication"), so the SM pre-assignment needs
-        no private entry point on this side of the split. The FA2 (flashinfer persistent) side
-        derives its cluster count from the device and is budgeted separately.
-
-        Returns None whenever the split cannot or should not run, and the caller then takes the
-        ordinary single-wrapper path. None is not a silent fallback for a broken split: it means
-        the partition put every row on one side, which is the guard working as designed.
+        Returns True when a two-sided split is available for this step.
         """
         import numpy as np
 
+        self.fused_split_plan = None
+        mask, _q_tiles, _kv_tiles = self.fused_split_mask
+        mask = np.asarray(mask, dtype=bool)
+        fa3_rows, fa2_rows = np.nonzero(mask)[0], np.nonzero(~mask)[0]
+        if len(fa3_rows) == 0 or len(fa2_rows) == 0:
+            # One-sided partition: nothing to split. The decode-population guard refuses
+            # fusion for pure long-prefill batches by design, so on a prefill-only workload
+            # this is the common case and must not be read as a failure.
+            self.fused_split_onesided = getattr(self, "fused_split_onesided", 0) + 1
+            return False
+
+        qo_lens = np.asarray(forward_batch.extend_seq_lens_cpu, dtype=np.int64)
+        if len(qo_lens) != len(mask):
+            # Partition computed for a different batch shape than the one that arrived
+            # (e.g. a padded graph replay). Refuse rather than mis-slice.
+            return False
+        seq_lens_cpu = forward_batch.seq_lens_cpu.to(torch.int64)
+        dev = forward_batch.seq_lens.device
+        rp_cpu = forward_batch.req_pool_indices.tolist()
+
+        tok_off = np.zeros(len(qo_lens) + 1, dtype=np.int64)
+        np.cumsum(qo_lens, out=tok_off[1:])
+
+        def tok_idx(rows):
+            return torch.from_numpy(
+                np.concatenate([np.arange(tok_off[r], tok_off[r + 1]) for r in rows])
+            ).to(dev, non_blocking=True)
+
+        def indptr(vals):
+            out = torch.zeros(len(vals) + 1, dtype=torch.int32)
+            out[1:] = torch.from_numpy(np.cumsum(vals).astype(np.int32))
+            return out.to(dev, non_blocking=True)
+
+        r2t = self.req_to_token_pool.req_to_token
+        # FA3 side. page_table is indexed by REQ POOL index, not batch row: req_to_token is a
+        # pool-sized table (upstream does the same at flashattention_backend.py:1028).
+        max_k = int(seq_lens_cpu[fa3_rows].max())
+        fa3_t = torch.as_tensor(
+            [rp_cpu[r] for r in fa3_rows], dtype=torch.int64, device=dev
+        )
+        page_table = r2t[fa3_t, :max_k]
+        if self.page_size > 1:
+            page_table = page_table // self.page_size
+        # FA2 side, planned through flashinfer's public API with explicit indptr/indices, so no
+        # second KVLocPlan is needed and the arrays come from the same req_to_token.
+        n2 = len(fa2_rows)
+        kv2_indices = torch.cat(
+            [r2t[rp_cpu[r], : int(seq_lens_cpu[r])] for r in fa2_rows]
+        )
+        if self.fused_fa2_wrapper is None:
+            self.fused_fa2_wrapper = BatchPrefillWithPagedKVCacheWrapper(
+                self.workspace_buffer, "NHD", backend=self.prefill_backend
+            )
+        self.fused_fa2_wrapper.begin_forward(
+            indptr(qo_lens[fa2_rows]),
+            indptr(seq_lens_cpu[fa2_rows].numpy()),
+            kv2_indices,
+            self.kv_last_page_len[:n2],
+            self.num_qo_heads,
+            self.num_kv_heads,
+            self.head_dim,
+            1,
+            q_data_type=self.q_data_type,
+            kv_data_type=self.data_type,
+            non_blocking=True,
+        )
+        self.fused_split_plan = dict(
+            fa3_tok=tok_idx(fa3_rows),
+            fa2_tok=tok_idx(fa2_rows),
+            cu_q=indptr(qo_lens[fa3_rows]),
+            max_q=int(qo_lens[fa3_rows].max()),
+            page_table=page_table,
+            cache_seqlens=forward_batch.seq_lens[
+                torch.as_tensor(fa3_rows, dtype=torch.int64, device=dev)
+            ].to(torch.int32),
+            n_fa3=len(fa3_rows),
+            n_fa2=n2,
+        )
+        return True
+
+    def _fused_split_dispatch(self, q, layer, forward_batch, causal, logits_soft_cap):
+        """Run the FA3/FA2 SM-pre-assigned split for one layer, or return None.
+
+        The two row subsets are DISJOINT, so the outputs combine by SCATTER (`index_copy_`) --
+        unlike upstream's ragged+paged pair, which covers the same rows and merges via LSE.
+
+        FA3's share of the GPU goes through upstream FA3's OWN public parameter, `sm_margin`
+        ("can be tuned if some SMs are used for communication"), so the SM pre-assignment needs
+        no private entry point on that side. Returning None is not a silent fallback for a
+        broken split: it means this layer or batch is outside the split's verified scope, and
+        the caller then takes the ordinary single-wrapper path.
+        """
+        pl = self.fused_split_plan
+        if pl is None:
+            return None
         # Features the split does not yet cover. Each is refused, never approximated: the
         # alternative is silently wrong attention, which a throughput A/B would not reveal.
         # TODO(swa): a sliding-window layer reads `self._swa_kv_pool` with its own cache locs
@@ -1389,127 +1481,52 @@ class FlashInferAttnBackend(AttentionBackend):
             # Item-aware masking takes precedence over the split's uniform causal mask.
             return None
 
-        mask, _q_tiles, _kv_tiles = self.fused_split_mask
-        mask = np.asarray(mask, dtype=bool)
-        fa3_rows = np.nonzero(mask)[0]
-        fa2_rows = np.nonzero(~mask)[0]
-        if len(fa3_rows) == 0 or len(fa2_rows) == 0:
-            # One-sided partition: no split to run. The decode-population guard refuses
-            # fusion for pure long-prefill batches by design, so this is the common case
-            # on a prefill-only workload and must not be read as a failure.
-            self.fused_split_onesided = getattr(self, "fused_split_onesided", 0) + 1
-            return None
-
-        dev = q.device
         hq, hd = layer.tp_q_head_num, layer.head_dim
-        qo_lens = np.asarray(forward_batch.extend_seq_lens_cpu, dtype=np.int64)
-        if len(qo_lens) != len(mask):
-            # The partition was computed for a different batch shape than the one that
-            # arrived (e.g. a padded graph replay). Refuse rather than mis-slice.
-            return None
-        seq_lens_cpu = forward_batch.seq_lens_cpu.to(torch.int64)
-
-        # Token rows of each request, in the flat q layout.
-        tok_off = np.zeros(len(qo_lens) + 1, dtype=np.int64)
-        np.cumsum(qo_lens, out=tok_off[1:])
-
-        def tok_idx(rows):
-            return torch.from_numpy(
-                np.concatenate([np.arange(tok_off[r], tok_off[r + 1]) for r in rows])
-            ).to(dev, non_blocking=True)
-
         qv = q.view(-1, hq, hd)
         o = torch.empty_like(qv)
-        rp = forward_batch.req_pool_indices
 
-        # ---------------- FA3 half: upstream flash_attn_with_kvcache ----------------
-        fa3_t = torch.from_numpy(fa3_rows).to(dev, non_blocking=True)
-        fa3_tok = tok_idx(fa3_rows)
-        max_k = int(seq_lens_cpu[fa3_rows].max())
-        # Upstream FA3 documents page_table as "the block table of each prompt",
-        # [batch, max_blocks]; req_to_token is already in that shape, so the subset is a
-        # gather. (The flat-to-dense conversion in mixed_dispatch.dense_block_table is for
-        # flashinfer's vector-sparse layout, which this path does not use.)
-        # Indexed by REQ POOL index, not by batch row: req_to_token is a pool-sized table
-        # (upstream does the same at flashattention_backend.py:1028).
-        page_table = self.req_to_token_pool.req_to_token[rp[fa3_t], :max_k]
-        if self.page_size > 1:
-            page_table = page_table // self.page_size
-        cu_q = torch.zeros(len(fa3_rows) + 1, dtype=torch.int32, device=dev)
-        cu_q[1:] = torch.from_numpy(np.cumsum(qo_lens[fa3_rows])).to(dev)
-        k_buf = forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id)
-        v_buf = forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id)
-        k_buf = k_buf.view(-1, self.page_size, layer.tp_k_head_num, hd)
-        v_buf = v_buf.view(-1, self.page_size, layer.tp_v_head_num, hd)
         from sglang.kernels.ops.attention.flash_attention import flash_attn_with_kvcache
 
+        k_buf = forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id).view(
+            -1, self.page_size, layer.tp_k_head_num, hd
+        )
+        v_buf = forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id).view(
+            -1, self.page_size, layer.tp_v_head_num, hd
+        )
         o_fa3 = flash_attn_with_kvcache(
-            q=qv[fa3_tok],
+            q=qv[pl["fa3_tok"]],
             k_cache=k_buf,
             v_cache=v_buf,
-            page_table=page_table,
-            cache_seqlens=forward_batch.seq_lens[fa3_t].to(torch.int32),
-            cu_seqlens_q=cu_q,
-            max_seqlen_q=int(qo_lens[fa3_rows].max()),
+            page_table=pl["page_table"],
+            cache_seqlens=pl["cache_seqlens"],
+            cu_seqlens_q=pl["cu_q"],
+            max_seqlen_q=pl["max_q"],
             softmax_scale=layer.scaling,
             causal=causal,
             softcap=logits_soft_cap if logits_soft_cap else 0.0,
             sm_margin=self.fused_sm_margin,
         )
-        o.index_copy_(0, fa3_tok, o_fa3.view(-1, hq, hd).to(o.dtype))
+        o.index_copy_(0, pl["fa3_tok"], o_fa3.view(-1, hq, hd).to(o.dtype))
 
-        # ---------------- FA2 half: flashinfer persistent paged wrapper ----------------
-        # Planned over the subset only, through flashinfer's public plan API with explicit
-        # indptr/indices -- so no second KVLocPlan is needed and the arrays are built from the
-        # same req_to_token the FA3 table came from.
-        if self.fused_fa2_wrapper is None:
-            self.fused_fa2_wrapper = BatchPrefillWithPagedKVCacheWrapper(
-                self.workspace_buffer, "NHD", backend=self.prefill_backend
-            )
-        n2 = len(fa2_rows)
-        fa2_t = torch.from_numpy(fa2_rows).to(dev, non_blocking=True)
-        fa2_tok = tok_idx(fa2_rows)
-        kv2_len = seq_lens_cpu[fa2_rows]
-        kv2_indptr = torch.zeros(n2 + 1, dtype=torch.int32, device=dev)
-        kv2_indptr[1:] = torch.cumsum(kv2_len, 0).to(dev, torch.int32)
-        r2t = self.req_to_token_pool.req_to_token
-        kv2_indices = torch.cat(
-            [r2t[int(rp[r]), : int(seq_lens_cpu[r])] for r in fa2_rows]
-        )
-        qo2_indptr = torch.zeros(n2 + 1, dtype=torch.int32, device=dev)
-        qo2_indptr[1:] = torch.from_numpy(np.cumsum(qo_lens[fa2_rows])).to(dev, torch.int32)
-        self.fused_fa2_wrapper.begin_forward(
-            qo2_indptr,
-            kv2_indptr,
-            kv2_indices,
-            self.kv_last_page_len[:n2],
-            self.num_qo_heads,
-            self.num_kv_heads,
-            self.head_dim,
-            1,
-            q_data_type=self.q_data_type,
-            kv_data_type=self.data_type,
-            non_blocking=True,
-        )
         o_fa2 = self.fused_fa2_wrapper.forward(
-            qv[fa2_tok],
+            qv[pl["fa2_tok"]],
             forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id),
             causal=causal,
             sm_scale=layer.scaling,
             logits_soft_cap=logits_soft_cap,
         )
-        o.index_copy_(0, fa2_tok, o_fa2.view(-1, hq, hd).to(o.dtype))
+        o.index_copy_(0, pl["fa2_tok"], o_fa2.view(-1, hq, hd).to(o.dtype))
 
         # Always-on composition counter. A serving A/B whose split never fired is
-        # indistinguishable from a null result, and a counter that is only logged under a
-        # debug flag has already produced one false pass on this project.
+        # indistinguishable from a null result, and a counter logged only under a debug flag
+        # has already produced one false pass on this project.
         self.fused_split_calls = getattr(self, "fused_split_calls", 0) + 1
-        if self.fused_split_calls % 200 == 1:
+        if self.fused_split_calls % 500 == 1:
             logger.info(
                 "FUSED_SPLIT_CALLS %d (fa3_rows=%d fa2_rows=%d sm_margin=%d onesided=%d)",
                 self.fused_split_calls,
-                len(fa3_rows),
-                len(fa2_rows),
+                pl["n_fa3"],
+                pl["n_fa2"],
                 self.fused_sm_margin,
                 getattr(self, "fused_split_onesided", 0),
             )

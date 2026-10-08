@@ -9601,3 +9601,19 @@ fused drain iterates, and no work can be stranded past the bound. Hypothesis 5 i
 rather than a run, and the plan/drain coverage question is closed.
 That leaves the fault inside the per-cluster WORK ASSIGNMENT or Runner1's execution of it, which is
 where the device `printf` goes -- the instrument deferred five times in favour of cheaper guesses.
+
+**Device `printf` added to the work loop (`persistent.cuh`, guarded by `-DFLASHINFER_TRACE_WORK`,
+which previously existed only as a define with no code behind it). First run's output is NOT
+evidence and must not be read as such:** only **17** `[WI]` lines survived, all from clusters
+243-257 with EMPTY ranges (`tileQ=16 range=[4,4) n=0`, `tileQ=64 range=[0,0) n=0`), and **zero**
+`tileQ=128` lines. For ~258 clusters x 3 runners that is a fraction of a percent of the expected
+output -- the device printf FIFO overflowed and kept a tail. Absence of `tileQ=128` lines here says
+nothing about whether Runner1 ran; row 2 computed correctly in the same run, which it could not have
+done if every range were truly empty.
+Two side facts the run DID establish: the drain claims cluster indices well past the SM count (243+,
+so `num_pers_clusters` is not ~132), and **the printf perturbs numerics** -- FA3 row 0 went from
+PASS (0.00585-0.00734) to FAIL (1.19145) with only the printf added, so any instrumented build is
+for coverage questions only and its rel errs must be ignored. That is consistent with this kernel's
+documented register sensitivity (168 regs with ~4.4 KB spill).
+Re-running with the printf gated on non-empty ranges, which drops the volume ~100x and should fit
+the FIFO.

@@ -3266,9 +3266,25 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         self.out_cache_loc = torch.cat(
             [self.out_cache_loc[: self.out_cache_loc.numel() - running_bs], verify_out_cache_loc]
         )
+        # 4a. prefix_lens for the tail rows. `ForwardBatch.init_new` passes
+        # `extend_prefix_lens = batch.prefix_lens` DIRECTLY -- it is an independent list, NOT
+        # derived from `seq_lens - extend_lens` as an earlier comment here claimed. mix_with_running
+        # filled it with decode semantics (`seq_len - 1`, correct for a 1-token extend), and a
+        # verify row extends n tokens from the committed prefix P, so it must be P.
+        # Left at P-1, the attention planner builds qo_indptr as cumsum(seq_lens - prefix_lens)
+        # and gets (P+n)-(P-1) = n+1 for each verify row -- one token too many per row. That
+        # surfaced far away as flashinfer's
+        #   "q.shape[0] (2051) does not match qo_indptr[-1] (2055)"
+        # with the deficit equal to the VERIFY ROW COUNT (measured 4, 3 and 2 across three runs,
+        # on both the paged and ragged wrappers), and it reproduced with the fused split OFF.
+        if verify_base_seq_lens_cpu is not None:
+            self.prefix_lens[pre_rows:] = [int(x) for x in verify_base_seq_lens_cpu.tolist()]
+        else:
+            # Same availability fallback mix_with_running uses; P = (P-1) + 1.
+            self.prefix_lens[pre_rows:] = [p + 1 for p in self.prefix_lens[pre_rows:]]
+
         # 4. EXTEND semantics for the tail rows: seq_lens = committed_prefix + n, so that
-        # extend_prefix_lens (derived as seq_lens - extend_lens) IS the committed prefix and
-        # positions run prefix .. prefix+n-1. That is the contract ordinary spec decode uses:
+        # the row's n draft tokens sit at positions prefix .. prefix+n-1. That is the contract ordinary spec decode uses:
         # a verify row's first draft token sits AT the committed prefix (measured, OFFCONV:
         # `seq_lens=[12] pos_head=[12,13,14,15]`).
         # Deriving it from whatever mix_with_running left (`- 1 + n`) yielded seq_lens ==

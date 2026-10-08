@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Callable, Optional
 
+import logging
+import os
+
 import torch
 
 from sglang.srt.compilation.torch_compile_decoration import set_torch_compile_config
@@ -60,6 +63,8 @@ if TYPE_CHECKING:
     from sglang.srt.speculative.eagle_worker_v2 import EagleDraftWorker
 
 _GREEDY_VARIANT = "greedy"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -638,6 +643,21 @@ class EAGLEDraftCudaGraphRunner(DecodeCudaGraphRunner):
         ):
             copy_dsts.append(buffers.bootstrap_room_ids_int[:raw_bs])
             copy_srcs.append(forward_batch.bootstrap_room_ids_int)
+        if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
+            _names = [
+                "seq_lens", "out_cache_loc", "positions",
+                "topk_p", "topk_index", "req_pool_indices",
+            ]
+            _bad = [
+                f"{_names[i] if i < len(_names) else f'extra{i}'}: dst{tuple(d.shape)} src{tuple(x.shape)}"
+                for i, (d, x) in enumerate(zip(copy_dsts, copy_srcs))
+                if d.shape != x.shape
+            ]
+            logger.error(
+                "DRAFTCOPY raw_bs=%s bs=%s raw_num_token=%s req_width=%s steps=%s topk=%s mismatch=[%s]",
+                raw_bs, bs, raw_num_token, self.captured_req_width,
+                self.speculative_num_steps, self.topk, "; ".join(_bad),
+            )
         _grouped_foreach_copy_(copy_dsts, copy_srcs)
 
         # hidden_states is large + contiguous: copy_() uses the cudaMemcpyAsync

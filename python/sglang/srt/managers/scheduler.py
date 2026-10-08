@@ -4147,14 +4147,31 @@ class Scheduler(
             and new_batch.input_embeds is None
             and all(r.beam_group is None for r in running_batch.reqs)
         ):
+            if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
+                _si = running_batch.spec_info
+                _tp = getattr(_si, "topk_p", None)
+                logger.error(
+                    "MIXEDGATE pre-filter reqs=%d spec_info=%s truthy=%s topk_p=%s",
+                    len(running_batch.reqs), type(_si).__name__, bool(_si),
+                    None if _tp is None else tuple(_tp.shape),
+                )
             running_batch.filter_batch()
+            if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
+                _si = running_batch.spec_info
+                _tp = getattr(_si, "topk_p", None)
+                logger.error(
+                    "MIXEDGATE post-filter reqs=%d spec_info=%s topk_p=%s",
+                    len(running_batch.reqs), type(_si).__name__,
+                    None if _tp is None else tuple(_tp.shape),
+                )
             if not running_batch.is_empty():
                 running_batch.prepare_for_decode()
                 new_batch.mixed_spec_running = running_batch
-                new_batch.decoding_reqs = running_batch.reqs
-                running_batch = ScheduleBatch(
-                    reqs=[], batch_is_full=running_batch.batch_is_full
-                )
+                # Unlike upstream's mixed chunk, the decode rows do NOT live inside the
+                # batch we return -- forward_mixed_spec merges them onto a private copy.
+                # So the scheduler keeps owning them: emptying running_batch here dropped
+                # the decode reqs and let `running_batch = last_batch` (the prefill batch)
+                # take their place, leaving reqs and spec_info different widths.
                 return new_batch, running_batch
 
         # Mixed-style chunked prefill
@@ -4505,6 +4522,17 @@ class Scheduler(
                         batch.spec_info.dsa_topk_indices is not None
                     )
                     batch.spec_info.future_indices = future_indices
+                    # 4-mode step: the verify half ran against a batch the scheduler still
+                    # owns (self.running_batch), so give it its OWN next draft input.
+                    # Without this it keeps the pre-step input, whose row count no longer
+                    # matches the batch after any filtering.
+                    _mix_run = getattr(batch_result, "mixed_running_batch", None)
+                    _mix_res = getattr(batch_result, "mixed_running_result", None)
+                    if _mix_run is not None and _mix_res is not None:
+                        _mix_run.spec_info = _mix_res.next_draft_input
+                        _mix_run.spec_info.future_dsa_topk_indices_available = (
+                            _mix_run.spec_info.dsa_topk_indices is not None
+                        )
             elif self.enable_pdmux and batch.forward_mode.is_split_prefill():
                 resolve_forward_inputs(batch, self.future_map)
                 batch_result = self.tp_worker.forward_batch_split_prefill(batch)
@@ -4821,6 +4849,18 @@ class Scheduler(
             self.batch_result_processor.process_batch_result_prebuilt(batch)
         elif batch.forward_mode.is_idle():
             self.batch_result_processor.process_batch_result_idle(batch, result)
+
+        # 4-mode step: one forward produced TWO logical batches. The prefill half was
+        # dispatched above; commit the verify half against the running batch the
+        # scheduler still owns, so its accepted tokens, seq_lens and finished reqs land.
+        # Cleared first: the result is reprocessed on some paths and the decode commit
+        # is not idempotent.
+        _mix_run = getattr(result, "mixed_running_batch", None)
+        _mix_res = getattr(result, "mixed_running_result", None)
+        if _mix_run is not None and _mix_res is not None:
+            result.mixed_running_batch = None
+            result.mixed_running_result = None
+            self.batch_result_processor.process_batch_result_decode(_mix_run, _mix_res)
 
         # Submit this batch's queued host backups before the next scheduler step.
         self.tree_cache.flush_pending_backups()

@@ -9484,3 +9484,34 @@ not: whether the 55 unwritten rows correspond to items that were enqueued but ne
 items consumed with a wrong q offset. Everything cheaper has now been tried and recorded
 (`TRACE_WORK` emits nothing; `WG_DRAIN=0` crashes; the qo sweep and NaN-index attribution are done),
 so the counter is the smallest remaining step that can still settle it.
+
+**Traced the task0 gap to the exact loop, and to whose responsibility coverage is.**
+`persistent_fa3_fused.cuh:239-252`, the drain loop:
+```
+while (true) {
+  if (ltid == 0) *s_cluster = atomicAdd(params_2.cluster_cursor, 1);
+  NamedBarrier::sync(128, kQueueBarrier);
+  const uint32_t c = *s_cluster;
+  if (c >= n_clusters) break;
+  Runner1::Run(params_1, &smem_storage_1, c, tid_base, s_merge);   // tile128 = task0
+  Runner2::Run(params_2, ..., c, ...);                              // tile64  = task1
+  Runner3::Run(params_3, ..., c, ...);                              // tile16  = task2
+}
+```
+and `n_clusters = params_2.num_pers_clusters`, which the scheduler sets from
+`num_clusters = num_sm / cluster_size` (`scheduler.cuh:1325`, capped at 1334) -- i.e. **SM-derived,
+not work-derived**. So this is a persistent-worker drain: `c` is a WORKER SLOT, every Runner is
+invoked for every slot, and covering all of a task's tiles is each `Runner::Run`'s internal
+mapping, not the queue's. That is consistent with the unwritten count being invariant across
+sm_split 48/32/16 -- the worker count was never the limiter, so no SM-partition explanation was
+ever going to work, and the "narrow drain leaves items unconsumed" hypothesis is now also unlikely
+(the loop drains until the cursor passes n_clusters; it does not stop early).
+
+**So the fault is inside `Runner1::Run`'s tile mapping for a task0 request** (tile128 class), which
+is where the instrumentation belongs: count, per worker slot, which (request, tile) pairs Runner1
+claims, and compare against the 5 packed-128 tiles that row 1's 609 packed rows require. A
+device-side `printf` guarded by the existing `-DFLASHINFER_TRACE_WORK` define is the cheapest form
+(the define is already plumbed through the harness at `test_fused_server_batch.py:325` but is
+referenced NOWHERE in the kernel -- `persistent.cuh:379` only mentions it in a comment, which is
+exactly why `TRACE_WORK=1` printed nothing). Adding the printf there makes that flag do what its
+name says, for this and every future coverage bug.

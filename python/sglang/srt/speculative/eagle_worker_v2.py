@@ -1348,6 +1348,14 @@ class EAGLEWorkerV2(BaseSpecWorker):
         grammar_barrier=None,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ):
+        # 4-mode step: the scheduler attached a running batch for this step (mixed_spec_running)
+        # instead of merging it, because the merge needs draft tokens that only draft() produces.
+        # WITHOUT this branch the attached batch is never consumed and its KV slots are orphaned --
+        # measured as `pool memory leak detected`, identical byte-for-byte across two runs because
+        # the dispatch was simply missing.
+        if getattr(batch, "mixed_spec_running", None) is not None:
+            return self.forward_mixed_spec(batch, pp_proxy_tensors=pp_proxy_tensors)
+
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
             if not (
                 batch.is_extend_in_batch and self.enable_dp_spec_prefill_coordination

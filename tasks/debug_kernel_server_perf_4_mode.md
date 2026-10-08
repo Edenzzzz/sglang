@@ -440,7 +440,28 @@ Evaluation completeness (added 2026-10-08, user-requested):
         through the webshell (that timed out at 900 s). Pin the clone to the commit the port was
         read against: upstream main moved `b7b2975b5` -> `54b551df8` within hours.
 
-      **4-mode port on upstream: merge + single forward RUN; failure is the documented missing commit
+      **4-mode port on upstream, 17 commits: every stage now exists, each added in response to a
+measured failure (2026-10-08).** Branch `upstream_port`, worktree `/opt/tiger/sglang-up`, tested
+with `drivers/portchk.sh` against pinned upstream `b7b2975b5` in the clean venv. The failure
+sequence IS the list of upstream contracts the fork never had to satisfy:
+
+| # | failure observed | cause / fix |
+|---|---|---|
+| 6 | pool leak, byte-identical twice | `forward_mixed_spec` was never CALLED -- no dispatch branch. Identical numbers are the tell that new code is not running. |
+| 7-8 | `'NoneType' has no attribute 'merge'` | `merge_batch` dereferences `sampling_info.penalizer_orchestrator`; MEASURED that the PREFILL batch lacks it and the running decode batch has it -- the opposite of two guesses. |
+| 9 | `tensor a (2055) vs b (2051)`, off by `draft_token_num` | draft tokens added twice: `eagle_prepare_for_verify` already sets `running.input_ids`, and `merge_batch` concatenates it. |
+| 10 | `shape '[1, 4]' invalid for input of size 1` | a MIXED batch keeps only the last logit per row; verify needs one per draft token. Carry `mixed_verify_tokens` ScheduleBatch -> ForwardBatch -> LogitsMetadata and keep the tail rows' every token. |
+| 11-12 | `SimpleNamespace` missing `seq_lens`, then `ngram_embedding_info` | a hand-built sampler view needs an open-ended field tail; swap `sampling_info` on the REAL ForwardBatch instead. |
+| 13 | `'tuple' has no attribute 'extra_keep_alive_refs'` | the scheduler wants a `GenerationBatchResult`; attach the verify half as `mixed_running_result`. |
+| 14 | relay stash: `payload.topk_p` is None | both draft extends must run, or the next step has no draft input. (Predicted in the previous commit, then observed.) |
+| 15-17 | `index 4 out of bounds`, `tensor a (4) vs b (5)`, `shape [1] vs broadcast [4]` | upstream's merge MUTATES the prefill batch (the fork built a separate worker batch). Fixed structurally twice: merge onto a COPY, and DELEGATE to `mix_with_running` + widen the tail to n tokens, so upstream owns the field list. |
+
+**Method note, recorded because it cost three rounds:** when fixes start arriving one field or one
+attribute at a time, the structure is wrong, not nearly right. That applied to the sampler view
+(11-12) and to the merge (15-17); in both cases the restructured version is SHORTER than the
+patched one. Also: an identical failure after a fix means the code did not run.
+
+**4-mode port on upstream: merge + single forward RUN; failure is the documented missing commit
 step (2026-10-08).** Four commits on branch `upstream_port` (worktree `/opt/tiger/sglang-up`):
 `mix_with_verify` (85562edfa), the scheduler's deferred merge + `forward_mixed_spec` (47720d9c1),
 the logits split into upstream's `eagle_sample` (9450daf39). Smoke test `drivers/portchk.sh` on the

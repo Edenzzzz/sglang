@@ -9404,3 +9404,33 @@ arithmetic, check whether its work items are enumerated with the right q offsets
 prefix is 0 (every failing case here has `prefix[1] = 0`, which is also the shape my notes flag as
 the unified serving crash's distinguishing feature: `prefix 0 where kv is shorter than the packed q
 extent`). Do NOT take any fused timing until both are fixed.
+
+### NaN rows attributed: they ARE row 1's, and they are its FIRST 55 — 2026-10-08
+
+Added a NaN-index diagnostic to the harness (prints the failing indices and attributes them to a
+row span). Result, identical at sm_split 48 and 32:
+
+```
+unwritten (NaN) rows = 55/512
+NaN idx first/last = [424, 425, 426, 427, 428, 429] ... [473, 474, 475, 476, 477, 478]
+NaN by row: row1(task0, span 424-510): 55
+nA=512 qo_c=[0, 424, 511, 512]
+```
+
+So the NaN rows are **424-478: the FIRST 55 rows of the task0 row**, and its LAST 32 (479-510) are
+written. That corrects the previous bullet twice over: the rows DO belong to row 1 (the
+"constant 55 regardless of qo1" reasoning was right that it does not scale, wrong that it implied
+another row), and the written window sits at the END of the row, not the start.
+
+Reconciling with the qo sweep: writes = qo for qo <= 64, and qo - 55 for qo >= 87 (87->32, 96->41,
+128->73). So the unwritten PREFIX saturates at 55 while the written suffix grows. A fixed-size
+window does not explain that; a work-item enumeration whose q-offset is computed from the row END
+(or from a cumulative offset that is 55 too large for this row) does. Note 55 is also exactly
+`qo_c[1] - 369`... no clean relation to 424 or 87, so the next step is to read it off the plan
+rather than infer: dump the task0 work items (q_start, q_len, tile index) for this fixture and
+compare against the row's true span 424-510.
+
+Combined with "rel err ~1.0 at qo1 <= 64 with NOTHING unwritten", the task0 path has a wrong q
+offset AND wrong values; both are consistent with one bug in how task0 work items are addressed,
+which is the single thing to fix next. The FA3 row's PASS (0.00662, split-KV active) and the task2
+decode row's PASS (0.00070) are unaffected by this and stand.

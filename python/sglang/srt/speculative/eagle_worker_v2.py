@@ -1568,8 +1568,12 @@ class EAGLEWorkerV2(BaseSpecWorker):
         ver_logits = lo.next_token_logits[n_pre_rows:]
         pre_hidden = ver_hidden = None
         if lo.hidden_states is not None:
+            # Bound the verify slice explicitly. These are FULL per-token states, and under a
+            # prefill-graph bucket the tensor is PADDED past the real token count, so an
+            # open-ended [t_pre:] handed the verify draft extend padding rows as hidden
+            # states -- corrupting the next draft tokens silently instead of failing.
             pre_hidden = lo.hidden_states[:t_pre]
-            ver_hidden = lo.hidden_states[t_pre:]
+            ver_hidden = lo.hidden_states[t_pre : t_pre + merged.mixed_verify_tokens]
         pre_out = LogitsProcessorOutput(
             next_token_logits=pre_logits, hidden_states=pre_hidden
         )
@@ -1586,6 +1590,12 @@ class EAGLEWorkerV2(BaseSpecWorker):
                 n_pre_rows, t_pre, tuple(lo.next_token_logits.shape),
                 tuple(pre_logits.shape), tuple(ver_logits.shape),
                 verify_input.draft_token_num,
+            )
+            logger.error(
+                "MIXEDHS hs=%s pre_hidden=%s ver_hidden=%s",
+                None if lo.hidden_states is None else tuple(lo.hidden_states.shape),
+                None if pre_hidden is None else tuple(pre_hidden.shape),
+                None if ver_hidden is None else tuple(ver_hidden.shape),
             )
 
         # Verify rows: hand the slice to upstream's own accept path, paired with the RUNNING batch

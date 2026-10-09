@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.39.0 — the plan builder runs and satisfies the merge contract (2026-10-09)
+
+`flashinfer@6aa16fc`. `port07/tests/test_plan_build.cu` on the vibecuda H200: **19/19 PASS**.
+First executed result of this port.
+
+- `FusedFourTaskPlan`'s device half is written: chunk choice (one per FA3 SM, rounded up to
+  `TILE_KV`), work-item enumeration, merge layout, per-task `work_indptr` (FA3 over exactly
+  `sm_split` CTAs), a bump allocator over page-locked staging, and one H2D copy.
+- `BuildFusedMergeLayout` rewritten to `BlockBatchReductionPersistent::Run`'s contract — 0.7's
+  merge for the *holistic* path. Reading `cascade.cuh` instead produced two claims that had to be
+  retracted; that kernel takes no `o_indices`, this one does. Four disagreements fixed:
+  per-packed-row `merge_indptr`, the list compacted over split rows, `kv_head_idx` out of the
+  grouping key, and one shared base per group. `partial_rows` 218624 → 31232 (the 7× head
+  over-count), slab 112 MB inside budget instead of 784 MB over.
+- The subtlest of those would not have crashed: giving each chunk its own base is the same slab
+  size in a different permutation, so chunk 0 of row r collided with chunk r of row 0 and the
+  merge would have reduced the wrong partials silently.
+- The gate checks the contract equality itself. `run_host_checks.sh` passed throughout all three
+  bugs because it only asserted monotonicity, counts and the round trip.
+- Plan is now **59** entries (15 shared + 4×11); `num_merge_rows` added; `num_fa3_clusters` still
+  last for `plan_info[-1]`.
+- Still no attention output: whether the dispatcher launches the merge is unverified (K1j), and
+  the fp32 reference has not run.
+
 ## v0.38.0 — the fused kernel is a loadable module on flashinfer 0.7 (2026-10-09)
 
 `torch.ops.fused_fa3.fused_run` registers. `sglang-up@f019410ff`, `flashinfer@b883589`.

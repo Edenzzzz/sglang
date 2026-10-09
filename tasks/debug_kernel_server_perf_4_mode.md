@@ -965,132 +965,43 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       `-DFLASHINFER_FUSED_UNIFIED_WGMMA=1`, the latter being the only configuration that
       instantiates `store_partial`.
 
-- [~] **K1c2 (2026-10-09). The CUDA body of `FusedFourTaskPlan` is WRITTEN and compiles, and
-      running it found a real layout conflict before the kernel ever executed.**
+- [x] **K1c2 CLOSED (2026-10-09, `flashinfer@6aa16fc`). The plan builder runs on GPU and
+      satisfies the merge contract: 19/19 PASS.** First thing this session that executed.
 
-      Written: chunk choice (one chunk per FA3 SM, rounded up to `TILE_KV=128` so no boundary
-      falls mid-tile), work-item enumeration, merge layout, per-task `work_indptr` (the FA3
-      task over exactly `sm_split` CTAs, which the dispatcher checks), a 16 B-aligned bump
-      allocator over page-locked staging, and ONE H2D copy. Compiles (`PLAN_COMPILES`), and
-      `tests/test_plan_build.cu` runs it on a mixed batch (2 long FA3 rows + 3 decode rows).
-
-      **It returns `cudaErrorInvalidValue`, and the cause is a partial-slab addressing conflict
-      -- the 511/512 class of bug, caught before execution this time.** With
-      `FLASHINFER_FUSED_PLAN_DEBUG=1`:
+      Command: `port07/tests/test_plan_build.cu`, vibecuda H200, mixed batch (2 long FA3 rows at
+      kv=8192/6144 + 3 decode rows), `sm_split=16`, 132 SMs:
 
       ```
-      items=0/0/21/1708  partial_rows=218624  int_bytes=72656/67108864
-      float_bytes=789669888/536870912 (o=783548416 lse=6121472)
+      [fused plan] items=0/0/21/1708 partial_rows=31232 int_bytes=99760/67108864
+      [fused plan] float_bytes=112809984/536870912 (o=111935488 lse=874496)
+      ALL PASS (0 failures)        -- 19 checks
+      (28 groups, 1708 items, 1708 with base)
       ```
 
-      `partial_rows` decomposes **exactly** as `112 * 128 * 10 + 84 * 128 * 7`, and those group
-      counts already include the 7 kv heads (row 0: 16 q-tiles x 7 heads; row 1: 12 x 7). So
-      `BuildFusedMergeLayout` assigns a **distinct partial row per kv head**, i.e.
-      `total_partial_rows` is head-inclusive.
+      `partial_rows` fell 218624 -> 31232, exactly the 7x kv-head over-count removed, and the
+      slab is 112 MB inside a 512 MB budget instead of 784 MB over it. The group/item counts
+      match by hand: 16 + 12 = 28 q-tile groups, and 16*10*7 + 12*7*7 = 1708 items.
 
-      That contradicts the writer. `store_partial` -- and the FA2 side in `persistent.cuh`,
-      which shares these buffers and the same merge kernel -- addresses
-      `partial_o[((base + row * num_kv_chunks + kv_chunk_idx) * num_kv_heads + kv_head_idx) *
-      HEAD_DIM]`, i.e. a **head-agnostic** `base` with an explicit head stride. Two
-      incompatible conventions:
+      `BuildFusedMergeLayout` is rewritten to `BlockBatchReductionPersistent::Run`'s contract,
+      fixing all four disagreements (per-packed-row `merge_indptr` with a terminator; the list
+      **compacted** over split rows with `o_indices` mapping back, since an uncompacted list
+      makes the merge zero unsplit rows over their direct write; `kv_head_idx` out of the
+      grouping key; one shared base per group advancing by `rows*chunks`). New plan field
+      `num_merge_rows`; shared entries 14 -> 15, so **59** at NUM_TASKS=4, with
+      `num_fa3_clusters` still last.
 
-      | | `partial_indptr` | slab shape |
-      |---|---|---|
-      | `BuildFusedMergeLayout` (now) | per-head row | `[total_partial_rows, head_dim]` |
-      | both writers + 0.7's merge kernel | head-agnostic | `[rows, num_kv_heads, head_dim]` |
+      The gate checks the **contract equality itself**, which `run_host_checks.sh` never did --
+      it only asserted monotonicity, counts and the round trip, which is exactly why all three
+      layout bugs passed it. One check in the gate's own first version was also wrong (it folded
+      a per-request chunk count into one number, while row 0 has 10 chunks and row 1 has 7); it
+      now groups task-3 items by their own `(batch_idx, q_start)` and requires one base per group.
 
-      **The writers' convention wins** -- it is what 0.7's
-      `PersistentVariableLengthMergeStatesKernel` reads and what the FA2 roles already do, and
-      the two roles must share one layout. So `BuildFusedMergeLayout` must group over
-      `(task, batch, q_start)` and keep `kv_head_idx` OUT of the key, emitting one row group per
-      q tile with the head carried by the stride. My `* num_kv_heads` float sizing is then
-      correct and the 7x over-count disappears.
-
-      **There is a SECOND disagreement, and it is the worse one.** The writer uses ONE base per
-      group with chunks **interleaved within a row** (`base + r * num_kv_chunks + kv_chunk_idx`);
-      `BuildFusedMergeLayout` gives each chunk **its own base** and lays chunks out
-      **contiguously** (`base_c = g + c * rows`). At `rows=128, chunks=10`:
-
-      | | row 0 / chunk 0 | row 0 / chunk 1 | row 1 / chunk 0 |
-      |---|---|---|---|
-      | writer writes at | `g+0` | `g+1` | `g+10` |
-      | layout allocated | `g+0` | `g+128` | `g+1` |
-
-      Same total size, **completely different permutation**: chunk 0 of row r collides with
-      chunk r of row 0. This would not have overflowed any buffer and would not have tripped an
-      assert -- it would simply have merged the wrong partials, silently. It is the same shape of
-      error as the retracted symmetric-mode result.
-
-      So the correct layout is: group over `(task, batch, q_start)` with `kv_head_idx` out of
-      the key, give **every member of a group the same** `partial_indptr` (the group base), and
-      advance `total_partial_rows` by `rows * num_chunks` -- where `num_chunks` is
-      `members.size() / num_kv_heads`, so `BuildFusedMergeLayout` needs `num_kv_heads` passed in.
-      Then the `* num_kv_heads` float sizing is right and the 7x over-count also disappears.
-
-      **The merge kernel was then read, and it settles all of this -- plus a THIRD disagreement
-      and a missing launch.** `PersistentVariableLengthMergeStatesKernel`
-      (`flashinfer/attention/cascade.cuh`) does:
-
-      ```
-      for i in [0, seq_len * num_heads):
-        pos = i / num_heads;  head_idx = i % num_heads
-        num_index_sets = indptr[pos + 1] - indptr[pos]
-        reads  V + ((indptr[pos] + k) * num_heads + head_idx) * head_dim,  k < num_index_sets
-        writes v_merged + (pos * num_heads + head_idx) * head_dim
-      ```
-
-      Four consequences, in order of how much they change the design:
-
-      1. **`indptr` is indexed by OUTPUT ROW, not by tile/group.** It has `seq_len + 1` entries,
-         one per merged row. `BuildFusedMergeLayout` pushes one entry per **group** (per q tile),
-         so the array is the wrong length and the wrong thing entirely. This is the third
-         disagreement, and the one that assuming would have gotten wrong -- the two found from
-         the writer side would both have been "fixed" and it would still have been broken.
-      2. Chunks of one output row sit at **consecutive** `indptr[pos] + k`, with `* num_heads`
-         as the stride. That **confirms** both earlier conclusions: the base is head-agnostic and
-         the writer's `base + r * num_kv_chunks + kv_chunk_idx` is exactly right, provided
-         `indptr` for row r equals `base + r * num_kv_chunks`.
-      3. **RETRACTED -- "no `o_indices` anywhere" and "nothing launches the merge".** Both came
-         from reading `cascade.cuh`, which is the WRONG merge for this path, and from a grep
-         (`MergeStates|VariableLengthMerge|merge_o_indices`) that missed the right one because
-         the struct is named `BlockBatchReductionPersistent`. The holistic path's merge lives in
-         **our own ported `persistent.cuh`**, and its `Run` takes **both** `indptr` and
-         `o_indices`. So `merge_o_indices` does have a consumer and the plan must keep it.
-
-      **The authoritative contract**, from `BlockBatchReductionPersistent::Run`:
-
-      ```
-      // V:        [num_packed_qo_len x num_kv_tiles, num_kv_heads, head_dim]
-      // v_merged: [qo_len, num_kv_heads, gqa_group_size, head_dim]
-      for i in [0, num_packed_qo_len * num_kv_heads):
-        packed_qo_idx  = i / num_kv_heads
-        kv_head_idx    = i % num_kv_heads
-        num_index_sets = indptr[packed_qo_idx + 1] - indptr[packed_qo_idx]
-        slot           = (indptr[packed_qo_idx] + off) * num_kv_heads + kv_head_idx
-      ```
-
-      This confirms all three writer-side conclusions and fixes the contract precisely:
-      `merge_indptr` is indexed by **packed q row** with `num_packed_qo_len + 1` entries (NOT one
-      per tile/group, which is what `BuildFusedMergeLayout` currently emits); the base is
-      **head-agnostic** with `* num_kv_heads` as the stride; and a row's chunks are
-      **consecutive** from `indptr[row]`. `store_partial`'s
-      `base + r * num_kv_chunks + kv_chunk_idx` is therefore exactly right provided
-      `indptr[row_r] == base + r * num_kv_chunks`, which holds iff each row of a tile gets
-      `num_kv_chunks` consecutive slots.
-
-      So the rewrite is: emit `merge_indptr` **per packed q row** (count = that row's chunk
-      count, 0 for unsplit rows that write O directly), `merge_o_indices[row]` = its output row,
-      and size the slab `[sum of per-row chunk counts, num_kv_heads, head_dim]` -- which makes
-      the `* num_kv_heads` float sizing correct and removes the 7x over-count.
-
-      Whether the fused dispatcher actually LAUNCHES `BlockBatchReductionPersistent` is still
-      unchecked and is the next thing to verify -- it is a separate question from the layout, and
-      the earlier claim that it does not was not established.
-
-      Note the host checks passed throughout: `run_host_checks.sh` only asserts monotonicity,
-      counts and the round trip, never agreement with the writer's addressing. Another gate that
-      measured less than it looked -- it needs a case that writes through the **computed
-      address** and reads it back, which would have caught both disagreements immediately.
+- [ ] **K1j. Does the fused dispatcher LAUNCH `BlockBatchReductionPersistent`?** Still
+      unverified, and deliberately not asserted either way -- claiming it did not was one of
+      last turn's two retractions. The kernel exists in the ported tree; what needs checking is
+      whether `FusedFA3PersistentDispatched` (or the ext) launches it after the attention grid,
+      and with `num_merge_rows` as `num_packed_qo_len`. Without that launch the partials are
+      written and never reduced. This is the last step before the fp32 reference.
 
 - [ ] **K1i. Recreate the correctness drivers.** The pod's `drv/` kept only the perf scripts
       (`b1_headroom.sh`, `b1b_headroom.sh`, `split_perf_mtp.sh`, `b1_analyze.py`, `b2_top.py`,

@@ -1398,6 +1398,32 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       computed from the wrong Q rows. **Prediction, not conclusion:** port the load path and see
       whether `fa3_1chunk` drops to the bf16 residual, as the FA2 side did.
 
+      **PREDICTION REFUTED (2026-10-10).** The hang is fixed (macro pairing) and `fa3_1chunk` now
+      runs to completion, but the numbers did not move:
+
+      | state | `fa3_1chunk` |
+      |---|---|
+      | store only | 6.153e+06, 254/256 |
+      | store + load + 32-lane mbarrier | **6.153e+06, 254/256** |
+      | `MODE=fa2` | 0.002126, 0/258 **PASS** |
+
+      The full packed-GQA feature is in place -- helpers, Q gather, `write_packed`, mbarrier init
+      -- and FA3 is wrong by the *same* amount over the *same* rows. So the residual does not come
+      from packed-GQA addressing. The hang-then-no-hang transition proves the new code is
+      compiled in, so this is not a build question.
+
+      **Established about the FA3 role, all by measurement:** the plan feeds it correctly; the
+      scheduler delivers all 56 items with every field right; the mainloop iterates the right KV
+      tile count; the packed-GQA path is complete; and the output is still off by 6e6 on the
+      simplest fixture (one unsplit row, no partials, no merge). **Four hypotheses killed this
+      way** -- items-never-ran, zero-iteration mainloop, unnormalised accumulator, packed-GQA
+      addressing.
+
+      **Next: explain the 2 rows that PASS.** 254 of 256 bad has survived every change. At gqa=4
+      and CTA_Q=128 a tile covers 32 tokens, so 2 is not a tile boundary -- whatever makes those
+      two rows correct is a sharper constraint than the 254 wrong ones, and cheaper to chase than
+      porting another component. Print which row indices pass.
+
       Open, concretely:
       - **[x] the packed-Q gather in `hopper/sparse_mainloop.cuh`** -- spliced in as the
         `#ifdef FLASHINFER_FUSED_PACKED_Q` arm with 0.7's TMA load as the `#else`.

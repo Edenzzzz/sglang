@@ -1329,8 +1329,30 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       3.076e+06. The defect is inside `fa3_prefill_body`'s mainloop/epilogue, with correct inputs,
       no split and no merge.
 
-      Next, and **not** another index hunt: the magnitude says unnormalised or uninitialised
-      accumulator. Our epilogue matches pristine 0.7 (neither calls `finalize`/`normalize`
+      **MAINLOOP DOES ITERATE -- that hypothesis is refuted (2026-10-10).** From every block on
+      `fa3_1chunk`: 56 mma lines, all `num_kv_tiles=1 swa=[0,-1) qo_len=1024 kv_len=128`.
+      `num_kv_tiles=1` is correct for kv=128 at TILE_KV=128, so the mainloop runs and `tOrO` is
+      written. Excluded by measurement, not argument.
+
+      **So, entirely by measurement:** the plan feeds the FA3 role correctly, the scheduler
+      delivers all 56 items with every field right, the mainloop iterates the right KV tile
+      count -- and the output is still off by 3.076e+06.
+
+      **Prime suspect: a UNITS mismatch in the FA3 epilogue.** `qo_len` reaches it as **1024**,
+      the PACKED extent (256 tokens x gqa 4). The scheduler presents packed deliberately -- its
+      own comment records that FA3's mainloop validates the tile index against `qo_len`, so a
+      token length there made every tile look out of range. But the epilogue writes `o`, laid out
+      `[tokens, num_qo_heads, head_dim]` with heads as a separate dimension, and clamps with
+      `row < qo_len - qo_tile_idx * CTA_Q`. At `qo_len=1024` that clamp never fires at the true
+      256-token boundary, so tiles past token 256 write rows the tensor does not have -- and the
+      gqa factor makes the row mapping wrong for **every** tile, not just the tail. A huge
+      residual without a fault is consistent, since `o` is the first of several large allocations.
+
+      **Candidate, not a finding.** Test by printing the epilogue's computed output row and
+      element offset against the tensor's true row count, from every block, before changing
+      anything.
+
+      Superseded candidate: the magnitude says unnormalised or uninitialised Our epilogue matches pristine 0.7 (neither calls `finalize`/`normalize`
       explicitly -- normalisation lives inside `mma_f16` / the `attention_updater`), so the
       question is whether the mainloop ran its KV iterations at all. Print `num_kv_tiles` and the
       updater's row sum from every block; a zero-iteration mainloop leaves `tOrO` untouched and

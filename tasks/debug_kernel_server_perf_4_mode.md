@@ -1109,8 +1109,48 @@ The six incompatibilities hit in sequence are all symptoms of that one gap:
 - [x] 2026-10-09 **increment 2a: BLOCKED, root-caused.** Harness ported through five
       incompatibilities (`drv/patch_harness.py`, `drv/run_verify.sh`); the sixth is a hard
       version gap. 32/32 cases error on the plan-length guard.
-- [ ] 2026-10-09 **DECISION NEEDED: port the fused kernel to flashinfer 0.7's HolisticPlanInfo,
-      or drop the single-fused-kernel variant.** This is C++ work against flashinfer internals
+### 2026-10-09 -- retargeting the build at 0.7 headers FAILS; the port is genuine C++ work
+
+I tried the cheap remedy first: compile the kernel against the installed wheel's bundled headers
+(`flashinfer/data/include`, which ships `attention/persistent.cuh`, `scheduler.cuh`, cutlass,
+spdlog and cccl) so its plan layout would match the running flashinfer by construction, with the
+0.3.1 source tree appended only for this project's own `persistent_fa3_fused.cuh`. That was worth
+one compile and it failed with specific, non-cosmetic errors:
+
+```
+hopper/variant_helper.cuh(54): error: class "AttentionVariantBase" has already been defined
+                               (previous definition at variant_helper.cuh:75)
+hopper/variants.cuh(168):      error: "DefaultAttention" has already been declared in this scope
+ext.cu(32):                    error: DefaultAttentionSm90 is not a template
+ext.cu(75):                    error: "StandardAttention" is ambiguous
+ext.cu(342-345):               error: HolisticPlanInfo<3> has no member
+                                 group_id_offset, group_nchunks_offset,
+                                 group_row_begin_offset, group_nrows_offset
+```
+
+**The last four are decisive.** 0.7's `HolisticPlanInfo` has not merely changed length -- it has
+**lost the four group tables** (`group_id`, `group_nchunks`, `group_row_begin`, `group_nrows`)
+that the kernel's **just-in-time reduction** indexes. Those tables are the mechanism by which
+split-KV partials are combined; the kernel cannot be compiled against 0.7 without reconstructing
+that information from whatever 0.7 provides instead. On top of that, 0.7's own
+`variant_helper.cuh` and `hopper/variant_helper.cuh` now collide when both are on the include
+path, and two variant types were renamed or made non-template.
+
+So **the header-retarget hypothesis is refuted, and my original assessment was right in
+substance**: the fused single kernel needs a real port to flashinfer 0.7 -- reworking the JIT
+reduction against a changed plan struct, plus the variant-type changes -- not a build-flag fix.
+Recorded so the cheap option is not retried.
+
+- [x] 2026-10-09 **build against 0.7 headers: REFUTED.** Four missing plan fields, one header
+      collision, two variant-type changes. `sglang-up@ee07b741b` + `5f486a485` keep the
+      retargeting logic (it is the right default if the kernel is ever ported) but it does not
+      compile today.
+- [ ] 2026-10-09 **port the fused kernel to flashinfer 0.7** -- reconstruct the JIT-reduction
+      group tables from 0.7's plan, resolve the variant-type changes, and avoid the
+      variant_helper collision. Substantial C++ work against flashinfer internals; the only route
+      to the one-launch cost structure.
+- [ ] 2026-10-09 **DECISION (not blocking): port the fused kernel, or bank the split's gains
+      and move to the scheduling axis.** This is C++ work against flashinfer internals
       (plan serialisation, the 4-task `UnifiedWgmmaTileScheduler` path), not a wiring task, and
       it is the only route to the one-launch cost structure that the serving measurements say is
       needed. Flagging rather than silently choosing: the alternative is to accept the

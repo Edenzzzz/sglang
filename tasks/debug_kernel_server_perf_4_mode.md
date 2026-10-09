@@ -691,7 +691,44 @@ the struct and `ToVector` against `NUM_TASK_ARGS = 10` and 10 reads in `FromVect
 round-trip would have misread every task. Found by enumerating pushes against reads, not by
 reading the diff. Hand-port these files; do not trust fuzz.
 
-- [x] 2026-10-09 **K1b done** (`persistent.cuh`, overlay, 11/16 hunks + 5 intentional drops).
+- [~] 2026-10-09 **K1b RETRACTED: `persistent.cuh` is NOT ported.** The first nvcc parse
+      (`port07/tests/nvcc_check.sh`, merged 0.7 + overlay include tree, sm_90a, C++20) gives
+      **7 errors**:
+      ```
+      (220) identifier "kPersistentMainloopBarrier" is undefined
+      (300) identifier "tid_base" is undefined
+      (327) identifier "cluster_override" is undefined
+      (327) identifier "kNoClusterOverride" is undefined
+      (414) identifier "thr_local_kv_offset" is undefined
+      (591) identifier "kPersistentMainloopBarrier" is undefined
+      (861) a template declaration is not allowed here
+      ```
+      Two distinct problems. **(a)** Five identifiers our 0.3.1-based file uses that 0.7 does not
+      provide -- they were defined in parts of 0.3.1 that 0.7 rewrote, so each needs a 0.7
+      equivalent found or written. That is the genuine porting work and it was invisible to
+      hunk accounting. **(b)** `(861) a template declaration is not allowed here` is a
+      **structural** error: the fuzzy apply misplaced code, exactly as it did in `scheduler.cuh`.
+      **My error, and worth naming:** I had already recorded that fuzzy patching is unsafe on
+      these files after it put `push_back` statements inside an error-message expression in
+      `scheduler.cuh` -- and then accepted the 11/16 fuzzy result for `persistent.cuh` because
+      invariant greps (`FUSED_GRID` present, `cluster_tile_q` guarded, no `MergeGroupJIT`) all
+      passed. Greps cannot see misplaced code. `persistent.cuh` must be **hand-ported** from
+      pristine 0.7, like `scheduler.cuh` was.
+      A third, smaller instance of the same blindness: the port carried a dangling
+      `#include "jit_merge.cuh"` for a header K1a dropped. Greps for every symbol in that header
+      returned 0; only the compile found the include.
+- [ ] **K1b2. Hand-port `persistent.cuh` onto pristine 0.7**, resolving the five missing
+      identifiers against 0.7's equivalents rather than transplanting 0.3.1's definitions.
+- [x] 2026-10-09 **overlay build mechanism established** -- a MERGED include tree (0.7's tree
+      copied, ours laid on top) rather than `-I` ordering. Both trees use relative includes, so a
+      partial overlay breaks them regardless of order; this is also what the real extension build
+      must do. `port07/tests/nvcc_check.sh`.
+- [x] 2026-10-09 **host checks pass and are the right granularity**: `FusedPlanInfo` round-trip
+      (58 entries, every field preserved, `plan_info[-1] == num_fa3_clusters`), work-item
+      enumeration (task0=0 task1=0 task2=7 task3=256, `max_splits_fa3=4`), merge layout (64
+      tiles, 32768 partial rows, CSR monotonic, unsplit rows absent from the merge lists).
+      These caught nothing that the compile then re-caught, i.e. they are complementary, not a
+      substitute -- the compile found what they structurally cannot.
 - [ ] 2026-10-09 **K1c in progress** -- 15/22 applied; the 7 rejects are the 4-task plan builder.
 
 #### A. Ultra fine-grained tile dispatcher for the different modes

@@ -996,12 +996,43 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       a per-request chunk count into one number, while row 0 has 10 chunks and row 1 has 7); it
       now groups task-3 items by their own `(batch_idx, q_start)` and requires one base per group.
 
-- [ ] **K1j. Does the fused dispatcher LAUNCH `BlockBatchReductionPersistent`?** Still
-      unverified, and deliberately not asserted either way -- claiming it did not was one of
-      last turn's two retractions. The kernel exists in the ported tree; what needs checking is
-      whether `FusedFA3PersistentDispatched` (or the ext) launches it after the attention grid,
-      and with `num_merge_rows` as `num_packed_qo_len`. Without that launch the partials are
-      written and never reduced. This is the last step before the fp32 reference.
+- [x] **K1j ANSWERED (2026-10-09). No, and it structurally cannot in 0.7's own form.**
+      Verified by reading the launch site rather than grepping for a call: `persistent.cuh:929`
+      launches **one cooperative kernel**
+
+      ```
+      PersistentKernelTemplate<BlockBatchPagedAttentionPersistent<KTraits1, Params>,
+                               BlockBatchPagedAttentionPersistent<KTraits2, Params>,
+                               BlockBatchReductionPersistent<ReductionKTraits>>
+      ...
+      cudaLaunchCooperativeKernel((void*)kernel, nblks, nthrs, args, smem_size, stream)
+      ```
+
+      so in 0.7 the merge is a **third role inside the same grid**, and the **cooperative**
+      launch is what gives it the grid-wide sync to run only after every partial is written. Our
+      fused dispatcher launches `cudaLaunchKernel` / `cudaLaunchKernelExC` with the three FA2
+      runners plus FA3 and **no reduction role**, non-cooperatively. So there is nothing to
+      "add a call to" -- the two designs differ in grid structure.
+
+      **Decision: launch the reduction as a SEPARATE kernel after the attention grid**, not as a
+      fourth role. Reasons, in order:
+      - A cooperative launch constrains the grid to what fits co-resident, which is exactly the
+        quantity `sm_split` pre-assignment is manipulating. Making the fused kernel cooperative
+        would couple the SM split to an occupancy constraint and is the opposite of the design.
+      - K1a already priced this: flashinfer's scheduled merge is a separate pass at 1682
+        launches / 10.66 ms in the B1b trace, and the in-kernel JIT rendezvous that avoided it
+        was measured at a 0.6%-of-GPU-time ceiling -- below the +/-1.5-3% serving noise floor.
+        So a separate pass is the already-measured choice, not a concession.
+      - `BlockBatchReductionPersistent::Run` is a `__device__` member, so a standalone launch
+        needs only a thin `__global__` wrapper plus `num_merge_rows` as `num_packed_qo_len`.
+
+- [ ] **K1k. Write that wrapper and launch it, then the fp32 reference.** A `__global__` over
+      `BlockBatchReductionPersistent<ReductionKTraits>::Run`, launched from
+      `FusedFA3PersistentDispatched` after the attention grid, taking `partial_o` / `partial_lse`
+      / `merge_indptr` / `merge_o_indices` / `num_merge_rows` / `num_kv_heads` /
+      `gqa_group_size`. Grid sized over `num_merge_rows * num_kv_heads`. Note its smem need
+      (`ReductionKTraits::SMEM_SIZE`) is sized independently of the attention roles', so it does
+      not have to fit inside the fused kernel's allocation.
 
 - [ ] **K1i. Recreate the correctness drivers.** The pod's `drv/` kept only the perf scripts
       (`b1_headroom.sh`, `b1b_headroom.sh`, `split_perf_mtp.sh`, `b1_analyze.py`, `b2_top.py`,

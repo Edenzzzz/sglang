@@ -1399,9 +1399,26 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       whether `fa3_1chunk` drops to the bf16 residual, as the FA2 side did.
 
       Open, concretely:
-      - **the packed-Q gather in `hopper/sparse_mainloop.cuh`** -- `cp_async` per lane; the
-        register round-trip form measured **-69% end to end**, so the async form is the one to
-        port;
+      - **[x] the packed-Q gather in `hopper/sparse_mainloop.cuh`** -- spliced in as the
+        `#ifdef FLASHINFER_FUSED_PACKED_Q` arm with 0.7's TMA load as the `#else`.
+        **`MODE=fa3_1chunk` now HANGS** (log stops after `pers_plan: ...`, no error, killed by the
+        400 s timeout) -- which is **exactly the symptom this doc predicted** for the remaining
+        piece. The packed path is one warp issuing its own `cp.async` completed with
+        `cp.async.mbarrier.arrive`, which tracks only the issuing thread's copies, so all 32 lanes
+        must arrive for themselves; the TMA path instead arms `barrier_Q` with
+        `arrive_and_expect_tx` for a single transaction arrival. Load ported, init not: the two
+        conventions meet on one barrier and the consumer waits forever.
+      - **[ ] THE remaining piece: `barrier_Q.init(cutlass::NumThreadsPerWarp)`** in
+        `prefill_sm90.cuh` behind `FLASHINFER_FUSED_PACKED_Q` / `FLASHINFER_FUSED_Q_MBARRIER`
+        (K1d2's deferred fourth change). Arming for 32 is also what lets Q complete **without** a
+        `cp.async` group drain -- `commit_group` otherwise sweeps the producer's in-flight KV
+        copies into Q's group and committed groups retire in order, so a drain waits on the whole
+        KV pipeline (0.3.1 prices that form at **~3x slow**).
+
+      **STALE figures warning:** `MODE=fa3` (45.34) and `MODE=mixed` (46.11) did **not** get fresh
+      runs this round -- the loop hung on `fa3_1chunk` first -- so those numbers predate the
+      packed-Q load splice and must not be read as results for the current state. `MODE=fa2`
+      remains **PASS** rel 0.002126, 0/258.
       - the Q mbarrier init in `prefill_sm90.cuh` behind `FLASHINFER_FUSED_PACKED_Q`. Distinctive
         mis-port symptom: arriving from 32 lanes on a barrier armed for 1 **hung for 1500 s**.
 

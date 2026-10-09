@@ -20,6 +20,7 @@ from __future__ import annotations
 import glob
 import logging
 import os
+import tempfile
 
 import torch
 
@@ -128,6 +129,65 @@ def _ensure_generated_config() -> str:
     return dirs[0]
 
 
+def _merged_include_tree(data: str, root: str) -> str:
+    """Build 0.7's header tree with this project's overlay laid ON TOP, and return its path.
+
+    Include ORDER cannot express what the overlay needs. The overlay replaces headers that
+    exist in the wheel under the same names -- persistent.cuh, prefill.cuh, epilogue.cuh,
+    sparse_mainloop.cuh, hopper/variants.cuh, hopper/prefill_sm90.cuh and more -- so with the
+    wheel first the wheel's copies win, and with the overlay first its own siblings go missing:
+    both trees use RELATIVE includes ("../exception.h", "../cp_async.cuh"), which resolve
+    relative to the including file, so a partial overlay that mirrors only
+    flashinfer/attention/ breaks every one of them whatever the -I order.
+
+    Copying the wheel's tree and overwriting with the overlay gives each header the siblings it
+    expects and makes "overlay wins" exact. This is the construction port07/tests/nvcc_check.sh
+    uses, which is the only one shown to compile this kernel against 0.7.
+
+    Cached under a content-stamped directory so a rebuild does not recopy, and so editing an
+    overlay header produces a new tree rather than a stale hit.
+    """
+    import hashlib, shutil
+
+    overlay = os.path.join(root, "include")
+    if not os.path.isdir(overlay):
+        raise FileNotFoundError(
+            f"no overlay include tree at {overlay}; SGLANG_FUSED_FI_ROOT must point at a tree "
+            "containing include/flashinfer/... (e.g. flashinfer's port07/)"
+        )
+    stamp = hashlib.sha256()
+    stamp.update(data.encode())
+    for dirpath, dirnames, filenames in os.walk(overlay):
+        dirnames.sort()
+        for fn in sorted(filenames):
+            fp = os.path.join(dirpath, fn)
+            stamp.update(os.path.relpath(fp, overlay).encode())
+            st = os.stat(fp)
+            stamp.update(f"{st.st_size}:{st.st_mtime_ns}".encode())
+    key = stamp.hexdigest()[:16]
+
+    base = os.environ.get("SGLANG_FUSED_MERGED_DIR") or os.path.join(
+        tempfile.gettempdir(), "sglang_fused_inc"
+    )
+    out = os.path.join(base, key)
+    done = os.path.join(out, ".complete")
+    if os.path.exists(done):
+        return os.path.join(out, "inc")
+    tmp = out + ".partial"
+    shutil.rmtree(tmp, ignore_errors=True)
+    inc = os.path.join(tmp, "inc")
+    os.makedirs(inc, exist_ok=True)
+    shutil.copytree(os.path.join(data, "include"), inc, dirs_exist_ok=True)
+    shutil.copytree(overlay, inc, dirs_exist_ok=True)
+    os.makedirs(out, exist_ok=True)
+    # Move into place, then mark complete, so a crashed build never leaves a tree that a later
+    # run would treat as usable.
+    shutil.rmtree(out, ignore_errors=True)
+    os.rename(tmp, out)
+    open(os.path.join(out, ".complete"), "w").close()
+    return os.path.join(out, "inc")
+
+
 def load_fused_fa3(verbose: bool = False) -> None:
     """Compile and register `torch.ops.fused_fa3.fused_run`. Idempotent."""
     global _LOADED
@@ -158,17 +218,13 @@ def load_fused_fa3(verbose: bool = False) -> None:
             f"{data}/cccl/libcudacxx/include",
             f"{data}/cccl/cub",
         ]
-        # The SOURCE tree is appended, never prepended. `fused_fa3_persistent_ext.cu` includes
-        # `flashinfer/attention/persistent_fa3_fused.cuh`, which is this project's OWN header and
-        # exists only in the source tree -- so the source tree must be on the path. But it also
-        # carries flashinfer 0.3.1's `scheduler.cuh`/`persistent.cuh`, and if those resolve first
-        # the plan layout reverts to 56/68 entries and the kernel rejects the running
-        # flashinfer's 28-entry plan again. Wheel first, source tree last: flashinfer's own types
-        # come from 0.7, the project's additions are still found.
-        includes += [
-            f"{root}/include",
-            f"{root}/csrc",
-        ]
+        # ONE merged tree in place of the wheel's include dir. The old scheme appended the
+        # source tree after the wheel so flashinfer's own types came from 0.7 while the
+        # project's additions were still found; that works only while the two trees are
+        # disjoint, which the 0.7 overlay is not -- it deliberately replaces same-named
+        # headers. See _merged_include_tree for why no -I order can express this.
+        includes[1] = _merged_include_tree(data, root)
+        includes += [f"{root}/csrc"]
         includes = [p for p in includes if os.path.isdir(p)]
     else:
         logger.warning(
@@ -196,6 +252,15 @@ def load_fused_fa3(verbose: bool = False) -> None:
             "--threads",
             "32",
             "-DFUSED_FA3_STAGES=" + os.environ.get("FA3_STAGES", "1"),
+            # This TU includes BOTH the FA2-lineage and Hopper trees, which 0.7 never does
+            # anywhere, so the unsuffixed Hopper aliases have to go or the two collide. It must
+            # be a TU-wide flag: as a #define in a header it only works when that header is the
+            # first to reach hopper/variant_helper.cuh, which it is not.
+            "-DFLASHINFER_SM90_SUPPRESS_UNSUFFIXED_NAMES=1",
+            # Drive the wgmma role from task 3 of the unified plan. This is also the ONLY
+            # configuration that instantiates store_partial, so without it the split-KV path
+            # is compiled out and split rows write no partial.
+            "-DFLASHINFER_FUSED_UNIFIED_WGMMA=1",
             "-U__CUDA_NO_HALF_OPERATORS__",
             "-U__CUDA_NO_HALF_CONVERSIONS__",
             "-U__CUDA_NO_HALF2_OPERATORS__",

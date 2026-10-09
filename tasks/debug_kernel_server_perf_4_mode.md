@@ -861,8 +861,59 @@ Most likely causes, in order of suspicion, none yet measured:
 
 - [x] 2026-10-09 **TTFT/ITL/throughput bars: NOT met; the split REGRESSES -6.8% tok/s** in the
       warmed, order-reversed A/B.
-- [ ] 2026-10-09 **preallocate the plan's buffers, then re-measure with graphs ON** -- the one
-      change that could plausibly turn this around, and it is required for graph safety anyway.
+### 2026-10-09 -- preallocation did NOT fix the regression; and a run-to-run noise floor
+
+`sglang-up@b9e3e4b8c` routes every per-step index array through a pinned grow-only pool (token
+indices, three indptrs, FA3 row ids, the page-table gather via `index_select(out=)`,
+`cache_seqlens` from the already-materialised `seq_lens_cpu`, and the FA2 `kv_indices` loop
+replaced by one flat `index_select`). Correctness first: in-server verify **PASS**, 5001 split
+calls, 10 ok / 0 FAIL, worst err 0.0108 (tol 0.02), 0/56 client errors.
+
+Warmed, order-reversed A/B, graphs off -- identical config to the run that gave -6.8%, so
+preallocation is the only variable. Raw: `/dev/shm/w/split_perf_mtp_results.txt`; prior run kept
+as `split_perf_run2_PREALLOC_BASELINE.txt`.
+
+| arm | tok/s | Mean TTFT | P99 TTFT | Mean ITL | P99 ITL |
+|---|---|---|---|---|---|
+| noguard_m8 | 12461.20 | 135.35 | **234.78** | 18.36 | 62.62 |
+| noguard_m0 | 12257.31 | 137.79 | 235.92 | 18.73 | 63.17 |
+| guard_on | 12165.66 | 136.46 | 241.37 | 18.86 | 63.35 |
+| **base (split OFF)** | **13110.83** | **135.13** | 280.61 | **17.47** | **62.30** |
+
+Best split arm is **-5.0% tok/s** and **+5.1% mean ITL** against base. **The split is still a
+regression.**
+
+**A noise floor, finally measured, and it changes how the earlier numbers should be read.**
+Same config, same code, arm by arm across the two runs:
+
+| arm | run 2 tok/s | run 3 tok/s | delta |
+|---|---|---|---|
+| base | 13276.37 | 13110.83 | -1.2% |
+| noguard_m8 | 12084.54 | 12461.20 | **+3.1%** |
+| noguard_m0 | 12361.23 | 12257.31 | -0.8% |
+| guard_on | 12369.17 | 12165.66 | -1.6% |
+
+Movements of -1.6% to +3.1% in **both directions** with nothing changed but the preallocation.
+So the run-to-run noise floor on this workload is roughly **+/-1.5-3%**, which means:
+(a) preallocation's apparent 1.8pp recovery (6.8% -> 5.0%) is **within noise and cannot be
+claimed**; and (b) any future gain smaller than ~3% on this harness is unmeasurable, so a
+"parity" result must not be read as success. I should have established this floor before
+reporting the first A/B at all -- [[gate-needs-noise-floor-and-reference]] says exactly this and
+I applied it to correctness gates while leaving the perf harness without one.
+
+The -5% regression is larger than the floor, so it is real.
+
+- [x] 2026-10-09 **preallocation: correctness PASS, perf effect WITHIN NOISE** -- the regression
+      persists at -5.0% tok/s. Not the mechanism.
+- [x] 2026-10-09 **perf noise floor measured: ~+/-1.5-3% tok/s** on this harness, from two
+      identical runs.
+- [ ] 2026-10-09 **graphs-ON A/B** -- the production configuration, and the structural change
+      most likely to matter: graphs amortise per-launch cost, and the split adds two attention
+      calls plus two `index_copy_` scatters per layer (~28x/step) against one call. Graphs-off
+      was maximally unfavourable to the split by construction.
+- [ ] 2026-10-09 **if graphs-on does not close it, PROFILE rather than hypothesise** -- five
+      consecutive mechanism guesses were wrong on the device assert; the per-layer launch count
+      is a suspect, not a diagnosis.
 - [x] 2026-10-09 **`sm_margin` does not transfer**: margin 8 is the WORST arm here
       (12084 tok/s) despite being the kernel-harness optimum. Use margin 0.
 - [ ] 2026-10-09 **guard-OFF arm re-running with `370c511f3`** -- in-server correctness of the

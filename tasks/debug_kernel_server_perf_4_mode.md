@@ -186,12 +186,12 @@ mixed chat + tracelab. Corrected 2026-10-09 (user): the kernel must be on upstre
 *interfaces and fusion boundaries must fit upstream* -- a 4-mode schedule running upstream's own
 attention measures the scheduling change alone and cannot show the thesis.
 
-## OPEN ITEMS, consolidated (2026-10-09)
+## Tasks, in priority order (2026-10-09)
 
-Everything still to do, in one place. **Kernel items gate everything else** (user: H20 and
-multi-node only after all kernel items close).
+Open items consolidated in one place, completed items kept below them. **Kernel items gate
+everything else** (user: H20 and multi-node only after all kernel items close).
 
-### Kernel -- in dependency order
+### OPEN -- kernel, in dependency order
 
 | id | item | why it is here |
 |---|---|---|
@@ -205,7 +205,7 @@ multi-node only after all kernel items close).
 | **K5** | **Re-measure in-server at the shape the schedule emits**, reporting `last_fa2_rows` and the tile histogram beside every timing. Gain must clear the measured **+/-1.5-3%** noise floor on the upside. | User: "-5 to -8.4% is not acceptable." |
 | **K6** | **CUDA-graph fault**: the split still dies under graphs on (`IndexKernel.cu` out-of-bounds via flashinfer `plan`, reached from `decode_cuda_graph_runner.load_batch`). Needs a capture-boundary bisect, not another hypothesis. Graphs on is the production config. | Five mechanism guesses were wrong; preallocation did not fix it. |
 
-### Server / workload -- after the kernel items
+### OPEN -- server / workload, after the kernel items
 
 - [ ] **EDF perf-model vs baseline unfused schedule** -- never run. The claim is that the fused
       kernel's flatter cost makes the model more accurate.
@@ -214,6 +214,53 @@ multi-node only after all kernel items close).
       parallel.** 5b (PD mux + 1P3D/2P2D) needs H20 and is gated on the kernel items.
 - [ ] **PD point 4** (two-way RDMA / congestion / randomized pull) -- currently a NEGATIVE result
       at 16 GPUs; not demonstrated on the full 4-NIC fabric.
+
+### DONE and verified (SHAs and exact commands in the sections below)
+
+**Kernel**
+
+- [x] **Two-executor FA3+FA2 split implemented on upstream** with upstream-fitting interfaces
+      (`sm_margin` for the SM budget, flashinfer's public `plan`, `req_to_token` gather,
+      stride-aware `paged_kv_view`). `sglang-up@cff63ef7e` and parents.
+- [x] **`forward_extend` dispatch written** -- two executors over disjoint row subsets, combined
+      by scatter rather than an LSE merge. Index arithmetic CPU-verified 400/400; that test
+      caught the FA3 page table being indexed by batch row instead of `req_pool_index`.
+- [x] **PASSES the causal fp32 reference, 5/5 shapes** standalone (err 0.00232-0.00424, each row
+      subset scored separately) -- `drv/split_unit.py`.
+- [x] **PASSES in-server**, guard off, no launch-blocking: 5001 dispatches, in-step reference
+      10 ok / 0 FAIL (worst 0.0112, tol 0.02), 0/56 client errors -- `drv/split_nocg.sh`.
+- [x] **SM pre-assignment measured**: 1.224x on isolated attention at `sm_margin=8` vs the
+      unsplit single-wrapper baseline (152.6 us vs 186.7 us), **correctness bit-identical across
+      all six margins** -- `drv/split_margin.py`.
+- [x] **Fused-kernel JIT loader works from inside sglang** (increment 1): compiles with C++20,
+      bootstraps flashinfer's generated config itself, registers
+      `torch.ops.fused_fa3.fused_run`. `sglang-up@9da582ac3`.
+- [x] **Decode-population guard ported and re-verified on upstream** -- 11/25 -> 23/25 agreement
+      against the measured boundary grid.
+- [x] **Upstream-facing data path CPU-verified**: `dense_block_table` 11/11,
+      `fa3_subset_varlen` 10/10, row partition inert when disabled.
+- [x] **`upstream_port` rebased onto live upstream main `3fef129ff`** (64 commits, zero
+      conflicts, port markers verified post-replay).
+
+**4-mode step**
+
+- [x] **Runs clean on upstream**: 151 merges, 0/56 client errors, 0 tracebacks, 0 width
+      mismatches.
+- [x] **Root cause found and fixed for the blocker**: `extend_prefix_lens` came from a STALE
+      `seq_lens_cpu` mirror while `seq_lens` came from the device tensor
+      (`eagle_prepare_for_verify` advances one and not the other). `sglang-up@b8b405822`.
+- [x] **Always-on composition counters** (`MIXEDSPEC_STEPS`, `FUSED_SPLIT_CALLS`,
+      `FUSED_SPLIT_ONESIDED`, `base_plan_skipped`) -- each added after a gate reported a verdict
+      about an unexercised path.
+
+**Methodology**
+
+- [x] **Perf harness noise floor measured: +/-1.5-3% tok/s**, from two identical runs. Any gain
+      under ~3% on this harness is unmeasurable.
+- [x] **Warmup and arm-order confounds identified and controlled** -- per-arm warmup pass plus
+      reversed arm order with `base` last.
+- [x] **CUDA-graph fault isolated to the graph path** by environment bisect (graphs off: 5001
+      calls clean; graphs on: device assert), after five wrong code-level mechanism guesses.
 
 ### Stale claims -- do NOT reuse
 

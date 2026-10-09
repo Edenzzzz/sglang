@@ -1418,7 +1418,35 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       addresses, all verified. Every `sO` row receiving row 0 is what a `partition_D` with a
       collapsed thread-to-row mapping produces.
 
-      First time the defect is pinned to a specific four-line sequence. It is upstream code
+      **STAGING IS CORRECT (2026-10-10) -- the broadcast is in `tOrO`.** From `store()`:
+
+      ```
+      thread_idx=0/64/128/192  NUM_MMA_THREADS=256  NUM_COPY_THREADS=128
+      size(tiled_mma)=256  size(tOsO)=64  size<1>(tOsO)=1
+      ```
+
+      1. `size(tiled_mma)=256 = NUM_MMA_THREADS`, so `thread_idx` reaching 160/192 is **in
+         range** -- no aliasing. **Refutes** my "thread_idx exceeds the TiledMma count" candidate,
+         which compared `thread_idx=160` against `num_threads=128` -- but 128 is
+         `NUM_COPY_THREADS`, the *store loop's stride*, unrelated to the slice's valid range. I
+         compared a value against the wrong bound.
+      2. `256 threads x size(tOsO)=64 = 16384 = sO's 128x128` exactly, so the register->smem
+         staging covers `sO` **once, completely**. **Refutes** the "collapsed thread-to-row
+         mapping" reading too.
+
+      So with staging correct and `sO` holding row 0 in rows 0/1/2, the broadcast is already in
+      **`tOrO`**, the MMA accumulator. **Every stage downstream of the compute is now verified:**
+      accumulator->smem staging (here), smem->global addressing (earlier), and the Q gather
+      (earlier -- addresses, coverage, values).
+
+      That puts the defect in `mma_f16` or what we hand it -- where this item began before the
+      packed-GQA detour -- now reached by **elimination** rather than guess. **Distinguishing
+      measurement:** print accumulator elements from distinct rows of one thread *before*
+      `convert_type`. Coinciding => the PV MMA or `attention_updater` replicates one row. Not
+      coinciding => the broadcast appears between `tOrO` and `sO` despite complete partitioning,
+      meaning copy atom and layout disagree.
+
+      **(Superseded:)** First time the defect is pinned to a specific four-line sequence. It is upstream code
       parameterised by **our** traits: `smem_tiled_copy_O` derives from `SmemCopyAtomO` and the
       `TiledMma`, and the fused build's warp counts differ from a stock FA3 epilogue's.
       **Next:** print `tOsO`'s layout and this thread's slice against the same from a stock build

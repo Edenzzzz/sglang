@@ -953,24 +953,40 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       the null case are now permanent steps of `nvcc_check.sh`, which reports
       `NULL_CASE_FAILED` if the gate ever stops covering the function.
 
-- [ ] **K1h (BLOCKING the fp32 reference). The loader cannot build the extension against the
-      overlay.** `fused_fa3_loader` compiles `tests/fused_fa3_persistent_ext.cu` with the
-      installed wheel's include dir **first** and the source tree appended **last** -- correct
-      for 0.3.1, wrong now, because the overlay's headers must *override* the wheel's
-      same-named ones (`persistent.cuh`, `prefill.cuh`, `epilogue.cuh`, `sparse_mainloop.cuh`,
-      `hopper/variants.cuh`, ...). Include order cannot express that, which is exactly why
-      `nvcc_check.sh` builds a **merged tree** (0.7's tree copied, overlay laid on top): both
-      trees use relative includes, so a partial overlay breaks every one of them regardless of
-      ordering. The loader needs the same construction, plus
-      `-DFLASHINFER_SM90_SUPPRESS_UNSUFFIXED_NAMES=1` and
-      `-DFLASHINFER_FUSED_UNIFIED_WGMMA=1`.
+- [x] **K1h (2026-10-09, `sglang-up@f019410ff`, verified `f8ad55bd4`). The fused kernel is a
+      LOADABLE MODULE against 0.7 -- `torch.ops.fused_fa3.fused_run` is registered.** The fix
+      was a **merged include tree**, not an `-I` ordering. nvcc's instantiation trace confirms
+      the real kernel compiled, not a degenerate specialisation:
+      `FusedFA3PersistentSymmetricKernel<..., UnifiedWgmmaTileScheduler<IdT>, R128, R64, R16>`,
+      `fa3_prefill_body` with that scheduler, `kUnifiedWgmma=true`, `SharedStorageQKVOSm90`
+      (the co-inclusion rename in effect) and `FusedQueueParams` in the kernel signature. No
+      errors; only cutlass deprecating `cute::copy_if`'s predicate form. The loader also now
+      passes `-DFLASHINFER_SM90_SUPPRESS_UNSUFFIXED_NAMES=1` and
+      `-DFLASHINFER_FUSED_UNIFIED_WGMMA=1`, the latter being the only configuration that
+      instantiates `store_partial`.
 
-      Also note for whoever resumes: the pod's `drv/` kept only the perf drivers
+- [ ] **K1c2 (THE remaining blocker before the fp32 reference -- corrected). The CUDA body of
+      `FusedFourTaskPlan`.** `fused_run` takes both plans as `std::vector<int64_t>`:
+      `fa3_plan` (flashinfer's own `PrefillPlanSM90Info`, available) and `pers_plan` (**our**
+      `FusedPlanInfo`, which nothing can currently produce). The host halves are written and
+      tested -- `EnumerateFusedWorkItems`, `BuildFusedMergeLayout`, and the 58-entry round trip
+      all pass `run_host_checks.sh` -- but the device half is not written, so there is no way
+      to get a `pers_plan` and therefore no way to call the kernel at all. The reference is
+      gated on this, not on the harness.
+
+      Two things it must get right, both of which have already cost a wrong answer once:
+      - the cluster-cursor initialisation, and
+      - the `partial_indptr` layout agreeing with 0.7's
+        `PersistentVariableLengthMergeStatesKernel`. `store_partial` now writes at
+        `partial_indptr + row * num_kv_chunks + kv_chunk_idx`, times `num_kv_heads`, times
+        head_dim, with `num_kv_chunks` derived by the **plan's** formula. The merge kernel must
+        read exactly that; a disagreement is what left 511/512 rows unwritten in fixture 2.
+
+- [ ] **K1i. Recreate the correctness drivers.** The pod's `drv/` kept only the perf scripts
       (`b1_headroom.sh`, `b1b_headroom.sh`, `split_perf_mtp.sh`, `b1_analyze.py`, `b2_top.py`,
-      `restore.sh`). The correctness drivers (`split_unit.py`, `split_margin.py`,
-      `split_verify_mtp.sh`) are gone and need recreating. There is no flashinfer **source**
-      tree on the pod either -- only `port07/` and the installed wheel -- so the loader's
-      `SGLANG_FUSED_FI_ROOT` has to point at the overlay.
+      `restore.sh`); `split_unit.py`, `split_margin.py` and `split_verify_mtp.sh` are gone.
+      `fused_run`'s 26-argument signature is in `port07/tests/fused_fa3_persistent_ext.cu:129`.
+      Keep these in the repo this time, not only on the pod.
 
 - [ ] **K1g-old (superseded by the above). `store_partial` is NOT ported -- the split-KV path is incomplete, and the green
       compile hides it.** 0.7's epilogue has **no** split path at all (only `store` /

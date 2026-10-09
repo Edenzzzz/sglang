@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.38.0 — the fused kernel is a loadable module on flashinfer 0.7 (2026-10-09)
+
+`torch.ops.fused_fa3.fused_run` registers. `sglang-up@f019410ff`, `flashinfer@b883589`.
+
+- **Merged include tree, not an `-I` ordering.** The loader put the wheel first and the source
+  tree last — right for 0.3.1, where the trees were disjoint; wrong for the 0.7 overlay, which
+  deliberately replaces same-named headers. Reversing the order fails too, because both trees
+  use relative includes that resolve against the including file. The loader now builds what
+  `nvcc_check.sh` builds: the wheel's tree with the overlay laid on top, content-stamped and
+  cached.
+- `store_partial` is ported and **genuinely compiled**. It sits behind an `if constexpr` that is
+  false for the default scheduler, so three earlier green compiles never covered it. The gate
+  now has a **null case** — a type error injected inside the function must break the unified
+  build — and both steps are permanent in `nvcc_check.sh`.
+- The plan's per-item `group_id` is gone for good: its only surviving role was the boolean "does
+  this row need a merge", now derived as `num_kv_chunks > 1`. Removing its initializer without
+  removing the field was the **fourth** positional-aggregate shift in this port, and the one
+  that produced six type errors three fields away from the edit.
+- **Nothing has executed.** The remaining blocker is not the harness but `FusedFourTaskPlan`'s
+  CUDA body (K1c2): `fused_run` needs a `pers_plan` and nothing can produce one yet. No
+  correctness claim and no A/B until the fp32 reference passes.
+
 ## v0.37.0 — FA2+FA3 co-inclusion, and the fused kernel body type-checks on 0.7 (2026-10-09)
 
 The instantiating TU (`fused_fa3_persistent_ext.cu`, what the loader actually builds) now

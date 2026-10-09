@@ -1006,10 +1006,36 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       q tile with the head carried by the stride. My `* num_kv_heads` float sizing is then
       correct and the 7x over-count disappears.
 
+      **There is a SECOND disagreement, and it is the worse one.** The writer uses ONE base per
+      group with chunks **interleaved within a row** (`base + r * num_kv_chunks + kv_chunk_idx`);
+      `BuildFusedMergeLayout` gives each chunk **its own base** and lays chunks out
+      **contiguously** (`base_c = g + c * rows`). At `rows=128, chunks=10`:
+
+      | | row 0 / chunk 0 | row 0 / chunk 1 | row 1 / chunk 0 |
+      |---|---|---|---|
+      | writer writes at | `g+0` | `g+1` | `g+10` |
+      | layout allocated | `g+0` | `g+128` | `g+1` |
+
+      Same total size, **completely different permutation**: chunk 0 of row r collides with
+      chunk r of row 0. This would not have overflowed any buffer and would not have tripped an
+      assert -- it would simply have merged the wrong partials, silently. It is the same shape of
+      error as the retracted symmetric-mode result.
+
+      So the correct layout is: group over `(task, batch, q_start)` with `kv_head_idx` out of
+      the key, give **every member of a group the same** `partial_indptr` (the group base), and
+      advance `total_partial_rows` by `rows * num_chunks` -- where `num_chunks` is
+      `members.size() / num_kv_heads`, so `BuildFusedMergeLayout` needs `num_kv_heads` passed in.
+      Then the `* num_kv_heads` float sizing is right and the 7x over-count also disappears.
+
+      **Before implementing it, `merge_indptr` / `merge_o_indices` must be checked against what
+      0.7's `PersistentVariableLengthMergeStatesKernel` actually iterates**, rather than assumed
+      -- that kernel is the consumer, and guessing its convention is how both of these
+      disagreements got written in the first place.
+
       Note the host checks passed throughout: `run_host_checks.sh` only asserts monotonicity,
       counts and the round trip, never agreement with the writer's addressing. Another gate that
-      measured less than it looked -- it needs a case that writes through the computed address
-      and reads it back.
+      measured less than it looked -- it needs a case that writes through the **computed
+      address** and reads it back, which would have caught both disagreements immediately.
 
 - [ ] **K1i. Recreate the correctness drivers.** The pod's `drv/` kept only the perf scripts
       (`b1_headroom.sh`, `b1b_headroom.sh`, `split_perf_mtp.sh`, `b1_analyze.py`, `b2_top.py`,

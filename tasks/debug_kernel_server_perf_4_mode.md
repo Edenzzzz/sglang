@@ -1048,7 +1048,49 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       visit unsplit rows, whose `num_index_sets` of 0 fills their output with **zeros** over the
       direct write -- the rows needing no merge would be exactly the ones it destroyed.
 
-- [~] **K1l IN PROGRESS. The Python bridge is in (`flashinfer@7c74969`), verified registered on
+- [~] **K1l. THE FUSED KERNEL EXECUTES (2026-10-09, `flashinfer@255191b`). One fault left, not
+      yet localized.** `drivers/fused_reference.py` (in-repo this time) builds both plans, calls
+      `fused_run`, and compares against an fp32 **causal** reference. Running it found two bugs
+      that **every compile-time gate had passed**:
+
+      1. `FromVector` still demanded 58 entries while `ToVector` emits 59 --
+         `NUM_SHARED_ARGS` was left at 14 when `num_merge_rows` was added. Caught on the
+         driver's first run.
+      2. **`len_kv_chunk = 0` for the FA2 classes was a device divide-by-zero.**
+         `persistent.cuh` divides by it *unconditionally*
+         (`kv_chunk_idx = kv_start / len_kv_chunk`, `ceil_div(..., len_kv_chunk)`), so 0 does not
+         mean "unsplit" -- it means `num_kv_chunks` is garbage, the row takes the **split** path,
+         and `store_partial` writes a 16 B vector at a wild offset. The FA2 classes now get a
+         span covering any row they can see, so `ceil_div` gives exactly 1 and they take the
+         direct-write path. **The plan gate had asserted `lkc[0..2] == 0`, so that check encoded
+         the bug**; it now requires a non-zero covering span.
+
+      Evidence the second fix landed, `compute-sanitizer` with `CUDA_LAUNCH_BLOCKING=1`:
+
+      | | kernel / block | faulting address |
+      |---|---|---|
+      | before | `FusedFA3PersistentKernel`, block (17,0,0) | 2,617,249,280 B **before** the nearest allocation (the 64 MB int workspace) |
+      | after | same kernel, block (19,0,0) | 1,266,688 B **after** the nearest allocation, which is **1 byte** in size |
+
+      The address went from wildly negative to modestly positive -- a different computation, not
+      the same fault surviving.
+
+      **Remaining fault, deliberately not hypothesised.** The faulting block is still
+      `>= sm_split`, so an FA2-role block, and the write is 16 B -- the vectorised partial store.
+      Next step is to read off **which base the FA2 role uses** for it: `persistent.cuh`'s
+      comment at the partial path says *"o_indptr (partial_o): [packed_qo_len * num_kv_chunks,
+      num_kv_heads, head_dim]"*, so the FA2 roles may index through `o_indptr` while the plan
+      fills `partial_indptr`, and the ext may be feeding one where the other is read. Establish
+      it from the code -- five wrong mechanisms were proposed for the last device assert in this
+      project before an environment bisect found the cause.
+
+      Fixture notes (`drivers/fused_reference.py`): `page_size=1` with pages in request order, so
+      the vector-sparse `kv_indices` and the raw page ids coincide numerically and that aliasing
+      trap is retired rather than live; FA3 rows first (= `pers_row_offset`); each side's pages
+      contiguous so `pers_kv_page_offset` is just the FA3 page count. Plans built fine:
+      `pers_plan: 59 entries, num_merge_rows=1024, num_fa3_clusters=16`, `fa3_plan: 9 entries`.
+
+- [~] **K1l-old. The Python bridge is in (`flashinfer@7c74969`), verified registered on
       the pod: `fused_run` True, `build_fused_plan` True.** Nothing could previously produce the
       `pers_plan` vector `fused_run` takes -- flashinfer's own plan functions build
       `HolisticPlanInfo`, which K1a replaced for this path -- so the kernel was undriveable from

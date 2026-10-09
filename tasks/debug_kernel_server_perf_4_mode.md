@@ -1638,6 +1638,40 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       The 254-of-256 pattern with exactly rows 0 and 128 correct is the sharpest unexplained
       constraint, and nothing in the elimination set accounts for why those two survive.
 
+      **RETRACTED IN FULL (2026-10-10): the fa3_1chunk investigation was measuring MY REFERENCE.**
+      That fixture has **qo_len=256 > kv_len=128**, so bottom-right causal gives token *i* the
+      range `kv[0 .. i-128]`, **negative for every i < 128**. The reference slices `kb[:pos+1]`,
+      and in Python a negative bound **wraps** rather than being empty:
+
+      ```
+      i=  0  pos=-128  kb[:-127]  -> 1 row    (accident: looks like a 1-row attend)
+      i=127  pos=  -1  kb[:0]     -> 0 rows   -> softmax over an empty tensor
+      i=128  pos=   0  kb[:1]     -> 1 row    (genuinely valid)
+      ```
+
+      **The two "passing" rows were 0 and 128 -- exactly where that accident yields a valid
+      single-row attend.** The 254/256 pattern and the 6.153e+06 residual were artifacts of the
+      harness, not kernel output.
+
+      Retracted with it: "the FA3 role produces garbage (6.153e+06 over 254/256)"; every
+      conclusion drawn *from* that pattern; "the corruption occurs between `sQ` and `sO`"; and the
+      **"impasse"** framing -- there was no impasse, there was an invalid fixture. The individual
+      eliminations (addresses verified, structures identical) remain valid in themselves but were
+      aimed at a defect this fixture cannot demonstrate.
+
+      **Survives:** `MODE=fa2` PASS (its fixture has kv >= qo for every row, which is also why it
+      validated cleanly); `MODE=fa3` (q=256 kv=2048) and `MODE=mixed` **are** well-posed, so their
+      **45.1** and **45.44** residuals are the real failures to chase; and the intermittent
+      3-of-5 stall, which is independent of the reference.
+
+      **Lesson, already in my own notes and not applied to my own harness:** give every gate a
+      null case. I validated the reference against FA2 and assumed it transferred, when the two
+      paths differ in exactly the parameter that breaks it. *A fixture whose expected output is
+      undefined cannot fail a kernel.*
+
+      **Fix:** assert `kl >= ql` in the reference (or clamp `pos` and skip contextless rows), make
+      `fa3_1chunk` well-posed, then re-measure `fa3` and `mixed`.
+
       **Stage count eliminated too (2026-10-10).** The FA3 pipeline depth was the one value left
       outside the elimination set -- the loader passes `-DFUSED_FA3_STAGES` from `FA3_STAGES`,
       default **1**, which the sanitizer's kernel signature confirmed. A 1-deep pipeline was a

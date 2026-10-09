@@ -1615,7 +1615,30 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       `sm_scale` (the variant computes `sm_scale_log2 = additional_params.sm_scale * log2e`) and
       `v_scale` (via `get_v_scale(additional_params, kv_head_idx)`).
 
-      **Neither appears in any address, so every check so far is blind to them.** The ext sets
+      **ELIMINATED TOO (2026-10-10):** `sm_scale` **is** set (`ext:222`); `v_scale` returns 1.0f
+      because 0.7's `AdditionalParams` has no `maybe_scale_v`/`scale_v_scalar` and `get_v_scale`
+      is `if constexpr`-guarded on their presence; `logits_soft_cap` and the four `maybe_*`
+      pointers are **zero-initialised** since the ext declares `FA3ParamsSel fa3{}` (`ext:193`).
+
+      **IMPASSE.** No candidate remains. Verified on device: plan, scheduler, mainloop KV tile
+      count, Q-load addresses, Q-load **values**, store addresses. Verified identical to the
+      working tree: `SmemLayoutQ`, `TiledMma*`, `NUM_MMA_THREADS`, warp counts. Verified by
+      inspection: `sm_scale`, `v_scale`, params zero-init. Four hypotheses retracted as probe
+      artifacts. **And the output is still 6.153e+06 over 254/256 with rows 0 and 128 correct,
+      plus a 3-of-5 stall.**
+
+      Naming the impasse beats inventing a sixth candidate. Two evidence-led options, both
+      differential rather than more localisation:
+      1. **Build the same fixture against the 0.3.1 tree** and diff intermediate values at the
+         same probe points -- separates "0.7 behaves differently" from "our port behaves
+         differently" in one run.
+      2. **Take the goal's stated alternative: a FA3+FA2 PDL split kernel.** The FA2 half already
+         PASSES and a PDL split does not require this compute path.
+
+      The 254-of-256 pattern with exactly rows 0 and 128 correct is the sharpest unexplained
+      constraint, and nothing in the elimination set accounts for why those two survive.
+
+      **(Superseded:)** Neither appears in any address, so every check so far is blind to them. The ext sets
       `P.sm_scale`/`P.v_scale` for the FA2 runners explicitly; whether it sets
       `fa3.additional_params.sm_scale` at all has **not** been checked. Reached by exhaustion
       rather than by picking a suspect. Check by printing the variant's `sm_scale_log2` from the

@@ -1,5 +1,67 @@
 # Current goal
 
+**Decisions taken 2026-10-09 (user), these override earlier framing:**
+
+1. **The fused kernel MUST land on upstream** -- port it to flashinfer 0.7 rather than demo on the
+   fork. The port may also make it faster.
+2. **Per-class SLO targets derive from the common settings of the given papers**, not invented.
+3. **The >=30%/>=10% bar is against the baselines, plural**: single node must beat **both**
+   prefill-prioritized (the default) **and** mixed chunked prefill; multi node must beat **both**
+   PD multiplex **and** PD disagg -- *beating disagg is the main argument*, mux is not designed
+   for multi-node so that win should come easily.
+4. **H20 / multi-node only after ALL kernel items are closed.**
+5. **-5% to -8.4% in-server is NOT an acceptable result.** The kernel must be a gain.
+
+## The tile-occupancy defect in the current dispatch (user's observation, 2026-10-09)
+
+Asked whether everything with a tile size > 16 (post-pack-GQA) goes to FA3. It does not, but the
+real gate is worse than that framing suggests. `split_classes` routes
+
+```python
+packed_qo = qo * gqa_ratio
+fa3 = (packed_qo >= MIN_PACKED_QO=48) & (kv_tiles >= 1) & (qo >= MIN_QO_LEN=16)
+```
+
+while the FA3 side uses a **fixed `TILE_Q = 128`**. So any row with `packed_qo` in **[48, 128)**
+is sent to FA3 and handed a 128-wide WGMMA tile it cannot fill -- **up to 63% of the tile idle**.
+That is genuine tile waste, and `MIN_PACKED_QO = 48` is a hand-set constant that admits exactly
+the rows which cannot fill the tile. The persistent/FA2 side already has three q-tile classes
+(`tile128` for packed > 64, `tile64`, `tile16`), so 64 exists and **32/48 would be new**.
+
+**Precision on priority:** for the current config (Qwen2.5-7B, 28 qo / 4 kv -> GQA 7, 4 draft
+tokens) a verify row is `packed_qo = 28` and already routes to FA2, so the waste band is NOT the
+cause of today's -5%. It bites when `num_draft_tokens x gqa` lands in [48,128) -- 8 draft tokens
+at GQA 7 is 56; 4 draft tokens at GQA >= 12 likewise. Today's -5% is the complementary half of
+the same problem: the FA2 side is 7 rows x 4 tokens = seven `tile16` items in a **separate
+launch** plus two `index_copy_` scatters, against the baseline's single kernel.
+
+**Both halves resolve in the fused single kernel**, which is why the port is the right call: small
+verify tiles are absorbed into the same grid by the LPT overlap schedule (no second launch, no
+scatter), and FA3's tile width becomes a per-work-item property instead of a compile-time
+constant.
+
+### Design, in dependency order
+
+- [ ] **K1. Port the fused kernel to flashinfer 0.7.** Reconstruct the JIT-reduction group tables
+      (`group_id`, `group_nchunks`, `group_row_begin`, `group_nrows`) that 0.7's
+      `HolisticPlanInfo` no longer carries; resolve `DefaultAttentionSm90` /`StandardAttention`
+      renames; avoid the `variant_helper.cuh` vs `hopper/variant_helper.cuh` collision. Blocks
+      everything else.
+- [ ] **K2. Dynamic WGMMA tile size in FA3: mix 128 and 64, chosen per work item** from
+      `packed_qo`. A 56-row item then runs at 88% tile occupancy instead of 44%.
+- [ ] **K3. Extend the FA2/persistent tile classes to 16/32/48/64**, keeping them inside the LPT
+      overlap schedule so small items still share the grid.
+- [ ] **K4. Replace `MIN_PACKED_QO = 48` with a FITTED dispatch rule for `packed_qo < 64`** on
+      `(packed_qo, kv_len)` -- a linear threshold or small learned model, trained on measured
+      per-tile times for FA3-at-64 vs FA2-at-{16,32,48,64}. Machinery already exists: the
+      measured boundary grid `tasks/fused_specdec_workload/boundary_28x4x128.json` (25 points)
+      and `_apply_decode_population_guard`, which replays it (11/25 -> 23/25 agreement). The
+      point is to stop hand-setting the constant that causes the waste.
+- [ ] **K5. Re-measure in-server at the shape the schedule emits**, not a chosen one. Report
+      `last_fa2_rows` and the per-class tile histogram beside every timing, and require the gain
+      to clear the measured +/-1.5-3% noise floor.
+
+
 **Land the fused FA3+FA2 SM-pre-assignment kernel ON UPSTREAM, alongside the 4-mode MTP step
 already there, then measure the combined arm.** Target: >=30% TTFT and ITL, >=10% throughput on
 mixed chat + tracelab. Corrected 2026-10-09 (user): the kernel must be on upstream and its

@@ -1351,8 +1351,34 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       **packed rows 0..3** are correct -- exactly the first `G` rows -- while packed rows 4..511
       are wrong.
 
-      That points at the gather loop's per-row **coverage**, not its addressing (already
-      verified). With the warp guard restored,
+      **COVERAGE VERIFIED EXACTLY AS PREDICTED (2026-10-10) -- the loop is exonerated.**
+      `n=4, max_i=96` (lane 0), `max_i=127` (lane 31), `nvalid=4` both, across 56 lines =
+      28 work items x 2 traced lanes (28 = 4 q tiles x 7 kv heads over 512 packed rows). The
+      gather writes **all 128 packed rows of every tile**, every write predicated valid.
+
+      **The FA3 role is now almost fully constrained by measurement:**
+
+      | checked | result |
+      |---|---|
+      | Q source addresses | exact (hand-checked) |
+      | Q load **coverage** | all 128 rows/tile, all valid |
+      | Q values in smem | distinct, plausible |
+      | store addresses | exact at bases **and** within-tile |
+      | output at token 0 | byte-correct, all 7 kv-head groups |
+      | tokens 1..127 | wrong, deterministic, 5/5 |
+      | layouts, `TiledMma`, warp counts, stages | identical to working tree, or forced |
+
+      Every input is correct and the first `G=4` packed rows of output are correct while the other
+      508 are not. **No mechanism proposed** -- five probe artifacts and six refuted hypotheses in
+      this item share one cause (inferring from partial measurement), and the measurements that
+      worked were those where the expectation was stated first.
+
+      **Next measurement:** dump `sQ` through the **same indexing the MMA uses** -- not naive
+      logical indices, which produced the "0,2,3 identical" artifact -- for packed rows 0..7 and
+      compare against host `q`. Rows 4..7 wrong in smem => the gather's writes land where the MMA
+      does not read; rows 4..7 right => the fault is inside the MMA.
+
+      **(Superseded:)** That points at the gather loop's per-row coverage, not its addressing. With the warp guard restored,
       `for (i = lane; i < get<0>(TileShape_QKD{}); i += NumThreadsPerWarp)` should have lanes
       0..31 cover `i = lane, lane+32, lane+64, lane+96` -- all 128 packed rows. If only `i < 4`
       lands, the loop or its predication is not doing what that arithmetic says. **Measurable

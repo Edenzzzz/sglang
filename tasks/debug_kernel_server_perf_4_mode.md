@@ -752,9 +752,62 @@ the KV view. "Same shape" is not "same contract".
 - [ ] 2026-10-09 **preallocate the plan's index buffers** -- removes the per-step allocations
       that collide with captured graphs; required before the split can run in the production
       (graphs-on) configuration.
-- [ ] 2026-10-09 **perf A/B, graphs OFF on BOTH arms** -- running. Matched config, so the
-      comparison is fair; graphs-off is not production, which is a stated limitation of the
-      number rather than a hidden one.
+### 2026-10-09 -- first serving A/B. Headline number NOT TRUSTED: arm order is confounded
+
+`sglang-up@69595708c`, pod tree `/dev/shm/w/up`, driver `drv/split_perf_mtp.sh`, raw results
+`/dev/shm/w/split_perf_run1_UNWARMED.txt`. Server: 4-mode MTP + EAGLE3 chain draft (topk=1,
+4 draft tokens), `--attention-backend flashinfer --enable-mixed-chunk --chunked-prefill-size
+2048 --page-size 1 --max-running-requests 64 --disable-cuda-graph --mem-fraction-static 0.75`,
+env `SGLANG_MIXED_SPEC=1 SGLANG_FLASHINFER_USE_PAGED=1
+SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1`. Workload: `bench_serving --dataset-name random
+--random-input-len 2048 --random-output-len 512 --random-range-ratio 0.5 --num-prompts 300
+--request-rate 12 --max-concurrency 56`.
+
+| arm | split calls | req/s | tok/s | Mean TTFT | P99 TTFT | Mean ITL | P99 ITL |
+|---|---|---|---|---|---|---|---|
+| base (split off) | 0 | 6.20 | 12087 | **337.95** | **2613.91** | 18.68 | 73.72 |
+| guard_on | 7501 | 6.19 | 12074 | 189.76 | 698.18 | 18.87 | 63.92 |
+| noguard_m0 | 8001 | 6.17 | 12035 | 187.70 | 695.36 | 18.93 | 63.45 |
+| noguard_m8 | 8001 | 6.16 | 12017 | 192.17 | 715.10 | 18.96 | 63.53 |
+
+Read naively this is -44% mean TTFT and -73% P99 TTFT, i.e. clearing the 30% bar.
+**It should not be read that way.** `base` ran FIRST and so was the only arm paying flashinfer
+JIT compilation and cache warmup. A 2613.9 ms P99 TTFT against ~700 ms for every later arm is
+far larger than any plausible attention effect and carries the signature of a one-off compile.
+**Arm order is confounded with the treatment**, so the TTFT column measures warmup, not the
+split, and the honest status of the 30% TTFT bar remains UNMET pending a clean run.
+
+Control now running: a discarded warmup pass before each arm's measurement, and the arm order
+**reversed** so `base` runs LAST -- any residual order effect then works against the split
+rather than for it, and a surviving gain cannot be an ordering artifact.
+
+**What the run does establish, since these are within-run comparisons unaffected by the warmup
+of the first arm:**
+
+1. **Throughput is flat**: 12087 / 12074 / 12035 / 12017 tok/s, a monotone -0.6% across the
+   three split arms. The >=10% throughput bar is **not met**, as the Amdahl arithmetic predicted.
+2. **Mean ITL is flat-to-slightly-worse** (18.68 -> 18.87/18.93/18.96, about +1.3%), while
+   **P99 ITL improves ~13-14%** (73.72 -> 63.45..63.92). Better tail, unchanged mean -- the same
+   shape as the TraceLab precedent (+0.27% throughput, -4.6% P99 ITL), and the P99 arms are
+   mutually consistent so this is not a warmup artifact.
+3. **My `g ~= 0` claim was WRONG and is retracted.** The guard-ON arm fused **7501** times here,
+   only 6% fewer than guard-OFF's 8001. I had inferred near-zero coverage from the staggered
+   56-request gate, where merged batches were ~7 rows; at 2048-token inputs with 56 concurrent
+   requests there are ample co-resident decode rows and the guard admits fusion readily.
+   Coverage is workload-dependent and I over-generalised from one shape. The `g * a` ceiling
+   argument still holds, but `g` is near 1 here, not near 0 -- which makes the flat throughput
+   a cleaner refutation of the kernel route than the coverage argument was.
+4. **`sm_margin=8` does not transfer from microbenchmark to server**: 12017 tok/s vs 12035 at
+   margin 0, and slightly worse TTFT/ITL. The kernel harness put margin 8 at 1.224x vs margin
+   0's 1.220x -- a 0.3% difference that does not survive contact with a real schedule. Use
+   margin 0.
+5. **Accept length is identical (2.06) in all four arms**, confirming the split does not perturb
+   speculative acceptance -- a necessary condition for the arms to be comparable at all.
+
+- [x] 2026-10-09 **throughput bar NOT met** -- flat to -0.6% across split arms, `g ~= 1`.
+- [x] 2026-10-09 **P99 ITL improves 13-14%**, mean ITL flat; 30% ITL bar not met.
+- [ ] 2026-10-09 **TTFT: warmed, reversed-order control running** -- the -44%/-73% figures are
+      not usable until it reports.
 - [ ] 2026-10-09 **guard-OFF arm re-running with `370c511f3`** -- in-server correctness of the
       split on real merged 4-mode batches, via the in-step reference.
 

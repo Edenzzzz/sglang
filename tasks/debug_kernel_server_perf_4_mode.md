@@ -1472,10 +1472,29 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       measuring the wrong half of the kernel, though each exclusion was necessary before this
       reading could be interpreted.
 
-      A fragment's row dimension collapsing to one value is what a `TiledMmaPV` whose `AtomLayout`
-      disagrees with the consumer warpgroup count produces. **Compare against stock FA3:** the
-      `TiledMmaPV` definition is byte-identical between trees, but the warp counts around it are
-      not -- the fused build runs the FA3 role alongside the FA2 roles' thread budget.
+      **THE COMPUTE IS STOCK (2026-10-10).** The overlay holds only `epilogue.cuh`,
+      `fa3_upstream.cuh`, `kernel_traits.cuh`, `prefill_sm90.cuh`, `sparse_mainloop.cuh`,
+      `utils.cuh`, `variant_helper.cuh`, `variants.cuh`. **`mainloop_mma.cuh` (defining `mma_f16`)
+      and `attention_updater.cuh` are NOT in it** -- both byte-for-byte upstream, and stock FA3
+      runs the same two files and passes at rel=0.001779.
+
+      So with the compute files unmodified and known-good, every input verified on device, every
+      output stage verified, the accumulator layout verified (`AtomLayout`,
+      `NUM_MMA_THREADS=256` measured) -- and the accumulator still holding one row duplicated --
+      **the defect cannot be *in* the compute.** It is in what the fused kernel **hands** the
+      compute, or the context it invokes it from: `fa3_prefill_body` (which I extracted) and the
+      fused kernel's warpgroup arrangement. **Both are files we own.**
+
+      **Specific comparison to make:** `mma_f16` is called with `threadIdx.x - NUM_COPY_THREADS`
+      as its thread index. In stock FA3 that is evaluated in a kernel whose warpgroup 0 is the
+      producer; in the fused kernel the FA3 role runs on a block whose warpgroups are arranged by
+      `fused_drain_queue` and the role split, so the same expression need not name the same lane.
+      `[stg]` showed `thread_idx` in {0,64,128,192} -- consistent with 256 MMA threads at offset
+      128, but *consistent* is not *correct*, and the stock-build comparison at the same probe
+      point has not been made.
+
+      First time the search space is reduced to code I wrote, with the upstream compute exonerated
+      by **provenance** rather than measurement.
       `convert_type`. Coinciding => the PV MMA or `attention_updater` replicates one row. Not
       coinciding => the broadcast appears between `tOrO` and `sO` despite complete partitioning,
       meaning copy atom and layout disagree.

@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.32.0 — Fused single kernel is bound to flashinfer 0.3.1; split is the only runnable variant (2026-10-09)
+
+- Root cause of six consecutive harness/extension incompatibilities: the flashinfer SOURCE tree
+  the kernel compiles against is **0.3.1**, while the installed wheel sglang uses is
+  **0.7.0.post1**. The kernel's `HolisticPlanInfo` is 56/68 entries; 0.7's `BatchAttention`
+  emits 28. All 32 harness cases error on the kernel's own plan-length guard.
+- **The "1.30x fused" result was measured on 0.3.1** and says nothing about the current stack. It
+  stands as history; citing it as support for the fused variant today was wrong.
+- The fused single kernel therefore **cannot be wired into the current server** without porting
+  it to 0.7's plan serialisation — C++ work against flashinfer internals, not integration.
+  Increments 2b/3 are blocked, not unstarted.
+- Increment 1 did pass: `fused_fa3` compiles from inside sglang with C++20 and registers
+  `torch.ops.fused_fa3.fused_run` (`sglang-up@9da582ac3`).
+- Runnable variant remains the two-executor split: correct (standalone 5/5 fp32; in-server 5001
+  calls, 10/0 verify) and **−5.0% tok/s** in serving, with a measured ±1.5–3% noise floor.
+
 ## v0.31.0 — Fused split PASSES in-server; the device assert was a use-after-free (2026-10-09)
 
 `sglang-up@056f28667` for the PASS, `f53707f53` for the fix. Driver `drv/split_verify_ngblk.sh`

@@ -1062,9 +1062,59 @@ persistent side is a `flashinfer.attention.BatchAttention` (exposing `int_worksp
 `BatchPrefillWithPagedKVCacheWrapper(..., backend="fa3")` (exposing `_int_workspace_buffer`,
 `_plan_info`).
 
-- [ ] 2026-10-09 **increment 2a: update `verify_fused.py` to the 26-arg schema** and re-establish
-      the fp32-reference PASS and the 1.30x timing on the CURRENT extension. Until this runs,
-      the fused variant's advantage over the two-executor split is unverified.
+### 2026-10-09 -- increment 2a BLOCKED: the fused kernel is bound to flashinfer 0.3.1
+
+**Root cause, and it subsumes every "staleness" found today as a single fact:**
+
+| component | version |
+|---|---|
+| flashinfer **source tree** `/dev/shm/w/fi` -- the headers the kernel compiles against | **0.3.1** |
+| flashinfer **installed wheel** -- what sglang and `BatchAttention` actually use | **0.7.0.post1** |
+
+The kernel's `HolisticPlanInfo` serialises to **56 or 68** entries (its own runtime guard says
+so); flashinfer 0.7's `BatchAttention._plan_info` is **28** entries. Every case errors with
+`persistent plan has 28 entries, expected 56 or 68`. These are four minor versions apart, so the
+plan layout, not a default, is incompatible.
+
+The six incompatibilities hit in sequence are all symptoms of that one gap:
+
+1. `fused_run` takes 26 args; the harness passed 20 (pre-`UnifiedWgmma`).
+2. `BatchAttention.__init__` is now `(kv_layout, device)`; the harness passed a workspace tensor.
+3. `--fi-root` defaults to the local `/opt/tiger/flashinfer`, absent on the pod.
+4. The harness's own `build_ext` still passes `-std=c++17`, which dies in preprocessing against
+   torch 2.14 (not disk: `/tmp` had 3.3 TB free, 1% inodes). Worked around by preloading via
+   sglang's own C++20 loader, which builds fine.
+5. `flashinfer.page.block_sparse_indices_to_vector_sparse_offsets` was **removed** in 0.7
+   (`vector_sparse` appears nowhere in the package). At `page_size == 1` it is the identity, so
+   `idx` can be passed directly -- but my earlier integration spec named that helper as a
+   requirement, which is now wrong.
+6. **The plan-layout mismatch above, which is not workaroundable.** Note the `.cu` comment I
+   recorded as authoritative ("real lengths are 49 and 60") is itself stale against its own
+   compiled types, which now report 56/68.
+
+**Consequences, which change the feasible scope and should not be worked around quietly:**
+
+* **The standing "fused kernel PASSES, 1.30x at sm_split 112" result was measured on flashinfer
+  0.3.1.** It is not withdrawn as a historical measurement, but it says nothing about the current
+  stack, and I was wrong to cite it earlier today as support for preferring the fused variant.
+* **The fused single kernel cannot be wired into the current server at all** without porting it
+  to flashinfer 0.7's `HolisticPlanInfo`. The server runs 0.7 (upstream sglang depends on 0.7
+  APIs -- `kv_loc_plan`, the new `BatchAttention` signature), the kernel needs 0.3.1, and two
+  flashinfers in one process is not viable. So increments 2b and 3 as written are blocked, not
+  merely unstarted.
+* The only kernel variant that runs on the current stack is the **two-executor split**, which is
+  verified correct (standalone 5/5 fp32; in-server 5001 calls, 10/0 verify) and measures
+  **-5.0% tok/s** in serving.
+
+- [x] 2026-10-09 **increment 2a: BLOCKED, root-caused.** Harness ported through five
+      incompatibilities (`drv/patch_harness.py`, `drv/run_verify.sh`); the sixth is a hard
+      version gap. 32/32 cases error on the plan-length guard.
+- [ ] 2026-10-09 **DECISION NEEDED: port the fused kernel to flashinfer 0.7's HolisticPlanInfo,
+      or drop the single-fused-kernel variant.** This is C++ work against flashinfer internals
+      (plan serialisation, the 4-task `UnifiedWgmmaTileScheduler` path), not a wiring task, and
+      it is the only route to the one-launch cost structure that the serving measurements say is
+      needed. Flagging rather than silently choosing: the alternative is to accept the
+      two-executor split's -5.0% and pursue the gains on the scheduling axis instead.
 - [ ] 2026-10-09 **increment 2b: build both plan vectors in `init_forward_metadata`** --
       `BatchAttention` for `pers_plan`, `BatchPrefillWithPagedKVCacheWrapper(backend="fa3")` for
       `fa3_plan` with `FLASHINFER_FA3_MAX_CTAS == sm_split`, plus vector-sparse

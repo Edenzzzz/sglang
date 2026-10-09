@@ -1296,7 +1296,26 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       | `fa3` | 44.84 | 45.1 |
       | `mixed` | 41.67 | 45.44, 256/258 (FA2 rows pass) |
 
-- [x] **K1n-null. THE HARNESS IS VALIDATED ON BOTH ARMS (2026-10-10).** Stock flashinfer FA3
+- [~] **K1n-null. SUSPECT -- the stock-FA3 result is contradicted by a second read of the same
+      tensor.** In one run: `STOCK FA3 vs reference: rel=0.001779 PASS`, yet an element print of
+      the *same* `o_stock` reads `+0.000000` for all 12 sampled `(token, head)` pairs -- on both
+      sides. Those cannot both hold: `rel=0.001779` requires `o_stock` close to a non-zero
+      reference, and if it were all zero that rel would be ~1.
+
+      Mundane candidates: `w.run()`'s output layout may not be the `[tokens, heads, dim]` this
+      print assumes; the rel computation and the element print may index different things; or
+      `'o_stock' in dir()` may not gate as assumed. **No conclusion is drawn from either number**,
+      and the "harness validated on both arms" claim below is suspended until resolved -- it rests
+      on this same tensor. Flagged rather than left to stand.
+
+      **Resolve by** printing `o_stock`'s shape, dtype and raw values beside the reference's at
+      identical indices, confirming they describe the same object *before* computing any rel --
+      the step skipped when the null case was added.
+
+      Unaffected: `MODE=fa2` PASS (0.002126, 0/258) across many rounds, and the stall fix verified
+      5/5; neither involves `o_stock`.
+
+- [~] **K1n-null (claim now suspended). THE HARNESS IS VALIDATED ON BOTH ARMS (2026-10-10).** Stock flashinfer FA3
       (`BatchPrefillWithPagedKVCacheWrapper(backend="fa3")`) on the same q/k/v against the same
       fp32 causal reference: **rel=0.001779 PASS** -- the same bf16 residual the FA2 path gets
       (0.002126). So the reference's layout, softmax scale and bottom-right causal masking all

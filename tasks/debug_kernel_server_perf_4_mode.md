@@ -927,35 +927,50 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       int64_t"*. Same failure mode as the loader's `plan()` call earlier today; naming the
       fields makes the next insertion a missing-member error.
 
-- [~] **K1g IN PROGRESS (2026-10-09, `flashinfer@134fb6a`). `store_partial` is ported, but the
-      only path that uses it still does not compile -- so it has never been type-checked.**
+- [x] **K1g (2026-10-09, `flashinfer@b883589`). `store_partial` ported and GENUINELY compiled;
+      the unified-wgmma TU builds (`UNIFIED_OK`, 10 device kernels), and the gate has a **null
+      case** proving it covers the function.**
 
-      Ported: the slab write (O + LSE at `partial_indptr + row * num_kv_chunks + kv_chunk_idx`,
-      times `num_kv_heads`, times head_dim), the scheduler's new `num_kv_chunks` field, and the
-      call site in `prefill_sm90.cuh`. Two decisions worth keeping:
+      Root cause of the 6 errors was **mine, from earlier this session**: the block at
+      `fused_fa3_persistent_ext.cu:277` is not a debug print, it is the `UnifiedWgmmaPlanPtrs`
+      aggregate initialiser. Removing `P(t3.group_id_offset)` deleted a live field initialiser
+      and shifted every argument after it by one, which is why the errors appeared three fields
+      later as `float*` vs `IdT*` mismatches instead of at the edit. **Fourth** positional-init
+      shift in this port; the first three are now designated-initialised.
 
-      - `num_kv_chunks` comes from the **plan's** formula, `ceil_div(kv_len, len_kv_chunk)`,
-        uniform per request and with **no** causal adjustment -- that is exactly what
-        `EnumerateFusedWorkItems` counted as `splits` when it sized the slab and
-        `BuildFusedMergeLayout` built `merge_indptr`. The FA2 side's causal-adjusted formula
-        would disagree with the plan, and that disagreement is what left 511/512 rows unwritten.
-      - The barrier counts follow **0.7's `store()`**, not 0.3.1's `store_partial`: 0.7 arrives
-        on `EpilogueBarrier` with `NUM_MMA_THREADS` where 0.3.1 used
-        `NUM_MMA_THREADS + Ktraits::NUM_PRODUCER_THREADS` -- consistent with 0.7 dropping the
-        `NUM_PRODUCER_THREADS == NUM_COPY_THREADS` assert. Mixing them puts two different
-        participant counts on one hardware barrier, i.e. a hang.
+      The fix is not to restore it -- `FusedPlanInfo` has no `group_id_offset`, by K1a. The
+      plan's per-item `group_id` went with the rendezvous, and its only surviving role is the
+      boolean *"does this row need a merge"*, which is derivable: the scheduler computes
+      `group_id = (num_kv_chunks > 1) ? 0 : -1` and the field is dropped from
+      `UnifiedWgmmaPlanPtrs` / `Arguments` / `Params`. Nothing read the group **index** any more
+      (`store_partial` no longer takes it; `is_split_kv` and the call-site gate only test
+      `>= 0`). `WorkTileInfo` keeps the field so `fa3_has_split_kv` still has something to probe.
 
-      **The default TU's `NVCC_EXT_OK` is a weak gate here too.** `store_partial` sits behind
-      `if constexpr (fa3_has_split_kv<TileScheduler>::value)`, false for the default scheduler,
-      so the branch is discarded and the function is never compiled. Building the path that does
-      use it (`-DFLASHINFER_FUSED_UNIFIED_WGMMA=1`) fails with **6 errors**, all one cause -- a
-      **third** positional aggregate init that shifted, in the upstream-port scheduler
-      arguments, at `fused_fa3_persistent_ext.cu:289-300` (`float*` <-> `IdT*` both directions,
-      `int` -> `IdT*`, `IdT*` -> `int`, narrowing `unsigned` -> `int`). The TU's own comment at
-      that site predicted it: *"the positions matter because this is aggregate initialisation,
-      and adding fields mid-struct without updating here would silently assign num_qo_heads to a
-      float*"*. Convert it to designated initialisers like the other two, then compile the
-      unified path, then the reference.
+      **Why this green is worth more than the previous three.** `store_partial` sits behind an
+      `if constexpr` that is false for the default scheduler, so the default TU's `NVCC_EXT_OK`
+      never covered it. Injecting a type error inside `store_partial` makes the unified compile
+      fail with exactly that error -- so it really is instantiated. Both the unified step and
+      the null case are now permanent steps of `nvcc_check.sh`, which reports
+      `NULL_CASE_FAILED` if the gate ever stops covering the function.
+
+- [ ] **K1h (BLOCKING the fp32 reference). The loader cannot build the extension against the
+      overlay.** `fused_fa3_loader` compiles `tests/fused_fa3_persistent_ext.cu` with the
+      installed wheel's include dir **first** and the source tree appended **last** -- correct
+      for 0.3.1, wrong now, because the overlay's headers must *override* the wheel's
+      same-named ones (`persistent.cuh`, `prefill.cuh`, `epilogue.cuh`, `sparse_mainloop.cuh`,
+      `hopper/variants.cuh`, ...). Include order cannot express that, which is exactly why
+      `nvcc_check.sh` builds a **merged tree** (0.7's tree copied, overlay laid on top): both
+      trees use relative includes, so a partial overlay breaks every one of them regardless of
+      ordering. The loader needs the same construction, plus
+      `-DFLASHINFER_SM90_SUPPRESS_UNSUFFIXED_NAMES=1` and
+      `-DFLASHINFER_FUSED_UNIFIED_WGMMA=1`.
+
+      Also note for whoever resumes: the pod's `drv/` kept only the perf drivers
+      (`b1_headroom.sh`, `b1b_headroom.sh`, `split_perf_mtp.sh`, `b1_analyze.py`, `b2_top.py`,
+      `restore.sh`). The correctness drivers (`split_unit.py`, `split_margin.py`,
+      `split_verify_mtp.sh`) are gone and need recreating. There is no flashinfer **source**
+      tree on the pod either -- only `port07/` and the installed wheel -- so the loader's
+      `SGLANG_FUSED_FI_ROOT` has to point at the overlay.
 
 - [ ] **K1g-old (superseded by the above). `store_partial` is NOT ported -- the split-KV path is incomplete, and the green
       compile hides it.** 0.7's epilogue has **no** split path at all (only `store` /

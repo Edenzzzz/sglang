@@ -1026,14 +1026,40 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       - `BlockBatchReductionPersistent::Run` is a `__device__` member, so a standalone launch
         needs only a thin `__global__` wrapper plus `num_merge_rows` as `num_packed_qo_len`.
 
-- [ ] **K1k. Write that wrapper and launch it, then the fp32 reference.** A `__global__` over
-      `BlockBatchReductionPersistent<ReductionKTraits>::Run`, launched from
-      `FusedFA3PersistentDispatched` after the attention grid, taking `partial_o` / `partial_lse`
-      / `merge_indptr` / `merge_o_indices` / `num_merge_rows` / `num_kv_heads` /
-      `gqa_group_size`. Grid sized over `num_merge_rows * num_kv_heads`. Note its smem need
-      (`ReductionKTraits::SMEM_SIZE`) is sized independently of the attention roles', so it does
-      not have to fit inside the fused kernel's allocation.
+- [x] **K1k DONE (2026-10-09, `flashinfer@641ef1b`). The reduction is launched as a separate
+      pass after the fused attention grid.** Device kernels on the unified TU **10 -> 15**, so
+      the wrapper is genuinely instantiated rather than discarded by an `if constexpr` -- the
+      failure mode that made three earlier green compiles mean less than they looked.
 
+      **The grid shape was the trap, and it fails silently.** `Run()` derives
+
+      ```
+      worker_id   = blockIdx.y * num_warps + warp_idx
+      num_workers = gridDim.x * gridDim.y * gridDim.z * num_warps
+      ```
+
+      so the stride counts every block while the id varies only in **Y**. Launched as the obvious
+      `(N, 1, 1)`, every block computes the **same** `worker_id` and every row not congruent to
+      it is never written -- the identical silent partial-coverage signature to fixture 2's
+      511/512, with no error and no assert. Blocks therefore go in `gridDim.Y`, `x = z = 1`.
+
+      The launcher no-ops when `num_merge_rows == 0` (the common decode-only case). Passing the
+      batch's row count instead of the plan's compacted split-row count would make the merge
+      visit unsplit rows, whose `num_index_sets` of 0 fills their output with **zeros** over the
+      direct write -- the rows needing no merge would be exactly the ones it destroyed.
+
+- [ ] **K1l. THE fp32 causal reference.** Everything the kernel needs now exists and compiles:
+      plan (K1c2, 19/19 on GPU), module (K1h), split-KV write (K1g), reduction (K1k). Nothing
+      has yet checked an attention **output**. Needs the correctness driver recreated (K1i) --
+      `fused_run`'s 26-argument signature is at
+      `port07/tests/fused_fa3_persistent_ext.cu:129`, and the fp32 reference must be **causal**
+      per the standing instruction. Keep the driver in-repo, not only on the pod.
+
+      Note what this will and will not establish: a PASS covers the FA3 path, the three FA2 tile
+      classes, the split-KV partials and the merge together. It will NOT cover cross-role
+      backfill or multicast (B1b/B2c/B3), which need `tma_store_wait` and are still untested,
+      nor topk>1 trees (K0 -- the 4-mode path is chain-draft only, and the in-step verify gate
+      cannot detect that because reference and test share the causal assumption).
 - [ ] **K1i. Recreate the correctness drivers.** The pod's `drv/` kept only the perf scripts
       (`b1_headroom.sh`, `b1b_headroom.sh`, `split_perf_mtp.sh`, `b1_analyze.py`, `b2_top.py`,
       `restore.sh`); `split_unit.py`, `split_margin.py` and `split_verify_mtp.sh` are gone.

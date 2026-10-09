@@ -1419,8 +1419,33 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       `work_idx % 2`, a mismatch stalls rather than faults.
 
       **A nondeterministic hang makes every FA3 timing meaningless, so it blocks the performance
-      work regardless of the residual.** Next: run `fa3_1chunk` N times and count completions vs
-      hangs before interpreting any FA3 number.
+      work regardless of the residual.**
+
+      **QUANTIFIED (2026-10-10), serialised repeats of `fa3_1chunk`, 150 s timeout each:**
+
+      | run | outcome |
+      |---|---|
+      | 1 | HUNG, rc=124 |
+      | 2 | COMPLETED, 6.153e+06, 254/256 |
+      | 3 | HUNG, rc=124 |
+
+      Two facts that point at different things:
+      1. **The hang is intermittent** -- 2 of 3. `rc=124` is the timeout, so genuine stalls, not
+         crashes. Blocks all FA3 timing.
+      2. **The residual is deterministic** -- every completion lands on exactly 6.153e+06 over
+         exactly 254 of 256 rows, the same before and after the packed-Q splice.
+
+      Fact 2 **partially restores the packed-GQA refutation** the entry above weakened. That entry
+      said the identical store-only and store+load+mbarrier numbers "may be coincidence rather
+      than evidence the load is inert", since both were single samples. They are **not**
+      coincidence -- the residual reproduces across completions, so completing the packed-GQA
+      feature genuinely left the FA3 error unchanged and the refutation stands. The caution was
+      right to apply, wrong in its conclusion.
+
+      **The two FA3 defects are now cleanly separated:** a nondeterministic stall in the Q
+      mbarrier handshake (blocks timing), and a deterministic 6.153e+06 / 254-of-256 residual that
+      is **not** packed-GQA addressing, the plan, the scheduler, the mainloop iteration count, or
+      the split/merge machinery -- all exonerated by measurement.
 
       **(Superseded claim, kept in place:)** The hang is fixed (macro pairing) and `fa3_1chunk`
       now runs to completion, but the numbers did not move:

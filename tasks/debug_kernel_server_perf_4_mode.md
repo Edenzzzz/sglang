@@ -1169,7 +1169,37 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       conclusion retracted above, but on different and sufficient evidence -- the retraction was
       correct when made, since the only support then was a branch-gated trace never shown to fire.
 
-      **FIXTURE BISECT (same day) -- the fault needs MANY kv tiles, and short kv now runs:**
+      **[x] FA2 PATH PASSES THE FP32 CAUSAL REFERENCE (2026-10-09, `flashinfer@cc56241`).**
+      First correctness PASS of this port. Command:
+      `MODE=<m> PYTHONPATH=<fork>/python SGLANG_FUSED_FI_ROOT=<fi>/port07 python drivers/fused_reference.py`
+
+      | fixture | before | after |
+      |---|---|---|
+      | `fa2_2tile` q=256 kv=256 | rel 1.991, 224/256 bad | **PASS** rel 0.0021, 0/256 |
+      | `fa2` q=256 kv=2048 (16 kv tiles) | **illegal access** | **PASS** rel 0.002126, 0/258 |
+      | `mixed` | rel 39.68, 258/258 | FAIL rel 40.57, 258/258 |
+
+      So all three FA2 tile classes, a row spanning 16 kv tiles, and bottom-right causal masking
+      are correct against an fp32 reference, at a residual consistent with bf16 (this doc's
+      recorded 0.0044 when correct). **The illegal access and the numeric error had ONE cause.**
+
+      Cause: the plan set `q_indptr = request_token_base + q_start`, but the kernel applies the
+      tile offset itself from `packed_qo_start` / `q_start`, so adding it to `q_indptr`
+      double-counts it -- and the unsplit write is `final_o + q_indptr * o_stride_n`.
+
+      How it was found, which is the transferable part: the trace was made to print from **every
+      block** instead of one. All 56 work items ran (8 q tiles x 7 kv heads), so coverage was
+      never the problem; what the trace showed was `q_indptr` taking 0,128,...,896 across the 8
+      tiles of ONE request, where it should have been 0 throughout. That **predicted** the
+      observed signal -- only tile 0 has `q_start == 0`, so only its 32 tokens (128 packed / gqa
+      4) were correct, exactly the 32 of 256 rows that had been passing. Three conclusions had to
+      be retracted earlier in this item, and all three came from reading an instrument's
+      **silence**; what worked was a positive signal checked against arithmetic.
+
+      Remaining: `MODE=mixed` at 40.57 is now isolated to the **FA3 role and/or the merge**,
+      since the FA2 path is clean. Not yet diagnosed.
+
+      **Fixture bisect that got here -- the fault needed MANY kv tiles:**
 
       | fixture | kv tiles | result |
       |---|---|---|

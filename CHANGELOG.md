@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.40.0 — the FA2 path passes the fp32 causal reference (2026-10-09)
+
+`flashinfer@cc56241`. First correctness result of the flashinfer 0.7 port.
+`MODE=<m> ... python drivers/fused_reference.py`:
+
+| fixture | before | after |
+|---|---|---|
+| `fa2_2tile` q=256 kv=256 | rel 1.991, 224/256 bad | **PASS** rel 0.0021, 0/256 |
+| `fa2` q=256 kv=2048 | **illegal access** | **PASS** rel 0.002126, 0/258 |
+| `mixed` | rel 39.68 | FAIL rel 40.57 |
+
+- All three FA2 tile classes, a row spanning 16 KV tiles, and bottom-right causal masking are
+  correct at a bf16-consistent residual. The illegal access and the numeric error had **one**
+  cause: the plan added `q_start` into `q_indptr`, double-counting a tile offset the kernel
+  applies itself, against an unsplit write of `final_o + q_indptr * o_stride_n`.
+- Also fixed on the way: `num_pers_clusters` was in item space rather than CTA-slot space, which
+  silently dropped 26 of 56 tile-128 work items; and `len_kv_chunk = 0` for the FA2 classes was a
+  device divide-by-zero, since `persistent.cuh` divides by it unconditionally.
+- Method note: three conclusions in this item had to be **retracted**, all from reading an
+  instrument's silence (a branch-gated trace never shown to fire, twice; and a unit audit written
+  from the same understanding that produced the bugs). What worked was a trace printing from every
+  block, giving a positive signal that could be checked against arithmetic — the `q_indptr`
+  sequence 0,128,…,896 predicted exactly the 32-of-256 passing rows already observed.
+- `MODE=mixed` remains FAIL, now isolated to the FA3 role and/or the merge. No performance number
+  yet, and the ≥30%/≥10% bar is still untested.
+
 ## v0.39.0 — the plan builder runs and satisfies the merge contract (2026-10-09)
 
 `flashinfer@6aa16fc`. `port07/tests/test_plan_build.cu` on the vibecuda H200: **19/19 PASS**.

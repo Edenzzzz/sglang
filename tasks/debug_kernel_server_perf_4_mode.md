@@ -1561,6 +1561,23 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       **Rule for any further probe here:** state its expected line count from the thread predicate
       and launch geometry FIRST, and compare against the observed count as the null case.
 
+      **`sQ` swizzle ELIMINATED (2026-10-10):** `SmemLayoutQ` is identical in both trees --
+      `tile_to_shape(SmemLayoutAtomQ{}, select<0,2>(TileShape_QKD{}))` (0.3.1 `:86`, overlay
+      `:87`) -- so the gather's writes through `sQ`'s own indexing resolve against the layout they
+      were written for.
+
+      **ELIMINATION SET for the FA3 role**, each by measurement or direct comparison:
+      the plan (56/56 items, fields right); the scheduler (split gate correctly closed); the
+      mainloop iteration count (`num_kv_tiles=1`, correct); split/merge (absent from the failing
+      fixture); packed-GQA addressing (feature complete, residual unmoved); Q-load source addresses
+      (`904 = 32*28+8`, `5380 = 192*28+4`); store addresses (exact every tile); `sQ` layout; and
+      four probe-artifact hypotheses, each retracted once the probe's multiplicity was checked.
+
+      **STANDING QUESTION:** with sources, destinations and layout all verified, stored values
+      still show elements 0, 2, 3 identical within a row; the residual is a deterministic
+      6.153e+06 over 254/256 with exactly rows 0 and 128 correct; and the run hangs on 3 of 5
+      attempts. **Nothing currently links the two defects.**
+
       **One mechanism explains BOTH symptoms**, which no previous candidate did:
       - *wrong data* -- a re-run gather re-issues `cp.async` into the same `sQ` while the consumer
         may already be reading it; repeated 16 B writes to the same smem rows is exactly how

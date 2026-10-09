@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.42.0 — K1n: packed gather and packed store EXONERATED (2026-10-10)
+
+`sglang@d1f78a58`, overlay `/dev/shm/w/port07`, H200 pod `f929493da6e45f10`.
+
+**The A/B.** `FUSED_PACKED_Q=off` now omits `-DFLASHINFER_FUSED_PACKED_Q` entirely instead of
+defining it to a value. Both the Q load and the O store are `#ifdef`-gated on that macro, so
+omitting it reverts FA3 to **stock 0.7 TMA load + `write_tiled`** while still running through our
+extracted `fa3_prefill_body` and `UnifiedWgmmaTileScheduler`. Valid only at **G=1** (`GQA1=1` ->
+HQ=HKV=7), where packed rows and tokens coincide.
+
+| arm | GQA1 | PACKED_Q | MBARRIER | rel err | bad rows |
+|---|---|---|---|---|---|
+| g1stock — stock TMA load + `write_tiled` | 1 | off | 0 | **48.93** | 258/258 |
+| g1packed — our gather + `write_packed`   | 1 | 1   | 1 | **47.62** | 258/258 |
+| g4packed — our gather + `write_packed`   | 0 | 4   | 1 | **45.24** | 258/258 |
+
+All three fail at the same magnitude, so the FA3 defect is **independent of** the packed gather,
+the packed store, the Q-barrier arrival mode **and** the group size. With the earlier
+`SM_SPLIT=all` A/B (bit-identical output) it is independent of the fusion too. What remains is
+`fa3_prefill_body` or the scheduler/params handed to it. This retires the gather addressing, its
+coverage, `write_packed` and the arrival mode as candidates — the failure survives compiling all
+of them out.
+
+### Fixes
+
+- **`prefill_sm90.cuh`**: `barrier_Q` arming was gated on `#if defined(FLASHINFER_FUSED_Q_MBARRIER)`
+  while the arrival side tests the macro's **value**. Once the flag became settable, `-D...=0` was
+  still *defined*, so the drain form's single arrival met a barrier armed for 32 and the kernel
+  hung (GPU pinned at 100% for 440–470 s on a microsecond fixture). Now
+  `#if FLASHINFER_FUSED_Q_MBARRIER && defined(FLASHINFER_FUSED_PACKED_Q)` — value-tested, and
+  requiring the packed path, since the 32-lane arrival exists only there. The in-code comment had
+  warned about exactly this count mismatch while the code it guarded could not express it.
+- **`fused_fa3_loader.py`**: `FUSED_PACKED_Q` and `FA3_MBARRIER` are now switchable, with `off`
+  omitting the macro rather than zeroing it.
+- **`drivers/fused_reference.py`**: `GQA1=1` collapses the fixture to G=1.
+
+### Retracted in place
+
+The Q-load `#else` arm's comment claims it is *"Correct and ~3x slow"*. Its slowness may be a real
+0.3.1-era measurement; its **correctness was never measured on this stack** — FA3 has never
+passed, so there was nothing to measure it against — and as first run it **hung**. It is not a
+known-good reference.
+
 ## v0.41.0 — FA3's illegal access fixed; FA2 still passes (2026-10-10)
 
 `flashinfer@c7fdd92`, `ec02a20`. `MODE=<m> ... python drivers/fused_reference.py`:

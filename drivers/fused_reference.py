@@ -16,7 +16,12 @@ Usage: PYTHONPATH=<fork>/python SGLANG_FUSED_FI_ROOT=<flashinfer>/port07 python 
 import os, sys, math
 import torch
 
-HQ, HKV, D = 28, 7, 128
+# K1n A/B: GQA1=1 collapses the group so packed rows and tokens coincide (G=1). That is the
+# only configuration in which FUSED_PACKED_Q=off is a valid comparison -- the unified
+# scheduler reports the PACKED extent as qo_len and the stock TMA/write_tiled paths read it
+# as tokens, so the two only agree when G=1.
+import os as _os
+HQ, HKV, D = (7, 7, 128) if _os.environ.get('GQA1') == '1' else (28, 7, 128)
 GQA = HQ // HKV
 PAGE = 1
 DEV = "cuda"

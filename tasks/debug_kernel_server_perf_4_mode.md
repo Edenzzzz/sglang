@@ -1519,6 +1519,63 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       fused path's template parameters or params, body exonerated. Needs only an include-path
       change, not a second flashinfer version.
 
+      **[x] K1n A/B (2026-10-10): the packed gather and packed store are BOTH EXONERATED. The
+      defect is in `fa3_prefill_body` or the unified scheduler.**
+
+      The decisive experiment, reached as **one macro** instead of an include-path change:
+      `FUSED_PACKED_Q=off` omits `FLASHINFER_FUSED_PACKED_Q` entirely, and both the Q load and the
+      O store are `#ifdef`-gated on it -- so FA3 reverts to **stock 0.7 TMA load + `write_tiled`**
+      while still running through our extracted `fa3_prefill_body` and `UnifiedWgmmaTileScheduler`.
+      Valid only at **G=1** (`GQA1=1` -> HQ=HKV=7), where packed rows and tokens coincide; the
+      scheduler reports the PACKED extent as `qo_len` and the stock paths read it as tokens.
+
+      | arm | GQA1 | PACKED_Q | MBARRIER | rel err | bad rows |
+      |---|---|---|---|---|---|
+      | g1stock -- stock TMA load + write_tiled | 1 | off | 0 | **48.93** | 258/258 |
+      | g1packed -- our gather + write_packed   | 1 | 1   | 1 | **47.62** | 258/258 |
+      | g4packed -- our gather + write_packed   | 0 | 4   | 1 | **45.24** | 258/258 |
+
+      All three FAIL at the same magnitude. The defect is therefore **independent of** the packed
+      gather, the packed store, the Q-barrier arrival mode, **and** the group size. Combined with
+      the earlier `SM_SPLIT=all` A/B (bit-identical output, so independent of the fusion), what is
+      left is `fa3_prefill_body` itself or the scheduler/params handed to it.
+
+      This retires a surface I had been probing for many turns: the gather's addressing, its
+      coverage, `write_packed`, and the barrier arrival mode cannot be the cause, because the
+      failure survives compiling all of them out.
+
+      **Two flag-plumbing bugs found and fixed while setting this up, both of which presented as
+      kernel hangs** (GPU pinned at 100% for 440-470 s on a microsecond fixture):
+      1. `prefill_sm90.cuh` armed `barrier_Q` under **`#if defined(FLASHINFER_FUSED_Q_MBARRIER)`**
+         while the arrival side tests the **value**. The moment the flag became settable,
+         `-D...=0` was still *defined*, so the drain form's single arrival met a barrier armed for
+         32. The in-code comment warned about exactly this count mismatch while the code it
+         guarded could not express it. Now value-tested **and** requiring `PACKED_Q`, since the
+         32-lane arrival exists only inside the gather.
+      2. **Retraction, in place:** the `#else` arm's comment claims it is *"Correct and ~3x
+         slow"*. Its **slowness** may be a real 0.3.1-era measurement; its **correctness was
+         never measured on this stack** -- FA3 has never passed, so there was nothing to measure
+         it against. As first run it **hung**, from bug (1). It is not a known-good reference and
+         must not be cited as one.
+
+      Commands (sglang `d1f78a582`, flashinfer overlay `/dev/shm/w/port07`, H200 pod
+      `f929493da6e45f10`):
+      ```
+      cd /dev/shm/w/drv
+      export PYTHONPATH=/dev/shm/w/up/python SGLANG_FUSED_FI_ROOT=/dev/shm/w/port07
+      # one TORCH_EXTENSIONS_DIR per arm so a cached .so cannot flatten the A/B
+      TORCH_EXTENSIONS_DIR=/dev/shm/w/tx_g1stock  GQA1=1 FUSED_PACKED_Q=off FA3_MBARRIER=0 \
+        MODE=fa3 SM_SPLIT=all FA3_PROBE=0 /dev/shm/w/venv/bin/python fused_reference.py
+      TORCH_EXTENSIONS_DIR=/dev/shm/w/tx_g1packed GQA1=1 FUSED_PACKED_Q=1 FA3_MBARRIER=1 (idem)
+      TORCH_EXTENSIONS_DIR=/dev/shm/w/tx_g4packed GQA1=0 FUSED_PACKED_Q=4 FA3_MBARRIER=1 (idem)
+      ```
+
+      **Pod-tree note:** the live fork on this pod is **`/dev/shm/w/up/python`**.
+      `/opt/tiger/sglang-up` holds a single file (a webshell push created the dest chain for it)
+      and `site-packages/sglang` has no `fused_fa3_loader.py` at all -- a push there matched md5
+      exactly while changing nothing on any import path. Gate a push on the loader's `__file__`
+      resolving **inside the tree just pushed to**, not on an md5.
+
       **[!] REFRAMING (2026-10-10): the accumulator duplication implies DUPLICATED Q INPUT, and
       the gather's SOURCES were only ever verified for row 0.**
 

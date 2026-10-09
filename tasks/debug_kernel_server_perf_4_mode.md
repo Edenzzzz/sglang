@@ -782,8 +782,45 @@ Both remaining errors are now understood exactly, and neither needs a design dec
 | `attention/persistent_fa3_fused.cuh` | **+948, unported** -- the kernel itself |
 | `attention/persistent_wgmma.cuh`, `unified_wgmma_scheduler.cuh` | +70 / +281, unported |
 
-- [ ] **K1d. Port `persistent_fa3_fused.cuh` (+948) and the two wgmma headers** onto the
-      compiling base, hand-applied, re-running `nvcc_check.sh` after each hunk. The five missing identifiers are
+- [~] **K1d IN PROGRESS. The three new fused headers are in the overlay**
+      (`flashinfer@19fc1f9`): `persistent_fa3_fused.cuh` (948), `persistent_wgmma.cuh` (70),
+      `unified_wgmma_scheduler.cuh` (281). They have **no 0.7 counterpart**, so they copy in
+      without a merge, and the rework was far smaller than the line counts suggested: **one**
+      `HolisticPlanInfo` mention (a comment, retargeted to our private `FusedPlanInfo`) and
+      **one** argument block, where the five group-table arguments to the FA3 epilogue were
+      removed per K1a.
+
+- [ ] **K1d2. Port `hopper/prefill_sm90.cuh` (+32 on a 622-line 0.7 base; ours is 705).** This
+      is now the blocking file -- dropping the group-table arguments above means the epilogue
+      signature here must match the shorter list. Four distinct changes, in order of importance:
+
+      1. **Extract the kernel body into a `__device__` function `fa3_prefill_body`.** This is
+         the keystone of the entire fusion: it is what lets the fused kernel invoke FA3's
+         mainloop on one range of SMs while the FA2-lineage persistent mainloop runs on the rest.
+         The `__global__` entry point stays unchanged for every existing caller, so upstream
+         behaviour is untouched.
+      2. **The `fa3_has_split_kv<S>` trait**, which detects whether a scheduler's `WorkTileInfo`
+         carries `group_id` -- true for our `UnifiedWgmmaTileScheduler`, false for upstream's.
+         Needed because `block_coord` is destructured at a fixed arity of 8 by the body, so the
+         unified reduction's per-item fields cannot ride along it. Note this probes the
+         SCHEDULER's own `group_id` field, which we keep in
+         `unified_wgmma_scheduler.cuh` -- it is unrelated to the PLAN's `group_id` that K1a
+         dropped, and conflating the two would wrongly suggest this trait can go.
+      3. **`FLASHINFER_SHARED_HAS_MEMBER_PROBES`** guard, so `prefill.cuh` and
+         `hopper/prefill_sm90.cuh` can both define the member probes when the fused kernel
+         includes both in one translation unit.
+      4. **Q mbarrier init for packed GQA** (`barrier_Q.init(NumThreadsPerWarp)`): the
+         packed-GQA loader is one warp issuing its own `cp.async` completed with
+         `cp.async.mbarrier.arrive`, which tracks only the issuing thread's copies, so all 32
+         lanes must arrive for themselves. Arming for 32 is what lets Q complete WITHOUT a
+         `cp.async` group drain -- `commit_group` otherwise sweeps the producer's in-flight KV
+         copies into Q's group, and committed groups retire in order, so a drain waits on the
+         whole KV pipeline. **Arriving from 32 lanes on a barrier armed for 1 hung for 1500 s**,
+         which is the symptom to recognise if this is mis-ported.
+
+- [ ] **K1e. `nvcc_check.sh` over the full fused TU** (not just `persistent.cuh` +
+      `fused_plan.cuh`), then the fp32-reference PASS, then a timing. No A/B before the reference
+      passes. The five missing identifiers are
       now fully diagnosed, and the diagnosis is better news than the error list suggested:
       **four of the five are OUR OWN symbols**, not things 0.7 removed. Nothing needs a 0.7
       equivalent invented; the definitions simply have to be carried over, which the fuzzy apply

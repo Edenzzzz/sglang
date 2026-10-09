@@ -1806,9 +1806,34 @@ class FlashInferAttnBackend(AttentionBackend):
             kv_data_type=iu.data_type,
             non_blocking=False,
         )
+        # Are the two token sets contiguous ranges? In a merged 4-mode batch the layout is
+        # [prefill chunk tokens | verify tokens], so the FA3 rows are a contiguous PREFIX and the
+        # FA2 rows a contiguous SUFFIX. When that holds, each executor can write straight into a
+        # VIEW of the output and the two index_copy_ scatters disappear. Measured cost of those
+        # scatters: 1680 launches, 19.65 ms, 1.2% of kernel time in the B1b trace -- self-
+        # inflicted overhead inside the split's own regression. Checked, never assumed: a
+        # non-contiguous partition falls back to the scatter path.
+        _f3 = fa3_rows
+        _f2 = fa2_rows
+        _contig = (
+            len(_f3)
+            and len(_f2)
+            and int(_f3[-1]) - int(_f3[0]) == len(_f3) - 1
+            and int(_f2[-1]) - int(_f2[0]) == len(_f2) - 1
+        )
+        _fa3_span = _fa2_span = None
+        if _contig:
+            a3, b3 = int(tok_off[int(_f3[0])]), int(tok_off[int(_f3[-1]) + 1])
+            a2, b2 = int(tok_off[int(_f2[0])]), int(tok_off[int(_f2[-1]) + 1])
+            # Only a partition into two adjacent spans covering every token qualifies.
+            if min(a3, a2) == 0 and max(b3, b2) == _tok_total and (b3 == a2 or b2 == a3):
+                _fa3_span, _fa2_span = (a3, b3), (a2, b2)
+
         self.fused_split_plan = dict(
             # Retained so the planned FA2 wrapper's arrays outlive this call; see above.
             _keep=(fa2_qo_indptr, fa2_kv_indptr, kv2_indices, fa2_last_page),
+            fa3_span=_fa3_span,
+            fa2_span=_fa2_span,
             tok_total=_tok_total,
             fa3_tok=tok_idx("fa3_tok", fa3_rows),
             fa2_tok=tok_idx("fa2_tok", fa2_rows),
@@ -1884,6 +1909,9 @@ class FlashInferAttnBackend(AttentionBackend):
         if FUSED_SPLIT_DEBUG:
             self._fused_split_debug_check(f"dispatch:L{layer.layer_id}")
         o = torch.empty_like(qv)
+        # Contiguous spans -> write through views, no scatter. See the plan for the measurement.
+        _s3, _s2 = pl.get("fa3_span"), pl.get("fa2_span")
+        _use_views = _s3 is not None and _s2 is not None
 
         from sglang.kernels.ops.attention.flash_attention import flash_attn_with_kvcache
 
@@ -1905,8 +1933,9 @@ class FlashInferAttnBackend(AttentionBackend):
         _k_raw, _v_raw = self.token_to_kv_pool.get_kv_buffer(layer.layer_id)
         k_buf = paged_kv_view(_k_raw, self.page_size, layer.tp_k_head_num, hd)
         v_buf = paged_kv_view(_v_raw, self.page_size, layer.tp_v_head_num, layer.v_head_dim)
+        _q3 = qv[_s3[0] : _s3[1]] if _use_views else qv[pl["fa3_tok"]]
         o_fa3 = flash_attn_with_kvcache(
-            q=qv[pl["fa3_tok"]],
+            q=_q3,
             k_cache=k_buf,
             v_cache=v_buf,
             page_table=pl["page_table"],
@@ -1918,7 +1947,10 @@ class FlashInferAttnBackend(AttentionBackend):
             softcap=logits_soft_cap if logits_soft_cap else 0.0,
             sm_margin=self.fused_sm_margin,
         )
-        o.index_copy_(0, pl["fa3_tok"], o_fa3.view(-1, hq, hd).to(o.dtype))
+        if _use_views:
+            o[_s3[0] : _s3[1]].copy_(o_fa3.view(-1, hq, hd))
+        else:
+            o.index_copy_(0, pl["fa3_tok"], o_fa3.view(-1, hq, hd).to(o.dtype))
 
         if pl.get("no_fa2_wrapper"):
             if ref_wrapper is None or kv_cache is None:
@@ -1942,14 +1974,18 @@ class FlashInferAttnBackend(AttentionBackend):
             return o
 
         o_fa2 = self.fused_fa2_wrapper.forward(
-            qv[pl["fa2_tok"]],
+            qv[_s2[0] : _s2[1]] if _use_views else qv[pl["fa2_tok"]],
             # Already resolved by the caller, including the fp4-dequant workspace case.
             kv_cache,
             causal=causal,
             sm_scale=layer.scaling,
             logits_soft_cap=logits_soft_cap,
         )
-        o.index_copy_(0, pl["fa2_tok"], o_fa2.view(-1, hq, hd).to(o.dtype))
+        if _use_views:
+            o[_s2[0] : _s2[1]].copy_(o_fa2.view(-1, hq, hd))
+        else:
+            o.index_copy_(0, pl["fa2_tok"], o_fa2.view(-1, hq, hd).to(o.dtype))
+        self.fused_split_views = getattr(self, "fused_split_views", 0) + (1 if _use_views else 0)
 
         # Counted here, ahead of the verify block below that reads it.
         self.fused_split_calls += 1

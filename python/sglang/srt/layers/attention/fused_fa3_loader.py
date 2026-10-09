@@ -59,11 +59,34 @@ def fi_data_dir() -> str | None:
 
 
 def _generated_config_dirs() -> list[str]:
-    return sorted(
-        glob.glob(
-            os.path.expanduser("~/.cache/flashinfer/*/generated/batch_attention_with*")
-        )
+    """Generated batch_attention config dirs, asked of flashinfer rather than guessed.
+
+    The old glob (~/.cache/flashinfer/*/generated/batch_attention_with*) missed under 0.7 twice
+    over: 0.7 inserts an ARCH segment, so the path is <version>/<arch>/generated/..., and sglang
+    redirects the cache base at import time, which moved the whole tree under ~/.cache/sglang/.
+    FLASHINFER_GEN_SRC_DIR is computed from the same env the running process used, so it tracks
+    both without this file knowing about either. The glob stays as a fallback for a flashinfer
+    old enough not to export it.
+    """
+    roots: list[str] = []
+    try:
+        from flashinfer.jit import env as _fi_env
+
+        gen = getattr(_fi_env, "FLASHINFER_GEN_SRC_DIR", None)
+        if gen is not None:
+            roots.append(os.path.join(str(gen), "batch_attention_with*"))
+    except Exception:
+        pass
+    roots.append(
+        os.path.expanduser("~/.cache/flashinfer/*/generated/batch_attention_with*")
     )
+    roots.append(
+        os.path.expanduser("~/.cache/flashinfer/*/*/generated/batch_attention_with*")
+    )
+    out: list[str] = []
+    for pat in roots:
+        out.extend(d for d in glob.glob(pat) if os.path.isdir(d))
+    return sorted(dict.fromkeys(out))
 
 
 def _ensure_generated_config() -> str:

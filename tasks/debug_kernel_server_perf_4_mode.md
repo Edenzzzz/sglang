@@ -814,8 +814,57 @@ of the first arm:**
 
 - [x] 2026-10-09 **throughput bar NOT met** -- flat to -0.6% across split arms, `g ~= 1`.
 - [x] 2026-10-09 **P99 ITL improves 13-14%**, mean ITL flat; 30% ITL bar not met.
-- [ ] 2026-10-09 **TTFT: warmed, reversed-order control running** -- the -44%/-73% figures are
-      not usable until it reports.
+### 2026-10-09 -- WARMED, REVERSED-ORDER A/B: the split is a net REGRESSION in serving
+
+Driver `drv/split_perf_mtp.sh` with a discarded warmup pass per arm and the arm order reversed
+(`base` LAST), `sglang-up@69595708c`, raw results `/dev/shm/w/split_perf_mtp_results.txt`.
+Same server/workload as the unwarmed run. Arms are listed in execution order.
+
+| arm (exec order) | split calls | tok/s | Mean TTFT | P99 TTFT | Mean ITL | P99 ITL |
+|---|---|---|---|---|---|---|
+| noguard_m8 | 8001 | 12084.54 | 137.14 | 242.30 | 18.97 | 63.45 |
+| noguard_m0 | 8001 | 12361.23 | 140.70 | 256.80 | 18.56 | 62.92 |
+| guard_on | 7501 | 12369.17 | 137.37 | 238.96 | 18.53 | 62.85 |
+| **base (split OFF)** | 0 | **13276.37** | **131.72** | 244.44 | **17.28** | **62.15** |
+
+**The split LOSES on every metric once the warmup confound is removed:**
+
+| metric | base | best split arm | delta |
+|---|---|---|---|
+| total tok/s | 13276.37 | 12369.17 | **-6.8%** |
+| Mean ITL | 17.28 | 18.53 | **+7.2% worse** |
+| Mean TTFT | 131.72 | 137.37 | **+4.3% worse** |
+| P99 ITL | 62.15 | 62.85 | +1.1% worse |
+
+**RETRACTED in full: every favourable reading from the unwarmed run.** The "-44% mean / -73% P99
+TTFT" was warmup, as suspected and flagged. But the "**P99 ITL improves 13-14%**" claim, which I
+had explicitly argued was *safe* because the three split arms agreed with each other, is **also
+wrong**: base's warmed P99 ITL is 62.15 ms, better than every split arm. Mutual agreement among
+the treated arms said nothing, because all three shared the same confound relative to an
+unwarmed control. That reasoning was faulty and the conclusion drawn from it is withdrawn.
+
+So the honest result: **a kernel that is 1.22x faster on isolated attention is a 6.8% throughput
+REGRESSION in the 4-mode server**, at `g ~= 1` coverage (7501-8001 fused calls per arm). The
+kernel-level speedup does not survive contact with the serving loop.
+
+Most likely causes, in order of suspicion, none yet measured:
+1. **Per-step host cost in `_fused_split_plan`**: fresh allocations every step, numpy
+   concatenations, three indptr builds, a per-row `req_to_token` gather and an extra flashinfer
+   `begin_forward` -- on the critical path, once per step, and the reason upstream preallocates.
+   This is the same per-step allocation pattern already implicated in the CUDA-graph fault.
+2. **Extra kernel launches**: two attention calls plus two `index_copy_` scatters per layer
+   instead of one call, ~28x per step.
+3. **`--disable-cuda-graph` on both arms** removes graph capture, which amortises exactly this
+   kind of launch and host overhead -- so this configuration is maximally unfavourable to the
+   split and the regression may be smaller (or absent) with graphs on. That cannot be tested
+   until the preallocation fix lands.
+
+- [x] 2026-10-09 **TTFT/ITL/throughput bars: NOT met; the split REGRESSES -6.8% tok/s** in the
+      warmed, order-reversed A/B.
+- [ ] 2026-10-09 **preallocate the plan's buffers, then re-measure with graphs ON** -- the one
+      change that could plausibly turn this around, and it is required for graph safety anyway.
+- [x] 2026-10-09 **`sm_margin` does not transfer**: margin 8 is the WORST arm here
+      (12084 tok/s) despite being the kernel-harness optimum. Use margin 0.
 - [ ] 2026-10-09 **guard-OFF arm re-running with `370c511f3`** -- in-server correctness of the
       split on real merged 4-mode batches, via the in-step reference.
 

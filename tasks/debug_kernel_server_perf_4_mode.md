@@ -1468,7 +1468,39 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       way** -- items-never-ran, zero-iteration mainloop, unnormalised accumulator, packed-GQA
       addressing.
 
-      **Next: explain the 2 rows that PASS.** 254 of 256 bad has survived every change. At gqa=4
+      **[x] EXPLAINED (2026-10-10): the 2 passing rows are `[0, 128]` -- stride CTA_Q, not
+      CTA_Q/gqa.** Five serialised repeats: **2 completed, 3 hung** (rc=124), and both completions
+      bit-identical:
+
+      ```
+      passing rows (2): [0, 128]
+      first=0 last=128 mod32=[0] mod128=[0]
+      worst rel err 6.153e+06, bad rows 254/256
+      ```
+
+      The stride between correct rows is **128 = CTA_Q**. The correct stride is **32 =
+      CTA_Q / gqa_group_size**: a q tile covers 128 **packed** rows, which at gqa=4 is 32 tokens.
+      So the epilogue advances output rows by the **packed** tile width where it should advance by
+      the **token** width -- a missing `/G` on the output row mapping. Only rows where the two
+      coincide land correctly, which for 256 tokens is exactly tokens 0 and 128. **254/256 is not
+      a near-miss; it is the predicted count for this mapping.**
+
+      This explains why completing the packed-GQA feature changed nothing: `write_packed` maps a
+      packed row to `(token, head-in-group)` correctly, but the **tile base** handed to it is
+      still in packed units, so every tile starts at the wrong token. Addressing *within* a tile
+      was fixed; addressing *between* tiles was not. The earlier refutation becomes precise rather
+      than merely negative -- the packed-GQA port was **necessary and insufficient**, and what
+      remains is one factor of G on the tile base, not a missing component.
+
+      To check before changing anything: whether `qo_tile_idx * CTA_Q` is used as a **token**
+      offset in `write_packed`'s caller chain, and whether `tile_base` inside `write_packed`
+      (`q_tile_idx * get<0>(TileShape_QKD{})` in the 0.3.1 source) is packed or token units. 0.3.1
+      computed packed rows and divided at the coord, so the port may have kept the base and
+      dropped the divide.
+
+      (Hang rate now **3 of 5**, so FA3 timing remains blocked regardless.)
+
+      **Superseded framing:** explain the 2 rows that PASS. 254 of 256 bad has survived every change. At gqa=4
       and CTA_Q=128 a tile covers 32 tokens, so 2 is not a tile boundary -- whatever makes those
       two rows correct is a sharper constraint than the 254 wrong ones, and cheaper to chase than
       porting another component. Print which row indices pass.

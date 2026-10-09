@@ -1535,7 +1535,31 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       probe's note -- "if these are NaN the fault is upstream in the compute, not in the write" --
       points the same way for non-NaN-but-replicated.
 
-      **So the fault is UPSTREAM of the epilogue, in the Q load or mainloop** -- the opposite end
+      **Q-LOAD PROBE (2026-10-10): addresses ALSO exact -- but the gather runs 3-4x per work
+      item.** Offsets hand-checked against `q` as `[tokens, num_qo_heads, head_dim]`:
+      `115712/128 = 904 = 32*28 + 8` (token 32, kv_head 2) and `688640/128 = 5380 = 192*28 + 4`
+      (token 192, kv_head 1). **Both ends of the chain are now verified exact** -- the gather
+      sources the right Q rows, `write_packed` stores to the right O rows. That eliminates the
+      entire index-space family for the FA3 role, which is what produced six bugs on the FA2 side.
+
+      The finding is the **line count**: **192** `[qld]` lines for **56** work items, with the same
+      `blk`/`tile` repeating (`blk=4 tile=6` four times in eight consecutive lines). One Q load per
+      work item means 56 was expected.
+
+      **One mechanism explains BOTH symptoms**, which no previous candidate did:
+      - *wrong data* -- a re-run gather re-issues `cp.async` into the same `sQ` while the consumer
+        may already be reading it; repeated 16 B writes to the same smem rows is exactly how
+        adjacent head-dim elements end up identical (0, 2, 3 equal in the `[wpk]` dumps);
+      - *the intermittent hang* -- `barrier_Q`'s phase advances per work item and the consumer
+        waits on phase `work_idx % 2`; extra arrivals desynchronise that phase, stalling rather
+        than faulting, timing-dependent. 0.3.1's note: issuing the arrive "once per work item keeps
+        that phase in step".
+
+      **Candidate, not confirmed:** the gather sits inside the producer warpgroup's KV loop rather
+      than outside it, re-executing per KV tile or pipeline stage. Check by printing the KV tile
+      index alongside -- if it increments with the repeats, the placement is the bug.
+
+      **(Superseded framing:)** the fault is UPSTREAM of the epilogue, in the Q load or mainloop -- the opposite end
       of the chain from where the last several entries looked. The packed-Q gather is the obvious
       suspect (newest code there, own `cp.async` per lane), but that is a candidate: next step is
       to **read the loaded `sQ`**, printing `sQ[0, 0..3]` right after the Q load and comparing

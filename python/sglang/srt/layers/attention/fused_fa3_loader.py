@@ -29,8 +29,33 @@ _LOADED = False
 
 
 def fi_root() -> str:
-    """The flashinfer SOURCE tree (not the installed wheel) holding the kernel and cutlass."""
+    """Tree holding the kernel SOURCE (`tests/fused_fa3_persistent_ext.cu`)."""
     return os.environ.get("SGLANG_FUSED_FI_ROOT", "/dev/shm/w/fi")
+
+
+def fi_data_dir() -> str | None:
+    """The INSTALLED flashinfer wheel's bundled headers (`flashinfer/data`).
+
+    The headers must come from the flashinfer the SERVER runs, not from the source tree the
+    kernel was written against. `HolisticPlanInfo`'s serialised length is a property of the
+    header: the 0.3.1 source tree yields 56/68 entries while the installed 0.7.0.post1
+    `BatchAttention._plan_info` is 28, and the kernel's own guard then rejects every plan
+    (`persistent plan has 28 entries, expected 56 or 68`). Compiling against the installed
+    wheel's headers makes the two agree by construction.
+
+    Returns None if the wheel ships no bundled headers, in which case the caller falls back to
+    the source tree and the mismatch is reported rather than hidden.
+    """
+    override = os.environ.get("SGLANG_FUSED_FI_DATA")
+    if override:
+        return override
+    try:
+        import flashinfer
+
+        d = os.path.join(os.path.dirname(flashinfer.__file__), "data")
+    except Exception:
+        return None
+    return d if os.path.isdir(os.path.join(d, "include")) else None
 
 
 def _generated_config_dirs() -> list[str]:
@@ -91,17 +116,39 @@ def load_fused_fa3(verbose: bool = False) -> None:
             "flashinfer SOURCE tree"
         )
     gen = _ensure_generated_config()
-    load(
-        name="fused_fa3",
-        sources=[src],
-        extra_include_paths=[
+    data = fi_data_dir()
+    if data:
+        # Installed wheel's bundled headers: cutlass/spdlog/cccl live directly under data/,
+        # not under a 3rdparty/ prefix as in the source tree.
+        includes = [
+            gen,
+            f"{data}/include",
+            f"{data}/csrc",
+            f"{data}/cutlass/include",
+            f"{data}/cutlass/tools/util/include",
+            f"{data}/spdlog/include",
+            f"{data}/cccl/thrust",
+            f"{data}/cccl/libcudacxx/include",
+            f"{data}/cccl/cub",
+        ]
+        includes = [p for p in includes if os.path.isdir(p)]
+    else:
+        logger.warning(
+            "installed flashinfer ships no bundled headers; compiling against the source tree "
+            "at %s, whose plan layout may not match the running flashinfer", root
+        )
+        includes = [
             gen,
             f"{root}/include",
             f"{root}/csrc",
             f"{root}/3rdparty/cutlass/include",
             f"{root}/3rdparty/cutlass/tools/util/include",
             f"{root}/3rdparty/spdlog/include",
-        ],
+        ]
+    load(
+        name="fused_fa3",
+        sources=[src],
+        extra_include_paths=includes,
         extra_cuda_cflags=[
             # C++20, not the harness's 17: torch 2.14's headers require it.
             "-std=c++20",
@@ -129,4 +176,7 @@ def load_fused_fa3(verbose: bool = False) -> None:
             "fused_fa3 compiled but torch.ops.fused_fa3.fused_run is not registered"
         )
     _LOADED = True
-    logger.info("fused_fa3 kernel loaded (fi_root=%s, generated=%s)", root, gen)
+    logger.info(
+        "fused_fa3 kernel loaded (src=%s, headers=%s, generated=%s)",
+        root, data or f"{root} (source tree)", gen,
+    )

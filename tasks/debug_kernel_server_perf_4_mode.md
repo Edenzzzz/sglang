@@ -1372,7 +1372,38 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       `tile_size`, **none of which I have printed**. Print all three from inside `write_packed`,
       with the expected per-thread iteration count stated first.
 
-      **Stride probe produced NO output (2026-10-10) -- not interpretable.** A probe inside
+      **[x] THE OUTPUT IS A PERMUTATION (2026-10-10).** Folding the stride values into the
+      already-firing `[wpk]` printf (its own null case) gave **28** `[wsz]` lines = 28 work items:
+
+      ```
+      [wsz] thread_idx=0 num_threads=128 tile_size=128 iters=1
+      distinct thread_idx seen: 0, 128, 160
+      OURS vs STOCK: ours absmax=0.367188  stock absmax=0.367188  (IDENTICAL)
+                     ours: 128/128 rows non-zero
+                     rel(ours, stock) = 4.82878
+      ```
+
+      1. `thread_idx` ranges **beyond** `tile_size`: 128 and 160 appear, and with
+         `for (i = thread_idx; i < 128; i += 128)` those threads run **zero** iterations. Threads
+         0..127 still cover all rows, so this is **idle capacity** in the store (half the MMA
+         threads do no work) -- a performance issue, not correctness.
+      2. Coverage is **full** (128/128), where an earlier run measured 32/128. Not claiming the
+         earlier number was wrong, but the two disagree and only this one has the stride
+         quantities beside it -- **32/128 should not be relied on.**
+      3. **`ours absmax == stock absmax` exactly**, full coverage, `rel = 4.83`. Identical extremes
+         + full coverage + large rel = **the right values are all present in the wrong rows.** The
+         output is a **permutation**, not a corruption.
+
+      Consistent with every surviving measurement -- per-item addresses exact, Q load verified,
+      values of correct magnitude. A permutation is precisely what "every address individually
+      correct, the mapping collectively wrong" looks like, and what a one-item-at-a-time address
+      check cannot detect.
+
+      **Next:** confirm it directly -- for each output row find which reference row it equals
+      (match on leading elements) and print the row->row map. A clean permutation will show its
+      pattern (a stride, a token/head-in-group swap, a tile rotation) and that names the fix.
+
+      **(Superseded:)** Stride probe produced NO output -- not interpretable. A probe inside
       `write_packed` printing `thread_idx` / `num_threads` / `tile_size` / iteration count gave
       **zero** lines, while `[wpk]` fires from the same function on a **narrower** gate
       (`thread_idx == 0` vs `threadIdx.x % 32 == 0`). So either the header change did not reach

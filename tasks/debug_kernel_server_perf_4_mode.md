@@ -1519,6 +1519,32 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       fused path's template parameters or params, body exonerated. Needs only an include-path
       change, not a second flashinfer version.
 
+      **[!] REFRAMING (2026-10-10): the accumulator duplication implies DUPLICATED Q INPUT, and
+      the gather's SOURCES were only ever verified for row 0.**
+
+      The PV accumulator holding identical values in both rows of its 2x2 fragment is what the MMA
+      produces when **fed two identical q rows**. Identical outputs from distinct inputs would be
+      a hardware fault; identical outputs from identical inputs is correct behaviour. So the likely
+      state is that `sQ` rows are duplicated and the MMA is faithfully computing the same answer
+      twice.
+
+      **Two of my own checks fail to exclude that, for the same reason each time:**
+      1. The `[qld]` probe printed `src_off` for `pr0 = tile_base` **only** -- row 0 of each tile,
+         never `i >= 1`. So the gather's **destinations** are verified (`[cov]`: 128/128 rows
+         written, all predicated valid) while its **sources** are verified for one row per tile. A
+         gather reading the same Q row for every `i` passes every check I ran.
+      2. The `[sqv]` probe I cited as showing "sQ values distinct" read `sQ` with **naive logical
+         indices** -- the same pattern that made the `sO` probe misreport a row's elements, and
+         which I had to un-retract. Its distinctness claim is unreliable for that same reason.
+
+      **Same failure shape as the store-side bug: destination verified, source not.** There I
+      found it by comparing values against **all** reference rows rather than their own expected
+      row. The equivalent here: print `src_off` for `i = 0` **and** `i = 1`.
+
+      **Expectation, stated first:** `packed_coord` maps `pr` and `pr+1` to the **same token at
+      the next head-in-group**, so `src_off` must differ by exactly one head's stride (128 elements
+      at HEAD_DIM=128). **Equal offsets confirm the duplication at its origin.**
+
       **Stage count: CORRECTED (2026-10-10).** An earlier commit message claimed the stage count
       is pinned at 1 because the fused kernel reserves **both** roles' storage, calling that "a
       real cost of fusion". **Withdrawn.** Making the FA2 reservation conditional on the split

@@ -201,6 +201,46 @@ The single-launch cost structure is the only one the serving data says can win.
 
 ---
 
+#### K1 scoped from 0.7's headers (2026-10-09): the reduction was REDESIGNED, not relocated
+
+Read `flashinfer/data/include/flashinfer/attention/scheduler.cuh` on the installed 0.7 wheel.
+`HolisticPlanInfo<NUM_TASKS>` now carries, **per task**: `q_indptr`, `kv_indptr`,
+**`partial_indptr`**, `q_len`, `kv_len`, `q_start`, `kv_start`, `kv_end`, `kv_head_idx`,
+`work_indptr` (10 fields); and **shared**: `len_kv_chunk`, `partial_o`, `partial_lse`,
+`merge_indptr`, `merge_o_indices`, `num_qo_len` (6 fields).
+
+**The four group tables the kernel indexes are gone and replaced.** 0.3.1 exposed
+`group_id` / `group_nchunks` / `group_row_begin` / `group_nrows` -- group counters the kernel's
+just-in-time reduction walked. 0.7 instead exposes a per-task **`partial_indptr`** plus shared
+**`merge_indptr` / `merge_o_indices`**, i.e. the conventional split-KV merge-list pattern. So the
+JIT reduction must be **rewritten against a different scheme**, not re-pointed at moved fields.
+This is the outcome flagged as possible before starting: *"if 0.7 removed those tables because
+the reduction itself was redesigned, I'll report that rather than force a port against a model
+that no longer exists."* It was redesigned.
+
+**The arithmetic confirms the model exactly.** `ToVector()` length is `2 + NUM_TASKS*10 + 6`:
+**NUM_TASKS=2 gives 28**, which is precisely the plan length 0.7's `BatchAttention` produced and
+the kernel rejected. So 0.7 also dropped from **3 tasks to 2**. (Note `NUM_SHARED_ARGS = 8` while
+only 6 shared fields are pushed -- the same count-vs-reality inconsistency 0.3.1 had at 16-vs-14,
+so **derive lengths from `ToVector()`, never from the `NUM_*_ARGS` constants**.)
+
+**Revised K1 content, in order:**
+
+- [ ] **K1a. Map the kernel's group-counter reduction onto `merge_indptr` / `merge_o_indices` /
+      per-task `partial_indptr`.** The kernel already owns `partial_o`, `partial_lse` and a
+      `merge_indptr` path, so the target representation is partly familiar; what changes is how a
+      chunk learns it is the last writer for a row. The 0.3.1 scheme used a `group_counter[gid]`
+      atomic against `group_nchunks[gid]`; 0.7's merge list makes that a scheduled merge instead
+      of a race, which should REMOVE the "counter can never complete when causal masking leaves a
+      chunk with no work item" defect recorded earlier in this doc.
+- [ ] **K1b. Rework the task layout from 3/4 tasks to 0.7's 2**, including what the
+      `UnifiedWgmmaTileScheduler` 4th task was carrying.
+- [ ] **K1c. Resolve the variant types** (`DefaultAttentionSm90` no longer a template,
+      `StandardAttention` ambiguous) and the `variant_helper.cuh` vs `hopper/variant_helper.cuh`
+      redefinition collision when both are on the include path.
+- [ ] **K1d. Re-establish the fp32-reference PASS and a real timing on 0.7** before any of A/B is
+      measured. The 1.30x figure is 0.3.1-only and must not be carried forward.
+
 #### A. Ultra fine-grained tile dispatcher for the different modes
 
 The four populations in a 4-mode step sit at different tile sizes, and the contested band is

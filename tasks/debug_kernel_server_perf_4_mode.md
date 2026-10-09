@@ -1390,7 +1390,39 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       passing row (the one place source and destination agree); Q load verified (compute was never
       the problem).
 
-      **Fix:** a read-side index in `write_packed` -- our ported code. The destination advances
+      **CORRECTED (2026-10-10): the fix is NOT in `write_packed`.** Line 87 reads
+      `buf[v] = sO(i, d + v)` -- the source **does** advance with the loop variable, as 0.3.1
+      does. `write_packed` is correct.
+
+      **The broadcast is CONFIRMED IN SMEM.** The probe prints `sO(0,0), sO(0,1), sO(1,0),
+      sO(2,0)` while its format string says `sO[0,0..3]`:
+
+      ```
+      sO(0,0)=0.032959  sO(0,1)=-0.035156  sO(1,0)=0.032959  sO(2,0)=0.032959
+      ```
+
+      Rows 0, 1, 2 of `sO` all hold row 0's value. **The earlier "elements 0,2,3 identical within
+      a row" was mislabelled, not an artifact** -- it was across *rows*, a genuine signal I
+      discarded because I misread which indices the printf passed. Retracting it was wrong; the
+      artifact was the label.
+
+      So the defect is in the **`tOrO` -> `sO` staging** in `store()`:
+
+      ```
+      Tensor tOrO_retile = smem_thr_copy_O.retile_S(convert_type<DTypeO>(tOrO));
+      Tensor tOsO        = smem_thr_copy_O.partition_D(sO);
+      cute::copy(smem_tiled_copy_O, tOrO_retile, tOsO);
+      ```
+
+      -- the register-to-smem copy's **partitioning**, not the gather, compute, or store
+      addresses, all verified. Every `sO` row receiving row 0 is what a `partition_D` with a
+      collapsed thread-to-row mapping produces.
+
+      First time the defect is pinned to a specific four-line sequence. It is upstream code
+      parameterised by **our** traits: `smem_tiled_copy_O` derives from `SmemCopyAtomO` and the
+      `TiledMma`, and the fused build's warp counts differ from a stock FA3 epilogue's.
+      **Next:** print `tOsO`'s layout and this thread's slice against the same from a stock build
+      -- a direct comparison, not an inference. The destination advances
       with the loop variable while the smem read does not. 0.3.1 reads `sO(r, d + v)` with `r` the
       loop variable; the port must be reading a fixed row. **One line to check.**
 

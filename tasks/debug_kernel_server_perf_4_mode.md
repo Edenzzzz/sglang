@@ -1495,6 +1495,34 @@ Both remaining errors are now understood exactly, and neither needs a design dec
 
       First time the search space is reduced to code I wrote, with the upstream compute exonerated
       by **provenance** rather than measurement.
+
+      **[x] A/B: THE DEFECT IS INDEPENDENT OF THE FUSION (2026-10-10).** Same build,
+      `SM_SPLIT=all` so every block is an FA3 role and no FA2 role co-resides:
+
+      ```
+      sm_split=16   tOrO[0..5]=0.032959 -0.035156 0.032959 -0.035156 -0.165039 0.014832
+      sm_split=all  tOrO[0..5]=0.032959 -0.035156 0.032959 -0.035156 -0.165039 0.014832
+      both: identity matches 1/128, worst rel err 11.81, 127/128 bad
+      ```
+
+      Bit-identical. **Eliminates in one run:** shared dynamic smem between roles, the warpgroup
+      arrangement from `fused_drain_queue`, the role split's register budget, and the
+      thread-index-base question from the two entries above. None can matter with no FA2 role
+      present and the result unchanged.
+
+      **What remains is `fa3_prefill_body` running alone -- my extraction.** The original
+      `__global__` is still a thin wrapper calling it, but flashinfer's stock FA3 module compiles
+      against the **wheel's** headers, not this overlay -- so the stock pass at 0.001779 does
+      **not** exercise my extracted body. **The decisive experiment:** build flashinfer's own FA3
+      module against the overlay's `prefill_sm90.cuh`, letting stock FA3 run through
+      `fa3_prefill_body`. Fails => the extraction is the bug. Passes => the difference is in the
+      fused path's template parameters or params, body exonerated. Needs only an include-path
+      change, not a second flashinfer version.
+
+      **Method note:** this A/B was the single most informative run of the item -- one environment
+      variable, no code change, four candidates retired at once. Against the many turns spent
+      adding probes: changing a parameter and comparing two runs of the **same build** beat
+      instrumenting one run, every time it was tried.
       `convert_type`. Coinciding => the PV MMA or `attention_updater` replicates one row. Not
       coinciding => the broadcast appears between `tOrO` and `sO` despite complete partitioning,
       meaning copy atom and layout disagree.

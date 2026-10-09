@@ -93,7 +93,12 @@ def main():
     nfa3 = len(fa3_q)
     sm_scale = 1.0 / math.sqrt(D)
     nsm = torch.cuda.get_device_properties(0).multi_processor_count
-    sm_split = 16
+    # SM_SPLIT=all makes every block an FA3 role, so the FA2 roles never co-reside. A true A/B of
+    # "fused context" vs "FA3 alone" on the SAME build: if the accumulator duplication disappears,
+    # coexistence with the FA2 role causes it (shared smem, warpgroup arrangement); if it
+    # persists, it is in fa3_prefill_body independent of the fusion. Cheaper than a second build
+    # configuration, which is the only other way to separate these.
+    sm_split = nsm if os.environ.get("SM_SPLIT") == "all" else 16
 
     total_q = sum(qo_lens)
     total_pages = sum(kv_lens)                       # page_size=1

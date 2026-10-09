@@ -1245,8 +1245,38 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       the usual ordering, and a caution against assuming one cause. **Not assumed:** that these
       share a cause, or that either explains mixed mode's 41.67.
 
-      Next, by the method that worked on FA2 rather than by hypothesis: sanitize
-      `MODE=fa3_1chunk` for the faulting kernel and block, then trace from **every** block --
+      **SANITIZED (2026-10-09): a NEGATIVE partial index -- a partial write on an unsplit row.**
+      `MODE=fa3_1chunk`, `CUDA_LAUNCH_BLOCKING=1`, a new signature (4 bytes, not 16):
+
+      ```
+      Invalid __global__ write of size 4 bytes
+      by thread (128,0,0) in block (8,0,0)
+      Access to 0x7f603fffffd4 is out of bounds
+      and is 44 bytes BEFORE the nearest allocation ... of size 1,073,741,824 bytes
+      at void flashinfer::FusedFA3PersistentKernel
+      ```
+
+      Three facts pin it: the 1 GB allocation is the driver's **float** workspace, so the target
+      is the partial buffers; a **4-byte** write is `partial_lse` (float), not `partial_o` (bf16,
+      written 16 B at a time); and it lands **before** the base, so the index is **negative**.
+      `-44/4 = -11`, which at `num_kv_heads=7` is `(-2)*7 + 3` -- a partial row index of −2 at kv
+      head 3. **−1 is exactly what `BuildFusedMergeLayout` writes into `partial_indptr` for a row
+      it marked UNSPLIT.** So a row the plan says needs no partial is reaching a partial write,
+      and the offset arithmetic runs off the front of the buffer.
+
+      Block 8 is below `sm_split=16`, so an FA3-role block -- consistent, since the FA3 epilogue
+      gates `store_partial` on `work_tile_info.group_id >= 0`, and `group_id` is now **derived**
+      in the scheduler as `(num_kv_chunks > 1) ? 0 : -1` from
+      `ceil_div(kv_len, len_kv_chunk[0])`. For this fixture that is `ceil_div(128,128) = 1`, so
+      the gate should be **closed**. One of those two inputs is therefore not what the plan
+      wrote -- the same class as the five plan index-space bugs, and settled by printing what the
+      FA3 scheduler actually read, from every block.
+
+      **Not assumed:** whether this also explains `MODE=fa3`'s wrong numbers at kv=2048 (which
+      does *not* fault) or mixed mode's 41.67.
+
+      Earlier plan, now partly executed: sanitize for the faulting kernel and block, then trace
+      from **every** block --
       the all-block trace is what found `q_indptr`, while single-block traces produced three
       retractions. The FA3 analogue of the `q_indptr`/`kv_indptr` family is the ext's own FA3
       params (`nnz_qo`, `o_stride_n`, and vector-sparse `fa3_kv_indices` vs the upstream-port raw

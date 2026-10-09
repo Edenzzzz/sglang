@@ -54,6 +54,15 @@ def main():
     if mode == "fa2":
         fa3_q, fa3_kv = [], []
         fa2_q, fa2_kv = [256, 1, 1], [2048, 300, 512]
+    elif mode == "fa2_1tile":
+        # tile-128 q class but a SINGLE kv tile (kv=128 = TILE_KV). Separates "the tile-128 q
+        # path" from "a row spanning many kv tiles" -- the two things MODE=fa2 changed at once
+        # relative to mixed mode.
+        fa3_q, fa3_kv = [], []
+        fa2_q, fa2_kv = [256], [128]
+    elif mode == "fa2_2tile":
+        fa3_q, fa3_kv = [], []
+        fa2_q, fa2_kv = [256], [256]
     elif mode == "fa3":
         fa3_q, fa3_kv = [256, 1, 1], [2048, 300, 512]
         fa2_q, fa2_kv = [], []

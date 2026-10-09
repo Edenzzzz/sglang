@@ -1169,7 +1169,29 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       conclusion retracted above, but on different and sufficient evidence -- the retraction was
       correct when made, since the only support then was a branch-gated trace never shown to fire.
 
-      Candidates, narrowed by the fixture and **not yet tested**: `MODE=fa2` is the first
+      **FIXTURE BISECT (same day) -- the fault needs MANY kv tiles, and short kv now runs:**
+
+      | fixture | kv tiles | result |
+      |---|---|---|
+      | `fa2_1tile` q=256 kv=128 | 1 | **no fault**, worst rel 1.169, 255/256 bad |
+      | `fa2_2tile` q=256 kv=256 | 2 | **no fault**, worst rel 1.991, 224/256 bad |
+      | `fa2` q=256 kv=2048 | 16 | **illegal access** |
+
+      So the tile-128 q class by itself does **not** fault -- the illegal access is specific to a
+      row spanning many kv tiles. That separates the two things `MODE=fa2` changed at once
+      relative to mixed mode, and gives a fixture that RUNS and can be debugged numerically
+      rather than by address.
+
+      The numeric signal is structured: in `fa2_2tile` exactly **32 of 256** rows are correct,
+      and 32 is one tile-128 q tile's worth of TOKENS (128 packed / gqa 4). The row is 1024
+      packed rows = 8 q tiles, so **one q tile lands correctly and seven do not** -- which points
+      at per-tile q addressing or tile coverage, and is checkable by printing each work item's q
+      tile index and the output rows it writes.
+
+      **Not assumed:** whether the long-kv fault and the short-kv wrongness share a cause, or
+      whether either explains mixed mode's 39.68. Treat as separate until one fix moves both.
+
+      Earlier candidate list, superseded by the bisect: `MODE=fa2` is the first
       configuration in which the **tile-128** class runs a row spanning many KV tiles (1024
       packed rows, 2048 kv), so the newly exposed machinery is the **S-slot K/V ring** -- where
       our staged wrapper's `NUM_KV_STAGES` had to be reconciled with 0.7's `NUM_STAGES` via the

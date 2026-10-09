@@ -143,6 +143,25 @@ def main():
         tok, hd = 32 * t, 0
         print(f"HOST q[tok={tok},head={hd},0..3] = "
               f"{[round(float(x), 6) for x in q[tok, hd, :4]]}")
+    # NULL CASE for the FA3 arm of this harness, never run before: does flashinfer's OWN stock
+    # FA3 pass this reference? FA2 passing validates the reference for FA2's conventions only. If
+    # stock FA3 fails it too, the ~45 residual is a convention mismatch here (layout, scale,
+    # masking) rather than a bug in our fused integration -- and every FA3 conclusion in K1n would
+    # need re-reading. The wrapper `w` is already planned over the FA3 subset above.
+    if nfa3 > 0:
+        try:
+            o_stock = w.run(q[: sum(fa3_q)], (k_cache, v_cache))
+            kpad_s = [k_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(nplan)]
+            vpad_s = [v_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(nplan)]
+            ref_s = fp32_causal_reference(q, kpad_s, vpad_s, fa3_q[:nplan], fa3_kv[:nplan], sm_scale)
+            n = min(o_stock.shape[0], ref_s.shape[0])
+            num = (o_stock[:n].float() - ref_s[:n]).norm().item()
+            den = max(ref_s[:n].norm().item(), 1e-6)
+            print(f"STOCK FA3 vs reference: rel={num / den:.4g}  "
+                  f"{'PASS -> reference is valid for FA3' if num / den <= 2e-2 else 'FAIL -> reference convention does NOT match FA3'}")
+        except Exception as e:
+            print(f"STOCK FA3 null case could not run: {type(e).__name__}: {e}")
+
     o = torch.zeros_like(q)
     pers_o = torch.zeros_like(q)
     nfa3_rows = sum(fa3_q)

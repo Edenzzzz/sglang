@@ -1296,6 +1296,24 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       | `fa3` | 44.84 | 45.1 |
       | `mixed` | 41.67 | 45.44, 256/258 (FA2 rows pass) |
 
+- [x] **K1n-null. THE HARNESS IS VALIDATED ON BOTH ARMS (2026-10-10).** Stock flashinfer FA3
+      (`BatchPrefillWithPagedKVCacheWrapper(backend="fa3")`) on the same q/k/v against the same
+      fp32 causal reference: **rel=0.001779 PASS** -- the same bf16 residual the FA2 path gets
+      (0.002126). So the reference's layout, softmax scale and bottom-right causal masking all
+      match FA3's conventions.
+
+      This null case had **never been run**; FA2 passing only validated the reference for FA2's
+      conventions, which is precisely the gap that let the ill-posed `fa3_1chunk` fixture waste an
+      investigation. **Consequence: the FA3 residual is a genuine bug in our fused integration,
+      not a harness mismatch** -- so every K1n measurement can be read at face value against a
+      reference validated on both arms. That matters after five probe artifacts and one fully
+      retracted investigation here.
+
+      (`fa3_1chunk` read 128/128 bad in this run vs 127/128 before: the stock-FA3 call now
+      precedes it and writes into the same `o` buffer the fused path reuses, so token 0's prior
+      accidental agreement is gone. An artifact of adding the null case ahead of the comparison --
+      fix by giving the stock run its own output tensor.)
+
 - [~] **K1n. STALL FIXED AND VERIFIED (2026-10-10, `flashinfer@` warp-guard commit); one
       deterministic residual remains.**
 

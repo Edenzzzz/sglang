@@ -1321,9 +1321,27 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       fix -- which the earlier single samples from a flaky path could not. `11.81` is **not**
       comparable to the retracted 6.153e+06 (different, ill-posed fixture).
 
-      **Next:** 127 of 128 wrong with exactly row 0 right, on a 4-q-tile fixture. Sharp
-      constraint, and **not** a reference artifact this time -- the fixture is well-posed and the
-      `kl >= ql` assert would have fired.
+      **Within-tile stepping ALSO exact (2026-10-10) -- row-stride hypothesis refuted.** The
+      earlier check printed only the tile base, so it was blind to within-tile stepping, and row 0
+      is the one row immune to a wrong row stride. Extended to r=1 and hand-checked against
+      `((token)*num_qo_heads + kvh*G + hig)*HEAD_DIM`:
+
+      | blk/tile | kvh | pr=0 | expected | pr=1 | expected |
+      |---|---|---|---|---|---|
+      | 7/0 | 3 | 1536 | `12*128` OK | 1664 | `13*128` OK |
+      | 4/3 | 1 | 344576 | `2692*128` OK | 344704 | `2693*128` OK |
+
+      `pr=1` correctly lands on the **same token, next head-in-group**, which is what the packed
+      layout requires. **Store addressing is now verified end to end** -- bases and within-tile
+      stepping -- on top of the verified Q load and the identical layouts/MMA.
+
+      **No further mechanism proposed for row 0 surviving.** Four hypotheses in this item were
+      retracted and the two that were not were refuted by the next measurement; the pattern is
+      that I infer from a partial measurement and the fuller one contradicts it. Addressing is now
+      measured as completely as a probe can, and is correct -- so the fault is in the computed
+      **values**, and the useful next measurement is of values: dump `sO` for one known
+      `(tile, row, head)` and compare **elementwise** against the reference's expected vector for
+      that exact row. A direct comparison with no inference step.
 
 - [ ] **K1n-old. The FA3 role produces garbage, and it is a DIFFERENT failure mode.**
 - [ ] **K1i. Recreate the correctness drivers.** The pod's `drv/` kept only the perf scripts

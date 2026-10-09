@@ -1511,7 +1511,41 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       inference was one step too fast: a CTA_Q stride in the output is consistent with a missing
       divide **anywhere** in the chain, and I attributed it to the one function I had not read.
 
-      Candidates, none inspected, none to be acted on before reading:
+      **RESOLVED BY DEVICE PROBE (2026-10-10): the addresses are exact; the VALUES are wrong.**
+      Enabled `write_packed`'s own probe (`FLASHINFER_FA3_PARTIAL_PROBE`, plumbed as `FA3_PROBE`).
+      64 `[wpk]` lines, so the packed branch **is** taken. Offsets hand-checked against
+      `((qo_indptr + tok) * num_qo_heads + kvh*G + r) * HEAD_DIM`:
+
+      | tile | kvh | tok | probe | expected | |
+      |---|---|---|---|---|---|
+      | 0 | 3 | 0 | 1536 | `12*128` | OK |
+      | 1 | 2 | 32 | 115712 | `904*128` | OK |
+      | 4 | 6 | 128 | 461824 | `3608*128` | OK |
+
+      **The store's mapping is exact for every tile**, so the epilogue is not the error and the
+      stride-128 passing pattern does not come from the write. What the probe shows instead:
+
+      ```
+      [wpk] blk=14 tile=2 sO[0,0..3]=0.059326 -0.011597 0.059326 0.059326
+      [wpk] blk=12 tile=3 sO[0,0..3]=-0.037598 0.062988 -0.037598 -0.037598
+      ```
+
+      Elements 0, 2, 3 are **identical** within a row, in both samples. Adjacent head-dim elements
+      being equal is not attention output; it is a broadcast or a wrongly-strided load. The 0.3.1
+      probe's note -- "if these are NaN the fault is upstream in the compute, not in the write" --
+      points the same way for non-NaN-but-replicated.
+
+      **So the fault is UPSTREAM of the epilogue, in the Q load or mainloop** -- the opposite end
+      of the chain from where the last several entries looked. The packed-Q gather is the obvious
+      suspect (newest code there, own `cp.async` per lane), but that is a candidate: next step is
+      to **read the loaded `sQ`**, printing `sQ[0, 0..3]` right after the Q load and comparing
+      against `q[token, head]` on the host.
+
+      Candidates 2 and 3 below are also resolved: `tile_shape_O` is **eliminated** (`get<0>` of
+      `TileShape_PDV` and `TileShape_QKD` are both `CTA_Q`), and the LSE path cannot explain a
+      wrong O when the addresses are confirmed right.
+
+      **(Superseded candidate list:)**
       - whether the `#ifdef` arm is taken at all -- `store_zero` also writes O and is not
         packed-aware;
       - **the LSE path**: `get_lse_local_tile_tensor` indexes on `qo_len`, which arrives

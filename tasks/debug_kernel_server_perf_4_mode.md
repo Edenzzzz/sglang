@@ -965,22 +965,51 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       `-DFLASHINFER_FUSED_UNIFIED_WGMMA=1`, the latter being the only configuration that
       instantiates `store_partial`.
 
-- [ ] **K1c2 (THE remaining blocker before the fp32 reference -- corrected). The CUDA body of
-      `FusedFourTaskPlan`.** `fused_run` takes both plans as `std::vector<int64_t>`:
-      `fa3_plan` (flashinfer's own `PrefillPlanSM90Info`, available) and `pers_plan` (**our**
-      `FusedPlanInfo`, which nothing can currently produce). The host halves are written and
-      tested -- `EnumerateFusedWorkItems`, `BuildFusedMergeLayout`, and the 58-entry round trip
-      all pass `run_host_checks.sh` -- but the device half is not written, so there is no way
-      to get a `pers_plan` and therefore no way to call the kernel at all. The reference is
-      gated on this, not on the harness.
+- [~] **K1c2 (2026-10-09). The CUDA body of `FusedFourTaskPlan` is WRITTEN and compiles, and
+      running it found a real layout conflict before the kernel ever executed.**
 
-      Two things it must get right, both of which have already cost a wrong answer once:
-      - the cluster-cursor initialisation, and
-      - the `partial_indptr` layout agreeing with 0.7's
-        `PersistentVariableLengthMergeStatesKernel`. `store_partial` now writes at
-        `partial_indptr + row * num_kv_chunks + kv_chunk_idx`, times `num_kv_heads`, times
-        head_dim, with `num_kv_chunks` derived by the **plan's** formula. The merge kernel must
-        read exactly that; a disagreement is what left 511/512 rows unwritten in fixture 2.
+      Written: chunk choice (one chunk per FA3 SM, rounded up to `TILE_KV=128` so no boundary
+      falls mid-tile), work-item enumeration, merge layout, per-task `work_indptr` (the FA3
+      task over exactly `sm_split` CTAs, which the dispatcher checks), a 16 B-aligned bump
+      allocator over page-locked staging, and ONE H2D copy. Compiles (`PLAN_COMPILES`), and
+      `tests/test_plan_build.cu` runs it on a mixed batch (2 long FA3 rows + 3 decode rows).
+
+      **It returns `cudaErrorInvalidValue`, and the cause is a partial-slab addressing conflict
+      -- the 511/512 class of bug, caught before execution this time.** With
+      `FLASHINFER_FUSED_PLAN_DEBUG=1`:
+
+      ```
+      items=0/0/21/1708  partial_rows=218624  int_bytes=72656/67108864
+      float_bytes=789669888/536870912 (o=783548416 lse=6121472)
+      ```
+
+      `partial_rows` decomposes **exactly** as `112 * 128 * 10 + 84 * 128 * 7`, and those group
+      counts already include the 7 kv heads (row 0: 16 q-tiles x 7 heads; row 1: 12 x 7). So
+      `BuildFusedMergeLayout` assigns a **distinct partial row per kv head**, i.e.
+      `total_partial_rows` is head-inclusive.
+
+      That contradicts the writer. `store_partial` -- and the FA2 side in `persistent.cuh`,
+      which shares these buffers and the same merge kernel -- addresses
+      `partial_o[((base + row * num_kv_chunks + kv_chunk_idx) * num_kv_heads + kv_head_idx) *
+      HEAD_DIM]`, i.e. a **head-agnostic** `base` with an explicit head stride. Two
+      incompatible conventions:
+
+      | | `partial_indptr` | slab shape |
+      |---|---|---|
+      | `BuildFusedMergeLayout` (now) | per-head row | `[total_partial_rows, head_dim]` |
+      | both writers + 0.7's merge kernel | head-agnostic | `[rows, num_kv_heads, head_dim]` |
+
+      **The writers' convention wins** -- it is what 0.7's
+      `PersistentVariableLengthMergeStatesKernel` reads and what the FA2 roles already do, and
+      the two roles must share one layout. So `BuildFusedMergeLayout` must group over
+      `(task, batch, q_start)` and keep `kv_head_idx` OUT of the key, emitting one row group per
+      q tile with the head carried by the stride. My `* num_kv_heads` float sizing is then
+      correct and the 7x over-count disappears.
+
+      Note the host checks passed throughout: `run_host_checks.sh` only asserts monotonicity,
+      counts and the round trip, never agreement with the writer's addressing. Another gate that
+      measured less than it looked -- it needs a case that writes through the computed address
+      and reads it back.
 
 - [ ] **K1i. Recreate the correctness drivers.** The pod's `drv/` kept only the perf scripts
       (`b1_headroom.sh`, `b1b_headroom.sh`, `split_perf_mtp.sh`, `b1_analyze.py`, `b2_top.py`,

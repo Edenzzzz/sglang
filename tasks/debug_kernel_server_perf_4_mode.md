@@ -1075,7 +1075,40 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       The address went from wildly negative to modestly positive -- a different computation, not
       the same fault surviving.
 
-      **Remaining fault, deliberately not hypothesised.** The faulting block is still
+      **UPDATE (same day): the fault is GONE; the kernel runs end to end.** Three further bugs,
+      each found by reading the consuming code against evidence:
+
+      | bug | why it was wrong |
+      |---|---|
+      | `q_indptr` absolute over the batch | the FA2 roles get `q`/`final_o` already advanced by `pers_row_offset`, so the unsplit write `final_o + q_indptr * o_stride_n` counted FA3's rows twice -- 256 FA3 rows put the FA2 rows at 512/513 of a 258-row tensor |
+      | `merge_o_indices` in PACKED rows | `Run`'s output is `[qo_len, num_kv_heads, gqa_group_size, head_dim]`, so `pos` indexes **tokens**; packed indices were `gqa` times too large |
+      | `v_merged` = `pers_o + pers_row_offset` | the rows that split are **FA3's**, at the START of `o`, and `o_indices` are absolute token rows -- so the merge wrote past the end of the FA2 region. **This was the fault.** |
+
+      The localization was a **bisect, not a guess**: `FLASHINFER_FUSED_NO_MERGE=1` showed the
+      attention grid (FA3 + three FA2 classes + partial writes + the cross-role queue) is
+      memory-clean and the reduction launch was the only faulting one -- which three sanitizer
+      runs' address patterns could not settle. One hypothesis was **checked and rejected** before
+      acting on it: `s_merged = nullptr` is in fact null-guarded at `persistent.cuh:848`.
+
+      **Current state -- numeric, not a fault:**
+
+      ```
+      pers_plan: 59 entries, num_merge_rows=1024, num_fa3_clusters=16
+      rows 0-4 rel 38.9 / 39.17 / 39.68 / 38.75 / 33.99
+      worst rel err 39.68, bad rows 258/258   FAIL
+      ```
+
+      The merge now writes (rows are no longer zero as under the bisect) but values are ~39x the
+      reference -- a magnitude that points at a missing softmax renormalisation, or at chunks
+      accumulating into one slot instead of being combined. **To be established, not assumed.**
+
+      Also: the FA2 decode rows (256, 257) are wrong too, and they **never touch the merge**.
+      That is a second independent error, and it may be in the DRIVER: the comparison stitches
+      `got[nfa3_rows:]` from `pers_o`, which assumes the FA2 roles write `pers_o` at absolute row
+      indices while their `q_indptr` is now subset-relative. Check the driver's stitching before
+      suspecting the kernel on those two rows.
+
+      **Superseded note (kept for the record), on the fault that is now fixed:** The faulting block is still
       `>= sm_split`, so an FA2-role block, and the write is 16 B -- the vectorised partial store.
       Next step is to read off **which base the FA2 role uses** for it: `persistent.cuh`'s
       comment at the partial path says *"o_indptr (partial_o): [packed_qo_len * num_kv_chunks,

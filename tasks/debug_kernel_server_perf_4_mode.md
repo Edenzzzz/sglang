@@ -186,38 +186,55 @@ mixed chat + tracelab. Corrected 2026-10-09 (user): the kernel must be on upstre
 *interfaces and fusion boundaries must fit upstream* -- a 4-mode schedule running upstream's own
 attention measures the scheduling change alone and cannot show the thesis.
 
-## Tasks, in priority order (as of 2026-10-09)
+## OPEN ITEMS, consolidated (2026-10-09)
 
-1. **[ ] `forward_extend` dispatch on `upstream_port`** -- the last piece of the kernel wiring.
-   Two executor calls over the disjoint row subsets, combined by SCATTER (not an LSE merge: our
-   subsets are disjoint, unlike upstream's ragged+paged pair which covers the same rows). Use the
-   three CPU-verified builders already committed: `self.fused_split_mask` (commit 62),
-   `dense_block_table` (63), `fa3_subset_varlen` (64). The SM budget is the ONLY non-standard
-   argument -- flashinfer derives `sm_count` from the device (`prefill.py:204`) so the wrapper
-   cannot carry one. Then: fp32-reference PASS on the upstream build.
-2. **[ ] Always-on composition counter before ANY serving A/B.** The `MIXEDSPEC_STEPS` pattern
-   caught a false pass on first use; the fork driver's `two_exec_calls` greps a string the code
-   never emits and proves nothing.
-3. **[ ] Combined arm: fused kernel + 4-mode vs upstream baseline**, on a workload with a REAL
-   decode population -- the decode-population guard refuses pure long-prefill batches by design,
-   which is why the IN=32768 A/B could never have shown a gain. Every serving arm passes
-   `drivers/srv_correctness.py` and reports fallback counts.
-4. **[ ] `tma_store_wait` multicast and cross-role backfill** -- never tested.
-5. **[ ] EDF perf-model vs baseline unfused schedule** -- never run; the fused kernel's flatter
-   cost should make the model more accurate, which is the claim to test.
-6. **[ ] PD-colocation point 4** (two-way RDMA / congestion / randomized source selection) --
-   still `- [ ]` in `tasks/pd_colocation_vs_disagg.md`; points 1-3 are measured there. Needs the
-   simulated-node topology (H200 exception authorized) or H20 nodes.
+Everything still to do, in one place. **Kernel items gate everything else** (user: H20 and
+multi-node only after all kernel items close).
 
-**Done and verified** (details below, with SHAs and commands): fused kernel PASSES the causal fp32
-reference on fixture 1 at every sm_split (0 unwritten; FA3 0.00628, task0 0.00250, tile16 0.00071)
-after two fixes (`MaskMode::kCausal`; `cluster_tile_q` guarded under `FUSED_GRID`); **1.30x** over
-the unfused persistent kernel on identical work (133.5 us @ sm_split 112 vs 174.0 us), optimum split
-OUTSIDE the harness's built-in 48/32/16 sweep; `upstream_port` rebased onto live main `3fef129ff`
-(64 commits) with the decode-population guard re-verified there (11/25 -> 23/25) and the full
-upstream-facing data path CPU-verified.
+### Kernel -- in dependency order
 
-**Not demonstrated:** the >=30%/>=10% bar. Only baseline serving numbers exist.
+| id | item | why it is here |
+|---|---|---|
+| **K-M** | **Quantify the fusion headroom FIRST**: per 4-mode step, count attention launches by role (draft-decode / draft-extend / target-prefill / target-verify), the fraction of step wall time in the small ones, their achieved SM occupancy, and the `packed_qo` tile histogram. | Without it the kernel work has no stated motivation; a reviewer asks why start at the kernel at all. Optimising before measuring headroom is how the -5% happened. |
+| **K-M2** | Set the fusion target from K-M: which launches can be absorbed via **cross-role backfill** and **multicast** (`tma_store_wait`). Draft ops run a DIFFERENT model, so this is cross-model co-scheduling -- scope it, do not assume it falls out of the existing partition. | The goal asks for it; it is also the only way the "small spec ops cannot fill the GPU" claim becomes a kernel contribution. |
+| **K0** | Decide whether **trees (topk>1)** are in scope. `mix_with_verify` carries no `custom_mask`, so verify rows are masked plain causal -- correct only for chain drafts. If in scope, plumb the mask through and build a gate whose reference does NOT share the causal assumption. If not, state "chain only" wherever 4-mode results are quoted. | Correctness, and it bounds every result in this doc. |
+| **K1** | **Port the fused kernel to flashinfer 0.7** (user: must land upstream). Reconstruct the JIT-reduction group tables 0.7's `HolisticPlanInfo` dropped; resolve `DefaultAttentionSm90`/`StandardAttention`; avoid the `variant_helper.cuh` collision. | Blocks K2-K5. The single-launch cost structure is the only one the serving data says can win. |
+| **K2** | **Dynamic WGMMA tile in FA3: 128 and 64, per work item** from `packed_qo`. | A 56-row item runs at 88% tile occupancy instead of 44%. |
+| **K3** | **FA2 tile classes 16/32/48/64** -- template instantiations over `mma16`, **2-CTA overlap schedule preserved**. Experiment on how many widths pay for themselves; report per-width timings. | Verify rows are the contested band; finer widths are cheap because the primitive is shared. |
+| **K4** | **Replace `MIN_PACKED_QO = 48` with a FITTED rule** on `(packed_qo, kv_len)` -- linear model recommended, simpler forms tried as baselines, agreement reported. Needs a denser grid than the existing 25 points. | The hand-set constant is what admits rows that cannot fill the tile. |
+| **K5** | **Re-measure in-server at the shape the schedule emits**, reporting `last_fa2_rows` and the tile histogram beside every timing. Gain must clear the measured **+/-1.5-3%** noise floor on the upside. | User: "-5 to -8.4% is not acceptable." |
+| **K6** | **CUDA-graph fault**: the split still dies under graphs on (`IndexKernel.cu` out-of-bounds via flashinfer `plan`, reached from `decode_cuda_graph_runner.load_batch`). Needs a capture-boundary bisect, not another hypothesis. Graphs on is the production config. | Five mechanism guesses were wrong; preallocation did not fix it. |
+
+### Server / workload -- after the kernel items
+
+- [ ] **EDF perf-model vs baseline unfused schedule** -- never run. The claim is that the fused
+      kernel's flatter cost makes the model more accurate.
+- [ ] **Superset items 5a-5f** in `tasks/pd_colocation_vs_disagg.md`. **5a (single node, vs
+      prefill-prioritized AND mixed-chunk) needs only the current H200 and can proceed in
+      parallel.** 5b (PD mux + 1P3D/2P2D) needs H20 and is gated on the kernel items.
+- [ ] **PD point 4** (two-way RDMA / congestion / randomized pull) -- currently a NEGATIVE result
+      at 16 GPUs; not demonstrated on the full 4-NIC fabric.
+
+### Stale claims -- do NOT reuse
+
+* **"Fused kernel PASSES, 1.30x at sm_split 112"** (133.5 us vs 174.0 us): measured on
+  **flashinfer 0.3.1**, against an extension whose `fused_run` took 20 args. The current stack is
+  0.7.0.post1 with a 26-arg schema and a changed plan struct. The measurement happened; it is not
+  evidence about today's code. Re-establishing it is part of K1.
+* **Any TTFT/ITL "win" from the first serving A/B** (-44% mean, -73% P99 TTFT, -14% P99 ITL):
+  warmup artifacts, fully retracted. The warmed order-reversed A/B is the only valid one.
+* **`g ~= 0` coverage**: wrong, retracted -- the guard fired 7501/8001 at MC=56.
+* **`sm_margin = 8`**: the kernel-harness optimum does not transfer; margin 0 is as good or
+  better in serving.
+* **Retracted diagnoses for the device assert** (keep the lesson, not the path): shared
+  flashinfer workspace; launch-blocking masking a race; plan-copy use-after-free; FA2 plan-array
+  lifetime; stride-ignoring KV reshape. Four were real latent bugs whose fixes are kept; none was
+  the fault. The fault was a CUDA-graph interaction, found by bisecting the ENVIRONMENT after
+  five code-level guesses. **An async device assert carries no location information, so
+  hypotheses built on its traceback are unfalsifiable.**
+
+**Not demonstrated:** the >=30% TTFT/ITL and >=10% throughput bar. The only in-server number for
+a working kernel is **-5.0%**.
 
 ---
 

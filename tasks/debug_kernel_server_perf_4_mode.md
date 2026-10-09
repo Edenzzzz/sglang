@@ -1408,7 +1408,21 @@ Both remaining errors are now understood exactly, and neither needs a design dec
         must arrive for themselves; the TMA path instead arms `barrier_Q` with
         `arrive_and_expect_tx` for a single transaction arrival. Load ported, init not: the two
         conventions meet on one barrier and the consumer waits forever.
-      - **[ ] THE remaining piece: `barrier_Q.init(cutlass::NumThreadsPerWarp)`** in
+      - **[~] `barrier_Q.init(cutlass::NumThreadsPerWarp)` APPLIED, hang NOT yet resolved.**
+        Clean serialised rerun (nothing else on the GPU, self-matching kill trap avoided) still
+        stops after `pers_plan: ...`, so the hang is real and the init alone did not fix it --
+        an uncontaminated measurement, unlike the round before.
+
+        Cause found in the code: the init was gated on `FLASHINFER_FUSED_PACKED_Q`, but the
+        **arrival** side is in `sparse_mainloop.cuh` behind its own
+        `#ifdef FLASHINFER_FUSED_Q_MBARRIER` -- mbarrier form arrives from all 32 lanes, `#else`
+        drain form arrives **once**. Defining `PACKED_Q` alone armed for 32 while the load took
+        the drain branch: 32 expected, 1 arrival. Init is now gated on
+        `FLASHINFER_FUSED_Q_MBARRIER` **alone**, and the loader defines it alongside `PACKED_Q`,
+        so the two sides cannot disagree. **Applied, not verified** -- the rerun's log still shows
+        only `pers_plan` and I could not confirm the rebuild had finished.
+
+      - **[ ] (superseded phrasing) THE remaining piece: `barrier_Q.init(...)`** in
         `prefill_sm90.cuh` behind `FLASHINFER_FUSED_PACKED_Q` / `FLASHINFER_FUSED_Q_MBARRIER`
         (K1d2's deferred fourth change). Arming for 32 is also what lets Q complete **without** a
         `cp.async` group drain -- `commit_group` otherwise sweeps the producer's in-flight KV

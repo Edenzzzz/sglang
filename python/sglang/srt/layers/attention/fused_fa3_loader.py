@@ -252,6 +252,10 @@ def load_fused_fa3(verbose: bool = False) -> None:
             "--threads",
             "32",
             "-DFUSED_FA3_STAGES=" + os.environ.get("FA3_STAGES", "1"),
+            # Device-side trace of what the FA2 role actually loaded and where it writes. The
+            # plan's units cannot be settled by reading either side's source -- a unit audit
+            # written from the same understanding passed while the kernel still faulted.
+            "-DFLASHINFER_FUSED_TRACE_WRITE=" + os.environ.get("FUSED_TRACE", "0"),
             # This TU includes BOTH the FA2-lineage and Hopper trees, which 0.7 never does
             # anywhere, so the unsuffixed Hopper aliases have to go or the two collide. It must
             # be a TU-wide flag: as a #define in a header it only works when that header is the

@@ -320,6 +320,61 @@ it was on the same line of output.
 - [x] **B1c answered (negatively): GEMM-level backfill is not the opportunity.** GEMMs are only
       8.7% sub-occupancy at load. Dropped rather than left open.
 
+#### B1d RESULT (2026-10-09): item A is priced, and its value depends on the MTP config
+
+`sglang-up@ed6eef498` adds host-side FLOP-weighted tile-coverage accounting
+(`mixed_dispatch.tile_waste_accumulate` / `tile_waste_report`, `SGLANG_FUSED_TILE_STATS=1`).
+Per row it charges `ceil(packed_qo/width)*width x ceil(kv/TILE_KV)*TILE_KV` covered against
+`packed_qo x kv` useful, bucketed by `packed_qo`. No profiler and no timing: the waste item A
+targets is a property of the SHAPES, and grid-level occupancy structurally cannot see it (a
+48-row item in a 128-wide tile keeps every SM busy while most of each tile idles).
+
+**A metric bug caught before it produced a wrong conclusion.** The first version charged
+`TILE_Q = 128` to every row and reported **88% waste** on packed-16 verify rows. That is
+invented headroom: those rows route to FA2's existing **`tile16`**. Fixed to charge each row its
+ACTUAL width -- FA3 always 128; FA2 its class (128 above 64, else 64 above 16, else 16).
+
+**Verify-dominated steps** (no large prefill row to dilute the FLOPs), 48 rows, kv 2000:
+
+| config | `packed_qo` | charged tile | waste |
+|---|---|---|---|
+| GQA 4, 4 draft tokens -- **our current config** | 16 | 16 | **2.3%** |
+| GQA 7, 8 draft tokens | 56 | 64 | **14.6%** |
+| GQA 12, 4 draft tokens | 48 | 64 | **26.8%** |
+| GQA 7, 12 draft tokens | 84 | 128 | **35.9%** |
+
+**Mixed steps** (one 2048-token prefill chunk + verify rows): overall waste collapses to
+**0.3% - 2.1%**, because the prefill row carries **89-94% of useful FLOPs at zero waste**
+(packed 8192 is exactly 64 tiles of 128).
+
+**Verdict on item A, stated plainly:**
+
+1. **At our current config it is worth essentially nothing** -- 2.3% of attention FLOPs in the
+   best case for it (verify-only), 0.3% in a realistic mixed step. Attention is 20.5% of GPU
+   time, so that is under 0.5% end-to-end, far below the **+/-1.5-3%** noise floor.
+2. **At other MTP configs it is worth a great deal** -- up to **35.9%** of attention FLOPs. The
+   pattern is sharp: waste is large exactly when `packed_qo` lands just above an available
+   width, and FA2's widths are only {16, 64, 128}.
+3. **The decode-population guard already prevents the specific waste originally suspected.**
+   `split_classes` returned `fa3_rows=1` in every mixed case: rows in the 48-127 band are
+   un-routed from FA3's fixed 128-wide tile to FA2, where they get 64. So A1 (dynamic 128/64 in
+   FA3) addresses a case the guard mostly already avoids.
+4. **The worst remaining band is 65-128**, not 16-64. Packed 84 charged 128 wastes 35.9%; the
+   proposed width set {16,32,48,64} does not cover it. **`tile96` would pay more than `tile32`.**
+5. **Item A's value is therefore a function of `num_draft_tokens x gqa`, which is a spec-config
+   choice, not something the kernel controls.** If the kernel contribution is to matter, the
+   config has to put `packed_qo` in an awkward band -- and more draft tokens is independently
+   desirable for acceptance length, so this is a coherent design direction rather than a
+   contrivance. But it must be stated as a config-dependent result, not a general speedup.
+
+- [x] **B1d DONE: item A priced.** 0.3-2.3% at our config; 14.6-35.9% at GQA 7-12 with 8-12
+      draft tokens in verify-dominated steps.
+- [ ] **A2 revised: instantiate {16, 32, 48, 64, 96} and measure**, with `tile96` prioritised --
+      the 65-128 band is the worst offender and the original proposal omitted it.
+- [ ] **Decide the MTP config question**: our GQA-4 / 4-draft-token setup makes item A worth ~0.
+      Either measure at a config where it pays (more draft tokens, which also raises acceptance
+      length) or report item A as config-dependent with the band table above.
+
 #### K1 scoped from 0.7's headers (2026-10-09): the reduction was REDESIGNED, not relocated
 
 Read `flashinfer/data/include/flashinfer/attention/scheduler.cuh` on the installed 0.7 wheel.

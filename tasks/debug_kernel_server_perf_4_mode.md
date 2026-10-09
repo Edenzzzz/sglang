@@ -64,6 +64,40 @@ machinery. That turns K3 from "write more kernels" into "pick how many widths ar
 instantiating", which is an experiment: instantiate a set, measure, and keep the widths that pay
 for themselves.
 
+### Open question answered: NO, the tree build is NOT fused into FA2 on upstream (2026-10-09)
+
+Asked directly, and checked in code rather than from memory. **`mix_with_verify` carries no
+`spec_info` and no `custom_mask`** -- there are zero references to either in it. Consequences:
+
+* The merged 4-mode batch therefore takes the planner's **`spec_info is None`** branch
+  (`qo_indptr = cumsum(seq_lens - prefix_lens)`, which is what the PLANWIDTH measurement
+  confirmed), so the verify rows are masked **plain causal**.
+* That is correct **only for a CHAIN draft** (`--speculative-eagle-topk 1`, which is what every
+  measurement here used). For `topk > 1` the real tree mask is required, because siblings must
+  not attend to one another, and causal masking would silently let them.
+* **The fused split inherits the restriction**: its FA2 subset plan passes no `custom_mask`
+  either (zero references in `_fused_split_plan`/`_fused_split_dispatch`).
+* Upstream's ordinary verify path DOES have the machinery -- `use_custom_mask` in
+  `_create_prefill_wrappers`, `EagleVerifyInput.custom_mask`, and the tree builders in
+  `speculative/eagle_utils.py` -- so this is something the 4-mode merge **drops**, not something
+  upstream lacks.
+
+**Gate blind spot worth recording:** the in-step verify gate could never have caught this. Its
+reference is the same paged wrapper under the same causal assumption, so both sides share the
+error -- a null case that agrees with the thing under test proves nothing, which is the same
+lesson as [[gate-needs-noise-floor-and-reference]] in a new place.
+
+So the 4-mode step as ported is **chain-only**, and that is a scope limitation of every result in
+this doc, not a bug in any one measurement. Supporting trees means carrying
+`EagleVerifyInput.custom_mask` through `mix_with_verify` into the merged batch and planning the
+paged wrapper (and the split's FA2 subset) with it, sliced to the verify rows.
+
+- [ ] **K0. Decide and record whether trees (topk>1) are in scope.** If yes, plumb the tree mask
+      through `mix_with_verify` and the split's FA2 plan, and add a gate whose reference does NOT
+      share the causal assumption (an fp32 tree-masked reference, not the paged wrapper). If no,
+      state "chain draft only" as an explicit limitation wherever the 4-mode results are quoted.
+      Listed as K0 because it bears on correctness of everything above it, not on performance.
+
 ### Design, in dependency order
 
 - [ ] **K1. Port the fused kernel to flashinfer 0.7.** Reconstruct the JIT-reduction group tables
@@ -85,6 +119,15 @@ for themselves.
       measured boundary grid `tasks/fused_specdec_workload/boundary_28x4x128.json` (25 points)
       and `_apply_decode_population_guard`, which replays it (11/25 -> 23/25 agreement). The
       point is to stop hand-setting the constant that causes the waste.
+      **User 2026-10-09: the threshold needs ACCURATE MEASUREMENT, so a linear model is the
+      recommendation; simpler forms may be tried too.** So: measure per-tile times for
+      FA3-at-{64,128} against FA2-at-{16,32,48,64} across a `(packed_qo, kv_len)` grid, fit a
+      linear decision boundary, and report its agreement against the measured winner the way the
+      decode guard's 11/25 -> 23/25 is reported. Try a bare threshold and a 2-D ratio rule as
+      baselines for the fit -- if a one-constant rule matches the linear model's agreement, keep
+      the constant, but it must be FITTED to measurements rather than chosen.
+      **The measurement grid must be denser than the existing 25 points**, which were taken for
+      the decode-population question, not for tile-width selection.
 - [ ] **K5. Re-measure in-server at the shape the schedule emits**, not a chosen one. Report
       `last_fa2_rows` and the per-class tile histogram beside every timing, and require the gain
       to clear the measured +/-1.5-3% noise floor.

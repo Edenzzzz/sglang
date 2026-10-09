@@ -1519,6 +1519,16 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       fused path's template parameters or params, body exonerated. Needs only an include-path
       change, not a second flashinfer version.
 
+      **Stage count: CORRECTED (2026-10-10).** An earlier commit message claimed the stage count
+      is pinned at 1 because the fused kernel reserves **both** roles' storage, calling that "a
+      real cost of fusion". **Withdrawn.** Making the FA2 reservation conditional on the split
+      (`sm_split < nsm`) and running `SM_SPLIT=all FA3_STAGES=2` **still** fails with
+      `invalid argument` -- so FA3's **own** two-stage `SharedStorage` exceeds the limit at these
+      traits (CTA_Q=128, CTA_KV=128, HEAD_DIM=128), with no FA2 reservation present. **The
+      one-stage pipeline is a traits limit, not a fusion cost.** The conditional reservation is
+      kept as a tidy-up (drops 69632 B per CTA when the split is all-FA3), not a fix. The
+      one-stage hypothesis for the accumulator row collapse is **untestable**, not refuted.
+
       **Method note:** this A/B was the single most informative run of the item -- one environment
       variable, no code change, four candidates retired at once. Against the many turns spent
       adding probes: changing a parameter and comparing two runs of the **same build** beat

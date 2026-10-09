@@ -29,8 +29,18 @@ def fp32_causal_reference(q, k, v, qo_lens, kv_lens, sm_scale):
     qrow = 0
     for b, (ql, kl) in enumerate(zip(qo_lens, kv_lens)):
         kb, vb = k[b][:kl].float(), v[b][:kl].float()      # [kl, HKV, D]
+        # Bottom-right causal needs kv_len >= qo_len, or the leading rows have NO causal context
+        # and the expected output is undefined. Asserting rather than clamping: a fixture whose
+        # expected output is undefined cannot fail a kernel, and silently clamping would hide that.
+        # The fa3_1chunk fixture violated this (qo=256, kv=128) and `kb[:pos+1]` with pos<0 WRAPS
+        # in Python, so 128 rows were compared against garbage and rows 0 and 128 "passed" by
+        # accident -- the whole 254/256 pattern was this bug, not the kernel.
+        assert kl >= ql, (
+            f"request {b}: kv_len={kl} < qo_len={ql}; bottom-right causal leaves the first "
+            f"{ql - kl} rows with no context and the reference undefined. Fix the fixture.")
         for i in range(ql):
             pos = kl - ql + i
+            assert pos >= 0, f"internal: pos={pos} should be impossible once kl >= ql"
             for h in range(HQ):
                 kh = h // GQA
                 s = (kb[: pos + 1, kh, :] @ q[qrow + i, h, :].float()) * sm_scale
@@ -67,7 +77,9 @@ def main():
         # FA3 only, and UNSPLIT: kv=128 makes the plan's chunk round up to TILE_KV=128, so
         # ceil_div(128,128)=1 -- no partials, no merge. Separates the FA3 mainloop/epilogue from
         # the split-KV machinery, which is the same bisect that isolated the FA2 bugs.
-        fa3_q, fa3_kv = [256], [128]
+        # kv >= qo so the reference is defined, and kv=128 = TILE_KV so the plan's chunk rounds
+        # to one chunk: still unsplit, still no merge, but now a valid causal problem.
+        fa3_q, fa3_kv = [128], [128]
         fa2_q, fa2_kv = [], []
     elif mode == "fa3":
         fa3_q, fa3_kv = [256, 1, 1], [2048, 300, 512]

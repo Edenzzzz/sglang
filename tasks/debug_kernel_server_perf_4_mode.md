@@ -1669,8 +1669,22 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       paths differ in exactly the parameter that breaks it. *A fixture whose expected output is
       undefined cannot fail a kernel.*
 
-      **Fix:** assert `kl >= ql` in the reference (or clamp `pos` and skip contextless rows), make
-      `fa3_1chunk` well-posed, then re-measure `fa3` and `mixed`.
+      **Fix APPLIED (2026-10-10):** the reference now asserts `kl >= ql` (asserting, not clamping
+      -- clamping would hide exactly this bug) plus a `pos >= 0` tripwire, and `fa3_1chunk` is
+      `(qo=128, kv=128)`: still one kv tile, still unsplit, still no merge, now a **valid** causal
+      problem.
+
+      **Re-ran all four: both FA3 modes HUNG** at the 300 s timeout, logs holding only their
+      `pers_plan` line (`fa3_1chunk` 61 B, `fa3` 64 B); `mixed` and `fa2` not reached. So **no new
+      residual measurement.** `fa3` completed at 45.1 in an earlier round and hung here, which
+      matches the measured 3-of-5 stall rate rather than being a new regression.
+
+      **This reorders the work: the intermittent stall must be fixed BEFORE any FA3 residual is
+      quoted.** A mode that completes two runs in five cannot be regression-tested, so the only
+      FA3 numbers on record (45.1, 45.44) are single samples from a flaky path and are not a
+      baseline. The stall is also the one FA3 symptom the retracted `fa3_1chunk` work never
+      touched -- rc=124 across five serialised runs, independent of the reference, and it survived
+      the `barrier_Q` macro pairing. **It is the real remaining defect.**
 
       **Stage count eliminated too (2026-10-10).** The FA3 pipeline depth was the one value left
       outside the elimination set -- the loader passes `-DFUSED_FA3_STAGES` from `FA3_STAGES`,

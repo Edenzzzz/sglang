@@ -1372,7 +1372,36 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       `tile_size`, **none of which I have printed**. Print all three from inside `write_packed`,
       with the expected per-thread iteration count stated first.
 
-      **[x] THE OUTPUT IS A PERMUTATION (2026-10-10).** Folding the stride values into the
+      **[x] COMPLETE DIAGNOSIS (2026-10-10): every output row gets reference row 0 -- a
+      BROADCAST, not a permutation.**
+
+      ```
+      PERMUTATION: 128/128 of our rows exactly match SOME reference row
+        ours->ref (first 12): [(0,0), (1,0), (2,0), (3,0), (4,0), ... (11,0)]
+        identity matches: 1/128
+      ```
+
+      Every one of our 128 output rows equals **reference row 0**, exactly. The kernel computes
+      token 0 correctly and writes that same row into every destination.
+
+      **Accounts for every surviving observation, nothing left over:** absmax matches exactly (the
+      broadcast value *is* a correct row); 128/128 rows non-zero (every destination written);
+      per-item store addresses exact (**destinations** right, **source** wrong); row 0 the single
+      passing row (the one place source and destination agree); Q load verified (compute was never
+      the problem).
+
+      **Fix:** a read-side index in `write_packed` -- our ported code. The destination advances
+      with the loop variable while the smem read does not. 0.3.1 reads `sO(r, d + v)` with `r` the
+      loop variable; the port must be reading a fixed row. **One line to check.**
+
+      **Why this took fifteen turns to see:** every address check verified **destinations**, and
+      all were correct. A source-side broadcast is invisible to destination checks, to coverage
+      counts (all rows written), and to magnitude checks (the value written is a legitimate output
+      row). The measurement that found it compared our rows against **all** reference rows instead
+      of against their own expected row -- it asked *"what is this value?"* rather than *"is this
+      value right?"*. That question would have found it at any point.
+
+      **(Superseded wording:)** THE OUTPUT IS A PERMUTATION. Folding the stride values into the
       already-firing `[wpk]` printf (its own null case) gave **28** `[wsz]` lines = 28 work items:
 
       ```

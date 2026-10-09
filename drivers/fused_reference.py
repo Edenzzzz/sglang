@@ -231,6 +231,24 @@ def main():
     # already usable through its rel against the reference, and instrumentation that disagrees
     # with a validated read is worse than none. Re-add only with a shape/dtype/absmax check at
     # the print site, which is what made the null case trustworthy.)
+    # PERMUTATION MAP. absmax(ours) == absmax(stock) with full coverage says the right values are
+    # present in the wrong rows; this finds, for each of our output rows, which REFERENCE row it
+    # actually equals. A clean permutation shows its pattern (stride, token<->head-in-group swap,
+    # tile rotation) and that names the fix. Matched on head 0's first 4 elements, which is enough
+    # to identify a row uniquely among 128 random rows.
+    if nfa3 > 0:
+        import torch as _t
+        key_ref = ref[:, 0, :4].float()
+        key_got = got[:, 0, :4].float()
+        d = (key_got[:, None, :] - key_ref[None, :, :]).abs().sum(-1)   # [ours, ref]
+        best = d.argmin(dim=1)
+        exact = (d.gather(1, best[:, None]).squeeze(1) < 1e-3)
+        pairs = [(r, int(best[r])) for r in range(min(12, got.shape[0]))]
+        print(f"PERMUTATION: {int(exact.sum())}/{got.shape[0]} of our rows exactly match SOME "
+              f"reference row")
+        print(f"  ours->ref (first 12): {pairs}")
+        ident = int((best == _t.arange(best.shape[0], device=best.device)).sum())
+        print(f"  identity matches: {ident}/{best.shape[0]}")
     rows_bad = 0
     worst = 0.0
     for r in range(total_q):

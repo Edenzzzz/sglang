@@ -1305,9 +1305,36 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       before the mainloop wrote it. **Not assumed:** that `MODE=fa3`'s 45.1 at kv=2048 is the
       same cause.
 
-      Method that has worked here and should be reused: print the kernel's own values from
-      **every** block and check them against arithmetic, rather than reasoning from a single
-      block or from silence -- that found `q_indptr`, and it found this one.
+      **FA3 SCHEDULER INPUTS VERIFIED CORRECT AND COMPLETE (2026-10-10).** Post-fix gate trace
+      on `fa3_1chunk`, from every block:
+
+      ```
+      gate lines: 56        (= 8 q tiles x 7 kv heads, the full task-3 item count)
+      distinct blocks: 16   (= sm_split)
+      all 56: group_id=-1 chunks=1 partial_indptr=-1 qo_len=1024 kv_len=128 chunk_idx=0
+      ```
+
+      Every field is right -- `group_id=-1` so the split gate is correctly **closed**, `chunks=1`
+      and `partial_indptr=-1` agree the row is unsplit, `qo_len=1024` is the packed extent
+      (256 tokens x gqa 4), `kv_len=128` the chunk, and `chunk_idx=0` is now in its own field
+      rather than holding `group_id`'s −1. **And all 56 items execute.**
+
+      That **retires** the reading floated from the pre-fix trace -- that only 16 items ran, one
+      per block, leaving `o` uninitialised. It was an artifact of the same misalignment, which
+      also corrupted `counter`/`ptr_begin`/`ptr_end`, the fields `is_valid()` tests. The caveat
+      was flagged when the observation was recorded, and it held.
+
+      **So the plan-to-kernel interface is now exonerated by measurement**, for the first time in
+      this item: the scheduler feeds correct, complete work and the output is still off by
+      3.076e+06. The defect is inside `fa3_prefill_body`'s mainloop/epilogue, with correct inputs,
+      no split and no merge.
+
+      Next, and **not** another index hunt: the magnitude says unnormalised or uninitialised
+      accumulator. Our epilogue matches pristine 0.7 (neither calls `finalize`/`normalize`
+      explicitly -- normalisation lives inside `mma_f16` / the `attention_updater`), so the
+      question is whether the mainloop ran its KV iterations at all. Print `num_kv_tiles` and the
+      updater's row sum from every block; a zero-iteration mainloop leaves `tOrO` untouched and
+      would produce exactly this.
 
       Earlier plan, now partly executed: sanitize for the faulting kernel and block, then trace
       from **every** block --

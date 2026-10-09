@@ -1296,8 +1296,37 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       | `fa3` | 44.84 | 45.1 |
       | `mixed` | 41.67 | 45.44, 256/258 (FA2 rows pass) |
 
-- [~] **K1n-null. SUSPECT -- the stock-FA3 result is contradicted by a second read of the same
-      tensor.** In one run: `STOCK FA3 vs reference: rel=0.001779 PASS`, yet an element print of
+- [x] **K1n-null. RESOLVED AND VALID (2026-10-10): the harness is validated on both arms.**
+      Printed shape/dtype/absmax/raw values before any norm -- the check skipped when the null
+      case was first added:
+
+      ```
+      o_stock: shape=(128, 28, 128) dtype=bfloat16 absmax=0.367188
+      ref_s:   shape=(128, 28, 128) dtype=float32  absmax=0.367188
+      o_stock[0,0,:3]=[0.253906, -0.071289, -0.049316]  ref_s[0,0,:3]=IDENTICAL
+      ```
+
+      Same shape, same absmax to six places, identical leading elements -- so `rel=0.001779` is a
+      real comparison and **stock FA3 genuinely matches the reference**. The suspension below is
+      **lifted**: the FA3 residual is a bug in our fused integration, not a convention mismatch.
+
+      Suspending was right (the two readings could not both be true and I had not checked the
+      object), but its conclusion was wrong. Three entries here now follow claim -> suspend ->
+      resolve, costing a turn each, and in two of three the original claim survived. The cheaper
+      discipline is this one: check the object before deriving a number from it.
+
+      **Still unexplained, claimed as nothing:** the later ours-vs-stock element print reads
+      `+0.000000` both sides while this check, same run, reads `o_stock[0,0,0]=0.253906`. A defect
+      in that print site, not in the null case. Fix before using that comparison.
+
+      | arm | result |
+      |---|---|
+      | `MODE=fa2` | PASS rel 0.002126, 0/258 (many rounds) |
+      | stock FA3 | PASS rel 0.001779 |
+      | fused FA3 | FAIL rel 11.07, 128/128 unsplit -- deterministic, **our** bug |
+      | stall | FIXED, verified 5/5 |
+
+- [~] **K1n-null (superseded). SUSPECT -- the stock-FA3 result is contradicted.** In one run: `STOCK FA3 vs reference: rel=0.001779 PASS`, yet an element print of
       the *same* `o_stock` reads `+0.000000` for all 12 sampled `(token, head)` pairs -- on both
       sides. Those cannot both hold: `rel=0.001779` requires `o_stock` close to a non-zero
       reference, and if it were all zero that rel would be ~1.

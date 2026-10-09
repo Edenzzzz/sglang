@@ -160,6 +160,15 @@ def main():
             kpad_s = [k_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(nplan)]
             vpad_s = [v_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(nplan)]
             ref_s = fp32_causal_reference(q, kpad_s, vpad_s, fa3_q[:nplan], fa3_kv[:nplan], sm_scale)
+            # Confirm the two tensors describe the same object BEFORE any norm. Skipping this is
+            # what made the previous null case self-contradictory: a rel of 0.001779 alongside an
+            # element print of all zeros for the same tensor.
+            print(f"  o_stock: shape={tuple(o_stock.shape)} dtype={o_stock.dtype} "
+                  f"absmax={float(o_stock.float().abs().max()):.6f}")
+            print(f"  ref_s:   shape={tuple(ref_s.shape)} dtype={ref_s.dtype} "
+                  f"absmax={float(ref_s.abs().max()):.6f}")
+            print(f"  o_stock[0,0,:3]={[round(float(x),6) for x in o_stock.reshape(o_stock.shape[0], -1)[0, :3]]}"
+                  f"  ref_s[0,0,:3]={[round(float(x),6) for x in ref_s.reshape(ref_s.shape[0], -1)[0, :3]]}")
             n = min(o_stock.shape[0], ref_s.shape[0])
             num = (o_stock[:n].float() - ref_s[:n]).norm().item()
             den = max(ref_s[:n].norm().item(), 1e-6)

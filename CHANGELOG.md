@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.33.0 — B1: the fusion headroom is 89% sub-occupancy, but mostly GEMM (2026-10-09)
+
+Driver `drv/b1_headroom.sh` + `drv/b1_analyze.py` on a 4-mode MTP server (EAGLE3 chain draft,
+split ON, guard OFF, graphs off), 355.7 MB torch-profiler trace, 66.5 ms GPU time / 7250 launches.
+
+- **89.3% of GPU time is in launches with grid < 132 blocks** — they cannot fill the H200
+  regardless of inner-loop speed. 6763 of 7250 launches.
+- Role split: **gemm 78.5%**, attention **11.6%**, epilogue/elementwise **8.9%**, memcpy 1.0%.
+  Top kernels are cuBLASLt `nvjet_sm90_*` at median grid 100–112.
+- So the attention-side tile dispatcher is bounded by 11.6% of GPU time and epilogue fusion by
+  8.9% — ~20% combined before discounting the non-reclaimable part. **No attention-side work can
+  reach the ≥30% target**, agreeing with the independent `g*a*0.18` ceiling of ~5–7%.
+- The defensible motivation is therefore "the GPU is chronically underfilled in colocated
+  spec-decode serving and cross-role fusion reclaims it", with attention as the demonstrator —
+  and the table shows the dominant idle capacity is GEMM, which the current scope does not touch.
+- Scope caveat: `MIXEDSPEC_STEPS 1` vs 501 split calls means the capture is dominated by ordinary
+  extend batches, not 4-mode merges; a 4-mode-heavy re-capture is queued (B1b).
+
 ## v0.32.0 — Fused single kernel is bound to flashinfer 0.3.1; split is the only runnable variant (2026-10-09)
 
 - Root cause of six consecutive harness/extension incompatibilities: the flashinfer SOURCE tree

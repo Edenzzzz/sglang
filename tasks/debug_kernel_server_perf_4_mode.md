@@ -201,6 +201,64 @@ The single-launch cost structure is the only one the serving data says can win.
 
 ---
 
+#### B1 RESULT (2026-10-09): the headroom is real but it is mostly GEMM, not attention
+
+Driver `drv/b1_headroom.sh`, analyzer `drv/b1_analyze.py`, trace
+`/dev/shm/w/prof/1791522716.762536-TP-0.trace.json.gz` (355.7 MB). 4-mode MTP server, EAGLE3
+chain draft (topk 1, 4 draft tokens), split ON / guard OFF / graphs off, warm pass before the
+capture, load during it (`--random-input-len 2048 --random-output-len 128 --request-rate 24
+--max-concurrency 48`). Composition during capture:
+`FUSED_SPLIT_CALLS 501 (fa3_rows=2 fa2_rows=22 onesided=3)`, `MIXEDSPEC_STEPS 1`.
+
+**66.5 ms of GPU time over 7250 launches.**
+
+| role | launches | GPU ms | share of GPU time | small N (grid<132) | small share of role |
+|---|---|---|---|---|---|
+| **gemm** | 1538 | **52.16** | **78.5%** | 1446 | 88.4% |
+| attention | 1595 | 7.68 | **11.6%** | 1225 | 87.5% |
+| epilogue/elementwise | 3637 | 5.93 | **8.9%** | 3612 | 98.4% |
+| memcpy/memset | 468 | 0.68 | 1.0% | 468 | 100.0% |
+| other | 12 | 0.02 | 0.0% | 12 | 100.0% |
+
+**89.3% of GPU time is in launches that cannot fill the device** (6763/7250 launches, 59.37 of
+66.49 ms, grid < 132 blocks). Top kernels are `nvjet_sm90_*` (cuBLASLt) at median grid 100-112 --
+the TARGET model's own linear layers failing to fill 132 SMs at this batch size.
+
+**What this means for the two main items, stated against the bar:**
+
+* **Item A (tile dispatcher) is bounded by 11.6%** of GPU time, and item **B (epilogue fusion) by
+  8.9%** -- about **20% combined, before** discounting the part that is not actually reclaimable
+  (a fused kernel still has to do the arithmetic; only the idle-SM fraction is recoverable).
+* So **no attention-side work can reach the >=30% TTFT/ITL target**, which is consistent with the
+  independent `g * a * 0.18` arithmetic recorded earlier that put the ceiling at ~5-7%. Two
+  different measurements now agree on that conclusion.
+* **The dominant idle capacity is GEMM**, at 78.5% of GPU time with 88.4% of it in
+  sub-132-block launches. If the paper's kernel contribution is to be proportionate to the
+  motivation table, it has to touch that -- e.g. cross-role backfill at the GEMM level (draft
+  model GEMMs filling the SMs the target's GEMMs leave idle), which is a different and larger
+  piece of work than the attention split.
+
+**The honest reviewer-facing framing**, which this table supports and the previous framing did
+not: *in colocated spec-decode serving the GPU is chronically underfilled -- 89% of GPU time in
+launches that cannot occupy the device -- and fusing across roles is how that capacity is
+reclaimed.* Attention is the demonstrator, not the whole prize, and the table says so.
+
+**Caveat on scope, recorded rather than buried:** `MIXEDSPEC_STEPS 1` against 501 split calls
+means this capture is dominated by ORDINARY extend batches, not 4-mode merges -- with the guard
+off and paged forced, the split fires on any two-sided extend batch. A 4-mode-heavy capture could
+shift the attention share up somewhat. It will not change the GEMM dominance, which is per-token
+work, but the exact A/B bounds above should be re-read from a capture where
+`MIXEDSPEC_STEPS` is large.
+
+- [x] **B1 DONE: headroom quantified.** 89.3% of GPU time in sub-occupancy launches; attention
+      11.6%, epilogue 8.9%, GEMM 78.5%.
+- [ ] **B1b. Re-capture with a 4-mode-heavy workload** (`MIXEDSPEC_STEPS` large) to tighten the
+      attention/epilogue bounds; the GEMM share is not expected to move.
+- [ ] **B1c. DECISION: does the kernel story extend to GEMM-level cross-role backfill?** The
+      motivation table says that is where the idle capacity is. If it stays attention-only, the
+      kernel contribution is bounded at ~20% of GPU time and the headline claim must be the
+      scheduling one -- which is where the measured TTFT wins already are.
+
 #### K1 scoped from 0.7's headers (2026-10-09): the reduction was REDESIGNED, not relocated
 
 Read `flashinfer/data/include/flashinfer/attention/scheduler.cuh` on the installed 0.7 wheel.

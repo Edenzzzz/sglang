@@ -1351,8 +1351,32 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       First quantitative statement of **what is missing** rather than what is eliminated, and it
       came from the oracle rather than my arithmetic. **32/128 is a number a fix has to move.**
 
-      **[x] ROOT CAUSE (2026-10-10): `write_packed`'s store loop strides by 128 threads inside a
-      ONE-WARP guard.** Distinct tokens written: **0, 32, 96** -- several tiles, so the offset is
+      **[RETRACTED] the "write_packed one-warp guard" root cause.** `write_packed` has **no warp
+      guard** -- its loop is `for (i = thread_idx; i < tile_size; i += num_threads)` with no
+      `canonical_warp_idx_sync` check. The guard quoted below is in **`store_partial`**, the
+      *split* path, which this unsplit fixture (`num_merge_rows=0`) never executes. I attributed
+      one function's code to another and built an exact-arithmetic story on it.
+
+      The arithmetic "matching with nothing left over" should have warned me, not reassured me:
+      `32 = 128/4` has several explanations at G=4, and I picked the one I had just read nearby.
+      A coincidence that tidy deserved one grep of the actual call site.
+
+      **So the measured fact is unexplained again:** 32 of 128 rows written, correct values
+      (absmax 0.347656 vs 0.367188), correct per-item addresses, written tokens 0/32/96 spanning
+      several tiles.
+
+      **The measurement that would settle the stride:** `write_O` passes
+      `num_threads = NUM_COPY_THREADS` and `thread_idx` from `store()`. If `NUM_MMA_THREADS`
+      exceeds `NUM_COPY_THREADS`, threads at index >= `tile_size` run zero iterations while those
+      below run one -- so coverage depends on `NUM_COPY_THREADS` vs `NUM_MMA_THREADS` vs
+      `tile_size`, **none of which I have printed**. Print all three from inside `write_packed`,
+      with the expected per-thread iteration count stated first.
+
+      **Seventh refuted hypothesis here.** The six before were refuted by measurement; this one by
+      reading the function I had already claimed about -- worse, and cheaper to have avoided.
+
+      **(Retracted claim, kept in place:)** `write_packed`'s store loop strides by 128 threads
+      inside a ONE-WARP guard. Distinct tokens written: **0, 32, 96** -- several tiles, so the offset is
       *not* lost -- with 32/128 rows non-zero. The prespecified rule's second branch: writes
       masked/discarded after the address is computed. And:
 

@@ -1638,6 +1638,19 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       The 254-of-256 pattern with exactly rows 0 and 128 correct is the sharpest unexplained
       constraint, and nothing in the elimination set accounts for why those two survive.
 
+      **Stage count eliminated too (2026-10-10).** The FA3 pipeline depth was the one value left
+      outside the elimination set -- the loader passes `-DFUSED_FA3_STAGES` from `FA3_STAGES`,
+      default **1**, which the sanitizer's kernel signature confirmed. A 1-deep pipeline was a
+      plausible joint cause for corruption *and* stalls. `FA3_STAGES=2` **cannot launch**:
+      *"fused kernel failed: invalid argument"*, matching the note already in
+      `persistent_fa3_fused.cuh` -- "with FA3 left at NUM_STAGES = 2 this mode does not launch at
+      all". So the depth is **forced** to 1 and eliminated as a variable, not judged on merit.
+
+      **Design constraint worth keeping for the write-up:** the stage count is pinned at 1 by the
+      shared-memory budget because, in the fused kernel, one CTA must hold **both** roles'
+      storage. That is a property of the fused design rather than of the port, and it bounds what
+      this kernel can ever do on this GPU independently of the current defect.
+
       **(Superseded:)** Neither appears in any address, so every check so far is blind to them. The ext sets
       `P.sm_scale`/`P.v_scale` for the FA2 runners explicitly; whether it sets
       `fa3.additional_params.sm_scale` at all has **not** been checked. Reached by exhaustion

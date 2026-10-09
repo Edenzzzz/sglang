@@ -40,6 +40,47 @@ verify tiles are absorbed into the same grid by the LPT overlap schedule (no sec
 scatter), and FA3's tile width becomes a per-work-item property instead of a compile-time
 constant.
 
+## MOTIVATION REQUIREMENT: fuse as many small draft/verify ops as possible (user 2026-10-09)
+
+*"Make sure we fuse as many small draft/verify operations in the two kernels as possible,
+otherwise it's hard to make a meaningful motivation for fusing the kernel -- a reviewer will ask
+why start from the kernel point of view for colocation if gains are so minimal?"*
+
+This is a **framing constraint on the whole kernel effort**, and it reorders the work. Fusing one
+large prefill chunk with seven verify rows is the marginal case: it cannot carry a kernel-level
+contribution, and a 1-2% end-to-end number invites exactly that reviewer question. The claim has
+to be that **the small spec operations individually cannot fill the GPU, and only a fused kernel
+can reclaim that** -- which is also what the goal already asks for under "multicast and
+**cross-role backfill** (needs `tma_store_wait`)".
+
+**The motivation must be MEASURED FIRST, before any of K2-K5.** Optimising before establishing
+the headroom is how the -5% happened: I tuned a kernel whose benefit at the real batch shape was
+never quantified.
+
+A 4-mode step currently issues, per layer: 3 draft decode steps (`--speculative-num-steps 3`),
+2 draft extends, and 1 mixed target forward. All but the target's prefill rows are **small**:
+draft decodes are 1 token/row, draft extends are short, verify rows are
+`num_draft_tokens x gqa` packed. Every one is its own launch with its own tail.
+
+- [ ] **K-M (do FIRST). Quantify the headroom the fusion is supposed to reclaim.** Per 4-mode
+      step, report:
+      1. **N** -- the count of distinct attention launches, split by role
+         (draft-decode / draft-extend / target-prefill / target-verify);
+      2. **X** -- the fraction of step wall time spent in the small ones;
+      3. **Y** -- their achieved SM occupancy (so "small" is a measurement, not an adjective);
+      4. **the tile histogram** by `packed_qo` class, which is what K2-K4 act on.
+      Use nsys/ncu or CUDA events around each role. **This is the reviewer-facing motivation
+      table**: without it the kernel work has no stated headroom, and with it the target gain is
+      bounded and honest. If X turns out small, say so -- that is the finding, and it would mean
+      the kernel is NOT the right place to start for colocation and the argument belongs on the
+      scheduling axis.
+- [ ] **K-M2. Then set the fusion target from N and X**: which of the N launches can be absorbed
+      into the two kernels, via cross-role backfill (small draft/verify work filling the SMs the
+      prefill mainloop leaves idle) and multicast. Note the draft ops run a DIFFERENT model, so
+      absorbing them is cross-model co-scheduling, a strictly bigger step than the
+      prefill+verify split already built -- scope it explicitly rather than assuming it falls
+      out of the existing partition.
+
 ### The rationale, in the user's terms (2026-10-09)
 
 **The objective is to minimise tile waste**, and the three row populations in a 4-mode step sit

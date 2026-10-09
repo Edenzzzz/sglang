@@ -89,6 +89,12 @@ for themselves.
       `last_fa2_rows` and the per-class tile histogram beside every timing, and require the gain
       to clear the measured +/-1.5-3% noise floor.
 
+**Gate on everything downstream (user 2026-10-09):** K1-K5 closing is the precondition for H20
+and the multi-node work -- *"after all kernel items closed"*. The superset/capacity items
+`5a-5f` in `pd_colocation_vs_disagg.md` therefore wait on this section, and the single-node
+item 5a (which needs only the current H200) is the one piece of that work that can proceed in
+parallel.
+
 
 **Land the fused FA3+FA2 SM-pre-assignment kernel ON UPSTREAM, alongside the 4-mode MTP step
 already there, then measure the combined arm.** Target: >=30% TTFT and ITL, >=10% throughput on
@@ -973,6 +979,10 @@ as `split_perf_run2_PREALLOC_BASELINE.txt`.
 Best split arm is **-5.0% tok/s** and **+5.1% mean ITL** against base. **The split is still a
 regression.**
 
+**User 2026-10-09: "-5 to -8.4% is not acceptable."** Recorded here so this number is never
+carried forward as a result. It is a regression, and the kernel items are not closeable until
+an in-server measurement clears the +/-1.5-3% noise floor on the UPSIDE.
+
 **A noise floor, finally measured, and it changes how the earlier numbers should be read.**
 Same config, same code, arm by arm across the two runs:
 
@@ -1305,8 +1315,12 @@ Recorded so the cheap option is not retried.
       group tables from 0.7's plan, resolve the variant-type changes, and avoid the
       variant_helper collision. Substantial C++ work against flashinfer internals; the only route
       to the one-launch cost structure.
-- [ ] 2026-10-09 **DECISION (not blocking): port the fused kernel, or bank the split's gains
-      and move to the scheduling axis.** This is C++ work against flashinfer internals
+- [x] 2026-10-09 **DECISION TAKEN (user): PORT IT, and it must land on UPSTREAM.** Not the
+      fork, and not dropped. The user's reasoning: *"yes. maybe after you port it will be
+      faster."* -- i.e. the port is not merely a compatibility chore, since 0.7's reworked
+      reduction may itself be better than 0.3.1's. This closes the fork-vs-upstream question
+      that was reopened by the version gap: the answer is the same as it was for the 4-mode
+      step, upstream, with no fork demo as a fallback. Tracked as **K1**. This is C++ work against flashinfer internals
       (plan serialisation, the 4-task `UnifiedWgmmaTileScheduler` path), not a wiring task, and
       it is the only route to the one-launch cost structure that the serving measurements say is
       needed. Flagging rather than silently choosing: the alternative is to accept the

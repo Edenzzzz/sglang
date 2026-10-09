@@ -76,18 +76,22 @@ def _ensure_generated_config() -> str:
 
     dev = torch.device("cuda")
     w = BatchAttention(kv_layout="NHD")
-    bs, kv, hq, hkv, d = 1, 16, 28, 7, 128
+    kv, hq, hkv, d = 16, 28, 7, 128
+    # Keyword form on purpose. 0.7 dropped the `batch_size` positional that 0.3.1 took between
+    # kv_len_arr and num_qo_heads, so the old positional call silently shifted every argument
+    # after it -- page_size landed in head_dim_vo -- and only surfaced as `plan() got multiple
+    # values for argument 'causal'`. Passing by name makes the next signature change fail on the
+    # argument that actually went away.
     w.plan(
-        torch.tensor([0, 1], dtype=torch.int32, device=dev),
-        torch.tensor([0, kv], dtype=torch.int32, device=dev),
-        torch.arange(kv, dtype=torch.int32, device=dev),
-        torch.tensor([kv], dtype=torch.int32, device=dev),
-        bs,
-        hq,
-        hkv,
-        d,
-        d,
-        1,
+        qo_indptr=torch.tensor([0, 1], dtype=torch.int32, device=dev),
+        kv_indptr=torch.tensor([0, kv], dtype=torch.int32, device=dev),
+        kv_indices=torch.arange(kv, dtype=torch.int32, device=dev),
+        kv_len_arr=torch.tensor([kv], dtype=torch.int32, device=dev),
+        num_qo_heads=hq,
+        num_kv_heads=hkv,
+        head_dim_qk=d,
+        head_dim_vo=d,
+        page_size=1,
         causal=True,
         q_data_type=torch.bfloat16,
         kv_data_type=torch.bfloat16,

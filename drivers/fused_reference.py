@@ -125,7 +125,13 @@ def main():
     # PLAN'S TASK 3, which the mask leaves empty -- so a dummy plan here drives no work.
     nplan = max(nfa3, 1)
     fa3_ws = torch.zeros(128 << 20, dtype=torch.uint8, device=DEV)
-    w = flashinfer.BatchPrefillWithPagedKVCacheWrapper(fa3_ws, backend="fa3")
+    # SEPARATE workspace for the stock wrapper. Sharing fa3_ws with the fused run let w.plan() and
+    # w.run() overwrite the FA3 plan the fused kernel then read: adding the stock null case took
+    # fa3_1chunk from 127/128 to 128/128 bad and zeroed the output. Recorded in memory as
+    # "flashinfer workspace is not shareable -- a mid-step wrapper needs its own", which I then
+    # did exactly.
+    stock_ws = torch.zeros(128 << 20, dtype=torch.uint8, device=DEV)
+    w = flashinfer.BatchPrefillWithPagedKVCacheWrapper(stock_ws, backend="fa3")
     w.plan(
         qo_indptr=qo_indptr[: nplan + 1].to(DEV),
         paged_kv_indptr=kv_indptr[: nplan + 1].to(DEV),
@@ -150,7 +156,7 @@ def main():
     # need re-reading. The wrapper `w` is already planned over the FA3 subset above.
     if nfa3 > 0:
         try:
-            o_stock = w.run(q[: sum(fa3_q)], (k_cache, v_cache))
+            o_stock = w.run(q[: sum(fa3_q)], (k_cache, v_cache)).clone()
             kpad_s = [k_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(nplan)]
             vpad_s = [v_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(nplan)]
             ref_s = fp32_causal_reference(q, kpad_s, vpad_s, fa3_q[:nplan], fa3_kv[:nplan], sm_scale)
@@ -191,6 +197,17 @@ def main():
         r4 = [round(float(x), 6) for x in ref[0, h, :4]]
         g4 = [round(float(x), 6) for x in got[0, h, :4]]
         print(f"  kvh={kvh} h={h:2d} ref={r4} got={g4}")
+    # OURS vs STOCK FA3, token by token. Stock passed the reference at 0.001779, so it is a
+    # trusted oracle on identical inputs -- this localises where our fused integration diverges
+    # with no inference step. Printed for the first tokens of head 0 and head 4 (kvh 0 and 1).
+    if nfa3 > 0 and 'o_stock' in dir():
+        n = min(o_stock.shape[0], 6)
+        print("OURS vs STOCK FA3 (trusted oracle), element 0 of heads 0 and 4:")
+        for t in range(n):
+            for h in (0, 4):
+                a = float(got[t, h, 0]); b = float(o_stock[t, h, 0])
+                print(f"  tok={t} h={h}: ours={a:+.6f} stock={b:+.6f} "
+                      f"{'ok' if abs(a - b) < 2e-3 else 'DIFF'}")
     rows_bad = 0
     worst = 0.0
     for r in range(total_q):

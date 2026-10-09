@@ -1226,10 +1226,31 @@ Both remaining errors are now understood exactly, and neither needs a design dec
         split and therefore depends on `store_partial` + the merge being right, neither of which
         has ever been exercised correctly (K1g only established that `store_partial` compiles).
 
-      Bisect it the way the FA2 side was bisected, which worked: shrink the fixture until FA3
-      rows are UNSPLIT (one kv chunk, so no partials and no merge) and see whether the FA3 role
-      alone is correct. That separates the mainloop/epilogue from the split machinery before
-      anything is changed.
+      **BISECT DONE (2026-10-09): the FA3 role faults even UNSPLIT.** `MODE=fa3_1chunk` (one FA3
+      row at kv=128, so the plan's chunk rounds up to `TILE_KV` and `ceil_div(128,128)=1`) reports
+      `num_merge_rows=0` -- no partials, no merge -- and hits an **illegal access**. So the FA3
+      mainloop/epilogue is broken independently of split-KV, which removes `store_partial` and the
+      merge from this fault's critical path. That is worth knowing before touching either: K1g
+      only established that `store_partial` *compiles*, so it was the obvious suspect and is now
+      excluded for the unsplit case.
+
+      **The two FA3 configurations fail differently, so there are at least two defects:**
+
+      | fixture | kv | merge rows | result |
+      |---|---|---|---|
+      | `fa3` | 2048 | 1032 | wrong numbers (44.84), **no fault** |
+      | `fa3_1chunk` | 128 | 0 | **illegal access** |
+
+      A fault in the *simpler* configuration and none in the more complex one is the opposite of
+      the usual ordering, and a caution against assuming one cause. **Not assumed:** that these
+      share a cause, or that either explains mixed mode's 41.67.
+
+      Next, by the method that worked on FA2 rather than by hypothesis: sanitize
+      `MODE=fa3_1chunk` for the faulting kernel and block, then trace from **every** block --
+      the all-block trace is what found `q_indptr`, while single-block traces produced three
+      retractions. The FA3 analogue of the `q_indptr`/`kv_indptr` family is the ext's own FA3
+      params (`nnz_qo`, `o_stride_n`, and vector-sparse `fa3_kv_indices` vs the upstream-port raw
+      `page_indices`), none of which have been read off the running kernel.
 
       **Fixture bisect that got here -- the fault needed MANY kv tiles:**
 

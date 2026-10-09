@@ -63,6 +63,12 @@ def main():
     elif mode == "fa2_2tile":
         fa3_q, fa3_kv = [], []
         fa2_q, fa2_kv = [256], [256]
+    elif mode == "fa3_1chunk":
+        # FA3 only, and UNSPLIT: kv=128 makes the plan's chunk round up to TILE_KV=128, so
+        # ceil_div(128,128)=1 -- no partials, no merge. Separates the FA3 mainloop/epilogue from
+        # the split-KV machinery, which is the same bisect that isolated the FA2 bugs.
+        fa3_q, fa3_kv = [256], [128]
+        fa2_q, fa2_kv = [], []
     elif mode == "fa3":
         fa3_q, fa3_kv = [256, 1, 1], [2048, 300, 512]
         fa2_q, fa2_kv = [], []

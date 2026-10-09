@@ -1272,8 +1272,42 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       wrote -- the same class as the five plan index-space bugs, and settled by printing what the
       FA3 scheduler actually read, from every block.
 
-      **Not assumed:** whether this also explains `MODE=fa3`'s wrong numbers at kv=2048 (which
-      does *not* fault) or mixed mode's 41.67.
+      **CAUSE FOUND AND FIXED (`flashinfer@c7fdd92`): the `WorkTileInfo` aggregate initialiser
+      was misaligned.** The struct is `(..., partial_indptr, group_id, kv_chunk_idx,
+      num_kv_chunks, ...)` but the positional initialiser listed `kv_chunk_idx` **before**
+      `group_id`, so `group_id` silently received the **chunk index** -- 0 for the first chunk,
+      which opens the `group_id >= 0` gate on **every** row. The FA3 epilogue then called
+      `store_partial` for rows the plan had marked unsplit with `partial_indptr = -1`.
+
+      The trace showed the contradiction directly instead of by inference: all 16 FA3 blocks
+      reported `group_id=0 chunks=1 partial_indptr=-1`, three values that cannot hold together
+      since `group_id` is derived as `(nchunks > 1) ? 0 : -1` from the same quantity printed as
+      `chunks=1`. It also matches the sanitizer arithmetic exactly -- 4 bytes 44 B before the base
+      is `(-2)*7 + 3` at `num_kv_heads=7`.
+
+      Now **designated initialisers**, like the three other aggregates this port has had to fix
+      for the same reason (sparse mainloop `Arguments`, epilogue `Arguments`,
+      `UnifiedWgmmaPlanPtrs`). **Four positional aggregates misaligned in one port.**
+
+      | fixture | before | after |
+      |---|---|---|
+      | `fa2` | PASS | **PASS** rel 0.002126, 0/258 |
+      | `fa3_1chunk` | **illegal access** | no fault, rel 3.076e+06, 256/256 |
+      | `fa3` | 44.84 | 45.1 |
+      | `mixed` | 41.67 | 45.44, 256/258 (FA2 rows pass) |
+
+- [ ] **K1n. The FA3 role produces garbage, and it is a DIFFERENT failure mode.** No fault
+      anywhere now, and FA2 is correct, but `fa3_1chunk` -- one unsplit row, no partials, no
+      merge, the simplest possible FA3 configuration -- is off by **3.076e+06**. That magnitude
+      is not an indexing slip; it is unnormalised or uninitialised output, so it should be chased
+      as such rather than as another index-space bug. Candidates: the softmax denominator never
+      applied (`normalize_d` / `attention_updater` not reaching the epilogue), or `tOrO` read
+      before the mainloop wrote it. **Not assumed:** that `MODE=fa3`'s 45.1 at kv=2048 is the
+      same cause.
+
+      Method that has worked here and should be reused: print the kernel's own values from
+      **every** block and check them against arithmetic, rather than reasoning from a single
+      block or from silence -- that found `q_indptr`, and it found this one.
 
       Earlier plan, now partly executed: sanitize for the faulting kernel and block, then trace
       from **every** block --

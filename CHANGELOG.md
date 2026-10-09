@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.41.0 — FA3's illegal access fixed; FA2 still passes (2026-10-10)
+
+`flashinfer@c7fdd92`, `ec02a20`. `MODE=<m> ... python drivers/fused_reference.py`:
+
+| fixture | before | after |
+|---|---|---|
+| `fa2` | PASS | **PASS** rel 0.002126, 0/258 |
+| `fa3_1chunk` | **illegal access** | no fault, rel 3.076e+06 |
+| `fa3` | 44.84 | 45.1 |
+| `mixed` | 41.67 | 45.44, 256/258 (FA2 rows pass) |
+
+- **`WorkTileInfo`'s positional initialiser was misaligned**: the struct is
+  `(partial_indptr, group_id, kv_chunk_idx, num_kv_chunks)` but the initialiser listed
+  `kv_chunk_idx` before `group_id`, so `group_id` received the chunk index — 0 on the first chunk,
+  opening the `group_id >= 0` gate on every row. The FA3 epilogue then wrote partials for rows the
+  plan marked unsplit (`partial_indptr = -1`), running off the front of the float workspace. Now
+  designated initialisers — the **fourth** positional aggregate this port has had to fix the same
+  way.
+- `kv_indptr` was double-counting the FA3 pages (the caller rebases the pointer, so the plan's
+  offsets must be subset-relative), which is why FA2 rows were wrong in `mixed` while identical
+  rows passed in `fa2`. Fixed; FA2 is now correct in both.
+- Method note: the diagnosis came from printing the kernel's own values from **every** block and
+  checking them against arithmetic — all 16 FA3 blocks reported the impossible triple
+  `group_id=0 chunks=1 partial_indptr=-1`, and `-44/4 = (-2)*7 + 3` matched the sanitizer exactly.
+  Single-block traces and reasoning from silence produced three retractions earlier in this item.
+- Open: the FA3 role is off by 3.076e+06 on the simplest unsplit fixture — a magnitude indicating
+  unnormalised/uninitialised output, not an index slip. Still no performance number.
+
 ## v0.40.0 — the FA2 path passes the fp32 causal reference (2026-10-09)
 
 `flashinfer@cc56241`. First correctness result of the flashinfer 0.7 port.

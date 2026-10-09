@@ -1573,7 +1573,34 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       (`904 = 32*28+8`, `5380 = 192*28+4`); store addresses (exact every tile); `sQ` layout; and
       four probe-artifact hypotheses, each retracted once the probe's multiplicity was checked.
 
-      **STANDING QUESTION:** with sources, destinations and layout all verified, stored values
+      **[x] Q LOADS CORRECTLY (2026-10-10) -- corruption is in the COMPUTE.** The sQ value probe
+      returned **56 lines against 56 predicted** (first probe here with multiplicity stated in
+      advance and matched), and the values are **distinct** across head-dim and rows at the
+      driver's 0.1-scaled magnitudes -- no replication, no broadcast:
+
+      ```
+      [sqv] blk=3  tile=2 sQ[0,0..3]=0.050293 0.163086 0.150391 0.197266
+      [sqv] blk=14 tile=1 sQ[0,0..3]=0.073242 0.069336 0.097656 -0.123535
+      ```
+
+      So the packed gather delivers correct data, **refuting the standing suspicion** that it was
+      the corruption source -- which was the main motivation for porting the load path.
+
+      With Q-load addresses exact, Q-load **values** correct, and store addresses exact, the
+      corruption occurs **between `sQ` and `sO`** -- in the QK^T MMA, the softmax, or the PV MMA.
+      **Both transfers are now excluded by measurement**, so every component I added to the port
+      is cleared and what remains is the **stock FA3 compute** running on demonstrably correct
+      input.
+
+      That reframes it: the compute is upstream's, so the fault is more likely something *we hand
+      it* that it reads differently -- a trait or layout constant consumed by the MMA rather than
+      by the loads, invisible to both address checks. **Compare between trees, do not guess:**
+      the `TiledMma` definitions, `NUM_MMA_THREADS` / warpgroup counts, and the
+      `AttentionUpdater`'s softmax scale -- `StandardAttentionSm90` was **renamed during the
+      co-inclusion work**, and a wrong variant computes with the wrong `sm_scale` while every
+      address stays right.
+
+      **(Superseded:)** with sources, destinations and layout all verified, stored values
       still show elements 0, 2, 3 identical within a row; the residual is a deterministic
       6.153e+06 over 254/256 with exactly rows 0 and 128 correct; and the run hangs on 3 of 5
       attempts. **Nothing currently links the two defects.**

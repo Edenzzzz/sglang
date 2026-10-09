@@ -5,9 +5,17 @@ for a 4x8 H100/H200 cluster serving agentic traffic (TraceLab-shaped: 64-100K co
 appends, ~480-token outputs, mixed with chat and math).
 
 Tasks, in priority order (status 2026-10-09; evidence in the sections below).
-**Item 5 is the capacity/throughput axis and is currently the weakest-evidenced part of
-the thesis: no measurement so far varies the workload mixture or compares against a
-fixed PD split on goodput.**
+
+**The thesis in one line:** our policy space (4-mode colocation + EDF/SLO router + tunable P/D
+admission ratio) is a **strict superset** of every baseline's fixed policy, so we should match
+the best baseline at any static workload and beat all of them when the workload moves.
+Baselines are two-tier: **single node** = prefill-prioritized (the default) and mixed chunked
+prefill; **multi node** = PD multiplex and PD disagg (1P3D, 2P2D).
+
+**Item 5 carries that claim and is the weakest-evidenced part of the thesis:** nothing measured
+so far varies the workload mixture, shifts it mid-run, or compares against any baseline on
+goodput. Items 1-3 measure routing, cache replication and EDF ordering against 2P2D at a single
+static mixture.
 
 - [x] **1. Cache-hit-first routing with an SLO veto** (2026-10-08, H20 16 GPUs) — cache-affinity
       colocation vs the best disagg (2P2D): agent TTFT -93% (21.6 -> 1.6 s), chat TTFT -99.5%,
@@ -32,38 +40,60 @@ fixed PD split on goodput.**
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex
       P99 ITL -27%. Full stack vs stock MTP: TTFT -95%/-51%, ITL -42%/-38% (chat/codex, 24/s, 3 rounds).
-- [ ] **5. CAPACITY AND FLEXIBILITY vs fixed PD splits (1P3D / 2P2D)** — added 2026-10-09 on the
-      user's correction. **This is the throughput axis; everything measured so far is not.**
-      Rationale: colocation lets every node admit both prefill and decode with cache
-      replication, so a fixed disagg partition strands capacity whenever the mixture moves away
-      from the ratio it was provisioned for. A 2P2D cluster provisioned for 50/50 has half its
-      GPUs idle-ish on prefill when traffic turns decode-heavy, and cannot re-balance without
-      redeploying; colocation re-balances per step. Methodology to follow
-      `arxiv 2504.08784` (see the sub-item below — the PDF did not extract, get the HTML/ar5iv
-      version before fixing the SLO definitions).
-      - [ ] **5a. Baselines**: 1P3D and 2P2D disagg vs 4-mode colocation, same total GPU count.
-            Needs 4 GPUs; per the standing authorization multi-node/multi-GPU modelling uses
-            **H20**, trial named **vibecuda**, <= 16 GPUs.
-      - [ ] **5b. Metric must be GOODPUT, not raw tok/s.** Per-workload-type SLOs: a TTFT target
-            for interactive chat, a TPOT/ITL target for agentic streams, and count only requests
-            meeting their OWN class's SLO. Raw throughput is what made the colocated-vs-colocated
-            A/B look flat and is the wrong number for a capacity claim.
-      - [ ] **5c. Sweep the MIXTURE RATIO** (prefill-heavy -> decode-heavy) at several request
-            rates, and report max sustainable rate per mixture — the capacity frontier, not a
-            single operating point. Build mixtures from the real datasets already in use
-            (TraceLab agentic replay + chat + math); record how they are blended so the mix is
-            reproducible.
-      - [ ] **5d. DYNAMIC adaptation: load spikes and mixture shifts.** The core flexibility
-            claim. Step-change the mixture mid-run (e.g. prefill share drops, decode share
-            rises) and inject a rate spike; measure SLO attainment during and after the
-            transition, plus time-to-recover. A fixed 2P2D split cannot re-provision; colocation
-            should degrade less and recover faster. This is where the argument should be
-            strongest, so it is the item most worth doing well — and it is also the item where a
-            null result would most damage the thesis, so it must be run honestly with the
-            transition visible in the time series.
-      - [ ] **5e. Read `arxiv 2504.08784` properly** for SLO definitions, the goodput metric and
-            how they construct/shift mixtures. The arxiv PDF did not text-extract; use the ar5iv
-            or HTML rendering.
+- [ ] **5. THE SUPERSET CLAIM: adapt to any workload the baselines are each tuned for.**
+      Added 2026-10-09 on the user's correction; **this is the capacity/throughput axis and
+      nothing measured so far tests it.**
+
+      **The claim.** Our method is 4-mode colocation plus an EDF/SLO router with a tunable
+      **P/D admission ratio**. Each baseline is one fixed point in that policy space, so our
+      policy space is a strict superset of all of them, and the EDF predictor plus per-class
+      SLOs choose the operating point *per workload and per step* instead of at deploy time.
+
+      | baseline | scope | the fixed choice it makes | our method reduces to it by |
+      |---|---|---|---|
+      | **prefill-prioritized** (sglang DEFAULT) | single node | prefill always preempts decode | admission ratio -> prefill absolute priority |
+      | **mixed chunked prefill** | single node | always co-admit a prefill chunk with decode | admitting a chunk every step |
+      | **PD multiplex** (`arxiv 2504.14489v2`) | multi node | time-share P and D on every node | alternating admission in time |
+      | **PD disagg 1P3D** | multi node | 1 node pure-prefill, 3 pure-decode | per-node ratio -> {1.0} u {0.0 x3} |
+      | **PD disagg 2P2D** | multi node | 2 pure-prefill, 2 pure-decode | per-node ratio -> {1.0 x2} u {0.0 x2} |
+
+      **Why this is the right framing:** each baseline is optimal for *some* mixture and wrong
+      for others — prefill-priority wins when prefill is scarce and starves decode when it is
+      not; 2P2D is right at its provisioned ratio and strands half the cluster when traffic
+      turns decode-heavy. A fixed policy cannot follow the workload; a tunable ratio can.
+
+      **How the claim is falsified, stated up front so the experiment can fail honestly:**
+      the superset argument predicts (a) at *every* static mixture we are within noise of the
+      **best** baseline for that mixture, and (b) at mixtures that **shift mid-run** we are
+      strictly better than all of them. If there is a static mixture where we lose to a
+      baseline by more than run-to-run noise, the superset claim fails there — a fixed policy
+      has less bookkeeping and that overhead is real, as the 6.8% kernel regression in
+      `debug_kernel_server_perf_4_mode.md` already shows for a different mechanism.
+
+      - [ ] **5a. SINGLE-NODE baselines** — vs **prefill-prioritized** (the default) and
+            **mixed chunked prefill**. 1 GPU; runnable on the current H200 pod.
+      - [ ] **5b. MULTI-NODE baselines** — vs **PD multiplex** and **PD disagg (1P3D and 2P2D)**
+            at equal total GPU count. Per the standing authorization: **H20**, trial named
+            **vibecuda**, <= 16 GPUs (4 nodes x 4, or <= 8 nodes x 2).
+      - [ ] **5c. Metric is GOODPUT under per-class SLOs, not raw tok/s.** A TTFT target for
+            interactive chat and a TPOT/ITL target for agentic streams; a request counts only if
+            it meets its OWN class's SLO. Raw throughput is what made the colocated-vs-colocated
+            kernel A/B look flat and is the wrong number for a capacity claim.
+      - [ ] **5d. STATIC sweep: mixture ratio x request rate.** Prefill-heavy -> decode-heavy at
+            several rates; report the **capacity frontier** (max sustainable rate per mixture),
+            not a single operating point. This is the test of prediction (a): the best baseline
+            changes across the sweep, and we must track it everywhere. Mixtures blended from the
+            datasets already in use (TraceLab agentic replay + chat + math), with the blend
+            recorded so it is reproducible.
+      - [ ] **5e. DYNAMIC: mid-run mixture shift and load spike.** The core of the argument and
+            the test of prediction (b): step-change the mixture (prefill share down, decode share
+            up) and inject a rate spike; measure SLO attainment **through** the transition and
+            time-to-recover, with the transition visible in the time series rather than averaged
+            away. A fixed split cannot re-provision; we re-balance per step. This is also where a
+            null result would most damage the thesis, so it gets run most carefully.
+      - [ ] **5f. Read `arxiv 2504.08784`** for its SLO definitions, goodput metric and how it
+            constructs and shifts mixtures. The arxiv PDF does not text-extract (compressed
+            streams only); use the ar5iv/HTML rendering.
 
 - [ ] **4. Two-way RDMA / congestion, randomized source selection** — **not demonstrated on the
       full 4-NIC fabric, and reported as such.** No congestion exists to relieve at 16 GPUs on 4

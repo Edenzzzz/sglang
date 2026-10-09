@@ -927,7 +927,37 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       int64_t"*. Same failure mode as the loader's `plan()` call earlier today; naming the
       fields makes the next insertion a missing-member error.
 
-- [ ] **K1g. `store_partial` is NOT ported -- the split-KV path is incomplete, and the green
+- [~] **K1g IN PROGRESS (2026-10-09, `flashinfer@134fb6a`). `store_partial` is ported, but the
+      only path that uses it still does not compile -- so it has never been type-checked.**
+
+      Ported: the slab write (O + LSE at `partial_indptr + row * num_kv_chunks + kv_chunk_idx`,
+      times `num_kv_heads`, times head_dim), the scheduler's new `num_kv_chunks` field, and the
+      call site in `prefill_sm90.cuh`. Two decisions worth keeping:
+
+      - `num_kv_chunks` comes from the **plan's** formula, `ceil_div(kv_len, len_kv_chunk)`,
+        uniform per request and with **no** causal adjustment -- that is exactly what
+        `EnumerateFusedWorkItems` counted as `splits` when it sized the slab and
+        `BuildFusedMergeLayout` built `merge_indptr`. The FA2 side's causal-adjusted formula
+        would disagree with the plan, and that disagreement is what left 511/512 rows unwritten.
+      - The barrier counts follow **0.7's `store()`**, not 0.3.1's `store_partial`: 0.7 arrives
+        on `EpilogueBarrier` with `NUM_MMA_THREADS` where 0.3.1 used
+        `NUM_MMA_THREADS + Ktraits::NUM_PRODUCER_THREADS` -- consistent with 0.7 dropping the
+        `NUM_PRODUCER_THREADS == NUM_COPY_THREADS` assert. Mixing them puts two different
+        participant counts on one hardware barrier, i.e. a hang.
+
+      **The default TU's `NVCC_EXT_OK` is a weak gate here too.** `store_partial` sits behind
+      `if constexpr (fa3_has_split_kv<TileScheduler>::value)`, false for the default scheduler,
+      so the branch is discarded and the function is never compiled. Building the path that does
+      use it (`-DFLASHINFER_FUSED_UNIFIED_WGMMA=1`) fails with **6 errors**, all one cause -- a
+      **third** positional aggregate init that shifted, in the upstream-port scheduler
+      arguments, at `fused_fa3_persistent_ext.cu:289-300` (`float*` <-> `IdT*` both directions,
+      `int` -> `IdT*`, `IdT*` -> `int`, narrowing `unsigned` -> `int`). The TU's own comment at
+      that site predicted it: *"the positions matter because this is aggregate initialisation,
+      and adding fields mid-struct without updating here would silently assign num_qo_heads to a
+      float*"*. Convert it to designated initialisers like the other two, then compile the
+      unified path, then the reference.
+
+- [ ] **K1g-old (superseded by the above). `store_partial` is NOT ported -- the split-KV path is incomplete, and the green
       compile hides it.** 0.7's epilogue has **no** split path at all (only `store` /
       `store_tail` / `store_zero`), so `store_partial` is entirely ours. Counts: 0.3.1's
       `epilogue.cuh` defines it and its `prefill_sm90.cuh` calls it **twice**; the 0.7-based

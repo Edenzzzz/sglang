@@ -497,8 +497,32 @@ so **derive lengths from `ToVector()`, never from the `NUM_*_ARGS` constants**.)
 
 **Revised K1 content, in order:**
 
-- [ ] **K1a. Map the kernel's group-counter reduction onto `merge_indptr` / `merge_o_indices` /
-      per-task `partial_indptr`.** The kernel already owns `partial_o`, `partial_lse` and a
+- [x] **K1a RESOLVED by measurement (2026-10-09): DROP the JIT reduction, use 0.7's scheduled
+      merge.** Read the kernel's actual reduction call
+      (`include/flashinfer/attention/persistent_fa3_fused.cuh:686-689`): it passes
+      `partial_o`, `partial_lse`, `merge_indptr`, `merge_o_indices` -- **all of which 0.7 still
+      has** -- *plus* `group_row_begin`, `group_nrows`, `group_kv_head`, `group_nchunks`,
+      `group_counter`, which 0.7 dropped. Those five exist **only** for the in-kernel
+      just-in-time rendezvous: an atomic `group_counter` against `group_nchunks` so the last
+      chunk to finish performs the merge itself and no separate merge kernel is launched.
+      0.7 instead schedules the merge as its own kernel -- and that kernel is visible in the B1b
+      trace: **`PersistentVariableLengthMergeStatesKernel`, 1682 launches, 10.66 ms = 0.6% of
+      kernel time.** So the entire cost that JIT reduction removes is **bounded at 0.6% of GPU
+      time**, which is far below the +/-1.5-3% noise floor.
+      **Therefore K1a is not a port of the group tables at all.** Port the fused kernel to write
+      partials and let 0.7's scheduled merge reduce them, exactly as 0.7's own `BatchAttention`
+      does. This removes the need to reconstruct any group table, removes the atomic rendezvous,
+      and removes the recorded split-KV defect where `group_counter` can never reach
+      `group_nchunks - 1` when causal masking leaves a chunk with no work item.
+      **On the paper's technique:** just-in-time reduction is one of the two ideas in *Taming
+      Dynamism on GPUs*. Measuring its ceiling at 0.6% here is the honest way to "think carefully
+      about how it fits our story" rather than copying it -- on this workload it does not pay, and
+      saying so is more useful than reimplementing it. If a later measurement shows the merge
+      kernel growing (more split-KV chunks at longer context), it can be revisited with a known
+      target to beat.
+- [ ] **K1a2. (superseded detail) Map the group-counter reduction onto the merge list** -- kept
+      only as the fallback if the scheduled merge turns out to cost materially more than 0.6%
+      once the fused kernel is actually producing partials. The kernel already owns `partial_o`, `partial_lse` and a
       `merge_indptr` path, so the target representation is partly familiar; what changes is how a
       chunk learns it is the last writer for a row. The 0.3.1 scheme used a `group_counter[gid]`
       atomic against `group_nchunks[gid]`; 0.7's merge list makes that a scheduled merge instead

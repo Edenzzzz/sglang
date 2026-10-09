@@ -949,10 +949,72 @@ and times 133.5 us vs 174.0 us unfused on identical work. That is a kernel-level
 never been done is wiring it into `forward_extend` the way the two-executor split now is.
 
 - [ ] 2026-10-09 **wire the single fused kernel into upstream `forward_extend`** -- one launch,
-      SM pre-assignment inside the grid, no scatter. Reuses the row partition, the varlen
-      builders and the dense page table already landed and CPU-verified; replaces the two
-      executor calls with one. This is the variant the goal actually asks for and the only one
-      whose cost structure can plausibly beat base in-server.
+      SM pre-assignment inside the grid, no scatter. This is the variant the goal actually asks
+      for and the only one whose cost structure can plausibly beat base in-server.
+
+### Integration surface of the fused kernel, read off the source (2026-10-09)
+
+Established from `/dev/shm/w/fi/tests/fused_fa3_persistent_ext.cu` and
+`tests/verify_fused.py`, so the wiring is specified against the real signature rather than from
+memory.
+
+**Entry point.** `torch.ops.fused_fa3.fused_run(...)`, registered by a
+`torch.utils.cpp_extension.load(name="fused_fa3", sources=[fused_fa3_persistent_ext.cu], ...)`.
+There is no prebuilt `.so` on the pod; it JIT-builds. Include paths needed:
+`<fi>/include`, `<fi>/csrc`, `<fi>/3rdparty/cutlass/include`,
+`<fi>/3rdparty/cutlass/tools/util/include`, `<fi>/3rdparty/spdlog/include`, **plus** a
+flashinfer-generated `batch_attention_with*` config directory from
+`~/.cache/flashinfer/*/generated/` -- which only exists after some `BatchAttention.plan()` has
+run, so the build has an ordering dependency on flashinfer's own JIT.
+The harness passes `-std=c++17`; **torch 2.14 requires C++20**, already hit and fixed once in
+this project, so that flag must be raised for this toolchain.
+
+**Signature** (tail of the argument list, in order):
+
+```
+fused_run(q, ..., fa3_int_ws, std::vector<int64_t> fa3_plan,
+          pers_int_ws, pers_float_ws, std::vector<int64_t> pers_plan,
+          num_qo_heads, num_kv_heads, page_size, sm_scale,
+          sm_split, pers_row_offset, fa3_num_ctas, pers_kv_page_offset,
+          fa3_kv_indices, pers_o, num_requests, max_pages_per_seq,
+          max_seqlen_q, kv_lens_per_req, q_indptr_per_req, kv_indptr_per_req)
+```
+
+**What this means for the port, and it is more than a call swap:**
+
+1. **It needs BOTH flashinfer plan vectors**, not one: `fa3_plan` is a
+   `PrefillPlanSM90Info`, `pers_plan` a `HolisticPlanInfo<3>` or `<4>`. So `forward_extend` must
+   plan the FA3 paged wrapper *and* the persistent `BatchAttention` wrapper each step and extract
+   both `_plan_info` vectors. The two-executor split already plans one extra wrapper per step, so
+   this is the same per-step planning cost -- the saving is strictly in the LAUNCH, which is
+   exactly the term the serving measurements implicate.
+2. **`sm_split` is the SM pre-assignment**, passed directly into the one grid. This is the
+   genuine "SM pre-assignment" the goal asks for; `sm_margin` in the two-executor split only
+   withheld SMs from FA3's own launch.
+3. **Index representation differs from the split's.** FA3 inside the fused kernel multiplies the
+   index by `k_stride_n`, so `fa3_kv_indices` must be **vector-sparse offsets** via
+   `flashinfer.page.block_sparse_indices_to_vector_sparse_offsets`, **not** the `req_to_token`
+   page ids the two-executor split feeds `flash_attn_with_kvcache`. This is precisely the
+   distinction `mixed_dispatch.dense_block_table`'s docstring was written for, and aliasing the
+   two caused an illegal memory access earlier in this project.
+4. **Plan-length guard**: under `FLASHINFER_FUSED_UNIFIED_WGMMA` the kernel requires a 4-task
+   plan and checks the vector's length, because `FromVector` walks by the count baked into the
+   type. The real lengths are 49 and 60 entries (from `ToVector()`), not the 51/62 that
+   `NUM_TASK_ARGS`/`NUM_SHARED_ARGS` arithmetic predicts -- the source comment records that the
+   arithmetic form of this guard rejected every valid plan.
+5. Reusable as-is from the split work: the row partition (`split_classes` + decode guard), the
+   per-request varlen builders (`fa3_subset_varlen`), and `dense_block_table` for the dense
+   `[batch, max_pages]` table.
+
+- [ ] 2026-10-09 **increment 1: JIT-build `fused_fa3` from inside sglang** with C++20 and the
+      generated-config include path, behind `SGLANG_FUSED_KERNEL`, asserting
+      `torch.ops.fused_fa3.fused_run` exists. No numerics yet.
+- [ ] 2026-10-09 **increment 2: build both plan vectors in `init_forward_metadata`** and
+      vector-sparse `fa3_kv_indices`; verify shapes and the plan-length guard on CPU/host where
+      possible.
+- [ ] 2026-10-09 **increment 3: one `fused_run` call in `forward_extend`**, gated, then the
+      in-step reference gate and the warmed A/B against base -- which must clear the measured
+      +/-1.5-3% noise floor to count as a gain.
 - [ ] 2026-10-09 **diagnose the graphs-on fault by capture-boundary bisect, not hypothesis** --
       five mechanism guesses were wrong; the remaining question is narrow (which buffer the
       captured graph reads that the split perturbs), and `SGLANG_FUSED_SPLIT_DEBUG=1` plus

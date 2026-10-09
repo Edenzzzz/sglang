@@ -653,13 +653,43 @@ lines were on 0.3.1.
 
 So K1c decomposes as:
 
-- [ ] **K1c1. Extend 0.7's `HolisticPlanInfo` to `NUM_TASKS=4` plus the wgmma plan fields.**
-      The length arithmetic stays consistent (`8 + 4*10 = 48`), so the guard needs no special
-      casing -- only the task count changes.
-- [ ] **K1c2. Port our `TwoStageHolisticPlan` additions** (4 hunks) so the 4-task plan is
-      actually populated, including the FA3 task's work items.
-- [ ] **K1c3. Confirm 0.7's 2-task `BatchAttention` path still works unchanged** -- the overlay
-      must not perturb it, since the FA2 half of the fused kernel relies on it.
+- [x] **K1c1 DONE, and the design changed: a PRIVATE plan struct, not an extension of
+      0.7's.** `flashinfer@79a79a7` adds `port07/include/flashinfer/attention/fused_plan.cuh`
+      defining `FusedPlanInfo<NUM_TASKS>` -- 0.7's fields plus `batch_idx_offset` per task and
+      six shared fields (cluster cursor and counts for cross-role backfill, `max_splits_fa3`, the
+      compact FA3 request list, `num_fa3_clusters` kept last because the harness reads the chosen
+      split as `plan_info[-1]`). **11 per task / 14 shared, verified self-consistent by
+      enumeration** (pushes == reads == constants), **58 entries at `NUM_TASKS=4`**.
+      **`scheduler.cuh` is no longer overlaid at all.**
+      *Why the design changed:* extending `HolisticPlanInfo` in place makes it 36 entries at
+      `NUM_TASKS=2` against stock 0.7's 28, and `BatchAttention._plan_info` is produced by
+      **flashinfer's own JIT-compiled module**, not ours -- so the two sides would disagree and
+      the kernel would reject every plan, the same failure class as the original
+      `28 entries, expected 56 or 68`. On the 0.3.1 *source tree* this could not happen, because
+      flashinfer's JIT compiled `BatchAttention` from the same modified headers. With the 0.7
+      *wheel* that coupling is gone. Chosen over the alternative (inject the overlay into
+      flashinfer's JIT so `BatchAttention` sees the extended struct), which is less code but
+      leaves us coupled to their internal build on every upgrade -- and releases have already
+      broken this work twice (plan-struct redesign, `vector_sparse` helper removal).
+      *Consequence:* 0.7's `HolisticPlanInfo`, `TwoStageHolisticPlan` and `BatchAttention` are
+      untouched, so **K1c3 is satisfied by construction** -- there is no overlay to perturb them.
+- [ ] **K1c2. Port the 4-task PLANNER** (our `TwoStageHolisticPlan` additions, 4 rejected hunks)
+      into `fused_plan.cuh` as a private function populating `FusedPlanInfo<4>`, including the
+      FA3 task's work items and the cluster cursor. ~400 lines; the largest single remaining
+      piece of K1c.
+- [x] **K1c3 satisfied by construction** -- nothing overlays 0.7's 2-task path.
+
+**Caveat on everything in `port07/` so far: NOTHING HAS BEEN COMPILED.** The checks are
+structural (hunk accounting, invariant greps, push/read enumeration), not a build. `persistent.cuh`
+and `fused_plan.cuh` must both go through nvcc before any of this is called ported in a stronger
+sense than "the edits are in place".
+
+**Also recorded: fuzzy patching is unsafe on these files.** Applying our `scheduler.cuh` diff
+with `patch --fuzz=3` produced **silently broken code** -- six `vec.push_back` statements landed
+*inside* `FromVector`'s error-message expression, and the file was left with 11 per-task fields in
+the struct and `ToVector` against `NUM_TASK_ARGS = 10` and 10 reads in `FromVector`, so a
+round-trip would have misread every task. Found by enumerating pushes against reads, not by
+reading the diff. Hand-port these files; do not trust fuzz.
 
 - [x] 2026-10-09 **K1b done** (`persistent.cuh`, overlay, 11/16 hunks + 5 intentional drops).
 - [ ] 2026-10-09 **K1c in progress** -- 15/22 applied; the 7 rejects are the 4-task plan builder.

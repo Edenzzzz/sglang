@@ -1348,9 +1348,37 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       gqa factor makes the row mapping wrong for **every** tile, not just the tail. A huge
       residual without a fault is consistent, since `o` is the first of several large allocations.
 
-      **Candidate, not a finding.** Test by printing the epilogue's computed output row and
-      element offset against the tensor's true row count, from every block, before changing
-      anything.
+      **CONFIRMED (2026-10-10), and it is an UN-PORTED feature rather than a new bug.** From
+      every block on `fa3_1chunk`:
+
+      ```
+      store lines: 56                 (8 q tiles x 7 kv heads)
+      qo_tile=0 ... qo_len=1024 rows_left=1024
+      qo_tile=1 ... qo_len=1024 rows_left=896
+      qo_head in {0,4,8,12,16,20,24}  (= kv_head * gqa)
+      ```
+
+      The epilogue's row clamp is in **packed** rows: it writes rows up to 1023 into an `o` with
+      only **256 token rows**, treating packed rows as tokens while indexing heads as a separate
+      dimension. Every tile's mapping is wrong, not just the tail -- consistent with 3.076e+06
+      and no fault, since `o` is the first of several large allocations.
+
+      **The missing piece is the packed-GQA store.** The scheduler presents packed rows
+      deliberately (its comment: FA3's mainloop validates the tile index against `qo_len`, so a
+      token length made every tile look out of range). What reconciles the two is upstream FA3's
+      packed-GQA addressing of rows as `(token, head-in-group)` pairs -- which is why
+      `sparse_mainloop.cuh` carries `packed_Q_ptr` and `group_size` (ported in K1f). The matching
+      epilogue store was never ported.
+
+      **This is the same feature as K1d2's deferred fourth change** (the packed-GQA Q mbarrier
+      init), and K1g's note that the packed-GQA work should be done as one unit. The deferral is
+      the cause of this failure; close them together.
+
+      Open, concretely:
+      - the packed-GQA store in `hopper/epilogue.cuh`: map packed row -> `(token, head-in-group)`
+        and clamp on the **token** extent;
+      - the Q mbarrier init in `prefill_sm90.cuh` behind `FLASHINFER_FUSED_PACKED_Q`. Distinctive
+        mis-port symptom: arriving from 32 lanes on a barrier armed for 1 **hung for 1500 s**.
 
       Superseded candidate: the magnitude says unnormalised or uninitialised Our epilogue matches pristine 0.7 (neither calls `finalize`/`normalize`
       explicitly -- normalisation lives inside `mma_f16` / the `attention_updater`), so the

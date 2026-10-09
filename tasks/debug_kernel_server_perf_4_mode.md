@@ -1196,8 +1196,40 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       be retracted earlier in this item, and all three came from reading an instrument's
       **silence**; what worked was a positive signal checked against arithmetic.
 
-      Remaining: `MODE=mixed` at 40.57 is now isolated to the **FA3 role and/or the merge**,
-      since the FA2 path is clean. Not yet diagnosed.
+      **[x] FA2 is now correct in MIXED mode too (`flashinfer@ec02a20`).** The FA2 decode rows
+      were wrong in mixed (rel 18.29 / 23.82) while identical rows passed in `MODE=fa2`. The
+      difference is `pers_kv_page_offset`, which is 0 when nothing goes to FA3: the caller hands
+      the FA2 roles a `kv_indices` pointer already advanced by the FA3 page total **and** the plan
+      supplied an absolute `kv_indptr`, double-counting those pages. Same shape as the `q_indptr`
+      bug -- when the caller rebases the pointer, the plan's offsets must be subset-relative.
+
+      | run | FA2 rows 256/257 | FA3 rows | bad |
+      |---|---|---|---|
+      | `mixed` | **0.002069 / 0.002004 PASS** | wrong | 256/258 |
+      | `mixed` + `NO_MERGE` | **PASS** | rel 1 (zero, expected) | 256/258 |
+      | `fa3` | -- | 44.84 | 258/258 |
+
+      With `NO_MERGE=1` the worst error over the whole batch is exactly **1.0**, which is what
+      unreduced FA3 rows look like (`got ~ 0`) with the FA2 rows correct -- an independent
+      confirmation that nothing on the FA2 side remains wrong.
+
+- [ ] **K1m. The FA3 role is the entire remaining failure.** `MODE=fa3` = 44.84 over 258/258;
+      `mixed` = 41.67 over exactly the 256 FA3 rows. This is a **different surface** from every
+      fix so far: the FA2 bugs were all plan-to-kernel index spaces, while the FA3 role runs
+      through `UnifiedWgmmaTileScheduler` and `fa3_prefill_body` with its own params built in the
+      ext. Candidates, **not yet tested**:
+
+      - the ext's FA3 params -- `fa3_kv_indices` is the **vector-sparse** array while the
+        upstream-port `page_indices` must be **raw page ids**; feeding one where the other is
+        read read far outside the cache before;
+      - the split-KV path: `MODE=fa3` reports `num_merge_rows=1032`, so almost every FA3 row is
+        split and therefore depends on `store_partial` + the merge being right, neither of which
+        has ever been exercised correctly (K1g only established that `store_partial` compiles).
+
+      Bisect it the way the FA2 side was bisected, which worked: shrink the fixture until FA3
+      rows are UNSPLIT (one kv chunk, so no partials and no merge) and see whether the FA3 role
+      alone is correct. That separates the mainloop/epilogue from the split machinery before
+      anything is changed.
 
       **Fixture bisect that got here -- the fault needed MANY kv tiles:**
 

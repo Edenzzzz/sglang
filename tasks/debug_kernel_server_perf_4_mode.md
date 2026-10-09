@@ -1398,8 +1398,32 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       computed from the wrong Q rows. **Prediction, not conclusion:** port the load path and see
       whether `fa3_1chunk` drops to the bf16 residual, as the FA2 side did.
 
-      **PREDICTION REFUTED (2026-10-10).** The hang is fixed (macro pairing) and `fa3_1chunk` now
-      runs to completion, but the numbers did not move:
+      **QUALIFIED (2026-10-10): the hang is INTERMITTENT, not fixed.** The claim below rested on
+      **one** completed run. Rerunning the identical fixture -- only a Python-side driver change,
+      no kernel rebuild -- hangs again (single `pers_plan` line, process alive for minutes). So
+      the packed-Q path is **nondeterministic**: it can complete and it can hang on the same
+      inputs and the same binary. "Fixed" was one sample read as a verdict.
+
+      Consequences, which weaken what follows:
+      - the 6.153e+06 / 254-of-256 figure is a real measurement from a completed run, but it is
+        **one sample from a nondeterministic path** -- not to be compared against other single
+        samples as if stable. The store-only and store+load+mbarrier numbers being identical may
+        be coincidence rather than evidence the load is inert;
+      - the packed-GQA refutation is weakened for the same reason and needs repeat runs;
+      - `MODE=fa2` PASS (0.002126, 0/258) is unaffected -- reproduced across many rounds, never
+        hung.
+
+      Candidate for the race, **not** a finding: `barrier_Q` is a `ClusterTransactionBarrier`
+      whose phase advances per work item, and 0.3.1's note says issuing the arrive "once per work
+      item keeps that phase in step". With 32 lanes arriving and the consumer waiting on phase
+      `work_idx % 2`, a mismatch stalls rather than faults.
+
+      **A nondeterministic hang makes every FA3 timing meaningless, so it blocks the performance
+      work regardless of the residual.** Next: run `fa3_1chunk` N times and count completions vs
+      hangs before interpreting any FA3 number.
+
+      **(Superseded claim, kept in place:)** The hang is fixed (macro pairing) and `fa3_1chunk`
+      now runs to completion, but the numbers did not move:
 
       | state | `fa3_1chunk` |
       |---|---|

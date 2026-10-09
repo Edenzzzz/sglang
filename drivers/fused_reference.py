@@ -161,6 +161,15 @@ def main():
     for r in range(max(0, total_q - 3), total_q):
         num = (got[r] - ref[r]).norm().item()
         print(f"  tail row {r}: rel={num / max(ref[r].norm().item(), 1e-6):.4g}")
+    # WHICH rows pass. 254/256 bad has survived every change to the FA3 path, so the identity of
+    # the 2 correct rows is a sharper constraint than the 254 wrong ones: at gqa=4 and CTA_Q=128 a
+    # tile covers 32 tokens, so 2 is not a tile boundary and the pattern should name the mechanism.
+    good = [r for r in range(total_q)
+            if (got[r] - ref[r]).norm().item() / max(ref[r].norm().item(), 1e-6) <= 2e-2]
+    print(f"passing rows ({len(good)}): {good[:24]}{' ...' if len(good) > 24 else ''}")
+    if good:
+        print(f"  first={good[0]} last={good[-1]} mod32={sorted({g % 32 for g in good})} "
+              f"mod128={sorted({g % 128 for g in good})}")
     print(f"\nmode={mode} worst rel err {worst:.4g}, bad rows {rows_bad}/{total_q}")
     print("PASS" if rows_bad == 0 else "FAIL")
     return 0 if rows_bad == 0 else 1

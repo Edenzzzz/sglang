@@ -43,12 +43,19 @@ compiles far enough that nvcc type-checks the kernel itself. `flashinfer@4ef2407
   defaulted `barrier_id` is ours and had to be carried onto 0.7, which matters because
   `__syncthreads()` compiles to `barrier.sync 0` — the same hardware barrier FA3 uses as
   `kQueryEmpty`.
-- Still open (K1f): 0.7 **inserted** `k_page_stride` / `v_page_stride` / `page_size` into the
-  sparse mainloop's `Arguments` after `window_left`, shifting our positional init. Needs
-  `hopper/sparse_mainloop.cuh` (+57: `packed_Q_ptr`, `group_size`) and `hopper/epilogue.cuh`
-  (+256: the split-KV `store_partial` path and six added fields) carried onto 0.7, with the call
-  sites moved to designated initializers. Then the fp32-reference PASS. **No A/B before the
-  reference passes.**
+- **The fused kernel compiles against flashinfer 0.7** (`1208ca4`): `NVCC_EXT_OK`, **10 device
+  kernels** in the object. The last three errors were one cause — 0.7 *inserted*
+  `k_page_stride` / `v_page_stride` / `page_size` into the sparse mainloop's `Arguments` after
+  `window_left`, and because every field it shifted onto happened to be assignable, the
+  positional init failed three fields later as *"no suitable conversion from AdditionalParams to
+  int64_t"* rather than where the change was. Both call sites now use designated initializers.
+- **This is not a correctness result, and the split-KV path is incomplete.** `store_partial` is
+  entirely ours (0.7's epilogue has only `store` / `store_tail` / `store_zero`) and is **not
+  ported**: 0.3.1 defines it and calls it twice, the 0.7-based copies have zero of each. The six
+  epilogue fields added here are plumbed but unread and default to `nullptr`, which is precisely
+  why the TU compiles — any FA3 row that splits over KV writes no partial and the merge reduces
+  memory nothing wrote. That is K1g, to be done with K1d2's deferred packed-GQA mbarrier change.
+  **No A/B, and no correctness claim, before the fp32 reference passes.**
 
 ## v0.36.0 — persistent.cuh compiles against flashinfer 0.7 (2026-10-09)
 

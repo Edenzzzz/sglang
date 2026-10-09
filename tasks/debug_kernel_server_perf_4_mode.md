@@ -906,7 +906,10 @@ Both remaining errors are now understood exactly, and neither needs a design dec
         compiles to `barrier.sync 0`, which FA3 also uses as `NamedBarriers::kQueryEmpty`, so a
         CTA backfilling from FA3 into this mainloop rendezvouses on a barrier FA3 already drove.
 
-- [ ] **K1f. The last delta: 0.7 inserted three fields into the sparse mainloop's `Arguments`.**
+- [x] **K1f (2026-10-09, `flashinfer@1208ca4`). The fused kernel COMPILES against 0.7 --
+      `NVCC_EXT_OK`, 10 device kernels** (against **0** for the header-parse TUs, so the body is
+      genuinely type-checked this time). 0.7 inserted three fields into the sparse mainloop's
+      `Arguments`.
       After `window_left` come `k_page_stride`, `v_page_stride`, `page_size`, so our positional
       aggregate init shifted `additional_params` onto an `int64_t`. FA3's paged params already
       carry all three under the same names. Two header deltas to carry onto 0.7, and the call
@@ -918,8 +921,28 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       | `hopper/sparse_mainloop.cuh` | +57 | `packed_Q_ptr`, `group_size`, and the packed-GQA load path that reads them (Q rows are `(token, head-in-group)` pairs, which the Q tensormap cannot express) |
       | `hopper/epilogue.cuh` | +256 | the split-KV `store_partial` path and **six** of our thirteen added fields: `partial_o`, `partial_lse`, `merge_indptr`, `merge_o_indices`, `num_kv_heads`, `gqa_group_size`. The other seven are the group tables and go with K1a's dropped rendezvous |
 
-      Then the fp32-reference PASS, then a timing. No A/B before the reference
-      passes. The five missing identifiers are
+      Both call sites now use **designated initialisers**. Every field 0.7's insertion shifted
+      onto happened to be assignable, so the positional form did not fail *where* the change
+      was -- it failed three fields later as *"no suitable conversion from AdditionalParams to
+      int64_t"*. Same failure mode as the loader's `plan()` call earlier today; naming the
+      fields makes the next insertion a missing-member error.
+
+- [ ] **K1g. `store_partial` is NOT ported -- the split-KV path is incomplete, and the green
+      compile hides it.** 0.7's epilogue has **no** split path at all (only `store` /
+      `store_tail` / `store_zero`), so `store_partial` is entirely ours. Counts: 0.3.1's
+      `epilogue.cuh` defines it and its `prefill_sm90.cuh` calls it **twice**; the 0.7-based
+      copies have **zero** of each. The six epilogue fields K1f added are plumbed but
+      **unread**, and default to `nullptr` -- which is exactly why the TU compiles. Any FA3 row
+      that splits over KV therefore writes no partial and the merge reduces memory nothing
+      wrote. (0.3.1 measured this class of bug once already: fixture 2 showed 511/512 rows
+      unwritten.)
+
+      Do this together with **K1d2's deferred 4th change** (the packed-GQA Q mbarrier init in
+      `prefill_sm90.cuh`): both belong to the same feature, and the mbarrier mis-port has the
+      distinctive symptom of a 1500 s hang when 32 lanes arrive on a barrier armed for 1.
+
+      Then the fp32-reference PASS, then a timing. **No A/B, and no correctness claim, before
+      the reference passes** -- `NVCC_EXT_OK` is not one. The five missing identifiers are
       now fully diagnosed, and the diagnosis is better news than the error list suggested:
       **four of the five are OUR OWN symbols**, not things 0.7 removed. Nothing needs a 0.7
       equivalent invented; the definitions simply have to be carried over, which the fuzzy apply

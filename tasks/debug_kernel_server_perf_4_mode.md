@@ -907,10 +907,56 @@ The -5% regression is larger than the floor, so it is real.
       persists at -5.0% tok/s. Not the mechanism.
 - [x] 2026-10-09 **perf noise floor measured: ~+/-1.5-3% tok/s** on this harness, from two
       identical runs.
-- [ ] 2026-10-09 **graphs-ON A/B** -- the production configuration, and the structural change
-      most likely to matter: graphs amortise per-launch cost, and the split adds two attention
-      calls plus two `index_copy_` scatters per layer (~28x/step) against one call. Graphs-off
-      was maximally unfavourable to the split by construction.
+- [x] 2026-10-09 **graphs-ON: STILL BROKEN.** Identical fault
+      (`IndexKernel.cu:111 index out of bounds` via `flashinfer/prefill.py plan ->
+      _compute_page_mask_indptr`), 1 split call then 56/56 client errors. So **preallocation
+      achieved NEITHER of its two stated purposes**: the perf effect was within noise, and it did
+      not fix the CUDA-graph fault it was primarily written for. Recorded as a double negative
+      rather than as progress. `b9e3e4b8c` is kept -- the per-step allocations it removed were
+      genuinely on the critical path -- but it fixed nothing measurable.
+
+### 2026-10-09 -- the two-executor split is LAUNCH-BOUND, and that reframes the kernel work
+
+Pulling the measurements together rather than guessing again:
+
+| evidence | value |
+|---|---|
+| isolated attention, fused harness (single fused kernel) | **1.30x** |
+| isolated attention, two-executor split (`split_margin.py`) | **1.224x** |
+| in-server, two-executor split, graphs off, warmed | **-5.0% tok/s** |
+| coverage in-server | `g ~= 1` (7501-8001 fused calls/arm) |
+| perf noise floor on this harness | +/-1.5-3% |
+| host-side per-step cost removed by preallocation | effect **within noise** |
+
+The split wins on isolated attention and loses in the server at near-full coverage, and removing
+**all** per-step host work changed nothing outside the noise floor. What remains is the
+**per-layer launch structure**: the split issues two attention kernels plus two `index_copy_`
+scatters per layer where base issues one kernel -- about 4x the launches, ~28 times per step. That
+cost is proportional to layers and cannot be amortised by preallocation, only by graph capture
+(currently blocked) or by **not launching twice**.
+
+**Consequence for the goal.** The goal asks primarily for a *fused* kernel -- FA3 and FA2 sharing
+ONE grid with an SM partition -- and names "a fa3 + fa2 pdl split kernel" as also acceptable. The
+two-executor split is the *acceptable fallback*, and it is the variant whose cost structure the
+serving loop punishes: separate launches, separate tails, a scatter per subset. The **single
+fused kernel already measures better in isolation (1.30x vs 1.224x) precisely because it has one
+launch and one tail**, and it is the variant that cannot be launch-bound by construction.
+
+So the route to a real serving gain is the fused single-kernel path
+(`tests/fused_fa3_persistent_ext.cu`, `SGLANG_FUSED_KERNEL`), which already PASSES the causal
+fp32 reference at every `sm_split` (0/512 unwritten; FA3 0.00628, task0 0.00250, tile16 0.00071)
+and times 133.5 us vs 174.0 us unfused on identical work. That is a kernel-level result; what has
+never been done is wiring it into `forward_extend` the way the two-executor split now is.
+
+- [ ] 2026-10-09 **wire the single fused kernel into upstream `forward_extend`** -- one launch,
+      SM pre-assignment inside the grid, no scatter. Reuses the row partition, the varlen
+      builders and the dense page table already landed and CPU-verified; replaces the two
+      executor calls with one. This is the variant the goal actually asks for and the only one
+      whose cost structure can plausibly beat base in-server.
+- [ ] 2026-10-09 **diagnose the graphs-on fault by capture-boundary bisect, not hypothesis** --
+      five mechanism guesses were wrong; the remaining question is narrow (which buffer the
+      captured graph reads that the split perturbs), and `SGLANG_FUSED_SPLIT_DEBUG=1` plus
+      disabling graph capture for individual runners will localise it.
 - [ ] 2026-10-09 **if graphs-on does not close it, PROFILE rather than hypothesise** -- five
       consecutive mechanism guesses were wrong on the device assert; the per-layer launch count
       is a suspect, not a diagnosis.

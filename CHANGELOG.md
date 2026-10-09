@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.34.0 — B1b RETRACTS B1: the GPU is not underfilled at load (2026-10-09)
+
+Driver `drv/b1b_headroom.sh` (load ramped before the capture window so decode rows are resident),
+`MIXEDSPEC_STEPS 201`, `FUSED_SPLIT_CALLS 6001 (fa3_rows=1 fa2_rows=61)`, 1653.3 ms GPU time over
+45617 launches — 25x B1's GPU sample, on the 4-mode path B1's trace never exercised.
+
+- **Sub-occupancy launches are 8.1% of GPU time, not 89.3%.** B1's figure came from a trace that
+  was 355 MB but held only 66.5 ms of GPU time — mostly CPU/idle events in a warmup-like window
+  captured before any decode backlog existed. The motivation framing built on it ("the GPU is
+  chronically underfilled") is **retracted**; at sustained load the device is well filled.
+- Representative role split: **gemm 70.4%** (only 8.7% sub-occupancy), **attention 20.5%** (3.1%),
+  **epilogue 8.5%** across 21711 launches, memcpy 0.5%.
+- Item A's ceiling rises to attention's 20.5%; item B is bounded by 8.5%. Their sum, 29%, is the
+  absolute ceiling if both were made free — so the ≥30% bar stays unreachable from attention and
+  epilogue, agreeing with the `g*a*0.18` ~5–7% estimate by a different route.
+- **B1c answered negatively and dropped**: GEMM-level cross-role backfill is not the opportunity,
+  since GEMMs are only 8.7% sub-occupancy at load.
+- New item B1d: emit the time-weighted `packed_qo` histogram. Grid-level occupancy cannot see
+  *within*-tile waste, which is exactly what item A targets.
+
 ## v0.33.0 — B1: the fusion headroom is 89% sub-occupancy, but mostly GEMM (2026-10-09)
 
 Driver `drv/b1_headroom.sh` + `drv/b1_analyze.py` on a 4-mode MTP server (EAGLE3 chain draft,

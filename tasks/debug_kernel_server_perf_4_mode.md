@@ -259,6 +259,67 @@ work, but the exact A/B bounds above should be re-read from a capture where
       kernel contribution is bounded at ~20% of GPU time and the headline claim must be the
       scheduling one -- which is where the measured TTFT wins already are.
 
+#### B1b RESULT (2026-10-09): **RETRACTS B1's 89% figure.** The GPU is NOT underfilled at load
+
+Driver `drv/b1b_headroom.sh` (load ramped 25 s BEFORE the capture window opens, so decode rows
+are resident and the 4-mode gate has a running batch to merge with), analyzer `drv/b1_analyze.py`,
+trace `/dev/shm/w/prof/1791525002.0451415-TP-0.trace.json.gz` (76.1 MB). Composition during
+capture: **`MIXEDSPEC_STEPS 201`** and
+**`FUSED_SPLIT_CALLS 6001 (fa3_rows=1 fa2_rows=61 onesided=21)`** -- so this trace genuinely
+exercises the 4-mode merged path, which B1's did not.
+
+**1653.3 ms of GPU time over 45617 launches** (B1 had 66.5 ms over 7250).
+
+| role | launches | GPU ms | share of GPU time | small N | small ms | small share of role |
+|---|---|---|---|---|---|---|
+| gemm | 7926 | 1163.27 | **70.4%** | 3503 | 101.48 | **8.7%** |
+| attention | 9725 | 339.59 | **20.5%** | 3459 | 10.69 | **3.1%** |
+| epilogue/elementwise | 21711 | 141.01 | **8.5%** | 7508 | 12.04 | 8.5% |
+| memcpy/memset | 6164 | 9.01 | 0.5% | 6164 | 9.01 | 100.0% |
+| other | 91 | 0.41 | 0.0% | 91 | 0.41 | 100.0% |
+
+**Sub-occupancy launches (grid < 132): 20725 of 45617 launches (45.4%) but only 133.63 ms of
+1653.30 ms = 8.1% of GPU time.**
+
+**RETRACTION, in place.** B1 reported *"89.3% of GPU time is in launches that cannot fill the
+device"* and I built a motivation framing on it -- *"the GPU is chronically underfilled in
+colocated spec-decode serving"*. **That figure was an artifact of an unrepresentative sample.**
+B1's trace was 355 MB but held only **66.5 ms** of GPU time: overwhelmingly CPU/idle events with
+a tiny, warmup-like GPU window, captured before any decode backlog existed. B1b has **25x the
+GPU time** on the path that matters and gives **8.1%**. The correct statement is the opposite of
+the one I made: **at sustained load the device is well filled** -- GEMMs are only 8.7%
+sub-occupancy and attention only 3.1%.
+
+I should have distrusted a 66 ms GPU sample before drawing a framing conclusion from it. The
+trace SIZE (355 MB) made it look substantial; the GPU-time total is the figure that mattered and
+it was on the same line of output.
+
+**Revised bounds for the two main items, from the representative capture:**
+
+* **Item A (tile dispatcher) acts on attention's 20.5%** of GPU time -- nearly double B1's 11.6%.
+  **Important metric caveat:** `grid < 132 blocks` measures GRID-level occupancy, so attention's
+  3.1% small share does **not** mean tiles are full. The waste item A targets is *within* the
+  WGMMA tile (a 48-row item in a 128-wide tile), which this metric cannot see. **A needs its own
+  measurement**: the `packed_qo` histogram weighted by time, which `b1_analyze.py` does not yet
+  emit.
+* **Item B (epilogue fusion) is bounded by 8.5%** of GPU time across **21711 launches** -- a very
+  long tail of tiny kernels, but a small share of time, and only 8.5% of that share is
+  sub-occupancy (0.7% of total). So B's reclaimable part is launch overhead and idle gaps within
+  ~8.5%, not the whole 8.5%.
+* **The >=30% bar remains unreachable from attention+epilogue**: 20.5% + 8.5% = 29% of GPU time
+  is the absolute ceiling if both were made *free*, which they cannot be. This agrees with the
+  `g * a * 0.18` estimate (~5-7%) and with B1's conclusion, by a different route.
+* **GEMM is 70.4% and mostly well-occupied**, so the GEMM-level cross-role backfill idea raised
+  in B1c is much weaker than B1 suggested -- there is little idle GEMM capacity to reclaim at
+  this load.
+
+- [x] **B1b DONE**, and it **retracts B1's headline**. Representative figures: attention 20.5%,
+      epilogue 8.5%, GEMM 70.4%, sub-occupancy only 8.1% of GPU time.
+- [ ] **B1d. Emit the time-weighted `packed_qo` tile histogram** -- the measurement item A
+      actually needs, which the grid-occupancy metric cannot provide.
+- [x] **B1c answered (negatively): GEMM-level backfill is not the opportunity.** GEMMs are only
+      8.7% sub-occupancy at load. Dropped rather than left open.
+
 #### K1 scoped from 0.7's headers (2026-10-09): the reduction was REDESIGNED, not relocated
 
 Read `flashinfer/data/include/flashinfer/attention/scheduler.cuh` on the installed 0.7 wheel.

@@ -163,6 +163,15 @@ def main():
     vpad = [v_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(B)]
     ref = fp32_causal_reference(q, kpad, vpad, qo_lens, kv_lens, sm_scale)
 
+    # Elementwise ref-vs-got for token 0 at each kv-head group, so a [wpk] line with tok=0 can be
+    # matched by its kvh. Direct comparison, no inference: the store addresses are verified exact
+    # end to end, so any difference here is the computed VALUE.
+    print("ROW0 ref vs got, token 0, head = kvh*4, first 4 elements:")
+    for kvh in range(HKV):
+        h = kvh * GQA
+        r4 = [round(float(x), 6) for x in ref[0, h, :4]]
+        g4 = [round(float(x), 6) for x in got[0, h, :4]]
+        print(f"  kvh={kvh} h={h:2d} ref={r4} got={g4}")
     rows_bad = 0
     worst = 0.0
     for r in range(total_q):

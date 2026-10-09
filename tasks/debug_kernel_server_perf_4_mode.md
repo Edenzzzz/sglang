@@ -1335,7 +1335,31 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       layout requires. **Store addressing is now verified end to end** -- bases and within-tile
       stepping -- on top of the verified Q load and the identical layouts/MMA.
 
-      **No further mechanism proposed for row 0 surviving.** Four hypotheses in this item were
+      **TOKEN 0 IS CORRECT FOR ALL HEADS (2026-10-10), and the "sO 0,2,3 identical" reading is
+      RETRACTED as a probe artifact.** Elementwise ref-vs-got at token 0 is **identical** for all
+      seven kv-head groups (all 4 elements each). So the compute, store and packed mapping all
+      work for that token.
+
+      The `sO` dump for the kvh=6 tile reads `0.059326 -0.011597 0.059326 0.059326` while the true
+      row is `[0.059326, -0.011597, 0.094727, 0.069824]` -- and `got` **matches** the reference.
+      So the data is right and my probe's `sO(0, d)` indexing into the **swizzled** layout is
+      wrong for `d >= 2`. The "broadcast or wrong stride" reading and everything built on it was
+      an artifact of reading swizzled smem with naive logical indices. **Fifth probe artifact in
+      this item.**
+
+      **The real constraint is sharper than "row 0 only":** token 0 correct for all heads means
+      **packed rows 0..3** are correct -- exactly the first `G` rows -- while packed rows 4..511
+      are wrong.
+
+      That points at the gather loop's per-row **coverage**, not its addressing (already
+      verified). With the warp guard restored,
+      `for (i = lane; i < get<0>(TileShape_QKD{}); i += NumThreadsPerWarp)` should have lanes
+      0..31 cover `i = lane, lane+32, lane+64, lane+96` -- all 128 packed rows. If only `i < 4`
+      lands, the loop or its predication is not doing what that arithmetic says. **Measurable
+      directly:** have each lane report the `i` values it wrote, with the expected count (128 per
+      tile) stated in advance.
+
+      **(Superseded:)** No further mechanism proposed for row 0 surviving. Four hypotheses in this item were
       retracted and the two that were not were refuted by the next measurement; the pattern is
       that I infer from a partial measurement and the fuller one contradicts it. Addressing is now
       measured as completely as a probe can, and is correct -- so the fault is in the computed

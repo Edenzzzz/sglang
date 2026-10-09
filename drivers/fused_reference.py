@@ -154,9 +154,11 @@ def main():
     # stock FA3 fails it too, the ~45 residual is a convention mismatch here (layout, scale,
     # masking) rather than a bug in our fused integration -- and every FA3 conclusion in K1n would
     # need re-reading. The wrapper `w` is already planned over the FA3 subset above.
+    o_stock_ok = False
     if nfa3 > 0:
         try:
             o_stock = w.run(q[: sum(fa3_q)], (k_cache, v_cache)).clone()
+            o_stock_ok = True
             kpad_s = [k_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(nplan)]
             vpad_s = [v_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(nplan)]
             ref_s = fp32_causal_reference(q, kpad_s, vpad_s, fa3_q[:nplan], fa3_kv[:nplan], sm_scale)
@@ -206,6 +208,22 @@ def main():
         r4 = [round(float(x), 6) for x in ref[0, h, :4]]
         g4 = [round(float(x), 6) for x in got[0, h, :4]]
         print(f"  kvh={kvh} h={h:2d} ref={r4} got={g4}")
+    # OURS vs the STOCK oracle, as a rel with the shape/absmax check AT the site -- the pattern
+    # that made the null case trustworthy, rather than the element print that disagreed with it.
+    # absmax of each side is the most informative single number: if ours is ~0 the fused path
+    # wrote nothing; if it is ~stock the values are right and the placement is wrong; if it is far
+    # larger the scaling is wrong.
+    if nfa3 > 0 and o_stock_ok:
+        g = got[: o_stock.shape[0]].float()
+        t = o_stock.float()
+        print(f"OURS vs STOCK: ours absmax={float(g.abs().max()):.6f} "
+              f"stock absmax={float(t.abs().max()):.6f} "
+              f"ours shape={tuple(g.shape)} stock shape={tuple(t.shape)}")
+        print(f"  rel(ours, stock) = "
+              f"{(g - t).norm().item() / max(t.norm().item(), 1e-6):.6g}")
+        nz = int((g.abs().sum(dim=(1, 2)) > 0).sum())
+        print(f"  ours: {nz}/{g.shape[0]} rows non-zero")
+
     # (An ours-vs-stock element print lived here and read +0.000000 on BOTH sides while the
     # validated check at the stock call, in the same run, read o_stock[0,0,0]=0.253906. The clone
     # and the gate are both correct on inspection, so it is a defect in the print site itself.

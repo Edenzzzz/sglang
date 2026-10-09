@@ -717,6 +717,31 @@ reading the diff. Hand-port these files; do not trust fuzz.
       A third, smaller instance of the same blindness: the port carried a dangling
       `#include "jit_merge.cuh"` for a header K1a dropped. Greps for every symbol in that header
       returned 0; only the compile found the include.
+#### K1b2 progress: nvcc errors 7 -> 2, both remaining ones diagnosed (2026-10-09)
+
+`port07/tests/nvcc_check.sh` (merged 0.7 + overlay include tree, sm_90a, C++20) on each step:
+
+| step | commit | errors |
+|---|---|---|
+| fuzzy-applied baseline | -- | **7** |
+| barrier ids carved into `fused_barriers.cuh` | `flashinfer@34e5cf0` | **5** |
+| `cluster_override` / `tid_base` / `kNoClusterOverride` hand-applied to `Run` | `flashinfer@933a655` | **2** |
+
+Both remaining errors are now understood exactly, and neither needs a design decision:
+
+1. **`thr_local_kv_offset` undefined (overlay line 433).** 0.7 **split this into two arrays** --
+   `thr_local_kv_offset_k` and `thr_local_kv_offset_v` (0.7 `persistent.cuh:269,271`) -- and
+   passes them separately to `prefetch_offest` / `page_produce_kv` at its lines 328/331. Our code
+   (from the FA2 K/V smem-ring work, `f54745e` / `3e41c2d`) still uses one shared array. **Fix:**
+   at each use site pass the `_k` variant on the K path and `_v` on the V path. Mechanical, but
+   it must follow the buffer rather than be search-replaced, since the `issue` lambda handles both.
+2. **`a template declaration is not allowed here` (overlay line 880).** The `KVStagedTraits`
+   template, also from the KV-ring commits, was placed by the fuzzy apply **inside a function
+   body**, where C++ forbids template declarations. **Fix:** move `KVStagedTraits` and its
+   `FLASHINFER_FA2_KV_STAGES_*` / `FLASHINFER_FA2_NUM_MMA_KV_*` macros to namespace scope. This
+   is the second structural corruption fuzzy patching introduced (the first put `push_back`
+   statements inside an error-message expression in `scheduler.cuh`).
+
 - [ ] **K1b2. Hand-port `persistent.cuh` onto pristine 0.7.** The five missing identifiers are
       now fully diagnosed, and the diagnosis is better news than the error list suggested:
       **four of the five are OUR OWN symbols**, not things 0.7 removed. Nothing needs a 0.7

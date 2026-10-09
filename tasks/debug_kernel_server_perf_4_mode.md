@@ -1017,9 +1017,59 @@ fused_run(q, ..., fa3_int_ws, std::vector<int64_t> fa3_plan,
       linked `fused_fa3.so`, `HAS_OP: True`, `INCREMENT1_PASS`. Generated config used:
       `~/.cache/flashinfer/90a/generated/batch_attention_with_kv_cache_dtype_q_bf16_dtype_kv_bf16_dtype_o_bf16_dtype_idx_i32_head_dim_qk_128_head_dim_vo_128_posenc_0_use_logits_soft_cap_false_use_profiler_false_flipped_schedule_false`.
       Built with **C++20** (the harness's `-std=c++17` does not compile against torch 2.14).
-- [ ] 2026-10-09 **increment 2: build both plan vectors in `init_forward_metadata`** and
-      vector-sparse `fa3_kv_indices`; verify shapes and the plan-length guard on CPU/host where
-      possible.
+### The registered `fused_run` schema, and the harness is STALE against it (2026-10-09)
+
+Taken from the loaded op rather than from the source or the harness, so it is authoritative:
+
+```
+fused_fa3::fused_run(
+  Tensor q, Tensor k_cache, Tensor v_cache, Tensor kv_indices, Tensor o,
+  Tensor fa3_int_ws, int[] fa3_plan,
+  Tensor pers_int_ws, Tensor pers_float_ws, int[] pers_plan,
+  int num_qo_heads, int num_kv_heads, int page_size, float sm_scale,
+  int sm_split, int pers_row_offset, int fa3_num_ctas, int pers_kv_page_offset,
+  Tensor fa3_kv_indices, Tensor pers_o,
+  int num_requests, int max_pages_per_seq, int max_seqlen_q,
+  Tensor kv_lens_per_req, Tensor q_indptr_per_req, Tensor kv_indptr_per_req) -> ()
+```
+
+**26 arguments. `tests/verify_fused.py` passes 20** -- it stops after `pers_o` and predates the
+six trailing `UnifiedWgmma` plan params. So the harness **cannot run against the current
+extension**; it would fail on arity.
+
+Two consequences, and the second is a correction to this doc:
+
+1. **The six trailing args are exactly what commits 63/64 were built to produce** --
+   `num_requests`, `max_pages_per_seq`, `max_seqlen_q` plus the per-request
+   `kv_lens_per_req` / `q_indptr_per_req` / `kv_indptr_per_req` arrays. `dense_block_table`
+   (dense `[batch, max_pages]`, -1 filled) and `fa3_subset_varlen` (densely renumbered
+   per-request varlen arrays, CPU-verified 11/11 and 10/10) supply them directly. The
+   upstream-facing data path built for the two-executor split is reusable here, which is the one
+   piece of leverage carried over.
+2. **The standing "fused kernel PASSES, 1.30x" result is not reproducible as recorded.** Those
+   numbers (133.5 us vs 174.0 us unfused; fixture 1 green at sm_split 48/32/16; 0/512 unwritten)
+   came from the harness, which can only have been run against an **older** extension than the
+   one now on the pod. The result is not withdrawn -- it was measured -- but it is **no longer
+   verifiable with the current source**, and re-validating it requires updating the harness to
+   the 26-arg schema. That must happen before the 1.30x figure is used to justify preferring the
+   fused variant, since that justification is currently resting on a number I cannot re-run.
+
+Also recorded from the harness, an integration constraint that is easy to miss: the FA3 wrapper
+**must be planned for exactly `sm_split` CTAs** -- `FLASHINFER_FA3_MAX_CTAS` has to be set to the
+same value before `fa3.plan(...)`, and the launch refuses a mismatch by design. And the
+persistent side is a `flashinfer.attention.BatchAttention` (exposing `int_workspace_buffer`,
+`float_workspace_buffer`, `_plan_info`), while the FA3 side is a
+`BatchPrefillWithPagedKVCacheWrapper(..., backend="fa3")` (exposing `_int_workspace_buffer`,
+`_plan_info`).
+
+- [ ] 2026-10-09 **increment 2a: update `verify_fused.py` to the 26-arg schema** and re-establish
+      the fp32-reference PASS and the 1.30x timing on the CURRENT extension. Until this runs,
+      the fused variant's advantage over the two-executor split is unverified.
+- [ ] 2026-10-09 **increment 2b: build both plan vectors in `init_forward_metadata`** --
+      `BatchAttention` for `pers_plan`, `BatchPrefillWithPagedKVCacheWrapper(backend="fa3")` for
+      `fa3_plan` with `FLASHINFER_FA3_MAX_CTAS == sm_split`, plus vector-sparse
+      `fa3_kv_indices` via `block_sparse_indices_to_vector_sparse_offsets`, and the six
+      UnifiedWgmma args from `dense_block_table` / `fa3_subset_varlen`.
 - [ ] 2026-10-09 **increment 3: one `fused_run` call in `forward_extend`**, gated, then the
       in-step reference gate and the warmed A/B against base -- which must clear the measured
       +/-1.5-3% noise floor to count as a gain.

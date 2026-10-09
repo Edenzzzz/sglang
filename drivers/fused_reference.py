@@ -125,6 +125,12 @@ def main():
     fa3_plan = list(w._plan_info)
     print(f"fa3_plan: {len(fa3_plan)} entries")
 
+    # Host-side ground truth for the [sqv] probe: q rows the FA3 tiles should load. Tile t of
+    # kv head h covers packed rows [128t, 128t+128), i.e. token 32t + (r/4), head h*4 + (r%4).
+    for t in (0, 1):
+        tok, hd = 32 * t, 0
+        print(f"HOST q[tok={tok},head={hd},0..3] = "
+              f"{[round(float(x), 6) for x in q[tok, hd, :4]]}")
     o = torch.zeros_like(q)
     pers_o = torch.zeros_like(q)
     nfa3_rows = sum(fa3_q)

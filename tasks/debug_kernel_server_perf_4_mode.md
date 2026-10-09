@@ -1134,7 +1134,27 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       tile128 = 8 tiles x 7 kv heads = 56, plus 2 decode rows x 7 = 14), so the plan's cluster
       accounting and the task-0/task-2 split are right.
 
-      **SETTLED (same day): block 84 takes the SPLIT branch, where the plan allocated nothing.**
+      **RETRACTED (same day): "block 84 takes the SPLIT branch".** The split-branch trace is
+      also silent for block 84, so the silence is the **trace's**, not the branch's. Two reasons
+      the gate may never fire, neither excluded: the printfs were gated on `tid.x == 0` where
+      `tid` is the **warpgroup-local** id, and the FA2 runners run at `tid_base` 128/256 so it is
+      never 0 for them (consistent with the sanitizer naming thread (32,0,0)) -- changed to
+      `(threadIdx.x & 127) == 0` and it still does not print; and `cpp_extension` caching, since
+      the `[fa2 enter]` line only proves the TU rebuilt when **that** line was added.
+
+      Nothing is asserted about which epilogue branch runs. What IS established:
+      the fault is an `Invalid __global__ write of 16 bytes` from block (84,0,0) thread (32,0,0),
+      4,537,344 B past a 1-byte allocation; `n_clusters=70` matches by hand so the plan's cluster
+      accounting is right; and the reduction does not run here (`num_merge_rows=0`), so mixed
+      mode's reduction attribution does not transfer.
+
+      **Each epilogue trace needs its own null case** -- an unconditional print at the same site,
+      confirmed to appear -- before its absence means anything. This is the third conclusion this
+      session drawn from an instrument not shown to measure anything (after the header-parse TUs,
+      the plan gate asserting `len_kv_chunk == 0`, and the unit audit that passed while the kernel
+      faulted).
+
+      **Superseded reasoning, kept for the record:**
       `[fa2 enter] blk=84` prints; the unsplit-write trace (a printf immediately before
       `write_o_reg_gmem`) does **not**; and the sanitizer reports the invalid 16 B write **from
       block 84**. A write happened and not on the unsplit path, so the split path ran --

@@ -1154,6 +1154,30 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       the plan gate asserting `len_kv_chunk == 0`, and the unit audit that passed while the kernel
       faulted).
 
+      **RESOLVED (same day, on sufficient evidence this time): the fault is in the FA2
+      MAINLOOP, before the epilogue.** A print placed **before** the `num_kv_chunks` branch --
+      its own null case -- does not appear for block 84, while `[fa2 enter]` from that block
+      does. Both enabling conditions were checked, not assumed: the trace **is** compiled in
+      (header edits force a rebuild, because the loader's merged include tree is named by a
+      content stamp over the overlay, so any overlay edit changes the include path and thus
+      torch's build config -- confirmed empirically when `[plan audit]` appeared after a
+      `fused_plan.cuh` edit with no flag change); and the print is upstream of both branches, so
+      its silence cannot be a branch-not-taken.
+
+      So block 84 enters the drain, runs a cluster, and faults **before** the epilogue. The
+      16-byte invalid write is inside the mainloop, not the output store. This restores the
+      conclusion retracted above, but on different and sufficient evidence -- the retraction was
+      correct when made, since the only support then was a branch-gated trace never shown to fire.
+
+      Candidates, narrowed by the fixture and **not yet tested**: `MODE=fa2` is the first
+      configuration in which the **tile-128** class runs a row spanning many KV tiles (1024
+      packed rows, 2048 kv), so the newly exposed machinery is the **S-slot K/V ring** -- where
+      our staged wrapper's `NUM_KV_STAGES` had to be reconciled with 0.7's `NUM_STAGES` via the
+      `fa2_kv_stages` probe -- and the **`kv_indices` rebase** by `pers_kv_page_offset`. Both are
+      inert for a single-tile decode row, which is all mixed mode exercised. Next: print the
+      ring's own slot index and the `kv_indices` offset it dereferences, same block, same
+      pre-site null case.
+
       **Superseded reasoning, kept for the record:**
       `[fa2 enter] blk=84` prints; the unsplit-write trace (a printf immediately before
       `write_o_reg_gmem`) does **not**; and the sanitizer reports the invalid 16 B write **from

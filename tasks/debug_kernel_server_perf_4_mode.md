@@ -1492,11 +1492,33 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       than merely negative -- the packed-GQA port was **necessary and insufficient**, and what
       remains is one factor of G on the tile base, not a missing component.
 
-      To check before changing anything: whether `qo_tile_idx * CTA_Q` is used as a **token**
-      offset in `write_packed`'s caller chain, and whether `tile_base` inside `write_packed`
-      (`q_tile_idx * get<0>(TileShape_QKD{})` in the 0.3.1 source) is packed or token units. 0.3.1
-      computed packed rows and divided at the coord, so the port may have kept the base and
-      dropped the divide.
+      **HYPOTHESIS WITHDRAWN as stated (2026-10-10): `write_packed`'s own mapping is correct.**
+      Reading it rather than inferring:
+
+      ```
+      const int tile_base = qo_tile_idx * tile_size;   // packed rows
+      const int pr = tile_base + i;                    // packed row
+      DTypeO* row = &gOp(packed_coord(pr, group_size), 0);
+      ```
+
+      and `packed_coord(p, G) = (p % G, p / G)` -- head-in-group and **token**. It does divide at
+      the coordinate. `get_packed_gqa_tensor` applies `offset = qo_indptr` as
+      `offset * token_stride`, and `q_indptr` is now the request's token base; `write_O` passes
+      `kv_head_idx = qo_head_idx / group_size` against a scheduler that sets
+      `qo_head_idx = kv_head * G`. **Every unit inside this function checks out.**
+
+      The stride-128 observation remains a fact needing explanation, but not by this mechanism. The
+      inference was one step too fast: a CTA_Q stride in the output is consistent with a missing
+      divide **anywhere** in the chain, and I attributed it to the one function I had not read.
+
+      Candidates, none inspected, none to be acted on before reading:
+      - whether the `#ifdef` arm is taken at all -- `store_zero` also writes O and is not
+        packed-aware;
+      - **the LSE path**: `get_lse_local_tile_tensor` indexes on `qo_len`, which arrives
+        **packed**, and that function was never ported for packed rows;
+      - **`tile_shape_O`**: 0.7's `store` passes `select<0,1>(TileShape_PDV{})` while 0.3.1's
+        `write_packed` was written against `TileShape_QKD`, so `get<0>` may differ. **Cheapest to
+        check and would produce exactly a wrong row stride.**
 
       (Hang rate now **3 of 5**, so FA3 timing remains blocked regardless.)
 

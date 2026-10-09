@@ -1134,7 +1134,34 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       tile128 = 8 tiles x 7 kv heads = 56, plus 2 decode rows x 7 = 14), so the plan's cluster
       accounting and the task-0/task-2 split are right.
 
-      Next, to be settled by reading the faulting address against the buffer rather than guessed:
+      **SETTLED (same day): block 84 takes the SPLIT branch, where the plan allocated nothing.**
+      `[fa2 enter] blk=84` prints; the unsplit-write trace (a printf immediately before
+      `write_o_reg_gmem`) does **not**; and the sanitizer reports the invalid 16 B write **from
+      block 84**. A write happened and not on the unsplit path, so the split path ran --
+      `write_o_` into `partial_o` -- while `MODE=fa2` has `num_merge_rows=0` and every
+      `partial_indptr` is −1. Writing partials the plan never sized explains a 4.5 MB overrun of
+      a 1.85 MB tensor far better than the off-by-a-factor index I had written down as the
+      candidate, which this **displaces**.
+
+      The disagreement is between two definitions of *"is this row split"*:
+
+      | | formula |
+      |---|---|
+      | plan | `chunks = ceil_div(kv_len, len_kv_chunk)` -- uniform, **no** causal term |
+      | kernel | `ceil_div(CAUSAL ? min((kv_len - q_len) + ceil_div(packed_qo_start + cluster_tile_q, gqa), kv_len) : kv_len, len_kv_chunk)` -- causal-adjusted |
+
+      Both read the same `len_kv_chunk`, so at `fa2_span = max kv_len` both should give 1. So one
+      of the inputs **the kernel actually reads** differs from what the plan wrote --
+      `len_kv_chunk`, `q_len`, or the causal flag. Note the FA2 runners are instantiated with
+      `MaskMode::kCausal` while `FusedFA3PersistentDispatched` is instantiated with
+      `CAUSAL=false`, so the two sides may not even agree that the bound applies.
+
+      Next: one printf on the **split** branch (`num_kv_chunks`, `len_kv_chunk`, `q_len`,
+      `kv_len`, `packed_qo_start`, `partial_indptr`) in the same block -- reading the kernel's own
+      inputs rather than re-deriving them. That is the step that has worked every time this
+      session, and skipping it is what produced the packed-vs-token guess.
+
+      Earlier candidate, now displaced:
       in `MODE=fa2` every row should have `num_kv_chunks == 1` (`fa2_span` is max kv_len, so
       `ceil_div` gives 1), which means the **unsplit** path and `write_o_reg_gmem` writing
       `final_o`. A 4.5 MB overrun of a 258x28x128 bf16 tensor (1.85 MB) is ~2.4 tensors past the

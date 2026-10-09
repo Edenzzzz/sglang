@@ -36,9 +36,19 @@ compiles far enough that nvcc type-checks the kernel itself. `flashinfer@4ef2407
   values for argument 'causal'"*), and the generated-config path gained an arch segment while
   sglang redirects the cache base at import time. Both now asked of flashinfer rather than
   globbed.
-- Still open: four real 0.7 API deltas inside the kernel (`BatchPrefillPagedParams` aggregate
-  init, `NUM_KV_STAGES`, `threadblock_sync_mdo_states` signature, `Runner::Run`'s dropped
-  `s_merge`), then the fp32-reference PASS. **No A/B before the reference passes.**
+- Three of the four 0.7 API deltas inside the kernel are closed (`36a89de`), verified by the
+  instantiating TU: **18 → 3 errors**. `NUM_KV_STAGES` turned out to be our own name that 0.3.1's
+  FA2 `KernelTraits` supplied a default for and 0.7's does not (now a `fa2_kv_stages` probe);
+  `Runner::Run`'s `s_merge` went with the rendezvous; and `threadblock_sync_mdo_states`'s
+  defaulted `barrier_id` is ours and had to be carried onto 0.7, which matters because
+  `__syncthreads()` compiles to `barrier.sync 0` — the same hardware barrier FA3 uses as
+  `kQueryEmpty`.
+- Still open (K1f): 0.7 **inserted** `k_page_stride` / `v_page_stride` / `page_size` into the
+  sparse mainloop's `Arguments` after `window_left`, shifting our positional init. Needs
+  `hopper/sparse_mainloop.cuh` (+57: `packed_Q_ptr`, `group_size`) and `hopper/epilogue.cuh`
+  (+256: the split-KV `store_partial` path and six added fields) carried onto 0.7, with the call
+  sites moved to designated initializers. Then the fp32-reference PASS. **No A/B before the
+  reference passes.**
 
 ## v0.36.0 — persistent.cuh compiles against flashinfer 0.7 (2026-10-09)
 

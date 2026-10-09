@@ -890,6 +890,34 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       | 3 | `persistent.cuh:618` `threadblock_sync_mdo_states` no match | signature changed in 0.7 |
       | 4 | `persistent_fa3_fused.cuh:257-259` *"too many arguments"* | `Runner::Run`'s `s_merge` was the JIT rendezvous broadcast, which went with the group tables |
 
+      **Three of the four landed (`flashinfer@36a89de`), verified by the instantiating TU on
+      the pod: 18 -> 3 errors.**
+
+      - `NUM_KV_STAGES` is **our** name, not a 0.7 rename. Our staged wrapper defines it as `S`;
+        the runners instantiated directly over flashinfer's FA2 `KernelTraits` found it in 0.3.1
+        only because that struct carried `NUM_KV_STAGES = 1` as a base default, which 0.7
+        renamed to `NUM_STAGES`. A `fa2_kv_stages` probe reads whichever member exists, so the
+        staged wrapper and upstream never have to agree on a spelling.
+      - `s_merge` dropped at the three `Run` call sites. The 16 B per-warpgroup tail slot keeps
+        its stride on purpose -- shrinking it is a shared-memory layout change and the fp32
+        reference is not passing yet to catch one.
+      - `threadblock_sync_mdo_states`: the defaulted `barrier_id` is ours and had to be carried
+        onto 0.7, which uses plain `__syncthreads()`. That matters because `__syncthreads()`
+        compiles to `barrier.sync 0`, which FA3 also uses as `NamedBarriers::kQueryEmpty`, so a
+        CTA backfilling from FA3 into this mainloop rendezvouses on a barrier FA3 already drove.
+
+- [ ] **K1f. The last delta: 0.7 inserted three fields into the sparse mainloop's `Arguments`.**
+      After `window_left` come `k_page_stride`, `v_page_stride`, `page_size`, so our positional
+      aggregate init shifted `additional_params` onto an `int64_t`. FA3's paged params already
+      carry all three under the same names. Two header deltas to carry onto 0.7, and the call
+      sites move to **designated initializers** so the next inserted field fails loudly instead
+      of shifting silently -- the same failure mode as the loader's `plan()` call earlier today.
+
+      | header | delta | content |
+      |---|---|---|
+      | `hopper/sparse_mainloop.cuh` | +57 | `packed_Q_ptr`, `group_size`, and the packed-GQA load path that reads them (Q rows are `(token, head-in-group)` pairs, which the Q tensormap cannot express) |
+      | `hopper/epilogue.cuh` | +256 | the split-KV `store_partial` path and **six** of our thirteen added fields: `partial_o`, `partial_lse`, `merge_indptr`, `merge_o_indices`, `num_kv_heads`, `gqa_group_size`. The other seven are the group tables and go with K1a's dropped rendezvous |
+
       Then the fp32-reference PASS, then a timing. No A/B before the reference
       passes. The five missing identifiers are
       now fully diagnosed, and the diagnosis is better news than the error list suggested:

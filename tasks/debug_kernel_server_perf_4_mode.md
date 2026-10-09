@@ -1374,9 +1374,34 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       init), and K1g's note that the packed-GQA work should be done as one unit. The deferral is
       the cause of this failure; close them together.
 
+      **[~] STORE PORTED (2026-10-10) -- it changed the output but did not fix it.** Added
+      `packed_coord` + `get_packed_gqa_tensor` to `hopper/utils.cuh` (0.7 had **neither** -- the
+      helpers were missing entirely), `write_packed` to `hopper/epilogue.cuh`, the
+      `#ifdef FLASHINFER_FUSED_PACKED_Q` dispatch in `write_O`, and the macro through the loader
+      (`FUSED_PACKED_Q`, default 4).
+
+      | fixture | before | after |
+      |---|---|---|
+      | `fa3_1chunk` | 3.076e+06, 256/256 | 6.153e+06, **254**/256 (2 rows correct) |
+      | `fa3` | 45.1 | 45.34 |
+      | `mixed` | 45.44 | 46.11 |
+      | `fa2` | PASS | **PASS** 0.002126, 0/258 |
+
+      Two rows going correct says the store's mapping now does something right, so the port is not
+      inert; the bulk still wrong says **the other half is missing**. K1f brought only the
+      `packed_Q_ptr`/`group_size` **fields** into `sparse_mainloop.cuh` -- that commit scoped the
+      file as "+57 lines: `packed_Q_ptr`, `group_size`, plus the packed-GQA load path that reads
+      them", and only the fields were applied. So the Q **load** still uses the token-major
+      tensormap while the scheduler hands it packed tile indices.
+
+      A half-ported packed-GQA path gives exactly this shape -- output rows mapped correctly,
+      computed from the wrong Q rows. **Prediction, not conclusion:** port the load path and see
+      whether `fa3_1chunk` drops to the bf16 residual, as the FA2 side did.
+
       Open, concretely:
-      - the packed-GQA store in `hopper/epilogue.cuh`: map packed row -> `(token, head-in-group)`
-        and clamp on the **token** extent;
+      - **the packed-Q gather in `hopper/sparse_mainloop.cuh`** -- `cp_async` per lane; the
+        register round-trip form measured **-69% end to end**, so the async form is the one to
+        port;
       - the Q mbarrier init in `prefill_sm90.cuh` behind `FLASHINFER_FUSED_PACKED_Q`. Distinctive
         mis-port symptom: arriving from 32 lanes on a barrier armed for 1 **hung for 1500 s**.
 

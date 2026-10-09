@@ -1048,7 +1048,33 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       visit unsplit rows, whose `num_index_sets` of 0 fills their output with **zeros** over the
       direct write -- the rows needing no merge would be exactly the ones it destroyed.
 
-- [ ] **K1l. THE fp32 causal reference.** Everything the kernel needs now exists and compiles:
+- [~] **K1l IN PROGRESS. The Python bridge is in (`flashinfer@7c74969`), verified registered on
+      the pod: `fused_run` True, `build_fused_plan` True.** Nothing could previously produce the
+      `pers_plan` vector `fused_run` takes -- flashinfer's own plan functions build
+      `HolisticPlanInfo`, which K1a replaced for this path -- so the kernel was undriveable from
+      a test. `build_fused_plan` returns the vector; the caller keeps the two workspaces it was
+      built against, since the plan's offsets point into them. It checks that the four host-read
+      inputs are CPU tensors and that `fa3_row_mask` is `at::kBool`, because the planner takes a
+      `const bool*` and an int32 mask would read 4x the elements without failing.
+
+      **Driver argument spec** (so this is written against the signature rather than guessed --
+      `tests/fused_fa3_persistent_ext.cu:129`, 26 arguments). The non-obvious ones, with the line
+      that consumes each:
+
+      | argument | meaning |
+      |---|---|
+      | `kv_indices` | **vector-sparse** offsets, for the FA2 roles (`:330`, rebased by `pers_kv_page_offset`) |
+      | `fa3_kv_indices` | the same thing for FA3's own params (`:221`) -- flashinfer's FA3 multiplies the entry by `k_stride_n` |
+      | the upstream-port `page_indices` | **RAW page ids** (`:300`), which upstream's paged path indexes as a real page number; feeding it the vector-sparse array read far outside the cache |
+      | `pers_row_offset` | FA3's rows come FIRST in q/o, so the FA2 roles' `q` and `final_o` are advanced by it (`:319`, `:342`, and the reduction's output at `:390`) |
+      | `pers_kv_page_offset` | the two sides are planned independently, so the persistent plan's `kv_indptr` restarts at 0 while its pages begin after FA3's; without the rebase it reads FA3's KV and produces plausible but wrong output (measured 1.52 rel err vs 0.0044 rebased) |
+      | `fa3_num_ctas` | MUST equal `sm_split`; the dispatcher refuses the launch otherwise, because FA3's scheduler indexes `work_indptr[blockIdx.x]` over the planned count |
+
+      The FA3 plan (`fa3_plan`, a `PrefillPlanSM90Info` vector) still comes from flashinfer's own
+      FA3 plan path -- `BatchPrefillWithPagedKVCacheWrapper(backend="fa3")._plan_info` -- over the
+      FA3 row subset only.
+
+      Everything the kernel needs now exists and compiles:
       plan (K1c2, 19/19 on GPU), module (K1h), split-KV write (K1g), reduction (K1k). Nothing
       has yet checked an attention **output**. Needs the correctness driver recreated (K1i) --
       `fused_run`'s 26-argument signature is at

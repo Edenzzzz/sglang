@@ -1542,9 +1542,24 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       sources the right Q rows, `write_packed` stores to the right O rows. That eliminates the
       entire index-space family for the FA3 role, which is what produced six bugs on the FA2 side.
 
-      The finding is the **line count**: **192** `[qld]` lines for **56** work items, with the same
-      `blk`/`tile` repeating (`blk=4 tile=6` four times in eight consecutive lines). One Q load per
-      work item means 56 was expected.
+      ~~The finding is the line count: 192 `[qld]` lines for 56 work items...~~ **RETRACTED
+      (2026-10-10): that was my probe gate.** The probe was gated on `lane == 0` with
+      `lane = threadIdx.x % NumThreadsPerWarp` (`sparse_mainloop.cuh:389`), true for one thread in
+      **every warp**; the producer warpgroup has **four** warps, so one execution prints four
+      times -- 56 x 4 = 224 expected vs 192 observed. **The gather runs once per work item.**
+
+      Two things should have caught this first: `num_kv_tiles = 1` for this fixture was already
+      measured, so a KV-loop placement would execute exactly **once** -- "re-executing per KV
+      tile" was arithmetically impossible against my own data; and this is the **same**
+      mis-gated-probe error as the earlier `tid.x == 0` trace. Fourth retraction in this item
+      traceable to a probe whose multiplicity I did not check.
+
+      **What falls with it:** the "one mechanism explains both symptoms" story. The data corruption
+      (elements 0, 2, 3 identical) and the intermittent hang are **again unexplained** and must not
+      be treated as linked.
+
+      **Rule for any further probe here:** state its expected line count from the thread predicate
+      and launch geometry FIRST, and compare against the observed count as the null case.
 
       **One mechanism explains BOTH symptoms**, which no previous candidate did:
       - *wrong data* -- a re-run gather re-issues `cp.async` into the same `sQ` while the consumer

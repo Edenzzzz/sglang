@@ -1442,6 +1442,40 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       That puts the defect in `mma_f16` or what we hand it -- where this item began before the
       packed-GQA detour -- now reached by **elimination** rather than guess. **Distinguishing
       measurement:** print accumulator elements from distinct rows of one thread *before*
+
+      **[x] CONFIRMED IN REGISTERS (2026-10-10): the PV accumulator duplicates rows within each
+      2x2 fragment.**
+
+      ```
+      size(tOrO)=64  tOrO[0..5] = 0.032959 -0.035156 0.032959 -0.035156 -0.165039 0.014832
+      tOrO(0)==tOrO(2),  tOrO(1)==tOrO(3),  tOrO(4..5) differ
+      ```
+
+      `tOrO` is `((2,2,V), MMA_M, MMA_K)` -- the epilogue's own `static_assert`s fix the first two
+      extents at 2 -- so elements 0,1 and 2,3 are the **two rows** of one 2x2 MMA fragment, and
+      they are identical. One row is computed and replicated, **in registers**, before
+      `convert_type` and before any staging.
+
+      **Chain complete, every link verified on device:**
+
+      | stage | verdict |
+      |---|---|
+      | Q gather: addresses, coverage (128/128), values | correct |
+      | mainloop: `num_kv_tiles=1` | correct |
+      | **PV accumulator: rows duplicated in each 2x2 fragment** | **THE DEFECT** |
+      | `tOrO`->`sO`: 256 x 64 = 16384 = sO once | correct |
+      | `sO`->global: bases + within-tile, every tile | correct |
+      | plan/scheduler: all fields, 56 items | correct |
+
+      The broadcast is produced by the **compute** -- `mma_f16`, the PV MMA's accumulator layout,
+      or the updater's rescale. Not data movement. The many turns spent verifying addresses were
+      measuring the wrong half of the kernel, though each exclusion was necessary before this
+      reading could be interpreted.
+
+      A fragment's row dimension collapsing to one value is what a `TiledMmaPV` whose `AtomLayout`
+      disagrees with the consumer warpgroup count produces. **Compare against stock FA3:** the
+      `TiledMmaPV` definition is byte-identical between trees, but the warp counts around it are
+      not -- the fused build runs the FA3 role alongside the FA2 roles' thread budget.
       `convert_type`. Coinciding => the PV MMA or `attention_updater` replicates one row. Not
       coinciding => the broadcast appears between `tOrO` and `sO` despite complete partitioning,
       meaning copy atom and layout disagree.

@@ -47,8 +47,19 @@ def main():
     import flashinfer
 
     # 1 long FA3 row + 2 short FA2 rows. FA3 first.
-    fa3_q, fa3_kv = [256], [2048]
-    fa2_q, fa2_kv = [1, 1], [300, 512]
+    # MODE=fa2 routes every row to the FA2 classes: no splits, so no merge either. A PASS there
+    # isolates any remaining error to FA3 or the merge, because it covers the plan, the three FA2
+    # tile classes, the direct-write path and this driver's own stitching. MODE=fa3 is the mirror.
+    mode = os.environ.get("MODE", "mixed")
+    if mode == "fa2":
+        fa3_q, fa3_kv = [], []
+        fa2_q, fa2_kv = [256, 1, 1], [2048, 300, 512]
+    elif mode == "fa3":
+        fa3_q, fa3_kv = [256, 1, 1], [2048, 300, 512]
+        fa2_q, fa2_kv = [], []
+    else:
+        fa3_q, fa3_kv = [256], [2048]
+        fa2_q, fa2_kv = [1, 1], [300, 512]
     qo_lens = fa3_q + fa2_q
     kv_lens = fa3_kv + fa2_kv
     B = len(qo_lens)
@@ -82,14 +93,17 @@ def main():
     print(f"pers_plan: {len(pers_plan)} entries, num_merge_rows={pers_plan[-2]}, "
           f"num_fa3_clusters={pers_plan[-1]}")
 
-    # FA3's own plan, over the FA3 row subset only.
+    # FA3's own plan. Always covers at least one request, even when the mask routes nothing to
+    # FA3: flashinfer's plan rejects an empty batch, and the wgmma role's work comes from the
+    # PLAN'S TASK 3, which the mask leaves empty -- so a dummy plan here drives no work.
+    nplan = max(nfa3, 1)
     fa3_ws = torch.zeros(128 << 20, dtype=torch.uint8, device=DEV)
     w = flashinfer.BatchPrefillWithPagedKVCacheWrapper(fa3_ws, backend="fa3")
     w.plan(
-        qo_indptr=qo_indptr[: nfa3 + 1].to(DEV),
-        paged_kv_indptr=kv_indptr[: nfa3 + 1].to(DEV),
-        paged_kv_indices=kv_indices[: sum(fa3_kv)],
-        paged_kv_last_page_len=torch.ones(nfa3, dtype=torch.int32, device=DEV),
+        qo_indptr=qo_indptr[: nplan + 1].to(DEV),
+        paged_kv_indptr=kv_indptr[: nplan + 1].to(DEV),
+        paged_kv_indices=kv_indices[: int(kv_indptr[nplan])],
+        paged_kv_last_page_len=torch.ones(nplan, dtype=torch.int32, device=DEV),
         num_qo_heads=HQ, num_kv_heads=HKV, head_dim_qk=D, page_size=PAGE,
         causal=True, q_data_type=DT, kv_data_type=DT,
     )
@@ -127,7 +141,12 @@ def main():
             rows_bad += 1
             if rows_bad <= 5:
                 print(f"  row {r} rel={rel:.4g}")
-    print(f"\nworst rel err {worst:.4g}, bad rows {rows_bad}/{total_q}")
+    # last rows explicitly: they are the FA2 rows in mixed mode, and they never touch the merge,
+    # so their error is diagnostic of a different thing than the FA3 rows'.
+    for r in range(max(0, total_q - 3), total_q):
+        num = (got[r] - ref[r]).norm().item()
+        print(f"  tail row {r}: rel={num / max(ref[r].norm().item(), 1e-6):.4g}")
+    print(f"\nmode={mode} worst rel err {worst:.4g}, bad rows {rows_bad}/{total_q}")
     print("PASS" if rows_bad == 0 else "FAIL")
     return 0 if rows_bad == 0 else 1
 

@@ -375,6 +375,48 @@ ACTUAL width -- FA3 always 128; FA2 its class (128 above 64, else 64 above 16, e
       Either measure at a config where it pays (more draft tokens, which also raises acceptance
       length) or report item A as config-dependent with the band table above.
 
+#### B2 RESULT (2026-10-09): epilogue fusion is bounded at ~6%, and the split's own scatters are 1.2%
+
+`drv/b2_top.py` on the B1b trace, sorting by **launch count** rather than time -- B1b's analyzer
+sorted by time, which hides the fusion targets behind a few large GEMMs. 1644.3 ms kernel time.
+
+| kernels with median duration | launches | ms | share of kernel time |
+|---|---|---|---|
+| < 5 us | 23448 | 104.94 | **6.4%** |
+| < 10 us | 28887 | 186.16 | 11.3% |
+| < 20 us | 30686 | 213.14 | 13.0% |
+
+**So epilogue fusion's ceiling is ~6% of kernel time**, and the realistic figure is well under
+that: fusing cannot delete the arithmetic, only the per-launch overhead (~2 us of a 3.4 us
+kernel). Top offenders by count are mostly MODEL-FORWARD ops, not spec-specific:
+3782 `fused_add_rmsnorm` (med 3.4 us), 2216 `vectorized_gather`, 1891 `fused_rope`,
+1891 `act_and_mul` (48.24 ms, the largest single epilogue cost), 1771 `FillFunctor` (med 1.4 us),
+1682 `PersistentVariableLengthMergeStates`, 1680 `store_kvcache`.
+
+**The actionable finding is self-inflicted: `index_copy_kernel_impl`, 1680 launches, 19.65 ms =
+1.2% of kernel time.** That is the split's own two scatters per layer (28 layers x 60 steps),
+plus some of the 1771 `FillFunctor` launches from the `empty_like` pattern -- overhead the split
+itself added, sitting inside its own -5% regression.
+
+**Removed in `sglang-up@91955d929`.** In a merged 4-mode batch the token layout is
+`[prefill chunk | verify rows]`, so FA3 rows form a contiguous **prefix** and FA2 rows a
+contiguous **suffix**; both are then plain views, so each executor reads its `q` slice and writes
+its output slice directly and the scatters disappear. Contiguity is **checked, not assumed** --
+both row sets must be contiguous ranges whose token spans start at 0, end at `tok_total` and
+abut, else the scatter path is kept. CPU-verified on three shapes: a merged 4-mode batch yields
+spans `(0,2047)+(2047,2075)`; an interleaved partition is refused; a verify-first ordering still
+qualifies with FA3 as the suffix. A `fused_split_views` counter records how often the view path
+fires so an A/B can confirm it rather than infer it.
+
+- [x] **B2 bound measured: ~6.4% of kernel time** in sub-5us launches; mostly model-forward
+      elementwise, not spec epilogue.
+- [x] **Split's own scatters identified (1.2%) and eliminated** via contiguous-span views
+      (`91955d929`). Not yet measured in-server.
+- [ ] **B2b. Re-run the warmed A/B with the view path** -- the first change in this whole
+      sequence that removes measured, attributable overhead rather than a hypothesised one.
+- [ ] **B2c. `tma_store_wait` cross-role backfill and multicast** -- still untested, and now
+      bounded by the ~6% figure above, so expectations should be set accordingly.
+
 #### K1 scoped from 0.7's headers (2026-10-09): the reduction was REDESIGNED, not relocated
 
 Read `flashinfer/data/include/flashinfer/attention/scheduler.cuh` on the installed 0.7 wheel.

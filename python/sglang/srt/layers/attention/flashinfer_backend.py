@@ -306,6 +306,12 @@ _FS_NP = {torch.int32: "int32", torch.int64: "int64"}
 # extra wrapper is never planned. Output stays correct either way, so a clean run isolates the
 # fault to that extra plan rather than to the FA3 half.
 FUSED_SPLIT_NO_FA2_WRAPPER = os.environ.get("SGLANG_FUSED_SPLIT_NOFA2", "0") == "1"
+# Skip the full-batch paged plan when the split will serve the whole batch. Under the split
+# that plan is never consumed -- the dispatch replaces prefill_wrapper_paged.forward outright
+# -- so the split was paying TWO flashinfer plans per step (host work plus a scheduling kernel
+# each) against the baseline's one. Non-attention overhead of exactly this kind is the only way
+# both executors can be individually faster than baseline while the whole step is slower.
+FUSED_SPLIT_SKIP_BASE_PLAN = os.environ.get("SGLANG_FUSED_SKIP_BASE_PLAN", "0") == "1"
 
 
 class FlashInferAttnBackend(AttentionBackend):
@@ -1141,6 +1147,28 @@ class FlashInferAttnBackend(AttentionBackend):
             self._prepare_dequant_workspace_metadata_for_extend(
                 forward_batch, use_ragged
             )
+
+            # The full-batch paged plan below is never consumed when the split serves the
+            # batch. Skipping it is only safe if no per-layer guard in the dispatch can bail
+            # and need it, so this is gated on backend-level features only: no sliding-window
+            # pool, no fp8-dequant KV workspace, no multi-item scoring, and the ragged path
+            # unused (the split lives in the paged branch).
+            if (
+                FUSED_SPLIT_SKIP_BASE_PLAN
+                and self.fused_split_mask is not None
+                and not use_ragged
+                and self._swa_kv_pool is None
+                and not self.prefill_uses_dequant_workspace
+                and not self.enable_mis
+                and not FUSED_SPLIT_VERIFY
+            ):
+                self.fused_base_plan_skipped = (
+                    getattr(self, "fused_base_plan_skipped", 0) + 1
+                )
+                self.forward_metadata = PrefillMetadata(
+                    self.prefill_wrappers_paged, use_ragged, extend_no_prefix
+                )
+                return
 
             self.indices_updater_prefill.update(
                 forward_batch.req_pool_indices,

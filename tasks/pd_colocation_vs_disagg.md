@@ -4,7 +4,10 @@ Make the case for **PD colocation with an EDF/SLO-aware router** against **PD di
 for a 4x8 H100/H200 cluster serving agentic traffic (TraceLab-shaped: 64-100K contexts, ~3.8K
 appends, ~480-token outputs, mixed with chat and math).
 
-Tasks, in priority order (status 2026-10-08; evidence in the sections below):
+Tasks, in priority order (status 2026-10-09; evidence in the sections below).
+**Item 5 is the capacity/throughput axis and is currently the weakest-evidenced part of
+the thesis: no measurement so far varies the workload mixture or compares against a
+fixed PD split on goodput.**
 
 - [x] **1. Cache-hit-first routing with an SLO veto** (2026-10-08, H20 16 GPUs) — cache-affinity
       colocation vs the best disagg (2P2D): agent TTFT -93% (21.6 -> 1.6 s), chat TTFT -99.5%,
@@ -29,6 +32,39 @@ Tasks, in priority order (status 2026-10-08; evidence in the sections below):
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex
       P99 ITL -27%. Full stack vs stock MTP: TTFT -95%/-51%, ITL -42%/-38% (chat/codex, 24/s, 3 rounds).
+- [ ] **5. CAPACITY AND FLEXIBILITY vs fixed PD splits (1P3D / 2P2D)** — added 2026-10-09 on the
+      user's correction. **This is the throughput axis; everything measured so far is not.**
+      Rationale: colocation lets every node admit both prefill and decode with cache
+      replication, so a fixed disagg partition strands capacity whenever the mixture moves away
+      from the ratio it was provisioned for. A 2P2D cluster provisioned for 50/50 has half its
+      GPUs idle-ish on prefill when traffic turns decode-heavy, and cannot re-balance without
+      redeploying; colocation re-balances per step. Methodology to follow
+      `arxiv 2504.08784` (see the sub-item below — the PDF did not extract, get the HTML/ar5iv
+      version before fixing the SLO definitions).
+      - [ ] **5a. Baselines**: 1P3D and 2P2D disagg vs 4-mode colocation, same total GPU count.
+            Needs 4 GPUs; per the standing authorization multi-node/multi-GPU modelling uses
+            **H20**, trial named **vibecuda**, <= 16 GPUs.
+      - [ ] **5b. Metric must be GOODPUT, not raw tok/s.** Per-workload-type SLOs: a TTFT target
+            for interactive chat, a TPOT/ITL target for agentic streams, and count only requests
+            meeting their OWN class's SLO. Raw throughput is what made the colocated-vs-colocated
+            A/B look flat and is the wrong number for a capacity claim.
+      - [ ] **5c. Sweep the MIXTURE RATIO** (prefill-heavy -> decode-heavy) at several request
+            rates, and report max sustainable rate per mixture — the capacity frontier, not a
+            single operating point. Build mixtures from the real datasets already in use
+            (TraceLab agentic replay + chat + math); record how they are blended so the mix is
+            reproducible.
+      - [ ] **5d. DYNAMIC adaptation: load spikes and mixture shifts.** The core flexibility
+            claim. Step-change the mixture mid-run (e.g. prefill share drops, decode share
+            rises) and inject a rate spike; measure SLO attainment during and after the
+            transition, plus time-to-recover. A fixed 2P2D split cannot re-provision; colocation
+            should degrade less and recover faster. This is where the argument should be
+            strongest, so it is the item most worth doing well — and it is also the item where a
+            null result would most damage the thesis, so it must be run honestly with the
+            transition visible in the time series.
+      - [ ] **5e. Read `arxiv 2504.08784` properly** for SLO definitions, the goodput metric and
+            how they construct/shift mixtures. The arxiv PDF did not text-extract; use the ar5iv
+            or HTML rendering.
+
 - [ ] **4. Two-way RDMA / congestion, randomized source selection** — **not demonstrated on the
       full 4-NIC fabric, and reported as such.** No congestion exists to relieve at 16 GPUs on 4
       hosts: random tie-break among near-equal hits is neutral, the L3 store moved ~236 GB without

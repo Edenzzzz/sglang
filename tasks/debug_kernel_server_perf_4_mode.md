@@ -785,7 +785,15 @@ rather than for it, and a surviving gain cannot be an ordering artifact.
 of the first arm:**
 
 1. **Throughput is flat**: 12087 / 12074 / 12035 / 12017 tok/s, a monotone -0.6% across the
-   three split arms. The >=10% throughput bar is **not met**, as the Amdahl arithmetic predicted.
+   three split arms. The >=10% throughput bar is not met **by the kernel, on this baseline**.
+   **SCOPE CORRECTION 2026-10-09 (user):** this baseline is unfused *colocation on one GPU*, so
+   it measures the attention kernel and is **the wrong axis for the project's throughput claim.**
+   That claim is about colocation versus a FIXED PD split (1P3D / 2P2D): every node can admit
+   both prefill and decode with cache replication, so a disagg partition strands capacity
+   whenever the mixture moves off the ratio it was provisioned for. A colocated-vs-colocated A/B
+   cannot show that, and I should not have read "flat tok/s here" as bearing on it. The capacity
+   experiment is now item 5 of `tasks/pd_colocation_vs_disagg.md`: goodput under per-class SLOs,
+   swept over mixture ratios and rates, plus load spikes and mid-run mixture shifts.
 2. **Mean ITL is flat-to-slightly-worse** (18.68 -> 18.87/18.93/18.96, about +1.3%), while
    **P99 ITL improves ~13-14%** (73.72 -> 63.45..63.92). Better tail, unchanged mean -- the same
    shape as the TraceLab precedent (+0.27% throughput, -4.6% P99 ITL), and the P99 arms are

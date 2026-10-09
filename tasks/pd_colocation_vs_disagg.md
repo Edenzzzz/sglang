@@ -72,13 +72,27 @@ static mixture.
 
       - [ ] **5a. SINGLE-NODE baselines** — vs **prefill-prioritized** (the default) and
             **mixed chunked prefill**. 1 GPU; runnable on the current H200 pod.
+            **User 2026-10-09: must be better over BOTH**, not merely over whichever of the two
+            is weaker at a given mixture. Each is optimal for some mixture, so "better over both"
+            is the whole content of the superset claim at single-node scale.
       - [ ] **5b. MULTI-NODE baselines** — vs **PD multiplex** and **PD disagg (1P3D and 2P2D)**
             at equal total GPU count. Per the standing authorization: **H20**, trial named
             **vibecuda**, <= 16 GPUs (4 nodes x 4, or <= 8 nodes x 2).
+            **User 2026-10-09: we must beat BOTH, and beating PD DISAGG is the main argument.**
+            PD multiplex is not designed for multi-node, so a win there should come easily and
+            carries correspondingly less weight -- do not present it as the headline.
+            **User 2026-10-09: H20 is gated on ALL kernel items being closed first** (K1-K5 in
+            `debug_kernel_server_perf_4_mode.md`). Do not allocate multi-node capacity before
+            then.
       - [ ] **5c. Metric is GOODPUT under per-class SLOs, not raw tok/s.** A TTFT target for
             interactive chat and a TPOT/ITL target for agentic streams; a request counts only if
             it meets its OWN class's SLO. Raw throughput is what made the colocated-vs-colocated
             kernel A/B look flat and is the wrong number for a capacity claim.
+            **User 2026-10-09: DERIVE the targets from the common settings of the papers already
+            given, do not invent them.** Primary source is `arxiv 2504.08784`; note its arXiv PDF
+            does not text-extract (compressed streams only), so use the ar5iv/HTML rendering.
+            Cross-check against `arxiv 2504.14489v2` (PD multiplex) and ThunderAgent, and record
+            which paper each number came from next to the number.
       - [ ] **5d. STATIC sweep: mixture ratio x request rate.** Prefill-heavy -> decode-heavy at
             several rates; report the **capacity frontier** (max sustainable rate per mixture),
             not a single operating point. This is the test of prediction (a): the best baseline

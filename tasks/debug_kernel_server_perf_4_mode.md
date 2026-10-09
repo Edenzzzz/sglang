@@ -191,19 +191,76 @@ attention measures the scheduling change alone and cannot show the thesis.
 Open items consolidated in one place, completed items kept below them. **Kernel items gate
 everything else** (user: H20 and multi-node only after all kernel items close).
 
-### OPEN -- kernel, in dependency order
+### OPEN -- kernel: TWO MAIN ITEMS (user 2026-10-09)
 
-| id | item | why it is here |
-|---|---|---|
-| **K-M** | **Quantify the fusion headroom FIRST**: per 4-mode step, count attention launches by role (draft-decode / draft-extend / target-prefill / target-verify), the fraction of step wall time in the small ones, their achieved SM occupancy, and the `packed_qo` tile histogram. | Without it the kernel work has no stated motivation; a reviewer asks why start at the kernel at all. Optimising before measuring headroom is how the -5% happened. |
-| **K-M2** | Set the fusion target from K-M: which launches can be absorbed via **cross-role backfill** and **multicast** (`tma_store_wait`). Draft ops run a DIFFERENT model, so this is cross-model co-scheduling -- scope it, do not assume it falls out of the existing partition. | The goal asks for it; it is also the only way the "small spec ops cannot fill the GPU" claim becomes a kernel contribution. |
-| **K0** | Decide whether **trees (topk>1)** are in scope. `mix_with_verify` carries no `custom_mask`, so verify rows are masked plain causal -- correct only for chain drafts. If in scope, plumb the mask through and build a gate whose reference does NOT share the causal assumption. If not, state "chain only" wherever 4-mode results are quoted. | Correctness, and it bounds every result in this doc. |
-| **K1** | **Port the fused kernel to flashinfer 0.7** (user: must land upstream). Reconstruct the JIT-reduction group tables 0.7's `HolisticPlanInfo` dropped; resolve `DefaultAttentionSm90`/`StandardAttention`; avoid the `variant_helper.cuh` collision. | Blocks K2-K5. The single-launch cost structure is the only one the serving data says can win. |
-| **K2** | **Dynamic WGMMA tile in FA3: 128 and 64, per work item** from `packed_qo`. | A 56-row item runs at 88% tile occupancy instead of 44%. |
-| **K3** | **FA2 tile classes 16/32/48/64** -- template instantiations over `mma16`, **2-CTA overlap schedule preserved**. Experiment on how many widths pay for themselves; report per-width timings. | Verify rows are the contested band; finer widths are cheap because the primitive is shared. |
-| **K4** | **Replace `MIN_PACKED_QO = 48` with a FITTED rule** on `(packed_qo, kv_len)` -- linear model recommended, simpler forms tried as baselines, agreement reported. Needs a denser grid than the existing 25 points. | The hand-set constant is what admits rows that cannot fill the tile. |
-| **K5** | **Re-measure in-server at the shape the schedule emits**, reporting `last_fa2_rows` and the tile histogram beside every timing. Gain must clear the measured **+/-1.5-3%** noise floor on the upside. | User: "-5 to -8.4% is not acceptable." |
-| **K6** | **CUDA-graph fault**: the split still dies under graphs on (`IndexKernel.cu` out-of-bounds via flashinfer `plan`, reached from `decode_cuda_graph_runner.load_batch`). Needs a capture-boundary bisect, not another hypothesis. Graphs on is the production config. | Five mechanism guesses were wrong; preallocation did not fix it. |
+**Prerequisite for both: K1 -- port the fused kernel to flashinfer 0.7** (must land upstream).
+Reconstruct the JIT-reduction group tables 0.7's `HolisticPlanInfo` dropped (`group_id`,
+`group_nchunks`, `group_row_begin`, `group_nrows`); resolve `DefaultAttentionSm90` /
+`StandardAttention`; avoid the `variant_helper.cuh` vs `hopper/variant_helper.cuh` collision.
+The single-launch cost structure is the only one the serving data says can win.
+
+---
+
+#### A. Ultra fine-grained tile dispatcher for the different modes
+
+The four populations in a 4-mode step sit at different tile sizes, and the contested band is
+**verify**. Prefill fills a 128-wide WGMMA tile many times over; decode and draft are single
+`tile16` items; verify is `num_draft_tokens x gqa`, anywhere from ~16 to >128. Today a hand-set
+`MIN_PACKED_QO = 48` routes anything above 48 to FA3's **fixed** `TILE_Q = 128`, so rows in
+[48,128) waste up to 63% of the tile.
+
+- [ ] **A1. Dynamic WGMMA tile size in FA3: mix 128 and 64, chosen PER WORK ITEM** from
+      `packed_qo`. A 56-row item then runs at 88% occupancy instead of 44%.
+- [ ] **A2. FA2 tile classes 16 / 32 / 48 / 64.** These are **template instantiations over
+      `mma16`**, not new kernels, and the **2-CTA overlap schedule is preserved** across them.
+      Experiment on how many widths are worthwhile -- each costs compile time, code size and
+      registers -- by sweeping {16,64} vs {16,32,64} vs {16,32,48,64} and keeping the widths that
+      pay for themselves. Report per-width timings with the chosen set.
+- [ ] **A3. Fitted dispatch rule replacing `MIN_PACKED_QO`**, on `(packed_qo, kv_len)` and per
+      mode. **Linear model recommended** (user); try a bare threshold and a 2-D ratio rule as
+      baselines and keep the simplest form that matches the fit's agreement. Train on measured
+      per-tile times for FA3-at-{64,128} vs FA2-at-{16,32,48,64}; report agreement against the
+      measured winner the way the decode guard's 11/25 -> 23/25 is reported. **Needs a denser
+      grid than the existing 25 points**, which were taken for the decode-population question.
+
+#### B. Fuse as many draft and verify EPILOGUE ops as possible
+
+This is what makes the kernel-level framing defensible. Attention is only part of a 4-mode step;
+the draft and verify **epilogues** are a long tail of tiny kernels -- draft-token sampling,
+argmax/accept comparison, accept-length reduction, hidden-state gathers and slices, cache-loc
+writes, tree/mask construction -- each its own launch, each far too small to fill the GPU.
+Fusing only one prefill chunk with seven verify rows is the marginal case the user warned about:
+*"hard to make a meaningful motivation... a reviewer will ask why start from the kernel point of
+view for colocation if gains are so minimal?"*
+
+- [ ] **B1. Quantify the headroom FIRST, before optimising.** Per 4-mode step report: the
+      **count of kernel launches by role** (draft-decode, draft-extend, draft/verify epilogue,
+      target-prefill, target-verify); the **fraction of step wall time** in the small ones; their
+      **achieved SM occupancy** (so "small" is measured, not asserted); and the `packed_qo` tile
+      histogram. nsys/ncu or CUDA events per role. **This is the reviewer-facing motivation
+      table.** Optimising before measuring headroom is how the -5% happened.
+- [ ] **B2. Fuse the epilogue tail.** Absorb as many of those ops as possible into the two
+      kernels -- epilogue work fused into the attention kernel's own epilogue, and **cross-role
+      backfill** so small draft/verify work fills the SMs the prefill mainloop leaves idle.
+      `tma_store_wait` is the enabling primitive (named in the goal, still untested).
+- [ ] **B3. Multicast** for the shared reads this creates (also named in the goal, untested).
+- [ ] **B4. Scope the cross-MODEL part explicitly.** Draft ops run the DRAFT model, not the
+      target, so absorbing them is cross-model co-scheduling -- a strictly bigger step than the
+      prefill+verify partition already built. Do not assume it falls out of the existing split.
+
+#### Supporting / correctness, not performance
+
+- [ ] **K0. Decide whether trees (topk>1) are in scope.** `mix_with_verify` carries no
+      `custom_mask`, so verify rows are masked plain causal -- correct only for chain drafts. If
+      in scope, plumb the mask through and build a gate whose reference does **not** share the
+      causal assumption. If not, state "chain draft only" wherever 4-mode results are quoted.
+      Bounds every result in this doc.
+- [ ] **K5. Re-measure in-server at the shape the schedule emits**, reporting `last_fa2_rows` and
+      the tile histogram beside every timing. The gain must clear the measured **+/-1.5-3%**
+      noise floor on the upside -- user: *"-5 to -8.4% is not acceptable."*
+- [ ] **K6. CUDA-graph fault.** The split still dies with graphs on (`IndexKernel.cu`
+      out-of-bounds via flashinfer `plan`, from `decode_cuda_graph_runner.load_batch`). Needs a
+      capture-boundary bisect, not another hypothesis. Graphs on is the production config.
 
 ### OPEN -- server / workload, after the kernel items
 
@@ -215,52 +272,29 @@ everything else** (user: H20 and multi-node only after all kernel items close).
 - [ ] **PD point 4** (two-way RDMA / congestion / randomized pull) -- currently a NEGATIVE result
       at 16 GPUs; not demonstrated on the full 4-NIC fabric.
 
-### DONE and verified (SHAs and exact commands in the sections below)
+### DONE and verified -- chronological (SHAs and commands in the sections below)
 
-**Kernel**
-
-- [x] **Two-executor FA3+FA2 split implemented on upstream** with upstream-fitting interfaces
-      (`sm_margin` for the SM budget, flashinfer's public `plan`, `req_to_token` gather,
-      stride-aware `paged_kv_view`). `sglang-up@cff63ef7e` and parents.
-- [x] **`forward_extend` dispatch written** -- two executors over disjoint row subsets, combined
-      by scatter rather than an LSE merge. Index arithmetic CPU-verified 400/400; that test
-      caught the FA3 page table being indexed by batch row instead of `req_pool_index`.
-- [x] **PASSES the causal fp32 reference, 5/5 shapes** standalone (err 0.00232-0.00424, each row
-      subset scored separately) -- `drv/split_unit.py`.
-- [x] **PASSES in-server**, guard off, no launch-blocking: 5001 dispatches, in-step reference
-      10 ok / 0 FAIL (worst 0.0112, tol 0.02), 0/56 client errors -- `drv/split_nocg.sh`.
-- [x] **SM pre-assignment measured**: 1.224x on isolated attention at `sm_margin=8` vs the
-      unsplit single-wrapper baseline (152.6 us vs 186.7 us), **correctness bit-identical across
-      all six margins** -- `drv/split_margin.py`.
-- [x] **Fused-kernel JIT loader works from inside sglang** (increment 1): compiles with C++20,
-      bootstraps flashinfer's generated config itself, registers
-      `torch.ops.fused_fa3.fused_run`. `sglang-up@9da582ac3`.
-- [x] **Decode-population guard ported and re-verified on upstream** -- 11/25 -> 23/25 agreement
-      against the measured boundary grid.
-- [x] **Upstream-facing data path CPU-verified**: `dense_block_table` 11/11,
-      `fa3_subset_varlen` 10/10, row partition inert when disabled.
-- [x] **`upstream_port` rebased onto live upstream main `3fef129ff`** (64 commits, zero
-      conflicts, port markers verified post-replay).
-
-**4-mode step**
-
-- [x] **Runs clean on upstream**: 151 merges, 0/56 client errors, 0 tracebacks, 0 width
-      mismatches.
-- [x] **Root cause found and fixed for the blocker**: `extend_prefix_lens` came from a STALE
-      `seq_lens_cpu` mirror while `seq_lens` came from the device tensor
-      (`eagle_prepare_for_verify` advances one and not the other). `sglang-up@b8b405822`.
-- [x] **Always-on composition counters** (`MIXEDSPEC_STEPS`, `FUSED_SPLIT_CALLS`,
-      `FUSED_SPLIT_ONESIDED`, `base_plan_skipped`) -- each added after a gate reported a verdict
-      about an unexercised path.
-
-**Methodology**
-
-- [x] **Perf harness noise floor measured: +/-1.5-3% tok/s**, from two identical runs. Any gain
-      under ~3% on this harness is unmeasurable.
-- [x] **Warmup and arm-order confounds identified and controlled** -- per-arm warmup pass plus
-      reversed arm order with `base` last.
-- [x] **CUDA-graph fault isolated to the graph path** by environment bisect (graphs off: 5001
-      calls clean; graphs on: device assert), after five wrong code-level mechanism guesses.
+| when | item |
+|---|---|
+| 10-06 | Two executors beat FA2-on-everything on the fork harness and PASS the reference -- the result that motivated the split. |
+| 10-07 | 4-mode MTP load sweep: the gain grows with load and needs the split. Multi-stream start-offset methodology retraction recorded. |
+| 10-08 | Decode-population guard derived from the 25-point boundary grid; replaying it lifts agreement with the measured winner 11/25 -> 23/25. |
+| 10-08 | `fi` restore recipe executed; fused extension JIT-built at runtime. |
+| 10-09 | `upstream_port` **rebased onto live upstream main `3fef129ff`** -- 64 commits, zero conflicts, port markers verified post-replay. |
+| 10-09 | Decode guard **ported to upstream** and re-verified there (11/25 -> 23/25). |
+| 10-09 | Upstream-facing data path **CPU-verified**: `dense_block_table` 11/11, `fa3_subset_varlen` 10/10, row partition inert when disabled. |
+| 10-09 | **`forward_extend` dispatch written** -- two executors over disjoint row subsets, scatter combine. Index arithmetic 400/400; that test caught the FA3 page table being indexed by batch row instead of `req_pool_index`. |
+| 10-09 | Interface finding: **`sm_margin` is an upstream FA3 parameter**, so the SM budget needs no private entry point. |
+| 10-09 | **Split PASSES the causal fp32 reference, 5/5 shapes** standalone (err 0.00232-0.00424, each row subset scored separately) -- `drv/split_unit.py`. |
+| 10-09 | **SM pre-assignment measured: 1.224x** on isolated attention at `sm_margin=8` vs the unsplit baseline (152.6 vs 186.7 us), **correctness bit-identical across all six margins** -- `drv/split_margin.py`. |
+| 10-09 | **4-mode blocker root-caused and fixed**: `extend_prefix_lens` came from a STALE `seq_lens_cpu` mirror while `seq_lens` came from the device tensor (`eagle_prepare_for_verify` advances one, not the other). `sglang-up@b8b405822`. |
+| 10-09 | **4-mode step runs clean on upstream**: 151 merges, 0/56 client errors, 0 tracebacks, 0 width mismatches. |
+| 10-09 | **Split PASSES in-server**, guard off, no launch-blocking: 5001 dispatches, in-step reference 10 ok / 0 FAIL (worst 0.0112, tol 0.02), 0/56 client errors -- `drv/split_nocg.sh`. |
+| 10-09 | **CUDA-graph fault isolated to the graph path** by environment bisect, after five wrong code-level mechanism guesses. |
+| 10-09 | **Perf harness noise floor measured: +/-1.5-3% tok/s** from two identical runs; warmup and arm-order confounds identified and controlled (per-arm warmup, reversed order, `base` last). |
+| 10-09 | **Always-on composition counters** (`MIXEDSPEC_STEPS`, `FUSED_SPLIT_CALLS`, `FUSED_SPLIT_ONESIDED`, `base_plan_skipped`) -- each added after a gate reported a verdict about an unexercised path. |
+| 10-09 | **Fused-kernel JIT loader works from inside sglang** (increment 1): C++20, bootstraps flashinfer's generated config itself, registers `torch.ops.fused_fa3.fused_run`. `sglang-up@9da582ac3`. |
+| 10-09 | Pod expired mid-run; trial **re-forked** to `f929493da6e45f10` (`vibecuda`); restore recipe recorded including the `overrides.attachments: []` requirement. |
 
 ### Stale claims -- do NOT reuse
 

@@ -1351,7 +1351,36 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       First quantitative statement of **what is missing** rather than what is eliminated, and it
       came from the oracle rather than my arithmetic. **32/128 is a number a fix has to move.**
 
-      **Next, narrow:** collect the set of distinct output tokens written across **all** items,
+      **[x] ROOT CAUSE (2026-10-10): `write_packed`'s store loop strides by 128 threads inside a
+      ONE-WARP guard.** Distinct tokens written: **0, 32, 96** -- several tiles, so the offset is
+      *not* lost -- with 32/128 rows non-zero. The prespecified rule's second branch: writes
+      masked/discarded after the address is computed. And:
+
+      ```
+      if (... && cutlass::canonical_warp_idx_sync() == write_warp_idx) {   // ONE warp = 32 threads
+        for (int i = thread_idx; i < tile_size; i += num_threads) {        // stride = 128
+      ```
+
+      The stride assumes all `num_threads` (128) participate; the guard admits only the write warp.
+      Each active thread runs **one** iteration (`thread_idx + 128 > tile_size = 128`), so exactly
+      **32 of 128** packed rows are written per item -- precisely the measured coverage, with
+      nothing left over.
+
+      Explains every surviving observation with no new assumption: per-item addresses exact (the
+      32 written rows go to correct places); token 0 byte-correct (it is among them); absmax right
+      (values correct, too few of them); and a single-item probe could never see it, since it
+      printed r=0 and r=1, both covered by the write warp.
+
+      **Also my bug:** the same splice that dropped the gather's warp guard is where the store's
+      thread-count assumption stopped holding. Fix = make the stride match the participating
+      count: drop the warp guard so all `NUM_COPY_THREADS` participate, **or** stride by
+      `NumThreadsPerWarp` with `thread_idx` taken modulo the warp. Which is correct depends on
+      whether `sO` is fully visible to all MMA warps there -- **check, do not pick**.
+
+      **NOT verified:** that fixing the stride makes `fa3_1chunk` pass. The arithmetic matches
+      exactly, but this item has six refuted hypotheses; not called fixed until the fixture says so.
+
+      **(Superseded:)** collect the set of distinct output tokens written across all items,
       expected `{0,32,64,96}` + 31 each. Every item reporting a token in `[0,32)` => the tile
       offset is lost between scheduler and store; right tokens but 32 rows non-zero => writes are
       masked or discarded after the address is computed.

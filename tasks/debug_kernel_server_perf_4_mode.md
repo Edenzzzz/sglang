@@ -1108,6 +1108,40 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       indices while their `q_indptr` is now subset-relative. Check the driver's stitching before
       suspecting the kernel on those two rows.
 
+      **RETRACTED (same day): "the FA2 role faults before the output write".** That rested on
+      block 19's write trace never printing while its entry trace did. But a fault in **any**
+      block aborts the kernel, so block 19 may simply never have reached its write before another
+      block killed the launch -- absence of its print was never evidence the write was
+      unreachable. The null case proved the trace was *compiled in*; it did not prove the traced
+      block *ran to* its write. A second null case was needed and not built.
+
+      **`MODE=fa2` under compute-sanitizer** (never run on this configuration before):
+
+      ```
+      Invalid __global__ write of size 16 bytes
+      by thread (32,0,0) in block (84,0,0)
+      Access to 0x7f092a0cf400 is out of bounds
+      and is 4,537,344 bytes after the nearest allocation ... of size 1 byte
+      ```
+
+      So the write **is** reached, in an FA2-role block (84 of 132, past `sm_split=16`), and
+      overruns by ~4.5 MB. Same 16-byte signature as mixed mode but a different block and
+      distance -- and in `MODE=fa2` the reduction does not run at all (`num_merge_rows=0`), so
+      there are **at least two distinct 16-byte overruns**. Carrying mixed mode's
+      reduction attribution across configurations was the error.
+
+      Not in doubt, from the entry trace: `n_clusters=70` matches by hand (1024 packed rows /
+      tile128 = 8 tiles x 7 kv heads = 56, plus 2 decode rows x 7 = 14), so the plan's cluster
+      accounting and the task-0/task-2 split are right.
+
+      Next, to be settled by reading the faulting address against the buffer rather than guessed:
+      in `MODE=fa2` every row should have `num_kv_chunks == 1` (`fa2_span` is max kv_len, so
+      `ceil_div` gives 1), which means the **unsplit** path and `write_o_reg_gmem` writing
+      `final_o`. A 4.5 MB overrun of a 258x28x128 bf16 tensor (1.85 MB) is ~2.4 tensors past the
+      end, so the index is several times too large rather than slightly off -- consistent with a
+      packed-vs-token factor still live on this path, but that is a **candidate, not a finding**.
+      Trace the **faulting** block (`FUSED_TRACE=85`), not an arbitrary one.
+
       **Superseded note (kept for the record), on the fault that is now fixed:** The faulting block is still
       `>= sm_split`, so an FA2-role block, and the write is 16 B -- the vectorised partial store.
       Next step is to read off **which base the FA2 role uses** for it: `persistent.cuh`'s

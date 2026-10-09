@@ -536,6 +536,36 @@ so **derive lengths from `ToVector()`, never from the `NUM_*_ARGS` constants**.)
 - [ ] **K1d. Re-establish the fp32-reference PASS and a real timing on 0.7** before any of A/B is
       measured. The 1.30x figure is 0.3.1-only and must not be carried forward.
 
+#### INCIDENT (2026-10-09): both fixes that made the fused kernel PASS were pod-only and were LOST
+
+Starting K1-0 surfaced this. The two fixes recorded in this doc as making the fused kernel PASS
+the causal fp32 reference at every `sm_split` -- `MaskMode::kNone` -> `kCausal` in `PKT`, and the
+`cluster_tile_q` guard under `FUSED_GRID` -- **were applied directly to the pod's copy of
+flashinfer and never committed**. The local checkout `/opt/tiger/flashinfer` at `b0563ae` still
+had `MaskMode::kNone` (0 occurrences of `kCausal`) and the unguarded
+`cluster_tile_q = gridDim.x * CTA_TILE_Q`, byte-identical to 0.7's line 242.
+
+That pod's trial went to `done` and its tmpfs is gone, so **those fixes existed nowhere in
+version control.** They are recoverable only because this doc recorded them verbatim, including
+the exact replacement expression. Restored and committed as `flashinfer@c496afd` before the port
+begins, so the 0.7 rebase starts from a correct kernel instead of silently re-deriving both bugs.
+
+Consequences worth stating:
+
+* **The "fused kernel PASSES 5/5, 1.30x at sm_split 112" result was produced by a tree that no
+  longer existed anywhere.** It was already unusable as evidence (flashinfer 0.3.1, 20-arg
+  extension); this makes it unreproducible for a second, independent reason.
+* **Any other pod-only edit is also gone.** The doc is the only inventory. Cross-checking it is
+  part of K1-0: every code change this doc claims must be verified present in git before being
+  relied on.
+* **Process fix:** edits made on the pod have to be committed locally the same session. The
+  push-patch-apply loop used for sglang does this correctly; the flashinfer tree was being edited
+  in place on the pod and so bypassed it.
+
+- [x] 2026-10-09 **both lost fixes recovered and committed** (`flashinfer@c496afd`).
+- [ ] **K1-0b. Audit this doc's other flashinfer claims against git** before porting -- the two
+      recovered fixes prove the doc and the repo had diverged.
+
 #### K1 SCOPE MEASURED (2026-10-09): ~3900 header lines, and scheduler.cuh is the hard part
 
 Measured against the pristine base `c51aef7` (flashinfer **0.3.1**, the commit before our fused

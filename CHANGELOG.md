@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.37.0 — FA2+FA3 co-inclusion, and the fused kernel body type-checks on 0.7 (2026-10-09)
+
+The instantiating TU (`fused_fa3_persistent_ext.cu`, what the loader actually builds) now
+compiles far enough that nvcc type-checks the kernel itself. `flashinfer@4ef2407`,
+`43d1f64`, `0bc00af`; `sglang-up@56cad32fa` and its follow-up.
+
+- **The previous compile gate was nearly empty.** A template is type-checked where it is
+  instantiated, and nothing in the header-parse TUs instantiates the fused kernel:
+  `cuobjdump -elf` reports **zero device kernels** in a 687 KB object, the only fused symbol
+  being a constant. `NVCC_FUSED_OK` therefore said the headers parse together and nothing about
+  the kernel body — including the reading that `fa3_upstream.cuh` was clean against 0.7, which
+  it did not support. The instantiating TU is now the third step of `nvcc_check.sh` and reports
+  the device-kernel count rather than OK/FAILED.
+- **The fused kernel is the first thing in 0.7 to include both the FA2-lineage and Hopper
+  trees.** Upstream's POD attention, which looks like the precedent, is FA2-only. 0.3.1 never
+  hit this because its upstream carried `...Sm90` suffixes that 0.7 dropped. Five name
+  collisions resolved by restoring those suffixes with unsuffixed aliases behind
+  `-DFLASHINFER_SM90_SUPPRESS_UNSUFFIXED_NAMES=1`; a tree-wide rename is unavailable because
+  every stock FA3 module is generated with `variant_name = "DefaultAttention<...>"`. The four
+  `DEFINE_HAS_MEMBER` probes are identical in both trees and use upstream's own
+  `FLASHINFER_SHARED_HAS_MEMBER_PROBES` guard; the four `REGISTER_*` macros differ only in the
+  name of a template type parameter, so they are guarded per-macro on both sides rather than
+  per-file (FA2 defines two macros Hopper lacks).
+- **`cluster_cursor` / `num_pers_clusters` no longer live in `PersistentParams`.** That struct is
+  generated from upstream's `batch_attention_customize_config.jinja`, so carrying them there
+  meant patching a template inside the installed wheel — unreproducible on a fresh pod, and it
+  would make every stock `BatchAttention` build grow two fields it never uses. They are now a
+  `FusedQueueParams` argument. The 0.3.1 tree patched that jinja; 0.7 does not need to.
+- 0.7 plan format in the TU: `FusedPlanInfo` replaces `HolisticPlanInfo`, and the six group
+  tables are gone with the JIT-reduction rendezvous, replaced by the scheduled merge over
+  `partial_indptr` / `merge_indptr` / `merge_o_indices`.
+- Two 0.7 config-discovery fixes in the loader: `BatchAttention.plan()` dropped the `batch_size`
+  positional (every later argument shifted by one, surfacing only as *"plan() got multiple
+  values for argument 'causal'"*), and the generated-config path gained an arch segment while
+  sglang redirects the cache base at import time. Both now asked of flashinfer rather than
+  globbed.
+- Still open: four real 0.7 API deltas inside the kernel (`BatchPrefillPagedParams` aggregate
+  init, `NUM_KV_STAGES`, `threadblock_sync_mdo_states` signature, `Runner::Run`'s dropped
+  `s_merge`), then the fp32-reference PASS. **No A/B before the reference passes.**
+
 ## v0.36.0 — persistent.cuh compiles against flashinfer 0.7 (2026-10-09)
 
 `NVCC_PARSE_OK` from `port07/tests/nvcc_check.sh` (merged 0.7 + overlay include tree, sm_90a,

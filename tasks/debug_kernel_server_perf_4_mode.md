@@ -790,7 +790,7 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       **one** argument block, where the five group-table arguments to the FA3 epilogue were
       removed per K1a.
 
-- [ ] **K1d2. Port `hopper/prefill_sm90.cuh` (+32 on a 622-line 0.7 base; ours is 705).** This
+- [~] **K1d2 (2026-10-09, 3 of 4 landed, `flashinfer@0b8cc6f`+`4ef2407`). Port `hopper/prefill_sm90.cuh` (+32 on a 622-line 0.7 base; ours is 705).** This
       is now the blocking file -- dropping the group-table arguments above means the epilogue
       signature here must match the shorter list. Four distinct changes, in order of importance:
 
@@ -816,10 +816,81 @@ Both remaining errors are now understood exactly, and neither needs a design dec
          `cp.async` group drain -- `commit_group` otherwise sweeps the producer's in-flight KV
          copies into Q's group, and committed groups retire in order, so a drain waits on the
          whole KV pipeline. **Arriving from 32 lanes on a barrier armed for 1 hung for 1500 s**,
-         which is the symptom to recognise if this is mis-ported.
+         which is the symptom to recognise if this is mis-ported. **STILL OPEN** -- deferred to
+         its own commit because it sits behind `FLASHINFER_FUSED_PACKED_Q` and has that
+         distinctive hang, worth isolating from the other three.
 
-- [ ] **K1e. `nvcc_check.sh` over the full fused TU** (not just `persistent.cuh` +
-      `fused_plan.cuh`), then the fp32-reference PASS, then a timing. No A/B before the reference
+      Changes 1-3 landed. Change 1 first landed broken in a way worth recording: the probe
+      guard and the `fa3_has_split_kv` trait were inserted **inside the `__global__`'s template
+      parameter list**, so the trait's `template<>` became a second clause on one declaration
+      and `fa3_prefill_body` lost its parameters entirely -- 25 errors, all pointing at line 61
+      rather than at the insertion. Fixed by hoisting the clause-independent text above and
+      re-attaching the orphaned clause to the body.
+
+- [x] **K1d3 (2026-10-09, `flashinfer@4ef2407`). FA2+FA3 co-inclusion in one TU is legal
+      against 0.7.** The fused kernel is the **first** thing in 0.7 that includes both trees.
+      Upstream's POD attention (`pod.cuh`), which looks like the precedent, is **FA2-only** --
+      it includes `prefill.cuh` and `variants.cuh` and no Hopper header. 0.3.1 never hit this
+      because its upstream carried `...Sm90` suffixes on the Hopper spellings; 0.7 dropped them
+      because nothing needed them. Five collisions, in `namespace flashinfer`:
+
+      | name | nature | resolution |
+      |---|---|---|
+      | `AttentionVariantBase` | different types in both trees | Hopper -> `...Sm90`, alias behind the flag |
+      | `SharedStorageQKVO` | different types in both trees | Hopper -> `...Sm90`; our `persistent.cuh` wants the **FA2** one (its parameter list matches `prefill.cuh`, not `kernel_traits.cuh`) |
+      | `DefaultAttention` / `DefaultFP8Attention` | different types | Hopper -> `...Sm90`, alias behind the flag |
+      | `StandardAttention` / `LogitsSoftCap` / `StandardFP8Attention` | 0.7 declares `StandardAttention` in **`mla.cuh`** too, where the fused TU resolved it | Hopper -> `...Sm90`; nvcc calls this *ambiguous*, not redefined |
+      | the four `DEFINE_HAS_MEMBER` probes | **identical** in both trees | `FLASHINFER_SHARED_HAS_MEMBER_PROBES`, which is 0.3.1 upstream's own mechanism |
+      | `REGISTER_LOGITS_TRANSFORM` / `LOGITS_MASK` / `QUERY_TRANSFORM` / `KEY_TRANSFORM` | bodies differ **only in the name of a template type parameter** (`Params` vs `MainloopParams`), so whichever wins compiles both trees identically -- a warning, not a correctness hazard | guarded **per-macro on both sides**, not per-file: FA2 defines two macros Hopper lacks (`REGISTER_M_D_UPDATE`, `REGISTER_OUTPUT_TRANSFORM`) and a whole-file guard would strand them |
+
+      A tree-wide rename is **not** available: every stock FA3 module is generated with
+      `variant_name = "DefaultAttention<...>"`, so it would break all of them. Hence the
+      aliases, dropped only by `-DFLASHINFER_SM90_SUPPRESS_UNSUFFIXED_NAMES=1`, which must be a
+      TU-wide **compile flag** rather than a `#define` in `persistent_fa3_fused.cuh` --
+      whichever header reaches `hopper/variant_helper.cuh` first wins, and in our own test TU
+      that is `fused_plan.cuh`. Without the flag the build fails loudly on the aliases; it can
+      never silently bind to the FA2 type of the same name. Renaming a struct also renames its
+      **constructors**: leaving them behind turns each into a deduction guide.
+
+- [x] **K1e-a (2026-10-09, `flashinfer@43d1f64`). The header-parse TUs were a near-empty gate.**
+      A template is type-checked where it is **instantiated**, and nothing in either parse TU
+      instantiates the fused kernel: `cuobjdump -elf` reports **zero device kernels** in a
+      687 KB object, and the only fused symbol is the `kFusedQueueBarrier` constant. So
+      `NVCC_FUSED_OK` says the headers parse together and nothing about the kernel body --
+      including the reading that `fa3_upstream.cuh` is clean against 0.7, which it does not
+      support. `fused_fa3_persistent_ext.cu` (the TU the loader actually builds) is now the
+      third step of `nvcc_check.sh`, and it reports the device-kernel count rather than OK.
+      Two 0.7 config-discovery bugs had to be fixed to get there (`sglang-up@56cad32fa`,
+      `+ the follow-up`): 0.7's `BatchAttention.plan()` dropped the `batch_size` positional, so
+      every later argument shifted by one and surfaced only as *"plan() got multiple values for
+      argument 'causal'"*; and the generated-config path gained an **arch segment** while
+      sglang **redirects the cache base at import time**, so the old glob missed on both counts
+      -- now asked of `flashinfer.jit.env.FLASHINFER_GEN_SRC_DIR`, with sglang imported first
+      for the same reason the loader gets it right.
+
+- [~] **K1e. IN PROGRESS (2026-10-09, `flashinfer@0bc00af`). The kernel body now type-checks;
+      4 real 0.7 API deltas remain.** The TU is ported onto 0.7's plan format: `FusedPlanInfo`
+      replaces `HolisticPlanInfo<3>/<4>`, the six group-table params are gone with the
+      JIT-reduction rendezvous (and with them the `FLASHINFER_NO_JIT_REDUCE` bisect flag), and
+      `cluster_cursor` / `num_pers_clusters` moved out of `PersistentParams` into a
+      `FusedQueueParams` argument threaded through the dispatcher, the three `__global__`s and
+      the seven `fused_drain_queue` call sites. That last move matters for upstreaming:
+      `PersistentParams` is generated from upstream's
+      `csrc/batch_attention_customize_config.jinja`, so keeping them there meant patching a
+      template **inside the installed wheel** -- unreproducible on a fresh pod, and it would
+      make every stock `BatchAttention` build grow two fields it never uses. The 0.3.1 tree did
+      patch that jinja; 0.7 does not need to.
+
+      Remaining (18 errors, 4 groups), all now **inside** the kernel rather than include plumbing:
+
+      | # | error | cause |
+      |---|---|---|
+      | 1 | `persistent_fa3_fused.cuh:672/675/693` *"too many initializer values"* | 0.7's `BatchPrefillPagedParams` changed field order/count; needs field-by-field assignment instead of positional aggregate init |
+      | 2 | `persistent.cuh:422` `FusedWarpgroupTraits` has no `NUM_KV_STAGES` | 0.7's `KernelTraits` renamed it |
+      | 3 | `persistent.cuh:618` `threadblock_sync_mdo_states` no match | signature changed in 0.7 |
+      | 4 | `persistent_fa3_fused.cuh:257-259` *"too many arguments"* | `Runner::Run`'s `s_merge` was the JIT rendezvous broadcast, which went with the group tables |
+
+      Then the fp32-reference PASS, then a timing. No A/B before the reference
       passes. The five missing identifiers are
       now fully diagnosed, and the diagnosis is better news than the error list suggested:
       **four of the five are OUR OWN symbols**, not things 0.7 removed. Nothing needs a 0.7

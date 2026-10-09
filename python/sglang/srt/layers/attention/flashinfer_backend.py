@@ -1165,6 +1165,13 @@ class FlashInferAttnBackend(AttentionBackend):
                 self.fused_base_plan_skipped = (
                     getattr(self, "fused_base_plan_skipped", 0) + 1
                 )
+                # Logged, not just counted: the first A/B of this knob reported
+                # base_plan_skipped=n/a because the driver grepped for a line that did not
+                # exist, so the arm could not be distinguished from the knob never firing.
+                if self.fused_base_plan_skipped % 500 == 1:
+                    logger.info(
+                        "FUSED_SPLIT base_plan_skipped=%d", self.fused_base_plan_skipped
+                    )
                 self.forward_metadata = PrefillMetadata(
                     self.prefill_wrappers_paged, use_ragged, extend_no_prefix
                 )

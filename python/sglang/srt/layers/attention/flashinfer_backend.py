@@ -1986,6 +1986,10 @@ class FlashInferAttnBackend(AttentionBackend):
         else:
             o.index_copy_(0, pl["fa2_tok"], o_fa2.view(-1, hq, hd).to(o.dtype))
         self.fused_split_views = getattr(self, "fused_split_views", 0) + (1 if _use_views else 0)
+        # Logged, not merely counted: an unlogged counter already made one perf arm
+        # uninterpretable (base_plan_skipped=n/a).
+        if _use_views and self.fused_split_views % 500 == 1:
+            logger.info("FUSED_SPLIT fused_split_views=%d", self.fused_split_views)
 
         # Counted here, ahead of the verify block below that reads it.
         self.fused_split_calls += 1

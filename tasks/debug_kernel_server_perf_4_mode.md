@@ -717,8 +717,33 @@ reading the diff. Hand-port these files; do not trust fuzz.
       A third, smaller instance of the same blindness: the port carried a dangling
       `#include "jit_merge.cuh"` for a header K1a dropped. Greps for every symbol in that header
       returned 0; only the compile found the include.
-- [ ] **K1b2. Hand-port `persistent.cuh` onto pristine 0.7**, resolving the five missing
-      identifiers against 0.7's equivalents rather than transplanting 0.3.1's definitions.
+- [ ] **K1b2. Hand-port `persistent.cuh` onto pristine 0.7.** The five missing identifiers are
+      now fully diagnosed, and the diagnosis is better news than the error list suggested:
+      **four of the five are OUR OWN symbols**, not things 0.7 removed. Nothing needs a 0.7
+      equivalent invented; the definitions simply have to be carried over, which the fuzzy apply
+      failed to do while letting their uses through.
+
+      | symbol | where it really lives | action |
+      |---|---|---|
+      | `kNoClusterOverride` | ours, `persistent.cuh:262`, `static constexpr uint32_t = 0xFFFFFFFFu` | carry the constant |
+      | `cluster_override` | ours, function **parameter** at `persistent.cuh:275` (defaults to `kNoClusterOverride`) | carry the signature change |
+      | `tid_base` | ours, function **parameter** at `persistent.cuh:276` (defaults to 0) | carry the signature change |
+      | `kPersistentMainloopBarrier` | ours, **`prefill.cuh:52`** -- `static constexpr int = kFusedQueueBarrier + 1` | **port `prefill.cuh`'s barrier constants FIRST** |
+      | `thr_local_kv_offset` | **upstream 0.7 has it** in its own `persistent.cuh` | resolves once the port is structurally correct |
+
+      So the order is: (1) port the barrier-constant block from our `prefill.cuh` (small and
+      self-contained, part of that file's +65); (2) hand-apply to pristine 0.7's `persistent.cuh`
+      the `kNoClusterOverride` constant, the `cluster_override`/`tid_base` parameters, the
+      `FUSED_GRID` role indexing, and the recovered `cluster_tile_q` guard -- by hand, hunk by
+      hunk, re-running `port07/tests/nvcc_check.sh` after each.
+
+      **What `cluster_override` and `tid_base` are for, since they are the fused design and not
+      incidental:** `cluster_override` lets the fused kernel's dynamic scheduler hand a block a
+      cluster index rather than deriving it from `blockIdx` -- that is the mechanism by which an
+      SM that finished FA3 picks up FA2 work (cross-role backfill). `tid_base` lets a warpgroup
+      compute `ltid = threadIdx.x - tid_base` so FA2's roles address shared memory correctly
+      when they occupy only part of a fused block. Neither has a 0.7 equivalent because neither
+      exists upstream; they are the fusion.
 - [x] 2026-10-09 **overlay build mechanism established** -- a MERGED include tree (0.7's tree
       copied, ours laid on top) rather than `-I` ordering. Both trees use relative includes, so a
       partial overlay breaks them regardless of order; this is also what the real extension build

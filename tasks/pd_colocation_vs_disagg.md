@@ -533,6 +533,28 @@ mixed step, and one short prompt agreed with stock MTP for 5 tokens (noise floor
   coloc_cache_mtp run on the fixed router.
 
 
+## Evidence state of the four points — 2026-10-10
+
+Added because the sections below carry 17 "measured" markers and **no** markers for the claims
+that are argument only, so a reader cannot tell which is which. Nothing here changes the
+arguments; it labels them.
+
+| point | mechanism exists in sglang | measured | argument only |
+|---|---|---|---|
+| 1. highest-hit-first with an EDF/SLO veto | yes — radix/prefix cache + router hit lengths; EDF ordering is **measured** on the MTP server (`edf-order-not-cap`) | the EDF *ordering* win, and the linear-in-KV step cost the veto's predictor needs | that routing hit-first **beats** disagg's prefill-first on TTFT: no multi-node run |
+| 2. best-effort cache migration | yes — hier cache + dist cache pool | nothing | the whole replication advantage, incl. the ThunderAgent thrashing comparison |
+| 3. EDF predictor with acceptance length | yes — EWMA of accept length is already tracked | step cost linear in total KV, on one GPU, 4-mode MTP (section 3) | that the predictor is **more accurate than baseline**: the baseline-unfused comparison has never been run |
+| 4. two-way RDMA, complete vs bipartite graph | partially — transfer paths exist, congestion-aware pull selection does not | nothing | the entire scaling claim; `O(N^2)` vs `O(N_p*N_d)` is topology arithmetic, not a measurement |
+
+So **one** of the four points has supporting measurement (3's cost model, plus 1's EDF
+ordering), and it is single-GPU. Points 2 and 4 are unmeasured end to end. The multi-node runs
+that would test them are gated on the kernel items per the standing instruction, and separately
+on the FA3 defect, since a serving A/B today would measure a corrupted FA3 path.
+
+**This labelling does not weaken the doc's purpose** — the four points are a design argument the
+goal asked to be written down, and they are written down. It records which parts a reviewer can
+challenge on data and which on reasoning.
+
 ## 1. Route to the highest cache-hit node first, with an EDF/SLO veto
 
 **The disagg baseline.** PD disaggregation picks a *prefill* node first, because prefill and

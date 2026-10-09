@@ -1050,18 +1050,42 @@ Both remaining errors are now understood exactly, and neither needs a design dec
          as the stride. That **confirms** both earlier conclusions: the base is head-agnostic and
          the writer's `base + r * num_kv_chunks + kv_chunk_idx` is exactly right, provided
          `indptr` for row r equals `base + r * num_kv_chunks`.
-      3. **There is no `o_indices` parameter anywhere in `cascade.cuh`.** Output position is
-         `pos` itself. So `merge_o_indices` has **no consumer in 0.7** -- it is a 0.3.1-era
-         field, and the plan should stop carrying it (or carry it only if a 0.7 entry point that
-         takes it turns up, which a grep of the whole header says it does not).
-      4. **Nothing in the ported tree launches the merge.** `persistent.cuh` only *mentions*
-         `merge_indptr`/`merge_o_indices` in a comment; there is no call. So even with a correct
-         layout the partials would never be reduced. The missing launch is a separate work item
-         from the layout, and it is on the critical path to the fp32 reference.
+      3. **RETRACTED -- "no `o_indices` anywhere" and "nothing launches the merge".** Both came
+         from reading `cascade.cuh`, which is the WRONG merge for this path, and from a grep
+         (`MergeStates|VariableLengthMerge|merge_o_indices`) that missed the right one because
+         the struct is named `BlockBatchReductionPersistent`. The holistic path's merge lives in
+         **our own ported `persistent.cuh`**, and its `Run` takes **both** `indptr` and
+         `o_indices`. So `merge_o_indices` does have a consumer and the plan must keep it.
 
-      This is why the layout was not rewritten from the writer side alone: two of the three
-      disagreements are visible from the writer, the third only from the consumer, and a third
-      guess would have produced a layout that still merged nothing.
+      **The authoritative contract**, from `BlockBatchReductionPersistent::Run`:
+
+      ```
+      // V:        [num_packed_qo_len x num_kv_tiles, num_kv_heads, head_dim]
+      // v_merged: [qo_len, num_kv_heads, gqa_group_size, head_dim]
+      for i in [0, num_packed_qo_len * num_kv_heads):
+        packed_qo_idx  = i / num_kv_heads
+        kv_head_idx    = i % num_kv_heads
+        num_index_sets = indptr[packed_qo_idx + 1] - indptr[packed_qo_idx]
+        slot           = (indptr[packed_qo_idx] + off) * num_kv_heads + kv_head_idx
+      ```
+
+      This confirms all three writer-side conclusions and fixes the contract precisely:
+      `merge_indptr` is indexed by **packed q row** with `num_packed_qo_len + 1` entries (NOT one
+      per tile/group, which is what `BuildFusedMergeLayout` currently emits); the base is
+      **head-agnostic** with `* num_kv_heads` as the stride; and a row's chunks are
+      **consecutive** from `indptr[row]`. `store_partial`'s
+      `base + r * num_kv_chunks + kv_chunk_idx` is therefore exactly right provided
+      `indptr[row_r] == base + r * num_kv_chunks`, which holds iff each row of a tile gets
+      `num_kv_chunks` consecutive slots.
+
+      So the rewrite is: emit `merge_indptr` **per packed q row** (count = that row's chunk
+      count, 0 for unsplit rows that write O directly), `merge_o_indices[row]` = its output row,
+      and size the slab `[sum of per-row chunk counts, num_kv_heads, head_dim]` -- which makes
+      the `* num_kv_heads` float sizing correct and removes the 7x over-count.
+
+      Whether the fused dispatcher actually LAUNCHES `BlockBatchReductionPersistent` is still
+      unchecked and is the next thing to verify -- it is a separate question from the layout, and
+      the earlier claim that it does not was not established.
 
       Note the host checks passed throughout: `run_host_checks.sh` only asserts monotonicity,
       counts and the round trip, never agreement with the writer's addressing. Another gate that

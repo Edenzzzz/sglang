@@ -491,9 +491,15 @@ that no longer exists."* It was redesigned.
 
 **The arithmetic confirms the model exactly.** `ToVector()` length is `2 + NUM_TASKS*10 + 6`:
 **NUM_TASKS=2 gives 28**, which is precisely the plan length 0.7's `BatchAttention` produced and
-the kernel rejected. So 0.7 also dropped from **3 tasks to 2**. (Note `NUM_SHARED_ARGS = 8` while
-only 6 shared fields are pushed -- the same count-vs-reality inconsistency 0.3.1 had at 16-vs-14,
-so **derive lengths from `ToVector()`, never from the `NUM_*_ARGS` constants**.)
+the kernel rejected. So 0.7 also dropped from **3 tasks to 2**. **CORRECTION (2026-10-09):** I earlier wrote that `NUM_SHARED_ARGS = 8` while only 6 shared
+fields are pushed, calling it the same count-vs-reality inconsistency 0.3.1 had at 16-vs-14.
+**That was wrong.** Enumerating `ToVector()` mechanically gives **8** shared pushes --
+`num_blks_x`, `num_blks_y`, `len_kv_chunk`, `partial_o`, `partial_lse`, `merge_indptr`,
+`merge_o_indices`, `num_qo_len` -- and 10 per task. I had counted only the 6 trailing fields and
+missed `num_blks_x`/`num_blks_y`, which are shared too. So in 0.7 the arithmetic is **consistent**:
+`NUM_SHARED_ARGS + NUM_TASKS*NUM_TASK_ARGS = 8 + 2*10 = 28`, exactly the observed plan length.
+The lesson I drew from it ("never trust the constants") does not apply to 0.7, and the length
+guard our patch adds using that formula is therefore correct here.
 
 **Revised K1 content, in order:**
 
@@ -617,6 +623,46 @@ port targets 0.7's scheduled merge and the group tables are not reconstructed at
 - [ ] **K1d. Port `persistent_fa3_fused.cuh` (+948)** to the 2-task layout and the scheduled
       merge, dropping the rendezvous.
 - [ ] **K1e. Re-establish the fp32-reference PASS and a timing on 0.7** before any A/B.
+
+#### K1b DONE / K1c MEASURED (2026-10-09)
+
+**K1b: `persistent.cuh` ported** -- `flashinfer@ed1be8a`, as an include **overlay**
+(`port07/include/flashinfer/attention/`) in front of the wheel's bundled headers, so 0.7 supplies
+every file except the ones we override. Mixing the 0.3.1 checkout and the 0.7 wheel on one
+include path is what silently reintroduces the plan-layout mismatch, hence the overlay.
+Our 16-hunk diff applies **11**; the **5 rejects are all JIT-reduction machinery**
+(`MergeGroupJIT`, the `s_merge_flag` handshake, the `group_id != nullptr` rendezvous, the
+`__threadfence` dance) and are **dropped by design** per K1a. Verified: `FUSED_GRID` role
+indexing present, the recovered `cluster_tile_q` guard at line 290, and **zero** residual
+`MergeGroupJIT`/`s_merge_flag`/`group_counter` references.
+
+**K1c: `scheduler.cuh` measured -- 15 of 22 hunks apply, 7 reject.** Verified invariants after
+the fuzzy apply (fuzz 2-3 on a redesigned file can land a hunk in the wrong place, so this was
+checked rather than assumed): **no group tables re-added** (0 occurrences), `HolisticPlanInfo<2>`
+still used by 0.7's `BatchAttention`, and the length guard our patch adds is correct for 0.7 (see
+the correction above).
+
+**The 7 rejects are the real K1c work, and they are NOT droppable.** They sit in
+`HolisticPlanInfo` (3 hunks) and `TwoStageHolisticPlan` (4 hunks), and they are what adds the
+**4-task plan and the unified-wgmma fields**. That matters because the 4th task *is* the fused
+design: it is the class whose work items FA3's mainloop pulls through
+`UnifiedWgmmaTileScheduler`, i.e. FA3's work expressed as a task inside the same plan as FA2's.
+0.7's `BatchAttention` only ever builds a 2-task plan, so the fused kernel needs **our own
+4-task plan builder** on top of 0.7's struct definitions -- which is precisely what our +439
+lines were on 0.3.1.
+
+So K1c decomposes as:
+
+- [ ] **K1c1. Extend 0.7's `HolisticPlanInfo` to `NUM_TASKS=4` plus the wgmma plan fields.**
+      The length arithmetic stays consistent (`8 + 4*10 = 48`), so the guard needs no special
+      casing -- only the task count changes.
+- [ ] **K1c2. Port our `TwoStageHolisticPlan` additions** (4 hunks) so the 4-task plan is
+      actually populated, including the FA3 task's work items.
+- [ ] **K1c3. Confirm 0.7's 2-task `BatchAttention` path still works unchanged** -- the overlay
+      must not perturb it, since the FA2 half of the fused kernel relies on it.
+
+- [x] 2026-10-09 **K1b done** (`persistent.cuh`, overlay, 11/16 hunks + 5 intentional drops).
+- [ ] 2026-10-09 **K1c in progress** -- 15/22 applied; the 7 rejects are the 4-task plan builder.
 
 #### A. Ultra fine-grained tile dispatcher for the different modes
 

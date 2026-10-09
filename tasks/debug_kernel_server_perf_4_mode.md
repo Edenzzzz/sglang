@@ -1006,9 +1006,17 @@ fused_run(q, ..., fa3_int_ws, std::vector<int64_t> fa3_plan,
    per-request varlen builders (`fa3_subset_varlen`), and `dense_block_table` for the dense
    `[batch, max_pages]` table.
 
-- [ ] 2026-10-09 **increment 1: JIT-build `fused_fa3` from inside sglang** with C++20 and the
-      generated-config include path, behind `SGLANG_FUSED_KERNEL`, asserting
-      `torch.ops.fused_fa3.fused_run` exists. No numerics yet.
+- [x] 2026-10-09 **increment 1 PASS: `fused_fa3` builds from inside sglang and registers its
+      op.** `sglang-up@9da582ac3`
+      (`python/sglang/srt/layers/attention/fused_fa3_loader.py`). Gate
+      `drv/test_loader.sh`; command
+      `PYTHONPATH=/dev/shm/w/up/python SGLANG_FUSED_FI_ROOT=/dev/shm/w/fi
+      /dev/shm/w/venv/bin/python -c "...load_fused_fa3(verbose=True)"`. Output:
+      `generated configs before: 0` -> `after: 1` (the loader drove a minimal
+      `BatchAttention.plan()` itself, so the flashinfer-JIT ordering dependency is handled),
+      linked `fused_fa3.so`, `HAS_OP: True`, `INCREMENT1_PASS`. Generated config used:
+      `~/.cache/flashinfer/90a/generated/batch_attention_with_kv_cache_dtype_q_bf16_dtype_kv_bf16_dtype_o_bf16_dtype_idx_i32_head_dim_qk_128_head_dim_vo_128_posenc_0_use_logits_soft_cap_false_use_profiler_false_flipped_schedule_false`.
+      Built with **C++20** (the harness's `-std=c++17` does not compile against torch 2.14).
 - [ ] 2026-10-09 **increment 2: build both plan vectors in `init_forward_metadata`** and
       vector-sparse `fa3_kv_indices`; verify shapes and the plan-length guard on CPU/host where
       possible.

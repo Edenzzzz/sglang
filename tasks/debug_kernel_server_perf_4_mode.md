@@ -1027,10 +1027,41 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       `members.size() / num_kv_heads`, so `BuildFusedMergeLayout` needs `num_kv_heads` passed in.
       Then the `* num_kv_heads` float sizing is right and the 7x over-count also disappears.
 
-      **Before implementing it, `merge_indptr` / `merge_o_indices` must be checked against what
-      0.7's `PersistentVariableLengthMergeStatesKernel` actually iterates**, rather than assumed
-      -- that kernel is the consumer, and guessing its convention is how both of these
-      disagreements got written in the first place.
+      **The merge kernel was then read, and it settles all of this -- plus a THIRD disagreement
+      and a missing launch.** `PersistentVariableLengthMergeStatesKernel`
+      (`flashinfer/attention/cascade.cuh`) does:
+
+      ```
+      for i in [0, seq_len * num_heads):
+        pos = i / num_heads;  head_idx = i % num_heads
+        num_index_sets = indptr[pos + 1] - indptr[pos]
+        reads  V + ((indptr[pos] + k) * num_heads + head_idx) * head_dim,  k < num_index_sets
+        writes v_merged + (pos * num_heads + head_idx) * head_dim
+      ```
+
+      Four consequences, in order of how much they change the design:
+
+      1. **`indptr` is indexed by OUTPUT ROW, not by tile/group.** It has `seq_len + 1` entries,
+         one per merged row. `BuildFusedMergeLayout` pushes one entry per **group** (per q tile),
+         so the array is the wrong length and the wrong thing entirely. This is the third
+         disagreement, and the one that assuming would have gotten wrong -- the two found from
+         the writer side would both have been "fixed" and it would still have been broken.
+      2. Chunks of one output row sit at **consecutive** `indptr[pos] + k`, with `* num_heads`
+         as the stride. That **confirms** both earlier conclusions: the base is head-agnostic and
+         the writer's `base + r * num_kv_chunks + kv_chunk_idx` is exactly right, provided
+         `indptr` for row r equals `base + r * num_kv_chunks`.
+      3. **There is no `o_indices` parameter anywhere in `cascade.cuh`.** Output position is
+         `pos` itself. So `merge_o_indices` has **no consumer in 0.7** -- it is a 0.3.1-era
+         field, and the plan should stop carrying it (or carry it only if a 0.7 entry point that
+         takes it turns up, which a grep of the whole header says it does not).
+      4. **Nothing in the ported tree launches the merge.** `persistent.cuh` only *mentions*
+         `merge_indptr`/`merge_o_indices` in a comment; there is no call. So even with a correct
+         layout the partials would never be reduced. The missing launch is a separate work item
+         from the layout, and it is on the critical path to the fp32 reference.
+
+      This is why the layout was not rewritten from the writer side alone: two of the three
+      disagreements are visible from the writer, the third only from the consumer, and a third
+      guess would have produced a layout that still merged nothing.
 
       Note the host checks passed throughout: `run_host_checks.sh` only asserts monotonicity,
       counts and the round trip, never agreement with the writer's addressing. Another gate that

@@ -40,6 +40,30 @@ verify tiles are absorbed into the same grid by the LPT overlap schedule (no sec
 scatter), and FA3's tile width becomes a per-work-item property instead of a compile-time
 constant.
 
+### The rationale, in the user's terms (2026-10-09)
+
+**The objective is to minimise tile waste**, and the three row populations in a 4-mode step sit
+at different places on that axis:
+
+| population | packed_qo | engine | why |
+|---|---|---|---|
+| **large prefill chunk** | thousands | **FA3** | fills a 128-wide WGMMA tile many times over; this is what FA3 is for |
+| **decode / draft** | small (1 token x gqa) | **FA2** | a single `tile16` item; FA3's 128-wide tile would be ~90% idle |
+| **verify** | `num_draft_tokens x gqa` -- anywhere from ~16 to >128 | **the middle area, and the whole question** | neither engine is obviously right, and this is where the gain has to be won |
+
+So the verify rows are the contested band, and the current dispatch resolves them with a
+hand-set constant (`MIN_PACKED_QO = 48`) against a fixed `TILE_Q = 128`, which is precisely the
+combination that wastes the tile. Getting verify right is the point of K2-K4; prefill and
+decode/draft are already routed correctly and are not in question.
+
+**What makes finer FA2 tiles cheap (user's key point): FA2's tile sizes are all composed of
+`mma16`s.** So 16/32/48/64 are not new kernels -- they are **template instantiation choices**
+over the same primitive, and the **2-CTA overlap schedule is preserved** across them. The cost
+is compile time, code size and register pressure per extra instantiation, not new scheduling
+machinery. That turns K3 from "write more kernels" into "pick how many widths are worth
+instantiating", which is an experiment: instantiate a set, measure, and keep the widths that pay
+for themselves.
+
 ### Design, in dependency order
 
 - [ ] **K1. Port the fused kernel to flashinfer 0.7.** Reconstruct the JIT-reduction group tables
@@ -49,9 +73,13 @@ constant.
       everything else.
 - [ ] **K2. Dynamic WGMMA tile size in FA3: mix 128 and 64, chosen per work item** from
       `packed_qo`. A 56-row item then runs at 88% tile occupancy instead of 44%.
-- [ ] **K3. Extend the FA2/persistent tile classes to 16/32/48/64**, keeping them inside the LPT
-      overlap schedule so small items still share the grid.
-- [ ] **K4. Replace `MIN_PACKED_QO = 48` with a FITTED dispatch rule for `packed_qo < 64`** on
+- [ ] **K3. Extend the FA2/persistent tile classes to 16/32/48/64** -- template instantiations
+      over `mma16`, not new kernels, with the **2-CTA overlap schedule preserved**.
+      **Experiment on how many widths are worthwhile**: each instantiation costs compile time,
+      code size and registers, so sweep {16,64} vs {16,32,64} vs {16,32,48,64} and keep only the
+      widths that pay for themselves on measured verify-row shapes. Report the chosen set with
+      the per-width timings that justify it.
+- [ ] **K4. Replace `MIN_PACKED_QO = 48` with a FITTED dispatch rule for the VERIFY band** on
       `(packed_qo, kv_len)` -- a linear threshold or small learned model, trained on measured
       per-tile times for FA3-at-64 vs FA2-at-{16,32,48,64}. Machinery already exists: the
       measured boundary grid `tasks/fused_specdec_workload/boundary_28x4x128.json` (25 points)

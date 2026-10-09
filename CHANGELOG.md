@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.36.0 — persistent.cuh compiles against flashinfer 0.7 (2026-10-09)
+
+`NVCC_PARSE_OK` from `port07/tests/nvcc_check.sh` (merged 0.7 + overlay include tree, sm_90a,
+C++20). First file of the fused-kernel port to build against the current stack.
+
+- Error progression 7 → 5 → 2 → 0, one commit per fix: barrier ids into their own header
+  (`34e5cf0`), `cluster_override`/`tid_base`/`kNoClusterOverride` hand-applied to `Run`
+  (`933a655`), K/V offset arrays separated (`0d34c00`), `KVStagedTraits` moved to namespace scope
+  (`2c79439`).
+- **Latent bug in our own code, surfaced by the port**: our KV-ring lambda prefetched offsets
+  once with K's strides and reused them for the V produce — correct only while V's strides equal
+  K's, and plausibly why 0.7 split the array into `_k`/`_v`. Now two prefetches. Correctness fix,
+  not a rename.
+- **Second structural corruption from fuzzy patching**: macros and `KVStagedTraits` had been
+  placed inside a struct template where C++ forbids template declarations. Both corruptions were
+  invisible to symbol greps and found only by compiling; remaining files are hand-ported.
+- Also host-verified this session: `FusedPlanInfo` round-trip (58 entries), work-item enumeration
+  (task3=256, `max_splits_fa3=4`), merge layout (64 tiles / 32768 partial rows, CSR monotonic,
+  unsplit rows absent).
+- Still unported: `persistent_fa3_fused.cuh` (+948, the kernel), the two wgmma headers, and the
+  planner's CUDA body. Bar remains unmet — attention+epilogue caps at 29% of GPU time.
+
 ## v0.35.0 — B2b: the two-executor split is a dead end; batch-shape hypothesis retracted (2026-10-09)
 
 `sglang-up@91955d929`, `drv/split_perf_mtp.sh MRR=96 MC=64 RR=24 NP=240`, per-arm warmup, arm

@@ -742,7 +742,48 @@ Both remaining errors are now understood exactly, and neither needs a design dec
    is the second structural corruption fuzzy patching introduced (the first put `push_back`
    statements inside an error-message expression in `scheduler.cuh`).
 
-- [ ] **K1b2. Hand-port `persistent.cuh` onto pristine 0.7.** The five missing identifiers are
+- [x] **K1b2 DONE (2026-10-09): `persistent.cuh` COMPILES against 0.7.** `NVCC_PARSE_OK` from
+      `port07/tests/nvcc_check.sh` (merged 0.7 + overlay include tree, sm_90a, `-std=c++20`,
+      `--expt-relaxed-constexpr`). Error progression, one commit per fix:
+      **7 -> 5 -> 2 -> 0**.
+
+      | fix | commit | errors after |
+      |---|---|---|
+      | barrier ids carved into `fused_barriers.cuh` (avoids overlaying 0.7's 4871-line `prefill.cuh`) | `flashinfer@34e5cf0` | 5 |
+      | `kNoClusterOverride` + `cluster_override` / `tid_base` parameters hand-applied to `Run` | `flashinfer@933a655` | 2 |
+      | K/V offset arrays separated, each prefetched with its own strides | `flashinfer@0d34c00` | 1 |
+      | `KVStagedTraits` + macros moved to namespace scope | `flashinfer@2c79439` | **0** |
+
+      **A latent bug in OUR code, surfaced by the port.** 0.7 split `thr_local_kv_offset` into
+      `_k` and `_v`. Porting our KV-ring lambda onto that showed it called `prefetch_offest`
+      **once with K's strides** (`k_stride_page/h/n`) and reused the result for the **V**
+      `page_produce_kv`. That is only correct while V's strides equal K's -- and is plausibly why
+      0.7 split the arrays. Fixed by issuing two prefetches. This changes what addresses the V
+      loads read whenever the strides differ, so it is a correctness fix, not a rename.
+
+      **Second structural corruption from fuzzy patching.** The `FLASHINFER_FA2_KV_STAGES_*`
+      macros and `KVStagedTraits` had been placed **inside** the following struct template, where
+      C++ forbids template declarations. nvcc said only *"a template declaration is not allowed
+      here"*, naming neither the template nor the enclosing scope. With the `push_back`
+      statements it put inside an error-message expression in `scheduler.cuh`, that is two
+      corruptions, **both invisible to symbol greps and findable only by compiling**. The
+      remaining files are hand-ported.
+
+**Port state after K1b2:**
+
+| file | status |
+|---|---|
+| `attention/fused_plan.cuh` | ported; host-compiled; round-trip + enumeration + merge-layout tests PASS |
+| `attention/fused_barriers.cuh` | added (barrier ids, avoids overlaying `prefill.cuh`) |
+| `attention/persistent.cuh` | **ported and NVCC_PARSE_OK** |
+| `attention/scheduler.cuh` | not overlaid, by design -- 0.7's used unmodified |
+| `attention/jit_merge.cuh` | dropped (K1a: 0.6% ceiling) |
+| planner CUDA body | host halves done and tested; CUDA side unwritten |
+| `attention/persistent_fa3_fused.cuh` | **+948, unported** -- the kernel itself |
+| `attention/persistent_wgmma.cuh`, `unified_wgmma_scheduler.cuh` | +70 / +281, unported |
+
+- [ ] **K1d. Port `persistent_fa3_fused.cuh` (+948) and the two wgmma headers** onto the
+      compiling base, hand-applied, re-running `nvcc_check.sh` after each hunk. The five missing identifiers are
       now fully diagnosed, and the diagnosis is better news than the error list suggested:
       **four of the five are OUR OWN symbols**, not things 0.7 removed. Nothing needs a 0.7
       equivalent invented; the definitions simply have to be carried over, which the fuzzy apply

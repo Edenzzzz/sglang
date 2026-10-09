@@ -299,6 +299,7 @@ FUSED_SPLIT_TOL = float(os.environ.get("SGLANG_FUSED_SPLIT_TOL", "0.02"))
 # the split builds, so the fault is attributed to the plan or the dispatch with real values
 # instead of being inferred from a traceback that names an unrelated later CUDA call.
 FUSED_SPLIT_DEBUG = os.environ.get("SGLANG_FUSED_SPLIT_DEBUG", "0") == "1"
+_FS_NP = {torch.int32: "int32", torch.int64: "int64"}
 # One-bit bisect for the post-forward index assert. The dispatch does exactly two new things:
 # an FA3 call, and planning+running an EXTRA flashinfer wrapper mid-step. With this set, the
 # FA2 rows are computed from the batch-wide reference wrapper and scattered instead, so the
@@ -336,6 +337,14 @@ class FlashInferAttnBackend(AttentionBackend):
         # Counters initialised here, not lazily via getattr: the verify block reads
         # fused_split_calls, so a lazy counter made the FIRST successful dispatch raise
         # AttributeError after both executors and the scatter had already run.
+        # Grow-on-demand buffer pool for the split's per-step index arrays. Upstream
+        # preallocates its own indptr/indices buffers for two reasons this path needs as well:
+        # a captured CUDA graph holds absolute addresses, so per-step allocations interleaved
+        # with replays can collide with graph-visible memory; and the allocation plus H2D work
+        # sits on the critical path once per step, which is a prime suspect for the measured
+        # 6.8% serving regression. Buffers only ever grow, so the steady state allocates nothing.
+        self._fs_dev: dict = {}
+        self._fs_host: dict = {}
         self.fused_split_calls = 0
         self.fused_split_onesided = 0
         self.fused_split_plans = 0
@@ -1414,6 +1423,41 @@ class FlashInferAttnBackend(AttentionBackend):
     def get_cuda_graph_seq_len_fill_value(self):
         return 1
 
+    def _fs_dev_buf(self, name, n, dtype, device):
+        """A length-n view of a persistent device buffer, grown only when outgrown."""
+        b = self._fs_dev.get(name)
+        if b is None or b.numel() < n or b.dtype != dtype or b.device != device:
+            b = torch.empty(max(n, 1024), dtype=dtype, device=device)
+            self._fs_dev[name] = b
+        return b[:n]
+
+    def _fs_host_buf(self, name, n, dtype):
+        """A length-n view of a persistent PINNED host buffer.
+
+        Pinned and persistent together are what make the H2D copy safe to issue without a
+        synchronise: the source outlives the copy because the pool owns it, unlike the
+        per-step temporaries this replaced.
+        """
+        b = self._fs_host.get(name)
+        if b is None or b.numel() < n or b.dtype != dtype:
+            try:
+                b = torch.empty(max(n, 1024), dtype=dtype, pin_memory=True)
+            except RuntimeError:
+                # Pinning can fail (no CUDA host allocator); fall back to pageable, which is
+                # still persistent and still correct, just slower to copy.
+                b = torch.empty(max(n, 1024), dtype=dtype)
+            self._fs_host[name] = b
+        return b[:n]
+
+    def _fs_upload(self, name, arr, dtype, device):
+        """Stage a numpy array through the pinned host buffer into the device buffer."""
+        n = int(arr.shape[0])
+        h = self._fs_host_buf(name, n, dtype)
+        h.copy_(torch.from_numpy(arr.astype(_FS_NP[dtype], copy=False)))
+        d = self._fs_dev_buf(name, n, dtype, device)
+        d.copy_(h, non_blocking=True)
+        return d
+
     def _fused_split_debug_check(self, where: str) -> None:
         """Synchronise, then report every split index tensor's actual device-side range.
 
@@ -1554,15 +1598,14 @@ class FlashInferAttnBackend(AttentionBackend):
         # on, the split ran 4501 times clean; with it off, it asserted after one call.
         # These are a few KB at most, so the sync costs nothing worth reclaiming. Making them
         # non-blocking again requires pinned staging buffers the plan owns across the step.
-        def tok_idx(rows):
-            return torch.from_numpy(
-                np.concatenate([np.arange(tok_off[r], tok_off[r + 1]) for r in rows])
-            ).to(dev)
+        def tok_idx(name, rows):
+            a = np.concatenate([np.arange(tok_off[r], tok_off[r + 1]) for r in rows])
+            return self._fs_upload(name, a, torch.int64, dev)
 
-        def indptr(vals):
-            out = torch.zeros(len(vals) + 1, dtype=torch.int32)
-            out[1:] = torch.from_numpy(np.cumsum(vals).astype(np.int32))
-            return out.to(dev)
+        def indptr(name, vals):
+            a = np.zeros(len(vals) + 1, dtype=np.int32)
+            np.cumsum(vals, out=a[1:])
+            return self._fs_upload(name, a, torch.int32, dev)
 
         # Bounds checks at the point of construction. Every index this plan builds is consumed
         # by a torch indexing op (`qv[tok]`, `index_copy_`, `r2t[rows]`), and an out-of-range
@@ -1604,18 +1647,42 @@ class FlashInferAttnBackend(AttentionBackend):
         # FA3 side. page_table is indexed by REQ POOL index, not batch row: req_to_token is a
         # pool-sized table (upstream does the same at flashattention_backend.py:1028).
         max_k = int(seq_lens_cpu[fa3_rows].max())
-        fa3_t = torch.as_tensor(
-            [rp_cpu[r] for r in fa3_rows], dtype=torch.int64, device=dev
+        # Row ids staged through the pool; indexed by REQ POOL index, not batch row.
+        fa3_t = self._fs_upload(
+            "fa3_rows",
+            np.asarray([rp_cpu[r] for r in fa3_rows], dtype=np.int64),
+            torch.int64,
+            dev,
         )
-        page_table = r2t[fa3_t, :max_k]
+        # Gather into a PERSISTENT buffer: `r2t[rows, :max_k]` allocated a fresh tensor on every
+        # step, and index_select with out= reuses one.
+        _cols = int(r2t.shape[1])
+        _pt = self._fs_dev_buf(
+            "page_table", len(fa3_rows) * _cols, r2t.dtype, dev
+        ).view(len(fa3_rows), _cols)
+        torch.index_select(r2t, 0, fa3_t, out=_pt)
+        page_table = _pt[:, :max_k]
         if self.page_size > 1:
             page_table = page_table // self.page_size
         # FA2 side, planned through flashinfer's public API with explicit indptr/indices, so no
         # second KVLocPlan is needed and the arrays come from the same req_to_token.
         n2 = len(fa2_rows)
-        kv2_indices = torch.cat(
-            [r2t[rp_cpu[r], : int(seq_lens_cpu[r])] for r in fa2_rows]
+        # One flat gather instead of a Python loop of device slices plus a cat: that loop ran
+        # once per FA2 row every step and allocated a tensor per row plus the concatenation.
+        _kvl = seq_lens_cpu[fa2_rows].numpy().astype(np.int64)
+        _flat = (
+            np.concatenate(
+                [
+                    np.arange(rp_cpu[r] * _cols, rp_cpu[r] * _cols + int(k))
+                    for r, k in zip(fa2_rows, _kvl)
+                ]
+            )
+            if n2
+            else np.zeros(0, dtype=np.int64)
         )
+        _flat_t = self._fs_upload("fa2_flat", _flat, torch.int64, dev)
+        kv2_indices = self._fs_dev_buf("fa2_kv_idx", int(_flat.shape[0]), r2t.dtype, dev)
+        torch.index_select(r2t.view(-1), 0, _flat_t, out=kv2_indices)
         if self.fused_fa2_wrapper is None:
             # DEDICATED workspace, never self.workspace_buffer. A flashinfer wrapper writes its
             # scheduler metadata into the workspace it was given, so planning this extra wrapper
@@ -1651,14 +1718,17 @@ class FlashInferAttnBackend(AttentionBackend):
             # Bisect mode: no extra wrapper. Record what the dispatch needs and stop here.
             self.fused_split_plan = dict(
                 tok_total=_tok_total,
-                fa3_tok=tok_idx(fa3_rows),
-                fa2_tok=tok_idx(fa2_rows),
-                cu_q=indptr(qo_lens[fa3_rows]),
+                fa3_tok=tok_idx("fa3_tok", fa3_rows),
+                fa2_tok=tok_idx("fa2_tok", fa2_rows),
+                cu_q=indptr("fa3_cu_q", qo_lens[fa3_rows]),
                 max_q=int(qo_lens[fa3_rows].max()),
                 page_table=page_table,
-                cache_seqlens=forward_batch.seq_lens[
-                    torch.as_tensor(fa3_rows, dtype=torch.int64, device=dev)
-                ].to(torch.int32),
+                cache_seqlens=self._fs_upload(
+                    "fa3_kvlen",
+                    seq_lens_cpu[fa3_rows].numpy().astype(np.int32),
+                    torch.int32,
+                    dev,
+                ),
                 n_fa3=len(fa3_rows),
                 n_fa2=n2,
                 no_fa2_wrapper=True,
@@ -1667,8 +1737,8 @@ class FlashInferAttnBackend(AttentionBackend):
                 self._fused_split_debug_check("plan")
             return True
 
-        fa2_qo_indptr = indptr(qo_lens[fa2_rows])
-        fa2_kv_indptr = indptr(seq_lens_cpu[fa2_rows].numpy())
+        fa2_qo_indptr = indptr("fa2_qo", qo_lens[fa2_rows])
+        fa2_kv_indptr = indptr("fa2_kv", seq_lens_cpu[fa2_rows].numpy())
         fa2_last_page = self.kv_last_page_len[:n2]
         self.fused_fa2_wrapper.begin_forward(
             fa2_qo_indptr,
@@ -1687,14 +1757,17 @@ class FlashInferAttnBackend(AttentionBackend):
             # Retained so the planned FA2 wrapper's arrays outlive this call; see above.
             _keep=(fa2_qo_indptr, fa2_kv_indptr, kv2_indices, fa2_last_page),
             tok_total=_tok_total,
-            fa3_tok=tok_idx(fa3_rows),
-            fa2_tok=tok_idx(fa2_rows),
-            cu_q=indptr(qo_lens[fa3_rows]),
+            fa3_tok=tok_idx("fa3_tok", fa3_rows),
+            fa2_tok=tok_idx("fa2_tok", fa2_rows),
+            cu_q=indptr("fa3_cu_q", qo_lens[fa3_rows]),
             max_q=int(qo_lens[fa3_rows].max()),
             page_table=page_table,
-            cache_seqlens=forward_batch.seq_lens[
-                torch.as_tensor(fa3_rows, dtype=torch.int64, device=dev)
-            ].to(torch.int32),
+            cache_seqlens=self._fs_upload(
+                "fa3_kvlen",
+                seq_lens_cpu[fa3_rows].numpy().astype(np.int32),
+                torch.int32,
+                dev,
+            ),
             n_fa3=len(fa3_rows),
             n_fa2=n2,
         )

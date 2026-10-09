@@ -1594,11 +1594,32 @@ Both remaining errors are now understood exactly, and neither needs a design dec
 
       That reframes it: the compute is upstream's, so the fault is more likely something *we hand
       it* that it reads differently -- a trait or layout constant consumed by the MMA rather than
-      by the loads, invisible to both address checks. **Compare between trees, do not guess:**
-      the `TiledMma` definitions, `NUM_MMA_THREADS` / warpgroup counts, and the
-      `AttentionUpdater`'s softmax scale -- `StandardAttentionSm90` was **renamed during the
-      co-inclusion work**, and a wrong variant computes with the wrong `sm_scale` while every
-      address stays right.
+      by the loads, invisible to both address checks.
+
+      **Compared (2026-10-10): `TiledMmaQK` / `TiledMmaPV` / `NUM_MMA_THREADS` / warp counts are
+      BYTE-IDENTICAL between trees** (empty diff), as is `SmemLayoutQ`. **The structural
+      elimination set is now complete:**
+
+      | checked | verdict |
+      |---|---|
+      | plan, scheduler, mainloop iteration count, split/merge | eliminated **by measurement** |
+      | packed-GQA store **and** load, addresses **and** values | eliminated **by measurement** |
+      | `sQ` smem layout | identical between trees |
+      | `TiledMma*`, `NUM_MMA_THREADS`, warp counts | identical between trees |
+      | four probe-artifact hypotheses | retracted once multiplicity was checked |
+
+      Everything structural is either verified correct on device or byte-identical to the tree
+      where this kernel worked -- and the output is still wrong. That leaves a narrow class: **a
+      value handed to the compute, not a structure.** The only such values flow through
+      `params.additional_params` and are read **only inside the variant**:
+      `sm_scale` (the variant computes `sm_scale_log2 = additional_params.sm_scale * log2e`) and
+      `v_scale` (via `get_v_scale(additional_params, kv_head_idx)`).
+
+      **Neither appears in any address, so every check so far is blind to them.** The ext sets
+      `P.sm_scale`/`P.v_scale` for the FA2 runners explicitly; whether it sets
+      `fa3.additional_params.sm_scale` at all has **not** been checked. Reached by exhaustion
+      rather than by picking a suspect. Check by printing the variant's `sm_scale_log2` from the
+      device against the host's `1/sqrt(128) = 0.0883883`.
 
       **(Superseded:)** with sources, destinations and layout all verified, stored values
       still show elements 0, 2, 3 identical within a row; the residual is a deterministic

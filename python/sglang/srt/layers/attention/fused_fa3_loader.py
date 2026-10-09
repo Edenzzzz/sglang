@@ -131,6 +131,17 @@ def load_fused_fa3(verbose: bool = False) -> None:
             f"{data}/cccl/libcudacxx/include",
             f"{data}/cccl/cub",
         ]
+        # The SOURCE tree is appended, never prepended. `fused_fa3_persistent_ext.cu` includes
+        # `flashinfer/attention/persistent_fa3_fused.cuh`, which is this project's OWN header and
+        # exists only in the source tree -- so the source tree must be on the path. But it also
+        # carries flashinfer 0.3.1's `scheduler.cuh`/`persistent.cuh`, and if those resolve first
+        # the plan layout reverts to 56/68 entries and the kernel rejects the running
+        # flashinfer's 28-entry plan again. Wheel first, source tree last: flashinfer's own types
+        # come from 0.7, the project's additions are still found.
+        includes += [
+            f"{root}/include",
+            f"{root}/csrc",
+        ]
         includes = [p for p in includes if os.path.isdir(p)]
     else:
         logger.warning(

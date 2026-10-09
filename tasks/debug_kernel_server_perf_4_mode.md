@@ -1326,6 +1326,36 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       | fused FA3 | FAIL rel 11.07, 128/128 unsplit -- deterministic, **our** bug |
       | stall | FIXED, verified 5/5 |
 
+      **[x] OURS vs THE ORACLE (2026-10-10): only 32 of 128 output rows are WRITTEN.**
+
+      ```
+      OURS vs STOCK: ours absmax=0.347656  stock absmax=0.367188  both (128, 28, 128)
+        rel(ours, stock) = 2.50669
+        ours: 32/128 rows non-zero
+      ```
+
+      1. absmax **0.347656 vs 0.367188** -- the written values are the **right magnitude**. Not a
+         scaling bug, not an uninitialised accumulator, not zeros. Retires every magnitude-based
+         reading this item entertained.
+      2. **Only 32 of 128 rows are written at all**, and 32 is exactly one q tile's token span
+         (`128 packed / G=4`). The fixture has 4 tiles x 7 kv heads = 28 items over 512 packed
+         rows = 128 tokens, so all 128 should be written.
+
+      **All four tiles' stores land within one tile's worth of tokens.** Consistent with every
+      earlier measurement rather than contradicting any: `[wpk]` showed `tile_base =
+      0/128/256/384` and `tok = 0/32/64/96`, correct **per item**, and the gather covers all 128
+      packed rows per tile. Correct per-item addresses **plus** 1-of-4 total coverage means the
+      items **overwrite each other** -- which a single-item address check cannot see, and mine
+      never could.
+
+      First quantitative statement of **what is missing** rather than what is eliminated, and it
+      came from the oracle rather than my arithmetic. **32/128 is a number a fix has to move.**
+
+      **Next, narrow:** collect the set of distinct output tokens written across **all** items,
+      expected `{0,32,64,96}` + 31 each. Every item reporting a token in `[0,32)` => the tile
+      offset is lost between scheduler and store; right tokens but 32 rows non-zero => writes are
+      masked or discarded after the address is computed.
+
 - [~] **K1n-null (superseded). SUSPECT -- the stock-FA3 result is contradicted.** In one run: `STOCK FA3 vs reference: rel=0.001779 PASS`, yet an element print of
       the *same* `o_stock` reads `+0.000000` for all 12 sampled `(token, head)` pairs -- on both
       sides. Those cannot both hold: `rel=0.001779` requires `o_stock` close to a non-zero

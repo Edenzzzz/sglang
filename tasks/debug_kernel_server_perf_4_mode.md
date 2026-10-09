@@ -1109,6 +1109,72 @@ The six incompatibilities hit in sequence are all symptoms of that one gap:
 - [x] 2026-10-09 **increment 2a: BLOCKED, root-caused.** Harness ported through five
       incompatibilities (`drv/patch_harness.py`, `drv/run_verify.sh`); the sixth is a hard
       version gap. 32/32 cases error on the plan-length guard.
+### 2026-10-09 -- the live hypothesis for the regression: BATCH SHAPE, not overhead
+
+The user's objection -- a -5..-8% regression is impossible if FA3 beats baseline on the prefill
+rows and our FA2 *is* the baseline kernel on the decode rows, with no tile waste -- is correct,
+and it forced the right comparison:
+
+| | FA3 rows | FA2 rows | result |
+|---|---|---|---|
+| isolated harness (`split_margin.py`) | 1 | **40** | **1.224x** |
+| real 4-mode server, MC=56 | 1 | **7** | **-8.4% tok/s** |
+
+**The 1.22x was measured at a batch shape the server never produces.** At 7 verify rows the FA2
+half is 7x4 = 28 tokens -- a launch that is almost entirely fixed cost -- plus two `index_copy_`
+scatters, against the baseline's single kernel over all 8 rows. No tile waste is involved; the
+split's *fixed* costs simply exceed the FA3 win at that shape. This is a methodology error on my
+part: I validated the kernel at a shape I chose rather than the shape the 4-mode schedule emits,
+then spent two measurement cycles attributing the gap to per-step overhead (preallocation, then
+the redundant full-batch plan) without first checking shape agreement, which was cheaper than
+either.
+
+Supporting measurements, warmed and order-reversed, `base` last, graphs off, `sglang-up@cff63ef7e`:
+
+| arm | tok/s | Mean ITL | notes |
+|---|---|---|---|
+| base | **13216.1** | **17.37** | split off |
+| guard_on | 12111.7 | 18.92 | -8.4% |
+| skipplan | 12105.8 | 18.94 | **uninterpretable, see below** |
+| noguard_m0 | 12089.3 | 18.96 | -8.5% |
+
+* **`skipplan` is uninterpretable, not a null result.** `base_plan_skipped=n/a`: the driver greps
+  the server log for a counter line the code never emitted, so the arm cannot be distinguished
+  from the knob never firing. Same "assert the gate exercised the path" failure as
+  [[gate-needs-noise-floor-and-reference]], repeated on a *perf* knob after being fixed for
+  correctness gates. Log line added (`sglang-up@HEAD`).
+* The redundant full-batch plan is still a genuine waste worth removing -- the split planned TWO
+  flashinfer wrappers per step where the baseline plans one -- but its effect has not been
+  measured.
+
+- [ ] 2026-10-09 **re-run the A/B at high concurrency (`MRR=160 MC=144 RR=36 NP=600`)** to test
+      whether the split wins once the batch supplies ~40 verify rows. Launched, then **lost when
+      the pod expired mid-run**; the driver is now parameterised (`MRR/MC/RR/NP`) and reports
+      `last_fa2_rows` so the shape is recorded beside the timings rather than inferred.
+- [ ] 2026-10-09 **if the split needs a decode-rich batch, that is a SCHEDULING result, not a
+      kernel one** -- it would mean the kernel's benefit is contingent on admission policy
+      (how many spec rows are co-resident), which is the EDF/admission lever, and it should be
+      stated that way rather than as a kernel speedup.
+
+### 2026-10-09 -- pod expired; trial re-forked
+
+Trial `6ca732428908993c` reached `done` mid-run, taking the high-concurrency A/B and all of
+`/dev/shm/w` (tmpfs) with it. `{"error": "EOF"}` from `execute-script` is identical for an
+expired trial and a network fault, so `probe_trial()` was checked first per the note in `px.py`.
+
+Re-forked to **`f929493da6e45f10`**, named `vibecuda`, per the goal and the standing
+`re-fork H200 OK (1 GPU)` authorization. Operational note for the restore recipe:
+
+```
+merlin-cli --control-plane i18n-bd job-v2 runs fork \
+  --json '{"source_sid":"<src>","name":"vibecuda","overrides":{"attachments":[]}}'
+```
+
+`overrides.attachments: []` is **required** -- without it the fork fails with
+`field "attachments" must be array`, because the source config's value does not round-trip
+through `job-runs/create`. Strip proxy vars first (`http_proxy`/`https_proxy` and the uppercase
+pair) or merlin-cli fails with a bare EOF.
+
 ### 2026-10-09 -- retargeting the build at 0.7 headers FAILS; the port is genuine C++ work
 
 I tried the cheap remedy first: compile the kernel against the installed wheel's bundled headers

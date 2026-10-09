@@ -536,6 +536,58 @@ so **derive lengths from `ToVector()`, never from the `NUM_*_ARGS` constants**.)
 - [ ] **K1d. Re-establish the fp32-reference PASS and a real timing on 0.7** before any of A/B is
       measured. The 1.30x figure is 0.3.1-only and must not be carried forward.
 
+#### K1 SCOPE MEASURED (2026-10-09): ~3900 header lines, and scheduler.cuh is the hard part
+
+Measured against the pristine base `c51aef7` (flashinfer **0.3.1**, the commit before our fused
+work began), local checkout `/opt/tiger/flashinfer` at `b0563ae`:
+
+| header | lines changed | nature |
+|---|---|---|
+| `attention/persistent_fa3_fused.cuh` | **+948** | new -- the fused kernel itself |
+| `attention/scheduler.cuh` | **+439** | **modified -- and 0.7 redesigned this file** |
+| `attention/persistent.cuh` | **+357** | modified (FUSED_GRID, `cluster_tile_q`, mask mode) |
+| `attention/unified_wgmma_scheduler.cuh` | +281 | new |
+| `attention/jit_merge.cuh` | +77 | new |
+| `attention/persistent_wgmma.cuh` | +70 | new |
+| `attention/prefill.cuh` | +65 | modified |
+| `attention/hopper/variants.cuh` | +10 | modified |
+| `attention/persistent_template.cuh` | +7 | modified |
+| **total, headers only** | **3885 insertions / 124 deletions across 18 files** | |
+
+Plus ~3700 lines of tests/harness, which do not need porting.
+
+**Checked, and it corrects nothing -- the earlier finding stands.** The group tables
+(`group_id_offset`, `group_nchunks_offset`, `group_row_begin_offset`, `group_nrows_offset`) are
+present **20 times in the pristine 0.3.1 base and 20 times at HEAD** -- i.e. they were
+**upstream's**, not ours, so 0.7 genuinely removed them and the JIT-reduction machinery was
+flashinfer's own. Our +439 lines in `scheduler.cuh` are separate work (the unified-wgmma plan
+and 4-task support).
+
+**Honest scope statement.** K1 is a **~3900-line header port onto a base whose central plan
+struct was redesigned**, with `scheduler.cuh` the hard part: our 439 lines modify the very file
+0.7 rewrote, and `HolisticPlanInfo` went from 3-4 tasks with group tables to 2 tasks with
+`partial_indptr` + `merge_indptr`/`merge_o_indices`. This is **multi-session C++ work**, not an
+afternoon's wiring, and I should not have implied otherwise when K1 was first scoped as "resolve
+renames and a header collision".
+
+**What K1a already removed from that total:** the JIT-reduction path (`jit_merge.cuh` +77, the
+group-table plumbing inside `persistent_fa3_fused.cuh`, and the matching part of the
+`scheduler.cuh` delta) is **dropped**, since its measured ceiling is 0.6% of GPU time. So the
+port targets 0.7's scheduled merge and the group tables are not reconstructed at all.
+
+**Order of work for K1, revised:**
+
+- [ ] **K1-0. Push the fused sources to the pod** -- the restore script omitted the `fi` tree, so
+      the build inputs are absent. Only our files are needed (~88 KB for the ext plus the fused
+      header), since everything else compiles against the 0.7 wheel's bundled headers.
+- [ ] **K1b. Rebase `persistent.cuh` (+357) and `prefill.cuh` (+65) onto 0.7's copies.** Mostly
+      mechanical: FUSED_GRID, the `cluster_tile_q` guard, the mask-mode fix.
+- [ ] **K1c. Re-apply `scheduler.cuh` (+439) onto 0.7's redesigned plan** -- 2 tasks instead of
+      3/4, `partial_indptr` instead of group tables. The real work.
+- [ ] **K1d. Port `persistent_fa3_fused.cuh` (+948)** to the 2-task layout and the scheduled
+      merge, dropping the rendezvous.
+- [ ] **K1e. Re-establish the fp32-reference PASS and a timing on 0.7** before any A/B.
+
 #### A. Ultra fine-grained tile dispatcher for the different modes
 
 The four populations in a 4-mode step sit at different tile sizes, and the contested band is

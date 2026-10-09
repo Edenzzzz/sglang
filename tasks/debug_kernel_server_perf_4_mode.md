@@ -1372,6 +1372,16 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       `tile_size`, **none of which I have printed**. Print all three from inside `write_packed`,
       with the expected per-thread iteration count stated first.
 
+      **Stride probe produced NO output (2026-10-10) -- not interpretable.** A probe inside
+      `write_packed` printing `thread_idx` / `num_threads` / `tile_size` / iteration count gave
+      **zero** lines, while `[wpk]` fires from the same function on a **narrower** gate
+      (`thread_idx == 0` vs `threadIdx.x % 32 == 0`). So either the header change did not reach
+      the compiled module, or `write_packed` is reached by threads for which neither gate is what
+      I assume. Both have bitten this item already (the `cpp_extension` cache question; the
+      per-warp-vs-per-block gate confusion), and separating them needs a **null case at that
+      site** -- the discipline set after the `lane == 0` retraction, which I did not apply here.
+      **No conclusion drawn**; 32-of-128 coverage stays unexplained.
+
       **Seventh refuted hypothesis here.** The six before were refuted by measurement; this one by
       reading the function I had already claimed about -- worse, and cheaper to have avoided.
 

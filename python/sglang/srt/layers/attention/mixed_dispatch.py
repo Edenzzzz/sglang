@@ -392,3 +392,93 @@ def fa3_subset_varlen(qo_lens, kv_lens, rows):
         np.cumsum(sel, out=cu[1:], dtype=np.int32)
     seqused = (kv[rows] if rows else np.zeros(0, dtype=np.int64)).astype(np.int32)
     return cu, seqused, int(cu[-1])
+
+# ---------------------------------------------------------------------------
+# B1d: time-independent tile-waste accounting.
+#
+# Grid-level occupancy (`grid < SM count`) cannot see the waste item A targets: a 48-row work
+# item inside a 128-wide WGMMA tile keeps every SM busy while leaving 63% of each tile idle. That
+# waste is a property of the SHAPES, not of the schedule, so it is computable on the host from
+# the same arrays the dispatcher already has -- no profiler, no timing.
+#
+# For one row the engine covers ceil(packed_qo/TILE_Q)*TILE_Q query rows by
+# ceil(kv/TILE_KV)*TILE_KV keys, while only packed_qo x kv is useful work. Accumulating both
+# gives a FLOP-weighted waste fraction, which is the figure that says whether finer tiles are
+# worth instantiating.
+TILE_STATS = os.environ.get("SGLANG_FUSED_TILE_STATS", "0") == "1"
+_PQ_BUCKETS = (16, 32, 48, 64, 128, 256, 512)
+_stats = {
+    "plans": 0,
+    "rows": 0,
+    "useful": 0,      # sum packed_qo * kv
+    "covered": 0,     # sum q_tiles*TILE_Q * kv_tiles*TILE_KV
+    "by_bucket": {},  # bucket -> [rows, useful, covered]
+}
+
+
+def _bucket(pq):
+    for b in _PQ_BUCKETS:
+        if pq <= b:
+            return b
+    return -1  # 512+
+
+
+def tile_waste_accumulate(qo_lens, kv_lens, gqa_ratio, mask=None):
+    """Accumulate FLOP-weighted tile coverage vs useful work, bucketed by packed_qo."""
+    if not TILE_STATS:
+        return
+    qo, kv = _as_i64(qo_lens), _as_i64(kv_lens)
+    pq = qo * gqa_ratio
+    kvt = (np.maximum(kv, 1) + (TILE_KV - 1)) >> KV_SHIFT
+    useful = pq * np.maximum(kv, 1)
+    # Each row is charged its ACTUAL tile width, not TILE_Q uniformly. FA3 has one fixed
+    # 128-wide WGMMA tile; the persistent/FA2 side already has three classes -- tile128 for
+    # packed_qo > 64, tile64, and tile16 -- so charging a packed-16 verify row 128 rows of
+    # coverage overstates its waste by 8x and would invent headroom that does not exist.
+    if mask is None:
+        width = np.where(pq > 64, TILE_Q, np.where(pq > 16, 64, 16))
+    else:
+        m = np.asarray(mask, dtype=bool)
+        fa2_width = np.where(pq > 64, TILE_Q, np.where(pq > 16, 64, 16))
+        width = np.where(m, TILE_Q, fa2_width)   # FA3 rows always pay the full 128
+    qrows = ((pq + width - 1) // width) * width
+    covered = qrows * (kvt * TILE_KV)
+    _stats["plans"] += 1
+    _stats["rows"] += int(len(qo))
+    _stats["useful"] += int(useful.sum())
+    _stats["covered"] += int(covered.sum())
+    for i in range(len(qo)):
+        b = _bucket(int(pq[i]))
+        e = _stats["by_bucket"].setdefault(b, [0, 0, 0])
+        e[0] += 1
+        e[1] += int(useful[i])
+        e[2] += int(covered[i])
+
+
+def tile_waste_report():
+    """One-line-per-bucket summary; returns '' when nothing was accumulated."""
+    if not TILE_STATS or not _stats["rows"]:
+        return ""
+    out = [
+        "TILE_WASTE plans=%d rows=%d useful=%.3e covered=%.3e waste=%.1f%%"
+        % (
+            _stats["plans"],
+            _stats["rows"],
+            float(_stats["useful"]),
+            float(_stats["covered"]),
+            100.0 * (1.0 - _stats["useful"] / max(_stats["covered"], 1)),
+        )
+    ]
+    for b in sorted(_stats["by_bucket"], key=lambda x: (x < 0, x)):
+        rows, u, c = _stats["by_bucket"][b]
+        label = "512+" if b < 0 else "<=%d" % b
+        out.append(
+            "  packed_qo %-6s rows=%-7d useful_share=%5.1f%% waste_in_bucket=%5.1f%%"
+            % (
+                label,
+                rows,
+                100.0 * u / max(_stats["useful"], 1),
+                100.0 * (1.0 - u / max(c, 1)),
+            )
+        )
+    return "\n".join(out)

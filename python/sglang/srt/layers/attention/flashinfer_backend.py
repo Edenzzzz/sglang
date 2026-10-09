@@ -312,6 +312,7 @@ FUSED_SPLIT_NO_FA2_WRAPPER = os.environ.get("SGLANG_FUSED_SPLIT_NOFA2", "0") == 
 # each) against the baseline's one. Non-attention overhead of exactly this kind is the only way
 # both executors can be individually faster than baseline while the whole step is slower.
 FUSED_SPLIT_SKIP_BASE_PLAN = os.environ.get("SGLANG_FUSED_SKIP_BASE_PLAN", "0") == "1"
+TILE_STATS = os.environ.get("SGLANG_FUSED_TILE_STATS", "0") == "1"
 
 
 class FlashInferAttnBackend(AttentionBackend):
@@ -1108,6 +1109,23 @@ class FlashInferAttnBackend(AttentionBackend):
                         _m, _qt, _kvt = split_classes(
                             _qo, forward_batch.seq_lens_cpu.tolist(), _gqa
                         )
+                        # B1d: FLOP-weighted tile-coverage accounting, host-side and free.
+                        # Grid occupancy cannot see a 48-row item sitting in a 128-wide tile;
+                        # this can, because the waste is a property of the shapes.
+                        if TILE_STATS:
+                            from sglang.srt.layers.attention.mixed_dispatch import (
+                                tile_waste_accumulate,
+                                tile_waste_report,
+                            )
+
+                            tile_waste_accumulate(
+                                _qo, forward_batch.seq_lens_cpu.tolist(), _gqa, _m
+                            )
+                            self._tw_n = getattr(self, "_tw_n", 0) + 1
+                            if self._tw_n % 200 == 1:
+                                _r = tile_waste_report()
+                                if _r:
+                                    logger.info("%s", _r)
                         # Store the mask and the tile counts the launch budget is derived from.
                         self.fused_split_mask = (_m, _qt, _kvt)
                         # Build the index tensors and plan the FA2 wrapper once for the

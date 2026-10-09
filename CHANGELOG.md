@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.35.0 — B2b: the two-executor split is a dead end; batch-shape hypothesis retracted (2026-10-09)
+
+`sglang-up@91955d929`, `drv/split_perf_mtp.sh MRR=96 MC=64 RR=24 NP=240`, per-arm warmup, arm
+order reversed with `base` last, graphs off.
+
+- Best split arm **−9.1% tok/s** (13225.3 vs 14545.5), **+9.1% mean ITL**, **+8.0% mean TTFT**.
+  Accept length identical at 2.07 across arms.
+- **Batch-shape hypothesis RETRACTED**: this run has `fa2_rows=62`, *more* favourable than the
+  `fa2_rows=40` where the isolated 1.224× was measured, and the split is worse than it was at
+  `fa2_rows=7`. Shape is not the explanation.
+- **Scatters eliminated as an explanation**: `views=6001` (logged, not inferred) confirms the
+  scatter-free path fired on every dispatch, removing B2's measured 1.2%-of-kernel-time
+  `index_copy_` cost, with no improvement.
+- **`SGLANG_FUSED_SKIP_BASE_PLAN` is harmful** — that arm is worst (12169.8 tok/s, P99 TTFT
+  2040.8 ms). It leaves `forward_metadata` pointing at unplanned wrappers. Remove, don't tune.
+- Mechanism: flashinfer's single `BatchPrefillWithPagedKVCacheKernel` already schedules work
+  items across the whole varlen batch; splitting into two launches discards that global balancing
+  and adds a second tail. The isolated 1.224× was against a different baseline, so it never
+  transferred.
+- Consequence: the two-executor variant (the goal's "also acceptable" fallback) is measured as a
+  dead end at serving scale. Only a single-grid fused kernel keeps one launch and one scheduler
+  while specialising per row class — so the remaining kernel hope rests entirely on K1.
+
 ## v0.34.0 — B1b RETRACTS B1: the GPU is not underfilled at load (2026-10-09)
 
 Driver `drv/b1b_headroom.sh` (load ramped before the capture window so decode rows are resident),

@@ -417,6 +417,61 @@ fires so an A/B can confirm it rather than infer it.
 - [ ] **B2c. `tma_store_wait` cross-role backfill and multicast** -- still untested, and now
       bounded by the ~6% figure above, so expectations should be set accordingly.
 
+#### B2b RESULT (2026-10-09): **the batch-shape hypothesis is REFUTED.** The two-executor split loses at every shape
+
+`sglang-up@91955d929` (+ view-counter logging), driver `drv/split_perf_mtp.sh` with
+`MRR=96 MC=64 RR=24 NP=240`, per-arm warmup, arm order reversed with `base` LAST, graphs off.
+Raw: `/dev/shm/w/split_perf_mtp_results.txt`.
+
+| arm (exec order) | tok/s | Mean TTFT | P99 TTFT | Mean ITL | P99 ITL | views | fa2_rows |
+|---|---|---|---|---|---|---|---|
+| skipplan | 12169.84 | 245.74 | 2040.75 | 20.81 | 86.17 | 6001 | 62 |
+| noguard_m0 | 13225.27 | 164.52 | -- | 19.23 | -- | 6001 | 62 |
+| guard_on | 13192.77 | 160.64 | -- | 19.21 | -- | 5501 | 63 |
+| **base (split OFF)** | **14545.47** | **152.33** | -- | **17.63** | -- | -- | -- |
+
+Best split arm is **-9.1% tok/s**, **+9.1% mean ITL**, **+8.0% mean TTFT** against base.
+Accept length identical (2.07) in all arms, so the arms are comparable.
+
+**RETRACTION: the batch-shape hypothesis is refuted.** I argued that the split regressed because
+the server produced `fa2_rows=7` while the isolated 1.224x was measured at `fa2_rows=40`, and
+that a decode-rich batch would flip the sign. This run has **`fa2_rows=62`** -- *more* favourable
+than the harness shape -- and the split is **worse** (-9.1%) than at `fa2_rows=7` (-8.4%). Shape
+is not the explanation. Recorded in place; the hypothesis was reasonable and is wrong.
+
+**Also settled: the scatters were not the explanation either.** `views=6001` confirms the
+scatter-free path fired on every dispatch (the counter is logged, so this is measured, not
+inferred), removing the 1.2%-of-kernel-time `index_copy_` cost that B2 identified. The
+regression did not improve.
+
+**And `skip_base_plan` HURTS.** With `base_plan_skipped` confirmed firing, that arm is the worst
+of the four (12169.84 tok/s, P99 TTFT 2040.75 ms). Skipping the full-batch plan leaves
+`forward_metadata` pointing at wrappers that were never planned, so any layer where the dispatch
+declines falls back onto an unplanned wrapper. The knob should be removed, not tuned.
+
+**What is now established about the two-executor approach, after four independent attempts to
+rescue it:** per-step host cost (preallocation -- within noise), the redundant full-batch plan
+(skipping it is worse), the scatters (removed, no change), and batch shape (refuted). The
+structure itself is the problem.
+
+**The mechanism, and why it motivates K1 specifically.** flashinfer's single
+`BatchPrefillWithPagedKVCacheKernel` is already a persistent varlen kernel that schedules work
+items across the WHOLE batch internally. Splitting that batch into two launches throws away that
+global load balancing and adds a second kernel tail, and FA3's advantage on the one prefill row
+does not cover the loss. The isolated 1.224x was measured against a different baseline (one
+persistent wrapper on a synthetic batch), which is why it did not transfer.
+
+**This is the strongest argument yet for the fused single kernel:** only a single-grid design
+keeps **one launch and one scheduler** while still specialising the mainloop per row class. The
+two-executor variant -- the goal's "also acceptable" fallback -- is now measured as a dead end at
+serving scale, and the remaining kernel hope rests entirely on K1.
+
+- [x] **B2b DONE: split is -9.1% at the decode-rich shape with scatters removed.** Batch-shape
+      hypothesis retracted; scatters and plan-skipping eliminated as explanations.
+- [x] **`SGLANG_FUSED_SKIP_BASE_PLAN` is harmful** -- remove rather than tune.
+- [ ] **Remove the two-executor dispatch from the default path** once K1 lands, or keep it only
+      behind a flag as the measured-negative baseline it now is.
+
 #### K1 scoped from 0.7's headers (2026-10-09): the reduction was REDESIGNED, not relocated
 
 Read `flashinfer/data/include/flashinfer/attention/scheduler.cuh` on the installed 0.7 wheel.

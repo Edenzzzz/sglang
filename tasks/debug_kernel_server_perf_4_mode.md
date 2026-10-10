@@ -804,6 +804,38 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[x] AN INSTRUMENT THAT DOES NOT MASK THE DEFECT -- and the pipeline accounting is BALANCED
+(2026-10-10).**
+
+`PIPE_COUNT=1` counts, per work item and in REGISTERS, the tiles the producer intended to load and
+the tiles the consumer actually consumed, printing once per block AFTER the loop. Placement is the
+entire point: counting happens during the race, reporting after it.
+
+| | |
+|---|---|
+| verdict on the instrumented run | **128/384 bad rows -- STILL FAILS** |
+| producer vs consumer, per block | **132/132 blocks, 0 mismatches** |
+| null arm `PIPE_COUNT=0` | 1 line (verdict only), no `[pipe]` output -- inert when off |
+
+1. **This is the first instrument that preserves the defect.** Every previous one destroyed it:
+   printf probe (76/384 -> 0/384), racecheck (false positives on stock's correct kernel), memcheck
+   (0 errors AND 0/384), ncu (profiled the fp32 reference's kernels instead). K1 finally has a
+   usable observation tool.
+2. **Loads == consumes on every block**, so the imbalance hypothesis dies by MEASUREMENT as well as
+   by the source audit. Counts are right, stage indices are right, cp.async coverage is right --
+   and CTAs still read another request's K/V.
+
+**That reframes the question.** If the synchronisation is correct, the producer may be loading the
+WRONG PAGES: a *data* error in the gather addressing, which would equally yield "another request's
+K/V" and would equally be invisible under `KVPERREQ`. The fork between that and a race is
+**DETERMINISM**, which has never been tested cleanly -- the cross-build comparisons (seed 1 -> 100
+in one dir, 116 in another) prove nothing, because register allocation differs between builds.
+Running 6 repeats of one seed in ONE build:
+
+* identical counts => **not a race**; an addressing bug, fixable by reading which pages the
+  producer selects per item.
+* varying counts => a race, and the register instrument is now the tool to localise it.
+
 **[x] A2 CLOSED -- THE FINE-GRAINED TILE DISPATCHER'S PREMISE IS FALSE (2026-10-10). This answers
 main kernel item (A).**
 

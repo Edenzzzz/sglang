@@ -270,13 +270,23 @@ def main():
         iters = int(_os.environ.get("TIME_ITERS", "50"))
         warmup = int(_os.environ.get("TIME_WARMUP", "10"))
 
+        # HOIST the H2D copies out of the timed region. `kv_len_t.to(DEV)`,
+        # `qo_indptr.to(DEV)` and `kv_indptr.to(DEV)` were inside the closure, so the FUSED arm
+        # paid three host->device transfers PER ITERATION that the unfused baseline never pays.
+        # The tell was that fused time was nearly CONSTANT across configurations (0.3053, 0.3057,
+        # 0.2919 ms) while unfused tracked the actual work (0.0378 - 0.0682) -- a fixed cost
+        # dominating, which is an artifact of the harness, not a property of the kernel.
+        _kvlen_d = kv_len_t.to(DEV)
+        _qoi_d = qo_indptr.to(DEV)
+        _kvi_d = kv_indptr.to(DEV)
+        _maxkv, _maxqo, _sumkv = max(kv_lens), max(qo_lens), sum(fa3_kv)
+
         def _fused():
             torch.ops.fused_fa3.fused_run(
                 q, k_cache, v_cache, kv_indices, o, fa3_ws, fa3_plan,
                 int_ws, flt_ws, pers_plan, HQ, HKV, PAGE, sm_scale,
-                sm_split, nfa3_rows, sm_split, sum(fa3_kv), kv_indices, pers_o,
-                B, max(kv_lens), max(qo_lens), kv_len_t.to(DEV),
-                qo_indptr.to(DEV), kv_indptr.to(DEV))
+                sm_split, nfa3_rows, sm_split, _sumkv, kv_indices, pers_o,
+                B, _maxkv, _maxqo, _kvlen_d, _qoi_d, _kvi_d)
 
         # UNFUSED baseline: the two roles as SEPARATE launches, which is what the fused kernel is
         # meant to replace. FA3 rows through flashinfer's own planned FA3 wrapper, FA2 rows through

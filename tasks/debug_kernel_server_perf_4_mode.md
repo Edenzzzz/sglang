@@ -1608,6 +1608,58 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       That distinguishes "the partials are wrong" from "the combination is wrong", which is the
       one split this investigation has not yet made. State the expected values before dumping.
 
+      **[x] STAGES=2 NOW RUNS, IS CORRECT, AND IS NO FASTER (2026-10-10). The leading perf
+      hypothesis is REFUTED by measurement, and the smem blocker was never FA3's storage.**
+
+      **The blocker, measured instead of guessed.** A `FUSED_SMEM_REPORT` print of the value
+      actually handed to the launch:
+
+      | STAGES | `sizeof(SharedStorage)` | FINAL request | device max | launches? |
+      |---|---|---|---|---|
+      | 1 | 98352 | 169008 = 99328 + 69632 + 48 | 232448 | yes |
+      | 2 | 163920 | **234544** = 164864 + 69632 + 48 | 232448 | **no, by 2096 B** |
+
+      FA3's own 2-stage storage (163920) fits with **68 KB spare**. What pushed it over is the
+      **cross-role backfill drain slot** -- `max(r1,r2,r3) = 69632` for the FA2 runners' storage --
+      allocated past the FA3 base and added **unconditionally**, which is why `SM_SPLIT=all` gave
+      the identical number. So "STAGES=2 does not fit" was wrong **twice**: first blamed on the
+      fusion's both-roles reservation, then on a traits limit. Both retracted; the cause is this
+      slot, and it is 2 KB.
+
+      Gated the slot on `fa2_can_run` -- at `sm_split == nsm` every block takes the FA3 role, so
+      nothing drains through FA2's storage and the slot is pure waste. That drops the STAGES=1
+      request from 169008 to **98352** (70 KB freed) and lets STAGES=2 launch at 163920.
+
+      **And the stage count does not matter** (`MODE=fa3`, `SM_SPLIT=all`, 30 iters):
+
+      | STAGES | correctness | fused ms | unfused ms |
+      |---|---|---|---|
+      | 1 | PASS 0.003279, 0/258 | 0.2590 | 0.0390 |
+      | 2 | PASS 0.003279, 0/258 | **0.2563** | 0.0380 |
+
+      A 1% difference. **So the single-stage K/V pipeline is NOT the cause of the gap** -- the
+      second prime suspect refuted, after the packed-Q gather (~1.5%). Both of the two
+      code-level explanations I had are now measured and small.
+
+      **[!] My own A/B was also wrong: three H2D copies per iteration inside the fused arm.**
+      `kv_len_t.to(DEV)`, `qo_indptr.to(DEV)` and `kv_indptr.to(DEV)` sat inside the timed closure,
+      so the fused arm paid transfers the unfused baseline never pays. Hoisting them improved
+      fused from 0.2919 to **0.2470** on `mixed` and 0.3053 to 0.2590 on `fa3` -- **15-18% of the
+      measured cost was harness artifact.** The tell was that fused time was nearly CONSTANT across
+      very different configurations while unfused tracked the work.
+
+      **[ ] That tell still holds after the fix, and is now the main lead.** Fused is 0.2470-0.2590
+      across `fa3`/`SM_SPLIT=all` and `mixed`/`SM_SPLIT=128` -- two quite different workloads --
+      while unfused moves 0.0380 to 0.0771. A cost that does not scale with work is **fixed
+      per-call overhead**, not kernel inefficiency. Next suspect, untested: the ext allocates its
+      upstream-port workspace (`up_partial_o`, `up_partial_lse`, `up_page_table`) **inside**
+      `fused_run`, i.e. once per call inside the timed loop. Hoist or cache those and re-measure
+      before touching anything in the kernel itself.
+
+      Note STAGES=2 still cannot launch for `mixed` at `SM_SPLIT=128`, where `fa2_can_run` is true
+      and the slot returns. Shrinking the slot to the runner that actually drains (r2 = 32768
+      rather than r3 = 69632) would buy it there too.
+
       **CTA_KV=64 first probe (2026-10-10): the KV gather is NOT the cause.** At CTA_KV=64 the
       derivation is `NUM_KV_PER_ITER=8, KV_STRIDE=8, NUM_GROUPS=8, THREADS_PER_GROUP=16,
       NUM_ITERS_PER_GROUP=8, size(dst)=8`, and the shuffle invariant

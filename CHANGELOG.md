@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.53.0 — STAGES=2 runs and is no faster; the smem blocker was the backfill slot (2026-10-10)
+
+### Measured — what actually blocked the second pipeline stage
+
+| STAGES | `sizeof(SharedStorage)` | FINAL request | device max | launches? |
+|---|---|---|---|---|
+| 1 | 98352 | 169008 = 99328 + 69632 + 48 | 232448 | yes |
+| 2 | 163920 | **234544** = 164864 + 69632 + 48 | 232448 | **no, by 2096 B** |
+
+FA3's own 2-stage storage fits with **68 KB spare**. The overflow came from the **cross-role
+backfill drain slot** (`max(r1,r2,r3) = 69632`) added **unconditionally** past the FA3 base — which
+is why `SM_SPLIT=all` gave the same number. "STAGES=2 does not fit" was wrong twice (blamed first
+on the fusion's reservation, then on a traits limit); both retracted.
+
+Gated the slot on `fa2_can_run`: at `sm_split == nsm` every block is FA3-role, nothing drains
+through FA2 storage. STAGES=1 drops 169008 → **98352** (70 KB freed); STAGES=2 launches.
+
+### Measured — the stage count does not matter
+
+`MODE=fa3`, `SM_SPLIT=all`: STAGES=1 → 0.2590 ms, STAGES=2 → **0.2563 ms**, both PASS 0.003279.
+A 1% difference, so the single-stage pipeline is **not** the cause of the gap. With the packed-Q
+gather at ~1.5%, both code-level explanations are now measured and small.
+
+### Fixed — my own A/B had three H2D copies per iteration in the fused arm
+
+`kv_len_t.to(DEV)`, `qo_indptr.to(DEV)`, `kv_indptr.to(DEV)` were inside the timed closure, so the
+fused arm paid transfers the baseline never pays. Hoisting them: `mixed` 0.2919 → **0.2470**,
+`fa3` 0.3053 → 0.2590. **15–18% of the measured cost was harness artifact.**
+
+### Open — fixed per-call overhead is now the lead
+
+Fused is 0.2470–0.2590 across two quite different workloads while unfused moves 0.0380–0.0771. A
+cost that does not scale with work is fixed overhead. Next suspect: the ext allocates its
+upstream-port workspace (`up_partial_o`, `up_partial_lse`, `up_page_table`) **inside** `fused_run`,
+once per call inside the timed loop.
+
 ## v0.52.0 — configurable FA3 tile shape; the 2nd pipeline stage is still unreachable (2026-10-10)
 
 `FA3_CTA_Q` / `FA3_CTA_KV` added so the second K/V stage can be bought by shrinking a tile.

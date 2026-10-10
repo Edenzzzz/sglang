@@ -251,7 +251,37 @@ def load_fused_fa3(verbose: bool = False) -> None:
             "-O3",
             "--threads",
             "32",
-            "-DFUSED_FA3_STAGES=" + os.environ.get("FA3_STAGES", "1"),
+            # DEFAULT 2, matching stock 0.7. Stock unions smem_v with smem_o and relies on
+            # DOUBLE BUFFERING to make that union safe: with 2 stages the producer's next V load
+            # targets the other stage and cannot overwrite the sO the epilogue is still reading.
+            # Our port ran 1 stage to fit shared memory and thereby removed that invariant, which
+            # is the measured race. 2 stages fits once ALIAS_SMEM is on (below).
+            "-DFUSED_FA3_STAGES=" + os.environ.get("FA3_STAGES", "2"),
+            # ALIAS_SMEM=1 puts the FA2 runners' SharedStorage at offset 0, aliasing FA3's region,
+            # instead of past it. A block takes one role, so the regions are never both live --
+            # EXCEPT that CUTLASS initialises FA3's pipeline mbarriers at kernel entry, BEFORE the
+            # sm_split branch, so every block writes into FA3's region whichever role it takes.
+            # The tree carries two contradictory measurements of this (aliasing races / aliasing
+            # clean 14-of-14 while disjoint fails 10-of-10), both predating today's fixes, so it is
+            # exposed here to be settled by measurement.
+            # DEFAULT ON. Puts the FA2 runners' SharedStorage at offset 0, aliasing FA3's
+            # region rather than sitting past it, so smem_size = max(FA3, FA2) = 163920 instead of
+            # FA3 + FA2 = 234544 -- which is what let the 2-stage pipeline launch in the
+            # co-resident configuration at all (the device max is 232448).
+            #
+            # MEASURED on `mixed` @ SM_SPLIT=128, 35 runs per arm:
+            #   alias + 2 stages      0 / 35 failures, 0.2426 ms
+            #   disjoint + 1 stage    3 / 35 failures, 0.2486 ms
+            # Correct, race-free and 2.4% faster. The tree previously carried two contradictory
+            # measurements of aliasing; this settles it in favour of "aliasing is sound", and the
+            # feared mbarrier conflict (CUTLASS initialises FA3's pipeline barriers before the
+            # sm_split branch) does not reproduce.
+            *([] if os.environ.get("ALIAS_SMEM") == "0" else ["-DFLASHINFER_FUSED_ALIAS_SMEM=1"]),
+            # FA3 tile shape. CTA_KV must divide the planner's kTileKV of 128 (a static_assert in
+            # the ext enforces it), so 64 or 128. Shrinking CTA_KV is how the second pipeline
+            # stage gets bought.
+            "-DFUSED_FA3_CTA_Q=" + os.environ.get("FA3_CTA_Q", "128"),
+            "-DFUSED_FA3_CTA_KV=" + os.environ.get("FA3_CTA_KV", "128"),
             # Diagnostic: skip the packed-GQA Q gather entirely and leave whatever is in smem, so
             # the difference in kernel time BOUNDS what that load costs. Output is garbage by
             # construction -- this measures the load, not the kernel -- so it is only ever read as

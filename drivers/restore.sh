@@ -88,10 +88,22 @@ mkdir -p $W/mtpedf $W/workloads/tracelab $W/tasks/perf_model
 SGPT=$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json
 if [ ! -s "$SGPT" ]; then
   log "fetching ShareGPT (chat tenant workload)"
-  $W/venv/bin/huggingface-cli download anon8231489123/ShareGPT_Vicuna_unfiltered \
-    ShareGPT_V3_unfiltered_cleaned_split.json --repo-type dataset \
-    --local-dir $W/workloads >/dev/null 2>&1 \
-    || log "SHAREGPT FETCH FAIL -- chat-tenant arms cannot run"
+  # The PYTHON API, not `huggingface-cli download`: this huggingface_hub version renamed that CLI
+  # to `hf`, so the old invocation prints help text and exits 0 having downloaded NOTHING -- a
+  # silent failure that reads as a network problem. The API is stable across the rename.
+  $P - <<'PY' 2>&1 | tail -2
+from huggingface_hub import hf_hub_download
+import shutil, os
+try:
+    p = hf_hub_download("anon8231489123/ShareGPT_Vicuna_unfiltered",
+                        "ShareGPT_V3_unfiltered_cleaned_split.json", repo_type="dataset")
+    dst = "/dev/shm/w/workloads/ShareGPT_V3_unfiltered_cleaned_split.json"
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copy(p, dst)
+    print("ShareGPT ->", dst, os.path.getsize(dst), "bytes")
+except Exception as e:
+    print("SHAREGPT FETCH FAIL -- chat-tenant arms cannot run:", e)
+PY
 fi
 
 # The tracelab trace is INTERNAL and has no known public source. Without it the codex/tracelab

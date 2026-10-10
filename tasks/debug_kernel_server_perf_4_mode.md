@@ -819,6 +819,49 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[!!] RETRACTION, AND IT INVERTS THE LOCALISATION: THE WRONG ROWS ARE *WITHIN* THE SAME
+REQUEST, NOT FROM ANOTHER ONE (2026-10-10).**
+
+I read the `KVPERREQ` discriminator backwards and then repeated the error in five commits
+(`683dc9141`, `09cc03410`, `776c924c0`, `c0462732a`, `664d758b2`). The correct derivation:
+
+`KVPERREQ=1` makes pages identical **within** a request and distinct **across** requests. So
+
+* a read of the wrong row **inside the same request** returns the **RIGHT** value -> **invisible**;
+* a read from **another request** returns a wrong value -> **VISIBLE**.
+
+That arm **PASSED 0/8**. A cross-request read would have FAILED it. Therefore:
+
+| arm | result | what it proves |
+|---|---|---|
+| all pages identical (`KVCONST=1`) | PASS 0/8 | any wrong-row read is invisible |
+| identical within request (`KVPERREQ=1`) | **PASS 0/8** | **NO cross-request reads** |
+| all pages distinct (control) | FAIL 8/8 | wrong-row reads **WITHIN** the request |
+
+**The defect is the consumer reducing the WRONG KV ROWS OF ITS OWN REQUEST.** Every statement in
+this doc and CHANGELOG of the form "CTAs read another request's K/V" is **WRONG** and is retracted;
+what the data supports is "CTAs read the wrong kv rows, and those rows belong to the same request".
+
+**What survives untouched:** it is a race (within-build repeats vary on both seeds); it needs >1
+work item per CTA; it scales ~4x with pipeline depth; it is invisible to every serialising
+instrument but not to register counting; all fifteen structural eliminations (none of them depended
+on the cross-request reading); and both confirmed contributors with their depth-scoping.
+
+**What this REDIRECTS:** a wrong row within the request means a wrong INDEX, not stale foreign
+data -- so the suspect list is now the gather's own addressing arithmetic, which I had set aside
+precisely because I believed the data came from elsewhere:
+
+* `__shfl_sync(FULL_MASK, my_kv_offset[parity], src_thread)` -- picks **another lane's** page
+  offset, i.e. another ROW OF THE SAME REQUEST, which is exactly the corrected signature. Any lane
+  divergence at that shuffle makes the result undefined.
+* `my_kv_offset[parity]` -- the 2-entry rolling buffer. A wrong `parity` loads a different TILE of
+  the same request.
+* `kv_base_idx = kv_tile_idx * CTA_KV` combined with `kv_offset` from the coordinate tensor.
+
+All three produce wrong-row-same-request, are data-dependent, and are depth-dependent through the
+parity buffer. **This is a better-aimed space than anything the fifteen eliminations left**, and it
+exists only because the earlier reading was wrong.
+
 **[x] THE `sO`/`smem_v` UNION IS A DEPTH-DEPENDENT CONTRIBUTOR, NOT THE ROUTE -- fifteenth
 eliminated, and structural candidates are now EXHAUSTED (2026-10-10).**
 

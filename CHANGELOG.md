@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.81.0 — RETRACTION: the wrong rows are WITHIN the request, not from another one (2026-10-10)
+
+I read the `KVPERREQ` discriminator backwards and repeated the error across five commits
+(`683dc9141`, `09cc03410`, `776c924c0`, `c0462732a`, `664d758b2`).
+
+`KVPERREQ=1` = pages identical **within** a request, distinct **across**. So a wrong-row read inside
+the same request returns the **right** value (invisible), while a read from another request returns a
+wrong value (visible). **That arm passed 0/8** — a cross-request read would have failed it.
+
+| arm | result | proves |
+|---|---|---|
+| all identical (`KVCONST`) | PASS | any wrong-row read invisible |
+| identical within request (`KVPERREQ`) | **PASS** | **no cross-request reads** |
+| all distinct (control) | FAIL 8/8 | wrong rows **within** the request |
+
+So every "CTAs read another request's K/V" statement is **retracted**. The supported claim: the
+consumer reduces the **wrong kv rows of its own request**.
+
+Unaffected: it is a race; needs >1 item/CTA; scales 4× with depth; invisible to serialising
+instruments but not register counting; all fifteen structural eliminations; both contributors and
+their depth-scoping.
+
+**Redirected:** a wrong row within the request means a wrong *index*, not stale foreign data — so the
+gather's addressing arithmetic is now the suspect list, which I had set aside believing the data came
+from elsewhere: `__shfl_sync(FULL_MASK, my_kv_offset[parity], src_thread)` (takes **another lane's**
+page offset = another row of the same request; undefined under lane divergence), the 2-entry
+`my_kv_offset[parity]` rolling buffer (wrong parity ⇒ different tile, same request), and
+`kv_base_idx = kv_tile_idx * CTA_KV` with the coordinate tensor's `kv_offset`. All three give
+wrong-row-same-request, are data-dependent, and are depth-dependent via the parity buffer.
+
 ## v0.80.0 — the sO/smem_v union is depth-dependent, not the route; candidates exhausted (2026-10-10)
 
 dec=128, `STAGES=1`, 6 seeds, same build set:

@@ -803,6 +803,40 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[x] MEMCHECK: 0 ERRORS -- no out-of-bounds access, so it is a pure ORDERING problem on in-bounds
+shared memory.** `compute-sanitizer --tool memcheck` on the failing shape (`DEC_ROWS=128`,
+`MIX_ALL_FA3=1`, the arm that fails 10/10 at mean ~128 bad rows):
+
+```
+ERROR SUMMARY: 0 errors
+mode=mix_decode worst rel err 0.002127, bad rows 0/384
+```
+
+Two things from that: **no invalid shared/global/local access anywhere**, and the run **passed
+under the sanitizer** -- the slowdown masks it, exactly as `FA3_PROBE=1`'s printf did. Both
+confirm timing-dependence and rule out the whole out-of-bounds class.
+
+**Instrument status is now complete and unhelpful:** `racecheck` cannot discriminate (it flags
+stock's own correct kernel), `memcheck` is clean, and any instrument slow enough to observe the
+kernel makes the bug disappear. There is no tool left that will name this directly.
+
+**Standing tally on this defect: nine hypotheses eliminated, one contributor confirmed.**
+Eliminated: `kQueryEmpty` symmetry, `work_idx` symmetry, Q-completion mechanism, scheduler advance
+logic, the store-completion handshake (made a clean arm dirty), same-output-row collisions,
+per-request plan arrays, `(batch, q_start)` group crossings, and out-of-bounds access. Confirmed:
+`sO`/`smem_v` aliasing, ~45% of the corruption (`FUSED_SPLIT_SMEM_O=1`).
+
+**What is left is bisection by deletion, not by hypothesis.** The remaining ~55% is an ordering
+problem among in-bounds shared buffers reused across work items, and the only approach not yet
+tried is to remove capability until it goes clean: e.g. force `work_indptr` to one item per CTA and
+accept dropping work (correctness-only arm, no timing meaning) to confirm the reuse class
+end-to-end; then re-add items one at a time. That is slow but it terminates, which nine hypotheses
+have not.
+
+**It does not change the recommendation below.** A correct kernel here is still net-negative on
+realistic batches, still under the 29% ceiling, and still slower than a baseline that already
+fuses the batch into one kernel.
+
 **[!] GROUP-CROSSING HYPOTHESIS REFUTED (2026-10-10) -- the eighth on this defect.** Implemented
 group-major enumeration (`FUSED_GROUP_MAJOR=1`: `for h { for q0 { for kv0 } } }` instead of chunk
 outer), which makes a CTA's contiguous run share `(batch, q_start)` and differ only in kv chunk, at

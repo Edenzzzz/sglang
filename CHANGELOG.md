@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.66.0 — memcheck clean; instruments exhausted; recommendation to park the fusion (2026-10-10)
+
+**`memcheck`: 0 errors** on the arm that fails 10/10 — and the run *passed* under the sanitizer
+(0/384), the slowdown masking it as `FA3_PROBE`'s printf did. So: **no out-of-bounds access**, and
+timing-dependence reconfirmed.
+
+**Instrument status is complete and unhelpful:** `racecheck` can't discriminate (flags stock's own
+correct kernel), `memcheck` is clean, and anything slow enough to observe the kernel hides the bug.
+
+**Tally on this defect: nine hypotheses eliminated, one contributor confirmed** (`sO`/`smem_v`
+aliasing, ~45%, `FUSED_SPLIT_SMEM_O`). Eliminated: `kQueryEmpty` symmetry, `work_idx` symmetry,
+Q-completion mechanism, scheduler advance logic, the store-completion handshake (it made a clean arm
+dirty), same-output-row collisions, per-request plan arrays, group crossings, out-of-bounds access.
+
+**Recommendation (unchanged by this result): park the two-role fusion.** Three independent blockers:
+the fusion is net-negative on realistic 4-mode batches (1.46–2.01× slower than all-FA3); B1's
+measured ceiling is 29%, below the ≥30% bar; and `BatchAttention` already does the whole batch in
+one validated-correct persistent kernel, 1.11–4.9× faster than ours everywhere. Restate the project
+on **FA3-only colocation** — one kernel, linear in KV, no `sm_split` parameter, no cross-role reuse.
+PD-colocation points 1/2/4 don't depend on the fusion and point 3 is stronger without it.
+
 ## v0.65.0 — separation done: the race tracks WORK-ITEM count, not request count (2026-10-10)
 
 Two harness fixes were prerequisites:

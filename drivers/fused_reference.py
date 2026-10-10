@@ -298,6 +298,24 @@ def main():
             if B - nfa3 > 0:
                 w2.run(q[nfa3_rows:], (k_cache, v_cache))
 
+        # THE RIGHT CONTROL, never run before. The unfused arm above uses
+        # BatchPrefillWithPagedKVCacheWrapper -- a DIFFERENT kernel family from our FA2 runners,
+        # which are derived from flashinfer's PERSISTENT BatchAttention. So "FA2-only is 20x
+        # slower than unfused" may be comparing against the wrong thing. Time BatchAttention on
+        # the same fixture: if it is also ~1 ms, the cost is inherent to the persistent kernel at
+        # this shape and our port is fine; if it is ~0.055 ms, our port of it is genuinely 20x off.
+        _ba = None
+        try:
+            from flashinfer.attention import BatchAttention
+            _ba = BatchAttention(kv_layout="NHD", device=DEV)
+            _ba.plan(qo_indptr.to(DEV), kv_indptr.to(DEV),
+                     kv_indices[: int(kv_indptr[B])], kv_len_t.to(DEV),
+                     HQ, HKV, D, D, PAGE, causal=True, sm_scale=sm_scale,
+                     q_data_type=DT, kv_data_type=DT)
+        except Exception as e:
+            print(f"[time] BatchAttention control unavailable: {type(e).__name__}: {e}")
+            _ba = None
+
         def _bench(fn):
             for _ in range(warmup):
                 fn()
@@ -328,6 +346,15 @@ def main():
         print(f"[time] unfused = {t_u:.4f} ms/iter  (two separate launches)")
         print(f"[time] speedup = {t_u / t_f:.4f}x  "
               f"({100.0 * (t_u - t_f) / t_u:+.2f}% latency)")
+        if _ba is not None:
+            try:
+                t_b = _bench(lambda: _ba.run(q, (k_cache, v_cache)))
+                print(f"[time] BatchAttention (flashinfer's OWN persistent kernel, the family our "
+                      f"FA2 runners come from) = {t_b:.4f} ms/iter")
+                print(f"[time]   fused/BatchAttention = {t_f / t_b:.4f}x, "
+                      f"BatchAttention/unfused = {t_b / t_u:.4f}x")
+            except Exception as e:
+                print(f"[time] BatchAttention run failed: {type(e).__name__}: {e}")
 
     # Output fingerprint, so two builds can be compared for "did this change anything at all".
     # A diagnostic arm that removes work (SKIP_PACKED_Q=1) must change the output; if the

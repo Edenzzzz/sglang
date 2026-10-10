@@ -14,6 +14,38 @@ validation come FIRST (user 2026-10-10)**; per-class SLO targets derive from the
 not invented; H20/multi-node only after ALL kernel items close; **-5% to -8.4% in-server is
 NOT acceptable** -- the kernel must be a gain.
 
+### [!] THE BASELINE WAS WRONG (2026-10-10). The real comparator is flashinfer's PERSISTENT
+### `BatchAttention`, and it is FASTER than the two-launch arm I had been using.
+
+Every speedup figure in this doc up to here compares against "unfused" = **two separate
+`BatchPrefillWithPagedKVCacheWrapper` launches**. But our FA2 runners are ported from flashinfer's
+**persistent `BatchAttention`**, which handles the WHOLE batch in ONE launch. I had never timed it.
+
+| fixture | fused | "unfused" (2 prefill launches) | **`BatchAttention`** | fused vs BatchAttention |
+|---|---|---|---|---|
+| `fa2` @ `SM_SPLIT=16` | 1.0961 | 0.0549 | **0.0499** | **22.0x slower** |
+| `mixed` @ `SM_SPLIT=128` | 0.2430 | 0.0730 | **0.0493** | **4.9x slower** |
+
+`BatchAttention` is **0.675x** the two-launch arm on `mixed` -- i.e. the baseline I was using is
+**48% slower than the real one**, so every ratio recorded above is optimistic.
+
+**Three consequences, stated plainly:**
+1. **The gap is larger than reported.** On `mixed` it is **4.9x**, not 3.4x. On FA2-only it is
+   **22x**.
+2. **The `fa3_1chunk` 1.51x "win" is in doubt** and must be re-measured against `BatchAttention`
+   before it is cited anywhere.
+3. **It reframes the project's premise.** The thing to beat is already a *single persistent
+   kernel* over the whole batch, not two launches. "We fuse what was two kernels into one" is not
+   the contribution against this baseline -- the contribution has to be the SM pre-assignment and
+   the role specialisation *within* a single kernel, measured against `BatchAttention`. Worth
+   raising with the user: the >=30%/>=10% bar should be stated against this comparator, and the
+   earlier in-server -5% to -8.4% was probably against it too.
+
+**Caveat on the control, recorded not assumed:** `BatchAttention`'s OUTPUT was not validated against
+the fp32 reference here -- it was run as a timing arm only. Before any published number it needs the
+same correctness gate as the fused arm, in case it is computing something cheaper (different
+masking, or a path that skips work this fixture implies).
+
 ### [x] K1.race CLOSED (2026-10-10), and a NEW 20x defect found on the FA2-only path
 
 **The race is fixed.** `FLASHINFER_FUSED_ALIAS_SMEM` + `FUSED_FA3_STAGES=2`, **both now the

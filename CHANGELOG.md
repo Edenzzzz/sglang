@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.58.0 — the baseline was wrong: `BatchAttention` is the real comparator (2026-10-10)
+
+Every speedup in this project compared against "unfused" = **two `BatchPrefillWithPagedKVCacheWrapper`
+launches**. But our FA2 runners are ported from flashinfer's **persistent `BatchAttention`**, which
+does the whole batch in **one** launch. It had never been timed.
+
+| fixture | fused | 2-launch "unfused" | **`BatchAttention`** | fused vs BA |
+|---|---|---|---|---|
+| `fa2` @ 16 | 1.0961 | 0.0549 | **0.0499** | **22.0×** |
+| `mixed` @ 128 | 0.2430 | 0.0730 | **0.0493** | **4.9×** |
+
+`BatchAttention` is **0.675×** the two-launch arm on `mixed`, so the baseline I was using is 48%
+slower than the real one and every recorded ratio is optimistic.
+
+**Consequences:** (1) the gap is 4.9× on `mixed` and 22× on FA2-only, not 3.4×/20×; (2) the
+`fa3_1chunk` 1.51× win must be re-measured against `BatchAttention` before being cited; (3) it
+reframes the premise — the thing to beat is already a single persistent kernel, so the contribution
+must be the SM pre-assignment and role specialisation *within* one kernel, measured against
+`BatchAttention`. The ≥30%/≥10% bar should be restated against this comparator.
+
+**Caveat:** `BatchAttention`'s output was not validated against the fp32 reference — it ran as a
+timing arm only. It needs the same correctness gate before any published number.
+
 ## v0.57.0 — race CLOSED (alias + 2 stages, now default); FA2-only path found 20x slow (2026-10-10)
 
 ### Fixed — the intermittent race

@@ -627,6 +627,45 @@ mixed chat + tracelab. Corrected 2026-10-09 (user): the kernel must be on upstre
 attention measures the scheduling change alone and cannot show the thesis.
 
 
+### [!] NEW CORRECTNESS BUG: the MULTI-ITEM-PER-CTA path was never exercised until now
+
+Found by the decode-heavy control arm, then bisected on request count (all-FA3, `SM_SPLIT=all`,
+kv=2048 each):
+
+| requests | `num_merge_rows` | work items | items / CTA | result |
+|---|---|---|---|---|
+| 41 | 1184 | 336 | 2.5 | PASS 0.003264, 0/296 |
+| 49 | 1216 | 392 | 3.0 | PASS 0.003064, 0/304 |
+| 65 | 1280 | 504 | 3.8 | PASS 0.002816, 0/320 |
+| **97** | 1408 | 728 | 5.5 | **1 bad row**, rel 11.82 |
+| **129** | **0** | 952 | 7.2 | **76 / 384 bad**, rel 10.1 |
+
+**The `num_merge_rows = 0` at 129 is NOT the bug** -- it is correct: the planner's chunk is
+`ceil(total_kv / fa3_ctas)` rounded to 128, and at 129 requests that reaches 2048, so
+`ceil(2048/2048) = 1` and nothing splits. So the 129-request failure is on the **DIRECT write
+path**, with no merge involved at all.
+
+**What this exposes: every previous fixture had <= 1 work item per CTA.** The largest before this
+was 3 requests / 896 items over 132 CTAs in the `fa3` fixture -- but those were spread one per CTA.
+Here a CTA loops over 4-7 items, and the failure rate scales with items-per-CTA (3.8 clean, 5.5 one
+bad row, 7.2 seventy-six). So **`get_next_work()` and the `counter` plumbing have effectively never
+been tested**, which is exactly where the two positional terminal returns I fixed earlier live
+(`num_kv_chunks` received `counter+1`, `counter` received `ptr_begin`).
+
+**That also re-opens a question about the earlier fix.** Those misaligned returns were corrected on
+the grounds that they were latent with no measured symptom. They are not latent on this path -- it
+is the first path that iterates. The fix may be incomplete, or there may be a second ordering issue
+in `load()`'s `counter` handling.
+
+**Next, and it is a cheap bisect:** run the request-count sweep with `FA3_PROBE=1` and check the
+`[sched]` stream for a CTA whose `counter` sequence skips or repeats a `work_idx`. Expected, stated
+first: for a CTA owning items `[b, e)` the stream should show `work_idx = b, b+1, ... e-1` exactly
+once each, with `counter` incrementing from 0. Any gap or repeat localises it immediately.
+
+**Priority note:** this is a correctness defect on the *most realistic* batch shape tested so far
+(a prefill chunk plus ~100 decode rows), which is precisely the 4-mode serving shape. It outranks
+the FA2 perf work, because a serving arm on this shape would be wrong, not just slow.
+
 ### [!] DECODE-HEAVY ARM REVERSES IT: on realistic 4-mode shapes the fusion is **NET NEGATIVE**
 
 The +5.4% below was measured on a batch with **2 decode tokens**. I predicted the margin would GROW

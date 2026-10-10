@@ -24,6 +24,46 @@ validation come FIRST (user 2026-10-10)**; per-class SLO targets derive from the
 not invented; H20/multi-node only after ALL kernel items close; **-5% to -8.4% in-server is
 NOT acceptable** -- the kernel must be a gain.
 
+### [!] FA2 22x: the split-KV hypothesis is REFUTED; it is the PER-ITEM INNER LOOP
+
+The FA2 classes never split kv (`chunk = (task == 3 && kv_chunk > 0) ? kv_chunk : kv`), on the
+reasoning that "chopping their short rows adds partials for no parallelism gain". That reasoning
+fails for a LONG-kv FA2 row, and the `fa2` fixture has one (request 0: qo=256, kv=2048), so
+enabling FA2 splitting looked like the fix. It is not:
+
+| arm | fused ms | fused/BA | correctness |
+|---|---|---|---|
+| `fa2`, `FUSED_FA2_SPLIT=0` | 1.1003 | 22.0x | 0/258 |
+| `fa2`, `FUSED_FA2_SPLIT=1` | **1.1127** | 22.4x | 0/258 |
+| `mixed`, `FUSED_FA2_SPLIT=1` | — | — | **2 bad rows** |
+
+**No improvement (slightly worse), and it breaks `mixed`.** Knob left OFF by default; the default
+path is unchanged and `mixed` still passes.
+
+**What that rules out, and where it leaves the 22x.** With 70 work items over 116 FA2 CTAs each CTA
+holds at most one item, so this is not a parallelism deficit -- and splitting further confirms it.
+The arithmetic: `BatchAttention` does the WHOLE fixture (56 tile128 items of 128 packed rows x 2048
+keys, plus 14 small ones) in 0.050 ms, while our longest single item apparently takes ~1.10 ms. So
+**the FA2 per-item inner loop is roughly 20x slower than the same kernel family under stock
+traits.** Candidates, in order and all untested:
+- `FusedWarpgroupTraits::NAMED_BARRIER_SYNC` -- replaces `__syncthreads()` with a warpgroup-scoped
+  named barrier. If that lands in the per-kv-tile loop it is a round trip per iteration, and 2048
+  keys at CTA_KV granularity is a lot of iterations.
+- `FUSED_GRID` -- cluster index from `blockIdx.x` with `cluster_size` pinned to 1, which may defeat
+  whatever cluster/multicast behaviour the stock path relies on.
+- The `ALIAS_SMEM` layout putting FA2's storage at offset 0 -- check for bank conflicts against the
+  stock offset.
+- The vector-sparse `kv_indices` indirection versus stock's paged addressing.
+
+**Next step is a profile of the FA2-only arm**, which is now clearly worth the setup cost: it is
+the largest single gap in the project (22x), it is the path decode-only steps take, and four
+plausible causes cannot be separated by more guessing.
+
+**[!] And a NEW BUG found incidentally:** with FA2 splitting enabled, `mixed` returns 2 bad rows --
+its two FA2 (decode) rows. So the FA2 classes' merge path is broken when FA2 rows are split in the
+co-resident configuration. Not on the default path, but it must be fixed before FA2 splitting can
+ever be enabled, and it is recorded here rather than left as a surprise.
+
 ### [x] BASELINE VALIDATED, AND WE HAVE NO WIN (2026-10-10)
 
 `BatchAttention` was gated against the same fp32 causal reference the fused arm is held to, on

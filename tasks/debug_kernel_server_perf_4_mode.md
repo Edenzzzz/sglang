@@ -657,10 +657,36 @@ the grounds that they were latent with no measured symptom. They are not latent 
 is the first path that iterates. The fix may be incomplete, or there may be a second ordering issue
 in `load()`'s `counter` handling.
 
-**Next, and it is a cheap bisect:** run the request-count sweep with `FA3_PROBE=1` and check the
-`[sched]` stream for a CTA whose `counter` sequence skips or repeats a `work_idx`. Expected, stated
-first: for a CTA owning items `[b, e)` the stream should show `work_idx = b, b+1, ... e-1` exactly
-once each, with `counter` incrementing from 0. Any gap or repeat localises it immediately.
+**[x] PROBED, and it is the SAME `sO`/`smem_v` RACE -- now firing 4-7x more often.** Two results:
+
+1. **With `FA3_PROBE=1` the run PASSES: 0/384 bad rows**, against 76/384 with the probe off. The
+   printf perturbs timing and masks it, which is the signature of a **race**, not a logic error.
+2. The `counter` plumbing is **correct** where it printed: blk=75 owns `[540,548)` and shows
+   `counter = n` against `work_idx = 540+n`. The gaps (308 of 952 lines) are CUDA printf
+   ring-buffer drops, not missing work -- 308 lines, 308 distinct `work_idx`, 0 duplicated.
+
+**So `get_next_work()` / `counter` are exonerated, and the mechanism is the one already diagnosed:
+`sO` is REUSED ACROSS WORK ITEMS within a CTA.** With <= 1 item per CTA -- every fixture before
+this one -- `sO` was never reused and the race could not fire from this direction. At 4-7 items per
+CTA it fires 4-7x more often, which is exactly the observed scaling (3.8 items/CTA clean, 5.5 one
+bad row, 7.2 seventy-six bad).
+
+**This is the evidence that `STAGES=2` was a mitigation, not a fix -- as recorded at the time**
+("a 2-stage pipeline HIDES the race rather than ordering the accesses"). It narrowed the window
+enough for single-item CTAs to come out clean at 0/35, and the multi-item path blows straight
+through it.
+
+**So the store-completion handshake is now required, not optional.** The fix identified earlier and
+deferred: `store_partial` / `store` must guarantee the O write has drained from `sO` before the
+producer may refill `smem_v` for the next item. Either a named-barrier arrival after the global
+write that the producer waits on, or route the partial O write through TMA and restore
+`tma_store_wait<0>()` in `store_tail()` (currently commented out). The TMA route matches 0.7, is
+what makes the port upstreamable, and is the same primitive B2c needs -- and it would also unblock
+the 12% `store_partial` parallelisation that had to be reverted.
+
+**Note what this invalidates:** the "race CLOSED, 0/35 co-resident" result stands only for
+<= 1 item per CTA. On realistic batch shapes (a chunk plus ~100 decode rows) the kernel is
+**incorrect**, so **no serving arm can be run until the handshake lands**.
 
 **Priority note:** this is a correctness defect on the *most realistic* batch shape tested so far
 (a prefill chunk plus ~100 decode rows), which is precisely the 4-mode serving shape. It outranks
@@ -746,7 +772,7 @@ refinement of the fusion -- it is the thing that makes it positive at all.
 |---|---|---|
 | **K1** | port the fused kernel to flashinfer 0.7 (prerequisite for both A and B) | **~done, 1 bug open** |
 | K1.corr | every fixture PASSES the causal fp32 reference, `mixed` included | **[x]** rel 0.0033 |
-| K1.race | **CLOSED** by `ALIAS_SMEM` + `STAGES=2` (now default): 0/35 co-resident | **[x]** |
+| K1.race | **REOPENED**: `STAGES=2` only mitigates; the multi-item-per-CTA path fails (76/384 at 129 requests). Needs the store-completion handshake | **[ ] OPEN** |
 | K1.perf | split-KV path was 78% of kernel time; chunk-size sweep gave **4.5x** on `fa3` | **[~]** still 1.5-2.5x off |
 | **S** | server integration: EDF perf model vs unfused baseline | **[ ] NOT RUN** |
 | **M** | multi-node PD colocation (H20 only, <=16 GPUs, trial `vibecuda`) | **[ ] NOT RUN** — doc: `pd_colocation_vs_disagg.md` |

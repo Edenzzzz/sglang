@@ -819,6 +819,45 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[x] POSITIVELY LOCALISED: THE WRONG KV *TILE* IS LOADED -- row/lane addressing exonerated
+(2026-10-10). Sixteenth elimination and the best-aimed state this investigation has reached.**
+
+`KVPERTILE=1` makes pages identical **within each `CTA_KV` tile** and distinct **across** tiles,
+aligned to the same boundaries the kernel tiles on (`FA3_CTA_KV`, read from the env so it cannot
+drift). dec=128, `STAGES=2`, baseline, warm dir, 6 seeds:
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| control, all pages distinct | 6/6 | 100, 104, 116, 112, 96, 124 -- mean ~109 |
+| **identical within tile, distinct across** | **6/6** | 120, 112, 104, 104, 120, 112 -- mean ~112 |
+
+**Unchanged.** Identical rows inside a tile would have HIDDEN any wrong-row-within-tile error; it
+hid nothing. So:
+
+* **row/lane addressing is EXONERATED** -- the `__shfl_sync(FULL_MASK, my_kv_offset[parity],
+  src_thread)` mapping and the `kv_offset` arithmetic are fine. This agrees with the hand-check:
+  `src_thread = group_id * THREADS_PER_GROUP + kv_offset / KV_STRIDE` with `THREADS_PER_GROUP = 16`
+  and `k < 16` always lands in the caller's own warp, so the implicit `%32` resolves to the
+  intended thread.
+* **the TILE INDEX is what is wrong.** The consumer/producer is working on a different kv tile of
+  its own request.
+
+**The surviving suspect is `my_kv_offset[parity]`, the 2-entry rolling buffer** (`sparse_mainloop.cuh:339`,
+toggled `parity ^= 1`). A wrong parity loads a different TILE of the same request -- precisely the
+measured signature. It is also the only single candidate that explains the **4x pipeline-depth
+scaling** on its own, and it is a race by construction: the parity toggles across the
+prefetch/consume handoff, so producer and consumer can disagree about which slot holds the tile
+currently being loaded.
+
+**Full constraint set, every item measured, and the parity buffer satisfies all five:** a race;
+wrong kv TILE; of the item's OWN request; requires >1 work item per CTA; magnitude scales ~4x with
+pipeline depth.
+
+**Next:** read the parity toggle against the prefetch/consume order in `load()` -- `prefetch_kv_offset`
+writes `my_kv_offset[parity]`, `load_kv_with_gather` reads it, and the K and V paths interleave
+with their own toggles at lines 641-711. A toggle that happens between a tile's prefetch and its
+gather, or a K path that toggles while the V path still needs the old slot, produces exactly this.
+
 **[!!] RETRACTION, AND IT INVERTS THE LOCALISATION: THE WRONG ROWS ARE *WITHIN* THE SAME
 REQUEST, NOT FROM ANOTHER ONE (2026-10-10).**
 

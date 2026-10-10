@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.82.0 — positively localised: the wrong KV *tile* is loaded; row addressing exonerated (2026-10-10)
+
+`KVPERTILE=1` (pages identical within each `CTA_KV` tile, distinct across; boundaries aligned to the
+kernel's own `FA3_CTA_KV`), dec=128, `STAGES=2`, 6 seeds:
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| control, all distinct | 6/6 | 100, 104, 116, 112, 96, 124 — mean ~109 |
+| **identical within tile** | **6/6** | 120, 112, 104, 104, 120, 112 — mean ~112 |
+
+Unchanged — identical rows inside a tile would have *hidden* a wrong-row error and hid nothing. So
+**row/lane addressing is exonerated** (agreeing with the hand-check that `src_thread` always lands in
+the caller's own warp) and **the tile index is what is wrong**: the kernel works on a different kv
+tile of its own request.
+
+Surviving suspect: **`my_kv_offset[parity]`**, the 2-entry rolling buffer (`sparse_mainloop.cuh:339`,
+`parity ^= 1`). A wrong parity loads a different tile of the same request — the measured signature —
+it alone explains the 4× depth scaling, and it is a race by construction since the parity toggles
+across the prefetch/consume handoff.
+
+All five measured constraints are satisfied by it: a race; wrong kv tile; same request; >1 item/CTA;
+~4× depth scaling. Sixteenth elimination, and the best-aimed state the investigation has reached.
+
 ## v0.81.0 — RETRACTION: the wrong rows are WITHIN the request, not from another one (2026-10-10)
 
 I read the `KVPERREQ` discriminator backwards and repeated the error across five commits

@@ -204,6 +204,25 @@ def main():
     # pages in request order -> page id == element offset at page_size=1
     kv_indices = torch.arange(total_pages, dtype=torch.int32, device=DEV)
 
+    # KVPERREQ=1: pages identical WITHIN a request, distinct ACROSS requests. This bisects the
+    # kv-ADDRESSING error that KVCONST localised (baseline PASSES 8/8 with all pages identical and
+    # FAILS 10/10 with distinct pages, so CTAs read the wrong kv ROWS).
+    #
+    #   corruption VANISHES  -> the stale rows come from ANOTHER REQUEST: cross-item leakage, i.e.
+    #                           a stale K/V tile left in smem by a previous work item.
+    #   corruption PERSISTS  -> the wrong rows are WITHIN the request: a bad tile index, and
+    #                           cross-item reuse is not the route.
+    #
+    # One bit, no kernel change, and nothing that serialises -- every instrument that slowed the
+    # kernel down (printf probe, racecheck, memcheck) masked this defect, so the discriminator has
+    # to live in the DATA rather than in the timing.
+    if _os.environ.get("KVPERREQ") == "1":
+        for _i in range(B):
+            _a, _b = int(kv_indptr[_i]), int(kv_indptr[_i + 1])
+            if _b > _a:
+                k_cache[_a:_b] = k_cache[_a:_a + 1].clone()
+                v_cache[_a:_b] = v_cache[_a:_a + 1].clone()
+
     # FWS was 1 GB and that is what blocked every fixture past qo~2048: the plan builder returned
     # "FusedFourTaskPlan failed: invalid argument" because the split-KV partial slab did not fit.
     # At qo=2048 / kv=8192 the planner picks a 128-wide kv chunk, giving 64 chunks x 64 q tiles, so

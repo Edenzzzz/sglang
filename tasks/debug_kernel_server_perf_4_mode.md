@@ -804,6 +804,55 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[x] LOCALISED: CTAs READ ANOTHER REQUEST'S K/V. The route is the K/V pipeline carried ACROSS
+work items (2026-10-10). First mechanism with POSITIVE evidence rather than elimination.**
+
+One bit, in the data rather than the timing -- which matters, because every instrument that slowed
+the kernel masked this defect. `KVPERREQ=1` makes pages identical WITHIN a request and distinct
+ACROSS requests, so a wrong-row read inside the right request is invisible while a read from
+another request is not. dec=128, baseline only (the fence is a known regression), warm build dir:
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| distinct pages everywhere (control) | 8/8 | 116, 104, 76, 92, 116, 72, 92, 96 |
+| **identical within request, distinct across** | **0/8** | **all zero -- PASS** |
+| all pages identical (`KVCONST=1`, re-confirm) | 0/8 | all zero -- PASS |
+
+**So the stale rows come from ANOTHER REQUEST.** Not Q (fenced, didn't fix it), not the output
+path, not the partial slab (refuted), not addressing within a request. Cross-item leakage in the
+**K/V** path.
+
+**MECHANISM, read off the source and consistent with every prior measurement:**
+
+* `load_tail` -- the pipeline drain -- is called **ONCE, after the whole persistent loop**
+  (`prefill_sm90.cuh:285`), and `smem_pipe_write_k/v` and `smem_pipe_read_k/v` are declared
+  **outside** the loop and carried across every item.
+* So if the consumer consumes even one fewer stage than the producer loaded for some item, the
+  pipeline **shifts permanently**, and from that item on every consumer reads a stage filled for a
+  different request. Stock cannot hit this: with one item per CTA there is no next item to inherit
+  the shift.
+* It retro-explains the handshake result exactly: `FUSED_O_HANDSHAKE` rendezvoused both loops and
+  **halved** corruption (112 -> 56) without fixing it, because a rendezvous realigns *timing* while
+  leaving the stage **indices** shifted.
+* It fits the items/CTA threshold (clean below 1 item/CTA, 15/15), the data dependence (causal tile
+  counts vary per item), and the serialisation-masking (a producer kept slow never runs ahead).
+
+**RULED OUT BY READING, before spending GPU time:**
+
+* **Producer/consumer tile-count disagreement.** Both sites call the SAME `get_num_kv_tiles` with
+  the SAME arguments including `fused_causal_kv_len(work_tile_info, kv_len)`
+  (`prefill_sm90.cuh:247` and `:325`). They agree.
+* **Scheduler desync.** `UnifiedWgmmaTileScheduler` is fully deterministic --
+  `work_indptr[blockIdx.x]` slices per block and `counter` advances -- `get_next_work` ignores
+  `is_producer`, and `prefetch_next_work`/`broadcast_next_work` are no-ops. Both warpgroups walk
+  the identical item sequence, and both `continue` conditions evaluate identical data.
+
+**NEXT, and it must be a measurement not a guess:** count tiles LOADED vs tiles CONSUMED per item
+on both sides and compare. A per-item drain plus a pipeline-state reset is the obvious fix, but
+resetting `PipelineState` without resetting the pipeline's own mbarrier phases is exactly the
+bookkeeping that deadlocked the `barrier_O` attempt -- so the count comes first, then the fix is
+aimed rather than attempted.
+
 **[x] THE BASELINE DEFECT IS A KV-ADDRESSING ERROR -- and my own fix introduces a SECOND,
 different one (2026-10-10).**
 

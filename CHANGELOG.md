@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.74.0 — LOCALISED: CTAs read another request's K/V via the cross-item pipeline (2026-10-10)
+
+First mechanism with **positive** evidence instead of elimination. `KVPERREQ=1` (pages identical
+within a request, distinct across) at dec=128, baseline, warm dir:
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| distinct pages everywhere | 8/8 | 72–116 |
+| **identical within request** | **0/8** | **all zero** |
+| all pages identical | 0/8 | all zero |
+
+**The stale rows come from another request** — cross-item leakage in the K/V path. Not Q (fenced,
+didn't fix), not the output path, not the partial slab (refuted), not addressing within a request.
+
+**Mechanism from source:** `load_tail` runs **once after the whole persistent loop**
+(`prefill_sm90.cuh:285`) while `smem_pipe_write_k/v` and `smem_pipe_read_k/v` live *outside* it. One
+item consuming fewer stages than were loaded shifts the pipeline **permanently**, so every later
+consumer reads a stage filled for a different request. Stock is immune — one item per CTA leaves no
+successor to inherit the shift. It retro-explains the handshake (112→56, halved not fixed: a
+rendezvous realigns timing, not stage indices), the items/CTA threshold, the data dependence, and
+the serialisation-masking.
+
+**Ruled out by reading, no GPU time spent:** producer/consumer tile-count disagreement (both sites
+call the same `get_num_kv_tiles` with the same args, `:247` and `:325`); scheduler desync
+(`UnifiedWgmmaTileScheduler` is deterministic per block, `is_producer` ignored, broadcast/prefetch
+are no-ops).
+
+Next: **count** tiles loaded vs consumed per item on both sides before attempting a fix — resetting
+`PipelineState` without its mbarrier phases is the bookkeeping that deadlocked the `barrier_O`
+attempt.
+
 ## v0.73.0 — the baseline defect is KV ADDRESSING; the fence is a regression (2026-10-10)
 
 | arm, dec=128, `KVCONST=1` (identical kv page **values**) | fails | bad rows of 384 |

@@ -1608,6 +1608,51 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       That distinguishes "the partials are wrong" from "the combination is wrong", which is the
       one split this investigation has not yet made. State the expected values before dumping.
 
+      **[x] KERNEL CORRECTNESS COMPLETE (2026-10-10): EVERY fixture PASSES with split-KV
+      ENABLED, `mixed` included. K1n is closed.**
+
+      | fixture | split | result |
+      |---|---|---|
+      | `fa3_split` 32 tok / kv 2048, **16 chunks** | yes | **PASS 0.00325, 0/32** |
+      | `fa3_1chunk` | yes | **PASS 0.002071, 0/128** |
+      | `fa3` 3 req, kv 2048/300/512 | yes | **PASS 0.004888, 0/258** |
+      | `mixed` FA3+FA2 co-resident, `SM_SPLIT=default` | yes | **PASS 0.003273, 0/258** |
+      | `fa2` | n/a | **PASS 0.002126, 0/258** |
+      | `fa3` unsplit (regression control) | no | PASS 0.002113 |
+
+      **The fix: an absolute causal bound, threaded as a quantity SEPARATE from `kv_len`.** It had
+      to be separate because `kv_len` is simultaneously the iteration bound (`get_num_kv_tiles`,
+      and `kv_idx >= kv_len`), so widening it would make each chunk read on into later chunks'
+      keys. Five files:
+      - `unified_wgmma_scheduler.cuh`: `WorkTileInfo::causal_kv_len = kv_len[work_idx] - kv_begin`
+        (the request's total kv minus this chunk's base), set in `load()` and both terminal
+        returns.
+      - `hopper/utils.cuh`: `fused_causal_kv_len(work_tile_info, kv_len)` with a
+        `fused_has_causal_kv_len` detector -- **detected, not required**, because upstream's
+        scheduler has no such field and `prefill_sm90.cuh` serves both. Returns `kv_len` when
+        absent, so every non-split and upstream path is bit-identical to before.
+      - `sparse_mainloop.cuh`: `get_num_kv_tiles(..., causal_kv_len = -1)`, and `load()` passes
+        the same value -- **load and mma must agree on the tile count or the pipeline deadlocks.**
+      - `mainloop_mma.cuh`: `col_limit_right` / `col_limit_left` use it.
+      - `prefill_sm90.cuh`: four call sites (two `get_num_kv_tiles`, two `mma_f16`).
+
+      `min(kv_len, col_limit_right)` then does the right thing for all three cases without extra
+      logic: chunks before the diagonal get a bound >= the chunk length so nothing is masked, the
+      diagonal chunk masks correctly, and chunks beyond the diagonal get a bound <= 0.
+
+      **Full bug list for K1n, five real bugs in four families:** the unassigned
+      `k_page_stride`/`v_page_stride`; a `CAUSAL` default resting on a measurement taken while
+      that bug made all keys identical; packed-GQA breaking every token-indexed causal bound (the
+      mask, and `get_num_kv_tiles`, where it *deleted* output); `merge_o_indices` units; and this
+      chunk-relative causal bound. Plus latent positional-aggregate bugs (`defined()` vs value on
+      the barrier gate, 13/14 values into a 15-field struct).
+
+      **[ ] NEXT, and nothing in the kernel blocks it now: remove the debug probes
+      (`FA3_PROBE`, `FUSED_TRACE`, the `[sched]`/`[kvinv]` prints) and take the first timing A/B.**
+      Then A1-A3, B1b/B2c/B3 (`tma_store_wait` cross-role backfill, multicast), the EDF perf model
+      vs unfused, and the multi-node PD items. The >=30% TTFT/ITL and >=10% throughput bars remain
+      entirely unmeasured.
+
       **[x] SPLIT-KV ROOT CAUSE FOUND (2026-10-10): the causal mask is applied CHUNK-RELATIVE,
       so every split chunk masks off keys it should see. Quantitative match to 4 decimals.**
 

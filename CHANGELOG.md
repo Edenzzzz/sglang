@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.48.0 — KERNEL CORRECTNESS COMPLETE: every fixture passes with split-KV on (2026-10-10)
+
+| fixture | split | result |
+|---|---|---|
+| `fa3_split` 32 tok / kv 2048, 16 chunks | yes | **PASS 0.00325, 0/32** |
+| `fa3_1chunk` | yes | **PASS 0.002071, 0/128** |
+| `fa3` 3 req, kv 2048/300/512 | yes | **PASS 0.004888, 0/258** |
+| `mixed` FA3+FA2 co-resident | yes | **PASS 0.003273, 0/258** |
+| `fa2` | n/a | **PASS 0.002126, 0/258** |
+| `fa3` unsplit (control) | no | PASS 0.002113 |
+
+### Fixed — the split-KV causal bound is now absolute
+
+Threaded as a quantity **separate** from `kv_len`, because `kv_len` is simultaneously the
+iteration bound (`get_num_kv_tiles`, `kv_idx >= kv_len`) — widening it would make each chunk read
+into later chunks' keys.
+
+- **`unified_wgmma_scheduler.cuh`**: `WorkTileInfo::causal_kv_len = kv_len[work_idx] - kv_begin`.
+- **`hopper/utils.cuh`**: `fused_causal_kv_len()` + a `fused_has_causal_kv_len` detector —
+  *detected, not required*, since upstream's scheduler has no such field and `prefill_sm90.cuh`
+  serves both. Returns `kv_len` when absent, so non-split and upstream paths are unchanged.
+- **`sparse_mainloop.cuh`**: `get_num_kv_tiles(..., causal_kv_len = -1)`, and `load()` passes the
+  same value — load and mma must agree on the tile count or the pipeline deadlocks.
+- **`mainloop_mma.cuh`**: `col_limit_right` / `col_limit_left`.
+- **`prefill_sm90.cuh`**: four call sites.
+
+`min(kv_len, col_limit_right)` then handles all three cases with no extra logic: chunks before the
+diagonal are unmasked, the diagonal chunk masks correctly, chunks beyond it are fully masked.
+
+### K1n closed — five real bugs in four families
+
+The unassigned `k_page_stride`/`v_page_stride`; a `CAUSAL` default resting on a measurement taken
+while that bug made all keys identical; packed-GQA breaking every token-indexed causal bound (the
+mask, and `get_num_kv_tiles`, where it *deleted* output); `merge_o_indices` units; and the
+chunk-relative causal bound. Plus latent positional-aggregate initialiser bugs.
+
+### Next
+
+Remove the debug probes and take the first timing A/B. The ≥30% TTFT/ITL and ≥10% throughput bars
+remain entirely unmeasured.
+
 ## v0.47.0 — split-KV root cause: the causal mask is chunk-relative (2026-10-10)
 
 Found by dumping `partial_o` / `partial_lse` for known merge rows against a Python per-chunk

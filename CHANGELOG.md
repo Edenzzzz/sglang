@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.14.0 — why the split never engages: three of five mixing flags no longer exist in the fork (2026-10-11)
+
+`run_mixed_workloads.py` sets five env flags for `MTPMIX_SPLIT`. Against `sglang-up/python/sglang/`:
+
+| flag the driver sets | read by the fork? |
+|---|---|
+| `SGLANG_MIXED_SPEC` | **yes** (`srt/managers/scheduler.py`) |
+| `SGLANG_FUSED_FA3_SM_SPLIT` | **yes** (`srt/layers/attention/flashinfer_backend.py`) |
+| **`SGLANG_ALLOW_MIXED_CHUNK_SPEC`** | **NO — absent** |
+| **`SGLANG_TWO_EXEC`** | **NO — absent** |
+| **`SGLANG_MIXED_ATTENTION_KERNEL`** | **NO — absent** |
+
+`SGLANG_ALLOW_MIXED_CHUNK_SPEC` is the gate that lets a prefill chunk merge with running decode rows —
+exactly the merge whose absence appears as separate `Prefill batch`/`Decode batch` lines. **The driver
+asks for mixing; the fork never hears it.**
+
+**This is driver/fork drift, not a kernel defect.** The driver was written against the 0.3.1-era fork;
+the 0.7 port renamed these and the driver wasn't updated. It explains the clean run (stock path), the
+0 fallbacks (nothing to fall back from), `K6`'s CUDA-graph fault not reproducing (graphs are fine when
+the split never engages), and why six serving attempts could never have measured the fused path.
+
+**Cost:** the "0 fallbacks, CUDA graphs on" positives recorded one entry above are real but describe a
+**stock-path** server, not the fused one. Corrected here.
+
+**Next:** audit what the 0.7 fork calls the mixed-chunk-spec gate, the two-executor switch and the
+kernel selector, then update the driver's method env. Two of five names survive, so the renames are
+likely narrow. Until then no serving arm can exercise the fused path.
+
 ## v1.13.0 — server runs clean with the 0.7 port, but the 4-mode split never engages (2026-10-11)
 
 Arm `MTPMIX_SPLIT`, chat 24/s, all four path shims fixed. At 4156 server log lines:

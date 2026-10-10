@@ -870,6 +870,47 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[x] WHY THE SPLIT DOES NOT ENGAGE: three of the five mixing flags NO LONGER EXIST in the 0.7-port
+fork (2026-10-11). Found by grep, no GPU.**
+
+`run_mixed_workloads.py` sets five env flags for the `MTPMIX_SPLIT` arm. Checked against
+`sglang-up/python/sglang/`:
+
+| flag the driver sets | read by the fork? |
+|---|---|
+| `SGLANG_MIXED_SPEC` | **yes** -- `srt/managers/scheduler.py` |
+| `SGLANG_FUSED_FA3_SM_SPLIT` | **yes** -- `srt/layers/attention/flashinfer_backend.py` |
+| **`SGLANG_ALLOW_MIXED_CHUNK_SPEC`** | **NO -- absent** |
+| **`SGLANG_TWO_EXEC`** | **NO -- absent** |
+| **`SGLANG_MIXED_ATTENTION_KERNEL`** | **NO -- absent** |
+
+**`SGLANG_ALLOW_MIXED_CHUNK_SPEC` is the one that lets a prefill chunk merge with running decode
+rows** -- precisely the merge whose absence shows up as separate `Prefill batch` / `Decode batch`
+lines. **The driver asks for mixing and the fork never hears the request.** `SGLANG_TWO_EXEC` and
+`SGLANG_MIXED_ATTENTION_KERNEL` are likewise dead names, so the two-executor split and the kernel
+selection are also unrequested.
+
+**This is a DRIFT between the serving driver and the fork, not a kernel defect.** The driver was
+written against the 0.3.1-era fork that honoured these names; the 0.7 port renamed or replaced them
+and the driver was never updated. It explains, exactly:
+
+* why the server runs perfectly clean (it is running the STOCK path -- no mixing requested, so
+  nothing fused to go wrong);
+* why there are 0 fallbacks (nothing to fall back FROM);
+* why `K6`'s CUDA-graph fault did not reproduce (graphs-on is fine when the split never engages);
+* and why six serving attempts could never have measured the fused path, independent of the five
+  provisioning blockers fixed before this one.
+
+**What this costs:** the "0 fallbacks, 0 tracebacks, CUDA graphs on" positives I recorded one entry
+above are **real but much weaker than they read** -- they describe a stock-path server, not the
+fused one. Corrected here rather than left standing.
+
+**The fix is a name audit, and it is the next concrete step:** find what the 0.7 fork calls the
+mixed-chunk-spec gate, the two-executor switch and the kernel selector, then update
+`run_mixed_workloads.py`'s method env. `SGLANG_MIXED_SPEC` and `SGLANG_FUSED_FA3_SM_SPLIT` survive,
+so the renames are likely narrow. Until then **no serving arm can exercise the fused path**, and the
+goal's central question stays unanswerable rather than merely unanswered.
+
 **[!] THE SERVER RUNS CLEAN WITH THE 0.7 PORT -- BUT THE 4-MODE SPLIT NEVER ENGAGES, SO THE FUSED
 KERNEL IS NEVER EXERCISED (2026-10-11).**
 

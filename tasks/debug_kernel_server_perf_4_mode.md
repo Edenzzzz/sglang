@@ -706,7 +706,43 @@ is the first to reuse any of it:
    cycles the phase 4-7 times. Any arrival-count asymmetry compounds per item rather than cancelling.
 3. The attention updater's smem scratch, if any is shared.
 
-**[x] FOUR-CORNER BISECT (2026-10-10), and it CORRECTS my "stock paths are CLEAN" claim.** Split
+**[x] FOUR CORNERS x10, RATES NOT POINTS (2026-10-10). The BASELINE is racy, so "revert to stock"
+is not a fix.** G=1, 129 requests, ~6.9 items/CTA, handshake OFF, 10 runs per corner:
+
+| gather | store | runs with bad rows | mean bad / run | worst single |
+|---|---|---|---|---|
+| packed | packed (**production default**) | **10 / 10** | **128.0** | 144 |
+| packed | stock | 10 / 10 | 19.4 | 36 |
+| stock | packed | 6 / 10 | 20.7 | 48 |
+| **stock** | **stock** (baseline) | **7 / 10** | **5.6** | 16 |
+
+**Three facts, each now properly sampled:**
+1. **The multi-item-per-CTA path is racy in ALL FOUR corners, baseline included** -- 7/10 runs fail
+   with stock's TMA Q load and stock `write_tiled` on both sides, mean 5.6 bad rows of 384. So the
+   defect is NOT confined to our packed additions, and **reverting them would not produce a correct
+   kernel**. This supersedes both the "stock is CLEAN 0/384" single-run claim and the "the defect is
+   OURS" conclusion drawn from it.
+2. Each packed path independently amplifies the baseline ~3.5x (19.4 and 20.7 vs 5.6).
+3. **Together they give 128, not ~35** -- 23x the baseline and strongly superlinear. They interact,
+   which fits `sQ` and `sO` both living in the aliased smem region and both being reused per work
+   item.
+
+**What this means for the project, stated plainly.** The multi-item-per-CTA configuration is what a
+real 4-mode batch produces (a prefill chunk plus tens to hundreds of decode rows), and the port is
+**incorrect there in every configuration tested**. That is a deeper problem than a packed-path bug:
+our `UnifiedWgmmaTileScheduler` drives several work items through one CTA, reusing `sQ`, `sO` and
+the `barrier_Q` phase per item, and nothing in the 0.7 components we reuse was validated in that
+configuration. **No serving arm can run, and no kernel timing on a realistic batch shape is
+meaningful, until the baseline race is root-caused.**
+
+**Next: root-cause the BASELINE race first, not the packed amplification.** It is the simplest
+reproducer (stock paths on both sides, 7/10 runs, mean 5.6 rows) and whatever fixes it may remove
+the interaction term that makes the packed combination 23x worse. Start by asking what 0.7's own
+FA3 does differently: does any 0.7 configuration actually run multiple work items through one CTA,
+or is our persistent multi-item loop a configuration its epilogue and `barrier_Q` phase handling
+have never seen?
+
+**[SUPERSEDED] [x] FOUR-CORNER BISECT (2026-10-10), and it CORRECTS my "stock paths are CLEAN" claim.** Split
 `write_packed`'s gate (`FUSED_PACKED_O`) from the Q gather's so the two could be mixed. G=1,
 129 requests, ~6.9 items/CTA, handshake OFF:
 

@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.63.0 — the multi-item-per-CTA path is racy in ALL corners, baseline included (2026-10-10)
+
+Four corners × 10 runs, G=1, 129 requests, ~6.9 work items per CTA, handshake OFF:
+
+| gather | store | runs with bad rows | mean bad/run | worst |
+|---|---|---|---|---|
+| packed | packed (**default**) | **10/10** | **128.0** | 144 |
+| packed | stock | 10/10 | 19.4 | 36 |
+| stock | packed | 6/10 | 20.7 | 48 |
+| **stock** | **stock** | **7/10** | **5.6** | 16 |
+
+**Supersedes two earlier single-run claims** — "stock is CLEAN 0/384" and "the defect is OURS".
+Both were n=1 on a configuration whose failure rate is a few percent.
+
+- The path is racy in **all four corners**, so reverting the packed additions would not give a
+  correct kernel.
+- Each packed path amplifies the baseline ~3.5×; **together 23×**, strongly superlinear — they
+  interact, consistent with `sQ` and `sO` sharing the aliased smem region and both being reused
+  per work item.
+
+**Consequence:** a real 4-mode batch (chunk + tens to hundreds of decode rows) *is* the multi-item
+configuration, and the port is incorrect there in every configuration tested. No serving arm and no
+realistic-shape timing is meaningful until the baseline race is root-caused.
+
+**Next:** root-cause the *baseline* race first (simplest reproducer), and start by establishing
+whether any 0.7 configuration actually runs multiple work items through one CTA — our persistent
+multi-item loop may be a configuration its epilogue and `barrier_Q` phase handling have never seen.
+
 ## v0.62.0 — decode-heavy arm: the fusion is NET NEGATIVE on realistic shapes (2026-10-10)
 
 The +5.4% in v0.61.0 was measured with **2 decode tokens**. I predicted the margin would grow with

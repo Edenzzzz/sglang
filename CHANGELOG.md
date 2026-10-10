@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.98.0 — prefill-on-prefill REFUTED; the interference is CROSS-BLOCK (2026-10-10)
+
+| arm | prefill items/CTA | decode items in grid | fails |
+|---|---|---|---|
+| `DEC_ROWS=1 SM_SPLIT=all` | ~0.4 | 7 | 0/6 |
+| **`DEC_ROWS=1 SM_SPLIT=8`** | **~7** | **7** | **0/6 — CLEAN** |
+| `DEC_ROWS=128 SM_SPLIT=all` | ~7 on 8 blocks | **896** | 6/6, ~100 bad rows |
+
+Packing the 56 prefill items onto 8 blocks with no decode work is **clean** — same density as the
+corrupting config, different decode count. So:
+
+1. **Prefill-on-prefill interference refuted** (my framing from v0.97.0, dead one arm later).
+2. **>1 item/CTA is necessary but not sufficient**; what tracks the defect is the **total decode item
+   count in the grid**.
+3. **The interference is therefore CROSS-BLOCK.** Corrupted blocks are ~94% prefill, so the 896 decode
+   items are on *other* blocks — and a block's items cannot touch another block's shared memory. That
+   **eliminates `smem_q`, `sO`/`smem_v`, the K/V stages and every shared-memory mechanism as the
+   route**; they can only be within-block contributors, which is exactly how the two confirmed ones
+   behaved (partial, depth-scoped).
+
+**New suspect list is global/device state**, led by the **`cluster_cursor` backfill queue** — ours,
+not stock's: "one device-side cursor every block pulls persistent cluster indices from once its own
+work is done". Heavy backfill at 896 items, almost none at 7; cross-block by construction; a race by
+construction (atomic cursor); and being our addition explains why stock-configured arms fail at a
+lower rate rather than never. Also: `num_pers_clusters`, merge slab sizing (weakened — `NOSPLIT=1`
+didn't help), `fa3_batch_list`.
+
+Next: disable backfill / `num_pers_clusters = 0` at `DEC_ROWS=128 SM_SPLIT=all` (the 6/6 config). If
+it goes clean, 26 eliminations resolve to one mechanism that is entirely our own addition.
+
 ## v0.97.0 — per-item-type accounting balances (25th); aggressor/victim story RETRACTED (2026-10-10)
 
 Counters split into full-tile (`qo_len >= CTA_Q`) and partial-tile populations so an imbalance between

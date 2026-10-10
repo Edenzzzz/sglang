@@ -870,6 +870,47 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[!!] PREFILL-ON-PREFILL REFUTED, AND THE INTERFERENCE IS CROSS-BLOCK -- which rules out shared
+memory entirely (2026-10-10). 26th elimination, and it redirects the whole search.**
+
+| arm | prefill items/CTA | decode items in grid | fails |
+|---|---|---|---|
+| `DEC_ROWS=1 SM_SPLIT=all` (control) | ~0.4 | 7 | **0/6** |
+| **`DEC_ROWS=1 SM_SPLIT=8`** | **~7** | **7** | **0/6 -- CLEAN** |
+| `DEC_ROWS=128 SM_SPLIT=all` (known) | ~7 on 8 blocks | **896** | 6/6 at ~100 bad rows |
+
+**Packing the 56 prefill items onto 8 blocks at ~7 each, with essentially no decode work, is
+CLEAN.** The density is the same as the corrupting configuration; the decode item COUNT is not. So:
+
+1. **Prefill-on-prefill cross-item interference is REFUTED** -- my framing from the previous entry,
+   dead one arm later.
+2. **`>1 work item per CTA` is NECESSARY BUT NOT SUFFICIENT.** The threshold sweep's "clean 15/15
+   below 1 item/CTA" still holds, but density alone does not reproduce the defect. What tracks it is
+   the **total number of decode items in the grid**.
+3. **[!] THEREFORE THE INTERFERENCE IS CROSS-BLOCK.** The plan decode showed the corrupted blocks
+   are ~94% prefill (6-8 FULL vs 0-1 PART items), so the 896 decode items live on OTHER blocks. A
+   block's decode items cannot touch another block's shared memory. **That eliminates `smem_q`,
+   `sO`/`smem_v`, the K/V stages and every other shared-memory mechanism as the ROUTE** -- they can
+   only ever be contributors within a block, which is exactly how the two confirmed ones behaved
+   (partial and depth-scoped).
+
+**The suspect list is now global/device state, and the fused kernel has one that stock does not:**
+the **`cluster_cursor` backfill queue** -- `fused_plan.cuh`'s *"one device-side cursor every block
+pulls persistent cluster indices from once its own work is done: this is what lets an SM that
+finished FA3 backfill the tile-16 queue instead of idling"*. With 896 decode items there is heavy
+backfill; with 7 there is almost none. That matches the measured dependence exactly, is cross-block
+by construction, is a race by construction (an atomic cursor), and is **ours, not stock's** -- which
+also explains why stock-configured arms fail at a much lower rate rather than never.
+
+Other global candidates, ranked: `num_pers_clusters` / the persistent cluster list; `merge_indptr` /
+`merge_o_indices` sizing (though `FUSED_NOSPLIT=1` did not help, which weakens the slab); and the
+`fa3_batch_list` compaction.
+
+**Next test, and it is a single knob:** the backfill is what `cluster_cursor` exists for. Disable
+backfill (or set `num_pers_clusters = 0`) at `DEC_ROWS=128 SM_SPLIT=all` -- the configuration that
+fails 6/6. If it goes clean, the backfill queue is the route and 26 eliminations resolve to one
+mechanism that is entirely our own addition.
+
 **[x] PER-ITEM-TYPE ACCOUNTING BALANCES (25th elimination) -- AND IT KILLS MY AGGRESSOR/VICTIM
 STORY: THE CORRUPTED BLOCKS ARE NEARLY PURE PREFILL (2026-10-10).**
 

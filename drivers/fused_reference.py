@@ -264,6 +264,49 @@ def main():
     print(f"pers_plan: {len(pers_plan)} entries, num_merge_rows={pers_plan[-2]}, "
           f"num_fa3_clusters={pers_plan[-1]}")
 
+    # PLANMAP=1: decode the plan ON THE HOST and print, per block, the FA3 work items it owns and
+    # the output rows each item covers. This replaces the device-side [item] trace, which could not
+    # work: correlating bad rows to items needs per-item identity, device printf masks the race (952
+    # prints took the failing arm to 0/384), so the correlation is impossible from inside the
+    # kernel. The plan is built here on the host before launch, so reading it perturbs NOTHING.
+    #
+    # Layout of FusedPlanInfo<4> (fused_plan.cuh): [0]=num_blks_x, [1]=num_blks_y, then tasks[4]
+    # x 11 int64 offsets, so task t field f sits at 2 + t*11 + f with
+    #   f: 0=q_indptr 1=kv_indptr 2=partial_indptr 3=q_len 4=kv_len 5=q_start
+    #      6=kv_start 7=kv_end 8=kv_head_idx 9=batch_idx 10=work_indptr
+    # Task 3 is the wgmma/FA3 queue, which is what MIX_ALL_FA3=1 routes everything to.
+    if _os.environ.get("PLANMAP") == "1":
+        _iw = int_ws.view(torch.int32).cpu()
+        _T = 3
+        # The plan's *_offset fields are BYTE offsets into int_ws, not int32 indices: the first
+        # decode read them as element indices and got all zeros for work_indptr. The stride
+        # between consecutive field offsets is 3808 bytes = 952 int32s, and 952 is exactly the
+        # item count, which is what identified the units.
+        _off = {k: int(pers_plan[2 + _T * 11 + i]) // 4 for i, k in enumerate(
+            ["q_indptr", "kv_indptr", "partial_indptr", "q_len", "kv_len", "q_start",
+             "kv_start", "kv_end", "kv_head_idx", "batch_idx", "work_indptr"])}
+        print(f"[planmap] task3 int32 indices (byte offsets / 4): {_off}")
+        _nblk = int(pers_plan[0]) * max(1, int(pers_plan[1]))
+        _wi = _iw[_off["work_indptr"]: _off["work_indptr"] + _nblk + 1].tolist()
+        print(f"[planmap] num_blks={_nblk} work_indptr[:12]={_wi[:12]} total_items={_wi[-1] if _wi else 0}")
+        _n = _wi[-1] if _wi else 0
+        _qs = _iw[_off["q_start"]: _off["q_start"] + _n].tolist()
+        _bi = _iw[_off["batch_idx"]: _off["batch_idx"] + _n].tolist()
+        _kl = _iw[_off["kv_len"]: _off["kv_len"] + _n].tolist()
+        # item -> owning block, by inverting work_indptr
+        _owner = {}
+        for _b in range(_nblk):
+            for _it in range(_wi[_b], _wi[_b + 1]):
+                _owner[_it] = _b
+        print(f"[planmap] first 8 items: " + " ".join(
+            f"(it={i} blk={_owner.get(i)} q_start={_qs[i] if i < len(_qs) else '?'} "
+            f"batch={_bi[i] if i < len(_bi) else '?'} kv_len={_kl[i] if i < len(_kl) else '?'})"
+            for i in range(min(8, _n))))
+        _PLANMAP = {"owner": _owner, "q_start": _qs, "batch_idx": _bi, "kv_len": _kl,
+                    "work_indptr": _wi, "nblk": _nblk}
+    else:
+        _PLANMAP = None
+
     # FA3's own plan. Always covers at least one request, even when the mask routes nothing to
     # FA3: flashinfer's plan rejects an empty batch, and the wgmma role's work comes from the
     # PLAN'S TASK 3, which the mask leaves empty -- so a dummy plan here drives no work.

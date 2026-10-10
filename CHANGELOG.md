@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.87.0 — host decode works; bad rows come in aligned runs of 4 token rows (2026-10-10)
+
+```
+verdict: bad rows 124/384     <- still FAILS, so the host decode perturbs nothing
+BADROWS rows 4,5,6,7 / 16,17,18,19 / 20,21,22,23 ...
+```
+
+Every device route to this information took the failing arm to 0/384; reading the plan on the host
+leaves it at 124/384. **This instrument is usable where none of the others were.**
+
+**New structural clue — the first thing learned about *which* rows are wrong:** bad rows form
+**aligned runs of 4 consecutive token rows**. At G=4 that is **16 packed rows**, which is exactly
+`size(dst)` / `NUM_KV_PER_ITER` from the `[kvinv-dims]` output. So the corruption granularity is
+**one gather iteration** — not one tile (32 token rows) and not one item. That is a far tighter target
+than "a tile".
+
+**Bug in my own decode, fixed:** `work_indptr` read as all zeros because I treated the plan's
+`*_offset` fields as int32 indices; they are **byte** offsets (stride 3808 bytes = 952 int32s = the
+item count, which identified the units). Dividing by 4 and re-running.
+
 ## v0.86.0 — catch-22: the bad-row correlation cannot use device prints (2026-10-10)
 
 Fixing the trace's aiming problem exposed a structural one. Adding per-item identity prints made the

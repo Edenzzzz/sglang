@@ -819,6 +819,32 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[x] HOST-SIDE DECODE WORKS, AND THE BAD ROWS HAVE STRUCTURE: ALIGNED RUNS OF 4 TOKEN ROWS
+(2026-10-10).**
+
+```
+verdict: bad rows 124/384        <- the arm STILL FAILS: the host decode perturbs nothing
+BADROWS [(4, 5.59), (5, 5.17), (6, 5.64), (7, 5.02),
+         (16, 5.27), (17, 5.17), (18, 5.16), (19, 5.01),
+         (20, 6.21), (21, 6.46), (22, 6.62), (23, 7.23)] ...
+```
+
+**The validity check is the important part of the first line.** Every device-side route to this
+information took the failing arm to 0/384; reading the plan on the host leaves it at 124/384, so
+this instrument is usable where none of the others were.
+
+**NEW STRUCTURAL CLUE, the first thing learned about WHICH rows are wrong:** bad rows come in
+**aligned runs of 4 consecutive token rows** (4-7, 16-19, 20-23, ...). At G=4 that is **16 packed
+rows** per run -- and 16 is exactly `size(dst)` and `NUM_KV_PER_ITER` from the `[kvinv-dims]`
+output. So the corruption granularity is **one gather iteration**, not one tile (128 packed rows /
+32 token rows) and not one item. Whatever goes wrong spoils the 16 packed rows a thread group
+handles in a single pass, which is a much tighter target than "a tile".
+
+**And a bug in my own decode, fixed:** `work_indptr` came back all zeros because I read the plan's
+`*_offset` fields as int32 INDICES. They are **BYTE** offsets -- the stride between consecutive
+field offsets is 3808 bytes = **952 int32s**, and 952 is exactly the item count, which is what
+identified the units. Dividing by 4 is the fix; re-running.
+
 **[!] CATCH-22: THE CORRELATION CANNOT BE DONE WITH DEVICE PRINTS AT ALL (2026-10-10).** Fixing
 the aiming problem exposed a structural one.
 

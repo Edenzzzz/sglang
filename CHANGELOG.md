@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.08.0 — the 9.6× harness number and the +19.8% serving number are NOT comparable (2026-10-11)
+
+Two of my claims sat in apparent contradiction; this reconciles them.
+
+| | this session's 9.6× | the recorded +19.8% |
+|---|---|---|
+| kernel version | **flashinfer 0.7 port** | **0.3.1 stack** |
+| what ran | harness fixture (1 prefill chunk 256×2048 + N decode rows) | real server, chat 24/s + codex 0.1 sess/s |
+| baseline | `BatchAttention`, same fixture | stock sglang MTP (`MTP_LPT`) |
+| what it measures | the attention kernel alone | whole 4-mode step + EDFP ordering |
+
+The **0.3.1** kernel in the full stack cleared the bar; the **0.7 port** measures 9.6× off a different
+baseline on a synthetic fixture. **Neither tells us how the 0.7 port behaves in the server** — which
+is exactly what the goal asks ("verify and optimize the kernel perf on server side").
+
+**What is actually left:** (1) **a serving arm with the 0.7 port** — if the harness slowness carries
+over it would *regress* the recorded +19.8%; if it doesn't (attention is only 20.5% of GPU time per
+B1, and server shapes differ from the fixture) the 9.6× is a fixture artifact. **No measurement in
+this session distinguishes these.** (2) **S** and **M**, never run. (3) **B3** and B2c's
+unimplemented multicast / `tma_store_wait`.
+
+**Scope correction:** "the kernel route is closed" holds for the harness fixture and the design's
+internal comparisons (FA2 5–12× off FA3; all-FA3 failing; the 1.3–1.5× prize). It is **not**
+established for the server, since this session ran no serving arm. The earlier commit overstated its
+scope; this draws the line.
+
 ## v1.07.0 — CORRECTION: the bar was already MET and srv_correctness.py already PASSED (2026-10-11)
 
 I spent this session reporting "no ≥30% TTFT/ITL, no ≥10% throughput, no serving arm passing

@@ -870,6 +870,46 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[!] THE 9.6x HARNESS NUMBER AND THE +19.8% SERVING NUMBER ARE NOT COMPARABLE -- and that gap is
+the remaining work the goal actually asks for (2026-10-11).**
+
+Two claims of mine sit in apparent contradiction and I should not leave them that way:
+
+* this session: *"the two-role fused kernel is 9.6-9.8x slower than `BatchAttention`"*;
+* the record: *"full stack delivers -37.7% codex ITL and +19.8% throughput"*.
+
+If the attention kernel were really 9.6x off in the server, the second could not hold. **They are
+different measurements and neither invalidates the other:**
+
+| | this session's 9.6x | the recorded +19.8% |
+|---|---|---|
+| kernel version | **flashinfer 0.7 port** | **0.3.1 stack** |
+| what ran | harness fixture: 1 prefill chunk (256x2048) + N decode rows | real server, chat 24/s + codex 0.1 sessions/s |
+| baseline | `BatchAttention` on the same fixture | stock sglang MTP (`MTP_LPT`) |
+| what it measures | the attention kernel alone | the whole 4-mode step plus EDFP ordering |
+
+So: the **0.3.1** kernel inside the full stack cleared the bar; the **0.7 port** measures 9.6x off a
+different baseline on a synthetic fixture. **Neither tells us how the 0.7 port behaves in the
+server**, and that is precisely what the goal asks for -- *"you must verify and optimize the kernel
+perf on server side"*.
+
+**This is the honest statement of what is left, and it is a real gap rather than a formality:**
+
+1. **A serving arm with the 0.7 port.** If the port's harness slowness carries into the server, it
+   would REGRESS the recorded gains, and the +19.8% would not survive the upgrade. If it does not
+   carry -- because attention is only 20.5% of GPU time (B1) and the server's shapes differ from the
+   harness fixture -- then the 9.6x is a harness artifact of an unrepresentative shape and the port
+   is fine. **I do not know which, and no measurement in this session distinguishes them.**
+2. **S** (EDF perf model vs unfused baseline) and **M** (multi-node, H20 <=16 GPUs, trial
+   `vibecuda`) -- never run.
+3. **B3**, and B2c's **unimplemented** multicast / `tma_store_wait`.
+
+**Where that leaves the kernel verdict I committed earlier:** "the kernel route is closed" is
+supported for the HARNESS fixture and for the design's internal comparisons (FA2 5-12x off FA3; the
+all-FA3 path failing; the 1.3-1.5x prize). It is **NOT** established for the server, because this
+session ran no serving arm. The earlier commit overstated its scope by not drawing that line, and
+this entry draws it.
+
 **[!!!] CORRECTION TO MY OWN STATUS REPORTING: THE BAR WAS ALREADY MET, AND `srv_correctness.py`
 ALREADY PASSED (recorded 2026-10-08; found 2026-10-11).**
 

@@ -14,6 +14,50 @@ validation come FIRST (user 2026-10-10)**; per-class SLO targets derive from the
 not invented; H20/multi-node only after ALL kernel items close; **-5% to -8.4% in-server is
 NOT acceptable** -- the kernel must be a gain.
 
+### [x] K1.race CLOSED (2026-10-10), and a NEW 20x defect found on the FA2-only path
+
+**The race is fixed.** `FLASHINFER_FUSED_ALIAS_SMEM` + `FUSED_FA3_STAGES=2`, **both now the
+loader defaults**. `mixed` @ `SM_SPLIT=128` -- the co-resident configuration -- 35 runs per arm:
+
+| arm | failures / 35 | fused ms |
+|---|---|---|
+| **alias + 2 stages (new default)** | **0 / 35** | **0.2426** |
+| disjoint + 1 stage (old default) | 3 / 35 | 0.2486 |
+
+Correct, race-free **and 2.4% faster**. Aliasing puts the FA2 runners' storage at offset 0 so
+`smem_size = max(FA3, FA2) = 163920` instead of `FA3 + FA2 = 234544`, which is what lets the
+2-stage pipeline launch at all against the 232448 B limit. 2 stages is what stock 0.7 relies on to
+make the `smem_v`/`smem_o` union safe, so this restores the invariant our port had removed.
+
+It also **settles the two contradictory records** in favour of "aliasing is sound": the feared
+mbarrier conflict (CUTLASS initialises FA3's pipeline barriers before the `sm_split` branch) does
+not reproduce on today's tree.
+
+**All six fixtures pass on the new defaults:**
+
+| fixture | rel err | rows | fused ms | unfused ms |
+|---|---|---|---|---|
+| `fa3_1chunk` | 0.002071 | 0/128 | **0.0203** | 0.0306 (**1.51x faster**) |
+| `fa3_split` | 0.00325 | 0/32 | 0.0412 | 0.0368 |
+| `fa3_multitile` | 0.002756 | 0/256 | 0.0421 | 0.0311 |
+| `fa3` | 0.003279 | 0/258 | 0.2557 | 0.0378 |
+| `mixed` | 0.003279 | 0/258 | 0.2429 | 0.0711 |
+| `fa2` | 0.002126 | 0/258 | **13.34** | 0.0547 |
+
+**[ ] NEW DEFECT, previously unmeasured: the FA2-only path is ~20x slower than unfused.** I had
+never timed `MODE=fa2` fused. Sweeping the split:
+
+| `SM_SPLIT` | fused ms | note |
+|---|---|---|
+| 1 / 4 / 16 / 64 | 1.103 / 1.104 / 1.101 / 1.145 | flat |
+| 128 | **13.34** | 12x cliff -- FA2 starved to 4 SMs |
+
+So two separate problems: a **12x cliff** when `sm_split` leaves FA2 almost no SMs (the mirror of
+the `sm_split=16` misallocation found earlier on `mixed`), and a **20x floor** even at the best
+split (1.10 vs 0.055 ms). **This matters more than it looks: decode-only steps are FA2-only**, so a
+20x-slow FA2 path would dominate any end-to-end serving number -- and that is exactly where the
+earlier in-server -5% to -8.4% came from. Investigate before any serving A/B.
+
 ### THE TWO MAIN KERNEL ITEMS (user, 2026-10-09) — both NOT STARTED
 
 #### A. Ultra fine-grained tile dispatcher — **[ ] NOT STARTED, nothing implemented**
@@ -250,7 +294,7 @@ attention measures the scheduling change alone and cannot show the thesis.
 |---|---|---|
 | **K1** | port the fused kernel to flashinfer 0.7 (prerequisite for both A and B) | **~done, 1 bug open** |
 | K1.corr | every fixture PASSES the causal fp32 reference, `mixed` included | **[x]** rel 0.0033 |
-| K1.race | intermittent 1-row race in the **FA3 SPLIT path** (not cross-role), ~1 in 12 runs | **[ ] OPEN** |
+| K1.race | **CLOSED** by `ALIAS_SMEM` + `STAGES=2` (now default): 0/35 co-resident | **[x]** |
 | K1.perf | split-KV path was 78% of kernel time; chunk-size sweep gave **4.5x** on `fa3` | **[~]** still 1.5-2.5x off |
 | **S** | server integration: EDF perf model vs unfused baseline | **[ ] NOT RUN** |
 | **M** | multi-node PD colocation (H20 only, <=16 GPUs, trial `vibecuda`) | **[ ] NOT RUN** — doc: `pd_colocation_vs_disagg.md` |

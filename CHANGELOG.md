@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.57.0 — race CLOSED (alias + 2 stages, now default); FA2-only path found 20x slow (2026-10-10)
+
+### Fixed — the intermittent race
+
+`FLASHINFER_FUSED_ALIAS_SMEM` + `FUSED_FA3_STAGES=2`, both now loader defaults. `mixed` @
+`SM_SPLIT=128` (co-resident), 35 runs per arm:
+
+| arm | failures / 35 | fused ms |
+|---|---|---|
+| **alias + 2 stages (new default)** | **0 / 35** | **0.2426** |
+| disjoint + 1 stage (old default) | 3 / 35 | 0.2486 |
+
+Aliasing puts FA2's storage at offset 0 so `smem = max(FA3, FA2) = 163920` rather than
+`FA3 + FA2 = 234544`, which is what lets 2 stages launch under the 232448 B limit. Stock 0.7 relies
+on double buffering to make the `smem_v`/`smem_o` union safe; our 1-stage port had removed that
+invariant. Settles the tree's two contradictory records in favour of "aliasing is sound".
+
+All six fixtures pass on the new defaults. `fa3_1chunk` is **1.51× faster** than unfused
+(0.0203 vs 0.0306 ms).
+
+### New defect — the FA2-only path is ~20× slower than unfused
+
+Never previously timed. `MODE=fa2`: **1.10 ms** at `SM_SPLIT` 1/4/16/64, **13.34 ms** at 128 (FA2
+starved to 4 SMs — a 12× cliff, mirroring the earlier `sm_split=16` misallocation on `mixed`), vs
+**0.055 ms** unfused. Two problems: the cliff, and a 20× floor at the best split.
+
+**Decode-only steps are FA2-only**, so this would dominate any end-to-end serving number and is a
+strong candidate for the earlier in-server −5% to −8.4%. Must be understood before any serving A/B.
+
 ## v0.56.0 — `STAGES=1` was never valid; and the obvious enabler for `STAGES=2` is wrong (2026-10-10)
 
 **Reframing.** Stock 0.7 has the same `union { smem_v; smem_o; }` but runs **2 stages**, and

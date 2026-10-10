@@ -870,6 +870,47 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[!] THE REAL-LOAD SERVING ARM CANNOT RUN ON THIS POD: the serving infrastructure was never
+restored after the re-fork (2026-10-11). Concrete blocker, with the fix list.**
+
+`ARMS="MTP_LPT MTPMIX_SPLIT" mtp_edf.sh 24 2000 30` on the 0.7 port exits immediately with
+`jsons=0` and empty fallback counts -- **no server ever launched**:
+
+```
+mtp_edf.sh: line 25: /dev/shm/w/mtpedf/rate24_p07.trace.log: No such file or directory
+python3: can't open file '/dev/shm/w/tasks/perf_model/fit_mtp_step.py'
+python3: can't open file '/dev/shm/w/slo_attain.py'
+MTP_LPT: fallbacks= tracebacks= jsons=0
+MTPMIX_SPLIT: fallbacks= tracebacks= jsons=0
+```
+
+**Not vacuous -- VOID.** The gate at least ran 33 requests; this executed nothing at all.
+
+**Cause:** this pod is the re-fork `62d25ecfb033ad4b`, and `/dev/shm/w/drv/restore.sh` restores only
+the KERNEL-harness subset -- `fused_reference.py`, the `qwen7b`/`qwen7b_eagle3` models, `up/`,
+`port07/`, `venv`. The SERVING tree was never part of it. Every serving result in this doc predates
+the re-fork and was produced on a pod that had it.
+
+**What a serving arm needs pushed before it can run (the fix list, derived from the failures):**
+
+1. `tasks/perf_model/fit_mtp_step.py` -> `/dev/shm/w/tasks/perf_model/`
+2. `slo_attain.py` -> `/dev/shm/w/`
+3. the `mtpedf/` output tree (created by the driver, but its parent must exist)
+4. whatever `mtp_edf.sh` invokes for load generation -- it expects a bench harness producing
+   per-request JSON, which is what `jsons=0` reports missing
+5. a re-check that `restore.sh` covers these, so the next re-fork does not silently drop them again
+
+**This is the honest blocker on the goal's central question.** Whether the 0.7 port's 9.6-9.8x
+harness slowness carries into a real server cannot be measured on this pod until the serving tree is
+restored. It is a provisioning gap, not a kernel finding, and it is fixable by pushing the files
+above -- but it is work that has not been done, and no serving claim about the 0.7 port should be
+made until it is.
+
+**Memory note worth keeping:** the existing memory entry says a restore left upstream sglang on
+PYTHONPATH instead of the fork, and the lesson recorded was "verify the pod tree by manifest". That
+lesson applies here and I did not apply it: I verified the KERNEL paths resolved and never checked
+the serving paths, then launched a serving arm against a tree that could not run one.
+
 **[!] SERVING GATE RAN WITH THE 0.7 PORT AND IS VACUOUS: `mixed=[]` -- the split never engaged
 (2026-10-11).**
 

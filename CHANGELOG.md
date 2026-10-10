@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.10.0 — the real-load serving arm cannot run: serving tree never restored after the re-fork (2026-10-11)
+
+`ARMS="MTP_LPT MTPMIX_SPLIT" mtp_edf.sh 24 2000 30` on the 0.7 port exits immediately, `jsons=0`, no
+server launched:
+
+```
+/dev/shm/w/mtpedf/rate24_p07.trace.log: No such file or directory
+can't open '/dev/shm/w/tasks/perf_model/fit_mtp_step.py'
+can't open '/dev/shm/w/slo_attain.py'
+MTP_LPT: fallbacks= tracebacks= jsons=0
+```
+
+**Not vacuous — void.** The gate at least ran 33 requests; this executed nothing.
+
+**Cause:** this is the re-fork `62d25ecfb033ad4b`, and `restore.sh` restores only the kernel-harness
+subset (`fused_reference.py`, models, `up/`, `port07/`, `venv`). The serving tree was never in it —
+every serving result in the docs predates the re-fork.
+
+**Fix list:** (1) `tasks/perf_model/fit_mtp_step.py`; (2) `slo_attain.py`; (3) the `mtpedf/` parent
+tree; (4) the load-generation harness producing per-request JSON (`jsons=0` is what's missing);
+(5) extend `restore.sh` so the next re-fork doesn't silently drop them.
+
+**This is the blocker on the goal's central question** — whether the 0.7 port's 9.6–9.8× harness
+slowness carries into a server. A provisioning gap, not a kernel finding, fixable by pushing the
+above; until then no serving claim about the 0.7 port is supportable.
+
+**Memory lesson I had and didn't apply:** "verify the pod tree by manifest". I verified the *kernel*
+paths resolved and never checked the serving paths, then launched a serving arm against a tree that
+couldn't run one.
+
 ## v1.09.0 — serving gate ran with the 0.7 port and is VACUOUS: `mixed=[]` (2026-10-11)
 
 First serving arm of this session, both arms of `srv_correctness.py` on the pod with the 0.7 port:

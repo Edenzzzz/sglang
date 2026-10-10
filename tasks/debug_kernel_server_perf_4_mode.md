@@ -1519,6 +1519,48 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       fused path's template parameters or params, body exonerated. Needs only an include-path
       change, not a second flashinfer version.
 
+      **[~] Split-KV, part 1 of 2 (2026-10-10): `merge_o_indices` units FIXED -- every row is now
+      written. The merged VALUES are still wrong, so part 2 is open.**
+
+      | fixture | rows written before | rows written after | rel err after |
+      |---|---|---|---|
+      | `fa3_split` | 2/32 | **32/32** | 0.5605, 31/32 bad |
+      | `fa3_multitile` | 6/256 | 128/256 | 8.134, 255/256 |
+      | `fa3` | — | 130/258 | 11.43, 255/258 |
+      | `mixed` | — | 128/256 | 11.43, 255/258 |
+      | `fa2` | 0/258 bad | **PASS 0.002126** | unaffected |
+
+      **The fix, read off 0.7's reduction rather than inferred.** In `persistent.cuh`,
+      `BlockBatchReductionPersistent::Run` resolves its destination as
+      `o_indices[packed_qo_idx] + kv_head_idx * gqa_group_size`, indexing `v_merged` viewed as
+      `[qo_len, num_kv_heads, gqa_group_size, head_dim]`. So the value must be a FLAT row index
+      over (token, qo_head) with head-in-group folded in:
+      `(token_base + token) * (num_kv_heads * G) + head_in_group`. We pushed the **token index
+      alone** -- unscaled by `num_qo_heads`, and dropping `head_in_group` entirely, so four
+      consecutive packed rows of one token collapsed onto one destination.
+
+      **It explains the old symptom exactly, which is why I trust the diagnosis:** values 0..31
+      plus `kv_head * G <= 24` land in flat rows 0..55 of an 896-row space -- token 0 and token 1
+      only. The fixture reported precisely `2/32 rows non-zero`.
+
+      **[ ] Part 2, the remaining defect: the merged values.** All rows are now written and
+      `fa2` is unaffected, so this is the reduction's arithmetic or the partials it reads, not
+      addressing. Where to look next, in order:
+      - `store_partial`'s slab offset `base + r * num_kv_chunks + kv_chunk_idx` against the
+        merge's `(indptr[packed_qo_idx] + off) * num_kv_heads + kv_head_idx`. These must agree on
+        BOTH the ordering of merge rows and the per-group base; `merge_indptr` is built in
+        (group, r) order and `store_partial` uses the group's single base plus `r * chunks`, which
+        agrees only if the merge-row ordinal equals `group_order * rows + r`.
+      - **`partial_lse`**: a wrong or unwritten LSE gives correctly-addressed rows combined with
+        wrong weights -- which is exactly the shape of the residual (all rows present, values
+        off by O(1)). `fa3_split` has 16 chunks (kv 2048, chunk 128), so a mis-weighted combine
+        across 16 partials would look like this.
+      - Why `fa3_multitile` writes only 128 of 256 token rows while `fa3_split` writes all 32 --
+        a multi-tile-specific gap in the merge-row ordinal, on top of the value bug.
+
+      Commands (sglang `0564bd6a4`, H200 pod `f929493da6e45f10`): as the unsplit entry above but with
+      `FUSED_NOSPLIT=0`.
+
       **[x] K1n CLOSED except split-KV (2026-10-10): EVERY fixture PASSES with split-KV
       disabled, `mixed` included. The remaining defect is isolated to split-KV + merge.**
 

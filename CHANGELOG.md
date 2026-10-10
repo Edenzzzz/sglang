@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.46.0 — split-KV part 1: `merge_o_indices` units fixed (2026-10-10)
+
+Every row is now written when split-KV is enabled; the merged **values** are still wrong, so this
+is partial progress, not a pass.
+
+| fixture | rows written before | after | rel err after |
+|---|---|---|---|
+| `fa3_split` | 2/32 | **32/32** | 0.5605, 31/32 bad |
+| `fa3_multitile` | 6/256 | 128/256 | 8.134 |
+| `fa3` | — | 130/258 | 11.43 |
+| `mixed` | — | 128/256 | 11.43 |
+| `fa2` | — | **PASS 0.002126** | unaffected |
+
+### Fixed
+
+- **`fused_plan.cuh` `BuildFusedMergeLayout`**: `merge_o_indices` was pushing the **token index
+  alone**. Read off 0.7's own reduction: `BlockBatchReductionPersistent::Run` resolves its
+  destination as `o_indices[packed_qo_idx] + kv_head_idx * gqa_group_size` into a `v_merged`
+  viewed as `[qo_len, num_kv_heads, gqa_group_size, head_dim]`, so the value must be a flat row
+  index over (token, qo_head): `(token_base + token) * (num_kv_heads * G) + head_in_group`. The
+  old value was unscaled by `num_qo_heads` and dropped `head_in_group`, collapsing four packed
+  rows of one token onto one destination.
+
+  It explains the prior symptom exactly: values 0–31 plus `kv_head*G <= 24` land in flat rows
+  0–55 of an 896-row space — token 0 and token 1 only, and the fixture reported precisely
+  `2/32 rows non-zero`.
+
+### Still open — split-KV part 2, the merged values
+
+All rows are written and `fa2` is unaffected, so this is the reduction arithmetic or the partials
+it reads. Next: `store_partial`'s slab offset vs the merge's slot formula (ordering and per-group
+base), `partial_lse` (a wrong LSE gives right addresses with wrong weights — the exact shape of
+the residual), and why `fa3_multitile` writes only 128 of 256 token rows.
+
 ## v0.45.0 — every fixture passes with split-KV off, `mixed` included (2026-10-10)
 
 The fused 4-role kernel passes the causal fp32 reference on **every** fixture when split-KV is

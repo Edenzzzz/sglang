@@ -1519,6 +1519,58 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       fused path's template parameters or params, body exonerated. Needs only an include-path
       change, not a second flashinfer version.
 
+      **[x] K1n CLOSED except split-KV (2026-10-10): EVERY fixture PASSES with split-KV
+      disabled, `mixed` included. The remaining defect is isolated to split-KV + merge.**
+
+      | fixture | what it adds | split | result |
+      |---|---|---|---|
+      | `fa3_split` 32 tok / kv 2048 | null case | yes | FAIL 1.326, **2/32 rows written** |
+      | `fa3_split` | long kv, 1 q tile | **no** | **PASS 0.002109, 32/32** |
+      | `fa3_multitile` 256 tok / kv 256 | **8 q tiles** | **no** | **PASS 0.002109, 256/256** |
+      | `fa3` 3 req, kv 2048/300/512 | multi-request | **no** | **PASS 0.002113, 258/258** |
+      | `mixed` FA3+FA2 co-resident, SPLIT=default | **the fused config** | **no** | **PASS 0.002113, 0/258** |
+      | `fa2` | FA2 roles only | n/a | **PASS 0.002126, 0/258** |
+
+      So the mainloop, the epilogue, packed-GQA addressing, the unified scheduler, the plan, the
+      causal bounds and **the fusion itself** are all correct at realistic sizes -- 3 requests, up
+      to 8 q tiles, kv 2048, all 7 kv heads, FA3 and FA2 roles co-resident on one grid. This is
+      the first time `mixed` has ever passed.
+
+      **What made it provable:** a `FUSED_NOSPLIT=1` knob forcing the plan's `kv_chunk` to 0,
+      which `EnumerateFusedWorkItems` reads as "one item spans the whole kv range" -- no partials,
+      no merge -- *at whatever sizes the fixture uses*. That isolation did not exist before:
+      `fa3_1chunk` was the only unsplit fixture and also the smallest (kv=128), so "unsplit" and
+      "short kv, one q tile" could not be separated. Every failing FA3 fixture splits and the only
+      passing one did not, which was suggestive but worthless as proof while they differed in size
+      too. Null case (`FUSED_NOSPLIT=0`) reproduced 1.326 / 2-of-32 first.
+
+      **[ ] REMAINING, and now the only open kernel-correctness item: split-KV + merge.**
+      Measured symptoms to work from:
+      - `fa3_split`: `num_merge_rows=128` -- the per-head packed count (32 tok x G=4), which
+        matches the documented contract (`num_packed_qo_len`, with the kernel iterating
+        `num_packed_qo_len * num_kv_heads`), so the COUNT is right.
+      - Only **2 of 32** token rows come back non-zero, and those two are wrong (rel 1.26/1.27),
+        so this is not a near-miss in the reduction arithmetic -- most output rows are never
+        written at all. Suspect `merge_o_indices` (the destination row per packed row) and
+        `store_partial`'s slab offset `base + r * num_kv_chunks + kv_chunk_idx` before the
+        reduction's arithmetic.
+      - `fa3_multitile` split: `num_merge_rows=1024`, 6/256 rows non-zero -- same shape at scale.
+      Related: [[fused-wgmma-splitkv-wrong]].
+
+      **Note for the perf work:** `FUSED_NOSPLIT=1` is a *correct* configuration, not a disabled
+      feature -- one work item spans the whole kv range. It gives less parallelism on long kv
+      (fewer CTAs busy), so it is not the configuration to publish, but it does mean a functional
+      end-to-end fused kernel exists for a first timing A/B while the merge is fixed.
+
+      Commands (sglang `d203b16c3`, H200 pod `f929493da6e45f10`):
+      ```
+      cd /dev/shm/w/drv
+      export PYTHONPATH=/dev/shm/w/up/python SGLANG_FUSED_FI_ROOT=/dev/shm/w/port07
+      TORCH_EXTENSIONS_DIR=/dev/shm/w/tn GQA1=0 FUSED_PACKED_Q=4 FA3_MBARRIER=1 FA3_STAGES=1 \
+        FA3_CAUSAL=1 MODE=mixed SM_SPLIT=default FA3_PROBE=0 KVCONST=0 FUSED_NOSPLIT=1 \
+        /dev/shm/w/venv/bin/python fused_reference.py
+      ```
+
       **[x] K1n: FA3 PASSES IN THE PRODUCTION CONFIG (2026-10-10) -- packed-GQA, G=4, 28/7 heads:
       `fa3_1chunk` rel 0.002071, 0/128. Three bugs, in two families.**
 

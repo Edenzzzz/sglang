@@ -86,6 +86,19 @@ def main():
         # to one chunk: still unsplit, still no merge, but now a valid causal problem.
         fa3_q, fa3_kv = [128], [128]
         fa2_q, fa2_kv = [], []
+    elif mode == "fa3_multitile":
+        # MULTI q tile, NO split: 256 tokens * G=4 = 1024 packed rows = 8 q tiles of CTA_Q=128,
+        # while kv=256 keeps the plan at one chunk. The `fa3` fixture changes three things at once
+        # (multi-request, multi q tile, split kv); this holds split and batch fixed so a failure
+        # here means the multi-tile path itself, and a PASS hands the blame to split/merge.
+        fa3_q, fa3_kv = [256], [256]
+        fa2_q, fa2_kv = [], []
+    elif mode == "fa3_split":
+        # The mirror: ONE q tile (32 tokens * 4 = 128 packed rows = exactly CTA_Q) with a kv long
+        # enough that the plan must chunk it. Isolates store_partial + merge_indptr/
+        # merge_o_indices + the reduction from everything about q tiling.
+        fa3_q, fa3_kv = [32], [2048]
+        fa2_q, fa2_kv = [], []
     elif mode == "fa3":
         fa3_q, fa3_kv = [256, 1, 1], [2048, 300, 512]
         fa2_q, fa2_kv = [], []
@@ -110,6 +123,17 @@ def main():
     q = torch.randn(total_q, HQ, D, device=DEV, dtype=DT) * 0.1
     k_cache = torch.randn(total_pages, HKV, D, device=DEV, dtype=DT) * 0.1
     v_cache = torch.randn(total_pages, HKV, D, device=DEV, dtype=DT) * 0.1
+    # K1n discriminator: KVCONST=1 makes every page identical, so a kernel that reads the WRONG
+    # kv row still gets the RIGHT values. "row 0 exact, the rest wrong and roughly proportional"
+    # is the signature of KV being correct for the first key and garbage beyond -- under
+    # bottom-right causal, row 0 attends to key 0 alone. PASS here => the defect is in WHICH kv
+    # rows are read; FAIL => kv values are not the cause. This is what localised the unassigned
+    # k_page_stride in one run after many turns of probing the accumulator.
+    # Stated limit: with constant K the softmax weights are uniform, so reading too FEW keys also
+    # passes. It isolates addressing, not the iteration count.
+    if _os.environ.get("KVCONST") == "1":
+        k_cache[:] = k_cache[0:1].clone()
+        v_cache[:] = v_cache[0:1].clone()
 
     qo_indptr = torch.tensor([0] + list(torch.tensor(qo_lens).cumsum(0)), dtype=torch.int32)
     kv_indptr = torch.tensor([0] + list(torch.tensor(kv_lens).cumsum(0)), dtype=torch.int32)
@@ -155,10 +179,14 @@ def main():
 
     # Host-side ground truth for the [sqv] probe: q rows the FA3 tiles should load. Tile t of
     # kv head h covers packed rows [128t, 128t+128), i.e. token 32t + (r/4), head h*4 + (r%4).
+    # Guarded on q's actual extent: this printed tile 1's base token unconditionally, which
+    # IndexErrors on any fixture with fewer than 33 tokens (fa3_split has 32) -- a diagnostic that
+    # kills the run before the measurement it was meant to explain.
     for t in (0, 1):
         tok, hd = 32 * t, 0
-        print(f"HOST q[tok={tok},head={hd},0..3] = "
-              f"{[round(float(x), 6) for x in q[tok, hd, :4]]}")
+        if tok < q.shape[0]:
+            print(f"HOST q[tok={tok},head={hd},0..3] = "
+                  f"{[round(float(x), 6) for x in q[tok, hd, :4]]}")
     # NULL CASE for the FA3 arm of this harness, never run before: does flashinfer's OWN stock
     # FA3 pass this reference? FA2 passing validates the reference for FA2's conventions only. If
     # stock FA3 fails it too, the ~45 residual is a convention mismatch here (layout, scale,

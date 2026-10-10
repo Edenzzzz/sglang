@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.45.0 — every fixture passes with split-KV off, `mixed` included (2026-10-10)
+
+The fused 4-role kernel passes the causal fp32 reference on **every** fixture when split-KV is
+disabled — including `mixed` at `SM_SPLIT=default`, i.e. FA3 and FA2 roles co-resident on one
+grid, which has never passed before.
+
+| fixture | split | result |
+|---|---|---|
+| `fa3_split` 32 tok / kv 2048 (null case) | yes | FAIL 1.326, 2/32 rows written |
+| `fa3_split` | no | **PASS 0.002109, 32/32** |
+| `fa3_multitile` 256 tok, 8 q tiles | no | **PASS 0.002109, 256/256** |
+| `fa3` 3 requests, kv 2048/300/512 | no | **PASS 0.002113, 258/258** |
+| `mixed` FA3+FA2 co-resident | no | **PASS 0.002113, 0/258** |
+| `fa2` | n/a | **PASS 0.002126, 0/258** |
+
+### Added
+
+- **`fused_plan.cuh`**: `FUSED_NOSPLIT=1` forces the plan's `kv_chunk` to 0, which
+  `EnumerateFusedWorkItems` reads as "one item spans the whole kv range" — no partials, no merge —
+  at whatever sizes the fixture uses. This isolation did not exist: `fa3_1chunk` was the only
+  unsplit fixture and also the smallest, so "unsplit" and "short kv, one q tile" were inseparable.
+  Diagnostic only (it changes the plan), though it is a *correct* configuration rather than a
+  disabled feature.
+- **`drivers/fused_reference.py`**: `fa3_multitile` (8 q tiles) and `fa3_split` (1 q tile, long kv)
+  fixtures; guarded a diagnostic that `IndexError`ed on any fixture with fewer than 33 tokens,
+  killing the run before the measurement it was meant to explain.
+
+### Still open — the only remaining kernel-correctness item
+
+Split-KV + merge. `num_merge_rows` is *correct* (128 = per-head packed count, matching the
+documented contract), but only 2 of 32 token rows come back non-zero and those two are wrong — so
+most rows are never written, pointing at `merge_o_indices` and `store_partial`'s slab offset rather
+than the reduction arithmetic.
+
 ## v0.44.0 — FA3 passes in the PRODUCTION config (packed-GQA, G=4) (2026-10-10)
 
 `MODE=fa3_1chunk` at `FUSED_PACKED_Q=4`, 28 qo / 7 kv heads: **rel 0.002071, 0/128, PASS**.

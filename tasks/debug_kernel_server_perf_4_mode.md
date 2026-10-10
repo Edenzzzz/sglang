@@ -803,7 +803,47 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
-**[!] A HYPOTHESIS THAT EXPLAINS EVERY OBSERVATION INCLUDING THE ANOMALY (2026-10-10): the defect
+**[!] GROUP-CROSSING HYPOTHESIS REFUTED (2026-10-10) -- the eighth on this defect.** Implemented
+group-major enumeration (`FUSED_GROUP_MAJOR=1`: `for h { for q0 { for kv0 } } }` instead of chunk
+outer), which makes a CTA's contiguous run share `(batch, q_start)` and differ only in kv chunk, at
+identical total work. `MODE=mix_decode DEC_ROWS=128 MIX_ALL_FA3=1`, 3 runs each:
+
+| arm | bad rows / 384 |
+|---|---|
+| default order (control) | 84, 80, 120 |
+| **group-major** | **100, 96, 96** |
+| group-major + `SPLIT_SMEM_O=1` | 83, 95, NON-FINITE |
+
+**No improvement -- marginally worse.** So `sQ` being refilled with a different Q tile between
+items is NOT the mechanism, and the neat explanation for the 217-items-passes anomaly is wrong. The
+anomaly remains unexplained.
+
+**Running tally on this one defect: eight refuted hypotheses** -- `kQueryEmpty` symmetry, `work_idx`
+symmetry, the Q-completion mechanism, scheduler advance logic, the store-completion handshake
+(which made a clean arm dirty), same-output-row collisions, per-request plan arrays, and now group
+crossings. **One contributor found and quantified:** `sO`/`smem_v` aliasing, worth ~45%
+(`FUSED_SPLIT_SMEM_O`).
+
+**What I would do next, and why I am not continuing this way.** The one instrument not yet tried is
+`compute-sanitizer --tool memcheck` -- out-of-bounds shared or global access, which `racecheck` does
+not cover and which would explain corruption with no race at all. That is a single run and it is
+the honest next step. But eight refutations against one confirmed contributor is a poor rate, and
+the strategic picture argues against spending more here regardless of the outcome:
+
+- the fusion is **net-negative** on realistic 4-mode batches (1.46-2.01x slower than all-FA3), so
+  fixing this race yields a *correct kernel that is still the wrong design*;
+- B1's measured ceiling is **29%**, below the >=30% bar, so the kernel route cannot clear it alone;
+- the baseline (`BatchAttention`) already does the whole batch in **one validated-correct persistent
+  kernel** and is 1.11x-4.9x faster than ours everywhere.
+
+**Recommendation, recorded for the decision it needs:** park the two-role fusion, and restate the
+project on **FA3-only colocation** -- one kernel, linear in KV, no `sm_split` parameter, no
+cross-role reuse, and already faster than the fusion on every realistic shape measured. Points 1,
+2 and 4 of the PD-colocation argument do not depend on the fusion at all; point 3 is *stronger*
+without it (see the 2026-10-10 section in `pd_colocation_vs_disagg.md`). That path has a live
+chance at the bar; this one has three independent blockers.
+
+**[REFUTED] A HYPOTHESIS THAT EXPLAINS EVERY OBSERVATION INCLUDING THE ANOMALY (2026-10-10): the defect
 fires when a CTA's run CROSSES `(batch, q_start)` GROUP BOUNDARIES, i.e. when `sQ` must be refilled
 with DIFFERENT Q data between items.**
 

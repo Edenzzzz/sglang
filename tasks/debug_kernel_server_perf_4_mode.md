@@ -803,15 +803,38 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
-**What would actually work, in order of cost:**
-1. **Bisect by disabling reuse rather than by hypothesis:** force one work item per CTA at the same
-   batch shape by partitioning `work_indptr` one-item-per-CTA (a planner change, ~3 lines). If the
-   corruption vanishes, reuse is confirmed as the mechanism without needing to know which buffer;
-   if it persists, reuse is exonerated and the cause is per-item, not cross-item. **This is the
-   experiment the last six hypotheses were all trying to approximate.**
-2. `--tool memcheck` for out-of-bounds smem/global access, which racecheck does not cover and which
-   would explain corruption without a race at all.
-3. Nsight Compute on the two kernels to compare barrier/pipeline stalls -- diagnostic, not decisive.
+**[~] SEPARATION ATTEMPTED, BLOCKED BY THE ORACLE.** In every sweep so far, request count and
+items-per-CTA grew together (41 requests = 2.5 items/CTA passed; 129 = 7.2 failed), so neither was
+isolated. One request with a long `qo` gives many items/CTA at request count 1:
+
+| qo (1 request, kv=8192) | items | items/CTA | result |
+|---|---|---|---|
+| 1024 | ~224 | ~1.7 | **PASS 0/1024** |
+| 2048 | ~448 | ~3.4 | **NO OUTPUT** |
+| 4096 | ~896 | ~6.8 | **NO OUTPUT** |
+
+The two larger arms produce nothing: the fp32 causal reference is **O(qo x kv x heads)** in Python
+and becomes unaffordable past qo~2048 at kv=8192 (it either OOMs or exceeds the 600 s cap). So the
+separation cannot be done with this oracle -- the harness, not the kernel, is the limit.
+
+**The fix is a cheaper oracle, and one is already validated: `BatchAttention`.** It passes the
+fp32 reference at 0 bad rows on every fixture tested, so it can serve as the correctness oracle at
+sizes where fp32 is unaffordable -- compare fused output against `BatchAttention` output rather
+than against fp32. That makes the whole (requests x items-per-CTA) plane reachable and is a
+prerequisite for separating these two variables at all.
+
+**Revised next steps, in order:**
+1. **Switch the oracle to `BatchAttention` for large fixtures** (keep fp32 for the small ones as the
+   validation of the oracle itself). ~15 lines in the driver; it already runs `BatchAttention`.
+2. Then rerun the separation: one request with qo 2048-16384 to get 3-30 items/CTA at request
+   count 1. That settles whether the corruption tracks reuse or request count -- which the last
+   seven hypotheses were all circling.
+3. `--tool memcheck` for out-of-bounds smem/global access, which racecheck does not cover and which
+   would explain corruption with no race at all.
+
+**Not worth doing:** chasing the 17 racecheck hazards (it flags stock's correct kernel too), or more
+inspection-led hypotheses -- seven have now been refuted, and the common factor is that none of them
+was a measurement that could distinguish the two live variables.
 
 **[SUPERSEDED] [x] FOUR-CORNER BISECT (2026-10-10), and it CORRECTS my "stock paths are CLEAN" claim.** Split
 `write_packed`'s gate (`FUSED_PACKED_O`) from the Q gather's so the two could be mixed. G=1,

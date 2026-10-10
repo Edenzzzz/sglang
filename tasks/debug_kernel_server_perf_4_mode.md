@@ -403,11 +403,42 @@ and relies on that wait to guarantee the store has drained before `sO`/`smem_v` 
 `store_partial` writes with plain vectorised stores and has **no completion handshake at all**, so
 nothing orders the producer's next V load against the consumer's `sO` read.
 
-**The fix (not yet implemented):** give `store_partial` a store-completion handshake before the
-producer may refill `smem_v` -- either a named-barrier arrival after the global write that the
-producer waits on, or route the partial O write through TMA and restore `tma_store_wait<0>()`. The
-second is closer to 0.7 and is the same primitive B2c needs for cross-role backfill, so it is
-likely the right one to build.
+**[x] MECHANISM CONFIRMED BY A PREDICTED INTERVENTION (2026-10-10), and there is a viable
+mitigation.** The diagnosis predicts that with `NUM_STAGES = 1` the producer's next V load targets
+exactly the memory `sO` aliases, while with `NUM_STAGES = 2` it targets the other stage. Tested,
+35 runs per arm, `MODE=fa3` @ `SM_SPLIT=all`:
+
+| arm | failures / 35 | bad rows seen |
+|---|---|---|
+| `FA3_STAGES=2` | **0 / 35** | — |
+| `FA3_STAGES=1` (control) | **3 / 35** | 224, 64, 96 |
+| `FUSED_NOSPLIT=1` (earlier) | **0 / 35** | — |
+
+**And the q-tile-boundary pattern now has six observations and holds every time:** bad rows 0, 64,
+96, 128, 224 -- all multiples of 32, i.e. always the FIRST row of a q tile (a tile spans 32 tokens
+at G=4).
+
+**Evidence quality, stated plainly:** each 0/35 vs 3/35 comparison is individually weak (Fisher
+p ~ 0.24). What carries this is that **three independent interventions all behave as one mechanism
+predicts** -- removing the split (0/35), adding a V stage (0/35), and widening the `sO` read window
+(1/10 -> 8/10) -- plus a deterministic failure location that the mechanism explains. That is a
+different kind of evidence from one underpowered A/B, and it is why I am willing to name the cause
+here when I was not willing to earlier.
+
+**Mitigation available now: `FA3_STAGES=2`.** It is perf-neutral (0.2563 vs 0.2590 ms measured
+earlier) and launches since the drain-slot gate fix. **Its limit, recorded rather than glossed:
+STAGES=2 only launches when `fa2_can_run` is false (`sm_split == nsm`), so it does NOT cover
+`mixed` at `SM_SPLIT=128` -- the co-resident case.** Covering that needs the drain slot shrunk from
+`max(r1,r2,r3) = 69632` to the runner that actually drains (r2 = 32768), which buys the 2096 B the
+launch is short.
+
+**The real fix is still the missing store-completion handshake** -- a 2-stage pipeline hides the
+race rather than ordering the accesses, and a 3+-chunk item could still wrap onto the aliased
+stage. Options, unchanged: a named-barrier arrival after the global write that the producer waits
+on, or route the partial O write through TMA and restore `tma_store_wait<0>()` in `store_tail()`.
+The TMA route matches 0.7, makes the port upstreamable, is the same primitive B2c's cross-role
+backfill needs, and would also unblock the 12% `store_partial` parallelisation that had to be
+reverted.
 
 #### OPEN -- kernel: TWO MAIN ITEMS (user 2026-10-09)
 

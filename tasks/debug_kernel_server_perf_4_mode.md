@@ -804,6 +804,36 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[x] Q-REUSE FENCE A/B -- CONTROL ARM IN, FENCE ARM RETRACTED AND RE-RUNNING (2026-10-10).**
+
+Control (`FENCE=0`, freshly built in its own extension dir, macro verified at nvcc):
+
+| arm | fails | bad rows (10 seeds) |
+|---|---|---|
+| `FENCE=0`, dec=8 | 3/10 | 0, 0, 2, 0, 1, 1, 0, 0, 0, 0 |
+| `FENCE=0`, dec=128 | **10/10** | 100, 112, 116, 116, 108, 64, 96, 88, 108, 108 |
+
+That reproduces the historical figure (mean ~102 of 384 against the previously recorded ~128) in a
+clean build tree, so the A/B is fence-vs-no-fence and not cached-vs-fresh.
+
+**[!] RETRACTION, in place: the first `FENCE=1` arm reported "fails 10/10" and that was an
+ARTIFACT, not a result.** Two compounding mistakes, both mine:
+
+1. **The patch did not compile.** The hoisted `barrier_O.wait` was inserted into
+   `get_num_kv_tiles`, where neither `shared_storage` nor `work_idx` is in scope -- the insertion
+   anchored on the first `#ifdef FLASHINFER_FUSED_PACKED_Q` in the file, which is in a different
+   function from the one holding the wait. Re-patched to the top of `load()`, after the
+   `block_coord` destructuring, which is above every write to `smem_q`.
+2. **The harness scored a missing verdict as a failure.** `v=${t#bad rows }` yields an empty
+   string when the run produces no verdict line at all, and `[ "$v" != "0" ]` is TRUE for the
+   empty string -- so a build failure, a crash and a timeout all counted as "bad rows". The
+   corrected script checks the build explicitly first, reports `NOVERDICT` separately from a
+   numeric bad-row count, and refuses to continue if the build did not produce one.
+
+This is the same family as the NaN gate recorded earlier in this doc -- a comparison that cannot
+distinguish "measured nothing" from "measured zero". The fence hypothesis itself is **untested**;
+the re-run is in flight.
+
 **[x] ITEMS-PER-CTA THRESHOLD SWEEP (2026-10-10): corruption needs >1 work item per CTA, and
 the reuse class is confirmed end-to-end.** First step of bisection-by-deletion. All-FA3,
 `SM_SPLIT=all` so every one of the 132 SMs is an FA3 CTA; correctness only, 5 seeds per point.

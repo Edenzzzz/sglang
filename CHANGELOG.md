@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.68.0 — fence control arm in; fence arm retracted as a build artifact; A2 unblocked (2026-10-10)
+
+**Control (`FENCE=0`, fresh build dir, macro verified at nvcc):** dec=8 fails 3/10; dec=128 fails
+**10/10** at 64–116 bad rows of 384 — reproducing the historical figure in a clean tree, so the A/B
+is fence-vs-no-fence rather than cached-vs-fresh.
+
+**RETRACTED: the first `FENCE=1` "10/10 fails" was an artifact.** The hoisted `barrier_O.wait` was
+inserted into `get_num_kv_tiles`, where `shared_storage` and `work_idx` are not in scope, so the arm
+never compiled; and the harness scored a *missing* verdict as a failure (`${t#bad rows }` is empty,
+and `[ "$v" != "0" ]` is true for empty). Same family as the NaN gate recorded earlier: a comparison
+that cannot tell "measured nothing" from "measured zero". Re-patched into `load()` above every
+`smem_q` write; the script now checks the build first and reports `NOVERDICT` separately. The fence
+hypothesis is **untested**.
+
+**A2 unblocked — a documented constraint was wrong.** The tree recorded "tile 48 needs 3 q-warps and
+8/3 is not integral — tile 48 requires a 6- or 12-warp layout". That assumed
+`warps_q == CTA_TILE_Q/16`; nothing requires it, because `num_mma_q` absorbs the leftover factor.
+Choosing the largest *divisor* of `kFa2Warps` whose q-width divides the tile makes all of
+{16,32,48,64,96,128} expressible at the existing 8 warps — 48 as 1q×8kv with `num_mma_q=3`, 96 as
+2q×4kv with `num_mma_q=3`. The old helper failed only because `kFa2Warps/3` truncated to 2, giving a
+silent 6-warp layout against the required 8. So the user's {16,32,48} hypothesis needs **no** change
+to `FusedPlanInfo<4>`: three widths, three FA2 task slots. Runner widths are now
+`FUSED_FA2_W0/W1/W2` with `static_assert`s on both layout invariants; defaults {128,64,16} unchanged.
+
 ## v0.67.0 — items-per-CTA threshold measured; the cross-item Q hazard named (2026-10-10)
 
 **Threshold sweep (5 seeds/point, all-FA3, `SM_SPLIT=all`):** clean 15/15 below 1 work item per CTA

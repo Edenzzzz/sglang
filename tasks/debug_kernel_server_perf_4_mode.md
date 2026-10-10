@@ -1519,6 +1519,71 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       fused path's template parameters or params, body exonerated. Needs only an include-path
       change, not a second flashinfer version.
 
+      **[x] K1n: FA3 PASSES IN THE PRODUCTION CONFIG (2026-10-10) -- packed-GQA, G=4, 28/7 heads:
+      `fa3_1chunk` rel 0.002071, 0/128. Three bugs, in two families.**
+
+      | arm | before | after |
+      |---|---|---|
+      | `fa3_1chunk` G=4 packed (production) | 7.121, 128/128 | **0.002071, 0/128 PASS** |
+      | `fa3_1chunk` G=1 packed | 0.002292 PASS | 0.002292 PASS (no regression) |
+      | `fa2` | 0.002126 PASS | 0.002126 PASS (no regression) |
+      | `fa3` multi-chunk, SPLIT=all | 1.187 | 2.643, 258/258 **still FAIL** |
+      | `mixed` | 1.121 | 2.066, 256/258 **still FAIL** |
+
+      **Bug 3 (two sites, one family): the packed-GQA rows break every TOKEN-INDEXED causal
+      bound.** Our unified FA3 role tiles over PACKED rows -- (token, head-in-group) pairs --
+      because FA3's mainloop validates the tile index against `qo_len`. 0.7's causal arithmetic is
+      token-indexed, so both the row index and `qo_len` are G times too large on the q axis. Two
+      places had to be corrected, and the token index needs an integer division, so no choice of
+      `qo_len` makes the stock expressions right:
+      - `mainloop_mma.cuh` `col_limit_right` / `col_limit_left` -- the per-row mask bound. (This
+        file is now in the overlay; it was stock 0.7 before, md5 `c82eff57` verified against the
+        pod's copy before patching.)
+      - `sparse_mainloop.cuh` `get_num_kv_tiles` -- the causal kv-tile count, and this one is why
+        most of the output was simply **missing**: at G=4 with 128 tokens (512 packed rows, 4 q
+        tiles) the stock bound gives `(0+1)*128 + 128 - 512 = -256` for q tile 0, so
+        `num_kv_tiles <= 0` and the body **exits early without storing**. Only q tile 3 survived
+        (`512+128-512 = 128`), so exactly 32 of 128 token rows were written and 96 stayed zero.
+
+      Both reduce to 0.7's expression exactly at G=1, which is why the G=1 arms passed either way.
+
+      **How it was localised, and what it cost to not do this first.** The driver's own
+      diagnostics said `ours: 32/128 rows non-zero` and `passing rows 96..127` -- one q tile's
+      worth, at the LAST tile. A scheduler probe then showed all **28 items dispatched correctly**
+      (7 per q tile, `span=1`, `nchunks=1`, `partial=-1` direct-write), which put the defect
+      inside the body rather than in the plan or the scheduler. Reading the `[wpk]` store probe
+      first -- 14 lines, every one `tile=3` -- would have pointed at the same place immediately.
+
+      **[!] RETRACTION of my own conclusion two entries above.** The K1n A/B concluded "the packed
+      gather and packed store are BOTH EXONERATED" because all three arms failed at the same
+      magnitude. That inference was **invalid**: all three were dominated by the page-stride bug,
+      which made them equal regardless of their differences. Once it was fixed, the same A/B
+      separated cleanly -- G=1 passes, G=4 fails -- and the packed path *was* implicated after
+      all. Comparing arms that share a dominant fault measures the fault, not the difference. This
+      is [[gate-needs-noise-floor-and-reference]] again: the A/B had no validated reference arm,
+      and a PASS somewhere in the matrix is what would have shown the comparison was live.
+
+      Also fixed, latent: both terminal returns in `UnifiedWgmmaTileScheduler` were still
+      **positional** -- 13 and 14 values into a 15-field `WorkTileInfo`, so `counter` received
+      `ptr_begin`, `ptr_begin` received `ptr_end`, and `num_kv_chunks` received `counter+1`. The
+      comment in `load()` documents exactly this hazard; the conversion to designated initialisers
+      had been applied to `load()` only. Not the cause of any measured symptom here.
+
+      **[ ] Still failing: multi-chunk `fa3` (2.643) and `mixed` (2.066, 256/258).** Single chunk
+      passes in every configuration and `fa2` is unaffected, so what remains is the split-KV /
+      merge path -- `num_kv_chunks > 1`, `store_partial`, `merge_indptr` / `merge_o_indices` and
+      the reduction. Consistent with [[fused-wgmma-splitkv-wrong]]. Note `SPLIT=all` (2.643) and
+      `SPLIT=default` (6.185) differ, so there is a fusion-dependent component on top.
+
+      Commands (sglang `2e766d590`, flashinfer `4b5244c+wip`, H200 pod `f929493da6e45f10`):
+      ```
+      cd /dev/shm/w/drv
+      export PYTHONPATH=/dev/shm/w/up/python SGLANG_FUSED_FI_ROOT=/dev/shm/w/port07
+      TORCH_EXTENSIONS_DIR=/dev/shm/w/tf_4_0 GQA1=0 FUSED_PACKED_Q=4 FA3_MBARRIER=1 \
+        FA3_STAGES=1 FA3_CAUSAL=1 MODE=fa3_1chunk SM_SPLIT=all FA3_PROBE=0 KVCONST=0 \
+        /dev/shm/w/venv/bin/python fused_reference.py
+      ```
+
       **[x] K1n RESOLVED for the single-tile FA3 arm (2026-10-10): FA3 PASSES, rel 0.002292,
       0/128. Two bugs, both found by parameter A/Bs on one build.**
 

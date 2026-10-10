@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.44.0 — FA3 passes in the PRODUCTION config (packed-GQA, G=4) (2026-10-10)
+
+`MODE=fa3_1chunk` at `FUSED_PACKED_Q=4`, 28 qo / 7 kv heads: **rel 0.002071, 0/128, PASS**.
+`fa2` and the G=1 arms unchanged — no regression.
+
+### Fixed — packed-GQA rows break every token-indexed causal bound
+
+Our unified FA3 role tiles over PACKED rows, `(token, head-in-group)` pairs, because FA3's
+mainloop validates the tile index against `qo_len`. 0.7's causal arithmetic is token-indexed, so
+both the row index and `qo_len` are G times too large on the q axis. The token index needs an
+integer division, so no choice of `qo_len` makes the stock expressions right.
+
+- **`mainloop_mma.cuh`** (now in the overlay; stock md5 `c82eff57` verified against the pod before
+  patching): `col_limit_right` / `col_limit_left`, the per-row mask bound.
+- **`sparse_mainloop.cuh` `get_num_kv_tiles`**: the causal kv-tile count — and this is why most
+  output was *missing* rather than wrong. At G=4 with 128 tokens (512 packed rows, 4 q tiles) the
+  stock bound gives `(0+1)*128 + 128 - 512 = -256` for q tile 0, so `num_kv_tiles <= 0` and the
+  body exits early **without storing**. Only q tile 3 survived, so 32 of 128 token rows were
+  written and 96 stayed zero.
+
+Both reduce to 0.7's expression exactly at G=1, which is why the G=1 arms passed either way.
+
+- **`unified_wgmma_scheduler.cuh`** (latent, no measured symptom): both terminal returns were
+  still positional — 13 and 14 values into a 15-field `WorkTileInfo`, so `counter` received
+  `ptr_begin`, `ptr_begin` received `ptr_end`, and `num_kv_chunks` received `counter+1`. The
+  comment in `load()` documents this exact hazard; the designated-initialiser conversion had been
+  applied to `load()` only.
+
+### Retracted in place
+
+v0.42.0 concluded "the packed gather and packed store are BOTH EXONERATED" because all three arms
+failed at the same magnitude. **That inference was invalid**: all three were dominated by the
+page-stride bug, which made them equal regardless of their differences. With it fixed the same A/B
+separates cleanly — G=1 passes, G=4 fails — and the packed path was implicated after all.
+Comparing arms that share a dominant fault measures the fault, not the difference.
+
+### Still open
+
+Multi-chunk `fa3` (2.643) and `mixed` (2.066, 256/258). Single chunk passes in every configuration
+and `fa2` is unaffected, so what remains is the split-KV / merge path (`num_kv_chunks > 1`,
+`store_partial`, `merge_indptr` / `merge_o_indices`, the reduction). `SPLIT=all` (2.643) and
+`SPLIT=default` (6.185) differ, so there is a fusion-dependent component on top.
+
 ## v0.43.0 — FA3 PASSES the causal fp32 reference for the first time (2026-10-10)
 
 `sglang@b48fa7d2`, `flashinfer@ce514ae`, H200 pod `f929493da6e45f10`. Single-tile arm

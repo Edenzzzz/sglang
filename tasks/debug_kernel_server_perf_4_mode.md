@@ -819,6 +819,48 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[!] CATCH-22: THE CORRELATION CANNOT BE DONE WITH DEVICE PRINTS AT ALL (2026-10-10).** Fixing
+the aiming problem exposed a structural one.
+
+```
+verdict: bad rows 0/384        <- PASSED, so there was nothing to correlate
+[item] lines: 952   [tile] lines: 216
+bad rows mapped to 0 distinct (block, item) pairs
+```
+
+Adding the per-item identity print made the arm **pass**: 952 + 216 device prints serialise the
+kernel and mask the race, exactly as documented for every other probe (printf 76/384 -> 0/384,
+racecheck, memcheck 0 errors AND 0/384). So:
+
+* correlating bad rows to items **requires** per-item identity from the device;
+* device `printf` **masks the defect**;
+* therefore **the race cannot be correlated by printing**. This is not a scripting mistake, it is
+  the method being self-defeating, and it rules out the whole approach rather than one attempt.
+
+**THE WAY OUT -- stop asking the device.** The item -> output-row mapping is a property of the
+PLAN, which is built on the HOST by `FusedFourTaskPlan` before the kernel launches. `work_indptr`
+gives each block's item range, and each item's `q_start` / `qo_indptr` / `q_tile_idx` /
+`o_indices` give the output rows it owns. Decoding those arrays in the harness needs **zero device
+code and therefore perturbs nothing**:
+
+1. dump the plan tensors in `fused_reference.py` (they are already passed to
+   `torch.ops.fused_fa3.fused_run`);
+2. map every `BADROWS` index to its owning `(block, work_idx)` on the host;
+3. only then, if a device trace is still needed, gate it to that single `(block, work_idx)` so the
+   print volume is ~2 lines instead of 1168 -- small enough that it may not mask.
+
+Step 3's viability is itself an open question: even a handful of prints may perturb enough. The
+honest fallback is the register-accumulate pattern -- have the kernel WRITE the per-item tile
+sequence to a global buffer (plain stores, not `printf`) which the host reads after the launch.
+Global stores are what the kernel already does for output; they do not serialise like `printf`,
+and the per-item accounting instrument already proved that writing-then-reporting preserves the
+defect (124/384 with it enabled).
+
+**Standing method rule this adds, worth keeping:** on this defect, ANY instrument that emits from
+inside the kernel while the race is live destroys the measurement. Only two patterns have survived:
+(a) register accumulation reported after the loop, and (b) a check of a DETERMINISTIC property,
+where serialisation is irrelevant. Future instruments must be one of those two.
+
 **[~] TILE-SEQUENCE TRACE: CORRECT for the item sampled, but the test was AIMED WRONG and my
 stated expectation was WRONG (2026-10-10). Inconclusive, not exculpatory.**
 

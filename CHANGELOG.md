@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.86.0 — catch-22: the bad-row correlation cannot use device prints (2026-10-10)
+
+Fixing the trace's aiming problem exposed a structural one. Adding per-item identity prints made the
+arm **pass 0/384**: 952 `[item]` + 216 `[tile]` prints serialise the kernel and mask the race, as
+documented for every other probe. So correlating bad rows to items *requires* device identity, device
+`printf` *masks the defect*, and therefore **the race cannot be correlated by printing** — the method
+is self-defeating, which rules out the approach rather than one attempt.
+
+**Way out — stop asking the device.** The item→output-row mapping belongs to the **plan**, built on
+the host by `FusedFourTaskPlan` before launch: `work_indptr` gives each block's item range, and
+`q_start`/`qo_indptr`/`q_tile_idx`/`o_indices` give the rows each item owns. Decoding those in the
+harness needs zero device code and perturbs nothing. Then, if a device trace is still wanted, gate it
+to the single offending `(block, work_idx)` (~2 lines instead of 1168). If even that perturbs, use
+plain global stores of the tile sequence read back on the host — the per-item accounting instrument
+already showed write-then-report preserves the defect (124/384 with it on).
+
+**Method rule added:** on this defect, any instrument emitting from inside the kernel while the race
+is live destroys the measurement. Only two patterns have survived — (a) register accumulation reported
+after the loop, (b) checks of a *deterministic* property, where serialisation is irrelevant. Future
+instruments must be one of those two.
+
 ## v0.85.0 — tile trace: correct for the item sampled, but aimed wrong and predicted wrong (2026-10-10)
 
 ```

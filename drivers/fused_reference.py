@@ -347,6 +347,24 @@ def main():
         print(f"[time] speedup = {t_u / t_f:.4f}x  "
               f"({100.0 * (t_u - t_f) / t_u:+.2f}% latency)")
         if _ba is not None:
+            # CORRECTNESS GATE on the control, before its timing is usable as a baseline. A faster
+            # arm that computes something cheaper is not a baseline. Compared against the same
+            # fp32 causal reference the fused arm is held to.
+            try:
+                _bo = _ba.run(q, (k_cache, v_cache))
+                _bo = _bo[0] if isinstance(_bo, tuple) else _bo
+                _bn = (_bo.float() - ref).norm().item()
+                _bd = max(ref.norm().item(), 1e-6)
+                _brel = _bn / _bd
+                _bbad = 0
+                for _r in range(total_q):
+                    _n = (_bo[_r].float() - ref[_r]).norm().item()
+                    if _n / max(ref[_r].norm().item(), 1e-6) > 2e-2:
+                        _bbad += 1
+                print(f"[time] BatchAttention CORRECTNESS: rel={_brel:.6f} bad_rows={_bbad}/{total_q}"
+                      + ("  VALID BASELINE" if _bbad == 0 else "  *** NOT A VALID BASELINE ***"))
+            except Exception as e:
+                print(f"[time] BatchAttention correctness check failed: {type(e).__name__}: {e}")
             try:
                 t_b = _bench(lambda: _ba.run(q, (k_cache, v_cache)))
                 print(f"[time] BatchAttention (flashinfer's OWN persistent kernel, the family our "

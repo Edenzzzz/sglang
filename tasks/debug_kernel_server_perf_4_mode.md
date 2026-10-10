@@ -3,16 +3,55 @@
 ## Tasks, in priority order (2026-10-10)
 
 **The bar:** >=30% TTFT & ITL and >=10% throughput on realistic mixed workloads, against
-**both** baselines (single node: prefill-prioritized AND mixed chunked prefill; multi node:
-PD multiplex AND PD disagg, with disagg the main argument). **NOT MET.** Best realistic
-figure: `mixed` fused **0.1717 ms** vs unfused **0.0690 ms** -- 2.5x SLOWER. Only the
-single-chunk microbenchmark leads (`fa3_1chunk` 1.45x faster).
+**both** baselines. **NOT MET -- and we are currently SLOWER ON EVERY FIXTURE** against the correct
+comparator, flashinfer's persistent `BatchAttention` (validated: 0 bad rows vs the fp32 reference):
+
+| fixture | fused ms | `BatchAttention` ms | fused/BA |
+|---|---|---|---|
+| `fa3_1chunk` | 0.0213 | 0.0192 | **1.11x slower** |
+| `fa3_multitile` | 0.0428 | 0.0195 | 2.19x |
+| `mixed` | 0.2433 | 0.0494 | **4.92x** |
+| `fa2` (decode-like) | 1.1036 | 0.0494 | **22.36x** |
+
+Earlier figures in this doc compared against two `BatchPrefillWithPagedKVCacheWrapper` launches,
+which is **~0.60-0.70x the speed of `BatchAttention`** -- so every ratio recorded before
+2026-10-10 is optimistic, and the one claimed win (`fa3_1chunk` 1.51x) **evaporates**: it is 1.11x
+SLOWER against the real baseline.
 
 **Standing decisions (user 2026-10-09), these override earlier framing:** the fused kernel
 MUST land on upstream (port to flashinfer 0.7, not a fork demo) and **the port plus precision
 validation come FIRST (user 2026-10-10)**; per-class SLO targets derive from the given papers,
 not invented; H20/multi-node only after ALL kernel items close; **-5% to -8.4% in-server is
 NOT acceptable** -- the kernel must be a gain.
+
+### [x] BASELINE VALIDATED, AND WE HAVE NO WIN (2026-10-10)
+
+`BatchAttention` was gated against the same fp32 causal reference the fused arm is held to, on
+every fixture: **rel 0.0018-0.0031, 0 bad rows -- VALID BASELINE**. So it is not computing something
+cheaper; it is simply faster.
+
+| fixture | fused ms | `BatchAttention` ms | fused/BA | BA vs my old 2-launch arm |
+|---|---|---|---|---|
+| `fa3_1chunk` | 0.0213 | 0.0192 | **1.11x slower** | 0.603x |
+| `fa3_multitile` | 0.0428 | 0.0195 | 2.19x | 0.588x |
+| `mixed` | 0.2433 | 0.0494 | **4.92x** | 0.698x |
+| `fa2` | 1.1036 | 0.0494 | **22.36x** | 0.901x |
+
+**The honest bottom line: the fused kernel is slower than flashinfer's own single persistent kernel
+on EVERY fixture measured, by 1.11x to 22x. There is no win anywhere.** The `fa3_1chunk` "1.51x
+faster" reported earlier was an artifact of the weaker baseline.
+
+**What this means for the plan, and it is worth the user's decision:**
+- The comparator already does the whole mixed batch in ONE persistent kernel. So "fuse two launches
+  into one" is not available as a contribution; the contribution must be **SM pre-assignment and
+  role specialisation inside a single kernel, beating `BatchAttention`**.
+- The closest configuration is `fa3_1chunk` at **1.11x** -- within reach. The furthest is FA2-only
+  at **22x**, and since **decode-only steps are FA2-only**, that path alone would sink any
+  end-to-end number. It is also the most likely explanation of the earlier in-server
+  **-5% to -8.4%**, which was never accounted for.
+- Priority implied by the numbers: fix the FA2 path (22x, and it dominates decode), then the
+  split-KV path on `mixed` (4.92x), before any of A/B/S/M. Optimising tile dispatch while the FA2
+  role is 22x off would be measuring noise on top of a much larger defect.
 
 ### [!] THE BASELINE WAS WRONG (2026-10-10). The real comparator is flashinfer's PERSISTENT
 ### `BatchAttention`, and it is FASTER than the two-launch arm I had been using.

@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.59.0 — baseline validated; we have NO win on any fixture (2026-10-10)
+
+`BatchAttention` gated against the same fp32 causal reference as the fused arm, every fixture:
+**rel 0.0018–0.0031, 0 bad rows — VALID BASELINE.** It is not computing something cheaper.
+
+| fixture | fused ms | `BatchAttention` ms | fused/BA |
+|---|---|---|---|
+| `fa3_1chunk` | 0.0213 | 0.0192 | **1.11× slower** |
+| `fa3_multitile` | 0.0428 | 0.0195 | 2.19× |
+| `mixed` | 0.2433 | 0.0494 | **4.92×** |
+| `fa2` | 1.1036 | 0.0494 | **22.36×** |
+
+**Bottom line: the fused kernel is slower than flashinfer's own single persistent kernel on every
+fixture, by 1.11× to 22×. There is no win anywhere.** The `fa3_1chunk` "1.51× faster" reported
+earlier was an artifact of the weaker two-launch baseline (which runs at 0.59–0.90× of
+`BatchAttention`).
+
+**Implied priority:** fix the FA2 path (22×, and decode-only steps are FA2-only — the likely
+explanation of the unexplained in-server −5% to −8.4%), then the split-KV path on `mixed` (4.92×),
+before any of A/B/S/M. Tile-dispatch tuning while the FA2 role is 22× off would be measuring noise
+on top of a much larger defect.
+
 ## v0.58.0 — the baseline was wrong: `BatchAttention` is the real comparator (2026-10-10)
 
 Every speedup in this project compared against "unfused" = **two `BatchPrefillWithPagedKVCacheWrapper`

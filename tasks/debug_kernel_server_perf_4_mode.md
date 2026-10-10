@@ -16,6 +16,31 @@ rows that cannot fill the tile. Detail in "The tile-occupancy defect" below.
 | A3 | **fitted linear dispatch rule** replacing the hand-set `MIN_PACKED_QO=48` threshold | **[ ]** not started |
 | A0 | priced already: **0.3-2.3%** at our config; **14.6-35.9%** at GQA 7-12 with 8-12 draft tokens | **[x]** (B1d) |
 
+**USER HYPOTHESIS (2026-10-10), logged UNTESTED — this is the rule A2/A3 should be measured
+against:** *"only do tile 16, 32, 48; >=64 should be more performant with FA3."*
+
+So the FA2 side carries **{16, 32, 48}** and the FA3 routing threshold becomes
+**`packed_qo >= 64`**, replacing the hand-set `MIN_PACKED_QO = 48` that currently admits
+[48,128) into a 128-wide tile.
+
+Knobs are in place (defaults preserve today's behaviour): `FUSED_FA2_TILES="a,b,c"` sets the
+three class widths and `FUSED_FA3_MIN_PACKED=<n>` routes `packed_qo >= n` to FA3. The class
+thresholds are now DERIVED from the configured widths rather than hardcoded at 64/16.
+
+**Two things found while wiring it, both of which bear on the hypothesis:**
+1. **Tile 48 is not expressible at the current warp count.** The FA2 layout requires
+   `warps_q * num_mma_q * 16 == CTA_TILE_Q` and `warps_q * warps_kv == kFa2Warps`. At
+   `kFa2Warps = 8` that gives 16 (1q x 8kv), 32 (2q x 4kv), 64 (4q x 2kv), 128 (8q x 1kv) --
+   but **48 needs 3 q-warps and 8/3 is not integral**. Tile 48 requires a 6- or 12-warp layout.
+   A real constraint on the {16,32,48} set, not an implementation shortcut.
+2. **No existing fixture exercises the contested band.** In `mixed` the FA2 rows are
+   `packed_qo = 4` and the FA3 row is 1024, so nothing lands in [16,128) -- the band the whole
+   dispatch question is about. Testing the hypothesis needs a fixture with rows at
+   `packed_qo` = 16/32/48/64/96 (at GQA 4: qo = 4/8/12/16/24), which does not exist yet.
+
+**Deferred by user instruction (2026-10-10): the flashinfer port and precision validation come
+FIRST, so the kernel can land directly on upstream.** A2/A3 resume after K1 closes.
+
 ### B. Fuse the small draft/verify epilogue ops — **[ ] NOT STARTED beyond the headroom study**
 
 | # | item | status |

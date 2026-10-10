@@ -216,6 +216,26 @@ def main():
     # One bit, no kernel change, and nothing that serialises -- every instrument that slowed the
     # kernel down (printf probe, racecheck, memcheck) masked this defect, so the discriminator has
     # to live in the DATA rather than in the timing.
+    # KVPERTILE=1: pages identical within each CTA_KV-sized TILE, distinct across tiles. This
+    # splits the corrected localisation (wrong row WITHIN the request) into its two mechanisms:
+    #
+    #   corruption VANISHES  -> the wrong row is inside the RIGHT tile: a lane/row addressing error
+    #                           (the __shfl_sync src_thread mapping, or kv_offset within the tile).
+    #   corruption PERSISTS  -> the wrong TILE is being loaded: the my_kv_offset[parity] rolling
+    #                           buffer, which is also the only candidate that explains the 4x
+    #                           pipeline-depth scaling by itself.
+    #
+    # Tile width must match the kernel's CTA_KV (128 by default), read from the env so the two
+    # cannot drift silently.
+    if _os.environ.get("KVPERTILE") == "1":
+        _tw = int(_os.environ.get("FA3_CTA_KV", "128"))
+        for _i in range(B):
+            _a, _b = int(kv_indptr[_i]), int(kv_indptr[_i + 1])
+            for _t0 in range(_a, _b, _tw):
+                _t1 = min(_t0 + _tw, _b)
+                k_cache[_t0:_t1] = k_cache[_t0:_t0 + 1].clone()
+                v_cache[_t0:_t1] = v_cache[_t0:_t0 + 1].clone()
+
     if _os.environ.get("KVPERREQ") == "1":
         for _i in range(B):
             _a, _b = int(kv_indptr[_i]), int(kv_indptr[_i + 1])

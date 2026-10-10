@@ -888,7 +888,7 @@ with BOTH known factors removed (one stage, un-aliased `sO`) ~16 bad rows of 384
 **STRUCTURAL CANDIDATES ARE EXHAUSTED.** Fifteen eliminated; every synchronisation mechanism
 verified correct at per-thread granularity; both confirmed contributors shown to be partial and
 depth-scoped. The four hard constraints any remaining explanation must satisfy: it is a **race**,
-it reads **another request's** K/V, it needs **>1 work item per CTA**, and it survives at **one
+it reads the **wrong rows of its own request** [RETRACTED -- see "THE WRONG ROWS ARE *WITHIN* THE SAME REQUEST" above; the rows are the item's OWN request's], it needs **>1 work item per CTA**, and it survives at **one
 pipeline stage with no `sO` aliasing**.
 
 **NEXT STEP, pre-committed before this arm ran so it is not chosen to fit the outcome: stop
@@ -983,7 +983,8 @@ bookkeeping only; per-thread arrival symmetry on the KV pipeline barriers remain
 and it is the obvious next target -- an over-arrival releases the consumer early (race, no
 deadlock), which is exactly the observed signature, while an under-arrival would deadlock.
 
-**Standing state of this defect:** a race; in the K/V path; reads another request's data; needs >1
+**Standing state of this defect:** a race; in the K/V path; reads the WRONG ROWS OF ITS OWN REQUEST
+[RETRACTED -- see "THE WRONG ROWS ARE *WITHIN* THE SAME REQUEST" above; the rows are the item's OWN request's]; needs >1
 work item per CTA; magnitude scales with pipeline depth (4x from 1 to 2 stages); invisible to every
 serialising instrument but NOT to register counting. Eleven hypotheses eliminated. Two contributors
 confirmed (`sO`/`smem_v` aliasing ~1/3, unfenced `smem_q` ~1/3) of which the second is a
@@ -1008,10 +1009,10 @@ entire point: counting happens during the race, reporting after it.
    usable observation tool.
 2. **Loads == consumes on every block**, so the imbalance hypothesis dies by MEASUREMENT as well as
    by the source audit. Counts are right, stage indices are right, cp.async coverage is right --
-   and CTAs still read another request's K/V.
+   and CTAs still read the wrong kv rows -- of their OWN request. [RETRACTED -- see "THE WRONG ROWS ARE *WITHIN* THE SAME REQUEST" above; the rows are the item's OWN request's]
 
 **That reframes the question.** If the synchronisation is correct, the producer may be loading the
-WRONG PAGES: a *data* error in the gather addressing, which would equally yield "another request's
+WRONG PAGES: a *data* error in the gather addressing, which would equally yield "wrong rows
 K/V" and would equally be invisible under `KVPERREQ`. The fork between that and a race is
 **DETERMINISM**, which has never been tested cleanly -- the cross-build comparisons (seed 1 -> 100
 in one dir, 116 in another) prove nothing, because register allocation differs between builds.
@@ -1117,13 +1118,16 @@ Two readings, and the second is a correction of my own commit:
    item's `producer_acquire` would wait on a phase nobody releases -- not quiet corruption. It did
    not deadlock, and corruption persists where no index shift is possible. So the pipeline-shift
    STORY in `683dc9141` does not survive its own test, even though the LOCALISATION it was built on
-   (`KVPERREQ`: CTAs read another request's K/V, 0/8 vs 8/8) rests on independent data and stands.
+   (`KVPERREQ` 0/8 vs 8/8) rests on independent data and stands -- though its DIRECTION was later
+   corrected: the wrong rows are the item's own request's. [RETRACTED -- see "THE WRONG ROWS ARE *WITHIN* THE SAME REQUEST" above; the rows are the item's OWN request's]
 
 What survives: the leakage is in the K/V path, across requests, and its magnitude scales with
 pipeline depth. What does not: that it is a stage-index shift caused by unconsumed stages.
 
-**[x] LOCALISED: CTAs READ ANOTHER REQUEST'S K/V. The route is the K/V pipeline carried ACROSS
-work items (2026-10-10). First mechanism with POSITIVE evidence rather than elimination.**
+**[~] LOCALISED -- BUT THE DIRECTION WAS WRONG. [RETRACTED -- see "THE WRONG ROWS ARE *WITHIN* THE SAME REQUEST" above; the rows are the item's OWN request's]** Original heading: *"CTAs read another
+request's K/V, the route is the K/V pipeline carried ACROSS work items."* The `KVPERREQ` data below
+is sound; my READING of it was inverted. Kept in place because the correct conclusion -- wrong rows
+WITHIN the request -- is derived from exactly these arms.
 
 One bit, in the data rather than the timing -- which matters, because every instrument that slowed
 the kernel masked this defect. `KVPERREQ=1` makes pages identical WITHIN a request and distinct
@@ -1136,7 +1140,8 @@ another request is not. dec=128, baseline only (the fence is a known regression)
 | **identical within request, distinct across** | **0/8** | **all zero -- PASS** |
 | all pages identical (`KVCONST=1`, re-confirm) | 0/8 | all zero -- PASS |
 
-**So the stale rows come from ANOTHER REQUEST.** Not Q (fenced, didn't fix it), not the output
+**RETRACTED: the stale rows come from the SAME request.** [RETRACTED -- see "THE WRONG ROWS ARE *WITHIN* THE SAME REQUEST" above; the rows are the item's OWN request's] Original text: *"So the stale
+rows come from ANOTHER REQUEST."* What still holds from this arm: not Q (fenced, didn't fix it), not the output
 path, not the partial slab (refuted), not addressing within a request. Cross-item leakage in the
 **K/V** path.
 

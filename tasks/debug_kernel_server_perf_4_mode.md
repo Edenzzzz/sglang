@@ -1608,6 +1608,38 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       That distinguishes "the partials are wrong" from "the combination is wrong", which is the
       one split this investigation has not yet made. State the expected values before dumping.
 
+      **[!] Perf probe INVALID -- the `SKIP_PACKED_Q` gather bound measured nothing (2026-10-10).**
+
+      Wired `SKIP_PACKED_Q` through the loader to bound the packed-Q gather's cost (the gather is
+      the prime suspect for the 4x gap, since it replaced TMA with a per-row `cp.async` and its own
+      comments call it slow). Two arms at `SM_SPLIT=128`, `MODE=mixed`:
+
+      | arm | fused ms | correctness |
+      |---|---|---|
+      | `SKIP_PACKED_Q=0` | 0.2927 | PASS 0.003279, 0/258 |
+      | `SKIP_PACKED_Q=1` (gather removed) | 0.2884 | **PASS 0.002069, 0/258** |
+
+      **The null case FAILED.** Removing the Q load must produce garbage; instead the arm passed,
+      with a *better* rel err than the correct build. The flag genuinely reached the compiler --
+      `build.ninja` shows `FLASHINFER_SKIP_PACKED_Q=1` for one arm and `=0` for the other -- so
+      this is not a stale-build artifact. Something about the arm is not what it claims, so the
+      1.5% delta is **uninterpretable** and the gather is NOT exonerated. Reporting "the gather
+      costs 1.5%" off this would be the same invalid-gate mistake retracted twice already today
+      ([[gate-needs-noise-floor-and-reference]]).
+
+      Two candidates for why the skip is inert, both untested: `sQ` is being filled by something
+      other than this loop (so the gather is redundant rather than free), or the `if (false)` still
+      does not guard what I think it guards after the hoist. **Resolve by checking whether the two
+      arms' OUTPUT TENSORS differ at all** -- identical output across a build that removes the Q
+      load would prove the skip is inert, which is the one-line question I should have asked before
+      reading any timing from it.
+
+      Also fixed while setting this up: `SKIP_PACKED_Q=1` **did not compile at all** ("identifier
+      `dbg_n` is undefined"). The `if (false)` the guard emits sat immediately above the
+      `dbg_n`/`dbg_maxi`/`dbg_nvalid` declarations, putting them in the `if`'s scope so the loop
+      could not see them. The diagnostic had been unusable since those counters were added;
+      declarations hoisted above the guard.
+
       **[~] Race hunt (2026-10-10): ONE source found and fixed; a residual race remains at
       1-in-20. The fix is confirmed by the results becoming DETERMINISTIC when they pass.**
 

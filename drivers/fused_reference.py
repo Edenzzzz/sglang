@@ -466,6 +466,13 @@ def main():
     if _os.environ.get("TIME_AB") == "1":
         if rows_bad == 0:
             _time_ab()
+        elif _os.environ.get("TIME_FORCE") == "1":
+            # Only for DIAGNOSTIC arms whose output is garbage by construction (e.g.
+            # SKIP_PACKED_Q=1, which removes the Q gather to bound its cost). The numbers are a
+            # timing delta against the correct arm, never a result in their own right.
+            print(f"[time] *** DIAGNOSTIC ARM: {rows_bad} bad rows, output is NOT correct. "
+                  f"Timing is only meaningful as a delta. ***")
+            _time_ab()
         else:
             print(f"[time] SKIPPED: this arm has {rows_bad} bad rows. "
                   f"No timing is reported for an arm that does not pass.")

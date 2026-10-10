@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.93.0 — RETRACTION: the culprit items ARE kv-chunked; split causal bound back in scope (2026-10-19)
+
+I claimed the culprits were "unsplit whole-row items" because the plan reports `kv_len=2048`, and
+used that to drop the split-KV `causal_kv_len` shift from the suspect list. **Wrong.** The decode
+reports **952 items**; ~128 are decode rows, leaving ~824 for request 0's **8** q tiles ≈ **103 items
+per q tile** — only possible if items are heavily **kv-chunked**. So `kv_len` is the *request's*
+length, not the chunk's; the chunk is `[kv_start, kv_end)`, which my decode reads but never printed.
+
+**So the split-KV `causal_kv_len` shift is back in scope — and is now the leading suspect.** It is a
+per-`(q_tile, chunk)` quantity, exactly the shape of thing that can be right for some q tiles and
+wrong for others, and this tree already got the chunk-relative masking wrong once before (each chunk
+summing over `token + 97` of 128 keys). The arithmetic check in v0.92.0 evaluated the **unsplit**
+formula, so it proves `get_num_kv_tiles` correct when `causal_kv_len == kv_len` and says nothing
+about the chunked case where they differ.
+
+Next, still host-side: print `kv_start`/`kv_end` per item, then evaluate the chunk-relative bound
+(`causal_kv_len = kv_total - kv_start`, mask limit `(qo_idx/G) + 1 + causal_kv_len - qo_len_tok`) for
+the culprit `(q_tile∈{1,2}, chunk)` pairs against the clean ones, and find where it disagrees with
+the reference.
+
 ## v0.92.0 — causal tile-count arithmetic correct for all 8 q tiles; bad tiles not at the transition (2026-10-10)
 
 Host arithmetic, no GPU. Kernel's packed-GQA formulae vs the bottom-right causal reference,

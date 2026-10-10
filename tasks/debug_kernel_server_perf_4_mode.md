@@ -840,9 +840,27 @@ are not where anything transitions.** Tiles 1 and 2 carry count 15 -- the SAME a
 cannot be what distinguishes them, and the three arithmetic suspects named in the previous entry are
 reduced to the two mask-side ones at most.
 
-**Also established from the decode:** the culprit items report `kv_len=2048`, i.e. the FULL kv
-length, so these are **unsplit whole-row items**, not chunks. That removes the split-KV
-`causal_kv_len` shift from the suspect list as well -- it does not apply to these items.
+**[!] RETRACTED, same day, from the item count:** I wrote *"the culprit items report
+`kv_len=2048`, the FULL kv length, so these are unsplit whole-row items, not chunks"* and used that
+to drop the split-KV `causal_kv_len` shift from the suspect list. **That is wrong.** The decode
+reports **952 total items**; ~128 are decode rows, leaving ~824 for request 0's **8** q tiles, i.e.
+**~103 items per q tile**. That is only possible if the items are **heavily kv-CHUNKED**. So
+`kv_len` in the plan is the **request's** length, not the chunk's -- the chunk is
+`[kv_start, kv_end)`, which my decode reads but never printed.
+
+**Consequence: the split-KV `causal_kv_len` shift is BACK IN SCOPE**, and it is now the leading
+suspect rather than an excluded one. It is a per-`(q_tile, chunk)` quantity -- exactly the shape of
+thing that can be right for some q tiles and wrong for others -- and the doc already records that
+this bound was ported by hand and got the chunk-relative masking wrong once before
+(`split-kv-causal-is-chunk-relative`: each chunk summed over `token + 97` of 128 keys). The
+arithmetic check above evaluated the UNSPLIT formula, so it does not cover this at all: it proves
+`get_num_kv_tiles` is right when `causal_kv_len == kv_len`, and says nothing about the chunked case
+where they differ.
+
+**The check that follows, and it is still host-side:** print `kv_start`/`kv_end` per item, then
+evaluate the chunk-relative bound -- `causal_kv_len = kv_total - kv_start`, mask limit
+`(qo_idx / G) + 1 + causal_kv_len - qo_len_tok` -- for the culprit `(q_tile=1,2, chunk)` pairs
+against the clean ones, and find the combination where it disagrees with the reference.
 
 **So what IS special about q tiles 1 and 2?** Not the plan data (identical to clean siblings), not
 the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and the O store**: tile

@@ -257,6 +257,10 @@ def load_fused_fa3(verbose: bool = False) -> None:
             # Our port ran 1 stage to fit shared memory and thereby removed that invariant, which
             # is the measured race. 2 stages fits once ALIAS_SMEM is on (below).
             "-DFUSED_FA3_STAGES=" + os.environ.get("FA3_STAGES", "2"),
+            # A/B knobs for the two FusedWarpgroupTraits overrides, the leading suspects for the
+            # FA2-only path being ~20x slower than the stock kernel family. Defaults unchanged.
+            "-DFUSED_NB_SYNC=" + os.environ.get("NB_SYNC", "1"),
+            "-DFUSED_GRID_1D=" + os.environ.get("GRID_1D", "1"),
             # ALIAS_SMEM=1 puts the FA2 runners' SharedStorage at offset 0, aliasing FA3's region,
             # instead of past it. A block takes one role, so the regions are never both live --
             # EXCEPT that CUTLASS initialises FA3's pipeline mbarriers at kernel entry, BEFORE the

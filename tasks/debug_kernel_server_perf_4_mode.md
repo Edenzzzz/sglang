@@ -819,6 +819,46 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[x] THE CORRUPTION UNIT IS A WHOLE MMA WARP, AND IT IS NOT A FIXED WARP (2026-10-10). Derived
+from the already-captured `BADROWS` -- no new GPU run.**
+
+Packed row = `token*G + head` with G=4, and MMA warp *w* owns packed rows `16w .. 16w+15`:
+
+| bad token rows | packed rows | warp |
+|---|---|---|
+| 4, 5, 6, 7 | 16 .. 31 | **1** |
+| 16, 17, 18, 19 | 64 .. 79 | **4** |
+| 20, 21, 22, 23 | 80 .. 95 | **5** |
+
+Every run is **exactly 4 token rows = 16 packed rows = one warp's share**, verified
+programmatically, and the affected warps are **1, 4 and 5** -- several warps in a single run, not
+one.
+
+Three things follow, and the second rules out a whole class:
+
+1. **The corruption unit is a whole MMA warp's output.** Granularity confirmed independently of the
+   `NB_SYNC` arm.
+2. **It is NOT a fixed warp.** A statically miswired warp (wrong accumulator offset, wrong row
+   mapping) would hit the SAME warp index every time. Warps 1, 4, 5 in one run kills that class --
+   which is also why the defect is a race and not an addressing constant.
+3. **The fault happens WITHIN one item.** All these rows lie inside the FIRST q tile of request 0
+   (`token rows 0..31` = `packed 0..127` = one CTA_Q tile), so whatever goes wrong does so while a
+   single work item is being processed, not across an item boundary. That is a meaningful narrowing:
+   the cross-item framing was about which TILE is loaded, but the damage is contained in one tile's
+   warps.
+
+**Combined picture now:** a race, inside one work item, that corrupts an arbitrary subset of that
+tile's eight MMA warps, each all-or-nothing, with the wrong data being a different KV tile of the
+same request, scaling 4x with pipeline depth, and invisible to any in-kernel instrument.
+
+**Next, and it follows directly:** eight warps share `smem_k`/`smem_v` stages but each holds its own
+accumulator and its own `tSrQ` descriptor. A subset of warps reading a stage while the producer
+refills it would corrupt exactly those warps' rows. The `consumer_wait` -> gemm -> `consumer_release`
+sequence is per-warpgroup, not per-warp, so a warp that passes `WarpScheduler::barrier_sync()` and
+issues its gemm before its peers can read a stage the pipeline considers released. Testing that means
+making the release wait for ALL warps, not just the warpgroup leader -- which `FUSED_O_HANDSHAKE`
+does for `sO` and nothing currently does for `smem_k`/`smem_v`.
+
 **[~] PER-WARP HYPOTHESIS: the `NB_SYNC` override is NOT the route; warp ordering NOT fully
 exonerated (2026-10-10). Twentieth elimination, with the limit stated in advance.**
 

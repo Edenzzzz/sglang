@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.89.0 — the corruption unit is a whole MMA warp, and not a fixed one (2026-10-10)
+
+Derived from the already-captured `BADROWS`, no new GPU run. Packed row = `token*G + head` (G=4),
+MMA warp *w* owns packed rows `16w..16w+15`:
+
+| bad token rows | packed rows | warp |
+|---|---|---|
+| 4–7 | 16–31 | **1** |
+| 16–19 | 64–79 | **4** |
+| 20–23 | 80–95 | **5** |
+
+Every run is exactly 4 token rows = 16 packed rows = **one warp's share** (verified
+programmatically), and warps **1, 4, 5** are hit in a single run.
+
+1. **The corruption unit is a whole MMA warp's output** — confirmed independently of the `NB_SYNC` arm.
+2. **It is not a fixed warp.** A statically miswired warp would hit the same index every time; three
+   different warps in one run kills that class, consistent with a race rather than an addressing
+   constant.
+3. **The fault happens within one item** — all these rows lie inside the first q tile of request 0
+   (`packed 0..127` = one CTA_Q tile), so the damage is contained in one tile's warps even though the
+   wrong *data* is another KV tile of the same request.
+
+Next: eight warps share `smem_k`/`smem_v` stages but each holds its own accumulator and `tSrQ`
+descriptor, and the `consumer_wait`→gemm→`consumer_release` sequence is per-**warpgroup**, not
+per-warp. A warp that clears `WarpScheduler::barrier_sync()` and issues its gemm off-phase from its
+peers can read a stage the pipeline already considers released — corrupting exactly those warps' rows.
+Testing it means making the release wait for all warps, which `FUSED_O_HANDSHAKE` does for `sO` and
+nothing currently does for `smem_k`/`smem_v`.
+
 ## v0.88.0 — NB_SYNC is not the route; per-warp granularity stands (2026-10-10)
 
 The granularity clue gave a real hypothesis: bad rows in aligned runs of 4 token rows = **16 packed

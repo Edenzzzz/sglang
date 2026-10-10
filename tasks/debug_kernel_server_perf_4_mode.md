@@ -870,6 +870,43 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[!] BACKFILL ARM WAS VACUOUS -- the knob could not have done anything in that configuration
+(2026-10-10). NOT a refutation.**
+
+| arm | fails | bad rows |
+|---|---|---|
+| `NO_BACKFILL=0` (control) | 6/6 | 68, 84, 112, 84, 72, 88 |
+| `NO_BACKFILL=1` | 6/6 | 96, 116, 108, 112, 104, 88 |
+
+Indistinguishable -- and **meaningless**, because the gate was a no-op. `FUSED_NO_BACKFILL=1` forces
+`plan.num_pers_clusters = 0`, but the planner sets `plan.num_pers_clusters = int64_t(fa2_ctas)` and
+this arm ran **`MIX_ALL_FA3=1 SM_SPLIT=all`**, which gives every SM to FA3 and therefore
+**`fa2_ctas = 0`**. So `num_pers_clusters` was **already zero** before my override: there were no
+persistent FA2 clusters to pull, no backfill was happening, and setting 0 to 0 changed nothing.
+
+**This is exactly the failure mode this doc already records under "gates need a noise floor and a
+validated reference": a gate that measured nothing, reported as a result.** I came close to logging a
+27th elimination off it. The honest status of the backfill hypothesis is **UNTESTED**.
+
+**What a valid test requires:** backfill must actually be live, which means FA2 clusters must exist
+AND some SMs must be assigned to FA2 -- i.e. `MIX_ALL_FA3=0` with `SM_SPLIT < all`, so the plan has
+real `fa2_ctas > 0` and a block that finishes FA3 has something to drain. The arms that fail 6/6
+today are all `MIX_ALL_FA3=1`, where by construction there is no cross-role backfill at all.
+
+**And that raises a sharper question about the cross-block finding itself.** If `MIX_ALL_FA3=1
+SM_SPLIT=all` has `fa2_ctas = 0` and no backfill, then the corrupting configuration contains **no
+cross-role backfill**, so the cursor cannot be the route for it -- not because the test refuted it,
+but because the mechanism is not present. The cross-block dependence measured on the decode item
+count therefore still needs a route, and the remaining global candidates are the ones ranked in the
+previous entry: the persistent cluster LIST, `merge_indptr`/`merge_o_indices` sizing, and
+`fa3_batch_list` compaction -- plus the partial slab, which `FUSED_NOSPLIT=1` weakened but did not
+exclude for this configuration.
+
+**Before the next arm, verify the knob bites.** The plan builder has
+`FLASHINFER_FUSED_PLAN_DEBUG`, which prints the per-task item counts; any backfill test must show
+`fa2_ctas > 0` in the control and `num_pers_clusters = 0` only under the override, or it is another
+vacuous gate.
+
 **[!!] PREFILL-ON-PREFILL REFUTED, AND THE INTERFERENCE IS CROSS-BLOCK -- which rules out shared
 memory entirely (2026-10-10). 26th elimination, and it redirects the whole search.**
 

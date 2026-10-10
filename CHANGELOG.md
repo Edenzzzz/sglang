@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.99.0 — the backfill arm was VACUOUS, not a refutation (2026-10-10)
+
+| arm | fails | bad rows |
+|---|---|---|
+| `NO_BACKFILL=0` | 6/6 | 68, 84, 112, 84, 72, 88 |
+| `NO_BACKFILL=1` | 6/6 | 96, 116, 108, 112, 104, 88 |
+
+Indistinguishable — and **meaningless**. The gate forces `plan.num_pers_clusters = 0`, but the planner
+sets it from `fa2_ctas`, and this arm ran `MIX_ALL_FA3=1 SM_SPLIT=all` → every SM to FA3 → `fa2_ctas =
+0`. `num_pers_clusters` was **already zero**; setting 0 to 0 does nothing. No backfill was happening
+to disable.
+
+**Exactly the failure this doc records under "gates need a noise floor and a validated reference".** I
+nearly logged it as a 27th elimination. The backfill hypothesis is **UNTESTED**.
+
+A valid test needs backfill live: `MIX_ALL_FA3=0` with `SM_SPLIT < all`, so `fa2_ctas > 0` and a block
+finishing FA3 has FA2 clusters to drain. Every arm failing 6/6 today is `MIX_ALL_FA3=1`, where no
+cross-role backfill exists by construction.
+
+**That sharpens the cross-block question:** the corrupting configuration contains *no* backfill, so the
+cursor cannot be its route — not by refutation but by absence. The cross-block dependence on decode
+item count still needs a route; remaining global candidates are the persistent cluster list,
+`merge_indptr`/`merge_o_indices` sizing, `fa3_batch_list` compaction, and the partial slab (weakened by
+`NOSPLIT=1` but not excluded here).
+
+Before any next arm: use `FLASHINFER_FUSED_PLAN_DEBUG` to confirm `fa2_ctas > 0` in the control, or it
+is another vacuous gate.
+
 ## v0.98.0 — prefill-on-prefill REFUTED; the interference is CROSS-BLOCK (2026-10-10)
 
 | arm | prefill items/CTA | decode items in grid | fails |

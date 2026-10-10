@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.64.0 — racecheck ran: 17 hazards, but it also flags stock's correct kernel (2026-10-10)
+
+`compute-sanitizer --tool racecheck` on the simplest failing arm (stock gather + stock store,
+`DEC_ROWS=32`, 30/288 bad under the sanitizer): **17 hazards, 17 errors.**
+
+| kernel | mentions in hazard blocks |
+|---|---|
+| `FusedFA3PersistentKernel` (ours) | 136 |
+| `BlockBatchPagedAttentionPersistent` (FA2 runners) | 408 |
+| **stock `BatchPrefillPersistentTileScheduler`** (`CTA_KV=96`) | **35** |
+
+The third row is decisive against the tool: that is flashinfer's own FA3 kernel, which this harness
+runs as the validated null case and which **passes** at 0 bad rows. **racecheck does not model
+`mbarrier`/TMA ordering**, so on CUTLASS Hopper warp-specialised kernels it reports the async
+pipeline's traffic as unsynchronised — false positives by construction.
+
+**So the 17 hazards must not be chased as 17 bugs.** Recorded so the next attempt doesn't spend a
+turn on them.
+
+**Better next experiment — bisect by disabling reuse, not by hypothesis:** partition `work_indptr`
+one-item-per-CTA at the same batch shape (~3-line planner change). Corruption vanishing confirms
+cross-item reuse as the mechanism without needing to identify the buffer; persisting exonerates
+reuse entirely. That is what the last six hypotheses were each trying to approximate indirectly.
+
 ## v0.63.0 — the multi-item-per-CTA path is racy in ALL corners, baseline included (2026-10-10)
 
 Four corners × 10 runs, G=1, 129 requests, ~6.9 work items per CTA, handshake OFF:

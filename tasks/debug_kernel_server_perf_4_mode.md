@@ -774,32 +774,44 @@ run contains two items with the same `(blk, kvh, q_start)` -- i.e. two work item
 the same output rows. **Zero collisions.** Caveat that bounds it: only 310 of ~910 `[sched]` lines
 printed (CUDA printf ring-buffer drops), so coverage is ~34% and this is suggestive, not proof.
 
-**[>] STOPPED GUESSING: `compute-sanitizer --tool racecheck` is now running on the simplest failing
-arm.** That is roughly the SIXTH hypothesis eliminated by hand on this one defect (kQueryEmpty,
-work_idx symmetry, Q-completion mechanism, scheduler advance logic, the handshake, same-row
-collisions). Manual elimination has been the wrong instrument for several turns: a shared-memory
-race is exactly what racecheck detects directly.
-
-Arm chosen: **stock gather + stock store** (the 7/10, mean-5.6 baseline) at `DEC_ROWS=32` -- the
-simplest configuration that still fails, with ~2+ items per CTA, kept small so the sanitizer
-finishes. Command:
+**[~] RACECHECK RAN: 17 hazards (17 errors) -- but it flags STOCK flashinfer's own kernel too, so
+it cannot by itself name the defect.** `compute-sanitizer --tool racecheck` on the simplest failing
+arm (stock gather + stock store, `DEC_ROWS=32`, which failed 30/288 under the sanitizer):
 
 ```
-cd /dev/shm/w/drv
-export PYTHONPATH=/dev/shm/w/up/python SGLANG_FUSED_FI_ROOT=/dev/shm/w/port07
-GQA1=1 FUSED_PACKED_Q=off FA3_MBARRIER=0 FA3_CTA_Q=128 FA3_CTA_KV=128 FA3_CAUSAL=1 \
-  MODE=mix_decode DEC_ROWS=32 MIX_ALL_FA3=1 SM_SPLIT=all FUSED_NOSPLIT=0 SEED=0 \
-  /usr/local/cuda/bin/compute-sanitizer --tool racecheck --racecheck-detect-level info \
-  --print-limit 40 /dev/shm/w/venv/bin/python fused_reference.py
+RACECHECK SUMMARY: 17 hazards displayed (17 errors, 0 warnings)
 ```
 
-Output lands in `/dev/shm/w/rc.out` on trial `62d25ecfb033ad4b`; `/dev/shm/w/rc.log` carries the
-summary. **Read that first on resume** -- it should name the hazard (write-after-write /
-read-after-write), the smem address and the two code locations, which ends the elimination game.
+Kernels implicated, by mention count in the hazard blocks:
 
-**Method note worth keeping:** six hypotheses, each plausible, each refuted, is the signature of
-using the wrong tool rather than of a subtle bug. The racecheck run should have been the second
-step after "it is timing-dependent", not the tenth.
+| kernel | mentions |
+|---|---|
+| `FusedFA3PersistentKernel` (**ours**, `CTA_KV=128`, `UnifiedWgmmaTileScheduler`) | 136 |
+| `BlockBatchPagedAttentionPersistent` (the FA2 runners) | 408 |
+| stock `BatchPrefillPersistentTileScheduler` (`CTA_KV=96`, `StandardAttention`) | 35 |
+
+**The third row is the problem: that is flashinfer's OWN FA3 kernel**, the one this harness runs as
+the validated stock null case and as the `BatchAttention` baseline -- and it **passes** the causal
+fp32 reference at 0 bad rows. So racecheck is reporting hazards in a kernel known to be correct.
+
+**Why: racecheck does not model `mbarrier` or TMA ordering.** It understands `__syncthreads()`-style
+barriers, and CUTLASS Hopper warp-specialised kernels synchronise through `cp.async` + mbarrier
+pipelines, which racecheck sees as unsynchronised shared-memory traffic. On these kernels it
+produces false positives by construction, which is exactly what the stock-kernel hazards are.
+
+**So this instrument does not settle it either**, and the 17 hazards must not be chased as if they
+were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
+pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
+
+**What would actually work, in order of cost:**
+1. **Bisect by disabling reuse rather than by hypothesis:** force one work item per CTA at the same
+   batch shape by partitioning `work_indptr` one-item-per-CTA (a planner change, ~3 lines). If the
+   corruption vanishes, reuse is confirmed as the mechanism without needing to know which buffer;
+   if it persists, reuse is exonerated and the cause is per-item, not cross-item. **This is the
+   experiment the last six hypotheses were all trying to approximate.**
+2. `--tool memcheck` for out-of-bounds smem/global access, which racecheck does not cover and which
+   would explain corruption without a race at all.
+3. Nsight Compute on the two kernels to compare barrier/pipeline stalls -- diagnostic, not decisive.
 
 **[SUPERSEDED] [x] FOUR-CORNER BISECT (2026-10-10), and it CORRECTS my "stock paths are CLEAN" claim.** Split
 `write_packed`'s gate (`FUSED_PACKED_O`) from the Q gather's so the two could be mixed. G=1,

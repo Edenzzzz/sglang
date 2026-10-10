@@ -676,13 +676,43 @@ bad row, 7.2 seventy-six bad).
 enough for single-item CTAs to come out clean at 0/35, and the multi-item path blows straight
 through it.
 
-**So the store-completion handshake is now required, not optional.** The fix identified earlier and
-deferred: `store_partial` / `store` must guarantee the O write has drained from `sO` before the
-producer may refill `smem_v` for the next item. Either a named-barrier arrival after the global
-write that the producer waits on, or route the partial O write through TMA and restore
-`tma_store_wait<0>()` in `store_tail()` (currently commented out). The TMA route matches 0.7, is
-what makes the port upstreamable, and is the same primitive B2c needs -- and it would also unblock
-the 12% `store_partial` parallelisation that had to be reverted.
+**[~] STORE-COMPLETION HANDSHAKE IMPLEMENTED AND MEASURED: it HALVES the corruption but does NOT
+fix it.** `FUSED_O_HANDSHAKE=1` (off by default) makes both loops rendezvous at the end of each
+work item on named barrier 7 with `NUM_MMA_THREADS + NUM_COPY_THREADS` participants, so the
+producer cannot begin item N+1's V load until the consumer has finished reading `sO` for item N.
+Both `continue` paths skip it symmetrically on each side, which is what keeps the arrival counts
+matched.
+
+| arm (dec=128, 129 requests, all-FA3) | bad rows | worst rel |
+|---|---|---|
+| handshake OFF (control) | **112 / 384** | 12.3 |
+| **handshake ON** | **56 / 384** | 10.23 |
+| handshake ON, dec=96 | 1 / 352 | 0.073 |
+| handshake ON, dec=32 | 0 / 288 | 0.0034 |
+
+**It does not deadlock, and it halves the bad-row count** -- so `sO`/`smem_v` is confirmed as a
+real contributor, worth roughly half the corruption. **But a second source remains**, and the
+kernel is still incorrect at dec >= 96.
+
+**What the remaining half is likely to be, in order.** The handshake only orders `sO` against the
+*next item's V load*. Other state is also reused across work items in the same CTA, and this path
+is the first to reuse any of it:
+1. **`sQ`** -- the Q tile is refilled per item. Stock 0.7 has a `kQueryEmpty` handshake for exactly
+   this ("All producer threads sync on kQueryEmpty barrier before loading Q" in
+   `sparse_mainloop.cuh`), but our packed-Q gather replaced the TMA Q load and **may not arrive on
+   it symmetrically**. That is the first thing to check, and it is the same class of defect as the
+   barrier-arming bug found earlier (`defined()` vs value).
+2. **`barrier_Q`'s phase** -- the consumer waits on `work_idx % 2`, so a CTA processing 4-7 items
+   cycles the phase 4-7 times. Any arrival-count asymmetry compounds per item rather than cancelling.
+3. The attention updater's smem scratch, if any is shared.
+
+**Next, and it is cheap:** grep both sides for `kQueryEmpty` and check the participant counts and
+that the packed-Q arm arrives on it at all. The gather replaced the TMA path wholesale, and the
+`barrier_Q.init` gate was already found to be wrong once in exactly this way.
+
+**Left OFF by default** until it is a complete fix: a flag that halves a correctness bug is worse
+than useless as a default, because it makes the remaining failures rarer and therefore harder to
+catch.
 
 **Note what this invalidates:** the "race CLOSED, 0/35 co-resident" result stands only for
 <= 1 item per CTA. On realistic batch shapes (a chunk plus ~100 decode rows) the kernel is

@@ -1608,6 +1608,62 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       That distinguishes "the partials are wrong" from "the combination is wrong", which is the
       one split this investigation has not yet made. State the expected values before dumping.
 
+      **[!] RETRACTION + FIRST PERFORMANCE NUMBERS (2026-10-10). "Kernel correctness complete"
+      below is WITHDRAWN: there is an intermittent ~1-row race. And the fused kernel is currently
+      ~4x SLOWER than unfused at its best split, not faster.**
+
+      **1. The race.** `mixed` produces **1 bad row of 258** at rel **0.16-0.35** in roughly
+      **2 of ~25 runs** -- against a 0.004 noise floor, so it is not precision. Evidence it is a
+      race and not data- or split-dependent:
+      - `SM_SPLIT=32`, `SEED=0`: FAIL 0.1604 in one run, **PASS 0.004005 in another**, same build,
+        same seed.
+      - `SM_SPLIT=24`, `SEED=0`: PASS in the first sweep, FAIL 0.2904 in the second.
+      - 22 consecutive seeded runs at `SM_SPLIT` in {all, default} passed, which is why single
+        runs made it look closed.
+      It shows up in `mixed` (FA3 and FA2 roles **co-resident**) and once in `fa3`. Suspect
+      something shared between roles -- smem, a named barrier, or ordering between the partial
+      writes and the reduction launch.
+
+      **How I got this wrong, again:** I declared completion from **single runs** of an
+      **unseeded** fixture, and never swept `sm_split` for correctness even though it is the
+      kernel's defining parameter. The fixture is now seeded (`SEED=`, default 0) and `SM_SPLIT`
+      takes an integer. A pass is one sample; this needs a repeat count before any verdict.
+      [[gate-needs-noise-floor-and-reference]].
+
+      **2. First timing A/B** -- `TIME_AB=1`, one fused launch vs the UNFUSED baseline of two
+      separate launches (flashinfer's own planned FA3 wrapper for the FA3 rows, an FA2 wrapper for
+      the FA2 rows). Timing runs only after the correctness verdict prints, and is skipped if the
+      arm has any bad row. `MODE=mixed`, `SEED=0`, 30 iters / 5 warmup, H200:
+
+      | `sm_split` | fused ms/iter | unfused ms/iter | ratio |
+      |---|---|---|---|
+      | 8 | 2.088 | 0.069 | 0.033x |
+      | 16 (old default) | 1.825 | 0.069 | 0.038x |
+      | 64 | 0.502 | 0.069 | 0.134x |
+      | 96 | 0.375 | 0.069 | 0.181x |
+      | 116 | 0.314 | 0.069 | 0.226x |
+      | 128 | **0.296** | 0.069 | **0.242x** |
+
+      So **the default split was a 6.2x self-inflicted loss**: at `sm_split=16` the FA3 role held
+      essentially all the work (258 tokens, kv 2048) on **12% of the SMs** while 116 SMs served 2
+      FA2 tokens. Monotone in the split over this fixture, so 16 was simply wrong here.
+
+      **Even at the best split the kernel is ~4x slower than unfused.** The >=30% TTFT/ITL and
+      >=10% throughput bars are therefore a long way off, and the known causes are all in code
+      that was written correctness-first and is documented as slow:
+      - the packed-Q gather replaces TMA with a per-row `cp.async` gather ("Correctness first ...
+        slower than the TMA path it replaces");
+      - `FA3_STAGES=1` -- a single-stage K/V pipeline with no prefetch overlap (2 cannot launch at
+        these traits, a smem limit);
+      - `store_partial` writes O with a scalar per-row loop;
+      - `write_packed` likewise ("a per-row loop rather than a tiled copy").
+      Each is a named, bounded optimisation rather than a mystery, which is the useful part of
+      having a number at last.
+
+      **[ ] Next, in this order:** (a) find the race -- it invalidates every measurement until
+      fixed; (b) restore TMA/vectorised paths for the packed Q load and O store; (c) revisit
+      `FA3_STAGES=2` under the real traits; (d) only then re-run the A/B and the sm_split sweep.
+
       **[x] KERNEL CORRECTNESS COMPLETE (2026-10-10): EVERY fixture PASSES with split-KV
       ENABLED, `mixed` included. K1n is closed.**
 

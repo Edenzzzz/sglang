@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.49.0 — RETRACTION: an intermittent race; and the first performance numbers (2026-10-10)
+
+### Retracted — "kernel correctness complete" (v0.48.0) is withdrawn
+
+`mixed` produces **1 bad row of 258 at rel 0.16–0.35 in roughly 2 of ~25 runs**, against a 0.004
+noise floor. It is a **race**, not data- or split-dependence:
+
+- `SM_SPLIT=32`, `SEED=0`: FAIL 0.1604 one run, **PASS 0.004005** another — same build, same seed.
+- `SM_SPLIT=24`, `SEED=0`: PASS in one sweep, FAIL 0.2904 in the next.
+
+It appears in `mixed` (FA3+FA2 **co-resident**) and once in `fa3`. Suspect shared state between
+roles — smem, a named barrier, or ordering between the partial writes and the reduction launch.
+
+**Cause of the bad claim:** completion was declared from **single runs** of an **unseeded**
+fixture, and `sm_split` — the kernel's defining parameter — was never swept for correctness. Now
+fixed: `SEED=` (default 0) and a numeric `SM_SPLIT`.
+
+### First timing A/B (`TIME_AB=1`)
+
+One fused launch vs the unfused baseline of two separate launches. Timing runs only after the
+correctness verdict and is skipped for any arm with a bad row. `MODE=mixed`, `SEED=0`, 30 iters:
+
+| `sm_split` | fused ms | unfused ms | ratio |
+|---|---|---|---|
+| 8 | 2.088 | 0.069 | 0.033× |
+| 16 (old default) | 1.825 | 0.069 | 0.038× |
+| 64 | 0.502 | 0.069 | 0.134× |
+| 96 | 0.375 | 0.069 | 0.181× |
+| 116 | 0.314 | 0.069 | 0.226× |
+| 128 | **0.296** | 0.069 | **0.242×** |
+
+The default split cost **6.2×**: FA3 held all the work (258 tokens, kv 2048) on 12% of the SMs
+while 116 SMs served 2 FA2 tokens. Even at the best split the kernel is **~4× slower than
+unfused**.
+
+Known causes, all correctness-first code already documented as slow: the packed-Q gather replaces
+TMA with a per-row `cp.async` gather; `FA3_STAGES=1` (single-stage K/V pipeline); `store_partial`
+and `write_packed` both write O with scalar per-row loops.
+
+### Next
+
+(a) Find the race — it invalidates every measurement until fixed. (b) Restore TMA/vectorised paths
+for the packed Q load and O store. (c) Revisit `FA3_STAGES=2`. (d) Re-run the A/B and sweep.
+
 ## v0.48.0 — KERNEL CORRECTNESS COMPLETE: every fixture passes with split-KV on (2026-10-10)
 
 | fixture | split | result |

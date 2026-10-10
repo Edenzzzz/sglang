@@ -116,10 +116,19 @@ def main():
     # coexistence with the FA2 role causes it (shared smem, warpgroup arrangement); if it
     # persists, it is in fa3_prefill_body independent of the fusion. Cheaper than a second build
     # configuration, which is the only other way to separate these.
-    sm_split = nsm if os.environ.get("SM_SPLIT") == "all" else 16
+    # SM_SPLIT: "all" gives every SM to the FA3 role, an integer sets the boundary directly, and
+    # the default of 16 is what the first timing A/B exposed as a likely misallocation -- FA3 held
+    # essentially all the work on 12% of the SMs. Numeric so the split can be swept, since SM
+    # pre-assignment is the thing this kernel exists to control.
+    _sms = os.environ.get("SM_SPLIT", "16")
+    sm_split = nsm if _sms == "all" else max(1, min(int(_sms), nsm))
 
     total_q = sum(qo_lens)
     total_pages = sum(kv_lens)                       # page_size=1
+    # SEEDED. This fixture was unseeded, so every run drew different q/k/v -- which is how a
+    # one-bad-row intermittent failure in MODE=fa3 got reported as "every fixture passes" from a
+    # single run. A pass on an unseeded fixture is one sample, not a verdict. SEED=<n> to sweep.
+    torch.manual_seed(int(_os.environ.get("SEED", "0")))
     q = torch.randn(total_q, HQ, D, device=DEV, dtype=DT) * 0.1
     k_cache = torch.randn(total_pages, HKV, D, device=DEV, dtype=DT) * 0.1
     v_cache = torch.randn(total_pages, HKV, D, device=DEV, dtype=DT) * 0.1
@@ -177,6 +186,24 @@ def main():
     fa3_plan = list(w._plan_info)
     print(f"fa3_plan: {len(fa3_plan)} entries")
 
+    # UNFUSED baseline's FA2 half, for TIME_AB. Its own workspace, for the same reason stock_ws
+    # exists: flashinfer workspaces are not shareable, and a second wrapper sharing one silently
+    # overwrites the first's plan.
+    w2 = None
+    if B - nfa3 > 0:
+        fa2_ws_stock = torch.zeros(128 << 20, dtype=torch.uint8, device=DEV)
+        qo2 = (qo_indptr[nfa3:] - qo_indptr[nfa3]).to(DEV)
+        kv2_indptr = (kv_indptr[nfa3:] - kv_indptr[nfa3]).to(DEV)
+        w2 = flashinfer.BatchPrefillWithPagedKVCacheWrapper(fa2_ws_stock, backend="fa2")
+        w2.plan(
+            qo_indptr=qo2,
+            paged_kv_indptr=kv2_indptr,
+            paged_kv_indices=kv_indices[int(kv_indptr[nfa3]):int(kv_indptr[B])],
+            paged_kv_last_page_len=torch.ones(B - nfa3, dtype=torch.int32, device=DEV),
+            num_qo_heads=HQ, num_kv_heads=HKV, head_dim_qk=D, page_size=PAGE,
+            causal=True, q_data_type=DT, kv_data_type=DT,
+        )
+
     # Host-side ground truth for the [sqv] probe: q rows the FA3 tiles should load. Tile t of
     # kv head h covers packed rows [128t, 128t+128), i.e. token 32t + (r/4), head h*4 + (r%4).
     # Guarded on q's actual extent: this printed tile 1's base token unconditionally, which
@@ -232,6 +259,65 @@ def main():
     # FA3 writes o, the FA2 roles write pers_o at pers_row_offset; stitch them.
     got = o.clone().float()
     got[nfa3_rows:] = pers_o[nfa3_rows:].float()
+
+    # ---- TIME_AB=1: first timing A/B, one FUSED launch vs the UNFUSED baseline ------------
+    # Runs only AFTER the correctness comparison below has been printed, so a timing number can
+    # never be reported for an arm that does not pass -- the rule this project keeps relearning.
+    # Composition is printed alongside, because a speedup is meaningless without knowing how many
+    # rows actually went to each role.
+    def _time_ab():
+        import torch as _t
+        iters = int(_os.environ.get("TIME_ITERS", "50"))
+        warmup = int(_os.environ.get("TIME_WARMUP", "10"))
+
+        def _fused():
+            torch.ops.fused_fa3.fused_run(
+                q, k_cache, v_cache, kv_indices, o, fa3_ws, fa3_plan,
+                int_ws, flt_ws, pers_plan, HQ, HKV, PAGE, sm_scale,
+                sm_split, nfa3_rows, sm_split, sum(fa3_kv), kv_indices, pers_o,
+                B, max(kv_lens), max(qo_lens), kv_len_t.to(DEV),
+                qo_indptr.to(DEV), kv_indptr.to(DEV))
+
+        # UNFUSED baseline: the two roles as SEPARATE launches, which is what the fused kernel is
+        # meant to replace. FA3 rows through flashinfer's own planned FA3 wrapper, FA2 rows through
+        # a second wrapper planned over the FA2 subset. Two launches, serialised on one stream.
+        qf = q[:nfa3_rows]
+        def _unfused():
+            if nfa3_rows > 0:
+                w.run(qf, (k_cache, v_cache))
+            if B - nfa3 > 0:
+                w2.run(q[nfa3_rows:], (k_cache, v_cache))
+
+        def _bench(fn):
+            for _ in range(warmup):
+                fn()
+            _t.cuda.synchronize()
+            st, en = _t.cuda.Event(True), _t.cuda.Event(True)
+            st.record()
+            for _ in range(iters):
+                fn()
+            en.record()
+            _t.cuda.synchronize()
+            return st.elapsed_time(en) / iters
+
+        try:
+            t_f = _bench(_fused)
+        except Exception as e:
+            print(f"[time] FUSED arm failed: {type(e).__name__}: {e}")
+            return
+        try:
+            t_u = _bench(_unfused)
+        except Exception as e:
+            print(f"[time] UNFUSED baseline could not run: {type(e).__name__}: {e}  "
+                  f"(fused={t_f:.4f} ms, no comparison)")
+            return
+        print(f"[time] composition: {nfa3} FA3 requests ({nfa3_rows} tokens), "
+              f"{B - nfa3} FA2 requests ({sum(qo_lens) - nfa3_rows} tokens), "
+              f"kv={kv_lens}, sm_split={sm_split}/{nsm}")
+        print(f"[time] fused   = {t_f:.4f} ms/iter  ({iters} iters, {warmup} warmup)")
+        print(f"[time] unfused = {t_u:.4f} ms/iter  (two separate launches)")
+        print(f"[time] speedup = {t_u / t_f:.4f}x  "
+              f"({100.0 * (t_u - t_f) / t_u:+.2f}% latency)")
 
     kpad = [k_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(B)]
     vpad = [v_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(B)]
@@ -375,6 +461,14 @@ def main():
         print(f"  first={good[0]} last={good[-1]} mod32={sorted({g % 32 for g in good})} "
               f"mod128={sorted({g % 128 for g in good})}")
     print(f"\nmode={mode} worst rel err {worst:.4g}, bad rows {rows_bad}/{total_q}")
+    # Timing runs ONLY after the verdict is printed, and only when the arm passed -- a timing
+    # number for a failing kernel is worse than none.
+    if _os.environ.get("TIME_AB") == "1":
+        if rows_bad == 0:
+            _time_ab()
+        else:
+            print(f"[time] SKIPPED: this arm has {rows_bad} bad rows. "
+                  f"No timing is reported for an arm that does not pass.")
     print("PASS" if rows_bad == 0 else "FAIL")
     return 0 if rows_bad == 0 else 1
 

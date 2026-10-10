@@ -100,14 +100,20 @@ def main():
         # BAND_KV sweeps the SECOND axis. A single-kv threshold cannot be the dispatch rule: at
         # kv=2048 FA3 wins across the whole packed_qo band, but the project's earlier decode-only
         # result has FA2 ahead by 1.30x at qo=1 / short kv. The boundary is 2-D.
+        # BAND_ROWS sweeps the THIRD axis, and it is the one that decides the rule. A single row
+        # makes FA3 look unconditionally better, but FA2's tile16 class PACKS many short rows and
+        # parallelises across them, while an FA3 tile of 128 packed rows is mostly idle on one row
+        # and well filled by 32 batched decode tokens. The doc's earlier "decode-only: FA2 beats
+        # FA3 by 1.30x" was presumably at a real decode batch size, which band1 never had.
         _bq = int(_os.environ.get("BAND_QO", "16"))
         _bkv = max(int(_os.environ.get("BAND_KV", "2048")), _bq)
+        _brows = int(_os.environ.get("BAND_ROWS", "1"))
         if _os.environ.get("BAND_SIDE", "fa2") == "fa3":
-            fa3_q, fa3_kv = [_bq], [_bkv]
+            fa3_q, fa3_kv = [_bq] * _brows, [_bkv] * _brows
             fa2_q, fa2_kv = [], []
         else:
             fa3_q, fa3_kv = [], []
-            fa2_q, fa2_kv = [_bq], [_bkv]
+            fa2_q, fa2_kv = [_bq] * _brows, [_bkv] * _brows
     elif mode == "band":
         # THE CONTESTED DISPATCH BAND, which no previous fixture covered. A 4-mode verify row is
         # qo = num_draft_tokens against a long context, so at GQA 4 these give

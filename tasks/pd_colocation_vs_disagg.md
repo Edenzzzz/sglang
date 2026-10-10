@@ -6,6 +6,54 @@ appends, ~480-token outputs, mixed with chat and math).
 
 Tasks, in priority order (status 2026-10-09; evidence in the sections below).
 
+---
+
+## [2026-10-11] CORRECTED KERNEL EVIDENCE -- supersedes the 2026-10-10 section below
+
+The 2026-10-10 update to this doc leaned on two kernel figures that are now **RETRACTED**, because
+both compared against an arm that fails the causal fp32 reference (`MIX_ALL_FA3=1`, a diagnostic
+configuration, failing 6/6 at 68-116 bad rows of 384):
+
+* ~~"the fusion is 1.46-2.01x slower than all-FA3 on realistic batches"~~ -- the baseline was broken;
+* ~~"3.14x slower than `BatchAttention`"~~ -- measured under the same knob, with a fence since shown
+  to be a regression.
+
+**The correctness-gated re-measurement is worse for the fusion, not better.** Two-role path
+(`MIX_ALL_FA3=0`), backfill live, bad rows beside every timing:
+
+| dec | sm_split | verdict | fused | `BatchAttention` | ratio |
+|---|---|---|---|---|---|
+| 8 | 96 | 0/264 | 0.3670 ms | 0.0699 ms | **5.3x slower (best case)** |
+| 32 | 96 | 0/288 | 1.2560 ms | 0.1180 ms | 10.6x |
+| 128 | 112 | 0/384 | 8.1775 ms | 0.2740 ms | **30.0x** |
+
+**What this means for each of the four points, stated against corrected evidence:**
+
+1. **Route to highest cache-hit node, EDF/SLO veto** -- **UNAFFECTED.** This is a router policy and
+   does not depend on the fused kernel. The argument in section 1 stands on its own.
+2. **Best-effort cache migration / replication** -- **UNAFFECTED**, same reason. Section 2 stands.
+3. **"Our EDF predictor is more accurate because the fused kernel is easier to model"** --
+   **THE PREMISE IS DEAD, and now for a better-evidenced reason than the 2026-10-10 entry gave.**
+   That entry said the premise was inverted by a "23x `sm_split` cliff". The corrected measurement
+   shows something simpler and more damaging: latency varies by **5.3x to 30x across `sm_split` and
+   decode count on correct arms** (0.367 -> 8.18 ms). A kernel whose runtime moves by 22x across its
+   own configuration space is *harder* to model than the unfused baseline, not easier. **Point 3
+   must be dropped or re-argued without the kernel.**
+4. **Two-way RDMA / complete graph** -- **UNAFFECTED.** A network-topology argument, independent of
+   the attention kernel.
+
+**So three of the four points survive intact and one is dead.** The surviving three are all
+*scheduling and networking* arguments that never needed the fused kernel; the one that depended on
+it is the one that fails. That is a cleaner statement of this doc's thesis than the kernel-first
+framing: **the colocation case rests on the router, not on the attention kernel.**
+
+**And the FA3-only alternative does not rescue point 3 either** -- it would run the all-FA3 path,
+which fails 6/6 on the fp32 reference. Both kernel designs are currently evidence-blocked, so point
+3 has no working kernel to stand on in either form.
+
+---
+
+
 **The thesis in one line:** our policy space (4-mode colocation + EDF/SLO router + tunable P/D
 admission ratio) is a **strict superset** of every baseline's fixed policy, so we should match
 the best baseline at any static workload and beat all of them when the workload moves.

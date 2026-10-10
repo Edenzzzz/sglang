@@ -179,6 +179,58 @@ contradicted them.
 
 ---
 
+## [!] WHAT TODAY'S KERNEL MEASUREMENTS TAKE AWAY FROM THE SCHEDULING ARGUMENT — 2026-10-10
+
+Four results from `debug_kernel_server_perf_4_mode.md` bear directly on the sections below, and
+**two of them cut against the argument as written**. Recorded here rather than left in the kernel
+doc, because the scheduling case leans on them.
+
+**1. The two-role fusion is NET NEGATIVE on realistic 4-mode batches.** One prefill chunk plus N
+decode rows, against routing everything to FA3 (same rows, no fusion):
+
+| decode rows | co-resident (best `sm_split`) | all-FA3 | fusion |
+|---|---|---|---|
+| 2 | 0.2426 | 0.2557 | +5.4% |
+| 8 | 0.3665 | **0.2512** | **1.46x SLOWER** |
+| 32 | 0.7371 | **0.3670** | **2.01x SLOWER** |
+
+The +5.4% was a 2-decode-token artifact. So **"one colocated batch through one fused attention
+kernel" is currently slower than one colocated batch through FA3 alone** -- the scheduling story
+does not need the two-role fusion, and is actively hurt by it at realistic decode counts.
+
+**2. Point 3's premise is INVERTED: the fused kernel makes cost modelling HARDER, not easier.**
+Section 3 below argues a colocated step is predictable because it is "one batch through one
+attention implementation whose cost is linear in total KV". Measured today: the **optimal
+`sm_split` moves with batch composition** (128 at 2 decode rows, 96 at 8, 64 at 32) and the
+penalty for getting it wrong is **not** smooth -- at dec=32 with `sm_split=128` the kernel takes
+**8.68 ms against 0.367 ms at that shape's own optimum, a 23x cliff**. A predictor over
+`(#prefill, #decode, sum KV)` must therefore also model the split, and the target has a 23x
+discontinuity in it. That is the opposite of "a smooth low-variance function".
+**Point 3 should be rewritten to claim predictability for the UNFUSED colocated step** (FA3-only,
+one kernel, linear in KV -- which still holds and is still better than disagg's two-stage
+pipeline), not for the fused one.
+
+**3. The baseline is stronger than this doc assumes.** flashinfer's own persistent
+`BatchAttention` does the whole mixed batch in ONE kernel and is **validated correct** here
+(0 bad rows vs the fp32 reference). Our fused kernel is **1.11x-4.9x slower than it** on every
+fixture. So "colocation gives us one kernel instead of two" is not a differentiator -- the
+baseline already has one kernel. The differentiator has to be the *schedule*.
+
+**4. The split-KV partial slab is O(packed_qo x num_kv_chunks)** -- ~1 GB for a single 2048-token
+chunk at 8K context. At production context lengths that workspace competes with the KV cache
+budget, which is a **scheduling** constraint (it reduces the cache a colocated node can hold, and
+cache capacity is exactly what points 1 and 2 trade on). Not previously accounted for anywhere
+below.
+
+**Gating, unchanged in kind but worse in degree than the 2026-10-06 note below:** the kernel is
+incorrect on multi-item-per-CTA batches -- i.e. a prefill chunk plus tens of decode rows, which is
+every realistic 4-mode step -- in *every* configuration tested. So no serving arm, single- or
+multi-node, is measurable today. The scheduling arguments below stand or fall on their own logic
+and on the H20 measurements already recorded; **none of them has fresh kernel support as of
+2026-10-10.**
+
+---
+
 ## What the kernel work licenses us to assume — 2026-10-06
 
 The scheduling argument below leans on one property: **attention cost on a colocated batch is
@@ -630,7 +682,15 @@ EDF only works if `predicted_service_time` is accurate; a scheduler with a bad p
 misses deadlines it could have met and rejects requests it could have taken.
 
 **Why colocation plus one attention kernel helps.** A colocated step is one batch through one
-attention implementation whose cost is now **linear in total KV** (*measured*, above). Features
+attention implementation whose cost is now **linear in total KV** (*measured*, above).
+
+> **[!] CORRECTION 2026-10-10 — this premise holds for the UNFUSED colocated step, not the fused
+> one.** With the two-role fused kernel the optimal `sm_split` moves with batch composition
+> (128 / 96 / 64 at 2 / 8 / 32 decode rows) and a mis-set split costs **23x** (8.68 ms vs 0.367 ms
+> at dec=32). A predictor would have to model the split too, over a target with a 23x
+> discontinuity. The claim should rest on FA3-only colocation — one kernel, linear in KV, no split
+> parameter — which is both simpler to model AND currently faster than the fusion (1.46–2.01x).
+> See the 2026-10-10 section at the top of this doc. Features
 that are known at admission:
 
     TTFT  ~ f(sum of append lengths, sum of context lengths, #prefill rows, #decode rows)

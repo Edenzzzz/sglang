@@ -1586,6 +1586,28 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       factor is ~1. Check the call sequence in `prefill_sm90.cuh` around the `store_partial` site
       against the `store()` site.
 
+      **Normalization-ordering suspect: REFUTED immediately (2026-10-10).** The dispatch in
+      `prefill_sm90.cuh` passes the SAME `tOrO` and the SAME `attention_updater.get_lse()` to
+      `store_partial` and to `store`, selected by `wrote_partial` -- one store per work item,
+      never both. So the normalization state cannot differ between the split and direct paths, and
+      `finalize` ordering is not the cause. (Also confirmed: the double-store that once
+      double-arrived on `EpilogueBarrier` is gated out, consistent with the `NO_MERGE` result
+      showing no direct write for split rows.)
+
+      **Also checked and consistent:** the merge's `num_index_sets = indptr[k+1] - indptr[k]`
+      equals `chunks >= 2` for every merged row (our CSR pushes `chunks` per row cumulatively
+      across groups, so the group boundaries are not special), and the merge's bypass for
+      `num_index_sets <= 1` therefore cannot be swallowing merged rows. `merge_o_indices` (1024
+      entries) and `merge_indptr` (1025) are indexed by the same ordinal.
+
+      **So every structural hypothesis is now refuted by reading both sides**: addressing on both
+      the partial and merge sides, buffer identity, LSE scale, normalization ordering, CSR
+      consistency, grid coverage, and double writes. The next step must be **data, not reading**:
+      dump `partial_o` / `partial_lse` for ONE known merge row and compare against a Python
+      chunk-wise reference (per-chunk attention over `[kv0, kv1)`, normalized, with its log2 sum).
+      That distinguishes "the partials are wrong" from "the combination is wrong", which is the
+      one split this investigation has not yet made. State the expected values before dumping.
+
       **[ ] Part 2, the remaining defect: the merged values.** All rows are now written and
       `fa2` is unaffected, so this is the reduction's arithmetic or the partials it reads, not
       addressing. Where to look next, in order:

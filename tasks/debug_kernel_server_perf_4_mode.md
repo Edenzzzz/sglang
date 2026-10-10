@@ -803,6 +803,70 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[x] ITEMS-PER-CTA THRESHOLD SWEEP (2026-10-10): corruption needs >1 work item per CTA, and
+the reuse class is confirmed end-to-end.** First step of bisection-by-deletion. All-FA3,
+`SM_SPLIT=all` so every one of the 132 SMs is an FA3 CTA; correctness only, 5 seeds per point.
+The fixture makes one request per decode row and kv=2048 chunks at 128, so items/CTA is about
+`(DEC_ROWS+1)*16/132`.
+
+| DEC_ROWS | items/CTA | fails | bad rows (5 seeds) |
+|---|---|---|---|
+| 1 | 0.24 | 0/5 | 0, 0, 0, 0, 0 |
+| 2 | 0.36 | 0/5 | 0, 0, 0, 0, 0 |
+| 4 | 0.6 | 0/5 | 0, 0, 0, 0, 0 |
+| 8 | 1.1 | 3/5 | 0, 1, 1, 2, 0 |
+| 16 | 2.1 | 4/5 | 2, 1, 0, 1, 1 |
+| 32 | 4.0 | 1/5 | 0, 0, 1, 0, 0 |
+| 64 | 7.9 | 1/5 | 0, 0, 1, 0, 0 |
+| **128** | 15.6 | **5/5** | **112, 112, 84, 92, 96 of 384** |
+
+Two things, and the second is new:
+
+* **Below 1 item/CTA it is clean, 15 runs for 15.** The first failure appears exactly where the
+  ratio crosses 1. That is the first direct, repeated evidence for the cross-item reuse class --
+  until now it rested on the production default versus one anomalous request.
+* **The severity is BIMODAL, not smooth.** A trickle of 1-2 bad rows from 8 to 64, then a ~100x
+  explosion at 128. Items/CTA is already 7.9 at dec=64 with one bad row. So >1 item/CTA is
+  NECESSARY but the magnitude is not a function of the ratio: either a second mechanism switches
+  on near dec=128, or that is where the producer laps the consumer. Not yet resolved -- recorded
+  as an open sub-question rather than explained away.
+
+Command (pod `62d25ecfb033ad4b`, `/dev/shm/w/thr.sh`):
+
+```
+TORCH_EXTENSIONS_DIR=/dev/shm/w/tdef GQA1=0 FUSED_PACKED_Q=4 FA3_MBARRIER=1 \
+FA3_CTA_Q=128 FA3_CTA_KV=128 FA3_CAUSAL=1 MODE=mix_decode DEC_ROWS=$R MIX_ALL_FA3=1 \
+SM_SPLIT=all FA3_PROBE=0 KVCONST=0 FUSED_NOSPLIT=0 SEED=$S python fused_reference.py
+```
+
+**[!] MECHANISM, READ OFF THE SOURCE: the `smem_q` refill for item N+1 is unfenced against item
+N's consumer.** Two premises, both verified by reading rather than inferred:
+
+1. **The producer refills `smem_q` BEFORE it waits** (`sparse_mainloop.cuh`): the Q load is
+   issued, and only then comes `barrier_O.wait((work_idx + 1) % 2)`. So nothing stands between
+   the refill and the previous item's reader.
+2. **The consumer signals `barrier_O` after only the FIRST QK gemm is ISSUED**
+   (`mainloop_mma.cuh`, `wg_wait=-1`, guarded by `work_idx != 0`) -- and
+   **`TiledMmaQK` is `GMMA::ss_op_selector`** (`kernel_traits.cuh:97`), i.e. BOTH operands come
+   from shared memory, so `tSrQ` is a smem `DescriptorIterator` and `sQ` is re-read by every
+   later kv tile's gemm, not consumed once into registers.
+
+The only cross-item fence is therefore placed too late on the producer side and raised too early
+on the consumer side. **This is stock 0.7 code**, sound for a CTA that runs one work item and a
+hazard for one that runs many -- which is what our persistent scheduler creates and what the
+sweep above measures. It predicts, without fitting:
+
+* stock-configured arms failing too, at a lower rate (measured: mean 5.6 of 384 versus 128), since
+  our 32-lane cp.async packed-Q load is in flight far longer than stock's TMA and widens the window;
+* every serializing instrument hiding it (measured: printf probe 0/384 vs 76/384, racecheck
+  indiscriminate, memcheck 0 errors and 0/384);
+* it being in the SAME class as the one contributor already confirmed -- `sO`/`smem_v`, 45% -- which
+  is the same bug on the output buffer instead of the input one.
+
+`FUSED_Q_REUSE_FENCE=1` (loader knob `Q_REUSE_FENCE`) hoists the producer's wait above the Q load
+and moves the consumer's arrival to after its last `sQ` read. It is expected to COST time: it
+serializes producer and consumer across items. Correctness first; the A/B measures both.
+
 **[x] MEMCHECK: 0 ERRORS -- no out-of-bounds access, so it is a pure ORDERING problem on in-bounds
 shared memory.** `compute-sanitizer --tool memcheck` on the failing shape (`DEC_ROWS=128`,
 `MIX_ALL_FA3=1`, the arm that fails 10/10 at mean ~128 bad rows):

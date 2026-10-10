@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.67.0 — items-per-CTA threshold measured; the cross-item Q hazard named (2026-10-10)
+
+**Threshold sweep (5 seeds/point, all-FA3, `SM_SPLIT=all`):** clean 15/15 below 1 work item per CTA
+(DEC_ROWS 1/2/4), first failures exactly where the ratio crosses 1 (dec=8), then a ~100× explosion
+at dec=128 (112/112/84/92/96 bad rows of 384, 5/5). So >1 item/CTA is **necessary**, but severity is
+**bimodal** rather than a smooth function of the ratio — 7.9 items/CTA at dec=64 yields one bad row.
+That residual is logged as open, not explained away.
+
+**Mechanism, read off the source (two verified premises):** the producer refills `smem_q` *before*
+`barrier_O.wait` (`sparse_mainloop.cuh`), and the consumer arrives on `barrier_O` after only the
+*first* QK gemm is issued (`mainloop_mma.cuh`, `wg_wait=-1`) — while `TiledMmaQK` is
+`GMMA::ss_op_selector` (`kernel_traits.cuh:97`), so Q stays in shared memory and is re-read by every
+later KV tile. The sole cross-item fence is thus placed too late on the producer side and raised too
+early on the consumer side. This is **stock 0.7 code**: correct for one item per CTA, a hazard for
+many. It independently predicts the stock-arm failures (5.6 vs 128), the instrument-masking, and
+puts the defect in the same class as the confirmed `sO`/`smem_v` contributor (45%) — the same bug on
+the output buffer rather than the input.
+
+New knob `FUSED_Q_REUSE_FENCE` / `Q_REUSE_FENCE` hoists the producer wait above the Q load and moves
+the consumer arrival after its last `sQ` read. Default off; it serializes producer and consumer
+across items, so it is expected to cost time. A/B in flight.
+
 ## v0.66.0 — memcheck clean; instruments exhausted; recommendation to park the fusion (2026-10-10)
 
 **`memcheck`: 0 errors** on the arm that fails 10/10 — and the run *passed* under the sanitizer

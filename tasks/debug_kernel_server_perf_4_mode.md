@@ -804,6 +804,49 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[x] Q-REUSE FENCE MEASURED: a THIRD real contributor, NOT a fix, and expensive (2026-10-10).**
+
+Dedicated `barrier_Qdone`, 10 seeds per arm at `DEC_ROWS=128` (`MIX_ALL_FA3=1`, `SM_SPLIT=all`),
+all arms built in their own extension dir with the macros verified in `build.ninja`:
+
+| arm | numeric fails | bad rows of 384 | no verdict |
+|---|---|---|---|
+| `FENCE=0 SPLIT=0` (production default) | 10/10 | 64-116, mean ~102 | 0/10 |
+| `FENCE=0 SPLIT=1` (un-alias `sO` only) | 7 | 60-86, mean ~73 | 3/10 |
+| `FENCE=1 SPLIT=1` (both) | 9 | 32-60, mean ~48 | 1/10 |
+
+**Counting a missing verdict as a failure -- which is the only honest reading, a non-verdict is not
+a pass -- every arm fails 10 of 10 at dec=128.** The bad-row count falls by about a third at each
+step (102 -> 73 -> 48), so both mechanisms are real contributors and the source-level reading was
+directionally right. **Neither nor both is sufficient.** Something beyond `smem_q` and `sO` reuse
+still corrupts output at high items/CTA.
+
+**It DOES fix the smaller shapes, and it is expensive.** At `DEC_ROWS=32`:
+
+| arm | verdict | fused | `BatchAttention` | ratio |
+|---|---|---|---|---|
+| `FENCE=0 SPLIT=0` | **FAIL** 2/288 | -- | -- | -- |
+| `FENCE=1 SPLIT=1` | **PASS 0/288** | 0.3703 ms | 0.1181 ms | **3.14x SLOWER** |
+
+So the first configuration in this project that is *correct* on a mixed 4-mode shape is also
+**3.14x slower than the validated reference** -- which is the predicted cost of serialising
+producer and consumer across work items, and the same reason every serialising instrument masked
+the defect.
+
+**[!] The no-verdict runs are INTERMITTENT and remain unattributed.** 4 of 30 runs printed no
+`bad rows` line. Re-running those exact seeds (`FENCE=0 SPLIT=1` seeds 5 and 8, `FENCE=1 SPLIT=1`
+seed 6) produced ordinary FINITE failures -- 82, 71 and 45 bad rows -- so none of them hung, none
+was non-finite on the retry, and the condition did not reproduce. I first guessed "hang", then
+"non-finite output" from reading the harness's early-return path; **both guesses are unsupported**
+and are recorded here as unattributed rather than explained.
+
+**A methodological correction that affects how these arms should be read.** `SEED` sets the input
+data, not the race: the same seed gives different outcomes on different runs (seed 5 -> NOVERDICT
+in the arm, 82 bad rows on retry). So one run per seed is fine as *sampling*, but a per-arm
+NOVERDICT *rate* is a property of 10 random draws, not of the arm -- the apparent 3/10 vs 1/10
+difference between the two arms carries no weight, and an earlier statement in this session that
+"the fence introduces an intermittent hang" was wrong on exactly that basis and is retracted.
+
 **[!] `barrier_O` CANNOT CARRY THE Q INVARIANT -- reusing it DEADLOCKS, and working out why
 settled what that barrier actually means (2026-10-10).**
 

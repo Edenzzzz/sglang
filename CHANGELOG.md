@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.70.0 — Q fence is a third real contributor, not a fix, and 3.14× slower (2026-10-10)
+
+Dedicated `barrier_Qdone`, 10 seeds/arm at `DEC_ROWS=128`, macros verified in `build.ninja`:
+
+| arm | numeric fails | bad rows of 384 | no verdict |
+|---|---|---|---|
+| `FENCE=0 SPLIT=0` | 10/10 | 64–116, mean ~102 | 0/10 |
+| `FENCE=0 SPLIT=1` | 7 | 60–86, mean ~73 | 3/10 |
+| `FENCE=1 SPLIT=1` | 9 | 32–60, mean ~48 | 1/10 |
+
+Counting a missing verdict as a failure, **every arm fails 10/10 at dec=128**. Bad rows fall ~⅓ per
+step (102→73→48), so both mechanisms are real contributors and the source reading was directionally
+right — but neither nor both is sufficient; something beyond `smem_q`/`sO` reuse still corrupts at
+high items/CTA.
+
+At `DEC_ROWS=32` the combined arm is the **first correct configuration** in this project on a mixed
+4-mode shape (PASS 0/288 where baseline FAILs 2/288) — and it is **3.14× slower** than
+`BatchAttention` (0.3703 ms vs 0.1181 ms), the predicted cost of serialising producer and consumer
+across items, and the same reason every serialising instrument masked the defect.
+
+**Unattributed:** 4 of 30 runs printed no verdict. Re-running those seeds gave ordinary finite
+failures (82/71/45 bad rows) — no hang, no non-finite, no reproduction. My two guesses ("hang", then
+"non-finite") are both unsupported and recorded as unattributed.
+
+**Methodological retraction:** `SEED` sets input data, not the race — the same seed yields different
+outcomes across runs. A per-arm NOVERDICT *rate* therefore reflects 10 random draws, not the arm, so
+the 3/10-vs-1/10 gap carries no weight, and this session's earlier claim that "the fence introduces
+an intermittent hang" was wrong on that basis and is retracted.
+
 ## v0.69.0 — barrier_O cannot carry the Q invariant; dedicated barrier_Qdone (2026-10-10)
 
 Reusing `barrier_O` for the cross-item Q fence **deadlocked**: GPU at 100% for 17 minutes on a

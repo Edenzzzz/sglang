@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.01.0 — B2c part 1: cross-role backfill is live and validated by its own null case (2026-10-11)
+
+Two-role path, `MIX_ALL_FA3=0 SM_SPLIT=64`, `DEC_ROWS=128`, 6 seeds:
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| backfill **ON** | **0/6** | all zero |
+| backfill **OFF** | 6/6 | **128 × 6 — deterministic** |
+
+**128 is exactly the decode-row count.** With zero persistent clusters published, no block drains the
+FA2 queue, so those rows are never computed. This gives (1) a gate that demonstrably **bites**, unlike
+the vacuous arm in v0.99.0, and in precisely the predicted way; and (2) a **validated null case** for
+backfill — ON computes all 384 correctly, OFF loses exactly the 128 rows that depend on it. The
+cross-role backfill is therefore **functional and load-bearing**.
+
+That closes the **backfill half of B2c**. Still open: `tma_store_wait` and multicast (neither exercised
+here), and the performance question — this is correctness only and says nothing about throughput.
+
 ## v1.00.0 — THE TWO-ROLE FUSED PATH IS CLEAN; the defect is confined to a diagnostic mode (2026-10-11)
 
 | configuration | roles live | fails |

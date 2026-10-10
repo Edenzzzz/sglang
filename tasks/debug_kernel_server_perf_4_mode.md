@@ -870,6 +870,36 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[x] B2c PART 1 DONE: CROSS-ROLE BACKFILL IS IMPLEMENTED, LIVE, AND VALIDATED BY ITS OWN NULL
+CASE (2026-10-11).**
+
+Two-role path, `MIX_ALL_FA3=0 SM_SPLIT=64`, `DEC_ROWS=128`, 6 seeds each:
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| backfill **ON** | **0/6** | 0, 0, 0, 0, 0, 0 |
+| backfill **OFF** (`FUSED_NO_BACKFILL=1`) | 6/6 | **128, 128, 128, 128, 128, 128** |
+
+**128 is exactly the number of decode rows.** With the cursor publishing zero persistent clusters,
+no block ever drains the FA2 queue, so those 128 rows are never computed and come back wrong --
+deterministically, every seed, the same count. That is:
+
+1. **A gate that demonstrably BITES**, in contrast to the vacuous arm one entry below, and it bites
+   in exactly the predicted way rather than in some unexplained way.
+2. **A validated null case for the backfill itself.** Backfill ON computes all 384 rows correctly;
+   backfill OFF loses precisely the 128 rows that depend on it. So the cross-role backfill is not
+   merely present -- it is **functional and load-bearing**, and the deterministic 128 is the proof
+   that it is the mechanism carrying FA2-role work.
+
+**That closes the backfill half of B2c**, which the goal names explicitly (*"test multicast and
+cross-role backfill"*). An SM that finishes its FA3 work does drain the FA2 queue, and correctness
+depends on it.
+
+**Still open in B2c: `tma_store_wait` and multicast.** The goal pairs them with backfill; neither is
+exercised by this arm. And the PERFORMANCE question is untouched -- this is a correctness
+demonstration, so it says nothing about whether backfill buys throughput. Timing it needs the
+backfill-on arm against the unfused baseline on the same shape.
+
 **[x][!!!] THE TWO-ROLE FUSED PATH IS CLEAN -- THE DEFECT IS CONFINED TO A DIAGNOSTIC
 CONFIGURATION I INTRODUCED (2026-10-11). This reframes the entire investigation.**
 

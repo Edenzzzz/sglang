@@ -735,12 +735,26 @@ the `barrier_Q` phase per item, and nothing in the 0.7 components we reuse was v
 configuration. **No serving arm can run, and no kernel timing on a realistic batch shape is
 meaningful, until the baseline race is root-caused.**
 
-**Next: root-cause the BASELINE race first, not the packed amplification.** It is the simplest
-reproducer (stock paths on both sides, 7/10 runs, mean 5.6 rows) and whatever fixes it may remove
-the interaction term that makes the packed combination 23x worse. Start by asking what 0.7's own
-FA3 does differently: does any 0.7 configuration actually run multiple work items through one CTA,
-or is our persistent multi-item loop a configuration its epilogue and `barrier_Q` phase handling
-have never seen?
+**[!] First question answered, and it REFUTES the framing: multi-item-per-CTA IS a stock 0.7
+configuration.** `tile_scheduler.cuh` has `BatchPrefillPersistentTileScheduler` with the identical
+pattern -- `work_idx = current_work.ptr_begin + current_work.counter + 1`, looping while
+`work_idx < ptr_end`. So our persistent multi-item loop is not a configuration 0.7's epilogue and
+`barrier_Q` handling have never seen, and "the components were never validated this way" is wrong.
+
+**That narrows the baseline race to the one thing the "stock gather + stock store" arm still
+replaces: our `UnifiedWgmmaTileScheduler`.** In that arm the Q load, the O store, the mainloop, the
+epilogue and `barrier_Q` are all stock; the scheduler is ours. So the mean-5.6-bad-rows baseline is
+attributable to it, and the comparison that settles it is **our scheduler vs 0.7's own persistent
+scheduler on the same rows**.
+
+**Concrete next step:** our scheduler differs from stock's in what each `WorkTileInfo` carries
+(15 fields vs stock's smaller set, including the `causal_kv_len` and derived `group_id` we added)
+and in deriving `q_tile_idx = q_start[work_idx] / cta_tile_q` where stock reads
+`qo_tile_indices[work_idx]` directly. Diff the two `get_next_work` implementations field by field,
+and in particular check that **every** field stock carries forward from `current_work` is carried
+forward by ours -- a field that stock propagates and ours recomputes (or vice versa) would corrupt
+exactly one item in a multi-item CTA, which is the observed signature (a handful of bad rows out of
+384, not wholesale garbage).
 
 **[SUPERSEDED] [x] FOUR-CORNER BISECT (2026-10-10), and it CORRECTS my "stock paths are CLEAN" claim.** Split
 `write_packed`'s gate (`FUSED_PACKED_O`) from the Q gather's so the two could be mixed. G=1,

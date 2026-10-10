@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.88.0 — NB_SYNC is not the route; per-warp granularity stands (2026-10-10)
+
+The granularity clue gave a real hypothesis: bad rows in aligned runs of 4 token rows = **16 packed
+rows** = **exactly one warp's share** of a 128-row q tile across 8 MMA warps, so one warp's QK gemm
+reading a different K tile would produce exactly this, satisfying all five measured constraints.
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| `NB_SYNC=1` (default) | 6/6 | 96, 112, 128, 116, 100, 88 — mean ~107 |
+| `NB_SYNC=0` (override off) | 6/6 | 104, 88, 72, 92, 112, 108 — mean ~96 |
+
+Overlapping ranges, no meaningful change. **As stated before the arm ran:** no-change does not
+exonerate warp ordering (both settings may order warps adequately while something else diverges); it
+shows only that this knob is not the fix. 20th elimination.
+
+The per-warp **granularity** is a measurement, not a hypothesis, and survives untouched — it remains
+the strongest live clue. Next: use the fixed host decode (byte offsets / 4) to map a specific bad run
+of 4 token rows to its owning `(block, work_idx)`, then compare that item's plan entries (`q_start`,
+`kv_start`, `kv_end`, `kv_len`, `partial_indptr`) against its neighbours — the item's own plan data is
+the only per-item input that could differ.
+
 ## v0.87.0 — host decode works; bad rows come in aligned runs of 4 token rows (2026-10-10)
 
 ```

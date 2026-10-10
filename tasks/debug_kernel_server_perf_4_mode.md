@@ -819,6 +819,32 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[~] PER-WARP HYPOTHESIS: the `NB_SYNC` override is NOT the route; warp ordering NOT fully
+exonerated (2026-10-10). Twentieth elimination, with the limit stated in advance.**
+
+The granularity clue gave the hypothesis: bad rows arrive in aligned runs of 4 token rows = **16
+packed rows**, and with CTA_Q=128 over 8 MMA warps, 16 packed rows is **exactly one warp's share of
+the output**. So one warp's QK gemm using a different K tile than its peers would produce precisely
+this, and it satisfies all five measured constraints (race, wrong tile, same request, >1 item/CTA,
+4x depth scaling). `FUSED_NB_SYNC` gates the `WarpScheduler::barrier_sync`/`barrier_arrive`
+overrides that order MMA warps around each gemm.
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| `NB_SYNC=1` (default) | 6/6 | 96, 112, 128, 116, 100, 88 -- mean ~107 |
+| `NB_SYNC=0` (override off) | 6/6 | 104, 88, 72, 92, 112, 108 -- mean ~96 |
+
+Ranges overlap heavily; no meaningful change. **Stated before the arm ran and still binding:** a
+no-change does NOT exonerate warp ordering, because both settings may order warps adequately while
+something else diverges. What it does establish is that this knob is not the fix.
+
+**The per-warp GRANULARITY remains the strongest live clue** -- it is a measurement, not a
+hypothesis, and it survives this arm untouched. The next step that uses it properly is the
+`(block, work_idx)` mapping from the now-fixed host decode (byte offsets / 4): take a specific bad
+run of 4 token rows, identify the item and block that own it, and read that item's plan entries
+(`q_start`, `kv_start`, `kv_end`, `kv_len`, `partial_indptr`) against its neighbours. If one warp's
+16 rows are wrong, the item's own plan data is the only per-item input that could differ.
+
 **[x] HOST-SIDE DECODE WORKS, AND THE BAD ROWS HAVE STRUCTURE: ALIGNED RUNS OF 4 TOKEN ROWS
 (2026-10-10).**
 

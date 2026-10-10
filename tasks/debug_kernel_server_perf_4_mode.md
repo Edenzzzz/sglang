@@ -870,6 +870,42 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[x][RESOLVED] THE 4-MODE GATE NEVER FIRES, CONFIRMED BY ITS OWN DEBUG PRINT. The fused path
+cannot be exercised in a server on this pod as configured (2026-10-11).**
+
+Serialised run, `SGLANG_DBG_DRAFT_COPY=1`, server ran to completion:
+
+| artifact | value |
+|---|---|
+| server log | **9474 lines** -- full run, not a crash |
+| **`MIXEDGATE` lines** | **0** |
+| `mixedspec` mentions | **0** |
+| prefill batches with `#running-req > 0` | **4195** |
+
+**The `MIXEDGATE` print is INSIDE the gate's body** (`scheduler.py:4150`, after the `if` at `:4141`),
+so **zero lines means the condition is false**, not that mixing happened unlogged. That resolves the
+ambiguity recorded two entries above: the "zero mixed steps" reading was right, and it is now
+confirmed by the gate's own instrumentation instead of by `SGLANG_LOG_MIXED_COMPOSITION`, which the
+fork does not read.
+
+**So the fused path is never entered, despite four of the seven gate clauses being demonstrably
+satisfied:** `SGLANG_MIXED_SPEC=1` (set and read), `is_mixed_chunk` (`--enable-mixed-chunk` passed),
+`spec_algorithm` not none (EAGLE3 args added for `MTP*` methods), and `running_batch` non-empty
+(4195 times). The failing clause is one of `return_logprob`, `input_embeds is None`, or
+`beam_group`, **or** the code never reaches `:4141` on this version's scheduler path.
+
+**This is the terminal finding of the serving thread, and it bounds the whole session:** the 0.7
+port cannot be measured in a server here, so whether its 9.6-9.8x harness slowness matters in
+production is **unmeasurable on this pod as configured**, not merely unmeasured. Eight attempts,
+seven blockers found (six provisioning, one self-inflicted), and the eighth is a scheduler gate
+clause that needs a line-level check rather than another run.
+
+**The one remaining diagnostic, and it is cheap:** add a log line *before* the `if` at `:4141`
+printing each clause's value, or run under a debugger breakpoint there. Every artifact-level approach
+is now exhausted -- the gate's own print was the last one, and it says the condition is false without
+saying which clause. **That requires editing the fork, which is a code change rather than a
+measurement, and is where the next session should start.**
+
 **[!] THE SPLIT ARM'S FAILURE IN THAT RUN WAS SELF-INFLICTED: I ran two servers on one GPU and one
 port (2026-10-11). Both that arm and the MIXEDGATE run are void.**
 

@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.16.0 — RESOLVED: the 4-mode gate never fires; the fused path is unmeasurable here (2026-10-11)
+
+Serialised run, `SGLANG_DBG_DRAFT_COPY=1`, server to completion:
+
+| artifact | value |
+|---|---|
+| server log | **9474 lines** (full run) |
+| **`MIXEDGATE` lines** | **0** |
+| `mixedspec` | **0** |
+| prefill with `#running-req > 0` | **4195** |
+
+The `MIXEDGATE` print is **inside** the gate body (`scheduler.py:4150`, after the `if` at `:4141`), so
+**0 lines ⇒ the condition is false** — not mixing-without-logging. That resolves the earlier
+ambiguity: "zero mixed steps" was right, now confirmed by the gate's own instrumentation rather than
+by `SGLANG_LOG_MIXED_COMPOSITION`, which the fork doesn't read.
+
+Four of seven clauses are demonstrably satisfied (`SGLANG_MIXED_SPEC`, `is_mixed_chunk`,
+`spec_algorithm` not none, `running_batch` non-empty ×4195). The failing one is `return_logprob`,
+`input_embeds`, `beam_group` — or `:4141` is never reached on this scheduler path.
+
+**Terminal finding for the serving thread:** the 0.7 port's production behaviour is **unmeasurable on
+this pod as configured**, not merely unmeasured. Eight attempts, seven blockers (six provisioning, one
+self-inflicted).
+
+**Next, and it is a code change not a measurement:** log each clause's value immediately before
+`:4141`. Every artifact-level approach is exhausted — the gate's own print was the last.
+
 ## v1.15.0 — every gate condition satisfied yet no mixed steps logged; MIXEDGATE is the next step (2026-10-11)
 
 Walked `scheduler.py:4141` against the driver: `SGLANG_MIXED_SPEC=1` **set and read**;

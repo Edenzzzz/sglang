@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.90.0 — my own proposed mechanism is already protected; refuted before building it (2026-10-10)
+
+The previous entry proposed that a warp could issue its gemm off-phase and read a stage the pipeline
+considers released. Checked before spending a build cycle. **It cannot happen:**
+
+1. `pipeline_params.consumer_arv_count = NUM_MMA_THREADS` (`prefill_sm90.cuh:120`) — a stage is not
+   released until *every* MMA thread calls `consumer_release`.
+2. `warpgroup_wait<1>()` precedes every `consumer_release` (`mainloop_mma.cuh:244-245`) — the gemm has
+   drained before the release.
+
+22nd elimination, and an elimination of my own proposal, recorded rather than quietly dropped. Reading
+first saved the build cycle — the same discipline that killed the tile-count and scheduler-desync
+candidates earlier today.
+
+The per-warp **granularity** is a measurement (runs of exactly 16 packed rows; warps 1/4/5 in one run)
+and stands; what is refuted is one explanation of how a warp gets the wrong K.
+
+**Live space, honestly bounded:** every synchronisation mechanism reachable by reading is verified
+correct — arrival counts, tile counts, stage indices, cp.async coverage, scheduler determinism,
+acquire/release pairing, lane mapping, gather addressing, parity uniformity, warp-release ordering. I
+have **no remaining candidate** both consistent with the full signature and checkable by reading. The
+next non-guess is the `(block, work_idx)` plan-entry comparison from the fixed host decode: a
+corrupted item's own plan data vs its clean neighbours', since per-item plan data is the only input
+that differs between items in one block.
+
 ## v0.89.0 — the corruption unit is a whole MMA warp, and not a fixed one (2026-10-10)
 
 Derived from the already-captured `BADROWS`, no new GPU run. Packed row = `token*G + head` (G=4),

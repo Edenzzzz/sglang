@@ -819,6 +819,41 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[!] MY OWN PROPOSED MECHANISM IS ALREADY PROTECTED -- refuted before building the fix I
+announced (2026-10-10). Twenty-second elimination.**
+
+Last entry proposed: *"the `consumer_wait` -> gemm -> `consumer_release` sequence is per-warpgroup,
+not per-warp, so a warp that passes `WarpScheduler::barrier_sync()` and issues its gemm before its
+peers can read a stage the pipeline considers released."* Checked the code before spending a build
+cycle on it. **It cannot happen, for two independent reasons:**
+
+1. **`pipeline_params.consumer_arv_count = NUM_MMA_THREADS`** (`prefill_sm90.cuh:120`). A stage is
+   not released until **every** MMA thread has called `consumer_release`, so no single warp can
+   release a stage out from under its peers. The arrival count is the protection, and it is already
+   set to the full consumer width.
+2. **`warpgroup_wait<1>()` precedes every `consumer_release`** (`mainloop_mma.cuh:244-245`,
+   and the same pattern in each loop). The gemm has drained before the release, so a warp cannot
+   still be reading the stage it releases.
+
+So the per-warp *release* story is dead. Recorded as an elimination of my own proposal rather than
+quietly dropped -- and the build cycle it would have cost was saved by reading first, which is the
+same discipline that killed the tile-count and scheduler-desync candidates earlier today.
+
+**What this does NOT touch:** the per-warp **granularity** is a measurement (runs of exactly 16
+packed rows, warps 1/4/5 in one run) and stands. The corruption is still warp-quantised; what is
+refuted is one specific explanation of how a warp could end up with the wrong K.
+
+**Remaining live space, honestly bounded.** Twenty-two eliminations, and every synchronisation
+mechanism reachable by reading is verified correct: arrival counts, tile counts, stage indices,
+cp.async coverage, scheduler determinism, acquire/release pairing, lane mapping, gather addressing,
+parity uniformity, warp-release ordering. The defect is a race, within one item, wrong KV tile of the
+item's own request, warp-quantised, 4x depth-scaled, invisible to in-kernel instruments. **I have no
+remaining candidate that is both consistent with all of that and checkable by reading.** The next
+step that is not a guess is the `(block, work_idx)` plan-entry comparison from the fixed host decode
+-- comparing a corrupted item's own plan data (`q_start`, `kv_start`, `kv_end`, `kv_len`,
+`partial_indptr`) against its clean neighbours, since per-item plan data is the only input that
+differs between items in the same block.
+
 **[x] THE CORRUPTION UNIT IS A WHOLE MMA WARP, AND IT IS NOT A FIXED WARP (2026-10-10). Derived
 from the already-captured `BADROWS` -- no new GPU run.**
 

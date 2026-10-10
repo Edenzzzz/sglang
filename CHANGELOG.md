@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.97.0 — per-item-type accounting balances (25th); aggressor/victim story RETRACTED (2026-10-10)
+
+Counters split into full-tile (`qo_len >= CTA_Q`) and partial-tile populations so an imbalance between
+them cannot cancel in a block sum:
+
+```
+verdict: 120/384   ASYM: 0   blocks: 132   FULL-or-PART disagreements: 0
+blocks with FULL items > 0: 8   (6/7/8 each → 8 × ~7 = 56 = the prefill item count)
+```
+
+1. **The FULL population was exercised** — 8 blocks hold all 56 prefill items — and
+   `FULL loaded == FULL cons` in each. Per-item-type desync **refuted** (25th elimination).
+2. **Those 8 blocks are nearly pure prefill** (6–8 FULL vs 0–1 PART items).
+
+**That retracts the aggressor/victim story.** I had concluded "decode is the aggressor, prefill the
+victim" from corruption living in prefill and growing with `DEC_ROWS`. But the corrupted blocks run
+almost exclusively prefill — a decode item can't corrupt via shared CTA state without sharing the CTA.
+
+**Better explanation of the `DEC_ROWS` threshold, requiring no interaction:** 896 decode items crowd
+the plan, so the LPT splitter packs the 56 prefill items into **8 blocks at ~7 each** instead of one
+per block — pushing those blocks past **1 item/CTA**, exactly the measured threshold. So the defect is
+**prefill-on-prefill cross-item interference**, `DEC_ROWS` is a knob on prefill density per block, and
+this fits every surviving constraint (own-request wrong tile — all items on such a block are request
+0; warp quantisation; 4× depth scaling; items/CTA threshold).
+
+Also explains why the `mix_decode` framing kept misleading me: the fixture name and the sweep imply
+decode work participates, and it does not — it only changes how densely request 0's q tiles pack onto
+a CTA.
+
 ## v0.96.0 — early-continue dead by arithmetic; and a gap in my own accounting instrument (2026-10-10)
 
 The leading candidate — the `q_tile_idx * CTA_Q >= qo_len` early-exit — **is dead**: a decode item has

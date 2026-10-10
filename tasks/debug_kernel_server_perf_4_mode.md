@@ -870,6 +870,48 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[x] PER-ITEM-TYPE ACCOUNTING BALANCES (25th elimination) -- AND IT KILLS MY AGGRESSOR/VICTIM
+STORY: THE CORRUPTED BLOCKS ARE NEARLY PURE PREFILL (2026-10-10).**
+
+Split the register counters into full-tile (`qo_len >= CTA_Q`) and partial-tile populations, so an
+imbalance between them cannot cancel in a block sum:
+
+```
+verdict: bad rows 120/384          <- still fails; instrument does not mask
+ASYM threads: 0
+blocks with both lines: 132
+blocks where FULL or PART disagrees: 0
+blocks with FULL items > 0: 8      (values 6, 7, 8  ->  8 x ~7 = 56 = the prefill item count)
+```
+
+1. **The FULL population WAS exercised** -- 8 blocks hold all 56 prefill items -- and
+   `FULL loaded == FULL cons` in every one. So the per-item-type desync is **refuted**, not
+   vacuously but on the blocks that actually carry prefill work. 25th elimination.
+2. **[!] AND THOSE 8 BLOCKS ARE NEARLY PURE PREFILL: 6-8 FULL items against 0-1 PART items.**
+
+**That kills the aggressor/victim framing from the previous entry.** I concluded that *"decode items
+are the aggressor, prefill the victim"* because corruption lives in prefill items and grows with
+`DEC_ROWS`. But prefill and decode items are **not co-resident**: the corrupted blocks run almost
+exclusively prefill. A decode item cannot corrupt a prefill item through shared CTA state if it is
+not sharing the CTA. **Retracted.**
+
+**The `DEC_ROWS` threshold has a better explanation, and it needs no interaction at all.** Adding
+decode rows does not inject an aggressor -- it **crowds the plan**. With 128 decode rows there are
+896 decode items, so the LPT splitter packs the 56 prefill items into **8 blocks at ~7 each** instead
+of spreading them one-per-block. That pushes those blocks past **1 item per CTA**, which is the
+threshold the sweep measured (clean 15/15 below it). So:
+
+* the defect is **prefill-on-prefill cross-item interference**, among the 6-8 prefill items a
+  crowded block runs back to back;
+* `DEC_ROWS` is a **knob on prefill density per block**, not a source of interfering work;
+* and this is consistent with every surviving constraint -- wrong KV tile of the item's own request
+  (all 7 items on such a block belong to request 0), warp-quantised damage, 4x depth scaling, and
+  the items/CTA threshold.
+
+**This also explains why the earlier `mix_decode` framing kept misleading me:** the fixture's name
+and the `DEC_ROWS` sweep both suggest decode work is participating, and it is not -- it is only
+changing how densely request 0's own q tiles are packed onto a CTA.
+
 **[!] EARLY-`continue` DEAD BY ARITHMETIC -- and it exposes a GAP IN MY OWN ACCOUNTING
 INSTRUMENT (2026-10-10).**
 

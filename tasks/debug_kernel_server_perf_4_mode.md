@@ -304,10 +304,29 @@ measurement I have on it -- parallelising `store_partial`'s O write across all M
 rate from 1/10 to 8/10, which is in exactly this code. And `FUSED_NOSPLIT=1` has never failed,
 though that needs its own repeat count before it counts as evidence (the error I just made).
 
-**Next, and sized properly this time:** to distinguish 1/12 from 0, a clean arm needs ~35 runs for
-95% confidence. Run `fa3` @ all with `FUSED_NOSPLIT=1` x 35 against splits-on x 35; if no-split is
-clean at that count the defect is in `store_partial` / the sO lifetime, which is where the
-8/10 regression already points.
+**Sized experiment RUN (2026-10-10), `MODE=fa3` @ `SM_SPLIT=all`, 35 runs per arm:**
+
+| arm | failures / 35 |
+|---|---|
+| `FUSED_NOSPLIT=1` (no partials, no merge) | **0 / 35** |
+| splits on (16 chunks) | **3 / 35** (8.6%), rel 0.41 / 0.51 / 0.60, 1 bad row each |
+
+**Stated honestly, because this is the trap I just retracted: 0/35 vs 3/35 is SUGGESTIVE, NOT
+CONCLUSIVE.** Fisher's exact gives **p ~ 0.24**, and the 95% upper bound on 0/35 is ~8.2%, which
+overlaps the split arm's 8.6%. Thirty-five runs was enough to distinguish 1/12 from 0 but the
+split arm's true rate is lower than assumed, so the arms barely separate. A conclusive no-split
+arm needs ~100 runs (0/100 bounds the rate at 3%).
+
+**What makes the split path the target anyway is INDEPENDENT evidence, not this comparison:**
+parallelising `store_partial`'s O write across all MMA threads took the failure rate from 1/10 to
+**8/10**, and that is split-path code. Two unrelated observations pointing at the same region is
+worth more here than one underpowered A/B.
+
+**Next, and cheaper than more sampling:** the failure is always **1 bad row of 258** at rel
+0.41-0.60. Record WHICH row index fails across occurrences. If it is always the same row, the
+location is deterministic while the occurrence is not -- which points at a specific work item
+(the row with the most chunks, or the one at the fully-masked-chunk boundary) rather than at a
+general memory race. The `mixed` failures were all row 0; that was not checked for `fa3`.
 
 #### OPEN -- kernel: TWO MAIN ITEMS (user 2026-10-09)
 

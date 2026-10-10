@@ -627,6 +627,45 @@ mixed chat + tracelab. Corrected 2026-10-09 (user): the kernel must be on upstre
 attention measures the scheduling change alone and cannot show the thesis.
 
 
+### [!] DECODE-HEAVY ARM REVERSES IT: on realistic 4-mode shapes the fusion is **NET NEGATIVE**
+
+The +5.4% below was measured on a batch with **2 decode tokens**. I predicted the margin would GROW
+with more co-resident FA2 work. **It inverts.** One prefill chunk (256 x 2048) plus N decode rows
+(1 x 2048), all arms 0 bad rows except where noted, 30 iters / 8 warmup:
+
+| decode rows | co-resident, best `sm_split` | all-FA3 control (same rows) | fusion |
+|---|---|---|---|
+| 2 (the old arm) | 0.2426 @128 | 0.2557 | **+5.4%** |
+| **8** | 0.3665 @96 | **0.2512** | **1.46x SLOWER** |
+| **32** | 0.7371 @64 | **0.3670** | **2.01x SLOWER** |
+| 128 | 2.6314 @64 | *control FAILED, see below* | — |
+
+Per-split detail at dec=32: 0.7371 (64), 1.2568 (96), 2.0489 (112), **8.6806** (128). At dec=8:
+0.4514 (64), 0.3665 (96), 0.5485 (112), 2.2380 (128). Note the best `sm_split` MOVES DOWN as decode
+grows (128 -> 96 -> 64) and the penalty for getting it wrong explodes -- 8.68 ms at dec=32 /
+split=128, 23x worse than that shape's own optimum.
+
+**Why, and it follows from A3:** decode rows routed to FA2 land on an executor that is 3.7-5x
+slower per row. The "spare SMs are free" argument fails because FA2 becomes the **critical path** --
+the FA3 role finishes its one chunk and waits. So the more decode work the batch has, the worse
+fusion does, monotonically.
+
+**So the +5.4% was an artifact of a degenerate shape**: with only 2 decode tokens there was almost
+no FA2 work to be slow, and offloading them freed the FA3 role. Retracted as a representative
+number -- it is the best case, not the typical one, and a real 4-mode step has many decode rows.
+
+**The project-level conclusion, stated plainly: the two-role FA3+FA2 fusion as implemented is
+net-negative on realistic 4-mode batches.** It is not a tuning problem -- at dec=32 no `sm_split`
+reaches the all-FA3 control. The fusion can only pay if the FA2 role reaches rough parity with FA3,
+and the FA2 role is currently **1.1x-22x off `BatchAttention`** (the same kernel family it was
+ported from). **Fixing the FA2 role is therefore a precondition for the fusion mattering at all**,
+not an optimisation after the fact.
+
+**[!] NEW BUG found by the control arm: all-FA3 with 129 requests returns 92/384 bad rows.** Every
+other arm in this sweep is 0 bad. So the FA3 path breaks at high request count -- untested before
+because no fixture had more than 3 requests. That invalidates the dec=128 comparison and needs
+isolating (suspect the plan's per-request arrays or the merge layout at scale).
+
 ### [x] THE FUSION QUESTION, MEASURED DIRECTLY (2026-10-10): co-residency is worth **+5.4%**
 
 Never measured before. Same rows (`qo=[256,1,1]`, `kv=[2048,300,512]`), both arms 0 bad rows,

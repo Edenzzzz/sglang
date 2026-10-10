@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.62.0 — decode-heavy arm: the fusion is NET NEGATIVE on realistic shapes (2026-10-10)
+
+The +5.4% in v0.61.0 was measured with **2 decode tokens**. I predicted the margin would grow with
+more co-resident FA2 work. **It inverts.** One prefill chunk (256×2048) + N decode rows (1×2048):
+
+| decode rows | co-resident (best split) | all-FA3 control | fusion |
+|---|---|---|---|
+| 2 | 0.2426 @128 | 0.2557 | +5.4% |
+| **8** | 0.3665 @96 | **0.2512** | **1.46× SLOWER** |
+| **32** | 0.7371 @64 | **0.3670** | **2.01× SLOWER** |
+
+Best `sm_split` moves down as decode grows (128→96→64) and the mis-set penalty explodes (8.68 ms at
+dec=32/split=128, 23× that shape's optimum).
+
+**Why:** decode routed to FA2 lands on an executor 3.7–5× slower per row, so FA2 becomes the
+critical path while FA3 finishes its chunk and waits. More decode ⇒ monotonically worse.
+
+**The +5.4% is retracted as representative** — it is the best case (almost no FA2 work to be slow),
+not the typical one.
+
+**Project-level conclusion: the two-role FA3+FA2 fusion as implemented is net-negative on realistic
+4-mode batches.** Not a tuning problem — at dec=32 *no* `sm_split` reaches the control. The fusion
+can only pay if the FA2 role nears FA3 parity, and it is currently 1.1×–22× off `BatchAttention`
+(its own source family). **Fixing the FA2 role is a precondition for the fusion mattering at all.**
+
+**New bug:** all-FA3 with 129 requests → 92/384 bad rows (every other arm 0 bad). The FA3 path
+breaks at high request count; no prior fixture had more than 3 requests. Invalidates the dec=128
+comparison; suspect per-request plan arrays or the merge layout at scale.
+
 ## v0.61.0 — THE FUSION QUESTION: co-residency is worth +5.4% (2026-10-10)
 
 Never measured directly before. Same rows (`qo=[256,1,1]`, `kv=[2048,300,512]`), both arms 0 bad

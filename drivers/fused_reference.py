@@ -86,6 +86,19 @@ def main():
         # to one chunk: still unsplit, still no merge, but now a valid causal problem.
         fa3_q, fa3_kv = [128], [128]
         fa2_q, fa2_kv = [], []
+    elif mode == "mix_decode":
+        # DECODE-HEAVY 4-mode shape: one prefill chunk plus DEC_ROWS decode rows. This is the arm
+        # that decides whether the fusion's +5.4% was a floor set by having only 2 decode tokens to
+        # overlap, or the real margin. MIX_ALL_FA3=1 routes everything to FA3 (the "no fusion"
+        # control, same rows); otherwise the chunk goes to FA3 and the decodes to FA2.
+        _dr = int(_os.environ.get("DEC_ROWS", "32"))
+        _chunk, _ctx = 256, 2048
+        if _os.environ.get("MIX_ALL_FA3") == "1":
+            fa3_q, fa3_kv = [_chunk] + [1] * _dr, [_ctx] + [_ctx] * _dr
+            fa2_q, fa2_kv = [], []
+        else:
+            fa3_q, fa3_kv = [_chunk], [_ctx]
+            fa2_q, fa2_kv = [1] * _dr, [_ctx] * _dr
     elif mode == "band1":
         # ONE row, declared on whichever side BAND_SIDE names, so the driver's stitching stays
         # valid (it assumes FA3 rows are a PREFIX of q/o). BAND_QO sets the q length, giving

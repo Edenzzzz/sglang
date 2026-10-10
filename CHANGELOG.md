@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.03.0 — correctness-gated verdict: the two-role fusion is 5.3–30× slower than BatchAttention (2026-10-11)
+
+Two-role path, backfill live, bad rows beside every timing, 30 iters / 8 warmup:
+
+| dec | sm_split | verdict | fused | `BatchAttention` | ratio |
+|---|---|---|---|---|---|
+| 8 | **96** | 0/264 | **0.3670** | 0.0699 | **5.3× (best)** |
+| 8 | 64 / 112 | 0/264 | 0.4523 / 0.5544 | 0.0698 | 6.5× / 7.9× |
+| 32 | 64 | **FAIL 2/288** | — | — | discarded |
+| 32 | 96 / 112 | 0/288 | 1.2560 / 2.0619 | 0.1180 | 10.6× / 17.5× |
+| 128 | 64 / 96 / 112 | 0/384 | 2.6463 / 4.8913 / 8.1775 | ~0.27 | 9.8× / 18× / **30×** |
+
+1. **On the correct path the fusion is 5.3–30× slower than a validated reference.** The retracted
+   1.46–2.01× and 3.14× figures weren't just invalid, they were **flattering**; proper measurement
+   makes the gap an order of magnitude worse.
+2. **The two-role path is not universally clean** — `dec=32 sm_split=64` gives 2/288, so yesterday's
+   0/6 doesn't generalise. K1's defect is narrowed in scope, not eliminated.
+3. **Scaling runs opposite to the premise:** the gap grows with decode count (5.3×→30×) and with
+   `sm_split`, i.e. with more SMs given to FA3 — the fusion is meant to *help* as co-residency rises.
+
+**Bar verdict restored on correctness-gated evidence and strengthened.** ≥30% TTFT/ITL and ≥10%
+throughput are unreachable from a kernel 5–30× off a drop-in reference on the targeted 4-mode shapes;
+B1's 29% ceiling, B1e's occupancy result and A2's 5–10× all stand independently.
+
+**`c98fe0f0d`'s FA3-only alternative is not rescued either** — it runs the all-FA3 path that fails
+6/6. Both candidate designs are now evidence-blocked, which is the honest state rather than a
+preference between them.
+
 ## v1.02.0 — RETRACTION: the central perf verdict used a BROKEN baseline (2026-10-11)
 
 "The fusion is **1.46–2.01× slower than all-FA3**" came from `drv/mdec.sh`, whose arms are:

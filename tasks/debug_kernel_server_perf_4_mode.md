@@ -870,6 +870,48 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[x][!!!] THE CORRECTNESS-GATED VERDICT: THE TWO-ROLE FUSION IS 5.3-30x SLOWER THAN
+`BatchAttention` (2026-10-11). Retracting the invalid baseline made the case WORSE, not better.**
+
+Two-role path (`MIX_ALL_FA3=0`), backfill live, bad rows printed beside every timing, 30 iters /
+8 warmup:
+
+| dec | sm_split | verdict | fused | `BatchAttention` | ratio |
+|---|---|---|---|---|---|
+| 8 | 64 | 0/264 | 0.4523 ms | 0.0698 ms | **6.5x slower** |
+| 8 | **96** | 0/264 | **0.3670 ms** | 0.0699 ms | **5.3x slower (best case)** |
+| 8 | 112 | 0/264 | 0.5544 ms | 0.0698 ms | 7.9x |
+| 32 | 64 | **FAIL 2/288** | -- | -- | arm discarded |
+| 32 | 96 | 0/288 | 1.2560 ms | 0.1180 ms | **10.6x** |
+| 32 | 112 | 0/288 | 2.0619 ms | 0.1179 ms | 17.5x |
+| 128 | 64 | 0/384 | 2.6463 ms | 0.2707 ms | **9.8x** |
+| 128 | 96 | 0/384 | 4.8913 ms | 0.2717 ms | 18.0x |
+| 128 | 112 | 0/384 | 8.1775 ms | 0.2740 ms | **30.0x** |
+
+**Three findings, and the first is the one that matters:**
+
+1. **On the path that is CORRECT, the fusion is 5.3x to 30x slower than a validated reference.** The
+   retracted "1.46-2.01x slower than all-FA3" and "3.14x slower than BatchAttention" figures were
+   not merely invalid -- they were **flattering**. Measuring properly makes the gap an order of
+   magnitude worse, and it degrades with both decode count and `sm_split`.
+2. **The two-role path is NOT universally clean either.** `dec=32 sm_split=64` returns **2/288 bad
+   rows**, so yesterday's "0/6 at dec=128 sm_split=64" does not generalise across shapes. K1's
+   defect is reduced in scope by the diagnostic-knob finding, not eliminated.
+3. **The scaling is the wrong way round for the whole premise.** The fusion is meant to help when
+   more decode work co-resides with prefill; instead the gap grows from 5.3x at dec=8 to 30x at
+   dec=128, and grows with `sm_split` -- i.e. with more SMs handed to the FA3 role.
+
+**So the bar verdict is restored on correctness-gated evidence, and strengthened.** The >=30%
+TTFT/ITL and >=10% throughput targets are unreachable from a kernel that is 5-30x off a
+drop-in-available reference on exactly the 4-mode shapes the project targets. B1's 29% ceiling,
+B1e's occupancy result and A2's FA3-beats-FA2-5-10x all stand independently and point the same way.
+
+**And `c98fe0f0d`'s FA3-only alternative is NOT rescued by this.** It would run the all-FA3 path,
+which fails 6/6. Its recommendation leaned on the now-retracted numbers; what replaces them is
+worse for the fusion but says nothing in favour of FA3-only, which has its own unresolved
+correctness defect. **Both candidate designs are now evidence-blocked**, and that is the honest
+state to report rather than a preference between them.
+
 **[!!] RETRACTION OF THE CENTRAL PERFORMANCE VERDICT: "the fusion is 1.46-2.01x SLOWER than
 all-FA3" COMPARED A CORRECT ARM AGAINST A BROKEN ONE (2026-10-11).**
 

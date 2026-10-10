@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.79.0 — FA2/FA3 region aliasing exonerated (14th eliminated) (2026-10-10)
+
+dec=128, `STAGES=1` (the only depth where disjoint fits — 234544 B vs a 232448 max at two stages),
+6 seeds each, both arms producing real verdicts rather than OOM:
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| `ALIAS_SMEM=1` (default) | 6/6 | 16, 12, 8, 12, 8, 48 — mean ~17 |
+| `ALIAS_SMEM=0` (disjoint) | **6/6** | 28, 32, 20, 28, 32, 24 — mean ~27 |
+
+Disjoint is **not** clean and is slightly worse, so the layout suspicion recorded in v0.78.0 is
+wrong and nothing writing FA2's region is the route.
+
+**Two distinct things in this tree are called "aliasing"** and must not be conflated:
+`FUSED_SPLIT_SMEM_O` aliases `sO` with `smem_v` *inside FA3's own* `SharedStorage` — a **confirmed
+contributor, ~⅓** — while `FLASHINFER_FUSED_ALIAS_SMEM` overlays *FA2's* `SharedStorage` on FA3's
+region, and that one is now **exonerated**.
+
 ## v0.78.0 — per-thread barrier arrivals are symmetric; suspicion moves to the smem layout (2026-10-10)
 
 Each of the 128 producer threads compared its own `producer_commit` count to its own intended loads,

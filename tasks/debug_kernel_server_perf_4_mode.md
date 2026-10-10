@@ -819,6 +819,26 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[!] FA2/FA3 REGION ALIASING EXONERATED -- fourteenth eliminated (2026-10-10).** dec=128,
+`STAGES=1` (the only depth where disjoint fits: it needs 234544 B against a 232448 device max at
+two stages), 6 seeds each. Both arms produced verdicts rather than `out of memory`, so the launches
+were real:
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| `ALIAS_SMEM=1` (default) | 6/6 | 16, 12, 8, 12, 8, 48 -- mean ~17 |
+| `ALIAS_SMEM=0` (disjoint) | **6/6** | 28, 32, 20, 28, 32, 24 -- mean ~27 |
+
+Disjoint is **not** clean, and if anything slightly worse. So nothing writing FA2's region is the
+route, and the layout suspicion from the previous entry is wrong.
+
+**TWO DIFFERENT THINGS IN THIS TREE ARE CALLED "ALIASING" and they must not be conflated:**
+
+| knob | what it aliases | status |
+|---|---|---|
+| `FUSED_SPLIT_SMEM_O` | `sO` with `smem_v` **inside FA3's own** `SharedStorage` | **confirmed contributor, ~1/3 of the corruption** |
+| `FLASHINFER_FUSED_ALIAS_SMEM` | **FA2's** `SharedStorage` over FA3's region | **EXONERATED (this entry)** |
+
 **[x] PER-THREAD BARRIER ARRIVALS ARE SYMMETRIC -- thirteenth hypothesis eliminated
 (2026-10-10).** Each of the 128 producer threads compares its OWN `producer_commit` count against
 its OWN intended loads and prints only on disagreement, so silence is the pass condition. All 7

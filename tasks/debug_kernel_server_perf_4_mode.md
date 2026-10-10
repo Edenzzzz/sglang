@@ -706,7 +706,44 @@ is the first to reuse any of it:
    cycles the phase 4-7 times. Any arrival-count asymmetry compounds per item rather than cancelling.
 3. The attention updater's smem scratch, if any is shared.
 
-**[x] ISOLATED (2026-10-10): the multi-item defect is in OUR PACKED PATHS. Stock paths are CLEAN.
+**[x] FOUR-CORNER BISECT (2026-10-10), and it CORRECTS my "stock paths are CLEAN" claim.** Split
+`write_packed`'s gate (`FUSED_PACKED_O`) from the Q gather's so the two could be mixed. G=1,
+129 requests, ~6.9 items/CTA, handshake OFF:
+
+| gather | store | bad rows | worst rel |
+|---|---|---|---|
+| packed | packed | **112 / 384** | 12.99 |
+| packed | **stock** | 22 / 384 | 17.83 |
+| **stock** | packed | 32 / 384 | 6.298 |
+| **stock** | **stock** | **6 / 384** | 17.33 |
+
+**RETRACTION: I reported stock+stock as "CLEAN 0/384" from a SINGLE RUN.** It is 6/384 here, on the
+same build and config. So the multi-item path is racy **even with stock paths** -- mildly -- and the
+claim that "the shared multi-item machinery is correct" is withdrawn. That is the single-sample
+error I had already flagged twice today on this very defect, made a third time.
+
+**What the matrix does support, with the baseline at ~6:**
+- the packed **store** adds ~26 bad rows (32 vs 6);
+- the packed **gather** adds ~16 (22 vs 6);
+- **both together give 112, not ~48** -- strongly superlinear. They interact, which fits a shared
+  smem region: `sQ` and `sO` both live in the aliased storage and are both reused per work item, so
+  each one's unordered reuse widens the other's window.
+
+**So there are at least three contributors** -- a small baseline race present even in stock paths,
+plus the gather and the store, which compound. No single fix will close this; and the earlier
+"handshake halves it" and "stock is clean" readings were each one sample on a racy configuration.
+
+**Method correction I should carry: every arm of a racy defect needs a repeat count before it is
+read.** Three times today I drew a conclusion from one run of a configuration whose failure rate is
+a few percent -- the 5/5 and 8/8 "mixed-only" claim, the 0/35 "closed" claim, and now 0/384
+"stock is clean". The fix is procedural: for this defect, no arm counts at n=1.
+
+**Next, and sized properly:** re-run all four corners x10 to get rates rather than points, then
+attack the largest contributor. `write_packed`'s per-row scalar loop reading `sO` is the leading
+candidate, and it is also what the reverted 12% parallelisation touched -- which now reads as a
+third signal pointing at the same code.
+
+**[x] ISOLATED (2026-10-10): the multi-item defect is in OUR PACKED PATHS. Stock paths are CLEAN. [SUPERSEDED by the four-corner bisect above]
 And my handshake is NOT the fix -- it has its own bug.**
 
 Full matrix at G=1 (where `FUSED_PACKED_Q=off` is a valid comparison), 129 requests, ~6.9 work

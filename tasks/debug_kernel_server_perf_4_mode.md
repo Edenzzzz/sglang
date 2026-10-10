@@ -870,6 +870,47 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[~] SERVING-TREE RESTORE: the full dependency list, discovered one failure at a time
+(2026-10-11). ShareGPT now fetched (642 MB); two more pieces found and pushed.**
+
+Each attempt revealed the next missing piece, so the complete list is only now known:
+
+| needed at | what | status |
+|---|---|---|
+| `$W/drv/{srv_correctness.py,mtp_edf.sh}` | drivers | **pushed** |
+| `$W/slo_attain.py` | SLO scorer | **pushed** |
+| `$W/tasks/perf_model/fit_mtp_step.py` | step-model fitter | **pushed** |
+| `$W/mtpedf/`, `$W/workloads/` | output + data trees | **created** |
+| `$W/workloads/ShareGPT_V3_...json` | chat tenant data | **FETCHED, 642 MB** |
+| `$W/drv/run_mixed_workloads.py` | **the load generator** -- the `jsons=0` source | **pushed** |
+| `$W/tasks/realistic_workload_analysis/` | its module directory | **pushed** |
+| `$W/workloads/tracelab/syfi_coding_trace.jsonl.gz` | codex tenant data | **UNOBTAINABLE** (internal) |
+
+**The ShareGPT fetch itself failed silently first** -- `huggingface-cli download` is renamed to `hf`
+in this `huggingface_hub`, so it printed help text and exited 0 having downloaded nothing, which
+read as a network fault. The pod reaches HF fine (HTTP 200). `restore.sh` now uses
+`hf_hub_download`.
+
+**That is the FOURTH "succeeded but did nothing" failure today**, and the pattern is the most
+portable lesson here:
+
+| | exit status | artifact |
+|---|---|---|
+| `num_pers_clusters=0` gate | 0 | already 0 -- disabled nothing |
+| backfill arm | 0 | no backfill was running to disable |
+| `srv_correctness` gate | 0, **`GATE PASS`** | `mixed=[]` -- split never engaged |
+| ShareGPT fetch | 0 | no file |
+
+**Checking exit status is not checking that work happened.** Only an artifact check catches these:
+`partial_rows`, `mixed=`, `jsons=`, a file size. Every future arm in this project should read its
+artifact counter BEFORE its verdict.
+
+**Still blocked on the codex tenant**, and that bounds what can be reproduced: the recorded
+**-37.7% codex ITL** came from a two-tenant arm, and the codex half needs an internal trace with no
+public source. A **chat-only** arm is now within reach and answers the narrower but still central
+question -- does the 0.7 port regress TTFT/ITL under real mixed batches -- but the headline
+two-tenant comparison is not reproducible by me.
+
 **[x] SERVING-TREE RESTORE EXTENDED, AND THE REMAINING BLOCKER IS A DATASET WITH NO PUBLIC SOURCE
 (2026-10-11).**
 

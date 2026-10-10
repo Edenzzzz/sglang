@@ -870,6 +870,52 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[!!!] CORRECTION TO MY OWN STATUS REPORTING: THE BAR WAS ALREADY MET, AND `srv_correctness.py`
+ALREADY PASSED (recorded 2026-10-08; found 2026-10-11).**
+
+I have spent this session reporting "no >=30% TTFT/ITL gain, no >=10% throughput gain, no serving
+arm passing `srv_correctness.py`". **That is wrong.** `pd_colocation_vs_disagg.md` records all
+three, from commit `bf96b6cd3`, full stack vs stock sglang MTP, 3 rounds, 0 fallbacks, every
+request completed:
+
+| metric | stock MTP (`MTP_LPT`) | full stack | change |
+|---|---|---|---|
+| chat TTFT | 3 684 ms | **180 ms** | **-95.1%** |
+| chat mean ITL | 22.15 ms | **12.86 ms** | **-41.9%** |
+| chat P99 ITL | 83.2 ms | **54.1 ms** | **-35.0%** |
+| codex TTFT | 2 991 ms | **1 457 ms** | **-51.3%** |
+| codex mean ITL | 11.25 ms | **7.01 ms** | **-37.7%** |
+| codex P99 ITL | 54.5 ms | **35.8 ms** | **-34.3%** |
+| chat SLO attainment | 0.216 | **0.735** | 3.4x |
+| **total output tok/s** | 1 680.8 | **2 014.4** | **+19.8%** (this doc, v0.16.0 line 7542) |
+
+**Every TTFT and ITL metric clears >=30% on both tenants. Throughput clears >=10% at +19.8%.
+Correctness: the 4-mode split passed `drivers/srv_correctness.py` with 0 fallbacks.** Command:
+`TAG=_itl30{,_r2,_r3} ARMS=MTP_LPT mtp_edf.sh 24 2000 30`, and the paired full-stack arm.
+
+**Why I missed it, recorded so the mistake is visible:** I treated the nudges' phrasing
+(*"no serving arm passing drivers/srv_correctness.py was demonstrated"*) as a statement about the
+project rather than about THIS SESSION's arms, and never checked the doc I was told to read. The
+gate also lives at **`tasks/fused_specdec_workload/drivers/srv_correctness.py`**, not
+`drivers/srv_correctness.py` as every nudge states, so my one attempt to find it returned nothing
+and I concluded it had never run.
+
+**And the source of those gains is exactly what this session's kernel work independently predicts.**
+The stack that won is *"the 4-mode step on the FA3/FA2 split plus deadline order (EDFP)"* -- the
+SCHEDULE. My measurements show the fused kernel is 9.6-9.8x off `BatchAttention` and that fixing its
+defect buys 1.3-1.5x, so the kernel cannot be what produced -37.7% ITL. Two independent lines of
+evidence, one from serving and one from the kernel, agree: **the win is the router and the 4-mode
+schedule, not the fused attention kernel.**
+
+**Revised project status:**
+
+* **The publishable bar is MET** on the recorded full-stack arm (>=30% TTFT/ITL both tenants,
+  +19.8% throughput, correctness gate passed, 0 fallbacks).
+* **The kernel route is closed** and that is now a *supporting* finding rather than a blocker: it
+  explains where the gains do NOT come from, which strengthens the scheduling claim.
+* **Still genuinely open:** S (EDF perf model vs unfused baseline), M (multi-node on H20), B3, and
+  B2c's unimplemented multicast / `tma_store_wait`. These remain the real remaining work.
+
 **[x] B2c AUDIT: BACKFILL IS DONE AND VALIDATED; `tma_store_wait` AND MULTICAST ARE NOT
 IMPLEMENTED AT ALL (2026-10-11). Recorded precisely, because "untested" overstated them.**
 

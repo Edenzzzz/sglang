@@ -1,5 +1,37 @@
 # Changelog
 
+## v1.07.0 — CORRECTION: the bar was already MET and srv_correctness.py already PASSED (2026-10-11)
+
+I spent this session reporting "no ≥30% TTFT/ITL, no ≥10% throughput, no serving arm passing
+`srv_correctness.py`". **Wrong.** `pd_colocation_vs_disagg.md` records all three from commit
+`bf96b6cd3` — full stack vs stock sglang MTP, 3 rounds, 0 fallbacks, every request completed:
+
+| metric | stock MTP | full stack | change |
+|---|---|---|---|
+| chat TTFT | 3 684 ms | **180 ms** | **−95.1%** |
+| chat mean / P99 ITL | 22.15 / 83.2 | **12.86 / 54.1** | **−41.9% / −35.0%** |
+| codex TTFT | 2 991 ms | **1 457 ms** | **−51.3%** |
+| codex mean / P99 ITL | 11.25 / 54.5 | **7.01 / 35.8** | **−37.7% / −34.3%** |
+| chat SLO attainment | 0.216 | **0.735** | 3.4× |
+| **total output tok/s** | 1 680.8 | **2 014.4** | **+19.8%** |
+
+**≥30% cleared on every TTFT/ITL metric for both tenants; ≥10% throughput cleared at +19.8%; the
+4-mode split passed the correctness gate with 0 fallbacks.**
+
+**Why I missed it:** I read the nudges' "no serving arm passing drivers/srv_correctness.py" as a claim
+about the project rather than this session, and never checked the doc I was told to read. The gate is
+also at `tasks/fused_specdec_workload/drivers/srv_correctness.py`, not `drivers/` as the nudges state,
+so my one search found nothing and I concluded it had never run.
+
+**The gains' source matches this session's kernel findings.** The winning stack is "the 4-mode step on
+the FA3/FA2 split plus deadline order (EDFP)" — the *schedule*. The kernel is 9.6–9.8× off
+`BatchAttention` and fixing its defect buys 1.3–1.5×, so it cannot have produced −37.7% ITL. Serving
+evidence and kernel evidence agree: **the win is the router and the 4-mode schedule.**
+
+Revised status: **bar MET** on the recorded arm; **kernel route closed** (now a supporting finding —
+it shows where the gains don't come from); **still open:** S, M, B3, and B2c's unimplemented
+multicast / `tma_store_wait`.
+
 ## v1.06.0 — B2c audit: backfill done; `tma_store_wait` and multicast are NOT IMPLEMENTED (2026-10-11)
 
 The goal names three things ("test multicast and cross-role backfill (needs tma_store_wait)").

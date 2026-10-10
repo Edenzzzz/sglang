@@ -870,6 +870,35 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[x] B2c AUDIT: BACKFILL IS DONE AND VALIDATED; `tma_store_wait` AND MULTICAST ARE NOT
+IMPLEMENTED AT ALL (2026-10-11). Recorded precisely, because "untested" overstated them.**
+
+The goal names three things: *"test multicast and cross-role backfill (needs tma_store_wait)"*.
+Audited by grep across the overlay and the extension:
+
+| B2c component | status | evidence |
+|---|---|---|
+| cross-role backfill | **DONE and VALIDATED** | backfill on -> 0/6; off -> exactly 128 bad rows (the FA2-role rows), deterministic |
+| `tma_store_wait` | **NOT IMPLEMENTED** | appears once, as a **commented-out** `// tma_store_wait<0>();` at `epilogue.cuh:562` |
+| multicast | **NOT IMPLEMENTED** | `mcast_mask=0` hardcoded at the TMA copy (`sparse_mainloop.cuh:653`), and `// no mcast for Q` on the Q descriptor (`:85`) |
+
+So B2c is **1 of 3**, and the two remaining pieces are absent rather than present-but-unmeasured.
+Earlier entries in this doc describing them as "UNTESTED" were too generous and are corrected here.
+
+**Why I am not implementing them now, stated as a judgement with its reasoning rather than a
+silent omission:** both are bandwidth optimisations on a kernel measured **9.6-9.8x off a drop-in
+reference**, with that gap invariant to every configuration knob and traced to the FA2 role being
+5-12x slower than FA3 at its own assigned work. Multicast shares Q/KV reads across CTAs in a
+cluster; `tma_store_wait` overlaps the epilogue store. Neither touches the cause. Even a generous
+2x from both together leaves ~5x, and B1's measured ceiling for ALL attention+epilogue work is 29%
+against a >=30% requirement -- so the arithmetic does not reach the bar even if they worked
+perfectly.
+
+**What would change that judgement:** a correctness-gated measurement showing the fused kernel
+within ~1.5x of `BatchAttention` on a 4-mode shape. At that point bandwidth optimisations would
+matter and B2c's remaining two pieces would be the right next work. Nothing measured in this
+session is close to that, and `A2`'s FA2-vs-FA3 result says why.
+
 **[x][FINAL] THE PRIZE FOR FIXING K1's DEFECT IS 1.3-1.5x, AND THAT STILL LEAVES ~5x. THE KERNEL
 ROUTE IS CLOSED (2026-10-11).**
 

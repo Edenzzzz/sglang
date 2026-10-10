@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.06.0 — B2c audit: backfill done; `tma_store_wait` and multicast are NOT IMPLEMENTED (2026-10-11)
+
+The goal names three things ("test multicast and cross-role backfill (needs tma_store_wait)").
+Audited:
+
+| component | status | evidence |
+|---|---|---|
+| cross-role backfill | **DONE + VALIDATED** | on → 0/6; off → exactly 128 bad rows (the FA2-role rows), deterministic |
+| `tma_store_wait` | **NOT IMPLEMENTED** | one occurrence, **commented out**: `// tma_store_wait<0>();` (`epilogue.cuh:562`) |
+| multicast | **NOT IMPLEMENTED** | `mcast_mask=0` hardcoded (`sparse_mainloop.cuh:653`); `// no mcast for Q` (`:85`) |
+
+B2c is **1 of 3**, and the two remaining pieces are *absent*, not present-but-unmeasured. Earlier
+entries calling them "UNTESTED" were too generous; corrected.
+
+**Why not implement them now (judgement, with reasoning):** both are bandwidth optimisations on a
+kernel measured **9.6–9.8× off** a drop-in reference, with the gap invariant to every knob and traced
+to the FA2 role being 5–12× slower than FA3 at its own work. Multicast shares reads across a cluster;
+`tma_store_wait` overlaps the epilogue store. Neither addresses the cause. A generous 2× from both
+still leaves ~5×, and B1's ceiling for *all* attention+epilogue work is 29% against ≥30% required — the
+arithmetic misses the bar even if they worked perfectly.
+
+**What would change it:** a correctness-gated measurement putting the fused kernel within ~1.5× of
+`BatchAttention` on a 4-mode shape. Nothing in this session is close, and A2 explains why.
+
 ## v1.05.0 — FINAL: fixing K1's defect buys 1.3–1.5× and still leaves ~5×; the kernel route is closed (2026-10-11)
 
 The all-FA3 path has no FA2 role, so it was the last configuration with a plausible route to the bar.

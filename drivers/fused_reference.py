@@ -375,6 +375,26 @@ def main():
             # (merge_indptr[r] + c) * HKV + h, and partial_o at that slot is the NORMALIZED
             # attention of that (token, head) over keys [128c, 128c+128) intersected with the
             # causal bound kv_len - qo_len + token.
+            # DEGENERATE-STATE SCAN over the WHOLE slab, not sampled tuples. Hypothesis: the
+            # FIRST row of a q tile has the smallest causal bound, so it can have ZERO valid keys
+            # in a chunk while later rows of the same tile still have some -- giving m = -inf,
+            # d = 0, i.e. O = 0/0 and LSE = -inf. The merge then does exp2(other_m - m) with both
+            # -inf = exp2(NaN). That would be a deterministic LOCATION with a value-dependent
+            # effect, which is exactly what the bad-row indices show (always a tile boundary).
+            n_slots = nmr * chunks * HKV
+            lse_v = partial_lse[:n_slots].float()
+            o_v = partial_o[: n_slots * D].float().view(n_slots, D)
+            bad_lse = ~_t.isfinite(lse_v)
+            bad_o = ~_t.isfinite(o_v).all(dim=1)
+            print(f"[deg] slots={n_slots} nonfinite_LSE={int(bad_lse.sum())} "
+                  f"nonfinite_O_rows={int(bad_o.sum())} "
+                  f"min_lse={float(lse_v[_t.isfinite(lse_v)].min()) if bool(_t.isfinite(lse_v).any()) else float('nan'):.4f}")
+            if int(bad_lse.sum()) or int(bad_o.sum()):
+                idx = _t.nonzero(bad_lse | bad_o).flatten()[:8].tolist()
+                for sl in idx:
+                    mr, rem = sl // (chunks * HKV), sl % (chunks * HKV)
+                    print(f"[deg]   slot={sl} merge_row={mr} (tile_row={mr % 128}) "
+                          f"chunk={rem // HKV} head={rem % HKV} lse={float(lse_v[sl])}")
             for (r, c, h) in ((0, 0, 0), (0, 1, 0), (4, 0, 0), (0, 0, 1)):
                 tok, hig = r // GQA, r % GQA
                 head = h * GQA + hig

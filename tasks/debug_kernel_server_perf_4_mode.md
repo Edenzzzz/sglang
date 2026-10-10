@@ -352,11 +352,37 @@ Note this is adjacent to, but NOT the same as, the fully-masked-chunk bug alread
 was a chunk where the item was skipped entirely (`num_kv_tiles <= 0`) and never wrote its slot.
 This is a chunk where the item RUNS but one of its rows has no valid keys.
 
-**Next: confirm by reading the partials.** `DUMP_PARTIALS=1` already dumps `partial_o`/`partial_lse`
-for chosen (row, chunk, head). Dump the FIRST row of a tile across all its chunks and check for
-`-inf` LSE paired with non-finite or garbage O. If confirmed, the fix is to force a degenerate row
-to a clean identity -- `lse = -inf` with `O = 0` -- at the point `store_partial` writes it, rather
-than letting `0/0` reach the slab.
+**[!] HYPOTHESIS REFUTED by reading the whole slab (2026-10-10).** A degenerate-state scan over
+all 115584 partial slots, run 6 times:
+
+```
+slots=115584  nonfinite_LSE=3584  nonfinite_O_rows=0  min_lse=-0.0319
+slot=105 merge_row=0 (tile_row=0) chunk=15 head=0 lse=-inf   [same 6/6 runs]
+```
+
+- **`nonfinite_O_rows = 0`: O is ALWAYS finite.** So no `0/0` ever reaches the slab and the
+  degenerate-NaN mechanism proposed above is **wrong**.
+- The 3584 `-inf` LSE entries sit at **chunk 15** (the last chunk) for the early rows, i.e. exactly
+  the chunks beyond those rows' causal bound. `-inf` paired with `O = 0` is the CORRECT merge
+  identity there, and it is what `store_partial_zero` is supposed to write. So this is the fix
+  working, not a bug.
+- The count and the slot list are **identical across all 6 runs**, so the non-finite pattern is
+  deterministic.
+
+**What this redirects to.** The partial *values* look correct and their degenerate pattern is
+deterministic, yet the OUTPUT varies run to run. So the nondeterminism is either (a) in the
+reduction's combination of those partials, or (b) in some partial slot whose value differs between
+runs without being non-finite -- which this scan would not catch, since it only tested finiteness.
+
+**Next, and it distinguishes (a) from (b) in one run:** checksum `partial_o` and `partial_lse`
+(sum + absmax, as the `[fp]` fingerprint does for the output) and compare across runs.
+- slab checksum **identical** while output differs => the attention grid is deterministic and the
+  defect is in the **reduction**.
+- slab checksum **differs** => the defect is upstream in the attention grid, and the scan above
+  simply did not catch it because the wrong value was finite.
+
+Note the methodological point: testing only `isfinite` was a weaker gate than I treated it as. It
+refuted the specific NaN mechanism but cannot clear the slab generally.
 
 #### OPEN -- kernel: TWO MAIN ITEMS (user 2026-10-09)
 

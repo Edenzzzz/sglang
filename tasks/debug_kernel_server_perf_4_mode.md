@@ -444,6 +444,7 @@ FIRST, so the kernel can land directly on upstream.** A2/A3 resume after K1 clos
 |---|---|---|
 | B1 | headroom quantified | **[x]** ceiling **29%** = attention 20.5% + epilogue 8.5% |
 | B1b/c/d | re-capture; GEMM-level backfill (answered: **no**); tile histogram | **[x]** |
+| B1e | **achieved** SM occupancy (B1 used `grid < 132` as a PROXY) | **[ ]** ncu, needs no port |
 | B2c | **`tma_store_wait` cross-role backfill + multicast** | **[ ] UNTESTED** |
 | B3 | the epilogue fusion itself | **[ ]** not started |
 
@@ -1586,14 +1587,24 @@ shift the attention share up somewhat. It will not change the GEMM dominance, wh
 work, but the exact A/B bounds above should be re-read from a capture where
 `MIXEDSPEC_STEPS` is large.
 
-- [x] **B1 DONE: headroom quantified.** 89.3% of GPU time in sub-occupancy launches; attention
-      11.6%, epilogue 8.9%, GEMM 78.5%.
-- [ ] **B1b. Re-capture with a 4-mode-heavy workload** (`MIXEDSPEC_STEPS` large) to tighten the
-      attention/epilogue bounds; the GEMM share is not expected to move.
-- [ ] **B1c. DECISION: does the kernel story extend to GEMM-level cross-role backfill?** The
-      motivation table says that is where the idle capacity is. If it stays attention-only, the
-      kernel contribution is bounded at ~20% of GPU time and the headline claim must be the
-      scheduling one -- which is where the measured TTFT wins already are.
+- [x] **B1. Headroom quantified** -- but read B1b below, NOT this line's original figures. B1
+      first reported *89.3% of GPU time in sub-occupancy launches; attention 11.6%, epilogue 8.9%,
+      GEMM 78.5%*. **That is RETRACTED**: the trace held only 66.5 ms of GPU time, captured before
+      any decode backlog existed. The standing numbers are B1b's -- attention **20.5%**, epilogue
+      **8.5%**, GEMM **70.4%**, and sub-occupancy launches **8.1%** of GPU time, not 89.3%.
+      Ceiling for the fusion: **29%** = 20.5 + 8.5.
+- [x] **B1b. Re-captured with a 4-mode-heavy workload.** Done; the result section below supersedes
+      B1 and is the source of the standing figures.
+- [x] **B1c. DECISION: does the kernel story extend to GEMM-level cross-role backfill?**
+      Answered **no**. The kernel contribution is therefore bounded at ~29% of GPU time and the
+      headline claim has to be the scheduling one.
+- [ ] **B1e. GAP: achieved occupancy was never measured -- `grid < 132` was used as a PROXY.**
+      The goal asks for *achieved SM occupancy* so that "small" is a measurement rather than an
+      adjective, and launch geometry is a weaker claim than that: a kernel with grid 132 can still
+      sit at low achieved occupancy, and the proxy says nothing about warp-level fill. Closing it
+      with ncu (`sm__warps_active.avg.pct_of_peak_sustained_active`, plus the shared-mem and
+      register occupancy limiters) on the fused kernel and on the `BatchAttention` reference at the
+      same shape. Needs no port. Driver `/dev/shm/w/occ.sh`.
 
 #### B1b RESULT (2026-10-09): **RETRACTS B1's 89% figure.** The GPU is NOT underfilled at load
 

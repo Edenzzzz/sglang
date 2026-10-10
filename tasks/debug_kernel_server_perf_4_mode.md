@@ -706,9 +706,32 @@ is the first to reuse any of it:
    cycles the phase 4-7 times. Any arrival-count asymmetry compounds per item rather than cancelling.
 3. The attention updater's smem scratch, if any is shared.
 
-**Next, and it is cheap:** grep both sides for `kQueryEmpty` and check the participant counts and
-that the packed-Q arm arrives on it at all. The gather replaced the TMA path wholesale, and the
-`barrier_Q.init` gate was already found to be wrong once in exactly this way.
+**[!] `kQueryEmpty` hypothesis REFUTED by direct comparison with stock 0.7.** Both sides are
+byte-identical to stock:
+- producer (`sparse_mainloop.cuh`): `NamedBarrier::sync(NUM_MMA_THREADS +
+  Ktraits::NUM_PRODUCER_THREADS, kQueryEmpty)` -- identical;
+- consumer (`mainloop_mma.cuh`): `NamedBarrier::arrive(NUM_MMA_THREADS +
+  Ktraits::NUM_PRODUCER_THREADS, kQueryEmpty)` -- identical;
+- plus stock's one-off `mma_init()` arrival on the same barrier.
+
+Arrival arithmetic checks out: 256 MMA threads arrive + 128 producer threads sync = 384 =
+`NUM_MMA_THREADS + NUM_PRODUCER_THREADS`. So the packed-Q gather did NOT break this handshake, even
+though it replaced the TMA Q load wholesale.
+
+**`work_idx` symmetry also checks out**, which was hypothesis (2): both loops skip `++work_idx` on
+the *same* two `continue` paths (tile out of range; `num_kv_tiles <= 0`), so the `barrier_Q` phase
+(`work_idx % 2`) cannot drift between producer and consumer.
+
+**So the remaining half is not in either Q handshake.** The next step should be the A/B that has
+worked repeatedly rather than more inspection: **run the multi-item fixture with
+`FUSED_PACKED_Q=off` at G=1**, i.e. the stock TMA Q load and stock `write_tiled`, through the same
+scheduler. That isolates "our packed paths" from "the port's multi-item plumbing" in one run:
+- still corrupt => the defect is in the shared multi-item machinery (scheduler/epilogue reuse), and
+  the packed paths are innocent;
+- clean => it is in the packed gather or `write_packed` when `sQ`/`sO` are reused across items.
+
+Command shape (needs a G=1 multi-row fixture, i.e. `mix_decode` with `GQA1=1`):
+`MODE=mix_decode DEC_ROWS=128 MIX_ALL_FA3=1 GQA1=1 FUSED_PACKED_Q=off FA3_MBARRIER=0 O_HANDSHAKE=1`.
 
 **Left OFF by default** until it is a complete fix: a flag that halves a correctness bug is worse
 than useless as a default, because it makes the remaining failures rarer and therefore harder to

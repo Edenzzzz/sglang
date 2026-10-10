@@ -804,6 +804,36 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[x] IT IS A RACE, settled cleanly for the first time (2026-10-10).** Same build dir, same seed,
+6 repeats at dec=128 baseline:
+
+```
+SEED=1 :: 96 100 88 88 92 84
+```
+
+**Varying, so not an addressing bug.** Every earlier comparison crossed BUILDS (seed 1 -> 100 in one
+dir, 116 in another), which proves nothing because register allocation differs between builds; this
+is the first within-build repeat. The alternative I raised one step earlier -- "the producer loads
+the wrong pages, a pure data error" -- is therefore dead, and independently so: `my_kv_offset[2]` is
+declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
+stale page across an item boundary.
+
+**[!] LIMITATION OF MY OWN ACCOUNTING, recorded so the "0 mismatches" is not over-read.** The
+instrument counted the producer's **intended** loads (`num_kv_tiles`, accumulated once per item)
+against the consumer's releases **from one thread**. It did NOT count actual per-thread
+`producer_commit` arrivals. A producer thread diverging through the `use_predicate` or
+`kv_tile_idx == swa_begin_kv_tile_idx` special cases would arrive a different number of times and
+this accounting would still report 0 mismatches. So "loads == consumes" bounds the ITEM-level
+bookkeeping only; per-thread arrival symmetry on the KV pipeline barriers remains **unmeasured**,
+and it is the obvious next target -- an over-arrival releases the consumer early (race, no
+deadlock), which is exactly the observed signature, while an under-arrival would deadlock.
+
+**Standing state of this defect:** a race; in the K/V path; reads another request's data; needs >1
+work item per CTA; magnitude scales with pipeline depth (4x from 1 to 2 stages); invisible to every
+serialising instrument but NOT to register counting. Eleven hypotheses eliminated. Two contributors
+confirmed (`sO`/`smem_v` aliasing ~1/3, unfenced `smem_q` ~1/3) of which the second is a
+**regression** that must not ship.
+
 **[x] AN INSTRUMENT THAT DOES NOT MASK THE DEFECT -- and the pipeline accounting is BALANCED
 (2026-10-10).**
 

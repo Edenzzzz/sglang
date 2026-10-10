@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.77.0 — it IS a race (first clean within-build test); accounting limitation recorded (2026-10-10)
+
+Same build dir, same seed, 6 repeats at dec=128 baseline: **96 100 88 88 92 84**. Varying ⇒ **a
+race**, not an addressing bug. Every earlier comparison crossed builds (seed 1 → 100 in one dir, 116
+in another), which proves nothing since register allocation differs; this is the first within-build
+repeat. Independently, `my_kv_offset[2]` is declared *inside* `load()` (`sparse_mainloop.cuh:339`),
+so it is fresh per item and cannot carry a stale page across an item boundary.
+
+**Limitation of my own accounting, so "0 mismatches" is not over-read:** the instrument counted the
+producer's *intended* loads (`num_kv_tiles`, once per item) against consumer releases *from one
+thread* — not actual per-thread `producer_commit` arrivals. A thread diverging through
+`use_predicate` or the `kv_tile_idx == swa_begin` special case would arrive a different number of
+times and the accounting would still read 0 mismatches. So item-level bookkeeping is bounded;
+**per-thread arrival symmetry on the KV barriers is unmeasured** and is the next target — an
+over-arrival releases the consumer early (race, no deadlock), exactly the observed signature.
+
+Standing state: a race, in the K/V path, reading another request's data, requiring >1 item/CTA,
+scaling 4× with pipeline depth, invisible to every serialising instrument but not to register
+counting. Eleven hypotheses eliminated; two contributors confirmed (`sO`/`smem_v` ~⅓, unfenced
+`smem_q` ~⅓, the latter a regression that must not ship).
+
 ## v0.76.0 — A2 CLOSED: the fine-grained tile dispatcher's premise is false (2026-10-10)
 
 Narrow FA2 classes `{48,32,16}` vs default `{128,64,16}`, single-request arms, all **PASSING** the

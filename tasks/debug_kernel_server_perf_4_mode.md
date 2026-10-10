@@ -804,6 +804,37 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[x] A2 CLOSED -- THE FINE-GRAINED TILE DISPATCHER'S PREMISE IS FALSE (2026-10-10). This answers
+main kernel item (A).**
+
+Narrow FA2 classes `{48,32,16}` against the default `{128,64,16}`, `band1` single-request arms, all
+**PASSING** the causal fp32 reference:
+
+| packed_qo | FA2 `{128,64,16}` | FA2 `{48,32,16}` | effect on FA2 | FA3 | FA3 vs best FA2 |
+|---|---|---|---|---|---|
+| 16 | 0.1409 ms | **0.1330 ms** | 1.06x faster | 0.0268 ms | **5.0x** |
+| 32 | 0.3978 ms | **0.2219 ms** | **1.79x faster** | 0.0329 ms | **6.7x** |
+| 48 | 0.3952 ms | 0.4900 ms | 1.24x SLOWER | 0.0389 ms | **10.2x** |
+| 64 | 0.3948 ms | 0.4964 ms | 1.26x SLOWER | 0.0457 ms | **8.6x** |
+
+**The narrow classes genuinely work.** Tile 32 is a real 1.79x win at `packed_qo=32` -- the first
+direct evidence the fine-grained dispatcher has any traction at all -- and it only became
+measurable because the tree's "tile 48 requires a 6- or 12-warp layout" claim was wrong. Tiles 48
+and 64 regress for a structural reason worth keeping: 48 resolves to 1q x 8kv with `num_mma_q=3`,
+which loses to 64's 4q x 2kv, and `packed_qo=64` then needs TWO 48-wide tiles.
+
+**But the premise of item A does not hold.** The user's hypothesis is *"only do tile 16, 32, 48;
+>=64 should be more performant with FA3"*, i.e. FA2 owns the small tiles. Measured on
+correctness-gated arms, **FA3 is 5.0-10.2x faster than the BEST FA2 configuration at every one of
+those sizes**. There is no crossover to find, so no threshold and no tile-class refinement can make
+the dispatcher pay: A1 (dynamic 128/64 WGMMA tile) and A3 (the routing threshold) inherit this.
+The honest form of item A is **"route everything to FA3"**, which is not a dispatcher.
+
+This is the third independent measurement today pointing the same way, after B1e (our kernel 18.75%
+occupancy at 1 block/SM while the reference runs LOWER occupancy and 3.14x faster) and the A3
+four-axis sweep. It is also measured where the kernel is provably correct, so K1's open defect does
+not bear on it.
+
 **[x] A2/A3 ON CORRECT ARMS (2026-10-10): FA3 beats FA2 by 5-12x at the SMALL tiles, and
 `BatchAttention` beats our FA3 by 1.3-2.4x. Every arm PASSES the causal fp32 reference.**
 

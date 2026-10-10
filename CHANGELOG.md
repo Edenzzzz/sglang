@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.76.0 — A2 CLOSED: the fine-grained tile dispatcher's premise is false (2026-10-10)
+
+Narrow FA2 classes `{48,32,16}` vs default `{128,64,16}`, single-request arms, all **PASSING** the
+causal fp32 reference:
+
+| packed_qo | FA2 `{128,64,16}` | FA2 `{48,32,16}` | effect | FA3 | FA3 vs best FA2 |
+|---|---|---|---|---|---|
+| 16 | 0.1409 | **0.1330** | 1.06× faster | 0.0268 | **5.0×** |
+| 32 | 0.3978 | **0.2219** | **1.79× faster** | 0.0329 | **6.7×** |
+| 48 | 0.3952 | 0.4900 | 1.24× slower | 0.0389 | **10.2×** |
+| 64 | 0.3948 | 0.4964 | 1.26× slower | 0.0457 | **8.6×** |
+
+The narrow classes **work** — tile 32 is a real 1.79× win, the first traction the dispatcher idea has
+shown, unlocked by correcting the tree's wrong "tile 48 needs 12 warps" claim. Tiles 48/64 regress
+structurally: 48 resolves to 1q×8kv (`num_mma_q=3`) which loses to 64's 4q×2kv, and `packed_qo=64`
+then needs two 48-wide tiles.
+
+**But item A's premise fails.** The hypothesis was FA2 owning {16,32,48} with FA3 taking ≥64; FA3 is
+**5.0–10.2× faster than the best FA2 config at every one of those sizes**. No crossover exists, so no
+threshold (A3) or dynamic WGMMA tile (A1) can make the dispatcher pay. The honest form of item A is
+"route everything to FA3", which is not a dispatcher. Third independent measurement today pointing
+the same way, after B1e and the A3 four-axis sweep — and measured where the kernel is provably
+correct, so K1's open defect doesn't bear on it.
+
+Also lands the per-item pipeline accounting instrument (`PIPE_COUNT`): producer's intended loads vs
+consumer's actual consumes, counted in registers during the race and printed once per block after
+the loop, since every in-loop instrument masked the defect.
+
 ## v0.75.0 — A2/A3 on correct arms: FA3 wins 5–12× at small tiles; four more mechanisms ruled out (2026-10-10)
 
 **A2/A3, every arm PASSING the fp32 reference.** The defect needs >1 item/CTA and `band1` is a

@@ -1608,6 +1608,42 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       That distinguishes "the partials are wrong" from "the combination is wrong", which is the
       one split this investigation has not yet made. State the expected values before dumping.
 
+      **[~] Race hunt (2026-10-10): ONE source found and fixed; a residual race remains at
+      1-in-20. The fix is confirmed by the results becoming DETERMINISTIC when they pass.**
+
+      **Localised first:** the failing row is **row 0 of the FA3 request** (the two FA2 rows, 256
+      and 257, are always clean). Under bottom-right causal with kv=2048 / qo=256, token 0 sees
+      the **fewest** keys -- 1793 of 2048 -- so it is the row most likely to own a chunk lying
+      entirely beyond the diagonal.
+
+      **Bug found: a fully masked split chunk never wrote its partial slot.** Such an item hits
+      `num_kv_tiles <= 0` and took `store_zero` + `continue`. But the merge counts the chunk
+      regardless -- `EnumerateFusedWorkItems` chunks uniformly with no causal adjustment, by
+      design, so the count matches what sized the slab and built `merge_indptr`. So the reduction
+      read `partial_lse` at an untouched slot (0.0 in a freshly zeroed workspace) and folded a
+      zero O in with weight `2^(0 - lse_true)`. At a true LSE near 6.6 that is a ~1% dilution --
+      and the measured failure was rel **0.03311** on row 0. `store_zero` was doubly wrong here:
+      it writes the FINAL O, not the partial slab, through a token-indexed mapping that is also
+      wrong on the packed path.
+
+      Fixed with `store_partial_zero`, which writes the item's slot with **-inf LSE** (the merge's
+      identity: `2^(-inf - m) == 0`) and zero O.
+
+      **Evidence the fix is real, and it is not the pass/fail count:** before it, passing runs
+      returned rel err scattered over 0.003273 / 0.004544 / 0.004985 / 0.003337 / 0.005239 across
+      splits. After it, **every passing run returns an identical 0.003279 at every split**. The
+      output is now deterministic when correct, which is exactly what removing an
+      uninitialised-read would do -- and a far better signal than a pass count.
+
+      **[ ] Residual race: 1 failure in 20 runs, 1 bad row, rel 0.2151.** Still `mixed`, so still
+      the co-resident configuration. Checked and ruled out: the barrier accounting in
+      `store_partial` is identical to 0.7's `store()` (sync `kValueEmpty` -> copy -> fence ->
+      arrive `EpilogueBarrier` -> ... -> sync `EpilogueBarrier`), so it is not an extra arrival
+      leaking into the next phase. Remaining candidates, untested: the cross-role backfill
+      (`fused_drain_queue` / device `cluster_cursor`) handing one work item to two blocks, or
+      ordering between the FA2 roles' writes and the FA3 partial slab they share. Next probe:
+      count executions per work item on the device and assert each is executed exactly once.
+
       **[!] RETRACTION + FIRST PERFORMANCE NUMBERS (2026-10-10). "Kernel correctness complete"
       below is WITHDRAWN: there is an intermittent ~1-row race. And the fused kernel is currently
       ~4x SLOWER than unfused at its best split, not faster.**

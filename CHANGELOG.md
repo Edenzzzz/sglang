@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.50.0 — fully-masked split chunks now write their partial slot (2026-10-10)
+
+One of (at least) two nondeterminism sources found and fixed. Residual race remains at 1-in-20.
+
+### Fixed
+
+A split item whose chunk lies entirely beyond the causal diagonal hits `num_kv_tiles <= 0` and
+took `store_zero` + `continue`, so it **never wrote its partial slot**. The merge counts the chunk
+regardless — `EnumerateFusedWorkItems` chunks uniformly with no causal adjustment, by design, so
+the count matches what sized the slab and built `merge_indptr`. The reduction therefore read
+`partial_lse` at an untouched slot (0.0 in a freshly zeroed workspace) and folded a zero O in with
+weight `2^(0 - lse_true)` — a ~1% dilution at a true LSE near 6.6, measured as rel **0.03311** on
+row 0. `store_zero` was doubly wrong: it writes the final O, not the partial slab, through a
+token-indexed mapping that is also wrong on the packed path.
+
+New `store_partial_zero` writes the slot with **-inf LSE** (the merge's identity) and zero O.
+
+**Why row 0:** under bottom-right causal with kv=2048 / qo=256, token 0 sees the *fewest* keys
+(1793 of 2048), so it is the row most likely to own a fully-masked chunk. The two FA2 rows were
+always clean.
+
+**Evidence the fix is real** — and it is not the pass count: before, passing runs scattered over
+rel 0.003273 / 0.004544 / 0.004985 / 0.003337 / 0.005239 across splits; after, **every passing run
+returns an identical 0.003279 at every split**. Deterministic-when-correct is what removing an
+uninitialised read looks like.
+
+### Still open
+
+Residual race: 1 failure in 20 runs, 1 bad row, rel 0.2151, still in `mixed` (co-resident). Ruled
+out: `store_partial`'s barrier accounting is identical to 0.7's `store()`. Remaining candidates:
+cross-role backfill (`fused_drain_queue` / device `cluster_cursor`) handing one work item to two
+blocks, or ordering between the FA2 roles' writes and the shared FA3 partial slab. Next probe:
+count executions per work item on device and assert exactly one.
+
 ## v0.49.0 — RETRACTION: an intermittent race; and the first performance numbers (2026-10-10)
 
 ### Retracted — "kernel correctness complete" (v0.48.0) is withdrawn

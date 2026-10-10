@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.91.0 — BREAKTHROUGH: corruption is deterministic in `q_start` — q tiles 1 and 2 of 8 (2026-10-10)
+
+Host-side plan decode, no device instrumentation (arm still fails: 84/384).
+
+```
+bad rows map to task-3 items: [1, 2, 9, 10, 17, 18, 25, 26, 33, 34]
+work_indptr[:12] = [0,7,14,21,28,36,43,50,57,64,72,79]   total_items=952
+```
+
+Each block owns ~7 items with `q_start ∈ {0,128,…,896}`, and the bad ones are **exactly `q_start=128`
+and `q_start=256`, in every block** (blk0→1,2; blk1→9,10; blk2→17,18; blk3→25,26; blk4→33,34).
+Culprits and clean siblings carry identical `batch=0`, `kv_len=2048` — **the plan data is correct**
+and the fault is **q-tile-selective**: tiles 1 and 2 of 8 always wrong, tiles 0 and 3–7 always right.
+
+**This is Effect 1 made visible.** The corrupted item SET is fixed and structural; the bad-row COUNT
+varies run to run (84, 124, 96–128) because Effect 2 modulates how much of each affected tile spoils.
+
+**Most actionable result yet.** `q_start` feeds the causal bound: for a 256-token request with
+kv_len=2048, token *t* attends up to `1792 + t`, so each q tile has its own kv-tile count and tiles
+1–2 are where that count transitions. Narrow, arithmetic suspects: `get_num_kv_tiles`'s packed-GQA
+bound (`last_tok`, `ceil_div(last_tok + 1 + ckv - qo_len/g_pk, CTA_KV)`), `col_limit_right`'s
+`(qo_idx/gqa_g) + 1 + ckv - qo_len_tok`, and the split-KV `causal_kv_len` shift — all per-q-tile, all
+hand-ported, and all checkable **on the host** by evaluating the formulae for `q_tile_idx` 0..7
+against the reference's per-tile key counts. No GPU run, no device instrumentation.
+
 ## v0.90.0 — my own proposed mechanism is already protected; refuted before building it (2026-10-10)
 
 The previous entry proposed that a warp could issue its gemm off-phase and read a stage the pipeline

@@ -736,6 +736,45 @@ def main():
     print(f"\nmode={mode} worst rel err {worst:.4g}, bad rows {rows_bad}/{total_q}")
     if _bad_rows:
         print(f"BADROWS {_bad_rows[:12]}" + (" ..." if len(_bad_rows) > 12 else ""))
+        # PLANMAP correlation: map each bad TOKEN row to the task-3 work item that owns it and print
+        # that item's plan entries beside its CLEAN neighbours in the same block. Per-item plan data
+        # is the only input that differs between items of one block, so if a corrupted item's entries
+        # match its neighbours' pattern the plan is exonerated; if they differ, that difference IS
+        # the bug. Host-side only -- the device route to this was ruled out (952 prints took the
+        # failing arm to 0/384).
+        if _PLANMAP is not None:
+            _G = HQ // HKV
+            _qs, _bi, _kl = _PLANMAP["q_start"], _PLANMAP["batch_idx"], _PLANMAP["kv_len"]
+            _own, _wi = _PLANMAP["owner"], _PLANMAP["work_indptr"]
+            _qoi = qo_indptr.tolist()
+            def _items_for(row):
+                hit = []
+                for _i in range(len(_qs)):
+                    _b = _bi[_i] if _i < len(_bi) else -1
+                    if not (0 <= _b < len(_qoi) - 1):
+                        continue
+                    # item covers packed rows [q_start, q_start+CTA_Q) inside its request
+                    _t0 = _qoi[_b] + _qs[_i] // _G
+                    _t1 = _qoi[_b] + (_qs[_i] + 128) // _G
+                    if _t0 <= row < _t1:
+                        hit.append(_i)
+                return hit
+            _badset = sorted({r for r, _ in _bad_rows})
+            _culprits = {}
+            for _r in _badset[:16]:
+                for _i in _items_for(_r):
+                    _culprits.setdefault(_i, []).append(_r)
+            print(f"[planmap] bad rows map to {len(_culprits)} task-3 items: "
+                  f"{sorted(_culprits)[:10]}")
+            for _i in sorted(_culprits)[:4]:
+                _b = _own.get(_i)
+                _sib = [j for j in range(_wi[_b], _wi[_b + 1])] if _b is not None else []
+                print(f"[planmap] CULPRIT item={_i} blk={_b} rows={_culprits[_i][:6]} "
+                      f"q_start={_qs[_i]} batch={_bi[_i]} kv_len={_kl[_i]}")
+                for _j in _sib[:6]:
+                    tag = "SAME" if _j == _i else "nbr "
+                    print(f"[planmap]   {tag} item={_j} q_start={_qs[_j]} batch={_bi[_j]} "
+                          f"kv_len={_kl[_j]} bad={'Y' if _j in _culprits else 'n'}")
     # Timing runs ONLY after the verdict is printed, and only when the arm passed -- a timing
     # number for a failing kernel is worse than none.
     if _os.environ.get("TIME_AB") == "1":

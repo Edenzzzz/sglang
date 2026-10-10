@@ -819,6 +819,51 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[x][!!] BREAKTHROUGH: THE CORRUPTION IS DETERMINISTIC IN `q_start` -- Q TILES 1 AND 2 OF 8 ARE
+WRONG IN EVERY BLOCK (2026-10-10). Host-side plan decode, no device instrumentation.**
+
+```
+verdict: bad rows 84/384                  <- host-side only, so the arm STILL FAILS
+work_indptr[:12] = [0, 7, 14, 21, 28, 36, 43, 50, 57, 64, 72, 79]   total_items=952
+bad rows map to task-3 items: [1, 2, 9, 10, 17, 18, 25, 26, 33, 34]
+```
+
+Each block owns ~7 items with `q_start` drawn from `{0,128,256,384,512,640,768,896}`, and the bad
+items are **exactly the `q_start=128` and `q_start=256` ones, in EVERY block**:
+
+| block | bad items | their `q_start` | clean siblings' `q_start` |
+|---|---|---|---|
+| 0 | 1, 2 | **128, 256** | 0, 384, 512, 640, 768 |
+| 1 | 9, 10 | **128, 256** | 896, 0, 384, 512 |
+| 2 | 17, 18 | **128, 256** | ... |
+| 3 | 25, 26 | **128, 256** | ... |
+| 4 | 33, 34 | **128, 256** | ... |
+
+**The plan data is CORRECT.** Culprits and clean siblings carry identical `batch=0` and
+`kv_len=2048`; the only thing distinguishing them is `q_start`. So the planner is exonerated and the
+fault is **q-tile-selective**: q tiles 1 and 2 of 8 are always wrong, everywhere, while tiles 0 and
+3-7 are always right.
+
+**This is Effect 1 made visible.** The two-effect model predicted a deterministic wrong-tile fault
+plus a timing-dependent amplifier, and that is exactly what the data shows: the SET of corrupted
+items is fixed and structural (`q_start` 128 and 256), while the COUNT of bad rows varies run to run
+(84 here, 124 earlier, 96-128 across the determinism sweep) because Effect 2 modulates how much of
+each affected tile is spoiled.
+
+**Why this is the most actionable result in the investigation:** `q_start` feeds the causal bound.
+For a 256-token request with `kv_len=2048`, token `t` may attend keys up to `kv_total - qo_len + t`
+= `1792 + t`, so each q tile has its own kv-tile count, and tiles 1 and 2 are precisely where that
+count transitions. The suspects are now narrow and all arithmetic:
+
+* `get_num_kv_tiles`'s packed-GQA bound -- `last_tok = ((q_tile_idx + 1) * CTA_Q - 1) / g_pk` and
+  `ceil_div(last_tok + 1 + ckv - qo_len / g_pk, CTA_KV)` -- evaluated at `q_tile_idx` 1 and 2;
+* `col_limit_right`'s `(qo_idx / gqa_g) + 1 + ckv - qo_len_tok` at the same tiles;
+* the split-KV `causal_kv_len` shift, since these items are chunked.
+
+All three are per-q-tile arithmetic, all three were ported by hand, and all three are checkable on
+the HOST by evaluating the same formulae for `q_tile_idx` 0..7 and comparing against the causal
+reference's own per-tile key counts -- no GPU run and no device instrumentation.
+
 **[!] MY OWN PROPOSED MECHANISM IS ALREADY PROTECTED -- refuted before building the fix I
 announced (2026-10-10). Twenty-second elimination.**
 

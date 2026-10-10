@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.52.0 — configurable FA3 tile shape; the 2nd pipeline stage is still unreachable (2026-10-10)
+
+`FA3_CTA_Q` / `FA3_CTA_KV` added so the second K/V stage can be bought by shrinking a tile.
+`MODE=mixed`, `SM_SPLIT=128`, `SEED=0`:
+
+| CTA_KV | STAGES | result |
+|---|---|---|
+| 128 | 1 | PASS 0.003279, **0.2952 ms** (baseline) |
+| 64 | 1 | **NON-FINITE: 590976 / 924672 nan** |
+| 64 | 2 | **NON-FINITE: 640128 / 924672 nan** |
+| 128 | 2 | **cannot launch** ("invalid argument", smem) |
+
+Both routes to a 2-stage pipeline are blocked, so the leading hypothesis for the 4× gap remains
+untested. **`CTA_KV=64` failing is a new correctness bug** — something hard-assumes 128. Not the
+planner's chunk alignment (chunks round to 128, which 64 divides), and the KV gather's derivation
+looks sound at 64 on paper, so it needs a probe.
+
+### Fixed — a parameter-order bug the call site could not reveal
+
+`AttentionKernelTraits` is `<USE_TMA_LOAD_KV, HEAD_DIM_QK, HEAD_DIM_VO, CTA_Q, CTA_KV, NUM_STAGES,
+…>`, and the original call site was `<false, 128, 128, 128, 128, STAGES, …>` — all four identical,
+so the ordering was unverifiable from the call site. The first attempt set `HEAD_DIM_VO=64` and
+tripped `static_assert(HEAD_DIM_QK == HEAD_DIM_VO)`. Same hazard as the positional aggregate
+initialisers fixed earlier; the order is now read off `kernel_traits.cuh` and recorded at the call
+site.
+
+The non-finite guard added in v0.51.0 caught all three failing arms here immediately — this
+morning's harness would have called them PASS.
+
 ## v0.51.0 — harness was silently passing NaN; and the Q gather is exonerated (2026-10-10)
 
 ### Fixed — the correctness harness passed non-finite output

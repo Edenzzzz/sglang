@@ -1608,6 +1608,38 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       That distinguishes "the partials are wrong" from "the combination is wrong", which is the
       one split this investigation has not yet made. State the expected values before dumping.
 
+      **[~] Second pipeline stage still UNREACHABLE by both routes (2026-10-10). The leading perf
+      hypothesis remains untested, and CTA_KV=64 is a new correctness bug.**
+
+      Made the FA3 tile shape configurable (`FA3_CTA_Q` / `FA3_CTA_KV`) to buy the second K/V
+      stage by shrinking a tile. `MODE=mixed`, `SM_SPLIT=128`, `SEED=0`:
+
+      | CTA_KV | STAGES | result |
+      |---|---|---|
+      | 128 | 1 | PASS 0.003279, **0.2952 ms** (the baseline) |
+      | 64 | 1 | **NON-FINITE: 590976 of 924672 elements nan/inf** |
+      | 64 | 2 | **NON-FINITE: 640128 of 924672** |
+      | 128 | 2 | **cannot launch: "invalid argument"** (SharedStorage over the smem max) |
+
+      So both routes to a 2-stage pipeline are blocked: 128 does not fit, and 64 does not compute.
+      **`CTA_KV=64` breaking correctness is a new, concrete bug** -- something in this port
+      hard-assumes `CTA_KV=128`. It is NOT the planner's chunk alignment (chunks round to 128, so
+      64 divides evenly) and the KV gather's derivation looks sound at 64 on paper
+      (`NUM_KV_PER_ITER=8`, `KV_STRIDE=8`, `valid_read` covering 0..63), so it needs the same
+      treatment the other bugs got: a probe, not a reading.
+
+      **Parameter-order bug found and fixed in the process.** `AttentionKernelTraits` is
+      `<USE_TMA_LOAD_KV, HEAD_DIM_QK, HEAD_DIM_VO, CTA_Q, CTA_KV, NUM_STAGES, ...>`, and the
+      original call site was `<false, 128, 128, 128, 128, STAGES, ...>` -- **all four identical, so
+      the ordering was unverifiable from the call site.** My first attempt set position 3 and so
+      changed `HEAD_DIM_VO` to 64, tripping `static_assert(HEAD_DIM_QK == HEAD_DIM_VO)`. Same
+      hazard as the positional aggregate initialisers fixed earlier in this port: identical values
+      hide an ordering until one of them changes. Order now read off `kernel_traits.cuh` and
+      recorded at the call site.
+
+      **The new non-finite guard earned its keep immediately** -- all three failing arms here
+      produce NaN, which the harness would have reported as `bad rows 0 ... PASS` this morning.
+
       **[x] RESOLVED, and it found a HARNESS HOLE worse than the probe (2026-10-10). The
       packed-Q gather is NOT the bottleneck: it costs ~1.5%.**
 

@@ -803,6 +803,46 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[!] A HYPOTHESIS THAT EXPLAINS EVERY OBSERVATION INCLUDING THE ANOMALY (2026-10-10): the defect
+fires when a CTA's run CROSSES `(batch, q_start)` GROUP BOUNDARIES, i.e. when `sQ` must be refilled
+with DIFFERENT Q data between items.**
+
+The anomaly that needed explaining: **1 request at ~217 items/CTA PASSED** (qo=2048) while
+**97 requests at ~5.5 items/CTA FAILED** (1 bad row). Items-per-CTA alone cannot produce that
+ordering, so reuse *count* is not the variable.
+
+What distinguishes them is **what the consecutive items are**:
+- **One request:** a CTA's contiguous run `[ptr_begin, ptr_end)` is mostly items of the *same*
+  `(batch, q_start)` group -- consecutive kv chunks of one q tile. Same `q_start` means the **same Q
+  tile**, so `sQ` holds the same data across those items and is never refilled with different
+  content. 217 such items in a row are harmless.
+- **Many requests:** a run crosses group boundaries constantly, so `sQ` must be refilled with a
+  different Q tile between items. 5.5 items/CTA spanning several groups is more dangerous than 217
+  items within one.
+
+**This fits every data point collected:**
+
+| fixture | run composition | result |
+|---|---|---|
+| 1 request, qo=2048, ~217 items/CTA | nearly all same-group | **PASS 0/2048** |
+| 1 request, qo=4096, ~434 items/CTA | crosses a few group boundaries | 1 bad row / 4096 |
+| 41 requests, 2.5 items/CTA | few crossings | PASS |
+| 97 requests, 5.5 items/CTA | more crossings | 1 bad row |
+| 129 requests, 7.2 items/CTA | crossings almost every item | 76-144 / 384 |
+
+It also explains why un-aliasing `smem_o` removed only ~45%: that fixed the **`sO`** half of the
+reuse hazard and left the **`sQ`** half, which is the one that tracks group crossings.
+
+**The decisive test, and it is cheap:** hold items/CTA fixed and vary only the number of GROUP
+CROSSINGS per run. The planner's `work_indptr` hands out items in plan order, and
+`EnumerateFusedWorkItems` emits `for kv0 { for h { for q0 } } }` -- so **chunk is the OUTER loop**,
+meaning consecutive items differ in `q0`/`h` and only rarely share a `q_start`. Reordering the
+enumeration to `for h { for q0 { for kv0 } } }` would make consecutive items share `(batch,
+q_start)` and differ only in chunk -- maximising same-group runs at identical total work. If the
+corruption largely vanishes under that reordering, the `sQ`-refill-between-items mechanism is
+confirmed, and the reordering is itself a candidate mitigation (it also improves `sQ` reuse, so it
+may be a perf win independently).
+
 **[~] UN-ALIASED `smem_o` FROM `smem_v` (`FUSED_SPLIT_SMEM_O=1`): a real 45% reduction, still not
 a fix.** Stock unions them to save shared memory, which is safe for one work item per CTA. Our
 persistent scheduler gives a CTA many, so the producer's V load for item N+1 can overwrite the `sO`

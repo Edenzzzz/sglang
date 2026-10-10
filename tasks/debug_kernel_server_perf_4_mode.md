@@ -804,6 +804,31 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[!] STAGE-INDEX SHIFT REFUTED as the mechanism -- but pipeline DEPTH modulates the defect 4x
+(2026-10-10). This weakens the explanation committed in `683dc9141`; the LOCALISATION stands.**
+
+With `FA3_STAGES=1` the stage index is always 0, so a shifted stage index cannot exist. dec=128,
+baseline, distinct pages:
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| `FA3_STAGES=2` (default) | 8/8 | 72-116, mean ~96 |
+| `FA3_STAGES=1` | **8/8** | **12-36, mean ~24** |
+
+Two readings, and the second is a correction of my own commit:
+
+1. **Depth matters a lot** -- 4x fewer bad rows at one stage. So the K/V pipeline IS implicated,
+   which is consistent with the `KVPERREQ` localisation.
+2. **But the specific mechanism I proposed is weakened.** "An item consumes fewer stages than were
+   loaded, so the pipeline shifts permanently" predicts a **DEADLOCK** at one stage -- the next
+   item's `producer_acquire` would wait on a phase nobody releases -- not quiet corruption. It did
+   not deadlock, and corruption persists where no index shift is possible. So the pipeline-shift
+   STORY in `683dc9141` does not survive its own test, even though the LOCALISATION it was built on
+   (`KVPERREQ`: CTAs read another request's K/V, 0/8 vs 8/8) rests on independent data and stands.
+
+What survives: the leakage is in the K/V path, across requests, and its magnitude scales with
+pipeline depth. What does not: that it is a stage-index shift caused by unconsumed stages.
+
 **[x] LOCALISED: CTAs READ ANOTHER REQUEST'S K/V. The route is the K/V pipeline carried ACROSS
 work items (2026-10-10). First mechanism with POSITIVE evidence rather than elimination.**
 

@@ -870,6 +870,53 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[x][!!] LOCALISED, REPRODUCIBLY: ALL corruption is in the PREFILL items, ZERO in the 896
+DECODE-row items -- and the decode items are the AGGRESSOR, the prefill tiles the VICTIM
+(2026-10-10). Host-side decode, ALL bad rows mapped, two repeats.**
+
+| | repeat 1 | repeat 2 |
+|---|---|---|
+| verdict | 104/384 | 88/384 |
+| culprit items | **56** of 952 | **49** of 952 |
+| by `q_tile` | 7 each, all 8 tiles | 7 each, 7 tiles |
+| by `kv_head` | 8 each, all 7 heads | 7 each, all 7 heads |
+| **decode-row culprits (items >= 56)** | **0** | **0** |
+| causal-bound MISMATCH | 0 | 0 |
+
+**Three results, all reproducible across both runs:**
+
+1. **Every corrupted item is a PREFILL item; not one of the 896 decode-row items is ever wrong.**
+   In repeat 1 that is ALL 56 prefill items (8 q tiles x 7 kv heads) and nothing else.
+2. **Uniform across `q_tile` AND `kv_head`.** This independently confirms the retraction above:
+   there is no `q_start` dependence whatsoever -- the earlier "q tiles 1 and 2" was purely my
+   lowest-16 sampling.
+3. **The causal bound matches the reference for every item**, so that suspect stays dead.
+
+**The distinguishing property is `qo_len`.** A prefill item owns a **full 128-packed-row q tile**
+(all 8 MMA warps carry real rows); a decode item owns **4 packed rows** (one partially-filled warp,
+seven idle). Combined with the warp-quantised damage (runs of exactly 16 packed rows), the defect
+lives in the **multi-row q-tile path** and cannot express itself on a 4-row tile.
+
+**And this REVERSES the victim/aggressor assumption I had been carrying.** The threshold sweep showed
+bad rows growing with `DEC_ROWS`, which I read as "more items per CTA -> more corruption". But the
+decode items are themselves CLEAN. So adding decode rows does not add corrupted decode output -- it
+adds **damage to the prefill tiles**. The decode items are the **aggressor**; the prefill item is the
+**victim**.
+
+**The constraint that makes this sharp:** `KVPERREQ=1` passes, so the bad data is request 0's **own**
+KV, not a decode request's. Therefore *a decode item's execution causes the prefill item to re-read a
+WRONG TILE OF ITS OWN REQUEST* -- the decode item leaves state (pipeline stage, smem, or scheduler)
+that makes the next prefill tile index wrongly, without ever importing decode data.
+
+**Next, and it is now a narrow question:** what does a 4-packed-row decode item leave behind that a
+128-row item does not? Candidates, all per-item and all checkable: the pipeline stage count it
+advances (`num_kv_tiles` for kv=2048 is the same 15-16, so it consumes a FULL tile sequence for 4
+rows of output); the `q_tile_idx * CTA_Q >= qo_len` early-`continue` path, which a decode item with
+`qo_len=4` packed can hit where a prefill item cannot; and the epilogue's partial-tile store. The
+early-continue path is the leading candidate because it is the one place an item exits the loop
+WITHOUT running the pipeline to completion -- and the doc's own comment says both `continue` paths
+"skip it on BOTH sides symmetrically", an invariant that has never been tested.
+
 **[!!] RETRACTED -- "DETERMINISTIC IN `q_start`" WAS AN ARTIFACT OF MY OWN SAMPLING
 (2026-10-10).** The heading below read *"BREAKTHROUGH: the corruption is deterministic in `q_start`
 -- q tiles 1 and 2 of 8 are wrong in every block"*. **It is not.** Three compounding errors, all

@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.95.0 — LOCALISED: all corruption is in PREFILL items; decode items are the AGGRESSOR (2026-10-10)
+
+Host-side decode, **all** bad rows mapped (sampling bug fixed), two repeats:
+
+| | repeat 1 | repeat 2 |
+|---|---|---|
+| verdict | 104/384 | 88/384 |
+| culprit items | **56**/952 | **49**/952 |
+| by `q_tile` | 7 each, all 8 | 7 each, 7 |
+| by `kv_head` | 8 each, all 7 | 7 each, all 7 |
+| **decode-row culprits** | **0** | **0** |
+| causal MISMATCH | 0 | 0 |
+
+1. **Every corrupted item is a prefill item; none of the 896 decode-row items is ever wrong.**
+2. **Uniform across `q_tile` and `kv_head`** — independently confirming that the retracted
+   "q tiles 1 and 2" was pure sampling bias.
+3. Causal bound matches the reference everywhere.
+
+**The distinguishing property is `qo_len`:** prefill items own a full 128-packed-row q tile (8 live
+warps); decode items own 4 packed rows (one partial warp). With warp-quantised damage, the defect
+lives in the **multi-row q-tile path**.
+
+**This reverses the victim/aggressor assumption.** Bad rows grow with `DEC_ROWS`, which I read as
+"more items/CTA → more corruption" — but decode items are *clean*, so added decode rows add damage to
+the **prefill** tiles. Decode is the aggressor, prefill the victim. And since `KVPERREQ` passes, the
+bad data is request 0's **own** KV: a decode item's execution makes the prefill item re-read a wrong
+tile of its own request without importing decode data.
+
+Next: what does a 4-packed-row decode item leave behind that a 128-row item does not? Leading
+candidate is the `q_tile_idx * CTA_Q >= qo_len` early-`continue`, the one path where an item exits
+without running the pipeline to completion — and the tree's own comment claims both `continue` paths
+"skip it on BOTH sides symmetrically", an invariant never tested.
+
 ## v0.94.0 — RETRACTION: "deterministic in q_start" was my own sampling artifact (2026-10-10)
 
 The v0.91.0 "breakthrough" is **withdrawn**. Three compounding errors, all mine:

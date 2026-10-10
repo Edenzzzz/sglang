@@ -250,7 +250,7 @@ attention measures the scheduling change alone and cannot show the thesis.
 |---|---|---|
 | **K1** | port the fused kernel to flashinfer 0.7 (prerequisite for both A and B) | **~done, 1 bug open** |
 | K1.corr | every fixture PASSES the causal fp32 reference, `mixed` included | **[x]** rel 0.0033 |
-| K1.race | intermittent 1-row race in `mixed` (co-resident), ~1 in 10-20 runs | **[ ] OPEN** |
+| K1.race | intermittent 1-row race in the **FA3 SPLIT path** (not cross-role), ~1 in 12 runs | **[ ] OPEN** |
 | K1.perf | split-KV path was 78% of kernel time; chunk-size sweep gave **4.5x** on `fa3` | **[~]** still 1.5-2.5x off |
 | **S** | server integration: EDF perf model vs unfused baseline | **[ ] NOT RUN** |
 | **M** | multi-node PD colocation (H20 only, <=16 GPUs, trial `vibecuda`) | **[ ] NOT RUN** — doc: `pd_colocation_vs_disagg.md` |
@@ -279,6 +279,35 @@ the index.
 
 Open items consolidated in one place, completed items kept below them. **Kernel items gate
 everything else** (user: H20 and multi-node only after all kernel items close).
+
+#### [!] K1.race RE-CHARACTERISED (2026-10-10): it is NOT cross-role and NOT `mixed`-only
+
+Three arms, 12 runs each, same build and seed:
+
+| arm | FA2 role blocks | FA2 work | failures |
+|---|---|---|---|
+| `fa3` @ `SM_SPLIT=128` | present | none | **0 / 12** |
+| `mixed` @ `SM_SPLIT=128` | present | yes | 1 / 12 |
+| `fa3` @ `SM_SPLIT=all` | **none** | none | **1 / 12** |
+
+`fa3` with **no FA2-role blocks at all** fails at the same rate as `mixed`. All three rates are
+within sampling noise of ~1/12, so FA2 co-residency is irrelevant.
+
+**RETRACTED:** every earlier statement that this race is "`mixed` only", "the co-resident
+configuration", or "a cross-ROLE hazard on the partial slab the FA3 epilogue shares with Runner1's
+persistent params". That came from small samples -- `fa3` @ all had passed 5/5 and then 8/8, and I
+treated two clean runs of 8 as evidence of absence for a 1-in-12 event. **At p = 1/12, eight
+passes have probability 0.50** -- the sample never distinguished the arms.
+
+**What is actually implicated:** the FA3 split path, independent of FA2. Consistent with the other
+measurement I have on it -- parallelising `store_partial`'s O write across all MMA threads took the
+rate from 1/10 to 8/10, which is in exactly this code. And `FUSED_NOSPLIT=1` has never failed,
+though that needs its own repeat count before it counts as evidence (the error I just made).
+
+**Next, and sized properly this time:** to distinguish 1/12 from 0, a clean arm needs ~35 runs for
+95% confidence. Run `fa3` @ all with `FUSED_NOSPLIT=1` x 35 against splits-on x 35; if no-split is
+clean at that count the defect is in `store_partial` / the sO lifetime, which is where the
+8/10 regression already points.
 
 #### OPEN -- kernel: TWO MAIN ITEMS (user 2026-10-09)
 

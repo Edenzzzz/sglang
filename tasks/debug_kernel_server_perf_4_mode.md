@@ -444,7 +444,7 @@ FIRST, so the kernel can land directly on upstream.** A2/A3 resume after K1 clos
 |---|---|---|
 | B1 | headroom quantified | **[x]** ceiling **29%** = attention 20.5% + epilogue 8.5% |
 | B1b/c/d | re-capture; GEMM-level backfill (answered: **no**); tile histogram | **[x]** |
-| B1e | **achieved** SM occupancy (B1 used `grid < 132` as a PROXY) | **[ ]** ncu, needs no port |
+| B1e | **achieved** SM occupancy | **[x]** ours **18.75%**, 1 block/SM (reg+smem); reference **12.49%** and 3.14x FASTER -- occupancy does not predict perf |
 | B2c | **`tma_store_wait` cross-role backfill + multicast** | **[ ] UNTESTED** |
 | B3 | the epilogue fusion itself | **[ ]** not started |
 
@@ -1702,13 +1702,36 @@ work, but the exact A/B bounds above should be re-read from a capture where
 - [x] **B1c. DECISION: does the kernel story extend to GEMM-level cross-role backfill?**
       Answered **no**. The kernel contribution is therefore bounded at ~29% of GPU time and the
       headline claim has to be the scheduling one.
-- [ ] **B1e. GAP: achieved occupancy was never measured -- `grid < 132` was used as a PROXY.**
-      The goal asks for *achieved SM occupancy* so that "small" is a measurement rather than an
-      adjective, and launch geometry is a weaker claim than that: a kernel with grid 132 can still
-      sit at low achieved occupancy, and the proxy says nothing about warp-level fill. Closing it
-      with ncu (`sm__warps_active.avg.pct_of_peak_sustained_active`, plus the shared-mem and
-      register occupancy limiters) on the fused kernel and on the `BatchAttention` reference at the
-      same shape. Needs no port. Driver `/dev/shm/w/occ.sh`.
+- [x] **B1e. DONE: achieved occupancy MEASURED, and it cuts against the fusion motivation.**
+      ncu, kernels attributed by name, `MODE=mix_decode MIX_ALL_FA3=1 SM_SPLIT=all`, dec=8 and 128:
+
+      | kernel | achieved occupancy | blocks/SM (reg / smem) | waves/SM |
+      |---|---|---|---|
+      | `FusedFA3PersistentKernel` (ours) | **18.75%** | **1 / 1** | 1.00 |
+      | `FusedStateReductionKernel` (split-KV merge) | 41.64% | 8 / 13 | 1.75 |
+      | `PersistentKernelTemplate<BlockBatchPagedAttentionPersistent...>` (`BatchAttention`'s) | **12.49%** | 2 / 2 | 1.00 |
+
+      **Our kernel is pinned to ONE block per SM by registers AND shared memory at once.** 18.75%
+      of peak warps is exactly our 384-thread block (12 of 64 warps) with a single block resident,
+      and dec=128 gives the identical 18.75%. So there is no room to co-schedule anything *within*
+      an SM: the role split is strictly spatial ACROSS SMs and never overlapped inside one. That is
+      structural, not a tuning artifact.
+
+      **And the reference runs at LOWER occupancy -- 12.49% -- while being 3.14x FASTER.** So
+      achieved occupancy does not predict performance on this workload, and the motivation "the GPU
+      is underfilled, therefore fuse the small kernels" does not survive its own measurement. B1b
+      already cut that claim from 89.3% to 8.1% of GPU time; B1e removes the warp-fill version of
+      it as well.
+
+      Driver `/dev/shm/w/occ2.sh`. **Method note:** the first attempt profiled EVERY kernel in the
+      process and reported `softmax_warp_forward` at 9183 invocations, `arange` and
+      `CatArrayBatchedCopy` -- the harness's own fp32 REFERENCE path, not the kernel. It spent 11
+      minutes at 1% GPU and its numbers must not be read as kernel occupancy. Filtered to
+      `-k regex:(Fused|Persistent|persistent)` with `--launch-count 24`.
+
+- [ ] **B1e-note. SUPERSEDED framing:** `grid < 132` was B1's PROXY for occupancy.
+      Launch geometry is the weaker claim and B1e above now supersedes it with the measured
+      figures. Kept only so the proxy is not mistaken for an occupancy measurement.
 
 #### B1b RESULT (2026-10-09): **RETRACTS B1's 89% figure.** The GPU is NOT underfilled at load
 

@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.71.0 — B1e: achieved occupancy measured, and it undercuts the fusion motivation (2026-10-10)
+
+ncu with kernels attributed by name (`mix_decode`, `MIX_ALL_FA3=1`, `SM_SPLIT=all`, dec 8 and 128):
+
+| kernel | achieved occupancy | blocks/SM (reg / smem) | waves/SM |
+|---|---|---|---|
+| `FusedFA3PersistentKernel` (ours) | **18.75%** | **1 / 1** | 1.00 |
+| `FusedStateReductionKernel` | 41.64% | 8 / 13 | 1.75 |
+| `PersistentKernelTemplate<BlockBatchPagedAttentionPersistent…>` (`BatchAttention`) | **12.49%** | 2 / 2 | 1.00 |
+
+Our kernel is pinned to **one block per SM by registers and shared memory simultaneously** — 18.75%
+of peak warps is exactly a 384-thread block (12 of 64 warps), identical at dec=128. So nothing can
+be co-scheduled *within* an SM; the role split is purely spatial across SMs. Structural, not tuning.
+
+**The reference runs at lower occupancy (12.49%) and is 3.14× faster.** Achieved occupancy therefore
+does not predict performance on this workload, and "the GPU is underfilled, so fuse the small
+kernels" fails on its own measurement. B1b had already cut that claim from 89.3% to 8.1% of GPU
+time; B1e removes the warp-fill version too.
+
+**Method note:** the first attempt profiled every kernel in the process and returned
+`softmax_warp_forward` (9183 invocations), `arange`, `CatArrayBatchedCopy` — the harness's fp32
+*reference* path, not the kernel — after 11 minutes at 1% GPU. Those numbers are not kernel
+occupancy. Fixed with `-k regex:(Fused|Persistent|persistent) --launch-count 24`.
+
 ## v0.70.0 — Q fence is a third real contributor, not a fix, and 3.14× slower (2026-10-10)
 
 Dedicated `barrier_Qdone`, 10 seeds/arm at `DEC_ROWS=128`, macros verified in `build.ninja`:

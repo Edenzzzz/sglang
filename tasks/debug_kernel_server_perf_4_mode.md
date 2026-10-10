@@ -870,6 +870,52 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[!] PARTIAL RETRACTION + CONFIRMATION BY A VALID ROUTE: the counter I used was dead, but the live
+one agrees -- 4158 co-residency opportunities, ZERO mixed steps (2026-10-11).**
+
+**Retracted:** I concluded "the split never engages" from `comp=MISSING` and from `Prefill batch` /
+`Decode batch` appearing as separate lines. **Both were bad evidence.**
+`SGLANG_LOG_MIXED_COMPOSITION` is **not read by the fork at all** -- `comp=MISSING` meant "that env
+var does nothing", not "no mixing happened". And the separate-lines argument was wrong too: the
+prefill lines carry **`#running-req: 6`**, i.e. requests already decoding, which IS the co-residency
+condition. **Fifth instance today of concluding from an artifact that could not report** -- and the
+first one I committed before checking.
+
+**Confirmed by the live counter, which is what the fork actually emits:**
+
+| artifact | value |
+|---|---|
+| prefill batches with `#running-req > 0` | **4158** |
+| `MIXEDSPEC_STEPS` / `mixedspec` mentions | **0** |
+| `SGLANG_MIXED_SPEC=1` | set by driver, **read** by `scheduler.py:4142` |
+| `--enable-mixed-chunk` | **passed** (`run_mixed_workloads.py:328`) -> `self.is_mixed_chunk` |
+
+So the conclusion stands on better evidence than it did: **4158 opportunities, zero mixed steps.**
+
+**Also corrected:** the previous entry said three dead flags were the cause. They are dead
+(`SGLANG_ALLOW_MIXED_CHUNK_SPEC`, `SGLANG_TWO_EXEC`, `SGLANG_MIXED_ATTENTION_KERNEL` are absent from
+the fork), but **that is not the blocker** -- `--enable-mixed-chunk` supplies what the first one used
+to, via a CLI arg rather than an env var. The flags being dead is untidy, not fatal.
+
+**The actual gate, `scheduler.py:4141`, and which condition fails:**
+
+```
+SGLANG_MIXED_SPEC == "1"            -- satisfied
+and self.is_mixed_chunk             -- satisfied (--enable-mixed-chunk)
+and not self.spec_algorithm.is_none()
+and not running_batch.is_empty()    -- satisfied 4158 times
+and not (new_batch.return_logprob or running_batch.return_logprob)
+and new_batch.input_embeds is None
+and all(r.beam_group is None for r in running_batch.reqs)
+```
+
+Three remain untested: **`spec_algorithm.is_none()`**, `return_logprob`, `input_embeds`/`beam_group`.
+`spec_algorithm` is the live suspect -- the EAGLE3 args at `run_mixed_workloads.py:338` are inside a
+conditional, so if this method does not take that branch the server runs **without speculative
+decoding**, the gate closes, and everything else observed follows. **The next step is to read the
+server's own startup banner for `speculative_algorithm`** in
+`r1_MTPMIX_SPLIT/server_MTPMIX_SPLIT.log`; one grep, no GPU, and it settles it.
+
 **[x] WHY THE SPLIT DOES NOT ENGAGE: three of the five mixing flags NO LONGER EXIST in the 0.7-port
 fork (2026-10-11). Found by grep, no GPU.**
 

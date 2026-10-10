@@ -252,6 +252,11 @@ def load_fused_fa3(verbose: bool = False) -> None:
             "--threads",
             "32",
             "-DFUSED_FA3_STAGES=" + os.environ.get("FA3_STAGES", "1"),
+            # Diagnostic: skip the packed-GQA Q gather entirely and leave whatever is in smem, so
+            # the difference in kernel time BOUNDS what that load costs. Output is garbage by
+            # construction -- this measures the load, not the kernel -- so it is only ever read as
+            # a timing delta, never as a correctness arm.
+            "-DFLASHINFER_SKIP_PACKED_Q=" + os.environ.get("SKIP_PACKED_Q", "0"),
             # The FA3 role's CAUSAL template parameter. Default 0 was set from a measurement
             # ("CAUSAL=1 is worse") taken while fa3.k_page_stride was unassigned, so every key
             # read page 0 and all keys were identical -- a configuration in which causal and

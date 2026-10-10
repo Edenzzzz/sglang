@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.54.0 — the gap is the split-KV path (78%); unsplit is already 1.45× FASTER (2026-10-10)
+
+The cost scales with kv chunk count, not with anything fixed. `SM_SPLIT=all`, 30 iters:
+
+| fixture | kv | chunks | fused ms | unfused ms | ratio |
+|---|---|---|---|---|---|
+| `fa3_1chunk` | 128 | 1 | **0.0223** | 0.0324 | **1.45× — +31% faster** |
+| `fa3_multitile` | 256 | 2 | 0.0433 | 0.0314 | 0.72× |
+| `fa3` | 2048 | 16 | 0.2574 | 0.0384 | 0.149× |
+
+Direct confirmation — `MODE=fa3` with the split switched off: **0.0578 ms** vs 0.2586 ms split, so
+the partial write plus merge is **0.2008 ms = 78% of the kernel's time** (unfused does the whole
+problem in 0.0386 ms). Without it the fused kernel is within 1.5× of baseline while using *less*
+parallelism, and on one chunk it already beats baseline by 31%.
+
+**First positive signal in the project**: the fusion works; one bounded path is the whole deficit.
+It also explains why the earlier prime suspects measured small — gather ~1.5%, pipeline depth ~1%.
+
+### Attempted and REVERTED — parallelising `store_partial`'s O write
+
+It writes 32 KB from a single warp (64 dependent 16 B stores/thread). Spreading it over all
+`NUM_MMA_THREADS` gave **−12%** on `mixed` (0.2470 → 0.2183) but took `MODE=fa3` from **1 failure
+in 10 to 8 in 10** (1–7 bad rows, rel 0.15–1.21). Reverted; revert re-verified at 1/10. The
+single-warp gate is load-bearing — likely protecting `sO`'s lifetime, since `sO` is **unioned with
+`smem_v`** and the producer warps may refill it for the next work item while the consumer reads.
+The `store_partial_zero` uint4 vectorisation was kept (not implicated).
+
+### Next
+
+Split the 0.2 ms between `store_partial` and the merge kernel — unmeasured so far — then optimise
+whichever dominates while respecting the sO lifetime.
+
 ## v0.53.0 — STAGES=2 runs and is no faster; the smem blocker was the backfill slot (2026-10-10)
 
 ### Measured — what actually blocked the second pipeline stage

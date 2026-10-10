@@ -1608,6 +1608,58 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       That distinguishes "the partials are wrong" from "the combination is wrong", which is the
       one split this investigation has not yet made. State the expected values before dumping.
 
+      **[x] THE GAP IS LOCALISED: the split-KV path is 78% of the kernel's time, and the fused
+      kernel is already 1.45x FASTER than unfused when nothing splits (2026-10-10).**
+
+      The cost is NOT fixed overhead -- it scales with the number of kv chunks. `SM_SPLIT=all`,
+      30 iters, after hoisting the H2D copies out of the timed region:
+
+      | fixture | kv | chunks | fused ms | unfused ms | ratio |
+      |---|---|---|---|---|---|
+      | `fa3_1chunk` | 128 | 1 | **0.0223** | 0.0324 | **1.45x — +31% FASTER** |
+      | `fa3_multitile` | 256 | 2 | 0.0433 | 0.0314 | 0.72x |
+      | `fa3` | 2048 | 16 | 0.2574 | 0.0384 | 0.149x |
+
+      And the direct confirmation, same fixture with the split switched off:
+
+      | `MODE=fa3` | fused ms | unfused ms |
+      |---|---|---|
+      | split, 16 chunks | 0.2586 | 0.0386 |
+      | `FUSED_NOSPLIT=1` | **0.0578** | 0.0387 |
+
+      **So the split-KV partial write plus the merge is 0.2008 ms -- 78% of the fused kernel's
+      time**, against an unfused baseline of 0.0386 ms for the entire problem. Without it the
+      fused kernel is within 1.5x of the baseline *while using less parallelism*, and on the
+      single-chunk fixture it already **beats** the baseline by 31%.
+
+      **This is the first positive signal in the project**: the fusion concept works, and one
+      bounded code path accounts for the whole deficit. It also explains why both earlier prime
+      suspects measured small -- the packed-Q gather (~1.5%) and the pipeline depth (~1%) are not
+      where the time goes.
+
+      **[!] First optimisation attempt: a real 12% win, REVERTED because it broke correctness.**
+      `store_partial` writes its 128x128 bf16 O tile (32 KB) from a **single warp** in a per-row
+      loop -- 64 dependent 16 B stores per thread. Parallelising it across all `NUM_MMA_THREADS`:
+
+      | | `mixed` fused ms | `fa3` failures / 10 |
+      |---|---|---|
+      | single warp (before) | 0.2470 | 1 |
+      | all MMA threads | **0.2183 (-12%)** | **8** |
+      | single warp (reverted) | 0.2470 | 1 |
+
+      So the single-warp gate is **load-bearing** for a reason I have not identified, and a 12%
+      win is not worth an 80%-failure kernel. Reverted, and the revert re-verified at 1/10.
+      Leading hypothesis for why: `sO` is **unioned with `smem_v`**, so the producer warps may be
+      refilling it for the next work item while the consumer reads it -- widening the set of
+      readers widens that window. The `store_partial_zero` vectorisation (uint4 instead of
+      element-at-a-time) was kept; it is not implicated.
+
+      **[ ] Next, with the target now quantified:** the 0.2 ms splits between `store_partial` and
+      the merge kernel, and that split has not been measured -- time them separately
+      (`FLASHINFER_FUSED_NO_MERGE=1` already isolates the merge, though it changes correctness so
+      only the delta is readable). Then optimise whichever dominates, respecting the sO lifetime
+      the single-warp gate protects.
+
       **[x] STAGES=2 NOW RUNS, IS CORRECT, AND IS NO FASTER (2026-10-10). The leading perf
       hypothesis is REFUTED by measurement, and the smem blocker was never FA3's storage.**
 

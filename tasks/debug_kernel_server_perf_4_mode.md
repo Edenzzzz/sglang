@@ -1519,6 +1519,71 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       fused path's template parameters or params, body exonerated. Needs only an include-path
       change, not a second flashinfer version.
 
+      **[x] K1n RESOLVED for the single-tile FA3 arm (2026-10-10): FA3 PASSES, rel 0.002292,
+      0/128. Two bugs, both found by parameter A/Bs on one build.**
+
+      | step | fa3_1chunk | fa3 (multi-tile) |
+      |---|---|---|
+      | before | 11.8, 127/128 | 48.93, 258/258 |
+      | + `fa3.k_page_stride` / `v_page_stride` assigned | 1.001, 127/128 | 1.593, 258/258 |
+      | + `FLASHINFER_FUSED_FA3_CAUSAL=1` | **0.002292, 0/128 PASS** | 4.856, 258/258 |
+
+      **Bug 1 -- the page stride was never assigned.** `fa3.k_page_stride` / `fa3.v_page_stride`
+      were never set and `FA3ParamsSel fa3{}` zero-initialises them. 0.7's `sparse_mainloop`
+      computes `my_kv_offset = page_idx * k_page_stride + entry_idx * k_stride_n`, so with the
+      page stride at 0 every page resolved to offset 0 and, at `page_size=1` (`entry_idx` always
+      0), **every key read page 0**. These are the same fields 0.7 inserted mid-struct; the FA2
+      persistent params already set their equivalents, only the FA3 selection block was missed.
+      Fifth instance of the family in [[upstream-fa3-subset-params]].
+
+      **Bug 2 -- the CAUSAL default rested on a vacuous measurement.** `FLASHINFER_FUSED_FA3_CAUSAL`
+      defaulted to 0 because "CAUSAL=1 is worse" had been measured -- but that was measured *while
+      bug 1 was live*, when every key held page 0's data. With all keys identical, causal and
+      non-causal are indistinguishable, so the measurement could not have discriminated and
+      whichever arm looked worse was noise. The reference is bottom-right causal and the stock
+      wrapper is built `causal=True`, so 1 is the only value that makes the comparison mean
+      anything. Null case: `FA3_CAUSAL=0` reproduces 1.001 / 127-of-128 exactly on the same build.
+
+      **What this retracts.** The entire "PV accumulator duplicates rows / every output row equals
+      reference row 0 / identity matches 1/128" investigation was a *consequence of bug 1*, not a
+      finding about the MMA: with every key reading page 0, all rows attend to identical keys and
+      every row's output is legitimately V[0] -- which is exactly reference row 0 under
+      bottom-right causal. The accumulator was computing correctly on the input it was given. The
+      "duplicated Q input" reframing recorded just above is likewise withdrawn: Q was never
+      duplicated. `tOrO(0)==tOrO(2)` was real and correctly measured; the inference from it to a
+      broken MMA was wrong.
+
+      **What found it.** `KVCONST=1`, which makes every kv page identical so a kernel reading the
+      WRONG kv row still gets the RIGHT values. It flipped a 127/128 failure to **PASS at
+      2.372e-07**, localising the defect to kv addressing in one run after many turns of probing
+      the accumulator. The null case (`KVCONST=0`, rel 11.8) ran first. Stated limit of that
+      discriminator, recorded before use: with constant K the softmax weights are uniform, so
+      reading too FEW keys also passes -- it isolates addressing, not the iteration count.
+
+      Two hypotheses refuted along the way, both by probes with their expected output stated
+      first: (a) `FA3_STAGES=1` collapsing the pipeline -- eliminated, since one q tile against
+      one kv tile is a single mainloop iteration with no buffer reuse, so the stage count cannot
+      matter for this fixture (and `STAGES=2` still cannot launch: a traits limit); (b) the KV
+      gather's shuffle invariant `kv_offset % KV_STRIDE == group_id`, which **holds** -- measured
+      `bad=0` over 16 pairs per block, with a positive confirmation line so silence could not be
+      mistaken for the probe not running. Dims: CTA_KV=128, NUM_KV_PER_ITER=16, KV_STRIDE=8,
+      8 groups x 16 threads, NUM_COPY_THREADS=128.
+
+      **[ ] Still failing: the multi-tile `fa3` fixture, 4.856, 258/258.** Single tile passes and
+      multi-tile does not, so what is left is the multi-tile / split-KV / merge path --
+      `num_kv_chunks`, `store_partial`, `merge_indptr` / `merge_o_indices` and the reduction --
+      not the mainloop. Next, and the same method: an A/B that makes the split not happen
+      (one chunk per request at multi-tile sizes) to separate tiling from merging.
+
+      Commands (sglang `b48fa7d2a`, flashinfer `ce514ae`, H200 pod `f929493da6e45f10`):
+      ```
+      cd /dev/shm/w/drv
+      export PYTHONPATH=/dev/shm/w/up/python SGLANG_FUSED_FI_ROOT=/dev/shm/w/port07
+      TORCH_EXTENSIONS_DIR=/dev/shm/w/tc_1 GQA1=1 FUSED_PACKED_Q=off FA3_MBARRIER=0 \
+        FA3_STAGES=1 FA3_CAUSAL=1 MODE=fa3_1chunk SM_SPLIT=all FA3_PROBE=0 KVCONST=0 \
+        /dev/shm/w/venv/bin/python fused_reference.py
+      ```
+
       **[x] K1n A/B (2026-10-10): the packed gather and packed store are BOTH EXONERATED. The
       defect is in `fa3_prefill_body` or the unified scheduler.**
 

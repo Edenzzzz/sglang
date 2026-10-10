@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.43.0 — FA3 PASSES the causal fp32 reference for the first time (2026-10-10)
+
+`sglang@b48fa7d2`, `flashinfer@ce514ae`, H200 pod `f929493da6e45f10`. Single-tile arm
+`MODE=fa3_1chunk`: **rel 0.002292, 0/128, PASS**.
+
+| step | fa3_1chunk | fa3 (multi-tile) |
+|---|---|---|
+| before | 11.8, 127/128 | 48.93, 258/258 |
+| + page strides assigned | 1.001, 127/128 | 1.593, 258/258 |
+| + `FLASHINFER_FUSED_FA3_CAUSAL=1` | **0.002292, 0/128 PASS** | 4.856, 258/258 |
+
+### Fixes
+
+- **`fused_fa3_persistent_ext.cu`**: assign `fa3.k_page_stride` / `fa3.v_page_stride`. They were
+  never set, and `FA3ParamsSel fa3{}` zero-initialises them. 0.7's `sparse_mainloop` computes
+  `page_idx * k_page_stride + entry_idx * k_stride_n`, so a zero page stride sent every page to
+  offset 0 and, at `page_size=1` (`entry_idx` always 0), **every key read page 0**. The FA2
+  persistent params already set their equivalents; only the FA3 selection block was missed.
+- **`fused_fa3_loader.py`**: `FLASHINFER_FUSED_FA3_CAUSAL` is now settable via `FA3_CAUSAL`. Its
+  default of 0 came from a *vacuous* measurement — "CAUSAL=1 is worse" was taken while the page
+  stride bug made every key identical, a configuration in which causal and non-causal cannot be
+  distinguished. The reference is bottom-right causal and the stock wrapper is `causal=True`.
+- **`fused_fa3_persistent_ext.cu`**: corrected the stale kv-index convention comment. 0.3.1 wanted
+  vector-sparse offsets; 0.7 wants raw page ids plus the page stride. They coincide at
+  `page_size=1`, so this fixture cannot see the difference — flagged as a TODO before any
+  `page_size>1` arm.
+- **`drivers/fused_reference.py`**: `KVCONST=1` (all kv pages identical) and `GQA1=1` (G=1)
+  discriminators.
+
+### Retracted in place
+
+The whole "PV accumulator duplicates rows / every output row equals reference row 0 / identity
+matches 1/128" investigation was a **consequence of the page-stride bug**, not a finding about the
+MMA: with every key reading page 0, all rows attend to identical keys, so every row's output is
+legitimately V[0] — exactly reference row 0 under bottom-right causal. The accumulator was correct
+on the input it was given. The "duplicated Q input" reframing is withdrawn too; Q was never
+duplicated. `tOrO(0)==tOrO(2)` was measured correctly, but the inference from it to a broken MMA
+was wrong.
+
+### Still open
+
+The multi-tile `fa3` fixture fails at 4.856, 258/258. Single tile passes, so what remains is the
+multi-tile / split-KV / merge path (`num_kv_chunks`, `store_partial`, `merge_indptr` /
+`merge_o_indices`, the reduction), not the mainloop.
+
 ## v0.42.0 — K1n: packed gather and packed store EXONERATED (2026-10-10)
 
 `sglang@d1f78a58`, overlay `/dev/shm/w/port07`, H200 pod `f929493da6e45f10`.

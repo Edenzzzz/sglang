@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.55.0 — race ROOT-CAUSED: the `sO`/`smem_v` union, O side only (2026-10-10)
+
+Slab fingerprint across runs (`MODE=fa3` @ `SM_SPLIT=all`, same seed and build):
+
+```
+lse_sum = 768993.500000  (IDENTICAL every run)
+o_sum   = 1467.978 / 1468.258 / 1468.412  (DIFFERS every run)
+```
+
+`partial_lse` is deterministic, `partial_o` is not. `partial_lse` is written straight from
+registers; `partial_o` is written **from `sO` in shared memory**, and `sO` is **unioned with
+`smem_v`** — the buffer the producer warps refill for the next work item.
+
+**This single mechanism explains every prior observation:** the single-warp gate on the O write is
+load-bearing because it keeps the `sO` read window short, and parallelising it across all MMA
+threads widened the window and took failures from 1/10 to 8/10.
+
+**`tma_store_wait` is the missing piece** — and the goal names it. `store_tail()` is
+`{ // tma_store_wait<0>(); }`, commented out. 0.7's `store()` writes O by TMA and relies on that
+wait to drain the store before `sO`/`smem_v` is reused; our `store_partial` uses plain vectorised
+stores with **no completion handshake**, so nothing orders the producer's next V load against the
+consumer's `sO` read.
+
+**Fix, not yet implemented:** a store-completion handshake before the producer may refill
+`smem_v` — either a named-barrier arrival after the global write, or route the partial O write
+through TMA and restore `tma_store_wait<0>()`. The latter matches 0.7 and is the same primitive
+B2c's cross-role backfill needs.
+
+### Also added
+
+Harness: bad-row indices (`BADROWS`), a whole-slab degenerate scan, and a slab fingerprint. The
+bad row is always a **q-tile boundary** (first row of a tile). The earlier degenerate-NaN
+hypothesis was **refuted** — `nonfinite_O_rows = 0`, and the 3584 `-inf` LSE entries are the
+correct identity for chunks beyond the causal bound.
+
 ## v0.54.0 — the gap is the split-KV path (78%); unsplit is already 1.45× FASTER (2026-10-10)
 
 The cost scales with kv chunk count, not with anything fixed. `SM_SPLIT=all`, 30 iters:

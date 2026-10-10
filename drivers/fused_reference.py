@@ -375,6 +375,17 @@ def main():
             # (merge_indptr[r] + c) * HKV + h, and partial_o at that slot is the NORMALIZED
             # attention of that (token, head) over keys [128c, 128c+128) intersected with the
             # causal bound kv_len - qo_len + token.
+            # SLAB FINGERPRINT across runs, to separate the two remaining possibilities:
+            #   identical slab + differing output => the defect is in the REDUCTION
+            #   differing slab                    => the defect is upstream in the attention grid
+            # Finite-masked so the intentional -inf entries do not swamp the sums.
+            _ns = nmr * chunks * HKV
+            _lf = partial_lse[:_ns].float()
+            _of = partial_o[: _ns * D].float()
+            _lm = _t.isfinite(_lf)
+            print(f"[slab] lse_sum={float(_lf[_lm].sum()):.6f} lse_absmax={float(_lf[_lm].abs().max()):.6f} "
+                  f"o_sum={float(_of.sum()):.6f} o_absmax={float(_of.abs().max()):.6f} "
+                  f"n_finite_lse={int(_lm.sum())}")
             # DEGENERATE-STATE SCAN over the WHOLE slab, not sampled tuples. Hypothesis: the
             # FIRST row of a q tile has the smallest causal bound, so it can have ZERO valid keys
             # in a chunk while later rows of the same tile still have some -- giving m = -inf,

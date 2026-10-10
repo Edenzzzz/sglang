@@ -374,15 +374,40 @@ deterministic, yet the OUTPUT varies run to run. So the nondeterminism is either
 reduction's combination of those partials, or (b) in some partial slot whose value differs between
 runs without being non-finite -- which this scan would not catch, since it only tested finiteness.
 
-**Next, and it distinguishes (a) from (b) in one run:** checksum `partial_o` and `partial_lse`
-(sum + absmax, as the `[fp]` fingerprint does for the output) and compare across runs.
-- slab checksum **identical** while output differs => the attention grid is deterministic and the
-  defect is in the **reduction**.
-- slab checksum **differs** => the defect is upstream in the attention grid, and the scan above
-  simply did not catch it because the wrong value was finite.
+**[x] ROOT CAUSE LOCALISED (2026-10-10): `partial_o` is NONDETERMINISTIC while `partial_lse` is
+NOT. The race is the `sO` / `smem_v` union, on the O side only.**
 
-Note the methodological point: testing only `isfinite` was a weaker gate than I treated it as. It
-refuted the specific NaN mechanism but cannot clear the slab generally.
+Slab fingerprint across runs (`MODE=fa3` @ `SM_SPLIT=all`, same seed, same build):
+
+```
+lse_sum = 768993.500000   lse_absmax = 7.005718   n_finite_lse = 112000   <- IDENTICAL every run
+o_sum   = 1467.978 / 1468.258 / 1468.412                                  <- DIFFERS every run
+```
+
+So the attention grid is **deterministic in its softmax statistics and nondeterministic in its O
+accumulator as written to the slab**. That asymmetry is the whole diagnosis:
+
+- `partial_lse` is written **straight from registers** (`lse(mi)` out of the updater) -> stable.
+- `partial_o` is written **from `sO` in shared memory**, and `sO` is **unioned with `smem_v`**
+  (`union { smem_v; smem_o; }` in the SharedStorage). `smem_v` is exactly what the producer warps
+  refill for the next work item.
+
+**Everything previously measured now fits one mechanism.** The single-warp gate on the O write is
+load-bearing because it keeps the `sO` read window short; parallelising it across all
+`NUM_MMA_THREADS` widened that window and took the failure rate from 1/10 to **8/10**. One warp
+makes the window small enough that the race lands ~1 in 12.
+
+**And this is where `tma_store_wait` belongs** -- the goal names it, and `store_tail()` in our
+epilogue is `{ // tma_store_wait<0>(); }`, i.e. **commented out**. 0.7's `store()` writes O by TMA
+and relies on that wait to guarantee the store has drained before `sO`/`smem_v` is reused. Our
+`store_partial` writes with plain vectorised stores and has **no completion handshake at all**, so
+nothing orders the producer's next V load against the consumer's `sO` read.
+
+**The fix (not yet implemented):** give `store_partial` a store-completion handshake before the
+producer may refill `smem_v` -- either a named-barrier arrival after the global write that the
+producer waits on, or route the partial O write through TMA and restore `tma_store_wait<0>()`. The
+second is closer to 0.7 and is the same primitive B2c needs for cross-role backfill, so it is
+likely the right one to build.
 
 #### OPEN -- kernel: TWO MAIN ITEMS (user 2026-10-09)
 

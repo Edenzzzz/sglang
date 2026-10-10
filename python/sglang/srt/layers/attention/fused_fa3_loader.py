@@ -261,6 +261,10 @@ def load_fused_fa3(verbose: bool = False) -> None:
             # until the consumer has finished reading sO for the current work item. Off by
             # default until measured -- a mismatched arrival count here deadlocks the kernel.
             "-DFUSED_O_HANDSHAKE=" + os.environ.get("O_HANDSHAKE", "0"),
+            # Un-alias smem_o from smem_v. Stock unions them, which is safe for one work item per
+            # CTA; our persistent scheduler gives a CTA many, so the producer's next V load can
+            # overwrite the sO the epilogue is still reading. Costs ~32 KB of the ~68 KB headroom.
+            "-DFUSED_SPLIT_SMEM_O=" + os.environ.get("SPLIT_SMEM_O", "0"),
             # Gates write_packed independently of the Q gather, so the multi-item corruption can be
             # attributed to one or the other. Default follows FLASHINFER_FUSED_PACKED_Q.
             *([] if os.environ.get("PACKED_O") is None

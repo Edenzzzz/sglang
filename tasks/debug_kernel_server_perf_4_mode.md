@@ -338,12 +338,24 @@ advantage narrows from 5.4x to ~2.8x at 8 rows and then widens again, but never 
 answer is the same everywhere: **route to FA3**. `MIN_PACKED_QO = 48` has no measured support at
 any point in that space; it costs 1.2x-12x on everything below it.
 
-**[!] This leaves the doc's earlier "Decode-only: FA2 beats FA3 by 1.30x" UNRECONCILED, and it
-should not be quietly dropped.** Three axes now contradict it. Candidate explanations, untested:
-it was measured on the 0.3.1 fork rather than this 0.7 port; or against a different FA3 entry
-point; or at a kv/batch combination outside this sweep. **Whichever it is, one of the two results
-is wrong, and the dispatch rule depends on which** -- so it needs re-running before A3 is wired
-into `split_classes`.
+**[x] RECONCILED (2026-10-10): the old "Decode-only: FA2 beats FA3 by 1.30x" is RETRACTED.**
+Re-ran it at its own configuration -- 18 decode rows, qo=1 -- with correctness gated:
+
+| kv | FA2 ms | FA3 ms | FA3 wins by |
+|---|---|---|---|
+| 16384 | 2.8494 | **0.7760** | 3.67x |
+| 32768 | 5.7746 | **1.5382** | 3.75x |
+| **65537** (the original's kv) | 11.5429 | **3.1540** | **3.66x** |
+
+All arms 0 bad rows. The original's own caveat explains it: **both its arms FAILED numerics**
+(rel 0.047-0.31) and it called the 1.30x "suggestive rather than conclusive". It compared two
+corrupted runs. Retraction recorded in place at that entry, together with the three conclusions
+that rested on it (routing "already correct in both directions"; "no headroom in decode"; the
+19.3% ceiling).
+
+**So A3's rule is now unambiguous across four axes** -- `packed_qo` 4-128, kv 128-65537, rows
+1-128 -- and it is the same everywhere: **route to FA3**. `MIN_PACKED_QO = 48` has no measured
+support at any point and costs 1.2x-12x below it. A3 can now be wired into `split_classes`.
 
 **Where this puts the fused kernel against the real baseline:** FA3 on these shapes is
 **1.29x-2.57x** off `BatchAttention`, against 4.9x on `mixed`. The verify/decode band is the
@@ -12449,7 +12461,30 @@ than with per-step kernel time. The SPLIT arm (running) measures the actual effe
 expectation it is checked against is "small", and if it comes back large that needs
 explaining, not celebrating.
 
-## Decode-only: FA2 beats FA3 by 1.30x, so the routing is already right — 2026-10-07
+## [RETRACTED 2026-10-10] Decode-only: "FA2 beats FA3 by 1.30x, so the routing is already right" — 2026-10-07
+
+> **RETRACTED IN FULL.** Re-measured on the 0.7 port with correctness gated, at this entry's OWN
+> configuration (18 decode rows, qo=1, kv=65537): **FA2 11.5429 ms vs FA3 3.1540 ms -- FA3 is
+> 3.66x FASTER**, both arms 0 bad rows. The same inversion holds at kv=16384 (3.67x) and 32768
+> (3.75x).
+>
+> **Why the original was wrong is stated in its own caveat below:** both arms FAILED numerics
+> (rel err 0.047-0.31), which the entry itself called "suggestive rather than conclusive". It was
+> comparing two corrupted runs.
+>
+> **What this retraction takes with it** -- these conclusions rested on it and are also withdrawn:
+> - *"the split's existing routing -- appends to FA3, decode to FA2 -- is already the correct
+>   assignment in both directions"*. It is not. Decode belongs on FA3 too, by 3.7x.
+> - *"There is no headroom to recover by moving decode to FA3"*. There is: 3.7x on decode rows.
+> - *"leaves the 19.3% ceiling standing"*. That ceiling was computed assuming decode had no
+>   attention headroom; it needs recomputing.
+> - the explanation *"FA2 wins q=1 (its 16-wide q tile wastes far less than FA3's 128-wide one on
+>   a 7-row packed decode)"* is a plausible story that the measurement does not support -- FA3
+>   wins q=1 at every kv and batch size tested.
+>
+> Original text preserved below for the record.
+
+
 
 The measurement that locates the remaining attention headroom, since decode is effectively the
 whole cost of the mixed batch (its FA2 half is 15 394 of 15 396 us). 18 decode rows,

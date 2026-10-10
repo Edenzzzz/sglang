@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.85.0 — tile trace: correct for the item sampled, but aimed wrong and predicted wrong (2026-10-10)
+
+```
+[tile] work=0 kv_tile_idx=1 parity=0 stage=0 kv_len=256
+[tile] work=0 kv_tile_idx=0 parity=1 stage=1 kv_len=256   (repeated for V)
+```
+
+**My pre-stated expectation was wrong.** I predicted tiles 15…0 from kv=2048, but split-KV chunks
+each item to `kv_len=256`, so the correct sequence is **1,0** — exactly what the kernel did, with
+stage and parity rotating properly. I wrote the expectation from the fixture's total kv length rather
+than the item's, forgetting the chunking this doc itself records. Pre-registering an expectation only
+helps if it is derived from the right quantity.
+
+**And the test was aimed wrong:** it traced `blockIdx.x == 0`, while the single bad row of 264 at
+dec=8 may belong to any of 132 blocks. So this is **inconclusive, not exculpatory** — it neither
+confirms nor refutes the deterministic wrong-tile effect.
+
+**Next, fixing the aiming first:** correlate a bad output row back to its owning block and work item
+(`BADROWS` from the harness; `work_indptr`, `q_start`, `o_indices` from the plan), then trace only
+that `(block, work_idx)`. Without that step a device trace samples 1/132 of the grid and hopes, which
+is what just happened.
+
 ## v0.84.0 — case 3: deterministic gather sequence forces a TWO-EFFECT model (2026-10-10)
 
 Pre-registered experiment, dec=128, `STAGES=2`, two repeats of one seed:

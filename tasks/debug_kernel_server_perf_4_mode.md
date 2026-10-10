@@ -819,6 +819,39 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[~] TILE-SEQUENCE TRACE: CORRECT for the item sampled, but the test was AIMED WRONG and my
+stated expectation was WRONG (2026-10-10). Inconclusive, not exculpatory.**
+
+```
+[tile] work=0 kv_tile_idx=1 parity=0 stage=0 kv_len=256
+[tile] work=0 kv_tile_idx=0 parity=1 stage=1 kv_len=256     (then the same pair again for V)
+24 [tile] lines across block 0's items; verdict 1/264 at dec=8
+```
+
+**My pre-stated expectation was wrong.** I wrote "kv=2048, CTA_KV=128 => each item gathers tiles
+15,14,...,0". But split-KV chunks each item to **`kv_len=256`**, so the correct sequence is tiles
+**1,0** -- exactly what the kernel did, with `stage` and `parity` alternating properly. I forgot the
+chunking that this very doc records, and wrote the expectation from the fixture's total kv length
+instead of the item's. Stating expectations in advance is only worth anything if they are derived
+from the right quantity.
+
+**And the test was aimed at the wrong place.** I traced `blockIdx.x == 0`, but at dec=8 there is
+exactly **1 bad row of 264**, which may belong to any of the 132 blocks. So "block 0's sequence is
+correct" says nothing about the block that actually corrupts. This neither confirms nor refutes
+Effect 1; it is a null measurement with a wrongly-chosen target, and it is recorded as such rather
+than as evidence that the gather is sound.
+
+**What the trace DID establish, modestly:** for an unsplit-looking 2-tile chunk the sequence, stage
+rotation and parity rotation are all correct, which is consistent with the `[kvinv]` and signature
+results and narrows nothing further.
+
+**NEXT, and the aiming problem is the thing to fix first:** correlate a BAD OUTPUT ROW back to the
+block and work item that produced it, then trace that item. The harness already prints `BADROWS`
+indices; the plan's `work_indptr`, `q_start` and `o_indices` map an output row to its owning item,
+and `work_indptr` maps that item to its block. Trace only that `(block, work_idx)` pair. Without
+this correlation step, any device-side trace is sampling 1/132 of the grid and hoping -- which is
+what just happened.
+
 **[x] CASE 3: THE GATHER SEQUENCE IS DETERMINISTIC AND WARP-UNIFORM -- which forces a TWO-EFFECT
 model and dissolves the tension I had been carrying (2026-10-10). Eighteenth elimination.**
 

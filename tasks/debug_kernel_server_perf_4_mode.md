@@ -1608,6 +1608,25 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       That distinguishes "the partials are wrong" from "the combination is wrong", which is the
       one split this investigation has not yet made. State the expected values before dumping.
 
+      **CTA_KV=64 first probe (2026-10-10): the KV gather is NOT the cause.** At CTA_KV=64 the
+      derivation is `NUM_KV_PER_ITER=8, KV_STRIDE=8, NUM_GROUPS=8, THREADS_PER_GROUP=16,
+      NUM_ITERS_PER_GROUP=8, size(dst)=8`, and the shuffle invariant
+      `kv_offset % KV_STRIDE == group_id` **holds** (`bad=0`, 8 pairs checked, positive
+      confirmation line present). The `t < NUM_ITERS_PER_GROUP` predicate leaves threads 8..15 of
+      each group with `my_kv_offset = 0`, but the gather only ever shuffles from
+      `g*16 + kv_offset/8` with `kv_offset/8` in [0,8) -- i.e. exactly the valid threads -- so
+      coverage of all 64 rows is intact.
+
+      The NaN is **3.7% of elements** (16896 of 458752) on `fa3_1chunk` with `FUSED_NOSPLIT=1`, so
+      it is the **direct path**, not the merge, and a localised subset rather than wholesale
+      garbage. Leading hypothesis, untested: a row whose entire kv range is masked within the
+      tiles actually visited gets `row_sum = 0` and NaNs on normalisation. With `CTA_Q=128` packed
+      = 32 tokens and `CTA_KV=64`, `n_masking_steps = ceil_div(CTA_Q, CTA_KV) = 2`, and
+      `get_num_kv_tiles` is computed from the tile's LAST row -- so rows earlier in the same tile
+      have smaller causal bounds and may see no valid key in the tiles visited. That interaction
+      does not arise at `CTA_KV=128` (one masking step), which is why this is new at 64.
+      Next: print per-row `row_sum`/`num_kv_tiles` for the NaN rows and check for a zero sum.
+
       **[~] Second pipeline stage still UNREACHABLE by both routes (2026-10-10). The leading perf
       hypothesis remains untested, and CTA_KV=64 is a new correctness bug.**
 

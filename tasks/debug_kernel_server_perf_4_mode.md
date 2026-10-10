@@ -747,14 +747,36 @@ epilogue and `barrier_Q` are all stock; the scheduler is ours. So the mean-5.6-b
 attributable to it, and the comparison that settles it is **our scheduler vs 0.7's own persistent
 scheduler on the same rows**.
 
-**Concrete next step:** our scheduler differs from stock's in what each `WorkTileInfo` carries
-(15 fields vs stock's smaller set, including the `causal_kv_len` and derived `group_id` we added)
-and in deriving `q_tile_idx = q_start[work_idx] / cta_tile_q` where stock reads
-`qo_tile_indices[work_idx]` directly. Diff the two `get_next_work` implementations field by field,
-and in particular check that **every** field stock carries forward from `current_work` is carried
-forward by ours -- a field that stock propagates and ours recomputes (or vice versa) would corrupt
-exactly one item in a multi-item CTA, which is the observed signature (a handful of bad rows out of
-384, not wholesale garbage).
+**[!] DIFFED, and the schedulers are EQUIVALENT -- the baseline race is not scheduler advance
+logic.** Stock `BatchPrefillPersistentTileScheduler` vs our `UnifiedWgmmaTileScheduler`:
+
+| | stock | ours |
+|---|---|---|
+| advance | `work_idx = ptr_begin + counter + 1` | identical |
+| `is_valid` | `counter + ptr_begin < ptr_end` | identical |
+| per-item reads | `qo_tile_indices / qo_indptr / kv_indptr / qo_lens / kv_lens [work_idx]` | same data; `q_tile_idx` derived as `q_start / cta_tile_q` |
+| `counter` propagation | `current_work.counter + 1` | identical |
+
+**And a detail in STOCK worth recording: its terminal returns have the SAME positional shortfall I
+"fixed" in ours** -- `{-1,-1,-1,-1,-1,-1,-1, 0, ptr_begin, ptr_end}` is **10 values for 11 fields**,
+so `counter` receives `ptr_begin`, `ptr_begin` receives `ptr_end`, and `ptr_end` defaults to 0. It
+is **benign** because `is_valid` still evaluates false (`ptr_begin + ptr_end < 0`). So that
+construct was never the bug in either scheduler, and **my earlier fix of ours was tidiness, not a
+correctness change** -- worth stating plainly because I recorded it at the time as a latent bug.
+
+**So what remains different in the "stock gather + stock store" arm is the plan DATA**, not the
+scheduler logic: our `FusedPlanInfo` rather than 0.7's `PrefillSM90Plan` -- the `work_indptr`
+partitioning, the per-item arrays, and `len_kv_chunk` / `partial_indptr`, which stock has no
+equivalent of.
+
+**Next, the cheapest remaining discriminator.** Stock also hands each CTA a contiguous
+`[ptr_begin, ptr_end)` run, so partitioning shape is shared. The one thing only OUR plan does is
+put several items of the **same `(batch, q_start)` group** -- differing only in kv chunk -- into one
+CTA's run, i.e. consecutive items that write the **same output rows**. If a CTA's run ever contains
+two items with identical `q_start` and `batch_idx`, that CTA writes one output row twice from two
+work items, and when `num_kv_chunks == 1` (no merge, direct write) the second write races the
+first. The `[sched]` probe already prints `q_start` and `batch_idx` per item, so this is one grep
+away.
 
 **[SUPERSEDED] [x] FOUR-CORNER BISECT (2026-10-10), and it CORRECTS my "stock paths are CLEAN" claim.** Split
 `write_packed`'s gate (`FUSED_PACKED_O`) from the Q gather's so the two could be mixed. G=1,

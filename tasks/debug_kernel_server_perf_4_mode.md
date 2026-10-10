@@ -804,6 +804,37 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[!] `barrier_O` CANNOT CARRY THE Q INVARIANT -- reusing it DEADLOCKS, and working out why
+settled what that barrier actually means (2026-10-10).**
+
+The first fence implementation moved `barrier_O`'s arrival to the end of the consumer's mma and
+hoisted its wait above the Q load. It **compiled and then hung**: GPU pinned at **100% for 17
+minutes** on a kernel that runs in microseconds (same signature as the earlier `FA3_MBARRIER`
+hang). Killed rather than left to burn the 30-minute cap.
+
+**Why, and this is the useful part.** The consumer's sequence is `mma(0), epi(0), mma(1),
+epi(1), ...`, so an arrival at the START of `mma(N)` carries the meaning *"`epi(N-1)` is done"* --
+which is exactly what licenses the producer to refill `smem_v`, the buffer `sO` **aliases**. So:
+
+* **`barrier_O` is an `sO`/`smem_v` handshake**, not a Q handshake. It never protected `smem_q` --
+  the Q load sits above it.
+* Its arrival and wait are paired with an **offset of one work item**, and the arrival is guarded
+  by `work_idx != 0`. Relocating the arrival left one wait with no matching arrival, which is the
+  deadlock.
+* Moving it would also have made things WORSE on the output side: the new arrival site sits
+  **before** `epi(N-1)`, so the producer could refill `smem_v` while the epilogue was still
+  reading `sO`. One barrier cannot carry both invariants.
+
+That also explains why un-aliasing `sO` measured as a **separate** 45% contributor rather than a
+duplicate of this one: two buffers, two invariants, one barrier.
+
+**Reimplemented with a DEDICATED `barrier_Qdone`**, `barrier_O` left byte-identical to stock
+(verified by diff on both files). One arrival per item, unconditional, from the mma warpgroup's
+last warp after its final `sQ` read; the producer waits `(work_idx - 1) % 2` before refilling
+`smem_q`, guarded at item 0 -- the same parity convention `barrier_Q` uses one line below, where
+the k-th completion is awaited with parity `k % 2`. Arms now run under a short timeout so a
+deadlock reports in minutes.
+
 **[x] Q-REUSE FENCE A/B -- CONTROL ARM IN, FENCE ARM RETRACTED AND RE-RUNNING (2026-10-10).**
 
 Control (`FENCE=0`, freshly built in its own extension dir, macro verified at nvcc):

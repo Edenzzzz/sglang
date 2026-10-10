@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.69.0 — barrier_O cannot carry the Q invariant; dedicated barrier_Qdone (2026-10-10)
+
+Reusing `barrier_O` for the cross-item Q fence **deadlocked**: GPU at 100% for 17 minutes on a
+microsecond kernel. Diagnosing it settled what that barrier means. The consumer runs
+`mma(0), epi(0), mma(1), epi(1), …`, so an arrival at the *start* of `mma(N)` means "epi(N−1) is
+done" — which is what licenses the producer to refill `smem_v`, the buffer `sO` aliases. Therefore
+`barrier_O` is an **`sO`/`smem_v` handshake**, never a Q handshake (the Q load sits above it); its
+arrival/wait are paired with a one-item offset and the arrival is guarded by `work_idx != 0`, so
+relocating it left a wait with no matching arrival. Moving it would also have *weakened* the output
+side, placing the arrival before `epi(N−1)`. One barrier cannot carry two invariants — which is also
+why un-aliasing `sO` measured as a separate 45% contributor rather than a duplicate.
+
+Reimplemented with a dedicated `barrier_Qdone` (one arrival per item, unconditional, after the
+consumer's last `sQ` read; producer waits `(work_idx-1)%2` before refilling `smem_q`, guarded at
+item 0). `barrier_O` is left byte-identical to stock, verified by diff. Also added `FUSED_FA2_W*`
+single-sourcing in the loader so the compile-time runner widths cannot drift from the planner's
+`FUSED_FA2_TILES` — a silent mis-route otherwise — with host-side validation mirroring the device
+warp-layout constraint.
+
 ## v0.68.0 — fence control arm in; fence arm retracted as a build artifact; A2 unblocked (2026-10-10)
 
 **Control (`FENCE=0`, fresh build dir, macro verified at nvcc):** dec=8 fails 3/10; dec=128 fails

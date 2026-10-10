@@ -803,6 +803,34 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[~] UN-ALIASED `smem_o` FROM `smem_v` (`FUSED_SPLIT_SMEM_O=1`): a real 45% reduction, still not
+a fix.** Stock unions them to save shared memory, which is safe for one work item per CTA. Our
+persistent scheduler gives a CTA many, so the producer's V load for item N+1 can overwrite the `sO`
+the epilogue is still reading for item N. Splitting them removes that hazard outright rather than
+ordering around it:
+
+| arm | FINAL smem | result |
+|---|---|---|
+| `SPLIT_SMEM_O=0` (default), dec=32 | 163920 | PASS 0/288 |
+| `SPLIT_SMEM_O=1`, dec=32 | **196688** (+32768 = exactly `CTA_Q*HEAD_DIM_VO*2`) | PASS 0/288 |
+| `SPLIT_SMEM_O=1`, dec=128, 5 runs | — | 73, 60, **NON-FINITE**, 55, 90 bad rows |
+
+**Mean bad rows at dec=128: ~128 (aliased) -> ~70 (split), a ~45% reduction.** So the aliasing was
+a genuine contributor and the hazard class is confirmed. It costs exactly the predicted 32 KB and
+launches with headroom (196688 of 232448). **But it is not the whole cause** -- which is what the
+four-corner bisect already implied (>=3 contributors), and one run still went non-finite.
+
+**What remains, and it is now a short list.** `smem_q` is its OWN buffer (not aliased), but it is
+still **refilled per work item**, so the producer's Q gather for item N+1 can overwrite the `sQ`
+the consumer is still using for item N's QK MMA. `kQueryEmpty` exists to prevent exactly that and
+is byte-identical to stock -- but stock's own multi-item path is the `BatchPrefillPersistentTileScheduler`
+configuration, and **it has not been established that any shipped flashinfer wrapper actually
+exercises it**. If stock's persistent path is itself untested upstream, then `kQueryEmpty`'s
+correctness under heavy reuse is an open question rather than a settled one.
+
+**Left OFF by default**, same reasoning as the handshake: a flag that removes 45% of a correctness
+bug makes the remainder rarer and harder to catch. It goes on when the set is complete.
+
 **[x] SEPARATION DONE (2026-10-10): REQUEST COUNT IS NOT REQUIRED. The defect tracks WORK-ITEM
 COUNT.** Two harness fixes were needed first:
 1. **`ORACLE=ba`** -- use the validated `BatchAttention` as the correctness oracle where the fp32

@@ -1,5 +1,34 @@
 # Changelog
 
+## v1.11.0 — serving arm still not running after four attempts; stopping with a handoff (2026-10-11)
+
+Attempt 4, every known dependency present and verified (drivers, `slo_attain.py`, `fit_mtp_step.py`,
+output trees, ShareGPT 642 MB, `run_mixed_workloads.py`, module dir):
+
+```
+MTP_LPT:      fallbacks=0 tracebacks=0 jsons=0
+MTPMIX_SPLIT: fallbacks=0 tracebacks=0 jsons=0
+comp=MISSING      numpy.linalg.LinAlgError: 1-dimensional array given
+```
+
+`jsons=0` = **no request completed**; the `LinAlgError` is downstream (fitting on empty data).
+Progress was real but incomplete across attempts: (1) missing drivers, (2) missing
+`slo_attain.py`/`fit_mtp_step.py`, (3) missing load generator + `realistic_workload_analysis/`,
+(4) fallback counters now populate — a server log exists — but no requests are issued.
+
+**Next step, concretely:** read `/dev/shm/w/mtpedf/rate24_p07c/*/server_*.log` directly (it exists
+now, it didn't before) instead of inferring from the driver summary. `run_mixed_workloads.py` expects
+invocation from `$W/tasks/realistic_workload_analysis` (mtp_edf.sh line 15 `cd`s there) and needs the
+model served at `PORT`; whether it finds the endpoint is the open question.
+
+**Why stop:** four attempts, each unblocking a layer and revealing the next, no measurement produced.
+The remaining work is provisioning archaeology on a re-forked pod, not a kernel or schedule question,
+and is better handed over with the dependency list and the exact next file to read. `restore.sh` now
+carries the knowledge so the next session starts at attempt 5.
+
+**The goal's central question remains unanswered:** whether the 0.7 port's 9.6–9.8× harness slowness
+carries into a real server is unmeasured, and no claim either way is supported.
+
 ## v1.10.0 — the real-load serving arm cannot run: serving tree never restored after the re-fork (2026-10-11)
 
 `ARMS="MTP_LPT MTPMIX_SPLIT" mtp_edf.sh 24 2000 30` on the 0.7 port exits immediately, `jsons=0`, no

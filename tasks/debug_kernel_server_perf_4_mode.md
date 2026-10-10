@@ -870,6 +870,41 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[ ] SERVING ARM STILL NOT RUNNING AFTER FOUR ATTEMPTS -- `jsons=0` persists. Stopping here with
+an accurate handoff rather than a fifth cycle (2026-10-11).**
+
+Attempt 4, with every known dependency present and verified on the pod (drivers, `slo_attain.py`,
+`fit_mtp_step.py`, output trees, ShareGPT 642 MB, `run_mixed_workloads.py`, its module dir):
+
+```
+MTP_LPT:      fallbacks=0 tracebacks=0 jsons=0
+MTPMIX_SPLIT: fallbacks=0 tracebacks=0 jsons=0
+comp=MISSING
+numpy.linalg.LinAlgError: 1-dimensional array given. Array must be two-dimensional
+```
+
+`jsons=0` means **no request ever completed**, so no per-request JSON exists; the `LinAlgError` is
+downstream, `fit_mtp_step.py` fitting on empty data. Progress across the four attempts was real but
+incomplete: attempt 1 died on missing drivers, 2 on missing `slo_attain.py`/`fit_mtp_step.py`, 3 on
+the missing load generator and `realistic_workload_analysis/`, 4 gets further (fallback/traceback
+counters now populate, so a server log exists) but still issues no requests.
+
+**What is left to diagnose, concretely:** the server either fails to come up or comes up and receives
+nothing. The next step is to read `/dev/shm/w/mtpedf/rate24_p07c/*/server_*.log` directly -- it now
+exists, which it did not in earlier attempts -- rather than inferring from the driver's summary
+line. `run_mixed_workloads.py` also expects to be invoked from
+`$W/tasks/realistic_workload_analysis` (mtp_edf.sh does `cd` there at line 15), and it needs the
+model served at `PORT`; whether it is finding the endpoint is the open question.
+
+**Why I am stopping rather than continuing:** four attempts, each unblocking one layer and revealing
+the next, with no measurement produced. The remaining work is provisioning archaeology on a
+re-forked pod, not a question about the kernel or the schedule, and it is better handed over with
+the dependency list and the exact next file to read than continued blind. Everything learned is
+recorded above and in `restore.sh`, so the next session starts from attempt 5 rather than attempt 1.
+
+**The goal's central question therefore remains unanswered:** whether the 0.7 port's 9.6-9.8x
+harness slowness carries into a real server. It is unmeasured, and no claim either way is supported.
+
 **[~] SERVING-TREE RESTORE: the full dependency list, discovered one failure at a time
 (2026-10-11). ShareGPT now fetched (642 MB); two more pieces found and pushed.**
 

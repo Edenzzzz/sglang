@@ -870,6 +870,49 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[x][!!!] THE TWO-ROLE FUSED PATH IS CLEAN -- THE DEFECT IS CONFINED TO A DIAGNOSTIC
+CONFIGURATION I INTRODUCED (2026-10-11). This reframes the entire investigation.**
+
+```
+[fused plan] items=0/0/896/896  partial_rows=16384
+pers_plan: 59 entries, num_merge_rows=1024, num_fa3_clusters=64
+```
+
+| configuration | roles live | fails |
+|---|---|---|
+| `MIX_ALL_FA3=1 SM_SPLIT=all` | FA3 only -- **a DIAGNOSTIC mode** | **6/6**, 68-116 bad rows |
+| `MIX_ALL_FA3=0 SM_SPLIT=64` | **FA2 + FA3, backfill LIVE** | **0/6 -- ALL CLEAN** |
+
+**`MIX_ALL_FA3=1` is a harness knob I set to isolate the FA3 role. It is not the production path.**
+The server routes by the plan's mask, which produces the two-role split -- and that path passes
+**6/6** at `DEC_ROWS=128` with cross-role backfill active (`num_fa3_clusters=64`, tasks 2 and 3 both
+populated).
+
+**So the blocking correctness defect does not block the production path.** Every arm in this doc
+that fails 6/6 or 10/10 at dec=128 was run under `MIX_ALL_FA3=1`. I spent this session narrowing a
+defect in a configuration the serving path never uses.
+
+**It also retroactively explains a result I had treated as an outlier:** the earlier `mixed`-fixture
+measurement of *"alias + 2 stages: 0/35 failures"* was a two-role arm. The two-role path has been
+clean all along; the all-FA3 diagnostic is what is broken.
+
+**What this does NOT mean, stated carefully so the next step is not overclaimed:**
+
+* The all-FA3 defect is **real** and still unexplained (27 candidates examined). It matters for any
+  future configuration that routes everything to FA3 -- including the "FA3-only colocation"
+  restatement in `c98fe0f0d`, which would run exactly this path. That is a genuine finding against
+  that alternative, not a free pass for it.
+* This is **one fixture, one split, 6 seeds**. It needs the `drivers/srv_correctness.py` gate and
+  more `SM_SPLIT` values before "K1 is correct on the production path" is a claim rather than an
+  indication.
+* The two confirmed contributors (`sO`/`smem_v` ~1/3, unfenced `smem_q` ~1/3) were measured under
+  the diagnostic mode, so their relevance to the production path is now **unknown**.
+
+**Immediate next step, and it is the one the goal has been asking for:** run
+`drivers/srv_correctness.py` on the two-role path. If the kernel is correct where it matters, the
+serving arms (S), B2c and B3 are **unblocked** -- and the ordered list can move past K1 for the
+first time.
+
 **[!] BACKFILL ARM WAS VACUOUS -- the knob could not have done anything in that configuration
 (2026-10-10). NOT a refutation.**
 

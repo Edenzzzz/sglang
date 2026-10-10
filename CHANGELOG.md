@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.00.0 — THE TWO-ROLE FUSED PATH IS CLEAN; the defect is confined to a diagnostic mode (2026-10-11)
+
+| configuration | roles live | fails |
+|---|---|---|
+| `MIX_ALL_FA3=1 SM_SPLIT=all` | FA3 only — **diagnostic** | **6/6**, 68–116 bad rows |
+| `MIX_ALL_FA3=0 SM_SPLIT=64` | **FA2 + FA3, backfill live** | **0/6 — all clean** |
+
+`MIX_ALL_FA3=1` is a harness knob I introduced to isolate the FA3 role; it is **not** the production
+path. The server routes by the plan's mask → the two-role split, which passes **6/6** at
+`DEC_ROWS=128` with cross-role backfill active (`num_fa3_clusters=64`, tasks 2 and 3 populated).
+
+**So the blocking defect does not block the production path.** Every 6/6 and 10/10 failure in this doc
+was run under `MIX_ALL_FA3=1`. It also explains the earlier `mixed`-fixture "alias + 2 stages: 0/35
+failures" I had treated as an outlier — the two-role path has been clean throughout.
+
+**Not overclaiming:** (1) the all-FA3 defect is real and unexplained after 27 candidates, and it
+matters for the **FA3-only colocation** restatement in `c98fe0f0d`, which would run exactly that path
+— a genuine finding *against* that alternative. (2) This is one fixture, one split, 6 seeds. (3) The
+two confirmed contributors were measured under the diagnostic mode, so their production relevance is
+now unknown.
+
+Next: run `drivers/srv_correctness.py` on the two-role path. If the kernel is correct where it
+matters, S, B2c and B3 are **unblocked** and the ordered list moves past K1 for the first time.
+
 ## v0.99.0 — the backfill arm was VACUOUS, not a refutation (2026-10-10)
 
 | arm | fails | bad rows |

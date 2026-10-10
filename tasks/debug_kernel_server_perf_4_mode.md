@@ -1566,6 +1566,26 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       `fa3_split` at 16 chunks). Note one row of 32 passes, which is what a weighting error would
       leave untouched where a single chunk dominates.
 
+      **Part 2, two more suspects REFUTED by reading both sides (2026-10-10):**
+      - **Buffer mismatch: refuted.** `P.partial_o` / `P.partial_lse` (what the epilogue writes
+        through) and the reduction's arguments both resolve to the same `pers_fb` offsets
+        (`pp.partial_o_offset`, `pp.partial_lse_offset`).
+      - **LSE scale: refuted.** `state_t::merge` combines with `math::ptx_exp2`, i.e. flashinfer's
+        state is in **log2** space, and FA3's `OnlineSoftmax` with `WITH_SCALE` also produces
+        log2-scale LSE. The two agree, so this is not a base-e/base-2 mismatch. Both `store()` and
+        `store_partial()` write `lse(mi)` with no conversion, so they cannot differ from each
+        other either.
+
+      **Next suspect, with the reason stated: NORMALIZATION ordering around `store_partial`.** The
+      merge calls `st.merge(v, s, /*other_d=*/1)` -- `other_d = 1` means each partial's O is
+      assumed **already normalized** (divided by its own row sum), with `s` carrying the log2 sum.
+      So `store_partial` must write a *finalized* `tOrO`. If `attention_updater.finalize(tOrO)` is
+      not called before `store_partial` on the split path -- or is called twice -- every merged row
+      is off by a row-sum factor, which is exactly the residual's shape: all rows present, values
+      off by O(1), and the one row of 32 that passes being where a single chunk dominates so the
+      factor is ~1. Check the call sequence in `prefill_sm90.cuh` around the `store_partial` site
+      against the `store()` site.
+
       **[ ] Part 2, the remaining defect: the merged values.** All rows are now written and
       `fa2` is unaffected, so this is the reduction's arithmetic or the partials it reads, not
       addressing. Where to look next, in order:

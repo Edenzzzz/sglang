@@ -51,12 +51,32 @@ never timed `MODE=fa2` fused. Sweeping the split:
 |---|---|---|
 | 1 / 4 / 16 / 64 | 1.103 / 1.104 / 1.101 / 1.145 | flat |
 | 128 | **13.34** | 12x cliff -- FA2 starved to 4 SMs |
+| unfused | **0.055** | |
 
-So two separate problems: a **12x cliff** when `sm_split` leaves FA2 almost no SMs (the mirror of
-the `sm_split=16` misallocation found earlier on `mixed`), and a **20x floor** even at the best
-split (1.10 vs 0.055 ms). **This matters more than it looks: decode-only steps are FA2-only**, so a
-20x-slow FA2 path would dominate any end-to-end serving number -- and that is exactly where the
-earlier in-server -5% to -8.4% came from. Investigate before any serving A/B.
+**Why this matters more than it looks: decode-only steps are FA2-only.** A 20x-slow FA2 path would
+dominate any end-to-end serving number, and it is a strong candidate for the earlier in-server
+**-5% to -8.4%** that was never explained. It must be understood before any serving A/B.
+
+**Occupancy tested, and it is NOT the main cause.** One grid means every block requests FA3's smem
+footprint even when it only ever runs FA2 work:
+
+| config | smem | CTAs/SM | `fa2` fused ms |
+|---|---|---|---|
+| `STAGES=2 ALIAS=1` (default) | 163920 | 1 | 1.0959 |
+| `STAGES=1 ALIAS=1` | 98352 | 2 | **0.8538** |
+
+Halving the request and doubling occupancy bought **1.28x, not 2x**. So the shared-memory footprint
+accounts for roughly 22% and **~15x is still unexplained**. Remaining candidates, untested: the
+`FusedWarpgroupTraits` overrides (`NAMED_BARRIER_SYNC`, `FUSED_GRID`) versus flashinfer's own FA2
+launch; `kFa2Warps = 8` (`FLASHINFER_FA2_QSPLIT`) changing the warp shape; and the three
+task-class warpgroups idling when a class has no items (this fixture gives task1 zero items). Next
+step is a profile of the FA2-only arm, not another guess.
+
+**[!] And it exposes a real TENSION to record rather than resolve silently:** `STAGES=2` is
+required for correctness (it is what closes the race) but costs **28%** on FA2-only work
+(1.0959 vs 0.8538). Both cannot be had with the current single-smem-size grid. Options, unranked
+until measured: a separate smem size per role (needs two kernels or a dynamic request), or finding
+the real 15x so the 28% stops mattering.
 
 ### THE TWO MAIN KERNEL ITEMS (user, 2026-10-09) — both NOT STARTED
 

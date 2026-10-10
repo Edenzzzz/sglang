@@ -804,6 +804,44 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[x] THE BASELINE DEFECT IS A KV-ADDRESSING ERROR -- and my own fix introduces a SECOND,
+different one (2026-10-10).**
+
+| arm, dec=128, `KVCONST=1` (every kv page identical in VALUE) | fails | bad rows of 384 |
+|---|---|---|
+| `FENCE=0 SPLIT=0` baseline | **0/8** | **0, 0, 0, 0, 0, 0, 0, 0 -- PASS** |
+| `FENCE=1 SPLIT=1` | 4/8 + 4 cold-build | 4, 12, 12, 12 (and 12, 16, 12 on re-run) |
+
+**[!] PREMISE CORRECTION, which changes what this experiment means.** I built it to test K/V
+pipeline parity, assuming `KVCONST=1` equalises kv **lengths**. It does not: it sets
+`k_cache[:] = k_cache[0:1]`, making every page identical in **value** while lengths are untouched.
+So **pipeline parity was never tested and remains UNTESTED** -- the "eleventh refutation" I claimed
+is withdrawn. What the knob actually isolates is *addressing*: with identical pages a kernel that
+reads the WRONG kv row still gets the RIGHT values.
+
+Read correctly, the result is sharper than the one I was after:
+
+1. **The baseline corruption IS a KV-addressing error.** Baseline passes 8/8 with identical pages
+   and fails 10/10 with distinct ones, so CTAs are reading the **wrong kv rows** -- which is the
+   stale-K-tile signature, and the first positive identification of the defect's *class* rather
+   than another elimination.
+2. **`FENCE=1 SPLIT=1` introduces a separate error that is NOT kv addressing.** It fails with
+   identical pages, where addressing errors are invisible by construction, in a configuration
+   where **stock is clean**. So the fence + un-aliasing is a **REGRESSION**, not just an
+   incomplete fix. The earlier framing "a third real contributor" stands only for the bad-row
+   count at dec=128 and must be qualified by this: the patch breaks a case the unmodified kernel
+   computes correctly. It must not ship as-is.
+
+**[x] NOVERDICT EXPLAINED, after two wrong guesses and one wrongly-dismissed right one.** Warm
+runs take **9-10 s** and the exact seeds that returned NOVERDICT return verdicts 3/3 once the
+extension dir is built. The NOVERDICTs sit on the **leading** runs of a *fresh* dir
+(`tq4_11` warm from the smoke test: 1/10; `tq4_01` fresh: 3/10; `tpp_11` fresh: 4/8, seeds 1-4
+consecutively). So they are **cold-build timeouts**: the TU's full build exceeds the 600 s cap and
+ninja makes incremental progress across killed attempts. I had guessed this and then dismissed it
+using a **122 s** figure that was one ninja EDGE, not the whole build. Consequence for reading
+every arm above: counts from a cold dir are "of the runs that completed", and the per-arm NOVERDICT
+*rate* carries no information about the kernel.
+
 **[!] SPLIT-KV PARTIAL SLAB REFUTED as the residual (2026-10-10) -- the tenth eliminated.**
 
 After the Q fence and the `sO` un-aliasing, 48 bad rows of 384 remained at dec=128. Both fixes are

@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.73.0 — the baseline defect is KV ADDRESSING; the fence is a regression (2026-10-10)
+
+| arm, dec=128, `KVCONST=1` (identical kv page **values**) | fails | bad rows of 384 |
+|---|---|---|
+| `FENCE=0 SPLIT=0` baseline | **0/8** | all zero — **PASS** |
+| `FENCE=1 SPLIT=1` | 4/8 + 4 cold-build | 4, 12, 12, 12 (12, 16, 12 on re-run) |
+
+**Premise correction:** I built this to test K/V pipeline parity, assuming `KVCONST=1` equalised kv
+*lengths*. It does not — it sets `k_cache[:] = k_cache[0:1]`, identical page *values*, lengths
+untouched. **Pipeline parity remains untested**; the "eleventh refutation" is withdrawn.
+
+Read correctly it is sharper. (1) **The baseline defect is a KV-addressing error**: clean 8/8 with
+identical pages, 10/10 failures with distinct ones ⇒ CTAs read the *wrong kv rows*, the stale-K-tile
+signature — the first positive identification of the defect's class rather than another elimination.
+(2) **`FENCE=1 SPLIT=1` adds a different error**: it fails where addressing errors are invisible by
+construction and where stock is clean, so it is a **regression**, not merely an incomplete fix. "A
+third real contributor" holds only for the dec=128 bad-row count and must carry this caveat; it must
+not ship.
+
+**NOVERDICT explained** (two wrong guesses, one wrongly dismissed): warm runs take 9–10 s and
+previously-NOVERDICT seeds return verdicts 3/3 once built; NOVERDICTs sit on the leading runs of
+*fresh* dirs (warm 1/10, fresh 3/10, fresh 4/8 at seeds 1–4). They are **cold-build timeouts** — the
+full TU build exceeds the 600 s cap and ninja progresses incrementally across kills. I had dismissed
+this using 122 s read from a single ninja *edge* rather than the whole build. So cold-dir counts are
+"of the runs that completed", and per-arm NOVERDICT rates say nothing about the kernel.
+
 ## v0.72.0 — split-KV slab refuted as the residual; pipeline parity is next (2026-10-10)
 
 The 48 remaining bad rows at dec=128 are **not** the split-KV partial slab. Both fixes so far are

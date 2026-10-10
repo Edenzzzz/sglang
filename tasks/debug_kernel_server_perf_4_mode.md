@@ -403,6 +403,43 @@ and relies on that wait to guarantee the store has drained before `sO`/`smem_v` 
 `store_partial` writes with plain vectorised stores and has **no completion handshake at all**, so
 nothing orders the producer's next V load against the consumer's `sO` read.
 
+**[!] CORRECTION (2026-10-10): the "offset 0" fix I proposed LAST TURN WAS ALREADY TRIED, and
+the recorded results about it CONTRADICT EACH OTHER. It must be re-measured, not implemented.**
+
+It already exists as a compile flag -- `FLASHINFER_FUSED_ALIAS_SMEM` makes
+`fused_pers_smem_base()` return 0, otherwise it returns FA3's size rounded to 1 KB. So aliasing
+FA2's storage onto FA3's is a one-flag change that has been in the tree all along, and the comment
+block above it carries **two measured claims that cannot both be true**:
+
+1. *"Now DISJOINT BY DEFAULT, because symmetric mode's FA3 output is wrong nondeterministically
+   (rel err 1.93 / 2.53 / 3.31 across identical runs, one run exact) and only when a CTA drains FA2
+   before entering FA3. A CUTLASS warp-specialised kernel initialises its pipeline mbarriers in
+   shared memory at entry, **before the sm_split branch**, and with a base of 0 the drain's slot and
+   its cursor/merge tail at ~69648 land inside FA3's 98352-byte SharedStorage."*
+2. *"MEASURED, and it does not work: with FA3 at one stage so that it fits, **the disjoint layout
+   fails 2 configurations on every run (0 clean in 10), while the same 1-stage FA3 with shared
+   memory REUSED is clean 14 times in 14**."*
+
+(1) says aliasing races; (2) says aliasing is clean 14/14 and *disjoint* is the broken one. They
+are from different sittings and were never reconciled.
+
+**And (1) names a real obstacle to my proposal that my reasoning missed.** I argued "a block is
+one role, never both, so the layouts can alias". That is false for the mbarrier initialisation:
+CUTLASS initialises FA3's pipeline mbarriers at **kernel entry, before** the `sm_split` branch, so
+**every** block -- FA2-role included -- writes into FA3's region at offset 0 regardless of the role
+it goes on to take. Aliasing therefore is not obviously safe, and my "with numbers" confidence last
+turn was unwarranted.
+
+**So the next step is a measurement, not an implementation:** build with
+`FLASHINFER_FUSED_ALIAS_SMEM` at `STAGES=2` and run `mixed` @ `SM_SPLIT=128` x 35 against the
+current disjoint `STAGES=1` baseline (1/10). That settles (1) vs (2) on today's tree, where both
+were recorded before several of today's fixes landed. Only then is it worth changing the layout.
+
+**Method note, since this is the third time today:** I proposed a fix whose prior attempt was
+already recorded in the file I was editing. Grepping for the mechanism (`fused_pers_smem_base`,
+`ALIAS_SMEM`) before designing the change would have surfaced it immediately -- cheaper than
+designing it and cheaper than implementing it.
+
 **[!] REFRAMING + A FAILED FIX ATTEMPT (2026-10-10). `STAGES=1` was never a valid
 configuration, and the obvious way to enable `STAGES=2` is wrong.**
 

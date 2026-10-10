@@ -706,6 +706,46 @@ is the first to reuse any of it:
    cycles the phase 4-7 times. Any arrival-count asymmetry compounds per item rather than cancelling.
 3. The attention updater's smem scratch, if any is shared.
 
+**[x] ISOLATED (2026-10-10): the multi-item defect is in OUR PACKED PATHS. Stock paths are CLEAN.
+And my handshake is NOT the fix -- it has its own bug.**
+
+Full matrix at G=1 (where `FUSED_PACKED_Q=off` is a valid comparison), 129 requests, ~6.9 work
+items per CTA, all-FA3, `SM_SPLIT=all`:
+
+| arm | bad rows | worst rel |
+|---|---|---|
+| **stock TMA Q + `write_tiled`, handshake OFF** | **0 / 384 CLEAN** | 0.002224 |
+| stock paths, handshake ON | 10 / 384 | 18.07 |
+| our packed gather + `write_packed`, handshake OFF | **144 / 384** | 15.25 |
+| our packed paths, handshake ON | 96 / 384 | 15.47 |
+| our packed paths at G=4 (production default) | 116 / 384 | 11.04 |
+
+**Two conclusions, both load-bearing:**
+
+1. **The shared multi-item machinery is correct.** With stock's TMA Q load and `write_tiled`, a CTA
+   looping over ~7 work items at 129 requests is CLEAN (0/384). So the scheduler, `get_next_work`,
+   `counter`, the `barrier_Q` phase and the epilogue dispatch all handle cross-item reuse fine.
+   **The defect is OURS**: the packed-Q gather and/or `write_packed`, which reuse `sQ` and `sO`
+   across items without the ordering stock gets from TMA transaction counts and TMA store
+   semantics.
+2. **My store-completion handshake is NOT the fix, and it is actively harmful.** It helps the
+   packed path (144 -> 96) but breaks a previously CLEAN arm (stock: 0 -> 10). So it mitigates one
+   hazard while introducing another -- almost certainly an arrival-count asymmetry on a `continue`
+   path I believed symmetric. **It should be reverted rather than defaulted on**; a partial
+   mitigation that corrupts a clean configuration is worse than nothing.
+
+**This also re-reads the earlier "handshake halves the corruption" result correctly.** 112 -> 56 at
+G=4 looked like progress toward a fix. In fact the baseline it halved was itself caused by the
+packed paths, and the same flag damages the stock path. The halving was real; the interpretation
+("the handshake is the required fix") was wrong.
+
+**The fix direction is now clear and matches stock:** give the packed paths the same ordering
+guarantees TMA provides -- either arm `barrier_Q` with a transaction count the gather actually
+satisfies (`arrive_and_expect_tx` over the gathered bytes, rather than
+`cpasync_barrier_arrive_noinc` on a count-armed barrier), or route the packed O store through TMA
+and restore `tma_store_wait<0>()`. Both are what `FA2+FA3 co-inclusion` already told us: deviating
+from 0.7's primitives is where this port's bugs live.
+
 **[!] `kQueryEmpty` hypothesis REFUTED by direct comparison with stock 0.7.** Both sides are
 byte-identical to stock:
 - producer (`sparse_mainloop.cuh`): `NamedBarrier::sync(NUM_MMA_THREADS +
@@ -825,7 +865,7 @@ refinement of the fusion -- it is the thing that makes it positive at all.
 |---|---|---|
 | **K1** | port the fused kernel to flashinfer 0.7 (prerequisite for both A and B) | **~done, 1 bug open** |
 | K1.corr | every fixture PASSES the causal fp32 reference, `mixed` included | **[x]** rel 0.0033 |
-| K1.race | **REOPENED**: `STAGES=2` only mitigates; the multi-item-per-CTA path fails (76/384 at 129 requests). Needs the store-completion handshake | **[ ] OPEN** |
+| K1.race | **OPEN, now ISOLATED**: multi-item corruption is in OUR PACKED paths (stock paths CLEAN 0/384 at 129 requests); the handshake is not the fix | **[ ] OPEN** |
 | K1.perf | split-KV path was 78% of kernel time; chunk-size sweep gave **4.5x** on `fa3` | **[~]** still 1.5-2.5x off |
 | **S** | server integration: EDF perf model vs unfused baseline | **[ ] NOT RUN** |
 | **M** | multi-node PD colocation (H20 only, <=16 GPUs, trial `vibecuda`) | **[ ] NOT RUN** — doc: `pd_colocation_vs_disagg.md` |

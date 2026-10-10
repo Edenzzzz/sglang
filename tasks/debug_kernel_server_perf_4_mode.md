@@ -870,6 +870,41 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[!!] RETRACTION OF THE CENTRAL PERFORMANCE VERDICT: "the fusion is 1.46-2.01x SLOWER than
+all-FA3" COMPARED A CORRECT ARM AGAINST A BROKEN ONE (2026-10-11).**
+
+That figure came from `drv/mdec.sh`, whose two arms are:
+
+* **co-resident** = `MIX_ALL_FA3=0` with `SM_SPLIT=64..128` -- the two-role path, now measured
+  **0/6 clean**;
+* **"CONTROL all-FA3"** = `MIX_ALL_FA3=1 SM_SPLIT=all` -- the diagnostic path, now measured
+  **6/6 FAILING** at 68-116 bad rows of 384.
+
+**This doc's own standing rule is that every kernel arm must PASS the causal fp32 reference.** The
+baseline in that comparison does not pass, so "co-residency is 1.46-2.01x slower than all-FA3" is
+**not a valid verdict on the fusion** -- it is a correct configuration measured against an incorrect
+one. Retracted.
+
+**The same applies to the `3.14x slower than BatchAttention` figure**, which was taken at
+`FENCE=1 SPLIT=1` under `MIX_ALL_FA3=1` -- the diagnostic knob, and additionally with a fence now
+known to be a regression. Also retracted as a verdict on the fusion.
+
+**What this does and does not change:**
+
+* **Does NOT rescue the bar on its own.** B1's 29% ceiling stands (it was measured from a trace, not
+  from these arms), as does B1e's occupancy result and A2's finding that FA3 beats FA2 5-10x on the
+  dispatcher's own shapes. Those three are independent of the diagnostic knob.
+* **Does invalidate the two headline "the fusion is slower" numbers**, which are the ones the
+  recommendation in `c98fe0f0d` leaned on most heavily. That recommendation therefore needs
+  re-deriving from correctness-gated arms before it can stand.
+* **Re-measurement is running now:** the two-role path against `BatchAttention` on the same shape,
+  `dec = 8 / 32 / 128` x `sm_split = 64 / 96 / 112`, with the bad-row count printed BESIDE every
+  timing so an arm that fails cannot contribute a number.
+
+**Lesson, and it is the same one as the sampling artifact:** I used an arm as a baseline without
+re-checking that it passed its own gate. The gate existed, the rule existed, and the arm had been
+failing it for the entire session.
+
 **[x] B2c PART 1 DONE: CROSS-ROLE BACKFILL IS IMPLEMENTED, LIVE, AND VALIDATED BY ITS OWN NULL
 CASE (2026-10-11).**
 

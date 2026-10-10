@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.02.0 — RETRACTION: the central perf verdict used a BROKEN baseline (2026-10-11)
+
+"The fusion is **1.46–2.01× slower than all-FA3**" came from `drv/mdec.sh`, whose arms are:
+**co-resident** = `MIX_ALL_FA3=0` (two-role, now **0/6 clean**) versus **"CONTROL all-FA3"** =
+`MIX_ALL_FA3=1 SM_SPLIT=all` (diagnostic, now **6/6 FAILING**, 68–116 bad rows).
+
+This doc's standing rule is that every kernel arm must pass the causal fp32 reference. **The baseline
+does not pass**, so that comparison pits a correct configuration against an incorrect one and is not a
+valid verdict on the fusion. **Retracted.** Same for **3.14× slower than `BatchAttention`**, taken at
+`FENCE=1 SPLIT=1` under the same knob with a fence now known to be a regression.
+
+**What it changes:** it invalidates the two headline "fusion is slower" numbers — the ones
+`c98fe0f0d`'s recommendation leaned on hardest, which now needs re-deriving from correctness-gated
+arms. **What it does not change:** B1's 29% ceiling (measured from a trace), B1e's occupancy result,
+and A2's finding that FA3 beats FA2 5–10× on the dispatcher's own shapes — all independent of the
+diagnostic knob.
+
+Re-measurement running: two-role path vs `BatchAttention`, `dec = 8/32/128` × `sm_split = 64/96/112`,
+bad-row count printed beside every timing so a failing arm cannot contribute a number.
+
+**Lesson, same as the sampling artifact:** I used an arm as a baseline without re-checking it passed
+its own gate. The gate and the rule both existed; the arm had been failing all session.
+
 ## v1.01.0 — B2c part 1: cross-role backfill is live and validated by its own null case (2026-10-11)
 
 Two-role path, `MIX_ALL_FA3=0 SM_SPLIT=64`, `DEC_ROWS=128`, 6 seeds:

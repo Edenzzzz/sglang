@@ -252,6 +252,13 @@ def load_fused_fa3(verbose: bool = False) -> None:
             "--threads",
             "32",
             "-DFUSED_FA3_STAGES=" + os.environ.get("FA3_STAGES", "1"),
+            # The FA3 role's CAUSAL template parameter. Default 0 was set from a measurement
+            # ("CAUSAL=1 is worse") taken while fa3.k_page_stride was unassigned, so every key
+            # read page 0 and all keys were identical -- a configuration in which causal and
+            # non-causal are indistinguishable. That measurement was therefore vacuous. The
+            # reference is bottom-right CAUSAL and the stock wrapper is built with causal=True,
+            # so this has to be 1 for the comparison to mean anything.
+            "-DFLASHINFER_FUSED_FA3_CAUSAL=" + os.environ.get("FA3_CAUSAL", "0"),
             # Device-side trace of what the FA2 role actually loaded and where it writes. The
             # plan's units cannot be settled by reading either side's source -- a unit audit
             # written from the same understanding passed while the kernel still faulted.
@@ -265,6 +272,28 @@ def load_fused_fa3(verbose: bool = False) -> None:
             # configuration that instantiates store_partial, so without it the split-KV path
             # is compiled out and split rows write no partial.
             "-DFLASHINFER_FUSED_UNIFIED_WGMMA=1",
+            # Packed-GQA addressing for the FA3 role, as a COMPILE-TIME group size: the unified
+            # plan tiles FA3 work over (token, head-in-group) pairs, which the Q tensormap cannot
+            # express, so both the Q load and the O store index rows through packed_coord.
+            # Without it the epilogue writes packed rows as if they were tokens.
+            # K1n A/B: FUSED_PACKED_Q=off omits the macro ENTIRELY, reverting both the Q
+            # load and the O store to 0.7 stock (TMA + write_tiled) while still running
+            # through our extracted fa3_prefill_body and unified scheduler. That is the
+            # decisive experiment as one macro rather than an include-path change. Valid
+            # only at G=1, where packed rows and tokens coincide -- the scheduler reports
+            # the PACKED extent as qo_len and the stock paths read it as tokens.
+            *([] if os.environ.get("FUSED_PACKED_Q") == "off"
+              else ["-DFLASHINFER_FUSED_PACKED_Q=" + os.environ.get("FUSED_PACKED_Q", "4")]),
+            # Pairs with the 32-lane barrier_Q arrival in the packed-Q load. The load's arrival
+            # side and prefill_sm90's barrier_Q.init are both gated on THIS macro, so defining
+            # one without the other cannot happen: arming for 32 against a single arrival hangs.
+            "-DFLASHINFER_FUSED_Q_MBARRIER=" + os.environ.get("FA3_MBARRIER", "1"),
+            # write_packed's own device probe: prints the element offset its mapping produces for
+            # each tile's first row, plus the values being stored. Off by default. The comment at
+            # that probe in the 0.3.1 source is the lesson this port keeps relearning -- "every
+            # hypothesis about why task-3 rows come back unwritten has been wrong so far, so stop
+            # inferring and read it off the device".
+            "-DFLASHINFER_FA3_PARTIAL_PROBE=" + os.environ.get("FA3_PROBE", "0"),
             "-U__CUDA_NO_HALF_OPERATORS__",
             "-U__CUDA_NO_HALF_CONVERSIONS__",
             "-U__CUDA_NO_HALF2_OPERATORS__",

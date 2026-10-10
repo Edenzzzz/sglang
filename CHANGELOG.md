@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.46.1 — split-KV part 2 narrowed: no double write, residual is in the reduction (2026-10-10)
+
+No code change; four measurements and two code reads that bound the remaining defect.
+
+- **`FLASHINFER_FUSED_NO_MERGE=1` gives 0/32 and 0/256 rows non-zero.** There is **no double
+  write**: the attention grid writes only partials for split rows, and every output row comes from
+  the reduction. The direct-write path is exonerated for split rows.
+- `store_partial`'s O slot and its LSE slot **both match** the merge's slot formula exactly, with
+  `partial_indptr == group_base` and `merge_indptr[row] == group_base + r*chunks` by construction.
+- Row counts check out: `fa3`'s `num_merge_rows=1032` = 8 tiles x 128 packed rows + 4 + 4 for the
+  two single-token requests (kv 300 -> 3 chunks, kv 512 -> 4 chunks).
+- The reduction launch wraps 0.7's `BlockBatchReductionPersistent::Run`, which self-covers via a
+  grid-stride loop, so grid sizing cannot explain missing rows — only slowness.
+
+Remaining: the **contents** of `partial_o` / `partial_lse` and the reduction's combination of them.
+`partial_lse` is the leading suspect — a wrong LSE gives correctly-addressed rows with wrong
+weights, exactly the residual's shape (all rows present, values off by O(1), `fa3_split` at 16
+chunks, and 1 of 32 rows passing as a weighting error would leave where one chunk dominates).
+
 ## v0.46.0 — split-KV part 1: `merge_o_indices` units fixed (2026-10-10)
 
 Every row is now written when split-KV is enabled; the merged **values** are still wrong, so this

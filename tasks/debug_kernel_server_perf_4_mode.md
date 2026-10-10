@@ -1543,6 +1543,29 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       plus `kv_head * G <= 24` land in flat rows 0..55 of an 896-row space -- token 0 and token 1
       only. The fixture reported precisely `2/32 rows non-zero`.
 
+      **Part 2 narrowing (2026-10-10), measured:**
+      - `store_partial`'s O slot `(partial_indptr + r*chunks + kv_chunk_idx) * num_kv_heads +
+        kv_head_idx` and its LSE slot **both match** the merge's slot formula exactly, and
+        `partial_indptr == group_base` with `merge_indptr[row] == group_base + r*chunks` by
+        construction. Addressing on the partial side is verified by reading, not assumed.
+      - Row counts are consistent: `fa3` reports `num_merge_rows=1032` = 8 tiles x 128 packed rows
+        for request 0, plus 4 + 4 for the two single-token requests (kv 300 -> 3 chunks, kv 512 ->
+        4 chunks). So the plan's accounting is right.
+      - **`FLASHINFER_FUSED_NO_MERGE=1` gives 0/32 and 0/256 rows non-zero.** So there is NO double
+        write: the attention grid writes *only* partials for split rows, and every output row comes
+        from the reduction. The direct-write path is exonerated for split rows, and the residual is
+        entirely the reduction's inputs or its arithmetic.
+      - The reduction launch is a thin wrapper over 0.7's `BlockBatchReductionPersistent::Run`,
+        which self-covers via a grid-stride loop over `num_packed_qo_len * num_kv_heads`, so grid
+        sizing cannot be the cause of the missing rows (it could only make it slow).
+
+      So what is left is narrow: the **contents** of `partial_o` / `partial_lse` (are the values
+      each chunk stores correct?), and the reduction's combination of them. `partial_lse` is the
+      leading suspect -- a wrong or unwritten LSE gives correctly-addressed rows combined with
+      wrong weights, which is exactly the residual's shape (all rows present, values off by O(1),
+      `fa3_split` at 16 chunks). Note one row of 32 passes, which is what a weighting error would
+      leave untouched where a single chunk dominates.
+
       **[ ] Part 2, the remaining defect: the merged values.** All rows are now written and
       `fa2` is unaffected, so this is the reduction's arithmetic or the partials it reads, not
       addressing. Where to look next, in order:

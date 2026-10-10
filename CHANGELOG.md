@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.83.0 — shuffle-lane invariant holds; both shuffle-site candidates dead (2026-10-10)
+
+Ran the `[kvinv]` probe that had sat unused in the tree (`FLASHINFER_FA3_PARTIAL_PROBE`,
+`sparse_mainloop.cuh:400`). **printf masking does not apply**: `kv_offset % KV_STRIDE == group_id` is
+deterministic arithmetic, not the race, so serialisation cannot hide a violation — unlike every
+earlier probe, where it destroyed the signal.
+
+```
+[kvinv-dims] CTA_KV=128 NUM_KV_PER_ITER=16 KV_STRIDE=8 NUM_GROUPS=8
+             THREADS_PER_GROUP=16 NUM_ITERS_PER_GROUP=16 size(dst)=16
+[kvinv-ok] lines: 3528      <- probe RAN;  [kvinv-bad] violations: 0
+```
+
+1. **Lane mapping correct** — `src_thread` fetches the intended lane for every checked pair.
+2. **"Silent page 0" path dead**, proven by the dims: `NUM_ITERS_PER_GROUP == THREADS_PER_GROUP == 16`
+   so `thread_in_group < 16` always holds and `k < 16` always holds; the zeroing branch can fire only
+   via the `kv_len` predicate, where the reader's `guard` matches the source lane's validity exactly.
+
+Seventeenth elimination, both by arithmetic rather than a timing-sensitive run. The arm's 0/264
+verdict reflects `FA3_PROBE=1` serialising away the race, which is irrelevant to a static invariant.
+
+Remaining: the `parity` double-buffer — case 1 (timing-dependent divergence) or case 3 (parity fine,
+wrong tile arrives otherwise) from the pre-registered list, separated by per-thread
+`(kv_tile_idx, parity)` signatures in registers, printed after the loop.
+
 ## v0.82.0 — positively localised: the wrong KV *tile* is loaded; row addressing exonerated (2026-10-10)
 
 `KVPERTILE=1` (pages identical within each `CTA_KV` tile, distinct across; boundaries aligned to the

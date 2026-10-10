@@ -819,6 +819,41 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[x] SHUFFLE-LANE INVARIANT HOLDS -- seventeenth elimination, and it kills BOTH shuffle-site
+candidates by arithmetic rather than by a timing-sensitive run (2026-10-10).**
+
+Ran the `[kvinv]` probe that had sat in the tree unused (`FLASHINFER_FA3_PARTIAL_PROBE`,
+`sparse_mainloop.cuh:400`) with its expected output written down in advance. **Why printf masking
+does not apply here:** the invariant `kv_offset % KV_STRIDE == group_id` is DETERMINISTIC
+arithmetic, not the race, so serialising the kernel cannot hide a violation -- unlike every earlier
+probe, where serialisation destroyed the signal.
+
+```
+[kvinv-dims] CTA_KV=128 NUM_KV_PER_ITER=16 KV_STRIDE=8 NUM_GROUPS=8
+             THREADS_PER_GROUP=16 NUM_ITERS_PER_GROUP=16 size(dst)=16 NUM_COPY_THREADS=128
+[kvinv-ok] lines: 3528          <- the probe RAN; "no bad lines" is not "never ran"
+nonzero bad counts:  (none)
+[kvinv-bad] VIOLATIONS: 0
+```
+
+1. **The lane mapping is correct.** `src_thread = group_id*THREADS_PER_GROUP + kv_offset/KV_STRIDE`
+   fetches the intended lane's offset for every `(thread, i)` pair checked.
+2. **The "silent page 0" path is also dead**, and the dims prove it: `NUM_ITERS_PER_GROUP = 16`
+   equals `THREADS_PER_GROUP = 16`, so `thread_in_group < NUM_ITERS_PER_GROUP` is ALWAYS true and
+   `k = kv_offset/8 < 16` always holds. The `else my_kv_offset[parity] = 0` branch can therefore
+   fire only through the `kv_len` predicate -- where the reader's `guard` matches the source lane's
+   validity exactly, so no reader consumes a zeroed offset.
+
+(The arm's own verdict was 0/264 because `FA3_PROBE=1` serialises and masks the RACE, exactly as
+documented. That does not bear on the invariant, which is why this probe is usable and the others
+were not.)
+
+**So of the two suspects named in the previous entry, both are gone.** What remains is the `parity`
+double-buffer itself -- case 1 (timing-dependent divergence) or case 3 (parity fine, wrong tile
+arrives another way) from the pre-registered list -- and the experiment that separates them is
+already specified there: per-thread `(kv_tile_idx, parity)` signatures accumulated in registers and
+printed after the loop.
+
 **[>] THE PARITY MECHANISM, AND AN UNRESOLVED TENSION WITH IT (2026-10-10). Next step, stated
 before running anything so it cannot be fitted to a result.**
 

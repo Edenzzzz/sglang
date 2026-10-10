@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.09.0 — serving gate ran with the 0.7 port and is VACUOUS: `mixed=[]` (2026-10-11)
+
+First serving arm of this session, both arms of `srv_correctness.py` on the pod with the 0.7 port:
+
+```
+LPT:   33 requests, fallbacks=0 tracebacks=0 mixed=[]
+SPLIT: 33 requests, fallbacks=0 tracebacks=0 mixed=[]
+```
+
+**Clean and meaningless.** The gate compares greedy outputs *on batches forced to mix prefill chunks
+with decode rows — the only batches the split touches* — and `mixed=[]` means **no such batch
+occurred**. The split never engaged; both arms compute identically by construction.
+
+**The composition counter caught it**, which is why the goal demands one beside every serving arm.
+Without `mixed=[]` I would have read "33/33 requests, 0 fallbacks, 0 tracebacks, clean compare" as a
+pass. Same class as today's `num_pers_clusters=0` gate — **third vacuous gate this session**, frequent
+enough to be the thing to guard against by default.
+
+**To make it real:** mixed batches need enough concurrent decode rows in flight when a prefill chunk
+arrives. The 33-request default doesn't produce that here. `mtp_edf.sh 24 2000 30` (chat 24/s, 2000
+requests, 30 ms ITL SLO) is what the recorded 2026-10-08 arm used and is the driver to run.
+
+**The central question stays open:** whether the 0.7 port's 9.6–9.8× harness slowness carries into a
+real server is **still unmeasured**. This attempt produced a clean-looking result that answers nothing.
+
 ## v1.08.0 — the 9.6× harness number and the +19.8% serving number are NOT comparable (2026-10-11)
 
 Two of my claims sat in apparent contradiction; this reconciles them.

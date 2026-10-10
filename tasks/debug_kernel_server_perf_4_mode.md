@@ -870,6 +870,40 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[!] SERVING GATE RAN WITH THE 0.7 PORT AND IS VACUOUS: `mixed=[]` -- the split never engaged
+(2026-10-11).**
+
+First serving arm of this session, both arms of
+`tasks/fused_specdec_workload/drivers/srv_correctness.py` on the pod with the 0.7 port:
+
+```
+LPT:   33 requests, fallbacks=0 tracebacks=0 mixed=[]
+SPLIT: 33 requests, fallbacks=0 tracebacks=0 mixed=[]
+```
+
+**Clean, and meaningless.** The gate exists to compare greedy outputs *"on batches that are forced
+to MIX prefill chunks with decode rows -- the only batches the split touches"*, and `mixed=[]` says
+**no such batch occurred in either arm**. The 4-mode split therefore never engaged, both arms
+compute identically by construction, and a clean `--compare` would validate nothing about the 0.7
+port.
+
+**The composition counter is what caught it**, which is precisely why the goal requires one beside
+every serving arm. Without `mixed=[]` in the output I would have read "33/33 requests, 0 fallbacks,
+0 tracebacks, comparison clean" as a pass. This is the same failure class as the
+`num_pers_clusters=0` gate earlier today: a gate that ran, reported success, and exercised nothing.
+**Third vacuous-gate instance this session** -- the pattern is now frequent enough to be the thing
+worth guarding against rather than an occasional slip.
+
+**What it would take to make the arm real:** the gate's mixed batches depend on load shape -- enough
+concurrent decode rows in flight when a prefill chunk arrives that the scheduler merges them. The
+33-request default evidently does not produce that on this pod. `mtp_edf.sh` drives real load
+(`mtp_edf.sh 24 2000 30` = chat 24/s, 2000 requests, 30 ms ITL SLO) and is what the recorded
+2026-10-08 arm used; that is the driver to run, not the bare gate.
+
+**So the central question remains open and I will not claim otherwise:** whether the 0.7 port's
+harness slowness (9.6-9.8x off `BatchAttention` on a synthetic fixture) carries into a real server
+is **still unmeasured**. This attempt produced a clean-looking result that answers nothing.
+
 **[!] THE 9.6x HARNESS NUMBER AND THE +19.8% SERVING NUMBER ARE NOT COMPARABLE -- and that gap is
 the remaining work the goal actually asks for (2026-10-11).**
 

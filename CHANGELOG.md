@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.60.0 — A3 measured on all three axes: route to FA3 everywhere (2026-10-10)
+
+Pod `f929493da6e45f10` expired mid-session; re-forked as **`62d25ecfb033ad4b`** and restored
+(`drivers/restore.sh`, now committed — it had only ever existed on the pod's tmpfs).
+
+**Third axis (batched decode rows), qo=1, kv=2048, all arms 0 bad rows:**
+
+| rows | FA2 ms | FA3 ms | FA3 wins by | `BatchAttention` | FA3/BA |
+|---|---|---|---|---|---|
+| 1 | 0.1431 | **0.0267** | 5.36× | 0.0207 | **1.29×** |
+| 8 | 0.1978 | **0.0709** | 2.79× | 0.0296 | 2.40× |
+| 32 | 0.7200 | **0.1761** | 4.09× | 0.0786 | 2.24× |
+| 128 | 2.6674 | **0.6311** | 4.23× | 0.2456 | 2.57× |
+
+FA2 never overtakes FA3. My row-packing explanation for the doc's "decode-only: FA2 wins by 1.30×"
+is **refuted**.
+
+**A3 now spans `packed_qo` 4–128, kv 128–8192, rows 1–128 — and the answer is "route to FA3"
+everywhere.** `MIN_PACKED_QO = 48` has no measured support anywhere in that space and costs
+1.2×–12× below it.
+
+**Open and not dropped:** the earlier "decode-only: FA2 beats FA3 by 1.30×" is now contradicted by
+three axes. One of the two results is wrong and the dispatch rule depends on which, so it must be
+re-run before A3 is wired into `split_classes`.
+
+On these shapes FA3 is **1.29×–2.57×** off `BatchAttention` vs 4.9× on `mixed` — the verify/decode
+band is the closest ground, and split-KV (78% of kernel time) is what stands between it and parity.
+
 ## v0.59.0 — baseline validated; we have NO win on any fixture (2026-10-10)
 
 `BatchAttention` gated against the same fp32 causal reference as the fused arm, every fixture:

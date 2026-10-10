@@ -319,13 +319,36 @@ MODE=band1 BAND_QO=1 BAND_KV=2048 BAND_ROWS={1,8,32,128} BAND_SIDE={fa2,fa3} \
   SM_SPLIT=64 TIME_AB=1 ... python fused_reference.py
 ```
 
-**What it decides.** `band1` at one row says FA3 wins everywhere (1.16x-12.1x). But FA2's `tile16`
-class packs many short rows and parallelises across them, while an FA3 tile of 128 packed rows is
-nearly empty on one row and well filled by 32 batched decode tokens. The doc's earlier
-"decode-only: FA2 beats FA3 by 1.30x" was presumably at a real decode batch size. So the single-row
-sweep licenses "route to FA3" for the **4-mode verify shape** (a handful of rows, the case the goal
-cares about) and says **nothing** about batched decode. Until `BAND_ROWS` runs, A3's rule stays
-scoped to the verify band.
+**[x] THIRD AXIS RUN on the new pod (`62d25ecfb033ad4b`). FA3 wins at EVERY batch size too --
+A3's rule now holds across all three axes.** qo=1, kv=2048, GQA 4, `SM_SPLIT=64`, all arms 0 bad
+rows:
+
+| rows | FA2 ms | FA3 ms | FA3 advantage | `BatchAttention` ms | FA3 / BA |
+|---|---|---|---|---|---|
+| 1 | 0.1431 | **0.0267** | 5.36x | 0.0207 | **1.29x** |
+| 8 | 0.1978 | **0.0709** | 2.79x | 0.0296 | 2.40x |
+| 32 | 0.7200 | **0.1761** | 4.09x | 0.0786 | 2.24x |
+| 128 | 2.6674 | **0.6311** | 4.23x | 0.2456 | 2.57x |
+
+**FA2 never overtakes FA3, even at 128 batched decode rows.** So my own row-packing explanation --
+that FA2's `tile16` class would win once many short rows could be packed -- is **refuted**. The
+advantage narrows from 5.4x to ~2.8x at 8 rows and then widens again, but never inverts.
+
+**A3 is therefore measured on all three axes** (`packed_qo` 4-128, kv 128-8192, rows 1-128) and the
+answer is the same everywhere: **route to FA3**. `MIN_PACKED_QO = 48` has no measured support at
+any point in that space; it costs 1.2x-12x on everything below it.
+
+**[!] This leaves the doc's earlier "Decode-only: FA2 beats FA3 by 1.30x" UNRECONCILED, and it
+should not be quietly dropped.** Three axes now contradict it. Candidate explanations, untested:
+it was measured on the 0.3.1 fork rather than this 0.7 port; or against a different FA3 entry
+point; or at a kv/batch combination outside this sweep. **Whichever it is, one of the two results
+is wrong, and the dispatch rule depends on which** -- so it needs re-running before A3 is wired
+into `split_classes`.
+
+**Where this puts the fused kernel against the real baseline:** FA3 on these shapes is
+**1.29x-2.57x** off `BatchAttention`, against 4.9x on `mixed`. The verify/decode band is the
+closest ground in the project, and the gap there is now small enough that the split-KV work
+(78% of kernel time) is what stands between it and parity.
 
 A1/A2 (tile widths) remain untested; what is measured here is **A3, the routing decision**, and it
 is worth far more than the 0.3-2.3% B1d priced for tile occupancy.

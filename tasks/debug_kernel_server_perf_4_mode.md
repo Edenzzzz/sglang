@@ -870,6 +870,47 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[!!] SPLIT-KV REFUTED AS THE CAUSE -- and the real cause is the FA2 ROLE, which A2 already
+measured. THIS CLOSES THE PERFORMANCE QUESTION (2026-10-11).**
+
+The knob bit cleanly and every arm passed, and the time did not move:
+
+| arm | FA3 items | partial_rows | verdict | fused | `BatchAttention` | ratio |
+|---|---|---|---|---|---|---|
+| `CHUNK_MULT=1` (control) | 896 | 16384 | 0/384 | 2.6501 ms | 0.2716 | 9.8x |
+| `CHUNK_MULT=4` | 224 | 4096 | 0/384 | 2.6249 ms | 0.2716 | 9.7x |
+| `CHUNK_MULT=16` | 56 | **0** | 0/384 | 2.6588 ms | 0.2759 | 9.6x |
+| `FUSED_NOSPLIT=1` | 56 | **0** | 0/384 | 2.6173 ms | 0.2733 | 9.6x |
+
+**Removing ALL 16384 partial rows, the 59 MB workspace and the merge pass moves runtime by under
+2%** -- inside the +/-1.5-3% noise floor. My split-KV amplification hypothesis from the previous
+entry is **REFUTED**, one arm after I proposed it.
+
+**The real cause is the FA2 role, and A2 measured it independently a day earlier.** The FA2 role
+carries **896 decode items in every one of these arms** -- that is the one thing the chunk knob does
+not change. And A2, on correctness-gated `band1` arms, measured **FA2 at 5.0x-12.2x slower than FA3**
+on exactly these small-tile shapes (`packed_qo` 16/32/48/64), with `BatchAttention` faster than both.
+
+So the chain is complete and every link is correctness-gated:
+
+1. The fusion's premise is that **FA2 handles the small-tile work** (decode/verify rows) while FA3
+   takes the large tiles. That is the entire point of the SM pre-assignment.
+2. **FA2 is 5-12x slower than FA3 on exactly those shapes** (A2), and narrow tile classes do not
+   rescue it -- tile 32 gave a real 1.79x, leaving FA2 still 6.7x behind.
+3. Therefore the fused kernel is **9.6-9.8x off `BatchAttention`** on a 4-mode shape, and that gap
+   is **invariant** to split-KV configuration, `sm_split`, chunk width and the merge pass.
+
+**This closes the performance question for the design, not just for a configuration.** The slowness
+is not amplification, not splitting, not scheduling overhead and not a tuning gap: it is that the
+fusion routes work to a role which is an order of magnitude slower than the alternative for that
+work. The >=30% TTFT/ITL and >=10% throughput bar is unreachable from here, and the earlier retracted
+figures (1.46-2.01x, 3.14x) understated the problem rather than overstating it.
+
+**What remains defensible from the kernel work:** the port's nine bug fixes, B2c's validated
+cross-role backfill, B1/B1e's headroom numbers, and A2's tile-class implementation -- all upstream
+-relevant independent of the design verdict. **What is not defensible is the fusion as a performance
+story**, in either the two-role form (9.6x off, correct) or the all-FA3 form (fails 6/6).
+
 **[x] DUPLICATE DISPATCH REFUTED -- and the 5.3-30x GAP IS SPLIT-KV AMPLIFICATION, not the fusion
 concept (2026-10-11).**
 

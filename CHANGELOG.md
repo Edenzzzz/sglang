@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.04.0 — split-KV refuted as the cause; the FA2 role is, and that CLOSES the perf question (2026-10-11)
+
+| arm | FA3 items | partial_rows | verdict | fused | `BatchAttention` | ratio |
+|---|---|---|---|---|---|---|
+| `CHUNK_MULT=1` | 896 | 16384 | 0/384 | 2.6501 | 0.2716 | 9.8× |
+| `CHUNK_MULT=4` | 224 | 4096 | 0/384 | 2.6249 | 0.2716 | 9.7× |
+| `CHUNK_MULT=16` | 56 | **0** | 0/384 | 2.6588 | 0.2759 | 9.6× |
+| `NOSPLIT=1` | 56 | **0** | 0/384 | 2.6173 | 0.2733 | 9.6× |
+
+Removing **all** partials, the 59 MB workspace and the merge pass moves runtime **<2%** — inside the
+noise floor. My split-KV hypothesis is **refuted one arm after proposing it**.
+
+**The cause is the FA2 role, which A2 measured a day earlier.** FA2 carries 896 decode items in every
+arm — the one thing the chunk knob doesn't change — and A2 measured **FA2 5.0–12.2× slower than FA3**
+on exactly these shapes, with narrow tile classes recovering only 1.79× (still 6.7× behind).
+
+So: the fusion's premise is that FA2 handles small-tile work; FA2 is an order of magnitude slower than
+FA3 at it; therefore the fused kernel is 9.6–9.8× off `BatchAttention`, **invariant** to split-KV
+config, `sm_split`, chunk width and the merge pass. **This closes the performance question for the
+design, not a configuration** — and the retracted 1.46–2.01×/3.14× figures *understated* the problem.
+
+**Defensible from the kernel work:** nine port bug fixes, B2c's validated backfill, B1/B1e headroom,
+A2's tile-class implementation — all upstream-relevant. **Not defensible:** the fusion as a
+performance story, in either the two-role form (9.6× off, correct) or all-FA3 (fails 6/6).
+
 ## v1.03.0 — correctness-gated verdict: the two-role fusion is 5.3–30× slower than BatchAttention (2026-10-11)
 
 Two-role path, backfill live, bad rows beside every timing, 30 iters / 8 warmup:

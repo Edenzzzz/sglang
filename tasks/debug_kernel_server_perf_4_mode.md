@@ -819,6 +819,39 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[x] THE CAUSAL TILE-COUNT ARITHMETIC IS CORRECT FOR ALL 8 Q TILES -- and the bad tiles are NOT
+at the transition (2026-10-10). Host arithmetic, no GPU.**
+
+Evaluated the kernel's own packed-GQA formulae against the bottom-right causal reference for
+`q_tile_idx` 0..7 (fixture: `qo_tok=256`, G=4, `kv_total=2048`, CTA_Q=128 packed, CTA_KV=128):
+
+| q tile | `last_tok` | kernel tiles | ref max key | ref tiles | |
+|---|---|---|---|---|---|
+| 0 | 31 | 15 | 1823 | 15 | OK |
+| **1** | 63 | **15** | 1855 | **15** | **OK** |
+| **2** | 95 | **15** | 1887 | **15** | **OK** |
+| 3 | 127 | 15 | 1919 | 15 | OK |
+| 4 | 159 | 16 | 1951 | 16 | OK |
+| 5-7 | 191-255 | 16 | 1983-2047 | 16 | OK |
+
+Zero mismatches. **`get_num_kv_tiles` is exonerated**, and the stronger point: **the corrupted tiles
+are not where anything transitions.** Tiles 1 and 2 carry count 15 -- the SAME as clean tiles 0 and
+3 -- while the 15->16 transition falls at tile 4, which is clean. So the per-tile causal arithmetic
+cannot be what distinguishes them, and the three arithmetic suspects named in the previous entry are
+reduced to the two mask-side ones at most.
+
+**Also established from the decode:** the culprit items report `kv_len=2048`, i.e. the FULL kv
+length, so these are **unsplit whole-row items**, not chunks. That removes the split-KV
+`causal_kv_len` shift from the suspect list as well -- it does not apply to these items.
+
+**So what IS special about q tiles 1 and 2?** Not the plan data (identical to clean siblings), not
+the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and the O store**: tile
+`qt` reads packed rows `[qt*128, (qt+1)*128)` through `packed_coord(p, G) = (p%G, p/G)` and
+`get_packed_gqa_tensor`, and writes them back the same way. Their bad token rows (48-51, 60-61,
+80-85) sit inside tiles 1-2's token range 32..95, consistent with either. **That is where the next
+look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
+`get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
+
 **[x][!!] BREAKTHROUGH: THE CORRUPTION IS DETERMINISTIC IN `q_start` -- Q TILES 1 AND 2 OF 8 ARE
 WRONG IN EVERY BLOCK (2026-10-10). Host-side plan decode, no device instrumentation.**
 

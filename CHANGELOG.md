@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.92.0 — causal tile-count arithmetic correct for all 8 q tiles; bad tiles not at the transition (2026-10-10)
+
+Host arithmetic, no GPU. Kernel's packed-GQA formulae vs the bottom-right causal reference,
+`q_tile_idx` 0..7 (`qo_tok=256`, G=4, `kv_total=2048`, CTA_Q=128 packed, CTA_KV=128):
+
+| q tile | kernel tiles | ref tiles | |
+|---|---|---|---|
+| 0 | 15 | 15 | OK |
+| **1** | **15** | **15** | OK |
+| **2** | **15** | **15** | OK |
+| 3 | 15 | 15 | OK |
+| 4–7 | 16 | 16 | OK |
+
+Zero mismatches — `get_num_kv_tiles` **exonerated**. Stronger: the corrupted tiles are **not at any
+transition** — tiles 1–2 share count 15 with clean tiles 0 and 3, while the 15→16 step falls at tile
+4, which is clean. The per-tile causal arithmetic cannot be the discriminator.
+
+Also from the decode: culprit items report `kv_len=2048` (full length), so they are **unsplit
+whole-row items** — which removes the split-KV `causal_kv_len` shift from the suspect list too.
+
+So what *is* special about q tiles 1 and 2? Not the plan data, not the kv-tile count, not splitting.
+What remains per-q-tile is the **Q gather and O store**: tile `qt` reads packed rows
+`[qt*128,(qt+1)*128)` via `packed_coord(p,G)=(p%G,p/G)` and `get_packed_gqa_tensor`, and writes back
+the same way; the bad token rows (48–51, 60–61, 80–85) lie in tiles 1–2's range 32..95, consistent
+with either. Next: evaluate `packed_coord` and the `get_packed_gqa_tensor` strides for `q_tile_idx`
+0..7 on the host and find what differs at 1 and 2.
+
 ## v0.91.0 — BREAKTHROUGH: corruption is deterministic in `q_start` — q tiles 1 and 2 of 8 (2026-10-10)
 
 Host-side plan decode, no device instrumentation (arm still fails: 84/384).

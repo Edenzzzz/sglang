@@ -24,6 +24,50 @@ validation come FIRST (user 2026-10-10)**; per-class SLO targets derive from the
 not invented; H20/multi-node only after ALL kernel items close; **-5% to -8.4% in-server is
 NOT acceptable** -- the kernel must be a gain.
 
+### [x] THE "FA2 22x" IS MOSTLY A FIXTURE ARTIFACT (2026-10-10). The real, shape-independent gap
+### against `BatchAttention` is ~5x.
+
+Two more candidates A/B'd on the FA2-only arm, both now switchable
+(`FUSED_NB_SYNC` / `FUSED_GRID_1D`):
+
+| arm | `fa2` fused ms | correctness |
+|---|---|---|
+| `NB_SYNC=1 GRID_1D=1` (default) | 1.1006 | 0/258 |
+| `NB_SYNC=0 GRID_1D=1` | **1.0987** | 0/258 |
+| `NB_SYNC=1 GRID_1D=0` | — | **258/258 bad** (FUSED_GRID is load-bearing, not optional) |
+
+**`NAMED_BARRIER_SYNC` makes no difference (1.0987 vs 1.1006) -- refuted**, the fourth hypothesis
+about this gap to fall. `FUSED_GRID=0` is simply broken (every row wrong), so it is required, not a
+tuning knob.
+
+**And the reframing those refutations forced.** The `fa2` fixture routes request 0 --
+**qo=256, kv=2048, i.e. PREFILL-shaped** -- through the FA2 classes. Run the identical rows through
+FA3 instead (`MODE=fa3`) and the kernel takes **0.2557 ms**, i.e. **4.3x faster than 1.1006**. So
+most of the "22x FA2 defect" is my fixture forcing prefill work through the wrong backend. That is
+a routing artifact, not a port defect, and it is consistent with the doc's own earlier finding that
+**FA2 beats FA3 on decode by 1.30x while the reverse holds for prefill**.
+
+**Corrected picture of where the project actually stands against `BatchAttention`:**
+
+| | fused ms | BA ms | gap |
+|---|---|---|---|
+| `fa3_1chunk` | 0.0213 | 0.0192 | **1.11x** |
+| `fa3_multitile` | 0.0428 | 0.0195 | 2.19x |
+| `mixed` | 0.2433 | 0.0494 | 4.92x |
+| `fa3` (same rows as `fa2`, right backend) | 0.2557 | 0.0494 | 5.18x |
+| `fa2` (same rows, WRONG backend) | 1.1006 | 0.0494 | 22.2x |
+
+So the shape-independent gap is **~5x**, and the 22x figure was ~4.3x routing on top of it. **The
+22x should not be chased as a kernel defect** -- what it actually demonstrates is that **dispatch
+choice is worth 4.3x on a single row**, which is direct quantitative support for item **A3** (the
+fitted dispatch rule) and for the user's tile-threshold hypothesis. That is the first measured
+evidence that A is worth doing at all, and it is much stronger than the 0.3-2.3% B1d priced for
+tile *occupancy* alone.
+
+**Revised priority, from the numbers:** the ~5x on the split-KV path (`mixed`, `fa3`) is the real
+kernel gap; A3/dispatch is independently worth up to 4.3x on mis-routed rows. Neither is the FA2
+inner loop, which four hypotheses failed to implicate because it was never the problem.
+
 ### [!] FA2 22x: the split-KV hypothesis is REFUTED; it is the PER-ITEM INNER LOOP
 
 The FA2 classes never split kv (`chunk = (task == 3 && kv_chunk > 0) ? kv_chunk : kv`), on the

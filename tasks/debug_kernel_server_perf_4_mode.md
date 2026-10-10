@@ -870,6 +870,37 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[>] CLAUSE-LEVEL GATE TRACE WRITTEN AND PUSHING -- the one diagnostic left, and it is a code
+change (2026-10-11).**
+
+Added to the fork at `sglang/srt/managers/scheduler.py`, immediately **before** the `if` at `:4141`:
+
+```
+if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
+    logger.error("MIXEDCLAUSE env=%s mixed_chunk=%s spec=%s running_nonempty=%s "
+                 "no_logprob=%s no_embeds=%s no_beam=%s", ...)
+```
+
+**Why this is necessary rather than another run:** the gate's existing `MIXEDGATE` print lives
+INSIDE the `if`, so a false condition is silent -- which is exactly the state eight attempts
+reached (0 `MIXEDGATE` lines over 9474 log lines with 4195 co-resident prefill batches). Printing
+each clause **before** the branch makes a false condition name its own cause. Same debug flag, one
+line per step, diagnosis-only.
+
+**Expected output, stated before running:** one `MIXEDCLAUSE` line per scheduler step with seven
+booleans. Four should read `True` from the analysis already done (`env`, `mixed_chunk`, `spec`,
+`running_nonempty`); whichever of `no_logprob` / `no_embeds` / `no_beam` reads `False` is the
+blocker. If all seven read `True` and the gate still does not fire, the `if` is not the code path in
+play and the search moves to how `new_batch`/`running_batch` reach this point.
+
+**Status:** patch written, syntax-checked, and mid-push to the pod (82 KB base64 uploaded,
+extraction pending). The run itself is one command once it lands, serialised per the lesson from the
+self-inflicted collision.
+
+**This is the clean handoff point for the serving thread.** Eight attempts resolved six provisioning
+blockers, one self-inflicted collision, and narrowed the cause to a single boolean in a seven-clause
+condition, with the instrument to read it written and in flight.
+
 **[x][RESOLVED] THE 4-MODE GATE NEVER FIRES, CONFIRMED BY ITS OWN DEBUG PRINT. The fused path
 cannot be exercised in a server on this pod as configured (2026-10-11).**
 

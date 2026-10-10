@@ -292,27 +292,40 @@ CTA_Q=128 packed rows is mostly idle on a single row but well filled by 32 batch
 **So this sweep does NOT license "always FA3" for decode** -- it licenses it for the 4-mode verify
 shape, which is a handful of rows, and that is exactly the case the goal cares about.
 
-**[!] POD EXPIRED before the deciding measurement could run (2026-10-10).** `probe_trial` returns
-**`done`** for trial `f929493da6e45f10`, and `/dev/shm` is tmpfs so the pod-side tree is gone. The
-batched-decode sweep -- the one that decides whether "always FA3" holds -- is implemented
-(`BAND_ROWS` on the `band1` fixture, N rows of `qo=1`) but **unrun**.
+**[~] POD EXPIRED mid-work, RE-FORKED (2026-10-10).** Trial `f929493da6e45f10` reached status
+`done` and `/dev/shm` is tmpfs, so the pod-side tree was lost. Re-forked per the standing
+instruction:
 
-**To resume:** re-fork with `overrides.attachments=[]`, re-run `/dev/shm/w/drv/restore.sh`, then
-push `drivers/fused_reference.py`, `port07/`, and the loader from the local repos (all committed).
-The first command to run is the `BAND_ROWS` sweep:
+```
+merlin-cli --control-plane i18n-bd job-v2 runs fork \
+  --json '{"source_sid":"f929493da6e45f10","name":"vibecuda","overrides":{"attachments":[]}}'
+```
+
+**NEW TRIAL: `62d25ecfb033ad4b`** (status `running`; H200, 143771 MiB, `/dev/shm` 1.7 T, Python
+3.12.4). `/tmp/px.py` updated to the new sid. `restore.sh` was recovered from the local copy at
+`/tmp/rst/restore.sh` -- note it only ever existed on the pod's tmpfs, so **keep that local copy**.
+Restore is running in the background (`/dev/shm/w/restore.log`); it clones upstream sglang,
+installs torch 2.14.1 then sglang then flashinfer 0.7.0.post1, and downloads Qwen2.5-7B (~15 GB).
+
+**To resume once restore finishes** -- verify the tree by resolution, not md5
+([[pod-tree-verify-manifest]]): `PYTHONPATH=/dev/shm/w/up/python python -c "from
+sglang.srt.layers.attention import fused_fa3_loader as L; print(L.__file__)"` must print a path
+inside `/dev/shm/w/up`. Then push `drivers/fused_reference.py`, `port07/`, and the loader from the
+local repos (all committed), and run the **`BAND_ROWS` sweep first** -- it is the measurement that
+decides whether A3's "route to FA3" rule extends past the verify band:
 
 ```
 MODE=band1 BAND_QO=1 BAND_KV=2048 BAND_ROWS={1,8,32,128} BAND_SIDE={fa2,fa3} \
   SM_SPLIT=64 TIME_AB=1 ... python fused_reference.py
 ```
 
-**What it decides.** `band1` at one row says FA3 wins everywhere (1.16x to 12.1x). But FA2's
-`tile16` class packs many short rows and parallelises across them, while an FA3 tile of 128 packed
-rows is nearly empty on one row and well filled by 32 batched decode tokens. The doc's earlier
-"decode-only: FA2 beats FA3 by 1.30x" was presumably measured at a real decode batch size. So the
-single-row sweep licenses "route to FA3" for the **4-mode verify shape** (a handful of rows, which
-is the case the goal cares about) and says **nothing** about batched decode. Until `BAND_ROWS` runs,
-A3's rule must stay scoped to the verify band.
+**What it decides.** `band1` at one row says FA3 wins everywhere (1.16x-12.1x). But FA2's `tile16`
+class packs many short rows and parallelises across them, while an FA3 tile of 128 packed rows is
+nearly empty on one row and well filled by 32 batched decode tokens. The doc's earlier
+"decode-only: FA2 beats FA3 by 1.30x" was presumably at a real decode batch size. So the single-row
+sweep licenses "route to FA3" for the **4-mode verify shape** (a handful of rows, the case the goal
+cares about) and says **nothing** about batched decode. Until `BAND_ROWS` runs, A3's rule stays
+scoped to the verify band.
 
 A1/A2 (tile widths) remain untested; what is measured here is **A3, the routing decision**, and it
 is worth far more than the 0.3-2.3% B1d priced for tile occupancy.

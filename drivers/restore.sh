@@ -70,5 +70,35 @@ json.dump(c, open("$W/qwen7b_eagle3_sgl/config.json", "w"), indent=1)
 print("eagle3 config architectures ->", c["architectures"])
 PY
 fi
+# ---- SERVING TREE -------------------------------------------------------------------------
+# Added 2026-10-11. restore.sh rebuilt only the KERNEL harness, so after a re-fork mtp_edf.sh exits
+# instantly with jsons=0 and no server ever launches -- a silent failure (exit 0) that looks like a
+# clean arm. These are the pieces it needs beyond the models.
+#
+# The DRIVERS and the two python helpers are small and are expected to be pushed alongside this
+# script; this section only checks for them and says what is missing, since it cannot fetch them.
+for f in $W/slo_attain.py $W/tasks/perf_model/fit_mtp_step.py \
+         $W/drv/srv_correctness.py $W/drv/mtp_edf.sh; do
+  [ -f "$f" ] || log "SERVING MISSING (push it): $f"
+done
+mkdir -p $W/mtpedf $W/workloads/tracelab $W/tasks/perf_model
+
+# ShareGPT is fetchable from HF, so fetch it rather than pushing ~600 MB through a 60 KB-chunked
+# exec channel. mtp_edf.sh wants it at exactly this path.
+SGPT=$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json
+if [ ! -s "$SGPT" ]; then
+  log "fetching ShareGPT (chat tenant workload)"
+  $W/venv/bin/huggingface-cli download anon8231489123/ShareGPT_Vicuna_unfiltered \
+    ShareGPT_V3_unfiltered_cleaned_split.json --repo-type dataset \
+    --local-dir $W/workloads >/dev/null 2>&1 \
+    || log "SHAREGPT FETCH FAIL -- chat-tenant arms cannot run"
+fi
+
+# The tracelab trace is INTERNAL and has no known public source. Without it the codex/tracelab
+# tenant cannot be driven, so the two-tenant arms that produced the recorded -37.7% ITL are not
+# reproducible on a fresh pod until someone supplies it.
+TL=$W/workloads/tracelab/syfi_coding_trace.jsonl.gz
+[ -s "$TL" ] || log "TRACELAB MISSING (internal, no public source): $TL -- codex-tenant arms blocked"
+
 log "RESTORE_CORE_DONE"
 du -sh $W/* 2>/dev/null | tail -8

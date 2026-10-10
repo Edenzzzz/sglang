@@ -870,6 +870,35 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[x] SERVING-TREE RESTORE EXTENDED, AND THE REMAINING BLOCKER IS A DATASET WITH NO PUBLIC SOURCE
+(2026-10-11).**
+
+`mtp_edf.sh` needs, beyond the models: `$W/slo_attain.py`,
+`$W/tasks/perf_model/fit_mtp_step.py`, `$W/mtpedf/`,
+`$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json` and
+`$W/workloads/tracelab/syfi_coding_trace.jsonl.gz`. On the re-forked pod **none of them exist**
+(`workloads/`, `hf/`, `fi/` all absent; 1.7 TB free, so not a space problem).
+
+**`drivers/restore.sh` extended (74 -> 104 lines), and the fixes are of three kinds:**
+
+1. **Fetchable:** ShareGPT is on HF, so restore now downloads it to the exact path the driver wants
+   (`anon8231489123/ShareGPT_Vicuna_unfiltered`, `--repo-type dataset`) rather than trying to push
+   ~600 MB through a 60 KB-chunked exec channel.
+2. **Pushable:** the four small drivers are now collected under `drivers/serving/` in-repo
+   (`slo_attain.py`, `fit_mtp_step.py`, `srv_correctness.py`, `mtp_edf.sh`) so one push covers them,
+   and restore **names each missing one in its log** instead of failing silently.
+3. **[!] NOT AVAILABLE: the tracelab trace.** `syfi_coding_trace.jsonl.gz` is internal with no known
+   public source. Without it the **codex/tracelab tenant cannot be driven at all**, which means the
+   two-tenant arms that produced the recorded **-37.7% codex ITL** are **not reproducible on a fresh
+   pod** by me. Restore now says so explicitly rather than letting the next session discover it as a
+   missing-file error mid-run.
+
+**What this means for the goal's central question, stated precisely:** a chat-tenant-only serving arm
+becomes runnable once restore fetches ShareGPT, and that is enough to measure whether the 0.7 port
+regresses TTFT/ITL under real mixed batches. The **two-tenant** comparison that generated the headline
+numbers is blocked on a dataset I cannot obtain. So the 0.7 port can be partially validated on a fresh
+pod and not fully.
+
 **[!] THE REAL-LOAD SERVING ARM CANNOT RUN ON THIS POD: the serving infrastructure was never
 restored after the re-fork (2026-10-11). Concrete blocker, with the fix list.**
 

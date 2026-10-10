@@ -870,6 +870,42 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[>] EVERY GATE CONDITION IS SATISFIED FROM THE DRIVER SIDE, YET NO MIXED STEPS ARE LOGGED. The
+decisive next step is the gate's OWN debug print (2026-10-11). Handoff.**
+
+Walked `scheduler.py:4141` condition by condition against the driver:
+
+| condition | status | evidence |
+|---|---|---|
+| `SGLANG_MIXED_SPEC == "1"` | **satisfied** | driver sets it; `scheduler.py:4142` reads it |
+| `self.is_mixed_chunk` | **satisfied** | `--enable-mixed-chunk` at `run_mixed_workloads.py:328` |
+| `not spec_algorithm.is_none()` | **satisfied** | `if method.startswith("MTP")` -> EAGLE3 args; `MTPMIX_SPLIT` matches |
+| `not running_batch.is_empty()` | **satisfied** | 4158 prefill batches with `#running-req > 0` |
+| `return_logprob` / `input_embeds` / `beam_group` | presumed fine | plain bench requests |
+
+**And yet `MIXEDSPEC_STEPS` / `mixedspec` appears 0 times (case-insensitive) in a completed trace
+run.** So one of two things is true and **I cannot distinguish them from the artifacts I have**:
+
+1. mixing genuinely does not happen, for a reason not visible in these conditions; or
+2. mixing happens and the counter is simply **not logged on this path** -- in which case my
+   "zero mixed steps" reading is a third artifact error, after `comp=MISSING` and the
+   separate-batch-lines argument.
+
+**The gate prints its own diagnosis, and it is one env var away.** `scheduler.py:4150` guards a
+`MIXEDGATE pre-filter reqs=%d spec_info=%s truthy=%s topk_p=%s` log behind
+**`SGLANG_DBG_DRAFT_COPY=1`**, which this run did not set. Re-running the trace arm with that flag
+prints, per step, whether the gate was reached and which field was falsy. **That distinguishes the
+two cases above directly and is the single next action** -- one env var added to the existing
+command, no code change, no GPU beyond the run itself.
+
+**Session close on this thread, stated honestly:** seven serving attempts. Six real blockers found
+and fixed -- missing drivers, missing scorer/fitter, missing load generator, `PYTHONPATH` pointing at
+non-existent `$W/python`/`$W/fi`, `$W/.venv` missing a dot, and three dead env flags -- each of which
+would independently have prevented any measurement, and all of which are now recorded in
+`restore.sh` and memory so the next session starts past them. **The fused path still has not been
+exercised in a server**, and whether the 0.7 port's 9.6-9.8x harness slowness matters in production
+remains unmeasured. The `MIXEDGATE` run is where to resume.
+
 **[!] PARTIAL RETRACTION + CONFIRMATION BY A VALID ROUTE: the counter I used was dead, but the live
 one agrees -- 4158 co-residency opportunities, ZERO mixed steps (2026-10-11).**
 

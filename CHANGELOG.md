@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.15.0 — every gate condition satisfied yet no mixed steps logged; MIXEDGATE is the next step (2026-10-11)
+
+Walked `scheduler.py:4141` against the driver: `SGLANG_MIXED_SPEC=1` **set and read**;
+`--enable-mixed-chunk` **passed** (`:328`); EAGLE3 args **added** (`method.startswith("MTP")` matches
+`MTPMIX_SPLIT`); `running_batch` non-empty **4158 times**. All satisfied — and yet
+`MIXEDSPEC_STEPS`/`mixedspec` appears **0 times** in a completed trace run.
+
+Two possibilities I **cannot** distinguish from current artifacts: (1) mixing genuinely doesn't
+happen for a reason outside these conditions; (2) mixing happens and the counter isn't logged on this
+path — which would make my "zero mixed steps" a *third* artifact error after `comp=MISSING` and the
+separate-batch-lines argument.
+
+**The gate prints its own diagnosis:** `scheduler.py:4150` guards
+`MIXEDGATE pre-filter reqs=… spec_info=… truthy=… topk_p=…` behind **`SGLANG_DBG_DRAFT_COPY=1`**,
+unset in this run. Adding it prints per step whether the gate was reached and which field was falsy.
+One env var, no code change. **That is the next action.**
+
+**Thread close:** seven serving attempts, six real blockers found and fixed (missing drivers; missing
+scorer/fitter; missing load generator; `PYTHONPATH` → non-existent `$W/python`/`$W/fi`; `$W/.venv`
+missing a dot; three dead env flags), all now in `restore.sh` and memory. The fused path still has not
+been exercised in a server; the 0.7 port's production behaviour remains unmeasured.
+
 ## v1.14.0 — why the split never engages: three of five mixing flags no longer exist in the fork (2026-10-11)
 
 `run_mixed_workloads.py` sets five env flags for `MTPMIX_SPLIT`. Against `sglang-up/python/sglang/`:

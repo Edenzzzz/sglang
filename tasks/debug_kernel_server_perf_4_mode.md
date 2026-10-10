@@ -870,8 +870,38 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
-**[x][!!] BREAKTHROUGH: THE CORRUPTION IS DETERMINISTIC IN `q_start` -- Q TILES 1 AND 2 OF 8 ARE
-WRONG IN EVERY BLOCK (2026-10-10). Host-side plan decode, no device instrumentation.**
+**[!!] RETRACTED -- "DETERMINISTIC IN `q_start`" WAS AN ARTIFACT OF MY OWN SAMPLING
+(2026-10-10).** The heading below read *"BREAKTHROUGH: the corruption is deterministic in `q_start`
+-- q tiles 1 and 2 of 8 are wrong in every block"*. **It is not.** Three compounding errors, all
+mine:
+
+1. **I sampled the 16 LOWEST bad row indices** (`_badset[:16]`). Low rows live in low q tiles, so
+   the culprit list was *guaranteed* to come out as the first two or three q tiles whatever the
+   truth. The "pattern" was my slice.
+2. **The next run contradicted it directly:** culprits came back as q tiles **0 and 1** (items
+   0,1,8,9,16,17,...) where the first run gave tiles **1 and 2** (items 1,2,9,10,...). A
+   deterministic `q_start` dependence cannot move between runs.
+3. **My retraction of the "unsplit" claim was ALSO wrong.** Every item reports `kv=[0,2048)`,
+   `ckv=2048` -- they ARE unsplit. The 952 items decompose exactly as
+   **8 q tiles x 7 kv heads = 56** (prefill) **+ 128 decode rows x 7 kv heads = 896** = 952. I had
+   forgotten the `kv_head` dimension and inferred chunking from the item count, so item index
+   encodes `(q_tile = i % 8, kv_head = i // 8)`.
+
+**What the run DID establish, and it is solid:** `kern_limit == ref_limit` for **every** item, so
+the chunk-relative causal bound is **correct** -- and since the items are unsplit, the earlier
+unsplit arithmetic check covers them properly after all. Both causal-bound suspects are therefore
+genuinely exonerated; it is the q-tile *localisation* that evaporates, not that result.
+
+**Sampling fixed:** the decode now maps ALL bad rows and reports the DISTRIBUTION over
+`(q_tile, kv_head)` rather than listing a biased prefix. Until that runs, the only honest statement
+about which items are corrupted is: **unknown**.
+
+**Lesson worth keeping, because it nearly became a published finding:** a "pattern" seen only in the
+lowest-indexed members of a sample is a property of the sample. Two of today's strongest-looking
+results -- this one and the tile-sequence trace aimed at block 0 -- were artifacts of looking only
+where it was cheap to look.
+
+
 
 ```
 verdict: bad rows 84/384                  <- host-side only, so the arm STILL FAILS

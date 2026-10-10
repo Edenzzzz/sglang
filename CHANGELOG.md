@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.94.0 — RETRACTION: "deterministic in q_start" was my own sampling artifact (2026-10-10)
+
+The v0.91.0 "breakthrough" is **withdrawn**. Three compounding errors, all mine:
+
+1. **I sampled the 16 lowest bad row indices** (`_badset[:16]`). Low rows live in low q tiles, so the
+   culprit list was *guaranteed* to be the first two or three q tiles whatever the truth.
+2. **The next run contradicted it:** culprits came back as q tiles **0 and 1** where the first run
+   gave **1 and 2**. A deterministic `q_start` dependence cannot move between runs.
+3. **My v0.93.0 retraction was also wrong** — every item reports `kv=[0,2048)`, so the items *are*
+   unsplit. 952 = **8 q tiles × 7 kv heads (56, prefill) + 128 decode rows × 7 kv heads (896)**. I had
+   forgotten the `kv_head` dimension; item index encodes `(q_tile = i%8, kv_head = i//8)`.
+
+**What the run did establish, solidly:** `kern_limit == ref_limit` for *every* item ⇒ the causal bound
+is **correct**, and since the items are unsplit, v0.92.0's unsplit arithmetic check covers them
+properly. Both causal-bound suspects are genuinely exonerated. It is the q-tile *localisation* that
+evaporates, not that result.
+
+Sampling fixed: the decode now maps **all** bad rows and reports the distribution over
+`(q_tile, kv_head)`. Until it runs, which items are corrupted is **unknown**.
+
+**Lesson:** a pattern visible only in the lowest-indexed members of a sample is a property of the
+sample. Two of today's strongest-looking results — this and the block-0 tile trace — were artifacts of
+looking only where it was cheap to look.
+
 ## v0.93.0 — RETRACTION: the culprit items ARE kv-chunked; split causal bound back in scope (2026-10-19)
 
 I claimed the culprits were "unsplit whole-row items" because the plan reports `kv_len=2048`, and

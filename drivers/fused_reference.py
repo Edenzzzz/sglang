@@ -302,8 +302,12 @@ def main():
             f"(it={i} blk={_owner.get(i)} q_start={_qs[i] if i < len(_qs) else '?'} "
             f"batch={_bi[i] if i < len(_bi) else '?'} kv_len={_kl[i] if i < len(_kl) else '?'})"
             for i in range(min(8, _n))))
+        _ks = _iw[_off["kv_start"]: _off["kv_start"] + _n].tolist()
+        _ke = _iw[_off["kv_end"]: _off["kv_end"] + _n].tolist()
+        _pi = _iw[_off["partial_indptr"]: _off["partial_indptr"] + _n].tolist()
         _PLANMAP = {"owner": _owner, "q_start": _qs, "batch_idx": _bi, "kv_len": _kl,
-                    "work_indptr": _wi, "nblk": _nblk}
+                    "work_indptr": _wi, "nblk": _nblk, "kv_start": _ks, "kv_end": _ke,
+                    "partial_indptr": _pi}
     else:
         _PLANMAP = None
 
@@ -759,22 +763,53 @@ def main():
                     if _t0 <= row < _t1:
                         hit.append(_i)
                 return hit
+            # ALL bad rows, not the first 16. The earlier version sliced _badset[:16], i.e. the
+            # SIXTEEN LOWEST row indices -- and low rows live in low q tiles, so the culprit list
+            # was guaranteed to come out as the first two or three q tiles regardless of the truth.
+            # That artifact produced a "corruption is deterministic in q_start" claim which the next
+            # run contradicted (q tiles 0,1 instead of 1,2). Sample everything and report the
+            # DISTRIBUTION over (q_tile, kv_head) instead of listing a biased prefix.
             _badset = sorted({r for r, _ in _bad_rows})
             _culprits = {}
-            for _r in _badset[:16]:
+            for _r in _badset:
                 for _i in _items_for(_r):
                     _culprits.setdefault(_i, []).append(_r)
-            print(f"[planmap] bad rows map to {len(_culprits)} task-3 items: "
-                  f"{sorted(_culprits)[:10]}")
+            print(f"[planmap] bad rows map to {len(_culprits)} task-3 items (of {len(_qs)})")
+            # Item index encodes (q_tile, kv_head): 952 = 8 q tiles x 7 kv heads (prefill, 56) +
+            # 128 decode rows x 7 kv heads (896). Verified against the decoded total.
+            _NQT = 8
+            _byqt, _bykh = {}, {}
+            for _i in _culprits:
+                if _i < 56:                      # prefill items only; decode rows have one tile
+                    _byqt[_i % _NQT] = _byqt.get(_i % _NQT, 0) + 1
+                    _bykh[_i // _NQT] = _bykh.get(_i // _NQT, 0) + 1
+            print(f"[planmap] prefill culprits by q_tile:  {dict(sorted(_byqt.items()))}")
+            print(f"[planmap] prefill culprits by kv_head: {dict(sorted(_bykh.items()))}")
+            print(f"[planmap] culprit items >=56 (decode rows): "
+                  f"{sum(1 for _i in _culprits if _i >= 56)}")
             for _i in sorted(_culprits)[:4]:
                 _b = _own.get(_i)
                 _sib = [j for j in range(_wi[_b], _wi[_b + 1])] if _b is not None else []
                 print(f"[planmap] CULPRIT item={_i} blk={_b} rows={_culprits[_i][:6]} "
                       f"q_start={_qs[_i]} batch={_bi[_i]} kv_len={_kl[_i]}")
-                for _j in _sib[:6]:
+                for _j in _sib[:8]:
                     tag = "SAME" if _j == _i else "nbr "
-                    print(f"[planmap]   {tag} item={_j} q_start={_qs[_j]} batch={_bi[_j]} "
-                          f"kv_len={_kl[_j]} bad={'Y' if _j in _culprits else 'n'}")
+                    _kst = _PLANMAP["kv_start"][_j]; _ken = _PLANMAP["kv_end"][_j]
+                    # CHUNK-RELATIVE causal bound, the kernel's own formula:
+                    #   causal_kv_len = kv_total - kv_start
+                    #   a row's last allowed key (chunk-local) = token + 1 + causal_kv_len - qo_tok
+                    # Reference, absolute: token may attend keys [0, kv_total - qo_tok + token],
+                    # so chunk-local limit = (kv_total - qo_tok + token) - kv_start + 1.
+                    # The two agree identically; a DISAGREEMENT at the culprit tiles is the bug.
+                    _ckv = _kl[_j] - _kst
+                    _lastok = (_qs[_j] + 128 - 1) // _G          # last token this q tile owns
+                    _qt = qo_lens[_bi[_j]]
+                    _kern = _lastok + 1 + _ckv - _qt
+                    _ref = (_kl[_j] - _qt + _lastok) - _kst + 1
+                    print(f"[planmap]   {tag} item={_j} q_start={_qs[_j]} kv=[{_kst},{_ken}) "
+                          f"ckv={_ckv} last_tok={_lastok} kern_limit={_kern} ref_limit={_ref} "
+                          f"{'MISMATCH' if _kern != _ref else 'ok'} "
+                          f"bad={'Y' if _j in _culprits else 'n'}")
     # Timing runs ONLY after the verdict is printed, and only when the arm passed -- a timing
     # number for a failing kernel is worse than none.
     if _os.environ.get("TIME_AB") == "1":

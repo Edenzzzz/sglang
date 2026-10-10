@@ -235,6 +235,49 @@ the real 15x so the 28% stops mattering.
 
 ### THE TWO MAIN KERNEL ITEMS (user, 2026-10-09) — both NOT STARTED
 
+#### A. Ultra fine-grained tile dispatcher — **[~] A3 MEASURED (2026-10-10). The user's threshold
+#### hypothesis is REFUTED, and in the OPPOSITE direction from the tile-occupancy argument.**
+
+**A3 dispatch curve.** New `band1` fixture: ONE row declared on each side, kv=2048, GQA 4, so
+`packed_qo = qo * 4`. Every arm passes the fp32 reference (0 bad rows). `SM_SPLIT=64`.
+
+| `packed_qo` | FA2 ms | FA3 ms | FA3 advantage | FA3 vs `BatchAttention` |
+|---|---|---|---|---|
+| 16 | 0.1428 | **0.0270** | **5.3x** | 1.34x |
+| 32 | 0.4018 | **0.0330** | **12.2x** | 1.69x |
+| 48 | 0.3975 | **0.0391** | **10.2x** | 1.89x |
+| 64 | 0.4021 | **0.0452** | **8.9x** | 2.42x |
+| 96 | 1.0491 | **0.0582** | **18.0x** | 2.91x |
+| 128 | 1.0507 | **0.0709** | **14.8x** | 3.56x |
+
+**FA3 wins at EVERY point in the band, by 5-18x.** So:
+
+1. **The user's hypothesis -- "only do tile 16, 32, 48 [on FA2]; >=64 should be more performant
+   with FA3" -- is refuted at this kv.** The data says **>=16** belongs on FA3. FA2 is 5-12x worse
+   precisely where the plan currently sends those rows.
+2. **It also inverts this doc's own tile-occupancy framing.** The standing argument is that
+   `packed_qo` in [48,128) is sent to FA3 and handed a 128-wide WGMMA tile it cannot fill -- "up to
+   63% of the tile idle". That waste is real, but it is **irrelevant next to FA2's cost**: FA3 with
+   63% of its tile idle still beats FA2 by 10x at packed 48. The defect is not that too many rows
+   reach FA3; it is that **too few do**.
+3. **`MIN_PACKED_QO = 48` is wrong in the opposite direction** from what the occupancy argument
+   implies. Lowering it (toward 16) is the measured win; raising it would be worse.
+4. **This is also where the fused kernel is CLOSEST to the baseline** -- 1.34x at packed 16, rising
+   to 3.56x at 128 -- against 4.9x on `mixed`. The verify-row band is the project's strongest
+   ground, not its weakest.
+
+**Caveat, and it bounds the claim: this is kv=2048 only.** The doc's own earlier finding is that
+**decode-only (qo=1, short kv) favours FA2 by 1.30x**, so the crossover must depend on kv as well
+as `packed_qo` -- which is exactly the 2-D boundary the "2-D dispatch boundary" section below
+argues for. A1/A2 (tile widths) remain untested; what is measured here is **A3, the routing
+decision**, and it is worth far more than the 0.3-2.3% B1d priced for tile occupancy.
+
+**Harness note:** routing cannot be overridden in the PLAN for testing -- the driver stitches
+`got = o; got[nfa3_rows:] = pers_o[nfa3_rows:]` from the FIXTURE's `nfa3`, so a row the plan moves
+to FA3 writes into `o` and is discarded. The `FUSED_FA3_MIN_PACKED` sweep returned bad rows in
+exact proportion to rows moved (5->64/64, 4->60, 3->52, 2->40, 1->24, 0->pass); that is the
+artifact, not a kernel defect. `band1` declares the side instead.
+
 #### A. Ultra fine-grained tile dispatcher — **[ ] NOT STARTED, nothing implemented**
 
 The defect, as the user put it on 2026-10-09 and still true today: `split_classes` admits any row

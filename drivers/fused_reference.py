@@ -86,6 +86,35 @@ def main():
         # to one chunk: still unsplit, still no merge, but now a valid causal problem.
         fa3_q, fa3_kv = [128], [128]
         fa2_q, fa2_kv = [], []
+    elif mode == "band1":
+        # ONE row, declared on whichever side BAND_SIDE names, so the driver's stitching stays
+        # valid (it assumes FA3 rows are a PREFIX of q/o). BAND_QO sets the q length, giving
+        # packed_qo = BAND_QO * 4 at GQA 4.
+        #
+        # This is the correct way to trace the dispatch curve. Overriding the routing inside the
+        # PLAN (FUSED_FA3_MIN_PACKED) does not work with this harness: the driver computes
+        # `got = o; got[nfa3_rows:] = pers_o[nfa3_rows:]` from the FIXTURE's nfa3, so a row the
+        # plan moves to FA3 writes into `o` and is then discarded. That is why the MIN_PACKED
+        # sweep returned bad rows in exact proportion to the rows moved (5->64/64, 4->60, 3->52,
+        # 2->40, 1->24, 0->pass) -- a harness artifact, NOT a kernel defect.
+        _bq = int(_os.environ.get("BAND_QO", "16"))
+        if _os.environ.get("BAND_SIDE", "fa2") == "fa3":
+            fa3_q, fa3_kv = [_bq], [2048]
+            fa2_q, fa2_kv = [], []
+        else:
+            fa3_q, fa3_kv = [], []
+            fa2_q, fa2_kv = [_bq], [2048]
+    elif mode == "band":
+        # THE CONTESTED DISPATCH BAND, which no previous fixture covered. A 4-mode verify row is
+        # qo = num_draft_tokens against a long context, so at GQA 4 these give
+        # packed_qo = 16 / 32 / 48 / 64 / 96 -- exactly the [16,128) range where the FA3-vs-FA2
+        # decision is made and where `MIN_PACKED_QO = 48` currently admits rows into a 128-wide
+        # WGMMA tile they cannot fill.
+        #
+        # All rows start on the FA2 side; FUSED_FA3_MIN_PACKED=<n> moves those with packed_qo >= n
+        # to FA3, so sweeping n traces the real dispatch curve instead of assuming a threshold.
+        fa3_q, fa3_kv = [], []
+        fa2_q, fa2_kv = [4, 8, 12, 16, 24], [2048, 2048, 2048, 2048, 2048]
     elif mode == "fa3_multitile":
         # MULTI q tile, NO split: 256 tokens * G=4 = 1024 packed rows = 8 q tiles of CTA_Q=128,
         # while kv=256 keeps the plan at one chunk. The `fa3` fixture changes three things at once

@@ -1,8 +1,22 @@
 # Current goal
 
-## THE TWO MAIN KERNEL ITEMS (user, 2026-10-09) — both NOT STARTED
+## Tasks, in priority order (2026-10-10)
 
-### A. Ultra fine-grained tile dispatcher — **[ ] NOT STARTED, nothing implemented**
+**The bar:** >=30% TTFT & ITL and >=10% throughput on realistic mixed workloads, against
+**both** baselines (single node: prefill-prioritized AND mixed chunked prefill; multi node:
+PD multiplex AND PD disagg, with disagg the main argument). **NOT MET.** Best realistic
+figure: `mixed` fused **0.1717 ms** vs unfused **0.0690 ms** -- 2.5x SLOWER. Only the
+single-chunk microbenchmark leads (`fa3_1chunk` 1.45x faster).
+
+**Standing decisions (user 2026-10-09), these override earlier framing:** the fused kernel
+MUST land on upstream (port to flashinfer 0.7, not a fork demo) and **the port plus precision
+validation come FIRST (user 2026-10-10)**; per-class SLO targets derive from the given papers,
+not invented; H20/multi-node only after ALL kernel items close; **-5% to -8.4% in-server is
+NOT acceptable** -- the kernel must be a gain.
+
+### THE TWO MAIN KERNEL ITEMS (user, 2026-10-09) — both NOT STARTED
+
+#### A. Ultra fine-grained tile dispatcher — **[ ] NOT STARTED, nothing implemented**
 
 The defect, as the user put it on 2026-10-09 and still true today: `split_classes` admits any row
 with `packed_qo` in **[48, 128)** to FA3, which uses a **fixed `TILE_Q = 128`** — so **up to 63%
@@ -41,7 +55,7 @@ thresholds are now DERIVED from the configured widths rather than hardcoded at 6
 **Deferred by user instruction (2026-10-10): the flashinfer port and precision validation come
 FIRST, so the kernel can land directly on upstream.** A2/A3 resume after K1 closes.
 
-### B. Fuse the small draft/verify epilogue ops — **[ ] NOT STARTED beyond the headroom study**
+#### B. Fuse the small draft/verify epilogue ops — **[ ] NOT STARTED beyond the headroom study**
 
 | # | item | status |
 |---|---|---|
@@ -53,38 +67,8 @@ FIRST, so the kernel can land directly on upstream.** A2/A3 resume after K1 clos
 **Blocker on the bar, recorded not buried:** B1's measured ceiling is **29%**, so the kernel alone
 cannot reach >=30% TTFT/ITL at any efficiency. Closing the bar needs the schedule too.
 
-## Prerequisite and downstream
 
-| # | item | status |
-|---|---|---|
-| **K1** | port the fused kernel to flashinfer 0.7 (prerequisite for both A and B) | **~done, 1 bug open** |
-| K1.corr | every fixture PASSES the causal fp32 reference, `mixed` included | **[x]** rel 0.0033 |
-| K1.race | intermittent 1-row race in `mixed` (co-resident), ~1 in 10-20 runs | **[ ] OPEN** |
-| K1.perf | split-KV path was 78% of kernel time; chunk-size sweep gave **4.5x** on `fa3` | **[~]** still 1.5-2.5x off |
-| **S** | server integration: EDF perf model vs unfused baseline | **[ ] NOT RUN** |
-| **M** | multi-node PD colocation (H20 only, <=16 GPUs, trial `vibecuda`) | **[ ] NOT RUN** — doc: `pd_colocation_vs_disagg.md` |
-
-**The bar:** >=30% TTFT & ITL and >=10% throughput on realistic mixed workloads, against both
-baselines. **Not met.** Best realistic figure: `mixed` fused **0.1717 ms** vs unfused **0.0690 ms**
-— 2.5x SLOWER. Only the single-chunk microbenchmark leads (`fa3_1chunk` 1.45x faster).
-
-**Everything below is the evidence trail, newest first within each item.** The catalogue above is
-the index.
-
-
-**Decisions taken 2026-10-09 (user), these override earlier framing:**
-
-1. **The fused kernel MUST land on upstream** -- port it to flashinfer 0.7 rather than demo on the
-   fork. The port may also make it faster.
-2. **Per-class SLO targets derive from the common settings of the given papers**, not invented.
-3. **The >=30%/>=10% bar is against the baselines, plural**: single node must beat **both**
-   prefill-prioritized (the default) **and** mixed chunked prefill; multi node must beat **both**
-   PD multiplex **and** PD disagg -- *beating disagg is the main argument*, mux is not designed
-   for multi-node so that win should come easily.
-4. **H20 / multi-node only after ALL kernel items are closed.**
-5. **-5% to -8.4% in-server is NOT an acceptable result.** The kernel must be a gain.
-
-## The tile-occupancy defect in the current dispatch (user's observation, 2026-10-09)
+### The tile-occupancy defect in the current dispatch (user's observation, 2026-10-09)
 
 Asked whether everything with a tile size > 16 (post-pack-GQA) goes to FA3. It does not, but the
 real gate is worse than that framing suggests. `split_classes` routes
@@ -112,7 +96,8 @@ verify tiles are absorbed into the same grid by the LPT overlap schedule (no sec
 scatter), and FA3's tile width becomes a per-work-item property instead of a compile-time
 constant.
 
-## MOTIVATION REQUIREMENT: fuse as many small draft/verify ops as possible (user 2026-10-09)
+
+### MOTIVATION REQUIREMENT: fuse as many small draft/verify ops as possible (user 2026-10-09)
 
 *"Make sure we fuse as many small draft/verify operations in the two kernels as possible,
 otherwise it's hard to make a meaningful motivation for fusing the kernel -- a reviewer will ask
@@ -153,7 +138,7 @@ draft decodes are 1 token/row, draft extends are short, verify rows are
       prefill+verify split already built -- scope it explicitly rather than assuming it falls
       out of the existing partition.
 
-### The rationale, in the user's terms (2026-10-09)
+#### The rationale, in the user's terms (2026-10-09)
 
 **The objective is to minimise tile waste**, and the three row populations in a 4-mode step sit
 at different places on that axis:
@@ -177,7 +162,7 @@ machinery. That turns K3 from "write more kernels" into "pick how many widths ar
 instantiating", which is an experiment: instantiate a set, measure, and keep the widths that pay
 for themselves.
 
-### Open question answered: NO, the tree build is NOT fused into FA2 on upstream (2026-10-09)
+#### Open question answered: NO, the tree build is NOT fused into FA2 on upstream (2026-10-09)
 
 Asked directly, and checked in code rather than from memory. **`mix_with_verify` carries no
 `spec_info` and no `custom_mask`** -- there are zero references to either in it. Consequences:
@@ -211,7 +196,7 @@ paged wrapper (and the split's FA2 subset) with it, sliced to the verify rows.
       state "chain draft only" as an explicit limitation wherever the 4-mode results are quoted.
       Listed as K0 because it bears on correctness of everything above it, not on performance.
 
-### Design, in dependency order
+#### Design, in dependency order
 
 - [ ] **K1. Port the fused kernel to flashinfer 0.7.** Reconstruct the JIT-reduction group tables
       (`group_id`, `group_nchunks`, `group_row_begin`, `group_nrows`) that 0.7's
@@ -258,12 +243,44 @@ mixed chat + tracelab. Corrected 2026-10-09 (user): the kernel must be on upstre
 *interfaces and fusion boundaries must fit upstream* -- a 4-mode schedule running upstream's own
 attention measures the scheduling change alone and cannot show the thesis.
 
-## Tasks, in priority order (2026-10-09)
+
+### Prerequisite and downstream
+
+| # | item | status |
+|---|---|---|
+| **K1** | port the fused kernel to flashinfer 0.7 (prerequisite for both A and B) | **~done, 1 bug open** |
+| K1.corr | every fixture PASSES the causal fp32 reference, `mixed` included | **[x]** rel 0.0033 |
+| K1.race | intermittent 1-row race in `mixed` (co-resident), ~1 in 10-20 runs | **[ ] OPEN** |
+| K1.perf | split-KV path was 78% of kernel time; chunk-size sweep gave **4.5x** on `fa3` | **[~]** still 1.5-2.5x off |
+| **S** | server integration: EDF perf model vs unfused baseline | **[ ] NOT RUN** |
+| **M** | multi-node PD colocation (H20 only, <=16 GPUs, trial `vibecuda`) | **[ ] NOT RUN** — doc: `pd_colocation_vs_disagg.md` |
+
+**The bar:** >=30% TTFT & ITL and >=10% throughput on realistic mixed workloads, against both
+baselines. **Not met.** Best realistic figure: `mixed` fused **0.1717 ms** vs unfused **0.0690 ms**
+— 2.5x SLOWER. Only the single-chunk microbenchmark leads (`fa3_1chunk` 1.45x faster).
+
+**Everything below is the evidence trail, newest first within each item.** The catalogue above is
+the index.
+
+
+**Decisions taken 2026-10-09 (user), these override earlier framing:**
+
+1. **The fused kernel MUST land on upstream** -- port it to flashinfer 0.7 rather than demo on the
+   fork. The port may also make it faster.
+2. **Per-class SLO targets derive from the common settings of the given papers**, not invented.
+3. **The >=30%/>=10% bar is against the baselines, plural**: single node must beat **both**
+   prefill-prioritized (the default) **and** mixed chunked prefill; multi node must beat **both**
+   PD multiplex **and** PD disagg -- *beating disagg is the main argument*, mux is not designed
+   for multi-node so that win should come easily.
+4. **H20 / multi-node only after ALL kernel items are closed.**
+5. **-5% to -8.4% in-server is NOT an acceptable result.** The kernel must be a gain.
+
+
 
 Open items consolidated in one place, completed items kept below them. **Kernel items gate
 everything else** (user: H20 and multi-node only after all kernel items close).
 
-### OPEN -- kernel: TWO MAIN ITEMS (user 2026-10-09)
+#### OPEN -- kernel: TWO MAIN ITEMS (user 2026-10-09)
 
 **Prerequisite for both: K1 -- port the fused kernel to flashinfer 0.7** (must land upstream).
 Reconstruct the JIT-reduction group tables 0.7's `HolisticPlanInfo` dropped (`group_id`,

@@ -49,9 +49,20 @@ BYTES_PER_KV_TOKEN = 2 * 2 * 128      # K and V, bf16, head_dim 128, per token
 BW_PER_SM = 22.0                      # B/ns/SM before saturation
 BW_PEAK = 2.87e3                      # B/ns at saturation
 
-# A row joins the FA3 class only if it fills enough of a 128-wide tile. Measured
-# crossover after GQA packing: 0.78x at packed_qo 32, 1.13x at 56.
-MIN_PACKED_QO = 48
+# A row joins the FA3 class only if it fills enough of a 128-wide tile. The original crossover
+# (0.78x at packed_qo 32, 1.13x at 56) is CONTRADICTED by a four-axis sweep on the 0.7 port
+# (2026-10-10, tasks/debug_kernel_server_perf_4_mode.md, fixture `band1`), every arm gated against
+# the causal fp32 reference at 0 bad rows:
+#
+#   packed_qo 4..128  x  kv 128..65537  x  rows 1..128   ->  FA3 faster at EVERY point, 1.16x-12.1x
+#
+# including the 18-row / kv=65537 decode shape where the doc previously recorded "FA2 beats FA3 by
+# 1.30x" -- that entry is RETRACTED (both its arms failed numerics; FA3 is 3.66x faster there).
+#
+# So there is no measured shape at which the FA2 role is the right executor, and MIN_PACKED_QO has
+# no support at 48 or any other value. Env-overridable rather than silently re-pinned, because the
+# implication is a DESIGN question, not a constant: see the note in split_classes.
+MIN_PACKED_QO = int(os.environ.get("SGLANG_FUSED_MIN_PACKED_QO", "48"))
 # ... and only if there is enough KV behind it to amortise the mainloop.
 #
 # MEASURED 2026-10-05 and this was wrong, expensively. At the serving head shape
@@ -132,6 +143,12 @@ def split_classes(qo_lens, kv_lens, gqa_ratio):
     packed_qo = qo * gqa_ratio
     q_tiles = (packed_qo + (TILE_Q - 1)) >> Q_SHIFT
     kv_tiles = (np.maximum(kv, 1) + (TILE_KV - 1)) >> KV_SHIFT
+    # A3 (2026-10-10): the four-axis sweep found NO shape where the FA2 role wins, so every
+    # threshold here routes work to the slower executor. Lowering MIN_PACKED_QO is the measured
+    # improvement -- but note what it converges to: if every row goes to FA3 the fused kernel has
+    # no co-resident FA2 role, i.e. it degenerates to FA3-only (`SM_SPLIT=all`) and the two-role
+    # premise collapses. That is a design question, not a constant, and it is recorded in the task
+    # doc rather than resolved by quietly editing a number here.
     fa3 = ((packed_qo >= MIN_PACKED_QO) & (kv_tiles >= MIN_KV_TILES)
            & (qo >= MIN_QO_LEN))
     fa3 = _apply_decode_population_guard(fa3, kv_tiles)

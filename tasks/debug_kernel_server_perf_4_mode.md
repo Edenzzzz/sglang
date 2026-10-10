@@ -805,10 +805,11 @@ were 17 bugs -- the honest read is "racecheck cannot distinguish our real race f
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
 **[x] IT IS A RACE, settled cleanly for the first time (2026-10-10).** Same build dir, same seed,
-6 repeats at dec=128 baseline:
+6 repeats at dec=128 baseline, BOTH seeds varying:
 
 ```
 SEED=1 :: 96 100 88 88 92 84
+SEED=2 :: 112 68 96 120 88 88
 ```
 
 **Varying, so not an addressing bug.** Every earlier comparison crossed BUILDS (seed 1 -> 100 in one
@@ -817,6 +818,26 @@ is the first within-build repeat. The alternative I raised one step earlier -- "
 the wrong pages, a pure data error" -- is therefore dead, and independently so: `my_kv_offset[2]` is
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
+
+**[!] TWO BUGS IN MY OWN INSTRUMENT, caught before the measurement was believed (2026-10-10).**
+
+1. **The counters went to a branch that is never compiled.** `prefill_sm90` calls `load()` from two
+   places, under `if constexpr (MULTIITEMSCORING)`. I instrumented the MULTIITEMSCORING branch,
+   which is not instantiated for our config, while the active `else` branch got none -- so both
+   counters would have stayed 0 and **every thread would have reported false asymmetry**. The whole
+   run would have "found" a spectacular bug that was mine. Retargeted to the active branch.
+2. **A hypothesis I nearly committed, checked and dropped.** The active `else` branch calls `load()`
+   with far fewer arguments -- no `num_kv_tiles_outside_items_window`, no `num_kv_tiles_prefix`, no
+   `causal_kv_len` -- which looked like the producer computing its tile count with a DEFAULTED causal
+   bound while the outer count used the absolute one, i.e. exactly the invisible imbalance. **It is
+   not:** `load()` computes `get_num_kv_tiles(..., fused_causal_kv_len(work_tile_info, kv_len))`
+   itself, reading `work_tile_info` directly (`sparse_mainloop.cuh:275`), so it matches the outer
+   computation exactly.
+
+Noted in passing, pre-existing and not ours: the MULTIITEMSCORING call site passes THREE trailing
+args (`..._outside_items_window`, `..._prefix`, `fused_causal_kv_len`) into a signature with two
+such params, so that branch would not compile if ever instantiated. Latent, because
+`MULTIITEMSCORING` is off everywhere here.
 
 **[!] LIMITATION OF MY OWN ACCOUNTING, recorded so the "0 mismatches" is not over-read.** The
 instrument counted the producer's **intended** loads (`num_kv_tiles`, accumulated once per item)

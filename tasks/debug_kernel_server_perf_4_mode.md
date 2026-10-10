@@ -769,14 +769,37 @@ scheduler logic: our `FusedPlanInfo` rather than 0.7's `PrefillSM90Plan` -- the 
 partitioning, the per-item arrays, and `len_kv_chunk` / `partial_indptr`, which stock has no
 equivalent of.
 
-**Next, the cheapest remaining discriminator.** Stock also hands each CTA a contiguous
-`[ptr_begin, ptr_end)` run, so partitioning shape is shared. The one thing only OUR plan does is
-put several items of the **same `(batch, q_start)` group** -- differing only in kv chunk -- into one
-CTA's run, i.e. consecutive items that write the **same output rows**. If a CTA's run ever contains
-two items with identical `q_start` and `batch_idx`, that CTA writes one output row twice from two
-work items, and when `num_kv_chunks == 1` (no merge, direct write) the second write races the
-first. The `[sched]` probe already prints `q_start` and `batch_idx` per item, so this is one grep
-away.
+**[!] Same-output-row collision hypothesis REFUTED (partially sampled).** Checked whether a CTA's
+run contains two items with the same `(blk, kvh, q_start)` -- i.e. two work items in one CTA writing
+the same output rows. **Zero collisions.** Caveat that bounds it: only 310 of ~910 `[sched]` lines
+printed (CUDA printf ring-buffer drops), so coverage is ~34% and this is suggestive, not proof.
+
+**[>] STOPPED GUESSING: `compute-sanitizer --tool racecheck` is now running on the simplest failing
+arm.** That is roughly the SIXTH hypothesis eliminated by hand on this one defect (kQueryEmpty,
+work_idx symmetry, Q-completion mechanism, scheduler advance logic, the handshake, same-row
+collisions). Manual elimination has been the wrong instrument for several turns: a shared-memory
+race is exactly what racecheck detects directly.
+
+Arm chosen: **stock gather + stock store** (the 7/10, mean-5.6 baseline) at `DEC_ROWS=32` -- the
+simplest configuration that still fails, with ~2+ items per CTA, kept small so the sanitizer
+finishes. Command:
+
+```
+cd /dev/shm/w/drv
+export PYTHONPATH=/dev/shm/w/up/python SGLANG_FUSED_FI_ROOT=/dev/shm/w/port07
+GQA1=1 FUSED_PACKED_Q=off FA3_MBARRIER=0 FA3_CTA_Q=128 FA3_CTA_KV=128 FA3_CAUSAL=1 \
+  MODE=mix_decode DEC_ROWS=32 MIX_ALL_FA3=1 SM_SPLIT=all FUSED_NOSPLIT=0 SEED=0 \
+  /usr/local/cuda/bin/compute-sanitizer --tool racecheck --racecheck-detect-level info \
+  --print-limit 40 /dev/shm/w/venv/bin/python fused_reference.py
+```
+
+Output lands in `/dev/shm/w/rc.out` on trial `62d25ecfb033ad4b`; `/dev/shm/w/rc.log` carries the
+summary. **Read that first on resume** -- it should name the hazard (write-after-write /
+read-after-write), the smem address and the two code locations, which ends the elimination game.
+
+**Method note worth keeping:** six hypotheses, each plausible, each refuted, is the signature of
+using the wrong tool rather than of a subtle bug. The racecheck run should have been the second
+step after "it is timing-dependent", not the tenth.
 
 **[SUPERSEDED] [x] FOUR-CORNER BISECT (2026-10-10), and it CORRECTS my "stock paths are CLEAN" claim.** Split
 `write_packed`'s gate (`FUSED_PACKED_O`) from the Q gather's so the two could be mixed. G=1,

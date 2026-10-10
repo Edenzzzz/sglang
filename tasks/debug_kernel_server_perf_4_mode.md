@@ -819,6 +819,43 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[>] THE PARITY MECHANISM, AND AN UNRESOLVED TENSION WITH IT (2026-10-10). Next step, stated
+before running anything so it cannot be fitted to a result.**
+
+**Mechanism.** `__shfl_sync(FULL_MASK, my_kv_offset[parity], src_thread)` (`sparse_mainloop.cuh:440`):
+each thread evaluates `my_kv_offset[parity]` with **its own** `parity`, and the shuffle returns the
+value *src_thread* computed. If `src_thread`'s parity differs from the reader's, the reader receives
+**the other buffer slot** -- a different TILE of the same request, which is exactly the measured
+signature. `parity` is a thread-local `int` (line 341) toggled at **seven** hand-managed sites
+(651, 662, 672, 681, 692, 702) with comments tracking `parity=0/1` through interleaved K and V
+paths. That is precisely the shape of state machine where one path through the loop leaves the
+value inconsistent.
+
+**Unresolved tension, recorded rather than smoothed over.** A wrong-tile *logic* error would be
+**DETERMINISTIC**, but the defect is **nondeterministic** (same build, same seed: 96 100 88 88 92
+84). Three possibilities, and they are distinguishable:
+
+1. `parity` DIVERGES across threads only under some timing-dependent path, so the shuffle slot is
+   race-dependent. Would explain both the wrong tile and the variance.
+2. The wrong-tile write is deterministic and a SECOND, timing-dependent effect modulates how many
+   output rows it spoils. Two effects, which the ~4x depth scaling would then be shared between.
+3. `parity` is uniform and correct, and the wrong tile arrives some other way -- in which case the
+   tile localisation stands but the parity suspect is wrong.
+
+**How to separate them without guessing:** the register-counting pattern already proven not to mask
+the defect. Per thread, accumulate a signature of the `(kv_tile_idx, parity)` pairs it actually
+gathered -- e.g. `sig ^= (kv_tile_idx * 2 + parity) * (i + 1)` -- and print per block after the
+loop. If threads within a warp report different signatures for the same item, case 1 is confirmed
+and names the diverging site; if every thread agrees yet the tile is still wrong, case 3. A
+deterministic signature across repeats with varying bad-row counts is case 2.
+
+**Why `parity` uniformity is NOT yet established by reading:** every toggle sits inside a branch on
+`kv_tile_idx`, which is uniform across the warpgroup, so uniformity is *plausible* -- but
+`prefetch_kv_offset`'s `valid_read` is thread-dependent (`thread_in_group < NUM_ITERS_PER_GROUP`),
+and threads failing it write `my_kv_offset[parity] = 0`. A zero offset is a VALID-LOOKING page
+offset, so a reader shuffling from such a lane gets page 0 of the cache rather than a guard
+violation. That is worth checking directly: it would corrupt with no divergence in `parity` at all.
+
 **[x] POSITIVELY LOCALISED: THE WRONG KV *TILE* IS LOADED -- row/lane addressing exonerated
 (2026-10-10). Sixteenth elimination and the best-aimed state this investigation has reached.**
 

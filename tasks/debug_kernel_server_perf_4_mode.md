@@ -804,6 +804,35 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[!] SPLIT-KV PARTIAL SLAB REFUTED as the residual (2026-10-10) -- the tenth eliminated.**
+
+After the Q fence and the `sO` un-aliasing, 48 bad rows of 384 remained at dec=128. Both fixes are
+SHARED-MEMORY reuse, so the next candidate was a different kind of cross-item state: the split-KV
+partial slab, where each split item writes
+`(indptr[packed_qo_idx] + off) * num_kv_heads + kv_head_idx` and two items landing on one slot
+overwrite each other. Slab pressure scales with the same axis the threshold sweep varied, and it
+was the one candidate that could also explain the BIMODAL knee.
+
+`FUSED_NOSPLIT=1` compiles that path out. **It changed nothing:**
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| `FENCE=1 SPLIT=1`, split ON | 9/10 | 32-60, mean ~48 |
+| `FENCE=1 SPLIT=1 NOSPLIT=1`, split OFF | **8/8** | 36-82, mean ~53 |
+
+Indistinguishable. **The residual is not the partial slab.** Eliminated, with the memory note that
+"split FA3 rows overwrite each other" now bounded: whatever that was, it is not what is corrupting
+these rows.
+
+**What that leaves, and it is the last item of cross-item state I can enumerate: the K/V PIPELINE
+PARITY.** `smem_pipe_write_k/v` and `smem_pipe_read_k/v` are passed **by reference** from one work
+item to the next, and stock only ever runs one item per CTA. If an item ends on an odd stage, the
+next item's producer and consumer start out disagreeing on stage parity and the consumer reads a
+stale K tile. Testable with an existing knob: `KVCONST=1` gives every request the same kv length,
+so every item has the same tile count and the pipeline returns to identical parity after each one.
+Running with a null case (`KVCONST=1` on the baseline too), because constant kv changes the
+workload and without the null a clean arm could just mean "constant kv is an easier shape".
+
 **[x] Q-REUSE FENCE MEASURED: a THIRD real contributor, NOT a fix, and expensive (2026-10-10).**
 
 Dedicated `barrier_Qdone`, 10 seeds per arm at `DEC_ROWS=128` (`MIX_ALL_FA3=1`, `SM_SPLIT=all`),

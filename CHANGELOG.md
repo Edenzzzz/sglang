@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.72.0 — split-KV slab refuted as the residual; pipeline parity is next (2026-10-10)
+
+The 48 remaining bad rows at dec=128 are **not** the split-KV partial slab. Both fixes so far are
+shared-memory reuse, so the slab — where each split item writes
+`(indptr[packed_qo_idx] + off) * num_kv_heads + kv_head_idx`, and whose pressure scales with the
+same axis the threshold sweep varied — was the natural next candidate, and the only one that could
+also explain the bimodal knee. `FUSED_NOSPLIT=1` compiles it out and changed nothing: 8/8 fails at
+36–82 bad rows (mean ~53) against 9/10 at 32–60 (mean ~48) with split on. **Tenth hypothesis
+eliminated.**
+
+Next and last enumerable piece of cross-item state: **K/V pipeline parity**.
+`smem_pipe_write_k/v` and `smem_pipe_read_k/v` are passed by reference across work items, and stock
+runs one item per CTA. An item ending on an odd stage leaves the next item's producer and consumer
+disagreeing on stage parity, so the consumer reads a stale K tile. Tested with `KVCONST=1` (equal kv
+lengths ⇒ equal tile counts ⇒ identical parity after every item), plus a null case on the baseline
+since constant kv also changes the workload.
+
 ## v0.71.0 — B1e: achieved occupancy measured, and it undercuts the fusion motivation (2026-10-10)
 
 ncu with kernels attributed by name (`mix_decode`, `MIX_ALL_FA3=1`, `SM_SPLIT=all`, dec 8 and 128):

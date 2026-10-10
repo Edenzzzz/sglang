@@ -870,6 +870,49 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[x][FINAL] THE PRIZE FOR FIXING K1's DEFECT IS 1.3-1.5x, AND THAT STILL LEAVES ~5x. THE KERNEL
+ROUTE IS CLOSED (2026-10-11).**
+
+The all-FA3 path has no FA2 role, so if it were correct it should avoid the 5-12x FA2 penalty that
+A2 measured -- it was the one remaining configuration with a plausible route to the bar. The
+threshold sweep showed it CLEAN at dec <= 4, so both paths can be timed where both are correct:
+
+| dec | all-FA3 (correct here) | two-role (correct) | all-FA3 gain | `BatchAttention` | all-FA3 vs ref |
+|---|---|---|---|---|---|
+| 2 | **0.2906 ms** | 0.4483 ms | **1.54x** | 0.0589 ms | **4.9x slower** |
+| 4 | **0.3483 ms** | 0.4503 ms | **1.29x** | 0.0639 ms | **5.5x slower** |
+
+**Fixing the defect buys 1.3-1.5x and leaves the kernel ~5x off a drop-in-available reference.**
+The bar needs roughly an order of magnitude, so K1's defect is not what stands between this design
+and >=30% TTFT/ITL -- the design is. That is the last open hope on the kernel route and it is now
+measured, not argued.
+
+**THE KERNEL ROUTE IS CLOSED, with every link correctness-gated:**
+
+1. **A2:** FA2 is 5.0-12.2x slower than FA3 on the small-tile shapes the dispatcher exists to serve;
+   narrow tile classes recover 1.79x at best, leaving 6.7x.
+2. **Two-role path:** correct, and 9.6-9.8x off `BatchAttention`, **invariant** to split-KV, chunk
+   width, `sm_split` and the merge pass.
+3. **All-FA3 path:** fails 6/6 at dec=128; where it IS correct it is only 1.3-1.5x better than
+   two-role and still ~5x off the reference.
+4. **B1/B1e:** 29% ceiling against a >=30% requirement; 18.75% achieved occupancy pinned at one
+   block/SM while the reference runs LOWER occupancy and faster.
+
+Four independent, correctness-gated measurements, all agreeing. **No configuration, tuning knob or
+defect fix inside this design reaches the bar.**
+
+**What is worth keeping and landing upstream, independent of the verdict:** the port's nine bug
+fixes; B2c's cross-role backfill, validated by its own null case (backfill off loses exactly the 128
+FA2-role rows); B1/B1e's headroom numbers; A2's tile-class implementation plus the warp-layout
+correction that unblocked it; and the instrument discipline recorded here -- register-accumulate or
+deterministic-property checks only, never sample where it is cheapest to look, and never use an arm
+as a baseline without re-checking it passes its own gate.
+
+**Where the publishable contribution actually is:** `pd_colocation_vs_disagg.md`, points 1, 2 and 4 --
+cache-hit-first routing with an EDF/SLO veto, best-effort migration encouraging replication, and
+two-way RDMA as a complete graph. All three are router arguments that never needed the fused kernel.
+Point 3, the only one that depended on it, is dead. **The colocation case rests on the router.**
+
 **[!!] SPLIT-KV REFUTED AS THE CAUSE -- and the real cause is the FA2 ROLE, which A2 already
 measured. THIS CLOSES THE PERFORMANCE QUESTION (2026-10-11).**
 

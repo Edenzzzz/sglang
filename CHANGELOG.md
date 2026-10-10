@@ -1,5 +1,34 @@
 # Changelog
 
+## v1.05.0 — FINAL: fixing K1's defect buys 1.3–1.5× and still leaves ~5×; the kernel route is closed (2026-10-11)
+
+The all-FA3 path has no FA2 role, so it was the last configuration with a plausible route to the bar.
+It is clean at dec ≤ 4, so both paths were timed where both are correct:
+
+| dec | all-FA3 | two-role | all-FA3 gain | `BatchAttention` | all-FA3 vs ref |
+|---|---|---|---|---|---|
+| 2 | **0.2906** | 0.4483 | **1.54×** | 0.0589 | **4.9× slower** |
+| 4 | **0.3483** | 0.4503 | **1.29×** | 0.0639 | **5.5× slower** |
+
+**Fixing the defect buys 1.3–1.5× and leaves ~5×.** The bar needs ~10×, so K1's defect is not what
+stands between this design and ≥30% TTFT/ITL — the design is.
+
+**Kernel route closed, four correctness-gated measurements agreeing:** (1) A2 — FA2 is 5.0–12.2×
+slower than FA3 on the dispatcher's own shapes, narrow tiles recover 1.79× at best; (2) two-role path
+correct but 9.6–9.8× off, invariant to every split/chunk/`sm_split` knob; (3) all-FA3 fails 6/6, and
+where correct is only 1.3–1.5× better and still ~5× off; (4) B1/B1e — 29% ceiling vs ≥30% required,
+18.75% occupancy at one block/SM while the reference runs lower occupancy and faster.
+
+**Worth landing upstream regardless:** nine port bug fixes; B2c's backfill validated by its null case;
+B1/B1e headroom; A2's tile classes plus the warp-layout correction that unblocked them; and the
+instrument discipline (register-accumulate or deterministic-property checks only; never sample where
+it is cheapest; never use an arm as a baseline without re-checking its gate).
+
+**Where the contribution is:** `pd_colocation_vs_disagg.md` points 1, 2, 4 — cache-hit-first routing
+with EDF/SLO veto, best-effort migration driving replication, two-way RDMA as a complete graph. All
+router arguments, none needing the fused kernel. Point 3 is dead. **The colocation case rests on the
+router.**
+
 ## v1.04.0 — split-KV refuted as the cause; the FA2 role is, and that CLOSES the perf question (2026-10-11)
 
 | arm | FA3 items | partial_rows | verdict | fused | `BatchAttention` | ratio |

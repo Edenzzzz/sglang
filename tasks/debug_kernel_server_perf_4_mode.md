@@ -870,6 +870,43 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[x] DUPLICATE DISPATCH REFUTED -- and the 5.3-30x GAP IS SPLIT-KV AMPLIFICATION, not the fusion
+concept (2026-10-11).**
+
+`items=0/0/896/896` looked like the same work going to both roles. It is not. Plan debug across
+routings:
+
+| config | items (t0/t1/t2/t3) | partial_rows | merge_rows | float workspace |
+|---|---|---|---|---|
+| `MIX_ALL_FA3=0 SM_SPLIT=64` | 0/0/**896**/**896** | **16384** | 1024 | **59 MB** |
+| `MIX_ALL_FA3=0 SM_SPLIT=96` | 0/0/896/896 | 16384 | 1024 | 59 MB |
+| `MIX_ALL_FA3=1 SM_SPLIT=all` | 0/0/0/**952** | **0** | 0 | **0** |
+
+**The decomposition is exact and there is no duplication:** FA3's 896 = **56 prefill items x 16 kv
+chunks**; FA2's 896 = **128 decode rows x 7 kv heads**. Different work, correctly partitioned.
+
+**But it identifies the cost.** The two-role path chops every prefill q tile into **sixteen** kv
+chunks, writes **16384 partial rows (59 MB)**, and runs a merge pass over 1024 rows. The all-FA3
+path splits **nothing**. So the measured 5.3-30x is **split-KV amplification in that configuration**,
+not an intrinsic property of running two roles -- and it explains the discontinuity that bothered me:
+on the `band1` single-request fixture the FA3 role is only **1.3x** off `BatchAttention`
+(0.0268 vs 0.0203 ms), which no amount of ordinary inefficiency turns into 30x.
+
+**Why this is the first finding this session with a plausible route to the >=10% bar:** the tree
+already measured **4.5x from the kv chunk-size multiplier** on an fa3 fixture, and `FUSED_NOSPLIT=1`
+compiles the split path out entirely. If widening the chunk removes most of the 59 MB of partials and
+the merge pass while staying correct, the gap closes by a large factor from a configuration change
+rather than a kernel rewrite.
+
+**Arms running** (two-role, `dec=128 sm_split=64`, reference point 2.6463 ms vs 0.2707 = 9.8x),
+every one correctness-gated with `partial_rows` printed so the knob is verified to bite:
+`CHUNK_MULT = 1 / 4 / 16`, and `FUSED_NOSPLIT=1`.
+
+**Caveat stated up front:** `FUSED_NOSPLIT=1` removes parallelism, so on a long-kv prefill it may
+trade the merge cost for serialisation -- the doc already records that `BatchAttention` is 22x faster
+than our FA2 role on a long-kv fixture precisely because it splits. The chunk multiplier is the
+interesting arm; NOSPLIT is the bound.
+
 **[x][!!!] THE CORRECTNESS-GATED VERDICT: THE TWO-ROLE FUSION IS 5.3-30x SLOWER THAN
 `BatchAttention` (2026-10-11). Retracting the invalid baseline made the case WORSE, not better.**
 

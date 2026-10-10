@@ -257,6 +257,10 @@ def load_fused_fa3(verbose: bool = False) -> None:
             # Our port ran 1 stage to fit shared memory and thereby removed that invariant, which
             # is the measured race. 2 stages fits once ALIAS_SMEM is on (below).
             "-DFUSED_FA3_STAGES=" + os.environ.get("FA3_STAGES", "2"),
+            # Store-completion handshake: the producer cannot refill smem_v (which sO aliases)
+            # until the consumer has finished reading sO for the current work item. Off by
+            # default until measured -- a mismatched arrival count here deadlocks the kernel.
+            "-DFUSED_O_HANDSHAKE=" + os.environ.get("O_HANDSHAKE", "0"),
             # A/B knobs for the two FusedWarpgroupTraits overrides, the leading suspects for the
             # FA2-only path being ~20x slower than the stock kernel family. Defaults unchanged.
             "-DFUSED_NB_SYNC=" + os.environ.get("NB_SYNC", "1"),

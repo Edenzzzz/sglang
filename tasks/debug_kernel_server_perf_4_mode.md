@@ -353,6 +353,34 @@ corrupted runs. Retraction recorded in place at that entry, together with the th
 that rested on it (routing "already correct in both directions"; "no headroom in decode"; the
 19.3% ceiling).
 
+**[!] AND A3's RESULT UNDERMINES THE TWO-ROLE DESIGN, which is a bigger finding than the
+threshold.** Taken at face value the sweep says: route everything to FA3. But if every row goes to
+FA3 then **no row goes to FA2**, the fused kernel has no co-resident second role, and it degenerates
+to FA3-only -- which is exactly `SM_SPLIT=all`. The two-role SM pre-assignment has no work to
+pre-assign.
+
+Stated as the uncomfortable version: **across `packed_qo` 4-128, kv 128-65537 and rows 1-128 there
+is no measured shape at which the FA2 role is the right executor.** The fusion premise requires at
+least one row class where FA2 wins, so that co-residency beats routing everything to the better
+kernel. This sweep found none.
+
+**Three ways that could still be wrong, and each is a concrete experiment:**
+1. **The sweep ran ONE class at a time** (`BAND_SIDE=fa2` or `fa3`) with the other role's SMs idle.
+   Co-residency changes the economics: FA2 rows running on SMs FA3 is not using are free, even if
+   FA2 is the slower executor per row. **The missing arm is both classes together at a fixed
+   `sm_split`, against FA3-only on all SMs** -- i.e. does fusion beat `SM_SPLIT=all` on a mixed
+   batch? That is the actual fusion question and it has never been measured directly.
+2. The FA2 role may be mis-ported rather than inherently slower -- it is **1.1-22x off
+   `BatchAttention`**, and `BatchAttention` is the same kernel family. If the FA2 role were fixed to
+   parity, its win region might reappear.
+3. Decode at *very* small kv (< 128) was not swept.
+
+**Implementation note:** `MIN_PACKED_QO` is now `SGLANG_FUSED_MIN_PACKED_QO`-overridable
+(`mixed_dispatch.py`) with the measurement recorded at the constant, rather than re-pinned to a new
+number. Pinning it to 16 would be the measured improvement for per-row speed and would
+simultaneously empty the FA2 class -- so the constant should not move until experiment (1) above
+says whether co-residency pays at all.
+
 **So A3's rule is now unambiguous across four axes** -- `packed_qo` 4-128, kv 128-65537, rows
 1-128 -- and it is the same everywhere: **route to FA3**. `MIN_PACKED_QO = 48` has no measured
 support at any point and costs 1.2x-12x below it. A3 can now be wired into `split_classes`.

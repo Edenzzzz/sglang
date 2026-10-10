@@ -870,6 +870,36 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[x] THE SERVER NOW STARTS. Two chained path bugs, both from the re-fork, and the reason five
+attempts showed nothing (2026-10-11).**
+
+| # | site | expects | actual on this pod | effect |
+|---|---|---|---|---|
+| 1 | `mtp_edf.sh:9` | `$W/python`, `$W/fi` | `$W/up/python`, `$W/port07` | `sglang` unimportable |
+| 2 | `run_mixed_workloads.py:346` | **`$W/.venv/bin/python3`** | `$W/venv/bin/python3` | server interpreter does not exist |
+
+Fixed by symlink, leaving both drivers byte-identical to what the recorded arms used:
+`$W/python -> $W/up/python`, `$W/fi -> $W/port07`, **`$W/.venv -> $W/venv`**, `$W/hf` created.
+
+**Server log now grows (8 -> 38 -> 41 lines and climbing) where every previous attempt produced
+exactly 0.**
+
+**[!] WHY FIVE ATTEMPTS SAW NOTHING, and this is the methodological point:** the driver's `summ()`
+helper reports `fallbacks=/tracebacks=/jsons=` by grepping the **server** log -- which was empty,
+because the server never started. So the summary was faithfully describing a file that did not
+contain the failure. The real stderr went to **`$R.trace.log`**, and that file said
+`FileNotFoundError: '/dev/shm/w/.venv/bin/python3'` the whole time. **Five attempts of `jsons=0`
+traced to a missing dot in a path, visible in a file I had not opened.**
+
+That is the fifth silent-success instance today and the sharpest: not a gate that measured nothing,
+but **me reading a summary instead of the raw stderr one level down**. The rule the other four
+produced -- check the artifact, not the exit status -- needed this corollary: **when the artifact is
+empty, read the log of the thing that was supposed to produce it, not the log it was supposed to
+write.**
+
+**Recorded in `restore.sh` and in the memory note** so a future re-fork creates all four symlinks
+rather than rediscovering them one failure at a time.
+
 **[~] ROOT CAUSE FOUND FOR THE IMPORT FAILURE (and fixed), BUT THE SERVER STILL DOES NOT START
 (2026-10-11). Fifth attempt; handing off with the exact next command.**
 

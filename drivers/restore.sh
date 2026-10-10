@@ -81,7 +81,16 @@ for f in $W/slo_attain.py $W/tasks/perf_model/fit_mtp_step.py \
          $W/drv/srv_correctness.py $W/drv/mtp_edf.sh; do
   [ -f "$f" ] || log "SERVING MISSING (push it): $f"
 done
-mkdir -p $W/mtpedf $W/workloads/tracelab $W/tasks/perf_model
+mkdir -p $W/mtpedf $W/workloads/tracelab $W/tasks/perf_model $W/hf
+# PATH SHIMS. Two drivers hardcode paths that a re-forked pod does not have, and both fail with no
+# output at the level the driver reports on -- five serving attempts showed jsons=0 because of these:
+#   mtp_edf.sh:9              PYTHONPATH=$W/python:$W/fi   (fork is at $W/up/python, fi at $W/port07)
+#   run_mixed_workloads.py    $W/.venv/bin/python3          (venv is at $W/venv -- note the dot)
+# Symlink rather than edit the drivers, so they stay byte-identical to what the recorded arms used.
+ln -sfn $W/up/python $W/python
+ln -sfn $W/port07    $W/fi
+ln -sfn $W/venv      $W/.venv
+for l in $W/python $W/fi $W/.venv; do [ -e "$l" ] || log "PATH SHIM FAILED: $l"; done
 
 # ShareGPT is fetchable from HF, so fetch it rather than pushing ~600 MB through a 60 KB-chunked
 # exec channel. mtp_edf.sh wants it at exactly this path.

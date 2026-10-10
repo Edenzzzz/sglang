@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.65.0 — separation done: the race tracks WORK-ITEM count, not request count (2026-10-10)
+
+Two harness fixes were prerequisites:
+- **`ORACLE=ba`** — use the validated `BatchAttention` where the fp32 reference is unaffordable.
+  Cross-validated on a fixture both can run: fp32 0.003303 vs BA 0.004407, **both 0/1024**.
+- **`FWS` 1 GB → 8 GB.** Everything past qo≈2048 had been failing with `FusedFourTaskPlan failed:
+  invalid argument` — the **plan builder**, not the kernel. At qo=2048/kv=8192 the planner makes 64
+  chunks × 64 q tiles, so `partial_o` alone needs **~939 MB**. A harness limit that had masqueraded
+  as a kernel ceiling across several sweeps.
+
+**Result — one request, rising scale:**
+
+| fixture | merge rows | items/CTA | result |
+|---|---|---|---|
+| qo=2048, kv=8192, 1 request | 8192 | ~217 | **PASS 0/2048** |
+| qo=4096, kv=8192, 1 request | 16384 | ~434 | **1 bad row/4096**, rel 0.2989 |
+
+**A single request corrupts at sufficient scale**, so request count is not necessary. The defect
+scales with work-item count — i.e. with how often a CTA reuses `sQ`/`sO` — which **rules out the
+per-request plan arrays** and leaves cross-item reuse as the mechanism, agreeing with the
+four-corner bisect.
+
+**Separate finding:** the partial slab grows as O(`packed_qo` × `num_kv_chunks`) — ~1 GB of partials
+for one 2048-token chunk at 8K context. A real serving concern independent of correctness, and it
+explains why the chunk-size sweep gave 4.5×.
+
 ## v0.64.0 — racecheck ran: 17 hazards, but it also flags stock's correct kernel (2026-10-10)
 
 `compute-sanitizer --tool racecheck` on the simplest failing arm (stock gather + stock store,

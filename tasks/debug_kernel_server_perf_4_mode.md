@@ -803,7 +803,38 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
-**[~] SEPARATION ATTEMPTED, BLOCKED BY THE ORACLE.** In every sweep so far, request count and
+**[x] SEPARATION DONE (2026-10-10): REQUEST COUNT IS NOT REQUIRED. The defect tracks WORK-ITEM
+COUNT.** Two harness fixes were needed first:
+1. **`ORACLE=ba`** -- use the validated `BatchAttention` as the correctness oracle where the fp32
+   reference is unaffordable (it is O(qo x kv x heads) in Python). Validated against fp32 on a
+   fixture both can run: fp32 0.003303 vs BA 0.004407, **both 0/1024**.
+2. **`FWS` 1 GB -> 8 GB.** Everything past qo~2048 was failing with
+   `FusedFourTaskPlan failed: invalid argument` -- the PLAN BUILDER, not the kernel. At
+   qo=2048 / kv=8192 the planner picks a 128-wide kv chunk, giving 64 chunks x 64 q tiles, so
+   `partial_o` alone needs **~939 MB** (524288 partial rows x 7 kv heads x 128 dims x 2 B). A
+   harness limit that had been masquerading as a kernel ceiling for several sweeps.
+
+With both fixed, **one request** at rising scale:
+
+| fixture | `num_merge_rows` | items / CTA | result |
+|---|---|---|---|
+| qo=2048, kv=8192, **1 request** | 8192 | ~217 | **PASS 0/2048** |
+| qo=4096, kv=8192, **1 request** | 16384 | ~434 | **1 bad row / 4096**, rel 0.2989 |
+
+**So a SINGLE request corrupts at sufficient scale: request count is not necessary.** The defect
+scales with the number of work items (and therefore with how many times a CTA reuses `sQ`/`sO`),
+not with the number of requests. That **rules out the per-request plan arrays** -- the direction
+several of the refuted hypotheses were circling -- and leaves cross-item reuse as the mechanism,
+which is what the four-corner bisect also pointed to.
+
+**[!] AND A SEPARATE FINDING worth recording on its own: the partial slab grows as
+O(packed_qo x num_kv_chunks).** Nearly a gigabyte of partials for ONE 2048-token chunk at 8K
+context, and 16384 merge rows at qo=4096. That is a real serving concern independent of
+correctness -- at production context lengths the split-KV workspace alone would dominate the KV
+cache budget. It also explains why the chunk-size sweep gave 4.5x: larger chunks cut this
+quadratically.
+
+**[SUPERSEDED] [~] SEPARATION ATTEMPTED, BLOCKED BY THE ORACLE.** In every sweep so far, request count and
 items-per-CTA grew together (41 requests = 2.5 items/CTA passed; 129 = 7.2 failed), so neither was
 isolated. One request with a long `qo` gives many items/CTA at request count 1:
 

@@ -204,7 +204,17 @@ def main():
     # pages in request order -> page id == element offset at page_size=1
     kv_indices = torch.arange(total_pages, dtype=torch.int32, device=DEV)
 
-    IWS, FWS = 64 << 20, 1 << 30
+    # FWS was 1 GB and that is what blocked every fixture past qo~2048: the plan builder returned
+    # "FusedFourTaskPlan failed: invalid argument" because the split-KV partial slab did not fit.
+    # At qo=2048 / kv=8192 the planner picks a 128-wide kv chunk, giving 64 chunks x 64 q tiles, so
+    # partial_o alone needs ~939 MB (524288 partial rows x 7 kv heads x 128 dims x 2 B) plus ~15 MB
+    # of partial_lse. That is a HARNESS limit, not a kernel one -- H200 has 143 GB.
+    #
+    # Worth recording as a finding in its own right: the partial slab grows as
+    # O(packed_qo x num_kv_chunks), i.e. quadratically in context length for a fixed chunk width.
+    # Nearly a gigabyte of partials for ONE 2048-token chunk at 8K context is a real serving
+    # concern, independent of the correctness work.
+    IWS, FWS = 256 << 20, 8 << 30
     int_ws = torch.zeros(IWS // 4, dtype=torch.int32, device=DEV)
     pin_ws = torch.zeros(IWS // 4, dtype=torch.int32).pin_memory()
     flt_ws = torch.zeros(FWS // 4, dtype=torch.float32, device=DEV)
@@ -526,7 +536,27 @@ def main():
                       f"keys[{lo},{hi}) O_rel={rel:.4g} lse_got={lse_got:.5f} "
                       f"lse_ref_log2={lse_ref:.5f}")
 
-    ref = fp32_causal_reference(q, kpad, vpad, qo_lens, kv_lens, sm_scale)
+    # ORACLE=ba uses flashinfer's persistent `BatchAttention` as the correctness oracle instead
+    # of the fp32 reference. Why this is sound AND necessary:
+    #   * sound: BatchAttention has been gated against fp32_causal_reference on every fixture here
+    #     and passes at 0 bad rows (rel 0.0018-0.0031), so it is a validated stand-in.
+    #   * necessary: the fp32 reference is O(qo x kv x heads) in Python and becomes unaffordable
+    #     past qo~2048 at kv=8192 -- it OOMs or runs past any sane cap. That blocked the ONE
+    #     experiment needed to separate "items per CTA" from "request count", because reaching
+    #     many items/CTA at request count 1 requires a long qo.
+    # Keep ORACLE=fp32 (the default) for the small fixtures: that is what validates the oracle.
+    if _os.environ.get("ORACLE") == "ba":
+        from flashinfer.attention import BatchAttention as _BA
+        _orc = _BA(kv_layout="NHD", device=DEV)
+        _orc.plan(qo_indptr.to(DEV), kv_indptr.to(DEV), kv_indices[: int(kv_indptr[B])],
+                  kv_len_t.to(DEV), HQ, HKV, D, D, PAGE, causal=True, sm_scale=sm_scale,
+                  q_data_type=DT, kv_data_type=DT)
+        _oo = _orc.run(q, (k_cache, v_cache))
+        ref = (_oo[0] if isinstance(_oo, tuple) else _oo).float()
+        print(f"[oracle] BatchAttention (validated stand-in for fp32): "
+              f"absmax={float(ref.abs().max()):.6f}")
+    else:
+        ref = fp32_causal_reference(q, kpad, vpad, qo_lens, kv_lens, sm_scale)
 
     # Elementwise ref-vs-got for token 0 at each kv-head group, so a [wpk] line with tok=0 can be
     # matched by its kvh. Direct comparison, no inference: the store addresses are verified exact

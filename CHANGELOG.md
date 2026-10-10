@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.78.0 — per-thread barrier arrivals are symmetric; suspicion moves to the smem layout (2026-10-10)
+
+Each of the 128 producer threads compared its own `producer_commit` count to its own intended loads,
+printing only on disagreement (silence = pass). All 7 commit sites, on the branch that compiles:
+
+```
+verdict: bad rows 124/384      <- instrument again PRESERVES the defect
+ASYMMETRIC THREADS: 0
+loaded == commit_k == commit_v on every block (108, 109, 110, 112, 124, 128)
+```
+
+Thirteenth hypothesis eliminated. **Synchronisation is now verified correct at every reachable
+level**: item tile counts, per-thread arrivals, stage indexing (`STAGES=1` can't shift and still
+fails), cp.async coverage, scheduler determinism, acquire/release pairing — and a race still reads
+another request's K/V.
+
+Suspicion therefore moves from the protocol to the **shared-memory layout**: `ALIAS_SMEM=1` (default)
+overlays FA2's `SharedStorage` on FA3's region, which is the only reason the 2-stage co-resident
+config fits (163920 vs 234544 against a 232448 max). Every block here takes the FA3 role so FA2
+should never write there — but anything that does corrupts K/V stages while leaving all counts
+consistent. Testable as one bit at `STAGES=1` only, since disjoint doesn't fit at two stages.
+
+Also fixed two bugs in the instrument itself before trusting it: the counters had gone to the
+never-instantiated `MULTIITEMSCORING` branch (all threads would have reported false asymmetry), and a
+near-committed hypothesis about the `else` branch's shorter arg list was checked and dropped —
+`load()` reads `work_tile_info` and calls `fused_causal_kv_len` itself.
+
 ## v0.77.0 — it IS a race (first clean within-build test); accounting limitation recorded (2026-10-10)
 
 Same build dir, same seed, 6 repeats at dec=128 baseline: **96 100 88 88 92 84**. Varying ⇒ **a

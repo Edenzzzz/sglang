@@ -819,6 +819,38 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[x] PER-THREAD BARRIER ARRIVALS ARE SYMMETRIC -- thirteenth hypothesis eliminated
+(2026-10-10).** Each of the 128 producer threads compares its OWN `producer_commit` count against
+its OWN intended loads and prints only on disagreement, so silence is the pass condition. All 7
+`producer_commit` sites covered, on the branch that actually compiles.
+
+```
+verdict: bad rows 124/384          <- the instrument again PRESERVES the defect
+ASYMMETRIC THREADS: 0
+[pipe] blk=71 PRODUCER items=7 loaded=112 commit_k=112 commit_v=112
+distinct (loaded, commit_k, commit_v) across all blocks:
+  108/108/108  109/109/109  110/110/110  112/112/112  124/124/124  128/128/128
+```
+
+So the over-arrival story is dead: arrivals are exact at per-thread granularity, and `loaded ==
+commit_k == commit_v` on every block.
+
+**SYNCHRONISATION IS NOW VERIFIED CORRECT AT EVERY LEVEL I CAN REACH:** item tile counts
+(producer and consumer call the same `get_num_kv_tiles` with the same args), per-thread
+`producer_commit` arrivals (0 asymmetric), stage indexing (`STAGES=1` cannot shift and still
+fails), cp.async coverage (`producer_arv_count == NUM_COPY_THREADS`, all 128 issuing threads
+commit), scheduler determinism (`work_indptr` slice + counter, `is_producer` ignored), and
+acquire/release pairing (balanced per path and per item). **And a race still reads another
+request's K/V.**
+
+**That points at the shared-memory LAYOUT rather than the protocol.** `ALIAS_SMEM=1`, the default,
+puts FA2's `SharedStorage` at offset 0 overlapping FA3's region -- it is what makes
+`smem_size = max(FA3, FA2) = 163920` instead of `FA3 + FA2 = 234544` against a 232448 device max,
+i.e. the only reason the 2-stage co-resident configuration launches at all. In this arm every block
+takes the FA3 role so FA2 should never write there, but anything that does would corrupt K/V stages
+while leaving every count consistent -- exactly what is observed. Testable as one bit only at
+`STAGES=1`, since disjoint does not fit at two stages.
+
 **[!] TWO BUGS IN MY OWN INSTRUMENT, caught before the measurement was believed (2026-10-10).**
 
 1. **The counters went to a branch that is never compiled.** `prefill_sm90` calls `load()` from two

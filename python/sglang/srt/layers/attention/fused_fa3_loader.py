@@ -261,6 +261,10 @@ def load_fused_fa3(verbose: bool = False) -> None:
             # until the consumer has finished reading sO for the current work item. Off by
             # default until measured -- a mismatched arrival count here deadlocks the kernel.
             "-DFUSED_O_HANDSHAKE=" + os.environ.get("O_HANDSHAKE", "0"),
+            # Gates write_packed independently of the Q gather, so the multi-item corruption can be
+            # attributed to one or the other. Default follows FLASHINFER_FUSED_PACKED_Q.
+            *([] if os.environ.get("PACKED_O") is None
+              else ["-DFUSED_PACKED_O=" + os.environ["PACKED_O"]]),
             # A/B knobs for the two FusedWarpgroupTraits overrides, the leading suspects for the
             # FA2-only path being ~20x slower than the stock kernel family. Defaults unchanged.
             "-DFUSED_NB_SYNC=" + os.environ.get("NB_SYNC", "1"),

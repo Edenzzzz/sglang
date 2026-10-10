@@ -322,11 +322,41 @@ parallelising `store_partial`'s O write across all MMA threads took the failure 
 **8/10**, and that is split-path code. Two unrelated observations pointing at the same region is
 worth more here than one underpowered A/B.
 
-**Next, and cheaper than more sampling:** the failure is always **1 bad row of 258** at rel
-0.41-0.60. Record WHICH row index fails across occurrences. If it is always the same row, the
-location is deterministic while the occurrence is not -- which points at a specific work item
-(the row with the most chunks, or the one at the fully-masked-chunk boundary) rather than at a
-general memory race. The `mixed` failures were all row 0; that was not checked for `fa3`.
+**[x] ROW INDEX RECORDED (2026-10-10), and it is a Q-TILE BOUNDARY every time.**
+
+Added bad-row indices to the harness (`BADROWS`). Failing rows observed:
+
+| fixture | failing row | token | q tile |
+|---|---|---|---|
+| `mixed` | 0 (repeatedly) | 0 | tile 0, first row |
+| `fa3` | **128** | 128 | tile 4, first row |
+
+At G=4 a q tile spans 128 packed rows = **32 tokens**, so tokens 0 and 128 are both the **FIRST
+row of a q tile**. The location is deterministic, the occurrence is not -- which rules out a
+general memory race and points at one specific work item.
+
+**Mechanism this suggests, and it is specific:** the first row of a q tile has the SMALLEST causal
+bound in that tile (bottom-right causal: fewer keys the earlier the token). So it is the row that
+can have **zero valid keys within a given kv chunk** while later rows of the same tile still have
+some. `get_num_kv_tiles` is computed from the tile's LAST row, so the item runs and
+`store_partial` writes **all** rows of the tile -- including a row whose online-softmax state is
+degenerate: `m = -inf`, `d = 0`, so O is `0/0` and LSE is `-inf`.
+
+The merge then computes `scale = exp2(other_m - m)`. With both `-inf` that is `exp2(NaN)`, and
+`0 * garbage` or `NaN * 0` propagates depending on what the other chunks contributed -- which is
+exactly a defect whose *presence* is deterministic but whose *visible effect* depends on values
+and ordering. It also explains why the observed rel varies so widely (0.04 to 0.80) for a single
+bad row.
+
+Note this is adjacent to, but NOT the same as, the fully-masked-chunk bug already fixed: that one
+was a chunk where the item was skipped entirely (`num_kv_tiles <= 0`) and never wrote its slot.
+This is a chunk where the item RUNS but one of its rows has no valid keys.
+
+**Next: confirm by reading the partials.** `DUMP_PARTIALS=1` already dumps `partial_o`/`partial_lse`
+for chosen (row, chunk, head). Dump the FIRST row of a tile across all its chunks and check for
+`-inf` LSE paired with non-finite or garbage O. If confirmed, the fix is to force a degenerate row
+to a clean identity -- `lse = -inf` with `O = 0` -- at the point `store_partial` writes it, rather
+than letting `0/0` reach the slab.
 
 #### OPEN -- kernel: TWO MAIN ITEMS (user 2026-10-09)
 

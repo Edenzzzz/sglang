@@ -464,6 +464,7 @@ def main():
         return 1
     rows_bad = 0
     worst = 0.0
+    _bad_rows = []
     for r in range(total_q):
         num = (got[r] - ref[r]).norm().item()
         den = max(ref[r].norm().item(), 1e-6)
@@ -471,6 +472,11 @@ def main():
         worst = max(worst, rel)
         if rel > 2e-2:
             rows_bad += 1
+            # WHICH rows fail, not just how many. If the bad row index is always the same across
+            # occurrences, the LOCATION is deterministic while the OCCURRENCE is not -- which
+            # points at a specific work item (most chunks, or the fully-masked-chunk boundary)
+            # rather than a general memory race. Cheaper and more informative than more sampling.
+            _bad_rows.append((r, round(rel, 4)))
             if rows_bad <= 5:
                 print(f"  row {r} rel={rel:.4g}")
     # last rows explicitly: they are the FA2 rows in mixed mode, and they never touch the merge,
@@ -488,6 +494,8 @@ def main():
         print(f"  first={good[0]} last={good[-1]} mod32={sorted({g % 32 for g in good})} "
               f"mod128={sorted({g % 128 for g in good})}")
     print(f"\nmode={mode} worst rel err {worst:.4g}, bad rows {rows_bad}/{total_q}")
+    if _bad_rows:
+        print(f"BADROWS {_bad_rows[:12]}" + (" ..." if len(_bad_rows) > 12 else ""))
     # Timing runs ONLY after the verdict is printed, and only when the arm passed -- a timing
     # number for a failing kernel is worse than none.
     if _os.environ.get("TIME_AB") == "1":

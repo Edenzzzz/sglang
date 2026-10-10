@@ -819,6 +819,51 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[x] CASE 3: THE GATHER SEQUENCE IS DETERMINISTIC AND WARP-UNIFORM -- which forces a TWO-EFFECT
+model and dissolves the tension I had been carrying (2026-10-10). Eighteenth elimination.**
+
+The pre-registered experiment (specified before any of today's results), dec=128, `STAGES=2`, two
+repeats of one seed:
+
+| | repeat 1 | repeat 2 |
+|---|---|---|
+| verdict | **128/384** | **116/384** -- the race is live |
+| `[sig]` lines (probe ran) | 132 | 132 |
+| `[sig-DIVERGE]` lines | **0** | **0** |
+| `blk=0` signature | **805148672** | **805148672** |
+| `blk=1` signature | **-520251392** | **-520251392** |
+| `blk=2` signature | **-1845651456** | **-1845651456** |
+
+**Parity divergence is dead** -- the `(kv_tile_idx, parity)` sequence every thread gathers is
+identical within the warp and identical across runs, while the bad-row count changes between those
+very runs.
+
+**What the signature does NOT prove, stated plainly:** that the sequence is CORRECT. It proves only
+that it is the same every time. That distinction is what makes the result useful rather than
+another dead end.
+
+**TWO-EFFECT MODEL, the first explanation consistent with every measurement taken:**
+
+1. **A DETERMINISTIC wrong-tile bug.** The gather fetches a wrong tile for some items, the same way
+   every run. Explains `KVPERTILE` failing 6/6, `KVPERREQ` passing 0/6 (wrong tile, right request),
+   and the stable per-block signature.
+2. **A SEPARATE timing-dependent effect** that modulates how many output rows the first one spoils.
+   Explains the run-to-run variance (96-128 at fixed seed and build) and the ~4x pipeline-depth
+   scaling. The `sO`/`smem_v` union is already measured as a real DEPTH-DEPENDENT contributor
+   (~29% at 2 stages, nothing at 1) and fits this slot exactly.
+
+**This dissolves the tension recorded in `0e3bb0496`**, where I noted that a wrong-tile logic error
+should be deterministic while the defect is not, and listed it as unresolved. The resolution is that
+no single mechanism has to be both: there are two, and the seventeen eliminations were searching for
+one thing that explained everything.
+
+**NEXT, and it is now a well-posed question rather than a hunt:** is the deterministic sequence
+CORRECT? Compare the per-block signature against the sequence the PLAN says that block's items
+should gather -- computable on the host from `work_indptr`, `kv_start/kv_end` and the chunking, then
+hashed with the same `sig = sig*31 + (kv_tile_idx*2 + parity)` recurrence. A mismatch names the
+offending item and tile directly. This is the first step in this investigation that compares against
+an independently-derived expectation rather than against another arm of the kernel.
+
 **[x] SHUFFLE-LANE INVARIANT HOLDS -- seventeenth elimination, and it kills BOTH shuffle-site
 candidates by arithmetic rather than by a timing-sensitive run (2026-10-10).**
 

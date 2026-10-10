@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.84.0 — case 3: deterministic gather sequence forces a TWO-EFFECT model (2026-10-10)
+
+Pre-registered experiment, dec=128, `STAGES=2`, two repeats of one seed:
+
+| | repeat 1 | repeat 2 |
+|---|---|---|
+| verdict | 128/384 | 116/384 — race live |
+| `[sig-DIVERGE]` | **0** | **0** |
+| `blk=0/1/2` signatures | 805148672 / −520251392 / −1845651456 | **identical** |
+
+**Parity divergence is dead** (18th elimination): the `(kv_tile_idx, parity)` sequence is warp-uniform
+and identical across runs, while bad rows change between those runs. The signature proves the sequence
+is *the same* every time — **not** that it is *correct*.
+
+**Two-effect model**, first explanation consistent with every measurement: (1) a **deterministic
+wrong-tile bug** — explains `KVPERTILE` failing, `KVPERREQ` passing, stable signatures; (2) a
+**separate timing-dependent effect** modulating how many rows it spoils — explains run-to-run variance
+and the 4× depth scaling, with the already-measured depth-dependent `sO`/`smem_v` union fitting that
+slot (~29% at 2 stages, nothing at 1).
+
+This **dissolves the tension in `0e3bb0496`** (a wrong-tile logic error should be deterministic, yet
+the defect is not): no single mechanism needs to be both. Seventeen eliminations were searching for
+one cause that explained everything.
+
+Next, now well-posed: is the deterministic sequence *correct*? Compare the per-block signature against
+the sequence the **plan** says those items should gather — derived on the host from `work_indptr`,
+`kv_start/kv_end` and the chunking, hashed with the same recurrence. First comparison in this
+investigation against an independently-derived expectation rather than another arm of the kernel.
+
 ## v0.83.0 — shuffle-lane invariant holds; both shuffle-site candidates dead (2026-10-10)
 
 Ran the `[kvinv]` probe that had sat unused in the tree (`FLASHINFER_FA3_PARTIAL_PROBE`,

@@ -817,10 +817,14 @@ was the one candidate that could also explain the BIMODAL knee.
 
 | arm | fails | bad rows of 384 |
 |---|---|---|
+| `FENCE=0 SPLIT=0` baseline, split ON | 10/10 | 64-116, mean ~102 |
+| `FENCE=0 SPLIT=0 NOSPLIT=1` **null case** | **8/8** | 80-116, mean ~100 |
 | `FENCE=1 SPLIT=1`, split ON | 9/10 | 32-60, mean ~48 |
 | `FENCE=1 SPLIT=1 NOSPLIT=1`, split OFF | **8/8** | 36-82, mean ~53 |
 
-Indistinguishable. **The residual is not the partial slab.** Eliminated, with the memory note that
+Indistinguishable in BOTH configurations. **The residual is not the partial slab**, and the null
+case earns its place: `NOSPLIT` is **inert** (100 vs 102 on the baseline), which also confirms the
+100 -> 53 improvement belongs to the fence and the un-aliasing rather than to disabling split. Eliminated, with the memory note that
 "split FA3 rows overwrite each other" now bounded: whatever that was, it is not what is corrupting
 these rows.
 

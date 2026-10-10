@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.51.0 — harness was silently passing NaN; and the Q gather is exonerated (2026-10-10)
+
+### Fixed — the correctness harness passed non-finite output
+
+NaN comparisons are all False, so a NaN output scored `rel = nan`, failed the `rel > tol` test and
+came back as `bad rows 0 ... PASS`. Caught because `SKIP_PACKED_Q=1` — which removes the Q load and
+*must* produce garbage — reported `PASS 0.002069` while its output fingerprint was `absmax=nan,
+sum=nan`. **Every verdict this harness printed was unsound for any arm producing non-finite
+output.** Now an explicit non-finite guard fails before any per-row norm; null-cased both ways
+(`SKIP=1` → `NON-FINITE OUTPUT: 730112 of 924672`; `SKIP=0` → PASS; normal arm 6/6 after).
+
+Also added an output fingerprint (`absmax`/`sum`/`nonzero`) so two builds can be compared for
+"did this change anything at all" — the question that resolved this in one run.
+
+### Measured — the packed-Q gather is NOT the bottleneck
+
+With the skip confirmed effective: **0.2927 ms (normal) vs 0.2884 ms (gather removed)** at
+`SM_SPLIT=128` → **~1.5%**. Caveat: the skip arm computes on NaNs and NaN arithmetic need not be
+equally fast, but the loads are structurally gone. This was the *prime* suspect for the 4× gap
+(it replaced TMA with a per-row `cp.async`), so the gap lives elsewhere.
+
+Remaining suspects in order: `FA3_STAGES=1` (single-stage K/V pipeline vs the baseline's 2 — no
+prefetch overlap, the kind of factor that costs multiples; `STAGES=2` cannot launch at these traits,
+so the traits need revisiting); the scalar per-row O stores in `store_partial`/`write_packed`; and
+the baseline being flashinfer's own tuned FA3 at full occupancy.
+
 ## v0.50.0 — fully-masked split chunks now write their partial slot (2026-10-10)
 
 One of (at least) two nondeterminism sources found and fixed. Residual race remains at 1-in-20.

@@ -319,6 +319,11 @@ def main():
         print(f"[time] speedup = {t_u / t_f:.4f}x  "
               f"({100.0 * (t_u - t_f) / t_u:+.2f}% latency)")
 
+    # Output fingerprint, so two builds can be compared for "did this change anything at all".
+    # A diagnostic arm that removes work (SKIP_PACKED_Q=1) must change the output; if the
+    # fingerprint is identical the arm is INERT and any timing delta from it is meaningless.
+    print(f"[fp] got absmax={float(got.abs().max()):.8f} sum={float(got.sum()):.6f} "
+          f"nonzero={int((got != 0).sum())}")
     kpad = [k_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(B)]
     vpad = [v_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(B)]
     # ---- DUMP_PARTIALS=1: is it the PARTIALS or the COMBINATION? -------------------------
@@ -435,6 +440,18 @@ def main():
         print(f"  ours->ref (first 12): {pairs}")
         ident = int((best == _t.arange(best.shape[0], device=best.device)).sum())
         print(f"  identity matches: {ident}/{best.shape[0]}")
+    # NON-FINITE GUARD, and this was a real hole. NaN comparisons are all False, so a NaN output
+    # scored `rel = nan`, failed the `rel > tol` test, and came back as "bad rows 0/258, PASS".
+    # Caught when SKIP_PACKED_Q=1 -- which removes the Q load and MUST produce garbage -- reported
+    # PASS at 0.002069 while its output fingerprint was absmax=nan, sum=nan. Any arm that NaNs was
+    # being reported as correct, which makes every verdict in this harness suspect until checked.
+    import torch as _tt
+    _nonfinite = int((~_tt.isfinite(got)).sum())
+    if _nonfinite:
+        print(f"\nmode={mode} NON-FINITE OUTPUT: {_nonfinite} of {got.numel()} elements are "
+              f"nan/inf. This is a FAIL regardless of any per-row norm.")
+        print("FAIL")
+        return 1
     rows_bad = 0
     worst = 0.0
     for r in range(total_q):

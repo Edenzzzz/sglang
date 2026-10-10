@@ -1608,6 +1608,41 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       That distinguishes "the partials are wrong" from "the combination is wrong", which is the
       one split this investigation has not yet made. State the expected values before dumping.
 
+      **[x] RESOLVED, and it found a HARNESS HOLE worse than the probe (2026-10-10). The
+      packed-Q gather is NOT the bottleneck: it costs ~1.5%.**
+
+      The one-line check -- do the two arms' outputs differ at all -- answered it immediately. An
+      output fingerprint (`absmax`, `sum`, `nonzero`) showed:
+
+      | arm | fingerprint | reported verdict |
+      |---|---|---|
+      | `SKIP_PACKED_Q=0` | absmax 0.01721, sum 97.56 | PASS 0.003279 |
+      | `SKIP_PACKED_Q=1` | **absmax nan, sum nan** | **"PASS 0.002069, 0/258"** |
+
+      **The harness was silently passing NaN.** NaN comparisons are all False, so a NaN output
+      scored `rel = nan`, failed the `rel > tol` test, and came back as `bad rows 0`. Every verdict
+      this harness has ever printed was therefore unsound for any arm that produced non-finite
+      output -- a much worse defect than the probe I was chasing. Fixed with an explicit
+      non-finite guard that fails before any per-row norm is computed; null-cased both ways
+      (`SKIP=1` now reports `NON-FINITE OUTPUT: 730112 of 924672 elements`, `SKIP=0` still PASSes,
+      and the normal arm passed 6/6 afterwards).
+
+      **With the skip confirmed effective, the gather's cost is bounded at ~1.5%**: 0.2927 ms
+      (normal) vs 0.2884 ms (gather removed) at `SM_SPLIT=128`. Caveat worth stating: the skip arm
+      computes on NaNs, and NaN arithmetic need not take the same time as normal arithmetic -- but
+      the loads themselves are structurally gone, so the gather is exonerated as the cause of the
+      4x gap. **This was the prime suspect** (it replaced TMA with a per-row `cp.async` and its own
+      comments call it slow), so the 4x lives elsewhere.
+
+      **Where the 4x must therefore be, in order of remaining suspicion:**
+      1. `FA3_STAGES=1` -- a single-stage K/V pipeline against a baseline that uses 2. No
+         prefetch overlap at all, which is the kind of factor that costs multiples rather than
+         percents. `STAGES=2` cannot launch at these traits (a smem limit), so this needs the
+         traits revisited -- smaller `CTA_Q` or `CTA_KV` to buy the second stage.
+      2. The scalar per-row O stores in `store_partial` and `write_packed`.
+      3. The baseline is flashinfer's own tuned FA3 at full occupancy; ours is a persistent
+         kernel holding 128 of 132 SMs with one-stage traits.
+
       **[!] Perf probe INVALID -- the `SKIP_PACKED_Q` gather bound measured nothing (2026-10-10).**
 
       Wired `SKIP_PACKED_Q` through the loader to bound the packed-Q gather's cost (the gather is

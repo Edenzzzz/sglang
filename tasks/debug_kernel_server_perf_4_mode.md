@@ -870,6 +870,40 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[!] THE SPLIT ARM'S FAILURE IN THAT RUN WAS SELF-INFLICTED: I ran two servers on one GPU and one
+port (2026-10-11). Both that arm and the MIXEDGATE run are void.**
+
+The completed arm reported:
+
+```
+MTP_LPT:      fallbacks=0 tracebacks=0 jsons=1    (9450 server log lines -- baseline WORKS)
+MTPMIX_SPLIT: fallbacks=0 tracebacks=0 jsons=0    (25 lines)
+```
+
+The 25-line log ends mid-weight-load (`Multi-thread loading shards: 50% Completed | 2/4`) with
+`resource_tracker: There appear to be 1 leaked semaphore objects` -- the process was **killed**, not
+an exception. **Cause: I launched the `MIXEDGATE` diagnostic while this arm was still running.** Both
+drivers bind a fixed port and there is one GPU, so two 7B servers tried to load at once. GPU now
+cleared (0%, 0 MiB) and all runs killed.
+
+**Both results are void:** `MTPMIX_SPLIT: jsons=0` here is my interference, and the `MIXEDGATE` run
+was contaminated identically. Neither says anything about the fused path.
+
+**What survives from the pair, and it is not nothing:** `MTP_LPT` produced `jsons=1` over 9450 log
+lines with 0 fallbacks and 0 tracebacks. **The baseline arm works end-to-end on this pod** -- the
+harness, the load generator, ShareGPT, the model, the scorer. Every provisioning blocker really is
+cleared; only the split arm is unproven, and it is unproven for a reason I created.
+
+**Procedural note, because it is the same error class as the day's others:** the GPU is a single
+exclusive resource and the drivers hardcode a port, so serving arms must be **serialised**. I had
+been chaining kernel runs with `until grep ALLDONE` guards all session and then launched a serving
+run without one. The next session should wrap any serving launch in the same wait-for-predecessor
+guard.
+
+**Resume point, unchanged in substance:** serialise, then run the trace arm alone with
+`SGLANG_DBG_DRAFT_COPY=1` and read the `MIXEDGATE pre-filter` lines. That still distinguishes "mixing
+does not happen" from "the counter is not logged", and it is still one env var.
+
 **[>] EVERY GATE CONDITION IS SATISFIED FROM THE DRIVER SIDE, YET NO MIXED STEPS ARE LOGGED. The
 decisive next step is the gate's OWN debug print (2026-10-11). Handoff.**
 

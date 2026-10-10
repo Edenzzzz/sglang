@@ -870,6 +870,45 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[!] EARLY-`continue` DEAD BY ARITHMETIC -- and it exposes a GAP IN MY OWN ACCOUNTING
+INSTRUMENT (2026-10-10).**
+
+The leading candidate from the previous entry was the `q_tile_idx * CTA_Q >= qo_len` early-exit.
+**A decode item never reaches it:** `q_tile_idx = 0`, `packed_qo = 1 token x G4 = 4`, so
+`0 >= 4` is false. Checked before building a test; dead.
+
+What the same arithmetic shows instead is the real asymmetry:
+
+| item | tokens | packed_qo | q tiles | tile occupancy | MMA warps with real rows |
+|---|---|---|---|---|---|
+| prefill | 256 | 1024 | 8 | 128/128 = **100%** | **8 of 8** |
+| decode | 1 | 4 | 1 | 4/128 = **3%** | **1 of 8** (partially) |
+
+A decode item runs a **full 15-16 tile kv sequence** to produce **4 packed rows**.
+
+**[!] THE GAP: my per-item accounting could not have seen a desync of this shape.** `PIPE_COUNT`
+compared, per BLOCK, the producer's summed `num_kv_tiles` against the consumer's release count from
+**one thread**, aggregated over all items that block ran. A decode item over-releasing by *k* and a
+prefill item under-releasing by *k* **cancels exactly** in that sum, and the instrument reports 0
+mismatches -- which it did, on 132/132 blocks. So "loads == consumes" bounds the block TOTAL and says
+nothing about per-item-TYPE balance. That is precisely the asymmetry the prefill/decode localisation
+now points at, and my strongest-looking synchronisation result does not exclude it.
+
+**The corrected instrument is a small change to the one that already works:** keep the register
+counters, but accumulate them into **two** pairs -- one for items with `packed_qo >= CTA_Q` (full
+tiles) and one for items with `packed_qo < CTA_Q` (partial tiles) -- and report both per block. If
+the partial-tile pair and the full-tile pair disagree in opposite directions, the desync is found and
+named. This is the register-accumulate pattern that demonstrably does not mask the defect (124/384
+with it enabled), so it is usable as-is.
+
+**Why this is the leading mechanism now:** the consumer's loop bounds derive from `qo_len`
+(`n_masking_steps = CAUSAL ? ceil_div(CTA_Q, CTA_KV) : 0`, and the three loops' `kv_tile_idx`
+conditions), while the producer's trip count derives from `get_num_kv_tiles`. For a 3%-occupied tile
+those two can legitimately differ in ways they cannot for a full tile -- and a per-item imbalance
+that cancels in the block sum is exactly what would desync the pipeline for the NEXT item on that
+CTA, making a prefill victim re-read a wrong tile of its own request while never importing decode
+data. That is the full measured signature, from one mechanism.
+
 **[x][!!] LOCALISED, REPRODUCIBLY: ALL corruption is in the PREFILL items, ZERO in the 896
 DECODE-row items -- and the decode items are the AGGRESSOR, the prefill tiles the VICTIM
 (2026-10-10). Host-side decode, ALL bad rows mapped, two repeats.**

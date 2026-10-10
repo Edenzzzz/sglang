@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.96.0 — early-continue dead by arithmetic; and a gap in my own accounting instrument (2026-10-10)
+
+The leading candidate — the `q_tile_idx * CTA_Q >= qo_len` early-exit — **is dead**: a decode item has
+`q_tile_idx=0` and `packed_qo=4`, so `0 >= 4` is false and it never reaches it. Checked before
+building a test.
+
+The same arithmetic shows the real asymmetry: a decode item runs a **full 15–16 tile KV sequence** to
+fill a q tile that is **4/128 = 3% occupied** (1 of 8 MMA warps with real rows), versus 100% / 8-of-8
+for prefill.
+
+**The gap:** `PIPE_COUNT` compared, *per block*, the producer's summed `num_kv_tiles` against one
+thread's release count, **aggregated over all items that block ran**. A decode item over-releasing by
+*k* and a prefill item under-releasing by *k* **cancels exactly** — and the instrument duly reported 0
+mismatches on 132/132 blocks. So that result bounds the block *total* and says nothing about
+per-item-*type* balance, which is exactly what the prefill/decode localisation now implicates. My
+strongest synchronisation result does not exclude this.
+
+**Corrected instrument:** same register counters, but split into two pairs — items with
+`packed_qo >= CTA_Q` (full tiles) vs `packed_qo < CTA_Q` (partial) — reported per block. Opposite-sign
+disagreement between the pairs names the desync. The register-accumulate pattern provably doesn't mask
+the defect (124/384 with it on), so it's usable as-is.
+
+**Why it's now the leading mechanism:** consumer loop bounds derive from `qo_len`, producer trip count
+from `get_num_kv_tiles`; for a 3%-occupied tile these can differ in ways impossible for a full tile,
+and a per-item imbalance that cancels in the block sum is precisely what desyncs the pipeline for the
+*next* item on that CTA — making a prefill victim re-read a wrong tile of its own request without
+importing decode data. That is the entire measured signature from one mechanism.
+
 ## v0.95.0 — LOCALISED: all corruption is in PREFILL items; decode items are the AGGRESSOR (2026-10-10)
 
 Host-side decode, **all** bad rows mapped (sampling bug fixed), two repeats:

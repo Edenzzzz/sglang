@@ -97,13 +97,17 @@ def main():
         # plan moves to FA3 writes into `o` and is then discarded. That is why the MIN_PACKED
         # sweep returned bad rows in exact proportion to the rows moved (5->64/64, 4->60, 3->52,
         # 2->40, 1->24, 0->pass) -- a harness artifact, NOT a kernel defect.
+        # BAND_KV sweeps the SECOND axis. A single-kv threshold cannot be the dispatch rule: at
+        # kv=2048 FA3 wins across the whole packed_qo band, but the project's earlier decode-only
+        # result has FA2 ahead by 1.30x at qo=1 / short kv. The boundary is 2-D.
         _bq = int(_os.environ.get("BAND_QO", "16"))
+        _bkv = max(int(_os.environ.get("BAND_KV", "2048")), _bq)
         if _os.environ.get("BAND_SIDE", "fa2") == "fa3":
-            fa3_q, fa3_kv = [_bq], [2048]
+            fa3_q, fa3_kv = [_bq], [_bkv]
             fa2_q, fa2_kv = [], []
         else:
             fa3_q, fa3_kv = [], []
-            fa2_q, fa2_kv = [_bq], [2048]
+            fa2_q, fa2_kv = [_bq], [_bkv]
     elif mode == "band":
         # THE CONTESTED DISPATCH BAND, which no previous fixture covered. A 4-mode verify row is
         # qo = num_draft_tokens against a long context, so at GQA 4 these give

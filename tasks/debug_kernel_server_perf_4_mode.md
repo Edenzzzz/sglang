@@ -266,11 +266,39 @@ the real 15x so the 28% stops mattering.
    to 3.56x at 128 -- against 4.9x on `mixed`. The verify-row band is the project's strongest
    ground, not its weakest.
 
-**Caveat, and it bounds the claim: this is kv=2048 only.** The doc's own earlier finding is that
-**decode-only (qo=1, short kv) favours FA2 by 1.30x**, so the crossover must depend on kv as well
-as `packed_qo` -- which is exactly the 2-D boundary the "2-D dispatch boundary" section below
-argues for. A1/A2 (tile widths) remain untested; what is measured here is **A3, the routing
-decision**, and it is worth far more than the 0.3-2.3% B1d priced for tile occupancy.
+**A3 2-D BOUNDARY MEASURED (2026-10-10). FA3 wins at EVERY point -- there is no crossover.**
+One row, GQA 4, `SM_SPLIT=64`, every arm 0 bad rows. FA3's advantage over FA2:
+
+| `packed_qo` | kv=128 | kv=512 | kv=2048 | kv=8192 |
+|---|---|---|---|---|
+| **4** (one decode token) | 1.16x | 1.73x | 5.36x | **11.0x** |
+| **16** | 1.16x | 1.68x | 5.36x | 8.19x |
+| **64** | 1.64x | 3.96x | 8.93x | **12.1x** |
+
+Raw FA2 / FA3 ms, for the record: (4,128) 0.0245/0.0211; (4,512) 0.0457/0.0264;
+(4,2048) 0.1426/0.0266; (4,8192) 0.5682/0.0516; (16,128) 0.0242/0.0208; (16,512) 0.0453/0.0270;
+(16,2048) 0.1442/0.0269; (16,8192) 0.5676/0.0693; (64,128) 0.0356/0.0217; (64,512) 0.1092/0.0276;
+(64,2048) 0.4035/0.0452; (64,8192) 1.6373/0.1358.
+
+**The advantage grows with kv and with `packed_qo`, and never inverts.** So within this fixture the
+fitted rule A3 asks for is degenerate: **route everything to FA3**. `MIN_PACKED_QO = 48` is costing
+1.2x to 8x on every row below it.
+
+**[!] This CONTRADICTS this doc's earlier "Decode-only: FA2 beats FA3 by 1.30x", and the
+reconciliation matters more than either number.** The difference is almost certainly **batch
+size**: `band1` has ONE row, while a decode step has MANY (e.g. 256 sequences at qo=1). With many
+short rows the FA2 `tile16` class packs them and parallelises across rows, whereas an FA3 tile of
+CTA_Q=128 packed rows is mostly idle on a single row but well filled by 32 batched decode tokens.
+**So this sweep does NOT license "always FA3" for decode** -- it licenses it for the 4-mode verify
+shape, which is a handful of rows, and that is exactly the case the goal cares about.
+
+**The missing measurement, now the obvious next one:** the same sweep with a BATCH of rows
+(e.g. 32/128/256 rows of qo=1) to find where FA2's row-packing overtakes FA3's tile fill. That is
+the real 2-D boundary and it is what A3 should be fitted to. `band1` only establishes the
+single-row edge of it.
+
+A1/A2 (tile widths) remain untested; what is measured here is **A3, the routing decision**, and it
+is worth far more than the 0.3-2.3% B1d priced for tile occupancy.
 
 **Harness note:** routing cannot be overridden in the PLAN for testing -- the driver stitches
 `got = o; got[nfa3_rows:] = pers_o[nfa3_rows:]` from the FIXTURE's `nfa3`, so a row the plan moves

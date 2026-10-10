@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.12.0 — root cause found for the import failure (fixed); server still doesn't start (2026-10-11)
+
+**The find:** `mtp_edf.sh` line 9 hardcodes `PYTHONPATH=$W/python:$W/fi  HF_HOME=$W/hf  FI_ROOT=$W/fi`.
+On this re-forked pod the fork is at **`$W/up/python`** and flashinfer at **`$W/port07`** — so every
+server launch ran with `sglang` **unimportable** and died before writing one log line. That is exactly
+why `server_*.log` was empty and `jsons=0` across four attempts, with no error pointing at it.
+
+**Fixed by symlink** (driver left byte-identical to what the recorded arms used):
+`$W/python -> $W/up/python`, `$W/fi -> $W/port07`, `$W/hf` created. Verified: `import sglang` resolves
+inside the fork (`sglang OK`).
+
+**Attempt 5 still gives `jsons=0` and 0-line server logs**, so the import was *a* root cause, not the
+only one.
+
+**Next command, stated exactly:** extract the server launch line from `mtp_edf.sh` and run it **in the
+foreground** by hand with the same env. Every attempt so far read the driver summary or the empty
+redirected log; nobody has seen the launch command's own stderr. One command away.
+
+**Central question still unanswered:** five attempts, one real root cause fixed, no serving
+measurement of the 0.7 port. The 9.6–9.8× harness result stands alone and says nothing about a server.
+
 ## v1.11.0 — serving arm still not running after four attempts; stopping with a handoff (2026-10-11)
 
 Attempt 4, every known dependency present and verified (drivers, `slo_attain.py`, `fit_mtp_step.py`,

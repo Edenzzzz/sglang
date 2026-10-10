@@ -870,6 +870,45 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[~] ROOT CAUSE FOUND FOR THE IMPORT FAILURE (and fixed), BUT THE SERVER STILL DOES NOT START
+(2026-10-11). Fifth attempt; handing off with the exact next command.**
+
+**The find:** `mtp_edf.sh` line 9 hardcodes
+
+```
+export PYTHONPATH=$W/python:$W/fi  HF_HOME=$W/hf  FI_ROOT=$W/fi
+```
+
+On this re-forked pod the fork lives at **`$W/up/python`** and flashinfer at **`$W/port07`**, so
+every server launch ran with `sglang` **unimportable** and died before writing a single log line --
+which is exactly why `server_*.log` was EMPTY and `jsons=0` through four attempts, with no error
+anywhere to point at it.
+
+**Fixed by symlink rather than editing the driver** (so the driver stays byte-identical to what the
+recorded arms used):
+
+```
+/dev/shm/w/python -> /dev/shm/w/up/python
+/dev/shm/w/fi     -> /dev/shm/w/port07
+/dev/shm/w/hf     (created)
+```
+
+Verified: `PYTHONPATH=$W/python:$W/fi python -c "import sglang..."` -> **`sglang OK`**, resolving
+inside the fork.
+
+**But attempt 5 still gives `jsons=0` and 0-line server logs**, so the import was *a* root cause and
+not *the* only one. The launch fails for a further reason that produces no output at all.
+
+**The next command, stated exactly so the next session does not re-derive it:** extract the server
+launch line from `mtp_edf.sh` and run it **in the foreground**, by hand, with the same env. Every
+attempt so far has read the driver's summary or the (empty) redirected log; nobody has yet seen the
+launch command's own stderr. That is the one piece of information still missing, and it is one
+command away.
+
+**Status of the goal's central question: still unanswered.** Five attempts, one genuine root cause
+found and fixed, and no serving measurement of the 0.7 port. The harness result (9.6-9.8x off
+`BatchAttention`) stands on its own and says nothing about the server.
+
 **[ ] SERVING ARM STILL NOT RUNNING AFTER FOUR ATTEMPTS -- `jsons=0` persists. Stopping here with
 an accurate handoff rather than a fifth cycle (2026-10-11).**
 

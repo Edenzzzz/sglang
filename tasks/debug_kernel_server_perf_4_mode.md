@@ -819,6 +819,45 @@ the wrong pages, a pure data error" -- is therefore dead, and independently so: 
 declared INSIDE `load()` (`sparse_mainloop.cuh:339`), so it is fresh per item and cannot carry a
 stale page across an item boundary.
 
+**[x] THE `sO`/`smem_v` UNION IS A DEPTH-DEPENDENT CONTRIBUTOR, NOT THE ROUTE -- fifteenth
+eliminated, and structural candidates are now EXHAUSTED (2026-10-10).**
+
+dec=128, `STAGES=1`, 6 seeds, same build set:
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| `SPLIT_SMEM_O=0` (control, `sO` aliases `smem_v`) | 6/6 | 16, 28, 20, 20, 12, 15 -- mean ~19 |
+| `SPLIT_SMEM_O=1` (un-aliased) | **6/6** | 23, 16, 16, 20, 6, 16 -- mean ~16 |
+
+Indistinguishable. Cross-referenced with the 2-stage measurement this is a real finding rather than
+one more negative:
+
+| depth | effect of un-aliasing `sO` |
+|---|---|
+| 2 stages | 102 -> 73 bad rows, **~29% reduction** |
+| 1 stage | 19 -> 16, **no effect** |
+
+**So the union only matters when the pipeline has depth**: at 2 stages the producer runs ahead and
+overwrites the `sO` the epilogue is still reading; at 1 stage it cannot run ahead, so the union is
+irrelevant. It is a genuine contributor *at depth*, and it is **not** the route for the residual --
+with BOTH known factors removed (one stage, un-aliased `sO`) ~16 bad rows of 384 remain.
+
+**STRUCTURAL CANDIDATES ARE EXHAUSTED.** Fifteen eliminated; every synchronisation mechanism
+verified correct at per-thread granularity; both confirmed contributors shown to be partial and
+depth-scoped. The four hard constraints any remaining explanation must satisfy: it is a **race**,
+it reads **another request's** K/V, it needs **>1 work item per CTA**, and it survives at **one
+pipeline stage with no `sO` aliasing**.
+
+**NEXT STEP, pre-committed before this arm ran so it is not chosen to fit the outcome: stop
+hypothesising and dump WHICH kv rows a corrupted output row actually consumed.** Build it on the
+register-counting pattern that demonstrably does NOT mask the defect (count during the race, report
+after it): per work item, have the consumer record a cheap signature of the kv rows it reduced
+(e.g. an XOR/sum of `kv_idx` values, or of the gathered page offsets) into registers, print it per
+block after the loop, and compare against the signature the plan says that item should have
+consumed. The signature of the row it DID consume then names the offending item directly, which
+fifteen hypotheses have not managed. `KVPERREQ` already proves the wrong rows belong to a different
+request, so the dump only has to identify WHICH one.
+
 **[!] FA2/FA3 REGION ALIASING EXONERATED -- fourteenth eliminated (2026-10-10).** dec=128,
 `STAGES=1` (the only depth where disjoint fits: it needs 234544 B against a 232448 device max at
 two stages), 6 seeds each. Both arms produced verdicts rather than `out of memory`, so the launches

@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.80.0 — the sO/smem_v union is depth-dependent, not the route; candidates exhausted (2026-10-10)
+
+dec=128, `STAGES=1`, 6 seeds, same build set:
+
+| arm | fails | bad rows of 384 |
+|---|---|---|
+| `SPLIT_SMEM_O=0` (control) | 6/6 | 16, 28, 20, 20, 12, 15 — mean ~19 |
+| `SPLIT_SMEM_O=1` (un-aliased) | **6/6** | 23, 16, 16, 20, 6, 16 — mean ~16 |
+
+Cross-referenced with the 2-stage result this is a finding, not just a negative: un-aliasing `sO`
+cuts ~29% at **two** stages (102→73) and **nothing** at one (19→16). The union only matters when the
+pipeline has depth — with two stages the producer runs ahead and overwrites the `sO` the epilogue is
+still reading; at one stage it cannot. So it is a real contributor *at depth* and **not the route**:
+with both known factors removed, ~16 bad rows of 384 remain.
+
+**Structural candidates are exhausted.** Fifteen eliminated, every synchronisation mechanism verified
+correct at per-thread granularity, both confirmed contributors shown partial and depth-scoped. Any
+remaining explanation must satisfy: it is a race; it reads another request's K/V; it needs >1 item
+per CTA; it survives at one stage with no `sO` aliasing.
+
+**Next step (pre-committed before this arm ran):** dump *which* kv rows a corrupted output row
+actually consumed, built on the register-counting pattern that does not mask the defect — per item,
+record a cheap signature of the reduced `kv_idx` values in registers, print per block after the loop,
+compare against what the plan says that item should have consumed. `KVPERREQ` already proves the rows
+belong to a different request, so the dump need only identify which one.
+
 ## v0.79.0 — FA2/FA3 region aliasing exonerated (14th eliminated) (2026-10-10)
 
 dec=128, `STAGES=1` (the only depth where disjoint fits — 234544 B vs a 232448 max at two stages),

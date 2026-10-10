@@ -1,5 +1,52 @@
 # Current goal
 
+## THE TWO MAIN KERNEL ITEMS (user, 2026-10-09) — both NOT STARTED
+
+### A. Ultra fine-grained tile dispatcher — **[ ] NOT STARTED, nothing implemented**
+
+The defect, as the user put it on 2026-10-09 and still true today: `split_classes` admits any row
+with `packed_qo` in **[48, 128)** to FA3, which uses a **fixed `TILE_Q = 128`** — so **up to 63%
+of the WGMMA tile is idle**. `MIN_PACKED_QO = 48` is a hand-set constant that admits exactly the
+rows that cannot fill the tile. Detail in "The tile-occupancy defect" below.
+
+| # | item | status |
+|---|---|---|
+| A1 | **dynamic 128/64 WGMMA tile** for the FA3 role (tile width per work item, not compile-time) | **[ ]** not implemented, not tested |
+| A2 | **fine-grained FA2 tile classes {16, 32, 48, 64, 96}**, `tile96` prioritised | **[ ]** still only the stock three (128/64/16) |
+| A3 | **fitted linear dispatch rule** replacing the hand-set `MIN_PACKED_QO=48` threshold | **[ ]** not started |
+| A0 | priced already: **0.3-2.3%** at our config; **14.6-35.9%** at GQA 7-12 with 8-12 draft tokens | **[x]** (B1d) |
+
+### B. Fuse the small draft/verify epilogue ops — **[ ] NOT STARTED beyond the headroom study**
+
+| # | item | status |
+|---|---|---|
+| B1 | headroom quantified | **[x]** ceiling **29%** = attention 20.5% + epilogue 8.5% |
+| B1b/c/d | re-capture; GEMM-level backfill (answered: **no**); tile histogram | **[x]** |
+| B2c | **`tma_store_wait` cross-role backfill + multicast** | **[ ] UNTESTED** |
+| B3 | the epilogue fusion itself | **[ ]** not started |
+
+**Blocker on the bar, recorded not buried:** B1's measured ceiling is **29%**, so the kernel alone
+cannot reach >=30% TTFT/ITL at any efficiency. Closing the bar needs the schedule too.
+
+## Prerequisite and downstream
+
+| # | item | status |
+|---|---|---|
+| **K1** | port the fused kernel to flashinfer 0.7 (prerequisite for both A and B) | **~done, 1 bug open** |
+| K1.corr | every fixture PASSES the causal fp32 reference, `mixed` included | **[x]** rel 0.0033 |
+| K1.race | intermittent 1-row race in `mixed` (co-resident), ~1 in 10-20 runs | **[ ] OPEN** |
+| K1.perf | split-KV path was 78% of kernel time; chunk-size sweep gave **4.5x** on `fa3` | **[~]** still 1.5-2.5x off |
+| **S** | server integration: EDF perf model vs unfused baseline | **[ ] NOT RUN** |
+| **M** | multi-node PD colocation (H20 only, <=16 GPUs, trial `vibecuda`) | **[ ] NOT RUN** — doc: `pd_colocation_vs_disagg.md` |
+
+**The bar:** >=30% TTFT & ITL and >=10% throughput on realistic mixed workloads, against both
+baselines. **Not met.** Best realistic figure: `mixed` fused **0.1717 ms** vs unfused **0.0690 ms**
+— 2.5x SLOWER. Only the single-chunk microbenchmark leads (`fa3_1chunk` 1.45x faster).
+
+**Everything below is the evidence trail, newest first within each item.** The catalogue above is
+the index.
+
+
 **Decisions taken 2026-10-09 (user), these override earlier framing:**
 
 1. **The fused kernel MUST land on upstream** -- port it to flashinfer 0.7 rather than demo on the

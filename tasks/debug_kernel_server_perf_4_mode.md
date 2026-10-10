@@ -627,6 +627,41 @@ mixed chat + tracelab. Corrected 2026-10-09 (user): the kernel must be on upstre
 attention measures the scheduling change alone and cannot show the thesis.
 
 
+### [x] THE FUSION QUESTION, MEASURED DIRECTLY (2026-10-10): co-residency is worth **+5.4%**
+
+Never measured before. Same rows (`qo=[256,1,1]`, `kv=[2048,300,512]`), both arms 0 bad rows,
+40 iters / 10 warmup:
+
+| config | ms |
+|---|---|
+| co-resident (`mixed`, FA3+FA2) @ `SM_SPLIT=96` | 0.3228 |
+| @ 112 | 0.2604 |
+| @ 120 | 0.2579 |
+| **@ 128 (best)** | **0.2426** |
+| **FA3-only, all SMs** (same rows, everything routed to FA3) | **0.2557** |
+| FA3-only @ 128 | 0.2570 |
+
+**Fusion beats routing-everything-to-the-better-kernel by 1.054x, i.e. +5.4%.** So co-residency
+does pay -- which answers the question A3's sweep raised -- but the margin is 5.4%, not 30%.
+
+**What that implies for the bar, and it is the most consequential number in the project.** The
+>=30% TTFT/ITL target is end-to-end. Attention is **20.5%** of step time (B1b). A 5.4% win on
+attention is therefore **~1.1% end-to-end** -- two orders below the bar, and well inside the
++/-1.5-3% serving noise floor, meaning **it would not even be measurable in a serving A/B**.
+
+**Caveat that bounds it, and it points at the one arm that could change the answer:** this batch
+has only **2 decode tokens** against a 256-token prefill chunk, so there is almost nothing for the
+FA2 role to overlap. Fusion's value should grow with the amount of co-resident FA2 work. **The
+missing arm is a decode-heavy mix** -- e.g. one prefill chunk against 32-128 decode rows, which is
+closer to a real 4-mode step -- where the FA2 role has enough work that overlapping it is worth
+more than 5.4%. That is the arm to run before concluding the kernel route is capped, and it is now
+the single highest-value measurement left.
+
+**What is already fixed regardless:** at every `sm_split` tested, co-resident beats FA3-only only
+at 128 (0.2426 vs 0.2557); at 96 it is *worse* (0.3228). So the fusion's win is entirely contingent
+on getting `sm_split` right, and the default of 16 was 6.2x off. SM pre-assignment is not a
+refinement of the fusion -- it is the thing that makes it positive at all.
+
 ### Prerequisite and downstream
 
 | # | item | status |

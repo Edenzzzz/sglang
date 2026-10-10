@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.61.0 — THE FUSION QUESTION: co-residency is worth +5.4% (2026-10-10)
+
+Never measured directly before. Same rows (`qo=[256,1,1]`, `kv=[2048,300,512]`), both arms 0 bad
+rows, 40 iters:
+
+| config | ms |
+|---|---|
+| co-resident (`mixed`) @ `SM_SPLIT=96` | 0.3228 |
+| @ 112 / 120 | 0.2604 / 0.2579 |
+| **@ 128 (best)** | **0.2426** |
+| **FA3-only, all SMs** (same rows) | **0.2557** |
+
+**Fusion beats routing-everything-to-FA3 by 1.054× (+5.4%).** Co-residency pays — answering the
+question A3's sweep raised — but by 5.4%, not 30%.
+
+**Consequence for the bar:** attention is 20.5% of step time (B1b), so +5.4% on attention is
+**~1.1% end-to-end** — two orders below the ≥30% target and inside the ±1.5–3% serving noise floor,
+i.e. **not measurable in a serving A/B**.
+
+**Caveat / next arm:** this batch has only 2 decode tokens against a 256-token prefill chunk, so the
+FA2 role has almost nothing to overlap. Fusion's value should grow with co-resident FA2 work. **A
+decode-heavy mix (one chunk against 32–128 decode rows) is the arm that could change the answer**
+and is now the highest-value measurement left.
+
+Also: co-resident beats FA3-only *only* at `sm_split=128`; at 96 it is worse (0.3228). The fusion's
+win is entirely contingent on SM pre-assignment — which is the mechanism, not a refinement.
+
 ## v0.60.0 — A3 measured on all three axes: route to FA3 everywhere (2026-10-10)
 
 Pod `f929493da6e45f10` expired mid-session; re-forked as **`62d25ecfb033ad4b`** and restored

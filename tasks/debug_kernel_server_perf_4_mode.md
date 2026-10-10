@@ -1608,6 +1608,54 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       That distinguishes "the partials are wrong" from "the combination is wrong", which is the
       one split this investigation has not yet made. State the expected values before dumping.
 
+      **[x] SPLIT-KV ROOT CAUSE FOUND (2026-10-10): the causal mask is applied CHUNK-RELATIVE,
+      so every split chunk masks off keys it should see. Quantitative match to 4 decimals.**
+
+      Found by dumping `partial_o` / `partial_lse` for known merge rows and comparing against a
+      Python per-chunk reference -- `partial_o` holds a NORMALIZED per-chunk output, so the
+      comparison needs no LSE convention. That is the split no amount of reading could make:
+
+      | row | token | chunk | head | `O_rel` | `lse_got` | ref (log2, 128 keys) |
+      |---|---|---|---|---|---|---|
+      | 0 | 0 | 0 | 0 | 0.6347 | **6.60012** | 7.00090 |
+      | 0 | 0 | 1 | 0 | 0.6819 | 6.60120 | 7.00105 |
+      | 4 | 1 | 0 | 0 | 0.6160 | **6.61413** | 6.99852 |
+      | 0 | 0 | 0 | 1 | 0.5138 | 6.60130 | 7.00064 |
+
+      **The LSE identifies the key count exactly.** `log2(97) = 6.5999` against `lse_got =
+      6.60012` for token 0, and `log2(98) = 6.6147` against `6.61413` for token 1. So each chunk
+      sums over `token + 97` keys, not 128.
+
+      **Where 97 comes from:** `col_limit_right(qo_idx) = (qo_idx/G) + 1 + kv_len - qo_len/G`
+      with the CHUNK's `kv_len = 128` and `qo_len/G = 32` gives `token + 1 + 128 - 32 = token +
+      97`. The bound is being computed **chunk-relative**. The scheduler hands each split item a
+      base shifted to its chunk and `kv_len = kv_chunk`, with the comment *"Legal because this
+      path is non-causal"* -- but `CAUSAL` is a **compile-time template parameter applied to every
+      item**, so once `FA3_CAUSAL=1` was needed for the unsplit path (and it was: that is what
+      made `fa3_1chunk` pass), every split chunk started masking against a bound that means
+      nothing in chunk-relative coordinates.
+
+      This also explains why split-KV looked broken in so many different ways across the session:
+      the error is per-chunk and position-dependent, so it changes with chunk count, q tile and
+      request length.
+
+      **Confirms the merge is INNOCENT of the value error.** `merge_o_indices[:6] = [0,1,2,3,28,29]`
+      is exactly right under the fixed units (token 0 heads-in-group 0..3, then token 1 -> 1*28+0),
+      `merge_indptr` strides by `chunks = 16`, and the slot arithmetic resolves correctly. The
+      merge was faithfully combining partials that were already wrong.
+
+      **[ ] The fix, and it is a design item rather than one line.** The causal bound must be
+      absolute, not chunk-relative. For a chunk `[kv0, kv1)` of a request with total `kv_total`
+      and `qo_tokens`, row `token` may attend keys up to `kv_total - qo_tokens + token`, i.e.
+      `kv_total - qo_tokens + token - kv0` within the chunk. Options, in the order I would try:
+      1. Pass the chunk base and the request's total kv to the mainloop and compute the bound
+         absolutely. Most faithful; needs two more fields through `BlockCoord`.
+      2. Have the planner skip chunks entirely beyond the diagonal and mark the rest unmasked,
+         masking only the chunk containing the diagonal. Cheaper at runtime, more planner logic,
+         and it must agree with the `splits` count the partial slab was sized from.
+      Note the interaction with [[packed-gqa-breaks-token-bounds]]: whatever carries the bound
+      must stay in TOKEN units while `qo_idx` is a packed row.
+
       **[ ] Part 2, the remaining defect: the merged values.** All rows are now written and
       `fa2` is unaffected, so this is the reduction's arithmetic or the partials it reads, not
       addressing. Where to look next, in order:

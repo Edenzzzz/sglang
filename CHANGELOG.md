@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.47.0 — split-KV root cause: the causal mask is chunk-relative (2026-10-10)
+
+Found by dumping `partial_o` / `partial_lse` for known merge rows against a Python per-chunk
+reference. `partial_o` is a *normalized* per-chunk output, so the comparison needs no LSE
+convention — that is the split that reading could not make.
+
+**The LSE identifies the key count exactly.** `log2(97) = 6.5999` vs measured `lse_got = 6.60012`
+(token 0), and `log2(98) = 6.6147` vs `6.61413` (token 1). Each chunk sums over `token + 97` keys
+instead of 128, and `O_rel` is 0.51–0.68.
+
+**Why 97:** `col_limit_right = (qo_idx/G) + 1 + kv_len - qo_len/G` with the *chunk's* `kv_len=128`
+and `qo_len/G=32` gives `token + 97`. The scheduler hands each split item a base shifted to its
+chunk and `kv_len = kv_chunk`, commented *"Legal because this path is non-causal"* — but `CAUSAL`
+is a **compile-time parameter applied to every item**, so once `FA3_CAUSAL=1` became necessary for
+the unsplit path, every split chunk began masking against a chunk-relative bound.
+
+**The merge is innocent of the value error.** `merge_o_indices[:6] = [0,1,2,3,28,29]` is exactly
+right under the fixed units, `merge_indptr` strides by `chunks=16`, and the slot arithmetic
+resolves correctly. It was faithfully combining partials that were already wrong.
+
+### Still open — the fix, a design item not a one-liner
+
+The causal bound must be absolute: for chunk `[kv0,kv1)` with total `kv_total` and `qo_tokens`, row
+`token` may attend up to `kv_total - qo_tokens + token - kv0` within the chunk. Either thread the
+chunk base and total kv through `BlockCoord`, or have the planner skip chunks beyond the diagonal
+and mask only the diagonal chunk (which must agree with the `splits` count the partial slab was
+sized from). Whatever carries the bound must stay in TOKEN units while `qo_idx` is a packed row.
+
 ## v0.46.1 — split-KV part 2 narrowed: no double write, residual is in the reduction (2026-10-10)
 
 No code change; four measurements and two code reads that bound the remaining defect.

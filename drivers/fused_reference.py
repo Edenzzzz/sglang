@@ -235,6 +235,68 @@ def main():
 
     kpad = [k_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(B)]
     vpad = [v_cache[kv_indptr[b]:kv_indptr[b + 1]] for b in range(B)]
+    # ---- DUMP_PARTIALS=1: is it the PARTIALS or the COMBINATION? -------------------------
+    # Every structural hypothesis about split-KV was refuted by reading both sides (addressing on
+    # the partial and merge sides, buffer identity, LSE scale, finalize ordering, CSR consistency,
+    # grid coverage, double writes). So stop reading and compare DATA.
+    #
+    # partial_o holds a NORMALIZED per-chunk output, so comparing it needs no LSE convention --
+    # that is what makes this the clean split:
+    #   partial_o matches  => the partials are right, the COMBINATION is wrong.
+    #   partial_o differs  => the partials are wrong and the merge is innocent.
+    #
+    # Plan vector layout (ToVector): 0 num_blks_x, 1 num_blks_y, 2..45 four tasks x 11 args,
+    # then 46 len_kv_chunk, 47 partial_o, 48 partial_lse, 49 merge_indptr, 50 merge_o_indices,
+    # ... 57 num_merge_rows, 58 num_fa3_clusters.
+    if _os.environ.get("DUMP_PARTIALS") == "1" and nfa3 > 0:
+        import torch as _t
+        po_off, plse_off = int(pers_plan[47]), int(pers_plan[48])
+        mi_off, moi_off = int(pers_plan[49]), int(pers_plan[50])
+        nmr = int(pers_plan[57])
+        # Offsets are BYTES from each buffer's base.
+        fb = flt_ws.view(torch.uint8)
+        partial_o = fb[po_off:].view(DT)                      # bf16, [slot, HEAD_DIM] flattened
+        partial_lse = fb[plse_off:].view(torch.float32)
+        ib = int_ws.view(torch.uint8)
+        merge_indptr = ib[mi_off:].view(torch.int32)[: nmr + 1].cpu()
+        merge_o_ind = ib[moi_off:].view(torch.int32)[: nmr].cpu()
+        print(f"[dump] num_merge_rows={nmr} merge_indptr[:6]={merge_indptr[:6].tolist()} "
+              f"merge_o_indices[:6]={merge_o_ind[:6].tolist()}")
+        if nmr > 0:
+            chunks = int(merge_indptr[1] - merge_indptr[0])
+            print(f"[dump] chunks per row = {chunks}")
+            b = 0
+            ql, kl = qo_lens[b], kv_lens[b]
+            kb = k_cache[kv_indptr[b]:kv_indptr[b + 1]][:kl].float()
+            vb = v_cache[kv_indptr[b]:kv_indptr[b + 1]][:kl].float()
+            # EXPECTED, stated before reading: merge row r is packed row r of this group, i.e.
+            # token r // GQA and head-in-group r % GQA. Slot for (row r, chunk c, kv head h) is
+            # (merge_indptr[r] + c) * HKV + h, and partial_o at that slot is the NORMALIZED
+            # attention of that (token, head) over keys [128c, 128c+128) intersected with the
+            # causal bound kv_len - qo_len + token.
+            for (r, c, h) in ((0, 0, 0), (0, 1, 0), (4, 0, 0), (0, 0, 1)):
+                tok, hig = r // GQA, r % GQA
+                head = h * GQA + hig
+                lo, hi = 128 * c, min(128 * (c + 1), kl)
+                bound = kl - ql + tok + 1          # exclusive, bottom-right causal
+                hi = min(hi, bound)
+                if lo >= hi:
+                    print(f"[dump] r={r} c={c} h={h}: chunk entirely masked (lo={lo} hi={hi})")
+                    continue
+                qv = q[tok, head].float()
+                sc = (kb[lo:hi, h] @ qv) * sm_scale
+                w = _t.softmax(sc, dim=0)
+                exp_o = (w[:, None] * vb[lo:hi, h]).sum(0)
+                slot = int(merge_indptr[r]) + c
+                got = partial_o[(slot * HKV + h) * D: (slot * HKV + h) * D + D].float()
+                lse_got = float(partial_lse[(slot * HKV + h)])
+                # Reference LSE in LOG2 units, which is what flashinfer's state_t carries.
+                lse_ref = float(_t.logsumexp(sc, dim=0) / math.log(2.0))
+                rel = float((got - exp_o).norm() / max(float(exp_o.norm()), 1e-9))
+                print(f"[dump] r={r} tok={tok} hig={hig} c={c} h={h} head={head} slot={slot} "
+                      f"keys[{lo},{hi}) O_rel={rel:.4g} lse_got={lse_got:.5f} "
+                      f"lse_ref_log2={lse_ref:.5f}")
+
     ref = fp32_causal_reference(q, kpad, vpad, qo_lens, kv_lens, sm_scale)
 
     # Elementwise ref-vs-got for token 0 at each kv-head group, so a [wpk] line with tok=0 can be

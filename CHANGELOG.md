@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.56.0 — `STAGES=1` was never valid; and the obvious enabler for `STAGES=2` is wrong (2026-10-10)
+
+**Reframing.** Stock 0.7 has the same `union { smem_v; smem_o; }` but runs **2 stages**, and
+double buffering is what makes the union safe — the producer's next V load hits the *other* stage.
+Our port set `STAGES=1` to fit smem and removed that invariant. So `STAGES=2` (0/35 vs 3/35) is not
+a mitigation hiding a race; **`STAGES=1` was an invalid configuration.**
+
+**Failed attempt, kept because the failure is the useful part.** The 69,632 B reservation blocking
+`STAGES=2` is commented as the scheduler's "cluster slot", so I gated it off on the grounds that
+cross-role backfill is unused → **`mixed` 25 failures / 25**. It is *not* a backfill queue: it is
+where the **FA2 runners' SharedStorage lives**, placed past FA3's region. Reverted; verified back
+to 1/10.
+
+**Arithmetic that failure establishes:** co-residency needs FA3's layout *plus* the FA2 region past
+it — `164864 + 69632 + 48 = 234544` vs a `232448` max. **`STAGES=2` and co-residency are
+incompatible with the current layout**, which is why the clean STAGES=2 result only holds at
+`SM_SPLIT=all`.
+
+**The right fix, with numbers, not implemented:** FA2-role blocks should address storage from
+**offset 0**. A block is one role, never both, so the layouts can alias across roles →
+`smem_size = max(FA3, FA2) = 163920`, ~68 KB spare, `STAGES=2` everywhere. The past-FA3 placement
+is only needed when one block does both — i.e. the cross-role drain (B2c). So this is a
+prerequisite for B2c too, and the smallest change that closes the race where it matters.
+
 ## v0.55.0 — race ROOT-CAUSED: the `sO`/`smem_v` union, O side only (2026-10-10)
 
 Slab fingerprint across runs (`MODE=fa3` @ `SM_SPLIT=all`, same seed and build):

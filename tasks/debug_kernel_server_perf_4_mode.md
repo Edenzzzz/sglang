@@ -403,6 +403,37 @@ and relies on that wait to guarantee the store has drained before `sO`/`smem_v` 
 `store_partial` writes with plain vectorised stores and has **no completion handshake at all**, so
 nothing orders the producer's next V load against the consumer's `sO` read.
 
+**[!] REFRAMING + A FAILED FIX ATTEMPT (2026-10-10). `STAGES=1` was never a valid
+configuration, and the obvious way to enable `STAGES=2` is wrong.**
+
+**Reframing, which corrects my own wording above.** Stock 0.7 has the SAME `union { smem_v;
+smem_o; }` -- but it runs **2 stages by default**, and double buffering is precisely what makes
+that union safe: the producer's next V load targets the *other* stage, so it cannot overwrite the
+`sO` the epilogue is still reading. Our port set `STAGES=1` to fit shared memory and thereby
+**removed an invariant stock relies on**. So `STAGES=2` is not "a mitigation hiding a race" --
+`STAGES=1` was an invalid configuration from the start.
+
+**Failed attempt, recorded because the failure is the useful part.** The 69632 B reservation that
+blocks `STAGES=2` is created by a block commented as the scheduler's "cluster slot", so I gated it
+off on the reasoning that cross-role backfill (B2c) is unused. Result: **`mixed` 25 FAILURES / 25.**
+The reservation is **not** a backfill queue -- it is where the **FA2 runners' SharedStorage lives**,
+placed past FA3's region by `fused_pers_smem_base`. Gating it starved every FA2-role block of its
+workspace. Reverted; revert verified back to **1 / 10** on `mixed`, i.e. the known race rate.
+
+**What that failure establishes, as arithmetic:** in the co-resident configuration the allocation
+must cover FA3's layout (any block may take the FA3 role) **plus** the FA2 region at an offset past
+it -- `164864 + 69632 + 48 = 234544` against a `232448` B device max. **`STAGES=2` and co-residency
+are incompatible with the CURRENT layout**, which is why the STAGES=2 result only holds at
+`SM_SPLIT=all`.
+
+**THE RIGHT FIX, identified with the numbers and not implemented:** FA2-role blocks should address
+their storage from **offset 0**, not past FA3's. A block is either FA3-role or FA2-role, **never
+both**, so the two layouts can safely **alias across roles** -- making
+`smem_size = max(FA3, FA2) = 163920`, which fits with ~68 KB spare and lets `STAGES=2` launch
+everywhere. The past-FA3 placement is only required when one block does both, which is exactly the
+cross-role drain (B2c, unimplemented). So this change is a prerequisite for B2c as well, and it is
+the smallest change that closes the race in the configuration that matters.
+
 **[x] MECHANISM CONFIRMED BY A PREDICTED INTERVENTION (2026-10-10), and there is a viable
 mitigation.** The diagnosis predicts that with `NUM_STAGES = 1` the producer's next V load targets
 exactly the memory `sO` aliases, while with `NUM_STAGES = 2` it targets the other stage. Tested,

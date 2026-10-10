@@ -1635,6 +1635,17 @@ Both remaining errors are now understood exactly, and neither needs a design dec
       output is now deterministic when correct, which is exactly what removing an
       uninitialised-read would do -- and a far better signal than a pass count.
 
+      **Double-execution hypothesis REFUTED (2026-10-10).** Counted the scheduler's per-work-item
+      dispatch in the co-resident configuration (`mixed`, `SM_SPLIT=48`): **896 `[sched]` lines,
+      896 distinct `work_idx`, 0 duplicated**, in each of 6 runs. 896 is exactly right -- 8 q
+      tiles x 7 kv heads x 16 chunks -- so every item is dispatched exactly once and cross-role
+      backfill is not handing work to two blocks.
+      **Stated caveat:** `FA3_PROBE=1` adds per-item printfs that serialise execution, so the 6
+      passes under it do NOT disprove the race; only the duplication hypothesis is refuted.
+      Remaining candidate, untested: ordering between the FA2 roles' writes and the FA3 partial
+      slab they share (the epilogue takes `partial_o`/`partial_lse` straight off Runner1's
+      persistent params), i.e. a cross-ROLE rather than cross-block hazard.
+
       **[ ] Residual race: 1 failure in 20 runs, 1 bad row, rel 0.2151.** Still `mixed`, so still
       the co-resident configuration. Checked and ruled out: the barrier accounting in
       `store_partial` is identical to 0.7's `store()` (sync `kValueEmpty` -> copy -> fence ->

@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.75.0 — A2/A3 on correct arms: FA3 wins 5–12× at small tiles; four more mechanisms ruled out (2026-10-10)
+
+**A2/A3, every arm PASSING the fp32 reference.** The defect needs >1 item/CTA and `band1` is a
+single request, so these arms are valid while K1 is open (unlike the pre-2026-10-10 A3 arms, whose
+numerics failed). FA2 `{128,64,16}`, kv=2048:
+
+| packed_qo | FA2 | FA3 | FA3 advantage | `BatchAttention` |
+|---|---|---|---|---|
+| 16 | 0.1409 | 0.0271 | 5.2× | 0.0202 |
+| 32 | 0.3978 | 0.0326 | 12.2× | 0.0203 |
+| 48 | 0.3952 | 0.0393 | 10.1× | 0.0205 |
+| 64 | 0.3948 | 0.0456 | 8.7× | 0.0193 |
+
+The user's `{16,32,48}` hypothesis is **refuted again on correctness-gated arms**: FA3 owns the
+narrow tiles by 5–12× where the tile-occupancy argument predicts FA2 should. And `BatchAttention`
+beats our FA3 side **1.3–2.4× at every size** on shapes where we are provably correct — the fusion's
+problem restated without reference to the race.
+
+**Four mechanisms ruled out by reading, no GPU time:** producer/consumer tile-count disagreement
+(same call, same args, `:247`/`:325`); scheduler desync (deterministic per block, `is_producer`
+ignored); acquire/release imbalance (balanced per item — `count` K and `count` V both sides, every
+wait matched); cp.async coverage on the KV commit (`producer_arv_count = NUM_COPY_THREADS` = 128 and
+all 128 issuing threads commit, so completion implies all copies landed — the strongest candidate,
+and still correct as written).
+
+Next must be the empirical instrument: per-item tiles **loaded vs consumed**, accumulated in
+registers and printed at block exit only, so it cannot serialise away the signal the way the printf
+probe, racecheck and memcheck each did.
+
 ## v0.74.0 — LOCALISED: CTAs read another request's K/V via the cross-item pipeline (2026-10-10)
 
 First mechanism with **positive** evidence instead of elimination. `KVPERREQ=1` (pages identical

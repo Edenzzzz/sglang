@@ -804,6 +804,51 @@ produces false positives by construction, which is exactly what the stock-kernel
 were 17 bugs -- the honest read is "racecheck cannot distinguish our real race from the async
 pipeline traffic it always flags". Recorded so the next attempt does not spend a turn on them.
 
+**[x] A2/A3 ON CORRECT ARMS (2026-10-10): FA3 beats FA2 by 5-12x at the SMALL tiles, and
+`BatchAttention` beats our FA3 by 1.3-2.4x. Every arm PASSES the causal fp32 reference.**
+
+Method that makes these valid while K1's defect is open: the corruption needs **>1 work item per
+CTA** (clean 15/15 below that), and `band1` is a SINGLE request. So these arms sit below the
+threshold and every one reports 0 bad rows -- unlike the pre-2026-10-10 A3 arms, whose own numerics
+failed.
+
+FA2 classes `{128,64,16}` (default), kv=2048, 20 iters / 5 warmup:
+
+| packed_qo | FA2 | FA3 | FA3 advantage | `BatchAttention` |
+|---|---|---|---|---|
+| 16 | 0.1409 ms | 0.0271 ms | **5.2x** | 0.0202 ms |
+| 32 | 0.3978 ms | 0.0326 ms | **12.2x** | 0.0203 ms |
+| 48 | 0.3952 ms | 0.0393 ms | **10.1x** | 0.0205 ms |
+| 64 | 0.3948 ms | 0.0456 ms | **8.7x** | 0.0193 ms |
+
+1. **The user's `{16,32,48}` hypothesis is REFUTED AGAIN, in the same direction as the earlier A3
+   measurement** -- and now on correctness-gated arms. The tile-occupancy argument says FA2 should
+   own the narrow tiles; FA3 owns them by 5-12x. The `{48,32,16}` arm tests whether genuinely
+   NARROW FA2 tiles change that, but FA2 would have to improve ~10x to matter.
+2. **`BatchAttention` beats our FA3 side by 1.3-2.4x at every size**, on shapes where we are
+   provably correct. That restates the fusion's problem with no reference to the race at all.
+
+**[!] FOUR MORE MECHANISMS RULED OUT BY READING, at no GPU cost (2026-10-10).** After the
+stage-index refutation, these were the remaining structural candidates for the cross-request K/V
+leakage. All four check out CORRECT, so none of them is the defect:
+
+* **Producer/consumer tile-count disagreement** -- both call the same `get_num_kv_tiles` with the
+  same arguments (`prefill_sm90.cuh:247`, `:325`).
+* **Scheduler desync** -- `UnifiedWgmmaTileScheduler` is deterministic (`work_indptr[blockIdx.x]`
+  slice + `counter`), `get_next_work` ignores `is_producer`, prefetch/broadcast are no-ops.
+* **Acquire/release imbalance (double-release)** -- balanced per item: prologue 1 K, each of the
+  `count-1` iterations 1 K + 1 V, epilogue 1 V, giving exactly `count` of each against the
+  producer's `count`. Every `consumer_wait` has one matching `consumer_release`.
+* **cp.async coverage on the KV commit** -- `producer_arv_count = NUM_COPY_THREADS` (128) and all
+  128 producer threads issue the gather and commit, so each arrives after its own cp.async and
+  completion does imply every copy landed. (This was the strongest candidate: it would have
+  explained the slowdown-masking exactly. It is nonetheless correct as written.)
+
+**So the next step must be the empirical instrument, not another reading:** per-item counts of
+tiles LOADED vs CONSUMED, accumulated in REGISTERS during the race and printed only at block exit,
+so the measurement cannot serialise the thing it measures -- which is how the printf probe,
+racecheck and memcheck all destroyed the signal.
+
 **[!] STAGE-INDEX SHIFT REFUTED as the mechanism -- but pipeline DEPTH modulates the defect 4x
 (2026-10-10). This weakens the explanation committed in `683dc9141`; the LOCALISATION stands.**
 

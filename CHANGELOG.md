@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.13.0 — server runs clean with the 0.7 port, but the 4-mode split never engages (2026-10-11)
+
+Arm `MTPMIX_SPLIT`, chat 24/s, all four path shims fixed. At 4156 server log lines:
+
+| artifact | value |
+|---|---|
+| `POST /generate` | **200 OK** sustained |
+| CUDA graphs | **`cuda graph: True`** |
+| fallbacks / tracebacks | **0 / 0** |
+| decode batches | **221** |
+| mixed-composition lines | **1** |
+| `SGLANG_LOG_MIXED_COMPOSITION` | **MISSING** |
+
+`Prefill batch` and `Decode batch` are **separate** log lines — merging them is what the 4-mode split
+does, so **the split is not engaging**. Clean *and* vacuous, same shape as the `srv_correctness` gate.
+
+**What it does establish:** (1) the 0.7 port serves live traffic without crashing **with CUDA graphs
+on** — `K6` records the split dying under graphs, and graphs-on is the production config; whether K6
+is fixed or merely untriggered without mixing is unresolved, but 0 tracebacks over 4156 lines is new.
+(2) 0 fallbacks — nothing silently reverted to the unfused path.
+
+**Still unmeasured:** whether the kernel's harness slowness matters in a server. Cannot be measured
+until the split engages.
+
+**Next, no GPU needed:** read `run_mixed_workloads.py`'s per-method env for `MTPMIX_SPLIT` against the
+fork's current 4-mode gate flag names — either the names drifted in the 0.7 port or the load never
+co-locates a prefill chunk with decode rows.
+
 ## v1.12.0 — root cause found for the import failure (fixed); server still doesn't start (2026-10-11)
 
 **The find:** `mtp_edf.sh` line 9 hardcodes `PYTHONPATH=$W/python:$W/fi  HF_HOME=$W/hf  FI_ROOT=$W/fi`.

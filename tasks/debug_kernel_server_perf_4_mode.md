@@ -870,6 +870,43 @@ the kv-tile count, not splitting. What remains per-q-tile is the **Q gather and 
 look goes**, and it is checkable the same cheap way: evaluate `packed_coord` and the
 `get_packed_gqa_tensor` strides for `q_tile_idx` 0..7 on the host and find what differs at 1 and 2.
 
+**[!] THE SERVER RUNS CLEAN WITH THE 0.7 PORT -- BUT THE 4-MODE SPLIT NEVER ENGAGES, SO THE FUSED
+KERNEL IS NEVER EXERCISED (2026-10-11).**
+
+Arm `MTPMIX_SPLIT`, chat 24/s, after fixing all four path shims. Mid-run at 4156 server log lines:
+
+| artifact | value | reading |
+|---|---|---|
+| `POST /generate` | **200 OK**, sustained | the 0.7 port serves real traffic |
+| CUDA graphs | **`cuda graph: True`** | and does so with graphs ON |
+| fallbacks / tracebacks | **0 / 0** | no fallback to the unfused path, no crash |
+| decode batches | **221** | real decode load is present |
+| mixed-composition lines | **1** | **the split is not merging** |
+| `SGLANG_LOG_MIXED_COMPOSITION` file | **MISSING** | no composition ever logged |
+
+**`Prefill batch` and `Decode batch` appear as SEPARATE log lines.** Merging them is exactly what
+the 4-mode split does, so the split is not engaging -- the server is running stock-shaped batches
+through the fused build. **Clean and vacuous**, the same shape as the `srv_correctness` gate: a
+serving arm that exercises nothing of the thing under test.
+
+**Two things this DOES establish, and they are worth having:**
+
+1. **The 0.7 port serves live traffic without crashing, with CUDA graphs enabled.** `K6` in this doc
+   records the split dying under graphs (`IndexKernel.cu` out-of-bounds via flashinfer `plan`), and
+   graphs-on is the production config. Whether K6 is fixed or merely not triggered without mixing is
+   unresolved -- but 0 tracebacks over 4156 lines with `cuda graph: True` is more than the port had
+   before.
+2. **0 fallbacks** means nothing silently reverted to the unfused path.
+
+**What remains unmeasured, unchanged:** whether the fused kernel's harness slowness matters in a
+server. It cannot be measured until the split engages, and it is not engaging at this load/config.
+
+**The next question is why, and it is specific:** `MTPMIX_SPLIT` is supposed to set the mixing flags
+via `run_mixed_workloads.py`'s per-method env. Either those flag NAMES changed in the 0.7 port (the
+fork's `mix_with_running`/4-mode gate), or the load shape never puts a prefill chunk and decode rows
+in the same step. Reading the method's env block in `run_mixed_workloads.py` against the fork's
+current flag names distinguishes these, and needs no GPU.
+
 **[x] THE SERVER NOW STARTS. Two chained path bugs, both from the re-fork, and the reason five
 attempts showed nothing (2026-10-11).**
 

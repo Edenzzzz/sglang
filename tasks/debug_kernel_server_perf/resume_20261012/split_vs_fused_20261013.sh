@@ -6,6 +6,9 @@
 # arm is that split (flash_attn_with_kvcache FA3 + BatchPrefillWithPagedKVCacheWrapper fa2).
 # (1) output gate for MTPMIX_SPLIT, (2) MTPMIX_SPLIT vs MTPMIXFUSED, mix32 / mix128 x chat 16 / 24/s,
 # race-fixed tree, no barrier. Fallback / split counters reported per arm.
+# v2: v1 never ran the split -- forward_extend dispatches it on the paged path only and ragged
+# stayed on without FUSED_KERNEL_EXEC (fixed: split_dispatch_paged.patch); v1's gate also only
+# checked the compare's status, so the driver's "zero split calls" failure was swallowed.
 set -uo pipefail
 W=/dev/shm/w
 [ "${INHERIT_LOCK:-0}" = 1 ] || { exec 9>"$W/a2_kernel.lock"; flock 9; }
@@ -24,13 +27,14 @@ unset SGLANG_DEBUG_STEP_SYNC
 source $W/tree_env.sh
 export MODEL=$W/qwen7b TRACE_PATH=$W/workloads/tracelab/syfi_coding_trace_all.jsonl.gz
 export CHAT_DATASET=$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json
-ROOT=$W/split_vs_fused_20261013; mkdir -p $ROOT
+ROOT=$W/split_vs_fused_v2_20261013; mkdir -p $ROOT
 GATE=$ROOT/q4_gate; mkdir -p $GATE
 cp $W/q4_gate_graphs_20261012/MTP_LPT_Q4G.json $GATE/
 ( cd $W/$TREE && export CORRECTNESS_SYNTHETIC=0 CORRECTNESS_DATASET=$CHAT_DATASET
   export BENCH_CHUNK=512 CORRECTNESS_DECODE_TOKENS=1200 SGLANG_FUSED_DECODE_GUARD=0 MTP_DRAFT_TOKENS=4 MTP_SPEC_STEPS=3
   D=$W/$TREE/tasks/fused_specdec_workload/drivers/srv_correctness.py
-  $W/venv/bin/python -u $D MTPMIX_SPLIT_Q4G $GATE 2>&1 | tail -2
+  # The run itself must pass (fallbacks, tracebacks, split calls > 0), not only the compare.
+  $W/venv/bin/python -u $D MTPMIX_SPLIT_Q4G $GATE 2>&1 | tail -2; [ ${PIPESTATUS[0]} = 0 ] || exit 3
   $W/venv/bin/python -u $D --compare $GATE MTP_LPT_Q4G MTPMIX_SPLIT_Q4G 2>&1 | tail -3; exit ${PIPESTATUS[0]} )
 gate=$?; echo "SPLIT_GATE_DONE status=$gate"; [ $gate = 0 ] || exit 1
 cd $W/$TREE/tasks/realistic_workload_analysis

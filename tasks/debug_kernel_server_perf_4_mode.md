@@ -60,6 +60,18 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   requires split calls > 0, `split_gate_counter.patch`); then a PDL split (stock FA2 launched as
   the FA3 grid's dependent on the SMs FA3 leaves) and an FA2 executor whose KV pipeline matches
   BatchPrefill's.
+  - [x] **Split A/B v1 invalid (2026-10-13 06:5x, recorded):** `MTPMIX_SPLIT` planned 2201
+    two-sided splits but ran **zero** -- forward_extend dispatches the split on the paged path
+    only, and ragged was forced off only under FUSED_KERNEL_EXEC, so the two-launch split fell
+    through to stock BatchPrefill every layer. Its gate "PASS" was false: the driver raised "zero
+    split calls" but the gate subshell returned the compare's status. Fixed: ragged off whenever a
+    two-sided split plan exists (`split_dispatch_paged.patch`, in `up_racefix`); gate subshells in
+    the split and A3b scripts now fail on the run's own status. A/B aborted, re-queued as v2.
+  - [x] **FA2 executor tuning (2026-10-13, all exact):** CTAs/SM 2x vs 3x: no change (2.52 vs
+    2.52 ms on 46 x 48K) -- not MLP-bound. KV chunk is the lever: auto 2.52 ms, 1024 2.01 ms,
+    4096 1.84 ms (unfused control 1.49-1.52 ms); same on chunk+verify (2.55 / 2.03 / 1.84 ms). The
+    auto rule splits long verify rows too finely. Larger chunks (8K/16K/64K) queued before split v2
+    (`fa2_exec_tune_20261013.sh`, `fa2_exec_tune2_20261013.sh`).
 
 ### [~] B. Fuse draft/verify epilogue ops
 

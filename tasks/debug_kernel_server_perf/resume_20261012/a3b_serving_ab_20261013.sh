@@ -25,7 +25,8 @@ cp $W/q4_gate_graphs_20261012/MTP_LPT_Q4G.json $OUT/
 DRIVER=$W/$TREE/tasks/fused_specdec_workload/drivers/srv_correctness.py
 ( export CORRECTNESS_SYNTHETIC=0 CORRECTNESS_DATASET=$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json
   export BENCH_CHUNK=512 CORRECTNESS_DECODE_TOKENS=1200 SGLANG_FUSED_DECODE_GUARD=0 MTP_DRAFT_TOKENS=4 MTP_SPEC_STEPS=3
-  SGLANG_FUSED_DISPATCH=a3 $W/venv/bin/python -u "$DRIVER" MTPMIXFUSED_A3B_Q4G "$OUT" 2>&1 | tail -2
+  # The run itself must pass (fallbacks, tracebacks, fused calls > 0), not only the compare.
+  SGLANG_FUSED_DISPATCH=a3 $W/venv/bin/python -u "$DRIVER" MTPMIXFUSED_A3B_Q4G "$OUT" 2>&1 | tail -2; [ ${PIPESTATUS[0]} = 0 ] || exit 3
   $W/venv/bin/python -u "$DRIVER" --compare "$OUT" MTP_LPT_Q4G MTPMIXFUSED_A3B_Q4G 2>&1 || exit 1 )
 gate=$?; echo "A3B_GATE_DONE status=$gate"; [ $gate = 0 ] || exit 1
 # (2) realistic A/B, graphs on

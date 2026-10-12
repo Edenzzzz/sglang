@@ -1,0 +1,19 @@
+--- a/python/sglang/srt/layers/attention/flashinfer_backend.py
++++ b/python/sglang/srt/layers/attention/flashinfer_backend.py
+@@ -1233,10 +1233,12 @@
+                 )
+                 extend_no_prefix = not any(forward_batch.extend_prefix_lens_cpu)
+ 
+-            if (
+-                FUSED_KERNEL_EXEC
+-                and self.fused_split_plan is not None
+-                and "fused_kernel" in self.fused_split_plan
++            # The split runs on the paged path only (forward_extend dispatches it there), so a
++            # two-sided split plan must turn ragged off -- for the fused kernel and for the
++            # two-launch split alike. Forcing it only under FUSED_KERNEL_EXEC left the two-launch
++            # split planned every step and never run.
++            if self.fused_split_plan is not None and (
++                not FUSED_KERNEL_EXEC or "fused_kernel" in self.fused_split_plan
+             ):
+                 use_ragged = False
+ 

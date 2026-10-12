@@ -9,7 +9,7 @@ after the kernel items close (<=16 GPUs).
 **Where it stands (2026-10-13):** under load the fused 4-mode arm beats stock MTP by TTFT
 -31..-79%, throughput +11..+36%, per-token latency -19..-30%; below capacity the arms are equal.
 TTFT and throughput clear the bar wherever the server is loaded; per-token latency clears it only
-at some points. Graphs-on 4-mode runs use a mixed-step barrier; its root cause (a schedule-stream publish racing the forward stream) is found, fix in validation.
+at some points. The graphs-on 4-mode crash is fixed (a schedule-stream publish raced the forward stream); 4-mode arms now run without the mixed-step barrier.
 
 ## Tasks, in priority order
 
@@ -165,7 +165,7 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
   before 2026-10-12 are void. ([evidence](debug_kernel_server_perf/resume_20261012/a2_serving_ropefix_20261012.md))
 - [x] **Serving-output gate (q4 and q8; graphs off and on):** every 4-mode arm agrees with stock on
   the long prompts; first tokens are the HF reference argmax or within one bf16 ulp.
-- [~] **Graphs-on 4-mode crash (2026-10-12; cause found 2026-10-13):** both 4-mode arms crash under
+- [x] **Graphs-on 4-mode crash (2026-10-12; cause found and fixed 2026-10-13):** both 4-mode arms crash under
   load (async index assert). Bisect: a device sync after mixed steps (or launch-blocking) cures it;
   phase syncs, no in-step graph, synchronous flashinfer plans and a sync after non-mixed steps do
   not. **Cause (code, 2026-10-13):** in the overlap loop the verify half's
@@ -181,7 +181,14 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     (`Assertion -sizes[i] <= index && index < sizes[i]`, 1 traceback), so the race reproduces.
   - [x] **output gate, fixed tree, graphs on, no barrier:** PASS (long prompts agree on >= 96
     tokens with stock `MTP_LPT_Q4G`).
-  - [ ] fixed tree, no barrier: MTPMIX_LPT and MTPMIXFUSED twice each, then the synchronous path. Until it passes, measurements keep the mixed-step barrier. The latent race
+  - [x] **fixed tree, no barrier (05:02-05:23):** MTPMIX_LPT 1651 / 1701 mixed steps, MTPMIXFUSED
+    1751 / 1751, 0 tracebacks each, CUDA graphs on; synchronous path (`--disable-overlap-schedule`)
+    1651 mixed steps, 0 tracebacks. **Verdict PASS.** From here every 4-mode arm runs on
+    `up_racefix` without the mixed-step barrier (`tree_env.sh`); S1 x S2 numbers above were taken
+    WITH the barrier, which can only have slowed the 4-mode arms.
+    Tree: sglang-up `cc739bd2d` + `racefix_scheduler.patch` + `racefix_fs_upload.patch`
+    (+ `steptrace_port.patch`, off unless `SGLANG_STEP_TRACE=1`); command
+    `bash graphs_racefix_20261013.sh` then `bash racefix_verdict.sh` (pod `/dev/shm/w`). Until it passes, measurements keep the mixed-step barrier. The latent race
   of the same class -- `_fs_upload` rewrote its reused pinned host buffer while the previous step's
   non-blocking copy out of it could still be queued -- now waits on a per-buffer copy event first
   ([patch](debug_kernel_server_perf/resume_20261012/racefix_fs_upload.patch), same tree and validation).

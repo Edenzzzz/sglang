@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.18.6 — Graphs-on 4-mode crash fix validated; full-length replay fits the KV pool (2026-10-13)
+
+- Race fix PASS: unfixed tree without the barrier crashes (index assert); fixed tree without the
+  barrier runs both 4-mode arms twice (1651-1751 mixed steps each) and the synchronous path with 0
+  tracebacks, output gate PASS. The mixed-step barrier is retired for all later 4-mode arms.
+- S2b v2 aborted: 24 sessions overflowed the 1.82M-token KV pool (14.4M tokens prefilled vs 5.8M
+  uncached). v3 replays 8 seeded sessions (combined peak 1.37M; p10/50/90/99 38K/123K/223K/390K).
+- B1 headroom profile moved ahead of the S2b resume.
+
 ## v1.18.5 — Graphs-on crash root cause; A3 serving loss explained; S3/S4 drivers (2026-10-13)
 
 - Graphs-on 4-mode crash: the verify half's `future_map.publish(new_seq_lens)` and relay stash ran

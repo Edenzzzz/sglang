@@ -147,8 +147,13 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     with CUDA graphs on torch > 2.6 (pod: 2.14). Arms `PDMUX` vs stock non-speculative `LPT` on
     mix32 / mix128 at chat 8/16/24/s, S1 layout -- `baselines_pdmux_20261013.sh`, queued after the
     chain.
-  - [ ] **semi-PD:** fork of sglang v0.4.4.post1 (torch 2.5 / cu124), MPS-based SM partition,
-    radix cache off, no speculative decoding; needs its own venv and the MPS daemon on the pod.
+  - [ ] **semi-PD -- blocked on a user decision (2026-10-13):** fork of sglang v0.4.4.post1
+    (torch 2.5 / cu124), MPS-based SM partition, radix cache off, no speculative decoding. Venv
+    `venv_semipd` + clone are on the pod (torch 2.5.1+cu124 installed), but its pinned
+    `sgl-kernel==0.0.5` no longer exists on PyPI (every 0.0.x release deleted), so it must be built
+    from the repo's `sgl-kernel/`, which needs a CUDA 12 nvcc (pod: 13.1). Installing NVIDIA's
+    CUDA 12.4 toolkit runfile was denied by the permission policy; needs the user's go-ahead (or
+    a CUDA 12 toolchain provided another way).
   - [ ] **Dynamo conditional disaggregation:** separate prefill/decode workers (vLLM / TRT-LLM),
     so its home is the multi-node H20 stage with PD points 1-6.
 

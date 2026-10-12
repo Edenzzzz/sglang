@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.18.0 — FA2 leaves the co-compiled kernel (PDL co-launch); tile 48 refuted (2026-10-12)
+
+`FLASHINFER_FUSED_COLAUNCH=1` (flashinfer `persistent_fa3_fused.cuh`): the FA3 grid runs alone on
+`sm_split` CTAs and `FA2ExecutorKernel` -- same runners, plan and queue at native 128x2 geometry --
+is its programmatic dependent (FA3 `griddepcontrol.launch_dependents` at entry, FA2
+`griddepcontrol.wait` before exit). FA2 CTAs fill the SMs FA3 does not hold and then the ones it
+vacates. All gate arms exact against the fp32 causal reference and on graph replay; 10 race
+repeats exact.
+
+- 48/32/16 classes: 3.3x on the A2 mixed fixture (0.508 -> 0.156 ms), 3.8-6.5x on FA2 rows; the
+  executor still spills (648 B stack).
+- **Tile 48 is the spill**: 1 q-warp x 4 kv-warps, `num_mma_q=3`. 64/32/16 builds at 96 B and is
+  1.6-2.2x faster at every q8 shape; the co-launched kernel then beats `BatchAttention` on the A2
+  mixed fixture (0.096 vs 0.106 ms) and is 1.55x off the unfused two-launch control. The A2
+  class-48 premise is refuted in place; the tail dispatcher stays.
+
+Evidence: `tasks/debug_kernel_server_perf/resume_20261012/colaunch_20261012.md`
+(`colaunch_gate_20261012.sh`, `colaunch_tiles_20261012.sh`, `colaunch_persistent_fa3_fused.patch`).
+
 ## v1.17.1 — Post-RoPE-fix realistic A/B: the 4-mode schedule wins, the fused kernel gives it back (2026-10-12)
 
 First serving timing on the fixed model (`agent_chat_rated`: chat 24/s + TraceLab codex 0.1/s,

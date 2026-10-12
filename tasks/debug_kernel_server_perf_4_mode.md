@@ -25,6 +25,11 @@ The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
   12 requests while moving plan work 384/0/0/112 -> 192/0/192/112
   ([evidence](debug_kernel_server_perf/resume_20261012/a2_serving_ropefix_20261012.md)). Correctness only;
   no serving performance claim yet.
+  **Class set, measured 2026-10-12 under the co-launch: 48/32/16 is REFUTED, 64/32/16 wins.**
+  Tile 48 at 4 FA2 warps is 1 q-warp x 4 kv-warps with `num_mma_q=3`; its accumulator spills
+  (executor stack 648 B vs 96 B for 64/32/16) and it is 1.6-2.2x slower than tile 64 at every q8
+  shape. 128/64/16 loses q4 rows (no 32 class). All arms exact
+  ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md#fa2-class-set-under-the-co-launch-colaunch_tiles_20261012sh-tile-48-is-the-spill)).
 - [ ] **A3: fitted dispatch rule.** Fit and validate against measured FA2/FA3
   winners across query size, KV length, mode and batch composition. Historical
   curves taken before the kernel fixes do not establish the current boundary.

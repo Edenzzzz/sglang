@@ -117,3 +117,19 @@ prefill rows to FA3 per step) is a valid, engaged control.
 `postfix_agent_chat_rated24_20261012.tgz`: bench logs, validation JSONs, codex per-request JSONs,
 server logs, the run log and runner (chat per-request JSONs omitted for size; full archive
 `/dev/shm/w/postfix_agent_chat_rated24_20261012.tar.gz` sha256 `e746232e…` on the trial).
+
+| round 2 | MTP_LPT | MTPMIX_LPT | MTPMIX_SPLIT | MTPMIXFUSED |
+|---|---|---|---|---|
+| chat output tok/s | 1284.2 | 1414.2 (+10.1%) | 1409.9 (+9.8%) | 1251.2 (-2.6%) |
+| chat mean TTFT (ms) | 33104 | 22299 (-32.6%) | 23249 (-29.8%) | 31808 (-3.9%) |
+| chat mean / median / P99 ITL (ms) | 33.1 / 27.4 / 99.7 | 28.9 / 20.3 / 114.8 | 29.0 / 20.4 / 118.2 | 33.1 / 16.8 / 109.9 |
+| codex output tok/s | 143.6 | 165.9 (+15.6%) | 162.9 (+13.5%) | 143.5 (-0.1%) |
+| codex mean TTFT (ms) | 26512 | 17665 (-33.4%) | 18548 (-30.0%) | 26329 (-0.7%) |
+| codex mean ITL (ms) | 17.6 | 15.3 (-13.0%) | 15.4 (-12.2%) | 14.6 (-17.1%) |
+| accept length chat / codex | 2.16 / 2.21 | 2.13 / 2.15 | 2.13 / 2.15 | 2.12 / 2.15 |
+| fallbacks / tracebacks | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+
+**Run-to-run noise on this setup:** chat throughput moves 0.3% (MTP_LPT, MTPMIX_LPT) and 0.9%
+(MTPMIXFUSED) between rounds, so the 10-13% gaps are well outside it. The two-executor split
+(FA2 rows at native `BatchAttention` speed) matches the unfused 4-mode arm within 0.3%: the 4-mode
+schedule's gain survives the split host path, and the fused arm's 11% loss is the kernel.

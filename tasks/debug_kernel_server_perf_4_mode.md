@@ -70,8 +70,13 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   - [x] **FA2 executor tuning (2026-10-13, all exact):** CTAs/SM 2x vs 3x: no change (2.52 vs
     2.52 ms on 46 x 48K) -- not MLP-bound. KV chunk is the lever: auto 2.52 ms, 1024 2.01 ms,
     4096 1.84 ms (unfused control 1.49-1.52 ms); same on chunk+verify (2.55 / 2.03 / 1.84 ms). The
-    auto rule splits long verify rows too finely. Larger chunks (8K/16K/64K) queued before split v2
-    (`fa2_exec_tune_20261013.sh`, `fa2_exec_tune2_20261013.sh`).
+    auto rule splits long verify rows too finely. Larger chunks: 8192 1.92 ms, 16384 2.16 ms,
+    65536 (no split; 184 items for 264 CTAs) 2.53 ms -- **optimum 4096: 1.84 ms, still ~20% behind
+    the two-launch control (1.49-1.51 ms)**, a gap in the persistent mainloop itself, not its
+    configuration (`fa2_exec_tune_20261013.sh`, `fa2_exec_tune2_20261013.sh`). Next: the auto
+    rule needs a floor near 4096 for long verify rows (re-check on the A2 fixtures before
+    changing it); the serving decision waits on split v2 (gate PASS, long prompts agree on 52
+    tokens, split calls now required > 0; running).
 
 ### [~] B. Fuse draft/verify epilogue ops
 

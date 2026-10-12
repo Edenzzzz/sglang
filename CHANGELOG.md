@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.18.2 — A3 map on the fixed kernel, A1 closed, B backfill measured, graphs-on serving (2026-10-12)
+
+- **Pod re-forked** to `095f01a3e1585eea` (trial expired); serving tree rebuilt from the fork's
+  upstream base plus the serving diff; the rebuilt kernel reproduces the old pod's verdicts and
+  timings within 1%.
+- **A3:** winner map on the fixed kernel, 216/216 arms exact. FA2 wins every verify-width row;
+  fitted rule (FA3 iff packed >= 112 and FA3 work >= 3.5M) agrees on 69/72 cells (worst loss 6%)
+  vs 55/72 (98%) for the old rule -- but **loses in serving** (-3.5% chat throughput, +29% TTFT),
+  because a batch it makes one-sided runs the stock wrapper. Refit open.
+- **A1 closed by measurement:** FA3 q64 never beats q128 beyond noise.
+- **B backfill:** co-launch hardware backfill worth up to 2.9x when FA2 work exceeds the slots
+  beside FA3; in-kernel `tma_store_wait` backfill is correct and worth 1.4-5.5x over none but
+  that path is 2-6x slower overall.
+- **Graphs on:** the output gate passes, but both 4-mode arms crashed under load (async index
+  assert). Bisected to work a mixed step leaves in flight (sync after mixed steps cures it; after
+  non-mixed steps does not; overlap scheduler, flashinfer plan staging and the in-step graph are
+  refuted). Root cause open; measured with a mixed-step barrier, fused 4-mode vs stock MTP:
+  **TTFT -56% / -58%, throughput +20% / +25%, mean ITL -21% / -13%** (chat / codex).
+- **S tooling:** `eval_curves.py` (Pareto + SLO attainment), env-driven mixture/standalone
+  scenarios, 32K-256K TraceLab extract, S3 datasets prepared.
+
 ## v1.18.1 — Fused co-launch beats stock MTP on TTFT and throughput in realistic serving (2026-10-12)
 
 Class set 64/32/16 plus `FUSED_FA2_KV_CHUNK=auto` (FA2 chunk sized to the CTA slots FA2 can

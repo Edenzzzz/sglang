@@ -103,6 +103,17 @@ gate and reports fallbacks and composition counters.
   long context (fork loaders `sharegpt`, `speed-bench`, `mooncake` toolagent/conversation,
   `agentic-trace`, `longbench_v2`, `custom`), each rate-swept as in S1.
   - [ ] Dataset preparation on the pod (ShareGPT V3 fetched; the rest pending).
+- **S tooling (2026-10-12):** `drivers/serving/eval_curves.py` turns
+  `<root>/<workload>_r<rate>/<ARM>_<stream>.json` into per-tenant rows (output tok/s, median
+  tok/s/user, TTFT/TPOT, SLO attainment and goodput under per-stream SLOs) and the two figures;
+  `run_mixed_workloads.py` gains env-driven `mix_env` (context range, rates, counts) and
+  `standalone_env` scenarios and `YARN_FACTOR`/`CONTEXT_LEN` (factor 8 -> 262144); defaults are
+  byte-identical to earlier runs (`run_mixed_workloads_matrix.patch`). Driver
+  `eval_matrix_s12_20261012.sh`: mixtures mix32 (32-64K), mix64 (64-128K), mix128 (128-256K,
+  YaRN 8) x chat rate {4,8,12,16,20,24} (codex rate scaled, 0.1/s at 24) x 3 arms, graphs on.
+  TraceLab on the pod is a 1.35 MB extract (Claude rows with context >= 32K and output >= 512,
+  original session ids, timing reduced to first/last event), checked locally to give identical
+  loader input on 32-49K, 32-64K, 64-128K and 128-256K.
 
 Global scheduling (PD colocation points 1-4, H20 multi-node <=16 GPUs) follows S and is tracked
 in `tasks/pd_colocation_vs_disagg.md`.

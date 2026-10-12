@@ -1,0 +1,74 @@
+--- /tmp/run_mixed_workloads.py.pre_matrix	2026-10-12 12:40:40.786495191 +0800
++++ /opt/tiger/sglang-up/tasks/realistic_workload_analysis/run_mixed_workloads.py	2026-10-12 12:41:12.915599944 +0800
+@@ -89,7 +89,55 @@
+     ]
+ 
+ 
++def _env(name, default):
++    return os.environ.get(name, default)
++
++
++def standalone(kind, n, rate):
++    """One standard standalone workload (S3), selected by STANDALONE:
++    sharegpt | mooncake_toolagent | mooncake_conversation | longbench_v2 |
++    speed_bench:<jsonl>[:<category>] | custom:<jsonl>."""
++    rate_args = ["--request-rate", str(rate), "--num-prompts", str(n)]
++    if kind == "sharegpt":
++        return ["--dataset-name", "sharegpt", "--dataset-path", CHAT_DS] + rate_args
++    if kind.startswith("mooncake_"):
++        return ["--dataset-name", "mooncake", "--mooncake-workload", kind.split("_", 1)[1]] + rate_args
++    if kind == "longbench_v2":
++        return ["--dataset-name", "longbench_v2"] + rate_args
++    if kind.startswith("speed_bench:"):
++        parts = kind.split(":")
++        args = ["--dataset-name", "speed-bench", "--dataset-path", parts[1]]
++        if len(parts) > 2:
++            args += ["--speed-bench-category", parts[2]]
++        return args + rate_args
++    if kind.startswith("custom:"):
++        return ["--dataset-name", "custom", "--dataset-path", kind.split(":", 1)[1]] + rate_args
++    raise ValueError(f"unknown STANDALONE workload {kind!r}")
++
++
+ SCENARIOS = {
++    # S1/S2 evaluation matrix: agent + short chat with every axis from the environment, so one
++    # driver sweeps request rate and context range. CHAT_SECONDS sizes the chat stream to the
++    # offered rate, so every rate point runs for about the same wall time.
++    "mix_env": {
++        "desc": "agent + short chat; context range, rates and counts from the environment",
++        "streams": {
++            "codex": codex(int(_env("CODEX_N", "36")), groups=int(_env("CODEX_GROUPS", "8")),
++                           min_ctx=int(_env("CODEX_MIN_CTX", "32768")),
++                           max_ctx=int(_env("CODEX_MAX_CTX", "49152")),
++                           rate=float(_env("CODEX_RATE", "0.1"))),
++            "chat": chat(max(1, int(float(_env("CHAT_SECONDS", "200")) * float(_env("CHAT_RATE", "8")))),
++                         float(_env("CHAT_RATE", "8")), int(_env("CHAT_IN", "512")),
++                         int(_env("CHAT_OUT", "96"))),
++        },
++    },
++    # S3: one standard standalone workload at STANDALONE_RATE for STANDALONE_N requests.
++    "standalone_env": {
++        "desc": "one standard standalone workload (STANDALONE), rate-swept",
++        "streams": {"main": standalone(_env("STANDALONE", "sharegpt"),
++                                       int(_env("STANDALONE_N", "1000")),
++                                       _env("STANDALONE_RATE", "8"))},
++    },
+     # Primary: long-context agent sessions beside high-rate short-answer chat.
+     # Short outputs keep chat from accumulating decode rows, which would push
+     # BatchPrefill back into its efficient many-tile regime; the arrivals still
+@@ -328,8 +376,13 @@
+                     "--attention-backend", "flashinfer", "--enable-mixed-chunk",
+                     "--mem-fraction-static", "0.85", "--port", str(PORT),
+                     "--host", "127.0.0.1", "--max-running-requests", "48",
+-                    "--context-length", "131072", "--json-model-override-args",
+-                    '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}',
++                    # YARN_FACTOR / CONTEXT_LEN raise the window past 131072 for the >128K
++                    # mixtures (factor 8 -> 262144); defaults reproduce every earlier run.
++                    "--context-length", os.environ.get("CONTEXT_LEN", "131072"),
++                    "--json-model-override-args",
++                    json.dumps({"rope_scaling": {"factor": float(os.environ.get("YARN_FACTOR", "4.0")),
++                                                 "original_max_position_embeddings": 32768,
++                                                 "type": "yarn"}}),
+                     "--watchdog-timeout", "600"]
+         if os.environ.get("BENCH_CHUNK"):
+             # Chunked-prefill size sweep; unset keeps sglang's default (8192 here).

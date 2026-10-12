@@ -1,0 +1,73 @@
+--- a/python/sglang/srt/managers/scheduler.py
++++ b/python/sglang/srt/managers/scheduler.py
+@@ -4604,15 +4604,22 @@
+                         # extends. Correct for the next iteration's resolve, but it gives up
+                         # that overlap -- revisit once the step is green (perf, not
+                         # correctness).
+-                        self.future_map.publish(
+-                            _mix_run.req_pool_indices, _mix_res.new_seq_lens
+-                        )
+-                        _mix_run.spec_info.future_indices = _mix_run.req_pool_indices
+-                        # Stash the verify half's relay payload, or next iter's
+-                        # resolve_forward_inputs for this batch finds nothing to resolve.
+-                        self._relay_forward_payload(
+-                            _mix_run, _mix_run.req_pool_indices, _mix_res
+-                        )
++                        # Both writes are GPU scatters of tensors the forward stream is still
++                        # producing (new_seq_lens, the draft input), and this code runs after
++                        # the forward-stream block, so issue them on the forward stream: on the
++                        # schedule stream they raced the step and published stale seq_lens,
++                        # which the next step resolved into out-of-range indices (the graphs-on
++                        # device assert that a sync after mixed steps cured).
++                        with self.forward_stream_ctx:
++                            self.future_map.publish(
++                                _mix_run.req_pool_indices, _mix_res.new_seq_lens
++                            )
++                            _mix_run.spec_info.future_indices = _mix_run.req_pool_indices
++                            # Stash the verify half's relay payload, or next iter's
++                            # resolve_forward_inputs for this batch finds nothing to resolve.
++                            self._relay_forward_payload(
++                                _mix_run, _mix_run.req_pool_indices, _mix_res
++                            )
+                         # ... and give it the same D2H as the batch that ran:
+                         # _resolve_spec_v2_tokens asserts next_token_ids.is_cpu.
+                         _mix_res.copy_done = self.device_module.Event()
+@@ -4707,6 +4714,9 @@
+                     # Non-overlap: drive the V2 worker synchronously (no
+                     # future_map relay / on_publish).
+                     resolve_forward_inputs(batch, self.future_map)
++                    _mix_pre = getattr(batch, "mixed_spec_running", None)
++                    if _mix_pre is not None:
++                        resolve_forward_inputs(_mix_pre, self.future_map)
+                     with self._forward_isolation(batch, overlap=False):
+                         batch_result = self.model_worker.forward_batch_generation(
+                             batch, pp_proxy_tensors=pp_proxy_tensors
+@@ -4731,6 +4741,28 @@
+                             batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
+                     batch.input_ids = None  # rebuilt next iter from draft_token
+                     self.update_cache_from_scheduler(batch, batch_result)
++                    # 4-mode step: carry the verify half forward the way the lines above
++                    # carry `batch` -- its own draft input, accepted seq_lens and a host copy
++                    # of its results (process_batch_result_decode needs next_token_ids on the
++                    # CPU) -- and hand result processing a snapshot, as the overlap path does.
++                    _mix_run = getattr(batch_result, "mixed_running_batch", None)
++                    _mix_res = getattr(batch_result, "mixed_running_result", None)
++                    if _mix_run is not None and _mix_res is not None:
++                        _mix_run.spec_info = _mix_res.next_draft_input
++                        _mix_seq = _mix_res.new_seq_lens
++                        if _mix_seq is not None and _mix_seq is not _mix_run.seq_lens:
++                            _mix_run.seq_lens = _mix_seq
++                            if _mix_run.seq_lens_cpu is not None:
++                                _mix_run.seq_lens_cpu = _mix_seq.to("cpu")
++                                _mix_run.seq_lens_sum = int(_mix_run.seq_lens_cpu.sum())
++                        _mix_run.input_ids = None
++                        self.update_cache_from_scheduler(_mix_run, _mix_res)
++                        _mix_res.copy_done = self.device_module.Event()
++                        _mix_res.copy_to_cpu(
++                            return_logprob=_mix_run.return_logprob,
++                            return_hidden_states=_mix_run.return_hidden_states,
++                        )
++                        batch_result.mixed_running_batch = _mix_run.copy()
+                     # Only the last PP rank owns real results requiring D2H; other ranks
+                     # consume device tensors rebuilt from the output ring.
+                     batch_result.copy_done = self.device_module.Event()

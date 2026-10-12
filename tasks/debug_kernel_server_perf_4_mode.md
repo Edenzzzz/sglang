@@ -9,7 +9,7 @@ after the kernel items close (<=16 GPUs).
 **Where it stands (2026-10-13):** under load the fused 4-mode arm beats stock MTP by TTFT
 -31..-79%, throughput +11..+36%, per-token latency -19..-30%; below capacity the arms are equal.
 TTFT and throughput clear the bar wherever the server is loaded; per-token latency clears it only
-at some points. Graphs-on 4-mode runs need a mixed-step barrier whose root cause is open.
+at some points. Graphs-on 4-mode runs use a mixed-step barrier; its root cause (a schedule-stream publish racing the forward stream) is found, fix in validation.
 
 ## Tasks, in priority order
 
@@ -127,12 +127,21 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
   before 2026-10-12 are void. ([evidence](debug_kernel_server_perf/resume_20261012/a2_serving_ropefix_20261012.md))
 - [x] **Serving-output gate (q4 and q8; graphs off and on):** every 4-mode arm agrees with stock on
   the long prompts; first tokens are the HF reference argmax or within one bf16 ulp.
-- [~] **Graphs-on 4-mode crash (2026-10-12):** both 4-mode arms crash under load (async index
-  assert). Bisect: a device sync after mixed steps (or launch-blocking) cures it; phase syncs,
-  no in-step graph, overlap off, synchronous flashinfer plans and a sync after non-mixed steps do
-  not. A mixed step leaves GPU work in flight that the next step's host side races. **Root cause
-  open**; measurements use the mixed-step barrier, which can only slow the 4-mode arms. Latent race
-  of the same class found: `_fs_upload` rewrites a pinned host buffer an async copy may still read.
+- [~] **Graphs-on 4-mode crash (2026-10-12; cause found 2026-10-13):** both 4-mode arms crash under
+  load (async index assert). Bisect: a device sync after mixed steps (or launch-blocking) cures it;
+  phase syncs, no in-step graph, synchronous flashinfer plans and a sync after non-mixed steps do
+  not. **Cause (code, 2026-10-13):** in the overlap loop the verify half's
+  `future_map.publish(new_seq_lens)` and relay stash run after the forward-stream block, i.e. on
+  the schedule stream, unordered against the forward stream that is still producing those
+  tensors; stale seq_lens get published and the next step resolves them into out-of-range
+  indices. The mixed-step sync orders exactly this. Fix: issue both on the forward stream
+  ([patch](debug_kernel_server_perf/resume_20261012/racefix_scheduler.patch), tree `up_racefix`).
+  **Retracted:** "overlap off does not cure" -- that arm died at its FIRST mixed step on
+  `assert next_token_ids.is_cpu` (the synchronous path had no 4-mode handoff at all; now added),
+  so it never tested the race. Validation queued (`graphs_racefix_20261013.sh`): null case on the
+  unfixed tree without the barrier, output gate, both 4-mode arms twice without the barrier, and
+  the synchronous path. Until it passes, measurements keep the mixed-step barrier. Latent race of
+  the same class: `_fs_upload` rewrites a pinned host buffer an async copy may still read.
 - [x] **Pod re-forked (2026-10-12):** `f096519a4d17aa1c` expired; `095f01a3e1585eea` rebuilt from the
   fork's upstream base + serving diff, reproducing the old pod's kernel results within 1%.
 

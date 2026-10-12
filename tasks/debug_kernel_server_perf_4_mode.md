@@ -78,8 +78,22 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   5202 plans): 82,833 verify rows with packed_qo <= 32 carry 4.4% of useful FLOPs at 56.8%
   in-tile waste; 11,141 rows >= 512 carry 95.6% at 1.0%; overall waste 6.3%. Verify rows are
   memory-bound, so their FLOP waste is not the cost -- their KV bandwidth is (A4). Unfused vs fused
-  over the same 60 steps: attention 3574 vs 2739 ms (-23%), span -15%. Ranges mix64/mix128:
-  `b1_tail_profile_mix128_20261013.sh`, running.
+  over the same 60 steps: attention 3574 vs 2739 ms (-23%), span -15%. Per context range (chat 16/s + agent 0.1/s, 60 steps each,
+  `b1_tail_profile_mix128_20261013.sh`; steps are sampled from live traffic, so step mixes differ
+  between arms -- per-call times are the cleaner comparison):
+  | range | arm | span | attention | small ops | main attention kernels (avg per call) |
+  |---|---|---|---|---|---|
+  | mix64 | fused | 16.2 s | 13.3 s (84.7%) | ~1.4% | BatchPrefill 7.20 ms (decode-only steps), FA2Executor 5.34 ms (mixed) |
+  | mix64 | unfused 4-mode | 17.7 s | 14.2 s (82.7%) | ~1.5% | BatchPrefill 7.22 ms (all steps) |
+  | mix64 | stock | 22.5 s | 17.7 s (80.0%) | ~1.6% | BatchPrefill 9.44 ms |
+  | mix128 | fused | 3.6 s | 2.2 s (70.1%) | ~3.9% | BatchPrefill 1.29 ms (decode-only), FA2Executor 0.83 ms (mixed) |
+  | mix128 | unfused 4-mode | 7.4 s | 6.0 s (86.1%) | ~1.8% | BatchPrefill 3.15 ms (all steps, long prefill rows on FA2) |
+  | mix128 | stock | 6.8 s | 5.8 s (88.6%) | ~1.4% | BatchPrefill 3.14 ms |
+  Small ops stay at 1.4-3.9% at every range, so B1's bound holds everywhere. At mix128 the unfused
+  merged batch runs its 128-256K prefill rows through FA2 BatchPrefill (3.15 ms/call); the fused
+  step sends them to FA3 and the verify rows to the FA2 executor (0.83 ms/call) -- the kernel-side
+  mechanism behind the per-range attribution above. Tile waste falls with context (mix32 6.3%,
+  mix64 2.7%, mix128 0.6%) because long prefill rows dominate useful work.
 - [x] **B2, cross-role backfill (2026-10-12):** co-launch hardware backfill worth up to 2.9x when FA2
   work exceeds the slots beside FA3, nothing on small mixes; in-kernel `tma_store_wait` backfill is
   correct and worth 1.4-5.5x over none, but that whole path is 2-6x slower. Co-launch ships.

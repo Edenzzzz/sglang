@@ -1048,66 +1048,45 @@ full-length run (S2, H200) measures the colocation side of this first.
 
 ## 6. NVIDIA Dynamo's scheduling policy vs ours, in detail — 2026-10-13
 
-(User request, 2026-10-13.) Sources: Dynamo docs -- [KV router routing concepts][dyn-router],
-[conditional disaggregation][dyn-cd] (v1.5.1, experimental), [planner][dyn-planner] (v1.2-v1.5
-and the older [SLA planner][dyn-sla]), [KVBM design][dyn-kvbm] / [overall architecture][dyn-arch],
-and the [delta-KV transfer RFC][dyn-rfc]; full list under [References](#references).
+Sources: Dynamo docs -- [KV router routing concepts][dyn-router], [conditional
+disaggregation][dyn-cd] (v1.5.1, experimental), [planner][dyn-planner] (and the older [SLA
+planner][dyn-sla]), [KVBM design][dyn-kvbm] / [overall architecture][dyn-arch], and the [delta-KV
+transfer RFC][dyn-rfc]; full list under [References](#references).
 
-**Dynamo, layer by layer.**
+**How Dynamo schedules, layer by layer:**
 
-- **Router (per request).** Each candidate worker gets
-  `cost = prefill_load_scale * max(0, active_prefill_blocks + incoming_prompt_blocks - overlap_credit_blocks) + (active_decode_blocks + incoming_active_blocks) + decode_active_request_weight * active_requests`
-  and the lowest cost wins (optional softmax sampling with `router_temperature`). Overlap credit
-  sums configured credits for prefix hits on device, host, disk and shared cache, and can decay
-  when a cache-rich worker already has too much active prefill. Prefill load counts in full until
-  the first token (or decays under an AISimulate duration model); decode load is active KV blocks
-  (optionally placeholder output blocks, down-weighted by `agent_hints.osl`). Before scoring,
-  workers are filtered by allow-lists, pins, DP bounds, taints and a busy threshold; queued
-  requests are released by weighted Deficit Round Robin over policy classes. **No SLO or deadline
-  term appears anywhere in the router**; it balances block counts.
-- **Conditional disaggregation (per request, experimental).** Separate prefill and decode pools.
-  A request prefills locally on its decode worker when effective ISL (prompt minus that worker's
-  cached prefix) < 2048 **and** effective/raw < 0.7 (`isl_bounding`, default), or when the prefill
-  worker is busy (`prefill_load`), or either (`isl_or_load`); an optional `decode_busy_threshold`
-  forces remote prefill when projected decode KV blocks exceed a fraction of capacity. How the
-  local prefill is scheduled inside the decode worker is not described (it is the engine's
-  ordinary batching). **Not supported on SGLang** (vLLM and TensorRT-LLM only).
-- **Planner (minutes).** Autoscales prefill and decode replica counts separately to meet
-  TTFT/ITL targets, from offline profiling or an engine performance model plus load prediction
-  (ARIMA/Prophet in the older version), every ~180 s by default; a load-based mode regresses on
-  live per-worker load. The older SLA planner supports only the disaggregated setup.
-- **KV placement.** KV events feed the router's indexer; KVBM offloads and onboards blocks across
-  G1 device / G2 host / G3 SSD / G4 remote tiers; NIXL moves KV point to point. Cross-node reuse
-  needs an explicit fetch located by the router; there is no deliberate replication of hot
-  prefixes -- copies exist where routing and disagg transfer happened to put them.
+| layer | how Dynamo decides |
+|---|---|
+| **Router** (per request) | Picks the worker with the lowest block-count cost: pending prefill blocks minus a prefix-hit credit, plus active decode blocks, plus an optional per-request charge. Cache hits are just a load discount. There is no SLO or deadline term anywhere, and no time model. |
+| **Queueing** | Weighted round-robin across request classes, then the engine's own first-come order. No deadline ordering. |
+| **Conditional disaggregation** (experimental) | Separate prefill and decode pools. A request prefills locally on its decode worker only below static thresholds: uncached prompt under 2048 tokens and under 70% of the prompt, or when the prefill workers are busy. The local prefill then runs in the engine's ordinary mixed batch. It doesn't support SGLang (vLLM and TensorRT-LLM only). |
+| **Planner** | Rescales the number of prefill and decode replicas about every 3 minutes to meet TTFT/ITL targets. The older SLA planner works only with disaggregated pools. |
+| **KV placement** | KV is offloaded across memory tiers and fetched point to point when needed. Copies of hot prefixes exist only where routing and transfers happened to leave them. |
 
-**Where ours differs, point by point.**
+**Where ours differs:**
 
-| decision | Dynamo | ours | consequence to test |
-|---|---|---|---|
-| where a request goes | argmin of block-count cost; cache hit enters as a linear load credit | highest cache hit first, vetoed if a step-time model plus the EDF queue ahead of it (tighter deadlines) predicts an SLO miss; then the next-highest hit that fits (point 1) | Dynamo can send a request to a cache-hot worker whose queue will make it miss its deadline, or away from one that would have met it; ours trades hit length against predicted deadline slack |
-| what "load" means | KV blocks (prefill, decode, requests) | predicted step time from a fitted model with acceptance length (EWMA) as an input (point 3) | block counts ignore that decode cost depends on context length and acceptance; equal blocks can mean very different ITL |
-| order within a node | engine FCFS, DRR across policy classes at the router | EDF on the 4-mode MTP server (measured: deadline order wins, per-step chunk caps lose) | SLO attainment under mixed-SLO tenants (S1/S2 curves) |
-| prefill placement | fixed prefill/decode pools; local prefill only below a static uncached-ISL threshold (2048, ratio 0.7) | every node prefills and decodes; the 4-mode step co-runs prefill chunks with MTP verify rows in one forward, with a per-step FA3/FA2 SM split | Dynamo's local path is an ordinary mixed batch; ours makes exactly that co-execution cheap (fused 4-mode vs stock MTP under load: TTFT -31..-79%, throughput +11..+36%) |
-| reacting to a mixture shift or burst | planner rescales P/D replica counts on a ~180 s loop | no pools to rescale; the split between prefill and decode work is chosen every step | dynamic mid-run shift experiment (5e): time to recover SLO attainment after a sudden agent:chat change |
-| KV movement for agent rounds | remote rounds ship KV P->D every round; local rounds avoid it under the threshold | session stays on the node holding its KV; a moved session moves once (points 2, 5) | per-round bytes and decode-side ITL on full-length TraceLab (point 5 table) |
-| replicas of hot prefixes | incidental (where routing/transfer left them) | best-effort migration on a non-hit route leaves a replica where demand went (point 2) | hit rate and re-prefill volume as load moves across nodes (ThunderAgent's thrashing setting) |
-| source of a pull | the worker that holds the block (router locates it) | random among near-equal hit holders to spread link load (point 4) | per-link utilisation spread and p99 pull latency vs number of nodes |
-| speculative decoding | not modelled by router or planner | acceptance length is a model input for TPOT | ITL prediction error and SLO control under MTP |
+- **Routing:** we rank nodes by cache hit, then veto any node where a step-time model plus the
+  earlier-deadline requests queued there predict a missed SLO (point 1). Dynamo can send a request
+  to a cache-hot worker that will miss its deadline.
+- **Load model:** we predict step time from a model that includes speculative acceptance length
+  (point 3). Dynamo counts KV blocks, which ignore context length and acceptance.
+- **Prefill placement:** every node prefills and decodes, and each step co-runs prefill chunks
+  with speculative verify work using the fused kernel. That is exactly the local path Dynamo
+  leaves to an ordinary batch, and the one we measured at TTFT -31% to -79% and throughput +11%
+  to +36% versus stock MTP under load.
+- **Reacting to shifts:** the prefill/decode balance is re-chosen every step, against Dynamo's
+  roughly 3-minute replica rescaling.
+- **Cache:** we deliberately replicate hot prefixes through migration (point 2) and spread pulls
+  across near-equal holders (point 4). Dynamo's copies are incidental.
 
-**Worth adopting from Dynamo** (cheap, orthogonal to the argument): tiered overlap credit
-(device / host / disk hits weighted differently) inside our hit ranking; a decaying prefill-load
-estimate so a just-admitted long prefill does not look like permanent load; output-length hints
-for agent rounds (`agent_hints.osl`) as an input to the step model; a small routing temperature
-to break ties without a central counter.
+**Worth adopting from Dynamo:** hit credits weighted by memory tier, a decaying estimate of
+prefill load, and output-length hints for agent rounds.
 
-**Fair baseline, concretely.** Dynamo's conditional disaggregation runs on vLLM or TensorRT-LLM
-only, so the comparison needs the same model and draft served by vLLM under Dynamo with
-`--router-mode kv --router-conditional-disagg` and `isl_or_load`, thresholds tuned to the
-full-length TraceLab effective-ISL distribution (the docs' own advice), and the planner off (or
-on, as a second arm) at a fixed GPU budget. Engine differences then confound the kernel part of
-the comparison, so we also report Dynamo's KV router in **aggregated** mode on the same engine as
-a routing-only control. H20, <= 16 GPUs, trial `vibecuda`; not run yet.
+**Baseline:** a fair comparison must run on vLLM, since Dynamo's conditional disaggregation
+doesn't support SGLang: conditional disaggregation tuned to the full-length TraceLab distribution,
+plus Dynamo's router in aggregated mode as a routing-only control. Both are H20 work. Per the user
+(2026-10-13) this comparison is **optional** because it lacks an SGLang backend; sglang PD
+disaggregation is the required disaggregation baseline.
 
 ---
 

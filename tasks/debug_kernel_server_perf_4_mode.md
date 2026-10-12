@@ -83,6 +83,15 @@ The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
   ITL -19% / -11%** (median chat ITL -34%); fused vs unfused 4-mode: throughput +7% / +6%, TTFT
   -33% / -37%. TTFT and throughput clear the bar; mean ITL does not, and no arm has CUDA graphs
   ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md#kernel-gate-of-auto-v2-fixed-and-serving-colaunch_serving_v2_20261012sh)).
+- [~] **Pod re-forked (2026-10-12 12:07).** Trial `f096519a4d17aa1c` reached `done` during the
+  graphs-on gate (that run is void, no results). Re-forked to **`095f01a3e1585eea`** (trial
+  `304094471`, `vibecuda`, one H200). The serving tree is rebuilt from the fork's upstream base
+  `3fef129ff` plus the serving-only fork diff (`python/`, both driver dirs, rope test; local tree
+  hashes match the lost pod's recorded `config.py` 21213348, `run_mixed_workloads.py` 190cbf06,
+  `fused_reference.py` 74dc112a). TraceLab: the 343 KB `syfi_32k49k` subset replaces the 53 MB
+  trace; checked locally that it yields the identical session set, order, lengths and timing
+  bounds the loader reads, so the codex tenant is unchanged. The q4-gate prompts come from
+  ShareGPT V3 (HF) instead of `ShareGPT.original.json`, so every gate arm is re-run on the new pod.
 - [x] **Documentation priority restored.** Historical failures, retractions,
   exact commands and evidence paths remain below; this checklist keeps A/B above
   supporting diagnostics.

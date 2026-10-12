@@ -45,7 +45,11 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
 ### [~] B. Fuse draft/verify epilogue ops
 
 - [~] **B1, small-op tail:** greedy EAGLE verify has an opt-in fused argmax/acceptance/length
-  epilogue; sampling, gathers, cache writes and tree build remain separate.
+  epilogue (5.5-42 us vs 14-57 us at batch 1-48, i.e. <0.1% of a ~14 ms step); sampling,
+  gathers, cache writes and tree build remain separate. Ceiling first, as for B3: profile 60
+  serving steps per arm (mix32 16/s) and bucket GPU time -- the sampling/verify, index/copy and
+  elementwise share bounds any further fusion. `b1_tail_profile_20261013.sh`,
+  `drivers/serving/parse_kernel_tail.py` -- queued after the race-fix verdict.
 - [x] **B2, cross-role backfill (2026-10-12):** co-launch hardware backfill worth up to 2.9x when FA2
   work exceeds the slots beside FA3, nothing on small mixes; in-kernel `tma_store_wait` backfill is
   correct and worth 1.4-5.5x over none, but that whole path is 2-6x slower. Co-launch ships.

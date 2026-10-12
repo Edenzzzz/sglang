@@ -140,8 +140,10 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
   `assert next_token_ids.is_cpu` (the synchronous path had no 4-mode handoff at all; now added),
   so it never tested the race. Validation queued (`graphs_racefix_20261013.sh`): null case on the
   unfixed tree without the barrier, output gate, both 4-mode arms twice without the barrier, and
-  the synchronous path. Until it passes, measurements keep the mixed-step barrier. Latent race of
-  the same class: `_fs_upload` rewrites a pinned host buffer an async copy may still read.
+  the synchronous path. Until it passes, measurements keep the mixed-step barrier. The latent race
+  of the same class -- `_fs_upload` rewrote its reused pinned host buffer while the previous step's
+  non-blocking copy out of it could still be queued -- now waits on a per-buffer copy event first
+  ([patch](debug_kernel_server_perf/resume_20261012/racefix_fs_upload.patch), same tree and validation).
 - [x] **Pod re-forked (2026-10-12):** `f096519a4d17aa1c` expired; `095f01a3e1585eea` rebuilt from the
   fork's upstream base + serving diff, reproducing the old pod's kernel results within 1%.
 

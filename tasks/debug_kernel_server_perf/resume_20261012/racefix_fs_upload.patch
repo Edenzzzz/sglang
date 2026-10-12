@@ -1,0 +1,36 @@
+--- a/python/sglang/srt/layers/attention/flashinfer_backend.py
++++ b/python/sglang/srt/layers/attention/flashinfer_backend.py
+@@ -393,6 +393,7 @@
+         # 6.8% serving regression. Buffers only ever grow, so the steady state allocates nothing.
+         self._fs_dev: dict = {}
+         self._fs_host: dict = {}
++        self._fs_copy_done: dict = {}
+         self.fused_split_calls = 0
+         self.fused_split_onesided = 0
+         self.fused_split_plans = 0
+@@ -1586,12 +1587,24 @@
+         return b[:n]
+ 
+     def _fs_upload(self, name, arr, dtype, device):
+-        """Stage a numpy array through the pinned host buffer into the device buffer."""
++        """Stage a numpy array through the pinned host buffer into the device buffer.
++
++        The host buffer is reused every step, so the CPU must not rewrite it while the previous
++        step's non-blocking copy out of it is still queued: wait for that copy's event first
++        (normally already complete, so this does not stall).
++        """
+         n = int(arr.shape[0])
++        done = self._fs_copy_done.get(name)
++        if done is not None:
++            done.synchronize()
+         h = self._fs_host_buf(name, n, dtype)
+         h.copy_(torch.from_numpy(arr.astype(_FS_NP[dtype], copy=False)))
+         d = self._fs_dev_buf(name, n, dtype, device)
+         d.copy_(h, non_blocking=True)
++        if h.is_pinned():
++            if done is None:
++                done = self._fs_copy_done[name] = torch.cuda.Event()
++            done.record()
+         return d
+ 
+     def _fused_split_debug_check(self, where: str) -> None:

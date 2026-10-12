@@ -107,8 +107,12 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     38K/124K/256K/822K; ~20 GPU-minutes of prefill per arm, so session rates 0.01/0.02/0.05 run
     under, near and over capacity. `tracelab_full_v2_20261013.sh`.
 
-- [ ] **S3, standalone workloads:** ShareGPT, GSM8K, MATH-500, HumanEval, Code-Feedback, Mooncake
-  tool-agent/conversation, LongBench v2 -- prepared on the pod, not run.
+- [ ] **S3, standalone workloads:** ShareGPT (4-32/s), GSM8K, MATH-500, HumanEval, Code-Feedback
+  (8-32/s), Mooncake conversation / tool-agent (recorded timestamps at 0.5-2x speed), LongBench v2
+  (0.25-1/s, documents that do not fit 131072 dropped); three arms each, YaRN x4.
+  `s3_standalone_20261013.sh` (`s3_standalone_knobs.patch`: Mooncake slowdown and LongBench length
+  filter were not plumbed) -- queued last.
+
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
   (goal point 3); earlier fits used the RoPE-corrupted model.
 - [x] **Chunk size is not the ITL lever at saturation (2026-10-12):** chunk 8192/4096/2048 leaves

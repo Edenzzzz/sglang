@@ -1,0 +1,18 @@
+--- a/tasks/realistic_workload_analysis/run_mixed_workloads.py
++++ b/tasks/realistic_workload_analysis/run_mixed_workloads.py
+@@ -105,9 +105,13 @@
+         # codefeedback); each request's output length is its reference answer's length.
+         return ["--dataset-name", "sharegpt", "--dataset-path", kind.split(":", 1)[1]] + rate_args
+     if kind.startswith("mooncake_"):
+-        return ["--dataset-name", "mooncake", "--mooncake-workload", kind.split("_", 1)[1]] + rate_args
++        # Mooncake replays its recorded timestamps; load is set by the slowdown factor, not the rate.
++        return ["--dataset-name", "mooncake", "--mooncake-workload", kind.split("_", 1)[1],
++                "--mooncake-slowdown-factor", _env("MOONCAKE_SLOWDOWN", "1.0")] + rate_args
+     if kind == "longbench_v2":
+-        return ["--dataset-name", "longbench_v2"] + rate_args
++        # Drop documents that do not fit the served window instead of failing them.
++        return ["--dataset-name", "longbench_v2",
++                "--sharegpt-context-len", _env("CONTEXT_LEN", "131072")] + rate_args
+     if kind.startswith("speed_bench:"):
+         parts = kind.split(":")
+         args = ["--dataset-name", "speed-bench", "--dataset-path", parts[1]]

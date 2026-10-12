@@ -167,8 +167,12 @@ gate and reports fallbacks and composition counters.
     today) and per-tenant SLO attainment in the report.
   - [ ] **>128K contexts:** Qwen2.5-7B + YaRN x4 stops at 131072; needs a larger YaRN factor or a
     longer-context model -- decide and record which.
-  - [ ] **ITL tail:** P99 ITL (~111 ms) sits on steps carrying an 8192-token prefill chunk;
-    prefill chunk size becomes a sweep axis for both stock and fused arms.
+  - [x] **ITL tail vs prefill chunk size (2026-10-12, graphs on, `chunk_sweep_v2_20261012.sh`,
+    one round, 0 fallbacks/tracebacks): chunk size is NOT the lever.** Stock MTP chat
+    1284.5 / 1270.5 tok/s and mean ITL 32.9 / 33.1 ms at chunk 4096 / 2048; fused 1534.7 / 1524.0
+    tok/s and mean ITL 26.0 / 25.7 ms -- the same as at 8192 for both. Each step's prefill is many
+    ~512-token chat prompts, not one long chunk, so the cap rarely binds; at this saturated
+    point ITL is batching. The rate sweep (S1) is where sub-saturation ITL is measured.
 - [ ] **S3: Standard standalone workloads** from the papers and
   `tasks/realistic_workload_analysis.md`: ShareGPT, math, coding, multi-turn web/tool agents,
   long context (fork loaders `sharegpt`, `speed-bench`, `mooncake` toolagent/conversation,
@@ -184,7 +188,9 @@ gate and reports fallbacks and composition counters.
   `standalone_env` scenarios and `YARN_FACTOR`/`CONTEXT_LEN` (factor 8 -> 262144); defaults are
   byte-identical to earlier runs (`run_mixed_workloads_matrix.patch`). Driver
   `eval_matrix_s12_20261012.sh`: mixtures mix32 (32-64K), mix64 (64-128K), mix128 (128-256K,
-  YaRN 8) x chat rate {4,8,12,16,20,24} (codex rate scaled, 0.1/s at 24) x 3 arms, graphs on.
+  YaRN 8) x chat rate {4,8,12,16,20,24} (codex rate scaled, 0.1/s at 24) x 3 arms, graphs on,
+  4-mode arms with the measured mixed-step barrier. **Started 2026-10-12 19:11** on
+  `095f01a3e1585eea` (`/dev/shm/w/eval_s12_20261012/`, log `eval_matrix_s12_20261012.log`).
   TraceLab on the pod is a 1.35 MB extract (Claude rows with context >= 32K and output >= 512,
   original session ids, timing reduced to first/last event), checked locally to give identical
   loader input on 32-49K, 32-64K, 64-128K and 128-256K.

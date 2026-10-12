@@ -1,6 +1,6 @@
 --- /tmp/run_mixed_workloads.py.pre_matrix	2026-10-12 12:40:40.786495191 +0800
-+++ /opt/tiger/sglang-up/tasks/realistic_workload_analysis/run_mixed_workloads.py	2026-10-12 13:20:55.358867293 +0800
-@@ -89,7 +89,59 @@
++++ /opt/tiger/sglang-up/tasks/realistic_workload_analysis/run_mixed_workloads.py	2026-10-13 00:40:33.035418836 +0800
+@@ -89,7 +89,77 @@
      ]
  
  
@@ -50,6 +50,24 @@
 +                         int(_env("CHAT_OUT", "96"))),
 +        },
 +    },
++    # Full-length TraceLab: the release as it is -- both providers, every context length up to the
++    # served window, first rounds included, sessions picked in proportion to their rounds so the
++    # replayed rounds follow the release's round-level context distribution. Chat is optional
++    # (CHAT_RATE=0 drops it). Needs YARN_FACTOR=32 CONTEXT_LEN=1048576 for the >256K tail.
++    "tracelab_full_env": {
++        "desc": "full-length TraceLab (claude+codex, all lengths, round-weighted) [+ short chat]",
++        "streams": {
++            "agent": codex(int(_env("AGENT_N", "360")), groups=int(_env("AGENT_GROUPS", "120")),
++                           min_ctx=0,
++                           max_ctx=int(_env("AGENT_MAX_CTX", "1040000")),
++                           min_out=1, rate=float(_env("AGENT_RATE", "0.2")))
++                     + ["--tracelab-providers", _env("AGENT_PROVIDERS", "claude,codex"),
++                        "--tracelab-allow-empty-prefix", "--tracelab-session-weighting", "rounds"],
++            **({"chat": chat(max(1, int(float(_env("CHAT_SECONDS", "600")) * float(_env("CHAT_RATE", "0")))),
++                             float(_env("CHAT_RATE", "0")), 512, 96)}
++               if float(_env("CHAT_RATE", "0")) > 0 else {}),
++        },
++    },
 +    # S3: one standard standalone workload at STANDALONE_RATE for STANDALONE_N requests.
 +    "standalone_env": {
 +        "desc": "one standard standalone workload (STANDALONE), rate-swept",
@@ -60,7 +78,7 @@
      # Primary: long-context agent sessions beside high-rate short-answer chat.
      # Short outputs keep chat from accumulating decode rows, which would push
      # BatchPrefill back into its efficient many-tile regime; the arrivals still
-@@ -328,8 +380,13 @@
+@@ -328,14 +398,21 @@
                      "--attention-backend", "flashinfer", "--enable-mixed-chunk",
                      "--mem-fraction-static", "0.85", "--port", str(PORT),
                      "--host", "127.0.0.1", "--max-running-requests", "48",
@@ -76,3 +94,11 @@
                      "--watchdog-timeout", "600"]
          if os.environ.get("BENCH_CHUNK"):
              # Chunked-prefill size sweep; unset keeps sglang's default (8192 here).
+             args_srv += ["--chunked-prefill-size", os.environ["BENCH_CHUNK"]]
+         if os.environ.get("DISABLE_CUDA_GRAPH") == "1":
+             args_srv.append("--disable-cuda-graph")
++        # Extra server flags for diagnostics (e.g. --disable-overlap-schedule); empty by default.
++        args_srv += os.environ.get("SERVER_EXTRA_ARGS", "").split()
+         if method.startswith("MTP"):
+             draft_tokens = int(os.environ.get("MTP_DRAFT_TOKENS", "4"))
+             draft_steps = int(os.environ.get("MTP_SPEC_STEPS", "3"))

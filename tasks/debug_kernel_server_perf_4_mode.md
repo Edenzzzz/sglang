@@ -130,7 +130,13 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
 - [x] **Chunk size is not the ITL lever at saturation (2026-10-12):** chunk 8192/4096/2048 leaves
   both arms unchanged (prefill per step is many ~512-token prompts).
 - [ ] **Direct baselines:** MuxWise (arXiv 2504.14489), semi-PD, NVIDIA Dynamo conditional
-  disaggregation, sglang mixed-chunk and sglang PD -- see References.
+  disaggregation and sglang PD -- see References.
+  - [x] **sglang mixed-chunk is already the stock arm (2026-10-13):** upstream keeps
+    `--enable-mixed-chunk` on for EAGLE3 and degrades running requests to plain 1-token decodes
+    in a mixed step. The S1 `MTP_LPT` server log shows `enable_mixed_chunk: True`, no disable
+    warning, and 3151 prefill batches carrying running requests (mix32 16/s). So every "stock
+    MTP" number is stock mixed-chunk + MTP; the 4-mode step's difference is that those requests
+    keep speculating (verify rows) instead of dropping to single-token decode.
 
 ### [~] Supporting gates
 

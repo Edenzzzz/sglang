@@ -1,0 +1,15 @@
+--- a/tasks/realistic_workload_analysis/run_mixed_workloads.py
++++ b/tasks/realistic_workload_analysis/run_mixed_workloads.py
+@@ -528,6 +528,12 @@
+         return
+ 
+     sc = SCENARIOS[args.scenario]
++    if _env("STREAMS", ""):
++        # One tenant alone (e.g. the unloaded reference that relative SLOs are scaled from).
++        keep = _env("STREAMS", "").split(",")
++        sc = {**sc, "streams": {k: v for k, v in sc["streams"].items() if k in keep}}
++        if not sc["streams"]:
++            sys.exit(f"STREAMS={keep} matches none of {list(SCENARIOS[args.scenario]['streams'])}")
+     outdir = Path(args.outdir or (Path(__file__).parent / f"h800_mw_{args.scenario}"))
+     outdir.mkdir(parents=True, exist_ok=True)
+     print(f"scenario: {args.scenario} — {sc['desc']}")

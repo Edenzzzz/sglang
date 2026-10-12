@@ -1,0 +1,25 @@
+--- a/python/sglang/srt/layers/attention/mixed_dispatch.py
++++ b/python/sglang/srt/layers/attention/mixed_dispatch.py
+@@ -144,6 +144,12 @@
+ # FA3 q64 never won by more than noise, so FA3 rows always use the q128 tile.
+ A3_MIN_PACKED_QO = int(os.environ.get("SGLANG_A3_MIN_PACKED_QO", "112"))
+ A3_MIN_FA3_WORK = float(os.environ.get("SGLANG_A3_MIN_FA3_WORK", "3.5e6"))  # sum packed_qo * kv
++# The map's FA3 candidates were all band rows (qo <= 32), so the work floor is only fitted there.
++# Applied to every batch it also vetoed 512-token chat prefill chunks (3584 packed x 512 kv = 1.8M):
++# 65% of mixed steps went one-sided onto the stock path (default rule: 7%) and serving lost 3.5%
++# throughput / +29% TTFT (graphs_barrier_agent_chat_rated24_20261012). A3b keeps the floor inside
++# the fitted regime: it applies only when no FA3 candidate is longer than A3_WORK_MAX_QO.
++A3_WORK_MAX_QO = int(os.environ.get("SGLANG_A3_WORK_MAX_QO", "32"))
+ 
+ 
+ def split_classes_a3(qo_lens, kv_lens, gqa_ratio):
+@@ -152,7 +158,8 @@
+     q_tiles = (packed_qo + (TILE_Q - 1)) >> Q_SHIFT
+     kv_tiles = (np.maximum(kv, 1) + (TILE_KV - 1)) >> KV_SHIFT
+     fa3 = packed_qo >= A3_MIN_PACKED_QO
+-    if fa3.any() and float((packed_qo[fa3] * np.maximum(kv[fa3], 1)).sum()) < A3_MIN_FA3_WORK:
++    if (fa3.any() and int(qo[fa3].max()) <= A3_WORK_MAX_QO
++            and float((packed_qo[fa3] * np.maximum(kv[fa3], 1)).sum()) < A3_MIN_FA3_WORK):
+         fa3 = np.zeros_like(fa3)
+     return fa3, q_tiles, kv_tiles
+ 

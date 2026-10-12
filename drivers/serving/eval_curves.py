@@ -11,9 +11,15 @@ SLOs. The two required figures are drawn from these rows:
 
 A request attains its SLO when TTFT <= ttft_ms and its mean per-token ITL (TPOT) <= tpot_ms.
 SLOs are given per stream, e.g. --slo '{"chat": [2000, 50], "codex": [10000, 80]}'
-(ms; streams missing from the map use --default-slo).
+(ms; streams missing from the map use --default-slo). --slo-relative K_TTFT,K_TPOT instead scales
+each (workload, stream)'s SLO from its unloaded latency (SLOs-Serve style): K times the median TTFT
+and TPOT of the --ref-arm running that stream ALONE at a low rate, read from
+<ref-root>/<workload>_<anything>/<ref-arm>_<stream>.json; the same SLO for every arm. (The swept
+runs' lowest rate is not a reference: there the chat tenant already queues behind agent prefills,
+e.g. mix128 chat median TTFT 38 s at 4/s.)
 
-Usage: eval_curves.py --root DIR --slo JSON [--default-slo 5000,100] [--csv out.csv] [--plot out.png]
+Usage: eval_curves.py --root DIR (--slo JSON [--default-slo 5000,100] |
+       --slo-relative 5,2 --ref-root UNLOADED_DIR [--ref-arm MTP_LPT]) [--csv out.csv] [--plot out.png]
 """
 import argparse, csv, glob, json, os, re, sys
 
@@ -22,6 +28,15 @@ import numpy as np
 
 def load(path):
     return json.loads(open(path).read().strip().splitlines()[-1])
+
+
+def unloaded(path):
+    """Median TTFT and TPOT (ms) of one run, the reference for relative SLOs."""
+    j = load(path)
+    out = np.array(j["output_lens"], dtype=float)
+    decode = np.array([float(np.sum(x)) for x in j["itls"]])
+    tpot = decode[out > 1] * 1e3 / (out[out > 1] - 1)
+    return float(np.median(np.array(j["ttfts"], dtype=float) * 1e3)), float(np.median(tpot))
 
 
 def rows_for(path, workload, rate, arm, stream, slo):
@@ -60,12 +75,15 @@ def main():
     ap.add_argument("--root", required=True)
     ap.add_argument("--slo", default="{}", help='per-stream {"stream": [ttft_ms, tpot_ms]}')
     ap.add_argument("--default-slo", default="5000,100")
+    ap.add_argument("--slo-relative", help="K_TTFT,K_TPOT x the reference arm's unloaded medians")
+    ap.add_argument("--ref-root", help="unloaded single-stream runs for --slo-relative")
+    ap.add_argument("--ref-arm", default="MTP_LPT")
     ap.add_argument("--csv")
     ap.add_argument("--plot")
     a = ap.parse_args()
     per_stream = {k: tuple(map(float, v)) for k, v in json.loads(a.slo).items()}
     default = tuple(map(float, a.default_slo.split(",")))
-    rows = []
+    runs = []
     for d in sorted(glob.glob(os.path.join(a.root, "*_r*"))):
         m = re.match(r"(.+)_r([0-9.]+)$", os.path.basename(d))
         if not m:
@@ -73,10 +91,34 @@ def main():
         workload, rate = m.group(1), float(m.group(2))
         for f in sorted(glob.glob(os.path.join(d, "*_*.json"))):
             base = os.path.basename(f)[:-5]
-            if base.endswith("_validation"):
+            if base.endswith("_validation") or ".previous." in base:
                 continue
             arm, stream = base.rsplit("_", 1)
-            rows.append(rows_for(f, workload, rate, arm, stream, per_stream.get(stream, default)))
+            runs.append((f, workload, rate, arm, stream))
+    slo_of = lambda workload, stream: per_stream.get(stream, default)
+    if a.slo_relative:
+        k_ttft, k_tpot = map(float, a.slo_relative.split(","))
+        if not a.ref_root:
+            sys.exit("--slo-relative needs --ref-root (unloaded single-stream runs)")
+        ref = {}
+        for f in glob.glob(os.path.join(a.ref_root, "*_*", f"{a.ref_arm}_*.json")):
+            base = os.path.basename(f)[:-5]
+            if base.endswith("_validation") or ".previous." in base:
+                continue
+            workload = os.path.basename(os.path.dirname(f)).rsplit("_", 1)[0]
+            ref[(workload, base[len(a.ref_arm) + 1:])] = ("unloaded", f)
+        rel = {}
+        for key, (rate, f) in ref.items():
+            ttft_ms, tpot_ms = unloaded(f)
+            rel[key] = (round(k_ttft * ttft_ms, 1), round(k_tpot * tpot_ms, 2))
+            print(f"relative SLO {key[0]}/{key[1]}: {a.ref_arm} {rate} median TTFT "
+                  f"{ttft_ms:.0f} ms, TPOT {tpot_ms:.1f} ms -> {rel[key]}", file=sys.stderr)
+        missing = {(w, st) for _, w, _, _, st in runs} - set(rel)
+        if missing:
+            sys.exit(f"no unloaded reference for {sorted(missing)} under {a.ref_root}")
+        slo_of = lambda workload, stream: rel[(workload, stream)]
+    rows = [rows_for(f, workload, rate, arm, stream, slo_of(workload, stream))
+            for f, workload, rate, arm, stream in runs]
     if not rows:
         sys.exit(f"no <workload>_r<rate>/<ARM>_<stream>.json under {a.root}")
     cols = list(rows[0])

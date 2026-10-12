@@ -32,9 +32,15 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
 - [~] **A3, fitted FA2/FA3 dispatch rule (2026-10-12):** winner map on the fixed kernel, 216/216
   exact: FA2 wins every verify-width row; rule "FA3 iff packed_qo >= 112 and FA3 work >= 3.5M"
   agrees on 69/72 cells (worst loss 6%) vs 55/72 (98%) for the serving rule -- **but loses in
-  serving** (-3.5% throughput, +29% TTFT) because batches it makes one-sided run the stock path.
-  Next: refit with the one-sided path priced in, or route one-sided batches through the co-launch.
+  serving** (-3.5% throughput, +29% TTFT). Cause, from the split counters (2026-10-13): the work
+  floor was fitted on band rows only (qo <= 32) but also vetoed 512-token chat prefill chunks
+  (3584 packed x 512 kv = 1.8M), so 1039/1601 split plans went one-sided onto the stock path vs
+  122/1801 under the default rule. Routing one-sided batches through the co-launch instead would
+  not help: on one-sided band shapes the fused kernel is 1.0-2.2x slower than `BatchAttention`.
   ([table](debug_kernel_server_perf/resume_20261012/a3_winner_map/a3_v2_table_20261012.txt))
+  - [ ] **A3b:** the floor applies only inside the fitted regime (all FA3 candidates qo <= 32,
+    `a3b_dispatch_rule.patch`); gated serving A/B vs the default rule, interleaved twice for a
+    noise floor, `a3b_serving_ab_20261013.sh` -- queued.
 
 ### [~] B. Fuse draft/verify epilogue ops
 
@@ -84,6 +90,11 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     this); (2) a fixed 2 s chat TTFT SLO is met by no arm at 64-128K and above, so SLO attainment
     stops discriminating there -- SLOs should scale with each workload's unloaded latency
     (SLOs-Serve style, e.g. 5x / 10x).
+  - [ ] **Relative SLOs (2026-10-13):** `eval_curves.py --slo-relative K_TTFT,K_TPOT --ref-root`
+    scales each tenant's SLO from its median TTFT/TPOT running ALONE on stock MTP. The swept runs'
+    lowest rate cannot be the reference (mix128 chat already waits 38 s at 4/s; tried and
+    discarded). Unloaded runs, chat 0.5/s and agent 0.02 sessions/s per mixture,
+    `unloaded_ref_20261013.sh` (driver gets a `STREAMS` filter, `streams_filter.patch`) -- queued.
 - [ ] **S2b, full-length TraceLab (user, 2026-10-13):** the release as it is -- Claude Code context
   p50/p90/p99 133K/483K/923K (25% >= 256K), Codex 120K/204K/233K, outputs p50 ~200 tokens; the
   32-64K slice is ~16% of rounds. Loader replays both providers, first rounds, round-weighted

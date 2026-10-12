@@ -57,17 +57,30 @@ Arms everywhere: stock MTP, unfused 4-mode, fused 4-mode (co-launch, 64/32/16, a
 EAGLE3 chain q4; CUDA graphs on; 4-mode arms with the measured mixed-step barrier (see gates);
 each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/eval_curves.py`.
 
-- [~] **S1 x S2, rate sweep x context mixtures (running since 2026-10-12 19:22,
+- [x] **S1 x S2, rate sweep x context mixtures (2026-10-12 19:22 -> 2026-10-13 02:57, 54 runs,
   `eval_matrix_s12_20261012.sh`):** chat 4-24/s + TraceLab agent at 0.1 sessions/s; per-tenant
-  SLOs chat 2 s / 50 ms TPOT, agent 10 s / 80 ms. 0 fallbacks, 0 tracebacks so far.
+  SLOs chat 2 s / 50 ms TPOT, agent 10 s / 80 ms. 0 fallbacks, 0 tracebacks in all 54 runs.
   - [x] **mix32 (32-64K):** arms equal at 4-8/s (4-mode P99 ITL worse: a verify rides with a
     chunk). From 12/s fused vs stock: TTFT -47..-79%, throughput +11..+25%, TPOT -19..-28%, SLO
     attainment up to 2x (agent 0.83 vs 0.47 at 16/s); fused beats unfused 4-mode from 16/s.
   - [x] **mix64 (64-128K):** already saturated at 4/s (the agent tenant alone fills the GPU). At
     12-20/s fused vs stock: chat throughput +15..+36%, TTFT -31..-35%, TPOT -19..-30%; agent
     throughput +18..+26%, TPOT -11..-25%; fused beats unfused by 9-14% chat throughput at 16-20/s.
-  - [ ] **mix128 (128-256K, YaRN x8):** running.
-  - [ ] Pareto (throughput vs tok/s/user) and SLO-vs-rate figures, once the sweep completes.
+  - [x] **mix128 (128-256K, YaRN x8), 2026-10-13:** the largest gains -- fused vs stock at
+    4-24/s: chat throughput +11..+49%, TTFT -35..-46%, TPOT -22..-41%; agent throughput
+    +10..+38%, TPOT -11..-31%, TTFT -8..-30%. At chat 24/s every chat metric clears the bar
+    (+49% / -46% / -41%) and the agent reaches -30% TTFT / -31% TPOT. Fused beats unfused 4-mode
+    at every rate.
+  - [x] **Figures (2026-10-13):** [`eval_s12_v2_20261012.png`](debug_kernel_server_perf/resume_20261012/eval_s12_v2_20261012.png) -- per
+    mixture and tenant: throughput vs median tok/s/user, SLO attainment, mean TTFT and TPOT vs chat
+    rate (data [`eval_s12_v2_20261012.csv`](debug_kernel_server_perf/resume_20261012/eval_s12_v2_20261012.csv), `drivers/serving/plot_eval.py`).
+    Fused is lowest on TTFT and TPOT at nearly every loaded point of all three mixtures. Two
+    limits of this sweep, to fix in the next pass: (1) the agent-tenant Pareto panels are not
+    meaningful -- the swept rate is the chat rate, the agent rate is fixed, so agent throughput
+    falls as chat load rises; the agent tenant needs its own rate sweep (the full-length run does
+    this); (2) a fixed 2 s chat TTFT SLO is met by no arm at 64-128K and above, so SLO attainment
+    stops discriminating there -- SLOs should scale with each workload's unloaded latency
+    (SLOs-Serve style, e.g. 5x / 10x).
 - [ ] **S2b, full-length TraceLab (user, 2026-10-13):** the release as it is -- Claude Code context
   p50/p90/p99 133K/483K/923K (25% >= 256K), Codex 120K/204K/233K, outputs p50 ~200 tokens; the
   32-64K slice is ~16% of rounds. Loader now replays both providers, first rounds, and

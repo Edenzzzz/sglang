@@ -1,0 +1,15 @@
+# b3_multicast_ceiling_20261013.sh on trial 095f01a3e1585eea (H200), 2026-10-13 03:1x-03:23.
+# skip0 = normal build (must pass the fp32 causal reference); skip1 = FLASHINFER_FA3_SKIP_KV_LOAD
+# (every FA3 K/V global load zero-filled; wrong by construction, timing only). Times in ms,
+# CUDA-graph replay, 50 iters. HEADS=28,4 SM_SPLIT=112, co-launch, FA2 64/32/16, auto chunk.
+MC skip0_fa3_kv16384_r16_q32 rc=0 [bad rows 0/512] [time] fused   = 0.8090 BatchAttention  = 0.4714
+MC skip0_fa3_kv65536_r1_q32 rc=0 [bad rows 0/32] [time] fused   = 0.1599 BatchAttention  = 0.1320
+MC skip0_pre2048_kv16384_v32 rc=0 [bad rows 0/2176] [time] fused   = 1.6692 BatchAttention  = 2.3354
+MC skip0_mixed_verify_q4 rc=0 [bad rows 0/536] [time] fused   = 0.0673 BatchAttention  = 0.1040
+MC skip0_fa3_default rc=0 [bad rows 0/258] [time] fused   = 0.1195 BatchAttention  = 0.0482
+MC skip1_fa3_kv16384_r16_q32 rc=1 [bad rows 512/512] [time] fused   = 0.6468 BatchAttention  = 0.4701
+MC skip1_fa3_kv65536_r1_q32 rc=1 [bad rows 32/32] [time] fused   = 0.1338 BatchAttention  = 0.1320
+MC skip1_pre2048_kv16384_v32 rc=1 [bad rows 2048/2176] [time] fused   = 1.5595 BatchAttention  = 2.3100
+MC skip1_mixed_verify_q4 rc=1 [bad rows 504/536] [time] fused   = 0.0640 BatchAttention  = 0.1039
+MC skip1_fa3_default rc=1 [bad rows 258/258] [time] fused   = 0.1134 BatchAttention  = 0.0490
+B3_CEILING_DONE

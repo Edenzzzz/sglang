@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.18.4 — B3 multicast ceiling on the current kernel; full-length TraceLab v2 (2026-10-13)
+
+- B3: skipping every FA3 K/V global load (`FLASHINFER_FA3_SKIP_KV_LOAD`) saves 4.9-6.6% on mixed
+  serving fixtures and 16-20% on short-append FA3 rows against 16-64K of context; a 2-CTA multicast
+  can reach at most half of that. Agent-append shapes queued (`b3_append_ceiling_20261013.sh`).
+- S2b: v1 (120 sessions) aborted after it queued 16.8M prompt tokens. v2 replays 24 sessions x 10
+  rounds whose context distribution matches the release (new `--tracelab-selection-seed`, seed
+  187), at 0.01/0.02/0.05 sessions/s (`tracelab_full_v2_20261013.sh`).
+
 ## v1.18.3 — Evaluation matrix results, full-length TraceLab, PD points 5-6, doc cleanup (2026-10-13)
 
 - **S1 x S2 sweep** (chat 4-24/s + TraceLab agent 0.1/s, graphs on, 0 fallbacks/tracebacks):

@@ -44,12 +44,15 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   work exceeds the slots beside FA3, nothing on small mixes; in-kernel `tma_store_wait` backfill is
   correct and worth 1.4-5.5x over none, but that whole path is 2-6x slower. Co-launch ships.
   ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md))
-- [ ] **B3, multicast:** not implemented (`mcast_mask=0`); needs page-size-128 paged TMA. A
-  2026-10-07 ceiling on the old two-executor FA3 (every K/V gather skipped) was only 1.6-1.8%
-  faster -- FA3-routed rows are compute-bound -- and FA2 verify rows have no shared reads (one
-  q-tile per row, disjoint split-KV chunks). Re-measuring that ceiling on the current kernel
-  before building anything: `FLASHINFER_FA3_SKIP_KV_LOAD` diagnostic
-  (`fa3_skip_kv_load.patch`), `b3_multicast_ceiling_20261013.sh`, queued after the full-length run.
+- [~] **B3, multicast:** not implemented (`mcast_mask=0`; needs page-size-128 paged TMA). Ceiling
+  measured first on the current kernel (2026-10-13, `b3_multicast_ceiling_20261013.sh`, diagnostic
+  `fa3_skip_kv_load.patch`): zero-filling EVERY FA3 K/V global load saves 4.9% on mixed_verify q4,
+  6.6% on prefill 2048 + 32 verify rows, 5.1% on the FA3 default fixture, and 16-20% on FA3 rows of
+  32 new tokens against 16-64K of context (all normal arms exact). Multicast removes only the loads
+  CTAs of a cluster share, at most half for a 2-CTA cluster, so its bound is ~3% on serving mixes
+  and ~10% on short-append FA3 rows. Pending before deciding: the same ceiling on agent-append
+  shapes (256-1024 new tokens on 32-131K of context), `b3_append_ceiling_20261013.sh`, queued after S2b.
+  ([raw](debug_kernel_server_perf/resume_20261012/b3_multicast_ceiling_20261013.txt))
 
 ### [ ] S. Server / workload evaluation
 
@@ -83,10 +86,16 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     (SLOs-Serve style, e.g. 5x / 10x).
 - [ ] **S2b, full-length TraceLab (user, 2026-10-13):** the release as it is -- Claude Code context
   p50/p90/p99 133K/483K/923K (25% >= 256K), Codex 120K/204K/233K, outputs p50 ~200 tokens; the
-  32-64K slice is ~16% of rounds. Loader now replays both providers, first rounds, and
-  round-weighted sessions (replayed median 120-126K vs the release's 124K);
-  `tracelab_full_env` scenario at YaRN x32 (1M tokens). Queued after the sweep.
-  ([patch](debug_kernel_server_perf/resume_20261012/tracelab_full_replay.patch))
+  32-64K slice is ~16% of rounds. Loader replays both providers, first rounds, round-weighted
+  sessions; `tracelab_full_env` at YaRN x32 (1M tokens), agent tenant alone, rate = session starts/s.
+  - [x] **v1 aborted (2026-10-13 03:16):** 120 sessions x 2 rounds at 0.2-0.8/s queued 16.8M prompt
+    tokens at ~2K tok/s -- one 1M-token session alone is ~400 s of prefill; could not finish.
+  - [ ] **v2 running (started 03:24):** 24 sessions x 10 rounds, selection seed 187 (new
+    `--tracelab-selection-seed`, [patch](debug_kernel_server_perf/resume_20261012/tracelab_selection_seed.patch));
+    the loader itself replays context p10/50/90/99 40K/127K/235K/869K vs the release's
+    38K/124K/256K/822K; ~20 GPU-minutes of prefill per arm, so session rates 0.01/0.02/0.05 run
+    under, near and over capacity. `tracelab_full_v2_20261013.sh`.
+
 - [ ] **S3, standalone workloads:** ShareGPT, GSM8K, MATH-500, HumanEval, Code-Feedback, Mooncake
   tool-agent/conversation, LongBench v2 -- prepared on the pod, not run.
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule

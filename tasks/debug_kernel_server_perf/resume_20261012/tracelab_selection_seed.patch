@@ -1,0 +1,81 @@
+--- a/python/sglang/benchmark/datasets/tracelab.py
++++ b/python/sglang/benchmark/datasets/tracelab.py
+@@ -1,6 +1,7 @@
+ import gzip
+ import json
+ import random
++from typing import Optional
+ from dataclasses import dataclass
+ from datetime import datetime
+ 
+@@ -33,6 +34,9 @@
+     # replayed rounds follow the release's ROUND-level context distribution (uniform session
+     # picks under-sample long contexts, which live in long sessions: median 51K vs 124K).
+     session_weighting: str = "uniform"
++    # Seed for session and window selection only (token draws stay on the global RNG), so a
++    # selection checked offline against the release's distribution replays unchanged.
++    selection_seed: Optional[int] = None
+ 
+     @classmethod
+     def from_args(cls, args):
+@@ -48,6 +52,7 @@
+             tuple(p for p in getattr(args, "tracelab_providers", "claude").split(",") if p),
+             bool(getattr(args, "tracelab_allow_empty_prefix", False)),
+             getattr(args, "tracelab_session_weighting", "uniform"),
++            getattr(args, "tracelab_selection_seed", None),
+         )
+ 
+     def load(self, tokenizer, model_id=None):
+@@ -96,15 +101,16 @@
+                 f"TraceLab selection has {len(eligible)} sufficiently long sessions; "
+                 f"requested {self.num_groups}"
+             )
++        selector = random if self.selection_seed is None else random.Random(self.selection_seed)
+         if self.session_weighting == "rounds":
+-            # Weighted sampling without replacement (Efraimidis-Spirakis keys), seeded through
+-            # the same global RNG as the uniform path.
++            # Weighted sampling without replacement (Efraimidis-Spirakis keys), seeded like
++            # the uniform path.
+             keyed = sorted(
+-                eligible, key=lambda sid: random.random() ** (1.0 / len(sessions[sid])), reverse=True
++                eligible, key=lambda sid: selector.random() ** (1.0 / len(sessions[sid])), reverse=True
+             )
+             selected = keyed[: self.num_groups]
+         else:
+-            selected = random.sample(eligible, self.num_groups)
++            selected = selector.sample(eligible, self.num_groups)
+         vocabulary = get_available_tokens(tokenizer)
+         if not vocabulary:
+             raise ValueError("Tokenizer vocabulary is empty")
+@@ -113,7 +119,7 @@
+         warmups = []
+         for session_id, quota in zip(selected, quotas):
+             records = sorted(sessions[session_id], key=lambda record: record["round_index"])
+-            window_start = random.randint(0, len(records) - quota)
++            window_start = selector.randint(0, len(records) - quota)
+             records = records[window_start : window_start + quota]
+             first_prefix = int(records[0]["prefix_tokens"])
+             prompt_ids = random.choices(vocabulary, k=first_prefix)
+--- a/python/sglang/benchmark/serving.py
++++ b/python/sglang/benchmark/serving.py
+@@ -2378,6 +2378,8 @@
+                                 choices=["uniform", "rounds"],
+                                 help="Session pick: uniform, or proportional to eligible rounds "
+                                 "(matches the release's round-level context distribution).")
++    tracelab_group.add_argument("--tracelab-selection-seed", type=int, default=None,
++                                help="Separate seed for session/window selection.")
+     parser.add_argument(
+         "--speed-bench-category",
+         type=str,
+--- a/tasks/realistic_workload_analysis/run_mixed_workloads.py
++++ b/tasks/realistic_workload_analysis/run_mixed_workloads.py
+@@ -147,7 +147,8 @@
+                            max_ctx=int(_env("AGENT_MAX_CTX", "1040000")),
+                            min_out=1, rate=float(_env("AGENT_RATE", "0.2")))
+                      + ["--tracelab-providers", _env("AGENT_PROVIDERS", "claude,codex"),
+-                        "--tracelab-allow-empty-prefix", "--tracelab-session-weighting", "rounds"],
++                        "--tracelab-allow-empty-prefix", "--tracelab-session-weighting", "rounds"]
++                     + (["--tracelab-selection-seed", _env("AGENT_SEED", "")] if _env("AGENT_SEED", "") else []),
+             **({"chat": chat(max(1, int(float(_env("CHAT_SECONDS", "600")) * float(_env("CHAT_RATE", "0")))),
+                              float(_env("CHAT_RATE", "0")), 512, 96)}
+                if float(_env("CHAT_RATE", "0")) > 0 else {}),

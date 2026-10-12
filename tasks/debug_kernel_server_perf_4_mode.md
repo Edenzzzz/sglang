@@ -84,9 +84,16 @@ gate and reports fallbacks and composition counters.
     ITL -19% / -11%** (median chat ITL -34%); fused vs unfused 4-mode: throughput +7% / +6%, TTFT
     -33% / -37%. TTFT and throughput clear the bar; mean ITL does not, and no arm has CUDA graphs
     ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md#kernel-gate-of-auto-v2-fixed-and-serving-colaunch_serving_v2_20261012sh)).
-  - [ ] **Graphs-on comparison** (old K6). Fused co-launch, unfused 4-mode and stock MTP with
-    CUDA graphs on: q4 output gate, then the realistic A/B. Running on the re-forked pod
-    (`graphs_on_v2_20261012.sh`; the first attempt died with the pod and is void).
+  - [ ] **Graphs-on comparison** (old K6). `graphs_on_v2_20261012.sh` on the re-forked pod.
+    **Output gate PASS with graphs on** (long prompts 96/96 vs stock for unfused and fused 4-mode,
+    0 fallbacks). **Realistic A/B: stock MTP runs** (2711 graph batches; chat 1283.6 tok/s, TTFT
+    33.5 s, mean ITL 33.0 ms, median 20.3 ms -- mean/throughput unchanged from graphs off, since
+    at saturation most steps carry a chunk and run eager) **but BOTH 4-mode arms crash ~60 s in**,
+    unfused included: torch `IndexKernel.cu` out-of-bounds, surfacing in flashinfer `plan()` under
+    `decode_cuda_graph_runner.load_batch -> init_forward_metadata_out_graph` during a verify that
+    follows a mixed step (15 running + 23 new sequences). Not the fused kernel; the fork's 4-mode
+    path with graphs on. The frame is a victim of an async assert; launch-blocking repro
+    (`graphs_repro_20261012.sh`) is queued behind the A3 map, and the S1xS2 sweep waits for the fix.
   - [ ] **EDF step model re-fitted on the fused kernel and compared with the unfused schedule**
     (goal point 3); it drives the SLO-attainment curve. Old fits used the RoPE-corrupted model.
 - [ ] **S2: Workload mixtures by context range with per-tenant SLOs.** Short chat mixed with

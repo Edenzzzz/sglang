@@ -9,6 +9,7 @@ W=/dev/shm/w
 until grep -q A3_V2_DONE $W/a3_winner_map_v2_20261012.log 2>/dev/null; do
   pgrep -f '[a]3_winner_map_v2' >/dev/null || break; sleep 60; done
 grep -q "G_GATE_DONE status=0" $W/graphs_on_v2_20261012.log || { echo "graphs-on gate did not pass -- not running"; exit 1; }
+until [ -f $W/GRAPHS_FIXED ]; do sleep 120; done  # created only after the graphs-on 4-mode crash is fixed and re-gated
 exec 9>"$W/a2_kernel.lock"; flock 9
 if pgrep -f '[s]glang.launch_server|[s]rv_correctness.py|[r]un_mixed_workloads|[f]used_reference.py' >/dev/null; then
   echo "GPU predecessor still running"; exit 1; fi

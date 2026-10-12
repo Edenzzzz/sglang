@@ -62,6 +62,23 @@ The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
 - [~] **Cross-role backfill and multicast.** Asymmetric FA3-to-FA2 backfill has
   passed bounded reference/null gates with store retirement; multicast and
   cross-model draft/target co-scheduling remain unimplemented/unvalidated.
+  - [x] **Backfill measured on the fixed kernel (2026-10-12, `b_backfill_20261012.sh`, classes
+    64/32/16, auto FA2 chunk, SM split 112; all 20 arms exact).** Two mechanisms, each on/off
+    (ms):
+
+    | fixture | co-launch + HW backfill | co-launch, FA2 grid capped to 40 CTAs | in-kernel backfill (`tma_store_wait`) | in-kernel, none | BA | unfused |
+    |---|---|---|---|---|---|---|
+    | mixed_verify q8 | 0.0899 | 0.0896 | 0.5285 | 0.7752 | 0.1059 | 0.0615 |
+    | mixed_verify q4 | 0.0673 | 0.0669 | 0.3310 | 0.4650 | 0.1038 | 0.0578 |
+    | q4, 32 rows @ kv 8192 | **0.2883** | 0.8364 | 1.2521 | 6.8677 | 0.3289 | 0.1931 |
+    | 2048-tok chunk + 32 q4 rows @ kv 16384 | 1.6826 | 1.6820 | 3.7521 | 13.3330 | 2.3164 | 1.1926 |
+    | mix_decode 32 | **0.1181** | 0.1673 | 0.2619 | 1.0579 | 0.0917 | 0.0832 |
+
+    Backfill matters when FA2 work outgrows the 40 CTA slots beside the FA3 grid: the hardware
+    backfill of the co-launch is worth 2.9x and 1.42x there, nothing on small mixes. The in-kernel
+    `tma_store_wait` backfill is correct and worth 1.4-5.5x over none, but that whole path is 2-6x
+    slower than the co-launch because its FA2 body is co-compiled -- so the co-launch is the
+    backfill we ship.
 
 ### [ ] S. Server / workload evaluation — 2026-10-12
 

@@ -1048,9 +1048,10 @@ full-length run (S2, H200) measures the colocation side of this first.
 
 ## 6. NVIDIA Dynamo's scheduling policy vs ours, in detail — 2026-10-13
 
-(User request, 2026-10-13.) Sources: Dynamo docs -- KV router routing concepts, conditional
-disaggregation (v1.5.1, experimental), planner (v1.2-v1.5 and the older SLA planner), KVBM /
-overall architecture; see the References in `debug_kernel_server_perf_4_mode.md`.
+(User request, 2026-10-13.) Sources: Dynamo docs -- [KV router routing concepts][dyn-router],
+[conditional disaggregation][dyn-cd] (v1.5.1, experimental), [planner][dyn-planner] (v1.2-v1.5
+and the older [SLA planner][dyn-sla]), [KVBM design][dyn-kvbm] / [overall architecture][dyn-arch],
+and the [delta-KV transfer RFC][dyn-rfc]; full list under [References](#references).
 
 **Dynamo, layer by layer.**
 
@@ -1120,3 +1121,51 @@ rows above the chunk limit, so a serving A/B today would measure a corrupted bas
 
 Order of work: fix the corruption, run the serving A/B, then the four experiments above in the
 listed order.
+
+---
+
+## References
+
+Systems and papers this doc argues against or borrows from. *(sent)* marks the ones the user sent;
+the kernel-side reference list is at the end of `debug_kernel_server_perf_4_mode.md`.
+
+- **NVIDIA Dynamo** -- the main baseline for points 1, 5 and 6.
+  - [KV router: routing concepts][dyn-router] -- note: block-count cost with a prefix-hit credit,
+    DRR across policy classes, no SLO/deadline term (point 6).
+  - [Conditional disaggregation][dyn-cd] -- note: local prefill on the decode worker below a static
+    uncached-ISL threshold (2048, ratio 0.7) or when prefill is busy; vLLM/TRT-LLM only (points 5, 6).
+  - [Planner][dyn-planner] and the older [SLA-based planner][dyn-sla] -- note: minute-scale P/D
+    replica autoscaling from profiled performance and load prediction (point 6).
+  - [KVBM design][dyn-kvbm], [overall architecture][dyn-arch] -- note: G1-G4 KV tiers, NIXL
+    point-to-point transfer, incidental rather than deliberate replication (points 2, 6).
+  - [Delta-KV transfer RFC][dyn-rfc] -- note: would cut remote agent rounds to append-only
+    transfer (point 5).
+- **semi-PD: Towards Efficient LLM Serving via Phase-Wise Disaggregated Computation and Unified
+  Storage** -- K. Hong et al., [arXiv:2504.19867][semipd] ([code][semipd-code]) -- note: SM-level
+  prefill/decode split inside one GPU over a shared KV store; static ratio, relaunch to change.
+- **Towards High-Goodput LLM Serving with Prefill-decode Multiplexing (MuxWise)** -- Y. Chen,
+  W. Cui et al., [arXiv:2504.14489][muxwise] *(sent)* -- note: intra-GPU P/D multiplexing with an
+  SLO-aware dispatcher; direct colocation baseline.
+- **ThunderAgent: A Simple, Fast and Program-Aware Agentic Inference System** -- H. Kang et al.,
+  [arXiv:2602.13692][thunder] *(sent)* -- note: KV-cache thrashing in agentic serving; motivates the
+  replication argument (point 2).
+- **TraceLab: Characterizing Coding Agent Workloads for LLM Serving** -- K. Zhu et al.,
+  [arXiv:2606.30560][tracelab] ([dataset][tracelab-gh]) *(sent)* -- note: the agentic workload and
+  the per-round transfer numbers of point 5.
+- **SLOs-Serve: Optimized Serving of Multi-SLO LLMs** -- S. Chen et al., [arXiv:2504.08784][slos]
+  *(sent)* -- note: per-application SLOs and mixture x load evaluation (point 3, experiments 5c/5d).
+
+[dyn-router]: https://docs.nvidia.com/dynamo/dev/knowledge-base/modular-components/router/routing-concepts
+[dyn-cd]: https://docs.nvidia.com/dynamo/advanced-customizations/conditional-disaggregation
+[dyn-planner]: https://docs.nvidia.com/dynamo/v1.5.0/knowledge-base/modular-components/planner/overview
+[dyn-sla]: https://docs.nvidia.com/dynamo/v-0-8-1/components/planner/sla-based-planner
+[dyn-kvbm]: https://docs.nvidia.com/dynamo/v-0-9-1/design-docs/kvbm-design
+[dyn-arch]: https://docs.nvidia.com/dynamo/v1.1.1/design-docs/overall-architecture
+[dyn-rfc]: https://github.com/ai-dynamo/dynamo/discussions/7861
+[semipd]: https://arxiv.org/abs/2504.19867
+[semipd-code]: https://github.com/infinigence/Semi-PD
+[muxwise]: https://arxiv.org/abs/2504.14489
+[thunder]: https://arxiv.org/abs/2602.13692
+[tracelab]: https://arxiv.org/abs/2606.30560
+[tracelab-gh]: https://github.com/uw-syfi/TraceLab
+[slos]: https://arxiv.org/abs/2504.08784

@@ -194,6 +194,13 @@ gate and reports fallbacks and composition counters.
   first and abandoned: at chat 4/s the codex stream alone took ~36 min per arm. **Running since
   2026-10-12 19:22** on `095f01a3e1585eea` (`/dev/shm/w/eval_s12_v2_20261012/`, log
   `eval_matrix_s12_v2_20261012.log`).
+  **First under-capacity point (mix32, chat 4/s + codex 0.1/s; per-stream SLO chat 2 s / 50 ms
+  TPOT, codex 10 s / 80 ms):** the three arms are equal -- chat TTFT 149 / 167 / 162 ms and TPOT
+  7.78 / 7.59 / 7.96 ms (stock / unfused 4-mode / fused), codex TTFT 1135 / 1160 / 1181 ms, chat
+  SLO attainment 0.969 / 0.968 / 0.968 -- and **P99 ITL is worse for 4-mode** (35.5 / 43.6 /
+  58.1 ms): a verify that rides with a prefill chunk waits for the chunk. The saturated-point
+  gains are capacity gains; they appear only as load approaches capacity, which is what the
+  Pareto and SLO-vs-rate curves will show.
   TraceLab on the pod is a 1.35 MB extract (Claude rows with context >= 32K and output >= 512,
   original session ids, timing reduced to first/last event), checked locally to give identical
   loader input on 32-49K, 32-64K, 64-128K and 128-256K.

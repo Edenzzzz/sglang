@@ -9,11 +9,11 @@ The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
 
 ### [~] A. Ultra fine-grained tile dispatcher — 2026-10-12
 
-- [~] **A1: FA3 128/64 WGMMA tile variants.** Separate compile-time tile
-  variants now coexist as `fused_fa3_q64` and `fused_fa3_q128`; the dispatch
-  selects q64 when the FA3 packed query extent is at most 64. This is the
-  per-batch groundwork; true per-work-item selection and serving benefit remain
-  open.
+- [x] **A1: FA3 128/64 WGMMA tile variants -- closed by measurement (2026-10-12).** The variants
+  coexist as `fused_fa3_q64` / `fused_fa3_q128`. On the fixed-kernel A3 map, **q64 never beats
+  q128 by more than noise** (best case 0.0182 vs 0.0183 ms) and loses by up to 2.3x at 16-64
+  rows; under the A3 rule every FA3 row has packed_qo >= 112, so per-work-item q64/q128 selection
+  has no shape to win on. Not built, for that reason, not skipped.
 - [~] **A2: FA2 fine-grained tile classes — current implementation focus.**
   The existing three configurable classes now accept `{48,32,16}` in the
   actual extension. Packed-32/48/64 band fixtures pass head-level fp32 checks;
@@ -31,15 +31,20 @@ The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
   (executor stack 648 B vs 96 B for 64/32/16) and it is 1.6-2.2x slower than tile 64 at every q8
   shape. 128/64/16 loses q4 rows (no 32 class). All arms exact
   ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md#fa2-class-set-under-the-co-launch-colaunch_tiles_20261012sh-tile-48-is-the-spill)).
-- [ ] **A3: fitted dispatch rule.** Fit and validate against measured FA2/FA3
-  winners across query size, KV length, mode and batch composition. Historical
-  curves taken before the kernel fixes do not establish the current boundary.
-  **Winner map 2026-10-12** (kv {1k,4k,16k} x rows {1,16} x qo {1..32} x {FA2, FA3 q64,
-  FA3 q128}; all 108 arms 0 bad rows): FA3 wins every in-kernel shape, but only because
-  in-kernel FA2 is 5-40x slower than native FA2 (`BatchAttention`), which itself beats every
-  fused arm at most shapes. The map measures the FA2 spill defect, not the boundary; it is
-  re-run after the co-launch fix
-  ([table](debug_kernel_server_perf/resume_20261012/a3_winner_map/a3_table_20261012.txt)).
+- [~] **A3: fitted dispatch rule (2026-10-12).** Winner map re-taken on the FIXED kernel
+  (co-launch, 64/32/16, auto FA2 chunk): kv {1K,4K,16K,64K} x rows {1,16,64} x qo {1..32} x
+  {FA2, FA3 q64, FA3 q128}, **216/216 arms exact** (fp32 reference + graph replay)
+  (`a3_winner_map_v2_20261012.sh`, [table](debug_kernel_server_perf/resume_20261012/a3_winner_map/a3_v2_table_20261012.txt)).
+  **FA2 wins every verify-width row (qo <= 8, packed <= 56)** at every kv and batch size except
+  two 64-row cells, and FA3 q128 wins once rows fill a tile and carry work. Fitted rule
+  (`SGLANG_FUSED_DISPATCH=a3`, `mixed_dispatch.split_classes_a3`): **FA3 iff packed_qo >= 112 and
+  the FA3 candidates' sum(packed_qo x kv) >= 3.5M**: 69/72 cells, worst loss 6.0%, mean 0.2%,
+  against 55/72, 97.6%, 9.0% for the current `packed >= 48` rule (all-FA2 51/72, all-FA3 21/72).
+  The 2026-10-10 "no shape where FA2 wins" (comment in `mixed_dispatch.py`) is **RETRACTED** in
+  place: it timed the spilling FA2. The previous map (same day, morning) measured that spill and
+  is superseded. Open: serving A/B of the rule (q4 and q8) and the decode-population guard, which
+  the rule bypasses because it was fitted on the old kernel.
+  ([patch](debug_kernel_server_perf/resume_20261012/a3_dispatch_rule.patch))
 - [x] **A-fix: FA2 out of the co-compiled kernel (2026-10-12).** Measured: 3.3-6.5x on FA2
   rows, all gates exact, serving gain above. Remaining kernel gap: 1.2-2x behind the unfused
   non-persistent two-launch control. `FLASHINFER_FUSED_COLAUNCH=1`

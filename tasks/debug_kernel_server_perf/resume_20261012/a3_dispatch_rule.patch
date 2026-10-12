@@ -1,0 +1,50 @@
+--- /tmp/mixed_dispatch.py.pre_a3	2026-10-12 14:09:34.124581155 +0800
++++ /opt/tiger/sglang-up/python/sglang/srt/layers/attention/mixed_dispatch.py	2026-10-12 14:09:34.139581673 +0800
+@@ -59,6 +59,8 @@
+ # including the 18-row / kv=65537 decode shape where the doc previously recorded "FA2 beats FA3 by
+ # 1.30x" -- that entry is RETRACTED (both its arms failed numerics; FA3 is 3.66x faster there).
+ #
++# RETRACTED 2026-10-12: that sweep timed an FA2 role that spilled (co-compiled with FA3, 168 regs,
++# 4200 B stack). On the fixed kernel FA2 wins every verify-width row; see split_classes_a3.
+ # So there is no measured shape at which the FA2 role is the right executor, and MIN_PACKED_QO has
+ # no support at 48 or any other value. Env-overridable rather than silently re-pinned, because the
+ # implication is a DESIGN question, not a constant: see the note in split_classes.
+@@ -132,6 +134,29 @@
+         np.asarray(a, dtype=np.int64)
+ 
+ 
++# A3 fitted rule (2026-10-12), from the winner map on the FIXED kernel -- FA2 co-launched at native
++# geometry, classes 64/32/16, auto FA2 chunk -- over kv {1K,4K,16K,64K} x rows {1,16,64} x
++# qo {1..32} at GQA 28/4, all 216 arms exact against the causal fp32 reference
++# (tasks/debug_kernel_server_perf/resume_20261012/a3_winner_map/a3_v2_table_20261012.txt).
++# A row goes to FA3 iff its packed query extent fills most of a 128-row WGMMA tile AND the FA3
++# candidates together carry enough work to occupy the FA3 SMs; everything else is FA2's.
++# Agreement 69/72 cells, worst loss 6.0%, mean 0.2% (the packed>=48 rule: 55/72, 97.6%, 9.0%).
++# FA3 q64 never won by more than noise, so FA3 rows always use the q128 tile.
++A3_MIN_PACKED_QO = int(os.environ.get("SGLANG_A3_MIN_PACKED_QO", "112"))
++A3_MIN_FA3_WORK = float(os.environ.get("SGLANG_A3_MIN_FA3_WORK", "3.5e6"))  # sum packed_qo * kv
++
++
++def split_classes_a3(qo_lens, kv_lens, gqa_ratio):
++    qo, kv = _as_i64(qo_lens), _as_i64(kv_lens)
++    packed_qo = qo * gqa_ratio
++    q_tiles = (packed_qo + (TILE_Q - 1)) >> Q_SHIFT
++    kv_tiles = (np.maximum(kv, 1) + (TILE_KV - 1)) >> KV_SHIFT
++    fa3 = packed_qo >= A3_MIN_PACKED_QO
++    if fa3.any() and float((packed_qo[fa3] * np.maximum(kv[fa3], 1)).sum()) < A3_MIN_FA3_WORK:
++        fa3 = np.zeros_like(fa3)
++    return fa3, q_tiles, kv_tiles
++
++
+ def split_classes(qo_lens, kv_lens, gqa_ratio):
+     """Route rows to the FA3 class or the persistent class. Vectorised.
+ 
+@@ -139,6 +164,8 @@
+     recomputing anything. Tiles are computed with shifts rather than ceil-div:
+     this runs on every batch, ahead of the launch.
+     """
++    if os.environ.get("SGLANG_FUSED_DISPATCH", "") == "a3":
++        return split_classes_a3(qo_lens, kv_lens, gqa_ratio)
+     qo, kv = _as_i64(qo_lens), _as_i64(kv_lens)
+     packed_qo = qo * gqa_ratio
+     q_tiles = (packed_qo + (TILE_Q - 1)) >> Q_SHIFT

@@ -88,7 +88,18 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     | agent TTFT mean | **1941 ms** | 5102 ms | 14500 ms |
     | agent TPOT mean | **11.3 ms** | 16.0 ms | 21.9 ms |
     | agent output tok/s | **308** | 205 | 162 |
-    Chat throughput equals the offered load in all arms (~1136 tok/s). The barrier-free fused arm
+    **mix32 24/s (07:30, both arms clean; split 103,501 split calls, fused 80,801 fused calls):**
+    | metric | split | fused | stock MTP (S1) | split vs stock |
+    |---|---|---|---|---|
+    | chat output tok/s | **1641** | 1489 | 1226 | +34% |
+    | chat TTFT mean | **8684 ms** | 33662 ms | 63512 ms | -86% |
+    | chat TPOT mean | **20.7 ms** | 27.7 ms | 34.8 ms | -40% |
+    | agent output tok/s | **212** | 162 | 130 | +64% |
+    | agent TTFT mean | **8768 ms** | 22597 ms | 43663 ms | -80% |
+    | agent TPOT mean | **13.4 ms** | 16.7 ms | 23.8 ms | -44% |
+    At both mix32 points the split clears the bar vs stock MTP on TTFT, TPOT and throughput for
+    both tenants. mix128 16/24 running.
+    Chat throughput at 16/s equals the offered load in all arms (~1136 tok/s). The barrier-free fused arm
     (4932 ms TTFT) is within 7% of S1's fused-with-barrier (5276 ms). Command:
     `INHERIT_LOCK=1 bash split_vs_fused_20261013.sh` (root `split_vs_fused_v2_20261013`), analysed
     with `drivers/serving/eval_curves.py --slo '{"chat":[2000,50],"codex":[10000,80]}'`.

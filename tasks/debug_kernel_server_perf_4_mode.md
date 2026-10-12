@@ -137,6 +137,16 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     warning, and 3151 prefill batches carrying running requests (mix32 16/s). So every "stock
     MTP" number is stock mixed-chunk + MTP; the 4-mode step's difference is that those requests
     keep speculating (verify rows) instead of dropping to single-token decode.
+  - [ ] **MuxWise = sglang `--enable-pdmux` (2026-10-13):** no public MuxWise repo; upstream
+    sglang's PD-multiplexing (GreenContext SM split, layer-split prefill) is that design and is in
+    our fork. Non-speculative only, chunked prefill and overlap off, and it warns of degradation
+    with CUDA graphs on torch > 2.6 (pod: 2.14). Arms `PDMUX` vs stock non-speculative `LPT` on
+    mix32 / mix128 at chat 8/16/24/s, S1 layout -- `baselines_pdmux_20261013.sh`, queued after the
+    chain.
+  - [ ] **semi-PD:** fork of sglang v0.4.4.post1 (torch 2.5 / cu124), MPS-based SM partition,
+    radix cache off, no speculative decoding; needs its own venv and the MPS daemon on the pod.
+  - [ ] **Dynamo conditional disaggregation:** separate prefill/decode workers (vLLM / TRT-LLM),
+    so its home is the multi-node H20 stage with PD points 1-6.
 
 ### [~] Supporting gates
 

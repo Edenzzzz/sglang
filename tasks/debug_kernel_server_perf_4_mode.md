@@ -42,8 +42,14 @@ The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
   against 55/72, 97.6%, 9.0% for the current `packed >= 48` rule (all-FA2 51/72, all-FA3 21/72).
   The 2026-10-10 "no shape where FA2 wins" (comment in `mixed_dispatch.py`) is **RETRACTED** in
   place: it timed the spilling FA2. The previous map (same day, morning) measured that spill and
-  is superseded. Open: serving A/B of the rule (q4 and q8) and the decode-population guard, which
-  the rule bypasses because it was fitted on the old kernel.
+  is superseded.
+  **Serving A/B (2026-10-12, graphs on, mixed-step barrier, one round, q4 gate PASS): the fitted
+  rule LOSES** -- chat 1481 vs 1534 tok/s (-3.5%), chat TTFT 19.2 vs 14.9 s (+29%), codex 187 vs
+  197 tok/s, with 16.5K fused calls against 45.6K. The map compares FA2 and FA3 *inside* the
+  fused kernel, but in serving a batch the rule makes one-sided runs the stock wrapper, not the
+  fused kernel, so the kernel-level winner is not the step-level winner. Open: refit with the
+  one-sided fallback path priced in (or route one-sided batches through the co-launch executor).
+  The decode-population guard stays on the default rule.
   ([patch](debug_kernel_server_perf/resume_20261012/a3_dispatch_rule.patch))
 - [x] **A-fix: FA2 out of the co-compiled kernel (2026-10-12).** Measured: 3.3-6.5x on FA2
   rows, all gates exact, serving gain above. Remaining kernel gap: 1.2-2x behind the unfused
@@ -137,6 +143,21 @@ gate and reports fallbacks and composition counters.
     may still be reading. **Root cause still open.** The graphs-on A/B runs with the measured
     mixed-step barrier (`SGLANG_DEBUG_STEP_SYNC=mixed`), which can only cost the 4-mode arms
     overlap; stock MTP runs without it (`graphs_barrier_ab_20261012.sh`).
+    **Graphs-on realistic A/B (one round each; 0 fallbacks, 0 tracebacks; fused >= 45,601 fused
+    calls, >= 1,751 mixed steps):**
+
+    | | stock MTP | unfused 4-mode | **fused 4-mode** | fused vs stock |
+    |---|---|---|---|---|
+    | chat output tok/s | 1283.6 | 1465.5 | **1534.3** | **+19.5%** |
+    | chat mean TTFT (s) | 33.5 | 20.1 | **14.9** | **-55.7%** |
+    | chat mean / median ITL (ms) | 33.0 / 20.3 | 28.0 / 12.5 | 26.2 / 13.8 | -20.6% / -32% |
+    | codex output tok/s | 157.7 | 184.3 | **197.2** | **+25.1%** |
+    | codex mean TTFT (s) | 26.2 | 15.3 | **10.9** | **-58.3%** |
+    | codex mean ITL (ms) | 16.4 | 14.6 | 14.3 | -12.7% |
+
+    The graphs-off gains hold with graphs on. 4-mode arms ran only ~152 graph batches against
+    stock's 2711: at this load almost every 4-mode step carries a chunk and runs eager. Mean ITL
+    is still short of -30%; prefill chunk size is the next lever (`chunk_sweep_v2_20261012.sh`).
   - [ ] **EDF step model re-fitted on the fused kernel and compared with the unfused schedule**
     (goal point 3); it drives the SLO-attainment curve. Old fits used the RoPE-corrupted model.
 - [ ] **S2: Workload mixtures by context range with per-tenant SLOs.** Short chat mixed with

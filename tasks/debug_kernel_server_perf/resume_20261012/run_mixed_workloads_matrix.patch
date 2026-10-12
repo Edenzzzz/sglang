@@ -1,6 +1,6 @@
 --- /tmp/run_mixed_workloads.py.pre_matrix	2026-10-12 12:40:40.786495191 +0800
-+++ /opt/tiger/sglang-up/tasks/realistic_workload_analysis/run_mixed_workloads.py	2026-10-12 12:41:12.915599944 +0800
-@@ -89,7 +89,55 @@
++++ /opt/tiger/sglang-up/tasks/realistic_workload_analysis/run_mixed_workloads.py	2026-10-12 13:20:55.358867293 +0800
+@@ -89,7 +89,59 @@
      ]
  
  
@@ -10,11 +10,15 @@
 +
 +def standalone(kind, n, rate):
 +    """One standard standalone workload (S3), selected by STANDALONE:
-+    sharegpt | mooncake_toolagent | mooncake_conversation | longbench_v2 |
++    sharegpt | sharegpt:<json> | mooncake_toolagent | mooncake_conversation | longbench_v2 |
 +    speed_bench:<jsonl>[:<category>] | custom:<jsonl>."""
 +    rate_args = ["--request-rate", str(rate), "--num-prompts", str(n)]
 +    if kind == "sharegpt":
 +        return ["--dataset-name", "sharegpt", "--dataset-path", CHAT_DS] + rate_args
++    if kind.startswith("sharegpt:"):
++        # ShareGPT-format conversions (prep_standalone.py: gsm8k, math500, humaneval,
++        # codefeedback); each request's output length is its reference answer's length.
++        return ["--dataset-name", "sharegpt", "--dataset-path", kind.split(":", 1)[1]] + rate_args
 +    if kind.startswith("mooncake_"):
 +        return ["--dataset-name", "mooncake", "--mooncake-workload", kind.split("_", 1)[1]] + rate_args
 +    if kind == "longbench_v2":
@@ -56,7 +60,7 @@
      # Primary: long-context agent sessions beside high-rate short-answer chat.
      # Short outputs keep chat from accumulating decode rows, which would push
      # BatchPrefill back into its efficient many-tile regime; the arrivals still
-@@ -328,8 +376,13 @@
+@@ -328,8 +380,13 @@
                      "--attention-backend", "flashinfer", "--enable-mixed-chunk",
                      "--mem-fraction-static", "0.85", "--port", str(PORT),
                      "--host", "127.0.0.1", "--max-running-requests", "48",

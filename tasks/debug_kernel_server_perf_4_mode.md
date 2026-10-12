@@ -109,7 +109,10 @@ gate and reports fallbacks and composition counters.
   `tasks/realistic_workload_analysis.md`: ShareGPT, math, coding, multi-turn web/tool agents,
   long context (fork loaders `sharegpt`, `speed-bench`, `mooncake` toolagent/conversation,
   `agentic-trace`, `longbench_v2`, `custom`), each rate-swept as in S1.
-  - [ ] Dataset preparation on the pod (ShareGPT V3 fetched; the rest pending).
+  - [x] Dataset preparation on the pod (2026-10-12, `drivers/serving/prep_standalone.py`):
+    ShareGPT V3; GSM8K 1319, MATH-500 500, HumanEval 164, Code-Feedback 5000 (ShareGPT-format,
+    output length = reference length); Mooncake tool-agent 23608 and conversation 12031 traces;
+    LongBench v2 503. All present on the pod; no S3 arm run yet.
 - **S tooling (2026-10-12):** `drivers/serving/eval_curves.py` turns
   `<root>/<workload>_r<rate>/<ARM>_<stream>.json` into per-tenant rows (output tok/s, median
   tok/s/user, TTFT/TPOT, SLO attainment and goodput under per-stream SLOs) and the two figures;

@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.17.1 — Post-RoPE-fix realistic A/B: the 4-mode schedule wins, the fused kernel gives it back (2026-10-12)
+
+First serving timing on the fixed model (`agent_chat_rated`: chat 24/s + TraceLab codex 0.1/s,
+EAGLE3 chain q4, no CUDA graphs, one round, 0 fallbacks/tracebacks in every arm). All arms are
+saturated, so TTFT tracks capacity.
+
+- Unfused 4-mode (`MTPMIX_LPT`) vs stock MTP: TTFT **-32%** (chat and codex), throughput
+  **+10% / +13%**, mean ITL -13% (short of the 30% bar), P99 ITL flat.
+- Fused 4-mode (`MTPMIXFUSED`, >=43,601 fused calls, A2 tail on) vs unfused 4-mode: throughput
+  -11% / -13%, TTFT +32% / +29%; median chat ITL lower (16.9 vs 20.3 ms). The fused kernel is
+  slower per call than the attention it replaces, consistent with the harness gap to `BatchAttention`.
+- Acceptance on the real workload: 2.13-2.22 tokens per verify, equal across the 4-mode arms.
+
+Serving-output gate at q4: PASS for the unfused, split and fused 4-mode arms (long prompts agree
+on >= 11 tokens; 0 fallbacks). Round 2 reproduces round 1 (fused chat 1251 vs split 1410 tok/s).
+
+**Cause, and a retraction:** the FA2 role is ~21x slower inside the fused kernel than in
+`BatchAttention` on a decode-shaped row (345 vs 15 us per call, both exact): the kernel compiles at
+168 registers with a 4200-byte stack vs 255 / ~100 B, so the co-compiled FA2 body spills in its
+inner loop. The 2026-10-10 claim that the "FA2 22x" was a fixture artifact is retracted in place.
+The A3 winner map (108 arms, all exact) therefore measures the defect, not the dispatch boundary.
+Fix under test: `FLASHINFER_FUSED_COLAUNCH=1` -- FA3 grid on `sm_split` CTAs plus
+`FA2ExecutorKernel` at native geometry as its PDL dependent (`colaunch_persistent_fa3_fused.patch`).
+Evidence: `tasks/debug_kernel_server_perf/resume_20261012/postfix_realistic_ab_20261012.md`
+(runner `postfix_realistic_ab_20261012.sh`, sha256 144dc5d4...).
+
 ## v1.17.0 — A2 q8 serving gate PASSES after fixing a shared RoPE bug; tail dispatch is bit-identical (2026-10-12)
 
 **The handed-off q8 run failed its gate, and the cause was the serving stack.** Stock LPT is not a

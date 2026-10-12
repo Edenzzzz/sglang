@@ -28,6 +28,18 @@ The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
 - [ ] **A3: fitted dispatch rule.** Fit and validate against measured FA2/FA3
   winners across query size, KV length, mode and batch composition. Historical
   curves taken before the kernel fixes do not establish the current boundary.
+  **Winner map 2026-10-12** (kv {1k,4k,16k} x rows {1,16} x qo {1..32} x {FA2, FA3 q64,
+  FA3 q128}; all 108 arms 0 bad rows): FA3 wins every in-kernel shape, but only because
+  in-kernel FA2 is 5-40x slower than native FA2 (`BatchAttention`), which itself beats every
+  fused arm at most shapes. The map measures the FA2 spill defect, not the boundary; it is
+  re-run after the co-launch fix
+  ([table](debug_kernel_server_perf/resume_20261012/a3_winner_map/a3_table_20261012.txt)).
+- [~] **A-fix: FA2 out of the co-compiled kernel (2026-10-12).** `FLASHINFER_FUSED_COLAUNCH=1`
+  runs the FA3 grid alone on `sm_split` CTAs and launches `FA2ExecutorKernel` (same runners,
+  same plan and queue, native 128x2 geometry) as its PDL dependent; FA3 triggers
+  `griddepcontrol.launch_dependents` at entry, the FA2 executor `griddepcontrol.wait`s before
+  exit so the merge stays ordered. The two grids cannot share an SM, so FA2 CTAs fill the SMs
+  FA3 does not hold and then the ones it vacates. Gate queued (`colaunch_gate_20261012.sh`).
 
 ### [~] B. Fuse draft/verify epilogue ops — 2026-10-12
 
@@ -51,6 +63,13 @@ The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
   runs separate from uninstrumented timing; no-graph low-load results do not
   establish production graph-mode performance or saturated throughput. **All serving
   timings before 2026-10-12 used the broken RoPE override and must be re-measured.**
+  **Re-measured 2026-10-12 (one round, no graphs, chat 24/s + codex 0.1/s, q4 chain,
+  0 fallbacks in all arms):** the unfused 4-mode schedule beats stock MTP by TTFT -32% (both
+  tenants), throughput +10%/+13%, mean ITL -13%. **The fused kernel gives that back**: vs the
+  unfused 4-mode arm it loses 11-13% throughput and ~30% TTFT (vs stock: TTFT -10/-12%,
+  throughput -2%). The kernel is the bottleneck, which points back at A.
+  Open: q4 output gate, a `MTPMIX_SPLIT` control, repeat rounds
+  ([evidence](debug_kernel_server_perf/resume_20261012/postfix_realistic_ab_20261012.md)).
 - [x] **Documentation priority restored.** Historical failures, retractions,
   exact commands and evidence paths remain below; this checklist keeps A/B above
   supporting diagnostics.
@@ -194,8 +213,16 @@ validation come FIRST (user 2026-10-10)**; per-class SLO targets derive from the
 not invented; H20/multi-node only after ALL kernel items close; **-5% to -8.4% in-server is
 NOT acceptable** -- the kernel must be a gain.
 
-### [x] THE "FA2 22x" IS MOSTLY A FIXTURE ARTIFACT (2026-10-10). The real, shape-independent gap
+### [~] THE "FA2 22x" IS MOSTLY A FIXTURE ARTIFACT (2026-10-10). The real, shape-independent gap
 ### against `BatchAttention` is ~5x.
+
+**RETRACTED 2026-10-12.** On a decode/verify-shaped FA2 row (one 8-token request, kv 4096) the
+fused kernel is still 21x slower than `BatchAttention` (0.348 vs 0.016 ms, nsys 345 vs 15 us per
+call, both 0 bad rows), and one 1024-key FA2 item costs ~0.3 ms regardless of backfill, budget
+split, SM split or tail dispatch. The fused kernel compiles at 168 registers with a 4200-byte stack
+against `BatchAttention`'s 255 registers and ~100 B: the co-compiled FA2 body spills in its inner
+loop. The 22x is a real per-item defect, not routing
+([evidence](debug_kernel_server_perf/resume_20261012/postfix_realistic_ab_20261012.md#why-the-fused-arm-loses-the-fa2-role-is-slow-inside-the-fused-kernel)).
 
 Two more candidates A/B'd on the FA2-only arm, both now switchable
 (`FUSED_NB_SYNC` / `FUSED_GRID_1D`):

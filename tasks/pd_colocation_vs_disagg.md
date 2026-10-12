@@ -8,6 +8,36 @@ Tasks, in priority order (status 2026-10-09; evidence in the sections below).
 
 ---
 
+## [2026-10-12] SERVING EVIDENCE USED A CORRUPTED MODEL -- re-measurement in progress
+
+Every serving run behind this doc passed the YaRN `--json-model-override-args`, which under
+transformers 5.x reset Qwen2.5's `rope_theta` from 1e6 to 1e4 (sglang's override replaced the rope
+dict). Fixed in sglang's config loader; details and bisection in
+`debug_kernel_server_perf/resume_20261012/a2_serving_ropefix_20261012.md`.
+
+What that does and does not touch, point by point:
+
+1. **Cache-hit-first routing with an EDF/SLO veto** -- the policy argument is unaffected; any
+   serving latency used to motivate it was measured on the corrupted model and must be re-run.
+2. **Best-effort migration / replication** -- unaffected in logic (no serving numbers depend on
+   the model's outputs).
+3. **EDF predictor accuracy** -- the step model (`heldout_mape=21.9%`) and the EDF A/Bs were fitted
+   and measured on the corrupted model. Step *latency* depends weakly on outputs, but acceptance
+   length and request lengths do not, so the fit and its SLO results are re-measured before use.
+   The 2026-10-11 conclusion that the fused kernel is harder to model (kernel harness, no model
+   outputs involved) stands.
+4. **Two-way RDMA / complete graph** -- unaffected in logic.
+
+The kernel-harness numbers in the 2026-10-11 section below (fused vs `BatchAttention`) do not
+involve the served model and are unaffected. The headline serving comparison was re-run on the
+fixed model (`agent_chat_rated`, chat 24/s + TraceLab codex 0.1/s, one round, no graphs): the
+**unfused** 4-mode schedule beats stock MTP by TTFT -32% and throughput +10%/+13% (mean ITL -13%),
+and the fused kernel loses 11-13% throughput against it. Points 1 and 3 should therefore be argued
+on the 4-mode schedule, not on the fused kernel, until A closes
+(`debug_kernel_server_perf/resume_20261012/postfix_realistic_ab_20261012.md`).
+
+---
+
 ## [2026-10-11] CORRECTED KERNEL EVIDENCE -- supersedes the 2026-10-10 section below
 
 The 2026-10-10 update to this doc leaned on two kernel figures that are now **RETRACTED**, because

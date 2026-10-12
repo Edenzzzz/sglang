@@ -1,0 +1,103 @@
+--- /tmp/persistent_fa3_fused.cuh.pre_colaunch	2026-10-12 10:28:50.373053675 +0800
++++ /opt/tiger/flashinfer/port07/include/flashinfer/attention/persistent_fa3_fused.cuh	2026-10-12 10:29:47.483028043 +0800
+@@ -321,6 +321,9 @@
+   // NOTE: element type must match persistent_template.cuh's declaration of the
+   // same extern array, or the two TUs disagree on `flashinfer::smem`.
+   extern __shared__ uint8_t smem[];
++  // Lets a programmatic dependent (the co-launched FA2 executor) start as soon as every CTA of
++  // this grid is resident, instead of at grid completion. A no-op without a dependent.
++  asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
+ 
+   // FLASHINFER_FUSED_SKIP_FA3 is a diagnostic, not a feature: it sends every CTA
+   // straight to the FA2 queue so a cluster launch can be exercised without FA3's
+@@ -507,6 +510,10 @@
+   // kFa3SmemBytes is 0: this kernel has no FA3 region ahead of the persistent slot, which
+   // is the whole point -- it owns all 232 448 B instead of the 134 048 B left over.
+   fused_drain_queue<0u, 0u, Runner1, Runner2, Runner3>(params_1, params_2, params_3, smem, queue);
++  // Under a programmatic launch this executor may overlap the FA3 grid; waiting here makes its
++  // completion imply the FA3 grid's, so the merge launched after it reads finished partials.
++  // Returns immediately when launched without the attribute.
++  asm volatile("griddepcontrol.wait;" ::: "memory");
+ }
+ 
+ #if FLASHINFER_FA3_UPSTREAM
+@@ -845,7 +852,18 @@
+   // that distinguishes this kernel from a two-kernel co-launch and because the
+   // A/B is a real measurement: worth 1.2% of the best split on H200 and 1.9-6.9%
+   // on H20. Shipping it on by default would mean shipping known-wrong output.
+-  const bool backfill = [] {
++  // FLASHINFER_FUSED_COLAUNCH=1: the FA2 roles leave this kernel. The FA3 grid runs on exactly
++  // sm_split CTAs and FA2ExecutorKernel -- the same runners and queue at their native 128x2
++  // geometry -- is launched as its programmatic dependent on the same stream. Inside this kernel
++  // the FA2 body is compiled at the FA3 role's 168 registers with a 4200-byte stack, and one
++  // 8-token decode row at kv 4096 measured 0.35 ms against 0.016 ms for BatchAttention. The two
++  // grids cannot share an SM (FA3 needs 164 KB of shared memory), so FA2 CTAs fill the SMs FA3
++  // does not hold, and later ones land on SMs that FA3 CTAs vacate: hardware backfill.
++  const bool colaunch = [] {
++    const char* e = std::getenv("FLASHINFER_FUSED_COLAUNCH");
++    return e != nullptr && std::atoi(e) != 0;
++  }();
++  const bool backfill = !colaunch && [] {
+     const char* e = std::getenv("FLASHINFER_FUSED_BACKFILL");
+     return e != nullptr && std::atoi(e) != 0;
+   }();
+@@ -884,7 +902,8 @@
+     cudaGetDevice(&dev);
+     cudaDeviceGetAttribute(&nsm_for_smem, cudaDevAttrMultiProcessorCount, dev);
+   }
+-  const bool fa2_can_run = backfill || (nsm_for_smem == 0) || (sm_split < uint32_t(nsm_for_smem));
++  const bool fa2_can_run =
++      !colaunch && (backfill || (nsm_for_smem == 0) || (sm_split < uint32_t(nsm_for_smem)));
+   int smem_size = int(sizeof(typename KernelTraits::SharedStorage));
+   // FUSED_SMEM_REPORT=1 prints the actual byte requirements and the device max. Guessing which
+   // tile to shrink to buy a second K/V stage wasted two attempts (CTA_KV=64 compiles but NaNs,
+@@ -991,7 +1010,7 @@
+   cudaGetDevice(&device);
+   FLASHINFER_CUDA_CALL(
+       cudaDeviceGetAttribute(&multiprocessor_count, cudaDevAttrMultiProcessorCount, device));
+-  dim3 grid_dims(multiprocessor_count);
++  dim3 grid_dims(colaunch ? sm_split : uint32_t(multiprocessor_count));
+   static constexpr int ctaSize = KernelTraits::NUM_WARPS * 32;
+   dim3 block_dims(ctaSize);
+   // The skip-FA3 diagnostic rides in the top bit of sm_split so the kernel
+@@ -1118,6 +1137,40 @@
+     FLASHINFER_CUDA_CALL(
+         cudaLaunchKernel(kernel, grid_dims, block_dims, args, smem_size, stream));
+   }
++  if (colaunch) {
++    if (symmetric || cluster > 1) {
++      FLASHINFER_ERROR("FLASHINFER_FUSED_COLAUNCH runs the FA3 grid alone on sm_split CTAs; it "
++                       "cannot be combined with FLASHINFER_FUSED_SYMMETRIC or a cluster launch");
++      return cudaErrorInvalidValue;
++    }
++    static_assert(Runner1::KTraits::NUM_THREADS == 128u,
++                  "FA2ExecutorKernel's launch bounds assume the 128-thread runners");
++    auto fa2_kernel = FA2ExecutorKernel<KernelTraits, Runner1, Runner2, Runner3>;
++    // One mainloop slot at offset 0 plus the drain's 16-byte cursor tail (kCursorOff).
++    const size_t slot = kPersSlotBytes<Runner1, Runner2, Runner3>();
++    const int fa2_smem = int(size_t(FLASHINFER_FUSED_WG_DRAIN) * slot + 48u);
++    FLASHINFER_CUDA_CALL(cudaFuncSetAttribute(
++        fa2_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, fa2_smem));
++    // Two CTAs per SM over the whole device by default: the CTAs that find the queue empty exit
++    // at once, so oversubscription costs only their launch. FUSED_FA2_EXEC_CTAS overrides it.
++    uint32_t fa2_ctas = 2u * uint32_t(multiprocessor_count);
++    if (const char* e = std::getenv("FUSED_FA2_EXEC_CTAS")) {
++      const int v = std::atoi(e);
++      if (v > 0) fa2_ctas = uint32_t(v);
++    }
++    cudaLaunchConfig_t fa2_cfg{};
++    fa2_cfg.gridDim = dim3(fa2_ctas);
++    fa2_cfg.blockDim = dim3(Runner1::KTraits::NUM_THREADS);
++    fa2_cfg.dynamicSmemBytes = fa2_smem;
++    fa2_cfg.stream = stream;
++    cudaLaunchAttribute fa2_attr[1];
++    fa2_attr[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
++    fa2_attr[0].val.programmaticStreamSerializationAllowed = 1;
++    fa2_cfg.attrs = fa2_attr;
++    fa2_cfg.numAttrs = 1;
++    FLASHINFER_CUDA_CALL(
++        cudaLaunchKernelEx(&fa2_cfg, fa2_kernel, params_1, params_2, params_3, queue));
++  }
+ #if FLASHINFER_FA3_UPSTREAM
+   // Split-KV reduction for the wgmma role. Required, not optional: under
+   // Split && Varlen upstream's epilogue takes the is_split branch whenever the

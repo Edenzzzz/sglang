@@ -44,7 +44,12 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   work exceeds the slots beside FA3, nothing on small mixes; in-kernel `tma_store_wait` backfill is
   correct and worth 1.4-5.5x over none, but that whole path is 2-6x slower. Co-launch ships.
   ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md))
-- [ ] **B3, multicast:** not implemented (`mcast_mask=0`); needs page-size-128 paged TMA.
+- [ ] **B3, multicast:** not implemented (`mcast_mask=0`); needs page-size-128 paged TMA. A
+  2026-10-07 ceiling on the old two-executor FA3 (every K/V gather skipped) was only 1.6-1.8%
+  faster -- FA3-routed rows are compute-bound -- and FA2 verify rows have no shared reads (one
+  q-tile per row, disjoint split-KV chunks). Re-measuring that ceiling on the current kernel
+  before building anything: `FLASHINFER_FA3_SKIP_KV_LOAD` diagnostic
+  (`fa3_skip_kv_load.patch`), `b3_multicast_ceiling_20261013.sh`, queued after the full-length run.
 
 ### [ ] S. Server / workload evaluation
 

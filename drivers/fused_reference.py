@@ -22,6 +22,10 @@ import torch
 # as tokens, so the two only agree when G=1.
 import os as _os
 HQ, HKV, D = (7, 7, 128) if _os.environ.get('GQA1') == '1' else (28, 7, 128)
+if "HEADS" in os.environ:
+    HQ, HKV = map(int, os.environ["HEADS"].split(","))
+if HKV <= 0 or HQ % HKV:
+    raise ValueError("HEADS must specify positive head counts with HQ divisible by HKV")
 GQA = HQ // HKV
 PAGE = 1
 DEV = "cuda"
@@ -58,7 +62,11 @@ def fp32_causal_reference(q, k, v, qo_lens, kv_lens, sm_scale):
 def main():
     torch.manual_seed(0)
     from sglang.srt.layers.attention.fused_fa3_loader import load_fused_fa3
-    load_fused_fa3(verbose=False)
+    _cta_q = int(os.environ.get("FUSED_FA3_CTA_Q", "0"))
+    _fused_namespace = load_fused_fa3(
+        verbose=False, cta_q=_cta_q if _cta_q in (64, 128) else None
+    )
+    _fused_ops = getattr(torch.ops, _fused_namespace)
     import flashinfer
 
     # 1 long FA3 row + 2 short FA2 rows. FA3 first.
@@ -74,7 +82,7 @@ def main():
         # path" from "a row spanning many kv tiles" -- the two things MODE=fa2 changed at once
         # relative to mixed mode.
         fa3_q, fa3_kv = [], []
-        fa2_q, fa2_kv = [256], [128]
+        fa2_q, fa2_kv = [128], [128]
     elif mode == "fa2_2tile":
         fa3_q, fa3_kv = [], []
         fa2_q, fa2_kv = [256], [256]
@@ -86,6 +94,14 @@ def main():
         # to one chunk: still unsplit, still no merge, but now a valid causal problem.
         fa3_q, fa3_kv = [128], [128]
         fa2_q, fa2_kv = [], []
+    elif mode == "mixed_verify":
+        prefill_queries = int(os.environ.get("PREFILL_QO", "504"))
+        prefill_context = int(os.environ.get("PREFILL_KV", "2048"))
+        verify_rows = int(os.environ.get("VERIFY_ROWS", "8"))
+        verify_queries = int(os.environ.get("VERIFY_QO", "4"))
+        verify_context = int(os.environ.get("VERIFY_KV", "2048"))
+        fa3_q, fa3_kv = [prefill_queries], [prefill_context]
+        fa2_q, fa2_kv = [verify_queries] * verify_rows, [verify_context] * verify_rows
     elif mode == "mix_decode":
         # DECODE-HEAVY 4-mode shape: one prefill chunk plus DEC_ROWS decode rows. This is the arm
         # that decides whether the fusion's +5.4% was a floor set by having only 2 decode tokens to
@@ -253,16 +269,21 @@ def main():
     # O(packed_qo x num_kv_chunks), i.e. quadratically in context length for a fixed chunk width.
     # Nearly a gigabyte of partials for ONE 2048-token chunk at 8K context is a real serving
     # concern, independent of the correctness work.
-    IWS, FWS = 256 << 20, 8 << 30
+    IWS = 256 << 20
+    FWS = int(os.environ.get("FUSED_REFERENCE_WORKSPACE_BYTES", str(8 << 30)))
+    if FWS < 4 or FWS % 4:
+        raise ValueError("FUSED_REFERENCE_WORKSPACE_BYTES must be a positive multiple of 4")
     int_ws = torch.zeros(IWS // 4, dtype=torch.int32, device=DEV)
     pin_ws = torch.zeros(IWS // 4, dtype=torch.int32).pin_memory()
     flt_ws = torch.zeros(FWS // 4, dtype=torch.float32, device=DEV)
 
-    pers_plan = torch.ops.fused_fa3.build_fused_plan(
+    pers_plan = _fused_ops.build_fused_plan(
         int_ws, pin_ws, flt_ws, qo_indptr, kv_indptr, kv_len_t, mask,
         HQ, HKV, D, D, PAGE, sm_split, nsm, True)
+    flt_ws.fill_(255)
     print(f"pers_plan: {len(pers_plan)} entries, num_merge_rows={pers_plan[-2]}, "
           f"num_fa3_clusters={pers_plan[-1]}")
+    print(f"workspace_bytes: initial={FWS} actual={flt_ws.numel() * flt_ws.element_size()}")
 
     # PLANMAP=1: decode the plan ON THE HOST and print, per block, the FA3 work items it owns and
     # the output rows each item covers. This replaces the device-side [item] trace, which could not
@@ -392,10 +413,10 @@ def main():
         except Exception as e:
             print(f"STOCK FA3 null case could not run: {type(e).__name__}: {e}")
 
-    o = torch.zeros_like(q)
-    pers_o = torch.zeros_like(q)
+    o = torch.full_like(q, float("nan"))
+    pers_o = o
     nfa3_rows = sum(fa3_q)
-    torch.ops.fused_fa3.fused_run(
+    _fused_ops.fused_run(
         q, k_cache, v_cache, kv_indices, o, fa3_ws, fa3_plan,
         int_ws, flt_ws, pers_plan, HQ, HKV, PAGE, sm_scale,
         sm_split, nfa3_rows, sm_split, sum(fa3_kv), kv_indices, pers_o,
@@ -404,9 +425,7 @@ def main():
     )
     torch.cuda.synchronize()
 
-    # FA3 writes o, the FA2 roles write pers_o at pers_row_offset; stitch them.
     got = o.clone().float()
-    got[nfa3_rows:] = pers_o[nfa3_rows:].float()
 
     # ---- TIME_AB=1: first timing A/B, one FUSED launch vs the UNFUSED baseline ------------
     # Runs only AFTER the correctness comparison below has been printed, so a timing number can
@@ -430,7 +449,7 @@ def main():
         _maxkv, _maxqo, _sumkv = max(kv_lens), max(qo_lens), sum(fa3_kv)
 
         def _fused():
-            torch.ops.fused_fa3.fused_run(
+            _fused_ops.fused_run(
                 q, k_cache, v_cache, kv_indices, o, fa3_ws, fa3_plan,
                 int_ws, flt_ws, pers_plan, HQ, HKV, PAGE, sm_scale,
                 sm_split, nfa3_rows, sm_split, _sumkv, kv_indices, pers_o,
@@ -441,10 +460,20 @@ def main():
         # a second wrapper planned over the FA2 subset. Two launches, serialised on one stream.
         qf = q[:nfa3_rows]
         def _unfused():
+            outputs = []
             if nfa3_rows > 0:
-                w.run(qf, (k_cache, v_cache))
+                outputs.append(w.run(qf, (k_cache, v_cache)))
             if B - nfa3 > 0:
-                w2.run(q[nfa3_rows:], (k_cache, v_cache))
+                outputs.append(w2.run(q[nfa3_rows:], (k_cache, v_cache)))
+            return tuple(outputs)
+
+        def validate_unfused(outputs):
+            combined = torch.cat(outputs, dim=0)
+            relative = (combined.float() - ref).norm(dim=-1) / ref.norm(dim=-1).clamp_min(1e-6)
+            bad_heads = int((~torch.isfinite(combined).all(dim=-1) | (relative > 2e-2)).sum())
+            print(f"[time] UNFUSED CORRECTNESS: bad_heads={bad_heads}/{total_q * HQ}")
+            if bad_heads:
+                raise RuntimeError("Unfused FA3/FA2 control failed the fp32 reference")
 
         # THE RIGHT CONTROL, never run before. The unfused arm above uses
         # BatchPrefillWithPagedKVCacheWrapper -- a DIFFERENT kernel family from our FA2 runners,
@@ -464,32 +493,55 @@ def main():
             print(f"[time] BatchAttention control unavailable: {type(e).__name__}: {e}")
             _ba = None
 
-        def _bench(fn):
+        def _bench(fn, validate_capture=None):
             for _ in range(warmup):
                 fn()
             _t.cuda.synchronize()
+            graph = None
+            if _os.environ.get("TIME_CUDA_GRAPH") == "1":
+                graph = _t.cuda.CUDAGraph()
+                with _t.cuda.graph(graph):
+                    captured_output = fn()
+                launch = graph.replay
+            else:
+                launch = fn
             st, en = _t.cuda.Event(True), _t.cuda.Event(True)
             st.record()
             for _ in range(iters):
-                fn()
+                launch()
             en.record()
             _t.cuda.synchronize()
-            return st.elapsed_time(en) / iters
+            elapsed = st.elapsed_time(en) / iters
+            if graph is not None and validate_capture is not None:
+                validate_capture(captured_output)
+            return elapsed
 
         try:
             t_f = _bench(_fused)
+            timed_relative = (
+                (o.float() - ref).norm(dim=-1)
+                / ref.norm(dim=-1).clamp_min(1e-6)
+            )
+            timed_bad = int((
+                ~_t.isfinite(o).all(dim=-1) | (timed_relative > 2e-2)
+            ).sum())
+            print(f"[time] FUSED REPLAY CORRECTNESS: bad_heads={timed_bad}/{total_q * HQ}")
+            if timed_bad and _os.environ.get("TIME_FORCE") != "1":
+                raise RuntimeError("Timed fused replay failed the fp32 reference")
         except Exception as e:
             print(f"[time] FUSED arm failed: {type(e).__name__}: {e}")
-            return
+            raise
         try:
-            t_u = _bench(_unfused)
+            validate_unfused(_unfused())
+            t_u = _bench(_unfused, validate_unfused)
         except Exception as e:
             print(f"[time] UNFUSED baseline could not run: {type(e).__name__}: {e}  "
                   f"(fused={t_f:.4f} ms, no comparison)")
-            return
+            raise
         print(f"[time] composition: {nfa3} FA3 requests ({nfa3_rows} tokens), "
               f"{B - nfa3} FA2 requests ({sum(qo_lens) - nfa3_rows} tokens), "
               f"kv={kv_lens}, sm_split={sm_split}/{nsm}")
+        print(f"[time] cuda_graph={_os.environ.get('TIME_CUDA_GRAPH') == '1'}")
         print(f"[time] fused   = {t_f:.4f} ms/iter  ({iters} iters, {warmup} warmup)")
         print(f"[time] unfused = {t_u:.4f} ms/iter  (two separate launches)")
         print(f"[time] speedup = {t_u / t_f:.4f}x  "
@@ -506,21 +558,41 @@ def main():
                 _brel = _bn / _bd
                 _bbad = 0
                 for _r in range(total_q):
-                    _n = (_bo[_r].float() - ref[_r]).norm().item()
-                    if _n / max(ref[_r].norm().item(), 1e-6) > 2e-2:
+                    head_error = (
+                        (_bo[_r].float() - ref[_r]).norm(dim=-1)
+                        / ref[_r].norm(dim=-1).clamp_min(1e-6)
+                    )
+                    if not bool(_t.isfinite(_bo[_r]).all()) or float(head_error.max()) > 2e-2:
                         _bbad += 1
                 print(f"[time] BatchAttention CORRECTNESS: rel={_brel:.6f} bad_rows={_bbad}/{total_q}"
                       + ("  VALID BASELINE" if _bbad == 0 else "  *** NOT A VALID BASELINE ***"))
+                if _bbad:
+                    return
             except Exception as e:
                 print(f"[time] BatchAttention correctness check failed: {type(e).__name__}: {e}")
+                return
             try:
-                t_b = _bench(lambda: _ba.run(q, (k_cache, v_cache)))
+                def validate_baseline_capture(captured_output):
+                    output = captured_output[0] if isinstance(captured_output, tuple) else captured_output
+                    relative = (
+                        (output.float() - ref).norm(dim=-1)
+                        / ref.norm(dim=-1).clamp_min(1e-6)
+                    )
+                    bad_rows = int((
+                        ~_t.isfinite(output).all(dim=-1) | (relative > 2e-2)
+                    ).sum())
+                    print(f"[time] BatchAttention CAPTURE CORRECTNESS: bad_heads={bad_rows}/{total_q * HQ}")
+                    if bad_rows:
+                        raise RuntimeError("Captured BatchAttention replay failed the fp32 reference")
+
+                t_b = _bench(lambda: _ba.run(q, (k_cache, v_cache)), validate_baseline_capture)
                 print(f"[time] BatchAttention (flashinfer's OWN persistent kernel, the family our "
                       f"FA2 runners come from) = {t_b:.4f} ms/iter")
                 print(f"[time]   fused/BatchAttention = {t_f / t_b:.4f}x, "
                       f"BatchAttention/unfused = {t_b / t_u:.4f}x")
             except Exception as e:
                 print(f"[time] BatchAttention run failed: {type(e).__name__}: {e}")
+                raise
 
     # Output fingerprint, so two builds can be compared for "did this change anything at all".
     # A diagnostic arm that removes work (SKIP_PACKED_Q=1) must change the output; if the
@@ -707,12 +779,11 @@ def main():
         print("FAIL")
         return 1
     rows_bad = 0
+    head_relative = (got - ref).norm(dim=-1) / ref.norm(dim=-1).clamp_min(1e-6)
     worst = 0.0
     _bad_rows = []
     for r in range(total_q):
-        num = (got[r] - ref[r]).norm().item()
-        den = max(ref[r].norm().item(), 1e-6)
-        rel = num / den
+        rel = float(head_relative[r].max())
         worst = max(worst, rel)
         if rel > 2e-2:
             rows_bad += 1
@@ -726,18 +797,16 @@ def main():
     # last rows explicitly: they are the FA2 rows in mixed mode, and they never touch the merge,
     # so their error is diagnostic of a different thing than the FA3 rows'.
     for r in range(max(0, total_q - 3), total_q):
-        num = (got[r] - ref[r]).norm().item()
-        print(f"  tail row {r}: rel={num / max(ref[r].norm().item(), 1e-6):.4g}")
+        print(f"  tail row {r}: worst_head_rel={float(head_relative[r].max()):.4g}")
     # WHICH rows pass. 254/256 bad has survived every change to the FA3 path, so the identity of
     # the 2 correct rows is a sharper constraint than the 254 wrong ones: at gqa=4 and CTA_Q=128 a
     # tile covers 32 tokens, so 2 is not a tile boundary and the pattern should name the mechanism.
-    good = [r for r in range(total_q)
-            if (got[r] - ref[r]).norm().item() / max(ref[r].norm().item(), 1e-6) <= 2e-2]
+    good = torch.nonzero(head_relative.amax(dim=1) <= 2e-2).flatten().tolist()
     print(f"passing rows ({len(good)}): {good[:24]}{' ...' if len(good) > 24 else ''}")
     if good:
         print(f"  first={good[0]} last={good[-1]} mod32={sorted({g % 32 for g in good})} "
               f"mod128={sorted({g % 128 for g in good})}")
-    print(f"\nmode={mode} worst rel err {worst:.4g}, bad rows {rows_bad}/{total_q}")
+    print(f"\nmode={mode} worst head rel err {worst:.4g}, bad rows {rows_bad}/{total_q}")
     if _bad_rows:
         print(f"BADROWS {_bad_rows[:12]}" + (" ..." if len(_bad_rows) > 12 else ""))
         # PLANMAP correlation: map each bad TOKEN row to the task-3 work item that owns it and print

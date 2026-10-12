@@ -1,0 +1,29 @@
+--- /tmp/sparse_mainloop.cuh.pre_skip	2026-10-13 01:47:36.166340489 +0800
++++ /opt/tiger/flashinfer/port07/include/flashinfer/attention/hopper/sparse_mainloop.cuh	2026-10-13 01:47:36.181341008 +0800
+@@ -417,7 +417,14 @@
+         int kv_offset = get<0>(coord);
+         int d_idx = get<1>(coord);
+         int kv_idx = kv_base_idx + kv_offset;
+-        bool guard = !use_predicate || kv_idx < kv_len;
++        // FLASHINFER_FA3_SKIP_KV_LOAD=1 (diagnostic, wrong output by construction): every K/V copy
++        // zero-fills shared memory instead of reading global memory, so the pipeline, barriers and
++        // all compute run unchanged minus the KV traffic. The difference to the normal build bounds
++        // what KV multicast (which can only remove part of that traffic) could ever save.
++#ifndef FLASHINFER_FA3_SKIP_KV_LOAD
++#define FLASHINFER_FA3_SKIP_KV_LOAD 0
++#endif
++        bool guard = !FLASHINFER_FA3_SKIP_KV_LOAD && (!use_predicate || kv_idx < kv_len);
+ 
+         // Shuffle the pre-computed offset (page_idx * page_stride + entry_idx * stride_n)
+         int src_thread = group_id * THREADS_PER_GROUP + kv_offset / KV_STRIDE;
+--- /tmp/fused_reference.py.pre_force	2026-10-13 01:47:57.616083315 +0800
++++ drivers/fused_reference.py	2026-10-13 01:47:57.632083869 +0800
+@@ -526,7 +526,7 @@
+                 ~_t.isfinite(o).all(dim=-1) | (timed_relative > 2e-2)
+             ).sum())
+             print(f"[time] FUSED REPLAY CORRECTNESS: bad_heads={timed_bad}/{total_q * HQ}")
+-            if timed_bad:
++            if timed_bad and _os.environ.get("TIME_FORCE") != "1":
+                 raise RuntimeError("Timed fused replay failed the fp32 reference")
+         except Exception as e:
+             print(f"[time] FUSED arm failed: {type(e).__name__}: {e}")

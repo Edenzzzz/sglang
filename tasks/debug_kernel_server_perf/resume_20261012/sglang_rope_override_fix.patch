@@ -1,0 +1,89 @@
+diff --git a/python/sglang/srt/utils/hf_transformers/config.py b/python/sglang/srt/utils/hf_transformers/config.py
+index c082b7c45..91959b1d4 100644
+--- a/python/sglang/srt/utils/hf_transformers/config.py
++++ b/python/sglang/srt/utils/hf_transformers/config.py
+@@ -383,8 +383,19 @@ def get_config(
+             current = getattr(config, key, None)
+             if isinstance(value, dict) and isinstance(current, PretrainedConfig):
+                 current.update(value)
+-            else:
+-                setattr(config, key, value)
++                continue
++            if key in ("rope_scaling", "rope_parameters") and isinstance(value, dict):
++                # transformers v5 stores rope_theta inside the rope dict, so replacing the
++                # dict with a scaling-only override drops the base frequency and
++                # get_rope_config falls back to 10000 (Qwen2.5 uses 1e6).
++                current_rope = getattr(config, "rope_parameters", None) or current
++                if (
++                    "rope_theta" not in value
++                    and isinstance(current_rope, dict)
++                    and "rope_theta" in current_rope
++                ):
++                    value = {**value, "rope_theta": current_rope["rope_theta"]}
++            setattr(config, key, value)
+ 
+     if is_gguf and not gguf_has_sidecar_config:
+         if config.model_type not in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES:
+diff --git a/test/manual/test_rope_override_theta.py b/test/manual/test_rope_override_theta.py
+new file mode 100644
+index 000000000..17485161c
+--- /dev/null
++++ b/test/manual/test_rope_override_theta.py
+@@ -0,0 +1,57 @@
++"""A scaling-only rope override must keep the model's rope_theta.
++
++Under transformers v5 rope_theta lives inside rope_parameters, so replacing the dict with
++'{"rope_scaling": {"type": "yarn", ...}}' used to drop it and get_rope_config fell back to 10000.
++That silently corrupted every long-context Qwen2.5 serving run that used the YaRN override.
++"""
++import json
++import tempfile
++import unittest
++
++from sglang.srt.utils.hf_transformers.common import get_rope_config
++from sglang.srt.utils.hf_transformers.config import get_config
++
++QWEN2_CONFIG = {
++    "architectures": ["Qwen2ForCausalLM"],
++    "model_type": "qwen2",
++    "hidden_size": 64,
++    "intermediate_size": 128,
++    "num_attention_heads": 4,
++    "num_key_value_heads": 2,
++    "num_hidden_layers": 1,
++    "max_position_embeddings": 32768,
++    "rope_theta": 1000000.0,
++    "vocab_size": 128,
++}
++YARN = {"factor": 4.0, "original_max_position_embeddings": 32768, "type": "yarn"}
++
++
++class TestRopeOverrideTheta(unittest.TestCase):
++    def setUp(self):
++        self.dir = tempfile.TemporaryDirectory()
++        with open(f"{self.dir.name}/config.json", "w") as f:
++            json.dump(QWEN2_CONFIG, f)
++
++    def tearDown(self):
++        self.dir.cleanup()
++
++    def rope(self, override):
++        cfg = get_config(self.dir.name, trust_remote_code=False, model_override_args=override)
++        return get_rope_config(cfg)
++
++    def test_no_override_keeps_theta(self):
++        self.assertEqual(self.rope(None)[0], 1000000.0)
++
++    def test_yarn_override_keeps_theta(self):
++        theta, params = self.rope({"rope_scaling": dict(YARN)})
++        self.assertEqual(theta, 1000000.0)
++        self.assertEqual(params["factor"], 4.0)
++        self.assertEqual(params.get("type", params.get("rope_type")), "yarn")
++
++    def test_explicit_theta_in_override_wins(self):
++        theta, _ = self.rope({"rope_scaling": {**YARN, "rope_theta": 500000.0}})
++        self.assertEqual(theta, 500000.0)
++
++
++if __name__ == "__main__":
++    unittest.main()

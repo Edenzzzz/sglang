@@ -1,0 +1,10 @@
+plan length: 59 (expected 59)
+round-trip: PASS
+plan_info[-1] == num_fa3_clusters: PASS
+work items: task0=0 task1=0 task2=7 task3=256 max_splits_fa3=4 fa3_reqs=1
+enumeration: PASS
+merge layout: tiles=64 partial_rows=32768 PASS
+GQA7 four-head merge coordinates: PASS
+query/head-aware KV split budget: PASS
+independent FA2 split and merge coordinates: PASS
+host checks PASS

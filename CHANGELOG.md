@@ -1,5 +1,34 @@
 # Changelog
 
+## v1.17.0 — A2 q8 serving gate PASSES after fixing a shared RoPE bug; tail dispatch is bit-identical (2026-10-12)
+
+**The handed-off q8 run failed its gate, and the cause was the serving stack.** Stock LPT is not a
+reliable control: archived repeats diverge on long prompts (R1 vs R3 at `[16,72,33,96]`). An
+independent HF reference (bf16/fp32, with and without YaRN) showed both stock and fused wrong on
+3 of 4 long prompts by up to 24 logits.
+
+**Root cause:** under transformers 5.x `rope_theta` lives inside `rope_parameters`; sglang's
+`--json-model-override-args` loop replaced the rope dict with the YaRN-only override, and
+`get_rope_config` fell back to 10000 (Qwen2.5 = 1e6). Bisection: bare server 4/4, + override 0/4,
+reproducing stock LPT's tokens exactly. Every serving driver (`srv_correctness.py`,
+`run_mixed_workloads.py`) passes that override, so **all serving correctness verdicts and serving
+timings before this fix used a corrupted model** and are retracted in place.
+
+**Fix** (sglang-up `srt/utils/hf_transformers/config.py`, upstream bug): a rope override that omits
+`rope_theta` inherits the config's; explicit values win. `test/manual/test_rope_override_theta.py`
+passes 3/3 and fails on the pre-fix file with `10000 != 1000000.0`.
+
+**Post-fix:** all five stock configs (up to YaRN + chunk512 + mixed-chunk + background decodes +
+EAGLE3 q8) match the reference 4/4. The q8 A2 gate passes (`status=0`), and **TAIL1 is
+bit-identical to TAIL0 on all 12 requests** while the plan moves 384/0/0/112 → 192/0/192/112.
+Every fused first token is the reference argmax or within one bf16 ulp (s1: 0.067-logit tie).
+Per-draft acceptance is equal across arms; the fused arm's extra verify calls are accounting
+(stock mixed-chunk decodes rows without speculation). Acceptance on these slice prompts is ~0.16
+and did not depend on the bug; it must be measured on the real chat+TraceLab workload.
+
+Correctness only — no serving performance claim. Evidence:
+`tasks/debug_kernel_server_perf/resume_20261012/a2_serving_ropefix_20261012.md`.
+
 ## v1.16.0 — RESOLVED: the 4-mode gate never fires; the fused path is unmeasurable here (2026-10-11)
 
 Serialised run, `SGLANG_DBG_DRAFT_COPY=1`, server to completion:

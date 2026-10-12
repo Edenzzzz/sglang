@@ -1,10 +1,180 @@
 # Current goal
 
-## Tasks, in priority order (2026-10-10)
+## Tasks, in priority order (2026-10-12)
+
+**The two main kernel items remain A and B below.** Dispatch wiring, correctness
+repairs and serving diagnostics are supporting work, not substitutes for either item.
+The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
+
+### [~] A. Ultra fine-grained tile dispatcher — 2026-10-12
+
+- [~] **A1: FA3 128/64 WGMMA tile variants.** Separate compile-time tile
+  variants now coexist as `fused_fa3_q64` and `fused_fa3_q128`; the dispatch
+  selects q64 when the FA3 packed query extent is at most 64. This is the
+  per-batch groundwork; true per-work-item selection and serving benefit remain
+  open.
+- [~] **A2: FA2 fine-grained tile classes — current implementation focus.**
+  The existing three configurable classes now accept `{48,32,16}` in the
+  actual extension. Packed-32/48/64 band fixtures pass head-level fp32 checks;
+  the class-set serving comparison is still open.
+  Opt-in `FUSED_FA2_FINE_TAIL=1` now selects the smallest class for each tail
+  work item, with a shared-memory handoff fence. Host and H200 kernel gates
+  pass; [A2 evidence](debug_kernel_server_perf/resume_20261011/a2_fine_tail_20261012.md)
+  records the bounded kernel gain. **Serving (2026-10-12): the q8 gate now PASSES** once the
+  shared RoPE bug is fixed, and the tail dispatcher is bit-identical to the old dispatch on all
+  12 requests while moving plan work 384/0/0/112 -> 192/0/192/112
+  ([evidence](debug_kernel_server_perf/resume_20261012/a2_serving_ropefix_20261012.md)). Correctness only;
+  no serving performance claim yet.
+- [ ] **A3: fitted dispatch rule.** Fit and validate against measured FA2/FA3
+  winners across query size, KV length, mode and batch composition. Historical
+  curves taken before the kernel fixes do not establish the current boundary.
+
+### [~] B. Fuse draft/verify epilogue ops — 2026-10-12
+
+- [~] **Fuse the small-op tail.** Greedy EAGLE tree verification now has an
+  opt-in fused argmax/acceptance/accepted-length epilogue; stochastic sampling,
+  gathers, cache writes and tree construction remain separate.
+- [~] **Cross-role backfill and multicast.** Asymmetric FA3-to-FA2 backfill has
+  passed bounded reference/null gates with store retirement; multicast and
+  cross-model draft/target co-scheduling remain unimplemented/unvalidated.
+
+### [~] Supporting gates — 2026-10-12
+
+- [~] **Correctness:** fused attention and bounded no-graph mixed MTP integration
+  pass. The "output-prefix/control instability" was the serving stack, not the kernel: the
+  YaRN override dropped `rope_theta` (1e6 -> 1e4), so stock LPT itself was wrong on 3/4 long
+  prompts against an independent HF reference. Fixed in sglang's config loader with a
+  regression test; post-fix every stock config matches the reference 4/4 and every fused
+  first token is the reference argmax or within one bf16 ulp. The asynchronous draft-side
+  indexing failure in graph mode remains open. Neither item A nor B is closed by these passes.
+- [ ] **Performance:** no publication-level serving gain. Keep verification
+  runs separate from uninstrumented timing; no-graph low-load results do not
+  establish production graph-mode performance or saturated throughput. **All serving
+  timings before 2026-10-12 used the broken RoPE override and must be re-measured.**
+- [x] **Documentation priority restored.** Historical failures, retractions,
+  exact commands and evidence paths remain below; this checklist keeps A/B above
+  supporting diagnostics.
+
+### [x] A2 measured update — 2026-10-12
+
+**Retraction (RoPE, 2026-10-12):** every serving number in this section was measured with the YaRN override that reset Qwen2.5's `rope_theta` from 1e6 to 1e4 ([RoPE root cause](debug_kernel_server_perf/resume_20261012/a2_serving_ropefix_20261012.md)), so the served model was not Qwen2.5. Kernel-level results here stand; the serving TTFT/ITL/throughput figures must be re-measured with the fix before they are used.
+
+On H200 trial `f096519a4d17aa1c` (`vibecuda`), the direct fused extension was
+rebuilt with `FUSED_FA2_TILES=48,32,16`. `MODE=band1`, `BAND_SIDE=fa2`,
+`BAND_QO=8/12/16`, `BAND_KV=2048`, `HEADS=28,4` passed with worst head error
+0.003584/0.003344/0.003307 and zero bad heads. This validates the requested
+fine-grained FA2 class implementation, not its serving benefit.
+
+The same real `loadsweep_min` MTP workload completed with direct fused execution,
+zero fallbacks/tracebacks, 601 mixed steps and 16,901+ fused calls. With
+`SGLANG_FUSED_SM_FA3=112`, mean TTFT was 437.10 ms (chat) and 3210.27 ms
+(TraceLab), versus 470.81/3350.35 ms for matched `MTPMIX_LPT`; mean ITL was
+14.26/23.92 ms versus 14.26/23.80 ms. This is a measured TTFT improvement but
+not the required ITL/throughput bar. Commands and logs: remote
+`/dev/shm/w/mixed_trace_fused_kernel_sm112` and
+`/dev/shm/w/mixed_trace_mtp_lpt_nograph`.
+
+**Retraction:** the earlier `MTP_DRAFT_TOKENS=8` serving entry did not actually
+exercise eight-token verification because the driver kept
+`--speculative-num-steps=3`; its `FUSED_VERIFY_EPILOGUE` log reported
+`draft_tokens=4`. The run remains a valid four-token MTP result, but is not A2
+class-path evidence. The driver now couples `MTP_DRAFT_TOKENS` with explicit
+`MTP_SPEC_STEPS`; a true wider-draft serving run is still open.
+
+**True wider-draft update:** with `MTP_DRAFT_TOKENS=8 MTP_SPEC_STEPS=7`, the
+epilogue log reports `draft_tokens=8`; 601 mixed steps, 17,401+ fused calls and
+zero fallbacks/tracebacks complete. Chat/codex mean TTFT is 743.96/3765.70 ms
+and mean ITL 18.68/29.66 ms. This validates the wider MTP path, but its added
+draft work is slower and is not a gain claim. The matched unfused control
+(`MTPMIX_LPT`) reports 647.65/3607.79 ms TTFT and 17.35/28.99 ms ITL, with
+104.79/107.03 tok/s versus fused 104.80/101.32 tok/s. Logs:
+`/dev/shm/w/fused_epilogue_true_q8` and `/dev/shm/w/lpt_true_q8`.
+
+Source identities were sglang `cc739bd2d2f8c74005bdd438acdf645402b83b08` and
+flashinfer `1a73e678a0210aa926f615c5811554813a67e6e2`, both with the recorded
+working-tree changes. The exact A2 command was
+`for q in 8 12 16; do FUSED_FA2_TILES=48,32,16 MODE=band1 BAND_SIDE=fa2
+BAND_QO=$q BAND_KV=2048 HEADS=28,4 python drivers/fused_reference.py; done`;
+the serving arms used
+`SGLANG_FUSED_KERNEL_EXEC=1 DISABLE_CUDA_GRAPH=1 BENCH_CHUNK=512
+SGLANG_FUSED_SM_FA3=112 ... run_mixed_workloads.py --scenario loadsweep_min
+--methods MTPMIXFUSED` and the identical environment with
+`SGLANG_FUSED_KERNEL_EXEC=0 --methods MTPMIX_LPT`.
+
+### [~] A1 measured update — 2026-10-12
+
+Both runtime operator namespaces load on H200. On the same `MODE=fa3_split`,
+`HEADS=28,4`, `kv=2048` fixture, q64 passes head-level fp32 with zero bad rows
+and measures **0.0396 ms**; q128 passes with zero bad rows and measures
+**0.0424 ms**. The q64 variant is 6.6% faster on this small-FA3 fixture, but
+both remain slower than valid `BatchAttention` (**0.0151/0.0152 ms**), so this
+does not establish a serving gain. Exact arms set `FUSED_FA3_CTA_Q=64` or
+`128`, `MODE=fa3_split`, `TIME_AB=1`, `TIME_CUDA_GRAPH=1`; source identities
+are the same as the A2 update.
+
+**Retraction (RoPE, 2026-10-12):** every serving number in the next paragraph was measured with the YaRN override that reset Qwen2.5's `rope_theta` from 1e6 to 1e4 ([RoPE root cause](debug_kernel_server_perf/resume_20261012/a2_serving_ropefix_20261012.md)), so the served model was not Qwen2.5. Kernel-level results here stand; the serving TTFT/ITL/throughput figures must be re-measured with the fix before they are used.
+
+The dynamic serving backend loaded `fused_fa3_q128` and completed the full
+`loadsweep_min` MTP run with **17,001+ fused calls**, 601 mixed steps, zero
+fallbacks and zero tracebacks. Its chat/codex mean TTFT was 483.42/3325.10 ms
+and mean ITL 14.45/24.04 ms; this validates the runtime namespace/dispatch path,
+not a performance win. Log: `/dev/shm/w/mixed_trace_fused_dynamic`.
+
+### [~] B multicast/backfill probe — 2026-10-12
+
+The H200 scattered-KV DSMEM microbenchmark (`tests/dsmem_kv_share.cu`) reports
+1.588x over redundant gather at a 256 MB working set, and the clustered
+384-thread launch is valid at 32 KB dynamic shared memory. Padding that arm to
+165 KB—the fused kernel regime—makes the clustered launch return
+`cudaErrorInvalidValue`. The integrated fused launcher nevertheless passes
+`FUSED_CLUSTER=2` with both `FA3_PAGED_TMA=0` and `FA3_PAGED_TMA=1` on the
+page-size-1 fixture, but this does not exercise TMA multicast: the paged-TMA
+path requires page-size-128 descriptors, while the current sglang pool uses
+page-size 1. Keep multicast open; retain `tma_store_wait<0>()` as a required
+cross-role handoff fence. Source identities are the same sglang
+`cc739bd2d2f8c74005bdd438acdf645402b83b08` / flashinfer
+`1a73e678a0210aa926f615c5811554813a67e6e2` working trees. Exact microbenchmark
+command: `nvcc -O3 -std=c++17 -arch=sm_90a tests/dsmem_kv_share.cu -o
+/dev/shm/w/dsmem_kv_share; /dev/shm/w/dsmem_kv_share 1048576 165`.
+The current fused reference arm with `SM_SPLIT=all` and
+`FLASHINFER_FUSED_BACKFILL=1` passes 536/536 rows (worst head error 0.003673);
+the identical `FLASHINFER_FUSED_BACKFILL=0` arm leaves 32 rows invalid. This is
+the bounded cross-role backfill gate, not a serving gain.
+
+### [~] B greedy verify epilogue — 2026-10-12
+
+**Retraction (RoPE, 2026-10-12):** every serving number in this section was measured with the YaRN override that reset Qwen2.5's `rope_theta` from 1e6 to 1e4 ([RoPE root cause](debug_kernel_server_perf/resume_20261012/a2_serving_ropefix_20261012.md)), so the served model was not Qwen2.5. Kernel-level results here stand; the serving TTFT/ITL/throughput figures must be re-measured with the fix before they are used.
+
+`SGLANG_FUSED_VERIFY_EPILOGUE=1` fuses target argmax, tree acceptance,
+prediction writes, accepted-index writes and accepted-length calculation into a
+two-launch Triton path. Six CUDA tests pass (chain/branching trees, vocab tails,
+ties/nonfinite logits, depth limits, empty batches and graph replay). At vocab
+151,936 and four draft tokens, measured graph-replay time is **5.53/10.41/31.02/
+41.88 us** for batch 1/8/32/48 versus the existing verifier **14.05/22.17/
+44.89/57.11 us**. Real `loadsweep_min` MTP completed 601 mixed steps,
+17,101+ fused attention calls, and zero fallbacks/tracebacks. Compared with
+matched `MTPMIX_LPT`, fused+epilogue mean TTFT was 453.40/3099.82 ms
+(chat/codex) versus 473.43/3389.09 ms; mean ITL was 14.39/24.37 ms versus
+14.14/23.57 ms. This is a real TTFT improvement, not the required ITL or
+throughput bar. Logs: `/dev/shm/w/fused_epilogue_ab`.
+
+### [~] EDF model A/B — 2026-10-12 (retracted: pre-RoPE-fix serving)
+
+**Retraction (RoPE, 2026-10-12):** every serving number in this section was measured with the YaRN override that reset Qwen2.5's `rope_theta` from 1e6 to 1e4 ([RoPE root cause](debug_kernel_server_perf/resume_20261012/a2_serving_ropefix_20261012.md)), so the served model was not Qwen2.5. Kernel-level results here stand; the serving TTFT/ITL/throughput figures must be re-measured with the fix before they are used.
+
+The checked-in MTP step model (`heldout_mape=21.9%`) was used with global EWMA
+acceptance (`EDFG`) on matched `loadsweep_min` fused and unfused MTP arms. Both
+completed 601 mixed steps with zero fallbacks/tracebacks. Fused/unfused mean
+TTFT was **461.51/475.26 ms** for chat and **3264.12/3339.65 ms** for codex;
+mean ITL was **14.22/14.14 ms** and **23.99/23.82 ms**, respectively. Output
+throughput was 104.89 tok/s for both arms (codex 127.88 vs 129.70). This is a
+valid model-level comparison, but it does not show better EDF control or meet
+the requested gain bar. Logs: `/dev/shm/w/edf_model_fused_vs_lpt`.
 
 **The bar:** >=30% TTFT & ITL and >=10% throughput on realistic mixed workloads, against
-**both** baselines. **NOT MET -- and we are currently SLOWER ON EVERY FIXTURE** against the correct
-comparator, flashinfer's persistent `BatchAttention` (validated: 0 bad rows vs the fp32 reference):
+**both** baselines. **NOT MET.** The following historical 2026-10-10 measurements were slower on
+every fixture against flashinfer's persistent `BatchAttention` (validated: 0 bad rows vs fp32).
+They predate the synchronization fix and must be remeasured before describing current performance:
 
 | fixture | fused ms | `BatchAttention` ms | fused/BA |
 |---|---|---|---|
@@ -233,7 +403,7 @@ required for correctness (it is what closes the race) but costs **28%** on FA2-o
 until measured: a separate smem size per role (needs two kernels or a dynamic request), or finding
 the real 15x so the 28% stops mattering.
 
-### THE TWO MAIN KERNEL ITEMS (user, 2026-10-09) — both NOT STARTED
+### HISTORICAL KERNEL ITEM BREAKDOWN (user, 2026-10-09) — superseded by the 2026-10-12 checklist above
 
 #### A. Ultra fine-grained tile dispatcher — **[~] A3 MEASURED (2026-10-10). The user's threshold
 #### hypothesis is REFUTED, and in the OPPOSITE direction from the tile-occupancy argument.**
@@ -399,7 +569,7 @@ to FA3 writes into `o` and is discarded. The `FUSED_FA3_MIN_PACKED` sweep return
 exact proportion to rows moved (5->64/64, 4->60, 3->52, 2->40, 1->24, 0->pass); that is the
 artifact, not a kernel defect. `band1` declares the side instead.
 
-#### A. Ultra fine-grained tile dispatcher — **[ ] NOT STARTED, nothing implemented**
+#### A. Ultra fine-grained tile dispatcher — **historical snapshot; implementation now exists, closure remains open**
 
 The defect, as the user put it on 2026-10-09 and still true today: `split_classes` admits any row
 with `packed_qo` in **[48, 128)** to FA3, which uses a **fixed `TILE_Q = 128`** — so **up to 63%
@@ -438,7 +608,7 @@ thresholds are now DERIVED from the configured widths rather than hardcoded at 6
 **Deferred by user instruction (2026-10-10): the flashinfer port and precision validation come
 FIRST, so the kernel can land directly on upstream.** A2/A3 resume after K1 closes.
 
-#### B. Fuse the small draft/verify epilogue ops — **[ ] NOT STARTED beyond the headroom study**
+#### B. Fuse the small draft/verify epilogue ops — **historical snapshot; implementation remains open**
 
 | # | item | status |
 |---|---|---|

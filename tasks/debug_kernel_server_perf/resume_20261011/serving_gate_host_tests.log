@@ -1,0 +1,25 @@
+CORRECTNESS_PROMPTS synthetic token IDs, seed=1234
+CORRECTNESS_PROMPTS synthetic token IDs, seed=1234
+.....
+----------------------------------------------------------------------
+Ran 5 tests in 0.054s
+
+OK
+candidate vs baseline: fallbacks=0 tracebacks=0
+  l0: first-token ==  common prefix 12/12
+GATE PASS: min common prefix short=None long=12 (long prompts must agree on their first 8 tokens)
+candidate vs baseline: fallbacks=0 tracebacks=0
+  l0: first-token !=  common prefix 0/12
+GATE FAIL: min common prefix short=None long=0 (long prompts must agree on their first 8 tokens)
+candidate vs baseline: fallbacks=1 tracebacks=0
+  l0: first-token ==  common prefix 12/12
+GATE FAIL: min common prefix short=None long=12 (long prompts must agree on their first 8 tokens)
+candidate vs baseline: fallbacks=0 tracebacks=1
+  l0: first-token ==  common prefix 12/12
+GATE FAIL: min common prefix short=None long=12 (long prompts must agree on their first 8 tokens)
+candidate vs baseline: fallbacks=0 tracebacks=0
+  l0: first-token ==  common prefix 2/12
+GATE FAIL: min common prefix short=None long=2 (long prompts must agree on their first 8 tokens)
+candidate vs baseline: fallbacks=0 tracebacks=0
+  s0: first-token ==  common prefix 12/12
+GATE FAIL: min common prefix short=12 long=None (long prompts must agree on their first 8 tokens)

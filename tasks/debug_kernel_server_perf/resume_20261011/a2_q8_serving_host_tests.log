@@ -1,0 +1,32 @@
+test_chain_arguments_match_requested_verification_width (test_fused_serving_gate.FusedServingGateTest.test_chain_arguments_match_requested_verification_width) ... ok
+test_explicit_synthetic_prompts_are_repeatable (test_fused_serving_gate.FusedServingGateTest.test_explicit_synthetic_prompts_are_repeatable) ... CORRECTNESS_PROMPTS synthetic token IDs, seed=1234
+CORRECTNESS_PROMPTS synthetic token IDs, seed=1234
+ok
+test_invalid_or_truncated_chain_is_rejected (test_fused_serving_gate.FusedServingGateTest.test_invalid_or_truncated_chain_is_rejected) ... ok
+test_matching_outputs_pass (test_fused_serving_gate.FusedServingGateTest.test_matching_outputs_pass) ... ok
+test_mismatch_and_runtime_failures_raise (test_fused_serving_gate.FusedServingGateTest.test_mismatch_and_runtime_failures_raise) ... ok
+test_missing_dataset_does_not_silently_use_synthetic_prompts (test_fused_serving_gate.FusedServingGateTest.test_missing_dataset_does_not_silently_use_synthetic_prompts) ... ok
+test_no_long_requests_fails (test_fused_serving_gate.FusedServingGateTest.test_no_long_requests_fails) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.082s
+
+OK
+candidate vs baseline: fallbacks=0 tracebacks=0
+  l0: first-token ==  common prefix 12/12
+GATE PASS: min common prefix short=None long=12 (long prompts must agree on their first 8 tokens)
+candidate vs baseline: fallbacks=0 tracebacks=0
+  l0: first-token !=  common prefix 0/12
+GATE FAIL: min common prefix short=None long=0 (long prompts must agree on their first 8 tokens)
+candidate vs baseline: fallbacks=1 tracebacks=0
+  l0: first-token ==  common prefix 12/12
+GATE FAIL: min common prefix short=None long=12 (long prompts must agree on their first 8 tokens)
+candidate vs baseline: fallbacks=0 tracebacks=1
+  l0: first-token ==  common prefix 12/12
+GATE FAIL: min common prefix short=None long=12 (long prompts must agree on their first 8 tokens)
+candidate vs baseline: fallbacks=0 tracebacks=0
+  l0: first-token ==  common prefix 2/12
+GATE FAIL: min common prefix short=None long=2 (long prompts must agree on their first 8 tokens)
+candidate vs baseline: fallbacks=0 tracebacks=0
+  s0: first-token ==  common prefix 12/12
+GATE FAIL: min common prefix short=12 long=None (long prompts must agree on their first 8 tokens)

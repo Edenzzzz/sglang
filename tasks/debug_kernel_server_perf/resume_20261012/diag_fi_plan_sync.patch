@@ -1,0 +1,49 @@
+--- /tmp/flashinfer_backend.py.pre_plansync	2026-10-12 14:24:46.243045669 +0800
++++ /opt/tiger/sglang-up/python/sglang/srt/layers/attention/flashinfer_backend.py	2026-10-12 14:25:46.458122296 +0800
+@@ -307,6 +307,46 @@
+ # fault to that extra plan rather than to the FA3 half.
+ FUSED_SPLIT_NO_FA2_WRAPPER = os.environ.get("SGLANG_FUSED_SPLIT_NOFA2", "0") == "1"
+ FUSED_KERNEL_EXEC = os.environ.get("SGLANG_FUSED_KERNEL_EXEC", "0") == "1"
++
++
++def _force_synchronous_flashinfer_plans():
++    """SGLANG_FI_PLAN_SYNC=1 (diagnostic): every flashinfer wrapper plan copies its pinned host
++    staging to the device synchronously. A non-blocking copy reads the pinned buffer when it
++    EXECUTES, so a second plan on the same wrapper issued before the GPU reaches the first copy
++    rewrites the first plan's metadata under it."""
++    import flashinfer
++
++    def wrap(cls):
++        plan = cls.plan
++
++        def plan_sync(self, *args, **kwargs):
++            kwargs["non_blocking"] = False
++            return plan(self, *args, **kwargs)
++
++        cls.plan = plan_sync
++        cls.begin_forward = plan_sync
++
++    for name in ("BatchPrefillWithPagedKVCacheWrapper", "BatchPrefillWithRaggedKVCacheWrapper",
++                 "BatchDecodeWithPagedKVCacheWrapper"):
++        cls = getattr(flashinfer, name, None)
++        if cls is not None:
++            wrap(cls)
++
++
++def _synchronous_fast_plan(fast_plan):
++    def plan_sync(*args, **kwargs):
++        kwargs["non_blocking"] = False
++        return fast_plan(*args, **kwargs)
++
++    return plan_sync
++
++
++if os.environ.get("SGLANG_FI_PLAN_SYNC", "0") == "1":
++    _force_synchronous_flashinfer_plans()
++    # The CUDA-graph wrappers bind these per instance (partial(fast_decode_plan, w)), bypassing
++    # the class methods patched above, so the module globals they are looked up from are wrapped.
++    fast_prefill_plan = _synchronous_fast_plan(fast_prefill_plan)
++    fast_decode_plan = _synchronous_fast_plan(fast_decode_plan)
+ # Skip the full-batch paged plan when the split will serve the whole batch. Under the split
+ # that plan is never consumed -- the dispatch replaces prefill_wrapper_paged.forward outright
+ # -- so the split was paying TWO flashinfer plans per step (host work plus a scheduling kernel

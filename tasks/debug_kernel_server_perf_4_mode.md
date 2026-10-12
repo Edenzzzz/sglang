@@ -114,8 +114,29 @@ gate and reports fallbacks and composition counters.
     unfused included: torch `IndexKernel.cu` out-of-bounds, surfacing in flashinfer `plan()` under
     `decode_cuda_graph_runner.load_batch -> init_forward_metadata_out_graph` during a verify that
     follows a mixed step (15 running + 23 new sequences). Not the fused kernel; the fork's 4-mode
-    path with graphs on. The frame is a victim of an async assert; launch-blocking repro
-    (`graphs_repro_20261012.sh`) is queued behind the A3 map, and the S1xS2 sweep waits for the fix.
+    path with graphs on. The frame is a victim of an async assert.
+    **Bisect (2026-10-12, unfused 4-mode arm, agent_chat_rated, graphs on; one toggle per arm):**
+
+    | arm | result |
+    |---|---|
+    | control (x2) | crash at mixed step 1 |
+    | `CUDA_LAUNCH_BLOCKING=1` (+ phase syncs, and alone) | **clean**, 1651 mixed steps |
+    | device sync at each 4-mode phase boundary (`SGLANG_DEBUG_MIX_SYNC=1`) | crash (now surfacing in `draft()`) |
+    | no graph inside mixed steps (`SGLANG_MIXED_SPEC_DISABLE_VERIFY_GRAPH=1`) | crash |
+    | overlap scheduler off (synchronous spec v2 confirmed in log) | crash |
+    | every flashinfer plan synchronous (`SGLANG_FI_PLAN_SYNC=1`, x2) | crash |
+    | caching allocator off | crash (no mixed step reached) |
+    | device sync after **every** step (`SGLANG_DEBUG_STEP_SYNC=all`) | **clean**, 1651 |
+    | device sync after **mixed** steps only | **clean**, 1651 |
+    | device sync after non-mixed steps only | crash |
+
+    So a mixed step leaves GPU work in flight that the next step's host side corrupts or reads
+    early. Refuted along the way: pinned flashinfer plan staging, the overlap scheduler's stream
+    split, the in-step graph. Not the cause here but a real latent race of the same class:
+    `_fs_upload` (split path) rewrites a persistent pinned host buffer that a previous async H2D
+    may still be reading. **Root cause still open.** The graphs-on A/B runs with the measured
+    mixed-step barrier (`SGLANG_DEBUG_STEP_SYNC=mixed`), which can only cost the 4-mode arms
+    overlap; stock MTP runs without it (`graphs_barrier_ab_20261012.sh`).
   - [ ] **EDF step model re-fitted on the fused kernel and compared with the unfused schedule**
     (goal point 3); it drives the SLO-attainment curve. Old fits used the RoPE-corrupted model.
 - [ ] **S2: Workload mixtures by context range with per-tenant SLOs.** Short chat mixed with

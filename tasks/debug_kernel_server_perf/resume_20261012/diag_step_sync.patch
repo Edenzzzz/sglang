@@ -1,0 +1,22 @@
+--- /tmp/scheduler.py.pre_stepsync	2026-10-12 14:33:39.064421645 +0800
++++ /opt/tiger/sglang-up/python/sglang/srt/managers/scheduler.py	2026-10-12 14:34:06.251359488 +0800
+@@ -4510,9 +4510,19 @@
+                                 )
+ 
+                         # FIXME: pp is not compatible with overlap
++                        _step_sync = os.environ.get("SGLANG_DEBUG_STEP_SYNC", "")
++                        _is_mixed_step = getattr(batch, "mixed_spec_running", None) is not None
+                         batch_result = self.model_worker.forward_batch_generation(
+                             batch, **fwd_kwargs
+                         )
++                        # Diagnostic: device sync after a step, to bisect a cross-step race by step
++                        # kind (all | mixed | nonmixed).
++                        if (
++                            _step_sync == "all"
++                            or (_step_sync == "mixed" and _is_mixed_step)
++                            or (_step_sync == "nonmixed" and not _is_mixed_step)
++                        ):
++                            torch.cuda.synchronize()
+                         if batch.spec_algorithm.is_none():
+                             self.future_map.publish(future_indices, batch.seq_lens + 1)
+                         # Park any refs the worker wants kept alive 2 iters

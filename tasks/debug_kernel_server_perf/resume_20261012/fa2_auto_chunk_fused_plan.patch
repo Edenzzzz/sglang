@@ -1,0 +1,108 @@
+--- /tmp/fused_plan.cuh.pre_auto	2026-10-12 11:19:02.117409250 +0800
++++ /tmp/fp_now	2026-10-12 11:38:48.517994900 +0800
+@@ -198,7 +198,15 @@
+   int32_t kv_head_idx;
+ };
+ 
++// FUSED_FA2_KV_CHUNK=auto: the chunk is chosen per batch by FusedAutoFa2KvChunk in the planner and
++// handed to EnumerateFusedWorkItems as fa2_chunk_override; here it reads as "no fixed chunk".
++inline bool FusedFa2KvChunkAuto() {
++  const char* configured = std::getenv("FUSED_FA2_KV_CHUNK");
++  return configured != nullptr && std::strcmp(configured, "auto") == 0;
++}
++
+ inline int32_t FusedFa2KvChunk(uint32_t fa3_chunk) {
++  if (FusedFa2KvChunkAuto()) return 0;
+   if (const char* configured = std::getenv("FUSED_FA2_KV_CHUNK")) {
+     int32_t chunk = 0;
+     std::istringstream input(configured);
+@@ -218,7 +226,7 @@
+     const int32_t* qo_lens, const int32_t* kv_lens, const bool* fa3_mask, uint32_t batch_size,
+     uint32_t gqa_group_size, uint32_t num_kv_heads, uint32_t fa3_tile_q, uint32_t kv_chunk,
+     std::vector<FusedWorkItem> out[4], int32_t* max_splits_fa3,
+-    std::vector<int32_t>* fa3_batch_list) {
++    std::vector<int32_t>* fa3_batch_list, int32_t fa2_chunk_override = 0) {
+   // A2/A3: the FA2 tile classes and the FA3 routing threshold, both configurable so the user's
+   // hypothesis -- "only do tile 16, 32, 48; >=64 should be more performant with FA3" -- can be
+   // MEASURED rather than assumed.
+@@ -256,7 +264,8 @@
+   for (int t = 0; t < 4; ++t) out[t].clear();
+   if (max_splits_fa3) *max_splits_fa3 = 1;
+   if (fa3_batch_list) fa3_batch_list->clear();
+-  const int32_t fa2_chunk = FusedFa2KvChunk(kv_chunk);
++  const int32_t fa2_chunk =
++      fa2_chunk_override > 0 ? fa2_chunk_override : FusedFa2KvChunk(kv_chunk);
+   const char* fine_tail_setting = std::getenv("FUSED_FA2_FINE_TAIL");
+   const bool fine_tail = fine_tail_setting && fine_tail_setting[0] == '1';
+ 
+@@ -525,6 +534,37 @@
+ // Guarded so the struct above stays host-checkable: port07/tests/run_host_checks.sh compiles
+ // this header with plain g++ to assert the ToVector/FromVector round-trip, and `cudaError_t`
+ // does not exist there. The declaration is only needed by the CUDA translation units.
++// FA2 split-KV chunk for FUSED_FA2_KV_CHUNK=auto. Sized so the FA2 item count roughly matches the
++// CTA slots the FA2 role can occupy: every SM when the batch has no FA3 work, otherwise the
++// 2 x (num_sm - sm_split) slots left beside the FA3 grid (FA3 CTAs vacate theirs only at the end).
++// Fewer, longer items starve a small batch of parallelism; more, shorter ones pay per-item and
++// merge cost on a large one. Measured under the co-launch, classes 64/32/16
++// (colaunch_chunk_20261012): the fixed best chunk ranged 256..2048 across seven fixtures and this
++// rule picks the best or within 3% of it on each. A power of two >= 256, so a chunk boundary never
++// falls inside a 128-key tile.
++inline int32_t FusedAutoFa2KvChunk(const int32_t* qo_lens, const int32_t* kv_lens,
++                                   const bool* fa3_mask, uint32_t batch_size,
++                                   uint32_t gqa_group_size, uint32_t num_kv_heads,
++                                   uint32_t largest_fa2_tile, uint32_t num_sm, uint32_t sm_split) {
++  int64_t work = 0;
++  bool has_fa3 = false;
++  for (uint32_t i = 0; i < batch_size; ++i) {
++    if (fa3_mask != nullptr && fa3_mask[i]) {
++      has_fa3 = true;
++      continue;
++    }
++    const int64_t packed = int64_t(qo_lens[i]) * gqa_group_size;
++    const int64_t tiles = (packed + largest_fa2_tile - 1) / largest_fa2_tile;
++    work += int64_t(num_kv_heads) * tiles * int64_t(kv_lens[i] > 0 ? kv_lens[i] : 1);
++  }
++  const int64_t free_sms = has_fa3 && sm_split < num_sm ? int64_t(num_sm - sm_split) : 0;
++  const int64_t slots = has_fa3 ? std::max<int64_t>(2 * free_sms, 1) : int64_t(num_sm);
++  const int64_t want = (work + slots - 1) / slots;
++  int64_t chunk = 256;
++  while (chunk < want) chunk *= 2;
++  return int32_t(std::min<int64_t>(chunk, int64_t(1) << 30));
++}
++
+ inline int32_t FusedWorkBudgetKvChunk(const int32_t* query_lengths,
+                                      const int32_t* kv_lengths, const bool* fa3_mask,
+                                      uint32_t batch_size, uint32_t gqa_group_size,
+@@ -663,9 +703,20 @@
+   std::vector<FusedWorkItem> items[4];
+   int32_t max_splits_fa3 = 1;
+   std::vector<int32_t> fa3_batch_list;
++  int32_t fa2_chunk_override = 0;
++  if (FusedFa2KvChunkAuto()) {
++    uint32_t largest_fa2_tile = 128u;
++    if (const char* e = std::getenv("FUSED_FA2_TILES")) {
++      unsigned a = 0, b = 0, c = 0;
++      if (std::sscanf(e, "%u,%u,%u", &a, &b, &c) == 3 && a) largest_fa2_tile = a;
++    }
++    fa2_chunk_override = FusedAutoFa2KvChunk(qo_lens.data(), kv_lens.data(), fa3_row_mask_h,
++                                             batch_size, gqa, num_kv_heads, largest_fa2_tile,
++                                             num_sm, fa3_ctas);
++  }
+   EnumerateFusedWorkItems(qo_lens.data(), kv_lens.data(), fa3_row_mask_h, batch_size, gqa,
+                           num_kv_heads, kFa3TileQ, uint32_t(kv_chunk < 0 ? 0 : kv_chunk),
+-                          items, &max_splits_fa3, &fa3_batch_list);
++                          items, &max_splits_fa3, &fa3_batch_list, fa2_chunk_override);
+ 
+   FusedMergeLayout merge;
+   // Per-request base in TOKEN rows, which is the unit merge_o_indices is in -- NOT packed rows.
+@@ -816,7 +867,9 @@
+   // When FA2 splitting is enabled its classes need the SAME chunk length the enumeration used, or
+   // persistent.cuh derives num_kv_chunks = ceil_div(kv_len, fa2_span) = 1 and the split rows take
+   // the direct-write path while their partials go unmerged.
+-  const int32_t fa2_chunk = FusedFa2KvChunk(uint32_t(kv_chunk < 0 ? 0 : kv_chunk));
++  const int32_t fa2_chunk = fa2_chunk_override > 0
++                                ? fa2_chunk_override
++                                : FusedFa2KvChunk(uint32_t(kv_chunk < 0 ? 0 : kv_chunk));
+   if (fa2_chunk > 0) fa2_span = fa2_chunk;
+   plan.len_kv_chunk_offset =
+       place(std::vector<int32_t>{fa2_span, fa2_span, fa2_span, kv_chunk > 0 ? kv_chunk : fa2_span});

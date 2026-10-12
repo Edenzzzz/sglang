@@ -163,6 +163,16 @@ gate and reports fallbacks and composition counters.
 - [ ] **S2: Workload mixtures by context range with per-tenant SLOs.** Short chat mixed with
   agentic tenants at **32-64K, 64-128K and >128K** (real Codex/Claude Code reaches a few hundred K).
   - [x] 32-49K TraceLab mixture measured (the S1 point above).
+  - [ ] **Full-length TraceLab (user, 2026-10-13): no context-range selection.** The release is
+    long-context: Claude Code context p50/p90/p99 133K/483K/923K (24.8% of rounds >= 256K), Codex
+    120K/204K/233K; outputs short (p50 252 / 184 tokens). The 32-49K slice behind the headline
+    numbers is ~16% of Claude rounds. Loader extended (`tracelab_full_replay.patch`):
+    `--tracelab-providers claude,codex`, `--tracelab-allow-empty-prefix` (keeps each session's
+    first round), `--tracelab-session-weighting rounds` (sessions picked in proportion to their
+    rounds; uniform picks replayed a 51-55K median vs the release's 124K, round-weighted picks
+    120-126K, >=256K share 11-13% vs 9.7%, checked locally on two seeds), min output 1. Served at
+    YaRN x32 (1,048,576 tokens) on the same Qwen2.5-7B so the EAGLE3 draft still applies. Queued
+    after the S1xS2 sweep.
   - [ ] **Per-tenant SLOs** in `run_mixed_workloads.py` (one global `TTFT_SLO_MS`/`ITL_SLO_MS`
     today) and per-tenant SLO attainment in the report.
   - [ ] **>128K contexts:** Qwen2.5-7B + YaRN x4 stops at 131072; needs a larger YaRN factor or a

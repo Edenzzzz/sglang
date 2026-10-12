@@ -1,0 +1,117 @@
+--- /tmp/tracelab.py.pre_full	2026-10-13 00:34:01.515945266 +0800
++++ /opt/tiger/sglang-up/python/sglang/benchmark/datasets/tracelab.py	2026-10-13 00:36:58.911053848 +0800
+@@ -25,6 +25,14 @@
+     min_context_len: int
+     max_context_len: int
+     min_output_len: int
++    # Full-release replay: which providers to keep, and whether a session's first round (empty
++    # prefix) is replayable. Defaults reproduce every earlier Claude-only, prefix>0 run.
++    providers: tuple = ("claude",)
++    allow_empty_prefix: bool = False
++    # "rounds" picks sessions with probability proportional to their eligible round count, so the
++    # replayed rounds follow the release's ROUND-level context distribution (uniform session
++    # picks under-sample long contexts, which live in long sessions: median 51K vs 124K).
++    session_weighting: str = "uniform"
+ 
+     @classmethod
+     def from_args(cls, args):
+@@ -37,6 +45,9 @@
+             args.tracelab_min_context_len,
+             args.tracelab_max_context_len,
+             args.tracelab_min_output_len,
++            tuple(p for p in getattr(args, "tracelab_providers", "claude").split(",") if p),
++            bool(getattr(args, "tracelab_allow_empty_prefix", False)),
++            getattr(args, "tracelab_session_weighting", "uniform"),
+         )
+ 
+     def load(self, tokenizer, model_id=None):
+@@ -51,7 +62,7 @@
+         with opener(self.dataset_path, "rt") as source:
+             for line in source:
+                 record = json.loads(line)
+-                if record.get("provider") != "claude":
++                if record.get("provider") not in self.providers:
+                     continue
+                 context_length = int(record.get("input_tokens_total") or 0)
+                 output_length = int(record.get("output_tokens") or 0)
+@@ -60,7 +71,7 @@
+                 if not (
+                     self.min_context_len <= context_length <= self.max_context_len
+                     and output_length >= self.min_output_len
+-                    and prefix_length > 0
++                    and (prefix_length > 0 or (self.allow_empty_prefix and prefix_length == 0))
+                     and append_length > 0
+                 ):
+                     continue
+@@ -85,7 +96,15 @@
+                 f"TraceLab selection has {len(eligible)} sufficiently long sessions; "
+                 f"requested {self.num_groups}"
+             )
+-        selected = random.sample(eligible, self.num_groups)
++        if self.session_weighting == "rounds":
++            # Weighted sampling without replacement (Efraimidis-Spirakis keys), seeded through
++            # the same global RNG as the uniform path.
++            keyed = sorted(
++                eligible, key=lambda sid: random.random() ** (1.0 / len(sessions[sid])), reverse=True
++            )
++            selected = keyed[: self.num_groups]
++        else:
++            selected = random.sample(eligible, self.num_groups)
+         vocabulary = get_available_tokens(tokenizer)
+         if not vocabulary:
+             raise ValueError("Tokenizer vocabulary is empty")
+@@ -98,14 +117,15 @@
+             records = records[window_start : window_start + quota]
+             first_prefix = int(records[0]["prefix_tokens"])
+             prompt_ids = random.choices(vocabulary, k=first_prefix)
+-            warmup_rng = random.Random(f"tracelab-warmup:{session_id}:{first_prefix}")
+-            warmups.append(DatasetRow(
+-                prompt=warmup_rng.choices(vocabulary, k=first_prefix),
+-                prompt_len=first_prefix,
+-                output_len=1,
+-                session_id=session_id,
+-                warmup_only=True,
+-            ))
++            if first_prefix > 0:
++                warmup_rng = random.Random(f"tracelab-warmup:{session_id}:{first_prefix}")
++                warmups.append(DatasetRow(
++                    prompt=warmup_rng.choices(vocabulary, k=first_prefix),
++                    prompt_len=first_prefix,
++                    output_len=1,
++                    session_id=session_id,
++                    warmup_only=True,
++                ))
+             previous_end_ms = None
+             for record in records:
+                 prefix_length = int(record["prefix_tokens"])
+@@ -139,6 +159,13 @@
+                     round_index=int(record["round_index"]),
+                     inter_round_delay_s=gap,
+                 ))
++        replayed = sorted(row.prompt_len for row in requests)
++        if replayed:
++            pick = lambda q: replayed[min(len(replayed) - 1, int(q * len(replayed)))]
++            print(
++                "TraceLab replayed context p10/p50/p90/p99: "
++                f"{pick(0.1)}/{pick(0.5)}/{pick(0.9)}/{pick(0.99)}; providers={','.join(self.providers)}"
++            )
+         print(
+             f"TraceLab length/session replay: {len(requests)} rounds, "
+             f"{self.num_groups} sessions; synthetic token contents, "
+--- /tmp/serving.py.pre_full	2026-10-13 00:34:01.517945335 +0800
++++ /opt/tiger/sglang-up/python/sglang/benchmark/serving.py	2026-10-13 00:36:58.911053848 +0800
+@@ -2370,6 +2370,14 @@
+     tracelab_group.add_argument("--tracelab-min-context-len", type=int, default=16384)
+     tracelab_group.add_argument("--tracelab-max-context-len", type=int, default=32768)
+     tracelab_group.add_argument("--tracelab-min-output-len", type=int, default=512)
++    tracelab_group.add_argument("--tracelab-providers", type=str, default="claude",
++                                help="Comma list of TraceLab providers to replay (claude,codex).")
++    tracelab_group.add_argument("--tracelab-allow-empty-prefix", action="store_true",
++                                help="Also replay each session's first round (empty prefix).")
++    tracelab_group.add_argument("--tracelab-session-weighting", type=str, default="uniform",
++                                choices=["uniform", "rounds"],
++                                help="Session pick: uniform, or proportional to eligible rounds "
++                                "(matches the release's round-level context distribution).")
+     parser.add_argument(
+         "--speed-bench-category",
+         type=str,

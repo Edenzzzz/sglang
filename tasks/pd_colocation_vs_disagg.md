@@ -990,6 +990,47 @@ is the real one, and it needs at least 4 nodes to say anything, hence the H20 bu
 
 ---
 
+## 5. Agentic append rounds make disagg re-ship the session's KV every round — 2026-10-13
+
+(User point, 2026-10-12.) An agent session is many short *append* rounds against a long, growing
+context: tool result appended, a few hundred output tokens, repeat. Under disaggregation each
+round is a new request: the prefill node computes the appended tokens and the decode node must
+receive the request's KV before its first decode step. Stock sglang PD frees a request's KV on
+the decode node when it finishes, so every round ships the **whole context**; even a decode
+node that kept the session prefix would still ship every round's **append**. Under colocation
+the session's KV stays on the node that decodes it (cache-hit-first routing, point 1), so a
+round moves **nothing** and only computes its append.
+
+**Measured from the full TraceLab release** (353,598 follow-up rounds in 4,109 sessions; rounds
+per session p50 18, p90 163, p99 1209; context p50/p90/p99 124K/256K/823K tokens; append
+p50/p90/p99 860/6.5K/105K tokens). Transfer time per round at line rate, no contention:
+
+| model (KV bytes/token) | link | disagg, full KV per round p50 / p90 / p99 | disagg, append only p50 / p90 / p99 | colocation |
+|---|---|---|---|---|
+| Qwen2.5-7B (57.3 KB) | 200 Gb/s | 285 / 587 / 1887 ms | 2.0 / 14.8 / 240 ms | 0 |
+| Qwen2.5-7B (57.3 KB) | 400 Gb/s | 143 / 294 / 944 ms | 1.0 / 7.4 / 120 ms | 0 |
+| 70B GQA-8 (320 KB) | 200 Gb/s | 1.63 / 3.36 / 10.8 s | 11 / 85 / 1373 ms | 0 |
+| 70B GQA-8 (320 KB) | 400 Gb/s | 0.81 / 1.68 / 5.39 s | 6 / 42 / 687 ms | 0 |
+
+Over the whole release that is 3.12 PB moved (full KV) against 107 TB (append only) for a 7B
+model -- 29x -- and colocation moves neither.
+
+**Where it shows up:** in **TTFT** of every round (the transfer precedes the first decode
+step), and in **ITL of the requests already decoding** on the receiving node, because each
+incoming transfer competes with them for the NIC and for HBM write bandwidth. Disagg's usual
+mitigation -- layer-wise streaming overlapped with prefill -- hides transfer behind *prefill
+compute*, but an append round has almost none (median 860 tokens), so there is nothing to hide
+it behind. This complements points 1 (keep the session where its cache is) and 2 (when a session
+must move, it moves once, not every round).
+
+**What must be measured (H20, <= 16 GPUs, trial `vibecuda`):** full-length TraceLab replay
+(round-weighted session sampling, both providers) on sglang PD (e.g. 2P2D) vs colocation with
+cache-hit-first routing, at matched rates; report per-round transferred bytes, round TTFT, ITL
+of co-resident decodes on decode nodes, and NIC utilisation. Not run yet. The single-node
+full-length run (S2, H200) measures the colocation side of this first.
+
+---
+
 ## Honest summary of standing
 
 The kernel-level result that motivates all of this (**1.225x on a TraceLab-shaped batch**) is

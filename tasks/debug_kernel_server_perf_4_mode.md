@@ -150,9 +150,13 @@ Papers and systems this work draws on. *(sent)* marks the ones the user sent.
   setting changed by relaunching (criticised as static in arXiv:2504.19516), while our split is
   decided per step inside one forward, co-runs prefill chunks with MTP verify rows, and lets the
   hardware backfill FA2 work onto SMs FA3 vacates.
-- **NVIDIA Dynamo -- conditional disaggregation**
-  ([docs](https://docs.nvidia.com/dynamo/advanced-customizations/conditional-disaggregation);
-  [delta-KV RFC](https://github.com/ai-dynamo/dynamo/discussions/7861)) -- note: closest
+- **NVIDIA Dynamo -- KV router, conditional disaggregation, planner, KVBM**
+  ([conditional disagg](https://docs.nvidia.com/dynamo/advanced-customizations/conditional-disaggregation);
+  [router](https://docs.nvidia.com/dynamo/dev/knowledge-base/modular-components/router/routing-concepts);
+  [planner](https://docs.nvidia.com/dynamo/v1.5.0/knowledge-base/modular-components/planner/overview);
+  [delta-KV RFC](https://github.com/ai-dynamo/dynamo/discussions/7861)). Full policy-by-policy
+  comparison: `pd_colocation_vs_disagg.md` point 6 (block-count cost router with no SLO term,
+  static local-prefill thresholds, minute-scale P/D autoscaling, incidental replication) -- note: closest
   multi-node baseline for agentic rounds. The KV-aware router prefills locally on the decode worker
   when the uncached part of the prompt is small (default effective-ISL threshold 4096 tokens) or
   remote prefill is loaded, so most agent append rounds avoid the KV transfer that PD point 5

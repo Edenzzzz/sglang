@@ -114,7 +114,14 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
   filter were not plumbed) -- queued last.
 
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
-  (goal point 3); earlier fits used the RoPE-corrupted model.
+  (goal point 3); earlier fits used the RoPE-corrupted model and are void (incl. the uncommitted
+  2026-10-12 05:10 "fused-vs-unfused EDF check" in `server_perf_model.md`). The STEPTRACE emitter
+  did not survive the re-port; ported to the overlap path with the 4-mode verify rows counted
+  (`steptrace_port.patch`). `s4_edf_20261013.sh`, on the race-fixed tree without the barrier (a
+  per-step sync would distort the modelled step times), runs only if the race fix passes: traces
+  on both 4-mode arms (mix32 8/16/24/s, mix128 12/s), one linear model per arm (held-out MAPE),
+  then EDF-R with each arm's own model vs no EDF at mix32 16/24/s -- queued after S3.
+
 - [x] **Chunk size is not the ITL lever at saturation (2026-10-12):** chunk 8192/4096/2048 leaves
   both arms unchanged (prefill per step is many ~512-token prompts).
 - [ ] **Direct baselines:** MuxWise (arXiv 2504.14489), semi-PD, NVIDIA Dynamo conditional

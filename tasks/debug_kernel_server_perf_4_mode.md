@@ -77,6 +77,21 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     rule needs a floor near 4096 for long verify rows (re-check on the A2 fixtures before
     changing it); the serving decision waits on split v2 (gate PASS, long prompts agree on 52
     tokens, split calls now required > 0; running).
+  - [~] **Split v2, first point (2026-10-13 07:14; provisional until mix32 24/s and mix128 land):**
+    mix32 chat 16/s + agent 0.1/s, race-fixed tree, no barrier, both arms 0 tracebacks / 0
+    fallbacks; split ran 80,001 split calls, fused 66,901 fused-kernel calls.
+    | metric | split (FA3 + stock FA2 BatchPrefill) | fused co-launch | stock MTP (S1) |
+    |---|---|---|---|
+    | chat TTFT mean | **689 ms** | 4932 ms | 24740 ms |
+    | chat TPOT mean | **14.5 ms** | 28.1 ms | 39.0 ms |
+    | chat ITL p99 | 108 ms | 149 ms | 138 ms |
+    | agent TTFT mean | **1941 ms** | 5102 ms | 14500 ms |
+    | agent TPOT mean | **11.3 ms** | 16.0 ms | 21.9 ms |
+    | agent output tok/s | **308** | 205 | 162 |
+    Chat throughput equals the offered load in all arms (~1136 tok/s). The barrier-free fused arm
+    (4932 ms TTFT) is within 7% of S1's fused-with-barrier (5276 ms). Command:
+    `INHERIT_LOCK=1 bash split_vs_fused_20261013.sh` (root `split_vs_fused_v2_20261013`), analysed
+    with `drivers/serving/eval_curves.py --slo '{"chat":[2000,50],"codex":[10000,80]}'`.
 
 ### [~] B. Fuse draft/verify epilogue ops
 

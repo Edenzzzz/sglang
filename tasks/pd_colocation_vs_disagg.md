@@ -1023,6 +1023,21 @@ compute*, but an append round has almost none (median 860 tokens), so there is n
 it behind. This complements points 1 (keep the session where its cache is) and 2 (when a session
 must move, it moves once, not every round).
 
+**Prior art that already blunts this, stated plainly.** NVIDIA Dynamo's *conditional
+disaggregation* prefills locally on the decode worker when the uncached part of the prompt is
+small (default effective-ISL threshold 4096 tokens) or remote prefill is loaded; with the median
+append at 860 tokens and the session prefix resident on its decode worker, most agent rounds
+then move no KV at all, and a proposed delta-KV RFC would cut the remaining remote rounds to
+append-only transfer (the 1-15 ms column above, not 143-587 ms). semi-PD avoids transfer
+entirely by splitting SMs inside one GPU over a shared KV store. So point 5 is decisive against
+stock sglang PD and against Dynamo's remote-prefill path; against Dynamo with conditional
+disaggregation the advantage that remains is (a) making the local prefill + speculative decode
+co-execution efficient -- that is our 4-mode step and fused kernel, measured at +20-36%
+throughput and -31..-79% TTFT over stock MTP under load -- (b) symmetric nodes instead of fixed
+prefill/decode pools, so routing and cache replication (points 1-2) can use every node, and
+(c) EDF/SLO-aware admission (point 3). Dynamo with conditional disaggregation must be run as a
+baseline rather than argued around.
+
 **What must be measured (H20, <= 16 GPUs, trial `vibecuda`):** full-length TraceLab replay
 (round-weighted session sampling, both providers) on sglang PD (e.g. 2P2D) vs colocation with
 cache-hit-first routing, at matched rates; report per-round transferred bytes, round TTFT, ITL

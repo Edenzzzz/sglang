@@ -39,7 +39,9 @@ The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
   fused arm at most shapes. The map measures the FA2 spill defect, not the boundary; it is
   re-run after the co-launch fix
   ([table](debug_kernel_server_perf/resume_20261012/a3_winner_map/a3_table_20261012.txt)).
-- [~] **A-fix: FA2 out of the co-compiled kernel (2026-10-12).** `FLASHINFER_FUSED_COLAUNCH=1`
+- [x] **A-fix: FA2 out of the co-compiled kernel (2026-10-12).** Measured: 3.3-6.5x on FA2
+  rows, all gates exact, serving gain above. Remaining kernel gap: 1.2-2x behind the unfused
+  non-persistent two-launch control. `FLASHINFER_FUSED_COLAUNCH=1`
   runs the FA3 grid alone on `sm_split` CTAs and launches `FA2ExecutorKernel` (same runners,
   same plan and queue, native 128x2 geometry) as its PDL dependent; FA3 triggers
   `griddepcontrol.launch_dependents` at entry, the FA2 executor `griddepcontrol.wait`s before
@@ -73,8 +75,14 @@ The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
   tenants), throughput +10%/+13%, mean ITL -13%. **The fused kernel gives that back**: vs the
   unfused 4-mode arm it loses 11-13% throughput and ~30% TTFT (vs stock: TTFT -10/-12%,
   throughput -2%). The kernel is the bottleneck, which points back at A.
-  Open: q4 output gate, a `MTPMIX_SPLIT` control, repeat rounds
+  q4 output gate PASS on all 4-mode arms; round 2 repeats within 1%; the two-executor split
+  matches the unfused 4-mode arm
   ([evidence](debug_kernel_server_perf/resume_20261012/postfix_realistic_ab_20261012.md)).
+  **After the A-fix (co-launch + 64/32/16 + auto FA2 chunk), 2026-10-12, 2 rounds, q4 gate PASS,
+  0 fallbacks:** fused vs stock MTP: **TTFT -55% chat / -58% codex, throughput +18% / +21%, mean
+  ITL -19% / -11%** (median chat ITL -34%); fused vs unfused 4-mode: throughput +7% / +6%, TTFT
+  -33% / -37%. TTFT and throughput clear the bar; mean ITL does not, and no arm has CUDA graphs
+  ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md#kernel-gate-of-auto-v2-fixed-and-serving-colaunch_serving_v2_20261012sh)).
 - [x] **Documentation priority restored.** Historical failures, retractions,
   exact commands and evidence paths remain below; this checklist keeps A/B above
   supporting diagnostics.

@@ -32,9 +32,12 @@ The kernel-harness numbers in the 2026-10-11 section below (fused vs `BatchAtten
 involve the served model and are unaffected. The headline serving comparison was re-run on the
 fixed model (`agent_chat_rated`, chat 24/s + TraceLab codex 0.1/s, one round, no graphs): the
 **unfused** 4-mode schedule beats stock MTP by TTFT -32% and throughput +10%/+13% (mean ITL -13%),
-and the fused kernel loses 11-13% throughput against it. Points 1 and 3 should therefore be argued
-on the 4-mode schedule, not on the fused kernel, until A closes
-(`debug_kernel_server_perf/resume_20261012/postfix_realistic_ab_20261012.md`).
+and the co-compiled fused kernel lost 11-13% throughput against it. After moving FA2 out of the
+co-compiled kernel (PDL co-launch, classes 64/32/16, auto FA2 chunk) the fused 4-mode arm beats
+stock MTP by TTFT -55% / -58% and throughput +18% / +21% (chat / codex), mean ITL -19% / -11%, and
+the unfused 4-mode arm by +7% / +6% throughput (2 rounds, no CUDA graphs)
+(`debug_kernel_server_perf/resume_20261012/colaunch_20261012.md`). The EDF step model (point 3)
+must be re-fitted on this kernel before its accuracy claim is tested.
 
 ---
 

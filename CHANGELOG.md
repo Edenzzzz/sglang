@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.18.1 — Fused co-launch beats stock MTP on TTFT and throughput in realistic serving (2026-10-12)
+
+Class set 64/32/16 plus `FUSED_FA2_KV_CHUNK=auto` (FA2 chunk sized to the CTA slots FA2 can
+occupy; the first build left `len_kv_chunk` at "no split", failed every split row and the q4 gate,
+and its serving run was voided). Fixed build: 10 kernel fixtures exact, beats `BatchAttention` on
+every mixed verify fixture; q4 serving-output gate PASS.
+
+Realistic A/B (chat 24/s + TraceLab codex 0.1/s, EAGLE3 q4, no graphs, 2 fused rounds, 0
+fallbacks): fused vs stock MTP **TTFT -55% / -58%, throughput +18% / +21%, mean ITL -19% / -11%**
+(chat / codex); vs the unfused 4-mode arm throughput +7% / +6%, TTFT -33% / -37%. Mean ITL misses
+the 30% bar (P99 tail ~111 ms unchanged) and no arm runs CUDA graphs yet.
+Evidence: `tasks/debug_kernel_server_perf/resume_20261012/colaunch_20261012.md`.
+
 ## v1.18.0 — FA2 leaves the co-compiled kernel (PDL co-launch); tile 48 refuted (2026-10-12)
 
 `FLASHINFER_FUSED_COLAUNCH=1` (flashinfer `persistent_fa3_fused.cuh`): the FA3 grid runs alone on

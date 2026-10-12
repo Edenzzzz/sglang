@@ -18957,3 +18957,55 @@ device, `prefill.py:204`, so it cannot carry one). Everything above that line is
 the three verified builders from commits 62-64.
 **Still pod-bound:** writing the two executor calls and verifying them -- the fp32 reference on the
 upstream build, then the combined 4-mode + fused arm. Not done, and that is the gap to the bar.
+
+---
+
+## References — papers the user sent, and what this work takes from each (2026-10-12)
+
+1. **Taming Dynamism on GPUs: Cross-SM Kernel Fusion via SM Cooperation and Just-in-Time
+   Reduction** (PDF supplied by the user).
+   *Borrowed:* (a) fusing heterogeneous, dynamically sized work into one persistent launch
+   whose CTAs pull work from a device-side queue -- our four-task plan with an atomic cluster
+   cursor, and the cross-role backfill in which FA3-role CTAs drain FA2 work once their own is
+   done; (b) **just-in-time reduction** of split-KV partials (last arrival merges) -- implemented,
+   then measured to bound at 0.6% of GPU time and replaced by flashinfer 0.7's scheduled merge
+   (K1a); (c) its task representation, as the template for an optional epilogue task (EAGLE tree
+   build after the reduction, item B).
+   *Not borrowed, by measurement:* co-compiling roles with different register needs into one
+   kernel body. Our FA2 role spilled inside it (168 registers, 4200-byte stack, 21x slower per
+   item), so FA2 now runs as a PDL-co-launched executor at native geometry and backfill is done by
+   the hardware block scheduler (A-fix). The SM pre-assignment itself (FA3 on `sm_split` SMs)
+   remains ours, not the paper's.
+2. **SLOs-Serve: Optimized Serving of Multi-SLO LLMs** -- S. Chen, Z. Jia, S. Khan,
+   A. Krishnamurthy, P. B. Gibbons, [arXiv:2504.08784](https://arxiv.org/abs/2504.08784).
+   *Borrowed (benchmark setting):* application- and stage-specific SLOs instead of one global
+   target; multiple application mixtures (summarization, coding, chat, tool calling, reasoning)
+   crossed with load; capacity measured *under* SLOs (goodput / SLO attainment). This is the
+   source for S1-S3's per-tenant SLOs and mixture x rate sweeps, and for deriving SLO numbers
+   rather than inventing them (`pd_colocation_vs_disagg.md` 5c/5f). Its chunked-prefill planner
+   that co-plans optional speculative decoding is the closest scheduling analogue of our 4-mode
+   step.
+3. **Towards High-Goodput LLM Serving with Prefill-decode Multiplexing (MuxWise)** --
+   Y. Chen, W. Cui et al., [arXiv:2504.14489](https://arxiv.org/abs/2504.14489) (cited to us as
+   the ASPLOS PD-multiplexing paper).
+   *Borrowed:* the **direct baseline** for colocation -- intra-GPU prefill/decode multiplexing
+   with an SLO-aware dispatcher and a contention-tolerant estimator; goodput-under-SLO as the
+   headline metric. Our SM pre-assignment is the kernel-level form of the same intra-GPU split,
+   and its estimator is the comparison point for our EDF step model (goal point 3). Status:
+   baseline not yet run (direct-baselines item).
+4. **ThunderAgent: A Simple, Fast and Program-Aware Agentic Inference System** -- H. Kang et al.,
+   [arXiv:2602.13692](https://arxiv.org/abs/2602.13692).
+   *Borrowed (argument):* **KV-cache thrashing** in agentic serving -- a session's cache is
+   evicted during a tool call and re-prefilled from scratch on return (up to 7.14x end-to-end in
+   their measurement). This is the motivation for PD point 2 (cache-hit-first routing plus
+   best-effort migration leaves replicas where demand is, rather than one thrashing copy) and for
+   evaluating on multi-turn agent sessions instead of independent prompts.
+5. **TraceLab: Characterizing Coding Agent Workloads for LLM Serving** -- K. Zhu, M. Jacob,
+   C. Ma, Y. Pan, S. Wang, A. Krishnamurthy, B. Kasikci,
+   [arXiv:2606.30560](https://arxiv.org/abs/2606.30560); dataset `syfi_coding_trace.jsonl.gz`
+   ([github.com/uw-syfi/TraceLab](https://github.com/uw-syfi/TraceLab)).
+   *Borrowed (workload):* the coding-agent tenant in every mixed serving run -- causal replay of
+   real Claude Code sessions (prefix / append / output tokens per round), plus the paper's
+   characterization used to set the mixtures: long contexts with short outputs, high but
+   imperfect prefix hit rates, sessions reaching a few hundred K tokens (S2's 32-64K, 64-128K,
+   >128K ranges). The pod uses a field-equivalent extract of the release (checked locally).

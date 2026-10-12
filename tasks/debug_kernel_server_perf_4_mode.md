@@ -84,6 +84,28 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     +10..+38%, TPOT -11..-31%, TTFT -8..-30%. At chat 24/s every chat metric clears the bar
     (+49% / -46% / -41%) and the agent reaches -30% TTFT / -31% TPOT. Fused beats unfused 4-mode
     at every rate.
+  - [x] **Where the speedup comes from, per context range (2026-10-13):** each stock->fused change
+    split into scheduling (stock MTP -> unfused 4-mode) and kernel (unfused 4-mode -> fused), from
+    `eval_s12_v2_20261012.csv`. Acceptance is not a source: tokens/verify is within 1-2% across the
+    three arms everywhere (chat ~2.03-2.08, agent ~3.1-3.7; stock marginally highest).
+    | range | scheduling share | kernel share |
+    |---|---|---|
+    | mix32 (32-64K) | carries the onset: at 12/s chat TTFT -46% / TPOT -34% all scheduling; at 20-24/s TTFT -25..-32% | appears from 16/s: TTFT -29..-45%, TPOT -9..-15%, throughput +8..+11% at 20-24/s |
+    | mix64 (64-128K) | steady: TTFT -18..-24%, TPOT -14..-20%, throughput +8..+20% | grows with load: TTFT -9..-21%, TPOT -5..-17%, throughput +3..+19% (chat 24/s: +19% kernel vs +13% scheduling) |
+    | mix128 (128-256K) | small and for the agent zero or negative (agent TTFT +15..-9%) | dominant: chat TTFT -27..-33%, throughput +17..+25% at 8-24/s; almost all agent TTFT/throughput gain |
+    Mechanism. *Scheduling:* stock sglang keeps mixed chunk on for EAGLE3 but degrades running
+    requests to 1-token decodes in a mixed step (no speculation), or runs verify in separate steps;
+    the 4-mode step keeps them speculating beside the prefill chunk. That pays most where steps
+    are short and many requests are decoding (mix32 onset) and saturates once the prefill chunk
+    dominates step time. *Kernel:* unfused 4-mode runs the whole merged batch through one FA2
+    BatchPrefill, so long-context prefill rows run on the FA2 path; the fused kernel sends them to
+    FA3 (WGMMA) on 112 SMs and co-launches FA2 for the verify rows. Attention's share of the step
+    grows with context (B1 at mix32: 75-80% of kernel time; fused attention 2739 ms vs unfused 3574
+    ms over 60 profiled steps, -23%), so the kernel's share of the gain grows with context: second
+    to scheduling at 32-64K, comparable at 64-128K, dominant at 128-256K. Below capacity
+    (mix32/mix64 at 4-8/s) neither applies and the arms are equal or 4-mode is slightly worse on
+    TPOT (a verify riding with a chunk). Per-range kernel attribution at 128K+ is being profiled
+    (`b1_tail_profile_mix128_20261013.sh`).
   - [x] **Figures (2026-10-13):** [`eval_s12_v2_20261012.png`](debug_kernel_server_perf/resume_20261012/eval_s12_v2_20261012.png) -- per
     mixture and tenant: throughput vs median tok/s/user, SLO attainment, mean TTFT and TPOT vs chat
     rate (data [`eval_s12_v2_20261012.csv`](debug_kernel_server_perf/resume_20261012/eval_s12_v2_20261012.csv), `drivers/serving/plot_eval.py`).
@@ -155,8 +177,10 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     from the repo's `sgl-kernel/`, which needs a CUDA 12 nvcc (pod: 13.1). Installing NVIDIA's
     CUDA 12.4 toolkit runfile was denied by the permission policy; needs the user's go-ahead (or
     a CUDA 12 toolchain provided another way).
-  - [ ] **Dynamo conditional disaggregation:** separate prefill/decode workers (vLLM / TRT-LLM),
-    so its home is the multi-node H20 stage with PD points 1-6.
+  - [ ] **Dynamo conditional disaggregation -- optional (user, 2026-10-13):** not mandatory when it
+    does not support sglang. Dynamo has an sglang worker, but conditional disaggregation (local
+    prefill on the decode worker) is documented for vLLM / TRT-LLM only, so sglang PD is the
+    disaggregation baseline; Dynamo stays a discussion point (PD doc point 6).
 
 ### [~] Supporting gates
 

@@ -201,6 +201,17 @@ gate and reports fallbacks and composition counters.
   58.1 ms): a verify that rides with a prefill chunk waits for the chunk. The saturated-point
   gains are capacity gains; they appear only as load approaches capacity, which is what the
   Pareto and SLO-vs-rate curves will show.
+  **mix32, chat 4 / 8 / 12 per s (stock / unfused 4-mode / fused 4-mode), all 0 fallbacks:**
+
+  | chat rate | chat SLO attain | chat mean TTFT (ms) | chat median tok/s/user | codex median tok/s/user |
+  |---|---|---|---|---|
+  | 4 | 0.969 / 0.968 / 0.968 | 149 / 167 / 162 | 217 / 218 / 212 | 157 / 160 / 155 |
+  | 8 | 0.950 / 0.954 / 0.954 | 239 / 232 / 251 | 170 / 175 / 163 | 122 / 129 / 118 |
+  | 12 | **0.797 / 0.891 / 0.899** | **859 / 460 / 449** | 62 / 113 / 96 | 66 / 89 / 87 |
+
+  Stock starts to saturate at 12/s; both 4-mode arms then keep ~10 points more chat SLO
+  attainment and halve TTFT. Between the two 4-mode arms the fused kernel is level at this
+  load (better TTFT/SLO, worse per-user tok/s).
   TraceLab on the pod is a 1.35 MB extract (Claude rows with context >= 32K and output >= 512,
   original session ids, timing reduced to first/last event), checked locally to give identical
   loader input on 32-49K, 32-64K, 64-128K and 128-256K.

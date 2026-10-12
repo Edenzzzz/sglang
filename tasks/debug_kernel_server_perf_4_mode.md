@@ -188,9 +188,12 @@ gate and reports fallbacks and composition counters.
   `standalone_env` scenarios and `YARN_FACTOR`/`CONTEXT_LEN` (factor 8 -> 262144); defaults are
   byte-identical to earlier runs (`run_mixed_workloads_matrix.patch`). Driver
   `eval_matrix_s12_20261012.sh`: mixtures mix32 (32-64K), mix64 (64-128K), mix128 (128-256K,
-  YaRN 8) x chat rate {4,8,12,16,20,24} (codex rate scaled, 0.1/s at 24) x 3 arms, graphs on,
-  4-mode arms with the measured mixed-step barrier. **Started 2026-10-12 19:11** on
-  `095f01a3e1585eea` (`/dev/shm/w/eval_s12_20261012/`, log `eval_matrix_s12_20261012.log`).
+  YaRN 8) x chat rate {4,8,12,16,20,24} x 3 arms, codex fixed at 0.1 sessions/s (so the
+  chat:codex ratio rises with rate; chat sized to last as long as the codex stream), graphs on,
+  4-mode arms with the measured mixed-step barrier. Scaling codex with the chat rate was tried
+  first and abandoned: at chat 4/s the codex stream alone took ~36 min per arm. **Running since
+  2026-10-12 19:22** on `095f01a3e1585eea` (`/dev/shm/w/eval_s12_v2_20261012/`, log
+  `eval_matrix_s12_v2_20261012.log`).
   TraceLab on the pod is a 1.35 MB extract (Claude rows with context >= 32K and output >= 512,
   original session ids, timing reduced to first/last event), checked locally to give identical
   loader input on 32-49K, 32-64K, 64-128K and 128-256K.

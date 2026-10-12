@@ -2,7 +2,7 @@
 # S1 x S2: request-rate sweep over three context-range mixtures (short chat + TraceLab agent),
 # three arms, CUDA graphs on. Output layout <root>/<mixture>_r<chat rate>/<ARM>_<stream>.json is
 # what drivers/serving/eval_curves.py turns into the throughput-vs-tok/s/user Pareto curve and
-# SLO-attainment-vs-rate curves. The codex session rate scales with the chat rate (0.1/s at 24).
+# SLO-attainment-vs-rate curves. Codex fixed at 0.1 sessions/s; the chat rate is swept.
 # Waits for the A3 v2 map and refuses to run unless the graphs-on output gate passed.
 set -uo pipefail
 W=/dev/shm/w
@@ -20,9 +20,9 @@ export FUSED_FA2_KV_CHUNK=auto SGLANG_FUSED_SM_FA3=112
 export SGLANG_DEBUG_STEP_SYNC=mixed
 unset FLASHINFER_FUSED_PLAN_DEBUG SGLANG_FUSED_SPLIT_VERIFY SGLANG_FUSED_VERIFY_EPILOGUE DISABLE_CUDA_GRAPH
 export MODEL=$W/qwen7b TRACE_PATH=$W/workloads/tracelab/syfi_coding_trace_all.jsonl.gz
-export CHAT_DATASET=$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json CHAT_SECONDS=150
+export CHAT_DATASET=$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json
 [ -s $TRACE_PATH ] || { echo "missing $TRACE_PATH"; exit 1; }
-ROOT=$W/eval_s12_20261012; mkdir -p $ROOT
+ROOT=$W/eval_s12_v2_20261012; mkdir -p $ROOT
 cd $W/validated_upstream/tasks/realistic_workload_analysis
 # mixture: min_ctx max_ctx codex_n codex_groups yarn context_len
 MIXES=("mix32 32768 65536 36 8 4.0 131072" "mix64 65536 131072 24 8 4.0 131072" "mix128 131072 262144 16 4 8.0 262144")
@@ -30,7 +30,9 @@ for mix in "${MIXES[@]}"; do
   set -- $mix; name=$1
   export CODEX_MIN_CTX=$2 CODEX_MAX_CTX=$3 CODEX_N=$4 CODEX_GROUPS=$5 YARN_FACTOR=$6 CONTEXT_LEN=$7
   for rate in 4 8 12 16 20 24; do
-    export CHAT_RATE=$rate CODEX_RATE=$(python3 -c "print(round($rate*0.1/24, 4))")
+    # Codex stays at its recorded 0.1 sessions/s; scaling it with the chat rate made the codex
+    # stream last ~36 min per arm at chat 4/s. Chat is sized to last as long as the codex stream.
+    export CHAT_RATE=$rate CODEX_RATE=0.1 CHAT_SECONDS=$((CODEX_N * 10))
     OUT=$ROOT/${name}_r$rate; mkdir -p $OUT
     for arm in MTP_LPT MTPMIX_LPT MTPMIXFUSED; do
       [ -f $OUT/${arm}_validation.json ] && continue

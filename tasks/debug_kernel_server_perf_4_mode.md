@@ -105,16 +105,17 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
   sessions; `tracelab_full_env` at YaRN x32 (1M tokens), agent tenant alone, rate = session starts/s.
   - [x] **v1 aborted (2026-10-13 03:16):** 120 sessions x 2 rounds at 0.2-0.8/s queued 16.8M prompt
     tokens at ~2K tok/s -- one 1M-token session alone is ~400 s of prefill; could not finish.
-  - [ ] **v2 (started 03:24):** 24 sessions x 10 rounds, selection seed 187 (new
-    `--tracelab-selection-seed`, [patch](debug_kernel_server_perf/resume_20261012/tracelab_selection_seed.patch));
-    the loader itself replays context p10/50/90/99 40K/127K/235K/869K vs the release's
-    38K/124K/256K/822K. Measured prefill at 600K+ context is ~1.1K tok/s, and the replay carries
-    5.8M uncached prompt tokens per arm (first-window prefixes 4.08M -- two sessions hold 863K and
-    750K -- plus 1.74M of appends), so an arm takes ~65 min and even 0.01 sessions/s is over
-    capacity. Re-planned: the stock arm at 0.01/s finishes on `up` (untouched by the race fix);
-    the sweep then pauses for the race-fix validation and resumes as `tracelab_full_v2b_20261013.sh`
-    at 0.01 and 0.05/s, its 4-mode arms on the tree the verdict selects (`tree_env.sh`, also used
-    by A3b and S3). Queue: `queue_chain2_20261013.sh`.
+  - [x] **v2 aborted (2026-10-13 04:54):** 24 sessions x 10 rounds, seed 187 (loader-checked p10/50/90/99
+    40K/127K/235K/869K). The stock arm hit its 90-min timeout having prefilled **14.4M** tokens for a
+    replay with 5.8M uncached tokens: the KV pool (1,823,088 tokens) cannot hold 24 sessions reaching
+    869K, so prefixes were evicted between rounds (usage 0.99, no retractions) and rounds re-prefilled.
+    No data. Lesson: a single-GPU replay must keep the sessions' combined peak context in the pool.
+  - [ ] **v3 (queued after the race-fix check and B1):** 8 sessions x 30 rounds, seed 1014 --
+    combined peak 1.37M tokens; loader-checked context p10/50/90/99 38K/123K/223K/390K vs the
+    release's 38K/124K/256K/822K. The >400K tail cannot be co-resident with other sessions on one GPU
+    (excluded by KV capacity, not by a length filter) and belongs to the multi-GPU stage. YaRN x16
+    (524288), session rates 0.005 and 0.02/s, three arms, 4-mode arms on the verdict's tree
+    (`tracelab_full_v2b_20261013.sh`, root `tracelab_full_v3_20261013`).
 
 - [ ] **S3, standalone workloads:** ShareGPT (4-32/s), GSM8K, MATH-500, HumanEval, Code-Feedback
   (8-32/s), Mooncake conversation / tool-agent (recorded timestamps at 0.5-2x speed), LongBench v2
@@ -175,9 +176,12 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
   ([patch](debug_kernel_server_perf/resume_20261012/racefix_scheduler.patch), tree `up_racefix`).
   **Retracted:** "overlap off does not cure" -- that arm died at its FIRST mixed step on
   `assert next_token_ids.is_cpu` (the synchronous path had no 4-mode handoff at all; now added),
-  so it never tested the race. Validation queued (`graphs_racefix_20261013.sh`): null case on the
-  unfixed tree without the barrier, output gate, both 4-mode arms twice without the barrier, and
-  the synchronous path. Until it passes, measurements keep the mixed-step barrier. The latent race
+  so it never tested the race. Validation (`graphs_racefix_20261013.sh`), 2026-10-13:
+  - [x] **null case:** unfixed tree, no barrier, MTPMIX_LPT chat 24/s + agent 0.1/s -> crashed
+    (`Assertion -sizes[i] <= index && index < sizes[i]`, 1 traceback), so the race reproduces.
+  - [x] **output gate, fixed tree, graphs on, no barrier:** PASS (long prompts agree on >= 96
+    tokens with stock `MTP_LPT_Q4G`).
+  - [ ] fixed tree, no barrier: MTPMIX_LPT and MTPMIXFUSED twice each, then the synchronous path. Until it passes, measurements keep the mixed-step barrier. The latent race
   of the same class -- `_fs_upload` rewrote its reused pinned host buffer while the previous step's
   non-blocking copy out of it could still be queued -- now waits on a per-buffer copy event first
   ([patch](debug_kernel_server_perf/resume_20261012/racefix_fs_upload.patch), same tree and validation).

@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.18.3 — Evaluation matrix results, full-length TraceLab, PD points 5-6, doc cleanup (2026-10-13)
+
+- **S1 x S2 sweep** (chat 4-24/s + TraceLab agent 0.1/s, graphs on, 0 fallbacks/tracebacks):
+  arms equal below capacity; under load fused 4-mode vs stock MTP gives TTFT -31..-79%,
+  throughput +11..+36%, TPOT -19..-30% (mix32 and mix64); 4-mode P99 ITL is worse at light load.
+  mix128 running.
+- **Full-length TraceLab:** release statistics (context p50 ~124K, a quarter of Claude rounds
+  >= 256K, outputs ~200 tokens); loader replays both providers, first rounds and round-weighted
+  sessions (replayed median 120-126K); YaRN x32 driver queued.
+- **PD point 5:** disagg re-ships session KV every agent round (p50 285 ms per round for 7B at
+  200 Gb/s; 3.1 PB vs 107 TB append-only over the release); Dynamo's conditional disaggregation
+  avoids most of it, stated plainly. **PD point 6:** Dynamo's router, conditional disaggregation,
+  planner and KVBM compared with ours point by point; hyperlinked references.
+- **Docs:** main checklist cut from 19,147 to 163 lines (full log archived verbatim); reference
+  list with a note per paper, semi-PD and Dynamo added.
+
 ## v1.18.2 — A3 map on the fixed kernel, A1 closed, B backfill measured, graphs-on serving (2026-10-12)
 
 - **Pod re-forked** to `095f01a3e1585eea` (trial expired); serving tree rebuilt from the fork's

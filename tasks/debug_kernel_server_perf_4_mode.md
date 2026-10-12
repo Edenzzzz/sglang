@@ -212,6 +212,20 @@ gate and reports fallbacks and composition counters.
   Stock starts to saturate at 12/s; both 4-mode arms then keep ~10 points more chat SLO
   attainment and halve TTFT. Between the two 4-mode arms the fused kernel is level at this
   load (better TTFT/SLO, worse per-user tok/s).
+  **mix32 complete (chat 16 / 20 / 24 per s; stock / unfused 4-mode / fused 4-mode; 0 fallbacks,
+  0 tracebacks in all 18 runs):**
+
+  | chat rate | chat out tok/s | chat mean TTFT (s) | chat TPOT (ms) | chat SLO | codex out tok/s | codex mean TTFT (s) | codex TPOT (ms) | codex SLO |
+  |---|---|---|---|---|---|---|---|---|
+  | 16 | 1024 / 1134 / **1136** | 24.7 / 9.6 / **5.3** | 39.0 / 33.5 / **28.6** | 0.12 / 0.17 / **0.34** | 162 / 186 / **202** | 14.5 / 7.6 / **5.4** | 21.9 / 17.7 / **16.1** | 0.47 / 0.56 / **0.83** |
+  | 20 | 1131 / 1245 / **1347** | 48.5 / 32.8 / **23.0** | 37.3 / 32.8 / **29.9** | 0.04 / 0.08 / **0.11** | 143 / 161 / **175** | 32.2 / 21.5 / **15.0** | 24.3 / 18.5 / **17.7** | 0.28 / 0.28 / **0.36** |
+  | 24 | 1226 / 1339 / **1481** | 63.5 / 47.9 / **33.9** | 34.8 / 31.2 / **28.0** | 0.01 / 0.03 / **0.08** | 130 / 145 / **160** | 43.7 / 31.9 / **22.7** | 23.8 / 17.7 / **17.2** | 0.17 / 0.25 / **0.28** |
+
+  Fused vs stock at 16-24/s: **TTFT -47% to -79%, throughput +11% to +25%, TPOT -27/-28%
+  (codex) and -19% to -27% (chat)**. The fused kernel now clearly beats the unfused 4-mode arm
+  from 16/s up (chat TTFT 5.3 vs 9.6 s, codex SLO 0.83 vs 0.56 at 16/s; +7-11% throughput at
+  20-24/s). TTFT and throughput clear the bar wherever the system is loaded; TPOT clears it only
+  at 16/s and stays just under -30% for chat above that.
   TraceLab on the pod is a 1.35 MB extract (Claude rows with context >= 32K and output >= 512,
   original session ids, timing reduced to first/last event), checked locally to give identical
   loader input on 32-49K, 32-64K, 64-128K and 128-256K.

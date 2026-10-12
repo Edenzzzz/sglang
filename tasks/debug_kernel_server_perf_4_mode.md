@@ -42,14 +42,44 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     `a3b_dispatch_rule.patch`); gated serving A/B vs the default rule, interleaved twice for a
     noise floor, `a3b_serving_ab_20261013.sh` -- queued.
 
+- [ ] **A4, FA2 verify-row bandwidth (2026-10-13):** attention is 75-80% of serving kernel time,
+  dominated by memory-bound verify rows. At serving verify shapes (q=4, GQA 28/4, all arms exact,
+  `fa2_verify_bw_20261013.sh`), KV bytes / time per layer:
+  | fixture | fused co-launch | unfused: FA3 + stock BatchPrefill FA2 | BatchAttention |
+  |---|---|---|---|
+  | 46 rows x 16K | 0.850 ms, 1.82 TB/s (38%) | **0.509 ms, 3.03 TB/s (63%)** | 0.831 ms |
+  | 46 rows x 48K | 2.523 ms, 1.84 TB/s (38%) | **1.511 ms, 3.06 TB/s (64%)** | 2.446 ms |
+  | 16 rows x 128K | 1.732 ms, 2.48 TB/s (52%) | **1.083 ms, 3.97 TB/s (83%)** | 1.985 ms |
+  | 512-chunk + 46 x 48K | 2.567 ms | **1.532 ms** | 2.294 ms |
+  The co-launched FA2 executor inherits the persistent BatchAttention design and reaches 38-52%
+  of HBM; stock non-persistent BatchPrefill reaches 63-83%. On verify rows the fused path is
+  ~1.65x slower than it need be -- the A-fix colaunch doc's "1.2-2x behind the two-launch
+  control" is this. Serving's `MTPMIX_SPLIT` arm is exactly that two-launch split (FA3 via
+  `flash_attn_with_kvcache` + `BatchPrefillWithPagedKVCacheWrapper` fa2). Next: gated serving A/B
+  split vs fused at mix32 / mix128 x 16 / 24/s (`split_vs_fused_20261013.sh`, queued; the gate now
+  requires split calls > 0, `split_gate_counter.patch`); then a PDL split (stock FA2 launched as
+  the FA3 grid's dependent on the SMs FA3 leaves) and an FA2 executor whose KV pipeline matches
+  BatchPrefill's.
+
 ### [~] B. Fuse draft/verify epilogue ops
 
-- [~] **B1, small-op tail:** greedy EAGLE verify has an opt-in fused argmax/acceptance/length
-  epilogue (5.5-42 us vs 14-57 us at batch 1-48, i.e. <0.1% of a ~14 ms step); sampling,
-  gathers, cache writes and tree build remain separate. Ceiling first, as for B3: profile 60
-  serving steps per arm (mix32 16/s) and bucket GPU time -- the sampling/verify, index/copy and
-  elementwise share bounds any further fusion. `b1_tail_profile_20261013.sh`,
-  `drivers/serving/parse_kernel_tail.py` -- queued after the race-fix verdict.
+- [x] **B1, fusion headroom (2026-10-13, measured):** 60 serving steps per arm profiled (torch
+  profiler, GPU activity), mix32 chat 16/s + agent 0.1/s, race-fixed tree, no barrier
+  (`b1_tail_profile_20261013.sh`, `drivers/serving/parse_kernel_tail.py`).
+  | arm | span / GPU busy | attention | GEMM | small ops (index+elementwise+sampling+other) |
+  |---|---|---|---|---|
+  | fused 4-mode | 4147 ms / 87.2% | 2739 ms (74.9%) | 809 ms (22.1%) | 2.9% (29.6K launches) |
+  | unfused 4-mode | 4895 ms / 91.1% | 3574 ms (80.1%) | 783 ms (17.6%) | 2.4% (27.6K launches) |
+  | stock MTP | 3635 ms / 90.8% | 2500 ms (75.7%) | 718 ms (21.7%) | 2.7% (24.4K launches) |
+  **Epilogue fusion is bounded at ~3% of kernel time** (+ the 9-13% GPU-idle share, part of it
+  host-side), far below the bar; B1's further fusion is not worth building. Kineto's
+  "est. achieved occupancy" reads 0.4-1% for attention/GEMM (persistent / graph-launched
+  kernels) and is not usable -- real occupancy needs Nsight Compute. packed_qo histogram (fused,
+  5202 plans): 82,833 verify rows with packed_qo <= 32 carry 4.4% of useful FLOPs at 56.8%
+  in-tile waste; 11,141 rows >= 512 carry 95.6% at 1.0%; overall waste 6.3%. Verify rows are
+  memory-bound, so their FLOP waste is not the cost -- their KV bandwidth is (A4). Unfused vs fused
+  over the same 60 steps: attention 3574 vs 2739 ms (-23%), span -15%. Ranges mix64/mix128:
+  `b1_tail_profile_mix128_20261013.sh`, running.
 - [x] **B2, cross-role backfill (2026-10-12):** co-launch hardware backfill worth up to 2.9x when FA2
   work exceeds the slots beside FA3, nothing on small mixes; in-kernel `tma_store_wait` backfill is
   correct and worth 1.4-5.5x over none, but that whole path is 2-6x slower. Co-launch ships.

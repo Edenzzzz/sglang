@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.18.7 — B1 headroom measured; verify-row bandwidth is the kernel lever (2026-10-13)
+
+- B1: small ops are ~3% of serving kernel time in every arm (attention 75-80%, GEMM 18-22%);
+  epilogue fusion cannot approach the bar. Kineto occupancy estimates are unusable.
+- A4: at serving verify shapes the co-launched persistent FA2 executor reaches 38-52% of HBM
+  bandwidth, stock BatchPrefill FA2 63-83%; the two-launch split beats the fused co-launch on
+  every fixture (1.53 vs 2.57 ms on chunk+verify). Split-vs-fused serving A/B queued.
+- Per-context-range attribution of the S1 x S2 gains (scheduling vs kernel).
+- Dynamo comparison made optional (conditional disaggregation lacks an sglang backend).
+
 ## v1.18.6 — Graphs-on 4-mode crash fix validated; full-length replay fits the KV pool (2026-10-13)
 
 - Race fix PASS: unfixed tree without the barrier crashes (index assert); fixed tree without the

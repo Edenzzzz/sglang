@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.18.5 — Graphs-on crash root cause; A3 serving loss explained; S3/S4 drivers (2026-10-13)
+
+- Graphs-on 4-mode crash: the verify half's `future_map.publish(new_seq_lens)` and relay stash ran
+  on the schedule stream, unordered against the forward stream producing those tensors (stale
+  seq_lens -> out-of-range indices next step). Fixed by issuing both on the forward stream; the
+  synchronous (overlap-off) path gained the 4-mode handoff it never had, which retracts the
+  "overlap off does not cure" bisect arm. `_fs_upload` waits on the previous copy's event before
+  rewriting its pinned buffer. Validation (null case, gate, serving without barrier) queued.
+- A3: the fitted work floor vetoed chat prefill chunks, making 65% of mixed steps one-sided (7%
+  under the default rule). A3b scopes the floor to the fitted regime; gated A/B queued.
+- Relative SLOs in `eval_curves.py` from unloaded single-tenant runs (the lowest swept rate is
+  already loaded: mix128 chat median TTFT 38 s); `STREAMS` filter in the workload driver.
+- S3 standalone sweep and S4 EDF step-model drivers (STEPTRACE re-ported) queued.
+- Pod: a pushed tarball replaced the `validated_upstream -> up` symlink with a directory for six
+  minutes; restored before any server launched from it.
+
 ## v1.18.4 — B3 multicast ceiling on the current kernel; full-length TraceLab v2 (2026-10-13)
 
 - B3: skipping every FA3 K/V global load (`FLASHINFER_FA3_SKIP_KV_LOAD`) saves 4.9-6.6% on mixed

@@ -18,10 +18,11 @@ export SGLANG_FUSED_FA2_TILES=64,32,16 FUSED_FA2_FINE_TAIL=1 FUSED_CONST_PERS_PA
 export FUSED_WORK_BUDGET_SPLIT=1 FLASHINFER_FUSED_BACKFILL=1 FLASHINFER_FUSED_COLAUNCH=1
 export FUSED_FA2_KV_CHUNK=auto SGLANG_FUSED_SM_FA3=112 SGLANG_DEBUG_STEP_SYNC=mixed
 unset FLASHINFER_FUSED_PLAN_DEBUG SGLANG_FUSED_SPLIT_VERIFY SGLANG_FUSED_VERIFY_EPILOGUE DISABLE_CUDA_GRAPH
+source $W/tree_env.sh
 # (1) output gate, graphs on, barrier on, A3b rule
 OUT=$W/q4_gate_a3b_20261013; mkdir -p $OUT
 cp $W/q4_gate_graphs_20261012/MTP_LPT_Q4G.json $OUT/
-DRIVER=$W/validated_upstream/tasks/fused_specdec_workload/drivers/srv_correctness.py
+DRIVER=$W/$TREE/tasks/fused_specdec_workload/drivers/srv_correctness.py
 ( export CORRECTNESS_SYNTHETIC=0 CORRECTNESS_DATASET=$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json
   export BENCH_CHUNK=512 CORRECTNESS_DECODE_TOKENS=1200 SGLANG_FUSED_DECODE_GUARD=0 MTP_DRAFT_TOKENS=4 MTP_SPEC_STEPS=3
   SGLANG_FUSED_DISPATCH=a3 $W/venv/bin/python -u "$DRIVER" MTPMIXFUSED_A3B_Q4G "$OUT" 2>&1 | tail -2
@@ -31,7 +32,7 @@ gate=$?; echo "A3B_GATE_DONE status=$gate"; [ $gate = 0 ] || exit 1
 export MODEL=$W/qwen7b TRACE_PATH=$W/workloads/tracelab/syfi_coding_trace.jsonl.gz
 export CHAT_DATASET=$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json CHAT_RATE=24 CODEX_RATE=0.1
 OUT=$W/a3b_serving_ab_20261013; mkdir -p $OUT
-cd $W/validated_upstream/tasks/realistic_workload_analysis
+cd $W/$TREE/tasks/realistic_workload_analysis
 for arm in DEFAULT_1 A3B_1 DEFAULT_2 A3B_2; do
   extra=""; [ ${arm%_*} = A3B ] && extra="SGLANG_FUSED_DISPATCH=a3"
   mkdir -p $OUT/$arm

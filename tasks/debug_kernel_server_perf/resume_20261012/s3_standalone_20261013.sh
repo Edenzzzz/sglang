@@ -20,11 +20,12 @@ export FUSED_FA2_KV_CHUNK=auto SGLANG_FUSED_SM_FA3=112
 # a device sync after mixed steps only. No effect on stock MTP, which has no mixed steps.
 export SGLANG_DEBUG_STEP_SYNC=mixed
 unset FLASHINFER_FUSED_PLAN_DEBUG SGLANG_FUSED_SPLIT_VERIFY SGLANG_FUSED_VERIFY_EPILOGUE DISABLE_CUDA_GRAPH
+source $W/tree_env.sh
 export MODEL=$W/qwen7b CHAT_DATASET=$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json
 export YARN_FACTOR=4.0 CONTEXT_LEN=131072 HF_DATASETS_OFFLINE=1
 S=$W/workloads/standalone
 ROOT=$W/s3_standalone_20261013; mkdir -p $ROOT
-cd $W/validated_upstream/tasks/realistic_workload_analysis
+cd $W/$TREE/tasks/realistic_workload_analysis
 # name|STANDALONE|points|seconds-per-point (N = point * seconds, at least 100)
 WORKLOADS=("sharegpt|sharegpt|4 8 16 32|120"
            "gsm8k|sharegpt:$S/gsm8k.json|8 16 32|90"

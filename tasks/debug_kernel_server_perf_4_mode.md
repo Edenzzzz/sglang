@@ -101,11 +101,16 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
   sessions; `tracelab_full_env` at YaRN x32 (1M tokens), agent tenant alone, rate = session starts/s.
   - [x] **v1 aborted (2026-10-13 03:16):** 120 sessions x 2 rounds at 0.2-0.8/s queued 16.8M prompt
     tokens at ~2K tok/s -- one 1M-token session alone is ~400 s of prefill; could not finish.
-  - [ ] **v2 running (started 03:24):** 24 sessions x 10 rounds, selection seed 187 (new
+  - [ ] **v2 (started 03:24):** 24 sessions x 10 rounds, selection seed 187 (new
     `--tracelab-selection-seed`, [patch](debug_kernel_server_perf/resume_20261012/tracelab_selection_seed.patch));
     the loader itself replays context p10/50/90/99 40K/127K/235K/869K vs the release's
-    38K/124K/256K/822K; ~20 GPU-minutes of prefill per arm, so session rates 0.01/0.02/0.05 run
-    under, near and over capacity. `tracelab_full_v2_20261013.sh`.
+    38K/124K/256K/822K. Measured prefill at 600K+ context is ~1.1K tok/s, and the replay carries
+    5.8M uncached prompt tokens per arm (first-window prefixes 4.08M -- two sessions hold 863K and
+    750K -- plus 1.74M of appends), so an arm takes ~65 min and even 0.01 sessions/s is over
+    capacity. Re-planned: the stock arm at 0.01/s finishes on `up` (untouched by the race fix);
+    the sweep then pauses for the race-fix validation and resumes as `tracelab_full_v2b_20261013.sh`
+    at 0.01 and 0.05/s, its 4-mode arms on the tree the verdict selects (`tree_env.sh`, also used
+    by A3b and S3). Queue: `queue_chain2_20261013.sh`.
 
 - [ ] **S3, standalone workloads:** ShareGPT (4-32/s), GSM8K, MATH-500, HumanEval, Code-Feedback
   (8-32/s), Mooncake conversation / tool-agent (recorded timestamps at 0.5-2x speed), LongBench v2

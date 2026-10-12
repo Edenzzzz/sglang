@@ -2,8 +2,9 @@
 
 ## Tasks, in priority order (2026-10-12)
 
-**The two main kernel items remain A and B below.** Dispatch wiring, correctness
-repairs and serving diagnostics are supporting work, not substitutes for either item.
+**The two main kernel items remain A and B below; S is the server/workload evaluation.**
+Dispatch wiring, correctness repairs and serving diagnostics are supporting work, not
+substitutes for any of them.
 The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
 
 ### [~] A. Ultra fine-grained tile dispatcher — 2026-10-12
@@ -57,6 +58,55 @@ The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
   passed bounded reference/null gates with store retirement; multicast and
   cross-model draft/target co-scheduling remain unimplemented/unvalidated.
 
+### [ ] S. Server / workload evaluation — 2026-10-12
+
+**Main items S1-S3 are the serving evaluation the user specified (2026-10-12)**; every earlier
+serving result is one point inside them. Arms in every cell: stock MTP, unfused 4-mode, fused
+4-mode (co-launch, 64/32/16, auto FA2 chunk); CUDA graphs on; every arm passes the serving-output
+gate and reports fallbacks and composition counters.
+
+- [ ] **S1: Request-rate sweeps -> throughput vs per-user tok/s Pareto curve and SLO
+  attainment vs request rate**, from under-capacity to saturation, per arm and per workload.
+  - [~] **First measured point (one saturated rate, no graphs).** No publication-level serving gain yet. Keep verification
+    runs separate from uninstrumented timing; no-graph low-load results do not
+    establish production graph-mode performance or saturated throughput. **All serving
+    timings before 2026-10-12 used the broken RoPE override and must be re-measured.**
+    **Re-measured 2026-10-12 (one round, no graphs, chat 24/s + codex 0.1/s, q4 chain,
+    0 fallbacks in all arms):** the unfused 4-mode schedule beats stock MTP by TTFT -32% (both
+    tenants), throughput +10%/+13%, mean ITL -13%. **The fused kernel gives that back**: vs the
+    unfused 4-mode arm it loses 11-13% throughput and ~30% TTFT (vs stock: TTFT -10/-12%,
+    throughput -2%). The kernel is the bottleneck, which points back at A.
+    q4 output gate PASS on all 4-mode arms; round 2 repeats within 1%; the two-executor split
+    matches the unfused 4-mode arm
+    ([evidence](debug_kernel_server_perf/resume_20261012/postfix_realistic_ab_20261012.md)).
+    **After the A-fix (co-launch + 64/32/16 + auto FA2 chunk), 2026-10-12, 2 rounds, q4 gate PASS,
+    0 fallbacks:** fused vs stock MTP: **TTFT -55% chat / -58% codex, throughput +18% / +21%, mean
+    ITL -19% / -11%** (median chat ITL -34%); fused vs unfused 4-mode: throughput +7% / +6%, TTFT
+    -33% / -37%. TTFT and throughput clear the bar; mean ITL does not, and no arm has CUDA graphs
+    ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md#kernel-gate-of-auto-v2-fixed-and-serving-colaunch_serving_v2_20261012sh)).
+  - [ ] **Graphs-on comparison** (old K6). Fused co-launch, unfused 4-mode and stock MTP with
+    CUDA graphs on: q4 output gate, then the realistic A/B. Running on the re-forked pod
+    (`graphs_on_v2_20261012.sh`; the first attempt died with the pod and is void).
+  - [ ] **EDF step model re-fitted on the fused kernel and compared with the unfused schedule**
+    (goal point 3); it drives the SLO-attainment curve. Old fits used the RoPE-corrupted model.
+- [ ] **S2: Workload mixtures by context range with per-tenant SLOs.** Short chat mixed with
+  agentic tenants at **32-64K, 64-128K and >128K** (real Codex/Claude Code reaches a few hundred K).
+  - [x] 32-49K TraceLab mixture measured (the S1 point above).
+  - [ ] **Per-tenant SLOs** in `run_mixed_workloads.py` (one global `TTFT_SLO_MS`/`ITL_SLO_MS`
+    today) and per-tenant SLO attainment in the report.
+  - [ ] **>128K contexts:** Qwen2.5-7B + YaRN x4 stops at 131072; needs a larger YaRN factor or a
+    longer-context model -- decide and record which.
+  - [ ] **ITL tail:** P99 ITL (~111 ms) sits on steps carrying an 8192-token prefill chunk;
+    prefill chunk size becomes a sweep axis for both stock and fused arms.
+- [ ] **S3: Standard standalone workloads** from the papers and
+  `tasks/realistic_workload_analysis.md`: ShareGPT, math, coding, multi-turn web/tool agents,
+  long context (fork loaders `sharegpt`, `speed-bench`, `mooncake` toolagent/conversation,
+  `agentic-trace`, `longbench_v2`, `custom`), each rate-swept as in S1.
+  - [ ] Dataset preparation on the pod (ShareGPT V3 fetched; the rest pending).
+
+Global scheduling (PD colocation points 1-4, H20 multi-node <=16 GPUs) follows S and is tracked
+in `tasks/pd_colocation_vs_disagg.md`.
+
 ### [~] Supporting gates — 2026-10-12
 
 - [~] **Correctness:** fused attention and bounded no-graph mixed MTP integration
@@ -66,23 +116,6 @@ The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
   regression test; post-fix every stock config matches the reference 4/4 and every fused
   first token is the reference argmax or within one bf16 ulp. The asynchronous draft-side
   indexing failure in graph mode remains open. Neither item A nor B is closed by these passes.
-- [ ] **Performance:** no publication-level serving gain. Keep verification
-  runs separate from uninstrumented timing; no-graph low-load results do not
-  establish production graph-mode performance or saturated throughput. **All serving
-  timings before 2026-10-12 used the broken RoPE override and must be re-measured.**
-  **Re-measured 2026-10-12 (one round, no graphs, chat 24/s + codex 0.1/s, q4 chain,
-  0 fallbacks in all arms):** the unfused 4-mode schedule beats stock MTP by TTFT -32% (both
-  tenants), throughput +10%/+13%, mean ITL -13%. **The fused kernel gives that back**: vs the
-  unfused 4-mode arm it loses 11-13% throughput and ~30% TTFT (vs stock: TTFT -10/-12%,
-  throughput -2%). The kernel is the bottleneck, which points back at A.
-  q4 output gate PASS on all 4-mode arms; round 2 repeats within 1%; the two-executor split
-  matches the unfused 4-mode arm
-  ([evidence](debug_kernel_server_perf/resume_20261012/postfix_realistic_ab_20261012.md)).
-  **After the A-fix (co-launch + 64/32/16 + auto FA2 chunk), 2026-10-12, 2 rounds, q4 gate PASS,
-  0 fallbacks:** fused vs stock MTP: **TTFT -55% chat / -58% codex, throughput +18% / +21%, mean
-  ITL -19% / -11%** (median chat ITL -34%); fused vs unfused 4-mode: throughput +7% / +6%, TTFT
-  -33% / -37%. TTFT and throughput clear the bar; mean ITL does not, and no arm has CUDA graphs
-  ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md#kernel-gate-of-auto-v2-fixed-and-serving-colaunch_serving_v2_20261012sh)).
 - [~] **Pod re-forked (2026-10-12 12:07).** Trial `f096519a4d17aa1c` reached `done` during the
   graphs-on gate (that run is void, no results). Re-forked to **`095f01a3e1585eea`** (trial
   `304094471`, `vibecuda`, one H200). The serving tree is rebuilt from the fork's upstream base
@@ -93,7 +126,7 @@ The >=30% TTFT/ITL and >=10% throughput targets remain unmet.
   bounds the loader reads, so the codex tenant is unchanged. The q4-gate prompts come from
   ShareGPT V3 (HF) instead of `ShareGPT.original.json`, so every gate arm is re-run on the new pod.
 - [x] **Documentation priority restored.** Historical failures, retractions,
-  exact commands and evidence paths remain below; this checklist keeps A/B above
+  exact commands and evidence paths remain below; this checklist keeps A/B and S above
   supporting diagnostics.
 
 ### [x] A2 measured update — 2026-10-12

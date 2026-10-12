@@ -12,3 +12,5 @@ if [ "$null_tb" -gt 0 ] && [ $fixed_ok = 1 ] && [ $gate_ok = 1 ]; then v=PASS
 elif [ "$null_tb" = 0 ]; then v="INCONCLUSIVE null case did not crash"
 else v="FAIL fixed_ok=$fixed_ok gate_ok=$gate_ok"; fi
 echo "$v (null tracebacks=$null_tb)" | tee $W/racefix_verdict
+# B1 (fusion headroom) runs FIRST after the verdict -- before the S2b resume -- on the verdict's tree.
+bash $W/b1_tail_profile_20261013.sh > $W/b1_tail_profile_20261013.log 2>&1

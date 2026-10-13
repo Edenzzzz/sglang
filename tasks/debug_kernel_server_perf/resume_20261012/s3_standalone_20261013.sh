@@ -3,6 +3,8 @@
 # graphs on, 4-mode arms with the mixed-step barrier. Layout <root>/<workload>_r<point>/<ARM>_main.json
 # for drivers/serving/eval_curves.py. Points: request rate (req/s) for ShareGPT-format and LongBench;
 # for Mooncake (recorded timestamps) the point is the speed-up 1/slowdown. Served at YaRN x4, 131072.
+# 2026-10-14: the 4-mode kernel arm is MTPMIX_SPLIT (two-launch FA3 + stock FA2), the measured
+# serving winner over the fused co-launch (split_vs_fused_v2, overlap A/B: overlap off).
 set -uo pipefail
 W=/dev/shm/w
 until grep -q A3B_AB_DONE $W/a3b_serving_ab_20261013.log 2>/dev/null; do
@@ -45,7 +47,7 @@ for wl in "${WORKLOADS[@]}"; do
       export STANDALONE_N=$(python3 -c "print(max(100, int($pt * $secs)))")
     fi
     OUT=$ROOT/${name}_r$pt; mkdir -p $OUT
-    for arm in MTP_LPT MTPMIX_LPT MTPMIXFUSED; do
+    for arm in MTP_LPT MTPMIX_LPT MTPMIX_SPLIT; do
       [ -f $OUT/${arm}_validation.json ] && continue
       echo "START $name r$pt $arm n=$STANDALONE_N $(date +%T)"
       timeout 3600 $W/venv/bin/python -u run_mixed_workloads.py --scenario standalone_env --methods "$arm" --outdir "$OUT" 2>&1 | tail -4

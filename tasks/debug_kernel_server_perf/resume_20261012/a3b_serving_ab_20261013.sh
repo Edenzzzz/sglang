@@ -5,6 +5,7 @@
 # only inside the fitted regime (SGLANG_A3_WORK_MAX_QO=32). Gate first, then default vs A3b
 # interleaved twice (the repeat is the noise floor), chat 24/s + TraceLab agent 0.1/s, graphs on,
 # mixed-step barrier on both arms. Reports one-sided / split plan counts per arm.
+# 2026-10-14: A3b is measured on the serving kernel, the two-launch split (MTPMIX_SPLIT).
 set -uo pipefail
 W=/dev/shm/w
 until grep -q UNLOADED_REF_DONE $W/unloaded_ref_20261013.log 2>/dev/null; do
@@ -26,8 +27,8 @@ DRIVER=$W/$TREE/tasks/fused_specdec_workload/drivers/srv_correctness.py
 ( export CORRECTNESS_SYNTHETIC=0 CORRECTNESS_DATASET=$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json
   export BENCH_CHUNK=512 CORRECTNESS_DECODE_TOKENS=1200 SGLANG_FUSED_DECODE_GUARD=0 MTP_DRAFT_TOKENS=4 MTP_SPEC_STEPS=3
   # The run itself must pass (fallbacks, tracebacks, fused calls > 0), not only the compare.
-  SGLANG_FUSED_DISPATCH=a3 $W/venv/bin/python -u "$DRIVER" MTPMIXFUSED_A3B_Q4G "$OUT" 2>&1 | tail -2; [ ${PIPESTATUS[0]} = 0 ] || exit 3
-  $W/venv/bin/python -u "$DRIVER" --compare "$OUT" MTP_LPT_Q4G MTPMIXFUSED_A3B_Q4G 2>&1 || exit 1 )
+  SGLANG_FUSED_DISPATCH=a3 $W/venv/bin/python -u "$DRIVER" MTPMIX_SPLIT_A3B_Q4G "$OUT" 2>&1 | tail -2; [ ${PIPESTATUS[0]} = 0 ] || exit 3
+  $W/venv/bin/python -u "$DRIVER" --compare "$OUT" MTP_LPT_Q4G MTPMIX_SPLIT_A3B_Q4G 2>&1 || exit 1 )
 gate=$?; echo "A3B_GATE_DONE status=$gate"; [ $gate = 0 ] || exit 1
 # (2) realistic A/B, graphs on
 export MODEL=$W/qwen7b TRACE_PATH=$W/workloads/tracelab/syfi_coding_trace.jsonl.gz
@@ -38,8 +39,8 @@ for arm in DEFAULT_1 A3B_1 DEFAULT_2 A3B_2; do
   extra=""; [ ${arm%_*} = A3B ] && extra="SGLANG_FUSED_DISPATCH=a3"
   mkdir -p $OUT/$arm
   echo "START $arm $(date +%T)"
-  env $extra $W/venv/bin/python -u run_mixed_workloads.py --scenario agent_chat_rated --methods MTPMIXFUSED --outdir "$OUT/$arm" 2>&1 | tail -6
-  L=$OUT/$arm/server_MTPMIXFUSED.log
+  env $extra $W/venv/bin/python -u run_mixed_workloads.py --scenario agent_chat_rated --methods MTPMIX_SPLIT --outdir "$OUT/$arm" 2>&1 | tail -6
+  L=$OUT/$arm/server_MTPMIX_SPLIT.log
   echo "END $arm rc=$? $(date +%T) graphs=$(grep -c 'cuda graph: True' $L) tracebacks=$(grep -c Traceback $L) last_plan=[$(grep -o 'FUSED_SPLIT_PLAN ok [0-9]*: fa3=[0-9]* fa2=[0-9]* (onesided so far [0-9]*)' $L | tail -1)]"
 done
 echo A3B_AB_DONE

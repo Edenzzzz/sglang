@@ -20,6 +20,8 @@
 # 38K/123K/223K/390K vs release 38K/124K/256K/822K. The >400K tail cannot be co-resident with other
 # sessions on one GPU (excluded by capacity, not by a length filter); it needs the multi-GPU stage.
 # Served at YaRN x16 (524288). Rates 0.005 and 0.02 sessions/s.
+# 2026-10-14: the 4-mode kernel arm is MTPMIX_SPLIT (two-launch FA3 + stock FA2), the measured
+# serving winner over the fused co-launch (split_vs_fused_v2, overlap A/B: overlap off).
 set -uo pipefail
 W=/dev/shm/w
 exec 9>"$W/a2_kernel.lock"; flock 9
@@ -41,7 +43,7 @@ cd $W/$TREE/tasks/realistic_workload_analysis
 for rate in 0.005 0.02; do
   export AGENT_RATE=$rate
   OUT=$ROOT/full_r$rate; mkdir -p $OUT
-  for arm in MTP_LPT MTPMIX_LPT MTPMIXFUSED; do
+  for arm in MTP_LPT MTPMIX_LPT MTPMIX_SPLIT; do
     [ -f $OUT/${arm}_validation.json ] && continue
     echo "START full r$rate $arm $(date +%T)"
     timeout 7200 $W/venv/bin/python -u run_mixed_workloads.py --scenario tracelab_full_env --methods "$arm" --outdir "$OUT" 2>&1 | tail -6

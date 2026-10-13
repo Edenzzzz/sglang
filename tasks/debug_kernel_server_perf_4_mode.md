@@ -123,6 +123,18 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     split / overlap m16 / m32 at mix32 and mix128 x 24/s (`split_overlap_20261013.sh`). The queue is
     paused after the full-length replay's stock arm (`stop_v3.sh`) so the replay's and S3's 4-mode
     arms use the winner.
+  - [x] **Overlap A/B: no gain, overlap stays off (2026-10-13 08:36-09:22):** gate PASS on the m16
+    arm (long prompts agree on 52 tokens; 3001/3001 split calls overlapped). All 6 serving arms
+    clean, overlap arms 100% overlapped (e.g. 35,501/35,501 at mix128).
+    | 24/s | chat TTFT split / m16 / m32 | chat TPOT | agent tok/s |
+    |---|---|---|---|
+    | mix32 | 8944 / 8614 / 8675 ms | 20.9 / 20.4 / 20.8 ms | 211 / 215 / 212 |
+    | mix128 | 68130 / 68108 / 68064 ms | 31.2 / 31.4 / 31.3 ms | 80.6 / 80.6 / 80.6 |
+    mix32 differences are inside the +/-1.5-3% noise floor; mix128 within 0.3%. In these steps one
+    role dominates (verify FA2 at mix32, prefill FA3 at mix128), so concurrent execution has
+    little to hide. The serving kernel stays the plain two-launch split.
+    ([csv](debug_kernel_server_perf/resume_20261012/split_overlap_20261013.csv),
+    `split_overlap_20261013.sh`, `split_overlap.patch`)
     Originally planned next (A4): overlap the split's two launches (FA3 on a side stream with `sm_margin`, stock FA2
     on the SMs it leaves) and re-run the S1 x S2 sweep with the split as the 4-mode arm.
   - [x] **Chunk floor rejected (2026-10-13, all exact):** a fixed 4096 floor wrecks small-KV cases

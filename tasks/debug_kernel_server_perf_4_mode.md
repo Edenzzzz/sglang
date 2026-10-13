@@ -117,7 +117,13 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     because long prefill rows (FA3 in both arms) dominate; the split's edge is the verify rows
     (stock FA2 at 63-83% of HBM vs the executor's 38-52%). Data:
     [`split_vs_fused_v2_20261013.csv`](debug_kernel_server_perf/resume_20261012/split_vs_fused_v2_20261013.csv).
-    Next (A4): overlap the split's two launches (FA3 on a side stream with `sm_margin`, stock FA2
+    **Overlap A/B queued (2026-10-13 08:1x):** `SGLANG_SPLIT_OVERLAP=1` runs FA3 on a side stream
+    holding all but `SGLANG_FUSED_SM_MARGIN` SMs while stock FA2 runs on the main stream
+    (`split_overlap.patch`; logged as `overlapped=` in FUSED_SPLIT_CALLS). Gate on the m16 arm, then
+    split / overlap m16 / m32 at mix32 and mix128 x 24/s (`split_overlap_20261013.sh`). The queue is
+    paused after the full-length replay's stock arm (`stop_v3.sh`) so the replay's and S3's 4-mode
+    arms use the winner.
+    Originally planned next (A4): overlap the split's two launches (FA3 on a side stream with `sm_margin`, stock FA2
     on the SMs it leaves) and re-run the S1 x S2 sweep with the split as the 4-mode arm.
   - [x] **Chunk floor rejected (2026-10-13, all exact):** a fixed 4096 floor wrecks small-KV cases
     (1 row x 16K: auto 0.028 ms vs 4096 0.099 ms; 16 x 4K q8: 0.094 vs 0.163 ms) while helping

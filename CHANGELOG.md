@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.18.8 — Serving kernel switches to the two-launch FA3 + stock-FA2 split (2026-10-13)
+
+- Split dispatch fix: the two-launch split was planned but never run in serving (ragged path);
+  ragged is now off whenever a two-sided split plan exists. Gate wrappers fail on the run's own
+  status (the earlier split "PASS" was a swallowed failure; recorded in place).
+- Split vs fused co-launch vs stock MTP at mix32/mix128 x chat 16/24/s, race-fixed tree, no
+  barrier: the split wins every point; vs stock it clears >=30% TTFT/TPOT and >=10% throughput at
+  3 of 4 points for both tenants (mix128 24/s chat +56% tput, -55% TTFT, -45% TPOT).
+- FA2 executor tuning: KV chunk 4096 best (2.52 -> 1.84 ms) but still ~20% behind stock FA2; a
+  fixed chunk floor is rejected (small-KV regressions).
+
 ## v1.18.7 — B1 headroom measured; verify-row bandwidth is the kernel lever (2026-10-13)
 
 - B1: small ops are ~3% of serving kernel time in every arm (attention 75-80%, GEMM 18-22%);

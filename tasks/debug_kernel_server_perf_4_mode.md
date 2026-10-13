@@ -6,7 +6,10 @@ on real serving workloads, then the EDF model and the PD-colocation argument
 chat + TraceLab workloads. Single H200 trial `095f01a3e1585eea` (`vibecuda`); H20 multi-node only
 after the kernel items close (<=16 GPUs).
 
-**Where it stands (2026-10-13):** under load the fused 4-mode arm beats stock MTP by TTFT
+**Where it stands (2026-10-13, updated 08:00):** the serving kernel is now the two-launch split
+(FA3 prefill rows + stock FA2 BatchPrefill verify rows): vs stock MTP it clears the bar at mix32
+16/24 and mix128 24/s for both tenants (e.g. mix128 24/s chat +56% tput / -55% TTFT / -45% TPOT)
+and misses only agent TTFT/TPOT at mix128 16/s (-26%). Earlier summary, fused co-launch: under load the fused 4-mode arm beats stock MTP by TTFT
 -31..-79%, throughput +11..+36%, per-token latency -19..-30%; below capacity the arms are equal.
 TTFT and throughput clear the bar wherever the server is loaded; per-token latency clears it only
 at some points. The graphs-on 4-mode crash is fixed (a schedule-stream publish raced the forward stream); 4-mode arms now run without the mixed-step barrier.
@@ -98,7 +101,29 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     | agent TTFT mean | **8768 ms** | 22597 ms | 43663 ms | -80% |
     | agent TPOT mean | **13.4 ms** | 16.7 ms | 23.8 ms | -44% |
     At both mix32 points the split clears the bar vs stock MTP on TTFT, TPOT and throughput for
-    both tenants. mix128 16/24 running.
+    both tenants.
+  - [x] **Split v2 complete -> serving kernel = the two-launch split (2026-10-13 08:00):** all 8 arms
+    clean (0 tracebacks, 0 fallbacks; split 23.5K-103.5K split calls, fused 23.0K-80.8K fused
+    calls). Split vs stock MTP (S1 numbers for stock):
+    | point | chat tput | chat TTFT | chat TPOT | agent tput | agent TTFT | agent TPOT |
+    |---|---|---|---|---|---|---|
+    | mix32 16/s | = (offered load) | -97% | -63% | +90% | -87% | -48% |
+    | mix32 24/s | +34% | -86% | -40% | +64% | -80% | -44% |
+    | mix128 16/s | +31% | -54% | -33% | +29% | -26% | -26% |
+    | mix128 24/s | +56% | -55% | -45% | +46% | -37% | -32% |
+    The bar is met everywhere except the agent tenant at mix128 16/s (-26%). Split vs fused
+    co-launch: mix32 chat TTFT -74..-86%, TPOT -25..-48%, agent tput +31..+50%; mix128 chat TTFT
+    -14..-18%, tput +5..+6%, agent TPOT +1..+9% (fused better there). The gap shrinks with context
+    because long prefill rows (FA3 in both arms) dominate; the split's edge is the verify rows
+    (stock FA2 at 63-83% of HBM vs the executor's 38-52%). Data:
+    [`split_vs_fused_v2_20261013.csv`](debug_kernel_server_perf/resume_20261012/split_vs_fused_v2_20261013.csv).
+    Next (A4): overlap the split's two launches (FA3 on a side stream with `sm_margin`, stock FA2
+    on the SMs it leaves) and re-run the S1 x S2 sweep with the split as the 4-mode arm.
+  - [x] **Chunk floor rejected (2026-10-13, all exact):** a fixed 4096 floor wrecks small-KV cases
+    (1 row x 16K: auto 0.028 ms vs 4096 0.099 ms; 16 x 4K q8: 0.094 vs 0.163 ms) while helping
+    long verify rows; and the two-launch control beats the fused executor on every A2 fixture too
+    (e.g. 16 x 16K q8: 0.156 vs 0.323 ms). With the split as the serving kernel the auto rule is
+    moot for serving (`fa2_chunk_floor_20261013.sh`).
     Chat throughput at 16/s equals the offered load in all arms (~1136 tok/s). The barrier-free fused arm
     (4932 ms TTFT) is within 7% of S1's fused-with-barrier (5276 ms). Command:
     `INHERIT_LOCK=1 bash split_vs_fused_20261013.sh` (root `split_vs_fused_v2_20261013`), analysed

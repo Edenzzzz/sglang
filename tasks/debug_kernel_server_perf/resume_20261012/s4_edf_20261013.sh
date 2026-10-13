@@ -2,11 +2,12 @@
 # S4: EDF step model on the fused kernel vs the unfused 4-mode schedule (goal point 3), on the
 # race-fixed tree without the mixed-step barrier (a per-step sync would distort the very step
 # times being modelled). Runs only if graphs_racefix_20261013 passed.
-#  (A) STEPTRACE on MTPMIX_LPT and MTPMIXFUSED: mix32 at chat 8/16/24/s and mix128 at 12/s
+#  (A) STEPTRACE on MTPMIX_LPT and MTPMIX_SPLIT: mix32 at chat 8/16/24/s and mix128 at 12/s
 #  (B) fit one linear step model per arm (tasks/perf_model/fit_mtp_step.py; fit on the first half,
 #      MAPE on the second): is the fused step easier or harder to predict?
 #  (C) EDF (per-request acceptance EWMA) with each arm's own model vs the same arm without EDF,
 #      mix32 chat 16/s and 24/s; SLO = the S1 chat SLO (TTFT 2000 ms, ITL 50 ms).
+# 2026-10-14: traced arms are MTPMIX_LPT (unfused 4-mode) and MTPMIX_SPLIT (the serving kernel).
 set -uo pipefail
 W=/dev/shm/w
 until grep -q QUEUE_CHAIN_DONE $W/queue_chain_20261013.log 2>/dev/null; do
@@ -47,14 +48,14 @@ run() {  # label method [env...]
   echo "END $label rc=$rc $(date +%T) tracebacks=$(grep -c Traceback $L) steptraces=$(grep -c 'STEPTRACE.*gpu=' $L)"
 }
 # (A) traces
-for arm in MTPMIX_LPT MTPMIXFUSED; do
+for arm in MTPMIX_LPT MTPMIX_SPLIT; do
   mix mix32 32768 65536 36 8 4.0 131072
   for r in 8 16 24; do run trace_${arm}_mix32_r$r $arm CHAT_RATE=$r SGLANG_STEP_TRACE=1; done
   mix mix128 131072 262144 16 4 8.0 262144
   run trace_${arm}_mix128_r12 $arm CHAT_RATE=12 SGLANG_STEP_TRACE=1
 done
 # (B) fits
-for arm in MTPMIX_LPT MTPMIXFUSED; do
+for arm in MTPMIX_LPT MTPMIX_SPLIT; do
   cat $ROOT/trace_${arm}_mix32_r8/server_$arm.log $ROOT/trace_${arm}_mix32_r16/server_$arm.log \
       $ROOT/trace_${arm}_mix128_r12/server_$arm.log $ROOT/trace_${arm}_mix32_r24/server_$arm.log > $ROOT/steptrace_$arm.log
   $W/venv/bin/python $W/$T/tasks/perf_model/fit_mtp_step.py $ROOT/steptrace_$arm.log --out $ROOT/step_model_$arm.json 2>&1 | tail -4
@@ -63,7 +64,7 @@ done
 # (C) EDF vs none, own model
 mix mix32 32768 65536 36 8 4.0 131072
 for r in 16 24; do
-  for arm in MTPMIX_LPT MTPMIXFUSED; do
+  for arm in MTPMIX_LPT MTPMIX_SPLIT; do
     run edf_${arm}_r$r ${arm}_EDFR CHAT_RATE=$r MTP_STEP_MODEL=$ROOT/step_model_$arm.json TTFT_SLO_MS=2000 ITL_SLO_MS=50
     run none_${arm}_r$r $arm CHAT_RATE=$r
   done

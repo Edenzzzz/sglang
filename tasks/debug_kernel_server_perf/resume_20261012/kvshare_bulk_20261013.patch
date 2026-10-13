@@ -1,0 +1,313 @@
+--- a/port07/include/flashinfer/attention/hopper/kernel_traits.cuh
++++ b/port07/include/flashinfer/attention/hopper/kernel_traits.cuh
+@@ -58,8 +58,12 @@
+     cutlass::arch::ClusterBarrier barrier_O;
+ #if FLASHINFER_FA3_KV_SHARE
+     cutlass::arch::ClusterBarrier barrier_kv_share;
++    cutlass::arch::ClusterTransactionBarrier barrier_kv_bulk;
+     uint32_t kv_share_stage;
+     uint32_t kv_share_items;
++    uint32_t kv_share_bulk_phase;
++    uint32_t kv_share_bulk_items;
++    uint32_t kv_share_bulk_copies;
+ #endif
+ #if FUSED_Q_REUSE_FENCE
+     // Q RETIREMENT, a SEPARATE barrier (ours).
+--- a/port07/include/flashinfer/attention/hopper/prefill_sm90.cuh
++++ b/port07/include/flashinfer/attention/hopper/prefill_sm90.cuh
+@@ -149,7 +149,11 @@
+     shared_storage.barrier_O.init(/*num_threads=*/1);
+ #if FLASHINFER_FA3_KV_SHARE
+     shared_storage.barrier_kv_share.init(2 * NUM_COPY_THREADS);
++    shared_storage.barrier_kv_bulk.init(1);
+     shared_storage.kv_share_items = 0;
++    shared_storage.kv_share_bulk_phase = 0;
++    shared_storage.kv_share_bulk_items = 0;
++    shared_storage.kv_share_bulk_copies = 0;
+ #endif
+ #if FUSED_Q_REUSE_FENCE
+     // One arrival per work item, from the mma warpgroup's last warp.
+--- a/port07/include/flashinfer/attention/hopper/sparse_mainloop.cuh
++++ b/port07/include/flashinfer/attention/hopper/sparse_mainloop.cuh
+@@ -172,6 +172,7 @@
+ #if FLASHINFER_FA3_KV_SHARE
+     bool kv_share_enabled = false;
+     bool kv_share_trace = false;
++    bool kv_share_bulk = false;
+ #endif
+   };
+ 
+@@ -199,6 +200,9 @@
+               return configured != nullptr && configured[0] == '1';
+             }(), [] {
+               const char* configured = std::getenv("FUSED_FA3_KV_SHARE_TRACE");
++              return configured != nullptr && configured[0] == '1';
++            }(), [] {
++              const char* configured = std::getenv("FUSED_FA3_KV_SHARE_BULK");
+               return configured != nullptr && configured[0] == '1';
+             }()
+ #endif
+@@ -304,6 +308,7 @@
+     }
+     if (share_kv && mainloop_params.kv_share_trace && threadIdx.x == 0) {
+       ++shared_storage.kv_share_items;
++      if (mainloop_params.kv_share_bulk) ++shared_storage.kv_share_bulk_items;
+     }
+ #endif
+ 
+@@ -438,7 +443,8 @@
+ 
+     // Unified helper lambda to load K or V with pre-computed offsets
+     // Uses parity to select buffer slot, caller must toggle parity after load
+-    auto load_kv_with_gather = [&](auto&& tXsX, auto&& tXcX, DTypeKV* base_ptr, int kv_tile_idx,
++    auto load_kv_with_gather = [&](auto&& tXsX, auto&& tXcX, auto&& shared_tensor,
++                                   DTypeKV* base_ptr, int kv_tile_idx,
+                                    int stage_idx, bool use_predicate) {
+       using Vec = AlignmentTypeKV;
+       constexpr int VecSize = sizeof(Vec) / sizeof(DTypeKV);
+@@ -450,6 +456,14 @@
+ 
+       auto dst = recast<Vec>(flatten(tXsX(_, _, _, stage_idx)));
+       auto c = flatten(tXcX(_, _, _, kv_tile_idx));
++#if FLASHINFER_FA3_KV_SHARE
++      constexpr uint32_t stage_elements = decltype(size<0>(shared_tensor))::value *
++                                          decltype(size<1>(shared_tensor))::value;
++      constexpr uint32_t half_bytes = stage_elements * sizeof(DTypeKV) / 2;
++      static_assert(half_bytes % 16 == 0);
++      auto* stage_base = &shared_tensor(0, 0, stage_idx);
++      const uint32_t stage_address = cute::cast_smem_ptr_to_uint(stage_base);
++#endif
+ 
+       constexpr unsigned FULL_MASK = 0xffffffff;
+ 
+@@ -532,7 +546,10 @@
+         Vec const* src_ptr = reinterpret_cast<Vec const*>(base_ptr + base_offset + d_idx);
+ #if FLASHINFER_FA3_KV_SHARE
+         static_assert(HEAD_DIM_QK % (2 * VecSize) == 0);
+-        if (!share_kv || uint32_t(d_idx >= HEAD_DIM_QK / 2) == cluster_rank) {
++        const uint32_t owner = mainloop_params.kv_share_bulk
++                                   ? (cute::cast_smem_ptr_to_uint(&dst(i)) - stage_address) / half_bytes
++                                   : uint32_t(d_idx >= HEAD_DIM_QK / 2);
++        if (!share_kv || owner == cluster_rank) {
+ #endif
+         cutlass::arch::cp_async_zfill<sizeof(Vec), cutlass::arch::CacheOperation::Global>(
+             &dst(i), src_ptr, guard);
+@@ -542,21 +559,50 @@
+       }
+ #if FLASHINFER_FA3_KV_SHARE
+       if (share_kv) {
+-        if (threadIdx.x == 0) shared_storage.kv_share_stage = uint32_t(stage_idx);
++        const uint32_t bulk_phase = shared_storage.kv_share_bulk_phase;
++        if (threadIdx.x == 0) {
++          shared_storage.kv_share_stage = uint32_t(stage_idx);
++          if (mainloop_params.kv_share_bulk) {
++            shared_storage.barrier_kv_bulk.arrive_and_expect_tx(half_bytes);
++          }
++        }
+         cute::cp_async_fence();
+         cute::cp_async_wait<0>();
++        cutlass::arch::fence_view_async_shared();
+         shared_storage.barrier_kv_share.arrive();
+         shared_storage.barrier_kv_share.arrive(peer_rank, 1);
+         shared_storage.barrier_kv_share.wait(0);
+         const auto cluster = cooperative_groups::this_cluster();
+         const uint32_t peer_stage =
+             *cluster.map_shared_rank(&shared_storage.kv_share_stage, peer_rank);
+-        auto peer_dst = recast<Vec>(flatten(tXsX(_, _, _, peer_stage)));
+-        CUTLASS_PRAGMA_UNROLL
+-        for (int index = 0; index < size(dst); ++index) {
+-          const auto coordinate = c(VecSize * index);
+-          if (uint32_t(get<1>(coordinate) >= HEAD_DIM_QK / 2) != cluster_rank) {
+-            dst(index) = *cluster.map_shared_rank(&peer_dst(index), peer_rank);
++        if (mainloop_params.kv_share_bulk) {
++          if (threadIdx.x == 0) {
++            const uint32_t source_address = stage_address + cluster_rank * half_bytes;
++            const uint32_t destination_address = cute::set_block_rank(
++                cute::cast_smem_ptr_to_uint(&shared_tensor(0, 0, peer_stage)) +
++                    cluster_rank * half_bytes,
++                peer_rank);
++            const uint32_t barrier_address = cute::set_block_rank(
++                cute::cast_smem_ptr_to_uint(&shared_storage.barrier_kv_bulk), peer_rank);
++            asm volatile(
++                "cp.async.bulk.shared::cluster.shared::cta.mbarrier::complete_tx::bytes "
++                "[%0], [%1], %2, [%3];"
++                :
++                : "r"(destination_address), "r"(source_address), "r"(half_bytes),
++                  "r"(barrier_address)
++                : "memory");
++            if (mainloop_params.kv_share_trace) ++shared_storage.kv_share_bulk_copies;
++          }
++          shared_storage.barrier_kv_bulk.wait(bulk_phase);
++          if (threadIdx.x == 0) shared_storage.kv_share_bulk_phase = bulk_phase ^ 1u;
++        } else {
++          auto peer_dst = recast<Vec>(flatten(tXsX(_, _, _, peer_stage)));
++          CUTLASS_PRAGMA_UNROLL
++          for (int index = 0; index < size(dst); ++index) {
++            const auto coordinate = c(VecSize * index);
++            if (uint32_t(get<1>(coordinate) >= HEAD_DIM_QK / 2) != cluster_rank) {
++              dst(index) = *cluster.map_shared_rank(&peer_dst(index), peer_rank);
++            }
+           }
+         }
+         cutlass::arch::fence_view_async_shared();
+@@ -572,7 +618,7 @@
+     {
+       prefetch_kv_offset(kv_tile_idx, true);
+       pipeline_k.producer_acquire(smem_pipe_write_k);
+-      load_kv_with_gather(tKsK, tKcK, K_ptr_base, kv_tile_idx, smem_pipe_write_k.index(), true);
++      load_kv_with_gather(tKsK, tKcK, sK, K_ptr_base, kv_tile_idx, smem_pipe_write_k.index(), true);
+       pipeline_k.producer_commit(smem_pipe_write_k, cutlass::arch::cpasync_barrier_arrive);
+ #if FUSED_PIPE_COUNT
+       if (dbg_commit_k) ++*dbg_commit_k;
+@@ -757,7 +803,7 @@
+     if (kv_tile_idx == swa_begin_kv_tile_idx) {
+       // kv_tile_idx already prefetched above (parity=0), reuse it for V
+       pipeline_v.producer_acquire(smem_pipe_write_v);
+-      load_kv_with_gather(tVsV, tVcV, V_ptr_base, kv_tile_idx, smem_pipe_write_v.index(), true);
++      load_kv_with_gather(tVsV, tVcV, sV, V_ptr_base, kv_tile_idx, smem_pipe_write_v.index(), true);
+       pipeline_v.producer_commit(smem_pipe_write_v, cutlass::arch::cpasync_barrier_arrive);
+ #if FUSED_PIPE_COUNT
+       if (dbg_commit_v) ++*dbg_commit_v;
+@@ -771,7 +817,7 @@
+       parity ^= 1;  // parity=1
+       prefetch_kv_offset(kv_tile_k, false);
+       pipeline_k.producer_acquire(smem_pipe_write_k);
+-      load_kv_with_gather(tKsK, tKcK, K_ptr_base, kv_tile_k, smem_pipe_write_k.index(), false);
++      load_kv_with_gather(tKsK, tKcK, sK, K_ptr_base, kv_tile_k, smem_pipe_write_k.index(), false);
+       pipeline_k.producer_commit(smem_pipe_write_k, cutlass::arch::cpasync_barrier_arrive);
+ #if FUSED_PIPE_COUNT
+       if (dbg_commit_k) ++*dbg_commit_k;
+@@ -781,7 +827,7 @@
+       // Load V for kv_tile_idx using my_kv_offset[0]
+       parity ^= 1;  // parity=0
+       pipeline_v.producer_acquire(smem_pipe_write_v);
+-      load_kv_with_gather(tVsV, tVcV, V_ptr_base, kv_tile_idx, smem_pipe_write_v.index(), true);
++      load_kv_with_gather(tVsV, tVcV, sV, V_ptr_base, kv_tile_idx, smem_pipe_write_v.index(), true);
+       pipeline_v.producer_commit(smem_pipe_write_v, cutlass::arch::cpasync_barrier_arrive);
+ #if FUSED_PIPE_COUNT
+       if (dbg_commit_v) ++*dbg_commit_v;
+@@ -801,7 +847,7 @@
+         parity ^= 1;  // Toggle to other buffer for prefetch
+         prefetch_kv_offset(kv_tile_k, false);
+         pipeline_k.producer_acquire(smem_pipe_write_k);
+-        load_kv_with_gather(tKsK, tKcK, K_ptr_base, kv_tile_k, smem_pipe_write_k.index(), false);
++        load_kv_with_gather(tKsK, tKcK, sK, K_ptr_base, kv_tile_k, smem_pipe_write_k.index(), false);
+         pipeline_k.producer_commit(smem_pipe_write_k, cutlass::arch::cpasync_barrier_arrive);
+ #if FUSED_PIPE_COUNT
+       if (dbg_commit_k) ++*dbg_commit_k;
+@@ -811,7 +857,7 @@
+         // Load V for kv_tile_idx using the previous buffer
+         parity ^= 1;  // Toggle back to kv_tile_idx's buffer
+         pipeline_v.producer_acquire(smem_pipe_write_v);
+-        load_kv_with_gather(tVsV, tVcV, V_ptr_base, kv_tile_idx, smem_pipe_write_v.index(), false);
++        load_kv_with_gather(tVsV, tVcV, sV, V_ptr_base, kv_tile_idx, smem_pipe_write_v.index(), false);
+         pipeline_v.producer_commit(smem_pipe_write_v, cutlass::arch::cpasync_barrier_arrive);
+ #if FUSED_PIPE_COUNT
+       if (dbg_commit_v) ++*dbg_commit_v;
+@@ -827,7 +873,7 @@
+       {
+         prefetch_kv_offset(0, false);
+         pipeline_v.producer_acquire(smem_pipe_write_v);
+-        load_kv_with_gather(tVsV, tVcV, V_ptr_base, 0, smem_pipe_write_v.index(), false);
++        load_kv_with_gather(tVsV, tVcV, sV, V_ptr_base, 0, smem_pipe_write_v.index(), false);
+         pipeline_v.producer_commit(smem_pipe_write_v, cutlass::arch::cpasync_barrier_arrive);
+ #if FUSED_PIPE_COUNT
+       if (dbg_commit_v) ++*dbg_commit_v;
+--- a/port07/include/flashinfer/attention/persistent_fa3_fused.cuh
++++ b/port07/include/flashinfer/attention/persistent_fa3_fused.cuh
+@@ -403,6 +403,9 @@
+     if (fa3_mainloop_params.kv_share_trace && threadIdx.x == 0 && blockIdx.x == 0) {
+       printf("FA3_KV_SHARE items=%u\n",
+              reinterpret_cast<typename FA3Traits::SharedStorage*>(smem)->kv_share_items);
++      printf("FA3_KV_SHARE bulk_items=%u bulk_copies=%u\n",
++             reinterpret_cast<typename FA3Traits::SharedStorage*>(smem)->kv_share_bulk_items,
++             reinterpret_cast<typename FA3Traits::SharedStorage*>(smem)->kv_share_bulk_copies);
+     }
+     cute::cluster_arrive_relaxed();
+     cute::cluster_wait();
+--- /dev/null
++++ b/port07/tests/test_kvshare_bulk_layout.cu
+@@ -0,0 +1,83 @@
++#include <algorithm>
++#include <array>
++#include <cstdint>
++#include <cstdio>
++#include <vector>
++
++#include "flashinfer/attention/hopper/kernel_traits.cuh"
++
++struct TestAttentionVariant {};
++
++template <class Layout>
++bool check_layout(const char* name, int stages) {
++  constexpr int tile_elements = 128 * 128;
++  constexpr int half_elements = tile_elements / 2;
++  constexpr int storage_elements = cute::cosize_v<Layout>;
++  Layout layout;
++  int cases = 0;
++  for (int first_stage = 0; first_stage < stages; ++first_stage) {
++    for (int second_stage = 0; second_stage < stages; ++second_stage) {
++      for (int valid_rows : {1, 17, 127, 128}) {
++        std::array<std::vector<uint16_t>, 2> storage = {
++            std::vector<uint16_t>(storage_elements, 0xffff),
++            std::vector<uint16_t>(storage_elements, 0xffff)};
++        const std::array<int, 2> active_stages = {first_stage, second_stage};
++        std::array<int, 2> bases;
++        for (int rank = 0; rank < 2; ++rank) {
++          bases[rank] = layout(cute::make_coord(0, 0, active_stages[rank]));
++          if ((bases[rank] * sizeof(uint16_t)) % 16 != 0) return false;
++          std::vector<bool> visited(tile_elements, false);
++          for (int row = 0; row < 128; ++row) {
++            for (int dimension = 0; dimension < 128; ++dimension) {
++              const int offset = layout(cute::make_coord(row, dimension, active_stages[rank]));
++              const int relative = offset - bases[rank];
++              if (relative < 0 || relative >= tile_elements || visited[relative]) return false;
++              visited[relative] = true;
++              if (dimension % 8 == 0) {
++                if (relative % 8 != 0 || relative / half_elements !=
++                    (relative + 7) / half_elements) return false;
++                for (int lane = 0; lane < 8; ++lane) {
++                  if (layout(cute::make_coord(row, dimension + lane, active_stages[rank])) !=
++                      offset + lane) return false;
++                }
++              }
++              if (relative / half_elements == rank) {
++                storage[rank][offset] = row < valid_rows ? row * 128 + dimension + 1 : 0;
++              }
++            }
++          }
++        }
++        for (int rank = 0; rank < 2; ++rank) {
++          std::copy_n(storage[rank].begin() + bases[rank] + rank * half_elements,
++                      half_elements,
++                      storage[rank ^ 1].begin() + bases[rank ^ 1] + rank * half_elements);
++        }
++        for (int rank = 0; rank < 2; ++rank) {
++          for (int row = 0; row < 128; ++row) {
++            for (int dimension = 0; dimension < 128; ++dimension) {
++              const int offset = layout(cute::make_coord(row, dimension, active_stages[rank]));
++              const uint16_t expected = row < valid_rows ? row * 128 + dimension + 1 : 0;
++              if (storage[rank][offset] != expected) return false;
++            }
++          }
++        }
++        ++cases;
++      }
++    }
++  }
++  std::printf("%s stages=%d cases=%d PASS\n", name, stages, cases);
++  return true;
++}
++
++template <int Stages>
++bool check_stages() {
++  using Traits = flashinfer::AttentionKernelTraits<
++      false, 128, 128, 128, 128, Stages, cutlass::bfloat16_t, cutlass::bfloat16_t,
++      cutlass::bfloat16_t, int32_t, TestAttentionVariant>;
++  return check_layout<typename Traits::SmemLayoutK>("K", Stages) &&
++         check_layout<typename Traits::SmemLayoutV>("V", Stages);
++}
++
++int main() {
++  return check_stages<1>() && check_stages<2>() && check_stages<3>() ? 0 : 1;
++}

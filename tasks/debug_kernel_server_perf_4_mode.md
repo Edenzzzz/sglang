@@ -41,9 +41,16 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   122/1801 under the default rule. Routing one-sided batches through the co-launch instead would
   not help: on one-sided band shapes the fused kernel is 1.0-2.2x slower than `BatchAttention`.
   ([table](debug_kernel_server_perf/resume_20261012/a3_winner_map/a3_v2_table_20261012.txt))
-  - [ ] **A3b:** the floor applies only inside the fitted regime (all FA3 candidates qo <= 32,
-    `a3b_dispatch_rule.patch`); gated serving A/B vs the default rule, interleaved twice for a
-    noise floor, `a3b_serving_ab_20261013.sh` -- queued.
+  - [x] **A3b on the serving split (Codex kernel worker, 2026-10-13, all 12 arms):** DEFAULT vs A3B
+    on `MTPMIX_SPLIT`, interleaved twice at mix32/mix64/mix128 x chat 24/s + agent 0.1/s; both rules
+    pass the q4 output gate (long prefix 52), 0 fallbacks / tracebacks. A3B vs DEFAULT: mix32 chat
+    TTFT -26.7%, agent tput +5.4% / TTFT -25.5%; mix64 chat TTFT -14.1%, agent tput +11.2%;
+    mix128 chat tput +6.1% / TTFT -28.2% / P99 ITL -33.3%, agent tput +10.9%. **Not promoted as a
+    universal switch:** A3B replaces the whole rule (incl. the decode-population guard), mean chat
+    interactivity falls (mix128 -16.9%), agent fixed-SLO attainment drops at mix128 (0.19 vs
+    0.44/0.31), acceptance differs between arms, and only 16-24 agent requests per arm.
+    ([findings](debug_kernel_server_perf/resume_20261012/a3b_split_findings_20261013.md), `a3b_split_serving_20261013.sh`,
+    `a3b_split_midrange_20261013.sh`.) My older `a3b_serving_ab_20261013.sh` is superseded.
 
 - [ ] **A4, FA2 verify-row bandwidth (2026-10-13):** attention is 75-80% of serving kernel time,
   dominated by memory-bound verify rows. At serving verify shapes (q=4, GQA 28/4, all arms exact,
@@ -147,6 +154,35 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     `INHERIT_LOCK=1 bash split_vs_fused_20261013.sh` (root `split_vs_fused_v2_20261013`), analysed
     with `drivers/serving/eval_curves.py --slo '{"chat":[2000,50],"codex":[10000,80]}'`.
 
+  - [x] **Kernel candidates vs the split (Codex kernel worker, 2026-10-13/14), none promoted:**
+    - native nonpersistent FA2 as the PDL dependent of an SM-limited FA3 grid: v1 failed (planner
+      reused the FA2 chunk for FA3 -> 512/512 nonfinite), fixed in v2 (0/544 bad); closes much of
+      the FA2 gap (46 q4 x 48K: 1.495 vs stock two-launch 1.527 ms) but not the FA3-dominated one
+      (prefill2048+8: 5.872 vs 3.950 ms) ([proto](debug_kernel_server_perf/resume_20261012/native_pdl_prototype_20261013.md)).
+      Serving v3 with split-KV FA3: no mean gain (mix32 chat TTFT +9.8%)
+      ([v3](debug_kernel_server_perf/resume_20261012/native_pdl_v3_serving_20261013.md)).
+    - dedicated FA3 entry: -9..-23% kernel time vs the combined entry, still behind the unfused
+      control on large-query fixtures ([entry](debug_kernel_server_perf/resume_20261012/native_fa3_entry_20261013.md)); compact planning
+      validated ([compact](debug_kernel_server_perf/resume_20261012/native_pdl_compact_20261013.md)); combined serving: no general win
+      (mix64 agent +9.7% is acceptance-confounded, 2.753 vs 3.177)
+      ([combined](debug_kernel_server_perf/resume_20261012/native_pdl_combined_20261013.md)).
+    - `auto4096` cap (min(auto, 4096)), opt-in: -20..-27% on long verify fixtures, +9..+18% serving
+      tput vs the uncapped co-launch -- moot for the split, which uses stock FA2
+      ([cap](debug_kernel_server_perf/resume_20261012/fa2_auto4096_candidate_20261013.md)).
+    - FA3 diagnosis: NCU shows custom FA3 at ~43% tensor activity vs stock 65% (stock: KV96, 2
+      stages, 132 CTAs) ([ncu](debug_kernel_server_perf/resume_20261012/fa3_ncu_20261014.md)); round-robin work pairs raise L2 hit
+      11.9% -> 94.9% and cut kernel time -14% / -26% on two fixtures
+      ([locality](debug_kernel_server_perf/resume_20261012/fa3_locality_20261014.md)); KV96 is +0.1..+4% slower than KV128 but exposed a
+      real packed-Q bug (Q gather looped over the KV width, leaving 32 Q columns unwritten), fixed
+      ([kv96](debug_kernel_server_perf/resume_20261012/fa3_kv96_prototype_20261014.md)); SM budget: keep 112
+      ([budget](debug_kernel_server_perf/resume_20261012/tma_sm_budget_20261013.md)); one-warp TMA producer: no gain
+      ([warp](debug_kernel_server_perf/resume_20261012/tma_warp_prototype_20261014.md)).
+    - [ ] paired serving split vs native PDL + dedicated entry + round-robin pairs: mix32 done, no
+      gain (chat TTFT +2.3%, agent tput -1.1%, acceptance matched); mix64/mix128 running
+      ([paired](debug_kernel_server_perf/resume_20261012/native_pdl_paired_serving_20261014.md)).
+    - [ ] unpacked query heads for FA3: built and host-tested, GPU run queued
+      ([unpacked](debug_kernel_server_perf/resume_20261012/fa3_unpacked_20261014.md)).
+
 ### [~] B. Fuse draft/verify epilogue ops
 
 - [x] **B1, fusion headroom (2026-10-13, measured):** 60 serving steps per arm profiled (torch
@@ -184,7 +220,7 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   work exceeds the slots beside FA3, nothing on small mixes; in-kernel `tma_store_wait` backfill is
   correct and worth 1.4-5.5x over none, but that whole path is 2-6x slower. Co-launch ships.
   ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md))
-- [~] **B3, multicast:** not implemented (`mcast_mask=0`; needs page-size-128 paged TMA). Ceiling
+- [x] **B3, multicast:** implemented by the Codex kernel worker on 2026-10-13 (true TMA multicast at page 128, below) and closed by measurement; until then `mcast_mask=0`. Ceiling
   measured first on the current kernel (2026-10-13, `b3_multicast_ceiling_20261013.sh`, diagnostic
   `fa3_skip_kv_load.patch`): zero-filling EVERY FA3 K/V global load saves 4.9% on mixed_verify q4,
   6.6% on prefill 2048 + 32 verify rows, 5.1% on the FA3 default fixture, and 16-20% on FA3 rows of
@@ -193,6 +229,18 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   and ~10% on short-append FA3 rows. Pending before deciding: the same ceiling on agent-append
   shapes (256-1024 new tokens on 32-131K of context), `b3_append_ceiling_20261013.sh`, queued after S2b.
   ([raw](debug_kernel_server_perf/resume_20261012/b3_multicast_ceiling_20261013.txt))
+  - [x] **Agent-append ceiling (Codex, 2026-10-13):** zero-KV-load headroom on append shapes is
+    -19..-22% (4 x q512 @ 64K 6.192 -> 4.812 ms) -- a ceiling, not a multicast gain
+    ([append](debug_kernel_server_perf/resume_20261012/b3_append_findings_20261013.md)).
+  - [x] **True TMA multicast implemented and gated (Codex, 2026-10-13):** `cp.async.bulk.tensor`
+    multicast over 2-CTA clusters at page 128, 9 gates + 48 timing cases pass (58 multicast tiles
+    on CTA0); **no clear benefit: multicast -0.2..+1.7% vs unicast TMA**
+    ([multicast](debug_kernel_server_perf/resume_20261012/tma_multicast_prototype_20261013.md)); page-128 serving integration passes all
+    5 EAGLE3 arms with up to 188 multicast tiles executed
+    ([paged serving](debug_kernel_server_perf/resume_20261012/tma_paged_serving_20261013.md)). Software sharing via DSMEM exchange loses
+    badly (4 x 512 @ 64K: 18.21 vs redundant 5.94 ms; bulk exchange still 60-63% slower)
+    ([dsmem](debug_kernel_server_perf/resume_20261012/kvshare_prototype_20261013.md), [bulk](debug_kernel_server_perf/resume_20261012/kvshare_bulk_20261013.md)).
+    **B3 closes by measurement: multicast is built and does not pay on these shapes.**
 
 ### [ ] S. Server / workload evaluation
 

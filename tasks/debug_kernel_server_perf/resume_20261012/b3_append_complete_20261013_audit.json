@@ -1,0 +1,94 @@
+{
+  "audits": [
+    {
+      "label": "skip1_app_kv131072_r2_q256",
+      "skip_kv_load": true,
+      "returncode": 1,
+      "diagnostic_only": true,
+      "bad_rows": 512,
+      "total_rows": 512,
+      "replay_bad_heads": 14336,
+      "fused_ms": 2.419,
+      "log_sha256": "6df97b9156618b0e0961c81095581bece8f0218972f410a709389f71d15e9bf1"
+    },
+    {
+      "label": "skip1_app_kv32768_r8_q1024",
+      "skip_kv_load": true,
+      "returncode": 1,
+      "diagnostic_only": true,
+      "bad_rows": 8192,
+      "total_rows": 8192,
+      "replay_bad_heads": 229376,
+      "fused_ms": 9.6627,
+      "log_sha256": "b790a371272dff654c5d805219c8dddb3a11bd1e2229ad38934513b02aaa2f19"
+    },
+    {
+      "label": "skip1_app_kv65536_r4_q512",
+      "skip_kv_load": true,
+      "returncode": 1,
+      "diagnostic_only": true,
+      "bad_rows": 2048,
+      "total_rows": 2048,
+      "replay_bad_heads": 57344,
+      "fused_ms": 4.8123,
+      "log_sha256": "7968acea6c316e8b5ba81014dd9ef08343afd38bb905ef635e1d22412e7669dc"
+    },
+    {
+      "label": "skip0_app_kv131072_r2_q256",
+      "skip_kv_load": false,
+      "returncode": 0,
+      "diagnostic_only": false,
+      "bad_rows": 0,
+      "total_rows": 512,
+      "replay_bad_heads": 0,
+      "fused_ms": 3.104,
+      "log_sha256": "0485e3a055dd535a7c60c133c4c93a78b2f81ae7f8b721e9cbae20d00fbf85dc"
+    },
+    {
+      "label": "skip0_app_kv32768_r8_q1024",
+      "skip_kv_load": false,
+      "returncode": 0,
+      "diagnostic_only": false,
+      "bad_rows": 0,
+      "total_rows": 8192,
+      "replay_bad_heads": 0,
+      "fused_ms": 11.9439,
+      "log_sha256": "5e433a035b9094e109d65db725a7edb27901ad6186c95dd946b2b3315ceebc2c"
+    },
+    {
+      "label": "skip0_app_kv65536_r4_q512",
+      "skip_kv_load": false,
+      "returncode": 0,
+      "diagnostic_only": false,
+      "bad_rows": 0,
+      "total_rows": 2048,
+      "replay_bad_heads": 0,
+      "fused_ms": 6.1923,
+      "log_sha256": "c43413ce6add15e1fc3fe43401d1d28393d1fcece62b556977d45ec2d844c129"
+    }
+  ],
+  "summary": [
+    {
+      "shape": "app_kv131072_r2_q256",
+      "normal_ms": 3.104,
+      "skip_kv_diagnostic_ms": 2.419,
+      "diagnostic_latency_reduction_pct": 22.068298969072163,
+      "multicast_implemented": false
+    },
+    {
+      "shape": "app_kv32768_r8_q1024",
+      "normal_ms": 11.9439,
+      "skip_kv_diagnostic_ms": 9.6627,
+      "diagnostic_latency_reduction_pct": 19.099289176902023,
+      "multicast_implemented": false
+    },
+    {
+      "shape": "app_kv65536_r4_q512",
+      "normal_ms": 6.1923,
+      "skip_kv_diagnostic_ms": 4.8123,
+      "diagnostic_latency_reduction_pct": 22.285741969865814,
+      "multicast_implemented": false
+    }
+  ],
+  "archive_sha256": "2c703f06ce5f011fd92f87b0704e912f5f3e1c0a01a5867109cf821811257afc"
+}

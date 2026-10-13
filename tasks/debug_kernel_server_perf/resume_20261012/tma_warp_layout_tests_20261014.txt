@@ -1,0 +1,4 @@
+K producers=128 tail mapping: 8 cases PASS
+V producers=128 tail mapping: 8 cases PASS
+K producers=32 tail mapping: 8 cases PASS
+V producers=32 tail mapping: 8 cases PASS

@@ -1,0 +1,218 @@
+[
+  {
+    "mixture": "mix128",
+    "arm": "NATIVE_1",
+    "method": "MTPMIXFUSED",
+    "execution_calls": 35701,
+    "overlapped": null,
+    "mixed_steps": 1351,
+    "graph_decode_lines": 221,
+    "fallbacks": 0,
+    "tracebacks": 0,
+    "plan_counters": [
+      "FUSED_SPLIT_PLAN ok 1401: fa3=6 fa2=42 (onesided so far 221)"
+    ],
+    "one_sided_counters": [
+      "FUSED_SPLIT_ONESIDED 1401/1401: fa3=0 fa2=7 rows=7 max_kv_tiles=1089 need_decode_rows>=2178 (guard: kv_tiles<=decode_rows/2)"
+    ],
+    "server_log_sha256": "a570711cdab6f83f29ee62922f54fa08bd43bbdfbb153b8752cf02a602145db3"
+  },
+  {
+    "mixture": "mix128",
+    "arm": "NATIVE_2",
+    "method": "MTPMIXFUSED",
+    "execution_calls": 35801,
+    "overlapped": null,
+    "mixed_steps": 1351,
+    "graph_decode_lines": 221,
+    "fallbacks": 0,
+    "tracebacks": 0,
+    "plan_counters": [
+      "FUSED_SPLIT_PLAN ok 1401: fa3=6 fa2=41 (onesided so far 223)"
+    ],
+    "one_sided_counters": [
+      "FUSED_SPLIT_ONESIDED 1401/1401: fa3=0 fa2=6 rows=6 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+    ],
+    "server_log_sha256": "c86ab1abaaf4c69fa2246585403dfb4abec2cd6f9f31f5cf61ef2e8330dac564"
+  },
+  {
+    "mixture": "mix128",
+    "arm": "SPLIT_1",
+    "method": "MTPMIX_SPLIT",
+    "execution_calls": 35501,
+    "overlapped": 0,
+    "mixed_steps": 1351,
+    "graph_decode_lines": 221,
+    "fallbacks": 0,
+    "tracebacks": 0,
+    "plan_counters": [
+      "FUSED_SPLIT_PLAN ok 1401: fa3=1 fa2=46 (onesided so far 223)"
+    ],
+    "one_sided_counters": [
+      "FUSED_SPLIT_ONESIDED 1401/1401: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
+    ],
+    "server_log_sha256": "0892285b29dc9e895c783e8420c1fe304530852d034d1ad41dd66bcb2483963f"
+  },
+  {
+    "mixture": "mix128",
+    "arm": "SPLIT_2",
+    "method": "MTPMIX_SPLIT",
+    "execution_calls": 35501,
+    "overlapped": 0,
+    "mixed_steps": 1351,
+    "graph_decode_lines": 221,
+    "fallbacks": 0,
+    "tracebacks": 0,
+    "plan_counters": [
+      "FUSED_SPLIT_PLAN ok 1401: fa3=1 fa2=45 (onesided so far 223)"
+    ],
+    "one_sided_counters": [
+      "FUSED_SPLIT_ONESIDED 1401/1401: fa3=0 fa2=1 rows=1 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+    ],
+    "server_log_sha256": "afc0e0b064672f52b7c88424addc7ba8578d83b884c544f89b1a868e57f0fa5f"
+  },
+  {
+    "mixture": "mix32",
+    "arm": "NATIVE_1",
+    "method": "MTPMIXFUSED",
+    "execution_calls": 99301,
+    "overlapped": null,
+    "mixed_steps": 3801,
+    "graph_decode_lines": 291,
+    "fallbacks": 0,
+    "tracebacks": 0,
+    "plan_counters": [
+      "FUSED_SPLIT_PLAN ok 3801: fa3=1 fa2=11 (onesided so far 324)"
+    ],
+    "one_sided_counters": [
+      "FUSED_SPLIT_ONESIDED 3801/3801: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
+    ],
+    "server_log_sha256": "2166a13456449b2b56eb2b432d5a41067bbec8a007b4a742fdb94a7411930232"
+  },
+  {
+    "mixture": "mix32",
+    "arm": "NATIVE_2",
+    "method": "MTPMIXFUSED",
+    "execution_calls": 100301,
+    "overlapped": null,
+    "mixed_steps": 3851,
+    "graph_decode_lines": 292,
+    "fallbacks": 0,
+    "tracebacks": 0,
+    "plan_counters": [
+      "FUSED_SPLIT_PLAN ok 3401: fa3=1 fa2=8 (onesided so far 222)"
+    ],
+    "one_sided_counters": [
+      "FUSED_SPLIT_ONESIDED 3801/3801: fa3=0 fa2=1 rows=1 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+    ],
+    "server_log_sha256": "e83babd720804c3a0418c507be3bc02b608b0684cb96a14df561fb6fad215647"
+  },
+  {
+    "mixture": "mix32",
+    "arm": "SPLIT_1",
+    "method": "MTPMIX_SPLIT",
+    "execution_calls": 103001,
+    "overlapped": 0,
+    "mixed_steps": 4001,
+    "graph_decode_lines": 312,
+    "fallbacks": 0,
+    "tracebacks": 0,
+    "plan_counters": [
+      "FUSED_SPLIT_PLAN ok 4001: fa3=1 fa2=8 (onesided so far 383)"
+    ],
+    "one_sided_counters": [
+      "FUSED_SPLIT_ONESIDED 4001/4001: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
+    ],
+    "server_log_sha256": "8d687560f538f44aa5cbd5747179eb15be1c5ec0c713470da47b36a2463dc35d"
+  },
+  {
+    "mixture": "mix32",
+    "arm": "SPLIT_2",
+    "method": "MTPMIX_SPLIT",
+    "execution_calls": 104001,
+    "overlapped": 0,
+    "mixed_steps": 4001,
+    "graph_decode_lines": 312,
+    "fallbacks": 0,
+    "tracebacks": 0,
+    "plan_counters": [
+      "FUSED_SPLIT_PLAN ok 3801: fa3=1 fa2=9 (onesided so far 316)"
+    ],
+    "one_sided_counters": [
+      "FUSED_SPLIT_ONESIDED 4001/4001: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
+    ],
+    "server_log_sha256": "911f5806584fc8a387f2311f38f5e28181fecdaa99072c8ba1825867effd83c7"
+  },
+  {
+    "mixture": "mix64",
+    "arm": "NATIVE_1",
+    "method": "MTPMIXFUSED",
+    "execution_calls": 55001,
+    "overlapped": null,
+    "mixed_steps": 2051,
+    "graph_decode_lines": 214,
+    "fallbacks": 0,
+    "tracebacks": 0,
+    "plan_counters": [
+      "FUSED_SPLIT_PLAN ok 2001: fa3=5 fa2=43 (onesided so far 200)"
+    ],
+    "one_sided_counters": [
+      "FUSED_SPLIT_ONESIDED 201/2009: fa3=0 fa2=47 rows=47 max_kv_tiles=955 need_decode_rows>=1910 (guard: kv_tiles<=decode_rows/2)"
+    ],
+    "server_log_sha256": "5da5b9732df9b3638253f31d8e1d0ac36b786be2f22b15f5e0c69e8709fbf250"
+  },
+  {
+    "mixture": "mix64",
+    "arm": "NATIVE_2",
+    "method": "MTPMIXFUSED",
+    "execution_calls": 55301,
+    "overlapped": null,
+    "mixed_steps": 2051,
+    "graph_decode_lines": 214,
+    "fallbacks": 0,
+    "tracebacks": 0,
+    "plan_counters": [
+      "FUSED_SPLIT_PLAN ok 2001: fa3=3 fa2=43 (onesided so far 202)"
+    ],
+    "one_sided_counters": [
+      "FUSED_SPLIT_ONESIDED 2001/2001: fa3=0 fa2=3 rows=3 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+    ],
+    "server_log_sha256": "073e7556d18b00788f65f0f14c7d37d7568fd13c1ca77e25e112711eb2d8b3ba"
+  },
+  {
+    "mixture": "mix64",
+    "arm": "SPLIT_1",
+    "method": "MTPMIX_SPLIT",
+    "execution_calls": 55001,
+    "overlapped": 0,
+    "mixed_steps": 2101,
+    "graph_decode_lines": 214,
+    "fallbacks": 0,
+    "tracebacks": 0,
+    "plan_counters": [
+      "FUSED_SPLIT_PLAN ok 2001: fa3=4 fa2=41 (onesided so far 213)"
+    ],
+    "one_sided_counters": [
+      "FUSED_SPLIT_ONESIDED 2201/2201: fa3=0 fa2=1 rows=1 max_kv_tiles=981 need_decode_rows>=1962 (guard: kv_tiles<=decode_rows/2)"
+    ],
+    "server_log_sha256": "eb60ee4c5d034d9868b02293135d1850b6197d67bf6d8e9e63001a9d956f552f"
+  },
+  {
+    "mixture": "mix64",
+    "arm": "SPLIT_2",
+    "method": "MTPMIX_SPLIT",
+    "execution_calls": 55001,
+    "overlapped": 0,
+    "mixed_steps": 2051,
+    "graph_decode_lines": 214,
+    "fallbacks": 0,
+    "tracebacks": 0,
+    "plan_counters": [
+      "FUSED_SPLIT_PLAN ok 2001: fa3=6 fa2=39 (onesided so far 211)"
+    ],
+    "one_sided_counters": [
+      "FUSED_SPLIT_ONESIDED 2201/2201: fa3=0 fa2=1 rows=1 max_kv_tiles=1008 need_decode_rows>=2016 (guard: kv_tiles<=decode_rows/2)"
+    ],
+    "server_log_sha256": "296ebddd49d195e8aa96b8ab9c99517cb128c20ad60c387565398119bb0d79dd"
+  }
+]

@@ -1,0 +1,74 @@
+--- a/port07/include/flashinfer/attention/persistent_fa3_fused.cuh
++++ b/port07/include/flashinfer/attention/persistent_fa3_fused.cuh
+@@ -505,6 +505,40 @@
+ 
+ // FA2 executor: the persistent LPT kernel at its native 128 threads x 2 CTAs/SM, which
+ // is where it gets 255 registers and zero spill. Drains tasks 0-2 only.
++template <typename FA3Mainloop, typename FA3Epilogue, typename FA3Traits,
++          bool LEFT_SLIDING_WINDOW, bool CAUSAL, typename FA3TileScheduler,
++          typename Runner1, typename Runner2, typename Runner3>
++__global__ void __launch_bounds__(FA3Traits::NUM_WARPS * cutlass::NumThreadsPerWarp, 1)
++    DedicatedFA3PrimaryKernel(
++#if FLASHINFER_FA3_UPSTREAM
++        CUTE_GRID_CONSTANT typename UpstreamFA3Kernel<FA3Traits::HEAD_DIM_VO, int32_t>::Params const upstream_fa3,
++#else
++        CUTE_GRID_CONSTANT typename FA3Mainloop::Params const fa3_mainloop_params,
++        CUTE_GRID_CONSTANT typename FA3Epilogue::Params const fa3_epilogue_params,
++        CUTE_GRID_CONSTANT typename FA3TileScheduler::Params const fa3_scheduler_params,
++#endif
++        FUSED_PERS_QUALIFIER typename Runner1::Params params_1,
++        FUSED_PERS_QUALIFIER typename Runner2::Params params_2,
++        FUSED_PERS_QUALIFIER typename Runner3::Params params_3,
++        const uint32_t sm_split, const bool backfill, const FusedQueueParams queue,
++        const uint32_t entry_register_count) {
++  extern __shared__ uint8_t smem[];
++  asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
++  FusedPdlRecord<kPdlFa3Start>(queue.pdl_timeline);
++#if FLASHINFER_FA3_UPSTREAM
++  UpstreamFA3Kernel<FA3Traits::HEAD_DIM_VO, int32_t>{}(upstream_fa3, reinterpret_cast<char*>(smem));
++#else
++  fa3_prefill_body<FA3Mainloop, FA3Epilogue, FA3Traits, LEFT_SLIDING_WINDOW, CAUSAL,
++                   FA3TileScheduler, false>(fa3_mainloop_params, fa3_epilogue_params,
++                                           fa3_scheduler_params, reinterpret_cast<char*>(smem),
++                                           entry_register_count);
++#endif
++  cute::tma_store_wait<0>();
++  cp_async::wait_group<0>();
++  __syncthreads();
++  FusedPdlRecord<kPdlFa3End, true>(queue.pdl_timeline);
++}
++
+ template <typename FA3Traits, typename Runner1, typename Runner2, typename Runner3>
+ __global__ void __launch_bounds__(128, 2)
+     FA2ExecutorKernel(typename Runner1::Params params_1, typename Runner2::Params params_2,
+@@ -886,6 +920,18 @@
+           : (void*)FusedFA3PersistentKernel<CollectiveMainloop, CollectiveEpilogue, KernelTraits,
+                                             LEFT_SLIDING_WINDOW, CAUSAL, Scheduler, Runner1,
+                                             Runner2, Runner3>;
++  if (!launch_fa2) {
++    const char* dedicated = std::getenv("FUSED_FA3_DEDICATED_PRIMARY");
++    if (dedicated != nullptr && dedicated[0] == '1') {
++      if (!colaunch || symmetric) {
++        FLASHINFER_ERROR("dedicated FA3 primary requires asymmetric co-launch mode");
++        return cudaErrorInvalidValue;
++      }
++      kernel = (void*)DedicatedFA3PrimaryKernel<CollectiveMainloop, CollectiveEpilogue,
++                                                KernelTraits, LEFT_SLIDING_WINDOW, CAUSAL,
++                                                Scheduler, Runner1, Runner2, Runner3>;
++    }
++  }
+   cudaFuncAttributes kernel_attributes{};
+   FLASHINFER_CUDA_CALL(cudaFuncGetAttributes(&kernel_attributes, kernel));
+   uint32_t entry_register_count = uint32_t(kernel_attributes.numRegs);
+--- a/port07/include/flashinfer/attention/hopper/prefill_sm90.cuh
++++ b/port07/include/flashinfer/attention/hopper/prefill_sm90.cuh
+@@ -71,7 +71,7 @@
+ template <typename CollectiveMainloop, typename CollectiveEpilogue, typename Ktraits,
+           bool LEFT_SLIDING_WINDOW, bool CAUSAL, typename TileScheduler,
+           bool MULTIITEMSCORING = false>
+-__device__ void fa3_prefill_body(
++__device__ __forceinline__ void fa3_prefill_body(
+     typename CollectiveMainloop::Params const& mainloop_params,
+     typename CollectiveEpilogue::Params const& epilogue_params,
+     typename TileScheduler::Params const& scheduler_params, char* shared_memory,
+

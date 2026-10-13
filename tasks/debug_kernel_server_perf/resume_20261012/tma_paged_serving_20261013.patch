@@ -1,0 +1,442 @@
+--- a/up_racefix/python/sglang/srt/layers/attention/flashinfer_backend.py
++++ b/up_racefix/python/sglang/srt/layers/attention/flashinfer_backend.py
+@@ -1817,7 +1817,7 @@
+             "page_table", len(fa3_rows) * _cols, r2t.dtype, dev
+         ).view(len(fa3_rows), _cols)
+         torch.index_select(r2t, 0, fa3_t, out=_pt)
+-        page_table = _pt[:, :max_k]
++        page_table = _pt[:, :max_k:self.page_size]
+         if self.page_size > 1:
+             page_table = page_table // self.page_size
+         # FA2 side, planned through flashinfer's public API with explicit indptr/indices, so no
+@@ -1829,7 +1829,7 @@
+         _flat = (
+             np.concatenate(
+                 [
+-                    np.arange(rp_cpu[r] * _cols, rp_cpu[r] * _cols + int(k))
++                    np.arange(rp_cpu[r] * _cols, rp_cpu[r] * _cols + int(k), self.page_size)
+                     for r, k in zip(fa2_rows, _kvl)
+                 ]
+             )
+@@ -1839,6 +1839,8 @@
+         _flat_t = self._fs_upload("fa2_flat", _flat, torch.int64, dev)
+         kv2_indices = self._fs_dev_buf("fa2_kv_idx", int(_flat.shape[0]), r2t.dtype, dev)
+         torch.index_select(r2t.view(-1), 0, _flat_t, out=kv2_indices)
++        if self.page_size > 1:
++            kv2_indices = kv2_indices // self.page_size
+         if self.fused_fa2_wrapper is None:
+             # DEDICATED workspace, never self.workspace_buffer. A flashinfer wrapper writes its
+             # scheduler metadata into the workspace it was given, so planning this extra wrapper
+@@ -1894,8 +1896,13 @@
+             return True
+ 
+         fa2_qo_indptr = indptr("fa2_qo", qo_lens[fa2_rows])
+-        fa2_kv_indptr = indptr("fa2_kv", seq_lens_cpu[fa2_rows].numpy())
++        fa2_kv_indptr = indptr("fa2_kv", (_kvl + self.page_size - 1) // self.page_size)
+         fa2_last_page = self.kv_last_page_len[:n2]
++        if self.page_size > 1:
++            fa2_last_page = self._fs_upload(
++                "fa2_last_page", ((_kvl - 1) % self.page_size + 1).astype(np.int32),
++                torch.int32, dev,
++            )
+         self.fused_fa2_wrapper.begin_forward(
+             fa2_qo_indptr,
+             fa2_kv_indptr,
+@@ -1904,7 +1911,7 @@
+             iu.num_qo_heads,
+             iu.num_kv_heads,
+             iu.head_dim,
+-            1,
++            self.page_size,
+             q_data_type=iu.q_data_type,
+             kv_data_type=iu.data_type,
+             non_blocking=False,
+@@ -2001,6 +2008,9 @@
+             _gqa = iu.num_qo_heads // iu.num_kv_heads
+             _max_fa3_packed_q = int((np.asarray(qo_lens, dtype=np.int64)[fa3_rows] * _gqa).max())
+             fa3_cta_q = 64 if _max_fa3_packed_q <= 64 else 128
++            fa3_cta_q = int(os.environ.get("FUSED_FA3_CTA_Q", str(fa3_cta_q)))
++            if os.environ.get("FUSED_PAGED_TMA_BUILD", "0") == "1" and self.page_size != 128:
++                raise ValueError("Paged TMA serving requires page_size=128")
+             fused_namespace = load_fused_fa3(cta_q=fa3_cta_q)
+             fused_ops = getattr(torch.ops, fused_namespace)
+ 
+@@ -2241,6 +2251,8 @@
+             logger.info("NATIVE_FA2_PDL_CALLS %d fa3_rows=%d fa2_rows=%d fa3_splits=%d",
+                         self.fused_split_calls, plan["n_fa3"], plan["n_fa2"], kernel["pers_plan"][54])
+             logger.info("NATIVE_PDL_COMPACT_CALLS %d", self.fused_split_calls)
++            if self.page_size > 1:
++                logger.info("NATIVE_PDL_PAGED_CALLS %d page_size=%d", self.fused_split_calls, self.page_size)
+         return output
+ 
+     def _fused_split_dispatch(
+@@ -2607,7 +2619,7 @@
+         o_fa2 = self.fused_fa2_wrapper.forward(
+             qv[_s2[0] : _s2[1]] if _use_views else qv[pl["fa2_tok"]],
+             # Already resolved by the caller, including the fp4-dequant workspace case.
+-            kv_cache,
++            (k_buf, v_buf) if self.page_size > 1 else kv_cache,
+             causal=causal,
+             sm_scale=layer.scaling,
+             logits_soft_cap=logits_soft_cap,
+--- a/srv_correctness.py
++++ b/srv_correctness.py
+@@ -104,6 +104,9 @@
+ 
+ 
+ def run_arm(arm, outdir):
++    requested_page_size = os.environ.get("BENCH_PAGE_SIZE")
++    if requested_page_size is not None and int(requested_page_size) not in (1, 128):
++        raise ValueError("The paged serving gate supports page sizes 1 and 128")
+     speculative_args = speculative_arguments() if arm.startswith("MTP") else []
+     os.makedirs(outdir, exist_ok=True)
+     short, long_ = prompts()
+@@ -116,6 +119,8 @@
+             '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}',
+             "--watchdog-timeout", "600"]
+     args += speculative_args
++    if requested_page_size is not None:
++        args.extend(["--page-size", str(int(requested_page_size))])
+     if os.environ.get("DISABLE_CUDA_GRAPH") == "1":
+         args.append("--disable-cuda-graph")
+     if os.environ.get("BENCH_CHUNK"):
+@@ -167,6 +172,7 @@
+         txt = open(f"{outdir}/server_{arm}.log").read()
+         results["_fallbacks"] = txt.lower().count("fallback")
+         results["_speculative_args"] = speculative_args
++        results["_requested_page_size"] = int(requested_page_size) if requested_page_size is not None else None
+         results["_tracebacks"] = txt.count("Traceback")
+         results["_mixed_spec_lines"] = [
+             line[-120:] for line in txt.splitlines()
+--- /dev/null
++++ b/test_paged_serving.py
+@@ -0,0 +1,275 @@
++import ast
++import importlib.util
++import os
++from pathlib import Path
++import sys
++import types
++import unittest
++from unittest.mock import patch
++
++import numpy as np
++import torch
++
++from fused_fa3_validation import verify_disputed_heads
++from tma_multicast_reference import build_fixture, reference_output
++
++
++SOURCE = Path(__file__).parent / "up_racefix/python/sglang/srt/layers/attention/flashinfer_backend.py"
++
++
++def extract_method(name, environment):
++    syntax = ast.parse(SOURCE.read_text())
++    method = next(node for node in ast.walk(syntax)
++                  if isinstance(node, ast.FunctionDef) and node.name == name)
++    executable = ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[]))
++    exec(compile(executable, str(SOURCE), "exec"), environment)
++    return environment[name]
++
++
++def request_fixture(page_size):
++    if page_size == 128:
++        pages = torch.tensor([[8, 3, 10, 2], [6, 11, 4, 9],
++                              [5, 7, 1, 12], [0, 13, 15, 14]], dtype=torch.int32)
++        table = (pages[:, :, None] * page_size + torch.arange(page_size, dtype=torch.int32)).flatten(1)
++    else:
++        table = torch.arange(4 * 512, dtype=torch.int32).reshape(4, 512)
++    lengths = torch.tensor([129, 128, 385, 257], dtype=torch.int32)
++    forward = types.SimpleNamespace(
++        extend_seq_lens_cpu=[7, 4, 32, 8], seq_lens=lengths.clone(), seq_lens_cpu=lengths,
++        req_pool_indices=torch.tensor([3, 0, 2, 1]), input_ids=torch.zeros(51, dtype=torch.int32),
++    )
++    updater = types.SimpleNamespace(num_qo_heads=28, num_kv_heads=4, head_dim=128,
++                                    q_data_type=torch.bfloat16, data_type=torch.bfloat16)
++    return table, forward, updater
++
++
++class PagedServingTest(unittest.TestCase):
++    def plan_split(self, page_size):
++        table, forward, updater = request_fixture(page_size)
++        calls = []
++
++        class Wrapper:
++            def begin_forward(self, *arguments, **keywords):
++                calls.append(([value.clone() if torch.is_tensor(value) else value
++                               for value in arguments], keywords))
++
++        backend = types.SimpleNamespace(
++            page_size=page_size, req_to_token_pool=types.SimpleNamespace(req_to_token=table),
++            indices_updater_prefill=updater, fused_split_mask=([True, False, True, False], [1] * 4, [1] * 4),
++            fused_split_plans=0, fused_split_onesided=0, fused_fa2_wrapper=Wrapper(),
++            kv_last_page_len=torch.ones(4, dtype=torch.int32),
++            _fs_upload=lambda name, data, dtype, device: torch.tensor(data, dtype=dtype, device=device),
++            _fs_dev_buf=lambda name, count, dtype, device: torch.empty(count, dtype=dtype, device=device),
++        )
++        environment = {
++            "torch": torch, "ForwardBatch": object,
++            "logger": types.SimpleNamespace(info=lambda *args: None, error=lambda *args: None),
++            "FUSED_SPLIT_NO_FA2_WRAPPER": False, "FUSED_SPLIT_DEBUG": False,
++            "FUSED_KERNEL_EXEC": False, "FUSED_NATIVE_PDL": False,
++        }
++        method = extract_method("_fused_split_plan", environment)
++        self.assertTrue(method(backend, forward))
++        return backend, forward, table, calls, method
++
++    def test_page128_split_metadata(self):
++        backend, _, _, calls, _ = self.plan_split(128)
++        arguments, keywords = calls[0]
++        self.assertEqual(arguments[0].tolist(), [0, 4, 12])
++        self.assertEqual(arguments[1].tolist(), [0, 1, 4])
++        self.assertEqual(arguments[2].tolist(), [8, 6, 11, 4])
++        self.assertEqual(arguments[3].tolist(), [128, 1])
++        self.assertEqual(arguments[7], 128)
++        self.assertFalse(keywords["non_blocking"])
++        self.assertEqual(backend.fused_split_plan["page_table"].tolist(),
++                         [[0, 13, 15, 14], [5, 7, 1, 12]])
++        self.assertEqual(backend.fused_split_plan["page_table"].stride(-1), 1)
++        self.assertEqual(backend.fused_split_plan["cache_seqlens"].tolist(), [129, 385])
++        self.assertEqual(backend.fused_split_plan["fa2_tok"].tolist(), list(range(7, 11)) + list(range(43, 51)))
++
++    def test_page_boundary_growth(self):
++        backend, forward, _, calls, method = self.plan_split(128)
++        forward.seq_lens_cpu[1] = 129
++        forward.seq_lens[1] = 129
++        self.assertTrue(method(backend, forward))
++        arguments, _ = calls[1]
++        self.assertEqual(arguments[1].tolist(), [0, 2, 5])
++        self.assertEqual(arguments[2].tolist(), [8, 3, 6, 11, 4])
++        self.assertEqual(arguments[3].tolist(), [1, 1])
++        self.assertEqual(calls[0][0][3].tolist(), [128, 1])
++
++    def test_page1_metadata_is_unchanged(self):
++        backend, _, table, calls, _ = self.plan_split(1)
++        arguments, _ = calls[0]
++        self.assertEqual(arguments[1].tolist(), [0, 128, 385])
++        self.assertEqual(arguments[2].tolist(), torch.cat((table[0, :128], table[1, :257])).tolist())
++        self.assertEqual(arguments[3].tolist(), [1, 1])
++        self.assertEqual(arguments[7], 1)
++        self.assertTrue(torch.equal(backend.fused_split_plan["page_table"], table[[3, 2], :385]))
++
++    def prepare_primary(self, page_size=128, primary_rows=(0, 2)):
++        table, forward, updater = request_fixture(page_size)
++        events, plans, loads = [], [], []
++
++        class Event:
++            def synchronize(self):
++                events.append("wait")
++
++            def record(self):
++                events.append("record")
++
++        def build(*arguments):
++            events.append("build")
++            plans.append(arguments)
++            return [0] * 59
++
++        class TorchProxy:
++            ops = types.SimpleNamespace(paged_test=types.SimpleNamespace(build_fused_plan=build))
++            cuda = types.SimpleNamespace(Event=Event, get_device_properties=lambda device: types.SimpleNamespace(multi_processor_count=132))
++
++            def __getattr__(self, name):
++                return getattr(torch, name)
++
++            def empty(self, size, **keywords):
++                keywords.pop("pin_memory", None)
++                return torch.empty(min(size, 128), **keywords)
++
++        environment = {"torch": TorchProxy(), "os": os, "FUSED_NATIVE_PDL": True,
++                       "FUSED_SPLIT_VERIFY": True, "logger": types.SimpleNamespace(info=lambda *args: None)}
++        method = extract_method("_prepare_fused_kernel_plan", environment)
++        loader_name = "sglang.srt.layers.attention.fused_fa3_loader"
++        loader = types.ModuleType(loader_name)
++
++        def load(**keywords):
++            loads.append(keywords)
++            return "paged_test"
++
++        loader.load_fused_fa3 = load
++        flashinfer = types.ModuleType("flashinfer")
++
++        def unused_wrapper(*arguments, **keywords):
++            raise AssertionError("The native primary must not construct the legacy FA3 wrapper")
++
++        flashinfer.BatchPrefillWithPagedKVCacheWrapper = unused_wrapper
++        backend = types.SimpleNamespace(page_size=page_size, _fused_kernel_state=None,
++                                        req_to_token_pool=types.SimpleNamespace(req_to_token=table))
++        plan = {}
++        primary = np.array(primary_rows, dtype=np.int64)
++        secondary = np.array([row for row in range(4) if row not in primary_rows], dtype=np.int64)
++        settings = {"FUSED_PAGED_TMA_BUILD": "1", "FUSED_FA3_CTA_Q": "128",
++                    "SGLANG_FUSED_SM_FA3": "112", "SGLANG_FUSED_KERNEL_DEBUG": "0"}
++        with patch.dict(sys.modules, {loader_name: loader, "flashinfer": flashinfer}), patch.dict(os.environ, settings):
++            for repeat in range(2):
++                method(backend, forward, plan, primary, secondary, np.array(forward.extend_seq_lens_cpu),
++                       forward.seq_lens_cpu, forward.req_pool_indices.tolist(),
++                       np.array([0, 7, 11, 43, 51]), updater, torch.device("cpu"))
++        return plan["fused_kernel"], plans, loads, events
++
++    def test_primary_and_verification_page_metadata(self):
++        kernel, plans, loads, events = self.prepare_primary()
++        self.assertEqual(plans[0][3].tolist(), [0, 7, 39])
++        self.assertEqual(plans[0][4].tolist(), [0, 2, 6])
++        self.assertEqual(plans[0][5].tolist(), [129, 385])
++        self.assertEqual(plans[0][11], 128)
++        self.assertEqual(kernel["kv_indices"].tolist(), [0, 13, 5, 7, 1, 12])
++        self.assertEqual(kernel["verify_q_indptr"].tolist(), [0, 7, 11, 43, 51])
++        self.assertEqual(kernel["verify_kv_indptr"].tolist(), [0, 2, 3, 7, 10])
++        self.assertEqual(kernel["verify_kv_indices"].tolist(), [0, 13, 8, 5, 7, 1, 12, 6, 11, 4])
++        self.assertEqual(kernel["max_pages"], 4)
++        self.assertEqual(loads, [{"cta_q": 128}, {"cta_q": 128}])
++        self.assertEqual(events, ["build", "record", "wait", "build", "record"])
++
++    def test_small_query_honors_explicit_tile(self):
++        kernel, _, loads, _ = self.prepare_primary(primary_rows=(0,))
++        self.assertEqual(kernel["fa3_cta_q"], 128)
++        self.assertEqual(loads, [{"cta_q": 128}, {"cta_q": 128}])
++
++    def test_tma_rejects_page1_before_launch(self):
++        with self.assertRaises(RuntimeError) as raised:
++            self.prepare_primary(page_size=1)
++        self.assertIn("page_size=128", str(raised.exception.__cause__))
++
++    def run_stock_dispatch(self, page_size):
++        module_path = Path(__file__).parent / "paged_view.py"
++        view_name = "sglang.srt.mem_cache.layout.paged_view"
++        specification = importlib.util.spec_from_file_location(view_name, module_path)
++        view_module = importlib.util.module_from_spec(specification)
++        specification.loader.exec_module(view_module)
++        attention_name = "sglang.kernels.ops.attention.flash_attention"
++        attention_module = types.ModuleType(attention_name)
++        caches = []
++
++        def fa3(**arguments):
++            self.assertEqual(arguments["k_cache"].shape, (512 // page_size, page_size, 4, 128))
++            return arguments["q"] + 1
++
++        class Wrapper:
++            def forward(self, query, cache, **arguments):
++                caches.append(cache)
++                return query + 2
++
++        attention_module.flash_attn_with_kvcache = fa3
++        cache = (torch.zeros(512, 4, 128, dtype=torch.bfloat16),
++                 torch.zeros(512, 4, 128, dtype=torch.bfloat16))
++        plan = {"tok_total": 8, "fa3_span": (0, 3), "fa2_span": (3, 8),
++                "fa3_tok": torch.arange(3), "fa2_tok": torch.arange(3, 8),
++                "page_table": torch.zeros(1, 512 // page_size, dtype=torch.int32),
++                "cache_seqlens": torch.tensor([512], dtype=torch.int32),
++                "cu_q": torch.tensor([0, 3], dtype=torch.int32), "max_q": 3,
++                "n_fa3": 1, "n_fa2": 1}
++        backend = types.SimpleNamespace(
++            page_size=page_size, fused_split_plan=plan, fused_fa2_wrapper=Wrapper(),
++            fused_split_calls=0, fused_split_onesided=0, fused_sm_margin=0,
++            forward_metadata=types.SimpleNamespace(multi_item_params=None),
++            token_to_kv_pool=types.SimpleNamespace(get_kv_buffer=lambda layer: cache),
++        )
++        layer = types.SimpleNamespace(
++            sliding_window_size=-1, k_scale_float=None, v_scale_float=None,
++            is_cross_attention=False, attn_type="decoder", tp_q_head_num=28, head_dim=128,
++            tp_k_head_num=4, tp_v_head_num=4, v_head_dim=128, scaling=0.088, layer_id=0,
++        )
++        environment = {"torch": torch, "AttentionType": types.SimpleNamespace(ENCODER_ONLY="encoder"),
++                       "FUSED_SPLIT_DEBUG": False, "SPLIT_OVERLAP": False, "FUSED_SPLIT_VERIFY": False,
++                       "logger": types.SimpleNamespace(info=lambda *arguments: None)}
++        method = extract_method("_fused_split_dispatch", environment)
++        query = torch.arange(8, dtype=torch.bfloat16).view(8, 1, 1).expand(8, 28, 128).clone()
++        with patch.dict(sys.modules, {view_name: view_module, attention_name: attention_module}):
++            output = method(backend, query, layer, None, True, 0, kv_cache=cache)
++        expected = query.clone()
++        expected[:3] += 1
++        expected[3:] += 2
++        self.assertTrue(torch.equal(output, expected))
++        return cache, caches[0]
++
++    def test_page128_stock_fa2_receives_paged_cache(self):
++        original, passed = self.run_stock_dispatch(128)
++        for raw, paged in zip(original, passed):
++            self.assertEqual(paged.shape, (4, 128, 4, 128))
++            self.assertEqual(paged.data_ptr(), raw.data_ptr())
++
++    def test_page1_stock_fa2_retains_original_cache(self):
++        original, passed = self.run_stock_dispatch(1)
++        self.assertIs(passed, original)
++
++    def test_fp32_adjudication_uses_page128_indices(self):
++        fixture = build_fixture([(3, 129), (2, 257)], [(4, 385)], device="cpu")
++        reference = reference_output(fixture).to(torch.bfloat16)
++        disputed = torch.tensor([[0, 0], [2, 27], [3, 8], [4, 20], [5, 1], [8, 26]])
++
++        def adjudicate(output):
++            return verify_disputed_heads(
++                fixture["query"], fixture["key"], fixture["value"], output, reference,
++                fixture["query_indptr"], fixture["page_indptr"],
++                torch.tensor(fixture["kv_lengths"]), fixture["indices"], disputed,
++                128 ** -0.5, 0.02,
++            )
++
++        results = adjudicate(reference)
++        self.assertEqual(len(results), len(disputed))
++        self.assertTrue(all(result["passed"] for result in results))
++        corrupt = reference.clone()
++        corrupt[4, 20] += 0.1
++        self.assertFalse(adjudicate(corrupt)[-1]["passed"])
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/test_paged_driver.py
+@@ -0,0 +1,51 @@
++import importlib.util
++import os
++from pathlib import Path
++import tempfile
++import unittest
++from unittest.mock import patch
++
++
++specification = importlib.util.spec_from_file_location(
++    "paged_correctness_driver", Path(__file__).parent / "srv_correctness.py")
++driver = importlib.util.module_from_spec(specification)
++specification.loader.exec_module(driver)
++
++
++class StopLaunch(Exception):
++    pass
++
++
++class PagedDriverTest(unittest.TestCase):
++    def launch_arguments(self, setting):
++        captured = []
++
++        def launch(arguments, **keywords):
++            captured.append(arguments)
++            keywords["stdout"].close()
++            raise StopLaunch()
++
++        environment = {} if setting is None else {"BENCH_PAGE_SIZE": setting}
++        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, environment, clear=True):
++            with patch.object(driver, "prompts", return_value=([], [])), patch.object(driver.subprocess, "Popen", side_effect=launch):
++                with self.assertRaises(StopLaunch):
++                    driver.run_arm("MTPMIXFUSED_PAGED", directory)
++        return captured[0]
++
++    def test_page128_reaches_server_cli(self):
++        arguments = self.launch_arguments("128")
++        self.assertEqual(arguments[arguments.index("--page-size") + 1], "128")
++        self.assertEqual(arguments[arguments.index("--speculative-num-draft-tokens") + 1], "4")
++
++    def test_default_cli_is_unchanged(self):
++        self.assertNotIn("--page-size", self.launch_arguments(None))
++
++    def test_unsupported_page_size_rejects_before_launch(self):
++        with patch.dict(os.environ, {"BENCH_PAGE_SIZE": "64"}, clear=True), patch.object(driver.subprocess, "Popen") as launch:
++            with self.assertRaises(ValueError):
++                driver.run_arm("MTPMIXFUSED_PAGED", "/unused")
++            launch.assert_not_called()
++
++
++if __name__ == "__main__":
++    unittest.main()

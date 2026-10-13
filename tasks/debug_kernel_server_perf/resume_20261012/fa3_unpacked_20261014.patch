@@ -1,0 +1,196 @@
+--- a/port07/include/flashinfer/attention/fused_plan.cuh
++++ b/port07/include/flashinfer/attention/fused_plan.cuh
+@@ -25,6 +25,10 @@
+  */
+ #ifndef FLASHINFER_ATTENTION_FUSED_PLAN_CUH_
+ #define FLASHINFER_ATTENTION_FUSED_PLAN_CUH_
++
++#ifndef FUSED_FA3_UNPACKED
++#define FUSED_FA3_UNPACKED 0
++#endif
+ 
+ #include <map>
+ #include <sstream>
+@@ -328,7 +332,9 @@
+     const int64_t packed_qo_pre = static_cast<int64_t>(qo) * gqa_group_size;
+     const bool is_fa3 = (fa3_mask && fa3_mask[i]) ||
+                         (fa3_min_packed > 0 && packed_qo_pre >= fa3_min_packed);
+-    const int64_t packed_qo = static_cast<int64_t>(qo) * gqa_group_size;
++    const bool unpacked_fa3 = FUSED_FA3_UNPACKED && is_fa3;
++    const int64_t packed_qo = static_cast<int64_t>(qo) * (unpacked_fa3 ? 1 : gqa_group_size);
++    const uint32_t task_heads = unpacked_fa3 ? num_kv_heads * gqa_group_size : num_kv_heads;
+ 
+     int task;
+     uint32_t tile_q;
+@@ -350,7 +356,7 @@
+       tile_q = kFa2TileQ[2];
+     }
+ 
+-    const int32_t role_chunk = task == 3 ? static_cast<int32_t>(kv_chunk) : fa2_chunk;
++    const int32_t role_chunk = unpacked_fa3 ? 0 : (task == 3 ? static_cast<int32_t>(kv_chunk) : fa2_chunk);
+     auto task_for_remaining = [&](int64_t remaining) {
+       if (!fine_tail || task == 3) return task;
+       if (remaining > int64_t(kFa2TileQ[1])) return 0;
+@@ -378,7 +384,7 @@
+     }();
+     if (group_major) {
+       for (int32_t kv0 = 0; kv0 < kv; kv0 += chunk) ++splits;
+-      for (uint32_t h = 0; h < num_kv_heads; ++h) {
++      for (uint32_t h = 0; h < task_heads; ++h) {
+         for (int64_t q0 = 0; q0 < packed_qo;) {
+           const int64_t rem = packed_qo - q0;
+           const int work_task = task_for_remaining(rem);
+@@ -401,7 +407,7 @@
+       ++splits;
+       // One item per (q tile, kv chunk, kv head). packed_qo is the q extent AFTER GQA packing,
+       // so the tile walk is over packed rows, not raw tokens.
+-      for (uint32_t h = 0; h < num_kv_heads; ++h) {
++      for (uint32_t h = 0; h < task_heads; ++h) {
+         for (int64_t q0 = 0; q0 < packed_qo;) {
+           const int64_t rem = packed_qo - q0;
+           const int work_task = task_for_remaining(rem);
+@@ -501,6 +507,7 @@
+   std::map<Key, std::vector<std::pair<int, int>>> groups;  // key -> [(task, item index)]
+   for (int t = 0; t < 4; ++t)
+     for (size_t i = 0; i < items[t].size(); ++i) {
++      if (FUSED_FA3_UNPACKED && t == 3) continue;
+       const auto& it = items[t][i];
+       groups[Key{t, it.batch_idx, it.q_start}].emplace_back(t, (int)i);
+     }
+@@ -754,7 +761,8 @@
+     }
+   }
+ 
+-  kv_chunk = FusedAlignFa3KvChunk(std::max(kv_chunk, int32_t(0)), FUSED_FA3_CTA_KV, page_size);
++  kv_chunk = FUSED_FA3_UNPACKED ? 0 : FusedAlignFa3KvChunk(
++      std::max(kv_chunk, int32_t(0)), FUSED_FA3_CTA_KV, page_size);
+ 
+   // CTA slot counts the work_indptr arrays are partitioned over. FA3 MUST be sm_split: its
+   // scheduler indexes work_indptr[blockIdx.x] over the planned count and
+--- a/port07/include/flashinfer/attention/unified_wgmma_scheduler.cuh
++++ b/port07/include/flashinfer/attention/unified_wgmma_scheduler.cuh
+@@ -130,7 +130,11 @@
+   CUTLASS_DEVICE
+   static WorkTileInfo load(Params const& params, int work_idx, int ptr_begin, int ptr_end,
+                            int counter) {
++#if FUSED_FA3_UNPACKED
++    const int kv_head = int(params.kv_head_idx[work_idx]) / int(params.group_size_fastdiv.divisor);
++#else
+     const int kv_head = int(params.kv_head_idx[work_idx]);
++#endif
+     const int kv_begin = int(params.kv_start[work_idx]);
+     // Split-KV with no mainloop change: hand it a base shifted to the chunk and
+     // a length of just that chunk. Legal because this path is non-causal.
+@@ -141,7 +145,11 @@
+     // every tile look out of range: measured as 116 task-3 work items sitting in
+     // exactly the right clusters and silently producing nothing. Present the q
+     // extent in the same packed units as the tile index.
+-    const int packed_qo_len = int(params.q_len[work_idx]) * int(params.group_size_fastdiv.divisor);
++    const int packed_qo_len = int(params.q_len[work_idx])
++#if !FUSED_FA3_UNPACKED
++                             * int(params.group_size_fastdiv.divisor)
++#endif
++                             ;
+     // The PLAN's formula -- uniform chunk per request, no causal adjustment -- because this must
+     // agree with the `splits` EnumerateFusedWorkItems counted when it sized the partial slab.
+     const int nchunks = (params.len_kv_chunk != nullptr && params.len_kv_chunk[0] > 0)
+@@ -173,7 +181,12 @@
+     }
+ #endif
+     return {.q_tile_idx = int(params.q_start[work_idx]) / int(params.cta_tile_q),
+-            .qo_head_idx = kv_head * int(params.group_size_fastdiv.divisor),
++            .qo_head_idx =
++#if FUSED_FA3_UNPACKED
++                int(params.kv_head_idx[work_idx]),
++#else
++                kv_head * int(params.group_size_fastdiv.divisor),
++#endif
+             .kv_head_idx = kv_head,
+             .qo_indptr = int(params.q_indptr[work_idx]),
+             .kv_indptr = int(params.kv_indptr[work_idx]) + kv_begin / int(params.page_size),
+--- a/port07/tests/fused_fa3_persistent_ext.cu
++++ b/port07/tests/fused_fa3_persistent_ext.cu
+@@ -586,6 +586,10 @@
+   plan.FromVector(plan_values);
+   TORCH_CHECK(plan.num_fa3_clusters == sm_split && plan.num_fa3_requests == num_requests,
+               "compact primary requires an FA3-only plan with the same SM budget");
++#if FUSED_FA3_UNPACKED
++  TORCH_CHECK(plan.max_splits_fa3 == 1 && plan.num_merge_rows == 0,
++              "unpacked FA3 requires its unsplit query-head plan");
++#endif
+   TORCH_CHECK(query_indptr.numel() == num_requests + 1 && page_indptr.numel() == num_requests + 1 &&
+               kv_lengths.numel() == num_requests, "compact primary metadata mismatch");
+   fused_run_impl(q, key_cache, value_cache, page_indices, output, at::Tensor(), {},
+--- /dev/null
++++ b/port07/tests/test_fa3_unpacked_plan.cpp
+@@ -0,0 +1,43 @@
++#include <cassert>
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++
++#include <flashinfer/attention/fused_plan.cuh>
++
++int main() {
++  static_assert(FUSED_FA3_UNPACKED == 1);
++  setenv("FUSED_FA2_TILES", "64,32,16", 1);
++  const int32_t queries[] = {512, 17, 129, 4, 8};
++  const int32_t lengths[] = {65536, 4097, 32769, 8193, 4096};
++  const int32_t offsets[] = {0, 512, 529, 658, 662, 670};
++  const bool roles[] = {true, true, true, false, false};
++  for (const char* ordering : {"0", "1"}) {
++    setenv("FUSED_GROUP_MAJOR", ordering, 1);
++    std::vector<flashinfer::FusedWorkItem> work[4];
++    int32_t maximum_splits = 0;
++    std::vector<int32_t> requests;
++    flashinfer::EnumerateFusedWorkItems(queries, lengths, roles, 5, 7, 4, 128, 512,
++                                      work, &maximum_splits, &requests, 256);
++    assert(maximum_splits == 1 && requests == std::vector<int32_t>({0, 1, 2}));
++    assert(work[3].size() == 196);
++    std::vector<int> coverage(658 * 28, 0);
++    for (const auto& item : work[3]) {
++      assert(item.batch_idx >= 0 && item.batch_idx < 3);
++      assert(item.kv_head_idx >= 0 && item.kv_head_idx < 28);
++      assert(item.kv_head_idx / 7 < 4);
++      assert(item.kv_start == 0 && item.kv_end == lengths[item.batch_idx]);
++      assert(item.q_start >= 0 && item.q_start + item.q_len <= queries[item.batch_idx]);
++      for (int row = 0; row < item.q_len; ++row) {
++        ++coverage[(offsets[item.batch_idx] + item.q_start + row) * 28 + item.kv_head_idx];
++      }
++    }
++    for (int count : coverage) assert(count == 1);
++    flashinfer::FusedMergeLayout merge;
++    flashinfer::BuildFusedMergeLayout(work, lengths, 5, 4, offsets, 7, &merge);
++    assert(merge.num_merge_tiles > 0);
++    for (int offset : merge.partial_indptr[3]) assert(offset == -1);
++    for (int row : merge.merge_o_indices) assert(row >= offsets[3] * 28);
++    std::printf("unpacked head/token coverage, no FA3 splits, FA2 merge retained: group_major=%s PASS\n", ordering);
++  }
++}
+--- a/up_racefix/python/sglang/srt/layers/attention/fused_fa3_loader.py
++++ b/up_racefix/python/sglang/srt/layers/attention/fused_fa3_loader.py
+@@ -231,11 +231,16 @@
+ 
+ def load_fused_fa3(verbose: bool = False, cta_q: int | None = None) -> str:
+     """Compile/register one FA3 tile variant and return its operator namespace."""
++    unpacked = os.environ.get("FUSED_FA3_UNPACKED", "0") == "1"
++    if unpacked and (os.environ.get("FUSED_PACKED_Q") != "off" or os.environ.get("FUSED_PAGED_TMA_BUILD", "0") != "0"):
++        raise ValueError("Unpacked FA3 requires FUSED_PACKED_Q=off and the gather build")
+     explicit_variant = cta_q is not None
+     compile_q = int(cta_q if explicit_variant else os.environ.get("FA3_CTA_Q", "128"))
+     if compile_q not in (64, 128):
+         raise ValueError(f"FA3 CTA_Q must be 64 or 128, got {compile_q}")
+     namespace = f"fused_fa3_q{compile_q}" if explicit_variant else "fused_fa3"
++    if unpacked:
++        namespace += "_unpacked"
+     if namespace in _LOADED_NAMESPACES and hasattr(getattr(torch.ops, namespace), "fused_run"):
+         return namespace
+     from torch.utils.cpp_extension import load
+@@ -407,6 +412,7 @@
+             # configuration that instantiates store_partial, so without it the split-KV path
+             # is compiled out and split rows write no partial.
+             "-DFLASHINFER_FUSED_UNIFIED_WGMMA=1",
++            "-DFUSED_FA3_UNPACKED=" + str(int(unpacked)),
+             "-DFLASHINFER_FUSED_CLUSTER=" + os.environ.get("FUSED_CLUSTER", "1"),
+             "-DFLASHINFER_FA3_PAGED_TMA=" + os.environ.get("FA3_PAGED_TMA", "0"),
+             "-DFLASHINFER_FUSED_PAGED_TMA=" + os.environ.get("FUSED_PAGED_TMA_BUILD", "0"),

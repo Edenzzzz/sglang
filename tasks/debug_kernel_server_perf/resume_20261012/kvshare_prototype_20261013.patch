@@ -1,0 +1,399 @@
+--- a/port07/include/flashinfer/attention/persistent_fa3_fused.cuh
++++ b/port07/include/flashinfer/attention/persistent_fa3_fused.cuh
+@@ -399,6 +399,14 @@
+     // passed the last work item's epilogue.
+     __syncthreads();
+ 
++#if FLASHINFER_FA3_KV_SHARE
++    if (fa3_mainloop_params.kv_share_trace && threadIdx.x == 0 && blockIdx.x == 0) {
++      printf("FA3_KV_SHARE items=%u\n",
++             reinterpret_cast<typename FA3Traits::SharedStorage*>(smem)->kv_share_items);
++    }
++    cute::cluster_arrive_relaxed();
++    cute::cluster_wait();
++#endif
+     // A runtime predicate, not a template parameter. As a template parameter it
+     // produced a second instantiation that was deterministically wrong -- FA3
+     // output off by 29-40x the output magnitude at every split, including with
+@@ -1108,15 +1116,21 @@
+     const int v = e ? std::atoi(e) : 1;
+     return v < 1 ? 1 : v;
+   }();
++#if FLASHINFER_FA3_KV_SHARE
++  if (!colaunch || symmetric || cluster != 2) {
++    FLASHINFER_ERROR("FA3 KV sharing requires the two-CTA clustered co-launch path");
++    return cudaErrorInvalidValue;
++  }
++#endif
+   if (cluster > 1) {
+     // A cluster launch requires gridDim.x to be a multiple of the cluster
+     // dimension. Rounding down would change the CTA count that both roles'
+     // plans were built for -- FA3's contract checks it exactly -- so refuse
+     // rather than silently reshape the grid.
+-    if (multiprocessor_count % cluster != 0) {
++    if (grid_dims.x % cluster != 0) {
+       FLASHINFER_ERROR("fused FA3+FA2 cluster launch: FLASHINFER_FUSED_CLUSTER=" +
+-                       std::to_string(cluster) + " does not divide the SM count " +
+-                       std::to_string(multiprocessor_count) +
++                       std::to_string(cluster) + " does not divide the grid size " +
++                       std::to_string(grid_dims.x) +
+                        "; rounding the grid would break the planned CTA count.");
+       return cudaErrorInvalidValue;
+     }
+@@ -1138,7 +1152,11 @@
+         cudaLaunchKernel(kernel, grid_dims, block_dims, args, smem_size, stream));
+   }
+   if (colaunch) {
+-    if (symmetric || cluster > 1) {
++    if (symmetric
++#if !FLASHINFER_FA3_KV_SHARE
++        || cluster > 1
++#endif
++    ) {
+       FLASHINFER_ERROR("FLASHINFER_FUSED_COLAUNCH runs the FA3 grid alone on sm_split CTAs; it "
+                        "cannot be combined with FLASHINFER_FUSED_SYMMETRIC or a cluster launch");
+       return cudaErrorInvalidValue;
+--- a/port07/include/flashinfer/attention/unified_wgmma_scheduler.cuh
++++ b/port07/include/flashinfer/attention/unified_wgmma_scheduler.cuh
+@@ -198,6 +198,16 @@
+   UnifiedWgmmaTileScheduler() {}
+ 
+   CUTLASS_DEVICE
++  WorkTileInfo get_peer_work(Params const& params, WorkTileInfo const& current_work) const {
++    const uint32_t peer_cta = blockIdx.x ^ 1u;
++    const int begin = int(params.work_indptr[peer_cta]);
++    const int end = int(params.work_indptr[peer_cta + 1]);
++    const int index = begin + current_work.counter;
++    if (index >= end) return WorkTileInfo{};
++    return load(params, index, begin, end, current_work.counter);
++  }
++
++  CUTLASS_DEVICE
+   WorkTileInfo get_initial_work(Params const& params) const {
+     const int ptr_begin = int(params.work_indptr[blockIdx.x]);
+     const int ptr_end = int(params.work_indptr[blockIdx.x + 1]);
+--- a/port07/include/flashinfer/attention/fused_plan.cuh
++++ b/port07/include/flashinfer/attention/fused_plan.cuh
+@@ -198,6 +198,25 @@
+   int32_t kv_head_idx;
+ };
+ 
++inline std::vector<int32_t> FusedPairFa3WorkItems(std::vector<FusedWorkItem>& items,
++                                                uint32_t cta_count) {
++  if (cta_count == 0 || cta_count % 2 != 0) {
++    FLASHINFER_ERROR("FA3 KV sharing requires a positive even CTA count");
++  }
++  std::vector<std::vector<FusedWorkItem>> assignments(cta_count);
++  for (size_t index = 0; index < items.size(); ++index) {
++    const size_t cluster = (index / 2) % (cta_count / 2);
++    assignments[2 * cluster + index % 2].push_back(items[index]);
++  }
++  std::vector<int32_t> offsets(cta_count + 1, 0);
++  items.clear();
++  for (uint32_t cta = 0; cta < cta_count; ++cta) {
++    items.insert(items.end(), assignments[cta].begin(), assignments[cta].end());
++    offsets[cta + 1] = int32_t(items.size());
++  }
++  return offsets;
++}
++
+ // FUSED_FA2_KV_CHUNK=auto: the chunk is chosen per batch by FusedAutoFa2KvChunk in the planner and
+ // handed to EnumerateFusedWorkItems as fa2_chunk_override; here it reads as "no fixed chunk".
+ inline bool FusedFa2KvChunkAuto() {
+@@ -718,6 +737,12 @@
+                           num_kv_heads, kFa3TileQ, uint32_t(kv_chunk < 0 ? 0 : kv_chunk),
+                           items, &max_splits_fa3, &fa3_batch_list, fa2_chunk_override);
+ 
++  std::vector<int32_t> paired_fa3_offsets;
++  if (const char* configured = std::getenv("FUSED_FA3_CLUSTER_PAIR");
++      configured != nullptr && configured[0] == '1') {
++    paired_fa3_offsets = FusedPairFa3WorkItems(items[3], fa3_ctas);
++  }
++
+   FusedMergeLayout merge;
+   // Per-request base in TOKEN rows, which is the unit merge_o_indices is in -- NOT packed rows.
+   // BlockBatchReductionPersistent::Run writes
+@@ -739,6 +764,10 @@
+   // refuses a launch where that disagrees.
+   std::vector<int32_t> work_indptr[4];
+   for (int t = 0; t < 4; ++t) {
++    if (t == 3 && !paired_fa3_offsets.empty()) {
++      work_indptr[t] = std::move(paired_fa3_offsets);
++      continue;
++    }
+     const uint32_t ctas = (t == 3) ? fa3_ctas : fa2_ctas;
+     const size_t n = items[t].size();
+     work_indptr[t].resize(ctas + 1);
+--- a/port07/include/flashinfer/attention/hopper/mainloop_mma.cuh
++++ b/port07/include/flashinfer/attention/hopper/mainloop_mma.cuh
+@@ -90,7 +90,11 @@
+     if (cutlass::canonical_warp_idx_sync() == Ktraits::NUM_WARPS - 1 && lane_predicate) {
+ #pragma unroll
+       for (uint32_t cta_id = 0; cta_id < 1; ++cta_id) {
++#if FLASHINFER_FA3_KV_SHARE
++        shared_storage.barrier_O.arrive(cute::block_rank_in_cluster(), lane_predicate);
++#else
+         shared_storage.barrier_O.arrive(cta_id, lane_predicate);
++#endif
+       }
+     }
+   }
+--- a/port07/include/flashinfer/attention/hopper/sparse_mainloop.cuh
++++ b/port07/include/flashinfer/attention/hopper/sparse_mainloop.cuh
+@@ -20,6 +20,10 @@
+ #include <cutlass/cutlass.h>
+ #include <cutlass/numeric_conversion.h>
+ #include <cutlass/numeric_types.h>
++#if FLASHINFER_FA3_KV_SHARE
++#include <cooperative_groups.h>
++#include <cstdlib>
++#endif
+ 
+ #include "../../fastdiv.cuh"
+ #include "../../math.cuh"
+@@ -165,6 +169,10 @@
+     // call site silently rather than loudly.
+     DTypeQ const* packed_Q_ptr = nullptr;
+     int group_size = 1;
++#if FLASHINFER_FA3_KV_SHARE
++    bool kv_share_enabled = false;
++    bool kv_share_trace = false;
++#endif
+   };
+ 
+   static Params to_underlying_arguments(Arguments const& args) {
+@@ -184,7 +192,17 @@
+             uint_fastdiv(args.page_size),  // Convert page_size to fastdiv
+             args.additional_params,
+             args.packed_Q_ptr,
+-            args.group_size};
++            args.group_size
++#if FLASHINFER_FA3_KV_SHARE
++            , [] {
++              const char* configured = std::getenv("FUSED_FA3_KV_SHARE");
++              return configured != nullptr && configured[0] == '1';
++            }(), [] {
++              const char* configured = std::getenv("FUSED_FA3_KV_SHARE_TRACE");
++              return configured != nullptr && configured[0] == '1';
++            }()
++#endif
++    };
+   }
+ 
+   CUTLASS_DEVICE
+@@ -264,6 +282,31 @@
+     auto [q_tile_idx, qo_head_idx, kv_head_idx, qo_indptr, kv_indptr, qo_len, kv_len, batch_idx] =
+         block_coord;
+ 
++#if FLASHINFER_FA3_KV_SHARE
++    const uint32_t cluster_rank = cute::block_rank_in_cluster();
++    const uint32_t peer_rank = cluster_rank ^ 1u;
++    bool share_kv = false;
++    if constexpr (!LEFT_SLIDING_WINDOW && !MULTIITEMSCORING &&
++                  fused_has_causal_kv_len<typename Scheduler::WorkTileInfo>::value) {
++      if (mainloop_params.kv_share_enabled) {
++        const auto peer = scheduler.get_peer_work(scheduler_params, work_tile_info);
++        if (peer.is_valid(scheduler_params) && peer.q_tile_idx * CTA_Q < peer.qo_len &&
++            peer.qo_indptr == qo_indptr && peer.kv_indptr == kv_indptr &&
++            peer.qo_len == qo_len && peer.kv_len == kv_len && peer.kv_head_idx == kv_head_idx &&
++            peer.causal_kv_len == work_tile_info.causal_kv_len) {
++          const int tile_count = get_num_kv_tiles(
++              mainloop_params, q_tile_idx, qo_len, kv_len, work_tile_info.causal_kv_len);
++          const int peer_tile_count = get_num_kv_tiles(
++              mainloop_params, peer.q_tile_idx, peer.qo_len, peer.kv_len, peer.causal_kv_len);
++          share_kv = tile_count > 0 && tile_count == peer_tile_count;
++        }
++      }
++    }
++    if (share_kv && mainloop_params.kv_share_trace && threadIdx.x == 0) {
++      ++shared_storage.kv_share_items;
++    }
++#endif
++
+ #if FUSED_Q_REUSE_FENCE
+     // CROSS-ITEM Q FENCE (ours). Every write to smem_q is below this point.
+     //
+@@ -487,9 +530,41 @@
+         // Final address: base_ptr + base_offset + d_idx
+         // where base_offset = page_idx * page_stride + entry_idx * stride_n
+         Vec const* src_ptr = reinterpret_cast<Vec const*>(base_ptr + base_offset + d_idx);
++#if FLASHINFER_FA3_KV_SHARE
++        static_assert(HEAD_DIM_QK % (2 * VecSize) == 0);
++        if (!share_kv || uint32_t(d_idx >= HEAD_DIM_QK / 2) == cluster_rank) {
++#endif
+         cutlass::arch::cp_async_zfill<sizeof(Vec), cutlass::arch::CacheOperation::Global>(
+             &dst(i), src_ptr, guard);
+-      }
++#if FLASHINFER_FA3_KV_SHARE
++        }
++#endif
++      }
++#if FLASHINFER_FA3_KV_SHARE
++      if (share_kv) {
++        if (threadIdx.x == 0) shared_storage.kv_share_stage = uint32_t(stage_idx);
++        cute::cp_async_fence();
++        cute::cp_async_wait<0>();
++        shared_storage.barrier_kv_share.arrive();
++        shared_storage.barrier_kv_share.arrive(peer_rank, 1);
++        shared_storage.barrier_kv_share.wait(0);
++        const auto cluster = cooperative_groups::this_cluster();
++        const uint32_t peer_stage =
++            *cluster.map_shared_rank(&shared_storage.kv_share_stage, peer_rank);
++        auto peer_dst = recast<Vec>(flatten(tXsX(_, _, _, peer_stage)));
++        CUTLASS_PRAGMA_UNROLL
++        for (int index = 0; index < size(dst); ++index) {
++          const auto coordinate = c(VecSize * index);
++          if (uint32_t(get<1>(coordinate) >= HEAD_DIM_QK / 2) != cluster_rank) {
++            dst(index) = *cluster.map_shared_rank(&peer_dst(index), peer_rank);
++          }
++        }
++        cutlass::arch::fence_view_async_shared();
++        shared_storage.barrier_kv_share.arrive();
++        shared_storage.barrier_kv_share.arrive(peer_rank, 1);
++        shared_storage.barrier_kv_share.wait(1);
++      }
++#endif
+     };
+ 
+     // load last k-tile
+--- a/port07/include/flashinfer/attention/hopper/prefill_sm90.cuh
++++ b/port07/include/flashinfer/attention/hopper/prefill_sm90.cuh
+@@ -71,7 +71,7 @@
+ template <typename CollectiveMainloop, typename CollectiveEpilogue, typename Ktraits,
+           bool LEFT_SLIDING_WINDOW, bool CAUSAL, typename TileScheduler,
+           bool MULTIITEMSCORING = false>
+-__device__ void fa3_prefill_body(
++__device__ __forceinline__ void fa3_prefill_body(
+     typename CollectiveMainloop::Params const& mainloop_params,
+     typename CollectiveEpilogue::Params const& epilogue_params,
+     typename TileScheduler::Params const& scheduler_params, char* shared_memory,
+@@ -147,6 +147,10 @@
+     shared_storage.barrier_Q.init(/*num_threads=*/1);
+ #endif
+     shared_storage.barrier_O.init(/*num_threads=*/1);
++#if FLASHINFER_FA3_KV_SHARE
++    shared_storage.barrier_kv_share.init(2 * NUM_COPY_THREADS);
++    shared_storage.kv_share_items = 0;
++#endif
+ #if FUSED_Q_REUSE_FENCE
+     // One arrival per work item, from the mma warpgroup's last warp.
+     shared_storage.barrier_Qdone.init(/*num_threads=*/1);
+@@ -179,6 +183,11 @@
+   // We need this to guarantee that the Pipeline init is visible to all producers and consumer
+   // blocks in the Cluster
+   __syncthreads();
++#if FLASHINFER_FA3_KV_SHARE
++  cutlass::arch::fence_barrier_init();
++  cute::cluster_arrive_relaxed();
++  cute::cluster_wait();
++#endif
+ 
+   uint32_t* maybe_prefix_len_ptr = nullptr;
+   if constexpr (has_maybe_prefix_len_ptr_v<decltype(mainloop_params.additional_params)>) {
+--- a/port07/include/flashinfer/attention/hopper/kernel_traits.cuh
++++ b/port07/include/flashinfer/attention/hopper/kernel_traits.cuh
+@@ -56,6 +56,11 @@
+   struct {
+     cutlass::arch::ClusterTransactionBarrier barrier_Q;
+     cutlass::arch::ClusterBarrier barrier_O;
++#if FLASHINFER_FA3_KV_SHARE
++    cutlass::arch::ClusterBarrier barrier_kv_share;
++    uint32_t kv_share_stage;
++    uint32_t kv_share_items;
++#endif
+ #if FUSED_Q_REUSE_FENCE
+     // Q RETIREMENT, a SEPARATE barrier (ours).
+     //
+--- a/up_racefix/python/sglang/srt/layers/attention/fused_fa3_loader.py
++++ b/up_racefix/python/sglang/srt/layers/attention/fused_fa3_loader.py
+@@ -408,6 +408,8 @@
+             # is compiled out and split rows write no partial.
+             "-DFLASHINFER_FUSED_UNIFIED_WGMMA=1",
+             "-DFLASHINFER_FUSED_CLUSTER=" + os.environ.get("FUSED_CLUSTER", "1"),
++            *([] if os.environ.get("FUSED_KV_SHARE_BUILD") != "1"
++              else ["-DFLASHINFER_FA3_KV_SHARE=1"]),
+             "-DFLASHINFER_FA3_PAGED_TMA=" + os.environ.get("FA3_PAGED_TMA", "0"),
+             # Packed-GQA addressing for the FA3 role, as a COMPILE-TIME group size: the unified
+             # plan tiles FA3 work over (token, head-in-group) pairs, which the Q tensormap cannot
+--- /dev/null
++++ b/port07/tests/test_fused_kvshare_plan.cpp
+@@ -0,0 +1,78 @@
++#include <cassert>
++#include <cstdio>
++#include <map>
++#include <tuple>
++#include <vector>
++
++#include <flashinfer/attention/fused_plan.cuh>
++
++int main() {
++  for (uint32_t cta_count : {2u, 4u, 8u, 16u}) {
++    for (int32_t count = 0; count <= 257; ++count) {
++      std::vector<flashinfer::FusedWorkItem> items;
++      for (int32_t index = 0; index < count; ++index) {
++        items.push_back({index, 0, 128, 0, 1024, 0});
++      }
++      const auto offsets = flashinfer::FusedPairFa3WorkItems(items, cta_count);
++      assert(offsets.size() == cta_count + 1 && offsets.front() == 0 && offsets.back() == count);
++      std::vector<int> seen(count, 0);
++      for (uint32_t cta = 0; cta < cta_count; ++cta) {
++        assert(offsets[cta] <= offsets[cta + 1]);
++        for (int32_t index = offsets[cta]; index < offsets[cta + 1]; ++index) {
++          assert(items[index].batch_idx >= 0 && items[index].batch_idx < count);
++          ++seen[items[index].batch_idx];
++        }
++      }
++      for (int frequency : seen) assert(frequency == 1);
++      for (uint32_t cta = 0; cta < cta_count; cta += 2) {
++        const int32_t left_count = offsets[cta + 1] - offsets[cta];
++        const int32_t right_count = offsets[cta + 2] - offsets[cta + 1];
++        assert(left_count == right_count || left_count == right_count + 1);
++        for (int32_t slot = 0; slot < right_count; ++slot) {
++          const auto& left = items[offsets[cta] + slot];
++          const auto& right = items[offsets[cta + 1] + slot];
++          assert(left.batch_idx % 2 == 0 && right.batch_idx == left.batch_idx + 1);
++        }
++      }
++    }
++  }
++  for (uint32_t cta_count : {0u, 1u, 3u}) {
++    std::vector<flashinfer::FusedWorkItem> items;
++    bool rejected = false;
++    try {
++      flashinfer::FusedPairFa3WorkItems(items, cta_count);
++    } catch (const std::exception&) {
++      rejected = true;
++    }
++    assert(rejected);
++  }
++  int32_t queries[] = {257, 512};
++  int32_t context[] = {1025, 4096};
++  int32_t query_offsets[] = {0, 257, 769};
++  bool mask[] = {true, true};
++  std::vector<flashinfer::FusedWorkItem> items[4];
++  int32_t max_splits = 0;
++  std::vector<int32_t> requests;
++  flashinfer::EnumerateFusedWorkItems(queries, context, mask, 2, 7, 4, 128, 256,
++                                    items, &max_splits, &requests);
++  flashinfer::FusedMergeLayout original_merge;
++  flashinfer::BuildFusedMergeLayout(items, context, 2, 4, query_offsets, 7, &original_merge);
++  using Key = std::tuple<int32_t, int32_t, int32_t, int32_t>;
++  std::map<Key, int32_t> partials;
++  for (size_t index = 0; index < items[3].size(); ++index) {
++    const auto& item = items[3][index];
++    partials[{item.batch_idx, item.q_start, item.kv_head_idx, item.kv_start}] =
++        original_merge.partial_indptr[3][index];
++  }
++  flashinfer::FusedPairFa3WorkItems(items[3], 112);
++  flashinfer::FusedMergeLayout paired_merge;
++  flashinfer::BuildFusedMergeLayout(items, context, 2, 4, query_offsets, 7, &paired_merge);
++  assert(original_merge.merge_indptr == paired_merge.merge_indptr);
++  assert(original_merge.merge_o_indices == paired_merge.merge_o_indices);
++  for (size_t index = 0; index < items[3].size(); ++index) {
++    const auto& item = items[3][index];
++    assert((partials.at({item.batch_idx, item.q_start, item.kv_head_idx, item.kv_start}) ==
++            paired_merge.partial_indptr[3][index]));
++  }
++  std::puts("FA3 cluster-pair coverage, odd tails, and split-merge coordinates: PASS");
++}
+

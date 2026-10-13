@@ -1,0 +1,120 @@
+{
+  "serving_audits": [
+    {
+      "mixture": "mix32",
+      "arm": "AUTO_1",
+      "fused_kernel_calls": 80801,
+      "fa3_rows_last": 1,
+      "fa2_rows_last": 46,
+      "sm_split": 112,
+      "mixed_steps": 3101,
+      "graph_decode_lines": 241,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "plan_counters": [
+        "FUSED_SPLIT_PLAN ok 3001: fa3=2 fa2=45 (onesided so far 136)"
+      ],
+      "one_sided_counters": [
+        "FUSED_SPLIT_ONESIDED 3001/3001: fa3=0 fa2=2 rows=2 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+      ],
+      "server_log_sha256": "ec0f60056c5b50db8ee4bb0984d464411c82bcee49e974f3ba81d113e2a869db"
+    },
+    {
+      "mixture": "mix32",
+      "arm": "AUTO_2",
+      "fused_kernel_calls": 81301,
+      "fa3_rows_last": 1,
+      "fa2_rows_last": 47,
+      "sm_split": 112,
+      "mixed_steps": 3101,
+      "graph_decode_lines": 242,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "plan_counters": [
+        "FUSED_SPLIT_PLAN ok 3201: fa3=1 fa2=46 (onesided so far 148)"
+      ],
+      "one_sided_counters": [
+        "FUSED_SPLIT_ONESIDED 3201/3201: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
+      ],
+      "server_log_sha256": "68e0b151d44547b0540c10a3902085c817ce40c3b54913066eecc1910a4812f8"
+    },
+    {
+      "mixture": "mix32",
+      "arm": "CAPPED_1",
+      "fused_kernel_calls": 88101,
+      "fa3_rows_last": 1,
+      "fa2_rows_last": 15,
+      "sm_split": 112,
+      "mixed_steps": 3401,
+      "graph_decode_lines": 232,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "plan_counters": [
+        "FUSED_SPLIT_PLAN ok 3401: fa3=1 fa2=10 (onesided so far 166)"
+      ],
+      "one_sided_counters": [
+        "FUSED_SPLIT_ONESIDED 3401/3401: fa3=0 fa2=1 rows=1 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+      ],
+      "server_log_sha256": "8274ecdd5908b4408567c4e72cd760d0b6a512836f850e0ffc3a54fbd12c21e5"
+    },
+    {
+      "mixture": "mix32",
+      "arm": "CAPPED_2",
+      "fused_kernel_calls": 89001,
+      "fa3_rows_last": 1,
+      "fa2_rows_last": 15,
+      "sm_split": 112,
+      "mixed_steps": 3401,
+      "graph_decode_lines": 241,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "plan_counters": [
+        "FUSED_SPLIT_PLAN ok 3401: fa3=1 fa2=27 (onesided so far 169)"
+      ],
+      "one_sided_counters": [
+        "FUSED_SPLIT_ONESIDED 3401/3401: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
+      ],
+      "server_log_sha256": "e7d6e7faaefbe5ec94e5e5949717feaba1316638a4cb0275804ebcc1c9039a00"
+    }
+  ],
+  "real_input_audits": [
+    {
+      "arm": "MTPMIXFUSED_auto4096_REAL_Q4G",
+      "layer0_checks": 121,
+      "layer0_worst": 0.012052,
+      "logs": [
+        {
+          "path": "MTPMIXFUSED_auto4096_REAL_Q4G.compare.log",
+          "sha256": "886b12e0633bceaac566da68ec6c9f0a26c754a197a731a88c2f27a841aca8f8"
+        },
+        {
+          "path": "server_MTPMIXFUSED_auto4096_REAL_Q4G.log",
+          "sha256": "7f1a23460310856d6d3264069646bbe925ca8ff1d8f86985528f027246f0a103"
+        },
+        {
+          "path": "MTPMIXFUSED_auto4096_REAL_Q4G.run.log",
+          "sha256": "f512b8d9f6ad2cb9fe2ba7673a37a684f79781c47d0818786891cbaeba176695"
+        }
+      ]
+    },
+    {
+      "arm": "MTPMIXFUSED_auto_REAL_Q4G",
+      "layer0_checks": 121,
+      "layer0_worst": 0.012052,
+      "logs": [
+        {
+          "path": "MTPMIXFUSED_auto_REAL_Q4G.compare.log",
+          "sha256": "eb58fad5aa80c108ed73d0cd2efb95ded5083d26d330a2fe513108359be8fb57"
+        },
+        {
+          "path": "server_MTPMIXFUSED_auto_REAL_Q4G.log",
+          "sha256": "97e8719448449f5e839b24f7ff2b869d6b5d84a02f109ae3ced6d299318997a9"
+        },
+        {
+          "path": "MTPMIXFUSED_auto_REAL_Q4G.run.log",
+          "sha256": "a53b033d5de21dcf35b7bc8705e1808babb69ebfa3b83230959cd3dadd85dc51"
+        }
+      ]
+    }
+  ]
+}

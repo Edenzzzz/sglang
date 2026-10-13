@@ -14,7 +14,8 @@ SLOs are given per stream, e.g. --slo '{"chat": [2000, 50], "codex": [10000, 80]
 (ms; streams missing from the map use --default-slo). --slo-relative K_TTFT,K_TPOT instead scales
 each (workload, stream)'s SLO from its unloaded latency (SLOs-Serve style): K times the median TTFT
 and TPOT of the --ref-arm running that stream ALONE at a low rate, read from
-<ref-root>/<workload>_<anything>/<ref-arm>_<stream>.json; the same SLO for every arm. (The swept
+<ref-root>/<workload>_unloaded_<stream>/<ref-arm>_<stream>.json; the same SLO for every arm.
+Legacy <workload>_<suffix> directories are also accepted. (The swept
 runs' lowest rate is not a reference: there the chat tenant already queues behind agent prefills,
 e.g. mix128 chat median TTFT 38 s at 4/s.)
 
@@ -105,8 +106,14 @@ def main():
             base = os.path.basename(f)[:-5]
             if base.endswith("_validation") or ".previous." in base:
                 continue
-            workload = os.path.basename(os.path.dirname(f)).rsplit("_", 1)[0]
-            ref[(workload, base[len(a.ref_arm) + 1:])] = ("unloaded", f)
+            stream = base[len(a.ref_arm) + 1:]
+            reference_name = os.path.basename(os.path.dirname(f))
+            tenant_suffix = f"_unloaded_{stream}"
+            if reference_name.endswith(tenant_suffix):
+                workload = reference_name[:-len(tenant_suffix)]
+            else:
+                workload = reference_name.rsplit("_", 1)[0]
+            ref[(workload, stream)] = ("unloaded", f)
         rel = {}
         for key, (rate, f) in ref.items():
             ttft_ms, tpot_ms = unloaded(f)

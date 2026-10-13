@@ -1,0 +1,14 @@
+TMA page alignment and partial-tail bounds: 13 cases PASS
+FA3 cluster-pair coverage, odd tails, and split-merge coordinates: PASS
+plan length: 59 (expected 59)
+round-trip: PASS
+plan_info[-1] == num_fa3_clusters: PASS
+work items: task0=0 task1=0 task2=7 task3=256 max_splits_fa3=4 fa3_reqs=1
+enumeration: PASS
+merge layout: tiles=64 partial_rows=32768 PASS
+GQA7 four-head merge coordinates: PASS
+FA2 classes 48/32/16 routing: PASS
+FA2 per-item tail coverage and split merge: PASS
+query/head-aware KV split budget: PASS
+independent FA2 split and merge coordinates: PASS
+FA2 auto KV chunk: PASS

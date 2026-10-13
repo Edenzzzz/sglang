@@ -1,0 +1,1020 @@
+--- a/port07/include/flashinfer/attention/persistent_fa3_fused.cuh
++++ b/port07/include/flashinfer/attention/persistent_fa3_fused.cuh
+@@ -44,6 +44,7 @@
+ #include <string>
+ 
+ #include <cutlass/arch/barrier.h>
++#include "fused_pdl_trace.cuh"
+ 
+ #if FLASHINFER_FA3_UPSTREAM
+ // This TU includes BOTH the FA2-lineage tree (via persistent.cuh) and the Hopper tree, which
+@@ -324,6 +325,7 @@
+   // Lets a programmatic dependent (the co-launched FA2 executor) start as soon as every CTA of
+   // this grid is resident, instead of at grid completion. A no-op without a dependent.
+   asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
++  FusedPdlRecord<kPdlFa3Start>(queue.pdl_timeline);
+ 
+   // FLASHINFER_FUSED_SKIP_FA3 is a diagnostic, not a feature: it sends every CTA
+   // straight to the FA2 queue so a cluster launch can be exercised without FA3's
+@@ -399,6 +401,7 @@
+     // passed the last work item's epilogue.
+     __syncthreads();
+ 
++    FusedPdlRecord<kPdlFa3End, true>(queue.pdl_timeline);
+     // A runtime predicate, not a template parameter. As a template parameter it
+     // produced a second instantiation that was deterministically wrong -- FA3
+     // output off by 29-40x the output magnitude at every split, including with
+@@ -724,7 +727,8 @@
+                                          typename Runner2::Params const& params_2,
+                                          typename Runner3::Params const& params_3,
+                                          uint32_t sm_split, uint32_t fa3_num_ctas,
+-                                         FusedQueueParams queue, cudaStream_t stream) {
++                                         FusedQueueParams queue, cudaStream_t stream,
++                                         bool launch_fa2 = true) {
+   // In symmetric mode every CTA has an FA3 slice, so the plan must cover the whole
+   // grid; in asymmetric mode only CTAs below sm_split do, and a mismatch there
+   // silently drops the rest of FA3's work. Both are checked, against different
+@@ -1137,7 +1141,7 @@
+     FLASHINFER_CUDA_CALL(
+         cudaLaunchKernel(kernel, grid_dims, block_dims, args, smem_size, stream));
+   }
+-  if (colaunch) {
++  if (colaunch && launch_fa2) {
+     if (symmetric || cluster > 1) {
+       FLASHINFER_ERROR("FLASHINFER_FUSED_COLAUNCH runs the FA3 grid alone on sm_split CTAs; it "
+                        "cannot be combined with FLASHINFER_FUSED_SYMMETRIC or a cluster launch");
+--- a/port07/include/flashinfer/attention/fused_plan.cuh
++++ b/port07/include/flashinfer/attention/fused_plan.cuh
+@@ -202,7 +202,16 @@
+ // handed to EnumerateFusedWorkItems as fa2_chunk_override; here it reads as "no fixed chunk".
+ inline bool FusedFa2KvChunkAuto() {
+   const char* configured = std::getenv("FUSED_FA2_KV_CHUNK");
+-  return configured != nullptr && std::strcmp(configured, "auto") == 0;
++  return configured != nullptr &&
++         (std::strcmp(configured, "auto") == 0 || std::strcmp(configured, "auto4096") == 0);
++}
++
++inline std::vector<int32_t> FusedRoleKvChunkLengths(int32_t maximum_kv,
++                                                  int32_t fa2_chunk, int32_t fa3_chunk) {
++  const int32_t unsplit = std::max<int32_t>(maximum_kv, 1);
++  const int32_t fa2 = fa2_chunk > 0 ? fa2_chunk : unsplit;
++  const int32_t fa3 = fa3_chunk > 0 ? fa3_chunk : unsplit;
++  return {fa2, fa2, fa2, fa3};
+ }
+ 
+ inline int32_t FusedFa2KvChunk(uint32_t fa3_chunk) {
+@@ -562,6 +571,10 @@
+   const int64_t want = (work + slots - 1) / slots;
+   int64_t chunk = 256;
+   while (chunk < want) chunk *= 2;
++  if (const char* configured = std::getenv("FUSED_FA2_KV_CHUNK");
++      configured != nullptr && std::strcmp(configured, "auto4096") == 0) {
++    chunk = std::min<int64_t>(chunk, 4096);
++  }
+   return int32_t(std::min<int64_t>(chunk, int64_t(1) << 30));
+ }
+ 
+@@ -870,9 +883,7 @@
+   const int32_t fa2_chunk = fa2_chunk_override > 0
+                                 ? fa2_chunk_override
+                                 : FusedFa2KvChunk(uint32_t(kv_chunk < 0 ? 0 : kv_chunk));
+-  if (fa2_chunk > 0) fa2_span = fa2_chunk;
+-  plan.len_kv_chunk_offset =
+-      place(std::vector<int32_t>{fa2_span, fa2_span, fa2_span, kv_chunk > 0 ? kv_chunk : fa2_span});
++  plan.len_kv_chunk_offset = place(FusedRoleKvChunkLengths(fa2_span, fa2_chunk, kv_chunk));
+   // num_merge_rows == merge_o_indices.size(): the COMPACTED split-row count, which is what the
+   // merge takes as num_packed_qo_len. Derived here rather than recomputed downstream, where
+   // getting it from the batch instead would make the merge visit unsplit rows and zero them.
+--- a/port07/include/flashinfer/attention/prefill.cuh
++++ b/port07/include/flashinfer/attention/prefill.cuh
+@@ -41,6 +41,7 @@
+ #include "mask.cuh"
+ #include "variants.cuh"
+ #include "fused_barriers.cuh"
++#include "fused_pdl_trace.cuh"
+ 
+ namespace flashinfer {
+ 
+@@ -2108,7 +2109,7 @@
+       // arrival state its exited warpgroups never resolved. Observed as wrong output for
+       // short UNSPLIT decode rows, backfill only: 2 clean runs in 6 on H200 (132 SMs) and
+       // masked on H20 (78 SMs), because the more CTAs start on FA3 the more of them backfill.
+-      if constexpr (KTraits::NAMED_BARRIER_SYNC) {
++      if constexpr (FusedNamedBarrier<KTraits>::value) {
+         cutlass::arch::NamedBarrier::sync(
+             KTraits::NUM_THREADS, static_cast<cutlass::arch::ReservedNamedBarriers>(barrier_id));
+       } else {
+@@ -2185,7 +2186,7 @@
+       // arrival state its exited warpgroups never resolved. Observed as wrong output for
+       // short UNSPLIT decode rows, backfill only: 2 clean runs in 6 on H200 (132 SMs) and
+       // masked on H20 (78 SMs), because the more CTAs start on FA3 the more of them backfill.
+-      if constexpr (KTraits::NAMED_BARRIER_SYNC) {
++      if constexpr (FusedNamedBarrier<KTraits>::value) {
+         cutlass::arch::NamedBarrier::sync(
+             KTraits::NUM_THREADS, static_cast<cutlass::arch::ReservedNamedBarriers>(barrier_id));
+       } else {
+@@ -3985,7 +3986,10 @@
+                                             (kv_head_idx * group_size) * o_stride_h;
+ 
+ #if (__CUDACC_VER_MAJOR__ >= 12 && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+-    asm volatile("griddepcontrol.wait;");
++    if (!FusedNativeIndependentPdl(params)) {
++      asm volatile("griddepcontrol.wait;" ::: "memory");
++    }
++    FusedNativePdlRecord<kPdlFa2Start>(params);
+ #endif
+ 
+     // Split-D over the VO dimension
+@@ -4457,6 +4461,7 @@
+     }  // d_tile (split-D over VO) loop
+ 
+ #if (__CUDACC_VER_MAJOR__ >= 12 && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
++    FusedNativePdlRecord<kPdlFa2End>(params);
+     asm volatile("griddepcontrol.launch_dependents;");
+ #endif
+ 
+@@ -4471,6 +4476,11 @@
+   extern __shared__ uint8_t smem[];
+   auto& smem_storage = reinterpret_cast<typename KTraits::SharedStoragePaged&>(smem);
+   BatchPrefillWithPagedKVCacheDevice<KTraits, SAME_KV_STRIDES>(params, smem_storage);
++#if (__CUDACC_VER_MAJOR__ >= 12 && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
++  if (FusedNativeIndependentPdl(params)) {
++    asm volatile("griddepcontrol.wait;" ::: "memory");
++  }
++#endif
+ }
+ 
+ template <uint32_t CTA_TILE_Q, uint32_t HEAD_DIM_QK, uint32_t HEAD_DIM_VO,
+--- a/port07/include/flashinfer/attention/fused_barriers.cuh
++++ b/port07/include/flashinfer/attention/fused_barriers.cuh
+@@ -5,8 +5,16 @@
+ #define FLASHINFER_ATTENTION_FUSED_BARRIERS_CUH_
+ 
+ #include <cutlass/arch/barrier.h>
++#include <type_traits>
+ 
+ namespace flashinfer {
++
++template <typename Traits, typename = void>
++struct FusedNamedBarrier : std::false_type {};
++
++template <typename Traits>
++struct FusedNamedBarrier<Traits, std::void_t<decltype(Traits::NAMED_BARRIER_SYNC)>>
++    : std::integral_constant<bool, Traits::NAMED_BARRIER_SYNC> {};
+ 
+ static constexpr int kPersistentMainloopBarrier = 2;
+ static constexpr int kFusedQueueBarrier = 5;
+@@ -24,6 +32,7 @@
+ struct FusedQueueParams {
+   int32_t* cluster_cursor = nullptr;
+   uint32_t num_pers_clusters = 0;
++  unsigned long long* pdl_timeline = nullptr;
+ };
+ 
+ }  // namespace flashinfer
+--- a/port07/tests/fused_fa3_persistent_ext.cu
++++ b/port07/tests/fused_fa3_persistent_ext.cu
+@@ -19,6 +19,7 @@
+ #include <torch/all.h>
+ #include <c10/cuda/CUDAStream.h>
+ #include <c10/cuda/CUDAGuard.h>
++#include "native_prefill_bridge.cuh"
+ 
+ #include "batch_attention_config.inc"
+ // The plan is ours, not flashinfer's HolisticPlanInfo -- 0.7 removed the group tables the
+@@ -211,7 +212,7 @@
+   return {t.stride(0), t.stride(0), t.stride(1)};
+ }
+ 
+-void fused_run(at::Tensor q, at::Tensor k_cache, at::Tensor v_cache, at::Tensor kv_indices,
++void fused_run_impl(at::Tensor q, at::Tensor k_cache, at::Tensor v_cache, at::Tensor kv_indices,
+                at::Tensor o, at::Tensor fa3_int_ws, std::vector<int64_t> fa3_plan,
+                at::Tensor pers_int_ws, at::Tensor pers_float_ws, std::vector<int64_t> pers_plan,
+                int64_t num_qo_heads, int64_t num_kv_heads, int64_t page_size, double sm_scale,
+@@ -219,7 +220,8 @@
+                int64_t pers_kv_page_offset, at::Tensor fa3_kv_indices,
+                at::Tensor pers_o, int64_t num_requests, int64_t max_pages_per_seq,
+                int64_t max_seqlen_q, at::Tensor kv_lens_per_req,
+-               at::Tensor q_indptr_per_req, at::Tensor kv_indptr_per_req) {
++               at::Tensor q_indptr_per_req, at::Tensor kv_indptr_per_req,
++               bool native_fa2, at::Tensor timeline) {
+   const c10::cuda::OptionalCUDAGuard g(q.device());
+   cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
+   void* fa3_ib = fa3_int_ws.data_ptr();
+@@ -260,6 +262,16 @@
+               kPlan4);
+   FusedPlanInfo<3> pp; pp.FromVector(pers_plan);
+ #endif
++
++  if (native_fa2) {
++    const char* colaunch = std::getenv("FLASHINFER_FUSED_COLAUNCH");
++    const char* symmetric = std::getenv("FLASHINFER_FUSED_SYMMETRIC");
++    TORCH_CHECK(colaunch != nullptr && std::atoi(colaunch) != 0 &&
++                (symmetric == nullptr || std::atoi(symmetric) == 0),
++                "native FA2 primary requires asymmetric co-launch mode");
++    TORCH_CHECK(pp.max_splits_fa3 == 1 || pp.num_fa3_requests == num_requests,
++                "split FA3 primary requires an FA3-only plan and deferred reduction");
++  }
+ 
+   // ---- FA3 params (mirrors csrc/batch_prefill_sm90.cu)
+   //
+@@ -472,6 +484,12 @@
+   FusedQueueParams queue;
+   queue.cluster_cursor = GetPtrFromBaseOffset<IdT>(pers_ib, pp.cluster_cursor_offset);
+   queue.num_pers_clusters = uint32_t(pp.num_pers_clusters);
++  if (timeline.defined() && timeline.numel() != 0) {
++    TORCH_CHECK(timeline.is_cuda() && timeline.device() == q.device() &&
++                timeline.scalar_type() == at::kLong && timeline.numel() == 4 && timeline.is_contiguous(),
++                "PDL timeline must contain four CUDA int64 values");
++    queue.pdl_timeline = reinterpret_cast<unsigned long long*>(timeline.data_ptr<int64_t>());
++  }
+ 
+   auto status =
+       // Template args: <KernelTraits, LEFT_SLIDING_WINDOW, CAUSAL, SAME_SCHEDULE_FOR_ALL_HEADS,
+@@ -483,8 +501,9 @@
+                                    (FLASHINFER_FUSED_FA3_CAUSAL != 0), false, FA3ParamsSel,
+                                    R128, R64, R16, false, kUnifiedWgmma>(
+                                           fa3, pr[0], pr[1], pr[2], uint32_t(sm_split),
+-                                          uint32_t(fa3_num_ctas), queue, stream);
++                                          uint32_t(fa3_num_ctas), queue, stream, !native_fa2);
+   TORCH_CHECK(status == cudaSuccess, "fused kernel failed: ", cudaGetErrorString(status));
++  if (native_fa2) return;
+ 
+   // Reduce the split-KV partials the grid just wrote. Separate launch, not a fourth role: 0.7
+   // runs its reduction inside a COOPERATIVE kernel, and a cooperative launch caps the grid at
+@@ -511,6 +530,57 @@
+       uint32_t(num_qo_heads / num_kv_heads), stream);
+   TORCH_CHECK(rstatus == cudaSuccess, "fused state reduction failed: ",
+               cudaGetErrorString(rstatus));
++}
++
++void fused_run(at::Tensor q, at::Tensor k_cache, at::Tensor v_cache, at::Tensor kv_indices,
++               at::Tensor o, at::Tensor fa3_int_ws, std::vector<int64_t> fa3_plan,
++               at::Tensor pers_int_ws, at::Tensor pers_float_ws, std::vector<int64_t> pers_plan,
++               int64_t num_qo_heads, int64_t num_kv_heads, int64_t page_size, double sm_scale,
++               int64_t sm_split, int64_t pers_row_offset, int64_t fa3_num_ctas,
++               int64_t pers_kv_page_offset, at::Tensor fa3_kv_indices,
++               at::Tensor pers_o, int64_t num_requests, int64_t max_pages_per_seq,
++               int64_t max_seqlen_q, at::Tensor kv_lens_per_req,
++               at::Tensor q_indptr_per_req, at::Tensor kv_indptr_per_req) {
++  fused_run_impl(q, k_cache, v_cache, kv_indices, o, fa3_int_ws, fa3_plan, pers_int_ws, pers_float_ws, pers_plan, num_qo_heads, num_kv_heads, page_size, sm_scale, sm_split, pers_row_offset, fa3_num_ctas, pers_kv_page_offset, fa3_kv_indices, pers_o, num_requests, max_pages_per_seq, max_seqlen_q, kv_lens_per_req, q_indptr_per_req, kv_indptr_per_req, false, at::Tensor());
++}
++
++void fused_primary_run(at::Tensor q, at::Tensor k_cache, at::Tensor v_cache, at::Tensor kv_indices,
++               at::Tensor o, at::Tensor fa3_int_ws, std::vector<int64_t> fa3_plan,
++               at::Tensor pers_int_ws, at::Tensor pers_float_ws, std::vector<int64_t> pers_plan,
++               int64_t num_qo_heads, int64_t num_kv_heads, int64_t page_size, double sm_scale,
++               int64_t sm_split, int64_t pers_row_offset, int64_t fa3_num_ctas,
++               int64_t pers_kv_page_offset, at::Tensor fa3_kv_indices,
++               at::Tensor pers_o, int64_t num_requests, int64_t max_pages_per_seq,
++               int64_t max_seqlen_q, at::Tensor kv_lens_per_req,
++               at::Tensor q_indptr_per_req, at::Tensor kv_indptr_per_req, at::Tensor timeline) {
++  fused_run_impl(q, k_cache, v_cache, kv_indices, o, fa3_int_ws, fa3_plan, pers_int_ws, pers_float_ws, pers_plan, num_qo_heads, num_kv_heads, page_size, sm_scale, sm_split, pers_row_offset, fa3_num_ctas, pers_kv_page_offset, fa3_kv_indices, pers_o, num_requests, max_pages_per_seq, max_seqlen_q, kv_lens_per_req, q_indptr_per_req, kv_indptr_per_req, true, timeline);
++}
++
++void fused_primary_finish(at::Tensor output, at::Tensor int_workspace,
++                           at::Tensor float_workspace, std::vector<int64_t> plan_values,
++                           int64_t num_requests, int64_t num_qo_heads, int64_t num_kv_heads) {
++  TORCH_CHECK(output.is_cuda() && output.scalar_type() == at::kBFloat16 &&
++              output.dim() == 3 && output.size(1) == num_qo_heads && output.size(2) == 128 &&
++              output.is_contiguous(), "invalid FA3 reduction output");
++  TORCH_CHECK(int_workspace.device() == output.device() &&
++              float_workspace.device() == output.device(), "FA3 reduction device mismatch");
++  TORCH_CHECK(num_kv_heads > 0 && num_qo_heads % num_kv_heads == 0, "invalid GQA heads");
++  FusedPlanInfo<4> plan;
++  TORCH_CHECK(plan_values.size() == plan.ToVector().size(), "invalid FA3 plan size");
++  plan.FromVector(plan_values);
++  TORCH_CHECK(plan.num_fa3_requests == num_requests, "FA3 reduction requires an FA3-only plan");
++  const c10::cuda::OptionalCUDAGuard guard(output.device());
++  const cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
++  void* integer_buffer = int_workspace.data_ptr();
++  void* float_buffer = float_workspace.data_ptr();
++  const auto status = FusedLaunchStateReduction<128, PDT, IdT>(
++      GetPtrFromBaseOffset<PDT>(float_buffer, plan.partial_o_offset),
++      GetPtrFromBaseOffset<float>(float_buffer, plan.partial_lse_offset),
++      static_cast<PDT*>(output.data_ptr()), nullptr,
++      GetPtrFromBaseOffset<IdT>(integer_buffer, plan.merge_indptr_offset),
++      GetPtrFromBaseOffset<IdT>(integer_buffer, plan.merge_o_indices_offset),
++      plan.num_merge_rows, uint32_t(num_kv_heads), uint32_t(num_qo_heads / num_kv_heads), stream);
++  TORCH_CHECK(status == cudaSuccess, "deferred FA3 reduction failed: ", cudaGetErrorString(status));
+ }
+ 
+ #if FLASHINFER_FA3_UPSTREAM
+@@ -695,6 +765,9 @@
+ 
+ FUSED_TORCH_LIBRARY_EXPAND(FUSED_OP_NAMESPACE, m) {
+   m.def("fused_run", &fused_run);
++  m.def("fused_primary_run", &fused_primary_run);
++  m.def("fused_primary_finish", &fused_primary_finish);
++  m.def("native_fa2_run", &native_fa2_run);
+   m.def("build_fused_plan", &build_fused_plan);
+ #if FLASHINFER_FA3_UPSTREAM
+   m.def("fa3_only_run", &fa3_only_run);
+--- a/up_racefix/python/sglang/srt/layers/attention/flashinfer_backend.py
++++ b/up_racefix/python/sglang/srt/layers/attention/flashinfer_backend.py
+@@ -306,7 +306,8 @@
+ # extra wrapper is never planned. Output stays correct either way, so a clean run isolates the
+ # fault to that extra plan rather than to the FA3 half.
+ FUSED_SPLIT_NO_FA2_WRAPPER = os.environ.get("SGLANG_FUSED_SPLIT_NOFA2", "0") == "1"
+-FUSED_KERNEL_EXEC = os.environ.get("SGLANG_FUSED_KERNEL_EXEC", "0") == "1"
++FUSED_NATIVE_PDL = os.environ.get("SGLANG_FUSED_NATIVE_PDL", "0") == "1"
++FUSED_KERNEL_EXEC = os.environ.get("SGLANG_FUSED_KERNEL_EXEC", "0") == "1" or FUSED_NATIVE_PDL
+ # Two-launch split: run the FA3 rows on a side stream (holding all but SGLANG_FUSED_SM_MARGIN SMs)
+ # concurrently with the stock FA2 rows on the current stream, instead of back to back. FA3 rows
+ # are compute-bound prefill chunks and FA2 rows memory-bound verify rows, so they overlap well.
+@@ -1951,7 +1952,7 @@
+             n_fa3=len(fa3_rows),
+             n_fa2=n2,
+         )
+-        if FUSED_KERNEL_EXEC and _fa3_span == (0, int(tok_off[int(_f3[-1]) + 1])):
++        if FUSED_KERNEL_EXEC and (FUSED_NATIVE_PDL or _fa3_span == (0, int(tok_off[int(_f3[-1]) + 1]))):
+             self._prepare_fused_kernel_plan(
+                 forward_batch,
+                 self.fused_split_plan,
+@@ -2012,11 +2013,11 @@
+             if not 0 < sm_split < num_sm:
+                 raise ValueError(f"SM split {sm_split} must be between 1 and {num_sm - 1}")
+ 
+-            if int(fa3_rows[0]) != 0 or not np.array_equal(
++            if not FUSED_NATIVE_PDL and (int(fa3_rows[0]) != 0 or not np.array_equal(
+                 fa3_rows, np.arange(len(fa3_rows), dtype=fa3_rows.dtype)
+-            ):
++            )):
+                 raise RuntimeError("fused kernel requires FA3 rows as a contiguous prefix")
+-            if not np.array_equal(
++            if not FUSED_NATIVE_PDL and not np.array_equal(
+                 fa2_rows,
+                 np.arange(len(fa3_rows), len(qo_lens), dtype=fa2_rows.dtype),
+             ):
+@@ -2034,13 +2035,19 @@
+             n_fa3 = len(fa3_rows)
+             qo_np = np.asarray(qo_lens, dtype=np.int32)
+             kv_np = np.asarray(seq_lens_cpu.tolist(), dtype=np.int32)
++            original_qo = qo_np
++            original_kv = kv_np
++            request_rows = fa3_rows if FUSED_NATIVE_PDL else np.arange(len(qo_np))
++            if FUSED_NATIVE_PDL:
++                qo_np = qo_np[request_rows]
++                kv_np = kv_np[request_rows]
+             qo_indptr_np = np.concatenate(([0], np.cumsum(qo_np, dtype=np.int64))).astype(np.int32)
+             page_counts = ((kv_np + self.page_size - 1) // self.page_size).astype(np.int32)
+             page_indptr_np = np.concatenate(([0], np.cumsum(page_counts, dtype=np.int64))).astype(np.int32)
+             kv_page_ids = []
+             r2t = self.req_to_token_pool.req_to_token
+             for row in range(len(qo_np)):
+-                req = int(rp_cpu[row])
++                req = int(rp_cpu[int(request_rows[row])])
+                 ids = r2t[req, : int(kv_np[row]) : self.page_size]
+                 kv_page_ids.append((ids // self.page_size).to(torch.int32))
+             all_page_ids = torch.cat(kv_page_ids).to(dev)
+@@ -2083,6 +2090,8 @@
+             fa3_sparse = fa3_page_ids
+             mask_cpu = torch.zeros(len(qo_np), dtype=torch.bool)
+             mask_cpu[:n_fa3] = True
++            if FUSED_NATIVE_PDL and state.get("plan_copy_done") is not None:
++                state["plan_copy_done"].synchronize()
+             pers_plan = fused_ops.build_fused_plan(
+                 state["pers_int"],
+                 state["pers_pinned"],
+@@ -2100,6 +2109,13 @@
+                 num_sm,
+                 True,
+             )
++            if FUSED_NATIVE_PDL:
++                if state.get("plan_copy_done") is None:
++                    state["plan_copy_done"] = torch.cuda.Event()
++                state["plan_copy_done"].record()
++                if "native_empty_lse" not in state:
++                    state["native_empty_lse"] = torch.empty(0, dtype=torch.float32, device=dev)
++                    state["native_empty_timeline"] = torch.empty(0, dtype=torch.int64, device=dev)
+             split_plan["fused_kernel"] = dict(
+                 fa3_int=fa3._int_workspace_buffer,
+                 fa3_plan=list(fa3._plan_info),
+@@ -2110,7 +2126,7 @@
+                 fa3_sparse=fa3_sparse,
+                 sm_split=sm_split,
+                 fa3_num_ctas=sm_split,
+-                fa3_tokens=int(tok_off[n_fa3]),
++                fa3_tokens=int(qo_indptr_np[n_fa3]) if FUSED_NATIVE_PDL else int(tok_off[n_fa3]),
+                 fa3_pages=int(page_indptr_np[n_fa3]),
+                 num_requests=len(qo_np),
+                 max_pages=int(page_counts.max()),
+@@ -2120,11 +2136,117 @@
+                 kv_indptr=torch.from_numpy(page_indptr_np).to(dev),
+                 op_namespace=fused_namespace,
+                 fa3_cta_q=fa3_cta_q,
+-            )
++                native_pdl=FUSED_NATIVE_PDL,
++            )
++            if FUSED_NATIVE_PDL:
++                primary = split_plan["fused_kernel"]
++                primary["empty_lse"] = state["native_empty_lse"]
++                primary["empty_timeline"] = state["native_empty_timeline"]
++                if FUSED_SPLIT_VERIFY:
++                    full_pages = [
++                        (r2t[int(rp_cpu[row]), :int(original_kv[row]):self.page_size] // self.page_size).to(torch.int32)
++                        for row in range(len(original_qo))
++                    ]
++                    full_page_counts = (original_kv + self.page_size - 1) // self.page_size
++                    primary["verify_q_indptr"] = torch.tensor(
++                        np.concatenate(([0], np.cumsum(original_qo, dtype=np.int64))),
++                        dtype=torch.int32, device=dev,
++                    )
++                    primary["verify_kv_indptr"] = torch.tensor(
++                        np.concatenate(([0], np.cumsum(full_page_counts, dtype=np.int64))),
++                        dtype=torch.int32, device=dev,
++                    )
++                    primary["verify_kv_lens"] = torch.from_numpy(original_kv).to(dev)
++                    primary["verify_kv_indices"] = torch.cat(full_pages)
+             logger.info("FUSED_KERNEL_PLAN ready fa3_rows=%d fa2_rows=%d", n_fa3, len(fa2_rows))
+         except Exception as exc:
+             split_plan.pop("fused_kernel", None)
+             raise RuntimeError("FUSED_KERNEL_PLAN failed") from exc
++
++    def _native_pdl_dispatch(self, qv, layer, plan, kernel, causal, logits_soft_cap, ref_wrapper, kv_cache):
++        if not causal or logits_soft_cap or qv.dtype != torch.bfloat16 or layer.head_dim != 128:
++            raise RuntimeError("Native PDL currently requires bf16 causal attention, head128, and no softcap")
++        from sglang.srt.mem_cache.layout.paged_view import paged_kv_view
++
++        key_cache, value_cache = self.token_to_kv_pool.get_kv_buffer(layer.layer_id)
++        key_cache = paged_kv_view(key_cache, self.page_size, layer.tp_k_head_num, layer.head_dim)
++        value_cache = paged_kv_view(value_cache, self.page_size, layer.tp_v_head_num, layer.v_head_dim)
++        output = torch.empty(qv.shape, dtype=qv.dtype, device=qv.device)
++        fa3_span, fa2_span = plan.get("fa3_span"), plan.get("fa2_span")
++        use_views = fa3_span is not None and fa2_span is not None
++        if use_views:
++            query3 = qv[fa3_span[0]:fa3_span[1]]
++            query2 = qv[fa2_span[0]:fa2_span[1]]
++            output3 = output[fa3_span[0]:fa3_span[1]]
++            output2 = output[fa2_span[0]:fa2_span[1]]
++        else:
++            query3 = qv[plan["fa3_tok"]]
++            query2 = qv[plan["fa2_tok"]]
++            output3 = torch.empty_like(query3)
++            output2 = torch.empty_like(query2)
++        ops = getattr(torch.ops, kernel["op_namespace"])
++        native = self.fused_fa2_wrapper
++        native_args = (
++            query2, key_cache, value_cache, native._qo_indptr_buf,
++            native._paged_kv_indptr_buf, native._paged_kv_indices_buf,
++            native._paged_kv_last_page_len_buf, output2, kernel["empty_lse"],
++            native._float_workspace_buffer, native._int_workspace_buffer,
++            list(native._plan_info), layer.scaling, True, True, kernel["empty_timeline"],
++        )
++        ops.fused_primary_run(
++            query3, key_cache, value_cache, kernel["kv_indices"], output3,
++            kernel["fa3_int"], kernel["fa3_plan"], kernel["pers_int"], kernel["pers_float"],
++            kernel["pers_plan"], layer.tp_q_head_num, layer.tp_k_head_num, self.page_size,
++            layer.scaling, kernel["sm_split"], kernel["fa3_tokens"], kernel["fa3_num_ctas"],
++            kernel["fa3_pages"], kernel["fa3_sparse"], output3, kernel["num_requests"],
++            kernel["max_pages"], kernel["max_q"], kernel["kv_lens"], kernel["q_indptr"],
++            kernel["kv_indptr"], kernel["empty_timeline"],
++        )
++        ops.native_fa2_run(*native_args)
++        ops.fused_primary_finish(
++            output3, kernel["pers_int"], kernel["pers_float"], kernel["pers_plan"],
++            kernel["num_requests"], layer.tp_q_head_num, layer.tp_k_head_num,
++        )
++        if not use_views:
++            output.index_copy_(0, plan["fa3_tok"], output3)
++            output.index_copy_(0, plan["fa2_tok"], output2)
++        if FUSED_SPLIT_VERIFY:
++            if ref_wrapper is None or kv_cache is None:
++                raise RuntimeError("Native PDL verification requires the full-batch reference")
++            snapshot = output.detach().cpu() if os.environ.get("SGLANG_FUSED_VERIFY_SNAPSHOT") == "1" else None
++            reference = ref_wrapper.forward(
++                qv, kv_cache, causal=causal, sm_scale=layer.scaling, logits_soft_cap=0.0,
++            ).view_as(output)
++            if snapshot is not None and not torch.equal(
++                snapshot.view(torch.uint8), output.detach().cpu().view(torch.uint8)
++            ):
++                raise RuntimeError("Reference execution changed the native PDL output")
++            if not torch.isfinite(output).all() or not torch.isfinite(reference).all():
++                raise RuntimeError("Native PDL produced nonfinite attention output")
++            relative = (output.float() - reference.float()).norm(dim=-1) / reference.float().norm(dim=-1).clamp_min(1e-6)
++            worst = relative.max().item()
++            if worst > FUSED_SPLIT_TOL:
++                from sglang.srt.layers.attention.fused_fa3_validation import verify_disputed_heads
++
++                adjudication = verify_disputed_heads(
++                    qv, key_cache, value_cache, output, reference,
++                    kernel["verify_q_indptr"], kernel["verify_kv_indptr"], kernel["verify_kv_lens"],
++                    kernel["verify_kv_indices"], torch.nonzero(relative > FUSED_SPLIT_TOL),
++                    layer.scaling, FUSED_SPLIT_TOL, causal=True, logits_soft_cap=0.0,
++                    key_scale=1.0, value_scale=1.0,
++                )
++                logger.info("NATIVE_PDL_VERIFY_FP32 %s", adjudication)
++                if not all(result["passed"] for result in adjudication):
++                    raise RuntimeError(f"Native PDL failed fp32 attention verification on layer {layer.layer_id}")
++            if layer.layer_id == 0:
++                logger.info("FUSED_KERNEL_VERIFY PASS worst_head=%.6f native_pdl=1", worst)
++        self.fused_split_calls += 1
++        if self.fused_split_calls % 100 == 1:
++            logger.info("FUSED_KERNEL_CALLS %d fa3_rows=%d fa2_rows=%d sm_split=%d",
++                        self.fused_split_calls, plan["n_fa3"], plan["n_fa2"], kernel["sm_split"])
++            logger.info("NATIVE_FA2_PDL_CALLS %d fa3_rows=%d fa2_rows=%d fa3_splits=%d",
++                        self.fused_split_calls, plan["n_fa3"], plan["n_fa2"], kernel["pers_plan"][54])
++        return output
+ 
+     def _fused_split_dispatch(
+         self, q, layer, forward_batch, causal, logits_soft_cap, ref_wrapper=None, kv_cache=None
+@@ -2188,6 +2310,8 @@
+         if FUSED_SPLIT_DEBUG:
+             self._fused_split_debug_check(f"dispatch:L{layer.layer_id}")
+         fused_kernel = pl.get("fused_kernel")
++        if fused_kernel is not None and fused_kernel.get("native_pdl"):
++            return self._native_pdl_dispatch(qv, layer, pl, fused_kernel, causal, logits_soft_cap, ref_wrapper, kv_cache)
+         if fused_kernel is not None:
+             try:
+                 hq = layer.tp_q_head_num
+--- /dev/null
++++ b/port07/include/flashinfer/attention/fused_pdl_trace.cuh
+@@ -0,0 +1,42 @@
++#pragma once
++
++#include <cuda_runtime.h>
++#include <type_traits>
++#include <utility>
++
++namespace flashinfer {
++
++enum FusedPdlTraceSlot { kPdlFa3Start = 0, kPdlFa3End = 1, kPdlFa2Start = 2, kPdlFa2End = 3 };
++
++template <int Slot, bool Maximum = false>
++__device__ __forceinline__ void FusedPdlRecord(unsigned long long* timeline) {
++#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
++  if (timeline != nullptr && threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0) {
++    unsigned long long timestamp;
++    asm volatile("mov.u64 %0, %globaltimer;" : "=l"(timestamp) :: "memory");
++    if constexpr (Maximum) atomicMax(timeline + Slot, timestamp);
++    else atomicMin(timeline + Slot, timestamp);
++  }
++#endif
++}
++
++template <typename Params, typename = void>
++struct FusedNativePdlParams : std::false_type {};
++
++template <typename Params>
++struct FusedNativePdlParams<Params, std::void_t<
++    decltype(std::declval<Params>().independent_pdl),
++    decltype(std::declval<Params>().pdl_timeline)>> : std::true_type {};
++
++template <typename Params>
++__device__ __forceinline__ bool FusedNativeIndependentPdl(const Params& params) {
++  if constexpr (FusedNativePdlParams<Params>::value) return params.independent_pdl;
++  return false;
++}
++
++template <int Slot, typename Params>
++__device__ __forceinline__ void FusedNativePdlRecord(const Params& params) {
++  if constexpr (FusedNativePdlParams<Params>::value) FusedPdlRecord<Slot>(params.pdl_timeline);
++}
++
++}
+--- /dev/null
++++ b/port07/tests/native_prefill_bridge.cuh
+@@ -0,0 +1,155 @@
++#pragma once
++
++#include <flashinfer/attention/prefill.cuh>
++#include <flashinfer/attention/scheduler.cuh>
++#include <flashinfer/attention/variants.cuh>
++
++struct NativePagedParams {
++  using DTypeQ = __nv_bfloat16;
++  using DTypeKV = __nv_bfloat16;
++  using DTypeO = __nv_bfloat16;
++  using IdType = int32_t;
++
++  DTypeQ* q = nullptr;
++  flashinfer::paged_kv_t<DTypeKV, IdType> paged_kv;
++  IdType* q_indptr = nullptr;
++  DTypeO* o = nullptr;
++  float* lse = nullptr;
++  flashinfer::uint_fastdiv group_size;
++  double sm_scale = 0;
++  double logits_soft_cap = 0;
++  double rope_rcp_scale = 1;
++  double rope_rcp_theta = 0.0001;
++  uint32_t num_qo_heads = 0;
++  IdType q_stride_n = 0;
++  IdType q_stride_h = 0;
++  uint32_t k_sf_stride_page = 0, k_sf_stride_n = 0, k_sf_stride_h = 0;
++  uint32_t v_sf_stride_page = 0, v_sf_stride_n = 0, v_sf_stride_h = 0;
++  int32_t window_left = -1;
++  IdType* request_indices = nullptr;
++  IdType* qo_tile_indices = nullptr;
++  IdType* kv_tile_indices = nullptr;
++  IdType* merge_indptr = nullptr;
++  IdType* o_indptr = nullptr;
++  bool* block_valid_mask = nullptr;
++  IdType* kv_chunk_size_ptr = nullptr;
++  uint32_t max_total_num_rows = 0;
++  uint32_t* total_num_rows = nullptr;
++  uint32_t padded_batch_size = 0;
++  bool partition_kv = false;
++  bool independent_pdl = false;
++  unsigned long long* pdl_timeline = nullptr;
++
++  __host__ __device__ __forceinline__ uint32_t get_qo_len(uint32_t batch_idx) const {
++    return q_indptr[batch_idx + 1] - q_indptr[batch_idx];
++  }
++
++  __host__ __device__ __forceinline__ uint32_t get_kv_len(uint32_t batch_idx) const {
++    return paged_kv.get_length(batch_idx);
++  }
++};
++
++void native_fa2_run(at::Tensor q, at::Tensor k_cache, at::Tensor v_cache,
++                    at::Tensor qo_indptr, at::Tensor kv_indptr, at::Tensor kv_indices,
++                    at::Tensor last_page_len, at::Tensor output, at::Tensor lse,
++                    at::Tensor float_workspace, at::Tensor int_workspace,
++                    std::vector<int64_t> plan_values, double sm_scale,
++                    bool enable_pdl, bool independent_pdl, at::Tensor timeline) {
++  TORCH_CHECK(q.is_cuda() && q.dim() == 3 && q.size(2) == 128,
++              "native FA2 bridge requires CUDA Q with head dimension 128");
++  TORCH_CHECK(q.scalar_type() == at::kBFloat16 && k_cache.scalar_type() == at::kBFloat16 &&
++              v_cache.scalar_type() == at::kBFloat16 && output.scalar_type() == at::kBFloat16,
++              "native FA2 bridge supports bf16 only");
++  TORCH_CHECK(output.sizes() == q.sizes() && output.is_contiguous(),
++              "native FA2 output must be contiguous and match Q");
++  TORCH_CHECK(!independent_pdl || enable_pdl, "independent work requires a PDL launch");
++  for (const auto& tensor : {k_cache, v_cache, qo_indptr, kv_indptr, kv_indices,
++                            last_page_len, output, lse, float_workspace, int_workspace, timeline}) {
++    TORCH_CHECK(tensor.is_cuda() && tensor.device() == q.device(), "CUDA device mismatch");
++  }
++  for (const auto& tensor : {qo_indptr, kv_indptr, kv_indices, last_page_len}) {
++    TORCH_CHECK(tensor.scalar_type() == at::kInt && tensor.is_contiguous(),
++                "native FA2 index tensors must be contiguous int32");
++  }
++  TORCH_CHECK(float_workspace.scalar_type() == at::kByte &&
++              int_workspace.scalar_type() == at::kByte &&
++              float_workspace.is_contiguous() && int_workspace.is_contiguous(),
++              "native FA2 workspaces must be contiguous byte buffers");
++  TORCH_CHECK(timeline.numel() == 0 ||
++              (timeline.scalar_type() == at::kLong && timeline.numel() == 4 && timeline.is_contiguous()),
++              "PDL timeline must be empty or four int64 values");
++  if (k_cache.dim() == 3) k_cache = k_cache.unsqueeze(1);
++  if (v_cache.dim() == 3) v_cache = v_cache.unsqueeze(1);
++  TORCH_CHECK(k_cache.dim() == 4 && v_cache.sizes() == k_cache.sizes() &&
++              k_cache.size(3) == 128 && k_cache.stride(3) == 1 && v_cache.stride(3) == 1,
++              "native FA2 bridge requires NHD paged caches with head dimension 128");
++  const int64_t batch = kv_indptr.numel() - 1;
++  const int64_t heads = q.size(1), kv_heads = k_cache.size(2);
++  TORCH_CHECK(batch > 0 && qo_indptr.numel() == batch + 1 && last_page_len.numel() == batch,
++              "native FA2 batch metadata mismatch");
++  TORCH_CHECK(kv_heads > 0 && heads % kv_heads == 0, "invalid GQA head counts");
++  TORCH_CHECK(lse.numel() == 0 ||
++              (lse.scalar_type() == at::kFloat && lse.numel() == q.size(0) * heads && lse.is_contiguous()),
++              "invalid native FA2 LSE buffer");
++  const c10::cuda::OptionalCUDAGuard device_guard(q.device());
++  const cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
++  flashinfer::PrefillPlanInfo plan;
++  plan.FromVector(plan_values);
++  TORCH_CHECK(plan.total_num_rows >= q.size(0), "native FA2 plan has too few output rows");
++  void* integer_buffer = int_workspace.data_ptr();
++  void* float_buffer = float_workspace.data_ptr();
++  NativePagedParams params{};
++  params.q = static_cast<__nv_bfloat16*>(q.data_ptr());
++  params.paged_kv = flashinfer::paged_kv_t<__nv_bfloat16, int32_t>(
++      kv_heads, k_cache.size(1), 128, batch, flashinfer::QKVLayout::kNHD,
++      static_cast<__nv_bfloat16*>(k_cache.data_ptr()),
++      static_cast<__nv_bfloat16*>(v_cache.data_ptr()),
++      k_cache.strides().data(), v_cache.strides().data(), kv_indices.data_ptr<int32_t>(),
++      kv_indptr.data_ptr<int32_t>(), last_page_len.data_ptr<int32_t>());
++  params.q_indptr = qo_indptr.data_ptr<int32_t>();
++  params.o = static_cast<__nv_bfloat16*>(output.data_ptr());
++  params.lse = lse.numel() == 0 ? nullptr : lse.data_ptr<float>();
++  params.num_qo_heads = heads;
++  params.group_size = flashinfer::uint_fastdiv(heads / kv_heads);
++  params.q_stride_n = q.stride(0);
++  params.q_stride_h = q.stride(1);
++  params.sm_scale = sm_scale;
++  params.request_indices = flashinfer::GetPtrFromBaseOffset<int32_t>(integer_buffer, plan.request_indices_offset);
++  params.qo_tile_indices = flashinfer::GetPtrFromBaseOffset<int32_t>(integer_buffer, plan.qo_tile_indices_offset);
++  params.kv_tile_indices = flashinfer::GetPtrFromBaseOffset<int32_t>(integer_buffer, plan.kv_tile_indices_offset);
++  params.o_indptr = flashinfer::GetPtrFromBaseOffset<int32_t>(integer_buffer, plan.o_indptr_offset);
++  params.kv_chunk_size_ptr = flashinfer::GetPtrFromBaseOffset<int32_t>(integer_buffer, plan.kv_chunk_size_ptr_offset);
++  params.padded_batch_size = plan.padded_batch_size;
++  params.max_total_num_rows = plan.total_num_rows;
++  params.independent_pdl = independent_pdl;
++  params.pdl_timeline = timeline.numel() == 0 ? nullptr :
++      reinterpret_cast<unsigned long long*>(timeline.data_ptr<int64_t>());
++  __nv_bfloat16* temporary_output = nullptr;
++  float* temporary_lse = nullptr;
++  if (plan.split_kv) {
++    params.merge_indptr = flashinfer::GetPtrFromBaseOffset<int32_t>(integer_buffer, plan.merge_indptr_offset);
++    temporary_output = flashinfer::GetPtrFromBaseOffset<__nv_bfloat16>(float_buffer, plan.v_offset);
++    temporary_lse = flashinfer::GetPtrFromBaseOffset<float>(float_buffer, plan.s_offset);
++    if (plan.enable_cuda_graph) {
++      params.block_valid_mask = flashinfer::GetPtrFromBaseOffset<bool>(integer_buffer, plan.block_valid_mask_offset);
++    }
++  }
++  if (plan.enable_cuda_graph) {
++    params.total_num_rows = flashinfer::GetPtrFromBaseOffset<uint32_t>(integer_buffer, plan.total_num_rows_offset);
++  }
++  bool equal_strides = k_cache.strides() == v_cache.strides();
++  using NativeAttention = flashinfer::DefaultAttention<false, false, false, false>;
++  cudaError_t status = cudaSuccess;
++  auto launch = [&](auto stride_tag) {
++    constexpr bool SAME_KV_STRIDES = decltype(stride_tag)::value;
++    DISPATCH_CTA_TILE_Q(plan.cta_tile_q, CTA_TILE_Q, {
++      status = flashinfer::BatchPrefillWithPagedKVCacheDispatched<
++          SAME_KV_STRIDES, CTA_TILE_Q, 128, 128, flashinfer::PosEncodingMode::kNone,
++          false, flashinfer::MaskMode::kCausal, NativeAttention, NativePagedParams>(
++          params, temporary_output, temporary_lse, enable_pdl, stream);
++    });
++  };
++  if (equal_strides) launch(std::true_type{});
++  else launch(std::false_type{});
++  TORCH_CHECK(status == cudaSuccess, "native FA2 launch failed: ", cudaGetErrorString(status));
++}
+--- /dev/null
++++ b/port07/tests/test_native_pdl_plan.cpp
+@@ -0,0 +1,19 @@
++#include <cassert>
++#include <cstdio>
++#include <vector>
++
++#include <flashinfer/attention/fused_plan.cuh>
++
++int main() {
++  assert((flashinfer::FusedRoleKvChunkLengths(65536, 4096, 0) ==
++          std::vector<int32_t>{4096, 4096, 4096, 65536}));
++  assert((flashinfer::FusedRoleKvChunkLengths(65536, 4096, 8192) ==
++          std::vector<int32_t>{4096, 4096, 4096, 8192}));
++  assert((flashinfer::FusedRoleKvChunkLengths(65536, 0, 256) ==
++          std::vector<int32_t>{65536, 65536, 65536, 256}));
++  assert((flashinfer::FusedRoleKvChunkLengths(65536, 0, 0) ==
++          std::vector<int32_t>{65536, 65536, 65536, 65536}));
++  assert((flashinfer::FusedRoleKvChunkLengths(0, 0, 0) ==
++          std::vector<int32_t>{1, 1, 1, 1}));
++  std::puts("Independent FA2/FA3 chunk metadata: PASS");
++}
+--- a/drivers/fused_reference.py
++++ b/fused_reference_native_pdl.py
+@@ -102,6 +102,9 @@
+         verify_context = int(os.environ.get("VERIFY_KV", "2048"))
+         fa3_q, fa3_kv = [prefill_queries], [prefill_context]
+         fa2_q, fa2_kv = [verify_queries] * verify_rows, [verify_context] * verify_rows
++    elif mode == "native_varied":
++        fa3_q, fa3_kv = [17, 32], [65536, 32769]
++        fa2_q, fa2_kv = [4, 8, 4, 8], [8192, 16384, 32769, 65536]
+     elif mode == "mix_decode":
+         # DECODE-HEAVY 4-mode shape: one prefill chunk plus DEC_ROWS decode rows. This is the arm
+         # that decides whether the fusion's +5.4% was a floor set by having only 2 decode tokens to
+@@ -363,7 +366,16 @@
+         fa2_ws_stock = torch.zeros(128 << 20, dtype=torch.uint8, device=DEV)
+         qo2 = (qo_indptr[nfa3:] - qo_indptr[nfa3]).to(DEV)
+         kv2_indptr = (kv_indptr[nfa3:] - kv_indptr[nfa3]).to(DEV)
+-        w2 = flashinfer.BatchPrefillWithPagedKVCacheWrapper(fa2_ws_stock, backend="fa2")
++        graph_buffers = {}
++        if _os.environ.get("NATIVE_PDL_GRAPH_PLAN") == "1":
++            graph_buffers = {
++                "use_cuda_graph": True,
++                "qo_indptr_buf": qo2.clone(),
++                "paged_kv_indptr_buf": kv2_indptr.clone(),
++                "paged_kv_indices_buf": kv_indices[int(kv_indptr[nfa3]):int(kv_indptr[B])].clone(),
++                "paged_kv_last_page_len_buf": torch.ones(B - nfa3, dtype=torch.int32, device=DEV),
++            }
++        w2 = flashinfer.BatchPrefillWithPagedKVCacheWrapper(fa2_ws_stock, backend="fa2", **graph_buffers)
+         w2.plan(
+             qo_indptr=qo2,
+             paged_kv_indptr=kv2_indptr,
+@@ -416,13 +428,105 @@
+     o = torch.full_like(q, float("nan"))
+     pers_o = o
+     nfa3_rows = sum(fa3_q)
+-    _fused_ops.fused_run(
++    implementation = _os.environ.get("NATIVE_PDL_MODE", "legacy")
++    if implementation not in ("legacy", "serial", "entry", "independent"):
++        raise ValueError(f"Unknown NATIVE_PDL_MODE={implementation}")
++    fused_arguments = (
+         q, k_cache, v_cache, kv_indices, o, fa3_ws, fa3_plan,
+         int_ws, flt_ws, pers_plan, HQ, HKV, PAGE, sm_scale,
+         sm_split, nfa3_rows, sm_split, sum(fa3_kv), kv_indices, pers_o,
+         B, max(kv_lens), max(qo_lens), kv_len_t.to(DEV),
+         qo_indptr.to(DEV), kv_indptr.to(DEV),
+     )
++    empty_timeline = torch.empty(0, dtype=torch.int64, device=DEV)
++    empty_lse = torch.empty(0, dtype=torch.float32, device=DEV)
++    primary_arguments = None
++    primary_finish_arguments = None
++    if implementation != "legacy" and nfa3_rows:
++        primary_int = torch.empty_like(int_ws)
++        primary_pinned = torch.empty_like(pin_ws, pin_memory=True)
++        primary_float = torch.empty_like(flt_ws)
++        primary_q_cpu = qo_indptr[:nfa3 + 1].clone()
++        primary_kv_cpu = kv_indptr[:nfa3 + 1].clone()
++        primary_lengths_cpu = kv_len_t[:nfa3].clone()
++        primary_plan = _fused_ops.build_fused_plan(
++            primary_int, primary_pinned, primary_float, primary_q_cpu, primary_kv_cpu,
++            primary_lengths_cpu, torch.ones(nfa3, dtype=torch.bool),
++            HQ, HKV, D, D, PAGE, sm_split, nsm, True,
++        )
++        primary_indices = kv_indices[:int(primary_kv_cpu[-1])]
++        primary_output = o[:nfa3_rows]
++        primary_arguments = (
++            q[:nfa3_rows], k_cache, v_cache, primary_indices, primary_output,
++            fa3_ws, fa3_plan, primary_int, primary_float, primary_plan,
++            HQ, HKV, PAGE, sm_scale, sm_split, nfa3_rows, sm_split,
++            int(primary_kv_cpu[-1]), primary_indices, primary_output, nfa3,
++            max(fa3_kv), max(fa3_q), primary_lengths_cpu.to(DEV),
++            primary_q_cpu.to(DEV), primary_kv_cpu.to(DEV),
++        )
++        primary_finish_arguments = (
++            primary_output, primary_int, primary_float, primary_plan, nfa3, HQ, HKV,
++        )
++        print(f"NATIVE_PRIMARY_PLAN max_splits={primary_plan[54]} merge_rows={primary_plan[-2]}")
++    native_arguments = None
++    if w2 is not None:
++        native_arguments = (
++            q[nfa3_rows:], k_cache, v_cache, w2._qo_indptr_buf,
++            w2._paged_kv_indptr_buf, w2._paged_kv_indices_buf,
++            w2._paged_kv_last_page_len_buf, o[nfa3_rows:], empty_lse,
++            w2._float_workspace_buffer, w2._int_workspace_buffer,
++            list(w2._plan_info), sm_scale,
++        )
++        print(f"NATIVE_FA2_PLAN cta_q={w2._plan_info[3]} split_kv={w2._plan_info[14]}")
++
++    def run_selected(timeline=empty_timeline):
++        if implementation == "legacy":
++            _fused_ops.fused_run(*fused_arguments)
++            return
++        if nfa3_rows:
++            _fused_ops.fused_primary_run(*primary_arguments, timeline)
++        if native_arguments is not None:
++            _fused_ops.native_fa2_run(
++                *native_arguments, implementation != "serial",
++                implementation == "independent", timeline,
++            )
++        if primary_finish_arguments is not None:
++            _fused_ops.fused_primary_finish(*primary_finish_arguments)
++
++    if _os.environ.get("NATIVE_PDL_TRACE") == "1":
++        if implementation == "legacy":
++            raise ValueError("The legacy control does not provide native FA2 timestamps")
++        for warmup in range(3):
++            run_selected()
++        torch.cuda.synchronize()
++        initial_timeline = torch.tensor(
++            [torch.iinfo(torch.int64).max, 0, torch.iinfo(torch.int64).max,
++             torch.iinfo(torch.int64).max], dtype=torch.int64, device=DEV,
++        )
++        timeline = initial_timeline.clone()
++        for graph_mode in (False, True):
++            o.fill_(float("nan"))
++            timeline.copy_(initial_timeline)
++            if graph_mode:
++                graph = torch.cuda.CUDAGraph()
++                with torch.cuda.graph(graph):
++                    run_selected(timeline)
++                graph.replay()
++            else:
++                run_selected(timeline)
++            torch.cuda.synchronize()
++            stamps = timeline.cpu().tolist()
++            if nfa3_rows and native_arguments is not None:
++                assert 0 < stamps[0] < stamps[1]
++                assert 0 < stamps[2] <= stamps[3] < torch.iinfo(torch.int64).max
++                overlaps = stamps[0] < stamps[3] < stamps[1]
++                if implementation in ("serial", "entry"):
++                    assert stamps[2] >= stamps[1], (implementation, stamps)
++                if implementation == "independent" and _os.environ.get("NATIVE_PDL_REQUIRE_OVERLAP") == "1":
++                    assert overlaps, (graph_mode, stamps)
++                print(f"NATIVE_PDL_TRACE mode={implementation} graph={graph_mode} stamps={stamps} completed_fa2_during_fa3={overlaps}")
++    else:
++        run_selected()
+     torch.cuda.synchronize()
+ 
+     got = o.clone().float()
+@@ -449,11 +553,7 @@
+         _maxkv, _maxqo, _sumkv = max(kv_lens), max(qo_lens), sum(fa3_kv)
+ 
+         def _fused():
+-            _fused_ops.fused_run(
+-                q, k_cache, v_cache, kv_indices, o, fa3_ws, fa3_plan,
+-                int_ws, flt_ws, pers_plan, HQ, HKV, PAGE, sm_scale,
+-                sm_split, nfa3_rows, sm_split, _sumkv, kv_indices, pers_o,
+-                B, _maxkv, _maxqo, _kvlen_d, _qoi_d, _kvi_d)
++            run_selected()
+ 
+         # UNFUSED baseline: the two roles as SEPARATE launches, which is what the fused kernel is
+         # meant to replace. FA3 rows through flashinfer's own planned FA3 wrapper, FA2 rows through
+--- /dev/null
++++ b/test_native_pdl_glue.py
+@@ -0,0 +1,112 @@
++import ast
++from pathlib import Path
++import sys
++import types
++import unittest
++from unittest.mock import patch
++
++import torch
++
++
++class NativePdlGlueTest(unittest.TestCase):
++    def run_partition(self, fa3_indices, fa2_indices, fa3_span, fa2_span):
++        source = Path(__file__).parent / "up_racefix/python/sglang/srt/layers/attention/flashinfer_backend.py"
++        syntax = ast.parse(source.read_text())
++        method = next(node for node in ast.walk(syntax) if isinstance(node, ast.FunctionDef) and node.name == "_native_pdl_dispatch")
++        calls = []
++        phase = ["prepare"]
++
++        def primary(*arguments):
++            calls.append("primary")
++            arguments[4].copy_(arguments[0] + 1)
++            phase[0] = "primary"
++
++        def native(*arguments):
++            self.assertEqual(phase[0], "primary")
++            phase[0] = "native"
++            calls.append("native")
++            self.assertEqual(arguments[13:15], (True, True))
++            arguments[7].copy_(arguments[0] + 2)
++
++        def finish(*arguments):
++            self.assertEqual(phase[0], "native")
++            calls.append("finish")
++            arguments[0].add_(2)
++            phase[0] = "finish"
++
++        operations = types.SimpleNamespace(fused_primary_run=primary, native_fa2_run=native, fused_primary_finish=finish)
++
++        class TorchProxy:
++            ops = types.SimpleNamespace(native_test=operations)
++
++            def __getattr__(self, name):
++                return getattr(torch, name)
++
++            def empty(self, *arguments, **keywords):
++                if phase[0] == "primary":
++                    raise AssertionError("Allocation between PDL launches")
++                return torch.empty(*arguments, **keywords)
++
++            def empty_like(self, *arguments, **keywords):
++                if phase[0] == "primary":
++                    raise AssertionError("Allocation between PDL launches")
++                return torch.empty_like(*arguments, **keywords)
++
++        environment = {"torch": TorchProxy(), "FUSED_SPLIT_VERIFY": False,
++                       "logger": types.SimpleNamespace(info=lambda *arguments: None)}
++        executable = ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[]))
++        exec(compile(executable, str(source), "exec"), environment)
++        query = torch.arange(8, dtype=torch.bfloat16).view(8, 1, 1).expand(8, 28, 128).clone()
++        cache = torch.zeros(8, 1, 4, 128, dtype=torch.bfloat16)
++        empty = torch.empty(0)
++        wrapper = types.SimpleNamespace(**{key: empty for key in (
++            "_qo_indptr_buf", "_paged_kv_indptr_buf", "_paged_kv_indices_buf",
++            "_paged_kv_last_page_len_buf", "_float_workspace_buffer", "_int_workspace_buffer")})
++        wrapper._plan_info = [0] * 15
++        backend = types.SimpleNamespace(
++            page_size=1, fused_fa2_wrapper=wrapper, fused_split_calls=0,
++            token_to_kv_pool=types.SimpleNamespace(get_kv_buffer=lambda layer: (cache, cache)),
++        )
++        layer = types.SimpleNamespace(tp_q_head_num=28, tp_k_head_num=4, tp_v_head_num=4,
++                                      head_dim=128, v_head_dim=128, scaling=0.088, layer_id=0)
++        plan = {"fa3_span": fa3_span, "fa2_span": fa2_span,
++                "fa3_tok": torch.tensor(fa3_indices), "fa2_tok": torch.tensor(fa2_indices),
++                "n_fa3": len(fa3_indices), "n_fa2": len(fa2_indices)}
++        kernel = {key: empty for key in (
++            "kv_indices", "fa3_int", "pers_int", "pers_float", "fa3_sparse",
++            "kv_lens", "q_indptr", "kv_indptr", "empty_lse", "empty_timeline")}
++        kernel.update(op_namespace="native_test", fa3_plan=[0] * 9, pers_plan=[0] * 59,
++                      sm_split=112, fa3_tokens=len(fa3_indices), fa3_num_ctas=112,
++                      fa3_pages=1, num_requests=len(fa3_indices), max_pages=1, max_q=4)
++        kernel["pers_plan"][54] = 2
++        module_name = "sglang.srt.mem_cache.layout.paged_view"
++        view_module = types.ModuleType(module_name)
++        view_module.paged_kv_view = lambda tensor, *arguments: tensor
++        original_getitem = torch.Tensor.__getitem__
++
++        def getitem(tensor, index):
++            if phase[0] == "primary":
++                raise AssertionError("Tensor indexing between PDL launches")
++            return original_getitem(tensor, index)
++
++        with patch.dict(sys.modules, {module_name: view_module}), patch.object(torch.Tensor, "__getitem__", getitem):
++            output = environment["_native_pdl_dispatch"](backend, query, layer, plan, kernel, True, 0, None, None)
++        expected = query.clone()
++        expected[fa3_indices] += 3
++        expected[fa2_indices] += 2
++        self.assertTrue(torch.equal(output, expected))
++        self.assertEqual(calls, ["primary", "native", "finish"])
++        self.assertEqual(backend.fused_split_calls, 1)
++
++    def test_prefix_views(self):
++        self.run_partition([0, 1, 2], [3, 4, 5, 6, 7], (0, 3), (3, 8))
++
++    def test_suffix_views(self):
++        self.run_partition([5, 6, 7], [0, 1, 2, 3, 4], (5, 8), (0, 5))
++
++    def test_scattered_partition(self):
++        self.run_partition([0, 3, 5], [1, 2, 4, 6, 7], None, None)
++
++
++if __name__ == "__main__":
++    unittest.main()
+

@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.18.9 — Codex kernel worker's 2026-10-13/14 results integrated; B3 closed (2026-10-14)
+
+- B3 closed by measurement: true TMA multicast (page 128, 2-CTA clusters) implemented and gated by
+  the Codex kernel worker; -0.2..+1.7% vs unicast TMA. DSMEM KV sharing (two versions) loses.
+- A3b on the serving split complete (12 arms): large mean gains but not promoted (SLO/fairness
+  trade-offs, acceptance confounds).
+- A4 candidates (native-PDL FA2, dedicated FA3 entry, compact planning, auto4096 cap, KV96, SM
+  budget, one-warp producer): none beats the plain split in serving; FA3 work-pair locality
+  (-14%/-26% kernel) is in serving test. KV96 work fixed a real packed-Q gather bug.
+- Overlap A/B: no gain beyond noise; the plain two-launch split remains the serving kernel.
+- eval_curves: relative-SLO reference directories named <mix>_unloaded_<stream> now resolve
+  (Codex fix + test).
+
 ## v1.18.8 — Serving kernel switches to the two-launch FA3 + stock-FA2 split (2026-10-13)
 
 - Split dispatch fix: the two-launch split was planned but never run in serving (ragged path);

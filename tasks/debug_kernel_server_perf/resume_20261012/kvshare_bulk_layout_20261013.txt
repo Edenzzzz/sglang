@@ -1,0 +1,6 @@
+K stages=1 cases=4 PASS
+V stages=1 cases=4 PASS
+K stages=2 cases=16 PASS
+V stages=2 cases=16 PASS
+K stages=3 cases=36 PASS
+V stages=3 cases=36 PASS

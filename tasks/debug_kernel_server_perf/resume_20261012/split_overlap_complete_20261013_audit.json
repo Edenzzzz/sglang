@@ -1,0 +1,155 @@
+{
+  "job": "095f01a3e1585eea",
+  "arms": [
+    {
+      "mixture": "mix32",
+      "arm": "SPLIT",
+      "calls": 102001,
+      "overlapped": 0,
+      "graph_decode_lines": 313,
+      "validation": {
+        "completed": true,
+        "fallbacks": 0,
+        "tracebacks": 0,
+        "fused_kernel_calls": 0,
+        "mixed_steps": 3901
+      },
+      "results": {
+        "chat": {
+          "completed": 8640,
+          "sha256": "483baec313eb08ce48e308325a42a4f8ec5e6f4b4e19197d43dfa14cdef73c87"
+        },
+        "codex": {
+          "completed": 36,
+          "sha256": "8071954a2911580349b0ebdf27024ed92937d0dde1b5929dcc39aca1a80f5c6e"
+        }
+      },
+      "server_log_sha256": "5de2b3d0bd40ea1b1c5420638aae5947da13c31a3e4dccdc933fad712372f0c6"
+    },
+    {
+      "mixture": "mix32",
+      "arm": "OVLm16",
+      "calls": 104001,
+      "overlapped": 104001,
+      "graph_decode_lines": 320,
+      "validation": {
+        "completed": true,
+        "fallbacks": 0,
+        "tracebacks": 0,
+        "fused_kernel_calls": 0,
+        "mixed_steps": 4051
+      },
+      "results": {
+        "chat": {
+          "completed": 8640,
+          "sha256": "2b46c8afb1d204672da365e8cdb543eb9db1e57afbeec365b3bde2cf1ff6817f"
+        },
+        "codex": {
+          "completed": 36,
+          "sha256": "df0fee004bb95b4ec84deca949f36787557c4c396a5485dccb7ed8985241266c"
+        }
+      },
+      "server_log_sha256": "741e005f3ce91fef87b46199d63c1230dc26e7f3f70c7de13ad9407c2778aad1"
+    },
+    {
+      "mixture": "mix32",
+      "arm": "OVLm32",
+      "calls": 103001,
+      "overlapped": 103001,
+      "graph_decode_lines": 310,
+      "validation": {
+        "completed": true,
+        "fallbacks": 0,
+        "tracebacks": 0,
+        "fused_kernel_calls": 0,
+        "mixed_steps": 3951
+      },
+      "results": {
+        "chat": {
+          "completed": 8640,
+          "sha256": "9bb8b05de392ccfe9c8b3f718bad72d5ffc85773cdd046748bf89f52ef0f367b"
+        },
+        "codex": {
+          "completed": 36,
+          "sha256": "79a1a4bf6dd9ac8ee98c24c92abe3d6b156c1a39c0edf2b4495a484a0c34cb15"
+        }
+      },
+      "server_log_sha256": "159e464d167ac1dce213645806b961636e618aa3c75a2014e426796de3261611"
+    },
+    {
+      "mixture": "mix128",
+      "arm": "SPLIT",
+      "calls": 35501,
+      "overlapped": 0,
+      "graph_decode_lines": 221,
+      "validation": {
+        "completed": true,
+        "fallbacks": 0,
+        "tracebacks": 0,
+        "fused_kernel_calls": 0,
+        "mixed_steps": 1351
+      },
+      "results": {
+        "chat": {
+          "completed": 3840,
+          "sha256": "d26d86dde116c17db1df82d7ef64668098684fec517e69d9a3464d680c8fd6f2"
+        },
+        "codex": {
+          "completed": 16,
+          "sha256": "cbcbe193de7b0a4c636e71893defc0faa2d3699f6af8d6f361d557cf21bab889"
+        }
+      },
+      "server_log_sha256": "3f5ebb499f82bb31d3dbcceefc00d637a58f46bf30c97521e0f8658500ce92d8"
+    },
+    {
+      "mixture": "mix128",
+      "arm": "OVLm16",
+      "calls": 35501,
+      "overlapped": 35501,
+      "graph_decode_lines": 221,
+      "validation": {
+        "completed": true,
+        "fallbacks": 0,
+        "tracebacks": 0,
+        "fused_kernel_calls": 0,
+        "mixed_steps": 1351
+      },
+      "results": {
+        "chat": {
+          "completed": 3840,
+          "sha256": "20d9a88483584aa8aa6c023984ce794ed559d45353517744de5637e6e85e3c51"
+        },
+        "codex": {
+          "completed": 16,
+          "sha256": "5e6aa5512c851b535c6c8b1ff5635c5363bbd9d168bd98dd10eeba995d8f21dc"
+        }
+      },
+      "server_log_sha256": "aad979d09a1e3db52a360721721700e2a9c0b32cc7a40e54c191e0d947015f5e"
+    },
+    {
+      "mixture": "mix128",
+      "arm": "OVLm32",
+      "calls": 35501,
+      "overlapped": 35501,
+      "graph_decode_lines": 221,
+      "validation": {
+        "completed": true,
+        "fallbacks": 0,
+        "tracebacks": 0,
+        "fused_kernel_calls": 0,
+        "mixed_steps": 1351
+      },
+      "results": {
+        "chat": {
+          "completed": 3840,
+          "sha256": "d45b061c0ab56af0e4f065e1f76fa2d47e06563fade4ccdb0f5ff91d72eed19c"
+        },
+        "codex": {
+          "completed": 16,
+          "sha256": "678adca933180a78d455eff6c2900d11beb00a1c338f25233eccd38c0b447c54"
+        }
+      },
+      "server_log_sha256": "8565744c820ceebca9d2b31a2f8989ed2b13a93334aad82d1130dfe9c7dbb24c"
+    }
+  ]
+}

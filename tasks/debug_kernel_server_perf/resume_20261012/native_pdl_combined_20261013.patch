@@ -1,0 +1,375 @@
+--- a/port07/include/flashinfer/attention/persistent_fa3_fused.cuh
++++ b/port07/include/flashinfer/attention/persistent_fa3_fused.cuh
+@@ -505,6 +505,40 @@
+ 
+ // FA2 executor: the persistent LPT kernel at its native 128 threads x 2 CTAs/SM, which
+ // is where it gets 255 registers and zero spill. Drains tasks 0-2 only.
++template <typename FA3Mainloop, typename FA3Epilogue, typename FA3Traits,
++          bool LEFT_SLIDING_WINDOW, bool CAUSAL, typename FA3TileScheduler,
++          typename Runner1, typename Runner2, typename Runner3>
++__global__ void __launch_bounds__(FA3Traits::NUM_WARPS * cutlass::NumThreadsPerWarp, 1)
++    DedicatedFA3PrimaryKernel(
++#if FLASHINFER_FA3_UPSTREAM
++        CUTE_GRID_CONSTANT typename UpstreamFA3Kernel<FA3Traits::HEAD_DIM_VO, int32_t>::Params const upstream_fa3,
++#else
++        CUTE_GRID_CONSTANT typename FA3Mainloop::Params const fa3_mainloop_params,
++        CUTE_GRID_CONSTANT typename FA3Epilogue::Params const fa3_epilogue_params,
++        CUTE_GRID_CONSTANT typename FA3TileScheduler::Params const fa3_scheduler_params,
++#endif
++        FUSED_PERS_QUALIFIER typename Runner1::Params params_1,
++        FUSED_PERS_QUALIFIER typename Runner2::Params params_2,
++        FUSED_PERS_QUALIFIER typename Runner3::Params params_3,
++        const uint32_t sm_split, const bool backfill, const FusedQueueParams queue,
++        const uint32_t entry_register_count) {
++  extern __shared__ uint8_t smem[];
++  asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
++  FusedPdlRecord<kPdlFa3Start>(queue.pdl_timeline);
++#if FLASHINFER_FA3_UPSTREAM
++  UpstreamFA3Kernel<FA3Traits::HEAD_DIM_VO, int32_t>{}(upstream_fa3, reinterpret_cast<char*>(smem));
++#else
++  fa3_prefill_body<FA3Mainloop, FA3Epilogue, FA3Traits, LEFT_SLIDING_WINDOW, CAUSAL,
++                   FA3TileScheduler, false>(fa3_mainloop_params, fa3_epilogue_params,
++                                           fa3_scheduler_params, reinterpret_cast<char*>(smem),
++                                           entry_register_count);
++#endif
++  cute::tma_store_wait<0>();
++  cp_async::wait_group<0>();
++  __syncthreads();
++  FusedPdlRecord<kPdlFa3End, true>(queue.pdl_timeline);
++}
++
+ template <typename FA3Traits, typename Runner1, typename Runner2, typename Runner3>
+ __global__ void __launch_bounds__(128, 2)
+     FA2ExecutorKernel(typename Runner1::Params params_1, typename Runner2::Params params_2,
+@@ -886,6 +920,18 @@
+           : (void*)FusedFA3PersistentKernel<CollectiveMainloop, CollectiveEpilogue, KernelTraits,
+                                             LEFT_SLIDING_WINDOW, CAUSAL, Scheduler, Runner1,
+                                             Runner2, Runner3>;
++  if (!launch_fa2) {
++    const char* dedicated = std::getenv("FUSED_FA3_DEDICATED_PRIMARY");
++    if (dedicated != nullptr && dedicated[0] == '1') {
++      if (!colaunch || symmetric) {
++        FLASHINFER_ERROR("dedicated FA3 primary requires asymmetric co-launch mode");
++        return cudaErrorInvalidValue;
++      }
++      kernel = (void*)DedicatedFA3PrimaryKernel<CollectiveMainloop, CollectiveEpilogue,
++                                                KernelTraits, LEFT_SLIDING_WINDOW, CAUSAL,
++                                                Scheduler, Runner1, Runner2, Runner3>;
++    }
++  }
+   cudaFuncAttributes kernel_attributes{};
+   FLASHINFER_CUDA_CALL(cudaFuncGetAttributes(&kernel_attributes, kernel));
+   uint32_t entry_register_count = uint32_t(kernel_attributes.numRegs);
+--- a/port07/include/flashinfer/attention/hopper/prefill_sm90.cuh
++++ b/port07/include/flashinfer/attention/hopper/prefill_sm90.cuh
+@@ -71,7 +71,7 @@
+ template <typename CollectiveMainloop, typename CollectiveEpilogue, typename Ktraits,
+           bool LEFT_SLIDING_WINDOW, bool CAUSAL, typename TileScheduler,
+           bool MULTIITEMSCORING = false>
+-__device__ void fa3_prefill_body(
++__device__ __forceinline__ void fa3_prefill_body(
+     typename CollectiveMainloop::Params const& mainloop_params,
+     typename CollectiveEpilogue::Params const& epilogue_params,
+     typename TileScheduler::Params const& scheduler_params, char* shared_memory,
+--- a/port07/tests/fused_fa3_persistent_ext.cu
++++ b/port07/tests/fused_fa3_persistent_ext.cu
+@@ -224,11 +224,16 @@
+                bool native_fa2, at::Tensor timeline) {
+   const c10::cuda::OptionalCUDAGuard g(q.device());
+   cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
+-  void* fa3_ib = fa3_int_ws.data_ptr();
++  const bool compact_primary = native_fa2 && fa3_plan.empty();
++  void* fa3_ib = compact_primary ? nullptr : fa3_int_ws.data_ptr();
+   void* pers_ib = pers_int_ws.data_ptr();
+   void* pers_fb = pers_float_ws.data_ptr();
+ 
+-  PrefillPlanSM90Info fp; fp.FromVector(fa3_plan);
++  PrefillPlanSM90Info fp;
++  if (!compact_primary) fp.FromVector(fa3_plan);
++#ifndef FLASHINFER_FUSED_UNIFIED_WGMMA
++  TORCH_CHECK(!compact_primary, "compact primary requires the unified FA3 scheduler");
++#endif
+   // Four tasks: 0/1/2 are the FA2 tile classes the persistent runners execute,
+   // 3 is the wgmma class whose work items FA3's mainloop pulls through
+   // UnifiedWgmmaTileScheduler. The loop below deliberately stays at 3.
+@@ -314,14 +319,16 @@
+   fa3.num_qo_heads = num_qo_heads; fa3.num_kv_heads = num_kv_heads;
+   fa3.group_size = num_qo_heads / num_kv_heads;
+   fa3.page_size = page_size; fa3.window_left = -1; fa3.causal = false;
+-  fa3.qo_tile_indices = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.qo_tile_indices_offset);
+-  fa3.qo_indptr      = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.qo_indptr_offset);
+-  fa3.kv_indptr      = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.kv_indptr_offset);
+-  fa3.qo_lens        = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.qo_len_offset);
+-  fa3.kv_lens        = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.kv_len_offset);
+-  fa3.head_indices   = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.head_indices_offset);
+-  fa3.work_indptr    = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.work_indptr_offset);
+-  fa3.batch_indices  = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.batch_indices_offset);
++  if (!compact_primary) {
++    fa3.qo_tile_indices = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.qo_tile_indices_offset);
++    fa3.qo_indptr      = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.qo_indptr_offset);
++    fa3.kv_indptr      = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.kv_indptr_offset);
++    fa3.qo_lens        = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.qo_len_offset);
++    fa3.kv_lens        = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.kv_len_offset);
++    fa3.head_indices   = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.head_indices_offset);
++    fa3.work_indptr    = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.work_indptr_offset);
++    fa3.batch_indices  = GetPtrFromBaseOffset<IdT>(fa3_ib, fp.batch_indices_offset);
++  }
+   // Index convention, and it CHANGED between 0.3.1 and 0.7. 0.3.1's fa3 multiplied the index by
+   // k_stride_n, so flashinfer ran block_sparse_indices_to_vector_sparse_offsets first and passed
+   // vector-sparse offsets; passing the raw page array there left the FA3 rows wrong by ~60% of
+@@ -556,6 +563,27 @@
+   fused_run_impl(q, k_cache, v_cache, kv_indices, o, fa3_int_ws, fa3_plan, pers_int_ws, pers_float_ws, pers_plan, num_qo_heads, num_kv_heads, page_size, sm_scale, sm_split, pers_row_offset, fa3_num_ctas, pers_kv_page_offset, fa3_kv_indices, pers_o, num_requests, max_pages_per_seq, max_seqlen_q, kv_lens_per_req, q_indptr_per_req, kv_indptr_per_req, true, timeline);
+ }
+ 
++void fused_primary_compact(at::Tensor q, at::Tensor key_cache, at::Tensor value_cache,
++                            at::Tensor page_indices, at::Tensor output, at::Tensor int_workspace,
++                            at::Tensor float_workspace, std::vector<int64_t> plan_values,
++                            int64_t num_qo_heads, int64_t num_kv_heads, int64_t page_size,
++                            double sm_scale, int64_t sm_split, int64_t num_requests,
++                            int64_t max_pages, int64_t max_queries, at::Tensor kv_lengths,
++                            at::Tensor query_indptr, at::Tensor page_indptr, at::Tensor timeline) {
++  FusedPlanInfo<4> plan;
++  TORCH_CHECK(plan_values.size() == plan.ToVector().size(), "invalid compact FA3 plan");
++  plan.FromVector(plan_values);
++  TORCH_CHECK(plan.num_fa3_clusters == sm_split && plan.num_fa3_requests == num_requests,
++              "compact primary requires an FA3-only plan with the same SM budget");
++  TORCH_CHECK(query_indptr.numel() == num_requests + 1 && page_indptr.numel() == num_requests + 1 &&
++              kv_lengths.numel() == num_requests, "compact primary metadata mismatch");
++  fused_run_impl(q, key_cache, value_cache, page_indices, output, at::Tensor(), {},
++                 int_workspace, float_workspace, plan_values, num_qo_heads, num_kv_heads,
++                 page_size, sm_scale, sm_split, q.size(0), sm_split, page_indices.numel(),
++                 page_indices, output, num_requests, max_pages, max_queries, kv_lengths,
++                 query_indptr, page_indptr, true, timeline);
++}
++
+ void fused_primary_finish(at::Tensor output, at::Tensor int_workspace,
+                            at::Tensor float_workspace, std::vector<int64_t> plan_values,
+                            int64_t num_requests, int64_t num_qo_heads, int64_t num_kv_heads) {
+@@ -766,6 +794,7 @@
+ FUSED_TORCH_LIBRARY_EXPAND(FUSED_OP_NAMESPACE, m) {
+   m.def("fused_run", &fused_run);
+   m.def("fused_primary_run", &fused_primary_run);
++  m.def("fused_primary_compact", &fused_primary_compact);
+   m.def("fused_primary_finish", &fused_primary_finish);
+   m.def("native_fa2_run", &native_fa2_run);
+   m.def("build_fused_plan", &build_fused_plan);
+--- a/up_racefix/python/sglang/srt/layers/attention/flashinfer_backend.py
++++ b/up_racefix/python/sglang/srt/layers/attention/flashinfer_backend.py
+@@ -2026,11 +2026,12 @@
+             state = self._fused_kernel_state
+             if state is None:
+                 state = self._fused_kernel_state = {
+-                    "fa3_workspace": torch.empty(256 << 20, dtype=torch.uint8, device=dev),
+                     "pers_int": torch.empty(64 << 20, dtype=torch.uint8, device=dev),
+                     "pers_float": torch.empty(128 << 20, dtype=torch.uint8, device=dev),
+                     "pers_pinned": torch.empty(64 << 20, dtype=torch.uint8, device="cpu", pin_memory=True),
+                 }
++                if not FUSED_NATIVE_PDL:
++                    state["fa3_workspace"] = torch.empty(256 << 20, dtype=torch.uint8, device=dev)
+ 
+             n_fa3 = len(fa3_rows)
+             qo_np = np.asarray(qo_lens, dtype=np.int32)
+@@ -2066,27 +2067,21 @@
+                     int(all_page_ids.min().item()) if all_page_ids.numel() else -1,
+                     int(all_page_ids.max().item()) if all_page_ids.numel() else -1,
+                 )
+-            fa3_q = torch.from_numpy(qo_indptr_np[: n_fa3 + 1])
+-            fa3_k = torch.from_numpy(page_indptr_np[: n_fa3 + 1])
+-            fa3_last = torch.from_numpy(
+-                np.where(kv_np[:n_fa3] % self.page_size == 0, self.page_size, kv_np[:n_fa3] % self.page_size).astype(np.int32)
+-            ).to(dev)
+-            fa3 = BatchPrefillWithPagedKVCacheWrapper(
+-                state["fa3_workspace"], kv_layout="NHD", backend="fa3"
+-            )
+-            fa3.plan(
+-                fa3_q,
+-                fa3_k,
+-                fa3_page_ids,
+-                fa3_last,
+-                iu.num_qo_heads,
+-                iu.num_kv_heads,
+-                iu.head_dim,
+-                self.page_size,
+-                causal=True,
+-                q_data_type=iu.q_data_type,
+-                kv_data_type=iu.data_type,
+-            )
++            fa3 = None
++            if not FUSED_NATIVE_PDL:
++                fa3_q = torch.from_numpy(qo_indptr_np[: n_fa3 + 1])
++                fa3_k = torch.from_numpy(page_indptr_np[: n_fa3 + 1])
++                fa3_last = torch.from_numpy(
++                    np.where(kv_np[:n_fa3] % self.page_size == 0, self.page_size, kv_np[:n_fa3] % self.page_size).astype(np.int32)
++                ).to(dev)
++                fa3 = BatchPrefillWithPagedKVCacheWrapper(
++                    state["fa3_workspace"], kv_layout="NHD", backend="fa3"
++                )
++                fa3.plan(
++                    fa3_q, fa3_k, fa3_page_ids, fa3_last, iu.num_qo_heads, iu.num_kv_heads,
++                    iu.head_dim, self.page_size, causal=True,
++                    q_data_type=iu.q_data_type, kv_data_type=iu.data_type,
++                )
+             fa3_sparse = fa3_page_ids
+             mask_cpu = torch.zeros(len(qo_np), dtype=torch.bool)
+             mask_cpu[:n_fa3] = True
+@@ -2117,8 +2112,8 @@
+                     state["native_empty_lse"] = torch.empty(0, dtype=torch.float32, device=dev)
+                     state["native_empty_timeline"] = torch.empty(0, dtype=torch.int64, device=dev)
+             split_plan["fused_kernel"] = dict(
+-                fa3_int=fa3._int_workspace_buffer,
+-                fa3_plan=list(fa3._plan_info),
++                fa3_int=fa3._int_workspace_buffer if fa3 is not None else None,
++                fa3_plan=list(fa3._plan_info) if fa3 is not None else None,
+                 pers_int=state["pers_int"],
+                 pers_float=state["pers_float"],
+                 pers_plan=list(pers_plan),
+@@ -2193,12 +2188,11 @@
+             native._float_workspace_buffer, native._int_workspace_buffer,
+             list(native._plan_info), layer.scaling, True, True, kernel["empty_timeline"],
+         )
+-        ops.fused_primary_run(
++        ops.fused_primary_compact(
+             query3, key_cache, value_cache, kernel["kv_indices"], output3,
+-            kernel["fa3_int"], kernel["fa3_plan"], kernel["pers_int"], kernel["pers_float"],
++            kernel["pers_int"], kernel["pers_float"],
+             kernel["pers_plan"], layer.tp_q_head_num, layer.tp_k_head_num, self.page_size,
+-            layer.scaling, kernel["sm_split"], kernel["fa3_tokens"], kernel["fa3_num_ctas"],
+-            kernel["fa3_pages"], kernel["fa3_sparse"], output3, kernel["num_requests"],
++            layer.scaling, kernel["sm_split"], kernel["num_requests"],
+             kernel["max_pages"], kernel["max_q"], kernel["kv_lens"], kernel["q_indptr"],
+             kernel["kv_indptr"], kernel["empty_timeline"],
+         )
+@@ -2246,6 +2240,7 @@
+                         self.fused_split_calls, plan["n_fa3"], plan["n_fa2"], kernel["sm_split"])
+             logger.info("NATIVE_FA2_PDL_CALLS %d fa3_rows=%d fa2_rows=%d fa3_splits=%d",
+                         self.fused_split_calls, plan["n_fa3"], plan["n_fa2"], kernel["pers_plan"][54])
++            logger.info("NATIVE_PDL_COMPACT_CALLS %d", self.fused_split_calls)
+         return output
+ 
+     def _fused_split_dispatch(
+--- a/fused_reference_native_pdl.py
++++ b/fused_reference_native_pdl.py
+@@ -441,6 +441,7 @@
+     empty_timeline = torch.empty(0, dtype=torch.int64, device=DEV)
+     empty_lse = torch.empty(0, dtype=torch.float32, device=DEV)
+     primary_arguments = None
++    primary_compact_arguments = None
+     primary_finish_arguments = None
+     if implementation != "legacy" and nfa3_rows:
+         primary_int = torch.empty_like(int_ws)
+@@ -467,6 +468,12 @@
+         primary_finish_arguments = (
+             primary_output, primary_int, primary_float, primary_plan, nfa3, HQ, HKV,
+         )
++        primary_compact_arguments = (
++            q[:nfa3_rows], k_cache, v_cache, primary_indices, primary_output,
++            primary_int, primary_float, primary_plan, HQ, HKV, PAGE, sm_scale, sm_split,
++            nfa3, max(fa3_kv), max(fa3_q), primary_lengths_cpu.to(DEV),
++            primary_q_cpu.to(DEV), primary_kv_cpu.to(DEV),
++        )
+         print(f"NATIVE_PRIMARY_PLAN max_splits={primary_plan[54]} merge_rows={primary_plan[-2]}")
+     native_arguments = None
+     if w2 is not None:
+@@ -484,7 +491,7 @@
+             _fused_ops.fused_run(*fused_arguments)
+             return
+         if nfa3_rows:
+-            _fused_ops.fused_primary_run(*primary_arguments, timeline)
++            _fused_ops.fused_primary_compact(*primary_compact_arguments, timeline)
+         if native_arguments is not None:
+             _fused_ops.native_fa2_run(
+                 *native_arguments, implementation != "serial",
+--- a/test_native_pdl_glue.py
++++ b/test_native_pdl_glue.py
+@@ -6,6 +6,8 @@
+ from unittest.mock import patch
+ 
+ import torch
++import numpy as np
++import os
+ 
+ 
+ class NativePdlGlueTest(unittest.TestCase):
+@@ -34,7 +36,7 @@
+             arguments[0].add_(2)
+             phase[0] = "finish"
+ 
+-        operations = types.SimpleNamespace(fused_primary_run=primary, native_fa2_run=native, fused_primary_finish=finish)
++        operations = types.SimpleNamespace(fused_primary_compact=primary, native_fa2_run=native, fused_primary_finish=finish)
+ 
+         class TorchProxy:
+             ops = types.SimpleNamespace(native_test=operations)
+@@ -107,6 +109,73 @@
+     def test_scattered_partition(self):
+         self.run_partition([0, 3, 5], [1, 2, 4, 6, 7], None, None)
+ 
++    def test_compact_primary_planning(self):
++        source = Path(__file__).parent / "up_racefix/python/sglang/srt/layers/attention/flashinfer_backend.py"
++        syntax = ast.parse(source.read_text())
++        method = next(node for node in ast.walk(syntax) if isinstance(node, ast.FunctionDef) and node.name == "_prepare_fused_kernel_plan")
++        events = []
++
++        class Event:
++            def synchronize(self):
++                events.append("wait")
++
++            def record(self):
++                events.append("record")
++
++        def build(*arguments):
++            events.append("build")
++            self.assertEqual(arguments[3].tolist(), [0, 17, 49])
++            self.assertEqual(arguments[4].tolist(), [0, 64, 160])
++            self.assertEqual(arguments[5].tolist(), [64, 96])
++            self.assertEqual(arguments[6].tolist(), [True, True])
++            return [0] * 59
++
++        class TorchProxy:
++            ops = types.SimpleNamespace(native_test=types.SimpleNamespace(build_fused_plan=build))
++            cuda = types.SimpleNamespace(get_device_properties=lambda device: types.SimpleNamespace(multi_processor_count=132), Event=Event)
++
++            def __getattr__(self, name):
++                return getattr(torch, name)
++
++            def empty(self, size, **keywords):
++                keywords.pop("pin_memory", None)
++                return torch.empty(min(size, 128), **keywords)
++
++        environment = {"torch": TorchProxy(), "os": os, "FUSED_NATIVE_PDL": True,
++                       "FUSED_SPLIT_VERIFY": False,
++                       "logger": types.SimpleNamespace(info=lambda *arguments: None)}
++        executable = ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[]))
++        exec(compile(executable, str(source), "exec"), environment)
++        loader_name = "sglang.srt.layers.attention.fused_fa3_loader"
++        loader = types.ModuleType(loader_name)
++        loader.load_fused_fa3 = lambda **keywords: "native_test"
++        flashinfer = types.ModuleType("flashinfer")
++
++        def unused_plan(*arguments, **keywords):
++            raise AssertionError("Legacy FA3 wrapper was constructed")
++
++        flashinfer.BatchPrefillWithPagedKVCacheWrapper = unused_plan
++        backend = types.SimpleNamespace(_fused_kernel_state=None, page_size=1,
++                                        req_to_token_pool=types.SimpleNamespace(req_to_token=torch.arange(512, dtype=torch.int32).reshape(4, 128)))
++        updater = types.SimpleNamespace(num_qo_heads=28, num_kv_heads=4, head_dim=128,
++                                        q_data_type=torch.bfloat16, data_type=torch.bfloat16)
++        plan = {}
++        with patch.dict(sys.modules, {loader_name: loader, "flashinfer": flashinfer}), patch.dict(os.environ, {"SGLANG_FUSED_SM_FA3": "112"}):
++            for repeat in range(2):
++                environment["_prepare_fused_kernel_plan"](
++                    backend, None, plan, np.array([1, 3]), np.array([0, 2]),
++                    np.array([4, 17, 4, 32]), torch.tensor([8, 64, 16, 96]),
++                    np.array([0, 1, 2, 3]), np.array([0, 4, 21, 25, 57]), updater, torch.device("cpu"),
++                )
++        kernel = plan["fused_kernel"]
++        self.assertIsNone(kernel["fa3_int"])
++        self.assertIsNone(kernel["fa3_plan"])
++        self.assertNotIn("fa3_workspace", backend._fused_kernel_state)
++        self.assertEqual(kernel["fa3_tokens"], 49)
++        self.assertEqual(kernel["num_requests"], 2)
++        self.assertEqual(kernel["kv_indices"].tolist(), list(range(128, 192)) + list(range(384, 480)))
++        self.assertEqual(events, ["build", "record", "wait", "build", "record"])
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

@@ -1,0 +1,4 @@
+ELF file    1: fused_fa3_q128.1.sm_90a.cubin
+cp.async.bulk.tensor.3d.shared::cluster.global.mbarrier::complete_tx::bytes.multicast::cluster.L2::cache_hint [%r13246], [%rd246, {%r13248, %r13254, %r1488}], [%r22886], %rs379, %rd2054;
+cp.async.bulk.tensor.3d.shared::cluster.global.mbarrier::complete_tx::bytes.multicast::cluster.L2::cache_hint [%r13251], [%rd246, {%r13253, %r13254, %r1488}], [%r22886], %rs379, %rd2054;
+cp.async.bulk.tensor.3d.shared::cluster.global.mbarrier::complete_tx::bytes.multicast::cluster.L2::cache_hint [%r13390], [%rd246, {%r13392, %r13398, %r1488}], [%r22894], %rs380, %rd2308;

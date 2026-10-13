@@ -1,0 +1,438 @@
+{
+  "job": "095f01a3e1585eea",
+  "complete": true,
+  "audits": [
+    {
+      "label": "b_kv16384_r16_q8_auto4096_1",
+      "policy": "auto4096",
+      "repeat": 1,
+      "fused_ms": 0.3264,
+      "unfused_ms": 0.1554,
+      "rows": 128,
+      "log_sha256": "3b0662990ff023cee0ad22cd637a77aea99fd172ba6d33e3d2644b67e0e60544"
+    },
+    {
+      "label": "b_kv16384_r16_q8_auto4096_2",
+      "policy": "auto4096",
+      "repeat": 2,
+      "fused_ms": 0.3262,
+      "unfused_ms": 0.1555,
+      "rows": 128,
+      "log_sha256": "060e0fa552866df1dfd95ec8f86042dba515fb914525ea11e84b28239d6bb8ac"
+    },
+    {
+      "label": "b_kv16384_r16_q8_auto_1",
+      "policy": "auto",
+      "repeat": 1,
+      "fused_ms": 0.3229,
+      "unfused_ms": 0.1557,
+      "rows": 128,
+      "log_sha256": "77196437cb082bd1e63767feccd050ad1e9c1486226d0ef5aee5d295813c2c7c"
+    },
+    {
+      "label": "b_kv16384_r16_q8_auto_2",
+      "policy": "auto",
+      "repeat": 2,
+      "fused_ms": 0.323,
+      "unfused_ms": 0.1556,
+      "rows": 128,
+      "log_sha256": "f0c96971130175c3643617c18d2eaa9ffbf4092bfe29ac4c8dd850811f5cee03"
+    },
+    {
+      "label": "b_kv16384_r1_q4_auto4096_1",
+      "policy": "auto4096",
+      "repeat": 1,
+      "fused_ms": 0.0298,
+      "unfused_ms": 0.0187,
+      "rows": 4,
+      "log_sha256": "d38a9307ff21c6d6e80f1a14464ba453292a3de77c01ce72cb188be28468d947"
+    },
+    {
+      "label": "b_kv16384_r1_q4_auto4096_2",
+      "policy": "auto4096",
+      "repeat": 2,
+      "fused_ms": 0.03,
+      "unfused_ms": 0.0188,
+      "rows": 4,
+      "log_sha256": "07f0315eaece529b1fb1c44246fc1bc59897689bd602aacaf9decda8b5218b4b"
+    },
+    {
+      "label": "b_kv16384_r1_q4_auto_1",
+      "policy": "auto",
+      "repeat": 1,
+      "fused_ms": 0.03,
+      "unfused_ms": 0.0187,
+      "rows": 4,
+      "log_sha256": "bd413c3cb4dca080f4bcffa182e3c360d0490857c96157e3c679e988d0bf9c8e"
+    },
+    {
+      "label": "b_kv16384_r1_q4_auto_2",
+      "policy": "auto",
+      "repeat": 2,
+      "fused_ms": 0.0278,
+      "unfused_ms": 0.0187,
+      "rows": 4,
+      "log_sha256": "7465e3b2aa4771d83e1f7ef4322faaac6e4137b6ce8c878826a71138b172633e"
+    },
+    {
+      "label": "b_kv4096_r16_q8_auto4096_1",
+      "policy": "auto4096",
+      "repeat": 1,
+      "fused_ms": 0.094,
+      "unfused_ms": 0.057,
+      "rows": 128,
+      "log_sha256": "70ca207709f004329b90ba34eb77c384fe0f3cf8a7fa9eb42dbfbae84ac0744a"
+    },
+    {
+      "label": "b_kv4096_r16_q8_auto4096_2",
+      "policy": "auto4096",
+      "repeat": 2,
+      "fused_ms": 0.0941,
+      "unfused_ms": 0.0571,
+      "rows": 128,
+      "log_sha256": "7beb553597e0488dd8f5029c61996b75bda6d88688d71a9b0cb92c08dfe40e58"
+    },
+    {
+      "label": "b_kv4096_r16_q8_auto_1",
+      "policy": "auto",
+      "repeat": 1,
+      "fused_ms": 0.0941,
+      "unfused_ms": 0.057,
+      "rows": 128,
+      "log_sha256": "459d54af0e54df3815ddec0023ce8e539fd737a53928c2edbee812ef422e528b"
+    },
+    {
+      "label": "b_kv4096_r16_q8_auto_2",
+      "policy": "auto",
+      "repeat": 2,
+      "fused_ms": 0.0939,
+      "unfused_ms": 0.0571,
+      "rows": 128,
+      "log_sha256": "28091aa3327dd0da3ffa76be4aade440580b9027b3acfabff64b4c88eee9c28c"
+    },
+    {
+      "label": "b_kv4096_r1_q8_auto4096_1",
+      "policy": "auto4096",
+      "repeat": 1,
+      "fused_ms": 0.0217,
+      "unfused_ms": 0.0115,
+      "rows": 8,
+      "log_sha256": "b1a165f9f3757b94e2bd4185bc30f4c58af2018b37bfee05c0d2750fc7eec0c8"
+    },
+    {
+      "label": "b_kv4096_r1_q8_auto4096_2",
+      "policy": "auto4096",
+      "repeat": 2,
+      "fused_ms": 0.0217,
+      "unfused_ms": 0.0115,
+      "rows": 8,
+      "log_sha256": "7ac03149048293d561ba9d654bdaedfba6238b6d4ccfe60c7f4bde27b5a7372b"
+    },
+    {
+      "label": "b_kv4096_r1_q8_auto_1",
+      "policy": "auto",
+      "repeat": 1,
+      "fused_ms": 0.0218,
+      "unfused_ms": 0.0116,
+      "rows": 8,
+      "log_sha256": "32db8354efcf84d32161b4bc7a3d4bf0e05086c259e347f34d5731bd56b9b4fb"
+    },
+    {
+      "label": "b_kv4096_r1_q8_auto_2",
+      "policy": "auto",
+      "repeat": 2,
+      "fused_ms": 0.0218,
+      "unfused_ms": 0.0116,
+      "rows": 8,
+      "log_sha256": "831460b95aef5491723f27f0dedc1537e1c68e2b7f3b0417af522bab211ef454"
+    },
+    {
+      "label": "chunk512_v46_kv48k_auto4096_1",
+      "policy": "auto4096",
+      "repeat": 1,
+      "fused_ms": 2.9211,
+      "unfused_ms": 2.2818,
+      "rows": 696,
+      "log_sha256": "ad0ad2c7f0f6d2e6c7ee0f4d4a212b2b2df6e446cb6a872f5efca516efd743c6"
+    },
+    {
+      "label": "chunk512_v46_kv48k_auto4096_2",
+      "policy": "auto4096",
+      "repeat": 2,
+      "fused_ms": 2.9298,
+      "unfused_ms": 2.2784,
+      "rows": 696,
+      "log_sha256": "28f95f57264128c8ff7d8452249333a51d12a0b2a9932eec80582e04e2baa8a7"
+    },
+    {
+      "label": "chunk512_v46_kv48k_auto_1",
+      "policy": "auto",
+      "repeat": 1,
+      "fused_ms": 3.6425,
+      "unfused_ms": 2.2751,
+      "rows": 696,
+      "log_sha256": "b23ae8a6fdc5a23cf85cca43eec75de86e4e303eabab65a9b92ed325868645e2"
+    },
+    {
+      "label": "chunk512_v46_kv48k_auto_2",
+      "policy": "auto",
+      "repeat": 2,
+      "fused_ms": 3.6468,
+      "unfused_ms": 2.2907,
+      "rows": 696,
+      "log_sha256": "eef7576f3e7d4a9ad1e325281f734a5fc068920cbc93efe148349d645a74fda3"
+    },
+    {
+      "label": "mix_decode32_auto4096_1",
+      "policy": "auto4096",
+      "repeat": 1,
+      "fused_ms": 0.1175,
+      "unfused_ms": 0.0829,
+      "rows": 288,
+      "log_sha256": "e43f5132ebadfc0be16399bf055d911589813fc3b17539a389bd2dd6a7c31399"
+    },
+    {
+      "label": "mix_decode32_auto4096_2",
+      "policy": "auto4096",
+      "repeat": 2,
+      "fused_ms": 0.1177,
+      "unfused_ms": 0.0825,
+      "rows": 288,
+      "log_sha256": "298f7f3241b3d076dfb97aa9c7fd9369c0096070e32131b9e3131a70022c441e"
+    },
+    {
+      "label": "mix_decode32_auto_1",
+      "policy": "auto",
+      "repeat": 1,
+      "fused_ms": 0.1181,
+      "unfused_ms": 0.0824,
+      "rows": 288,
+      "log_sha256": "920f43929a10ab75922bde3d95ca671dc9de80c5ba4c1a8fc10b867918d641c0"
+    },
+    {
+      "label": "mix_decode32_auto_2",
+      "policy": "auto",
+      "repeat": 2,
+      "fused_ms": 0.1177,
+      "unfused_ms": 0.0831,
+      "rows": 288,
+      "log_sha256": "d0560688ba2e8cbae7c1fc1f744369186fdb2ee9db409b7e96a7798fbf90eaea"
+    },
+    {
+      "label": "mixed_verify_q4_auto4096_1",
+      "policy": "auto4096",
+      "repeat": 1,
+      "fused_ms": 0.0669,
+      "unfused_ms": 0.0574,
+      "rows": 536,
+      "log_sha256": "e8500ed68cb47ff1f24634998bfd71446738d8d75232cab985d60326edd2abbf"
+    },
+    {
+      "label": "mixed_verify_q4_auto4096_2",
+      "policy": "auto4096",
+      "repeat": 2,
+      "fused_ms": 0.0668,
+      "unfused_ms": 0.0575,
+      "rows": 536,
+      "log_sha256": "d7e3b2cde35ae214dea624bd314aa49279b529699e4299b7b3d4c4d606638e6a"
+    },
+    {
+      "label": "mixed_verify_q4_auto_1",
+      "policy": "auto",
+      "repeat": 1,
+      "fused_ms": 0.0668,
+      "unfused_ms": 0.0577,
+      "rows": 536,
+      "log_sha256": "2553e5a19e9cb2b81b77d7d093dd12b70834dd9b022e6ab6e58daf7bd252f100"
+    },
+    {
+      "label": "mixed_verify_q4_auto_2",
+      "policy": "auto",
+      "repeat": 2,
+      "fused_ms": 0.0669,
+      "unfused_ms": 0.0576,
+      "rows": 536,
+      "log_sha256": "8c3c9fd72e78b3078c79052783693e75ab9f74acee5e33b0b6009811bb5c974d"
+    },
+    {
+      "label": "mixed_verify_q8_auto4096_1",
+      "policy": "auto4096",
+      "repeat": 1,
+      "fused_ms": 0.0895,
+      "unfused_ms": 0.0614,
+      "rows": 568,
+      "log_sha256": "05165836b85ddce5e88795945d7227dc70ea971203099c630d454ed93b4d87ed"
+    },
+    {
+      "label": "mixed_verify_q8_auto4096_2",
+      "policy": "auto4096",
+      "repeat": 2,
+      "fused_ms": 0.0895,
+      "unfused_ms": 0.0615,
+      "rows": 568,
+      "log_sha256": "b1a264c35deade14158b9fca069ebf6d3db57ad7936035952b2ea06521b09335"
+    },
+    {
+      "label": "mixed_verify_q8_auto_1",
+      "policy": "auto",
+      "repeat": 1,
+      "fused_ms": 0.0895,
+      "unfused_ms": 0.0614,
+      "rows": 568,
+      "log_sha256": "428662e57c0434f3d2d996a3290f7baf52b154388f9d8207102b5c16cf2c6e00"
+    },
+    {
+      "label": "mixed_verify_q8_auto_2",
+      "policy": "auto",
+      "repeat": 2,
+      "fused_ms": 0.0894,
+      "unfused_ms": 0.0613,
+      "rows": 568,
+      "log_sha256": "ba740f6d8ef412652a04426502e8259e49b875bef89bec1cb98c19e31d7238a9"
+    },
+    {
+      "label": "v_r16_kv128k_auto4096_1",
+      "policy": "auto4096",
+      "repeat": 1,
+      "fused_ms": 1.7323,
+      "unfused_ms": 1.1588,
+      "rows": 64,
+      "log_sha256": "bb07d42d25d55d0a04886329a2b64a1a1b8a38e9c60da53d489557db97ab4280"
+    },
+    {
+      "label": "v_r16_kv128k_auto4096_2",
+      "policy": "auto4096",
+      "repeat": 2,
+      "fused_ms": 1.7328,
+      "unfused_ms": 1.1839,
+      "rows": 64,
+      "log_sha256": "b5653233bbf82a8904e18546ee3140ab7c451d5bf61d849f488b402e71e02a50"
+    },
+    {
+      "label": "v_r16_kv128k_auto_1",
+      "policy": "auto",
+      "repeat": 1,
+      "fused_ms": 1.7328,
+      "unfused_ms": 1.1809,
+      "rows": 64,
+      "log_sha256": "76921f4efb9f3e6a2174c5ef58a6f059427fc538afeeb28105c2b7c6ddffbd4c"
+    },
+    {
+      "label": "v_r16_kv128k_auto_2",
+      "policy": "auto",
+      "repeat": 2,
+      "fused_ms": 1.7347,
+      "unfused_ms": 1.1837,
+      "rows": 64,
+      "log_sha256": "81af647585ef5f9c710816ee64c7c21039d5a97b71f6cffeba817c7726f7625c"
+    },
+    {
+      "label": "v_r46_kv16k_auto4096_1",
+      "policy": "auto4096",
+      "repeat": 1,
+      "fused_ms": 0.6637,
+      "unfused_ms": 0.512,
+      "rows": 184,
+      "log_sha256": "830fc1a19eb79b61f3c4e15cd2b3b808668c8f76541fd03d442375aa72a7be74"
+    },
+    {
+      "label": "v_r46_kv16k_auto4096_2",
+      "policy": "auto4096",
+      "repeat": 2,
+      "fused_ms": 0.6639,
+      "unfused_ms": 0.5105,
+      "rows": 184,
+      "log_sha256": "768f38ba2e83ac6ab5f3b8eddf33a3ab712c6366ff1c669fcb0bd1720afcb6fe"
+    },
+    {
+      "label": "v_r46_kv16k_auto_1",
+      "policy": "auto",
+      "repeat": 1,
+      "fused_ms": 0.8532,
+      "unfused_ms": 0.5105,
+      "rows": 184,
+      "log_sha256": "1831a2e3718ec4d9794274ce9f1708ef3f1191e2a82417e4c388186ed08aaff1"
+    },
+    {
+      "label": "v_r46_kv16k_auto_2",
+      "policy": "auto",
+      "repeat": 2,
+      "fused_ms": 0.8538,
+      "unfused_ms": 0.5097,
+      "rows": 184,
+      "log_sha256": "e5c6b6dcd3651dbe6be396ccdca8edbe67f0837c1c88377cdf21516210f9b967"
+    },
+    {
+      "label": "v_r46_kv48k_auto4096_1",
+      "policy": "auto4096",
+      "repeat": 1,
+      "fused_ms": 1.8327,
+      "unfused_ms": 1.5315,
+      "rows": 184,
+      "log_sha256": "ee162e1311daabfef7ddf67088a0a28664f0f0f56c51b455c124ee4a93d557d0"
+    },
+    {
+      "label": "v_r46_kv48k_auto4096_2",
+      "policy": "auto4096",
+      "repeat": 2,
+      "fused_ms": 1.8475,
+      "unfused_ms": 1.5292,
+      "rows": 184,
+      "log_sha256": "945f1c2755b8381305af0a65a318e65461f400444cdd3a635ac89027ce9581c3"
+    },
+    {
+      "label": "v_r46_kv48k_auto_1",
+      "policy": "auto",
+      "repeat": 1,
+      "fused_ms": 2.5343,
+      "unfused_ms": 1.5359,
+      "rows": 184,
+      "log_sha256": "21e6f0ff3588baf1a603a39e8fe1d184e636b53777befa87814cafcf3bb4abd6"
+    },
+    {
+      "label": "v_r46_kv48k_auto_2",
+      "policy": "auto",
+      "repeat": 2,
+      "fused_ms": 2.5397,
+      "unfused_ms": 1.5197,
+      "rows": 184,
+      "log_sha256": "3bcd181cb71e7b81da341a31867f7408076e1bb5600afd901e2e00cfacda899a"
+    },
+    {
+      "label": "v_r8_kv8k_auto4096_1",
+      "policy": "auto4096",
+      "repeat": 1,
+      "fused_ms": 0.0711,
+      "unfused_ms": 0.0496,
+      "rows": 32,
+      "log_sha256": "a1ee67bb1238a721b1164fdbe4857af6dffa3d37483571f348412d2ef822a787"
+    },
+    {
+      "label": "v_r8_kv8k_auto4096_2",
+      "policy": "auto4096",
+      "repeat": 2,
+      "fused_ms": 0.0717,
+      "unfused_ms": 0.0498,
+      "rows": 32,
+      "log_sha256": "69ee860198691daf0a065170592d09efdbe6627432cf9eeaac866aa625870f4d"
+    },
+    {
+      "label": "v_r8_kv8k_auto_1",
+      "policy": "auto",
+      "repeat": 1,
+      "fused_ms": 0.0713,
+      "unfused_ms": 0.0494,
+      "rows": 32,
+      "log_sha256": "7ae3fe1b97183131c2002b604a3d76ba5aa026c1bcb70f66b2ff714b69a78b0a"
+    },
+    {
+      "label": "v_r8_kv8k_auto_2",
+      "policy": "auto",
+      "repeat": 2,
+      "fused_ms": 0.073,
+      "unfused_ms": 0.0498,
+      "rows": 32,
+      "log_sha256": "3de78ccae7e9a309b93102146508538045ef3ea20993a4f245548ca4ea02d36f"
+    }
+  ]
+}

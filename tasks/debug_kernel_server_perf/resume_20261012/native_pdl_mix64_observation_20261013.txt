@@ -1,0 +1,17 @@
+2026-10-13T20:04:59+08:00
+    PID STAT     ELAPSED COMMAND
+ 487089 Ss      01:15:52 bash native_pdl_serving_20261013.sh
+ 493488 Ss         56:10 bash native_fa3_entry_ab_20261013.sh
+ 501745 Ss         26:27 bash native_pdl_compact_validate_20261013.sh
+ 506950 S          05:17 bash kvshare_bulk_kernel_20261013.sh
+{"mixture": "mix64", "arm": "NATIVE_2", "method": "MTPMIXFUSED", "execution_calls": 55301, "overlapped": null, "mixed_steps": 2051, "graph_decode_lines": 214, "fallbacks": 0, "tracebacks": 0, "plan_counters": ["FUSED_SPLIT_PLAN ok 2001: fa3=3 fa2=43 (onesided so far 202)"], "one_sided_counters": ["FUSED_SPLIT_ONESIDED 2001/2001: fa3=0 fa2=3 rows=3 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"], "server_log_sha256": "073e7556d18b00788f65f0f14c7d37d7568fd13c1ca77e25e112711eb2d8b3ba"}
+END mix64 NATIVE_2 2026-10-13T20:00:52+08:00
+START mix128 SPLIT_1 2026-10-13T20:00:52+08:00
+{"arm": "NATIVE_1", "stream": "chat", "completed": 5760, "duration": 406.1967012695968, "output_throughput": 1019.6143856055473, "mean_ttft_ms": 85935.99039997337, "mean_tpot_ms": 38.48498254797687, "p99_itl_ms": 252.3299634022017}
+{"arm": "NATIVE_1", "stream": "codex", "completed": 24, "duration": 463.24868461303413, "output_throughput": 140.6091418357959, "mean_ttft_ms": 63735.3559701393, "mean_tpot_ms": 26.782665813559706, "p99_itl_ms": 199.3350051343441}
+{"arm": "NATIVE_2", "stream": "chat", "completed": 5760, "duration": 406.7656903844327, "output_throughput": 1018.1881358001832, "mean_ttft_ms": 86751.06063389912, "mean_tpot_ms": 38.61444069340816, "p99_itl_ms": 258.8230123463922}
+{"arm": "NATIVE_2", "stream": "codex", "completed": 24, "duration": 462.92636623606086, "output_throughput": 140.70704274118742, "mean_ttft_ms": 64409.12697471988, "mean_tpot_ms": 26.575728275723524, "p99_itl_ms": 199.904448017478}
+{"arm": "SPLIT_1", "stream": "chat", "completed": 5760, "duration": 407.07076239585876, "output_throughput": 1017.4250726394429, "mean_ttft_ms": 86177.37241536929, "mean_tpot_ms": 38.87026391248342, "p99_itl_ms": 295.6450395286083}
+{"arm": "SPLIT_1", "stream": "codex", "completed": 24, "duration": 460.7318200636655, "output_throughput": 141.37725497448633, "mean_ttft_ms": 64670.545227515206, "mean_tpot_ms": 24.640240869596337, "p99_itl_ms": 196.72529540956012}
+{"arm": "SPLIT_2", "stream": "chat", "completed": 5760, "duration": 407.7525377422571, "output_throughput": 1015.7239052226221, "mean_ttft_ms": 85496.37255289967, "mean_tpot_ms": 38.67452409663547, "p99_itl_ms": 278.4839502721995}
+{"arm": "SPLIT_2", "stream": "codex", "completed": 24, "duration": 459.82734642364085, "output_throughput": 141.65534195956457, "mean_ttft_ms": 64304.99008515228, "mean_tpot_ms": 24.427363263130612, "p99_itl_ms": 195.14262080192515}

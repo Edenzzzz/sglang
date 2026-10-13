@@ -1,0 +1,327 @@
+{
+  "kernel_cases": [
+    {
+      "case": "fa3_q17_kv32769_independent",
+      "primary_plan": [
+        [
+          "26",
+          "119"
+        ]
+      ],
+      "sha256": "7d123e9631b00155b2a30443d58bf8f86e2d5e3f17808b7c9f82ebdbe7418e61"
+    },
+    {
+      "case": "fa3_q17_kv32769_serial",
+      "primary_plan": [
+        [
+          "26",
+          "119"
+        ]
+      ],
+      "sha256": "4e5d2547b473f692f14cdb0859597548fd237274d3130f10b3a993b9986e68a2"
+    },
+    {
+      "case": "fa3_q32_kv65536_independent",
+      "primary_plan": [
+        [
+          "14",
+          "224"
+        ]
+      ],
+      "sha256": "868508313c72606b072b87b9fb5629cb79e6d322c2ef26e870958b1157165e4d"
+    },
+    {
+      "case": "fa3_q32_kv65536_serial",
+      "primary_plan": [
+        [
+          "14",
+          "224"
+        ]
+      ],
+      "sha256": "6f7b829fe468167acb6dd0b4cf179fcf79ca98f8a2a739445b3b1dbcaf1dfb7a"
+    },
+    {
+      "case": "mixed_q256_kv128k_independent",
+      "primary_plan": [
+        [
+          "2",
+          "1792"
+        ]
+      ],
+      "sha256": "b5d322f18a9814459b0f49ba755be29fda520c209843a0616cf8a47d4f5c573b"
+    },
+    {
+      "case": "mixed_q256_kv128k_serial",
+      "primary_plan": [
+        [
+          "2",
+          "1792"
+        ]
+      ],
+      "sha256": "bc3b2d1875c62b8b464a8a5cdcce9411e9d4d99b95798444aea4d2f0270d120d"
+    },
+    {
+      "case": "mixed_q32_kv65536_independent",
+      "primary_plan": [
+        [
+          "14",
+          "224"
+        ]
+      ],
+      "sha256": "91c0563244041ef171e1fb4d65ee848a9cac7d95cc01928fe57507d2a99ecd2f"
+    },
+    {
+      "case": "mixed_q32_kv65536_serial",
+      "primary_plan": [
+        [
+          "14",
+          "224"
+        ]
+      ],
+      "sha256": "676f64bf964a74cf24e4c59f24687c802bb94b9f732460516a4dfc0f51592fc3"
+    },
+    {
+      "case": "mixed_varied_independent",
+      "primary_plan": [
+        [
+          "14",
+          "343"
+        ]
+      ],
+      "sha256": "0bab7b9df5e787f15bd50a31ca8b6b6d27734ab1f56d41e8da555620b380e581"
+    },
+    {
+      "case": "mixed_varied_serial",
+      "primary_plan": [
+        [
+          "14",
+          "343"
+        ]
+      ],
+      "sha256": "455841fe8469155b30a4455067cb2028c85be19a509ada7f4614dd4c62c4f093"
+    }
+  ],
+  "serving_native_counters": [
+    [
+      "1",
+      "1",
+      "1",
+      "1"
+    ],
+    [
+      "101",
+      "1",
+      "1",
+      "1"
+    ],
+    [
+      "1",
+      "1",
+      "1",
+      "1"
+    ],
+    [
+      "201",
+      "1",
+      "2",
+      "1"
+    ],
+    [
+      "301",
+      "1",
+      "3",
+      "1"
+    ],
+    [
+      "401",
+      "1",
+      "4",
+      "1"
+    ],
+    [
+      "501",
+      "1",
+      "5",
+      "1"
+    ],
+    [
+      "601",
+      "1",
+      "6",
+      "1"
+    ],
+    [
+      "701",
+      "1",
+      "7",
+      "1"
+    ],
+    [
+      "801",
+      "2",
+      "7",
+      "3"
+    ],
+    [
+      "901",
+      "1",
+      "8",
+      "1"
+    ],
+    [
+      "1001",
+      "1",
+      "8",
+      "1"
+    ],
+    [
+      "1101",
+      "1",
+      "8",
+      "1"
+    ],
+    [
+      "1201",
+      "1",
+      "8",
+      "1"
+    ],
+    [
+      "1301",
+      "1",
+      "8",
+      "1"
+    ],
+    [
+      "1401",
+      "1",
+      "8",
+      "1"
+    ],
+    [
+      "1501",
+      "1",
+      "9",
+      "1"
+    ],
+    [
+      "1601",
+      "1",
+      "9",
+      "1"
+    ],
+    [
+      "1701",
+      "1",
+      "9",
+      "1"
+    ],
+    [
+      "1801",
+      "1",
+      "9",
+      "1"
+    ],
+    [
+      "1901",
+      "1",
+      "9",
+      "1"
+    ],
+    [
+      "2001",
+      "1",
+      "9",
+      "1"
+    ],
+    [
+      "2101",
+      "2",
+      "9",
+      "2"
+    ],
+    [
+      "2201",
+      "1",
+      "10",
+      "1"
+    ],
+    [
+      "2301",
+      "1",
+      "10",
+      "1"
+    ],
+    [
+      "2401",
+      "1",
+      "10",
+      "1"
+    ],
+    [
+      "2501",
+      "1",
+      "10",
+      "1"
+    ],
+    [
+      "2601",
+      "1",
+      "10",
+      "1"
+    ],
+    [
+      "2701",
+      "1",
+      "10",
+      "1"
+    ],
+    [
+      "2801",
+      "1",
+      "11",
+      "1"
+    ],
+    [
+      "2901",
+      "1",
+      "11",
+      "1"
+    ],
+    [
+      "3001",
+      "1",
+      "10",
+      "1"
+    ],
+    [
+      "3101",
+      "1",
+      "10",
+      "1"
+    ],
+    [
+      "3201",
+      "1",
+      "10",
+      "1"
+    ],
+    [
+      "3301",
+      "1",
+      "10",
+      "1"
+    ],
+    [
+      "3401",
+      "1",
+      "10",
+      "1"
+    ]
+  ],
+  "layer0_checks": 127,
+  "layer0_worst": 0.012052,
+  "server_sha256": "aa575e90de20232c2ebfe0d2f2dffee573d73e4d04b5bfc7f2601c361b11af6d",
+  "output_comparison": "MTPMIXFUSED_NATIVE_PDL_Q4G vs MTP_LPT_Q4G: fallbacks=0 tracebacks=0\n  l0: first-token ==  common prefix 96/96  verify calls 12 vs 52\n  l1: first-token ==  common prefix 11/96  verify calls 24 vs 49\n  l2: first-token ==  common prefix 96/96  verify calls 34 vs 44\n  l3: first-token ==  common prefix 96/96  verify calls 52 vs 51\n  s0: first-token ==  common prefix 345/1200  verify calls 487 vs 537\n  s1: first-token ==  common prefix 148/1200  verify calls 742 vs 826\n  s2: first-token ==  common prefix 43/1200  verify calls 584 vs 601\n  s3: first-token ==  common prefix 1/1200  verify calls 551 vs 664\n  s4: first-token ==  common prefix 497/1200  verify calls 469 vs 518\n  s5: first-token ==  common prefix 63/1200  verify calls 527 vs 558\n  s6: first-token ==  common prefix 16/1200  verify calls 571 vs 643\n  s7: first-token ==  common prefix 1200/1200  verify calls 478 vs 522\nGATE PASS: min common prefix short=1 long=11 (long prompts must agree on their first 8 tokens)\n",
+  "runner_log": "port07/include/flashinfer/attention/persistent_fa3_fused.cuh: OK\nport07/include/flashinfer/attention/fused_plan.cuh: OK\nport07/include/flashinfer/attention/prefill.cuh: OK\nport07/include/flashinfer/attention/fused_barriers.cuh: OK\nport07/tests/fused_fa3_persistent_ext.cu: OK\nup_racefix/python/sglang/srt/layers/attention/flashinfer_backend.py: OK\nfi_native_pdl_v3/include/flashinfer/attention/persistent_fa3_fused.cuh: OK\nfi_native_pdl_v3/include/flashinfer/attention/fused_plan.cuh: OK\nfi_native_pdl_v3/include/flashinfer/attention/prefill.cuh: OK\nfi_native_pdl_v3/include/flashinfer/attention/fused_barriers.cuh: OK\nfi_native_pdl_v3/tests/fused_fa3_persistent_ext.cu: OK\nup_native_pdl_v3/python/sglang/srt/layers/attention/flashinfer_backend.py: OK\nfi_native_pdl_v3/include/flashinfer/attention/fused_pdl_trace.cuh: OK\nfi_native_pdl_v3/tests/native_prefill_bridge.cuh: OK\nfi_native_pdl_v3/tests/test_native_pdl_plan.cpp: OK\ndrivers/fused_reference_native_pdl_v3.py: OK\nnative_pdl_overlay_v3_20261013/test_native_pdl_glue.py: OK\nBUILD_START 2026-10-13T18:36:34+08:00\nBUILD_DONE 2026-10-13T18:39:01+08:00\nSTART fa3_q32_kv65536_serial 2026-10-13T18:39:01+08:00\n{\"case\": \"fa3_q32_kv65536_serial\", \"primary_plan\": [[\"14\", \"224\"]], \"sha256\": \"6f7b829fe468167acb6dd0b4cf179fcf79ca98f8a2a739445b3b1dbcaf1dfb7a\"}\nSTART fa3_q32_kv65536_independent 2026-10-13T18:39:10+08:00\n{\"case\": \"fa3_q32_kv65536_independent\", \"primary_plan\": [[\"14\", \"224\"]], \"sha256\": \"868508313c72606b072b87b9fb5629cb79e6d322c2ef26e870958b1157165e4d\"}\nSTART fa3_q17_kv32769_serial 2026-10-13T18:39:19+08:00\n{\"case\": \"fa3_q17_kv32769_serial\", \"primary_plan\": [[\"26\", \"119\"]], \"sha256\": \"4e5d2547b473f692f14cdb0859597548fd237274d3130f10b3a993b9986e68a2\"}\nSTART fa3_q17_kv32769_independent 2026-10-13T18:39:28+08:00\n{\"case\": \"fa3_q17_kv32769_independent\", \"primary_plan\": [[\"26\", \"119\"]], \"sha256\": \"7d123e9631b00155b2a30443d58bf8f86e2d5e3f17808b7c9f82ebdbe7418e61\"}\nSTART mixed_q32_kv65536_serial 2026-10-13T18:39:37+08:00\n{\"case\": \"mixed_q32_kv65536_serial\", \"primary_plan\": [[\"14\", \"224\"]], \"sha256\": \"676f64bf964a74cf24e4c59f24687c802bb94b9f732460516a4dfc0f51592fc3\"}\nSTART mixed_q32_kv65536_independent 2026-10-13T18:39:46+08:00\n{\"case\": \"mixed_q32_kv65536_independent\", \"primary_plan\": [[\"14\", \"224\"]], \"sha256\": \"91c0563244041ef171e1fb4d65ee848a9cac7d95cc01928fe57507d2a99ecd2f\"}\nSTART mixed_q256_kv128k_serial 2026-10-13T18:39:55+08:00\n{\"case\": \"mixed_q256_kv128k_serial\", \"primary_plan\": [[\"2\", \"1792\"]], \"sha256\": \"bc3b2d1875c62b8b464a8a5cdcce9411e9d4d99b95798444aea4d2f0270d120d\"}\nSTART mixed_q256_kv128k_independent 2026-10-13T18:40:06+08:00\n{\"case\": \"mixed_q256_kv128k_independent\", \"primary_plan\": [[\"2\", \"1792\"]], \"sha256\": \"b5d322f18a9814459b0f49ba755be29fda520c209843a0616cf8a47d4f5c573b\"}\nSTART mixed_varied_serial 2026-10-13T18:40:17+08:00\n{\"case\": \"mixed_varied_serial\", \"primary_plan\": [[\"14\", \"343\"]], \"sha256\": \"455841fe8469155b30a4455067cb2028c85be19a509ada7f4614dd4c62c4f093\"}\nSTART mixed_varied_independent 2026-10-13T18:40:26+08:00\n{\"case\": \"mixed_varied_independent\", \"primary_plan\": [[\"14\", \"343\"]], \"sha256\": \"0bab7b9df5e787f15bd50a31ca8b6b6d27734ab1f56d41e8da555620b380e581\"}\nNATIVE_PDL_V3_SPLIT_GATES_DONE 2026-10-13T18:40:36+08:00\nSERVING_GATE_START 2026-10-13T18:40:36+08:00\nGATE PASS: min common prefix short=1 long=11 (long prompts must agree on their first 8 tokens)\nNATIVE_PDL_V3_DONE 2026-10-13T18:42:04+08:00\nNATIVE_PDL_V3_EXIT status=0 time=2026-10-13T18:42:04+08:00\n"
+}

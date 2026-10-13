@@ -1,0 +1,187 @@
+--- a/port07/include/flashinfer/attention/fused_plan.cuh
++++ b/port07/include/flashinfer/attention/fused_plan.cuh
+@@ -34,6 +34,8 @@
+ #include <algorithm>
+ #include <cstring>
+ #include <vector>
++#include <limits>
++#include <numeric>
+ 
+ // Angle-bracket, NOT relative: this header lives in an OVERLAY that mirrors only
+ // flashinfer/attention/, so a relative path resolves inside the overlay and misses the wheel's
+@@ -219,6 +221,19 @@
+   return offsets;
+ }
+ 
++inline int32_t FusedAlignFa3KvChunk(int32_t chunk, uint32_t tile_kv, uint32_t page_size) {
++  if (chunk < 0 || page_size == 0 || (tile_kv != 64 && tile_kv != 96 && tile_kv != 128)) {
++    FLASHINFER_ERROR("invalid FA3 chunk, tile or page size");
++  }
++  if (chunk == 0) return 0;
++  const int64_t alignment = std::lcm(std::lcm(int64_t(128), int64_t(tile_kv)), int64_t(page_size));
++  const int64_t aligned = ((int64_t(chunk) + alignment - 1) / alignment) * alignment;
++  if (aligned > std::numeric_limits<int32_t>::max()) {
++    FLASHINFER_ERROR("aligned FA3 KV chunk exceeds int32 range");
++  }
++  return int32_t(aligned);
++}
++
+ inline bool FusedTmaPageAlignedWork(const std::vector<FusedWorkItem>& items, uint32_t page_size) {
+   if (page_size != 128) return false;
+   for (const auto& item : items) {
+@@ -672,6 +687,9 @@
+ #define FUSED_FA3_CTA_Q 128
+ #endif
+   constexpr uint32_t kFa3TileQ = uint32_t(FUSED_FA3_CTA_Q);
++#ifndef FUSED_FA3_CTA_KV
++#define FUSED_FA3_CTA_KV 128
++#endif
+   if (num_kv_heads == 0 || num_qo_heads % num_kv_heads != 0) return cudaErrorInvalidValue;
+   const uint32_t gqa = num_qo_heads / num_kv_heads;
+ 
+@@ -735,6 +753,8 @@
+       if (ns[0] == '1') kv_chunk = 0;
+     }
+   }
++
++  kv_chunk = FusedAlignFa3KvChunk(std::max(kv_chunk, int32_t(0)), FUSED_FA3_CTA_KV, page_size);
+ 
+   // CTA slot counts the work_indptr arrays are partitioned over. FA3 MUST be sm_split: its
+   // scheduler indexes work_indptr[blockIdx.x] over the planned count and
+--- a/port07/tests/fused_fa3_persistent_ext.cu
++++ b/port07/tests/fused_fa3_persistent_ext.cu
+@@ -48,18 +48,14 @@
+ // single-stage pipeline has NO prefetch overlap at all -- the leading remaining suspect for the
+ // measured 4x gap against flashinfer's own 2-stage FA3.
+ //
+-// CONSTRAINT: the planner rounds kv chunks up to kTileKV = 128 (fused_plan.cuh), so CTA_KV must
+-// DIVIDE 128 or chunks stop aligning to kv tiles and a partial tile at a chunk seam gets masked
+-// twice. 64 and 128 are safe; 96 is not.
+ #ifndef FUSED_FA3_CTA_Q
+ #define FUSED_FA3_CTA_Q 128
+ #endif
+ #ifndef FUSED_FA3_CTA_KV
+ #define FUSED_FA3_CTA_KV 128
+ #endif
+-static_assert(128 % FUSED_FA3_CTA_KV == 0,
+-              "CTA_KV must divide the planner's kTileKV of 128, or kv chunks stop aligning to "
+-              "kv tiles and a seam tile is masked twice");
++static_assert(FUSED_FA3_CTA_KV == 64 || FUSED_FA3_CTA_KV == 96 || FUSED_FA3_CTA_KV == 128,
++              "supported FA3 KV tiles are 64, 96 and 128");
+ // PARAMETER ORDER, read off kernel_traits.cuh rather than inferred:
+ //   <USE_TMA_LOAD_KV, HEAD_DIM_QK, HEAD_DIM_VO, CTA_Q, CTA_KV, NUM_STAGES, ...>
+ // The original line was <false, 128, 128, 128, 128, STAGES, ...> -- all four identical, so the
+--- a/port07/include/flashinfer/attention/hopper/sparse_mainloop.cuh
++++ b/port07/include/flashinfer/attention/hopper/sparse_mainloop.cuh
+@@ -717,7 +717,7 @@
+                  blockIdx.x, int(tile_base / get<0>(TileShape_QKD{})), tile_base, int(qo_len), G,
+                  pr0 / G, pr0 % G,
+                  r0 ? (long long)(r0 - mainloop_params.packed_Q_ptr) : -1LL,
+-                 int(get<0>(TileShape_QKD{})), int(get<1>(TileShape_QKD{})));
++                 int(get<0>(TileShape_QKD{})), int(HEAD_DIM_QK));
+         }
+ #endif
+         for (int i = lane; i < get<0>(TileShape_QKD{}); i += cutlass::NumThreadsPerWarp) {
+@@ -727,7 +727,7 @@
+           if (valid) ++dbg_nvalid;
+           const DTypeQ* row = valid ? &gQp(packed_coord(pr, G), 0) : nullptr;
+ #pragma unroll
+-          for (int d = 0; d < get<1>(TileShape_QKD{}); d += kVec) {
++          for (int d = 0; d < HEAD_DIM_QK; d += kVec) {
+             cutlass::arch::cp_async<16, cutlass::arch::CacheOperation::Always>(
+                 &sQ(i, d), row + d, valid);
+           }
+--- /dev/null
++++ b/port07/tests/test_fa3_kv_alignment.cpp
+@@ -0,0 +1,60 @@
++#include <cassert>
++#include <cstdio>
++#include <limits>
++#include <numeric>
++#include <vector>
++
++#include <flashinfer/attention/fused_plan.cuh>
++
++int main() {
++  int cases = 0;
++  for (uint32_t tile : {64u, 96u, 128u}) {
++    for (uint32_t page : {1u, 128u, 256u}) {
++      const int alignment = std::lcm(std::lcm(128, int(tile)), int(page));
++      assert(flashinfer::FusedAlignFa3KvChunk(0, tile, page) == 0);
++      for (int chunk = 1; chunk <= 20000; chunk += 37) {
++        const int aligned = flashinfer::FusedAlignFa3KvChunk(chunk, tile, page);
++        assert(aligned >= chunk && aligned - chunk < alignment);
++        assert(aligned % 128 == 0 && aligned % tile == 0 && aligned % page == 0);
++        assert(flashinfer::FusedAlignFa3KvChunk(aligned, tile, page) == aligned);
++        if (tile == 128 && page <= 128) assert(aligned == (chunk + 127) / 128 * 128);
++        ++cases;
++      }
++    }
++  }
++  for (int invalid : {-1, std::numeric_limits<int32_t>::max()}) {
++    bool rejected = false;
++    try {
++      flashinfer::FusedAlignFa3KvChunk(invalid, 96, 128);
++    } catch (const std::exception&) {
++      rejected = true;
++    }
++    assert(rejected);
++  }
++  for (const auto invalid : {std::pair<uint32_t, uint32_t>{0, 128}, {95, 128}, {96, 0}}) {
++    bool rejected = false;
++    try {
++      flashinfer::FusedAlignFa3KvChunk(1024, invalid.first, invalid.second);
++    } catch (const std::exception&) {
++      rejected = true;
++    }
++    assert(rejected);
++  }
++  const int32_t queries[] = {17, 32, 257};
++  const int32_t lengths[] = {32769, 65537, 4097};
++  const bool roles[] = {true, true, true};
++  std::vector<flashinfer::FusedWorkItem> work[4];
++  int32_t maximum_splits = 0;
++  std::vector<int32_t> requests;
++  const int chunk = flashinfer::FusedAlignFa3KvChunk(513, 96, 128);
++  flashinfer::EnumerateFusedWorkItems(queries, lengths, roles, 3, 7, 4, 128, chunk,
++                                    work, &maximum_splits, &requests);
++  assert(chunk == 768 && maximum_splits == (65537 + chunk - 1) / chunk);
++  assert(!work[3].empty());
++  for (const auto& item : work[3]) {
++    assert(item.kv_start % 96 == 0 && item.kv_start % 128 == 0);
++    assert(item.kv_end > item.kv_start && item.kv_end <= lengths[item.batch_idx]);
++    assert(item.kv_end - item.kv_start <= chunk);
++  }
++  std::printf("FA3 alignment: %d rounded cases, disabled/invalid bounds and split seams PASS\n", cases);
++}
+--- /dev/null
++++ b/test_packed_q_dimensions.py
+@@ -0,0 +1,28 @@
++from pathlib import Path
++import re
++import unittest
++
++
++class PackedQueryDimensions(unittest.TestCase):
++    def test_copy_bound_is_head_dimension(self):
++        source = (Path(__file__).parent / "port07/include/flashinfer/attention/hopper/sparse_mainloop.cuh").read_text()
++        self.assertRegex(source, r"for \(int d = 0; d < HEAD_DIM_QK; d \+= kVec\)")
++        self.assertNotRegex(source, r"for \(int d = 0; d < get<1>\(TileShape_QKD\{\}\)")
++
++    def test_warp_covers_every_query_component(self):
++        for kv_tile in (64, 96, 128):
++            query_rows, head_dimension = 128, 128
++            coverage = [[0] * head_dimension for _ in range(query_rows)]
++            for lane in range(32):
++                for row in range(lane, query_rows, 32):
++                    for column in range(0, head_dimension, 8):
++                        for element in range(column, column + 8):
++                            coverage[row][element] += 1
++            self.assertTrue(all(count == 1 for row in coverage for count in row), kv_tile)
++            old_columns = set(range(kv_tile))
++            if kv_tile < head_dimension:
++                self.assertLess(len(old_columns), head_dimension)
++
++
++if __name__ == "__main__":
++    unittest.main()

@@ -1,0 +1,252 @@
+{
+  "audits": [
+    {
+      "mixture": "mix32",
+      "arm": "NATIVE_1",
+      "method": "MTPMIXFUSED",
+      "execution_calls": 101101,
+      "overlapped": null,
+      "mixed_steps": 3851,
+      "compact_execution_calls": 101101,
+      "graph_decode_lines": 296,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "plan_counters": [
+        "FUSED_SPLIT_PLAN ok 3801: fa3=1 fa2=10 (onesided so far 321)"
+      ],
+      "one_sided_counters": [
+        "FUSED_SPLIT_ONESIDED 3801/3801: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
+      ],
+      "server_log_sha256": "a1d8f43681de41815c5574322bab3ec0e9caf0a99d33188c690436e9fc94e270"
+    },
+    {
+      "mixture": "mix32",
+      "arm": "NATIVE_2",
+      "method": "MTPMIXFUSED",
+      "execution_calls": 102801,
+      "overlapped": null,
+      "mixed_steps": 3951,
+      "compact_execution_calls": 102801,
+      "graph_decode_lines": 301,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "plan_counters": [
+        "FUSED_SPLIT_PLAN ok 4001: fa3=1 fa2=10 (onesided so far 348)"
+      ],
+      "one_sided_counters": [
+        "FUSED_SPLIT_ONESIDED 4001/4001: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
+      ],
+      "server_log_sha256": "b2624cb5795d4f582eaee91fc70f090ff4328766de7a59f6519527742bbb06fe"
+    },
+    {
+      "mixture": "mix32",
+      "arm": "SPLIT_1",
+      "method": "MTPMIX_SPLIT",
+      "execution_calls": 103001,
+      "overlapped": 0,
+      "mixed_steps": 4001,
+      "compact_execution_calls": 0,
+      "graph_decode_lines": 308,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "plan_counters": [
+        "FUSED_SPLIT_PLAN ok 4001: fa3=1 fa2=10 (onesided so far 382)"
+      ],
+      "one_sided_counters": [
+        "FUSED_SPLIT_ONESIDED 4001/4001: fa3=0 fa2=1 rows=1 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+      ],
+      "server_log_sha256": "cf548c732b5cf6a7ce614b421f9e322168645874f811927d47ba1f5c05ec6253"
+    },
+    {
+      "mixture": "mix32",
+      "arm": "SPLIT_2",
+      "method": "MTPMIX_SPLIT",
+      "execution_calls": 103001,
+      "overlapped": 0,
+      "mixed_steps": 3951,
+      "compact_execution_calls": 0,
+      "graph_decode_lines": 313,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "plan_counters": [
+        "FUSED_SPLIT_PLAN ok 4001: fa3=1 fa2=20 (onesided so far 364)"
+      ],
+      "one_sided_counters": [
+        "FUSED_SPLIT_ONESIDED 4001/4001: fa3=0 fa2=1 rows=1 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+      ],
+      "server_log_sha256": "0bb2ba08ff726dbd53dc4c1408879d2f8e1c12c9ad35edef9e88d0b8c82d3be8"
+    },
+    {
+      "mixture": "mix64",
+      "arm": "NATIVE_1",
+      "method": "MTPMIXFUSED",
+      "execution_calls": 55901,
+      "overlapped": null,
+      "mixed_steps": 2051,
+      "compact_execution_calls": 55901,
+      "graph_decode_lines": 215,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "plan_counters": [
+        "FUSED_SPLIT_PLAN ok 2001: fa3=1 fa2=46 (onesided so far 191)"
+      ],
+      "one_sided_counters": [
+        "FUSED_SPLIT_ONESIDED 2001/2001: fa3=0 fa2=1 rows=1 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+      ],
+      "server_log_sha256": "07ec72803c977afd14fe8a6f36a3196e52d1cebaaf707f280b4173662b44d55e"
+    },
+    {
+      "mixture": "mix64",
+      "arm": "SPLIT_1",
+      "method": "MTPMIX_SPLIT",
+      "execution_calls": 55001,
+      "overlapped": 0,
+      "mixed_steps": 2101,
+      "compact_execution_calls": 0,
+      "graph_decode_lines": 286,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "plan_counters": [
+        "FUSED_SPLIT_PLAN ok 2001: fa3=1 fa2=46 (onesided so far 213)"
+      ],
+      "one_sided_counters": [
+        "FUSED_SPLIT_ONESIDED 2201/2201: fa3=0 fa2=1 rows=1 max_kv_tiles=981 need_decode_rows>=1962 (guard: kv_tiles<=decode_rows/2)"
+      ],
+      "server_log_sha256": "21887985bbd5532d9c6c3bb5f6db002ef0b64c98b4d9195eab71aa99e6d3fab6"
+    }
+  ],
+  "rows": [
+    {
+      "mixture": "mix32",
+      "arm": "NATIVE_1",
+      "stream": "chat",
+      "completed": 8640,
+      "output_throughput": 1640.2619217243312,
+      "mean_ttft_ms": 9266.072423428002,
+      "mean_tpot_ms": 21.160593162860348,
+      "p99_itl_ms": 107.69542679190636,
+      "tokens_per_verify": 2.0495603992585765
+    },
+    {
+      "mixture": "mix32",
+      "arm": "NATIVE_1",
+      "stream": "codex",
+      "completed": 36,
+      "output_throughput": 208.16414486150103,
+      "mean_ttft_ms": 9172.690868843347,
+      "mean_tpot_ms": 13.491380806297684,
+      "p99_itl_ms": 91.69879160821417,
+      "tokens_per_verify": 3.5945695295996702
+    },
+    {
+      "mixture": "mix32",
+      "arm": "NATIVE_2",
+      "stream": "chat",
+      "completed": 8640,
+      "output_throughput": 1640.1033573003406,
+      "mean_ttft_ms": 9017.660449059998,
+      "mean_tpot_ms": 21.104811345079643,
+      "p99_itl_ms": 107.44958187453447,
+      "tokens_per_verify": 2.048504603759627
+    },
+    {
+      "mixture": "mix32",
+      "arm": "NATIVE_2",
+      "stream": "codex",
+      "completed": 36,
+      "output_throughput": 208.79285466852417,
+      "mean_ttft_ms": 8894.393982210508,
+      "mean_tpot_ms": 13.453736329307608,
+      "p99_itl_ms": 91.64859715849161,
+      "tokens_per_verify": 3.590181649771008
+    },
+    {
+      "mixture": "mix32",
+      "arm": "SPLIT_1",
+      "stream": "chat",
+      "completed": 8640,
+      "output_throughput": 1640.3248593155547,
+      "mean_ttft_ms": 8963.785410805873,
+      "mean_tpot_ms": 20.87771158171269,
+      "p99_itl_ms": 108.00222178921098,
+      "tokens_per_verify": 2.0491594750683917
+    },
+    {
+      "mixture": "mix32",
+      "arm": "SPLIT_1",
+      "stream": "codex",
+      "completed": 36,
+      "output_throughput": 211.04527604994226,
+      "mean_ttft_ms": 8820.29364987587,
+      "mean_tpot_ms": 13.409019206466292,
+      "p99_itl_ms": 92.18721609562633,
+      "tokens_per_verify": 3.5877391483233905
+    },
+    {
+      "mixture": "mix32",
+      "arm": "SPLIT_2",
+      "stream": "chat",
+      "completed": 8640,
+      "output_throughput": 1640.8577000948962,
+      "mean_ttft_ms": 8913.177905787274,
+      "mean_tpot_ms": 20.849912557014022,
+      "p99_itl_ms": 107.8453753143549,
+      "tokens_per_verify": 2.0481280420554886
+    },
+    {
+      "mixture": "mix32",
+      "arm": "SPLIT_2",
+      "stream": "codex",
+      "completed": 36,
+      "output_throughput": 211.00373949389703,
+      "mean_ttft_ms": 8803.572889158708,
+      "mean_tpot_ms": 13.394899243662424,
+      "p99_itl_ms": 93.14350806176661,
+      "tokens_per_verify": 3.5922455074403996
+    },
+    {
+      "mixture": "mix64",
+      "arm": "NATIVE_1",
+      "stream": "chat",
+      "completed": 5760,
+      "output_throughput": 1044.8757240373534,
+      "mean_ttft_ms": 80655.96602157975,
+      "mean_tpot_ms": 37.65027304482498,
+      "p99_itl_ms": 219.4457990117371,
+      "tokens_per_verify": 2.0462667122398734
+    },
+    {
+      "mixture": "mix64",
+      "arm": "NATIVE_1",
+      "stream": "codex",
+      "completed": 24,
+      "output_throughput": 146.16110689054466,
+      "mean_ttft_ms": 59482.37689607777,
+      "mean_tpot_ms": 25.88682884405132,
+      "p99_itl_ms": 182.7477037161586,
+      "tokens_per_verify": 3.239902506963788
+    },
+    {
+      "mixture": "mix64",
+      "arm": "SPLIT_1",
+      "stream": "chat",
+      "completed": 5760,
+      "output_throughput": 1016.113732951442,
+      "mean_ttft_ms": 86421.8312491307,
+      "mean_tpot_ms": 38.57539493065385,
+      "p99_itl_ms": 285.03171168267727,
+      "tokens_per_verify": 2.0463365591291343
+    },
+    {
+      "mixture": "mix64",
+      "arm": "SPLIT_1",
+      "stream": "codex",
+      "completed": 24,
+      "output_throughput": 130.227973584646,
+      "mean_ttft_ms": 64930.764121546716,
+      "mean_tpot_ms": 25.269918706942896,
+      "p99_itl_ms": 199.71652679145336,
+      "tokens_per_verify": 2.731133657554922
+    }
+  ]
+}

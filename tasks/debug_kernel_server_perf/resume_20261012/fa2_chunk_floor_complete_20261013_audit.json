@@ -1,0 +1,216 @@
+{
+  "job": "095f01a3e1585eea",
+  "archive_sha256": "5085b7bb4a8bbcaa0c61db6d11a9f9f3b7bc5bbe46cf5cbca7237fd04509c505",
+  "rows": [
+    {
+      "case": "b_kv16384_r16_q8_k2048",
+      "fused": 0.3345,
+      "unfused": 0.1556,
+      "rows": 128,
+      "sha256": "c190136d457b1c583674a68f1e055566a36da6cd1600889f4bea6b6bbbea6f63"
+    },
+    {
+      "case": "b_kv16384_r16_q8_k4096",
+      "fused": 0.3276,
+      "unfused": 0.1558,
+      "rows": 128,
+      "sha256": "897800d038b2c3781095df6e8f4a542b17a5fa0c43d927ed1f8c3c01eae2f5bd"
+    },
+    {
+      "case": "b_kv16384_r16_q8_kauto",
+      "fused": 0.3232,
+      "unfused": 0.1558,
+      "rows": 128,
+      "sha256": "f735ddaa3e6f7734f95467b8b620ee0e294b5c82e46cb6ade84996448fb527fe"
+    },
+    {
+      "case": "b_kv16384_r1_q4_k2048",
+      "fused": 0.0605,
+      "unfused": 0.0189,
+      "rows": 4,
+      "sha256": "6da9966a47284b630694d879ac49b1fd27d7e165963ee84807abf00d42320756"
+    },
+    {
+      "case": "b_kv16384_r1_q4_k4096",
+      "fused": 0.0989,
+      "unfused": 0.0188,
+      "rows": 4,
+      "sha256": "d5908d8b7f6694b19f9cc252e1349837a7e82dd5980d621847632d2f7fe8f83b"
+    },
+    {
+      "case": "b_kv16384_r1_q4_kauto",
+      "fused": 0.028,
+      "unfused": 0.0189,
+      "rows": 4,
+      "sha256": "77656e3696627a5f4a7507720c9846456dc03db3566086bab4bd015b5361e6fb"
+    },
+    {
+      "case": "b_kv4096_r16_q8_k2048",
+      "fused": 0.0945,
+      "unfused": 0.0574,
+      "rows": 128,
+      "sha256": "8b046437692d5ac60ffb7bf7ffc8c9e742cf0d5dab6bfa155b1565a54e1fae73"
+    },
+    {
+      "case": "b_kv4096_r16_q8_k4096",
+      "fused": 0.1629,
+      "unfused": 0.0574,
+      "rows": 128,
+      "sha256": "4a88a0af465c55fbb6995be453bf875a159fdcbdeaef7d0273b58bce0561d1d4"
+    },
+    {
+      "case": "b_kv4096_r16_q8_kauto",
+      "fused": 0.0944,
+      "unfused": 0.0576,
+      "rows": 128,
+      "sha256": "c1efeb0a913d5ea372766448cf8bae6a74120b02ede63e38d08772b476f82e4e"
+    },
+    {
+      "case": "b_kv4096_r1_q8_k2048",
+      "fused": 0.0606,
+      "unfused": 0.0117,
+      "rows": 8,
+      "sha256": "e24905737e36fae1fc385c785a123b59384a536947540ab5e90006f94d381a20"
+    },
+    {
+      "case": "b_kv4096_r1_q8_k4096",
+      "fused": 0.1021,
+      "unfused": 0.0117,
+      "rows": 8,
+      "sha256": "7c57530e7c43b91086991654fbb8f7f7c5b795faf63cfef3546732368b1767f0"
+    },
+    {
+      "case": "b_kv4096_r1_q8_kauto",
+      "fused": 0.022,
+      "unfused": 0.0118,
+      "rows": 8,
+      "sha256": "f9aafbe1c64f3e58bcd5c422636754c7a0f0f89a22bdb5e6ff3e5ed2575f0d26"
+    },
+    {
+      "case": "mix_decode32_k2048",
+      "fused": 0.1183,
+      "unfused": 0.0831,
+      "rows": 288,
+      "sha256": "59e444a655d7e17f152dbab7a6e97e7dd878a073d19c14e2ee8d1120ddb97ae5"
+    },
+    {
+      "case": "mix_decode32_k4096",
+      "fused": 0.1181,
+      "unfused": 0.0832,
+      "rows": 288,
+      "sha256": "16a225ebbabe0e1d8e6918186974b219c851e4d3065d29661b1538737caef87b"
+    },
+    {
+      "case": "mix_decode32_kauto",
+      "fused": 0.118,
+      "unfused": 0.0826,
+      "rows": 288,
+      "sha256": "167d6fb1de070ef6b4f6374d8dac72105415f4f0067b6deed5b74e5f73f8ac8a"
+    },
+    {
+      "case": "mixed_verify_q4_k2048",
+      "fused": 0.0671,
+      "unfused": 0.0578,
+      "rows": 536,
+      "sha256": "e65072075b6e510bdeb706d402bd1dc515c2497117f079c87b1d7f2f043929fa"
+    },
+    {
+      "case": "mixed_verify_q4_k4096",
+      "fused": 0.0672,
+      "unfused": 0.0578,
+      "rows": 536,
+      "sha256": "8ac352e94636a72ad0b7263af719daa8e573e1cd680fbb3114be31d3ea801c76"
+    },
+    {
+      "case": "mixed_verify_q4_kauto",
+      "fused": 0.0673,
+      "unfused": 0.0578,
+      "rows": 536,
+      "sha256": "e47a9adb52b7dd55d1660e018b85ef34e82da760f27b6cef50633cb267b09296"
+    },
+    {
+      "case": "mixed_verify_q8_k2048",
+      "fused": 0.0898,
+      "unfused": 0.0619,
+      "rows": 568,
+      "sha256": "49b3a2fe129f2e31773a87f94d54086f75447d91365ddfcb8ab966c267359caa"
+    },
+    {
+      "case": "mixed_verify_q8_k4096",
+      "fused": 0.0898,
+      "unfused": 0.0615,
+      "rows": 568,
+      "sha256": "ff8dd232480d2c54fe77a32333b3cbf1da78ba7bd168f5ea198cf0cb03c973bb"
+    },
+    {
+      "case": "mixed_verify_q8_kauto",
+      "fused": 0.0898,
+      "unfused": 0.0615,
+      "rows": 568,
+      "sha256": "e0bece54e79c0dce4e7c9ae51ca51dfd02555014ba913a198ee0e64011cd57bb"
+    },
+    {
+      "case": "v_r16_kv128k_k2048",
+      "fused": 1.7773,
+      "unfused": 1.1283,
+      "rows": 64,
+      "sha256": "8e3c7a220059c49b5cbc8e3da3208f63a434435e01b74799b3732987afaf4ae2"
+    },
+    {
+      "case": "v_r16_kv128k_k4096",
+      "fused": 1.7441,
+      "unfused": 1.1204,
+      "rows": 64,
+      "sha256": "56fa4633e4480e2790b75505f43597d30db3c36966dd71eaf86c8787c4b3828f"
+    },
+    {
+      "case": "v_r16_kv128k_kauto",
+      "fused": 1.7382,
+      "unfused": 1.0704,
+      "rows": 64,
+      "sha256": "2d04d10f9c852124439e4027edd7ecc80f5a826aa4a73ba4c5386df0df035499"
+    },
+    {
+      "case": "v_r46_kv16k_k2048",
+      "fused": 0.6719,
+      "unfused": 0.511,
+      "rows": 184,
+      "sha256": "843dd839538db5daaaa07144cf197498608370516d5e9e58d2347b2e9ed36452"
+    },
+    {
+      "case": "v_r46_kv16k_k4096",
+      "fused": 0.6621,
+      "unfused": 0.5106,
+      "rows": 184,
+      "sha256": "0137a4d133369a958068d20bb5a78ea44666476a17336fc62bca591382078658"
+    },
+    {
+      "case": "v_r46_kv16k_kauto",
+      "fused": 0.8541,
+      "unfused": 0.5118,
+      "rows": 184,
+      "sha256": "2e74a628b2d19571f8f613becb1a00c7567e444072351057589c0e8bed6e8777"
+    },
+    {
+      "case": "v_r8_kv8k_k2048",
+      "fused": 0.0715,
+      "unfused": 0.0499,
+      "rows": 32,
+      "sha256": "989eb8accaab9d91ef450f0cc0c2a04e95ebd63657b9aa171e976df60c6cdf64"
+    },
+    {
+      "case": "v_r8_kv8k_k4096",
+      "fused": 0.119,
+      "unfused": 0.0498,
+      "rows": 32,
+      "sha256": "5c10d4bb3166af3f4144854e185dcc14181971a15d9c0fd6742821a3e772979b"
+    },
+    {
+      "case": "v_r8_kv8k_kauto",
+      "fused": 0.0727,
+      "unfused": 0.0497,
+      "rows": 32,
+      "sha256": "67024a8176359ff89c94053e39baa58e2979dfeadeb0fadf39c6c3d5d5ce4398"
+    }
+  ]
+}

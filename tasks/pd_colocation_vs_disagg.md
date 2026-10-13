@@ -949,6 +949,17 @@ Traced run: `SGLANG_STEP_TRACE=1 SGLANG_EDF_ACCEPT_TRACE=1`, 0 fallbacks, 0 trac
         router's admission/SLO veto across nodes (point 1). The in-node scheduler should order by
         deadline and stay work-conserving.
 
+### Router support for point 3 (2026-10-14)
+
+`tasks/pd_colocation/router.py` now predicts per-token TPOT under speculative decoding: each
+worker keeps an EWMA of acceptance length from finished requests' `meta_info`
+(`completion_tokens / spec_verify_ct`, `--accept-ewma-alpha`), and the SLO veto divides the
+step-time prediction by it; `--step-model` loads the linear MTP step model from
+`tasks/perf_model/fit_mtp_step.py` (incl. its `c_acc` term) -- the S4 refit on the split kernel
+is what will feed it. Defaults leave the old per-step behaviour unchanged. Checks:
+`router_accept_test.py` (EWMA and TPOT arithmetic, PASS) and `router_test.py` (fake workers;
+same routing behaviour as the committed router on all four policies).
+
 ## 4. Two-way RDMA: a complete graph instead of a bipartite one
 
 **The topology argument.** Disagg's KV traffic is structurally **bipartite**: prefill nodes

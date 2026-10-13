@@ -14,6 +14,12 @@ Policies, each one switchable so its contribution can be measured on its own:
 With --edf, each request is forwarded with priority = deadline (ms), so a worker started with
 --enable-priority-scheduling --schedule-low-priority-values-first runs EDF locally.
 
+Speculative decoding (point 3): a decode step emits `acceptance length` tokens per request, so the
+per-token TPOT the veto checks is step time / acceptance. With --accept-ewma-alpha > 0 the router
+keeps a per-worker EWMA of acceptance from each finished request's meta_info
+(completion_tokens / spec_verify_ct) and divides the step-time prediction by it; --step-model
+loads the linear MTP step model of tasks/perf_model/fit_mtp_step.py (incl. its acceptance term).
+
 Prefix tracking is approximate by design: rolling hashes of fixed-size blocks of input_ids
 (or text characters), per worker, LRU-bounded by that worker's KV capacity in tokens. That is
 what a router can know without querying workers, which keeps the decision off the request path.
@@ -53,6 +59,13 @@ class Worker:
         self.cap_blocks = max(1, kv_tokens // block_tok)
         self.blocks = collections.OrderedDict()  # hash -> None, LRU order
         self.inflight = {}  # rid -> dict(prefill, decode_left, deadline, t0)
+        self.accept = None  # EWMA of tokens per verify step on this worker (None: no sample yet)
+
+    def observe_accept(self, completion_tokens, verify_ct, alpha):
+        if not completion_tokens or not verify_ct:
+            return
+        sample = completion_tokens / verify_ct
+        self.accept = sample if self.accept is None else (1 - alpha) * self.accept + alpha * sample
 
     def hit(self, hashes):
         n = 0
@@ -83,16 +96,28 @@ class PerfModel:
         # context under-predicts a holder running 16K-prefix rows by ~an order of magnitude.
         self.decode_ms_per_seq_ktok = decode_ms_per_seq_ktok
         self.grid = {}
+        self.step = None  # fit_mtp_step.py coefficients: whole-step ms, linear in the step's work
+
+    def step_ms(self, running, kv_tokens, accept):
+        c = self.step
+        return (c["c0"] + c["c_bs"] * running + c["c_kv"] * kv_tokens / 1e3
+                + c.get("c_acc", 0.0) * accept)
 
     def ttft_ms(self, uncached_tokens_ahead):
         return uncached_tokens_ahead / self.prefill_tok_s * 1000.0
 
-    def tpot_ms(self, running, kv_tokens=0.0):
-        """kv_tokens: total KV over the rows that would be resident, in tokens."""
+    def tpot_ms(self, running, kv_tokens=0.0, accept=None):
+        """kv_tokens: total KV over the rows that would be resident, in tokens. accept: the
+        worker's acceptance EWMA (tokens per step); None keeps the per-step prediction."""
+        if self.step is not None:
+            a = accept if accept else 1.0
+            return self.step_ms(running, kv_tokens, a) / a
         if self.grid:
-            return self.grid_tpot_ms(running, kv_tokens)
-        return (self.decode_step_ms + self.decode_ms_per_seq * running
-                + self.decode_ms_per_seq_ktok * kv_tokens / 1e3)
+            per_step = self.grid_tpot_ms(running, kv_tokens)
+        else:
+            per_step = (self.decode_step_ms + self.decode_ms_per_seq * running
+                        + self.decode_ms_per_seq_ktok * kv_tokens / 1e3)
+        return per_step / accept if accept else per_step
 
     def grid_tpot_ms(self, running, kv_tokens):
         """Interpolate the calibrated (concurrency, mean context) -> ITL grid.
@@ -136,6 +161,9 @@ class Router:
             rows = json.load(open(a.decode_grid))
             self.pm.grid = {(r["conc"], r["ctx"]): r["itl_ms"] for r in rows}
             print(f"decode grid: {len(self.pm.grid)} points", flush=True)
+        if a.step_model:
+            self.pm.step = json.load(open(a.step_model))["coef"]
+            print(f"step model: {self.pm.step}", flush=True)
         self.rr = 0
         self.rid = 0
         self.log = open(a.log, "a") if a.log else None
@@ -148,7 +176,8 @@ class Router:
         # Every resident row's KV, including this request's prompt: the decode slowdown this
         # request would cause on w, which is what the hot-prefix holders actually suffer.
         kv = sum(r.get("kv", 0) for r in w.inflight.values()) + n_tok_self
-        tpot = self.pm.tpot_ms(len(w.inflight) + 1, kv)
+        accept = w.accept if self.a.accept_ewma_alpha > 0 else None
+        tpot = self.pm.tpot_ms(len(w.inflight) + 1, kv, accept)
         return ttft, tpot
 
     def feasible(self, w, uncached, deadline, now, n_tok_self=0):
@@ -259,24 +288,30 @@ class Router:
                     tail = (tail + chunk)[-65536:]
                     await resp.write(chunk)
                 await resp.write_eof()
-            if self.log:
-                # The worker's own account of this request's prefix hit: the last data chunk's
-                # meta_info carries cached_tokens and prompt_tokens. This, not the router's
-                # block-hash estimate, is the cache-hit rate the replication argument rests on.
-                meta = {}
-                for line in reversed(tail.decode("utf-8", "replace").splitlines()):
-                    line = line.strip()
-                    if line.startswith("data:") and "meta_info" in line:
-                        try:
-                            meta = json.loads(line[5:].strip()).get("meta_info", {})
-                        except ValueError:
-                            pass
-                        break
-                if meta:
-                    self.log.write(json.dumps(dict(rid=rid, worker=i, done=time.time(),
-                                                   cached_tokens=meta.get("cached_tokens"),
-                                                   prompt_tokens=meta.get("prompt_tokens"))) + "\n")
-                    self.log.flush()
+            # The worker's own account of this request: the last data chunk's meta_info carries
+            # cached_tokens / prompt_tokens (the measured prefix hit the replication argument rests
+            # on, not the router's block-hash estimate) and completion_tokens / spec_verify_ct
+            # (this request's acceptance length, which feeds the worker's EWMA).
+            meta = {}
+            for line in reversed(tail.decode("utf-8", "replace").splitlines()):
+                line = line.strip()
+                if line.startswith("data:") and "meta_info" in line:
+                    try:
+                        meta = json.loads(line[5:].strip()).get("meta_info", {})
+                    except ValueError:
+                        pass
+                    break
+            if meta and self.a.accept_ewma_alpha > 0:
+                w.observe_accept(meta.get("completion_tokens"), meta.get("spec_verify_ct"),
+                                 self.a.accept_ewma_alpha)
+            if meta and self.log:
+                self.log.write(json.dumps(dict(rid=rid, worker=i, done=time.time(),
+                                               cached_tokens=meta.get("cached_tokens"),
+                                               prompt_tokens=meta.get("prompt_tokens"),
+                                               completion_tokens=meta.get("completion_tokens"),
+                                               spec_verify_ct=meta.get("spec_verify_ct"),
+                                               accept_ewma=w.accept)) + "\n")
+                self.log.flush()
         finally:
             w.inflight.pop(rid, None)
         return resp
@@ -311,6 +346,10 @@ def main():
     ap.add_argument("--decode-ms-per-seq", type=float, default=0.3)
     ap.add_argument("--decode-ms-per-seq-ktok", type=float, default=0.0)
     ap.add_argument("--decode-grid", default="", help="calibrate_h20.py decode_grid.json")
+    ap.add_argument("--step-model", default="",
+                    help="fit_mtp_step.py JSON: whole-step ms model (with c_acc if fitted)")
+    ap.add_argument("--accept-ewma-alpha", type=float, default=0.0,
+                    help=">0: per-worker acceptance EWMA; predicted TPOT = step ms / acceptance")
     ap.add_argument("--log", default="")
     a = ap.parse_args()
     r = Router(a)

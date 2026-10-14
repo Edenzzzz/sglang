@@ -216,6 +216,15 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   step sends them to FA3 and the verify rows to the FA2 executor (0.83 ms/call) -- the kernel-side
   mechanism behind the per-range attribution above. Tile waste falls with context (mix32 6.3%,
   mix64 2.7%, mix128 0.6%) because long prefill rows dominate useful work.
+  - [x] **True GEMM-epilogue fusion bounded (2026-10-15, user: "fuse them if you can get a real
+    gain over PDL"):** the existing fused verify/chain epilogues are separate Triton launches, not
+    epilogues. The largest candidate for a real epilogue, the target argmax inside the LM-head GEMM
+    (Qwen2.5-7B, vocab 151936), can save at most the argmax pass plus the logits round trip:
+    19 / 72 / 235 us at 48 / 184 / 1024 verify tokens (LM-head GEMM 270 / 338 / 1717 us), i.e.
+    ~0.2-1% of a 20-40 ms serving step -- below the 2-3% serving noise floor, so no measurable
+    gain over PDL chaining; not built. bf16-logit argmax disagrees with an fp32 reference on 2-3%
+    of rows (ties), so an fp32-accumulator epilogue would be more exact, not faster.
+    (`b1_lmhead_epilogue_ceiling_20261015.py`, log `b1_lmhead_ceiling_20261015.log`)
 - [x] **B2, cross-role backfill (2026-10-12):** co-launch hardware backfill worth up to 2.9x when FA2
   work exceeds the slots beside FA3, nothing on small mixes; in-kernel `tma_store_wait` backfill is
   correct and worth 1.4-5.5x over none, but that whole path is 2-6x slower. Co-launch ships.
@@ -345,7 +354,12 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     MTP itself does not gain from small chunks (2048: chat ITL 29.40 vs 29.15 ms, tput -8%, TTFT
     +20%), so 8192 is its best setting and the comparison is fair. At chunk 2048 every metric for
     both tenants clears the bar except **agent TTFT (-27.6%)**; at 4096 agent TTFT clears (-30.2%)
-    but chat ITL does not (-28.3%). Chunk 3072 and repeats are next.
+    but chat ITL does not (-28.3%).
+    **With repeats (sweep 2b, two runs per arm; MTP repeats within 1%):** 2048 gives chat
+    +32% / -40% / -32% and agent +35% / **-25%** / -57%; 3072 gives chat +31% / -41% / **-29.1%**
+    and agent +33% / **-27.4%** / -49%. No static chunk clears both chat ITL and agent TTFT: a
+    smaller chunk protects decode ITL but delays agent prefills. Next: EDF dynamic chunk (prefill
+    sized to the tightest decode slack each step), `edf_dynchunk_20261015.sh`, running.
     ([table](debug_kernel_server_perf/resume_20261012/chunk_itl_sweep_20261015.txt),
     `chunk_itl_sweep_20261015.sh`)
 - [ ] **Direct baselines:** MuxWise (arXiv 2504.14489), semi-PD, NVIDIA Dynamo conditional

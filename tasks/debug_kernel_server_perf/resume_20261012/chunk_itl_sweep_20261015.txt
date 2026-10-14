@@ -17,3 +17,17 @@ MTP 2048       chat    1107.9  89806.9  29.40    28.30   177.6
 MTP 2048       agent     98.4  73728.7  35.31    51.70   198.5
 SPLIT 8192 #2  chat    1587.0  42185.5  21.42    22.84   197.1
 SPLIT 8192 #2  agent    145.9  40709.6  26.77    39.25   139.4
+
+# Sweep 2b (chunk_itl_sweep2_20261015.sh, root chunk_itl_sweep2b_20261015), 05:33-05:58; all arms
+# audited against sweep 1's MTP reference (STOCK_SERVING_PASS / STOCK_DISPATCH_PASS).
+SPLIT 3072 #1  chat    1580.9  41492.7  20.27    21.39   148.1
+SPLIT 3072 #1  agent    145.2  41532.8  21.85    25.52   125.8
+SPLIT 2048 #2  chat    1558.7  46812.5  20.42    21.41   114.6
+SPLIT 2048 #2  agent    141.5  46397.1  17.08    20.60    88.0
+MTP (8192) #2  chat    1196.8  74690.5  29.08    30.10   406.7
+MTP (8192) #2  agent    107.1  60228.1  41.26    83.12   591.6
+SPLIT 3072 #2  chat    1559.4  46371.3  21.04    22.30   145.0
+SPLIT 3072 #2  agent    141.5  45299.3  19.44    24.31    82.8
+# Means of two runs vs MTP mean: 2048 chat +32%/-40%/-32% (tput/TTFT/ITL), agent +35%/-25%/-57%;
+# 3072 chat +31%/-41%/-29.1%, agent +33%/-27.4%/-49%. MTP repeats agree within 1%; split arms run
+# second in sweep 2b show ~10% higher TTFT than their first runs.

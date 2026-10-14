@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.18.11 — Static chunks cannot clear both bars; true LM-head epilogue bounded (2026-10-15)
+
+- Chunk sweep repeats: split at 2048 and 3072 each miss one bar (2048: agent TTFT -25%; 3072:
+  chat ITL -29.1%, agent TTFT -27.4%); MTP control repeats within 1%. EDF dynamic chunk queued.
+- B: a real GEMM-epilogue argmax could save at most 19-235 us per step (0.2-1%), below the serving
+  noise floor; not built.
+
 ## v1.18.10 — Prefill chunk is the chat-ITL lever on the split with guard 0 (2026-10-15)
 
 - Picked up the Codex kernel worker's thread (its last job exited 02:06; GPU taken per the user).

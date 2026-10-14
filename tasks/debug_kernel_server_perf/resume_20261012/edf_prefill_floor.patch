@@ -1,0 +1,15 @@
+--- up_edf_budgetfix/python/sglang/srt/managers/scheduler.py	2026-10-14 07:15:36.648157786 +0800
++++ up_edf_floor/python/sglang/srt/managers/scheduler.py	2026-10-15 07:09:28.156034983 +0800
+@@ -3318,6 +3318,12 @@
+             decode_avg_kv=average_kv, prefill_prefix_len=prefix,
+         )
+         chosen = chosen // self.page_size * self.page_size
++        # Prefill floor: past saturation every decode row is late, the tightest slack is ~0 and
++        # the budget alone would starve prefill (measured: ~300 tokens/step at a 30 ms ITL SLO,
++        # TTFT worse than stock MTP). The floor keeps prefill progressing; 0 disables it.
++        floor = int(os.environ.get("SGLANG_EDF_PREFILL_FLOOR", "0"))
++        if floor > 0:
++            chosen = max(chosen, min(floor, prefill_capacity) // self.page_size * self.page_size)
+         total_budget = chosen + decode_reserve if chosen > 0 else 0
+         self.edf_chunk_calls += 1
+         if self.edf_chunk_calls == 1 or self.edf_chunk_calls % 200 == 0:

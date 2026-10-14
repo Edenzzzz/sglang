@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.18.10 — Prefill chunk is the chat-ITL lever on the split with guard 0 (2026-10-15)
+
+- Picked up the Codex kernel worker's thread (its last job exited 02:06; GPU taken per the user).
+  Its Q32 FA2 serving A/B: within noise, not promoted.
+- Chunk sweep on the frozen 32-64K cohort: split at chunk 2048 vs MTP (best at 8192) gives chat
+  +34% tput / -43% TTFT / -34% mean ITL and agent +38% / -28% / -56%; only agent TTFT misses the
+  bar. MTP does not gain from small chunks. Supersedes the 2026-10-12 "chunk is not the lever"
+  finding, which was measured with the decode guard on.
+
 ## v1.18.9 — Codex kernel worker's 2026-10-13/14 results integrated; B3 closed (2026-10-14)
 
 - B3 closed by measurement: true TMA multicast (page 128, 2-CTA clusters) implemented and gated by

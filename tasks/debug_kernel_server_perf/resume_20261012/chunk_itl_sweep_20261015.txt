@@ -1,0 +1,19 @@
+# chunk_itl_sweep_20261015.sh on trial 095f01a3e1585eea (H200), 2026-10-15 04:50-05:27 +08:00.
+# Frozen workload (Codex's stock_fa3_single_serving cohort): 48 agent programs / 96 rounds, 24 active,
+# 32-64K contexts; 2048 natural ShareGPT requests at 8 req/s; EAGLE3 q4, graphs on, YaRN x4.
+# SPLIT = MTPMIX_SPLIT (two-launch FA3 + stock FA2), decode-population guard 0. Every arm passed
+# Codex's auditors (exact cohort, program peak 24, backend execution; STOCK_SERVING_PASS /
+# STOCK_DISPATCH_PASS). Means over requests; ITL = all inter-token gaps; ms and tok/s.
+arm            tenant  tput    TTFT     meanITL  TPOT    p99ITL
+MTP (8192)     chat    1203.6  74590.8  29.15    30.72   408.0
+MTP (8192)     agent    107.7  59457.7  40.32    81.02   588.5
+SPLIT 8192 #1  chat    1556.3  43368.2  21.77    23.38   197.5
+SPLIT 8192 #1  agent    142.1  41011.4  27.58    38.63   164.0
+SPLIT 4096     chat    1583.1  42740.4  20.90    21.99   161.3
+SPLIT 4096     agent    144.1  41521.4  23.39    28.99   134.0
+SPLIT 2048     chat    1614.1  42222.7  19.13    19.98   114.3
+SPLIT 2048     agent    149.0  43053.2  17.74    20.32    71.1
+MTP 2048       chat    1107.9  89806.9  29.40    28.30   177.6
+MTP 2048       agent     98.4  73728.7  35.31    51.70   198.5
+SPLIT 8192 #2  chat    1587.0  42185.5  21.42    22.84   197.1
+SPLIT 8192 #2  agent    145.9  40709.6  26.77    39.25   139.4

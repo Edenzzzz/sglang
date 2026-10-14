@@ -332,8 +332,22 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
   on both 4-mode arms (mix32 8/16/24/s, mix128 12/s), one linear model per arm (held-out MAPE),
   then EDF-R with each arm's own model vs no EDF at mix32 16/24/s -- queued after S3.
 
-- [x] **Chunk size is not the ITL lever at saturation (2026-10-12):** chunk 8192/4096/2048 leaves
+- [x] **Chunk size: not the lever with the decode guard on (2026-10-12); IS the ITL lever with guard 0 (2026-10-15, supersedes):** chunk 8192/4096/2048 leaves
   both arms unchanged (prefill per step is many ~512-token prompts).
+  - **2026-10-15 update (guard 0, split serving kernel):** with long prefills now routed to FA3
+    (Codex found the decode-population guard kept every 32K+ prefill off FA3 in timed runs), the
+    mixed-step chunk sets step time and hence ITL. Frozen 32-64K cohort (24 agent programs +
+    natural ShareGPT 8/s), all arms audited; noise floor from the 8192 repeat: 2-3%.
+    | vs MTP (8192) | split 8192 (mean of 2) | split 4096 | split 2048 |
+    |---|---|---|---|
+    | chat tput / TTFT / mean ITL | +31% / -43% / -26% | +32% / -43% / -28% | **+34% / -43% / -34%** |
+    | agent tput / TTFT / mean ITL | +34% / -31% / -33% | +34% / -30% / -42% | **+38% / -28% / -56%** |
+    MTP itself does not gain from small chunks (2048: chat ITL 29.40 vs 29.15 ms, tput -8%, TTFT
+    +20%), so 8192 is its best setting and the comparison is fair. At chunk 2048 every metric for
+    both tenants clears the bar except **agent TTFT (-27.6%)**; at 4096 agent TTFT clears (-30.2%)
+    but chat ITL does not (-28.3%). Chunk 3072 and repeats are next.
+    ([table](debug_kernel_server_perf/resume_20261012/chunk_itl_sweep_20261015.txt),
+    `chunk_itl_sweep_20261015.sh`)
 - [ ] **Direct baselines:** MuxWise (arXiv 2504.14489), semi-PD, NVIDIA Dynamo conditional
   disaggregation and sglang PD -- see References.
   - [x] **sglang mixed-chunk is already the stock arm (2026-10-13):** upstream keeps
@@ -434,6 +448,12 @@ Papers and systems this work draws on. *(sent)* marks the ones the user sent.
   multiplexing paper")* -- note: baseline. Intra-GPU prefill/decode multiplexing with an SLO-aware
   dispatcher and a contention-tolerant estimator; goodput under SLO as the metric. Direct
   colocation baseline (not yet run); its estimator is the comparison point for our EDF step model.
+- **Crossflow: Prefill–Decode Elasticity for Agentic LLM Serving** -- Y. Xu et al.,
+  [arXiv:2609.27085v1](https://arxiv.org/abs/2609.27085v1) *(sent)* -- note: direct cluster-policy
+  baseline. Fixed P/D roles with decode-local prefill admitted through revocable multi-resource
+  leases, cache/shape-aware path comparison, and local SLO revalidation. No new model kernels;
+  its timestamp-scaled TraceLab replay is relevant to our arrival-rate protocol. This does not
+  close A/B or justify moving to EDF. [Analysis and comparison](debug_kernel_server_perf/resume_20261012/crossflow_analysis_20261014.md).
 - **ThunderAgent: A Simple, Fast and Program-Aware Agentic Inference System** -- H. Kang et al.,
   [arXiv:2602.13692](https://arxiv.org/abs/2602.13692) *(sent)* -- note: argument and setting. KV-cache
   thrashing in agentic serving (a session's cache evicted during a tool call and re-prefilled, up

@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.18.12 — Guard-0 step-model refit; EDF dynamic chunk starves prefill past saturation (2026-10-15)
+
+- Refit with the decode guard off: held-out MAPE split 10.1% vs unfused 10.7% (goal point 3).
+- EDF dynamic chunk on the overloaded cohort: meets the ITL target (19.9 / 16.2 ms) but cuts
+  prefill to ~1.3K / ~300 tokens per step, so TTFT and throughput fall (30 ms: worse than MTP).
+  Opt-in prefill floor added; near-capacity A/B queued.
+
 ## v1.18.11 — Static chunks cannot clear both bars; true LM-head epilogue bounded (2026-10-15)
 
 - Chunk sweep repeats: split at 2048 and 3072 each miss one bar (2048: agent TTFT -25%; 3072:

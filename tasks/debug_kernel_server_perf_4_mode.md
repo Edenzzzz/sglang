@@ -341,6 +341,31 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
   on both 4-mode arms (mix32 8/16/24/s, mix128 12/s), one linear model per arm (held-out MAPE),
   then EDF-R with each arm's own model vs no EDF at mix32 16/24/s -- queued after S3.
 
+  - [x] **Guard-0 refit + EDF dynamic chunk, overloaded cohort (Claude, 2026-10-15; builds on the
+    Codex kernel worker's EDF runtime / budget fix / mode-aware fitter):** step traces with the
+    decode guard off (split and unfused, chunk 8192 and 2048; 5.4-6.6K rows each), fitted with
+    `fit_step_matrix_piecewise` (piecewise-relative): held-out MAPE **split 10.1% vs unfused
+    10.7%** (goal point 3: the split is slightly easier to predict; Codex's guard-on fit was
+    13.9% vs 16.3%). Acceptance stays out of the step model because the traced value is the
+    lifetime average (2.12-2.19, not identifiable); it enters the EDF budget instead
+    (slack = ITL_SLO x per-request acceptance EWMA - time since the row's last token).
+    Serving on the frozen 32-64K cohort, all arms in Codex's `up_edf_budgetfix` tree:
+    | arm (2 runs where shown) | chat tput / TTFT / mean ITL / P99 | agent tput / TTFT / mean ITL |
+    |---|---|---|
+    | MTP | 928 / 179 s / 32.2 / 486 ms | 83 / 121 s / 93 ms |
+    | split static 3072 (x2) | 1240 / 125 s / 22.0 / 168 ms | 116 / 95 s / 29 ms |
+    | EDF itl 50 ms | 1074 / 149 s / 19.9 / 75 ms | 105 / 115 s / 18 ms |
+    | EDF itl 30 ms (x2) | 849 / 211 s / 16.2 / 50 ms | 80 / 148 s / 13 ms |
+    EDF meets its ITL target but admits only ~1.3K (50 ms) / ~300 (30 ms) prefill tokens per step:
+    this cohort is past saturation in every arm (TTFT 40-200 s), every decode row is late, and a
+    slack-sized chunk starves prefill -- at 30 ms TTFT is worse than stock MTP. Confirms
+    `EDF: order, don't cap` on the current stack. **Caveat:** all absolute numbers in this tree
+    are ~30% slower than the same frozen cohort in the chunk-sweep tree, MTP included (identical
+    server args and requests; GPU unthrottled; scheduler host-bound at ~100% CPU) -- compare only
+    within a run. ([script](debug_kernel_server_perf/resume_20261012/edf_dynchunk_20261015.sh))
+  - [ ] **EDF with a prefill floor, near capacity (queued 07:20):** `SGLANG_EDF_PREFILL_FLOOR`
+    (`edf_prefill_floor.patch`), MTP / static 3072 / EDF 50 ms + floor 2048 at 8 programs +
+    chat 4/s and 16 programs + chat 6/s, where slack exists (`edf_nearcap_20261015.sh`).
 - [x] **Chunk size: not the lever with the decode guard on (2026-10-12); IS the ITL lever with guard 0 (2026-10-15, supersedes):** chunk 8192/4096/2048 leaves
   both arms unchanged (prefill per step is many ~512-token prompts).
   - **2026-10-15 update (guard 0, split serving kernel):** with long prefills now routed to FA3

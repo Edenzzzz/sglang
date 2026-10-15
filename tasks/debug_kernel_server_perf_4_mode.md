@@ -496,7 +496,7 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       crossed at 1024) and pays in agent TTFT and throughput. No single floor clears both chat ITL
       and agent TTFT at this overloaded point. Floor 2048 stays the default; the confirmation run
       keeps it.
-    - [ ] **Same-queue confirmation (running since 18:13, `confirm_resv_20261015.sh`):** MTP | split
+    - [x] **Same-queue confirmation (done 23:13, `confirm_resv_20261015.sh`):** MTP | split
       3072 | EDF + deadline reservation | EDF + mode 2, interleaved x2, TraceLab C = 4 / 8 and cohort
       C = 16. **Rep 1, TraceLab C = 4 (same queue, vs MTP):** split tput +23% / mean TTFT +28% / ITL
       -33%; EDF+reservation +28% / **-2%** / -28% (P99 ITL -70%); mode 2 +22% / +2% / -25% (short
@@ -516,7 +516,22 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       Mode 2 reserved 4,200+ times on the cohort and serves chat almost at once (TTFT 51.8 -> 3.8 s)
       but starves agent prefill; at TraceLab C=8 it gives the best mean TTFT (-8%) yet short appends
       still wait 2780 vs MTP 1903 ms (its half-step cap excludes 1-4K tool-output appends). Mode 1 is
-      the balanced arm. Rep 2 running.
+      the balanced arm.
+      **Final, both reps (23:13), all 24 arms clean, every peak = C.** Rep-to-rep spread is 0-2% on
+      throughput / ITL and 0-13% on mean TTFT (`confirm_aggregate.py confirm_resv_20261015`). Mean of
+      2 reps vs same-queue MTP (tput / mean TTFT / mean ITL / P99 ITL):
+      | point | split 3072 | **EDF + reservation (mode 1)** | EDF + mode 2 |
+      |---|---|---|---|
+      | TraceLab C=4 | +21 / +37 / -33 / -67% | +26 / -4 / -27 / -68% | +24 / -10 / -24 / -62% |
+      | TraceLab C=8 | +33 / +9 / -33 / -79% | +34 / -5 / -31 / -78% | +35 / -17 / -29 / -78% |
+      | cohort C=16 agent | +30 / -28 / -37 / -84% | +32 / -28 / -43 / -88% | +13 / -3 / -46 / -86% |
+      | cohort C=16 chat | +28 / -37 / -25 / -66% | +30 / -57 / -24 / -73% | +17 / -93 / -9 / -75% |
+      **Verdict vs the bar (>=30% TTFT and ITL, >=10% throughput):** mode 1 clears throughput
+      (+26..+34%) and P99 ITL (-68..-88%) at every point, mean ITL at TraceLab C=8 and the cohort agent
+      tenant, and chat TTFT; it misses mean TTFT on TraceLab (-4 / -5%; cold >=32K prefills are half
+      of all TTFT and compute-bound, see above), cohort agent TTFT (-28%), and mean ITL for TraceLab C=4
+      (-27%) and chat (-24%). **The bar is not met on all metrics.** Mode 2 is not promoted: it trades
+      agent throughput and TTFT for chat TTFT. Static split 3072 is dominated by mode 1.
     - [ ] **Agent ITL SLO 80 ms (queued after the confirmation):** TraceLab is agent-only and the
       agent tenant's evaluation SLO is 80 ms; EDF + reservation with `ITL_SLO_MS=80`, TraceLab C = 4 /
       8, two reps (`edf_slo80_20261015.sh`). S3 behind it.

@@ -496,6 +496,18 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       crossed at 1024) and pays in agent TTFT and throughput. No single floor clears both chat ITL
       and agent TTFT at this overloaded point. Floor 2048 stays the default; the confirmation run
       keeps it.
+    - [ ] **Same-queue confirmation (running since 18:13, `confirm_resv_20261015.sh`):** MTP | split
+      3072 | EDF + deadline reservation | EDF + mode 2, interleaved x2, TraceLab C = 4 / 8 and cohort
+      C = 16. **Rep 1, TraceLab C = 4 (same queue, vs MTP):** split tput +23% / mean TTFT +28% / ITL
+      -33%; EDF+reservation +28% / **-2%** / -28% (P99 ITL -70%); mode 2 +22% / +2% / -25% (short
+      appends 761 ms vs MTP 945, but 4-32K requests 4597 vs 2427 and cold 28.9 s). **Why mean TTFT
+      stays near MTP:** the 19 cold >= 32K prompts (159K uncached on average, 190 PFLOP) are 45-69% of
+      all TTFT; they reach 331 (MTP) / 396 (split) / 446 (EDF+reservation) TFLOP/s including queueing,
+      vs a ~700 TFLOP/s FA3 floor of 14.3 s per prompt (`cold_bound.py`). -30% mean TTFT needs cold
+      prefill near ~16 s, i.e. larger chunks, which the 50 ms ITL budget forbids (floor 2048 binds).
+    - [ ] **Agent ITL SLO 80 ms (queued after the confirmation):** TraceLab is agent-only and the
+      agent tenant's evaluation SLO is 80 ms; EDF + reservation with `ITL_SLO_MS=80`, TraceLab C = 4 /
+      8, two reps (`edf_slo80_20261015.sh`). S3 behind it.
   - [ ] **Final-config arms (2026-10-15, queued):** MTP | split static 3072 | split + EDF 50 ms +
     floor 2048, tree `up_edf_floor`, guard 0, no barrier (`s3_standalone_final_20261015.sh`, root
     `s3_standalone_final_20261015`; yields to `codex_needs_gpu`). Replaces the never-run

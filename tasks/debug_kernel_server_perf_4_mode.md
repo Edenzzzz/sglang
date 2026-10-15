@@ -445,7 +445,7 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       (cohort). Two metrics miss at every loaded point: **agent mean TTFT** (cohort -21..-28%;
       TraceLab +7..+28%, short appends blocked behind long prompts' chunks) and **chat mean ITL**
       (-17..-27%). The reservation and floor A/Bs below target exactly these.
-    - [ ] **EDF earlier-deadline reservation (queued after the sweep):** under EDF, cap the chunked
+    - [x] **EDF earlier-deadline reservation (2026-10-15, done 17:06):** under EDF, cap the chunked
       request's share so waiting requests with an earlier TTFT deadline are admitted in the same
       step (`edf_reserve_earlier_deadlines.patch`, tree `up_edf_resv`, `SGLANG_EDF_RESERVE=1`).
       A/B vs a same-queue EDF control at TraceLab C = 4 / 8 and cohort C = 16 + chat 8 req/s:
@@ -465,6 +465,10 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       for later-deadline requests whose whole prefill fits in half the step, and beside a chunked
       request admits only the reserved ones (an unreserved request ahead would end admission).
       Not smoke-tested separately; added as a fourth arm of the confirmation run.
+      **Cohort C = 16 + chat 8 req/s (17:06):** no effect, within noise -- agent tput / TTFT / ITL
+      138.6 / 32.0 s / 16.7 -> 139.9 / 31.6 s / 16.8, chat 1549 / 23.8 s / 24.2 -> 1559 / 23.1 s /
+      23.8. Fired < 200 times; here TTFT is queueing past capacity (32 s), which reordering within a
+      step cannot remove. Mode 1 helps only where long prompts block short ones (TraceLab).
     - [ ] **Reservation + lower floor (queued after it):** chat mean ITL misses (-24% at cohort C=16)
       because the 2048 floor binds every step; floor 1024 and 512 with the reservation on, TraceLab
       C = 8 and cohort C = 16 (`edf_floor_resv_20261015.sh`). S3 moved behind it.

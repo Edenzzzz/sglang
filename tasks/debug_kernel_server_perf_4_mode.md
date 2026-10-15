@@ -570,6 +570,16 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       compute-bound; small chunks cost ~12-15%; the rest of cold TTFT is cold prompts queueing behind
       each other. TraceLab C=4 step trace (MTP | EDF + deadline reservation) queued:
       `steptrace_tracelab_20261016.sh`, after the output gate; S3 behind it.
+    - [~] **Serving-output gate, reservation trees (2026-10-16 01:33, `resv_gate_20261015.sh`):**
+      Codex's EDF gate driver (`drivers/srv_correctness_edf_20261014.py`, BENCH_CHUNK 512, 1200
+      decode tokens, guard 0), all arms 0 tracebacks / fallbacks / width mismatches, graphs on.
+      MTP repeat vs MTP (noise floor): min common prefix short 15 / long 39, PASS. Split + EDF +
+      deadline reservation: short 1 / long 11, PASS by the rule (long >= 8); short-request
+      reservation: identical 1 / 11. No reservation fired on the gate workload, so both test split +
+      EDF. **Not a clean pass:** far below the floor, and earlier split-only gates kept long prefixes
+      of 52-96. EDF changes batch composition, and greedy bf16 outputs depend on it, so the MTP repeat
+      (same schedule) is an optimistic floor -- control queued: split-only, EDF-only (stock FA2 4-mode)
+      and split + EDF, each vs a fresh MTP (`gate_control_20261016.sh`).
   - [ ] **Final-config arms (2026-10-15, queued):** MTP | split static 3072 | split + EDF 50 ms +
     floor 2048, tree `up_edf_floor`, guard 0, no barrier (`s3_standalone_final_20261015.sh`, root
     `s3_standalone_final_20261015`; yields to `codex_needs_gpu`). Replaces the never-run

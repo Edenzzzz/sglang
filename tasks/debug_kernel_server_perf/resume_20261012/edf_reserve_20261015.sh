@@ -8,11 +8,13 @@
 # rescored on uncached work, is earlier than the chunked request's. Program concurrency only.
 # Full-length TraceLab (8 sessions x 30 rounds, seed 1014, YaRN x16): C=4 EDF control (rerun, same
 # tree, reserve off) | EDF+reserve; C=8 EDF+reserve | EDF control. Then the frozen 32-64K cohort +
-# ShareGPT 8 req/s at C=16: EDF control | EDF+reserve. Claude, 2026-10-15.
+# ShareGPT 8 req/s at C=16: EDF+reserve only. Controls (EDF, reserve off, same up_edf_floor code)
+# come from the parallel session's edf_reserve_ab_20261015.sh run in the same window (16:00-17:30).
+# Requeued 16:4x behind that A/B; serializes with its queue on a2_kernel.lock. Claude, 2026-10-15.
 set -uo pipefail
 W=/dev/shm/w
-root=$W/edf_reserve_20261015
-until grep -q 'CONC_EXIT' $W/concurrency_sweep_20261015.log 2>/dev/null; do sleep 60; done
+root=$W/edf_reserve_uncached_20261015
+until grep -q 'RESV_EXIT' $W/edf_reserve_ab_20261015.log 2>/dev/null; do sleep 60; done
 exec 9>"$W/a2_kernel.lock"; flock 9
 trap 'printf "RES_EXIT status=%s time=%s\n" "$?" "$(date -Is)"' EXIT
 if pgrep -f '[s]glang.launch_server|[k]ernel_concurrency_driver|[f]used_reference|[r]un_mixed' >/dev/null; then echo "GPU predecessor"; exit 1; fi
@@ -69,14 +71,11 @@ run_arm() {  # tag C reserve scenario driver
 }
 export YARN_FACTOR=16.0 CONTEXT_LEN=524288 AGENT_MAX_CTX=1040000 AGENT_N=240 AGENT_GROUPS=8 AGENT_SEED=1014
 export CHAT_RATE=0 AGENT_RATE=inf
-run_arm tracelab_c4_EDF 4 0 tracelab
 run_arm tracelab_c4_EDF_RES 4 1 tracelab
 run_arm tracelab_c8_EDF_RES 8 1 tracelab
-run_arm tracelab_c8_EDF 8 0 tracelab
 export AGENT_N=96 AGENT_GROUPS=48 AGENT_SEED=20261014 OTHER_N=2048 OTHER_RATE=8
 export AGENT_MIN_CTX=32768 AGENT_MAX_CTX=65536 CONTEXT_LEN=131072 YARN_FACTOR=4.0
 export BENCH_TRACE_MAX_TOTAL_TOKENS=131072
 unset AGENT_RATE CHAT_RATE
-run_arm cohort_c16_EDF 16 0 cohort
 run_arm cohort_c16_EDF_RES 16 1 cohort
 echo "RES_DONE $(date -Is)"

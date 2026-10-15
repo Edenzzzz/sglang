@@ -1,0 +1,154 @@
+--- up_edf_floor/python/sglang/srt/managers/scheduler.py	2026-10-15 07:09:28.156034983 +0800
++++ up_edf_preempt/python/sglang/srt/managers/scheduler.py	2026-10-16 04:05:58.539499234 +0800
+@@ -3332,6 +3332,117 @@
+                         prefix, len(lengths), average_kv)
+         return total_budget
+ 
++    def _edf_rescore_and_park(self):
++        """Extend EDF ordering to the in-progress chunked prefill.
++
++        sglang continues the chunked request with the whole step budget, so a request that
++        needs more than the leftover budget waits for every remaining chunk of a long cold
++        prompt. Waiting requests are rescored on their uncached work (the enqueue deadline
++        uses the total length, so a cache-hit round of a long session ranks like a cold
++        prompt). If the earliest one is due before the chunked request and is short, the
++        chunked request is parked: its computed prefix stays in the radix tree (checkpoint),
++        its row is released like a retraction, and it re-enters the waiting queue on the next
++        scheduling step -- after the result of its in-flight chunk, which the result
++        processor skips for retracted requests, has drained.
++        """
++        if not self.edf_enabled or os.environ.get("SGLANG_EDF_PREEMPT_CHUNK", "0") != "1":
++            return
++        if not self.waiting_queue:
++            return
++        from sglang.srt.managers.edf_scheduler import compute_ttft_slo_ms
++        from sglang.srt.mem_cache.common import match_kv_cache
++
++        def uncached(r):
++            return max(1, len(r.origin_input_ids) + len(r.output_ids) - r.num_matched_prefix_tokens)
++
++        candidates = self.waiting_queue[:64]
++        for req in candidates:
++            arrival = getattr(req, "_edf_arrival_monotonic", None)
++            if arrival is None or req.priority is None or getattr(req, "_edf_parked", False):
++                continue
++            match_kv_cache(req, self.tree_cache)
++            req.priority = min(req.priority, arrival + compute_ttft_slo_ms(uncached(req)) / 1000.0)
++
++        chunked = self.chunked_req
++        if chunked is None or chunked.priority is None or not chunked.kv.holds_kv:
++            return
++        ranked = [r for r in candidates if r.priority is not None]
++        if not ranked:
++            return
++        urgent = min(ranked, key=lambda r: r.priority)
++        max_tokens = int(os.environ.get("SGLANG_EDF_PREEMPT_MAX_TOKENS", "16384"))
++        remaining = len(chunked.full_untruncated_fill_ids) - chunked.prefix_len
++        work = uncached(urgent)
++        if urgent.priority >= chunked.priority or work > max_tokens or remaining < 2 * work:
++            return
++        release_kv_cache(chunked, self.tree_cache, checkpoint=True)
++        chunked.reset_for_retract()
++        chunked._edf_parked = True
++        self.chunked_req = None
++        self._edf_parked_reqs = [chunked]
++        self.edf_park_calls = getattr(self, "edf_park_calls", 0) + 1
++        if self.edf_park_calls == 1 or self.edf_park_calls % 20 == 0:
++            logger.info("EDF_PARK calls=%d chunked_left=%d urgent_work=%d urgent_slack=%.2f",
++                        self.edf_park_calls, remaining, work,
++                        urgent.priority - time.monotonic())
++
++    def _edf_chunked_req_limit(self, chunked_req, budget):
++        """Reserve chunk budget for waiting requests due before the in-progress chunked prefill.
++
++        A waiting request's deadline is rescored on its uncached work, so a cache-hit round of a
++        long session is not ranked like a cold prompt of the same total length.
++        """
++        if os.environ.get("SGLANG_EDF_RESERVE_DIAG", "0") == "1" and self.waiting_queue:
++            import time as _t
++            now = _t.monotonic()
++            self.edf_diag_calls = getattr(self, "edf_diag_calls", 0) + 1
++            if self.edf_diag_calls % 25 == 1:
++                head = self.waiting_queue[0]
++                logger.info(
++                    "EDF_RESERVE_DIAG n=%d budget=%d waiting=%d chunked_left=%d chunked_dl=%.1f "
++                    "head_in=%d head_out=%d head_matched=%d head_arrival=%s head_prio=%s",
++                    self.edf_diag_calls, budget, len(self.waiting_queue),
++                    len(chunked_req.full_untruncated_fill_ids) - chunked_req.prefix_len,
++                    (chunked_req.priority - now) if chunked_req.priority is not None else -1.0,
++                    len(head.origin_input_ids), len(head.output_ids), head.num_matched_prefix_tokens,
++                    None if getattr(head, "_edf_arrival_monotonic", None) is None
++                    else round(head._edf_arrival_monotonic - now, 1),
++                    None if head.priority is None else round(head.priority - now, 1))
++        if (not self.edf_enabled
++                or os.environ.get("SGLANG_EDF_RESERVE_EARLIER", "0") != "1"
++                or budget < 2 * self.page_size):
++            return None
++        from sglang.srt.managers.edf_scheduler import compute_ttft_slo_ms
++
++        deadline = chunked_req.priority
++        if deadline is None:
++            return None
++        from sglang.srt.mem_cache.common import match_kv_cache
++
++        reserved = 0
++        for req in self.waiting_queue[:16]:
++            arrival = getattr(req, "_edf_arrival_monotonic", None)
++            if arrival is None:
++                continue
++            # The FCFS/priority policy does not prefix-match waiting requests, so the
++            # uncached work is unknown until matched here.
++            match_kv_cache(req, self.tree_cache)
++            work = max(1, len(req.origin_input_ids) + len(req.output_ids)
++                       - req.num_matched_prefix_tokens)
++            if arrival + compute_ttft_slo_ms(work) / 1000.0 >= deadline:
++                continue
++            charge = -(-work // self.page_size) * self.page_size
++            if reserved + charge > budget - self.page_size:
++                break
++            reserved += charge
++        if not reserved:
++            return None
++        self.edf_reserve_calls = getattr(self, "edf_reserve_calls", 0) + 1
++        if self.edf_reserve_calls == 1 or self.edf_reserve_calls % 20 == 0:
++            logger.info("EDF_RESERVE calls=%d budget=%d reserved=%d",
++                        self.edf_reserve_calls, budget, reserved)
++        return (budget - reserved) // self.page_size * self.page_size
++
+     def _edf_observe_batch(self, batch):
+         if not self.edf_enabled:
+             return
+@@ -3904,6 +4015,13 @@
+         return res
+ 
+     def get_new_batch_prefill(self, running_batch: ScheduleBatch) -> NextBatchPlan:
++        # A request parked by _edf_rescore_and_park re-enters the queue one step later, after
++        # its in-flight chunk has drained; this must run before any early return, or a parked
++        # request that is the only remaining work is never resumed.
++        parked = getattr(self, "_edf_parked_reqs", None)
++        if parked:
++            self.waiting_queue.extend(parked)
++            self._edf_parked_reqs = []
+         prefill_delayer_single_pass = None
+         if self.prefill_delayer:
+             # Get max usage across all pools for prefill delay decision
+@@ -3977,6 +4095,8 @@
+             running_batch.batch_is_full = True
+             return None, running_batch
+ 
++        self._edf_rescore_and_park()
++
+         # Get priority queue
+         self.policy.calc_priority(
+             self.waiting_queue,
+@@ -4037,6 +4157,10 @@
+                 adder.rem_chunk_tokens or 0,
+                 self.page_size,
+             )
++            if adder.chunked_req_limit is None:
++                adder.chunked_req_limit = self._edf_chunked_req_limit(
++                    self.chunked_req, adder.rem_chunk_tokens or 0
++                )
+             self.chunked_req = adder.add_chunked_req(self.chunked_req)
+ 
+         if self.enable_lora:

@@ -415,6 +415,14 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     raises ITL 2-5 ms over the control (hit rounds decode instead of queueing). Next: uncapped
     preemption = shortest-remaining-work-first (`edf_preempt_srpt_20261016.sh`), queued after the
     park gate. Correctness of parking pending the forced gate.
+    **Bug found and fixed (04:05):** the cohort C=16 preempt arm hung after its first park (no server
+    log for 18 min): parked requests were re-queued inside `_edf_rescore_and_park`, which runs after
+    `get_new_batch_prefill`'s early returns, so a parked request that was the only remaining work was
+    stranded. Re-queue moved to the top of `get_new_batch_prefill` (`edf_preempt_chunk_v2.patch`, tree
+    `up_edf_preempt` patched in place before the park gate and the SRPT runs). The TraceLab preempt
+    numbers above ran v1 (constant arrivals there always re-triggered the re-queue; every request
+    completed), so they stand provisionally; the SRPT run re-measures the 16K-cap arm on v2. The
+    cohort C=16 preempt point is void (rc 143, killed).
     **Complete table, % vs MTP** (tput / mean TTFT / median TTFT / TPOT / mean ITL / P99 ITL):
     | point | split static 3072 | split + EDF + floor |
     |---|---|---|

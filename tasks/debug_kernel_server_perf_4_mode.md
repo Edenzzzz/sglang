@@ -436,6 +436,17 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     budget asks for less than the 2048 floor (`requested=8192 admitted=2050`); preemption adds decode
     concurrency (5.35-5.46 vs 4.98 running per decode step). One GPU sits on a TTFT/ITL frontier here
     (floor 1024: ITL -8%, TTFT +19%); the remaining lever is placement across nodes (PD point 1).
+    **Uncapped vs 16K-cap preemption, complete (`edf_preempt_srpt_20261016.sh`, 04:48-06:32, all arms
+    clean, peak = C, parks 20-60 per run; same-queue MTP at C=8: TTFT 6538 ms, ITL 58.8, tput 93.5):**
+    | arm | TTFT | ITL | TPOT | tput | vs MTP (TTFT / ITL / tput) |
+    |---|---|---|---|---|---|
+    | C=8 16K cap (x2) | 4113 / 5016 | 44.6 / 42.9 | 54.4 / 48.8 | 125.8 / 125.4 | -37/-23% / -24/-27% / +35/+34% |
+    | C=8 uncapped (x2) | **3963 / 3751** | 44.8 / 45.5 | 50.4 / 50.3 | 127.3 / 125.9 | **-39/-43%** / -24/-23% / +36/+35% |
+    | C=4 uncapped (x2) | **2369 / 2378** | 24.9 / 25.0 | 32.1 / 32.1 | 120.7 / 119.8 | **-43%** / -17% / +28% (MTP from the 01:35 queue) |
+    Uncapped preemption (shortest remaining work first among prompts) is adopted: better and steadier
+    TTFT than the 16K cap. **Bar status, full-length TraceLab: TTFT and throughput clear at C=4 and
+    C=8; ITL misses (-17% / -23..-24%), and C=4 TPOT is worse than MTP (+20%)** -- more requests decode
+    beside 2048-token chunks at 100-390K context. Gate for parking still pending (v2 running).
     **Complete table, % vs MTP** (tput / mean TTFT / median TTFT / TPOT / mean ITL / P99 ITL):
     | point | split static 3072 | split + EDF + floor |
     |---|---|---|

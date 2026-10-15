@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.19.11 — Uncapped EDF preemption: TraceLab TTFT -39..-43% vs MTP (2026-10-16)
+
+- Fixed-code preemption, no cap (shortest remaining work first): C=8 TTFT -39/-43%, tput +35%,
+  ITL -23/-24%; C=4 TTFT -43%, tput +28%, ITL -17%. TTFT and throughput clear the bar; ITL does not.
+
 ## v1.19.9 — In-server prefill rate: FA3 split +30% over MTP's FA2 on TraceLab (2026-10-16)
 
 - Step-traced TraceLab C=4: prefill 476-507 TFLOP/s (split + EDF) vs 351-401 (MTP) at every prefix

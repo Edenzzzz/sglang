@@ -401,6 +401,9 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       step (`edf_reserve_earlier_deadlines.patch`, tree `up_edf_resv`, `SGLANG_EDF_RESERVE=1`).
       A/B vs a same-queue EDF control at TraceLab C = 4 / 8 and cohort C = 16 + chat 8 req/s:
       `edf_reserve_ab_20261015.sh`; S3 now waits for it.
+    - [ ] **Reservation + lower floor (queued after it):** chat mean ITL misses (-24% at cohort C=16)
+      because the 2048 floor binds every step; floor 1024 and 512 with the reservation on, TraceLab
+      C = 8 and cohort C = 16 (`edf_floor_resv_20261015.sh`). S3 moved behind it.
   - [ ] **Final-config arms (2026-10-15, queued):** MTP | split static 3072 | split + EDF 50 ms +
     floor 2048, tree `up_edf_floor`, guard 0, no barrier (`s3_standalone_final_20261015.sh`, root
     `s3_standalone_final_20261015`; yields to `codex_needs_gpu`). Replaces the never-run

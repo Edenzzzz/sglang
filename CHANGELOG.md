@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.19.10 — EDF chunk preemption: TraceLab C=4 TTFT -39% vs MTP (2026-10-16)
+
+- Preemption removes the cache-hit TTFT tail (C=4 <1K-uncached mean 3.1 s -> 0.3 s); C=4 TTFT
+  -39/-40% and tput +27% vs MTP, ITL -20%. C=8: TTFT -15%, ITL -29%, tput +32%. Uncapped (SRPT)
+  preemption queued; forced park gate pending.
+
 ## v1.19.9 — EDF chunk preemption for the agent-TTFT miss (2026-10-16)
 
 - Root cause: a cache-hit round needing more than one step's budget waits behind a cold long

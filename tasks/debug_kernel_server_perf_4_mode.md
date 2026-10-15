@@ -398,6 +398,23 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     gate queued: long prompts first, short ones while they are chunked (chunk 256), stock MTP in the
     same order as the order-only null case, park arm must park >= 1
     (`edf_park_gate_20261016.sh`, `drivers/serving/srv_correctness_edf_park_20261016.py`).
+    **Serving, TraceLab (2026-10-16 01:35-03:40, all arms clean, peak = C, one tree/queue):**
+    | C | arm | tput | mean TTFT | <1K-uncached TTFT mean / med | mean ITL | TPOT |
+    |---|---|---|---|---|---|---|
+    | 4 | MTP | 93.8 | 4178 ms | 1040 / 201 | 29.9 | 26.7 |
+    | 4 | EDF control (x2) | 116.6 / 114.0 | 3941 / 4823 | 3107 / 2254 | 22.1 / 20.6 | 20.7 / 21.3 |
+    | 4 | EDF + preempt (x2) | 119.4 / 119.1 | **2558 / 2518** | **326 / 284** | 24.0 / 24.1 | 23.3 / 24.4 |
+    | 8 | MTP | 94.7 | 6068 | 2003 / 311 | 59.7 | 77.6 |
+    | 8 | EDF control | 124.1 | 7771 | 6166 / 294 | 37.0 | 37.3 |
+    | 8 | EDF + preempt | 125.2 | 5136 | 1762 / 405 | 42.2 | 49.6 |
+    Parks: ~20-40 per run (urgent 197-546 uncached tokens behind 89-110K-token remainders). **C=4:
+    preempt vs MTP TTFT -39/-40%, tput +27%, ITL -20% (control -28..-31%); repeat TTFT within 2%
+    (control 22% apart).** C=8: TTFT only -15% vs MTP (-34% vs control), ITL -29%, tput +32%,
+    TPOT -36%; mean TTFT is now set by the 17 cold 64K+ prompts (39 s vs MTP 45 s) and the 16-64K
+    bin got worse (12.0 vs 9.7 s: over the 16K cap they cannot preempt a 390K prompt). Preemption
+    raises ITL 2-5 ms over the control (hit rounds decode instead of queueing). Next: uncapped
+    preemption = shortest-remaining-work-first (`edf_preempt_srpt_20261016.sh`), queued after the
+    park gate. Correctness of parking pending the forced gate.
     **Complete table, % vs MTP** (tput / mean TTFT / median TTFT / TPOT / mean ITL / P99 ITL):
     | point | split static 3072 | split + EDF + floor |
     |---|---|---|

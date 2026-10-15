@@ -469,9 +469,22 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       138.6 / 32.0 s / 16.7 -> 139.9 / 31.6 s / 16.8, chat 1549 / 23.8 s / 24.2 -> 1559 / 23.1 s /
       23.8. Fired < 200 times; here TTFT is queueing past capacity (32 s), which reordering within a
       step cannot remove. Mode 1 helps only where long prompts block short ones (TraceLab).
-    - [ ] **Reservation + lower floor (queued after it):** chat mean ITL misses (-24% at cohort C=16)
+    - [x] **Reservation + lower floor (done 17:50):** chat mean ITL misses (-24% at cohort C=16)
       because the 2048 floor binds every step; floor 1024 and 512 with the reservation on, TraceLab
       C = 8 and cohort C = 16 (`edf_floor_resv_20261015.sh`). S3 moved behind it.
+      **Done 17:50, all 4 arms clean.** TraceLab C = 8, floor 2048 / 1024 / 512 (all with
+      reservation): mean TTFT 5759 / 9505 / 13220 ms, short appends 3673 / 6810 / 10486, mean ITL
+      41.3 / 33.6 / 30.3, P99 ITL 282 / 178 / 136, tput 126.3 / 122.3 / --. Cohort C = 16 vs the
+      sweep's MTP (cross-queue), agent and chat tput / TTFT / TPOT / ITL / P99 ITL:
+      | floor | agent | chat |
+      |---|---|---|
+      | 2048 | +31% / -28% / -55% / -39% / -85% | +29% / -56% / -25% / -24% / -73% |
+      | 1024 | +23% / -17% / -64% / -49% / -88% | +23% / -44% / **-30% / -30%** / -83% |
+      | 512 | +20% / -11% / -68% / -54% / -90% | +20% / -39% / -33% / -33% / -84% |
+      The floor is a straight TTFT-vs-ITL dial: lowering it buys chat mean ITL (the -30% bar is
+      crossed at 1024) and pays in agent TTFT and throughput. No single floor clears both chat ITL
+      and agent TTFT at this overloaded point. Floor 2048 stays the default; the confirmation run
+      keeps it.
   - [ ] **Final-config arms (2026-10-15, queued):** MTP | split static 3072 | split + EDF 50 ms +
     floor 2048, tree `up_edf_floor`, guard 0, no barrier (`s3_standalone_final_20261015.sh`, root
     `s3_standalone_final_20261015`; yields to `codex_needs_gpu`). Replaces the never-run

@@ -406,7 +406,11 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     TPOT -53%, TTFT **-30.9%** (runs -35% / -27%: the borderline metric); **16/s** chat tput +12%,
     TTFT -99%, TPOT -71%; agent tput +109%, TTFT -89%, TPOT -59%. **mix128 12/s** (overloaded:
     MTP chat TTFT 89 s): chat tput +47%, TTFT -81%, TPOT -55%, P99 ITL -84%; agent tput +43%,
-    TPOT -50%, TTFT only **-18%**. Agent TTFT is the recurring gap: EDF's TTFT deadline grows with
+    TPOT -50%, TTFT only **-18%**. **mix128 16/s:** chat tput +59%, TTFT -83%, TPOT -56%, P99 ITL
+    -83%; agent tput +47%, TTFT **-33%**, TPOT -41% -- both tenants clear the bar (vs static 3072:
+    chat tput +12%, TTFT -49%, TPOT -21%). Data
+    [`edf_ratesweep2_20261015.csv`](debug_kernel_server_perf/resume_20261012/edf_ratesweep2_20261015.csv).
+    Agent TTFT is the recurring gap: EDF's TTFT deadline grows with
     prompt length (+1 s per 5K tokens past 4096), so a 200K agent prompt gets ~40 s vs chat's 2 s
     and always waits, while the evaluation scores agents against 10 s.
   - [ ] **Two-tier TTFT SLO in EDF (queued after sweep 2):** prompts >= 16K get the flat agent SLO

@@ -428,6 +428,14 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     failed its must-park check (rc 1; outputs still PASS, long 96): EDF already serves the short
     requests ahead of the WAITING long prompts, and the in-progress long had < 2x the short work left.
     v2 queued: one long, then the shorts 0.1 s later, then the other longs.
+    **Preempt on the fixed code (v2), TraceLab C=8, first pair (04:48-05:16):** 16K cap: TTFT 4113 ms
+    (**-32% vs MTP 6068**; v1 gave 5136 -- the stranded-request bug cost ~1 s), ITL 44.6 (-25%), tput
+    125.8 (+33%); uncapped (SRPT): TTFT 3963 (**-35%**), ITL 44.8 (-25%), tput 127.3 (+34%), 16-64K bin
+    6.1 -> 4.1 s. TTFT now clears at C=8; ITL does not (needs <= 41.8 ms). Mechanism: EDF runs ~1900
+    mixed steps vs MTP's 670 (2048 vs 8192 prefill tokens per step at 100-390K context), and the EDF
+    budget asks for less than the 2048 floor (`requested=8192 admitted=2050`); preemption adds decode
+    concurrency (5.35-5.46 vs 4.98 running per decode step). One GPU sits on a TTFT/ITL frontier here
+    (floor 1024: ITL -8%, TTFT +19%); the remaining lever is placement across nodes (PD point 1).
     **Complete table, % vs MTP** (tput / mean TTFT / median TTFT / TPOT / mean ITL / P99 ITL):
     | point | split static 3072 | split + EDF + floor |
     |---|---|---|

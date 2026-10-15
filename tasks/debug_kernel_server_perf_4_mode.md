@@ -372,6 +372,10 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     4.6 s). Fix: match the first 16 waiting requests inside the reservation
     (`edf_reserve_matched.patch`, tree `up_edf_reserve2`); rerun with C=4 twice + same-tree control,
     C=8, cohort C=16 (`edf_reserve_matched_20261015.sh`), queued behind the A3 A/B and S3.
+    **Still inert (23:13-23:20, TraceLab C=4):** <20 firings in 6 min with matching, so unmatched
+    prefixes are not the whole cause; run stopped. One diagnostic arm queued
+    (`edf_reserve_diag_20261015.sh`, tree `up_edf_reserve3`): logs the head waiting request's
+    length, matched prefix, arrival and deadline against the chunked request's.
     **Complete table, % vs MTP** (tput / mean TTFT / median TTFT / TPOT / mean ITL / P99 ITL):
     | point | split static 3072 | split + EDF + floor |
     |---|---|---|

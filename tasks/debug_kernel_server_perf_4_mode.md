@@ -413,10 +413,16 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     Agent TTFT is the recurring gap: EDF's TTFT deadline grows with
     prompt length (+1 s per 5K tokens past 4096), so a 200K agent prompt gets ~40 s vs chat's 2 s
     and always waits, while the evaluation scores agents against 10 s.
-  - [ ] **Two-tier TTFT SLO in EDF (queued after sweep 2):** prompts >= 16K get the flat agent SLO
-    (10 s), shorter ones the chat SLO (2 s) -- `edf_two_tier_slo.patch` (opt-in
-    `SGLANG_EDF_LONG_PROMPT_TOKENS`), EDF+floor with vs without at mix32 12/s, mix128 12/16/s
-    (`edf_tier_20261015.sh`).
+  - [x] **Two-tier TTFT SLO in EDF -- not promoted (2026-10-15 10:39-11:20):** prompts >= 16K get
+    the flat agent SLO (10 s), shorter ones the chat SLO (2 s) (`edf_two_tier_slo.patch`, opt-in
+    `SGLANG_EDF_LONG_PROMPT_TOKENS`), EDF+floor with vs without, same run, all arms clean.
+    mix32 12/s: no effect (32-64K prompts already had ~8-14 s deadlines; agent TTFT is its own
+    prefill time). mix128 12/s: agent TTFT 26.0 -> 21.3 s (-18%, P99 -37%) but chat TTFT
+    16.7 -> 22.5 s (+35%) -- it moves TTFT between tenants. mix128 16/s: worse for both (chat
+    tput -8%, chat TTFT +73%, agent TTFT +11%). Standard length-scaled deadlines stay. This run's
+    standard-deadline control at mix128 16/s reproduces sweep 2 with margin: agent TTFT 26.1 s vs
+    MTP 44.2 s (-41%). Data [`edf_tier_20261015.csv`](debug_kernel_server_perf/resume_20261012/edf_tier_20261015.csv),
+    `edf_tier_20261015.sh`.
 - [x] **Chunk size: not the lever with the decode guard on (2026-10-12); IS the ITL lever with guard 0 (2026-10-15, supersedes):** chunk 8192/4096/2048 leaves
   both arms unchanged (prefill per step is many ~512-token prompts).
   - **2026-10-15 update (guard 0, split serving kernel):** with long prefills now routed to FA3

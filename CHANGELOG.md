@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.19.1 — EDF sweep repeats and mix128 confirm; two-tier TTFT SLO rejected (2026-10-15)
+
+- mix32 12/16 req/s repeats reproduce the v1.19.0 gains; mix128 16/s clears the bar for both
+  tenants (chat tput +59%, TTFT -83%; agent tput +47%, TTFT -33..-41%). Remaining gap: agent TTFT
+  at mix128 12/s (-18%) and borderline at mix32 12/s (-31% mean).
+- Two-tier TTFT deadlines (flat agent/chat SLOs) only trade TTFT between tenants at 12/s and lose
+  for both at 16/s; not promoted.
+
 ## v1.19.0 — Split + EDF dynamic chunk with a prefill floor clears the bar vs MTP at and past capacity (2026-10-15)
 
 - S1 mix32 rate sweep (chat 8/12/16/s + 32-64K agent sessions): split kernel + EDF chunk budget

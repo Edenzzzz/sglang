@@ -9,7 +9,7 @@
 # edf_reserve_uncached_20261015.sh on a2_kernel.lock. Claude, 2026-10-15.
 W=/dev/shm/w
 root=$W/a3_guard0_20261015
-until grep -q 'RES_EXIT' $W/edf_reserve_uncached_20261015.log 2>/dev/null; do sleep 60; done
+until grep -q 'RES_EXIT' $W/edf_reserve_matched_20261015.log 2>/dev/null; do sleep 60; done
 exec 9>"$W/a2_kernel.lock"; flock 9
 trap 'printf "A3G_EXIT status=%s time=%s\n" "$?" "$(date -Is)"' EXIT
 if pgrep -f '[s]glang.launch_server|[k]ernel_concurrency_driver|[f]used_reference|[r]un_mixed' >/dev/null; then echo "GPU predecessor"; exit 1; fi

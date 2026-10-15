@@ -645,7 +645,7 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       mean TTFT -39/-40% (C=4) and -32/-35% (C=8, 16K cap / SRPT) vs MTP on one GPU. The prefill-rate
       measurement stands; the inference from it was wrong -- most of the remaining TTFT was blocking,
       not compute. The TraceLab miss is now mean ITL (-20..-25%).
-    - [~] **Serving-output gate, reservation trees (2026-10-16 01:33, `resv_gate_20261015.sh`):**
+    - [x] **Serving-output gate, reservation trees (2026-10-16 01:33, `resv_gate_20261015.sh`):**
       Codex's EDF gate driver (`drivers/srv_correctness_edf_20261014.py`, BENCH_CHUNK 512, 1200
       decode tokens, guard 0), all arms 0 tracebacks / fallbacks / width mismatches, graphs on.
       MTP repeat vs MTP (noise floor): min common prefix short 15 / long 39, PASS. Split + EDF +
@@ -662,6 +662,13 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       4.2e-3 per-head relative error, while the attention checks against fp32 pass. Same-input check
       on this tree queued (`split_verify_20261016.sh`: `SGLANG_FUSED_SPLIT_VERIFY=1`, every split step
       recomputed with the stock FA2 wrapper, FAIL above 0.02 scale-normalised error).
+      **Same-input check (06:36-06:38), both arms clean:** split-only and split + EDF, every split step
+      recomputed with the stock FA2 wrapper on the same inputs: **0 FAIL lines**, sampled error 0.0059
+      (FA3 rows 0.0059, FA2 rows 0.0029-0.0059), worst 0.0112 < 0.02. The split's attention agrees with
+      stock within tolerance; the earlier greedy divergence (1 / 11 with this driver; the canonical
+      `srv_correctness.py` driver gives long 52 on the same split code) is bf16 FA3-vs-FA2 numerics
+      flipping near-tie tokens, not a wrong result. **Gate closed: PASS** for both reservation trees
+      (no reservation fired on the gate workload; their only change is scheduling).
   - [ ] **Final-config arms (2026-10-15, queued):** MTP | split static 3072 | split + EDF 50 ms +
     floor 2048, tree `up_edf_floor`, guard 0, no barrier (`s3_standalone_final_20261015.sh`, root
     `s3_standalone_final_20261015`; yields to `codex_needs_gpu`). Replaces the never-run

@@ -388,6 +388,14 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       | EDF+floor | +25% / -22% / -42% / -27% / -82% | +23% / **-75%** / -19% / -17% / -73% |
       Chat is still queueing (MTP chat TTFT 23.6 s at 8 req/s), so this point is past chat capacity.
       Misses: agent TTFT (-22%), agent ITL (-23..-27%), chat mean ITL / TPOT (-17..-19%).
+    - [x] **Cohort C = 16 + ShareGPT 8 req/s (15:37):** all arms clean, peak 16, mean 13.6-14.9.
+      | arm | agent | chat |
+      |---|---|---|
+      | MTP | 106.9 / 43548 / 44.9 / 27.4 / 501 | 1207 / 52023 / 31.5 / 31.4 / 471 |
+      | split 3072 | +30% / -28% / -53% / -36% / -84% | +28% / -37% / -25% / -25% / -66% |
+      | EDF+floor | +30% / -27% / -55% / -39% / -86% | +29% / -55% / -25% / -24% / -73% |
+      Clears throughput, agent TPOT/ITL/P99 ITL, chat TTFT and P99 ITL; misses agent TTFT (-27%)
+      and chat mean ITL (-24%). Both arms deeply overloaded (MTP TTFT 44-52 s).
     - [ ] **EDF earlier-deadline reservation (queued after the sweep):** under EDF, cap the chunked
       request's share so waiting requests with an earlier TTFT deadline are admitted in the same
       step (`edf_reserve_earlier_deadlines.patch`, tree `up_edf_resv`, `SGLANG_EDF_RESERVE=1`).

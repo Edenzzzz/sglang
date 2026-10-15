@@ -7,13 +7,13 @@
 # context range. Layout <root>/<workload>_r<point>/<ARM>_main.json for drivers/serving/eval_curves.py.
 # Load axis: request rate (req/s) only -- no session-start rates. Mooncake replays its recorded
 # per-request timestamps compressed by 1/slowdown (Crossflow's protocol); each END line reports the
-# achieved request rate so its point is stated in req/s. Queued behind edf_floor_resv_20261015.sh;
+# achieved request rate so its point is stated in req/s. Queued behind confirm_resv_20261015.sh;
 # yields to /dev/shm/w/codex_needs_gpu before every arm.
 # Claude, 2026-10-15.
 set -uo pipefail
 W=/dev/shm/w
 root=$W/s3_standalone_final_20261015
-until grep -q 'FLRV_EXIT' $W/edf_floor_resv_20261015.log 2>/dev/null; do sleep 60; done
+until grep -q 'CONF_EXIT' $W/confirm_resv_20261015.log 2>/dev/null; do sleep 60; done
 exec 9>"$W/a2_kernel.lock"; flock 9
 trap 'printf "S3F_EXIT status=%s time=%s\n" "$?" "$(date -Is)"' EXIT
 if pgrep -f '[s]glang.launch_server|[k]ernel_concurrency_driver|[f]used_reference|[r]un_mixed' >/dev/null; then echo "GPU predecessor"; exit 1; fi

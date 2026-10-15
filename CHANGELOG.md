@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.19.5 — Concurrency sweep C=2/4; EDF earlier-deadline reservation queued (2026-10-15)
+
+- Full-length TraceLab by program concurrency: at C=4 the split clears throughput (+26-29%), ITL
+  (-31..-34%) and P99 ITL (-67..-73%) vs MTP; mean TTFT +14% comes only from short appends blocked
+  behind long prompts' remaining chunks (cold >=32K prefills improve 20-26%).
+- `edf_reserve_earlier_deadlines.patch` (`SGLANG_EDF_RESERVE=1`): EDF reserves step budget for
+  earlier-deadline waiting requests ahead of the chunked request; A/B queued.
+
 ## v1.19.4 — S3 re-queued on request-rate axis behind the concurrency sweep (2026-10-15)
 
 - `s3_standalone_final_20261015.sh` waits for `concurrency_sweep_20261015.sh`; Mooncake points are

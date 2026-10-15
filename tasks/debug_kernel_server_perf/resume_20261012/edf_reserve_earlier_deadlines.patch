@@ -1,0 +1,66 @@
+--- up_edf_floor/python/sglang/srt/managers/scheduler.py	2026-10-15 07:09:28.156034983 +0800
++++ up_edf_resv/python/sglang/srt/managers/scheduler.py	2026-10-15 14:22:01.701464275 +0800
+@@ -382,6 +382,9 @@
+ 
+ logger = logging.getLogger(__name__)
+ 
++# EDF: let earlier-deadline waiting requests share the step ahead of the chunked request.
++EDF_RESERVE_EARLIER_DEADLINES = os.environ.get("SGLANG_EDF_RESERVE", "0") == "1"
++
+ 
+ def _prewarm_hccl_group(device, group, device_module):
+     warmup_tensor = torch.zeros(1, dtype=torch.int32, device=device)
+@@ -3277,6 +3280,8 @@
+         self.edf_latency_predictor = None
+         self.edf_queue_calls = 0
+         self.edf_chunk_calls = 0
++        self.edf_reserve_calls = 0
++        self.edf_reserve_tokens = 0
+         self.edf_observe_calls = 0
+         if self.edf_enabled:
+             from sglang.srt.managers.edf_scheduler import try_load_latency_predictor
+@@ -3332,6 +3337,35 @@
+                         prefix, len(lengths), average_kv)
+         return total_budget
+ 
++    def _edf_chunked_req_limit(self, budget):
++        """Reserve this step's prefill budget for waiting requests whose TTFT deadline is earlier
++        than the chunked request's, so a short append is not held behind every remaining chunk of
++        a long prompt. Walks the deadline-ordered queue and stops at the first request that does not
++        fit whole; the chunked request keeps at least one page. None leaves the budget unchanged."""
++        if (not self.edf_enabled or not EDF_RESERVE_EARLIER_DEADLINES
++                or not self.waiting_queue or budget < 2 * self.page_size):
++            return None
++        bound = self.chunked_req.priority
++        if bound is None:
++            return None
++        reserved = 0
++        for req in self.waiting_queue:
++            if req.priority is None or req.priority >= bound:
++                break
++            req.init_next_round_input(self.tree_cache)
++            work = -(-max(1, len(req.full_untruncated_fill_ids) - req.prefix_len) // self.page_size) * self.page_size
++            if reserved + work > budget - self.page_size:
++                break
++            reserved += work
++        if not reserved:
++            return None
++        self.edf_reserve_calls += 1
++        self.edf_reserve_tokens += reserved
++        if self.edf_reserve_calls == 1 or self.edf_reserve_calls % 200 == 0:
++            logger.info("EDF_RESERVE calls=%d reserved=%d budget=%d total_reserved=%d",
++                        self.edf_reserve_calls, reserved, budget, self.edf_reserve_tokens)
++        return (budget - reserved) // self.page_size * self.page_size
++
+     def _edf_observe_batch(self, batch):
+         if not self.edf_enabled:
+             return
+@@ -4037,6 +4071,8 @@
+                 adder.rem_chunk_tokens or 0,
+                 self.page_size,
+             )
++            if adder.chunked_req_limit is None:
++                adder.chunked_req_limit = self._edf_chunked_req_limit(adder.rem_chunk_tokens or 0)
+             self.chunked_req = adder.add_chunked_req(self.chunked_req)
+ 
+         if self.enable_lora:

@@ -341,6 +341,30 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
   (0.25-1/s, documents that do not fit 131072 dropped); three arms each, YaRN x4.
   `s3_standalone_20261013.sh` (`s3_standalone_knobs.patch`: Mooncake slowdown and LongBench length
   filter were not plumbed) -- queued last.
+    - [x] **C = 2 / 4 done (14:13):** all 6 arms clean, peak = C, mean in-flight 1.99-2.00 / 3.76-3.79.
+      | C | arm | out tok/s | TTFT mean / p50 / p99 | TPOT | ITL mean / p99 |
+      |---|---|---|---|---|---|
+      | 2 | MTP | 100.3 | 3846 / 341 / 96.5K | 10.9 | 10.0 / 27.6 |
+      | 2 | split 3072 | 108.0 (+8%) | 4007 / 277 / 102.8K | 8.4 | 8.1 / 85.5 |
+      | 2 | EDF+floor | 114.3 (+14%) | 3383 (-12%) / 273 / 94.3K | 8.5 (-22%) | 8.7 (-13%) / 87.6 |
+      | 4 | MTP | 93.2 | 3466 / 422 / 96.1K | 30.1 | 31.8 / 590 |
+      | 4 | split 3072 | 120.5 (+29%) | 3995 (+15%) / 330 / 72.2K | 21.4 (-29%) | 21.1 (-34%) / 194 (-67%) |
+      | 4 | EDF+floor | 117.9 (+26%) | 3945 (+14%) / 349 / 70.0K | 20.8 (-31%) | 21.8 (-31%) / 160 (-73%) |
+      At C = 4 the split clears throughput, ITL and P99 ITL; mean TTFT misses. **TTFT by uncached
+      prompt length (C = 4):** short appends < 4K (185 of 240 rounds) MTP 926 ms -> split 1994 /
+      EDF 2344; 4-32K 2435 -> 3618 / 2407; cold >= 32K (19 rounds) 30.1 s -> 24.2 / 22.4 s (-20 /
+      -26%). The kernel helps the long prefills; the loss is head-of-line blocking: sglang continues
+      the in-progress chunked prefill with the whole step budget, so a short append waits for every
+      remaining chunk of a long prompt, and 2-3K chunks hold that slot longer than MTP's 8192.
+      EDF's floor binds at every logged step (admitted 2048 of 8192); the step model's prediction is
+      physical (8192 tokens at a 100K prefix ~ 670 ms of attention vs ~145 ms of budget at 50 ms x
+      ~2.9 tokens/step), so this is the SLO, not a model error.
+      (`ttft_breakdown.py` on the pod; per-arm `*_agent.json` under `concurrency_sweep_20261015/`.)
+    - [ ] **EDF earlier-deadline reservation (queued after the sweep):** under EDF, cap the chunked
+      request's share so waiting requests with an earlier TTFT deadline are admitted in the same
+      step (`edf_reserve_earlier_deadlines.patch`, tree `up_edf_resv`, `SGLANG_EDF_RESERVE=1`).
+      A/B vs a same-queue EDF control at TraceLab C = 4 / 8 and cohort C = 16 + chat 8 req/s:
+      `edf_reserve_ab_20261015.sh`; S3 now waits for it.
   - [ ] **Final-config arms (2026-10-15, queued):** MTP | split static 3072 | split + EDF 50 ms +
     floor 2048, tree `up_edf_floor`, guard 0, no barrier (`s3_standalone_final_20261015.sh`, root
     `s3_standalone_final_20261015`; yields to `codex_needs_gpu`). Replaces the never-run

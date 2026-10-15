@@ -360,7 +360,18 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     That variant ranks waiting requests by their enqueue deadline from TOTAL prompt length and fired
     once in the whole C=4 run (`EDF_RESERVE calls=1`); a cache-hit round of a long session is never
     earlier than the chunked prompt under that deadline. `edf_reserve_earlier.patch` rescores on
-    uncached work instead -- not yet run.
+    uncached work instead.
+    **Both variants were inert (2026-10-15 18:1x):** mine also fired ~once per run (TraceLab C=4,
+    17:50-18:05). Cause, found in the server log: the EDF arms run the FCFS/priority policy, which
+    prefix-matches waiting requests only when the radix cache `supports_fast_match_prefix()` (it does
+    not here), so `num_matched_prefix_tokens` stays 0 and a 99%-cached 27K round is charged 27K
+    tokens > the 2K budget -> the reservation loop breaks. Log: 88 s stretch with `#queue-req: 1`,
+    every step `#new-seq: 1` (the cold chunked prompt), token usage <= 0.41 (not memory). The TTFT
+    tail is a handful of cache-hit rounds (<600 uncached) waiting 60-96 s -- also in MTP (one at
+    96 s). Single C=4 runs are too noisy to judge (two identical EDF controls: mean TTFT 3.9 vs
+    4.6 s). Fix: match the first 16 waiting requests inside the reservation
+    (`edf_reserve_matched.patch`, tree `up_edf_reserve2`); rerun with C=4 twice + same-tree control,
+    C=8, cohort C=16 (`edf_reserve_matched_20261015.sh`), queued behind the A3 A/B and S3.
     **Complete table, % vs MTP** (tput / mean TTFT / median TTFT / TPOT / mean ITL / P99 ITL):
     | point | split static 3072 | split + EDF + floor |
     |---|---|---|

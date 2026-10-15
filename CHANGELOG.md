@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.19.7 — EDF reservation was inert: waiting requests were never prefix-matched (2026-10-15)
+
+- Both reservation variants fired ~once per run: the FCFS/priority policy never prefix-matches
+  waiting requests on this radix cache, so their uncached work read as their full length.
+  `edf_reserve_matched.patch` matches them inside the reservation; rerun queued.
+
 ## v1.19.7 — EDF reservation measured; short-request reservation mode 2 (2026-10-15)
 
 - Earlier-deadline reservation vs same-queue EDF control: mean TTFT -38% (TraceLab C=4), -28% (C=8);

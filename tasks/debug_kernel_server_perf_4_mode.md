@@ -393,6 +393,11 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     the radix tree, row released as a retraction, re-queued next step) when a short earlier-deadline
     request waits (`edf_preempt_chunk.patch`, `SGLANG_EDF_PREEMPT_CHUNK`, tree `up_edf_preempt`).
     A/B with the EDF serving gate, interleaved in one queue: `edf_preempt_20261016.sh`.
+    Gates (01:32-01:35): EDF control and EDF+preempt both PASS (long prefix 52) **but parked 0
+    times** -- the standard gate sends short prompts first, so it cannot exercise parking. Forced
+    gate queued: long prompts first, short ones while they are chunked (chunk 256), stock MTP in the
+    same order as the order-only null case, park arm must park >= 1
+    (`edf_park_gate_20261016.sh`, `drivers/serving/srv_correctness_edf_park_20261016.py`).
     **Complete table, % vs MTP** (tput / mean TTFT / median TTFT / TPOT / mean ITL / P99 ITL):
     | point | split static 3072 | split + EDF + floor |
     |---|---|---|

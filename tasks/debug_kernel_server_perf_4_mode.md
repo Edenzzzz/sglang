@@ -621,9 +621,14 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       -> 2843 ms (-17%; one rep, tracing on). The split reaches ~70% of the ~700 TFLOP/s FA3 ceiling;
       the rest is the 2048 chunk and the decode/verify rows sharing each step. Mean TTFT gains less
       than the prefill rate because TTFT also contains cold prompts queueing behind each other and
-      the decode share of every step (which is what buys the ITL gain). Single-GPU mean TTFT on
+      the decode share of every step (which is what buys the ITL gain). ~~Single-GPU mean TTFT on
       full-length TraceLab is therefore bounded near the prefill-rate gain (~-20..-30%) at best; the
-      30% bar there needs more prefill capacity (multi-node, PD points) rather than scheduling.
+      30% bar there needs more prefill capacity (multi-node, PD points) rather than scheduling.~~
+      **Retracted (2026-10-16 06:0x):** the parallel session's EDF chunk preemption (park the chunked
+      long prompt, serve uncached-short waiting rounds; `edf_preempt_chunk_v2.patch`) reaches TraceLab
+      mean TTFT -39/-40% (C=4) and -32/-35% (C=8, 16K cap / SRPT) vs MTP on one GPU. The prefill-rate
+      measurement stands; the inference from it was wrong -- most of the remaining TTFT was blocking,
+      not compute. The TraceLab miss is now mean ITL (-20..-25%).
     - [~] **Serving-output gate, reservation trees (2026-10-16 01:33, `resv_gate_20261015.sh`):**
       Codex's EDF gate driver (`drivers/srv_correctness_edf_20261014.py`, BENCH_CHUNK 512, 1200
       decode tokens, guard 0), all arms 0 tracebacks / fallbacks / width mismatches, graphs on.

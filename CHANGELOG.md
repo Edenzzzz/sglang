@@ -4,7 +4,8 @@
 
 - Step-traced TraceLab C=4: prefill 476-507 TFLOP/s (split + EDF) vs 351-401 (MTP) at every prefix
   bucket up to >=256K; GPU-busy -19%. Mean TTFT on full-length TraceLab is bounded near this gain on
-  one GPU; agent ITL SLO 80 ms not promoted (no consistent gain).
+  one GPU [retracted 2026-10-16: EDF chunk preemption reaches -32..-40% TTFT on one GPU]; agent ITL
+  SLO 80 ms not promoted (no consistent gain).
 
 ## v1.19.10 — EDF chunk preemption: TraceLab C=4 TTFT -39% vs MTP (2026-10-16)
 

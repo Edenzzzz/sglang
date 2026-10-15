@@ -330,7 +330,7 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     uses (Crossflow: req/s; ThunderAgent: concurrency). It controls neither: at 0.005/s the 8 sessions averaged 1.3-1.5 requests in flight (MTP / split), a
     near-idle server. Cancelled by the user after 2 of 6 arms; those numbers are not a result.
     Agent load is program concurrency only (ThunderAgent; references).
-  - [ ] **Concurrency sweep (2026-10-15):** same 8x30-round seed-1014 replay, program concurrency
+  - [x] **Concurrency sweep (2026-10-15 12:36-15:56, all 18 arms clean, peak = C every arm):** same 8x30-round seed-1014 replay, program concurrency
     C = 2/4/8 (KV pool caps C at p99 390K context), arms MTP | split static 3072 | split + EDF +
     floor 2048; then the frozen 32-64K cohort at C = 8/16/24 + ShareGPT 8 req/s (replaces the
     retracted EDF load points). Running since 12:36: `concurrency_sweep_20261015.sh`, root
@@ -344,6 +344,27 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     head-of-line blocking -- an in-progress chunked prefill takes the whole 2-3K budget every step
     and EDF never ranks waiting requests against it. Fix under test: `edf_reserve_earlier.patch`
     (`SGLANG_EDF_RESERVE_EARLIER`), A/B `edf_reserve_20261015.sh` queued after the sweep.
+    **Complete table, % vs MTP** (tput / mean TTFT / median TTFT / TPOT / mean ITL / P99 ITL):
+    | point | split static 3072 | split + EDF + floor |
+    |---|---|---|
+    | TraceLab C=2 | +8 / +4 / -19 / -23 / -19 / +209 | +14 / -12 / -20 / -22 / -13 / +217 |
+    | TraceLab C=4 | +29 / +15 / -22 / -29 / -34 / -67 | +26 / +14 / -17 / -31 / -31 / -73 |
+    | TraceLab C=8 | +32 / +7 / -37 / -49 / -33 / -80 | +34 / +28 / -26 / -50 / -38 / -82 |
+    | cohort C=8 agent | +24 / -23 / -24 / -37 / -23 / -81 | +25 / -22 / -25 / -42 / -27 / -82 |
+    | cohort C=8 chat | +22 / -38 / -35 / -18 / -19 / -66 | +23 / **-75** / -74 / -19 / -17 / -73 |
+    | cohort C=16 agent | +30 / -28 / -26 / -53 / -36 / -84 | +30 / -27 / -27 / -55 / -39 / -86 |
+    | cohort C=16 chat | +28 / -37 / -35 / -25 / -25 / -66 | +29 / -55 / -53 / -25 / -24 / -73 |
+    | cohort C=24 agent | +32 / -25 / -13 / -72 / -52 / -83 | +30 / -21 / -5 / -77 / -60 / -88 |
+    | cohort C=24 chat | +29 / -39 / -42 / -25 / -27 / -64 | +29 / -48 / -50 / -22 / -20 / -69 |
+    Mean in-flight agent requests: TraceLab 1.99-2.00 / 3.76-3.79 / 7.07-7.13; cohort 7.3-7.7 /
+    13.6-14.9 / 19.2-21.0. Acceptance 2.12-2.16 (cohort), 2.89-3.02 (TraceLab) in every arm.
+    **Verdict:** throughput (+22..+34%), TPOT and P99 ITL clear the bar at every loaded point; agent
+    TTFT misses (-21..-28% on the cohort, worse than MTP on TraceLab from head-of-line blocking);
+    chat mean ITL misses (-17..-27%). **Load caveat:** chat at 8 req/s alone exceeds capacity at
+    every C (MTP chat TTFT 24-74 s), so every cohort point is overloaded; a below-capacity chat
+    rate is still missing. Data [`concurrency_sweep_20261015.csv`](debug_kernel_server_perf/resume_20261012/concurrency_sweep_20261015.csv),
+    `bash concurrency_sweep_20261015.sh` (pod `/dev/shm/w`), table `drivers/serving/conc_table.py
+    concurrency_sweep_20261015`; sglang `118c5985b` + pod trees `up_edf_floor` (+ ported replay).
 
 - [ ] **S3, standalone workloads:** ShareGPT (4-32/s), GSM8K, MATH-500, HumanEval, Code-Feedback
   (8-32/s), Mooncake conversation / tool-agent (recorded timestamps at 0.5-2x speed), LongBench v2

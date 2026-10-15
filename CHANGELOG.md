@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.19.5 — Program-concurrency sweep complete (2026-10-15)
+
+- 18 arms, peak = C every arm. Throughput +22..+34%, TPOT and P99 ITL clear the bar at every loaded
+  point; agent TTFT (-21..-28% cohort, worse on TraceLab) and chat mean ITL (-17..-27%) miss.
+  Chat at 8 req/s overloads every cohort point; a below-capacity chat rate is next.
+
 ## v1.19.4 — TraceLab concurrency sweep C=2/4; EDF chunk reservation for earlier-deadline requests (2026-10-15)
 
 - Full-length TraceLab at program concurrency 2 and 4: split / EDF clear throughput and ITL at

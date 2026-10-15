@@ -379,6 +379,15 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       C = 4 and more so: short appends (185/240 rounds) wait 2-2.8x longer behind long prompts'
       chunks, while 4-32K and cold prefills improve 37-49% and 24-25%. EDF's 2048 floor makes the
       blocking worse than static 3072. The reservation A/B below is the direct test.
+    - [x] **Cohort C = 8 + ShareGPT 8 req/s (15:18):** all arms clean, peak 8 programs, mean
+      7.29-7.67; acceptance 2.12-2.15 in every arm. Out tok/s / TTFT mean / TPOT / ITL mean / P99 ITL:
+      | arm | agent | chat |
+      |---|---|---|
+      | MTP | 110.3 / 18992 / 29.6 / 20.7 / 413 | 1288 / 23560 / 30.0 / 30.4 / 476 |
+      | split 3072 | +24% / -23% / -37% / -23% / -81% | +22% / -38% / -18% / -19% / -66% |
+      | EDF+floor | +25% / -22% / -42% / -27% / -82% | +23% / **-75%** / -19% / -17% / -73% |
+      Chat is still queueing (MTP chat TTFT 23.6 s at 8 req/s), so this point is past chat capacity.
+      Misses: agent TTFT (-22%), agent ITL (-23..-27%), chat mean ITL / TPOT (-17..-19%).
     - [ ] **EDF earlier-deadline reservation (queued after the sweep):** under EDF, cap the chunked
       request's share so waiting requests with an earlier TTFT deadline are admitted in the same
       step (`edf_reserve_earlier_deadlines.patch`, tree `up_edf_resv`, `SGLANG_EDF_RESERVE=1`).

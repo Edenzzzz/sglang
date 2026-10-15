@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.19.0 — Split + EDF dynamic chunk with a prefill floor clears the bar vs MTP at and past capacity (2026-10-15)
+
+- S1 mix32 rate sweep (chat 8/12/16/s + 32-64K agent sessions): split kernel + EDF chunk budget
+  (refit guard-0 step model, per-request acceptance EWMA, 2048-token prefill floor) vs stock MTP:
+  at 12/s chat TTFT -85% / TPOT -63%, agent tput +57% / TTFT -35% / TPOT -54%; at 16/s chat tput
+  +12% / TTFT -99% / TPOT -71%, agent tput +108% / TTFT -90% / TPOT -59%. Both tenants clear
+  >=30% TTFT/ITL and >=10% throughput at 12 and 16/s. Chat SLO attainment 0.975-0.988 vs MTP
+  0.119-0.755. One run per arm; repeats pending.
+
 ## v1.18.12 — Guard-0 step-model refit; EDF dynamic chunk starves prefill past saturation (2026-10-15)
 
 - Refit with the decode guard off: held-out MAPE split 10.1% vs unfused 10.7% (goal point 3).

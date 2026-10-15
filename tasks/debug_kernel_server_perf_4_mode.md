@@ -373,7 +373,33 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     16p/6/s: chat TTFT -6%, P99 ITL -24%, agent ITL -21%, agent TTFT +5%. Vs MTP: 8p chat
     +38% / -35% / -42% (tput/TTFT/ITL), agent +41% / **-16%** / -74%; 16p chat +34% / -30% / -34%,
     agent +41% / **-15%** / -78%. Agent TTFT stays the gap (queueing behind its own prefill
-    backlog). Next: across capacity on the S1 mixture (`edf_ratesweep_20261015.sh`, running).
+    backlog). Next: across capacity on the S1 mixture.
+  - [x] **EDF + floor across capacity -- clears the bar vs MTP at and past capacity (2026-10-15
+    08:01-09:08):** S1 mixture mix32 (32-64K agent sessions at 0.1/s) + short chat at 8/12/16/s,
+    tree `up_edf_floor`, guard 0, split step model refit on guard-0 traces; all 9 arms clean
+    (0 tracebacks / fallbacks; split calls 71.5K-130.5K; EDF admitted 2.4K-3.1K prefill tokens per
+    step -- above the floor once slack exists). SLO chat 2 s / 50 ms, agent 10 s / 80 ms.
+    | chat rate | arm | chat tput / TTFT / TPOT / P99 ITL / SLO | agent tput / TTFT / TPOT |
+    |---|---|---|---|
+    | 8 | MTP | 586 / 242 ms / 11.2 / 92.8 / 0.950 | 352 / 1220 ms / 9.1 |
+    | 8 | static 3072 | 586 / 151 ms / 8.0 / 54.9 / 0.974 | 405 / 998 ms / 6.7 |
+    | 8 | EDF+floor | 586 / 141 ms / 8.1 / 55.2 / 0.984 | 400 / 1087 ms / 6.8 |
+    | 12 | MTP | 851 / 995 ms / 24.9 / 137 / 0.755 | 238 / 1782 ms / 16.5 |
+    | 12 | static 3072 | 851 / 172 ms / 9.4 / 64.8 / 0.970 | 373 / 1004 ms / 7.7 |
+    | 12 | EDF+floor | 852 / 146 ms / 9.3 / 60.7 / 0.988 | 374 / 1167 ms / 7.7 |
+    | 16 | MTP | 1017 / 25.7 s / 39.5 / 140 / 0.119 | 161 / 14.9 s / 22.6 |
+    | 16 | static 3072 | 1136 / 419 ms / 12.7 / 97.0 / 0.909 | 324 / 1305 ms / 10.2 |
+    | 16 | EDF+floor | 1136 / 234 ms / 11.7 / 76.3 / 0.975 | 334 / 1518 ms / 9.4 |
+    **EDF+floor vs MTP:** 12/s chat TTFT -85%, TPOT -63%, P99 ITL -56%; agent tput +57%, TTFT
+    -35%, TPOT -54% (total output +13%). 16/s chat tput +12%, TTFT -99%, TPOT -71%; agent tput
+    +108%, TTFT -90%, TPOT -59%. **Every metric of both tenants clears >=30% / >=10% at 12 and
+    16/s** (chat throughput is capped by offered load below 16/s). Below capacity (8/s) all arms are
+    fast and the agent gain is smaller (TTFT -11%). Vs static chunk 3072, EDF+floor raises chat SLO
+    attainment (0.984 / 0.988 / 0.975 vs 0.974 / 0.970 / 0.909) and cuts chat TTFT -6..-44% by
+    serving tighter deadlines first, at +9..+16% agent TTFT. Caveat: one run per arm; same-tree
+    MTP/static controls in this run. Data [`edf_ratesweep_20261015.csv`](debug_kernel_server_perf/resume_20261012/edf_ratesweep_20261015.csv),
+    command `bash edf_ratesweep_20261015.sh` (pod `/dev/shm/w`), analysis
+    `drivers/serving/eval_curves.py --root edf_ratesweep_20261015 --slo '{"chat":[2000,50],"codex":[10000,80]}'`.
 - [x] **Chunk size: not the lever with the decode guard on (2026-10-12); IS the ITL lever with guard 0 (2026-10-15, supersedes):** chunk 8192/4096/2048 leaves
   both arms unchanged (prefill per step is many ~512-token prompts).
   - **2026-10-15 update (guard 0, split serving kernel):** with long prefills now routed to FA3

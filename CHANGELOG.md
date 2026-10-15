@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.19.4 — TraceLab concurrency sweep C=2/4; EDF chunk reservation for earlier-deadline requests (2026-10-15)
+
+- Full-length TraceLab at program concurrency 2 and 4: split / EDF clear throughput and ITL at
+  C=4 vs MTP; mean TTFT is +14-15% from head-of-line blocking of cache-hit rounds behind a chunked
+  prefill.
+- `edf_reserve_earlier.patch` (opt-in `SGLANG_EDF_RESERVE_EARLIER`): reserve chunk budget for
+  waiting requests whose uncached-work deadline precedes the chunked request's; A/B queued.
+
 ## v1.19.5 — Concurrency sweep C=2/4; EDF earlier-deadline reservation queued (2026-10-15)
 
 - Full-length TraceLab by program concurrency: at C=4 the split clears throughput (+26-29%), ITL

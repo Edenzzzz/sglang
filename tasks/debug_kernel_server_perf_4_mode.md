@@ -335,6 +335,15 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     floor 2048; then the frozen 32-64K cohort at C = 8/16/24 + ShareGPT 8 req/s (replaces the
     retracted EDF load points). Running since 12:36: `concurrency_sweep_20261015.sh`, root
     `concurrency_sweep_20261015`; each arm logs `PROGRAM_CONCURRENCY` (peak must equal C).
+    Partial (TraceLab, peak = C and mean in-flight 1.99-2.00 / 3.76-3.79 in every arm, 0 tracebacks /
+    fallbacks): **C=2** split / EDF vs MTP: tput +7.7% / +13.9%, mean TTFT +4% / -12%, TPOT -23% /
+    -22%, mean ITL -19% / -13%, P99 ITL 28 -> 85 / 88 ms. **C=4**: tput +29% / +26%, mean TTFT
+    **+15% / +14%** (median -22% / -17%, P99 -25% / -27%), TPOT -29% / -31%, mean ITL -34% / -31%,
+    P99 ITL -67% / -73%. TTFT by uncached tokens at C=4: cache-hit rounds (<1K uncached) keep a
+    170-200 ms median in all arms but their mean rises 1.1 s (MTP) -> 1.7 s (split) / 3.1 s (EDF):
+    head-of-line blocking -- an in-progress chunked prefill takes the whole 2-3K budget every step
+    and EDF never ranks waiting requests against it. Fix under test: `edf_reserve_earlier.patch`
+    (`SGLANG_EDF_RESERVE_EARLIER`), A/B `edf_reserve_20261015.sh` queued after the sweep.
 
 - [ ] **S3, standalone workloads:** ShareGPT (4-32/s), GSM8K, MATH-500, HumanEval, Code-Feedback
   (8-32/s), Mooncake conversation / tool-agent (recorded timestamps at 0.5-2x speed), LongBench v2

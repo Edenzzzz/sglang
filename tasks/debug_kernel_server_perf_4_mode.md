@@ -592,7 +592,7 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       C=8 5740 / 7605 ms (mean +9%); throughput 117-124 tok/s and ITL equal to the 50 ms arms. The rep
       spread (25-30%) exceeds any effect; **not promoted** -- chunk size does not limit TTFT, consistent
       with prefill being near compute-bound (below).
-    - [ ] **Is TraceLab TTFT compute-bound? (2026-10-16):** the SM-cap hypothesis does not apply --
+    - [x] **Is TraceLab TTFT compute-bound? (2026-10-16, traced 04:39):** the SM-cap hypothesis does not apply --
       the split launches upstream FA3 with `sm_margin` 0 (all SMs); `SGLANG_FUSED_SM_FA3` only sizes
       the fused single-launch path. In-server prefill rate from the existing cohort step traces
       (`steptrace_prefill_rate.py`, single-prefill steps incl. co-scheduled decode time): chunk 2048
@@ -600,6 +600,17 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       compute-bound; small chunks cost ~12-15%; the rest of cold TTFT is cold prompts queueing behind
       each other. TraceLab C=4 step trace (MTP | EDF + deadline reservation) queued:
       `steptrace_tracelab_20261016.sh`, after the output gate; S3 behind it.
+      **TraceLab C=4 traced (04:39), both arms clean.** In-server prefill rate on single-prefill
+      steps, prefix <32K / 32-128K / 128-256K / >=256K (TFLOP/s, co-scheduled decode time included):
+      MTP 401 / 373 / 359 / 351 (FA2 BatchPrefill, chunk 8192); EDF + deadline reservation 507 / 476 /
+      484 / 494 (FA3 prefill rows, chunk 2048) -- **+30% prefill rate from the kernel, holding at
+      >= 256K prefixes**. Total GPU-busy time 1029 -> 831 s (-19%); this traced pair's mean TTFT 3437
+      -> 2843 ms (-17%; one rep, tracing on). The split reaches ~70% of the ~700 TFLOP/s FA3 ceiling;
+      the rest is the 2048 chunk and the decode/verify rows sharing each step. Mean TTFT gains less
+      than the prefill rate because TTFT also contains cold prompts queueing behind each other and
+      the decode share of every step (which is what buys the ITL gain). Single-GPU mean TTFT on
+      full-length TraceLab is therefore bounded near the prefill-rate gain (~-20..-30%) at best; the
+      30% bar there needs more prefill capacity (multi-node, PD points) rather than scheduling.
     - [~] **Serving-output gate, reservation trees (2026-10-16 01:33, `resv_gate_20261015.sh`):**
       Codex's EDF gate driver (`drivers/srv_correctness_edf_20261014.py`, BENCH_CHUNK 512, 1200
       decode tokens, guard 0), all arms 0 tracebacks / fallbacks / width mismatches, graphs on.

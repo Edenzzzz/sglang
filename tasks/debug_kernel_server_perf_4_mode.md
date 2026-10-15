@@ -539,6 +539,16 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     - [ ] **Agent ITL SLO 80 ms (queued after the confirmation):** TraceLab is agent-only and the
       agent tenant's evaluation SLO is 80 ms; EDF + reservation with `ITL_SLO_MS=80`, TraceLab C = 4 /
       8, two reps (`edf_slo80_20261015.sh`). S3 behind it.
+      Rep 1-2 TraceLab C=4: mean TTFT 3319 ms (-5% vs MTP), cold 27.2 s (368 TFLOP/s vs 446 at 50 ms),
+      admitted chunk 2049-2654: the larger budget barely enlarges chunks and does not speed cold prefill.
+    - [ ] **Is TraceLab TTFT compute-bound? (2026-10-16):** the SM-cap hypothesis does not apply --
+      the split launches upstream FA3 with `sm_margin` 0 (all SMs); `SGLANG_FUSED_SM_FA3` only sizes
+      the fused single-launch path. In-server prefill rate from the existing cohort step traces
+      (`steptrace_prefill_rate.py`, single-prefill steps incl. co-scheduled decode time): chunk 2048
+      ~500 TFLOP/s, chunk 8192 ~570 TFLOP/s, near the H200 FA3 ceiling (~650-750). Prefill is close to
+      compute-bound; small chunks cost ~12-15%; the rest of cold TTFT is cold prompts queueing behind
+      each other. TraceLab C=4 step trace (MTP | EDF + deadline reservation) queued:
+      `steptrace_tracelab_20261016.sh`, after the output gate; S3 behind it.
   - [ ] **Final-config arms (2026-10-15, queued):** MTP | split static 3072 | split + EDF 50 ms +
     floor 2048, tree `up_edf_floor`, guard 0, no barrier (`s3_standalone_final_20261015.sh`, root
     `s3_standalone_final_20261015`; yields to `codex_needs_gpu`). Replaces the never-run

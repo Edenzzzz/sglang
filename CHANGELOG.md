@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.19.8 — A3 closed: fitted dispatch = default at guard 0; all kernel items closed (2026-10-16)
+
+- Clean A/B at guard 0 (gates pass; cohort C=16 x2, TraceLab C=8): A3B within noise of DEFAULT on
+  every metric. The earlier A3b TTFT gains were the decode-guard removal. A and B are both closed.
+
 ## v1.19.8 — Same-queue confirmation: EDF + reservation vs MTP (2026-10-15)
 
 - 24 arms, 2 interleaved reps (spread 0-2% on throughput/ITL). EDF + deadline reservation vs MTP:

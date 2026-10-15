@@ -19,7 +19,7 @@ at some points. The graphs-on 4-mode crash is fixed (a schedule-stream publish r
 A and B are the two kernel items; S is the server/workload evaluation the user specified.
 Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = partly, `[ ]` = not run.
 
-### [~] A. Ultra fine-grained tile dispatcher
+### [x] A. Ultra fine-grained tile dispatcher
 
 - [x] **A-fix, FA2 out of the co-compiled kernel (2026-10-12):** FA2 spilled inside the fused
   kernel (168 regs, 4200 B stack, 21x slower per item than `BatchAttention`); now FA3 grid on
@@ -32,7 +32,7 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   3x accumulator, spills; 1.6-2.2x slower at q8); **64/32/16** adopted (96 B stack). Per-item tail
   dispatch kept (bit-identical outputs). FA2 split-KV chunk = `auto` (sized to the FA2 CTA slots;
   matches or beats the best fixed chunk on every fixture). ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md))
-- [~] **A3, fitted FA2/FA3 dispatch rule (2026-10-12):** winner map on the fixed kernel, 216/216
+- [x] **A3, fitted FA2/FA3 dispatch rule (2026-10-12; closed 2026-10-16, see the guard-0 A/B below):** winner map on the fixed kernel, 216/216
   exact: FA2 wins every verify-width row; rule "FA3 iff packed_qo >= 112 and FA3 work >= 3.5M"
   agrees on 69/72 cells (worst loss 6%) vs 55/72 (98%) for the serving rule -- **but loses in
   serving** (-3.5% throughput, +29% TTFT). Cause, from the split counters (2026-10-13): the work
@@ -51,11 +51,19 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     0.44/0.31), acceptance differs between arms, and only 16-24 agent requests per arm.
     ([findings](debug_kernel_server_perf/resume_20261012/a3b_split_findings_20261013.md), `a3b_split_serving_20261013.sh`,
     `a3b_split_midrange_20261013.sh`.) My older `a3b_serving_ab_20261013.sh` is superseded.
-  - [ ] **A3 at guard 0, clean A/B (queued 2026-10-15):** the A3b test above compared A3B against
+  - [x] **A3 at guard 0, clean A/B (2026-10-16 00:19-01:13, all arms clean, peak = C):** the A3b test above compared A3B against
     DEFAULT with the decode guard ON, and A3B drops the guard, so its gains are not attributable to
     the fitted thresholds; guard 0 is now the default. Both rules at guard 0 on the split (chunk
     3072, no EDF): q4 gate per rule, interleaved DEFAULT/A3B x2 on the cohort at C=16 + chat 8 req/s,
-    one pair on TraceLab C=8 (`a3_guard0_20261015.sh`).
+    one pair on TraceLab C=8 (`a3_guard0_20261015.sh`). Both rules pass the q4 gate (long prefix 52
+    vs the MTP_LPT_Q4G floor). **A3B = DEFAULT within noise:** cohort C=16, two-repeat means, A3B vs
+    DEFAULT: agent tput +0.3%, TTFT -0.5%, TPOT -0.3%, ITL -3.5% (repeat spread 1.4%), P99 ITL -12.6%
+    (spread 6.3%); chat tput -0.1%, TTFT -2.2%, TPOT -1.8%, ITL -0.8%; acceptance 2.13 in all four.
+    TraceLab C=8: tput 0.0%, mean TTFT -3.8% (single runs vary up to 17%), median -0.5%, TPOT +1.3%,
+    ITL +2.1%, P99 ITL +9.6%. The 2026-10-13 A3b gains (TTFT -25..-28%) came from dropping the decode
+    guard, now the default, not from the fitted thresholds. Split calls 48.0-51.5K (cohort),
+    35.5K (TraceLab) in both rules. **A3 closed:** keep the default rule at guard 0.
+    Command: `bash a3_guard0_20261015.sh` (pod `/dev/shm/w`), table `a3tab.py a3_guard0_20261015`.
 
 - [x] **A4, FA2 verify-row bandwidth (2026-10-13; closed by measurement 2026-10-15):** serving runs
   verify rows on stock FA2 BatchPrefill (63-83% of HBM) inside the two-launch split, and every fused /

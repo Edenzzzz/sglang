@@ -505,6 +505,18 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       all TTFT; they reach 331 (MTP) / 396 (split) / 446 (EDF+reservation) TFLOP/s including queueing,
       vs a ~700 TFLOP/s FA3 floor of 14.3 s per prompt (`cold_bound.py`). -30% mean TTFT needs cold
       prefill near ~16 s, i.e. larger chunks, which the 50 ms ITL budget forbids (floor 2048 binds).
+      **Rep 1 complete (20:42), all 12 arms clean**, vs same-queue MTP (tput / mean TTFT / mean ITL /
+      P99 ITL):
+      | point | split 3072 | EDF + reservation (mode 1) | EDF + mode 2 |
+      |---|---|---|---|
+      | TraceLab C=4 | +23% / +28% / -33% / -65% | +28% / -2% / -28% / -70% | +22% / +2% / -25% / -61% |
+      | TraceLab C=8 | +32% / +15% / -33% / -78% | +33% / +4% / -33% / -79% | +35% / -8% / -31% / -79% |
+      | cohort C=16 agent | +30% / -28% / -37% / -84% | +31% / -27% / -42% / -88% | +12% / -2% / -45% / -86% |
+      | cohort C=16 chat | +29% / -37% / -25% / -66% | +30% / -56% / -24% / -73% | +17% / **-93%** / -9% / -76% |
+      Mode 2 reserved 4,200+ times on the cohort and serves chat almost at once (TTFT 51.8 -> 3.8 s)
+      but starves agent prefill; at TraceLab C=8 it gives the best mean TTFT (-8%) yet short appends
+      still wait 2780 vs MTP 1903 ms (its half-step cap excludes 1-4K tool-output appends). Mode 1 is
+      the balanced arm. Rep 2 running.
     - [ ] **Agent ITL SLO 80 ms (queued after the confirmation):** TraceLab is agent-only and the
       agent tenant's evaluation SLO is 80 ms; EDF + reservation with `ITL_SLO_MS=80`, TraceLab C = 4 /
       8, two reps (`edf_slo80_20261015.sh`). S3 behind it.

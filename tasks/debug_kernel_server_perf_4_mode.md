@@ -446,7 +446,12 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     Uncapped preemption (shortest remaining work first among prompts) is adopted: better and steadier
     TTFT than the 16K cap. **Bar status, full-length TraceLab: TTFT and throughput clear at C=4 and
     C=8; ITL misses (-17% / -23..-24%), and C=4 TPOT is worse than MTP (+20%)** -- more requests decode
-    beside 2048-token chunks at 100-390K context. Gate for parking still pending (v2 running).
+    beside 2048-token chunks at 100-390K context.
+    **Forced park gate v2 PASS (06:32-06:36, `edf_park_gate_v2_20261016.sh` = `edf_park_gate_20261016.sh`
+    with the v2 order):** the park arm parked (logged: chunked remainder 10,464, urgent 2,048 tokens,
+    slack 1.96 s) and agrees with the stock MTP_LPT_Q4G reference on long prefix 11 -- the same as stock
+    MTP in this order (11, the order-only noise floor; the EDF control without parking: 96); 0
+    tracebacks / fallbacks. Parked prefills resume correctly; the preemption serving arms are gated.
     **Complete table, % vs MTP** (tput / mean TTFT / median TTFT / TPOT / mean ITL / P99 ITL):
     | point | split static 3072 | split + EDF + floor |
     |---|---|---|

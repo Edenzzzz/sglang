@@ -1,0 +1,34 @@
+--- up_edf_floor/python/sglang/benchmark/session_replay.py	2026-10-11 22:07:12.000000000 +0800
++++ up_stock_fa3_dispatch/python/sglang/benchmark/session_replay.py	2026-10-14 20:29:16.846558757 +0800
+@@ -1,4 +1,5 @@
+ import asyncio
++import json
+ import os
+ import time
+ from pathlib import Path
+@@ -28,6 +29,25 @@
+     requests, send_request, request_rate, replay_timestamps=False, slowdown_factor=1.0
+ ):
+     """Serialize each session regardless of whether recorded think times are replayed."""
++    concurrency = os.environ.get("BENCH_SESSION_CONCURRENCY")
++    if concurrency is not None:
++        if request_rate != float("inf"):
++            raise ValueError("program-concurrency replay requires request-rate inf")
++        path = os.environ.get("BENCH_SESSION_AUDIT_FILE")
++        if not path:
++            raise ValueError("program-concurrency replay requires an audit output path")
++        from sglang.benchmark.session_concurrency import replay_concurrent_sessions
++
++        outputs, report = await replay_concurrent_sessions(
++            requests,
++            send_request,
++            int(concurrency),
++            replay_delays=replay_timestamps,
++            delay_scale=slowdown_factor,
++        )
++        Path(path).write_text(json.dumps(report, indent=2) + "\n")
++        print("PROGRAM_CONCURRENCY", json.dumps({key: value for key, value in report.items() if key not in ("events", "session_rounds")}), flush=True)
++        return outputs
+     if request_rate <= 0 or slowdown_factor < 0:
+         raise ValueError("Session arrival rate must be positive and slowdown nonnegative")
+     sessions = {}

@@ -325,6 +325,16 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     (excluded by KV capacity, not by a length filter) and belongs to the multi-GPU stage. YaRN x16
     (524288), session rates 0.005 and 0.02/s, three arms, 4-mode arms on the verdict's tree
     (`tracelab_full_v2b_20261013.sh`, root `tracelab_full_v3_20261013`).
+  - [x] **Session-rate axis retracted (2026-10-15):** `tracelab_full_final_20261015.sh` swept
+    "0.005 / 0.02 sessions/s" (Poisson session starts, rounds back to back), an axis no reference
+    uses (Crossflow: req/s; ThunderAgent: concurrency). It controls neither: at 0.005/s the 8 sessions averaged 1.3-1.5 requests in flight (MTP / split), a
+    near-idle server. Cancelled by the user after 2 of 6 arms; those numbers are not a result.
+    Agent load is program concurrency only (ThunderAgent; references).
+  - [ ] **Concurrency sweep (2026-10-15):** same 8x30-round seed-1014 replay, program concurrency
+    C = 2/4/8 (KV pool caps C at p99 390K context), arms MTP | split static 3072 | split + EDF +
+    floor 2048; then the frozen 32-64K cohort at C = 8/16/24 + ShareGPT 8 req/s (replaces the
+    retracted EDF load points). Running since 12:36: `concurrency_sweep_20261015.sh`, root
+    `concurrency_sweep_20261015`; each arm logs `PROGRAM_CONCURRENCY` (peak must equal C).
 
 - [ ] **S3, standalone workloads:** ShareGPT (4-32/s), GSM8K, MATH-500, HumanEval, Code-Feedback
   (8-32/s), Mooncake conversation / tool-agent (recorded timestamps at 0.5-2x speed), LongBench v2
@@ -367,6 +377,12 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     are ~30% slower than the same frozen cohort in the chunk-sweep tree, MTP included (identical
     server args and requests; GPU unthrottled; scheduler host-bound at ~100% CPU) -- compare only
     within a run. ([script](debug_kernel_server_perf/resume_20261012/edf_dynchunk_20261015.sh))
+    **Correction (2026-10-15 12:40):** the EDF trees (`up_edf_budgetfix`, `up_edf_floor`) lacked the
+    program-concurrency replay (`BENCH_SESSION_CONCURRENCY` silently ignored; no `PROGRAM_CONCURRENCY`
+    line in any bench log), so every program was released at once: measured mean in-flight
+    31.4-34.8 in every arm, not the stated 24 / 8 / 16 programs. Arms within a run stay matched, but
+    the load labels are wrong and "overloaded at any program concurrency" was never tested.
+    Rerun with the replay ported (`edf_floor_session_concurrency.patch`): `concurrency_sweep_20261015.sh`.
   - [x] **EDF with a prefill floor (2026-10-15 07:20-08:01):** `SGLANG_EDF_PREFILL_FLOOR`
     (`edf_prefill_floor.patch`, tree `up_edf_floor`), MTP / static 3072 / EDF 50 ms + floor 2048,
     all arms clean. Both lighter points turned out still past saturation (chat TTFT 95-158 s): the
@@ -377,9 +393,12 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     16p/6/s: chat TTFT -6%, P99 ITL -24%, agent ITL -21%, agent TTFT +5%. Vs MTP: 8p chat
     +38% / -35% / -42% (tput/TTFT/ITL), agent +41% / **-16%** / -74%; 16p chat +34% / -30% / -34%,
     agent +41% / **-15%** / -78%. Agent TTFT stays the gap (queueing behind its own prefill
-    backlog). Next: across capacity on the S1 mixture.
-  - [x] **EDF + floor across capacity -- clears the bar vs MTP at and past capacity (2026-10-15
-    08:01-09:08):** S1 mixture mix32 (32-64K agent sessions at 0.1/s) + short chat at 8/12/16/s,
+    backlog). Next: across capacity on the S1 mixture. **Retracted (2026-10-15 12:40):** "8p" and
+    "16p" ran with all 48 programs released (mean in-flight 33.1-35.5), see the correction above.
+  - [ ] **EDF + floor across capacity (2026-10-15 08:01-09:08) -- load axis retracted 12:40:** the
+    agent tenant was driven by a session-start rate (0.1 sessions/s), not program concurrency, so
+    the agent load is uncontrolled; these numbers are not evidence for the bar. Superseded by
+    `concurrency_sweep_20261015.sh` (cohort C = 8/16/24 + chat 8 req/s). Original record: S1 mixture mix32 (32-64K agent sessions at 0.1/s) + short chat at 8/12/16/s,
     tree `up_edf_floor`, guard 0, split step model refit on guard-0 traces; all 9 arms clean
     (0 tracebacks / fallbacks; split calls 71.5K-130.5K; EDF admitted 2.4K-3.1K prefill tokens per
     step -- above the floor once slack exists). SLO chat 2 s / 50 ms, agent 10 s / 80 ms.
@@ -404,7 +423,7 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     MTP/static controls in this run. Data [`edf_ratesweep_20261015.csv`](debug_kernel_server_perf/resume_20261012/edf_ratesweep_20261015.csv),
     command `bash edf_ratesweep_20261015.sh` (pod `/dev/shm/w`), analysis
     `drivers/serving/eval_curves.py --root edf_ratesweep_20261015 --slo '{"chat":[2000,50],"codex":[10000,80]}'`.
-  - [x] **Repeats + mix128 (sweep 2, 09:11-10:17; `edf_ratesweep2_20261015.sh`, all arms clean):**
+  - [ ] **Repeats + mix128 (sweep 2, same retracted session-rate axis; 09:11-10:17; `edf_ratesweep2_20261015.sh`, all arms clean):**
     mix32 repeats reproduce sweep 1 within ~3-7% for EDF and static, MTP within ~1% at 16/s and ~11%
     at 12/s. Two-run means, EDF+floor vs MTP: **12/s** chat TTFT -84%, TPOT -62%; agent tput +55%,
     TPOT -53%, TTFT **-30.9%** (runs -35% / -27%: the borderline metric); **16/s** chat tput +12%,
@@ -417,7 +436,8 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     Agent TTFT is the recurring gap: EDF's TTFT deadline grows with
     prompt length (+1 s per 5K tokens past 4096), so a 200K agent prompt gets ~40 s vs chat's 2 s
     and always waits, while the evaluation scores agents against 10 s.
-  - [x] **Two-tier TTFT SLO in EDF -- not promoted (2026-10-15 10:39-11:20):** prompts >= 16K get
+  - [x] **Two-tier TTFT SLO in EDF -- not promoted (2026-10-15 10:39-11:20; same session-rate axis, the
+    rejection stands as a within-run comparison):** prompts >= 16K get
     the flat agent SLO (10 s), shorter ones the chat SLO (2 s) (`edf_two_tier_slo.patch`, opt-in
     `SGLANG_EDF_LONG_PROMPT_TOKENS`), EDF+floor with vs without, same run, all arms clean.
     mix32 12/s: no effect (32-64K prompts already had ~8-14 s deadlines; agent TTFT is its own
@@ -551,14 +571,26 @@ Papers and systems this work draws on. *(sent)* marks the ones the user sent.
 - **Crossflow: Prefill–Decode Elasticity for Agentic LLM Serving** -- Y. Xu et al.,
   [arXiv:2609.27085v1](https://arxiv.org/abs/2609.27085v1) *(sent)* -- note: direct cluster-policy
   baseline. Fixed P/D roles with decode-local prefill admitted through revocable multi-resource
-  leases, cache/shape-aware path comparison, and local SLO revalidation. No new model kernels;
-  its timestamp-scaled TraceLab replay is relevant to our arrival-rate protocol. This does not
-  close A/B or justify moving to EDF. [Analysis and comparison](debug_kernel_server_perf/resume_20261012/crossflow_analysis_20261014.md).
+  leases, cache/shape-aware path comparison, and local SLO revalidation. No new model kernels.
+  **How it replays TraceLab** ([Sec. 6](https://arxiv.org/html/2609.27085v1#S6)): one-hour
+  segments of the public trace (window not stated), keeping timestamps, conversation order,
+  prefix relationships and token work; load factor alpha divides every timestamp offset from the
+  first arrival by alpha (8x-20x for GPT-OSS-120B; baselines at 16/18/20x): the recorded
+  request timestamps compressed, so **its load axis is request rate (req/s)**. Whether a round
+  waits for the previous response is not stated. Six TP4 GB300 servers (2P4D), SGLang, <=256
+  running requests per server, no stated evaluation SLO. Its GLM-5.2 TraceLab mean ITL worsens
+  20.9-34.3%. Load axes in the literature are request rate (Crossflow) or program concurrency
+  (ThunderAgent); neither uses session starts/s. Our agent tenant uses concurrency (below).
+  This does not close A/B or justify moving to EDF. [Analysis and comparison](debug_kernel_server_perf/resume_20261012/crossflow_analysis_20261014.md).
 - **ThunderAgent: A Simple, Fast and Program-Aware Agentic Inference System** -- H. Kang et al.,
   [arXiv:2602.13692](https://arxiv.org/abs/2602.13692) *(sent)* -- note: argument and setting. KV-cache
   thrashing in agentic serving (a session's cache evicted during a tool call and re-prefilled, up
   to 7.14x end-to-end): motivates PD point 2 (migration leaves replicas where demand is) and
-  evaluating on multi-turn agent sessions rather than independent prompts.
+  evaluating on multi-turn agent sessions rather than independent prompts. **Load protocol we
+  follow:** agent load is the number of parallel programs (workflows) kept active -- its x-axis
+  "parallel workflow number", headline point 96 programs on 8xH100 -- not an arrival rate. Every
+  agent arm here reports its program concurrency C and the measured mean requests in flight;
+  session-start rates (sessions/s) are not used.
 - **TraceLab: Characterizing Coding Agent Workloads for LLM Serving** -- K. Zhu, M. Jacob, C. Ma,
   Y. Pan, S. Wang, A. Krishnamurthy, B. Kasikci, [arXiv:2606.30560](https://arxiv.org/abs/2606.30560);
   dataset `syfi_coding_trace.jsonl.gz` ([github](https://github.com/uw-syfi/TraceLab)) *(sent)* --

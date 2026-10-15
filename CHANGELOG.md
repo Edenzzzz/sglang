@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.19.3 — Agent load is program concurrency only; EDF load points retracted (2026-10-15)
+
+- Session-start rates (sessions/s) are dropped as a load axis (user): the full-length TraceLab
+  0.005/0.02 sessions/s run is cancelled (0.005/s averaged 1.3-1.5 requests in flight).
+- The EDF trees lacked the program-concurrency replay, so the EDF frozen-cohort runs released all
+  48 programs (31-35 in flight, not 8/16/24), and the v1.19.0/1.19.1 rate sweeps drove the agent
+  tenant at 0.1 sessions/s. Their "clears the bar" claims are retracted pending
+  `concurrency_sweep_20261015.sh` (replay ported: `edf_floor_session_concurrency.patch`).
+- S3 queue cancelled (Mooncake replay must move to concurrency too).
+
 ## v1.19.2 — S3 standalone workloads queued on the final config (2026-10-15)
 
 - `s3_standalone_final_20261015.sh`: MTP | split static 3072 | split + EDF 50 ms + floor 2048 on

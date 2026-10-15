@@ -536,11 +536,15 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       of all TTFT and compute-bound, see above), cohort agent TTFT (-28%), and mean ITL for TraceLab C=4
       (-27%) and chat (-24%). **The bar is not met on all metrics.** Short-request reservation is not promoted: it trades
       agent throughput and TTFT for chat TTFT. Static split 3072 is dominated by deadline reservation.
-    - [ ] **Agent ITL SLO 80 ms (queued after the confirmation):** TraceLab is agent-only and the
+    - [x] **Agent ITL SLO 80 ms (done 00:19, not promoted):** TraceLab is agent-only and the
       agent tenant's evaluation SLO is 80 ms; EDF + reservation with `ITL_SLO_MS=80`, TraceLab C = 4 /
       8, two reps (`edf_slo80_20261015.sh`). S3 behind it.
       Rep 1-2 TraceLab C=4: mean TTFT 3319 ms (-5% vs MTP), cold 27.2 s (368 TFLOP/s vs 446 at 50 ms),
       admitted chunk 2049-2654: the larger budget barely enlarges chunks and does not speed cold prefill.
+      **Done (00:19), 4 arms clean.** Mean TTFT rep1 / rep2: C=4 3319 / 2570 ms (mean -16% vs MTP),
+      C=8 5740 / 7605 ms (mean +9%); throughput 117-124 tok/s and ITL equal to the 50 ms arms. The rep
+      spread (25-30%) exceeds any effect; **not promoted** -- chunk size does not limit TTFT, consistent
+      with prefill being near compute-bound (below).
     - [ ] **Is TraceLab TTFT compute-bound? (2026-10-16):** the SM-cap hypothesis does not apply --
       the split launches upstream FA3 with `sm_margin` 0 (all SMs); `SGLANG_FUSED_SM_FA3` only sizes
       the fused single-launch path. In-server prefill rate from the existing cohort step traces

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.19.2 — S3 standalone workloads queued on the final config (2026-10-15)
+
+- `s3_standalone_final_20261015.sh`: MTP | split static 3072 | split + EDF 50 ms + floor 2048 on
+  ShareGPT, GSM8K, MATH-500, HumanEval, Code-Feedback, Mooncake, LongBench v2; queued after S2b.
+
 ## v1.19.1 — EDF sweep repeats and mix128 confirm; two-tier TTFT SLO rejected (2026-10-15)
 
 - mix32 12/16 req/s repeats reproduce the v1.19.0 gains; mix128 16/s clears the bar for both

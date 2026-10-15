@@ -331,6 +331,10 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
   (0.25-1/s, documents that do not fit 131072 dropped); three arms each, YaRN x4.
   `s3_standalone_20261013.sh` (`s3_standalone_knobs.patch`: Mooncake slowdown and LongBench length
   filter were not plumbed) -- queued last.
+  - [ ] **Final-config arms (2026-10-15, queued):** MTP | split static 3072 | split + EDF 50 ms +
+    floor 2048, tree `up_edf_floor`, guard 0, no barrier (`s3_standalone_final_20261015.sh`, root
+    `s3_standalone_final_20261015`; waits for the S2b final run, yields to `codex_needs_gpu`).
+    Replaces the never-run 2026-10-13 arms.
 
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
   (goal point 3); earlier fits used the RoPE-corrupted model and are void (incl. the uncommitted

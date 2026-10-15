@@ -363,9 +363,17 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     are ~30% slower than the same frozen cohort in the chunk-sweep tree, MTP included (identical
     server args and requests; GPU unthrottled; scheduler host-bound at ~100% CPU) -- compare only
     within a run. ([script](debug_kernel_server_perf/resume_20261012/edf_dynchunk_20261015.sh))
-  - [ ] **EDF with a prefill floor, near capacity (queued 07:20):** `SGLANG_EDF_PREFILL_FLOOR`
-    (`edf_prefill_floor.patch`), MTP / static 3072 / EDF 50 ms + floor 2048 at 8 programs +
-    chat 4/s and 16 programs + chat 6/s, where slack exists (`edf_nearcap_20261015.sh`).
+  - [x] **EDF with a prefill floor (2026-10-15 07:20-08:01):** `SGLANG_EDF_PREFILL_FLOOR`
+    (`edf_prefill_floor.patch`, tree `up_edf_floor`), MTP / static 3072 / EDF 50 ms + floor 2048,
+    all arms clean. Both lighter points turned out still past saturation (chat TTFT 95-158 s): the
+    frozen cohort's ~4.7M agent prefill tokens keep it overloaded at any program concurrency. The
+    floor binds (admitted prefill = 2048 every logged step), so EDF acts as chunk 2048 + deadline
+    order. EDF+floor vs static 3072: equal-or-better on everything except agent TTFT -- 8p/4/s: chat
+    TTFT -10%, chat ITL -10%, chat P99 ITL -27%, agent ITL -16% (tput, agent TTFT within noise);
+    16p/6/s: chat TTFT -6%, P99 ITL -24%, agent ITL -21%, agent TTFT +5%. Vs MTP: 8p chat
+    +38% / -35% / -42% (tput/TTFT/ITL), agent +41% / **-16%** / -74%; 16p chat +34% / -30% / -34%,
+    agent +41% / **-15%** / -78%. Agent TTFT stays the gap (queueing behind its own prefill
+    backlog). Next: across capacity on the S1 mixture (`edf_ratesweep_20261015.sh`, running).
 - [x] **Chunk size: not the lever with the decode guard on (2026-10-12); IS the ITL lever with guard 0 (2026-10-15, supersedes):** chunk 8192/4096/2048 leaves
   both arms unchanged (prefill per step is many ~512-token prompts).
   - **2026-10-15 update (guard 0, split serving kernel):** with long prefills now routed to FA3

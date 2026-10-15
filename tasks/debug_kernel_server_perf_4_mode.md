@@ -423,6 +423,11 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     numbers above ran v1 (constant arrivals there always re-triggered the re-queue; every request
     completed), so they stand provisionally; the SRPT run re-measures the 16K-cap arm on v2. The
     cohort C=16 preempt point is void (rc 143, killed).
+    **Forced park gate v1 (04:39-04:43, `edf_park_gate_20261016.sh`):** order-only null cases PASS (stock
+    MTP long-first: long prefix 11; EDF control long-first: 96), but the park arm parked 0 times and
+    failed its must-park check (rc 1; outputs still PASS, long 96): EDF already serves the short
+    requests ahead of the WAITING long prompts, and the in-progress long had < 2x the short work left.
+    v2 queued: one long, then the shorts 0.1 s later, then the other longs.
     **Complete table, % vs MTP** (tput / mean TTFT / median TTFT / TPOT / mean ITL / P99 ITL):
     | point | split static 3072 | split + EDF + floor |
     |---|---|---|

@@ -156,13 +156,15 @@ def run_arm(arm, outdir):
             if os.environ.get("CORRECTNESS_LONG_FIRST") == "1":
                 # Long prefills first, short requests while they are still being chunked: the
                 # order that makes EDF park a chunked prefill for an earlier-deadline request.
-                futs = {}
-                for i, p in enumerate(long_):
-                    futs[ex.submit(post, "/generate", {"input_ids": p, "sampling_params": sp})] = f"l{i}"
-                    time.sleep(0.1)
-                time.sleep(0.3)
+                # One long prompt first; the short ones arrive while most of its prefill is left
+                # (EDF already orders waiting requests, so only an in-progress chunk can block).
+                futs = {ex.submit(post, "/generate", {"input_ids": long_[0], "sampling_params": sp}): "l0"}
+                time.sleep(float(os.environ.get("CORRECTNESS_SHORT_DELAY", "0.1")))
                 for i, p in enumerate(short):
                     futs[ex.submit(post, "/generate", {"input_ids": p, "sampling_params": background_sampling})] = f"s{i}"
+                    time.sleep(0.02)
+                for i, p in enumerate(long_[1:], start=1):
+                    futs[ex.submit(post, "/generate", {"input_ids": p, "sampling_params": sp})] = f"l{i}"
                     time.sleep(0.1)
             else:
                 futs = {ex.submit(post, "/generate", {"input_ids": p, "sampling_params": background_sampling}): f"s{i}"

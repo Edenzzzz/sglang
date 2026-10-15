@@ -7,11 +7,13 @@
 #   MTP_LPT_LF_Q4G            stock MTP, long-first order (order-only null case)
 #   MTPMIX_SPLIT_EDFCTRL_LF   EDF, no preemption, long-first
 #   MTPMIX_SPLIT_EDFPARK_LF   EDF + preemption, long-first, must park at least once
-# Queued behind edf_preempt_20261016.sh. Claude, 2026-10-16.
+# v2 (04:5x): v1's long-first order never parked -- EDF already put the shorts ahead of the WAITING
+# longs, and the in-progress long had < 2x short work left; v2 sends one long, then the shorts
+# 0.1 s later (most of its prefill left), then the other longs. Claude, 2026-10-16.
 set -uo pipefail
 W=/dev/shm/w
-root=$W/edf_park_gate_20261016
-until grep -q 'PRE_EXIT' $W/edf_preempt_20261016.log 2>/dev/null; do sleep 60; done
+root=$W/edf_park_gate_v2_20261016
+until grep -q 'PG_EXIT' $W/edf_park_gate_20261016.v1.log 2>/dev/null; do sleep 60; done
 exec 9>"$W/a2_kernel.lock"; flock 9
 trap 'printf "PG_EXIT status=%s time=%s\n" "$?" "$(date -Is)"' EXIT
 for _ in $(seq 60); do pgrep -f '[s]glang.launch_server|[k]ernel_concurrency_driver|[f]used_reference|[r]un_mixed' >/dev/null || break; sleep 5; done

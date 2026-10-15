@@ -7,13 +7,13 @@
 # context range. Layout <root>/<workload>_r<point>/<ARM>_main.json for drivers/serving/eval_curves.py.
 # Load axis: request rate (req/s) only -- no session-start rates. Mooncake replays its recorded
 # per-request timestamps compressed by 1/slowdown (Crossflow's protocol); each END line reports the
-# achieved request rate so its point is stated in req/s. Queued behind gate_control_20261016.sh;
+# achieved request rate so its point is stated in req/s. Queued behind split_verify_20261016.sh;
 # yields to /dev/shm/w/codex_needs_gpu before every arm.
 # Claude, 2026-10-15.
 set -uo pipefail
 W=/dev/shm/w
 root=$W/s3_standalone_final_20261015
-until grep -q 'GCTL_DONE\|GCTL_EXIT' $W/gate_control_20261016.log 2>/dev/null; do sleep 60; done
+until grep -q 'SVER_DONE\|SVER_EXIT' $W/split_verify_20261016.log 2>/dev/null; do sleep 60; done
 exec 9>"$W/a2_kernel.lock"; flock 9
 trap 'printf "S3F_EXIT status=%s time=%s\n" "$?" "$(date -Is)"' EXIT
 # A predecessor's server can still be exiting after it releases the lock; wait up to 5 min.

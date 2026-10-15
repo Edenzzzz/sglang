@@ -626,6 +626,13 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       of 52-96. EDF changes batch composition, and greedy bf16 outputs depend on it, so the MTP repeat
       (same schedule) is an optimistic floor -- control queued: split-only, EDF-only (stock FA2 4-mode)
       and split + EDF, each vs a fresh MTP (`gate_control_20261016.sh`).
+      **Control (04:48), all arms clean:** EDF-only (stock FA2 4-mode) short 18 / long 39 = the MTP floor;
+      split-only 1 / 11; split + EDF 1 / 11. The early divergence is the split kernel path, not EDF.
+      This matches the Codex role-isolation finding (`stock_fa3_dispatch_20261014.md`): the generation
+      difference localizes to the FA3 primary, whose split-KV reduction differs from unsplit by up to
+      4.2e-3 per-head relative error, while the attention checks against fp32 pass. Same-input check
+      on this tree queued (`split_verify_20261016.sh`: `SGLANG_FUSED_SPLIT_VERIFY=1`, every split step
+      recomputed with the stock FA2 wrapper, FAIL above 0.02 scale-normalised error).
   - [ ] **Final-config arms (2026-10-15, queued):** MTP | split static 3072 | split + EDF 50 ms +
     floor 2048, tree `up_edf_floor`, guard 0, no barrier (`s3_standalone_final_20261015.sh`, root
     `s3_standalone_final_20261015`; yields to `codex_needs_gpu`). Replaces the never-run

@@ -369,6 +369,16 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       physical (8192 tokens at a 100K prefix ~ 670 ms of attention vs ~145 ms of budget at 50 ms x
       ~2.9 tokens/step), so this is the SLO, not a model error.
       (`ttft_breakdown.py` on the pod; per-arm `*_agent.json` under `concurrency_sweep_20261015/`.)
+    - [x] **C = 8 done (15:00):** all arms clean, peak 8, mean in-flight 7.07-7.13.
+      | arm | out tok/s | TTFT mean / p50 / p99 | TPOT | ITL mean / p99 | TTFT <4K / 4-32K / >=32K uncached |
+      |---|---|---|---|---|---|
+      | MTP | 93.7 | 6133 / 651 / 100.9K | 74.0 | 59.8 / 1335 | 2179 / 7166 / 42678 |
+      | split 3072 | 124.1 (+32%) | 6580 (+7%) / 411 / 82.2K | 37.7 (-49%) | 40.1 (-33%) / 271 (-80%) | 4312 / 4536 / 32534 |
+      | EDF+floor | 125.2 (+34%) | 7846 (+28%) / 483 / 72.1K | 36.6 (-50%) | 36.8 (-38%) / 236 (-82%) | 6157 / 3681 / 32180 |
+      Throughput, TPOT, ITL and P99 ITL clear the bar; mean TTFT does not, for the same reason as
+      C = 4 and more so: short appends (185/240 rounds) wait 2-2.8x longer behind long prompts'
+      chunks, while 4-32K and cold prefills improve 37-49% and 24-25%. EDF's 2048 floor makes the
+      blocking worse than static 3072. The reservation A/B below is the direct test.
     - [ ] **EDF earlier-deadline reservation (queued after the sweep):** under EDF, cap the chunked
       request's share so waiting requests with an earlier TTFT deadline are admitted in the same
       step (`edf_reserve_earlier_deadlines.patch`, tree `up_edf_resv`, `SGLANG_EDF_RESERVE=1`).

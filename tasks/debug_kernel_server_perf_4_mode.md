@@ -104,7 +104,7 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     rule needs a floor near 4096 for long verify rows (re-check on the A2 fixtures before
     changing it); the serving decision waits on split v2 (gate PASS, long prompts agree on 52
     tokens, split calls now required > 0; running).
-  - [~] **Split v2, first point (2026-10-13 07:14; provisional until mix32 24/s and mix128 land):**
+  - [x] **Split v2, first point (2026-10-13 07:14; superseded by "Split v2 complete" below):**
     mix32 chat 16/s + agent 0.1/s, race-fixed tree, no barrier, both arms 0 tracebacks / 0
     fallbacks; split ran 80,001 split calls, fused 66,901 fused-kernel calls.
     | metric | split (FA3 + stock FA2 BatchPrefill) | fused co-launch | stock MTP (S1) |
@@ -384,6 +384,15 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     prefixes are not the whole cause; run stopped. One diagnostic arm queued
     (`edf_reserve_diag_20261015.sh`, tree `up_edf_reserve3`): logs the head waiting request's
     length, matched prefix, arrival and deadline against the chunked request's.
+    **Root cause found (2026-10-16 01:3x, server-log trace of the 42-61 s outliers):** the outlier IS
+    in the waiting queue (`#queue-req: 1` for 61 s) behind a cold ~390K prompt prefilled 2,048 tokens
+    per step; it is a cache-hit round with 2,377 uncached tokens -- more than the whole step budget,
+    and sglang allows one chunked request, so no budget reservation can admit it (the diagnostic arm:
+    20 reservations in 15 min; MTP shows the same pattern, one 96 s outlier). Fix: EDF over the chunked
+    request -- rescore waiting deadlines on uncached work and park the chunked prompt (prefix kept in
+    the radix tree, row released as a retraction, re-queued next step) when a short earlier-deadline
+    request waits (`edf_preempt_chunk.patch`, `SGLANG_EDF_PREEMPT_CHUNK`, tree `up_edf_preempt`).
+    A/B with the EDF serving gate, interleaved in one queue: `edf_preempt_20261016.sh`.
     **Complete table, % vs MTP** (tput / mean TTFT / median TTFT / TPOT / mean ITL / P99 ITL):
     | point | split static 3072 | split + EDF + floor |
     |---|---|---|

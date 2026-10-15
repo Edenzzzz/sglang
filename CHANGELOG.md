@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.19.9 — EDF chunk preemption for the agent-TTFT miss (2026-10-16)
+
+- Root cause: a cache-hit round needing more than one step's budget waits behind a cold long
+  prompt's whole chunked prefill. `edf_preempt_chunk.patch` parks the chunked prompt (prefix kept
+  in the radix tree) for a short earlier-deadline request; gated A/B queued.
+- H20 8x2 vibecuda re-allocated (job 1c90eac0a6848b48) now that A and B are closed.
+
 ## v1.19.8 — A3 closed: fitted dispatch = default at guard 0; all kernel items closed (2026-10-16)
 
 - Clean A/B at guard 0 (gates pass; cohort C=16 x2, TraceLab C=8): A3B within noise of DEFAULT on

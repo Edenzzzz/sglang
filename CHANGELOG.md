@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.19.6 — Concurrency sweep complete (2026-10-15)
+
+- 18 arms (TraceLab C=2/4/8, cohort C=8/16/24 + chat 8 req/s), all clean with peak = C. Throughput
+  +22..+34%, P99 ITL -64..-88% above C=2; agent mean TTFT and chat mean ITL miss the 30% bar.
+
 ## v1.19.5 — Program-concurrency sweep complete (2026-10-15)
 
 - 18 arms, peak = C every arm. Throughput +22..+34%, TPOT and P99 ITL clear the bar at every loaded

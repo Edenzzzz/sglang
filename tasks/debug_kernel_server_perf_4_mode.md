@@ -52,7 +52,11 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     ([findings](debug_kernel_server_perf/resume_20261012/a3b_split_findings_20261013.md), `a3b_split_serving_20261013.sh`,
     `a3b_split_midrange_20261013.sh`.) My older `a3b_serving_ab_20261013.sh` is superseded.
 
-- [ ] **A4, FA2 verify-row bandwidth (2026-10-13):** attention is 75-80% of serving kernel time,
+- [x] **A4, FA2 verify-row bandwidth (2026-10-13; closed by measurement 2026-10-15):** serving runs
+  verify rows on stock FA2 BatchPrefill (63-83% of HBM) inside the two-launch split, and every fused /
+  PDL / entry / locality / unpacked candidate measured no serving gain over it (sub-items below). The
+  persistent co-launched FA2 executor stays ~20% behind stock (a mainloop gap) -- relevant only if the
+  fused co-launch is revived. attention is 75-80% of serving kernel time,
   dominated by memory-bound verify rows. At serving verify shapes (q=4, GQA 28/4, all arms exact,
   `fa2_verify_bw_20261013.sh`), KV bytes / time per layer:
   | fixture | fused co-launch | unfused: FA3 + stock BatchPrefill FA2 | BatchAttention |
@@ -177,10 +181,13 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       ([kv96](debug_kernel_server_perf/resume_20261012/fa3_kv96_prototype_20261014.md)); SM budget: keep 112
       ([budget](debug_kernel_server_perf/resume_20261012/tma_sm_budget_20261013.md)); one-warp TMA producer: no gain
       ([warp](debug_kernel_server_perf/resume_20261012/tma_warp_prototype_20261014.md)).
-    - [ ] paired serving split vs native PDL + dedicated entry + round-robin pairs: mix32 done, no
-      gain (chat TTFT +2.3%, agent tput -1.1%, acceptance matched); mix64/mix128 running
+    - [x] paired serving split vs native PDL + dedicated entry + round-robin pairs (complete
+      2026-10-14 04:4x, two repeats): no uniform gain -- 32-64K and 64-128K within +/-4% on every
+      metric; 128-256K agent ITL -12.4% but agent TTFT +6.3%, chat tput -1.9%; split stays
       ([paired](debug_kernel_server_perf/resume_20261012/native_pdl_paired_serving_20261014.md)).
-    - [ ] unpacked query heads for FA3: built and host-tested, GPU run queued
+    - [x] unpacked query heads for FA3 (complete 2026-10-14 04:40, 16 gates + 40 timings pass):
+      KV128 within 0.6% of packed auto on the four large fixtures, KV96 slower, unsplit 3.7x slower
+      on irregular short queries; packed auto retained
       ([unpacked](debug_kernel_server_perf/resume_20261012/fa3_unpacked_20261014.md)).
 
 ### [~] B. Fuse draft/verify epilogue ops

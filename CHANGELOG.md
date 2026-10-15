@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.19.6 — A4 closed by measurement (2026-10-15)
+
+- Codex's paired native-PDL serving (no uniform gain) and unpacked-query FA3 (<0.6%) complete; with
+  every candidate measured against the split, A4 closes: verify rows run on stock FA2 in the split.
+
 ## v1.19.6 — Concurrency sweep complete (2026-10-15)
 
 - 18 arms (TraceLab C=2/4/8, cohort C=8/16/24 + chat 8 req/s), all clean with peak = C. Throughput

@@ -5,7 +5,7 @@
 - 24 arms, 2 interleaved reps (spread 0-2% on throughput/ITL). EDF + deadline reservation vs MTP:
   throughput +26..+34%, P99 ITL -68..-88% everywhere; misses mean TTFT on TraceLab (-4/-5%), cohort
   agent TTFT (-28%) and chat / TraceLab-C4 mean ITL (-24/-27%). Bar not met on all metrics.
-- Mode 2 not promoted (trades agent throughput/TTFT for chat TTFT -93%).
+- Short-request reservation not promoted (trades agent throughput/TTFT for chat TTFT -93%).
 
 ## v1.19.7 — EDF reservation was inert: waiting requests were never prefix-matched (2026-10-15)
 

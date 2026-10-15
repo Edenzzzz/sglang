@@ -475,7 +475,7 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       **TraceLab C = 8 (16:55):** mean TTFT 7961 -> 5759 ms (-28%), short appends 6561 -> 3673 (-44%),
       ITL 36.6 -> 41.3 ms (+13%), throughput +2%; still above the sweep's MTP for short appends
       (2179). The reservation fired < 200 times: at C = 8 the long prompts are already past their own
-      deadline, so EDF correctly ranks them first and nothing earlier waits. **Mode 2**
+      deadline, so EDF correctly ranks them first and nothing earlier waits. **Short-request reservation (mode 2)**
       (`edf_reserve_short_mode2.patch`, tree `up_edf_resv2`, `SGLANG_EDF_RESERVE=2`) also reserves
       for later-deadline requests whose whole prefill fits in half the step, and beside a chunked
       request admits only the reserved ones (an unreserved request ahead would end admission).
@@ -483,7 +483,7 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       **Cohort C = 16 + chat 8 req/s (17:06):** no effect, within noise -- agent tput / TTFT / ITL
       138.6 / 32.0 s / 16.7 -> 139.9 / 31.6 s / 16.8, chat 1549 / 23.8 s / 24.2 -> 1559 / 23.1 s /
       23.8. Fired < 200 times; here TTFT is queueing past capacity (32 s), which reordering within a
-      step cannot remove. Mode 1 helps only where long prompts block short ones (TraceLab).
+      step cannot remove. Deadline reservation helps only where long prompts block short ones (TraceLab).
     - [x] **Reservation + lower floor (done 17:50):** chat mean ITL misses (-24% at cohort C=16)
       because the 2048 floor binds every step; floor 1024 and 512 with the reservation on, TraceLab
       C = 8 and cohort C = 16 (`edf_floor_resv_20261015.sh`). S3 moved behind it.
@@ -501,9 +501,9 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       and agent TTFT at this overloaded point. Floor 2048 stays the default; the confirmation run
       keeps it.
     - [x] **Same-queue confirmation (done 23:13, `confirm_resv_20261015.sh`):** MTP | split
-      3072 | EDF + deadline reservation | EDF + mode 2, interleaved x2, TraceLab C = 4 / 8 and cohort
+      3072 | EDF + deadline reservation | EDF + short-request reservation, interleaved x2, TraceLab C = 4 / 8 and cohort
       C = 16. **Rep 1, TraceLab C = 4 (same queue, vs MTP):** split tput +23% / mean TTFT +28% / ITL
-      -33%; EDF+reservation +28% / **-2%** / -28% (P99 ITL -70%); mode 2 +22% / +2% / -25% (short
+      -33%; EDF+reservation +28% / **-2%** / -28% (P99 ITL -70%); EDF+short-request reservation +22% / +2% / -25% (short
       appends 761 ms vs MTP 945, but 4-32K requests 4597 vs 2427 and cold 28.9 s). **Why mean TTFT
       stays near MTP:** the 19 cold >= 32K prompts (159K uncached on average, 190 PFLOP) are 45-69% of
       all TTFT; they reach 331 (MTP) / 396 (split) / 446 (EDF+reservation) TFLOP/s including queueing,
@@ -511,31 +511,31 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       prefill near ~16 s, i.e. larger chunks, which the 50 ms ITL budget forbids (floor 2048 binds).
       **Rep 1 complete (20:42), all 12 arms clean**, vs same-queue MTP (tput / mean TTFT / mean ITL /
       P99 ITL):
-      | point | split 3072 | EDF + reservation (mode 1) | EDF + mode 2 |
+      | point | split 3072 | EDF + deadline reservation | EDF + short-request reservation |
       |---|---|---|---|
       | TraceLab C=4 | +23% / +28% / -33% / -65% | +28% / -2% / -28% / -70% | +22% / +2% / -25% / -61% |
       | TraceLab C=8 | +32% / +15% / -33% / -78% | +33% / +4% / -33% / -79% | +35% / -8% / -31% / -79% |
       | cohort C=16 agent | +30% / -28% / -37% / -84% | +31% / -27% / -42% / -88% | +12% / -2% / -45% / -86% |
       | cohort C=16 chat | +29% / -37% / -25% / -66% | +30% / -56% / -24% / -73% | +17% / **-93%** / -9% / -76% |
-      Mode 2 reserved 4,200+ times on the cohort and serves chat almost at once (TTFT 51.8 -> 3.8 s)
+      Short-request reservation reserved 4,200+ times on the cohort and serves chat almost at once (TTFT 51.8 -> 3.8 s)
       but starves agent prefill; at TraceLab C=8 it gives the best mean TTFT (-8%) yet short appends
-      still wait 2780 vs MTP 1903 ms (its half-step cap excludes 1-4K tool-output appends). Mode 1 is
+      still wait 2780 vs MTP 1903 ms (its half-step cap excludes 1-4K tool-output appends). Deadline reservation is
       the balanced arm.
       **Final, both reps (23:13), all 24 arms clean, every peak = C.** Rep-to-rep spread is 0-2% on
       throughput / ITL and 0-13% on mean TTFT (`confirm_aggregate.py confirm_resv_20261015`). Mean of
       2 reps vs same-queue MTP (tput / mean TTFT / mean ITL / P99 ITL):
-      | point | split 3072 | **EDF + reservation (mode 1)** | EDF + mode 2 |
+      | point | split 3072 | **EDF + deadline reservation** | EDF + short-request reservation |
       |---|---|---|---|
       | TraceLab C=4 | +21 / +37 / -33 / -67% | +26 / -4 / -27 / -68% | +24 / -10 / -24 / -62% |
       | TraceLab C=8 | +33 / +9 / -33 / -79% | +34 / -5 / -31 / -78% | +35 / -17 / -29 / -78% |
       | cohort C=16 agent | +30 / -28 / -37 / -84% | +32 / -28 / -43 / -88% | +13 / -3 / -46 / -86% |
       | cohort C=16 chat | +28 / -37 / -25 / -66% | +30 / -57 / -24 / -73% | +17 / -93 / -9 / -75% |
-      **Verdict vs the bar (>=30% TTFT and ITL, >=10% throughput):** mode 1 clears throughput
+      **Verdict vs the bar (>=30% TTFT and ITL, >=10% throughput):** deadline reservation clears throughput
       (+26..+34%) and P99 ITL (-68..-88%) at every point, mean ITL at TraceLab C=8 and the cohort agent
       tenant, and chat TTFT; it misses mean TTFT on TraceLab (-4 / -5%; cold >=32K prefills are half
       of all TTFT and compute-bound, see above), cohort agent TTFT (-28%), and mean ITL for TraceLab C=4
-      (-27%) and chat (-24%). **The bar is not met on all metrics.** Mode 2 is not promoted: it trades
-      agent throughput and TTFT for chat TTFT. Static split 3072 is dominated by mode 1.
+      (-27%) and chat (-24%). **The bar is not met on all metrics.** Short-request reservation is not promoted: it trades
+      agent throughput and TTFT for chat TTFT. Static split 3072 is dominated by deadline reservation.
     - [ ] **Agent ITL SLO 80 ms (queued after the confirmation):** TraceLab is agent-only and the
       agent tenant's evaluation SLO is 80 ms; EDF + reservation with `ITL_SLO_MS=80`, TraceLab C = 4 /
       8, two reps (`edf_slo80_20261015.sh`). S3 behind it.

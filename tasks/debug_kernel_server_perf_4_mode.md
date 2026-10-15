@@ -400,6 +400,19 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     MTP/static controls in this run. Data [`edf_ratesweep_20261015.csv`](debug_kernel_server_perf/resume_20261012/edf_ratesweep_20261015.csv),
     command `bash edf_ratesweep_20261015.sh` (pod `/dev/shm/w`), analysis
     `drivers/serving/eval_curves.py --root edf_ratesweep_20261015 --slo '{"chat":[2000,50],"codex":[10000,80]}'`.
+  - [x] **Repeats + mix128 (sweep 2, 09:11-10:17; `edf_ratesweep2_20261015.sh`, all arms clean):**
+    mix32 repeats reproduce sweep 1 within ~3-7% for EDF and static, MTP within ~1% at 16/s and ~11%
+    at 12/s. Two-run means, EDF+floor vs MTP: **12/s** chat TTFT -84%, TPOT -62%; agent tput +55%,
+    TPOT -53%, TTFT **-30.9%** (runs -35% / -27%: the borderline metric); **16/s** chat tput +12%,
+    TTFT -99%, TPOT -71%; agent tput +109%, TTFT -89%, TPOT -59%. **mix128 12/s** (overloaded:
+    MTP chat TTFT 89 s): chat tput +47%, TTFT -81%, TPOT -55%, P99 ITL -84%; agent tput +43%,
+    TPOT -50%, TTFT only **-18%**. Agent TTFT is the recurring gap: EDF's TTFT deadline grows with
+    prompt length (+1 s per 5K tokens past 4096), so a 200K agent prompt gets ~40 s vs chat's 2 s
+    and always waits, while the evaluation scores agents against 10 s.
+  - [ ] **Two-tier TTFT SLO in EDF (queued after sweep 2):** prompts >= 16K get the flat agent SLO
+    (10 s), shorter ones the chat SLO (2 s) -- `edf_two_tier_slo.patch` (opt-in
+    `SGLANG_EDF_LONG_PROMPT_TOKENS`), EDF+floor with vs without at mix32 12/s, mix128 12/16/s
+    (`edf_tier_20261015.sh`).
 - [x] **Chunk size: not the lever with the decode guard on (2026-10-12); IS the ITL lever with guard 0 (2026-10-15, supersedes):** chunk 8192/4096/2048 leaves
   both arms unchanged (prefill per step is many ~512-token prompts).
   - **2026-10-15 update (guard 0, split serving kernel):** with long prefills now routed to FA3

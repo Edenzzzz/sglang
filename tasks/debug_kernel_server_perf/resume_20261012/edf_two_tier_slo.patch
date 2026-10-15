@@ -1,0 +1,18 @@
+--- /dev/shm/edf_scheduler.before_tier.py	2026-10-15 10:22:04.669132136 +0800
++++ up_edf_floor/python/sglang/srt/managers/edf_scheduler.py	2026-10-15 10:22:04.683132365 +0800
+@@ -162,6 +162,15 @@
+ 
+     Base TTFT + scaling for longer inputs (Ascendra-style).
+     """
++    # Two-tier SLO (opt-in): when SGLANG_EDF_LONG_PROMPT_TOKENS > 0, prompts at or above it get the
++    # flat SGLANG_EDF_LONG_TTFT_SLO_MS and shorter ones the flat base SLO -- the per-tenant SLOs
++    # the evaluation scores (chat vs agent) instead of a deadline that grows with prompt length,
++    # which pushed every long agent prompt behind all chat (agent TTFT the only missed bar).
++    long_tokens = int(os.environ.get("SGLANG_EDF_LONG_PROMPT_TOKENS", "0"))
++    if long_tokens > 0:
++        if input_len >= long_tokens:
++            return float(os.environ.get("SGLANG_EDF_LONG_TTFT_SLO_MS", "10000"))
++        return TTFT_SLO_MS
+     extra_tokens = max(0, input_len - 4096)
+     extra_ms = (extra_tokens / TTFT_SCALE_TOKENS) * TTFT_SCALE_MS
+     return TTFT_SLO_MS + extra_ms

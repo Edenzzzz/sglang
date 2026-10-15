@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.19.4 — S3 re-queued on request-rate axis behind the concurrency sweep (2026-10-15)
+
+- `s3_standalone_final_20261015.sh` waits for `concurrency_sweep_20261015.sh`; Mooncake points are
+  reported as achieved req/s (timestamp compression, Crossflow's protocol), never session rates.
+
 ## v1.19.3 — Agent load is program concurrency only; EDF load points retracted (2026-10-15)
 
 - Session-start rates (sessions/s) are dropped as a load axis (user): the full-length TraceLab

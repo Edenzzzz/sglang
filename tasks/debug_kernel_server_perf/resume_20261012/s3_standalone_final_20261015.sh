@@ -5,13 +5,15 @@
 # on, YaRN x4 / 131072. The EDF arm uses the split step model fitted on the 32-64K cohort
 # (edf_dynchunk_20261015); short standalone prompts are inside its token range but below its
 # context range. Layout <root>/<workload>_r<point>/<ARM>_main.json for drivers/serving/eval_curves.py.
-# Points: request rate (req/s); Mooncake replays recorded timestamps, point = speed-up 1/slowdown.
-# Queued behind tracelab_full_final_20261015.sh; yields to /dev/shm/w/codex_needs_gpu before every arm.
+# Load axis: request rate (req/s) only -- no session-start rates. Mooncake replays its recorded
+# per-request timestamps compressed by 1/slowdown (Crossflow's protocol); each END line reports the
+# achieved request rate so its point is stated in req/s. Queued behind concurrency_sweep_20261015.sh;
+# yields to /dev/shm/w/codex_needs_gpu before every arm.
 # Claude, 2026-10-15.
 set -uo pipefail
 W=/dev/shm/w
 root=$W/s3_standalone_final_20261015
-until grep -q 'EDF_RATE_EXIT' $W/tracelab_full_final_20261015.log 2>/dev/null; do sleep 60; done
+until grep -q 'CONC_EXIT' $W/concurrency_sweep_20261015.log 2>/dev/null; do sleep 60; done
 exec 9>"$W/a2_kernel.lock"; flock 9
 trap 'printf "S3F_EXIT status=%s time=%s\n" "$?" "$(date -Is)"' EXIT
 if pgrep -f '[s]glang.launch_server|[k]ernel_concurrency_driver|[f]used_reference|[r]un_mixed' >/dev/null; then echo "GPU predecessor"; exit 1; fi
@@ -31,6 +33,7 @@ unset SGLANG_DEBUG_STEP_SYNC DISABLE_CUDA_GRAPH BENCH_CHUNK SGLANG_FUSED_NATIVE_
 unset SGLANG_FUSED_SPLIT_VERIFY SGLANG_FUSED_VERIFY_EPILOGUE SGLANG_FUSED_VERIFY_SNAPSHOT SGLANG_FUSED_DISPATCH
 unset FLASHINFER_FUSED_PLAN_DEBUG SGLANG_STEP_TRACE SGLANG_EDF_SCHEDULING SGLANG_EDF_LATENCY_MODEL SGLANG_EDF_ACCEPT_MODE
 unset FUSED_NOSPLIT FUSED_FA3_UNPACKED FUSED_FA3_CLUSTER_PAIR FUSED_PAGED_TMA_BUILD SERVER_EXTRA_ARGS STREAMS
+unset BENCH_SESSION_CONCURRENCY AGENT_RATE CODEX_RATE
 test -s "$MTP_STEP_MODEL"
 runner=$W/up_edf_floor/tasks/realistic_workload_analysis/run_mixed_workloads.py
 test -f "$runner" || runner=$W/up_racefix/tasks/realistic_workload_analysis/run_mixed_workloads.py
@@ -65,7 +68,7 @@ for wl in "${WORKLOADS[@]}"; do
       ( cd "$(dirname "$runner")" && env ITL_SLO_MS=50 SGLANG_EDF_PREFILL_FLOOR=$floor timeout --kill-after=30 3600 \
           "$W/venv/bin/python" -u "$runner" --scenario standalone_env --methods "$method" --outdir "$out" > "$out/driver_$method.log" 2>&1 )
       rc=$?; L=$out/server_$method.log
-      echo "S3F_END $name r$pt $method rc=$rc $(date -Is) tracebacks=$(grep -c Traceback $L) fallback=$(grep -ci fallback $L) split=[$(grep -o 'FUSED_SPLIT_CALLS [0-9]*' $L | tail -1)] edf_chunk=[$(grep -o 'EDF_RUNTIME_CHUNK calls=[0-9]* requested=[0-9]* admitted=[0-9]* prefill=[0-9]*' $L | tail -1)]"
+      echo "S3F_END $name r$pt $method rc=$rc $(date -Is) tracebacks=$(grep -c Traceback $L) fallback=$(grep -ci fallback $L) split=[$(grep -o 'FUSED_SPLIT_CALLS [0-9]*' $L | tail -1)] edf_chunk=[$(grep -o 'EDF_RUNTIME_CHUNK calls=[0-9]* requested=[0-9]* admitted=[0-9]* prefill=[0-9]*' $L | tail -1)] req_s=[$(grep -h 'Request throughput' $out/bench_${method}_main.log 2>/dev/null | awk '{print $NF}')]"
     done
   done
 done

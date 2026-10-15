@@ -51,6 +51,11 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     0.44/0.31), acceptance differs between arms, and only 16-24 agent requests per arm.
     ([findings](debug_kernel_server_perf/resume_20261012/a3b_split_findings_20261013.md), `a3b_split_serving_20261013.sh`,
     `a3b_split_midrange_20261013.sh`.) My older `a3b_serving_ab_20261013.sh` is superseded.
+  - [ ] **A3 at guard 0, clean A/B (queued 2026-10-15):** the A3b test above compared A3B against
+    DEFAULT with the decode guard ON, and A3B drops the guard, so its gains are not attributable to
+    the fitted thresholds; guard 0 is now the default. Both rules at guard 0 on the split (chunk
+    3072, no EDF): q4 gate per rule, interleaved DEFAULT/A3B x2 on the cohort at C=16 + chat 8 req/s,
+    one pair on TraceLab C=8 (`a3_guard0_20261015.sh`).
 
 - [x] **A4, FA2 verify-row bandwidth (2026-10-13; closed by measurement 2026-10-15):** serving runs
   verify rows on stock FA2 BatchPrefill (63-83% of HBM) inside the two-launch split, and every fused /
@@ -190,7 +195,7 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       on irregular short queries; packed auto retained
       ([unpacked](debug_kernel_server_perf/resume_20261012/fa3_unpacked_20261014.md)).
 
-### [~] B. Fuse draft/verify epilogue ops
+### [x] B. Fuse draft/verify epilogue ops
 
 - [x] **B1, fusion headroom (2026-10-13, measured):** 60 serving steps per arm profiled (torch
   profiler, GPU activity), mix32 chat 16/s + agent 0.1/s, race-fixed tree, no barrier

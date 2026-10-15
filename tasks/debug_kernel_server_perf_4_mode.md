@@ -343,7 +343,12 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     170-200 ms median in all arms but their mean rises 1.1 s (MTP) -> 1.7 s (split) / 3.1 s (EDF):
     head-of-line blocking -- an in-progress chunked prefill takes the whole 2-3K budget every step
     and EDF never ranks waiting requests against it. Fix under test: `edf_reserve_earlier.patch`
-    (`SGLANG_EDF_RESERVE_EARLIER`), A/B `edf_reserve_20261015.sh` queued after the sweep.
+    (`SGLANG_EDF_RESERVE_EARLIER`); its A/B `edf_reserve_20261015.sh` was cancelled at 16:3x as a
+    duplicate of the parallel session's `edf_reserve_ab_20261015.sh` (`edf_reserve_earlier_deadlines.patch`).
+    That variant ranks waiting requests by their enqueue deadline from TOTAL prompt length and fired
+    once in the whole C=4 run (`EDF_RESERVE calls=1`); a cache-hit round of a long session is never
+    earlier than the chunked prompt under that deadline. `edf_reserve_earlier.patch` rescores on
+    uncached work instead -- not yet run.
     **Complete table, % vs MTP** (tput / mean TTFT / median TTFT / TPOT / mean ITL / P99 ITL):
     | point | split static 3072 | split + EDF + floor |
     |---|---|---|

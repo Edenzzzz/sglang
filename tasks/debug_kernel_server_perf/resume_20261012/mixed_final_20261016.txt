@@ -1,0 +1,8 @@
+cohort_c8_chat4 agent: MTP tput=128 ttft=11813 itl=29.3 | EDFP tput=184 ttft=7635 itl=20.1 acc=2.23/2.23 | tput=+44% ttft=-35% tpot=-38% itl=-31% p99itl=-85%
+cohort_c8_chat4 chat: MTP tput=740 ttft=12269 itl=51.8 | EDFP tput=820 ttft=2085 itl=31.4 acc=2.21/2.19 | tput=+11% ttft=-83% tpot=-42% itl=-39% p99itl=-74%
+cohort_c16_chat4 agent: MTP tput=127 ttft=28257 itl=39.1 | EDFP tput=178 ttft=21701 itl=21.1 acc=2.23/2.21 | tput=+40% ttft=-23% tpot=-58% itl=-46% p99itl=-86%
+cohort_c16_chat4 chat: MTP tput=729 ttft=32390 itl=48.3 | EDFP tput=820 ttft=12320 itl=29.3 acc=2.21/2.19 | tput=+12% ttft=-62% tpot=-42% itl=-39% p99itl=-75%
+cohort_c8_chat8 agent: MTP tput=111 ttft=18276 itl=21.7 | EDFP tput=136 ttft=14820 itl=15.6 acc=2.15/2.13 | tput=+22% ttft=-19% tpot=-43% itl=-28% p99itl=-83%
+cohort_c8_chat8 chat: MTP tput=1302 ttft=22799 itl=30.3 | EDFP tput=1560 ttft=9721 itl=25.3 acc=2.15/2.13 | tput=+20% ttft=-57% tpot=-13% itl=-16% p99itl=-73%
+cohort_c16_chat8 agent: MTP tput=107 ttft=43530 itl=27.2 | EDFP tput=136 ttft=31992 itl=17.9 acc=2.14/2.12 | tput=+27% ttft=-27% tpot=-52% itl=-34% p99itl=-81%
+cohort_c16_chat8 chat: MTP tput=1209 ttft=51943 itl=31.3 | EDFP tput=1516 ttft=29005 itl=25.2 acc=2.14/2.12 | tput=+25% ttft=-44% tpot=-20% itl=-19% p99itl=-72%

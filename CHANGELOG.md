@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.0 — Final single-GPU config clears the bar on the mixed workload near capacity (2026-10-16)
+
+- Split + EDF + floor + uncapped chunk preemption (park gate PASS) vs MTP, cohort C=8 + chat 4/s:
+  agent tput +44% / TTFT -35% / ITL -31%, chat tput +11% / TTFT -83% / ITL -39%. Under overload
+  (C=16 or chat 8/s) agent TTFT (-19..-27%) and chat ITL (-16..-19%) miss; P99 ITL -72..-86%.
+
 ## v1.19.11 — Uncapped EDF preemption: TraceLab TTFT -39..-43% vs MTP (2026-10-16)
 
 - Fixed-code preemption, no cap (shortest remaining work first): C=8 TTFT -39/-43%, tput +35%,

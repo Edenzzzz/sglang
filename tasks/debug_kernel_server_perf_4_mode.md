@@ -452,6 +452,25 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     slack 1.96 s) and agrees with the stock MTP_LPT_Q4G reference on long prefix 11 -- the same as stock
     MTP in this order (11, the order-only noise floor; the EDF control without parking: 96); 0
     tracebacks / fallbacks. Parked prefills resume correctly; the preemption serving arms are gated.
+    **Final single-GPU config vs MTP, mixed workload (2026-10-16 06:38-07:27, `mixed_final_20261016.sh`;
+    split + EDF 50 ms + floor 2048 + uncapped preemption; frozen 32-64K cohort at program concurrency C
+    + natural ShareGPT chat; all 8 arms clean, peak = C, parks 20-120; acceptance within 0.02):**
+    | point | tenant | tput | mean TTFT | TPOT | mean ITL | P99 ITL |
+    |---|---|---|---|---|---|---|
+    | C=8, chat 4/s | agent | **+44%** | **-35%** | -38% | **-31%** | -85% |
+    | C=8, chat 4/s | chat | **+11%** | **-83%** | -42% | **-39%** | -74% |
+    | C=16, chat 4/s | agent | +40% | -23% | -58% | -46% | -86% |
+    | C=16, chat 4/s | chat | +12% | -62% | -42% | -39% | -75% |
+    | C=8, chat 8/s | agent | +22% | -19% | -43% | -28% | -83% |
+    | C=8, chat 8/s | chat | +20% | -57% | -13% | -16% | -73% |
+    | C=16, chat 8/s | agent | +27% | -27% | -52% | -34% | -81% |
+    | C=16, chat 8/s | chat | +25% | -44% | -20% | -19% | -72% |
+    **C=8 + chat 4/s clears the bar on every metric for both tenants** (chat throughput is near the
+    offered load). Misses elsewhere: agent mean TTFT at C=16 / chat 8 (-19..-27%; MTP agent TTFT is
+    18-44 s, i.e. overload, where the agent's own prefill backlog dominates) and chat mean ITL / TPOT
+    under chat 8/s overload (-13..-20%). P99 ITL drops 72-86% everywhere. Data
+    [`mixed_final_20261016.txt`](debug_kernel_server_perf/resume_20261012/mixed_final_20261016.txt),
+    table `drivers/serving/mixtab.py mixed_final_20261016` (pod `/dev/shm/w`).
     **Complete table, % vs MTP** (tput / mean TTFT / median TTFT / TPOT / mean ITL / P99 ITL):
     | point | split static 3072 | split + EDF + floor |
     |---|---|---|

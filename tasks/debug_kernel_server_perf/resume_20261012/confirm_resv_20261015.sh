@@ -1,6 +1,8 @@
 #!/bin/bash
 # Confirmation (2026-10-15), queued after edf_floor_resv_20261015.sh: the candidate config (split +
-# EDF 50 ms + floor 2048 + earlier-deadline reservation, tree up_edf_resv) vs MTP and static split
+# EDF 50 ms + floor 2048 + earlier-deadline reservation, tree up_edf_resv; and mode 2, which also
+# reserves for short later-deadline requests, tree up_edf_resv2, edf_reserve_short_mode2.patch -- at
+# TraceLab C=8 mode 1 fired <200 times because long prompts were already past their deadline) vs MTP and static split
 # 3072, all in ONE queue and interleaved twice (rep 1, rep 2), so the verdict does not mix runs: the
 # EDF control repeated 17% apart in mean TTFT across queues. TraceLab C = 4 / 8, cohort C = 16 + chat.
 # Earlier header follows.
@@ -55,17 +57,18 @@ unset AGENT_RATE CODEX_RATE BENCH_MAX_CONCURRENCY
 test -s "$MTP_STEP_MODEL"
 grep -q BENCH_SESSION_CONCURRENCY $PYTHONPATH/sglang/benchmark/session_replay.py
 grep -q EDF_RESERVE_EARLIER_DEADLINES $W/up_edf_resv/python/sglang/srt/managers/scheduler.py
+grep -q EDF_RESERVE_MODE $W/up_edf_resv2/python/sglang/srt/managers/scheduler.py
 test -f $PYTHONPATH/sglang/benchmark/session_concurrency.py
 runner=$W/up_racefix/tasks/realistic_workload_analysis/run_mixed_workloads.py
 sha256sum "$PYTHONPATH/sglang/srt/managers/scheduler.py" "$PYTHONPATH/sglang/srt/managers/edf_scheduler.py" \
   "$PYTHONPATH/sglang/benchmark/session_replay.py" "$PYTHONPATH/sglang/benchmark/session_concurrency.py" \
   "$runner" drivers/kernel_concurrency_driver.py "$MTP_STEP_MODEL" \
-  $W/up_edf_resv/python/sglang/srt/managers/scheduler.py > "$root/sources.sha256"
+  $W/up_edf_resv/python/sglang/srt/managers/scheduler.py $W/up_edf_resv2/python/sglang/srt/managers/scheduler.py > "$root/sources.sha256"
 end_line() {  # tag out method
   local L=$2/server_$3.log
   echo "CONF_END $1 $(date -Is) tracebacks=$(grep -c Traceback $L) fallback=$(grep -ci fallback $L) split=[$(grep -o 'FUSED_SPLIT_CALLS [0-9]*' $L | tail -1)] edf_chunk=[$(grep -o 'EDF_RUNTIME_CHUNK calls=[0-9]* requested=[0-9]* admitted=[0-9]* prefill=[0-9]*' $L | tail -1)] reserve=[$(grep -o 'EDF_RESERVE calls=[0-9]* reserved=[0-9]* budget=[0-9]* total_reserved=[0-9]*' $L | tail -1)] programs=[$(grep -ho '"concurrency_limit": [0-9]*, "sessions": [0-9]*, "rounds": [0-9]*, "peak_active_programs": [0-9]*, "mean_active_programs": [0-9.]*' $2/bench_$3_agent.log | head -1)] inflight=[$(grep -h '^Concurrency:' $2/bench_$3_agent.log | awk '{print $2}')]"
 }
-ARMS=("MTP|up_edf_resv|0|0|MTP_LPT" "SPLIT_C3072|up_edf_resv|0|0|MTPMIX_SPLIT" "EDF_RESV|up_edf_resv|1|2048|MTPMIX_SPLIT_EDFR")
+ARMS=("MTP|up_edf_resv|0|0|MTP_LPT" "SPLIT_C3072|up_edf_resv|0|0|MTPMIX_SPLIT" "EDF_RESV|up_edf_resv|1|2048|MTPMIX_SPLIT_EDFR" "EDF_RESV2|up_edf_resv2|2|2048|MTPMIX_SPLIT_EDFR")
 run_arm() {  # tag out scenario-driver(runner|driver)
   local tag=$1 out=$2 kind=$3 label=$4 tree=$5 resv=$6 C=$7 floor=$8 method=$9
   [ -s $W/codex_needs_gpu ] && { echo "CONF_YIELD $tag"; exit 0; }

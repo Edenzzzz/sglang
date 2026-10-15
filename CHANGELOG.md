@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.19.7 — EDF reservation measured; short-request reservation mode 2 (2026-10-15)
+
+- Earlier-deadline reservation vs same-queue EDF control: mean TTFT -38% (TraceLab C=4), -28% (C=8);
+  short appends -66% / -44%; ITL +13%. Fires rarely at C=8 (long prompts already overdue).
+- `edf_reserve_short_mode2.patch` (`SGLANG_EDF_RESERVE=2`): also reserve for short later-deadline
+  requests; queued in the same-queue confirmation run.
+
 ## v1.19.6 — A4 closed by measurement (2026-10-15)
 
 - Codex's paired native-PDL serving (no uniform gain) and unpacked-query FA3 (<0.6%) complete; with

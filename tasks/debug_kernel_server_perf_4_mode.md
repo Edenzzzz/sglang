@@ -457,6 +457,14 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       sweep's EDF arm in mean TTFT, so cross-queue comparisons are not trusted:
       `confirm_resv_20261015.sh` reruns MTP / split 3072 / EDF + reservation interleaved twice in one
       queue (TraceLab C = 4 / 8, cohort C = 16 + chat 8 req/s) before any verdict; S3 behind it.
+      **TraceLab C = 8 (16:55):** mean TTFT 7961 -> 5759 ms (-28%), short appends 6561 -> 3673 (-44%),
+      ITL 36.6 -> 41.3 ms (+13%), throughput +2%; still above the sweep's MTP for short appends
+      (2179). The reservation fired < 200 times: at C = 8 the long prompts are already past their own
+      deadline, so EDF correctly ranks them first and nothing earlier waits. **Mode 2**
+      (`edf_reserve_short_mode2.patch`, tree `up_edf_resv2`, `SGLANG_EDF_RESERVE=2`) also reserves
+      for later-deadline requests whose whole prefill fits in half the step, and beside a chunked
+      request admits only the reserved ones (an unreserved request ahead would end admission).
+      Not smoke-tested separately; added as a fourth arm of the confirmation run.
     - [ ] **Reservation + lower floor (queued after it):** chat mean ITL misses (-24% at cohort C=16)
       because the 2048 floor binds every step; floor 1024 and 512 with the reservation on, TraceLab
       C = 8 and cohort C = 16 (`edf_floor_resv_20261015.sh`). S3 moved behind it.

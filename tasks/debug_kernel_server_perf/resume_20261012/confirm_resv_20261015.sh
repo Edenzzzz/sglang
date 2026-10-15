@@ -35,6 +35,8 @@ root=$W/confirm_resv_20261015
 until grep -q 'FLRV_EXIT' $W/edf_floor_resv_20261015.log 2>/dev/null; do sleep 60; done
 exec 9>"$W/a2_kernel.lock"; flock 9
 trap 'printf "CONF_EXIT status=%s time=%s\n" "$?" "$(date -Is)"' EXIT
+# A predecessor's server can still be exiting after it releases the lock; wait up to 5 min.
+for _ in $(seq 60); do pgrep -f '[s]glang.launch_server|[k]ernel_concurrency_driver|[f]used_reference|[r]un_mixed' >/dev/null || break; sleep 5; done
 if pgrep -f '[s]glang.launch_server|[k]ernel_concurrency_driver|[f]used_reference|[r]un_mixed' >/dev/null; then echo "GPU predecessor"; exit 1; fi
 mkdir -p "$root"
 cd "$W"

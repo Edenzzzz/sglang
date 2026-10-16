@@ -329,6 +329,25 @@ predictable from the batch's shape**. Two measured results support that, and one
 
 ---
 
+## Multi-node, program concurrency, MTP everywhere (H20, 8 pods x 2 GPUs) — 2026-10-16
+
+The 2026-10-08 runs below drove agents by a session-start rate (an axis since dropped: agent load is
+program concurrency only) and ran stock FA2 without speculation. Re-run on job `1c90eac0a6848b48`
+(trial 432235269, vibecuda, 8x2 H20) after A and B closed: every worker serves EAGLE3 MTP; agents are
+the TraceLab 32-64K cohort (192 sessions x 2 rounds) at program concurrency AGENT_CONC, plus ShareGPT
+chat at CHAT_RATE. Provisioning `tasks/pd_colocation/mn_provision_20261016.sh` (upstream 3fef129 + the
+H200 serving tree's 26-file overlay + port07); driver `tasks/pd_colocation/mn_matrix_20261016.sh`.
+- [x] **C=64 + chat 16 req/s (overloaded: stock chat mean TTFT 43 s, median 95 ms), all requests
+  completed, 0 tracebacks / fallbacks:**
+  | arm | agent tput / TTFT mean, med / TPOT / ITL / P99 ITL | chat tput / TTFT mean, med / TPOT / ITL |
+  |---|---|---|
+  | stock MTP, cache-affinity router | 671 / 21.9 s, 8.0 s / 47.4 / 27.2 / 360 | 3305 / 43.0 s, 95 ms / 15.1 / 13.5 |
+  | **ours** (split + EDF + uncapped preemption, chunk 2048), same router | 767 / 18.0 s, 8.1 s / 29.8 / 21.5 / 149 | 3305 / 26.5 s, 82 ms / 17.3 / 13.8 |
+  Ours vs stock colocation: agent tput +14%, TTFT -18%, TPOT -37%, ITL -21%, P99 ITL -59%; chat
+  TTFT -38%, TPOT +15%, throughput = offered load. Mixed at this overload point; the sglang
+  cache-aware-router arm failed to start (sglang_router 0.3.2 cannot bind `::`; fixed, rerun queued),
+  disagg 2p2d and the lighter point (C=32, chat 8 req/s) are running.
+
 ## Multi-node measurements (H20, 8 pods x 2 GPUs = 16 workers) — 2026-10-08
 
 Setup: merlin job `c2fb3965f36cd15f` (cn-seed, trial vibecuda), 8 pods x 2 H20, one
@@ -676,7 +695,7 @@ arguments; it labels them.
 |---|---|---|---|
 | 1. highest-hit-first with an EDF/SLO veto | yes — radix/prefix cache + router hit lengths; EDF ordering is **measured** on the MTP server (`edf-order-not-cap`) | the EDF *ordering* win, and the linear-in-KV step cost the veto's predictor needs | that routing hit-first **beats** disagg's prefill-first on TTFT: no multi-node run |
 | 2. best-effort cache migration | yes — hier cache + dist cache pool | nothing | the whole replication advantage, incl. the ThunderAgent thrashing comparison |
-| 3. EDF predictor with acceptance length | yes — EWMA of accept length is already tracked | step cost linear in total KV, on one GPU, 4-mode MTP (section 3) | that the predictor is **more accurate than baseline**: the baseline-unfused comparison has never been run |
+| 3. EDF predictor with acceptance length | yes — EWMA of accept length is already tracked | step cost linear in total KV, on one GPU, 4-mode MTP (section 3) | a matched fused/unfused EDFG A/B now runs cleanly, but shows no ITL/throughput advantage and does not establish better predictor accuracy |
 | 4. two-way RDMA, complete vs bipartite graph | partially — transfer paths exist, congestion-aware pull selection does not | nothing | the entire scaling claim; `O(N^2)` vs `O(N_p*N_d)` is topology arithmetic, not a measurement |
 
 So **one** of the four points has supporting measurement (3's cost model, plus 1's EDF
@@ -1136,6 +1155,12 @@ the kernel-side reference list is at the end of `debug_kernel_server_perf_4_mode
 - **Towards High-Goodput LLM Serving with Prefill-decode Multiplexing (MuxWise)** -- Y. Chen,
   W. Cui et al., [arXiv:2504.14489][muxwise] *(sent)* -- note: intra-GPU P/D multiplexing with an
   SLO-aware dispatcher; direct colocation baseline.
+- **Crossflow: Prefill–Decode Elasticity for Agentic LLM Serving** -- Y. Xu et al.,
+  [arXiv:2609.27085v1](https://arxiv.org/abs/2609.27085v1) *(sent)* -- note: direct elastic-P/D
+  baseline for points 1–4, not merely static disaggregation. It retains decode homes and lends
+  bounded local-prefill capacity through leases and SLO feedback; our symmetric placement,
+  replication and network benefits remain hypotheses requiring matched comparison.
+  [Detailed analysis](debug_kernel_server_perf/resume_20261012/crossflow_analysis_20261014.md).
 - **ThunderAgent: A Simple, Fast and Program-Aware Agentic Inference System** -- H. Kang et al.,
   [arXiv:2602.13692][thunder] *(sent)* -- note: KV-cache thrashing in agentic serving; motivates the
   replication argument (point 2).

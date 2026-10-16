@@ -326,6 +326,11 @@ class Router:
     async def health(self, request):
         return web.Response(text="ok")
 
+    async def models(self, request):
+        # bench_serving's ready check polls /v1/models; every worker serves the same model.
+        async with self.session.get(self.workers[0].url + "/v1/models") as r:
+            return web.Response(body=await r.read(), status=r.status, content_type="application/json")
+
     async def start(self, app):
         self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None))
 
@@ -358,6 +363,7 @@ def main():
     app.router.add_post("/generate", r.generate)
     app.router.add_route("*", "/flush_cache", r.broadcast)
     app.router.add_get("/health", r.health)
+    app.router.add_get("/v1/models", r.models)
     web.run_app(app, host="0.0.0.0", port=a.port, access_log=None)
 
 

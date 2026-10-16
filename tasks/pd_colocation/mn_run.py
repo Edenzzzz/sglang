@@ -56,9 +56,7 @@ def urls(hs, roles=None):
     return out
 
 
-KILL = ("for p in $(ps -eo pid,cmd | grep -E 'sglang.launch_server|sglang::|sglang_router|router.py|bench_serving|mn_bench|mooncake_master' "
-        "| grep -v grep | awk '{print $1}'); do kill -9 $p 2>/dev/null; done; sleep 2; "
-        "rm -f ~/.cache/torch_extensions/py312_cu128/fused_fa3/lock; echo killed")
+KILL = f"bash {W}/tasks/pd_colocation/mn_kill.sh"
 
 
 def run_arm(arm):
@@ -139,13 +137,13 @@ def run_arm(arm):
                 f"--policy {pol} --log {log}/router_decisions.jsonl {os.environ.get('ROUTER_ARGS', '')}")
     elif pol == "cache_aware":
         ws = " ".join(u for u, _, _ in all_w)
-        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --worker-urls {ws} --policy cache_aware {lenient} --host :: --port {RPORT}"
+        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --worker-urls {ws} --policy cache_aware {lenient} --host 0.0.0.0 --port {RPORT}"
     else:
         pre = [i for i, m in enumerate(layout) if m == "prefill"]
         dec = [i for i, m in enumerate(layout) if m == "decode"]
         p_args = " ".join(f"--prefill {u} {b}" for u, b, _ in urls(hs, pre))
         d_args = " ".join(f"--decode {u}" for u, _, _ in urls(hs, dec))
-        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --pd-disaggregation {p_args} {d_args} --prefill-policy cache_aware --decode-policy power_of_two {lenient} --host :: --port {RPORT}"
+        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --pd-disaggregation {p_args} {d_args} --prefill-policy cache_aware --decode-policy power_of_two {lenient} --host 0.0.0.0 --port {RPORT}"
     # setsid -f with every fd redirected: a backgrounded "cd && cmd" list keeps a subshell whose
     # stdout is the webshell pipe, which held each launch call open for its 100 s timeout.
     C.run(0, f"ulimit -n $(ulimit -Hn); cd {W} && PYTHONPATH={W}/python setsid -f {rcmd} > {log}/router.log 2>&1 < /dev/null; sleep 8; "

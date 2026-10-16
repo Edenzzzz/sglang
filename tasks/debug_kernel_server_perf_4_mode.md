@@ -769,6 +769,26 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     parks), the same regime as the other short-prompt sets. At C=64 the split gains +5% throughput and -8%
     ITL; EDF arms lose there. Consistent across S3: the 4-mode step pays off only where long-context
     prefill shares the GPU with decode (cohort, TraceLab, Mooncake 2x).
+    - [x] **4-mode context gate (2026-10-16 13:12-14:33, `mixed_gate_ab_20261016.sh`, 12 arms clean):**
+      `SGLANG_MIXED_SPEC_MIN_CTX` (`mixed_spec_ctx_gate.patch`, tree `up_edf_gate` = `up_edf_preempt` +
+      gate): a step mixes its prefill into the verify step only if some prefill row's prefix + chunk >=
+      the gate, else the prefill runs alone as in MTP; `MIXEDSPEC_GATED` counts gated steps. MTP vs
+      EDF + floor + preemption ungated vs gated at 8192 (out tok/s / mean TTFT / mean ITL / P99 ITL):
+      | point | MTP | ungated | gate 8K | gated / mixed steps |
+      |---|---|---|---|---|
+      | WebShop C=16 | 1908 / 47 ms / 7.80 / 29.7 | 1696 / 60 / 8.66 / 36.4 | 1788 / 42 / 8.46 / 43.9 | 1201 / 0 |
+      | ShareGPT 16 req/s | 3058 / 97 / 6.25 / 32.0 | 3078 / 68 / 6.26 / 34.5 | 3070 / **54** / 6.41 / 32.8 | 1601 / 1 |
+      | cohort C=16 agent | 106.8 / 43.3 s / 28.0 / 503 | **137.3 / 31.6 s / 17.6 / 92** | 126.5 / 34.7 s / 19.6 / 104 | 1401 / 1151 |
+      | cohort C=16 chat | 1219 / 51.8 s / 31.4 / 473 | **1528 / 28.4 s / 25.0 / 129** | 1404 / 34.4 s / 28.4 / 142 | |
+      | TraceLab C=8 | 94.8 / 6461 / 58.6 / 1276 | 127.4 / 4214 / 43.8 / 310 | 126.8 / 4089 / 44.3 / 293 | 1 / 1801 |
+      **Not promoted.** On short prompts it removes most of the mixed-step cost (ShareGPT: throughput
+      equal to MTP, TTFT -44%; WebShop: throughput -6% instead of -11%), and TraceLab never gates.
+      But on the overloaded cohort, gating the chat-only prefill steps stalls decode during them:
+      agent throughput -8%, chat ITL 25.0 -> 28.4 ms vs ungated. Prompt length is the wrong signal --
+      mixing pays when the server is loaded and costs at moderate load; a load-based gate (queue depth /
+      running count) is the next candidate. Ungated EDF + preemption vs MTP on these runs: TraceLab C=8
+      tput +34%, TTFT -35%, ITL -25%, P99 ITL -76%; cohort agent +29% / -27% / -37%, chat +25% / -45% /
+      -20%.
 
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
   (goal point 3); earlier fits used the RoPE-corrupted model and are void (incl. the uncommitted

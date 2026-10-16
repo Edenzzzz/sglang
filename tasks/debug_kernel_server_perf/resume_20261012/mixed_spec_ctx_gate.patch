@@ -1,0 +1,35 @@
+--- up_edf_preempt/python/sglang/srt/managers/scheduler.py	2026-10-16 04:05:58.539499234 +0800
++++ up_edf_gate/python/sglang/srt/managers/scheduler.py	2026-10-16 13:11:18.959725021 +0800
+@@ -382,6 +382,9 @@
+ 
+ logger = logging.getLogger(__name__)
+ 
++# Minimum prefill context (prefix + chunk) for the 4-mode mixed step; 0 mixes every step.
++MIXED_SPEC_MIN_CTX = int(os.environ.get("SGLANG_MIXED_SPEC_MIN_CTX", "0"))
++
+ 
+ def _prewarm_hccl_group(device, group, device_module):
+     warmup_tensor = torch.zeros(1, dtype=torch.int32, device=device)
+@@ -4375,6 +4378,22 @@
+                 new_batch.input_embeds is None,
+                 all(r.beam_group is None for r in running_batch.reqs),
+             )
++        # Context gate for the 4-mode step: co-scheduling a prefill chunk with the verify rows pays
++        # off only when the prefill carries long-context attention; on short prompts the mixed step
++        # only lengthens every decode step. Below SGLANG_MIXED_SPEC_MIN_CTX (longest prefix + chunk
++        # among this batch's prefill rows) the prefill runs as its own step, as in stock MTP.
++        if (
++            MIXED_SPEC_MIN_CTX > 0
++            and os.environ.get("SGLANG_MIXED_SPEC") == "1"
++            and not running_batch.is_empty()
++            and max((r.extend_end or 0 for r in new_batch.reqs), default=0)
++            < MIXED_SPEC_MIN_CTX
++        ):
++            self.mixed_spec_gated = getattr(self, "mixed_spec_gated", 0) + 1
++            if self.mixed_spec_gated % 200 == 1:
++                logger.info("MIXEDSPEC_GATED %d", self.mixed_spec_gated)
++            new_batch.decoding_reqs = None
++            return new_batch, running_batch
+         if (
+             os.environ.get("SGLANG_MIXED_SPEC") == "1"
+             and self.is_mixed_chunk

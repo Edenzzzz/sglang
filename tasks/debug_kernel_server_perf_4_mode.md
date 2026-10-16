@@ -693,6 +693,19 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     `s3_standalone_final_20261015`; yields to `codex_needs_gpu`). Replaces the never-run
     2026-10-13 arms. Re-queued 13:1x behind `concurrency_sweep_20261015.sh`; load axis is request
     rate only (Mooncake: recorded per-request timestamps compressed, achieved req/s reported).
+    **ShareGPT (2026-10-16 07:27-08:08, 12 arms clean):** req/s achieved / out tok/s / mean TTFT /
+    mean ITL / P99 ITL, acceptance 2.04-2.09 in every arm:
+    | rate | MTP | split 3072 | split + EDF + floor |
+    |---|---|---|---|
+    | 4 | 3.99 / 847 / 43 ms / 4.17 / 13.5 | 3.99 / 847 / 49 / 4.16 / 15.8 | 3.99 / 847 / 48 / 4.16 / 16.9 |
+    | 8 | 7.99 / 1633 / 48 / 4.68 / 18.5 | 7.99 / 1634 / 55 / 4.76 / 24.9 | 8.00 / 1635 / 57 / 4.80 / 25.0 |
+    | 16 | 15.01 / 3074 / 95 / 6.18 / 31.2 | 15.02 / 3077 / 72 / 6.20 / 33.9 | 14.93 / 3059 / 76 / 6.21 / 34.0 |
+    | 32 | 24.03 / 5049 / 17.3 s / 9.10 / 44.1 | 24.73 / 5198 / 14.7 s / 8.75 / 47.3 | 22.92 / 4818 / 20.2 s / 9.47 / 43.9 |
+    **No gain on short-prompt ShareGPT:** below capacity all arms are equal within a few ms (the split
+    adds ~6 ms TTFT and some P99 ITL); at saturation (32/s) the split gives +3% throughput and -15%
+    TTFT, while EDF + floor loses (-5% throughput, +16% TTFT: the 2048 floor and 50 ms budget throttle
+    prefill when every request is short). The 4-mode gains are specific to long-context mixing
+    (agent / TraceLab / mixtures), as the B1 and step-trace evidence predicts. Other workloads running.
 
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
   (goal point 3); earlier fits used the RoPE-corrupted model and are void (incl. the uncommitted

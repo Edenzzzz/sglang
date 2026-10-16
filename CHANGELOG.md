@@ -10,6 +10,9 @@
   of stock PD-disagg requests) are excluded from tok/s/user; spec-count sums tolerate `None`. Figures and
   CSVs force-added (`*.csv` / `*.png` are gitignored; the previous commit linked missing files).
 - `tasks/pd_colocation/mn_sweep_figure.py`: the H20 chat-rate sweep -> eval_curves layout -> figure.
+- `mn_node.sh`: claims a torch.distributed port and passes `--nccl-port` (sglang's default http port +
+  randint(100, 1000) landed on other workers' claimed ports and hung init); the supervisor restarts a worker
+  whose "Init parallel" has not ended after ~60 s instead of 360 s.
 - PD doc: 8-GPU C=32 our-router rows rerun with the fixed router; old rows retracted (router-capped).
   Ours vs stock colocation at C=32: agent +19% throughput, -4% TTFT, -23% ITL; chat +13% throughput, -65% TTFT.
 

@@ -78,8 +78,12 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   local g=$1
   PORT=$(pick $((ROLE * 2 + g + RANDOM)))
   BOOT=$(pick $((ROLE * 2 + g + 7919 + RANDOM)))
+  # torch.distributed port, claimed like the others: unset, sglang takes http port + randint(100, 1000),
+  # which lands on the 50-port grid other workers on the host claim; the worker then hung at
+  # "Init parallel begin." until the supervisor killed it (pod 2 GPU 0: 3 x 6 min, 2026-10-16).
+  NCCL=$(pick $((ROLE * 2 + g + 104729 + RANDOM)))
   ARGS=(--model $W/qwen7b --attention-backend flashinfer --mem-fraction-static 0.85
-        --host :: --port $PORT --context-length 131072 --watchdog-timeout 600
+        --host :: --port $PORT --nccl-port $NCCL --context-length 131072 --watchdog-timeout 600
         --json-model-override-args '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}')
   # Shared L3 prefix cache (goal points 2 and 4): every colocated worker writes the prefixes it
   # computes through to a cluster-wide mooncake store (RDMA, host DRAM) and prefetches a request's
@@ -154,6 +158,9 @@ supervise() {
     for t in $(seq 1 90); do
       sleep 4
       grep -q "address already in use" $LOG/worker_r${ROLE}_g${g}.log && break
+      # Distributed init takes < 1 s when healthy; still waiting after ~60 s means a port clash.
+      [ $t -ge 15 ] && grep -q "Init parallel begin" $LOG/worker_r${ROLE}_g${g}.log \
+        && ! grep -q "Init parallel ends" $LOG/worker_r${ROLE}_g${g}.log && break
       grep -q "fired up" $LOG/worker_r${ROLE}_g${g}.log && return 0
     done
     grep -q "fired up" $LOG/worker_r${ROLE}_g${g}.log && return 0

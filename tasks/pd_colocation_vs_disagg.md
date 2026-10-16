@@ -121,6 +121,57 @@ static mixture.
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex
       P99 ITL -27%. Full stack vs stock MTP: TTFT -95%/-51%, ITL -42%/-38% (chat/codex, 24/s, 3 rounds).
+- [ ] **7. Inter-node routing: predict whether a request meets its TTFT and ITL SLO on node i, given
+      i's estimated hit length x_i and current load** (added 2026-10-17 on the user's request; needs
+      more design thinking before more code). This is the decision behind point 1's veto: when the
+      highest-hit node is too hot, route to the highest-hit node predicted to still meet the SLO.
+      **Current predictor** (`router.py` `predict()` / `feasible()`, policy `cache_slo`; router-side
+      bookkeeping only, no worker query):
+      `TTFT_i = (Σ prefill_left of in-flight requests on i with deadline <= this one + n - x_i) / prefill_tok_s`;
+      `TPOT_i = grid(running_i + 1, mean ctx incl. this prompt) / acceptance EWMA_i`; feasible iff both
+      meet the SLO and no later-deadline request queued on i is pushed past its own deadline.
+      **Known errors, by sign:**
+      - pessimistic: the global KV pool (HiCache + mooncake L3) pulls the missing prefix
+        best-effort while the request waits in the queue, so the effective hit at start is
+        `x_i + min(x_pool - x_i, W_i * B_src / bytes_per_token)`, not `x_i`. Scale on H20 / Qwen-7B:
+        a 32K prefix is ~1.8 GB of KV, ~0.1 s at ~20 GB/s RDMA, vs ~6 s to recompute at 5K tok/s.
+        With multi-second queue waits the pull almost always finishes, so ignoring it overstates a
+        non-holder's TTFT by up to the whole recompute time. (Exact only with the pool off, as in
+        every H20 run so far.)
+      - optimistic: one blended prefill rate (5 012 tok/s); calibrated 8.3K tok/s at 4K falling to
+        4.4K at 48K (`/tmp/h20/mn_slo_calibrate.log`), so the longest agent prefills -- the ones that
+        decide agent TTFT -- are under-predicted.
+      - optimistic: decode interference -- colocated steps mix <= 2048-token chunks with decode rows
+        (4-mode), so prefill drains slower when many rows decode; ignored.
+      - optimistic: future earlier-deadline arrivals preempt the queue under EDF (and chunk parking),
+        so the current queue is a lower bound on the work ahead.
+      - optimistic: x_i is the router's hash estimate; the worker may have evicted those blocks.
+      **Open design questions:**
+      - target: a calibrated (unbiased) prediction plus an explicit margin, or a quantile (e.g. P90)
+        prediction? The cost is asymmetric -- a false veto loses the hit (recompute elsewhere,
+        cache replication as a side effect), a false accept misses an SLO.
+      - queue drain as a sum of fitted step times (`fit_mtp_step.py`: chunk tokens, prefix ctx,
+        decode rows, decode KV, acceptance) over ceil(ahead / chunk) steps -- point 3's claim that the
+        fused/split kernel is easy to model is tested here.
+      - arrival-aware wait: add the expected earlier-deadline work arriving during the wait (rate x
+        work of tight-deadline classes, e.g. chat).
+      - transfer term: source bandwidth from an EWMA of observed pulls per source (no router query);
+        sglang's prefetch policies (best_effort / wait_complete / timeout) change what "best effort"
+        guarantees; source eviction during the wait; host-to-device copy contention.
+      - ITL over the request's lifetime, not one step: resident rows finish and others arrive; the
+        ITL SLO applies to every resident row, and all share one step time.
+      - staleness: router-side bookkeeping only sees first-token and finish events; piggybacking
+        worker queue state on response headers is cheaper than a per-decision query.
+      - interaction with point 2 (routing to a non-holder IS replication) and point 4 (which holder to
+        pull from).
+      **Sub-items:**
+      - [ ] measure the current predictor's error: router-logged `ttft_pred` vs measured TTFT per
+            request, bucketed by load and prompt length (data: `mn_slo_veto_8gpu_20261017.sh`)
+      - [ ] step-model queue drain (with decode interference) replacing the constant prefill rate
+      - [ ] transfer-aware effective hit; requires an arm with the L3 pool on
+      - [ ] margin / quantile choice set from the measured error distribution
+      - [ ] A/B: cache affinity | current veto | + step model | + transfer term | + margin, on
+            goodput / SLO attainment at the 8-GPU H20 points (agent C=16/32, chat 8 req/s)
 - [ ] **5. THE SUPERSET CLAIM: adapt to any workload the baselines are each tuned for.**
       Added 2026-10-09 on the user's correction; **this is the capacity/throughput axis and
       nothing measured so far tests it.**

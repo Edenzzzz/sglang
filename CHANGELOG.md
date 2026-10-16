@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.4 — PD doc: inter-node SLO-feasibility prediction as a major open item (2026-10-17)
+
+- `pd_colocation_vs_disagg.md` item 7: predicting TTFT/ITL on a node from its hit length and load for
+  the routing veto -- current predictor, its errors by sign (best-effort KV pull pessimistic; blended
+  prefill rate, decode interference, future arrivals, stale hits optimistic), open design questions,
+  sub-items.
+
 ## v1.20.3 — H20 8-GPU chat request-rate sweep at reference-list rates (2026-10-16)
 
 - 1 / 2 / 4 / 8 chat req/s per GPU at agent C=16, stock coloc | ours | stock PD disagg, with the throughput vs

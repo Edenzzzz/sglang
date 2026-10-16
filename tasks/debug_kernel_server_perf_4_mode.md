@@ -747,6 +747,13 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     1 req/s arms were killed). The references set load around measured capacity -- Crossflow by request
     rate (timestamp compression), ThunderAgent by concurrency; a long-document set without timestamps
     belongs on program concurrency (documents in flight), not req/s.
+    **Scope (user, 2026-10-16):** S3 is ShareGPT, math reasoning (GSM8K, MATH-500), coding (HumanEval,
+    Code-Feedback) and agentic web browsing only; LongBench and Mooncake leave S3 (the Mooncake rows above
+    stay as recorded). **Web browsing (running since 12:26):** THUDM/AgentInstruct WebShop, 351 multi-turn
+    trajectories (4-10 turns, mean 4.7), converted by `drivers/serving/prep_webshop_agentic.py` and replayed
+    round by round with the server's own replies (`sglang-oai-chat`, 64 output tokens per turn); load is
+    program concurrency C = 8 / 16 / 32 / 64. Arms MTP | split 3072 | EDF + floor | EDF + floor + chunk
+    preemption, tree `up_edf_preempt` (`s3_webshop_agentic_20261016.sh`, runner `run_agentic_standalone.py`).
 
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
   (goal point 3); earlier fits used the RoPE-corrupted model and are void (incl. the uncommitted

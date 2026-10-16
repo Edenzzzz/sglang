@@ -749,11 +749,26 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     belongs on program concurrency (documents in flight), not req/s.
     **Scope (user, 2026-10-16):** S3 is ShareGPT, math reasoning (GSM8K, MATH-500), coding (HumanEval,
     Code-Feedback) and agentic web browsing only; LongBench and Mooncake leave S3 (the Mooncake rows above
-    stay as recorded). **Web browsing (running since 12:26):** THUDM/AgentInstruct WebShop, 351 multi-turn
+    stay as recorded). **Web browsing (12:26-12:59):** THUDM/AgentInstruct WebShop, 351 multi-turn
     trajectories (4-10 turns, mean 4.7), converted by `drivers/serving/prep_webshop_agentic.py` and replayed
     round by round with the server's own replies (`sglang-oai-chat`, 64 output tokens per turn); load is
     program concurrency C = 8 / 16 / 32 / 64. Arms MTP | split 3072 | EDF + floor | EDF + floor + chunk
     preemption, tree `up_edf_preempt` (`s3_webshop_agentic_20261016.sh`, runner `run_agentic_standalone.py`).
+    **WebShop done (12:26-12:59, 16 arms, 0 tracebacks / fallbacks, 0 parks; acceptance 1.78 in every
+    arm).** Every arm completes all 1642 turns of the 351 conversations; rc=1 is only the runner's
+    "requests == conversations" check (the bench counts turns). Out tok/s / mean TTFT ms / P99 TTFT /
+    mean ITL / P99 ITL:
+    | C | MTP | split 3072 | EDF + floor | EDF + preempt |
+    |---|---|---|---|---|
+    | 8 | 1246 / 40 / 70 / 5.93 / 24.9 | 1162 / 47 / 82 / 6.29 / 30.9 | 1156 / 48 / 86 / 6.31 / 31.5 | 1158 / 48 / 83 / 6.29 / 31.5 |
+    | 16 | 1916 / 47 / 92 / 7.77 / 29.4 | 1732 / 59 / 120 / 8.50 / 36.0 | 1724 / 61 / 112 / 8.49 / 36.3 | 1714 / 60 / 105 / 8.57 / 36.3 |
+    | 32 | 2577 / 61 / 201 / 11.4 / 41.5 | 2324 / 83 / 235 / 12.4 / 47.4 | 2390 / 81 / 328 / 12.1 / 46.9 | 2383 / 82 / 273 / 12.1 / 47.4 |
+    | 64 | 2995 / 375 / 736 / 14.8 / 60.5 | 3148 / 380 / 821 / 13.6 / 64.0 | 2765 / 432 / 888 / 15.7 / 60.7 | 2697 / 447 / 908 / 16.0 / 64.4 |
+    **Web browsing loses on one GPU at C <= 32:** throughput -7..-10%, TTFT +18..+36%, ITL +6..+9% for
+    every 4-mode arm -- WebShop observations are short (no long prefill to co-schedule; preemption never
+    parks), the same regime as the other short-prompt sets. At C=64 the split gains +5% throughput and -8%
+    ITL; EDF arms lose there. Consistent across S3: the 4-mode step pays off only where long-context
+    prefill shares the GPU with decode (cohort, TraceLab, Mooncake 2x).
 
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
   (goal point 3); earlier fits used the RoPE-corrupted model and are void (incl. the uncommitted

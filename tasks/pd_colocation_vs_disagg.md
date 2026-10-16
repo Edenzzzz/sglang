@@ -203,9 +203,15 @@ static mixture.
             the workers should wait for the pull (`timeout` / `wait_complete`) and the router should
             predict the same. Without a pool the prefix costs a full recompute, so the veto is neutral
             at C=16 (above) and wins at C=32 only by spreading decode load.
-      - [~] **Timeout-prefetch A/B (2026-10-17, `mn_pool_timeout_8gpu_20261017.sh`, running; rep 1 done):**
-            cache 359 tok/s / 7.36 s / 18.1 ms agent, chat 368 ms (P99 9.8 s); veto + transfer 343 / 7.84 s /
-            19.2, chat 177 ms (P99 1.75 s). **The transfer term still cannot fire on this workload, for a
+      - [x] **Timeout-prefetch A/B (2026-10-17, `bash tasks/pd_colocation/mn_pool_timeout_8gpu_20261017.sh`,
+            interleaved x2).** Agent tok/s / mean TTFT, chat mean TTFT (P99):
+            | arm | rep 1 | rep 2 |
+            |---|---|---|
+            | cache | 359 / 7.36 s, 368 ms (9.8 s) | 366 / 7.37 s, 376 ms (8.2 s) |
+            | veto + transfer | 343 / 7.84 s, 177 ms (1.75 s) | 354 / 8.01 s, 400 ms (12.8 s) |
+            Cache affinity repeats within ~2%; the veto's chat tail does not (P99 1.75 vs 12.8 s). Two-rep
+            means: veto agent throughput -4%, agent TTFT +8%, chat TTFT -22% -- **at C=16 on this mix the
+            veto's chat gain is inside the noise and it costs the agent ~8% TTFT.** **The transfer term still cannot fire on this workload, for a
             reason the policy does not change:** all 27 agent requests the veto moved were first rounds with
             local hit 0 and pool hit 0 (cold prompts, nothing to pull); a second round's prefix sits on its
             holder and is rarely vetoed; 1 of 99 agent decisions predicted any pull. TraceLab sessions share

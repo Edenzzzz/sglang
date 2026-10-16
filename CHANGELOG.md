@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.12 — Resident ITL check measured: chat ITL -32% over the plain SLO check, agent TTFT +26% (2026-10-17)
+
+- 8 H20, hot 4 x 16K shared-prefix chat + agent C=16, x2, clean grid and cache fallback: SLO check + resident ITL
+  check vs cache affinity -- chat ITL -58% (P99 -33%), TTFT -88%, throughput +17%; agent TTFT +32%, throughput -23%.
+  Over the plain SLO check: chat ITL -32%, agent TTFT +26%. 0 tracebacks / 0 fallbacks.
+
 ## v1.20.11 — Router SLO check on the clean grid decides; resident-ITL charge measured as an overlap (2026-10-17)
 
 - Clean-grid hot-mix A/B (rep 1): the SLO check now decides most routes (no feasible node 14%, was 45-63%) and keeps

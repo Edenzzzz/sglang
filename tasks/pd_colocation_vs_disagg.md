@@ -301,12 +301,32 @@ static mixture.
             `--prefill-tok-s 5021 --prefill-curve 4096:491.8,8192:1014.1,16384:2358.4,32768:6072.7,49152:11148.2
             --decode-grid /dev/shm/w/mn/decode_grid.json`. Both A/Bs requeued on it
             (`mn_resident_itl_8gpu_20261017.sh`, then `mn_overload_fallback_8gpu_20261017.sh`). Old grid kept as `/dev/shm/w/mn/decode_grid_prefillmixed_20261017.json` (pod 0).
-      - [ ] **Protect requests already decoding on the target node (user, 2026-10-17).** The check
+      - [x] **Resident ITL check, measured (2026-10-17 06:1x-07:3x; `bash tasks/pd_colocation/mn_resident_itl_8gpu_20261017.sh`;
+            hot mix 4 x 16K shared-prefix chat at 16 req/s + agent C=16, pool on, timeout prefetch,
+            `HC_WRITE=write_through`, clean grid, `--chunk-interference 1.124`, `--no-feasible-fallback cache`
+            in both SLO-check arms; interleaved x2; all 6 arms 8 workers 0 tracebacks / 0 fallbacks, prefill
+            hit 92.6-93.2%).** Two-rep means, out tok/s / mean TTFT / mean ITL (chat P99 ITL):
+            | arm | agent | chat | requests / worker |
+            |---|---|---|---|
+            | cache affinity | 236 / 10.1 s / 29.4 | 1729 / 15.2 s / 83.5 (457) | 19-807 |
+            | SLO check | 208 / 10.6 s / 36.7 | 2015 / 1.69 s / 51.9 (406) | 23-572 |
+            | **SLO check + resident ITL check** | 182 / 13.3 s / 36.6 | **2016 / 1.78 s / 35.3 (308)** | 19-632 |
+            Reps agree within ~10% (chat ITL 33.3 / 37.3 ms, agent TTFT 13.3 / 13.4 s). **The resident check
+            cuts chat ITL a further -32% (P99 -24%) over the plain SLO check -- -58% (P99 -33%) vs cache
+            affinity -- at chat TTFT -88% and throughput +17% vs cache affinity.** It costs the agent: TTFT
+            +26% over the plain check (+32% vs cache affinity), throughput -13% (-23%); agent ITL is unchanged
+            (36.6 vs 36.7 ms). It rejected 1 544 nodes in rep 1 and doubled the moved requests (893 -> 1 773),
+            with no feasible node on 19-23% of decisions (sent to the top-hit node). Reading: the check
+            protects the requests that are decoding when a prefill arrives -- mostly chat here -- by delaying
+            or relocating the agent's long prefills; it cannot help the agent's own ITL, which is set by the
+            chat prefills the agent decodes beside. The ITL SLO is one value (`--itl-slo-ms 100`) for both
+            tenants; per-tenant SLOs are the next lever.
+      - [x] **Protect requests already decoding on the target node (user, 2026-10-17).** The check
             covered this request's TTFT and ITL and the TTFT deadlines of requests still queued on the
             node, but not the ITL of requests already decoding there -- and admission costs them twice:
             the new request's prefill chunks ride in their decode steps until its prefill ends, then it
             decodes beside them. The hot-prefix A/B shows the cost: moving chat raised agent ITL +16%.
-            **Implemented (`router.py --check-residents`, not yet measured):** reject the node if any
+            **Implemented (`router.py --check-residents`; measured above):** reject the node if any
             resident's predicted mean ITL -- decode time spent so far + its remaining steps at the step
             time with the new request + one prefill chunk (`--chunk-tokens`, prefill-curve cost) per
             step while the new request's prefill runs -- exceeds its ITL SLO. Each decision logs which

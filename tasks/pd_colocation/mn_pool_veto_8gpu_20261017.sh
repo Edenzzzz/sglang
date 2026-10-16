@@ -4,13 +4,12 @@
 # Agent C=16, chat 8 req/s, final single-GPU stack on every worker. Arms (all pool on):
 #   coloc_cache_edf_mtp_hc   cache affinity only
 #   coloc_slo_edf_mtp_hc     veto, router ignores the pool (no transfer term)
-#   coloc_slo_edf_mtp_hc     veto + transfer term (--pool-kv-tokens = 8 workers x 32 GB / 57 344 B per token)
+#   coloc_slo_edf_mtp_hc     veto + transfer term (--pool-kv-tokens = 8 workers x 24 GB / 57 344 B per token)
 # Router logs ttft_pred / ttft_obs / pull_pred per request for the predictor-error analysis.
 # Waits for mn_slo_veto_8gpu_20261017.sh (same pods; reuses its calibration). Claude.
 set -u
 export PATH=$HOME/.merlin-cli/bin:$PATH
 cd "$(dirname "$0")"
-until grep -q SLO_VETO_DONE /tmp/h20/mn_slo_veto.log; do sleep 30; done
 # The transfer-aware router.py is pushed only now, so the veto experiment above ran one router throughout.
 python3 - <<'PY'
 import base64
@@ -26,5 +25,5 @@ export KERNEL=mtpsplit PREEMPT=1 CHUNK=2048
 export AGENT_CONC=16 SESSIONS=48 CHAT_RATE=8 CHAT_N=2400
 RUN_TAG=_8g_pool_c16_r8 python3 -u mn_run.py coloc_cache_edf_mtp_hc
 RUN_TAG=_8g_pool_c16_r8_notransfer ROUTER_ARGS="$RA" python3 -u mn_run.py coloc_slo_edf_mtp_hc
-RUN_TAG=_8g_pool_c16_r8_transfer ROUTER_ARGS="$RA --pool-kv-tokens 4468000" python3 -u mn_run.py coloc_slo_edf_mtp_hc
+RUN_TAG=_8g_pool_c16_r8_transfer ROUTER_ARGS="$RA --pool-kv-tokens 3348000" python3 -u mn_run.py coloc_slo_edf_mtp_hc
 echo POOL_VETO_DONE

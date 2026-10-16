@@ -289,6 +289,14 @@ static mixture.
             once it decodes -- those already decoding plus those queued ahead of it (earlier deadline) -- e.g.
             10 decoding + 40 queued behind now predicts 44.8 ms instead of ~210 ms. The resident-ITL A/B was
             stopped after rep 1 and rerun on the fixed router with a cache-affinity control.
+            **Second cause, in the calibration itself (04:3x):** with the row count fixed, own-ITL still
+            rejected ~11K nodes and 45% of decisions had no feasible node. `calibrate_h20.py` timed decode
+            on the FIRST pass of N concurrent requests, so the other requests' prefill chunks ran inside the
+            timed steps (32 x 16K = 512K prefill tokens at ~5K tok/s): the grid read 210 ms at 32 x 16K
+            where serving measured 35-84 ms at similar rows and context. This is the "15x knee" the script's
+            comment left unexplained -- not a capacity effect. Fixed: prefill every prompt first (1 output
+            token), then time a second, fully cached pass. Recalibrating; both A/Bs stopped and requeued on
+            the new grid. Old grid kept as `/dev/shm/w/mn/decode_grid_prefillmixed_20261017.json` (pod 0).
       - [ ] **Protect requests already decoding on the target node (user, 2026-10-17).** The check
             covered this request's TTFT and ITL and the TTFT deadlines of requests still queued on the
             node, but not the ITL of requests already decoding there -- and admission costs them twice:

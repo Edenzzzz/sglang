@@ -7,6 +7,8 @@
   35-59 ms measured), so ~15K node rejections per hot-mix run came from an inflated own-ITL and 56-63% of decisions
   had no feasible node: earlier SLO-check results mostly measured the most-slack fallback (doc corrected in place).
   Resident-ITL A/B rerun on the fixed router with a cache-affinity control.
+- `calibrate_h20.py`: decode ITL timed on a second, fully cached pass; the first pass put the other requests'
+  prefill chunks inside the timed steps (210 ms at 32 x 16K vs 35-84 ms in serving) -- the grid's unexplained knee.
 
 ## v1.20.9 — SLO check protects requests already decoding on the target node; "veto" wording removed (2026-10-17)
 

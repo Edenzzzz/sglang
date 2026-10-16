@@ -45,17 +45,26 @@ for n in (4096, 8192, 16384, 32768, 49152):
 dec = []
 for ctx in (256, 4096, 16384):
     for conc in (1, 8, 32, 64):
-        def one(_):
-            _, ts = gen([rng.randrange(1000, 30000) for _ in range(ctx)], 192, True)
+        # Prefill every prompt first, then time a second, fully cached pass of the same prompts. Timing
+        # the first pass (all conc requests submitted at once) put the other requests' prefill chunks
+        # inside the decode steps: 32 x 16K = 512K prefill tokens at ~5K tok/s, so the "decode" grid
+        # read 210 ms at 32 x 16K where serving measured 35-84 ms at similar rows and context. That was
+        # the unexplained knee noted below.
+        prompts = [[rng.randrange(1000, 30000) for _ in range(ctx)] for _ in range(conc)]
+        with cf.ThreadPoolExecutor(conc) as ex:
+            list(ex.map(lambda p: gen(p, 1, False), prompts))
+
+        def one(p):
+            _, ts = gen(p, 192, True)
             return [(b - a) * 1000 for a, b in zip(ts, ts[1:])]
         with cf.ThreadPoolExecutor(conc) as ex:
-            itls = [x for lst in ex.map(one, range(conc)) for x in lst[20:]]
+            itls = [x for lst in ex.map(one, prompts) for x in lst[20:]]
         m = sum(itls) / max(1, len(itls))
         dec.append((ctx, conc, m))
         print(f"decode ctx {ctx:6d} conc {conc:3d}: mean ITL {m:6.2f} ms", flush=True)
 
 # Emit the measured grid for the router to interpolate. No parametric fit: on H20 the surface has
-# a knee no closed form matched (2026-10-08). ITL is flat to ~131K total resident tokens (9.1 ms at
+# a knee no closed form matched (2026-10-08) -- measured with prefill inside the timed steps, see above. ITL is flat to ~131K total resident tokens (9.1 ms at
 # 32x4K, 8.3 ms at 8x16K) and then jumps 15x by 524K (136.6 ms at 32x16K) -- too steep for a
 # bandwidth bound (29 GB per step would be ~7 ms at HBM speed), so it is a capacity effect
 # (eviction/retraction or an attention-backend path change) that still needs a root cause.

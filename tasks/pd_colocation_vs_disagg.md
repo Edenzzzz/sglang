@@ -203,6 +203,17 @@ static mixture.
             the workers should wait for the pull (`timeout` / `wait_complete`) and the router should
             predict the same. Without a pool the prefix costs a full recompute, so the veto is neutral
             at C=16 (above) and wins at C=32 only by spreading decode load.
+      - [~] **Timeout-prefetch A/B (2026-10-17, `mn_pool_timeout_8gpu_20261017.sh`, running; rep 1 done):**
+            cache 359 tok/s / 7.36 s / 18.1 ms agent, chat 368 ms (P99 9.8 s); veto + transfer 343 / 7.84 s /
+            19.2, chat 177 ms (P99 1.75 s). **The transfer term still cannot fire on this workload, for a
+            reason the policy does not change:** all 27 agent requests the veto moved were first rounds with
+            local hit 0 and pool hit 0 (cold prompts, nothing to pull); a second round's prefix sits on its
+            holder and is rarely vetoed; 1 of 99 agent decisions predicted any pull. TraceLab sessions share
+            no prefix across sessions, so with 2 rounds there is no request that is both moved and
+            transferable. Testing it needs hot shared prefixes on overloaded holders: queued
+            `mn_hot_transfer_8gpu_20261017.sh` (HOT=1, 4 x 16K shared system prompts at 16 req/s; cache |
+            veto ignoring the pool | veto + transfer, x2). The cold moved requests also show the
+            predictor's spread: 8.9 s predicted vs 0.7 s measured, 10.7 s vs 37.9 s.
       - [x] **Predictor error (same runs, `ttft_obs` vs `ttft_pred`):** predicted / measured median 0.64
             (chat) and 0.72-0.73 (agent) -- about 30% optimistic, as the error list expected (blended
             prefill rate, decode interference, future arrivals). Agent error p10 / p90 -6.4..-7.7 s /

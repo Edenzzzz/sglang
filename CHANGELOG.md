@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.20.0 — S3 complete in scope; load + context gate for the 4-mode step (2026-10-16)
+
+- S3 standalone (ShareGPT, GSM8K, MATH-500, HumanEval, Code-Feedback, WebShop agentic web browsing):
+  no gain from the 4-mode step on short prompts; LongBench rate points retracted (past capacity).
+- `mixed_spec_ctx_queue_gate.patch`: mix prefill into the verify step only if prefill context >= 8192
+  or >= 4 requests wait. Keeps the full cohort gain, ShareGPT TTFT -45% at MTP throughput, WebShop
+  throughput loss -10% -> -7%. Promoted as the default dispatch.
+- H20: 8-GPU vibecuda job (4 pods x 2) provisioned via the ghfast.top GitHub proxy and non-xet HF mirror.
+
 ## v1.20.0 — Final single-GPU config clears the bar on the mixed workload near capacity (2026-10-16)
 
 - Split + EDF + floor + uncapped chunk preemption (park gate PASS) vs MTP, cohort C=8 + chat 4/s:

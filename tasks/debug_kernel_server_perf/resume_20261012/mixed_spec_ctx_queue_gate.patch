@@ -1,0 +1,40 @@
+--- up_edf_preempt/python/sglang/srt/managers/scheduler.py	2026-10-16 04:05:58.539499234 +0800
++++ up_edf_gateq/python/sglang/srt/managers/scheduler.py	2026-10-16 14:38:04.552598084 +0800
+@@ -382,6 +382,12 @@
+ 
+ logger = logging.getLogger(__name__)
+ 
++# Minimum prefill context (prefix + chunk) for the 4-mode mixed step; 0 mixes every step.
++MIXED_SPEC_MIN_CTX = int(os.environ.get("SGLANG_MIXED_SPEC_MIN_CTX", "0"))
++# A backlog of at least this many waiting requests re-enables mixing for short prefills too:
++# under load the mixed step buys prefill throughput, at moderate load it only lengthens decode.
++MIXED_SPEC_MIN_QUEUE = int(os.environ.get("SGLANG_MIXED_SPEC_MIN_QUEUE", str(1 << 30)))
++
+ 
+ def _prewarm_hccl_group(device, group, device_module):
+     warmup_tensor = torch.zeros(1, dtype=torch.int32, device=device)
+@@ -4375,6 +4381,24 @@
+                 new_batch.input_embeds is None,
+                 all(r.beam_group is None for r in running_batch.reqs),
+             )
++        # Context/load gate for the 4-mode step: co-scheduling a prefill chunk with the verify rows
++        # pays off when the prefill carries long-context attention or when requests are backing up;
++        # otherwise the mixed step only lengthens every decode step. Below SGLANG_MIXED_SPEC_MIN_CTX
++        # (longest prefix + chunk among this batch's prefill rows) and with fewer than
++        # SGLANG_MIXED_SPEC_MIN_QUEUE requests waiting, the prefill runs as its own step, as in MTP.
++        if (
++            MIXED_SPEC_MIN_CTX > 0
++            and os.environ.get("SGLANG_MIXED_SPEC") == "1"
++            and not running_batch.is_empty()
++            and max((r.extend_end or 0 for r in new_batch.reqs), default=0)
++            < MIXED_SPEC_MIN_CTX
++            and len(self.waiting_queue) < MIXED_SPEC_MIN_QUEUE
++        ):
++            self.mixed_spec_gated = getattr(self, "mixed_spec_gated", 0) + 1
++            if self.mixed_spec_gated % 200 == 1:
++                logger.info("MIXEDSPEC_GATED %d", self.mixed_spec_gated)
++            new_batch.decoding_reqs = None
++            return new_batch, running_batch
+         if (
+             os.environ.get("SGLANG_MIXED_SPEC") == "1"
+             and self.is_mixed_chunk

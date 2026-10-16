@@ -789,6 +789,20 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       running count) is the next candidate. Ungated EDF + preemption vs MTP on these runs: TraceLab C=8
       tput +34%, TTFT -35%, ITL -25%, P99 ITL -76%; cohort agent +29% / -27% / -37%, chat +25% / -45% /
       -20%.
+    - [x] **Load + context gate -- promoted (2026-10-16 14:38-15:13, `mixed_gateq_ab_20261016.sh`, 9 arms
+      clean):** `SGLANG_MIXED_SPEC_MIN_QUEUE` (`mixed_spec_ctx_queue_gate.patch`, tree `up_edf_gateq`)
+      re-enables mixing whenever >= Q requests wait; gate = context 8192 OR queue 4. Same-queue, vs MTP
+      and ungated EDF + preemption (out tok/s / mean TTFT / mean ITL / P99 ITL):
+      | point | MTP | ungated | gate ctx 8K + queue 4 | gated / mixed steps |
+      |---|---|---|---|---|
+      | WebShop C=16 | 1919 / 46 ms / 7.76 / 29.5 | 1723 / 61 / 8.52 / 36.0 | 1786 / **43** / 8.48 / 43.4 | 1401 / 0 |
+      | ShareGPT 16 req/s | 3091 / 95 / 6.21 / 30.9 | 3076 / 68 / 6.29 / 34.1 | 3087 / **52** / 6.28 / 33.5 | 1601 / 1 |
+      | cohort C=16 agent | 107.8 / 42.9 s / 27.8 / 505 | 139.5 / 30.8 s / 17.6 / 91 | **139.2 / 30.9 s / 17.6 / 91** | 1 / 2651 |
+      | cohort C=16 chat | 1228 / 51.2 s / 31.0 / 472 | 1542 / 27.0 s / 24.7 / 129 | **1549 / 27.1 s / 24.6 / 129** | |
+      Matches or beats the ungated arm at every point: the overloaded cohort keeps the full gain (the
+      queue clause keeps mixing on), ShareGPT keeps MTP throughput with TTFT -45%, WebShop's loss vs MTP
+      shrinks from -10% to -7% throughput (ITL still +9%: short-prompt agent traffic is not fully
+      recovered). **Default dispatch from here: mix iff prefill context >= 8192 or >= 4 requests wait.**
 
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
   (goal point 3); earlier fits used the RoPE-corrupted model and are void (incl. the uncommitted

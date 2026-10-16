@@ -109,6 +109,9 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
     # landed while it waited, so an idle non-holder pulls nothing; timeout waits for the pull up to
     # 1 s + 0.25 s per 1K tokens. The router's --prefetch-policy must match.
     ARGS+=(--hicache-storage-prefetch-policy ${HC_PREFETCH:-best_effort})
+    # HC_WRITE: when a computed prefix reaches the pool. sglang's default write_through_selective writes
+    # it only after its second hit on that worker, so a prefix computed once is not in the pool yet.
+    [ -n "${HC_WRITE:-}" ] && ARGS+=(--hicache-write-policy $HC_WRITE)
   fi
   # Worker-side EDF: deadline-ordered admission with no chunk cap (no latency model), the
   # configuration that won on the MTP server (pd_colocation_vs_disagg.md point 3).

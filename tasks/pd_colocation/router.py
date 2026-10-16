@@ -200,7 +200,8 @@ class Router:
             self.pm.step = json.load(open(a.step_model))["coef"]
             print(f"step model: {self.pm.step}", flush=True)
         self.pool = Worker("pool", a.pool_kv_tokens, BLOCK_TOK) if a.pool_kv_tokens > 0 else None
-        self.pull_bps = a.pull_gbps * 1e9  # bytes/s, EWMA of observed pulls
+        self.pull_bps = a.pull_gbps * 1e9  # bytes/s, raised by observed complete pulls
+        self.pull_realized = 1.0  # EWMA of pulled / predicted tokens (see observe_pull)
         self.rr = 0
         self.rid = 0
         self.log = open(a.log, "a") if a.log else None
@@ -218,7 +219,8 @@ class Router:
         elif a.prefetch_policy == "timeout":
             wait_s = max(wait_s, min(full_s, a.prefetch_timeout_base
                                      + a.prefetch_timeout_per_ktok * missing / 1000.0))
-        return min(missing, int(wait_s * self.pull_bps / a.kv_bytes_per_token)), wait_s
+        got = min(missing, int(wait_s * self.pull_bps / a.kv_bytes_per_token))
+        return int(got * self.pull_realized), wait_s
 
     def predict(self, w, uncached, deadline, n_tok_self=0, missing=0):
         """missing: prefix tokens the pool holds beyond w's own hit (0 without a pool)."""
@@ -433,29 +435,39 @@ class Router:
                                                spec_verify_ct=meta.get("spec_verify_ct"),
                                                accept_ewma=w.accept,
                                                ttft_obs=(t_first - t_route) * 1000.0 if t_first else None,
-                                               pull_bps=self.pull_bps if self.pool else None)) + "\n")
+                                               pull_bps=self.pull_bps if self.pool else None,
+                                               pull_realized=self.pull_realized if self.pool else None)) + "\n")
                 self.log.flush()
         finally:
             w.inflight.pop(rid, None)
         return resp
 
     def observe_pull(self, meta, info, n_tok, t_route, t_first):
-        """Update the pull-bandwidth EWMA from one finished request. Pulled tokens = the worker's
-        cached_tokens (device + host + prefetched pages) minus the router's local-hit estimate; the
-        window is the queue wait = TTFT - the request's own prefill of the rest. Only a pull that
-        stopped short of the pool's hit is bandwidth-bound; a complete one is a lower bound, so it
-        may only raise the estimate."""
+        """Learn from one finished request how much of a predicted pull actually landed, and how fast.
+
+        Pulled tokens = the worker's cached_tokens (device + host + prefetched pages) minus the
+        router's local-hit estimate. Two estimates, kept apart because they fail differently:
+        - pull_realized: EWMA of pulled / predicted. The pool mirror is optimistic -- sglang's default
+          write_through_selective writes a prefix to the pool only after its second hit on a worker, and
+          the pool evicts -- so a predicted pull often finds no pages (192-prefix mix: 1.6K tokens
+          pulled per request against 19.5K predicted). Predictions are scaled by it.
+        - pull_bps: only a COMPLETE pull says anything about bandwidth (pulled / queue wait is then a
+          lower bound, so it may only raise the estimate). An incomplete pull is usually missing pages,
+          not a slow link; using it drove the estimate to 0 GB/s in that run."""
         c = meta.get("cached_tokens") if meta else None
         if c is None or t_first is None:
             return
-        pulled = c - info.get("hit", 0)
+        pulled = max(0, c - info.get("hit", 0))
+        pred = info.get("pull_pred", 0) or 0
+        al = self.a.pull_ewma_alpha
+        if pred >= self.a.prefetch_threshold:
+            self.pull_realized = (1 - al) * self.pull_realized + al * min(1.0, pulled / pred)
         missing = info.get("pool_hit", 0) - info.get("hit", 0)
         wait_s = (t_first - t_route) - self.pm.prefill_ms(max(0, n_tok - c), n_tok) / 1000.0
-        if pulled < self.a.prefetch_threshold or wait_s < 0.05:
+        if pulled < self.a.prefetch_threshold or wait_s < 0.05 or pulled < 0.95 * missing:
             return
         sample = pulled * self.a.kv_bytes_per_token / wait_s
-        if pulled < 0.95 * missing or sample > self.pull_bps:
-            al = self.a.pull_ewma_alpha
+        if sample > self.pull_bps:
             self.pull_bps = (1 - al) * self.pull_bps + al * sample
 
     async def broadcast(self, request):

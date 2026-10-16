@@ -6,6 +6,10 @@
   decoding there past its ITL SLO (time spent so far + remaining steps at the step time with the new request + one
   prefill chunk per step during its prefill); decisions log the rejecting check. A/B queued
   (`mn_resident_itl_8gpu_20261017.sh`).
+- Router pool model: learns `pull_realized` (EWMA of pulled / predicted tokens) and scales predicted pulls by it;
+  bandwidth only from complete pulls, only upward (incomplete pulls drove it to 0 GB/s). The mirror predicted 19.5K
+  pulled tokens where 1.6K landed on the 192-prefix mix (chat TTFT 234 s): sglang's default write_through_selective
+  writes a prefix to the pool after its second hit. `HC_WRITE` sets the workers' `--hicache-write-policy`.
 - `router.py --no-feasible-fallback cache`: when no node is predicted to meet the SLO, take the top-hit node instead
   of the most-slack one (the latter scattered requests off their prefixes under overload: chat TTFT 28 -> 73 s on
   the 192-prefix mix). A/B queued (`mn_overload_fallback_8gpu_20261017.sh`).

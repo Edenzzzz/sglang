@@ -22,7 +22,9 @@ md5sum router.py
 RA=$(grep -oE "ROUTER_ARGS=.*" /tmp/h20/mn_slo_calibrate.log | tail -1 | cut -d= -f2-)
 RA="$RA --pool-kv-tokens 3348000 --prefetch-policy timeout --chunk-tokens 2048"
 export SID=bb854a10b8954223 NPODS=4 MIN_CTX=32768 MAX_CTX=65536 TURNS=2
-export KERNEL=mtpsplit PREEMPT=1 CHUNK=2048 HC_PREFETCH=timeout
+# HC_WRITE=write_through: a computed prefix reaches the pool at once (default write_through_selective waits
+# for a second hit, so the router's pool mirror predicted pulls of pages that were not there).
+export KERNEL=mtpsplit PREEMPT=1 CHUNK=2048 HC_PREFETCH=timeout HC_WRITE=write_through
 export AGENT_CONC=16 SESSIONS=48 HOT=1 HOT_GROUPS=4 HOT_PREFIX=16384 CHAT_RATE=16 CHAT_N=3200
 for rep in 1 2; do
   RUN_TAG=_8g_hot_c16_residents0_rep$rep ROUTER_ARGS="$RA --check-residents 0" python3 -u mn_run.py coloc_slo_edf_mtp_hc

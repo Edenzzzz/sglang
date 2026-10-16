@@ -299,7 +299,20 @@ static mixture.
             and adding recompute to a saturated cluster. Its predictions there were also pessimistic
             (median 107 s predicted vs 73 s measured). When every node misses, the request misses wherever
             it goes, so the router should minimise added work: `--no-feasible-fallback cache` takes the
-            top-hit node (implemented, unit-checked; default stays `slack`). A/B queued:
+            top-hit node (implemented, unit-checked; default stays `slack`).
+            **The transfer term made it worse still (rep 1, SLO check + transfer):** chat TTFT 234 s and
+            845 tok/s, agent TTFT 85 s. Two faults in the router's pool model, both measured: (1) the pool
+            does not hold what the router's mirror says -- 1 395 decisions predicted a pull of 19.5K tokens
+            on average, but workers pulled 1.6K per request, and the worker-reported hit fell 80% -> 64%:
+            requests were moved to non-holders for pulls that never landed and recomputed. sglang's
+            default `write_through_selective` writes a prefix to the pool only after its second hit on a
+            worker, while the mirror inserted it after the first. (2) The bandwidth learner fell to 0
+            GB/s: it read every incomplete pull as bandwidth-bound and divided by queue waits of 100+ s,
+            but an incomplete pull usually means missing pages. Fixed (router.py, 2026-10-17 04:2x): the
+            router learns `pull_realized`, an EWMA of pulled / predicted tokens, and scales predicted pulls
+            by it; only complete pulls update bandwidth, and only upward; workers can run
+            `HC_WRITE=write_through` (pool write after the first compute). Both queued A/Bs below now run
+            with these. A/B queued:
             `mn_overload_fallback_8gpu_20261017.sh` (cache affinity vs SLO check + transfer + resident
             ITL + cache fallback, x2).
       - [ ] margin / quantile choice set from the measured error distribution

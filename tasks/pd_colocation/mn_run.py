@@ -83,7 +83,8 @@ def run_arm(arm):
     # directory would let a failed arm report the previous run's numbers.
     C.run_all(f"rm -rf {log}")
     env = (f"ONE_NIC={os.environ.get('ONE_NIC', '0')} KERNEL={os.environ.get('KERNEL', 'lpt')} EDF={int(edf)} SPEC={int(spec)} "
-           f"TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')} PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')}")
+           f"TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')} PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')} "
+           f"SGL_PY={os.environ.get('SGL_PY', '')}")
     if hc:
         rc, out = C.run(0, f"mkdir -p {log}; ip=$(hostname -I | tr ' ' '\\n' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1); "
                            "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\"); "
@@ -170,7 +171,11 @@ def calibrate():
     log = f"{W}/mn/calibrate"
     print("=== calibrate", flush=True)
     C.run_all(KILL)
-    C.run(0, f"rm -rf {log}; mkdir -p {log}; KERNEL=lpt EDF=0 bash {W}/tasks/pd_colocation/mn_node.sh coloc {log}")
+    # The perf model must describe the workers the router will route to: same kernel / MTP / EDF /
+    # preemption config as the arm (env), not the stock FA2 worker.
+    cenv = (f"KERNEL={os.environ.get('KERNEL', 'lpt')} EDF={os.environ.get('EDF', '0')} SPEC={os.environ.get('SPEC', '0')} "
+            f"PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')}")
+    C.run(0, f"rm -rf {log}; mkdir -p {log}; {cenv} bash {W}/tasks/pd_colocation/mn_node.sh coloc {log}")
     hs = hosts()
     t0 = time.time()
     while time.time() - t0 < 900:

@@ -5,6 +5,8 @@
 - 8 H20, hot 4 x 16K shared-prefix chat + agent C=16, x2, clean grid and cache fallback: SLO check + resident ITL
   check vs cache affinity -- chat ITL -58% (P99 -33%), TTFT -88%, throughput +17%; agent TTFT +32%, throughput -23%.
   Over the plain SLO check: chat ITL -32%, agent TTFT +26%. 0 tracebacks / 0 fallbacks.
+- `tasks/pd_colocation/mn_ab_figure.py`: per-arm, per-rep spread of a routing A/B (tok/s/user p1/p10/median/p90/p99,
+  per-rep TTFT / TPOT); resident A/B figure and per-rep table in the PD doc.
 
 ## v1.20.11 — Router SLO check on the clean grid decides; resident-ITL charge measured as an overlap (2026-10-17)
 

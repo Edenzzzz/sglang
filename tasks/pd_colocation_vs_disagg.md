@@ -311,7 +311,19 @@ static mixture.
             | cache affinity | 236 / 10.1 s / 29.4 | 1729 / 15.2 s / 83.5 (457) | 19-807 |
             | SLO check | 208 / 10.6 s / 36.7 | 2015 / 1.69 s / 51.9 (406) | 23-572 |
             | **SLO check + resident ITL check** | 182 / 13.3 s / 36.6 | **2016 / 1.78 s / 35.3 (308)** | 19-632 |
-            Reps agree within ~10% (chat ITL 33.3 / 37.3 ms, agent TTFT 13.3 / 13.4 s). **The resident check
+            **Spread** (figure [`h20x8_hot_resident_itl.png`](pd_colocation/figures_20261017/h20x8_hot_resident_itl.png),
+            data [`.csv`](pd_colocation/figures_20261017/h20x8_hot_resident_itl.csv): per arm and rep, per-request
+            tok/s/user median with p10-p90 bar and p1-p99 whisker, and each rep's mean TTFT / TPOT). Rep 1 / rep 2:
+            | arm | chat tok/s/user p1 / p10 / median / p90 / p99 | agent tok/s/user median (p10-p90) | chat TPOT ms | agent TTFT s | agent TPOT ms |
+            |---|---|---|---|---|---|
+            | cache | 4.2 / 7.1 / 14.0 / 16.5 / 42 ; 4.3 / 7.6 / 14.3 / 24.9 / 126 | 51 (10-242) ; 33 (8-209) | 85.8 ; 81.1 | 10.0 ; 10.2 | 47.2 ; 53.0 |
+            | SLO check | 4.4 / 8.5 / 27.7 / 268 / 387 ; 4.4 / 8.5 / 24.5 / 260 / 382 | 20 (7-92) ; 23 (7-94) | 50.1 ; 53.6 | 10.9 ; 10.3 | 65.7 ; 62.5 |
+            | + resident check | 5.9 / 11.5 / 63.5 / 266 / 388 ; 5.0 / 11.2 / 68.6 / 196 / 338 | 39 (7-139) ; 28 (7-165) | 33.3 ; 37.3 | 13.3 ; 13.4 | 52.6 ; 69.5 |
+            The resident check moves the median chat user from 24-28 to 63-69 tok/s; chat's slow tail (p1 4-6
+            tok/s/user) is the same in every arm, and so is the agent's (p10 ~7-10). The noisiest rep-to-rep
+            metric is agent TPOT under the resident check (52.6 vs 69.5 ms). Command:
+            `PYTHONPATH=<matplotlib> python tasks/pd_colocation/mn_ab_figure.py tasks/pd_colocation/figures_20261017/h20x8_hot_resident_itl
+            cache=coloc_cache_edf_mtp_hc_8g_hot_c16_cleangrid2_ctl,slo_check=coloc_slo_edf_mtp_hc_8g_hot_c16_cleangrid2_residents0,slo_check+resident=coloc_slo_edf_mtp_hc_8g_hot_c16_cleangrid2_residents1`. **The resident check
             cuts chat ITL a further -32% (P99 -24%) over the plain SLO check -- -58% (P99 -33%) vs cache
             affinity -- at chat TTFT -88% and throughput +17% vs cache affinity.** It costs the agent: TTFT
             +26% over the plain check (+32% vs cache affinity), throughput -13% (-23%); agent ITL is unchanged

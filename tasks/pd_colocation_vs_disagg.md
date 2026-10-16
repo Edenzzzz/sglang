@@ -370,6 +370,7 @@ PD disaggregation (sglang_router pd, stock MTP). Driver `tasks/pd_colocation/mn_
   | C=32, chat 8/s | stock coloc | 221 / 12.1 s / 97.4 / 1815 | 1461 / 7310 / 185 / 2265 |
   | C=32, chat 8/s | our router, stock MTP | (agent stream lost) | 1658 / 35.1 s / 30.3 / 421 |
   | C=32, chat 8/s | **ours** | **391 / 12.6 s / 32.2 / 315** | 1658 / 19.7 s / 28.3 / 425 |
+  | C=32, chat 8/s | stock PD disagg (clean upstream) | 152 / 74.5 s / 13.6 / 51 | 1075 / 78.3 s / 6.5 / 43 |
   Ours vs stock colocation: C=16 agent throughput +22%, TTFT -17%, TPOT -59%, ITL -26%, chat TTFT -83%,
   chat ITL -17% (chat P99 ITL +58%); C=32 agent throughput +77%, ITL -67%, P99 ITL -83%, chat
   throughput +14%, chat ITL -85%, but agent TTFT +4% and chat mean TTFT +169% (median 85 vs 2957 ms:
@@ -388,6 +389,11 @@ PD disaggregation (sglang_router pd, stock MTP). Driver `tasks/pd_colocation/mn_
   P99 34 vs 185 ms). Disagg is prefill-bound: its 2 prefill pods hit 16.6% of prompt tokens (862K /
   5.19M, `mn_audit.py`), 8 workers 0 tracebacks / 0 fallbacks, 302-344 requests each. Command:
   `bash tasks/pd_colocation/mn_disagg_rerun_8gpu_20261016.sh` (SGL_PY=up_clean, KERNEL=lpt).
+  **Stock PD disagg at C=32** (same script): saturated on prefill -- prefill hit 10.0% (1.05M / 10.5M
+  tok), agent and chat mean TTFT 74.5 / 78.3 s, agent 152 tok/s, chat 1075 tok/s (offered ~1 650); 8
+  workers 0 tracebacks / 0 fallbacks, 617-677 requests each. Even the pre-fix (router-capped) ours row
+  beats it: agent throughput 2.6x, agent TTFT -83%, chat TTFT -75%; disagg keeps lower ITL (13.6 vs
+  32.2 ms agent). Final C=32 comparison waits on the our-router reruns.
   **PD disaggregation baseline (history):** its prefill workers failed on import at C=16 -- mooncake links
   `libcudart.so.12`, the venv is cu130 -- fixed by installing `nvidia-cuda-runtime-cu12` on all pods;
   then a cross-GPU port collision (ports now claimed under a lock), the serving overlay's spec-v2 assert in

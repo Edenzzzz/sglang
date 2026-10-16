@@ -389,6 +389,11 @@ PD disaggregation (sglang_router pd, stock MTP). Driver `tasks/pd_colocation/mn_
   P99 34 vs 185 ms). Disagg is prefill-bound: its 2 prefill pods hit 16.6% of prompt tokens (862K /
   5.19M, `mn_audit.py`), 8 workers 0 tracebacks / 0 fallbacks, 302-344 requests each. Command:
   `bash tasks/pd_colocation/mn_disagg_rerun_8gpu_20261016.sh` (SGL_PY=up_clean, KERNEL=lpt).
+  - [ ] **Chat request-rate sweep at reference-list rates (queued 2026-10-16):** the matrix's chat 4 / 8 req/s
+    is 0.5 / 1 req/s per GPU, at or below the bottom of the papers' per-GPU rates (SLOs-Serve 1.5-4.5 per
+    A100, semi-PD 11-16 per A100 for Llama3-8B ShareGPT, DistServe / Sarathi-Serve 0.5-10). Sweep 1 / 2 /
+    4 / 8 req/s per GPU (8-64 total) at agent C=16, stock coloc | ours | stock PD disagg, for the throughput
+    vs tok/s/user figure with p1/p10/p90/p99 error bars: `bash tasks/pd_colocation/mn_chat_ratesweep_8gpu_20261016.sh`.
   **Stock PD disagg at C=32** (same script): saturated on prefill -- prefill hit 10.0% (1.05M / 10.5M
   tok), agent and chat mean TTFT 74.5 / 78.3 s, agent 152 tok/s, chat 1075 tok/s (offered ~1 650); 8
   workers 0 tracebacks / 0 fallbacks, 617-677 requests each. Even the pre-fix (router-capped) ours row

@@ -203,6 +203,7 @@ class Router:
         self.pool = Worker("pool", a.pool_kv_tokens, BLOCK_TOK) if a.pool_kv_tokens > 0 else None
         self.pull_bps = a.pull_gbps * 1e9  # bytes/s, raised by observed complete pulls
         self.pull_realized = 1.0  # EWMA of pulled / predicted tokens (see observe_pull)
+        self.last_pull = self.last_pull_raw = 0
         self.rr = 0
         self.rid = 0
         self.log = open(a.log, "a") if a.log else None
@@ -213,6 +214,7 @@ class Router:
         actually spent, given a predicted queue wait of `wait_s` seconds."""
         a = self.a
         if missing < a.prefetch_threshold:
+            self.last_pull_raw = 0
             return 0, wait_s
         full_s = missing * a.kv_bytes_per_token / self.pull_bps
         if a.prefetch_policy == "wait_complete":
@@ -221,6 +223,7 @@ class Router:
             wait_s = max(wait_s, min(full_s, a.prefetch_timeout_base
                                      + a.prefetch_timeout_per_ktok * missing / 1000.0))
         got = min(missing, int(wait_s * self.pull_bps / a.kv_bytes_per_token))
+        self.last_pull_raw = got
         return int(got * self.pull_realized), wait_s
 
     def predict(self, w, uncached, deadline, n_tok_self=0, missing=0):
@@ -340,11 +343,12 @@ class Router:
             slack = deadline - (now + ttft / 1000.0)
             if best_slack is None or slack > best_slack:
                 best_slack, best_i = slack, i
-                best_pred = (ttft, self.last_pull)
+                best_pred = (ttft, self.last_pull, self.last_pull_raw)
             if ok:
                 return i, {"hit": hits[i] * blk, "rejected_nodes": rejected_nodes,
                            "reject_reasons": dict(reasons), "ttft_pred": ttft,
-                           "pull_pred": self.last_pull, "pool_hit": pool_hit * blk}
+                           "pull_pred": self.last_pull, "pull_raw": self.last_pull_raw,
+                           "pool_hit": pool_hit * blk}
             rejected_nodes += 1
             reasons[self.last_reason] += 1
         if self.a.no_feasible_fallback == "cache":
@@ -355,10 +359,10 @@ class Router:
             best_i = order[0]
             best_pred = (self.predict(self.workers[best_i], max(0, n_tok - hits[best_i] * blk), deadline,
                                       n_tok, max(0, pool_hit - hits[best_i]) * blk if self.pool else 0)[0],
-                         self.last_pull)
+                         self.last_pull, self.last_pull_raw)
         return best_i, {"hit": hits[best_i] * blk, "rejected_nodes": rejected_nodes,
                         "reject_reasons": dict(reasons), "least_bad": True,
-                        "ttft_pred": best_pred[0], "pull_pred": best_pred[1],
+                        "ttft_pred": best_pred[0], "pull_pred": best_pred[1], "pull_raw": best_pred[2],
                         "pool_hit": pool_hit * blk}
 
     async def generate(self, request):
@@ -489,7 +493,11 @@ class Router:
         if c is None or t_first is None:
             return
         pulled = max(0, c - info.get("hit", 0))
-        pred = info.get("pull_pred", 0) or 0
+        # Learn against the UNSCALED prediction: scaling by pull_realized and then learning from the scaled value
+        # is a trap -- once the estimate is low, scaled predictions fall below the prefetch threshold, no sample
+        # is taken and the estimate never recovers (192-prefix mix: 0.0 after the first misses, 48 of 3 940
+        # decisions predicted any pull).
+        pred = info.get("pull_raw", info.get("pull_pred", 0)) or 0
         al = self.a.pull_ewma_alpha
         if pred >= self.a.prefetch_threshold:
             self.pull_realized = (1 - al) * self.pull_realized + al * min(1.0, pulled / pred)

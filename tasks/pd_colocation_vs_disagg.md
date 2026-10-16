@@ -467,6 +467,15 @@ static mixture.
             default `write_through_selective` (a prefix is written after its second hit -- a popularity filter
             that keeps shared prefixes and skips one-off agent contexts), mirror that rule in the router, and lower
             the master's eviction watermark (0.95 -> 0.85) so puts find space.
+            **Selective-pool A/B, rep 1 (`mn_selective_pool_8gpu_20261017.sh`, 09:xx):** the pool fix works -- 0
+            failed page writes and 0 "insufficient space" puts on the workers checked, pool at 81% of 192 GB (was
+            93-94%) -- and the three arms sit within noise (agent 124 / 129 / 130 tok/s, chat TTFT 26.6 / 26.2 /
+            27.5 s for cache / SLO check ignoring the pool / SLO check + transfer). Pulls still barely land: 48 of
+            3 940 decisions predicted one, 7 989 tokens predicted vs 2 157 pulled on average (27%). A second flaw,
+            in my learner: the realisation EWMA was learned from the SCALED prediction, so once it fell, scaled
+            predictions dropped below the 256-token prefetch threshold, no sample was taken, and it stayed at 0.0.
+            Fixed: decisions log the unscaled `pull_raw` and the EWMA learns pulled / raw (unit check: from 0.0, one
+            full pull lifts it to 0.20). Rep 2 runs on the unfixed router, consistent with rep 1.
             Spread ([figure](pd_colocation/figures_20261017/h20x8_manyprefix_overload_fallback.png),
             [data](pd_colocation/figures_20261017/h20x8_manyprefix_overload_fallback.csv)):
             | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 (rep 1 ; rep 2) | out tok/s | mean TTFT s | mean TPOT ms |

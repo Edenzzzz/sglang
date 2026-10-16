@@ -10,6 +10,9 @@
   under write_through). `router.py --pool-write-policy write_through_selective` mirrors sglang's default (a block
   enters the pool after its second hit on a worker); `MC_EVICT_HIGH` sets the master's eviction watermark. A/B queued
   (`mn_selective_pool_8gpu_20261017.sh`).
+- Selective pool, rep 1: no failed writes, pool 81% full, arms within noise; pulls 27% of predicted. `router.py`:
+  the realisation EWMA learns from the unscaled prediction (`pull_raw`); learned from the scaled one it locked at
+  0.0 once predictions fell below the prefetch threshold.
 
 ## v1.20.12 — Resident ITL check measured: chat ITL -32% over the plain SLO check, agent TTFT +26% (2026-10-17)
 

@@ -91,7 +91,7 @@ def run_arm(arm):
                            "CUDART=$(" + W + "/venv/bin/python -c 'import nvidia.cuda_runtime as m, os; print(os.path.dirname(m.__file__))'); "
                            "LD_LIBRARY_PATH=$CUDART/lib:$CUDART "
                            f"setsid -f {W}/venv/bin/mooncake_master --rpc_port $p --metrics_port $((p + 1)) "
-                           f"--eviction_high_watermark_ratio=0.95 > {log}/mooncake_master.log 2>&1 < /dev/null; sleep 3; "
+                           f"--eviction_high_watermark_ratio={os.environ.get('MC_EVICT_HIGH', '0.95')} > {log}/mooncake_master.log 2>&1 < /dev/null; sleep 3; "
                            "echo HC_MASTER=$ip:$p")
         master = [l for l in out.splitlines() if l.startswith("HC_MASTER=")][-1][10:]
         # The workers only report "Failed to setup Mooncake store", so check the master itself.

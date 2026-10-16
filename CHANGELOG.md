@@ -6,6 +6,10 @@
   TTFT 27.6 vs 27.5 s): 95% of decisions had no feasible node and went to the top-hit node. The collapse of the
   most-slack fallback is gone. Learned pull realisation fell to 0.0 even with write_through: predicted pool pulls
   do not land -- open. Spread figure + per-rep table in the PD doc.
+- Cause found: the pool was full (BatchPut "insufficient space" at 93-94% of 192 GB; one-off agent contexts written
+  under write_through). `router.py --pool-write-policy write_through_selective` mirrors sglang's default (a block
+  enters the pool after its second hit on a worker); `MC_EVICT_HIGH` sets the master's eviction watermark. A/B queued
+  (`mn_selective_pool_8gpu_20261017.sh`).
 
 ## v1.20.12 — Resident ITL check measured: chat ITL -32% over the plain SLO check, agent TTFT +26% (2026-10-17)
 

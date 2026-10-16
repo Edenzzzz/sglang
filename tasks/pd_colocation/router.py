@@ -70,6 +70,7 @@ class Worker:
         self.url = url
         self.cap_blocks = max(1, kv_tokens // block_tok)
         self.blocks = collections.OrderedDict()  # hash -> None, LRU order
+        self.block_hits = collections.OrderedDict()  # hash -> completed requests through it (pool write filter)
         self.inflight = {}  # rid -> dict(prefill, decode_left, deadline, t0)
         self.accept = None  # EWMA of tokens per verify step on this worker (None: no sample yet)
 
@@ -429,8 +430,7 @@ class Router:
                         pass
                     break
             if self.pool is not None:
-                # Write-through: the pool holds this request's prefix once it has been computed.
-                self.pool.insert(hashes)
+                self.mirror_pool_write(w, hashes)
                 self.observe_pull(meta, info, n_tok, t_route, t_first)
             if meta and self.a.accept_ewma_alpha > 0:
                 w.observe_accept(meta.get("completion_tokens"), meta.get("spec_verify_ct"),
@@ -449,6 +449,29 @@ class Router:
         finally:
             w.inflight.pop(rid, None)
         return resp
+
+    def mirror_pool_write(self, w, hashes):
+        """Mirror what the workers write to the pool once a request has been computed.
+
+        write_through: every computed block. write_through_selective (sglang's default): a block only once
+        it has been hit twice on that worker -- a popularity filter. Under write_through on the 192-prefix
+        mix the agents' one-off ~50K-token contexts filled the 192 GB pool to 93-94% and the shared
+        prefixes' BatchPuts failed for lack of space, so a mirror that inserted every computed prefix
+        predicted pulls of pages that were never stored."""
+        if self.a.pool_write_policy == "write_through":
+            self.pool.insert(hashes)
+            return
+        seen = w.block_hits
+        hot = []
+        for h in hashes:
+            seen[h] = seen.get(h, 0) + 1
+            seen.move_to_end(h)
+            if seen[h] >= 2:
+                hot.append(h)
+        while len(seen) > w.cap_blocks:
+            seen.popitem(last=False)
+        if hot:
+            self.pool.insert(hot)
 
     def observe_pull(self, meta, info, n_tok, t_route, t_first):
         """Learn from one finished request how much of a predicted pull actually landed, and how fast.
@@ -540,6 +563,8 @@ def main():
     ap.add_argument("--prefetch-policy", choices=["best_effort", "timeout", "wait_complete"],
                     default="best_effort", help="must match the workers' setting")
     ap.add_argument("--prefetch-threshold", type=int, default=256)
+    ap.add_argument("--pool-write-policy", choices=["write_through", "write_through_selective"],
+                    default="write_through_selective", help="must match the workers' --hicache-write-policy")
     ap.add_argument("--prefetch-timeout-base", type=float, default=1.0)
     ap.add_argument("--prefetch-timeout-per-ktok", type=float, default=0.25)
     a = ap.parse_args()

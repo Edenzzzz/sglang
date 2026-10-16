@@ -348,6 +348,36 @@ H200 serving tree's 26-file overlay + port07); driver `tasks/pd_colocation/mn_ma
   cache-aware-router arm failed to start (sglang_router 0.3.2 cannot bind `::`; fixed, rerun queued),
   disagg 2p2d and the lighter point (C=32, chat 8 req/s) are running.
 
+## Multi-node measurements with the final single-GPU stack (H20) — 2026-10-16
+
+Workload: TraceLab 32-64K agent sessions (2 rounds each) at program concurrency C (ThunderAgent) +
+ShareGPT chat at a fixed request rate; EAGLE3 MTP on every worker. Arms: stock sglang colocation
+(sglang_router cache_aware, stock MTP) | our cache-affinity router + stock MTP | **ours: our router +
+4-mode MTP on the split + worker EDF (deadline order) + chunk preemption + load/context gate** | stock
+PD disaggregation (sglang_router pd, stock MTP). Driver `tasks/pd_colocation/mn_run.py` + `mn_bench.sh`.
+
+- [x] **16 GPUs (8 pods x 2, job 1c90eac0a6848b48, measured before the user cut H20 to 8 GPUs), C=32 +
+  chat 8 req/s**, ours vs stock colocation: agent throughput +14% (929 vs 815 tok/s), TTFT -12%, ITL
+  -19%; chat TTFT -51%. Disagg never started (prefill workers died on import, see below).
+- [~] **8 GPUs (4 pods x 2, job bb854a10b8954223), `mn_matrix_8gpu_20261016.sh`, all reported arms 0
+  tracebacks / fallbacks.** Out tok/s / mean TTFT / mean ITL / P99 ITL:
+  | point | arm | agent | chat |
+  |---|---|---|---|
+  | C=16, chat 4/s | stock coloc | 343 / 8.3 s / 19.3 / 227 | 798 / 1697 ms / 19.9 / 219 |
+  | C=16, chat 4/s | our router, stock MTP | 320 / 7.8 s / 19.5 / 173 | 798 / 1429 / 17.5 / 80 |
+  | C=16, chat 4/s | **ours** | **420 / 6.9 s / 14.2 / 185** | 798 / **287** / 16.5 / 347 |
+  | C=32, chat 8/s | stock coloc | 221 / 12.1 s / 97.4 / 1815 | 1461 / 7310 / 185 / 2265 |
+  | C=32, chat 8/s | our router, stock MTP | (agent stream lost) | 1658 / 35.1 s / 30.3 / 421 |
+  | C=32, chat 8/s | **ours** | **391 / 12.6 s / 32.2 / 315** | 1658 / 19.7 s / 28.3 / 425 |
+  Ours vs stock colocation: C=16 agent throughput +22%, TTFT -17%, TPOT -59%, ITL -26%, chat TTFT -83%,
+  chat ITL -17% (chat P99 ITL +58%); C=32 agent throughput +77%, ITL -67%, P99 ITL -83%, chat
+  throughput +14%, chat ITL -85%, but agent TTFT +4% and chat mean TTFT +169% (median 85 vs 2957 ms:
+  a starved tail). The C=32 "our router, stock MTP" agent client died after warmup without output
+  (silent kill; pods run at half the memory request to get scheduled) -- to be rerun.
+  **PD disaggregation baseline:** its prefill workers failed on import at C=16 -- mooncake links
+  `libcudart.so.12`, the venv is cu130 -- fixed by installing `nvidia-cuda-runtime-cu12` on all pods;
+  C=32 disagg running with the fix, C=16 disagg rerun queued (`mn_disagg_rerun_8gpu_20261016.sh`).
+
 ## Multi-node measurements (H20, 8 pods x 2 GPUs = 16 workers) — 2026-10-08
 
 Setup: merlin job `c2fb3965f36cd15f` (cn-seed, trial vibecuda), 8 pods x 2 H20, one

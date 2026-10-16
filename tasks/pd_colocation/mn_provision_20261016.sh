@@ -43,5 +43,6 @@ mkdir -p workloads/tracelab
 [ -s workloads/ShareGPT_V3_unfiltered_cleaned_split.json ] || $P -c "
 from huggingface_hub import hf_hub_download;import shutil
 shutil.copy(hf_hub_download('anon8231489123/ShareGPT_Vicuna_unfiltered','ShareGPT_V3_unfiltered_cleaned_split.json',repo_type='dataset'),'$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json')" >/dev/null 2>&1 || log SHAREGPT_FAIL
+$P -m pip install -q mooncake-transfer-engine sglang-router nvidia-cuda-runtime-cu12 >/dev/null 2>&1
 ulimit -n $(ulimit -Hn)
 log "PROVISION_DONE torch_ok sgl=$($P -c 'import sgl_kernel' 2>/dev/null && echo 1) fi=$($P -c 'import flashinfer' 2>/dev/null && echo 1) qwen=$(ls qwen7b/*.safetensors 2>/dev/null | wc -l) draft=$([ -f qwen7b_eagle3/model.safetensors ] && echo 1) sgpt=$([ -s workloads/ShareGPT_V3_unfiltered_cleaned_split.json ] && echo 1)"

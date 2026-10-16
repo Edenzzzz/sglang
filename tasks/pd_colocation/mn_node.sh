@@ -15,8 +15,10 @@ export PYTHONPATH=$W/python:$W/fi HF_HOME=$W/hf FI_ROOT=$W/fi TORCH_CUDA_ARCH_LI
 export SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 SGLANG_FLASHINFER_USE_PERSISTENT=1
 # mooncake (PD-disagg KV transfer) links libcudart.so.12; the pods' system toolkit is CUDA 13,
 # but the torch cu128 wheels ship the 12.x runtime inside site-packages.
-CUDART=$(python3 -c "import nvidia.cuda_runtime as m, os; print(os.path.dirname(m.__file__))" 2>/dev/null)
-export LD_LIBRARY_PATH=$CUDART:$CUDART/lib:${LD_LIBRARY_PATH:-}
+# 2026-10-16 venv: torch is cu130, mooncake still links libcudart.so.12 -> nvidia-cuda-runtime-cu12
+# (provisioning) puts it under site-packages/nvidia/cuda_runtime/lib.
+CUDART=$(dirname "$(find $(readlink -f $W/venv) -name 'libcudart.so.12*' 2>/dev/null | head -1)" 2>/dev/null)
+export LD_LIBRARY_PATH=$CUDART:${LD_LIBRARY_PATH:-}
 # Mooncake's handshake cannot parse an unbracketed IPv6 host:port ("failed to get IP address of
 # peer server 2605:...:16743 ... use IPv4 address instead"), so every disagg request failed. The
 # pods also carry IPv4 addresses, all mutually reachable; advertise the first one.

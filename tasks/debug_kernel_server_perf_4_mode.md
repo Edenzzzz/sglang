@@ -723,7 +723,22 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     the step with verify rows); at saturation (Code-Feedback 32) it gains +2% throughput and -5% TTFT.
     EDF + floor matches the split or is worse. The gains measured on the cohort / TraceLab come from
     long-context prefill mixed with decode; a production deployment should enable the 4-mode step only
-    when such prefill is present (a dispatch decision per step, not a fallback). Mooncake and LongBench v2 running.
+    when such prefill is present (a dispatch decision per step, not a fallback).
+    **Mooncake conversation / tool-agent (09:21-10:37, 18 arms clean; recorded per-request timestamps
+    at 0.5 / 1 / 2x speed, 600 requests, ~3.7K-token prompts):** req/s achieved / mean TTFT / mean ITL /
+    P99 ITL, MTP vs split vs EDF + floor:
+    | trace, speed | MTP | split 3072 | EDF + floor |
+    |---|---|---|---|
+    | conversation 0.5x | 1.49 / 606 ms / 6.1 / 13 | 1.49 / 524 / 6.3 / 41 | 1.49 / **452** / 6.6 / 46 |
+    | conversation 1x | 2.98 / 634 / 8.6 / 72 | 2.98 / 545 / 8.3 / 81 | 2.98 / **472** / 9.0 / 68 |
+    | conversation 2x | 4.26 / 15.6 s / 28.2 / 236 | 4.63 / 9.5 s / 24.8 / 118 | **4.76 / 8.3 s / 24.6 / 96** |
+    | tool-agent 0.5x | 2.73 / 589 / 6.6 / 13 | 2.73 / 505 / 6.7 / 45 | 2.73 / **422** / 7.0 / 64 |
+    | tool-agent 1x | 5.36 / 624 / 9.0 / 147 | 5.35 / 523 / 8.7 / 83 | 5.36 / **430** / 9.5 / 70 |
+    | tool-agent 2x | 6.70 / 7.5 s / 27.4 / 231 | 8.12 / 3.8 s / 23.0 / 113 | **8.13 / 3.1 s / 23.1 / 91** |
+    **Medium-length prompts show the gain:** EDF + floor cuts TTFT 25-31% below capacity (ITL +5..+8%);
+    at 2x, where MTP falls behind the trace, EDF gives throughput +12% (conversation) / +21% (tool-agent),
+    TTFT -47% / -58%, P99 ITL -59% / -60%, mean ITL -13% / -16%. Throughput and TTFT clear the bar at
+    2x; mean ITL does not. LongBench v2 running.
 
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
   (goal point 3); earlier fits used the RoPE-corrupted model and are void (incl. the uncommitted

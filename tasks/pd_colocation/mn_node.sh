@@ -104,6 +104,10 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
     ARGS+=(--speculative-algorithm EAGLE3 --speculative-draft-model-path $W/qwen7b_eagle3_sgl
            --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4)
     [ "$MODE" = coloc ] && [ "$SPEC" = 1 ] && export SGLANG_ALLOW_MIXED_CHUNK_SPEC=1 SGLANG_MIXED_SPEC=1
+    # Load + context gate (mixed_spec_ctx_queue_gate.patch): mix only when the prefill carries >= 8K
+    # context or >= 4 requests wait; otherwise the prefill runs alone, as in stock MTP.
+    [ "$MODE" = coloc ] && [ "$SPEC" = 1 ] && export SGLANG_MIXED_SPEC_MIN_CTX=${MIX_MIN_CTX:-8192} \
+      SGLANG_MIXED_SPEC_MIN_QUEUE=${MIX_MIN_QUEUE:-4}
   fi
   case $MODE in
     coloc) ARGS+=(--enable-mixed-chunk) ;;

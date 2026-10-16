@@ -7,6 +7,9 @@
   metric clears except agent TTFT. At C=16 it is neutral-to-worse (no pool: a vetoed request recomputes).
 - `mn_node.sh`: with the L3 pool on, cap the HiCache host pool (`--hicache-size 48`) and the mooncake segment
   (24 GB): the defaults (~130 GB + 32 GB per worker, two per 232 GB pod) OOM-killed every worker at startup.
+- `mn_run.py`: mooncake master from the venv (`$W/venv/bin/mooncake_master`; the old ~/.local path does not
+  exist on the re-provisioned pods, so no master ran and every worker failed "setup Mooncake store"); an arm
+  now aborts if the master is not running.
 
 ## v1.20.4 — PD doc: inter-node SLO-feasibility prediction as a major open item (2026-10-17)
 

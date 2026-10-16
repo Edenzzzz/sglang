@@ -90,10 +90,16 @@ def run_arm(arm):
                            "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\"); "
                            "CUDART=$(" + W + "/venv/bin/python -c 'import nvidia.cuda_runtime as m, os; print(os.path.dirname(m.__file__))'); "
                            "LD_LIBRARY_PATH=$CUDART/lib:$CUDART "
-                           f"setsid -f /home/tiger/.local/lib/python3.12/site-packages/mooncake/mooncake_master --rpc_port $p --metrics_port $((p + 1)) "
+                           f"setsid -f {W}/venv/bin/mooncake_master --rpc_port $p --metrics_port $((p + 1)) "
                            f"--eviction_high_watermark_ratio=0.95 > {log}/mooncake_master.log 2>&1 < /dev/null; sleep 3; "
                            "echo HC_MASTER=$ip:$p")
         master = [l for l in out.splitlines() if l.startswith("HC_MASTER=")][-1][10:]
+        # The workers only report "Failed to setup Mooncake store", so check the master itself.
+        rc, mlog = C.run(0, f"pgrep -f 'mooncake_master --rpc_port {master.rsplit(':', 1)[1]}' >/dev/null && echo MASTER_UP; "
+                            f"tail -2 {log}/mooncake_master.log")
+        if "MASTER_UP" not in mlog:
+            print(f"  mooncake master did not start: {mlog.strip()[-300:]}; aborting arm", flush=True)
+            return
         print(f"  mooncake master {master}", flush=True)
         env += f" HC_MASTER={master}"
     import concurrent.futures as cf

@@ -368,13 +368,22 @@ PD disaggregation (sglang_router pd, stock MTP). Driver `tasks/pd_colocation/mn_
   | C=16, chat 4/s | **ours** | **420 / 6.9 s / 14.2 / 185** | 798 / **287** / 16.5 / 347 |
   | C=16, chat 4/s | stock PD disagg (2 prefill + 2 decode pods, clean upstream) | 137 / 34.3 s / 10.8 / 34 | 796 / 21 546 / 5.0 / 25 |
   | C=32, chat 8/s | stock coloc | 221 / 12.1 s / 97.4 / 1815 | 1461 / 7310 / 185 / 2265 |
-  | C=32, chat 8/s | our router, stock MTP | (agent stream lost) | 1658 / 35.1 s / 30.3 / 421 |
-  | C=32, chat 8/s | **ours** | **391 / 12.6 s / 32.2 / 315** | 1658 / 19.7 s / 28.3 / 425 |
+  | ~~C=32, chat 8/s~~ | ~~our router, stock MTP~~ (router capped at 100 connections) | ~~(agent stream lost)~~ | ~~1658 / 35.1 s / 30.3 / 421~~ |
+  | ~~C=32, chat 8/s~~ | ~~ours~~ (router capped at 100 connections) | ~~391 / 12.6 s / 32.2 / 315~~ | ~~1658 / 19.7 s / 28.3 / 425~~ |
+  | C=32, chat 8/s | our router, stock MTP (fixed router) | 221 / 13.8 s / 95.0 / 1767 | 1433 / 10.1 s / 189 / 2294 |
+  | C=32, chat 8/s | **ours** (fixed router) | **263 / 11.6 s / 74.6 / 391** | **1657 / 2.54 s / 135 / 651** |
   | C=32, chat 8/s | stock PD disagg (clean upstream) | 152 / 74.5 s / 13.6 / 51 | 1075 / 78.3 s / 6.5 / 43 |
   Ours vs stock colocation: C=16 agent throughput +22%, TTFT -17%, TPOT -59%, ITL -26%, chat TTFT -83%,
-  chat ITL -17% (chat P99 ITL +58%); C=32 agent throughput +77%, ITL -67%, P99 ITL -83%, chat
-  throughput +14%, chat ITL -85%, but agent TTFT +4% and chat mean TTFT +169% (median 85 vs 2957 ms:
-  a starved tail). ~~The C=32 "our router, stock MTP" agent client died after warmup without output
+  chat ITL -17% (chat P99 ITL +58%). **C=32 (fixed router, 2026-10-16):** agent throughput +19%, TTFT -4%,
+  ITL -23%, P99 ITL -78%; chat throughput +13% (serves the full offered 8 req/s; stock 1461 of ~1650
+  tok/s), TTFT -65%, ITL -27%, P99 ITL -71%. Bar misses at C=32: agent TTFT (-4%) and agent/chat ITL
+  (-23 / -27% vs -30%). ~~C=32 agent throughput +77%, ITL -67%, P99 ITL -83%, chat throughput +14%,
+  chat ITL -85%, but agent TTFT +4% and chat mean TTFT +169% (median 85 vs 2957 ms: a starved tail).~~
+  **Retracted:** measured behind our router's 100-connection cap, which queued chat inside the router
+  (fewer requests on the GPUs, hence the low ITL and the starved chat tail). Rerun audit: 8 workers 0
+  tracebacks / 0 fallbacks, 256-394 requests each; composition per worker FUSED_SPLIT_CALLS 6.5K-11.5K,
+  MIXEDSPEC_STEPS 201-401, MIXEDSPEC_GATED >= 201, EDF_PARK firing. Command:
+  `bash tasks/pd_colocation/mn_rerun_c32_cache_mtps_20261016.sh` (router.py `limit=0`). ~~The C=32 "our router, stock MTP" agent client died after warmup without output
   (silent kill; pods run at half the memory request to get scheduled).~~ **Retracted 2026-10-16:** not a
   kill. One upstream POST in our `router.py` hit EPIPE on a stale keep-alive connection (the retry caught
   only `ServerDisconnectedError`), and the concurrency replay aborts the client on any failed round.
@@ -405,9 +414,9 @@ PD disaggregation (sglang_router pd, stock MTP). Driver `tasks/pd_colocation/mn_
     (p1 ~4-5 tok/s/user) is much worse than disagg's.
   **Stock PD disagg at C=32** (same script): saturated on prefill -- prefill hit 10.0% (1.05M / 10.5M
   tok), agent and chat mean TTFT 74.5 / 78.3 s, agent 152 tok/s, chat 1075 tok/s (offered ~1 650); 8
-  workers 0 tracebacks / 0 fallbacks, 617-677 requests each. Even the pre-fix (router-capped) ours row
-  beats it: agent throughput 2.6x, agent TTFT -83%, chat TTFT -75%; disagg keeps lower ITL (13.6 vs
-  32.2 ms agent). Final C=32 comparison waits on the our-router reruns.
+  workers 0 tracebacks / 0 fallbacks, 617-677 requests each. Ours (fixed router) vs disagg at C=32: agent
+  throughput 1.7x (263 vs 152), agent TTFT -84%, chat throughput +54%, chat TTFT -97% (2.5 vs 78.3 s);
+  disagg keeps far lower ITL (agent 14.1 vs 74.6 ms, chat 7.4 vs 135 ms, burst-excluded).
   **PD disaggregation baseline (history):** its prefill workers failed on import at C=16 -- mooncake links
   `libcudart.so.12`, the venv is cu130 -- fixed by installing `nvidia-cuda-runtime-cu12` on all pods;
   then a cross-GPU port collision (ports now claimed under a lock), the serving overlay's spec-v2 assert in

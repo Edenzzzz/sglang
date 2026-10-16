@@ -10,6 +10,8 @@
   of stock PD-disagg requests) are excluded from tok/s/user; spec-count sums tolerate `None`. Figures and
   CSVs force-added (`*.csv` / `*.png` are gitignored; the previous commit linked missing files).
 - `tasks/pd_colocation/mn_sweep_figure.py`: the H20 chat-rate sweep -> eval_curves layout -> figure.
+- PD doc: 8-GPU C=32 our-router rows rerun with the fixed router; old rows retracted (router-capped).
+  Ours vs stock colocation at C=32: agent +19% throughput, -4% TTFT, -23% ITL; chat +13% throughput, -65% TTFT.
 
 ## v1.20.1 — Multi-node teardown kills supervisor loops (2026-10-16)
 

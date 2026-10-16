@@ -10,6 +10,7 @@
 #   disagg_2p2d_mtps     stock PD disaggregation (2 prefill pods + 2 decode pods), stock MTP
 # Runs locally (drives the pods through px_multi). Claude, 2026-10-16.
 set -u
+export PATH=$HOME/.merlin-cli/bin:$PATH
 cd "$(dirname "$0")"
 export SID=bb854a10b8954223 NPODS=4 CHAT_SHAREGPT=1 MIN_CTX=32768 MAX_CTX=65536 TURNS=${TURNS:-2}
 for point in "16 4" "32 8"; do

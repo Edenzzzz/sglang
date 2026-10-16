@@ -10,6 +10,8 @@ log() { echo "[prov $(hostname | tail -c 6) $(date +%H:%M:%S)] $*"; }
 # served over the cluster network (HUB=http://<pod0-ipv4>:<port>, /dev/shm/w/up.tgz).
 if [ ! -d up/.git ]; then
   for a in 1 2 3; do rm -rf up; git clone --quiet https://github.com/sgl-project/sglang.git up && break; sleep 10; done
+  # github.com is blocked outright on some pods (2026-10-16 job bb854a10b8954223); the ghfast.top proxy works.
+  [ -d up/.git ] || { rm -rf up; git clone --quiet --filter=blob:none https://ghfast.top/https://github.com/sgl-project/sglang.git up && log "up via ghfast"; }
   if [ ! -d up/.git ] && [ -n "${HUB:-}" ]; then rm -rf up; curl -sf $HUB/up.tgz | tar xzf - && log "up from hub"; fi
   git -C up checkout --quiet 3fef129ff8a32c32da5f6a0efd33485f6cc6233c || { log CLONE_FAIL; exit 1; }
 fi
@@ -32,6 +34,8 @@ $P -m pip install -q 'huggingface_hub[cli]' aiohttp >/dev/null 2>&1
 # and ShareGPT from hf-mirror (~11 MB/s).
 $P -m pip install -q modelscope >/dev/null 2>&1
 export HF_ENDPOINT=https://hf-mirror.com
+# Xet-stored files are fetched from cas-server.xethub.hf.co directly (401 from these pods); plain HTTP via the mirror works.
+export HF_HUB_DISABLE_XET=1
 [ -f qwen7b/model-00004-of-00004.safetensors ] || $P -c "from modelscope import snapshot_download as s; s('Qwen/Qwen2.5-7B-Instruct', local_dir='$W/qwen7b')" >/dev/null 2>&1 || log TARGET_FAIL
 log "target shards $(ls qwen7b/*.safetensors 2>/dev/null | wc -l)"
 [ -f qwen7b_eagle3/model.safetensors ] || $P -c "from huggingface_hub import snapshot_download as s; s('thoughtworks/Qwen2.5-7B-Instruct-Eagle3', local_dir='$W/qwen7b_eagle3')" >/dev/null 2>&1 || log DRAFT_FAIL

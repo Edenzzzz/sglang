@@ -80,4 +80,5 @@ for i in range(3):
 a, b, c = (A[i][3] / A[i][i] for i in range(3))
 long_rate = sum(n_ for n_, _ in pre[2:]) / sum(t for _, t in pre[2:])
 print(f"rejected linear fit (kept for the record): ITL = {a:.2f} + {b:.4f}*conc + {c:.5f}*conc*kv/1e3 ms")
-print(f"ROUTER_ARGS=--prefill-tok-s {long_rate:.0f} --decode-grid /dev/shm/w/mn/decode_grid.json")
+curve = ",".join(f"{n_}:{t * 1000:.1f}" for n_, t in pre)
+print(f"ROUTER_ARGS=--prefill-tok-s {long_rate:.0f} --prefill-curve {curve} --decode-grid /dev/shm/w/mn/decode_grid.json")

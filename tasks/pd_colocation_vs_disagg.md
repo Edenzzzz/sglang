@@ -207,7 +207,12 @@ static mixture.
             (chat) and 0.72-0.73 (agent) -- about 30% optimistic, as the error list expected (blended
             prefill rate, decode interference, future arrivals). Agent error p10 / p90 -6.4..-7.7 s /
             +9.2..+9.6 s: far too wide for a hard veto at a ~8-15 s deadline.
-      - [ ] step-model queue drain (with decode interference) replacing the constant prefill rate
+      - [ ] step-model queue drain (with decode interference) replacing the constant prefill rate.
+            **Step 1 implemented 2026-10-17 (`router.py --prefill-curve`, not yet measured):** prefill time
+            from the calibrated cold-TTFT curve, `T(ctx) - T(ctx - uncached)`, so long contexts cost more
+            per token and a cached prefix still costs attention: a 4K append on a 60K prompt predicts
+            1.27 s vs 0.82 s with the blended rate (+55%), 48K cold 11.2 s vs 9.8 s. Decode interference
+            and future arrivals are still unmodelled. `calibrate_h20.py` now prints the curve.
       - [ ] transfer-aware effective hit; requires an arm with the L3 pool on. **Implemented
             2026-10-17 (`router.py`, not yet measured):** the router mirrors the pool's contents
             (write-through on each finished request) with the same chained block keys as HiCache's

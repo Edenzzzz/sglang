@@ -108,6 +108,10 @@ class PerfModel:
         # context under-predicts a holder running 16K-prefix rows by ~an order of magnitude.
         self.decode_ms_per_seq_ktok = decode_ms_per_seq_ktok
         self.grid = {}
+        # Measured (prompt tokens, TTFT ms) of cold prefills (--prefill-curve): attention makes a
+        # token's cost grow with its context, 8.3K tok/s at 4K -> 4.4K at 48K on H20, which one
+        # blended rate under-predicts for exactly the long agent prefills (item 7).
+        self.curve = []
         self.step = None  # fit_mtp_step.py coefficients: whole-step ms, linear in the step's work
 
     def step_ms(self, running, kv_tokens, accept):
@@ -117,6 +121,22 @@ class PerfModel:
 
     def ttft_ms(self, uncached_tokens_ahead):
         return uncached_tokens_ahead / self.prefill_tok_s * 1000.0
+
+    def cold_ms(self, n):
+        """TTFT of an n-token cold prefill, interpolated on the curve (linear past its end)."""
+        pts = [(0, 0.0)] + self.curve
+        for (n0, t0), (n1, t1) in zip(pts, pts[1:]):
+            if n <= n1:
+                return t0 + (t1 - t0) * (n - n0) / (n1 - n0)
+        (n0, t0), (n1, t1) = pts[-2], pts[-1]
+        return t1 + (t1 - t0) * (n - n1) / (n1 - n0)
+
+    def prefill_ms(self, uncached, ctx):
+        """Time to prefill the last `uncached` tokens of a `ctx`-token prompt: the cold cost of the
+        whole prompt minus that of its cached prefix, so a cached prefix still costs attention."""
+        if not self.curve:
+            return self.ttft_ms(uncached)
+        return self.cold_ms(ctx) - self.cold_ms(max(0, ctx - uncached))
 
     def tpot_ms(self, running, kv_tokens=0.0, accept=None):
         """kv_tokens: total KV over the rows that would be resident, in tokens. accept: the
@@ -173,6 +193,9 @@ class Router:
             rows = json.load(open(a.decode_grid))
             self.pm.grid = {(r["conc"], r["ctx"]): r["itl_ms"] for r in rows}
             print(f"decode grid: {len(self.pm.grid)} points", flush=True)
+        if a.prefill_curve:
+            self.pm.curve = sorted((int(n), float(t)) for n, t in
+                                   (x.split(":") for x in a.prefill_curve.split(",")))
         if a.step_model:
             self.pm.step = json.load(open(a.step_model))["coef"]
             print(f"step model: {self.pm.step}", flush=True)
@@ -200,17 +223,21 @@ class Router:
     def predict(self, w, uncached, deadline, n_tok_self=0, missing=0):
         """missing: prefix tokens the pool holds beyond w's own hit (0 without a pool)."""
         # Under EDF only requests with EARLIER deadlines are served ahead of this one.
-        ahead = sum(r["prefill"] for r in w.inflight.values() if r["deadline"] <= deadline)
-        wait_ms = self.pm.ttft_ms(ahead)
+        wait_ms = self.drain_ms(w, deadline)
         got, wait_s = self.pulled(wait_ms / 1000.0, missing)
         self.last_pull = got
-        ttft = wait_s * 1000.0 + self.pm.ttft_ms(max(0, uncached - got))
+        ttft = wait_s * 1000.0 + self.pm.prefill_ms(max(0, uncached - got), n_tok_self)
         # Every resident row's KV, including this request's prompt: the decode slowdown this
         # request would cause on w, which is what the hot-prefix holders actually suffer.
         kv = sum(r.get("kv", 0) for r in w.inflight.values()) + n_tok_self
         accept = w.accept if self.a.accept_ewma_alpha > 0 else None
         tpot = self.pm.tpot_ms(len(w.inflight) + 1, kv, accept)
         return ttft, tpot
+
+    def drain_ms(self, w, deadline):
+        """Prefill time of the work queued on w ahead of a request with this deadline."""
+        return sum(self.pm.prefill_ms(r["prefill"], r.get("kv", r["prefill"]))
+                   for r in w.inflight.values() if r["deadline"] <= deadline)
 
     def feasible(self, w, uncached, deadline, now, n_tok_self=0, missing=0):
         ttft, tpot = self.predict(w, uncached, deadline, n_tok_self, missing)
@@ -221,9 +248,8 @@ class Router:
         # push any of them past their own deadline.
         for r in w.inflight.values():
             if r["deadline"] > deadline and r["decode_left"] == r["decode_total"]:
-                t_r = now + self.pm.ttft_ms(
-                    sum(x["prefill"] for x in w.inflight.values() if x["deadline"] <= r["deadline"])
-                    + uncached) / 1000.0
+                t_r = now + (self.drain_ms(w, r["deadline"])
+                             + self.pm.prefill_ms(uncached, n_tok_self)) / 1000.0
                 if t_r > r["deadline"]:
                     return False, ttft, tpot
         return True, ttft, tpot
@@ -378,7 +404,7 @@ class Router:
             return
         pulled = c - info.get("hit", 0)
         missing = info.get("pool_hit", 0) - info.get("hit", 0)
-        wait_s = (t_first - t_route) - self.pm.ttft_ms(max(0, n_tok - c)) / 1000.0
+        wait_s = (t_first - t_route) - self.pm.prefill_ms(max(0, n_tok - c), n_tok) / 1000.0
         if pulled < self.a.prefetch_threshold or wait_s < 0.05:
             return
         sample = pulled * self.a.kv_bytes_per_token / wait_s
@@ -424,6 +450,8 @@ def main():
     ap.add_argument("--decode-ms-per-seq", type=float, default=0.3)
     ap.add_argument("--decode-ms-per-seq-ktok", type=float, default=0.0)
     ap.add_argument("--decode-grid", default="", help="calibrate_h20.py decode_grid.json")
+    ap.add_argument("--prefill-curve", default="",
+                    help="cold-prefill TTFT curve 'tokens:ms,...' (calibrate_h20.py); overrides --prefill-tok-s")
     ap.add_argument("--step-model", default="",
                     help="fit_mtp_step.py JSON: whole-step ms model (with c_acc if fitted)")
     ap.add_argument("--accept-ewma-alpha", type=float, default=0.0,

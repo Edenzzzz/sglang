@@ -8,6 +8,8 @@
   agent error p10/p90 -7.7/+9.6 s. Next: `timeout` prefetch on workers + router, with repeats.
 - `mn_node.sh` / `mn_run.py`: `HC_PREFETCH` sets the workers' `--hicache-storage-prefetch-policy`; timeout-policy
   A/B queued (`mn_pool_timeout_8gpu_20261017.sh`, cache vs veto + transfer term, interleaved x2).
+- `router.py --prefill-curve`: prefill time from the calibrated cold-TTFT curve (T(ctx) - T(ctx - uncached))
+  instead of one blended rate; `calibrate_h20.py` prints it.
 
 ## v1.20.5 — Router SLO veto on the final stack: wins at C=32, neutral at C=16 (2026-10-17)
 

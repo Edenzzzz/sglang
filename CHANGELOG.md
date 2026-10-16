@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.6 — Pool-on veto A/B: the transfer term never fires under best_effort prefetch (2026-10-17)
+
+- 8 H20, agent C=16 + chat 8 req/s, mooncake L3 pool on: under the default `best_effort` prefetch the veto sends
+  requests to idle non-holders, where no pull lands, so the transfer term predicts 0 and the two veto arms run the
+  same logic; their 8% agent-TTFT and 1.35 vs 15.9 s chat-P99 gap is run-to-run noise. Predictor ~30% optimistic,
+  agent error p10/p90 -7.7/+9.6 s. Next: `timeout` prefetch on workers + router, with repeats.
+
 ## v1.20.5 — Router SLO veto on the final stack: wins at C=32, neutral at C=16 (2026-10-17)
 
 - 8 H20, same-session A/B (`mn_slo_veto_8gpu_20261017.sh`): at agent C=32 + chat 8 req/s the veto beats cache

@@ -183,8 +183,30 @@ static mixture.
             colocation at C=32:** agent throughput +44%, ITL -40%; chat throughput +13%, TTFT -64%, ITL
             -50% -- every bar metric except agent TTFT (+4%). The veto fired on 64% of C=32 decisions,
             and 314 had no feasible worker: the predictor is coarse (item 7's error list).
-      - [ ] measure the current predictor's error: router-logged `ttft_pred` vs measured TTFT per
-            request, bucketed by load and prompt length (`ttft_obs` logged from the pool A/B on)
+      - [x] **Pool-on A/B (2026-10-17, `bash tasks/pd_colocation/mn_pool_veto_8gpu_20261017.sh`; agent
+            C=16, chat 8 req/s; workers at sglang's default `best_effort` prefetch).** All 3 arms 8 workers
+            0 tracebacks / 0 fallbacks. Out tok/s / mean TTFT / mean ITL (chat P99 TTFT):
+            | arm | agent | chat | vetoed | prefill hit |
+            |---|---|---|---|---|
+            | cache | 358 / 7.59 s / 17.5 | 1659 / 259 ms / 15.3 (5.5 s) | - | 65.0% |
+            | veto, no transfer term | 333 / 8.04 s / 19.4 | 1659 / 176 ms / 14.8 (1.35 s) | 379 / 2 500 | 59.0% |
+            | veto + transfer term | 349 / 7.40 s / 20.1 | 1658 / 458 ms / 17.6 (15.9 s) | 406 / 2 500 | 59.7% |
+            **The transfer term never fired:** it predicted 0 pulled tokens for every agent request.
+            Under `best_effort` a pull lands only while a request waits in the queue, and the veto sends
+            requests to idle non-holders, where the predicted wait is 0 -- so 0 is the right prediction,
+            and the workers did pull almost nothing (60-412 tokens per agent request on average); the
+            bandwidth EWMA never moved off its 10 GB/s prior. **The two veto arms therefore ran the same
+            routing logic, and their difference is run-to-run noise:** 8% on agent TTFT and 1.35 vs 15.9 s
+            on chat P99 TTFT. Single runs do not resolve these metrics; the earlier single-run veto A/Bs
+            carry the same caveat. Design implication: `best_effort` is the wrong prefetch policy for
+            deliberate non-holder routing -- recomputing a 32K prefix takes ~6 s, pulling it ~0.2 s -- so
+            the workers should wait for the pull (`timeout` / `wait_complete`) and the router should
+            predict the same. Without a pool the prefix costs a full recompute, so the veto is neutral
+            at C=16 (above) and wins at C=32 only by spreading decode load.
+      - [x] **Predictor error (same runs, `ttft_obs` vs `ttft_pred`):** predicted / measured median 0.64
+            (chat) and 0.72-0.73 (agent) -- about 30% optimistic, as the error list expected (blended
+            prefill rate, decode interference, future arrivals). Agent error p10 / p90 -6.4..-7.7 s /
+            +9.2..+9.6 s: far too wide for a hard veto at a ~8-15 s deadline.
       - [ ] step-model queue drain (with decode interference) replacing the constant prefill rate
       - [ ] transfer-aware effective hit; requires an arm with the L3 pool on. **Implemented
             2026-10-17 (`router.py`, not yet measured):** the router mirrors the pool's contents

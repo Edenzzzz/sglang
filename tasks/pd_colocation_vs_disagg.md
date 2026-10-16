@@ -352,11 +352,17 @@ static mixture.
             pessimistic for agents, likely because an in-progress chunked prefill keeps its full uncached
             length in the router's table until its first token. **The resident ITL check fires a lot but
             does not help:** it rejected 7 680 nodes, pushed no-feasible back to 52%, and left agent ITL
-            unchanged (36.9 vs 36.5 ms). Its charge -- one full cold chunk time per shared step -- assumes
-            prefill and decode serialise inside a step; the 4-mode step overlaps them (measured chat ITL
-            ~56 ms where the charge predicts >100 ms). Rep 2 and the overload A/B were stopped; the
-            calibration now measures that overlap (`--chunk-interference`: decoders' added ITL per step
-            during a cold 32K prefill / the chunk's cold time), recalibrating.
+            unchanged (36.9 vs 36.5 ms). ~~Its charge -- one full cold chunk time per shared step -- assumes
+            prefill and decode serialise inside a step; the 4-mode step overlaps them.~~ **Retracted
+            (06:1x, measured):** they do serialise. Calibration now times decoders beside a cold 32K
+            prefill: ITL 12.6 -> 380 ms (4K ctx x 8), 34.3 -> 426 ms (4K x 32), 23.2 -> 385 ms (16K x 8),
+            against a 334-349 ms cold chunk: added time per step / chunk time = 1.07-1.12
+            (`--chunk-interference 1.124`). So the charge was right: on H20 a step carrying a 2048-token
+            chunk costs ~10-30x a decode-only step, and serving's ~56 ms mean chat ITL averages over
+            stretches without prefill. The check did not help because, with every node rejected on 52% of
+            decisions, the most-slack fallback -- which ignores ITL -- chose the node. Rerunning with
+            `--no-feasible-fallback cache` in both SLO-check arms, so the resident check changes only which
+            feasible node is chosen.
       - [ ] margin / quantile choice set from the measured error distribution
       - [ ] A/B: cache affinity | current SLO check | + step model | + transfer term | + margin, on
             goodput / SLO attainment at the 8-GPU H20 points (agent C=16/32, chat 8 req/s)

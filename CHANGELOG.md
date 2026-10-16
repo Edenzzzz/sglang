@@ -6,7 +6,9 @@
   chat TTFT -89% / ITL -32% / throughput +20% vs cache affinity (agent throughput -11%, ITL +21%). The resident ITL
   check rejected 7 680 nodes without helping agent ITL: its per-step charge assumed prefill and decode serialise.
 - `calibrate_h20.py` measures decode interference of a cold 32K prefill (`--chunk-interference`); `router.py` scales
-  the resident charge by it.
+  the resident charge by it. Measured 1.07-1.12: prefill chunk and decode serialise (decoder ITL 12-34 -> 380-426 ms
+  beside a cold 32K prefill), so the charge was right and the "overlap" explanation is retracted; the most-slack
+  fallback, which ignores ITL, is why the check did not help. Rerun with `--no-feasible-fallback cache`.
 
 ## v1.20.10 — Router TPOT prediction counted queued requests as decoding; SLO-check results re-read (2026-10-17)
 

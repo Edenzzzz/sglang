@@ -476,6 +476,23 @@ static mixture.
             predictions dropped below the 256-token prefetch threshold, no sample was taken, and it stayed at 0.0.
             Fixed: decisions log the unscaled `pull_raw` and the EWMA learns pulled / raw (unit check: from 0.0, one
             full pull lifts it to 0.20). Rep 2 runs on the unfixed router, consistent with rep 1.
+            **Both reps (`bash tasks/pd_colocation/mn_selective_pool_8gpu_20261017.sh`; all 6 arms 8 workers 0
+            tracebacks / 0 fallbacks, prefill hit 88.2-89.6%):** the three arms tie within noise -- agent 124 / 134
+            (cache), 129 / 129 (SLO check ignoring the pool), 130 / 129 tok/s (+ transfer); chat TTFT 26.6 / 28.1,
+            26.2 / 27.4, 27.5 / 27.8 s. At 16 chat req/s on this mix the cluster is past capacity (95% of decisions
+            have no feasible node, see the overload A/B), so placement -- and with it the transfer term -- has
+            nothing to choose between. The transfer test needs a load where feasible non-holders exist; next run
+            at a lower chat rate with the fixed learner. Spread
+            ([figure](pd_colocation/figures_20261017/h20x8_manyprefix_selective_pool.png),
+            [data](pd_colocation/figures_20261017/h20x8_manyprefix_selective_pool.csv)):
+            | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 (rep 1 ; rep 2) | out tok/s | mean TTFT s | mean TPOT ms |
+            |---|---|---|---|---|---|
+            | cache | chat | 3.5/7.6/12.7/45.3/319 ; 3.6/7.4/12.8/35.7/311 | 1673 ; 1823 | 26.6 ; 28.1 | 84.5 ; 85.7 |
+            | cache | agent | 5.8/8.2/11.3/278/345 ; 5.0/8.1/12.2/134/332 | 124 ; 134 | 29.8 ; 28.2 | 67.8 ; 67.5 |
+            | slo_check_no_transfer | chat | 3.6/7.3/12.0/17.7/43.9 ; 3.4/7.1/11.8/18.8/46.8 | 1892 ; 1885 | 26.2 ; 27.4 | 93.8 ; 94.8 |
+            | slo_check_no_transfer | agent | 5.1/8.0/11.2/236/339 ; 4.5/8.2/11.0/271/353 | 129 ; 129 | 28.0 ; 27.5 | 72.8 ; 76.8 |
+            | slo_check+transfer | chat | 3.6/7.2/11.8/18.0/52.8 ; 3.5/7.0/12.0/19.0/40.2 | 1857 ; 1802 | 27.5 ; 27.8 | 94.2 ; 94.8 |
+            | slo_check+transfer | agent | 3.9/7.8/11.6/255/342 ; 4.9/8.3/11.3/291/352 | 130 ; 129 | 28.6 ; 29.0 | 74.5 ; 71.0 |
             Spread ([figure](pd_colocation/figures_20261017/h20x8_manyprefix_overload_fallback.png),
             [data](pd_colocation/figures_20261017/h20x8_manyprefix_overload_fallback.csv)):
             | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 (rep 1 ; rep 2) | out tok/s | mean TTFT s | mean TPOT ms |

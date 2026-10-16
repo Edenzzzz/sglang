@@ -13,6 +13,8 @@
 - Selective pool, rep 1: no failed writes, pool 81% full, arms within noise; pulls 27% of predicted. `router.py`:
   the realisation EWMA learns from the unscaled prediction (`pull_raw`); learned from the scaled one it locked at
   0.0 once predictions fell below the prefetch threshold.
+- Selective-pool A/B x2 (spread table + figure): cache affinity, SLO check, SLO check + transfer tie within noise at
+  16 chat req/s on the 192-prefix mix -- past capacity, so placement has nothing to choose. 0 tracebacks / fallbacks.
 
 ## v1.20.12 — Resident ITL check measured: chat ITL -32% over the plain SLO check, agent TTFT +26% (2026-10-17)
 

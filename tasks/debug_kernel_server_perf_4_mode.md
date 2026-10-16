@@ -705,7 +705,25 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     adds ~6 ms TTFT and some P99 ITL); at saturation (32/s) the split gives +3% throughput and -15%
     TTFT, while EDF + floor loses (-5% throughput, +16% TTFT: the 2048 floor and 50 ms budget throttle
     prefill when every request is short). The 4-mode gains are specific to long-context mixing
-    (agent / TraceLab / mixtures), as the B1 and step-trace evidence predicts. Other workloads running.
+    (agent / TraceLab / mixtures), as the B1 and step-trace evidence predicts.
+    **GSM8K / MATH-500 / HumanEval / Code-Feedback (08:08-09:21, 36 arms, 0 tracebacks / fallbacks):**
+    dataset size caps N (GSM8K 1319, MATH-500 500, HumanEval 164 prompts), so their higher-rate points
+    exit rc=1 on the harness's "did not complete all N" check after serving every available prompt --
+    all three arms see the same requests. MTP vs split vs EDF+floor, mean TTFT ms / mean ITL / P99 ITL:
+    | point | MTP | split 3072 | EDF + floor |
+    |---|---|---|---|
+    | GSM8K 8 | 30 / 3.38 / 15.0 | 38 / 3.44 / 11.8 | 38 / 3.43 / 11.7 |
+    | GSM8K 32 (31.0 req/s) | 36 / 4.99 / 18.4 | 51 / 5.34 / 25.0 | 50 / 5.33 / 24.8 |
+    | MATH-500 32 (27-28 req/s) | 91 / 6.16 / 21.7 | 104 / 6.24 / 29.7 | 222 / 6.58 / 28.6 |
+    | HumanEval 32 | 37 / 5.30 / 18.2 | 53 / 5.94 / 26.4 | 53 / 5.80 / 25.9 |
+    | Code-Feedback 16 | 63 / 5.65 / 22.2 | 77 / 5.79 / 28.6 | 82 / 5.82 / 28.7 |
+    | Code-Feedback 32 (saturated, 18 req/s) | 29.1 s / 6.75 / 25.1 | 27.5 s / 6.55 / 32.4 | 31.5 s / 6.90 / 31.9 |
+    Throughput is equal (within 1-2%) everywhere below saturation. **On short prompts the 4-mode
+    split is slightly worse:** +8..+16 ms TTFT, +1..+7% mean ITL, +30..+45% P99 ITL (prefill now shares
+    the step with verify rows); at saturation (Code-Feedback 32) it gains +2% throughput and -5% TTFT.
+    EDF + floor matches the split or is worse. The gains measured on the cohort / TraceLab come from
+    long-context prefill mixed with decode; a production deployment should enable the 4-mode step only
+    when such prefill is present (a dispatch decision per step, not a fallback). Mooncake and LongBench v2 running.
 
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
   (goal point 3); earlier fits used the RoPE-corrupted model and are void (incl. the uncommitted

@@ -803,6 +803,11 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       queue clause keeps mixing on), ShareGPT keeps MTP throughput with TTFT -45%, WebShop's loss vs MTP
       shrinks from -10% to -7% throughput (ITL still +9%: short-prompt agent traffic is not fully
       recovered). **Default dispatch from here: mix iff prefill context >= 8192 or >= 4 requests wait.**
+      **Output gate (15:27-15:31, `gateq_gate_20261016.sh`, 3 arms clean, graphs on):** MTP repeat vs MTP
+      short 15 / long 39 (floor); split + EDF + preemption + gate short **37** / long 18, PASS (gate fired,
+      FUSED_SPLIT_CALLS 1001). Short prompts now prefill alone as in MTP, so they agree longer than the
+      floor; the long-prompt gap is the FA3-vs-FA2 bf16 difference already adjudicated by the same-input
+      check above.
 
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
   (goal point 3); earlier fits used the RoPE-corrupted model and are void (incl. the uncommitted

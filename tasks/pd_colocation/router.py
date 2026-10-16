@@ -336,6 +336,15 @@ class Router:
                            "pull_pred": self.last_pull, "pool_hit": pool_hit * blk}
             rejected_nodes += 1
             reasons[self.last_reason] += 1
+        if self.a.no_feasible_fallback == "cache":
+            # Overload: every node misses this request's SLO. Moving it then only adds recompute to
+            # an already saturated cluster (192 x 16K shared-prefix mix: 99% of decisions had no
+            # feasible node, and the most-slack fallback scattered requests off their prefixes --
+            # chat TTFT 28 -> 73 s vs cache affinity), so take the top-hit node and do the least work.
+            best_i = order[0]
+            best_pred = (self.predict(self.workers[best_i], max(0, n_tok - hits[best_i] * blk), deadline,
+                                      n_tok, max(0, pool_hit - hits[best_i]) * blk if self.pool else 0)[0],
+                         self.last_pull)
         return best_i, {"hit": hits[best_i] * blk, "rejected_nodes": rejected_nodes,
                         "reject_reasons": dict(reasons), "least_bad": True,
                         "ttft_pred": best_pred[0], "pull_pred": best_pred[1],
@@ -485,6 +494,8 @@ def main():
                     help="also reject a node if admitting the request would push a request already "
                          "decoding there past its ITL SLO")
     ap.add_argument("--chunk-tokens", type=int, default=2048, help="workers' --chunked-prefill-size")
+    ap.add_argument("--no-feasible-fallback", choices=["slack", "cache"], default="slack",
+                    help="when no node is predicted to meet the SLO: the most-slack node, or the top-hit node")
     ap.add_argument("--kv-tokens", type=int, default=1_000_000)
     ap.add_argument("--prefill-tok-s", type=float, default=20000)
     ap.add_argument("--decode-step-ms", type=float, default=15)

@@ -291,6 +291,17 @@ static mixture.
             (predicted mean ITL ~44 ms vs a 50 ms SLO) and moved to an idle node when the residents are
             near their end (20 of 300 tokens left). A/B queued on the hot mix:
             `mn_resident_itl_8gpu_20261017.sh` (`--check-residents 0` vs `1`, same build, x2).
+      - [ ] **What to do when no node can meet the SLO (2026-10-17).** On the 192 x 16K shared-prefix mix
+            (`mn_manyprefix_transfer_8gpu_20261017.sh`, rep 1) the SLO check ignoring the pool lost badly
+            to cache affinity -- agent TTFT 48.7 vs 30.4 s, chat TTFT 73.4 vs 28.1 s, chat throughput -19%,
+            chat ITL +48% -- because 3 896 of 3 940 decisions (99%) found no feasible node and fell back to
+            the most-slack node, scattering requests off their prefixes (779 went to a node with no hit)
+            and adding recompute to a saturated cluster. Its predictions there were also pessimistic
+            (median 107 s predicted vs 73 s measured). When every node misses, the request misses wherever
+            it goes, so the router should minimise added work: `--no-feasible-fallback cache` takes the
+            top-hit node (implemented, unit-checked; default stays `slack`). A/B queued:
+            `mn_overload_fallback_8gpu_20261017.sh` (cache affinity vs SLO check + transfer + resident
+            ITL + cache fallback, x2).
       - [ ] margin / quantile choice set from the measured error distribution
       - [ ] A/B: cache affinity | current SLO check | + step model | + transfer term | + margin, on
             goodput / SLO attainment at the 8-GPU H20 points (agent C=16/32, chat 8 req/s)

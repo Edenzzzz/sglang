@@ -6,6 +6,9 @@
   decoding there past its ITL SLO (time spent so far + remaining steps at the step time with the new request + one
   prefill chunk per step during its prefill); decisions log the rejecting check. A/B queued
   (`mn_resident_itl_8gpu_20261017.sh`).
+- `router.py --no-feasible-fallback cache`: when no node is predicted to meet the SLO, take the top-hit node instead
+  of the most-slack one (the latter scattered requests off their prefixes under overload: chat TTFT 28 -> 73 s on
+  the 192-prefix mix). A/B queued (`mn_overload_fallback_8gpu_20261017.sh`).
 - Docs, CHANGELOG, router and scripts no longer use "veto": the router's SLO-feasibility check is called that; the
   decision-log field `vetoed` is now `rejected_nodes` (mn_audit reads both). Scripts renamed
   `mn_slo_check_8gpu_20261017.sh`, `mn_pool_slo_check_8gpu_20261017.sh`.

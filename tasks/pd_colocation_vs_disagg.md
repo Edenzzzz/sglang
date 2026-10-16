@@ -398,11 +398,35 @@ PD disaggregation (sglang_router pd, stock MTP). Driver `tasks/pd_colocation/mn_
   P99 34 vs 185 ms). Disagg is prefill-bound: its 2 prefill pods hit 16.6% of prompt tokens (862K /
   5.19M, `mn_audit.py`), 8 workers 0 tracebacks / 0 fallbacks, 302-344 requests each. Command:
   `bash tasks/pd_colocation/mn_disagg_rerun_8gpu_20261016.sh` (SGL_PY=up_clean, KERNEL=lpt).
-  - [ ] **Chat request-rate sweep at reference-list rates (queued 2026-10-16):** the matrix's chat 4 / 8 req/s
+  - [x] **Chat request-rate sweep at reference-list rates (2026-10-16, 23:5x):** the matrix's chat 4 / 8 req/s
     is 0.5 / 1 req/s per GPU, at or below the bottom of the papers' per-GPU rates (SLOs-Serve 1.5-4.5 per
-    A100, semi-PD 11-16 per A100 for Llama3-8B ShareGPT, DistServe / Sarathi-Serve 0.5-10). Sweep 1 / 2 /
-    4 / 8 req/s per GPU (8-64 total) at agent C=16, stock coloc | ours | stock PD disagg, for the throughput
-    vs tok/s/user figure with p1/p10/p90/p99 error bars: `bash tasks/pd_colocation/mn_chat_ratesweep_8gpu_20261016.sh`.
+    A100, semi-PD 11-16 per A100 for Llama3-8B ShareGPT, DistServe / Sarathi-Serve 0.5-10). Swept 1 / 2 /
+    4 / 8 req/s per GPU (8-64 total; plus the matrix's 4 req/s point) at agent C=16, stock coloc | ours |
+    stock PD disagg. Figure [`h20x8_chatsweep_c16.png`](pd_colocation/figures_20261016/h20x8_chatsweep_c16.png)
+    (throughput vs tok/s/user: median marker, p10-p90 bar, p1-p99 whisker; SLO attainment, TTFT, TPOT vs
+    chat rate; data [`h20x8_chatsweep_c16.csv`](pd_colocation/figures_20261016/h20x8_chatsweep_c16.csv)).
+    Every arm completed every request; all 14 audited arms 8 workers 0 tracebacks / 0 fallbacks; ours'
+    composition per worker at 8 / 16 / 32 / 64 req/s: FUSED_SPLIT_CALLS >= 3K / 3.5K / 10K / 15.5K,
+    MIXEDSPEC_STEPS >= 101 / 101 / 401 / 651, EDF_PARK firing. Prefill cache hit: ours 44-68%, stock coloc
+    25-39%, disagg 5-13%.
+    | chat req/s (per GPU) | ours vs stock coloc: agent tput / TTFT / ITL | chat tput / TTFT / ITL |
+    |---|---|---|
+    | 4 (0.5) | +22% / -17% / -26% | = (offered) / -83% / -17% |
+    | 8 (1) | +20% / -3% / -32% | = (offered) / -81% / -30% |
+    | 16 (2) | +6% / -9% / -12% | +12% / -75% / -7% |
+    | 32 (4) | +12% / -11% / -17% | +10% / -40% / -1% |
+    | 64 (8) | +25% / -16% / -28% | +20% / -30% / -6% |
+    **Reading.** (1) 8 H20s with this agent tenant saturate between 1 and 2 chat req/s per GPU, so the
+    papers' upper per-GPU rates (their ShareGPT-only workloads on A100) are deep overload here; above 8
+    req/s every arm queues (TTFT 10-144 s) and colocated chat TPOT falls again past 16 req/s because
+    fewer requests decode at once. (2) Ours beats stock colocation on throughput (+6..+25%) and TTFT at
+    every rate; the >=30% ITL bar is met only at 8 req/s (both tenants) and 64 req/s agent (-28%, just
+    short); agent TTFT never clears -30%. (3) Stock PD disagg has the worst TTFT (21-144 s) and the
+    lowest throughput at every rate, but the lowest TPOT and a far better slow-user tail at low load
+    (chat p1 47 vs 4 tok/s/user at 4 req/s): its prefill pods throttle admission, so its decode pods are
+    lightly loaded. Command: `bash tasks/pd_colocation/mn_chat_ratesweep_8gpu_20261016.sh`, then
+    `PYTHONPATH=<matplotlib> python tasks/pd_colocation/mn_sweep_figure.py tasks/pd_colocation/figures_20261016/h20x8_chatsweep_c16`;
+    audit `SID=bb854a10b8954223 NPODS=4 python tasks/pd_colocation/mn_audit.py <arm>_8g_chatsweep_c16_r<R>`.
   - [x] **Stock PD-disagg ITL/TPOT are understated by burst delivery (2026-10-16):** 17.5-29.1% of its
     requests stream every token at once at the end (ITLs 0.0 s; never on colocated workers, 0 of 1 200),
     so their decode time sits in TTFT and adds zero-gap ITLs. Excluding those requests, disagg mean ITL /

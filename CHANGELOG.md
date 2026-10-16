@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.3 — H20 8-GPU chat request-rate sweep at reference-list rates (2026-10-16)
+
+- 1 / 2 / 4 / 8 chat req/s per GPU at agent C=16, stock coloc | ours | stock PD disagg, with the throughput vs
+  tok/s/user figure (p1/p10/p90/p99 error bars). Ours beats stock colocation on throughput (+6..+25%) and TTFT at
+  every rate; >=30% ITL only at 1 req/s/GPU; agent TTFT never clears -30%. Disagg: worst TTFT and throughput,
+  lowest TPOT. 8 H20s saturate between 1 and 2 chat req/s per GPU with this agent tenant.
+
 ## v1.20.2 — Interactivity error bars on the throughput vs tok/s/user figures (2026-10-16)
 
 - `eval_curves.py` reports per-request tok/s/user p1 / p10 / p90 / p99 next to the median;

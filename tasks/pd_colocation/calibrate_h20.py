@@ -39,7 +39,7 @@ for n in (4096, 8192, 16384, 32768, 49152):
     print(f"prefill {n:6d} tok: TTFT {ttft * 1000:8.1f} ms  -> {n / ttft:8.0f} tok/s", flush=True)
 # Decode ITL vs concurrency at SEVERAL context lengths. The first calibration used 256-token
 # prompts only, which fits a slope of 0.065 ms/seq -- so the router's TPOT prediction never
-# crossed a 100 ms budget, and the SLO veto never fired on an overloaded hot-prefix holder
+# crossed a 100 ms budget, and the SLO check never fired on an overloaded hot-prefix holder
 # (coloc_slo_edf_hot, 2026-10-08). A decode row's cost grows with its KV, so the slope has to be
 # per KV token, not per sequence.
 dec = []

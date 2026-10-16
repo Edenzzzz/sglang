@@ -17,7 +17,7 @@ dict). Fixed in sglang's config loader; details and bisection in
 
 What that does and does not touch, point by point:
 
-1. **Cache-hit-first routing with an EDF/SLO veto** -- the policy argument is unaffected; any
+1. **Cache-hit-first routing with an EDF/SLO check** -- the policy argument is unaffected; any
    serving latency used to motivate it was measured on the corrupted model and must be re-run.
 2. **Best-effort migration / replication** -- unaffected in logic (no serving numbers depend on
    the model's outputs).
@@ -62,7 +62,7 @@ configuration, failing 6/6 at 68-116 bad rows of 384):
 
 **What this means for each of the four points, stated against corrected evidence:**
 
-1. **Route to highest cache-hit node, EDF/SLO veto** -- **UNAFFECTED.** This is a router policy and
+1. **Route to highest cache-hit node, EDF/SLO check** -- **UNAFFECTED.** This is a router policy and
    does not depend on the fused kernel. The argument in section 1 stands on its own.
 2. **Best-effort cache migration / replication** -- **UNAFFECTED**, same reason. Section 2 stands.
 3. **"Our EDF predictor is more accurate because the fused kernel is easier to model"** --
@@ -98,19 +98,19 @@ so far varies the workload mixture, shifts it mid-run, or compares against any b
 goodput. Items 1-3 measure routing, cache replication and EDF ordering against 2P2D at a single
 static mixture.
 
-- [x] **1. Cache-hit-first routing with an SLO veto** (2026-10-08, H20 16 GPUs) — cache-affinity
+- [x] **1. Cache-hit-first routing with an SLO check** (2026-10-08, H20 16 GPUs) — cache-affinity
       colocation vs the best disagg (2P2D): agent TTFT -93% (21.6 -> 1.6 s), chat TTFT -99.5%,
-      prefix hit 73% vs 23-31%. Disagg keeps lower ITL (3.7 vs 6.4 ms). The calibrated veto fires on 2% of
+      prefix hit 73% vs 23-31%. Disagg keeps lower ITL (3.7 vs 6.4 ms). The calibrated SLO check fires on 2% of
       requests and trims chat P99 TTFT 15%.
-      Hot-prefix stress (4 shared 16K prompts piled on their holders): a TTFT-only veto barely
+      Hot-prefix stress (4 shared 16K prompts piled on their holders): a TTFT-only SLO check barely
       fires, because a cache holder's PREFILL stays fast while its DECODE degrades. Pricing the
       decode slowdown (`--decode-grid`) cuts chat ITL **-65%** and P99 **-80%** for a 25% chat TTFT
       cost (v0.18.0). Sub-items of this point:
       - [x] route to the highest-hit node first (affinity beats rr and disagg by 8-99x on TTFT)
-      - [x] veto on predicted SLO violation, counting only EARLIER-deadline in-flight requests
+      - [x] SLO check on predicted SLO violation, counting only EARLIER-deadline in-flight requests
             (`router.py feasible()`: it sums the prefill ahead of this request's deadline, and
             re-checks that admitting it does not push later-deadline requests past their own)
-      - [x] the veto must price the term the overload appears in (TPOT, not just TTFT)
+      - [x] the SLO check must price the term the overload appears in (TPOT, not just TTFT)
       - [x] load balancing: tie-break on hit bucket, then in-flight load, then random (a bare
             `min()` created a 2-worker hotspot; retracted and fixed, daaedef6a)
 - [x] **2. Best-effort cache migration / replication** (2026-10-08) — a cluster-wide mooncake L3
@@ -123,7 +123,7 @@ static mixture.
       P99 ITL -27%. Full stack vs stock MTP: TTFT -95%/-51%, ITL -42%/-38% (chat/codex, 24/s, 3 rounds).
 - [ ] **7. Inter-node routing: predict whether a request meets its TTFT and ITL SLO on node i, given
       i's estimated hit length x_i and current load** (added 2026-10-17 on the user's request; needs
-      more design thinking before more code). This is the decision behind point 1's veto: when the
+      more design thinking before more code). This is the decision behind point 1's SLO check: when the
       highest-hit node is too hot, route to the highest-hit node predicted to still meet the SLO.
       **Current predictor** (`router.py` `predict()` / `feasible()`, policy `cache_slo`; router-side
       bookkeeping only, no worker query):
@@ -148,7 +148,7 @@ static mixture.
       - optimistic: x_i is the router's hash estimate; the worker may have evicted those blocks.
       **Open design questions:**
       - target: a calibrated (unbiased) prediction plus an explicit margin, or a quantile (e.g. P90)
-        prediction? The cost is asymmetric -- a false veto loses the hit (recompute elsewhere,
+        prediction? The cost is asymmetric -- a false SLO check loses the hit (recompute elsewhere,
         cache replication as a side effect), a false accept misses an SLO.
       - queue drain as a sum of fitted step times (`fit_mtp_step.py`: chunk tokens, prefix ctx,
         decode rows, decode KV, acceptance) over ceil(ahead / chunk) steps -- point 3's claim that the
@@ -165,65 +165,65 @@ static mixture.
       - interaction with point 2 (routing to a non-holder IS replication) and point 4 (which holder to
         pull from).
       **Sub-items:**
-      - [x] **Current veto (no pool, no transfer term) vs cache affinity, same session, final stack,
-            8 H20 (2026-10-17, `bash tasks/pd_colocation/mn_slo_veto_8gpu_20261017.sh`; calibrated on one
+      - [x] **Current SLO check (no pool, no transfer term) vs cache affinity, same session, final stack,
+            8 H20 (2026-10-17, `bash tasks/pd_colocation/mn_slo_check_8gpu_20261017.sh`; calibrated on one
             final-stack worker: prefill 8.3K tok/s at 4K -> 4.4K at 48K, blended `--prefill-tok-s 5012`,
             decode grid conc x ctx). All 4 arms 8 workers 0 tracebacks / 0 fallbacks. Out tok/s / mean
             TTFT / mean ITL:
-            | point | arm | agent | chat | vetoed / least-bad | prefill hit |
+            | point | arm | agent | chat | moved / no feasible node | prefill hit |
             |---|---|---|---|---|---|
             | C=16, chat 8/s | cache | 377 / 6.80 s / 17.0 | 1659 / 304 ms / 16.2 | - | 65.2% |
-            | C=16, chat 8/s | veto | 366 / 7.14 s / 17.6 | 1658 / 474 ms / 14.7 | 345 / 8 of 2 500 | 60.6% |
+            | C=16, chat 8/s | SLO check | 366 / 7.14 s / 17.6 | 1658 / 474 ms / 14.7 | 345 / 8 of 2 500 | 60.6% |
             | C=32, chat 8/s | cache | 257 / 11.4 s / 75.5 | 1657 / 2.41 s / 135 | - | 64.4% |
-            | C=32, chat 8/s | **veto** | **319 / 12.6 s / 58.0** | 1657 / 2.65 s / **91.7** | 1 667 / 314 of 2 596 | 54.9% |
-            At C=16 the veto is neutral-to-worse (agent TTFT +5%, chat TTFT +56%): without a pool, a
-            vetoed request recomputes its prefix. At C=32 it wins: agent throughput +24%, ITL -23%,
+            | C=32, chat 8/s | **SLO check** | **319 / 12.6 s / 58.0** | 1657 / 2.65 s / **91.7** | 1 667 / 314 of 2 596 | 54.9% |
+            At C=16 the SLO check is neutral-to-worse (agent TTFT +5%, chat TTFT +56%): without a pool, a
+            moved request recomputes its prefix. At C=32 it wins: agent throughput +24%, ITL -23%,
             chat ITL -32%, at +10% TTFT on both tenants -- spreading hot holders' decode load. The
-            control reproduces the 2026-10-16 C=32 fixed-router run within 3%. **Veto stack vs stock
+            control reproduces the 2026-10-16 C=32 fixed-router run within 3%. **SLO check stack vs stock
             colocation at C=32:** agent throughput +44%, ITL -40%; chat throughput +13%, TTFT -64%, ITL
-            -50% -- every bar metric except agent TTFT (+4%). The veto fired on 64% of C=32 decisions,
+            -50% -- every bar metric except agent TTFT (+4%). The SLO check moved a request on 64% of C=32 decisions,
             and 314 had no feasible worker: the predictor is coarse (item 7's error list).
-      - [x] **Pool-on A/B (2026-10-17, `bash tasks/pd_colocation/mn_pool_veto_8gpu_20261017.sh`; agent
+      - [x] **Pool-on A/B (2026-10-17, `bash tasks/pd_colocation/mn_pool_slo_check_8gpu_20261017.sh`; agent
             C=16, chat 8 req/s; workers at sglang's default `best_effort` prefetch).** All 3 arms 8 workers
             0 tracebacks / 0 fallbacks. Out tok/s / mean TTFT / mean ITL (chat P99 TTFT):
-            | arm | agent | chat | vetoed | prefill hit |
+            | arm | agent | chat | requests moved off their top-hit node | prefill hit |
             |---|---|---|---|---|
             | cache | 358 / 7.59 s / 17.5 | 1659 / 259 ms / 15.3 (5.5 s) | - | 65.0% |
-            | veto, no transfer term | 333 / 8.04 s / 19.4 | 1659 / 176 ms / 14.8 (1.35 s) | 379 / 2 500 | 59.0% |
-            | veto + transfer term | 349 / 7.40 s / 20.1 | 1658 / 458 ms / 17.6 (15.9 s) | 406 / 2 500 | 59.7% |
+            | SLO check, no transfer term | 333 / 8.04 s / 19.4 | 1659 / 176 ms / 14.8 (1.35 s) | 379 / 2 500 | 59.0% |
+            | SLO check + transfer term | 349 / 7.40 s / 20.1 | 1658 / 458 ms / 17.6 (15.9 s) | 406 / 2 500 | 59.7% |
             **The transfer term never fired:** it predicted 0 pulled tokens for every agent request.
-            Under `best_effort` a pull lands only while a request waits in the queue, and the veto sends
+            Under `best_effort` a pull lands only while a request waits in the queue, and the SLO check sends
             requests to idle non-holders, where the predicted wait is 0 -- so 0 is the right prediction,
             and the workers did pull almost nothing (60-412 tokens per agent request on average); the
-            bandwidth EWMA never moved off its 10 GB/s prior. **The two veto arms therefore ran the same
+            bandwidth EWMA never moved off its 10 GB/s prior. **The two SLO-check arms therefore ran the same
             routing logic, and their difference is run-to-run noise:** 8% on agent TTFT and 1.35 vs 15.9 s
-            on chat P99 TTFT. Single runs do not resolve these metrics; the earlier single-run veto A/Bs
+            on chat P99 TTFT. Single runs do not resolve these metrics; the earlier single-run SLO check A/Bs
             carry the same caveat. Design implication: `best_effort` is the wrong prefetch policy for
             deliberate non-holder routing -- recomputing a 32K prefix takes ~6 s, pulling it ~0.2 s -- so
             the workers should wait for the pull (`timeout` / `wait_complete`) and the router should
-            predict the same. Without a pool the prefix costs a full recompute, so the veto is neutral
+            predict the same. Without a pool the prefix costs a full recompute, so the SLO check is neutral
             at C=16 (above) and wins at C=32 only by spreading decode load.
       - [x] **Timeout-prefetch A/B (2026-10-17, `bash tasks/pd_colocation/mn_pool_timeout_8gpu_20261017.sh`,
             interleaved x2).** Agent tok/s / mean TTFT, chat mean TTFT (P99):
             | arm | rep 1 | rep 2 |
             |---|---|---|
             | cache | 359 / 7.36 s, 368 ms (9.8 s) | 366 / 7.37 s, 376 ms (8.2 s) |
-            | veto + transfer | 343 / 7.84 s, 177 ms (1.75 s) | 354 / 8.01 s, 400 ms (12.8 s) |
-            Cache affinity repeats within ~2%; the veto's chat tail does not (P99 1.75 vs 12.8 s). Two-rep
-            means: veto agent throughput -4%, agent TTFT +8%, chat TTFT -22% -- **at C=16 on this mix the
-            veto's chat gain is inside the noise and it costs the agent ~8% TTFT.** **The transfer term still cannot fire on this workload, for a
-            reason the policy does not change:** all 27 agent requests the veto moved were first rounds with
+            | SLO check + transfer | 343 / 7.84 s, 177 ms (1.75 s) | 354 / 8.01 s, 400 ms (12.8 s) |
+            Cache affinity repeats within ~2%; the SLO check's chat tail does not (P99 1.75 vs 12.8 s). Two-rep
+            means: SLO check agent throughput -4%, agent TTFT +8%, chat TTFT -22% -- **at C=16 on this mix the
+            SLO check's chat gain is inside the noise and it costs the agent ~8% TTFT.** **The transfer term still cannot fire on this workload, for a
+            reason the policy does not change:** all 27 agent requests the SLO check moved were first rounds with
             local hit 0 and pool hit 0 (cold prompts, nothing to pull); a second round's prefix sits on its
-            holder and is rarely vetoed; 1 of 99 agent decisions predicted any pull. TraceLab sessions share
+            holder and is rarely moved off it; 1 of 99 agent decisions predicted any pull. TraceLab sessions share
             no prefix across sessions, so with 2 rounds there is no request that is both moved and
             transferable. Testing it needs hot shared prefixes on overloaded holders: queued
             `mn_hot_transfer_8gpu_20261017.sh` (HOT=1, 4 x 16K shared system prompts at 16 req/s; cache |
-            veto ignoring the pool | veto + transfer, x2). The cold moved requests also show the
+            SLO check ignoring the pool | SLO check + transfer, x2). The cold moved requests also show the
             predictor's spread: 8.9 s predicted vs 0.7 s measured, 10.7 s vs 37.9 s.
       - [x] **Hot-prefix transfer A/B (`bash tasks/pd_colocation/mn_hot_transfer_8gpu_20261017.sh`; HOT=1, 4 groups x 16K shared
-            prefixes at 16 req/s, agent C=16, pool on, timeout prefetch; cache | veto ignoring the pool |
-            veto + transfer, x2).** First run (02:0x): cache rep 1 agent 239 tok/s / 10.4 s / 30.0 ms,
-            chat 1768 / 9.8 s / 75.4 ms. The veto-ignoring-pool rep 1 **crashed a worker** on
+            prefixes at 16 req/s, agent C=16, pool on, timeout prefetch; cache | SLO check ignoring the pool |
+            SLO check + transfer, x2).** First run (02:0x): cache rep 1 agent 239 tok/s / 10.4 s / 30.0 ms,
+            chat 1768 / 9.8 s / 75.4 ms. The SLO check-ignoring-pool rep 1 **crashed a worker** on
             `assert self.chunked_req is None` (`scheduler.py:4314`): EDF's reservation for earlier-deadline
             requests (`SGLANG_EDF_RESERVE_EARLIER`, on with `PREEMPT=1`) caps the in-progress chunk below
             the step budget, and the admission guard that refuses to chunk a second request only applied
@@ -236,12 +236,12 @@ static mixture.
             | arm | agent | chat | requests / worker | prefill hit |
             |---|---|---|---|---|
             | cache | 236 / 9.96 s / 30.5 | 1664 / 13.9 s / 78.6 | 19-807 | 92.9% |
-            | veto ignoring the pool | 224 / 10.1 s / 35.5 | **2017 / 1.41 s / 51.6** | 328-506 | 93.3% |
-            | veto + transfer | 216 / 10.2 s / 35.5 | **2015 / 1.43 s / 50.1** | 221-549 | 93.3% |
-            **Veto vs cache: chat throughput +21%, TTFT -90%, ITL -34%; agent throughput -5..-8%, TTFT
+            | SLO check ignoring the pool | 224 / 10.1 s / 35.5 | **2017 / 1.41 s / 51.6** | 328-506 | 93.3% |
+            | SLO check + transfer | 216 / 10.2 s / 35.5 | **2015 / 1.43 s / 50.1** | 221-549 | 93.3% |
+            **SLO check vs cache: chat throughput +21%, TTFT -90%, ITL -34%; agent throughput -5..-8%, TTFT
             +2..+3%, ITL +16%.** Cache affinity piles each hot group on its holder (19 vs 807 requests per
-            worker); the veto spreads them at the same hit rate, because the 4 hot prefixes replicate after
-            a few recomputes. Reps agree within ~2% for the veto arms (chat TTFT 1.61 / 1.22 s); the cache
+            worker); the SLO check spreads them at the same hit rate, because the 4 hot prefixes replicate after
+            a few recomputes. Reps agree within ~2% for the SLO-check arms (chat TTFT 1.61 / 1.22 s); the cache
             arm varies more (agent 271 / 200 tok/s). **The transfer term makes no difference here, as
             expected:** only 37 of 1 623 moved requests had a pool hit beyond their local one (4 x 16K
             replicates almost immediately). On those 37 its prediction was close: 26.3K tokens predicted vs
@@ -253,7 +253,7 @@ static mixture.
       - [x] **Predictor error (same runs, `ttft_obs` vs `ttft_pred`):** predicted / measured median 0.64
             (chat) and 0.72-0.73 (agent) -- about 30% optimistic, as the error list expected (blended
             prefill rate, decode interference, future arrivals). Agent error p10 / p90 -6.4..-7.7 s /
-            +9.2..+9.6 s: far too wide for a hard veto at a ~8-15 s deadline.
+            +9.2..+9.6 s: far too wide for a hard SLO check at a ~8-15 s deadline.
       - [ ] step-model queue drain (with decode interference) replacing the constant prefill rate.
             **Step 1 implemented 2026-10-17 (`router.py --prefill-curve`, not yet measured):** prefill time
             from the calibrated cold-TTFT curve, `T(ctx) - T(ctx - uncached)`, so long contexts cost more
@@ -270,15 +270,29 @@ static mixture.
             prefetched pages, minus the router's local-hit estimate, over the observed queue
             wait); a complete pull only raises it. The router now logs `ttft_obs` next to
             `ttft_pred`. Unit check: a 32K-prefix request whose holder has a 12 s queue -- without
-            the pool the veto picks a non-holder at a predicted 9.5 s (3 s queue + 6.5 s recompute);
+            the pool the SLO check picks a non-holder at a predicted 9.5 s (3 s queue + 6.5 s recompute);
             with it, 3.0 s (the 1.9 GB pull fits inside the wait). A/B queued:
-            `mn_pool_veto_8gpu_20261017.sh` (pool on: affinity | veto without | veto with the
+            `mn_pool_slo_check_8gpu_20261017.sh` (pool on: affinity | SLO check without | SLO check with the
             transfer term, agent C=16, chat 8 req/s).
             The index answers "radix tree?": it IS one, flattened at 256-token blocks (each key
             chains its parent's), so matching is the radix walk; it loses up to 255 tokens per
             match and evicts per block rather than per leaf.
+      - [ ] **Protect requests already decoding on the target node (user, 2026-10-17).** The check
+            covered this request's TTFT and ITL and the TTFT deadlines of requests still queued on the
+            node, but not the ITL of requests already decoding there -- and admission costs them twice:
+            the new request's prefill chunks ride in their decode steps until its prefill ends, then it
+            decodes beside them. The hot-prefix A/B shows the cost: moving chat raised agent ITL +16%.
+            **Implemented (`router.py --check-residents`, not yet measured):** reject the node if any
+            resident's predicted mean ITL -- decode time spent so far + its remaining steps at the step
+            time with the new request + one prefill chunk (`--chunk-tokens`, prefill-curve cost) per
+            step while the new request's prefill runs -- exceeds its ITL SLO. Each decision logs which
+            check rejected each node (`own_ttft` / `own_itl` / `queued_ttft` / `resident_itl`). Unit
+            check: a 24K-uncached request (12 chunks) is admitted beside residents early in their output
+            (predicted mean ITL ~44 ms vs a 50 ms SLO) and moved to an idle node when the residents are
+            near their end (20 of 300 tokens left). A/B queued on the hot mix:
+            `mn_resident_itl_8gpu_20261017.sh` (`--check-residents 0` vs `1`, same build, x2).
       - [ ] margin / quantile choice set from the measured error distribution
-      - [ ] A/B: cache affinity | current veto | + step model | + transfer term | + margin, on
+      - [ ] A/B: cache affinity | current SLO check | + step model | + transfer term | + margin, on
             goodput / SLO attainment at the 8-GPU H20 points (agent C=16/32, chat 8 req/s)
 - [ ] **5. THE SUPERSET CLAIM: adapt to any workload the baselines are each tuned for.**
       Added 2026-10-09 on the user's correction; **this is the capacity/throughput axis and
@@ -353,7 +367,7 @@ static mixture.
       full 4-NIC fabric, and reported as such.** No congestion exists to relieve at 16 GPUs on 4
       hosts: random tie-break among near-equal hits is neutral, the L3 store moved ~236 GB without
       measurable contention, and disagg's 8 prefill GPUs replicate 4 hot prefixes to 82% hit. The
-      store also COSTS ~19% chat ITL once the veto spreads load. Sub-items:
+      store also COSTS ~19% chat ITL once the SLO check spreads load. Sub-items:
       - [x] randomized pull among near-equal-hit nodes (`cache_rand`): neutral at 16 GPUs
       - [x] the same on a NARROWED fabric (`ONE_NIC=1`) -- **randomized selection LOSES even under
             deliberate contention.** Measured below; this is a negative result for the proposed
@@ -682,7 +696,7 @@ prefetch). Any worker can therefore pull a prefix that any other worker computed
 - **With affinity routing the store is idle (16 pulls in the whole run) and changes nothing.**
   Affinity already serves 73% of tokens locally. This is the intended ordering: route to the
   holder first (point 1), and pull from the store only when the router must place a request
-  elsewhere (an SLO veto or an overloaded holder, point 2).
+  elsewhere (an SLO check or an overloaded holder, point 2).
 - **Not yet shown: the congestion advantage (point 4).** At 16 GPUs on 4 hosts the store moved
   ~236 GB without measurable link contention, so random vs load-aware source choice cannot
   differ yet. That needs either more nodes than the 16-GPU cap allows, or a deliberately
@@ -692,7 +706,7 @@ prefetch). Any worker can therefore pull a prefix that any other worker computed
   connection (`ServerDisconnectedError`). The router now retries once before streaming starts
   (a8465ecc7), as the stock router does.
 
-**The SLO veto, calibrated, with worker-side EDF (point 1), 2026-10-08.** The router's
+**The SLO check, calibrated, with worker-side EDF (point 1), 2026-10-08.** The router's
 `PerfModel` was fitted on one H20 worker (`mn_run.py calibrate`, `calibrate_h20.py`): prefill
 9.0K tok/s at 4-8K falling to 4.9K at 49K, so 5 531 tok/s over 16-49K, and decode ITL 5.05 ms +
 0.065 ms per running sequence. The router uses the same length-scaled TTFT deadline as the
@@ -702,16 +716,16 @@ chunk cap (`_edf` suffix; the configuration that won on the H200). Command:
 python mn_run.py coloc_cache_edf coloc_slo_edf` (commit bf96b6cd3). 0 tracebacks and 0 fallbacks;
 every request completed.
 
-| arm | agent TTFT ms mean / P99 | chat TTFT ms mean / P99 | ITL ms agent / chat | vetoes |
+| arm | agent TTFT ms mean / P99 | chat TTFT ms mean / P99 | ITL ms agent / chat | SLO-check moves |
 |---|---|---|---|---|
 | coloc_cache | 1 596 / 8 371 | 101 / 1 539 | 7.2 / 6.4 | - |
 | coloc_cache_edf (worker EDF) | 1 611 / 8 102 | 117 / 2 269 | 7.4 / 6.4 | - |
-| **coloc_slo_edf** (veto + worker EDF) | **1 582** / 8 132 | 108 / **1 313** | 7.2 / 6.4 | 71 of 3 587 (2.0%) |
+| **coloc_slo_edf** (SLO check + worker EDF) | **1 582** / 8 132 | 108 / **1 313** | 7.2 / 6.4 | 71 of 3 587 (2.0%) |
 
-- **The veto fires once calibrated** (the uncalibrated run vetoed nothing). It moves 2% of
+- **The SLO check fires once calibrated** (the uncalibrated run moved no request). It moves 2% of
   requests off their highest-hit node and trims the chat TTFT tail (P99 -15% vs affinity alone),
   with means unchanged. At this load affinity rarely pushes a worker past its SLO, so there is
-  little to correct. The veto is a tail guard, and its value should grow with hotspots, which the
+  little to correct. The SLO check is a tail guard, and its value should grow with hotspots, which the
   HOT experiment below creates.
 
 **Hot-prefix stress (points 1, 2, 4), 2026-10-08.** `HOT=1`: the chat tenant becomes 4 groups
@@ -721,7 +735,7 @@ requests); the agent tenant is unchanged. Command: `HOT=1 RUN_TAG=_hot ROUTER_AR
 (commits 498d60155, daaedef6a; the cache tie-break was already randomized). 0 tracebacks, 0
 fallbacks, every request completed.
 
-| arm | agent TTFT ms mean / P99 | chat TTFT ms mean / P99 | ITL ms agent / chat (chat P99) | prefix hit | vetoes | max requests/worker |
+| arm | agent TTFT ms mean / P99 | chat TTFT ms mean / P99 | ITL ms agent / chat (chat P99) | prefix hit | SLO-check moves | max requests/worker |
 |---|---|---|---|---|---|---|
 | coloc_cache_hot | 1 673 / 8 602 | 340 / 2 263 | 7.1 / 23.4 (224) | 93.5% | - | 803 |
 | coloc_slo_edf_hot | 1 605 / 8 408 | 347 / 3 290 | 7.8 / 19.1 (230) | 93.5% | 96 (2.7%) | 808 |
@@ -730,15 +744,15 @@ fallbacks, every request completed.
 
 - **Colocation still wins TTFT by an order of magnitude** (agent -94%, chat -99%), even when the
   workload is designed to create hotspots.
-- **CORRECTED 2026-10-08 (see the decode-aware veto below): the "veto is too weak" reading in
-  this bullet held only while the veto priced TTFT alone. Pricing the decode slowdown cuts chat
+- **CORRECTED 2026-10-08 (see the decode-aware SLO check below): the "SLO check is too weak" reading in
+  this bullet held only while the SLO check priced TTFT alone. Pricing the decode slowdown cuts chat
   mean ITL to 8.3 ms and P99 to 44 ms.** Original reading: **Disagg wins chat ITL by 5x here.** A hot group's decode concentrates on its holder in
   colocation (~800 requests on the busiest worker), while disagg spreads decode over 8 dedicated
-  GPUs. This is colocation's real weakness, and the veto is too weak to fix it: it moves only
+  GPUs. This is colocation's real weakness, and the SLO check is too weak to fix it: it moves only
   ~2.5% of requests, because the calibrated model predicts TTFT, and TTFT stays fine on a holder
-  whose prefix is cached. The overload shows up as ITL, which the veto does not price. The veto
+  whose prefix is cached. The overload shows up as ITL, which the SLO check does not price. The SLO check
   plus store trims chat ITL 19% (23.4 -> 18.9 ms) and P99 to 200 ms, and does not close the gap.
-- **What point 4 needs and does not yet have:** a veto that prices the decode (TPOT) slowdown a
+- **What point 4 needs and does not yet have:** a SLO check that prices the decode (TPOT) slowdown a
   request causes on its holder. The router's TPOT model exists (`decode_step_ms`,
   `decode_ms_per_seq`), but with the calibrated slope (0.065 ms/seq) it never crosses the
   100 ms ITL budget. Calibration measured ITL vs concurrency at short contexts, while the holders'
@@ -775,7 +789,7 @@ the store is idle. So the only arm that congests (`rr`) ignores cache hits entir
 arms that select on hits never pull. Randomized source selection has no choice to make in either.
 The isolating configuration needs both at once: several workers holding the SAME prefix (so hit
 lengths genuinely tie) and local misses that pull cross-node. `HOT=1 ONE_NIC=1` with the
-decode-aware veto does that -- the veto spreads each shared-prefix group over several workers, which
+decode-aware SLO check does that -- the SLO check spreads each shared-prefix group over several workers, which
 both replicates the prefix and forces the spread requests to pull. New policy `cache_slo_rand`
 (c87aa83b9) is `cache_slo` with the load term dropped inside a hit bucket, i.e. the goal's "pick
 randomly among near-equal holders"; it differs from `cache_slo` only when holders really tie.
@@ -783,7 +797,7 @@ Running: `HOT=1 ONE_NIC=1 mn_run.py coloc_slo_edf_hc coloc_slo_rand_hc`.
 
 **Randomized source selection under contention: measured, and it LOSES (2026-10-08).** The
 isolating pair, both arms identical except the policy -- hot shared prefixes, `ONE_NIC=1`,
-decode-aware veto (`--decode-grid`, 12 points), L3 store, worker EDF on both sides. Command:
+decode-aware SLO check (`--decode-grid`, 12 points), L3 store, worker EDF on both sides. Command:
 `HOT=1 ONE_NIC=1 RUN_TAG=_hotnic ROUTER_ARGS="<grid> --ttft-slo-ms 2000 --itl-slo-ms 40"
 mn_run.py coloc_slo_edf_hc` then `coloc_slo_rand_edf_hc` (commits c87aa83b9, f6eab46b3).
 0 tracebacks, 0 fallbacks, all requests completed in both.
@@ -806,7 +820,7 @@ randomness only to break what remains.
 hit lengths within a threshold, pull from one at random" is dominated by "pull from the least
 loaded of them". Randomness is not harmless here; it discards the signal that matters. What the
 goal's underlying intuition gets RIGHT is that concentration is the risk -- but the measured cure
-is the load-aware tie-break plus the decode-aware veto (chat ITL -65%, P99 -80%, v0.18.0), not
+is the load-aware tie-break plus the decode-aware SLO check (chat ITL -65%, P99 -80%, v0.18.0), not
 randomization. A congestion-dominated regime where randomization wins would need link cost to
 exceed holder-compute cost; one NIC at 16 GPUs does not reach it, and the simulated-node sweep
 below is the way to look for it.
@@ -824,8 +838,8 @@ started on the old 4-NIC assignment (2 of 16 workers). The identical script mtim
 was misleading -- `tar` preserves mtimes, so it showed the local file's time, not extraction time.
 Later arms would have been fully pinned, making the A/B inconsistent.
 
-**The veto has to price TPOT, not TTFT (point 1, resolved 2026-10-08).** The hot-prefix holders'
-overload shows up as slow decode, not slow prefill, so a TTFT-only veto never fired on them. Two
+**The SLO check has to price TPOT, not TTFT (point 1, resolved 2026-10-08).** The hot-prefix holders'
+overload shows up as slow decode, not slow prefill, so a TTFT-only SLO check never fired on them. Two
 fixes, in order:
 
 1. *Calibration.* `calibrate_h20.py` measured decode ITL at 256-token context only, fitting
@@ -852,23 +866,23 @@ fixes, in order:
    reproduces every measured point). 16 rows x 16K predicts 51 ms where the old slope predicted
    ~6 ms. Commits 7010f40fe, f6eab46b3.
 
-| hot-prefix arm | chat ITL mean / P99 ms | chat TTFT mean / P99 ms | agent ITL mean ms | vetoes |
+| hot-prefix arm | chat ITL mean / P99 ms | chat TTFT mean / P99 ms | agent ITL mean ms | SLO-check moves |
 |---|---|---|---|---|
 | coloc_cache_hot (affinity) | 23.4 / 224 | **340** / 2 263 | **7.1** | - |
-| coloc_slo_edf_hot (TTFT-only veto) | 19.1 / 230 | 347 / 3 290 | 7.8 | 96 (2.7%) |
-| **coloc_slo_edf_hot2 (decode-aware veto, ITL SLO 40 ms)** | **8.3 / 44.3** | 424 / 5 161 | 8.7 | **192 (5.4%)**, 20 least-bad |
-| coloc_slo_edf_hc_hot2 (decode-aware veto + L3 store) | 9.9 / 80.0 | 468 / 6 304 | 9.8 | - |
+| coloc_slo_edf_hot (TTFT-only SLO check) | 19.1 / 230 | 347 / 3 290 | 7.8 | 96 (2.7%) |
+| **coloc_slo_edf_hot2 (decode-aware SLO check, ITL SLO 40 ms)** | **8.3 / 44.3** | 424 / 5 161 | 8.7 | **192 (5.4%)**, 20 least-bad |
+| coloc_slo_edf_hc_hot2 (decode-aware SLO check + L3 store) | 9.9 / 80.0 | 468 / 6 304 | 9.8 | - |
 | disagg_2p2d_hot | 3.8 / 30.5 | 29 513 / 85 682 | 6.3 | - |
 
 **Pricing the decode cost cuts chat mean ITL 65% (23.4 -> 8.3 ms) and P99 80% (224 -> 44 ms)**,
 closing most of the gap to disaggregation, for a 25% chat TTFT cost (340 -> 424 ms) and slightly
 worse agent ITL. Colocation keeps a ~70x TTFT advantage. This is point 1's mechanism working as
-designed: route to the cache holder first, and veto it only when the load it would carry is
+designed: route to the cache holder first, and SLO check it only when the load it would carry is
 predicted to break the SLO -- with the SLO term that the overload actually appears in.
 
-**The L3 store does not help once the veto spreads the load, and costs ~19% chat mean ITL / 80%
+**The L3 store does not help once the SLO check spreads the load, and costs ~19% chat mean ITL / 80%
 P99** (8.3 -> 9.9 ms, 44 -> 80 ms; agent ITL 8.7 -> 9.8 ms). Its write-through traffic and
-prefetches compete with decode on the same GPUs, while the vetoed requests already replicate the
+prefetches compete with decode on the same GPUs, while the moved requests already replicate the
 hot prefixes by recomputing them. Together with the earlier result that the store is idle under
 affinity routing (16 pulls), the rule is: **the store pays only where routing CANNOT place a
 request near its prefix** -- round-robin, or a cold cluster -- and is a cost where the router is
@@ -951,7 +965,7 @@ arguments; it labels them.
 
 | point | mechanism exists in sglang | measured | argument only |
 |---|---|---|---|
-| 1. highest-hit-first with an EDF/SLO veto | yes — radix/prefix cache + router hit lengths; EDF ordering is **measured** on the MTP server (`edf-order-not-cap`) | the EDF *ordering* win, and the linear-in-KV step cost the veto's predictor needs | that routing hit-first **beats** disagg's prefill-first on TTFT: no multi-node run |
+| 1. highest-hit-first with an EDF/SLO check | yes — radix/prefix cache + router hit lengths; EDF ordering is **measured** on the MTP server (`edf-order-not-cap`) | the EDF *ordering* win, and the linear-in-KV step cost the SLO check's predictor needs | that routing hit-first **beats** disagg's prefill-first on TTFT: no multi-node run |
 | 2. best-effort cache migration | yes — hier cache + dist cache pool | nothing | the whole replication advantage, incl. the ThunderAgent thrashing comparison |
 | 3. EDF predictor with acceptance length | yes — EWMA of accept length is already tracked | step cost linear in total KV, on one GPU, 4-mode MTP (section 3) | a matched fused/unfused EDFG A/B now runs cleanly, but shows no ITL/throughput advantage and does not establish better predictor accuracy |
 | 4. two-way RDMA, complete vs bipartite graph | partially — transfer paths exist, congestion-aware pull selection does not | nothing | the entire scaling claim; `O(N^2)` vs `O(N_p*N_d)` is topology arithmetic, not a measurement |
@@ -965,7 +979,7 @@ on the FA3 defect, since a serving A/B today would measure a corrupted FA3 path.
 goal asked to be written down, and they are written down. It records which parts a reviewer can
 challenge on data and which on reasoning.
 
-## 1. Route to the highest cache-hit node first, with an EDF/SLO veto
+## 1. Route to the highest cache-hit node first, with an EDF/SLO check
 
 **The disagg baseline.** PD disaggregation picks a *prefill* node first, because prefill and
 decode live on different pools. Prefix cache locality is then a second-order concern: the
@@ -974,7 +988,7 @@ With agentic traffic this is the wrong order of preference, because the prefix i
 (64-100K) relative to the new tokens (~3.8K), so a hit is worth far more than a marginally
 emptier queue.
 
-**The colocated policy.** Rank candidate nodes by prefix-hit length, then **veto** by SLO
+**The colocated policy.** Rank candidate nodes by prefix-hit length, then **SLO check** by SLO
 feasibility rather than by load:
 
     candidates = sort(nodes, key = -hit_len(node, request))
@@ -1004,21 +1018,21 @@ express "take the cache hit, pay a little TTFT, still make the deadline". That t
 not available to a disagg router.
 
 **Risk to measure, not assume.** Cache-hit-first concentrates load on whichever nodes hold
-popular prefixes. The SLO veto is the only thing preventing hotspotting, so the experiment must
-report the **hit-rate vs p99-TTFT frontier**, not just mean TTFT. If the veto fires often, the
+popular prefixes. The SLO check is the only thing preventing hotspotting, so the experiment must
+report the **hit-rate vs p99-TTFT frontier**, not just mean TTFT. If the SLO check fires often, the
 policy degenerates toward load-balancing and the advantage shrinks -- that is the honest
 failure mode and it should be looked for.
 
 ## 2. Best-effort cache migration, and why colocation replicates better
 
-When the veto rejects the best-hit node, we route to a worse-hit node **and** pull the missing
+When the SLO check rejects the best-hit node, we route to a worse-hit node **and** pull the missing
 prefix to it, using sglang's hierarchical cache plus the distributed cache pool. The pull is
 best-effort: if it does not complete before the request is scheduled, the node recomputes the
 tail, so correctness never depends on the transfer and a slow link degrades latency rather
 than breaking the request.
 
 **The replication argument.** Every migration leaves a copy. Under cache-hit-first routing with
-an SLO veto, popular prefixes are therefore *pulled toward wherever load forces requests to
+an SLO check, popular prefixes are therefore *pulled toward wherever load forces requests to
 go*, so replica count grows with demand for that prefix. This is the behaviour ThunderAgent
 argues for in agentic serving, where the same long session prefix is revisited repeatedly and a
 single-copy cache thrashes: the copy is evicted between turns and re-prefilled from scratch,
@@ -1223,14 +1237,14 @@ Traced run: `SGLANG_STEP_TRACE=1 SGLANG_EDF_ACCEPT_TRACE=1`, 0 fallbacks, 0 trac
       - **What this means for point 3.** The predictor does not earn its keep by throttling chunks
         inside a node. The accurate step model and acceptance EWMA matter where a decision is a
         real choice between alternatives, not a delay of work that must happen anyway: the
-        router's admission/SLO veto across nodes (point 1). The in-node scheduler should order by
+        router's admission/SLO check across nodes (point 1). The in-node scheduler should order by
         deadline and stay work-conserving.
 
 ### Router support for point 3 (2026-10-14)
 
 `tasks/pd_colocation/router.py` now predicts per-token TPOT under speculative decoding: each
 worker keeps an EWMA of acceptance length from finished requests' `meta_info`
-(`completion_tokens / spec_verify_ct`, `--accept-ewma-alpha`), and the SLO veto divides the
+(`completion_tokens / spec_verify_ct`, `--accept-ewma-alpha`), and the SLO check divides the
 step-time prediction by it; `--step-model` loads the linear MTP step model from
 `tasks/perf_model/fit_mtp_step.py` (incl. its `c_acc` term) -- the S4 refit on the split kernel
 is what will feed it. Defaults leave the old per-step behaviour unchanged. Checks:
@@ -1353,7 +1367,7 @@ transfer RFC][dyn-rfc]; full list under [References](#references).
 
 **Where ours differs:**
 
-- **Routing:** we rank nodes by cache hit, then veto any node where a step-time model plus the
+- **Routing:** we rank nodes by cache hit, then SLO check any node where a step-time model plus the
   earlier-deadline requests queued there predict a missed SLO (point 1). Dynamo can send a request
   to a cache-hot worker that will miss its deadline.
 - **Load model:** we predict step time from a model that includes speculative acceptance length

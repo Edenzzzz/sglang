@@ -1,5 +1,5 @@
 #!/bin/bash
-# PD point 1 on the final single-GPU stack (2026-10-17): does the router's EDF/SLO veto (cache_slo: walk
+# PD point 1 on the final single-GPU stack (2026-10-17): does the router's EDF/SLO check (cache_slo: walk
 # workers by hit length, take the first predicted to meet the request's TTFT deadline given the uncached
 # work queued ahead) cut agent TTFT -- the metric no 8-GPU arm has cut by 30% -- versus pure cache affinity?
 # 1) calibrate the router's perf model on one worker running the SAME stack (mtpsplit + EDF + preemption +
@@ -15,8 +15,8 @@ RA=$(grep -oE "ROUTER_ARGS=.*" /tmp/h20/mn_slo_calibrate.log | tail -1 | cut -d=
 [ -z "$RA" ] && { echo "calibration failed"; exit 1; }
 echo "ROUTER_ARGS: $RA"
 for C in 16 32; do
-  export AGENT_CONC=$C SESSIONS=$((C * 3)) CHAT_RATE=8 CHAT_N=2400 RUN_TAG=_8g_veto_c${C}_r8
+  export AGENT_CONC=$C SESSIONS=$((C * 3)) CHAT_RATE=8 CHAT_N=2400 RUN_TAG=_8g_SLO check_c${C}_r8
   ROUTER_ARGS="$RA" python3 -u mn_run.py coloc_slo_edf_mtp
   python3 -u mn_run.py coloc_cache_edf_mtp
 done
-echo SLO_VETO_DONE
+echo SLO_CHECK_DONE

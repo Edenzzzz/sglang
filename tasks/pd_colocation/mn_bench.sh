@@ -36,7 +36,7 @@ fi
 A=$!
 # HOT=1 (point 4): the second tenant shares a few long system prompts instead of sending fresh
 # ones, so pure cache affinity piles each group onto its single holder. Spreading that load needs
-# either the SLO veto plus recompute, or the veto plus a cross-node pull from the L3 store.
+# either the SLO check plus recompute, or the SLO check plus a cross-node pull from the L3 store.
 if [ "${HOT:-0}" = 1 ]; then
   SECOND=(--dataset-name generated-shared-prefix --gsp-num-groups ${HOT_GROUPS:-4}
           --gsp-prompts-per-group $(( ${CHAT_N:-3200} / ${HOT_GROUPS:-4} )) --gsp-system-prompt-len ${HOT_PREFIX:-16384}

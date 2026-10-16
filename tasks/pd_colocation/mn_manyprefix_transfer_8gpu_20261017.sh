@@ -1,10 +1,10 @@
 #!/bin/bash
-# PD item 7, transfer-aware veto with MANY shared prefixes (2026-10-17). With 4 hot groups (mn_hot_transfer_8gpu_
-# 20261017.sh) the first few vetoed moves recompute each 16K prefix on the new node, after which every node holds all
+# PD item 7, transfer-aware SLO check with MANY shared prefixes (2026-10-17). With 4 hot groups (mn_hot_transfer_8gpu_
+# 20261017.sh) the first few moved off their top-hit node moves recompute each 16K prefix on the new node, after which every node holds all
 # four locally: only 37 of 1 623 moved requests had a pool hit beyond their local hit. Here 192 groups x 16K shared
 # prefixes (~3.1M tokens): fits the pool (8 x 24 GB = ~3.35M tokens) but not one node (device ~1.1M + host 48 GB
 # ~0.84M), so a moved request usually finds its prefix in the pool and not locally. Pool on, timeout prefetch, agent
-# C=16, chat 16 req/s. cache | veto ignoring the pool | veto + transfer, interleaved x2. Waits for the hot A/B. Claude.
+# C=16, chat 16 req/s. cache | SLO check ignoring the pool | SLO check + transfer, interleaved x2. Waits for the hot A/B. Claude.
 set -u
 export PATH=$HOME/.merlin-cli/bin:$PATH
 cd "$(dirname "$0")"

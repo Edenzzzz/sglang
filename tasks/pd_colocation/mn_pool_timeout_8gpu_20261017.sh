@@ -1,9 +1,9 @@
 #!/bin/bash
-# PD item 7, transfer-aware veto with a prefetch policy that actually pulls (2026-10-17). Under sglang's default
+# PD item 7, transfer-aware SLO check with a prefetch policy that actually pulls (2026-10-17). Under sglang's default
 # best_effort, a request sent to an idle non-holder starts before any of its prefix lands, so the router's
-# transfer term predicted 0 and the veto recomputed (mn_pool_veto_8gpu_20261017.sh). Here every worker runs
+# transfer term predicted 0 and the SLO check recomputed (mn_pool_slo_check_8gpu_20261017.sh). Here every worker runs
 # --hicache-storage-prefetch-policy timeout (wait for the pull, up to 1 s + 0.25 s/Ktok) and the router predicts
-# the same. Pool on in every arm; cache affinity vs veto + transfer term, interleaved x2 to measure the noise the
+# the same. Pool on in every arm; cache affinity vs SLO check + transfer term, interleaved x2 to measure the noise the
 # best_effort A/B exposed. Agent C=16, chat 8 req/s. Claude.
 set -u
 export PATH=$HOME/.merlin-cli/bin:$PATH

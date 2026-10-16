@@ -36,7 +36,7 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   exact: FA2 wins every verify-width row; rule "FA3 iff packed_qo >= 112 and FA3 work >= 3.5M"
   agrees on 69/72 cells (worst loss 6%) vs 55/72 (98%) for the serving rule -- **but loses in
   serving** (-3.5% throughput, +29% TTFT). Cause, from the split counters (2026-10-13): the work
-  floor was fitted on band rows only (qo <= 32) but also vetoed 512-token chat prefill chunks
+  floor was fitted on band rows only (qo <= 32) but also rejected 512-token chat prefill chunks
   (3584 packed x 512 kv = 1.8M), so 1039/1601 split plans went one-sided onto the stock path vs
   122/1801 under the default rule. Routing one-sided batches through the co-launch instead would
   not help: on one-sided band shapes the fused kernel is 1.0-2.2x slower than `BatchAttention`.

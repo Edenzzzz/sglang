@@ -42,8 +42,8 @@ def main():
                                 ("cache_slo", ["--ttft-slo-ms", "300", "--prefill-tok-s", "20000", "--rand-thresh", "1"], 8)]):
         out, recs = asyncio.run(run(policy, extra, conc=conc, base=32000 + 200 * k))
         cnt = collections.Counter(r["worker"] for r in recs)
-        vet = sum(r.get("vetoed", 0) for r in recs)
+        vet = sum(r.get("moved off their top-hit node", 0) for r in recs)
         print(f"{policy:<11} streamed_ok={all(o == 4 for o in out)} per_worker={dict(sorted(cnt.items()))} "
-              f"hits={[r['hit'] for r in recs[:4]]} vetoed_total={vet}")
+              f"hits={[r['hit'] for r in recs[:4]]} moved off their top-hit node_total={vet}")
 
 main()

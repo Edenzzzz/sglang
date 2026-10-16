@@ -1,8 +1,18 @@
 # Changelog
 
-## v1.20.8 — Hot-prefix veto A/B: chat TTFT -90% vs cache affinity; transfer term untested by 4 groups (2026-10-17)
+## v1.20.9 — SLO check protects requests already decoding on the target node; "veto" wording removed (2026-10-17)
 
-- 8 H20, 4 x 16K shared-prefix chat at 16 req/s + agent C=16, pool on, x2: the veto beats cache affinity on chat
+- `router.py --check-residents`: a node is also rejected if admitting the request would push any request already
+  decoding there past its ITL SLO (time spent so far + remaining steps at the step time with the new request + one
+  prefill chunk per step during its prefill); decisions log the rejecting check. A/B queued
+  (`mn_resident_itl_8gpu_20261017.sh`).
+- Docs, CHANGELOG, router and scripts no longer use "veto": the router's SLO-feasibility check is called that; the
+  decision-log field `vetoed` is now `rejected_nodes` (mn_audit reads both). Scripts renamed
+  `mn_slo_check_8gpu_20261017.sh`, `mn_pool_slo_check_8gpu_20261017.sh`.
+
+## v1.20.8 — Hot-prefix SLO check A/B: chat TTFT -90% vs cache affinity; transfer term untested by 4 groups (2026-10-17)
+
+- 8 H20, 4 x 16K shared-prefix chat at 16 req/s + agent C=16, pool on, x2: the SLO check beats cache affinity on chat
   throughput +21%, TTFT -90%, ITL -34% at -5..-8% agent throughput, +16% agent ITL. With 4 prefixes the transfer
   term had only 37 transferable moves (prediction 81% of the actual pull); 192-prefix A/B queued.
 
@@ -13,22 +23,22 @@
   so a waiting request got chunked beside it and `assert self.chunked_req is None` killed the worker (8-GPU
   hot-prefix arm). The guard now applies whenever a chunked request is in flight. Hot-prefix A/B rerunning.
 
-## v1.20.6 — Pool-on veto A/B: the transfer term never fires under best_effort prefetch (2026-10-17)
+## v1.20.6 — Pool-on SLO check A/B: the transfer term never fires under best_effort prefetch (2026-10-17)
 
-- 8 H20, agent C=16 + chat 8 req/s, mooncake L3 pool on: under the default `best_effort` prefetch the veto sends
-  requests to idle non-holders, where no pull lands, so the transfer term predicts 0 and the two veto arms run the
+- 8 H20, agent C=16 + chat 8 req/s, mooncake L3 pool on: under the default `best_effort` prefetch the SLO check sends
+  requests to idle non-holders, where no pull lands, so the transfer term predicts 0 and the two SLO-check arms run the
   same logic; their 8% agent-TTFT and 1.35 vs 15.9 s chat-P99 gap is run-to-run noise. Predictor ~30% optimistic,
   agent error p10/p90 -7.7/+9.6 s. Next: `timeout` prefetch on workers + router, with repeats.
 - `mn_node.sh` / `mn_run.py`: `HC_PREFETCH` sets the workers' `--hicache-storage-prefetch-policy`; timeout-policy
-  A/B queued (`mn_pool_timeout_8gpu_20261017.sh`, cache vs veto + transfer term, interleaved x2).
+  A/B queued (`mn_pool_timeout_8gpu_20261017.sh`, cache vs SLO check + transfer term, interleaved x2).
 - `router.py --prefill-curve`: prefill time from the calibrated cold-TTFT curve (T(ctx) - T(ctx - uncached))
   instead of one blended rate; `calibrate_h20.py` prints it.
 
-## v1.20.5 — Router SLO veto on the final stack: wins at C=32, neutral at C=16 (2026-10-17)
+## v1.20.5 — Router SLO check on the final stack: wins at C=32, neutral at C=16 (2026-10-17)
 
-- 8 H20, same-session A/B (`mn_slo_veto_8gpu_20261017.sh`): at agent C=32 + chat 8 req/s the veto beats cache
+- 8 H20, same-session A/B (`mn_slo_check_8gpu_20261017.sh`): at agent C=32 + chat 8 req/s the SLO check beats cache
   affinity by +24% agent throughput, -23% agent ITL, -32% chat ITL (+10% TTFT); vs stock colocation every bar
-  metric clears except agent TTFT. At C=16 it is neutral-to-worse (no pool: a vetoed request recomputes).
+  metric clears except agent TTFT. At C=16 it is neutral-to-worse (no pool: a moved request recomputes).
 - `mn_node.sh`: with the L3 pool on, cap the HiCache host pool (`--hicache-size 48`) and the mooncake segment
   (24 GB): the defaults (~130 GB + 32 GB per worker, two per 232 GB pod) OOM-killed every worker at startup.
 - `mn_run.py`: mooncake master from the venv (`$W/venv/bin/mooncake_master`; the old ~/.local path does not
@@ -40,12 +50,12 @@
 ## v1.20.4 — PD doc: inter-node SLO-feasibility prediction as a major open item (2026-10-17)
 
 - `pd_colocation_vs_disagg.md` item 7: predicting TTFT/ITL on a node from its hit length and load for
-  the routing veto -- current predictor, its errors by sign (best-effort KV pull pessimistic; blended
+  the routing SLO check -- current predictor, its errors by sign (best-effort KV pull pessimistic; blended
   prefill rate, decode interference, future arrivals, stale hits optimistic), open design questions,
   sub-items.
-- `router.py`: transfer-aware TTFT prediction for the veto (`--pool-kv-tokens`, `--prefetch-policy`,
+- `router.py`: transfer-aware TTFT prediction for the SLO check (`--pool-kv-tokens`, `--prefetch-policy`,
   pull-bandwidth EWMA from `cached_tokens`), pool mirror with HiCache-compatible chained block keys,
-  `ttft_obs` logged per request. Pool-on A/B queued (`mn_pool_veto_8gpu_20261017.sh`).
+  `ttft_obs` logged per request. Pool-on A/B queued (`mn_pool_slo_check_8gpu_20261017.sh`).
 
 ## v1.20.3 — H20 8-GPU chat request-rate sweep at reference-list rates (2026-10-16)
 
@@ -290,7 +300,7 @@
   synchronous (overlap-off) path gained the 4-mode handoff it never had, which retracts the
   "overlap off does not cure" bisect arm. `_fs_upload` waits on the previous copy's event before
   rewriting its pinned buffer. Validation (null case, gate, serving without barrier) queued.
-- A3: the fitted work floor vetoed chat prefill chunks, making 65% of mixed steps one-sided (7%
+- A3: the fitted work floor rejected chat prefill chunks, making 65% of mixed steps one-sided (7%
   under the default rule). A3b scopes the floor to the fitted regime; gated A/B queued.
 - Relative SLOs in `eval_curves.py` from unloaded single-tenant runs (the lowest swept rate is
   already loaded: mix128 chat median TTFT 38 s); `STREAMS` filter in the workload driver.
@@ -748,7 +758,7 @@ instrument discipline (register-accumulate or deterministic-property checks only
 it is cheapest; never use an arm as a baseline without re-checking its gate).
 
 **Where the contribution is:** `pd_colocation_vs_disagg.md` points 1, 2, 4 — cache-hit-first routing
-with EDF/SLO veto, best-effort migration driving replication, two-way RDMA as a complete graph. All
+with EDF/SLO check, best-effort migration driving replication, two-way RDMA as a complete graph. All
 router arguments, none needing the fused kernel. Point 3 is dead. **The colocation case rests on the
 router.**
 
@@ -3251,10 +3261,10 @@ this was fixed. Reproduces with the split OFF, so it is a port defect, and it bl
   codex). The earlier -29.7% chat P99 miss at a 47 ms budget was budget tuning, not a ceiling.
 - Chat P99 ITL saturates near 112 ms for 20-30 ms budgets; codex keeps improving to 78 ms.
 
-## v0.18.0 — The SLO veto prices decode, not just prefill (2026-10-08)
+## v0.18.0 — The SLO check prices decode, not just prefill (2026-10-08)
 
-- Hot-prefix workload (4 groups sharing 16K prompts, H20 16 GPUs): a TTFT-only veto never fired on
-  an overloaded cache holder, because its prefill stays fast. The veto now prices the decode
+- Hot-prefix workload (4 groups sharing 16K prompts, H20 16 GPUs): a TTFT-only SLO check never fired on
+  an overloaded cache holder, because its prefill stays fast. The SLO check now prices the decode
   slowdown a request would cause: chat mean ITL **-65%** (23.4 -> 8.3 ms), P99 **-80%** (224 -> 44 ms)
   for a 25% chat TTFT cost. Colocation keeps a ~70x TTFT advantage over disagg 2P2D.
 - `calibrate_h20.py` measures decode ITL over context x concurrency (was 256-token context only,
@@ -3361,8 +3371,8 @@ this was fixed. Reproduces with the split OFF, so it is a port defect, and it bl
   (queue position), reported as measured.
 - H20 multi-node study: cache-affinity routing beats round-robin by 8.4x on agent TTFT and
   ~90x on chat TTFT (72.9% worker-reported cache hit). sglang's own `cache_aware` router is a
-  strong baseline: better chat TTFT tails, worse ITL tails than ours. The SLO veto needs
-  calibrated H20 constants (0 vetoes with placeholders).
+  strong baseline: better chat TTFT tails, worse ITL tails than ours. The SLO check needs
+  calibrated H20 constants (0 SLO-check moves with placeholders).
 
 ## v0.15.1 — Stream start barrier; serving results re-measured (2026-10-07)
 
@@ -3545,7 +3555,7 @@ the earlier explanation that FA2 was "at roofline": at the real 989.4 TFLOP/s pe
 **33%**, not 83%.
 
 **The four-point PD colocation doc is written** (`tasks/pd_colocation_vs_disagg.md`), covering
-cache-hit-first routing with an EDF/SLO veto, best-effort cache migration and the replication
+cache-hit-first routing with an EDF/SLO check, best-effort cache migration and the replication
 argument, an EDF predictor with EWMA acceptance length, and complete-vs-bipartite RDMA with
 random-among-ties source selection. Every claim is labelled measured or predicted and each
 point carries the measurement that would falsify it. None of the four is measured yet.

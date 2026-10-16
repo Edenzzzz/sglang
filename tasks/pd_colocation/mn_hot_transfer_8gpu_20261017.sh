@@ -1,13 +1,13 @@
 #!/bin/bash
-# PD item 7, transfer-aware veto where requests WITH a prefix must move (2026-10-17). In the TraceLab + ShareGPT
-# mix the veto only ever moved cold first-round agent requests (local and pool hit 0), so the transfer term
+# PD item 7, transfer-aware SLO check where requests WITH a prefix must move (2026-10-17). In the TraceLab + ShareGPT
+# mix the SLO check only ever moved cold first-round agent requests (local and pool hit 0), so the transfer term
 # predicted a pull for 1 of 99 agent decisions and could not be tested (mn_pool_timeout_8gpu_20261017.sh). Here
 # the chat tenant is HOT: 4 groups sharing 16K system prompts at 16 req/s, so cache affinity piles each group on
-# its holder and the veto must move requests whose 16K prefix sits in the pool (pull ~0.9 GB, ~0.1 s, vs ~2.4 s
+# its holder and the SLO check must move requests whose 16K prefix sits in the pool (pull ~0.9 GB, ~0.1 s, vs ~2.4 s
 # recompute). Pool on, timeout prefetch on workers and router, agent C=16. Arms interleaved x2:
 #   coloc_cache_edf_mtp_hc   cache affinity
-#   coloc_slo_edf_mtp_hc     veto, router ignores the pool (prices a moved request as a recompute)
-#   coloc_slo_edf_mtp_hc     veto + transfer term
+#   coloc_slo_edf_mtp_hc     SLO check, router ignores the pool (prices a moved request as a recompute)
+#   coloc_slo_edf_mtp_hc     SLO check + transfer term
 # Workers carry edf_one_chunked_req.patch (applied to the pods' tree 2026-10-17 02:5x): the first run crashed a
 # worker on `assert self.chunked_req is None`. Claude.
 set -u

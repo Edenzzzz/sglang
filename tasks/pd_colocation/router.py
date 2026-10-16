@@ -7,7 +7,7 @@ Policies, each one switchable so its contribution can be measured on its own:
   cache       highest prefix-hit worker (cache-affinity-only baseline)
   cache_rand  highest hit, but uniform among workers within --rand-thresh of the best hit
               (spreads KV pulls over replicas instead of hammering one holder; point 4)
-  cache_slo   cache_rand + EDF/SLO veto: walk candidates by hit length and take the first
+  cache_slo   cache_rand + EDF/SLO check: walk candidates by hit length and take the first
               whose predicted TTFT/TPOT keeps this request AND the tighter-deadline requests
               already queued there within SLO; else the least-bad worker (point 1)
 
@@ -15,7 +15,7 @@ With --edf, each request is forwarded with priority = deadline (ms), so a worker
 --enable-priority-scheduling --schedule-low-priority-values-first runs EDF locally.
 
 Speculative decoding (point 3): a decode step emits `acceptance length` tokens per request, so the
-per-token TPOT the veto checks is step time / acceptance. With --accept-ewma-alpha > 0 the router
+per-token TPOT the SLO check compares against the ITL SLO is step time / acceptance. With --accept-ewma-alpha > 0 the router
 keeps a per-worker EWMA of acceptance from each finished request's meta_info
 (completion_tokens / spec_verify_ct) and divides the step-time prediction by it; --step-model
 loads the linear MTP step model of tasks/perf_model/fit_mtp_step.py (incl. its acceptance term).
@@ -239,10 +239,37 @@ class Router:
         return sum(self.pm.prefill_ms(r["prefill"], r.get("kv", r["prefill"]))
                    for r in w.inflight.values() if r["deadline"] <= deadline)
 
+    def residents_itl_ok(self, w, uncached, n_tok_self, tpot, now):
+        """Would admitting this request push any request already decoding on w past its ITL SLO?
+
+        Admission costs a resident twice: this request's prefill chunks ride in its decode steps
+        until the prefill ends (one chunk per step, `--chunk-tokens`), and from then on this request
+        decodes beside it (`tpot` is the per-token step time with it resident). A resident's SLO is
+        on its mean ITL, so the prediction adds the remaining steps to the decode time it has
+        already spent rather than judging one step in isolation."""
+        a = w.accept if (self.a.accept_ewma_alpha > 0 and w.accept) else 1.0
+        step_ms = tpot * a
+        n_chunks = -(-uncached // self.a.chunk_tokens) if uncached > 0 else 0
+        chunk_ms = self.pm.prefill_ms(uncached, n_tok_self) / n_chunks if n_chunks else 0.0
+        for r in w.inflight.values():
+            if r.get("t_first") is None or r["decode_left"] <= 0:
+                continue
+            done = r["decode_total"] - r["decode_left"]
+            rem_steps = r["decode_left"] / a
+            total_ms = ((now - r["t_first"]) * 1000.0 + rem_steps * step_ms
+                        + min(n_chunks, rem_steps) * chunk_ms)
+            if total_ms / max(1, done + r["decode_left"]) > r["itl_slo"]:
+                return False
+        return True
+
     def feasible(self, w, uncached, deadline, now, n_tok_self=0, missing=0):
         ttft, tpot = self.predict(w, uncached, deadline, n_tok_self, missing)
         uncached = max(0, uncached - self.last_pull)
-        if now + ttft / 1000.0 > deadline or tpot > self.a.itl_slo_ms:
+        if now + ttft / 1000.0 > deadline:
+            self.last_reason = "own_ttft"
+            return False, ttft, tpot
+        if tpot > self.a.itl_slo_ms:
+            self.last_reason = "own_itl"
             return False, ttft, tpot
         # Admitting this request delays LATER-deadline requests queued here; it must not
         # push any of them past their own deadline.
@@ -251,7 +278,11 @@ class Router:
                 t_r = now + (self.drain_ms(w, r["deadline"])
                              + self.pm.prefill_ms(uncached, n_tok_self)) / 1000.0
                 if t_r > r["deadline"]:
+                    self.last_reason = "queued_ttft"
                     return False, ttft, tpot
+        if self.a.check_residents and not self.residents_itl_ok(w, uncached, n_tok_self, tpot, now):
+            self.last_reason = "resident_itl"
+            return False, ttft, tpot
         return True, ttft, tpot
 
     def choose(self, hashes, blk, n_tok, deadline):
@@ -287,7 +318,8 @@ class Router:
                                           len(self.workers[j].inflight), random.random()))
         if pol == "cache_rand":
             return order[0], {"hit": hits[order[0]] * blk}
-        vetoed = 0
+        rejected_nodes = 0
+        reasons = collections.Counter()
         best_slack, best_i = None, order[0]
         best_pred = None
         for i in order:
@@ -299,10 +331,13 @@ class Router:
                 best_slack, best_i = slack, i
                 best_pred = (ttft, self.last_pull)
             if ok:
-                return i, {"hit": hits[i] * blk, "vetoed": vetoed, "ttft_pred": ttft,
+                return i, {"hit": hits[i] * blk, "rejected_nodes": rejected_nodes,
+                           "reject_reasons": dict(reasons), "ttft_pred": ttft,
                            "pull_pred": self.last_pull, "pool_hit": pool_hit * blk}
-            vetoed += 1
-        return best_i, {"hit": hits[best_i] * blk, "vetoed": vetoed, "least_bad": True,
+            rejected_nodes += 1
+            reasons[self.last_reason] += 1
+        return best_i, {"hit": hits[best_i] * blk, "rejected_nodes": rejected_nodes,
+                        "reject_reasons": dict(reasons), "least_bad": True,
                         "ttft_pred": best_pred[0], "pull_pred": best_pred[1],
                         "pool_hit": pool_hit * blk}
 
@@ -321,7 +356,8 @@ class Router:
         uncached = max(0, n_tok - info.get("hit", 0) - info.get("pull_pred", 0))
         t_route = time.time()
         w.inflight[rid] = dict(prefill=uncached, decode_left=out_tok, decode_total=out_tok,
-                               deadline=deadline, t0=t_route, kv=n_tok)
+                               deadline=deadline, t0=t_route, kv=n_tok, t_first=None,
+                               itl_slo=self.a.itl_slo_ms)
         w.insert(hashes)
         t_first = None
         if self.a.edf:
@@ -354,6 +390,7 @@ class Router:
                     if first:
                         w.inflight[rid]["prefill"] = 0
                         t_first = time.time()
+                        w.inflight[rid]["t_first"] = t_first
                         first = False
                     w.inflight[rid]["decode_left"] = max(0, w.inflight[rid]["decode_left"] - 1)
                     tail = (tail + chunk)[-65536:]
@@ -444,6 +481,10 @@ def main():
     ap.add_argument("--edf", action="store_true")
     ap.add_argument("--ttft-slo-ms", type=float, default=5000)
     ap.add_argument("--itl-slo-ms", type=float, default=100)
+    ap.add_argument("--check-residents", type=int, default=1,
+                    help="also reject a node if admitting the request would push a request already "
+                         "decoding there past its ITL SLO")
+    ap.add_argument("--chunk-tokens", type=int, default=2048, help="workers' --chunked-prefill-size")
     ap.add_argument("--kv-tokens", type=int, default=1_000_000)
     ap.add_argument("--prefill-tok-s", type=float, default=20000)
     ap.add_argument("--decode-step-ms", type=float, default=15)

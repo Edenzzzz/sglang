@@ -65,14 +65,19 @@ def rows_for(path, workload, rate, arm, stream, slo):
     out = np.array(j["output_lens"], dtype=float)
     decode = np.array([float(np.sum(x)) for x in j["itls"]])          # seconds
     tpot = np.where(out > 1, decode * 1e3 / np.maximum(out - 1, 1), 0.0)  # ms per token
-    user_tps = np.where(decode > 0, (out - 1) / np.maximum(decode, 1e-9), np.nan)
+    # A "burst" request streams all of its tokens at once at the end (< 1 ms of decode per token; seen
+    # on 17-29% of stock sglang_router PD-disagg requests, never on colocated workers): its decode
+    # rate is not observable from the client, so it is excluded from tok/s/user and counted in
+    # burst_frac; its TTFT already contains its whole decode.
+    burst = (out > 1) & (decode < 1e-3 * (out - 1))
+    user_tps = np.where((decode > 0) & ~burst, (out - 1) / np.maximum(decode, 1e-9), np.nan)
     tok_itl = np.concatenate([np.array(x) * 1e3 for x in j["itls"] if len(x)]) if any(
         len(x) for x in j["itls"]) else np.array([0.0])
     ttft_slo, tpot_slo = slo
     ok = (ttft <= ttft_slo) & (tpot <= tpot_slo)
-    proposed = sum(j.get("spec_num_proposed_drafts") or []) or 0
-    correct = sum(j.get("spec_num_correct_drafts") or []) or 0
-    verify = sum(j.get("spec_verify_ct") or []) or 0
+    proposed = sum(x or 0 for x in (j.get("spec_num_proposed_drafts") or []))
+    correct = sum(x or 0 for x in (j.get("spec_num_correct_drafts") or []))
+    verify = sum(x or 0 for x in (j.get("spec_verify_ct") or []))
     return {
         "workload": workload, "rate": rate, "arm": arm, "stream": stream, "n": len(ttft),
         "duration_s": round(j["duration"], 2),
@@ -81,6 +86,7 @@ def rows_for(path, workload, rate, arm, stream, slo):
         # Per-request tok/s/user spread for the interactivity error bars: p1 / p10 are the slow-user
         # tail (the latency-P99 / P90 users), p90 / p99 the fastest.
         **{f"user_tok_s_p{q}": round(float(np.nanpercentile(user_tps, q)), 2) for q in USER_PCTS},
+        "burst_frac": round(float(burst.mean()), 4),
         "ttft_mean_ms": round(float(ttft.mean()), 1),
         "ttft_p99_ms": round(float(np.percentile(ttft, 99)), 1),
         "tpot_mean_ms": round(float(tpot.mean()), 2),

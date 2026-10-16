@@ -394,6 +394,15 @@ PD disaggregation (sglang_router pd, stock MTP). Driver `tasks/pd_colocation/mn_
     A100, semi-PD 11-16 per A100 for Llama3-8B ShareGPT, DistServe / Sarathi-Serve 0.5-10). Sweep 1 / 2 /
     4 / 8 req/s per GPU (8-64 total) at agent C=16, stock coloc | ours | stock PD disagg, for the throughput
     vs tok/s/user figure with p1/p10/p90/p99 error bars: `bash tasks/pd_colocation/mn_chat_ratesweep_8gpu_20261016.sh`.
+  - [x] **Stock PD-disagg ITL/TPOT are understated by burst delivery (2026-10-16):** 17.5-29.1% of its
+    requests stream every token at once at the end (ITLs 0.0 s; never on colocated workers, 0 of 1 200),
+    so their decode time sits in TTFT and adds zero-gap ITLs. Excluding those requests, disagg mean ITL /
+    TPOT: C=16 chat 5.5 / 6.2 ms (reported 5.0 / 5.2), agent 11.4 / 11.2 (10.8 / 8.4); C=32 chat 7.4 / 8.4
+    (6.5 / 6.0), agent 14.1 / 12.6 (13.6 / 10.3). Disagg still has the lower ITL; its TPOT edge shrinks.
+    `eval_curves.py` now reports `burst_frac` and excludes burst requests from tok/s/user. Per-request
+    spread at chat 4 req/s, C=16 (`mn_sweep_figure.py`): chat tok/s/user p1 / median / p99 -- ours 4.3 /
+    243 / 394, stock coloc 4.8 / 239 / 371, stock disagg 47 / 207 / 685: colocation's slow-user tail
+    (p1 ~4-5 tok/s/user) is much worse than disagg's.
   **Stock PD disagg at C=32** (same script): saturated on prefill -- prefill hit 10.0% (1.05M / 10.5M
   tok), agent and chat mean TTFT 74.5 / 78.3 s, agent 152 tok/s, chat 1075 tok/s (offered ~1 650); 8
   workers 0 tracebacks / 0 fallbacks, 617-677 requests each. Even the pre-fix (router-capped) ours row

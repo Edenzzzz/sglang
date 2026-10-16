@@ -6,6 +6,10 @@
   `plot_eval.py` and `eval_curves.py --plot` draw them as horizontal error bars (median marker,
   p10-p90 bar, p1-p99 whisker); `plot_eval.py` plots arms beyond the three S1 x S2 names.
 - Regenerated S1 x S2 and both EDF rate-sweep figures (`tasks/debug_kernel_server_perf/userpct_20261016/`).
+- `eval_curves.py`: `burst_frac`; requests that stream all tokens at once (< 1 ms decode per token, 17-29%
+  of stock PD-disagg requests) are excluded from tok/s/user; spec-count sums tolerate `None`. Figures and
+  CSVs force-added (`*.csv` / `*.png` are gitignored; the previous commit linked missing files).
+- `tasks/pd_colocation/mn_sweep_figure.py`: the H20 chat-rate sweep -> eval_curves layout -> figure.
 
 ## v1.20.1 — Multi-node teardown kills supervisor loops (2026-10-16)
 

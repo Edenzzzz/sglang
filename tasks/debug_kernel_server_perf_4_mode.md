@@ -323,6 +323,9 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     [`edf_ratesweep_20261015_userpct.png`](debug_kernel_server_perf/userpct_20261016/edf_ratesweep_20261015_userpct.png),
     [`edf_ratesweep2_20261015_userpct.png`](debug_kernel_server_perf/userpct_20261016/edf_ratesweep2_20261015_userpct.png)
     (their agent tenant ran on the retracted session-rate axis; the chat x-axis is a request rate).
+    Requests whose tokens all arrive in one burst at the end (< 1 ms decode per token) are excluded
+    from tok/s/user and counted in `burst_frac`: 0 here (one request in one row), but 17-29% of stock
+    PD-disagg requests on H20 (`pd_colocation_vs_disagg.md`).
     Command, CPU only on the pod's JSONs: `eval_curves.py --root /dev/shm/w/<sweep> --slo
     '{"chat":[2000,50],"codex":[10000,80]}' --csv <sweep>_userpct.csv; plot_eval.py <csv> <png>`.
     Chat rates vs the reference list (per GPU): this sweep's 4-24 req/s on one H200 for a 7B model

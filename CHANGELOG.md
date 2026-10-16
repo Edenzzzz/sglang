@@ -6,6 +6,9 @@
   the routing veto -- current predictor, its errors by sign (best-effort KV pull pessimistic; blended
   prefill rate, decode interference, future arrivals, stale hits optimistic), open design questions,
   sub-items.
+- `router.py`: transfer-aware TTFT prediction for the veto (`--pool-kv-tokens`, `--prefetch-policy`,
+  pull-bandwidth EWMA from `cached_tokens`), pool mirror with HiCache-compatible chained block keys,
+  `ttft_obs` logged per request. Pool-on A/B queued (`mn_pool_veto_8gpu_20261017.sh`).
 
 ## v1.20.3 — H20 8-GPU chat request-rate sweep at reference-list rates (2026-10-16)
 

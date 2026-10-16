@@ -168,7 +168,23 @@ static mixture.
       - [ ] measure the current predictor's error: router-logged `ttft_pred` vs measured TTFT per
             request, bucketed by load and prompt length (data: `mn_slo_veto_8gpu_20261017.sh`)
       - [ ] step-model queue drain (with decode interference) replacing the constant prefill rate
-      - [ ] transfer-aware effective hit; requires an arm with the L3 pool on
+      - [ ] transfer-aware effective hit; requires an arm with the L3 pool on. **Implemented
+            2026-10-17 (`router.py`, not yet measured):** the router mirrors the pool's contents
+            (write-through on each finished request) with the same chained block keys as HiCache's
+            page keys, takes `missing = pool hit - local hit`, and predicts the pulled tokens from
+            the predicted queue wait and the workers' prefetch policy (best_effort: what arrives
+            during the wait; timeout: wait up to 1 s + 0.25 s/Ktok; wait_complete: all). Pull
+            bandwidth is an EWMA learned from finished requests (`cached_tokens` includes
+            prefetched pages, minus the router's local-hit estimate, over the observed queue
+            wait); a complete pull only raises it. The router now logs `ttft_obs` next to
+            `ttft_pred`. Unit check: a 32K-prefix request whose holder has a 12 s queue -- without
+            the pool the veto picks a non-holder at a predicted 9.5 s (3 s queue + 6.5 s recompute);
+            with it, 3.0 s (the 1.9 GB pull fits inside the wait). A/B queued:
+            `mn_pool_veto_8gpu_20261017.sh` (pool on: affinity | veto without | veto with the
+            transfer term, agent C=16, chat 8 req/s).
+            The index answers "radix tree?": it IS one, flattened at 256-token blocks (each key
+            chains its parent's), so matching is the radix walk; it loses up to 255 tokens per
+            match and evicts per block rather than per leaf.
       - [ ] margin / quantile choice set from the measured error distribution
       - [ ] A/B: cache affinity | current veto | + step model | + transfer term | + margin, on
             goodput / SLO attainment at the 8-GPU H20 points (agent C=16/32, chat 8 req/s)

@@ -20,9 +20,21 @@ keeps a per-worker EWMA of acceptance from each finished request's meta_info
 (completion_tokens / spec_verify_ct) and divides the step-time prediction by it; --step-model
 loads the linear MTP step model of tasks/perf_model/fit_mtp_step.py (incl. its acceptance term).
 
-Prefix tracking is approximate by design: rolling hashes of fixed-size blocks of input_ids
-(or text characters), per worker, LRU-bounded by that worker's KV capacity in tokens. That is
-what a router can know without querying workers, which keeps the decision off the request path.
+Prefix tracking is approximate by design: a radix tree flattened at block granularity. Block k's
+key hashes block k's input_ids together with block k-1's key, so one key names the whole prefix up
+to block k and a hit is the walk to the first missing key -- the same chained-page scheme as
+sglang's HiCache storage keys (hicache_storage.get_hash_str). One key set per worker, LRU-bounded
+by its KV capacity; with --pool-kv-tokens, one more for the cluster-wide L3 KV pool. That is what a
+router can know without querying workers, which keeps the decision off the request path.
+
+KV transfer (--pool-kv-tokens > 0): a request routed to a node holding x_i of its prefix, while
+the pool holds x_pool > x_i, has the missing x_pool - x_i tokens prefetched into that node while it
+waits in the queue. What it gets depends on the worker's --hicache-storage-prefetch-policy:
+best_effort takes what has arrived when the request is scheduled, timeout waits up to
+base + per_ktok * missing / 1000 s, wait_complete waits for all of it. The router predicts the
+pulled tokens from the predicted queue wait and an EWMA of observed pull bandwidth, learned from
+each finished request's cached_tokens (which includes prefetched pages) against the router's own
+local-hit estimate.
 
 Every decision is logged as one JSON line (--log) for the hit-rate vs SLO analysis.
 """
@@ -164,15 +176,35 @@ class Router:
         if a.step_model:
             self.pm.step = json.load(open(a.step_model))["coef"]
             print(f"step model: {self.pm.step}", flush=True)
+        self.pool = Worker("pool", a.pool_kv_tokens, BLOCK_TOK) if a.pool_kv_tokens > 0 else None
+        self.pull_bps = a.pull_gbps * 1e9  # bytes/s, EWMA of observed pulls
         self.rr = 0
         self.rid = 0
         self.log = open(a.log, "a") if a.log else None
         self.session = None
 
-    def predict(self, w, uncached, deadline, n_tok_self=0):
+    def pulled(self, wait_s, missing):
+        """Tokens of a `missing`-token prefix prefetched from the pool into a node, and the wait
+        actually spent, given a predicted queue wait of `wait_s` seconds."""
+        a = self.a
+        if missing < a.prefetch_threshold:
+            return 0, wait_s
+        full_s = missing * a.kv_bytes_per_token / self.pull_bps
+        if a.prefetch_policy == "wait_complete":
+            wait_s = max(wait_s, full_s)
+        elif a.prefetch_policy == "timeout":
+            wait_s = max(wait_s, min(full_s, a.prefetch_timeout_base
+                                     + a.prefetch_timeout_per_ktok * missing / 1000.0))
+        return min(missing, int(wait_s * self.pull_bps / a.kv_bytes_per_token)), wait_s
+
+    def predict(self, w, uncached, deadline, n_tok_self=0, missing=0):
+        """missing: prefix tokens the pool holds beyond w's own hit (0 without a pool)."""
         # Under EDF only requests with EARLIER deadlines are served ahead of this one.
         ahead = sum(r["prefill"] for r in w.inflight.values() if r["deadline"] <= deadline)
-        ttft = self.pm.ttft_ms(ahead + uncached)
+        wait_ms = self.pm.ttft_ms(ahead)
+        got, wait_s = self.pulled(wait_ms / 1000.0, missing)
+        self.last_pull = got
+        ttft = wait_s * 1000.0 + self.pm.ttft_ms(max(0, uncached - got))
         # Every resident row's KV, including this request's prompt: the decode slowdown this
         # request would cause on w, which is what the hot-prefix holders actually suffer.
         kv = sum(r.get("kv", 0) for r in w.inflight.values()) + n_tok_self
@@ -180,8 +212,9 @@ class Router:
         tpot = self.pm.tpot_ms(len(w.inflight) + 1, kv, accept)
         return ttft, tpot
 
-    def feasible(self, w, uncached, deadline, now, n_tok_self=0):
-        ttft, tpot = self.predict(w, uncached, deadline, n_tok_self)
+    def feasible(self, w, uncached, deadline, now, n_tok_self=0, missing=0):
+        ttft, tpot = self.predict(w, uncached, deadline, n_tok_self, missing)
+        uncached = max(0, uncached - self.last_pull)
         if now + ttft / 1000.0 > deadline or tpot > self.a.itl_slo_ms:
             return False, ttft, tpot
         # Admitting this request delays LATER-deadline requests queued here; it must not
@@ -203,6 +236,7 @@ class Router:
             return self.rr, {"hit": self.workers[self.rr].hit(hashes) * blk}
         hits = [w.hit(hashes) for w in self.workers]
         best = max(hits)
+        pool_hit = max(best, self.pool.hit(hashes)) if self.pool else 0
         if pol == "cache":
             # Ties on load are broken at random. A bare min() returned the lowest-index worker
             # whenever loads tied, and every session's first turn (and every chat request) ties at
@@ -229,16 +263,22 @@ class Router:
             return order[0], {"hit": hits[order[0]] * blk}
         vetoed = 0
         best_slack, best_i = None, order[0]
+        best_pred = None
         for i in order:
             uncached = max(0, n_tok - hits[i] * blk)
-            ok, ttft, tpot = self.feasible(self.workers[i], uncached, deadline, now, n_tok)
+            missing = max(0, pool_hit - hits[i]) * blk if self.pool else 0
+            ok, ttft, tpot = self.feasible(self.workers[i], uncached, deadline, now, n_tok, missing)
             slack = deadline - (now + ttft / 1000.0)
             if best_slack is None or slack > best_slack:
                 best_slack, best_i = slack, i
+                best_pred = (ttft, self.last_pull)
             if ok:
-                return i, {"hit": hits[i] * blk, "vetoed": vetoed, "ttft_pred": ttft}
+                return i, {"hit": hits[i] * blk, "vetoed": vetoed, "ttft_pred": ttft,
+                           "pull_pred": self.last_pull, "pool_hit": pool_hit * blk}
             vetoed += 1
-        return best_i, {"hit": hits[best_i] * blk, "vetoed": vetoed, "least_bad": True}
+        return best_i, {"hit": hits[best_i] * blk, "vetoed": vetoed, "least_bad": True,
+                        "ttft_pred": best_pred[0], "pull_pred": best_pred[1],
+                        "pool_hit": pool_hit * blk}
 
     async def generate(self, request):
         payload = await request.json()
@@ -252,10 +292,12 @@ class Router:
         w = self.workers[i]
         self.rid += 1
         rid = self.rid
-        uncached = max(0, n_tok - info.get("hit", 0))
+        uncached = max(0, n_tok - info.get("hit", 0) - info.get("pull_pred", 0))
+        t_route = time.time()
         w.inflight[rid] = dict(prefill=uncached, decode_left=out_tok, decode_total=out_tok,
-                               deadline=deadline, t0=time.time(), kv=n_tok)
+                               deadline=deadline, t0=t_route, kv=n_tok)
         w.insert(hashes)
+        t_first = None
         if self.a.edf:
             payload["priority"] = int(deadline * 1000) % 2_000_000_000
         if self.log:
@@ -285,6 +327,7 @@ class Router:
                 async for chunk in up.content.iter_any():
                     if first:
                         w.inflight[rid]["prefill"] = 0
+                        t_first = time.time()
                         first = False
                     w.inflight[rid]["decode_left"] = max(0, w.inflight[rid]["decode_left"] - 1)
                     tail = (tail + chunk)[-65536:]
@@ -303,6 +346,10 @@ class Router:
                     except ValueError:
                         pass
                     break
+            if self.pool is not None:
+                # Write-through: the pool holds this request's prefix once it has been computed.
+                self.pool.insert(hashes)
+                self.observe_pull(meta, info, n_tok, t_route, t_first)
             if meta and self.a.accept_ewma_alpha > 0:
                 w.observe_accept(meta.get("completion_tokens"), meta.get("spec_verify_ct"),
                                  self.a.accept_ewma_alpha)
@@ -312,11 +359,32 @@ class Router:
                                                prompt_tokens=meta.get("prompt_tokens"),
                                                completion_tokens=meta.get("completion_tokens"),
                                                spec_verify_ct=meta.get("spec_verify_ct"),
-                                               accept_ewma=w.accept)) + "\n")
+                                               accept_ewma=w.accept,
+                                               ttft_obs=(t_first - t_route) * 1000.0 if t_first else None,
+                                               pull_bps=self.pull_bps if self.pool else None)) + "\n")
                 self.log.flush()
         finally:
             w.inflight.pop(rid, None)
         return resp
+
+    def observe_pull(self, meta, info, n_tok, t_route, t_first):
+        """Update the pull-bandwidth EWMA from one finished request. Pulled tokens = the worker's
+        cached_tokens (device + host + prefetched pages) minus the router's local-hit estimate; the
+        window is the queue wait = TTFT - the request's own prefill of the rest. Only a pull that
+        stopped short of the pool's hit is bandwidth-bound; a complete one is a lower bound, so it
+        may only raise the estimate."""
+        c = meta.get("cached_tokens") if meta else None
+        if c is None or t_first is None:
+            return
+        pulled = c - info.get("hit", 0)
+        missing = info.get("pool_hit", 0) - info.get("hit", 0)
+        wait_s = (t_first - t_route) - self.pm.ttft_ms(max(0, n_tok - c)) / 1000.0
+        if pulled < self.a.prefetch_threshold or wait_s < 0.05:
+            return
+        sample = pulled * self.a.kv_bytes_per_token / wait_s
+        if pulled < 0.95 * missing or sample > self.pull_bps:
+            al = self.a.pull_ewma_alpha
+            self.pull_bps = (1 - al) * self.pull_bps + al * sample
 
     async def broadcast(self, request):
         res = []
@@ -361,6 +429,17 @@ def main():
     ap.add_argument("--accept-ewma-alpha", type=float, default=0.0,
                     help=">0: per-worker acceptance EWMA; predicted TPOT = step ms / acceptance")
     ap.add_argument("--log", default="")
+    # KV transfer from the cluster-wide L3 pool (HiCache + mooncake), see the module docstring.
+    ap.add_argument("--pool-kv-tokens", type=int, default=0, help="pool capacity; 0 = no pool")
+    ap.add_argument("--kv-bytes-per-token", type=int, default=57344,
+                    help="Qwen2.5-7B bf16: 28 layers x 2 x 4 KV heads x 128 x 2 B")
+    ap.add_argument("--pull-gbps", type=float, default=10.0, help="initial pull bandwidth, GB/s")
+    ap.add_argument("--pull-ewma-alpha", type=float, default=0.2)
+    ap.add_argument("--prefetch-policy", choices=["best_effort", "timeout", "wait_complete"],
+                    default="best_effort", help="must match the workers' setting")
+    ap.add_argument("--prefetch-threshold", type=int, default=256)
+    ap.add_argument("--prefetch-timeout-base", type=float, default=1.0)
+    ap.add_argument("--prefetch-timeout-per-ktok", type=float, default=0.25)
     a = ap.parse_args()
     r = Router(a)
     app = web.Application(client_max_size=1 << 30)

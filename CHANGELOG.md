@@ -6,6 +6,11 @@
   supervisor from an aborted arm relaunched its worker seconds after teardown; that orphan held 86 GB on
   pod 0 GPU 1, so every PD-disagg prefill worker there OOMed (logged as "bindfail").
 - `mn_node.sh`: worker ports picked below the ephemeral range under a lock; `mn_run.py`: 40-min health deadline.
+- `router.py`: connector `limit=0` (aiohttp's default capped it at 100 concurrent upstream connections,
+  binding at C=32 + chat 8 req/s), keep-alive 3 s, retry also on `ClientOSError` (an EPIPE aborted the C=32
+  stock-MTP agent client). Both 8-GPU C=32 our-router rows marked not final; rerun queued.
+- PD doc: stock PD-disagg 8-GPU C=16 measured (clean upstream): ours is 3.1x agent throughput, -80% agent
+  TTFT, -98.7% chat TTFT; disagg keeps lower ITL. `mn_audit.py` takes `NPODS`.
 
 ## v1.20.0 — S3 complete in scope; load + context gate for the 4-mode step (2026-10-16)
 

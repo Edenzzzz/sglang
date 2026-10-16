@@ -366,17 +366,33 @@ PD disaggregation (sglang_router pd, stock MTP). Driver `tasks/pd_colocation/mn_
   | C=16, chat 4/s | stock coloc | 343 / 8.3 s / 19.3 / 227 | 798 / 1697 ms / 19.9 / 219 |
   | C=16, chat 4/s | our router, stock MTP | 320 / 7.8 s / 19.5 / 173 | 798 / 1429 / 17.5 / 80 |
   | C=16, chat 4/s | **ours** | **420 / 6.9 s / 14.2 / 185** | 798 / **287** / 16.5 / 347 |
+  | C=16, chat 4/s | stock PD disagg (2 prefill + 2 decode pods, clean upstream) | 137 / 34.3 s / 10.8 / 34 | 796 / 21 546 / 5.0 / 25 |
   | C=32, chat 8/s | stock coloc | 221 / 12.1 s / 97.4 / 1815 | 1461 / 7310 / 185 / 2265 |
   | C=32, chat 8/s | our router, stock MTP | (agent stream lost) | 1658 / 35.1 s / 30.3 / 421 |
   | C=32, chat 8/s | **ours** | **391 / 12.6 s / 32.2 / 315** | 1658 / 19.7 s / 28.3 / 425 |
   Ours vs stock colocation: C=16 agent throughput +22%, TTFT -17%, TPOT -59%, ITL -26%, chat TTFT -83%,
   chat ITL -17% (chat P99 ITL +58%); C=32 agent throughput +77%, ITL -67%, P99 ITL -83%, chat
   throughput +14%, chat ITL -85%, but agent TTFT +4% and chat mean TTFT +169% (median 85 vs 2957 ms:
-  a starved tail). The C=32 "our router, stock MTP" agent client died after warmup without output
-  (silent kill; pods run at half the memory request to get scheduled) -- to be rerun.
-  **PD disaggregation baseline:** its prefill workers failed on import at C=16 -- mooncake links
+  a starved tail). ~~The C=32 "our router, stock MTP" agent client died after warmup without output
+  (silent kill; pods run at half the memory request to get scheduled).~~ **Retracted 2026-10-16:** not a
+  kill. One upstream POST in our `router.py` hit EPIPE on a stale keep-alive connection (the retry caught
+  only `ServerDisconnectedError`), and the concurrency replay aborts the client on any failed round.
+  Also found: `router.py`'s aiohttp session used the default connector, **capped at 100 concurrent
+  upstream connections**; at C=32 + chat 8 req/s ~200+ requests are in flight, so both our-router C=32
+  rows above were queued inside the router -- the suspected cause of the chat starved tail. Both C=32
+  our-router rows are therefore not final; router fixed (`limit=0`, keep-alive 3 s, retry on
+  `ClientOSError`) and both arms rerun (`mn_rerun_c32_cache_mtps_20261016.sh`). C=16 (~2 chat in flight)
+  is unaffected.
+  **Ours vs stock PD disagg at C=16:** agent throughput 3.1x (420 vs 137 tok/s), agent TTFT -80%, chat
+  TTFT -98.7% (0.29 vs 21.5 s); disagg keeps lower ITL (agent 10.8 vs 14.2 ms, chat 5.0 vs 16.5 ms,
+  P99 34 vs 185 ms). Disagg is prefill-bound: its 2 prefill pods hit 16.6% of prompt tokens (862K /
+  5.19M, `mn_audit.py`), 8 workers 0 tracebacks / 0 fallbacks, 302-344 requests each. Command:
+  `bash tasks/pd_colocation/mn_disagg_rerun_8gpu_20261016.sh` (SGL_PY=up_clean, KERNEL=lpt).
+  **PD disaggregation baseline (history):** its prefill workers failed on import at C=16 -- mooncake links
   `libcudart.so.12`, the venv is cu130 -- fixed by installing `nvidia-cuda-runtime-cu12` on all pods;
-  C=32 disagg running with the fix, C=16 disagg rerun queued (`mn_disagg_rerun_8gpu_20261016.sh`).
+  then a cross-GPU port collision (ports now claimed under a lock), the serving overlay's spec-v2 assert in
+  disagg prefill (baseline now runs clean upstream), and orphan workers relaunched by surviving
+  `mn_node.sh` supervisors that OOMed new prefill workers (`mn_kill.sh` now kills supervisors first).
 
 ## Multi-node measurements (H20, 8 pods x 2 GPUs = 16 workers) — 2026-10-08
 

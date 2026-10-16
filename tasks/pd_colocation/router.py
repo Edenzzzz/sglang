@@ -264,14 +264,16 @@ class Router:
             self.log.flush()
         resp = web.StreamResponse()
         try:
-            # One retry when the worker drops a reused keep-alive connection before answering
-            # (aiohttp ServerDisconnectedError): nothing has been streamed yet, so it is safe.
-            # The stock router retries likewise; without it 1 in ~3 600 requests failed.
+            # One retry when the worker drops a reused keep-alive connection before answering:
+            # ServerDisconnectedError, or ClientOSError (EPIPE) when the request write hits the
+            # closed socket. Nothing has been streamed yet, so it is safe. The stock router retries
+            # likewise; without it 1 in ~3 600 requests failed, and one EPIPE aborted a whole
+            # concurrency-replay agent client (8-GPU C=32 coloc_cache_mtps, 2026-10-16).
             for attempt in (0, 1):
                 try:
                     up = await self.session.post(w.url + "/generate", json=payload)
                     break
-                except aiohttp.ServerDisconnectedError:
+                except (aiohttp.ServerDisconnectedError, aiohttp.ClientOSError):
                     if attempt:
                         raise
             async with up:
@@ -332,7 +334,10 @@ class Router:
             return web.Response(body=await r.read(), status=r.status, content_type="application/json")
 
     async def start(self, app):
-        self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None))
+        # Pooled connections expire before uvicorn's 5 s keep-alive, so the router rarely reuses a
+        # socket the worker is closing.
+        self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None),
+                                             connector=aiohttp.TCPConnector(limit=0, keepalive_timeout=3))
 
 
 def main():

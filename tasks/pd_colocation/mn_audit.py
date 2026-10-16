@@ -10,7 +10,7 @@ import json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from px_multi import Cluster
 
-C = Cluster(os.environ.get("SID", "c2fb3965f36cd15f"), "cn-seed", nodes=[f"worker-{i}" for i in range(8)])
+C = Cluster(os.environ.get("SID", "c2fb3965f36cd15f"), "cn-seed", nodes=[f"worker-{i}" for i in range(int(os.environ.get("NPODS", "8")))])
 W = "/dev/shm/w"
 for arm in sys.argv[1:]:
     d = f"{W}/mn/{arm}"

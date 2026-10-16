@@ -84,7 +84,7 @@ def run_arm(arm):
     C.run_all(f"rm -rf {log}")
     env = (f"ONE_NIC={os.environ.get('ONE_NIC', '0')} KERNEL={os.environ.get('KERNEL', 'lpt')} EDF={int(edf)} SPEC={int(spec)} "
            f"TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')} PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')} "
-           f"SGL_PY={os.environ.get('SGL_PY', '')}")
+           f"SGL_PY={os.environ.get('SGL_PY', '')} HC_PREFETCH={os.environ.get('HC_PREFETCH', 'best_effort')}")
     if hc:
         rc, out = C.run(0, f"mkdir -p {log}; ip=$(hostname -I | tr ' ' '\\n' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1); "
                            "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\"); "

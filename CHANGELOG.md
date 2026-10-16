@@ -6,6 +6,8 @@
   requests to idle non-holders, where no pull lands, so the transfer term predicts 0 and the two veto arms run the
   same logic; their 8% agent-TTFT and 1.35 vs 15.9 s chat-P99 gap is run-to-run noise. Predictor ~30% optimistic,
   agent error p10/p90 -7.7/+9.6 s. Next: `timeout` prefetch on workers + router, with repeats.
+- `mn_node.sh` / `mn_run.py`: `HC_PREFETCH` sets the workers' `--hicache-storage-prefetch-policy`; timeout-policy
+  A/B queued (`mn_pool_timeout_8gpu_20261017.sh`, cache vs veto + transfer term, interleaved x2).
 
 ## v1.20.5 — Router SLO veto on the final stack: wins at C=32, neutral at C=16 (2026-10-17)
 

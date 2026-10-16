@@ -105,6 +105,10 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
     # pod, got every worker OOM-killed at startup (2026-10-17). 48 GB + 24 GB per worker ~= 175 GB/pod.
     export MOONCAKE_GLOBAL_SEGMENT_SIZE=${HC_SEGMENT:-24gb}
     ARGS+=(--enable-hierarchical-cache --hicache-storage-backend mooncake --hicache-size ${HC_HOST_GB:-48})
+    # HC_PREFETCH: what a queued request gets from the pool. best_effort (sglang's default) takes only what
+    # landed while it waited, so an idle non-holder pulls nothing; timeout waits for the pull up to
+    # 1 s + 0.25 s per 1K tokens. The router's --prefetch-policy must match.
+    ARGS+=(--hicache-storage-prefetch-policy ${HC_PREFETCH:-best_effort})
   fi
   # Worker-side EDF: deadline-ordered admission with no chunk cap (no latency model), the
   # configuration that won on the MTP server (pd_colocation_vs_disagg.md point 3).

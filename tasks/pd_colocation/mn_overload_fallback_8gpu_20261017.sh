@@ -24,7 +24,7 @@ export SID=bb854a10b8954223 NPODS=4 MIN_CTX=32768 MAX_CTX=65536 TURNS=2
 export KERNEL=mtpsplit PREEMPT=1 CHUNK=2048 HC_PREFETCH=timeout HC_WRITE=write_through
 export AGENT_CONC=16 SESSIONS=48 HOT=1 HOT_GROUPS=192 HOT_PREFIX=16384 CHAT_RATE=16 CHAT_N=3840
 for rep in 1 2; do
-  RUN_TAG=_8g_many_c16_fbcache_ctl_rep$rep python3 -u mn_run.py coloc_cache_edf_mtp_hc
-  RUN_TAG=_8g_many_c16_fbcache_rep$rep ROUTER_ARGS="$RA --no-feasible-fallback cache" python3 -u mn_run.py coloc_slo_edf_mtp_hc
+  RUN_TAG=_8g_many_c16_cleangrid_fbcache_ctl_rep$rep python3 -u mn_run.py coloc_cache_edf_mtp_hc
+  RUN_TAG=_8g_many_c16_cleangrid_fbcache_rep$rep ROUTER_ARGS="$RA --no-feasible-fallback cache" python3 -u mn_run.py coloc_slo_edf_mtp_hc
 done
 echo OVERLOAD_FALLBACK_DONE

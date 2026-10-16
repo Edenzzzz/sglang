@@ -295,8 +295,12 @@ static mixture.
             timed steps (32 x 16K = 512K prefill tokens at ~5K tok/s): the grid read 210 ms at 32 x 16K
             where serving measured 35-84 ms at similar rows and context. This is the "15x knee" the script's
             comment left unexplained -- not a capacity effect. Fixed: prefill every prompt first (1 output
-            token), then time a second, fully cached pass. Recalibrating; both A/Bs stopped and requeued on
-            the new grid. Old grid kept as `/dev/shm/w/mn/decode_grid_prefillmixed_20261017.json` (pod 0).
+            token), then time a second, fully cached pass. **New grid (05:0x):** 32 x 16K 75 ms (was 210),
+            8 x 16K 24 ms (61), 32 x 4K 31 ms (88), 64 x 16K 146 ms (251) -- in line with serving. Prefill
+            curve unchanged (8.3K tok/s at 4K -> 4.4K at 48K). Router flags now:
+            `--prefill-tok-s 5021 --prefill-curve 4096:491.8,8192:1014.1,16384:2358.4,32768:6072.7,49152:11148.2
+            --decode-grid /dev/shm/w/mn/decode_grid.json`. Both A/Bs requeued on it
+            (`mn_resident_itl_8gpu_20261017.sh`, then `mn_overload_fallback_8gpu_20261017.sh`). Old grid kept as `/dev/shm/w/mn/decode_grid_prefillmixed_20261017.json` (pod 0).
       - [ ] **Protect requests already decoding on the target node (user, 2026-10-17).** The check
             covered this request's TTFT and ITL and the TTFT deadlines of requests still queued on the
             node, but not the ITL of requests already decoding there -- and admission costs them twice:

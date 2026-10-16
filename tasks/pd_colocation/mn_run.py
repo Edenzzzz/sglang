@@ -114,8 +114,8 @@ def run_arm(arm):
         up = int([l for l in out.splitlines() if l.startswith("UP=")][-1][3:])
         if up == len(all_w) == 2 * NPODS:
             break
-        if time.time() - t0 > 1500:
-            print(f"  only {up}/{len(all_w)} workers healthy after 25 min; aborting arm", flush=True)
+        if time.time() - t0 > 2400:
+            print(f"  only {up}/{len(all_w)} workers healthy after 40 min; aborting arm", flush=True)
             C.run_all(KILL)
             return
         time.sleep(20)

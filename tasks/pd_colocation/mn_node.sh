@@ -56,7 +56,10 @@ with open(sys.argv[2], "a+") as claims:
     claims.seek(0)
     taken = {int(x) for x in claims.read().split()}
     for _ in range(500):
-        p = rng.randrange(40000, 59000, 50)
+        # Below the kernel's ephemeral range (32768-63999 on these pods): sglang's internal NCCL / ZMQ sockets and
+        # outgoing connections take random ports from it while the model loads, so a probed port in
+        # 40000-59000 was often gone by the time the http server bound it. 12001 is mooncake's RPC port.
+        p = rng.randrange(13000, 19950, 50)
         if p in taken:
             continue
         try:

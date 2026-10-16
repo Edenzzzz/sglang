@@ -447,6 +447,25 @@ static mixture.
             | slo_check+transfer | agent | 5.3/7.4/12.4/258/340 | 84.79 | 67.9 |
             | slo_check_no_transfer | chat | 2.9/5.3/9.4/10.9/12.5 | 73.42 | 125.1 |
             | slo_check_no_transfer | agent | 4.7/8.2/10.7/276/343 | 48.67 | 66.9 |
+      - [x] **Overload A/B with the cache fallback (2026-10-17 07:4x-08:4x; `bash tasks/pd_colocation/mn_overload_fallback_8gpu_20261017.sh`;
+            192 x 16K shared-prefix chat at 16 req/s + agent C=16, pool on, timeout prefetch, `HC_WRITE=write_through`,
+            clean grid; SLO check + transfer term + resident ITL check + `--no-feasible-fallback cache`; x2; all 4
+            arms 8 workers 0 tracebacks / 0 fallbacks, prefill hit 87.7-89.5%).** Two-rep means: cache affinity
+            agent 128 tok/s / 28.3 s / 40.6 ms, chat 1 737 / 27.5 s / 88.1 ms; SLO check agent 129 / 29.5 s / 40.5,
+            chat 1 773 / 27.6 s / 92.7. **Parity:** the cache fallback removes the collapse (chat TTFT 73-234 s with
+            the most-slack fallback) but gains nothing -- 95% of decisions (3 749 / 3 692 of 3 940) had no feasible
+            node, almost all on this request's own TTFT (22-24K rejections), and went to the top-hit node, i.e.
+            cache affinity. Under full overload no placement meets the SLO; the lever there is admission (what to
+            delay), not placement. **Open problem:** the learned pull realisation fell to 0.0 in both reps -- even
+            with `write_through`, predicted pool pulls do not land; investigating the workers' prefetch next.
+            Spread ([figure](pd_colocation/figures_20261017/h20x8_manyprefix_overload_fallback.png),
+            [data](pd_colocation/figures_20261017/h20x8_manyprefix_overload_fallback.csv)):
+            | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 (rep 1 ; rep 2) | out tok/s | mean TTFT s | mean TPOT ms |
+            |---|---|---|---|---|---|
+            | cache | chat | 3.4/7.6/13.1/59.0/326 ; 3.5/7.0/11.9/20.1/200 | 1620 ; 1855 | 26.9 ; 28.1 | 82.7 ; 93.2 |
+            | cache | agent | 4.8/7.9/11.8/269/352 ; 4.7/7.7/11.7/156/329 | 122 ; 135 | 29.8 ; 26.7 | 67.9 ; 73.1 |
+            | slo_check+cache_fallback | chat | 3.6/7.2/12.2/19.9/44.3 ; 3.5/7.2/11.9/21.5/56.0 | 1729 ; 1817 | 27.2 ; 28.0 | 92.4 ; 92.8 |
+            | slo_check+cache_fallback | agent | 4.7/8.4/11.7/245/350 ; 5.1/7.8/11.3/299/353 | 128 ; 130 | 28.8 ; 30.1 | 71.7 ; 71.2 |
       - [ ] margin / quantile choice set from the measured error distribution
       - [ ] A/B: cache affinity | current SLO check | + step model | + transfer term | + margin, on
             goodput / SLO attainment at the 8-GPU H20 points (agent C=16/32, chat 8 req/s)

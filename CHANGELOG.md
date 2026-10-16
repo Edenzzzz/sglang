@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.13 — Overload: SLO check with cache fallback ties cache affinity; pool pulls do not land (2026-10-17)
+
+- 192 x 16K shared-prefix mix, x2: SLO check + cache fallback = cache affinity within noise (chat 1 773 vs 1 737 tok/s,
+  TTFT 27.6 vs 27.5 s): 95% of decisions had no feasible node and went to the top-hit node. The collapse of the
+  most-slack fallback is gone. Learned pull realisation fell to 0.0 even with write_through: predicted pool pulls
+  do not land -- open. Spread figure + per-rep table in the PD doc.
+
 ## v1.20.12 — Resident ITL check measured: chat ITL -32% over the plain SLO check, agent TTFT +26% (2026-10-17)
 
 - 8 H20, hot 4 x 16K shared-prefix chat + agent C=16, x2, clean grid and cache fallback: SLO check + resident ITL

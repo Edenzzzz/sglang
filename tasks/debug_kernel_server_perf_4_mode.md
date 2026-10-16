@@ -316,6 +316,18 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
   - [x] **Figures (2026-10-13):** [`eval_s12_v2_20261012.png`](debug_kernel_server_perf/resume_20261012/eval_s12_v2_20261012.png) -- per
     mixture and tenant: throughput vs median tok/s/user, SLO attainment, mean TTFT and TPOT vs chat
     rate (data [`eval_s12_v2_20261012.csv`](debug_kernel_server_perf/resume_20261012/eval_s12_v2_20261012.csv), `drivers/serving/plot_eval.py`).
+    **With interactivity spread (2026-10-16):** [`eval_s12_v2_20261012_userpct.png`](debug_kernel_server_perf/userpct_20261016/eval_s12_v2_20261012_userpct.png)
+    -- the tok/s/user axis now shows each point's per-request distribution: marker = median request,
+    thick bar p10-p90, whisker p1-p99 (p1/p10 are the slow-user tail, i.e. the latency P99/P90 users).
+    Medians reproduce the committed CSV exactly. Same for the EDF rate sweeps:
+    [`edf_ratesweep_20261015_userpct.png`](debug_kernel_server_perf/userpct_20261016/edf_ratesweep_20261015_userpct.png),
+    [`edf_ratesweep2_20261015_userpct.png`](debug_kernel_server_perf/userpct_20261016/edf_ratesweep2_20261015_userpct.png)
+    (their agent tenant ran on the retracted session-rate axis; the chat x-axis is a request rate).
+    Command, CPU only on the pod's JSONs: `eval_curves.py --root /dev/shm/w/<sweep> --slo
+    '{"chat":[2000,50],"codex":[10000,80]}' --csv <sweep>_userpct.csv; plot_eval.py <csv> <png>`.
+    Chat rates vs the reference list (per GPU): this sweep's 4-24 req/s on one H200 for a 7B model
+    sits inside semi-PD's Llama3-8B ShareGPT range (11-16 req/s per A100) and above SLOs-Serve's
+    1.5-4.5 req/s per A100 (OPT-7B/13B); DistServe / Sarathi-Serve use 0.5-10 req/s.
     Fused is lowest on TTFT and TPOT at nearly every loaded point of all three mixtures. Two
     limits of this sweep, to fix in the next pass: (1) the agent-tenant Pareto panels are not
     meaningful -- the swept rate is the chat rate, the agent rate is fixed, so agent throughput

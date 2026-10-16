@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.2 — Interactivity error bars on the throughput vs tok/s/user figures (2026-10-16)
+
+- `eval_curves.py` reports per-request tok/s/user p1 / p10 / p90 / p99 next to the median;
+  `plot_eval.py` and `eval_curves.py --plot` draw them as horizontal error bars (median marker,
+  p10-p90 bar, p1-p99 whisker); `plot_eval.py` plots arms beyond the three S1 x S2 names.
+- Regenerated S1 x S2 and both EDF rate-sweep figures (`tasks/debug_kernel_server_perf/userpct_20261016/`).
+
 ## v1.20.1 — Multi-node teardown kills supervisor loops (2026-10-16)
 
 - `tasks/pd_colocation/mn_kill.sh` now kills `mn_node.sh` supervisor shells before workers. A surviving

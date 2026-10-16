@@ -27,6 +27,25 @@ import argparse, csv, glob, json, os, re, sys
 import numpy as np
 
 
+USER_PCTS = (1, 10, 90, 99)
+
+
+def user_tok_s_errorbar(ax, pts, kw):
+    """Throughput vs tok/s/user with the per-request spread: marker at the median, thick bar
+    p10-p90, thin whisker p1-p99. Rows from CSVs without percentiles fall back to the median alone."""
+    x = np.array([float(p["user_tok_s_median"]) for p in pts])
+    y = np.array([float(p["out_tok_s"]) for p in pts])
+    ax.plot(x, y, "-", **kw)
+    if not all(p.get("user_tok_s_p1") not in (None, "") for p in pts):
+        return
+    q = {k: np.array([float(p[f"user_tok_s_p{k}"]) for p in pts]) for k in USER_PCTS}
+    color = kw.get("color")
+    ax.errorbar(x, y, xerr=[x - q[1], q[99] - x], fmt="none", ecolor=color, elinewidth=0.8,
+                capsize=2, alpha=0.6)
+    ax.errorbar(x, y, xerr=[x - q[10], q[90] - x], fmt="none", ecolor=color, elinewidth=2.5,
+                capsize=0, alpha=0.6)
+
+
 def load(path):
     return json.loads(open(path).read().strip().splitlines()[-1])
 
@@ -59,6 +78,9 @@ def rows_for(path, workload, rate, arm, stream, slo):
         "duration_s": round(j["duration"], 2),
         "out_tok_s": round(float(out.sum()) / j["duration"], 1),
         "user_tok_s_median": round(float(np.nanmedian(user_tps)), 2),
+        # Per-request tok/s/user spread for the interactivity error bars: p1 / p10 are the slow-user
+        # tail (the latency-P99 / P90 users), p90 / p99 the fastest.
+        **{f"user_tok_s_p{q}": round(float(np.nanpercentile(user_tps, q)), 2) for q in USER_PCTS},
         "ttft_mean_ms": round(float(ttft.mean()), 1),
         "ttft_p99_ms": round(float(np.percentile(ttft, 99)), 1),
         "tpot_mean_ms": round(float(tpot.mean()), 2),
@@ -144,12 +166,13 @@ def main():
                               and r["arm"] == arm), key=lambda r: r["rate"])
                 if not pts:
                     continue
-                axes[i][0].plot([p["user_tok_s_median"] for p in pts], [p["out_tok_s"] for p in pts],
-                                "o-", label=arm)
+                user_tok_s_errorbar(axes[i][0], pts, dict(marker="o", label=arm,
+                                                          color=f"C{sorted({r['arm'] for r in rows}).index(arm)}"))
                 axes[i][1].plot([p["rate"] for p in pts], [p["slo_attain"] for p in pts], "o-",
                                 label=arm)
             axes[i][0].set(title=f"{wl} / {st}: throughput vs interactivity",
-                           xlabel="tok/s/user (median)", ylabel="output tok/s")
+                           xlabel="tok/s/user (median; bars p10-p90, whiskers p1-p99)",
+                           ylabel="output tok/s")
             axes[i][1].set(title=f"{wl} / {st}: SLO attainment", xlabel="request rate (req/s)",
                            ylabel="fraction meeting SLO", ylim=(0, 1.02))
             axes[i][0].legend(fontsize=7)

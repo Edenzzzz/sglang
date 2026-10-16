@@ -456,8 +456,17 @@ static mixture.
             the most-slack fallback) but gains nothing -- 95% of decisions (3 749 / 3 692 of 3 940) had no feasible
             node, almost all on this request's own TTFT (22-24K rejections), and went to the top-hit node, i.e.
             cache affinity. Under full overload no placement meets the SLO; the lever there is admission (what to
-            delay), not placement. **Open problem:** the learned pull realisation fell to 0.0 in both reps -- even
-            with `write_through`, predicted pool pulls do not land; investigating the workers' prefetch next.
+            delay), not placement. **Why pool pulls do not land (found 08:5x):** the learned pull realisation fell
+            to 0.0 in both reps because the pool is full. The mooncake master holds 178-181 of 192 GB (92.7-94.4%)
+            and evicts only above its 0.95 watermark, so workers' BatchPut fails "due to insufficient space" (one
+            worker: 14 failed writes, 1 789 pages). With `write_through` every computed prefix is written --
+            including ~96 agent contexts of ~50K tokens -- so the working set (192 x 16K shared prefixes ~3.1M
+            tokens plus agent contexts) overflows the ~3.35M-token pool and the shared prefixes are evicted or
+            never stored. The router's mirror assumed every computed prefix was in the pool; its realisation EWMA
+            correctly learned that pulls do not land and switched its pull predictions off. Next: keep sglang's
+            default `write_through_selective` (a prefix is written after its second hit -- a popularity filter
+            that keeps shared prefixes and skips one-off agent contexts), mirror that rule in the router, and lower
+            the master's eviction watermark (0.95 -> 0.85) so puts find space.
             Spread ([figure](pd_colocation/figures_20261017/h20x8_manyprefix_overload_fallback.png),
             [data](pd_colocation/figures_20261017/h20x8_manyprefix_overload_fallback.csv)):
             | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 (rep 1 ; rep 2) | out tok/s | mean TTFT s | mean TPOT ms |

@@ -63,6 +63,43 @@ for ctx in (256, 4096, 16384):
         dec.append((ctx, conc, m))
         print(f"decode ctx {ctx:6d} conc {conc:3d}: mean ITL {m:6.2f} ms", flush=True)
 
+# Decode interference of a prefill: the router charges every decoding resident one prefill chunk per
+# step while a new request's prefill runs (router.py residents_itl_ok). Charging the full cold chunk time
+# assumes prefill and decode run serially inside a step; the 4-mode step overlaps them, and serving
+# measured chat ITL ~56 ms where that charge predicted >100 ms (7 680 node rejections in one run). Measure
+# it: N cached decoders, a cold 32K prefill started beside them, decoders' ITL inside vs outside the
+# prefill window. ratio = added ms per step / cold chunk time (2048 tokens at the prefill's context).
+interf = []
+for ctx, conc in ((4096, 8), (4096, 32), (16384, 8)):
+    prompts = [[rng.randrange(1000, 30000) for _ in range(ctx)] for _ in range(conc)]
+    with cf.ThreadPoolExecutor(conc) as ex:
+        list(ex.map(lambda p: gen(p, 1, False), prompts))
+    window = {}
+
+    def prefill():
+        time.sleep(3.0)
+        t0 = time.time()
+        gen([rng.randrange(1000, 30000) for _ in range(32768)], 1, False)
+        window["t"] = (t0, time.time())
+
+    def one(p):
+        _, ts = gen(p, 1024, True)
+        return ts
+    with cf.ThreadPoolExecutor(conc + 1) as ex:
+        pf = ex.submit(prefill)
+        tss = list(ex.map(one, prompts))
+        pf.result()
+    a, b = window["t"]
+    inside = [(y - x) * 1000 for ts in tss for x, y in zip(ts, ts[1:]) if x >= a and y <= b]
+    outside = [(y - x) * 1000 for ts in tss for x, y in zip(ts, ts[1:]) if y < a or x > b]
+    mi, mo = sum(inside) / max(1, len(inside)), sum(outside) / max(1, len(outside))
+    chunk_cold_ms = (b - a) * 1000 / (32768 / 2048)  # this run's prefill, per 2048-token chunk
+    ratio = max(0.0, mi - mo) / chunk_cold_ms
+    interf.append(ratio)
+    print(f"interference ctx {ctx:6d} conc {conc:3d}: ITL outside {mo:6.2f} ms, inside {mi:6.2f} ms "
+          f"({len(inside)} gaps), chunk {chunk_cold_ms:6.1f} ms -> ratio {ratio:.3f}", flush=True)
+chunk_interference = max(interf)
+
 # Emit the measured grid for the router to interpolate. No parametric fit: on H20 the surface has
 # a knee no closed form matched (2026-10-08) -- measured with prefill inside the timed steps, see above. ITL is flat to ~131K total resident tokens (9.1 ms at
 # 32x4K, 8.3 ms at 8x16K) and then jumps 15x by 524K (136.6 ms at 32x16K) -- too steep for a
@@ -90,4 +127,5 @@ a, b, c = (A[i][3] / A[i][i] for i in range(3))
 long_rate = sum(n_ for n_, _ in pre[2:]) / sum(t for _, t in pre[2:])
 print(f"rejected linear fit (kept for the record): ITL = {a:.2f} + {b:.4f}*conc + {c:.5f}*conc*kv/1e3 ms")
 curve = ",".join(f"{n_}:{t * 1000:.1f}" for n_, t in pre)
-print(f"ROUTER_ARGS=--prefill-tok-s {long_rate:.0f} --prefill-curve {curve} --decode-grid /dev/shm/w/mn/decode_grid.json")
+print(f"ROUTER_ARGS=--prefill-tok-s {long_rate:.0f} --prefill-curve {curve} --decode-grid /dev/shm/w/mn/decode_grid.json "
+      f"--chunk-interference {chunk_interference:.3f}")

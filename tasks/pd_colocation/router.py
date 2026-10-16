@@ -257,7 +257,10 @@ class Router:
         a = w.accept if (self.a.accept_ewma_alpha > 0 and w.accept) else 1.0
         step_ms = tpot * a
         n_chunks = -(-uncached // self.a.chunk_tokens) if uncached > 0 else 0
-        chunk_ms = self.pm.prefill_ms(uncached, n_tok_self) / n_chunks if n_chunks else 0.0
+        # Added step time per prefill chunk, as a measured fraction of the chunk's cold prefill time
+        # (calibrate_h20.py): the 4-mode step overlaps the chunk with decode rather than serialising.
+        chunk_ms = (self.a.chunk_interference * self.pm.prefill_ms(uncached, n_tok_self) / n_chunks
+                    if n_chunks else 0.0)
         for r in w.inflight.values():
             if r.get("t_first") is None or r["decode_left"] <= 0:
                 continue
@@ -511,6 +514,8 @@ def main():
                     help="also reject a node if admitting the request would push a request already "
                          "decoding there past its ITL SLO")
     ap.add_argument("--chunk-tokens", type=int, default=2048, help="workers' --chunked-prefill-size")
+    ap.add_argument("--chunk-interference", type=float, default=1.0,
+                    help="added decode-step time per prefill chunk / the chunk's cold prefill time (calibrated)")
     ap.add_argument("--no-feasible-fallback", choices=["slack", "cache"], default="slack",
                     help="when no node is predicted to meet the SLO: the most-slack node, or the top-hit node")
     ap.add_argument("--kv-tokens", type=int, default=1_000_000)

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.20.11 — Router SLO check on the clean grid decides; resident-ITL charge measured as an overlap (2026-10-17)
+
+- Clean-grid hot-mix A/B (rep 1): the SLO check now decides most routes (no feasible node 14%, was 45-63%) and keeps
+  chat TTFT -89% / ITL -32% / throughput +20% vs cache affinity (agent throughput -11%, ITL +21%). The resident ITL
+  check rejected 7 680 nodes without helping agent ITL: its per-step charge assumed prefill and decode serialise.
+- `calibrate_h20.py` measures decode interference of a cold 32K prefill (`--chunk-interference`); `router.py` scales
+  the resident charge by it.
+
 ## v1.20.10 — Router TPOT prediction counted queued requests as decoding; SLO-check results re-read (2026-10-17)
 
 - `router.py predict()`: rows decoding beside a request = those decoding now + those queued ahead of it (earlier

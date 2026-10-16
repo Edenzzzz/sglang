@@ -339,6 +339,24 @@ static mixture.
             with these. A/B queued:
             `mn_overload_fallback_8gpu_20261017.sh` (cache affinity vs SLO check + transfer + resident
             ITL + cache fallback, x2).
+      - [~] **Clean-grid A/B, hot mix (2026-10-17 05:0x-06:0x, rep 1 only; `mn_resident_itl_8gpu_20261017.sh`).**
+            Out tok/s / mean TTFT / mean ITL:
+            | arm | agent | chat | moved / no feasible node | rejections by check |
+            |---|---|---|---|---|
+            | cache | 253 / 9.99 s / 30.2 | 1676 / 15.4 s / 83.1 | - | - |
+            | SLO check | 224 / 9.59 s / 36.5 | 2017 / 1.67 s / 56.6 | 797 / 468 of 3 300 | own ITL 3 483, own TTFT 411, queued TTFT 272 |
+            | + resident ITL check | 209 / 10.4 s / 36.9 | 2018 / 1.74 s / 56.4 | 2 267 / 1 711 | resident ITL 7 680, own ITL 5 864, own TTFT 1 209, queued TTFT 374 |
+            With the clean grid the SLO check itself decides (no-feasible fell from 45-63% to 14%), and the
+            outcome holds: chat throughput +20%, TTFT -89%, ITL -32% vs cache affinity, at agent throughput
+            -11% and ITL +21%. Predicted / measured TTFT median 0.80 for chat, 2.99 for agents (p90 16.6):
+            pessimistic for agents, likely because an in-progress chunked prefill keeps its full uncached
+            length in the router's table until its first token. **The resident ITL check fires a lot but
+            does not help:** it rejected 7 680 nodes, pushed no-feasible back to 52%, and left agent ITL
+            unchanged (36.9 vs 36.5 ms). Its charge -- one full cold chunk time per shared step -- assumes
+            prefill and decode serialise inside a step; the 4-mode step overlaps them (measured chat ITL
+            ~56 ms where the charge predicts >100 ms). Rep 2 and the overload A/B were stopped; the
+            calibration now measures that overlap (`--chunk-interference`: decoders' added ITL per step
+            during a cold 32K prefill / the chunk's cold time), recalibrating.
       - [ ] margin / quantile choice set from the measured error distribution
       - [ ] A/B: cache affinity | current SLO check | + step model | + transfer term | + margin, on
             goodput / SLO attainment at the 8-GPU H20 points (agent C=16/32, chat 8 req/s)

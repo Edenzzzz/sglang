@@ -2,6 +2,11 @@
 # Tear down every multi-node process on this pod. A script file, not an inline exec string: an inline
 # pattern list appears on the exec shell's own command line, so the loop killed its own shell and every
 # per-pod call ran to its timeout (~13 min of overhead per arm, 2026-10-16).
+# Supervisor loops (mn_node.sh) go first: a surviving one relaunches its worker seconds after the
+# kill, and that orphan held 86 GB on pod 0 GPU 1 so every new worker there OOMed (2026-10-16).
+for p in $(ps -eo pid,cmd | grep 'mn_node.sh' | grep -v -E 'grep|mn_kill' | awk '{print $1}'); do
+  [ "$p" != "$$" ] && kill -9 $p 2>/dev/null
+done
 for p in $(ps -eo pid,cmd | grep -E 'sglang.launch_server|sglang::|sglang_router|router.py|bench_serving|benchmark.serving|mn_bench|mooncake_master' \
            | grep -v -E 'grep|mn_kill' | awk '{print $1}'); do
   [ "$p" != "$$" ] && kill -9 $p 2>/dev/null

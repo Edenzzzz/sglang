@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.1 — Multi-node teardown kills supervisor loops (2026-10-16)
+
+- `tasks/pd_colocation/mn_kill.sh` now kills `mn_node.sh` supervisor shells before workers. A surviving
+  supervisor from an aborted arm relaunched its worker seconds after teardown; that orphan held 86 GB on
+  pod 0 GPU 1, so every PD-disagg prefill worker there OOMed (logged as "bindfail").
+- `mn_node.sh`: worker ports picked below the ephemeral range under a lock; `mn_run.py`: 40-min health deadline.
+
 ## v1.20.0 — S3 complete in scope; load + context gate for the 4-mode step (2026-10-16)
 
 - S3 standalone (ShareGPT, GSM8K, MATH-500, HumanEval, Code-Feedback, WebShop agentic web browsing):

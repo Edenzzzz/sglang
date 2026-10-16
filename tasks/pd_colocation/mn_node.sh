@@ -21,6 +21,17 @@ export LD_LIBRARY_PATH=$CUDART:$CUDART/lib:${LD_LIBRARY_PATH:-}
 # peer server 2605:...:16743 ... use IPv4 address instead"), so every disagg request failed. The
 # pods also carry IPv4 addresses, all mutually reachable; advertise the first one.
 export SGLANG_HOST_IP=$(hostname -I | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+# KERNEL=mtpsplit: the single-GPU serving kernel of 2026-10-16 -- 4-mode MTP step on the two-launch
+# split (FA3 prefill rows + stock FA2 verify rows), decode guard off; the same env as
+# run_mixed_workloads' MTPMIX_SPLIT arm. SM_FA3 scaled to H20's 78 SMs (112/132 on H200).
+if [ "${KERNEL:-lpt}" = mtpsplit ]; then
+  export SGLANG_MIXED_ATTENTION_KERNEL=persistent SGLANG_TWO_EXEC=1 SGLANG_FUSED_FA3_SM_SPLIT=1
+  export FLASHINFER_SM_PARTITION=1 UP_STAGES=2 SGLANG_FUSED_FA3_SRC=$W/fi/tests/fused_fa3_persistent_ext.cu
+  export SGLANG_FUSED_FI_ROOT=$W/port07 SGLANG_FUSED_FA2_TILES=64,32,16 FUSED_FA2_FINE_TAIL=1
+  export FUSED_CONST_PERS_PARAMS=1 FUSED_WORK_BUDGET_SPLIT=1 FLASHINFER_FUSED_BACKFILL=1
+  export FLASHINFER_FUSED_COLAUNCH=1 FUSED_FA2_KV_CHUNK=auto SGLANG_FUSED_SM_FA3=66
+  export SGLANG_SPLIT_OVERLAP=0 SGLANG_FUSED_DECODE_GUARD=0
+fi
 if [ "${KERNEL:-lpt}" = split ]; then
   export SGLANG_MIXED_ATTENTION_KERNEL=persistent SGLANG_TWO_EXEC=1 SGLANG_FUSED_FA3_SM_SPLIT=1
   export FLASHINFER_SM_PARTITION=1 UP_STAGES=2 SGLANG_FUSED_FA3_SRC=$W/fi/tests/fused_fa3_persistent_ext.cu
@@ -71,6 +82,12 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   fi
   # Worker-side EDF: deadline-ordered admission with no chunk cap (no latency model), the
   # configuration that won on the MTP server (pd_colocation_vs_disagg.md point 3).
+  # PREEMPT=1 (with EDF=1): EDF over the in-progress chunked prefill -- uncapped chunk preemption,
+  # edf_preempt_chunk_v2.patch (in h20_overlay.tgz); park gate v2 PASS on H200 2026-10-16.
+  if [ "${PREEMPT:-0}" = 1 ]; then
+    export SGLANG_EDF_PREEMPT_CHUNK=1 SGLANG_EDF_RESERVE_EARLIER=1 SGLANG_EDF_PREEMPT_MAX_TOKENS=1000000000
+  fi
+  [ -n "${CHUNK:-}" ] && ARGS+=(--chunked-prefill-size $CHUNK)
   if [ "${EDF:-0}" = 1 ]; then
     export SGLANG_EDF_SCHEDULING=1 SGLANG_TTFT_SLO_MS=${TTFT_SLO_MS:-2000} SGLANG_EDF_LATENCY_MODEL=
     ARGS+=(--enable-priority-scheduling --schedule-low-priority-values-first

@@ -12,12 +12,27 @@ export PYTHONPATH=$W/python:$W/fi
 mkdir -p $OUT; rm -rf $OUT/barrier
 export BENCH_BARRIER_DIR=$OUT/barrier
 S=${SESSIONS:-64}; T=${TURNS:-6}
+if [ -n "${AGENT_CONC:-}" ]; then
+  # Program concurrency (ThunderAgent protocol; the only agent load axis -- user, 2026-10-15): AGENT_CONC
+  # sessions kept active, the next starts when one finishes, rounds back to back. Same TraceLab
+  # cohort selection as the single-GPU kernel_concurrency_env (providers, round weighting, seed).
+  export BENCH_SESSION_CONCURRENCY=$AGENT_CONC BENCH_SESSION_AUDIT_FILE=$OUT/agent_programs.json
+  $W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/qwen7b \
+    --dataset-name tracelab-claude --dataset-path $W/workloads/tracelab/syfi_full_min.jsonl.gz --tokenize-prompt \
+    --tracelab-num-groups $S --tracelab-min-context-len ${MIN_CTX:-32768} --tracelab-max-context-len ${MAX_CTX:-65536} \
+    --tracelab-min-output-len 1 --num-prompts $((S * T)) --request-rate inf \
+    --tracelab-providers claude,codex --tracelab-allow-empty-prefix --tracelab-session-weighting rounds \
+    --tracelab-selection-seed ${AGENT_SEED:-20261014} \
+    --warmup-requests 2 --output-file $OUT/agent.json --output-details --disable-tqdm > $OUT/bench_agent.log 2>&1 &
+  unset BENCH_SESSION_CONCURRENCY BENCH_SESSION_AUDIT_FILE
+else
 $W/venv/bin/python -m sglang.bench_serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/qwen7b \
   --dataset-name tracelab-claude --dataset-path $W/tracelab_trace.jsonl.gz --tokenize-prompt \
   --tracelab-num-groups $S --tracelab-min-context-len ${MIN_CTX:-16384} --tracelab-max-context-len ${MAX_CTX:-49152} \
   --tracelab-min-output-len 64 --num-prompts $((S * T)) --request-rate ${SESSION_RATE:-0.5} \
   --use-trace-timestamps --mooncake-slowdown-factor ${SLOWDOWN:-0.1} \
   --warmup-requests 2 --output-file $OUT/agent.json --output-details --disable-tqdm > $OUT/bench_agent.log 2>&1 &
+fi
 A=$!
 # HOT=1 (point 4): the second tenant shares a few long system prompts instead of sending fresh
 # ones, so pure cache affinity piles each group onto its single holder. Spreading that load needs
@@ -26,10 +41,12 @@ if [ "${HOT:-0}" = 1 ]; then
   SECOND=(--dataset-name generated-shared-prefix --gsp-num-groups ${HOT_GROUPS:-4}
           --gsp-prompts-per-group $(( ${CHAT_N:-3200} / ${HOT_GROUPS:-4} )) --gsp-system-prompt-len ${HOT_PREFIX:-16384}
           --gsp-question-len ${CHAT_IN:-512} --gsp-output-len ${CHAT_OUT:-128})
+elif [ "${CHAT_SHAREGPT:-0}" = 1 ]; then
+  SECOND=(--dataset-name sharegpt --dataset-path $W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json)
 else
   SECOND=(--dataset-name random-ids --random-input ${CHAT_IN:-512} --random-output ${CHAT_OUT:-128} --random-range-ratio 0.5)
 fi
-$W/venv/bin/python -m sglang.bench_serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/qwen7b \
+$W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/qwen7b \
   "${SECOND[@]}" --request-rate ${CHAT_RATE:-16} --num-prompts ${CHAT_N:-3200} \
   --warmup-requests 2 --output-file $OUT/chat.json --output-details --disable-tqdm > $OUT/bench_chat.log 2>&1 &
 C=$!

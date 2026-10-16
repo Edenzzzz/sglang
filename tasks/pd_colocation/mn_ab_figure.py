@@ -1,7 +1,8 @@
 """Per-arm, per-rep spread for a multi-node routing A/B: per-request tok/s/user (median, p10-p90 bar, p1-p99
 whisker) and mean TTFT / mean ITL for each rep, both streams, plus a CSV of the eval_curves rows.
 
-  python mn_ab_figure.py <out_prefix> <label>=<arm dir prefix>[,...]   (rep suffix _rep1/_rep2 appended)
+  python mn_ab_figure.py <out_prefix> <label>=<arm dir prefix>[,...]   (rep suffix _rep1/_rep2 appended; a
+  directory without one is a single run and plots as rep 1)
 
 Runs locally: links each arm/rep's agent.json / chat.json on pod 0 into eval_curves.py's
 <root>/<workload>_r<rate>/<ARM>_<stream>.json layout with workload "ab" and rate = rep number, runs
@@ -24,8 +25,11 @@ def main():
     for label, prefix in arms:
         for rep in (1, 2):
             for st in ("agent", "chat"):
-                cmds.append(f"[ -s {MN}/{prefix}_rep{rep}/{st}.json ] && ln -sf {MN}/{prefix}_rep{rep}/{st}.json "
-                            f"{ROOT}/ab_r{rep}/{label}_{st}.json || true")
+                # Single-run arms have no _rep suffix: their one run is rep 1.
+                alt = f"{MN}/{prefix}/{st}.json" if rep == 1 else "/nonexistent"
+                cmds.append(f"if [ -s {MN}/{prefix}_rep{rep}/{st}.json ]; then ln -sf {MN}/{prefix}_rep{rep}/{st}.json "
+                            f"{ROOT}/ab_r{rep}/{label}_{st}.json; elif [ -s {alt} ]; then ln -sf {alt} "
+                            f"{ROOT}/ab_r{rep}/{label}_{st}.json; fi")
     src = base64.b64encode(open(os.path.join(REPO, "drivers/serving/eval_curves.py"), "rb").read()).decode()
     rc, o = C.run(0, "; ".join(cmds) + f"; echo {src} | base64 -d > /tmp/eval_curves.py; "
                      f"/dev/shm/w/venv/bin/python /tmp/eval_curves.py --root {ROOT} --slo '{SLO}' --csv /tmp/ab.csv "

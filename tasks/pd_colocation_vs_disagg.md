@@ -395,6 +395,58 @@ static mixture.
             decisions, the most-slack fallback -- which ignores ITL -- chose the node. Rerunning with
             `--no-feasible-fallback cache` in both SLO-check arms, so the resident check changes only which
             feasible node is chosen.
+      - [x] **Spread of every routing A/B above (backfilled 2026-10-17 08:xx; user: "you should always record
+            that").** Per arm and stream, rep 1 ; rep 2: tok/s/user p1 / p10 / median / p90 / p99, then mean TTFT s and
+            mean TPOT ms. Figures show the same per rep (median marker, p10-p90 bar, p1-p99 whisker). Command:
+            `python tasks/pd_colocation/mn_ab_figure.py <out_prefix> <label>=<arm dir prefix>,...`.
+            *SLO check vs cache affinity, no pool, agent C=16 + chat 8 req/s (`mn_slo_check_8gpu_20261017.sh`, 1 run)* -- [figure](pd_colocation/figures_20261017/h20x8_slocheck_nopool_c16.png), [data](pd_colocation/figures_20261017/h20x8_slocheck_nopool_c16.csv)
+            | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 | mean TTFT s | mean TPOT ms |
+            |---|---|---|---|---|
+            | cache | chat | 4.3/17.2/241/302/393 | 0.30 | 20.3 |
+            | cache | agent | 8.2/18.6/94.1/197/260 | 6.80 | 22.9 |
+            | slo_check | chat | 4.4/18.0/240/302/394 | 0.47 | 18.9 |
+            | slo_check | agent | 6.5/14.7/82.7/204/347 | 7.14 | 28.4 |
+            *same at agent C=32 (1 run)* -- [figure](pd_colocation/figures_20261017/h20x8_slocheck_nopool_c32.png), [data](pd_colocation/figures_20261017/h20x8_slocheck_nopool_c32.csv)
+            | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 | mean TTFT s | mean TPOT ms |
+            |---|---|---|---|---|
+            | cache | chat | 2.5/4.0/6.2/137/299 | 2.41 | 155.2 |
+            | cache | agent | 3.9/6.3/9.4/17.0/281 | 11.45 | 104.0 |
+            | slo_check | chat | 2.9/4.7/9.0/264/343 | 2.65 | 105.2 |
+            | slo_check | agent | 3.4/7.2/11.9/41.4/256 | 12.56 | 83.6 |
+            *pool on, best_effort prefetch, C=16 (`mn_pool_slo_check_8gpu_20261017.sh`, 1 run)* -- [figure](pd_colocation/figures_20261017/h20x8_pool_besteffort_c16.png), [data](pd_colocation/figures_20261017/h20x8_pool_besteffort_c16.csv)
+            | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 | mean TTFT s | mean TPOT ms |
+            |---|---|---|---|---|
+            | cache | chat | 4.0/16.7/233/294/365 | 0.26 | 20.1 |
+            | cache | agent | 7.1/18.4/96.7/179/304 | 7.59 | 22.8 |
+            | slo_check+transfer | chat | 4.4/13.1/230/294/365 | 0.46 | 22.7 |
+            | slo_check+transfer | agent | 6.8/12.0/83.0/190/324 | 7.40 | 30.9 |
+            | slo_check_no_transfer | chat | 4.3/15.2/234/294/365 | 0.18 | 21.6 |
+            | slo_check_no_transfer | agent | 7.1/11.4/75.3/164/319 | 8.04 | 27.2 |
+            *pool on, timeout prefetch, C=16 (`mn_pool_timeout_8gpu_20261017.sh`, x2)* -- [figure](pd_colocation/figures_20261017/h20x8_pool_timeout_c16.png), [data](pd_colocation/figures_20261017/h20x8_pool_timeout_c16.csv)
+            | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 | mean TTFT s | mean TPOT ms |
+            |---|---|---|---|---|
+            | cache | chat | 4.2/14.8/233/294/364 ; 4.1/16.0/232/293/362 | 0.37 ; 0.38 | 21.8 ; 21.7 |
+            | cache | agent | 7.5/17.5/93.3/182/308 ; 6.7/15.8/89.2/211/305 | 7.36 ; 7.37 | 24.3 ; 26.3 |
+            | slo_check+transfer | chat | 3.9/12.1/230/293/370 ; 4.0/14.0/231/294/368 | 0.18 ; 0.40 | 25.2 ; 22.7 |
+            | slo_check+transfer | agent | 6.3/10.5/82.5/201/333 ; 6.3/15.0/77.9/178/312 | 7.84 ; 8.01 | 30.9 ; 29.0 |
+            *hot 4 x 16K prefixes, patched scheduler (`mn_hot_transfer_8gpu_20261017.sh`, x2)* -- [figure](pd_colocation/figures_20261017/h20x8_hot_transfer.png), [data](pd_colocation/figures_20261017/h20x8_hot_transfer.csv)
+            | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 | mean TTFT s | mean TPOT ms |
+            |---|---|---|---|---|
+            | cache | chat | 4.3/7.6/14.5/42.2/115 ; 3.9/7.4/14.8/23.4/84.8 | 13.21 ; 14.56 | 76.9 ; 80.2 |
+            | cache | agent | 5.0/8.7/27.4/206/268 ; 4.4/8.0/30.3/194/317 | 9.16 ; 10.76 | 52.6 ; 53.6 |
+            | slo_check+transfer | chat | 4.1/8.4/36.5/304/402 ; 4.3/8.4/27.2/313/408 | 1.41 ; 1.46 | 47.8 ; 52.2 |
+            | slo_check+transfer | agent | 5.0/8.6/24.6/88.7/169 ; 5.4/8.3/22.2/79.9/192 | 10.10 ; 10.32 | 58.2 ; 57.9 |
+            | slo_check_no_transfer | chat | 4.0/8.4/29.6/310/402 ; 4.5/8.6/26.6/312/405 | 1.61 ; 1.22 | 51.9 ; 51.2 |
+            | slo_check_no_transfer | agent | 6.3/8.1/20.4/77.3/201 ; 6.4/11.3/21.7/88.8/216 | 10.14 ; 10.13 | 56.9 ; 50.0 |
+            *192 x 16K prefixes, pre-fix router (`mn_manyprefix_transfer_8gpu_20261017.sh`; SLO-check arms rep 1 only)* -- [figure](pd_colocation/figures_20261017/h20x8_manyprefix_oldrouter.png), [data](pd_colocation/figures_20261017/h20x8_manyprefix_oldrouter.csv)
+            | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 | mean TTFT s | mean TPOT ms |
+            |---|---|---|---|---|
+            | cache | chat | 3.7/7.8/12.6/45.7/270 ; 3.5/7.5/12.2/28.8/221 | 28.08 ; 27.92 | 84.3 ; 88.1 |
+            | cache | agent | 4.8/8.2/11.7/222/353 ; 4.3/8.1/11.1/252/346 | 30.42 ; 28.54 | 67.7 ; 73.9 |
+            | slo_check+transfer | chat | 3.2/5.7/10.3/11.9/14.5 | 233.54 | 115.0 |
+            | slo_check+transfer | agent | 5.3/7.4/12.4/258/340 | 84.79 | 67.9 |
+            | slo_check_no_transfer | chat | 2.9/5.3/9.4/10.9/12.5 | 73.42 | 125.1 |
+            | slo_check_no_transfer | agent | 4.7/8.2/10.7/276/343 | 48.67 | 66.9 |
       - [ ] margin / quantile choice set from the measured error distribution
       - [ ] A/B: cache affinity | current SLO check | + step model | + transfer term | + margin, on
             goodput / SLO attainment at the 8-GPU H20 points (agent C=16/32, chat 8 req/s)

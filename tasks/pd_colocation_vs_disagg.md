@@ -220,7 +220,7 @@ static mixture.
             `mn_hot_transfer_8gpu_20261017.sh` (HOT=1, 4 x 16K shared system prompts at 16 req/s; cache |
             veto ignoring the pool | veto + transfer, x2). The cold moved requests also show the
             predictor's spread: 8.9 s predicted vs 0.7 s measured, 10.7 s vs 37.9 s.
-      - [~] **Hot-prefix transfer A/B (`mn_hot_transfer_8gpu_20261017.sh`; HOT=1, 4 groups x 16K shared
+      - [x] **Hot-prefix transfer A/B (`bash tasks/pd_colocation/mn_hot_transfer_8gpu_20261017.sh`; HOT=1, 4 groups x 16K shared
             prefixes at 16 req/s, agent C=16, pool on, timeout prefetch; cache | veto ignoring the pool |
             veto + transfer, x2).** First run (02:0x): cache rep 1 agent 239 tok/s / 10.4 s / 30.0 ms,
             chat 1768 / 9.8 s / 75.4 ms. The veto-ignoring-pool rep 1 **crashed a worker** on
@@ -231,7 +231,25 @@ static mixture.
             Fixed by applying the guard whenever a chunked request is in flight
             (`tasks/pd_colocation/edf_one_chunked_req.patch`, applied to all 4 pods); every EDF + PREEMPT
             arm before this carried the bug, but only the hot-prefix mix (many concurrent 16K-cached
-            requests) triggered it. All arms rerunning on the patched tree.
+            requests) triggered it. **Rerun on the patched tree (2026-10-17 02:5x-03:4x), all 6 arms 8
+            workers 0 tracebacks / 0 fallbacks.** Two-rep means, out tok/s / mean TTFT / mean ITL:
+            | arm | agent | chat | requests / worker | prefill hit |
+            |---|---|---|---|---|
+            | cache | 236 / 9.96 s / 30.5 | 1664 / 13.9 s / 78.6 | 19-807 | 92.9% |
+            | veto ignoring the pool | 224 / 10.1 s / 35.5 | **2017 / 1.41 s / 51.6** | 328-506 | 93.3% |
+            | veto + transfer | 216 / 10.2 s / 35.5 | **2015 / 1.43 s / 50.1** | 221-549 | 93.3% |
+            **Veto vs cache: chat throughput +21%, TTFT -90%, ITL -34%; agent throughput -5..-8%, TTFT
+            +2..+3%, ITL +16%.** Cache affinity piles each hot group on its holder (19 vs 807 requests per
+            worker); the veto spreads them at the same hit rate, because the 4 hot prefixes replicate after
+            a few recomputes. Reps agree within ~2% for the veto arms (chat TTFT 1.61 / 1.22 s); the cache
+            arm varies more (agent 271 / 200 tok/s). **The transfer term makes no difference here, as
+            expected:** only 37 of 1 623 moved requests had a pool hit beyond their local one (4 x 16K
+            replicates almost immediately). On those 37 its prediction was close: 26.3K tokens predicted vs
+            21.4K pulled (81%), TTFT predicted / measured median 0.94 (p10 0.09, p90 1.93), and the learned
+            pull bandwidth settled at 0.75 GB/s (prior 10). The predictor still rates most nodes
+            infeasible: 1 215 of the 1 623 moves found no feasible worker (least-bad).
+            A transferable workload is queued: `mn_manyprefix_transfer_8gpu_20261017.sh` (192 x 16K
+            shared prefixes ~3.1M tokens, fits the pool but not one node; same 3 arms x 2).
       - [x] **Predictor error (same runs, `ttft_obs` vs `ttft_pred`):** predicted / measured median 0.64
             (chat) and 0.72-0.73 (agent) -- about 30% optimistic, as the error list expected (blended
             prefill rate, decode interference, future arrivals). Agent error p10 / p90 -6.4..-7.7 s /

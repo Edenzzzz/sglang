@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.8 — Hot-prefix veto A/B: chat TTFT -90% vs cache affinity; transfer term untested by 4 groups (2026-10-17)
+
+- 8 H20, 4 x 16K shared-prefix chat at 16 req/s + agent C=16, pool on, x2: the veto beats cache affinity on chat
+  throughput +21%, TTFT -90%, ITL -34% at -5..-8% agent throughput, +16% agent ITL. With 4 prefixes the transfer
+  term had only 37 transferable moves (prediction 81% of the actual pull); 192-prefix A/B queued.
+
 ## v1.20.7 — EDF reservation could chunk two requests at once (scheduler assert), fixed (2026-10-17)
 
 - `edf_one_chunked_req.patch`: `_select_prefill_admission` refused to chunk a second request while one is in

@@ -277,6 +277,18 @@ static mixture.
             The index answers "radix tree?": it IS one, flattened at 256-token blocks (each key
             chains its parent's), so matching is the radix walk; it loses up to 255 tokens per
             match and evicts per block rather than per leaf.
+      - [x] **[CORRECTION 2026-10-17 04:5x] Every SLO-check arm above mostly measured its no-feasible-node
+            fallback, not the check.** Per-check rejection counts (first logged in the resident-ITL A/B, hot
+            mix): ~14-15K node rejections per run came from this request's own predicted ITL, against 0.7-0.8K
+            for TTFT, 0.2K for queued requests' TTFT and 0.8K for residents' ITL; 56-63% of decisions found no
+            feasible node. Cause: `predict()` counted every in-flight request on a node as a decoding row,
+            later-deadline requests still waiting for prefill included, so the calibrated decode grid was read
+            at 40-60 rows (~210-250 ms) where measured ITL was 35-59 ms. The measured numbers above stand, but
+            the mechanism behind them was mostly "most-slack node among infeasible ones", and the earlier
+            explanations should be read that way. Fixed: TPOT now counts the rows decoding beside this request
+            once it decodes -- those already decoding plus those queued ahead of it (earlier deadline) -- e.g.
+            10 decoding + 40 queued behind now predicts 44.8 ms instead of ~210 ms. The resident-ITL A/B was
+            stopped after rep 1 and rerun on the fixed router with a cache-affinity control.
       - [ ] **Protect requests already decoding on the target node (user, 2026-10-17).** The check
             covered this request's TTFT and ITL and the TTFT deadlines of requests still queued on the
             node, but not the ITL of requests already decoding there -- and admission costs them twice:

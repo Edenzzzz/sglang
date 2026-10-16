@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.20.10 — Router TPOT prediction counted queued requests as decoding; SLO-check results re-read (2026-10-17)
+
+- `router.py predict()`: rows decoding beside a request = those decoding now + those queued ahead of it (earlier
+  deadline), not every in-flight request. The old count read the decode grid at 40-60 rows (~210-250 ms vs
+  35-59 ms measured), so ~15K node rejections per hot-mix run came from an inflated own-ITL and 56-63% of decisions
+  had no feasible node: earlier SLO-check results mostly measured the most-slack fallback (doc corrected in place).
+  Resident-ITL A/B rerun on the fixed router with a cache-affinity control.
+
 ## v1.20.9 — SLO check protects requests already decoding on the target node; "veto" wording removed (2026-10-17)
 
 - `router.py --check-residents`: a node is also rejected if admitting the request would push any request already

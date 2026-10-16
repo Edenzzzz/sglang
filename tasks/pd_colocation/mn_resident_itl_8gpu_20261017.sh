@@ -6,11 +6,13 @@
 # on the target node. --check-residents 1 rejects a node if any resident's predicted mean ITL (time spent so far +
 # remaining steps at the step time with the new request + one prefill chunk per step while its prefill runs) would
 # exceed its ITL SLO. Same router build in both arms; only --check-residents differs. Pool on, timeout prefetch,
-# transfer term on, agent C=16, hot chat 16 req/s, interleaved x2. Waits for the many-prefix A/B. Claude.
+# transfer term on, agent C=16, hot chat 16 req/s, interleaved x2, with a cache-affinity control.
+# Rerun 2026-10-17 04:5x on the fixed TPOT prediction: the first run's router counted every in-flight request (queued
+# ones included) as decoding, so ~15K node rejections came from an inflated predicted ITL (grid at 40-60 rows) and
+# 56-63% of decisions found no feasible node. Claude.
 set -u
 export PATH=$HOME/.merlin-cli/bin:$PATH
 cd "$(dirname "$0")"
-while kill -0 1191815 2>/dev/null; do sleep 30; done
 python3 - <<'PY'
 import base64
 from px_multi import Cluster
@@ -27,7 +29,8 @@ export SID=bb854a10b8954223 NPODS=4 MIN_CTX=32768 MAX_CTX=65536 TURNS=2
 export KERNEL=mtpsplit PREEMPT=1 CHUNK=2048 HC_PREFETCH=timeout HC_WRITE=write_through
 export AGENT_CONC=16 SESSIONS=48 HOT=1 HOT_GROUPS=4 HOT_PREFIX=16384 CHAT_RATE=16 CHAT_N=3200
 for rep in 1 2; do
-  RUN_TAG=_8g_hot_c16_residents0_rep$rep ROUTER_ARGS="$RA --check-residents 0" python3 -u mn_run.py coloc_slo_edf_mtp_hc
-  RUN_TAG=_8g_hot_c16_residents1_rep$rep ROUTER_ARGS="$RA --check-residents 1" python3 -u mn_run.py coloc_slo_edf_mtp_hc
+  RUN_TAG=_8g_hot_c16_fixedpred_ctl_rep$rep python3 -u mn_run.py coloc_cache_edf_mtp_hc
+  RUN_TAG=_8g_hot_c16_fixedpred_residents0_rep$rep ROUTER_ARGS="$RA --check-residents 0" python3 -u mn_run.py coloc_slo_edf_mtp_hc
+  RUN_TAG=_8g_hot_c16_fixedpred_residents1_rep$rep ROUTER_ARGS="$RA --check-residents 1" python3 -u mn_run.py coloc_slo_edf_mtp_hc
 done
 echo RESIDENT_ITL_DONE

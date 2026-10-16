@@ -229,11 +229,16 @@ class Router:
         got, wait_s = self.pulled(wait_ms / 1000.0, missing)
         self.last_pull = got
         ttft = wait_s * 1000.0 + self.pm.prefill_ms(max(0, uncached - got), n_tok_self)
-        # Every resident row's KV, including this request's prompt: the decode slowdown this
-        # request would cause on w, which is what the hot-prefix holders actually suffer.
-        kv = sum(r.get("kv", 0) for r in w.inflight.values()) + n_tok_self
+        # Rows decoding beside this request once it decodes: those decoding now plus those queued ahead
+        # of it (earlier deadline, so prefilled first), with their KV and this request's prompt. Counting
+        # every in-flight request -- later-deadline ones still waiting for prefill included -- put
+        # 40-60 rows into the calibrated grid (~210-250 ms) on the hot-prefix mix, where measured ITL
+        # was 35-59 ms: 56-63% of decisions found no feasible node, almost all on this request's ITL.
+        rows = [r for r in w.inflight.values()
+                if r.get("t_first") is not None or r["deadline"] <= deadline]
+        kv = sum(r.get("kv", 0) for r in rows) + n_tok_self
         accept = w.accept if self.a.accept_ewma_alpha > 0 else None
-        tpot = self.pm.tpot_ms(len(w.inflight) + 1, kv, accept)
+        tpot = self.pm.tpot_ms(len(rows) + 1, kv, accept)
         return ttft, tpot
 
     def drain_ms(self, w, deadline):

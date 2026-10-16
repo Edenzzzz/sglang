@@ -21,6 +21,9 @@ log "up $(git -C up rev-parse --short HEAD)"
 if [ ! -x /opt/tiger/w/venv/bin/python ]; then rm -rf $W/venv; mkdir -p /opt/tiger/w; python3 -m venv /opt/tiger/w/venv; fi
 [ -L $W/venv ] || { rm -rf $W/venv; ln -sfn /opt/tiger/w/venv $W/venv; }
 P=$W/venv/bin/python
+# HiCache's native page hash (hicache_hash_cpp) JIT-compiles against openssl/sha.h; without it every
+# --enable-hierarchical-cache worker dies at startup.
+[ -f /usr/include/openssl/sha.h ] || sudo -n apt-get install -y libssl-dev >/dev/null 2>&1 || log "libssl-dev nonzero"
 $P -c "import torch" 2>/dev/null || { $P -m pip install -q --upgrade pip setuptools wheel >/dev/null 2>&1; $P -m pip install -q torch==2.14.1 || { log TORCH_FAIL; exit 1; }; }
 $P -c "import torch;print('TORCH',torch.__version__,torch.version.cuda,torch.cuda.is_available(),torch.cuda.device_count())" 2>&1 | tail -1
 $P -c "import torch,sys;sys.exit(0 if torch.cuda.is_available() else 1)" || { log CUDA_UNAVAILABLE; exit 2; }

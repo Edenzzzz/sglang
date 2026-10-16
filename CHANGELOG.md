@@ -10,6 +10,8 @@
 - `mn_run.py`: mooncake master from the venv (`$W/venv/bin/mooncake_master`; the old ~/.local path does not
   exist on the re-provisioned pods, so no master ran and every worker failed "setup Mooncake store"); an arm
   now aborts if the master is not running.
+- Provisioning installs `libssl-dev`: HiCache's native page hash JIT-compiles against `openssl/sha.h`; without it
+  every pool-on worker died at startup ("Failed to load HiCache native hash extension").
 
 ## v1.20.4 — PD doc: inter-node SLO-feasibility prediction as a major open item (2026-10-17)
 

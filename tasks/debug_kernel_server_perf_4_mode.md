@@ -738,7 +738,15 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     **Medium-length prompts show the gain:** EDF + floor cuts TTFT 25-31% below capacity (ITL +5..+8%);
     at 2x, where MTP falls behind the trace, EDF gives throughput +12% (conversation) / +21% (tool-agent),
     TTFT -47% / -58%, P99 ITL -59% / -60%, mean ITL -13% / -16%. Throughput and TTFT clear the bar at
-    2x; mean ITL does not. LongBench v2 running.
+    2x; mean ITL does not.
+    **LongBench v2 -- retracted (2026-10-16 12:11):** the rate grid 0.25 / 0.5 / 1 req/s was carried
+    over unreviewed from the 2026-10-13 script. LongBench v2 prompts average ~57K tokens (11.39M input
+    tokens / 200 requests) and one H200 prefills ~14.5K tok/s, so capacity is ~0.25 req/s: every point
+    was at or past saturation (MTP mean TTFT 57 s at 0.25/s, 241 s at 0.5/s with 0.25 achieved). These
+    points measure queue growth, not serving latency; not reported. Stopped after 0.25 and 0.5 (the
+    1 req/s arms were killed). The references set load around measured capacity -- Crossflow by request
+    rate (timestamp compression), ThunderAgent by concurrency; a long-document set without timestamps
+    belongs on program concurrency (documents in flight), not req/s.
 
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
   (goal point 3); earlier fits used the RoPE-corrupted model and are void (incl. the uncommitted

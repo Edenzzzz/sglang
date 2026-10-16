@@ -165,8 +165,26 @@ static mixture.
       - interaction with point 2 (routing to a non-holder IS replication) and point 4 (which holder to
         pull from).
       **Sub-items:**
+      - [x] **Current veto (no pool, no transfer term) vs cache affinity, same session, final stack,
+            8 H20 (2026-10-17, `bash tasks/pd_colocation/mn_slo_veto_8gpu_20261017.sh`; calibrated on one
+            final-stack worker: prefill 8.3K tok/s at 4K -> 4.4K at 48K, blended `--prefill-tok-s 5012`,
+            decode grid conc x ctx). All 4 arms 8 workers 0 tracebacks / 0 fallbacks. Out tok/s / mean
+            TTFT / mean ITL:
+            | point | arm | agent | chat | vetoed / least-bad | prefill hit |
+            |---|---|---|---|---|---|
+            | C=16, chat 8/s | cache | 377 / 6.80 s / 17.0 | 1659 / 304 ms / 16.2 | - | 65.2% |
+            | C=16, chat 8/s | veto | 366 / 7.14 s / 17.6 | 1658 / 474 ms / 14.7 | 345 / 8 of 2 500 | 60.6% |
+            | C=32, chat 8/s | cache | 257 / 11.4 s / 75.5 | 1657 / 2.41 s / 135 | - | 64.4% |
+            | C=32, chat 8/s | **veto** | **319 / 12.6 s / 58.0** | 1657 / 2.65 s / **91.7** | 1 667 / 314 of 2 596 | 54.9% |
+            At C=16 the veto is neutral-to-worse (agent TTFT +5%, chat TTFT +56%): without a pool, a
+            vetoed request recomputes its prefix. At C=32 it wins: agent throughput +24%, ITL -23%,
+            chat ITL -32%, at +10% TTFT on both tenants -- spreading hot holders' decode load. The
+            control reproduces the 2026-10-16 C=32 fixed-router run within 3%. **Veto stack vs stock
+            colocation at C=32:** agent throughput +44%, ITL -40%; chat throughput +13%, TTFT -64%, ITL
+            -50% -- every bar metric except agent TTFT (+4%). The veto fired on 64% of C=32 decisions,
+            and 314 had no feasible worker: the predictor is coarse (item 7's error list).
       - [ ] measure the current predictor's error: router-logged `ttft_pred` vs measured TTFT per
-            request, bucketed by load and prompt length (data: `mn_slo_veto_8gpu_20261017.sh`)
+            request, bucketed by load and prompt length (`ttft_obs` logged from the pool A/B on)
       - [ ] step-model queue drain (with decode interference) replacing the constant prefill rate
       - [ ] transfer-aware effective hit; requires an arm with the L3 pool on. **Implemented
             2026-10-17 (`router.py`, not yet measured):** the router mirrors the pool's contents

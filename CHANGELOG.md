@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.5 — Router SLO veto on the final stack: wins at C=32, neutral at C=16 (2026-10-17)
+
+- 8 H20, same-session A/B (`mn_slo_veto_8gpu_20261017.sh`): at agent C=32 + chat 8 req/s the veto beats cache
+  affinity by +24% agent throughput, -23% agent ITL, -32% chat ITL (+10% TTFT); vs stock colocation every bar
+  metric clears except agent TTFT. At C=16 it is neutral-to-worse (no pool: a vetoed request recomputes).
+
 ## v1.20.4 — PD doc: inter-node SLO-feasibility prediction as a major open item (2026-10-17)
 
 - `pd_colocation_vs_disagg.md` item 7: predicting TTFT/ITL on a node from its hit length and load for

@@ -42,20 +42,32 @@ fi
 # jobs, which hold ports this container cannot even see (a bare bind of [::]:30301 failed with
 # no sglang process alive). Each port is probed by binding it, 50 apart so sglang's internal
 # ports above it stay clear, and published in ports_r<role>.txt for mn_run.py.
-pick() { python3 - "$1" <<'PY'
-import random, socket, sys
-rng = random.Random(int(sys.argv[1]))
-for _ in range(500):
-    p = rng.randrange(40000, 59000, 50)
-    try:
-        for q in (p, p + 1, p + 2, p + 3):
-            s = socket.socket(socket.AF_INET6); s.bind(("::", q)); s.close()
+# Every pick is also CLAIMED in $LOG/claimed_ports under a lock: a probe only proves a port is free
+# now, and the two GPUs' workers pick concurrently -- GPU 1's http port once equalled GPU 0's PD
+# bootstrap port, which the bootstrap server binds at once while the http server binds after the
+# model loads, so every retry failed with "address already in use".
+pick() { python3 - "$1" "$LOG/claimed_ports" <<'PY'
+import fcntl, os, random, socket, sys
+rng = random.Random(int(sys.argv[1]) ^ os.getpid() ^ int.from_bytes(os.urandom(4), "little"))
+with open(sys.argv[2], "a+") as claims:
+    fcntl.flock(claims, fcntl.LOCK_EX)
+    claims.seek(0)
+    taken = {int(x) for x in claims.read().split()}
+    for _ in range(500):
+        p = rng.randrange(40000, 59000, 50)
+        if p in taken:
+            continue
+        try:
+            for q in (p, p + 1, p + 2, p + 3):
+                s = socket.socket(socket.AF_INET6); s.bind(("::", q)); s.close()
+        except OSError:
+            continue
+        claims.write(f"{p}\n"); claims.flush()
         print(p); break
-    except OSError:
-        continue
 PY
 }
 rm -f $LOG/ports_r${ROLE}_g*.txt
+mkdir -p $LOG; touch $LOG/claimed_ports
 launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   ulimit -n $(ulimit -Hn)
   local g=$1

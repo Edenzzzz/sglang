@@ -6,8 +6,12 @@
 set -u
 export PATH=$HOME/.merlin-cli/bin:$PATH
 cd "$(dirname "$0")"
-until grep -q MATRIX8_DONE /tmp/h20/mn_matrix_8gpu.log 2>/dev/null; do sleep 60; done
 export SID=bb854a10b8954223 NPODS=4 CHAT_SHAREGPT=1 MIN_CTX=32768 MAX_CTX=65536 TURNS=2
-export AGENT_CONC=16 CHAT_RATE=4 SESSIONS=48 CHAT_N=1200 RUN_TAG=_8g_c16_r4_rerun
-KERNEL=lpt PREEMPT=0 python3 -u mn_run.py disagg_2p2d_mtps
+# 18:3x: also the C=32 point -- the C=32 disagg arm failed on a port collision between the two GPUs'
+# workers on one prefill pod (mn_node.sh now claims ports under a lock).
+for point in "16 4" "32 8"; do
+  read -r C R <<< "$point"
+  export AGENT_CONC=$C CHAT_RATE=$R SESSIONS=$((C * 3)) CHAT_N=$((R * 300)) RUN_TAG=_8g_c${C}_r${R}_rerun
+  KERNEL=lpt PREEMPT=0 python3 -u mn_run.py disagg_2p2d_mtps
+done
 echo DISAGG_RERUN_DONE

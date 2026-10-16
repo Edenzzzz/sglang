@@ -8,11 +8,11 @@
 #   coloc_cache_edf_mtp_hc   cache affinity
 #   coloc_slo_edf_mtp_hc     veto, router ignores the pool (prices a moved request as a recompute)
 #   coloc_slo_edf_mtp_hc     veto + transfer term
-# Waits for mn_pool_timeout_8gpu_20261017.sh. Claude.
+# Workers carry edf_one_chunked_req.patch (applied to the pods' tree 2026-10-17 02:5x): the first run crashed a
+# worker on `assert self.chunked_req is None`. Claude.
 set -u
 export PATH=$HOME/.merlin-cli/bin:$PATH
 cd "$(dirname "$0")"
-until grep -q POOL_TMO_DONE /tmp/h20/mn_pool_timeout.log; do sleep 30; done
 RA=$(grep -oE "ROUTER_ARGS=.*" /tmp/h20/mn_slo_calibrate.log | tail -1 | cut -d= -f2-)
 export SID=bb854a10b8954223 NPODS=4 MIN_CTX=32768 MAX_CTX=65536 TURNS=2
 export KERNEL=mtpsplit PREEMPT=1 CHUNK=2048 HC_PREFETCH=timeout

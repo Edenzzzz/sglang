@@ -1,0 +1,18 @@
+--- a/python/sglang/srt/managers/schedule_policy.py
++++ b/python/sglang/srt/managers/schedule_policy.py
+@@ -1470,11 +1470,10 @@
+                 return AddReqResult.OTHER
+             max_new_tokens = 0
+         elif chunk_tokens_limit is not None and chunk_fit_tokens > chunk_tokens_limit:
+-            if (
+-                has_chunked_req
+-                and get_schedule().schedule_policy == "shortest-prefill-first"
+-            ):
+-                # Only one unfinished chunked request can be tracked.
++            if has_chunked_req:
++                # Only one unfinished chunked request can be tracked. Any policy that caps the
++                # in-progress chunk below the step budget (shortest-prefill-first, and EDF's
++                # reservation for earlier-deadline requests) leaves room to chunk a second request.
+                 return AddReqResult.OTHER
+             if self.exact_chunk_fill:
+                 # Take the remainder verbatim so the batch hits exactly

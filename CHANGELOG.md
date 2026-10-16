@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.7 — EDF reservation could chunk two requests at once (scheduler assert), fixed (2026-10-17)
+
+- `edf_one_chunked_req.patch`: `_select_prefill_admission` refused to chunk a second request while one is in
+  flight only under `shortest-prefill-first`; EDF's earlier-deadline reservation also caps the in-progress chunk,
+  so a waiting request got chunked beside it and `assert self.chunked_req is None` killed the worker (8-GPU
+  hot-prefix arm). The guard now applies whenever a chunked request is in flight. Hot-prefix A/B rerunning.
+
 ## v1.20.6 — Pool-on veto A/B: the transfer term never fires under best_effort prefetch (2026-10-17)
 
 - 8 H20, agent C=16 + chat 8 req/s, mooncake L3 pool on: under the default `best_effort` prefetch the veto sends

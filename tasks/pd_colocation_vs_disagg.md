@@ -220,6 +220,18 @@ static mixture.
             `mn_hot_transfer_8gpu_20261017.sh` (HOT=1, 4 x 16K shared system prompts at 16 req/s; cache |
             veto ignoring the pool | veto + transfer, x2). The cold moved requests also show the
             predictor's spread: 8.9 s predicted vs 0.7 s measured, 10.7 s vs 37.9 s.
+      - [~] **Hot-prefix transfer A/B (`mn_hot_transfer_8gpu_20261017.sh`; HOT=1, 4 groups x 16K shared
+            prefixes at 16 req/s, agent C=16, pool on, timeout prefetch; cache | veto ignoring the pool |
+            veto + transfer, x2).** First run (02:0x): cache rep 1 agent 239 tok/s / 10.4 s / 30.0 ms,
+            chat 1768 / 9.8 s / 75.4 ms. The veto-ignoring-pool rep 1 **crashed a worker** on
+            `assert self.chunked_req is None` (`scheduler.py:4314`): EDF's reservation for earlier-deadline
+            requests (`SGLANG_EDF_RESERVE_EARLIER`, on with `PREEMPT=1`) caps the in-progress chunk below
+            the step budget, and the admission guard that refuses to chunk a second request only applied
+            under `shortest-prefill-first`, so a waiting request was chunked beside the in-progress one.
+            Fixed by applying the guard whenever a chunked request is in flight
+            (`tasks/pd_colocation/edf_one_chunked_req.patch`, applied to all 4 pods); every EDF + PREEMPT
+            arm before this carried the bug, but only the hot-prefix mix (many concurrent 16K-cached
+            requests) triggered it. All arms rerunning on the patched tree.
       - [x] **Predictor error (same runs, `ttft_obs` vs `ttft_pred`):** predicted / measured median 0.64
             (chat) and 0.72-0.73 (agent) -- about 30% optimistic, as the error list expected (blended
             prefill rate, decode interference, future arrivals). Agent error p10 / p90 -6.4..-7.7 s /

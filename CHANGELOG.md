@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.20.26 — EDF deadlines on uncached tokens: pdmux + EDF clears all 12 bar means vs stock MTP (2026-10-17)
+
+- `apply_edf_uncached.py` (`SGLANG_EDF_UNCACHED_DEADLINE=1`): the TTFT deadline scales with prompt tokens not already
+  in the radix tree (read-only match at enqueue), so cheap cache-hit agent turns are not queued as cold prompts.
+- With pdmux decode_bs_divisor 27, three repeats + output gate PASS: C=8 agent +28% / -30.1% / -31.6%, chat +25% / -71%
+  / -55%; C=16 agent +33% / -32% / -40%, chat +32% / -57% / -55%. C=8 agent TTFT clears by 0.1 point only (per rep
+  -31.1 / -29.4 / -29.7%); divisor 30 next. `srv_correctness.py` gained `SRV_EXTRA_ARGS` for pdmux arms.
+
 ## v1.20.25 — pdmux + EDF: gate PASS; decode-SM share and two-tier SLO are trade-offs (2026-10-17)
 
 - Output gate: pdmux + EDF diverges from stock LPT exactly as the pdmux null case (short 1 / long 11; floor 163 / 96).

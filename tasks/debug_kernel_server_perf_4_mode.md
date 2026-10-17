@@ -1296,9 +1296,14 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
           | 16 | **27** | **+32.1% / -31.1% / -41.5%** | +31.6% / -55.8% / -56.2% |
           | 16 | 24 | +32.2% / -31.2% / -43.0% | +31.5% / -56.1% / -55.9% |
           | 16 | 18 | +30.2% / -28.6% / -45.6% | +31.9% / -52.6% / -56.5% |
-          **Divisor 27 clears all 12 bar metrics in rep 1**; the C=8 agent margins are thin (1.1 / 1.9 points vs a <=2%
-          repeat spread), so two more repeats and the output gate are running (`REP=2,3 D24=0 bash
-          pdmux_edf_unc2_20261017.sh`, `gate_pdmux_edf_unc27.sh`). Per-request spread in
+          **Divisor 27, three repeats (17:35-17:58, all rc=0, 0 tracebacks / 0 fallbacks) + output gate PASS**
+          (LPT_PDMUX_EDF with uncached deadlines and divisor 27 vs LPT: short 1 / long 11, identical to the pdmux null
+          case; stock repeat floor short 132 / long 96). Means vs stock MTP (per-rep tput / TTFT s / ITL ms in
+          [3-rep summary](debug_kernel_server_perf/pdmux_mtp_20261017/pdmux_unc27_3rep_summary.txt)):
+          C=8 agent +27.8% / -30.1% / -31.6%, chat +25.4% / -70.8% / -55.3%; C=16 agent +32.7% / -32.2% / -40.2%, chat
+          +31.6% / -57.1% / -54.7%; repeat spread <=3.4% (C=8), <=5.2% (C=16). **All 12 means clear the bar, but C=8
+          agent TTFT by 0.1 point (per rep -31.1 / -29.4 / -29.7%) -- not robust.** Divisor 30 (between 36's -34.1 /
+          -29.1 and 27's -30.1 / -31.6) for three repeats next, `pdmux_edf_unc2_20261017.sh` with UNC_D30. Per-request spread in
           [summary](debug_kernel_server_perf/pdmux_mtp_20261017/pdmux_edf_unc_20261017_summary.txt). Script:
       `pdmux_mtp_ab_20261017.sh` (frozen cohort, C = 8 / 16 + ShareGPT 8 req/s; PDMUX | MTP_PDMUX |
       EDFR50_F2048, one tree, one session, graphs on). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`

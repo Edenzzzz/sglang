@@ -22,7 +22,12 @@ after the kernel items close (<=16 GPUs).
   agent C=8 + ShareGPT 8 req/s, 48 agent requests; all runs 0 tracebacks / 0 fallbacks).** vs stock MTP (same harness,
   same session): chunk 2048 agent +42% / -24% / -34%, chat TTFT -68% / ITL -23%; chunk 1024 agent +41% / -17% / -50%, chat
   -64% / -29.7%; chunk 512 agent -8% / +48% / -51%. Chat throughput = offered load in every arm. Misses at 1024: agent TTFT
-  and chat ITL (0.3 point short). Deadline-driven chunk choice on H200 running.
+  and chat ITL (0.3 point short). **Deadline-driven chunk (small 1024, large 4096, only late requests longer than one
+  small chunk count; `SKIP_BASE=1 CHUNKS=4096 DEADLINE_CHUNK=1024:4096:<tok/s> bash mn_h200_fourmode_20261018.sh`, both
+  clean):** pace 12000 agent +46% / -28.5% / -31.0%, chat TTFT -70.8% / ITL -21.2%; pace 6000 agent +47.7% / -29.9% /
+  -31.0%, chat TTFT -71.7% / ITL -22.4%. **The 4-mode MTP schedule on H200 reaches the bar on agent throughput, TTFT
+  (-29.9%) and ITL and on chat TTFT; chat ITL (-22%) is the remaining miss** (single repeats; chat throughput is the
+  offered load).
 - [ ] Not met: vs stock colocation *without* speculation on H20 (agent TTFT at a ~5.9 s compute floor; best -18% /
   -21%), and node-count scaling (needs > 16 GPUs). Both wait on the user: which baseline the bar uses, and the GPU cap.
 

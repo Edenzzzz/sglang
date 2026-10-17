@@ -8,8 +8,8 @@ export PATH=$HOME/.merlin-cli/bin:$PATH
 cd "$(dirname "$0")"
 export SID=d6a80befdd4e4da5 MN_CP=i18n-bd NPODS=1 GPUS_PER_POD=1 SM_FA3=112
 export CHAT_SHAREGPT=1 MIN_CTX=32768 MAX_CTX=65536 TURNS=2 AGENT_CONC=8 SESSIONS=24 CHAT_RATE=8 CHAT_N=2400
-KERNEL=lpt PREEMPT=0 RUN_TAG=_h200_c8 python3 -u mn_run.py coloc_sgl_mtps
+[ "${SKIP_BASE:-0}" = 1 ] || KERNEL=lpt PREEMPT=0 RUN_TAG=_h200_c8 python3 -u mn_run.py coloc_sgl_mtps
 for CH in ${CHUNKS:-2048 1024 512}; do
-  RUN_TAG=_h200_4mode_unc_ch${CH}_c8 KERNEL=mtpsplit PREEMPT=1 CHUNK=$CH EDF_UNCACHED=1 python3 -u mn_run.py coloc_cache_edf_mtp
+  RUN_TAG=_h200_4mode_unc_ch${CH}${DEADLINE_CHUNK:+_dl${DEADLINE_CHUNK//:/-}}_c8 KERNEL=mtpsplit PREEMPT=1 CHUNK=$CH EDF_UNCACHED=1 python3 -u mn_run.py coloc_cache_edf_mtp
 done
 echo H200_FOURMODE_DONE

@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.42 — H200 re-forked; 4-mode MTP schedule reaches the bar except chat ITL (2026-10-18)
+
+- Re-forked H200 (`d6a80befdd4e4da5`) provisioned from the H20 recipe (`mn_provision_h200_20261018.sh`); harness gained
+  MN_CP / GPUS_PER_POD / SM_FA3 and an explicit sglang-router metrics port.
+- 4-mode MTP + EDF (uncached deadlines) + deadline-driven chunk (1024 / 4096) vs stock MTP, agent C=8 + chat 8 req/s:
+  agent +48% / -29.9% / -31.0%, chat TTFT -71.7% / ITL -22.4%.
+
 ## v1.20.41 — 4-mode MTP: per-step deadline chunk choice stays on the same TTFT / ITL frontier (2026-10-18)
 
 - `apply_edf_deadline_chunk.py`: the TTFT-driven per-step chunk degenerates to the large chunk under load (agent ITL

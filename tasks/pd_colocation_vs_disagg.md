@@ -121,6 +121,13 @@ static mixture.
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex
       P99 ITL -27%. Full stack vs stock MTP: TTFT -95%/-51%, ITL -42%/-38% (chat/codex, 24/s, 3 rounds).
+- [ ] **Single-GPU winner on 8 H20s (2026-10-17, running):** PD multiplexing + worker-side EDF with uncached-token
+  deadlines (divisor 30) cleared all 12 bar means against stock MTP on one H200 (main doc, Direct baselines). Here it
+  runs on every colocated worker under cache-affinity routing (`mn_run.py` suffix `_pdmux`; `mn_node.sh` PDMUX /
+  PDMUX_DIV / EDF_UNCACHED; uncached-deadline patch applied on all four pods), vs stock colocation with MTP and stock
+  colocation without speculation, same session, agent C=16 + chat 16 / 32 req/s. On H20 pdmux forms 5 SM groups
+  (78 SMs: 56/22, 48/30, 40/38 prefill/decode) instead of 8. `bash tasks/pd_colocation/mn_pdmux_8gpu_20261017.sh`.
+
 - [ ] **7. Inter-node routing: predict whether a request meets its TTFT and ITL SLO on node i, given
       i's estimated hit length x_i and current load** (added 2026-10-17 on the user's request; needs
       more design thinking before more code). This is the decision behind point 1's SLO check: when the

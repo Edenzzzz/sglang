@@ -125,6 +125,13 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
     export SGLANG_EDF_PREEMPT_CHUNK=1 SGLANG_EDF_RESERVE_EARLIER=1 SGLANG_EDF_PREEMPT_MAX_TOKENS=1000000000
   fi
   [ -n "${CHUNK:-}" ] && ARGS+=(--chunked-prefill-size $CHUNK)
+  # PDMUX=1: PD multiplexing (decode and layer-split prefill on separate SM groups, prefill unchunked, overlap off);
+  # PDMUX_DIV is its decode_bs_divisor (decode SM share), EDF_UNCACHED=1 scales EDF TTFT deadlines with uncached tokens.
+  if [ "${PDMUX:-0}" = 1 ]; then
+    printf "sm_group_num: 8\ndecode_bs_divisor: ${PDMUX_DIV:-30}\nsplit_forward_token_budget: 65536\n" > $LOG/pdmux_r${ROLE}_g${g}.yaml
+    ARGS+=(--enable-pdmux --chunked-prefill-size -1 --disable-overlap-schedule --pdmux-config-path $LOG/pdmux_r${ROLE}_g${g}.yaml)
+  fi
+  [ "${EDF_UNCACHED:-0}" = 1 ] && export SGLANG_EDF_UNCACHED_DEADLINE=1
   # WORKER_EXTRA: extra sglang flags for diagnostics (e.g. --enable-metrics, which also turns on HiCache's
   # storage metrics: prefetch outcomes and deferred tokens by reason on /metrics).
   [ -n "${WORKER_EXTRA:-}" ] && ARGS+=(${WORKER_EXTRA})
@@ -148,7 +155,7 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
       SGLANG_MIXED_SPEC_MIN_QUEUE=${MIX_MIN_QUEUE:-4}
   fi
   case $MODE in
-    coloc) ARGS+=(--enable-mixed-chunk) ;;
+    coloc) [ "${PDMUX:-0}" = 1 ] || ARGS+=(--enable-mixed-chunk) ;;
     prefill|decode)
       # Back-end RDMA NICs only. mlx5_0 is the front-end NIC (eth0) whose RoCEv2 GID is the IPv6
       # management address, while mlx5_1..4 (eth1-4) carry IPv4-mapped RoCEv2 GIDs; a worker on

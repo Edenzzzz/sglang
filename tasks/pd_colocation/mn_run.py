@@ -63,11 +63,15 @@ def run_arm(arm):
     # Suffixes: _hc adds a cluster-wide mooncake L3 prefix store (mn_node.sh HC_MASTER);
     # _edf runs deadline-ordered admission on every worker (mn_node.sh EDF); _mtp runs EAGLE3 MTP
     # on every worker, colocated ones with the 4-mode step (mn_node.sh SPEC=1); _mtps is stock MTP
-    # without the 4-mode step (SPEC=2).
+    # without the 4-mode step (SPEC=2); _pdmux runs PD multiplexing on every colocated worker (mn_node.sh PDMUX,
+    # decode SM share PDMUX_DIV, EDF deadlines on uncached tokens EDF_UNCACHED).
     base, hc, edf = arm, False, False
     spec = False
-    while base.endswith(("_hc", "_edf", "_mtp", "_mtps")):
-        if base.endswith("_hc"):
+    pdmux = False
+    while base.endswith(("_hc", "_edf", "_mtp", "_mtps", "_pdmux")):
+        if base.endswith("_pdmux"):
+            pdmux, base = True, base[:-6]
+        elif base.endswith("_hc"):
             hc, base = True, base[:-3]
         elif base.endswith("_mtps"):
             spec, base = 2, base[:-5]
@@ -77,14 +81,15 @@ def run_arm(arm):
             edf, base = True, base[:-4]
     layout, router = ARMS[base]
     log = f"{W}/mn/{arm}{os.environ.get('RUN_TAG', '')}"
-    print(f"=== {arm}{os.environ.get('RUN_TAG', '')}: layout={layout} router={router} l3_store={hc} worker_edf={edf} mtp={spec}", flush=True)
+    print(f"=== {arm}{os.environ.get('RUN_TAG', '')}: layout={layout} router={router} l3_store={hc} worker_edf={edf} mtp={spec} pdmux={pdmux}", flush=True)
     C.run_all(KILL)
     # bench_serving APPENDS to its output file and mn_summary reads the last line, so a stale
     # directory would let a failed arm report the previous run's numbers.
     C.run_all(f"rm -rf {log}")
     env = (f"ONE_NIC={os.environ.get('ONE_NIC', '0')} KERNEL={os.environ.get('KERNEL', 'lpt')} EDF={int(edf)} SPEC={int(spec)} "
            f"TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')} PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')} "
-           f"SGL_PY={os.environ.get('SGL_PY', '')} HC_PREFETCH={os.environ.get('HC_PREFETCH', 'best_effort')} HC_WRITE={os.environ.get('HC_WRITE', '')} HC_HOST_MODE={os.environ.get('HC_HOST_MODE', '')} WORKER_EXTRA=\"{os.environ.get('WORKER_EXTRA', '')}\"")
+           f"SGL_PY={os.environ.get('SGL_PY', '')} HC_PREFETCH={os.environ.get('HC_PREFETCH', 'best_effort')} HC_WRITE={os.environ.get('HC_WRITE', '')} HC_HOST_MODE={os.environ.get('HC_HOST_MODE', '')} WORKER_EXTRA=\"{os.environ.get('WORKER_EXTRA', '')}\" "
+           f"PDMUX={int(pdmux)} PDMUX_DIV={os.environ.get('PDMUX_DIV', '30')} EDF_UNCACHED={os.environ.get('EDF_UNCACHED', '0')}")
     if hc:
         rc, out = C.run(0, f"mkdir -p {log}; ip=$(hostname -I | tr ' ' '\\n' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1); "
                            "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\"); "

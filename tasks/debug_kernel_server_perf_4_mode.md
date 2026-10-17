@@ -324,6 +324,14 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       the remaining 1.1x per-SM gap of our build. Our static-list path (ours) loses on chat/agent (+5..+20%): its
       static per-CTA lists, as in A5.0f. Script `a5_mixed_corun_20261017.sh` (harness arms in
       `a5_fa3_reference_20261017.py`).
+    - [x] **Same table on the parity build (paged TMA, 2026-10-17 13:59-14:04, 30 runs 13/13, spread <=5.7%):**
+      corun_dyn (our FA3 role, dynamic scheduler on B SMs || stock FA2) vs split: append 512 @ 48K + 46 verify
+      **-18.4%** (B 120); agent 2 x 512 @ 64K + 24 verify -1.8% (112); chat 2048 + 32 verify -1.2% (112); fresh 512 +
+      46 verify -0.5%; prefill 2048 @ 64K + 8 verify +1.0% (corun_sgl -3.1%). corun_dyn now beats corun_sgl on every
+      fixture but prefill; the static-list path never wins (up to +27% on short items) and is retired for the
+      dynamic scheduler. Serving decision: co-run when both roles carry real work (an agent append beside many
+      verify rows), split otherwise -- to be wired into the serving split path and measured end to end.
+      `bash a5_mixed_corun_tma_20261017.sh`.
   - [ ] A5.4 L2-locality work pairing (-14/-26% kernel time on two fixtures, 2026-10-14) on serving items.
   - [ ] A5.5 TMA multicast on agent-append items (zero-KV-load ceiling there 19-22%, vs ~3% on serving mixes).
   - [ ] A5.6 in-kernel cross-role backfill (`tma_store_wait`) on top of A5.0.

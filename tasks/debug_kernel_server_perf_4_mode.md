@@ -27,7 +27,9 @@ after the kernel items close (<=16 GPUs).
   clean):** pace 12000 agent +46% / -28.5% / -31.0%, chat TTFT -70.8% / ITL -21.2%; pace 6000 agent +47.7% / -29.9% /
   -31.0%, chat TTFT -71.7% / ITL -22.4%. **The 4-mode MTP schedule on H200 reaches the bar on agent throughput, TTFT
   (-29.9%) and ITL and on chat TTFT; chat ITL (-22%) is the remaining miss** (single repeats; chat throughput is the
-  offered load).
+  offered load). Repeat 2 of pace 6000: agent +48.0% / -28.9% / -33.3%, chat -72.3% / -23.0%. **Large chunk 2048 instead of
+  4096 (`DEADLINE_CHUNK=1024:2048:6000`, clean): agent +51.8% / -29.7% / -40.7%, chat TTFT -73.7% / ITL -26.7%** --
+  better on every metric; remaining gaps agent TTFT (0.3 point) and chat ITL (3.3 points).
 - [ ] Not met: vs stock colocation *without* speculation on H20 (agent TTFT at a ~5.9 s compute floor; best -18% /
   -21%), and node-count scaling (needs > 16 GPUs). Both wait on the user: which baseline the bar uses, and the GPU cap.
 

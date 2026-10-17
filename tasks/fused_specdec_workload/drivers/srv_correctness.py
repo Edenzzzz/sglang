@@ -75,6 +75,9 @@ def prompts():
 
 def run_arm(arm, outdir):
     os.makedirs(outdir, exist_ok=True)
+    comp = env_for(arm)["SGLANG_LOG_MIXED_COMPOSITION"]
+    if os.path.exists(comp):
+        os.remove(comp)
     log = open(f"{outdir}/server_{arm}.log", "w")
     args = [f"{W}/venv/bin/python", "-m", "sglang.launch_server", "--model", MODEL,
             "--attention-backend", "flashinfer", "--enable-mixed-chunk",
@@ -94,6 +97,8 @@ def run_arm(arm, outdir):
         args += ["--enable-pdmux", "--chunked-prefill-size", "-1", "--disable-overlap-schedule"]
         # Extra pdmux-arm server flags (e.g. --pdmux-config-path); the stock reference arms stay unchanged.
         args += os.environ.get("SRV_EXTRA_ARGS", "").split()
+    # Per-invocation server flags for any arm (e.g. --chunked-prefill-size of the serving config under test).
+    args += os.environ.get("SRV_ARGS", "").split()
     if arm.endswith("_EDF"):
         args += ["--enable-priority-scheduling", "--schedule-low-priority-values-first",
                  "--priority-scheduling-preemption-threshold", "999999"]
@@ -138,10 +143,14 @@ def run_arm(arm, outdir):
         txt = open(f"{outdir}/server_{arm}.log").read()
         results["_fallbacks"] = txt.lower().count("fallback")
         results["_tracebacks"] = txt.count("Traceback")
+        # Composition counter: mixed steps the attention backend logged (records with decode rows "d"; per-mode shape
+        # records carry "mode" instead). 0 means the arm never mixed prefill with decode/verify rows.
+        lines = open(comp).read().splitlines() if os.path.exists(comp) else []
+        results["_composition_steps"] = sum('"d":' in l for l in lines)
         results["_mixed_spec_lines"] = [l[-120:] for l in txt.splitlines() if "MIXED_SPEC steps" in l][-3:]
         json.dump(results, open(f"{outdir}/{arm}.json", "w"))
         print(f"{arm}: {len(results) - 2} requests, fallbacks={results['_fallbacks']} "
-              f"tracebacks={results['_tracebacks']} mixed={results['_mixed_spec_lines']}", flush=True)
+              f"tracebacks={results['_tracebacks']} composition_steps={results['_composition_steps']} mixed={results['_mixed_spec_lines']}", flush=True)
     finally:
         import signal
         try:

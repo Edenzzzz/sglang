@@ -33,8 +33,17 @@ after the kernel items close (<=16 GPUs).
   -25.4% / -36.0%, chat -69.0% / -26.1%. Across all five chunk settings chat ITL stays at 12.1-12.7 ms (-23..-27% vs
   stock MTP's 16.5 ms) whatever the mixed-step length, so the remaining chat-ITL gap is the MTP decode step itself
   (3 draft steps + a 4-token verify at ~2.1 accepted tokens), not prefill interference; -30% needs <= 11.55 ms. Best
-  setting 1024/2048: agent +52% / -29.7% / -40.7%, chat TTFT -73.7% / ITL -26.7%. Output gate on the 4-mode arms on this
-  re-forked pod not yet run.
+  setting 1024/2048: agent +52% / -29.7% / -40.7%, chat TTFT -73.7% / ITL -26.7%. Composition counter (worker log,
+  `FUSED_SPLIT_CALLS`, logged every 500): >= 66001 split attention calls (~2.36K 4-mode steps x 28 layers) in the
+  1024/2048 arm and in its 2-step / 3-token repeat; 0 in stock MTP; fallbacks 0 everywhere.
+  - [x] 2026-10-18 output gate on this pod, PASS (`tasks/pd_colocation/gate_h200_fourmode_20261018.sh`, srv_correctness
+    vs stock MTP; driver now takes SRV_ARGS and counts mixed composition records). Noise floor MTP_REP: long prompts agree
+    >= 18 tokens, short >= 63; null case MTP_C2048 (stock MTP at the config's chunk 2048): long >= 11, short 0 (s1's
+    first decode token flips on chunking alone); config MTP_MIX_SPLIT_EDF (mtpsplit 112 FA3 SMs + EDF + chunk preemption
+    + uncached deadlines + deadline chunk 1024/2048:6000): long >= 11, short 0 -- the same requests diverge at the same
+    positions as the null case (s0 132, s2 298, s5 63, l1/l5 11), so the remaining divergence is the chunk size, not the
+    split or the schedule. Config arm: >= 1501 split calls, 0 tracebacks, 0 fallbacks, priority scheduling on.
+    sglang `3717b3638` + this commit; `bash /dev/shm/w/mn/gate_h200_fourmode_20261018.sh` on pod `d6a80befdd4e4da5`.
   - [x] 2026-10-18 shorter MTP step (2 draft steps, 3 verify tokens, both arms; clean: tracebacks 0, fallbacks 0): stock MTP
     agent 68.6 tok/s / 17.49 s / 27.9 ms, chat 10.19 s / 16.8 ms; ours (1024/2048) agent 99.6 / 12.25 s / 19.4 ms, chat
     2.94 s / 12.9 ms -> agent +45.2% / -30.0% / -30.5%, chat TTFT -71.1% / ITL -23.2%. Stock MTP's chat ITL does not

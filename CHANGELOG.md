@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.45 — H200 output gate PASS for the best 4-mode MTP serving config (2026-10-18)
+
+- `gate_h200_fourmode_20261018.sh`: config arm diverges from stock MTP exactly where stock MTP at the same chunk size
+  does (null case); split fired (>= 1501 calls), 0 tracebacks / fallbacks. Serving arms' counter: >= 66001 split calls.
+- `srv_correctness.py`: `SRV_ARGS` (per-invocation server flags for any arm) and a mixed-composition step count.
+
 ## v1.20.44 — H200 4-mode MTP with a 2-step / 3-token draft: chat ITL gap unchanged (2026-10-18)
 
 - Both arms on 2 draft steps / 3 verify tokens: agent +45% / -30.0% / -30.5%, chat TTFT -71% / ITL -23% vs stock MTP.

@@ -1,5 +1,7 @@
 # Changelog
 
+## v1.20.37 — H20 config: repeat 2 holds (every value clears vs stock + MTP, smallest -39%); output gate PASS (2026-10-17)
+
 ## v1.20.36 — per-step SM sharing with TTFT deadlines + ITL budget: all 12 vs stock + MTP by >= 39% on 8 H20s (2026-10-17)
 
 - `apply_pdmux_itl_budget.py`: a deadline-late prefill batch shares the GPU only while the decode-interval EWMA is under

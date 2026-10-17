@@ -714,7 +714,14 @@ static mixture.
         / -88% / -88%; 32 req/s agent +45% / -39% / -47%, chat +64% / -79% / -60% (smallest margin -39%; single rep).**
         vs stock colocation without speculation: ITL -36..-57% but agent TTFT +29% / +88% -- the ITL term moves the
         operating point to the ITL side, and against that baseline TTFT is bounded by the ~5.9 s compute floor.
-        `POINTS="16:0 32:0" PDMUX_SHARE_DEADLINE=1 PDMUX_ITL_BUDGET=24 bash tasks/pd_colocation/mn_pdmux_share_8gpu_20261017.sh`.
+        **Repeat 2 (8 workers, 0 tracebacks / 0 fallbacks): 16 req/s agent 281 / 7.99 s / 19.1 ms, chat 1.88 s / 18.4
+        ms; 32 req/s agent 221 / 13.56 s / 23.2 ms, chat 5599 / 6.92 s / 30.5 ms. Two-repeat means vs stock + MTP: 16
+        req/s agent +73% / -45% / -64%, chat +46% / -89% / -87%; 32 req/s agent +48% / -40% / -46%, chat +62% / -78% /
+        -60% -- every per-repeat value clears, smallest -39.1%.** **Output gate on one H20 (`gate_h20_pdmux_share.sh`):
+        PASS** -- LPT_PDMUX_EDF (this config: pdmux + EDF uncached deadlines + deadline / ITL-budget sharing, divisor 30)
+        vs LPT short 1 / long 11, identical to the pdmux null case; stock repeat floor short 118 / long 52; 0 tracebacks
+        / 0 fallbacks, sharing, EDF and pdmux active.
+        `POINTS="16:0 32:0" PDMUX_SHARE_DEADLINE=1 PDMUX_ITL_BUDGET=24 [REP_SUFFIX=_rep2] bash tasks/pd_colocation/mn_pdmux_share_8gpu_20261017.sh`.
 
       **The claim.** Our method is 4-mode colocation plus an EDF/SLO router with a tunable
       **P/D admission ratio**. Each baseline is one fixed point in that policy space, so our

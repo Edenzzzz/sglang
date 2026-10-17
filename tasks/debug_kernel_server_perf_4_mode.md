@@ -1000,7 +1000,16 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       `topk1.py` assert is consistent with a merged batch lacking draft state; (4) draft CUDA graphs per stream group
       (or eager draft, at a measured cost). Gates: srv_correctness against the stock-LPT floor, then the same cohort A/B
       vs `--enable-pdmux` and vs ours. This is where the SM-pre-assignment idea meets decode ITL: the measured gap to
-      PD multiplexing is chat ITL +75-81%. Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
+      PD multiplexing is chat ITL +75-81%.
+      **Pieces (1)-(3) implemented (2026-10-17, eager path; not yet measured):**
+      `tasks/debug_kernel_server_perf/pdmux_mtp_20261017/apply_pdmux_mtp.py` on tree `up_pdmux_mtp` (copy of
+      `up_edf_floor`): `TpModelWorker.forward_batch_split_prefill` takes a capture mode; `llama.forward_split_prefill`
+      keeps the EAGLE3 aux hidden states on the ForwardBatch across splits and hands them to the logits processor at
+      the last layer; `EAGLEWorkerV2.forward_batch_split_prefill` runs the target slice with `CaptureHiddenMode.FULL`
+      and, after the last slice, `_draft_extend_for_prefill` exactly as `_forward_prefill_batch` does; the scheduler's
+      pdmux branch routes split prefills through it when speculation is on. Compiles. Gate running:
+      `smoke_pdmux_mtp.sh` (stock MTP vs MTP + pdmux, both eager, 24 concurrent requests incl. 8 x 12-24K prompts,
+      greedy 128 tokens, per-request common prefix). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).
   - [ ] **MuxWise = sglang `--enable-pdmux` (2026-10-13; superseded by the 2026-10-17 run above):** no public MuxWise repo; upstream
     sglang's PD-multiplexing (GreenContext SM split, layer-split prefill) is that design and is in

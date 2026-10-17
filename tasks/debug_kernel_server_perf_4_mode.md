@@ -62,6 +62,18 @@ after the kernel items close (<=16 GPUs).
     re-slicing it does not move the mean step interval chat sees; 1024/2048 stays best. sglang `708cd9dfe` + this
     commit; `SKIP_BASE=1 CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 STEP_BUDGET=50:0.02:5e-7 REP_SUFFIX=_v2 bash
     tasks/pd_colocation/mn_h200_fourmode_20261018.sh` (patch applied on the pod tree, removed after).
+  - [x] 2026-10-18 traced A/B (STEP_TRACE=1, both arms; clean, >= split calls as above): rep 3 of the best setting vs its
+    own stock MTP: agent +45.5% / -29.0% / -35.7%, chat TTFT -71.5% / ITL -23.8% (three reps: agent TTFT -29.7 / -28.9 /
+    -29.0%, chat ITL -26.7 / -22.8 / -23.8%). (a) Host overhead is not the remaining lever: 4-mode mixed steps cannot use
+    the prefill CUDA graph (`can_run_graph` rejects MIXED) and run eager, but the GPU sits idle only 3.2 ms after each one
+    (2742 steps, 8.8 s) and 0.16 ms after each decode step (3.0 s), against 297 s of GPU time -- <= 4% even if all of it
+    were recovered. Per kind, ours: decode 9.14 ms x 18808, mixed 44.0 ms x 2742 (743 prefill tokens mean); stock
+    MTP: decode 10.94 ms x 15448, mixed 59.0 ms x 2151. (b) EDF step model (S4; `fit_pdmux_step.py`, the stock 5-term
+    form, fit on the first half, tested on the second): decode-only GPU time MAPE 3.6% ours / 2.7% stock; mixed steps
+    26.7% (p90 38.0%) ours vs 53.5% (p90 94.1%) stock -- the 4-mode step is twice as predictable where EDF needs it.
+    `STEP_TRACE=1 SPEC_TAG=_trace CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 bash
+    tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; `tasks/perf_model/steptrace_util.py` and
+    `tasks/perf_model/fit_pdmux_step.py` on the two `worker_r0_g0.log`. sglang `f04f12557` + this commit.
   - [x] 2026-10-18 output gate on this pod, PASS (`tasks/pd_colocation/gate_h200_fourmode_20261018.sh`, srv_correctness
     vs stock MTP; driver now takes SRV_ARGS and counts mixed composition records). Noise floor MTP_REP: long prompts agree
     >= 18 tokens, short >= 63; null case MTP_C2048 (stock MTP at the config's chunk 2048): long >= 11, short 0 (s1's

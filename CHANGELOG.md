@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.48 — Traced 4-mode MTP A/B: host overhead <= 4%, mixed-step model twice as accurate as stock (2026-10-18)
+
+- Rep 3 of the best H200 setting: agent +45.5% / -29.0% / -35.7%, chat -71.5% / -23.8% vs stock MTP.
+- `steptrace_util.py`: GPU idle after eager 4-mode mixed steps is 3.2 ms each (8.8 s of 297 s GPU time).
+- Step model on mixed steps: MAPE 26.7% (4-mode) vs 53.5% (stock MTP). `STEP_TRACE` knob in mn_node.sh / mn_run.py.
+
 ## v1.20.47 — Step-time budget on the 4-mode chunk: negative (2026-10-18)
 
 - `apply_edf_step_budget.py` + `STEP_BUDGET` knob (mn_node.sh / mn_run.py / mn_h200_fourmode): caps the chunk to a

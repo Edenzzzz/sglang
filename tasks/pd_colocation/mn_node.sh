@@ -131,6 +131,12 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # PDMUX_DIV is its decode_bs_divisor (decode SM share), EDF_UNCACHED=1 scales EDF TTFT deadlines with uncached tokens.
   if [ "${PDMUX:-0}" = 1 ]; then
     printf "sm_group_num: 8\ndecode_bs_divisor: ${PDMUX_DIV:-30}\nsplit_forward_token_budget: 65536\n" > $LOG/pdmux_r${ROLE}_g${g}.yaml
+    # PDMUX_MANUAL: explicit SM groups "[[prefill_sm, decode_sm, min_decode_bs], ...]" (sglang's manual_divisions, one entry
+    # per mixed group). divide_sm caps prefill at 56 of H20's 78 SMs (decode >= 16 SMs, prefill >= half).
+    if [ -n "${PDMUX_MANUAL:-}" ]; then
+      n=$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])) + 2)" "$PDMUX_MANUAL")
+      printf "sm_group_num: $n\nmanual_divisions: $PDMUX_MANUAL\nsplit_forward_token_budget: 65536\n" > $LOG/pdmux_r${ROLE}_g${g}.yaml
+    fi
     ARGS+=(--enable-pdmux --chunked-prefill-size -1 --disable-overlap-schedule --pdmux-config-path $LOG/pdmux_r${ROLE}_g${g}.yaml)
   fi
   [ "${EDF_UNCACHED:-0}" = 1 ] && export SGLANG_EDF_UNCACHED_DEADLINE=1

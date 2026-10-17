@@ -152,6 +152,13 @@ static mixture.
   TTFT pays for the decode SMs. On H20 the bar is not met against stock non-speculative colocation; the lever there
   is prefill capacity, not decode isolation. Command: `bash tasks/pd_colocation/mn_pdmux_8gpu_20261017.sh` (run 1:
   baselines), `OURS_ONLY=1 bash ...` (run 2); audit `SID=bb854a10b8954223 NPODS=4 python mn_audit.py <arm>_8g_pdmux_c16_r<R>`.
+  - [x] **Prefill-heavy SM groups on H20 (2026-10-17 20:31, negative):** `divide_sm` gives decode >= 16 SMs and prefill
+    >= half, so prefill holds at most 56 of 78 SMs whenever decode runs. pdmux's `manual_divisions` (`mn_node.sh`
+    PDMUX_MANUAL) with 64/14 below 24 decoding requests: every worker died at start-up -- `CUBLAS_STATUS_EXECUTION_FAILED`
+    in a GEMM during decode CUDA-graph capture on the 14-SM green context (twice per GPU, then killed). With partitions
+    in multiples of 8 and a working decode group needing >= 16 SMs, prefill cannot exceed 56 of H20's 78 SMs under
+    pdmux: the TTFT loss on H20 is structural to SM-split colocation on this GPU, not a tuning gap.
+    `mn_pdmux_manual_8gpu_20261017.sh`.
 
 - [ ] **7. Inter-node routing: predict whether a request meets its TTFT and ITL SLO on node i, given
       i's estimated hit length x_i and current load** (added 2026-10-17 on the user's request; needs

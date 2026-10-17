@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.39 — 4-mode MTP schedule on 8 H20s: TTFT and throughput clear vs stock + MTP, ITL does not (2026-10-18)
+
+- EAGLE3 MTP in the 4-mode fused step + EDF with uncached deadlines: chunk 2048 agent +20% / -33% / -5%, chat +23% /
+  -84% / -19%; chunk 1024 agent +15% / -31% / -13%, chat +22% / -87% / -28%. Mixed steps (~100 ms on H20) bound ITL.
+- The H200 trial 095f01a3e1585eea has ended; further H200 work needs a re-fork and a rebuild of the serving trees.
+
 ## v1.20.38 — PD point 4 scaling inside the cap: colocation keeps cache locality, disagg loses it (2026-10-18)
 
 - 2 vs 4 H20 pods at fixed per-GPU load (`mn_scaling_20261018.sh`): prefill cache hit rises with nodes for colocation

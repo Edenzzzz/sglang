@@ -121,6 +121,15 @@ static mixture.
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex
       P99 ITL -27%. Full stack vs stock MTP: TTFT -95%/-51%, ITL -42%/-38% (chat/codex, 24/s, 3 rounds).
+- [x] **The goal's required schedule on 8 H20s -- EAGLE3 MTP in the 4-mode fused step (2026-10-18,
+  `mn_fourmode_unc_8gpu_20261018.sh`):** KERNEL=mtpsplit SPEC=1 (prefill chunk + verify rows in one target forward on
+  the FA3 / FA2 split), worker EDF + chunk preemption, TTFT deadlines on uncached tokens, cache-affinity routing; chat
+  16 req/s, agent C=16, 8 workers, 0 tracebacks / 0 fallbacks. vs stock colocation + MTP (same cohort): chunk 2048
+  agent +20% / -33% / -5%, chat +23% / -84% / -19%; chunk 1024 agent +15% / -31% / -13%, chat +22% / -87% / -28%.
+  **TTFT and throughput clear; ITL does not.** Each mixed step carries a prefill chunk over 32-64K contexts plus the
+  verify rows (~100 ms on H20, chat TPOT 108-117 ms), and every decoding request waits for it; smaller chunks buy ITL
+  with agent TTFT, already at -31% at 1024. Spatial isolation (pdmux) is what removes that wait, and MTP on top of pdmux
+  was negative on H200 -- so on this hardware the 4-mode MTP schedule and the ITL bar pull against each other.
 - [x] **Single-GPU winner on 8 H20s (2026-10-17):** PD multiplexing + worker-side EDF with uncached-token
   deadlines (divisor 30) cleared all 12 bar means against stock MTP on one H200 (main doc, Direct baselines). Here it
   runs on every colocated worker under cache-affinity routing (`mn_run.py` suffix `_pdmux`; `mn_node.sh` PDMUX /

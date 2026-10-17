@@ -1,0 +1,8 @@
+C=8 PDMUX_EDF_D18 LPT_agent                    n=   96 tput=  138.1 ttft= 14.30s itl=  13.5ms p99itl=    29 tok/s/user p1/p10/p50/p90/p99=38/59/69/82/111 accept=None
+C=8 PDMUX_EDF_D18 LPT_chat                     n= 2048 tput= 1611.4 ttft=  4.92s itl=  13.0ms p99itl=    29 tok/s/user p1/p10/p50/p90/p99=38/59/73/97/129 accept=None
+C=8 PDMUX_EDF_D12 LPT_agent                    n=   96 tput=  135.1 ttft= 15.00s itl=  13.1ms p99itl=    30 tok/s/user p1/p10/p50/p90/p99=52/61/70/83/112 accept=None
+C=8 PDMUX_EDF_D12 LPT_chat                     n= 2048 tput= 1611.7 ttft=  5.12s itl=  12.9ms p99itl=    31 tok/s/user p1/p10/p50/p90/p99=38/58/72/93/123 accept=None
+C=16 PDMUX_EDF_D18 LPT_agent                    n=   96 tput=  136.8 ttft= 31.99s itl=  15.1ms p99itl=    35 tok/s/user p1/p10/p50/p90/p99=34/49/64/77/94 accept=None
+C=16 PDMUX_EDF_D18 LPT_chat                     n= 2048 tput= 1610.3 ttft= 20.98s itl=  14.1ms p99itl=    37 tok/s/user p1/p10/p50/p90/p99=35/53/68/83/117 accept=None
+C=16 PDMUX_EDF_D12 LPT_agent                    n=   96 tput=  137.8 ttft= 31.91s itl=  14.1ms p99itl=    31 tok/s/user p1/p10/p50/p90/p99=29/55/66/84/99 accept=None
+C=16 PDMUX_EDF_D12 LPT_chat                     n= 2048 tput= 1611.4 ttft= 20.65s itl=  13.6ms p99itl=    31 tok/s/user p1/p10/p50/p90/p99=36/56/70/88/122 accept=None

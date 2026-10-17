@@ -1254,7 +1254,19 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
         other session) agent TTFT does not move (12.97 vs 13.20 s at C=8): cold 32-64K agent prefills are compute-
         bound and EDF serves chat's earlier deadlines first. Agent-ITL lever next: pdmux's decode SM share
         (`decode_bs_divisor` 36 -> 18 / 12, `pdmux_edf_div_20261017.sh`), after the output gate (`gate_pdmux_edf.sh`).
-        sglang `29842f52f`+ (tree `up_pdmux_mtp`). Script:
+        sglang `29842f52f`+ (tree `up_pdmux_mtp`).
+        - [x] **Output gate (2026-10-17 15:4x, `gate_pdmux_edf.sh`): PASS.** LPT_PDMUX_EDF vs LPT: min common prefix
+          short 1 / long 11, identical to the null case LPT_PDMUX vs LPT (pdmux's own numerics: decode on a resized SM
+          group); stock repeat floor short 163 / long 96; 0 tracebacks / 0 fallbacks, priority scheduling and pdmux on.
+          EDF changes order, not numerics.
+        - [x] **Decode SM share (2026-10-17 15:48-16:10, rep 1, all rc=0):** pdmux gives decode `decode_bs * 6 //
+          decode_bs_divisor` of its 8 groups (default 36). vs stock MTP, agent tput / TTFT / ITL: C=8 divisor 36
+          +29% / -31% / -29%, 18 +25% / -24% / -37%, 12 +22% / -20% / -39%; C=16 36 +32% / -32% / -41%, 18 +27% / -26%
+          / -45%, 12 +28% / -26% / -48%. More decode SMs buy agent ITL with agent TTFT -- a trade-off curve, not a free
+          lever; at C=8 no divisor clears both. Default 36 stays. Chat keeps -59..-84% TTFT and -55..-58% ITL
+          throughout ([summary](debug_kernel_server_perf/pdmux_mtp_20261017/pdmux_edf_div_20261017_summary.txt),
+          `pdmux_edf_div_20261017.sh`). Next: the two-tier TTFT SLO (agent prompts >= 16K get a flat SLO instead of a
+          length-scaled deadline that queues them behind all chat), `pdmux_edf_t2_20261017.sh`, running. Script:
       `pdmux_mtp_ab_20261017.sh` (frozen cohort, C = 8 / 16 + ShareGPT 8 req/s; PDMUX | MTP_PDMUX |
       EDFR50_F2048, one tree, one session, graphs on). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).

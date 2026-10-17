@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.20.17 — PD multiplexing runs under EAGLE3 MTP (eager), first end-to-end (2026-10-17)
+
+- `tasks/debug_kernel_server_perf/pdmux_mtp_20261017/apply_pdmux_mtp.py` (tree `up_pdmux_mtp`): split-prefill support for
+  the speculative path -- target capture + EAGLE3 aux across splits (llama, qwen2), draft extend after the last split
+  as a normal EXTEND with input_ids restored, EagleDraftInput installed before decode, target verify on the per-stream
+  decode backend, eager pdmux decode override limited to the target runner. Smoke: 24 requests served, 0 tracebacks,
+  20/24 identical to stock MTP over 128 greedy tokens, acceptance 3.03-3.13. Next: srv_correctness, CUDA graphs, A/B.
+
 ## v1.20.16 — MuxWise baseline (sglang --enable-pdmux) beats our single-GPU config on ITL (2026-10-17)
 
 - H200, frozen 32-64K cohort at agent C = 8 / 16 + ShareGPT 8 req/s, one session: PD multiplexing ties ours on

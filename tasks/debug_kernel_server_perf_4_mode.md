@@ -1009,7 +1009,20 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       and, after the last slice, `_draft_extend_for_prefill` exactly as `_forward_prefill_batch` does; the scheduler's
       pdmux branch routes split prefills through it when speculation is on. Compiles. Gate running:
       `smoke_pdmux_mtp.sh` (stock MTP vs MTP + pdmux, both eager, 24 concurrent requests incl. 8 x 12-24K prompts,
-      greedy 128 tokens, per-request common prefix). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
+      greedy 128 tokens, per-request common prefix).
+      **Eager path works end to end (2026-10-17 11:17, six fix rounds, all in `apply_pdmux_mtp.py`):** beyond (1)-(3) it
+      needed (4b) the draft extend to run as a normal EXTEND (it inherited SPLIT_PREFILL and was routed to the draft
+      model's split forward), (4c) the draft extend's `EagleDraftInput` installed on the batch before it joins decode,
+      (5) the eager pdmux per-stream decode-backend override restricted to the target runner (the draft decode runs on
+      the multi-step draft backends `draft()` planned; the override left `forward_metadata` None), (6) the same EAGLE3
+      aux capture in `qwen2.forward_split_prefill` (the target is Qwen2), (7) target verify planned on and run under
+      the per-stream decode backend (as an extend it re-planned the split prefill's `attn_backend` between slices:
+      "q.shape[0] (19885) does not match qo_indptr[-1] (12)"), (8) `input_ids` restored from the split ForwardBatch for
+      the draft extend. **Smoke gate (`bash /dev/shm/w/smoke_pdmux_mtp.sh`): MTP + pdmux served all 24 requests, 0
+      tracebacks; 20 / 24 identical to stock MTP over 128 greedy tokens (median common prefix 128, worst 8);
+      acceptance length 3.03-3.13, 17 split prefill batches beside decode.** The worst-case prefix is within the bf16
+      batching noise measured before (split vs stock min common prefix 5 / 15) but this is not the formal gate:
+      `srv_correctness.py` against the stock-LPT floor comes next, then (4) CUDA graphs, then the cohort A/B. Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).
   - [ ] **MuxWise = sglang `--enable-pdmux` (2026-10-13; superseded by the 2026-10-17 run above):** no public MuxWise repo; upstream
     sglang's PD-multiplexing (GreenContext SM split, layer-split prefill) is that design and is in

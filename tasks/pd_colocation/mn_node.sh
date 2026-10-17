@@ -112,6 +112,10 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
     # HC_WRITE: when a computed prefix reaches the pool. sglang's default write_through_selective writes
     # it only after its second hit on that worker, so a prefix computed once is not in the pool yet.
     [ -n "${HC_WRITE:-}" ] && ARGS+=(--hicache-write-policy $HC_WRITE)
+    # HC_HOST_MODE=buffer_only: host memory is only a staging buffer for L3 transfers, not an L2 cache. In the
+    # default "cache" mode write-through fills the host pool (100% used on the 192-prefix mix) and every pool
+    # prefetch is deferred and then dropped for host_capacity (553K / 608K tokens, the only reasons logged).
+    [ -n "${HC_HOST_MODE:-}" ] && ARGS+=(--hicache-host-memory-mode $HC_HOST_MODE)
   fi
   # Worker-side EDF: deadline-ordered admission with no chunk cap (no latency model), the
   # configuration that won on the MTP server (pd_colocation_vs_disagg.md point 3).

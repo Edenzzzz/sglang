@@ -508,6 +508,17 @@ static mixture.
             | slo_check_no_transfer | agent | 4.4/7.3/12.5/101/223 ; 5.1/8.2/14.6/74.7/165 | 146 ; 160 | 20.4 ; 19.1 | 72.7 ; 64.4 |
             | slo_check+transfer | chat | 4.5/9.5/167/392/429 ; 4.5/9.2/143/384/426 | 1022 ; 1021 | 7.0 ; 7.3 | 37.4 ; 40.3 |
             | slo_check+transfer | agent | 5.1/8.0/16.4/83.5/154 ; 5.0/8.1/13.3/78.4/184 | 154 ; 148 | 19.3 ; 19.6 | 64.8 ; 69.6 |
+            **Prefetch diagnostic (`bash tasks/pd_colocation/mn_prefetch_diag_8gpu_20261017.sh`, `--enable-metrics`, 6
+            of 8 workers' `/metrics` saved):** the pool HAS the pages -- `storage_prefetch_hit_tokens_total` 796K --
+            but only 349K were prefetched (44%). Every deferred and unfulfilled token is `host_capacity`: deferred
+            553K, unfulfilled 608K, against 399 `below_threshold` and 0 for every other reason (rate limit, anchor
+            lost, device capacity, storage transfer). The host pool is full -- `hicache_host_used_tokens` 5 020 161 of
+            5 022 324 -- because write-through backs every hot node up to host, and sglang defers L3 staging for lack
+            of host pages rather than evicting L2 to make room. So the pool pull fails in the worker's host tier,
+            not in the pool, the network or the router. Fix under test: `HC_HOST_MODE=buffer_only`
+            (`--hicache-host-memory-mode buffer_only`: host memory is only a staging buffer for L3, no L2 cache),
+            queued as `mn_bufferonly_8gpu_20261017.sh` (192-prefix at chat 8 req/s, cache affinity vs SLO check +
+            transfer, x2, spread figure) after the margin A/B.
             Spread of the 16 req/s run
             ([figure](pd_colocation/figures_20261017/h20x8_manyprefix_selective_pool.png),
             [data](pd_colocation/figures_20261017/h20x8_manyprefix_selective_pool.csv)):

@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.20.15 — Pool pulls fail in the worker's host tier (host_capacity), not in the pool (2026-10-17)
+
+- Prefetch diagnostic with `--enable-metrics`: the pool held 796K of the requested tokens but only 349K were
+  prefetched; all deferred (553K) and unfulfilled (608K) tokens are `host_capacity` -- write-through keeps the L2
+  host pool 100% full and sglang defers L3 staging rather than evicting L2. `HC_HOST_MODE` sets
+  `--hicache-host-memory-mode`; buffer-only A/B queued (`mn_bufferonly_8gpu_20261017.sh`). `WORKER_EXTRA`,
+  `SCRAPE_METRICS` knobs for diagnostics. H200: MuxWise-style `--enable-pdmux` baseline on the concurrency axis running
+  (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).
+
 ## v1.20.14 — Measured TTFT predictor error; conformal-style margin for the SLO check (2026-10-17)
 
 - Hot mix, 13 200 requests: measured / predicted TTFT median 1.04-1.12, p80 1.34-1.58, p90 2.25-2.36 where a feasible

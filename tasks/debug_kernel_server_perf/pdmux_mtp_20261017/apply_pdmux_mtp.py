@@ -46,8 +46,8 @@ patch("managers/tp_worker.py",
             )''')
 
 # 2. llama: capture EAGLE3 aux hidden states across splits, as the full forward does
-patch("models/llama.py",
-'''        start, end = split_interval
+LLAMA_SPLIT_PATCHES = [
+    ('''        start, end = split_interval
         # embed
         if start == 0:
             residual_batch.start(forward_batch)
@@ -63,7 +63,7 @@ patch("models/llama.py",
                 forward_batch.hidden_states,
                 forward_batch,
             )''',
-'''        start, end = split_interval
+     '''        start, end = split_interval
         # embed
         if start == 0:
             residual_batch.start(forward_batch)
@@ -87,15 +87,14 @@ patch("models/llama.py",
                 capture_output=aux.capture
                 if aux is not None and i in getattr(self.model, "layers_to_capture", ())
                 else None,
-            )''')
-patch("models/llama.py",
-'''            # logits process
+            )'''),
+    ('''            # logits process
             result = self.logits_processor(
                 input_ids, forward_batch.hidden_states, self.lm_head, forward_batch
             )
         else:
             result = None''',
-'''            # logits process
+     '''            # logits process
             result = self.logits_processor(
                 input_ids,
                 forward_batch.hidden_states,
@@ -105,7 +104,10 @@ patch("models/llama.py",
             )
             forward_batch.split_aux_hidden_states = None
         else:
-            result = None''')
+            result = None'''),
+]
+for old, new in LLAMA_SPLIT_PATCHES:
+    patch("models/llama.py", old, new)
 
 # 3. EAGLEWorkerV2: split prefill = target split with FULL capture, then draft extend after the last split
 patch("speculative/eagle_worker_v2.py",
@@ -175,4 +177,42 @@ patch("model_executor/runner/eager_runner.py",
 '''        model_runner = self.model_runner
         if self.enable_pdmux and not model_runner.is_draft_worker:
             return model_runner.decode_attn_backend, forward_context(''')
+# 6. qwen2 (the Qwen2.5 target): the same EAGLE3 aux capture across splits as llama (patch 2); its forward_split_prefill
+#    is textually the same and its decoder layer takes capture_output.
+for old, new in LLAMA_SPLIT_PATCHES:
+    patch("models/qwen2.py", old, new)
+
+# 7. target verify under pdmux runs on the per-stream decode backend, like decode. Verify is an extend-mode forward and
+#    planned the target's attn_backend -- the backend the split prefill planned at its first slice -- so a verify
+#    between two prefill slices re-planned it ("q.shape[0] (19885) does not match qo_indptr[-1] (12)"). The group
+#    backends are full backends of the same type (attention_backend_setup), so they plan target verify.
+patch("model_executor/runner/eager_runner.py",
+'''        model_runner = self.model_runner
+        kwargs = model_runner._extend_forward_kwargs(forward_batch, pp_proxy_tensors)
+
+        if not self.enable_pdmux:
+            forward_batch = self.load_batch(forward_batch, pp_proxy_tensors)''',
+'''        model_runner = self.model_runner
+        kwargs = model_runner._extend_forward_kwargs(forward_batch, pp_proxy_tensors)
+        extend_backend, extend_ctx = model_runner.attn_backend, contextlib.nullcontext()
+        if (
+            self.enable_pdmux
+            and not model_runner.is_draft_worker
+            and forward_batch.forward_mode.is_target_verify()
+        ):
+            extend_backend = model_runner.decode_attn_backend
+            extend_ctx = forward_context(ForwardContext(attn_backend=extend_backend))
+
+        if not self.enable_pdmux:
+            forward_batch = self.load_batch(forward_batch, pp_proxy_tensors)''')
+patch("model_executor/runner/eager_runner.py",
+'''            model_runner.attn_backend.init_forward_metadata(forward_batch)
+            model_runner.attn_backend.prepare_prefill_shared_read_snapshot(''',
+'''            extend_backend.init_forward_metadata(forward_batch)
+            extend_backend.prepare_prefill_shared_read_snapshot(''')
+patch("model_executor/runner/eager_runner.py",
+'''        with device_timer_ctx(model_runner.device_timer, category):
+            pcg_runner = model_runner.prefill_cuda_graph_runner''',
+'''        with device_timer_ctx(model_runner.device_timer, category), extend_ctx:
+            pcg_runner = model_runner.prefill_cuda_graph_runner''')
 print("done")

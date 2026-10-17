@@ -519,6 +519,23 @@ static mixture.
             (`--hicache-host-memory-mode buffer_only`: host memory is only a staging buffer for L3, no L2 cache),
             queued as `mn_bufferonly_8gpu_20261017.sh` (192-prefix at chat 8 req/s, cache affinity vs SLO check +
             transfer, x2, spread figure) after the margin A/B.
+            **Buffer-only A/B (`bash tasks/pd_colocation/mn_bufferonly_8gpu_20261017.sh`, x2; all 4 arms 8 workers 0
+            tracebacks / 0 fallbacks; workers log `hicache_host_memory_mode: buffer_only`):** pulls land more often --
+            7 885 of 20 661 predicted tokens (38%, was 18%), realisation EWMA ending 0.4 -- but the workers still log
+            58-80 prefetches hitting the 8-reissue cap each, and the transfer arm still loses to cache affinity: agent
+            144 / 151 vs 162 / 169 tok/s, TTFT 21.1 / 20.8 vs 19.5 / 18.3 s, ITL 42.7 / 42.5 vs 35.0 / 38.1 ms; chat
+            TTFT 8.1 / 8.0 vs 7.9 / 7.8 s. Buffer-only also costs cache affinity itself against the default host
+            cache (agent 162-169 vs 169-180 tok/s, chat TTFT 7.8-7.9 vs 6.6-6.9 s): it gives up the L2 hits. **Reading
+            for point 2 on H20:** moving a request to a non-holder and pulling its prefix through the pool does not
+            beat keeping it on the holder at this load, with either host mode. Spread
+            ([figure](pd_colocation/figures_20261017/h20x8_manyprefix_r8_bufferonly.png),
+            [data](pd_colocation/figures_20261017/h20x8_manyprefix_r8_bufferonly.csv)):
+            | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 (rep 1 ; rep 2) | out tok/s | mean TTFT s | mean TPOT ms |
+            |---|---|---|---|---|---|
+            | cache | chat | 4.2/8.8/157/380/420 ; 3.7/8.4/161/379/420 | 1022 ; 1022 | 7.9 ; 7.8 | 38.9 ; 42.0 |
+            | cache | agent | 5.0/7.2/13.2/164/250 ; 4.2/7.4/15.3/129/285 | 162 ; 169 | 19.5 ; 18.3 | 65.7 ; 66.8 |
+            | slo_check+transfer | chat | 4.2/8.7/107/363/411 ; 3.9/8.5/117/373/418 | 1021 ; 1020 | 8.1 ; 8.0 | 44.7 ; 44.5 |
+            | slo_check+transfer | agent | 4.2/7.4/14.5/75.7/171 ; 4.4/7.5/14.4/89.3/212 | 144 ; 151 | 21.1 ; 20.8 | 74.6 ; 72.5 |
             Spread of the 16 req/s run
             ([figure](pd_colocation/figures_20261017/h20x8_manyprefix_selective_pool.png),
             [data](pd_colocation/figures_20261017/h20x8_manyprefix_selective_pool.csv)):

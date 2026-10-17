@@ -17,6 +17,8 @@
   `--hicache-host-memory-mode`; buffer-only A/B queued (`mn_bufferonly_8gpu_20261017.sh`). `WORKER_EXTRA`,
   `SCRAPE_METRICS` knobs for diagnostics. H200: MuxWise-style `--enable-pdmux` baseline on the concurrency axis running
   (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).
+- Buffer-only A/B x2: pulls land 38% (was 18%) but the SLO check + transfer still loses to cache affinity (agent
+  throughput -10..-11%, TTFT +8..+14%); buffer-only also costs cache affinity its L2 hits. Spread table + figure.
 
 ## v1.20.14 — Measured TTFT predictor error; conformal-style margin for the SLO check (2026-10-17)
 

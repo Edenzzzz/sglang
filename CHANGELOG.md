@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.23 — A5 closed: FA3 at state of the art; co-run bounded at 1.2% of serving GPU time (2026-10-17)
+
+- Serving bound for FA3 || FA2 co-running from TraceLab step traces: 1.2% of GPU time (mixed steps are prefill-
+  dominated, min/max p50 0.03). Multicast: ClusterM=2 deadlocks without a cluster-aware causal scheduler, and NCU shows
+  98% L2 hit / 72% tensor activity, identical to sgl-kernel FA3 -- not load-bound. q-tile choice, split reduction,
+  locality and in-kernel backfill closed by measured bounds. A1 re-closed.
+
 ## v1.20.22 — FA3 role at parity with upstream FA3; SM co-run pays -18% on append+verify (2026-10-17)
 
 - Final FA3 role build: flash-attention mainloop, paged-TMA KV, `-DNDEBUG`, fast math, upstream's dynamic scheduler

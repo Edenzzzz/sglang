@@ -26,7 +26,7 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   `sm_split` CTAs + `FA2ExecutorKernel` at native geometry as its PDL dependent
   (`FLASHINFER_FUSED_COLAUNCH=1`). 3.3-6.5x on FA2 rows, every gate exact; still 1.2-2x behind the
   non-persistent unfused two-launch control. ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md))
-- [ ] **A1, FA3 q64 vs q128 per work item (2026-10-12; reopened 2026-10-17):** *Correction in place:* the
+- [x] **A1, FA3 q64 vs q128 per work item (2026-10-12; reopened and re-closed 2026-10-17, see A5.1):** *Correction in place:* the
   old line "q64 never beats q128 beyond noise, loses up to 2.3x" misread the winner map. On the fixed
   kernel (`a3_winner_map/a3_v2_table_20261012.txt`, 72 cells, 216/216 arms exact) q64 is slower on 64
   cells (median 1.34x, worst 2.98x at kv 64K x 16 rows x qo 16: half the query rows per loaded KV block,
@@ -208,8 +208,15 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       on irregular short queries; packed auto retained
       ([unpacked](debug_kernel_server_perf/resume_20261012/fa3_unpacked_20261014.md)).
 
-- [ ] **A5, FA3 technique study on serving-shaped items (user, 2026-10-17: "test these techniques more for fa3 ...
+- [x] **A5, FA3 technique study on serving-shaped items (user, 2026-10-17: "test these techniques more for fa3 ...
   otherwise it's hard to make a story around the kernel stuff if we just port it without any optimizations").**
+  **Outcome (2026-10-17):** the custom FA3 role now runs flash-attention's own kernel (paged TMA, `-DNDEBUG`, fast
+  math, dynamic scheduler) and matches sgl-kernel FA3 instruction for instruction; every earlier FA3 gap was the build
+  (flashinfer's mainloop, asserts compiled in, cp.async gather). Of the techniques, only SM co-running FA3 with FA2
+  buys anything (-18% on balanced append + verify steps), and its serving ceiling on TraceLab is 1.2% of GPU time
+  because long-context prefill dominates every mixed step. The attention kernel is at the state of the art and is
+  not where the serving bar can be won. (The co-launched FA2 executor's A4 gap was also measured without
+  `-DNDEBUG`; moot while serving runs stock FA2.)
   Fixtures = FA3 items replayed from serving step traces (TraceLab append 256-1024 on 32-131K, chat prefill
   chunks, split-KV long rows), every arm PASS vs the causal fp32 reference, reported against upstream FA3
   (what serving runs) and the unfused two-launch step. In order:
@@ -300,11 +307,15 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       `drivers/a5_fa3_reference_20261017.py` = tma_multicast_reference + an upstream sgl-kernel arm), both in
       `tasks/debug_kernel_server_perf/a5_fa3_20261017/`; binaries = tma_sm_budget GATHER arm (tree
       `up_tma_multicast`, `fi_tma_multicast`); sglang `ad2d19bab`, flashinfer `1a73e67`.
-  - [ ] A5.1 per-item q-tile choice (q64 on short-KV few-row items, q128 elsewhere; A1 win region above).
-  - [ ] A5.2 split-KV reduction: separate merge kernel vs atomic last-arriver vs DSMEM reduction within a
-    cluster, on decode/verify-heavy steps (the 0.6% bound was a whole-workload average and excluded the
-    launch gap before the merge).
-  - [ ] A5.3 FA3 on all 132 SMs with stock FA2 as its PDL dependent, triggered at each FA3 CTA's last tile.
+  - [x] A5.1 per-item q-tile choice (closed by bound, 2026-10-17): q64 wins only on short-KV few-row items (A1, up to
+    24%), and those rows are verify-width and route to FA2 (A3: FA2 wins every verify-width row); FA3 rows are
+    prefill/append chunks where q128 is never slower. No serving item reaches the win region.
+  - [x] A5.2 split-KV reduction (2026-10-17): on the parity FA3 role the split path is exact (flash-attention's
+    combine; the double merge fixed), but splitting itself loses where it fires (append 512 @ 48K at 132 CTAs: 0.679
+    ms split vs 0.627 unsplit at 112), so the planner should not split FA3 rows; with no splits there is nothing to
+    reduce, and the FA2 side's merge is stock BatchPrefill's. A faster reduction (JIT / DSMEM) only pays on a path
+    the scheduler should avoid -- not built.
+  - [x] A5.3 FA3 co-run with FA2 on the remaining SMs (2026-10-17): -18% where roles balance, <=2% serving bound.
     - [x] **Co-run vs serving split on mixed fixtures (2026-10-17 13:45-13:51, 30 runs, each 13/13 vs fp32 causal,
       repeat spread <=4.3% except chat 6.6%):** arms per run -- *split* (serving: sgl-kernel FA3 on all SMs, then
       stock FA2 BatchPrefill), *corun_sgl* (sgl-kernel FA3 with `sm_margin` = 132-B on one stream || stock FA2 on
@@ -342,9 +353,19 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       workloads; FA3 prefill speed is the lever**, and those items already run at ~580-600 TFLOP/s (prefill 2048
       @ 64K: 1.9 TFLOP per layer in 3.19 ms) with our role at parity with upstream. `corun_bound_from_steptrace.py`
       on `steptrace_tracelab_20261016/rep1/tracelab_c4/{MTP,EDF_RESV}/server_*.log`.
-  - [ ] A5.4 L2-locality work pairing (-14/-26% kernel time on two fixtures, 2026-10-14) on serving items.
-  - [ ] A5.5 TMA multicast on agent-append items (zero-KV-load ceiling there 19-22%, vs ~3% on serving mixes).
-  - [ ] A5.6 in-kernel cross-role backfill (`tma_store_wait`) on top of A5.0.
+  - [x] A5.4 L2 locality (closed by measurement, 2026-10-17): on the parity build L2 hit rate is already 98% for both
+    our role and sgl-kernel FA3 (NCU, prefill 2048 @ 64K / agent 4 x 512 @ 64K); the 2026-10-14 pairing gain was on
+    the flashinfer mainloop's 12% hit rate.
+  - [x] A5.5 TMA multicast (2026-10-17, negative): flash-attention's ClusterM=2 with paged TMA **deadlocks** on the
+    first call (GPU 100%, no progress for 8 min, killed by PID): multicast needs both CTAs of a cluster on paired
+    tiles in lockstep, which neither our lists nor upstream's varlen scheduler provide -- flash-attention's own
+    dispatcher disables clusters for causal / varlen / split. Headroom is also small: on the parity build NCU shows
+    98% L2 hit and 72% tensor-pipe activity, instruction-for-instruction equal to sgl-kernel FA3 (881.5M vs 881.2M on
+    prefill 2048 @ 64K), so K/V loads are not the bound; the 19-22% zero-KV-load ceiling was measured on the
+    flashinfer mainloop. Not pursued. `a5_fa3_ncu_parity_20261017.sh`.
+  - [x] A5.6 in-kernel cross-role backfill (closed by bound, 2026-10-17): backfill only matters when FA3 and FA2 run
+    concurrently, and the serving bound for any co-run is 1.2% of GPU time on TraceLab (A5.3); the hardware
+    co-launch already backfills. Not rebuilt on the flash-attention role.
 
 ### [x] B. Fuse draft/verify epilogue ops
 

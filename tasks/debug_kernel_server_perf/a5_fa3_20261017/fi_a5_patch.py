@@ -2,7 +2,10 @@
   python fi_a5_patch.py <fi root>
 1. dynamic smem covers flash-attention's SharedStorage when the FA3 role runs its kernel body (FLASHINFER_FA3_UPSTREAM):
    the launch sized it from flashinfer's FA3 traits (163 920 B), so the upstream body addressed shared memory past
-   the allocation (compute-sanitizer: out-of-range shared address, 2048:2048 at 112 CTAs)."""
+   the allocation (compute-sanitizer: out-of-range shared address, 2048:2048 at 112 CTAs).
+2. fused_primary_finish does not merge again under FLASHINFER_FA3_UPSTREAM: the dispatch already ran flash-attention's
+   combine over its own partials, and flashinfer's state reduction then re-merged the plan's split rows from
+   flashinfer's (unwritten) partial buffer over the correct output (append 512 @ 48K at 132 CTAs: nonfinite)."""
 import sys
 p = f"{sys.argv[1]}/include/flashinfer/attention/persistent_fa3_fused.cuh"
 s = open(p).read()
@@ -18,3 +21,18 @@ if "UpstreamFA3Kernel<KernelTraits::HEAD_DIM_VO, int32_t>::SharedStorageSize" in
 else:
     assert s.count(old) == 1, s.count(old)
     open(p, "w").write(s.replace(old, new, 1)); print("patched")
+
+p = f"{sys.argv[1]}/tests/fused_fa3_persistent_ext.cu"
+s = open(p).read()
+old = """  TORCH_CHECK(plan.num_fa3_requests == num_requests, "FA3 reduction requires an FA3-only plan");
+"""
+new = old + """#if FLASHINFER_FA3_UPSTREAM
+  // The FA3 role ran flash-attention's kernel, whose split partials the dispatch already combined.
+  return;
+#endif
+"""
+if "whose split partials the dispatch already combined" in s:
+    print("already 2")
+else:
+    assert s.count(old) == 1, s.count(old)
+    open(p, "w").write(s.replace(old, new, 1)); print("patched 2")

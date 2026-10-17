@@ -190,7 +190,6 @@ def main():
             wrapper.run(query_view, (key, value), out=output_view)
 
     from sgl_kernel.flash_attn import flash_attn_with_kvcache
-    assert not native, "A5 fixtures are FA3-only"
     max_pages = max(int(fixture["page_indptr"][r + 1] - fixture["page_indptr"][r]) for r in range(len(primary)))
     page_table = torch.zeros(len(primary), max_pages, dtype=torch.int32, device="cuda")
     for r in range(len(primary)):
@@ -229,6 +228,48 @@ def main():
             query, key, value, page_table=page_table, cache_seqlens=cache_seqlens, cu_seqlens_q=cu_seqlens_q,
             max_seqlen_q=max_seqlen_q, softmax_scale=1.0 / math.sqrt(HEAD_DIM), causal=True)
 
+    def run_upstream_pack():
+        # sgl-kernel FA3 with packed GQA forced, the layout our flash-attention build is compiled with.
+        upstream["pack"] = flash_attn_with_kvcache(
+            query, key, value, page_table=page_table, cache_seqlens=cache_seqlens, cu_seqlens_q=cu_seqlens_q,
+            max_seqlen_q=max_seqlen_q, softmax_scale=1.0 / math.sqrt(HEAD_DIM), causal=True, pack_gqa=True)
+
+    # Mixed fixtures (FA2 verify rows present): A5.3 arms, all writing `output`.
+    primary_tokens_n = int(fixture["query_indptr"][len(primary)])
+    fa2_wrapper = wrappers[-1] if native else None
+    corun_streams = (torch.cuda.Stream(), torch.cuda.Stream())
+
+    def run_sgl_fa3(margin):
+        flash_attn_with_kvcache(
+            query[:primary_tokens_n], key, value, page_table=page_table, cache_seqlens=cache_seqlens,
+            cu_seqlens_q=cu_seqlens_q, max_seqlen_q=max_seqlen_q, softmax_scale=1.0 / math.sqrt(HEAD_DIM),
+            causal=True, sm_margin=margin, out=output[:primary_tokens_n])
+
+    def run_fa2_stock():
+        wrapper, query_view, output_view = fa2_wrapper
+        wrapper.run(query_view, (key, value), out=output_view)
+
+    def run_split():
+        run_sgl_fa3(0)
+        run_fa2_stock()
+
+    def corun(fa3_fn):
+        main = torch.cuda.current_stream()
+        for st in corun_streams:
+            st.wait_stream(main)
+        with torch.cuda.stream(corun_streams[0]):
+            fa3_fn()
+        with torch.cuda.stream(corun_streams[1]):
+            run_fa2_stock()
+        for st in corun_streams:
+            main.wait_stream(st)
+
+    def run_corun_sgl():
+        corun(lambda: run_sgl_fa3(num_sms - sm_split))
+
+    def run_corun_dyn():
+        corun(run_fa3only)
+
     reference = reference_output(fixture)
     torch.cuda.synchronize()
     output.fill_(float("nan"))
@@ -239,10 +280,20 @@ def main():
     run_stock()
     torch.cuda.synchronize()
     verify(output, reference, "stock_eager")
-    run_upstream()
-    torch.cuda.synchronize()
-    verify(upstream["out"], reference, "upstream_eager")
-    if fa3only is not None:
+    if not native:
+        run_upstream()
+        torch.cuda.synchronize()
+        verify(upstream["out"], reference, "upstream_eager")
+    else:
+        mixed_arms = [("split", run_split), ("corun_sgl", run_corun_sgl)]
+        if fa3only is not None:
+            mixed_arms.append(("corun_dyn", run_corun_dyn))
+        for label, function in mixed_arms:
+            output.fill_(float("nan"))
+            function()
+            torch.cuda.synchronize()
+            verify(output, reference, f"{label}_eager")
+    if fa3only is not None and not native:
         output.fill_(float("nan"))
         run_fa3only()
         torch.cuda.synchronize()
@@ -294,9 +345,14 @@ def main():
         assert os.environ.get("FUSED_FA3_TMA_TRACE", "0") == "0"
         iterations = int(os.environ.get("TIME_ITERS", "100"))
         assert iterations > 0
-        arms = [("candidate", run), ("stock", run_stock), ("upstream", run_upstream)]
-        if fa3only is not None:
-            arms.append(("fa3only", run_fa3only))
+        if not native:
+            arms = [("candidate", run), ("stock", run_stock), ("upstream", run_upstream)]
+            if fa3only is not None:
+                arms.append(("fa3only", run_fa3only))
+            if os.environ.get("A5_PACK_ARM") == "1":
+                arms.append(("upstream_pack", run_upstream_pack))
+        else:
+            arms = [("candidate", run), ("stock", run_stock)] + mixed_arms
         for label, function in arms:
             for _ in range(3):
                 function()
@@ -313,7 +369,8 @@ def main():
                 timing_graph.replay()
             end.record()
             end.synchronize()
-            verify(upstream["out"] if label == "upstream" else output, reference, f"timed_{label}")
+            timed_out = {"upstream": upstream.get("out"), "upstream_pack": upstream.get("pack")}.get(label, output)
+            verify(timed_out, reference, f"timed_{label}")
             print(f"TIME {label} graph=True ms={start.elapsed_time(end) / iterations:.6f}", flush=True)
     print("FIXTURE " + json.dumps({"primary": primary, "native": native, "page_size": PAGE_SIZE,
                                     "poisoned_tails": True, "shuffled_pages": True}), flush=True)

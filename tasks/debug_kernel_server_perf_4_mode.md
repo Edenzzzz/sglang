@@ -213,8 +213,33 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   Fixtures = FA3 items replayed from serving step traces (TraceLab append 256-1024 on 32-131K, chat prefill
   chunks, split-KV long rows), every arm PASS vs the causal fp32 reference, reported against upstream FA3
   (what serving runs) and the unfused two-launch step. In order:
-  - [ ] A5.0 mainloop gap: our persistent FA3 at ~43% tensor activity vs stock 65% (NCU 2026-10-14); close it
-    first, since every technique below is measured on top of it.
+  - [x] A5.0 mainloop gap (closed 2026-10-17): it was the build, not the mainloop design -- flashinfer's paged mainloop
+    instead of flash-attention's, no `-DNDEBUG`, and cp.async page gather instead of paged TMA.
+    - [x] **Parity (2026-10-17 13:53-13:58, all runs 11-12/11-12 vs fp32 causal):** sgl-kernel FA3 with
+      `pack_gqa=True` forced is no slower (prefill 2048 @ 64K 3.24 vs 3.23 ms), so packed GQA is not the gap. Paged
+      TMA KV (`FA3_PAGED_TMA=1`) with `-DNDEBUG` -- earlier measured slower only because the device asserts were in --
+      makes our flash-attention build on its dynamic scheduler **match or beat sgl-kernel FA3**: prefill 2048 @ 64K
+      3.19 vs 3.27, agent 4 x 512 @ 64K 3.32 vs 3.35, chat 2048 0.0606 vs 0.0601 ms. Final FA3 role build:
+      flash-attention mainloop, paged TMA, `-DNDEBUG`, fast math. (Our static-list path at 112: 3.44 / 3.58 /
+      0.117 ms -- the dynamic scheduler stays.) Mixed co-run table rerunning on this build
+      (`a5_mixed_corun_tma_20261017.sh`).
+    - [x] **A5.0f full table + scheduler (2026-10-17 13:26-13:50; every run 11/11 vs fp32 causal):** flash-attention
+      mainloop + `-DNDEBUG` + fast math (`a5_fa3_upstream_table_20261017.sh`, two reversed repeats, spread <=0.6%):
+      long items within 1.07-1.12x of sgl-kernel FA3 (append 512 @ 48K 0.627 vs 0.586, agent 4 x 512 @ 64K 3.74 vs
+      3.34, prefill 2048 @ 64K 3.61 vs 3.31 ms); flashinfer's mainloop with `-DNDEBUG` gains only ~4%, so the
+      flash-attention mainloop is the base. **Split-KV fix:** the two split fixtures were nonfinite --
+      `fused_primary_finish` re-merged the plan's split rows from flashinfer's (unwritten) partial buffer after the
+      dispatch had already run flash-attention's combine; patch item 2 in `fi_a5_patch.py`, now exact (append @ 132
+      splits=2, 16 x 16 @ 1K). **Scheduler** (`a5_fa3_budget_20261017.sh`): our build on upstream's own dynamic
+      persistent scheduler capped at 112 SMs (`fa3_only_run`, `FA3_SM_BUDGET=112`) vs our static per-CTA lists at
+      112, ms: 8 x 1024 @ 32K 7.42 vs 9.05; chat 2048 0.074 vs 0.121; chat 4 x 512 0.040 vs 0.046; 16 x 16 @ 1K
+      0.023 vs 0.041; long items tie (3.60 vs 3.63); static wins only append 512 @ 48K (0.648 vs 0.703, one tile per
+      CTA). Dynamic at 112 vs sgl-kernel at 132: 1.10-1.24x. *Correction (2026-10-17 13:52, from A5.3 below): I read
+      this as the SM-count ratio ("parity at equal SMs") -- wrong for the long items: prefill 2048 @ 64K is 448
+      equal tiles, 4 waves at both 112 and 132, and sgl-kernel FA3 capped at 112 SMs is no slower; our 3.60 ms there
+      is a real 1.10x per-SM gap.* So the FA3 role should run flash-attention's kernel on its dynamic scheduler over the
+      FA3 SM budget; the remaining question is what the other SMs buy when FA2 runs on them concurrently (A5.3),
+      which was last measured on the flashinfer mainloop without `-DNDEBUG`.
     - [x] **A5.0d FA3 role on flash-attention's mainloop (2026-10-17 12:55-13:16, every run 11/11 checks vs fp32
       causal reference):** `FA3_UPSTREAM=1` now builds (loader switch, hopper headers beside the merged include
       tree) and runs after one fix -- the launch sized dynamic smem from flashinfer's FA3 traits (163 920 B) while
@@ -280,6 +305,25 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     cluster, on decode/verify-heavy steps (the 0.6% bound was a whole-workload average and excluded the
     launch gap before the merge).
   - [ ] A5.3 FA3 on all 132 SMs with stock FA2 as its PDL dependent, triggered at each FA3 CTA's last tile.
+    - [x] **Co-run vs serving split on mixed fixtures (2026-10-17 13:45-13:51, 30 runs, each 13/13 vs fp32 causal,
+      repeat spread <=4.3% except chat 6.6%):** arms per run -- *split* (serving: sgl-kernel FA3 on all SMs, then
+      stock FA2 BatchPrefill), *corun_sgl* (sgl-kernel FA3 with `sm_margin` = 132-B on one stream || stock FA2 on
+      another), *corun_dyn* (our flash-attention build on its dynamic scheduler capped at B || stock FA2), *ours*
+      (compact FA3 role, static lists + native FA2 as PDL dependent). Best B per fixture, vs split:
+      | fixture (FA3 rows + FA2 q=4 rows) | split ms | ours | corun_sgl | corun_dyn |
+      |---|---|---|---|---|
+      | fresh 512 + 46 @ 48K | 2.335 | -0.2% (112) | +9.4% (96) | -0.8% (112) |
+      | append 512 @ 48K + 46 @ 48K | 3.208 | -6.9% (120) | -16.7% (120) | **-17.9% (120)** |
+      | prefill 2048 @ 64K + 8 @ 16K | 3.417 | +9.5% (120) | -3.3% (120) | +11.9% (120) |
+      | chat 2048 + 32 @ 8K | 0.282 | +20.3% (120) | -1.7% (120) | +3.0% (112) |
+      | agent 2 x 512 @ 64K + 24 @ 32K | 2.497 | +4.7% (112) | +0.1% (120) | +5.4% (120) |
+      **Co-running pays when the roles take comparable time and one cannot fill the GPU alone** (append: a 0.6 ms
+      FA3 wave hides under ~2.6 ms of bandwidth-bound verify rows, -18%); where one role dominates, sequential
+      split ties or wins, and B=96 loses everywhere but append. So B must be chosen per step, "no co-run"
+      included -- a dispatch decision (A2/A3), not a constant. corun_dyn trails corun_sgl wherever FA3 dominates:
+      the remaining 1.1x per-SM gap of our build. Our static-list path (ours) loses on chat/agent (+5..+20%): its
+      static per-CTA lists, as in A5.0f. Script `a5_mixed_corun_20261017.sh` (harness arms in
+      `a5_fa3_reference_20261017.py`).
   - [ ] A5.4 L2-locality work pairing (-14/-26% kernel time on two fixtures, 2026-10-14) on serving items.
   - [ ] A5.5 TMA multicast on agent-append items (zero-KV-load ceiling there 19-22%, vs ~3% on serving mixes).
   - [ ] A5.6 in-kernel cross-role backfill (`tma_store_wait`) on top of A5.0.

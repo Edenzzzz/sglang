@@ -23,7 +23,7 @@ export SGLANG_FUSED_MERGED_DIR=$W/merged_a5 TORCH_EXTENSIONS_DIR=$W/torch_ext_a5
 mkdir -p $W/merged_a5; ln -sfn $W/flash-attention $W/merged_a5/flash-attention
 export FUSED_PAGED_TMA_BUILD=0 FUSED_CLUSTER=1 FLASHINFER_FUSED_CLUSTER=1 FUSED_FA3_CLUSTER_PAIR=0 FUSED_FA3_TMA_MULTICAST=0
 export FA3_UPSTREAM=${UPS:-1} FUSED_FAST_MATH=1
-export TIME_AB=1 TIME_ITERS=100 SEED=31 FA2_REQUESTS=,
+export TIME_AB=1 TIME_ITERS=100 SEED=31 FA2_REQUESTS=${FA2_OVERRIDE:-,}
 unset FUSED_NOSPLIT FLASHINFER_FUSED_SYMMETRIC FLASHINFER_FUSED_SKIP_FA3 FA3_SKIP_KV_LOAD TIME_FORCE
 export FA3_PAGED_TMA=$PTMA
 env FA3_REQUESTS="$1" SM_SPLIT=$2 timeout --kill-after=20 1500 ${SANITIZE:+/usr/local/cuda/bin/compute-sanitizer --tool memcheck --show-backtrace device --print-limit 8} $W/venv/bin/python -u $W/drivers/a5_fa3_reference_20261017.py \

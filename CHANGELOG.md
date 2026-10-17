@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.20.22 — FA3 role at parity with upstream FA3; SM co-run pays -18% on append+verify (2026-10-17)
+
+- Final FA3 role build: flash-attention mainloop, paged-TMA KV, `-DNDEBUG`, fast math, upstream's dynamic scheduler
+  -- matches or beats sgl-kernel FA3 (prefill 2048 @ 64K 3.19 vs 3.27 ms). Split-KV on that path is exact after
+  `fused_primary_finish` stopped re-merging over flash-attention's combine. Packed GQA is not a cost.
+- A5.3: FA3 on B SMs co-run with stock FA2 verify rows vs the serving split (sequential): -18% on append 512 @ 48K +
+  46 verify rows, tie or loss where one role dominates -- B must be chosen per step. Correction recorded in place: the
+  1.1x residual was a per-SM gap, not the SM-count ratio.
+
 ## v1.20.21 — FA3 role on flash-attention's mainloop; -DNDEBUG closes most of the FA3 gap (2026-10-17)
 
 - A5.0d: `FLASHINFER_FA3_UPSTREAM` builds and runs again (loader switch, flash-attention headers, dynamic smem now

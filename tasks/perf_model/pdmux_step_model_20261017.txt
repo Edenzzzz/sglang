@@ -1,0 +1,48 @@
+PTR_END rep1_cohort_c8_FINAL rc=0 2026-10-17T18:55:10+08:00 edf_enabled=1 tracebacks=0 fallback=0 pdmux=3 spli
+PTR_END rep1_cohort_c8_LPT rc=0 2026-10-17T19:01:17+08:00 edf_enabled=0 tracebacks=0 fallback=0 pdmux=3 split=
+PTR_END rep1_cohort_c8_MTP rc=0 2026-10-17T19:08:10+08:00 edf_enabled=0 tracebacks=0 fallback=0 pdmux=3 split=
+PTR_END rep1_cohort_c16_FINAL rc=0 2026-10-17T19:13:30+08:00 edf_enabled=1 tracebacks=0 fallback=0 pdmux=3 spl
+PTR_END rep1_cohort_c16_LPT rc=0 2026-10-17T19:19:28+08:00 edf_enabled=0 tracebacks=0 fallback=0 pdmux=3 split
+PTR_END rep1_cohort_c16_MTP rc=0 2026-10-17T19:26:28+08:00 edf_enabled=0 tracebacks=0 fallback=0 pdmux=3 split
+C=8
+FINAL/server_LPT.log
+  pdmux decode                 gpu n=19539 test=9770 mean=10.45 ms cv=0.38 MAPE=6.7% p90APE=11.5% coefs=21
+  pdmux decode                 gap n=19532 test=9766 mean=12.40 ms cv=0.45 MAPE=8.9% p90APE=15.2% coefs=21
+  pdmux prefill split          gpu n=2525 test=1263 mean=75.08 ms cv=0.72 MAPE=22.5% p90APE=62.4% coefs=21
+C=8
+LPT/server_LPT.log
+  stock all steps              gpu n=14275 test=7138 mean=11.97 ms cv=3.06 MAPE=63.1% p90APE=80.5% coefs=5
+  stock all steps              gap n=13921 test=6961 mean=9.06 ms cv=1.20 MAPE=117.3% p90APE=141.8% coefs=5
+  stock decode-only steps      gpu n=12175 test=6088 mean=6.53 ms cv=0.29 MAPE=17.5% p90APE=22.3% coefs=5
+  stock mixed steps            gpu n=2100 test=1050 mean=91.60 ms cv=1.44 MAPE=56.7% p90APE=159.3% coefs=5
+  stock decode-only steps      gap n=12159 test=6080 mean=7.38 ms cv=1.02 MAPE=22.8% p90APE=51.6% coefs=5
+  stock mixed steps            gap n=1762 test=881 mean=27.12 ms cv=0.83 MAPE=49.9% p90APE=73.1% coefs=5
+C=8
+MTP/server_MTP_LPT.log
+  stock all steps              gpu n=7166 test=3583 mean=36.10 ms cv=2.08 MAPE=25.0% p90APE=89.1% coefs=5
+  stock all steps              gap n=6811 test=3406 mean=24.07 ms cv=0.81 MAPE=52.0% p90APE=104.4% coefs=5
+  stock decode-only steps      gpu n=5282 test=2641 mean=20.26 ms cv=0.69 MAPE=66.8% p90APE=133.9% coefs=5
+  stock mixed steps            gpu n=1884 test=942 mean=108.74 ms cv=1.44 MAPE=43.4% p90APE=117.2% coefs=5
+  stock decode-only steps      gap n=5278 test=2639 mean=20.47 ms cv=0.69 MAPE=78.6% p90APE=139.7% coefs=5
+  stock mixed steps            gap n=1533 test=767 mean=46.17 ms cv=0.65 MAPE=37.4% p90APE=80.4% coefs=5
+C=16
+FINAL/server_LPT.log
+  pdmux decode                 gpu n=18145 test=9073 mean=11.18 ms cv=0.40 MAPE=4.0% p90APE=7.5% coefs=21
+  pdmux decode                 gap n=18141 test=9071 mean=13.59 ms cv=0.45 MAPE=8.9% p90APE=21.2% coefs=21
+  pdmux prefill split          gpu n=2683 test=1342 mean=64.61 ms cv=0.84 MAPE=246.0% p90APE=94.9% coefs=21
+C=16
+LPT/server_LPT.log
+  stock all steps              gpu n=12135 test=6068 mean=13.57 ms cv=2.42 MAPE=58.7% p90APE=88.9% coefs=5
+  stock all steps              gap n=11785 test=5893 mean=11.55 ms cv=1.20 MAPE=74.1% p90APE=91.9% coefs=5
+  stock decode-only steps      gpu n=10045 test=5023 mean=7.43 ms cv=0.29 MAPE=7.5% p90APE=15.3% coefs=5
+  stock mixed steps            gpu n=2090 test=1045 mean=81.77 ms cv=1.47 MAPE=52.5% p90APE=143.6% coefs=5
+  stock decode-only steps      gap n=10035 test=5018 mean=9.59 ms cv=1.21 MAPE=27.5% p90APE=51.3% coefs=5
+  stock mixed steps            gap n=1750 test=875 mean=26.34 ms cv=0.76 MAPE=54.3% p90APE=68.5% coefs=5
+C=16
+MTP/server_MTP_LPT.log
+  stock all steps              gpu n=6447 test=3224 mean=45.45 ms cv=1.68 MAPE=25.4% p90APE=43.8% coefs=5
+  stock all steps              gap n=6095 test=3048 mean=33.46 ms cv=0.65 MAPE=34.8% p90APE=86.7% coefs=5
+  stock decode-only steps      gpu n=4554 test=2277 mean=28.02 ms cv=0.57 MAPE=32.3% p90APE=81.5% coefs=5
+  stock mixed steps            gpu n=1893 test=947 mean=92.32 ms cv=1.46 MAPE=46.8% p90APE=117.8% coefs=5
+  stock decode-only steps      gap n=4551 test=2276 mean=28.26 ms cv=0.57 MAPE=45.0% p90APE=115.8% coefs=5
+  stock mixed steps            gap n=1544 test=772 mean=49.77 ms cv=0.61 MAPE=38.2% p90APE=79.2% coefs=5

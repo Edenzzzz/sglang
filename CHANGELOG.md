@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.28 — EDF step model on the final schedule: decode ITL predictable to 9% vs 35-117% unfused (2026-10-17)
+
+- STEPTRACE under PD multiplexing (`apply_steptrace_pdmux.py`) and `tasks/perf_model/fit_pdmux_step.py`. Held-out MAPE
+  of the decode interval: pdmux + EDF 8.9% at C=8 and C=16 vs stock chunked LPT 74-117% and stock MTP 35-52%; decode
+  step GPU time 4-7% vs 7.5-67%. Prefill-split time (TTFT side) stays hard to predict under pdmux (p90 62-95%).
+
 ## v1.20.27 — single-GPU bar met in the mean: pdmux + EDF (uncached deadlines, divisor 30) (2026-10-17)
 
 - Three repeats + output gate PASS vs stock MTP: C=8 agent +29% / -31.7% / -31.1%, chat +25% / -73% / -55%; C=16 agent

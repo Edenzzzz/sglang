@@ -989,6 +989,26 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       check above.
 
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
+  - [x] **Step model on the final schedule (PD multiplexing + EDF, uncached deadlines, divisor 30) vs the stock
+    (unfused) schedules (2026-10-17 18:50-19:26, 6 traced arms rc=0, 0 tracebacks / 0 fallbacks):** STEPTRACE now
+    covers pdmux's event loop (`apply_steptrace_pdmux.py`: decode and split-prefill forwards traced on their own
+    streams, with the SM group `sg=` and split layers `lay=`). Lightweight linear models, fit on the first half of
+    each trace, held-out MAPE on the second (`tasks/perf_model/fit_pdmux_step.py`):
+    | what EDF predicts | pdmux + EDF | stock chunked LPT | stock MTP |
+    |---|---|---|---|
+    | decode interval a request sees (ITL), C=8 / 16 | **8.9% / 8.9%** (p90 15 / 21%) | all steps 117% / 74% | all steps 52% / 35% |
+    | decode-only step GPU time, C=8 / 16 | **6.7% / 4.0%** | 17.5% / 7.5% | 66.8% / 32.3% |
+    | prefill work (pdmux: one split forward; stock: mixed step), GPU, C=8 / 16 | 22.5% / 246% (p90 62 / 95%) | 56.7% / 52.5% | 43.4% / 46.8% |
+    pdmux decode model: per SM group, c0 + c_bs*rows + c_kv*KV (21 coefficients); stock: fit_mtp_step.py's form
+    (c0, prefill tokens, attention work, rows, KV). **With decode on its own SM group, the per-token interval is
+    predictable to ~9%; on the unfused schedules prefill chunks interleave with decode and the same kind of model
+    misses by 35-117%** -- the user's point-3 thesis (a schedule that is easy to model gives better SLO control)
+    holds for ITL on this schedule, not for the fused-kernel step (whose co-run bound is 1.2%). TTFT-side prediction
+    is the weak part: a split prefill shares the GPU with a varying decode load (p90 62-95%). The project fitter
+    (`fit_mtp_step.py`, launch-to-launch target) gives >100% on the stock traces under the overlap scheduler, so the
+    2026-10-14 10.1 / 10.7% figures (4-mode MTP server, other workload) are not comparable to these. Output:
+    [`pdmux_step_model_20261017.txt`](perf_model/pdmux_step_model_20261017.txt); traces `REP=1 bash
+    steptrace_pdmux_20261017.sh` (pod `/dev/shm/w`).
   (goal point 3); earlier fits used the RoPE-corrupted model and are void (incl. the uncommitted
   2026-10-12 05:10 "fused-vs-unfused EDF check" in `server_perf_model.md`). The STEPTRACE emitter
   did not survive the re-port; ported to the overlap path with the 4-mode verify rows counted

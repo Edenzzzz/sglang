@@ -1284,8 +1284,22 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
           match and the deadline scales with the uncached remainder. First arm (C=8, divisor 36, rep 1, rc=0, EDF + pdmux
           on, 0 tracebacks / 0 fallbacks) vs stock MTP: agent tput +29.8%, **TTFT -34.1%** (12.31 vs 12.97 s with
           full-length deadlines), ITL -29.1%; chat +25.4% / -74.0% / -54.4%. The TTFT margin it buys is what the decode
-          SM share can spend on agent ITL: divisor 18 / 27 / 24 arms running (`pdmux_edf_unc_20261017.sh`,
-          `pdmux_edf_unc2_20261017.sh`); output gate after. Script:
+          SM share can spend on agent ITL. **Divisor sweep (16:51-17:30, rep 1, 8 arms rc=0, 0 tracebacks / 0
+          fallbacks, EDF + pdmux on)**, vs stock MTP, agent tput / TTFT / ITL ; chat:
+          | C | divisor | agent | chat |
+          |---|---|---|---|
+          | 8 | 36 | +29.8% / -34.1% / -29.1% | +25.4% / -74.0% / -54.4% |
+          | 8 | **27** | **+28.3% / -31.1% / -31.9%** | +25.5% / -71.1% / -55.3% |
+          | 8 | 24 | +26.8% / -27.5% / -33.8% | +25.5% / -69.2% / -55.7% |
+          | 8 | 18 | +24.3% / -23.8% / -36.2% | +25.5% / -66.1% / -57.3% |
+          | 16 | 36 | +34.8% / -34.3% / -38.6% | +31.9% / -59.4% / -54.6% |
+          | 16 | **27** | **+32.1% / -31.1% / -41.5%** | +31.6% / -55.8% / -56.2% |
+          | 16 | 24 | +32.2% / -31.2% / -43.0% | +31.5% / -56.1% / -55.9% |
+          | 16 | 18 | +30.2% / -28.6% / -45.6% | +31.9% / -52.6% / -56.5% |
+          **Divisor 27 clears all 12 bar metrics in rep 1**; the C=8 agent margins are thin (1.1 / 1.9 points vs a <=2%
+          repeat spread), so two more repeats and the output gate are running (`REP=2,3 D24=0 bash
+          pdmux_edf_unc2_20261017.sh`, `gate_pdmux_edf_unc27.sh`). Per-request spread in
+          [summary](debug_kernel_server_perf/pdmux_mtp_20261017/pdmux_edf_unc_20261017_summary.txt). Script:
       `pdmux_mtp_ab_20261017.sh` (frozen cohort, C = 8 / 16 + ShareGPT 8 req/s; PDMUX | MTP_PDMUX |
       EDFR50_F2048, one tree, one session, graphs on). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).

@@ -44,8 +44,8 @@ PRIO="--enable-priority-scheduling --schedule-low-priority-values-first --priori
 # decode_bs_divisor: pdmux gives decode SM group decode_bs * 6 // divisor (default 36); smaller = more decode SMs.
 for d in 18 12 27 24; do printf "sm_group_num: 8\ndecode_bs_divisor: $d\nsplit_forward_token_budget: 65536\n" > $W/pdmux_div$d.yaml; done
 # label | method | BENCH_CHUNK | floor | extra server args | EDF | extra env (two-tier SLO)
-ARMS=("UNC_D27|LPT||0|$PD $PRIO --pdmux-config-path $W/pdmux_div27.yaml|1|SGLANG_EDF_UNCACHED_DEADLINE=1"
-      "UNC_D24|LPT||0|$PD $PRIO --pdmux-config-path $W/pdmux_div24.yaml|1|SGLANG_EDF_UNCACHED_DEADLINE=1")
+ARMS=("UNC_D27|LPT||0|$PD $PRIO --pdmux-config-path $W/pdmux_div27.yaml|1|SGLANG_EDF_UNCACHED_DEADLINE=1")
+[ "${D24:-1}" = 1 ] && ARMS+=("UNC_D24|LPT||0|$PD $PRIO --pdmux-config-path $W/pdmux_div24.yaml|1|SGLANG_EDF_UNCACHED_DEADLINE=1")
 REP=${REP:-1}
 for C in 8 16; do
   for v in "${ARMS[@]}"; do

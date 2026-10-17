@@ -92,6 +92,8 @@ def run_arm(arm, outdir):
     if "PDMUX" in arm:
         # PD multiplexing (GreenContext SM split, layer-split prefill): no chunked prefill, no overlap scheduler.
         args += ["--enable-pdmux", "--chunked-prefill-size", "-1", "--disable-overlap-schedule"]
+        # Extra pdmux-arm server flags (e.g. --pdmux-config-path); the stock reference arms stay unchanged.
+        args += os.environ.get("SRV_EXTRA_ARGS", "").split()
     if arm.endswith("_EDF"):
         args += ["--enable-priority-scheduling", "--schedule-low-priority-values-first",
                  "--priority-scheduling-preemption-threshold", "999999"]

@@ -39,6 +39,10 @@ def env_for(arm):
         env.update(SGLANG_MIXED_ATTENTION_KERNEL="persistent", SGLANG_TWO_EXEC="1",
                    SGLANG_FUSED_FA3_SM_SPLIT="1", FLASHINFER_SM_PARTITION="1", UP_STAGES="2",
                    SGLANG_FUSED_FA3_SRC=f"{W}/fi/tests/fused_fa3_persistent_ext.cu")
+    if arm.endswith("_EDF"):
+        # Worker-side EDF: server-assigned deadlines, deadline-ordered admission, no latency model / chunk cap.
+        env.update(SGLANG_EDF_SCHEDULING="1", SGLANG_EDF_LATENCY_MODEL="", SGLANG_EDF_ACCEPT_MODE="none",
+                   SGLANG_TTFT_SLO_MS=os.environ.get("TTFT_SLO_MS", "2000"))
     return env
 
 
@@ -88,6 +92,9 @@ def run_arm(arm, outdir):
     if "PDMUX" in arm:
         # PD multiplexing (GreenContext SM split, layer-split prefill): no chunked prefill, no overlap scheduler.
         args += ["--enable-pdmux", "--chunked-prefill-size", "-1", "--disable-overlap-schedule"]
+    if arm.endswith("_EDF"):
+        args += ["--enable-priority-scheduling", "--schedule-low-priority-values-first",
+                 "--priority-scheduling-preemption-threshold", "999999"]
     # Own session, so teardown can kill sglang's children (scheduler, detokenizer, the HTTP
     # process) as a group. srv.kill() alone left one listening on the port, and the next
     # arm's warmup request went to that stale server and timed out.

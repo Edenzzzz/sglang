@@ -1230,11 +1230,31 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       not a pdmux effect -- closed. The cost is the step: a 4-token verify plus 3 draft steps over 32-64K-context
       rows, on pdmux's shrunken decode SM group, takes ~4x a non-speculative decode step for 2.1x the tokens.
       Plain pdmux stays the strongest ITL baseline; ours keeps TTFT (chat -46% / -8% vs PDMUX) and ties throughput.
-      - [ ] **PD multiplexing + EDF (2026-10-17, running):** pdmux keeps decode on its own SM group, which is where its
+      - [x] **PD multiplexing + EDF (2026-10-17 14:32-15:42, 12 arms rc=0, 0 tracebacks / 0 fallbacks, EDF active in the
+        EDF arms (EDF_RUNTIME, priority scheduling on), pdmux on in every pdmux arm; output gate queued):** pdmux keeps decode on its own SM group, which is where its
         ITL comes from; our EDF wins chat TTFT by deadline-ordered admission, which is independent of chunking.
         pdmux's batch builder goes through `get_new_batch_prefill`, so worker-side EDF (deadline order, no latency
         model, no chunk cap; server-assigned deadlines) applies unchanged. Arms PDMUX | PDMUX_EDF | stock MTP (the
-        bar's baseline), C = 8 / 16, two repeats, same cohort / tree / session. `pdmux_edf_20261017.sh` (REP=1, 2). Script:
+        bar's baseline), C = 8 / 16, two repeats, same cohort / tree / session. `pdmux_edf_20261017.sh` (REP=1, 2).
+        Two-repeat means (rep 1 ; rep 2 in [summary](debug_kernel_server_perf/pdmux_mtp_20261017/pdmux_edf_20261017_summary.txt)):
+        tput / mean TTFT (s) / mean ITL (P99) ms, chat tok/s/user p1 / p50 / p99:
+        | C | arm | agent | chat | chat tok/s/user |
+        |---|---|---|---|---|
+        | 8 | stock MTP | 110.5 / 18.69 / 21.3 (423) | 1285 / 23.19 / 30.5 (478) | 7 / 42 / 168 |
+        | 8 | PDMUX | 140.9 / 12.91 / 15.4 (38) | 1613 / 10.67 / 13.7 (33) | 38 / 69 / 133 |
+        | 8 | **PDMUX + EDF** | 143.0 / 12.97 / 15.2 (36) | 1611 / **3.80** / 14.0 (33) | 33 / 68 / 132 |
+        | 16 | stock MTP | 107.7 / 43.14 / 27.2 (495) | 1223 / 51.36 / 31.1 (471) | 7 / 41 / 162 |
+        | 16 | PDMUX | 142.5 / 28.87 / 17.0 (41) | 1609 / 25.06 / 13.7 (32) | 37 / 72 / 130 |
+        | 16 | **PDMUX + EDF** | 142.2 / 29.37 / 16.1 (38) | 1610 / **17.45** / 14.0 (34) | 34 / 69 / 131 |
+        Repeat spread <=2% on every mean (chat TTFT 1.3%). **PDMUX + EDF vs stock MTP: C=8 agent tput +29.4%, TTFT
+        -30.6%, ITL -28.6%; chat tput +25.4%, TTFT -83.6%, ITL -54.2%. C=16 agent +32.1% / -31.9% / -40.8%; chat
+        +31.6% / -66.0% / -54.9%.** 11 of 12 metrics clear the bar (>=30% TTFT and ITL, >=10% throughput); the miss is
+        agent ITL at C=8 (-28.6%). EDF adds to pdmux exactly what it was meant to: chat TTFT -64% (C=8) / -30% (C=16)
+        with ITL and throughput unchanged. Against stock *non-speculative* LPT (2026-10-17 baseline run, same cohort,
+        other session) agent TTFT does not move (12.97 vs 13.20 s at C=8): cold 32-64K agent prefills are compute-
+        bound and EDF serves chat's earlier deadlines first. Agent-ITL lever next: pdmux's decode SM share
+        (`decode_bs_divisor` 36 -> 18 / 12, `pdmux_edf_div_20261017.sh`), after the output gate (`gate_pdmux_edf.sh`).
+        sglang `29842f52f`+ (tree `up_pdmux_mtp`). Script:
       `pdmux_mtp_ab_20261017.sh` (frozen cohort, C = 8 / 16 + ShareGPT 8 req/s; PDMUX | MTP_PDMUX |
       EDFR50_F2048, one tree, one session, graphs on). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).

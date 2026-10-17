@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.24 — PD multiplexing + worker-side EDF clears 11 of 12 bar metrics vs stock MTP (2026-10-17)
+
+- H200, frozen 32-64K TraceLab cohort at agent C = 8 / 16 + ShareGPT 8 req/s, two repeats (spread <=2%): pdmux + EDF vs
+  stock MTP -- C=8 agent +29% tput / -31% TTFT / -29% ITL, chat +25% / -84% / -54%; C=16 agent +32% / -32% / -41%,
+  chat +32% / -66% / -55%. EDF on top of pdmux cuts chat TTFT 64% / 30% with ITL and throughput unchanged.
+  `srv_correctness.py` gained `_EDF` arms; output gate and a decode-SM-share sweep queued.
+
 ## v1.20.23 — A5 closed: FA3 at state of the art; co-run bounded at 1.2% of serving GPU time (2026-10-17)
 
 - Serving bound for FA3 || FA2 co-running from TraceLab step traces: 1.2% of GPU time (mixed steps are prefill-

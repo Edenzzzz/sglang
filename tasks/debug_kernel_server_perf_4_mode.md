@@ -332,6 +332,16 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       dynamic scheduler. Serving decision: co-run when both roles carry real work (an agent append beside many
       verify rows), split otherwise -- to be wired into the serving split path and measured end to end.
       `bash a5_mixed_corun_tma_20261017.sh`.
+    - [x] **Serving bound for co-running (2026-10-17 14:2x, from the TraceLab C=4 step traces of 2026-10-16):** per
+      mixed step (prefill rows + decode/verify rows), FA3 time = causal prefill FLOPs at 500 TFLOP/s, FA2 time =
+      verify-row KV bytes at 3 TB/s; an ideal co-run saves min of the two. Our arm (EDF + deadline reservation,
+      10,629 steps, 1,784 mixed): modelled attention is 79% of mixed-step time, but the roles are badly
+      unbalanced -- min/max p10/p50/p90 0.01/0.03/0.18 -- so a perfect co-run saves **1.2% of all GPU time (2.1% of
+      mixed-step time)**; stock MTP 0.4%. A long-context prefill chunk dwarfs the verify rows beside it, which is
+      also why the 2026-10-13 serving overlap A/B found nothing. **Co-running cannot move serving metrics on agentic
+      workloads; FA3 prefill speed is the lever**, and those items already run at ~580-600 TFLOP/s (prefill 2048
+      @ 64K: 1.9 TFLOP per layer in 3.19 ms) with our role at parity with upstream. `corun_bound_from_steptrace.py`
+      on `steptrace_tracelab_20261016/rep1/tracelab_c4/{MTP,EDF_RESV}/server_*.log`.
   - [ ] A5.4 L2-locality work pairing (-14/-26% kernel time on two fixtures, 2026-10-14) on serving items.
   - [ ] A5.5 TMA multicast on agent-append items (zero-KV-load ceiling there 19-22%, vs ~3% on serving mixes).
   - [ ] A5.6 in-kernel cross-role backfill (`tma_store_wait`) on top of A5.0.

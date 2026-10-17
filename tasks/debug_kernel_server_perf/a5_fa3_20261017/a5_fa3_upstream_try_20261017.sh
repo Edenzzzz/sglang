@@ -17,11 +17,14 @@ PTMA=${PTMA:-0}
 # XN: extra nvcc flag set name (FUSED_EXTRA_NVCC), each set built into its own extension dir.
 XN=${XN:-none}
 case $XN in none) export FUSED_EXTRA_NVCC= ;; ndebug) export FUSED_EXTRA_NVCC=-DNDEBUG ;;
-  fa) export FUSED_EXTRA_NVCC="-DNDEBUG -DCUTLASS_ENABLE_GDC_FOR_SM90 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED -DCUTLASS_DEBUG_TRACE_LEVEL=0" ;; esac
+  fa) export FUSED_EXTRA_NVCC="-DNDEBUG -DCUTLASS_ENABLE_GDC_FOR_SM90 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED -DCUTLASS_DEBUG_TRACE_LEVEL=0" ;;
+  # c2: flash-attention's ClusterM=2 (TMA K/V multicast to the two CTAs of a cluster); the dedicated launch must form
+  # the same cluster.
+  c2) export FUSED_EXTRA_NVCC="-DNDEBUG -DFLASHINFER_FA3_CLUSTER_M=2" FLASHINFER_FUSED_CLUSTER=2 ;; esac
 export SGLANG_FUSED_MERGED_DIR=$W/merged_a5 TORCH_EXTENSIONS_DIR=$W/torch_ext_a5_upstream$([ "${UPS:-1}" = 0 ] && echo _fimain)$([ $PTMA = 1 ] && echo _ptma)$([ $XN != none ] && echo _$XN)
 # fa3_upstream.cuh includes ../../../../../flash-attention/hopper relative to the merged include tree.
 mkdir -p $W/merged_a5; ln -sfn $W/flash-attention $W/merged_a5/flash-attention
-export FUSED_PAGED_TMA_BUILD=0 FUSED_CLUSTER=1 FLASHINFER_FUSED_CLUSTER=1 FUSED_FA3_CLUSTER_PAIR=0 FUSED_FA3_TMA_MULTICAST=0
+export FUSED_PAGED_TMA_BUILD=0 FUSED_CLUSTER=1 FLASHINFER_FUSED_CLUSTER=${FLASHINFER_FUSED_CLUSTER:-1} FUSED_FA3_CLUSTER_PAIR=0 FUSED_FA3_TMA_MULTICAST=0
 export FA3_UPSTREAM=${UPS:-1} FUSED_FAST_MATH=1
 export TIME_AB=1 TIME_ITERS=100 SEED=31 FA2_REQUESTS=${FA2_OVERRIDE:-,}
 unset FUSED_NOSPLIT FLASHINFER_FUSED_SYMMETRIC FLASHINFER_FUSED_SKIP_FA3 FA3_SKIP_KV_LOAD TIME_FORCE

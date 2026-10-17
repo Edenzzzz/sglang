@@ -134,7 +134,16 @@ static mixture.
   +47% / -87% / -61%; chunk 256 agent +45% / +11% / -71%, chat +48% / -76% / -76%. With 2048 / 1024 above, the agent
   pair moves along a frontier -- (-33%, -5%), (-31%, -13%), (-21%, -45%), (+11%, -71%) -- and between 1024 and 512 it
   trades linearly, so no single chunk size clears both agent metrics; at chunk 512 agent TTFT (-21%) is the only miss.
-  A chunk size chosen per step by deadline and ITL budget (as the pdmux sharing rule does) is the next lever.
+  **Per-step chunk from EDF deadlines (`apply_edf_deadline_chunk.py` + `_long.py`, `DEADLINE_CHUNK=512:2048:<tok/s>`,
+  8 workers, 0 tracebacks / 0 fallbacks):** small chunk unless a late request (deadline order, cumulative uncached
+  tokens at the small chunk's pace) needs it. Pace 3000 / 2000 tok/s: agent +13% / -35% / -5%, +21% / -33% / -11%; with
+  only requests longer than one small chunk counting as late: agent +13% / -36% / -2%, chat +21% / -92% / -23%. Under
+  this load the agent backlog is always behind its deadlines, so the TTFT-driven choice degenerates to the large chunk;
+  an ITL budget would degenerate to the small one (chunk 512: -21% / -45%). **On H20 the 4-mode MTP schedule's agent
+  TTFT / ITL trade is physical -- prefill work shares each mixed step with decode -- and per-step chunk choice moves
+  along the same frontier; it does not clear both by 30%.** Spatial isolation (pdmux, non-speculative) clears all 12
+  vs stock + MTP; the 4-mode MTP schedule clears 10 of 12 at chunk 512 (agent TTFT the miss) or at chunk >= 1024
+  (agent and chat ITL the misses).
 - [x] **Single-GPU winner on 8 H20s (2026-10-17):** PD multiplexing + worker-side EDF with uncached-token
   deadlines (divisor 30) cleared all 12 bar means against stock MTP on one H200 (main doc, Direct baselines). Here it
   runs on every colocated worker under cache-affinity routing (`mn_run.py` suffix `_pdmux`; `mn_node.sh` PDMUX /

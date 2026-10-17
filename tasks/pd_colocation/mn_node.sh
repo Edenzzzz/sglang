@@ -140,6 +140,8 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
     ARGS+=(--enable-pdmux --chunked-prefill-size -1 --disable-overlap-schedule --pdmux-config-path $LOG/pdmux_r${ROLE}_g${g}.yaml)
   fi
   [ "${EDF_UNCACHED:-0}" = 1 ] && export SGLANG_EDF_UNCACHED_DEADLINE=1
+  # DEADLINE_CHUNK="small:large:tok_s": per-step prefill chunk from EDF deadlines (apply_edf_deadline_chunk.py).
+  [ -n "${DEADLINE_CHUNK:-}" ] && export SGLANG_EDF_DEADLINE_CHUNK=$DEADLINE_CHUNK
   # PDMUX_SHARE=N: run a split-prefill batch on the whole GPU (pdmux group 0) when >= N uncached prompt tokens are
   # waiting (apply_pdmux_backlog_share.py); 0 keeps pdmux's SM split always.
   [ "${PDMUX_SHARE:-0}" != 0 ] && export SGLANG_PDMUX_SHARE_BACKLOG_TOKENS=$PDMUX_SHARE

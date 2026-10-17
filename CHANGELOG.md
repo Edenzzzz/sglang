@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.41 — 4-mode MTP: per-step deadline chunk choice stays on the same TTFT / ITL frontier (2026-10-18)
+
+- `apply_edf_deadline_chunk.py`: the TTFT-driven per-step chunk degenerates to the large chunk under load (agent ITL
+  -2..-11% vs stock + MTP). With chunk 512, the 4-mode MTP schedule clears 10 of 12 metrics; agent TTFT (-21%) misses.
+
 ## v1.20.40 — 4-mode MTP chunk sweep on 8 H20s: agent TTFT / ITL frontier, no single chunk clears both (2026-10-18)
 
 - Chunk 512: everything clears vs stock + MTP except agent TTFT (-21%): agent +37% / -21% / -45%, chat +47% / -87% / -61%.

@@ -10,7 +10,7 @@ export SID=bb854a10b8954223 NPODS=4 CHAT_SHAREGPT=1 MIN_CTX=32768 MAX_CTX=65536 
 export AGENT_CONC=16 SESSIONS=48 CHAT_RATE=${CHAT_RATE:-16}
 export CHAT_N=$((CHAT_RATE * 120)); [ $CHAT_N -lt 2400 ] && CHAT_N=2400
 for CH in ${CHUNKS:-2048 1024}; do
-  RUN_TAG=_8g_4mode_unc_ch${CH}_r${CHAT_RATE} KERNEL=mtpsplit PREEMPT=1 CHUNK=$CH EDF_UNCACHED=1 \
+  RUN_TAG=_8g_4mode_unc_ch${CH}${DEADLINE_CHUNK:+_dl${DEADLINE_CHUNK//:/-}}_r${CHAT_RATE} KERNEL=mtpsplit PREEMPT=1 CHUNK=$CH EDF_UNCACHED=1 \
     python3 -u mn_run.py coloc_cache_edf_mtp
 done
 echo FOURMODE_DONE

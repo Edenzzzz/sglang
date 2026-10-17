@@ -49,6 +49,19 @@ after the kernel items close (<=16 GPUs).
     MN_CP=i18n-bd python3 tasks/pd_colocation/mn_ab_figure.py figs/h200_fourmode_best_reps_20261018
     stock_mtp=coloc_sgl_mtps_h200_c8,ours_4mode=coloc_cache_edf_mtp_h200_4mode_unc_ch2048_dl1024-2048-6000_c8` (stock rep 1
     is directory `..._c8b`, linked as `_c8_rep1`; `_c8` is the aborted metrics-port attempt).
+  - [x] 2026-10-18 where chat ITL goes, and a step-time budget on the chunk (negative). Chat ITL is the mean step
+    interval; split by interval (rep 2, share of chat ITL time): stock < 10 ms 21% / 20-80 ms 31% / > 80 ms 34% (mean
+    237 ms); ours 24% / 46% / 16% (mean 110 ms -- 2048 chunks over 32-64K prefixes). `apply_edf_step_budget.py`
+    (`STEP_BUDGET=budget_ms:a:b`: largest chunk with a*c + b*c*(prefix + c/2) <= budget, a=0.02, b=5e-7) tests whether
+    shortening deep-context mixed steps buys chat ITL. vs the two stock reps' means: budget 50 ms on 1024/2048 (caps
+    verified depth-dependent: 2048 -> 1101 at a 50K prefix, -> 1902 at 12K; 782 capped steps; >= 71001 split calls; 0
+    tracebacks / fallbacks) agent +37.9% / -21.8% / -34.6%, chat -65.7% / -23.5% -- worse TTFT, same chat ITL (12.5 vs
+    12.3 ms). The first sweep (budgets 60 / 80 on 1024/4096) read `prefix_len`, which is not refreshed between chunks,
+    so it capped by token count only (~3000 / ~4000), not by depth -- not a test of the rule (agent +40% / -25.1% /
+    -34.6%, chat -68.3% / -22.3%; +42.4% / -26.2% / -32.3%, -69.4% / -21.1%). Conclusion: at a fixed prefill total,
+    re-slicing it does not move the mean step interval chat sees; 1024/2048 stays best. sglang `708cd9dfe` + this
+    commit; `SKIP_BASE=1 CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 STEP_BUDGET=50:0.02:5e-7 REP_SUFFIX=_v2 bash
+    tasks/pd_colocation/mn_h200_fourmode_20261018.sh` (patch applied on the pod tree, removed after).
   - [x] 2026-10-18 output gate on this pod, PASS (`tasks/pd_colocation/gate_h200_fourmode_20261018.sh`, srv_correctness
     vs stock MTP; driver now takes SRV_ARGS and counts mixed composition records). Noise floor MTP_REP: long prompts agree
     >= 18 tokens, short >= 63; null case MTP_C2048 (stock MTP at the config's chunk 2048): long >= 11, short 0 (s1's

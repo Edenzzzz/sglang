@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.47 — Step-time budget on the 4-mode chunk: negative (2026-10-18)
+
+- `apply_edf_step_budget.py` + `STEP_BUDGET` knob (mn_node.sh / mn_run.py / mn_h200_fourmode): caps the chunk to a
+  predicted mixed-step time over its prefix. Budget 50 ms on 1024/2048: agent TTFT -21.8% (vs -29.3%), chat ITL
+  unchanged (-23.5%). A first 60 / 80 ms sweep did not see depth (stale `prefix_len`), recorded as such.
+
 ## v1.20.46 — H200 best 4-mode MTP setting repeated, with per-request error bars (2026-10-18)
 
 - Rep 2: agent +42% / -28.9% / -32.0%, chat TTFT -71.8% / ITL -22.8% vs stock MTP; two-rep means agent +47% / -29.3% /

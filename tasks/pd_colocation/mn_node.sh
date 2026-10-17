@@ -142,6 +142,8 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   [ "${EDF_UNCACHED:-0}" = 1 ] && export SGLANG_EDF_UNCACHED_DEADLINE=1
   # DEADLINE_CHUNK="small:large:tok_s": per-step prefill chunk from EDF deadlines (apply_edf_deadline_chunk.py).
   [ -n "${DEADLINE_CHUNK:-}" ] && export SGLANG_EDF_DEADLINE_CHUNK=$DEADLINE_CHUNK
+  # STEP_BUDGET="budget_ms:a:b": cap that chunk to a predicted mixed-step time over its prefix (apply_edf_step_budget.py).
+  [ -n "${STEP_BUDGET:-}" ] && export SGLANG_EDF_STEP_BUDGET=$STEP_BUDGET
   # PDMUX_SHARE=N: run a split-prefill batch on the whole GPU (pdmux group 0) when >= N uncached prompt tokens are
   # waiting (apply_pdmux_backlog_share.py); 0 keeps pdmux's SM split always.
   [ "${PDMUX_SHARE:-0}" != 0 ] && export SGLANG_PDMUX_SHARE_BACKLOG_TOKENS=$PDMUX_SHARE
@@ -167,7 +169,7 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # of speculation on this GPU from that of mixing prefill with verify.
   if [ "${SPEC:-0}" != 0 ]; then
     ARGS+=(--speculative-algorithm EAGLE3 --speculative-draft-model-path $W/qwen7b_eagle3_sgl
-           --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4)
+           --speculative-num-steps ${SPEC_STEPS:-3} --speculative-eagle-topk 1 --speculative-num-draft-tokens ${SPEC_TOKENS:-4})
     [ "$MODE" = coloc ] && [ "$SPEC" = 1 ] && export SGLANG_ALLOW_MIXED_CHUNK_SPEC=1 SGLANG_MIXED_SPEC=1
     # Load + context gate (mixed_spec_ctx_queue_gate.patch): mix only when the prefill carries >= 8K
     # context or >= 4 requests wait; otherwise the prefill runs alone, as in stock MTP.

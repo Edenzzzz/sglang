@@ -29,7 +29,12 @@ after the kernel items close (<=16 GPUs).
   (-29.9%) and ITL and on chat TTFT; chat ITL (-22%) is the remaining miss** (single repeats; chat throughput is the
   offered load). Repeat 2 of pace 6000: agent +48.0% / -28.9% / -33.3%, chat -72.3% / -23.0%. **Large chunk 2048 instead of
   4096 (`DEADLINE_CHUNK=1024:2048:6000`, clean): agent +51.8% / -29.7% / -40.7%, chat TTFT -73.7% / ITL -26.7%** --
-  better on every metric; remaining gaps agent TTFT (0.3 point) and chat ITL (3.3 points).
+  better on every metric; remaining gaps agent TTFT (0.3 point) and chat ITL (3.3 points). **Chunk pairs 768/2048 and 1024/1536 (clean):** agent +50% / -29.1% / -41.9%, chat -73.1% / -26.1%; agent +44% /
+  -25.4% / -36.0%, chat -69.0% / -26.1%. Across all five chunk settings chat ITL stays at 12.1-12.7 ms (-23..-27% vs
+  stock MTP's 16.5 ms) whatever the mixed-step length, so the remaining chat-ITL gap is the MTP decode step itself
+  (3 draft steps + a 4-token verify at ~2.1 accepted tokens), not prefill interference; -30% needs <= 11.55 ms. Best
+  setting 1024/2048: agent +52% / -29.7% / -40.7%, chat TTFT -73.7% / ITL -26.7%. Output gate on the 4-mode arms on this
+  re-forked pod not yet run.
 - [ ] Not met: vs stock colocation *without* speculation on H20 (agent TTFT at a ~5.9 s compute floor; best -18% /
   -21%), and node-count scaling (needs > 16 GPUs). Both wait on the user: which baseline the bar uses, and the GPU cap.
 

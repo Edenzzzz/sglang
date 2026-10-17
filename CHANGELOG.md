@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.43 — H200 4-mode MTP chunk pairs: chat ITL floor ~12 ms set by the MTP decode step (2026-10-18)
+
+- Best 4-mode MTP setting (deadline chunk 1024/2048) vs stock MTP: agent +52% / -29.7% / -40.7%, chat TTFT -73.7% /
+  ITL -26.7%. Chat ITL is 12.1-12.7 ms at every chunk setting -- the spec-decode step, not prefill, bounds it.
+
 ## v1.20.42 — H200 re-forked; 4-mode MTP schedule reaches the bar except chat ITL (2026-10-18)
 
 - Re-forked H200 (`d6a80befdd4e4da5`) provisioned from the H20 recipe (`mn_provision_h200_20261018.sh`); harness gained

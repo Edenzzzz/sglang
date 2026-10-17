@@ -182,6 +182,12 @@ static mixture.
     against the (-30%, -30%) bar**; raising N buys ITL with TTFT, lowering it below 32K stops helping. On H20 the
     bar is met against stock colocation + MTP except agent ITL at 32 req/s (-18.5%), and not met against stock
     non-speculative colocation.
+  - [x] **SLO-check routing over these workers (2026-10-17, negative):** router `cache_slo` (calibrated H20 prefill
+    curve, 10 s TTFT SLO, resident check off, no-feasible -> top-hit) over pdmux + EDF + 32K backlog sharing, chat 16
+    req/s, 8 workers healthy, 0 tracebacks / 0 fallbacks: agent 302 / 6.18 s / 20.6 ms, chat 1.47 s / 19.3 ms -- vs
+    cache-affinity routing on the same workers (303 / 5.91 s / 22.0 ms; 1.23 s / 20.8 ms) no gain: moving a cold agent
+    prompt off its backed-up cache node costs the hit about what it saves in queueing. `bash
+    tasks/pd_colocation/mn_pdmux_slo_8gpu_20261017.sh`.
 
 - [ ] **7. Inter-node routing: predict whether a request meets its TTFT and ITL SLO on node i, given
       i's estimated hit length x_i and current load** (added 2026-10-17 on the user's request; needs

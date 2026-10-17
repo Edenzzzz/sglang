@@ -1028,8 +1028,15 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       five long prompts diverge at 48-99 tokens, one short at token 2 -- and acceptance length 3.07 vs 3.31 (-7%). Under
       greedy speculation the output is fixed by the target's verify, so divergence is target numerics (pdmux decodes on
       a different SM count, so flashinfer's split-KV partition differs); the acceptance drop is the open question.
-      Formal gate running: `gate_pdmux_mtp.sh` (srv_correctness arms MTP, MTP_REP = noise floor, MTP_PDMUX, graphs on;
-      the driver gained a PDMUX arm). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
+      **Formal gate (`bash /dev/shm/w/gate_pdmux_mtp.sh`, srv_correctness, graphs on; the driver gained a PDMUX arm):
+      MTP_PDMUX PASS by the rule** (long prompts agree on their first 8 tokens; 0 tracebacks, 0 fallbacks), but far
+      from the floor: stock MTP repeat vs MTP is fully deterministic (min common prefix short 1 200 / long 96), MTP_PDMUX
+      short 1 / long 11. Per request: every first token matches; 6 / 8 long prompts identical over 96 tokens (l1, l5
+      diverge at 18 / 11); the 1 200-token background rows -- which decode on the decode SM group while pdmux resizes it
+      as prefills come and go, changing the kernels' partition -- diverge at 1-723, one identical; several identical
+      outputs show different acceptance, i.e. the draft saw differently rounded inputs. Null case running to separate
+      pdmux's own numerics from the patch: `gate_pdmux_nospec.sh` (stock LPT vs LPT + `--enable-pdmux`, no speculation,
+      paths the patch does not touch). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).
   - [ ] **MuxWise = sglang `--enable-pdmux` (2026-10-13; superseded by the 2026-10-17 run above):** no public MuxWise repo; upstream
     sglang's PD-multiplexing (GreenContext SM split, layer-split prefill) is that design and is in

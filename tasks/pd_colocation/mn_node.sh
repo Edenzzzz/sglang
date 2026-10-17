@@ -82,7 +82,7 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # which lands on the 50-port grid other workers on the host claim; the worker then hung at
   # "Init parallel begin." until the supervisor killed it (pod 2 GPU 0: 3 x 6 min, 2026-10-16).
   NCCL=$(pick $((ROLE * 2 + g + 104729 + RANDOM)))
-  ARGS=(--model $W/qwen7b --attention-backend flashinfer --mem-fraction-static 0.85
+  ARGS=(--model $W/qwen7b --attention-backend flashinfer --mem-fraction-static ${MEM_FRAC:-0.85}
         --host :: --port $PORT --nccl-port $NCCL --context-length 131072 --watchdog-timeout 600
         --json-model-override-args '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}')
   # Shared L3 prefix cache (goal points 2 and 4): every colocated worker writes the prefixes it
@@ -125,6 +125,8 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
     export SGLANG_EDF_PREEMPT_CHUNK=1 SGLANG_EDF_RESERVE_EARLIER=1 SGLANG_EDF_PREEMPT_MAX_TOKENS=1000000000
   fi
   [ -n "${CHUNK:-}" ] && ARGS+=(--chunked-prefill-size $CHUNK)
+  # MEM_FRAC: static memory fraction. PDMUX arms need ~0.70 on H20: prefill is unchunked, and at 0.85 a 32-64K agent
+  # prefill OOMed with 6.3 GB left after the KV pool (2026-10-17).
   # PDMUX=1: PD multiplexing (decode and layer-split prefill on separate SM groups, prefill unchunked, overlap off);
   # PDMUX_DIV is its decode_bs_divisor (decode SM share), EDF_UNCACHED=1 scales EDF TTFT deadlines with uncached tokens.
   if [ "${PDMUX:-0}" = 1 ]; then

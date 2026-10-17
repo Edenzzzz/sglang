@@ -127,6 +127,13 @@ static mixture.
   PDMUX_DIV / EDF_UNCACHED; uncached-deadline patch applied on all four pods), vs stock colocation with MTP and stock
   colocation without speculation, same session, agent C=16 + chat 16 / 32 req/s. On H20 pdmux forms 5 SM groups
   (78 SMs: 56/22, 48/30, 40/38 prefill/decode) instead of 8. `bash tasks/pd_colocation/mn_pdmux_8gpu_20261017.sh`.
+  *Run 1 (19:33-20:3x): our arm invalid -- 3 of 8 workers OOMed on their first unchunked 32-64K agent prefills (6.3 GB
+  left after the KV pool at mem fraction 0.85; H20 has 95 GB vs H200's 140 GB), so the router lost them, the agent
+  bench never completed and chat served 424 / 2400. The baselines in that session are clean (8 workers, 0 tracebacks /
+  0 fallbacks): stock colocation + MTP at chat 16 / 32 req/s: agent TTFT 15.7 / 22.8 s, ITL 50.9 / 42.1 ms, tput 162 /
+  146; chat TTFT 16.8 / 29.8 s, ITL 129.6 / 74.7 ms, tput 2214 / 3467. Stock colocation without speculation: agent
+  7.2 / 7.4 s, 27.9 / 43.9 ms, 266 / 217; chat 2.7 / 2.8 s, 27.3 / 69.2 ms, 3243 / 5432.* Our arm reruns at
+  `MEM_FRAC=0.70` (`OURS_ONLY=1 bash mn_pdmux_8gpu_20261017.sh`).
 
 - [ ] **7. Inter-node routing: predict whether a request meets its TTFT and ITL SLO on node i, given
       i's estimated hit length x_i and current load** (added 2026-10-17 on the user's request; needs

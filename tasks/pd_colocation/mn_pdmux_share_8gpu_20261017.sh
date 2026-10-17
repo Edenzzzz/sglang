@@ -11,7 +11,7 @@ export AGENT_CONC=16 SESSIONS=48
 for spec in ${POINTS:-16:32768 16:131072}; do
   R=${spec%%:*}; T=${spec##*:}
   N=$((R * 120)); [ $N -lt 2400 ] && N=2400
-  export CHAT_RATE=$R CHAT_N=$N RUN_TAG=_8g_pdmuxshare${T}_c16_r${R}
+  export CHAT_RATE=$R CHAT_N=$N RUN_TAG=_8g_pdmuxshare${T}_c16_r${R}${REP_SUFFIX:-}
   KERNEL=lpt PREEMPT=0 EDF_UNCACHED=1 PDMUX_DIV=30 MEM_FRAC=0.70 PDMUX_SHARE=$T python3 -u mn_run.py coloc_cache_edf_pdmux
 done
 echo PDMUX_SHARE_DONE

@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.33 — 8 H20s: pdmux + EDF + 48K backlog sharing clears all 12 bar means vs stock colocation + MTP (2026-10-17)
+
+- Two repeats, both clean: 16 req/s agent +63% / -46% / -63%, chat +46% / -86% / -86%; 32 req/s agent +56% / -56% /
+  -30.9% (per rep -32.8 / -29.0%), chat +67% / -86% / -51%. Against stock colocation without speculation the agent
+  pair stays short of 30% (TTFT floor ~5.9 s on this cohort).
+
 ## v1.20.32 — H20 TP=2: lowers TTFT, raises ITL for every scheduler; pdmux + TP=2 hangs (2026-10-17)
 
 - One TP=2 worker per pod: stock agent TTFT 7.18 -> 4.76 s but ITL 27.9 -> 45.1 ms; ours (EDF, uncached deadlines)

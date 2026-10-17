@@ -182,12 +182,17 @@ static mixture.
     against the (-30%, -30%) bar**; raising N buys ITL with TTFT, lowering it below 32K stops helping. On H20 the
     bar is met against stock colocation + MTP except agent ITL at 32 req/s (-18.5%), and not met against stock
     non-speculative colocation.
-    - [ ] **N=48K, rep 1 (2026-10-17 22:3x-22:5x, 8 workers, 0 tracebacks / 0 fallbacks):** chat 16 req/s agent 259 /
+    - [x] **N=48K, rep 1 (2026-10-17 22:3x-22:5x, 8 workers, 0 tracebacks / 0 fallbacks):** chat 16 req/s agent 259 /
       8.49 s / 19.0 ms, chat 2.20 s / 17.5 ms; 32 req/s agent 228 / 10.08 s / 28.3 ms, chat 5766 / 4.05 s / 35.1 ms.
       **vs stock colocation + MTP (same cohort): all 12 clear -- 16 req/s agent +59% / -46% / -63%, chat +46% / -87% /
       -87%; 32 req/s agent +56% / -56% / -33%, chat +66% / -86% / -53%.** vs stock colocation without speculation:
       16 req/s agent -3% / +18% / -32%, chat TTFT -20% / ITL -36%. Smallest margin vs MTP: agent ITL at 32 req/s
-      (-32.8%); repeat 2 running (`POINTS="16:49152 32:49152" RUN_TAG suffix _rep2`).
+      (-32.8%). **Repeat 2 (8 workers, 0 tracebacks / 0 fallbacks): 16 req/s agent 271 / 8.39 s / 18.6 ms, chat 2.40 s /
+      18.7 ms; 32 req/s agent 227 / 9.94 s / 29.9 ms, chat 5838 / 4.43 s / 38.1 ms. Two-repeat means vs stock
+      colocation + MTP: 16 req/s agent +63% / -46% / -63%, chat +46% / -86% / -86%; 32 req/s agent +56% / -56% /
+      -30.9%, chat +67% / -86% / -51% -- all 12 clear in the mean;** per repeat the 32 req/s agent ITL is -32.8 /
+      -29.0%, so that one metric is borderline. Command: `POINTS="16:49152 32:49152" [REP_SUFFIX=_rep2] bash
+      tasks/pd_colocation/mn_pdmux_share_8gpu_20261017.sh`.
   - [x] **SLO-check routing over these workers (2026-10-17, negative):** router `cache_slo` (calibrated H20 prefill
     curve, 10 s TTFT SLO, resident check off, no-feasible -> top-hit) over pdmux + EDF + 32K backlog sharing, chat 16
     req/s, 8 workers healthy, 0 tracebacks / 0 fallbacks: agent 302 / 6.18 s / 20.6 ms, chat 1.47 s / 19.3 ms -- vs

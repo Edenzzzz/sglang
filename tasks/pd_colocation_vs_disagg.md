@@ -706,6 +706,15 @@ static mixture.
         except agent ITL at 32 req/s (-12%). The deadline rule only weighs TTFT, so it lands on the TTFT side of the
         frontier; an ITL term (resident rows' step budget) is the missing half for the per-step operating point.
         `POINTS="16:0 32:0" PDMUX_SHARE_DEADLINE=1 bash tasks/pd_colocation/mn_pdmux_share_8gpu_20261017.sh`.
+      - [x] **With the ITL term (2026-10-17, `apply_pdmux_itl_budget.py`, `PDMUX_ITL_BUDGET=24`):** the decode loop keeps
+        an EWMA of the decode-step interval; a TTFT-late batch shares only while that EWMA is under 24 ms. 8 workers, 0
+        tracebacks / 0 fallbacks, sharing held back on a few batches per worker. Agent tput / TTFT / ITL ; chat:
+        16 req/s 281 / 9.28 s / 17.8 ms ; 3223 / 1.99 s / 16.1 ms; 32 req/s 212 / 13.87 s / 22.2 ms ; 5670 / 6.29 s /
+        30.0 ms. **vs stock colocation + MTP all 12 clear with wide margins: 16 req/s agent +73% / -41% / -65%, chat +46%
+        / -88% / -88%; 32 req/s agent +45% / -39% / -47%, chat +64% / -79% / -60% (smallest margin -39%; single rep).**
+        vs stock colocation without speculation: ITL -36..-57% but agent TTFT +29% / +88% -- the ITL term moves the
+        operating point to the ITL side, and against that baseline TTFT is bounded by the ~5.9 s compute floor.
+        `POINTS="16:0 32:0" PDMUX_SHARE_DEADLINE=1 PDMUX_ITL_BUDGET=24 bash tasks/pd_colocation/mn_pdmux_share_8gpu_20261017.sh`.
 
       **The claim.** Our method is 4-mode colocation plus an EDF/SLO router with a tunable
       **P/D admission ratio**. Each baseline is one fixed point in that policy space, so our

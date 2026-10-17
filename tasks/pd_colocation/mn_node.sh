@@ -147,6 +147,8 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # (apply_pdmux_deadline_share.py); PDMUX_PREFILL_TOK_S is the calibrated full-GPU prefill rate.
   if [ "${PDMUX_SHARE_DEADLINE:-0}" = 1 ]; then
     export SGLANG_PDMUX_SHARE_DEADLINE=1 SGLANG_PDMUX_PREFILL_TOK_S=${PDMUX_PREFILL_TOK_S:-5019}
+    # PDMUX_ITL_BUDGET (ms): share only while the decode-interval EWMA is below it (apply_pdmux_itl_budget.py).
+    export SGLANG_PDMUX_ITL_BUDGET_MS=${PDMUX_ITL_BUDGET:-0}
   fi
   # WORKER_EXTRA: extra sglang flags for diagnostics (e.g. --enable-metrics, which also turns on HiCache's
   # storage metrics: prefetch outcomes and deferred tokens by reason on /metrics).

@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.36 — per-step SM sharing with TTFT deadlines + ITL budget: all 12 vs stock + MTP by >= 39% on 8 H20s (2026-10-17)
+
+- `apply_pdmux_itl_budget.py`: a deadline-late prefill batch shares the GPU only while the decode-interval EWMA is under
+  SGLANG_PDMUX_ITL_BUDGET_MS. At 24 ms, 16 / 32 req/s: agent +73% / -41% / -65%, +45% / -39% / -47%; chat +46% / -88%
+  / -88%, +64% / -79% / -60% vs stock colocation + MTP. vs stock non-speculative colocation: ITL -36..-57%, TTFT worse.
+
 ## v1.20.35 — per-step SM sharing from EDF deadlines (PD item 5) (2026-10-17)
 
 - `apply_pdmux_deadline_share.py`: share the whole GPU for a prefill batch only when the deadline-ordered queue would

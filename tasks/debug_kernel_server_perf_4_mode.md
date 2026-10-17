@@ -979,7 +979,17 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     tail is far better too (chat p1 35-37 vs 17-18 tok/s/user). Against stock MTP ours still wins (C=16: agent
     throughput +30%, agent TTFT -27%, chat TTFT -55%, chat ITL -23%), but against this direct baseline the >=30% ITL
     bar is not met, and only chat TTFT clears it (C=8). PD multiplexing is non-speculative; the same SM split under
-    MTP's verify rows is the open combination. Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
+    MTP's verify rows is the open combination. **Tried directly (09:48-09:51, `pdmux_mtp_conc_20261017.sh`,
+    `pdmux_mtp_eager_20261017.sh`): stock EAGLE3 chain MTP + `--enable-pdmux` does not run in this tree.** The only
+    explicit rejection is for UNO tree mode, and the server does enable PD multiplexing (8 stream groups, prefill/decode
+    SMs 132/0 ... 0/132), but (1) with CUDA graphs it dies capturing the EAGLE3 draft graphs (`AttributeError: 'NoneType'
+    object has no attribute 'decode_wrappers'` -- the draft graph runner hard-codes `enable_pdmux = False` while the
+    pdmux attention backends are per stream group), and (2) as a labelled eager diagnostic (`--disable-cuda-graph`) it
+    reaches `event_loop_pdmux` and fails on the first draft step (`AssertionError` in
+    `speculative/topk1.py:95 draft_topk1_postprocess`): pdmux's event loop runs split prefill batches and decode on
+    separate stream groups, and EAGLE's draft/verify state assumes the standard loop. Combining them is scheduler
+    integration work (drive the EAGLE worker's draft and verify from the decode stream group while prefill runs on the
+    other), not a flag. Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).
   - [ ] **MuxWise = sglang `--enable-pdmux` (2026-10-13; superseded by the 2026-10-17 run above):** no public MuxWise repo; upstream
     sglang's PD-multiplexing (GreenContext SM split, layer-split prefill) is that design and is in

@@ -195,6 +195,11 @@ static mixture.
     stock colocation without speculation 7.18 s; the bar's -30% would be 5.03 s, **below the compute floor**. Against
     that baseline the agent-TTFT target is unreachable on H20 by any scheduling, routing or SM-split change; only
     less prefill work (more cache reuse or less compute per token) could move it.
+  - [ ] **TP=2 per pod (2026-10-17, `TP=2` in `mn_node.sh` / `mn_run.py`, `mn_tp2_8gpu_20261017.sh`):** one worker per
+    pod over both GPUs halves the per-request prefill floor. *pdmux + TP=2 hangs:* 4 workers came up, served until
+    21:33, then every GPU sat at 100% with no log progress for 30 min (green-context streams vs TP collectives); killed
+    by PID. Running instead: EDF with uncached deadlines on chunked colocation + cache-affinity routing vs stock
+    colocation, both TP=2, chat 16 req/s.
 
 - [ ] **7. Inter-node routing: predict whether a request meets its TTFT and ITL SLO on node i, given
       i's estimated hit length x_i and current load** (added 2026-10-17 on the user's request; needs

@@ -178,7 +178,10 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # One file per GPU: the two supervisors run concurrently, and a shared file rewritten via
   # one temp name lost an entry (pods 0, 2, 6 in coloc_cache), stalling the arm for 25 min.
   echo "$g $PORT $BOOT" > $LOG/ports_r${ROLE}_g${g}.tmp && mv $LOG/ports_r${ROLE}_g${g}.tmp $LOG/ports_r${ROLE}_g${g}.txt
-  CUDA_VISIBLE_DEVICES=$g setsid nohup $W/venv/bin/python -m sglang.launch_server "${ARGS[@]}" \
+  # TP=2: one worker per pod over both GPUs (tensor parallel), so a long cold prefill spreads over two GPUs.
+  local devs=$g
+  if [ "${TP:-1}" = 2 ]; then devs=0,1; ARGS+=(--tp-size 2); fi
+  CUDA_VISIBLE_DEVICES=$devs setsid nohup $W/venv/bin/python -m sglang.launch_server "${ARGS[@]}" \
     > $LOG/worker_r${ROLE}_g${g}.log 2>&1 < /dev/null &
   echo $! > $LOG/pid_r${ROLE}_g${g}
   echo "worker role=$ROLE gpu=$g port=$PORT boot=$BOOT mode=$MODE pid=$!"
@@ -205,7 +208,7 @@ supervise() {
     mv $LOG/worker_r${ROLE}_g${g}.log $LOG/worker_r${ROLE}_g${g}.bindfail$attempt.log
   done
 }
-for g in 0 1; do
+for g in $([ "${TP:-1}" = 2 ] && echo 0 || echo 0 1); do
   supervise $g > $LOG/supervise_r${ROLE}_g${g}.log 2>&1 < /dev/null &
   disown
 done

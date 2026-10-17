@@ -90,7 +90,7 @@ def run_arm(arm):
            f"TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')} PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')} "
            f"SGL_PY={os.environ.get('SGL_PY', '')} HC_PREFETCH={os.environ.get('HC_PREFETCH', 'best_effort')} HC_WRITE={os.environ.get('HC_WRITE', '')} HC_HOST_MODE={os.environ.get('HC_HOST_MODE', '')} WORKER_EXTRA=\"{os.environ.get('WORKER_EXTRA', '')}\" "
            f"PDMUX={int(pdmux)} PDMUX_DIV={os.environ.get('PDMUX_DIV', '30')} EDF_UNCACHED={os.environ.get('EDF_UNCACHED', '0')} "
-           f"MEM_FRAC={os.environ.get('MEM_FRAC', '0.85')} PDMUX_MANUAL='{os.environ.get('PDMUX_MANUAL', '')}' PDMUX_SHARE={os.environ.get('PDMUX_SHARE', '0')}")
+           f"MEM_FRAC={os.environ.get('MEM_FRAC', '0.85')} PDMUX_MANUAL='{os.environ.get('PDMUX_MANUAL', '')}' PDMUX_SHARE={os.environ.get('PDMUX_SHARE', '0')} TP={os.environ.get('TP', '1')}")
     if hc:
         rc, out = C.run(0, f"mkdir -p {log}; ip=$(hostname -I | tr ' ' '\\n' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1); "
                            "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\"); "
@@ -124,7 +124,7 @@ def run_arm(arm):
         check = " ".join(f"'{u}/health'" for u, _, _ in all_w)
         rc, out = C.run(0, f"n=0; for u in {check}; do [ \"$(curl -sg -o /dev/null -w '%{{http_code}}' --max-time 3 $u)\" = 200 ] && n=$((n+1)); done; echo UP=$n")
         up = int([l for l in out.splitlines() if l.startswith("UP=")][-1][3:])
-        if up == len(all_w) == 2 * NPODS:
+        if up == len(all_w) == (2 // int(os.environ.get("TP", "1"))) * NPODS:
             break
         if time.time() - t0 > 2400:
             print(f"  only {up}/{len(all_w)} workers healthy after 40 min; aborting arm", flush=True)

@@ -801,7 +801,24 @@ static mixture.
             goal). NOT built, and the measurements argue against building it here: with no
             contention to observe there is nothing to fit, and a per-request router query would add
             latency to every decision. Revisit only if the narrowed-fabric run shows an effect.
-      - [ ] scaling with node count (the actual claim) -- needs more nodes than the 16-GPU cap
+      - [x] **Scaling with node count, inside the cap: 2 vs 4 pods (4 vs 8 H20s) at fixed per-GPU load (2026-10-18,
+            `mn_scaling_20261018.sh`; agent C = 2 / GPU, chat 2 req/s / GPU, 6 sessions / GPU; every arm 0 tracebacks /
+            0 fallbacks on every pod, `mn_audit.py`).** Agent tput / TTFT / ITL ; chat tput / TTFT / ITL ; prefill hit:
+            | arm | pods | agent | chat | hit |
+            |---|---|---|---|---|
+            | ours (pdmux + EDF + deadline / ITL-budget sharing) | 2 | 123 / 6.73 s / 25.2 ms | 1645 / 0.64 s / 14.0 ms | 0.342 |
+            | ours | 4 | 281 / 8.63 s / 18.5 ms | 3223 / 1.94 s / 17.3 ms | 0.395 |
+            | stock colocation + MTP | 2 | 48 / 16.77 s / 77.0 ms | 1656 / 10.27 s / 77.8 ms | 0.339 |
+            | stock colocation + MTP | 4 | 162 / 15.68 s / 50.9 ms | 2214 / 16.84 s / 129.6 ms | 0.394 |
+            | stock PD disagg + MTP (1P1D / 2P2D) | 2 | 24 / 69.9 s / 55.8 ms | 1048 / 93.3 s / 48.2 ms | 0.125 |
+            | stock PD disagg + MTP | 4 | 108 / 43.6 s / 11.1 ms | 2000 / 45.3 s / 5.5 ms | 0.055 |
+            (4-pod ours / stock-colocation rows: the 2026-10-17 runs at the same per-GPU load, ours the two-repeat mean.)
+            **Cache locality is the scaling signal: from 2 to 4 pods colocation's prefill hit rises (0.34 -> 0.39) while
+            disaggregation's halves (0.125 -> 0.055)** -- more prefill nodes dilute each prefix, while cache-affinity
+            colocation keeps it where its session lives. Ours stays ahead of disagg at both sizes (agent throughput 5.1x
+            at 2 pods, 2.6x at 4; TTFT -90% / -80%); disagg gains the most from the extra pods (its 1P1D layout is badly
+            unbalanced) and has the lowest decode-only ITL (5-11 ms) at 43-93 s TTFT. Two sizes inside the 16-GPU cap
+            show the direction; more sizes need more nodes.
       - [ ] **Simulated-node topology (user proposal, 2026-10-08): treat each GPU as a node and
             shape its interconnect.** 2x8 or 1x8 H200, one TP1 worker per GPU = 8 independent cache
             holders instead of 16 workers paired on 4 host NICs. More holders means hit lengths tie

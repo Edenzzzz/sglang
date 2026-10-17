@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.38 — PD point 4 scaling inside the cap: colocation keeps cache locality, disagg loses it (2026-10-18)
+
+- 2 vs 4 H20 pods at fixed per-GPU load (`mn_scaling_20261018.sh`): prefill cache hit rises with nodes for colocation
+  (0.34 -> 0.39) and halves for PD disaggregation (0.125 -> 0.055). Ours vs disagg agent throughput 5.1x / 2.6x, TTFT
+  -90% / -80%. All arms clean on every pod.
+
 ## v1.20.37 — H20 config: repeat 2 holds (every value clears vs stock + MTP, smallest -39%); output gate PASS (2026-10-17)
 
 ## v1.20.36 — per-step SM sharing with TTFT deadlines + ITL budget: all 12 vs stock + MTP by >= 39% on 8 H20s (2026-10-17)

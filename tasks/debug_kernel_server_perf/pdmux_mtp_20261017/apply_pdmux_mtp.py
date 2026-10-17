@@ -159,5 +159,9 @@ patch("managers/scheduler.py",
                 if batch.spec_algorithm.is_none():
                     batch_result = self.tp_worker.forward_batch_split_prefill(batch)
                 else:
-                    batch_result = self.model_worker.forward_batch_split_prefill(batch)''')
+                    batch_result = self.model_worker.forward_batch_split_prefill(batch)
+                    # After the last split the draft extend produced the requests' first draft state; install it as
+                    # the speculative branch below does, so they join the decode batch with an EagleDraftInput.
+                    if getattr(batch_result, "next_draft_input", None) is not None:
+                        batch.spec_info = batch_result.next_draft_input''')
 print("done")

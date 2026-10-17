@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.46 — H200 best 4-mode MTP setting repeated, with per-request error bars (2026-10-18)
+
+- Rep 2: agent +42% / -28.9% / -32.0%, chat TTFT -71.8% / ITL -22.8% vs stock MTP; two-rep means agent +47% / -29.3% /
+  -36%, chat -72.7% / -25%. Agent p1 tok/s/user rises 4-5x. `mn_ab_figure.py` takes `MN_CP`.
+
 ## v1.20.45 — H200 output gate PASS for the best 4-mode MTP serving config (2026-10-18)
 
 - `gate_h200_fourmode_20261018.sh`: config arm diverges from stock MTP exactly where stock MTP at the same chunk size

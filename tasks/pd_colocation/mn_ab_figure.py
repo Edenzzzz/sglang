@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from px_multi import Cluster
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-C = Cluster(os.environ.get("SID", "bb854a10b8954223"), "cn-seed", nodes=["worker-0"])
+C = Cluster(os.environ.get("SID", "bb854a10b8954223"), os.environ.get("MN_CP", "cn-seed"), nodes=["worker-0"])
 MN, ROOT = "/dev/shm/w/mn", "/dev/shm/w/mn_eval/ab"
 SLO = '{"chat":[2000,50],"agent":[10000,80]}'
 

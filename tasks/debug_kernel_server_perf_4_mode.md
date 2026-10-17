@@ -36,6 +36,19 @@ after the kernel items close (<=16 GPUs).
   setting 1024/2048: agent +52% / -29.7% / -40.7%, chat TTFT -73.7% / ITL -26.7%. Composition counter (worker log,
   `FUSED_SPLIT_CALLS`, logged every 500): >= 66001 split attention calls (~2.36K 4-mode steps x 28 layers) in the
   1024/2048 arm and in its 2-step / 3-token repeat; 0 in stock MTP; fallbacks 0 everywhere.
+  - [x] 2026-10-18 matched repeat of the best setting (stock MTP + ours 1024/2048, same session; clean): rep 2 agent
+    +42.4% / -28.9% / -32.0%, chat TTFT -71.8% / ITL -22.8% (rep 1: +51.8% / -29.7% / -40.7%, chat -73.7% / -26.7%).
+    Two-rep means: agent 105.9 vs 72.0 tok/s (+47%), TTFT 12.14 vs 17.18 s (-29.3%), ITL 16.5 vs 25.9 ms (-36%); chat
+    TTFT 2.67 vs 9.79 s (-72.7%), ITL 12.3 vs 16.4 ms (-25%); chat throughput = offered load. Per-request tok/s/user
+    (p1 / p10 / median / p90 / p99), rep 1 | rep 2 -- agent stock 5.2/21.4/49.8/84.8/97.9 | 5.2/17.2/49.8/81.7/94.3, ours
+    25.9/37.5/57.0/113.5/143.5 | 21.0/33.4/53.6/98.2/132.3; chat stock 11.5/27.5/81.8/253.0/335.8 |
+    11.7/27.3/95.3/253.3/336.4, ours 20.3/33.2/184.3/264.2/354.2 | 19.6/32.8/179.9/262.2/344.6. The tail moves most (agent
+    p1 4-5x). Figure `tasks/pd_colocation/figs/h200_fourmode_best_reps_20261018.png` (+ `.csv`). Agent TTFT (-29%) and
+    chat ITL (-23..-27%) stay below -30% in both reps; the rest clear. sglang `76cfe56b8`; `SPEC_TAG=_rep2 CHUNKS=2048
+    DEADLINE_CHUNK=1024:2048:6000 bash tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; figure `SID=d6a80befdd4e4da5
+    MN_CP=i18n-bd python3 tasks/pd_colocation/mn_ab_figure.py figs/h200_fourmode_best_reps_20261018
+    stock_mtp=coloc_sgl_mtps_h200_c8,ours_4mode=coloc_cache_edf_mtp_h200_4mode_unc_ch2048_dl1024-2048-6000_c8` (stock rep 1
+    is directory `..._c8b`, linked as `_c8_rep1`; `_c8` is the aborted metrics-port attempt).
   - [x] 2026-10-18 output gate on this pod, PASS (`tasks/pd_colocation/gate_h200_fourmode_20261018.sh`, srv_correctness
     vs stock MTP; driver now takes SRV_ARGS and counts mixed composition records). Noise floor MTP_REP: long prompts agree
     >= 18 tokens, short >= 63; null case MTP_C2048 (stock MTP at the config's chunk 2048): long >= 11, short 0 (s1's

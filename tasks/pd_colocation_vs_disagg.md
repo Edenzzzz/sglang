@@ -688,6 +688,13 @@ static mixture.
 - [ ] **5. THE SUPERSET CLAIM: adapt to any workload the baselines are each tuned for.**
       Added 2026-10-09 on the user's correction; **this is the capacity/throughput axis and
       nothing measured so far tests it.**
+      - [x] **Partial evidence on 8 H20s (2026-10-17): one knob spans stock colocation and PD multiplexing.** With
+        backlog-triggered sharing (`PDMUX_SHARE=N`), N=0 shares the whole GPU for every prefill batch (stock-colocation
+        behaviour) and N=infinity is pure pdmux. Measured at chat 16 req/s, agent C=16, agent TTFT / ITL: N=16K 6.05 s
+        / 21.8 ms, 32K 5.91 / 22.0, 48K 8.44 / 18.8 (2-rep mean), 64K 12.14 / 15.9, 128K 13.57 / 15.1, pure pdmux 13.97 /
+        15.1; stock colocation (TP=1) 7.18 / 27.9. Every N <= 48K beats stock colocation on agent ITL, and N <= 32K on
+        TTFT as well; N is set per deployment here, not yet per step by the EDF predictor -- the per-step choice (and
+        the dominance the claim needs on the capacity axis) is still to be shown.
 
       **The claim.** Our method is 4-mode colocation plus an EDF/SLO router with a tunable
       **P/D admission ratio**. Each baseline is one fixed point in that policy space, so our

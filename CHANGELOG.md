@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.16 — MuxWise baseline (sglang --enable-pdmux) beats our single-GPU config on ITL (2026-10-17)
+
+- H200, frozen 32-64K cohort at agent C = 8 / 16 + ShareGPT 8 req/s, one session: PD multiplexing ties ours on
+  throughput and agent ITL, has chat ITL 13.7-13.8 ms vs ours 24-25 ms (P99 32 vs 128-131 ms) and a far better
+  slow-user tail; ours wins only chat TTFT (-49% at C=8, -7% at C=16). Ours still beats stock MTP clearly. 8 arms rc=0,
+  0 tracebacks / fallbacks. Recorded as a negative result in the main doc's direct-baselines item.
+
 ## v1.20.15 — Pool pulls fail in the worker's host tier (host_capacity), not in the pool (2026-10-17)
 
 - Prefetch diagnostic with `--enable-metrics`: the pool held 796K of the requested tokens but only 349K were

@@ -1,0 +1,16 @@
+C=8 LPT           LPT_agent                    n=   96 tput=  122.8 ttft= 13.20s itl=  25.7ms p99itl=   466 tok/s/user p1/p10/p50/p90/p99=5/17/40/84/167
+C=8 LPT           LPT_chat                     n= 2048 tput= 1497.9 ttft= 14.06s itl=  26.3ms p99itl=   465 tok/s/user p1/p10/p50/p90/p99=7/23/52/95/156
+C=8 PDMUX         LPT_agent                    n=   96 tput=  139.1 ttft= 13.14s itl=  15.7ms p99itl=    39 tok/s/user p1/p10/p50/p90/p99=31/44/62/75/111
+C=8 PDMUX         LPT_chat                     n= 2048 tput= 1611.5 ttft= 11.34s itl=  13.8ms p99itl=    32 tok/s/user p1/p10/p50/p90/p99=35/56/71/101/130
+C=8 MTP           MTP_LPT_agent                n=   96 tput=  110.4 ttft= 18.83s itl=  21.0ms p99itl=   415 tok/s/user p1/p10/p50/p90/p99=6/20/54/99/208
+C=8 MTP           MTP_LPT_chat                 n= 2048 tput= 1291.3 ttft= 23.53s itl=  30.3ms p99itl=   476 tok/s/user p1/p10/p50/p90/p99=8/20/42/98/162
+C=8 EDFR50_F2048  MTPMIX_SPLIT_EDFR_agent      n=   96 tput=  138.6 ttft= 14.69s itl=  15.4ms p99itl=    72 tok/s/user p1/p10/p50/p90/p99=28/39/61/107/168
+C=8 EDFR50_F2048  MTPMIX_SPLIT_EDFR_chat       n= 2048 tput= 1575.3 ttft=  5.82s itl=  25.0ms p99itl=   131 tok/s/user p1/p10/p50/p90/p99=18/26/46/82/144
+C=16 LPT           LPT_agent                    n=   96 tput=  127.4 ttft= 29.80s itl=  32.1ms p99itl=   528 tok/s/user p1/p10/p50/p90/p99=3/11/42/68/118
+C=16 LPT           LPT_chat                     n= 2048 tput= 1481.8 ttft= 33.32s itl=  24.6ms p99itl=   456 tok/s/user p1/p10/p50/p90/p99=7/24/59/102/155
+C=16 PDMUX         LPT_agent                    n=   96 tput=  141.9 ttft= 29.01s itl=  16.9ms p99itl=    41 tok/s/user p1/p10/p50/p90/p99=25/29/62/75/105
+C=16 PDMUX         LPT_chat                     n= 2048 tput= 1609.0 ttft= 25.31s itl=  13.7ms p99itl=    32 tok/s/user p1/p10/p50/p90/p99=37/56/71/97/130
+C=16 MTP           MTP_LPT_agent                n=   96 tput=  106.9 ttft= 43.43s itl=  27.6ms p99itl=   500 tok/s/user p1/p10/p50/p90/p99=3/11/46/80/131
+C=16 MTP           MTP_LPT_chat                 n= 2048 tput= 1221.5 ttft= 51.96s itl=  31.3ms p99itl=   472 tok/s/user p1/p10/p50/p90/p99=8/18/40/80/158
+C=16 EDFR50_F2048  MTPMIX_SPLIT_EDFR_agent      n=   96 tput=  139.1 ttft= 31.75s itl=  16.9ms p99itl=    75 tok/s/user p1/p10/p50/p90/p99=19/32/59/94/141
+C=16 EDFR50_F2048  MTPMIX_SPLIT_EDFR_chat       n= 2048 tput= 1555.1 ttft= 23.49s itl=  24.0ms p99itl=   128 tok/s/user p1/p10/p50/p90/p99=17/24/48/81/129

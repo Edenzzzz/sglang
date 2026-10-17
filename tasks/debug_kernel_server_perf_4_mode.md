@@ -954,7 +954,34 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     warning, and 3151 prefill batches carrying running requests (mix32 16/s). So every "stock
     MTP" number is stock mixed-chunk + MTP; the 4-mode step's difference is that those requests
     keep speculating (verify rows) instead of dropping to single-token decode.
-  - [ ] **MuxWise = sglang `--enable-pdmux` (2026-10-13):** no public MuxWise repo; upstream
+  - [x] **MuxWise baseline measured on the program-concurrency axis (Claude, 2026-10-17 08:51-09:40; H200 idle --
+    Codex's owner PID992767 gone, lock free, noted in the coordination file).** Frozen 32-64K TraceLab cohort (48
+    programs / 96 rounds) at agent C = 8 / 16 + natural ShareGPT 8 req/s, tree `up_edf_floor`, one session, one run per
+    arm; all 8 arms rc=0, 0 tracebacks, 0 fallbacks; PDMUX server log `enable_pdmux: True`; ours FUSED_SPLIT_CALLS
+    67 501 / 68 001; every agent arm logged `concurrency_limit` = C. Out tok/s / mean TTFT / mean ITL / P99 ITL, and
+    tok/s/user p1 / p50 / p99 ([summary](debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017_summary.txt)):
+    | C | arm | agent | chat | chat tok/s/user p1 / p50 / p99 |
+    |---|---|---|---|---|
+    | 8 | stock non-spec (LPT) | 123 / 13.2 s / 25.7 / 466 | 1 498 / 14.1 s / 26.3 / 465 | 7 / 52 / 156 |
+    | 8 | **PD multiplexing (`--enable-pdmux`)** | 139 / 13.1 s / 15.7 / 39 | 1 612 / 11.3 s / **13.8 / 32** | **35 / 71** / 130 |
+    | 8 | stock MTP | 110 / 18.8 s / 21.0 / 415 | 1 291 / 23.5 s / 30.3 / 476 | 8 / 42 / 162 |
+    | 8 | ours (split + EDF 50 ms + floor 2048) | 139 / 14.7 s / 15.4 / 72 | 1 575 / **5.8 s** / 25.0 / 131 | 18 / 46 / 144 |
+    | 16 | stock non-spec (LPT) | 127 / 29.8 s / 32.1 / 528 | 1 482 / 33.3 s / 24.6 / 456 | 7 / 59 / 155 |
+    | 16 | **PD multiplexing** | 142 / 29.0 s / 16.9 / 41 | 1 609 / 25.3 s / **13.7 / 32** | **37 / 71** / 130 |
+    | 16 | stock MTP | 107 / 43.4 s / 27.6 / 500 | 1 222 / 52.0 s / 31.3 / 472 | 8 / 40 / 158 |
+    | 16 | ours | 139 / 31.8 s / 16.9 / 75 | 1 555 / **23.5 s** / 24.0 / 128 | 17 / 48 / 129 |
+    **Measured negative result: PD multiplexing beats our final single-GPU config on ITL.** Ours vs PD multiplexing --
+    C=8: throughput tie (agent 139 / 139, chat -2%), chat TTFT **-49%**, agent ITL tie, but chat ITL **+81%** (25.0 vs
+    13.8 ms, P99 4x), agent TTFT +12%; C=16: agent / chat throughput -2% / -3%, chat TTFT -7%, agent TTFT +9%, agent
+    ITL tie, chat ITL **+75%** (P99 4x). Its decode runs on its own SMs (GreenContext split) every step, so decode
+    rows never wait behind a prefill chunk; ours mixes a 2048-token chunk into decode steps, and a mixed step costs the
+    chunk plus the decode (measured on H20: decoders' ITL 12-34 -> 380-426 ms beside a cold 32K prefill). Its slow-user
+    tail is far better too (chat p1 35-37 vs 17-18 tok/s/user). Against stock MTP ours still wins (C=16: agent
+    throughput +30%, agent TTFT -27%, chat TTFT -55%, chat ITL -23%), but against this direct baseline the >=30% ITL
+    bar is not met, and only chat TTFT clears it (C=8). PD multiplexing is non-speculative; the same SM split under
+    MTP's verify rows is the open combination. Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
+    (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).
+  - [ ] **MuxWise = sglang `--enable-pdmux` (2026-10-13; superseded by the 2026-10-17 run above):** no public MuxWise repo; upstream
     sglang's PD-multiplexing (GreenContext SM split, layer-split prefill) is that design and is in
     our fork. Non-speculative only, chunked prefill and overlap off, and it warns of degradation
     with CUDA graphs on torch > 2.6 (pod: 2.14). Arms `PDMUX` vs stock non-speculative `LPT` on

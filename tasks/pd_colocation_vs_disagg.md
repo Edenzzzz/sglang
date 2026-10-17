@@ -159,6 +159,16 @@ static mixture.
     in multiples of 8 and a working decode group needing >= 16 SMs, prefill cannot exceed 56 of H20's 78 SMs under
     pdmux: the TTFT loss on H20 is structural to SM-split colocation on this GPU, not a tuning gap.
     `mn_pdmux_manual_8gpu_20261017.sh`.
+  - [ ] **Backlog-triggered SM sharing (2026-10-17, `apply_pdmux_backlog_share.py`, `PDMUX_SHARE=N`):** pdmux's group 0
+    is unpartitioned (prefill and decode on normal streams over the whole GPU, as stock colocation); a split-prefill
+    batch formed beside running decode now runs there when >= N uncached prompt tokens wait, else in pdmux's
+    decode-isolating split. Chat 16 req/s, agent C=16, 8 workers healthy, 0 tracebacks / 0 OOMs, sharing fires on
+    large backlogs only (e.g. 45K / 57K / 112K tokens), agent tput / TTFT / ITL ; chat TTFT / ITL:
+    N=32K: 303 / 5.91 s / 22.0 ms ; 1.23 s / 20.8 ms. N=128K: 242 / 13.57 s / 15.1 ms ; 3.91 s / 14.3 ms.
+    **N=32K vs stock colocation without speculation: agent +14% / -18% / -21%, chat TTFT -55% / ITL -24%** (chat
+    throughput = offered load in every arm); vs stock colocation + MTP: agent +87% / -62% / -57%, chat -93% / -84%.
+    P99 ITL rises to ~340 ms (shared batches stall decode, as in stock). N trades TTFT for ITL; 16K / 64K at 16
+    req/s and 32K at 32 req/s running (`POINTS="32:32768 16:65536 16:16384" bash mn_pdmux_share_8gpu_20261017.sh`).
 
 - [ ] **7. Inter-node routing: predict whether a request meets its TTFT and ITL SLO on node i, given
       i's estimated hit length x_i and current load** (added 2026-10-17 on the user's request; needs

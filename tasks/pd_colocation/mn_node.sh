@@ -140,6 +140,9 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
     ARGS+=(--enable-pdmux --chunked-prefill-size -1 --disable-overlap-schedule --pdmux-config-path $LOG/pdmux_r${ROLE}_g${g}.yaml)
   fi
   [ "${EDF_UNCACHED:-0}" = 1 ] && export SGLANG_EDF_UNCACHED_DEADLINE=1
+  # PDMUX_SHARE=N: run a split-prefill batch on the whole GPU (pdmux group 0) when >= N uncached prompt tokens are
+  # waiting (apply_pdmux_backlog_share.py); 0 keeps pdmux's SM split always.
+  [ "${PDMUX_SHARE:-0}" != 0 ] && export SGLANG_PDMUX_SHARE_BACKLOG_TOKENS=$PDMUX_SHARE
   # WORKER_EXTRA: extra sglang flags for diagnostics (e.g. --enable-metrics, which also turns on HiCache's
   # storage metrics: prefetch outcomes and deferred tokens by reason on /metrics).
   [ -n "${WORKER_EXTRA:-}" ] && ARGS+=(${WORKER_EXTRA})

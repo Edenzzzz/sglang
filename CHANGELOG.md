@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.20.40 — 4-mode MTP chunk sweep on 8 H20s: agent TTFT / ITL frontier, no single chunk clears both (2026-10-18)
+
+- Chunk 512: everything clears vs stock + MTP except agent TTFT (-21%): agent +37% / -21% / -45%, chat +47% / -87% / -61%.
+
 ## v1.20.39 — 4-mode MTP schedule on 8 H20s: TTFT and throughput clear vs stock + MTP, ITL does not (2026-10-18)
 
 - EAGLE3 MTP in the 4-mode fused step + EDF with uncached deadlines: chunk 2048 agent +20% / -33% / -5%, chat +23% /

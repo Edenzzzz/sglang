@@ -130,6 +130,11 @@ static mixture.
   verify rows (~100 ms on H20, chat TPOT 108-117 ms), and every decoding request waits for it; smaller chunks buy ITL
   with agent TTFT, already at -31% at 1024. Spatial isolation (pdmux) is what removes that wait, and MTP on top of pdmux
   was negative on H200 -- so on this hardware the 4-mode MTP schedule and the ITL bar pull against each other.
+  **Chunk sweep (`CHUNKS="512 256"`, 8 workers, 0 tracebacks / 0 fallbacks):** chunk 512 agent +37% / -21% / -45%, chat
+  +47% / -87% / -61%; chunk 256 agent +45% / +11% / -71%, chat +48% / -76% / -76%. With 2048 / 1024 above, the agent
+  pair moves along a frontier -- (-33%, -5%), (-31%, -13%), (-21%, -45%), (+11%, -71%) -- and between 1024 and 512 it
+  trades linearly, so no single chunk size clears both agent metrics; at chunk 512 agent TTFT (-21%) is the only miss.
+  A chunk size chosen per step by deadline and ITL budget (as the pdmux sharing rule does) is the next lever.
 - [x] **Single-GPU winner on 8 H20s (2026-10-17):** PD multiplexing + worker-side EDF with uncached-token
   deadlines (divisor 30) cleared all 12 bar means against stock MTP on one H200 (main doc, Direct baselines). Here it
   runs on every colocated worker under cache-affinity routing (`mn_run.py` suffix `_pdmux`; `mn_node.sh` PDMUX /

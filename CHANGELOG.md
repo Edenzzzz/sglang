@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.29 — pdmux + EDF on 8 H20s: ITL -41..-88%, but TTFT loses to stock non-speculative colocation (2026-10-17)
+
+- Multi-node arm `coloc_cache_edf_pdmux` (pdmux on every colocated worker, uncached EDF deadlines, divisor 30,
+  MEM_FRAC 0.70 -- 0.85 OOMed on unchunked agent prefills). vs stock coloc + MTP: everything clears except agent TTFT
+  (-11% / -27%). vs stock coloc without speculation: ITL -41..-61%, TTFT 1.9-3.2x worse, throughput -1..-13% -- on H20
+  prefill compute is the bottleneck and pdmux's decode SM share comes out of it.
+
 ## v1.20.28 — EDF step model on the final schedule: decode ITL predictable to 9% vs 35-117% unfused (2026-10-17)
 
 - STEPTRACE under PD multiplexing (`apply_steptrace_pdmux.py`) and `tasks/perf_model/fit_pdmux_step.py`. Held-out MAPE

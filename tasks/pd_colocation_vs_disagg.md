@@ -121,7 +121,7 @@ static mixture.
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex
       P99 ITL -27%. Full stack vs stock MTP: TTFT -95%/-51%, ITL -42%/-38% (chat/codex, 24/s, 3 rounds).
-- [ ] **Single-GPU winner on 8 H20s (2026-10-17, running):** PD multiplexing + worker-side EDF with uncached-token
+- [x] **Single-GPU winner on 8 H20s (2026-10-17):** PD multiplexing + worker-side EDF with uncached-token
   deadlines (divisor 30) cleared all 12 bar means against stock MTP on one H200 (main doc, Direct baselines). Here it
   runs on every colocated worker under cache-affinity routing (`mn_run.py` suffix `_pdmux`; `mn_node.sh` PDMUX /
   PDMUX_DIV / EDF_UNCACHED; uncached-deadline patch applied on all four pods), vs stock colocation with MTP and stock
@@ -134,6 +134,24 @@ static mixture.
   146; chat TTFT 16.8 / 29.8 s, ITL 129.6 / 74.7 ms, tput 2214 / 3467. Stock colocation without speculation: agent
   7.2 / 7.4 s, 27.9 / 43.9 ms, 266 / 217; chat 2.7 / 2.8 s, 27.3 / 69.2 ms, 3243 / 5432.* Our arm reruns at
   `MEM_FRAC=0.70` (`OURS_ONLY=1 bash mn_pdmux_8gpu_20261017.sh`).
+  **Run 2 (our arm at 0.70, 20:03-20:28): 8 workers, 0 tracebacks / 0 fallbacks on every pod (`mn_audit.py`), 20.7 GB
+  activation headroom; prefill cache hit 0.395 / 0.368 (baselines 0.394 / 0.288 MTP, 0.394 / 0.367 no-spec) -- routing
+  is not the difference.** Agent C=16, tput / mean TTFT / mean ITL:
+  | chat req/s | arm | agent | chat |
+  |---|---|---|---|
+  | 16 | stock coloc + MTP | 162 / 15.68 s / 50.9 ms | 2214 / 16.84 s / 129.6 ms |
+  | 16 | stock coloc, no spec | 266 / 7.18 s / 27.9 ms | 3243 / 2.74 s / 27.3 ms |
+  | 16 | **ours: pdmux + EDF (uncached deadlines, divisor 30)** | 231 / 13.97 s / 15.1 ms | 3216 / 5.19 s / 16.0 ms |
+  | 32 | stock coloc + MTP | 146 / 22.77 s / 42.1 ms | 3467 / 29.84 s / 74.7 ms |
+  | 32 | stock coloc, no spec | 217 / 7.36 s / 43.9 ms | 5432 / 2.80 s / 69.2 ms |
+  | 32 | **ours** | 195 / 16.71 s / 19.1 ms | 5348 / 8.98 s / 26.9 ms |
+  vs stock coloc + MTP: agent +42% / -11% / -70% (16), +33% / -27% / -55% (32); chat +45% / -69% / -88%, +54% / -70% /
+  -64% -- all clear except agent TTFT. **vs stock coloc without speculation (the stronger H20 baseline): ITL -41..-61%
+  but TTFT 1.9-3.2x worse and throughput -1..-13%.** The single-GPU H200 result does not carry over: on H20 (148 dense
+  TFLOP/s, 78 SMs, 5 pdmux groups) prefill is the bottleneck, and pdmux runs it unchunked on 40-56 of 78 SMs, so
+  TTFT pays for the decode SMs. On H20 the bar is not met against stock non-speculative colocation; the lever there
+  is prefill capacity, not decode isolation. Command: `bash tasks/pd_colocation/mn_pdmux_8gpu_20261017.sh` (run 1:
+  baselines), `OURS_ONLY=1 bash ...` (run 2); audit `SID=bb854a10b8954223 NPODS=4 python mn_audit.py <arm>_8g_pdmux_c16_r<R>`.
 
 - [ ] **7. Inter-node routing: predict whether a request meets its TTFT and ITL SLO on node i, given
       i's estimated hit length x_i and current load** (added 2026-10-17 on the user's request; needs

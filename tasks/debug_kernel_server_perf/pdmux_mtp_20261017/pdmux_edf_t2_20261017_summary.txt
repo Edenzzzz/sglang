@@ -1,0 +1,12 @@
+C=8 T2_10S_D36    LPT_agent                    n=   96 tput=  140.8 ttft= 13.09s itl=  15.3ms p99itl=    36 tok/s/user p1/p10/p50/p90/p99=31/48/60/74/107 accept=None
+C=8 T2_10S_D36    LPT_chat                     n= 2048 tput= 1612.3 ttft=  4.63s itl=  14.5ms p99itl=    35 tok/s/user p1/p10/p50/p90/p99=30/51/66/104/128 accept=None
+C=8 T2_10S_D18    LPT_agent                    n=   96 tput=  135.9 ttft= 14.44s itl=  13.8ms p99itl=    34 tok/s/user p1/p10/p50/p90/p99=34/54/66/83/116 accept=None
+C=8 T2_10S_D18    LPT_chat                     n= 2048 tput= 1611.1 ttft=  5.54s itl=  13.5ms p99itl=    32 tok/s/user p1/p10/p50/p90/p99=37/55/72/95/125 accept=None
+C=8 T2_5S_D18     LPT_agent                    n=   96 tput=  135.8 ttft= 14.06s itl=  14.6ms p99itl=    37 tok/s/user p1/p10/p50/p90/p99=35/54/66/81/110 accept=None
+C=8 T2_5S_D18     LPT_chat                     n= 2048 tput= 1611.7 ttft=  9.78s itl=  13.8ms p99itl=    36 tok/s/user p1/p10/p50/p90/p99=40/56/69/92/121 accept=None
+C=16 T2_10S_D36    LPT_agent                    n=   96 tput=  140.8 ttft= 29.44s itl=  16.7ms p99itl=    41 tok/s/user p1/p10/p50/p90/p99=26/33/62/75/93 accept=None
+C=16 T2_10S_D36    LPT_chat                     n= 2048 tput= 1611.3 ttft= 18.87s itl=  14.1ms p99itl=    35 tok/s/user p1/p10/p50/p90/p99=34/54/69/93/128 accept=None
+C=16 T2_10S_D18    LPT_agent                    n=   96 tput=  137.8 ttft= 31.17s itl=  15.7ms p99itl=    41 tok/s/user p1/p10/p50/p90/p99=28/36/66/78/95 accept=None
+C=16 T2_10S_D18    LPT_chat                     n= 2048 tput= 1609.7 ttft= 21.13s itl=  14.0ms p99itl=    35 tok/s/user p1/p10/p50/p90/p99=35/57/70/88/119 accept=None
+C=16 T2_5S_D18     LPT_agent                    n=   96 tput=  137.7 ttft= 31.05s itl=  15.6ms p99itl=    41 tok/s/user p1/p10/p50/p90/p99=25/33/68/76/93 accept=None
+C=16 T2_5S_D18     LPT_chat                     n= 2048 tput= 1611.2 ttft= 25.50s itl=  13.8ms p99itl=    32 tok/s/user p1/p10/p50/p90/p99=42/58/71/87/118 accept=None

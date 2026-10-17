@@ -1266,7 +1266,18 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
           lever; at C=8 no divisor clears both. Default 36 stays. Chat keeps -59..-84% TTFT and -55..-58% ITL
           throughout ([summary](debug_kernel_server_perf/pdmux_mtp_20261017/pdmux_edf_div_20261017_summary.txt),
           `pdmux_edf_div_20261017.sh`). Next: the two-tier TTFT SLO (agent prompts >= 16K get a flat SLO instead of a
-          length-scaled deadline that queues them behind all chat), `pdmux_edf_t2_20261017.sh`, running. Script:
+          length-scaled deadline that queues them behind all chat), `pdmux_edf_t2_20261017.sh`.
+        - [x] **Two-tier TTFT SLO (2026-10-17 16:10-16:44, rep 1, 6 arms rc=0, EDF + pdmux on, 0 tracebacks / 0
+          fallbacks): negative.** `SGLANG_EDF_LONG_PROMPT_TOKENS=16384` with a flat 10 s / 5 s agent SLO, vs stock MTP:
+          C=8 10 s (divisor 36) agent +28% / -30% / -28%, chat TTFT -80%; 10 s + divisor 18 agent -23% TTFT / -35% ITL;
+          5 s + divisor 18 agent -25% / -32%, chat TTFT only -58%. C=16 10 s agent +31% / -32% / -39%. Agent TTFT
+          does not move (13.09 vs 12.97 s at C=8) while chat TTFT degrades, so agent TTFT is not chat queueing: it is
+          agent-vs-agent queueing on compute-bound cold 32-64K prefills. Length-scaled deadlines stay.
+          ([summary](debug_kernel_server_perf/pdmux_mtp_20261017/pdmux_edf_t2_20261017_summary.txt))
+        **Where the bar stands for PD multiplexing + EDF (default divisor, length-scaled SLO), vs stock MTP:** 11 of 12
+        metrics clear at C=8 and C=16; the one miss is C=8 agent ITL (-28.6%, two repeats), and every knob that buys it
+        (decode SM share, agent SLO tier) costs agent TTFT below -30% -- the C=8 agent pair sits on a trade-off frontier
+        at about (-30%, -29%). Script:
       `pdmux_mtp_ab_20261017.sh` (frozen cohort, C = 8 / 16 + ShareGPT 8 req/s; PDMUX | MTP_PDMUX |
       EDFR50_F2048, one tree, one session, graphs on). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).

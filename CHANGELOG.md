@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.25 — pdmux + EDF: gate PASS; decode-SM share and two-tier SLO are trade-offs (2026-10-17)
+
+- Output gate: pdmux + EDF diverges from stock LPT exactly as the pdmux null case (short 1 / long 11; floor 163 / 96).
+- More decode SMs (decode_bs_divisor 18 / 12) buy agent ITL (-37..-48%) at the cost of agent TTFT (-20..-26%); a flat
+  agent TTFT SLO does not move agent TTFT and costs chat TTFT. Bar vs stock MTP: 11/12 at C=8 and C=16; C=8 agent ITL
+  -28.6% is the one miss, on a TTFT/ITL frontier at about (-30%, -29%).
+
 ## v1.20.24 — PD multiplexing + worker-side EDF clears 11 of 12 bar metrics vs stock MTP (2026-10-17)
 
 - H200, frozen 32-64K TraceLab cohort at agent C = 8 / 16 + ShareGPT 8 req/s, two repeats (spread <=2%): pdmux + EDF vs

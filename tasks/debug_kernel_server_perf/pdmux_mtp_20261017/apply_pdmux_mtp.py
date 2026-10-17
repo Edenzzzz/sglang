@@ -219,4 +219,45 @@ patch("model_executor/runner/eager_runner.py",
             pcg_runner = model_runner.prefill_cuda_graph_runner''',
 '''        with device_timer_ctx(model_runner.device_timer, category), extend_ctx:
             pcg_runner = model_runner.prefill_cuda_graph_runner''')
+
+# 8. the draft extend after a split prefill runs on the prefill stream while the decode step (target verify, draft
+#    decode, draft extend over accepted tokens) runs on the decode stream. EAGLE replaced the draft runner's pdmux
+#    prefill backend (its own flashinfer workspace) with draft_extend_attn_backend, which shares the global workspace
+#    and its eager kv-index buffers with the decode-stream backends, so both streams wrote them at once: illegal
+#    address in the decode step at C=16 (pdmux_mtp_ab_20261017, cohort_c16). Keep the pdmux prefill backend and run the
+#    prefill-side draft extend on it.
+patch("speculative/eagle_worker_v2.py",
+'''        self.draft_runner.draft_attn_backend = self.draft_attn_backend
+        if self.draft_extend_attn_backend is not None:
+            self.draft_runner.attn_backend = self.draft_extend_attn_backend''',
+'''        self.draft_runner.draft_attn_backend = self.draft_attn_backend
+        # pdmux: the runner's own backend was built for the prefill stream with a private workspace
+        # (attention_backend_setup); the split-prefill draft extend runs on it, concurrently with decode.
+        from sglang.srt.runtime_context import get_disagg
+
+        self.draft_prefill_stream_attn_backend = (
+            self.draft_runner.attn_backend if get_disagg().enable_pdmux else None
+        )
+        if self.draft_extend_attn_backend is not None:
+            self.draft_runner.attn_backend = self.draft_extend_attn_backend''')
+patch("speculative/eagle_worker_v2.py",
+'''            backends = [self.draft_attn_backend, self.draft_extend_attn_backend]
+            if self.draft_attn_backend is not None:''',
+'''            backends = [self.draft_attn_backend, self.draft_extend_attn_backend]
+            if self.draft_prefill_stream_attn_backend is not None:
+                backends.append(self.draft_prefill_stream_attn_backend)
+            if self.draft_attn_backend is not None:''')
+patch("speculative/eagle_worker_v2.py",
+'''        with canary_ctx:
+            logits_output = self.draft_runner.forward(forward_batch).logits_output
+        maybe_detect_nan(logits_output.next_token_logits, "draft_extend_for_prefill")''',
+'''        decode_stream_backend = self.draft_runner.attn_backend
+        if self.draft_prefill_stream_attn_backend is not None and batch.split_forward_batch is not None:
+            self.draft_runner.attn_backend = self.draft_prefill_stream_attn_backend
+        try:
+            with canary_ctx:
+                logits_output = self.draft_runner.forward(forward_batch).logits_output
+        finally:
+            self.draft_runner.attn_backend = decode_stream_backend
+        maybe_detect_nan(logits_output.next_token_logits, "draft_extend_for_prefill")''')
 print("done")

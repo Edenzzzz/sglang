@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.20.18 — pdmux + MTP cross-stream race fixed; FA3 gap located vs upstream FA3 (2026-10-17)
+
+- pdmux + EAGLE3 MTP (patch item 8): the draft extend after a split prefill (prefill stream) shared the global
+  flashinfer workspace and eager kv-index buffers with the concurrent decode step, giving an illegal address at C=16.
+  It now runs on the draft runner's pdmux prefill backend (private workspace). Output gate re-run: PASS, unchanged
+  short 1 / long 11. MTP_PDMUX runs at mem fraction 0.78 (unchunked 64K prefill OOMed at 0.85).
+- A5 (new, user-requested FA3 technique study). A5.0: on FA3-only fixtures our persistent FA3 is 1.45x slower than
+  upstream sgl-kernel FA3 on long items and 2.3-2.9x on chat-size ones, at 112 and 132 CTAs alike (SM budget is not
+  the cause); our split-KV merge path costs 0.64 ms where it fires. A1 reopened: the winner map shows q64 up to 24%
+  faster on short-KV few-row items and 1.34x slower in median elsewhere (the old "no difference" line was wrong).
+
 ## v1.20.17 — PD multiplexing runs under EAGLE3 MTP (eager), first end-to-end (2026-10-17)
 
 - `tasks/debug_kernel_server_perf/pdmux_mtp_20261017/apply_pdmux_mtp.py` (tree `up_pdmux_mtp`): split-prefill support for

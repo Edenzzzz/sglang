@@ -26,8 +26,13 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   `sm_split` CTAs + `FA2ExecutorKernel` at native geometry as its PDL dependent
   (`FLASHINFER_FUSED_COLAUNCH=1`). 3.3-6.5x on FA2 rows, every gate exact; still 1.2-2x behind the
   non-persistent unfused two-launch control. ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md))
-- [x] **A1, FA3 q64 vs q128 per work item (2026-10-12):** closed by measurement -- q64 never beats
-  q128 beyond noise and loses up to 2.3x; nothing to select. Not built for that reason.
+- [ ] **A1, FA3 q64 vs q128 per work item (2026-10-12; reopened 2026-10-17):** *Correction in place:* the
+  old line "q64 never beats q128 beyond noise, loses up to 2.3x" misread the winner map. On the fixed
+  kernel (`a3_winner_map/a3_v2_table_20261012.txt`, 72 cells, 216/216 arms exact) q64 is slower on 64
+  cells (median 1.34x, worst 2.98x at kv 64K x 16 rows x qo 16: half the query rows per loaded KV block,
+  so twice the KV traffic on memory-bound items) and faster by >3% on 3 cells, up to 24% (kv 1024, 1 row,
+  qo 16 -- short-KV, few-row items). A per-item q-tile choice therefore has a real, narrow win region;
+  reopened as part of the FA3 technique study (S-kernel, below), to be measured on serving-shaped items.
 - [x] **A2, FA2 tile classes (2026-10-12):** 48/32/16 refuted (tile 48 = 1 q-warp x 4 kv-warps,
   3x accumulator, spills; 1.6-2.2x slower at q8); **64/32/16** adopted (96 B stack). Per-item tail
   dispatch kept (bit-identical outputs). FA2 split-KV chunk = `auto` (sized to the FA2 CTA slots;
@@ -202,6 +207,44 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       KV128 within 0.6% of packed auto on the four large fixtures, KV96 slower, unsplit 3.7x slower
       on irregular short queries; packed auto retained
       ([unpacked](debug_kernel_server_perf/resume_20261012/fa3_unpacked_20261014.md)).
+
+- [ ] **A5, FA3 technique study on serving-shaped items (user, 2026-10-17: "test these techniques more for fa3 ...
+  otherwise it's hard to make a story around the kernel stuff if we just port it without any optimizations").**
+  Fixtures = FA3 items replayed from serving step traces (TraceLab append 256-1024 on 32-131K, chat prefill
+  chunks, split-KV long rows), every arm PASS vs the causal fp32 reference, reported against upstream FA3
+  (what serving runs) and the unfused two-launch step. In order:
+  - [ ] A5.0 mainloop gap: our persistent FA3 at ~43% tensor activity vs stock 65% (NCU 2026-10-14); close it
+    first, since every technique below is measured on top of it.
+    - [x] **Gap located (2026-10-17 12:16-12:23, H200, all 28 runs 9/9 checks vs fp32 causal reference, repeat
+      spread <=3.1%):** that NCU compare was confounded (ours on 112 CTAs vs flashinfer FA3 on 132, and flashinfer
+      FA3 is not what serving runs). FA3-only fixtures, ms, two-repeat means:
+      | fixture | ours 112 | ours 132 | flashinfer FA3 | upstream FA3 (serving) | ours/upstream |
+      |---|---|---|---|---|---|
+      | 8 x 1024 @ 32K | 11.03 | 10.25 | 7.42 | 5.99 | 1.71x (132) |
+      | chat 2048 fresh | 0.171 | 0.173 | 0.081 | 0.060 | 2.88x |
+      | chat 4 x 512 fresh | 0.069 | 0.073 | 0.038 | 0.032 | 2.32x |
+      | append 512 @ 48K | 0.856 | 1.493 | 0.682 | 0.586 | 1.46x (112) |
+      | agent 4 x 512 @ 64K | 4.75 | 4.77 | 4.11 | 3.28 | 1.45x |
+      | prefill 2048 @ 64K | 4.65 | 4.65 | 3.96 | 3.21 | 1.45x |
+      | 16 x 16 @ 1K | 0.073 | 0.045 | 0.071 | 0.024 | 1.86x |
+      Three separate costs, none of them the SM budget: (1) ~1.45x mainloop on long compute-bound items;
+      (2) ~0.1 ms fixed per call, dominant on chat-size items; (3) our split-KV merge path: append 512 @ 48K
+      plans 112 tiles of 48K keys (one wave at 112 CTAs); at 132 it splits in two and gets 0.64 ms *slower*.
+      Flashinfer FA3 is itself 1.16-1.35x behind upstream. Packed vs unpacked Q (Codex, <0.6%) and TMA vs
+      gather KV (B3) were already ruled out. Our build lacks `--use_fast_math`, which upstream FA3 uses
+      (softmax exp2 throughput bounds FA3 at head dim 128): A5.0b tests it next.
+      Commands: `bash a5_fa3_gap_20261017.sh` (pod `/dev/shm/w`, harness
+      `drivers/a5_fa3_reference_20261017.py` = tma_multicast_reference + an upstream sgl-kernel arm), both in
+      `tasks/debug_kernel_server_perf/a5_fa3_20261017/`; binaries = tma_sm_budget GATHER arm (tree
+      `up_tma_multicast`, `fi_tma_multicast`); sglang `ad2d19bab`, flashinfer `1a73e67`.
+  - [ ] A5.1 per-item q-tile choice (q64 on short-KV few-row items, q128 elsewhere; A1 win region above).
+  - [ ] A5.2 split-KV reduction: separate merge kernel vs atomic last-arriver vs DSMEM reduction within a
+    cluster, on decode/verify-heavy steps (the 0.6% bound was a whole-workload average and excluded the
+    launch gap before the merge).
+  - [ ] A5.3 FA3 on all 132 SMs with stock FA2 as its PDL dependent, triggered at each FA3 CTA's last tile.
+  - [ ] A5.4 L2-locality work pairing (-14/-26% kernel time on two fixtures, 2026-10-14) on serving items.
+  - [ ] A5.5 TMA multicast on agent-append items (zero-KV-load ceiling there 19-22%, vs ~3% on serving mixes).
+  - [ ] A5.6 in-kernel cross-role backfill (`tma_store_wait`) on top of A5.0.
 
 ### [x] B. Fuse draft/verify epilogue ops
 
@@ -1038,7 +1081,19 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       /dev/shm/w/gate_pdmux_nospec.sh`, stock LPT vs LPT + `--enable-pdmux`, no speculation, paths the patch does not
       touch): min common prefix short 1 / long 11 -- exactly MTP_PDMUX's.** The divergence is pdmux's own numerics (its
       decode runs on a resized SM group); the MTP integration adds none. **Gate cleared against the right floor.**
-      Payoff A/B running: `pdmux_mtp_ab_20261017.sh` (frozen cohort, C = 8 / 16 + ShareGPT 8 req/s; PDMUX | MTP_PDMUX |
+      **Payoff A/B, run 1 (11:33-11:58): MTP_PDMUX crashed at both C, two different bugs.** (a) OOM at C=8 and C=16
+      (1.8 GiB MLP activation, 1.57 GiB free): pdmux prefills unchunked, and a whole 64K agent prompt does not fit
+      beside the draft model at mem fraction 0.85; the arm now runs at 0.78 (KV pool ~1.6M tokens vs the cohort's
+      <= 16 x 64K working set -- a handicap to our arm, not an advantage). (b) Rerun at 0.78: C=8 clean, C=16 **illegal
+      address in the decode step** (47 running, 9 queued). Cause: the draft extend after a split prefill runs on the
+      prefill stream while the decode step runs on the decode stream, and EAGLE had replaced the draft runner's pdmux
+      prefill backend (private flashinfer workspace) with `draft_extend_attn_backend`, which shares the global
+      workspace and eager kv-index buffers with the decode-stream backends. Fix (patch item 8): keep the pdmux
+      prefill backend and run the prefill-side draft extend on it. **Output gate re-run with the fix: PASS, short 1 /
+      long 11 -- unchanged, equal to the non-speculative pdmux null case** (`pdmux_mtp_fix8_20261017.sh`; the
+      pre-fix C=8 run is discarded, since it ran with the race). Both MTP_PDMUX arms rerunning; PDMUX and
+      EDFR50_F2048 from run 1 stand (0 tracebacks, 0 fallbacks, FUSED_SPLIT_CALLS 67.5K / 68.5K). Script:
+      `pdmux_mtp_ab_20261017.sh` (frozen cohort, C = 8 / 16 + ShareGPT 8 req/s; PDMUX | MTP_PDMUX |
       EDFR50_F2048, one tree, one session, graphs on). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).
   - [ ] **MuxWise = sglang `--enable-pdmux` (2026-10-13; superseded by the 2026-10-17 run above):** no public MuxWise repo; upstream

@@ -32,8 +32,11 @@ export AGENT_N=96 AGENT_GROUPS=48 AGENT_SEED=20261014 OTHER_N=2048 OTHER_RATE=8
 export AGENT_MIN_CTX=32768 AGENT_MAX_CTX=65536 CONTEXT_LEN=131072 YARN_FACTOR=4.0
 export BENCH_TRACE_MAX_TOTAL_TOKENS=131072
 unset AGENT_RATE CHAT_RATE AGENT_RATE CODEX_RATE BENCH_MAX_CONCURRENCY
+# MTP_PDMUX at mem fraction 0.78 (driver default 0.85, overridden by the later flag): pdmux runs prefill unchunked, and at 0.85 the
+# first 64K agent prompt OOMed in the MLP (1.8 GiB alloc, 1.57 GiB free) with the draft model resident; 0.78 still leaves a
+# ~1.6M-token KV pool against the cohort's <= 16 x 64K working set.
 # label | method | BENCH_CHUNK | prefill floor | extra server args
-ARMS=("PDMUX|LPT||0|--enable-pdmux --chunked-prefill-size -1 --disable-overlap-schedule" "MTP_PDMUX|MTP_LPT||0|--enable-pdmux --chunked-prefill-size -1 --disable-overlap-schedule"
+ARMS=("PDMUX|LPT||0|--enable-pdmux --chunked-prefill-size -1 --disable-overlap-schedule" "MTP_PDMUX|MTP_LPT||0|--enable-pdmux --chunked-prefill-size -1 --disable-overlap-schedule --mem-fraction-static 0.78"
       "EDFR50_F2048|MTPMIX_SPLIT_EDFR||2048|")
 for C in 8 16; do
   for v in "${ARMS[@]}"; do

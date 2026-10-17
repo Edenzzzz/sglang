@@ -492,7 +492,23 @@ static mixture.
             (`host_capacity`; the host pool is capped at 48 GB per worker), or when the L3 hit is below the
             256-token threshold; those reasons reach only HiCache's storage metrics. Diagnostic queued:
             `mn_prefetch_diag_8gpu_20261017.sh` (the transfer arm once with `--enable-metrics`, every worker's
-            `/metrics` saved before teardown; new knobs `WORKER_EXTRA`, `SCRAPE_METRICS`). Spread
+            `/metrics` saved before teardown; new knobs `WORKER_EXTRA`, `SCRAPE_METRICS`).
+            **Chat 8 req/s A/B, both reps (`bash tasks/pd_colocation/mn_selective_pool_r8_8gpu_20261017.sh`):** cache
+            affinity is best on every agent metric -- agent 169 / 180 tok/s and TTFT 19.2 / 18.5 s vs the SLO check
+            ignoring the pool 146 / 160, 20.4 / 19.1 s, and with the transfer term 154 / 148, 19.3 / 19.6 s; chat TTFT
+            6.6-7.3 s in every arm. Below capacity the SLO check moves requests off holders and each move costs a
+            16K recompute (or a pull that does not land), so it does not pay here; the transfer term recovers part of
+            the loss in rep 1 only. Spread ([figure](pd_colocation/figures_20261017/h20x8_manyprefix_r8_selective_pool.png),
+            [data](pd_colocation/figures_20261017/h20x8_manyprefix_r8_selective_pool.csv)):
+            | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 (rep 1 ; rep 2) | out tok/s | mean TTFT s | mean TPOT ms |
+            |---|---|---|---|---|---|
+            | cache | chat | 4.7/9.7/190/394/432 ; 4.4/9.6/190/396/433 | 1022 ; 1022 | 6.9 ; 6.6 | 33.4 ; 33.6 |
+            | cache | agent | 5.4/7.9/19.9/205/280 ; 5.6/8.2/27.5/207/302 | 169 ; 180 | 19.2 ; 18.5 | 58.5 ; 56.2 |
+            | slo_check_no_transfer | chat | 4.8/9.5/130/386/428 ; 4.9/9.7/162/391/429 | 1022 ; 1022 | 7.2 ; 7.2 | 37.6 ; 36.9 |
+            | slo_check_no_transfer | agent | 4.4/7.3/12.5/101/223 ; 5.1/8.2/14.6/74.7/165 | 146 ; 160 | 20.4 ; 19.1 | 72.7 ; 64.4 |
+            | slo_check+transfer | chat | 4.5/9.5/167/392/429 ; 4.5/9.2/143/384/426 | 1022 ; 1021 | 7.0 ; 7.3 | 37.4 ; 40.3 |
+            | slo_check+transfer | agent | 5.1/8.0/16.4/83.5/154 ; 5.0/8.1/13.3/78.4/184 | 154 ; 148 | 19.3 ; 19.6 | 64.8 ; 69.6 |
+            Spread of the 16 req/s run
             ([figure](pd_colocation/figures_20261017/h20x8_manyprefix_selective_pool.png),
             [data](pd_colocation/figures_20261017/h20x8_manyprefix_selective_pool.csv)):
             | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 (rep 1 ; rep 2) | out tok/s | mean TTFT s | mean TPOT ms |

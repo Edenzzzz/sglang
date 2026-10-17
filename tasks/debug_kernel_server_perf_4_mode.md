@@ -1229,7 +1229,12 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       (bench 2.12 tokens per verify for MTP_PDMUX and ours), so the smoke test's 3.07 vs 3.31 was small-sample noise,
       not a pdmux effect -- closed. The cost is the step: a 4-token verify plus 3 draft steps over 32-64K-context
       rows, on pdmux's shrunken decode SM group, takes ~4x a non-speculative decode step for 2.1x the tokens.
-      Plain pdmux stays the strongest ITL baseline; ours keeps TTFT (chat -46% / -8% vs PDMUX) and ties throughput. Script:
+      Plain pdmux stays the strongest ITL baseline; ours keeps TTFT (chat -46% / -8% vs PDMUX) and ties throughput.
+      - [ ] **PD multiplexing + EDF (2026-10-17, running):** pdmux keeps decode on its own SM group, which is where its
+        ITL comes from; our EDF wins chat TTFT by deadline-ordered admission, which is independent of chunking.
+        pdmux's batch builder goes through `get_new_batch_prefill`, so worker-side EDF (deadline order, no latency
+        model, no chunk cap; server-assigned deadlines) applies unchanged. Arms PDMUX | PDMUX_EDF | stock MTP (the
+        bar's baseline), C = 8 / 16, two repeats, same cohort / tree / session. `pdmux_edf_20261017.sh` (REP=1, 2). Script:
       `pdmux_mtp_ab_20261017.sh` (frozen cohort, C = 8 / 16 + ShareGPT 8 req/s; PDMUX | MTP_PDMUX |
       EDFR50_F2048, one tree, one session, graphs on). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).

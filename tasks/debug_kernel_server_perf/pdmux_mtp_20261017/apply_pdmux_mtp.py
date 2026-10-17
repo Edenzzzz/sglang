@@ -164,4 +164,15 @@ patch("managers/scheduler.py",
                     # the speculative branch below does, so they join the decode batch with an EagleDraftInput.
                     if getattr(batch_result, "next_draft_input", None) is not None:
                         batch.spec_info = batch_result.next_draft_input''')
+# 5. eager decode: the per-stream pdmux decode backend applies to the target runner only. The scheduler switches the
+#    target runner's backend per stream group (multiplexing_mixin.adjust_stream_groups); the draft runner is not
+#    switched and its draft decode runs under the multi-step draft backends that draft() planned, so overriding its
+#    context with the (never planned) pdmux decode backend left forward_metadata None.
+patch("model_executor/runner/eager_runner.py",
+'''        model_runner = self.model_runner
+        if self.enable_pdmux:
+            return model_runner.decode_attn_backend, forward_context(''',
+'''        model_runner = self.model_runner
+        if self.enable_pdmux and not model_runner.is_draft_worker:
+            return model_runner.decode_attn_backend, forward_context(''')
 print("done")

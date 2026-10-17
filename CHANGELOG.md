@@ -14,6 +14,8 @@
 - Hot mix, 13 200 requests: measured / predicted TTFT median 1.04-1.12, p80 1.34-1.58, p90 2.25-2.36 where a feasible
   node existed (table in item 7). `router.py --ttft-quantile q`: feasibility at the q-quantile of that ratio over a
   sliding window per prompt-length class. A/B queued (`mn_ttft_margin_8gpu_20261017.sh`, q 0 vs 0.8, x2).
+- Measured x2 on the hot mix: q = 0.8 vs 0 within noise on every metric (margin binds, +10-20% own-TTFT rejections,
+  but reps differ more than arms). Kept off by default. Spread figure + table in item 7.
 
 ## v1.20.13 — Overload: SLO check with cache fallback ties cache affinity; pool pulls do not land (2026-10-17)
 

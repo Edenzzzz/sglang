@@ -538,7 +538,7 @@ static mixture.
             | cache | agent | 4.8/7.9/11.8/269/352 ; 4.7/7.7/11.7/156/329 | 122 ; 135 | 29.8 ; 26.7 | 67.9 ; 73.1 |
             | slo_check+cache_fallback | chat | 3.6/7.2/12.2/19.9/44.3 ; 3.5/7.2/11.9/21.5/56.0 | 1729 ; 1817 | 27.2 ; 28.0 | 92.4 ; 92.8 |
             | slo_check+cache_fallback | agent | 4.7/8.4/11.7/245/350 ; 5.1/7.8/11.3/299/353 | 128 ; 130 | 28.8 ; 30.1 | 71.7 ; 71.2 |
-      - [~] **Margin / quantile choice from the measured error distribution (2026-10-17).** Measured / predicted
+      - [x] **Margin / quantile choice from the measured error distribution (2026-10-17).** Measured / predicted
             TTFT over the 4 clean-grid hot-mix SLO-check runs (13 200 requests; router logs `ttft_pred`, `ttft_obs`):
             | class | node | n | p10 | p50 | p80 | p90 | p99 |
             |---|---|---|---|---|---|---|---|
@@ -551,8 +551,22 @@ static mixture.
             Implemented (`router.py --ttft-quantile q`): a conformal-style margin -- feasibility uses predicted TTFT
             times the q-quantile of measured / predicted TTFT over a sliding window (500 finished requests) per
             class (`--long-prompt-tokens 24000` splits chat- from agent-length prompts); 1.0 until 50 samples.
-            Unit check: q = 0.8 over lognormal(0.08, 0.5) ratios gives 1.67. A/B queued after the prefetch
-            diagnostic: `mn_ttft_margin_8gpu_20261017.sh` (hot mix, q = 0 vs 0.8, x2, spread figure).
+            Unit check: q = 0.8 over lognormal(0.08, 0.5) ratios gives 1.67.
+            **Measured (`bash tasks/pd_colocation/mn_ttft_margin_8gpu_20261017.sh`, hot mix, x2; all 4 arms 8 workers
+            0 tracebacks / 0 fallbacks, prefill hit 92.8-93.0%): no effect beyond noise.** Two-rep means q = 0 vs
+            0.8: agent 186 vs 180 tok/s, TTFT 16.2 vs 16.4 s, ITL 31.4 vs 31.6 ms; chat 2 016 vs 1 971 tok/s, TTFT
+            1.80 vs 1.81 s, ITL 36.2 vs 35.6 ms. The margin binds -- own-TTFT rejections 2 417 / 2 688 -> 2 932 /
+            2 941 -- but reps differ more than arms (q = 0 moved 1 215 vs 2 096 requests; agent TTFT 17.9 vs 14.4 s),
+            so a quantile margin does not change outcomes on this mix: the rejected nodes were mostly ones the
+            other checks already rejected, and the fallback (top-hit node) decides the infeasible 23-29%. Kept off
+            by default. Spread ([figure](pd_colocation/figures_20261017/h20x8_hot_ttft_margin.png),
+            [data](pd_colocation/figures_20261017/h20x8_hot_ttft_margin.csv)):
+            | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 (rep 1 ; rep 2) | out tok/s | mean TTFT s | mean TPOT ms |
+            |---|---|---|---|---|---|
+            | q0 | chat | 5.2/11.2/77.2/268/387 ; 5.3/11.1/46.0/231/368 | 2017 ; 2016 | 2.0 ; 1.6 | 34.6 ; 37.7 |
+            | q0 | agent | 6.1/8.1/48.5/164/342 ; 5.0/7.4/27.9/134/192 | 168 ; 204 | 17.9 ; 14.4 | 47.1 ; 59.6 |
+            | q0.8 | chat | 4.8/10.3/66.7/265/380 ; 5.5/12.0/70.9/213/361 | 1925 ; 2017 | 2.1 ; 1.5 | 39.3 ; 31.7 |
+            | q0.8 | agent | 6.6/7.8/57.9/190/332 ; 6.1/7.3/35.4/135/206 | 170 ; 189 | 17.5 ; 15.4 | 45.8 ; 52.8 |
       - [ ] A/B: cache affinity | current SLO check | + step model | + transfer term | + margin, on
             goodput / SLO attainment at the 8-GPU H20 points (agent C=16/32, chat 8 req/s)
 - [ ] **5. THE SUPERSET CLAIM: adapt to any workload the baselines are each tuned for.**

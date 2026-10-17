@@ -132,6 +132,10 @@ patch("speculative/eagle_worker_v2.py",
         # The draft extend covers the whole prompt in one normal extend; left at SPLIT_PREFILL it would be routed
         # through the draft model's forward_split_prefill.
         split_mode, batch.forward_mode = batch.forward_mode, ForwardMode.EXTEND
+        # The scheduler drops batch.input_ids after every split slice (the target's ForwardBatch, built at the first
+        # slice, keeps them); the draft extend rotates the prompt ids, so take them back from there.
+        if batch.input_ids is None:
+            batch.input_ids = batch.split_forward_batch.input_ids
         try:
             with (
                 draft_tp_context(self.draft_worker.draft_owns_attention),

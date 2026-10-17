@@ -989,7 +989,18 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     `speculative/topk1.py:95 draft_topk1_postprocess`): pdmux's event loop runs split prefill batches and decode on
     separate stream groups, and EAGLE's draft/verify state assumes the standard loop. Combining them is scheduler
     integration work (drive the EAGLE worker's draft and verify from the decode stream group while prefill runs on the
-    other), not a flag. Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
+    other), not a flag.
+    - [ ] **PD multiplexing under EAGLE3 MTP -- scoped (2026-10-17, from `multiplex/multiplexing_mixin.py
+      event_loop_pdmux`).** The loop runs the decode batch on the decode SM group with `run_batch`, advances a
+      layer-split prefill (`split_index` / `split_forward_count`, a token budget's worth of layers per iteration) on
+      the prefill SM group, and merges finished prefill requests into the running batch. Needed: (1) the EAGLE worker's
+      `forward_batch_generation` must honour the split for extend batches (it runs the whole target forward today);
+      (2) EAGLE3 reads hidden states from 3 target layers, so the split prefill must keep those across iterations and run
+      the draft extend when the last layer finishes; (3) `merge_batch` must carry `EagleDraftInput` -- the eager
+      `topk1.py` assert is consistent with a merged batch lacking draft state; (4) draft CUDA graphs per stream group
+      (or eager draft, at a measured cost). Gates: srv_correctness against the stock-LPT floor, then the same cohort A/B
+      vs `--enable-pdmux` and vs ours. This is where the SM-pre-assignment idea meets decode ITL: the measured gap to
+      PD multiplexing is chat ITL +75-81%. Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).
   - [ ] **MuxWise = sglang `--enable-pdmux` (2026-10-13; superseded by the 2026-10-17 run above):** no public MuxWise repo; upstream
     sglang's PD-multiplexing (GreenContext SM split, layer-split prefill) is that design and is in

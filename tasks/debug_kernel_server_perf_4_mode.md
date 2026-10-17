@@ -6,7 +6,21 @@ on real serving workloads, then the EDF model and the PD-colocation argument
 chat + TraceLab workloads. Single H200 trial `095f01a3e1585eea` (`vibecuda`); H20 multi-node only
 after the kernel items close (<=16 GPUs).
 
-**Where it stands (2026-10-13, updated 08:00):** the serving kernel is now the two-launch split
+**Where it stands (2026-10-18):**
+- [x] Kernel items A, B and A5 closed (2026-10-17). The FA3 role runs flash-attention's kernel (paged TMA, `-DNDEBUG`,
+  fast math, dynamic scheduler) at parity with sgl-kernel FA3; FA3 || FA2 co-running buys -18% on balanced steps but
+  is bounded at ~1.2% of serving GPU time on TraceLab. Multicast, q-tile choice, split reduction and in-kernel
+  backfill are closed by measurement or measured bound (A5).
+- [x] Best serving config (single H200): PD multiplexing + worker-side EDF with uncached-token TTFT deadlines, decode
+  divisor 30 -- vs stock MTP all 12 bar metrics clear in the mean (C=8 four repeats, C=16 three), output gate PASS.
+  (Direct baselines -> PD multiplexing + EDF.)
+- [x] S4 step model on that schedule: decode ITL predictable to ~9% held-out vs 35-117% on the unfused schedules.
+- [x] 8 H20s (`pd_colocation_vs_disagg.md`): the same workers plus per-step SM sharing (TTFT deadlines + 24 ms ITL
+  budget) clear all 12 vs stock colocation + MTP in both repeats (smallest -39%), H20 output gate PASS.
+- [ ] Not met: vs stock colocation *without* speculation on H20 (agent TTFT at a ~5.9 s compute floor; best -18% /
+  -21%), and node-count scaling (needs > 16 GPUs). Both wait on the user: which baseline the bar uses, and the GPU cap.
+
+**Earlier standing (2026-10-13, superseded):** the serving kernel is now the two-launch split
 (FA3 prefill rows + stock FA2 BatchPrefill verify rows): vs stock MTP it clears the bar at mix32
 16/24 and mix128 24/s for both tenants (e.g. mix128 24/s chat +56% tput / -55% TTFT / -45% TPOT)
 and misses only agent TTFT/TPOT at mix128 16/s (-26%). Earlier summary, fused co-launch: under load the fused 4-mode arm beats stock MTP by TTFT

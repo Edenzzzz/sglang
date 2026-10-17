@@ -159,7 +159,7 @@ static mixture.
     in multiples of 8 and a working decode group needing >= 16 SMs, prefill cannot exceed 56 of H20's 78 SMs under
     pdmux: the TTFT loss on H20 is structural to SM-split colocation on this GPU, not a tuning gap.
     `mn_pdmux_manual_8gpu_20261017.sh`.
-  - [ ] **Backlog-triggered SM sharing (2026-10-17, `apply_pdmux_backlog_share.py`, `PDMUX_SHARE=N`):** pdmux's group 0
+  - [x] **Backlog-triggered SM sharing (2026-10-17, `apply_pdmux_backlog_share.py`, `PDMUX_SHARE=N`):** pdmux's group 0
     is unpartitioned (prefill and decode on normal streams over the whole GPU, as stock colocation); a split-prefill
     batch formed beside running decode now runs there when >= N uncached prompt tokens wait, else in pdmux's
     decode-isolating split. Chat 16 req/s, agent C=16, 8 workers healthy, 0 tracebacks / 0 OOMs, sharing fires on
@@ -168,7 +168,20 @@ static mixture.
     **N=32K vs stock colocation without speculation: agent +14% / -18% / -21%, chat TTFT -55% / ITL -24%** (chat
     throughput = offered load in every arm); vs stock colocation + MTP: agent +87% / -62% / -57%, chat -93% / -84%.
     P99 ITL rises to ~340 ms (shared batches stall decode, as in stock). N trades TTFT for ITL; 16K / 64K at 16
-    req/s and 32K at 32 req/s running (`POINTS="32:32768 16:65536 16:16384" bash mn_pdmux_share_8gpu_20261017.sh`).
+    req/s and 32K at 32 req/s (`POINTS="32:32768 16:65536 16:16384" bash mn_pdmux_share_8gpu_20261017.sh`, all 8
+    workers, 0 tracebacks / 0 fallbacks). vs stock colocation without speculation (same cohort, run-1 baselines):
+    | chat req/s | N | agent tput / TTFT / ITL | chat tput / TTFT / ITL |
+    |---|---|---|---|
+    | 16 | 16K | +12.8% / -15.7% / -21.9% | -0.6% / -61.2% / -25.6% |
+    | 16 | 32K | +13.9% / -17.7% / -21.1% | -0.6% / -55.0% / -23.8% |
+    | 16 | 64K | -4.9% / +69.0% / -43.0% | -0.5% / +63.2% / -44.3% |
+    | 16 | 128K | -9.0% / +88.9% / -45.9% | -0.6% / +42.8% / -47.6% |
+    | 32 | 32K | +9.1% / -10.5% / -21.9% | +14.5% / -38.9% / -35.7% |
+    vs stock colocation + MTP at 32 req/s, N=32K: agent +61.5% / -71.1% / -18.5%, chat +79.4% / -94.3% / -40.4%.
+    **Every metric now beats the strongest H20 baseline at N <= 32K, but the agent pair sits at about (-18%, -21%)
+    against the (-30%, -30%) bar**; raising N buys ITL with TTFT, lowering it below 32K stops helping. On H20 the
+    bar is met against stock colocation + MTP except agent ITL at 32 req/s (-18.5%), and not met against stock
+    non-speculative colocation.
 
 - [ ] **7. Inter-node routing: predict whether a request meets its TTFT and ITL SLO on node i, given
       i's estimated hit length x_i and current load** (added 2026-10-17 on the user's request; needs

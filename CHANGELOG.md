@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.20.30 — H20: backlog-triggered SM sharing in pdmux (2026-10-17)
+
+- `apply_pdmux_backlog_share.py` (`SGLANG_PDMUX_SHARE_BACKLOG_TOKENS`): a split-prefill batch runs on the whole GPU
+  (pdmux group 0) when the uncached prompt backlog reaches N tokens. On 8 H20s at N=32K it beats stock
+  non-speculative colocation on every metric (16 req/s: agent +14% / -18% / -21%, chat TTFT -55% / ITL -24%; 32 req/s:
+  agent +9% / -11% / -22%, chat +15% / -39% / -36%) but not by 30%. A 14-SM decode group (prefill-heavy manual
+  divisions) fails cuBLAS during graph capture, so prefill is capped at 56 of 78 SMs under the SM split.
+
 ## v1.20.29 — pdmux + EDF on 8 H20s: ITL -41..-88%, but TTFT loses to stock non-speculative colocation (2026-10-17)
 
 - Multi-node arm `coloc_cache_edf_pdmux` (pdmux on every colocated worker, uncached EDF deadlines, divisor 30,

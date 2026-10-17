@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.20.20 — our FA3 role was flashinfer's paged mainloop, not upstream's (2026-10-17)
+
+- A5.0c NCU: same occupancy, registers and smem as upstream FA3 and identical math instruction counts (HGMMA, MUFU,
+  FMUL/FFMA/FADD), but 2x total instructions -- ~790M extra LOP3/PRMT/IMAD/SHFL/SHF/LEA plus cp.async KV gather.
+  The profiled kernel is `DedicatedFA3PrimaryKernel<SparseCollectiveMainloop<...>>`: the upstream-mainloop role
+  (`FLASHINFER_FA3_UPSTREAM`) was never enabled after the 0.7 port, so every FA3 measurement since used flashinfer's
+  paged mainloop. A5.0d: loader switch `FA3_UPSTREAM`, flash-attention hopper headers on the pod; it now compiles and
+  faults at run time (illegal address), under compute-sanitizer.
+
 ## v1.20.19 — pdmux + MTP payoff is negative; fast math worth 4-6% on our FA3 (2026-10-17)
 
 - MTP + `--enable-pdmux` (race fixed, all arms clean) vs plain pdmux at C=8/16: throughput -24%, TTFT +61..+117%,

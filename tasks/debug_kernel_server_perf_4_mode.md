@@ -215,6 +215,20 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   (what serving runs) and the unfused two-launch step. In order:
   - [ ] A5.0 mainloop gap: our persistent FA3 at ~43% tensor activity vs stock 65% (NCU 2026-10-14); close it
     first, since every technique below is measured on top of it.
+    - [x] **A5.0c NCU, ours vs upstream FA3 (2026-10-17 12:47, one launch each, both fixtures PASS):** same block
+      (384), registers (168), smem (164 vs 167 KB) and occupancy (18.7% warps), but ours issues **2x the
+      instructions** for the same work: prefill 2048 @ 64K 1.67G (fast math) vs 0.88G, chat 2048 34M vs 18M. The
+      math is identical -- HGMMA 28.93M, MUFU 119.4M, FMUL / FFMA / FADD / FMNMX / F2FP all within 1% -- and the excess
+      is ~790M integer/permute/shuffle instructions: LOP3 203M, PRMT 123M (one per score element), IMAD 111M (vs
+      15M), SHFL 69M (vs 7M), SHF 65M (vs 5M), LEA 65M (vs 6M), IADD3 62M, plus 29M LDGSTS (cp.async KV gather; upstream
+      uses TMA). **Root cause: the profiled kernel is `DedicatedFA3PrimaryKernel<SparseCollectiveMainloop<
+      BatchPrefillPagedParams ...>>` -- flashinfer's own sparse/paged hopper mainloop, not flash-attention's.** The
+      upstream-mainloop role (`hopper/fa3_upstream.cuh`, `FLASHINFER_FA3_UPSTREAM`) was never enabled by the loader
+      after the 0.7 port (its last attempt failed on a missing flash-attention tree, then a `wgmma_plan` params
+      mismatch, archive log 2026-10-09). Every FA3 number since -- NCU 43%, KV96, locality, unpacked, multicast,
+      SM budget -- measured flashinfer's mainloop. Next: A5.0d, build the role on the upstream mainloop.
+      `bash a5_fa3_ncu_20261017.sh`; `python ncu_compare.py <dir> <fixture>`; per-opcode via `ncu --import <rep>
+      --page raw --csv --print-metric-instances details --metrics sass__inst_executed_per_opcode`.
     - [x] **A5.0b `--use_fast_math` (2026-10-17 12:39-12:46, ON/OFF interleaved x2, 112 CTAs, all 28 runs 9/9):**
       ON/OFF = 0.940-0.977 on every fixture (spread <=0.4%), e.g. prefill 2048 @ 64K 4.628 -> 4.411 ms, chat 2048
       0.171 -> 0.161 ms. Real but small: ours/upstream is still 1.37-1.38x on long items and 2.0-2.95x on short

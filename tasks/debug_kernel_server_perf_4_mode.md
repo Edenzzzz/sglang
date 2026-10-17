@@ -1022,7 +1022,14 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       tracebacks; 20 / 24 identical to stock MTP over 128 greedy tokens (median common prefix 128, worst 8);
       acceptance length 3.03-3.13, 17 split prefill batches beside decode.** The worst-case prefix is within the bf16
       batching noise measured before (split vs stock min common prefix 5 / 15) but this is not the formal gate:
-      `srv_correctness.py` against the stock-LPT floor comes next, then (4) CUDA graphs, then the cohort A/B. Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
+      `srv_correctness.py` against the stock-LPT floor comes next, then (4) CUDA graphs, then the cohort A/B.
+      **CUDA graphs work too (11:3x, `smoke_pdmux_mtp_graphs.sh`):** with graphs on in both servers MTP + pdmux served
+      24 / 24, 0 tracebacks, decode on graphs (`cuda graph: True`); 18 / 24 identical to stock MTP over 128 tokens --
+      five long prompts diverge at 48-99 tokens, one short at token 2 -- and acceptance length 3.07 vs 3.31 (-7%). Under
+      greedy speculation the output is fixed by the target's verify, so divergence is target numerics (pdmux decodes on
+      a different SM count, so flashinfer's split-KV partition differs); the acceptance drop is the open question.
+      Formal gate running: `gate_pdmux_mtp.sh` (srv_correctness arms MTP, MTP_REP = noise floor, MTP_PDMUX, graphs on;
+      the driver gained a PDMUX arm). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).
   - [ ] **MuxWise = sglang `--enable-pdmux` (2026-10-13; superseded by the 2026-10-17 run above):** no public MuxWise repo; upstream
     sglang's PD-multiplexing (GreenContext SM split, layer-split prefill) is that design and is in

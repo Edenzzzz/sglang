@@ -85,6 +85,9 @@ def run_arm(arm, outdir):
                  "--speculative-draft-model-path", f"{W}/qwen7b_eagle3_sgl",
                  "--speculative-num-steps", "3", "--speculative-eagle-topk", "1",
                  "--speculative-num-draft-tokens", "4"]
+    if "PDMUX" in arm:
+        # PD multiplexing (GreenContext SM split, layer-split prefill): no chunked prefill, no overlap scheduler.
+        args += ["--enable-pdmux", "--chunked-prefill-size", "-1", "--disable-overlap-schedule"]
     # Own session, so teardown can kill sglang's children (scheduler, detokenizer, the HTTP
     # process) as a group. srv.kill() alone left one listening on the port, and the next
     # arm's warmup request went to that stale server and timed out.

@@ -9,14 +9,17 @@ W=/dev/shm/w
 exec 9>"$W/a2_kernel.lock"; flock 9
 pgrep -f '[s]glang.launch_server' >/dev/null && { echo "GPU predecessor still running"; exit 1; }
 out=$W/pdmux_mtp_smoke_20261017; mkdir -p $out
-export PYTHONPATH=$W/up_pdmux_mtp/python HF_HOME=$W/hf
+export PYTHONPATH=$W/up_pdmux_mtp/python HF_HOME=$W/hf SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1
 COMMON="--model $W/qwen7b --attention-backend flashinfer --mem-fraction-static 0.8 --host 127.0.0.1 --port 31977
-  --context-length 32768 --disable-cuda-graph --speculative-algorithm EAGLE3
+  --context-length 131072 --disable-cuda-graph --speculative-algorithm EAGLE3
   --speculative-draft-model-path $W/qwen7b_eagle3_sgl --speculative-num-steps 3 --speculative-eagle-topk 1
   --speculative-num-draft-tokens 4"
 run() {  # run <label> <extra args>
   local label=$1; shift
-  $W/venv/bin/python -m sglang.launch_server $COMMON "$@" > $out/server_$label.log 2>&1 &
+  # Same YaRN override as every serving arm (mn_node.sh / the drivers): the plain 32K config fails the context check.
+  $W/venv/bin/python -m sglang.launch_server $COMMON \
+    --json-model-override-args '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}' \
+    "$@" > $out/server_$label.log 2>&1 &
   local pid=$!
   for t in $(seq 1 120); do sleep 5; curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:31977/health | grep -q 200 && break
     kill -0 $pid 2>/dev/null || break; done

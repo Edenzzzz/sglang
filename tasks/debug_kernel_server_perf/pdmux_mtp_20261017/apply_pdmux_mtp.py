@@ -85,7 +85,7 @@ patch("models/llama.py",
                 forward_batch.hidden_states,
                 forward_batch,
                 capture_output=aux.capture
-                if aux is not None and i in self.model.layers_to_capture
+                if aux is not None and i in getattr(self.model, "layers_to_capture", ())
                 else None,
             )''')
 patch("models/llama.py",
@@ -127,18 +127,24 @@ patch("speculative/eagle_worker_v2.py",
         batch_output.new_seq_lens = batch.seq_lens
         if self._draft_worker is None:
             return batch_output
-        with (
-            draft_tp_context(self.draft_worker.draft_owns_attention),
-            speculative_moe_backend_context(),
-            speculative_moe_a2a_backend_context(),
-            spec_stage_span("draft_extend"),
-        ):
-            batch_output.next_draft_input = self.draft_worker._draft_extend_for_prefill(
-                batch,
-                batch_output.logits_output.hidden_states,
-                batch_output.next_token_ids,
-                batch_output.logits_output.mm_input_embeds,
-            )
+        # The draft extend covers the whole prompt in one normal extend; left at SPLIT_PREFILL it would be routed
+        # through the draft model's forward_split_prefill.
+        split_mode, batch.forward_mode = batch.forward_mode, ForwardMode.EXTEND
+        try:
+            with (
+                draft_tp_context(self.draft_worker.draft_owns_attention),
+                speculative_moe_backend_context(),
+                speculative_moe_a2a_backend_context(),
+                spec_stage_span("draft_extend"),
+            ):
+                batch_output.next_draft_input = self.draft_worker._draft_extend_for_prefill(
+                    batch,
+                    batch_output.logits_output.hidden_states,
+                    batch_output.next_token_ids,
+                    batch_output.logits_output.mm_input_embeds,
+                )
+        finally:
+            batch.forward_mode = split_mode
         return batch_output
 
     def _forward_dp_spec_prefill_coordination(''')

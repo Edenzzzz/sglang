@@ -215,6 +215,25 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   (what serving runs) and the unfused two-launch step. In order:
   - [ ] A5.0 mainloop gap: our persistent FA3 at ~43% tensor activity vs stock 65% (NCU 2026-10-14); close it
     first, since every technique below is measured on top of it.
+    - [x] **A5.0d FA3 role on flash-attention's mainloop (2026-10-17 12:55-13:16, every run 11/11 checks vs fp32
+      causal reference):** `FA3_UPSTREAM=1` now builds (loader switch, hopper headers beside the merged include
+      tree) and runs after one fix -- the launch sized dynamic smem from flashinfer's FA3 traits (163 920 B) while
+      the body is flash-attention's kernel (compute-sanitizer: out-of-range shared address); `fi_a5_patch.py` takes
+      the max with `UpstreamFA3Kernel::SharedStorageSize`. Upstream mainloop removed the LOP3/PRMT overhead but
+      was no faster (prefill 2048 @ 64K 4.71 ms): consumers spin on mbarriers (NANOSLEEP 10M, SYNCS 31M). Paged-TMA
+      KV (`FA3_PAGED_TMA=1`) is slower still (5.22 ms). Control arm `fa3only` (our build of flash-attention's
+      kernel on upstream's own scheduler, 132 SMs): 4.65 ms = our candidate, so the scheduler adapter was not the
+      long-item cost -- the build was.
+    - [x] **A5.0e `-DNDEBUG` is the long-item gap (2026-10-17 13:21-13:25, 11/11 checks):** our FA3 extension was
+      built without `-DNDEBUG`, so every device `assert` in flash-attention's scheduler / paged-KV / mainloop ran
+      per tile (the ISETP 24M vs 6M, BRA 36M vs 10M excess). With it (upstream mainloop, fast math, 112 CTAs):
+      prefill 2048 @ 64K 4.68 -> **3.61 ms** (sgl-kernel upstream 3.32 on 132 SMs: 1.09x), chat 2048 0.168 ->
+      0.122 ms; `fa3only` 3.59 / 0.065 ms. Upstream's other build flags (GDC, extended MMA shapes, trace level 0)
+      add nothing. Left: ~57 us fixed on short items in our compact path (0.122 vs fa3only 0.065 ms). The same
+      extension compiles the co-launched FA2 executor, whose A4 "~20% mainloop gap" to stock FA2 was measured
+      without `-DNDEBUG` too -- to re-measure. Full fixture table running (`a5_fa3_upstream_table_20261017.sh`).
+      Scripts: `a5_fa3_upstream_try_20261017.sh` (UPS / PTMA / XN switches), `extra_nvcc_patch.py`,
+      `upstream_patch.py`, `fi_a5_patch.py` (pod trees `up_a5`, `fi_a5`).
     - [x] **A5.0c NCU, ours vs upstream FA3 (2026-10-17 12:47, one launch each, both fixtures PASS):** same block
       (384), registers (168), smem (164 vs 167 KB) and occupancy (18.7% warps), but ours issues **2x the
       instructions** for the same work: prefill 2048 @ 64K 1.67G (fast math) vs 0.88G, chat 2048 34M vs 18M. The

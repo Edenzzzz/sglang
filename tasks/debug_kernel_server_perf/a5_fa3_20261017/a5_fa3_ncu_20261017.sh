@@ -1,11 +1,12 @@
 #!/bin/bash
-# A5.0c: NCU of our dedicated FA3 primary (fast math OFF / ON) vs upstream sgl-kernel FA3 on a chat-size fixture
+# A5.0c/d: NCU of our dedicated FA3 primary (flashinfer mainloop, fast math OFF / ON; upstream mainloop UP) vs upstream sgl-kernel FA3 on a chat-size fixture
 # (per-tile overhead dominates: 448 tiles of ~1K keys) and a long one (mainloop dominates), same harness and builds
 # as a5_fa3_fastmath_20261017.sh. One profiled launch per kernel, kernel replay, clocks uncontrolled -- counters,
 # not timings. Waits for a2_kernel.lock; yields to /dev/shm/w/codex_needs_gpu.
 set -uo pipefail
 W=/dev/shm/w
 out=$W/a5_fa3_ncu_20261017
+VARIANT_FILTER=${VARIANT_FILTER:-}
 trap 'printf "A5NCU_EXIT status=%s time=%s\n" "$?" "$(date -Is)"' EXIT
 exec 9>"$W/a2_kernel.lock"; flock 9
 cd "$W"; mkdir -p "$out"
@@ -25,14 +26,19 @@ shapes=("chat_fresh2048|2048:2048" "prefill2048_kv64k|2048:65536")
 # variant|kernel|fast math|extension dir
 variants=("oursOFF|DedicatedFA3PrimaryKernel|0|$W/torch_ext_tma_gather"
           "oursON|DedicatedFA3PrimaryKernel|1|$W/torch_ext_a5_fastmath"
-          "upstream|device_kernel|0|$W/torch_ext_tma_gather")
+          "upstream|device_kernel|0|$W/torch_ext_tma_gather"
+          "oursUP|DedicatedFA3PrimaryKernel|1|$W/torch_ext_a5_upstream")
 for shape in "${shapes[@]}"; do
   for v in "${variants[@]}"; do
     IFS='|' read -r name kernel fm ext <<< "$v"
+    [ -n "$VARIANT_FILTER" ] && [ "$name" != "$VARIANT_FILTER" ] && continue
+    if [ "$name" = oursUP ]; then
+      up=(FA3_UPSTREAM=1 SGLANG_FUSED_FI_ROOT=$W/fi_a5 SGLANG_FUSED_MERGED_DIR=$W/merged_a5)
+    else up=(FA3_UPSTREAM=0); fi
     [ -s $W/codex_needs_gpu ] && { echo "A5NCU_YIELD ${shape%%|*} $name"; exit 0; }
     label=${shape%%|*}_$name
     echo "A5NCU_START $label $(date -Is)"
-    env FA3_REQUESTS="${shape#*|}" FUSED_FAST_MATH=$fm TORCH_EXTENSIONS_DIR=$ext timeout --kill-after=30 900 \
+    env "${up[@]}" FA3_REQUESTS="${shape#*|}" FUSED_FAST_MATH=$fm TORCH_EXTENSIONS_DIR=$ext timeout --kill-after=30 900 \
       ncu --target-processes application-only --kernel-name-base function --kernel-name "$kernel" --launch-count 1 \
       --replay-mode kernel --clock-control none \
       --section LaunchStats --section Occupancy --section SpeedOfLight --section SchedulerStats \

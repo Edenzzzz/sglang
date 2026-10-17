@@ -201,6 +201,28 @@ def main():
     max_seqlen_q = max(length for length, _ in primary)
     upstream = {}
 
+    fa3only = None
+    if os.environ.get("FA3_UPSTREAM") == "1":
+        # Our build of flash-attention's kernel on upstream's own persistent scheduler (fa3_only_run): separates our
+        # scheduler adapter from our compile configuration.
+        n = len(primary)
+        iopt = dict(dtype=torch.int32, device="cuda")
+        fo = dict(
+            lse=torch.empty(int(query.shape[0]) * QUERY_HEADS, dtype=torch.float32, device="cuda"),
+            page_table=torch.full((n * max_pages,), -1, **iopt),
+            partial_o=torch.empty(1, dtype=torch.float32, device="cuda"),
+            partial_lse=torch.empty(1, dtype=torch.float32, device="cuda"),
+            nsd=torch.ones(n, **iopt), sem=torch.zeros(1, **iopt),
+            batch_list=torch.arange(n, **iopt), page_indptr=fixture["page_indptr"][:n + 1].to("cuda"))
+        fa3only = fo
+
+    def run_fa3only():
+        fo = fa3only
+        operations.fa3_only_run(
+            query, key, value, output, fo["lse"], fixture["indices"], fo["page_indptr"], cu_seqlens_q, cache_seqlens,
+            fo["batch_list"], QUERY_HEADS, KV_HEADS, PAGE_SIZE, 1.0 / math.sqrt(HEAD_DIM), max_seqlen_q, max_pages, 1,
+            fo["page_table"], fo["partial_o"], fo["partial_lse"], fo["nsd"], fo["sem"], True)
+
     def run_upstream():
         # Kept, not copied: under graph capture the returned tensor is the graph's static output.
         upstream["out"] = flash_attn_with_kvcache(
@@ -220,6 +242,11 @@ def main():
     run_upstream()
     torch.cuda.synchronize()
     verify(upstream["out"], reference, "upstream_eager")
+    if fa3only is not None:
+        output.fill_(float("nan"))
+        run_fa3only()
+        torch.cuda.synchronize()
+        verify(output, reference, "fa3only_eager")
     for _ in range(3):
         run()
     torch.cuda.synchronize()
@@ -267,7 +294,10 @@ def main():
         assert os.environ.get("FUSED_FA3_TMA_TRACE", "0") == "0"
         iterations = int(os.environ.get("TIME_ITERS", "100"))
         assert iterations > 0
-        for label, function in (("candidate", run), ("stock", run_stock), ("upstream", run_upstream)):
+        arms = [("candidate", run), ("stock", run_stock), ("upstream", run_upstream)]
+        if fa3only is not None:
+            arms.append(("fa3only", run_fa3only))
+        for label, function in arms:
             for _ in range(3):
                 function()
             torch.cuda.synchronize()

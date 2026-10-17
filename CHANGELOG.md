@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.20.21 — FA3 role on flash-attention's mainloop; -DNDEBUG closes most of the FA3 gap (2026-10-17)
+
+- A5.0d: `FLASHINFER_FA3_UPSTREAM` builds and runs again (loader switch, flash-attention headers, dynamic smem now
+  covers flash-attention's SharedStorage -- the launch had sized it from flashinfer's traits). All arms exact.
+- A5.0e: the FA3 extension was compiled without `-DNDEBUG`; device asserts ran per tile. With it, prefill 2048 @ 64K
+  4.68 -> 3.61 ms on 112 CTAs (sgl-kernel upstream FA3 3.32 ms on 132), chat 2048 0.168 -> 0.122 ms. ~57 us of fixed
+  per-call cost remains on short items in our compact path.
+
 ## v1.20.20 — our FA3 role was flashinfer's paged mainloop, not upstream's (2026-10-17)
 
 - A5.0c NCU: same occupancy, registers and smem as upstream FA3 and identical math instruction counts (HGMMA, MUFU,

@@ -1303,7 +1303,25 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
           C=8 agent +27.8% / -30.1% / -31.6%, chat +25.4% / -70.8% / -55.3%; C=16 agent +32.7% / -32.2% / -40.2%, chat
           +31.6% / -57.1% / -54.7%; repeat spread <=3.4% (C=8), <=5.2% (C=16). **All 12 means clear the bar, but C=8
           agent TTFT by 0.1 point (per rep -31.1 / -29.4 / -29.7%) -- not robust.** Divisor 30 (between 36's -34.1 /
-          -29.1 and 27's -30.1 / -31.6) for three repeats next, `pdmux_edf_unc2_20261017.sh` with UNC_D30. Per-request spread in
+          -29.1 and 27's -30.1 / -31.6) for three repeats next, `pdmux_edf_unc2_20261017.sh` with UNC_D30.
+        - [x] **Final single-GPU config -- PD multiplexing + EDF with uncached-token deadlines, decode_bs_divisor 30
+          (2026-10-17 18:05-18:50; three repeats, all rc=0, 0 tracebacks / 0 fallbacks, EDF + pdmux on; output gate
+          PASS -- LPT_PDMUX_EDF vs LPT short 1 / long 11, identical to the pdmux null case, stock repeat floor short 545
+          / long 90).** Three-repeat means vs stock MTP (same cohort, ShareGPT 8 req/s, frozen 32-64K TraceLab):
+          | C | agent tput / TTFT / ITL | chat tput / TTFT / ITL |
+          |---|---|---|
+          | 8 | **+28.9% / -31.7% / -31.1%** | +25.3% / -72.8% / -54.9% |
+          | 16 | +32.7% / -32.3% / -40.4% | +31.6% / -57.3% / -54.7% |
+          **All 12 means clear the bar (>=30% TTFT and ITL, >=10% throughput).** Per repeat, C=8 agent TTFT / ITL:
+          -30.4 / -31.9, -33.0 / -31.9, -31.6 / -29.6 (5 of 6 values clear; rep 3 ITL is 0.4 point short); C=16 all
+          clear in every repeat. Chat tok/s/user p1/p50/p99 34 / 69 / 132 (C=8) vs stock MTP 7 / 42 / 168; agent P99
+          ITL 34-35 ms vs 417-498 ms. Per-rep tput / TTFT / ITL in
+          [summary](debug_kernel_server_perf/pdmux_mtp_20261017/pdmux_unc30_3rep_summary.txt). Commands (pod
+          `/dev/shm/w`, tree `up_pdmux_mtp` = `up_edf_floor` + `apply_pdmux_mtp.py` + `apply_edf_uncached.py`):
+          `for r in 1 2 3; do REP=$r D27=0 D24=0 D30=1 bash pdmux_edf_unc2_20261017.sh; done`, `bash
+          gate_pdmux_edf_unc30.sh`. **Attribution, stated plainly:** the SM split that buys ITL is sglang's PD
+          multiplexing; ours is the scheduling on top -- deadline-ordered admission with uncached-token deadlines and
+          the decode-share setting -- which turns pdmux's 9-of-12 into 12-of-12 against stock MTP. Per-request spread in
           [summary](debug_kernel_server_perf/pdmux_mtp_20261017/pdmux_edf_unc_20261017_summary.txt). Script:
       `pdmux_mtp_ab_20261017.sh` (frozen cohort, C = 8 / 16 + ShareGPT 8 req/s; PDMUX | MTP_PDMUX |
       EDFR50_F2048, one tree, one session, graphs on). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`

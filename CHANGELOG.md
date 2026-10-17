@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.27 — single-GPU bar met in the mean: pdmux + EDF (uncached deadlines, divisor 30) (2026-10-17)
+
+- Three repeats + output gate PASS vs stock MTP: C=8 agent +29% / -31.7% / -31.1%, chat +25% / -73% / -55%; C=16 agent
+  +33% / -32% / -40%, chat +32% / -57% / -55%. 5 of 6 C=8 agent per-rep values clear (one ITL at -29.6%).
+
 ## v1.20.26 — EDF deadlines on uncached tokens: pdmux + EDF clears all 12 bar means vs stock MTP (2026-10-17)
 
 - `apply_edf_uncached.py` (`SGLANG_EDF_UNCACHED_DEADLINE=1`): the TTFT deadline scales with prompt tokens not already

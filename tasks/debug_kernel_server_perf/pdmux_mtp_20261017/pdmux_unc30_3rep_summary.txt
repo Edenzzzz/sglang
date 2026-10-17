@@ -1,0 +1,12 @@
+rep1 C=8 UNC_D30       LPT_agent                    n=   96 tput=  142.1 ttft= 13.00s itl=  14.5ms p99itl=    34 tok/s/user p1/p10/p50/p90/p99=34/51/65/75/107 accept=None
+rep1 C=8 UNC_D30       LPT_chat                     n= 2048 tput= 1608.7 ttft=  6.68s itl=  13.6ms p99itl=    33 tok/s/user p1/p10/p50/p90/p99=34/56/69/109/132 accept=None
+rep1 C=16 UNC_D30       LPT_agent                    n=   96 tput=  142.6 ttft= 29.31s itl=  16.3ms p99itl=    35 tok/s/user p1/p10/p50/p90/p99=32/43/60/73/87 accept=None
+rep1 C=16 UNC_D30       LPT_chat                     n= 2048 tput= 1611.1 ttft= 22.26s itl=  14.2ms p99itl=    34 tok/s/user p1/p10/p50/p90/p99=38/53/68/93/126 accept=None
+rep2 C=8 UNC_D30       LPT_agent                    n=   96 tput=  143.5 ttft= 12.51s itl=  14.5ms p99itl=    32 tok/s/user p1/p10/p50/p90/p99=32/52/64/75/104 accept=None
+rep2 C=8 UNC_D30       LPT_chat                     n= 2048 tput= 1610.3 ttft=  6.03s itl=  13.7ms p99itl=    31 tok/s/user p1/p10/p50/p90/p99=33/53/68/110/133 accept=None
+rep2 C=16 UNC_D30       LPT_agent                    n=   96 tput=  142.3 ttft= 29.31s itl=  16.1ms p99itl=    36 tok/s/user p1/p10/p50/p90/p99=33/47/62/74/87 accept=None
+rep2 C=16 UNC_D30       LPT_chat                     n= 2048 tput= 1608.8 ttft= 22.09s itl=  14.0ms p99itl=    32 tok/s/user p1/p10/p50/p90/p99=39/54/69/92/123 accept=None
+rep3 C=8 UNC_D30       LPT_agent                    n=   96 tput=  141.6 ttft= 12.78s itl=  15.0ms p99itl=    38 tok/s/user p1/p10/p50/p90/p99=31/50/64/74/102 accept=None
+rep3 C=8 UNC_D30       LPT_chat                     n= 2048 tput= 1612.3 ttft=  6.24s itl=  13.9ms p99itl=    34 tok/s/user p1/p10/p50/p90/p99=34/53/68/103/131 accept=None
+rep3 C=16 UNC_D30       LPT_agent                    n=   96 tput=  143.7 ttft= 28.95s itl=  16.2ms p99itl=    35 tok/s/user p1/p10/p50/p90/p99=33/41/63/74/85 accept=None
+rep3 C=16 UNC_D30       LPT_chat                     n= 2048 tput= 1610.5 ttft= 21.43s itl=  14.0ms p99itl=    34 tok/s/user p1/p10/p50/p90/p99=36/55/69/98/130 accept=None

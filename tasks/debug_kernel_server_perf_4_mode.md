@@ -215,6 +215,11 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   (what serving runs) and the unfused two-launch step. In order:
   - [ ] A5.0 mainloop gap: our persistent FA3 at ~43% tensor activity vs stock 65% (NCU 2026-10-14); close it
     first, since every technique below is measured on top of it.
+    - [x] **A5.0b `--use_fast_math` (2026-10-17 12:39-12:46, ON/OFF interleaved x2, 112 CTAs, all 28 runs 9/9):**
+      ON/OFF = 0.940-0.977 on every fixture (spread <=0.4%), e.g. prefill 2048 @ 64K 4.628 -> 4.411 ms, chat 2048
+      0.171 -> 0.161 ms. Real but small: ours/upstream is still 1.37-1.38x on long items and 2.0-2.95x on short
+      ones. Adopt fast math (upstream's own build flag); the gap is elsewhere -> A5.0c NCU, ours vs upstream.
+      `bash a5_fa3_fastmath_20261017.sh` (tree `up_a5` = `up_tma_multicast` + `fastmath_patch.py`).
     - [x] **Gap located (2026-10-17 12:16-12:23, H200, all 28 runs 9/9 checks vs fp32 causal reference, repeat
       spread <=3.1%):** that NCU compare was confounded (ours on 112 CTAs vs flashinfer FA3 on 132, and flashinfer
       FA3 is not what serving runs). FA3-only fixtures, ms, two-repeat means:
@@ -1091,8 +1096,24 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       workspace and eager kv-index buffers with the decode-stream backends. Fix (patch item 8): keep the pdmux
       prefill backend and run the prefill-side draft extend on it. **Output gate re-run with the fix: PASS, short 1 /
       long 11 -- unchanged, equal to the non-speculative pdmux null case** (`pdmux_mtp_fix8_20261017.sh`; the
-      pre-fix C=8 run is discarded, since it ran with the race). Both MTP_PDMUX arms rerunning; PDMUX and
-      EDFR50_F2048 from run 1 stand (0 tracebacks, 0 fallbacks, FUSED_SPLIT_CALLS 67.5K / 68.5K). Script:
+      pre-fix C=8 run is discarded, since it ran with the race). PDMUX and EDFR50_F2048 from run 1 stand (0 tracebacks,
+      0 fallbacks, FUSED_SPLIT_CALLS 67.5K / 68.5K); MTP_PDMUX rerun with the fix at C=8 / 16 (12:25-12:39): rc=0,
+      0 tracebacks, 0 fallbacks, pdmux active.
+      **Result: MTP + pdmux does not pay -- negative.** Agent / chat: tput, mean TTFT (s), mean ITL (P99) ms;
+      chat tok/s/user p1/p50/p99 (`summarize_ab.py`, [summary](debug_kernel_server_perf/pdmux_mtp_20261017/pdmux_mtp_ab_20261017_summary.txt)):
+      | C | arm | agent | chat | chat tok/s/user |
+      |---|---|---|---|---|
+      | 8 | PDMUX | 141 / 12.9 / 15.5 (37) | 1612 / 10.7 / 13.8 (33) | 36 / 68 / 132 |
+      | 8 | MTP_PDMUX | 107 / 20.7 / 17.8 (99) | 1267 / 25.2 / 27.0 (116) | 16 / 40 / 113 |
+      | 8 | EDFR50_F2048 (ours) | 139 / 14.8 / 14.3 (48) | 1576 / 5.8 / 25.1 (131) | 18 / 45 / 138 |
+      | 16 | PDMUX | 142 / 29.0 / 16.9 (41) | 1610 / 25.3 / 13.7 (32) | 36 / 71 / 130 |
+      | 16 | MTP_PDMUX | 106 / 48.0 / 18.1 (99) | 1213 / 55.0 / 28.2 (111) | 17 / 38 / 95 |
+      | 16 | EDFR50_F2048 (ours) | 139 / 31.6 / 16.8 (73) | 1558 / 23.3 / 23.9 (127) | 16 / 48 / 126 |
+      MTP_PDMUX vs PDMUX: throughput -24%, TTFT +61..+117%, chat ITL 2x. Acceptance is the same in both MTP arms
+      (bench 2.12 tokens per verify for MTP_PDMUX and ours), so the smoke test's 3.07 vs 3.31 was small-sample noise,
+      not a pdmux effect -- closed. The cost is the step: a 4-token verify plus 3 draft steps over 32-64K-context
+      rows, on pdmux's shrunken decode SM group, takes ~4x a non-speculative decode step for 2.1x the tokens.
+      Plain pdmux stays the strongest ITL baseline; ours keeps TTFT (chat -46% / -8% vs PDMUX) and ties throughput. Script:
       `pdmux_mtp_ab_20261017.sh` (frozen cohort, C = 8 / 16 + ShareGPT 8 req/s; PDMUX | MTP_PDMUX |
       EDFR50_F2048, one tree, one session, graphs on). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).

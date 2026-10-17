@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.20.19 — pdmux + MTP payoff is negative; fast math worth 4-6% on our FA3 (2026-10-17)
+
+- MTP + `--enable-pdmux` (race fixed, all arms clean) vs plain pdmux at C=8/16: throughput -24%, TTFT +61..+117%,
+  chat ITL 2x; acceptance equals our MTP arm (2.12), so the earlier smoke-test acceptance gap was noise. Plain pdmux
+  remains the strongest ITL baseline; ours keeps chat TTFT and ties throughput.
+- A5.0b: building our FA3 with `--use_fast_math` (as upstream does) is 2.3-6.0% faster on every fixture, all exact;
+  the remaining gap to upstream FA3 (1.37x long, 2-2.95x short) goes to an NCU comparison (A5.0c).
+
 ## v1.20.18 — pdmux + MTP cross-stream race fixed; FA3 gap located vs upstream FA3 (2026-10-17)
 
 - pdmux + EAGLE3 MTP (patch item 8): the draft extend after a split prefill (prefill stream) shared the global

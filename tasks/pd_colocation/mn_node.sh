@@ -27,13 +27,13 @@ export LD_LIBRARY_PATH=$CUDART:${LD_LIBRARY_PATH:-}
 export SGLANG_HOST_IP=$(hostname -I | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
 # KERNEL=mtpsplit: the single-GPU serving kernel of 2026-10-16 -- 4-mode MTP step on the two-launch
 # split (FA3 prefill rows + stock FA2 verify rows), decode guard off; the same env as
-# run_mixed_workloads' MTPMIX_SPLIT arm. SM_FA3 scaled to H20's 78 SMs (112/132 on H200).
+# run_mixed_workloads' MTPMIX_SPLIT arm. SM_FA3 (env) scaled to H20's 78 SMs by default; 112 on H200.
 if [ "${KERNEL:-lpt}" = mtpsplit ]; then
   export SGLANG_MIXED_ATTENTION_KERNEL=persistent SGLANG_TWO_EXEC=1 SGLANG_FUSED_FA3_SM_SPLIT=1
   export FLASHINFER_SM_PARTITION=1 UP_STAGES=2 SGLANG_FUSED_FA3_SRC=$W/fi/tests/fused_fa3_persistent_ext.cu
   export SGLANG_FUSED_FI_ROOT=$W/port07 SGLANG_FUSED_FA2_TILES=64,32,16 FUSED_FA2_FINE_TAIL=1
   export FUSED_CONST_PERS_PARAMS=1 FUSED_WORK_BUDGET_SPLIT=1 FLASHINFER_FUSED_BACKFILL=1
-  export FLASHINFER_FUSED_COLAUNCH=1 FUSED_FA2_KV_CHUNK=auto SGLANG_FUSED_SM_FA3=66
+  export FLASHINFER_FUSED_COLAUNCH=1 FUSED_FA2_KV_CHUNK=auto SGLANG_FUSED_SM_FA3=${SM_FA3:-66}
   export SGLANG_SPLIT_OVERLAP=0 SGLANG_FUSED_DECODE_GUARD=0
 fi
 if [ "${KERNEL:-lpt}" = split ]; then
@@ -217,7 +217,8 @@ supervise() {
     mv $LOG/worker_r${ROLE}_g${g}.log $LOG/worker_r${ROLE}_g${g}.bindfail$attempt.log
   done
 }
-for g in $([ "${TP:-1}" = 2 ] && echo 0 || echo 0 1); do
+# GPUS_PER_POD (default 2, the H20 pods): one worker per GPU, or one TP=2 worker.
+for g in $([ "${TP:-1}" = 2 ] && echo 0 || seq 0 $(( ${GPUS_PER_POD:-2} - 1 ))); do
   supervise $g > $LOG/supervise_r${ROLE}_g${g}.log 2>&1 < /dev/null &
   disown
 done

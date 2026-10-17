@@ -14,7 +14,7 @@ from px_multi import Cluster
 SID = os.environ.get("SID", "c2fb3965f36cd15f")
 NPODS = int(os.environ.get("NPODS", "8"))
 W = "/dev/shm/w"
-C = Cluster(SID, "cn-seed", nodes=[f"worker-{i}" for i in range(NPODS)])
+C = Cluster(SID, os.environ.get("MN_CP", "cn-seed"), nodes=[f"worker-{i}" for i in range(NPODS)])  # MN_CP: control plane
 RPORT = 31000
 
 ARMS = {
@@ -90,7 +90,7 @@ def run_arm(arm):
            f"TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')} PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')} "
            f"SGL_PY={os.environ.get('SGL_PY', '')} HC_PREFETCH={os.environ.get('HC_PREFETCH', 'best_effort')} HC_WRITE={os.environ.get('HC_WRITE', '')} HC_HOST_MODE={os.environ.get('HC_HOST_MODE', '')} WORKER_EXTRA=\"{os.environ.get('WORKER_EXTRA', '')}\" "
            f"PDMUX={int(pdmux)} PDMUX_DIV={os.environ.get('PDMUX_DIV', '30')} EDF_UNCACHED={os.environ.get('EDF_UNCACHED', '0')} "
-           f"MEM_FRAC={os.environ.get('MEM_FRAC', '0.85')} PDMUX_MANUAL='{os.environ.get('PDMUX_MANUAL', '')}' PDMUX_SHARE={os.environ.get('PDMUX_SHARE', '0')} TP={os.environ.get('TP', '1')} PDMUX_SHARE_DEADLINE={os.environ.get('PDMUX_SHARE_DEADLINE', '0')} PDMUX_ITL_BUDGET={os.environ.get('PDMUX_ITL_BUDGET', '0')} DEADLINE_CHUNK={os.environ.get('DEADLINE_CHUNK', '')}")
+           f"MEM_FRAC={os.environ.get('MEM_FRAC', '0.85')} SM_FA3={os.environ.get('SM_FA3', '66')} PDMUX_MANUAL='{os.environ.get('PDMUX_MANUAL', '')}' PDMUX_SHARE={os.environ.get('PDMUX_SHARE', '0')} TP={os.environ.get('TP', '1')} GPUS_PER_POD={os.environ.get('GPUS_PER_POD', '2')} PDMUX_SHARE_DEADLINE={os.environ.get('PDMUX_SHARE_DEADLINE', '0')} PDMUX_ITL_BUDGET={os.environ.get('PDMUX_ITL_BUDGET', '0')} DEADLINE_CHUNK={os.environ.get('DEADLINE_CHUNK', '')}")
     if hc:
         rc, out = C.run(0, f"mkdir -p {log}; ip=$(hostname -I | tr ' ' '\\n' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1); "
                            "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\"); "
@@ -124,7 +124,7 @@ def run_arm(arm):
         check = " ".join(f"'{u}/health'" for u, _, _ in all_w)
         rc, out = C.run(0, f"n=0; for u in {check}; do [ \"$(curl -sg -o /dev/null -w '%{{http_code}}' --max-time 3 $u)\" = 200 ] && n=$((n+1)); done; echo UP=$n")
         up = int([l for l in out.splitlines() if l.startswith("UP=")][-1][3:])
-        if up == len(all_w) == (2 // int(os.environ.get("TP", "1"))) * NPODS:
+        if up == len(all_w) == (int(os.environ.get("GPUS_PER_POD", "2")) // int(os.environ.get("TP", "1"))) * NPODS:
             break
         if time.time() - t0 > 2400:
             print(f"  only {up}/{len(all_w)} workers healthy after 40 min; aborting arm", flush=True)
@@ -141,7 +141,8 @@ def run_arm(arm):
     # The stock router's circuit breaker opens on a prefill worker that is merely slow under a
     # saturating load and then rejects requests outright ("No available prefill"), which dropped
     # ~60% of disagg_2p2d's requests. A baseline must serve every request, so breaker and
-    # health-check ejection are off for every sglang_router arm.
+    # health-check ejection are off for every sglang_router arm. --prometheus-port: the exporter's default port was taken
+    # on the re-forked H200 host and the router panicked at start.
     lenient = ("--disable-circuit-breaker --health-failure-threshold 1000000 "
                "--health-check-timeout-secs 60 --queue-size 100000")
     if kind == "ours":
@@ -150,13 +151,13 @@ def run_arm(arm):
                 f"--policy {pol} --log {log}/router_decisions.jsonl {os.environ.get('ROUTER_ARGS', '')}")
     elif pol == "cache_aware":
         ws = " ".join(u for u, _, _ in all_w)
-        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --worker-urls {ws} --policy cache_aware {lenient} --host 0.0.0.0 --port {RPORT}"
+        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --worker-urls {ws} --policy cache_aware {lenient} --host 0.0.0.0 --port {RPORT} --prometheus-port {RPORT + 1}"
     else:
         pre = [i for i, m in enumerate(layout) if m == "prefill"]
         dec = [i for i, m in enumerate(layout) if m == "decode"]
         p_args = " ".join(f"--prefill {u} {b}" for u, b, _ in urls(hs, pre))
         d_args = " ".join(f"--decode {u}" for u, _, _ in urls(hs, dec))
-        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --pd-disaggregation {p_args} {d_args} --prefill-policy cache_aware --decode-policy power_of_two {lenient} --host 0.0.0.0 --port {RPORT}"
+        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --pd-disaggregation {p_args} {d_args} --prefill-policy cache_aware --decode-policy power_of_two {lenient} --host 0.0.0.0 --port {RPORT} --prometheus-port {RPORT + 1}"
     # setsid -f with every fd redirected: a backgrounded "cd && cmd" list keeps a subshell whose
     # stdout is the webshell pipe, which held each launch call open for its 100 s timeout.
     C.run(0, f"ulimit -n $(ulimit -Hn); cd {W} && PYTHONPATH={W}/python setsid -f {rcmd} > {log}/router.log 2>&1 < /dev/null; sleep 8; "

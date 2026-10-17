@@ -17,6 +17,12 @@ after the kernel items close (<=16 GPUs).
 - [x] S4 step model on that schedule: decode ITL predictable to ~9% held-out vs 35-117% on the unfused schedules.
 - [x] 8 H20s (`pd_colocation_vs_disagg.md`): the same workers plus per-step SM sharing (TTFT deadlines + 24 ms ITL
   budget) clear all 12 vs stock colocation + MTP in both repeats (smallest -39%), H20 output gate PASS.
+- [ ] **4-mode MTP schedule on H200 (2026-10-18, re-forked trial `d6a80befdd4e4da5`, provisioned from the H20 recipe:
+  upstream 3fef129 + `h20_overlay.tgz` + port07 + uncached deadlines; harness `mn_h200_fourmode_20261018.sh`, one worker,
+  agent C=8 + ShareGPT 8 req/s, 48 agent requests; all runs 0 tracebacks / 0 fallbacks).** vs stock MTP (same harness,
+  same session): chunk 2048 agent +42% / -24% / -34%, chat TTFT -68% / ITL -23%; chunk 1024 agent +41% / -17% / -50%, chat
+  -64% / -29.7%; chunk 512 agent -8% / +48% / -51%. Chat throughput = offered load in every arm. Misses at 1024: agent TTFT
+  and chat ITL (0.3 point short). Deadline-driven chunk choice on H200 running.
 - [ ] Not met: vs stock colocation *without* speculation on H20 (agent TTFT at a ~5.9 s compute floor; best -18% /
   -21%), and node-count scaling (needs > 16 GPUs). Both wait on the user: which baseline the bar uses, and the GPU cap.
 

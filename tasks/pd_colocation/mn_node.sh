@@ -146,6 +146,8 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   [ -n "${STEP_BUDGET:-}" ] && export SGLANG_EDF_STEP_BUDGET=$STEP_BUDGET
   # STEP_TRACE=1: one STEPTRACE line per forward (GPU time + host launch time; tasks/perf_model fitters).
   [ "${STEP_TRACE:-0}" = 1 ] && export SGLANG_STEP_TRACE=1
+  # TTFT_SCALE_MS: EDF deadline slope, ms per SGLANG_TTFT_SCALE_TOKENS (5000) prompt tokens past 4096 (default 1000).
+  [ -n "${TTFT_SCALE_MS:-}" ] && export SGLANG_TTFT_SCALE_MS=$TTFT_SCALE_MS
   # PDMUX_SHARE=N: run a split-prefill batch on the whole GPU (pdmux group 0) when >= N uncached prompt tokens are
   # waiting (apply_pdmux_backlog_share.py); 0 keeps pdmux's SM split always.
   [ "${PDMUX_SHARE:-0}" != 0 ] && export SGLANG_PDMUX_SHARE_BACKLOG_TOKENS=$PDMUX_SHARE

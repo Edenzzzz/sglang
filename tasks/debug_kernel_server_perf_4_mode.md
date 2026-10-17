@@ -74,6 +74,14 @@ after the kernel items close (<=16 GPUs).
     `STEP_TRACE=1 SPEC_TAG=_trace CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 bash
     tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; `tasks/perf_model/steptrace_util.py` and
     `tasks/perf_model/fit_pdmux_step.py` on the two `worker_r0_g0.log`. sglang `f04f12557` + this commit.
+  - [x] 2026-10-18 steeper EDF deadline slope (negative for the bar). Default deadlines grow 1000 ms per 5000 uncached
+    tokens (~ the H200 prefill time), so agents are ordered near arrival + service time; `TTFT_SCALE_MS=5000` (5x)
+    pushes agent order toward shortest-first. vs the two stock reps' means, pace 6000 / 2000: agent +40.8% / -21.2% /
+    -38.1% and +44.9% / -26.0% / -38.9%; chat TTFT -98.7% / -98.6% (127 / 138 ms), ITL -20.5% / -21.1%. Agent median TTFT
+    drops to 5.0 / 4.0 s (from ~11 s) but the longest prompts wait behind every shorter one (p99 45.7 / 43.1 s vs 23 s), so
+    mean agent TTFT -- the bar's metric -- gets worse. Clean (0 tracebacks / fallbacks). `SKIP_BASE=1 TTFT_SCALE_MS=5000
+    CHUNKS=2048 DEADLINE_CHUNK=1024:2048:{6000,2000} bash tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; sglang
+    `562fd566d` + this commit.
   - [x] 2026-10-18 output gate on this pod, PASS (`tasks/pd_colocation/gate_h200_fourmode_20261018.sh`, srv_correctness
     vs stock MTP; driver now takes SRV_ARGS and counts mixed composition records). Noise floor MTP_REP: long prompts agree
     >= 18 tokens, short >= 63; null case MTP_C2048 (stock MTP at the config's chunk 2048): long >= 11, short 0 (s1's

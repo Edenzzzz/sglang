@@ -7,6 +7,9 @@
   as a normal EXTEND with input_ids restored, EagleDraftInput installed before decode, target verify on the per-stream
   decode backend, eager pdmux decode override limited to the target runner. Smoke: 24 requests served, 0 tracebacks,
   20/24 identical to stock MTP over 128 greedy tokens, acceptance 3.03-3.13. Next: srv_correctness, CUDA graphs, A/B.
+- CUDA graphs work under pdmux + MTP. srv_correctness (PDMUX arm added): MTP_PDMUX vs MTP short 1 / long 11, PASS by
+  rule; null case LPT_PDMUX vs LPT (no speculation, unpatched paths) gives exactly the same, so the divergence is
+  pdmux's own numerics and the integration adds none. Payoff A/B running (`pdmux_mtp_ab_20261017.sh`).
 
 ## v1.20.16 — MuxWise baseline (sglang --enable-pdmux) beats our single-GPU config on ITL (2026-10-17)
 

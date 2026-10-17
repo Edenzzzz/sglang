@@ -1034,9 +1034,12 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       short 1 / long 11. Per request: every first token matches; 6 / 8 long prompts identical over 96 tokens (l1, l5
       diverge at 18 / 11); the 1 200-token background rows -- which decode on the decode SM group while pdmux resizes it
       as prefills come and go, changing the kernels' partition -- diverge at 1-723, one identical; several identical
-      outputs show different acceptance, i.e. the draft saw differently rounded inputs. Null case running to separate
-      pdmux's own numerics from the patch: `gate_pdmux_nospec.sh` (stock LPT vs LPT + `--enable-pdmux`, no speculation,
-      paths the patch does not touch). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
+      outputs show different acceptance, i.e. the draft saw differently rounded inputs. **Null case (`bash
+      /dev/shm/w/gate_pdmux_nospec.sh`, stock LPT vs LPT + `--enable-pdmux`, no speculation, paths the patch does not
+      touch): min common prefix short 1 / long 11 -- exactly MTP_PDMUX's.** The divergence is pdmux's own numerics (its
+      decode runs on a resized SM group); the MTP integration adds none. **Gate cleared against the right floor.**
+      Payoff A/B running: `pdmux_mtp_ab_20261017.sh` (frozen cohort, C = 8 / 16 + ShareGPT 8 req/s; PDMUX | MTP_PDMUX |
+      EDFR50_F2048, one tree, one session, graphs on). Command: `bash /dev/shm/w/pdmux_conc_20261017.sh`
     (`tasks/debug_kernel_server_perf/baselines_20261017/pdmux_conc_20261017.sh`).
   - [ ] **MuxWise = sglang `--enable-pdmux` (2026-10-13; superseded by the 2026-10-17 run above):** no public MuxWise repo; upstream
     sglang's PD-multiplexing (GreenContext SM split, layer-split prefill) is that design and is in

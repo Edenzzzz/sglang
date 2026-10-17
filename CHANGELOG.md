@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.14 — Measured TTFT predictor error; conformal-style margin for the SLO check (2026-10-17)
+
+- Hot mix, 13 200 requests: measured / predicted TTFT median 1.04-1.12, p80 1.34-1.58, p90 2.25-2.36 where a feasible
+  node existed (table in item 7). `router.py --ttft-quantile q`: feasibility at the q-quantile of that ratio over a
+  sliding window per prompt-length class. A/B queued (`mn_ttft_margin_8gpu_20261017.sh`, q 0 vs 0.8, x2).
+
 ## v1.20.13 — Overload: SLO check with cache fallback ties cache affinity; pool pulls do not land (2026-10-17)
 
 - 192 x 16K shared-prefix mix, x2: SLO check + cache fallback = cache affinity within noise (chat 1 773 vs 1 737 tok/s,

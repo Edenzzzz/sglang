@@ -511,7 +511,21 @@ static mixture.
             | cache | agent | 4.8/7.9/11.8/269/352 ; 4.7/7.7/11.7/156/329 | 122 ; 135 | 29.8 ; 26.7 | 67.9 ; 73.1 |
             | slo_check+cache_fallback | chat | 3.6/7.2/12.2/19.9/44.3 ; 3.5/7.2/11.9/21.5/56.0 | 1729 ; 1817 | 27.2 ; 28.0 | 92.4 ; 92.8 |
             | slo_check+cache_fallback | agent | 4.7/8.4/11.7/245/350 ; 5.1/7.8/11.3/299/353 | 128 ; 130 | 28.8 ; 30.1 | 71.7 ; 71.2 |
-      - [ ] margin / quantile choice set from the measured error distribution
+      - [~] **Margin / quantile choice from the measured error distribution (2026-10-17).** Measured / predicted
+            TTFT over the 4 clean-grid hot-mix SLO-check runs (13 200 requests; router logs `ttft_pred`, `ttft_obs`):
+            | class | node | n | p10 | p50 | p80 | p90 | p99 |
+            |---|---|---|---|---|---|---|---|
+            | chat (< 24K tokens) | feasible | 9 956 | 0.60 | 1.09 | 1.57 | 2.25 | 6.61 |
+            | chat | no feasible node | 2 852 | 0.46 | 1.12 | 2.29 | 3.66 | 10.98 |
+            | agent 24-48K | feasible | 119 | 0.07 | 1.04 | 1.34 | 2.36 | 4.69 |
+            | agent >= 48K | feasible | 126 | 0.06 | 1.05 | 1.58 | 2.34 | 12.86 |
+            The clean-grid predictor is unbiased in the median (1.04-1.12) but wide, and the spread differs by
+            class, so with no margin a request judged feasible misses its deadline about half the time.
+            Implemented (`router.py --ttft-quantile q`): a conformal-style margin -- feasibility uses predicted TTFT
+            times the q-quantile of measured / predicted TTFT over a sliding window (500 finished requests) per
+            class (`--long-prompt-tokens 24000` splits chat- from agent-length prompts); 1.0 until 50 samples.
+            Unit check: q = 0.8 over lognormal(0.08, 0.5) ratios gives 1.67. A/B queued after the prefetch
+            diagnostic: `mn_ttft_margin_8gpu_20261017.sh` (hot mix, q = 0 vs 0.8, x2, spread figure).
       - [ ] A/B: cache affinity | current SLO check | + step model | + transfer term | + margin, on
             goodput / SLO attainment at the 8-GPU H20 points (agent C=16/32, chat 8 req/s)
 - [ ] **5. THE SUPERSET CLAIM: adapt to any workload the baselines are each tuned for.**

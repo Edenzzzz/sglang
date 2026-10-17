@@ -203,6 +203,10 @@ class Router:
         self.pool = Worker("pool", a.pool_kv_tokens, BLOCK_TOK) if a.pool_kv_tokens > 0 else None
         self.pull_bps = a.pull_gbps * 1e9  # bytes/s, raised by observed complete pulls
         self.pull_realized = 1.0  # EWMA of pulled / predicted tokens (see observe_pull)
+        # Measured / predicted TTFT of finished requests, per class (chat-length vs agent-length prompts), for
+        # the conformal-style margin of --ttft-quantile.
+        self.ttft_ratio = {"short": collections.deque(maxlen=a.ttft_window),
+                           "long": collections.deque(maxlen=a.ttft_window)}
         self.last_pull = self.last_pull_raw = 0
         self.rr = 0
         self.rid = 0
@@ -276,10 +280,22 @@ class Router:
                 return False
         return True
 
+    def ttft_margin(self, n_tok):
+        """Multiplier on predicted TTFT so that a request judged feasible meets its deadline with probability
+        ~q: the q-quantile of measured / predicted TTFT over recent finished requests of its class. The ratio
+        is wide and class-dependent (hot mix, 13 200 requests: p80 1.34-1.58 and p90 2.25-2.36 when a feasible
+        node existed), so no single fixed margin fits; 1.0 until enough samples arrive or with q = 0."""
+        q = self.a.ttft_quantile
+        win = self.ttft_ratio["long" if n_tok >= self.a.long_prompt_tokens else "short"]
+        if q <= 0 or len(win) < 50:
+            return 1.0
+        v = sorted(win)
+        return max(1.0, v[min(len(v) - 1, int(q * len(v)))])
+
     def feasible(self, w, uncached, deadline, now, n_tok_self=0, missing=0):
         ttft, tpot = self.predict(w, uncached, deadline, n_tok_self, missing)
         uncached = max(0, uncached - self.last_pull)
-        if now + ttft / 1000.0 > deadline:
+        if now + ttft * self.ttft_margin(n_tok_self) / 1000.0 > deadline:
             self.last_reason = "own_ttft"
             return False, ttft, tpot
         if tpot > self.a.itl_slo_ms:
@@ -433,6 +449,9 @@ class Router:
                     except ValueError:
                         pass
                     break
+            if t_first is not None and info.get("ttft_pred"):
+                self.ttft_ratio["long" if n_tok >= self.a.long_prompt_tokens else "short"].append(
+                    (t_first - t_route) * 1000.0 / max(1.0, info["ttft_pred"]))
             if self.pool is not None:
                 self.mirror_pool_write(w, hashes)
                 self.observe_pull(meta, info, n_tok, t_route, t_first)
@@ -547,6 +566,10 @@ def main():
     ap.add_argument("--chunk-tokens", type=int, default=2048, help="workers' --chunked-prefill-size")
     ap.add_argument("--chunk-interference", type=float, default=1.0,
                     help="added decode-step time per prefill chunk / the chunk's cold prefill time (calibrated)")
+    ap.add_argument("--ttft-quantile", type=float, default=0.0,
+                    help="judge TTFT feasibility at this quantile of measured/predicted TTFT (0 = off)")
+    ap.add_argument("--ttft-window", type=int, default=500, help="finished requests per class in that window")
+    ap.add_argument("--long-prompt-tokens", type=int, default=24000, help="class boundary for the TTFT margin")
     ap.add_argument("--no-feasible-fallback", choices=["slack", "cache"], default="slack",
                     help="when no node is predicted to meet the SLO: the most-slack node, or the top-hit node")
     ap.add_argument("--kv-tokens", type=int, default=1_000_000)

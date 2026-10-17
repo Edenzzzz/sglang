@@ -79,7 +79,9 @@ after the kernel items close (<=16 GPUs).
     pushes agent order toward shortest-first. vs the two stock reps' means, pace 6000 / 2000: agent +40.8% / -21.2% /
     -38.1% and +44.9% / -26.0% / -38.9%; chat TTFT -98.7% / -98.6% (127 / 138 ms), ITL -20.5% / -21.1%. Agent median TTFT
     drops to 5.0 / 4.0 s (from ~11 s) but the longest prompts wait behind every shorter one (p99 45.7 / 43.1 s vs 23 s), so
-    mean agent TTFT -- the bar's metric -- gets worse. Clean (0 tracebacks / fallbacks). `SKIP_BASE=1 TTFT_SCALE_MS=5000
+    mean agent TTFT -- the bar's metric -- gets worse. Middle slope `TTFT_SCALE_MS=2000`, pace 3000: agent +43.9% / -26.2% /
+    -38.1%, chat TTFT -86.8% / ITL -23.5% (agent median 7.8 s, p99 29.9 s) -- same trade, smaller. Clean (0 tracebacks /
+    fallbacks); the default slope stays best for mean agent TTFT. `SKIP_BASE=1 TTFT_SCALE_MS=5000
     CHUNKS=2048 DEADLINE_CHUNK=1024:2048:{6000,2000} bash tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; sglang
     `562fd566d` + this commit.
   - [x] 2026-10-18 output gate on this pod, PASS (`tasks/pd_colocation/gate_h200_fourmode_20261018.sh`, srv_correctness

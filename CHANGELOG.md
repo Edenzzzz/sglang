@@ -3,6 +3,7 @@
 ## v1.20.49 — Steeper EDF deadline slope: chat TTFT ~130 ms, agent mean TTFT worse (2026-10-18)
 
 - `TTFT_SCALE_MS` knob. 5x slope: agent median TTFT halves but p99 doubles, mean -21..-26% (vs -29%); chat TTFT -98.7%.
+  2x slope: agent TTFT -26.2%, chat TTFT -86.8%; default slope stays best for the bar.
 
 ## v1.20.48 — Traced 4-mode MTP A/B: host overhead <= 4%, mixed-step model twice as accurate as stock (2026-10-18)
 

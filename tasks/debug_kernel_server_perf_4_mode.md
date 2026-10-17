@@ -35,6 +35,13 @@ after the kernel items close (<=16 GPUs).
   (3 draft steps + a 4-token verify at ~2.1 accepted tokens), not prefill interference; -30% needs <= 11.55 ms. Best
   setting 1024/2048: agent +52% / -29.7% / -40.7%, chat TTFT -73.7% / ITL -26.7%. Output gate on the 4-mode arms on this
   re-forked pod not yet run.
+  - [x] 2026-10-18 shorter MTP step (2 draft steps, 3 verify tokens, both arms; clean: tracebacks 0, fallbacks 0): stock MTP
+    agent 68.6 tok/s / 17.49 s / 27.9 ms, chat 10.19 s / 16.8 ms; ours (1024/2048) agent 99.6 / 12.25 s / 19.4 ms, chat
+    2.94 s / 12.9 ms -> agent +45.2% / -30.0% / -30.5%, chat TTFT -71.1% / ITL -23.2%. Stock MTP's chat ITL does not
+    move with the shorter step (16.5 -> 16.8 ms) and neither does ours (12.1-12.7 -> 12.9 ms), so the draft depth is not
+    what holds chat ITL at -23..-27%; agent ITL gain shrinks (-40.7% -> -30.5%). The 3-step / 4-token setting stays best.
+    sglang `dd200bb1d`; `SPEC_STEPS=2 SPEC_TOKENS=3 SPEC_TAG=_s2t3 CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 bash
+    tasks/pd_colocation/mn_h200_fourmode_20261018.sh` (log `/tmp/h20/mn_h200_s2t3.log`).
 - [ ] Not met: vs stock colocation *without* speculation on H20 (agent TTFT at a ~5.9 s compute floor; best -18% /
   -21%), and node-count scaling (needs > 16 GPUs). Both wait on the user: which baseline the bar uses, and the GPU cap.
 

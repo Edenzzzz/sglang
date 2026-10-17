@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.44 — H200 4-mode MTP with a 2-step / 3-token draft: chat ITL gap unchanged (2026-10-18)
+
+- Both arms on 2 draft steps / 3 verify tokens: agent +45% / -30.0% / -30.5%, chat TTFT -71% / ITL -23% vs stock MTP.
+  Chat ITL does not move with draft depth in either arm; the 3-step / 4-token setting stays best.
+
 ## v1.20.43 — H200 4-mode MTP chunk pairs: chat ITL floor ~12 ms set by the MTP decode step (2026-10-18)
 
 - Best 4-mode MTP setting (deadline chunk 1024/2048) vs stock MTP: agent +52% / -29.7% / -40.7%, chat TTFT -73.7% /

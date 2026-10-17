@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.32 — H20 TP=2: lowers TTFT, raises ITL for every scheduler; pdmux + TP=2 hangs (2026-10-17)
+
+- One TP=2 worker per pod: stock agent TTFT 7.18 -> 4.76 s but ITL 27.9 -> 45.1 ms; ours (EDF, uncached deadlines)
+  at TP=2 is level with stock TP=2. pdmux + TP=2 hangs (GPUs at 100%, no progress). The best stock setting differs per
+  metric, and our best H20 config sits between them on both.
+
 ## v1.20.31 — H20 agent-TTFT floor; SLO-check routing over pdmux workers negative (2026-10-17)
 
 - Zero-queueing bound from the calibrated H20 prefill curve: mean agent TTFT >= ~5.9 s on this cohort; ours 5.91 s,

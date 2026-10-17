@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.31 — H20 agent-TTFT floor; SLO-check routing over pdmux workers negative (2026-10-17)
+
+- Zero-queueing bound from the calibrated H20 prefill curve: mean agent TTFT >= ~5.9 s on this cohort; ours 5.91 s,
+  stock non-speculative colocation 7.18 s, so its -30% target (5.03 s) is below the compute floor. Load-aware routing
+  over the pdmux workers gives no agent TTFT gain over cache affinity.
+
 ## v1.20.30 — H20: backlog-triggered SM sharing in pdmux (2026-10-17)
 
 - `apply_pdmux_backlog_share.py` (`SGLANG_PDMUX_SHARE_BACKLOG_TOKENS`): a split-prefill batch runs on the whole GPU

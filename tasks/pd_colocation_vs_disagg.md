@@ -188,6 +188,13 @@ static mixture.
     cache-affinity routing on the same workers (303 / 5.91 s / 22.0 ms; 1.23 s / 20.8 ms) no gain: moving a cold agent
     prompt off its backed-up cache node costs the hit about what it saves in queueing. `bash
     tasks/pd_colocation/mn_pdmux_slo_8gpu_20261017.sh`.
+  - [x] **Agent-TTFT floor on H20 (2026-10-17, bound from the calibrated prefill curve):** a cold 48K prompt (the
+    cohort's median context) costs ~11.1 s of prefill on one H20, a cold 32K prompt 6.1 s (`calibrate_h20.py` curve);
+    about half of the 96 agent turns are cold first turns and the rest hit the cache (measured token hit ~0.39) at
+    < 1 s. With zero queueing the mean agent TTFT is therefore ~(48 x 11 + 48 x 0.8) / 96 = **~5.9 s**. Ours is 5.91 s;
+    stock colocation without speculation 7.18 s; the bar's -30% would be 5.03 s, **below the compute floor**. Against
+    that baseline the agent-TTFT target is unreachable on H20 by any scheduling, routing or SM-split change; only
+    less prefill work (more cache reuse or less compute per token) could move it.
 
 - [ ] **7. Inter-node routing: predict whether a request meets its TTFT and ITL SLO on node i, given
       i's estimated hit length x_i and current load** (added 2026-10-17 on the user's request; needs

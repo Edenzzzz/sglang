@@ -1335,7 +1335,9 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
           **All 12 means clear the bar (>=30% TTFT and ITL, >=10% throughput).** Per repeat, C=8 agent TTFT / ITL:
           -30.4 / -31.9, -33.0 / -31.9, -31.6 / -29.6 (5 of 6 values clear; rep 3 ITL is 0.4 point short); C=16 all
           clear in every repeat. Chat tok/s/user p1/p50/p99 34 / 69 / 132 (C=8) vs stock MTP 7 / 42 / 168; agent P99
-          ITL 34-35 ms vs 417-498 ms. Per-rep tput / TTFT / ITL in
+          ITL 34-35 ms vs 417-498 ms. **Rep 4 (2026-10-17 22:45-22:57, rc=0, 0 tracebacks / 0 fallbacks): C=8 agent
+          141 / 12.95 s / 14.6 ms (-30.7% / -31.5% vs stock MTP); four-repeat C=8 agent means -31.4% TTFT / -31.2% ITL,
+          7 of 8 per-repeat values clear; C=16 clears in every repeat.** Per-rep tput / TTFT / ITL in
           [summary](debug_kernel_server_perf/pdmux_mtp_20261017/pdmux_unc30_3rep_summary.txt). Commands (pod
           `/dev/shm/w`, tree `up_pdmux_mtp` = `up_edf_floor` + `apply_pdmux_mtp.py` + `apply_edf_uncached.py`):
           `for r in 1 2 3; do REP=$r D27=0 D24=0 D30=1 bash pdmux_edf_unc2_20261017.sh; done`, `bash

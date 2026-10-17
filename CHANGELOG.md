@@ -1,5 +1,7 @@
 # Changelog
 
+## v1.20.34 — extra repeats: H200 C=8 agent -31.4% / -31.2% (4 reps), H20 32 req/s agent ITL -31.6% (3 reps) (2026-10-17)
+
 ## v1.20.33 — 8 H20s: pdmux + EDF + 48K backlog sharing clears all 12 bar means vs stock colocation + MTP (2026-10-17)
 
 - Two repeats, both clean: 16 req/s agent +63% / -46% / -63%, chat +46% / -86% / -86%; 32 req/s agent +56% / -56% /

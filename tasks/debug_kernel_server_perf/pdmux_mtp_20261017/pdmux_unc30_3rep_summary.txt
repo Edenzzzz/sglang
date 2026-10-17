@@ -10,3 +10,7 @@ rep3 C=8 UNC_D30       LPT_agent                    n=   96 tput=  141.6 ttft= 1
 rep3 C=8 UNC_D30       LPT_chat                     n= 2048 tput= 1612.3 ttft=  6.24s itl=  13.9ms p99itl=    34 tok/s/user p1/p10/p50/p90/p99=34/53/68/103/131 accept=None
 rep3 C=16 UNC_D30       LPT_agent                    n=   96 tput=  143.7 ttft= 28.95s itl=  16.2ms p99itl=    35 tok/s/user p1/p10/p50/p90/p99=33/41/63/74/85 accept=None
 rep3 C=16 UNC_D30       LPT_chat                     n= 2048 tput= 1610.5 ttft= 21.43s itl=  14.0ms p99itl=    34 tok/s/user p1/p10/p50/p90/p99=36/55/69/98/130 accept=None
+rep4 C=8 UNC_D30       LPT_agent                    n=   96 tput=  141.4 ttft= 12.95s itl=  14.6ms p99itl=    35 tok/s/user p1/p10/p50/p90/p99=28/49/65/74/106 accept=None
+rep4 C=8 UNC_D30       LPT_chat                     n= 2048 tput= 1611.5 ttft=  6.71s itl=  13.7ms p99itl=    33 tok/s/user p1/p10/p50/p90/p99=32/53/69/107/131 accept=None
+rep4 C=16 UNC_D30       LPT_agent                    n=   96 tput=  142.7 ttft= 29.38s itl=  15.9ms p99itl=    36 tok/s/user p1/p10/p50/p90/p99=33/46/62/74/88 accept=None
+rep4 C=16 UNC_D30       LPT_chat                     n= 2048 tput= 1610.4 ttft= 22.14s itl=  14.0ms p99itl=    33 tok/s/user p1/p10/p50/p90/p99=37/55/68/92/128 accept=None

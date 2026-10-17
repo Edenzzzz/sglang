@@ -191,7 +191,9 @@ static mixture.
       18.7 ms; 32 req/s agent 227 / 9.94 s / 29.9 ms, chat 5838 / 4.43 s / 38.1 ms. Two-repeat means vs stock
       colocation + MTP: 16 req/s agent +63% / -46% / -63%, chat +46% / -86% / -86%; 32 req/s agent +56% / -56% /
       -30.9%, chat +67% / -86% / -51% -- all 12 clear in the mean;** per repeat the 32 req/s agent ITL is -32.8 /
-      -29.0%, so that one metric is borderline. Command: `POINTS="16:49152 32:49152" [REP_SUFFIX=_rep2] bash
+      -29.0%, so that one metric is borderline. **Repeat 3 at 32 req/s (8 workers, 0 tracebacks / 0 fallbacks): agent
+      226 / 10.19 s / 28.2 ms, chat 5765 / 4.04 s / 38.5 ms -- agent ITL -33.0%; three-repeat agent ITL mean -31.6%
+      (-32.8 / -29.0 / -33.0), TTFT -56%.** Command: `POINTS="16:49152 32:49152" [REP_SUFFIX=_rep2] bash
       tasks/pd_colocation/mn_pdmux_share_8gpu_20261017.sh`.
   - [x] **SLO-check routing over these workers (2026-10-17, negative):** router `cache_slo` (calibrated H20 prefill
     curve, 10 s TTFT SLO, resident check off, no-feasible -> top-hit) over pdmux + EDF + 32K backlog sharing, chat 16

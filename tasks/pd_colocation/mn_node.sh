@@ -121,6 +121,9 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
     export SGLANG_EDF_PREEMPT_CHUNK=1 SGLANG_EDF_RESERVE_EARLIER=1 SGLANG_EDF_PREEMPT_MAX_TOKENS=1000000000
   fi
   [ -n "${CHUNK:-}" ] && ARGS+=(--chunked-prefill-size $CHUNK)
+  # WORKER_EXTRA: extra sglang flags for diagnostics (e.g. --enable-metrics, which also turns on HiCache's
+  # storage metrics: prefetch outcomes and deferred tokens by reason on /metrics).
+  [ -n "${WORKER_EXTRA:-}" ] && ARGS+=(${WORKER_EXTRA})
   if [ "${EDF:-0}" = 1 ]; then
     export SGLANG_EDF_SCHEDULING=1 SGLANG_TTFT_SLO_MS=${TTFT_SLO_MS:-2000} SGLANG_EDF_LATENCY_MODEL=
     ARGS+=(--enable-priority-scheduling --schedule-low-priority-values-first

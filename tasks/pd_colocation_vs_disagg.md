@@ -482,7 +482,17 @@ static mixture.
             26.2 / 27.4, 27.5 / 27.8 s. At 16 chat req/s on this mix the cluster is past capacity (95% of decisions
             have no feasible node, see the overload A/B), so placement -- and with it the transfer term -- has
             nothing to choose between. The transfer test needs a load where feasible non-holders exist; next run
-            at a lower chat rate with the fixed learner. Spread
+            at a lower chat rate with the fixed learner (`mn_selective_pool_r8_8gpu_20261017.sh`, chat 8 req/s,
+            running). Its rep 1 shows the learner no longer locks (pull realisation 1.0 -> 0.0 -> 1.0 range, last
+            0.03), but pulls still mostly fail: 111 decisions predicted ~21.2K tokens, ~3.8K landed (18%), with the
+            pool 84% full and no failed writes. The workers log "HiCache storage prefetch reissue cap reached ...
+            attempts=8; the request is admitted without further L3 lookups" for 107 requests on one pod -- nearly
+            every request routed for a pull retried its L3 prefetch 8 times and was admitted without it. sglang
+            re-arms a prefetch when it is rate-limited, when the host pool has no room to stage the pages
+            (`host_capacity`; the host pool is capped at 48 GB per worker), or when the L3 hit is below the
+            256-token threshold; those reasons reach only HiCache's storage metrics. Diagnostic queued:
+            `mn_prefetch_diag_8gpu_20261017.sh` (the transfer arm once with `--enable-metrics`, every worker's
+            `/metrics` saved before teardown; new knobs `WORKER_EXTRA`, `SCRAPE_METRICS`). Spread
             ([figure](pd_colocation/figures_20261017/h20x8_manyprefix_selective_pool.png),
             [data](pd_colocation/figures_20261017/h20x8_manyprefix_selective_pool.csv)):
             | arm | stream | tok/s/user p1 / p10 / med / p90 / p99 (rep 1 ; rep 2) | out tok/s | mean TTFT s | mean TPOT ms |

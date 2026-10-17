@@ -84,7 +84,7 @@ def run_arm(arm):
     C.run_all(f"rm -rf {log}")
     env = (f"ONE_NIC={os.environ.get('ONE_NIC', '0')} KERNEL={os.environ.get('KERNEL', 'lpt')} EDF={int(edf)} SPEC={int(spec)} "
            f"TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')} PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')} "
-           f"SGL_PY={os.environ.get('SGL_PY', '')} HC_PREFETCH={os.environ.get('HC_PREFETCH', 'best_effort')} HC_WRITE={os.environ.get('HC_WRITE', '')}")
+           f"SGL_PY={os.environ.get('SGL_PY', '')} HC_PREFETCH={os.environ.get('HC_PREFETCH', 'best_effort')} HC_WRITE={os.environ.get('HC_WRITE', '')} WORKER_EXTRA=\"{os.environ.get('WORKER_EXTRA', '')}\"")
     if hc:
         rc, out = C.run(0, f"mkdir -p {log}; ip=$(hostname -I | tr ' ' '\\n' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1); "
                            "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\"); "
@@ -168,6 +168,10 @@ def run_arm(arm):
             break
     rc, out = C.run(0, f"{W}/venv/bin/python {W}/tasks/pd_colocation/mn_summary.py {log}")
     print("  " + "\n  ".join(out.strip().splitlines()[-3:]), flush=True)
+    if os.environ.get("SCRAPE_METRICS"):
+        # Each worker's Prometheus page (needs WORKER_EXTRA=--enable-metrics) before teardown.
+        for r, (u, _, _) in enumerate(all_w):
+            C.run(0, f"curl -sg --max-time 20 {u}/metrics > {log}/metrics_w{r}.txt; wc -l < {log}/metrics_w{r}.txt")
     C.run_all(KILL)
 
 

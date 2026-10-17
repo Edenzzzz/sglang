@@ -695,6 +695,17 @@ static mixture.
         15.1; stock colocation (TP=1) 7.18 / 27.9. Every N <= 48K beats stock colocation on agent ITL, and N <= 32K on
         TTFT as well; N is set per deployment here, not yet per step by the EDF predictor -- the per-step choice (and
         the dominance the claim needs on the capacity axis) is still to be shown.
+      - [x] **Per-step choice from EDF deadlines (2026-10-17, `apply_pdmux_deadline_share.py`,
+        `PDMUX_SHARE_DEADLINE=1`):** no threshold; a split-prefill batch shares the whole GPU only when the waiting queue
+        in deadline order would miss a TTFT deadline at the split's prefill rate (calibrated 5019 tok/s x prefill SM
+        share). 8 H20s, agent C=16, 8 workers, 0 tracebacks / 0 fallbacks, sharing on ~6-11% of batches. Agent tput /
+        TTFT / ITL ; chat TTFT / ITL: 16 req/s 304 / 5.96 s / 21.3 ms ; 0.91 s / 20.2 ms; 32 req/s 232 / 6.44 s / 37.0 ms
+        ; 1.40 s / 50.4 ms. vs stock colocation without speculation: 16 req/s agent +14% / -17% / -24%, chat TTFT -67%
+        / ITL -26%; 32 req/s agent +7% / -13% / -16%, chat +12% / -50% / -27% -- **better on every metric at both
+        rates with no tuned knob, and the best chat TTFT of any H20 arm**, but not by 30%. vs stock + MTP: all clear
+        except agent ITL at 32 req/s (-12%). The deadline rule only weighs TTFT, so it lands on the TTFT side of the
+        frontier; an ITL term (resident rows' step budget) is the missing half for the per-step operating point.
+        `POINTS="16:0 32:0" PDMUX_SHARE_DEADLINE=1 bash tasks/pd_colocation/mn_pdmux_share_8gpu_20261017.sh`.
 
       **The claim.** Our method is 4-mode colocation plus an EDF/SLO router with a tunable
       **P/D admission ratio**. Each baseline is one fixed point in that policy space, so our

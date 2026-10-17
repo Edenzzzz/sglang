@@ -143,6 +143,11 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # PDMUX_SHARE=N: run a split-prefill batch on the whole GPU (pdmux group 0) when >= N uncached prompt tokens are
   # waiting (apply_pdmux_backlog_share.py); 0 keeps pdmux's SM split always.
   [ "${PDMUX_SHARE:-0}" != 0 ] && export SGLANG_PDMUX_SHARE_BACKLOG_TOKENS=$PDMUX_SHARE
+  # PDMUX_SHARE_DEADLINE=1: share per batch only when the EDF-ordered queue would miss a TTFT deadline under the split
+  # (apply_pdmux_deadline_share.py); PDMUX_PREFILL_TOK_S is the calibrated full-GPU prefill rate.
+  if [ "${PDMUX_SHARE_DEADLINE:-0}" = 1 ]; then
+    export SGLANG_PDMUX_SHARE_DEADLINE=1 SGLANG_PDMUX_PREFILL_TOK_S=${PDMUX_PREFILL_TOK_S:-5019}
+  fi
   # WORKER_EXTRA: extra sglang flags for diagnostics (e.g. --enable-metrics, which also turns on HiCache's
   # storage metrics: prefetch outcomes and deferred tokens by reason on /metrics).
   [ -n "${WORKER_EXTRA:-}" ] && ARGS+=(${WORKER_EXTRA})

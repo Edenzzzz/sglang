@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.35 — per-step SM sharing from EDF deadlines (PD item 5) (2026-10-17)
+
+- `apply_pdmux_deadline_share.py`: share the whole GPU for a prefill batch only when the deadline-ordered queue would
+  miss a TTFT deadline under the SM split. On 8 H20s it beats stock non-speculative colocation on every metric at 16
+  and 32 req/s with no tuned threshold (agent +7..+14% / -13..-17% / -16..-24%), short of 30%.
+
 ## v1.20.34 — extra repeats: H200 C=8 agent -31.4% / -31.2% (4 reps), H20 32 req/s agent ITL -31.6% (3 reps) (2026-10-17)
 
 ## v1.20.33 — 8 H20s: pdmux + EDF + 48K backlog sharing clears all 12 bar means vs stock colocation + MTP (2026-10-17)

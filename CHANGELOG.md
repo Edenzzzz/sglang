@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.53 — Per-request acceptance halves TPOT prediction error on the 4-mode schedule (2026-10-18)
+
+- `tpot_acc_probe.py`: TPOT = k / acc_i, MAPE 7.0% vs 12.7% with a constant acceptance (point 3).
+- Stock MTP's per-request `spec_verify_ct` undercounts verifies (2.97 vs 1.87 tokens per verify); open check.
+
 ## v1.20.52 — S4 on the 4-mode fused schedule: mixed-step model 6x more accurate than stock MTP (2026-10-18)
 
 - `fit_tpot_acc.py`: steps carrying a prefill chunk 7.8 / 8.5% MAPE (4-mode) vs 49.5 / 44.2% (stock MTP), two traces.

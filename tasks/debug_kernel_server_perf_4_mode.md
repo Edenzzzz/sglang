@@ -1125,7 +1125,19 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     `STEP_TRACE=1 SPEC_TAG={_trace,_dacc} CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 bash
     tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; the second A/B is also bar rep 4: agent +46.5% / -28.1% /
     -34.2%, chat -71.0% / -24.1% vs its own stock MTP.
-  - [ ] **Acceptance length as a TPOT input (point 3) -- not yet testable from the trace.** `acc=` is the server's
+  - [x] **Acceptance length as a TPOT input (point 3), per request (2026-10-18):** `tasks/perf_model/tpot_acc_probe.py`
+    streams 600 ShareGPT first turns (6 req/s Poisson, <= 256 output tokens) while 4 threads keep 40K-token prefills
+    running, and reads each response's `completion_tokens / spec_verify_ct`. Fit on the first half by arrival, test on
+    the second. **4-mode schedule:** TPOT 42.1 ms mean, acceptance 2.07 (sd 0.30, p10-p90 1.78-2.42; decode log 2.05),
+    corr(TPOT, 1/acc) 0.88; TPOT = k / acc_i (the steady state of a per-request EWMA) MAPE **7.0%** (p90 17.4%) vs a
+    constant acceptance 12.7% (p90 26.7%); adding running requests at arrival 6.8%. The predicted acceptance length
+    halves the TPOT error EDF would plan with. **Stock MTP arm not usable:** its per-request acceptance reads 2.97
+    (sd 1.05) while its own decode log reports 1.87, and corr(TPOT, 1/acc) is -0.70 -- stock's `spec_verify_ct`
+    undercounts verifies on some path; open check below. `python tpot_acc_probe.py /dev/shm/w/probe_ours ours` (and
+    without `ours`) on pod `d6a80befdd4e4da5`; sglang `af3a39efc` + this commit.
+  - [ ] Stock MTP `spec_verify_ct` undercount (2.97 tokens per verify vs the decode log's 1.87): find the path that
+    skips the increment before using stock's per-request acceptance anywhere.
+  - [x] **Acceptance length from the step trace -- not testable (superseded by the per-request probe above).** `acc=` is the server's
     cumulative mean, and the per-step delta (`apply_steptrace_dacc.py`, `dacc=`) is zero on most steps because the
     metrics reporter accumulates accept counts only at its decode-log interval; with either signal the EWMA input does
     not change TPOT MAPE (12.9 vs 12.6% ours, 6.5 vs 6.5% stock), which says nothing yet. Needs per-request accepted

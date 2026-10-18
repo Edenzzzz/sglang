@@ -29,6 +29,26 @@ check), the occupancy scan that locates where the kernel matters, why
 independent-prompt datasets cannot show it, and the mixed-tenancy scenarios
 where it wins end to end, including SLO control with the analytic cost model.
 
+## Baselines
+
+Which systems each result is judged against (user, 2026-10-18). The bar is >= 30% TTFT and ITL and >= 10% throughput
+on realistic mixed workloads (chat + TraceLab), measured against these, same session, same workload.
+
+- **Single node** -- demonstrates kernel fusion and schedule efficiency with the mixed tile dispatch:
+  - [ ] **Stock chunked prefill + mixed chunk, default attention kernel, no speculation** (sglang `--enable-mixed-chunk`
+    with its flashinfer backend): the primary baseline. Our arms: the fused / split mixed-tile step without MTP, and
+    with MTP (4-mode step); the MTP arm is reported only if its gain over this baseline exceeds ours without MTP.
+  - [ ] **PD multiplexing** (MuxWise, arXiv:2504.14489 = sglang `--enable-pdmux`, GreenContext SM groups,
+    layer-split prefill). It runs without the CPU-GPU overlap scheduler and captures one CUDA-graph set per SM group;
+    the 4-mode step keeps the overlap scheduler and one graph set. Earlier pdmux runs are in
+    `debug_kernel_server_perf_4_mode.md` (Direct baselines).
+  - Stock MTP (EAGLE3 without the 4-mode step) is a reference for the MTP arm, not the bar's baseline.
+- **Multi-node** (H20 only, <= 16 GPUs, trial `vibecuda`):
+  - [ ] **PD disaggregation** (sglang prefill / decode roles, mooncake transfer), vs our colocated symmetric nodes.
+  - [ ] **semi-PD-style systems with an sglang implementation**: semi-PD (arXiv:2504.19867, fork of sglang
+    v0.4.4.post1); others added if they ship sglang code. NVIDIA Dynamo conditional disaggregation is optional.
+- **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
+
 ## TraceLab causal replay: the zero-regression check
 
 The headline setting is one H800 with Qwen2.5-7B-Instruct, 400 causal rounds

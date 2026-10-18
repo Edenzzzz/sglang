@@ -214,12 +214,19 @@ static mixture.
       - [x] **Ours without MTP at matched throughput, natural text (clean):** C=8 agent 145.7 tok/s / TTFT 0.65 s / TPOT
         10.8 ms; C=4 72.7 tok/s / 0.74 s / 10.0 ms (chat 56 / 53 ms, 5.8 / 5.5 ms). At C=8 ours serves more agent
         throughput than disagg (145.7 vs 128.5) with TTFT -94% but TPOT 1.7x disagg's 6.3 ms -- and TPOT barely moves
-        from C=16 (12.3) through C=4 (10.0), so the gap is neither load nor prefill interference: our decode step is
-        slower on these 64K+ contexts. Disagg runs the clean upstream tree; ours runs the patched tree with the split
-        environment and `SGLANG_FLASHINFER_USE_PERSISTENT=1` (set for every arm by mn_node.sh). `for C in 8 4; do FO_TEXT=1
+        from C=16 (12.3) through C=4 (10.0). *Corrected 2026-10-18 (decode-kernel check below): the reading "neither
+        load nor prefill interference; our decode step is slower" was wrong -- these points vary agent concurrency only,
+        while chat prefill stays at 4 req/s, so the interference was held constant, not removed.* `for C in 8 4; do FO_TEXT=1
         AGENT_CONC=$C ... REP=_light_text_c$C ARMS=coloc_slo_edf_hc ...` (`/tmp/h20/fanout_text2.sh`).
-      - [ ] Decode-kernel check at C=4: stock kernel (`KERNEL=lpt`) with the persistent path on / off (`FI_PERSISTENT`);
-        repeat; per-node replica / re-prefill counters.
+      - [x] **Decode-kernel check at C=4 (natural text, clean): not the kernel.** Stock kernel (`KERNEL=lpt`), persistent
+        path on / off (`FI_PERSISTENT=1/0`): agent 67.2 / 69.0 tok/s, TPOT 12.9 / 12.1 ms -- no better than our split
+        kernel (10.0 ms), and the persistent path makes no difference. What separates colocation from disagg's 6.3 ms
+        is the steps decode shares: on colocated nodes every chat prefill (constant 4 req/s) and every 1024-token
+        agent append is a mixed step the decoding agents ride through, while disagg's decode pods run decode only.
+        This is the colocation cost the 4-mode step and EDF reduce (ours 10.0-12.3 ms vs the stock kernel's 12-13 ms)
+        but do not remove at this load. `for FP in 1 0; do FI_PERSISTENT=$FP KERNEL=lpt FO_TEXT=1 AGENT_CONC=4 ...
+        REP=_light_text_c4_lpt_fp$FP ARMS=coloc_slo_edf_hc ...` (`/tmp/h20/fanout_pers.sh`).
+      - [ ] Repeat the key fan-out arms; per-node replica / re-prefill counters.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

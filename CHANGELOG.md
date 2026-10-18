@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.68 — PD 2b: agent TPOT gap vs disagg is mixed-step interference, not the decode kernel (2026-10-18)
+
+- Stock kernel with the persistent path on / off gives agent TPOT 12.9 / 12.1 ms (ours 10.0, disagg 6.3). The earlier
+  "decode step is slower" reading is corrected in place: chat prefill load was constant across those points.
+
 ## v1.20.67 — PD 2b on natural text; per-token TPOT replaces the chunk-gap ITL for MTP arms (2026-10-18)
 
 - Fan-out driver: `--text-source` (ShareGPT slices); the chunk-gap "ITL" overstated MTP arms 2-3x, TPOT recomputed.

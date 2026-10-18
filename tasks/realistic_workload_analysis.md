@@ -87,6 +87,25 @@ on realistic mixed workloads (chat + TraceLab), measured against these, same ses
     -22.2% -- the same as the sequential split (verify rows are few, so FA2 overlap has little to hide).
     `ARMS=ours_mtp_ovl` / `ARMS=ours_ovl CHUNK={8192,4096} DEADLINE_CHUNK=2048:{8192,4096}:6000 bash
     tasks/pd_colocation/mn_h200_nospec_20261018.sh`.
+  - [x] **Agent-TTFT floor and the deadline slope, no-MTP overlapped arm (2026-10-18, all arms clean).** Unloaded
+    (1 program, chat 0.2 req/s, same 32-64K cold prompts): stock 1.30 s, ours (2048 / 8192) 1.20 s mean agent TTFT --
+    so of the loaded 3.12 / 2.80 s, ~1.7 s is queueing, and -30% (2.18 s) is not ruled out by compute. EDF's deadline
+    slope (default 1000 ms per 5K uncached tokens) puts every chat ahead of every agent prefill (chat TTFT 0.13-0.17 s
+    vs stock 1.04 s), so flatter slopes trade chat headroom for agent TTFT. vs stock without spec, agent TTFT / ITL ;
+    chat TTFT / ITL (agent throughput +22..+27% in every arm):
+    | deadline chunk, slope | agent | chat |
+    |---|---|---|
+    | 2048 / 8192, 1000 | -10.4% / -24.0% | -87.5% / -29.6% |
+    | 2048 / 8192, 250 | **-24.3%** / -19.8% | -62.8% / -29.3% |
+    | 2048 / 8192, 0 | -20.4% / -20.8% | -39.8% / -31.6% |
+    | 1024 / 4096, 250 | -13.3% / -23.5% | -60.6% / -31.6% |
+    | 1024 / 4096, 500 | -4.3% / -25.1% | -72.3% / -31.3% |
+    | 1024 / 2048, 250 | +2.2% / -28.6% | -51.9% / -36.4% |
+    | 1024 / 2048, 1000 | +15.6% / **-31.2%** | -85.6% / -36.0% |
+    Agent TTFT and agent ITL lie on one frontier (sum ~ -45..-50 points); no chunk / slope setting reaches -30% on
+    both. `TTFT_SCALE_MS=<slope> ARMS=ours_ovl CHUNK=<large> DEADLINE_CHUNK=<small>:<large>:6000 bash
+    tasks/pd_colocation/mn_h200_nospec_20261018.sh`; floor: `AGENT_CONC=1 SESSIONS=8 TURNS=2 CHAT_RATE=0.2 CHAT_N=40
+    TAG=_floor ARMS="stock ours_ovl" CHUNK=8192 DEADLINE_CHUNK=2048:8192:6000 bash ...`. sglang `253e9968c`.
   - [x] **Output gate, both FA2-overlapped arms: PASS (2026-10-18, `tasks/pd_colocation/gate_h200_ovl_20261018.sh`,
     srv_correctness).** No MTP: stock LPT is deterministic run to run (LPT_REP agrees on all 96 long-prompt tokens,
     short >= 1); ours (`SPLIT_OVL_EDF`, deadline chunk 2048 / 8192, chunk 8192) diverges at token 11 on one long

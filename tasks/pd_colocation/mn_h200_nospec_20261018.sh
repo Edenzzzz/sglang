@@ -21,7 +21,7 @@ for arm in ${ARMS:-stock stock_mtp pdmux ours ours_ovl ours_mtp}; do
     ours) KERNEL=mtpsplit PREEMPT=1 CHUNK=${CHUNK:-2048} EDF_UNCACHED=1 DEADLINE_CHUNK=${DEADLINE_CHUNK:-1024:2048:6000} \
           RUN_TAG=_h200_split_ch${CHUNK:-2048}_c8$T python3 -u mn_run.py coloc_cache_edf ;;
     ours_ovl) SPLIT_OVERLAP=1 KERNEL=mtpsplit PREEMPT=1 CHUNK=${CHUNK:-2048} EDF_UNCACHED=1 DEADLINE_CHUNK=${DEADLINE_CHUNK:-1024:2048:6000} \
-          RUN_TAG=_h200_split_ovl_ch${CHUNK:-2048}_dl${DEADLINE_CHUNK//:/-}_c8$T python3 -u mn_run.py coloc_cache_edf ;;
+          RUN_TAG=_h200_split_ovl_ch${CHUNK:-2048}_dl${DEADLINE_CHUNK//:/-}${TTFT_SCALE_MS:+_ts${TTFT_SCALE_MS}}_c8$T python3 -u mn_run.py coloc_cache_edf ;;
     ours_mtp_ovl) SPLIT_OVERLAP=1 KERNEL=mtpsplit PREEMPT=1 CHUNK=2048 EDF_UNCACHED=1 DEADLINE_CHUNK=1024:2048:6000 \
           RUN_TAG=_h200_4mode_ovl_unc_ch2048_dl1024-2048-6000_c8$T python3 -u mn_run.py coloc_cache_edf_mtp ;;
     ours_mtp) KERNEL=mtpsplit PREEMPT=1 CHUNK=2048 EDF_UNCACHED=1 DEADLINE_CHUNK=1024:2048:6000 \

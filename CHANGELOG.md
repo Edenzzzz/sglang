@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.62 — No-MTP arm: agent-TTFT floor and deadline-slope x chunk frontier (2026-10-18)
+
+- Unloaded agent TTFT 1.30 s (stock) / 1.20 s (ours): loaded TTFT is mostly queueing. Flatter EDF slopes reach agent
+  TTFT -24.3% vs stock (slope 250, 2048/8192) but agent ITL falls to -19.8%; best ITL -31.2% costs TTFT +15.6%.
+
 ## v1.20.61 — Output gate PASS for the FA2-overlapped arms; kernel-numerics null case (2026-10-18)
 
 - No-MTP overlapped split diverges from stock FlashInfer exactly where stock FA3 does (token 11); MTP arm matches the

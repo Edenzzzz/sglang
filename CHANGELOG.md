@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.61 — Output gate PASS for the FA2-overlapped arms; kernel-numerics null case (2026-10-18)
+
+- No-MTP overlapped split diverges from stock FlashInfer exactly where stock FA3 does (token 11); MTP arm matches the
+  chunk-size null case. `gate_h200_ovl_20261018.sh`.
+
 ## v1.20.60 — No-MTP chunk sweep with FA2 overlap; overlap neutral on the MTP arm (2026-10-18)
 
 - vs stock mixed chunk without spec: 2048/8192 agent +24.8% / -10.4% / -24.0%, chat -87.5% / -29.6%; 1024/2048

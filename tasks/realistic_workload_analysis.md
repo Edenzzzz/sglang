@@ -86,7 +86,16 @@ on realistic mixed workloads (chat + TraceLab), measured against these, same ses
     3.12 s; -30% needs 2.19 s). Ours + MTP with overlap vs stock + MTP: agent +41.8% / -27.3% / -28.8%, chat -69.1% /
     -22.2% -- the same as the sequential split (verify rows are few, so FA2 overlap has little to hide).
     `ARMS=ours_mtp_ovl` / `ARMS=ours_ovl CHUNK={8192,4096} DEADLINE_CHUNK=2048:{8192,4096}:6000 bash
-    tasks/pd_colocation/mn_h200_nospec_20261018.sh`. Next: output gates for the overlapped arms.
+    tasks/pd_colocation/mn_h200_nospec_20261018.sh`.
+  - [x] **Output gate, both FA2-overlapped arms: PASS (2026-10-18, `tasks/pd_colocation/gate_h200_ovl_20261018.sh`,
+    srv_correctness).** No MTP: stock LPT is deterministic run to run (LPT_REP agrees on all 96 long-prompt tokens,
+    short >= 1); ours (`SPLIT_OVL_EDF`, deadline chunk 2048 / 8192, chunk 8192) diverges at token 11 on one long
+    prompt -- and so does the null case, stock with sgl-kernel's FA3 backend at the same chunk (`LPT_FA3`,
+    `--attention-backend fa3`: long >= 11, short >= 2), so the divergence is the attention kernel's bf16 rounding,
+    not the split or the schedule. MTP: the overlapped 4-mode arm (`MTP_MIX_SPLIT_OVL_EDF`) vs stock MTP matches the
+    chunk-size null case of the earlier 4-mode gate position for position (long >= 11, short 0; s1's first decode token
+    flips on chunking alone). Split fired with every call overlapped (gate runs: 501 / 1501 split calls, `overlapped`
+    equal); 0 tracebacks / 0 fallbacks. `bash /dev/shm/w/mn/gate_h200_ovl_20261018.sh` on pod `d6a80befdd4e4da5`.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

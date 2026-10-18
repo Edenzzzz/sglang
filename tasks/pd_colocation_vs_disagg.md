@@ -144,7 +144,25 @@ static mixture.
         Zipf(s) task choice over a ranking that rotates every ROTATE s, R rounds with tool gap G and A-token appends;
         per-request TTFT / ITL / cached tokens / popularity epoch, TTFT recovery after each rotation). Checked against
         a mock streaming server only (623 requests, 4 tasks, rotation and Zipf draw as specified); not yet run on GPUs.
-      - [ ] per-node replica / re-prefill counters; first H20 run (4 x 4, <= 16 GPUs) vs PD disagg.
+      - [x] **First run, 8 H20s (job bb854a10b8954223, 4 pods x 2 GPUs; 2026-10-18; `bash
+        tasks/pd_colocation/mn_fanout_8gpu_20261018.sh`; 16 tasks x 64K prefixes, 32 programs, 4 rounds, 5 s tool
+        gaps, Zipf 1.2 rotating every 180 s, 900 s, + ShareGPT 8 req/s; every arm 0 errors / 0 tracebacks / 0
+        fallbacks).** Agent out tok/s, TTFT mean / p99, ITL mean ; prefix cached ; chat TTFT / ITL:
+        | arm | agent | cached | chat |
+        |---|---|---|---|
+        | PD disagg 2P2D, stock MTP (clean upstream tree) | 44 / 62.6 s / 240 s / 148.8 ms | 83.0% | 75.6 s / 57.7 ms |
+        | colocation, prefix affinity only (no pool) | 405 / 1.18 s / 19.9 s / 85.5 ms | 97.9% | 74.5 ms / 5.4 ms |
+        | **ours: SLO-checked hit-first routing + pool + transfer term + EDF + 4-mode MTP** | **505 / 0.94 s / 6.75 s / 47.1 ms** | 97.7% | 139 ms / 7.0 ms |
+        Ours vs PD disagg: agent throughput 11.5x, TTFT -98.5%, ITL -68%; chat TTFT -99.8%, ITL -88%, chat throughput
+        +18% (1647 vs 1395 tok/s). Disagg does not recover from the rotating hot set: its agent TTFT grows epoch over
+        epoch (~37 s -> 104 s), while both colocation arms hold 0.5-1.2 s after the first epoch's cold start. Ours vs
+        affinity only (isolates the routing + replication policy): agent throughput +25%, TTFT -20%, p99 -66%, ITL
+        -45%; chat TTFT 74 -> 139 ms and ITL 5.4 -> 7.0 ms -- worse, still far inside a 2 s / 50 ms SLO. Caveats:
+        single repeat; disagg runs clean upstream sglang + stock MTP, so ours-vs-disagg folds kernel and policy
+        together (the affinity arm is the policy-only control); disagg is overloaded at this load. Our patched tree
+        cannot run disagg + MTP: its prefill workers assert at warmup (`disaggregation/prefill.py`
+        `batch.spec_info is result.next_draft_input`), so that baseline runs on `up_clean`.
+      - [ ] Repeat; a lighter load where disagg is below capacity; per-node replica / re-prefill counters.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.64 — PD 2b fan-out workload on 8 H20s: colocation + replication vs PD disagg (2026-10-18)
+
+- Ours vs PD disagg (stock MTP): agent throughput 11.5x, TTFT -98.5%, ITL -68%; chat TTFT -99.8%, ITL -88%. Ours vs
+  affinity-only colocation: agent +25% / -20% (p99 -66%) / -45%. Single repeat. `mn_fanout_8gpu_20261018.sh`.
+
 ## v1.20.63 — Long-context mix vs all single-node baselines: MTP arm clears all six vs stock + MTP again (2026-10-18)
 
 - 32-250K TraceLab + chat 2 req/s: ours + MTP vs stock + MTP agent +54% / -34% / -49%, chat +23% / -90% / -42%

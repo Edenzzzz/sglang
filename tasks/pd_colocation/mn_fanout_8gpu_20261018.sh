@@ -4,7 +4,9 @@
 # 64K-token prefixes (~1M-token hot set, above one pool's KV), 32 programs kept active, 4 rounds, 5 s tool gaps,
 # Zipf 1.2, hot set rotating every 180 s, 900 s. Arms, MTP on every role:
 #   disagg_2p2d_mtps           PD disaggregation (2 prefill + 2 decode pods), sglang router, stock MTP on every role,
-#                              stock kernel (KERNEL=lpt; our split env and 4-mode crash its prefill workers at warmup)
+#                              stock kernel and the clean upstream tree (SGL_PY=up_clean, default chunk), as in
+#                              mn_scaling_20261018.sh: on our patched tree its prefill workers assert at warmup
+#                              (disaggregation/prefill.py `batch.spec_info is result.next_draft_input`)
 #   coloc_cache_edf_mtp        colocation, prefix affinity only (no pool)
 #   coloc_slo_edf_mtp_hc       ours: SLO-checked hit-first routing + mooncake pool + transfer term + EDF + 4-mode MTP
 # Claude, 2026-10-18.
@@ -20,7 +22,8 @@ for arm in ${ARMS:-disagg_2p2d_mtps coloc_cache_edf_mtp coloc_slo_edf_mtp_hc}; d
   case $arm in
     coloc_slo_edf_mtp_hc) RUN_TAG=_8g_fanout${REP:-} ROUTER_ARGS="$RA --pool-kv-tokens 3348000 --prefetch-policy timeout" \
                             python3 -u mn_run.py $arm ;;
-    disagg_*) RUN_TAG=_8g_fanout${REP:-} KERNEL=lpt PREEMPT=0 python3 -u mn_run.py $arm ;;
+    disagg_*) (unset CHUNK; RUN_TAG=_8g_fanout${REP:-} SGL_PY=/dev/shm/w/up_clean/python KERNEL=lpt PREEMPT=0 \
+                 python3 -u mn_run.py $arm) ;;
     *) RUN_TAG=_8g_fanout${REP:-} python3 -u mn_run.py $arm ;;
   esac
 done

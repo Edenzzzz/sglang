@@ -308,7 +308,13 @@ static mixture.
         observed decode interval). **Settled vs PD disagg without spec (natural text):** heavy -- agent throughput
         3.2-3.3x, TTFT -96%, goodput 5.0-7.1x, TPOT 2.1-2.3x disagg's, chat TTFT -99%, chat ITL ~1.9x; light -- agent
         2.3x, TTFT -94..-95%, goodput 3.0-3.5x, TPOT p50 equal (15 ms SLO) / mean 1.5x, chat TTFT -99%.
-      - [ ] Load-adaptive router ITL SLO (from the observed decode interval).
+      - [x] **Load-adaptive router ITL SLO, K = 2 (2026-10-19; `router.py --itl-slo-auto K --itl-slo-floor-ms 10`: SLO = K
+        x EWMA of finished requests' per-token decode time, logged per decision; clean; `bash /tmp/h20/fanout_auto.sh`).**
+        Effective SLO p10 / p50 / p90 (`tasks/perf_model/router_itl_slo_values.py`): light 12.0 / 12.6 / 21.9 ms, heavy
+        16.6 / 19.6 / 30.6 ms. Light: agent 302 tok/s / 0.65 s / TPOT 8.71 ms (p50 6.49), goodput 296 tok/s -- the best
+        light-load point (fixed 15 ms: 8.9-9.2 ms). Heavy: 521 tok/s / 0.88 s / 14.6 ms, goodput 509 tok/s -- behind
+        fixed 20-30 ms (~560 / 12.0 ms / ~552): the SLO's low tail (~17 ms) moves too many requests off their cached
+        prefix. Next: K = 2.5 (heavy ~24, light ~16 ms).
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

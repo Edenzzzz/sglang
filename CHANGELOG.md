@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.55 — Reference-list format; JITServe added; mixed-SLO setting item (2026-10-18)
+
+- CLAUDE.md: every reference gets summary / relation / what-we-learn, the last only where it strengthens our core
+  contributions. The 4-mode doc's reference list rewritten to that format; JITServe (NSDI '26) added.
+- S: mixed-SLO setting item -- service goodput by request type, tiered TTFT SLO (2x above 200K uncached tokens).
+
 ## v1.20.54 — Stock MTP decodes without speculation under interleaved prefill (2026-10-18)
 
 - Per-chunk probe: stock MTP advances ~40% of its decode steps one token at a time (no verify) while chunked prefill

@@ -18,6 +18,17 @@
   every intermediate hypothesis is unreadable; keep the conclusion and the
   evidence, delete the path.
 
+# Reference Lists
+
+- Every paper in a task doc's reference list gets exactly three bullets:
+  1. **Summary:** the method and how it is evaluated (models, hardware, workloads, load axis, metrics, headline numbers).
+  2. **Relation to our method:** where it overlaps with or differs from ours.
+  3. **What we can learn:** method or evaluation-setting lessons, used only to strengthen our core contributions:
+     the fused kernels, higher cluster-wide request volume, and scheduling flexibility under load spikes, mixed
+     workloads and workload variation. Do not stack the paper's techniques onto our system: that makes our
+     contribution look like an assembly of others' ideas.
+- Add every paper the user sends to the list in this format.
+
 # Task Checklists
 
 - Check `tasks/*.md` files for unchecked `- [ ]` TODOs — these are usually overnight/long-running tasks.

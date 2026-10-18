@@ -624,6 +624,11 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     this); (2) a fixed 2 s chat TTFT SLO is met by no arm at 64-128K and above, so SLO attainment
     stops discriminating there -- SLOs should scale with each workload's unloaded latency
     (SLOs-Serve style, e.g. 5x / 10x).
+  - [ ] **Mixed-SLO setting (2026-10-18, user; JITServe in References):** score each tenant by service goodput
+    (tokens on time) next to means: chat latency-sensitive (TTFT 2 s, TBT 100 ms), agent rounds deadline-sensitive
+    with a tiered TTFT SLO -- doubled above 200K uncached tokens (user); sweep a common SLO scale 0.8-1.5x. In the
+    scheduler, the same tier as an EDF deadline multiplier (`SGLANG_EDF_LONG_DEADLINE=tokens:scale`), tested on a
+    workload that contains > 200K prompts.
   - [ ] **Relative SLOs (2026-10-13):** `eval_curves.py --slo-relative K_TTFT,K_TPOT --ref-root`
     scales each tenant's SLO from its median TTFT/TPOT running ALONE on stock MTP. The swept runs'
     lowest rate cannot be the reference (mix128 chat already waits 38 s at 4/s; tried and
@@ -1589,76 +1594,117 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
 
 ## References
 
-Papers and systems this work draws on. *(sent)* marks the ones the user sent.
+Papers and systems this work draws on. *(sent)* marks the ones the user sent. Each entry: summary, relation to our
+method, and what we take from it -- only where it strengthens our own contributions (fused kernels, higher
+cluster-wide request volume, scheduling flexibility under load spikes / mixed workloads / workload variation).
 
-- **Taming Dynamism on GPUs: Cross-SM Kernel Fusion via SM Cooperation and Just-in-Time Reduction**
-  *(sent; PDF)* -- note: technique. Taken: one persistent launch whose CTAs pull heterogeneous,
-  dynamically sized work from a device-side queue (our four-task plan and atomic cluster cursor,
-  and cross-role backfill); just-in-time reduction of split-KV partials (built, measured at <=0.6%
-  of GPU time, replaced by flashinfer 0.7's scheduled merge); its task representation as the
-  template for an optional epilogue task (EAGLE tree build, item B). Not taken, by measurement:
-  co-compiling roles with different register needs into one body -- our FA2 role spilled 21x
-  there, so FA2 runs as a PDL-co-launched executor and backfill is done by the hardware scheduler.
-- **SLOs-Serve: Optimized Serving of Multi-SLO LLMs** -- S. Chen, Z. Jia, S. Khan, A. Krishnamurthy,
-  P. B. Gibbons, [arXiv:2504.08784](https://arxiv.org/abs/2504.08784) *(sent)* -- note: setting.
-  Application- and stage-specific SLOs, several application mixtures (summarization, coding,
-  chat, tool calling, reasoning) crossed with load, capacity measured under SLOs (goodput / SLO
-  attainment): the source of S1-S3's per-tenant SLOs and mixture x rate sweeps. Its chunked-prefill
-  planner that co-plans speculative decoding is the closest scheduling analogue of our 4-mode step.
-- **Towards High-Goodput LLM Serving with Prefill-decode Multiplexing (MuxWise)** -- Y. Chen,
-  W. Cui et al., [arXiv:2504.14489](https://arxiv.org/abs/2504.14489) *(sent; "the ASPLOS PD
-  multiplexing paper")* -- note: baseline. Intra-GPU prefill/decode multiplexing with an SLO-aware
-  dispatcher and a contention-tolerant estimator; goodput under SLO as the metric. Direct
-  colocation baseline (not yet run); its estimator is the comparison point for our EDF step model.
+- **Taming Dynamism on GPUs: Cross-SM Kernel Fusion via SM Cooperation and Just-in-Time Reduction** *(sent; PDF)*
+  - *Summary:* fuses dynamically sized, heterogeneous work into one persistent launch whose CTAs pull tasks from a
+    device-side queue, with SMs cooperating on shared tasks and split partials reduced just in time instead of by a
+    separate merge kernel; evaluated on kernel-level dynamic workloads against per-task launches.
+  - *Relation:* the template for our four-task plan (atomic cluster cursor, cross-role backfill) and the JIT
+    reduction of split-KV partials we built (<= 0.6% of GPU time, then replaced by flashinfer 0.7's scheduled merge).
+    We did not co-compile roles with different register needs into one body: our FA2 role spilled 21x that way, so
+    FA2 runs as a PDL-co-launched executor and backfill is done by the hardware scheduler.
+  - *Learn:* its framing -- dynamism inside one launch is the problem, cooperation across SMs the answer -- is the
+    story for our kernel contribution, applied to the 4-mode serving step (prefill chunk + verify rows), which a
+    kernel-only benchmark does not exercise; report the same kernel-level evidence (makespan vs per-mode launches,
+    SM idle time) on captured serving steps.
+- **SLOs-Serve: Optimized Serving of Multi-SLO LLMs** -- S. Chen, Z. Jia, S. Khan, A. Krishnamurthy, P. B. Gibbons,
+  [arXiv:2504.08784](https://arxiv.org/abs/2504.08784) *(sent)*
+  - *Summary:* application- and stage-specific SLOs; a chunked-prefill planner (dynamic programming over token
+    allocations) that co-plans speculative decoding and routes across replicas; evaluated on mixtures
+    (summarization, coding, chat, tool calling, reasoning) crossed with load, reporting capacity under SLOs.
+  - *Relation:* its planner co-scheduling prefill chunks with speculation is the closest scheduling analogue of our
+    4-mode step; it plans token budgets, we change what one step computes (fused FA3 + FA2 in one forward).
+  - *Learn:* its evaluation -- per-tenant SLOs, mixture x rate sweeps, capacity at a fixed attainment -- is the
+    frame in which our scheduling flexibility under mixed workloads shows; it is the source of S1-S3's setup.
+- **Towards High-Goodput LLM Serving with Prefill-decode Multiplexing (MuxWise)** -- Y. Chen, W. Cui et al.,
+  [arXiv:2504.14489](https://arxiv.org/abs/2504.14489) *(sent; "the ASPLOS PD multiplexing paper")*
+  - *Summary:* intra-GPU prefill/decode multiplexing (SM partitions via green contexts, layer-split prefill) with an
+    SLO-aware dispatcher and a contention-tolerant latency estimator; goodput under SLO as the metric.
+  - *Relation:* direct colocation baseline (= sglang `--enable-pdmux`, run 2026-10-17); our split is decided per
+    step inside one forward and co-runs prefill with MTP verify rows, where pdmux partitions SMs at model level.
+  - *Learn:* its estimator is the comparison point for our EDF step model (S4: mixed-step MAPE 7.8-8.5% on the
+    4-mode schedule vs 44-50% on stock MTP) -- predictability of the fused step is our argument, not theirs.
 - **Crossflow: Prefill–Decode Elasticity for Agentic LLM Serving** -- Y. Xu et al.,
-  [arXiv:2609.27085v1](https://arxiv.org/abs/2609.27085v1) *(sent)* -- note: direct cluster-policy
-  baseline. Fixed P/D roles with decode-local prefill admitted through revocable multi-resource
-  leases, cache/shape-aware path comparison, and local SLO revalidation. No new model kernels.
-  **How it replays TraceLab** ([Sec. 6](https://arxiv.org/html/2609.27085v1#S6)): one-hour
-  segments of the public trace (window not stated), keeping timestamps, conversation order,
-  prefix relationships and token work; load factor alpha divides every timestamp offset from the
-  first arrival by alpha (8x-20x for GPT-OSS-120B; baselines at 16/18/20x): the recorded
-  request timestamps compressed, so **its load axis is request rate (req/s)**. Whether a round
-  waits for the previous response is not stated. Six TP4 GB300 servers (2P4D), SGLang, <=256
-  running requests per server, no stated evaluation SLO. Its GLM-5.2 TraceLab mean ITL worsens
-  20.9-34.3%. Load axes in the literature are request rate (Crossflow) or program concurrency
-  (ThunderAgent); neither uses session starts/s. Our agent tenant uses concurrency (below).
-  This does not close A/B or justify moving to EDF. [Analysis and comparison](debug_kernel_server_perf/resume_20261012/crossflow_analysis_20261014.md).
+  [arXiv:2609.27085v1](https://arxiv.org/abs/2609.27085v1) *(sent)*
+  - *Summary:* fixed P/D roles with decode-local prefill admitted through revocable multi-resource leases,
+    cache/shape-aware path comparison and local SLO revalidation; no new kernels. Replays one-hour TraceLab segments
+    with timestamps compressed by a load factor alpha (8-20x; request rate as the load axis), six TP4 GB300 servers
+    (2P4D), SGLang, no stated evaluation SLO; its GLM-5.2 TraceLab mean ITL worsens 20.9-34.3%.
+  - *Relation:* direct cluster-policy baseline; it keeps fixed roles and decides per request where to prefill, we
+    keep symmetric nodes and make local prefill + speculative decode cheap inside one step.
+    [Analysis and comparison](debug_kernel_server_perf/resume_20261012/crossflow_analysis_20261014.md).
+  - *Learn:* its ITL regression under decode-local prefill is exactly the cost our fused step removes -- report
+    ITL alongside TTFT on the same replay; its timestamp-compression protocol is the request-rate load axis for
+    chat-like tenants (agent tenants use program concurrency, below).
 - **ThunderAgent: A Simple, Fast and Program-Aware Agentic Inference System** -- H. Kang et al.,
-  [arXiv:2602.13692](https://arxiv.org/abs/2602.13692) *(sent)* -- note: argument and setting. KV-cache
-  thrashing in agentic serving (a session's cache evicted during a tool call and re-prefilled, up
-  to 7.14x end-to-end): motivates PD point 2 (migration leaves replicas where demand is) and
-  evaluating on multi-turn agent sessions rather than independent prompts. **Load protocol we
-  follow:** agent load is the number of parallel programs (workflows) kept active -- its x-axis
-  "parallel workflow number", headline point 96 programs on 8xH100 -- not an arrival rate. Every
-  agent arm here reports its program concurrency C and the measured mean requests in flight;
-  session-start rates (sessions/s) are not used.
-- **TraceLab: Characterizing Coding Agent Workloads for LLM Serving** -- K. Zhu, M. Jacob, C. Ma,
-  Y. Pan, S. Wang, A. Krishnamurthy, B. Kasikci, [arXiv:2606.30560](https://arxiv.org/abs/2606.30560);
-  dataset `syfi_coding_trace.jsonl.gz` ([github](https://github.com/uw-syfi/TraceLab)) *(sent)* --
-  note: workload. The coding-agent tenant in every mixed run (causal replay of prefix / append /
-  output tokens per round); its statistics set the mixtures and the full-length replay (context
-  p50 ~124K, a quarter of Claude rounds >= 256K, short outputs, high prefix hit) and PD point 5.
-- **semi-PD: Towards Efficient LLM Serving via Phase-Wise Disaggregated Computation and Unified
-  Storage** -- K. Hong et al., [arXiv:2504.19867](https://arxiv.org/abs/2504.19867)
-  ([code](https://github.com/infinigence/Semi-PD)) -- note: closest intra-GPU design. Splits each
-  GPU's SMs between a prefill and a decode process over one shared KV store, so there is no KV
-  transfer and no weight replication. Difference from ours: its SM ratio is a deployment-level
-  setting changed by relaunching (criticised as static in arXiv:2504.19516), while our split is
-  decided per step inside one forward, co-runs prefill chunks with MTP verify rows, and lets the
-  hardware backfill FA2 work onto SMs FA3 vacates.
+  [arXiv:2602.13692](https://arxiv.org/abs/2602.13692) *(sent)*
+  - *Summary:* program-aware scheduling for agentic workflows; shows KV-cache thrashing (a session's cache evicted
+    during a tool call and re-prefilled, up to 7.14x end-to-end); load axis is the number of parallel programs kept
+    active (headline 96 programs on 8x H100).
+  - *Relation:* motivates PD point 2 -- best-effort migration leaves replicas where demand is, where disaggregation
+    pins a session's cache to its prefill node.
+  - *Learn:* **load protocol we follow** -- agent load is program concurrency C, never sessions/s; every agent arm
+    reports C and measured mean in-flight requests. Its thrashing measurement is the evidence for our cluster-wide
+    request-volume argument (cache replication raises sustainable volume).
+- **TraceLab: Characterizing Coding Agent Workloads for LLM Serving** -- K. Zhu, M. Jacob, C. Ma, Y. Pan, S. Wang,
+  A. Krishnamurthy, B. Kasikci, [arXiv:2606.30560](https://arxiv.org/abs/2606.30560); dataset
+  `syfi_coding_trace.jsonl.gz` ([github](https://github.com/uw-syfi/TraceLab)) *(sent)*
+  - *Summary:* characterization of Claude Code / Codex agent traces: context p50 ~124K, a quarter of Claude rounds
+    >= 256K, short outputs, high prefix hit, long inter-round gaps.
+  - *Relation:* the coding-agent tenant in every mixed run (causal replay of prefix / append / output tokens).
+  - *Learn:* its long-context, append-heavy rounds are where prefill and speculative decode collide -- the regime
+    our 4-mode step targets; report results by uncached-prompt-length bucket, as its statistics suggest.
+- **JITServe: SLO-aware LLM Serving with Imprecise Request Information** -- W. Zhang, Z. Wu, Y. Mu, R. Ning, B. Liu,
+  N. Sarda, M. Lee, F. Lai, NSDI '26 ([PDF](https://www.usenix.org/system/files/nsdi26-zhang-wei.pdf),
+  [arXiv:2504.20068](https://arxiv.org/abs/2504.20068)) *(sent)*
+  - *Summary:* maximizes *service goodput* (tokens that meet their request's SLO) across three request types:
+    latency-sensitive (TTFT ~2 s, TBT ~100 ms, set from P95s of 1K DeepSeek API calls), deadline-sensitive (20 s
+    end-to-end), compound (20 s x number of stages, sub-deadlines from matched historical pattern graphs). Grouped
+    margin goodput maximization gives each request just enough bandwidth to meet its SLO just in time (upper-bound
+    output length from a quantile regression forest, refined every ~50 tokens), picks batches by a length-sorted
+    sliding window, preempts only when the projected gain exceeds the stall cost; ~2.8K LoC on vLLM with chunked
+    prefill. Llama-3.1-8B/70B, Qwen2.5-14B, Qwen3-30B-A3B on 16x A100; chat, long-context math, deep research,
+    agentic code generation, Microsoft-trace arrivals. 1.4-6.3x goodput (28.5-83.2% resource savings) vs Autellix,
+    learning-to-rank, vLLM FCFS, Sarathi-Serve; within 3-9% of an oracle. SLOs are fixed per type: they do not scale
+    with prompt length or with isolated latency.
+  - *Relation:* a request-level scheduler -- it decides *who* runs when, on unchanged kernels; it does not change
+    what one step costs. Our EDF is the same family (deadline-driven admission), but our contribution is that the
+    fused 4-mode step makes the step cheaper and predictable (S4), and that colocation lets the cluster route a
+    request anywhere. Its batch-composition finding (mixing input lengths slows a batch) is the inefficiency our
+    fused kernel attacks inside the step rather than by keeping lengths apart.
+  - *Learn (evaluation, not method):* (1) report **service goodput by request type** next to means -- chat as
+    latency-sensitive (token i on time if done by TTFT_SLO + i x TBT_SLO), agent rounds as deadline-sensitive or
+    compound (a program's rounds share one deadline); this is the metric under which scheduling flexibility under
+    mixed load is visible. (2) Set SLOs from an external reference (their P95-of-API method) or relative to the
+    unloaded latency of the same request on stock MTP, and sweep a common SLO scale (0.8x-1.5x) -- our relative-SLO
+    item. (3) Its fixed per-type SLOs ignore prompt length; for TraceLab, whose rounds span 32K to > 256K, a tiered
+    TTFT SLO (e.g. 2x for > 200K uncached tokens, as the user proposed; TokenScale also tiers by length) avoids
+    scoring a 256K prefill against a chat deadline. The scheduler's internal deadlines (length-scaled EDF) and the
+    evaluation SLOs are separate choices and should be reported separately.
+- **semi-PD: Towards Efficient LLM Serving via Phase-Wise Disaggregated Computation and Unified Storage** -- K. Hong
+  et al., [arXiv:2504.19867](https://arxiv.org/abs/2504.19867) ([code](https://github.com/infinigence/Semi-PD))
+  - *Summary:* splits each GPU's SMs between a prefill and a decode process over one shared KV store: no KV transfer,
+    no weight replication; the SM ratio is a deployment setting changed by relaunching (criticised as static in
+    arXiv:2504.19516).
+  - *Relation:* closest intra-GPU design; ours decides the split per step inside one forward, co-runs prefill chunks
+    with MTP verify rows, and lets the hardware backfill FA2 work onto SMs FA3 vacates.
+  - *Learn:* its static ratio is the foil for scheduling flexibility under workload variation -- show our per-step
+    split tracking a shift in the prefill/decode mix (load spike or tenant change) where a fixed ratio cannot.
 - **NVIDIA Dynamo -- KV router, conditional disaggregation, planner, KVBM**
   ([conditional disagg](https://docs.nvidia.com/dynamo/advanced-customizations/conditional-disaggregation);
   [router](https://docs.nvidia.com/dynamo/dev/knowledge-base/modular-components/router/routing-concepts);
   [planner](https://docs.nvidia.com/dynamo/v1.5.0/knowledge-base/modular-components/planner/overview);
-  [delta-KV RFC](https://github.com/ai-dynamo/dynamo/discussions/7861)). Full policy-by-policy
-  comparison: `pd_colocation_vs_disagg.md` point 6 (block-count cost router with no SLO term,
-  static local-prefill thresholds, minute-scale P/D autoscaling, incidental replication) -- note: closest
-  multi-node baseline for agentic rounds. The KV-aware router prefills locally on the decode worker
-  when the uncached part of the prompt is small (default effective-ISL threshold 4096 tokens) or
-  remote prefill is loaded, so most agent append rounds avoid the KV transfer that PD point 5
-  measures; the RFC would cut remote rounds to append-only transfer. What remains ours: making that
-  local prefill + speculative decode co-execution efficient (4-mode step + fused kernel, S1:
-  +20-25% throughput, -50-80% TTFT vs stock MTP under load), symmetric nodes instead of fixed
-  prefill/decode pools (routing and replication free to use every node), and EDF/SLO-aware
-  admission. Must be run as a baseline, not argued around.
+  [delta-KV RFC](https://github.com/ai-dynamo/dynamo/discussions/7861))
+  - *Summary:* KV-aware block-count cost router with no SLO term; prefills locally on the decode worker when the
+    uncached prompt is small (effective-ISL threshold 4096 by default) or remote prefill is loaded; minute-scale P/D
+    autoscaling planner; KVBM tiered KV store; the RFC would cut remote rounds to append-only transfer.
+  - *Relation:* closest multi-node baseline for agentic rounds (`pd_colocation_vs_disagg.md` point 6): most agent
+    append rounds already avoid the KV transfer that PD point 5 measures. What stays ours: making local prefill +
+    speculative decode co-execution efficient (4-mode step + fused kernel), symmetric nodes instead of fixed pools,
+    and EDF/SLO-aware admission. Must be run as a baseline, not argued around.
+  - *Learn:* its static local-prefill threshold and minute-scale planner are the comparison for scheduling
+    flexibility under load spikes -- evaluate a step change in load where per-request, per-step decisions react
+    within seconds.

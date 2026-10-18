@@ -1142,10 +1142,16 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     stock's `spec_verify_ct` (batch_result_processor's per-request increment) misses verifies when decode interleaves
     with chunked prefill steps; acceptance itself is equal on the two schedules, and the mixed step does not degrade
     drafting. The missed increment path in stock is not located (it does not affect any bar metric).
-  - [ ] Locate the stock-MTP path that skips `req.spec_verify_ct += 1` under interleaved prefill (metric bug only).
-    2026-10-18: ruled out retraction (the counter is set only in `Req.__init__`; no retractions in either probe log)
-    and the decode path (`_resolve_spec_v2_tokens` increments once per verify for every unfinished request). Next:
-    log one request's output length and verify count per step on stock MTP with the background prefills.
+  - [x] **The stock-MTP "undercount" is non-speculative decode steps, not a counter bug (2026-10-18).** Per-chunk
+    probe (`tpot_acc_probe.py` with chunk records, N=200, 4 background 40K prefills): ours emits ~123 token-adding
+    stream chunks per 256-token request at 2.08 tokens per chunk (= its acceptance, 2.06); stock MTP emits ~154 at
+    1.66 tokens per chunk, ~105 of them single-token, against ~85 verifies. Under interleaved chunked prefill stock MTP
+    advances its decode rows in plain one-token steps (no draft / verify) for ~40% of their steps; those tokens count
+    in `completion_tokens` but not `spec_verify_ct`, so its tokens-per-verify reads 3.0. Ruled out on the way:
+    retraction (counter set only in `Req.__init__`, no retractions logged) and the decode path (increments once per
+    verify). This is part of why the 4-mode step wins on stock MTP's long-prefill load: ours keeps speculating through
+    every mixed step (2.06 tokens per step) where stock falls back to 1. `N=200 python tpot_acc_probe.py
+    /dev/shm/w/probe_{stock,ours}_chunks [ours]` on pod `d6a80befdd4e4da5`.
   - [x] **Acceptance length from the step trace -- not testable (superseded by the per-request probe above).** `acc=` is the server's
     cumulative mean, and the per-step delta (`apply_steptrace_dacc.py`, `dacc=`) is zero on most steps because the
     metrics reporter accumulates accept counts only at its decode-log interval; with either signal the EWMA input does

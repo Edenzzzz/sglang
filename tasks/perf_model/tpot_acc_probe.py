@@ -10,7 +10,7 @@ N requests, max 256 output tokens). Per request: TTFT, TPOT = (e2e - TTFT) / (to
   python tpot_acc_probe.py <outdir> [ours]
 Claude, 2026-10-18.
 """
-import concurrent.futures as cf, json, os, random, signal, subprocess, sys, threading, time, urllib.request
+import collections, concurrent.futures as cf, json, os, random, signal, subprocess, sys, threading, time, urllib.request
 import numpy as np
 
 W = "/dev/shm/w"
@@ -57,7 +57,7 @@ def stream_one(i, text, t_arr):
     with lock:
         running = inflight[0]; inflight[0] += 1
     t0 = time.perf_counter()
-    first = None; meta = None
+    first = None; meta = None; chunks = []
     try:
         r = post({"text": text, "sampling_params": {"temperature": 0, "max_new_tokens": 256}, "stream": True})
         for line in r:
@@ -68,6 +68,9 @@ def stream_one(i, text, t_arr):
             if first is None:
                 first = time.perf_counter()
             meta = d.get("meta_info", meta)
+            if meta is not None:
+                chunks.append((round(time.perf_counter() - t0, 4), meta.get("completion_tokens", 0),
+                               meta.get("spec_verify_ct", 0)))
     finally:
         with lock:
             inflight[0] -= 1
@@ -76,7 +79,7 @@ def stream_one(i, text, t_arr):
     vct = (meta or {}).get("spec_verify_ct", 0)
     return dict(i=i, arrival=t_arr, running=running, ttft=(first - t0) * 1e3 if first else None,
                 tpot=(t1 - first) * 1e3 / (toks - 1) if first and toks > 1 else None,
-                tokens=toks, acc=toks / vct if vct else None)
+                tokens=toks, acc=toks / vct if vct else None, chunks=chunks)
 
 
 log = open(f"{out}/server.log", "w")
@@ -144,4 +147,12 @@ print(f"{'ours (4-mode)' if ours else 'stock MTP'}: n={len(rs)} TPOT mean={tp.me
 print(f"  constant acceptance      {mape(const)}")
 print(f"  per-request acceptance   {mape(per_req)}")
 print(f"  per-request acc + load   {mape(load)}")
+# Per chunk: steps that added tokens without adding a verify (the counter skipped them), by tokens added.
+skip = collections.Counter(); ok = collections.Counter()
+for r in res:
+    for (ta, ka, va), (tb, kb, vb) in zip(r["chunks"], r["chunks"][1:]):
+        if kb > ka:
+            (skip if vb == va else ok)[kb - ka] += 1
+print(f"  chunks adding tokens: with a verify increment {sum(ok.values())} {dict(sorted(ok.items())[:8])}; "
+      f"without {sum(skip.values())} {dict(sorted(skip.items())[:8])}")
 print("PROBE_DONE")

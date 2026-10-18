@@ -140,6 +140,11 @@ static mixture.
       pulled bytes and their latency, max/mean per-node load, and the time to recover TTFT after each popularity shift.
       Needs: a fan-out loader (shared-prefix programs on top of the TraceLab replay), per-node replica / recompute
       counters from the radix and store logs.
+      - [x] 2026-10-18 loader `drivers/serving/fanout_agents.py` (K tasks x L-token shared prefix, program concurrency C,
+        Zipf(s) task choice over a ranking that rotates every ROTATE s, R rounds with tool gap G and A-token appends;
+        per-request TTFT / ITL / cached tokens / popularity epoch, TTFT recovery after each rotation). Checked against
+        a mock streaming server only (623 requests, 4 tasks, rotation and Zipf draw as specified); not yet run on GPUs.
+      - [ ] per-node replica / re-prefill counters; first H20 run (4 x 4, <= 16 GPUs) vs PD disagg.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

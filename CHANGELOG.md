@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.79 — Router per-class (chat) ITL SLO: negative, off by default (2026-10-19)
+
+- 12 / 9 ms chat SLO: agent 505 / 461 tok/s (vs 555), chat ITL unchanged (10.5 ms). No prefill-free node exists at this
+  load, so the check only moves agents off their cached prefixes.
+
 ## v1.20.78 — Point 4: random holder choice loses on the narrowed fabric with fast-rotating fan-out (2026-10-19)
 
 - 1 NIC, 45 s rotation: load-ordered 545 tok/s / TPOT 13.3 ms / goodput 531 vs random 526 / 15.3 / 506; chat TTFT 157

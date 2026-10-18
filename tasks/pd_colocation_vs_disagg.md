@@ -321,6 +321,11 @@ static mixture.
         hand-tuned optimum at both loads** (fixed 20-30 ms at heavy: ~560 / 12.0 / ~552; fixed 15 ms at light: 8.9-9.2
         ms), within 1-8%; K = 2.0 is slightly better at light load (8.7 ms) and falls behind at heavy load. Default for
         the router from here: `--itl-slo-auto 2.5 --itl-slo-floor-ms 10`.
+      - [x] **Per-class ITL SLO for chat-length requests (negative; 2026-10-19; `router.py --itl-slo-short-ms`; heavy
+        natural-text load, adaptive K = 2.5 for the rest; clean; `bash /tmp/h20/fanout_short.sh`).** Chat SLO 12 / 9 ms:
+        agent 505 / 461 tok/s, TTFT 0.92 / 1.08 s, ITL 16.9 / 21.7 ms; chat ITL 10.5 / 10.5 ms (vs 10.8 ms without).
+        Chat ITL does not move: agent prefill runs on every node at this load, so the SLO check finds no prefill-free
+        node to keep chat decode on, and moving agents only costs their cached prefixes. Off by default (0).
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

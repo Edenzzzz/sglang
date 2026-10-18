@@ -1111,6 +1111,25 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       check above.
 
 - [ ] **S4, EDF step model** re-fitted on the fused kernel and compared with the unfused schedule
+  - [x] **Step model on the 4-mode fused schedule vs stock MTP (2026-10-18, H200 `d6a80befdd4e4da5`, two traced A/Bs,
+    each both arms clean, >= 66001 split calls):** same linear form (c0, prefill tokens, attention work, rows, KV), fit
+    on the first half of each trace, held-out MAPE (`tasks/perf_model/fit_tpot_acc.py`):
+    | step kind (GPU time) | 4-mode MTP, trace 1 / 2 | stock MTP, trace 1 / 2 |
+    |---|---|---|
+    | decode-only | 3.6% / 3.6% (p90 7.3 / 7.1%) | 2.7% / 2.7% (p90 5.2 / 5.3%) |
+    | carries a prefill chunk | **7.8% / 8.5%** (p90 15.8 / 18.5%) | 49.5% / 44.2% (p90 89.4 / 84.3%) |
+    | TPOT per accepted token (interval / acceptance) | 12.8% / 12.9% | 5.9% / 6.5% |
+    The step EDF has to predict before it admits a prefill -- one that carries a chunk -- is ~6x more predictable on the
+    4-mode schedule (point 3). The per-token interval is less predictable on ours (12.9% vs 6.5%) because ours
+    alternates 9 ms decode and 44 ms mixed steps where stock's back-to-back steps are mostly 8 ms decode. Traces
+    `STEP_TRACE=1 SPEC_TAG={_trace,_dacc} CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 bash
+    tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; the second A/B is also bar rep 4: agent +46.5% / -28.1% /
+    -34.2%, chat -71.0% / -24.1% vs its own stock MTP.
+  - [ ] **Acceptance length as a TPOT input (point 3) -- not yet testable from the trace.** `acc=` is the server's
+    cumulative mean, and the per-step delta (`apply_steptrace_dacc.py`, `dacc=`) is zero on most steps because the
+    metrics reporter accumulates accept counts only at its decode-log interval; with either signal the EWMA input does
+    not change TPOT MAPE (12.9 vs 12.6% ours, 6.5 vs 6.5% stock), which says nothing yet. Needs per-request accepted
+    tokens per verify from the batch result (EAGLE accept lengths) logged per step, then a per-request EWMA.
   - [x] **Step model on the final schedule (PD multiplexing + EDF, uncached deadlines, divisor 30) vs the stock
     (unfused) schedules (2026-10-17 18:50-19:26, 6 traced arms rc=0, 0 tracebacks / 0 fallbacks):** STEPTRACE now
     covers pdmux's event loop (`apply_steptrace_pdmux.py`: decode and split-prefill forwards traced on their own

@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.52 — S4 on the 4-mode fused schedule: mixed-step model 6x more accurate than stock MTP (2026-10-18)
+
+- `fit_tpot_acc.py`: steps carrying a prefill chunk 7.8 / 8.5% MAPE (4-mode) vs 49.5 / 44.2% (stock MTP), two traces.
+- `apply_steptrace_dacc.py`: per-step acceptance delta in STEPTRACE; too sparse (reporter batches its counters), so the
+  acceptance-input test stays open. Bar rep 4: agent TTFT -28.1%, chat ITL -24.1%.
+
 ## v1.20.51 — FP8 linear A/B; the split now serves identity-scaled KV layers (2026-10-18)
 
 - `apply_split_unit_kv_scale.py`: under `--quantization fp8` (BF16 KV) the split refused every layer for its unit KV

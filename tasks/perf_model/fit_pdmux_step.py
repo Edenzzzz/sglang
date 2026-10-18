@@ -17,7 +17,7 @@ import sys
 import numpy as np
 
 PAT = re.compile(r"STEPTRACE (\w+) et=(\d+) bs=(\d+) np=(\d+) ptok=(\d+) pf=(\d+) nd=(\d+) dkv=(\d+) kv=(\d+) "
-                 r"mx=(\d+)(?: sg=(\d+) lay=(\d+))?(?: acc=[0-9.]+)? t=([0-9.]+) gpu=([0-9.]+)")
+                 r"mx=(\d+)(?: sg=(\d+) lay=(\d+))?(?: acc=[0-9.]+)?(?: dacc=[0-9.]+)? t=([0-9.]+) gpu=([0-9.]+)")
 GAP_MS = 200.0
 
 

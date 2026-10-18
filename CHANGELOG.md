@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.56 — Long-prefill deadline multiplier (2x above 200K uncached tokens) (2026-10-18)
+
+- `apply_edf_long_deadline.py` + `LONG_DEADLINE`; harness knobs `CTX_LEN`, `YARN_FACTOR`, overridable workload knobs.
+- 32-250K TraceLab + chat (over capacity): mean agent TTFT unchanged, < 128K rounds 25-37% faster, > 195K slower.
+
 ## v1.20.55 — Reference-list format; JITServe added; mixed-SLO setting item (2026-10-18)
 
 - CLAUDE.md: every reference gets summary / relation / what-we-learn, the last only where it strengthens our core

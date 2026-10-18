@@ -83,8 +83,8 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # "Init parallel begin." until the supervisor killed it (pod 2 GPU 0: 3 x 6 min, 2026-10-16).
   NCCL=$(pick $((ROLE * 2 + g + 104729 + RANDOM)))
   ARGS=(--model $W/qwen7b --attention-backend flashinfer --mem-fraction-static ${MEM_FRAC:-0.85}
-        --host :: --port $PORT --nccl-port $NCCL --context-length 131072 --watchdog-timeout 600
-        --json-model-override-args '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}')
+        --host :: --port $PORT --nccl-port $NCCL --context-length ${CTX_LEN:-131072} --watchdog-timeout 600
+        --json-model-override-args '{"rope_scaling":{"factor":'${YARN_FACTOR:-4.0}',"original_max_position_embeddings":32768,"type":"yarn"}}')
   # Shared L3 prefix cache (goal points 2 and 4): every colocated worker writes the prefixes it
   # computes through to a cluster-wide mooncake store (RDMA, host DRAM) and prefetches a request's
   # prefix from it on a local miss, so any node can pull from any other -- a complete graph, with
@@ -150,6 +150,8 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   [ -n "${TTFT_SCALE_MS:-}" ] && export SGLANG_TTFT_SCALE_MS=$TTFT_SCALE_MS
   # CKPT_EVERY=N: radix-checkpoint a chunked prefill every N computed tokens, not every chunk (apply_checkpoint_every.py).
   [ -n "${CKPT_EVERY:-}" ] && export SGLANG_CHECKPOINT_EVERY_TOKENS=$CKPT_EVERY
+  # LONG_DEADLINE="tokens:scale": EDF TTFT deadline x scale for uncached prefills >= tokens (apply_edf_long_deadline.py).
+  [ -n "${LONG_DEADLINE:-}" ] && export SGLANG_EDF_LONG_DEADLINE=$LONG_DEADLINE
   # PDMUX_SHARE=N: run a split-prefill batch on the whole GPU (pdmux group 0) when >= N uncached prompt tokens are
   # waiting (apply_pdmux_backlog_share.py); 0 keeps pdmux's SM split always.
   [ "${PDMUX_SHARE:-0}" != 0 ] && export SGLANG_PDMUX_SHARE_BACKLOG_TOKENS=$PDMUX_SHARE

@@ -629,6 +629,18 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     with a tiered TTFT SLO -- doubled above 200K uncached tokens (user); sweep a common SLO scale 0.8-1.5x. In the
     scheduler, the same tier as an EDF deadline multiplier (`SGLANG_EDF_LONG_DEADLINE=tokens:scale`), tested on a
     workload that contains > 200K prompts.
+    - [x] **First test, over capacity (2026-10-18, H200 `d6a80befdd4e4da5`):** TraceLab cohort 32-250K (YaRN x8,
+      context 262144), agent C=6, 18 sessions x 2 rounds (36 rounds, 4 above 200K, max 222,761 tokens) + ShareGPT
+      8 req/s; all arms clean (0 tracebacks / fallbacks, >= 73001 split calls in ours). Every arm is past capacity
+      (chat TTFT >= 32 s), so these are not operating-point results. vs stock MTP (agent 37.4 tok/s / 52.8 s / 47.8 ms,
+      chat 1073 tok/s / 69.2 s / 34.8 ms), ours: agent +32% / -22% / -55%, chat +31% / -53% / -29%; ours with
+      `LONG_DEADLINE=200000:2`: agent +33% / -21.5% / -59%, chat +32% / -52% / -29%. The doubled deadline leaves mean
+      agent TTFT unchanged (41.5 vs 41.3 s) and moves it between lengths, as intended: < 64K 20.6 -> 13.0 s, 64-128K
+      34.4 -> 25.7 s, 128-195K 51.0 -> 51.5 s, > 195K 61.6 -> 92.8 s; median 41.2 -> 28.5 s, p99 100 -> 142 s. Next:
+      the same cohort at a chat rate near capacity, scored by per-tier SLO attainment. `YARN_FACTOR=8.0
+      CTX_LEN=262144 MIN_CTX=32768 MAX_CTX=250000 AGENT_CONC=6 SESSIONS=18 SPEC_TAG=_long CHUNKS=2048
+      DEADLINE_CHUNK=1024:2048:6000 bash tasks/pd_colocation/mn_h200_fourmode_20261018.sh`, then the same with
+      `SKIP_BASE=1 LONG_DEADLINE=200000:2`; sglang `be923db1f` + this commit.
   - [ ] **Relative SLOs (2026-10-13):** `eval_curves.py --slo-relative K_TTFT,K_TPOT --ref-root`
     scales each tenant's SLO from its median TTFT/TPOT running ALONE on stock MTP. The swept runs'
     lowest rate cannot be the reference (mix128 chat already waits 38 s at 4/s; tried and

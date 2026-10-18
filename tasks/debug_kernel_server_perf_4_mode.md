@@ -13,7 +13,11 @@ after the kernel items close (<=16 GPUs).
   backfill are closed by measurement or measured bound (A5).
 - [x] Best serving config (single H200): PD multiplexing + worker-side EDF with uncached-token TTFT deadlines, decode
   divisor 30 -- vs stock MTP all 12 bar metrics clear in the mean (C=8 four repeats, C=16 three), output gate PASS.
-  (Direct baselines -> PD multiplexing + EDF.)
+  (Direct baselines -> PD multiplexing + EDF.) **Not our method (user, 2026-10-18): pdmux is a baseline only.** It
+  cannot use the CPU-GPU overlap scheduler (our pdmux arms run `--disable-overlap-schedule`; the 4-mode arms run with
+  `disable_overlap_schedule: False`) and it multiplies the CUDA graphs to capture by the number of green-context SM
+  groups (5 on H20, 8 configured on H200), where the 4-mode step keeps one graph set. Both are advantages of ours to
+  state in the paper; the bar is judged on the 4-mode fused schedule.
 - [x] S4 step model on that schedule: decode ITL predictable to ~9% held-out vs 35-117% on the unfused schedules.
 - [x] 8 H20s (`pd_colocation_vs_disagg.md`): the same workers plus per-step SM sharing (TTFT deadlines + 24 ms ITL
   budget) clear all 12 vs stock colocation + MTP in both repeats (smallest -39%), H20 output gate PASS.

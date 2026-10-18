@@ -6,8 +6,8 @@ concurrency C (program concurrency is the agent load axis); each new program pic
 current popularity ranking, which rotates by one place every ROTATE seconds, so a new task's fan-out starts while the
 previous hot task drains. A program runs R rounds: prompt = task prefix + its own history (appends and outputs); each
 round streams one /generate, then waits a tool-call gap G and appends A fresh tokens. Prefix and appends are fixed-seed
-random token ids: cache and transfer behaviour depend on lengths and sharing, not on content (speculative acceptance
-does, so MTP arms should use a natural-text prefix source).
+random token ids by default: cache and transfer behaviour depend on lengths and sharing, not on content; speculative
+acceptance does, so MTP arms use `--text-source` (ShareGPT slices).
 
   python fanout_agents.py --url http://HOST:PORT --tasks 8 --prefix-len 131072 --concurrency 32 --rounds 4 \
       --duration 900 --out run.json
@@ -18,6 +18,7 @@ Claude, 2026-10-18.
 """
 import argparse
 import json
+import os
 import random
 import threading
 import time
@@ -62,10 +63,32 @@ def main():
     ap.add_argument("--seed", type=int, default=2026)
     ap.add_argument("--timeout", type=float, default=1800.0)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--text-source", default="", help="ShareGPT json: natural-text prefixes / appends (else random ids)")
+    ap.add_argument("--tokenizer", default="/dev/shm/w/qwen7b")
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
-    prefixes = [[rng.randrange(1000, 30000) for _ in range(a.prefix_len)] for _ in range(a.tasks)]
+    if a.text_source:
+        # Natural text: one token stream from ShareGPT conversations; prefixes and appends are contiguous slices of
+        # it, so speculative (MTP) acceptance behaves as on real prompts. Random ids give near-zero acceptance, which
+        # makes MTP pure overhead.
+        from transformers import AutoTokenizer
+        tok = AutoTokenizer.from_pretrained(a.tokenizer)
+        data = json.load(open(a.text_source))
+        text = "\n".join(t["value"] for d in data[:20000] for t in d.get("conversations", []))
+        pool = tok(text[:40_000_000])["input_ids"]
+        need = a.tasks * a.prefix_len
+        assert len(pool) > need + 10 * a.append_len, (len(pool), need)
+        prefixes = [pool[i * a.prefix_len:(i + 1) * a.prefix_len] for i in range(a.tasks)]
+        append_pool = pool[need:]
+    else:
+        prefixes = [[rng.randrange(1000, 30000) for _ in range(a.prefix_len)] for _ in range(a.tasks)]
+        append_pool = None
+    # Release barrier (mn_bench.sh): ready once the prefixes exist, so the chat stream does not start alone.
+    barrier = os.environ.get("BENCH_BARRIER_DIR")
+    if barrier:
+        os.makedirs(barrier, exist_ok=True)
+        open(os.path.join(barrier, "ready_fanout"), "w").close()
     weights = np.array([1.0 / (i + 1) ** a.zipf for i in range(a.tasks)])
     weights /= weights.sum()
     t_start = time.perf_counter()
@@ -92,7 +115,11 @@ def main():
             for rnd in range(a.rounds):
                 if time.perf_counter() - t_start >= a.duration:
                     return
-                history += [prng.randrange(1000, 30000) for _ in range(a.append_len)]
+                if append_pool is not None:
+                    off = prng.randrange(0, len(append_pool) - a.append_len)
+                    history += append_pool[off:off + a.append_len]
+                else:
+                    history += [prng.randrange(1000, 30000) for _ in range(a.append_len)]
                 sent = time.perf_counter() - t_start
                 try:
                     t0, stamps, meta, out_ids = stream_generate(a.url, history, a.output_len, a.timeout)

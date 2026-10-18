@@ -14,12 +14,12 @@ export BENCH_BARRIER_DIR=$OUT/barrier
 S=${SESSIONS:-64}; T=${TURNS:-6}
 if [ "${WORKLOAD:-}" = fanout ]; then
   # PD point 2b: fan-out agents on shared long task prefixes with rotating popularity (drivers/serving/fanout_agents.py).
-  # It does not use the release barrier; mark it ready so the chat stream is released at once.
-  mkdir -p $BENCH_BARRIER_DIR && touch $BENCH_BARRIER_DIR/ready_fanout
+  # The driver marks itself ready in the release barrier once its prefixes are built (tokenizing takes ~1-2 min).
   $W/venv/bin/python $W/drivers/serving/fanout_agents.py --url http://127.0.0.1:$RPORT --tasks ${FO_TASKS:-8} \
     --prefix-len ${FO_PREFIX:-65536} --concurrency ${AGENT_CONC:-16} --rounds ${FO_ROUNDS:-4} \
     --append-len ${FO_APPEND:-1024} --output-len ${FO_OUT:-128} --tool-gap-s ${FO_GAP:-5} --zipf ${FO_ZIPF:-1.2} \
-    --rotate-s ${FO_ROTATE:-180} --duration ${FO_DURATION:-900} --out $OUT/fanout.json > $OUT/bench_fanout.log 2>&1 &
+    --rotate-s ${FO_ROTATE:-180} --duration ${FO_DURATION:-900} --out $OUT/fanout.json \
+    ${FO_TEXT:+--text-source $W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json} > $OUT/bench_fanout.log 2>&1 &
 elif [ -n "${AGENT_CONC:-}" ]; then
   # Program concurrency (ThunderAgent protocol; the only agent load axis -- user, 2026-10-15): AGENT_CONC
   # sessions kept active, the next starts when one finishes, rounds back to back. Same TraceLab

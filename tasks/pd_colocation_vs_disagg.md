@@ -251,9 +251,16 @@ static mixture.
         the exact arm name `coloc_slo_edf_mtp_hc`, so the no-MTP arms routed with `router.py`'s default calibration and
         no transfer term (pool still on at the workers). Their numbers stand as measured for that configuration, not for
         the full policy; the MTP arms are unaffected. Fixed (`coloc_slo_*` match); the no-MTP rows are re-run below.
-      - [ ] Router ITL SLO (decode-aware SLO check, `--itl-slo-ms 15 / 10`, TTFT SLO 10 s) on the heavy natural-text
-        load, ours without MTP with the full router arguments; repeat at both loads; per-node replica / re-prefill
-        counters.
+      - [x] **Router ITL SLO with the full router arguments, heavy natural-text load, ours without MTP (2026-10-19;
+        clean; `bash /tmp/h20/fanout_itlslo.sh` = `FO_TEXT=1 EXTRA_RA="--ttft-slo-ms 10000 --itl-slo-ms {15,10}"
+        REP=_text_itl{15,10} ARMS=coloc_slo_edf_hc bash tasks/pd_colocation/mn_fanout_8gpu_20261018.sh`).** The default
+        ITL SLO (100 ms) never moved a request at ~20 ms TPOT. ITL SLO 15 / 10 ms: agent 505 / 501 tok/s, TTFT 0.92 /
+        0.88 s, TPOT 16.0 / 17.2 ms; chat TTFT 319 / 332 ms, ITL 10.3 / 10.2 ms. Agent SLO goodput at 10 s + 80 ms:
+        495 / 485 tok/s (97.9 / 96.8%); at 20 s + 30 ms: 489 / 480 tok/s (96.7 / 95.8%) -- **5.8x and 4.4x disagg's**
+        (86 / 111 tok/s). Vs the earlier no-MTP arm (default router arguments): agent +8% / -19% / TPOT -22%, chat
+        TTFT and ITL worse (135 -> 319 ms, 7.5 -> 10.3 ms). Agent TPOT stays 3x disagg's 5.2 ms (decode isolation);
+        chat ITL 2x disagg's 5.0 ms.
+      - [ ] Repeat at both loads; per-node replica / re-prefill counters.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

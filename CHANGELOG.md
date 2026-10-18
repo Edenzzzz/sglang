@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.70 — PD 2b: router ITL SLO with full router args; agent goodput 4.4-5.8x PD disagg (2026-10-19)
+
+- Fixed the fan-out script dropping router args for no-MTP arms. ITL SLO 15 ms: agent 505 tok/s, TTFT 0.92 s, TPOT
+  16.0 ms; goodput 489-495 vs disagg 86-111 tok/s. Agent TPOT still 3x disagg's.
+
 ## v1.20.69 — PD 2b heavy load on natural text; agent SLO goodput 3.2-5.3x PD disagg (2026-10-18)
 
 - 8 H20s, 32 programs + chat 8 req/s: ours (no MTP) vs disagg (no spec) agent +162% / TTFT -93% / TPOT 4x worse,

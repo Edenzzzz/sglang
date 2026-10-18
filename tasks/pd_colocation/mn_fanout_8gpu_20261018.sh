@@ -20,7 +20,7 @@ export WORKLOAD=fanout FO_TASKS=${FO_TASKS:-16} FO_PREFIX=${FO_PREFIX:-65536} AG
 export FO_GAP=5 FO_ZIPF=1.2 FO_ROTATE=180 FO_DURATION=900 CHAT_SHAREGPT=1 CHAT_RATE=${CHAT_RATE:-8} CHAT_N=${CHAT_N:-7200}
 for arm in ${ARMS:-disagg_2p2d_mtps coloc_cache_edf_mtp coloc_slo_edf_mtp_hc}; do
   case $arm in
-    coloc_slo_edf_mtp_hc) RUN_TAG=_8g_fanout${REP:-} ROUTER_ARGS="$RA --pool-kv-tokens 3348000 --prefetch-policy timeout" \
+    coloc_slo_*) RUN_TAG=_8g_fanout${REP:-} ROUTER_ARGS="$RA --pool-kv-tokens 3348000 --prefetch-policy timeout ${EXTRA_RA:-}" \
                             python3 -u mn_run.py $arm ;;
     disagg_*) (unset CHUNK; RUN_TAG=_8g_fanout${REP:-} SGL_PY=/dev/shm/w/up_clean/python KERNEL=lpt PREEMPT=0 \
                  python3 -u mn_run.py $arm) ;;

@@ -246,7 +246,14 @@ static mixture.
         96.8% / 270, disagg no spec 65.8% / 85 and 79.7% / 102. **Ours delivers 3.2-5.3x disagg's agent goodput**
         (3.4x even at a 30 ms TPOT SLO): disagg's per-token decode is faster, but its two prefill pods make half its
         requests miss the TTFT deadline. Per-token TPOT is the one metric where disagg leads (decode isolation).
-      - [ ] Repeat at both loads; per-node replica / re-prefill counters.
+      - [x] **Config correction (2026-10-19): every "ours, no MTP" arm above (`coloc_slo_edf_hc`) ran without its router
+        arguments.** `mn_fanout_8gpu_20261018.sh` attached the calibrated SLO model, pool size and transfer term only to
+        the exact arm name `coloc_slo_edf_mtp_hc`, so the no-MTP arms routed with `router.py`'s default calibration and
+        no transfer term (pool still on at the workers). Their numbers stand as measured for that configuration, not for
+        the full policy; the MTP arms are unaffected. Fixed (`coloc_slo_*` match); the no-MTP rows are re-run below.
+      - [ ] Router ITL SLO (decode-aware SLO check, `--itl-slo-ms 15 / 10`, TTFT SLO 10 s) on the heavy natural-text
+        load, ours without MTP with the full router arguments; repeat at both loads; per-node replica / re-prefill
+        counters.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

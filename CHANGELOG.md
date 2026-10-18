@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.20.71 — PD 2b heavy-load repeat: agent goodput 4.4-6.2x PD disagg over two repeats (2026-10-19)
+
+- Rep 2: ours 503 tok/s / 0.89 s / TPOT 16.9 ms, goodput 490 / 483 tok/s; disagg 170 / 17.9 s / 5.7 ms, 79 / 100.
+
 ## v1.20.70 — PD 2b: router ITL SLO with full router args; agent goodput 4.4-5.8x PD disagg (2026-10-19)
 
 - Fixed the fan-out script dropping router args for no-MTP arms. ITL SLO 15 ms: agent 505 tok/s, TTFT 0.92 s, TPOT

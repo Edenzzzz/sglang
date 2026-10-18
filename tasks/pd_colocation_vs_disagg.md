@@ -260,7 +260,12 @@ static mixture.
         (86 / 111 tok/s). Vs the earlier no-MTP arm (default router arguments): agent +8% / -19% / TPOT -22%, chat
         TTFT and ITL worse (135 -> 319 ms, 7.5 -> 10.3 ms). Agent TPOT stays 3x disagg's 5.2 ms (decode isolation);
         chat ITL 2x disagg's 5.0 ms.
-      - [ ] Repeat at both loads; per-node replica / re-prefill counters.
+      - [x] **Repeat 2, heavy natural-text load (2026-10-19; clean; `bash /tmp/h20/fanout_rep2.sh`).** Disagg (no spec):
+        agent 170 tok/s / 17.90 s / TPOT 5.7 ms, chat 19.5 s / 5.4 ms; ours (ITL SLO 15 ms, full router arguments): 503
+        tok/s / 0.89 s / 16.9 ms, chat 312 ms / 10.3 ms. Agent SLO goodput at 10 s + 80 ms / 20 s + 30 ms: ours 490 /
+        483 tok/s (97.3 / 95.9%), disagg 79 / 100 (46.3 / 58.9%). **Two repeats: ours delivers 4.4-6.2x disagg's agent
+        goodput**, agent throughput 2.8-3.0x, agent TTFT -95%, chat TTFT -98%; agent TPOT 3x and chat ITL 2x disagg's.
+      - [ ] Light-load repeat; per-node replica / re-prefill counters.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

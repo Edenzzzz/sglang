@@ -192,7 +192,7 @@ static mixture.
         without MTP. `for C in 8 4; do AGENT_CONC=$C REP=_light_c$C ARMS=coloc_slo_edf_mtp_hc ...` (`/tmp/h20/fanout_pareto.sh`).
       - [x] **Metric correction (2026-10-18): the fan-out driver's "ITL" is the gap between streamed chunks, and an MTP
         step streams ~2-3 tokens per chunk, so for MTP arms it is a per-step time, biased 2-3x against MTP.** Per-token
-        TPOT ((e2e - TTFT) / (tokens - 1), recomputed for every arm from the saved records, `/tmp/fo_tpot.py`) replaces
+        TPOT ((e2e - TTFT) / (tokens - 1), recomputed for every arm from the saved records, `tasks/perf_model/fanout_tpot.py`) replaces
         it below and supersedes the ITL columns above for MTP arms: heavy load, ours 16.8 ms vs disagg + MTP 127 ms;
         light load ours 11.2 ms, affinity-only 14.7, disagg 6.1 (no spec) / 19.7 (MTP); ours at C=8 / 4 8.0 / 6.4 ms.
       - [x] **Natural-text fan-out, light load (2026-10-18; `FO_TEXT=1`: prefixes and appends are ShareGPT slices; 16
@@ -239,7 +239,7 @@ static mixture.
         Ours without MTP vs disagg without: agent throughput +162%, TTFT -93%, TPOT 4x worse; chat TTFT -99%, ITL +50%.
         Ours + MTP vs disagg + MTP: +750% / -98% / TPOT -74%, chat +25% / -99.7% / -81%. The first run's "11.5x" was
         against disagg + MTP, the weak baseline on H20; against disagg without spec ours serves 2.6x the agent tokens.
-      - [x] **Agent SLO goodput (requests meeting both a TTFT and a per-token TPOT SLO; `/tmp/fo_slo.py` on the saved
+      - [x] **Agent SLO goodput (requests meeting both a TTFT and a per-token TPOT SLO; `tasks/perf_model/fanout_slo_goodput.py` on the saved
         records).** Attainment / goodput tok/s at TTFT 10 s + TPOT 80 ms (the eval matrix's agent SLO), and at 20 s + 30
         ms (a tight TPOT): heavy -- ours no MTP 98.0% / 457 and 81.2% / 379, ours + MTP 97.6% / 429 and 65.4% / 288,
         disagg no spec 48.2% / 86 and 62.1% / 111, disagg + MTP 29.1% / 15; light -- ours no MTP 98.0% / 273 and

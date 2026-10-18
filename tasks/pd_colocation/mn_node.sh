@@ -14,7 +14,8 @@ mkdir -p $LOG
 # SGL_PY: server-side sglang tree; the stock PD-disagg baseline runs clean upstream ($W/up_clean/python),
 # because the serving overlay's spec-v2 changes trip disagg prefill's spec_info identity assert.
 export PYTHONPATH=${SGL_PY:-$W/python}:$W/fi HF_HOME=$W/hf FI_ROOT=$W/fi TORCH_CUDA_ARCH_LIST=9.0a
-export SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 SGLANG_FLASHINFER_USE_PERSISTENT=1
+# FI_PERSISTENT=0: flashinfer's non-persistent attention path (default 1, the persistent path).
+export SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 SGLANG_FLASHINFER_USE_PERSISTENT=${FI_PERSISTENT:-1}
 # mooncake (PD-disagg KV transfer) links libcudart.so.12; the pods' system toolkit is CUDA 13,
 # but the torch cu128 wheels ship the 12.x runtime inside site-packages.
 # 2026-10-16 venv: torch is cu130, mooncake still links libcudart.so.12 -> nvidia-cuda-runtime-cu12

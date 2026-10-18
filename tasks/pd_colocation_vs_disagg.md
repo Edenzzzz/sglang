@@ -211,8 +211,15 @@ static mixture.
         verify over 64K+ contexts cost more than the accepted drafts save. Disagg's low TPOT comes with half the agent
         throughput (its 2 prefill pods throttle how many agents decode), so the fair TPOT comparison is at matched
         throughput: ours at C=8 (150 tok/s > disagg's 128) gave TPOT 8.0 ms with MTP on random text.
-      - [ ] Ours without MTP at C=8 / C=4 on natural text (TPOT at matched throughput); repeat; per-node replica /
-        re-prefill counters.
+      - [x] **Ours without MTP at matched throughput, natural text (clean):** C=8 agent 145.7 tok/s / TTFT 0.65 s / TPOT
+        10.8 ms; C=4 72.7 tok/s / 0.74 s / 10.0 ms (chat 56 / 53 ms, 5.8 / 5.5 ms). At C=8 ours serves more agent
+        throughput than disagg (145.7 vs 128.5) with TTFT -94% but TPOT 1.7x disagg's 6.3 ms -- and TPOT barely moves
+        from C=16 (12.3) through C=4 (10.0), so the gap is neither load nor prefill interference: our decode step is
+        slower on these 64K+ contexts. Disagg runs the clean upstream tree; ours runs the patched tree with the split
+        environment and `SGLANG_FLASHINFER_USE_PERSISTENT=1` (set for every arm by mn_node.sh). `for C in 8 4; do FO_TEXT=1
+        AGENT_CONC=$C ... REP=_light_text_c$C ARMS=coloc_slo_edf_hc ...` (`/tmp/h20/fanout_text2.sh`).
+      - [ ] Decode-kernel check at C=4: stock kernel (`KERNEL=lpt`) with the persistent path on / off (`FI_PERSISTENT`);
+        repeat; per-node replica / re-prefill counters.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

@@ -117,6 +117,29 @@ static mixture.
       store (write-through, best-effort prefetch) lifts round-robin's hit rate 12.7% -> 22.3% (chat
       TTFT -41%, P99 ITL -83%). Under affinity it sits idle (16 pulls): affinity already serves 73%
       locally, so migration pays only where routing must place a request elsewhere.
+- [ ] **2b. A workload where replication + load balancing must matter (design, 2026-10-18, user; 4 nodes of 8
+      H200 / H100, scaled to H20 4 x 4 within the cap).** The earlier runs were neutral because no request had to
+      leave its prefix holder (affinity served 73-93% of tokens locally, the store sat idle) and recompute was cheap
+      (16K hot prefixes ~1 s). The case needs three conditions at once:
+      1. **Demand per prefix above one node's capacity** -- *fan-out agents*: K tasks, each a long shared context
+         (100-200K tokens, a TraceLab Claude/Codex session prefix), each spawning N parallel programs (best-of-N
+         rollouts, sub-agents on one repository; N = 8-32) that append their own rounds. Affinity piles all N on the
+         holder; spreading without a copy recomputes 100K+ tokens (~10 s on H200), a pull ships ~5.7 GB of KV (Qwen 7B,
+         ~57 KB/token; ~0.15 s at 400 Gb/s), so a replica is worth ~60x its transfer.
+      2. **Working set above one pool's memory, below the cluster's** -- sum of hot contexts > the prefill pool's
+         KV + host cache in 2P2D-style disagg, < all nodes' together; with tool-call gaps between rounds (ThunderAgent's
+         thrashing), disagg's pool evicts and re-prefills while colocation keeps copies across every node's memory.
+      3. **Popularity that shifts** -- Zipf over tasks whose ranking rotates every few minutes (a new task's fan-out
+         starts while an old one drains), so any static placement or pool sizing lags and replicas must follow demand.
+      Plus chat at a fixed rate on every node as the latency-sensitive tenant. Load: agent program concurrency C per
+      node (never sessions/s), chat by request rate, both around measured capacity.
+      **Arms:** PD disaggregation (sglang P/D roles + cache-aware router; with and without MTP on decode), colocation
+      with affinity only (no migration), colocation round-robin + store, ours (SLO-checked hit-first routing +
+      best-effort pull + EDF, 4-mode step with MTP). **Measured, besides TTFT / ITL / throughput:** re-prefilled tokens
+      (the falsifier: ours must recompute less than disagg at equal memory), replica count per hot prefix over time,
+      pulled bytes and their latency, max/mean per-node load, and the time to recover TTFT after each popularity shift.
+      Needs: a fan-out loader (shared-prefix programs on top of the TraceLab replay), per-node replica / recompute
+      counters from the radix and store logs.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

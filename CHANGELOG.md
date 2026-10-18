@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.66 — PD 2b fan-out at a lighter load: TTFT / throughput win, agent ITL loses to disagg (2026-10-18)
+
+- 16 programs + chat 4 req/s on 8 H20s: ours vs PD disagg (no spec) agent +130% / -92% TTFT, chat TTFT -99%, but agent
+  ITL 31.6 vs 6.1 ms (disagg's isolated decode pods). Disagg + MTP: agent ITL 23 ms, worse than without.
+
 ## v1.20.65 — Long mix, no-MTP arm, three matched repeats: on the bar's edge (2026-10-18)
 
 - Slope 250: agent TTFT -30.9% / ITL -28.4%; slope 400: -29.2% / -30.2% vs stock without spec (means of 3). Chat

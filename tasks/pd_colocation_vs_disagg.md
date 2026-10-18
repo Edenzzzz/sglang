@@ -162,7 +162,23 @@ static mixture.
         together (the affinity arm is the policy-only control); disagg is overloaded at this load. Our patched tree
         cannot run disagg + MTP: its prefill workers assert at warmup (`disaggregation/prefill.py`
         `batch.spec_info is result.next_draft_input`), so that baseline runs on `up_clean`.
-      - [ ] Repeat; a lighter load where disagg is below capacity; per-node replica / re-prefill counters.
+      - [x] **Lighter load, 8 H20s (2026-10-18; 16 programs, chat 4 req/s / 3600 requests, otherwise as above; all arms
+        0 errors / 0 tracebacks / 0 fallbacks; `AGENT_CONC=16 CHAT_RATE=4 CHAT_N=3600 REP=_light ARMS="disagg_2p2d_mtps
+        disagg_2p2d coloc_cache_edf_mtp coloc_slo_edf_mtp_hc" bash tasks/pd_colocation/mn_fanout_8gpu_20261018.sh`).**
+        | arm | agent tok/s / TTFT mean / p99 / ITL | cached | chat TTFT / ITL |
+        |---|---|---|---|
+        | PD disagg 2P2D, no spec | 122 / 10.85 s / 56.4 s / **6.1 ms** | 88.6% | 6.90 s / 5.4 ms |
+        | PD disagg 2P2D, stock MTP | 107 / 11.31 s / 70.7 s / 23.0 ms | 86.9% | 7.35 s / 7.0 ms |
+        | colocation, affinity only | 262 / 0.93 s / 3.95 s / 41.4 ms | 97.6% | 59 ms / 4.6 ms |
+        | ours | **281 / 0.83 s** / 14.0 s / 31.6 ms | 97.5% | 64 ms / 4.7 ms |
+        Ours vs disagg without spec (the stronger disagg here): agent throughput +130%, TTFT -92%, chat TTFT -99%,
+        chat ITL -13% -- **but agent ITL is 5x worse (31.6 vs 6.1 ms)**: disagg's two decode pods are lightly loaded
+        and isolated, while ours carries agent decode rows through mixed steps that prefill 64K-prefix chunks (the
+        colocation weakness seen in the hot-prefix test). Disagg's prefill pods are its bottleneck (TTFT ~11 s, slowly
+        recovering epoch over epoch); MTP on its decode pods makes agent ITL worse here (23 vs 6.1 ms). Ours vs
+        affinity only: +7% / -11% / -24% ITL, p99 TTFT worse (14.0 vs 3.95 s). Single repeat.
+      - [ ] Agent ITL vs disagg on the fan-out workload (decode isolation): the open weakness; repeat; per-node replica /
+        re-prefill counters.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

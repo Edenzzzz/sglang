@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.69 — PD 2b heavy load on natural text; agent SLO goodput 3.2-5.3x PD disagg (2026-10-18)
+
+- 8 H20s, 32 programs + chat 8 req/s: ours (no MTP) vs disagg (no spec) agent +162% / TTFT -93% / TPOT 4x worse,
+  chat TTFT -99%. Agent SLO goodput (10 s TTFT + 80 ms TPOT): 457 vs 86 tok/s (98% vs 48% attainment).
+
 ## v1.20.68 — PD 2b: agent TPOT gap vs disagg is mixed-step interference, not the decode kernel (2026-10-18)
 
 - Stock kernel with the persistent path on / off gives agent TPOT 12.9 / 12.1 ms (ours 10.0, disagg 6.3). The earlier

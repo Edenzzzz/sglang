@@ -226,7 +226,27 @@ static mixture.
         This is the colocation cost the 4-mode step and EDF reduce (ours 10.0-12.3 ms vs the stock kernel's 12-13 ms)
         but do not remove at this load. `for FP in 1 0; do FI_PERSISTENT=$FP KERNEL=lpt FO_TEXT=1 AGENT_CONC=4 ...
         REP=_light_text_c4_lpt_fp$FP ARMS=coloc_slo_edf_hc ...` (`/tmp/h20/fanout_pers.sh`).
-      - [ ] Repeat the key fan-out arms; per-node replica / re-prefill counters.
+      - [x] **Heavy load on natural text (repeat of the first run with ShareGPT text and both disagg variants; 32
+        programs, chat 8 req/s; all four arms 0 errors / 0 tracebacks / 0 fallbacks; `bash /tmp/h20/fanout_heavy_text.sh`
+        = `FO_TEXT=1 REP=_text ARMS="disagg_2p2d disagg_2p2d_mtps coloc_slo_edf_mtp_hc coloc_slo_edf_hc" bash
+        tasks/pd_colocation/mn_fanout_8gpu_20261018.sh`).** Agent tok/s / TTFT / per-token TPOT ; chat tok/s / TTFT / ITL:
+        | arm | agent | chat |
+        |---|---|---|
+        | PD disagg, no spec | 177.9 / 17.21 s / **5.2 ms** | 1618 / 18.90 s / 5.0 ms |
+        | PD disagg, stock MTP | 51.7 / 52.29 s / 104.8 ms | 1318 / 64.60 s / 50.0 ms |
+        | ours + MTP | 439.7 / **0.86 s** / 27.0 ms | 1642 / 0.198 s / 9.3 ms |
+        | ours, no MTP | **466.5** / 1.14 s / 20.4 ms | 1643 / 0.135 s / 7.5 ms |
+        Ours without MTP vs disagg without: agent throughput +162%, TTFT -93%, TPOT 4x worse; chat TTFT -99%, ITL +50%.
+        Ours + MTP vs disagg + MTP: +750% / -98% / TPOT -74%, chat +25% / -99.7% / -81%. The first run's "11.5x" was
+        against disagg + MTP, the weak baseline on H20; against disagg without spec ours serves 2.6x the agent tokens.
+      - [x] **Agent SLO goodput (requests meeting both a TTFT and a per-token TPOT SLO; `/tmp/fo_slo.py` on the saved
+        records).** Attainment / goodput tok/s at TTFT 10 s + TPOT 80 ms (the eval matrix's agent SLO), and at 20 s + 30
+        ms (a tight TPOT): heavy -- ours no MTP 98.0% / 457 and 81.2% / 379, ours + MTP 97.6% / 429 and 65.4% / 288,
+        disagg no spec 48.2% / 86 and 62.1% / 111, disagg + MTP 29.1% / 15; light -- ours no MTP 98.0% / 273 and
+        96.8% / 270, disagg no spec 65.8% / 85 and 79.7% / 102. **Ours delivers 3.2-5.3x disagg's agent goodput**
+        (3.4x even at a 30 ms TPOT SLO): disagg's per-token decode is faster, but its two prefill pods make half its
+        requests miss the TTFT deadline. Per-token TPOT is the one metric where disagg leads (decode isolation).
+      - [ ] Repeat at both loads; per-node replica / re-prefill counters.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

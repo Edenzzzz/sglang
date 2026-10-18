@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.76 — PD 2b: 30 ms ITL SLO repeats; the best SLO depends on load (2026-10-19)
+
+- Heavy rep 2: 569 tok/s / 0.64 s / TPOT 12.0 ms, goodput 562 tok/s. Light: 30 ms costs TPOT vs 15 ms (10.0 vs 8.9-9.2
+  ms). Settled vs PD disagg: goodput 5.0-7.1x (heavy), 3.0-3.5x (light).
+
 ## v1.20.75 — PD 2b: router ITL SLO plateau at 20-30 ms (2026-10-19)
 
 - Heavy load: ~560 agent tok/s, TTFT 0.66-0.73 s, TPOT 12.0 ms, goodput ~550 tok/s at 20 / 25 / 30 ms; 30 ms is best

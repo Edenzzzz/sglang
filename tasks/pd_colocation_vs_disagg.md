@@ -300,7 +300,15 @@ static mixture.
         30 ms is the chat-friendliest point and the default from here. Settled numbers vs PD disagg (no spec, two
         repeats), heavy load: agent throughput 3.1-3.3x, TTFT -96%, goodput 5.0-7.0x, TPOT 2.1-2.3x disagg's; chat TTFT
         -99%, chat ITL ~1.8x disagg's.
-      - [ ] Repeat the 30 ms setting at heavy and light load.
+      - [x] **30 ms repeats (2026-10-19; clean; `bash /tmp/h20/fanout_itl30rep.sh`).** Heavy rep 2: agent 569 tok/s /
+        0.64 s / TPOT 12.0 ms (p50 9.5), chat 249 ms / 9.8 ms, goodput 562 tok/s (98.7%) -- reproduces rep 1 (558 /
+        0.66 / 12.0, 549). Light: 299 tok/s / 0.56 s / 10.0 ms (p50 7.35), chat 60 ms / 6.4 ms, goodput 293 tok/s -- vs
+        the 15 ms SLO at light load (294-300 / 0.68-0.69 s / 8.9-9.2 ms, p50 6.5): the looser SLO costs TPOT at light
+        load and wins it at heavy load, so the ITL SLO wants to scale with load (the router could set it from the
+        observed decode interval). **Settled vs PD disagg without spec (natural text):** heavy -- agent throughput
+        3.2-3.3x, TTFT -96%, goodput 5.0-7.1x, TPOT 2.1-2.3x disagg's, chat TTFT -99%, chat ITL ~1.9x; light -- agent
+        2.3x, TTFT -94..-95%, goodput 3.0-3.5x, TPOT p50 equal (15 ms SLO) / mean 1.5x, chat TTFT -99%.
+      - [ ] Load-adaptive router ITL SLO (from the observed decode interval).
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

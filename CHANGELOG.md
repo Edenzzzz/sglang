@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.57 — 2x deadline above 200K on a 32-250K mix at chat 4 req/s: five of six metrics clear (2026-10-18)
+
+- vs stock MTP: agent +41% / -39.1% / -33%, chat +35% / -80.4% / -26.7% (chat ITL misses); SLO attainment agent
+  30.6% vs 11.1%, chat 50.7% vs 0.2%. Single repeat; stock is past capacity at this rate.
+
 ## v1.20.56 — Long-prefill deadline multiplier (2x above 200K uncached tokens) (2026-10-18)
 
 - `apply_edf_long_deadline.py` + `LONG_DEADLINE`; harness knobs `CTX_LEN`, `YARN_FACTOR`, overridable workload knobs.

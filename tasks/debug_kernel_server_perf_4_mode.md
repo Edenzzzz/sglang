@@ -641,6 +641,20 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       CTX_LEN=262144 MIN_CTX=32768 MAX_CTX=250000 AGENT_CONC=6 SESSIONS=18 SPEC_TAG=_long CHUNKS=2048
       DEADLINE_CHUNK=1024:2048:6000 bash tasks/pd_colocation/mn_h200_fourmode_20261018.sh`, then the same with
       `SKIP_BASE=1 LONG_DEADLINE=200000:2`; sglang `be923db1f` + this commit.
+    - [x] **Chat 4 req/s, same cohort (2026-10-18; 1200 chat requests; all arms clean, >= 52001 split calls):**
+      stock MTP is still past capacity (chat 590 tok/s served, TTFT 48.7 s); single repeat.
+      | metric vs stock MTP (agent 42.4 tok/s / 40.0 s / 50.3 ms; chat 590 tok/s / 48.7 s / 61.4 ms) | ours | ours + 2x above 200K |
+      |---|---|---|
+      | agent throughput / TTFT / ITL | +41% / -27.5% / -40% | +41% / **-39.1%** / -33% |
+      | chat throughput / TTFT / ITL | +35% / -63% / -32.4% | +35% / **-80.4%** / -26.7% |
+      | agent TTFT SLO attainment (10 s; 20 s for >= 200K) | 25.0% (stock 11.1%) | 30.6% |
+      | chat TTFT SLO attainment (2 s) | 20.6% (stock 0.2%) | 50.7% |
+      Agent TTFT by prompt length, stock / ours / ours + 2x: < 64K 24.4 / 10.6 / 8.3 s, 64-128K 44.7 / 20.7 / 14.4 s,
+      128-195K 45.2 / 37.4 / 31.1 s, > 195K 46.3 / 51.6 / 51.2 s. With the doubled deadline five of six metrics clear
+      the bar on this long-context mix; chat ITL (-26.7%) misses -- the long prefills it defers still run as mixed steps
+      chat decode rides through. Without it chat ITL clears (-32.4%) and agent TTFT misses (-27.5%). Next: repeat, a
+      lower chat rate where stock MTP is below capacity, and the output gate for the `LONG_DEADLINE` arm (ordering
+      only; the config's gate passed). `CHAT_RATE=4 CHAT_N=1200 SPEC_TAG=_long_r4` + the command above.
   - [ ] **Relative SLOs (2026-10-13):** `eval_curves.py --slo-relative K_TTFT,K_TPOT --ref-root`
     scales each tenant's SLO from its median TTFT/TPOT running ALONE on stock MTP. The swept runs'
     lowest rate cannot be the reference (mix128 chat already waits 38 s at 4/s; tried and

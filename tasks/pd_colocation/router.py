@@ -208,6 +208,8 @@ class Router:
         self.ttft_ratio = {"short": collections.deque(maxlen=a.ttft_window),
                            "long": collections.deque(maxlen=a.ttft_window)}
         self.last_pull = self.last_pull_raw = 0
+        # EWMA of finished requests' observed per-token decode time (ms), for --itl-slo-auto.
+        self.tpot_ewma = None
         self.rr = 0
         self.rid = 0
         self.log = open(a.log, "a") if a.log else None
@@ -280,6 +282,15 @@ class Router:
                 return False
         return True
 
+    def itl_slo(self):
+        """ITL SLO the SLO check prices against. --itl-slo-auto K > 0 sets it to K x the observed per-token decode
+        time (EWMA over finished requests), floored at --itl-slo-floor-ms: the best fixed SLO moved with load on the
+        fan-out workload (15 ms at light load, 20-30 ms at heavy), because a tight SLO at heavy load moves requests
+        off their cached prefix for no TPOT gain. Fixed --itl-slo-ms otherwise, and until the first sample."""
+        if self.a.itl_slo_auto > 0 and self.tpot_ewma is not None:
+            return max(self.a.itl_slo_floor_ms, self.a.itl_slo_auto * self.tpot_ewma)
+        return self.a.itl_slo_ms
+
     def ttft_margin(self, n_tok):
         """Multiplier on predicted TTFT so that a request judged feasible meets its deadline with probability
         ~q: the q-quantile of measured / predicted TTFT over recent finished requests of its class. The ratio
@@ -298,7 +309,7 @@ class Router:
         if now + ttft * self.ttft_margin(n_tok_self) / 1000.0 > deadline:
             self.last_reason = "own_ttft"
             return False, ttft, tpot
-        if tpot > self.a.itl_slo_ms:
+        if tpot > self.itl_slo():
             self.last_reason = "own_itl"
             return False, ttft, tpot
         # Admitting this request delays LATER-deadline requests queued here; it must not
@@ -397,14 +408,14 @@ class Router:
         t_route = time.time()
         w.inflight[rid] = dict(prefill=uncached, decode_left=out_tok, decode_total=out_tok,
                                deadline=deadline, t0=t_route, kv=n_tok, t_first=None,
-                               itl_slo=self.a.itl_slo_ms)
+                               itl_slo=self.itl_slo())
         w.insert(hashes)
         t_first = None
         if self.a.edf:
             payload["priority"] = int(deadline * 1000) % 2_000_000_000
         if self.log:
             self.log.write(json.dumps(dict(t=time.time(), rid=rid, client_rid=payload.get("rid"), worker=i,
-                                           n_tok=n_tok, policy=self.a.policy, **info)) + "\n")
+                                           n_tok=n_tok, policy=self.a.policy, itl_slo=self.itl_slo(), **info)) + "\n")
             self.log.flush()
         resp = web.StreamResponse()
         try:
@@ -449,6 +460,10 @@ class Router:
                     except ValueError:
                         pass
                     break
+            ctoks = meta.get("completion_tokens") if meta else None
+            if t_first is not None and ctoks and ctoks > 1:
+                obs = (time.time() - t_first) * 1000.0 / (ctoks - 1)
+                self.tpot_ewma = obs if self.tpot_ewma is None else 0.98 * self.tpot_ewma + 0.02 * obs
             if t_first is not None and info.get("ttft_pred"):
                 self.ttft_ratio["long" if n_tok >= self.a.long_prompt_tokens else "short"].append(
                     (t_first - t_route) * 1000.0 / max(1.0, info["ttft_pred"]))
@@ -560,6 +575,9 @@ def main():
     ap.add_argument("--edf", action="store_true")
     ap.add_argument("--ttft-slo-ms", type=float, default=5000)
     ap.add_argument("--itl-slo-ms", type=float, default=100)
+    ap.add_argument("--itl-slo-auto", type=float, default=0.0,
+                    help="> 0: ITL SLO = this x the observed per-token decode time (EWMA), see itl_slo()")
+    ap.add_argument("--itl-slo-floor-ms", type=float, default=10.0)
     ap.add_argument("--check-residents", type=int, default=1,
                     help="also reject a node if admitting the request would push a request already "
                          "decoding there past its ITL SLO")

@@ -57,6 +57,25 @@ on realistic mixed workloads (chat + TraceLab), measured against these, same ses
     nodes, vs our colocated symmetric nodes with and without MTP.
   - [ ] **semi-PD-style systems with an sglang implementation**: semi-PD (arXiv:2504.19867, fork of sglang
     v0.4.4.post1); others added if they ship sglang code. NVIDIA Dynamo conditional disaggregation is optional.
+- [x] **Single-node A/B, H200 `d6a80befdd4e4da5`, 2026-10-18 (same session; agent C=8 frozen 32-64K TraceLab x 2 rounds
+  + ShareGPT 8 req/s; one worker; all six arms 0 tracebacks / 0 fallbacks; split arms >= 65.5K split calls,
+  overlapped arm `overlapped=71501` = every split; chat throughput = offered load in every arm).** Agent tput tok/s /
+  TTFT / ITL ; chat TTFT / ITL:
+  | arm | agent | chat |
+  |---|---|---|
+  | stock chunked prefill + mixed chunk, no spec | 89.9 / 3.12 s / 60.5 ms | 1.04 s / 29.7 ms |
+  | stock + MTP | 74.0 / 16.85 s / 24.0 ms | 8.95 s / 15.8 ms |
+  | stock pdmux (divisor 36) | 101.4 / 8.11 s / 27.0 ms | 2.03 s / 15.5 ms |
+  | ours, no MTP, split sequential | 102.7 / 3.90 s / 47.5 ms | 0.17 s / 22.7 ms |
+  | **ours, no MTP, FA2 overlapped** | **113.0 / 3.61 s / 41.6 ms** | **0.15 s / 19.0 ms** |
+  | ours + MTP (4-mode, sequential split) | 103.2 / 12.32 s / 17.1 ms | 2.81 s / 12.5 ms |
+  Ours without MTP (overlapped) vs stock without MTP: agent +25.7% / **+15.6%** / -31.2%, chat TTFT -85.6% / ITL -36.0%
+  -- clears everything except agent TTFT; the sequential split gives +14% / +24.8% / -21.5%, -84% / -23.6%, so FA2
+  overlap is worth +10% agent throughput and -12 / -16% agent / chat ITL. Ours + MTP vs stock + MTP: agent +39.5% /
+  -26.9% / -28.8%, chat -68.6% / -20.9%. Agent TTFT is the miss without MTP: stock prefills in 8192-token chunks, ours
+  in the 1024 / 2048 deadline chunks tuned for the MTP arm. Next: overlap on the MTP arm, larger chunks on the no-MTP
+  arm, and output gates for both overlapped arms. `bash tasks/pd_colocation/mn_h200_nospec_20261018.sh`; sglang
+  `d33dcf44c`.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

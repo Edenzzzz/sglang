@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.59 — Single-node A/B against the bar's baselines; FA2 overlap measured for the first time (2026-10-18)
+
+- Ours without MTP (FA2 overlapped) vs stock mixed chunk without spec: agent +25.7% / +15.6% / -31.2%, chat -85.6% /
+  -36.0%; agent TTFT the one miss. Overlap vs sequential split: +10% agent tput, -12% / -16% agent / chat ITL.
+- Ours + MTP vs stock + MTP: agent +39.5% / -26.9% / -28.8%, chat -68.6% / -20.9%. `SPLIT_OVERLAP` knob.
+
 ## v1.20.58 — 32-250K mix at chat 2 req/s: 4-mode MTP clears all six vs stock MTP (2026-10-18)
 
 - Ours agent +53% / -37.5% / -44%, chat +23% / -86% / -45.5%; with 2x deadline above 200K agent +55% / -37.8% / -46%,

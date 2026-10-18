@@ -1024,6 +1024,16 @@ static mixture.
       - [x] the same on a NARROWED fabric (`ONE_NIC=1`) -- **randomized selection LOSES even under
             deliberate contention.** Measured below; this is a negative result for the proposed
             algorithm, in the regime built to favour it.
+      - [x] **Randomized holder choice on the fan-out workload, narrowed fabric + fast rotation (2026-10-19; 8 H20s,
+            `ONE_NIC=1`, hot set rotating every 45 s instead of 180 s, natural text, adaptive ITL SLO K = 2.5; both arms
+            clean; `bash /tmp/h20/fanout_rand.sh`).** Load-ordered within a hit bucket (`coloc_slo_edf_hc`) vs random
+            within it (`coloc_slo_rand_edf_hc`): agent 545 vs 526 tok/s, TTFT 0.77 vs 0.81 s, TPOT 13.3 vs 15.3 ms;
+            goodput 531 vs 506 tok/s; chat TTFT 157 vs 364 ms, ITL 10.0 vs 11.3 ms; new-copy routings 79 vs 91.
+            **Random loses again (-4.7% goodput, +15% TPOT, +132% chat TTFT), now on the workload built for
+            replication.** The load-ordered arm loses only ~2% against the full fabric with 180 s rotation (555 tok/s,
+            0.75 s), so at <= 16 H20s the links are not the constraint even at 4x less bandwidth and 4x faster churn;
+            holder load is. Point 4's randomization rule stays refuted at this scale; its premise (congestion) needs
+            more hosts than the cap allows.
       - [ ] congestion modelled from router-observed past link latency (the alternative in the
             goal). NOT built, and the measurements argue against building it here: with no
             contention to observe there is nothing to fit, and a per-request router query would add

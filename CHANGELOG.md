@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.78 — Point 4: random holder choice loses on the narrowed fabric with fast-rotating fan-out (2026-10-19)
+
+- 1 NIC, 45 s rotation: load-ordered 545 tok/s / TPOT 13.3 ms / goodput 531 vs random 526 / 15.3 / 506; chat TTFT 157
+  vs 364 ms. Links are not the constraint at <= 16 H20s (load-ordered within 2% of the full-fabric run).
+
 ## v1.20.77 — Router: load-adaptive ITL SLO (K = 2.5) tracks the hand-tuned optimum at both loads (2026-10-19)
 
 - `router.py --itl-slo-auto K`: SLO = K x observed per-token decode time. K = 2.5: heavy 555 tok/s / TPOT 12.1 ms /

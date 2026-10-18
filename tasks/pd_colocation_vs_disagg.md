@@ -183,8 +183,14 @@ static mixture.
         tokens per second of disagg (281 vs 122 tok/s; disagg's prefill pods throttle how many agents decode at once),
         so the fair comparison is ITL at matched agent throughput. `CHUNK=512` / `CHUNK=2048
         DEADLINE_CHUNK=512:2048:5019` with `REP=_light_ch512` / `_light_dl512` (`/tmp/h20/fanout_itl.sh`).
-      - [ ] Agent ITL vs disagg at matched agent throughput (ours at fewer programs); repeat; per-node replica /
-        re-prefill counters.
+      - [x] Ours at fewer programs (light load, clean): C=8 agent 150 tok/s / 0.80 s / ITL 23.0 ms, C=4 74 tok/s /
+        1.09 s / ITL 18.0 ms. At C=8 ours already exceeds disagg's agent throughput (150 vs 122) with its MTP ITL (23.0
+        ms = disagg + MTP), and even at C=4 (74 tok/s) ITL stays 3x disagg's no-spec 6.1 ms -- so the gap is per-step
+        MTP cost, not load: the driver's random-id prefixes and appends give near-zero draft acceptance, so MTP drafts
+        and verifies for nothing (which is also why MTP made disagg worse). Next: natural-text prefixes
+        (`fanout_agents.py --text-source`, ShareGPT slices; `FO_TEXT=1`), ours with and without MTP vs disagg with and
+        without MTP. `for C in 8 4; do AGENT_CONC=$C REP=_light_c$C ARMS=coloc_slo_edf_mtp_hc ...` (`/tmp/h20/fanout_pareto.sh`).
+      - [ ] Natural-text fan-out: ours +/- MTP vs disagg +/- MTP; repeat; per-node replica / re-prefill counters.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

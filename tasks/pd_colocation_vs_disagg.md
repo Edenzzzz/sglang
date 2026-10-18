@@ -294,7 +294,13 @@ static mixture.
         tok/s (98.3 / 98.2%) -- **5.0-7.0x disagg's** and better than ITL SLO 15 on every agent metric (496-505 tok/s,
         16.0-17.8 ms): a looser SLO moves fewer requests off their cached prefix. Agent TPOT gap to disagg narrows from
         ~3x to ~2x (12.0 vs 5.2-5.7 ms).
-      - [ ] Router ITL SLO 25 / 30 ms at heavy load (find the optimum); repeat it.
+      - [x] **Router ITL SLO 25 / 30 ms, heavy load (2026-10-19; clean; `bash /tmp/h20/fanout_itl2530.sh`):** agent 562 /
+        558 tok/s, TTFT 0.72 / 0.66 s, TPOT 12.0 / 12.0 ms; chat TTFT 268 / 254 ms, ITL 10.3 / 9.5 ms (p99 90 / 42 ms);
+        goodput 552 / 549 tok/s. 20-30 ms is a plateau (10 and 15 ms move too many requests off their cached prefix);
+        30 ms is the chat-friendliest point and the default from here. Settled numbers vs PD disagg (no spec, two
+        repeats), heavy load: agent throughput 3.1-3.3x, TTFT -96%, goodput 5.0-7.0x, TPOT 2.1-2.3x disagg's; chat TTFT
+        -99%, chat ITL ~1.8x disagg's.
+      - [ ] Repeat the 30 ms setting at heavy and light load.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

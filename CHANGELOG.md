@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.75 — PD 2b: router ITL SLO plateau at 20-30 ms (2026-10-19)
+
+- Heavy load: ~560 agent tok/s, TTFT 0.66-0.73 s, TPOT 12.0 ms, goodput ~550 tok/s at 20 / 25 / 30 ms; 30 ms is best
+  for chat (TTFT 254 ms, ITL 9.5 ms, p99 42 ms) and becomes the default.
+
 ## v1.20.74 — PD 2b: router ITL SLO 20 ms beats 15 ms; agent goodput 5.0-7.0x PD disagg (2026-10-19)
 
 - Heavy natural-text load: 562 tok/s, TTFT 0.73 s, TPOT 12.0 ms; goodput 552 vs disagg 79-111 tok/s. Light-load

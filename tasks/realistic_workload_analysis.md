@@ -73,9 +73,20 @@ on realistic mixed workloads (chat + TraceLab), measured against these, same ses
   -- clears everything except agent TTFT; the sequential split gives +14% / +24.8% / -21.5%, -84% / -23.6%, so FA2
   overlap is worth +10% agent throughput and -12 / -16% agent / chat ITL. Ours + MTP vs stock + MTP: agent +39.5% /
   -26.9% / -28.8%, chat -68.6% / -20.9%. Agent TTFT is the miss without MTP: stock prefills in 8192-token chunks, ours
-  in the 1024 / 2048 deadline chunks tuned for the MTP arm. Next: overlap on the MTP arm, larger chunks on the no-MTP
-  arm, and output gates for both overlapped arms. `bash tasks/pd_colocation/mn_h200_nospec_20261018.sh`; sglang
-  `d33dcf44c`.
+  in the 1024 / 2048 deadline chunks tuned for the MTP arm. `bash tasks/pd_colocation/mn_h200_nospec_20261018.sh`;
+  sglang `d33dcf44c`.
+  - [x] **Chunk size on the no-MTP overlapped arm, and overlap on the MTP arm (same session, all clean, every split
+    overlapped: `overlapped` = split calls, 56-72K):** vs stock without spec, agent tput / TTFT / ITL, chat TTFT / ITL:
+    | ours, no MTP, overlapped, deadline chunk | agent | chat |
+    |---|---|---|
+    | 1024 / 2048 | +25.7% / +15.6% / -31.2% | -85.6% / -36.0% |
+    | 2048 / 4096 | +24.9% / +0.3% / -26.3% | -86.7% / -30.6% |
+    | 2048 / 8192 | +24.8% / **-10.4%** / -24.0% | -87.5% / -29.6% |
+    Chunk size moves agent TTFT against agent ITL along one frontier; no setting clears both (stock's agent TTFT is
+    3.12 s; -30% needs 2.19 s). Ours + MTP with overlap vs stock + MTP: agent +41.8% / -27.3% / -28.8%, chat -69.1% /
+    -22.2% -- the same as the sequential split (verify rows are few, so FA2 overlap has little to hide).
+    `ARMS=ours_mtp_ovl` / `ARMS=ours_ovl CHUNK={8192,4096} DEADLINE_CHUNK=2048:{8192,4096}:6000 bash
+    tasks/pd_colocation/mn_h200_nospec_20261018.sh`. Next: output gates for the overlapped arms.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

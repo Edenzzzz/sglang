@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.60 — No-MTP chunk sweep with FA2 overlap; overlap neutral on the MTP arm (2026-10-18)
+
+- vs stock mixed chunk without spec: 2048/8192 agent +24.8% / -10.4% / -24.0%, chat -87.5% / -29.6%; 1024/2048
+  agent +25.7% / +15.6% / -31.2%, chat -85.6% / -36.0%. Agent TTFT and ITL trade along one frontier.
+
 ## v1.20.59 — Single-node A/B against the bar's baselines; FA2 overlap measured for the first time (2026-10-18)
 
 - Ours without MTP (FA2 overlapped) vs stock mixed chunk without spec: agent +25.7% / +15.6% / -31.2%, chat -85.6% /

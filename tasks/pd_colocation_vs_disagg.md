@@ -265,7 +265,15 @@ static mixture.
         tok/s / 0.89 s / 16.9 ms, chat 312 ms / 10.3 ms. Agent SLO goodput at 10 s + 80 ms / 20 s + 30 ms: ours 490 /
         483 tok/s (97.3 / 95.9%), disagg 79 / 100 (46.3 / 58.9%). **Two repeats: ours delivers 4.4-6.2x disagg's agent
         goodput**, agent throughput 2.8-3.0x, agent TTFT -95%, chat TTFT -98%; agent TPOT 3x and chat ITL 2x disagg's.
-      - [ ] Light-load repeat; per-node replica / re-prefill counters.
+      - [x] **Re-prefill, the falsifier named above (`tasks/perf_model/fanout_reprefill.py`: sum of input - cached tokens
+        per request, from the saved records).** Heavy natural-text load: ours (no MTP) recomputes 8.6-8.7M of 246-249M
+        input tokens (3.4-3.5%; 2.3% with default router arguments), ours + MTP 5.3M of 213M (2.5%); disagg (no spec)
+        8.7-8.8M of 84-87M (10.2-10.4%), disagg + MTP 5.2M of 31M (16.7%). Disagg recomputes ~3x the share of what it
+        serves: about the same absolute prefill work as ours, turned into a third of the served tokens. "Colocation
+        replicates better" passes this test at equal memory.
+      - [ ] Replica count per prefix over time: the router decision log carries rid / worker / cached tokens but no prefix
+        key, and the driver records carry no rid, so the two cannot be joined; log the task id with each request. Then
+        a light-load repeat.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.72 — PD 2b re-prefill: disagg recomputes ~3x the share of its input that colocation does (2026-10-19)
+
+- Heavy natural-text load: ours 3.4-3.5% of input tokens recomputed (2.5% with MTP), disagg 10.2-10.4% (16.7% with
+  MTP). `fanout_reprefill.py`.
+
 ## v1.20.71 — PD 2b heavy-load repeat: agent goodput 4.4-6.2x PD disagg over two repeats (2026-10-19)
 
 - Rep 2: ours 503 tok/s / 0.89 s / TPOT 16.9 ms, goodput 490 / 483 tok/s; disagg 170 / 17.9 s / 5.7 ms, 79 / 100.

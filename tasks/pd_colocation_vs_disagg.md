@@ -287,7 +287,14 @@ static mixture.
         repeats (79-111 tok/s). Three repeats of ours: 496-505 tok/s, TTFT 0.89-0.98 s, TPOT 16.0-17.8 ms. Replicas:
         each task's prefix on 3-8 of 8 workers over the run; per epoch the hot tasks on 6-8 (task 0 on all 8 in epoch
         0); 78 of 3509 routings made a new copy -- the same demand-following replication as at the light load.
-      - [ ] A second light-load repeat of both arms.
+      - [x] **Light-load repeat 2 and router ITL SLO 20 ms (2026-10-19; clean; `bash /tmp/h20/fanout_more.sh`).** Light:
+        disagg 127.7 tok/s / 10.23 s / TPOT 5.8 ms (p50 6.60), goodput 84 / 101 tok/s; ours (ITL SLO 15) 299.6 /
+        0.68 s / 8.85 ms (p50 6.48), chat 89 ms / 7.4 ms -- reproduces repeat 1 (294 / 0.69 / 9.18, p50 6.49). Heavy,
+        ITL SLO 20 ms: agent **562 tok/s / 0.73 s / TPOT 12.0 ms (p50 8.5)**, chat 305 ms / 10.3 ms; goodput 553 / 552
+        tok/s (98.3 / 98.2%) -- **5.0-7.0x disagg's** and better than ITL SLO 15 on every agent metric (496-505 tok/s,
+        16.0-17.8 ms): a looser SLO moves fewer requests off their cached prefix. Agent TPOT gap to disagg narrows from
+        ~3x to ~2x (12.0 vs 5.2-5.7 ms).
+      - [ ] Router ITL SLO 25 / 30 ms at heavy load (find the optimum); repeat it.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

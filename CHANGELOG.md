@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.74 — PD 2b: router ITL SLO 20 ms beats 15 ms; agent goodput 5.0-7.0x PD disagg (2026-10-19)
+
+- Heavy natural-text load: 562 tok/s, TTFT 0.73 s, TPOT 12.0 ms; goodput 552 vs disagg 79-111 tok/s. Light-load
+  repeat 2 reproduces repeat 1.
+
 ## v1.20.73 — PD 2b light-load repeat: goodput 3.0-3.5x disagg; replicas follow the hot set (2026-10-19)
 
 - Ours (ITL SLO 15 ms) vs disagg: agent 294 vs 124 tok/s, TTFT 0.69 vs 10.6 s, TPOT p50 6.49 vs 6.61 ms (mean 9.2 vs

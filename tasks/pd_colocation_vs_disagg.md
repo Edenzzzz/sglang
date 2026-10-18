@@ -190,7 +190,29 @@ static mixture.
         and verifies for nothing (which is also why MTP made disagg worse). Next: natural-text prefixes
         (`fanout_agents.py --text-source`, ShareGPT slices; `FO_TEXT=1`), ours with and without MTP vs disagg with and
         without MTP. `for C in 8 4; do AGENT_CONC=$C REP=_light_c$C ARMS=coloc_slo_edf_mtp_hc ...` (`/tmp/h20/fanout_pareto.sh`).
-      - [ ] Natural-text fan-out: ours +/- MTP vs disagg +/- MTP; repeat; per-node replica / re-prefill counters.
+      - [x] **Metric correction (2026-10-18): the fan-out driver's "ITL" is the gap between streamed chunks, and an MTP
+        step streams ~2-3 tokens per chunk, so for MTP arms it is a per-step time, biased 2-3x against MTP.** Per-token
+        TPOT ((e2e - TTFT) / (tokens - 1), recomputed for every arm from the saved records, `/tmp/fo_tpot.py`) replaces
+        it below and supersedes the ITL columns above for MTP arms: heavy load, ours 16.8 ms vs disagg + MTP 127 ms;
+        light load ours 11.2 ms, affinity-only 14.7, disagg 6.1 (no spec) / 19.7 (MTP); ours at C=8 / 4 8.0 / 6.4 ms.
+      - [x] **Natural-text fan-out, light load (2026-10-18; `FO_TEXT=1`: prefixes and appends are ShareGPT slices; 16
+        programs, chat 4 req/s; all four arms 0 errors / 0 tracebacks / 0 fallbacks; `bash /tmp/h20/fanout_text.sh` =
+        `FO_TEXT=1 AGENT_CONC=16 CHAT_RATE=4 CHAT_N=3600 REP=_light_text ARMS="disagg_2p2d disagg_2p2d_mtps
+        coloc_slo_edf_mtp_hc coloc_slo_edf_hc" bash tasks/pd_colocation/mn_fanout_8gpu_20261018.sh`).**
+        | arm | agent tok/s / TTFT / TPOT | chat TTFT / ITL |
+        |---|---|---|
+        | PD disagg, no spec | 128.5 / 10.05 s / **6.3 ms** | 10.20 s / 5.3 ms |
+        | PD disagg, stock MTP | 104.1 / 11.60 s / 22.1 ms | 10.65 s / 7.4 ms |
+        | ours + MTP | 246.4 / 0.91 s / 18.5 ms | 66 ms / 4.9 ms |
+        | ours, no MTP | **279.0 / 0.74 s** / 12.3 ms | 63 ms / 6.2 ms |
+        Ours + MTP vs disagg + MTP: agent +137% / -92% / TPOT -16%; chat TTFT -99%, ITL -34%. Ours without MTP vs
+        disagg without: agent +117% / -93% / TPOT +97% (worse); chat TTFT -99%, ITL +17% (worse). MTP raises agent
+        TPOT in both systems on H20 even with natural text: H20's low compute (vs its bandwidth) makes the 4-token
+        verify over 64K+ contexts cost more than the accepted drafts save. Disagg's low TPOT comes with half the agent
+        throughput (its 2 prefill pods throttle how many agents decode), so the fair TPOT comparison is at matched
+        throughput: ours at C=8 (150 tok/s > disagg's 128) gave TPOT 8.0 ms with MTP on random text.
+      - [ ] Ours without MTP at C=8 / C=4 on natural text (TPOT at matched throughput); repeat; per-node replica /
+        re-prefill counters.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.67 — PD 2b on natural text; per-token TPOT replaces the chunk-gap ITL for MTP arms (2026-10-18)
+
+- Fan-out driver: `--text-source` (ShareGPT slices); the chunk-gap "ITL" overstated MTP arms 2-3x, TPOT recomputed.
+- 8 H20s, light load: ours + MTP vs disagg + MTP agent +137% / -92% / TPOT -16%, chat -99% / -34%; ours without MTP vs
+  disagg without: +117% / -93% / TPOT 2x worse (decode isolation at half the throughput).
+
 ## v1.20.66 — PD 2b fan-out at a lighter load: TTFT / throughput win, agent ITL loses to disagg (2026-10-18)
 
 - 16 programs + chat 4 req/s on 8 H20s: ours vs PD disagg (no spec) agent +130% / -92% TTFT, chat TTFT -99%, but agent

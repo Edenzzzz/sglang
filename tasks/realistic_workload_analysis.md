@@ -36,7 +36,12 @@ on realistic mixed workloads (chat + TraceLab), measured against these, same ses
 
 - **Single node** -- demonstrates kernel fusion and schedule efficiency with the mixed tile dispatch:
   - [ ] **Stock chunked prefill + mixed chunk, default attention kernel, no speculation** (sglang `--enable-mixed-chunk`
-    with its flashinfer backend): the primary baseline for ours without MTP (the fused / split mixed-tile step).
+    with its flashinfer backend): the baseline for ours without MTP. That arm shows what fine-grained mixed-tile
+    dispatch (FA3 prefill tiles + FA2 decode tiles, chosen per work item), FA2 overlapped with FA3, and EDF-driven
+    chunk-size admission buy over the original mixed chunk / chunked prefill: higher compute utilisation (a long prompt
+    is not re-launched chunk after chunk with decode rows padded into prefill tiles) without the default mixed
+    chunk's head-of-line blocking and tile waste. Arms: split sequential (`SPLIT_OVERLAP=0`) and split with FA2
+    overlapped on a side stream (`SPLIT_OVERLAP=1`).
   - [ ] **Stock chunked prefill + MTP** (EAGLE3, no 4-mode step), for ours with MTP (4-mode step). MTP is required, not
     optional: almost every model ships an MTP head, and PD disaggregation runs MTP on its decode nodes to raise their
     compute utilisation -- which would undercut our claim that colocation maximises compute utilisation and serving

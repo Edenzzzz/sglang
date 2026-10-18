@@ -13,13 +13,15 @@ export SID=d6a80befdd4e4da5 MN_CP=i18n-bd NPODS=1 GPUS_PER_POD=1 SM_FA3=112
 export CHAT_SHAREGPT=1 MIN_CTX=${MIN_CTX:-32768} MAX_CTX=${MAX_CTX:-65536} TURNS=${TURNS:-2} AGENT_CONC=${AGENT_CONC:-8}
 export SESSIONS=${SESSIONS:-24} CHAT_RATE=${CHAT_RATE:-8} CHAT_N=${CHAT_N:-2400}
 T=${TAG:-_nospec}
-for arm in ${ARMS:-stock stock_mtp pdmux ours ours_mtp}; do
+for arm in ${ARMS:-stock stock_mtp pdmux ours ours_ovl ours_mtp}; do
   case $arm in
     stock) KERNEL=lpt PREEMPT=0 RUN_TAG=_h200_c8$T python3 -u mn_run.py coloc_sgl ;;
     stock_mtp) KERNEL=lpt PREEMPT=0 RUN_TAG=_h200_c8$T python3 -u mn_run.py coloc_sgl_mtps ;;
     pdmux) KERNEL=lpt PREEMPT=0 PDMUX_DIV=36 MEM_FRAC=${PDMUX_MEM_FRAC:-0.78} RUN_TAG=_h200_c8$T python3 -u mn_run.py coloc_sgl_pdmux ;;
     ours) KERNEL=mtpsplit PREEMPT=1 CHUNK=${CHUNK:-2048} EDF_UNCACHED=1 DEADLINE_CHUNK=${DEADLINE_CHUNK:-1024:2048:6000} \
           RUN_TAG=_h200_split_ch${CHUNK:-2048}_c8$T python3 -u mn_run.py coloc_cache_edf ;;
+    ours_ovl) SPLIT_OVERLAP=1 KERNEL=mtpsplit PREEMPT=1 CHUNK=${CHUNK:-2048} EDF_UNCACHED=1 DEADLINE_CHUNK=${DEADLINE_CHUNK:-1024:2048:6000} \
+          RUN_TAG=_h200_split_ovl_ch${CHUNK:-2048}_c8$T python3 -u mn_run.py coloc_cache_edf ;;
     ours_mtp) KERNEL=mtpsplit PREEMPT=1 CHUNK=2048 EDF_UNCACHED=1 DEADLINE_CHUNK=1024:2048:6000 \
           RUN_TAG=_h200_4mode_unc_ch2048_dl1024-2048-6000_c8$T python3 -u mn_run.py coloc_cache_edf_mtp ;;
   esac

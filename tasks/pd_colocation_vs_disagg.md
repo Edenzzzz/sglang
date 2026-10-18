@@ -282,7 +282,12 @@ static mixture.
         most workers (epoch 0: task 0 on 7; epoch 4: tasks 4 and 7 on 6 each) while cold ones fall to 1-2 -- replicas
         follow demand. Only 76 of 2106 routings put a task on a worker that had not served it (each leaves a new
         copy, pulled from the pool or recomputed). Disagg holds prefixes on its 2 prefill pods only.
-      - [ ] Same measurement at the heavy load; repeat the light-load arms.
+      - [x] **Heavy load, repeat 3 with tagging (2026-10-19; clean; `bash /tmp/h20/fanout_heavyrep3.sh`):** ours 496 tok/s /
+        0.98 s / TPOT 17.8 ms, chat 342 ms / 10.9 ms; goodput 484 / 474 tok/s (97.5 / 95.5%) -- 4.3-6.1x the two disagg
+        repeats (79-111 tok/s). Three repeats of ours: 496-505 tok/s, TTFT 0.89-0.98 s, TPOT 16.0-17.8 ms. Replicas:
+        each task's prefix on 3-8 of 8 workers over the run; per epoch the hot tasks on 6-8 (task 0 on all 8 in epoch
+        0); 78 of 3509 routings made a new copy -- the same demand-following replication as at the light load.
+      - [ ] A second light-load repeat of both arms.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

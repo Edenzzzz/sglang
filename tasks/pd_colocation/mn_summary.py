@@ -4,6 +4,11 @@ d = sys.argv[1]
 K = ("completed", "mean_ttft_ms", "median_ttft_ms", "p99_ttft_ms", "mean_tpot_ms", "mean_itl_ms", "p99_itl_ms", "output_throughput")
 for s in ("agent", "chat"):
     p = os.path.join(d, f"{s}.json")
+    fo = os.path.join(d, "bench_fanout.log")
+    if s == "agent" and not os.path.exists(p) and os.path.exists(fo):
+        # Fan-out workload (mn_bench.sh WORKLOAD=fanout): its summary lines stand in for the agent stream.
+        lines = [l.strip() for l in open(fo, errors="replace") if l.startswith("FANOUT requests") or "cached fraction" in l]
+        print("agent", " | ".join(lines) or "FANOUT MISSING"); continue
     if not os.path.exists(p):
         print(s, "MISSING"); continue
     # bench_serving APPENDS one JSON line per run; the last line is this run.

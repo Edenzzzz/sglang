@@ -640,7 +640,9 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     replay with 5.8M uncached tokens: the KV pool (1,823,088 tokens) cannot hold 24 sessions reaching
     869K, so prefixes were evicted between rounds (usage 0.99, no retractions) and rounds re-prefilled.
     No data. Lesson: a single-GPU replay must keep the sessions' combined peak context in the pool.
-  - [ ] **v3 (queued after the race-fix check and B1):** 8 sessions x 30 rounds, seed 1014 --
+  - [x] **v3 -- superseded (2026-10-18 note):** its replay ran as P1 of the 2026-10-15 concurrency sweep below (same
+    8 x 30 rounds, seed 1014, C = 2 / 4 / 8, all arms clean); the session-rate form here was retracted. Original plan:
+    8 sessions x 30 rounds, seed 1014 --
     combined peak 1.37M tokens; loader-checked context p10/50/90/99 38K/123K/223K/390K vs the
     release's 38K/124K/256K/822K. The >400K tail cannot be co-resident with other sessions on one GPU
     (excluded by KV capacity, not by a length filter) and belongs to the multi-GPU stage. YaRN x16

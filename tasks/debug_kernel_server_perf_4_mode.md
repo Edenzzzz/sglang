@@ -1135,8 +1135,14 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     (sd 1.05) while its own decode log reports 1.87, and corr(TPOT, 1/acc) is -0.70 -- stock's `spec_verify_ct`
     undercounts verifies on some path; open check below. `python tpot_acc_probe.py /dev/shm/w/probe_ours ours` (and
     without `ours`) on pod `d6a80befdd4e4da5`; sglang `af3a39efc` + this commit.
-  - [ ] Stock MTP `spec_verify_ct` undercount (2.97 tokens per verify vs the decode log's 1.87): find the path that
-    skips the increment before using stock's per-request acceptance anywhere.
+  - [x] **Stock MTP's per-request acceptance under load is a counter artifact; the 4-mode schedule loses no
+    acceptance (2026-10-18).** Same probe without the background prefills (`BG=0 N=300`): chat acceptance stock 2.13
+    / ours 2.09 (sd 0.30 both, corr(TPOT, 1/acc) 0.90 / 0.89). With them: ours 2.08 (unchanged), stock 2.96 at every
+    output length (verifies per token 0.36 vs ours 0.49-0.60), while both servers' decode logs read 2.06 / 2.04. So
+    stock's `spec_verify_ct` (batch_result_processor's per-request increment) misses verifies when decode interleaves
+    with chunked prefill steps; acceptance itself is equal on the two schedules, and the mixed step does not degrade
+    drafting. The missed increment path in stock is not located (it does not affect any bar metric).
+  - [ ] Locate the stock-MTP path that skips `req.spec_verify_ct += 1` under interleaved prefill (metric bug only).
   - [x] **Acceptance length from the step trace -- not testable (superseded by the per-request probe above).** `acc=` is the server's
     cumulative mean, and the per-step delta (`apply_steptrace_dacc.py`, `dacc=`) is zero on most steps because the
     metrics reporter accumulates accept counts only at its decode-log interval; with either signal the EWMA input does

@@ -104,7 +104,7 @@ try:
             except Exception:
                 pass
 
-    bgs = [threading.Thread(target=background, daemon=True) for _ in range(4)]
+    bgs = [threading.Thread(target=background, daemon=True) for _ in range(int(os.environ.get("BG", "4")))]
     [b.start() for b in bgs]
     time.sleep(3)
     res = []

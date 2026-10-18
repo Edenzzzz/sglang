@@ -36,15 +36,20 @@ on realistic mixed workloads (chat + TraceLab), measured against these, same ses
 
 - **Single node** -- demonstrates kernel fusion and schedule efficiency with the mixed tile dispatch:
   - [ ] **Stock chunked prefill + mixed chunk, default attention kernel, no speculation** (sglang `--enable-mixed-chunk`
-    with its flashinfer backend): the primary baseline. Our arms: the fused / split mixed-tile step without MTP, and
-    with MTP (4-mode step); the MTP arm is reported only if its gain over this baseline exceeds ours without MTP.
+    with its flashinfer backend): the primary baseline for ours without MTP (the fused / split mixed-tile step).
+  - [ ] **Stock chunked prefill + MTP** (EAGLE3, no 4-mode step), for ours with MTP (4-mode step). MTP is required, not
+    optional: almost every model ships an MTP head, and PD disaggregation runs MTP on its decode nodes to raise their
+    compute utilisation -- which would undercut our claim that colocation maximises compute utilisation and serving
+    capacity. So the schedule must be shown compatible with MTP and efficient with it: ours + MTP vs stock + MTP here,
+    and vs PD disaggregation with MTP on its decode nodes multi-node.
   - [ ] **PD multiplexing** (MuxWise, arXiv:2504.14489 = sglang `--enable-pdmux`, GreenContext SM groups,
     layer-split prefill). It runs without the CPU-GPU overlap scheduler and captures one CUDA-graph set per SM group;
     the 4-mode step keeps the overlap scheduler and one graph set. Earlier pdmux runs are in
     `debug_kernel_server_perf_4_mode.md` (Direct baselines).
-  - Stock MTP (EAGLE3 without the 4-mode step) is a reference for the MTP arm, not the bar's baseline.
+    Stock pdmux uses sglang's default `decode_bs_divisor` (36); our tuned 30 is not a stock setting.
 - **Multi-node** (H20 only, <= 16 GPUs, trial `vibecuda`):
-  - [ ] **PD disaggregation** (sglang prefill / decode roles, mooncake transfer), vs our colocated symmetric nodes.
+  - [ ] **PD disaggregation** (sglang prefill / decode roles, mooncake transfer), with and without MTP on its decode
+    nodes, vs our colocated symmetric nodes with and without MTP.
   - [ ] **semi-PD-style systems with an sglang implementation**: semi-PD (arXiv:2504.19867, fork of sglang
     v0.4.4.post1); others added if they ship sglang code. NVIDIA Dynamo conditional disaggregation is optional.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.

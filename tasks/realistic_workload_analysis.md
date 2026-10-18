@@ -115,6 +115,25 @@ on realistic mixed workloads (chat + TraceLab), measured against these, same ses
     chunk-size null case of the earlier 4-mode gate position for position (long >= 11, short 0; s1's first decode token
     flips on chunking alone). Split fired with every call overlapped (gate runs: 501 / 1501 split calls, `overlapped`
     equal); 0 tracebacks / 0 fallbacks. `bash /dev/shm/w/mn/gate_h200_ovl_20261018.sh` on pod `d6a80befdd4e4da5`.
+- [x] **Single-node A/B on the long-context mix (2026-10-18, H200; TraceLab 32-250K, YaRN x8 / context 262144, agent
+  C=6, 18 sessions x 2 rounds, 4 rounds > 200K, + ShareGPT 2 req/s; our arms with the 2x deadline above 200K; all arms
+  0 tracebacks / 0 fallbacks; split calls 28.5K (no MTP) / 40.5K (MTP)).** Agent tput / TTFT / ITL ; chat tput / TTFT /
+  ITL ; TTFT SLO attainment agent (10 s, 20 s >= 200K) / chat (2 s):
+  | arm | agent | chat | attainment |
+  |---|---|---|---|
+  | stock, no spec | 46.3 / 9.92 s / 105.4 ms | 341.7 / 12.49 s / 178.4 ms | 66.7% / 32.0% |
+  | stock + MTP | 46.1 / 27.51 s / 71.2 ms | 329.8 / 36.92 s / 100.4 ms | 19.4% / 0.2% |
+  | ours, no MTP (overlapped, 2048 / 8192) | 67.8 / 8.33 s / 67.8 ms | 402.0 / 0.60 s / 98.2 ms | 63.9% / 97.3% |
+  | ours + MTP (4-mode) | 71.0 / 18.22 s / 36.5 ms | 406.5 / 3.57 s / 58.1 ms | 58.3% / 70.0% |
+  **Ours + MTP vs stock + MTP clears all six:** agent +54.0% / -33.8% / -48.7%, chat +23.3% / -90.3% / -42.1% -- the
+  second repeat on this mix (the first, 2026-10-18 earlier: +53% / -37.5% / -44%, +23% / -86% / -45.5%). **Ours
+  without MTP vs stock without spec:** agent +46.4% / -16.1% / -35.7%, chat +17.6% / -95.2% / -45.0% -- five of six;
+  agent TTFT misses. Both stock arms serve below the offered chat load (~407 tok/s); ours serve all of it. Stock
+  without speculation has far lower TTFT than stock + MTP here as on the standard mix, so the MTP arm's TTFT lead is
+  over stock + MTP only (vs stock without spec: agent TTFT +84%, ITL -65%). `YARN_FACTOR=8.0 CTX_LEN=262144
+  MIN_CTX=32768 MAX_CTX=250000 AGENT_CONC=6 SESSIONS=18 CHAT_RATE=2 CHAT_N=600 TAG=_long_base LONG_DEADLINE=200000:2`
+  then `ARMS="stock stock_mtp"`, `ARMS=ours_ovl CHUNK=8192 DEADLINE_CHUNK=2048:8192:6000`, `ARMS=ours_mtp` with
+  `bash tasks/pd_colocation/mn_h200_nospec_20261018.sh`; sglang `c739f4294`.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.63 — Long-context mix vs all single-node baselines: MTP arm clears all six vs stock + MTP again (2026-10-18)
+
+- 32-250K TraceLab + chat 2 req/s: ours + MTP vs stock + MTP agent +54% / -34% / -49%, chat +23% / -90% / -42%
+  (second repeat); ours without MTP vs stock without spec agent +46% / -16% / -36%, chat +18% / -95% / -45%.
+
 ## v1.20.62 — No-MTP arm: agent-TTFT floor and deadline-slope x chunk frontier (2026-10-18)
 
 - Unloaded agent TTFT 1.30 s (stock) / 1.20 s (ours): loaded TTFT is mostly queueing. Flatter EDF slopes reach agent

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.58 — 32-250K mix at chat 2 req/s: 4-mode MTP clears all six vs stock MTP (2026-10-18)
+
+- Ours agent +53% / -37.5% / -44%, chat +23% / -86% / -45.5%; with 2x deadline above 200K agent +55% / -37.8% / -46%,
+  chat +23% / -89% / -48%. Single repeat; baseline A/B (stock mixed chunk, stock + MTP, pdmux) queued.
+
 ## v1.20.57 — 2x deadline above 200K on a 32-250K mix at chat 4 req/s: five of six metrics clear (2026-10-18)
 
 - vs stock MTP: agent +41% / -39.1% / -33%, chat +35% / -80.4% / -26.7% (chat ITL misses); SLO attainment agent

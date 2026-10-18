@@ -659,6 +659,15 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       chat decode rides through. Without it chat ITL clears (-32.4%) and agent TTFT misses (-27.5%). Next: repeat, a
       lower chat rate where stock MTP is below capacity, and the output gate for the `LONG_DEADLINE` arm (ordering
       only; the config's gate passed). `CHAT_RATE=4 CHAT_N=1200 SPEC_TAG=_long_r4` + the command above.
+    - [x] **Chat 2 req/s, same cohort (2026-10-18; 600 chat requests; all arms clean):** both our arms clear all six
+      bar metrics vs stock MTP (agent 46.0 tok/s / 28.8 s / 68.8 ms, chat 329 tok/s / 36.6 s / 103 ms; stock still
+      serves below the offered ~407 chat tok/s, ours serves all of it): ours agent +53% / -37.5% / -44%, chat +23% /
+      -86% / -45.5%; ours + 2x above 200K agent +55% / -37.8% / -46%, chat +23% / -89% / -48%. SLO attainment (agent 10
+      s, 20 s >= 200K; chat 2 s): stock 22.2% / 0.2%, ours 52.8% / 54.3%, ours + 2x 55.6% / 70.8%. Agent TTFT by length,
+      stock / ours / ours + 2x: < 64K 19.2 / 6.0 / 2.2 s, 64-128K 33.0 / 13.9 / 9.9 s, 128-195K 29.9 / 22.8 / 23.1 s,
+      > 195K 38.5 / 33.1 / 46.6 s. Single repeat. These are vs stock MTP; the bar's single-node baselines (stock mixed
+      chunk without MTP, stock + MTP for the MTP arm, pdmux) are in `realistic_workload_analysis.md` ## Baselines.
+      `CHAT_RATE=2 CHAT_N=600 SPEC_TAG=_long_r2` + the command above.
   - [ ] **Relative SLOs (2026-10-13):** `eval_curves.py --slo-relative K_TTFT,K_TPOT --ref-root`
     scales each tenant's SLO from its median TTFT/TPOT running ALONE on stock MTP. The swept runs'
     lowest rate cannot be the reference (mix128 chat already waits 38 s at 4/s; tried and

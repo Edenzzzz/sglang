@@ -291,6 +291,15 @@ class Router:
             return max(self.a.itl_slo_floor_ms, self.a.itl_slo_auto * self.tpot_ewma)
         return self.a.itl_slo_ms
 
+    def itl_slo_for(self, n_tok):
+        """Per-request ITL SLO: --itl-slo-short-ms > 0 gives short (chat-length, < --long-prompt-tokens) requests their
+        own tighter SLO; everyone else gets itl_slo(). Every in-flight request carries its SLO, so the SLO check keeps
+        new prefills off workers whose short decoding requests would miss theirs -- a load-driven separation of chat
+        decode from agent prefill, without fixed roles."""
+        if self.a.itl_slo_short_ms > 0 and n_tok < self.a.long_prompt_tokens:
+            return self.a.itl_slo_short_ms
+        return self.itl_slo()
+
     def ttft_margin(self, n_tok):
         """Multiplier on predicted TTFT so that a request judged feasible meets its deadline with probability
         ~q: the q-quantile of measured / predicted TTFT over recent finished requests of its class. The ratio
@@ -309,7 +318,7 @@ class Router:
         if now + ttft * self.ttft_margin(n_tok_self) / 1000.0 > deadline:
             self.last_reason = "own_ttft"
             return False, ttft, tpot
-        if tpot > self.itl_slo():
+        if tpot > self.itl_slo_for(n_tok_self):
             self.last_reason = "own_itl"
             return False, ttft, tpot
         # Admitting this request delays LATER-deadline requests queued here; it must not
@@ -408,7 +417,7 @@ class Router:
         t_route = time.time()
         w.inflight[rid] = dict(prefill=uncached, decode_left=out_tok, decode_total=out_tok,
                                deadline=deadline, t0=t_route, kv=n_tok, t_first=None,
-                               itl_slo=self.itl_slo())
+                               itl_slo=self.itl_slo_for(n_tok))
         w.insert(hashes)
         t_first = None
         if self.a.edf:
@@ -578,6 +587,8 @@ def main():
     ap.add_argument("--itl-slo-auto", type=float, default=0.0,
                     help="> 0: ITL SLO = this x the observed per-token decode time (EWMA), see itl_slo()")
     ap.add_argument("--itl-slo-floor-ms", type=float, default=10.0)
+    ap.add_argument("--itl-slo-short-ms", type=float, default=0.0,
+                    help="> 0: ITL SLO for requests shorter than --long-prompt-tokens (see itl_slo_for)")
     ap.add_argument("--check-residents", type=int, default=1,
                     help="also reject a node if admitting the request would push a request already "
                          "decoding there past its ITL SLO")

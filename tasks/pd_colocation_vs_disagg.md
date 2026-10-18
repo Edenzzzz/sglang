@@ -271,9 +271,18 @@ static mixture.
         8.7-8.8M of 84-87M (10.2-10.4%), disagg + MTP 5.2M of 31M (16.7%). Disagg recomputes ~3x the share of what it
         serves: about the same absolute prefill work as ours, turned into a third of the served tokens. "Colocation
         replicates better" passes this test at equal memory.
-      - [ ] Replica count per prefix over time: the router decision log carries rid / worker / cached tokens but no prefix
-        key, and the driver records carry no rid, so the two cannot be joined; log the task id with each request. Then
-        a light-load repeat.
+      - [x] **Light-load repeat with request tagging (2026-10-19; driver tags rid `fo-t<task>-...`, router logs
+        `client_rid`; clean; `bash /tmp/h20/fanout_lightrep.sh`).** Disagg (no spec): agent 124 tok/s / 10.62 s / TPOT
+        6.10 ms (p50 6.61), chat 9.59 s / 5.4 ms; ours (ITL SLO 15 ms, full router arguments, no MTP): 294 tok/s / 0.69
+        s / 9.18 ms (p50 **6.49**), chat 82 ms / 7.5 ms. Agent SLO goodput 10 s + 80 ms / 20 s + 30 ms: ours 288 / 288
+        tok/s (97.7 / 97.9%), disagg 81 / 96 (65.6 / 77.6%) -- **3.0-3.5x**. With the ITL SLO the median agent TPOT
+        drops below disagg's; the mean stays 1.5x (a tail of slow tokens).
+      - [x] **Replica count per hot prefix (`tasks/perf_model/fanout_replicas.py`, that run).** Over 900 s each task's
+        64K prefix was served by 3-7 of the 8 workers; per 180 s popularity epoch the currently hot tasks sit on the
+        most workers (epoch 0: task 0 on 7; epoch 4: tasks 4 and 7 on 6 each) while cold ones fall to 1-2 -- replicas
+        follow demand. Only 76 of 2106 routings put a task on a worker that had not served it (each leaves a new
+        copy, pulled from the pool or recomputed). Disagg holds prefixes on its 2 prefill pods only.
+      - [ ] Same measurement at the heavy load; repeat the light-load arms.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

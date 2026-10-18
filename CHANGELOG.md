@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.73 — PD 2b light-load repeat: goodput 3.0-3.5x disagg; replicas follow the hot set (2026-10-19)
+
+- Ours (ITL SLO 15 ms) vs disagg: agent 294 vs 124 tok/s, TTFT 0.69 vs 10.6 s, TPOT p50 6.49 vs 6.61 ms (mean 9.2 vs
+  6.1). Hot prefixes replicate to 3-7 of 8 workers and follow popularity; 76 of 2106 routings made a new copy.
+
 ## v1.20.72 — PD 2b re-prefill: disagg recomputes ~3x the share of its input that colocation does (2026-10-19)
 
 - Heavy natural-text load: ours 3.4-3.5% of input tokens recomputed (2.5% with MTP), disagg 10.2-10.4% (16.7% with

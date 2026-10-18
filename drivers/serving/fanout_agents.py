@@ -27,9 +27,12 @@ import urllib.request
 import numpy as np
 
 
-def stream_generate(url, input_ids, max_new_tokens, timeout):
+def stream_generate(url, input_ids, max_new_tokens, timeout, rid=None):
     body = {"input_ids": input_ids, "stream": True,
             "sampling_params": {"temperature": 0, "max_new_tokens": max_new_tokens, "ignore_eos": True}}
+    if rid is not None:
+        # The task id rides in the request id, so router decision logs (rid -> worker) join to the shared prefix.
+        body["rid"] = rid
     req = urllib.request.Request(f"{url}/generate", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     t0 = time.perf_counter()
@@ -122,14 +125,15 @@ def main():
                     history += [prng.randrange(1000, 30000) for _ in range(a.append_len)]
                 sent = time.perf_counter() - t_start
                 try:
-                    t0, stamps, meta, out_ids = stream_generate(a.url, history, a.output_len, a.timeout)
+                    rid = f"fo-t{task}-p{pid}-r{rnd}-{prng.getrandbits(32):08x}"
+                    t0, stamps, meta, out_ids = stream_generate(a.url, history, a.output_len, a.timeout, rid)
                 except Exception as exc:
                     with lock:
                         records.append(dict(task=task, program=pid, round=rnd, input_len=len(history),
                                             error=str(exc)[:200], start=sent))
                     break
                 itl = np.diff(stamps).mean() * 1e3 if len(stamps) > 1 else None
-                rec = dict(task=task, program=pid, round=rnd, input_len=len(history),
+                rec = dict(task=task, program=pid, round=rnd, rid=rid, input_len=len(history),
                            ttft=(stamps[0] - t0) if stamps else None, itl_ms=itl,
                            e2e=(stamps[-1] - t0) if stamps else None, start=t0 - t_start, epoch=epoch(t0),
                            cached=(meta or {}).get("cached_tokens"), out_tokens=len(out_ids))

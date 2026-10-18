@@ -403,8 +403,8 @@ class Router:
         if self.a.edf:
             payload["priority"] = int(deadline * 1000) % 2_000_000_000
         if self.log:
-            self.log.write(json.dumps(dict(t=time.time(), rid=rid, worker=i, n_tok=n_tok,
-                                           policy=self.a.policy, **info)) + "\n")
+            self.log.write(json.dumps(dict(t=time.time(), rid=rid, client_rid=payload.get("rid"), worker=i,
+                                           n_tok=n_tok, policy=self.a.policy, **info)) + "\n")
             self.log.flush()
         resp = web.StreamResponse()
         try:

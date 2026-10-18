@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.51 — FP8 linear A/B; the split now serves identity-scaled KV layers (2026-10-18)
+
+- `apply_split_unit_kv_scale.py`: under `--quantization fp8` (BF16 KV) the split refused every layer for its unit KV
+  scale and fell back silently; it now refuses only non-unit scales or an fp8 KV cache.
+- Both arms FP8: agent +36% / -31.2% / -25.9%, chat -76.5% / -26.7% vs stock MTP + FP8 (exploratory, numerics change).
+
 ## v1.20.50 — Mixed-step profile; checkpointing every 8192 tokens does not shorten steps (2026-10-18)
 
 - `prof/prof_mixed_20261018.py`, `prof/gpu_gaps.py`, `prof/sync_sites.py`: torch-profile mixed steps on the serving

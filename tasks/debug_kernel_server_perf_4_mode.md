@@ -99,6 +99,17 @@ after the kernel items close (<=16 GPUs).
     profile window's idle share does not translate into step time. `SKIP_BASE=1 STEP_TRACE=1 CKPT_EVERY=8192
     CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 bash tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; gate `bash
     /dev/shm/w/mn/gate_h200_ckpt_20261018.sh`; sglang `d15297007` + this commit (patch removed from the pod tree after).
+  - [x] 2026-10-18 FP8 linear layers on both arms (`WORKER_EXTRA="--quantization fp8"`, BF16 KV cache; exploratory --
+    FP8 changes model numerics, no output gate run, not a bar result). First run: our arm took no split at all -- under
+    FP8 linear the attention layers carry k/v_scale_float = 1.0 and `_fused_split_dispatch` refused any layer with a
+    scale (its fp8-KV guard), so every layer went to the single-wrapper path with nothing logged as a fallback (agent
+    72.1 tok/s / 18.86 s, worse than stock). Fixed by `apply_split_unit_kv_scale.py` (refuse only a non-unit scale or an
+    fp8 KV cache). Rerun (>= 66001 split calls, 0 tracebacks / fallbacks) vs stock MTP + FP8 (78.1 / 15.46 s / 24.3 ms,
+    chat 7.89 s / 15.0 ms): agent +36.2% / -31.2% / -25.9%, chat TTFT -76.5% / ITL -26.7%. FP8 shortens the GEMM share
+    of both arms' steps; agent TTFT now clears, agent ITL falls short instead, chat ITL is unchanged in ratio. Single
+    rep each. `WORKER_EXTRA="--quantization fp8" SPEC_TAG=_fp8 CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 bash
+    tasks/pd_colocation/mn_h200_fourmode_20261018.sh` (ours rerun with `SKIP_BASE=1 REP_SUFFIX=_unitkv` after the
+    patch); sglang `fb9b617ff` + this commit.
   - [x] 2026-10-18 output gate on this pod, PASS (`tasks/pd_colocation/gate_h200_fourmode_20261018.sh`, srv_correctness
     vs stock MTP; driver now takes SRV_ARGS and counts mixed composition records). Noise floor MTP_REP: long prompts agree
     >= 18 tokens, short >= 63; null case MTP_C2048 (stock MTP at the config's chunk 2048): long >= 11, short 0 (s1's

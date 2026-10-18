@@ -134,6 +134,10 @@ on realistic mixed workloads (chat + TraceLab), measured against these, same ses
   MIN_CTX=32768 MAX_CTX=250000 AGENT_CONC=6 SESSIONS=18 CHAT_RATE=2 CHAT_N=600 TAG=_long_base LONG_DEADLINE=200000:2`
   then `ARMS="stock stock_mtp"`, `ARMS=ours_ovl CHUNK=8192 DEADLINE_CHUNK=2048:8192:6000`, `ARMS=ours_mtp` with
   `bash tasks/pd_colocation/mn_h200_nospec_20261018.sh`; sglang `c739f4294`.
+  - [x] Same mix, no-MTP arm with deadline slope 250 (`TTFT_SCALE_MS=250`; clean): agent 64.1 / 7.05 s / 75.3 ms, chat
+    402.0 / 2.95 s / 110.3 ms -> vs stock without spec agent +38.4% / **-28.9% / -28.6%**, chat +17.6% / -76.4% /
+    -38.2%. The slope moves agent TTFT against agent ITL as on the standard mix (default slope: -16.1% / -35.7%); both
+    sit 1-1.5 points short of -30% here.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

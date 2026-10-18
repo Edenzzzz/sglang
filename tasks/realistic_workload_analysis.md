@@ -137,7 +137,10 @@ on realistic mixed workloads (chat + TraceLab), measured against these, same ses
   - [x] Same mix, no-MTP arm with deadline slope 250 (`TTFT_SCALE_MS=250`; clean): agent 64.1 / 7.05 s / 75.3 ms, chat
     402.0 / 2.95 s / 110.3 ms -> vs stock without spec agent +38.4% / **-28.9% / -28.6%**, chat +17.6% / -76.4% /
     -38.2%. The slope moves agent TTFT against agent ITL as on the standard mix (default slope: -16.1% / -35.7%); both
-    sit 1-1.5 points short of -30% here.
+    sit 1-1.5 points short of -30% here. Slopes 400 / 500 (clean): agent -27.0% / -30.6% and -23.7% / -33.5% (TTFT /
+    ITL), chat -84.4% / -40.1% and -88.4% / -44.4%, agent throughput +41% / +45%. Four slopes trace one frontier
+    through (-29, -29) -> (-27, -31) -> (-24, -34) -> (-16, -36); single repeats over 36 agent rounds, so the 250-400
+    points are within noise of the bar on both. `TTFT_SCALE_MS={250,400,500}` + the long-mix command above.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

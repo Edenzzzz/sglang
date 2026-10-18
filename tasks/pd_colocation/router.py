@@ -368,6 +368,17 @@ class Router:
                                           len(self.workers[j].inflight), random.random()))
         if pol == "cache_rand":
             return order[0], {"hit": hits[order[0]] * blk}
+        if self.a.long_prefill_pool > 0:
+            # Soft node roles. A request is classed once, by its best cache hit: a cold long prefill (uncached on the
+            # best holder > --long-prefill-tokens) tries the first --long-prefill-pool workers first; a short request
+            # with no cache anywhere (chat) tries the others first; a request with a hit keeps hit-first order, so an
+            # agent append stays on its node. The SLO check still walks the whole order, so a request lands outside
+            # its side when its side cannot take it -- roles by preference, not by partition, and no KV transfer.
+            pool = self.a.long_prefill_pool
+            if n_tok - best * blk > self.a.long_prefill_tokens:
+                order = sorted(order, key=lambda j: 0 if j < pool else 1)
+            elif best == 0:
+                order = sorted(order, key=lambda j: 0 if j >= pool else 1)
         rejected_nodes = 0
         reasons = collections.Counter()
         best_slack, best_i = None, order[0]
@@ -587,6 +598,9 @@ def main():
     ap.add_argument("--itl-slo-auto", type=float, default=0.0,
                     help="> 0: ITL SLO = this x the observed per-token decode time (EWMA), see itl_slo()")
     ap.add_argument("--itl-slo-floor-ms", type=float, default=10.0)
+    ap.add_argument("--long-prefill-pool", type=int, default=0,
+                    help="> 0: long uncached prefills prefer workers [0, N), short ones the rest (see choose)")
+    ap.add_argument("--long-prefill-tokens", type=int, default=16384)
     ap.add_argument("--itl-slo-short-ms", type=float, default=0.0,
                     help="> 0: ITL SLO for requests shorter than --long-prompt-tokens (see itl_slo_for)")
     ap.add_argument("--check-residents", type=int, default=1,

@@ -17,7 +17,7 @@ RA=$(grep -oE "ROUTER_ARGS=.*" /tmp/h20/mn_slo_calibrate.log | tail -1 | cut -d=
 export SID=bb854a10b8954223 MN_CP=cn-seed NPODS=4 GPUS_PER_POD=2
 export KERNEL=${KERNEL:-mtpsplit} PREEMPT=1 CHUNK=${CHUNK:-2048} HC_PREFETCH=timeout EDF_UNCACHED=1
 export WORKLOAD=fanout FO_TASKS=${FO_TASKS:-16} FO_PREFIX=${FO_PREFIX:-65536} AGENT_CONC=${AGENT_CONC:-32} FO_ROUNDS=4
-export FO_GAP=5 FO_ZIPF=1.2 FO_ROTATE=180 FO_DURATION=900 CHAT_SHAREGPT=1 CHAT_RATE=${CHAT_RATE:-8} CHAT_N=${CHAT_N:-7200}
+export FO_GAP=5 FO_ZIPF=1.2 FO_ROTATE=${FO_ROTATE:-180} FO_DURATION=900 CHAT_SHAREGPT=1 CHAT_RATE=${CHAT_RATE:-8} CHAT_N=${CHAT_N:-7200}
 for arm in ${ARMS:-disagg_2p2d_mtps coloc_cache_edf_mtp coloc_slo_edf_mtp_hc}; do
   case $arm in
     coloc_slo_*) RUN_TAG=_8g_fanout${REP:-} ROUTER_ARGS="$RA --pool-kv-tokens 3348000 --prefetch-policy timeout ${EXTRA_RA:-}" \

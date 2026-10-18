@@ -148,6 +148,8 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   [ "${STEP_TRACE:-0}" = 1 ] && export SGLANG_STEP_TRACE=1
   # TTFT_SCALE_MS: EDF deadline slope, ms per SGLANG_TTFT_SCALE_TOKENS (5000) prompt tokens past 4096 (default 1000).
   [ -n "${TTFT_SCALE_MS:-}" ] && export SGLANG_TTFT_SCALE_MS=$TTFT_SCALE_MS
+  # CKPT_EVERY=N: radix-checkpoint a chunked prefill every N computed tokens, not every chunk (apply_checkpoint_every.py).
+  [ -n "${CKPT_EVERY:-}" ] && export SGLANG_CHECKPOINT_EVERY_TOKENS=$CKPT_EVERY
   # PDMUX_SHARE=N: run a split-prefill batch on the whole GPU (pdmux group 0) when >= N uncached prompt tokens are
   # waiting (apply_pdmux_backlog_share.py); 0 keeps pdmux's SM split always.
   [ "${PDMUX_SHARE:-0}" != 0 ] && export SGLANG_PDMUX_SHARE_BACKLOG_TOKENS=$PDMUX_SHARE

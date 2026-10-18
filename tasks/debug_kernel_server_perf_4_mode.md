@@ -84,6 +84,21 @@ after the kernel items close (<=16 GPUs).
     fallbacks); the default slope stays best for mean agent TTFT. `SKIP_BASE=1 TTFT_SCALE_MS=5000
     CHUNKS=2048 DEADLINE_CHUNK=1024:2048:{6000,2000} bash tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; sglang
     `562fd566d` + this commit.
+  - [x] 2026-10-18 GPU bubbles inside mixed steps, and per-chunk radix checkpoints (negative). Torch profile of 60 steps
+    during a 40K prefill over 8 decoding rows (`tasks/pd_colocation/prof/prof_mixed_20261018.py`, GPU activity only):
+    ours GPU-busy 74.8% of the window (690 ms idle of 2735 ms) vs stock MTP 91.6% (stock's window holds 8192-token
+    prefill steps). With stacks (`prof/sync_sites.py`; CPU tracing inflates host gaps ~2x) the largest idle time
+    preceded: the per-chunk radix checkpoint of the chunked request (checkpoint_into_tree / _add_new_node /
+    collect_full_device_indices, ~194 ms over 43 chunks), CUDA-graph input copies (fill_from, 125 ms), flashinfer plan()
+    on the base wrapper (85 ms, 567 DtoH syncs), prepare_for_draft in forward_mixed_spec (66 ms). Skipping the base plan
+    was measured harmful on 10-09 (unplanned-wrapper fallback), so the checkpoint was tested: `apply_checkpoint_every.py`
+    (`CKPT_EVERY=8192`: checkpoint a chunked prefill every 8192 computed tokens, stock's rate; gate PASS, divergence
+    identical to the chunk-size null case). Serving (traced, >= 601 checkpoints skipped, >= 66001 split calls, 0
+    tracebacks / fallbacks): agent 104.1 tok/s / 12.21 s / 17.4 ms, chat 2.76 s / 12.5 ms -- unchanged (-28.9% agent TTFT
+    vs the stock mean); mixed step 44.17 ms vs 43.96 ms. The checkpoint's host time overlaps GPU work in serving; the
+    profile window's idle share does not translate into step time. `SKIP_BASE=1 STEP_TRACE=1 CKPT_EVERY=8192
+    CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 bash tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; gate `bash
+    /dev/shm/w/mn/gate_h200_ckpt_20261018.sh`; sglang `d15297007` + this commit (patch removed from the pod tree after).
   - [x] 2026-10-18 output gate on this pod, PASS (`tasks/pd_colocation/gate_h200_fourmode_20261018.sh`, srv_correctness
     vs stock MTP; driver now takes SRV_ARGS and counts mixed composition records). Noise floor MTP_REP: long prompts agree
     >= 18 tokens, short >= 63; null case MTP_C2048 (stock MTP at the config's chunk 2048): long >= 11, short 0 (s1's

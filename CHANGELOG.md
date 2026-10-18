@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.50 — Mixed-step profile; checkpointing every 8192 tokens does not shorten steps (2026-10-18)
+
+- `prof/prof_mixed_20261018.py`, `prof/gpu_gaps.py`, `prof/sync_sites.py`: torch-profile mixed steps on the serving
+  config, GPU idle gaps and the call sites behind them.
+- `apply_checkpoint_every.py` + `CKPT_EVERY`: gate PASS; serving unchanged (mixed step 44.2 vs 44.0 ms).
+
 ## v1.20.49 — Steeper EDF deadline slope: chat TTFT ~130 ms, agent mean TTFT worse (2026-10-18)
 
 - `TTFT_SCALE_MS` knob. 5x slope: agent median TTFT halves but p99 doubles, mean -21..-26% (vs -29%); chat TTFT -98.7%.

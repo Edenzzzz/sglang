@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.77 — Router: load-adaptive ITL SLO (K = 2.5) tracks the hand-tuned optimum at both loads (2026-10-19)
+
+- `router.py --itl-slo-auto K`: SLO = K x observed per-token decode time. K = 2.5: heavy 555 tok/s / TPOT 12.1 ms /
+  goodput 545 (fixed best ~560 / 12.0 / ~552); light 298 tok/s / 9.6 ms (fixed best 8.9-9.2 ms).
+
 ## v1.20.76 — PD 2b: 30 ms ITL SLO repeats; the best SLO depends on load (2026-10-19)
 
 - Heavy rep 2: 569 tok/s / 0.64 s / TPOT 12.0 ms, goodput 562 tok/s. Light: 30 ms costs TPOT vs 15 ms (10.0 vs 8.9-9.2

@@ -314,7 +314,13 @@ static mixture.
         16.6 / 19.6 / 30.6 ms. Light: agent 302 tok/s / 0.65 s / TPOT 8.71 ms (p50 6.49), goodput 296 tok/s -- the best
         light-load point (fixed 15 ms: 8.9-9.2 ms). Heavy: 521 tok/s / 0.88 s / 14.6 ms, goodput 509 tok/s -- behind
         fixed 20-30 ms (~560 / 12.0 ms / ~552): the SLO's low tail (~17 ms) moves too many requests off their cached
-        prefix. Next: K = 2.5 (heavy ~24, light ~16 ms).
+        prefix.
+      - [x] **K = 2.5 (2026-10-19; clean; `bash /tmp/h20/fanout_auto25.sh`):** effective SLO p10 / p50 / p90 heavy 19.8 /
+        22.1 / 33.9 ms, light 15.3 / 16.0 / 26.5 ms. Heavy: agent 555 tok/s / 0.75 s / TPOT 12.1 ms (p50 8.9), goodput
+        545 tok/s; light: 298 tok/s / 0.64 s / 9.6 ms (p50 6.51), chat 88 ms / 7.1 ms. **One setting tracks the
+        hand-tuned optimum at both loads** (fixed 20-30 ms at heavy: ~560 / 12.0 / ~552; fixed 15 ms at light: 8.9-9.2
+        ms), within 1-8%; K = 2.0 is slightly better at light load (8.7 ms) and falls behind at heavy load. Default for
+        the router from here: `--itl-slo-auto 2.5 --itl-slo-floor-ms 10`.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

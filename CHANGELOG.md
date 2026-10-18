@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.65 — Long mix, no-MTP arm, three matched repeats: on the bar's edge (2026-10-18)
+
+- Slope 250: agent TTFT -30.9% / ITL -28.4%; slope 400: -29.2% / -30.2% vs stock without spec (means of 3). Chat
+  -78..-85% / -38..-40%, agent throughput +39..+41%.
+
 ## v1.20.64 — PD 2b fan-out workload on 8 H20s: colocation + replication vs PD disagg (2026-10-18)
 
 - Ours vs PD disagg (stock MTP): agent throughput 11.5x, TTFT -98.5%, ITL -68%; chat TTFT -99.8%, ITL -88%. Ours vs

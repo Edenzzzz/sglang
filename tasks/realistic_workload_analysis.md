@@ -141,6 +141,17 @@ on realistic mixed workloads (chat + TraceLab), measured against these, same ses
     ITL), chat -84.4% / -40.1% and -88.4% / -44.4%, agent throughput +41% / +45%. Four slopes trace one frontier
     through (-29, -29) -> (-27, -31) -> (-24, -34) -> (-16, -36); single repeats over 36 agent rounds, so the 250-400
     points are within noise of the bar on both. `TTFT_SCALE_MS={250,400,500}` + the long-mix command above.
+  - [x] **Three matched repeats of slopes 250 / 400 (stock re-run each repeat; all clean).** Stock agent TTFT 9.92 /
+    9.87 / 10.31 s, ITL 105.4 / 105.7 / 104.2 ms; chat 12.49 / 12.65 / 13.20 s, 178.4 / 178.1 / 174.5 ms. Ours slope
+    250: agent 7.05 / 6.99 / 6.74 s, 75.3 ms x3; slope 400: 7.24 / 6.93 / 7.12 s, 73.1 / 73.8 / 73.3 ms. Means vs stock:
+    | slope | agent tput | agent TTFT | agent ITL | chat TTFT | chat ITL |
+    |---|---|---|---|---|---|
+    | 250 | +39% | **-30.9%** | -28.4% | -78% | -38% |
+    | 400 | +41% | -29.2% | **-30.2%** | -85% | -40% |
+    The spread between repeats is small (stock TTFT +-2.5%, our ITL +-1%), so these are two points on the measured
+    frontier: each clears one agent metric and misses the other by 0.8-1.6 points; neither clears both. `for REPN in 2
+    3; do TAG=_long_base_rep$REPN; ARMS=stock ...; for TS in 250 400; do TTFT_SCALE_MS=$TS ARMS=ours_ovl CHUNK=8192
+    DEADLINE_CHUNK=2048:8192:6000 ...` (`/tmp/h20/long_ts3.sh`, long-mix env above).
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

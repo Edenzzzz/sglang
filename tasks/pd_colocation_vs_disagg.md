@@ -177,7 +177,13 @@ static mixture.
         colocation weakness seen in the hot-prefix test). Disagg's prefill pods are its bottleneck (TTFT ~11 s, slowly
         recovering epoch over epoch); MTP on its decode pods makes agent ITL worse here (23 vs 6.1 ms). Ours vs
         affinity only: +7% / -11% / -24% ITL, p99 TTFT worse (14.0 vs 3.95 s). Single repeat.
-      - [ ] Agent ITL vs disagg on the fan-out workload (decode isolation): the open weakness; repeat; per-node replica /
+      - [x] Smaller prefill chunks do not buy agent ITL here (light load, ours; clean): chunk 512 agent 259 tok/s / 1.24 s
+        / 35.1 ms, deadline chunk 512/2048 259 / 1.09 s / 39.8 ms, vs chunk 2048 281 / 0.83 s / 31.6 ms. Agent ITL is
+        not set by mixed-step prefill length on this workload; the likelier cause is load: ours decodes 2.3x the agent
+        tokens per second of disagg (281 vs 122 tok/s; disagg's prefill pods throttle how many agents decode at once),
+        so the fair comparison is ITL at matched agent throughput. `CHUNK=512` / `CHUNK=2048
+        DEADLINE_CHUNK=512:2048:5019` with `REP=_light_ch512` / `_light_dl512` (`/tmp/h20/fanout_itl.sh`).
+      - [ ] Agent ITL vs disagg at matched agent throughput (ours at fewer programs); repeat; per-node replica /
         re-prefill counters.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is

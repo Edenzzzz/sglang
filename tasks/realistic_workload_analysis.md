@@ -151,7 +151,9 @@ on realistic mixed workloads (chat + TraceLab), measured against these, same ses
     The spread between repeats is small (stock TTFT +-2.5%, our ITL +-1%), so these are two points on the measured
     frontier: each clears one agent metric and misses the other by 0.8-1.6 points; neither clears both. `for REPN in 2
     3; do TAG=_long_base_rep$REPN; ARMS=stock ...; for TS in 250 400; do TTFT_SCALE_MS=$TS ARMS=ours_ovl CHUNK=8192
-    DEADLINE_CHUNK=2048:8192:6000 ...` (`/tmp/h20/long_ts3.sh`, long-mix env above).
+    DEADLINE_CHUNK=2048:8192:6000 ...` (`/tmp/h20/long_ts3.sh`, long-mix env above). Slope 325 (two repeats, clean):
+    agent 7.01 / 6.87 s, 74.7 / 74.7 ms -> vs the three-repeat stock mean -30.8% / -28.9%, chat -82% / -38%: at agent
+    TTFT -30% the frontier puts agent ITL at ~-29%.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

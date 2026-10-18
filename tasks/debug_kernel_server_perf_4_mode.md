@@ -1143,6 +1143,9 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     with chunked prefill steps; acceptance itself is equal on the two schedules, and the mixed step does not degrade
     drafting. The missed increment path in stock is not located (it does not affect any bar metric).
   - [ ] Locate the stock-MTP path that skips `req.spec_verify_ct += 1` under interleaved prefill (metric bug only).
+    2026-10-18: ruled out retraction (the counter is set only in `Req.__init__`; no retractions in either probe log)
+    and the decode path (`_resolve_spec_v2_tokens` increments once per verify for every unfinished request). Next:
+    log one request's output length and verify count per step on stock MTP with the background prefills.
   - [x] **Acceptance length from the step trace -- not testable (superseded by the per-request probe above).** `acc=` is the server's
     cumulative mean, and the per-step delta (`apply_steptrace_dacc.py`, `dacc=`) is zero on most steps because the
     metrics reporter accumulates accept counts only at its decode-log interval; with either signal the EWMA input does

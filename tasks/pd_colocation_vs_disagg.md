@@ -326,6 +326,14 @@ static mixture.
         agent 505 / 461 tok/s, TTFT 0.92 / 1.08 s, ITL 16.9 / 21.7 ms; chat ITL 10.5 / 10.5 ms (vs 10.8 ms without).
         Chat ITL does not move: agent prefill runs on every node at this load, so the SLO check finds no prefill-free
         node to keep chat decode on, and moving agents only costs their cached prefixes. Off by default (0).
+      - [x] **Soft node roles (negative; 2026-10-19; `router.py --long-prefill-pool N`: cold long prefills prefer workers
+        [0, N), cache-less short requests the rest, hit-holding requests keep hit-first order; heavy natural-text load,
+        adaptive K = 2.5; clean; `bash /tmp/h20/fanout_pool.sh`).** Pool 6 / 4: agent 497 / 507 tok/s, TTFT 1.07 / 1.02
+        s, TPOT 16.2 / 15.3 ms, goodput 477 / 490 tok/s; chat ITL 9.8 / 9.9 ms (p99 76 / 68). vs no pool (555 / 0.75 s /
+        12.1 ms / 545; chat 10.8 ms): chat ITL -1 ms, agents -9..-13%. Agent prefill still reaches the chat-side workers
+        (SLO overflow and agents' own appends), so chat decode is never prefill-free; disagg's 5 ms chat ITL comes from
+        decode pods that by construction never prefill. Off by default (0). With this the routing levers for the
+        decode-latency gap (fixed / adaptive / per-class ITL SLO, soft roles) are exhausted at this scale.
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

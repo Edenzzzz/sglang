@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.80 — Router soft node roles: negative, off by default (2026-10-19)
+
+- Long-prefill pool 6 / 4: chat ITL 9.8-9.9 ms (vs 10.8), agents -9..-13% throughput. Routing cannot make chat decode
+  prefill-free at this load; disagg's decode pods are by construction.
+
 ## v1.20.79 — Router per-class (chat) ITL SLO: negative, off by default (2026-10-19)
 
 - 12 / 9 ms chat SLO: agent 505 / 461 tok/s (vs 555), chat ITL unchanged (10.5 ms). No prefill-free node exists at this

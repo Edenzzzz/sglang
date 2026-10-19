@@ -33,7 +33,7 @@ AND WRITE A DOC COVERING EACH POINT), e.g. if we have 4 x 8 H100 nodes,
    querying router adds latency?).
 NOTE that for MULTI-NODE MODELING EXPERIMENTS YOU CAN ONLY USE H20 NODES AND DO NOT USE MORE THAN 16 GPUs 4 NODES x 4
 GPUs (or <= 8 Nodes x 2 GPUs per node, THE TRIAL SHOULD BE NAMED VIBECUDA, SINCE H200 IS SCARCE. You must get at least
-30% gain on TTFT & ITL in realistic workloads (e.g. our mixed chat +tracelab) and at least 10% throughput gains else
+30% gain on TTFT & ITL （or their SLO attainment rates) in realistic workloads (e.g. our mixed chat +tracelab) and at least 10% throughput gains else
 it's not publishable. Test the kernel items in /opt/tiger/sglang/tasks/debug_kernel_server_perf_4_mode.md first for
 both fa2 and fa3, then move on to server and workload items.
 

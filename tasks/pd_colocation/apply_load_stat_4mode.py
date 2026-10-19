@@ -12,6 +12,10 @@ the existing positional fields (routers that decode the old prefix are unaffecte
                       the in-progress chunked request (its remaining tokens at its current depth) and the waiting
                       queue. Deadlines are EDF priorities (monotonic seconds) reported relative to now, since worker
                       and router clocks differ; requests without a deadline report 1e9 ms.
+Transport: upstream binds the LoadStat socket only beside a live KV-events publisher (routers discover it through
+/server_info's kv_events block), and refuses --load-publish-endpoint without --kv-events-config. Our router is given
+the endpoints, so SGLANG_LOAD_PUB_DIRECT=<tcp endpoint> binds the socket directly, with no KV events (whose per-block
+publishing would add scheduler work to the arm being measured) and without --load-publish-endpoint.
   python apply_load_stat_4mode.py <tree>/python/sglang/srt
 Claude, 2026-10-20.
 """
@@ -20,10 +24,10 @@ import sys
 root = sys.argv[1]
 
 
-def patch(rel, edits):
+def patch(rel, edits, marker="prefill_queue"):
     p = f"{root}/{rel}"
     s = open(p).read()
-    if "prefill_queue" in s:
+    if marker in s:
         print("already", rel)
         return
     for old, new in edits:
@@ -95,3 +99,20 @@ patch("managers/scheduler_components/load_publisher.py", [
      "                    accept_len=counts[11],\n"
      "                    prefill_queue=counts[12],\n"),
 ])
+
+patch("managers/scheduler_components/load_publisher.py", [
+    ("import atexit\n", "import atexit\nimport os\n"),
+    ("        self._publish_failed = False\n        if not is_kv_publisher_rank(kv_events_config):\n",
+     "        self._publish_failed = False\n"
+     "        direct = os.environ.get(\"SGLANG_LOAD_PUB_DIRECT\", \"\")\n"
+     "        if direct:\n"
+     "            # Endpoint given to the router directly (apply_load_stat_4mode.py): no KV-events discovery.\n"
+     "            try:\n"
+     "                self._socket = _open_pub_socket(direct)\n"
+     "                atexit.register(self.close)\n"
+     "                logger.info(\"load publisher bound at %s (direct)\", direct)\n"
+     "            except Exception:\n"
+     "                logger.warning(\"direct load publisher failed to bind %r\", direct, exc_info=True)\n"
+     "            return\n"
+     "        if not is_kv_publisher_rank(kv_events_config):\n"),
+], marker="SGLANG_LOAD_PUB_DIRECT")

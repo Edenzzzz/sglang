@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.20.93 — Decode-first rule: skip prefill below one page; direct load publisher (2026-10-20)
+
+- `apply_edf_itl_slo_chunk.py`: when less than one KV page fits beside the running decodes, no prefill that step
+  (returns 0, the scheduler's existing skip). The 1-token floor rounded to a zero-token extend and crashed every H20
+  worker in flashinfer's planner (`kv_len[0]-1 should be non-negative`), collapsing the first SLO-control arm
+  (41 127 errors) -- that run is void and is rerun (`mn_slo_control_r1b_20261020.sh`).
+- `apply_load_stat_4mode.py`: `SGLANG_LOAD_PUB_DIRECT` binds the LoadStat socket directly (upstream binds it only
+  beside a KV-events publisher and refuses `--load-publish-endpoint` without `--kv-events-config`).
+- `apply_steptrace_pdmux.py` applied on H200 (the first pdmux trace emitted no lines); pdmux traces queued.
+
 ## v1.20.92 — Node-reported load and multi-node SLO control (2026-10-20)
 
 - `apply_load_stat_4mode.py`: append decode rows, decode KV, acceptance and the earliest-deadline prefill queue

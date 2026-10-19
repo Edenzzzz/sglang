@@ -203,6 +203,26 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   through deep-context mixed steps. Per-request records (TTFT, TPOT, lengths, errors):
   `tasks/pd_colocation/results_h200_per_tenant_20261019.json.gz`. `bash tasks/pd_colocation/h200_per_tenant_20261019.sh`;
   scoring `tasks/perf_model/bench_per_tenant.py`; sglang `f9673a12d`.
+- [x] **Six-repeat standard-mix result (2026-10-20, H200 `dadf94f0e1da7238`; every repeat 0 tracebacks / 0 fallbacks;
+  ours no MTP 71.5-72.5K split calls, all overlapped; ours + MTP 33.5-34.5K split calls).** Mean +- std over repeats
+  (per-repeat values in `tasks/perf_model/bench_reps_summary.py` output); attainment = TTFT and per-request TPOT both
+  met, agent 10 s + 80 ms, chat 0.5 s + 20 ms. Stock mixed chunk ran its slow mode in 5 of 6 repeats (agent TTFT
+  4.65 +- 0.89 s), so its mean includes both modes; prefill-prioritized stock is stable (2 repeats).
+  | arm | agent tput | agent TTFT | agent TPOT | agent att. | chat TTFT | chat TPOT | chat att. |
+  |---|---|---|---|---|---|---|---|
+  | stock mixed chunk (6) | 80.5 +- 4.2 | 4.65 +- 0.89 s | 77.5 ms | 44.1 +- 6.7% | 2.07 s | 38.0 ms | 53.8 +- 2.1% |
+  | stock prefill-prioritized (2) | 92.6 | 2.42 s | 76.6 ms | 58.9% | 0.86 s | 34.8 ms | 59.9% |
+  | **ours, no MTP (5)** | **113.2 +- 0.4** | 3.40 +- 0.08 s | **52.1 ms** | **92.0 +- 1.8%** | **0.14 s** | **20.7 ms** | **69.8 +- 0.1%** |
+  | stock + MTP (6) | 65.7 +- 3.1 | 20.23 +- 1.28 s | 29.2 ms | 3.0% | 12.54 s | 17.2 ms | 34.2 +- 3.2% |
+  | stock prefill-prioritized + MTP (2) | 81.6 | 15.47 s | 29.8 ms | 8.9% | 7.67 s | 16.6 ms | 49.2% |
+  | **ours + MTP (5)** | **102.1 +- 1.3** | **12.54 +- 0.16 s** | **18.6 ms** | **45.8 +- 1.8%** | **2.94 s** | **13.0 ms** | **58.9 +- 0.8%** |
+  vs stock mixed chunk: no MTP agent +41% / TTFT -27% / TPOT -33% / attainment +109%, chat TTFT -93% / TPOT -46% /
+  attainment **+29.7%**; MTP +55% / -38% / -36% / 15x, chat -76% / -24% / **+72%**. vs prefill-prioritized: no MTP
+  +22% / TTFT **+40%** / -32% / +56%, chat -84% / -41% / **+16.5%**; MTP +25% / -19% / -38% / 5x, chat -61% / -22% /
+  **+20%**. **Against mixed chunk the attainment bar clears with MTP and sits at the line without it; against
+  prefill-prioritized chat attainment falls short in both pairs.** Our arms vary by <= 1.4 tok/s and <= 1.8 points
+  attainment across repeats. `bash tasks/pd_colocation/h200_per_tenant_20261019.sh`, `h200_more_reps_20261019.sh`,
+  `h200_pp_and_trace_20261019.sh`; sglang `09aadc008`.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

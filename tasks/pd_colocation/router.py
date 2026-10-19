@@ -43,6 +43,7 @@ import asyncio
 import collections
 import json
 import random
+import threading
 import time
 
 import aiohttp
@@ -73,6 +74,9 @@ class Worker:
         self.block_hits = collections.OrderedDict()  # hash -> completed requests through it (pool write filter)
         self.inflight = {}  # rid -> dict(prefill, decode_left, deadline, t0)
         self.accept = None  # EWMA of tokens per verify step on this worker (None: no sample yet)
+        # Latest node-reported load (apply_load_stat_4mode.py over --load-endpoints): receive time, decode rows,
+        # their KV tokens, acceptance length, and [abs_deadline_s, uncached, prefix] prefill entries earliest first.
+        self.load = None
 
     def observe_accept(self, completion_tokens, verify_ct, alpha):
         if not completion_tokens or not verify_ct:
@@ -244,6 +248,15 @@ class Router:
         # every in-flight request -- later-deadline ones still waiting for prefill included -- put
         # 40-60 rows into the calibrated grid (~210-250 ms) on the hot-prefix mix, where measured ITL
         # was 35-59 ms: 56-63% of decisions found no feasible node, almost all on this request's ITL.
+        ld = self.fresh_load(w)
+        if ld is not None:
+            ahead = [(u, pf) for dl, u, pf in ld["queue"] if dl <= deadline]
+            recent = [r for r in w.inflight.values() if r["t0"] > ld["t"] and r["deadline"] <= deadline]
+            n_rows = ld["rows"] + len(ahead) + len(recent) + 1
+            kv = (ld["kv"] + sum(u + pf for u, pf in ahead) + sum(r.get("kv", 0) for r in recent)
+                  + n_tok_self)
+            tpot = self.pm.tpot_ms(n_rows, kv, ld["acc"] if ld["acc"] != 1.0 else None)
+            return ttft, tpot
         rows = [r for r in w.inflight.values()
                 if r.get("t_first") is not None or r["deadline"] <= deadline]
         kv = sum(r.get("kv", 0) for r in rows) + n_tok_self
@@ -252,9 +265,31 @@ class Router:
         return ttft, tpot
 
     def drain_ms(self, w, deadline):
-        """Prefill time of the work queued on w ahead of a request with this deadline."""
+        """Prefill time of the work queued on w ahead of a request with this deadline. With a fresh node report:
+        the reported earlier-deadline entries plus what this router sent there since the report."""
+        ld = self.fresh_load(w)
+        if ld is not None:
+            ms = sum(self.loaded_prefill_ms(w, u, pf + u) for dl, u, pf in ld["queue"] if dl <= deadline)
+            return ms + sum(self.loaded_prefill_ms(w, r["prefill"], r.get("kv", r["prefill"]))
+                            for r in w.inflight.values()
+                            if r["t0"] > ld["t"] and r["deadline"] <= deadline and r["prefill"] > 0)
         return sum(self.loaded_prefill_ms(w, r["prefill"], r.get("kv", r["prefill"]))
                    for r in w.inflight.values() if r["deadline"] <= deadline)
+
+    def fresh_load(self, w):
+        if w.load is None or time.time() - w.load["t"] > self.a.load_max_age_s:
+            return None
+        return w.load
+
+    def decode_state(self, w):
+        """Decode rows, their KV tokens and the acceptance length on w: the node's own report when fresh, else the
+        router's in-flight bookkeeping."""
+        ld = self.fresh_load(w)
+        if ld is not None:
+            return ld["rows"], ld["kv"], ld["acc"]
+        rows = [r for r in w.inflight.values() if r.get("t_first") is not None and r["decode_left"] > 0]
+        acc = w.accept if (self.a.accept_ewma_alpha > 0 and w.accept) else 1.0
+        return len(rows), sum(r.get("kv", 0) for r in rows), acc
 
     def loaded_prefill_ms(self, w, uncached, ctx):
         """Prefill time on w when every step first keeps w's running decodes within their ITL SLO (the workers'
@@ -266,12 +301,11 @@ class Router:
         worker (no cap without decode rows)."""
         if not self.a.slo_chunk or uncached <= 0:
             return self.pm.prefill_ms(uncached, ctx)
-        rows = [r for r in w.inflight.values() if r.get("t_first") is not None and r["decode_left"] > 0]
-        if not rows:
+        n_rows, kv_rows, acc = self.decode_state(w)
+        if not n_rows:
             return self.pm.prefill_ms(uncached, ctx)
         itl_ms, ca, cb = (float(x) for x in self.a.slo_chunk.split(":"))
-        acc = w.accept if (self.a.accept_ewma_alpha > 0 and w.accept) else 1.0
-        d = self.pm.tpot_ms(len(rows), sum(r.get("kv", 0) for r in rows), acc if acc != 1.0 else None) * acc
+        d = self.pm.tpot_ms(n_rows, kv_rows, acc if acc != 1.0 else None) * acc
         budget = itl_ms * acc - d
         if budget <= 0:
             return float("inf")
@@ -627,6 +661,41 @@ class Router:
                                              connector=aiohttp.TCPConnector(limit=0, keepalive_timeout=3))
 
 
+# Positions in the LoadStat wire array (["LoadStat", ...fields], apply_load_stat_4mode.py appends 11-14).
+LS_DECODE_ROWS, LS_DECODE_KV, LS_ACCEPT, LS_QUEUE = 11, 12, 13, 14
+
+
+def subscribe_loads(router, endpoints):
+    """One SUB socket per worker; keeps each worker's latest report. Deadlines arrive relative to the worker's
+    clock and are turned into absolute router time on receipt."""
+    import msgspec
+    import zmq
+    ctx = zmq.Context.instance()
+    socks = {}
+    poller = zmq.Poller()
+    for i, ep in enumerate(endpoints):
+        s = ctx.socket(zmq.SUB)
+        if ep.startswith("tcp://["):
+            s.setsockopt(zmq.IPV6, 1)
+        s.setsockopt(zmq.SUBSCRIBE, b"load")
+        s.connect(ep)
+        socks[s] = i
+        poller.register(s, zmq.POLLIN)
+    dec = msgspec.msgpack.Decoder()
+    while True:
+        for s, _ in poller.poll(1000):
+            frames = s.recv_multipart()
+            if len(frames) != 3:
+                continue
+            v = dec.decode(frames[2])
+            if not isinstance(v, list) or len(v) <= LS_QUEUE:
+                continue
+            now = time.time()
+            router.workers[socks[s]].load = dict(
+                t=now, rows=int(v[LS_DECODE_ROWS]), kv=int(v[LS_DECODE_KV]), acc=float(v[LS_ACCEPT]) or 1.0,
+                queue=[(now + dl / 1000.0, int(u), int(pf)) for dl, u, pf in (v[LS_QUEUE] or [])])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", nargs="+", required=True)
@@ -654,6 +723,10 @@ def main():
     ap.add_argument("--chunk-tokens", type=int, default=2048, help="workers' --chunked-prefill-size")
     ap.add_argument("--slo-chunk", default="",
                     help="'itl_ms:a:b': workers run apply_edf_itl_slo_chunk.py; predict prefill under their decode load")
+    ap.add_argument("--load-endpoints", nargs="*", default=[],
+                    help="ZMQ load PUB endpoints, one per --workers entry in order (workers' --load-publish-endpoint)")
+    ap.add_argument("--load-max-age-s", type=float, default=0.5,
+                    help="a node report older than this falls back to the router's own bookkeeping")
     ap.add_argument("--slo-chunk-max-steps", type=int, default=20000,
                     help="steps after which a loaded prefill counts as infeasible (infinite TTFT)")
     ap.add_argument("--chunk-interference", type=float, default=1.0,
@@ -692,6 +765,9 @@ def main():
     ap.add_argument("--prefetch-timeout-per-ktok", type=float, default=0.25)
     a = ap.parse_args()
     r = Router(a)
+    if a.load_endpoints:
+        assert len(a.load_endpoints) == len(a.workers), (len(a.load_endpoints), len(a.workers))
+        threading.Thread(target=subscribe_loads, args=(r, a.load_endpoints), daemon=True).start()
     app = web.Application(client_max_size=1 << 30)
     app.on_startup.append(r.start)
     app.router.add_post("/generate", r.generate)

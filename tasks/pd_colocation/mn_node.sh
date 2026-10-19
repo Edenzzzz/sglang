@@ -195,7 +195,9 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   fi
   case $MODE in
     # MIXED_CHUNK=0: sglang's default prefill-prioritized chunked prefill (no mixed chunk), a single-node baseline.
-    coloc) [ "${PDMUX:-0}" = 1 ] || [ "${MIXED_CHUNK:-1}" = 0 ] || ARGS+=(--enable-mixed-chunk) ;;
+    # LOAD_PUB=1: publish the LoadStat (apply_load_stat_4mode.py) on the bootstrap port, unused when colocated.
+    coloc) [ "${PDMUX:-0}" = 1 ] || [ "${MIXED_CHUNK:-1}" = 0 ] || ARGS+=(--enable-mixed-chunk)
+           [ "${LOAD_PUB:-0}" = 1 ] && ARGS+=(--load-publish-endpoint "tcp://[::]:$BOOT") ;;
     prefill|decode)
       # Back-end RDMA NICs only. mlx5_0 is the front-end NIC (eth0) whose RoCEv2 GID is the IPv6
       # management address, while mlx5_1..4 (eth1-4) carry IPv4-mapped RoCEv2 GIDs; a worker on

@@ -9,7 +9,9 @@ within that budget and never above the chunk the deadline rule chose. When the d
 step admits one prefill token (a chunk size of 0 would switch chunking off). The request whose chunk is sized is the
 in-progress chunked request, else the earliest-deadline waiting one. Applied after apply_edf_deadline_chunk.py.
 
-  SGLANG_EDF_ITL_SLO="slo_ms:tokens_per_step:base_ms:a:b"
+  SGLANG_EDF_ITL_SLO="slo_ms:tokens_per_step:base_ms:a:b"            fixed decode-step base
+  SGLANG_EDF_ITL_SLO="slo_ms:tokens_per_step:c0:c_bs:c_kv:a:b"       live base c0 + c_bs*rows + c_kv*KV/1e3 from the
+                                                                     running batch (the router's step model)
   python apply_edf_itl_slo_chunk.py <tree>/python/sglang/srt
 Logs `EDF_ITL_SLO calls= capped= prefix= chunk=a->b` every 500 calls and on every 100th cap.
 Claude, 2026-10-19.
@@ -29,7 +31,14 @@ new2 = '''    def _edf_itl_slo_chunk(self, running_batch, chunk_size):
         spec = os.environ.get("SGLANG_EDF_ITL_SLO", "")
         if not spec or not chunk_size or running_batch is None or not running_batch.reqs:
             return chunk_size
-        slo_ms, tps, base_ms, a, b = (float(x) for x in spec.split(":"))
+        vals = [float(x) for x in spec.split(":")]
+        if len(vals) == 7:
+            slo_ms, tps, c0, c_bs, c_kv, a, b = vals
+            reqs = running_batch.reqs
+            base_ms = c0 + c_bs * len(reqs) + c_kv * sum(
+                len(q.origin_input_ids) + len(q.output_ids) for q in reqs) / 1e3
+        else:
+            slo_ms, tps, base_ms, a, b = vals
         if self.chunked_req is not None:
             r = self.chunked_req
             prefix = max(r.prefix_len, r.kv.kv_committed_len if getattr(r, "kv", None) is not None else 0)

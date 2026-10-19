@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.20.92 — Node-reported load and multi-node SLO control (2026-10-20)
+
+- `apply_load_stat_4mode.py`: append decode rows, decode KV, acceptance and the earliest-deadline prefill queue
+  (ms to deadline, uncached, prefix) to sglang's router-facing `LoadStat` (ZMQ PUB, change-triggered + 1 s heartbeat).
+- `router.py --load-endpoints`: SUB thread keeps each node's latest report; decode state, own-ITL rows and the
+  earlier-deadline drain come from it when fresh (< `--load-max-age-s`), else from router bookkeeping. CPU test
+  `test_router_load_sub.py` passes.
+- `apply_edf_itl_slo_chunk.py`: 7-field form with a live decode base c0 + c_bs*rows + c_kv*KV (H20 fit: decode grid
+  4.1% MAPE, cold prefill 2.4%). `LOAD_PUB` knob (bootstrap port). A/B `mn_slo_control_8gpu_20261020.sh` running.
+
 ## v1.20.91 — Correction: stock baseline is bimodal (2026-10-19)
 
 - Stock rep 3 matches the 10-18 numbers; reps 1-2 were a slow mode (start-up queueing behind the first agent

@@ -3,7 +3,8 @@
 ## v1.20.88 — SLO-sized prefill chunk (2026-10-19)
 
 - `apply_edf_itl_slo_chunk.py`: largest chunk keeping running decodes within their ITL SLO (step model base + a*c +
-  b*c*(prefix + c/2) <= slo * tokens_per_step) unless the prefill is past its TTFT deadline; `ITL_SLO` knob.
+  b*c*(prefix + c/2) <= slo * tokens_per_step), no exception (user): no late-prefill override, no floor above the
+  budget; `ITL_SLO` knob.
   H200 A/B `h200_itl_slo_chunk_20261019.sh` running.
 
 ## v1.20.87 — H200 per-tenant rerun of the standard mix (2026-10-19)

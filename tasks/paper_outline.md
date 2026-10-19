@@ -9,7 +9,7 @@ command and commit) or marked as missing. Priority order of the remaining gaps:
    (-28.1%); chat SLO attainment 1.3x / 1.8-1.9x stock, agent goodput 2.3-2.8x / ~16x. Open: stock is slower on
    this pod than on 10-18 while ours matches -- unexplained (`realistic_workload_analysis.md` Baselines).
 1b. [ ] SLO-sized chunk admission (user, 2026-10-19): admit the largest chunk that keeps the running decodes within
-   their ITL SLO, unless the prefill is past its TTFT deadline. The tested step budget was a fixed 50 ms floored at
+   their ITL SLO, with no exception (no late-prefill override, no minimum chunk). The tested step budget was a fixed 50 ms floored at
    the 1024 small chunk, so it never sized to the SLO. Target: the chat TPOT tail (p90 61-63 ms no MTP).
 2. [ ] 5e: mid-run mixture shift / load spike, measured through the transition (`pd_colocation_vs_disagg.md` 5e).
    This is the flexibility claim's main evidence and it has not been run.

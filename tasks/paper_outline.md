@@ -15,8 +15,9 @@ command and commit) or marked as missing. Priority order of the remaining gaps:
 1b. [ ] SLO-sized chunk admission (user, 2026-10-19): admit the largest chunk that keeps the running decodes within
    their ITL SLO, with no exception (no late-prefill override, no minimum chunk). The tested step budget was a fixed 50 ms floored at
    the 1024 small chunk, so it never sized to the SLO. Target: the chat TPOT tail (p90 61-63 ms no MTP).
-2. [ ] 5e: mid-run mixture shift / load spike, measured through the transition (`pd_colocation_vs_disagg.md` 5e).
-   This is the flexibility claim's main evidence and it has not been run.
+2. [x] 2026-10-20 load spike (chat x3 for 240 s, 8 H20s, two repeats): ours keeps agent attainment 99-100% through
+   the spike and the spike stream's chat attainment at 88-91%; PD disagg 36-57% agent, 19-22% chat in every window.
+   Mixture shift (rather than rate) still open. (`pd_colocation_vs_disagg.md` 5e.)
 3. [x] 2026-10-19 Point 4 as proposed (pull-source choice among per-worker copies, serving node fixed): neutral
    among sources (within 3%), copies cost 7-10% goodput; no congested source at <= 16 H20s even on one NIC.
 4. [x] 2026-10-20 (from the 10-13 B1 profiles, `debug_kernel_server_perf_4_mode.md` B1): padding waste is small --

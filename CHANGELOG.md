@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.21.2 — Load spike: ours absorbs a 3x chat spike (2026-10-20)
+
+- 8 H20s, two repeats: agent attainment 99-100% through the spike, spike-stream chat 88-91% (TTFT 0.13 s); PD disagg
+  36-57% agent, 19-22% chat, 14-31 s TTFT in every window.
+
 ## v1.21.1 — 5e load spike harness (2026-10-20)
 
 - `mn_bench.sh CHAT_SPIKE=delay:rate:n`: a second chat stream on top of the base load after `delay` s (own seed, own

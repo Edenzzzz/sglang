@@ -1,0 +1,58 @@
+ACTIVE GOAL (verbatim, as set by the user with /goal)
+
+We are now on a local cpu only machine and you should use merlin-cli to allocate one gpu in queue
+h100-sxm-80gb.vmss-eastus2-vlmh200.agent.merge (the trial must be named vibecuda) to continue the work. You must
+actually implement the fused FA3 + FA2 SM pre-assignment kernel instead of just keep testing and speculating...and
+optimize it to best you can on real serving workload. If not sure, implement the kernel first and test it with real
+4-mode mixed serving schedule, then adjust the kernel level workload. In real serving you must assume an MTP spec model
+with common acceptance rate in a 4-mode fused schedule. You may draw inspiration from the techniques in the paper
+"Taming Dynamism on GPUs: Cross-SM Kernel Fusion via SM Cooperation and Just-in-Time Reduction.pdf", but think
+carefully about how it fits into our story (not like we are just copying their technique). You must verify and
+optimize the kernel perf on server side, and test multicast and cross-role backfill (needs tma_store_wait). A fa3 + fa2
+pdl split kernel is also acceptable (but explore other fused optimizations) When the kernel is fully optimized on
+server side, you should check how well the model level perf model works with it (for EDF) vs baseline unfused
+schedule. Then think about what we can do for global pd colocation schedule vs PD disagg (YOU MUST GOTHROUGH THIS LIST
+AND WRITE A DOC COVERING EACH POINT), e.g. if we have 4 x 8 H100 nodes,
+1. for colocation we don't have to always find a prefill node first, route to the highest cache hit ratio node as the
+   first policy; if it's predicted to violate SLO for ongoing/this new request give the load prediction (apart from
+   the model level perf model we also need to consider head requests in the queue (based on EDF, those with tighter
+   deadline than this one), route to the highest hit ratio node that can still take it without violating SLO
+   (scheduling flexibility against pd disagg).
+2. if we don't route to the highest hit node, we can do best-effort cache migration (already supported by sglang hier
+   cache + dist cache pool), so our schedule naturally encourages cache replication better than disagg (refer to the
+   argument in ThunderAgent, their setting for repeated cache thrashing in agentic serving)
+3. Our EDF predictor should be more accurate than baseline due to easiness of perf modeling with fused attn kernel
+   (use lightweight MLP or whatever), so better SLO control. For perf model we can use predicted acceptance length as
+   an input param (easy to justify, in online serving draft model is fixed & we can use EWMA) to predict TPOT.
+4. since we have better cache replication and two-way RDMA utilization (complete graph, disagg is just a bipartite
+   graph), network congestion should reduce and our approach should scale better as #nodes increase (don't always
+   just resort to a few prefill nodes that hold a cache segment). A simple algorithm to reduce congestion may be when
+   we have multi cache hit nodes and the hit length are within a threshold, we just randomly pull from one of them (or
+   if you can model the link congestion by getting info from the central sglang router/past link latency, check how
+   classic networking papers do this, but it might be hard to accurately model for nodes we rarely pull from and
+   querying router adds latency?).
+NOTE that for MULTI-NODE MODELING EXPERIMENTS YOU CAN ONLY USE H20 NODES AND DO NOT USE MORE THAN 16 GPUs 4 NODES x 4
+GPUs (or <= 8 Nodes x 2 GPUs per node, THE TRIAL SHOULD BE NAMED VIBECUDA, SINCE H200 IS SCARCE. You must get at least
+30% gain on TTFT & ITL in realistic workloads (e.g. our mixed chat +tracelab) and at least 10% throughput gains else
+it's not publishable. Test the kernel items in /opt/tiger/sglang/tasks/debug_kernel_server_perf_4_mode.md first for
+both fa2 and fa3, then move on to server and workload items.
+
+USER DECISIONS SINCE (they amend the goal; dates 2026-10-18 / 2026-10-19)
+
+- Baselines. Single node: stock chunked prefill + mixed chunk, default kernel, no spec (for ours without MTP); stock
+  + MTP (for ours + MTP); stock PD multiplexing (pdmux). Multi-node: PD disaggregation with and without MTP on its
+  decode nodes, plus semi-PD-style systems that have an sglang implementation. FP8 is out of scope.
+- MTP is required: almost all models ship MTP, and disaggregation runs it on decode nodes, so the schedule must be
+  shown compatible and efficient with MTP. The no-MTP arm shows fine-grained mixed-tile dispatch + FA2 overlap +
+  EDF chunk admission over the original mixed chunk / chunked prefill.
+- pdmux is a baseline only: no CPU-GPU overlap scheduling, and CUDA graphs multiplied by SM groups.
+- Long prefill requests (> 200K) get a doubled TTFT deadline.
+- Reference lists: three bullets per paper (summary; relation to ours; what we can learn, used only to strengthen the
+  core contributions). JITServe (NSDI '26) added.
+- Every node must run prefill: no decode-only nodes / hard role separation (2026-10-19).
+- Point 4 is about choosing the pull SOURCE among copies; a supplier's decode load does not matter for an RDMA pull
+  (2026-10-19).
+- Paper story: follow the 11/21 draft outline (tasks/AttentionFuse Outline OSDI 25'.docx), highlighting the core
+  contributions -- fused kernels, higher cluster-wide request volume, scheduling flexibility under load spikes,
+  mixed workloads and workload variation (tasks/paper_outline.md).
+- SLO-aware EDF should admit just enough prefill chunk to keep running decodes within their SLO (2026-10-19).

@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.20.85 — KV pull-source choice among per-worker copies (2026-10-19)
+
+- `apply_kv_copy_source.py`: pulled prefixes are re-exported as per-worker copies on the puller's segment; a pull
+  picks its source by `SGLANG_KV_COPY_POLICY` (off / first / random / least_latency); own copy read first. `KV_COPY`
+  knob in `mn_node.sh` / `mn_run.py`. CPU fake-store test passes. A/B: `mn_kv_copy_source_20261019.sh`.
+- `h200_per_tenant_20261019.sh`, `bench_per_tenant.py`: single-node per-tenant rerun on H200 `dadf94f0e1da7238`.
+
 ## v1.20.84 — Paper outline; point-4 random-pull correction (2026-10-19)
 
 - `tasks/paper_outline.md`: the 11/21 draft's sections mapped to measured results, contributions C1-C4, ranked gaps.

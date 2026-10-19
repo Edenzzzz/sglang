@@ -106,6 +106,10 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
     # default host pool (--hicache-ratio 2 = ~130 GB per H20 worker) plus a 32 GB segment, twice per
     # pod, got every worker OOM-killed at startup (2026-10-17). 48 GB + 24 GB per worker ~= 175 GB/pod.
     export MOONCAKE_GLOBAL_SEGMENT_SIZE=${HC_SEGMENT:-24gb}
+    # KV_COPY (apply_kv_copy_source.py): pulled prefixes are re-exported as per-worker copies and a pull picks its
+    # source among them by policy (first / random / least_latency); off = one source per page, sglang's default.
+    export SGLANG_KV_COPY_POLICY=${KV_COPY:-off} SGLANG_KV_COPY_WORKER=$(( ROLE * ${GPUS_PER_POD:-2} + g ))
+    export SGLANG_KV_COPY_NWORKERS=${KV_COPY_NWORKERS:-0}
     ARGS+=(--enable-hierarchical-cache --hicache-storage-backend mooncake --hicache-size ${HC_HOST_GB:-48})
     # HC_PREFETCH: what a queued request gets from the pool. best_effort (sglang's default) takes only what
     # landed while it waited, so an idle non-holder pulls nothing; timeout waits for the pull up to

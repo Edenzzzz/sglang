@@ -1065,6 +1065,22 @@ static mixture.
       decode load should not matter for the pull itself. A real test needs (a) more than one copy of a hot prefix in
       the pool (replica count > 1 or per-node copies exported as sources) and (b) a reader that picks among copies
       (first / least-recently-used NIC / random) while the serving node stays fixed by the SLO check.
+      - [ ] **Point-4 test design (2026-10-19).** Source of a pull today: sglang's mooncake store writes every page with
+        the default `ReplicateConfig` (`replica_num = 1`), and mooncake's client reads the first complete replica in
+        the master's order (`FindFirstCompleteReplica`, `client_service.cpp`; no random or locality ranking). So
+        there is exactly one source per page, and the "which holder" choice does not exist. Installed mooncake
+        0.3.13.post1 has what a real test needs: `batch_get_replica_desc`, `create_copy_task`,
+        `ReplicateConfig.preferred_segments`, `TransferEngine.batch_transfer_sync_read`. Plan, serving node fixed by
+        the SLO check in every arm:
+        (a) copies: after a node pulls a prefix it re-exports it under a per-node key suffix on its own segment
+            (`preferred_segments = [local]`), so a hot prefix has one copy per node that has served it --
+            best-effort replication of the pool itself, at the memory cost replication implies;
+        (b) reader: for each page, `batch_is_exist` over the suffixes, then pick a source by policy -- `first`
+            (stock order), `random` (point 4's rule), `least_inflight` (fewest outstanding reads from that source,
+            counted locally, no router query);
+        (c) workload: the fan-out with fast rotation on the narrowed fabric (`ONE_NIC=1`), where a new hot prefix is
+            pulled by every node at once from a single segment -- the case where one source NIC's egress is shared;
+        (d) metrics: per-pull bandwidth and its tail, TTFT in the first 30 s after each rotation, source spread.
       Original record: No congestion exists to relieve at 16 GPUs on 4
       hosts: random tie-break among near-equal hits is neutral, the L3 store moved ~236 GB without
       measurable contention, and disagg's 8 prefill GPUs replicate 4 hot prefixes to 82% hit. The

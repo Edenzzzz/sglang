@@ -4,8 +4,13 @@ Rebuild the story of the 11/21 draft (`tasks/AttentionFuse Outline OSDI 25'.docx
 since. The draft section order is kept; each item is either backed by a dated result (with the doc that holds the
 command and commit) or marked as missing. Priority order of the remaining gaps:
 
-1. [ ] Single-node per-tenant scoring of the standard mix (chat on TTFT + TPOT attainment, agents on goodput). H200
-   `dadf94f0e1da7238` is provisioning (2026-10-19); the previous trial's per-request records were lost with its pod.
+1. [x] 2026-10-19 Single-node per-tenant rerun of the standard mix (H200 `dadf94f0e1da7238`, two repeats): no MTP
+   vs stock clears all five means (+44% / -35% / -32%, chat -94% / -45%); MTP vs stock MTP misses only chat ITL
+   (-28.1%); chat SLO attainment 1.3x / 1.8-1.9x stock, agent goodput 2.3-2.8x / ~16x. Open: stock is slower on
+   this pod than on 10-18 while ours matches -- unexplained (`realistic_workload_analysis.md` Baselines).
+1b. [ ] SLO-sized chunk admission (user, 2026-10-19): admit the largest chunk that keeps the running decodes within
+   their ITL SLO, unless the prefill is past its TTFT deadline. The tested step budget was a fixed 50 ms floored at
+   the 1024 small chunk, so it never sized to the SLO. Target: the chat TPOT tail (p90 61-63 ms no MTP).
 2. [ ] 5e: mid-run mixture shift / load spike, measured through the transition (`pd_colocation_vs_disagg.md` 5e).
    This is the flexibility claim's main evidence and it has not been run.
 3. [x] 2026-10-19 Point 4 as proposed (pull-source choice among per-worker copies, serving node fixed): neutral

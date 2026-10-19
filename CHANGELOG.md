@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.87 — H200 per-tenant rerun of the standard mix (2026-10-19)
+
+- Two repeats on `dadf94f0e1da7238`: ours no MTP vs stock +44% / -35% / -32%, chat -94% / -45%; ours + MTP vs stock
+  MTP +60.5% / -38.9% / -32.9%, chat -77.8% / -28.1%. Per tenant: chat attainment 1.3x / 1.8-1.9x, agent goodput
+  2.3-2.8x / ~16x. Per-request records committed. Stock slower than on the 10-18 pod: open.
+
 ## v1.20.86 — Point 4 measured as proposed: pull-source choice neutral (2026-10-19)
 
 - 8 H20s, one NIC, 45 s rotation: off 531 tok/s agent goodput, first 492, random 477, least_latency 487. Per-page

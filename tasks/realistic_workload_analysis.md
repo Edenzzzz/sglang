@@ -157,6 +157,38 @@ on realistic mixed workloads (chat + TraceLab), measured against these, same ses
     `bash /tmp/h20/long_ts5.sh`): agent 8.07 / 8.25 / 8.29 s, 70.4 / 70.0 / 69.8 ms -> -18.2% / -33.3% (agent
     throughput +43%, chat -70% / -44%): the chunk moves the point along the same frontier, it does not lift it. Seven
     chunk / slope settings now trace one agent TTFT / ITL frontier on this mix with no point at -30% / -30%.
+- [x] **Per-tenant rerun of the standard mix, two matched repeats (2026-10-19, H200 `dadf94f0e1da7238`, re-forked and
+  provisioned from the H20 tree: upstream 3fef129 + the current H20 overlay, `scheduler.py` md5 aa706592; agent C=8
+  frozen 32-64K TraceLab x 2 rounds + ShareGPT 8 req/s; all eight arms 0 tracebacks / 0 fallbacks; no-MTP split arms
+  71.5K / 72.5K split calls, every one overlapped; MTP arms 34.5K / 33.5K split calls = ~1.2K 4-mode steps, plus ~1.4K
+  short prefills run on their own by the context / queue gate (`MIX_MIN_CTX` 8192, queue < 4, the default since 10-16);
+  the 10-18 ">= 66K" MTP count cannot be re-checked, its logs went with that pod).** Means of the two repeats, agent tput /
+  TTFT / ITL ; chat TTFT / ITL:
+  | arm | agent | chat |
+  |---|---|---|
+  | stock mixed chunk, no spec | 78.4 / 5.45 s / 62.9 ms | 2.45 s / 34.8 ms |
+  | ours, no MTP, FA2 overlapped | 112.9 / 3.52 s / 42.6 ms | 0.145 s / 19.2 ms |
+  | stock + MTP | 63.7 / 20.70 s / 24.3 ms | 13.31 s / 17.6 ms |
+  | ours + MTP (4-mode, 1024 / 2048) | 102.2 / 12.64 s / 16.3 ms | 2.96 s / 12.65 ms |
+  Ours without MTP vs stock without spec: agent **+44% / -35.3% / -32.4%**, chat **-94.1% / -44.8%** -- all clear in
+  both repeats (rep 1 +44 / -34 / -32, -94 / -45; rep 2 +44 / -36 / -32, -94 / -45). Ours + MTP vs stock + MTP: agent
+  **+60.5% / -38.9% / -32.9%**, chat **-77.8%** / ITL -28.1% (chat ITL misses by 1.9 points, rep 1 -27.7%, rep 2 -28.6%).
+  **Caveat:** stock is slower on this pod than on the 10-18 pod (no spec: TTFT 5.45 vs 3.12 s, chat 2.45 vs 1.04 s;
+  MTP: 20.7 vs 16.85 s) while our arms match their 10-18 numbers (3.5 vs 3.6 s; 12.6 vs 12.1-12.3 s). Same-session
+  comparison is the rule and both repeats agree, but why stock moved is not explained yet -- open.
+  Per tenant (attainment = share of requests meeting both a TTFT and a per-request TPOT target, TPOT = sum(itls) /
+  (output - 1); goodput = their output tok/s), rep 1 | rep 2:
+  | arm | agent 10 s + 80 ms | agent 10 s + 30 ms | chat 0.5 s + 20 ms | chat 2 s + 50 ms | chat TPOT p90 |
+  |---|---|---|---|---|---|
+  | stock, no spec | 48.9 / 44.4% (42.0 / 36.5 tok/s) | 2.2 / 2.2% | 52.6 / 52.9% | 60.9 / 61.0% | 100.7 / 97.8 ms |
+  | ours, no MTP | **93.3 / 91.1% (98.2 / 101.9)** | 2.2 / 2.2% | **69.7 / 69.9%** | **80.0 / 80.3%** | 62.7 / 61.1 ms |
+  | stock + MTP | 2.2 / 2.2% (2.5 / 2.6) | 0 / 0% | 31.7 / 32.9% | 32.3 / 33.7% | 36.7 / 36.6 ms |
+  | ours + MTP | **46.7 / 42.2% (41.2 / 39.3)** | **42.2 / 40.0%** | **58.1 / 60.2%** | **61.9 / 65.7%** | 30.6 / 30.8 ms |
+  Per tenant, chat meets its SLO 1.3x (no MTP) and 1.8-1.9x (MTP) as often as stock, agent goodput is 2.3-2.8x and
+  ~16x. Chat attainment is capped by a TPOT tail (p90 61-63 ms without MTP, 31 ms with): the chat requests decoding
+  through deep-context mixed steps. Per-request records (TTFT, TPOT, lengths, errors):
+  `tasks/pd_colocation/results_h200_per_tenant_20261019.json.gz`. `bash tasks/pd_colocation/h200_per_tenant_20261019.sh`;
+  scoring `tasks/perf_model/bench_per_tenant.py`; sglang `f9673a12d`.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

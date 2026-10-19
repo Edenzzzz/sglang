@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.94 — 4-mode step-model search: per-step predictability claim not supported (2026-10-20)
+
+- Serving traces, best model per schedule (MLP / GBT): every schedule ~3-8% on mixed / prefill steps; ours beats
+  pdmux (5.9% vs 7.5% light load) but not stock mixed chunk (4.2%). The 10-18 gap was pdmux's linear form. Outline C3
+  demoted to an enabler of SLO control. `fit_4mode_step.py` gains pdmux sg / lay features.
+
 ## v1.20.93 — Decode-first rule: skip prefill below one page; direct load publisher (2026-10-20)
 
 - `apply_edf_itl_slo_chunk.py`: when less than one KV page fits beside the running decodes, no prefill that step

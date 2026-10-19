@@ -57,7 +57,11 @@ re-balances per step instead of re-provisioning.
   - [x] 2026-10-18 no MTP vs stock mixed chunk: agent +25.7% / +15.6% / -31.2%, chat -85.6% / -36.0% (agent TTFT is the
     miss: stock prefills in 8192 chunks).
   - [x] 2026-10-18 output gates PASS for every arm, each with a null case (`gate_h200_*`).
-- **C3 Predictable fused step -> EDF and routing work**
+- **C3 Predictable fused step -> EDF and routing work** -- **2026-10-20: not supported as a per-step claim.** With each
+  schedule's best model (MLP / GBT on serving traces) every schedule predicts to ~3-8%; ours beats pdmux (5.9% vs
+  7.5% at light load) but not stock mixed chunk (4.2%). The earlier 26.7% vs 53.5% used pdmux's linear form. Keep the
+  step model as an enabler of SLO control (router + decode-first worker), not as a contribution
+  (`server_perf_model.md`).
   - [x] 2026-10-18 S4 step model, held-out half: mixed-step MAPE 26.7% ours vs 53.5% stock MTP; decode-only 3.6% vs 2.7%.
     Decode ITL predictable to ~9% vs 35-117% on unfused schedules.
   - [x] EWMA acceptance length as a model input (point 3; measured 2.10 tokens/step).

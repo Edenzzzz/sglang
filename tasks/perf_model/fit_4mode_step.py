@@ -4,7 +4,8 @@ half of each trace in time order, scored on the second half: MAPE and p90 APE pe
 rows only, mixed = a prefill chunk beside decode rows, prefill = prefill rows only), for the forward's GPU time and for
 the launch-to-launch gap of back-to-back steps (< 200 ms, what ITL sees).
 
-Features per step: ptok (prefill tokens), pf (their summed prefix), np (prefill requests), nd (decode rows), dkv (decode
+Features per step (pdmux logs also carry sg = SM group and lay = layers in a split forward, used by mlp / gbt):
+ptok (prefill tokens), pf (their summed prefix), np (prefill requests), nd (decode rows), dkv (decode
 KV tokens), kv (total KV), with attn = (ptok * pf / np + ptok^2 / (2 np)) / 1e6 the causal-attention work of the chunk.
   lin5      ms = c0 + c_tok*ptok + c_attn*attn + c_bs*nd + c_kv*dkv            (pdmux's form, fit_pdmux_step.py)
   lin7      lin5 + c_np*np + c_mixed*[np>0 and nd>0]                           (per-request and mixed-step overhead)
@@ -27,7 +28,7 @@ import numpy as np
 import torch
 
 PAT = re.compile(r"STEPTRACE (\w+) et=(\d+) bs=(\d+) np=(\d+) ptok=(\d+) pf=(\d+) nd=(\d+) dkv=(\d+) kv=(\d+) "
-                 r"mx=(\d+)(?: sg=\d+ lay=\d+)?(?: acc=([0-9.]+))?(?: dacc=[0-9.]+)? t=([0-9.]+) gpu=([0-9.]+)")
+                 r"mx=(\d+)(?: sg=(\d+) lay=(\d+))?(?: acc=([0-9.]+))?(?: dacc=[0-9.]+)? t=([0-9.]+) gpu=([0-9.]+)")
 GAP_MS = 200.0
 
 
@@ -41,7 +42,8 @@ def load(spec):
             continue
         g = m.groups()
         rs.append(dict(np=int(g[3]), ptok=int(g[4]), pf=int(g[5]), nd=int(g[6]), dkv=int(g[7]), kv=int(g[8]),
-                       t=float(g[11]) * 1e3, gpu=float(g[12]), S=steps, T=toks))
+                       sg=int(g[10] or 0), lay=int(g[11] or 0), t=float(g[13]) * 1e3, gpu=float(g[14]), S=steps,
+                       T=toks))
     rs.sort(key=lambda r: r["t"])
     for a, b in zip(rs, rs[1:]):
         iv = b["t"] - a["t"]
@@ -96,7 +98,7 @@ def fit_overlap(tr, y):
 
 def feats(rs):
     return np.log1p(np.array([[r["ptok"], r["pf"], r["np"], r["nd"], r["dkv"], r["kv"], r["attn"] * 1e3,
-                               r["S"], r["T"]] for r in rs], dtype=float))
+                               r["S"], r["T"], r["sg"], r["lay"]] for r in rs], dtype=float))
 
 
 def fit_mlp(tr, y):

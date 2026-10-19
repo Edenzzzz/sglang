@@ -33,6 +33,22 @@ Our method aims to achieve an optimal pareto curve: high throughput, stable deco
     (1) pdmux 5-term linear, (2) + MTP terms (verify tokens = rows x draft tokens, acceptance), (3) overlap form
     max(T_p, T_d) + beta * min (FA2 runs beside FA3; the persistent-kernel analytic model reached 3.1%), (4) MLP on
     the same features, (5) a tree ensemble;
+  - [x] **2026-10-20 results (H200 `dadf94f0e1da7238`, STEPTRACE serving traces, `tasks/perf_model/fit_4mode_step.py`,
+    first half fit / second half scored; GPU time of mixed / prefill-bearing steps, MAPE and p90 APE; decode steps are
+    0.5-4.9% for every schedule and model).** Standard load (agent C=8 + chat 8 req/s) | light (C=4 + 4 req/s):
+    | schedule | pdmux 5-term linear (lin5) | best model (MLP / GBT) |
+    |---|---|---|
+    | stock mixed chunk, no spec | 26.1% / 25.2% | 4.4% (p90 10.4%) / 4.2% (p90 8.6%) |
+    | ours, no MTP (FA2 overlapped) | 33.7% / 33.1% | 3.2% (p90 6.8%) / 5.9% (p90 15.3%) |
+    | stock + MTP | 23.6% / -- | 3.6% (p90 7.4%) / -- |
+    | ours + MTP (4-mode) | 26.7% (gap target) / -- | 4.6% (p90 9.8%, gap target) / -- |
+    | pdmux split prefill forwards (sg / lay features given to MLP / GBT) | -- / 73.0% | -- / 7.5% (p90 17.8%); pdmux's own per-SM-group form 19.8% |
+    **The per-step predictability claim does not hold in a fair comparison.** With a flexible model every schedule's
+    steps predict to ~3-8%; the 10-18 "26.7% vs 53.5%" was pdmux's 5-term linear form, which is the weakest model for
+    every schedule. Ours is more predictable than pdmux (5.9% vs 7.5%, p90 15.3% vs 17.8% at light load) but not than
+    stock mixed chunk (4.2% at light load). The lin4mode draft / verify terms need the 2-step / 3-token MTP traces
+    (queued) to be identifiable. sglang `0c9eaf7b7`; traces from `bash tasks/pd_colocation/h200_pp_and_trace_20261019.sh`
+    and `h200_pdmux_trace_20261020.sh`.
   - deploy the winner in both places: router TTFT / ITL prediction from node-reported state (rows, sum KV,
     acceptance, prefill queue by deadline, free KV) piggybacked on responses with an idle heartbeat, and the
     worker's decode-first chunk rule (decode base from the live batch instead of a constant).

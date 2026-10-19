@@ -66,5 +66,16 @@ for i in $(seq 1 3000); do
 done
 mkdir -p $BENCH_BARRIER_DIR && touch $BENCH_BARRIER_DIR/go
 echo "released: $n/2 ready"
-wait $A $C
+# CHAT_SPIKE="delay_s:rate:n" (5e load spike): delay_s after release a second chat stream at `rate` req/s sends n
+# requests on top of the base load; its own seed so it does not replay the base stream's prompts, no barrier.
+S=
+if [ -n "${CHAT_SPIKE:-}" ]; then
+  IFS=: read -r SP_DELAY SP_RATE SP_N <<< "$CHAT_SPIKE"
+  ( sleep $SP_DELAY; date +%s.%N > $OUT/chat_spike.start
+    BENCH_BARRIER_DIR= $W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT \
+      --model $W/qwen7b "${SECOND[@]}" --seed 7 --request-rate $SP_RATE --num-prompts $SP_N --warmup-requests 0 \
+      --output-file $OUT/chat_spike.json --output-details --disable-tqdm ) > $OUT/bench_chat_spike.log 2>&1 &
+  S=$!
+fi
+wait $A $C $S
 echo MNBENCHDONE

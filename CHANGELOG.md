@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.21.1 — 5e load spike harness (2026-10-20)
+
+- `mn_bench.sh CHAT_SPIKE=delay:rate:n`: a second chat stream on top of the base load after `delay` s (own seed, own
+  output). `spike_windows.py`: agent attainment / goodput pre / spike / first 60 s / post; base and spike chat
+  attainment. `mn_spike_8gpu_20261020.sh` (ours vs PD disagg, chat 8 -> 24 req/s for 240 s) running.
+
 ## v1.21.0 — Six-repeat single-node result (2026-10-20)
 
 - vs stock mixed chunk: MTP pair clears the attainment bar (chat +72%, agent 15x, +55% throughput); no MTP chat +29.7%.

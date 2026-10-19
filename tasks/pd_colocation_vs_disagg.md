@@ -334,6 +334,13 @@ static mixture.
         (SLO overflow and agents' own appends), so chat decode is never prefill-free; disagg's 5 ms chat ITL comes from
         decode pods that by construction never prefill. Off by default (0). With this the routing levers for the
         decode-latency gap (fixed / adaptive / per-class ITL SLO, soft roles) are exhausted at this scale.
+      - [x] **Time-based draining (negative; 2026-10-19; `router.py --drain-frac 0.25 --drain-period-s {20,8}`: a rotating
+        quarter of the workers takes no new requests per period; heavy natural-text load, adaptive K = 2.5; clean;
+        `bash /tmp/h20/fanout_drain.sh`).** Period 20 / 8 s: agent 521 / 503 tok/s, TTFT 0.99 / 1.03 s, ITL 14.4 / 16.4
+        ms; chat ITL 12.1 / 12.1 ms (p99 315 / 317 ms) -- worse than no draining (555 / 0.75 s / 12.1 ms; chat 10.8 ms,
+        p99 ~90). Taking a quarter of the cluster out of admission concentrates new prefills on the rest, so the open
+        workers' decode sees more prefill, not less, and requests moved off their cached node re-prefill. Off by
+        default (0).
 - [x] **3. EDF with an EWMA acceptance length** (2026-10-08, H200) — measured 2.10 tokens/step. a=1
       collapses EDF; a per-request EWMA is biased low by the min over requests; a global EWMA is
       right, but every per-step chunk cap loses. **Deadline ORDER wins**: chat TTFT -62%, codex

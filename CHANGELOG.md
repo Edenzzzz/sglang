@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.81 — Router time-based draining: negative, off by default (2026-10-19)
+
+- 25% of workers drained per 20 / 8 s window: agent 521 / 503 tok/s (vs 555), chat ITL 12.1 ms (vs 10.8). Draining
+  concentrates prefill on the open workers.
+
 ## v1.20.80 — Router soft node roles: negative, off by default (2026-10-19)
 
 - Long-prefill pool 6 / 4: chat ITL 9.8-9.9 ms (vs 10.8), agents -9..-13% throughput. Routing cannot make chat decode

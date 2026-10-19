@@ -21,6 +21,22 @@ Our method aims to achieve an optimal pareto curve: high throughput, stable deco
 
 ## TODOs
 
+- [ ] **One step model for the 4-mode mixed step, shared by router and worker (user, 2026-10-19).** Today three
+  different models are in play and none is the joint model: the H20 router uses lookup tables (cold-prefill curve,
+  decode ITL grid, one `--chunk-interference` scalar); the S4 predictability numbers (mixed MAPE 26.7% ours vs 53.5%
+  stock MTP, decode 3.6% vs 2.7%) come from pdmux's 5-term linear form fit offline (`fit_pdmux_step.py`); the worker's
+  decode-first chunk rule (`apply_edf_itl_slo_chunk.py`) uses a hand-set subset with a fixed decode base. The MLPs
+  below are from the persistent-kernel era and were never fit on 4-mode steps. Plan:
+  - data: STEPTRACE (`STEP_TRACE=1`) from 4-mode and stock-MTP serving on H200 at several loads and chunk sizes;
+    per step P new tokens, P prefix, #P requests, decode rows, decode KV, acceptance, GPU time and launch-to-launch gap;
+  - candidates, fit on the first half and scored on the second (MAPE and p90, mixed and decode-only separately):
+    (1) pdmux 5-term linear, (2) + MTP terms (verify tokens = rows x draft tokens, acceptance), (3) overlap form
+    max(T_p, T_d) + beta * min (FA2 runs beside FA3; the persistent-kernel analytic model reached 3.1%), (4) MLP on
+    the same features, (5) a tree ensemble;
+  - deploy the winner in both places: router TTFT / ITL prediction from node-reported state (rows, sum KV,
+    acceptance, prefill queue by deadline, free KV) piggybacked on responses with an idle heartbeat, and the
+    worker's decode-first chunk rule (decode base from the live batch instead of a constant).
+
 - [ ] **Wire overlap_profiler into scheduler** [DEPRIORITIZED 2026-08: the
   analytic model removed the chunk-control dependency on profiling; still
   needed only to validate the router cost signal]: `ProfilingRunner` exists in `overlap_profiler.py` but is NOT integrated into the server. Options: (a) add `FlushCacheReqInput`-style special request type + API endpoint + handler in `scheduler.py`, (b) add `--run-profiler` flag to `launch_server` that runs profiling during scheduler init before entering event loop, (c) standalone script that creates `ModelRunner` directly (like tests). Option (b) is simplest. The profiler requires `--enable-piecewise-cuda-graph`.
@@ -40,6 +56,23 @@ Our method aims to achieve an optimal pareto curve: high throughput, stable deco
   - Training: 200 epochs, command: `python tasks/perf_model/train_perf_model_mlp.py --csv Qwen_Qwen3-8B_9544552f_20260405_185729_profile.csv --output tasks/perf_model/dmc_model.pt --epochs 200`
 - [ ] Validate MLP predictions against actual server latency on representative workloads from `tasks/realistic_workload_analysis.md`
 - [x] Use trained models for SLO-aware chunk size control (integrated in `edf_scheduler.py` via `SGLANG_EDF_LATENCY_MODEL` env var)
+
+### 2026-10-12 fused-vs-unfused EDF check
+
+The checked-in MTP linear step model (`heldout_mape=21.9%`) was exercised with
+global acceptance EWMA on matched fused and unfused `loadsweep_min` arms. Both
+completed 601 mixed steps with zero fallbacks/tracebacks. Fused mean TTFT was
+2.9%/2.3% lower for chat/codex, but mean ITL was 0.6%/0.7% higher and codex
+output throughput was 1.4% lower. This validates the comparison path, not the
+claim that fusion makes EDF easier or better; the broader MLP validation TODO
+remains open.
+
+The EDF predictor interface now accepts an `acceptance_length` argument. The
+online EWMA binding estimate is passed into chunk-budget predictions, while old
+MLP/analytic models remain compatible; `fit_mtp_step.py` also accepts optional
+`acc=<EWMA>` STEPTRACE fields and emits `c_acc` when present. This makes the
+requested acceptance-length feature explicit without treating the old
+21.9%-MAPE checkpoint as retrained evidence.
 
 ### Production target and router integration audit (2026-07-23)
 
@@ -93,3 +126,21 @@ cost and the oldest timestamp so neither load nor staleness is understated.
 These fields are diagnostic only. Incremental request/queue cost must be
 validated before replacing request-count load inside the existing
 cache-imbalance guard.
+
+### 2026-10-12 fused-vs-unfused EDF check
+
+The checked-in MTP step model (`heldout_mape=21.9%`) was exercised with global
+acceptance EWMA on matched fused and unfused `loadsweep_min` arms. Both completed
+601 mixed steps with zero fallbacks/tracebacks. Fused mean TTFT was 2.9%/2.3%
+lower for chat/codex, but mean ITL was 0.6%/0.7% higher and codex output
+throughput was 1.4% lower. This validates the comparison path, not the claim
+that fusion makes EDF easier or better; the broader MLP validation TODO remains
+open.
+
+The EDF predictor interface now accepts `acceptance_length`; the online EWMA
+binding estimate is passed into chunk-budget predictions. `fit_mtp_step.py`
+accepts optional `acc=<EWMA>` STEPTRACE fields and emits `c_acc`, while old
+five-coefficient models remain compatible. Regression coverage is in
+`test/manual/benchmark/test_mtp_step_acceptance_model.py`.
+The scheduler's STEPTRACE records the current lifetime acceptance EWMA as
+`acc=...`, so new calibration runs can actually fit the added coefficient.

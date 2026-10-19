@@ -169,7 +169,15 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   Ours without MTP vs stock without spec: agent **+44% / -35.3% / -32.4%**, chat **-94.1% / -44.8%** -- all clear in
   both repeats (rep 1 +44 / -34 / -32, -94 / -45; rep 2 +44 / -36 / -32, -94 / -45). Ours + MTP vs stock + MTP: agent
   **+60.5% / -38.9% / -32.9%**, chat **-77.8%** / ITL -28.1% (chat ITL misses by 1.9 points, rep 1 -27.7%, rep 2 -28.6%).
-  **Caveat:** stock is slower on this pod than on the 10-18 pod (no spec: TTFT 5.45 vs 3.12 s, chat 2.45 vs 1.04 s;
+  **CORRECTION (2026-10-19, later the same day): stock is bimodal, and the "all clear" above rests on its slow mode.**
+  A third stock repeat (no spec) gave agent 89.8 tok/s / 3.01 s / 61.1 ms, chat 1.04 s / 29.8 ms -- the 10-18 numbers
+  (89.9 / 3.12 s / 60.5 ms, 1.04 s / 29.7 ms), not reps 1-2 (78.4 / 5.45 s). Same pod, tree, seeds; all three prefill
+  the same 2.12M tokens, but the slow runs use 20% more, smaller prefill steps (2329-2339 vs 1946; mean 910 vs 1089
+  new tokens) and queue 140+ requests behind the first agent prefills in the first minute (queue mean 17.5-18.0 vs
+  2.3). Against rep 3, ours without MTP is agent +26% / TTFT **+17%** / ITL -30%, chat -86% / -35% -- agent TTFT is the
+  miss again, as on 10-18. Three more matched repeats of all four arms are queued (`h200_more_reps_20261019.sh`) so
+  each comparison is reported over the distribution, not one mode.
+  Earlier caveat: stock is slower on this pod than on the 10-18 pod (no spec: TTFT 5.45 vs 3.12 s, chat 2.45 vs 1.04 s;
   MTP: 20.7 vs 16.85 s) while our arms match their 10-18 numbers (3.5 vs 3.6 s; 12.6 vs 12.1-12.3 s). Same-session
   comparison is the rule and both repeats agree, but why stock moved is not explained yet -- open.
   Per tenant (attainment = share of requests meeting both a TTFT and a per-request TPOT target, TPOT = sum(itls) /

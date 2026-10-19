@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.91 — Correction: stock baseline is bimodal (2026-10-19)
+
+- Stock rep 3 matches the 10-18 numbers; reps 1-2 were a slow mode (start-up queueing behind the first agent
+  prefills). Vs rep 3, ours without MTP misses agent TTFT (+17%). Doc and outline corrected; repeats 4-6 queued.
+
 ## v1.20.90 — Baselines delineated by SLO control; 4-mode step-model fitter (2026-10-19)
 
 - Baselines table: single node without SLO control vs prefill-prioritized and mixed chunk (required), with SLO control

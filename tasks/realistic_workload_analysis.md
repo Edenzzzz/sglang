@@ -177,6 +177,16 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   2.3). Against rep 3, ours without MTP is agent +26% / TTFT **+17%** / ITL -30%, chat -86% / -35% -- agent TTFT is the
   miss again, as on 10-18. Three more matched repeats of all four arms are queued (`h200_more_reps_20261019.sh`) so
   each comparison is reported over the distribution, not one mode.
+  Stock + MTP rep 3 also matches 10-18 (72.3 / 17.26 s / 23.8 ms, chat 9.47 s / 16.3 ms). Means vs stock's fast mode
+  (rep 3), ours + MTP: agent +41% / -26.8% / -31.5%, chat -68.7% / -22.4%. **Per tenant vs rep 3** (attainment = TTFT
+  and per-request TPOT both met; ours = its two reps):
+  | pair | agent 10 s + 80 ms | agent goodput | chat 0.5 s + 20 ms | chat 2 s + 50 ms | throughput |
+  |---|---|---|---|---|---|
+  | no MTP: stock rep 3 / ours | 55.6% / 91.1-93.3% | 51.7 / 98.2-101.9 tok/s | 58.5% / 69.7-69.9% (+19%) | 70.5% / 80.0-80.3% (+14%) | +26% |
+  | MTP: stock rep 3 / ours | 2.2% / 42.2-46.7% | 2.9 / 39.3-41.2 tok/s | 41.0% / 58.1-60.2% (+44-47%) | 42.8% / 61.9-65.7% (+45-53%) | +41% |
+  With MTP the attainment bar clears against stock's fast mode on both tenants (> +30%) with +41% throughput. Without
+  MTP chat attainment gains only +14-19%: our chat TPOT p90 (~61 ms) caps it. Single repeat of the fast mode; reps
+  4-6 decide the distribution.
   Earlier caveat: stock is slower on this pod than on the 10-18 pod (no spec: TTFT 5.45 vs 3.12 s, chat 2.45 vs 1.04 s;
   MTP: 20.7 vs 16.85 s) while our arms match their 10-18 numbers (3.5 vs 3.6 s; 12.6 vs 12.1-12.3 s). Same-session
   comparison is the rule and both repeats agree, but why stock moved is not explained yet -- open.

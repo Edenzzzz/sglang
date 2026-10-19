@@ -1097,7 +1097,19 @@ static mixture.
             **Ours absorbs a 3x chat spike with no attainment loss** (agent 99-100% through the spike and its first
             minute; the spike stream's own chat attainment 88-91%, TTFT 0.13-0.14 s); disagg's two prefill nodes queue
             both tenants for 14-31 s TTFT in every window. The pre-spike window is lowest for both arms (start-up and
-            cold prefixes). Mixture shift (rather than rate) is not run. sglang `ff6a90041`.
+            cold prefixes).
+            **Mixture shift (2026-10-20, same cluster and base load; ~300 s in, a second fan-out driver adds 32 agent
+            programs on the same task prefixes for 240 s -- agent load x2, chat unchanged; `FO_SPIKE=300:32:240`,
+            `mn_shift_8gpu_20261020.sh`; all arms clean).** Base agents pre / shift / first 60 s / post, the added
+            programs over their run, chat over the run; rep 1 | rep 2:
+            | arm | base agent attainment | added agents | agent goodput in shift (base + added) | chat attainment |
+            |---|---|---|---|---|
+            | ours | 96.4 / 99.3 / 100 / 98.7% \| 96.1 / 98.7 / 97.3 / 97.4% | 99.6% \| 99.0% | 373 + 345 \| 393 + 393 tok/s | 83.5% \| 83.7% |
+            | PD disagg 2P2D | 26.9 / 31.0 / 26.5 / 61.0% \| 27.5 / 21.5 / 20.6 / 54.6% | 28.1% \| 28.4% | 38 + 29 \| 27 + 34 tok/s | 22.2% \| 18.2% |
+            **Ours takes doubled agent load at 97-100% attainment and roughly doubles agent goodput during the shift
+            (718-786 tok/s); agent TTFT rises from ~0.9 s to ~1.5-1.9 s.** Chat attainment drops from ~90% (no shift) to
+            ~84%: chats decode beside twice the agent prefill. Disagg serves 61-67 tok/s of agent goodput during the shift
+            at 21-31% attainment, TTFT 26-49 s. sglang 6e4bcbd77; the load-spike rows above are sglang `ff6a90041`.
       - [ ] **5e (original item). DYNAMIC: mid-run mixture shift and load spike.** The core of the argument and
             the test of prediction (b): step-change the mixture (prefill share down, decode share
             up) and inject a rate spike; measure SLO attainment **through** the transition and

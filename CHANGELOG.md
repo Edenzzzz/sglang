@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.21.7 — Mixture shift: ours absorbs doubled agent load (2026-10-20)
+
+- 8 H20s, two repeats: ours 97-100% agent attainment through the shift, agent goodput 718-786 tok/s (x2), chat ~84%;
+  PD disagg 21-31% agent, 18-22% chat, TTFT 26-49 s.
+
 ## v1.21.6 — MTP arms were capped at 48 running requests (2026-10-20)
 
 - sglang's speculative default `max_running_requests = 48` capped every MTP arm (ours and both stocks); 36-68% of their

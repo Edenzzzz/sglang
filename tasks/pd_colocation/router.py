@@ -238,7 +238,7 @@ class Router:
         wait_ms = self.drain_ms(w, deadline)
         got, wait_s = self.pulled(wait_ms / 1000.0, missing)
         self.last_pull = got
-        ttft = wait_s * 1000.0 + self.pm.prefill_ms(max(0, uncached - got), n_tok_self)
+        ttft = wait_s * 1000.0 + self.loaded_prefill_ms(w, max(0, uncached - got), n_tok_self)
         # Rows decoding beside this request once it decodes: those decoding now plus those queued ahead
         # of it (earlier deadline, so prefilled first), with their KV and this request's prompt. Counting
         # every in-flight request -- later-deadline ones still waiting for prefill included -- put
@@ -253,8 +253,40 @@ class Router:
 
     def drain_ms(self, w, deadline):
         """Prefill time of the work queued on w ahead of a request with this deadline."""
-        return sum(self.pm.prefill_ms(r["prefill"], r.get("kv", r["prefill"]))
+        return sum(self.loaded_prefill_ms(w, r["prefill"], r.get("kv", r["prefill"]))
                    for r in w.inflight.values() if r["deadline"] <= deadline)
+
+    def loaded_prefill_ms(self, w, uncached, ctx):
+        """Prefill time on w when every step first keeps w's running decodes within their ITL SLO (the workers'
+        apply_edf_itl_slo_chunk.py rule, --slo-chunk "itl_ms:a:b" with the workers' coefficients). A step may last
+        itl_ms x tokens-per-step; the decode rows take d of it (the step model at w's current decode load), and the
+        chunk gets the largest c with a*c + b*c*(prefix + c/2) <= the rest. The prefill is walked chunk by chunk as
+        its prefix deepens. A node whose decodes already fill the budget admits ~no prefill: infinite TTFT, so the
+        SLO check routes the request elsewhere. Without running decodes the cold-prefill model applies, as on the
+        worker (no cap without decode rows)."""
+        if not self.a.slo_chunk or uncached <= 0:
+            return self.pm.prefill_ms(uncached, ctx)
+        rows = [r for r in w.inflight.values() if r.get("t_first") is not None and r["decode_left"] > 0]
+        if not rows:
+            return self.pm.prefill_ms(uncached, ctx)
+        itl_ms, ca, cb = (float(x) for x in self.a.slo_chunk.split(":"))
+        acc = w.accept if (self.a.accept_ewma_alpha > 0 and w.accept) else 1.0
+        d = self.pm.tpot_ms(len(rows), sum(r.get("kv", 0) for r in rows), acc if acc != 1.0 else None) * acc
+        budget = itl_ms * acc - d
+        if budget <= 0:
+            return float("inf")
+        prefix, left, t = max(0, ctx - uncached), uncached, 0.0
+        qa = cb / 2
+        for _ in range(self.a.slo_chunk_max_steps):
+            qb = ca + cb * prefix
+            c = budget / qb if qa == 0 else (-qb + (qb * qb + 4 * qa * budget) ** 0.5) / (2 * qa)
+            c = max(1.0, min(float(self.a.chunk_tokens), c, float(left)))
+            t += d + ca * c + cb * c * (prefix + c / 2)
+            left -= c
+            prefix += c
+            if left <= 0:
+                return t
+        return float("inf")
 
     def residents_itl_ok(self, w, uncached, n_tok_self, tpot, now):
         """Would admitting this request push any request already decoding on w past its ITL SLO?
@@ -326,7 +358,7 @@ class Router:
         for r in w.inflight.values():
             if r["deadline"] > deadline and r["decode_left"] == r["decode_total"]:
                 t_r = now + (self.drain_ms(w, r["deadline"])
-                             + self.pm.prefill_ms(uncached, n_tok_self)) / 1000.0
+                             + self.loaded_prefill_ms(w, uncached, n_tok_self)) / 1000.0
                 if t_r > r["deadline"]:
                     self.last_reason = "queued_ttft"
                     return False, ttft, tpot
@@ -620,6 +652,10 @@ def main():
                     help="also reject a node if admitting the request would push a request already "
                          "decoding there past its ITL SLO")
     ap.add_argument("--chunk-tokens", type=int, default=2048, help="workers' --chunked-prefill-size")
+    ap.add_argument("--slo-chunk", default="",
+                    help="'itl_ms:a:b': workers run apply_edf_itl_slo_chunk.py; predict prefill under their decode load")
+    ap.add_argument("--slo-chunk-max-steps", type=int, default=20000,
+                    help="steps after which a loaded prefill counts as infeasible (infinite TTFT)")
     ap.add_argument("--chunk-interference", type=float, default=1.0,
                     help="added decode-step time per prefill chunk / the chunk's cold prefill time (calibrated)")
     ap.add_argument("--ttft-quantile", type=float, default=0.0,

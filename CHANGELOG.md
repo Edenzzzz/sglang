@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.89 — Router: prefill time under the node's decode load (2026-10-19)
+
+- `router.py --slo-chunk itl_ms:a:b`: when workers serve running decodes first (`apply_edf_itl_slo_chunk.py`), a
+  node's prefill rate is what the ITL budget leaves after its decode step; TTFT and queue drain are walked chunk by
+  chunk under that load, and a node whose decodes fill the budget predicts infinite TTFT, so the SLO check routes away.
+
 ## v1.20.88 — SLO-sized prefill chunk (2026-10-19)
 
 - `apply_edf_itl_slo_chunk.py`: largest chunk keeping running decodes within their ITL SLO (step model base + a*c +

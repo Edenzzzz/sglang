@@ -20,6 +20,18 @@ if [ "${WORKLOAD:-}" = fanout ]; then
     --append-len ${FO_APPEND:-1024} --output-len ${FO_OUT:-128} --tool-gap-s ${FO_GAP:-5} --zipf ${FO_ZIPF:-1.2} \
     --rotate-s ${FO_ROTATE:-180} --duration ${FO_DURATION:-900} --out $OUT/fanout.json \
     ${FO_TEXT:+--text-source $W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json} > $OUT/bench_fanout.log 2>&1 &
+  FO_BASE=$!
+  # FO_SPIKE="delay_s:conc:duration_s" (5e mixture shift): a second fan-out driver on the same task prefixes (own seed,
+  # so its appends and task draws differ) adds `conc` programs `delay_s` after its prefixes are built, for duration_s.
+  if [ -n "${FO_SPIKE:-}" ]; then
+    IFS=: read -r FS_DELAY FS_CONC FS_DUR <<< "$FO_SPIKE"
+    BENCH_BARRIER_DIR= $W/venv/bin/python $W/drivers/serving/fanout_agents.py --url http://127.0.0.1:$RPORT \
+      --tasks ${FO_TASKS:-8} --prefix-len ${FO_PREFIX:-65536} --concurrency $FS_CONC --rounds ${FO_ROUNDS:-4} \
+      --append-len ${FO_APPEND:-1024} --output-len ${FO_OUT:-128} --tool-gap-s ${FO_GAP:-5} --zipf ${FO_ZIPF:-1.2} \
+      --rotate-s ${FO_ROTATE:-180} --duration $FS_DUR --start-delay $FS_DELAY --seed 7 --out $OUT/fanout_spike.json \
+      ${FO_TEXT:+--text-source $W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json} > $OUT/bench_fanout_spike.log 2>&1 &
+    FO_SP=$!
+  fi
 elif [ -n "${AGENT_CONC:-}" ]; then
   # Program concurrency (ThunderAgent protocol; the only agent load axis -- user, 2026-10-15): AGENT_CONC
   # sessions kept active, the next starts when one finishes, rounds back to back. Same TraceLab
@@ -77,5 +89,5 @@ if [ -n "${CHAT_SPIKE:-}" ]; then
       --output-file $OUT/chat_spike.json --output-details --disable-tqdm ) > $OUT/bench_chat_spike.log 2>&1 &
   S=$!
 fi
-wait $A $C $S
+wait $A $C $S ${FO_BASE:-} ${FO_SP:-}
 echo MNBENCHDONE

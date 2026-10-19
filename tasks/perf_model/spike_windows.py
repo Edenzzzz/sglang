@@ -3,7 +3,8 @@
 Agents (fanout.json, per-request start times from the release barrier): attainment (TTFT <= 10 s and per-request TPOT
 <= 80 ms) and goodput in three windows -- before the spike, during it, after it -- plus the 60 s right after it starts
 (how fast the schedule absorbs the step). Chat: the base stream over the whole run and the spike stream (which only
-exists during the spike), attainment at TTFT <= 0.5 s and TPOT <= 20 ms.
+exists during the spike), attainment at TTFT <= 0.5 s and TPOT <= 20 ms. With a second fan-out driver (FO_SPIKE, mixture
+shift), its own agents' attainment over its run.
   python spike_windows.py --spike 300:240 DIR [DIR ...]
 Claude, 2026-10-20.
 """
@@ -56,7 +57,13 @@ def main():
         try:
             print("  chat   spike " + chat(f"{d}/chat_spike.json"))
         except FileNotFoundError:
-            print("  chat   spike missing")
+            print("  chat   spike none")
+        try:
+            # Second fan-out driver (FO_SPIKE): its records start at its own t0, which follows its start delay.
+            f = json.load(open(f"{d}/fanout_spike.json"))
+            print("  agent  spike-driver " + agent_windows(f"{d}/fanout_spike.json", 0.0, f["wall_s"])[1])
+        except FileNotFoundError:
+            pass
 
 
 if __name__ == "__main__":

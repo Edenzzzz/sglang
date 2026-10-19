@@ -68,6 +68,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--text-source", default="", help="ShareGPT json: natural-text prefixes / appends (else random ids)")
     ap.add_argument("--tokenizer", default="/dev/shm/w/qwen7b")
+    ap.add_argument("--start-delay", type=float, default=0.0,
+                    help="seconds to wait after the prefixes are built before starting programs (mid-run load shift)")
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
@@ -92,6 +94,8 @@ def main():
     if barrier:
         os.makedirs(barrier, exist_ok=True)
         open(os.path.join(barrier, "ready_fanout"), "w").close()
+    if a.start_delay > 0:
+        time.sleep(a.start_delay)
     weights = np.array([1.0 / (i + 1) ** a.zipf for i in range(a.tasks)])
     weights /= weights.sum()
     t_start = time.perf_counter()

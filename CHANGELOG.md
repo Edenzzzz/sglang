@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.21.3 — Mixture-shift harness; single-node slack arms (2026-10-20)
+
+- `fanout_agents.py --start-delay`; `mn_bench.sh FO_SPIKE=delay:conc:duration` adds a second fan-out driver on the same
+  task prefixes (own seed); both drivers' PIDs waited on. `spike_windows.py` scores the second driver.
+  `mn_shift_8gpu_20261020.sh` (agent load x2 for 240 s, ours vs disagg) running.
+- `h200_slack_20261020.sh`: per-row slack decode-first single-node (chat 20 ms / agents 80 ms), targeting chat
+  attainment vs prefill-prioritized stock; H200 tree rebuilt with the current patch.
+
 ## v1.21.2 — Load spike: ours absorbs a 3x chat spike (2026-10-20)
 
 - 8 H20s, two repeats: agent attainment 99-100% through the spike, spike-stream chat 88-91% (TTFT 0.13 s); PD disagg

@@ -1065,7 +1065,7 @@ static mixture.
       decode load should not matter for the pull itself. A real test needs (a) more than one copy of a hot prefix in
       the pool (replica count > 1 or per-node copies exported as sources) and (b) a reader that picks among copies
       (first / least-recently-used NIC / random) while the serving node stays fixed by the SLO check.
-      - [ ] **Point-4 test design (2026-10-19).** Source of a pull today: sglang's mooncake store writes every page with
+      - [x] **Point-4 test design (2026-10-19; measured below).** Source of a pull today: sglang's mooncake store writes every page with
         the default `ReplicateConfig` (`replica_num = 1`), and mooncake's client reads the first complete replica in
         the master's order (`FindFirstCompleteReplica`, `client_service.cpp`; no random or locality ranking). So
         there is exactly one source per page, and the "which holder" choice does not exist. Installed mooncake
@@ -1081,6 +1081,24 @@ static mixture.
         (c) workload: the fan-out with fast rotation on the narrowed fabric (`ONE_NIC=1`), where a new hot prefix is
             pulled by every node at once from a single segment -- the case where one source NIC's egress is shared;
         (d) metrics: per-pull bandwidth and its tail, TTFT in the first 30 s after each rotation, source spread.
+      - [x] **Point 4 measured as proposed: pull-source choice, serving node fixed (2026-10-19, 8 H20s, `ONE_NIC=1`, hot
+        set rotating every 45 s, natural-text fan-out, adaptive ITL SLO K = 2.5; all arms 0 tracebacks / 0 fallbacks;
+        single repeats).** Copies were made and read: e.g. `random`, per worker, 25-45% of reads from other workers' copies;
+        `first`, almost none (the original key covers the range, so first = original). Per-page read latency is the same on every
+        source, 0.011-0.019 ms (one 0.057 outlier), so no source is congested even on one NIC.
+        | KV_COPY | agent goodput 10 s + 80 ms | chat attainment 0.5 s + 20 ms | agent tput / TTFT / ITL | chat TTFT / ITL |
+        |---|---|---|---|---|
+        | off (one source per page) | **531 tok/s** | **91.1%** | 543.7 / 0.75 s / 13.4 ms | 346 ms / 10.4 ms |
+        | first | 492 | 88.8% | 514.3 / 0.89 s / 15.9 ms | 311 ms / 11.7 ms |
+        | random (point 4's rule) | 477 | 87.7% | 502.5 / 0.85 s / 16.9 ms | 409 ms / 12.6 ms |
+        | least_latency | 487 | 89.0% | 512.0 / 0.85 s / 16.4 ms | 321 ms / 11.6 ms |
+        (`off` reproduces the unpatched 10-19 run, 533 tok/s / 91.8%.) **Among sources, the choice is neutral** (first /
+        random / least_latency within 3%, random lowest). **Making copies costs 7-10% agent goodput**: re-exporting
+        every pulled page (25K-204K pages per worker) runs on the prefetch path. The rule's premise, a congested source,
+        does not exist at <= 16 H20s even with one NIC, consistent with the serving-node result. Point 4's congestion
+        argument therefore rests on scale beyond the GPU cap; within it, one source per page is best.
+        `bash tasks/pd_colocation/mn_kv_copy_source_20261019.sh` (patch `apply_kv_copy_source.py` on every pod's tree,
+        `KV_COPY` knob); scoring `tasks/perf_model/fanout_per_tenant.py`. sglang `881bbc492`.
       Original record: No congestion exists to relieve at 16 GPUs on 4
       hosts: random tie-break among near-equal hits is neutral, the L3 store moved ~236 GB without
       measurable contention, and disagg's 8 prefill GPUs replicate 4 hot prefixes to 82% hit. The

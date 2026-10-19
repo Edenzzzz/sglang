@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.86 — Point 4 measured as proposed: pull-source choice neutral (2026-10-19)
+
+- 8 H20s, one NIC, 45 s rotation: off 531 tok/s agent goodput, first 492, random 477, least_latency 487. Per-page
+  latency equal across sources (0.011-0.019 ms); copies cost 7-10%; one source per page stays the default.
+
 ## v1.20.85 — KV pull-source choice among per-worker copies (2026-10-19)
 
 - `apply_kv_copy_source.py`: pulled prefixes are re-exported as per-worker copies on the puller's segment; a pull

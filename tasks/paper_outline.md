@@ -8,7 +8,8 @@ command and commit) or marked as missing. Priority order of the remaining gaps:
    `dadf94f0e1da7238` is provisioning (2026-10-19); the previous trial's per-request records were lost with its pod.
 2. [ ] 5e: mid-run mixture shift / load spike, measured through the transition (`pd_colocation_vs_disagg.md` 5e).
    This is the flexibility claim's main evidence and it has not been run.
-3. [ ] Point 4 as actually proposed: pull-source choice among KV copies, serving node fixed (correction 2026-10-19).
+3. [x] 2026-10-19 Point 4 as proposed (pull-source choice among per-worker copies, serving node fixed): neutral
+   among sources (within 3%), copies cost 7-10% goodput; no congested source at <= 16 H20s even on one NIC.
 4. [ ] Mixed-chunk tile waste / padding measured against stock (the draft's "up to 40%" in 3.4 is not backed yet).
 5. [ ] Second model (larger dense or MoE). Every result so far is Qwen2.5-7B-Instruct + EAGLE3.
 6. [ ] semi-PD baseline (sglang v0.4.4.post1 fork); fault tolerance stays optional.
@@ -64,8 +65,8 @@ re-balances per step instead of re-provisioning.
     misses on TTFT.
   - [x] 2026-10-18 scaling 2 -> 4 pods: prefill hit 0.34 -> 0.39 (ours) vs 0.125 -> 0.055 (disagg) -- more prefill nodes
     dilute each prefix.
-  - [ ] Point 4 (two-way RDMA, pull-source choice): untested as proposed, see the correction in
-    `pd_colocation_vs_disagg.md`.
+  - [x] 2026-10-19 Point 4 (pull-source choice): neutral at <= 16 H20s; per-page latency equal across sources. State it
+    as a scale argument, not a measured gain.
 
 ## Section-by-section against the draft
 

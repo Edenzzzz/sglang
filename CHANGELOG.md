@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.83 — Per-tenant fan-out scoring (2026-10-19)
+
+- `fanout_per_tenant.py`: chat SLO attainment 91-96% (ours) vs 25-33% (disagg) heavy, 97-99% vs 43-54% light;
+  agent goodput 3.0-7.1x. Mean chat ITL is worse, per-request chat TPOT stays under 20 ms for >= 90%.
+
 ## v1.20.82 — FA3 prefill-chunk splits: negative, no lever (2026-10-19)
 
 - Forced num_splits / pack_gqa within +-2% of auto at 4K-120K depth; the mixed step is attention-FLOP-bound

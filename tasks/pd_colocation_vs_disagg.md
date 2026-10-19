@@ -246,6 +246,26 @@ static mixture.
         96.8% / 270, disagg no spec 65.8% / 85 and 79.7% / 102. **Ours delivers 3.2-5.3x disagg's agent goodput**
         (3.4x even at a 30 ms TPOT SLO): disagg's per-token decode is faster, but its two prefill pods make half its
         requests miss the TTFT deadline. Per-token TPOT is the one metric where disagg leads (decode isolation).
+      - [x] **2026-10-19 per-tenant scoring: chat on SLO attainment (TTFT + per-request TPOT), agents on SLO goodput.**
+        Same saved records, re-scored by `tasks/perf_model/fanout_per_tenant.py` (per-request TPOT = sum(itls) /
+        (output_len - 1), so MTP arms count tokens, not stream chunks). Chat attainment at 0.5 s + 20 ms / 1 s + 30 ms /
+        2 s + 50 ms, agent goodput at 10 s + 80 ms / 20 s + 30 ms:
+        | arm (8 H20, text fan-out) | chat attainment | chat TPOT p50 / p90 ms | agent goodput tok/s |
+        |---|---|---|---|
+        | heavy, ours no MTP (ITL SLO auto 2.5) | **91.3 / 94.3 / 95.9%** | 7.0 / 13.4 | **546 / 544** |
+        | heavy, ours no MTP (ITL SLO 20 ms) | 91.4 / 93.9 / 95.8% | 6.9 / 13.1 | 553 / 552 |
+        | heavy, ours + MTP | 91.0 / 94.5 / 96.3% | 4.9 / 15.9 | 429 / 288 |
+        | heavy, disagg 2P2D no spec (2 reps) | 24.5-25.2 / 27.5-28.6 / 31.9-32.7% | 5.3-5.5 / 7.5-9.0 | 79-86 / 100-111 |
+        | heavy, disagg 2P2D + MTP | 27.6 / 29.2 / 30.6% | 8.9 / 176 | 15 / 15 |
+        | light, ours no MTP (auto 2.5) | **96.8 / 97.8 / 98.6%** | 5.2 / 7.9 | **291 / 291** |
+        | light, ours + MTP | 98.3 / 99.1 / 99.5% | 4.1 / 6.9 | 240 / 202 |
+        | light, disagg 2P2D no spec (3 reps) | 43.1-44.6 / 47.0-48.6 / 51.3-53.7% | 5.4-5.5 / 7.2-7.5 | 81-85 / 96-102 |
+        | light, disagg 2P2D + MTP | 39.7 / 44.7 / 50.2% | 5.5 / 17.8 | 63 / 60 |
+        Chat's mean ITL is 1.3-1.9x disagg's, but at the per-request level ours keeps chat TPOT under 20 ms for >= 90% of
+        requests; disagg's chat requests miss on TTFT (they queue behind long fan-out prefills on its two prefill pods).
+        Per tenant, ours meets chat SLOs **3.0-3.7x as often (heavy) and 1.8-2.2x (light)** and delivers 3.0-7.1x the
+        agent goodput. Whether the bar is stated per tenant is the user's decision; this records the numbers. sglang
+        `e4cfed359`; runs as in the rows above.
       - [x] **Config correction (2026-10-19): every "ours, no MTP" arm above (`coloc_slo_edf_hc`) ran without its router
         arguments.** `mn_fanout_8gpu_20261018.sh` attached the calibrated SLO model, pool size and transfer term only to
         the exact arm name `coloc_slo_edf_mtp_hc`, so the no-MTP arms routed with `router.py`'s default calibration and

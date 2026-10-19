@@ -150,6 +150,9 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   [ -n "${DEADLINE_CHUNK:-}" ] && export SGLANG_EDF_DEADLINE_CHUNK=$DEADLINE_CHUNK
   # STEP_BUDGET="budget_ms:a:b": cap that chunk to a predicted mixed-step time over its prefix (apply_edf_step_budget.py).
   [ -n "${STEP_BUDGET:-}" ] && export SGLANG_EDF_STEP_BUDGET=$STEP_BUDGET
+  # ITL_SLO="slo_ms:tokens_per_step:base_ms:a:b:min_chunk": largest chunk keeping running decodes within their ITL SLO,
+  # unless the prefill is past its TTFT deadline (apply_edf_itl_slo_chunk.py).
+  [ -n "${ITL_SLO:-}" ] && export SGLANG_EDF_ITL_SLO=$ITL_SLO
   # STEP_TRACE=1: one STEPTRACE line per forward (GPU time + host launch time; tasks/perf_model fitters).
   [ "${STEP_TRACE:-0}" = 1 ] && export SGLANG_STEP_TRACE=1
   # TTFT_SCALE_MS: EDF deadline slope, ms per SGLANG_TTFT_SCALE_TOKENS (5000) prompt tokens past 4096 (default 1000).

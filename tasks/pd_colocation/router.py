@@ -368,6 +368,16 @@ class Router:
                                           len(self.workers[j].inflight), random.random()))
         if pol == "cache_rand":
             return order[0], {"hit": hits[order[0]] * blk}
+        if self.a.drain_frac > 0:
+            # Time-based draining: a rotating window of round(drain_frac * N) workers takes no new requests for
+            # --drain-period-s, so it decodes what it holds with no prefill beside it, then rejoins while the next
+            # window drains. Drained workers go to the end of the order; the SLO check still uses them when no open
+            # worker can take a request. Decode isolation by time, on colocated nodes, without fixed roles.
+            n = len(self.workers)
+            k = max(1, round(self.a.drain_frac * n))
+            phase = int(now // self.a.drain_period_s)
+            drained = {(phase * k + d) % n for d in range(k)}
+            order = sorted(order, key=lambda j: 1 if j in drained else 0)
         if self.a.long_prefill_pool > 0:
             # Soft node roles. A request is classed once, by its best cache hit: a cold long prefill (uncached on the
             # best holder > --long-prefill-tokens) tries the first --long-prefill-pool workers first; a short request
@@ -598,6 +608,9 @@ def main():
     ap.add_argument("--itl-slo-auto", type=float, default=0.0,
                     help="> 0: ITL SLO = this x the observed per-token decode time (EWMA), see itl_slo()")
     ap.add_argument("--itl-slo-floor-ms", type=float, default=10.0)
+    ap.add_argument("--drain-frac", type=float, default=0.0,
+                    help="> 0: this fraction of workers takes no new requests in rotating windows (see choose)")
+    ap.add_argument("--drain-period-s", type=float, default=20.0)
     ap.add_argument("--long-prefill-pool", type=int, default=0,
                     help="> 0: long uncached prefills prefer workers [0, N), short ones the rest (see choose)")
     ap.add_argument("--long-prefill-tokens", type=int, default=16384)

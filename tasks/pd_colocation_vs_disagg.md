@@ -277,7 +277,8 @@ static mixture.
         (`ITL_SLO=...:measured:slack:cls24000_80`, router per class; `mn_slo_slack_8gpu_20261020.sh`).
         Measured rep 2: 381.7 / 3.04 s / 17.4 ms ; 1.01 s / 12.0 ms (p99 53). **Per-row slack rep 1 is worse still:**
         142.9 / 16.25 s / 26.1 ms ; chat 23.53 s (p99 214 s) / 18.0 ms (p99 58), 4 errors, 0 tracebacks. Caps were live
-        (108-203 tokens at 66-69K depth where rows had slack, 2-19 where they had none), but the measured decode step
+        (108-203 tokens at 66-69K depth where rows had slack, 2-19 where they had none); rep 2 (146.8 / 17.58 s /
+        27.7 ms ; chat 12.92 s, p99 104 s / 18.0 ms, 1 error) reproduces it. The measured decode step
         (~20 ms) sits at the chat SLO, so chat rows never bank slack and any row slightly behind drives the budget
         negative -- no prefill on that node at all. **Conclusion (H20, this fan-out load): no strict decode-first policy
         can hold chat at 20 ms TPOT beside long-context agent decodes without starving prefill; every variant lowers

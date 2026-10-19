@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.20.90 — Baselines delineated by SLO control; 4-mode step-model fitter (2026-10-19)
+
+- Baselines table: single node without SLO control vs prefill-prioritized and mixed chunk (required), with SLO control
+  vs pdmux (nice to have); multi-node with SLO control vs PD disagg / semi-PD (the main claim). `MIXED_CHUNK=0` knob,
+  `stock_pp` / `stock_mtp_pp` arms.
+- `fit_4mode_step.py`: lin5 (pdmux form), lin7, lin4mode (draft / verify terms), overlap max+beta*min, MLP, GBT;
+  held-out MAPE per step kind, pooled across speculative configs. Synthetic check reaches the 2.5% noise floor.
+- `h200_pp_and_trace_20261019.sh` queued: prefill-prioritized arms, STEPTRACE runs at two loads and two MTP configs.
+
 ## v1.20.89 — Router: prefill time under the node's decode load (2026-10-19)
 
 - `router.py --slo-chunk itl_ms:a:b`: when workers serve running decodes first (`apply_edf_itl_slo_chunk.py`), a

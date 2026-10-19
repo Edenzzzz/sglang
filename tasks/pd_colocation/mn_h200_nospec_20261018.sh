@@ -17,6 +17,8 @@ for arm in ${ARMS:-stock stock_mtp pdmux ours ours_ovl ours_mtp}; do
   case $arm in
     stock) KERNEL=lpt PREEMPT=0 RUN_TAG=_h200_c8$T python3 -u mn_run.py coloc_sgl ;;
     stock_mtp) KERNEL=lpt PREEMPT=0 RUN_TAG=_h200_c8$T python3 -u mn_run.py coloc_sgl_mtps ;;
+    stock_pp) MIXED_CHUNK=0 KERNEL=lpt PREEMPT=0 RUN_TAG=_h200_pp_c8$T python3 -u mn_run.py coloc_sgl ;;
+    stock_mtp_pp) MIXED_CHUNK=0 KERNEL=lpt PREEMPT=0 RUN_TAG=_h200_pp_c8$T python3 -u mn_run.py coloc_sgl_mtps ;;
     pdmux) KERNEL=lpt PREEMPT=0 PDMUX_DIV=36 MEM_FRAC=${PDMUX_MEM_FRAC:-0.78} RUN_TAG=_h200_c8$T python3 -u mn_run.py coloc_sgl_pdmux ;;
     ours) KERNEL=mtpsplit PREEMPT=1 CHUNK=${CHUNK:-2048} EDF_UNCACHED=1 DEADLINE_CHUNK=${DEADLINE_CHUNK:-1024:2048:6000} \
           RUN_TAG=_h200_split_ch${CHUNK:-2048}_c8$T python3 -u mn_run.py coloc_cache_edf ;;

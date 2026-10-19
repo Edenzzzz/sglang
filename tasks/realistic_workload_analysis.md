@@ -31,32 +31,28 @@ where it wins end to end, including SLO control with the analytic cost model.
 
 ## Baselines
 
-Which systems each result is judged against (user, 2026-10-18). The bar is >= 30% TTFT and ITL and >= 10% throughput
-on realistic mixed workloads (chat + TraceLab), measured against these, same session, same workload.
+Which systems each result is judged against (user, 2026-10-18; delineated by SLO control 2026-10-19). The bar is
+>= 30% on TTFT and ITL, or on their SLO attainment rates, and >= 10% throughput on realistic mixed workloads (chat +
+TraceLab), same session, same workload. "SLO control" = the decode-first worker rule (every step admits only the
+prefill that keeps running decodes within their ITL SLO, no exception; `apply_edf_itl_slo_chunk.py`) and, multi-node,
+the router predicting each node's TTFT / ITL from its load and routing to the highest-hit node that stays within SLO.
 
-- **Single node** -- demonstrates kernel fusion and schedule efficiency with the mixed tile dispatch:
-  - [ ] **Stock chunked prefill + mixed chunk, default attention kernel, no speculation** (sglang `--enable-mixed-chunk`
-    with its flashinfer backend): the baseline for ours without MTP. That arm shows what fine-grained mixed-tile
-    dispatch (FA3 prefill tiles + FA2 decode tiles, chosen per work item), FA2 overlapped with FA3, and EDF-driven
-    chunk-size admission buy over the original mixed chunk / chunked prefill: higher compute utilisation (a long prompt
-    is not re-launched chunk after chunk with decode rows padded into prefill tiles) without the default mixed
-    chunk's head-of-line blocking and tile waste. Arms: split sequential (`SPLIT_OVERLAP=0`) and split with FA2
-    overlapped on a side stream (`SPLIT_OVERLAP=1`).
-  - [ ] **Stock chunked prefill + MTP** (EAGLE3, no 4-mode step), for ours with MTP (4-mode step). MTP is required, not
-    optional: almost every model ships an MTP head, and PD disaggregation runs MTP on its decode nodes to raise their
-    compute utilisation -- which would undercut our claim that colocation maximises compute utilisation and serving
-    capacity. So the schedule must be shown compatible with MTP and efficient with it: ours + MTP vs stock + MTP here,
-    and vs PD disaggregation with MTP on its decode nodes multi-node.
-  - [ ] **PD multiplexing** (MuxWise, arXiv:2504.14489 = sglang `--enable-pdmux`, GreenContext SM groups,
-    layer-split prefill). It runs without the CPU-GPU overlap scheduler and captures one CUDA-graph set per SM group;
-    the 4-mode step keeps the overlap scheduler and one graph set. Earlier pdmux runs are in
-    `debug_kernel_server_perf_4_mode.md` (Direct baselines).
-    Stock pdmux uses sglang's default `decode_bs_divisor` (36); our tuned 30 is not a stock setting.
-- **Multi-node** (H20 only, <= 16 GPUs, trial `vibecuda`):
-  - [ ] **PD disaggregation** (sglang prefill / decode roles, mooncake transfer), with and without MTP on its decode
-    nodes, vs our colocated symmetric nodes with and without MTP.
-  - [ ] **semi-PD-style systems with an sglang implementation**: semi-PD (arXiv:2504.19867, fork of sglang
-    v0.4.4.post1); others added if they ship sglang code. NVIDIA Dynamo conditional disaggregation is optional.
+| setting | our arm | baselines | what it shows | priority |
+|---|---|---|---|---|
+| single node, no SLO control | fused split (FA3 prefill tiles + FA2 decode tiles, FA2 overlapped), EDF order + deadline chunk; without MTP and with MTP (4-mode step) | sglang **prefill-prioritized** chunked prefill (default, no mixed chunk) and sglang **mixed chunk**, default kernel; each without spec and with MTP | kernel fusion + schedule efficiency: no re-launched chunks, no decode rows padded into prefill tiles, no head-of-line blocking | required |
+| single node, SLO control | the same + decode-first rule | **pdmux** (stock `decode_bs_divisor` 36; its SM split is its own SLO mechanism) | ours meets decode SLOs with one CUDA-graph set and the CPU-GPU overlap scheduler, which pdmux lacks | nice to have |
+| multi-node, SLO control | symmetric colocated nodes, decode-first workers, load-aware SLO-checked hit-first router, cluster KV pool; without and with MTP | **PD disaggregation** (sglang prefill / decode roles, mooncake) without and with MTP on decode nodes; **semi-PD**-style systems with an sglang implementation | higher capacity than disaggregation (request rate at a fixed SLO attainment target) while sticking to the SLOs | required (the main claim) |
+
+- Model and data: Qwen2.5-7B-Instruct + EAGLE3 head; FP8 is out of scope. Agent load is program concurrency, chat by
+  request rate.
+- MTP is required, not optional: almost every model ships an MTP head, and disaggregation runs MTP on its decode nodes
+  to raise their compute utilisation -- which would undercut the claim that colocation maximises compute utilisation
+  and serving capacity. Every setting is run with and without MTP against the matching baseline.
+- pdmux is a baseline only: it runs without the CPU-GPU overlap scheduler and captures one CUDA-graph set per SM group.
+- [ ] Prefill-prioritized arm (sglang default, no `--enable-mixed-chunk`): not yet run on H200; the stock arms so far
+  are mixed chunk (`coloc_sgl`, `coloc_sgl_mtps`).
+- [ ] Single-node SLO-control arm vs pdmux; multi-node SLO-control arms vs disagg / semi-PD with the fitted 4-mode step
+  model and node-reported load (`server_perf_model.md`).
 - [x] **Single-node A/B, H200 `d6a80befdd4e4da5`, 2026-10-18 (same session; agent C=8 frozen 32-64K TraceLab x 2 rounds
   + ShareGPT 8 req/s; one worker; all six arms 0 tracebacks / 0 fallbacks; split arms >= 65.5K split calls,
   overlapped arm `overlapped=71501` = every split; chat throughput = offered load in every arm).** Agent tput tok/s /

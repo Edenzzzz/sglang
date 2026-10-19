@@ -57,22 +57,25 @@ Our method aims to achieve an optimal pareto curve: high throughput, stable deco
 - [ ] Validate MLP predictions against actual server latency on representative workloads from `tasks/realistic_workload_analysis.md`
 - [x] Use trained models for SLO-aware chunk size control (integrated in `edf_scheduler.py` via `SGLANG_EDF_LATENCY_MODEL` env var)
 
-### 2026-10-12 fused-vs-unfused EDF check
-
-The checked-in MTP linear step model (`heldout_mape=21.9%`) was exercised with
-global acceptance EWMA on matched fused and unfused `loadsweep_min` arms. Both
-completed 601 mixed steps with zero fallbacks/tracebacks. Fused mean TTFT was
-2.9%/2.3% lower for chat/codex, but mean ITL was 0.6%/0.7% higher and codex
-output throughput was 1.4% lower. This validates the comparison path, not the
-claim that fusion makes EDF easier or better; the broader MLP validation TODO
-remains open.
-
-The EDF predictor interface now accepts an `acceptance_length` argument. The
-online EWMA binding estimate is passed into chunk-budget predictions, while old
-MLP/analytic models remain compatible; `fit_mtp_step.py` also accepts optional
-`acc=<EWMA>` STEPTRACE fields and emits `c_acc` when present. This makes the
-requested acceptance-length feature explicit without treating the old
-21.9%-MAPE checkpoint as retrained evidence.
+- [ ] **Wire overlap_profiler into scheduler** [DEPRIORITIZED 2026-08: the
+  analytic model removed the chunk-control dependency on profiling; still
+  needed only to validate the router cost signal]: `ProfilingRunner` exists in `overlap_profiler.py` but is NOT integrated into the server. Options: (a) add `FlushCacheReqInput`-style special request type + API endpoint + handler in `scheduler.py`, (b) add `--run-profiler` flag to `launch_server` that runs profiling during scheduler init before entering event loop, (c) standalone script that creates `ModelRunner` directly (like tests). Option (b) is simplest. The profiler requires `--enable-piecewise-cuda-graph`.
+- [ ] **Fix profiler shape mismatch with persistent kernel**: Calling `/profile_seq_lens` on v3+PCG server crashes with `RuntimeError: output with shape [1] doesn't match the broadcast shape [389]`. The `ProfilingRunner.profile_one_seq_config` creates a ForwardBatch that's missing some fields the persistent kernel needs (possibly `extend_seq_lens` or `prefix_lens` tensor shapes). Need to debug the exact line and fix the ForwardBatch construction.
+- [x] **Profile with persistent v3 + CG + PCG (old)**: Profiler ran 22,837/25,444 configs (90%) before server crash. Data: `Qwen_Qwen3-8B_6b6dccb5_20260329_220215_profile.csv`. Trained MLP (`tasks/perf_model/model.pt`): 3.4% MAPE (now superseded)
+- [x] **Retrained LPT model** (commit 9544552f, 2026-04-06): Full 25,444 configs profiled with latest LPT kernel (static fallback + extra CG sizes). Data: `Qwen_Qwen3-8B_9544552f_20260406_005503_profile.csv`. Trained MLP (`tasks/perf_model/lpt_model.pt`):
+  - **MAPE: 2.4%**, MAE: 3.26ms, P90 error: 7.32ms
+  - Features: n_p, r_p, r_d, decode_bs, overlap
+  - Target range: 14.34ms to 1394.86ms
+  - Architecture: 3-layer MLP [128, 64, 32] with log1p target transform
+  - Training: 200 epochs, Adam lr=1e-3, cosine schedule
+  - Command: `python tasks/perf_model/train_perf_model_mlp.py --csv Qwen_Qwen3-8B_9544552f_20260406_005503_profile.csv --output tasks/perf_model/lpt_model.pt --epochs 200`
+- [x] **DMC model** (commit 9544552f, 2026-04-06): Full 25,241 configs profiled with DMC (no persistent). Data: `Qwen_Qwen3-8B_9544552f_20260405_185729_profile.csv`. Trained MLP (`tasks/perf_model/dmc_model.pt`):
+  - **MAPE: 2.3%**, MAE: 3.04ms, P90 error: 6.29ms
+  - Features: n_p, r_p, r_d, decode_bs, overlap
+  - Target range: 20.43ms to 1354.95ms
+  - Training: 200 epochs, command: `python tasks/perf_model/train_perf_model_mlp.py --csv Qwen_Qwen3-8B_9544552f_20260405_185729_profile.csv --output tasks/perf_model/dmc_model.pt --epochs 200`
+- [ ] Validate MLP predictions against actual server latency on representative workloads from `tasks/realistic_workload_analysis.md`
+- [x] Use trained models for SLO-aware chunk size control (integrated in `edf_scheduler.py` via `SGLANG_EDF_LATENCY_MODEL` env var)
 
 ### Production target and router integration audit (2026-07-23)
 
@@ -126,21 +129,3 @@ cost and the oldest timestamp so neither load nor staleness is understated.
 These fields are diagnostic only. Incremental request/queue cost must be
 validated before replacing request-count load inside the existing
 cache-imbalance guard.
-
-### 2026-10-12 fused-vs-unfused EDF check
-
-The checked-in MTP step model (`heldout_mape=21.9%`) was exercised with global
-acceptance EWMA on matched fused and unfused `loadsweep_min` arms. Both completed
-601 mixed steps with zero fallbacks/tracebacks. Fused mean TTFT was 2.9%/2.3%
-lower for chat/codex, but mean ITL was 0.6%/0.7% higher and codex output
-throughput was 1.4% lower. This validates the comparison path, not the claim
-that fusion makes EDF easier or better; the broader MLP validation TODO remains
-open.
-
-The EDF predictor interface now accepts `acceptance_length`; the online EWMA
-binding estimate is passed into chunk-budget predictions. `fit_mtp_step.py`
-accepts optional `acc=<EWMA>` STEPTRACE fields and emits `c_acc`, while old
-five-coefficient models remain compatible. Regression coverage is in
-`test/manual/benchmark/test_mtp_step_acceptance_model.py`.
-The scheduler's STEPTRACE records the current lifetime acceptance EWMA as
-`acc=...`, so new calibration runs can actually fit the added coefficient.

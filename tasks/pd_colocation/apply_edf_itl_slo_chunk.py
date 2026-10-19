@@ -17,6 +17,14 @@ waiting one. Applied after apply_edf_deadline_chunk.py.
   SGLANG_EDF_ITL_SLO="slo_ms:tokens_per_step:base_ms:a:b"            fixed decode-step base
   SGLANG_EDF_ITL_SLO="slo_ms:tokens_per_step:c0:c_bs:c_kv:a:b"       live base c0 + c_bs*rows + c_kv*KV/1e3 from the
                                                                      running batch (the router's step model)
+  a ":slack" suffix: the step budget is per running row instead of per step. The ITL SLO (and how attainment is
+                                  scored) is a request's mean TPOT, so a row that has decoded o tokens in E ms since
+                                  this rule first saw it decoding stays within SLO s after a step of x ms while
+                                  x <= s*(o + tokens_per_step) - E; the budget is the minimum over running rows. No row
+                                  is ever pushed past its SLO, but rows that ran fast lend their slack to prefill.
+                                  Per-class SLOs: a "cls<tokens>_<ms>" token (or SGLANG_EDF_ITL_SLO_CLASSES="tokens:ms")
+                                  gives rows whose prompt is at least `tokens` long the SLO `ms` (agents); shorter rows
+                                  get slo_ms (chat).
   a trailing ":measured" on either form: the decode base is this node's measured decode-step time (EWMA over the decode-step
                                   cadence sglang already accumulates in decode_moment_totals); the model base is used
                                   only until the first decode samples arrive. The grid-fit model over-predicted H20
@@ -50,10 +58,25 @@ NEW_CLAMP = (
 old = "        chunked_prefill_size = self._edf_deadline_chunk(running_batch, chunked_prefill_size)\n"
 new = old + "        chunked_prefill_size = self._edf_itl_slo_chunk(running_batch, chunked_prefill_size)\n"
 old2 = "    def _edf_deadline_chunk(self, running_batch, chunk_size):"
-new2 = '''    def _edf_measured_decode_ms(self):
+new2 = '''    def _edf_slack_step_ms(self, running_batch, slo_ms, tps):
+        """Longest step (ms) that keeps every running row within its mean-TPOT SLO."""
+        cls = [t[3:] for t in os.environ.get("SGLANG_EDF_ITL_SLO", "").split(":") if t.startswith("cls")]
+        classes = cls[0].replace("_", ":") if cls else os.environ.get("SGLANG_EDF_ITL_SLO_CLASSES", "")
+        long_tok, long_ms = (float(x) for x in classes.split(":")) if classes else (float("inf"), slo_ms)
+        now = time.monotonic()
+        step = float("inf")
+        for r in running_batch.reqs:
+            if getattr(r, "_edf_dec_t0", None) is None:
+                r._edf_dec_t0, r._edf_dec_o0 = now, len(r.output_ids)
+            s_r = long_ms if len(r.origin_input_ids) >= long_tok else slo_ms
+            o = len(r.output_ids) - r._edf_dec_o0
+            step = min(step, s_r * (o + tps) - (now - r._edf_dec_t0) * 1000.0)
+        return step
+
+    def _edf_measured_decode_ms(self):
         """EWMA of this node's measured decode-step time (ms) from the decode_moment_totals deltas since the last
         call; None unless SGLANG_EDF_ITL_SLO ends in ":measured" and a decode step has been timed."""
-        if not os.environ.get("SGLANG_EDF_ITL_SLO", "").endswith(":measured"):
+        if ":measured" not in os.environ.get("SGLANG_EDF_ITL_SLO", ""):
             return None
         totals = getattr(self, "decode_moment_totals", None)
         if not totals:
@@ -71,7 +94,7 @@ new2 = '''    def _edf_measured_decode_ms(self):
         spec = os.environ.get("SGLANG_EDF_ITL_SLO", "")
         if not spec or not chunk_size or running_batch is None or not running_batch.reqs:
             return chunk_size
-        vals = [float(x) for x in spec.split(":") if x != "measured"]
+        vals = [float(x) for x in spec.split(":") if x not in ("measured", "slack") and not x.startswith("cls")]
         if len(vals) == 7:
             slo_ms, tps, c0, c_bs, c_kv, a, b = vals
             reqs = running_batch.reqs
@@ -92,7 +115,7 @@ new2 = '''    def _edf_measured_decode_ms(self):
             r = min(waiting, key=lambda w: w.priority)
             prefix = getattr(r, "_edf_cached_len", 0)
         self.edf_itl_slo_calls = getattr(self, "edf_itl_slo_calls", 0) + 1
-        budget = slo_ms * tps - base_ms
+        budget = (self._edf_slack_step_ms(running_batch, slo_ms, tps) if ":slack" in spec else slo_ms * tps) - base_ms
         if budget <= 0:
             c = 0
         else:
@@ -121,6 +144,9 @@ MEASURED_OVERRIDE_NEW = MEASURED_OVERRIDE_OLD + (
     "        measured = self._edf_measured_decode_ms()\n"
     "        if measured is not None:\n"
     "            base_ms = measured\n")
+SLACK_BUDGET_OLD = "        budget = slo_ms * tps - base_ms\n"
+SLACK_BUDGET_NEW = ("        budget = (self._edf_slack_step_ms(running_batch, slo_ms, tps) if \":slack\" in spec else slo_ms * tps)"
+                    " - base_ms\n")
 ENV_FORM = 'if os.environ.get("SGLANG_EDF_ITL_SLO_MEASURED") != "1":'
 SUFFIX_FORM = 'if not os.environ.get("SGLANG_EDF_ITL_SLO", "").endswith(":measured"):'
 VALS_OLD = 'vals = [float(x) for x in spec.split(":")]'
@@ -129,6 +155,17 @@ if ENV_FORM in s:
     s = s.replace(ENV_FORM, SUFFIX_FORM).replace(VALS_OLD, VALS_NEW)
     open(p, "w").write(s)
     print("measured switch -> ':measured' suffix")
+if "def _edf_itl_slo_chunk" in s and "def _edf_slack_step_ms" not in s and "def _edf_measured_decode_ms" in s:
+    slack_helper = new2[: new2.index("    def _edf_measured_decode_ms(self):")]
+    assert s.count(SLACK_BUDGET_OLD) == 1
+    s = (s.replace("    def _edf_measured_decode_ms(self):\n", slack_helper + "    def _edf_measured_decode_ms(self):\n")
+         .replace(SLACK_BUDGET_OLD, SLACK_BUDGET_NEW)
+         .replace('if not os.environ.get("SGLANG_EDF_ITL_SLO", "").endswith(":measured"):',
+                  'if ":measured" not in os.environ.get("SGLANG_EDF_ITL_SLO", ""):')
+         .replace('vals = [float(x) for x in spec.split(":") if x != "measured"]',
+                  'vals = [float(x) for x in spec.split(":") if x not in ("measured", "slack") and not x.startswith("cls")]'))
+    open(p, "w").write(s)
+    print("slack mode added")
 if "def _edf_itl_slo_chunk" in s and "def _edf_measured_decode_ms" not in s:
     helper = new2[: new2.index("    def _edf_itl_slo_chunk(self, running_batch, chunk_size):")]
     assert s.count(MEASURED_HELPER_ANCHOR) == 1 and s.count(MEASURED_OVERRIDE_OLD) == 1

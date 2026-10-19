@@ -264,8 +264,17 @@ static mixture.
         **With the grid-fit decode model, SLO control loses to our own uncontrolled arm on everything but chat p99 ITL**:
         the model (fit on distinct-context calibration rows, 0.114 ms per KV-ktok) prices 4 rows at 68K depth at the whole
         20 ms budget while the same load measures ~12 ms ITL, so the rule capped prefill to ~10 tokens / step. It still
-        beats disagg on throughput (+34%) and TTFT (-50%, chat -75%). Next: the same arm with the measured decode-step
-        time (`ITL_SLO=...:measured`, LoadStat `decode_step_ms`; `mn_slo_measured_8gpu_20261020.sh`, running).
+        beats disagg on throughput (+34%) and TTFT (-50%, chat -75%).
+        Measured decode-step base (`ITL_SLO=...:measured`, LoadStat `decode_step_ms`, rep 1, clean): 305.7 / 5.38 s /
+        20.8 ms ; 4.14 s / 13.9 ms (p99 62) -- better than the grid model, still far behind no control. The measured
+        decode step is genuinely ~20 ms here (16 rows x ~68K KV ~ 63 GB read per step on H20), so a 20 ms per-step budget
+        leaves ~no prefill. **Per tenant (`fanout_per_tenant.py`, rep 2 / measured rep 1): chat attainment at 0.5 s + 20 ms
+        -- no control 91.4%, SLO control measured 65.1%, grid 50.3%, disagg 26.2%; agent goodput at 10 s + 80 ms -- 551 /
+        262 / 176 / 92 tok/s.** The per-step rule lowers attainment: chat TPOT p90 is already 13.6 ms without control, so
+        the ITL SLO was not binding, and capping every step to it costs TTFT (and raises TPOT p90 to 28 ms as requests
+        pile up). The SLO, and how attainment is scored, is a request's mean TPOT, so the next arm budgets per running
+        row: x <= s*(o + acc) - E (no row ever past its SLO; fast rows lend slack), chat 20 ms / agents 80 ms
+        (`ITL_SLO=...:measured:slack:cls24000_80`, router per class; `mn_slo_slack_8gpu_20261020.sh`, queued).
         sglang `079a8a6dc`.
       - [x] **2026-10-19 per-tenant scoring: chat on SLO attainment (TTFT + per-request TPOT), agents on SLO goodput.**
         Same saved records, re-scored by `tasks/perf_model/fanout_per_tenant.py` (per-request TPOT = sum(itls) /

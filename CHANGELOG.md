@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.98 — Per-row slack decode-first budget (2026-10-20)
+
+- Per-step decode-first lowered H20 fan-out attainment (chat 91% -> 65%, agent goodput 551 -> 262 tok/s): the SLO is
+  a request's mean TPOT and was not binding. `apply_edf_itl_slo_chunk.py` `:slack` mode budgets per running row
+  (x <= s*(o + acc) - E), per-class SLO via a `cls<tokens>_<ms>` token; unit-checked. Arms queued.
+
 ## v1.20.97 — Pooled MTP step-model fit (2026-10-20)
 
 - Closed-form 4-mode linear model: ours 12-13% vs stock MTP 24-27% on prefill-bearing steps; GBT ~3% on both.

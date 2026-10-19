@@ -255,7 +255,13 @@ class Router:
             n_rows = ld["rows"] + len(ahead) + len(recent) + 1
             kv = (ld["kv"] + sum(u + pf for u, pf in ahead) + sum(r.get("kv", 0) for r in recent)
                   + n_tok_self)
-            tpot = self.pm.tpot_ms(n_rows, kv, ld["acc"] if ld["acc"] != 1.0 else None)
+            acc = ld["acc"] if ld["acc"] != 1.0 else None
+            tpot = self.pm.tpot_ms(n_rows, kv, acc)
+            if ld.get("dms", 0.0) > 0 and ld["rows"] > 0:
+                # Anchor to the measured step: the model supplies only how the step grows from the rows decoding now
+                # to the rows this request would decode beside.
+                now_model = self.pm.tpot_ms(ld["rows"], ld["kv"], acc)
+                tpot = ld["dms"] / (ld["acc"] or 1.0) * tpot / max(now_model, 1e-6)
             return ttft, tpot
         rows = [r for r in w.inflight.values()
                 if r.get("t_first") is not None or r["deadline"] <= deadline]
@@ -305,7 +311,11 @@ class Router:
         if not n_rows:
             return self.pm.prefill_ms(uncached, ctx)
         itl_ms, ca, cb = (float(x) for x in self.a.slo_chunk.split(":"))
-        d = self.pm.tpot_ms(n_rows, kv_rows, acc if acc != 1.0 else None) * acc
+        ld = self.fresh_load(w)
+        # The node's measured decode-step time when it reports one (the workers' decode-first rule uses the same
+        # measurement), else the step model at its decode load.
+        d = (ld["dms"] if ld is not None and ld.get("dms", 0.0) > 0
+             else self.pm.tpot_ms(n_rows, kv_rows, acc if acc != 1.0 else None) * acc)
         budget = itl_ms * acc - d
         if budget <= 0:
             return float("inf")
@@ -662,7 +672,7 @@ class Router:
 
 
 # Positions in the LoadStat wire array (["LoadStat", ...fields], apply_load_stat_4mode.py appends 11-14).
-LS_DECODE_ROWS, LS_DECODE_KV, LS_ACCEPT, LS_QUEUE = 11, 12, 13, 14
+LS_DECODE_ROWS, LS_DECODE_KV, LS_ACCEPT, LS_QUEUE, LS_DECODE_STEP_MS = 11, 12, 13, 14, 15
 
 
 def subscribe_loads(router, endpoints):
@@ -693,7 +703,8 @@ def subscribe_loads(router, endpoints):
             now = time.time()
             router.workers[socks[s]].load = dict(
                 t=now, rows=int(v[LS_DECODE_ROWS]), kv=int(v[LS_DECODE_KV]), acc=float(v[LS_ACCEPT]) or 1.0,
-                queue=[(now + dl / 1000.0, int(u), int(pf)) for dl, u, pf in (v[LS_QUEUE] or [])])
+                queue=[(now + dl / 1000.0, int(u), int(pf)) for dl, u, pf in (v[LS_QUEUE] or [])],
+                dms=float(v[LS_DECODE_STEP_MS]) if len(v) > LS_DECODE_STEP_MS else 0.0)
 
 
 def main():

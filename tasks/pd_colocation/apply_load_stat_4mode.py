@@ -8,6 +8,8 @@ the existing positional fields (routers that decode the old prefix are unaffecte
   num_decode_rows     running decode / verify rows
   decode_kv_tokens    their total KV (prompt + output tokens)
   accept_len          speculative acceptance length (tokens per verify step), 1.0 without speculation
+  decode_step_ms      measured decode-step time, EWMA over the decode_moment_totals deltas between snapshots
+                      (0 until a decode step has been timed)
   prefill_queue       up to 64 [ms_to_deadline, uncached_tokens, prefix_tokens] entries, earliest deadline first:
                       the in-progress chunked request (its remaining tokens at its current depth) and the waiting
                       queue. Deadlines are EDF priorities (monotonic seconds) reported relative to now, since worker
@@ -116,3 +118,40 @@ patch("managers/scheduler_components/load_publisher.py", [
      "            return\n"
      "        if not is_kv_publisher_rank(kv_events_config):\n"),
 ], marker="SGLANG_LOAD_PUB_DIRECT")
+
+patch("managers/load_snapshot.py", [(
+    "    prefill_queue: Optional[list[list[float]]] = None\n",
+    "    prefill_queue: Optional[list[list[float]]] = None\n"
+    "    decode_step_ms: float = 0.0\n",
+)], marker="decode_step_ms")
+
+patch("managers/scheduler_components/load_inquirer.py", [
+    ("@dataclass(kw_only=True, slots=True, frozen=True)\nclass SchedulerLoadInquirer:\n",
+     "# Per-inquirer decode-step EWMA state (the dataclass is frozen): last (count, step_us) totals and the EWMA.\n"
+     "_DECODE_STEP_STATE: dict = {}\n\n\n"
+     "@dataclass(kw_only=True, slots=True, frozen=True)\nclass SchedulerLoadInquirer:\n"),
+    ("            prefill_queue=prefill_queue,\n",
+     "            prefill_queue=prefill_queue,\n"
+     "            decode_step_ms=self._decode_step_ms(),\n"),
+    ("    def get_loads(self) -> LoadSnapshot:\n",
+     "    def _decode_step_ms(self) -> float:\n"
+     "        tot = self.get_decode_moment_totals()\n"
+     "        st = _DECODE_STEP_STATE.setdefault(id(self), {\"last\": None, \"ewma\": 0.0})\n"
+     "        last = st[\"last\"]\n"
+     "        if last is not None and tot[0] > last[0]:\n"
+     "            ms = (tot[2] - last[1]) / (tot[0] - last[0]) / 1000.0\n"
+     "            st[\"ewma\"] = ms if st[\"ewma\"] == 0.0 else 0.8 * st[\"ewma\"] + 0.2 * ms\n"
+     "        st[\"last\"] = (tot[0], tot[2])\n"
+     "        return round(st[\"ewma\"], 3)\n\n"
+     "    def get_loads(self) -> LoadSnapshot:\n"),
+], marker="_decode_step_ms")
+
+patch("managers/scheduler_components/load_publisher.py", [
+    ("    prefill_queue: Optional[list] = None  # [ms_to_deadline, uncached, prefix], earliest first\n",
+     "    prefill_queue: Optional[list] = None  # [ms_to_deadline, uncached, prefix], earliest first\n"
+     "    decode_step_ms: float = 0.0  # Measured decode-step time, EWMA\n"),
+    ("                load.prefill_queue,\n            )\n",
+     "                load.prefill_queue,\n                load.decode_step_ms,\n            )\n"),
+    ("                    prefill_queue=counts[12],\n",
+     "                    prefill_queue=counts[12],\n                    decode_step_ms=counts[13],\n"),
+], marker="decode_step_ms")

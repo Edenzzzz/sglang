@@ -17,6 +17,10 @@ waiting one. Applied after apply_edf_deadline_chunk.py.
   SGLANG_EDF_ITL_SLO="slo_ms:tokens_per_step:base_ms:a:b"            fixed decode-step base
   SGLANG_EDF_ITL_SLO="slo_ms:tokens_per_step:c0:c_bs:c_kv:a:b"       live base c0 + c_bs*rows + c_kv*KV/1e3 from the
                                                                      running batch (the router's step model)
+  a trailing ":measured" on either form: the decode base is this node's measured decode-step time (EWMA over the decode-step
+                                  cadence sglang already accumulates in decode_moment_totals); the model base is used
+                                  only until the first decode samples arrive. The grid-fit model over-predicted H20
+                                  fan-out decode steps ~2-3x (shared-prefix rows), capping prefill to ~10 tokens.
   python apply_edf_itl_slo_chunk.py <tree>/python/sglang/srt
 Logs `EDF_ITL_SLO calls= capped= prefix= chunk=a->b` every 500 calls and on every 100th cap.
 Claude, 2026-10-19.
@@ -43,24 +47,31 @@ NEW_CLAMP = (
     "            # num_mixed_decode_tokens), so the prefill share is what is left: add the rows back so prefill gets c.\n"
     "            out += rows\n"
 )
-if "def _edf_itl_slo_chunk" in s:
-    if NEW_CLAMP in s:
-        print("already")
-    else:
-        old = [o for o in OLD_CLAMPS if s.count(o) == 1 and s.count(NEW_CLAMP) == 0]
-        assert old, "no known clamp to upgrade"
-        open(p, "w").write(s.replace(old[-1], NEW_CLAMP))
-        print("upgraded")
-    sys.exit(0)
 old = "        chunked_prefill_size = self._edf_deadline_chunk(running_batch, chunked_prefill_size)\n"
 new = old + "        chunked_prefill_size = self._edf_itl_slo_chunk(running_batch, chunked_prefill_size)\n"
 old2 = "    def _edf_deadline_chunk(self, running_batch, chunk_size):"
-new2 = '''    def _edf_itl_slo_chunk(self, running_batch, chunk_size):
+new2 = '''    def _edf_measured_decode_ms(self):
+        """EWMA of this node's measured decode-step time (ms) from the decode_moment_totals deltas since the last
+        call; None unless SGLANG_EDF_ITL_SLO ends in ":measured" and a decode step has been timed."""
+        if not os.environ.get("SGLANG_EDF_ITL_SLO", "").endswith(":measured"):
+            return None
+        totals = getattr(self, "decode_moment_totals", None)
+        if not totals:
+            return None
+        last = getattr(self, "_edf_dm_last", None)
+        self._edf_dm_last = (totals[0], totals[2])
+        if last is not None and totals[0] > last[0]:
+            step_ms = (totals[2] - last[1]) / (totals[0] - last[0]) / 1000.0
+            prev = getattr(self, "_edf_dm_ewma", None)
+            self._edf_dm_ewma = step_ms if prev is None else 0.8 * prev + 0.2 * step_ms
+        return getattr(self, "_edf_dm_ewma", None)
+
+    def _edf_itl_slo_chunk(self, running_batch, chunk_size):
         """Largest chunk whose predicted step keeps the running decodes within their ITL SLO."""
         spec = os.environ.get("SGLANG_EDF_ITL_SLO", "")
         if not spec or not chunk_size or running_batch is None or not running_batch.reqs:
             return chunk_size
-        vals = [float(x) for x in spec.split(":")]
+        vals = [float(x) for x in spec.split(":") if x != "measured"]
         if len(vals) == 7:
             slo_ms, tps, c0, c_bs, c_kv, a, b = vals
             reqs = running_batch.reqs
@@ -68,6 +79,9 @@ new2 = '''    def _edf_itl_slo_chunk(self, running_batch, chunk_size):
                 len(q.origin_input_ids) + len(q.output_ids) for q in reqs) / 1e3
         else:
             slo_ms, tps, base_ms, a, b = vals
+        measured = self._edf_measured_decode_ms()
+        if measured is not None:
+            base_ms = measured
         if self.chunked_req is not None:
             r = self.chunked_req
             prefix = max(r.prefix_len, r.kv.kv_committed_len if getattr(r, "kv", None) is not None else 0)
@@ -101,6 +115,36 @@ new2 = '''    def _edf_itl_slo_chunk(self, running_batch, chunk_size):
         return out
 
 ''' + old2
+MEASURED_HELPER_ANCHOR = "    def _edf_itl_slo_chunk(self, running_batch, chunk_size):\n"
+MEASURED_OVERRIDE_OLD = "        else:\n            slo_ms, tps, base_ms, a, b = vals\n"
+MEASURED_OVERRIDE_NEW = MEASURED_OVERRIDE_OLD + (
+    "        measured = self._edf_measured_decode_ms()\n"
+    "        if measured is not None:\n"
+    "            base_ms = measured\n")
+ENV_FORM = 'if os.environ.get("SGLANG_EDF_ITL_SLO_MEASURED") != "1":'
+SUFFIX_FORM = 'if not os.environ.get("SGLANG_EDF_ITL_SLO", "").endswith(":measured"):'
+VALS_OLD = 'vals = [float(x) for x in spec.split(":")]'
+VALS_NEW = 'vals = [float(x) for x in spec.split(":") if x != "measured"]'
+if ENV_FORM in s:
+    s = s.replace(ENV_FORM, SUFFIX_FORM).replace(VALS_OLD, VALS_NEW)
+    open(p, "w").write(s)
+    print("measured switch -> ':measured' suffix")
+if "def _edf_itl_slo_chunk" in s and "def _edf_measured_decode_ms" not in s:
+    helper = new2[: new2.index("    def _edf_itl_slo_chunk(self, running_batch, chunk_size):")]
+    assert s.count(MEASURED_HELPER_ANCHOR) == 1 and s.count(MEASURED_OVERRIDE_OLD) == 1
+    s = s.replace(MEASURED_HELPER_ANCHOR, helper + MEASURED_HELPER_ANCHOR).replace(
+        MEASURED_OVERRIDE_OLD, MEASURED_OVERRIDE_NEW)
+    open(p, "w").write(s)
+    print("measured base added")
+if "def _edf_itl_slo_chunk" in s:
+    if NEW_CLAMP in s:
+        print("already")
+    else:
+        old = [o for o in OLD_CLAMPS if s.count(o) == 1 and s.count(NEW_CLAMP) == 0]
+        assert old, "no known clamp to upgrade"
+        open(p, "w").write(s.replace(old[-1], NEW_CLAMP))
+        print("upgraded")
+    sys.exit(0)
 assert s.count(old) == 1 and s.count(old2) == 1, (s.count(old), s.count(old2))
 s = s.replace(old, new, 1).replace(old2, new2, 1)
 open(p, "w").write(s)

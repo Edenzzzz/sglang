@@ -28,8 +28,8 @@ threading.Thread(target=R.subscribe_loads, args=(me, [ep]), daemon=True).start()
 time.sleep(0.5)
 
 
-def send(rows, kv, acc, queue):
-    stat = ["LoadStat", rows, len(queue), kv, 1_000_000, 0, 0, 0, 0, 0, 0, rows, kv, acc, queue]
+def send(rows, kv, acc, queue, dms=0.0):
+    stat = ["LoadStat", rows, len(queue), kv, 1_000_000, 0, 0, 0, 0, 0, 0, rows, kv, acc, queue, dms]
     pub.send_multipart([b"load", (1).to_bytes(8, "big"), msgspec.msgpack.encode(stat)])
 
 
@@ -47,6 +47,11 @@ time.sleep(0.2)
 heavy = R.Router.loaded_prefill_ms(me, w, 8000, 8000)
 print("heavy node: rows=40 -> loaded prefill", heavy)
 assert heavy == float("inf")
+send(40, 40 * 30000, 1.0, [[500.0, 16000, 0]], dms=12.0)
+time.sleep(0.2)
+measured = R.Router.loaded_prefill_ms(me, w, 8000, 8000)
+print("same node reporting a measured 12 ms decode step -> loaded prefill", round(measured), "ms")
+assert w.load["dms"] == 12.0 and measured != float("inf")
 time.sleep(0.7)
 assert R.Router.fresh_load(me, w) is None
 print("stale after", a.load_max_age_s, "s -> router bookkeeping:", R.Router.decode_state(me, w))

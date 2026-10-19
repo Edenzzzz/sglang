@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.20.96 — Measured decode-step time for decode-first control (2026-10-20)
+
+- The grid-fit decode model over-predicted H20 fan-out decode steps ~2-3x (shared-prefix rows; 4 rows at 68K
+  depth priced at the full 20 ms budget vs ~12 ms measured ITL), so the fixed rule capped prefill to ~10 tokens/step.
+- `apply_edf_itl_slo_chunk.py`: `ITL_SLO=...:measured` uses the node's measured decode-step EWMA (sglang's
+  `decode_moment_totals` deltas) as the decode base. `apply_load_stat_4mode.py`: `decode_step_ms` in LoadStat.
+  `router.py`: decode budget from the reported step; own-ITL anchored to it (model gives only the growth ratio).
+  CPU test extended. Arms `mn_slo_measured_8gpu_20261020.sh` queued after the A/B.
+
 ## v1.20.95 — Decode-first rule: prefill share under mixed chunk (2026-10-20)
 
 - Root cause of both SLO-control collapses (35-41K errors): under mixed chunk `PrefillAdder` charges one token per

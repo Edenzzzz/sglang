@@ -49,6 +49,17 @@ Our method aims to achieve an optimal pareto curve: high throughput, stable deco
     stock mixed chunk (4.2% at light load). The lin4mode draft / verify terms need the 2-step / 3-token MTP traces
     (queued) to be identifiable. sglang `0c9eaf7b7`; traces from `bash tasks/pd_colocation/h200_pp_and_trace_20261019.sh`
     and `h200_pdmux_trace_20261020.sh`.
+  - [x] **2026-10-20 pooled MTP fit (3 traces per schedule: 3 draft steps / 4 verify tokens at standard and light load,
+    2 / 3 at standard; fit on all first halves, scored per trace; GPU time; `fit_4mode_step.py --pool`).** Prefill-bearing
+    steps (ours: 4-mode chunk + verify; stock: mixed chunk + verify), per-trace range:
+    | schedule | lin4mode (closed form, 4-mode terms) | pdmux lin5 | GBT |
+    |---|---|---|---|
+    | ours + MTP (4-mode step) | **12.0-12.9%** (p90 24.4-25.0%) | 16.2-17.3% | 3.0-3.5% (p90 6.5-7.5%) |
+    | stock + MTP | 25.4-27.4% (p90 40.5-43.8%) | 23.7-25.3% | 2.8-4.9% (p90 5.6-10.4%) |
+    Decode steps 0.5-4.3% everywhere. **With a closed-form linear model -- the kind the router evaluates per decision --
+    the 4-mode step is ~2x more predictable than stock MTP's mixed step (12-13% vs 24-27%), and the 4-mode terms help
+    ours but not stock; with a tree ensemble both reach ~3%.** The defensible claim is that the fused step admits a simple
+    interpretable model at half the error, not that it is more predictable to any model.
   - deploy the winner in both places: router TTFT / ITL prediction from node-reported state (rows, sum KV,
     acceptance, prefill queue by deadline, free KV) piggybacked on responses with an idle heartbeat, and the
     worker's decode-first chunk rule (decode base from the live batch instead of a constant).

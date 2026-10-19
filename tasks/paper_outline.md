@@ -62,6 +62,9 @@ re-balances per step instead of re-provisioning.
   7.5% at light load) but not stock mixed chunk (4.2%). The earlier 26.7% vs 53.5% used pdmux's linear form. Keep the
   step model as an enabler of SLO control (router + decode-first worker), not as a contribution
   (`server_perf_model.md`).
+  Narrower claim that holds (pooled MTP fit, 2026-10-20): with a closed-form linear model the 4-mode step predicts to
+  12-13% vs 24-27% for stock MTP's mixed step (the 4-mode terms help ours, not stock); a tree ensemble reaches ~3% on
+  both. State it as "admits a simple model at half the error".
   - [x] 2026-10-18 S4 step model, held-out half: mixed-step MAPE 26.7% ours vs 53.5% stock MTP; decode-only 3.6% vs 2.7%.
     Decode ITL predictable to ~9% vs 35-117% on unfused schedules.
   - [x] EWMA acceptance length as a model input (point 3; measured 2.10 tokens/step).

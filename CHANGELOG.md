@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.97 — Pooled MTP step-model fit (2026-10-20)
+
+- Closed-form 4-mode linear model: ours 12-13% vs stock MTP 24-27% on prefill-bearing steps; GBT ~3% on both.
+  Outline C3 narrowed to "admits a simple model at half the error".
+
 ## v1.20.96 — Measured decode-step time for decode-first control (2026-10-20)
 
 - The grid-fit decode model over-predicted H20 fan-out decode steps ~2-3x (shared-prefix rows; 4 rows at 68K

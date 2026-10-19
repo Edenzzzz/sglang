@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.21.0 — Six-repeat single-node result (2026-10-20)
+
+- vs stock mixed chunk: MTP pair clears the attainment bar (chat +72%, agent 15x, +55% throughput); no MTP chat +29.7%.
+  vs prefill-prioritized: chat attainment +16.5% (no MTP) / +20% (MTP), short of +30%. Stock slow mode in 5/6 repeats.
+  `bench_reps_summary.py`.
+
 ## v1.20.99 — Decode-first on H20 fan-out: every variant lowers attainment (2026-10-20)
 
 - Per-row slack: 142.9 tok/s, TTFT 16.3 s, chat TTFT p99 214 s -- the measured decode step (~20 ms) is at the chat SLO,

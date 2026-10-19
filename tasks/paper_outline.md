@@ -4,7 +4,10 @@ Rebuild the story of the 11/21 draft (`tasks/AttentionFuse Outline OSDI 25'.docx
 since. The draft section order is kept; each item is either backed by a dated result (with the doc that holds the
 command and commit) or marked as missing. Priority order of the remaining gaps:
 
-1. [ ] 2026-10-19 Single-node per-tenant rerun of the standard mix (H200 `dadf94f0e1da7238`). REOPENED: stock is
+1. [x] 2026-10-20 six repeats: vs stock mixed chunk the attainment bar clears with MTP (chat +72%, agent 15x,
+   throughput +55%) and sits at the line without (chat +29.7%); vs prefill-prioritized chat attainment falls short
+   (+16.5% / +20%). (`realistic_workload_analysis.md` Baselines, six-repeat table.)
+   Earlier: 2026-10-19 Single-node per-tenant rerun of the standard mix (H200 `dadf94f0e1da7238`). REOPENED: stock is
    bimodal (rep 3 matches 10-18, reps 1-2 are a slow mode); vs rep 3 ours without MTP misses agent TTFT (+17%).
    Repeats 4-6 queued. Reps 1-2 read: no MTP vs stock clears all five means (+44% / -35% / -32%, chat -94% / -45%); MTP vs stock MTP misses only chat ITL
    (-28.1%); chat SLO attainment 1.3x / 1.8-1.9x stock, agent goodput 2.3-2.8x / ~16x. Open: stock is slower on

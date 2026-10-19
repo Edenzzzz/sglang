@@ -103,6 +103,14 @@ after the kernel items close (<=16 GPUs).
     profile window's idle share does not translate into step time. `SKIP_BASE=1 STEP_TRACE=1 CKPT_EVERY=8192
     CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 bash tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; gate `bash
     /dev/shm/w/mn/gate_h200_ckpt_20261018.sh`; sglang `d15297007` + this commit (patch removed from the pod tree after).
+  - [x] 2026-10-19 FA3 prefill-chunk launch shape (negative, no lever). The mixed step's FA3 call (one chunked request,
+    causal, `num_splits` / `pack_gqa` left to the auto heuristic) was suspected of leaving SMs idle when a chunk has
+    under 1-2 waves of tiles. Microbench, Qwen-7B shapes (28/4 heads, d128), H200: time is linear in chunk length at
+    every depth (prefix 4K / 16K / 50K / 120K x chunk 512 / 1024 / 2048: 66-272 us, 231-925, 724-2829, 1650-6573 us),
+    and forced splits 1-6 or pack_gqa on / off are all within +-2% of auto (split >= 2 is 5-20% slower at 4K-16K).
+    50K x 1024 runs at ~540 TFLOP/s. A 743-token chunk at 50K depth costs ~1 ms of attention per layer, ~28 ms of the
+    44 ms mixed step, so the step is attention-FLOP-bound on work the bar holds fixed; chat ITL on the standard mix is
+    not limited by launch shape. `tasks/perf_model/fa3_chunk_splits.py` on pod `d6a80befdd4e4da5` (sgl-kernel FA3).
   - [x] 2026-10-18 FP8 linear layers on both arms (`WORKER_EXTRA="--quantization fp8"`, BF16 KV cache; exploratory --
     FP8 changes model numerics, no output gate run, not a bar result). First run: our arm took no split at all -- under
     FP8 linear the attention layers carry k/v_scale_float = 1.0 and `_fused_split_dispatch` refused any layer with a

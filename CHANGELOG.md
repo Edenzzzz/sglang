@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.20.82 — FA3 prefill-chunk splits: negative, no lever (2026-10-19)
+
+- Forced num_splits / pack_gqa within +-2% of auto at 4K-120K depth; the mixed step is attention-FLOP-bound
+  (~540 TFLOP/s), so the standard-mix chat ITL is not limited by FA3 launch shape.
+
 ## v1.20.81 — Router time-based draining: negative, off by default (2026-10-19)
 
 - 25% of workers drained per 20 / 8 s window: agent 521 / 503 tok/s (vs 555), chat ITL 12.1 ms (vs 10.8). Draining

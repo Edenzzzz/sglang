@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.84 — Paper outline; point-4 random-pull correction (2026-10-19)
+
+- `tasks/paper_outline.md`: the 11/21 draft's sections mapped to measured results, contributions C1-C4, ranked gaps.
+- Point 4 correction: `cache_rand` randomized the serving node among equal-hit holders, not the KV pull source;
+  the "randomized pull refuted" conclusions are retracted and the items unchecked.
+
 ## v1.20.83 — Per-tenant fan-out scoring (2026-10-19)
 
 - `fanout_per_tenant.py`: chat SLO attainment 91-96% (ours) vs 25-33% (disagg) heavy, 97-99% vs 43-54% light;

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Serving-output gate on the re-forked H200 (d6a80befdd4e4da5) for the FA2-overlapped split arms of
+# Serving-output gate on the re-forked H200 (dadf94f0e1da7238) for the FA2-overlapped split arms of
 # mn_h200_nospec_20261018.sh. No MTP: LPT (stock chunked prefill + mixed chunk, no spec), LPT_REP (noise floor),
 # SPLIT_OVL_EDF (ours: FA3/FA2 split with FA2 overlapped, EDF + chunk preemption, uncached deadlines, deadline chunk
 # 2048/8192, chunk 8192), each vs LPT. MTP: MTP_MIX_SPLIT_OVL_EDF (4-mode step, overlapped split, the best MTP setting)

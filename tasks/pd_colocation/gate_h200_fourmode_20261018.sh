@@ -1,5 +1,5 @@
 #!/bin/bash
-# Serving-output gate on the re-forked H200 (d6a80befdd4e4da5) for the best 4-mode MTP serving config of
+# Serving-output gate on the re-forked H200 (dadf94f0e1da7238) for the best 4-mode MTP serving config of
 # mn_h200_fourmode_20261018.sh: KERNEL=mtpsplit (FA3 on 112 SMs + FA2 verify rows), EDF + chunk preemption, uncached
 # deadlines, deadline chunk 1024/2048:6000, chunk 2048, mix gate 8K ctx / 4 queued. srv_correctness arms: MTP (stock
 # MTP reference), MTP_REP (noise floor), MTP_C2048 (null case: stock MTP at the config's chunk size), MTP_MIX_SPLIT_EDF

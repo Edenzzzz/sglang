@@ -1055,16 +1055,26 @@ static mixture.
             constructs and shifts mixtures. The arxiv PDF does not text-extract (compressed
             streams only); use the ar5iv/HTML rendering.
 
-- [ ] **4. Two-way RDMA / congestion, randomized source selection** — **not demonstrated on the
-      full 4-NIC fabric, and reported as such.** No congestion exists to relieve at 16 GPUs on 4
+- [ ] **4. Two-way RDMA / congestion, randomized source selection** — **CORRECTION (2026-10-19, user): the
+      randomized-pull rule has not been tested.** `cache_rand` / `cache_slo_rand` (`router.py`) randomize which
+      equal-hit holder *serves* the request (prefill + decode land there), not which holder a non-holder *pulls* the
+      KV from. Pulled pages come from the mooncake L3 pool, whose master places them; the router never chooses a pull
+      source. So the "holder load decides" conclusion below measures serving-node placement: a random equal-hit holder
+      can be the busier one, and its decode batch absorbs the new request. An RDMA read of an idle source's memory does
+      not compete with that source's decode compute (it costs NIC egress and memory bandwidth only), so the source's
+      decode load should not matter for the pull itself. A real test needs (a) more than one copy of a hot prefix in
+      the pool (replica count > 1 or per-node copies exported as sources) and (b) a reader that picks among copies
+      (first / least-recently-used NIC / random) while the serving node stays fixed by the SLO check.
+      Original record: No congestion exists to relieve at 16 GPUs on 4
       hosts: random tie-break among near-equal hits is neutral, the L3 store moved ~236 GB without
       measurable contention, and disagg's 8 prefill GPUs replicate 4 hot prefixes to 82% hit. The
       store also COSTS ~19% chat ITL once the SLO check spreads load. Sub-items:
-      - [x] randomized pull among near-equal-hit nodes (`cache_rand`): neutral at 16 GPUs
-      - [x] the same on a NARROWED fabric (`ONE_NIC=1`) -- **randomized selection LOSES even under
+      - [ ] randomized pull among near-equal-hit nodes (`cache_rand`): neutral at 16 GPUs -- tested serving-node
+            choice, not pull-source choice (correction above)
+      - [ ] the same on a NARROWED fabric (`ONE_NIC=1`; serving-node choice, see correction) -- **randomized selection LOSES even under
             deliberate contention.** Measured below; this is a negative result for the proposed
             algorithm, in the regime built to favour it.
-      - [x] **Randomized holder choice on the fan-out workload, narrowed fabric + fast rotation (2026-10-19; 8 H20s,
+      - [ ] **Randomized holder choice (serving node, not pull source; see correction) on the fan-out workload, narrowed fabric + fast rotation (2026-10-19; 8 H20s,
             `ONE_NIC=1`, hot set rotating every 45 s instead of 180 s, natural text, adaptive ITL SLO K = 2.5; both arms
             clean; `bash /tmp/h20/fanout_rand.sh`).** Load-ordered within a hit bucket (`coloc_slo_edf_hc`) vs random
             within it (`coloc_slo_rand_edf_hc`): agent 545 vs 526 tok/s, TTFT 0.77 vs 0.81 s, TPOT 13.3 vs 15.3 ms;
@@ -1072,8 +1082,7 @@ static mixture.
             **Random loses again (-4.7% goodput, +15% TPOT, +132% chat TTFT), now on the workload built for
             replication.** The load-ordered arm loses only ~2% against the full fabric with 180 s rotation (555 tok/s,
             0.75 s), so at <= 16 H20s the links are not the constraint even at 4x less bandwidth and 4x faster churn;
-            holder load is. Point 4's randomization rule stays refuted at this scale; its premise (congestion) needs
-            more hosts than the cap allows.
+            holder load is -- for choosing where a request runs. It does not test randomizing the pull source.
       - [ ] congestion modelled from router-observed past link latency (the alternative in the
             goal). NOT built, and the measurements argue against building it here: with no
             contention to observe there is nothing to fit, and a per-request router query would add
@@ -1535,7 +1544,8 @@ fabric width (`coloc_rand`, where purely random choice sent hit-0 chat to busy w
 `min()` tie-break hotspot). The fix each time was to order by in-flight load first and use
 randomness only to break what remains.
 
-**Point 4's algorithm, as proposed, is therefore refuted at this scale**: "when several nodes have
+**[RETRACTED 2026-10-19: these arms randomized the serving node, not the pull source; see the correction at point 4.
+What follows holds for where a request runs, not for which copy a pull reads.]** **Point 4's algorithm, as proposed, is therefore refuted at this scale**: "when several nodes have
 hit lengths within a threshold, pull from one at random" is dominated by "pull from the least
 loaded of them". Randomness is not harmless here; it discards the signal that matters. What the
 goal's underlying intuition gets RIGHT is that concentration is the risk -- but the measured cure

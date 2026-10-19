@@ -246,6 +246,27 @@ static mixture.
         96.8% / 270, disagg no spec 65.8% / 85 and 79.7% / 102. **Ours delivers 3.2-5.3x disagg's agent goodput**
         (3.4x even at a 30 ms TPOT SLO): disagg's per-token decode is faster, but its two prefill pods make half its
         requests miss the TTFT deadline. Per-token TPOT is the one metric where disagg leads (decode isolation).
+      - [ ] **2026-10-20 multi-node SLO control (decode-first workers + node-reported load + load-aware router), 8 H20s,
+        text fan-out, full fabric, 180 s rotation; `mn_slo_control_8gpu_20261020.sh`.** Pieces: decode-first worker rule
+        (`apply_edf_itl_slo_chunk.py`, 20 ms ITL SLO, no exception), LoadStat with decode rows / KV / acceptance / prefill
+        queue by deadline (`apply_load_stat_4mode.py`, direct PUB on the bootstrap port), router `--slo-chunk` +
+        `--load-endpoints` (TTFT walked chunk by chunk under each node's decode load; infinite on a decode-full node).
+        Two bugs found and fixed on the way: (1) a 1-token floor rounded to a zero-token extend, (2) under mixed chunk the
+        scheduler charges one token per decode row against the chunk, so a ~100-token cap beside 50+ rows left a zero
+        prefill share -- both crashed every worker in flashinfer's planner (`kv_len[0]-1 should be non-negative`); the
+        two collapsed runs (35-41K errors) are void, as are three overlapping runs from a malformed queue script.
+        Clean results, agent tput / TTFT / ITL ; chat TTFT / ITL (p99 ITL):
+        | arm | rep 1 | rep 2 |
+        |---|---|---|
+        | ours, no SLO control | 549.1 / 0.75 s / 12.4 ms ; 294 ms / 10.7 ms (253) | 561.2 / 0.71 s / 12.3 ms ; 269 ms / 10.4 ms (118) |
+        | ours, SLO control, grid-fit decode model | void | 244.6 / 8.19 s / 26.5 ms ; 4.54 s / 16.1 ms (61) |
+        | PD disagg 2P2D, no spec | 181.6 / 16.62 s / 5.0 ms ; 18.59 s / 5.0 ms (14) | 182.8 / 16.37 s / 5.0 ms ; 18.05 s / 5.1 ms (14) |
+        **With the grid-fit decode model, SLO control loses to our own uncontrolled arm on everything but chat p99 ITL**:
+        the model (fit on distinct-context calibration rows, 0.114 ms per KV-ktok) prices 4 rows at 68K depth at the whole
+        20 ms budget while the same load measures ~12 ms ITL, so the rule capped prefill to ~10 tokens / step. It still
+        beats disagg on throughput (+34%) and TTFT (-50%, chat -75%). Next: the same arm with the measured decode-step
+        time (`ITL_SLO=...:measured`, LoadStat `decode_step_ms`; `mn_slo_measured_8gpu_20261020.sh`, running).
+        sglang `079a8a6dc`.
       - [x] **2026-10-19 per-tenant scoring: chat on SLO attainment (TTFT + per-request TPOT), agents on SLO goodput.**
         Same saved records, re-scored by `tasks/perf_model/fanout_per_tenant.py` (per-request TPOT = sum(itls) /
         (output_len - 1), so MTP arms count tokens, not stream chunks). Chat attainment at 0.5 s + 20 ms / 1 s + 30 ms /

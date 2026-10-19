@@ -1085,7 +1085,20 @@ static mixture.
             changes across the sweep, and we must track it everywhere. Mixtures blended from the
             datasets already in use (TraceLab agentic replay + chat + math), with the blend
             recorded so it is reproducible.
-      - [ ] **5e. DYNAMIC: mid-run mixture shift and load spike.** The core of the argument and
+      - [x] **5e. DYNAMIC: load spike (2026-10-20, 8 H20s, text fan-out C=32 + ShareGPT chat 8 req/s; at t = 300 s a
+            second chat stream adds 16 req/s for 240 s -- chat load x3; `mn_spike_8gpu_20261020.sh`, scored by
+            `tasks/perf_model/spike_windows.py`; all arms 0 tracebacks / 0 fallbacks).** Agent attainment (TTFT <= 10 s
+            and TPOT <= 80 ms) per window pre / spike / first 60 s of spike / post; chat attainment (0.5 s + 20 ms)
+            base stream / spike stream; rep 1 | rep 2:
+            | arm | agent attainment | agent goodput in spike | chat base / spike |
+            |---|---|---|---|
+            | ours (SLO-checked hit-first router, pool, EDF) | 96.4 / 99.4 / 100 / 99.1% \| 96.4 / 99.8 / 100 / 98.1% | 554 \| 546 tok/s | 90.4 / 91.0% \| 89.8 / 87.9% |
+            | PD disagg 2P2D | 24.5 / 36.0 / 50.9 / 44.9% \| 32.0 / 39.3 / 57.3 / 52.8% | 60 \| 59 tok/s | 21.5 / 20.2% \| 22.3 / 19.1% |
+            **Ours absorbs a 3x chat spike with no attainment loss** (agent 99-100% through the spike and its first
+            minute; the spike stream's own chat attainment 88-91%, TTFT 0.13-0.14 s); disagg's two prefill nodes queue
+            both tenants for 14-31 s TTFT in every window. The pre-spike window is lowest for both arms (start-up and
+            cold prefixes). Mixture shift (rather than rate) is not run. sglang `ff6a90041`.
+      - [ ] **5e (original item). DYNAMIC: mid-run mixture shift and load spike.** The core of the argument and
             the test of prediction (b): step-change the mixture (prefill share down, decode share
             up) and inject a rate spike; measure SLO attainment **through** the transition and
             time-to-recover, with the transition visible in the time series rather than averaged

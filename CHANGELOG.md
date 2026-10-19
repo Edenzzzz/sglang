@@ -5,7 +5,9 @@
 - `apply_edf_itl_slo_chunk.py`: when less than one KV page fits beside the running decodes, no prefill that step
   (returns 0, the scheduler's existing skip). The 1-token floor rounded to a zero-token extend and crashed every H20
   worker in flashinfer's planner (`kv_len[0]-1 should be non-negative`), collapsing the first SLO-control arm
-  (41 127 errors) -- that run is void and is rerun (`mn_slo_control_r1b_20261020.sh`).
+  (41 127 errors) -- that run is void. A queued rerun script was launched with a malformed wait loop and two rogue
+  copies ran concurrently with disagg rep 1; all three overlapping runs are void, the cluster was cleared, and the A/B
+  was relaunched with only the valid rep-1 reference kept (`SKIP_REF1=1`); `mn_slo_control_r1b_20261020.sh` unused.
 - `apply_load_stat_4mode.py`: `SGLANG_LOAD_PUB_DIRECT` binds the LoadStat socket directly (upstream binds it only
   beside a KV-events publisher and refuses `--load-publish-endpoint` without `--kv-events-config`).
 - `apply_steptrace_pdmux.py` applied on H200 (the first pdmux trace emitted no lines); pdmux traces queued.

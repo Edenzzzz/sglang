@@ -8,8 +8,11 @@ chunk over its prefix (the same form and coefficients as apply_edf_step_budget.p
 within that budget and never above the chunk the deadline rule chose. When less than one KV page fits (or the decode
 step alone fills the budget) the step admits no prefill: it returns 0, which get_new_batch_prefill turns into "no
 prefill batch this step" (a sub-page chunk rounds down to a zero-token extend, which flashinfer's planner rejects:
-kv_len[0]-1 should be non-negative, 2026-10-20 H20). The request whose chunk is sized is the in-progress chunked
-request, else the earliest-deadline waiting one. Applied after apply_edf_deadline_chunk.py.
+kv_len[0]-1 should be non-negative, 2026-10-20 H20). Under mixed chunk the scheduler charges one token per running
+decode row against the chunk, so the returned chunk is the prefill cap plus the decode rows; returning the bare cap
+left a chunk smaller than the decode rows, a zero-token extend for the in-progress chunked request and the same
+planner abort. The request whose chunk is sized is the in-progress chunked request, else the earliest-deadline
+waiting one. Applied after apply_edf_deadline_chunk.py.
 
   SGLANG_EDF_ITL_SLO="slo_ms:tokens_per_step:base_ms:a:b"            fixed decode-step base
   SGLANG_EDF_ITL_SLO="slo_ms:tokens_per_step:c0:c_bs:c_kv:a:b"       live base c0 + c_bs*rows + c_kv*KV/1e3 from the
@@ -22,17 +25,31 @@ import sys
 
 p = f"{sys.argv[1]}/managers/scheduler.py"
 s = open(p).read()
-OLD_CLAMP = "        out = int(min(chunk_size, max(1, c)))\n"
-NEW_CLAMP = ("        out = int(min(chunk_size, c))\n"
-             "        if out < max(1, self.page_size):\n"
-             "            # Less than one page fits beside the running decodes: no prefill this step.\n"
-             "            out = 0\n")
+OLD_CLAMPS = [
+    "        out = int(min(chunk_size, max(1, c)))\n",
+    ("        out = int(min(chunk_size, c))\n"
+     "        if out < max(1, self.page_size):\n"
+     "            # Less than one page fits beside the running decodes: no prefill this step.\n"
+     "            out = 0\n"),
+]
+NEW_CLAMP = (
+    "        rows = len(running_batch.reqs) if self.is_mixed_chunk else 0\n"
+    "        out = int(min(chunk_size - rows, c))\n"
+    "        if out < max(1, self.page_size):\n"
+    "            # Less than one page fits beside the running decodes: no prefill this step.\n"
+    "            out = 0\n"
+    "        elif self.is_mixed_chunk:\n"
+    "            # Mixed chunk charges one token per running decode row against the chunk (PrefillAdder subtracts\n"
+    "            # num_mixed_decode_tokens), so the prefill share is what is left: add the rows back so prefill gets c.\n"
+    "            out += rows\n"
+)
 if "def _edf_itl_slo_chunk" in s:
     if NEW_CLAMP in s:
         print("already")
     else:
-        assert s.count(OLD_CLAMP) == 1, s.count(OLD_CLAMP)
-        open(p, "w").write(s.replace(OLD_CLAMP, NEW_CLAMP))
+        old = [o for o in OLD_CLAMPS if s.count(o) == 1 and s.count(NEW_CLAMP) == 0]
+        assert old, "no known clamp to upgrade"
+        open(p, "w").write(s.replace(old[-1], NEW_CLAMP))
         print("upgraded")
     sys.exit(0)
 old = "        chunked_prefill_size = self._edf_deadline_chunk(running_batch, chunked_prefill_size)\n"
@@ -68,10 +85,15 @@ new2 = '''    def _edf_itl_slo_chunk(self, running_batch, chunk_size):
             # a*c + b*c*prefix + (b/2)*c^2 = budget
             qa, qb = b / 2, a + b * prefix
             c = (budget / qb) if qa == 0 else ((-qb + (qb * qb + 4 * qa * budget) ** 0.5) / (2 * qa))
-        out = int(min(chunk_size, c))
+        rows = len(running_batch.reqs) if self.is_mixed_chunk else 0
+        out = int(min(chunk_size - rows, c))
         if out < max(1, self.page_size):
             # Less than one page fits beside the running decodes: no prefill this step.
             out = 0
+        elif self.is_mixed_chunk:
+            # Mixed chunk charges one token per running decode row against the chunk (PrefillAdder subtracts
+            # num_mixed_decode_tokens), so the prefill share is what is left: add the rows back so prefill gets c.
+            out += rows
         self.edf_itl_slo_capped = getattr(self, "edf_itl_slo_capped", 0) + int(out < chunk_size)
         if self.edf_itl_slo_calls % 500 == 1 or (out < chunk_size and self.edf_itl_slo_capped % 100 == 1):
             logger.info("EDF_ITL_SLO calls=%d capped=%d prefix=%d chunk=%d->%d", self.edf_itl_slo_calls,

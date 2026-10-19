@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.20.95 — Decode-first rule: prefill share under mixed chunk (2026-10-20)
+
+- Root cause of both SLO-control collapses (35-41K errors): under mixed chunk `PrefillAdder` charges one token per
+  running decode row against the chunk, so a ~100-token prefill cap beside 50+ decode rows left a zero / negative
+  prefill share, the in-progress chunked request was scheduled with a zero-token extend, and flashinfer's planner
+  aborted every worker. The rule now returns cap + decode rows (cap compared with chunk - rows; no prefill below one
+  page). Both earlier SLO-control runs are void; rep 1 is rerun after the A/B (`mn_slo_control_r1b_20261020.sh`).
+
 ## v1.20.94 — 4-mode step-model search: per-step predictability claim not supported (2026-10-20)
 
 - Serving traces, best model per schedule (MLP / GBT): every schedule ~3-8% on mixed / prefill steps; ours beats

@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.21.6 — MTP arms were capped at 48 running requests (2026-10-20)
+
+- sglang's speculative default `max_running_requests = 48` capped every MTP arm (ours and both stocks); 36-68% of their
+  chats missed on TTFT from the queue it builds. All MTP arms rerun with `--max-running-requests 128
+  --cuda-graph-max-bs 128` (`h200_mtp_cap128_20261020.sh`).
+
 ## v1.21.5 — Chunk trade: negative (2026-10-20)
 
 - Deadline chunk 512 / 1024 leaves chat attainment unchanged (69.3% no MTP, 57.1% MTP) and costs agent attainment

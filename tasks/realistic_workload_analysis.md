@@ -223,6 +223,14 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   prefill-prioritized chat attainment falls short in both pairs.** Our arms vary by <= 1.4 tok/s and <= 1.8 points
   attainment across repeats. `bash tasks/pd_colocation/h200_per_tenant_20261019.sh`, `h200_more_reps_20261019.sh`,
   `h200_pp_and_trace_20261019.sh`; sglang `09aadc008`.
+- [x] **Single-node per-row slack decode-first (2026-10-20, H200; negative).** The decode-first rule budgeting per running
+  row against its mean-TPOT SLO (chat 20 ms, agents >= 24K prompt 80 ms; measured decode base; `ITL_SLO=...:measured:
+  slack:cls24000_80`, `h200_slack_20261020.sh`) starves prefill on one node too: ours without MTP agent 50.4 tok/s /
+  TTFT 30.19 s / ITL 18.9 ms, chat TTFT 18.99 s / ITL 16.7 ms (vs 113 tok/s / 3.4 s without the rule). Most caps were
+  0: with ~2400 chat requests some running row is almost always slightly behind its SLO, and the rule then admits no
+  prefill until it catches up. Stopped after the first arm. Single-node chat attainment is pursued instead with smaller
+  deadline chunks (`h200_chunk_trade_20261020.sh`), trading part of the agent margin (92% vs 59% attainment over
+  prefill-prioritized) for chat TPOT.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

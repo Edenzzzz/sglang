@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.21.4 — Single-node slack decode-first: negative; chunk trade (2026-10-20)
+
+- Per-row slack on one H200 starves prefill (agent 50 tok/s, TTFT 30 s; caps mostly 0 because some chat row is
+  always behind). `ours_mtp_dc` arm (env chunks); `h200_chunk_trade_20261020.sh` (deadline chunk 512 / 256) running.
+
 ## v1.21.3 — Mixture-shift harness; single-node slack arms (2026-10-20)
 
 - `fanout_agents.py --start-delay`; `mn_bench.sh FO_SPIKE=delay:conc:duration` adds a second fan-out driver on the same

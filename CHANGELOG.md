@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.99 — Decode-first on H20 fan-out: every variant lowers attainment (2026-10-20)
+
+- Per-row slack: 142.9 tok/s, TTFT 16.3 s, chat TTFT p99 214 s -- the measured decode step (~20 ms) is at the chat SLO,
+  so rows bank no slack and prefill stops. Per-step measured 306-382 tok/s. The uncontrolled SLO-checked router
+  (551 tok/s goodput, chat attainment 91%) remains the multi-node configuration vs disagg (92, 26%).
+
 ## v1.20.98 — Per-row slack decode-first budget (2026-10-20)
 
 - Per-step decode-first lowered H20 fan-out attainment (chat 91% -> 65%, agent goodput 551 -> 262 tok/s): the SLO is

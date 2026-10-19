@@ -19,7 +19,13 @@ command and commit) or marked as missing. Priority order of the remaining gaps:
    This is the flexibility claim's main evidence and it has not been run.
 3. [x] 2026-10-19 Point 4 as proposed (pull-source choice among per-worker copies, serving node fixed): neutral
    among sources (within 3%), copies cost 7-10% goodput; no congested source at <= 16 H20s even on one NIC.
-4. [ ] Mixed-chunk tile waste / padding measured against stock (the draft's "up to 40%" in 3.4 is not backed yet).
+4. [x] 2026-10-20 (from the 10-13 B1 profiles, `debug_kernel_server_perf_4_mode.md` B1): padding waste is small --
+   decode rows padded into prefill tiles cost 6.3% of FLOPs at 32K, 2.7% at 64K, 0.6% at 128K. The step time comes
+   from kernel choice: stock mixed chunk runs every row, 64-256K prefill rows included, through FA2 BatchPrefill;
+   the fused step sends prefill rows to FA3 and decode / verify rows to the FA2 executor. Attention per 60 steps at
+   64K: stock 17.7 s vs fused 13.3 s (-25%); at 128K the merged batch 3.15 ms/call vs the fused FA2 executor's
+   0.83 ms on mixed steps. Rewrite the draft's 3.4 ("up to 40% from padding") as ~25% attention time from kernel
+   choice, padding < 7%.
 5. [ ] Second model (larger dense or MoE). Every result so far is Qwen2.5-7B-Instruct + EAGLE3.
 6. [ ] semi-PD baseline (sglang v0.4.4.post1 fork); fault tolerance stays optional.
 
@@ -100,7 +106,7 @@ re-balances per step instead of re-provisioning.
   - 3.2 disagg underuses resources: re-prefill 10.3% vs 3.4%, prefill hit dilution 0.125 -> 0.055.
   - 3.3 chunked prefill vs SLO: stock MTP mixed steps 59 ms vs ours 44 ms; chat ITL interval shares (stock 34% of chat
     ITL time in > 80 ms intervals vs 16% ours).
-  - [ ] 3.4 mixed-chunk tile waste: run the stock mixed-chunk kernel on a TraceLab step mix and count padded rows.
+  - [x] 3.4 mixed-chunk cost: padding < 7% of FLOPs; kernel choice ~25% of attention time (gap 4 above).
 - **4. Design.** 4.1 problem formulation: meet per-tenant TTFT + TPOT SLOs, maximise goodput. 4.2 the 4-mode step (C1).
   4.3 EDF with uncached-token deadlines, a long-request deadline multiplier (2x above 200K) and deadline-driven chunk
   admission (C2). 4.4 step model with acceptance input (C3). 4.5 router (C4).

@@ -153,7 +153,10 @@ on realistic mixed workloads (chat + TraceLab), measured against these, same ses
     3; do TAG=_long_base_rep$REPN; ARMS=stock ...; for TS in 250 400; do TTFT_SCALE_MS=$TS ARMS=ours_ovl CHUNK=8192
     DEADLINE_CHUNK=2048:8192:6000 ...` (`/tmp/h20/long_ts3.sh`, long-mix env above). Slope 325 (two repeats, clean):
     agent 7.01 / 6.87 s, 74.7 / 74.7 ms -> vs the three-repeat stock mean -30.8% / -28.9%, chat -82% / -38%: at agent
-    TTFT -30% the frontier puts agent ITL at ~-29%.
+    TTFT -30% the frontier puts agent ITL at ~-29%. Slope 250 with deadline chunk 2048 / 4096 (three repeats, clean,
+    `bash /tmp/h20/long_ts5.sh`): agent 8.07 / 8.25 / 8.29 s, 70.4 / 70.0 / 69.8 ms -> -18.2% / -33.3% (agent
+    throughput +43%, chat -70% / -44%): the chunk moves the point along the same frontier, it does not lift it. Seven
+    chunk / slope settings now trace one agent TTFT / ITL frontier on this mix with no point at -30% / -30%.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

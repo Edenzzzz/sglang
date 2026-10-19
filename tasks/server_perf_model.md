@@ -42,10 +42,11 @@ Our method aims to achieve an optimal pareto curve: high throughput, stable deco
     | ours, no MTP (FA2 overlapped) | 33.7% / 33.1% | 3.2% (p90 6.8%) / 5.9% (p90 15.3%) |
     | stock + MTP | 23.6% / -- | 3.6% (p90 7.4%) / -- |
     | ours + MTP (4-mode) | 26.7% (gap target) / -- | 4.6% (p90 9.8%, gap target) / -- |
-    | pdmux split prefill forwards (sg / lay features given to MLP / GBT) | -- / 73.0% | -- / 7.5% (p90 17.8%); pdmux's own per-SM-group form 19.8% |
+    | pdmux split prefill forwards (sg / lay features given to MLP / GBT) | 72.8% / 73.0% | 5.0% (p90 10.8%) / 7.5% (p90 17.8%); pdmux's own per-SM-group form 24.0% / 19.8% |
     **The per-step predictability claim does not hold in a fair comparison.** With a flexible model every schedule's
     steps predict to ~3-8%; the 10-18 "26.7% vs 53.5%" was pdmux's 5-term linear form, which is the weakest model for
-    every schedule. Ours is more predictable than pdmux (5.9% vs 7.5%, p90 15.3% vs 17.8% at light load) but not than
+    every schedule. Ours is more predictable than pdmux at both loads (3.2% vs 5.0% standard, 5.9% vs 7.5% light; p90
+    6.8% vs 10.8% and 15.3% vs 17.8%) but not than
     stock mixed chunk (4.2% at light load). The lin4mode draft / verify terms need the 2-step / 3-token MTP traces
     (queued) to be identifiable. sglang `0c9eaf7b7`; traces from `bash tasks/pd_colocation/h200_pp_and_trace_20261019.sh`
     and `h200_pdmux_trace_20261020.sh`.

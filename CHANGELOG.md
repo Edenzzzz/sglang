@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.21.5 — Chunk trade: negative (2026-10-20)
+
+- Deadline chunk 512 / 1024 leaves chat attainment unchanged (69.3% no MTP, 57.1% MTP) and costs agent attainment
+  (80%, 29%); the single-node chat gap to prefill-prioritized stock is structural at this load.
+
 ## v1.21.4 — Single-node slack decode-first: negative; chunk trade (2026-10-20)
 
 - Per-row slack on one H200 starves prefill (agent 50 tok/s, TTFT 30 s; caps mostly 0 because some chat row is

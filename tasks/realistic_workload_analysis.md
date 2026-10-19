@@ -231,6 +231,13 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   prefill until it catches up. Stopped after the first arm. Single-node chat attainment is pursued instead with smaller
   deadline chunks (`h200_chunk_trade_20261020.sh`), trading part of the agent margin (92% vs 59% attainment over
   prefill-prioritized) for chat TPOT.
+- [x] **Chunk trade (2026-10-20, H200; negative).** Deadline chunk 512 / 1024 (chunk 1024), one repeat each; per tenant
+  (agent 10 s + 80 ms, chat 0.5 s + 20 ms): no MTP -- chat 69.3% (vs 69.8% at 1024 / 2048), chat TPOT p90 50.1 ms (vs
+  ~61), agent 80.0% (vs 92.0%), agent TTFT 4.72 s; MTP -- chat 57.1% (vs 58.9%), agent 28.9% (vs 45.8%), agent TTFT
+  14.37 s. A 512-token chunk at ~50K depth still costs ~23 ms of attention beside the ~9 ms decode step, and agent
+  prefill runs almost continuously, so ~30% of chats keep a mean TPOT above 20 ms; holding them under it would need
+  chunks below ~200 tokens. The 256 arms were stopped. **On one node at this load the chat-attainment gap to
+  prefill-prioritized stock (+16-20%) is structural**: chats decode beside continuous long-context agent prefill.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

@@ -66,6 +66,10 @@ def block_hashes(payload):
     return out, blk if ids is not None else blk // 4, n_tok
 
 
+class WorkerDown(Exception):
+    """The chosen worker refused the connection; the request is routed again."""
+
+
 class Worker:
     def __init__(self, url, kv_tokens, block_tok):
         self.url = url
@@ -73,6 +77,8 @@ class Worker:
         self.blocks = collections.OrderedDict()  # hash -> None, LRU order
         self.block_hits = collections.OrderedDict()  # hash -> completed requests through it (pool write filter)
         self.inflight = {}  # rid -> dict(prefill, decode_left, deadline, t0)
+        # Set when a connection to the worker is refused or drops mid-stream: the worker takes no new requests.
+        self.dead = False
         self.accept = None  # EWMA of tokens per verify step on this worker (None: no sample yet)
         # Latest node-reported load (apply_load_stat_4mode.py over --load-endpoints): receive time, decode rows,
         # their KV tokens, acceptance length, and [abs_deadline_s, uncached, prefix] prefill entries earliest first.
@@ -414,10 +420,11 @@ class Router:
     def choose(self, hashes, blk, n_tok, deadline):
         pol = self.a.policy
         now = time.time()
+        alive = [j for j, w in enumerate(self.workers) if not w.dead] or list(range(len(self.workers)))
         if pol == "rr":
-            self.rr = (self.rr + 1) % len(self.workers)
-            return self.rr, {"hit": self.workers[self.rr].hit(hashes) * blk}
-        hits = [w.hit(hashes) for w in self.workers]
+            self.rr = (self.rr + 1) % len(alive)
+            return alive[self.rr], {"hit": self.workers[alive[self.rr]].hit(hashes) * blk}
+        hits = [w.hit(hashes) if not w.dead else -1 for w in self.workers]
         best = max(hits)
         pool_hit = max(best, self.pool.hit(hashes)) if self.pool else 0
         if pol == "cache":
@@ -436,10 +443,10 @@ class Router:
         # cache_slo_rand drops the load term inside a hit bucket, so equal-hit holders are tried in
         # random order: the goal's "randomly pull from one of them" for congestion spreading.
         if pol == "cache_slo_rand":
-            order = sorted(range(len(self.workers)),
+            order = sorted(alive,
                            key=lambda j: (-(hits[j] // max(1, self.a.rand_thresh)), random.random()))
         else:
-            order = sorted(range(len(self.workers)),
+            order = sorted(alive,
                            key=lambda j: (-(hits[j] // max(1, self.a.rand_thresh)),
                                           len(self.workers[j].inflight), random.random()))
         if pol == "cache_rand":
@@ -498,8 +505,26 @@ class Router:
                         "ttft_pred": best_pred[0], "pull_pred": best_pred[1], "pull_raw": best_pred[2],
                         "pool_hit": pool_hit * blk}
 
+    def mark_dead(self, w, i, err):
+        if not w.dead:
+            w.dead = True
+            print(f"worker {i} ({w.url}) marked dead: {type(err).__name__}", flush=True)
+            if self.log:
+                self.log.write(json.dumps(dict(t=time.time(), worker_dead=i, err=type(err).__name__)) + "\n")
+                self.log.flush()
+
     async def generate(self, request):
         payload = await request.json()
+        # A worker that refuses the connection is marked dead and the request goes to the next choice; nothing has
+        # been streamed to the client by then, so the reroute is invisible to it.
+        for _ in range(len(self.workers)):
+            try:
+                return await self.serve(request, payload)
+            except WorkerDown:
+                continue
+        return web.Response(status=503, text="no live worker")
+
+    async def serve(self, request, payload):
         hashes, blk, n_tok = block_hashes(payload)
         out_tok = int((payload.get("sampling_params") or {}).get("max_new_tokens", 128))
         # Same length-scaled TTFT SLO the workers' EDF schedules against
@@ -534,24 +559,31 @@ class Router:
                 try:
                     up = await self.session.post(w.url + "/generate", json=payload)
                     break
-                except (aiohttp.ServerDisconnectedError, aiohttp.ClientOSError):
+                except (aiohttp.ServerDisconnectedError, aiohttp.ClientOSError) as e:
+                    # ClientConnectorError (connection refused) is a ClientOSError: a dead worker fails both tries.
                     if attempt:
-                        raise
+                        self.mark_dead(w, i, e)
+                        raise WorkerDown() from e
             async with up:
                 resp.content_type = up.headers.get("Content-Type", "application/json")
                 resp.set_status(up.status)
                 await resp.prepare(request)
                 first = True
                 tail = b""
-                async for chunk in up.content.iter_any():
-                    if first:
-                        w.inflight[rid]["prefill"] = 0
-                        t_first = time.time()
-                        w.inflight[rid]["t_first"] = t_first
-                        first = False
-                    w.inflight[rid]["decode_left"] = max(0, w.inflight[rid]["decode_left"] - 1)
-                    tail = (tail + chunk)[-65536:]
-                    await resp.write(chunk)
+                try:
+                    async for chunk in up.content.iter_any():
+                        if first:
+                            w.inflight[rid]["prefill"] = 0
+                            t_first = time.time()
+                            w.inflight[rid]["t_first"] = t_first
+                            first = False
+                        w.inflight[rid]["decode_left"] = max(0, w.inflight[rid]["decode_left"] - 1)
+                        tail = (tail + chunk)[-65536:]
+                        await resp.write(chunk)
+                except aiohttp.ClientPayloadError as e:
+                    # The worker died mid-stream: this request is lost (as under disaggregation); later ones avoid it.
+                    self.mark_dead(w, i, e)
+                    raise
                 await resp.write_eof()
             # The worker's own account of this request: the last data chunk's meta_info carries
             # cached_tokens / prompt_tokens (the measured prefix hit the replication argument rests

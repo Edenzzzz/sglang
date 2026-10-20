@@ -145,6 +145,12 @@ def run_arm(arm):
     # on the re-forked H200 host and the router panicked at start.
     lenient = ("--disable-circuit-breaker --health-failure-threshold 1000000 "
                "--health-check-timeout-secs 60 --queue-size 100000")
+    if os.environ.get("DISAGG_HEALTH", "0") == "1":
+        # Fault-tolerance arms (FAULT_AT): the stock router must be able to eject a dead worker. Health checks every
+        # 10 s, ejected after 3 consecutive failures (a killed worker refuses at once; a loaded live one answers
+        # within the 30 s timeout); the circuit breaker stays off for the reason above.
+        lenient = ("--disable-circuit-breaker --health-failure-threshold 3 --health-check-interval-secs 10 "
+                   "--health-check-timeout-secs 30 --queue-size 100000")
     if kind == "ours":
         ws = " ".join(u for u, _, _ in all_w)
         # LOAD_PUB=1: colocated workers publish their LoadStat on the (otherwise unused) bootstrap port.
@@ -170,8 +176,28 @@ def run_arm(arm):
                       "CHAT_OUT", "MIN_CTX", "MAX_CTX", "HOT", "HOT_GROUPS", "HOT_PREFIX", "AGENT_CONC",
                       "AGENT_SEED", "CHAT_SHAREGPT", "WORKLOAD", "FO_TASKS", "FO_PREFIX", "FO_ROUNDS", "FO_APPEND",
                       "FO_OUT", "FO_GAP", "FO_ZIPF", "FO_ROTATE", "FO_DURATION", "FO_TEXT", "CHAT_SPIKE", "FO_SPIKE", "MODEL_DIR") if k in os.environ)
-    C.run(0, f"setsid -f env {knobs} bash {W}/tasks/pd_colocation/mn_bench.sh {log} {RPORT} > {log}/mn_bench.log 2>&1 < /dev/null; echo started")
+    # The launch call itself can fail on the webshell, and nothing else would notice: the arm then waits out its
+    # 90 min timeout with no bench (and FAULT_AT fires anyway). Check that the bench log exists; relaunch if not.
+    for attempt in range(4):
+        C.run(0, f"setsid -f env {knobs} bash {W}/tasks/pd_colocation/mn_bench.sh {log} {RPORT} > {log}/mn_bench.log 2>&1 < /dev/null; echo started")
+        rc, out = C.run(0, f"sleep 5; [ -f {log}/mn_bench.log ] && echo BENCH_UP")
+        if "BENCH_UP" in out:
+            break
+        print(f"  bench launch attempt {attempt + 1} did not start: {out.strip()[-120:]}", flush=True)
     t0 = time.time()
+    fault_at = float(os.environ.get("FAULT_AT", "0"))
+    if fault_at > 0:
+        # Fault injection: FAULT_AT s into the bench, kill every worker on pod FAULT_POD (supervisors first, so none
+        # is relaunched). Pod 0 hosts the router, bench and pool master, so the faulted pod must be another one.
+        fpod = int(os.environ.get("FAULT_POD", "1"))
+        assert fpod != 0
+
+        def fault():
+            time.sleep(fault_at)
+            rc, out = C.run(fpod, f"date +%s.%N > {log}/fault_t.txt; {KILL}")
+            print(f"  FAULT: killed pod {fpod} workers at +{fault_at:.0f} s: {out.strip()[-40:]}", flush=True)
+        import threading
+        threading.Thread(target=fault, daemon=True).start()
     while time.time() - t0 < 5400:
         time.sleep(60)
         rc, out = C.run(0, f"grep -c MNBENCHDONE {log}/mn_bench.log")

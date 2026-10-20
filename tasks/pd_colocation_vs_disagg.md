@@ -286,6 +286,25 @@ static mixture.
         92 tok/s) because disagg reaches its 5 ms decode only by keeping few requests in flight.** The SLO-checked router
         without worker-side decode-first stays the multi-node configuration.
         sglang `079a8a6dc`.
+      - [x] **Fault tolerance: lose 2 of 8 GPUs mid-run (2026-10-20; same text fan-out C=32 + chat 8 req/s; at t = 300 s
+        every worker on pod 1 is killed, `FAULT_AT` / `FAULT_POD` in mn_run.py -- under PD disagg pod 1 is one of the
+        two prefill pods, under ours two colocated workers; our router marks a worker dead on a refused or broken
+        connection and reroutes (`test_router_dead_worker.py` PASS), the stock PD router ejects it by health check
+        (`DISAGG_HEALTH=1`: every 10 s, 3 failures); `bash tasks/pd_colocation/mn_fault_8gpu_20261020.sh`, windows by
+        `spike_windows.py --spike 300:600`; sglang 58e562574).** Two repeats:
+        | arm | agent att. before / after the fault | agent goodput before / after | chat att. (0.5 s + 20 ms) | lost requests |
+        |---|---|---|---|---|
+        | ours rep 1 | 96.3 / 97.9% | 506 / 480 tok/s | 84.8% | 1 agent + 4 chats (in flight on pod 1) |
+        | ours rep 2 | 96.4 / 98.3% | 500 / 506 tok/s | 85.1% | 6 chats |
+        | PD disagg rep 1 | 12.9 / 34.9% | 14 / 50 tok/s | 9.0% | 30 chats |
+        | PD disagg rep 2 | 23.1 / 33.0% | 24 / 49 tok/s | 14.9% | 1 agent + 2 chats |
+        Without a fault (same load): ours chat 91.4% / agent goodput 551 tok/s, disagg 26.2% / 92 tok/s. **Losing a
+        quarter of the GPUs costs ours ~6 chat-attainment points and nothing on agents** (both workers marked dead
+        within 10 ms of each other on their broken streams; their in-flight requests are lost, every later one is
+        rerouted to the six survivors, which already hold replicas of the hot prefixes); **disagg loses half its
+        prefill capacity and its chat attainment falls from 26% to 9-15%.** Its agent attainment rises after the fault
+        only because its pre-fault window holds the start-up burst it is already overloaded by -- at this load it has
+        no SLO headroom to lose, so the cleaner contrast is the chat number.
       - [x] **Second model: Qwen2.5-14B-Instruct (2026-10-20; 40 q / 8 kv heads, TP1 per H20, no MTP; same text fan-out
         C=32 + chat 8 req/s on 8 H20s; router SLO model recalibrated on 14B -- cold prefill ~2.3K tok/s at long context,
         own decode grid `decode_grid_qwen14b.json`; `mn_14b_8gpu_20261020.sh`; ours 0 tracebacks / 0 fallbacks).**

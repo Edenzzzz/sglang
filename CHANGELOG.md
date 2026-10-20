@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.23.0 — Fault tolerance; acceptance 3.0; page 128 (2026-10-20)
+
+- `router.py`: a worker that refuses or breaks a connection is marked dead and later requests are rerouted
+  (`test_router_dead_worker.py`); `mn_run.py` `FAULT_AT` / `FAULT_POD` fault injection, `DISAGG_HEALTH` ejection for the
+  stock router, and a bench-launch check (a lost launch call had left an arm idle for its timeout).
+- 8 H20s, kill 2 of 8 GPUs at 300 s: ours agent attainment 96 -> 98%, chat 85% (91% unfaulted); disagg chat 9-15%
+  (26% unfaulted).
+- H200 acceptance 3.0 (simulated): chat attainment +26% over prefill-prioritized + MTP, agent 2.5x. Page 128: negative.
+
 ## v1.22.4 — MTP ablation, CUDA graphs off, chat 6 req/s (2026-10-20)
 
 - H200, two repeats: without the split kernel the MTP stack loses 34% agent throughput (agent / chat attainment 11% /

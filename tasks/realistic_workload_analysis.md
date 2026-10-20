@@ -258,6 +258,23 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   arm: stock + MTP 36.6 tok/s / TTFT 33.42 s / TPOT 48.5 ms, chat 41.54 s / 42.6 ms; prefill-prioritized + MTP 37.1 /
   32.88 s / 52.2 ms, chat 42.67 s / 44.2 ms; ours + MTP 60.4 / 18.97 s / 31.7 ms, chat 10.90 s / 27.9 ms. 48 is the best
   cap for each system, so the cap-48 MTP comparison is each system at its best; cap 80 not run.
+- [x] **Acceptance sensitivity: MTP at 3.0 accepted tokens per verify (2026-10-20, H200, standard mix, chat 8 req/s;
+  `SGLANG_SIMULATE_ACC_LEN=3.0` for every arm -- logged accept len 3.00, the head still drafts, the verify still runs,
+  output lengths fixed by the drivers; `bash tasks/pd_colocation/h200_sim_acc3_20261020.sh`; two repeats, clean).**
+  Our head measures ~2.1; 3.0 is nearer what trained EAGLE3 heads reach on chat. Per tenant, rep 1 | rep 2:
+  | arm | agent tput | agent att. | chat TTFT | chat TPOT | chat att. |
+  |---|---|---|---|---|---|
+  | ours + MTP (rows + SLO admission) | 113.3 / 116.6 | 60.0 / 57.8% | 1.08 / 0.98 s | 10.1 / 9.8 ms | 69.0 / 69.8% |
+  | prefill-prioritized + MTP | 89.3 / 89.2 | 24.4 / 22.2% | 5.49 / 5.51 s | 12.6 / 13.0 ms | 55.2 / 55.2% |
+  | stock + MTP | 76.0 / 77.3 | 15.6 / 4.4% | 7.71 / 7.46 s | 14.1 / 14.5 ms | 48.3 / 48.9% |
+  vs prefill-prioritized: chat attainment **+26%**, agent attainment 2.5x, agent throughput +29%, chat TTFT -81%, chat
+  TPOT -22%. Higher acceptance lifts every system (prefill-prioritized chat 49 -> 55%); the chat-attainment gap to
+  +30% at 8 req/s stays (ours ~24% TPOT misses at both acceptances).
+- [x] **KV page 128 (2026-10-20, H200, standard mix, chat 8 req/s; `bash tasks/pd_colocation/h200_page128_20261020.sh`;
+  two repeats, clean; ours logged page_size 128 and 33K split calls) -- negative.** Every arm before ran sglang's default
+  page 1, where the FA3 role gathers K/V per token instead of paged TMA. At page 128: ours agent 93.2 / 94.7 tok/s,
+  attainment 40.0 / 37.8%, chat 57.8 / 59.6% (vs 102.5 / 45.0% / 63.0% at page 1); prefill-prioritized + MTP chat 48.8 /
+  51.3% (vs 49.3%). Page 128 costs ours ~9% throughput and 4 chat points and leaves stock unchanged; page 1 stays.
 - [x] **MTP ablation and CUDA graphs off (2026-10-20, H200, standard mix, two repeats each, all 0 tracebacks;
   `bash tasks/pd_colocation/h200_mtp_ablation_20261020.sh`; sglang f7682cf73).** The full ours + MTP stack at cap 48
   (four-mode step + split + EDF + deadline chunk) minus one component, per tenant (agent 10 s + 80 ms, chat 0.5 s +

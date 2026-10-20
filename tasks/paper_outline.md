@@ -294,9 +294,13 @@ sglang's mixed chunk.
 | ours, no MTP | -- | 3.2% / 5.9% (standard / light load) |
 | pdmux | 19.8-24.0% (its own form) | 5.0% / 7.5% |
 
-### 6.9 Fault tolerance (if time permits)
-- xPyD: kill a prefill node -> TTFT and ITL rise on every decode node fed by it; colocated nodes re-route to any
-  survivor
+### 6.9 Fault tolerance (8 H20s, kill 2 of 8 GPUs at t = 300 s, two repeats)
+| arm | agent attainment before / after | chat attainment (whole run) |
+|---|---|---|
+| **ours** (router marks the dead workers and reroutes) | **96.4 / 98.1%** | **85.0%** (91.4% without the fault) |
+| PD disagg 2P2D (pod 1 = one of two prefill pods; health-check ejection) | 18 / 34% | 9.0-14.9% (26.2% without) |
+- ours loses only the requests in flight on the killed pod (1-6 per run); survivors already hold the hot prefixes
+- disaggregation loses half its prefill capacity; its chat attainment falls by 11-17 points
 
 ## 7. Ablations
 
@@ -333,4 +337,4 @@ sglang's mixed chunk.
     goodput, not raw decode speed
   - short-prompt standalone workloads see little gain; the step helps where long-context prefill meets decode
   - MTP is concurrency-limited at 48 running requests for every system
-  - open: Llama-3.3-70B / GLM-4.5-Air on 4 nodes with simulated MTP, semi-PD baseline (blocked on a CUDA 12 toolkit install), fault tolerance, Blackwell kernels
+  - open: Llama-3.3-70B on 4 x 4 H20 (TP4, trained EAGLE3 head), semi-PD baseline (blocked on a CUDA 12 toolkit install), Blackwell kernels

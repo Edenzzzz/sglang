@@ -338,8 +338,15 @@ code { font: .86em "IBM Plex Mono", monospace; background: var(--surface); paddi
 <tr><td>pdmux</td><td class="r">19.8–24.0%<br><span class="meta">its own form</span></td><td class="r">5.0% / 7.5%</td></tr>
 </tbody></table></div>
 
-<h3>6.9 Fault tolerance (if time permits)</h3>
-<ul><li>xPyD: kill a prefill node → TTFT and ITL rise on every decode node fed by it; colocated nodes re-route to any survivor</li></ul>
+<h3>6.9 Fault tolerance <span class="meta">— 8 H20s, kill 2 of 8 GPUs at t = 300 s, two repeats</span></h3>
+<div class="tbl"><table>
+<thead><tr><th>Arm</th><th class="r">Agent attainment before / after</th><th class="r">Chat attainment (whole run)</th></tr></thead>
+<tbody>
+<tr class="ours"><td>ours (router marks the dead workers and reroutes)</td><td class="r">96.4 / 98.1%</td><td class="r">85.0% <span class="meta">(91.4% without the fault)</span></td></tr>
+<tr><td>PD disagg 2P2D (pod 1 = one of two prefill pods; health-check ejection)</td><td class="r">18 / 34%</td><td class="r">9.0–14.9% <span class="meta">(26.2% without)</span></td></tr>
+</tbody></table></div>
+<ul><li>ours loses only the requests in flight on the killed pod (1–6 per run); survivors already hold the hot prefixes</li>
+<li>disaggregation loses half its prefill capacity; its chat attainment falls by 11–17 points</li></ul>
 
 <h2 id="ablations"><span class="n">07</span>Ablations</h2>
 <ul>
@@ -370,7 +377,7 @@ code { font: .86em "IBM Plex Mono", monospace; background: var(--surface); paddi
 <li>per-token decode: disaggregation's decode-only nodes keep 5 ms TPOT vs our 12 ms; the gain is in attainment and goodput, not raw decode speed</li>
 <li>short-prompt standalone workloads see little gain; the step helps where long-context prefill meets decode</li>
 <li>MTP is concurrency-limited at 48 running requests for every system</li>
-<li>open: Llama-3.3-70B / GLM-4.5-Air on 4 nodes with simulated MTP, semi-PD baseline (blocked on a CUDA 12 toolkit install), fault tolerance, Blackwell kernels</li>
+<li>open: Llama-3.3-70B on 4 × 4 H20 (TP4, trained EAGLE3 head), semi-PD baseline (blocked on a CUDA 12 toolkit install), Blackwell kernels</li>
 </ul></div>
 </main>
 </div>

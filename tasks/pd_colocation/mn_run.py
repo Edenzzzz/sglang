@@ -31,6 +31,9 @@ ARMS = {
     "disagg_2p2d": (["prefill"] * (NPODS // 2) + ["decode"] * (NPODS // 2), "sgl:pd"),
     "disagg_1p3d": (["prefill"] * (NPODS // 4) + ["decode"] * (NPODS - NPODS // 4), "sgl:pd"),
 }
+# disagg_p<P>: the first P pods prefill, the other NPODS - P decode -- any P:D split, for ratio sweeps (2026-10-21).
+for _p in range(1, NPODS):
+    ARMS[f"disagg_p{_p}"] = (["prefill"] * _p + ["decode"] * (NPODS - _p), "sgl:pd")
 
 
 def hosts():

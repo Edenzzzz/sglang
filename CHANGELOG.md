@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.24.0 — 32-GPU P:D ratio sweep setup (2026-10-21)
+
+- User authorized up to 8 x 4 H20. `mn_run.py` `disagg_p<P>` arms (any prefill:decode pod split); 32-GPU Qwen-7B
+  provisioning (`mn_provision_32g_20261021.sh`); 70B per-request results archived (`h20_70b_requests_20261021.npz`).
+
 ## v1.23.8 — One-GPU chat 8 req/s accepted as a limitation (2026-10-21)
 
 - +28% chat SLO attainment (63.0% vs 49.3%) recorded as the one point below the +30% bar, per the user.

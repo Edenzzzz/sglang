@@ -16,6 +16,7 @@ if [ "${WORKLOAD:-}" = fanout ]; then
   # PD point 2b: fan-out agents on shared long task prefixes with rotating popularity (drivers/serving/fanout_agents.py).
   # The driver marks itself ready in the release barrier once its prefixes are built (tokenizing takes ~1-2 min).
   $W/venv/bin/python $W/drivers/serving/fanout_agents.py --url http://127.0.0.1:$RPORT --tasks ${FO_TASKS:-8} \
+    --tokenizer $W/${MODEL_DIR:-qwen7b} \
     --prefix-len ${FO_PREFIX:-65536} --concurrency ${AGENT_CONC:-16} --rounds ${FO_ROUNDS:-4} \
     --append-len ${FO_APPEND:-1024} --output-len ${FO_OUT:-128} --tool-gap-s ${FO_GAP:-5} --zipf ${FO_ZIPF:-1.2} \
     --rotate-s ${FO_ROTATE:-180} --duration ${FO_DURATION:-900} --out $OUT/fanout.json \
@@ -26,6 +27,7 @@ if [ "${WORKLOAD:-}" = fanout ]; then
   if [ -n "${FO_SPIKE:-}" ]; then
     IFS=: read -r FS_DELAY FS_CONC FS_DUR <<< "$FO_SPIKE"
     BENCH_BARRIER_DIR= $W/venv/bin/python $W/drivers/serving/fanout_agents.py --url http://127.0.0.1:$RPORT \
+      --tokenizer $W/${MODEL_DIR:-qwen7b} \
       --tasks ${FO_TASKS:-8} --prefix-len ${FO_PREFIX:-65536} --concurrency $FS_CONC --rounds ${FO_ROUNDS:-4} \
       --append-len ${FO_APPEND:-1024} --output-len ${FO_OUT:-128} --tool-gap-s ${FO_GAP:-5} --zipf ${FO_ZIPF:-1.2} \
       --rotate-s ${FO_ROTATE:-180} --duration $FS_DUR --start-delay $FS_DELAY --seed 7 --out $OUT/fanout_spike.json \
@@ -37,7 +39,7 @@ elif [ -n "${AGENT_CONC:-}" ]; then
   # sessions kept active, the next starts when one finishes, rounds back to back. Same TraceLab
   # cohort selection as the single-GPU kernel_concurrency_env (providers, round weighting, seed).
   export BENCH_SESSION_CONCURRENCY=$AGENT_CONC BENCH_SESSION_AUDIT_FILE=$OUT/agent_programs.json
-  $W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/qwen7b \
+  $W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/${MODEL_DIR:-qwen7b} \
     --dataset-name tracelab-claude --dataset-path $W/workloads/tracelab/syfi_full_min.jsonl.gz --tokenize-prompt \
     --tracelab-num-groups $S --tracelab-min-context-len ${MIN_CTX:-32768} --tracelab-max-context-len ${MAX_CTX:-65536} \
     --tracelab-min-output-len 1 --num-prompts $((S * T)) --request-rate inf \
@@ -46,7 +48,7 @@ elif [ -n "${AGENT_CONC:-}" ]; then
     --warmup-requests 2 --output-file $OUT/agent.json --output-details --disable-tqdm > $OUT/bench_agent.log 2>&1 &
   unset BENCH_SESSION_CONCURRENCY BENCH_SESSION_AUDIT_FILE
 else
-$W/venv/bin/python -m sglang.bench_serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/qwen7b \
+$W/venv/bin/python -m sglang.bench_serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/${MODEL_DIR:-qwen7b} \
   --dataset-name tracelab-claude --dataset-path $W/tracelab_trace.jsonl.gz --tokenize-prompt \
   --tracelab-num-groups $S --tracelab-min-context-len ${MIN_CTX:-16384} --tracelab-max-context-len ${MAX_CTX:-49152} \
   --tracelab-min-output-len 64 --num-prompts $((S * T)) --request-rate ${SESSION_RATE:-0.5} \
@@ -66,7 +68,7 @@ elif [ "${CHAT_SHAREGPT:-0}" = 1 ]; then
 else
   SECOND=(--dataset-name random-ids --random-input ${CHAT_IN:-512} --random-output ${CHAT_OUT:-128} --random-range-ratio 0.5)
 fi
-$W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/qwen7b \
+$W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/${MODEL_DIR:-qwen7b} \
   "${SECOND[@]}" --request-rate ${CHAT_RATE:-16} --num-prompts ${CHAT_N:-3200} \
   --warmup-requests 2 --output-file $OUT/chat.json --output-details --disable-tqdm > $OUT/bench_chat.log 2>&1 &
 C=$!
@@ -85,7 +87,7 @@ if [ -n "${CHAT_SPIKE:-}" ]; then
   IFS=: read -r SP_DELAY SP_RATE SP_N <<< "$CHAT_SPIKE"
   ( sleep $SP_DELAY; date +%s.%N > $OUT/chat_spike.start
     BENCH_BARRIER_DIR= $W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT \
-      --model $W/qwen7b "${SECOND[@]}" --seed 7 --request-rate $SP_RATE --num-prompts $SP_N --warmup-requests 0 \
+      --model $W/${MODEL_DIR:-qwen7b} "${SECOND[@]}" --seed 7 --request-rate $SP_RATE --num-prompts $SP_N --warmup-requests 0 \
       --output-file $OUT/chat_spike.json --output-details --disable-tqdm ) > $OUT/bench_chat_spike.log 2>&1 &
   S=$!
 fi

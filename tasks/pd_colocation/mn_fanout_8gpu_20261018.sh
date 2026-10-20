@@ -13,7 +13,7 @@
 set -u
 export PATH=$HOME/.merlin-cli/bin:$PATH
 cd "$(dirname "$0")"
-RA=$(grep -oE "ROUTER_ARGS=.*" /tmp/h20/mn_slo_calibrate.log | tail -1 | cut -d= -f2-)
+RA=$(grep -oE "ROUTER_ARGS=.*" ${RA_LOG:-/tmp/h20/mn_slo_calibrate.log} | tail -1 | cut -d= -f2-)
 export SID=bb854a10b8954223 MN_CP=cn-seed NPODS=4 GPUS_PER_POD=2
 export KERNEL=${KERNEL:-mtpsplit} PREEMPT=1 CHUNK=${CHUNK:-2048} HC_PREFETCH=timeout EDF_UNCACHED=1
 export WORKLOAD=fanout FO_TASKS=${FO_TASKS:-16} FO_PREFIX=${FO_PREFIX:-65536} AGENT_CONC=${AGENT_CONC:-32} FO_ROUNDS=4

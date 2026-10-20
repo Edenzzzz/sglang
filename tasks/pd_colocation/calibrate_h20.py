@@ -8,6 +8,8 @@ base cost and per-sequence slope that router.py's PerfModel(decode_step_ms, deco
 uses. Prints the router flags to use.
 """
 import concurrent.futures as cf, json, random, sys, time, urllib.request
+# CAL_GRID: where the decode grid goes (one per model; the 7B grid stays at the default path).
+GRID_PATH = __import__("os").environ.get("CAL_GRID", "/dev/shm/w/mn/decode_grid.json")
 
 URL = sys.argv[1].rstrip("/")
 
@@ -109,8 +111,8 @@ chunk_interference = max(interf)
 # NEGATIVE base cost, the max form overpredicted the middle of the grid by 3-4x.
 import json
 json.dump([{"ctx": x, "conc": c, "itl_ms": m} for x, c, m in dec],
-          open("/dev/shm/w/mn/decode_grid.json", "w"), indent=1)
-print("decode grid -> /dev/shm/w/mn/decode_grid.json")
+          open(GRID_PATH, "w"), indent=1)
+print(f"decode grid -> {GRID_PATH}")
 
 # ITL = a + b*conc + c*conc*ctx/1e3 (least squares on the three terms)
 X = [[1.0, float(c), c * x / 1e3] for x, c, _ in dec]
@@ -127,5 +129,5 @@ a, b, c = (A[i][3] / A[i][i] for i in range(3))
 long_rate = sum(n_ for n_, _ in pre[2:]) / sum(t for _, t in pre[2:])
 print(f"rejected linear fit (kept for the record): ITL = {a:.2f} + {b:.4f}*conc + {c:.5f}*conc*kv/1e3 ms")
 curve = ",".join(f"{n_}:{t * 1000:.1f}" for n_, t in pre)
-print(f"ROUTER_ARGS=--prefill-tok-s {long_rate:.0f} --prefill-curve {curve} --decode-grid /dev/shm/w/mn/decode_grid.json "
+print(f"ROUTER_ARGS=--prefill-tok-s {long_rate:.0f} --prefill-curve {curve} --decode-grid {GRID_PATH} "
       f"--chunk-interference {chunk_interference:.3f}")

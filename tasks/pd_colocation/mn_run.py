@@ -90,7 +90,7 @@ def run_arm(arm):
            f"TTFT_SLO_MS={os.environ.get('TTFT_SLO_MS', '2000')} PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')} "
            f"SGL_PY={os.environ.get('SGL_PY', '')} HC_PREFETCH={os.environ.get('HC_PREFETCH', 'best_effort')} HC_WRITE={os.environ.get('HC_WRITE', '')} HC_HOST_MODE={os.environ.get('HC_HOST_MODE', '')} WORKER_EXTRA=\"{os.environ.get('WORKER_EXTRA', '')}\" "
            f"PDMUX={int(pdmux)} PDMUX_DIV={os.environ.get('PDMUX_DIV', '30')} EDF_UNCACHED={os.environ.get('EDF_UNCACHED', '0')} "
-           f"MEM_FRAC={os.environ.get('MEM_FRAC', '0.85')} SM_FA3={os.environ.get('SM_FA3', '66')} PDMUX_MANUAL='{os.environ.get('PDMUX_MANUAL', '')}' PDMUX_SHARE={os.environ.get('PDMUX_SHARE', '0')} TP={os.environ.get('TP', '1')} GPUS_PER_POD={os.environ.get('GPUS_PER_POD', '2')} SPEC_STEPS={os.environ.get('SPEC_STEPS', '3')} SPEC_TOKENS={os.environ.get('SPEC_TOKENS', '4')} PDMUX_SHARE_DEADLINE={os.environ.get('PDMUX_SHARE_DEADLINE', '0')} PDMUX_ITL_BUDGET={os.environ.get('PDMUX_ITL_BUDGET', '0')} DEADLINE_CHUNK={os.environ.get('DEADLINE_CHUNK', '')} STEP_BUDGET={os.environ.get('STEP_BUDGET', '')} STEP_TRACE={os.environ.get('STEP_TRACE', '0')} TTFT_SCALE_MS={os.environ.get('TTFT_SCALE_MS', '')} CKPT_EVERY={os.environ.get('CKPT_EVERY', '')} LONG_DEADLINE={os.environ.get('LONG_DEADLINE', '')} CTX_LEN={os.environ.get('CTX_LEN', '131072')} YARN_FACTOR={os.environ.get('YARN_FACTOR', '4.0')} SPLIT_OVERLAP={os.environ.get('SPLIT_OVERLAP', '0')} FI_PERSISTENT={os.environ.get('FI_PERSISTENT', '1')} KV_COPY={os.environ.get('KV_COPY', 'off')} ITL_SLO={os.environ.get('ITL_SLO', '')} MIXED_CHUNK={os.environ.get('MIXED_CHUNK', '1')} LOAD_PUB={os.environ.get('LOAD_PUB', '0')} KV_COPY_NWORKERS={NPODS * int(os.environ.get('GPUS_PER_POD', '2'))}")
+           f"MEM_FRAC={os.environ.get('MEM_FRAC', '0.85')} SM_FA3={os.environ.get('SM_FA3', '66')} PDMUX_MANUAL='{os.environ.get('PDMUX_MANUAL', '')}' PDMUX_SHARE={os.environ.get('PDMUX_SHARE', '0')} TP={os.environ.get('TP', '1')} GPUS_PER_POD={os.environ.get('GPUS_PER_POD', '2')} SPEC_STEPS={os.environ.get('SPEC_STEPS', '3')} SPEC_TOKENS={os.environ.get('SPEC_TOKENS', '4')} PDMUX_SHARE_DEADLINE={os.environ.get('PDMUX_SHARE_DEADLINE', '0')} PDMUX_ITL_BUDGET={os.environ.get('PDMUX_ITL_BUDGET', '0')} DEADLINE_CHUNK={os.environ.get('DEADLINE_CHUNK', '')} STEP_BUDGET={os.environ.get('STEP_BUDGET', '')} STEP_TRACE={os.environ.get('STEP_TRACE', '0')} TTFT_SCALE_MS={os.environ.get('TTFT_SCALE_MS', '')} CKPT_EVERY={os.environ.get('CKPT_EVERY', '')} LONG_DEADLINE={os.environ.get('LONG_DEADLINE', '')} CTX_LEN={os.environ.get('CTX_LEN', '131072')} YARN_FACTOR={os.environ.get('YARN_FACTOR', '4.0')} SPLIT_OVERLAP={os.environ.get('SPLIT_OVERLAP', '0')} FI_PERSISTENT={os.environ.get('FI_PERSISTENT', '1')} KV_COPY={os.environ.get('KV_COPY', 'off')} ITL_SLO={os.environ.get('ITL_SLO', '')} MIXED_CHUNK={os.environ.get('MIXED_CHUNK', '1')} LOAD_PUB={os.environ.get('LOAD_PUB', '0')} MODEL_DIR={os.environ.get('MODEL_DIR', 'qwen7b')} KV_COPY_NWORKERS={NPODS * int(os.environ.get('GPUS_PER_POD', '2'))}")
     if hc:
         rc, out = C.run(0, f"mkdir -p {log}; ip=$(hostname -I | tr ' ' '\\n' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1); "
                            "p=$(python3 -c \"import random, socket\nfor _ in range(200):\n    p = random.randrange(20000, 29000)\n    try:\n        [socket.socket().bind(('0.0.0.0', q)) for q in (p, p + 1)]; print(p); break\n    except OSError:\n        pass\"); "
@@ -169,7 +169,7 @@ def run_arm(arm):
                      ("SESSIONS", "TURNS", "SESSION_RATE", "SLOWDOWN", "CHAT_RATE", "CHAT_N", "CHAT_IN",
                       "CHAT_OUT", "MIN_CTX", "MAX_CTX", "HOT", "HOT_GROUPS", "HOT_PREFIX", "AGENT_CONC",
                       "AGENT_SEED", "CHAT_SHAREGPT", "WORKLOAD", "FO_TASKS", "FO_PREFIX", "FO_ROUNDS", "FO_APPEND",
-                      "FO_OUT", "FO_GAP", "FO_ZIPF", "FO_ROTATE", "FO_DURATION", "FO_TEXT", "CHAT_SPIKE", "FO_SPIKE") if k in os.environ)
+                      "FO_OUT", "FO_GAP", "FO_ZIPF", "FO_ROTATE", "FO_DURATION", "FO_TEXT", "CHAT_SPIKE", "FO_SPIKE", "MODEL_DIR") if k in os.environ)
     C.run(0, f"setsid -f env {knobs} bash {W}/tasks/pd_colocation/mn_bench.sh {log} {RPORT} > {log}/mn_bench.log 2>&1 < /dev/null; echo started")
     t0 = time.time()
     while time.time() - t0 < 5400:
@@ -189,13 +189,14 @@ def run_arm(arm):
 def calibrate():
     """Fit router.py's PerfModel on one H20 colocated worker (pod 0, GPU 0) with
     calibrate_h20.py; prints the ROUTER_ARGS line for the cache_slo arms."""
-    log = f"{W}/mn/calibrate"
+    model = os.environ.get("MODEL_DIR", "qwen7b")
+    log = f"{W}/mn/calibrate" + ("" if model == "qwen7b" else f"_{model}")
     print("=== calibrate", flush=True)
     C.run_all(KILL)
     # The perf model must describe the workers the router will route to: same kernel / MTP / EDF /
     # preemption config as the arm (env), not the stock FA2 worker.
     cenv = (f"KERNEL={os.environ.get('KERNEL', 'lpt')} EDF={os.environ.get('EDF', '0')} SPEC={os.environ.get('SPEC', '0')} "
-            f"PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')}")
+            f"PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')} MODEL_DIR={model}")
     C.run(0, f"rm -rf {log}; mkdir -p {log}; {cenv} bash {W}/tasks/pd_colocation/mn_node.sh coloc {log}")
     hs = hosts()
     t0 = time.time()
@@ -209,7 +210,8 @@ def calibrate():
         rc, out = C.run(0, f"curl -sg -o /dev/null -w '%{{http_code}}' --max-time 3 {url}/health")
         if out.strip().endswith("200"):
             break
-    C.run(0, f"setsid -f {W}/venv/bin/python {W}/tasks/pd_colocation/calibrate_h20.py {url} > {log}/calibrate.log 2>&1 < /dev/null; echo started")
+    grid = f"{W}/mn/decode_grid.json" if model == "qwen7b" else f"{W}/mn/decode_grid_{model}.json"
+    C.run(0, f"CAL_GRID={grid} setsid -f {W}/venv/bin/python {W}/tasks/pd_colocation/calibrate_h20.py {url} > {log}/calibrate.log 2>&1 < /dev/null; echo started")
     while time.time() - t0 < 2400:
         time.sleep(30)
         rc, out = C.run(0, f"cat {log}/calibrate.log")

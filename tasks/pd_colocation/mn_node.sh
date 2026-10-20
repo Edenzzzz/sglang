@@ -84,7 +84,8 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # which lands on the 50-port grid other workers on the host claim; the worker then hung at
   # "Init parallel begin." until the supervisor killed it (pod 2 GPU 0: 3 x 6 min, 2026-10-16).
   NCCL=$(pick $((ROLE * 2 + g + 104729 + RANDOM)))
-  ARGS=(--model $W/qwen7b --attention-backend flashinfer --mem-fraction-static ${MEM_FRAC:-0.85}
+  # MODEL_DIR: model directory under $W (default qwen7b; the second-model check uses qwen14b).
+  ARGS=(--model $W/${MODEL_DIR:-qwen7b} --attention-backend flashinfer --mem-fraction-static ${MEM_FRAC:-0.85}
         --host :: --port $PORT --nccl-port $NCCL --context-length ${CTX_LEN:-131072} --watchdog-timeout 600
         --json-model-override-args '{"rope_scaling":{"factor":'${YARN_FACTOR:-4.0}',"original_max_position_embeddings":32768,"type":"yarn"}}')
   # Shared L3 prefix cache (goal points 2 and 4): every colocated worker writes the prefixes it

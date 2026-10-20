@@ -1,0 +1,359 @@
+<title>AttentionFuse Paper Outline</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #f2f0ea; --fg: #1d2326; --muted: #5d676b; --rule: #dcd8ce;
+  --accent: #0f6b6b; --accent-soft: #e0efec; --ours: #0f6b6b; --warn: #9a5b12; --warn-soft: #f6ead8;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #14191b; --surface: #1c2326; --fg: #e4e7e6; --muted: #9aa5a8; --rule: #2e383b;
+  --accent: #5cc4bb; --accent-soft: #19302f; --ours: #6fd3c9; --warn: #e0a85c; --warn-soft: #2f2617; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #14191b; --surface: #1c2326; --fg: #e4e7e6; --muted: #9aa5a8; --rule: #2e383b;
+  --accent: #5cc4bb; --accent-soft: #19302f; --ours: #6fd3c9; --warn: #e0a85c; --warn-soft: #2f2617; color-scheme: dark }
+
+body { background: var(--bg); color: var(--fg); font: 400 17px/1.6 "Source Serif 4", Georgia, serif; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-block: 40px 80px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 48px; }
+nav { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start;
+  font: 500 13px/1.5 "IBM Plex Sans", system-ui, sans-serif; display: grid; gap: 4px; }
+nav .lab { text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+nav a { color: var(--muted); text-decoration: none; padding: 2px 0 2px 10px; border-left: 2px solid var(--rule); }
+nav a:hover { color: var(--accent); border-left-color: var(--accent); }
+main { min-width: 0; max-width: 760px; }
+h1, h2, h3 { text-wrap: balance; line-height: 1.25; }
+h1 { font-size: 2.1rem; font-weight: 700; margin: 0 0 12px; }
+h2 { font-size: 1.45rem; font-weight: 600; margin: 56px 0 12px; padding-top: 12px; border-top: 1px solid var(--rule); scroll-margin-top: 16px; }
+h2 .n { font: 500 .85rem "IBM Plex Mono", monospace; color: var(--accent); margin-right: 10px; vertical-align: 2px; }
+h3 { font-size: 1.1rem; font-weight: 600; margin: 28px 0 8px; }
+p { margin: 0 0 12px; }
+ul, ol { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 3px 0; }
+li > ul { margin: 2px 0 4px; }
+.meta { font: 400 13.5px/1.55 "IBM Plex Sans", system-ui, sans-serif; color: var(--muted); }
+.kicker { font: 600 11px "IBM Plex Sans", sans-serif; text-transform: uppercase; letter-spacing: .1em; color: var(--accent); margin-bottom: 8px; }
+.num { font-family: "IBM Plex Mono", monospace; font-size: .92em; }
+.headline { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 24px 0 8px; }
+.stat { background: var(--surface); border-radius: 6px; padding: 14px 16px; }
+.stat b { display: block; font: 500 1.55rem/1.2 "IBM Plex Mono", monospace; color: var(--ours); }
+.stat span { font: 400 13px/1.4 "IBM Plex Sans", sans-serif; color: var(--muted); }
+.outline { background: var(--surface); border-radius: 8px; padding: 18px 22px; }
+.outline > ul { padding-left: 0; list-style: none; }
+.outline > ul > li { margin: 10px 0; }
+.outline > ul > li > b:first-child { font: 600 12px "IBM Plex Sans", sans-serif; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
+.contrib { counter-reset: c; list-style: none; padding: 0; display: grid; gap: 12px; }
+.contrib li { counter-increment: c; border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px 12px 52px; position: relative; border-radius: 0 6px 6px 0; margin: 0; }
+.contrib li::before { content: counter(c); position: absolute; left: 16px; top: 11px; font: 600 1.2rem "IBM Plex Mono", monospace; color: var(--accent); }
+.contrib .tag { font: 500 11px "IBM Plex Sans", sans-serif; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.tbl { overflow-x: auto; margin: 12px 0 14px; }
+table { border-collapse: collapse; width: 100%; font: 400 14px/1.4 "IBM Plex Sans", system-ui, sans-serif; }
+th { text-align: left; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); border-bottom: 1.5px solid var(--fg); padding: 6px 10px 6px 0; vertical-align: bottom; }
+td { border-bottom: 1px solid var(--rule); padding: 7px 10px 7px 0; vertical-align: top; }
+td.r, th.r { text-align: right; font-family: "IBM Plex Mono", monospace; }
+tr.ours td { color: var(--ours); font-weight: 600; }
+tr.main td:first-child { font-weight: 600; }
+.pill { display: inline-block; font: 600 10.5px "IBM Plex Sans", sans-serif; text-transform: uppercase; letter-spacing: .07em; padding: 1px 7px; border-radius: 999px; background: var(--accent); color: var(--bg); vertical-align: 1px; }
+.note { background: var(--warn-soft); border-left: 3px solid var(--warn); padding: 10px 14px; border-radius: 0 6px 6px 0; font-size: 15.5px; margin: 12px 0; }
+.note b { color: var(--warn); }
+code { font: .86em "IBM Plex Mono", monospace; background: var(--surface); padding: 1px 4px; border-radius: 3px; }
+@media (max-width: 860px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; padding-block: 24px 60px; }
+  nav { display: none; }
+  body { font-size: 16px; }
+  h1 { font-size: 1.7rem; }
+}
+</style>
+
+<div class="wrap">
+<nav aria-label="Sections">
+  <div class="lab">Contents</div>
+  <a href="#outline">Paper outline</a>
+  <a href="#abstract">Abstract</a>
+  <a href="#intro">1 Introduction</a>
+  <a href="#background">2 Background</a>
+  <a href="#motivation">3 Motivation</a>
+  <a href="#design">4 Design</a>
+  <a href="#impl">5 Implementation</a>
+  <a href="#eval">6 Evaluation</a>
+  <a href="#ablations">7 Ablations</a>
+  <a href="#related">8 Related work</a>
+  <a href="#conclusion">9 Conclusion</a>
+</nav>
+
+<main>
+<div class="kicker">Draft · 2026-10-20 · MLSys submission</div>
+<h1>AttentionFuse: SLO-Aware Prefill-Decode Colocation with Fused Attention and Cache-First Routing</h1>
+<p class="meta">Rebuilt from the 11/21 outline with results measured since. Every number traces to a dated entry (commit + command) in the task docs. Model: Qwen2.5-7B-Instruct with an EAGLE3 MTP head unless noted; single node = 1 H200, multi-node = 8 H20.</p>
+
+<div class="headline">
+  <div class="stat"><b>91% vs 26%</b><span>chat SLO attainment vs PD disaggregation, 8 H20</span></div>
+  <div class="stat"><b>6×</b><span>agent goodput vs PD disaggregation (551 vs 92 tok/s)</span></div>
+  <div class="stat"><b>97–100%</b><span>agent attainment through a 3× chat spike and 2× agent load</span></div>
+  <div class="stat"><b>+72% / +55%</b><span>chat attainment / throughput vs mixed chunk, 1 H200 with MTP</span></div>
+</div>
+
+<h2 id="outline"><span class="n">00</span>Paper outline (10/20)</h2>
+<div class="outline"><ul>
+<li><b>Goal</b> — we need to meet per-tenant SLOs (chat: TTFT + per-token latency; agents: TTFT + TPOT) while maximizing goodput, for mixed chat + long-context agent traffic, with speculative decoding (MTP) on as production runs it — without fixing a prefill / decode split in hardware.</li>
+<li><b>Motivation</b>
+  <ul>
+  <li>prefill-prioritized chunked prefill — good throughput, but long prefills stall running decodes (agent P99 ITL <span class="num">1.35 s</span>)</li>
+  <li>mixed chunk — decode rides the prefill step, but every row, 64–256K prefill rows included, runs through one FA2 prefill kernel (~25% more attention time than splitting by role)</li>
+  <li>PD disaggregation — decode isolation, but a few prefill nodes queue every tenant (TTFT 14–31 s at our loads), dilute each prefix across prefill nodes and re-prefill agent turns</li>
+  <li>PD multiplexing — per-phase SM groups, but no CPU-GPU overlap scheduling and one CUDA-graph set per SM group</li>
+  <li>MTP raises decode-node utilization under disaggregation, undercutting "colocation for utilization" unless the colocated schedule is MTP-compatible and efficient — MTP is in scope</li>
+  </ul></li>
+<li><b>Design</b>
+  <ul>
+  <li>a fused step that runs prefill, decode, draft and verify attention side by side on pre-assigned SMs: FA3 (Hopper TMA / wgmma) for prefill tiles, FA2 for decode / verify tiles, FA2 overlapped beside FA3</li>
+  <li>the 4-mode MTP step: the prefill chunk rides the verify forward, inside the stock scheduler (overlap scheduler on, one CUDA-graph set)</li>
+  <li>why does this help? cheaper per prefill token than mixed chunk, no decode stalls as in prefill-prioritized, and EDF spends each step on deadlines</li>
+  </ul></li>
+<li><b>Distributed inference</b>
+  <ul>
+  <li>meeting SLOs across nodes requires routing on predicted load, not on a fixed prefill / decode role</li>
+  <li>EDF needs a step-time estimate; the fused step admits a simple one, shared by scheduler and router</li>
+  <li>route each request to the node holding the longest cached prefix that can still meet every SLO; pull the rest from a cluster KV pool (best-effort replication); nodes report their load to the router</li>
+  </ul></li>
+<li><b>Evaluation</b>
+  <ul>
+  <li>main workload: <b>mixed TraceLab coding agents + ShareGPT chat</b> (standard 32–64K and long 32–250K mixes); multi-node fan-out agents on shared repository prefixes + chat; <b>standalone ShareGPT, math, code and agent / tool traces</b></li>
+  <li>single node vs prefill-prioritized and mixed chunk (with and without MTP), pdmux as a reference</li>
+  <li>multi-node vs PD disaggregation (with and without MTP on decode); semi-PD if time permits</li>
+  <li>per-tenant SLO attainment and goodput, error bars over repeats, load spikes and mixture shifts, a second model</li>
+  </ul></li>
+<li><b>Fault tolerance (if time permits)</b>
+  <ul><li>prefill-node failure propagates to decode nodes under disaggregation; colocated nodes absorb it</li></ul></li>
+</ul></div>
+
+<h2 id="abstract"><span class="n">—</span>Abstract</h2>
+<p>LLM serving fleets are disaggregated into prefill and decode nodes so that long prefills never stall decoding. The split is fixed in hardware: it queues requests behind a few prefill nodes, dilutes cached prefixes across them, and leaves decode compute idle — which speculative decoding (MTP) now fills on the disaggregated side. We present AttentionFuse, a colocated serving system in which every node runs prefill and decode together. Its step runs FA3 prefill tiles and FA2 decode / verify tiles on pre-assigned SMs inside sglang's scheduler, with the prefill chunk riding the MTP verify forward (a 4-mode step) and an EDF scheduler that sizes each chunk to deadlines. Across nodes, a cache-first router sends each request to the node holding the most of its prefix that can still meet every SLO, pulling the rest from a cluster KV pool. On mixed coding-agent + chat traffic over 8 H20s, AttentionFuse meets chat SLOs for 91% of requests vs 26% under PD disaggregation and delivers 6× the agent goodput, holding 97–100% agent attainment through a 3× chat spike and a doubled agent load; with a 14B model disaggregation collapses (agent TTFT ~290 s). On one H200 with MTP it raises chat SLO attainment by 72%, agent attainment 15× and throughput 55% over sglang's mixed chunk.</p>
+
+<h2 id="intro"><span class="n">01</span>Introduction</h2>
+<ul>
+<li><b>Setting / problem</b>
+  <ul>
+  <li>production traffic mixes interactive chat (tight TTFT and per-token SLOs) with coding / tool agents whose prompts run 32–250K tokens, share long prefixes across turns and programs, and arrive in bursts</li>
+  <li>MTP speculative decoding is standard and multiplies decode-side work per step</li>
+  <li><b>goal:</b> meet per-tenant SLOs at the highest request volume per GPU, and adapt to load spikes and mixture shifts without re-provisioning</li>
+  </ul></li>
+<li><b>Why existing systems do not meet it</b>
+  <ul>
+  <li>prefill-prioritized and mixed-chunk colocation: decodes either stall behind long prefills or pay a slow one-kernel step; neither orders work by deadline</li>
+  <li>PD disaggregation: decode isolation at the cost of prefill queueing, prefix dilution and per-turn re-prefill; the P:D ratio is fixed, so a spike or a mixture shift lands on whichever side is short</li>
+  <li>PD multiplexing: per-phase SM groups, but loses the CPU-GPU overlap scheduler and multiplies CUDA graphs by groups</li>
+  </ul></li>
+<li><b>Key insight</b> — the isolation disaggregation buys can be had per step without fixing the split: one fused step runs each attention role on the kernel and SMs it suits, a deadline-driven scheduler decides how much prefill each step carries, and symmetric nodes let the router follow the cache instead of a role table</li>
+<li><b>Contributions</b> (§4): (1) SM-pre-assigned FA3 + FA2 split attention; (2) the 4-mode MTP step; (3) EDF scheduling for the fused step with a shared step model; (4) cache-first, SLO-checked multi-node routing over a cluster KV pool</li>
+<li><b>Results</b> (§6) — 8 H20s vs PD disaggregation: chat SLO attainment 91% vs 26%, agent goodput 6×, robust to a 3× spike, a 2× agent shift and a 14B model; 1 H200 with MTP: +72% chat attainment, 15× agent attainment, +55% throughput over mixed chunk</li>
+</ul>
+
+<h2 id="background"><span class="n">02</span>Background</h2>
+<h3>2.1 LLM serving and speculative decoding</h3>
+<ul>
+<li>prefill is compute-bound and parallel; decode reads all of a request's KV per token and is bandwidth-bound</li>
+<li>MTP / EAGLE3: a draft head proposes tokens, the target verifies them in one forward (acceptance ~2.0–2.1 tokens per verify step on our workloads); a step = draft steps + a verify forward</li>
+</ul>
+<h3>2.2 Colocated schedules in sglang</h3>
+<ul>
+<li>prefill-prioritized chunked prefill (the default): prefill steps run alone, decodes wait</li>
+<li>mixed chunk: decode rows ride the prefill step, all through FA2 BatchPrefill</li>
+<li>PD multiplexing (MuxWise / pdmux): GreenContext SM groups per phase, layer-split prefill; overlap scheduler off; one CUDA-graph set per SM group (5 on H20, 8 on H200)</li>
+</ul>
+<h3>2.3 PD disaggregation</h3>
+<ul>
+<li>DistServe, Mooncake; sglang prefill / decode roles with mooncake KV transfer; MTP on decode nodes</li>
+<li>NVIDIA Dynamo: KV-aware router, conditional disaggregation</li>
+<li>static P:D provisioning: a spike or mixture shift hits whichever side is under-provisioned</li>
+</ul>
+<h3>2.4 KV-cache-centric scheduling</h3>
+<ul>
+<li>multi-turn and agent workloads reuse long prefixes; cache-aware routing and a cluster KV pool (sglang HiCache + mooncake store) cut TTFT; ThunderAgent documents repeated cache thrashing in agentic serving</li>
+</ul>
+
+<h2 id="motivation"><span class="n">03</span>Challenges and motivation</h2>
+<h3>3.1 Attention dominates the mixed step at long context</h3>
+<ul><li>a 743-token chunk at 50K depth is ~28 ms of attention in a 44 ms mixed step (H200); FA3's chunk call already runs at ~540 TFLOP/s — the step is attention-FLOP-bound, so the kernel each row runs on decides the step time</li></ul>
+<h3>3.2 Mixed chunk pays for its kernel choice</h3>
+<ul>
+<li>decode rows padded into prefill tiles waste only 6.3% / 2.7% / 0.6% of FLOPs at 32K / 64K / 128K</li>
+<li>running 64–256K prefill rows through FA2 is the cost: attention per 60 steps at 64K, stock 17.7 s vs split 13.3 s (−25%); at 128K the merged batch takes 3.15 ms per call vs 0.83 ms for the split's FA2 calls on mixed steps</li>
+</ul>
+<h3>3.3 Prefill-prioritized scheduling breaks decode SLOs</h3>
+<ul><li>standard mix: agent P99 ITL 1.35 s, chat TPOT 34.8 ms (vs 20.7 ms for ours without MTP)</li></ul>
+<h3>3.4 Disaggregation queues, dilutes and re-prefills</h3>
+<ul><li>8 H20s, fan-out agents: agent TTFT 16–31 s; prefill hit rate falls 0.125 → 0.055 going from 2 to 4 pods while colocation's rises 0.34 → 0.39; re-prefill share 10.3% vs 3.4%</li></ul>
+<h3>3.5 Speculative decoding is concurrency-limited</h3>
+<ul><li>MTP serves best at sglang's speculative default of 48 running requests for every system (64 and 128 slow every step), so the schedule has to make each step count</li></ul>
+
+<h2 id="design"><span class="n">04</span>AttentionFuse design</h2>
+<p><b>Our main contributions are:</b></p>
+<ol class="contrib">
+<li><div class="tag">Kernel item 1</div><b>SM-pre-assigned FA3 + FA2 split attention.</b> Each mixed step's work items are dispatched by role: prefill tiles to FA3 on a reserved SM budget (flash-attention's Hopper kernel: paged TMA, wgmma, dynamic scheduler), decode and verify tiles to FA2 (tile classes 64/32/16, auto split-KV) on the remaining SMs, with FA2 launched beside FA3 on a side stream. Both roles are exact against a causal fp32 reference.</li>
+<li><div class="tag">Kernel item 2</div><b>The 4-mode MTP step.</b> Prefill chunk, decode, draft and verify in one target forward: the chunk rides the verify forward instead of a separate prefill step, inside sglang's own scheduler — the CPU-GPU overlap scheduler stays on and one CUDA-graph set serves all steps.</li>
+<li><div class="tag">Scheduling</div><b>EDF scheduling for the fused step.</b> Deadlines on uncached tokens (base 2 s + 1 s per 5K tokens beyond 4096, doubled above 200K), deadline-driven chunk admission (a small chunk normally, a large one when the backlog would miss a deadline at its pace) and chunk preemption for earlier-deadline arrivals. A closed-form step model of the fused step predicts it at half the error of stock MTP's step and is shared with the router.</li>
+<li><div class="tag">Multi-node</div><b>Cache-first, SLO-checked request routing.</b> Symmetric nodes; the router sends each request to the node with the longest cached prefix whose predicted TTFT and ITL — for this request, the earlier-deadline queue ahead of it and the decodes it joins — stay within SLO, else the next. Misses pull the prefix from a cluster KV pool (best-effort replication over a complete RDMA graph). Nodes report decode rows, KV, acceptance and their deadline-ordered prefill queue through sglang's LoadStat channel.</li>
+</ol>
+<h3>4.1 Problem formulation</h3>
+<ul><li>per-tenant SLOs: chat TTFT 0.5 s and per-request TPOT 20 ms; agents TTFT 10 s and TPOT 80 ms; maximize goodput (output tokens of requests meeting both) per GPU, under bursty, shifting mixtures</li></ul>
+<h3>4.2 Split attention with SM pre-assignment</h3>
+<ul>
+<li>dispatch: FA3 for prefill-shaped items, FA2 for every verify-width / decode item (FA2 wins every verify-width row in the winner map, 216/216 cells exact)</li>
+<li>FA3 role = flash-attention's kernel, at parity with sgl-kernel FA3; FA2 runs beside it on the remaining SMs</li>
+</ul>
+<h3>4.3 The 4-mode MTP step</h3>
+<ul><li>the scheduler attaches the running batch to the prefill step; the spec worker drafts, merges the chunk with the verify rows and splits attention by role; a context / queue gate keeps short prefills on their own step</li></ul>
+<h3>4.4 EDF scheduling and the step model</h3>
+<ul>
+<li>deadline order decides which prefill a step carries; chunk size follows the deadline backlog</li>
+<li>step model: linear in prefill tokens, prefix attention work, #prefill requests, decode rows, decode KV and the draft / verify terms; fit on serving step traces</li>
+</ul>
+<h3>4.5 Multi-node routing and the KV pool</h3>
+<ul>
+<li>SLO check: predicted TTFT = EDF queue drain ahead + own prefill (cold-prefill curve, pull-adjusted); ITL from the calibrated decode grid with this request and earlier-deadline requests resident; adaptive ITL SLO = 2.5× the observed TPOT</li>
+<li>KV pool: mooncake L3 store spanning all nodes; replication happens as a side effect of serving</li>
+<li>node load: LoadStat extended with decode rows, decode KV, acceptance, deadline-ordered prefill queue and measured decode-step time (ZMQ PUB, change-triggered, 1 s heartbeat)</li>
+</ul>
+
+<h2 id="impl"><span class="n">05</span>Implementation</h2>
+<ul>
+<li>sglang (upstream <code>3fef129</code> + ~26 files): split dispatch in the flashinfer backend, the 4-mode step in the EAGLE3 worker, EDF scheduler with deadline chunk and preemption, per-step trace logging</li>
+<li>FA3 role on flash-attention's kernel (paged TMA, <code>-DNDEBUG</code>, fast math); FA2 from flashinfer 0.7</li>
+<li>router: aiohttp proxy with the SLO check, cluster prefix index, pull-bandwidth EWMA and LoadStat subscriber</li>
+<li>KV pool: sglang HiCache with the mooncake store backend over RDMA</li>
+</ul>
+
+<h2 id="eval"><span class="n">06</span>Evaluation</h2>
+<h3>6.1 Settings</h3>
+<p><b>Workloads</b> — the mixed TraceLab + chat setting is the main workload; the standalone sets show where the step does and does not help.</p>
+<div class="tbl"><table>
+<thead><tr><th>Workload</th><th>Composition</th><th>Load axis</th><th>Where</th></tr></thead>
+<tbody>
+<tr class="main"><td>Mixed TraceLab + chat (standard) <span class="pill">main</span></td><td>TraceLab coding-agent sessions, 32–64K prompts, 2 rounds + ShareGPT chat</td><td>agent concurrency C=8; chat 8 req/s</td><td>1 H200</td></tr>
+<tr class="main"><td>Mixed TraceLab + chat (long) <span class="pill">main</span></td><td>TraceLab 32–250K prompts (4 rounds &gt; 200K) + ShareGPT chat</td><td>C=6; chat 2 req/s</td><td>1 H200</td></tr>
+<tr class="main"><td>Fan-out agents + chat <span class="pill">main</span></td><td>16 tasks × 64K shared repository prefixes, 4 rounds, rotating Zipf popularity + ShareGPT chat</td><td>32 agent programs; chat 8 req/s</td><td>8 H20</td></tr>
+<tr><td>Standalone ShareGPT</td><td>short chat prompts</td><td>4–32 req/s</td><td>1 H200</td></tr>
+<tr><td>Standalone math</td><td>GSM8K, MATH-500</td><td>8–32 req/s</td><td>1 H200</td></tr>
+<tr><td>Standalone code</td><td>HumanEval, Code-Feedback</td><td>8–32 req/s</td><td>1 H200</td></tr>
+<tr><td>Standalone agent / tool traces</td><td>Mooncake conversation and tool-agent (recorded timestamps), WebShop browsing agent</td><td>0.5–2× trace speed; C</td><td>1 H200</td></tr>
+</tbody></table></div>
+<ul>
+<li><b>Models (so far)</b>: Qwen2.5-7B-Instruct + EAGLE3 (3 draft steps, 4 verify tokens); Qwen2.5-14B-Instruct (no MTP)</li>
+<li><b>Models (proposed for 4 × 8 H200 / H100)</b> — sized so that a node holds tens of 32–250K agent contexts beside chat decodes, the batch shape the 4-mode step targets; MTP simulated with <code>SGLANG_SIMULATE_ACC_LEN</code> (acceptance fixed to the measured ~2.0–2.1, real draft and verify work per step)
+  <ul>
+  <li>dense: <b>Llama-3.3-70B-Instruct</b> (128K native; 80 layers, 8 KV heads → 320 KB KV / token). TP4 on H200 (~380 GB KV, ~1.2M tokens, 8 replicas on 32 GPUs) or TP8 on H100 (~430 GB KV, ~1.3M tokens, 4 replicas)</li>
+  <li>MoE: <b>Qwen3-30B-A3B-Instruct-2507</b> (262K native, covers the long mix without YaRN; 48 layers, 4 KV heads → 96 KB KV / token; 3B active, so attention is the largest share of the step). TP1 on H200 (~65 GB KV, ~0.7M tokens, 32 replicas) or TP2 on H100 (~85 GB KV, ~0.9M tokens, 16 replicas) — the most nodes for routing</li>
+  </ul></li>
+<li><b>Testbed</b>: 1 H200; 8 H20 (4 pods × 2 GPUs, one TP1 worker per GPU)</li>
+<li><b>Baselines</b>: sglang prefill-prioritized and mixed chunk, each with and without MTP (single node); pdmux (reference); PD disaggregation 2P2D with and without MTP on decode (multi-node); semi-PD (planned)</li>
+<li><b>Metrics</b>: per-tenant SLO attainment (TTFT and per-request TPOT both met) and goodput; TTFT, TPOT, throughput; mean ± std over repeats</li>
+</ul>
+
+<h3>6.2 Kernel microbenchmarks</h3>
+<ul>
+<li>FA3 role at parity with sgl-kernel FA3 (exact vs fp32); FA3 co-running with FA2 −18% on balanced append + verify steps</li>
+<li>in serving, overlapping FA2 beside FA3 is worth +10% agent throughput and −12% / −16% agent / chat ITL over running the two roles back to back</li>
+</ul>
+
+<h3>6.3 Main workload, single node <span class="meta">— 1 H200, mixed TraceLab + chat, 5–6 repeats</span></h3>
+<div class="tbl"><table>
+<thead><tr><th>Arm</th><th class="r">Agent tput (tok/s)</th><th class="r">Agent attainment</th><th class="r">Chat attainment</th></tr></thead>
+<tbody>
+<tr><td>stock mixed chunk</td><td class="r">80.5 ± 4.2</td><td class="r">44.1%</td><td class="r">53.8%</td></tr>
+<tr><td>stock prefill-prioritized</td><td class="r">92.6</td><td class="r">58.9%</td><td class="r">59.9%</td></tr>
+<tr class="ours"><td>ours, no MTP</td><td class="r">113.2 ± 0.4</td><td class="r">92.0%</td><td class="r">69.8%</td></tr>
+<tr><td>stock + MTP</td><td class="r">65.7 ± 3.1</td><td class="r">3.0%</td><td class="r">34.2%</td></tr>
+<tr><td>stock prefill-prioritized + MTP</td><td class="r">81.6</td><td class="r">8.9%</td><td class="r">49.2%</td></tr>
+<tr class="ours"><td>ours + MTP</td><td class="r">102.1 ± 1.3</td><td class="r">45.8%</td><td class="r">58.9%</td></tr>
+</tbody></table></div>
+<ul>
+<li>vs mixed chunk: with MTP +55% throughput, 15× agent and +72% chat attainment; without MTP +41%, +109%, +29.7%</li>
+<li>vs prefill-prioritized: +22% / +25% throughput, agent attainment +56% / 5×, chat attainment +16.5% / +20%</li>
+<li>long mix (32–250K), ours + MTP vs stock + MTP, two repeats: agent throughput +54%, TTFT −34%, ITL −49%; chat throughput +23%, TTFT −90%, ITL −42%</li>
+<li>our arms vary by ≤ 1.4 tok/s across repeats; stock mixed chunk is bimodal (slow mode in 5 of 6)</li>
+</ul>
+
+<h3>6.4 Main workload, multi-node vs PD disaggregation <span class="meta">— 8 H20s, fan-out agents + chat</span></h3>
+<div class="tbl"><table>
+<thead><tr><th>Arm</th><th class="r">Chat attainment (0.5 s + 20 ms)</th><th class="r">Agent goodput (10 s + 80 ms)</th><th class="r">Agent TTFT</th></tr></thead>
+<tbody>
+<tr class="ours"><td>ours</td><td class="r">91.4%</td><td class="r">551 tok/s</td><td class="r">0.71 s</td></tr>
+<tr><td>PD disagg 2P2D</td><td class="r">26.2%</td><td class="r">92 tok/s</td><td class="r">16.4 s</td></tr>
+</tbody></table></div>
+<ul>
+<li>throughput 2.3–3.3×, TTFT −94..−96%; disaggregation keeps a faster per-token decode (5 ms vs 12 ms), but its prefill queue makes most requests miss</li>
+<li>cache: re-prefill share 3.4% vs 10.3%; prefill hit rate rises with node count for colocation, falls for disaggregation</li>
+</ul>
+
+<h3>6.5 Dynamic load: spikes and mixture shifts <span class="meta">— 8 H20s, two repeats</span></h3>
+<div class="tbl"><table>
+<thead><tr><th>Event</th><th class="r">Ours: agent</th><th class="r">Ours: chat</th><th class="r">Disagg: agent</th><th class="r">Disagg: chat</th></tr></thead>
+<tbody>
+<tr><td>chat ×3 for 240 s</td><td class="r">99–100%</td><td class="r">88–91%</td><td class="r">36–57%</td><td class="r">19–22%</td></tr>
+<tr><td>agent load ×2 for 240 s</td><td class="r">97–100%<br><span class="meta">goodput ~2×</span></td><td class="r">~84%</td><td class="r">21–31%</td><td class="r">18–22%</td></tr>
+</tbody></table></div>
+<p class="meta">SLO attainment within the event window.</p>
+
+<h3>6.6 Standalone workloads <span class="meta">— 1 H200, stock + MTP vs ours + MTP</span></h3>
+<ul>
+<li>agent / tool traces (Mooncake conversation, tool-agent): TTFT −25..−31% below capacity; at 2× trace speed throughput +12% / +21%, TTFT −47% / −58%, P99 ITL −59% / −60%</li>
+<li>ShareGPT, math (GSM8K, MATH-500), code (HumanEval, Code-Feedback): on par below capacity (short prompts carry little prefill to fuse); at saturation +2–3% throughput, TTFT −5..−15%</li>
+<li>WebShop browsing agent (short multi-turn prompts, one GPU): behind stock MTP (throughput −7..−10%)</li>
+<li>the gains concentrate where long-context prefill meets decode, which is the mixed agent + chat setting above</li>
+</ul>
+
+<h3>6.7 Second model <span class="meta">— Qwen2.5-14B, 8 H20s, fan-out</span></h3>
+<ul>
+<li>ours: agent 186–216 tok/s, chat attainment 45–51%, agent goodput 102–131 tok/s</li>
+<li>PD disaggregation collapses: agent TTFT ~290 s, agent goodput 0, chat attainment 11–13%</li>
+<li>a load scaled to 14B's capacity is running</li>
+<li>next: Llama-3.3-70B and Qwen3-30B-A3B on 4 × 8 H200 / H100 (§6.1)</li>
+</ul>
+
+<h3>6.8 Step-model accuracy (EDF)</h3>
+<div class="tbl"><table>
+<thead><tr><th>Schedule</th><th class="r">Closed-form model (MAPE)</th><th class="r">Best model, gradient-boosted trees (MAPE)</th></tr></thead>
+<tbody>
+<tr class="ours"><td>ours + MTP (4-mode)</td><td class="r">12–13%</td><td class="r">3.0–3.5%</td></tr>
+<tr><td>stock + MTP</td><td class="r">24–27%</td><td class="r">2.8–4.9%</td></tr>
+<tr><td>ours, no MTP</td><td class="r">—</td><td class="r">3.2% / 5.9%<br><span class="meta">standard / light load</span></td></tr>
+<tr><td>pdmux</td><td class="r">19.8–24.0%<br><span class="meta">its own form</span></td><td class="r">5.0% / 7.5%</td></tr>
+</tbody></table></div>
+
+<h3>6.9 Fault tolerance (if time permits)</h3>
+<ul><li>xPyD: kill a prefill node → TTFT and ITL rise on every decode node fed by it; colocated nodes re-route to any survivor</li></ul>
+
+<h2 id="ablations"><span class="n">07</span>Ablations</h2>
+<ul>
+<li>FA2 overlapped beside FA3 vs back to back: +10% agent throughput, −12% / −16% agent / chat ITL</li>
+<li>split attention vs one FA2 kernel for the mixed step: −25% attention time at 64K</li>
+<li>full MTP stack (4-mode step + split + EDF) vs stock MTP: agent attainment 3.0% → 45.8%, chat 34.2% → 58.9% (a per-component MTP ablation is pending)</li>
+<li>cache-first SLO-checked routing vs PD roles: re-prefill 10.3% → 3.4%, agent goodput 6×</li>
+<li>remove CUDA graphs (pending)</li>
+</ul>
+
+<h2 id="related"><span class="n">08</span>Related work</h2>
+<ul>
+<li><b>PD disaggregation</b>: DistServe, Mooncake, NVIDIA Dynamo (conditional disaggregation, KV router)</li>
+<li><b>Semi-disaggregation and multiplexing</b>: semi-PD (MPS SM split, restart to resize), DynaServe, MuxWise / sglang pdmux (SM groups per phase) — none fuses attention across phases; pdmux loses the overlap scheduler</li>
+<li><b>SLO-aware scheduling</b>: SLOs-Serve (multi-SLO), JITServe (imprecise request information)</li>
+<li><b>Agentic serving</b>: ThunderAgent (program-aware, cache thrashing), Crossflow (P/D elasticity), TraceLab (coding-agent workloads)</li>
+<li><b>Kernel fusion</b>: POD-Attention, persistent kernels, Taming Dynamism (cross-SM fusion, just-in-time reduction) — we pre-assign SMs per role inside one step</li>
+<li><b>Attention-FFN disaggregation</b> (Step-3, MegaScale-Infer): orthogonal, combinable</li>
+</ul>
+
+<h2 id="conclusion"><span class="n">09</span>Conclusion and limitations</h2>
+<p><b>Conclusion.</b> Colocated serving with a fused 4-mode step, EDF and cache-first routing meets per-tenant SLOs at several times the goodput of PD disaggregation, holds them through load spikes and mixture shifts, and stays MTP-compatible — without a fixed prefill / decode split.</p>
+<div class="note"><b>Limitations</b>
+<ul>
+<li>single node vs prefill-prioritized: chat SLO attainment +16.5% / +20%; chats decode beside continuous long-context agent prefill</li>
+<li>per-token decode: disaggregation's decode-only nodes keep 5 ms TPOT vs our 12 ms; the gain is in attainment and goodput, not raw decode speed</li>
+<li>short-prompt standalone workloads see little gain; the step helps where long-context prefill meets decode</li>
+<li>MTP is concurrency-limited at 48 running requests for every system</li>
+<li>open: 70B / 30B-A3B on 32 GPUs with simulated MTP, semi-PD baseline, fault tolerance, Blackwell kernels</li>
+</ul></div>
+</main>
+</div>

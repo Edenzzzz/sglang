@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.21.14 — Outline: proposed eval models, HTML version (2026-10-20)
+
+- `tasks/paper_outline.md` 6.1: Llama-3.3-70B-Instruct (dense) and Qwen3-30B-A3B-Instruct-2507 (MoE) for 4 x 8
+  H200 / H100, KV capacity per TP layout, MTP simulated via `SGLANG_SIMULATE_ACC_LEN`.
+- `tasks/paper_outline.html`: the outline as a standalone page for review.
+
 ## v1.21.13 — Paper outline rewritten (2026-10-20)
 
 - `tasks/paper_outline.md`: 10/20 outline in the 11/21 format plus drafted sections (abstract through conclusion),

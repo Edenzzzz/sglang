@@ -196,7 +196,7 @@ sglang's mixed chunk.
 
 - **Models (so far)**: Qwen2.5-7B-Instruct + EAGLE3 (3 draft steps, 4 verify tokens); Qwen2.5-14B-Instruct (no MTP)
 - **Models (proposed for 4 nodes x 8 or x 4 H200 / H100, one TP8 / TP4 instance per node)** -- sized so that a node
-  holds tens of 32-128K agent contexts beside chat decodes, the batch shape the 4-mode step targets; MTP simulated with
+  holds tens of 32-250K agent contexts beside chat decodes, the batch shape the 4-mode step targets; MTP simulated with
   `SGLANG_SIMULATE_ACC_LEN` (acceptance fixed to the measured ~2.0-2.1, real draft and verify work per step). KV room
   per node after weights, 0.88 memory fraction:
 
@@ -207,7 +207,10 @@ sglang's mixed chunk.
   | Qwen3-235B-A22B-2507 (MoE, 262K; 4 KV heads, replicated 2x at TP8) | 376 KB | 1.2M | no room | no fit | no fit |
 
   - both main picks have 8 KV heads, so TP8 holds one KV head per GPU with no replication
-  - both are 128K native: the long mix is capped at 128K for them (or YaRN 2x); Qwen3-235B covers 250K but needs 8 x H200
+  - 4 replicas (one per node), the same router fan-out as the H20 runs' 4 pods
+  - context forced past 128K for the 250K long mix: `SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 --context-length
+    262144`, rope unchanged (keep `rope_theta` if a YaRN override is used); attention cost depends only on length and
+    output lengths are fixed by the workload, so quality past 128K does not affect the measurement
   - 4 x H100 (320 GB / node) fits neither main pick with useful KV; there only a <= 32B dense model works
 - **Testbed**: 1 H200; 8 H20 (4 pods x 2 GPUs, one TP1 worker per GPU)
 - **Baselines**: sglang prefill-prioritized and mixed chunk, each with and without MTP (single node); pdmux

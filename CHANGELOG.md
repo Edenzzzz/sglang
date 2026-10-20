@@ -3,7 +3,8 @@
 ## v1.21.15 — Outline: eval models re-sized for TP4 / TP8 nodes (2026-10-20)
 
 - `tasks/paper_outline.md` / `.html` 6.1: one TP8 / TP4 instance per node; Llama-3.3-70B-Instruct and GLM-4.5-Air
-  (replacing Qwen3-30B-A3B), with KV capacity per node for 8 / 4 x H200 / H100.
+  (replacing Qwen3-30B-A3B), with KV capacity per node for 8 / 4 x H200 / H100; 4 replicas; context forced to 262K
+  via `SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN` for the long mix.
 
 ## v1.21.14 — Outline: proposed eval models, HTML version (2026-10-20)
 

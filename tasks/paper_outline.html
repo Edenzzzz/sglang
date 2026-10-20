@@ -242,7 +242,7 @@ code { font: .86em "IBM Plex Mono", monospace; background: var(--surface); paddi
 </tbody></table></div>
 <ul>
 <li><b>Models (so far)</b>: Qwen2.5-7B-Instruct + EAGLE3 (3 draft steps, 4 verify tokens); Qwen2.5-14B-Instruct (no MTP)</li>
-<li><b>Models (proposed for 4 nodes × 8 or × 4 H200 / H100, one TP8 / TP4 instance per node)</b> — sized so that a node holds tens of 32–128K agent contexts beside chat decodes, the batch shape the 4-mode step targets; MTP simulated with <code>SGLANG_SIMULATE_ACC_LEN</code> (acceptance fixed to the measured ~2.0–2.1, real draft and verify work per step). KV room per node after weights, 0.88 memory fraction:
+<li><b>Models (proposed for 4 nodes × 8 or × 4 H200 / H100, one TP8 / TP4 instance per node)</b> — sized so that a node holds tens of 32–250K agent contexts beside chat decodes, the batch shape the 4-mode step targets; MTP simulated with <code>SGLANG_SIMULATE_ACC_LEN</code> (acceptance fixed to the measured ~2.0–2.1, real draft and verify work per step). KV room per node after weights, 0.88 memory fraction:
 <div class="tbl"><table>
 <thead><tr><th>Model</th><th class="r">KV / token / node</th><th class="r">8 × H200</th><th class="r">8 × H100</th><th class="r">4 × H200</th><th class="r">4 × H100</th></tr></thead>
 <tbody>
@@ -252,7 +252,8 @@ code { font: .86em "IBM Plex Mono", monospace; background: var(--surface); paddi
 </tbody></table></div>
   <ul>
   <li>both main picks have 8 KV heads, so TP8 holds one KV head per GPU with no replication</li>
-  <li>both are 128K native: the long mix is capped at 128K for them (or YaRN 2×); Qwen3-235B covers 250K but needs 8 × H200</li>
+  <li>4 replicas (one per node), the same router fan-out as the H20 runs' 4 pods</li>
+  <li>context forced past 128K for the 250K long mix: <code>SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 --context-length 262144</code>, rope unchanged (keep <code>rope_theta</code> if a YaRN override is used); attention cost depends only on length and output lengths are fixed by the workload, so quality past 128K does not affect the measurement</li>
   <li>4 × H100 (320 GB / node) fits neither main pick with useful KV; there only a ≤ 32B dense model works</li>
   </ul></li>
 <li><b>Testbed</b>: 1 H200; 8 H20 (4 pods × 2 GPUs, one TP1 worker per GPU)</li>

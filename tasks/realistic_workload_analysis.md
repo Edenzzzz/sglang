@@ -265,6 +265,14 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   the same as without overlap): the verify batch is too small beside a deep-context FA3 chunk for the overlap to hide
   anything. vs prefill-prioritized + MTP (49.3%) **+27.7%**. With the page-128, acceptance-3.0, overlap and util
   variants all measured, chat attainment at 8 req/s settles at 62-64% (+26-30%) for every variant of ours.
+- [x] **Rows + SLO admission + the per-row slack chunk cap (2026-10-21, H200, chat 8 req/s, one repeat each, clean;
+  `bash tasks/pd_colocation/h200_rows_slack_20261021.sh`) -- negative.** The cap (largest chunk keeping every running row
+  within its mean-TPOT SLO, `ITL_SLO=20:2.0:...:measured:slack:cls24000_80`) does what it is for -- chat TPOT misses
+  30% -> 3.8% -- but binds on 86% of steps (6028 / 7001) and starves prefill: chat TTFT misses 57%, chat attainment
+  42.9%, agent 13.3% (TTFT 24 s). Letting waiting short prompts through it (`apply_itl_slo_short_floor.py`, floor 1024
+  tokens) changes nothing (chat 43.4%, agent 11.1%, cap on 88% of steps): late agent requests hold the earliest EDF
+  deadlines, so the cap is sized on them and the adder serves them first. A per-row TPOT cap and deadline order pull
+  against each other once agents run late; rows + admission without the cap (63.0%) stays the configuration.
 - [x] **Rows + SLO admission without EDF (2026-10-21, H200, chat 8 req/s, FCFS 4-mode MTP at chunk 2048, two repeats,
   clean; `bash tasks/pd_colocation/h200_rows_noedf_20261021.sh`) -- negative.** Chat attainment 21.6 / 22.8% (TTFT 21.5
   / 20.5 s), agent 6.7 / 8.9% (TTFT 26.4 / 25.4 s), agent 68-70 tok/s; rows split on 1 step. Without deadline order the

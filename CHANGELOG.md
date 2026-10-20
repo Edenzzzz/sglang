@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.23.5 — Slack chunk cap on top of rows + admission: negative (2026-10-21)
+
+- Chat TPOT misses 30% -> 4%, but prefill starves (chat attainment 43%); a short-prompt floor does not help.
+
 ## v1.23.4 — Rows + admission without EDF: negative (2026-10-21)
 
 - FCFS + rows + SLO admission: chat attainment 22%, agent 8% (head-of-line blocking behind agent prefills).

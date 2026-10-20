@@ -335,7 +335,8 @@ sglang's mixed chunk.
   several times the goodput of PD disaggregation, holds them through load spikes and mixture shifts, and stays
   MTP-compatible -- without a fixed prefill / decode split
 - **Limitations**
-  - single node vs prefill-prioritized: chat SLO attainment +16.5% (no MTP) / +28% (MTP) at chat 8 req/s; about a
+  - single node vs prefill-prioritized at chat 8 req/s (the heaviest load measured): chat SLO attainment +16.5% (no MTP)
+    / +28% (MTP, 63.0% vs 49.3%; the only point below +30%); about a
     quarter of chats decode beside long-context agent prefill chunks and miss a 20 ms TPOT under every schedule
   - per-token decode: disaggregation's decode-only nodes keep 5 ms TPOT vs our 12 ms; the gain is in attainment and
     goodput, not raw decode speed

@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.23.8 — One-GPU chat 8 req/s accepted as a limitation (2026-10-21)
+
+- +28% chat SLO attainment (63.0% vs 49.3%) recorded as the one point below the +30% bar, per the user.
+
 ## v1.23.7 — FA3 page-size kernel bench and step traces (2026-10-21)
 
 - FA3 is 9-17% faster at page 128 than page 1 on deep-context chunks (paged TMA vs per-token gather), but decode

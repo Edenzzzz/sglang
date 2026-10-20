@@ -265,6 +265,10 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   the same as without overlap): the verify batch is too small beside a deep-context FA3 chunk for the overlap to hide
   anything. vs prefill-prioritized + MTP (49.3%) **+27.7%**. With the page-128, acceptance-3.0, overlap and util
   variants all measured, chat attainment at 8 req/s settles at 62-64% (+26-30%) for every variant of ours.
+- [x] **Bar status, one GPU, chat 8 req/s -- accepted as a stated limitation (user, 2026-10-21).** Chat SLO attainment
+  (TTFT 0.5 s and per-request TPOT 20 ms both met) 63.0% for ours + MTP vs 49.3% for prefill-prioritized stock + MTP, a
+  +28% relative gain (63.0 / 49.3) against the +30% bar (64.1% needed); four repeats, 61-65%. Agents clear (5.5x
+  attainment), throughput +27%. Every other single-node load (chat 4 / 6 req/s) and every multi-node comparison clears.
 - [x] **EDF base deadline at the chat SLO (TTFT_SLO_MS=500 instead of 2000) with rows + SLO admission (2026-10-21,
   H200, chat 8 req/s, two repeats, clean, 29.0K / 29.5K split calls; `bash
   tasks/pd_colocation/h200_rows_ttft500_20261021.sh`) -- no change.** Chat attainment 63.3 / 61.8% (TTFT misses 32.6 /

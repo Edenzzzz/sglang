@@ -375,7 +375,7 @@ code { font: .86em "IBM Plex Mono", monospace; background: var(--surface); paddi
 <p><b>Conclusion.</b> Colocated serving with a fused 4-mode step, EDF and cache-first routing meets per-tenant SLOs at several times the goodput of PD disaggregation, holds them through load spikes and mixture shifts, and stays MTP-compatible — without a fixed prefill / decode split.</p>
 <div class="note"><b>Limitations</b>
 <ul>
-<li>single node vs prefill-prioritized: chat SLO attainment +16.5% (no MTP) / +28% (MTP) at chat 8 req/s; about a quarter of chats decode beside long-context agent prefill chunks and miss a 20 ms TPOT under every schedule</li>
+<li>single node vs prefill-prioritized at chat 8 req/s (the heaviest load measured): chat SLO attainment +16.5% (no MTP) / +28% (MTP, 63.0% vs 49.3%; the only point below +30%); about a quarter of chats decode beside long-context agent prefill chunks and miss a 20 ms TPOT under every schedule</li>
 <li>per-token decode: disaggregation's decode-only nodes keep 5 ms TPOT vs our 12 ms; the gain is in attainment and goodput, not raw decode speed</li>
 <li>short-prompt standalone workloads see little gain; the step helps where long-context prefill meets decode</li>
 <li>MTP is concurrency-limited at 48 running requests for every system</li>

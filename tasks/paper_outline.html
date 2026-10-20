@@ -242,10 +242,18 @@ code { font: .86em "IBM Plex Mono", monospace; background: var(--surface); paddi
 </tbody></table></div>
 <ul>
 <li><b>Models (so far)</b>: Qwen2.5-7B-Instruct + EAGLE3 (3 draft steps, 4 verify tokens); Qwen2.5-14B-Instruct (no MTP)</li>
-<li><b>Models (proposed for 4 × 8 H200 / H100)</b> — sized so that a node holds tens of 32–250K agent contexts beside chat decodes, the batch shape the 4-mode step targets; MTP simulated with <code>SGLANG_SIMULATE_ACC_LEN</code> (acceptance fixed to the measured ~2.0–2.1, real draft and verify work per step)
+<li><b>Models (proposed for 4 nodes × 8 or × 4 H200 / H100, one TP8 / TP4 instance per node)</b> — sized so that a node holds tens of 32–128K agent contexts beside chat decodes, the batch shape the 4-mode step targets; MTP simulated with <code>SGLANG_SIMULATE_ACC_LEN</code> (acceptance fixed to the measured ~2.0–2.1, real draft and verify work per step). KV room per node after weights, 0.88 memory fraction:
+<div class="tbl"><table>
+<thead><tr><th>Model</th><th class="r">KV / token / node</th><th class="r">8 × H200</th><th class="r">8 × H100</th><th class="r">4 × H200</th><th class="r">4 × H100</th></tr></thead>
+<tbody>
+<tr class="main"><td>Llama-3.3-70B-Instruct<br><span class="meta">dense, 128K, 80 layers, 8 KV heads</span></td><td class="r">320 KB</td><td class="r">2.4M tok</td><td class="r">1.1M</td><td class="r">1.0M</td><td class="r">0.36M (tight)</td></tr>
+<tr class="main"><td>GLM-4.5-Air<br><span class="meta">MoE 106B-A12B, 128K, 46 layers, 8 KV heads, native MTP layer</span></td><td class="r">184 KB</td><td class="r">3.8M</td><td class="r">1.6M</td><td class="r">1.3M</td><td class="r">no room</td></tr>
+<tr><td>Qwen3-235B-A22B-2507<br><span class="meta">MoE, 262K; 4 KV heads, replicated 2× at TP8</span></td><td class="r">376 KB</td><td class="r">1.2M</td><td class="r">no room</td><td class="r">no fit</td><td class="r">no fit</td></tr>
+</tbody></table></div>
   <ul>
-  <li>dense: <b>Llama-3.3-70B-Instruct</b> (128K native; 80 layers, 8 KV heads → 320 KB KV / token). TP4 on H200 (~380 GB KV, ~1.2M tokens, 8 replicas on 32 GPUs) or TP8 on H100 (~430 GB KV, ~1.3M tokens, 4 replicas)</li>
-  <li>MoE: <b>Qwen3-30B-A3B-Instruct-2507</b> (262K native, covers the long mix without YaRN; 48 layers, 4 KV heads → 96 KB KV / token; 3B active, so attention is the largest share of the step). TP1 on H200 (~65 GB KV, ~0.7M tokens, 32 replicas) or TP2 on H100 (~85 GB KV, ~0.9M tokens, 16 replicas) — the most nodes for routing</li>
+  <li>both main picks have 8 KV heads, so TP8 holds one KV head per GPU with no replication</li>
+  <li>both are 128K native: the long mix is capped at 128K for them (or YaRN 2×); Qwen3-235B covers 250K but needs 8 × H200</li>
+  <li>4 × H100 (320 GB / node) fits neither main pick with useful KV; there only a ≤ 32B dense model works</li>
   </ul></li>
 <li><b>Testbed</b>: 1 H200; 8 H20 (4 pods × 2 GPUs, one TP1 worker per GPU)</li>
 <li><b>Baselines</b>: sglang prefill-prioritized and mixed chunk, each with and without MTP (single node); pdmux (reference); PD disaggregation 2P2D with and without MTP on decode (multi-node); semi-PD (planned)</li>
@@ -310,7 +318,7 @@ code { font: .86em "IBM Plex Mono", monospace; background: var(--surface); paddi
 <li>ours: agent 186–216 tok/s, chat attainment 45–51%, agent goodput 102–131 tok/s</li>
 <li>PD disaggregation collapses: agent TTFT ~290 s, agent goodput 0, chat attainment 11–13%</li>
 <li>a load scaled to 14B's capacity is running</li>
-<li>next: Llama-3.3-70B and Qwen3-30B-A3B on 4 × 8 H200 / H100 (§6.1)</li>
+<li>next: Llama-3.3-70B and GLM-4.5-Air on 4 nodes × 8 / × 4 H200 / H100 (§6.1)</li>
 </ul>
 
 <h3>6.8 Step-model accuracy (EDF)</h3>
@@ -353,7 +361,7 @@ code { font: .86em "IBM Plex Mono", monospace; background: var(--surface); paddi
 <li>per-token decode: disaggregation's decode-only nodes keep 5 ms TPOT vs our 12 ms; the gain is in attainment and goodput, not raw decode speed</li>
 <li>short-prompt standalone workloads see little gain; the step helps where long-context prefill meets decode</li>
 <li>MTP is concurrency-limited at 48 running requests for every system</li>
-<li>open: 70B / 30B-A3B on 32 GPUs with simulated MTP, semi-PD baseline, fault tolerance, Blackwell kernels</li>
+<li>open: Llama-3.3-70B / GLM-4.5-Air on 4 nodes with simulated MTP, semi-PD baseline, fault tolerance, Blackwell kernels</li>
 </ul></div>
 </main>
 </div>

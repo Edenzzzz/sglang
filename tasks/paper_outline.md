@@ -195,14 +195,20 @@ sglang's mixed chunk.
 | standalone agent / tool traces | Mooncake conversation and tool-agent (recorded timestamps), WebShop browsing agent | 0.5-2x trace speed; C | 1 H200 |
 
 - **Models (so far)**: Qwen2.5-7B-Instruct + EAGLE3 (3 draft steps, 4 verify tokens); Qwen2.5-14B-Instruct (no MTP)
-- **Models (proposed for 4 x 8 H200 / H100)** -- sized so that a node holds tens of 32-250K agent contexts beside chat
-  decodes, the batch shape the 4-mode step targets; MTP simulated with `SGLANG_SIMULATE_ACC_LEN` (acceptance fixed to
-  the measured ~2.0-2.1, real draft and verify work per step)
-  - dense: **Llama-3.3-70B-Instruct** (128K native; 80 layers, 8 KV heads -> 320 KB KV / token). TP4 on H200 (~380 GB
-    KV, ~1.2M tokens, 8 replicas on 32 GPUs) or TP8 on H100 (~430 GB KV, ~1.3M tokens, 4 replicas)
-  - MoE: **Qwen3-30B-A3B-Instruct-2507** (262K native, covers the long mix without YaRN; 48 layers, 4 KV heads ->
-    96 KB KV / token; 3B active, so attention is the largest share of the step). TP1 on H200 (~65 GB KV, ~0.7M tokens,
-    32 replicas) or TP2 on H100 (~85 GB KV, ~0.9M tokens, 16 replicas) -- the most nodes for routing
+- **Models (proposed for 4 nodes x 8 or x 4 H200 / H100, one TP8 / TP4 instance per node)** -- sized so that a node
+  holds tens of 32-128K agent contexts beside chat decodes, the batch shape the 4-mode step targets; MTP simulated with
+  `SGLANG_SIMULATE_ACC_LEN` (acceptance fixed to the measured ~2.0-2.1, real draft and verify work per step). KV room
+  per node after weights, 0.88 memory fraction:
+
+  | model | KV / token / node | 8 x H200 | 8 x H100 | 4 x H200 | 4 x H100 |
+  |---|---|---|---|---|---|
+  | **Llama-3.3-70B-Instruct** (dense, 128K, 80 layers, 8 KV heads) | 320 KB | 2.4M tok | 1.1M | 1.0M | 0.36M (tight) |
+  | **GLM-4.5-Air** (MoE 106B-A12B, 128K, 46 layers, 8 KV heads, native MTP layer) | 184 KB | 3.8M | 1.6M | 1.3M | no room |
+  | Qwen3-235B-A22B-2507 (MoE, 262K; 4 KV heads, replicated 2x at TP8) | 376 KB | 1.2M | no room | no fit | no fit |
+
+  - both main picks have 8 KV heads, so TP8 holds one KV head per GPU with no replication
+  - both are 128K native: the long mix is capped at 128K for them (or YaRN 2x); Qwen3-235B covers 250K but needs 8 x H200
+  - 4 x H100 (320 GB / node) fits neither main pick with useful KV; there only a <= 32B dense model works
 - **Testbed**: 1 H200; 8 H20 (4 pods x 2 GPUs, one TP1 worker per GPU)
 - **Baselines**: sglang prefill-prioritized and mixed chunk, each with and without MTP (single node); pdmux
   (reference); PD disaggregation 2P2D with and without MTP on decode (multi-node); semi-PD (planned)
@@ -257,7 +263,7 @@ sglang's mixed chunk.
 - ours: agent 186-216 tok/s, chat attainment 45-51%, agent goodput 102-131 tok/s
 - PD disaggregation collapses: agent TTFT ~290 s, agent goodput 0, chat attainment 11-13%; a load scaled to 14B's
   capacity is running
-- next: Llama-3.3-70B and Qwen3-30B-A3B on 4 x 8 H200 / H100 (section 6.1)
+- next: Llama-3.3-70B and GLM-4.5-Air on 4 nodes x 8 / x 4 H200 / H100 (section 6.1)
 
 ### 6.8 Step-model accuracy (EDF)
 | schedule | closed-form model (MAPE) | best model, gradient-boosted trees (MAPE) |
@@ -304,4 +310,4 @@ sglang's mixed chunk.
     goodput, not raw decode speed
   - short-prompt standalone workloads see little gain; the step helps where long-context prefill meets decode
   - MTP is concurrency-limited at 48 running requests for every system
-  - open: 70B / 30B-A3B on 32 GPUs with simulated MTP, semi-PD baseline, fault tolerance, Blackwell kernels
+  - open: Llama-3.3-70B / GLM-4.5-Air on 4 nodes with simulated MTP, semi-PD baseline, fault tolerance, Blackwell kernels

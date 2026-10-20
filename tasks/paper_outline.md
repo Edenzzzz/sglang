@@ -267,6 +267,8 @@ sglang's mixed chunk.
 - PD disaggregation collapses: agent TTFT ~290 s, agent goodput 0, chat attainment 11-13%
 - at half load (scaled to 14B's capacity, two repeats): ours chat attainment 80% vs 9-17%, agent goodput 133-143 vs
   0-1 tok/s, agent TTFT 2.2 s vs 110-118 s
+- with MTP (random-weight draft head, simulated acceptance 2.1): ours chat attainment 73-77% vs 0.1-1.1%, agent
+  throughput 117-121 vs 15 tok/s, agent TTFT 3.2-3.5 s vs 106-108 s
 - next: Llama-3.3-70B and GLM-4.5-Air on 4 nodes x 8 / x 4 H200 / H100 (section 6.1)
 
 ### 6.8 Step-model accuracy (EDF)
@@ -314,4 +316,4 @@ sglang's mixed chunk.
     goodput, not raw decode speed
   - short-prompt standalone workloads see little gain; the step helps where long-context prefill meets decode
   - MTP is concurrency-limited at 48 running requests for every system
-  - open: Llama-3.3-70B / GLM-4.5-Air on 4 nodes with simulated MTP, semi-PD baseline, fault tolerance, Blackwell kernels
+  - open: Llama-3.3-70B / GLM-4.5-Air on 4 nodes with simulated MTP, semi-PD (blocked on a CUDA 12 toolkit install) baseline, fault tolerance, Blackwell kernels

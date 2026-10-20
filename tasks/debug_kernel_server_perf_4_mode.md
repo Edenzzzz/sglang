@@ -1602,6 +1602,11 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
     from the repo's `sgl-kernel/`, which needs a CUDA 12 nvcc (pod: 13.1). Installing NVIDIA's
     CUDA 12.4 toolkit runfile was denied by the permission policy; needs the user's go-ahead (or
     a CUDA 12 toolchain provided another way).
+    **2026-10-20 retry on H200 `dadf94f0e1da7238` (`semipd_provision_20261020.sh`, all under /opt/tiger/semipd):**
+    fork cloned, torch 2.5.1+cu124 venv, semi-pd-ipc built; CUDA 12.4 headers / libs assembled from NVIDIA's pip wheels
+    plus CCCL 2.3.2. sgl-kernel 0.0.5 still cannot build: the `nvidia-cuda-nvcc-cu12` wheel ships ptxas but no `nvcc`
+    driver (the earlier `nvcc --version` was the system CUDA 13.1 one), and torch refuses a 13.x nvcc for a cu124 build.
+    A CUDA 12 nvcc needs a toolkit install (runfile or conda) -- the step that needs the user's go-ahead. Still blocked.
   - [ ] **Dynamo conditional disaggregation -- optional (user, 2026-10-13):** not mandatory when it
     does not support sglang. Dynamo has an sglang worker, but conditional disaggregation (local
     prefill on the decode worker) is documented for vLLM / TRT-LLM only, so sglang PD is the

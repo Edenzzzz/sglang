@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.22.2 — 14B with simulated MTP; semi-PD retry (2026-10-20)
+
+- 8 H20s, 14B half load, MTP with a random-weight head and acceptance fixed at 2.1: ours chat attainment 73-77% vs
+  disagg 0.1-1.1%, agent throughput 117-121 vs 15 tok/s, agent TTFT 3.2-3.5 s vs 106-108 s.
+- semi-PD: the pip CUDA 12.4 wheels give headers and libs but no nvcc driver; still needs a CUDA 12 toolkit install.
+
 ## v1.22.1 — SLO-checked admission for deadline-ordered rows (2026-10-20)
 
 - `apply_decode_rows_admit.py`: admit a request only while the resident rows' mean-TPOT SLO load (measured step

@@ -312,6 +312,20 @@ static mixture.
           **At a load 14B can carry, ours meets chat SLOs for 80% of requests (vs 9-17%) and serves ~10x the agent
           throughput with ~140 tok/s agent goodput vs ~0. Halving the load does not rescue disagg: its two prefill nodes
           still queue 64K prefixes (agent TTFT 110-118 s, prefix cached fraction 0.44-0.50 vs ours 0.94).**
+        - [x] **With MTP, simulated acceptance (2026-10-20; same half load; draft = random-weight EAGLE3 head of 14B's shape,
+          `make_sim_eagle3_head.py`, acceptance fixed at 2.1 tokens per verify via `SGLANG_SIMULATE_ACC_LEN` -- logged
+          accept len 2.05-2.13 -- so draft and verify work per step are real; `bash
+          tasks/pd_colocation/mn_14b_mtp_8gpu_20261020.sh`; sglang 0e54fc671; ours 0 errors).**
+          | arm | agent tput / TTFT / ITL | chat TTFT / TPOT | chat attainment 0.5 s+20 ms / 2 s+50 ms | agent goodput 10 s+80 ms |
+          |---|---|---|---|---|
+          | ours + MTP rep 1 | 116.5 / 3.45 s / 144 ms | 0.56 s / 29.4 ms | 76.8 / 88.6% | 88 tok/s |
+          | ours + MTP rep 2 | 121.3 / 3.18 s / 141 ms | 0.80 s / 42.3 ms | 73.1 / 84.1% | 94 tok/s |
+          | PD disagg + MTP rep 1 | 15.0 / 108 s / 84 ms | 90.6 s / 21.5 ms | 0.1 / 0.2% | 0 |
+          | PD disagg + MTP rep 2 | 15.5 / 106 s / 162 ms | 91.4 s / 45.7 ms | 1.1 / 1.4% | 0 |
+          **With MTP disaggregation still collapses (TTFT ~107 s, no agent request within SLO, chat attainment ~1%);
+          ours keeps chat attainment at 73-77% and serves ~8x the agent throughput.** At 2.1 accepted tokens per verify
+          MTP does not pay for 14B on H20 for either system (ours 117-121 vs 153-157 tok/s without it, agent ITL 141-144
+          vs 45-48 ms): the verify forward at 14B is too costly for that acceptance.
       - [x] **2026-10-19 per-tenant scoring: chat on SLO attainment (TTFT + per-request TPOT), agents on SLO goodput.**
         Same saved records, re-scored by `tasks/perf_model/fanout_per_tenant.py` (per-request TPOT = sum(itls) /
         (output_len - 1), so MTP arms count tokens, not stream chunks). Chat attainment at 0.5 s + 20 ms / 1 s + 30 ms /

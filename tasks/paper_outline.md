@@ -246,9 +246,9 @@ sglang's mixed chunk.
 - vs mixed chunk: MTP +55% throughput, 15x agent and +72% chat attainment; no MTP +41%, +109%, +29.7%
 - vs prefill-prioritized: no MTP +22% throughput, agent attainment +56%, chat +16.5%; MTP (deadline-ordered rows)
   +27% throughput, agent attainment 5.5x, chat +28%, chat TTFT -70%
-- attainment vs chat rate (agents fixed at C=8), ours + MTP vs prefill-prioritized + MTP: chat 2 / 4 / 8 req/s chat
-  attainment +14% / +16% / +28%, chat TTFT -76% / -75% / -70%, chat TPOT -51% / -39% / -12%, agent attainment equal /
-  1.5x / 5.5x, agent throughput +30% / +29% / +27%; ~24% of chats miss TPOT at every rate for every system (chats
+- attainment vs chat rate (agents fixed at C=8), ours + MTP vs prefill-prioritized + MTP: chat 2 / 4 / 6 / 8 req/s chat
+  attainment +14% / +16% / +24% / +28%, chat TTFT -76% / -75% / -69% / -70%, chat TPOT -51% / -39% / -30% / -12%, agent
+  attainment equal / 1.5x / 2.6x / 5.5x, agent throughput +30% / +29% / +29% / +27%; ~24% of chats miss TPOT at every rate for every system (chats
   decoding beside 32-64K agent prefill chunks)
 - long mix (32-250K), ours + MTP vs stock + MTP, two repeats: agent throughput +54%, TTFT -34%, ITL -49%; chat
   throughput +23%, TTFT -90%, ITL -42%
@@ -303,9 +303,11 @@ sglang's mixed chunk.
 - FA2 overlapped beside FA3 vs back to back: +10% agent throughput, -12% / -16% agent / chat ITL
 - split attention vs one FA2 kernel for the mixed step: -25% attention time at 64K
 - full MTP stack (4-mode step + split + EDF) vs stock MTP: agent attainment 3.0% -> 45.8%, chat 34.2% -> 58.9%
-  (a per-component MTP ablation is pending)
+- MTP stack minus one component (two repeats): no split kernel -34% agent throughput, attainment agent 11% / chat 37%;
+  no EDF agent attainment 16-20% (vs 47%), chat +0-3 points; no deadline chunk neutral at the standard mix
+- deadline-ordered decode rows + SLO admission on top: chat attainment 58.9% -> 63.0%, chat TTFT -21%
 - cache-first SLO-checked routing vs PD roles: re-prefill 10.3% -> 3.4%, agent goodput 6x
-- remove CUDA graphs (pending)
+- CUDA graphs off: ours -20% throughput, stock MTP -4%; ours still leads (agent +29%, chat attainment 38% vs 23%)
 
 ## 8. Related work
 

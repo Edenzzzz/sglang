@@ -258,7 +258,24 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   arm: stock + MTP 36.6 tok/s / TTFT 33.42 s / TPOT 48.5 ms, chat 41.54 s / 42.6 ms; prefill-prioritized + MTP 37.1 /
   32.88 s / 52.2 ms, chat 42.67 s / 44.2 ms; ours + MTP 60.4 / 18.97 s / 31.7 ms, chat 10.90 s / 27.9 ms. 48 is the best
   cap for each system, so the cap-48 MTP comparison is each system at its best; cap 80 not run.
-- [ ] **Deadline-ordered decode rows (2026-10-20, H200; rate sweep running).** Under the MTP cap the slot, not the GPU, is what
+- [x] **MTP ablation and CUDA graphs off (2026-10-20, H200, standard mix, two repeats each, all 0 tracebacks;
+  `bash tasks/pd_colocation/h200_mtp_ablation_20261020.sh`; sglang f7682cf73).** The full ours + MTP stack at cap 48
+  (four-mode step + split + EDF + deadline chunk) minus one component, per tenant (agent 10 s + 80 ms, chat 0.5 s +
+  20 ms), rep 1 | rep 2:
+  | arm | agent tput | agent TTFT | agent att. | chat TTFT | chat TPOT | chat att. |
+  |---|---|---|---|---|---|---|
+  | full stack (refs 1-2) | 101.7 / 103.1 | 12.50 / 12.29 s | 46.7 / 46.7% | 3.01 / 2.89 s | 12.9 / 13.0 ms | 58.4 / 59.1% |
+  | no split (4-mode step on the stock kernel; MIXEDSPEC_STEPS 1751, no split calls) | 66.8 / 68.9 | 19.97 / 20.08 s | 11.1 / 11.1% | 9.10 / 9.06 s | 17.8 / 17.6 ms | 35.6 / 38.2% |
+  | no EDF (FCFS, chunk 2048, no preemption) | 107.6 / 103.5 | 12.17 / 12.75 s | 20.0 / 15.6% | 4.24 / 4.72 s | 11.2 / 11.8 ms | 62.3 / 59.1% |
+  | no deadline chunk (EDF + preemption, fixed chunk 2048) | 102.8 / 102.4 | 12.43 / 12.38 s | 46.7 / 46.7% | 2.84 / 2.90 s | 12.8 / 12.9 ms | 59.1 / 58.9% |
+  | ours, CUDA graphs off | 78.6 / 83.3 | 17.31 / 15.59 s | 13.3 / 20.0% | 5.86 / 5.20 s | 22.7 / 22.3 ms | 36.8 / 38.8% |
+  | stock + MTP, CUDA graphs off | 64.1 / 61.7 | 20.96 / 21.19 s | 2.2 / 2.2% | 13.65 / 14.74 s | 23.6 / 24.6 ms | 26.0 / 20.8% |
+  **The split kernel carries the MTP stack**: without it agent throughput falls 34% and both tenants' attainment
+  collapses (agent 11%, chat 37%). EDF is what lets agents meet their SLO (47% vs 16-20% FCFS) at a cost of 0-3 chat
+  points (FCFS admits chats in arrival order and lets agent prefill wait). The deadline chunk is neutral at this
+  operating point (it mattered on the long mix, above). CUDA graphs are worth ~20% throughput to ours and ~4% to stock
+  MTP; with graphs off ours still leads stock (agent +29%, chat attainment 37.8% vs 23.4%).
+- [x] **Deadline-ordered decode rows (2026-10-20, H200).** Under the MTP cap the slot, not the GPU, is what
   chats wait for: our running chats decode at 13 ms/token against a 20 ms SLO while new ones queue for a slot.
   `apply_decode_rows_edf.py` lets up to `--max-running-requests` requests be resident but runs at most K rows per step
   (the 48-row speculative CUDA graph), the K whose next token is due soonest (a request that has emitted o tokens
@@ -296,24 +313,24 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
     tokens per verify cannot meet 20 ms in any schedule), and admission closes during those steps, which is where the
     remaining TTFT misses queue. **Short of +30% at chat 8 req/s by ~1 point.** util 1.0 (one repeat): 62.5%, agent
     44.4% -- the same range as 0.9.
-  - [ ] **Attainment vs chat rate (2026-10-20, `bash tasks/pd_colocation/h200_chat_rate_sweep_20261020.sh`, agent load
+  - [x] **Attainment vs chat rate (2026-10-20, `bash tasks/pd_colocation/h200_chat_rate_sweep_20261020.sh`, agent load
     fixed at C=8, chat 300 s at 2 / 4 / 6 req/s, one repeat each; 8 req/s = the four-repeat means above).** Per tenant,
     ours + MTP (rows + admission) / prefill-prioritized stock + MTP / stock + MTP (mixed chunk):
     | chat req/s | chat attainment | chat TTFT | chat TPOT | agent attainment | agent TTFT | agent TPOT | agent tput |
     |---|---|---|---|---|---|---|---|
     | 2 | **74.7** / 65.7 / 63.2% | 0.42 / 1.73 / 1.76 s | 13.6 / 28.0 / 28.5 ms | 66.7 / 66.7 / 62.2% | 5.86 / 4.22 / 4.81 s | 25.7 / 66.3 / 75.5 ms | 154 / 119 / 113 |
     | 4 | **70.3** / 60.5 / 58.2% | 1.01 / 4.07 / 4.69 s | 12.7 / 20.8 / 21.9 ms | 62.2 / 42.2 / 24.4% | 8.35 / 10.23 / 11.21 s | 19.3 / 39.5 / 42.6 ms | 132 / 102 / 95 |
-    | 6 | (rerun pending) / 55.7 / 48.8% | -- / 5.44 / 7.08 s | -- / 18.0 / 18.8 ms | -- / 20.0 / 4.4% | -- / 12.86 / 14.57 s | -- / 41.7 / 47.7 ms | -- / 92 / 81 |
+    | 6 | **69.3** / 55.7 / 48.8% | 1.71 / 5.44 / 7.08 s | 12.6 / 18.0 / 18.8 ms | 51.1 / 20.0 / 4.4% | 10.47 / 12.86 / 14.57 s | 21.8 / 41.7 / 47.7 ms | 118 / 92 / 81 |
     | 8 | **63.0** / 49.3 / 34.2% | 2.29 / 7.59 / 12.54 s | 14.8 / 16.9 / 17.2 ms | 45.0 / 8.1 / 3.0% | 11.1 / 15.5 / 20.2 s | 39.0 / 30.1 / 29.2 ms | 103 / 81 / 66 |
-    vs prefill-prioritized + MTP, chat attainment +14% / +16% / -- / +28%; chat TTFT -76% / -75% / -- / -70% and chat
-    TPOT -51% / -39% / -- / -12%; agent attainment equal / 1.5x / -- / 5.5x; agent throughput +30% / +29% / -- / +27%.
-    At 4 req/s every bar item clears per tenant (chat TTFT and TPOT both > -30%, agent attainment +47%, throughput
-    +29%); at 2 req/s chat clears on TTFT and TPOT but agents only tie on attainment (agent TTFT +39%: EDF serves the
+    vs prefill-prioritized + MTP, chat attainment +14% / +16% / +24% / +28%; chat TTFT -76% / -75% / -69% / -70% and
+    chat TPOT -51% / -39% / -30% / -12%; agent attainment equal / 1.5x / 2.6x / 5.5x; agent throughput +30% / +29% / +29%
+    / +27%. At 4 and 6 req/s every bar item clears per tenant (chat TTFT and TPOT both >= -30%, agent attainment 1.5x /
+    2.6x, throughput +29%); at 2 req/s chat clears on TTFT and TPOT but agents only tie on attainment (agent TTFT +39%: EDF serves the
     chats' 0.5 s deadlines first); at 8 req/s chat TPOT (-12%) and chat attainment (+28%) miss. **About 24% of chats
     miss TPOT at every rate, ours included**, so that share does not come from chat load: it is the chats that decode
-    beside 32-64K agent prefill chunks. The chat 6 arm of ours crashed on the second-chunked-request assert (the
-    re-forked H200 tree lacked `edf_one_chunked_req.patch`; now `apply_edf_one_chunked_req.py` on both pod sets), rerun
-    queued (`h200_chat6_rerun_20261020.sh`).
+    beside 32-64K agent prefill chunks. The first chat 6 run of ours crashed on the second-chunked-request assert (the
+    re-forked H200 tree lacked `edf_one_chunked_req.patch`; now `apply_edf_one_chunked_req.py` on both pod sets); the
+    row above is its clean rerun (`h200_chat6_rerun_20261020.sh`). All other arms 0 tracebacks; sglang f7682cf73.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

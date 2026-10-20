@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.22.4 — MTP ablation, CUDA graphs off, chat 6 req/s (2026-10-20)
+
+- H200, two repeats: without the split kernel the MTP stack loses 34% agent throughput (agent / chat attainment 11% /
+  37%); without EDF agent attainment falls to 16-20% (from 47%); the deadline chunk is neutral at the standard mix;
+  CUDA graphs off costs ours ~20%, stock MTP ~4%.
+- Chat 6 req/s rerun after the one-chunked-request fix: chat attainment 69.3% vs 55.7% prefill-prioritized + MTP,
+  chat TTFT -69%, TPOT -30%, agent attainment 2.6x, throughput +29%.
+
 ## v1.22.3 — Attainment vs chat rate; one-chunked-request fix on the H200 tree (2026-10-20)
 
 - Four repeats of deadline-ordered rows + SLO admission at chat 8 req/s: chat attainment 63.0% vs 49.3% (+28%).

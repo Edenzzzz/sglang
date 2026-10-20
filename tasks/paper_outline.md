@@ -28,7 +28,9 @@ command and commit) or marked as missing. Priority order of the remaining gaps:
    64K: stock 17.7 s vs fused 13.3 s (-25%); at 128K the merged batch 3.15 ms/call vs the fused FA2 executor's
    0.83 ms on mixed steps. Rewrite the draft's 3.4 ("up to 40% from padding") as ~25% attention time from kernel
    choice, padding < 7%.
-5. [ ] Second model (larger dense or MoE). Every result so far is Qwen2.5-7B-Instruct + EAGLE3.
+5. [x] 2026-10-20 second model, Qwen2.5-14B on 8 H20s (no MTP, router recalibrated): ours 186-216 tok/s agent, chat
+   attainment 45-51% / 70-73% (tight / loose), agent goodput 102-131 tok/s; PD disagg collapses (agent TTFT ~290 s,
+   0 agent goodput, chat 11-13%). Open: a load scaled to 14B's capacity, and 14B with MTP (needs an EAGLE3 head).
 6. [ ] semi-PD baseline (sglang v0.4.4.post1 fork); fault tolerance stays optional.
 
 ## Story in one paragraph (2026-10-19)

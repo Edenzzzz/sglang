@@ -286,6 +286,20 @@ static mixture.
         92 tok/s) because disagg reaches its 5 ms decode only by keeping few requests in flight.** The SLO-checked router
         without worker-side decode-first stays the multi-node configuration.
         sglang `079a8a6dc`.
+      - [x] **Second model: Qwen2.5-14B-Instruct (2026-10-20; 40 q / 8 kv heads, TP1 per H20, no MTP; same text fan-out
+        C=32 + chat 8 req/s on 8 H20s; router SLO model recalibrated on 14B -- cold prefill ~2.3K tok/s at long context,
+        own decode grid `decode_grid_qwen14b.json`; `mn_14b_8gpu_20261020.sh`; ours 0 tracebacks / 0 fallbacks).**
+        | arm | agent tput / TTFT / ITL | chat TTFT / ITL | chat attainment 0.5 s+20 ms / 2 s+50 ms | agent goodput 10 s+80 ms |
+        |---|---|---|---|---|
+        | ours rep 1 | 216.0 / 2.88 s / 85.8 ms | 2.95 s / 44.2 ms | 45.3 / 70.3% | 131 tok/s |
+        | ours rep 2 | 185.7 / 3.70 s / 100.3 ms | 2.11 s / 44.9 ms | 51.4 / 73.0% | 102 tok/s |
+        | PD disagg rep 1 | 6.5 / 289.5 s / 16.9 ms | 199.2 s / 12.5 ms | 11.3 / 11.5% | 0 |
+        | PD disagg rep 2 | -- | -- (6857 / 7200 chats completed) | 13.2 / 13.2% | 0 |
+        **The 14B result widens the gap: disagg's two prefill nodes cannot keep up with 14B prefill on 64K prefixes
+        (agent TTFT ~290 s, chat ~200 s, chat output below the offered load, run took 2414 s of wall time for a 900 s
+        workload), so no agent request meets its SLO.** Ours serves the load but 14B on H20 is overloaded at a 7B-sized
+        offered load: chat TPOT p50 18-21 ms, so tight-SLO chat attainment falls to 45-51% (from ~90% on 7B). A load
+        scaled to 14B's capacity is the fair next point. sglang 642e476b7.
       - [x] **2026-10-19 per-tenant scoring: chat on SLO attainment (TTFT + per-request TPOT), agents on SLO goodput.**
         Same saved records, re-scored by `tasks/perf_model/fanout_per_tenant.py` (per-request TPOT = sum(itls) /
         (output_len - 1), so MTP arms count tokens, not stream chunks). Chat attainment at 0.5 s + 20 ms / 1 s + 30 ms /

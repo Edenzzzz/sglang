@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.21.11 — Second model: Qwen2.5-14B (2026-10-20)
+
+- 8 H20s, fan-out, two repeats: ours agent 186-216 tok/s, chat attainment 45-51% (0.5 s + 20 ms), agent goodput
+  102-131 tok/s; PD disagg agent TTFT ~290 s, agent goodput 0, chat 11-13%.
+
 ## v1.21.10 — MTP cap 64 also worse for every arm (2026-10-20)
 
 - Stock MTP 36.6 tok/s, prefill-prioritized MTP 37.1, ours MTP 60.4 (vs 102 at 48); 48 is each system's best cap.

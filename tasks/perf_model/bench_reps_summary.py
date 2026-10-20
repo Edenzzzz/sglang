@@ -17,6 +17,11 @@ ARMS = {
     "stock + MTP": "coloc_sgl_mtps_h200_c8_pt_rep{}",
     "stock prefill-prioritized + MTP": "coloc_sgl_mtps_h200_pp_c8_pt_rep{}",
     "ours + MTP": "coloc_cache_edf_mtp_h200_4mode_unc_ch2048_dl1024-2048-6000_c8_pt_rep{}",
+    "ours + MTP, matched ref": "coloc_cache_edf_mtp_h200_4mode_unc_ch2048_dl1024-2048-6000_c8_pt_rows_ref_rep{}",
+    "stock prefill-prioritized + MTP, matched ref": "coloc_sgl_mtps_h200_pp_c8_pt_rows_ref_rep{}",
+    "ours + MTP, deadline-ordered rows, cap 96": "coloc_cache_edf_mtp_h200_4mode_unc_ch2048_dl1024-2048-6000_c8_pt_rows48_cap96_rep{}",
+    "ours + MTP, deadline-ordered rows, cap 72": "coloc_cache_edf_mtp_h200_4mode_unc_ch2048_dl1024-2048-6000_c8_pt_rows48_cap72_rep{}",
+    "ours + MTP, deadline-ordered rows, cap 128": "coloc_cache_edf_mtp_h200_4mode_unc_ch2048_dl1024-2048-6000_c8_pt_rows48_cap128_rep{}",
 }
 SLOS = {"agent": (10.0, 80.0), "chat": (0.5, 20.0)}
 

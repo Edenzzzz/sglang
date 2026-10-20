@@ -258,6 +258,21 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   arm: stock + MTP 36.6 tok/s / TTFT 33.42 s / TPOT 48.5 ms, chat 41.54 s / 42.6 ms; prefill-prioritized + MTP 37.1 /
   32.88 s / 52.2 ms, chat 42.67 s / 44.2 ms; ours + MTP 60.4 / 18.97 s / 31.7 ms, chat 10.90 s / 27.9 ms. 48 is the best
   cap for each system, so the cap-48 MTP comparison is each system at its best; cap 80 not run.
+- [ ] **Deadline-ordered decode rows (2026-10-20, H200, running).** Under the MTP cap the slot, not the GPU, is what
+  chats wait for: our running chats decode at 13 ms/token against a 20 ms SLO while new ones queue for a slot.
+  `apply_decode_rows_edf.py` lets up to `--max-running-requests` requests be resident but runs at most K rows per step
+  (the 48-row speculative CUDA graph), the K whose next token is due soonest (a request that has emitted o tokens
+  since it started decoding at t0 is due at t0 + SLO x (o + 1); chat 20 ms, prompts >= 24K 80 ms); the others sit
+  out the step with their KV and draft state in place (the overlap relay is keyed by req_pool_idx). Rows merge back
+  before admission, so the cap, KV reservation and chunk rules see all of them.
+  - [x] **Output gate (2026-10-20, `gate_decode_rows_20261020.sh`, 160 ShareGPT prompts at once, greedy, 192 tokens,
+    ours + MTP 4-mode; 0 tracebacks; K=16 split 501+ steps at 154 rows mean, 138 sitting out):** agreement with the
+    cap-160 reference -- rerun of the reference (noise floor) 99/160 exact, mean common prefix 705 of 863 chars; K=16
+    41/160, 422; **null case, no parking at cap 16 (the same 16-row steps) 43/160, 411.** Parking agrees as well as
+    its batch-size null: the divergence is bf16 batch-shape numerics (texts diverge at near-tie words and stay
+    coherent), not state corruption. PASS.
+  - [ ] Serving A/B: K=48 at cap 96 vs in-session ours + MTP (cap 48) and prefill-prioritized stock + MTP, two
+    repeats (`bash tasks/pd_colocation/h200_decode_rows_20261020.sh`).
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

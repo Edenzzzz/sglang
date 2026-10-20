@@ -30,6 +30,15 @@ for arm in ${ARMS:-stock stock_mtp pdmux ours ours_ovl ours_mtp}; do
           RUN_TAG=_h200_4mode_unc_ch${CHUNK:-2048}_dl${DEADLINE_CHUNK//:/-}_c8$T python3 -u mn_run.py coloc_cache_edf_mtp ;;
     ours_mtp) KERNEL=mtpsplit PREEMPT=1 CHUNK=2048 EDF_UNCACHED=1 DEADLINE_CHUNK=1024:2048:6000 \
           RUN_TAG=_h200_4mode_unc_ch2048_dl1024-2048-6000_c8$T python3 -u mn_run.py coloc_cache_edf_mtp ;;
+    # MTP ablation (2026-10-20): the full stack minus one component at a time.
+    #   ours_mtp_unfused  4-mode step + EDF + deadline chunk, attention on the stock kernel (no FA3/FA2 split)
+    #   ours_mtp_noedf    4-mode step + split, FCFS admission at chunk 2048 (no EDF, no preemption, no deadline chunk)
+    #   ours_mtp_nodc     4-mode step + split + EDF + preemption at a fixed chunk 2048 (no deadline chunk)
+    ours_mtp_unfused) KERNEL=lpt PREEMPT=1 CHUNK=2048 EDF_UNCACHED=1 DEADLINE_CHUNK=1024:2048:6000 \
+          RUN_TAG=_h200_4mode_unfused_unc_ch2048_dl1024-2048-6000_c8$T python3 -u mn_run.py coloc_cache_edf_mtp ;;
+    ours_mtp_noedf) KERNEL=mtpsplit PREEMPT=0 CHUNK=2048 RUN_TAG=_h200_4mode_noedf_ch2048_c8$T python3 -u mn_run.py coloc_cache_mtp ;;
+    ours_mtp_nodc) KERNEL=mtpsplit PREEMPT=1 CHUNK=2048 EDF_UNCACHED=1 \
+          RUN_TAG=_h200_4mode_unc_ch2048_nodc_c8$T python3 -u mn_run.py coloc_cache_edf_mtp ;;
   esac
 done
 echo H200_NOSPEC_DONE

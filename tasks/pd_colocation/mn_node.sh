@@ -154,6 +154,8 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # ITL_SLO="slo_ms:tokens_per_step:base_ms:a:b": largest chunk keeping running decodes within their ITL SLO, no
   # exception (apply_edf_itl_slo_chunk.py).
   [ -n "${ITL_SLO:-}" ] && export SGLANG_EDF_ITL_SLO=$ITL_SLO
+  # DECODE_ROWS="K:slo_ms:long_tok:long_ms": each step decodes the K rows due soonest (apply_decode_rows_edf.py).
+  [ -n "${DECODE_ROWS:-}" ] && export SGLANG_DECODE_ROWS=$DECODE_ROWS
   # STEP_TRACE=1: one STEPTRACE line per forward (GPU time + host launch time; tasks/perf_model fitters).
   [ "${STEP_TRACE:-0}" = 1 ] && export SGLANG_STEP_TRACE=1
   # TTFT_SCALE_MS: EDF deadline slope, ms per SGLANG_TTFT_SCALE_TOKENS (5000) prompt tokens past 4096 (default 1000).
@@ -186,7 +188,11 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # SPEC=2: the same EAGLE3 MTP without the 4-mode step (stock sglang MTP), to separate the cost
   # of speculation on this GPU from that of mixing prefill with verify.
   if [ "${SPEC:-0}" != 0 ]; then
-    ARGS+=(--speculative-algorithm EAGLE3 --speculative-draft-model-path $W/qwen7b_eagle3_sgl
+    # DRAFT_DIR: draft head under $W (default qwen7b_eagle3_sgl). SIM_ACC=<len>: simulated acceptance, every verify
+    # accepts <len> tokens including the bonus (SGLANG_SIMULATE_ACC_LEN, match-expected); the draft and verify work
+    # per step stay real, so a random-weight head of the target's shape (make_sim_eagle3_head.py) serves.
+    [ -n "${SIM_ACC:-}" ] && export SGLANG_SIMULATE_ACC_LEN=$SIM_ACC SGLANG_SIMULATE_ACC_METHOD=match-expected
+    ARGS+=(--speculative-algorithm EAGLE3 --speculative-draft-model-path $W/${DRAFT_DIR:-qwen7b_eagle3_sgl}
            --speculative-num-steps ${SPEC_STEPS:-3} --speculative-eagle-topk 1 --speculative-num-draft-tokens ${SPEC_TOKENS:-4})
     [ "$MODE" = coloc ] && [ "$SPEC" = 1 ] && export SGLANG_ALLOW_MIXED_CHUNK_SPEC=1 SGLANG_MIXED_SPEC=1
     # Load + context gate (mixed_spec_ctx_queue_gate.patch): mix only when the prefill carries >= 8K

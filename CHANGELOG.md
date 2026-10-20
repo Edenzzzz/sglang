@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.22.0 — Deadline-ordered decode rows; simulated-MTP 14B; MTP ablation arms (2026-10-20)
+
+- `apply_decode_rows_edf.py`: with MTP, up to `--max-running-requests` requests stay resident while each step runs the
+  K (= speculative graph batch) rows whose next token is due soonest; the rest sit out with KV and draft state kept.
+  Output gate PASS against its same-batch-size null (41 vs 43 of 160 exact, `gate_decode_rows_20261020.sh`).
+- `make_sim_eagle3_head.py` + `DRAFT_DIR` / `SIM_ACC` harness knobs: random-weight EAGLE3 head of the target's shape
+  with simulated acceptance (`SGLANG_SIMULATE_ACC_LEN`), used for Qwen2.5-14B MTP on H20.
+- `mn_h200_nospec_20261018.sh`: MTP ablation arms (`ours_mtp_unfused`, `_noedf`, `_nodc`); runners
+  `h200_decode_rows_20261020.sh`, `h200_mtp_ablation_20261020.sh`, `mn_14b_mtp_8gpu_20261020.sh`.
+
 ## v1.21.16 — 14B at half load (2026-10-20)
 
 - 8 H20s, agent C=16 + chat 4 req/s, two repeats: ours chat attainment 80% (0.5 s + 20 ms) vs disagg 9-17%, agent

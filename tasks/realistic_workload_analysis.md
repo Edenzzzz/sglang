@@ -265,6 +265,11 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   the same as without overlap): the verify batch is too small beside a deep-context FA3 chunk for the overlap to hide
   anything. vs prefill-prioritized + MTP (49.3%) **+27.7%**. With the page-128, acceptance-3.0, overlap and util
   variants all measured, chat attainment at 8 req/s settles at 62-64% (+26-30%) for every variant of ours.
+- [x] **Rows + SLO admission without EDF (2026-10-21, H200, chat 8 req/s, FCFS 4-mode MTP at chunk 2048, two repeats,
+  clean; `bash tasks/pd_colocation/h200_rows_noedf_20261021.sh`) -- negative.** Chat attainment 21.6 / 22.8% (TTFT 21.5
+  / 20.5 s), agent 6.7 / 8.9% (TTFT 26.4 / 25.4 s), agent 68-70 tok/s; rows split on 1 step. Without deadline order the
+  SLO admission check holds the queue head, and chats wait behind long agent prefills in arrival order; FCFS alone
+  (ablation) was 59-62% chat. Admission needs EDF ordering.
 - [x] **Acceptance sensitivity: MTP at 3.0 accepted tokens per verify (2026-10-20, H200, standard mix, chat 8 req/s;
   `SGLANG_SIMULATE_ACC_LEN=3.0` for every arm -- logged accept len 3.00, the head still drafts, the verify still runs,
   output lengths fixed by the drivers; `bash tasks/pd_colocation/h200_sim_acc3_20261020.sh`; two repeats, clean).**

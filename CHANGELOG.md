@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.23.4 — Rows + admission without EDF: negative (2026-10-21)
+
+- FCFS + rows + SLO admission: chat attainment 22%, agent 8% (head-of-line blocking behind agent prefills).
+
 ## v1.23.3 — Llama-3.3-70B, 4 replicas: ours vs PD disagg (2026-10-21)
 
 - 4 x 4 H20, TP4, MTP at acceptance 2.1, fan-out + chat, two repeats: chat attainment 77-89% vs 16-18% (2 s + 50 ms),

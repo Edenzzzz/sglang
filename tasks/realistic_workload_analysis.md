@@ -265,6 +265,12 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   the same as without overlap): the verify batch is too small beside a deep-context FA3 chunk for the overlap to hide
   anything. vs prefill-prioritized + MTP (49.3%) **+27.7%**. With the page-128, acceptance-3.0, overlap and util
   variants all measured, chat attainment at 8 req/s settles at 62-64% (+26-30%) for every variant of ours.
+- [x] **EDF base deadline at the chat SLO (TTFT_SLO_MS=500 instead of 2000) with rows + SLO admission (2026-10-21,
+  H200, chat 8 req/s, two repeats, clean, 29.0K / 29.5K split calls; `bash
+  tasks/pd_colocation/h200_rows_ttft500_20261021.sh`) -- no change.** Chat attainment 63.3 / 61.8% (TTFT misses 32.6 /
+  32.8%), agent 37.8 / 44.4%. The chat TTFT misses are not ordering: they are the requests SLO admission holds back while
+  long agent-chunk steps run. Across rows, admission, util, overlap, page size, acceptance, chunk caps and deadline
+  base, chat attainment at 8 req/s stays at 61-65% (+24-32% over prefill-prioritized + MTP; four-repeat mean +28%).
 - [x] **Rows + SLO admission + the per-row slack chunk cap (2026-10-21, H200, chat 8 req/s, one repeat each, clean;
   `bash tasks/pd_colocation/h200_rows_slack_20261021.sh`) -- negative.** The cap (largest chunk keeping every running row
   within its mean-TPOT SLO, `ITL_SLO=20:2.0:...:measured:slack:cls24000_80`) does what it is for -- chat TPOT misses

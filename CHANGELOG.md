@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.23.6 — EDF base deadline at the chat SLO: no change (2026-10-21)
+
+- TTFT_SLO_MS=500 with rows + admission: chat attainment 62.6% (two repeats), TTFT misses unchanged at 33%.
+
 ## v1.23.5 — Slack chunk cap on top of rows + admission: negative (2026-10-21)
 
 - Chat TPOT misses 30% -> 4%, but prefill starves (chat attainment 43%); a short-prompt floor does not help.

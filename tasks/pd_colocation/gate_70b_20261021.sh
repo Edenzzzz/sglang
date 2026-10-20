@@ -9,7 +9,7 @@ set -uo pipefail
 W=/dev/shm/w
 cd $W/tasks/pd_colocation
 OUT=$W/gate_70b_20261021; [ "${KEEP:-0}" = 1 ] || rm -rf $OUT; mkdir -p $OUT
-export GPUS_PER_POD=4 TP=4 MODEL_DIR=llama70b DRAFT_DIR=llama70b_eagle3 MEM_FRAC=0.85 CTX_LEN=131072 SM_FA3=${SM_FA3:-66}
+export GPUS_PER_POD=4 TP=4 MODEL_DIR=llama70b DRAFT_DIR=llama70b_eagle3_sgl MEM_FRAC=0.85 CTX_LEN=131072 SM_FA3=${SM_FA3:-66}
 for arm in ${ARMS:-stock stock_rep ours}; do
   bash mn_kill.sh >/dev/null 2>&1; sleep 5
   LOG=$OUT/$arm; mkdir -p $LOG

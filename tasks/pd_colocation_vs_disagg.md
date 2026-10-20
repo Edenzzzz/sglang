@@ -286,6 +286,17 @@ static mixture.
         92 tok/s) because disagg reaches its 5 ms decode only by keeping few requests in flight.** The SLO-checked router
         without worker-side decode-first stays the multi-node configuration.
         sglang `079a8a6dc`.
+      - [ ] **Llama-3.3-70B-Instruct at TP4, 4 pods x 4 H20 = 4 replicas (2026-10-21, job f3b4627e0864b06f, provisioned by
+        `mn_provision_70b_20261021.sh` from the archived serving tree -- manifest verified on all 4 pods -- plus
+        `mn_provision_70b_post_20261021.sh`).**
+        - [x] **Output gate (`gate_70b_20261021.sh`, one TP4 pod, trained EAGLE3 head; 96 ShareGPT + 8 x 32K TraceLab
+          prompts at once, greedy, 128 tokens; all arms 0 tracebacks; ours 13K split calls, 151 4-mode steps): PASS.**
+          vs stock MTP, short / long prompts exact and mean common prefix: stock rerun (noise floor) 42/96, 355 of 564
+          chars / 1/8, 111 of 446; ours 41/96, 357 / 2/8, 177. The trained head accepts only 1.29-1.39 tokens per verify
+          on these raw-text prompts (the Qwen-7B head: ~2.1), so the serving A/B fixes acceptance at 2.1 for every arm.
+        - [ ] Router calibration on one 70B TP4 worker, then ours vs PD disagg 2P2D (TP4 per pod, MTP everywhere), text
+          fan-out at AGENT_CONC 8 + chat 2 req/s, two repeats (`bash tasks/pd_colocation/mn_70b_16gpu_20261021.sh`) --
+          running.
       - [x] **Fault tolerance: lose 2 of 8 GPUs mid-run (2026-10-20; same text fan-out C=32 + chat 8 req/s; at t = 300 s
         every worker on pod 1 is killed, `FAULT_AT` / `FAULT_POD` in mn_run.py -- under PD disagg pod 1 is one of the
         two prefill pods, under ours two colocated workers; our router marks a worker dead on a refused or broken

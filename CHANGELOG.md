@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.23.2 — Llama-3.3-70B on 4 x 4 H20: provisioned, gate PASS (2026-10-21)
+
+- Job f3b4627e0864b06f provisioned from the archived serving tree (manifest verified on all pods); upstream from a
+  `git archive` because GitHub resets the pods' clones. TP4 output gate PASS (ours 41/96 vs noise floor 42/96 exact).
+- The trained EAGLE3 head accepts 1.3 tokens per verify on raw prompts; the 70B A/B fixes acceptance at 2.1.
+- `mn_run.py` calibrate passes TP / GPUS_PER_POD / DRAFT_DIR / SIM_ACC; `POOL_KV_TOKENS` knob for the router.
+
 ## v1.23.1 — H20 results archived; 70B job provisioning (2026-10-20)
 
 - `tasks/pd_colocation/h20_requests_20261020.npz`: per-request TTFT / TPOT / output length / start of all 413 streams

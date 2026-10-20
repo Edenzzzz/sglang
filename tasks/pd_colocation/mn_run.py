@@ -222,7 +222,10 @@ def calibrate():
     # The perf model must describe the workers the router will route to: same kernel / MTP / EDF /
     # preemption config as the arm (env), not the stock FA2 worker.
     cenv = (f"KERNEL={os.environ.get('KERNEL', 'lpt')} EDF={os.environ.get('EDF', '0')} SPEC={os.environ.get('SPEC', '0')} "
-            f"PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')} MODEL_DIR={model}")
+            f"PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')} MODEL_DIR={model} "
+            f"TP={os.environ.get('TP', '1')} GPUS_PER_POD={os.environ.get('GPUS_PER_POD', '2')} "
+            f"DRAFT_DIR={os.environ.get('DRAFT_DIR', 'qwen7b_eagle3_sgl')} SIM_ACC={os.environ.get('SIM_ACC', '')} "
+            f"MEM_FRAC={os.environ.get('MEM_FRAC', '0.85')} SM_FA3={os.environ.get('SM_FA3', '66')}")
     C.run(0, f"rm -rf {log}; mkdir -p {log}; {cenv} bash {W}/tasks/pd_colocation/mn_node.sh coloc {log}")
     hs = hosts()
     t0 = time.time()

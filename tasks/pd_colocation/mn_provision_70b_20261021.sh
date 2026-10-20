@@ -4,7 +4,8 @@
 # (tree_20261020.tgz: the 32 files that differ from upstream, taken from pod 0 of bb854a10b8954223 on 2026-10-20, every
 # in-place patch included) + flashinfer port07, torch 2.14.1. The tree is verified against tree_manifest_20261020.txt
 # (md5 prefixes) before anything runs. Models: Llama-3.3-70B-Instruct (ModelScope) and its trained EAGLE3 head
-# (yuhuili/EAGLE3-LLaMA3.3-Instruct-70B, hf-mirror), on the root overlay (/dev/shm holds 227 GB). Claude.
+# (yuhuili/EAGLE3-LLaMA3.3-Instruct-70B, hf-mirror), on the root overlay. The repo's original/ (a second 140 GB copy
+# as consolidated .pth) is skipped. Claude.
 set -u
 W=/dev/shm/w; mkdir -p $W; cd $W
 log() { echo "[prov $(hostname | tail -c 6) $(date +%H:%M:%S)] $*"; }
@@ -41,7 +42,7 @@ done < $W/tree_manifest_20261020.txt
 $P -m pip install -q 'huggingface_hub[cli]' aiohttp modelscope >/dev/null 2>&1
 export HF_ENDPOINT=https://hf-mirror.com
 M=/opt/tiger/w; mkdir -p $M
-[ -f $M/llama70b/model-00030-of-00030.safetensors ] || $P -c "from modelscope import snapshot_download as s; s('LLM-Research/Llama-3.3-70B-Instruct', local_dir='$M/llama70b')" >/dev/null 2>&1 || log TARGET_FAIL
+[ -f $M/llama70b/model-00030-of-00030.safetensors ] || $P -c "from modelscope import snapshot_download as s; s('LLM-Research/Llama-3.3-70B-Instruct', local_dir='$M/llama70b', ignore_file_pattern=['original/*'])" >/dev/null 2>&1 || log TARGET_FAIL
 ln -sfn $M/llama70b $W/llama70b
 log "target shards $(ls $M/llama70b/*.safetensors 2>/dev/null | wc -l)"
 [ -f $M/llama70b_eagle3/config.json ] || $P -c "from huggingface_hub import snapshot_download as s; s('yuhuili/EAGLE3-LLaMA3.3-Instruct-70B', local_dir='$M/llama70b_eagle3')" >/dev/null 2>&1 || log DRAFT_FAIL

@@ -32,7 +32,10 @@ def gen(ids, max_new, stream):
 
 
 rng = random.Random(0)
-gen([rng.randrange(1000, 30000) for _ in range(64)], 4, False)  # warm
+# Warm with a short and a 4096-token prompt: a 64-token warmup left the first long prefill to pay one-time kernel setup
+# (the 32-GPU calibration measured 4096 tokens at 7.1 s vs 1.1 s for 8192, 2026-10-21).
+for n in (64, 4096):
+    gen([rng.randrange(1000, 30000) for _ in range(n)], 4, False)
 pre = []
 for n in (4096, 8192, 16384, 32768, 49152):
     ids = [rng.randrange(1000, 30000) for _ in range(n)]  # fresh tokens: guaranteed cache miss

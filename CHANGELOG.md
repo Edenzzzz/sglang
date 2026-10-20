@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.22.3 — Attainment vs chat rate; one-chunked-request fix on the H200 tree (2026-10-20)
+
+- Four repeats of deadline-ordered rows + SLO admission at chat 8 req/s: chat attainment 63.0% vs 49.3% (+28%).
+  Attainment-vs-rate sweep: chat 2 / 4 req/s +14% / +16% attainment, chat TTFT -76% / -75%, TPOT -51% / -39%,
+  agent throughput +30% / +29% over prefill-prioritized stock + MTP.
+- `apply_edf_one_chunked_req.py`: at most one unfinished chunked request under every policy, on both admission paths
+  (the re-forked H200 tree lacked the 10-17 `edf_one_chunked_req.patch`; the ignore-EOS path was unguarded everywhere).
+
 ## v1.22.2 — 14B with simulated MTP; semi-PD retry (2026-10-20)
 
 - 8 H20s, 14B half load, MTP with a random-weight head and acceptance fixed at 2.1: ours chat attainment 73-77% vs

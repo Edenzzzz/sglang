@@ -294,8 +294,26 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
     14.8 vs 16.9 ms (-12%). The rows move chat misses from TTFT (38% -> 32%) to TPOT (24% -> 30%): the remaining TPOT
     misses are chats decoding through long mixed steps (logged step interval up to ~104 ms, where a chat row at 2.0
     tokens per verify cannot meet 20 ms in any schedule), and admission closes during those steps, which is where the
-    remaining TTFT misses queue. **Short of +30% at chat 8 req/s by ~1 point**; util 1.0 and the attainment-vs-rate
-    sweep (`h200_chat_rate_sweep_20261020.sh`, chat 2 / 4 / 6 req/s) are running.
+    remaining TTFT misses queue. **Short of +30% at chat 8 req/s by ~1 point.** util 1.0 (one repeat): 62.5%, agent
+    44.4% -- the same range as 0.9.
+  - [ ] **Attainment vs chat rate (2026-10-20, `bash tasks/pd_colocation/h200_chat_rate_sweep_20261020.sh`, agent load
+    fixed at C=8, chat 300 s at 2 / 4 / 6 req/s, one repeat each; 8 req/s = the four-repeat means above).** Per tenant,
+    ours + MTP (rows + admission) / prefill-prioritized stock + MTP / stock + MTP (mixed chunk):
+    | chat req/s | chat attainment | chat TTFT | chat TPOT | agent attainment | agent TTFT | agent TPOT | agent tput |
+    |---|---|---|---|---|---|---|---|
+    | 2 | **74.7** / 65.7 / 63.2% | 0.42 / 1.73 / 1.76 s | 13.6 / 28.0 / 28.5 ms | 66.7 / 66.7 / 62.2% | 5.86 / 4.22 / 4.81 s | 25.7 / 66.3 / 75.5 ms | 154 / 119 / 113 |
+    | 4 | **70.3** / 60.5 / 58.2% | 1.01 / 4.07 / 4.69 s | 12.7 / 20.8 / 21.9 ms | 62.2 / 42.2 / 24.4% | 8.35 / 10.23 / 11.21 s | 19.3 / 39.5 / 42.6 ms | 132 / 102 / 95 |
+    | 6 | (rerun pending) / 55.7 / 48.8% | -- / 5.44 / 7.08 s | -- / 18.0 / 18.8 ms | -- / 20.0 / 4.4% | -- / 12.86 / 14.57 s | -- / 41.7 / 47.7 ms | -- / 92 / 81 |
+    | 8 | **63.0** / 49.3 / 34.2% | 2.29 / 7.59 / 12.54 s | 14.8 / 16.9 / 17.2 ms | 45.0 / 8.1 / 3.0% | 11.1 / 15.5 / 20.2 s | 39.0 / 30.1 / 29.2 ms | 103 / 81 / 66 |
+    vs prefill-prioritized + MTP, chat attainment +14% / +16% / -- / +28%; chat TTFT -76% / -75% / -- / -70% and chat
+    TPOT -51% / -39% / -- / -12%; agent attainment equal / 1.5x / -- / 5.5x; agent throughput +30% / +29% / -- / +27%.
+    At 4 req/s every bar item clears per tenant (chat TTFT and TPOT both > -30%, agent attainment +47%, throughput
+    +29%); at 2 req/s chat clears on TTFT and TPOT but agents only tie on attainment (agent TTFT +39%: EDF serves the
+    chats' 0.5 s deadlines first); at 8 req/s chat TPOT (-12%) and chat attainment (+28%) miss. **About 24% of chats
+    miss TPOT at every rate, ours included**, so that share does not come from chat load: it is the chats that decode
+    beside 32-64K agent prefill chunks. The chat 6 arm of ours crashed on the second-chunked-request assert (the
+    re-forked H200 tree lacked `edf_one_chunked_req.patch`; now `apply_edf_one_chunked_req.py` on both pod sets), rerun
+    queued (`h200_chat6_rerun_20261020.sh`).
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

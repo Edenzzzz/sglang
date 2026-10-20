@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.21.10 — MTP cap 64 also worse for every arm (2026-10-20)
+
+- Stock MTP 36.6 tok/s, prefill-prioritized MTP 37.1, ours MTP 60.4 (vs 102 at 48); 48 is each system's best cap.
+
 ## v1.21.9 — Second model (Qwen2.5-14B) and MTP cap sweep (2026-10-20)
 
 - `MODEL_DIR` knob (worker, bench tokenizer, fan-out driver); calibration writes a per-model decode grid (`CAL_GRID`)

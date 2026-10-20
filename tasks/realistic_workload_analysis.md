@@ -254,6 +254,10 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   ms at 48). Up to 128 rows verifying 4 draft tokens each make every step slower, so decode slows for everyone and the
   queue grows anyway: the cap of 48 protects MTP serving. The cap-48 MTP comparison stands, and the chat-attainment
   gap to prefill-prioritized stock is not a configuration artifact. Rep 2 stopped.
+  **Cap 64 (2026-10-20, `h200_mtp_capsweep_20261020.sh`, one repeat each, clean)** is already worse than 48 for every
+  arm: stock + MTP 36.6 tok/s / TTFT 33.42 s / TPOT 48.5 ms, chat 41.54 s / 42.6 ms; prefill-prioritized + MTP 37.1 /
+  32.88 s / 52.2 ms, chat 42.67 s / 44.2 ms; ours + MTP 60.4 / 18.97 s / 31.7 ms, chat 10.90 s / 27.9 ms. 48 is the best
+  cap for each system, so the cap-48 MTP comparison is each system at its best; cap 80 not run.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

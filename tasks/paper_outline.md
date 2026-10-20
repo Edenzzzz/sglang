@@ -1,134 +1,298 @@
-# Current goal
+# AttentionFuse: SLO-Aware Prefill-Decode Colocation with Fused Attention and Cache-First Routing
 
-Rebuild the story of the 11/21 draft (`tasks/AttentionFuse Outline OSDI 25'.docx`) around what has been measured
-since. The draft section order is kept; each item is either backed by a dated result (with the doc that holds the
-command and commit) or marked as missing. Priority order of the remaining gaps:
+Draft (2026-10-20), rebuilt from the 11/21 outline (`tasks/AttentionFuse Outline OSDI 25'.docx`) with the results
+measured since. Every number traces to a dated entry (commit + command) in `debug_kernel_server_perf_4_mode.md`,
+`realistic_workload_analysis.md`, `pd_colocation_vs_disagg.md` or `server_perf_model.md`. Model: Qwen2.5-7B-Instruct
+with an EAGLE3 MTP head unless noted; single node = 1 H200, multi-node = 8 H20.
 
-1. [x] 2026-10-20 six repeats: vs stock mixed chunk the attainment bar clears with MTP (chat +72%, agent 15x,
-   throughput +55%) and sits at the line without (chat +29.7%); vs prefill-prioritized chat attainment falls short
-   (+16.5% / +20%). (`realistic_workload_analysis.md` Baselines, six-repeat table.)
-   Earlier: 2026-10-19 Single-node per-tenant rerun of the standard mix (H200 `dadf94f0e1da7238`). REOPENED: stock is
-   bimodal (rep 3 matches 10-18, reps 1-2 are a slow mode); vs rep 3 ours without MTP misses agent TTFT (+17%).
-   Repeats 4-6 queued. Reps 1-2 read: no MTP vs stock clears all five means (+44% / -35% / -32%, chat -94% / -45%); MTP vs stock MTP misses only chat ITL
-   (-28.1%); chat SLO attainment 1.3x / 1.8-1.9x stock, agent goodput 2.3-2.8x / ~16x. Open: stock is slower on
-   this pod than on 10-18 while ours matches -- unexplained (`realistic_workload_analysis.md` Baselines).
-1b. [ ] SLO-sized chunk admission (user, 2026-10-19): admit the largest chunk that keeps the running decodes within
-   their ITL SLO, with no exception (no late-prefill override, no minimum chunk). The tested step budget was a fixed 50 ms floored at
-   the 1024 small chunk, so it never sized to the SLO. Target: the chat TPOT tail (p90 61-63 ms no MTP).
-2. [x] 2026-10-20 load spike (chat x3 for 240 s, 8 H20s, two repeats): ours keeps agent attainment 99-100% through
-   the spike and the spike stream's chat attainment at 88-91%; PD disagg 36-57% agent, 19-22% chat in every window.
-   Mixture shift (agent load x2 for 240 s): ours 97-100% agent attainment, agent goodput ~2x during the shift, chat
-   ~84%; disagg 21-31% agent, 18-22% chat. (`pd_colocation_vs_disagg.md` 5e.)
-3. [x] 2026-10-19 Point 4 as proposed (pull-source choice among per-worker copies, serving node fixed): neutral
-   among sources (within 3%), copies cost 7-10% goodput; no congested source at <= 16 H20s even on one NIC.
-4. [x] 2026-10-20 (from the 10-13 B1 profiles, `debug_kernel_server_perf_4_mode.md` B1): padding waste is small --
-   decode rows padded into prefill tiles cost 6.3% of FLOPs at 32K, 2.7% at 64K, 0.6% at 128K. The step time comes
-   from kernel choice: stock mixed chunk runs every row, 64-256K prefill rows included, through FA2 BatchPrefill;
-   the fused step sends prefill rows to FA3 and decode / verify rows to the FA2 executor. Attention per 60 steps at
-   64K: stock 17.7 s vs fused 13.3 s (-25%); at 128K the merged batch 3.15 ms/call vs the fused FA2 executor's
-   0.83 ms on mixed steps. Rewrite the draft's 3.4 ("up to 40% from padding") as ~25% attention time from kernel
-   choice, padding < 7%.
-5. [x] 2026-10-20 second model, Qwen2.5-14B on 8 H20s (no MTP, router recalibrated): ours 186-216 tok/s agent, chat
-   attainment 45-51% / 70-73% (tight / loose), agent goodput 102-131 tok/s; PD disagg collapses (agent TTFT ~290 s,
-   0 agent goodput, chat 11-13%). Open: a load scaled to 14B's capacity, and 14B with MTP (needs an EAGLE3 head).
-6. [ ] semi-PD baseline (sglang v0.4.4.post1 fork); fault tolerance stays optional.
+## Paper Outline (10/20)
 
-## Story in one paragraph (2026-10-19)
+- **goal** -- we need to meet per-tenant SLOs (chat: TTFT + per-token latency; agents: TTFT + TPOT) while maximizing
+  goodput, for mixed chat + long-context agent traffic, with speculative decoding (MTP) on as production runs it --
+  without fixing a prefill / decode split in hardware
+- **motivation**
+  - prefill-prioritized chunked prefill -- good throughput, but long prefills stall running decodes (agent P99 ITL 1.35 s)
+  - mixed chunk -- decode rides the prefill step, but every row, 64-256K prefill rows included, runs through one FA2
+    prefill kernel (~25% more attention time than splitting by role)
+  - PD disaggregation -- decode isolation, but a few prefill nodes queue every tenant (TTFT 14-31 s at our loads),
+    dilute each prefix across prefill nodes and re-prefill agent turns
+  - PD multiplexing -- per-phase SM groups, but no CPU-GPU overlap scheduling and one CUDA-graph set per SM group
+  - MTP raises decode-node utilization under disaggregation, undercutting "colocation for utilization" unless the
+    colocated schedule is MTP-compatible and efficient -- MTP is in scope
+- **design**
+  - a fused step that runs prefill, decode, draft and verify attention side by side on pre-assigned SMs: FA3 (Hopper
+    TMA / wgmma) for prefill tiles, FA2 for decode / verify tiles, FA2 overlapped beside FA3
+  - the 4-mode MTP step: the prefill chunk rides the verify forward, inside the stock scheduler (overlap scheduler on,
+    one CUDA-graph set)
+  - why does this help? cheaper per prefill token than mixed chunk, no decode stalls as in prefill-prioritized, and
+    EDF spends each step on deadlines
+- **distributed inference**
+  - meeting SLOs across nodes requires routing on predicted load, not on a fixed prefill / decode role
+  - EDF needs a step-time estimate; the fused step admits a simple one, shared by scheduler and router
+  - route each request to the node holding the longest cached prefix that can still meet every SLO; pull the rest
+    from a cluster KV pool (best-effort replication); nodes report their load to the router
+- **evaluation**
+  - main workload: mixed TraceLab coding agents + ShareGPT chat (standard 32-64K and long 32-250K mixes); multi-node
+    fan-out agents on shared repository prefixes + chat; standalone ShareGPT, math, code and agent / tool traces
+  - single node vs prefill-prioritized and mixed chunk (with and without MTP), pdmux as a reference
+  - multi-node vs PD disaggregation (with and without MTP on decode); semi-PD if time permits
+  - per-tenant SLO attainment and goodput, error bars over repeats, load spikes and mixture shifts, a second model
+  - fault tolerance (if time permits)
+    - prefill-node failure propagates to decode nodes under disaggregation; colocated nodes absorb it
 
-Disaggregation buys decode isolation by fixing a prefill / decode split in hardware. Colocation can have the same
-isolation per step, without fixing the split, if one step can run prefill, decode, draft and verify attention side
-by side at a chosen SM share. That requires (C1) a kernel path that runs FA3 prefill tiles and FA2 decode / verify tiles
-on pre-assigned SMs inside the normal sglang step: CPU-GPU overlap scheduling stays on and there is one CUDA-graph set;
-pdmux has neither. It also requires (C2) a schedule that spends the step on deadlines: EDF on uncached-token deadlines,
-chunk size admitted per step. With speculative decoding on (MTP is now standard, and disagg runs it on decode nodes)
-(C3) the fused step is predictable enough to route on. Cluster-wide (C4), symmetric nodes let the router send each
-request to its cache holder first and move only when the SLO check says so. Prefixes then get replicated where demand
-is, rather than diluted across a fixed prefill pool. The cluster serves more requests within SLO, and the schedule
-re-balances per step instead of re-provisioning.
+## Abstract
 
-## Core contributions and their evidence
+LLM serving fleets are disaggregated into prefill and decode nodes so that long prefills never stall decoding. The
+split is fixed in hardware: it queues requests behind a few prefill nodes, dilutes cached prefixes across them, and
+leaves decode compute idle -- which speculative decoding (MTP) now fills on the disaggregated side. We present
+AttentionFuse, a colocated serving system in which every node runs prefill and decode together. Its step runs FA3
+prefill tiles and FA2 decode / verify tiles on pre-assigned SMs inside sglang's scheduler, with the prefill chunk
+riding the MTP verify forward (a 4-mode step) and an EDF scheduler that sizes each chunk to deadlines. Across nodes, a
+cache-first router sends each request to the node holding the most of its prefix that can still meet every SLO,
+pulling the rest from a cluster KV pool. On mixed coding-agent + chat traffic over 8 H20s, AttentionFuse meets chat
+SLOs for 91% of requests vs 26% under PD disaggregation and delivers 6x the agent goodput, holding 97-100% agent
+attainment through a 3x chat spike and a doubled agent load; with a 14B model disaggregation collapses (agent TTFT
+~290 s). On one H200 with MTP it raises chat SLO attainment by 72%, agent attainment 15x and throughput 55% over
+sglang's mixed chunk.
 
-- **C1 Fused FA3 + FA2 step with SM pre-assignment (kernel)**
-  - [x] 2026-10-17 FA3 role runs flash-attention's Hopper kernel (paged TMA, NDEBUG) at parity with sgl-kernel FA3;
-    FA2 runs decode / verify rows. `debug_kernel_server_perf_4_mode.md` "Where it stands".
-  - [x] 2026-10-18 FA2 overlapped with FA3 on a side stream, no MTP, H200: +10% agent throughput and -12% / -16% agent /
-    chat ITL over the sequential split. `realistic_workload_analysis.md` Baselines.
-  - [x] 2026-10-17 kernel-level bound, stated honestly: co-running gives -18% on balanced steps but is ~1.2% of serving
-    GPU time on TraceLab. Multicast, q-tile choice, split reduction and in-kernel backfill were closed by measurement (A5).
-  - [x] 2026-10-19 the mixed step is attention-FLOP-bound: FA3's prefill-chunk call runs at ~540 TFLOP/s, and forced
-    split-KV / pack-GQA give nothing (`perf_model/fa3_chunk_splits.py`).
-  - Paper framing: the kernel's value in serving is that it makes the 4-mode step possible inside the stock scheduler
-    (overlap scheduler on, one graph set, no padded decode rows in prefill tiles). Its standalone speedup is secondary.
-    This replaces the draft's persistent-FA2 / POD kernel and removes its Limitation "SM80 MMA cannot reach FA3".
-- **C2 4-mode MTP schedule + EDF (single node)**
-  - [x] 2026-10-18 long-context mix (TraceLab 32-250K + ShareGPT 2 req/s, H200), ours + MTP vs stock + MTP: agent
-    +54% / -34% / -49%, chat +23% / -90% / -42%. All six bar metrics clear, two repeats.
-  - [x] 2026-10-18 same mix, no MTP vs stock without spec: agent TTFT / ITL frontier through (-30.9, -28.4) and
-    (-29.2, -30.2), three repeats. Throughput +39-41%, chat -78..-85% / -38..-40%.
-  - [x] 2026-10-18 standard mix (32-64K + ShareGPT 8 req/s), ours + MTP vs stock + MTP, two-rep means: agent +47% /
-    -29.3% / -36%, chat -72.7% / -25%. The agent p1 tok/s/user is 4-5x. Misses: agent TTFT 0.7 pt, chat ITL 5 pt.
-  - [x] 2026-10-18 no MTP vs stock mixed chunk: agent +25.7% / +15.6% / -31.2%, chat -85.6% / -36.0% (agent TTFT is the
-    miss: stock prefills in 8192 chunks).
-  - [x] 2026-10-18 output gates PASS for every arm, each with a null case (`gate_h200_*`).
-- **C3 Predictable fused step -> EDF and routing work** -- **2026-10-20: not supported as a per-step claim.** With each
-  schedule's best model (MLP / GBT on serving traces) every schedule predicts to ~3-8%; ours beats pdmux (5.9% vs
-  7.5% at light load) but not stock mixed chunk (4.2%). The earlier 26.7% vs 53.5% used pdmux's linear form. Keep the
-  step model as an enabler of SLO control (router + decode-first worker), not as a contribution
-  (`server_perf_model.md`).
-  Narrower claim that holds (pooled MTP fit, 2026-10-20): with a closed-form linear model the 4-mode step predicts to
-  12-13% vs 24-27% for stock MTP's mixed step (the 4-mode terms help ours, not stock); a tree ensemble reaches ~3% on
-  both. State it as "admits a simple model at half the error".
-  - [x] 2026-10-18 S4 step model, held-out half: mixed-step MAPE 26.7% ours vs 53.5% stock MTP; decode-only 3.6% vs 2.7%.
-    Decode ITL predictable to ~9% vs 35-117% on unfused schedules.
-  - [x] EWMA acceptance length as a model input (point 3; measured 2.10 tokens/step).
-  - [ ] Show that the better prediction changes decisions: SLO-check accuracy, i.e. predicted vs realised misses per
-    routing decision, ours vs a stock-schedule model.
-- **C4 Cache-first, SLO-checked routing on symmetric nodes (multi-node, 8 H20s)**
-  - [x] 2026-10-19 fan-out workload vs PD disagg 2P2D without spec: agent goodput 3.0-7.1x, throughput 2.3-3.3x, TTFT
-    -94..-96%; re-prefill share 3.4% vs 10.3%.
-  - [x] 2026-10-19 per tenant: chat SLO attainment 91-96% vs 25-33% (heavy load), 97-99% vs 43-54% (light). Mean
-    chat ITL is 1.3-1.9x disagg's, yet per-request chat TPOT stays under 20 ms for >= 90% of requests. Disagg's chat
-    misses on TTFT.
-  - [x] 2026-10-18 scaling 2 -> 4 pods: prefill hit 0.34 -> 0.39 (ours) vs 0.125 -> 0.055 (disagg) -- more prefill nodes
-    dilute each prefix.
-  - [x] 2026-10-19 Point 4 (pull-source choice): neutral at <= 16 H20s; per-page latency equal across sources. State it
-    as a scale argument, not a measured gain.
+## 1. Introduction
 
-## Section-by-section against the draft
+- **Setting / problem**
+  - production traffic mixes interactive chat (tight TTFT and per-token SLOs) with coding / tool agents whose prompts
+    run 32-250K tokens, share long prefixes across turns and programs, and arrive in bursts
+  - MTP speculative decoding is standard and multiplies decode-side work per step
+  - goal: meet per-tenant SLOs at the highest request volume per GPU, and adapt to load spikes and mixture shifts
+    without re-provisioning
+- **Why existing systems do not meet it**
+  - prefill-prioritized and mixed-chunk colocation: decodes either stall behind long prefills or pay a slow one-kernel
+    step; neither orders work by deadline
+  - PD disaggregation: decode isolation at the cost of prefill queueing, prefix dilution and per-turn re-prefill; the
+    P:D ratio is fixed, so a spike or a mixture shift lands on whichever side is short
+  - PD multiplexing: per-phase SM groups, but loses the CPU-GPU overlap scheduler and multiplies CUDA graphs by groups
+- **Key insight** -- the isolation disaggregation buys can be had per step without fixing the split: one fused step
+  runs each attention role on the kernel and SMs it suits, a deadline-driven scheduler decides how much prefill each
+  step carries, and symmetric nodes let the router follow the cache instead of a role table
+- **Contributions** (section 4): (1) SM-pre-assigned FA3 + FA2 split attention; (2) the 4-mode MTP step; (3) EDF
+  scheduling for the fused step with a shared step model; (4) cache-first, SLO-checked multi-node routing over a
+  cluster KV pool
+- **Results** (section 6) -- 8 H20s vs PD disaggregation: chat SLO attainment 91% vs 26%, agent goodput 6x, robust to
+  a 3x spike, a 2x agent shift and a 14B model; 1 H200 with MTP: +72% chat attainment, 15x agent attainment, +55%
+  throughput over mixed chunk
 
-- **Abstract / Intro.** Keep the draft's thesis, colocation vs rigid disaggregation, and replace its kernel sentence
-  with C1 as above. Add MTP explicitly: the draft's Limitation "no benefit with speculative decoding" is now a
-  result (C2 long mix clears all six with MTP). Shorten the abstract (S. Bian's comment).
-- **2.2 baselines.** The draft's pdmux critique is confirmed and should carry data: no CPU-GPU overlap scheduling
-  (our pdmux arms run `--disable-overlap-schedule`), CUDA graphs x SM groups (5 on H20, 8 on H200). Stock pdmux
-  (divisor 36) on the standard mix is in the Baselines table.
-  - [ ] Graph memory, pdmux vs ours, measured on one config (the draft quotes 2 GB / 8x; ours is not measured).
-- **2.3 PD disaggregation.** Add Dynamo conditional disagg (`dynamo-conditional-disagg` memory note): argue on
-  co-execution efficiency, symmetric nodes and EDF, not on per-round KV re-ship.
-- **3. Motivation (S. Venkataraman: "show data for these points").**
-  - 3.1 attention time ratio: at 50K depth a 743-token chunk costs ~28 ms of a 44 ms mixed step (2026-10-19).
-  - 3.2 disagg underuses resources: re-prefill 10.3% vs 3.4%, prefill hit dilution 0.125 -> 0.055.
-  - 3.3 chunked prefill vs SLO: stock MTP mixed steps 59 ms vs ours 44 ms; chat ITL interval shares (stock 34% of chat
-    ITL time in > 80 ms intervals vs 16% ours).
-  - [x] 3.4 mixed-chunk cost: padding < 7% of FLOPs; kernel choice ~25% of attention time (gap 4 above).
-- **4. Design.** 4.1 problem formulation: meet per-tenant TTFT + TPOT SLOs, maximise goodput. 4.2 the 4-mode step (C1).
-  4.3 EDF with uncached-token deadlines, a long-request deadline multiplier (2x above 200K) and deadline-driven chunk
-  admission (C2). 4.4 step model with acceptance input (C3). 4.5 router (C4).
-- **5.2.3 fair resource sharing / P:D ratio.** Superseded. The measured design is EDF order plus an SLO check, not a
-  P:D compute-time ratio target (`edf-order-not-cap`: every per-step chunk cap lost).
-- **5.4 KV pooling, ECMP-style random holder.** Untested as proposed; keep it as a design point only if point 4 runs.
-- **5.5 CUDA graphs.** The 4-mode mixed step runs eager (`can_run_graph` rejects MIXED); host idle after it is 3.2 ms
-  per step, <= 4% of GPU time. Decode steps keep their graphs.
-- **6. Evaluation.** Testbed is H200 x1 single-node and 8 H20 multi-node (<= 16 GPUs). Models: Qwen2.5-7B + EAGLE3
-  (gap 5). Workloads: TraceLab 32-64K and 32-250K + ShareGPT, plus the fan-out agent workload (`fanout_agents.py`).
-  Metrics, per `serving-eval-matrix` and `always-record-error-bars`: per-tenant SLO attainment and goodput,
-  tok/s/user percentiles, rate sweeps.
-- **7. Ablations** (S. Venkataraman: "alternate designs that didn't work and why"). Measured negatives worth a
-  paragraph each: per-step chunk caps and step-time budgets; per-chunk radix checkpoints; router per-class ITL SLO;
-  soft node roles; time-based draining; random serving-node choice among equal-hit holders; symmetric in-kernel
-  backfill (computes FA3 wrong); FA3 split-KV / pack-GQA on prefill chunks. The common thread: at a fixed amount of
-  prefill work, re-slicing it does not move the mean step interval; ordering it by deadline does.
-- **8. Related work.** Reference list in `debug_kernel_server_perf_4_mode.md` (three-bullet format), incl. JITServe.
-- **9. Limitations.** Kept from the draft: per-architecture kernel work (Blackwell). Removed: SM80 and the
-  no-spec-decode limitation. Added: decode isolation is where disagg still leads (agent TPOT ~2x at heavy load on the
-  fan-out), and goodput, not per-token decode speed, is where ours wins.
+## 2. Background
+
+### 2.1 LLM serving and speculative decoding
+- prefill is compute-bound and parallel; decode reads all of a request's KV per token and is bandwidth-bound
+- MTP / EAGLE3: a draft head proposes tokens, the target verifies them in one forward (acceptance ~2.0-2.1 tokens per
+  verify step on our workloads); a step = draft steps + a verify forward
+
+### 2.2 Colocated schedules in sglang
+- prefill-prioritized chunked prefill (the default): prefill steps run alone, decodes wait
+- mixed chunk: decode rows ride the prefill step, all through FA2 BatchPrefill
+- PD multiplexing (MuxWise / pdmux): GreenContext SM groups per phase, layer-split prefill; overlap scheduler off;
+  one CUDA-graph set per SM group (5 on H20, 8 on H200)
+
+### 2.3 PD disaggregation
+- DistServe, Mooncake; sglang prefill / decode roles with mooncake KV transfer; MTP on decode nodes
+- NVIDIA Dynamo: KV-aware router, conditional disaggregation
+- static P:D provisioning: a spike or mixture shift hits whichever side is under-provisioned
+
+### 2.4 KV-cache-centric scheduling
+- multi-turn and agent workloads reuse long prefixes; cache-aware routing and a cluster KV pool (sglang HiCache +
+  mooncake store) cut TTFT; ThunderAgent documents repeated cache thrashing in agentic serving
+
+## 3. Challenges and motivation
+
+### 3.1 Attention dominates the mixed step at long context
+- a 743-token chunk at 50K depth is ~28 ms of attention in a 44 ms mixed step (H200); FA3's chunk call already runs at
+  ~540 TFLOP/s -- the step is attention-FLOP-bound, so the kernel each row runs on decides the step time
+
+### 3.2 Mixed chunk pays for its kernel choice
+- decode rows padded into prefill tiles waste only 6.3% / 2.7% / 0.6% of FLOPs at 32K / 64K / 128K
+- running 64-256K prefill rows through FA2 is the cost: attention per 60 steps at 64K, stock 17.7 s vs split 13.3 s
+  (-25%); at 128K the merged batch takes 3.15 ms per call vs 0.83 ms for the split's FA2 calls on mixed steps
+
+### 3.3 Prefill-prioritized scheduling breaks decode SLOs
+- standard mix: agent P99 ITL 1.35 s, chat TPOT 34.8 ms (vs 20.7 ms for ours without MTP)
+
+### 3.4 Disaggregation queues, dilutes and re-prefills
+- 8 H20s, fan-out agents: agent TTFT 16-31 s; prefill hit rate falls 0.125 -> 0.055 going from 2 to 4 pods while
+  colocation's rises 0.34 -> 0.39; re-prefill share 10.3% vs 3.4%
+
+### 3.5 Speculative decoding is concurrency-limited
+- MTP serves best at sglang's speculative default of 48 running requests for every system (64 and 128 slow every
+  step), so the schedule has to make each step count
+
+## 4. AttentionFuse design
+
+**Our main contributions are:**
+
+1. **SM-pre-assigned FA3 + FA2 split attention (kernel item 1).** Each mixed step's work items are dispatched by role:
+   prefill tiles to FA3 on a reserved SM budget (flash-attention's Hopper kernel: paged TMA, wgmma, dynamic
+   scheduler), decode and verify tiles to FA2 (tile classes 64/32/16, auto split-KV) on the remaining SMs, with FA2
+   launched beside FA3 on a side stream. Both roles are exact against a causal fp32 reference.
+2. **The 4-mode MTP step (kernel item 2).** Prefill chunk, decode, draft and verify in one target forward: the chunk
+   rides the verify forward instead of a separate prefill step, inside sglang's own scheduler -- the CPU-GPU overlap
+   scheduler stays on and one CUDA-graph set serves all steps.
+3. **EDF scheduling for the fused step.** Deadlines on uncached tokens (base 2 s + 1 s per 5K tokens beyond 4096,
+   doubled above 200K), deadline-driven chunk admission (a small chunk normally, a large one when the backlog would
+   miss a deadline at its pace) and chunk preemption for earlier-deadline arrivals. A closed-form step model of the
+   fused step predicts it at half the error of stock MTP's step and is shared with the router.
+4. **Cache-first, SLO-checked multi-node routing.** Symmetric nodes; the router sends each request to the node with
+   the longest cached prefix whose predicted TTFT and ITL -- for this request, the earlier-deadline queue ahead of it
+   and the decodes it joins -- stay within SLO, else the next. Misses pull the prefix from a cluster KV pool
+   (best-effort replication over a complete RDMA graph). Nodes report decode rows, KV, acceptance and their
+   deadline-ordered prefill queue through sglang's LoadStat channel.
+
+### 4.1 Problem formulation
+- per-tenant SLOs: chat TTFT 0.5 s and per-request TPOT 20 ms; agents TTFT 10 s and TPOT 80 ms; maximize goodput
+  (output tokens of requests meeting both) per GPU, under bursty, shifting mixtures
+
+### 4.2 Split attention with SM pre-assignment
+- dispatch: FA3 for prefill-shaped items, FA2 for every verify-width / decode item (FA2 wins every verify-width row
+  in the winner map, 216/216 cells exact)
+- FA3 role = flash-attention's kernel, at parity with sgl-kernel FA3; FA2 runs beside it on the remaining SMs
+
+### 4.3 The 4-mode MTP step
+- the scheduler attaches the running batch to the prefill step; the spec worker drafts, merges the chunk with the
+  verify rows and splits attention by role; a context / queue gate keeps short prefills on their own step
+
+### 4.4 EDF scheduling and the step model
+- deadline order decides which prefill a step carries; chunk size follows the deadline backlog
+- step model: linear in prefill tokens, prefix attention work, #prefill requests, decode rows, decode KV and the
+  draft / verify terms; fit on serving step traces
+
+### 4.5 Multi-node routing and the KV pool
+- SLO check: predicted TTFT = EDF queue drain ahead + own prefill (cold-prefill curve, pull-adjusted); ITL from the
+  calibrated decode grid with this request and earlier-deadline requests resident; adaptive ITL SLO = 2.5x the
+  observed TPOT
+- KV pool: mooncake L3 store spanning all nodes; replication happens as a side effect of serving
+- node load: LoadStat extended with decode rows, decode KV, acceptance, deadline-ordered prefill queue and measured
+  decode-step time (ZMQ PUB, change-triggered, 1 s heartbeat)
+
+## 5. Implementation
+
+- sglang (upstream 3fef129 + ~26 files): split dispatch in the flashinfer backend, the 4-mode step in the EAGLE3
+  worker, EDF scheduler with deadline chunk and preemption, per-step trace logging
+- FA3 role on flash-attention's kernel (paged TMA, `-DNDEBUG`, fast math); FA2 from flashinfer 0.7
+- router: aiohttp proxy with the SLO check, cluster prefix index, pull-bandwidth EWMA and LoadStat subscriber
+- KV pool: sglang HiCache with the mooncake store backend over RDMA
+
+## 6. Evaluation
+
+### 6.1 Settings
+
+**Workloads** (main workload first):
+
+| workload | composition | load axis | where |
+|---|---|---|---|
+| **mixed TraceLab + chat (standard)** | TraceLab coding-agent sessions, 32-64K prompts, 2 rounds + ShareGPT chat | agent program concurrency C=8; chat 8 req/s | 1 H200 |
+| **mixed TraceLab + chat (long)** | TraceLab 32-250K prompts (4 rounds > 200K) + ShareGPT chat | C=6; chat 2 req/s | 1 H200 |
+| **fan-out agents + chat** | 16 tasks x 64K shared repository prefixes, 4 rounds, rotating Zipf popularity + ShareGPT chat | 32 agent programs; chat 8 req/s | 8 H20 |
+| standalone ShareGPT | short chat prompts | 4-32 req/s | 1 H200 |
+| standalone math | GSM8K, MATH-500 | 8-32 req/s | 1 H200 |
+| standalone code | HumanEval, Code-Feedback | 8-32 req/s | 1 H200 |
+| standalone agent / tool traces | Mooncake conversation and tool-agent (recorded timestamps), WebShop browsing agent | 0.5-2x trace speed; C | 1 H200 |
+
+- **Models**: Qwen2.5-7B-Instruct + EAGLE3 (3 draft steps, 4 verify tokens); Qwen2.5-14B-Instruct (no MTP)
+- **Testbed**: 1 H200; 8 H20 (4 pods x 2 GPUs, one TP1 worker per GPU)
+- **Baselines**: sglang prefill-prioritized and mixed chunk, each with and without MTP (single node); pdmux
+  (reference); PD disaggregation 2P2D with and without MTP on decode (multi-node); semi-PD (planned)
+- **Metrics**: per-tenant SLO attainment (TTFT and per-request TPOT both met) and goodput; TTFT, TPOT, throughput;
+  mean +- std over repeats
+
+### 6.2 Kernel microbenchmarks
+- FA3 role at parity with sgl-kernel FA3 (exact vs fp32); FA3 co-running with FA2 -18% on balanced append + verify
+  steps
+- in serving, overlapping FA2 beside FA3 is worth +10% agent throughput and -12% / -16% agent / chat ITL over running
+  the two roles back to back
+
+### 6.3 Main workload, single node (1 H200, mixed TraceLab + chat, 5-6 repeats)
+| arm | agent tput (tok/s) | agent attainment | chat attainment |
+|---|---|---|---|
+| stock mixed chunk | 80.5 +- 4.2 | 44.1% | 53.8% |
+| stock prefill-prioritized | 92.6 | 58.9% | 59.9% |
+| **ours, no MTP** | **113.2 +- 0.4** | **92.0%** | **69.8%** |
+| stock + MTP | 65.7 +- 3.1 | 3.0% | 34.2% |
+| stock prefill-prioritized + MTP | 81.6 | 8.9% | 49.2% |
+| **ours + MTP** | **102.1 +- 1.3** | **45.8%** | **58.9%** |
+- vs mixed chunk: MTP +55% throughput, 15x agent and +72% chat attainment; no MTP +41%, +109%, +29.7%
+- vs prefill-prioritized: +22% / +25% throughput, agent attainment +56% / 5x, chat attainment +16.5% / +20%
+- long mix (32-250K), ours + MTP vs stock + MTP, two repeats: agent throughput +54%, TTFT -34%, ITL -49%; chat
+  throughput +23%, TTFT -90%, ITL -42%
+- our arms vary by <= 1.4 tok/s across repeats; stock mixed chunk is bimodal (slow mode in 5 of 6)
+
+### 6.4 Main workload, multi-node vs PD disaggregation (8 H20s, fan-out agents + chat)
+| arm | chat attainment (0.5 s + 20 ms) | agent goodput (10 s + 80 ms) | agent TTFT |
+|---|---|---|---|
+| **ours** | **91.4%** | **551 tok/s** | 0.71 s |
+| PD disagg 2P2D | 26.2% | 92 tok/s | 16.4 s |
+- throughput 2.3-3.3x, TTFT -94..-96%; disaggregation keeps a faster per-token decode (5 ms vs 12 ms), but its prefill
+  queue makes most requests miss
+- cache: re-prefill share 3.4% vs 10.3%; prefill hit rate rises with node count for colocation, falls for disagg
+
+### 6.5 Dynamic load: spikes and mixture shifts (8 H20s, two repeats)
+| event | ours: agent attainment through the event | ours: chat | disagg: agent | disagg: chat |
+|---|---|---|---|---|
+| chat x3 for 240 s | 99-100% | 88-91% | 36-57% | 19-22% |
+| agent load x2 for 240 s | 97-100% (agent goodput ~2x) | ~84% | 21-31% | 18-22% |
+
+### 6.6 Standalone workloads (1 H200, MTP vs ours + MTP)
+- agent / tool traces (Mooncake conversation, tool-agent): TTFT -25..-31% below capacity; at 2x trace speed
+  throughput +12% / +21%, TTFT -47% / -58%, P99 ITL -59% / -60%
+- ShareGPT, math (GSM8K, MATH-500), code (HumanEval, Code-Feedback): on par below capacity (short prompts carry little
+  prefill to fuse); at saturation +2-3% throughput, TTFT -5..-15%
+- WebShop browsing agent (short multi-turn prompts, one GPU): behind stock MTP (throughput -7..-10%)
+- the gains concentrate where long-context prefill meets decode, which is the mixed agent + chat setting above
+
+### 6.7 Second model (Qwen2.5-14B, 8 H20s, fan-out)
+- ours: agent 186-216 tok/s, chat attainment 45-51%, agent goodput 102-131 tok/s
+- PD disaggregation collapses: agent TTFT ~290 s, agent goodput 0, chat attainment 11-13%; a load scaled to 14B's
+  capacity is running
+
+### 6.8 Step-model accuracy (EDF)
+| schedule | closed-form model (MAPE) | best model, gradient-boosted trees (MAPE) |
+|---|---|---|
+| ours + MTP (4-mode) | 12-13% | 3.0-3.5% |
+| stock + MTP | 24-27% | 2.8-4.9% |
+| ours, no MTP | -- | 3.2% / 5.9% (standard / light load) |
+| pdmux | 19.8-24.0% (its own form) | 5.0% / 7.5% |
+
+### 6.9 Fault tolerance (if time permits)
+- xPyD: kill a prefill node -> TTFT and ITL rise on every decode node fed by it; colocated nodes re-route to any
+  survivor
+
+## 7. Ablations
+
+- FA2 overlapped beside FA3 vs back to back: +10% agent throughput, -12% / -16% agent / chat ITL
+- split attention vs one FA2 kernel for the mixed step: -25% attention time at 64K
+- full MTP stack (4-mode step + split + EDF) vs stock MTP: agent attainment 3.0% -> 45.8%, chat 34.2% -> 58.9%
+  (a per-component MTP ablation is pending)
+- cache-first SLO-checked routing vs PD roles: re-prefill 10.3% -> 3.4%, agent goodput 6x
+- remove CUDA graphs (pending)
+
+## 8. Related work
+
+- **PD disaggregation**: DistServe, Mooncake, NVIDIA Dynamo (conditional disaggregation, KV router)
+- **semi-disaggregation and multiplexing**: semi-PD (MPS SM split, restart to resize), DynaServe, MuxWise / sglang pdmux
+  (SM groups per phase) -- none fuses attention across phases; pdmux loses the overlap scheduler
+- **SLO-aware scheduling**: SLOs-Serve (multi-SLO), JITServe (imprecise request information)
+- **agentic serving**: ThunderAgent (program-aware, cache thrashing), Crossflow (P/D elasticity), TraceLab (coding-agent
+  workloads)
+- **kernel fusion**: POD-Attention, persistent kernels, Taming Dynamism (cross-SM fusion, just-in-time reduction) --
+  we pre-assign SMs per role inside one step
+- **attention-FFN disaggregation** (Step-3, MegaScale-Infer): orthogonal, combinable
+
+## 9. Conclusion and limitations
+
+- **Conclusion**: colocated serving with a fused 4-mode step, EDF and cache-first routing meets per-tenant SLOs at
+  several times the goodput of PD disaggregation, holds them through load spikes and mixture shifts, and stays
+  MTP-compatible -- without a fixed prefill / decode split
+- **Limitations**
+  - single node vs prefill-prioritized: chat SLO attainment +16.5% / +20%; chats decode beside continuous long-context
+    agent prefill
+  - per-token decode: disaggregation's decode-only nodes keep 5 ms TPOT vs our 12 ms; the gain is in attainment and
+    goodput, not raw decode speed
+  - short-prompt standalone workloads see little gain; the step helps where long-context prefill meets decode
+  - MTP is concurrency-limited at 48 running requests for every system
+  - open: 14B with MTP (needs an EAGLE3 head), semi-PD baseline, fault tolerance, Blackwell kernels

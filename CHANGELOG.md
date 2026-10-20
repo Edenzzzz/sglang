@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.21.13 — Paper outline rewritten (2026-10-20)
+
+- `tasks/paper_outline.md`: 10/20 outline in the 11/21 format plus drafted sections (abstract through conclusion),
+  four main contributions in the design section, main workloads highlighted in the evaluation, results to date.
+
 ## v1.21.12 — ## Baselines in the main task doc (2026-10-20)
 
 - `debug_kernel_server_perf_4_mode.md` gains a ## Baselines section (settings, baselines, priority, current status),

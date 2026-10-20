@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.21.8 — MTP cap 128 is worse for every arm (2026-10-20)
+
+- Stock MTP 32.8 tok/s / TTFT 32 s, prefill-prioritized MTP 31.6 / 41 s, ours MTP 57.0 / 9.6 s (TPOT 40 ms vs 18.6 at 48):
+  bigger verify batches slow every step. The cap-48 comparison stands.
+
 ## v1.21.7 — Mixture shift: ours absorbs doubled agent load (2026-10-20)
 
 - 8 H20s, two repeats: ours 97-100% agent attainment through the shift, agent goodput 718-786 tok/s (x2), chat ~84%;

@@ -238,14 +238,22 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   prefill runs almost continuously, so ~30% of chats keep a mean TPOT above 20 ms; holding them under it would need
   chunks below ~200 tokens. The 256 arms were stopped. **On one node at this load the chat-attainment gap to
   prefill-prioritized stock (+16-20%) is structural**: chats decode beside continuous long-context agent prefill.
-- [ ] **Every MTP arm so far was concurrency-capped at 48 running requests (found 2026-10-20).** sglang derives
+- [x] **Every MTP arm so far was concurrency-capped at 48 running requests (found 2026-10-20; the cap is the better
+  operating point -- see the cap-128 result at the end of this item).** sglang derives
   `max_running_requests` from the speculative CUDA-graph batch size: ours + MTP, stock + MTP and prefill-prioritized
   + MTP all ran with 48 and hit it (ours: queue mean 29.6, max 105, one new request admitted per step while 30-90
   wait); the no-MTP arms run uncapped (4096) and peak at 115 running. Chat misses split accordingly (TTFT > 0.5 s /
   TPOT > 20 ms): ours no MTP 3.0-3.2% / 30%; ours + MTP 36-39% / 23-25%; stock + MTP 67-68% / 32%. So the MTP
   arms' chat attainment was set by the cap, for ours and the baselines alike. Rerun with the same raise for every
   MTP arm, `WORKER_EXTRA="--max-running-requests 128 --cuda-graph-max-bs 128"`, two repeats
-  (`h200_mtp_cap128_20261020.sh`, running).
+  (`h200_mtp_cap128_20261020.sh`; the first launch never started -- this sglang splits `--cuda-graph-max-bs` into
+  `-decode` / `-prefill`, rerun with `--cuda-graph-max-bs-decode 128`, `max_running_requests: 128` confirmed in the log).
+  **Cap 128 is worse for every MTP arm** (rep 1, clean): stock + MTP 32.8 tok/s / TTFT 32.45 s / TPOT 77.6 ms, chat
+  39.65 s / 92.1 ms, chat throughput below offered; prefill-prioritized + MTP 31.6 / 41.37 s / 84.7 ms, chat 49.16 s /
+  101.3 ms; ours + MTP 57.0 / 9.58 s / 40.1 ms, chat 1.82 s / 55.1 ms (vs 102.1 / 12.54 s / 18.6 ms, chat 2.94 s / 13.0
+  ms at 48). Up to 128 rows verifying 4 draft tokens each make every step slower, so decode slows for everyone and the
+  queue grows anyway: the cap of 48 protects MTP serving. The cap-48 MTP comparison stands, and the chat-attainment
+  gap to prefill-prioritized stock is not a configuration artifact. Rep 2 stopped.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

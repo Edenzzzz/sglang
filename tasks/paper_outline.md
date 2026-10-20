@@ -122,6 +122,8 @@ sglang's mixed chunk.
 ### 3.5 Speculative decoding is concurrency-limited
 - MTP serves best at sglang's speculative default of 48 running requests for every system (64 and 128 slow every
   step), so the schedule has to make each step count
+- at that cap the slot, not the GPU, is what new chats wait for: 38% of our chats miss TTFT queued behind it while the
+  running ones decode at 13 ms/token against a 20 ms SLO
 
 ## 4. AttentionFuse design
 
@@ -136,8 +138,11 @@ sglang's mixed chunk.
    scheduler stays on and one CUDA-graph set serves all steps.
 3. **EDF scheduling for the fused step.** Deadlines on uncached tokens (base 2 s + 1 s per 5K tokens beyond 4096,
    doubled above 200K), deadline-driven chunk admission (a small chunk normally, a large one when the backlog would
-   miss a deadline at its pace) and chunk preemption for earlier-deadline arrivals. A closed-form step model of the
-   fused step predicts it at half the error of stock MTP's step and is shared with the router.
+   miss a deadline at its pace) and chunk preemption for earlier-deadline arrivals. Decode rows are deadline-ordered
+   too: more requests stay resident than the 48-row MTP graph holds, each step decodes the 48 whose next token is due
+   soonest, and a request is admitted only while every resident row can still meet its TPOT SLO at the measured step
+   time. A closed-form step model of the fused step predicts it at half the error of stock MTP's step and is shared
+   with the router.
 4. **Cache-first, SLO-checked multi-node routing.** Symmetric nodes; the router sends each request to the node with
    the longest cached prefix whose predicted TTFT and ITL -- for this request, the earlier-deadline queue ahead of it
    and the decodes it joins -- stay within SLO, else the next. Misses pull the prefix from a cluster KV pool
@@ -159,6 +164,10 @@ sglang's mixed chunk.
 
 ### 4.4 EDF scheduling and the step model
 - deadline order decides which prefill a step carries; chunk size follows the deadline backlog
+- deadline-ordered decode rows: a row that has emitted o tokens since it started decoding at t0 is due its next token
+  at t0 + SLO x (o + 1); the K rows due soonest run, the others keep KV and draft state and sit out the step
+- SLO-checked admission: a row with SLO s takes dt / (s x a) of a row slot per step (dt the measured step interval, a
+  the tokens per verify); admit while the resident rows' sum plus the newcomer fits 0.9 x K
 - step model: linear in prefill tokens, prefix attention work, #prefill requests, decode rows, decode KV and the
   draft / verify terms; fit on serving step traces
 
@@ -232,9 +241,15 @@ sglang's mixed chunk.
 | **ours, no MTP** | **113.2 +- 0.4** | **92.0%** | **69.8%** |
 | stock + MTP | 65.7 +- 3.1 | 3.0% | 34.2% |
 | stock prefill-prioritized + MTP | 81.6 | 8.9% | 49.2% |
-| **ours + MTP** | **102.1 +- 1.3** | **45.8%** | **58.9%** |
+| ours + MTP, cap 48 | 102.1 +- 1.3 | 45.8% | 58.9% |
+| **ours + MTP, deadline-ordered rows + SLO admission (4)** | **102.5 +- 2.2** | **45.0 +- 2.8%** | **63.0 +- 1.4%** |
 - vs mixed chunk: MTP +55% throughput, 15x agent and +72% chat attainment; no MTP +41%, +109%, +29.7%
-- vs prefill-prioritized: +22% / +25% throughput, agent attainment +56% / 5x, chat attainment +16.5% / +20%
+- vs prefill-prioritized: no MTP +22% throughput, agent attainment +56%, chat +16.5%; MTP (deadline-ordered rows)
+  +27% throughput, agent attainment 5.5x, chat +28%, chat TTFT -70%
+- attainment vs chat rate (agents fixed at C=8), ours + MTP vs prefill-prioritized + MTP: chat 2 / 4 / 8 req/s chat
+  attainment +14% / +16% / +28%, chat TTFT -76% / -75% / -70%, chat TPOT -51% / -39% / -12%, agent attainment equal /
+  1.5x / 5.5x, agent throughput +30% / +29% / +27%; ~24% of chats miss TPOT at every rate for every system (chats
+  decoding beside 32-64K agent prefill chunks)
 - long mix (32-250K), ours + MTP vs stock + MTP, two repeats: agent throughput +54%, TTFT -34%, ITL -49%; chat
   throughput +23%, TTFT -90%, ITL -42%
 - our arms vary by <= 1.4 tok/s across repeats; stock mixed chunk is bimodal (slow mode in 5 of 6)
@@ -310,10 +325,10 @@ sglang's mixed chunk.
   several times the goodput of PD disaggregation, holds them through load spikes and mixture shifts, and stays
   MTP-compatible -- without a fixed prefill / decode split
 - **Limitations**
-  - single node vs prefill-prioritized: chat SLO attainment +16.5% / +20%; chats decode beside continuous long-context
-    agent prefill
+  - single node vs prefill-prioritized: chat SLO attainment +16.5% (no MTP) / +28% (MTP) at chat 8 req/s; about a
+    quarter of chats decode beside long-context agent prefill chunks and miss a 20 ms TPOT under every schedule
   - per-token decode: disaggregation's decode-only nodes keep 5 ms TPOT vs our 12 ms; the gain is in attainment and
     goodput, not raw decode speed
   - short-prompt standalone workloads see little gain; the step helps where long-context prefill meets decode
   - MTP is concurrency-limited at 48 running requests for every system
-  - open: Llama-3.3-70B / GLM-4.5-Air on 4 nodes with simulated MTP, semi-PD (blocked on a CUDA 12 toolkit install) baseline, fault tolerance, Blackwell kernels
+  - open: Llama-3.3-70B / GLM-4.5-Air on 4 nodes with simulated MTP, semi-PD baseline (blocked on a CUDA 12 toolkit install), fault tolerance, Blackwell kernels

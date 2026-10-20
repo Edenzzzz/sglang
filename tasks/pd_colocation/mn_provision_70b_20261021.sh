@@ -8,14 +8,20 @@
 set -u
 W=/dev/shm/w; mkdir -p $W; cd $W
 log() { echo "[prov $(hostname | tail -c 6) $(date +%H:%M:%S)] $*"; }
-if [ ! -d up/.git ]; then
-  for url in https://github.com/sgl-project/sglang.git https://ghfast.top/https://github.com/sgl-project/sglang.git; do
-    rm -rf up; git clone --quiet --filter=blob:none $url up && break
-  done
-  [ -n "${HUB:-}" ] && [ ! -d up/.git ] && { curl -sf $HUB/up.tgz | tar xzf - && log "up from hub"; }
-  git -C up checkout --quiet 3fef129ff8a32c32da5f6a0efd33485f6cc6233c || { log CLONE_FAIL; exit 1; }
+# Upstream 3fef129's python/ tree: from up_3fef129_python.tgz (`git archive 3fef129 python`, pushed to pod 0 and served to
+# the others at $HUB) -- GitHub resets these pods' clones (2026-10-20, also through the ghfast proxy) -- else a clone.
+if [ ! -d up/python ]; then
+  [ -f $W/up_3fef129_python.tgz ] || [ -z "${HUB:-}" ] || curl -sf $HUB/up_3fef129_python.tgz -o $W/up_3fef129_python.tgz
+  if [ -f $W/up_3fef129_python.tgz ]; then
+    rm -rf up; mkdir -p up && tar xzf $W/up_3fef129_python.tgz -C up && log "upstream 3fef129 from archive"
+  else
+    for url in https://github.com/sgl-project/sglang.git https://ghfast.top/https://github.com/sgl-project/sglang.git; do
+      rm -rf up; git clone --quiet --filter=blob:none $url up && break
+    done
+    git -C up checkout --quiet 3fef129ff8a32c32da5f6a0efd33485f6cc6233c || { log CLONE_FAIL; exit 1; }
+  fi
 fi
-log "up $(git -C up rev-parse --short HEAD)"
+[ -d up/python/sglang ] || { log UPSTREAM_MISSING; exit 1; }
 # /dev/shm is noexec on these pods: the venv lives on the root overlay.
 if [ ! -x /opt/tiger/w/venv/bin/python ]; then rm -rf $W/venv; mkdir -p /opt/tiger/w; python3 -m venv /opt/tiger/w/venv; fi
 [ -L $W/venv ] || { rm -rf $W/venv; ln -sfn /opt/tiger/w/venv $W/venv; }

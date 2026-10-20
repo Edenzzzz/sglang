@@ -258,6 +258,13 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   arm: stock + MTP 36.6 tok/s / TTFT 33.42 s / TPOT 48.5 ms, chat 41.54 s / 42.6 ms; prefill-prioritized + MTP 37.1 /
   32.88 s / 52.2 ms, chat 42.67 s / 44.2 ms; ours + MTP 60.4 / 18.97 s / 31.7 ms, chat 10.90 s / 27.9 ms. 48 is the best
   cap for each system, so the cap-48 MTP comparison is each system at its best; cap 80 not run.
+- [x] **Full MTP configuration: rows + SLO admission + FA2 overlapped beside FA3 (2026-10-20, H200, chat 8 req/s;
+  `h200_rows_ovl_20261020.sh`, `h200_rows_ovl_more_20261020.sh`; four repeats, clean; every split call overlapped --
+  29.0K / 29.5K).** Agent 104.0 / 104.3 / 101.8 / 102.6 tok/s, attainment 46.7 / 55.6 / 44.4 / 44.4%; chat TTFT
+  2.17 / 2.14 / 2.44 / 2.19 s, TPOT 13.6 / 15.1 / 15.1 / 14.2 ms, attainment 62.9 / 63.7 / 62.3 / 62.9% (mean 63.0%,
+  the same as without overlap): the verify batch is too small beside a deep-context FA3 chunk for the overlap to hide
+  anything. vs prefill-prioritized + MTP (49.3%) **+27.7%**. With the page-128, acceptance-3.0, overlap and util
+  variants all measured, chat attainment at 8 req/s settles at 62-64% (+26-30%) for every variant of ours.
 - [x] **Acceptance sensitivity: MTP at 3.0 accepted tokens per verify (2026-10-20, H200, standard mix, chat 8 req/s;
   `SGLANG_SIMULATE_ACC_LEN=3.0` for every arm -- logged accept len 3.00, the head still drafts, the verify still runs,
   output lengths fixed by the drivers; `bash tasks/pd_colocation/h200_sim_acc3_20261020.sh`; two repeats, clean).**

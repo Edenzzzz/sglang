@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.24.1 — Chat template knob; 32-GPU sweep and chat-templated single-node rerun launched (2026-10-21)
+
+- `mn_bench.sh` `CHAT_TEMPLATE=1` (ShareGPT chat through the model's chat template); `mn_scale32_20261021.sh`,
+  `h200_chattemplate_20261021.sh`. Larger-model runs move to GLM-4.5-Air (less KV per token, built-in MTP layer).
+
 ## v1.24.0 — 32-GPU P:D ratio sweep setup (2026-10-21)
 
 - User authorized up to 8 x 4 H20. `mn_run.py` `disagg_p<P>` arms (any prefill:decode pod split); 32-GPU Qwen-7B

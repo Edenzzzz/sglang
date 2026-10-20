@@ -65,6 +65,9 @@ if [ "${HOT:-0}" = 1 ]; then
           --gsp-question-len ${CHAT_IN:-512} --gsp-output-len ${CHAT_OUT:-128})
 elif [ "${CHAT_SHAREGPT:-0}" = 1 ]; then
   SECOND=(--dataset-name sharegpt --dataset-path $W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json)
+  # CHAT_TEMPLATE=1: wrap each chat prompt in the model's chat template, as a served chat request would be -- raw text
+  # (bench_serving's default) understates the draft head's acceptance (Llama-70B EAGLE3 accepted 1.3, 2026-10-21).
+  [ "${CHAT_TEMPLATE:-0}" = 1 ] && SECOND+=(--apply-chat-template)
 else
   SECOND=(--dataset-name random-ids --random-input ${CHAT_IN:-512} --random-output ${CHAT_OUT:-128} --random-range-ratio 0.5)
 fi

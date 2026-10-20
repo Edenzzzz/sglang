@@ -271,8 +271,25 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
     41/160, 422; **null case, no parking at cap 16 (the same 16-row steps) 43/160, 411.** Parking agrees as well as
     its batch-size null: the divergence is bf16 batch-shape numerics (texts diverge at near-tie words and stay
     coherent), not state corruption. PASS.
-  - [ ] Serving A/B: K=48 at cap 96 vs in-session ours + MTP (cap 48) and prefill-prioritized stock + MTP, two
-    repeats (`bash tasks/pd_colocation/h200_decode_rows_20261020.sh`).
+  - [x] **Without an admission check it trades TTFT misses for TPOT misses (K=48, cap 96, rep 1, clean; split at 73 rows
+    mean, 25 sitting out):** chat TTFT miss 7.2% (vs 37.8% for ours at cap 48, rep 6), TPOT miss 42.0% (vs 23.4%), mean
+    TPOT 57.6 ms -- attainment 58.0% vs 59.0%. Up to 96 resident rows each ran about half the steps. Agents: TTFT 4.25 s
+    (vs 12.39 s) but TPOT 104.6 ms (vs 18.6), attainment 37.8% (vs 46.7%).
+  - [x] **SLO-checked admission (`apply_decode_rows_admit.py`, applied on top):** admit while the resident rows' SLO
+    load stays within util x K slots -- a row with SLO s takes dt / (s x a) of a slot per step, dt the measured step
+    interval, a the resident rows' tokens per verify (output tokens / sglang's `spec_verify_ct`); the newcomer is
+    charged as a chat row. The admission check binds when long mixed steps run (logged: dt 42.8 ms, a 2.03, load 45.2
+    of 43.2; dt 104 ms, load 127.6).
+  - [ ] **Serving A/B (K=48, util 0.9, cap 128 as a bound; `bash tasks/pd_colocation/h200_decode_rows_20261020.sh`):**
+    rep 1 (clean), per tenant (agent 10 s + 80 ms, chat 0.5 s + 20 ms) vs ours + MTP at cap 48 (rep 6) and
+    prefill-prioritized stock + MTP (rep 1):
+    | arm | agent tput / TTFT / TPOT / att. | chat TTFT / TPOT / att. (TTFT miss, TPOT miss) |
+    |---|---|---|
+    | stock prefill-prioritized + MTP | 82.2 / 15.47 s / 29.8 ms / 8.9% | 7.67 s / 16.0 ms / 49.1% (50.7%, 23.7%) |
+    | ours + MTP, cap 48 | 102.7 / 12.39 s / 18.6 ms / 46.7% | 2.84 s / 12.8 ms / 59.0% (37.8%, 23.4%) |
+    | **ours + MTP, deadline-ordered rows + SLO admission** | **106.2 / 10.60 s / 39.3 ms / 46.7%** | **2.04 s / 14.4 ms / 65.0%** (30.8%, 29.6%) |
+    vs prefill-prioritized + MTP: chat attainment **+32%**, agent attainment 5.2x, agent throughput +29%, chat TTFT
+    -73%, agent TTFT -31%. Matched in-session references and repeat 2 running.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

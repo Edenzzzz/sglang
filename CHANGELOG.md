@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.22.1 — SLO-checked admission for deadline-ordered rows (2026-10-20)
+
+- `apply_decode_rows_admit.py`: admit a request only while the resident rows' mean-TPOT SLO load (measured step
+  interval / (SLO x tokens per verify)) fits util x K row slots. Without it (cap 96) chat TPOT reached 57.6 ms; with it,
+  rep 1 chat attainment 65.0% vs 49.1% for prefill-prioritized stock + MTP (+32%), agent attainment 46.7% vs 8.9%.
+
 ## v1.22.0 — Deadline-ordered decode rows; simulated-MTP 14B; MTP ablation arms (2026-10-20)
 
 - `apply_decode_rows_edf.py`: with MTP, up to `--max-running-requests` requests stay resident while each step runs the

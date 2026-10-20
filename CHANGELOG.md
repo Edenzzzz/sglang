@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.23.7 — FA3 page-size kernel bench and step traces (2026-10-21)
+
+- FA3 is 9-17% faster at page 128 than page 1 on deep-context chunks (paged TMA vs per-token gather), but decode
+  steps slow 5% at page 128 in serving; total GPU time equal, page 1 stays.
+
 ## v1.23.6 — EDF base deadline at the chat SLO: no change (2026-10-21)
 
 - TTFT_SLO_MS=500 with rows + admission: chat attainment 62.6% (two repeats), TTFT misses unchanged at 33%.

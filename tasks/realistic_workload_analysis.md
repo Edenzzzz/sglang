@@ -301,6 +301,17 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   page 1, where the FA3 role gathers K/V per token instead of paged TMA. At page 128: ours agent 93.2 / 94.7 tok/s,
   attainment 40.0 / 37.8%, chat 57.8 / 59.6% (vs 102.5 / 45.0% / 63.0% at page 1); prefill-prioritized + MTP chat 48.8 /
   51.3% (vs 49.3%). Page 128 costs ours ~9% throughput and 4 chat points and leaves stock unchanged; page 1 stays.
+  - [x] **Why (2026-10-21, kernel + step traces).** FA3 itself is faster at page 128: sgl-kernel `flash_attn_with_kvcache`
+    on the serving shapes (Qwen-7B heads, causal, scattered pages, every arm within 4.2e-3 of an fp32 causal reference;
+    `tasks/debug_kernel_server_perf/fa3_page_bench_20261021.py`) runs 2048 @ 64K in 3.36 / 3.07 / 3.15 ms per layer at
+    page 1 / 128 / 256 (583 / 637 / 620 TFLOP/s), 1024 @ 64K 1.81 / 1.54 / 1.57 ms, 2048 @ 32K 1.81 / 1.57 / 1.59 ms, 512
+    @ 48K 0.68 / 0.59 / 0.60 ms -- 9-17% from paged TMA over the per-token gather. In serving (STEP_TRACE, ours + MTP rows
+    + admission, page 1 vs 128, one repeat each; `h200_pg_steptrace_20261021.sh`, `tasks/perf_model/steptrace_compare.py`,
+    `steptrace_gaps.py`) the deep mixed steps get that gain (1200-2100 new tokens at 16-49K prefix 110.4 -> 104.8 ms, at
+    >= 49K 136.2 -> 125.4 ms) but decode steps -- 89% of steps -- get slower (GPU 9.10 -> 9.60 ms mean, p90 8.6 -> 11.5
+    ms), so total GPU time is equal (297 vs 294 s) and page 128 finishes fewer steps (23.7K vs 22.5K; host gap 0.46 vs
+    0.64 ms per step, negligible). Page 1 stays; a deep-context FA3 gain of ~8% on the mixed steps is the whole headroom
+    the KV layout offers, small next to the 31-37 ms mean mixed step that sets the chat TPOT misses.
 - [x] **MTP ablation and CUDA graphs off (2026-10-20, H200, standard mix, two repeats each, all 0 tracebacks;
   `bash tasks/pd_colocation/h200_mtp_ablation_20261020.sh`; sglang f7682cf73).** The full ours + MTP stack at cap 48
   (four-mode step + split + EDF + deadline chunk) minus one component, per tenant (agent 10 s + 80 ms, chat 0.5 s +

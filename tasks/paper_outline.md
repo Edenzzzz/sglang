@@ -277,7 +277,11 @@ sglang's mixed chunk.
 - WebShop browsing agent (short multi-turn prompts, one GPU): behind stock MTP (throughput -7..-10%)
 - the gains concentrate where long-context prefill meets decode, which is the mixed agent + chat setting above
 
-### 6.7 Second model (Qwen2.5-14B, 8 H20s, fan-out)
+### 6.7 Larger models (fan-out, H20)
+- **Llama-3.3-70B, TP4, 4 x 4 H20 = 4 replicas**, MTP (trained EAGLE3 head, acceptance fixed at 2.1), two repeats:
+  ours chat attainment 77-89% vs 16-18% (2 s + 50 ms), agent goodput 59-69 vs 4-5 tok/s, agent throughput 3.5x, agent
+  TTFT 2.5 s vs 41-43 s
+- Qwen2.5-14B, TP1, 8 H20:
 - ours: agent 186-216 tok/s, chat attainment 45-51%, agent goodput 102-131 tok/s
 - PD disaggregation collapses: agent TTFT ~290 s, agent goodput 0, chat attainment 11-13%
 - at half load (scaled to 14B's capacity, two repeats): ours chat attainment 80% vs 9-17%, agent goodput 133-143 vs
@@ -337,4 +341,4 @@ sglang's mixed chunk.
     goodput, not raw decode speed
   - short-prompt standalone workloads see little gain; the step helps where long-context prefill meets decode
   - MTP is concurrency-limited at 48 running requests for every system
-  - open: Llama-3.3-70B on 4 x 4 H20 (TP4, trained EAGLE3 head), semi-PD baseline (blocked on a CUDA 12 toolkit install), Blackwell kernels
+  - open: semi-PD baseline (blocked on a CUDA 12 toolkit install), Blackwell kernels

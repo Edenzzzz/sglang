@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.23.3 — Llama-3.3-70B, 4 replicas: ours vs PD disagg (2026-10-21)
+
+- 4 x 4 H20, TP4, MTP at acceptance 2.1, fan-out + chat, two repeats: chat attainment 77-89% vs 16-18% (2 s + 50 ms),
+  agent goodput 59-69 vs 4-5 tok/s, agent TTFT 2.5 vs 41-43 s.
+- `mn_node.sh` `WORKER_UP_S` (startup window); post-provisioning installs libssl-dev and sets the draft to bf16.
+
 ## v1.23.2 — Llama-3.3-70B on 4 x 4 H20: provisioned, gate PASS (2026-10-21)
 
 - Job f3b4627e0864b06f provisioned from the archived serving tree (manifest verified on all pods); upstream from a

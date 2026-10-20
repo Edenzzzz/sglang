@@ -11,7 +11,7 @@ set -u
 export PATH=$HOME/.merlin-cli/bin:$PATH
 cd "$(dirname "$0")"
 export SID=f3b4627e0864b06f MN_CP=cn-seed NPODS=4 GPUS_PER_POD=4 TP=4 MODEL_DIR=llama70b DRAFT_DIR=llama70b_eagle3_sgl
-export SM_FA3=${SM_FA3:-66} MEM_FRAC=${MEM_FRAC:-0.85} POOL_KV_TOKENS=${POOL_KV_TOKENS:-596000} SIM_ACC=${SIM_ACC:-2.1}
+export SM_FA3=${SM_FA3:-66} MEM_FRAC=${MEM_FRAC:-0.85} POOL_KV_TOKENS=${POOL_KV_TOKENS:-596000} SIM_ACC=${SIM_ACC:-2.1} WORKER_UP_S=1500
 if ! grep -q "ROUTER_ARGS=" /tmp/h20/mn_70b_calibrate.log 2>/dev/null; then
   KERNEL=mtpsplit EDF=1 SPEC=1 PREEMPT=1 CHUNK=2048 python3 -u mn_run.py calibrate | tee /tmp/h20/mn_70b_calibrate.log
   grep -q "ROUTER_ARGS=" /tmp/h20/mn_70b_calibrate.log || { echo "calibration failed"; exit 1; }

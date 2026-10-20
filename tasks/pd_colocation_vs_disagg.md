@@ -286,7 +286,7 @@ static mixture.
         92 tok/s) because disagg reaches its 5 ms decode only by keeping few requests in flight.** The SLO-checked router
         without worker-side decode-first stays the multi-node configuration.
         sglang `079a8a6dc`.
-      - [ ] **Llama-3.3-70B-Instruct at TP4, 4 pods x 4 H20 = 4 replicas (2026-10-21, job f3b4627e0864b06f, provisioned by
+      - [x] **Llama-3.3-70B-Instruct at TP4, 4 pods x 4 H20 = 4 replicas (2026-10-21, job f3b4627e0864b06f, provisioned by
         `mn_provision_70b_20261021.sh` from the archived serving tree -- manifest verified on all 4 pods -- plus
         `mn_provision_70b_post_20261021.sh`).**
         - [x] **Output gate (`gate_70b_20261021.sh`, one TP4 pod, trained EAGLE3 head; 96 ShareGPT + 8 x 32K TraceLab
@@ -294,9 +294,21 @@ static mixture.
           vs stock MTP, short / long prompts exact and mean common prefix: stock rerun (noise floor) 42/96, 355 of 564
           chars / 1/8, 111 of 446; ours 41/96, 357 / 2/8, 177. The trained head accepts only 1.29-1.39 tokens per verify
           on these raw-text prompts (the Qwen-7B head: ~2.1), so the serving A/B fixes acceptance at 2.1 for every arm.
-        - [ ] Router calibration on one 70B TP4 worker, then ours vs PD disagg 2P2D (TP4 per pod, MTP everywhere), text
-          fan-out at AGENT_CONC 8 + chat 2 req/s, two repeats (`bash tasks/pd_colocation/mn_70b_16gpu_20261021.sh`) --
-          running.
+        - [x] **Ours vs PD disagg 2P2D (2 prefill + 2 decode TP4 pods), MTP everywhere at acceptance 2.1, text fan-out
+          (16 x 64K prefixes) at AGENT_CONC 8 + chat 2 req/s, 900 s, two repeats (`bash
+          tasks/pd_colocation/mn_70b_16gpu_20261021.sh`; router calibrated on one 70B TP4 worker -- cold prefill ~2.2K
+          tok/s, 49K tokens in 25 s; ours 20-30K split calls, 0 tracebacks; disagg's 3 tracebacks are aborted health-check
+          requests; sglang b28082f80).**
+          | arm | agent tput / TTFT / ITL | prefix cached | chat TTFT mean / p50, TPOT | chat att. 0.5 s+20 ms / 2 s+50 ms | agent goodput 10 s+80 ms |
+          |---|---|---|---|---|---|
+          | ours rep 1 | 68.6 / 2.54 s / 114 ms | 0.91 | 3.40 s / 0.19 s, 40.7 ms | 55.5 / 76.7% | 59 tok/s |
+          | ours rep 2 | 76.4 / 2.47 s / 96 ms | 0.92 | 1.18 s / 0.15 s, 28.7 ms | 69.5 / 89.1% | 69 tok/s |
+          | PD disagg rep 1 | 20.0 / 43.0 s / 27 ms | 0.76 | 40.5 s / 37.2 s, 11.9 ms | 10.7 / 16.0% | 4 tok/s |
+          | PD disagg rep 2 | 21.3 / 41.2 s / 27 ms | 0.78 | 39.0 s / 36.4 s, 10.8 ms | 12.8 / 18.2% | 5 tok/s |
+          **At 70B the result holds: chat attainment 5x (2 s + 50 ms: 77-89% vs 16-18%), agent goodput ~13x, agent
+          throughput 3.5x, agent TTFT -94%, chat TTFT -94..-97%.** Disaggregation again keeps the faster per-token decode
+          (11 vs 29-41 ms) but its two prefill pods queue every request (TTFT ~40 s). The workers needed `libssl-dev`
+          (HiCache's hash extension) and a bf16 draft config (`mn_provision_70b_post_20261021.sh`).
       - [x] **Fault tolerance: lose 2 of 8 GPUs mid-run (2026-10-20; same text fan-out C=32 + chat 8 req/s; at t = 300 s
         every worker on pod 1 is killed, `FAULT_AT` / `FAULT_POD` in mn_run.py -- under PD disagg pod 1 is one of the
         two prefill pods, under ours two colocated workers; our router marks a worker dead on a refused or broken

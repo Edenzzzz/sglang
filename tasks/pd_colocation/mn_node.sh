@@ -235,7 +235,9 @@ supervise() {
   local g=$1
   for attempt in 1 2 3 4 5; do
     launch $g
-    for t in $(seq 1 90); do
+    # WORKER_UP_S (default 360): how long a worker may take to report "fired up" before it is relaunched; a 70B TP4
+    # worker with the pool store and spec CUDA graphs needs ~10 min (four relaunches at 360 s, 2026-10-21).
+    for t in $(seq 1 $(( ${WORKER_UP_S:-360} / 4 ))); do
       sleep 4
       grep -q "address already in use" $LOG/worker_r${ROLE}_g${g}.log && break
       # Distributed init takes < 1 s when healthy; still waiting after ~60 s means a port clash.

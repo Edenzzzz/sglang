@@ -319,8 +319,10 @@ code { font: .86em "IBM Plex Mono", monospace; background: var(--surface); paddi
 <li>the gains concentrate where long-context prefill meets decode, which is the mixed agent + chat setting above</li>
 </ul>
 
-<h3>6.7 Second model <span class="meta">— Qwen2.5-14B, 8 H20s, fan-out</span></h3>
+<h3>6.7 Larger models <span class="meta">— fan-out, H20</span></h3>
 <ul>
+<li><b>Llama-3.3-70B, TP4, 4 × 4 H20 = 4 replicas</b>, MTP (trained EAGLE3 head, acceptance fixed at 2.1), two repeats: ours chat attainment 77–89% vs 16–18% (2 s + 50 ms), agent goodput 59–69 vs 4–5 tok/s, agent throughput 3.5×, agent TTFT 2.5 s vs 41–43 s</li>
+<li>Qwen2.5-14B, TP1, 8 H20:</li>
 <li>ours: agent 186–216 tok/s, chat attainment 45–51%, agent goodput 102–131 tok/s</li>
 <li>PD disaggregation collapses: agent TTFT ~290 s, agent goodput 0, chat attainment 11–13%</li>
 <li>at half load (scaled to 14B's capacity, two repeats): ours chat attainment 80% vs 9–17%, agent goodput 133–143 vs 0–1 tok/s, agent TTFT 2.2 s vs 110–118 s</li>
@@ -377,7 +379,7 @@ code { font: .86em "IBM Plex Mono", monospace; background: var(--surface); paddi
 <li>per-token decode: disaggregation's decode-only nodes keep 5 ms TPOT vs our 12 ms; the gain is in attainment and goodput, not raw decode speed</li>
 <li>short-prompt standalone workloads see little gain; the step helps where long-context prefill meets decode</li>
 <li>MTP is concurrency-limited at 48 running requests for every system</li>
-<li>open: Llama-3.3-70B on 4 × 4 H20 (TP4, trained EAGLE3 head), semi-PD baseline (blocked on a CUDA 12 toolkit install), Blackwell kernels</li>
+<li>open: semi-PD baseline (blocked on a CUDA 12 toolkit install), Blackwell kernels</li>
 </ul></div>
 </main>
 </div>

@@ -264,8 +264,9 @@ sglang's mixed chunk.
 
 ### 6.7 Second model (Qwen2.5-14B, 8 H20s, fan-out)
 - ours: agent 186-216 tok/s, chat attainment 45-51%, agent goodput 102-131 tok/s
-- PD disaggregation collapses: agent TTFT ~290 s, agent goodput 0, chat attainment 11-13%; a load scaled to 14B's
-  capacity is running
+- PD disaggregation collapses: agent TTFT ~290 s, agent goodput 0, chat attainment 11-13%
+- at half load (scaled to 14B's capacity, two repeats): ours chat attainment 80% vs 9-17%, agent goodput 133-143 vs
+  0-1 tok/s, agent TTFT 2.2 s vs 110-118 s
 - next: Llama-3.3-70B and GLM-4.5-Air on 4 nodes x 8 / x 4 H200 / H100 (section 6.1)
 
 ### 6.8 Step-model accuracy (EDF)

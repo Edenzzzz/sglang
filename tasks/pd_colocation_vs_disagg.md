@@ -300,6 +300,18 @@ static mixture.
         workload), so no agent request meets its SLO.** Ours serves the load but 14B on H20 is overloaded at a 7B-sized
         offered load: chat TPOT p50 18-21 ms, so tight-SLO chat attainment falls to 45-51% (from ~90% on 7B). A load
         scaled to 14B's capacity is the fair next point. sglang 642e476b7.
+        - [x] **Half load, scaled to 14B's capacity (2026-10-20; agent C=16, chat 4 req/s, 3600 chats; same calibration;
+          `bash tasks/pd_colocation/mn_14b_half_8gpu_20261020.sh`, scored by `fanout_per_tenant.py`; sglang 7e7b390b7;
+          ours 0 errors).**
+          | arm | agent tput / TTFT mean / p50 / ITL | chat TTFT mean / p50, TPOT | chat attainment 0.5 s+20 ms / 2 s+50 ms | agent goodput 10 s+80 ms |
+          |---|---|---|---|---|
+          | ours rep 1 | 157.3 / 2.16 s / 0.95 s / 45.2 ms | 0.93 s / 75 ms, 24.1 ms | 80.1 / 92.9% | 143 tok/s |
+          | ours rep 2 | 152.8 / 2.29 s / 0.96 s / 47.5 ms | 0.80 s / 75 ms, 24.5 ms | 80.4 / 92.8% | 133 tok/s |
+          | PD disagg rep 1 | 16.1 / 110 s / 105 s / 12.4 ms | 83.0 s / 75.0 s, 10.3 ms | 9.4 / 10.6% | 1 |
+          | PD disagg rep 2 | 15.2 / 118 s / 119 s / 12.7 ms | 75.9 s / 70.1 s, 11.9 ms | 16.9 / 18.7% | 0 |
+          **At a load 14B can carry, ours meets chat SLOs for 80% of requests (vs 9-17%) and serves ~10x the agent
+          throughput with ~140 tok/s agent goodput vs ~0. Halving the load does not rescue disagg: its two prefill nodes
+          still queue 64K prefixes (agent TTFT 110-118 s, prefix cached fraction 0.44-0.50 vs ours 0.94).**
       - [x] **2026-10-19 per-tenant scoring: chat on SLO attainment (TTFT + per-request TPOT), agents on SLO goodput.**
         Same saved records, re-scored by `tasks/perf_model/fanout_per_tenant.py` (per-request TPOT = sum(itls) /
         (output_len - 1), so MTP arms count tokens, not stream chunks). Chat attainment at 0.5 s + 20 ms / 1 s + 30 ms /

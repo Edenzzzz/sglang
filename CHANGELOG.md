@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.21.16 — 14B at half load (2026-10-20)
+
+- 8 H20s, agent C=16 + chat 4 req/s, two repeats: ours chat attainment 80% (0.5 s + 20 ms) vs disagg 9-17%, agent
+  goodput 133-143 vs 0-1 tok/s, agent TTFT 2.2 s vs 110-118 s.
+
 ## v1.21.15 — Outline: eval models re-sized for TP4 / TP8 nodes (2026-10-20)
 
 - `tasks/paper_outline.md` / `.html` 6.1: one TP8 / TP4 instance per node; Llama-3.3-70B-Instruct and GLM-4.5-Air

@@ -148,6 +148,25 @@ and misses only agent TTFT/TPOT at mix128 16/s (-26%). Earlier summary, fused co
 TTFT and throughput clear the bar wherever the server is loaded; per-token latency clears it only
 at some points. The graphs-on 4-mode crash is fixed (a schedule-stream publish raced the forward stream); 4-mode arms now run without the mixed-step barrier.
 
+## Baselines
+
+What every bar result is judged against (user, 2026-10-18 / 2026-10-19). Bar: >= 30% on TTFT and ITL, or on their SLO
+attainment rates, and >= 10% throughput, realistic mixed workloads (chat + TraceLab), same session and workload. SLO
+control = the decode-first worker rule plus, multi-node, the load-aware SLO-checked router. Full tables, commands and
+commits: `realistic_workload_analysis.md` ## Baselines (single node), `pd_colocation_vs_disagg.md` (multi-node).
+
+| setting | our arm | baselines | priority | status (2026-10-20) |
+|---|---|---|---|---|
+| single node, no SLO control | fused split (FA3 prefill + FA2 decode, overlapped), EDF + deadline chunk; without MTP and with MTP (4-mode) | sglang mixed chunk and prefill-prioritized chunked prefill, default kernel; each without spec and with MTP | required | vs mixed chunk: MTP pair clears (chat attainment +72%, agent 15x, throughput +55%), no MTP at the line (chat +29.7%); vs prefill-prioritized: agents clear, chat attainment +16.5% / +20% (short) |
+| single node, SLO control | the same + decode-first | pdmux (stock `decode_bs_divisor` 36) | nice to have | decode-first (per step and per row) starves prefill on one node; not a gain |
+| multi-node, SLO control | symmetric colocated nodes, SLO-checked hit-first router, cluster KV pool; without and with MTP | PD disaggregation (sglang roles, mooncake) without and with MTP on decode; semi-PD with an sglang implementation | required (main claim) | vs PD disagg on 8 H20s: chat attainment 91% vs 26%, agent goodput 6x; holds through a 3x chat spike and a 2x agent shift; Qwen2.5-14B: disagg collapses (agent TTFT ~290 s); semi-PD not run |
+
+- Model: Qwen2.5-7B-Instruct + EAGLE3 (second model Qwen2.5-14B, no MTP). FP8 out of scope. Agent load is program
+  concurrency, chat by request rate.
+- MTP is required, not optional (disaggregation runs MTP on its decode nodes). Every MTP arm runs at sglang's
+  speculative default of 48 running requests, each system's best cap (64 and 128 are worse for all).
+- Stock mixed chunk is bimodal across repeats (slow mode in 5 of 6); comparisons use the six-repeat mean with error bars.
+
 ## Tasks, in priority order
 
 A and B are the two kernel items; S is the server/workload evaluation the user specified.
@@ -674,7 +693,7 @@ each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/
       s, 20 s >= 200K; chat 2 s): stock 22.2% / 0.2%, ours 52.8% / 54.3%, ours + 2x 55.6% / 70.8%. Agent TTFT by length,
       stock / ours / ours + 2x: < 64K 19.2 / 6.0 / 2.2 s, 64-128K 33.0 / 13.9 / 9.9 s, 128-195K 29.9 / 22.8 / 23.1 s,
       > 195K 38.5 / 33.1 / 46.6 s. Single repeat. These are vs stock MTP; the bar's single-node baselines (stock mixed
-      chunk without MTP, stock + MTP for the MTP arm, pdmux) are in `realistic_workload_analysis.md` ## Baselines.
+      chunk without MTP, stock + MTP for the MTP arm, pdmux) are in `realistic_workload_analysis.md` ?lines.
       `CHAT_RATE=2 CHAT_N=600 SPEC_TAG=_long_r2` + the command above.
   - [ ] **Relative SLOs (2026-10-13):** `eval_curves.py --slo-relative K_TTFT,K_TPOT --ref-root`
     scales each tenant's SLO from its median TTFT/TPOT running ALONE on stock MTP. The swept runs'

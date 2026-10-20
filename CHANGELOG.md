@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.21.12 — ## Baselines in the main task doc (2026-10-20)
+
+- `debug_kernel_server_perf_4_mode.md` gains a ## Baselines section (settings, baselines, priority, current status),
+  pointing at the full tables in `realistic_workload_analysis.md` and `pd_colocation_vs_disagg.md`.
+
 ## v1.21.11 — Second model: Qwen2.5-14B (2026-10-20)
 
 - 8 H20s, fan-out, two repeats: ours agent 186-216 tok/s, chat attainment 45-51% (0.5 s + 20 ms), agent goodput

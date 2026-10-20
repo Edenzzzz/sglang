@@ -258,7 +258,7 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   arm: stock + MTP 36.6 tok/s / TTFT 33.42 s / TPOT 48.5 ms, chat 41.54 s / 42.6 ms; prefill-prioritized + MTP 37.1 /
   32.88 s / 52.2 ms, chat 42.67 s / 44.2 ms; ours + MTP 60.4 / 18.97 s / 31.7 ms, chat 10.90 s / 27.9 ms. 48 is the best
   cap for each system, so the cap-48 MTP comparison is each system at its best; cap 80 not run.
-- [ ] **Deadline-ordered decode rows (2026-10-20, H200, running).** Under the MTP cap the slot, not the GPU, is what
+- [ ] **Deadline-ordered decode rows (2026-10-20, H200; rate sweep running).** Under the MTP cap the slot, not the GPU, is what
   chats wait for: our running chats decode at 13 ms/token against a 20 ms SLO while new ones queue for a slot.
   `apply_decode_rows_edf.py` lets up to `--max-running-requests` requests be resident but runs at most K rows per step
   (the 48-row speculative CUDA graph), the K whose next token is due soonest (a request that has emitted o tokens
@@ -280,16 +280,22 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
     interval, a the resident rows' tokens per verify (output tokens / sglang's `spec_verify_ct`); the newcomer is
     charged as a chat row. The admission check binds when long mixed steps run (logged: dt 42.8 ms, a 2.03, load 45.2
     of 43.2; dt 104 ms, load 127.6).
-  - [ ] **Serving A/B (K=48, util 0.9, cap 128 as a bound; `bash tasks/pd_colocation/h200_decode_rows_20261020.sh`):**
-    rep 1 (clean), per tenant (agent 10 s + 80 ms, chat 0.5 s + 20 ms) vs ours + MTP at cap 48 (rep 6) and
-    prefill-prioritized stock + MTP (rep 1):
-    | arm | agent tput / TTFT / TPOT / att. | chat TTFT / TPOT / att. (TTFT miss, TPOT miss) |
-    |---|---|---|
-    | stock prefill-prioritized + MTP | 82.2 / 15.47 s / 29.8 ms / 8.9% | 7.67 s / 16.0 ms / 49.1% (50.7%, 23.7%) |
-    | ours + MTP, cap 48 | 102.7 / 12.39 s / 18.6 ms / 46.7% | 2.84 s / 12.8 ms / 59.0% (37.8%, 23.4%) |
-    | **ours + MTP, deadline-ordered rows + SLO admission** | **106.2 / 10.60 s / 39.3 ms / 46.7%** | **2.04 s / 14.4 ms / 65.0%** (30.8%, 29.6%) |
-    vs prefill-prioritized + MTP: chat attainment **+32%**, agent attainment 5.2x, agent throughput +29%, chat TTFT
-    -73%, agent TTFT -31%. Matched in-session references and repeat 2 running.
+  - [x] **Serving A/B (K=48, util 0.9, cap 128 as a bound; `bash tasks/pd_colocation/h200_decode_rows_20261020.sh`,
+    `h200_decode_rows_more_20261020.sh`; four repeats, all clean; sglang 0e54fc671).** Per tenant (agent 10 s + 80 ms,
+    chat 0.5 s + 20 ms), per-repeat values:
+    | arm | agent tput | agent TTFT | agent att. | chat TTFT | chat TPOT | chat att. (TTFT miss / TPOT miss) |
+    |---|---|---|---|---|---|---|
+    | stock prefill-prioritized + MTP (4: rep 1-2, refs 1-2) | 81.0-82.2 | 15.46-15.53 s | 6.7-8.9% | 7.54-7.68 s | 16.0-18.1 ms | 49.1 / 49.3 / 49.3 / 49.5% (~50.5% / ~23.5%) |
+    | ours + MTP, cap 48 (in-session refs 1-2) | 101.7 / 103.1 | 12.50 / 12.29 s | 46.7 / 46.7% | 3.01 / 2.89 s | 12.9 / 13.0 ms | 58.4 / 59.1% (38.4 / 37.6%, 24.2 / 23.8%) |
+    | **ours + MTP, deadline-ordered rows + SLO admission (4)** | 106.2 / 101.8 / 101.8 / 100.2 | 10.60-11.37 s | 46.7 / 42.2 / 48.9 / 42.2% | 2.04-2.38 s | 14.4-15.1 ms | **65.0 / 62.3 / 63.6 / 61.2%** (31-33% / 29-31%) |
+    | same, util 0.8 (1) | 100.3 | 13.07 s | 35.6% | 3.05 s | 13.6 ms | 59.9% (37.2% / 26.7%) |
+    Means: chat attainment **63.0 +- 1.4% vs 49.3%, +28%** (the bar's 30% would need 64.1%); vs ours at cap 48, +4.1
+    points. Agent attainment 45.0% vs 8.1% (5.5x), agent throughput +25%, chat TTFT -70%, agent TTFT -28%; chat TPOT
+    14.8 vs 16.9 ms (-12%). The rows move chat misses from TTFT (38% -> 32%) to TPOT (24% -> 30%): the remaining TPOT
+    misses are chats decoding through long mixed steps (logged step interval up to ~104 ms, where a chat row at 2.0
+    tokens per verify cannot meet 20 ms in any schedule), and admission closes during those steps, which is where the
+    remaining TTFT misses queue. **Short of +30% at chat 8 req/s by ~1 point**; util 1.0 and the attainment-vs-rate
+    sweep (`h200_chat_rate_sweep_20261020.sh`, chat 2 / 4 / 6 req/s) are running.
 - **Out of scope:** FP8 (weights, activations or KV); FP8 runs in the task docs are exploratory records, not results.
 
 ## TraceLab causal replay: the zero-regression check

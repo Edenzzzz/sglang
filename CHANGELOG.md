@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.23.1 — H20 results archived; 70B job provisioning (2026-10-20)
+
+- `tasks/pd_colocation/h20_requests_20261020.npz`: per-request TTFT / TPOT / output length / start of all 413 streams
+  run on H20 job bb854a10b8954223 (`tasks/perf_model/pack_requests.py`), kept before the job is replaced.
+- `tree_20261020.tgz` + `tree_manifest_20261020.txt`: that job's serving tree (32 files vs upstream 3fef129);
+  `mn_provision_70b_20261021.sh` rebuilds it and verifies the manifest, then fetches Llama-3.3-70B + its EAGLE3 head.
+- `mn_node.sh`: any TP size (one TP worker per pod, one RDMA NIC per rank).
+
 ## v1.23.0 — Fault tolerance; acceptance 3.0; page 128 (2026-10-20)
 
 - `router.py`: a worker that refuses or breaks a connection is marked dead and later requests are rerouted

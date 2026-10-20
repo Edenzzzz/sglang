@@ -211,15 +211,18 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
       # management address, while mlx5_1..4 (eth1-4) carry IPv4-mapped RoCEv2 GIDs; a worker on
       # mlx5_0 could not bring up a QP to one on mlx5_1..4 ("Failed to modify QP to RTR").
       IB=mlx5_$(( 1 + (ROLE * 2 + g) % 4 ))
+      # A TP worker passes one back-end NIC per rank (sglang maps the comma list onto its GPUs).
+      [ "${TP:-1}" -gt 1 ] && IB=$(seq -s, 1 $TP | sed 's/\([0-9]\+\)/mlx5_\1/g')
       ARGS+=(--disaggregation-mode $MODE --disaggregation-transfer-backend mooncake
              --disaggregation-ib-device $IB --disaggregation-bootstrap-port $BOOT) ;;
   esac
   # One file per GPU: the two supervisors run concurrently, and a shared file rewritten via
   # one temp name lost an entry (pods 0, 2, 6 in coloc_cache), stalling the arm for 25 min.
   echo "$g $PORT $BOOT" > $LOG/ports_r${ROLE}_g${g}.tmp && mv $LOG/ports_r${ROLE}_g${g}.tmp $LOG/ports_r${ROLE}_g${g}.txt
-  # TP=2: one worker per pod over both GPUs (tensor parallel), so a long cold prefill spreads over two GPUs.
+  # TP>1: one worker per pod over GPUs 0..TP-1 (tensor parallel): TP=2 spreads a long cold prefill over both H20s of a
+  # 2-GPU pod; TP=4 holds a 70B model on a 4-GPU pod.
   local devs=$g
-  if [ "${TP:-1}" = 2 ]; then devs=0,1; ARGS+=(--tp-size 2); fi
+  if [ "${TP:-1}" -gt 1 ]; then devs=$(seq -s, 0 $(( TP - 1 ))); ARGS+=(--tp-size $TP); fi
   CUDA_VISIBLE_DEVICES=$devs setsid nohup $W/venv/bin/python -m sglang.launch_server "${ARGS[@]}" \
     > $LOG/worker_r${ROLE}_g${g}.log 2>&1 < /dev/null &
   echo $! > $LOG/pid_r${ROLE}_g${g}
@@ -247,8 +250,8 @@ supervise() {
     mv $LOG/worker_r${ROLE}_g${g}.log $LOG/worker_r${ROLE}_g${g}.bindfail$attempt.log
   done
 }
-# GPUS_PER_POD (default 2, the H20 pods): one worker per GPU, or one TP=2 worker.
-for g in $([ "${TP:-1}" = 2 ] && echo 0 || seq 0 $(( ${GPUS_PER_POD:-2} - 1 ))); do
+# GPUS_PER_POD (default 2, the H20 pods): one worker per GPU, or one TP worker per pod.
+for g in $([ "${TP:-1}" -gt 1 ] && echo 0 || seq 0 $(( ${GPUS_PER_POD:-2} - 1 ))); do
   supervise $g > $LOG/supervise_r${ROLE}_g${g}.log 2>&1 < /dev/null &
   disown
 done

@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.26.4 — GLM-4.5-Air single node; a TP4 hang; an invalid knob test caught (2026-10-21)
+
+- GLM-4.5-Air on one TP4 H20 pod: ours + MTP is -15% agent throughput vs stock + MTP at quarter load and wins only
+  chat TTFT; at half load stock + MTP collapses but ours no-MTP is the better arm. The 4-mode schedule does not pay
+  on this model.
+- A forward step hung in ours no-MTP (600 s watchdog, TP1), not reproduced in 4 reruns. Left open with a soak planned.
+- The first SKIP_BASE_PLAN run measured nothing: the pod carried the pre-flag launcher, so the knob never fired while
+  the arm still produced a plausible number. The script now verifies the pod exports it before arming.
+
 ## v1.26.3 — Rate sweep vs stock on FA3; MTP gap located; draft extend on FA3 (2026-10-21)
 
 - Chat 8-16 req/s: ours +9..+14% agent attainment and -74..-80% chat TTFT, but -2.5..-4 points chat attainment and

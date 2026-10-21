@@ -657,7 +657,28 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       arm on FA3): PASS.** 96 ShareGPT + 8 x 32K TraceLab prompts at once, greedy, 128 tokens. Stock rerun vs stock (noise
       floor): short 16/96 exact, mean common prefix 238 of 567 chars; long 0/8, 219 of 600. Ours vs stock: short 20/96,
       230; long 1/8, 187. 0 tracebacks in all arms; ours 1001 split calls, 151 4-mode steps, verify on FA3 captured;
-      accept len 2.54 / 2.61 (stock) and 2.75 (ours). Serving table: `mn_glm_single_20261021.sh`, running.
+      accept len 2.54 / 2.61 (stock) and 2.75 (ours). Serving table below.
+    - [ ] **GLM-4.5-Air single node, one H20 pod at TP4 (2026-10-21, `bash tasks/pd_colocation/mn_glm_single_20261021.sh`;
+      chat template, own MTP layer; stock on FA3, ours with the split policy). At the standard mix every system is
+      overloaded** (stock + MTP chat TTFT 136 s, 772 of ~1640 chat tok/s offered), so quarter load (agents C=2 over 6
+      sessions, chat 2 req/s) and half load (C=4 over 12, chat 4 req/s), one repeat each. agent tok/s | agent TTFT |
+      chat TTFT | chat TPOT:
+      | arm | quarter load | half load |
+      |---|---|---|
+      | stock prefill-prioritized + MTP, FA3 | 43.1 \| 4.3 s \| 0.81 s \| 25.1 ms | 23.8 \| 24.4 s \| 22.9 s \| 50.1 ms |
+      | stock mixed chunk, FA3, no MTP | 35.2 \| 4.2 s \| 0.80 s \| 29.9 ms | 31.1 \| 6.3 s \| 2.85 s \| 88.8 ms |
+      | stock prefill-prioritized, FA3, no MTP | 35.6 \| 4.8 s \| 0.89 s \| 35.0 ms | 32.1 \| 6.5 s \| 2.93 s \| 106.8 ms |
+      | ours + MTP (rows + admission, policy) | 36.6 \| 6.2 s \| 0.37 s \| 25.8 ms | 25.0 \| 12.6 s \| 4.50 s \| 98.1 ms |
+      | ours no MTP (policy, decode on FA3) | HUNG (below) | 30.6 \| 8.8 s \| 1.41 s \| 85.4 ms |
+      Ours + MTP loses to stock + MTP at quarter load (-15% agent tok/s) and wins only chat TTFT (-54%); at half load
+      stock + MTP collapses (chat TTFT 22.9 s) while ours + MTP holds 4.5 s, but ours no-MTP is the better arm there and
+      stock no-MTP still leads it on throughput. On this model and GPU the 4-mode schedule does not pay. Needs repeats.
+      - [ ] **A forward step hung in ours no-MTP at quarter load (`_glm_L2_ct_pol_r1`): "Scheduler watchdog timeout
+        (self.watchdog_timeout=600.0, self.soft=False)" on TP1, then SIGQUIT; 0 tracebacks, no CUDA error in the log.**
+        Not reproduced in 4 further runs at the same load (`mn_glm_hang_bisect_20261021.sh`: the same config twice, once
+        without DECODE_FA3, once without SPLIT_POLICY -- all 4 completed, 0 tracebacks), so it is rarer than 1 in 4 and
+        those bisect arms prove nothing yet. Open: a longer soak of ours no-MTP on this model with the watchdog lowered,
+        so the hung step is caught as a stack rather than after 600 s.
   - [ ] 32 GPUs, Qwen2.5-7B no spec, ours vs disagg at 2 / 4 / 5 / 6 of 8 prefill pods (`mn_scale32_20261021.sh`,
     running); then 16 / 32 GPUs with MTP at real acceptance for each model.
 

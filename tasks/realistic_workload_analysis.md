@@ -467,8 +467,25 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
       | stock mixed chunk, FA3 | 141.8 | 2.09 s | 0.579 s | 293 ms |
       Larger loose-deadline chunks recover agent TTFT (3.30 -> 2.94 s) and throughput (-5.5% -> -3.2% vs stock), but
       the chat ITL tail degrades 112 -> 400 ms, overshooting even stock mixed chunk's 293 ms. Every setting is a
-      different point on one frontier; none dominates stock. **And chunk tuning cannot reach the bar's throughput
-      half in principle at this load:** throughput here is work / time with nothing dropped and chat pinned at the
+      different point on one frontier; none dominates stock.
+      **But with MTP the same lever is worth far more, and the 4-mode arm was mis-tuned all along (2026-10-22, one
+      repeat).** Ours + MTP (rows + SLO admission) at deadline chunk 1024:4096 vs its 1024:2048 default and vs stock
+      prefill-prioritized + MTP, all on FA3:
+      | metric | stock + MTP | ours + MTP ch2048 | **ours + MTP ch4096** |
+      |---|---|---|---|
+      | agent tok/s | 161.2 / 161.5 | 140.6 / 141.5 (-12.5%) | **155.2 (-3.8%)** |
+      | agent att. @ 80 ms ITL | 66.7 / 68.9% | 62.2 / 64.4% | **66.7%** (parity) |
+      | agent att. @ 30 ms ITL | 46.7 / 48.9% | 55.6 / 51.1% | **57.8% (+21%)** |
+      | chat att. | 77.0% | 75.6 / 75.5% | **77.9% (+1.2%)** |
+      | chat TTFT mean | 1.80 s | 0.72 s | **0.42 s (-77%)** |
+      | agent TTFT mean | 7.63 / 7.68 s | 7.37 / 7.60 s | **6.37 s (-17%)** |
+      | agent ITL p99 | 394 / 452 ms | 211 ms | 219 ms |
+      At this point ours + MTP beats stock + MTP on chat attainment, chat TTFT, agent TTFT and the 30 ms ITL
+      attainment, ties the loose agent SLO, and gives up only 3.8% throughput -- where the 2048 default gave up 12.5%
+      and lost on both attainments. The 4-mode step rides a prefill chunk with the verify forward, so it wants a
+      LARGER chunk than the no-MTP schedule, which is the opposite of how it was configured in every run before this.
+      Needs repeats, and 8192 should be tried for the MTP arm too.
+      **Chunk tuning still cannot reach the bar's throughput half in principle at this load:** throughput here is work / time with nothing dropped and chat pinned at the
       offered rate, so ours approaches stock's 141.8 from below and can only exceed it where stock WASTES capacity --
       i.e. under saturation and queueing. That makes the agent-concurrency sweep (`h200_agentload_20261022.sh`,
       C=16 / 24) not just the next test but the only one that can clear the throughput half on single node.

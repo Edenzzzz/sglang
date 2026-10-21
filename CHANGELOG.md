@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.30.1 — The 4-mode MTP arm was mis-tuned: chunk 4096 recovers most of the throughput gap (2026-10-22)
+
+- Ours + MTP at deadline chunk 1024:4096 instead of 1024:2048: agent throughput -3.8% vs stock + MTP (was -12.5%),
+  chat attainment 77.9% vs 77.0% (now ahead), chat TTFT -77%, agent TTFT -17%, 30 ms-ITL agent attainment +21%,
+  parity on the loose agent SLO. One repeat; repeats and a 8192 point still needed.
+- The 4-mode step rides a prefill chunk with the verify forward, so it wants a LARGER chunk than the no-MTP
+  schedule -- the opposite of how every earlier run configured it.
+
 ## v1.30.0 — Point 2 holds across the whole thrashing curve (2026-10-22)
 
 - 16 H20s, both on FA3, working set swept 1M -> 4M -> 8M live KV tokens at fixed agent program concurrency. Ours:

@@ -2471,6 +2471,13 @@ the 2026-10-10 version of this section (no serving data, corruption blocking) is
   dispatch -- so **the entire multi-node advantage is the colocated schedule plus the cache-first SLO router**. The
   fused kernel's measured contributions are elsewhere: step predictability (point 3, 0.4% / 3.2% MAPE) and ~2.5% on
   our own single-GPU schedule.
+  - [ ] **What the kernel adds at cluster scale is a separate question, and it is now queued
+    (`mn_kernel_on_16g_20261022.sh`).** Turning the kernel off was deliberate -- it attributes the win -- but it
+    leaves the fused stack's own multi-node contribution unmeasured. The queued arms run the SAME workload, router,
+    EDF and pool with the full fused stack ON (split rows on FA3, per-step split policy, per-layer fastpath, verify
+    on FA3), no-spec and MTP, so the difference against the `KERNEL=lpt` arms above is the kernel's cluster-scale
+    value with everything else held fixed. On one GPU that difference was +2.5%; whether it is larger at 16 GPUs,
+    where mixed steps carry more and deeper decode rows, is exactly what the fused split was built for.
   Against PD disaggregation at its best P:D ratio, both systems on FA3, ours wins
   by margins far above the bar: +56% agent throughput at 32 GPUs / 1x
   load, +164% at 2x, 3.5x with Qwen3-8B and real MTP at 16 GPUs, with agent TTFT 6-18x lower.

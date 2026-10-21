@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.33.0 — Clean multi-node table complete: MTP widens the gap to 19x / 44x (2026-10-22)
+
+- 16 H20s, every arm on upstream's FA3 backend, ours with no split, disagg swept over 2+2 and 3+1, no-spec and MTP.
+  With MTP vs disagg's better ratio: chat SLO attainment 92.8% vs 4.9% (19x), agent SLO goodput 1099 vs 25 tok/s
+  (44x), raw throughput 5.2x, agent TTFT -98%. Ours' chat TPOT p90 9.5 ms also beats disagg 3+1's 13.8 ms.
+- Speculation widens the gap because disagg ships draft hidden states to decode pods every round on top of
+  re-prefilling the session, while colocation verifies where the KV already is.
+
 ## v1.32.2 — Correction: most of the C=16 single-node deficit was a tuning artifact (2026-10-22)
 
 - Ours no MTP at C=16 with deadline chunk 1024:4096 instead of 1024:2048: agent attainment 34.4% -> 48.4% (stock

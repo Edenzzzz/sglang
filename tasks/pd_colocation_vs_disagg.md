@@ -2476,7 +2476,18 @@ the 2026-10-10 version of this section (no serving data, corruption blocking) is
     0.80 s, chat TTFT 185 ms, cached 0.972, 0 errors. On one GPU the 4-mode MTP arm was the *worst* configuration at
     saturation (agent attainment 19.4% at C=16); at 16 GPUs it is the best. The reason is the same routing dimension
     that makes the whole multi-node case work: the router can place a verify-heavy step on a node that can absorb it,
-    where a single GPU must interleave it with everything else. Disagg's MTP arms (2+2, 3+1) running.
+    where a single GPU must interleave it with everything else. **With disagg's MTP arms in, the MTP comparison is the
+    widest of all (all on FA3, disagg at both ratios):**
+    | 16 GPUs, MTP, all FA3 | agent tok/s | agent TTFT | chat att. 0.5s/20ms | agent SLO goodput | chat TPOT p90 | cached |
+    |---|---|---|---|---|---|---|
+    | **ours + MTP** | **1120.7** | **0.80 s** | **92.8%** | **1099 tok/s** | **9.5 ms** | 0.972 |
+    | disagg 2 + 2 + MTP | 195.9 | 34.25 s | 4.9% | 25 tok/s | 6.5 ms | 0.74 |
+    | disagg 3 + 1 + MTP | 213.5 | 29.71 s | 3.8% | 22 tok/s | 13.8 ms | 0.75 |
+    Against disagg's better ratio: **chat SLO attainment 19x (92.8% vs 4.9%), agent SLO goodput 44x (1099 vs 25
+    tok/s), raw agent throughput 5.2x, agent TTFT -98%**. Ours' chat TPOT p90 (9.5 ms) also beats disagg 3+1's
+    (13.8 ms); only disagg 2+2 is tighter (6.5 ms) and it attains 4.9%. Speculation widens the gap because disagg must
+    ship the draft hidden states to its decode pods every round on top of re-prefilling the session, while colocation
+    verifies where the KV already is.
   - [ ] **What the kernel adds at cluster scale is a separate question, and it is now queued
     (`mn_kernel_on_16g_20261022.sh`).** Turning the kernel off was deliberate -- it attributes the win -- but it
     leaves the fused stack's own multi-node contribution unmeasured. The queued arms run the SAME workload, router,

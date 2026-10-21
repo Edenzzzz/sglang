@@ -75,18 +75,34 @@ belongs in the limitations.
 
 ## Abstract
 
+[2026-10-22 REWRITE -- every number below is from a run with both systems on sglang's FA3 backend; the previous
+abstract's single-node claims were measured against stock forced onto the deprecated flashinfer backend and are
+withdrawn.]
+
 LLM serving fleets are disaggregated into prefill and decode nodes so that long prefills never stall decoding. The
 split is fixed in hardware: it queues requests behind a few prefill nodes, dilutes cached prefixes across them, and
-leaves decode compute idle -- which speculative decoding (MTP) now fills on the disaggregated side. We present
-AttentionFuse, a colocated serving system in which every node runs prefill and decode together. Its step runs FA3
-prefill tiles and FA2 decode / verify tiles on pre-assigned SMs inside sglang's scheduler, with the prefill chunk
-riding the MTP verify forward (a 4-mode step) and an EDF scheduler that sizes each chunk to deadlines. Across nodes, a
-cache-first router sends each request to the node holding the most of its prefix that can still meet every SLO,
-pulling the rest from a cluster KV pool. On mixed coding-agent + chat traffic over 8 H20s, AttentionFuse meets chat
-SLOs for 91% of requests vs 26% under PD disaggregation and delivers 6x the agent goodput, holding 97-100% agent
-attainment through a 3x chat spike and a doubled agent load; with a 14B model disaggregation collapses (agent TTFT
-~290 s). On one H200 with MTP it raises chat SLO attainment by 72%, agent attainment 15x and throughput 55% over
-sglang's mixed chunk.
+makes every round of a multi-turn agent session re-ship or recompute its KV. We present AttentionFuse, a colocated
+serving system in which every node runs prefill and decode together: an EDF scheduler that orders by deadline and
+sizes each prefill chunk to it, a 4-mode step in which a prefill chunk rides the MTP verify forward, and a
+cache-first router that sends each request to the node holding the most of its prefix that can still meet every SLO,
+pulling the rest from a cluster KV pool.
+
+The case is a cluster one. On mixed coding-agent + chat traffic over 16-32 H20s, with PD disaggregation swept over
+its prefill:decode ratios and both systems on the same attention backend, AttentionFuse delivers 1.9-3.8x the agent
+throughput at 6-18x lower agent TTFT, and the gap *widens* with pressure: doubling offered load takes it from +56% to
++164%, and growing the agent working set 8x past the cluster KV pool takes it from +91% to +277% while our cached
+prefix fraction falls only 0.98 -> 0.95 against disaggregation's 0.89 -> 0.61. Disaggregation retains a better
+inter-token-latency tail throughout, because its decode nodes never see a prefill.
+
+Two findings qualify the design. First, the fused FA3+FA2 attention step is not where the throughput comes from: once
+decode and verify rows also run on FA3 no FA2 role remains, and the surviving per-step choice -- splitting one varlen
+call into two co-running launches -- is worth 4-25% on kernel microbenchmarks and nothing measurable in serving. Its
+measured value is instead *predictability*: our 4-mode step's GPU time is modelled to 0.4% / 3.2% MAPE (decode /
+prefill-bearing steps) against 1.5% / 5.7% for stock MTP, and 2.7-4.5x better than the same schedule on an
+unmodified backend, which is what the EDF admission decisions consume. Second, on a single GPU the schedule
+*redistributes* latency rather than reducing it: against sglang's default we cut chat TTFT 77% and the agent ITL tail
+71% while giving up 57% on agent TTFT and 5% on throughput, and no chunk policy escapes that frontier. We therefore
+claim colocation as a cluster-scale and saturation-regime result, and report the single-GPU trade as a trade.
 
 ## 1. Introduction
 

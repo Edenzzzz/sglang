@@ -346,7 +346,9 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   **Draft extend on FA3 is only ~2% of the backend share (2026-10-21, `apply_draft_fa3.py`,
   `h200_draft_fa3_20261021.sh`; gate `_ct_rows48adm_dr3gate` 0 failures, worst 0.0112; pod md5 a950eea4).** Stock's
   prefill-prioritized + MTP schedule on our backend: 142.5 -> 145.3 tok/s with the draft model's draft extend on FA3,
-  vs 161.5 on stock's own FA3 backend. So the draft model was not the backend gap; ~10% remains. What our backend still
+  vs 161.5 on stock's own FA3 backend; ours + MTP (rows + SLO admission) 131 -> 134.1 / 134.8 tok/s, chat attainment
+  72-73 -> 73.6 / 74.1%, agent 60-62 -> 62.2%. So the draft model was not the backend gap; ~10% remains (ours is -17%
+  on throughput, -3 points chat and -6 points agent attainment vs stock + MTP). What our backend still
   pays on every extend step is `indices_updater_prefill.update` -- the full-batch flashinfer CSR (kv_indices for every
   row) plus the paged wrapper plan -- which under the split policy is never read, since every extend step is served by
   FA3. Testing `SGLANG_FUSED_SKIP_BASE_PLAN=1` (`h200_skip_base_plan_20261021.sh`, queued).

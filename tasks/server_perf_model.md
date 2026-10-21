@@ -47,6 +47,15 @@ Our method aims to achieve an optimal pareto curve: high throughput, stable deco
   decode and 2-3.5x worse on prefill -- upstream's internal heuristics (split-KV choice, scheduler metadata) make step
   time vary where our pre-assigned split does not. So the fused kernel's measured value is **predictability for SLO
   control**, not raw throughput (+2.5% there), which is what point 3 needs and what EDF admission consumes.
+  - [ ] **What accuracy is WORTH, end to end (`mn_predictor_value_20261022.sh`, queued).** Accuracy only matters if
+    the router's SLO check admits better with it, which no run has yet shown. Three runs of ours at 16 H20s, same
+    schedule and workload, only the router's perf model perturbed: the fitted curve / grid as calibrated, then scaled
+    0.75x (the check believes steps are cheaper than they are) and 1.25x (dearer). A 25% mis-specification is roughly
+    the spread between a 3% and a 12% MAPE model at the p90 of its error, i.e. the distance our measurements put
+    between the fused step and the alternatives. **If per-tenant attainment is flat across all three, predictor
+    accuracy does not convert into SLO control at this scale and point 3's downstream half should be dropped**; if the
+    calibrated arm wins, the gap is what the accuracy buys. `RA_OVERRIDE` was added to `mn_fanout_8gpu_20261018.sh` to
+    feed the perturbed args verbatim.
 
 - [ ] **One step model for the 4-mode mixed step, shared by router and worker (user, 2026-10-19).** Today three
   different models are in play and none is the joint model: the H20 router uses lookup tables (cold-prefill curve,

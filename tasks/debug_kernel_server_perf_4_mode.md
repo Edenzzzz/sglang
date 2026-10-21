@@ -622,9 +622,26 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     speculation halves ITL. The 80 ms target is loose enough that it rewards stock's throughput instead; the 30 ms
     target is where a scheduler that protects ITL shows up. Worth stating in the paper as SLO-dependence rather than
     quoting one threshold.
+  - **On RAW TTFT / ITL the bar is met on three of six metrics against sglang's actual default, and which baseline
+    you pick decides the verdict.** Ours no MTP vs stock mixed chunk (the default; rep1):
+    | metric | stock mixed chunk | ours no MTP | delta |
+    |---|---|---|---|
+    | chat TTFT mean | 579.5 ms | 132.8 ms | **-77%** |
+    | agent ITL p99 | 417.8 ms | 120.2 ms | **-71%** |
+    | chat ITL p99 | 293.1 ms | 111.9 ms | **-62%** |
+    | agent TTFT mean | 2356 ms | 3692 ms | +57% |
+    | chat ITL mean | 13.1 ms | 14.5 ms | +11% |
+    | agent throughput | 141.8 tok/s | 133.9 tok/s | -5% |
+    But against stock PREFILL-PRIORITIZED (not the default -- it needs mixed chunk off) ours' chat ITL p99 is 111.9
+    vs **27.3 ms**, 4x worse, because that schedule never mixes a prefill chunk into chat decode. So no schedule
+    dominates: stock mixed chunk has good agent TTFT and bad ITL tails, stock prefill-prioritized has excellent ITL
+    tails and poor chat TTFT, ours has the best chat TTFT (4x) and the best agent ITL tail while paying in agent TTFT
+    and chat ITL tail. **Our schedule moves latency from chat TTFT to agent TTFT, and from the agent ITL tail to the
+    chat ITL tail** -- a redistribution, not a uniform win, and the paper has to say which tenant it is protecting.
   - Consistent with the diagnosis that this load does not saturate stock (chat throughput = offered rate in every
     arm, nothing dropped). The agent-concurrency sweep (`h200_agentload_20261022.sh`, C=16 / 24) is the test that
-    can still clear the bar; if it does not, the single-node claim should be dropped in favour of the multi-node one.
+    can still clear the bar on throughput; if it does not, the single-node claim should be dropped in favour of the
+    multi-node one.
 
 - [ ] **S0, three-model evaluation flow (user, 2026-10-21): kernel microbench -> single node -> 16 GPUs -> 32 GPUs, real
   acceptance only, chat prompts through the chat template, disagg at its best P:D ratio.** Models: Qwen2.5-7B + trained

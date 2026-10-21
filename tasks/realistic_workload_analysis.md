@@ -342,8 +342,14 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   straight trade.** vs ours' 1024 / 2048 at the same rate: chat TPOT p90 55 -> 43.7 ms (stock's is 43) and chat TTFT
   0.15 -> 0.24 s, but agent TTFT 3.38 -> 4.58 s, agent attainment 93.3 -> 82.2% (stock 82.2%), chat attainment 75.2 ->
   73.1%, throughput 127.2 -> 123.0. Smaller chunks buy the chat tail at exactly the agent TTFT that was ours' lead, so
-  there is no chunk size at which both clear stock here. Next: draft extend on FA3 (`h200_draft_fa3_20261021.sh`,
-  running; gate 0 failures, worst 0.0112) for the 12% backend share of the MTP gap.
+  there is no chunk size at which both clear stock here.
+  **Draft extend on FA3 is only ~2% of the backend share (2026-10-21, `apply_draft_fa3.py`,
+  `h200_draft_fa3_20261021.sh`; gate `_ct_rows48adm_dr3gate` 0 failures, worst 0.0112; pod md5 a950eea4).** Stock's
+  prefill-prioritized + MTP schedule on our backend: 142.5 -> 145.3 tok/s with the draft model's draft extend on FA3,
+  vs 161.5 on stock's own FA3 backend. So the draft model was not the backend gap; ~10% remains. What our backend still
+  pays on every extend step is `indices_updater_prefill.update` -- the full-batch flashinfer CSR (kv_indices for every
+  row) plus the paged wrapper plan -- which under the split policy is never read, since every extend step is served by
+  FA3. Testing `SGLANG_FUSED_SKIP_BASE_PLAN=1` (`h200_skip_base_plan_20261021.sh`, queued).
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

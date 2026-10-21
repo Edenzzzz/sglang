@@ -51,6 +51,9 @@ if [ "${KERNEL:-lpt}" = mtpsplit ]; then
   export SGLANG_SPLIT_POLICY=${SPLIT_POLICY:-0}
   # DRAFT_FA3=1: the draft model's draft-extend steps on FA3 (apply_draft_fa3.py).
   export SGLANG_DRAFT_FA3=${DRAFT_FA3:-0}
+  # SKIP_BASE_PLAN=1: under the split policy every extend step is served by FA3, so the full-batch flashinfer prefill
+  # plan (kv_indices CSR + wrapper plan) is built and never read; skip it.
+  export SGLANG_FUSED_SKIP_BASE_PLAN=${SKIP_BASE_PLAN:-0}
 fi
 if [ "${KERNEL:-lpt}" = split ]; then
   export SGLANG_MIXED_ATTENTION_KERNEL=persistent SGLANG_TWO_EXEC=1 SGLANG_FUSED_FA3_SM_SPLIT=1

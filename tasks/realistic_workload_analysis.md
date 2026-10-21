@@ -424,6 +424,14 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
     directly, with no split and no port. Measuring that now (`h200_ours_on_fa3_20261022.sh`): if the 4-mode step runs
     there, the fused-split backend was never load-bearing for the schedule, and the single-node comparison should be
     rerun on that footing.
+    - [x] **First arm back, and it corrects the conclusion above (2026-10-22, `h200_ours_on_fa3_20261022.sh`, ours no
+      MTP, KERNEL=lpt + ATTN_BACKEND=fa3, so our patches do not apply at all): 133.9 tok/s, agent TTFT 3.27 s, chat
+      TTFT 0.12 s** -- *slower* than the same schedule on our patched flashinfer backend (137.3). So our kernel work is
+      worth about **+2.5% for our own schedule**, not nothing; and the residual gap to stock mixed chunk on FA3 (142.0)
+      is the **schedule's** cost (-5.7% on the plain backend), not the backend class's. The earlier reading -- "no
+      amount of work inside the flashinfer backend reaches 161" -- stands for *stock's* schedule, where the backend is
+      the whole gap; it does not transfer to ours. Per-tenant attainment and the MTP arm (does the 4-mode step run on
+      the FA3 backend at all?) follow in the same run.
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

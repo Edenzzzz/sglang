@@ -1950,7 +1950,29 @@ mixed step, and one short prompt agreed with stock MTP for 5 tokens (noise floor
   coloc_cache_mtp run on the fixed router.
 
 
-## Evidence state of the four points — 2026-10-10
+## Evidence state of the four points — 2026-10-21 (supersedes the 2026-10-10 table below)
+
+Rewritten because the table below says "nothing measured" for points 2 and 4 and "no multi-node
+run" for point 1, all of which are now out of date, and because every baseline in it ran
+`--attention-backend flashinfer` while upstream sglang's own default on Hopper is **FA3**
+(`get_default_attn_backend`). Every number here has both systems on FA3, Qwen2.5-7B unless noted,
+H20 (4-GPU pods), agent load = program concurrency, chat by request rate.
+
+| point | what is now measured | what is still argument only |
+|---|---|---|
+| 1. highest-hit-first with an EDF/SLO check | **the multi-node comparison the old table said was missing.** 32 GPUs, 1x load: ours 596 vs disagg 5+3 383 / 4+4 325 agent tok/s, agent TTFT 0.74 vs 4.6 / 5.8 s, chat TTFT 0.05 vs 3.0 / 3.6 s. 2x load: 1172 vs 444 / 393, TTFT 0.72 vs 12.3 / 14.7 s. Qwen3-8B + real MTP, 16 GPUs: 448 vs 105 / 128, TTFT 1.7 vs 31 / 24 s. Disagg swept over P:D ratios in every case. EDF ordering measured on the single-node MTP server | that the *SLO check* specifically (rather than hit-first routing plus colocation) is what buys this: no arm isolates it at 32 GPUs |
+| 2. best-effort cache migration / replication | **the replication effect, as cached fraction.** At 32 GPUs ours holds prefix-cached fraction 0.98 vs disagg 0.76-0.85, and disagg's falls with load (0.85 -> 0.76 from 1x to 2x) because its prefill pods re-prefill agent history. Attribution: ours *without* the cluster pool still does 2092 vs 2153 tok/s, and disagg 5+3 *with* the pool 353 vs 303 -- so the pool is not the gain; colocated placement is | that explicit best-effort *migration* helps: moving a request to a non-holder and pulling its prefix through the pool was **negative** on H20 (section at point 2). The ThunderAgent thrashing comparison is still unrun |
+| 3. EDF predictor with acceptance length | the step cost model on one GPU, 4-mode MTP, with EWMA acceptance as an input; EDF *ordering* wins on the MTP server (`edf-order-not-cap`) | **the premise is inverted and stays inverted** (2026-10-11): the fused kernel's own configuration space is harder to model than the unfused baseline, not easier. A matched fused/unfused A/B runs cleanly and shows no ITL or throughput advantage, so better *predictor accuracy* is not established. Open item |
+| 4. two-way RDMA, complete vs bipartite graph | **scaling with load, not congestion.** Ours doubles agent throughput 1x -> 2x (596 -> 1172) at flat TTFT; disagg grows 16-21% and its TTFT triples. Pull-source choice measured directly (2026-10-19, `random` / `least_inflight` / stock order, one NIC, hot prefix): no congestion regime exists at <= 16 H20s, so point 4's randomized-pull rule is **refuted at this scale** | the congestion claim itself at larger N. `O(N^2)` vs `O(N_p*N_d)` remains topology arithmetic |
+
+**So two of the four points now rest on measurement** (1 and 2's replication effect, both
+multi-node and both with disagg at its best ratio), one is refuted at the scale we can test (4's
+pull rule), and one has an inverted premise that no measurement has rescued (3). The single-node
+bar is **not met** against stock on FA3 (best ours: -3.4% throughput, +9 points agent attainment,
+-1.5 points chat attainment; with MTP -16% throughput), so the argument of this doc is the
+multi-node one.
+
+## Evidence state of the four points — 2026-10-10 (superseded; kept for the labelling it introduced)
 
 Added because the sections below carry 17 "measured" markers and **no** markers for the claims
 that are argument only, so a reader cannot tell which is which. Nothing here changes the
@@ -2385,16 +2407,33 @@ disaggregation is the required disaggregation baseline.
 
 ---
 
-## Honest summary of standing
+## Honest summary of standing — 2026-10-21
 
-The kernel-level result that motivates all of this (**1.225x on a TraceLab-shaped batch**) is
-real but is batch time, not serving. The publishability bar is **>=30% TTFT/ITL and >=10%
-throughput on a realistic workload**, and there is **no serving data at all** yet. The gating
-blocker is the split-row corruption in point 0 above, because serving batches routinely contain
-rows above the chunk limit, so a serving A/B today would measure a corrupted baseline.
+The split-row corruption that gated everything is fixed and there is now a lot of serving data, so
+the 2026-10-10 version of this section (no serving data, corruption blocking) is gone.
 
-Order of work: fix the corruption, run the serving A/B, then the four experiments above in the
-listed order.
+- **Multi-node is where the case holds.** Against PD disaggregation at its best P:D ratio, both
+  systems on FA3, ours wins by margins far above the bar: +56% agent throughput at 32 GPUs / 1x
+  load, +164% at 2x, 3.5x with Qwen3-8B and real MTP at 16 GPUs, with agent TTFT 6-18x lower.
+  Disagg's weakness is structural here -- it re-prefills agent session history every round, so its
+  cached fraction falls with load while ours stays at 0.98.
+- **Single node does not meet the bar.** Against stock sglang on its own Hopper default (FA3),
+  best ours is -3.4% throughput, +9 points agent SLO attainment, -78% chat TTFT, but -1.5 points
+  chat attainment; with MTP -16% throughput. The deficit is ours' chat TPOT tail, and smaller
+  prefill chunks trade it straight back for agent TTFT. Every earlier single-node headline that
+  beat stock was measured against stock forced onto the flashinfer backend and is superseded.
+- **Where ours still loses on latency tails:** agent ITL p99 is 1.5-2.5x disagg's at 32 GPUs (its
+  decode pods never see a prefill) and 6-11x at 16 GPUs with MTP.
+- **The kernel contribution is narrower than the project name suggests.** With both halves of the
+  mixed step on FA3, no FA2 role remains in serving; what is left is the per-step decision to split
+  one FA3 call into two co-running launches, worth 4-25% on kernel microbenchmarks (up to 77% when
+  a short chunk sits beside long-context rows) and nothing measurable in serving. Multicast
+  (-0.2..+1.7%) and in-kernel cross-role backfill are closed as negatives or by bound.
+
+Open, in priority order: the ~9% backend gap behind stock's FA3 backend (decode-step test in
+flight; the structural alternative is porting the split onto sglang's FA3 backend class), point 3's
+EDF predictor-accuracy comparison against the unfused schedule, point 2's ThunderAgent-style
+thrashing comparison, and an intermittent TP4 forward-step hang on GLM-4.5-Air.
 
 ---
 

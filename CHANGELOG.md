@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.27.0 — PD-colocation doc: evidence state and standing rewritten to current measurement (2026-10-21)
+
+- The four-point evidence table and the standing summary were dated 2026-10-10 and contradicted
+  everything measured since (they claimed no serving data, points 2 and 4 unmeasured, and a
+  long-fixed blocker). Rewritten with both systems on FA3: points 1 and 2 now rest on multi-node
+  measurement, point 4's pull rule is refuted at <= 16 H20s, point 3's premise stays inverted.
+- Recorded plainly: multi-node clears the bar (+56% to 3.5x agent throughput vs disagg at its best
+  ratio), single node does not (-3.4% throughput vs stock on FA3), ours' ITL tails are worse than
+  disagg's, and the kernel contribution reduces to the per-step split decision.
+
 ## v1.26.5 — Backend gap decomposed; best single-node ours (2026-10-21)
 
 - Skipping the unused per-step flashinfer plan: +1.7% (counter-verified). With draft extend on FA3 the backend gap

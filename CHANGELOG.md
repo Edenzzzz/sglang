@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.32.1 — Single-node question settled: the advantage is light-load only (2026-10-22)
+
+- Agent concurrency sweep complete (8 / 16 / 24, every arm on FA3, n=45 / 93 / 140). Ours goes from parity with
+  stock at C=8 to about half its attainment at C=24: agent 17.9% vs 30.7%, chat 26.4% vs 29.8%, agent TTFT 13.5 s
+  vs 4.9 s. Ours + MTP collapses to 11.0% chat attainment and 25.5 s agent TTFT.
+- The degradation is monotone in load, so all three load directions are now closed (light load has no headroom,
+  saturation favours stock, chat-heavy is bounded by ours' chat TPOT tail). The single-node contribution is a
+  light-load latency/throughput trade; the quantitative case rests on multi-node.
+
 ## v1.32.0 — BAR MET on multi-node, confound-free, with no kernel work (2026-10-22)
 
 - 16 H20s, no spec, every arm on upstream's FA3 backend, ours with KERNEL=lpt (no split at all), disagg swept over

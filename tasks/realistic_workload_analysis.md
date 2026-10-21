@@ -506,6 +506,22 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
       opposite of its multi-node behaviour, where the lead grows with load (+56% -> +164%) and with cache pressure
       (+91% -> +277%). The difference is that multi-node has a routing dimension (place the request on a node that
       can meet its SLO) which a single GPU does not.
+      **C=24 completes the sweep and the trend is MONOTONE (2026-10-22, n=140 agent requests):**
+      | arm | agent att. C=8 | C=16 | C=24 | chat att. C=8 | C=16 | C=24 |
+      |---|---|---|---|---|---|---|
+      | stock mixed chunk | 84.4% | 50.5% | 26.4% | 79.9% | 57.0% | 28.6% |
+      | stock prefill-prioritized | 86.7 / 84.4% | 55.9% | 30.7% | 80.2% | 57.0% | 29.8% |
+      | ours no MTP | 86.7 / 95.6% | 34.4% | **17.9%** | 78.2% | 55.2% | **26.4%** |
+      | ours + MTP 4-mode | 62.2 / 64.4% | 19.4% | **17.1%** | 75.6% | 45.2% | **11.0%** |
+      Ours goes from parity at C=8 to roughly half of stock's attainment at C=24 (agent TTFT 13.5 s no-MTP, 25.5 s with
+      MTP, against stock's 4.9-6.3 s). **The single-node question is therefore settled: our schedule's advantage on one
+      GPU exists only at light load, and it degrades faster than stock's under saturation, monotonically.** Every load
+      direction is now closed -- light load has no attainment headroom (stock at 80%), agent-saturated load favours
+      stock increasingly, and the chat-heavy direction is bounded by ours' worse chat TPOT p90 at every load. The
+      single-node contribution is a light-load latency/throughput trade (-77% chat TTFT, -71% agent ITL tail, +57%
+      agent TTFT, -5.5% throughput vs sglang's default), and the paper's quantitative case rests on multi-node, where
+      the same schedule clears the bar by +314% chat attainment and 7.3x agent SLO goodput because it has a routing
+      dimension a single GPU lacks.
       Ours + MTP at chunk 2048 is the worst arm in the whole sweep (agent TTFT 16.6 s, chat attainment 45.2%). Since
       chunk 4096 was worth -12.5% -> -3.8% throughput for that same arm at C=8, running the 4-mode step with a 2048
       chunk under saturation is probably the single worst configuration choice measured here, not a property of the

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.24.2 — Fusion microbench, 2-mode / 4-mode, three models (2026-10-21)
+
+- Split alone 0-6% faster than unfused FA2 per mixed step; co-run 8-15% with 16 rows, 3-6% with 48. The 34% serving
+  ablation gap is left to decompose.
+
 ## v1.24.1 — Chat template knob; 32-GPU sweep and chat-templated single-node rerun launched (2026-10-21)
 
 - `mn_bench.sh` `CHAT_TEMPLATE=1` (ShareGPT chat through the model's chat template); `mn_scale32_20261021.sh`,

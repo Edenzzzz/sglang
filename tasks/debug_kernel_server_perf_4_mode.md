@@ -595,9 +595,24 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   EAGLE3 head (thoughtworks), Qwen3-8B + trained EAGLE3 head (AngelSlim), GLM-4.5-Air + its own MTP layer (chosen over
   Llama-3.3-70B: 184 vs 320 KB KV per token, 12B active). Single node = one H200 (7B / 8B) or one 4-GPU H20 pod at TP4
   (GLM-4.5-Air); multi-node = H20 job 2f608c1b1a67cf09 (8 x 4) at 4 and 8 pods.
-  - [ ] Kernel microbench, 2-mode (prefill chunk + decode rows) and 4-mode (prefill chunk + 4-token verify rows), unfused
-    FA2 vs split vs co-run, per model's per-GPU heads, fp32 causal reference (`tasks/debug_kernel_server_perf/
-    fusion_microbench_20261021.py`) -- queued after the H200 reruns.
+  - [x] **Kernel microbench (2026-10-21, idle H200, 132 SMs; `python tasks/debug_kernel_server_perf/
+    fusion_microbench_20261021.py`, raw `fusion_microbench_20261021.txt`; all 36 cases x 2 arms within 4.2e-3 of an fp32
+    causal reference).** One mixed attention step per layer: unfused = every row through flashinfer FA2 BatchPrefill
+    (stock sglang's mixed-chunk path; `SGLANG_FLASHINFER_USE_PERSISTENT` is read nowhere in the tree, so stock runs
+    this), split = prefill chunk on FA3 (sgl-kernel) then the rows on FA2, co-run = FA3 with an SM margin and the FA2
+    rows on a second stream. Chunk 1024 @ 16K / 49K and 2048 @ 32K, 16 or 48 rows at 4-64K KV; 2-mode rows = 1 decode
+    token, 4-mode rows = 4 verify tokens. Per model, range over the six chunk x mode cases:
+    | model (per-GPU heads) | split vs unfused, 16 rows / 48 rows | co-run vs unfused, 16 rows / 48 rows |
+    |---|---|---|
+    | Qwen2.5-7B (28 / 4) | -1.0..-2.6% / +4.4..-1.9% | -6.1..-14.6% / -3.3..-6.3% |
+    | Qwen3-8B (32 / 8) | -3.2..-5.8% / -0.7..-3.4% | -7.8..-13.5% / -3.4..-5.3% |
+    | GLM-4.5-Air TP4 (24 / 2) | +1.6..-6.3% / +1.2..-3.4% | -11.5..-14.0% / -4.1..-5.9% |
+    **At the kernel level the gain is the co-run, not FA3 alone:** FA3 on the chunk beside FA2 rows saves at most ~6%
+    (sequential), co-running saves 8-15% when the rows are few and 3-6% at 48 rows, where the rows dominate the step.
+    2-mode and 4-mode behave alike (verify rows cost about as much as decode rows here). Open: the serving ablation
+    lost 34% throughput without the split (4-mode step on the stock kernel), far more than these per-step numbers;
+    to decompose next (FA3 vs FA2 on the chunk alone, the rows alone, and serving's own FA2 configuration -- tile
+    classes 64/32/16 and split-KV -- against plain BatchPrefill).
   - [ ] Single node: Qwen2.5-7B table rerun with chat template (`h200_chattemplate_20261021.sh`, running); Qwen3-8B (head
     downloading); GLM-4.5-Air on one H20 pod.
   - [ ] 32 GPUs, Qwen2.5-7B no spec, ours vs disagg at 2 / 4 / 5 / 6 of 8 prefill pods (`mn_scale32_20261021.sh`,

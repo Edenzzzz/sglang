@@ -11,7 +11,15 @@
 set -u
 export PATH=$HOME/.merlin-cli/bin:$PATH
 cd "$(dirname "$0")"
-while kill -0 "$1" 2>/dev/null; do sleep 60; done
+[ "${1:-}" = now ] || while kill -0 "$1" 2>/dev/null; do sleep 60; done
+# The knob must be EXPORTED by the pod's mn_node.sh: the first run of this script (2026-10-21 22:0x) measured nothing
+# because the pod still had the pre-SKIP_BASE_PLAN launcher (base_plan_skipped never logged). Verified before arming.
+grep -q SKIP_BASE_PLAN /dev/shm/w/tasks/pd_colocation/mn_node.sh 2>/dev/null || python3 - <<'PY'
+import sys; sys.path.insert(0, "/tmp")
+from px import run
+assert "1" in run("grep -c SKIP_BASE_PLAN /dev/shm/w/tasks/pd_colocation/mn_node.sh")[1], "pod launcher lacks SKIP_BASE_PLAN"
+print("pod launcher has SKIP_BASE_PLAN")
+PY
 export CHAT_TEMPLATE=1
 FA="SPLIT_ROWS_FA3=1 SPLIT_POLICY=1 DRAFT_FA3=1 SKIP_BASE_PLAN=1"
 WX="--max-running-requests 128 --cuda-graph-max-bs-decode 48"

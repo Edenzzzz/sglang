@@ -351,7 +351,10 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   on throughput, -3 points chat and -6 points agent attainment vs stock + MTP). What our backend still
   pays on every extend step is `indices_updater_prefill.update` -- the full-batch flashinfer CSR (kv_indices for every
   row) plus the paged wrapper plan -- which under the split policy is never read, since every extend step is served by
-  FA3. Testing `SGLANG_FUSED_SKIP_BASE_PLAN=1` (`h200_skip_base_plan_20261021.sh`, queued).
+  FA3. `SGLANG_FUSED_SKIP_BASE_PLAN=1` (`h200_skip_base_plan_20261021.sh`): the first run measured NOTHING -- the pod
+  still carried the pre-flag `mn_node.sh` (the draft-FA3 job had pushed the launcher before the flag was added), so the
+  env was never exported and `base_plan_skipped` never logged, while the arm still read 146.2 tok/s and looked like a
+  +0.6% result. The script now verifies the pod launcher exports the knob before arming, and the arms were rerun.
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

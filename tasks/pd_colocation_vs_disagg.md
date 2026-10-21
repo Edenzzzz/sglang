@@ -286,7 +286,7 @@ static mixture.
         92 tok/s) because disagg reaches its 5 ms decode only by keeping few requests in flight.** The SLO-checked router
         without worker-side decode-first stays the multi-node configuration.
         sglang `079a8a6dc`.
-      - [ ] **32 H20s, disagg at every P:D ratio (2026-10-21; job 2f608c1b1a67cf09, 8 pods x 4, user cap 32 GPUs;
+      - [x] **32 H20s, disagg at every P:D ratio (2026-10-21; job 2f608c1b1a67cf09, 8 pods x 4, user cap 32 GPUs;
         Qwen2.5-7B TP1 per GPU = 32 workers, no speculation; text fan-out x4 the 8-GPU load: 64 tasks x 64K prefixes, 128
         agent programs, 4 rounds + ShareGPT chat 32 req/s, 900 s; router calibrated on one worker -- warmed with a
         4096-token prompt after the first calibration's 4096 point read 7.1 s; `bash
@@ -300,8 +300,18 @@ static mixture.
         | disagg, 6 + 2 | 264 / 41.9 s / 30.8 s / 4.7 ms | 0.60 | 29.9 s / 18.1 s, 30.4 ms |
         Disagg improves with prefill share up to 5 of 8 pods, then decode becomes the bottleneck (chat TPOT 30 ms at 6 + 2).
         Even at its best split it serves agents at 1/7 of our throughput with ~45x the TTFT. Its prefix-cached fraction
-        stays ~0.6 vs 0.975 for ours, and ours had the cluster KV pool while disagg had none -- attribution arms (ours
-        without the pool; disagg 5 + 3 with the same pool) running (`mn_scale32_fair_20261021.sh`).
+        stays ~0.6 vs 0.975 for ours, and ours had the cluster KV pool while disagg had none. **Attribution (same load,
+        one repeat each; `mn_scale32_fair_20261021.sh`, `/tmp/run_p5hc.sh` equivalent: `ARMS=disagg_p5_hc`):**
+        | arm | agent tput / TTFT | prefix cached | chat TTFT / TPOT |
+        |---|---|---|---|
+        | ours without the pool (router told there is none) | 2092 / 0.99 s | 0.971 | 0.07 s / 7.7 ms |
+        | disagg 5 + 3 with the pool on the prefill pods | 353 / 36.2 s | 0.722 | 29.6 s / 4.6 ms |
+        **The pool is not where the gap comes from**: ours loses 3% without it (hit-first routing alone keeps 97% of
+        each prefix local), and giving disagg the pool lifts it 16% (0.64 -> 0.72 cached). The gap is structural to
+        stock sglang PD on agent sessions: a session's history is decoded on a decode pod, so the next round's prefill
+        on a prefill pod misses it (cached 0.6-0.72) and re-prefills it, and the prefill pods queue every tenant. (PD
+        decode servers run a chunk cache, so under disagg the pool can only serve the prefill pods.) Systems that keep
+        a session on one node across rounds (Dynamo's conditional disaggregation) would narrow this; see point 5.
       - [x] **Llama-3.3-70B-Instruct at TP4, 4 pods x 4 H20 = 4 replicas (2026-10-21, job f3b4627e0864b06f, provisioned by
         `mn_provision_70b_20261021.sh` from the archived serving tree -- manifest verified on all 4 pods -- plus
         `mn_provision_70b_post_20261021.sh`).**

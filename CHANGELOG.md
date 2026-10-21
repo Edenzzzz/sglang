@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.28.1 — Single-node table queued on the FA3 footing (2026-10-22)
+
+- `h200_fa3_table_20261022.sh`: five schedules (stock mixed chunk, stock prefill-prioritized, stock + MTP, ours no
+  MTP, ours + MTP 4-mode), every arm on sglang's FA3 backend, two repeats, per-tenant attainment. With the backend
+  held fixed the schedule is the only variable, which is the footing the bar should have been judged on all along.
+
 ## v1.28.0 — The backend gap is sglang's flashinfer backend class (2026-10-22)
 
 - Control arm, same schedule and load, only the backend differs: stock on the FA3 backend 7.48 ms / 161.2 tok/s,

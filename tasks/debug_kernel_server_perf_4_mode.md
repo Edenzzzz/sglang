@@ -590,6 +590,17 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
 
 ### [ ] S. Server / workload evaluation
 
+- [ ] **S0b, EVERY single-node comparison must be redone on sglang's FA3 backend (2026-10-22).** The backend-class
+  control (`tasks/realistic_workload_analysis.md`, "THE COST IS THE FLASHINFER BACKEND CLASS") measured the same stock
+  schedule at 161.2 agent tok/s on the FA3 backend and 81.1 on the flashinfer backend with no split at all. Our split
+  was built inside the flashinfer backend, which upstream deprecated on Hopper for that regression; our FA3 patches
+  recover 81 -> 147 but cannot reach 161 from inside it. Our scheduling (EDF, deadline chunk, decode-row cap, SLO
+  admission, 4-mode MTP) lives in `scheduler.py`, so it runs on the FA3 backend with no split and no port -- making
+  the schedule, not the backend, the thing under test. The definitive table is
+  `bash tasks/pd_colocation/h200_fa3_table_20261022.sh`: five schedules, every arm on FA3, two repeats, per-tenant
+  attainment; the >=30% / >=10% bar is judged there. Queued behind `h200_ours_on_fa3_20261022.sh`, which checks the
+  4-mode step runs on that backend at all.
+
 - [ ] **S0, three-model evaluation flow (user, 2026-10-21): kernel microbench -> single node -> 16 GPUs -> 32 GPUs, real
   acceptance only, chat prompts through the chat template, disagg at its best P:D ratio.** Models: Qwen2.5-7B + trained
   EAGLE3 head (thoughtworks), Qwen3-8B + trained EAGLE3 head (AngelSlim), GLM-4.5-Air + its own MTP layer (chosen over

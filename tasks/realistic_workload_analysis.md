@@ -403,8 +403,9 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
     whose kernels are too small to hide it. `apply_split_fastpath.py` (`SPLIT_FASTPATH=1`) removes the per-layer output
     allocation and full-output copy on single-call steps (FA3's own output is the answer) and caches the paged K/V
     views instead of rebuilding them per layer. **Gate passes (0 failures over split and single-call steps, worst
-    0.0166, 218 split / 283 one-call in the gate) but it does NOT move serving: 146.9 tok/s, identical to before.** So
-    those two per-layer items were not the 114 us either.
+    0.0166, 218 split / 283 one-call in the gate) and buys only a little: the shallow bin 10.68 -> 10.25 ms (-4%),
+    ours + MTP 135.4 -> 136.6 tok/s, ours no MTP unchanged at 137.3, and stock's schedule on our backend still
+    146.9.** So those two per-layer items are ~0.4 ms of the 3.2 ms, not the bulk. Kept (it is free and verified).
   - [ ] **Control that distinguishes our split code from the flashinfer backend class (`h200_backend_class_20261022.sh`,
     queued):** the same stock schedule on the flashinfer backend with NO split at all (KERNEL=lpt), traced, against
     stock's FA3 backend and the two ours arms. If the shallow bin stays ~10.6 ms with no split in the picture, the cost

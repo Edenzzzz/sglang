@@ -514,14 +514,20 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
       | ours no MTP | 86.7 / 95.6% | 34.4% | **17.9%** | 78.2% | 55.2% | **26.4%** |
       | ours + MTP 4-mode | 62.2 / 64.4% | 19.4% | **17.1%** | 75.6% | 45.2% | **11.0%** |
       Ours goes from parity at C=8 to roughly half of stock's attainment at C=24 (agent TTFT 13.5 s no-MTP, 25.5 s with
-      MTP, against stock's 4.9-6.3 s). **The single-node question is therefore settled: our schedule's advantage on one
-      GPU exists only at light load, and it degrades faster than stock's under saturation, monotonically.** Every load
-      direction is now closed -- light load has no attainment headroom (stock at 80%), agent-saturated load favours
-      stock increasingly, and the chat-heavy direction is bounded by ours' worse chat TPOT p90 at every load. The
-      single-node contribution is a light-load latency/throughput trade (-77% chat TTFT, -71% agent ITL tail, +57%
-      agent TTFT, -5.5% throughput vs sglang's default), and the paper's quantitative case rests on multi-node, where
-      the same schedule clears the bar by +314% chat attainment and 7.3x agent SLO goodput because it has a routing
-      dimension a single GPU lacks.
+      MTP, against stock's 4.9-6.3 s) -- **but every row above holds the deadline chunk at 1024:2048, and that is the
+      wrong setting at load. CORRECTION (2026-10-22, `h200_c16_chunk_20261022.sh`): most of the C=16 deficit is a
+      TUNING ARTIFACT.** Ours no MTP at C=16 with chunk 1024:4096 instead of 1024:2048:
+      | at C=16 | agent att. | chat att. | agent TTFT | chat TTFT |
+      |---|---|---|---|---|
+      | stock prefill-prioritized | 55.9% | 57.0% | 3.16 s | 1.86 s |
+      | ours, chunk 2048 | 34.4% | 55.2% | 6.72 s | 1.23 s |
+      | **ours, chunk 4096** | **48.4%** | **55.3%** | **5.04 s** | **0.95 s** |
+      Agent attainment recovers 34.4% -> 48.4% (stock 50.5-55.9%), chat is at parity, and chat TTFT stays 2x better
+      than stock's. So the earlier "monotone degradation, question settled" reading was **premature**: it varied load
+      while holding a chunk size that only suits light load. The chunk has to scale with load, and C=24 needs the same
+      retest before any claim about saturation is made. What survives unchanged: ours does not CLEAR the bar on one GPU
+      at any load measured, and the multi-node case is far stronger (+314% chat attainment, 7.3x agent SLO goodput)
+      because it has a routing dimension a single GPU lacks.
       Ours + MTP at chunk 2048 is the worst arm in the whole sweep (agent TTFT 16.6 s, chat attainment 45.2%). Since
       chunk 4096 was worth -12.5% -> -3.8% throughput for that same arm at C=8, running the 4-mode step with a 2048
       chunk under saturation is probably the single worst configuration choice measured here, not a property of the

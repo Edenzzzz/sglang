@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.32.2 — Correction: most of the C=16 single-node deficit was a tuning artifact (2026-10-22)
+
+- Ours no MTP at C=16 with deadline chunk 1024:4096 instead of 1024:2048: agent attainment 34.4% -> 48.4% (stock
+  50.5-55.9%), chat 55.3% vs 57.0% (parity), agent TTFT 6.72 -> 5.04 s, chat TTFT 0.95 s (2x better than stock).
+- So v1.32.1's "monotone degradation, single-node question settled" was premature: it swept load while holding a
+  chunk size suited only to light load. C=24 needs the same retest. Unchanged: ours does not clear the bar on one
+  GPU at any load measured, and multi-node is far stronger.
+
 ## v1.32.1 — Single-node question settled: the advantage is light-load only (2026-10-22)
 
 - Agent concurrency sweep complete (8 / 16 / 24, every arm on FA3, n=45 / 93 / 140). Ours goes from parity with

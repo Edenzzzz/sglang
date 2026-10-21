@@ -525,7 +525,8 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
       Agent attainment recovers 34.4% -> 48.4% (stock 50.5-55.9%), chat is at parity, and chat TTFT stays 2x better
       than stock's. So the earlier "monotone degradation, question settled" reading was **premature**: it varied load
       while holding a chunk size that only suits light load. The chunk has to scale with load, and C=24 needs the same
-      retest before any claim about saturation is made. What survives unchanged: ours does not CLEAR the bar on one GPU
+      retest before any claim about saturation is made (`h200_c24_chunk_20261022.sh`, queued: chunk 4096 and 8192, no
+      MTP and with MTP). What survives unchanged: ours does not CLEAR the bar on one GPU
       at any load measured, and the multi-node case is far stronger (+314% chat attainment, 7.3x agent SLO goodput)
       because it has a routing dimension a single GPU lacks.
       Ours + MTP at chunk 2048 is the worst arm in the whole sweep (agent TTFT 16.6 s, chat attainment 45.2%). Since

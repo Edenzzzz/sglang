@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.28.0 — The backend gap is sglang's flashinfer backend class (2026-10-22)
+
+- Control arm, same schedule and load, only the backend differs: stock on the FA3 backend 7.48 ms / 161.2 tok/s,
+  stock on the flashinfer backend with NO split at all 11.98 ms / 81.1 tok/s. The flashinfer backend is half the
+  throughput on this workload -- which is why upstream made FA3 the Hopper default -- and our split was built
+  inside it. Our FA3 patches recover 81 -> 147; the residual ~9% is that class's own machinery.
+- Our scheduling is in scheduler.py, not the backend, so it should run on the FA3 backend with no split and no
+  port. Measuring (`h200_ours_on_fa3_20261022.sh`).
+
 ## v1.27.2 — Dispatch fastpath: correct but not the cost; backend-class control queued (2026-10-22)
 
 - `apply_split_fastpath.py` gate passes (0 failures, worst 0.0166, both paths exercised) and leaves serving

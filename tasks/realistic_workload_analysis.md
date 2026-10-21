@@ -406,11 +406,24 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
     0.0166, 218 split / 283 one-call in the gate) and buys only a little: the shallow bin 10.68 -> 10.25 ms (-4%),
     ours + MTP 135.4 -> 136.6 tok/s, ours no MTP unchanged at 137.3, and stock's schedule on our backend still
     146.9.** So those two per-layer items are ~0.4 ms of the 3.2 ms, not the bulk. Kept (it is free and verified).
-  - [ ] **Control that distinguishes our split code from the flashinfer backend class (`h200_backend_class_20261022.sh`,
-    queued):** the same stock schedule on the flashinfer backend with NO split at all (KERNEL=lpt), traced, against
-    stock's FA3 backend and the two ours arms. If the shallow bin stays ~10.6 ms with no split in the picture, the cost
-    is the backend class itself and porting the split onto sglang's FA3 backend class is the fix -- a structural change
-    this control is meant to justify with data rather than assume.
+  - [x] **THE COST IS THE FLASHINFER BACKEND CLASS, NOT OUR SPLIT (2026-10-22, `bash tasks/pd_colocation/
+    h200_backend_class_20261022.sh`; same stock prefill-prioritized + MTP schedule, same load, only the backend
+    differs; `binfeat.py` confirms identical step features: ptok 163.8-169.3, np 1.05-1.10, nd 0).**
+    | arm | slow-bin step | agent tok/s |
+    |---|---|---|
+    | stock schedule, FA3 backend | 7.48 ms | 161.2 |
+    | stock schedule, flashinfer backend, **no split at all** | **11.98 ms** | **81.1** |
+    | ours (flashinfer + our FA3 split, forced never-split) | 10.67 ms | 146.7 |
+    | ours + dispatch fastpath | 10.25 ms | 146.9 |
+    sglang's flashinfer backend is **half** the end-to-end throughput of its FA3 backend on this workload, which is
+    why upstream made FA3 the Hopper default for MHA (`get_default_attn_backend` cites a flashinfer Hopper regression).
+    The whole split was built inside the deprecated backend. Our FA3 patches recover 81 -> 147 tok/s of it; the
+    residual ~9% is the class's own per-step machinery, and no amount of work inside it reaches 161.
+    **Consequence, and it is cheap: our scheduling lives in `scheduler.py`, not in the attention backend**, so EDF,
+    the deadline chunk, the decode-row cap, SLO admission and the 4-mode MTP step should run on the FA3 backend
+    directly, with no split and no port. Measuring that now (`h200_ours_on_fa3_20261022.sh`): if the 4-mode step runs
+    there, the fused-split backend was never load-bearing for the schedule, and the single-node comparison should be
+    rerun on that footing.
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

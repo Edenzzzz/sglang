@@ -286,6 +286,22 @@ static mixture.
         92 tok/s) because disagg reaches its 5 ms decode only by keeping few requests in flight.** The SLO-checked router
         without worker-side decode-first stays the multi-node configuration.
         sglang `079a8a6dc`.
+      - [ ] **32 H20s, disagg at every P:D ratio (2026-10-21; job 2f608c1b1a67cf09, 8 pods x 4, user cap 32 GPUs;
+        Qwen2.5-7B TP1 per GPU = 32 workers, no speculation; text fan-out x4 the 8-GPU load: 64 tasks x 64K prefixes, 128
+        agent programs, 4 rounds + ShareGPT chat 32 req/s, 900 s; router calibrated on one worker -- warmed with a
+        4096-token prompt after the first calibration's 4096 point read 7.1 s; `bash
+        tasks/pd_colocation/mn_scale32_20261021.sh`; every arm 0 errors / 0 tracebacks; sglang 5e5efa3cf).** One repeat each:
+        | arm | agent tput / TTFT mean / p50 / ITL | prefix cached | chat TTFT mean / p50, TPOT |
+        |---|---|---|---|
+        | **ours** (SLO-checked hit-first routing + pool + EDF) | **2153 / 0.93 s / 0.44 s / 12.9 ms** | 0.975 | **0.08 s / 0.05 s, 7.2 ms** |
+        | disagg, 2 prefill + 6 decode pods | 125 / 110 s / 105 s / 2.8 ms | 0.62 | 95.0 s / 90.2 s, 83.5 ms |
+        | disagg, 4 + 4 | 244 / 57.0 s / 45.4 s / 3.0 ms | 0.63 | 44.7 s / 31.7 s, 3.8 ms |
+        | disagg, 5 + 3 | 303 / 44.3 s / 38.2 s / 3.4 ms | 0.64 | 34.1 s / 26.4 s, 4.0 ms |
+        | disagg, 6 + 2 | 264 / 41.9 s / 30.8 s / 4.7 ms | 0.60 | 29.9 s / 18.1 s, 30.4 ms |
+        Disagg improves with prefill share up to 5 of 8 pods, then decode becomes the bottleneck (chat TPOT 30 ms at 6 + 2).
+        Even at its best split it serves agents at 1/7 of our throughput with ~45x the TTFT. Its prefix-cached fraction
+        stays ~0.6 vs 0.975 for ours, and ours had the cluster KV pool while disagg had none -- attribution arms (ours
+        without the pool; disagg 5 + 3 with the same pool) running (`mn_scale32_fair_20261021.sh`).
       - [x] **Llama-3.3-70B-Instruct at TP4, 4 pods x 4 H20 = 4 replicas (2026-10-21, job f3b4627e0864b06f, provisioned by
         `mn_provision_70b_20261021.sh` from the archived serving tree -- manifest verified on all 4 pods -- plus
         `mn_provision_70b_post_20261021.sh`).**

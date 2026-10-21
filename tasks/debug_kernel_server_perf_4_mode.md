@@ -598,8 +598,33 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   admission, 4-mode MTP) lives in `scheduler.py`, so it runs on the FA3 backend with no split and no port -- making
   the schedule, not the backend, the thing under test. The definitive table is
   `bash tasks/pd_colocation/h200_fa3_table_20261022.sh`: five schedules, every arm on FA3, two repeats, per-tenant
-  attainment; the >=30% / >=10% bar is judged there. Queued behind `h200_ours_on_fa3_20261022.sh`, which checks the
-  4-mode step runs on that backend at all.
+  attainment.
+  **Result (2026-10-22, 9 of 10 arms; chat 8 req/s, agent program concurrency 8, chat template, real head, all arms
+  0 tracebacks / 0 fallbacks). BAR NOT MET at this load.** rep1 / rep2, primary SLOs (agent 10 s + 80 ms, chat
+  0.5 s + 20 ms):
+  | arm | agent att. | chat att. | agent SLO tok/s | agent att. @30 ms ITL |
+  |---|---|---|---|---|
+  | stock mixed chunk | 84.4 / 84.4% | 79.9 / 79.8% | 117 / 125 | 33.3 / 33.3% |
+  | stock prefill-prioritized | 86.7 / 84.4% | 80.2 / 80.3% | 124 / 123 | 31.1 / 33.3% |
+  | stock prefill-prioritized + MTP | 66.7 / 68.9% | 77.0 / 77.0% | 118 / 129 | 46.7 / 48.9% |
+  | ours no MTP | 86.7 / 95.6% | 78.2 / - | 114 / 122 | 28.9 / 24.4% |
+  | ours + MTP (4-mode) | 62.2% | 75.6% | 107 | **55.6%** |
+  Readings, in order of how much they matter:
+  - **The bar is not met here.** Ours no MTP is +6.5% agent attainment over stock prefill-prioritized (91.2% vs 85.6%
+    on rep means), -2.5% chat attainment and -5% throughput; ours + MTP is behind stock + MTP on both primary
+    attainments. Nothing approaches +30% / +10%.
+  - **Ours' agent attainment is noisier than the effect I had been quoting**: 86.7% and 95.6% across two repeats of
+    the same configuration. With n=45 agent requests one request is 2.2 points, so a 9-point spread is 4 requests.
+    Any single-node agent-attainment claim needs more repeats than two, and the earlier "+9 points" and "95.6%"
+    headlines should be read as 86.7-95.6%.
+  - **Under the tighter ITL SLO the ordering flips in our favour**: at agent 10 s + 30 ms, ours + MTP is 55.6% vs
+    stock + MTP's 46.7-48.9% (+14-19%), and both MTP arms beat both no-MTP arms (46-56% vs 24-33%) because
+    speculation halves ITL. The 80 ms target is loose enough that it rewards stock's throughput instead; the 30 ms
+    target is where a scheduler that protects ITL shows up. Worth stating in the paper as SLO-dependence rather than
+    quoting one threshold.
+  - Consistent with the diagnosis that this load does not saturate stock (chat throughput = offered rate in every
+    arm, nothing dropped). The agent-concurrency sweep (`h200_agentload_20261022.sh`, C=16 / 24) is the test that
+    can still clear the bar; if it does not, the single-node claim should be dropped in favour of the multi-node one.
 
 - [ ] **S0, three-model evaluation flow (user, 2026-10-21): kernel microbench -> single node -> 16 GPUs -> 32 GPUs, real
   acceptance only, chat prompts through the chat template, disagg at its best P:D ratio.** Models: Qwen2.5-7B + trained

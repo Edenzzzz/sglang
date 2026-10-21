@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.29.2 — Five-schedule FA3 table: bar not met at this load; attainment is SLO-threshold dependent (2026-10-22)
+
+- Every arm on sglang's FA3 backend so the schedule is the only variable. Ours no MTP: +6.5% agent attainment,
+  -2.5% chat attainment, -5% throughput vs stock prefill-prioritized. Ours + MTP behind stock + MTP on primary
+  attainments. Bar (>=30% / >=10%) not met at chat 8 req/s with agent concurrency 8.
+- Under the tighter 30 ms ITL target the ordering flips: ours + MTP 55.6% vs stock + MTP 46.7-48.9%. The result is
+  SLO-threshold dependent and should be reported that way.
+- Ours' agent attainment spans 86.7-95.6% across two repeats of one configuration (n=45, one request = 2.2 points),
+  so earlier single-repeat headlines were over-precise.
+
 ## v1.29.1 — Point 2 supported: cache thrashing separates colocation from disagg (2026-10-22)
 
 - 16 H20s, both on FA3, working set swept by distinct agent tasks at fixed program concurrency. From 16 to 64 tasks

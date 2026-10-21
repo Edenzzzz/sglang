@@ -2482,7 +2482,7 @@ the 2026-10-10 version of this section (no serving data, corruption blocking) is
     |---|---|---|---|---|---|---|
     | **ours + MTP** | **1120.7** | **0.80 s** | **92.8%** | **1099 tok/s** | **9.5 ms** | 0.972 |
     | disagg 2 + 2 + MTP | 195.9 | 34.25 s | 4.9% | 25 tok/s | 6.5 ms | 0.74 |
-    | disagg 3 + 1 + MTP | 213.5 | 29.71 s | 3.8% | 22 tok/s | 13.8 ms | 0.75 |
+    | disagg 3 + 1 + MTP | 204.6 | 31.81 s | 3.8% | 22 tok/s | 13.8 ms | 0.705 |
     Against disagg's better ratio: **chat SLO attainment 19x (92.8% vs 4.9%), agent SLO goodput 44x (1099 vs 25
     tok/s), raw agent throughput 5.2x, agent TTFT -98%**. Ours' chat TPOT p90 (9.5 ms) also beats disagg 3+1's
     (13.8 ms); only disagg 2+2 is tighter (6.5 ms) and it attains 4.9%. Speculation widens the gap because disagg must

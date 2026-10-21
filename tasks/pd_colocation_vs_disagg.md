@@ -312,6 +312,28 @@ static mixture.
         on a prefill pod misses it (cached 0.6-0.72) and re-prefills it, and the prefill pods queue every tenant. (PD
         decode servers run a chunk cache, so under disagg the pool can only serve the prefill pods.) Systems that keep
         a session on one node across rounds (Dynamo's conditional disaggregation) would narrow this; see point 5.
+      - [x] **Per-tenant SLO attainment of the 32-GPU sweep, and MTP at 16 / 32 GPUs (2026-10-21; Qwen2.5-7B, trained
+        EAGLE3 head at real acceptance ~2.0, chat prompts through the chat template; 16 GPUs = pods 0-3 at half the load:
+        32 tasks, 64 programs, chat 16 req/s; `bash tasks/pd_colocation/mn_mtp_scale_20261021.sh`, scoring
+        `fanout_per_tenant.py`; sglang 8f5230e60).** Chat attainment at 0.5 s + 20 ms / 2 s + 50 ms; agent goodput at
+        10 s + 80 ms:
+        | GPUs, spec | arm | chat att. | agent goodput | agent tput / TTFT | errors |
+        |---|---|---|---|---|---|
+        | 32, none | **ours** | **97.0 / 99.6%** | **2106 tok/s** | 2153 / 0.93 s | 0 |
+        | 32, none | ours without the pool | 97.0 / 99.4% | 2010 | 2092 / 0.99 s | 0 |
+        | 32, none | disagg 2 + 6 / 4 + 4 / 5 + 3 / 6 + 2 | 7.6 / 17.3 / 19.4 / 24.1% (2 s + 50 ms: 7.8-27.0%) | 1 / 30 / 46 / 46 | 125-303 / 42-110 s | 0 |
+        | 32, none | disagg 5 + 3 with the pool | 24.7 / 27.1% | 82 | 353 / 36.2 s | 0 |
+        | 32, MTP | **ours** | **91.1 / 99.3%** | **1727** | 1777 / 1.17 s | 0 |
+        | 32, MTP | disagg 5 + 3 | 4.2 / 4.7% | 2 | 235 / 57.2 s | 0 |
+        | 32, MTP | disagg 6 + 2 | 7.2 / 7.3% (20,323 of 28,800 chats completed) | 0 | 38 / 121 s | 79 |
+        | 16, MTP | **ours** | **90.3 / 96.1%** | **883** | 907 / 0.91 s | 0 |
+        | 16, MTP | disagg 2 + 2 | 0.5 / 0.9% | 3 | 119 / 57.5 s | 0 |
+        | 16, MTP | disagg 3 + 1 | 41.2 / 42.5% (7,589 of 14,400 completed) | 1 | 12 / 157 s | 48 |
+        **At these loads disaggregation is overloaded at every P:D ratio, and ours is not**: the prefill side queues
+        every tenant (TTFT 30-110 s) and re-prefills agent history it does not hold (cached 0.46-0.72), and giving
+        decode fewer pods to add prefill (6 + 2, 3 + 1) collapses decode instead. With MTP on H20 at ~2.0 accepted tokens
+        ours loses ~18% agent throughput vs no spec (1777 vs 2153 at 32 GPUs). The comparison is at one load per scale; a
+        load sweep at which disagg is not overloaded (where ours' advantage should shrink) is the next run.
       - [x] **Llama-3.3-70B-Instruct at TP4, 4 pods x 4 H20 = 4 replicas (2026-10-21, job f3b4627e0864b06f, provisioned by
         `mn_provision_70b_20261021.sh` from the archived serving tree -- manifest verified on all 4 pods -- plus
         `mn_provision_70b_post_20261021.sh`).**

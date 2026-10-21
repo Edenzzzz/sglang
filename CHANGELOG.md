@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.25.2 — 32 H20s with disagg on FA3, 1x load (2026-10-21)
+
+- Ours vs disagg 5 + 3 at 1x load, where disagg is not collapsed: agent throughput +56%, agent TTFT -84%. Disagg holds
+  the lower ITL tail.
+
 ## v1.25.1 — Fair-stock single-node rep 1; plain decode on FA3 (2026-10-21)
 
 - On FA3 (its Hopper default), stock beats ours: chat attainment 80% vs ours 73% without MTP, and 77% vs 61% with

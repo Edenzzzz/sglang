@@ -693,7 +693,16 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
         four TP ranks), so the one diagnostic that would have named the stuck frame produced nothing. py-spy is now in
         the pod venv, `mn_node.sh` puts `$W/venv/bin` on the worker's PATH, and `WATCHDOG` is a knob. Soak running:
         `bash tasks/pd_colocation/mn_glm_hang_soak_20261022.sh` -- 8 runs of the arm that hung at the same load with
-        `WATCHDOG=180`, each log scanned for the watchdog line and any py-spy dump.
+        `WATCHDOG=180`, each log scanned for the watchdog line and any py-spy dump. **7 of 8 done, zero watchdog hits,
+        every agent stream completing**, so the fault is rarer than 1 in 9 on that path and the soak cannot be the
+        whole answer.
+        **Remedy rather than more soaking (2026-10-22):** the hang lives in our flashinfer-backend split path, and the
+        H200 work showed our 4-mode schedule runs on sglang's OWN FA3 backend (MIXEDSPEC_STEPS 851, accept 2.05) and is
+        *faster* there with MTP (140.6 vs 136.6 tok/s) -- that backend contains none of our split code. So the same two
+        GLM arms are being rerun with `KERNEL=lpt ATTN_BACKEND=fa3` at both loads, 2 repeats of the arm that hung
+        (`mn_glm_fa3_20261022.sh`, WATCHDOG=180 and py-spy still armed). If they are clean and competitive, the fix is
+        to run this schedule on the FA3 backend -- which we want on performance grounds anyway -- and the flashinfer
+        split path can be retired instead of debugged.
   - [ ] 32 GPUs, Qwen2.5-7B no spec, ours vs disagg at 2 / 4 / 5 / 6 of 8 prefill pods (`mn_scale32_20261021.sh`,
     running); then 16 / 32 GPUs with MTP at real acceptance for each model.
 

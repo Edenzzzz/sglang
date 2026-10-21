@@ -40,6 +40,39 @@ with an EAGLE3 MTP head unless noted; single node = 1 H200, multi-node = 8 H20.
   - fault tolerance (if time permits)
     - prefill-node failure propagates to decode nodes under disaggregation; colocated nodes absorb it
 
+## [2026-10-22] THE ABSTRACT AND SECTION 4 BELOW ARE STALE -- read this first
+
+Two measurements since the outline was written change what the paper can claim. Nothing below has been edited yet;
+this block is what a co-author should believe.
+
+**1. The single-node baseline was wrong, in our favour, and the corrected one is much stronger.** Every single-node
+number below (and the abstract's "+72% chat attainment, 15x agent attainment, +55% throughput on one H200") compared
+ours against stock sglang forced onto the **flashinfer** attention backend. Upstream's own default on Hopper for these
+models is **FA3** (`get_default_attn_backend`, citing a flashinfer Hopper regression). With the identical schedule and
+load and only the backend changed, stock measures **161.2 agent tok/s on FA3 and 81.1 on flashinfer** -- the backend
+we built inside is half the speed. Against the correct baseline our best single-node configuration is **-3.4%
+throughput, +9 points agent SLO attainment, -78% chat TTFT, -1.5 points chat attainment**, and with MTP -16%
+throughput. The >=30% / >=10% bar is **not met on single node** as of this date. The definitive five-schedule table,
+every arm on FA3, is `tasks/pd_colocation/h200_fa3_table_20261022.sh`.
+
+**2. The fused FA3+FA2 kernel is not the mechanism the title implies.** Once the decode / verify rows also run on FA3
+(they are ~8x faster there than on flashinfer's BatchPrefill), **no FA2 role remains in serving**. What survives of
+"fusion" is a per-step decision to split one varlen FA3 call into two co-running launches, which is worth 4-25% on
+kernel microbenchmarks (up to 77% when a short chunk sits beside long-context rows) and **nothing measurable in
+serving** -- forcing every step to a single call changes throughput by 0.2%. Multicast is closed as a negative
+(-0.2..+1.7%) and in-kernel cross-role backfill by bound. Meanwhile the measured serving cost sat in steps the kernel
+work cannot touch: a large share of serving forwards carry ~164 prefill tokens and zero decode rows, where attention
+is negligible and the backend class's per-step overhead dominates.
+
+**What the paper's contribution actually is, on current evidence:** the *schedule* and the *routing*, not the kernel.
+Both are backend-independent -- they live in `scheduler.py` and the router -- and the multi-node results, with both
+systems on FA3 and disagg swept over P:D ratios, clear the bar by large margins (+56% agent throughput at 32 GPUs /
+1x load, +164% at 2x, 3.5x with Qwen3-8B + real MTP at 16 GPUs, agent TTFT 6-18x lower). The honest framing is a
+colocated scheduler plus cache-first router whose advantage grows with cluster size and load, with the kernel work
+reported as what it measured: an attention-backend choice worth 1.8x on this workload, and a split whose gains are
+real in isolation and absent in serving. Ours' ITL tails remain worse than disagg's (1.5-2.5x at 32 GPUs), which
+belongs in the limitations.
+
 ## Abstract
 
 LLM serving fleets are disaggregated into prefill and decode nodes so that long prefills never stall decoding. The

@@ -337,8 +337,13 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   admission) 131 (60-62% / 72-73%); ours without rows + admission 120.5 (48.9% / 66.8%); ours at a fixed chunk 2048
   131.0 (64.4% / 72.3%). So ~12% is backend (only the draft model is still on flashinfer -- its draft extend runs
   BatchPrefill on decode-shaped rows; `apply_draft_fa3.py`, `h200_draft_fa3_20261021.sh` queued) and ~8% is the 4-mode
-  schedule; rows + admission are worth +9% and the deadline chunk nothing. Next: chunk 512 / 1024 for the TPOT tail
-  (`h200_chunk1024_cr12_20261021.sh`, running), draft on FA3.
+  schedule; rows + admission are worth +9% and the deadline chunk nothing.
+  **Chunk 512 / 1024 for the TPOT tail (2026-10-21, chat 12 req/s, `h200_chunk1024_cr12_20261021.sh`) -- negative, a
+  straight trade.** vs ours' 1024 / 2048 at the same rate: chat TPOT p90 55 -> 43.7 ms (stock's is 43) and chat TTFT
+  0.15 -> 0.24 s, but agent TTFT 3.38 -> 4.58 s, agent attainment 93.3 -> 82.2% (stock 82.2%), chat attainment 75.2 ->
+  73.1%, throughput 127.2 -> 123.0. Smaller chunks buy the chat tail at exactly the agent TTFT that was ours' lead, so
+  there is no chunk size at which both clear stock here. Next: draft extend on FA3 (`h200_draft_fa3_20261021.sh`,
+  running; gate 0 failures, worst 0.0112) for the 12% backend share of the MTP gap.
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

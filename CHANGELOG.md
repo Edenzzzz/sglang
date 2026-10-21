@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.28.2 — The 4-mode step runs on upstream's FA3 backend; no port needed (2026-10-22)
+
+- MIXEDSPEC_STEPS 851, accept 2.05, 0 tracebacks: our 4-mode MTP schedule runs on sglang's own FA3 backend, so the
+  fused-split backend was never load-bearing for the schedule.
+- Backend choice is schedule-dependent: ours + MTP is +2.9% on upstream FA3 (140.6 vs 136.6), ours without MTP is
+  +2.5% on our patched backend (137.3 vs 133.9). So the kernel work is worth ~2.5% for our own schedule, not nothing.
+- Best agent attainment to date: ours no MTP on FA3, 95.6% vs stock's 84.4% (+13.3%), at -5.7% throughput. Bar still
+  unmet on single node; the deficit is the schedule's throughput cost, not the backend's.
+
 ## v1.28.1 — Single-node table queued on the FA3 footing (2026-10-22)
 
 - `h200_fa3_table_20261022.sh`: five schedules (stock mixed chunk, stock prefill-prioritized, stock + MTP, ours no

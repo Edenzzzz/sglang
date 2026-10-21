@@ -430,8 +430,27 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
       worth about **+2.5% for our own schedule**, not nothing; and the residual gap to stock mixed chunk on FA3 (142.0)
       is the **schedule's** cost (-5.7% on the plain backend), not the backend class's. The earlier reading -- "no
       amount of work inside the flashinfer backend reaches 161" -- stands for *stock's* schedule, where the backend is
-      the whole gap; it does not transfer to ours. Per-tenant attainment and the MTP arm (does the 4-mode step run on
-      the FA3 backend at all?) follow in the same run.
+      the whole gap; it does not transfer to ours.
+    - [x] **The 4-mode step RUNS on upstream's FA3 backend -- no port, and the fused-split backend was never
+      load-bearing for the schedule (2026-10-22, same run): MIXEDSPEC_STEPS 851, accept len 2.05, 0 tracebacks, 0
+      fallbacks.** And which backend wins depends on the schedule: ours + MTP is *better* on upstream FA3 (140.6 vs
+      136.6 tok/s, +2.9%) while ours without MTP is better on our patched backend (137.3 vs 133.9, +2.5%). Per tenant
+      (agent 10 s + 80 ms, chat 0.5 s + 20 ms), chat 8 req/s:
+      | arm | agent tok/s | agent att. | chat att. | chat TTFT | chat TPOT p90 |
+      |---|---|---|---|---|---|
+      | stock mixed chunk, FA3 | 142.0 | 84.4% | 79.9% | 0.58 s | 40 ms |
+      | stock + MTP, FA3 | 161.5 | 67-69% | 77.0% | 1.80 s | 16 ms |
+      | ours no MTP, our backend | 137.3 | 93.3% | 78.4% | 0.13 s | 50 ms |
+      | **ours no MTP, FA3 backend** | 133.9 | **95.6%** | 78.0% | 0.12 s | 54 ms |
+      | ours + MTP, our backend | 136.6 | 62.2% | 74.2% | 0.69 s | 31 ms |
+      | **ours + MTP, FA3 backend** | **140.6** | 57.8% | 75.2% | 0.76 s | 31 ms |
+      Best agent attainment to date is ours no MTP on the FA3 backend, **95.6% vs stock's 84.4% (+13.3%)**, at -5.7%
+      throughput and -1.9 points chat attainment. The bar (>=30% attainment, >=10% throughput) is still not met on
+      single node, and the deficit is now attributable to the SCHEDULE's throughput cost rather than to the backend.
+      - Note on the earlier "+43% shallow bin": that comparison was stock's schedule on both backends, where the bin
+        carries nd=0 on each, so it was a like-for-like overhead measurement. The same bin under OURS' schedule carries
+        nd=15.3 and dkv=40K (8.50 ms) -- our steps legitimately mix decode rows into the prefill step, which is the
+        design, not overhead. Do not compare those two bins across schedules.
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

@@ -489,6 +489,26 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
       offered rate, so ours approaches stock's 141.8 from below and can only exceed it where stock WASTES capacity --
       i.e. under saturation and queueing. That makes the agent-concurrency sweep (`h200_agentload_20261022.sh`,
       C=16 / 24) not just the next test but the only one that can clear the throughput half on single node.
+    - [ ] **Saturation does NOT favour our schedule on one GPU -- the hypothesis is refuted at chunk 2048
+      (2026-10-22, `h200_agentload_20261022.sh`, agent concurrency 16, chat 8 req/s, every arm on FA3, n=93 agent
+      requests so attainment is far less noisy than the n=45 at C=8).** Stock does degrade as predicted, which was
+      the premise: agent attainment 84% -> 50.5-55.9%, chat 80% -> 57.0%, chat TPOT p90 40 -> 99-107 ms. But ours is
+      worse on every metric there:
+      | at C=16 | agent att. | chat att. | agent TTFT | chat TTFT | SLO tok/s (agent) |
+      |---|---|---|---|---|---|
+      | stock mixed chunk | 50.5% | 57.0% | 3.55 s | 1.97 s | 151.1 |
+      | stock prefill-prioritized | 55.9% | 57.0% | 3.16 s | 1.86 s | 150.6 |
+      | ours no MTP, chunk 2048 | **34.4%** | **55.2%** | **6.72 s** | 1.23 s | 117.8 |
+      Mechanism: with 16 concurrent agent programs at 32-64K context, EDF's deferral of loose-deadline agents
+      compounds (agent TTFT doubles) and chat gains almost nothing (55.2 vs 57.0) because chat is starved by agent
+      prefill volume whatever the ordering. Our schedule's advantage is a LIGHT-load phenomenon on one GPU -- the
+      opposite of its multi-node behaviour, where the lead grows with load (+56% -> +164%) and with cache pressure
+      (+91% -> +277%). The difference is that multi-node has a routing dimension (place the request on a node that
+      can meet its SLO) which a single GPU does not.
+      - [ ] Last single-node test (`h200_c16_chunk_20261022.sh`, queued): ours at its BEST chunk (1024:4096 and
+        1024:8192, the setting that took ours + MTP from -12.5% to -3.8% at C=8) under C=16. This sweep used 2048, so
+        the chunk interaction at saturation is untested. If ours still loses there, the single-node claim closes as a
+        light-load latency/throughput trade and the paper's quantitative case rests on multi-node.
     - [ ] **The load regime the bar needs (`h200_agentload_20261022.sh`, queued).** Stock holds 76-80% chat attainment
       from chat 8 to 16 req/s with nothing dropped, so no >=30% attainment gain is reachable at any of the loads
       measured so far -- the comparison has been run where stock is not saturated. Agent program CONCURRENCY is what

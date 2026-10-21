@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.30.2 — Saturation does not favour our schedule on one GPU (2026-10-22)
+
+- Agent concurrency 16, every arm on FA3, n=93 agent requests. Stock degrades as predicted (agent attainment 84 ->
+  50.5-55.9%, chat 80 -> 57.0%), but ours at chunk 2048 is worse on everything: agent 34.4%, chat 55.2%, agent TTFT
+  6.72 s vs stock's 3.16-3.55 s. EDF's deferral of loose-deadline agents compounds under saturation and chat gains
+  nothing because it is starved by agent prefill volume regardless of ordering.
+- So the single-GPU advantage is a LIGHT-load phenomenon, the opposite of multi-node where the lead grows with load
+  and cache pressure. The difference is the routing dimension, which one GPU does not have.
+- Queued the last single-node test: ours at its best chunk (4096 / 8192) under C=16.
+
 ## v1.30.1 — The 4-mode MTP arm was mis-tuned: chunk 4096 recovers most of the throughput gap (2026-10-22)
 
 - Ours + MTP at deadline chunk 1024:4096 instead of 1024:2048: agent throughput -3.8% vs stock + MTP (was -12.5%),

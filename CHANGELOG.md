@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.25.0 — Rows and verify on FA3; stock baseline moves to FA3; page-128 split bug (2026-10-21)
+
+- Stock sglang's default attention backend on Hopper is FA3, but every arm ran with `--attention-backend flashinfer`
+  forced. `ATTN_BACKEND=fa3` restores the default, and serving reruns against it are running. Against FA3 stock, our
+  sequential split gains nothing (-8..+9%); the co-run gains 4-31% except with 48 rows beside a short chunk.
+- `apply_split_rows_fa3.py` (`SPLIT_ROWS_FA3=1`): split decode / verify rows on FA3 instead of FA2 BatchPrefill
+  (48 rows: 0.9 vs ~8 ms per layer at any KV layout). Serving gate: 0 failures in 12.5K split calls, worst 0.0167.
+  `apply_verify_fa3.py` (`VERIFY_FA3=1`): MTP verify-only steps on FA3, CUDA-graph safe; gate queued.
+- Fix: the split's FA3 page table was per token, which is wrong at page_size > 1 (rel err 12.6 at page 128). The
+  page-128 serving result for ours is invalid.
+
 ## v1.24.4 — Qwen3-8B single node; Qwen2.5-7B multi-node MTP (2026-10-21)
 
 - Qwen3-8B half load: ours no-MTP throughput +16%, chat TTFT -86%, TPOT -27% vs prefill-prioritized; its EAGLE3 head

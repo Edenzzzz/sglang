@@ -595,24 +595,38 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   EAGLE3 head (thoughtworks), Qwen3-8B + trained EAGLE3 head (AngelSlim), GLM-4.5-Air + its own MTP layer (chosen over
   Llama-3.3-70B: 184 vs 320 KB KV per token, 12B active). Single node = one H200 (7B / 8B) or one 4-GPU H20 pod at TP4
   (GLM-4.5-Air); multi-node = H20 job 2f608c1b1a67cf09 (8 x 4) at 4 and 8 pods.
-  - [x] **Kernel microbench (2026-10-21, idle H200, 132 SMs; `python tasks/debug_kernel_server_perf/
-    fusion_microbench_20261021.py`, raw `fusion_microbench_20261021.txt`; all 36 cases x 2 arms within 4.2e-3 of an fp32
-    causal reference).** One mixed attention step per layer: unfused = every row through flashinfer FA2 BatchPrefill
-    (stock sglang's mixed-chunk path; `SGLANG_FLASHINFER_USE_PERSISTENT` is read nowhere in the tree, so stock runs
-    this), split = prefill chunk on FA3 (sgl-kernel) then the rows on FA2, co-run = FA3 with an SM margin and the FA2
-    rows on a second stream. Chunk 1024 @ 16K / 49K and 2048 @ 32K, 16 or 48 rows at 4-64K KV; 2-mode rows = 1 decode
-    token, 4-mode rows = 4 verify tokens. Per model, range over the six chunk x mode cases:
-    | model (per-GPU heads) | split vs unfused, 16 rows / 48 rows | co-run vs unfused, 16 rows / 48 rows |
-    |---|---|---|
-    | Qwen2.5-7B (28 / 4) | -1.0..-2.6% / +4.4..-1.9% | -6.1..-14.6% / -3.3..-6.3% |
-    | Qwen3-8B (32 / 8) | -3.2..-5.8% / -0.7..-3.4% | -7.8..-13.5% / -3.4..-5.3% |
-    | GLM-4.5-Air TP4 (24 / 2) | +1.6..-6.3% / +1.2..-3.4% | -11.5..-14.0% / -4.1..-5.9% |
-    **At the kernel level the gain is the co-run, not FA3 alone:** FA3 on the chunk beside FA2 rows saves at most ~6%
-    (sequential), co-running saves 8-15% when the rows are few and 3-6% at 48 rows, where the rows dominate the step.
-    2-mode and 4-mode behave alike (verify rows cost about as much as decode rows here). Open: the serving ablation
-    lost 34% throughput without the split (4-mode step on the stock kernel), far more than these per-step numbers;
-    to decompose next (FA3 vs FA2 on the chunk alone, the rows alone, and serving's own FA2 configuration -- tile
-    classes 64/32/16 and split-KV -- against plain BatchPrefill).
+  - [ ] **Kernel microbench (2026-10-21, idle H200, 132 SMs; every arm in every case within 4.6e-3 of an fp32 causal
+    reference). Reopened: the unfused baseline was the wrong stock.** One mixed attention step per layer: a prefill chunk
+    (1024 @ 16K / 49K, 2048 @ 32K) + 16 or 48 rows at 4-64K KV; 2-mode rows = 1 decode token, 4-mode rows = 4 verify
+    tokens; Qwen2.5-7B heads unless noted.
+    - [x] **Baseline (2026-10-21).** Upstream's default backend on Hopper for MHA models with no spec or topk 1 is FA3
+      (`get_default_attn_backend`, `arg_groups/model_override_base.py:296`, citing a flashinfer regression on Hopper);
+      `mn_node.sh` forced `--attention-backend flashinfer` on every arm, stock included. So stock's mixed step is ONE
+      varlen FA3 call over chunk + rows, not FA2 BatchPrefill. `ATTN_BACKEND=fa3` now selects it.
+    - [x] **Rows set the step on FA2 BatchPrefill, at any KV layout (2026-10-21; `rows_kernels_20261021.py`,
+      `fusion_decompose_20261021.py` -> `fusion_decompose_20261021.txt`, `rows_layout_check_20261021.py` part 1).**
+      48 rows: FA2 BatchPrefill 7.4-8.2 ms vs FA3 0.90-0.93 ms, FA2 BatchDecode (q1) 0.98-1.04 ms, persistent FA2
+      (`flashinfer.BatchAttention`) 2.14 ms (q4) / 1.00 ms (q1), KV-read floor 0.78 ms; the same with KV slots
+      scattered per token, in 16-token runs, or contiguous. The chunk alone is close on either kernel (FA3 0.49-3.38 vs
+      FA2 0.48-3.85 ms).
+    - [x] **Against flashinfer stock (2026-10-21; `fusion_microbench_20261021.py`, raw
+      `fusion_microbench_20261021.txt` and `fusion_microbench_rows3_20261021.txt`).** Split with FA2 rows: -6..+7%;
+      co-run with FA2 rows: -0.4..-17%. Rows on FA3 (`apply_split_rows_fa3.py`): -49..-85% sequential, -57..-89%
+      co-run, all three models (Qwen3-8B 32 / 8 heads, GLM-4.5-Air TP4 24 / 2). This is FA3 vs FA2 BatchPrefill on the
+      rows, not fusion.
+    - [x] **Against FA3 stock (2026-10-21; `rows_layout_check_20261021.py` part 2, contig | scatter).** Split
+      sequential (FA3 chunk, then FA3 rows): -8..+9% -- no gain, a second launch over the same work. Co-run (chunk with
+      sm_margin m, rows on the m SMs left), best m of 8..48:
+      | case | 16 x q4 | 48 x q4 | 48 x q1 |
+      |---|---|---|---|
+      | 1024 @ 16K | -29.9 / -31.0% | +5.0 / +3.9% | +10.2 / +8.9% |
+      | 1024 @ 49K | -4.3 / -5.9% | -5.5 / -5.3% | -9.0 / -6.2% |
+      | 2048 @ 32K | -18.6 / -14.2% | -9.9 / -10.9% | -14.0 / -10.9% |
+      The kernel gain left over FA3 stock is the co-run: 4-31% except where 48 rows meet a short chunk, where m stopped
+      at 48 SMs while the rows need most of the GPU.
+    - [ ] Margin sweep to 120 SMs for the losing cells; the 2-mode / 4-mode table for all three models against FA3 stock.
+    - [ ] Serving: stock on FA3 (`h200_rows_fa3_ab_20261021.sh`, running) -- every earlier single-node stock number
+      ran flashinfer.
   - [ ] Single node: Qwen2.5-7B table rerun with chat template (`h200_chattemplate_20261021.sh`, running); Qwen3-8B (head
     downloading); GLM-4.5-Air on one H20 pod.
   - [ ] 32 GPUs, Qwen2.5-7B no spec, ours vs disagg at 2 / 4 / 5 / 6 of 8 prefill pods (`mn_scale32_20261021.sh`,

@@ -1,0 +1,37 @@
+GPU NVIDIA H200, 132 SMs; ms per layer
+qwen2.5-7b 2-mode  1024@ 16384 +  16x q1  unfused   3.609  split   3.512 ( -2.7%)  co-run   3.001 (-16.8%, m8)  rows-FA3   0.925 (-74.4%)  rows-FA3 co-run   0.732 (-79.7%, m48)  err 3.7e-03 OK
+qwen2.5-7b 2-mode  1024@ 16384 +  48x q1  unfused   8.024  split   8.100 ( +1.0%)  co-run   7.685 ( -4.2%, m8)  rows-FA3   1.467 (-81.7%)  rows-FA3 co-run   1.499 (-81.3%, m48)  err 3.9e-03 OK
+qwen2.5-7b 4-mode  1024@ 16384 +  16x q4  unfused   3.617  split   3.539 ( -2.2%)  co-run   3.362 ( -7.0%, m8)  rows-FA3   0.928 (-74.3%)  rows-FA3 co-run   0.738 (-79.6%, m48)  err 3.7e-03 OK
+qwen2.5-7b 4-mode  1024@ 16384 +  48x q4  unfused   8.478  split   8.433 ( -0.5%)  co-run   8.098 ( -4.5%, m8)  rows-FA3   1.494 (-82.4%)  rows-FA3 co-run   1.469 (-82.7%, m48)  err 3.9e-03 OK
+qwen2.5-7b 2-mode  1024@ 49152 +  16x q1  unfused   4.399  split   4.408 ( +0.2%)  co-run   4.189 ( -4.8%, m24)  rows-FA3   1.777 (-59.6%)  rows-FA3 co-run   1.705 (-61.3%, m16)  err 3.8e-03 OK
+qwen2.5-7b 2-mode  1024@ 49152 +  48x q1  unfused   9.054  split   9.323 ( +3.0%)  co-run   8.931 ( -1.4%, m24)  rows-FA3   2.629 (-71.0%)  rows-FA3 co-run   2.124 (-76.5%, m48)  err 3.8e-03 OK
+qwen2.5-7b 4-mode  1024@ 49152 +  16x q4  unfused   4.463  split   4.453 ( -0.2%)  co-run   4.182 ( -6.3%, m16)  rows-FA3   1.786 (-60.0%)  rows-FA3 co-run   1.664 (-62.7%, m16)  err 3.8e-03 OK
+qwen2.5-7b 4-mode  1024@ 49152 +  48x q4  unfused   9.469  split   9.662 ( +2.0%)  co-run   9.391 ( -0.8%, m24)  rows-FA3   2.645 (-72.1%)  rows-FA3 co-run   2.155 (-77.2%, m48)  err 3.5e-03 OK
+qwen2.5-7b 2-mode  2048@ 32768 +  16x q1  unfused   5.036  split   4.891 ( -2.9%)  co-run   4.523 (-10.2%, m16)  rows-FA3   2.251 (-55.3%)  rows-FA3 co-run   1.883 (-62.6%, m16)  err 4.0e-03 OK
+qwen2.5-7b 2-mode  2048@ 32768 +  48x q1  unfused   9.602  split  10.233 ( +6.6%)  co-run   9.551 ( -0.5%, m8)  rows-FA3   2.982 (-68.9%)  rows-FA3 co-run   2.467 (-74.3%, m32)  err 4.2e-03 OK
+qwen2.5-7b 4-mode  2048@ 32768 +  16x q4  unfused   5.113  split   5.031 ( -1.6%)  co-run   4.419 (-13.6%, m8)  rows-FA3   2.242 (-56.2%)  rows-FA3 co-run   1.843 (-64.0%, m16)  err 4.0e-03 OK
+qwen2.5-7b 4-mode  2048@ 32768 +  48x q4  unfused   9.922  split  10.657 ( +7.4%)  co-run   9.883 ( -0.4%, m8)  rows-FA3   2.973 (-70.0%)  rows-FA3 co-run   2.455 (-75.3%, m32)  err 4.2e-03 OK
+qwen3-8b 2-mode   1024@ 16384 +  16x q1  unfused   4.043  split   3.914 ( -3.2%)  co-run   3.592 (-11.2%, m8)  rows-FA3   1.317 (-67.4%)  rows-FA3 co-run   1.266 (-68.7%, m48)  err 4.0e-03 OK
+qwen3-8b 2-mode   1024@ 16384 +  48x q1  unfused   9.243  split   9.237 ( -0.1%)  co-run   8.972 ( -2.9%, m8)  rows-FA3   2.480 (-73.2%)  rows-FA3 co-run   2.833 (-69.4%, m48)  err 4.1e-03 OK
+qwen3-8b 4-mode   1024@ 16384 +  16x q4  unfused   4.108  split   4.017 ( -2.2%)  co-run   3.657 (-11.0%, m24)  rows-FA3   1.321 (-67.9%)  rows-FA3 co-run   1.257 (-69.4%, m48)  err 4.0e-03 OK
+qwen3-8b 4-mode   1024@ 16384 +  48x q4  unfused   9.681  split   9.729 ( +0.5%)  co-run   9.287 ( -4.1%, m8)  rows-FA3   2.528 (-73.9%)  rows-FA3 co-run   2.812 (-71.0%, m48)  err 4.1e-03 OK
+qwen3-8b 2-mode   1024@ 49152 +  16x q1  unfused   5.085  split   4.872 ( -4.2%)  co-run   4.747 ( -6.7%, m16)  rows-FA3   2.230 (-56.1%)  rows-FA3 co-run   2.159 (-57.5%, m32)  err 3.7e-03 OK
+qwen3-8b 2-mode   1024@ 49152 +  48x q1  unfused  10.367  split  10.965 ( +5.8%)  co-run  10.137 ( -2.2%, m24)  rows-FA3   3.455 (-66.7%)  rows-FA3 co-run   3.183 (-69.3%, m48)  err 3.2e-03 OK
+qwen3-8b 4-mode   1024@ 49152 +  16x q4  unfused   5.178  split   4.925 ( -4.9%)  co-run   4.697 ( -9.3%, m8)  rows-FA3   2.230 (-56.9%)  rows-FA3 co-run   2.155 (-58.4%, m32)  err 3.7e-03 OK
+qwen3-8b 4-mode   1024@ 49152 +  48x q4  unfused  10.833  split  11.328 ( +4.6%)  co-run  10.776 ( -0.5%, m24)  rows-FA3   3.474 (-67.9%)  rows-FA3 co-run   3.166 (-70.8%, m48)  err 3.6e-03 OK
+qwen3-8b 2-mode   2048@ 32768 +  16x q1  unfused   5.604  split   5.364 ( -4.3%)  co-run   5.051 ( -9.9%, m8)  rows-FA3   2.725 (-51.4%)  rows-FA3 co-run   2.423 (-56.8%, m24)  err 3.8e-03 OK
+qwen3-8b 2-mode   2048@ 32768 +  48x q1  unfused  11.028  split  11.690 ( +6.0%)  co-run  10.703 ( -2.9%, m16)  rows-FA3   3.816 (-65.4%)  rows-FA3 co-run   3.461 (-68.6%, m48)  err 3.5e-03 OK
+qwen3-8b 4-mode   2048@ 32768 +  16x q4  unfused   5.678  split   5.411 ( -4.7%)  co-run   5.174 ( -8.9%, m8)  rows-FA3   2.924 (-48.5%)  rows-FA3 co-run   2.380 (-58.1%, m24)  err 3.8e-03 OK
+qwen3-8b 4-mode   2048@ 32768 +  48x q4  unfused  11.554  split  12.005 ( +3.9%)  co-run  11.115 ( -3.8%, m16)  rows-FA3   3.856 (-66.6%)  rows-FA3 co-run   3.493 (-69.8%, m48)  err 3.5e-03 OK
+glm-4.5-air/tp4 2-mode  1024@ 16384 +  16x q1  unfused   3.078  split   3.059 ( -0.6%)  co-run   2.692 (-12.5%, m8)  rows-FA3   0.724 (-76.5%)  rows-FA3 co-run   0.584 (-81.0%, m32)  err 3.5e-03 OK
+glm-4.5-air/tp4 2-mode  1024@ 16384 +  48x q1  unfused   7.041  split   7.097 ( +0.8%)  co-run   6.919 ( -1.7%, m16)  rows-FA3   1.055 (-85.0%)  rows-FA3 co-run   0.785 (-88.8%, m48)  err 3.7e-03 OK
+glm-4.5-air/tp4 4-mode  1024@ 16384 +  16x q4  unfused   3.097  split   3.139 ( +1.3%)  co-run   2.724 (-12.0%, m8)  rows-FA3   0.701 (-77.4%)  rows-FA3 co-run   0.587 (-81.1%, m32)  err 3.8e-03 OK
+glm-4.5-air/tp4 4-mode  1024@ 16384 +  48x q4  unfused   7.276  split   7.364 ( +1.2%)  co-run   6.974 ( -4.1%, m8)  rows-FA3   1.086 (-85.1%)  rows-FA3 co-run   0.783 (-89.2%, m48)  err 3.8e-03 OK
+glm-4.5-air/tp4 2-mode  1024@ 49152 +  16x q1  unfused   3.766  split   3.962 ( +5.2%)  co-run   3.394 ( -9.9%, m8)  rows-FA3   1.538 (-59.2%)  rows-FA3 co-run   1.347 (-64.2%, m16)  err 3.4e-03 OK
+glm-4.5-air/tp4 2-mode  1024@ 49152 +  48x q1  unfused   7.821  split   7.949 ( +1.6%)  co-run   7.555 ( -3.4%, m8)  rows-FA3   1.950 (-75.1%)  rows-FA3 co-run   1.475 (-81.1%, m32)  err 3.3e-03 OK
+glm-4.5-air/tp4 4-mode  1024@ 49152 +  16x q4  unfused   3.829  split   3.955 ( +3.3%)  co-run   3.669 ( -4.2%, m24)  rows-FA3   1.522 (-60.2%)  rows-FA3 co-run   1.343 (-64.9%, m16)  err 3.4e-03 OK
+glm-4.5-air/tp4 4-mode  1024@ 49152 +  48x q4  unfused   8.094  split   8.204 ( +1.4%)  co-run   8.154 ( +0.7%, m24)  rows-FA3   2.070 (-74.4%)  rows-FA3 co-run   1.467 (-81.9%, m24)  err 3.3e-03 OK
+glm-4.5-air/tp4 2-mode  2048@ 32768 +  16x q1  unfused   4.301  split   4.213 ( -2.0%)  co-run   3.922 ( -8.8%, m24)  rows-FA3   1.758 (-59.1%)  rows-FA3 co-run   1.846 (-57.1%, m8)  err 3.9e-03 OK
+glm-4.5-air/tp4 2-mode  2048@ 32768 +  48x q1  unfused   8.365  split   8.363 ( -0.0%)  co-run   8.103 ( -3.1%, m24)  rows-FA3   2.286 (-72.7%)  rows-FA3 co-run   1.912 (-77.1%, m24)  err 3.8e-03 OK
+glm-4.5-air/tp4 4-mode  2048@ 32768 +  16x q4  unfused   4.335  split   4.331 ( -0.1%)  co-run   3.912 ( -9.8%, m8)  rows-FA3   1.638 (-62.2%)  rows-FA3 co-run   1.836 (-57.6%, m16)  err 3.9e-03 OK
+glm-4.5-air/tp4 4-mode  2048@ 32768 +  48x q4  unfused   8.657  split   8.615 ( -0.5%)  co-run   8.461 ( -2.3%, m8)  rows-FA3   2.331 (-73.1%)  rows-FA3 co-run   1.867 (-78.4%, m24)  err 3.8e-03 OK

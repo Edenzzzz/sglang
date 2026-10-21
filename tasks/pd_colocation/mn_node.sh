@@ -37,6 +37,12 @@ if [ "${KERNEL:-lpt}" = mtpsplit ]; then
   export FLASHINFER_FUSED_COLAUNCH=1 FUSED_FA2_KV_CHUNK=auto SGLANG_FUSED_SM_FA3=${SM_FA3:-66}
   # SPLIT_OVERLAP=1: launch the FA2 rows on the main stream while FA3 runs on a side stream (overlapped= counter).
   export SGLANG_SPLIT_OVERLAP=${SPLIT_OVERLAP:-0} SGLANG_FUSED_DECODE_GUARD=0
+  # SPLIT_ROWS_FA3=1: decode / verify rows on FA3 instead of FA2 BatchPrefill (apply_split_rows_fa3.py; SPLIT_ROWS_FA3
+  # counter). SPLIT_VERIFY=1: every split layer checked against the full planned wrapper (FUSED_SPLIT_VERIFY lines).
+  export SGLANG_SPLIT_ROWS_FA3=${SPLIT_ROWS_FA3:-0} SGLANG_FUSED_SPLIT_VERIFY=${SPLIT_VERIFY:-0}
+  # VERIFY_FA3=1: MTP verify-only steps on FA3 (apply_verify_fa3.py; VERIFY_FA3 counter); VERIFY_FA3_CHECK=1 compares each
+  # verify layer to the planned flashinfer wrapper (needs --disable-cuda-graph).
+  export SGLANG_VERIFY_FA3=${VERIFY_FA3:-0} SGLANG_VERIFY_FA3_CHECK=${VERIFY_FA3_CHECK:-0}
 fi
 if [ "${KERNEL:-lpt}" = split ]; then
   export SGLANG_MIXED_ATTENTION_KERNEL=persistent SGLANG_TWO_EXEC=1 SGLANG_FUSED_FA3_SM_SPLIT=1
@@ -85,7 +91,9 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # "Init parallel begin." until the supervisor killed it (pod 2 GPU 0: 3 x 6 min, 2026-10-16).
   NCCL=$(pick $((ROLE * 2 + g + 104729 + RANDOM)))
   # MODEL_DIR: model directory under $W (default qwen7b; the second-model check uses qwen14b).
-  ARGS=(--model $W/${MODEL_DIR:-qwen7b} --attention-backend flashinfer --mem-fraction-static ${MEM_FRAC:-0.85}
+  # ATTN_BACKEND: flashinfer (default; the split lives in its backend) or fa3, upstream's own default on Hopper for MHA
+  # models with no spec or topk 1 (get_default_attn_backend) -- the stock baseline a reviewer would run.
+  ARGS=(--model $W/${MODEL_DIR:-qwen7b} --attention-backend ${ATTN_BACKEND:-flashinfer} --mem-fraction-static ${MEM_FRAC:-0.85}
         --host :: --port $PORT --nccl-port $NCCL --context-length ${CTX_LEN:-131072} --watchdog-timeout 600
         --json-model-override-args '{"rope_scaling":{"factor":'${YARN_FACTOR:-4.0}',"original_max_position_embeddings":32768,"type":"yarn"}}')
   # Shared L3 prefix cache (goal points 2 and 4): every colocated worker writes the prefixes it

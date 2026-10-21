@@ -1,0 +1,13 @@
+ms per layer, Qwen2.5-7B heads
+ 1024@ 16384 + 16x q4: chunk FA3  0.490  chunk FA2  0.481  rows FA2  2.989  rows FA2 no-split  3.007  merged  3.627  max err 3.7e-03 OK
+ 1024@ 16384 + 48x q4: chunk FA3  0.501  chunk FA2  0.493  rows FA2  7.822  rows FA2 no-split  8.636  merged  8.759  max err 3.7e-03 OK
+ 1024@ 16384 + 48x q1: chunk FA3  0.517  chunk FA2  0.505  rows FA2  7.553  rows FA2 no-split  7.677  merged  8.710  max err 3.7e-03 OK
+ 1024@ 49152 + 16x q4: chunk FA3  1.476  chunk FA2  1.572  rows FA2  3.065  rows FA2 no-split  3.022  merged  4.481  max err 4.0e-03 OK
+ 1024@ 49152 + 48x q4: chunk FA3  1.362  chunk FA2  1.501  rows FA2  8.198  rows FA2 no-split  8.565  merged  9.675  max err 3.4e-03 OK
+ 1024@ 49152 + 48x q1: chunk FA3  1.385  chunk FA2  1.503  rows FA2  7.662  rows FA2 no-split  8.187  merged  9.438  max err 3.5e-03 OK
+ 2048@ 32768 + 16x q4: chunk FA3  1.878  chunk FA2  2.025  rows FA2  3.043  rows FA2 no-split  3.032  merged  5.093  max err 3.8e-03 OK
+ 2048@ 32768 + 48x q4: chunk FA3  1.876  chunk FA2  2.079  rows FA2  8.320  rows FA2 no-split  8.287  merged 10.263  max err 4.0e-03 OK
+ 2048@ 32768 + 48x q1: chunk FA3  1.884  chunk FA2  2.057  rows FA2  7.838  rows FA2 no-split  7.979  merged 10.187  max err 4.0e-03 OK
+ 2048@ 61440 + 16x q4: chunk FA3  3.384  chunk FA2  3.754  rows FA2  3.039  rows FA2 no-split  3.087  merged  6.815  max err 3.3e-03 OK
+ 2048@ 61440 + 48x q4: chunk FA3  3.374  chunk FA2  3.852  rows FA2  8.363  rows FA2 no-split  8.164  merged 12.211  max err 3.6e-03 OK
+ 2048@ 61440 + 48x q1: chunk FA3  3.379  chunk FA2  3.807  rows FA2  7.705  rows FA2 no-split  7.948  merged 12.017  max err 3.7e-03 OK

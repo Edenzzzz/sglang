@@ -339,8 +339,16 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   vs prefill-prioritized: chat attainment **+26%**, agent attainment 2.5x, agent throughput +29%, chat TTFT -81%, chat
   TPOT -22%. Higher acceptance lifts every system (prefill-prioritized chat 49 -> 55%); the chat-attainment gap to
   +30% at 8 req/s stays (ours ~24% TPOT misses at both acceptances).
-- [x] **KV page 128 (2026-10-20, H200, standard mix, chat 8 req/s; `bash tasks/pd_colocation/h200_page128_20261020.sh`;
-  two repeats, clean; ours logged page_size 128 and 33K split calls) -- negative.** Every arm before ran sglang's default
+- [ ] **KV page 128 (2026-10-20, H200, standard mix, chat 8 req/s; `bash tasks/pd_colocation/h200_page128_20261020.sh`;
+  two repeats, clean; ours logged page_size 128 and 33K split calls) -- INVALID for ours, rerun needed (2026-10-21).**
+  The split's FA3 page table was `req_to_token[rows, :max_k] // page_size`, one column per TOKEN, while FA3 reads column
+  j as page j: at page 128 every column past the first names the wrong page. Measured
+  (`tasks/debug_kernel_server_perf/split_page_table_check_20261021.py`, H200, 1024-token chunk @ 15K + 8 verify rows vs
+  an fp32 causal reference): page 1 rel err 3.4e-3 both ways; page 128 per-token table **1.26e+1 FAIL**, per-page table
+  (`[:, ::page_size] // page_size`, upstream flashattention_backend's construction) 4.0e-3. So ours at page 128 ran wrong
+  attention on every split step (outputs, acceptance and output lengths with it); the stock arms do not use the split
+  and stand. Fixed in `tasks/pd_colocation/apply_split_rows_fa3.py` (both sides of the split). The numbers below are
+  kept only as the record of the invalid run. Every arm before ran sglang's default
   page 1, where the FA3 role gathers K/V per token instead of paged TMA. At page 128: ours agent 93.2 / 94.7 tok/s,
   attainment 40.0 / 37.8%, chat 57.8 / 59.6% (vs 102.5 / 45.0% / 63.0% at page 1); prefill-prioritized + MTP chat 48.8 /
   51.3% (vs 49.3%). Page 128 costs ours ~9% throughput and 4 chat points and leaves stock unchanged; page 1 stays.

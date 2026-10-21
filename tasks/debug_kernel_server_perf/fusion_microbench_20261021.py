@@ -4,6 +4,9 @@
   split     ours, sequential: prefill rows on FA3 (sgl-kernel flash_attn_with_kvcache, all SMs), then the decode /
             verify rows on FA2 BatchPrefill
   co-run    ours, overlapped: FA3 with sm_margin SMs left free, the FA2 rows on a second stream at the same time
+  rows-FA3  ours with SGLANG_SPLIT_ROWS_FA3=1 (apply_split_rows_fa3.py): prefill rows on FA3, then the decode / verify
+            rows on a second FA3 call (varlen q, GQA packed by FA3's heuristic); and its overlapped form, the rows
+            taking the margin SMs (sm_margin = num_SMs - margin)
 
 Two batch kinds, per model (per-GPU heads; head dim 128, bf16, KV paged at page 1 as in serving, scattered pages):
   2-mode    a prefill chunk C over prefix P + R decode rows (1 query token each) at KV lengths drawn from the mix
@@ -60,6 +63,24 @@ def fa3_prefill(b, sm_margin=0):
         cache_seqlens=torch.tensor([n], dtype=torch.int32, device=dev),
         cu_seqlens_q=torch.tensor([0, c], dtype=torch.int32, device=dev), max_seqlen_q=c, causal=True,
         sm_margin=sm_margin)
+
+
+def fa3_rows(b, sm_margin=0):
+    n = len(b["q_lens"]) - 1
+    kv = b["kv_lens"][1:]
+    pt = torch.zeros(n, max(kv), dtype=torch.int32, device=dev)
+    for i in range(n):
+        pt[i, :kv[i]] = b["pages"][i + 1]
+    ql = b["q_lens"][1:]
+    cu = torch.tensor([0] + list(torch.tensor(ql).cumsum(0)), dtype=torch.int32, device=dev)
+    kvl = torch.tensor(kv, dtype=torch.int32, device=dev)
+    q = b["q"][b["q_lens"][0]:]
+    return lambda: flash_attn_with_kvcache(q=q, k_cache=b["k"], v_cache=b["v"], page_table=pt, cache_seqlens=kvl,
+                                           cu_seqlens_q=cu, max_seqlen_q=max(ql), causal=True, sm_margin=sm_margin)
+
+
+def first(o):
+    return o[0] if isinstance(o, tuple) else o
 
 
 def ref(b, i, heads, rows):
@@ -132,11 +153,29 @@ def run_case(name, hq, hk, chunk, prefix, rows, qrow, row_kv):
         t = timeit(corun)
         if best is None or t < best[0]:
             best = (t, margin)
-    t_unf, t_split = timeit(unfused), timeit(split)
+    rows3 = fa3_rows(b)
+    split3 = lambda: (pre(), rows3())
+    e_r3 = check(b, o_pre, first(rows3()))
+    best3 = None
+    for margin in (8, 16, 24, 32, 48):
+        pre_m, rows_m = fa3_prefill(b, margin), fa3_rows(b, NSM - margin)
+
+        def corun3(pre_m=pre_m, rows_m=rows_m):
+            side.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(side):
+                rows_m()
+            pre_m()
+            torch.cuda.current_stream().wait_stream(side)
+        t = timeit(corun3)
+        if best3 is None or t < best3[0]:
+            best3 = (t, margin)
+    t_unf, t_split, t_s3 = timeit(unfused), timeit(split), timeit(split3)
+    pct = lambda x: (x / t_unf - 1) * 100
+    err = max(e_unf, e_split, e_r3)
     print(f"{name:16s} {chunk:5d}@{prefix:6d} + {rows:3d}x q{qrow}  unfused {t_unf:7.3f}  split {t_split:7.3f} "
-          f"({(t_split / t_unf - 1) * 100:+5.1f}%)  co-run {best[0]:7.3f} ({(best[0] / t_unf - 1) * 100:+5.1f}%, "
-          f"margin {best[1]})  err unfused {e_unf:.1e} split {e_split:.1e} {'OK' if max(e_unf, e_split) < 2e-2 else 'FAIL'}",
-          flush=True)
+          f"({pct(t_split):+5.1f}%)  co-run {best[0]:7.3f} ({pct(best[0]):+5.1f}%, m{best[1]})  "
+          f"rows-FA3 {t_s3:7.3f} ({pct(t_s3):+5.1f}%)  rows-FA3 co-run {best3[0]:7.3f} ({pct(best3[0]):+5.1f}%, "
+          f"m{best3[1]})  err {err:.1e} {'OK' if err < 2e-2 else 'FAIL'}", flush=True)
 
 
 g = torch.Generator().manual_seed(1)

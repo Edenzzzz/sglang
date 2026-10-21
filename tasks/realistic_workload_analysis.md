@@ -369,6 +369,19 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   FA3 142 tok/s, 84.4%, 79.9%, 0.58 s, 40 ms: throughput -3.4%, agent attainment +9 points, chat TTFT -78%, chat
   attainment -1.5 points. With MTP 135.4 / 136.3 tok/s, agent 62.2%, chat 74.2% -- against stock + MTP on FA3 161.5,
   67-69%, 77.0%: -16% throughput. Bar (>=30% TTFT / ITL attainment, >=10% throughput) not met on single node.
+  - [x] **Step trace of both backends, same schedule and load (2026-10-21, `bash tasks/pd_colocation/
+    h200_backend_trace_20261021.sh`, STEP_TRACE=1; gap reproduced in the traced arms, 161.2 vs 146.9 tok/s = -8.9%).**
+    Not host overhead and not total GPU work: host launch gap mean -0.19 ms (stock) vs +0.17 ms (ours) over 38.7K /
+    31.4K steps, and GPU sums are 301 vs 297 s. Acceptance is identical (2.016 vs 2.020), so it is not speculation
+    efficiency either. Where the time sits: DECODE-labelled steps are 221 of stock's 301 GPU-seconds and 211 of ours'
+    297, at 6.09 ms mean (bs 7.0) vs ours' 7.26 ms (bs 8.7) -- per token ours is 4% cheaper there (0.41 vs 0.43 ms),
+    and the emitted-token accounting agrees across backends (steps x bs x accept = 513K vs 511K). Mixed EXTEND steps
+    cost ours +8% (85.5 vs 79.2 s). So ours does equal GPU work for ~9% fewer tokens per second, which is idle time
+    the busy-period metric excludes by construction.
+  - [ ] **Decode / verify steps on FA3 in that arm (`h200_ourbe_decode_20261021.sh`, running).** Every "stock schedule
+    on our backend" arm so far ran DECODE_FA3=0, so those steps -- the 211 GPU-seconds above -- still used flashinfer's
+    decode wrapper. This is the last untested per-step cost before the structural option (porting the split onto
+    sglang's own FA3 backend class instead of the flashinfer one).
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

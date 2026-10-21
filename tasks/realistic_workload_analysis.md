@@ -455,8 +455,23 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
       the trade is real but one-sided, and the bar wants both. Lever under test: keep the small chunk for tight
       deadlines, give loose-deadline requests a large one, so agent prefills finish in fewer, bigger chunks while chat
       keeps small ones -- `DEADLINE_CHUNK=1024:4096` and `1024:8192` on the FA3 backend
-      (`h200_agent_chunk_20261022.sh`, queued). Note the earlier 512 / 1024 probe moved this dial the WRONG way
+      (`h200_agent_chunk_20261022.sh`). Note the earlier 512 / 1024 probe moved this dial the WRONG way
       (agent TTFT 3.38 -> 4.58 s), which is consistent with this reading.
+      **Result (2026-10-22): the lever works in the predicted direction but only slides along a Pareto frontier.**
+      Ours no MTP on the FA3 backend:
+      | deadline chunk | agent tok/s | agent TTFT | chat TTFT | chat ITL p99 |
+      |---|---|---|---|---|
+      | 1024:2048 (baseline) | 133.9 / 134.2 | 3.30 s | 0.13 s | 112 ms |
+      | 1024:4096 | 135.9 | 3.06 s | 0.099 s | 194 ms |
+      | 1024:8192 | 137.3 | 2.94 s | 0.141 s | 400 ms |
+      | stock mixed chunk, FA3 | 141.8 | 2.09 s | 0.579 s | 293 ms |
+      Larger loose-deadline chunks recover agent TTFT (3.30 -> 2.94 s) and throughput (-5.5% -> -3.2% vs stock), but
+      the chat ITL tail degrades 112 -> 400 ms, overshooting even stock mixed chunk's 293 ms. Every setting is a
+      different point on one frontier; none dominates stock. **And chunk tuning cannot reach the bar's throughput
+      half in principle at this load:** throughput here is work / time with nothing dropped and chat pinned at the
+      offered rate, so ours approaches stock's 141.8 from below and can only exceed it where stock WASTES capacity --
+      i.e. under saturation and queueing. That makes the agent-concurrency sweep (`h200_agentload_20261022.sh`,
+      C=16 / 24) not just the next test but the only one that can clear the throughput half on single node.
     - [ ] **The load regime the bar needs (`h200_agentload_20261022.sh`, queued).** Stock holds 76-80% chat attainment
       from chat 8 to 16 req/s with nothing dropped, so no >=30% attainment gain is reachable at any of the loads
       measured so far -- the comparison has been run where stock is not saturated. Agent program CONCURRENCY is what

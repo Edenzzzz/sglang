@@ -599,20 +599,22 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   the schedule, not the backend, the thing under test. The definitive table is
   `bash tasks/pd_colocation/h200_fa3_table_20261022.sh`: five schedules, every arm on FA3, two repeats, per-tenant
   attainment.
-  **Result (2026-10-22, 9 of 10 arms; chat 8 req/s, agent program concurrency 8, chat template, real head, all arms
-  0 tracebacks / 0 fallbacks). BAR NOT MET at this load.** rep1 / rep2, primary SLOs (agent 10 s + 80 ms, chat
-  0.5 s + 20 ms):
-  | arm | agent att. | chat att. | agent SLO tok/s | agent att. @30 ms ITL |
+  **Result (2026-10-22, COMPLETE, 10 of 10 arms; chat 8 req/s, agent program concurrency 8, chat template, real head,
+  every arm 0 tracebacks / 0 fallbacks). BAR NOT MET at this load.** rep1 / rep2, primary SLOs (agent 10 s + 80 ms,
+  chat 0.5 s + 20 ms):
+  | arm | agent att. | chat att. | agent tok/s | agent att. @30 ms ITL |
   |---|---|---|---|---|
-  | stock mixed chunk | 84.4 / 84.4% | 79.9 / 79.8% | 117 / 125 | 33.3 / 33.3% |
-  | stock prefill-prioritized | 86.7 / 84.4% | 80.2 / 80.3% | 124 / 123 | 31.1 / 33.3% |
-  | stock prefill-prioritized + MTP | 66.7 / 68.9% | 77.0 / 77.0% | 118 / 129 | 46.7 / 48.9% |
-  | ours no MTP | 86.7 / 95.6% | 78.2 / - | 114 / 122 | 28.9 / 24.4% |
-  | ours + MTP (4-mode) | 62.2% | 75.6% | 107 | **55.6%** |
+  | stock mixed chunk | 84.4 / 84.4% | 79.9 / 79.8% | 141.8 / 141.8 | 33.3 / 33.3% |
+  | stock prefill-prioritized | 86.7 / 84.4% | 80.2 / 80.3% | 142.1 / 141.7 | 31.1 / 33.3% |
+  | stock prefill-prioritized + MTP | 66.7 / 68.9% | 77.0 / 77.0% | 161.2 / 161.5 | 46.7 / 48.9% |
+  | ours no MTP | 86.7 / **95.6%** | 78.2 / 78.0% | 133.9 / 134.2 | 28.9 / 24.4% |
+  | ours + MTP (4-mode) | 62.2 / 64.4% | 75.6 / 75.5% | 140.6 / 141.5 | **55.6 / 51.1%** |
   Readings, in order of how much they matter:
   - **The bar is not met here.** Ours no MTP is +6.5% agent attainment over stock prefill-prioritized (91.2% vs 85.6%
-    on rep means), -2.5% chat attainment and -5% throughput; ours + MTP is behind stock + MTP on both primary
-    attainments. Nothing approaches +30% / +10%.
+    on rep means), -2.5% chat attainment and -5.5% throughput (134.1 vs 141.9 mean); ours + MTP is behind stock + MTP
+    on both primary attainments (-6 and -1.5 points) at -12.5% throughput (141.1 vs 161.4). Nothing approaches
+    +30% / +10%. Both repeats agree to within 0.3% on throughput for every arm, so the throughput deficits are real
+    and not noise -- unlike the agent-attainment numbers below.
   - **Ours' agent attainment is noisier than the effect I had been quoting**: 86.7% and 95.6% across two repeats of
     the same configuration. With n=45 agent requests one request is 2.2 points, so a 9-point spread is 4 requests.
     Any single-node agent-attainment claim needs more repeats than two, and the earlier "+9 points" and "95.6%"

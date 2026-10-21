@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.29.3 — Five-schedule FA3 table complete (10/10 arms) (2026-10-22)
+
+- Final arms in. Throughput reproduces to within 0.3% across repeats for every arm: stock mixed chunk 141.8/141.8,
+  stock prefill-prioritized 142.1/141.7, stock + MTP 161.2/161.5, ours no MTP 133.9/134.2, ours + MTP 140.6/141.5.
+  So the throughput deficits (-5.5% no MTP, -12.5% with MTP) are real, not noise, while agent attainment is noisy
+  (ours no MTP 86.7/95.6%).
+- At the 30 ms ITL target ours + MTP leads stock + MTP 55.6/51.1% vs 46.7/48.9% in both repeats.
+
 ## v1.29.2 — Five-schedule FA3 table: bar not met at this load; attainment is SLO-threshold dependent (2026-10-22)
 
 - Every arm on sglang's FA3 backend so the schedule is the only variable. Ours no MTP: +6.5% agent attainment,

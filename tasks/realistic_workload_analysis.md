@@ -288,8 +288,22 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV
   heads): no-MTP chat attainment ours 24.5% vs prefill-prioritized 10.8% / mixed chunk 0.7% (agent 69% vs 31% / 21%,
   throughput 55.6 vs 47.2 / 42.4); every MTP arm collapses (chat TTFT 100-170 s, 0% chat attainment; agents ours 13% vs
-  7.8% / 10%). Not a valid comparison point; rerun at half load (`h200_qwen3_half_20261021.sh`, agents C=4, chat 4
-  req/s) running.
+  7.8% / 10%). Not a valid comparison point; rerun at half load below.
+- [x] **Qwen3-8B at half load (2026-10-21, H200, agents C=4 over 12 sessions + chat 4 req/s, chat template, trained
+  EAGLE3 head; two repeats, 0 tracebacks; the stock no-MTP rep 1 arms wrote no records, so those rows are rep 2 only;
+  `bash tasks/pd_colocation/h200_qwen3_half_20261021.sh`).** Per tenant (agent 10 s + 80 ms, chat 0.5 s + 20 ms):
+  | arm | agent tput | agent att. | chat TTFT | chat TPOT | chat att. |
+  |---|---|---|---|---|---|
+  | stock mixed chunk | 52.8 | 81.8% | 0.86 s | 28.4 ms | 59.9% |
+  | stock prefill-prioritized | 58.8 | 77.3% | 0.50 s | 26.0 ms | 63.5% |
+  | **ours, no MTP** | **68.0** | **86.4%** | **0.07 s** | **19.1 ms** | **68.1%** |
+  | stock + MTP (accept 1.79-1.85) | 17.4 | 4.5% | 59.2 s | 66.7 ms | 0% |
+  | prefill-prioritized + MTP (1.83) | 15.3 | 18.2% | 88.9 s | 80.4 ms | 0% |
+  | ours + MTP (1.82) | 29.4 | 18.2% | 18.0 s | 32.0 ms | 21.3% |
+  Without MTP ours leads on throughput (+16% / +29%) and chat latency (TTFT -86%, TPOT -27% vs prefill-prioritized)
+  but chat attainment only +7% / +14%. **With this head MTP is a loss for every system** (accept ~1.8 tokens per
+  verify on this workload; the verify and draft passes cost more than they save), so for Qwen3-8B the no-spec
+  comparison is the meaningful one.
 - [x] **Bar status, one GPU, chat 8 req/s -- accepted as a stated limitation (user, 2026-10-21).** Chat SLO attainment
   (TTFT 0.5 s and per-request TPOT 20 ms both met) 63.0% for ours + MTP vs 49.3% for prefill-prioritized stock + MTP, a
   +28% relative gain (63.0 / 49.3) against the +30% bar (64.1% needed); four repeats, 61-65%. Agents clear (5.5x

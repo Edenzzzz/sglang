@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.24.4 — Qwen3-8B single node; Qwen2.5-7B multi-node MTP (2026-10-21)
+
+- Qwen3-8B half load: ours no-MTP throughput +16%, chat TTFT -86%, TPOT -27% vs prefill-prioritized; its EAGLE3 head
+  accepts 1.8 and MTP is a loss for every system. Qwen2.5-7B MTP at 16 / 32 GPUs: disagg overloaded at every ratio.
+
 ## v1.24.3 — Single-node table with chat template (2026-10-21)
 
 - Qwen2.5-7B, real head (accept 2.02): ours + MTP chat attainment 62.7% vs 44.0% prefill-prioritized + MTP (+42%),

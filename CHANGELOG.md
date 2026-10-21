@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.24.3 — Single-node table with chat template (2026-10-21)
+
+- Qwen2.5-7B, real head (accept 2.02): ours + MTP chat attainment 62.7% vs 44.0% prefill-prioritized + MTP (+42%),
+  agent ~10x, throughput +33%. Ours without the KV pool at 32 GPUs: 2092 vs 2153 tok/s (the pool is not the gain).
+
 ## v1.24.2 — Fusion microbench, 2-mode / 4-mode, three models (2026-10-21)
 
 - Split alone 0-6% faster than unfused FA2 per mixed step; co-run 8-15% with 16 rows, 3-6% with 48. The 34% serving

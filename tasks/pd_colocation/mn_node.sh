@@ -92,7 +92,9 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # computes through to a cluster-wide mooncake store (RDMA, host DRAM) and prefetches a request's
   # prefix from it on a local miss, so any node can pull from any other -- a complete graph, with
   # replication happening as a side effect of serving rather than as a migration step.
-  if [ -n "${HC_MASTER:-}" ]; then
+  # PD decode servers run a chunk cache (no radix tree), which hierarchical cache cannot sit on: under disagg the pool
+  # serves the prefill pods, where prefixes are computed.
+  if [ -n "${HC_MASTER:-}" ] && [ "$MODE" != decode ]; then
     export MOONCAKE_MASTER=$HC_MASTER LOCAL_HOSTNAME=$SGLANG_HOST_IP MOONCAKE_PROTOCOL=rdma
     # ONE_NIC=1 pins every pod's store traffic to a single back-end NIC instead of spreading over
     # mlx5_1..4. At 16 GPUs on 4 hosts the 4-NIC fabric showed no contention (~236 GB moved, no

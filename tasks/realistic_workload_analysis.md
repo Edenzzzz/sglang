@@ -265,6 +265,24 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   the same as without overlap): the verify batch is too small beside a deep-context FA3 chunk for the overlap to hide
   anything. vs prefill-prioritized + MTP (49.3%) **+27.7%**. With the page-128, acceptance-3.0, overlap and util
   variants all measured, chat attainment at 8 req/s settles at 62-64% (+26-30%) for every variant of ours.
+- [x] **Single-node table rerun with chat-templated chat prompts, real heads only (2026-10-21, H200, standard mix, chat 8
+  req/s, two repeats each, all clean; `bash tasks/pd_colocation/h200_chattemplate_20261021.sh`, CHAT_TEMPLATE=1; the
+  TraceLab agent stream replays recorded token streams and is unchanged).** Logged accept len 2.02-2.03 in every MTP arm
+  -- the chat template does not move this head's acceptance. Means of the two repeats, per tenant (agent 10 s + 80 ms,
+  chat 0.5 s + 20 ms):
+  | arm | agent tput | agent TTFT | agent att. | chat TTFT | chat TPOT | chat att. |
+  |---|---|---|---|---|---|---|
+  | stock mixed chunk | 78.8 | 4.91 s | 35.6% | 2.29 s | 38.8 ms | 52.9% |
+  | stock prefill-prioritized | 89.2 | 2.76 s | 55.6% | 1.05 s | 40.5 ms | 58.2% |
+  | **ours, no MTP** | **113.8** | 3.34 s | **92.2%** | **0.14 s** | **20.6 ms** | **69.8%** |
+  | stock + MTP | 64.8 | 20.63 s | 2.2% | 12.94 s | 17.2 ms | 33.2% |
+  | stock prefill-prioritized + MTP | 75.9 | 17.06 s | 4.4% | 9.07 s | 16.8 ms | 44.0% |
+  | **ours + MTP (rows + SLO admission)** | **101.3** | **11.40 s** | **42.2%** | **2.37 s** | **15.2 ms** | **62.7%** |
+  With MTP vs prefill-prioritized + MTP: chat attainment **+42%**, agent ~10x, agent throughput +33%, chat TTFT -74%,
+  agent TTFT -33%; vs stock + MTP chat +89%, agent 19x, throughput +56%. Without MTP vs prefill-prioritized: chat +20%,
+  agent +66%, throughput +28%, chat TTFT -87%, TPOT -49%; vs mixed chunk chat +32%, throughput +44%. With templated chat
+  prompts the prefill-prioritized + MTP baseline drops from 49.3% to 44.0% chat attainment (its chat TTFT misses rise),
+  so the MTP point that sat at +28% now clears +30%.
 - [x] **Bar status, one GPU, chat 8 req/s -- accepted as a stated limitation (user, 2026-10-21).** Chat SLO attainment
   (TTFT 0.5 s and per-request TPOT 20 ms both met) 63.0% for ours + MTP vs 49.3% for prefill-prioritized stock + MTP, a
   +28% relative gain (63.0 / 49.3) against the +30% bar (64.1% needed); four repeats, 61-65%. Agents clear (5.5x

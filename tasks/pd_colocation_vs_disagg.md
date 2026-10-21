@@ -2471,6 +2471,12 @@ the 2026-10-10 version of this section (no serving data, corruption blocking) is
   dispatch -- so **the entire multi-node advantage is the colocated schedule plus the cache-first SLO router**. The
   fused kernel's measured contributions are elsewhere: step predictability (point 3, 0.4% / 3.2% MAPE) and ~2.5% on
   our own single-GPU schedule.
+  - [x] **MTP pays off at cluster scale, the opposite of single node (2026-10-22, same rerun):** ours + MTP on the
+    FA3 backend with no split reaches **1120.7 agent tok/s** against the no-spec arm's 962.7 (+16%), at agent TTFT
+    0.80 s, chat TTFT 185 ms, cached 0.972, 0 errors. On one GPU the 4-mode MTP arm was the *worst* configuration at
+    saturation (agent attainment 19.4% at C=16); at 16 GPUs it is the best. The reason is the same routing dimension
+    that makes the whole multi-node case work: the router can place a verify-heavy step on a node that can absorb it,
+    where a single GPU must interleave it with everything else. Disagg's MTP arms (2+2, 3+1) running.
   - [ ] **What the kernel adds at cluster scale is a separate question, and it is now queued
     (`mn_kernel_on_16g_20261022.sh`).** Turning the kernel off was deliberate -- it attributes the win -- but it
     leaves the fused stack's own multi-node contribution unmeasured. The queued arms run the SAME workload, router,

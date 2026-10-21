@@ -447,6 +447,16 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
       Best agent attainment to date is ours no MTP on the FA3 backend, **95.6% vs stock's 84.4% (+13.3%)**, at -5.7%
       throughput and -1.9 points chat attainment. The bar (>=30% attainment, >=10% throughput) is still not met on
       single node, and the deficit is now attributable to the SCHEDULE's throughput cost rather than to the backend.
+    - [ ] **Why ours loses throughput, and the lever for it (2026-10-22).** Chat throughput is identical in every arm
+      (1640-1647 tok/s = the offered 8 req/s, nothing is dropped), so single-node throughput differences are entirely
+      AGENT throughput, and at fixed agent program concurrency that is set by how fast agent requests finish. Ours'
+      agent TTFT is 3.0-3.3 s against stock's 2.1 s because EDF deprioritises agents (10 s deadline) for chat (0.5 s)
+      and the deadline chunk hands everything 1024 / 2048 tokens. Chat TTFT is 5x better for it (0.12 vs 0.58 s), so
+      the trade is real but one-sided, and the bar wants both. Lever under test: keep the small chunk for tight
+      deadlines, give loose-deadline requests a large one, so agent prefills finish in fewer, bigger chunks while chat
+      keeps small ones -- `DEADLINE_CHUNK=1024:4096` and `1024:8192` on the FA3 backend
+      (`h200_agent_chunk_20261022.sh`, queued). Note the earlier 512 / 1024 probe moved this dial the WRONG way
+      (agent TTFT 3.38 -> 4.58 s), which is consistent with this reading.
       - Note on the earlier "+43% shallow bin": that comparison was stock's schedule on both backends, where the bin
         carries nd=0 on each, so it was a like-for-like overhead measurement. The same bin under OURS' schedule carries
         nd=15.3 and dkv=40K (8.50 ms) -- our steps legitimately mix decode rows into the prefill step, which is the

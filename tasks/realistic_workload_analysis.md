@@ -283,6 +283,13 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   agent +66%, throughput +28%, chat TTFT -87%, TPOT -49%; vs mixed chunk chat +32%, throughput +44%. With templated chat
   prompts the prefill-prioritized + MTP baseline drops from 49.3% to 44.0% chat attainment (its chat TTFT misses rise),
   so the MTP point that sat at +28% now clears +30%.
+- [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
+  Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
+  `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV
+  heads): no-MTP chat attainment ours 24.5% vs prefill-prioritized 10.8% / mixed chunk 0.7% (agent 69% vs 31% / 21%,
+  throughput 55.6 vs 47.2 / 42.4); every MTP arm collapses (chat TTFT 100-170 s, 0% chat attainment; agents ours 13% vs
+  7.8% / 10%). Not a valid comparison point; rerun at half load (`h200_qwen3_half_20261021.sh`, agents C=4, chat 4
+  req/s) running.
 - [x] **Bar status, one GPU, chat 8 req/s -- accepted as a stated limitation (user, 2026-10-21).** Chat SLO attainment
   (TTFT 0.5 s and per-request TPOT 20 ms both met) 63.0% for ours + MTP vs 49.3% for prefill-prioritized stock + MTP, a
   +28% relative gain (63.0 / 49.3) against the +30% bar (64.1% needed); four repeats, 61-65%. Agents clear (5.5x

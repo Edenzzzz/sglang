@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.25.1 — Fair-stock single-node rep 1; plain decode on FA3 (2026-10-21)
+
+- On FA3 (its Hopper default), stock beats ours: chat attainment 80% vs ours 73% without MTP, and 77% vs 61% with
+  MTP. Rows on FA3 moved ours little. The earlier single-node table is superseded as a bar result.
+- `apply_decode_fa3.py` (`DECODE_FA3=1`): plain decode steps on FA3, so every attention call matches stock and only
+  the mixed step differs. Gate and A/B queued (`h200_decode_fa3_20261021.sh`); H20 sweep relaunched with disagg on FA3.
+
 ## v1.25.0 — Rows and verify on FA3; stock baseline moves to FA3; page-128 split bug (2026-10-21)
 
 - Stock sglang's default attention backend on Hopper is FA3, but every arm ran with `--attention-backend flashinfer`

@@ -283,6 +283,23 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   agent +66%, throughput +28%, chat TTFT -87%, TPOT -49%; vs mixed chunk chat +32%, throughput +44%. With templated chat
   prompts the prefill-prioritized + MTP baseline drops from 49.3% to 44.0% chat attainment (its chat TTFT misses rise),
   so the MTP point that sat at +28% now clears +30%.
+- [ ] **Stock on its own Hopper default, FA3 (2026-10-21, H200, standard mix, chat 8 req/s, chat template, real head;
+  `bash tasks/pd_colocation/h200_rows_fa3_ab_20261021.sh`; sglang 4e9f57717 + pod tree flashinfer_backend.py md5
+  9f826826 (apply_split_rows_fa3.py); all 0 tracebacks; scored with `tasks/perf_model/bench_per_tenant.py`). Rep 1 of
+  2; the table above is SUPERSEDED as a bar result.** Upstream picks FA3 on Hopper for MHA models with no spec or
+  topk 1 (`get_default_attn_backend`); every stock arm above forced flashinfer (`mn_node.sh`), whose BatchPrefill runs
+  decode / verify rows ~8x slower than FA3. Per tenant (agent 10 s + 80 ms, chat 0.5 s + 20 ms):
+  | arm | agent tput | agent TTFT | agent att. | chat TTFT | chat TPOT p50 / p90 | chat att. |
+  |---|---|---|---|---|---|---|
+  | stock mixed chunk, FA3 | 141.7 | 2.12 s | 84.4% | 0.58 s | 5.1 / 39.9 ms | 79.9% |
+  | stock prefill-prioritized, FA3 | 142.0 | 2.13 s | 86.7% | 0.54 s | 5.4 / 39.7 ms | 80.5% |
+  | ours, no MTP, rows on FA3 | 123.3 | 3.25 s | 93.3% | 0.12 s | 5.6 / 53.4 ms | 73.3% |
+  | stock prefill-prioritized + MTP, FA3 | 161.3 | 7.63 s | 68.9% | 1.81 s | 3.4 / 16.3 ms | 77.0% |
+  | ours + MTP (rows + SLO admission), rows on FA3 | 98.5 | 12.04 s | 35.6% | 2.68 s | 5.6 / 31.7 ms | 61.0% |
+  Against the fair stock, ours misses the bar: without MTP agent attainment +8% but chat -9% and throughput -13%; with
+  MTP behind on every column. Rows on FA3 alone moved ours little (no MTP 113.8 -> 123.3 tok/s; MTP 101.3 -> 98.5):
+  the mixed step's rows were not what held ours back. Next: MTP verify-only steps on FA3 (`apply_verify_fa3.py`,
+  `h200_verify_fa3_20261021.sh`, queued), rep 2, and a step trace of ours vs stock-FA3 without MTP.
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

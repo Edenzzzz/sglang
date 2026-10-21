@@ -43,6 +43,8 @@ if [ "${KERNEL:-lpt}" = mtpsplit ]; then
   # VERIFY_FA3=1: MTP verify-only steps on FA3 (apply_verify_fa3.py; VERIFY_FA3 counter); VERIFY_FA3_CHECK=1 compares each
   # verify layer to the planned flashinfer wrapper (needs --disable-cuda-graph).
   export SGLANG_VERIFY_FA3=${VERIFY_FA3:-0} SGLANG_VERIFY_FA3_CHECK=${VERIFY_FA3_CHECK:-0}
+  # DECODE_FA3=1: plain decode steps (no spec) on FA3 (apply_decode_fa3.py), checked under VERIFY_FA3_CHECK too.
+  export SGLANG_DECODE_FA3=${DECODE_FA3:-0}
 fi
 if [ "${KERNEL:-lpt}" = split ]; then
   export SGLANG_MIXED_ATTENTION_KERNEL=persistent SGLANG_TWO_EXEC=1 SGLANG_FUSED_FA3_SM_SPLIT=1

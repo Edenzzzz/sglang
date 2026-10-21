@@ -47,6 +47,8 @@ if [ "${KERNEL:-lpt}" = mtpsplit ]; then
   export SGLANG_DECODE_FA3=${DECODE_FA3:-0}
   # SPLIT_MARGIN_AUTO=1: under SPLIT_OVERLAP the chunk / rows SM partition is chosen per step (apply_split_auto_margin.py).
   export SGLANG_SPLIT_MARGIN_AUTO=${SPLIT_MARGIN_AUTO:-0}
+  # SPLIT_POLICY=1: per extend step, split (short chunk) or one FA3 call over all rows (apply_split_policy.py).
+  export SGLANG_SPLIT_POLICY=${SPLIT_POLICY:-0}
 fi
 if [ "${KERNEL:-lpt}" = split ]; then
   export SGLANG_MIXED_ATTENTION_KERNEL=persistent SGLANG_TWO_EXEC=1 SGLANG_FUSED_FA3_SM_SPLIT=1

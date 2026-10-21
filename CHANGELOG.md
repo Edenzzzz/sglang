@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.26.0 — Per-step split-or-one-call policy; SM partition negative (2026-10-21)
+
+- Per-step SM partition lost 9% in serving: serving steps are chunk-dominated, so reserving SMs for the rows slowed
+  the chunk. On serving-shaped steps the split beats one FA3 call by 20-77% when a short chunk sits beside long
+  rows, and loses 0-21% beside a long chunk. Shared SMs beat a reserved partition.
+- `apply_split_policy.py` (`SPLIT_POLICY=1`): split only when the chunk is short; otherwise one FA3 call over all
+  rows. Every extend step now runs on FA3. Gate and A/B running.
+
 ## v1.25.6 — Plain decode on FA3 in serving (2026-10-21)
 
 - Ours without MTP, every attention call on FA3: 137 vs 142 tok/s for stock on FA3, agent attainment +7..+9

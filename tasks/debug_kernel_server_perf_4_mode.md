@@ -626,7 +626,29 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       The kernel gain left over FA3 stock is the co-run alone: 4-25%, none where the chunk's own FA3 time (49K prefix)
       matches the rows'. The best m moves from 16 to 80 SMs with the rows' share of the work, so a fixed margin loses
       most of it -- the margin has to follow the step's composition.
-    - [ ] The 2-mode / 4-mode table for all three models against FA3 stock, with m chosen per step.
+    - [x] **Per-step SM partition in serving -- negative (2026-10-21; `apply_split_auto_margin.py`,
+      `h200_auto_margin_20261021.sh`, rep 1, pod md5 b7b4b6c4).** m from a cost model fit on the sweep above:
+      ours no MTP 125.2 vs 137.0 tok/s at margin 0, chat attainment 75.6 vs 78.4%, chat TPOT p90 62 vs 50 ms; + MTP
+      130.9 vs 129.4 / 131.9 (no change). Logged steps show why: serving's mixed steps are a deep deadline chunk
+      (predicted 7-8 ms per layer) beside rows worth ~0.2 ms, so m = 8 took SMs from the step-setting chunk.
+      Rep 2 stopped.
+    - [x] **Serving-shaped mixed steps vs one stock FA3 call (2026-10-21; `python tasks/debug_kernel_server_perf/
+      serving_mix_corun_20261021.py`, raw `serving_mix_corun_20261021.txt`; chunk C @ P + A agent rows at 32-64K KV
+      + S chat rows at 0.5-4K, q4 or q1; all 20 steps within 4.2e-3 of fp32).**
+      | chunk | split | co-run, shared SMs (m0) | co-run, rows on 8 SMs | best partition |
+      |---|---|---|---|---|
+      | 512 @ 4K | -63..-76% | -64..-77% | -12..+151% | -67..-79% |
+      | 1024 @ 16K | -31..+1% | -8..-38% | -10..+158% | -10..-33% |
+      | 2048 @ 32K | +11..+21% | +8..+11% | +7..+26% | +3..+8% |
+      | 4096 @ 32K | 0..+14% | -3..+9% | +4..+17% | +5..+17% |
+      | 6000 @ 49K | -2..-4% | -2..-3% | +1..+3% | +1..+3% |
+      One varlen FA3 call sized for a short chunk is slow on long-context rows (0.8 ms floor with a 512-token
+      chunk vs 0.14-0.30 ms split) -- the split wins there; beside a long chunk the rows hide and the second launch
+      only adds. A reserved partition never beats shared SMs by more than 3 points and loses badly when rows are
+      long. So the per-step decision is whether to split, not where: `apply_split_policy.py` splits below a
+      predicted chunk time of 1 ms per layer, otherwise runs the whole step as one FA3 call (and every one-sided
+      step, which still ran flashinfer's prefill, now runs FA3). Serving: `h200_split_policy_20261021.sh`, running.
+    - [ ] The 2-mode / 4-mode table for all three models against FA3 stock under the policy.
     - [x] Serving against stock on FA3: see `tasks/realistic_workload_analysis.md`, "Stock on its own Hopper default".
   - [ ] Single node: Qwen2.5-7B table rerun with chat template (`h200_chattemplate_20261021.sh`, running); Qwen3-8B (head
     downloading); GLM-4.5-Air on one H20 pod.

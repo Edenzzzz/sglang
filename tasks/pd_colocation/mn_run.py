@@ -229,7 +229,10 @@ def calibrate():
             f"PREEMPT={os.environ.get('PREEMPT', '0')} CHUNK={os.environ.get('CHUNK', '')} MODEL_DIR={model} "
             f"TP={os.environ.get('TP', '1')} GPUS_PER_POD={os.environ.get('GPUS_PER_POD', '2')} "
             f"DRAFT_DIR={os.environ.get('DRAFT_DIR', 'qwen7b_eagle3_sgl')} SIM_ACC={os.environ.get('SIM_ACC', '')} "
-            f"MEM_FRAC={os.environ.get('MEM_FRAC', '0.85')} SM_FA3={os.environ.get('SM_FA3', '66')}")
+            f"MEM_FRAC={os.environ.get('MEM_FRAC', '0.85')} SM_FA3={os.environ.get('SM_FA3', '66')} "
+            f"SPLIT_OVERLAP={os.environ.get('SPLIT_OVERLAP', '0')} SPLIT_ROWS_FA3={os.environ.get('SPLIT_ROWS_FA3', '0')} "
+            f"VERIFY_FA3={os.environ.get('VERIFY_FA3', '0')} DECODE_FA3={os.environ.get('DECODE_FA3', '0')} "
+            f"SPLIT_MARGIN_AUTO={os.environ.get('SPLIT_MARGIN_AUTO', '0')} CHAT_TEMPLATE={os.environ.get('CHAT_TEMPLATE', '0')}")
     C.run(0, f"rm -rf {log}; mkdir -p {log}; {cenv} bash {W}/tasks/pd_colocation/mn_node.sh coloc {log}")
     hs = hosts()
     t0 = time.time()

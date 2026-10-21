@@ -298,6 +298,7 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   | stock prefill-prioritized + MTP, FA3 | 161.3 / 161.7 | 7.63 / 7.78 s | 68.9 / 66.7% | 1.81 / 1.80 s | 16.3 / 15.7 ms | 77.0 / 77.0% |
   | ours + MTP, rows on FA3 | 98.5 / - | 12.04 / 11.45 s | 35.6 / 44.4% | 2.68 / 2.40 s | 31.7 / 32.0 ms | 61.0 / 63.8% |
   | ours + MTP, rows + verify on FA3 | 129.4 / 131.9 | 8.30 / 7.67 s | 60.0 / 62.2% | 0.91 / 0.88 s | 30.6 / 30.6 ms | 72.2 / 72.6% |
+  | ours, no MTP, rows + plain decode on FA3 | 137.0 / 136.9 | 3.11 / 3.17 s | 91.1 / 93.3% | 0.13 / 0.11 s | 50.4 / 50.5 ms | 78.4 / 78.4% |
   Verify on FA3 (`apply_verify_fa3.py`; gate `_r3v3gate` with graphs off: 55K FA3 verify calls, 0 VERIFY_FA3_CHECK
   failures, worst 0.012 vs the planned flashinfer wrapper; graphs on, the first VERIFY_FA3 call is logged inside
   capture at bs 48, so the replayed verify graphs run FA3) is the large step: ours + MTP throughput +32%, chat
@@ -305,8 +306,13 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   -19% throughput, chat attainment -6 points, agent -6 points (chat TTFT -51% is the one win); without MTP agent
   attainment +5..+7 points and chat TTFT -78%, but chat attainment -7 points (TPOT p90 53 vs 40 ms) and throughput
   -13%. Stock on FA3 already attains ~80% chat at this load, so +30% attainment is out of reach here regardless: the
-  bar needs a load at which stock on FA3 saturates. Next: plain decode on FA3 (`h200_decode_fa3_20261021.sh`,
-  running), then the remaining gaps (draft model still on flashinfer; TPOT tail of the mixed step; fixed sm_margin).
+  bar needs a load at which stock on FA3 saturates. Plain decode on FA3 (`apply_decode_fa3.py`,
+  `h200_decode_fa3_20261021.sh`; gate `_r3d3gate` graphs off: 0 DECODE_FA3_CHECK failures, worst 0.011 vs the
+  planned BatchDecode wrapper; pod md5 6facb522) brings ours without MTP, now on FA3 for every attention call, to
+  near parity with stock mixed chunk on FA3: throughput -3%, agent attainment +7..+9 points, chat attainment -1.5
+  points, chat TTFT -78..-81%; the chat TPOT p90 stays 10 ms worse (50 vs 40 ms). Next: the per-step SM partition
+  of the co-run (`h200_auto_margin_20261021.sh`; every run so far had sm_margin 0), the draft model (still on
+  flashinfer), and a load at which stock saturates.
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

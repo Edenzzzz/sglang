@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.25.6 — Plain decode on FA3 in serving (2026-10-21)
+
+- Ours without MTP, every attention call on FA3: 137 vs 142 tok/s for stock on FA3, agent attainment +7..+9
+  points, chat attainment -1.5 points, chat TTFT -78%. Gate: 0 failures, worst error 0.011.
+
 ## v1.25.5 — 32 H20s at 2x load, both on FA3 (2026-10-21)
 
 - Ours 1172 vs disagg 5 + 3 444 tok/s agent throughput (+164%); agent TTFT 0.72 vs 12.25 s. Disagg holds the lower

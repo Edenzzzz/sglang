@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.27.2 — Dispatch fastpath: correct but not the cost; backend-class control queued (2026-10-22)
+
+- `apply_split_fastpath.py` gate passes (0 failures, worst 0.0166, both paths exercised) and leaves serving
+  unchanged at 146.9 tok/s, so the per-layer output copy and view rebuilds were not the 114 us/layer.
+- Queued the control that was missing all along: stock's schedule on the flashinfer backend with no split at all.
+  It decides whether the remaining cost is our split code or the backend class, and so whether the port is needed.
+
 ## v1.27.1 — The backend gap is per-layer dispatch overhead, not attention (2026-10-22)
 
 - Ruled out with measurement: the split itself (forcing one FA3 call per extend step changes nothing) and the page

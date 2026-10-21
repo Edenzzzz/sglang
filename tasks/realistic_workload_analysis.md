@@ -402,7 +402,14 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
     the 3.2 ms is ~114 us per layer of GPU-timeline time that is not attention math -- the dispatch's own work on steps
     whose kernels are too small to hide it. `apply_split_fastpath.py` (`SPLIT_FASTPATH=1`) removes the per-layer output
     allocation and full-output copy on single-call steps (FA3's own output is the answer) and caches the paged K/V
-    views instead of rebuilding them per layer. Gate + traced A/B: `h200_fastpath_20261022.sh`, running.
+    views instead of rebuilding them per layer. **Gate passes (0 failures over split and single-call steps, worst
+    0.0166, 218 split / 283 one-call in the gate) but it does NOT move serving: 146.9 tok/s, identical to before.** So
+    those two per-layer items were not the 114 us either.
+  - [ ] **Control that distinguishes our split code from the flashinfer backend class (`h200_backend_class_20261022.sh`,
+    queued):** the same stock schedule on the flashinfer backend with NO split at all (KERNEL=lpt), traced, against
+    stock's FA3 backend and the two ours arms. If the shallow bin stays ~10.6 ms with no split in the picture, the cost
+    is the backend class itself and porting the split onto sglang's FA3 backend class is the fix -- a structural change
+    this control is meant to justify with data rather than assume.
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

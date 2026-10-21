@@ -47,8 +47,9 @@ PORTS = {}  # role -> [(http_port, bootstrap_port) for gpu 0, 1], read from each
 
 def read_ports(log):
     for r, (rc, out) in enumerate(C.run_all(f"cat {log}/ports_r${{ARNOLD_ID}}_g*.txt 2>/dev/null")):
-        rows = [l.split() for l in out.splitlines() if len(l.split()) == 3 and l.split()[0] in ("0", "1")]
-        PORTS[r] = [(int(p), int(b)) for _, p, b in sorted(rows)]
+        # One line per GPU worker ("gpu port boot"); any GPU index (4-GPU pods run g0..g3).
+        rows = [l.split() for l in out.splitlines() if len(l.split()) == 3 and l.split()[0].isdigit()]
+        PORTS[r] = [(int(p), int(b)) for _, p, b in sorted(rows, key=lambda x: int(x[0]))]
 
 
 def urls(hs, roles=None):

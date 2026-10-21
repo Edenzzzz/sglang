@@ -354,7 +354,16 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   FA3. `SGLANG_FUSED_SKIP_BASE_PLAN=1` (`h200_skip_base_plan_20261021.sh`): the first run measured NOTHING -- the pod
   still carried the pre-flag `mn_node.sh` (the draft-FA3 job had pushed the launcher before the flag was added), so the
   env was never exported and `base_plan_skipped` never logged, while the arm still read 146.2 tok/s and looked like a
-  +0.6% result. The script now verifies the pod launcher exports the knob before arming, and the arms were rerun.
+  +0.6% result. The arms were rerun with the knob verified by its
+  `base_plan_skipped` counter (2001 / 2501 skips): +1.7%, stock's schedule on our backend 145.3 -> 147.8 tok/s and
+  ours + MTP 134.5 -> 135.4. (The guard added to the script was itself wrong -- it tested for the substring "1" in a
+  count that read "2", and without `set -e` it did not halt -- so the counter, not the guard, is what establishes that
+  these arms are valid.) So the ~16 tok/s backend gap is not one thing: +2% draft extend, +1.7% unused base plan, ~9%
+  unaccounted. What sglang's FA3 backend does not do per step and ours still does: `split_classes`, the split plan's
+  numpy index builds and synchronous H2D copies, the decode wrapper plan (DECODE_FA3 was off in this arm), and the
+  draft model's 3 per-cycle decode steps, which `DRAFT_FA3` does not cover (it covers draft extend only). Measuring GPU
+  ms per step type against host launch gap on both backends before changing anything else:
+  `h200_backend_trace_20261021.sh` (STEP_TRACE=1, `tasks/perf_model/steptrace_compare.py`, `steptrace_gaps.py`).
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

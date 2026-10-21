@@ -499,12 +499,17 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
       | stock mixed chunk | 50.5% | 57.0% | 3.55 s | 1.97 s | 151.1 |
       | stock prefill-prioritized | 55.9% | 57.0% | 3.16 s | 1.86 s | 150.6 |
       | ours no MTP, chunk 2048 | **34.4%** | **55.2%** | **6.72 s** | 1.23 s | 117.8 |
+      | ours + MTP 4-mode, chunk 2048 | **19.4%** | **45.2%** | **16.58 s** | 6.73 s | 31.6 |
       Mechanism: with 16 concurrent agent programs at 32-64K context, EDF's deferral of loose-deadline agents
       compounds (agent TTFT doubles) and chat gains almost nothing (55.2 vs 57.0) because chat is starved by agent
       prefill volume whatever the ordering. Our schedule's advantage is a LIGHT-load phenomenon on one GPU -- the
       opposite of its multi-node behaviour, where the lead grows with load (+56% -> +164%) and with cache pressure
       (+91% -> +277%). The difference is that multi-node has a routing dimension (place the request on a node that
       can meet its SLO) which a single GPU does not.
+      Ours + MTP at chunk 2048 is the worst arm in the whole sweep (agent TTFT 16.6 s, chat attainment 45.2%). Since
+      chunk 4096 was worth -12.5% -> -3.8% throughput for that same arm at C=8, running the 4-mode step with a 2048
+      chunk under saturation is probably the single worst configuration choice measured here, not a property of the
+      4-mode step -- which the retest below settles.
       - [ ] Last single-node test (`h200_c16_chunk_20261022.sh`, queued): ours at its BEST chunk (1024:4096 and
         1024:8192, the setting that took ours + MTP from -12.5% to -3.8% at C=8) under C=16. This sweep used 2048, so
         the chunk interaction at saturation is untested. If ours still loses there, the single-node claim closes as a

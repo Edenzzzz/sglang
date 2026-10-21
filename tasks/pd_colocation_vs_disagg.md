@@ -2412,8 +2412,13 @@ disaggregation is the required disaggregation baseline.
 The split-row corruption that gated everything is fixed and there is now a lot of serving data, so
 the 2026-10-10 version of this section (no serving data, corruption blocking) is gone.
 
-- **Multi-node is where the case holds.** Against PD disaggregation at its best P:D ratio, both
-  systems on FA3, ours wins by margins far above the bar: +56% agent throughput at 32 GPUs / 1x
+- **Multi-node is where the case holds, with one confound still being removed.** In every multi-node run so far ours
+  ran sglang's **flashinfer** backend (carrying our FA3 patches) while disagg ran the **FA3** backend. The
+  backend-class control measured that class at half the throughput of FA3 on this workload, so ours was handicapped
+  and the comparison was not schedule-vs-schedule. The rerun with every arm on FA3 and no split planning at all
+  (`bash tasks/pd_colocation/mn_fa3_16g_20261022.sh`, 16 H20s, no-spec and real MTP, disagg at 2+2 and 3+1) is queued;
+  it can only move ours' numbers up. Against PD disaggregation at its best P:D ratio, both systems on FA3, ours wins
+  by margins far above the bar: +56% agent throughput at 32 GPUs / 1x
   load, +164% at 2x, 3.5x with Qwen3-8B and real MTP at 16 GPUs, with agent TTFT 6-18x lower.
   Disagg's weakness is structural here -- it re-prefills agent session history every round, so its
   cached fraction falls with load while ours stays at 0.98.

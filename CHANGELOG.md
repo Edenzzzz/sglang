@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.27.1 — The backend gap is per-layer dispatch overhead, not attention (2026-10-22)
+
+- Ruled out with measurement: the split itself (forcing one FA3 call per extend step changes nothing) and the page
+  table's row stride (-4..+4% across 2.1x-28.4x stride ratios, all within fp32 reference).
+- Located: the slow bin's steps carry 164 prefill tokens, 37 prefix and zero decode rows, so the 3.2 ms gap is
+  ~114 us/layer of dispatch work on launch-bound steps. `apply_split_fastpath.py` drops the per-layer output copy
+  and allocation on single-call steps and caches the paged K/V views. Gate and A/B running.
+
 ## v1.27.0 — PD-colocation doc: evidence state and standing rewritten to current measurement (2026-10-21)
 
 - The four-point evidence table and the standing summary were dated 2026-10-10 and contradicted

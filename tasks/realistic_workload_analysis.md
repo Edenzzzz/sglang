@@ -388,10 +388,21 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
     second, which is exactly the -9%. Mixed EXTEND steps cost ours +8% GPU overall (85.3 vs 79.2 s) and **+43% in the
     shallow bin** (ptok < 600, prefix < 16K: 10.68 vs 7.48 ms) -- the bin the split policy actually splits, since a
     600-token chunk at 16K predicts ~0.19 ms. Chat prefills live in that bin.
-  - [ ] **Never-split probe (`h200_nosplit_probe_20261021.sh`, running):** `SGLANG_SPLIT_SINGLE_CHUNK_MS=0` makes every
-    extend step one FA3 call, separating our planning plus the second launch from FA3 itself. If prefill-step time then
-    matches stock's, the serving cost is our split on shallow steps -- the opposite sign to the kernel microbenchmark,
-    where splitting a short chunk beside long rows was the best case.
+  - [x] **The split is NOT the cost (2026-10-22, `h200_nosplit_probe_20261021.sh`, `SPLIT_POLICY split=0
+    one_call=2001`).** With every extend step forced to one FA3 call -- the same kernel upstream's FA3 backend runs --
+    the shallow bin still costs 10.67 ms (vs 10.68 with the split, stock 7.48) and throughput is unchanged (146.7 vs
+    146.9, stock 161.2).
+  - [x] **Nor is the page table's row stride (2026-10-22, `python tasks/debug_kernel_server_perf/
+    page_table_stride_20261022.py`; every arm within 4.1e-3 of fp32).** Ours passes `buf[:, :max_k]` out of a
+    [pool, 131072] buffer (row stride 512 KB) where upstream passes a contiguous [rows, max_k]; FA3 does not care --
+    narrow vs wide vs wide-made-contiguous differ -4.2..+3.9% across stride ratios 2.1x to 28.4x.
+  - [x] **It is our PER-LAYER dispatch overhead on launch-bound steps (2026-10-22).** The shallow bin's steps are tiny:
+    ptok 164, prefix 37, total KV 201, **nd = 0** in all three traces (`binfeat.py` over the STEPTRACE logs, identical
+    features across backends: ptok 163.8 / 163.5 / 162.6, np 1.05 / 1.06 / 1.06). Attention there is microscopic, so
+    the 3.2 ms is ~114 us per layer of GPU-timeline time that is not attention math -- the dispatch's own work on steps
+    whose kernels are too small to hide it. `apply_split_fastpath.py` (`SPLIT_FASTPATH=1`) removes the per-layer output
+    allocation and full-output copy on single-call steps (FA3's own output is the answer) and caches the paged K/V
+    views instead of rebuilding them per layer. Gate + traced A/B: `h200_fastpath_20261022.sh`, running.
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

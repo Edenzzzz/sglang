@@ -334,6 +334,19 @@ static mixture.
         decode fewer pods to add prefill (6 + 2, 3 + 1) collapses decode instead. With MTP on H20 at ~2.0 accepted tokens
         ours loses ~18% agent throughput vs no spec (1777 vs 2153 at 32 GPUs). The comparison is at one load per scale; a
         load sweep at which disagg is not overloaded (where ours' advantage should shrink) is the next run.
+      - [ ] **Load sweep at 32 H20s with both systems on FA3 (2026-10-21; `bash tasks/pd_colocation/
+        mn_load_sweep32_fa3_20261021.sh`; sglang 6d3f344af, pods' flashinfer_backend.py md5 ed98c8e1fd51; Qwen2.5-7B no
+        spec, 900 s; 1x and 2x the 8-GPU load).** H20 is Hopper, where upstream's default backend is FA3; every earlier
+        disagg arm forced flashinfer, so disagg now runs FA3 and ours runs its split rows on FA3 (`SPLIT_ROWS_FA3=1`).
+        1x load (agent programs 32 / tasks 16, chat 8 req/s), all errors=0, 0 tracebacks:
+        | arm | agent tok/s | agent TTFT mean / p99 | chat TTFT mean / p99 | ITL p99 agent / chat | cached |
+        |---|---|---|---|---|---|
+        | ours (EDF + SLO router + pool) | 596.3 | 0.74 / 2.72 s | 0.05 / 0.31 s | 19.3 / 18.7 ms | 0.981 |
+        | disagg 5 + 3, FA3 | 382.5 | 4.59 / 28.60 s | 2.98 / 28.25 s | 14.3 / 10.2 ms | 0.851 |
+        | disagg 4 + 4, FA3 | 324.5 | 5.79 / 35.31 s | 3.55 / 34.06 s | 12.9 / 9.7 ms | 0.805 |
+        Even at 1x load, where disagg is not collapsed, ours leads on agent throughput (+56%), agent TTFT (-84%) and chat
+        TTFT (-98%); disagg holds the lower ITL tail (its decode pods never see a prefill). 2x load running; per-tenant
+        attainment and error bars to add.
       - [x] **Llama-3.3-70B-Instruct at TP4, 4 pods x 4 H20 = 4 replicas (2026-10-21, job f3b4627e0864b06f, provisioned by
         `mn_provision_70b_20261021.sh` from the archived serving tree -- manifest verified on all 4 pods -- plus
         `mn_provision_70b_post_20261021.sh`).**

@@ -100,8 +100,10 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # ATTN_BACKEND: flashinfer (default; the split lives in its backend) or fa3, upstream's own default on Hopper for MHA
   # models with no spec or topk 1 (get_default_attn_backend) -- the stock baseline a reviewer would run.
   ARGS=(--model $W/${MODEL_DIR:-qwen7b} --attention-backend ${ATTN_BACKEND:-flashinfer} --mem-fraction-static ${MEM_FRAC:-0.85}
-        --host :: --port $PORT --nccl-port $NCCL --context-length ${CTX_LEN:-131072} --watchdog-timeout 600
-        --json-model-override-args '{"rope_scaling":{"factor":'${YARN_FACTOR:-4.0}',"original_max_position_embeddings":32768,"type":"yarn"}}')
+        --host :: --port $PORT --nccl-port $NCCL --context-length ${CTX_LEN:-131072} --watchdog-timeout 600)
+  # YaRN to CTX_LEN for the 32K-native Qwen models; YARN_FACTOR=0 for a model native at CTX_LEN (GLM-4.5-Air, 128K).
+  [ "${YARN_FACTOR:-4.0}" != 0 ] && ARGS+=(--json-model-override-args \
+    '{"rope_scaling":{"factor":'${YARN_FACTOR:-4.0}',"original_max_position_embeddings":32768,"type":"yarn"}}')
   # Shared L3 prefix cache (goal points 2 and 4): every colocated worker writes the prefixes it
   # computes through to a cluster-wide mooncake store (RDMA, host DRAM) and prefetches a request's
   # prefix from it on a local miss, so any node can pull from any other -- a complete graph, with
@@ -208,8 +210,13 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
     # accepts <len> tokens including the bonus (SGLANG_SIMULATE_ACC_LEN, match-expected); the draft and verify work
     # per step stay real, so a random-weight head of the target's shape (make_sim_eagle3_head.py) serves.
     [ -n "${SIM_ACC:-}" ] && export SGLANG_SIMULATE_ACC_LEN=$SIM_ACC SGLANG_SIMULATE_ACC_METHOD=match-expected
-    ARGS+=(--speculative-algorithm EAGLE3 --speculative-draft-model-path $W/${DRAFT_DIR:-qwen7b_eagle3_sgl}
-           --speculative-num-steps ${SPEC_STEPS:-3} --speculative-eagle-topk 1 --speculative-num-draft-tokens ${SPEC_TOKENS:-4})
+    # DRAFT_DIR=nextn: the model's own MTP layer (GLM-4.5-Air), sglang's NEXTN algorithm, no separate draft path.
+    if [ "${DRAFT_DIR:-}" = nextn ]; then
+      ARGS+=(--speculative-algorithm NEXTN)
+    else
+      ARGS+=(--speculative-algorithm EAGLE3 --speculative-draft-model-path $W/${DRAFT_DIR:-qwen7b_eagle3_sgl})
+    fi
+    ARGS+=(--speculative-num-steps ${SPEC_STEPS:-3} --speculative-eagle-topk 1 --speculative-num-draft-tokens ${SPEC_TOKENS:-4})
     [ "$MODE" = coloc ] && [ "$SPEC" = 1 ] && export SGLANG_ALLOW_MIXED_CHUNK_SPEC=1 SGLANG_MIXED_SPEC=1
     # Load + context gate (mixed_spec_ctx_queue_gate.patch): mix only when the prefill carries >= 8K
     # context or >= 4 requests wait; otherwise the prefill runs alone, as in stock MTP.

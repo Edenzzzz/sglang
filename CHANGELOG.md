@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.26.2 — GLM-4.5-Air output gate passes; launcher supports NEXTN and no YaRN (2026-10-21)
+
+- One H20 pod at TP4: ours agrees with stock within stock's own run-to-run noise. Acceptance 2.5-2.75.
+- `mn_node.sh`: `DRAFT_DIR=nextn` (the model's own MTP layer), `YARN_FACTOR=0`. `mn_h20_single_20261021.sh`
+  single-pod harness. The split policy changes nothing in serving (ours no MTP 135.8 tok/s, chat 78.5%).
+
 ## v1.26.1 — Qwen3-8B with MTP on 16 H20s, both on FA3 (2026-10-21)
 
 - Ours 448 vs disagg 105 / 128 tok/s (2 + 2 / 3 + 1); agent TTFT 1.7 vs 24-31 s. Ours' agent ITL p99 is 340 ms vs

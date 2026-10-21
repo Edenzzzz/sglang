@@ -652,6 +652,12 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     - [x] Serving against stock on FA3: see `tasks/realistic_workload_analysis.md`, "Stock on its own Hopper default".
   - [ ] Single node: Qwen2.5-7B table rerun with chat template (`h200_chattemplate_20261021.sh`, running); Qwen3-8B (head
     downloading); GLM-4.5-Air on one H20 pod.
+    - [x] **GLM-4.5-Air output gate (2026-10-21; one H20 pod at TP4, `bash tasks/pd_colocation/gate_glm_20261021.sh` on
+      pod 0 of job 2f608c1b1a67cf09, pods' flashinfer_backend.py md5 31b6d37c; own MTP layer via NEXTN, no YaRN; every
+      arm on FA3): PASS.** 96 ShareGPT + 8 x 32K TraceLab prompts at once, greedy, 128 tokens. Stock rerun vs stock (noise
+      floor): short 16/96 exact, mean common prefix 238 of 567 chars; long 0/8, 219 of 600. Ours vs stock: short 20/96,
+      230; long 1/8, 187. 0 tracebacks in all arms; ours 1001 split calls, 151 4-mode steps, verify on FA3 captured;
+      accept len 2.54 / 2.61 (stock) and 2.75 (ours). Serving table: `mn_glm_single_20261021.sh`, running.
   - [ ] 32 GPUs, Qwen2.5-7B no spec, ours vs disagg at 2 / 4 / 5 / 6 of 8 prefill pods (`mn_scale32_20261021.sh`,
     running); then 16 / 32 GPUs with MTP at real acceptance for each model.
 

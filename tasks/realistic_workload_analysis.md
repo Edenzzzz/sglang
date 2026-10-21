@@ -457,6 +457,13 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
       keeps small ones -- `DEADLINE_CHUNK=1024:4096` and `1024:8192` on the FA3 backend
       (`h200_agent_chunk_20261022.sh`, queued). Note the earlier 512 / 1024 probe moved this dial the WRONG way
       (agent TTFT 3.38 -> 4.58 s), which is consistent with this reading.
+    - [ ] **The load regime the bar needs (`h200_agentload_20261022.sh`, queued).** Stock holds 76-80% chat attainment
+      from chat 8 to 16 req/s with nothing dropped, so no >=30% attainment gain is reachable at any of the loads
+      measured so far -- the comparison has been run where stock is not saturated. Agent program CONCURRENCY is what
+      saturates this GPU (32-64K contexts), and multi-node showed ours pulling ahead exactly as load doubled (+56% ->
+      +164%). So: agent concurrency 16 and 24 against the 8 used in every run so far, chat fixed at 8 req/s, every arm
+      on the FA3 backend. If ours does not clear the bar at a load where stock degrades, the honest conclusion is that
+      the single-node bar is not reachable with this workload shape and the claim belongs to multi-node only.
       - Note on the earlier "+43% shallow bin": that comparison was stock's schedule on both backends, where the bin
         carries nd=0 on each, so it was a like-for-like overhead measurement. The same bin under OURS' schedule carries
         nd=15.3 and dkv=40K (8.50 ms) -- our steps legitimately mix decode rows into the prefill step, which is the

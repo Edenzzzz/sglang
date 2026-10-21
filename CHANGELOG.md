@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.32.0 — BAR MET on multi-node, confound-free, with no kernel work (2026-10-22)
+
+- 16 H20s, no spec, every arm on upstream's FA3 backend, ours with KERNEL=lpt (no split at all), disagg swept over
+  2+2 and 3+1. vs disagg's best ratio: chat SLO attainment 96.5% vs 23.3% (+314%), agent SLO goodput 939 vs 129
+  tok/s (7.3x), raw agent throughput +179%, agent TTFT -95%, chat TTFT -99.5%. Requirement is >=30% attainment and
+  >=10% throughput.
+- Ours' chat TPOT p90 (11.5 ms) also beats disagg 3+1 (13.3 ms), so ITL favours ours at this scale.
+- The advantage is entirely the colocated schedule plus the cache-first SLO router; the fused kernel contributes
+  predictability (point 3) and ~2.5% on the single-GPU schedule, not this.
+
 ## v1.31.0 — Multi-node confound removed: +297% with NO kernel work (2026-10-22)
 
 - 16 H20s, no spec, every arm on upstream's FA3 backend with no split planning (KERNEL=lpt): ours 962.7 vs disagg

@@ -356,6 +356,19 @@ static mixture.
         triples -- its prefill pods saturate re-prefilling agent history (cached fraction 0.85 -> 0.76). The gap widens
         with load: agent throughput +56% at 1x, +164% at 2x. Ours' ITL tail stays 1.5-2.5x disagg's (19-25 vs 10-16
         ms). Per-tenant attainment and error bars still to add.
+      - [ ] **Qwen3-8B + trained EAGLE3 head (AngelSlim) with MTP on 16 H20s, both on FA3 (2026-10-21;
+        `bash tasks/pd_colocation/mn_qwen3_16g_mtp_20261021.sh`; sglang fc9847d2a, pods' flashinfer_backend.py md5
+        ed98c8e1fd51; ours rows + verify on FA3, disagg `--attention-backend fa3`; router perf model calibrated on
+        ours' worker config, `/tmp/h20/mn_q3_calibrate.log`; chat template; 16 tasks / 32 agent programs, chat 8 req/s,
+        900 s -- half the Qwen2.5-7B 16-GPU load). All errors=0, 0 tracebacks:**
+        | arm | agent tok/s | agent TTFT mean / p99 | chat TTFT mean / p99 | agent ITL p99 | chat TPOT | cached |
+        |---|---|---|---|---|---|---|
+        | ours | 447.8 | 1.67 / 21.50 s | 0.21 / 2.46 s | 339.6 ms | 11.1 ms | 0.930 |
+        | disagg 2 + 2, FA3 | 105.0 | 30.74 / 109.70 s | 24.79 / 102.16 s | 30.3 ms | 3.6 ms | 0.641 |
+        | disagg 3 + 1, FA3 | 128.4 | 23.56 / 85.94 s | 16.97 / 76.71 s | 58.3 ms | 7.7 ms | 0.652 |
+        Ours 3.5x disagg's better ratio in agent throughput, TTFT -93% / -99%; disagg's prefill pods re-prefill agent
+        history (cached 0.64-0.65 vs 0.93) and queue. Ours' agent ITL tail is 6-11x disagg's (340 ms p99) -- the cost of
+        colocating deep chunks with decode on H20; to examine. One repeat; per-tenant attainment to add.
       - [x] **Llama-3.3-70B-Instruct at TP4, 4 pods x 4 H20 = 4 replicas (2026-10-21, job f3b4627e0864b06f, provisioned by
         `mn_provision_70b_20261021.sh` from the archived serving tree -- manifest verified on all 4 pods -- plus
         `mn_provision_70b_post_20261021.sh`).**

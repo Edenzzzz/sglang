@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.26.1 — Qwen3-8B with MTP on 16 H20s, both on FA3 (2026-10-21)
+
+- Ours 448 vs disagg 105 / 128 tok/s (2 + 2 / 3 + 1); agent TTFT 1.7 vs 24-31 s. Ours' agent ITL p99 is 340 ms vs
+  30-58 ms for disagg.
+
 ## v1.26.0 — Per-step split-or-one-call policy; SM partition negative (2026-10-21)
 
 - Per-step SM partition lost 9% in serving: serving steps are chunk-dominated, so reserving SMs for the rows slowed

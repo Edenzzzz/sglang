@@ -49,6 +49,8 @@ if [ "${KERNEL:-lpt}" = mtpsplit ]; then
   export SGLANG_SPLIT_MARGIN_AUTO=${SPLIT_MARGIN_AUTO:-0}
   # SPLIT_POLICY=1: per extend step, split (short chunk) or one FA3 call over all rows (apply_split_policy.py).
   export SGLANG_SPLIT_POLICY=${SPLIT_POLICY:-0}
+  # SPLIT_NEVER=1: policy threshold 0, so every extend step is one FA3 call (isolates the split from FA3 itself).
+  [ "${SPLIT_NEVER:-0}" = 1 ] && export SGLANG_SPLIT_SINGLE_CHUNK_MS=0
   # DRAFT_FA3=1: the draft model's draft-extend steps on FA3 (apply_draft_fa3.py).
   export SGLANG_DRAFT_FA3=${DRAFT_FA3:-0}
   # SKIP_BASE_PLAN=1: under the split policy every extend step is served by FA3, so the full-batch flashinfer prefill

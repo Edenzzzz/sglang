@@ -378,10 +378,20 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
     and the emitted-token accounting agrees across backends (steps x bs x accept = 513K vs 511K). Mixed EXTEND steps
     cost ours +8% (85.5 vs 79.2 s). So ours does equal GPU work for ~9% fewer tokens per second, which is idle time
     the busy-period metric excludes by construction.
-  - [ ] **Decode / verify steps on FA3 in that arm (`h200_ourbe_decode_20261021.sh`, running).** Every "stock schedule
-    on our backend" arm so far ran DECODE_FA3=0, so those steps -- the 211 GPU-seconds above -- still used flashinfer's
-    decode wrapper. This is the last untested per-step cost before the structural option (porting the split onto
-    sglang's own FA3 backend class instead of the flashinfer one).
+  - [x] **DECODE_FA3 in that arm changes nothing, and cannot (2026-10-21/22, `h200_ourbe_decode_20261021.sh`):**
+    146.9 tok/s either way, decode-step GPU mean 7.26 ms both. `apply_decode_fa3.py` fires only when
+    `forward_batch.spec_info is None`, and under MTP every decode-or-idle batch carries spec state, so the patch is a
+    no-op in any MTP arm by construction. It still matters for the no-MTP arms, where it was worth +11% (123 -> 137).
+  - [x] **The gap is PREFILL-step time, and ours' decode is already faster (2026-10-22).** In the traced arms ours'
+    agent TPOT is *better* than stock's (20.3-21.2 vs 24.8 ms) while its agent TTFT is *worse* (8.51-8.58 vs 7.80 s).
+    Agent load is fixed program concurrency, so TTFT sets agent throughput: slower prefill steps -> fewer tokens per
+    second, which is exactly the -9%. Mixed EXTEND steps cost ours +8% GPU overall (85.3 vs 79.2 s) and **+43% in the
+    shallow bin** (ptok < 600, prefix < 16K: 10.68 vs 7.48 ms) -- the bin the split policy actually splits, since a
+    600-token chunk at 16K predicts ~0.19 ms. Chat prefills live in that bin.
+  - [ ] **Never-split probe (`h200_nosplit_probe_20261021.sh`, running):** `SGLANG_SPLIT_SINGLE_CHUNK_MS=0` makes every
+    extend step one FA3 call, separating our planning plus the second launch from FA3 itself. If prefill-step time then
+    matches stock's, the serving cost is our split on shallow steps -- the opposite sign to the kernel microbenchmark,
+    where splitting a short chunk beside long rows was the best case.
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

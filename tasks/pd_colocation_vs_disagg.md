@@ -356,6 +356,20 @@ static mixture.
         triples -- its prefill pods saturate re-prefilling agent history (cached fraction 0.85 -> 0.76). The gap widens
         with load: agent throughput +56% at 1x, +164% at 2x. Ours' ITL tail stays 1.5-2.5x disagg's (19-25 vs 10-16
         ms). Per-tenant attainment and error bars still to add.
+      - [ ] **Point 2 measured as ThunderAgent poses it: cache THRASHING (2026-10-22, 16 H20s = 4 pods x 4, both
+        systems on FA3, `bash tasks/pd_colocation/mn_thrash_16g_20261022.sh`; agent program concurrency fixed at 32,
+        the WORKING SET swept by distinct agent tasks at 64K prefix each: 16 / 64 / 128 tasks = ~1M / 4M / 8M live KV
+        tokens against ~6.7M of cluster capacity, so only the last point must evict and re-prefill).** The claim is
+        that colocation plus the shared pool keeps prefixes resident where disagg's prefill pods must recompute them,
+        so the cached fraction is the direct re-prefill proxy. First point (16 tasks, no thrashing -- the baseline):
+        | arm | agent tok/s | agent TTFT mean / p99 | chat TTFT mean / p99 | ITL p99 agent / chat | cached |
+        |---|---|---|---|---|---|
+        | ours | 597.5 | 0.60 / 2.40 s | 0.06 / 0.34 s | 21.9 / 19.9 ms | 0.980 |
+        | disagg 2 + 2, FA3 | 313.1 | 7.03 / 44.72 s | 6.50 / 48.58 s | 17.2 / 12.1 ms | 0.890 |
+        Ours +91% agent throughput and 12x lower agent TTFT before any thrashing, with disagg already 9 points behind
+        on cached fraction. 64- and 128-task points running; the test of point 2 is whether ours holds ~0.98 while
+        disagg's falls as the working set passes capacity.
+
       - [ ] **Qwen3-8B + trained EAGLE3 head (AngelSlim) with MTP on 16 H20s, both on FA3 (2026-10-21;
         `bash tasks/pd_colocation/mn_qwen3_16g_mtp_20261021.sh`; sglang fc9847d2a, pods' flashinfer_backend.py md5
         ed98c8e1fd51; ours rows + verify on FA3, disagg `--attention-backend fa3`; router perf model calibrated on

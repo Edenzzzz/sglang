@@ -380,9 +380,20 @@ static mixture.
         | disagg chat TTFT mean | 6.50 s | 15.66 s | 2.4x |
         Ours' lead widens from +91% to **+266%** agent throughput as the working set grows 4x, and the mechanism is
         legible in the cached fraction: disagg's prefill pods lose prefixes between an agent session's rounds and
-        recompute them, where colocation plus the pool keeps them resident (ours loses 1.4 points, disagg 21). Both
-        systems keep chat throughput at the offered rate; disagg pays in TTFT. 128-task point (~8M, past capacity, so
-        both must evict) running.
+        recompute them, where colocation plus the pool keeps them resident. **COMPLETE CURVE (all 6 arms, errors=0,
+        0 tracebacks):**
+        | tasks (live KV) | ours tok/s | ours cached | ours agent TTFT | disagg tok/s | disagg cached | disagg agent TTFT | ratio |
+        |---|---|---|---|---|---|---|---|
+        | 16 (~1M) | 597.5 | 0.980 | 0.60 s | 313.1 | 0.890 | 7.03 s | +91% |
+        | 64 (~4M) | 570.7 | 0.966 | 0.62 s | 155.9 | 0.681 | 20.26 s | **+266%** |
+        | 128 (~8M, past the ~6.7M pool) | 534.5 | 0.949 | 0.68 s | 141.8 | 0.605 | 22.58 s | **+277%** |
+        Across an 8x working-set growth ours loses **10.6% throughput and 3.1 points of cached fraction**; disagg loses
+        **55% and 28.5 points**, with agent TTFT 3.2x and chat TTFT 2.7x worse (76 ms vs 17.8 s at the last point, a
+        234x gap). The degradation is monotone in both systems and the cached fraction tracks it, so the mechanism is
+        not inferred: disagg must recompute an agent session's prefix on whichever prefill pod the round lands on,
+        while colocation plus the cluster pool keeps it resident or pulls it over RDMA. **This is point 2's claim,
+        measured as ThunderAgent poses it, and it holds.** Disagg keeps the better ITL tail throughout (11.9-17.2 vs
+        21.9-113.2 ms p99), which is the standing trade.
 
       - [ ] **Qwen3-8B + trained EAGLE3 head (AngelSlim) with MTP on 16 H20s, both on FA3 (2026-10-21;
         `bash tasks/pd_colocation/mn_qwen3_16g_mtp_20261021.sh`; sglang fc9847d2a, pods' flashinfer_backend.py md5

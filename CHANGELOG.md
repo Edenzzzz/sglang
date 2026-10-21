@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.30.0 — Point 2 holds across the whole thrashing curve (2026-10-22)
+
+- 16 H20s, both on FA3, working set swept 1M -> 4M -> 8M live KV tokens at fixed agent program concurrency. Ours:
+  -10.6% throughput, -3.1 points cached fraction, agent TTFT 0.60 -> 0.68 s. Disagg 2+2: -55%, -28.5 points, agent
+  TTFT 7.0 -> 22.6 s. Lead +91% -> +266% -> +277%; chat TTFT 76 ms vs 17.8 s at the last point.
+- Degradation is monotone in both systems and tracks the cached fraction, so the re-prefill mechanism is measured
+  rather than inferred. Disagg retains the better ITL tail throughout.
+
 ## v1.29.3 — Five-schedule FA3 table complete (10/10 arms) (2026-10-22)
 
 - Final arms in. Throughput reproduces to within 0.3% across repeats for every arm: stock mixed chunk 141.8/141.8,

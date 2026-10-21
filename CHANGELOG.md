@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.26.3 — Rate sweep vs stock on FA3; MTP gap located; draft extend on FA3 (2026-10-21)
+
+- Chat 8-16 req/s: ours +9..+14% agent attainment and -74..-80% chat TTFT, but -2.5..-4 points chat attainment and
+  -3..-5% throughput (chat TPOT tail). The bar is not met.
+- MTP gap of 161 vs 131 tok/s: ~12% is our backend (stock's own schedule on our backend: 142.5), ~8% is the 4-mode
+  schedule. `apply_draft_fa3.py` (`DRAFT_FA3=1`): the draft model's draft extend on FA3. Queued.
+
 ## v1.26.2 — GLM-4.5-Air output gate passes; launcher supports NEXTN and no YaRN (2026-10-21)
 
 - One H20 pod at TP4: ours agrees with stock within stock's own run-to-run noise. Acceptance 2.5-2.75.

@@ -49,6 +49,8 @@ if [ "${KERNEL:-lpt}" = mtpsplit ]; then
   export SGLANG_SPLIT_MARGIN_AUTO=${SPLIT_MARGIN_AUTO:-0}
   # SPLIT_POLICY=1: per extend step, split (short chunk) or one FA3 call over all rows (apply_split_policy.py).
   export SGLANG_SPLIT_POLICY=${SPLIT_POLICY:-0}
+  # DRAFT_FA3=1: the draft model's draft-extend steps on FA3 (apply_draft_fa3.py).
+  export SGLANG_DRAFT_FA3=${DRAFT_FA3:-0}
 fi
 if [ "${KERNEL:-lpt}" = split ]; then
   export SGLANG_MIXED_ATTENTION_KERNEL=persistent SGLANG_TWO_EXEC=1 SGLANG_FUSED_FA3_SM_SPLIT=1

@@ -313,6 +313,32 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   points, chat TTFT -78..-81%; the chat TPOT p90 stays 10 ms worse (50 vs 40 ms). Next: the per-step SM partition
   of the co-run (`h200_auto_margin_20261021.sh`; every run so far had sm_margin 0), the draft model (still on
   flashinfer), and a load at which stock saturates.
+- [ ] **Chat-rate sweep and the MTP gap against stock on FA3 (2026-10-21, H200, Qwen2.5-7B, chat template, real head;
+  `bash tasks/pd_colocation/h200_split_policy_20261021.sh` then `h200_mtp_gap_20261021.sh`; sglang 1394ac5aa, pod tree
+  flashinfer_backend.py md5 31b6d37c (rows + verify + decode + split policy); all 0 tracebacks; one repeat per rate,
+  two at 8 req/s; `bench_per_tenant.py`).** Ours = every attention call on FA3, split per step only for a short
+  chunk (`apply_split_policy.py`; gate `_ct_polgate` 0 failures, worst 0.0167), co-run on shared SMs.
+  | chat rate | arm | agent tput | agent TTFT | agent att. | chat TTFT | chat TPOT p90 | chat att. |
+  |---|---|---|---|---|---|---|---|
+  | 8 | stock mixed chunk, FA3 | 141.7 / 142.0 | 2.1 s | 84.4% | 0.58 s | 40 ms | 79.9% |
+  | 8 | ours (policy) | 135.8 / - | 3.15 s | 93.3% | 0.12 s | 52 ms | 78.5% |
+  | 12 | stock mixed chunk, FA3 | 132.6 | 2.17 s | 82.2% | 0.62 s | 45 ms | 77.9% |
+  | 12 | stock prefill-prioritized, FA3 | 133.9 | 2.03 s | 82.2% | 0.58 s | 43 ms | 78.8% |
+  | 12 | ours (policy) | 127.2 | 3.38 s | 93.3% | 0.15 s | 55 ms | 75.2% |
+  | 16 | stock mixed chunk, FA3 | 120.1 | 2.23 s | 84.4% | 0.63 s | 54 ms | 76.1% |
+  | 16 | stock prefill-prioritized, FA3 | 121.9 | 1.93 s | 80.0% | 0.58 s | 52 ms | 76.5% |
+  | 16 | ours (policy) | 117.4 | 3.76 s | 91.1% | 0.15 s | 62 ms | 74.0% |
+  Stock on FA3 degrades slowly with chat rate (chat attainment 80 -> 76%): this agent mix does not saturate it. Ours
+  holds agent attainment +9..+14% and chat TTFT -74..-80%, but trails 2.5-4 points on chat attainment and 3-5% on
+  throughput, from its chat TPOT tail (p90 +8..+12 ms, the 2048-token deadline chunk at 32-64K prefix). The split
+  policy itself changes nothing in serving (8 req/s: 135.8 vs 137.0 tok/s without it). Bar not met.
+  **MTP gap** (chat 8, agent tok/s; per tenant agent / chat attainment): stock prefill-prioritized + MTP on stock's FA3
+  backend 161.5 (67-69% / 77%); the SAME schedule on our backend 142.5 (71.1% / 71.7%); ours (4-mode, rows + SLO
+  admission) 131 (60-62% / 72-73%); ours without rows + admission 120.5 (48.9% / 66.8%); ours at a fixed chunk 2048
+  131.0 (64.4% / 72.3%). So ~12% is backend (only the draft model is still on flashinfer -- its draft extend runs
+  BatchPrefill on decode-shaped rows; `apply_draft_fa3.py`, `h200_draft_fa3_20261021.sh` queued) and ~8% is the 4-mode
+  schedule; rows + admission are worth +9% and the deadline chunk nothing. Next: chunk 512 / 1024 for the TPOT tail
+  (`h200_chunk1024_cr12_20261021.sh`, running), draft on FA3.
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

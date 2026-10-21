@@ -345,8 +345,17 @@ static mixture.
         | disagg 5 + 3, FA3 | 382.5 | 4.59 / 28.60 s | 2.98 / 28.25 s | 14.3 / 10.2 ms | 0.851 |
         | disagg 4 + 4, FA3 | 324.5 | 5.79 / 35.31 s | 3.55 / 34.06 s | 12.9 / 9.7 ms | 0.805 |
         Even at 1x load, where disagg is not collapsed, ours leads on agent throughput (+56%), agent TTFT (-84%) and chat
-        TTFT (-98%); disagg holds the lower ITL tail (its decode pods never see a prefill). 2x load running; per-tenant
-        attainment and error bars to add.
+        TTFT (-98%); disagg holds the lower ITL tail (its decode pods never see a prefill).
+        2x load (agent programs 64 / tasks 32, chat 16 req/s), all errors=0, 0 tracebacks:
+        | arm | agent tok/s | agent TTFT mean / p99 | chat TTFT mean / p99 | ITL p99 agent / chat | cached |
+        |---|---|---|---|---|---|
+        | ours | 1172.2 | 0.72 / 3.11 s | 0.06 / 0.37 s | 23.6 / 25.4 ms | 0.979 |
+        | disagg 5 + 3, FA3 | 443.7 | 12.25 / 56.52 s | 9.68 / 55.22 s | 15.8 / 12.1 ms | 0.757 |
+        | disagg 4 + 4, FA3 | 393.2 | 14.66 / 60.46 s | 11.92 / 59.44 s | 13.0 / 10.1 ms | 0.763 |
+        Ours doubles its agent throughput from 1x to 2x (596 -> 1172) at flat TTFT; disagg grows 16-21% and its TTFT
+        triples -- its prefill pods saturate re-prefilling agent history (cached fraction 0.85 -> 0.76). The gap widens
+        with load: agent throughput +56% at 1x, +164% at 2x. Ours' ITL tail stays 1.5-2.5x disagg's (19-25 vs 10-16
+        ms). Per-tenant attainment and error bars still to add.
       - [x] **Llama-3.3-70B-Instruct at TP4, 4 pods x 4 H20 = 4 replicas (2026-10-21, job f3b4627e0864b06f, provisioned by
         `mn_provision_70b_20261021.sh` from the archived serving tree -- manifest verified on all 4 pods -- plus
         `mn_provision_70b_post_20261021.sh`).**

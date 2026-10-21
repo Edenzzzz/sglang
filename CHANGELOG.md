@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.25.5 — 32 H20s at 2x load, both on FA3 (2026-10-21)
+
+- Ours 1172 vs disagg 5 + 3 444 tok/s agent throughput (+164%); agent TTFT 0.72 vs 12.25 s. Disagg holds the lower
+  ITL tail.
+
 ## v1.25.4 — Per-step SM partition for the co-run (2026-10-21)
 
 - `apply_split_auto_margin.py` (`SPLIT_MARGIN_AUTO=1`): the chunk / rows SM split follows the step's predicted

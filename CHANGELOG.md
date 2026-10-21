@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.25.4 — Per-step SM partition for the co-run (2026-10-21)
+
+- `apply_split_auto_margin.py` (`SPLIT_MARGIN_AUTO=1`): the chunk / rows SM split follows the step's predicted
+  attention times. Every earlier serving co-run had margin 0, so both launches shared all SMs. A/B queued.
+
 ## v1.25.3 — Verify on FA3 in serving; co-run vs FA3 stock with margin to 112 (2026-10-21)
 
 - MTP verify-only steps on FA3 (gate 0 failures in 55K calls, captured in CUDA graphs): ours + MTP throughput

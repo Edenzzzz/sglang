@@ -45,6 +45,8 @@ if [ "${KERNEL:-lpt}" = mtpsplit ]; then
   export SGLANG_VERIFY_FA3=${VERIFY_FA3:-0} SGLANG_VERIFY_FA3_CHECK=${VERIFY_FA3_CHECK:-0}
   # DECODE_FA3=1: plain decode steps (no spec) on FA3 (apply_decode_fa3.py), checked under VERIFY_FA3_CHECK too.
   export SGLANG_DECODE_FA3=${DECODE_FA3:-0}
+  # SPLIT_MARGIN_AUTO=1: under SPLIT_OVERLAP the chunk / rows SM partition is chosen per step (apply_split_auto_margin.py).
+  export SGLANG_SPLIT_MARGIN_AUTO=${SPLIT_MARGIN_AUTO:-0}
 fi
 if [ "${KERNEL:-lpt}" = split ]; then
   export SGLANG_MIXED_ATTENTION_KERNEL=persistent SGLANG_TWO_EXEC=1 SGLANG_FUSED_FA3_SM_SPLIT=1

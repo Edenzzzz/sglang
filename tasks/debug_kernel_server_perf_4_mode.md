@@ -693,9 +693,10 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
         four TP ranks), so the one diagnostic that would have named the stuck frame produced nothing. py-spy is now in
         the pod venv, `mn_node.sh` puts `$W/venv/bin` on the worker's PATH, and `WATCHDOG` is a knob. Soak running:
         `bash tasks/pd_colocation/mn_glm_hang_soak_20261022.sh` -- 8 runs of the arm that hung at the same load with
-        `WATCHDOG=180`, each log scanned for the watchdog line and any py-spy dump. **7 of 8 done, zero watchdog hits,
-        every agent stream completing**, so the fault is rarer than 1 in 9 on that path and the soak cannot be the
-        whole answer.
+        `WATCHDOG=180`, each log scanned for the watchdog line and any py-spy dump. **All 8 runs clean: zero watchdog
+        hits, zero tracebacks, all 8 agent streams and chat streams completing** (run 8: agent 12/12, chat 600/600).
+        With the 4 earlier bisect runs that is 12 consecutive clean runs of the configuration that hung, so the fault
+        is rarer than 1 in 12 at this load and a soak cannot settle it.
         **Remedy rather than more soaking (2026-10-22):** the hang lives in our flashinfer-backend split path, and the
         H200 work showed our 4-mode schedule runs on sglang's OWN FA3 backend (MIXEDSPEC_STEPS 851, accept 2.05) and is
         *faster* there with MTP (140.6 vs 136.6 tok/s) -- that backend contains none of our split code. So the same two

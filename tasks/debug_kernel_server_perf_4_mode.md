@@ -677,8 +677,12 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
         (self.watchdog_timeout=600.0, self.soft=False)" on TP1, then SIGQUIT; 0 tracebacks, no CUDA error in the log.**
         Not reproduced in 4 further runs at the same load (`mn_glm_hang_bisect_20261021.sh`: the same config twice, once
         without DECODE_FA3, once without SPLIT_POLICY -- all 4 completed, 0 tracebacks), so it is rarer than 1 in 4 and
-        those bisect arms prove nothing yet. Open: a longer soak of ours no-MTP on this model with the watchdog lowered,
-        so the hung step is caught as a stack rather than after 600 s.
+        those bisect arms prove nothing yet. **Why the first hang left no stack: sglang shells out to `py-spy dump`
+        when the watchdog fires and py-spy was not installed on the pod** ("Pyspy failed ... py-spy: not found" for all
+        four TP ranks), so the one diagnostic that would have named the stuck frame produced nothing. py-spy is now in
+        the pod venv, `mn_node.sh` puts `$W/venv/bin` on the worker's PATH, and `WATCHDOG` is a knob. Soak running:
+        `bash tasks/pd_colocation/mn_glm_hang_soak_20261022.sh` -- 8 runs of the arm that hung at the same load with
+        `WATCHDOG=180`, each log scanned for the watchdog line and any py-spy dump.
   - [ ] 32 GPUs, Qwen2.5-7B no spec, ours vs disagg at 2 / 4 / 5 / 6 of 8 prefill pods (`mn_scale32_20261021.sh`,
     running); then 16 / 32 GPUs with MTP at real acceptance for each model.
 

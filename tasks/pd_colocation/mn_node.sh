@@ -25,6 +25,7 @@ export LD_LIBRARY_PATH=$CUDART:${LD_LIBRARY_PATH:-}
 # Mooncake's handshake cannot parse an unbracketed IPv6 host:port ("failed to get IP address of
 # peer server 2605:...:16743 ... use IPv4 address instead"), so every disagg request failed. The
 # pods also carry IPv4 addresses, all mutually reachable; advertise the first one.
+export PATH=$W/venv/bin:$PATH
 export SGLANG_HOST_IP=$(hostname -I | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
 # KERNEL=mtpsplit: the single-GPU serving kernel of 2026-10-16 -- 4-mode MTP step on the two-launch
 # split (FA3 prefill rows + stock FA2 verify rows), decode guard off; the same env as
@@ -109,7 +110,7 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # ATTN_BACKEND: flashinfer (default; the split lives in its backend) or fa3, upstream's own default on Hopper for MHA
   # models with no spec or topk 1 (get_default_attn_backend) -- the stock baseline a reviewer would run.
   ARGS=(--model $W/${MODEL_DIR:-qwen7b} --attention-backend ${ATTN_BACKEND:-flashinfer} --mem-fraction-static ${MEM_FRAC:-0.85}
-        --host :: --port $PORT --nccl-port $NCCL --context-length ${CTX_LEN:-131072} --watchdog-timeout 600)
+        --host :: --port $PORT --nccl-port $NCCL --context-length ${CTX_LEN:-131072} --watchdog-timeout ${WATCHDOG:-600})
   # YaRN to CTX_LEN for the 32K-native Qwen models; YARN_FACTOR=0 for a model native at CTX_LEN (GLM-4.5-Air, 128K).
   [ "${YARN_FACTOR:-4.0}" != 0 ] && ARGS+=(--json-model-override-args \
     '{"rope_scaling":{"factor":'${YARN_FACTOR:-4.0}',"original_max_position_embeddings":32768,"type":"yarn"}}')

@@ -614,19 +614,20 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       co-run with FA2 rows: -0.4..-17%. Rows on FA3 (`apply_split_rows_fa3.py`): -49..-85% sequential, -57..-89%
       co-run, all three models (Qwen3-8B 32 / 8 heads, GLM-4.5-Air TP4 24 / 2). This is FA3 vs FA2 BatchPrefill on the
       rows, not fusion.
-    - [x] **Against FA3 stock (2026-10-21; `rows_layout_check_20261021.py` part 2, contig | scatter).** Split
-      sequential (FA3 chunk, then FA3 rows): -8..+9% -- no gain, a second launch over the same work. Co-run (chunk with
-      sm_margin m, rows on the m SMs left), best m of 8..48:
+    - [x] **Against FA3 stock (2026-10-21; `python tasks/debug_kernel_server_perf/rows_layout_check_20261021.py`, raw
+      `rows_layout_check_20261021.txt`; sglang 6d3f344af).** Split sequential (FA3 chunk, then FA3 rows): -5..+20% --
+      no gain, a second launch over the same work. Co-run (chunk with sm_margin m, rows on the m SMs left), best m of
+      8..112, contig | scatter KV:
       | case | 16 x q4 | 48 x q4 | 48 x q1 |
       |---|---|---|---|
-      | 1024 @ 16K | -29.9 / -31.0% | +5.0 / +3.9% | +10.2 / +8.9% |
-      | 1024 @ 49K | -4.3 / -5.9% | -5.5 / -5.3% | -9.0 / -6.2% |
-      | 2048 @ 32K | -18.6 / -14.2% | -9.9 / -10.9% | -14.0 / -10.9% |
-      The kernel gain left over FA3 stock is the co-run: 4-31% except where 48 rows meet a short chunk, where m stopped
-      at 48 SMs while the rows need most of the GPU.
-    - [ ] Margin sweep to 120 SMs for the losing cells; the 2-mode / 4-mode table for all three models against FA3 stock.
-    - [ ] Serving: stock on FA3 (`h200_rows_fa3_ab_20261021.sh`, running) -- every earlier single-node stock number
-      ran flashinfer.
+      | 1024 @ 16K | -24.9 / -24.6% (m48) | -10.2 / -11.0% (m80) | -11.0 / -8.5% (m64-80) |
+      | 1024 @ 49K | -3.6 / -4.7% (m16) | +2.6 / -0.1% (m48) | +0.4 / -0.1% (m48) |
+      | 2048 @ 32K | -11.0 / -13.4% (m16) | -8.2 / -7.0% (m32) | -9.2 / -7.8% (m32) |
+      The kernel gain left over FA3 stock is the co-run alone: 4-25%, none where the chunk's own FA3 time (49K prefix)
+      matches the rows'. The best m moves from 16 to 80 SMs with the rows' share of the work, so a fixed margin loses
+      most of it -- the margin has to follow the step's composition.
+    - [ ] The 2-mode / 4-mode table for all three models against FA3 stock, with m chosen per step.
+    - [x] Serving against stock on FA3: see `tasks/realistic_workload_analysis.md`, "Stock on its own Hopper default".
   - [ ] Single node: Qwen2.5-7B table rerun with chat template (`h200_chattemplate_20261021.sh`, running); Qwen3-8B (head
     downloading); GLM-4.5-Air on one H20 pod.
   - [ ] 32 GPUs, Qwen2.5-7B no spec, ours vs disagg at 2 / 4 / 5 / 6 of 8 prefill pods (`mn_scale32_20261021.sh`,

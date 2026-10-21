@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.25.3 — Verify on FA3 in serving; co-run vs FA3 stock with margin to 112 (2026-10-21)
+
+- MTP verify-only steps on FA3 (gate 0 failures in 55K calls, captured in CUDA graphs): ours + MTP throughput
+  +32% (98.5 -> 129.4 / 131.9 tok/s) and chat attainment 61 -> 72%. Still behind stock + MTP on FA3 (161 tok/s,
+  77%).
+- Kernel: co-run vs one stock FA3 call -4..-25% where the rows' and chunk's times differ, ~0 where they match. The
+  best SM margin ranges from 16 to 80, so it must follow the step's composition.
+
 ## v1.25.2 — 32 H20s with disagg on FA3, 1x load (2026-10-21)
 
 - Ours vs disagg 5 + 3 at 1x load, where disagg is not collapsed: agent throughput +56%, agent TTFT -84%. Disagg holds

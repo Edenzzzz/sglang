@@ -1,0 +1,27 @@
+GPU NVIDIA H200, 132 SMs; ms per layer, Qwen2.5-7B heads
+== 1. rows alone, by KV layout
+48 x q1 scatter: FA2-prefill  7.470 (OK 4e-03)  FA2-decode  0.978 (OK 4e-03)  FA3  0.920 (OK 4e-03)
+48 x q1 run16  : FA2-prefill  7.463 (OK 4e-03)  FA2-decode  0.975 (OK 3e-03)  FA3  0.902 (OK 4e-03)
+48 x q1 contig : FA2-prefill  7.920 (OK 3e-03)  FA2-decode  1.001 (OK 3e-03)  FA3  0.892 (OK 3e-03)
+48 x q4 scatter: FA2-prefill  8.289 (OK 3e-03)  FA3  0.938 (OK 4e-03)
+48 x q4 run16  : FA2-prefill  8.000 (OK 4e-03)  FA3  0.918 (OK 3e-03)
+48 x q4 contig : FA2-prefill  8.245 (OK 4e-03)  FA3  0.906 (OK 4e-03)
+== 2. mixed step vs stock sglang's Hopper default (FA3 backend: one varlen FA3 call over chunk + rows)
+contig   1024@ 16384 + 16x q4: stock-FA3  0.901  split  0.853 ( -5.4%)  co-run  0.677 (-24.9%, m48)  err 3.5e-03 OK
+contig   1024@ 16384 + 48x q4: stock-FA3  1.362  split  1.433 ( +5.3%)  co-run  1.224 (-10.2%, m80)  err 3.9e-03 OK
+contig   1024@ 16384 + 48x q1: stock-FA3  1.371  split  1.417 ( +3.4%)  co-run  1.221 (-11.0%, m80)  err 3.9e-03 OK
+contig   1024@ 49152 + 16x q4: stock-FA3  1.712  split  1.721 ( +0.5%)  co-run  1.651 ( -3.6%, m16)  err 3.2e-03 OK
+contig   1024@ 49152 + 48x q4: stock-FA3  1.998  split  2.388 (+19.5%)  co-run  2.050 ( +2.6%, m48)  err 4.6e-03 OK
+contig   1024@ 49152 + 48x q1: stock-FA3  2.074  split  2.325 (+12.1%)  co-run  2.081 ( +0.4%, m48)  err 4.3e-03 OK
+contig   2048@ 32768 + 16x q4: stock-FA3  2.021  split  2.218 ( +9.8%)  co-run  1.799 (-11.0%, m16)  err 3.8e-03 OK
+contig   2048@ 32768 + 48x q4: stock-FA3  2.560  split  2.804 ( +9.5%)  co-run  2.352 ( -8.2%, m32)  err 4.2e-03 OK
+contig   2048@ 32768 + 48x q1: stock-FA3  2.675  split  2.765 ( +3.4%)  co-run  2.429 ( -9.2%, m32)  err 4.2e-03 OK
+scatter  1024@ 16384 + 16x q4: stock-FA3  0.907  split  0.862 ( -5.0%)  co-run  0.685 (-24.6%, m48)  err 3.5e-03 OK
+scatter  1024@ 16384 + 48x q4: stock-FA3  1.357  split  1.391 ( +2.5%)  co-run  1.208 (-11.0%, m80)  err 3.6e-03 OK
+scatter  1024@ 16384 + 48x q1: stock-FA3  1.387  split  1.470 ( +6.0%)  co-run  1.269 ( -8.5%, m64)  err 3.6e-03 OK
+scatter  1024@ 49152 + 16x q4: stock-FA3  1.742  split  1.755 ( +0.8%)  co-run  1.660 ( -4.7%, m16)  err 3.2e-03 OK
+scatter  1024@ 49152 + 48x q4: stock-FA3  2.118  split  2.400 (+13.3%)  co-run  2.116 ( -0.1%, m48)  err 3.8e-03 OK
+scatter  1024@ 49152 + 48x q1: stock-FA3  2.102  split  2.394 (+13.9%)  co-run  2.100 ( -0.1%, m48)  err 3.1e-03 OK
+scatter  2048@ 32768 + 16x q4: stock-FA3  2.078  split  2.269 ( +9.2%)  co-run  1.801 (-13.4%, m16)  err 4.2e-03 OK
+scatter  2048@ 32768 + 48x q4: stock-FA3  2.656  split  2.787 ( +4.9%)  co-run  2.471 ( -7.0%, m32)  err 3.3e-03 OK
+scatter  2048@ 32768 + 48x q1: stock-FA3  2.602  split  2.866 (+10.1%)  co-run  2.399 ( -7.8%, m32)  err 3.5e-03 OK

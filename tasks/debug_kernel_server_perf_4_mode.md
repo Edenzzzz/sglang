@@ -590,6 +590,19 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
 
 ### [ ] S. Server / workload evaluation
 
+- [ ] **S0, three-model evaluation flow (user, 2026-10-21): kernel microbench -> single node -> 16 GPUs -> 32 GPUs, real
+  acceptance only, chat prompts through the chat template, disagg at its best P:D ratio.** Models: Qwen2.5-7B + trained
+  EAGLE3 head (thoughtworks), Qwen3-8B + trained EAGLE3 head (AngelSlim), GLM-4.5-Air + its own MTP layer (chosen over
+  Llama-3.3-70B: 184 vs 320 KB KV per token, 12B active). Single node = one H200 (7B / 8B) or one 4-GPU H20 pod at TP4
+  (GLM-4.5-Air); multi-node = H20 job 2f608c1b1a67cf09 (8 x 4) at 4 and 8 pods.
+  - [ ] Kernel microbench, 2-mode (prefill chunk + decode rows) and 4-mode (prefill chunk + 4-token verify rows), unfused
+    FA2 vs split vs co-run, per model's per-GPU heads, fp32 causal reference (`tasks/debug_kernel_server_perf/
+    fusion_microbench_20261021.py`) -- queued after the H200 reruns.
+  - [ ] Single node: Qwen2.5-7B table rerun with chat template (`h200_chattemplate_20261021.sh`, running); Qwen3-8B (head
+    downloading); GLM-4.5-Air on one H20 pod.
+  - [ ] 32 GPUs, Qwen2.5-7B no spec, ours vs disagg at 2 / 4 / 5 / 6 of 8 prefill pods (`mn_scale32_20261021.sh`,
+    running); then 16 / 32 GPUs with MTP at real acceptance for each model.
+
 Arms everywhere: stock MTP, unfused 4-mode, fused 4-mode (co-launch, 64/32/16, auto chunk);
 EAGLE3 chain q4; CUDA graphs on; 4-mode arms with the measured mixed-step barrier (see gates);
 each arm reports fallbacks and composition counters. Analyzer: `drivers/serving/eval_curves.py`.

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.29.1 — Point 2 supported: cache thrashing separates colocation from disagg (2026-10-22)
+
+- 16 H20s, both on FA3, working set swept by distinct agent tasks at fixed program concurrency. From 16 to 64 tasks
+  ours loses 4.5% agent throughput and 1.4 points of cached fraction; disagg 2+2 loses 50% and 21 points, with agent
+  TTFT 3x and chat TTFT 2.4x worse. Ours' lead widens from +91% to +266%.
+- The cached fraction is the re-prefill proxy: disagg's prefill pods lose an agent session's prefix between rounds
+  and recompute it. 128-task point (past cluster capacity) running.
+
 ## v1.29.0 — Point 3 supported: the fused step is the most predictable one measured (2026-10-22)
 
 - With the 4-mode schedule actually traced and fit (the earlier arms logged no STEPTRACE lines), ours + MTP on the

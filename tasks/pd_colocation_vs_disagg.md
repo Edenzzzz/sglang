@@ -367,8 +367,22 @@ static mixture.
         | ours | 597.5 | 0.60 / 2.40 s | 0.06 / 0.34 s | 21.9 / 19.9 ms | 0.980 |
         | disagg 2 + 2, FA3 | 313.1 | 7.03 / 44.72 s | 6.50 / 48.58 s | 17.2 / 12.1 ms | 0.890 |
         Ours +91% agent throughput and 12x lower agent TTFT before any thrashing, with disagg already 9 points behind
-        on cached fraction. 64- and 128-task points running; the test of point 2 is whether ours holds ~0.98 while
-        disagg's falls as the working set passes capacity.
+        on cached fraction. **Second point (64 tasks, ~4M live KV against ~6.7M capacity) is the first thrashing
+        evidence and it supports point 2 as posed:**
+        | metric | 16 tasks | 64 tasks | change |
+        |---|---|---|---|
+        | ours agent tok/s | 597.5 | 570.7 | -4.5% |
+        | ours cached fraction | 0.980 | 0.966 | -1.4 pts |
+        | ours agent TTFT mean / p99 | 0.60 / 2.40 s | 0.62 / 3.66 s | flat |
+        | disagg 2+2 agent tok/s | 313.1 | 155.9 | **-50%** |
+        | disagg cached fraction | 0.890 | 0.681 | **-21 pts** |
+        | disagg agent TTFT mean / p99 | 7.03 / 44.7 s | 20.26 / 98.9 s | **3x** |
+        | disagg chat TTFT mean | 6.50 s | 15.66 s | 2.4x |
+        Ours' lead widens from +91% to **+266%** agent throughput as the working set grows 4x, and the mechanism is
+        legible in the cached fraction: disagg's prefill pods lose prefixes between an agent session's rounds and
+        recompute them, where colocation plus the pool keeps them resident (ours loses 1.4 points, disagg 21). Both
+        systems keep chat throughput at the offered rate; disagg pays in TTFT. 128-task point (~8M, past capacity, so
+        both must evict) running.
 
       - [ ] **Qwen3-8B + trained EAGLE3 head (AngelSlim) with MTP on 16 H20s, both on FA3 (2026-10-21;
         `bash tasks/pd_colocation/mn_qwen3_16g_mtp_20261021.sh`; sglang fc9847d2a, pods' flashinfer_backend.py md5

@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.31.0 — Multi-node confound removed: +297% with NO kernel work (2026-10-22)
+
+- 16 H20s, no spec, every arm on upstream's FA3 backend with no split planning (KERNEL=lpt): ours 962.7 vs disagg
+  2+2 242.3 agent tok/s, agent TTFT 0.89 vs 27.57 s, cached fraction 0.97 vs 0.76. Stronger than the confounded
+  version, and attributable entirely to the colocated schedule plus the cache-first SLO router.
+- Disagg retains the better ITL tail (14.4 vs 110.1 ms p99).
+
 ## v1.30.2 — Saturation does not favour our schedule on one GPU (2026-10-22)
 
 - Agent concurrency 16, every arm on FA3, n=93 agent requests. Stock degrades as predicted (agent attainment 84 ->

@@ -2451,12 +2451,21 @@ disaggregation is the required disaggregation baseline.
 The split-row corruption that gated everything is fixed and there is now a lot of serving data, so
 the 2026-10-10 version of this section (no serving data, corruption blocking) is gone.
 
-- **Multi-node is where the case holds, with one confound still being removed.** In every multi-node run so far ours
-  ran sglang's **flashinfer** backend (carrying our FA3 patches) while disagg ran the **FA3** backend. The
-  backend-class control measured that class at half the throughput of FA3 on this workload, so ours was handicapped
-  and the comparison was not schedule-vs-schedule. The rerun with every arm on FA3 and no split planning at all
-  (`bash tasks/pd_colocation/mn_fa3_16g_20261022.sh`, 16 H20s, no-spec and real MTP, disagg at 2+2 and 3+1) is queued;
-  it can only move ours' numbers up. Against PD disaggregation at its best P:D ratio, both systems on FA3, ours wins
+- **Multi-node is where the case holds, the confound is now removed, and the result is STRONGER and attributable to
+  the schedule alone.** Every earlier multi-node run had ours on sglang's **flashinfer** backend (carrying our FA3
+  patches) while disagg ran the **FA3** backend, which the backend-class control measured at twice the throughput on
+  this workload -- so ours was handicapped. The rerun with every arm on FA3 and **no split planning at all**
+  (`bash tasks/pd_colocation/mn_fa3_16g_20261022.sh`, `KERNEL=lpt ATTN_BACKEND=fa3`; 16 H20s, 32 tasks / 64 agent
+  programs, chat 16 req/s, 900 s), first two arms:
+  | 16 GPUs, no spec, both on FA3 | agent tok/s | agent TTFT mean / p99 | agent ITL p99 | cached |
+  |---|---|---|---|---|
+  | ours (schedule + router only, no split) | **962.7** | 0.89 / 14.31 s | 110.1 ms | 0.97 |
+  | disagg 2 + 2 | 242.3 | 27.57 / 82.71 s | 14.4 ms | 0.76 |
+  **+297% agent throughput and 31x lower agent TTFT, with no kernel work in the picture** -- ours ran upstream's
+  unmodified FA3 backend. So the multi-node advantage is attributable entirely to the colocated schedule and the
+  cache-first SLO router, not to the fused attention kernel, whose measured value is predictability (point 3) and
+  ~2.5% on our own schedule. Disagg keeps the better ITL tail (14.4 vs 110.1 ms p99), as everywhere.
+  Against PD disaggregation at its best P:D ratio, both systems on FA3, ours wins
   by margins far above the bar: +56% agent throughput at 32 GPUs / 1x
   load, +164% at 2x, 3.5x with Qwen3-8B and real MTP at 16 GPUs, with agent TTFT 6-18x lower.
   Disagg's weakness is structural here -- it re-prefills agent session history every round, so its

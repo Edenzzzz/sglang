@@ -364,6 +364,11 @@ the router predicting each node's TTFT / ITL from its load and routing to the hi
   draft model's 3 per-cycle decode steps, which `DRAFT_FA3` does not cover (it covers draft extend only). Measuring GPU
   ms per step type against host launch gap on both backends before changing anything else:
   `h200_backend_trace_20261021.sh` (STEP_TRACE=1, `tasks/perf_model/steptrace_compare.py`, `steptrace_gaps.py`).
+  **Best ours so far, both repeats (draft extend on FA3 + base plan skipped, chat 8 req/s):** no MTP 137.3 / 137.4
+  tok/s, agent attainment 93.3%, chat 78.4%, chat TTFT 0.13 s, chat TPOT p90 50 / 52 ms -- against stock mixed chunk on
+  FA3 142 tok/s, 84.4%, 79.9%, 0.58 s, 40 ms: throughput -3.4%, agent attainment +9 points, chat TTFT -78%, chat
+  attainment -1.5 points. With MTP 135.4 / 136.3 tok/s, agent 62.2%, chat 74.2% -- against stock + MTP on FA3 161.5,
+  67-69%, 77.0%: -16% throughput. Bar (>=30% TTFT / ITL attainment, >=10% throughput) not met on single node.
 - [x] **Qwen3-8B at the Qwen2.5 load -- overloaded for every system (2026-10-21, H200, trained EAGLE3 head AngelSlim/
   Qwen3-8B_eagle3, accept 2.00-2.09, chat template on, YaRN to 128K; two repeats, all clean; ours + MTP 78K split calls;
   `h200_next_20261021.sh`).** Agent C=8 + chat 8 req/s exceeds Qwen3-8B's single-H200 capacity (36 layers, 8 KV

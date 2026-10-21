@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.26.5 — Backend gap decomposed; best single-node ours (2026-10-21)
+
+- Skipping the unused per-step flashinfer plan: +1.7% (counter-verified). With draft extend on FA3 the backend gap
+  is +2% / +1.7% / ~9% unaccounted; a step trace of both backends is queued to split GPU time from host gap.
+- Best ours on single node, two repeats: no MTP 137.3 / 137.4 tok/s (stock on FA3 142), agent attainment +9 points,
+  chat TTFT -78%, chat attainment -1.5 points. With MTP 135.4 / 136.3 vs stock 161.5. Bar not met.
+
 ## v1.26.4 — GLM-4.5-Air single node; a TP4 hang; an invalid knob test caught (2026-10-21)
 
 - GLM-4.5-Air on one TP4 H20 pod: ours + MTP is -15% agent throughput vs stock + MTP at quarter load and wins only

@@ -21,6 +21,20 @@ Our method aims to achieve an optimal pareto curve: high throughput, stable deco
 
 ## TODOs
 
+- [ ] **Point 3 re-fit with both systems on FA3 (2026-10-22, `bash tasks/pd_colocation/h200_point3_refit_20261022.sh`,
+  `tasks/perf_model/fit_4mode_step.py --target gpu`, first half fit / second half scored).** The 2026-10-20 fits below
+  all used stock on the FLASHINFER backend, which upstream deprecated on Hopper, so the baseline was wrong. Same
+  schedule (stock prefill-prioritized + MTP) and workload on both backends, GPU time, MAPE (p90 APE):
+  | arm | decode: lin5 / MLP / GBT | prefill: lin5 / MLP / GBT |
+  |---|---|---|
+  | stock + MTP, FA3 backend | 3.7% (7.7) / 1.5% (3.3) / 1.5% (3.9) | 8.2% (17.5) / 5.7% (10.6) / 7.5% (17.7) |
+  | the same schedule, our backend | 1.6% (3.6) / 0.7% (1.5) / 0.4% (0.9) | 14.3% (27.4) / 3.4% (6.6) / 2.9% (5.9) |
+  Our backend's steps are more predictable on the same schedule -- decode 2x better on every model, prefill better
+  under MLP / GBT but worse under the 5-term linear form, i.e. its prefill cost is less linear but more learnable.
+  **This is not yet point 3's claim**, which is about our 4-mode SCHEDULE vs stock's unfused one: those arms logged 0
+  STEPTRACE lines because STEP_TRACE was only on for the backend-comparison arms, so they could not be fit.
+  Collection + fit queued: `h200_point3_traces_20261022.sh` (ours + MTP and ours no MTP, on our backend and on FA3).
+
 - [ ] **One step model for the 4-mode mixed step, shared by router and worker (user, 2026-10-19).** Today three
   different models are in play and none is the joint model: the H20 router uses lookup tables (cold-prefill curve,
   decode ITL grid, one `--chunk-interference` scalar); the S4 predictability numbers (mixed MAPE 26.7% ours vs 53.5%
@@ -85,6 +99,23 @@ Our method aims to achieve an optimal pareto curve: high throughput, stable deco
 - [ ] Validate MLP predictions against actual server latency on representative workloads from `tasks/realistic_workload_analysis.md`
 - [x] Use trained models for SLO-aware chunk size control (integrated in `edf_scheduler.py` via `SGLANG_EDF_LATENCY_MODEL` env var)
 
+### 2026-10-12 fused-vs-unfused EDF check
+
+The checked-in MTP linear step model (`heldout_mape=21.9%`) was exercised with
+global acceptance EWMA on matched fused and unfused `loadsweep_min` arms. Both
+completed 601 mixed steps with zero fallbacks/tracebacks. Fused mean TTFT was
+2.9%/2.3% lower for chat/codex, but mean ITL was 0.6%/0.7% higher and codex
+output throughput was 1.4% lower. This validates the comparison path, not the
+claim that fusion makes EDF easier or better; the broader MLP validation TODO
+remains open.
+
+The EDF predictor interface now accepts an `acceptance_length` argument. The
+online EWMA binding estimate is passed into chunk-budget predictions, while old
+MLP/analytic models remain compatible; `fit_mtp_step.py` also accepts optional
+`acc=<EWMA>` STEPTRACE fields and emits `c_acc` when present. This makes the
+requested acceptance-length feature explicit without treating the old
+21.9%-MAPE checkpoint as retrained evidence.
+
 ### Production target and router integration audit (2026-07-23)
 
 The LPT/DMC checkpoints already time `model_runner.forward`, so their target
@@ -137,3 +168,21 @@ cost and the oldest timestamp so neither load nor staleness is understated.
 These fields are diagnostic only. Incremental request/queue cost must be
 validated before replacing request-count load inside the existing
 cache-imbalance guard.
+
+### 2026-10-12 fused-vs-unfused EDF check
+
+The checked-in MTP step model (`heldout_mape=21.9%`) was exercised with global
+acceptance EWMA on matched fused and unfused `loadsweep_min` arms. Both completed
+601 mixed steps with zero fallbacks/tracebacks. Fused mean TTFT was 2.9%/2.3%
+lower for chat/codex, but mean ITL was 0.6%/0.7% higher and codex output
+throughput was 1.4% lower. This validates the comparison path, not the claim
+that fusion makes EDF easier or better; the broader MLP validation TODO remains
+open.
+
+The EDF predictor interface now accepts `acceptance_length`; the online EWMA
+binding estimate is passed into chunk-budget predictions. `fit_mtp_step.py`
+accepts optional `acc=<EWMA>` STEPTRACE fields and emits `c_acc`, while old
+five-coefficient models remain compatible. Regression coverage is in
+`test/manual/benchmark/test_mtp_step_acceptance_model.py`.
+The scheduler's STEPTRACE records the current lifetime acceptance EWMA as
+`acc=...`, so new calibration runs can actually fit the added coefficient.

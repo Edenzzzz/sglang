@@ -31,9 +31,22 @@ Our method aims to achieve an optimal pareto curve: high throughput, stable deco
   | the same schedule, our backend | 1.6% (3.6) / 0.7% (1.5) / 0.4% (0.9) | 14.3% (27.4) / 3.4% (6.6) / 2.9% (5.9) |
   Our backend's steps are more predictable on the same schedule -- decode 2x better on every model, prefill better
   under MLP / GBT but worse under the 5-term linear form, i.e. its prefill cost is less linear but more learnable.
-  **This is not yet point 3's claim**, which is about our 4-mode SCHEDULE vs stock's unfused one: those arms logged 0
-  STEPTRACE lines because STEP_TRACE was only on for the backend-comparison arms, so they could not be fit.
-  Collection + fit queued: `h200_point3_traces_20261022.sh` (ours + MTP and ours no MTP, on our backend and on FA3).
+  **POINT 3 IS SUPPORTED ONCE THE 4-MODE SCHEDULE IS ACTUALLY FIT (2026-10-22, `bash tasks/pd_colocation/
+  h200_point3_traces_20261022.sh`; same fitter and protocol, GPU time).** This reverses the 2026-10-11 "the premise is
+  inverted" conclusion, which rested on fits whose stock baseline ran the flashinfer backend:
+  | arm | decode MAPE (best model) | prefill / mixed MAPE (best model) |
+  |---|---|---|
+  | stock + MTP, FA3 backend (baseline) | 1.5% (MLP, p90 3.3) | 5.7% (MLP, p90 10.6) |
+  | **ours + MTP 4-mode, our fused backend** | **0.4%** (GBT, p90 0.8) | **3.2%** (GBT, p90 6.5) |
+  | ours + MTP 4-mode, FA3 backend | 1.1% (overlap, p90 2.1) | 10.6% (overlap, p90 23.9) |
+  | ours no MTP, FA3 backend | 0.6% (overlap, p90 0.8) | 4.7% (GBT, p90 11.6) |
+  Our 4-mode step on the fused backend is the most predictable arm measured: **3.8x better than stock's unfused MTP
+  schedule on decode steps and 1.8x better on prefill-bearing steps**; the 5-term linear form alone gets decode to
+  1.1% vs stock's 3.7%.
+  **And the fused backend is what buys it:** the same 4-mode schedule on upstream's FA3 backend is 2.7-4.5x worse on
+  decode and 2-3.5x worse on prefill -- upstream's internal heuristics (split-KV choice, scheduler metadata) make step
+  time vary where our pre-assigned split does not. So the fused kernel's measured value is **predictability for SLO
+  control**, not raw throughput (+2.5% there), which is what point 3 needs and what EDF admission consumes.
 
 - [ ] **One step model for the 4-mode mixed step, shared by router and worker (user, 2026-10-19).** Today three
   different models are in play and none is the joint model: the H20 router uses lookup tables (cold-prefill curve,

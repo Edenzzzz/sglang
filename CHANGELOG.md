@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.29.0 — Point 3 supported: the fused step is the most predictable one measured (2026-10-22)
+
+- With the 4-mode schedule actually traced and fit (the earlier arms logged no STEPTRACE lines), ours + MTP on the
+  fused backend predicts GPU time at 0.4% MAPE on decode steps and 3.2% on prefill-bearing ones, vs stock + MTP on
+  FA3 at 1.5% / 5.7% -- 3.8x and 1.8x better. This reverses the 2026-10-11 "premise inverted" finding, which rested
+  on a flashinfer-backend baseline.
+- The same schedule on upstream's FA3 backend is 2.7-4.5x worse to model, so the fused split is what buys the
+  predictability. The kernel's measured value is SLO-control predictability, not throughput (+2.5%).
+
 ## v1.28.2 — The 4-mode step runs on upstream's FA3 backend; no port needed (2026-10-22)
 
 - MIXEDSPEC_STEPS 851, accept 2.05, 0 tracebacks: our 4-mode MTP schedule runs on sglang's own FA3 backend, so the

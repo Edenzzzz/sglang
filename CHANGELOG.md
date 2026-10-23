@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.38.0 — Fair multi-node result: ours sustains >= 2-4x the load of best-tuned disagg at SLO (2026-10-24)
+
+- 16 H20s (8 pods x 2), both on FA3, disagg's P:D swept at worker granularity with the KV pool on, load swept.
+  Best-tuned disagg (6+2) holds >= 90% chat attainment only at 16 agent programs (92.8%; 67.8% at 32); ours holds
+  94.2% at 64. A lower bound -- ours' capacity is not yet reached; 96 / 128 programs queued.
+- At equal light load the systems are close (99.5% vs 92.8%); the gap is saturation: disagg's agent throughput
+  plateaus near 360-410 tok/s while ours scales to 991. Ours' agent ITL p99 stays worse (109-134 vs 29-31 ms).
+
 ## v1.37.0 — Role-split FA3 kernel in the native executor; stage-2 serving rerun with it (2026-10-23)
 
 - `SGLANG_ROLE_SPLIT_FA3=1` in `native_fa3_fa2_pdl_20261023.py`: the mixed step runs as two FA3 launches (prefill

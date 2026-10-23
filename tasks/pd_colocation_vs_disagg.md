@@ -411,7 +411,24 @@ static mixture.
         KV pool its cached fraction is 0.92-0.94, not 0.76. The old 7-44x ratios came largely from the weak baseline.
         Ours at this load is being rerun: its phase-A arm aborted before starting because the cn-seed WebShell SSO
         session expired mid-sweep ("mooncake master did not start: webshell relay redirected to SSO"), not because
-        of the arm (`mn_cap16_ours_L32_rerun_20261023.sh`). Phase B (load sweep) is running.
+        of the arm (`mn_cap16_ours_L32_rerun_20261023.sh`).
+      - [x] **Phase B: CAPACITY AT SLO, ours vs the two best-tuned disagg splits (2026-10-24,
+        `mn_capacity_16g_phaseB_20261023.sh`, splits 6 and 7 picked automatically from phase A; all errors=0).**
+        chat attainment (0.5 s + 20 ms) / agent SLO goodput (tok/s) / agent tok/s / agent TTFT:
+        | agent programs + chat rate | ours | disagg 6 + 2 | disagg 7 + 1 |
+        |---|---|---|---|
+        | 16 + 4 req/s | **99.5%** / 293 / 295.8 / 0.57 s | 92.8% / 282 / 285.7 / 1.00 s | 88.3% / 266 / 269.5 / 0.96 s |
+        | 32 + 8 req/s | rerun pending | 67.8% / 359 / 413.1 / 3.47 s | 50.0% / 326 / 369.7 / 3.23 s |
+        | 48 + 12 req/s | **96.6%** / 772 / 787.2 / 0.65 s | 45.8% / 231 / 371.1 / 9.91 s | 19.1% / 234 / 361.3 / 8.96 s |
+        | 64 + 16 req/s | **94.2%** / 964 / 991.2 / 0.74 s | 31.2% / 165 / 361.5 / 15.69 s | 4.4% / 63 / 253.9 / 23.90 s |
+        **The fair multi-node result.** The best-tuned disagg holds >= 90% chat attainment only at the lightest load
+        (16 programs); ours still holds 94.2% at 64. So **ours sustains at least 2-4x the load of the best-tuned PD
+        disaggregation at SLO**, and that is a LOWER bound: ours' own capacity is not yet reached (96 / 128 programs
+        queued, `mn_cap16_ours_high_20261024.sh`). At equal light load the systems are close (99.5% vs 92.8%, agent
+        SLO goodput 293 vs 282), as a fair comparison should be; the gap is a saturation effect -- disagg's agent
+        throughput plateaus at ~360-410 tok/s from 32 programs on while ours scales with load to 991.
+        Standing trade: ours' agent ITL p99 is 109-134 ms at 48-64 programs vs disagg's 29-31 ms (its decode pods
+        never see a prefill); chat TPOT p90 ours 9.7-12.9 ms vs disagg 13.5-14.3 ms.
 
       - [ ] **Qwen3-8B + trained EAGLE3 head (AngelSlim) with MTP on 16 H20s, both on FA3 (2026-10-21;
         `bash tasks/pd_colocation/mn_qwen3_16g_mtp_20261021.sh`; sglang fc9847d2a, pods' flashinfer_backend.py md5

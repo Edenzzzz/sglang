@@ -238,6 +238,20 @@ claim colocation as a cluster-scale and saturation-regime result, and report the
 
 ## 6. Evaluation
 
+### 6.0 Evaluation flow, baselines and the claim at each stage [2026-10-23]
+
+The evaluation is three stages, each answering one question against the strongest baseline we can build for that
+stage, and each feeding the next: a kernel that wins on the shapes serving actually produces, a single node whose
+schedule and step model use that kernel, and a cluster whose router uses that step model. Every number below is
+measured with the baseline on the SAME attention backend as ours (sglang's FA3, its Hopper default); results measured
+against stock forced onto the flashinfer backend are withdrawn (see the note at the top of this file).
+
+| stage | question | baseline(s) | our claim | headline evidence | status |
+|---|---|---|---|---|---|
+| **1. Kernel** (6.2) | is role-specific FA3 + FA2 faster than FA3 on the mixed steps serving produces? | single varlen FA3 (sglang default), dual-stream FA3, SM-grid-tuned FA3; all tuned per shape | **C1**: heterogeneous attention with PDL wins on decode/verify-heavy mixed steps | 1.45-1.78x on captured small-query steps (Qwen2.5, 32K-394K); 1.45-1.67x on Qwen3; ~1.0x prefill-heavy | measured; Llama-70B capture missing |
+| **2. Single node** (6.3) | does the kernel and the 4-mode schedule pay off in serving on one GPU? | sglang on FA3: mixed chunk, prefill-prioritized, each +/- MTP | **C2a** kernel at fixed schedule; **C2b** step predictability; C2c schedule as a latency trade | kernel: +10.6-11.3% agent tput, -21.5% agent ITL at 128-256K; step model 3.8x more accurate | C2a meets the 10% tput bar at long context only; ITL bar not met |
+| **3. Multi-node** (6.4) | does colocation + cache-first SLO routing beat PD disaggregation at scale? | PD disagg, P:D swept at worker granularity, KV pool on, same FA3 backend, with and without MTP | **C3**: higher sustainable load at SLO (capacity), widening with cache pressure and scale | capacity-at-SLO sweep running; overload point: +179% tput, thrashing lead +91% -> +277% | 16 GPUs: capacity sweep running; 32 GPUs: same protocol next |
+
 ### 6.1 Settings
 
 **Workloads** (main workload first):
@@ -271,46 +285,136 @@ claim colocation as a cluster-scale and saturation-regime result, and report the
     output lengths are fixed by the workload, so quality past 128K does not affect the measurement
   - 4 x H100 (320 GB / node) fits neither main pick with useful KV; there only a <= 32B dense model works
 - **Testbed**: 1 H200; 8 H20 (4 pods x 2 GPUs, one TP1 worker per GPU)
-- **Baselines**: sglang prefill-prioritized and mixed chunk, each with and without MTP (single node); pdmux
-  (reference); PD disaggregation 2P2D with and without MTP on decode (multi-node); semi-PD (planned)
+- **Baselines, per stage, all on sglang's FA3 attention backend** (its Hopper default for these models):
+  - kernel: one varlen FA3 call over all rows (what sglang runs); dual-stream FA3 (prefill and rows on separate
+    launches); FA3 with SM-grid margins 0-72 and row/prefill SplitKV and GQA-packing searched per captured shape
+  - single node: sglang mixed chunk (default) and prefill-prioritized, each with and without EAGLE3 MTP; the kernel is
+    also isolated by running sglang's OWN schedule with only the attention swapped
+  - multi-node: sglang PD disaggregation with its own router, prefill:decode ratio swept (2+2, 3+1 at 16 GPUs; 4+4,
+    5+3, 6+2 at 32 GPUs), with and without MTP on every role
+- **Scale axis (multi-node)**: 16 GPUs (4 nodes x 4 H20) and 32 GPUs (8 nodes x 4 H20), one TP1 worker per GPU for
+  the 7-8B models, load scaled with GPU count
 - **Metrics**: per-tenant SLO attainment (TTFT and per-request TPOT both met) and goodput; TTFT, TPOT, throughput;
   mean +- std over repeats
 
-### 6.2 Kernel microbenchmarks
-- FA3 role at parity with sgl-kernel FA3 (exact vs fp32); FA3 co-running with FA2 -18% on balanced append + verify
-  steps
-- in serving, overlapping FA2 beside FA3 is worth +10% agent throughput and -12% / -16% agent / chat ITL over running
-  the two roles back to back
+### 6.2 Stage 1 -- kernel microbenchmarks on captured serving tensors (H20)
 
-### 6.3 Main workload, single node (1 H200, mixed TraceLab + chat, 5-6 repeats)
-| arm | agent tput (tok/s) | agent attainment | chat attainment |
-|---|---|---|---|
-| stock mixed chunk | 80.5 +- 4.2 | 44.1% | 53.8% |
-| stock prefill-prioritized | 92.6 | 58.9% | 59.9% |
-| **ours, no MTP** | **113.2 +- 0.4** | **92.0%** | **69.8%** |
-| stock + MTP | 65.7 +- 3.1 | 3.0% | 34.2% |
-| stock prefill-prioritized + MTP | 81.6 | 8.9% | 49.2% |
-| ours + MTP, cap 48 | 102.1 +- 1.3 | 45.8% | 58.9% |
-| **ours + MTP, deadline-ordered rows + SLO admission (4)** | **102.5 +- 2.2** | **45.0 +- 2.8%** | **63.0 +- 1.4%** |
-- vs mixed chunk: MTP +55% throughput, 15x agent and +72% chat attainment; no MTP +41%, +109%, +29.7%
-- vs prefill-prioritized: no MTP +22% throughput, agent attainment +56%, chat +16.5%; MTP (deadline-ordered rows)
-  +27% throughput, agent attainment 5.5x, chat +28%, chat TTFT -70%
-- attainment vs chat rate (agents fixed at C=8), ours + MTP vs prefill-prioritized + MTP: chat 2 / 4 / 6 / 8 req/s chat
-  attainment +14% / +16% / +24% / +28%, chat TTFT -76% / -75% / -69% / -70%, chat TPOT -51% / -39% / -30% / -12%, agent
-  attainment equal / 1.5x / 2.6x / 5.5x, agent throughput +30% / +29% / +29% / +27%; ~24% of chats miss TPOT at every rate for every system (chats
-  decoding beside 32-64K agent prefill chunks)
-- long mix (32-250K), ours + MTP vs stock + MTP, two repeats: agent throughput +54%, TTFT -34%, ITL -49%; chat
-  throughput +23%, TTFT -90%, ITL -42%
-- our arms vary by <= 1.4 tok/s across repeats; stock mixed chunk is bimodal (slow mode in 5 of 6)
+**Baselines.** Single varlen FA3 (sglang's own call), dual-stream FA3, and FA3 with SM-grid margins; each control
+re-tuned per shape over row/prefill SplitKV (0-64), GQA packing (auto/off/on) and margins 0-72 of 78 SMs. The best
+control is kept as a separate arm in validation so a poor new selection cannot hide a stronger baseline.
+**Ours.** A native executor that runs prefill tiles on FA3 and decode/verify rows on FA2, chained with programmatic
+dependent launch (PDL), with a geometry-only split policy (v3) chosen before validation.
+**Inputs.** Real Q/K/V captured from serving after the workload barrier (not synthetic fixtures): Qwen2.5-7B and
+Qwen3-8B, two-mode (prefill + decode) and four-mode (prefill + EAGLE3 verify, measured acceptance 1.8-3.5 tokens),
+physical KV page IDs and strides restored; 29 captures, 32K-394K contexts. Every record passes a full-output FP32
+causal-attention check (max head-relative error 0.0046-0.0078).
 
-### 6.4 Main workload, multi-node vs PD disaggregation (8 H20s, fan-out agents + chat)
-| arm | chat attainment (0.5 s + 20 ms) | agent goodput (10 s + 80 ms) | agent TTFT |
-|---|---|---|---|
-| **ours** | **91.4%** | **551 tok/s** | 0.71 s |
-| PD disagg 2P2D | 26.2% | 92 tok/s | 16.4 s |
-- throughput 2.3-3.3x, TTFT -94..-96%; disaggregation keeps a faster per-token decode (5 ms vs 12 ms), but its prefill
-  queue makes most requests miss
-- cache: re-prefill share 3.4% vs 10.3%; prefill hit rate rises with node count for colocation, falls for disagg
+| captured step | best tuned FA3 (ms) | ours, native PDL (ms) | speedup |
+|---|---:|---:|---:|
+| Qwen2.5 two-mode, 32-64K, fresh / small query | 0.2016 | 0.1350 | **1.47x** |
+| Qwen2.5 two-mode, ~394K, fresh / small | 0.9334 | 0.5360 | **1.74x** |
+| Qwen2.5 four-mode, 128-256K, cached / small | 5.4609 | 3.0634 | **1.78x** |
+| Qwen2.5 four-mode, ~394K, fresh / small | 0.9355 | 0.7510 | **1.23x** |
+| Qwen2.5 two-mode, 32-64K, cached / small (after v3) | 0.8235 | 0.7358 | **1.12x** |
+| Qwen3 two-mode, fresh / small | 0.3986 | 0.2503 | **1.59x** |
+| Qwen3 four-mode, cached / small (after v3) | 3.5974 | 2.1576 | **1.67x** |
+| prefill-heavy steps (2046 prefill tokens, 2 rows) | -- | -- | 0.98-1.09x |
+
+- **C1 claim**: on the mixed steps where decode/verify rows meet deep context, role-specific attention is 1.2-1.8x
+  faster than the best FA3 we can tune per shape; where the prefill chunk dominates it is neutral (0.98-1.09x).
+- Where the speedup comes from: most of it is role-specific attention and its split plan; PDL adds only 1-12% over
+  the same plan run serially. Report it that way rather than as "fusion".
+- Honest limits: four small four-mode Qwen2.5 cases still regress 3-4%; GLM-4.5-Air four-mode regresses 2-58%
+  (`three_model_screen_20261023.md`), so GLM is not a C1 model; Llama-3.3-70B has not been captured yet.
+- Sources: `resume_20261012/captured_kernel_results_20261023.md`, `geometry_policy_evaluation_20261023.md`,
+  `pd_colocation/results_20261023/captured_sm_controls/captured_native_all29.{svg,csv}`.
+
+### 6.3 Stage 2 -- single node (1 H200)
+
+**C2a: the kernel in serving, at a fixed schedule.** Both arms run sglang's own schedule on the same frozen FA3
+backend (2048-token chunks, 48-request cap, CUDA graphs, overlap on); only the attention differs. Opposite-order
+pairs, audited from raw token-arrival events. Qwen2.5-7B, mixed TraceLab agents + ShareGPT chat:
+
+| context / mode | agent tok/s | agent ITL (token-weighted) | agent TPOT | chat TPOT |
+|---|---:|---:|---:|---:|
+| 128-256K, two-mode | **+11.3%** | **-21.5%** | -23.9% | -19.5% |
+| 128-256K, four-mode (MTP) | **+10.6%** | -11.6% | **-24.9%** | **-24.9%** |
+| 32-64K, two-mode | +6.1% | -1.1% | -1.8% | -5.5% |
+| 32-64K, four-mode (MTP) | +3.1% | -11.9% | -13.6% | -4.7% |
+
+- Claim: the kernel alone clears the 10% throughput bar at long context and cuts TPOT ~25%; at 32-64K it is worth
+  3-6%. Source: `resume_20261012/native_kernel_serving_attribution_20261023.md`. Qwen3-8B 32-64K: +9.2% / +7.9%
+  throughput, ITL -1.0% / -4.1% (one four-mode repeat regressed ITL, so no-regression is not yet established).
+
+**C2b: the fused step is predictable, which EDF admission consumes.** GPU time per step, first-half fit /
+second-half scored, same features: ours + MTP on the fused path 0.4% decode / 3.2% prefill-step MAPE vs stock + MTP on
+FA3 1.5% / 5.7% (3.8x / 1.8x better); the same 4-mode schedule on unmodified FA3 is 2.7-4.5x worse, so the fused
+split is what buys the predictability (`server_perf_model.md`).
+
+**C2c: the colocated schedule on one GPU is a latency trade, not a win.** Against sglang mixed chunk on FA3 at agent
+concurrency 8 + chat 8 req/s: chat TTFT -77%, agent ITL p99 -71%, chat ITL p99 -62%, but agent TTFT +57% and
+throughput -5.5%; against prefill-prioritized the chat ITL tail is 4x worse. At saturation (agent concurrency 16-24)
+it does not beat stock even at its best chunk. Report this as the motivation for stage 3: the schedule's advantage
+needs a routing dimension a single GPU does not have. Source: `realistic_workload_analysis.md`.
+
+> Superseded: the earlier 6.3 table (ours +41-55% throughput, 15x agent attainment over mixed chunk) compared against
+> stock forced onto the flashinfer backend, half the throughput of FA3 on this workload. It must not be quoted.
+
+### 6.4 Stage 3 -- multi-node vs PD disaggregation, 16 and 32 GPUs (H20)
+
+**Baseline.** sglang PD disaggregation with its own router, prefill:decode ratio swept, same FA3 backend as ours,
+with and without MTP on every role. **Ours.** Colocated workers, worker-side EDF, cache-first SLO-checked router,
+cluster KV pool. Workload: fan-out coding agents (64K repository prefixes, multi-round) + ShareGPT chat, load scaled
+with GPU count. Per-tenant SLOs: chat 0.5 s TTFT + 20 ms TPOT, agent 10 s + 80 ms.
+
+**16 GPUs (4 x 4), every arm on FA3** (32 tasks / 64 agent programs, chat 16 req/s, 900 s):
+
+| arm | agent tok/s | agent TTFT | chat attainment | agent SLO goodput | chat TPOT p90 |
+|---|---:|---:|---:|---:|---:|
+| **ours, no spec** | **962.7** | **0.89 s** | **96.5%** | **939 tok/s** | 11.5 ms |
+| **ours, no spec, fused kernel on** | -- | -- | 94.7% | **1063 tok/s** | 11.6 ms |
+| PD disagg 3+1 | 344.9 | 17.24 s | 23.3% | 129 tok/s | 13.3 ms |
+| PD disagg 2+2 | 242.3 | 27.57 s | 15.6% | 56 tok/s | 7.4 ms |
+| **ours + MTP** | **1120.7** | **0.80 s** | **92.8%** | **1099 tok/s** | 9.5 ms |
+| PD disagg 3+1 + MTP | 204.6 | 31.81 s | 3.8% | 22 tok/s | 13.8 ms |
+| PD disagg 2+2 + MTP | 195.9 | 34.25 s | 4.9% | 25 tok/s | 6.5 ms |
+
+- **Do not headline these ratios.** The load was sized to OUR capacity, so disagg is past saturation (chat
+  attainment 3.8-23%) and goodput ratios of 7-44x divide by a near-zero baseline; the P:D sweep was also pod-granular
+  (only 1+3 / 2+2 / 3+1 exist at 4 x 4) and disagg ran without the KV pool ours had. A reviewer will reject all three.
+  The C3 number for the paper is **capacity at SLO** -- the highest load each system holds at >= 90% per-tenant
+  attainment, from a load sweep, with P:D swept at worker granularity and the pool on both sides
+  (`pd_colocation/mn_capacity_16g_20261023.sh`, running on 8 pods x 2 GPUs). The table above stays as the overload
+  point of that curve.
+- What the table does support: at this load, vs disagg's best ratio, chat attainment 96.5% vs 23.3% (no spec) and
+  92.8% vs 4.9% (MTP), throughput +179% / 5.2x, agent TTFT -95% / -98%. MTP helps ours (+16%) and hurts disagg, which ships draft
+  state to decode pods every round on top of re-prefilling the session.
+- The colocated schedule carries this on its own -- the no-spec row runs upstream's unmodified FA3 -- and the fused
+  kernel adds +13% agent SLO goodput on top (1063 vs 939 tok/s), the stage-1 kernel showing up at cluster scale.
+- Disagg 2+2 keeps a tighter chat TPOT tail (6.5-7.4 ms) by starving agents, at 4.9-15.6% attainment.
+
+**32 GPUs (8 x 4)**, disagg on FA3 (ours on its earlier backend, i.e. a conservative comparison), Qwen2.5 no spec:
+
+| load | ours agent tok/s | disagg 5+3 | disagg 4+4 | ours agent TTFT | disagg 5+3 TTFT |
+|---|---:|---:|---:|---:|---:|
+| 1x (32 programs, chat 8 req/s) | 596.3 | 382.5 | 324.5 | 0.74 s | 4.59 s |
+| 2x (64 programs, chat 16 req/s) | **1172.2** | 443.7 | 393.2 | **0.72 s** | 12.25 s |
+
+- The lead widens with load (+56% -> +164%): ours doubles throughput at flat TTFT, disagg grows 16% and its TTFT triples.
+- Disagg was also swept at 2 / 4 / 5 / 6 prefill pods of 8 at the original load; every ratio was overloaded.
+- **Open (needed for the scale claim)**: the 32-GPU table must be rerun with ours on FA3 (both kernel off and on) and
+  with MTP, matching the 16-GPU footing, so 16 -> 32 is a like-for-like scale sweep.
+
+**Cache pressure (16 GPUs, no spec):** working set swept 1M -> 4M -> 8M live KV tokens against a ~6.7M pool at fixed
+program concurrency. Ours loses 10.6% throughput and 3.1 points of cached prefix fraction (0.98 -> 0.95); disagg loses
+55% and 28.5 points (0.89 -> 0.61). The lead grows +91% -> +266% -> +277%, and the cached fraction tracks it, so the
+re-prefill mechanism is measured, not inferred (point 2, ThunderAgent's thrashing setting).
+
+**What does not hold:** randomized pull among near-equal cache holders (point 4) shows no congestion regime at <= 16
+H20s; the complete-graph vs bipartite argument is untested at the scale where it would matter.
+
+> Superseded: the 8-GPU table formerly here (ours 91.4% vs 26.2% chat attainment) ran with disagg on the flashinfer
+> backend and a single P:D ratio.
 
 ### 6.5 Dynamic load: spikes and mixture shifts (8 H20s, two repeats)
 | event | ours: agent attainment through the event | ours: chat | disagg: agent | disagg: chat |

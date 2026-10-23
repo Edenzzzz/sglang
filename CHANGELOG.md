@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.41.0 — 32-64K full stack misses the bar; EDF deadline mismatch + overload demotion under screen (2026-10-24)
+
+- 32-64K full stack vs stock on FA3: agent tput -3.4% / +5.0%, chat attainment flat ~50% in both arms. All agent
+  requests land in the first 60 s; ours' EDF ran a 2 s chat deadline (scored SLO 0.5 s) with no overload handling.
+- `apply_edf_late_demote_20261024.py`: `SGLANG_EDF_LATE_DEMOTE=1` ranks prefills that can no longer meet their
+  deadline behind every feasible one (deadline order kept among the demoted); retracted decodes never demoted.
+- Harness `--ours-env KEY=VALUE`; audit `--repeats`; `edf_overload_screen_h200_20261024.sh` screens per-tenant
+  deadlines (0.5 s / 10 s) with and without demotion. 128-256K rate sweep stopped (it used the 2 s deadline).
+
 ## v1.40.0 — Full single-node stack vs stock sglang on FA3, 128-256K (2026-10-24)
 
 - H200, paired and audited: ours (deadline order + chunk preemption + deadline-sized chunks + FA3 + FA2 v3 + 4-mode)

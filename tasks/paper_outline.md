@@ -434,7 +434,7 @@ control to show zero merged steps). Agent concurrency 4 / 8 sessions + chat 4 re
 - Do not headline the attainment ratios: this load is past both systems' capacity (stock 17%, ours 27-32% chat
   attainment) and agent n=16, so 2/16 -> 5/16 is a small-count ratio. The paper figure is attainment vs chat rate
   (pending), where the gap shows as the load each system sustains at 90%.
-- 32-64K stage running. Source: `resume_20261012/native_kernel_serving_attribution_20261023.md` (full-stack section),
+- 32-64K: no bar met (agent tput -3.4% / +5.0%, chat attainment flat ~50% in both arms because every agent lands in the first 60 s and ours' deadlines were set to a 2 s chat SLO, not the scored 0.5 s, with no overload handling). Deadline fixes being screened; both stages rerun with the chosen one. Source: `resume_20261012/native_kernel_serving_attribution_20261023.md` (full-stack section),
   `resume_20261012/ours_full_stack_h200_20261024.sh`.
 
 > Superseded: the earlier 6.3 table (ours +41-55% throughput, 15x agent attainment over mixed chunk) compared against

@@ -93,8 +93,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--repeats", type=int, default=2)
     arguments = parser.parse_args()
-    report = audit(arguments.root)
+    report = audit(arguments.root, arguments.repeats)
     arguments.output.write_text(json.dumps(report, indent=2) + "\n")
     for comparison in report["comparisons"]:
         print(comparison["mode"], comparison["tenant"], comparison["change_percent"])

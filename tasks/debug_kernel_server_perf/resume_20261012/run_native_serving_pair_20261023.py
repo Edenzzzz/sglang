@@ -89,6 +89,7 @@ def run_arm(arguments, mode, repeat, arm):
             SGLANG_EDF_PREEMPT_CHUNK="1", SGLANG_EDF_RESERVE_EARLIER="1", SGLANG_EDF_PREEMPT_MAX_TOKENS="1000000000",
             SGLANG_EDF_UNCACHED_DEADLINE="1", SGLANG_EDF_DEADLINE_CHUNK=arguments.deadline_chunk,
         )
+        environment.update(item.split("=", 1) for item in arguments.ours_env)
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -219,6 +220,8 @@ def main():
     parser.add_argument("--ours", action="store_true",
                         help="control = stock sglang on FA3 (stock MTP in four-mode); candidate = our deadline scheduler + native kernel")
     parser.add_argument("--deadline-chunk", default="1024:2048:6000")
+    parser.add_argument("--ours-env", action="append", default=[], metavar="KEY=VALUE",
+                        help="extra SGLANG_* setting for the --ours candidate arm (repeatable)")
     parser.add_argument("--role-row-splits", type=int, default=32)
     arguments = parser.parse_args()
     if min(arguments.concurrency, arguments.sessions, arguments.chat_rate, arguments.chat_requests, arguments.repeats, arguments.tp_size) <= 0:

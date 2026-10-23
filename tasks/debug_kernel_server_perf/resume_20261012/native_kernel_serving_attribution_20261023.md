@@ -201,8 +201,10 @@ is the one to ship**; the role split is the right ablation to report beside it.
 ## Full single-node stack vs stock sglang on FA3, 128-256K (2026-10-24, Claude)
 
 - [x] 2026-10-24 128-256K: ours +12% agent tput, chat TTFT -69/-79%, agent ITL -31/-12%; chat TPOT +17/+30%. Audit passes.
-- [ ] 32-64K stage (running on H200 34c7bd503d461dc1, `ONLY=short`).
-- [ ] Attainment vs chat rate at 128-256K (both arms), for capacity at 90%.
+- [x] 2026-10-24 32-64K: no bar met; chat attainment flat at ~50% in both arms (cause below). Audit passes.
+- [ ] Attainment vs chat rate at 128-256K: started and STOPPED -- it ran the 2 s chat deadline found wrong below; rerun
+      after the deadline fix is chosen (`ours_full_stack_rate_h200_20261024.sh`, aborted root kept as `*.aborted_2s_deadline`).
+- [ ] 2026-10-24 screen of the deadline fixes at 32-64K (`edf_overload_screen_h200_20261024.sh`, running).
 
 Command (H200 34c7bd503d461dc1, sglang `6acf9a297` + the audit fix in this commit):
 `bash ours_full_stack_h200_20261024.sh now`. It runs `run_native_serving_pair_20261023.py <root> --stage mix128
@@ -245,3 +247,45 @@ Reading:
 - **This load is past both systems' capacity.** Chat attainment is 17% for stock and 27-32% for ours, and agent
   attainment counts are small (2/16 vs 5-8/16). The attainment and goodput ratios are therefore not a paper headline;
   a chat-rate sweep is needed.
+
+### 32-64K stage (root `/opt/tiger/w/ours_full_stack_h200_20261024/short`, agent conc 8 / 16 sessions, chat 8 req/s)
+
+| mode / tenant | tok/s | TTFT | TPOT | ITL | worst-10% TPOT |
+|---|---:|---:|---:|---:|---:|
+| four / agent | -3.4% | +14.8% | -33.5% | -26.6% | -52.5% |
+| four / chat | -0.1% | -36.5% | +23.3% | +20.0% | +2.0% |
+| two / agent | +5.0% | -3.0% | -3.3% | -4.8% | +3.6% |
+| two / chat | +0.0% | -58.7% | +23.2% | +16.9% | +14.2% |
+
+Attainment, r1 / r2:
+- **Chat 0.5 s / 20 ms:** stock 49.7 / 50.1% (four) and 49.0 / 49.0% (two); ours 48.2 / 48.0% (four) and
+  51.1 / 50.9% (two).
+- **Agent 10 s / 80 ms:** stock 50.0 / 43.3% (four) and 50.0 / 60.0% (two); ours 50.0 / 53.3% (four) and
+  60.0 / 63.3% (two).
+
+**Why chat attainment is ~50% in every arm.** Binning chat TTFT by arrival time (10 s bins) shows two regimes in
+sequence, not a mix:
+- **0-60 s:** all 32 agent requests (16 sessions x 2 turns) arrive. Chat TTFT p50 is 4.9-13.9 s under stock and
+  0.2-6.7 s under ours.
+- **60-120 s:** no agent work is left, and chat TTFT is 20 ms in both arms.
+
+So the ~50% is the agent-free half of the window. Ours shortens the burst-time wait but not to 0.5 s. Ruled out:
+- The 48-request running cap was reached on only 30-33 of ~1630 logged steps.
+- KV memory is far from full.
+- Ours cuts the mean queue from 38 to 17.
+
+**Ours' scheduler is configured against a looser SLO than the one scored.** Two causes:
+1. **Deadline mismatch.** `SGLANG_TTFT_SLO_MS=2000` gives chat a 2 s deadline, but attainment scores 0.5 s. The agent
+   deadline also grows with uncached length (a 48K cold prompt gets ~10.8 s), so chat waits behind any agent queued
+   more than ~9 s earlier.
+2. **No overload handling.** Plain EDF serves already-late requests first. During the burst every queued agent
+   prefill is past its deadline, so each one also makes the chat behind it late.
+
+Fixes being screened:
+- **(a) Per-tenant deadlines matching the scored SLOs:** 0.5 s below 8192 uncached tokens, 10 s at or above. This uses
+  the existing two-tier mode in `edf_scheduler.compute_ttft_slo_ms`.
+- **(b) Late demotion:** (a) plus `SGLANG_EDF_LATE_DEMOTE=1` (`apply_edf_late_demote_20261024.py`). A prefill that can
+  no longer meet its deadline at 6000 tok/s ranks behind every feasible one and keeps deadline order among the
+  demoted.
+
+The 128-256K full-stack numbers above were measured with the same 2 s deadline and are rerun with the chosen fix.

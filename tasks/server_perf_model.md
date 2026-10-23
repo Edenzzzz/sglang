@@ -47,7 +47,20 @@ Our method aims to achieve an optimal pareto curve: high throughput, stable deco
   decode and 2-3.5x worse on prefill -- upstream's internal heuristics (split-KV choice, scheduler metadata) make step
   time vary where our pre-assigned split does not. So the fused kernel's measured value is **predictability for SLO
   control**, not raw throughput (+2.5% there), which is what point 3 needs and what EDF admission consumes.
-  - [ ] **What accuracy is WORTH, end to end (`mn_predictor_value_20261022.sh`, queued).** Accuracy only matters if
+  - [ ] **What accuracy is WORTH, end to end -- result (2026-10-23) and a failed arm.** 16 H20s, ours no spec,
+    same schedule and workload, only the router's perf model scaled:
+    | router perf model | agent tok/s | agent TTFT | chat TTFT | errors |
+    |---|---:|---:|---:|---:|
+    | calibrated (1.0x) | 1093.5 | 0.83 s | 72.9 ms | 0 |
+    | pessimistic (1.25x, believes steps dearer) | 1092.2 | 0.84 s | 70.7 ms | 0 |
+    | optimistic (0.75x, believes steps cheaper) | **INVALID RUN** | -- | -- | 137,979 |
+    **By the falsification condition written before the run, the overestimating side is flat: a predictor 25% too
+    pessimistic does not change SLO control at this load**, so better accuracy does not buy end-to-end attainment
+    there. The optimistic arm is not a result: all four workers on one pod lost their response streams at once
+    (`ClientPayloadError`), the router marked them dead, and the client's retries produced the error count. All 16
+    workers have 0 tracebacks; host OOM kills found in `dmesg` date from 10-18/10-19 and are unrelated (checked
+    against the run window, 10-22 07:51). Cause unknown; rerun with stream-cut diagnostics before any asymmetry claim.
+  - [x] (earlier text) **What accuracy is WORTH, end to end (`mn_predictor_value_20261022.sh`).** Accuracy only matters if
     the router's SLO check admits better with it, which no run has yet shown. Three runs of ours at 16 H20s, same
     schedule and workload, only the router's perf model perturbed: the fitted curve / grid as calibrated, then scaled
     0.75x (the check believes steps are cheaper than they are) and 1.25x (dearer). A 25% mis-specification is roughly

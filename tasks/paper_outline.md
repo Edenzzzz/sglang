@@ -373,6 +373,7 @@ with GPU count. Per-tenant SLOs: chat 0.5 s TTFT + 20 ms TPOT, agent 10 s + 80 m
 |---|---:|---:|---:|---:|---:|
 | **ours, no spec** | **962.7** | **0.89 s** | **96.5%** | **939 tok/s** | 11.5 ms |
 | **ours, no spec, fused kernel on** | -- | -- | 94.7% | **1063 tok/s** | 11.6 ms |
+| ours + MTP, fused kernel on | INVALID RUN (chat client wrote 0 bytes, 2 of 5 agent epochs; 0 worker tracebacks; cause unknown, rerun queued) | | | | |
 | PD disagg 3+1 | 344.9 | 17.24 s | 23.3% | 129 tok/s | 13.3 ms |
 | PD disagg 2+2 | 242.3 | 27.57 s | 15.6% | 56 tok/s | 7.4 ms |
 | **ours + MTP** | **1120.7** | **0.80 s** | **92.8%** | **1099 tok/s** | 9.5 ms |

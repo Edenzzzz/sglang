@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.34.0 — Outline restructured by stage; two failed multi-node arms diagnosed as invalid (2026-10-23)
+
+- Paper outline section 6 now runs kernel -> single node -> multi-node with the baseline and claim at each stage.
+  Multi-node goodput ratios (7-44x) are withdrawn as headlines: they came from an overload point with a pod-granular
+  P:D sweep and no KV pool for disagg. A capacity-at-SLO sweep (8 pods x 2 GPUs, P:D swept 1-7, pool on both sides)
+  is running.
+- Predictor value: a 1.25x pessimistic step model matches the calibrated one (1092 vs 1094 tok/s), so on the
+  overestimating side accuracy does not change SLO control at this load. The 0.75x arm and the kernel-on MTP arm are
+  invalid runs (stream cuts / a silent chat client, 0 worker tracebacks, cause unknown); OOM kills in dmesg predate
+  both and are unrelated.
+
 ## v1.33.0 — Clean multi-node table complete: MTP widens the gap to 19x / 44x (2026-10-22)
 
 - 16 H20s, every arm on upstream's FA3 backend, ours with no split, disagg swept over 2+2 and 3+1, no-spec and MTP.

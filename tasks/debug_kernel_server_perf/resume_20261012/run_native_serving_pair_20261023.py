@@ -77,8 +77,18 @@ def run_arm(arguments, mode, repeat, arm):
         # The candidate runs the mixed step as two FA3 launches (prefill rows + decode/verify rows, row num_splits 32)
         # instead of FA3 + FA2; set explicitly because every SGLANG_* key is stripped from the inherited environment.
         environment.update(SGLANG_ROLE_SPLIT_FA3="1", SGLANG_ROLE_SPLIT_ROW_SPLITS=str(arguments.role_row_splits))
-    if mode == "four":
+    if mode == "four" and not (arguments.ours and arm == "fa3"):
         environment.update(SGLANG_ALLOW_MIXED_CHUNK_SPEC="1", SGLANG_MIXED_SPEC="1", SGLANG_MIXED_SPEC_MIN_CTX="8192", SGLANG_MIXED_SPEC_MIN_QUEUE="4")
+    if arguments.ours and arm == "native":
+        # Our full single-node stack (2026-10-24): deadline-ordered scheduling with uncached-token deadlines, chunk
+        # preemption and deadline-sized chunks -- the env mn_node.sh sets for EDF=1 PREEMPT=1 EDF_UNCACHED=1
+        # DEADLINE_CHUNK=1024:2048:6000 -- on top of the native FA3 + FA2 kernel. The control arm is then plain stock
+        # sglang on FA3 (and, in four-mode, stock MTP without the 4-mode mixed step).
+        environment.update(
+            SGLANG_EDF_SCHEDULING="1", SGLANG_TTFT_SLO_MS="2000", SGLANG_EDF_LATENCY_MODEL="",
+            SGLANG_EDF_PREEMPT_CHUNK="1", SGLANG_EDF_RESERVE_EARLIER="1", SGLANG_EDF_PREEMPT_MAX_TOKENS="1000000000",
+            SGLANG_EDF_UNCACHED_DEADLINE="1", SGLANG_EDF_DEADLINE_CHUNK=arguments.deadline_chunk,
+        )
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -89,6 +99,9 @@ def run_arm(arguments, mode, repeat, arm):
         "--max-running-requests", "48", "--cuda-graph-max-bs-decode", "48", "--context-length", config["CTX_LEN"],
         "--watchdog-timeout", "600", "--tp-size", str(arguments.tp_size),
     ]
+    if arguments.ours and arm == "native":
+        command += ["--enable-priority-scheduling", "--schedule-low-priority-values-first",
+                    "--priority-scheduling-preemption-threshold", "999999"]
     if not arguments.no_yarn:
         command += ["--json-model-override-args", json.dumps({"rope_scaling": {"factor": float(config["YARN_FACTOR"]), "original_max_position_embeddings": original_context, "type": "yarn"}})]
     if mode == "four":
@@ -200,6 +213,9 @@ def main():
     parser.add_argument("--packed-query-limit", type=int, choices=(32, 64), default=32)
     parser.add_argument("--step-trace", action="store_true")
     parser.add_argument("--role-split", action="store_true")
+    parser.add_argument("--ours", action="store_true",
+                        help="control = stock sglang on FA3 (stock MTP in four-mode); candidate = our deadline scheduler + native kernel")
+    parser.add_argument("--deadline-chunk", default="1024:2048:6000")
     parser.add_argument("--role-row-splits", type=int, default=32)
     arguments = parser.parse_args()
     if min(arguments.concurrency, arguments.sessions, arguments.chat_rate, arguments.chat_requests, arguments.repeats, arguments.tp_size) <= 0:

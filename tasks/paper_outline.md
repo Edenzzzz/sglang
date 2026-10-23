@@ -373,8 +373,11 @@ causal-attention check (max head-relative error 0.0046-0.0078).
     oracle baseline, not from the kernel.
   - Superseded and not to be quoted: the H20 per-bucket table above (1.5-1.8x vs best-tuned FA3; buckets under 1% of
     real steps) and the census-reweighted 0.975-1.13x (one capture per bucket against an oracle).
-  - Implication for stage 2: re-run single-node serving with the role-split FA3 (dual-stream, split 32) as "ours" --
-    it should match or beat the native arm, and it is a far simpler artifact to ship.
+  - **Stage 2 does NOT bear that implication out (2026-10-24).** In paired serving at 128-256K the role split matches
+    FA3 + FA2 on throughput (+9.9-11.5% vs FA3) and chat latency, but is clearly worse on agent decode latency
+    (two-mode agent TPOT +6.6% vs FA3 + FA2's -23.9%; agent ITL -1.5..-5.7% vs -11.6..-21.5%). Per-step attention time
+    missed a serving-level advantage of the FA2 rows, so the FA2 role is not dead weight and "two FA3 launches" is
+    not the kernel to ship. Cross-session comparison; a same-session three-way pair is the clean test.
 - **Correctness, end to end (passed 2026-10-23)**: GSM8K (1,319 questions) and 32-60K passkey retrieval, native vs FA3
   run twice for a noise floor, two- and four-mode: native 76.50% / 76.19% against FA3 76.57-76.57% / 75.44-76.88%,
   passkey 100% everywhere, native path confirmed firing. Not a paper claim (precision stays out of the paper, per the

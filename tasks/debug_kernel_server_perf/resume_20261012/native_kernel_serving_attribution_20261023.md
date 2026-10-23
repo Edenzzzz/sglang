@@ -133,3 +133,29 @@ concurrency 8 + ShareGPT chat 8 req/s; native v3 relative to FA3, mean of both r
 Consistent with the earlier 32-64K matrix (+3-6% agent throughput): a small, real gain at this context length,
 with the large gains at 128-256K. Short finite cohorts (agent tenant ~62 s, 32 requests per arm), so this is
 kernel attribution, not a capacity or SLO claim. Chat throughput is pinned at the offered rate in every arm.
+
+## Role-split FA3 in serving, 128-256K (2026-10-24, Claude)
+
+`SGLANG_ROLE_SPLIT_FA3=1`: the mixed step as two FA3 launches (prefill rows on a side stream, decode/verify rows with
+num_splits 32), no FA2. It reproduces the fixed role-split FA3 that the trace-proportional benchmark found 1-2% faster
+per step than FA3 + FA2. Same paired protocol, frozen tree and scheduler as the native v3 runs above
+(`rolesplit_serving_h200_20261023.sh`, H200 `34c7bd503d461dc1`, root
+`/opt/tiger/w/rolesplit_serving_h200_20261023/long`); audit passes every check (all requests identity-matched,
+metrics recomputed from raw arrivals, graphs and overlap on); the candidate logged `NATIVE_PDL_CALL ... role_split=1`
+(432 calls in two-mode r1), the controls none. Relative to FA3, mean of two repeats, with the FA3 + FA2 native v2
+result at the same context from the matrix above:
+
+| mode / tenant | tok/s | TTFT | request TPOT | token ITL | FA3 + FA2 native: tok/s / TPOT / ITL |
+|---|---:|---:|---:|---:|---|
+| four / agent | **+9.9%** | -12.9% | -9.0% | -1.5% | +10.6% / -24.9% / -11.6% |
+| four / chat | -0.0% | **-22.5%** | **-25.7%** | **-18.8%** | +0.0% / -24.9% / -22.6% |
+| two / agent | **+11.5%** | -13.6% | +6.6% | -5.7% | +11.3% / -23.9% / -21.5% |
+| two / chat | +0.0% | **-21.5%** | -19.5% | -15.1% | +0.0% / -19.5% / -13.4% |
+
+**The role split matches FA3 + FA2 on throughput (+9.9-11.5%) and on chat latency, but is clearly worse on agent
+decode latency** -- two-mode agent TPOT +6.6% against -23.9%, agent ITL -1.5..-5.7% against -11.6..-21.5%. The
+per-step kernel benchmark had the role split 1-2% faster, so the FA2 rows carry an advantage in serving that
+per-step attention time does not capture (one candidate: the row launch's SM footprint and how much it delays the
+decode-only steps that follow; the benchmark times each step in isolation). Caveat: the FA3 + FA2 numbers come from
+an earlier session with the v2 policy, not this session's v3 tree, so the comparison is across runs; a same-session
+three-way pair (FA3 / FA3 + FA2 v3 / role split) is the clean test.

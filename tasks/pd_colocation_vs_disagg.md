@@ -412,6 +412,9 @@ static mixture.
         Ours at this load is being rerun: its phase-A arm aborted before starting because the cn-seed WebShell SSO
         session expired mid-sweep ("mooncake master did not start: webshell relay redirected to SSO"), not because
         of the arm (`mn_cap16_ours_L32_rerun_20261023.sh`).
+      - [ ] **32-GPU capacity (2026-10-24, running, `mn_capacity_32g_20261023.sh`)**. Phase A at 64 programs / chat
+        16: disagg P:D 1..7 chat attainment 10.5 / 20.6 / 31.5 / 44.2 / 48.9 / 55.9 / 48.7% vs ours 99.1% (agent SLO
+        goodput 1096 vs best 352 tok/s). Phase B at 32 programs: ours 99.6%, disagg 7+1 82.4%; 96 / 128 pending.
       - [x] **Phase B: CAPACITY AT SLO, ours vs the two best-tuned disagg splits (2026-10-24,
         `mn_capacity_16g_phaseB_20261023.sh`, splits 6 and 7 picked automatically from phase A; all errors=0).**
         chat attainment (0.5 s + 20 ms) / agent SLO goodput (tok/s) / agent tok/s / agent TTFT:
@@ -421,10 +424,14 @@ static mixture.
         | 32 + 8 req/s | rerun pending | 67.8% / 359 / 413.1 / 3.47 s | 50.0% / 326 / 369.7 / 3.23 s |
         | 48 + 12 req/s | **96.6%** / 772 / 787.2 / 0.65 s | 45.8% / 231 / 371.1 / 9.91 s | 19.1% / 234 / 361.3 / 8.96 s |
         | 64 + 16 req/s | **94.2%** / 964 / 991.2 / 0.74 s | 31.2% / 165 / 361.5 / 15.69 s | 4.4% / 63 / 253.9 / 23.90 s |
+        | 96 + 24 req/s | 89.2% / 1187 | -- | -- |
+        | 128 + 32 req/s | 72.6% / 1221 | -- | -- |
         **The fair multi-node result.** The best-tuned disagg holds >= 90% chat attainment only at the lightest load
         (16 programs); ours still holds 94.2% at 64. So **ours sustains at least 2-4x the load of the best-tuned PD
-        disaggregation at SLO**, and that is a LOWER bound: ours' own capacity is not yet reached (96 / 128 programs
-        queued, `mn_cap16_ours_high_20261024.sh`). At equal light load the systems are close (99.5% vs 92.8%, agent
+        disaggregation at SLO**. Ours' own capacity point (2026-10-24, `mn_cap16_ours_high_20261024.sh`): 89.2% at 96
+        programs and 72.6% at 128, so ours' capacity lies between 64 and 96 programs and disagg's between 16 and 48:
+        **4x at the tested grid (64 vs 16)**. The grid is coarse on disagg's side; a 24 / 32-program disagg point would
+        tighten the lower end. At equal light load the systems are close (99.5% vs 92.8%, agent
         SLO goodput 293 vs 282), as a fair comparison should be; the gap is a saturation effect -- disagg's agent
         throughput plateaus at ~360-410 tok/s from 32 programs on while ours scales with load to 991.
         Standing trade: ours' agent ITL p99 is 109-134 ms at 48-64 programs vs disagg's 29-31 ms (its decode pods

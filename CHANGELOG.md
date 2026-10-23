@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.40.0 — Full single-node stack vs stock sglang on FA3, 128-256K (2026-10-24)
+
+- H200, paired and audited: ours (deadline order + chunk preemption + deadline-sized chunks + FA3 + FA2 v3 + 4-mode)
+  vs stock sglang mixed chunk on FA3 (stock EAGLE3 MTP in four-mode). Agent tok/s +12%. Chat TTFT -69% (four-mode) /
+  -79% (two-mode). Agent TPOT -35%; agent ITL -31% (four) / -12% (two). Chat mean TPOT +17% / +30%, with a growing p90
+  tail. Past both systems' capacity, so the attainment ratios are not headlined; a chat-rate sweep is queued.
+- The audit requires a four-mode merge exactly when `SGLANG_MIXED_SPEC=1`, and zero merges otherwise. Before this, it
+  rejected the valid stock-MTP control.
+- `ours_full_stack_h200_20261024.sh` gains `ONLY=` / `AUDIT_ONLY=`; new `ours_full_stack_rate_h200_20261024.sh`
+  (chat 1 and 2 req/s).
+
 ## v1.39.0 — Same-session: FA3 + FA2 rows win agent decode latency; role split is the ablation (2026-10-24)
 
 - 128-256K, H200, paired vs FA3, same session and tree: FA3 + FA2 native v3 gives +10.7/+11.6% agent throughput and

@@ -34,12 +34,14 @@ export NATIVE_PDL_FA2_FP32_LIBRARY=/opt/tiger/w/torch_ext_native_fp32_20261023/n
 export NATIVE_PDL_FA2_FP32_DIRECT_LIBRARY=/opt/tiger/w/torch_ext_native_fp32_direct_20261023/native_fa2_q32_fp32_direct/native_fa2_q32_fp32_direct.so
 COMMON="--split-policy geometry_v3 --direct-output --packed-query-limit 64 --repeats 2 --ours"
 for spec in "long mix128 --concurrency 4 --sessions 8 --chat-rate 4 --chat-requests 960" "short mix32"; do
-  set -- $spec; R=$BASE/$1; stage=$2; shift 2
+  set -- $spec; name=$1; R=$BASE/$1; stage=$2; shift 2
+  # ONLY=<long|short> reruns one stage; the harness refuses to overwrite a finished stage's arms.
+  [ -z "${ONLY:-}" ] || [ "$ONLY" = "$name" ] || continue
   make_root "$R"
   export PYTHONPATH=$R/python:$R:/dev/shm/w/fi TRACE_DATASET_PATH=$R/tracelab_unique.jsonl.gz
   cd "$R"
   echo "##### $stage"
-  /dev/shm/w/venv/bin/python -u run_native_serving_pair_20261023.py "$R" --stage $stage --modes four two "$@" $COMMON
+  [ "${AUDIT_ONLY:-0}" = 1 ] || /dev/shm/w/venv/bin/python -u run_native_serving_pair_20261023.py "$R" --stage $stage --modes four two "$@" $COMMON
   /dev/shm/w/venv/bin/python audit_native_serving_pair_20261023.py "$R" "$R/audit.json"
 done
 echo OURS_FULL_STACK_DONE

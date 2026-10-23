@@ -197,3 +197,51 @@ from splitting the mixed step by role), but FA3 + FA2 cuts agent decode latency 
 per-step kernel benchmark, which times each step in isolation and found the role split 1-2% faster. The role split
 does better on TTFT (-13% vs -2%), consistent with its prefill launch finishing earlier. **The fused FA3 + FA2 kernel
 is the one to ship**; the role split is the right ablation to report beside it.
+
+## Full single-node stack vs stock sglang on FA3, 128-256K (2026-10-24, Claude)
+
+- [x] 2026-10-24 128-256K: ours +12% agent tput, chat TTFT -69/-79%, agent ITL -31/-12%; chat TPOT +17/+30%. Audit passes.
+- [ ] 32-64K stage (running on H200 34c7bd503d461dc1, `ONLY=short`).
+- [ ] Attainment vs chat rate at 128-256K (both arms), for capacity at 90%.
+
+Command (H200 34c7bd503d461dc1, sglang `6acf9a297` + the audit fix in this commit):
+`bash ours_full_stack_h200_20261024.sh now`. It runs `run_native_serving_pair_20261023.py <root> --stage mix128
+--modes four two --concurrency 4 --sessions 8 --chat-rate 4 --chat-requests 960 --split-policy geometry_v3
+--direct-output --packed-query-limit 64 --repeats 2 --ours`, then `audit_native_serving_pair_20261023.py`.
+Root `/opt/tiger/w/ours_full_stack_h200_20261024/long`. Per-tenant scoring: `bench_per_tenant.py mix128_*/requests`.
+
+- **The fa3 arm under `--ours` is stock sglang.** In four-mode it runs stock EAGLE3 MTP (no `SGLANG_MIXED_SPEC`).
+- **The native arm is ours:** the EDF env (uncached-token deadlines, chunk preemption, deadline chunk 1024:2048:6000)
+  plus FA3 + FA2 v3 plus the 4-mode step.
+- **The audit enforces the split in both directions.** A four-mode merge is required exactly when
+  `SGLANG_MIXED_SPEC=1`; an arm without it must log zero `MIXEDSPEC_STEPS`.
+- **The previous audit rejected the valid stock control.** It required a merge in every four-mode arm, so this rerun
+  of the audit exists only to apply the fix; the arms were not re-measured.
+
+Audit (relative change, ours vs stock, mean over two opposite-order repeats):
+
+| mode / tenant | tok/s | TTFT | TPOT | ITL | worst-10% TPOT |
+|---|---:|---:|---:|---:|---:|
+| four / agent | +12.4% | +2.9% | -34.9% | -30.6% | -51.4% |
+| four / chat | +0.0% | -68.6% | +17.2% | +12.5% | -5.5% |
+| two / agent | +11.8% | -14.5% | -35.0% | -11.7% | -20.7% |
+| two / chat | +0.0% | -79.4% | +30.5% | +21.4% | +35.6% |
+
+Per-tenant, per repeat (r1 / r2; chat n=960, agent n=16):
+
+| arm | agent attain. 10 s/80 ms | agent TPOT p90 | chat TTFT mean | chat attain. 0.5 s/20 ms | chat TPOT p50 / p90 |
+|---|---:|---:|---:|---:|---:|
+| four, stock MTP | 12.5 / 12.5% | 115 / 126 ms | 23.0 / 23.6 s | 17.9 / 17.5% | 17.7 / 16.1, 60 / 64 ms |
+| four, ours | 31.2 / 31.2% | 81 / 64 ms | 6.9 / 7.7 s | 27.7 / 27.0% | 16.7 / 17.0, 70 / 74 ms |
+| two, stock | 12.5 / 12.5% | 123 / 114 ms | 21.6 / 21.0 s | 16.8 / 16.8% | 18.9 / 18.9, 68 / 69 ms |
+| two, ours | 43.8 / 50.0% | 61 / 59 ms | 3.1 / 5.7 s | 32.1 / 31.5% | 17.2 / 16.6, 96 / 91 ms |
+
+Reading:
+- **Ours clears the throughput bar.** Agent tok/s rises 12% in both modes.
+- **Ours clears the 30% latency bar on the tenant each mechanism targets.** Chat TTFT falls 69-79% (deadline order);
+  agent TPOT falls 35% and four-mode agent ITL falls 31% (kernel + 4-mode).
+- **Chat decode pays the cost.** Chat p50 TPOT is unchanged, but the p90 tail rises from 60-69 ms to 70-96 ms.
+  Deadline order lets agent prefill chunks ride in chat decode steps.
+- **This load is past both systems' capacity.** Chat attainment is 17% for stock and 27-32% for ours, and agent
+  attainment counts are small (2/16 vs 5-8/16). The attainment and goodput ratios are therefore not a paper headline;
+  a chat-rate sweep is needed.

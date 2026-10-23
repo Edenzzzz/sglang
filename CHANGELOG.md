@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.37.0 — Role-split FA3 kernel in the native executor; stage-2 serving rerun with it (2026-10-23)
+
+- `SGLANG_ROLE_SPLIT_FA3=1` in `native_fa3_fa2_pdl_20261023.py`: the mixed step runs as two FA3 launches (prefill
+  rows on a side stream, decode/verify rows with num_splits 32), no FA2 planning. On 48 trace-sampled four-mode
+  captures (H200): 1.249x / 1.389x vs sglang's FA3 call at 32-64K / 128-256K, 1.00x vs the fixed role-split FA3 it
+  reimplements, 0.99x vs a per-step oracle; FP32 worst 0.0046 (vs 0.0075 with FA2 rows). Off by default.
+- `run_native_serving_pair_20261023.py --role-split`: sets the switch explicitly for the candidate arm (the harness
+  strips every inherited SGLANG_* key, so an exported variable would never have reached the server).
+- `rolesplit_serving_h200_20261023.sh`: paired FA3 vs role-split serving, 128-256K and 32-64K, two- and four-mode,
+  two repeats, audited -- running.
+- Caught before measuring: a script run from a directory holding the unpatched module imports that copy ahead of
+  PYTHONPATH, so the first role-split bench would have timed the old FA2 path.
+
 ## v1.36.0 — Stage 1 on trace-proportional captures: role separation is the contribution (2026-10-23)
 
 - 96 real mixed serving steps sampled in proportion to the trace (two/four-mode, 32-64K and 128-256K), H200, v3

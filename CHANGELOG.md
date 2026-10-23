@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.43.0 — v2 single-node full stack: two-mode wins attainment everywhere, four-mode does not (2026-10-24)
+
+- Two repeats at 128-256K (chat 4/2/1 req/s) and 32-64K. Every cell: chat TTFT -95..-99%, agent TPOT -12..-55%,
+  agent attainment up or equal. But chat TPOT +26..+84%, four-mode agent throughput -6..-16%, and four-mode at
+  128-256K loses chat strict attainment. The single-node bar is not met as a whole.
+- Diagnosis: the 6000 tok/s demotion rate demotes every cold 128-256K agent on arrival. The chat-rate sweep is the
+  wrong load axis, since agents alone saturate one GPU. Demote-on-miss screen launched
+  (`edf_demote_on_miss_h200_20261024.sh`).
+
 ## v1.42.0 — Late demotion fixes single-node chat TTFT under overload; v2 full-stack run (2026-10-24)
 
 - Screen at 32-64K: per-tenant deadlines alone change nothing; adding `SGLANG_EDF_LATE_DEMOTE=1` cuts chat TTFT

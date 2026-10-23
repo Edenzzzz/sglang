@@ -206,8 +206,12 @@ is the one to ship**; the role split is the right ablation to report beside it.
       after the deadline fix is chosen (`ours_full_stack_rate_h200_20261024.sh`, aborted root kept as `*.aborted_2s_deadline`).
 - [x] 2026-10-24 screen of the deadline fixes at 32-64K: per-tenant deadlines alone do nothing; + late demotion cuts
       chat TTFT 96-98%. Chosen for v2.
-- [ ] v2 definitive run (per-tenant deadlines + late demotion), both stages + chat-rate sweep, two repeats:
-      `ours_full_stack_v2_h200_20261024.sh`, root `/opt/tiger/w/ours_full_stack_v2_h200_20261024` (running).
+- [x] 2026-10-24 v2 (per-tenant deadlines + late demotion), all stages, two repeats: mixed. Ours wins two-mode
+      everywhere; four-mode at 128-256K loses chat strict attainment and 6-9% agent throughput. Details below.
+- [ ] Capacity sweep on AGENT concurrency at 128-256K. The chat-rate sweep never reached any system's capacity:
+      agents alone saturate one GPU.
+- [ ] Demote-on-miss variant at 128-256K. The 6000 tok/s feasibility rate demotes every cold 128-256K agent on
+      arrival (four-mode agent TTFT +33-50%).
 
 Command (H200 34c7bd503d461dc1, sglang `6acf9a297` + the audit fix in this commit):
 `bash ours_full_stack_h200_20261024.sh now`. It runs `run_native_serving_pair_20261023.py <root> --stage mix128
@@ -316,3 +320,55 @@ the `--ours-env` settings below. Stock -> ours:
   beside ~50K-deep prefill needs chunks below ~200 tokens, and the per-row slack cap starves prefill (it binds on 86%
   of steps). It is a single-GPU limit; stage 3's routing is the answer.
 - **The cost is four-mode agent throughput (-15%)**: demoted agents finish after the feasible work.
+
+### v2 definitive run (2026-10-24, root `/opt/tiger/w/ours_full_stack_v2_h200_20261024`, audits exit 0)
+
+Command: `bash ours_full_stack_v2_h200_20261024.sh now` (sglang `d9ccea38f`). Ours = per-tenant deadlines + late
+demotion + chunk preemption + deadline-sized chunks + FA3 + FA2 v3 + 4-mode; stock = sglang mixed chunk on FA3
+(stock EAGLE3 MTP in four-mode).
+
+Audit, ours vs stock, mean of two opposite-order repeats:
+
+| stage | mode | agent tok/s | agent TTFT | agent TPOT | agent ITL | chat TTFT | chat TPOT | chat ITL |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| 128-256K, chat 4/s | four | -6.4% | +35.6% | -54.7% | -32.3% | -97.7% | +84.2% | +58.6% |
+| 128-256K, chat 4/s | two | +10.5% | +2.4% | -40.5% | -21.6% | -98.8% | +46.0% | +28.4% |
+| 32-64K, chat 8/s | four | -15.8% | +49.6% | -46.1% | -42.6% | -95.3% | +59.8% | +38.5% |
+| 32-64K, chat 8/s | two | +4.3% | -1.9% | -17.0% | -11.9% | -97.7% | +25.7% | +14.4% |
+| 128-256K, chat 2/s | four | -6.4% | +32.7% | -38.1% | -26.2% | -97.0% | +48.4% | +15.7% |
+| 128-256K, chat 2/s | two | +6.1% | +12.9% | -30.2% | -17.7% | -98.1% | +60.2% | +17.6% |
+| 128-256K, chat 1/s | four | -9.1% | +42.5% | -15.2% | -26.1% | -96.9% | +30.2% | -8.0% |
+| 128-256K, chat 1/s | two | +2.7% | +7.1% | -11.7% | -8.8% | -98.1% | +59.8% | +6.4% |
+
+SLO attainment, stock -> ours, r1 / r2 (chat strict = 0.5 s + 20 ms, chat relaxed = 1 s + 30 ms; agent 10 s + 80 ms):
+
+| stage | mode | chat strict | chat relaxed | agent |
+|---|---|---|---|---|
+| 128-256K, chat 4/s | four | 20.0/17.5 -> 18.4/18.1% | 20.1/17.9 -> 23.9/24.4% | 18.8/12.5 -> 50.0/50.0% |
+| 128-256K, chat 4/s | two | 16.6/16.7 -> 36.8/35.4% | 17.1/17.6 -> 41.8/41.2% | 18.8/12.5 -> 50.0/50.0% |
+| 32-64K, chat 8/s | four | 49.9/50.1 -> 55.0/54.4% | 50.3/50.4 -> 82.1/81.8% | 43.3/33.3 -> 46.7/50.0% |
+| 32-64K, chat 8/s | two | 49.2/49.0 -> 65.0/65.0% | 49.9/49.5 -> 85.6/86.0% | 53.3/50.0 -> 56.7/60.0% |
+| 128-256K, chat 2/s | four | 27.9/29.4 -> 23.1/23.3% | 29.2/30.0 -> 24.8/24.8% | 25.0/18.8 -> 50.0/43.8% |
+| 128-256K, chat 2/s | two | 30.6/30.8 -> 37.9/38.1% | 32.3/32.5 -> 41.2/40.6% | 31.2/31.2 -> 43.8/50.0% |
+| 128-256K, chat 1/s | four | 33.8/33.8 -> 24.2/22.9% | 34.2/34.6 -> 26.2/25.8% | 37.5/31.2 -> 43.8/50.0% |
+| 128-256K, chat 1/s | two | 35.4/35.8 -> 37.9/37.1% | 36.2/37.1 -> 40.4/39.2% | 43.8/37.5 -> 43.8/37.5% |
+
+Reading:
+- **Chat TTFT falls 95-99% in every cell.** Ours admits chat in 0.1-0.5 s; stock makes it wait 4.5-23 s.
+- **Chat TPOT rises 26-84% in every cell.** Admitted chat decodes beside long-context agent prefill. In four-mode
+  the 4-mode step also puts that prefill into the verify steps, whereas stock MTP's verify steps carry no prefill.
+  At 128-256K four-mode, ours' chat TPOT p50 is 46-59 ms against stock's 15-19 ms, so ours LOSES chat strict
+  attainment there (18-24% vs 18-34%).
+- **Agent attainment rises or holds in every cell** (stock 12-53% -> ours 38-60%), with agent TPOT -12..-55%.
+- **Four-mode agent throughput falls 6-16%; two-mode rises 3-11%.** In four-mode, demotion delays agents: their TTFT
+  rises 33-50%.
+- **v1 vs v2 at 128-256K, four-mode.** v1 (2 s chat deadline, no demotion) had +12.4% agent throughput and 27-28%
+  chat strict attainment; v2 has -6.4% and 18%. Demotion at 6000 tok/s marks every cold 128-256K agent infeasible
+  on arrival (10 s budget, 128K+ uncached tokens), so all of them rank behind chat and behind each other's
+  deadlines.
+- **The chat-rate sweep is the wrong load axis here.** At 128-256K, stock's chat attainment only moves from 17% to
+  34% as chat drops from 4 to 1 req/s: four concurrent 128-256K agents alone saturate one H200. Capacity has to be
+  swept on agent concurrency (as the multi-node evaluation does).
+- **Bar status, single node: not met as a whole.** Two-mode meets it on chat TTFT, agent TPOT and attainment; the
+  throughput bar is met only at 128-256K chat 4/s (+10.5%). Four-mode misses on throughput and chat strict
+  attainment.

@@ -248,7 +248,7 @@ against stock forced onto the flashinfer backend are withdrawn (see the note at 
 
 | stage | question | baseline(s) | our claim | headline evidence | status |
 |---|---|---|---|---|---|
-| **1. Kernel** (6.2) | is role-specific FA3 + FA2 faster than FA3 on the mixed steps serving produces? | single varlen FA3 (sglang default), dual-stream FA3, SM-grid-tuned FA3; all tuned per shape | **C1**: heterogeneous attention wins on decode/verify-heavy mixed steps | **role-separated attention 1.23-1.57x over sglang's FA3 call** on 96 trace-sampled steps (2/4-mode, 32-256K); native FA2 rows 1-2% slower than a fixed role-split FA3 | done (v3, H200); Llama-70B missing |
+| **1. Kernel** (6.2) | is role-specific FA3 + FA2 faster than FA3 on the mixed steps serving produces? | single varlen FA3 (sglang default), dual-stream FA3, SM-grid-tuned FA3; all tuned per shape | **C1**: heterogeneous attention wins on decode/verify-heavy mixed steps | **role-separated attention 1.23-1.57x over sglang's FA3 call** on 96 trace-sampled steps (2/4-mode, 32-256K); in serving the FA2 rows add a further 15-25 pts of agent decode latency over a role-split FA3 | done (v3, H200); Llama-70B missing |
 | **2. Single node** (6.3) | does the kernel and the 4-mode schedule pay off in serving on one GPU? | sglang on FA3: mixed chunk, prefill-prioritized, each +/- MTP | **C2a** kernel at fixed schedule; **C2b** step predictability; C2c schedule as a latency trade | kernel: +10.6-11.3% agent tput, -21.5% agent ITL at 128-256K; step model 3.8x more accurate | C2a meets the 10% tput bar at long context only; ITL bar not met |
 | **3. Multi-node** (6.4) | does colocation + cache-first SLO routing beat PD disaggregation at scale? | PD disagg, P:D swept at worker granularity, KV pool on, same FA3 backend, with and without MTP | **C3**: higher sustainable load at SLO (capacity), widening with cache pressure and scale | **16 GPUs: ours sustains >= 2-4x the load of best-tuned disagg at >= 90% chat attainment** (lower bound; disagg 92.8% at 16 programs, ours 94.2% at 64); thrashing lead +91% -> +277% | 16 GPUs done (ours' own capacity point queued); 32 GPUs queued |
 
@@ -377,7 +377,11 @@ causal-attention check (max head-relative error 0.0046-0.0078).
     FA3 + FA2 on throughput (+9.9-11.5% vs FA3) and chat latency, but is clearly worse on agent decode latency
     (two-mode agent TPOT +6.6% vs FA3 + FA2's -23.9%; agent ITL -1.5..-5.7% vs -11.6..-21.5%). Per-step attention time
     missed a serving-level advantage of the FA2 rows, so the FA2 role is not dead weight and "two FA3 launches" is
-    not the kernel to ship. Cross-session comparison; a same-session three-way pair is the clean test.
+    not the kernel to ship. **Confirmed same-session (2026-10-24)**: at 128-256K both give +10-12% throughput, but
+    FA3 + FA2 cuts agent decode latency 17-24% (four-mode agent TPOT -24.2%, ITL -20.8%) where the role split gives
+    -1.5..+6.6%. So the paper's kernel story has two measured parts: **role separation buys throughput** (stage 1,
+    1.23-1.57x attention; stage 2, +10-12%), and **FA2 decode/verify rows buy decode latency** (a further ~15-25
+    points of agent ITL / TPOT in serving), with the role-split FA3 as the ablation that separates them.
 - **Correctness, end to end (passed 2026-10-23)**: GSM8K (1,319 questions) and 32-60K passkey retrieval, native vs FA3
   run twice for a noise floor, two- and four-mode: native 76.50% / 76.19% against FA3 76.57-76.57% / 75.44-76.88%,
   passkey 100% everywhere, native path confirmed firing. Not a paper claim (precision stays out of the paper, per the

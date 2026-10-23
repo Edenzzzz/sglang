@@ -177,3 +177,23 @@ At 32-64K the two kernels are within a few points of each other on every metric,
 split ahead on four-mode agent throughput and two-mode agent ITL; FA3 + FA2 ahead on four-mode agent ITL). The
 clear separation is only at 128-256K agent decode latency, where FA3 + FA2 led; the same-session FA3 + FA2 v3 pair at
 128-256K (`native_v3_long_serving_h200_20261024.sh`, running) is the clean test of that.
+
+## Same-session three-way result at 128-256K: FA3 + FA2 wins decode latency (2026-10-24, Claude)
+
+`native_v3_long_serving_h200_20261024.sh`: FA3 + FA2 native v3 (FP32 partials, direct BF16 output) through the
+IDENTICAL paired protocol and tree, in the same H200 session, right after the role-split pair; audited, exit 0.
+Relative to FA3 (each pair has its own FA3 control):
+
+| mode / tenant | FA3 + FA2 v3: tok/s / TTFT / TPOT / ITL | role split (FA3 + FA3): tok/s / TTFT / TPOT / ITL |
+|---|---|---|
+| four / agent | **+10.7% / -2.2% / -24.2% / -20.8%** | +9.9% / -12.9% / -9.0% / -1.5% |
+| four / chat | +0.0% / -15.3% / **-23.2% / -23.3%** | -0.0% / -22.5% / -25.7% / -18.8% |
+| two / agent | **+11.6% / -2.7% / -20.1% / -16.7%** | +11.5% / -13.6% / +6.6% / -5.7% |
+| two / chat | +0.0% / -18.5% / -19.0% / -13.1% | +0.0% / -21.5% / -19.5% / -15.1% |
+
+**Same-session, the earlier cross-session reading holds**: both kernels give the same throughput gain (+10-12%,
+from splitting the mixed step by role), but FA3 + FA2 cuts agent decode latency 17-24% where the role split manages
+-1.5..+6.6%. The FA2 rows are therefore worth ~15-25 points of agent ITL / TPOT in serving -- invisible to the
+per-step kernel benchmark, which times each step in isolation and found the role split 1-2% faster. The role split
+does better on TTFT (-13% vs -2%), consistent with its prefill launch finishing earlier. **The fused FA3 + FA2 kernel
+is the one to ship**; the role split is the right ablation to report beside it.

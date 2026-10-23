@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.39.0 — Same-session: FA3 + FA2 rows win agent decode latency; role split is the ablation (2026-10-24)
+
+- 128-256K, H200, paired vs FA3, same session and tree: FA3 + FA2 native v3 gives +10.7/+11.6% agent throughput and
+  cuts agent TPOT 20-24% / ITL 17-21%; the role-split FA3 gives the same throughput but agent TPOT -9.0/+6.6%, ITL
+  -1.5/-5.7%. The FA2 rows are worth ~15-25 points of agent decode latency in serving, invisible to the per-step
+  benchmark. The fused FA3 + FA2 kernel is the one to ship.
+
 ## v1.38.0 — Fair multi-node result: ours sustains >= 2-4x the load of best-tuned disagg at SLO (2026-10-24)
 
 - 16 H20s (8 pods x 2), both on FA3, disagg's P:D swept at worker granularity with the KV pool on, load swept.

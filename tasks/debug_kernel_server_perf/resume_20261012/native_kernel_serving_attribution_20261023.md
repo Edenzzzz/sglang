@@ -204,7 +204,10 @@ is the one to ship**; the role split is the right ablation to report beside it.
 - [x] 2026-10-24 32-64K: no bar met; chat attainment flat at ~50% in both arms (cause below). Audit passes.
 - [ ] Attainment vs chat rate at 128-256K: started and STOPPED -- it ran the 2 s chat deadline found wrong below; rerun
       after the deadline fix is chosen (`ours_full_stack_rate_h200_20261024.sh`, aborted root kept as `*.aborted_2s_deadline`).
-- [ ] 2026-10-24 screen of the deadline fixes at 32-64K (`edf_overload_screen_h200_20261024.sh`, running).
+- [x] 2026-10-24 screen of the deadline fixes at 32-64K: per-tenant deadlines alone do nothing; + late demotion cuts
+      chat TTFT 96-98%. Chosen for v2.
+- [ ] v2 definitive run (per-tenant deadlines + late demotion), both stages + chat-rate sweep, two repeats:
+      `ours_full_stack_v2_h200_20261024.sh`, root `/opt/tiger/w/ours_full_stack_v2_h200_20261024` (running).
 
 Command (H200 34c7bd503d461dc1, sglang `6acf9a297` + the audit fix in this commit):
 `bash ours_full_stack_h200_20261024.sh now`. It runs `run_native_serving_pair_20261023.py <root> --stage mix128
@@ -289,3 +292,27 @@ Fixes being screened:
   demoted.
 
 The 128-256K full-stack numbers above were measured with the same 2 s deadline and are rerun with the chosen fix.
+
+### Screen of the deadline fixes, 32-64K (2026-10-24, one repeat per mode, root `/opt/tiger/w/edf_overload_screen_h200_20261024`)
+
+Command: `bash edf_overload_screen_h200_20261024.sh now`, which runs the paired harness with `--repeats 1 --ours`, plus
+the `--ours-env` settings below. Stock -> ours:
+
+| fix / mode | chat TTFT mean | chat 0.5 s/20 ms | chat 1 s/30 ms | chat 2 s/50 ms | agent tok/s | agent 10 s/80 ms |
+|---|---:|---:|---:|---:|---:|---:|
+| tier / four | 4.86 -> 3.26 s | 50.0 -> 47.3% | 50.4 -> 49.4% | 50.8 -> 57.3% | -- | 46.7 -> 46.7% |
+| tier / two | 4.60 -> 1.78 s | 49.0 -> 52.5% | 49.4 -> 56.9% | 50.3 -> 67.3% | +3.6% | 56.7 -> 56.7% |
+| **late / four** | 4.92 -> **0.18 s** | 50.0 -> 55.2% | 50.4 -> **83.8%** | 50.8 -> **98.4%** | **-15.4%** | 40.0 -> 50.0% |
+| **late / two** | 4.50 -> **0.10 s** | 48.8 -> **64.2%** | 49.3 -> **85.5%** | 50.3 -> **97.6%** | +4.1% | 50.0 -> 53.3% |
+
+- **tier** = per-tenant deadlines (`SGLANG_TTFT_SLO_MS=500`, `SGLANG_EDF_LONG_PROMPT_TOKENS=8192`,
+  `SGLANG_EDF_LONG_TTFT_SLO_MS=10000`). Alone, it changes nothing: already-late agents still hold the earliest
+  deadlines.
+- **late** = tier + `SGLANG_EDF_LATE_DEMOTE=1`. It removes the burst-time chat wait: chat TTFT falls 96-98%, and chat
+  attainment at 1 s / 30 ms rises from 50% to 84-86%.
+- **The strict 0.5 s / 20 ms chat SLO is now bound by TPOT.** Chat requests admitted during the agent burst decode
+  beside continuous 32-64K agent prefill. Stock meets chat TPOT only by holding chat back until the agents finish.
+  This matches the 2026-10-20/21 single-node finding (`realistic_workload_analysis.md`): holding chats under 20 ms
+  beside ~50K-deep prefill needs chunks below ~200 tokens, and the per-row slack cap starves prefill (it binds on 86%
+  of steps). It is a single-GPU limit; stage 3's routing is the answer.
+- **The cost is four-mode agent throughput (-15%)**: demoted agents finish after the feasible work.

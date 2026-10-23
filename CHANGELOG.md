@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.42.0 — Late demotion fixes single-node chat TTFT under overload; v2 full-stack run (2026-10-24)
+
+- Screen at 32-64K: per-tenant deadlines alone change nothing; adding `SGLANG_EDF_LATE_DEMOTE=1` cuts chat TTFT
+  96-98% and lifts chat attainment at 1 s/30 ms from 50% to 84-86%. Strict 20 ms chat TPOT stays bound by decoding
+  beside continuous long-context prefill. Four-mode agent throughput falls 15%.
+- `ours_full_stack_v2_h200_20261024.sh`: both stages + chat-rate sweep with the fix, two repeats each.
+
 ## v1.41.0 — 32-64K full stack misses the bar; EDF deadline mismatch + overload demotion under screen (2026-10-24)
 
 - 32-64K full stack vs stock on FA3: agent tput -3.4% / +5.0%, chat attainment flat ~50% in both arms. All agent

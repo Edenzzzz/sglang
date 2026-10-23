@@ -395,6 +395,24 @@ static mixture.
         measured as ThunderAgent poses it, and it holds.** Disagg keeps the better ITL tail throughout (11.9-17.2 vs
         21.9-113.2 ms p99), which is the standing trade.
 
+      - [ ] **Capacity at SLO, 16 GPUs (8 pods x 2), phase A: disagg at every P:D split, KV pool on, FA3 (2026-10-23,
+        `bash tasks/pd_colocation/mn_capacity_16g_20261023.sh`; 32 agent programs + chat 8 req/s, Qwen2.5 no spec):**
+        | prefill pods of 8 | chat attainment | agent SLO goodput | agent tok/s | agent TTFT | chat TPOT p90 | cached |
+        |---|---:|---:|---:|---:|---:|---:|
+        | 1 | 16.2% | 86 | 194.9 | 15.18 s | 6.2 ms | 0.940 |
+        | 2 | 37.3% | 201 | 293.6 | 7.93 s | 7.2 ms | 0.933 |
+        | 3 | 51.5% | 230 | 316.1 | 6.78 s | 7.9 ms | 0.924 |
+        | 4 | 60.4% | 296 | 366.3 | 4.84 s | 8.5 ms | 0.926 |
+        | 5 | 66.1% | 320 | 386.6 | 4.31 s | 9.8 ms | 0.922 |
+        | **6** | **67.8%** | **359** | **413.1** | 3.47 s | 13.0 ms | 0.922 |
+        | 7 | 50.0% | 326 | 369.7 | 3.23 s | 31.1 ms | 0.918 |
+        **A properly tuned disagg is far stronger than the baseline every earlier multi-node table used**: its best
+        split (6 of 8) attains 67.8% chat, against 23.3% at the pod-granular best of the old 4 x 4 sweep, and with the
+        KV pool its cached fraction is 0.92-0.94, not 0.76. The old 7-44x ratios came largely from the weak baseline.
+        Ours at this load is being rerun: its phase-A arm aborted before starting because the cn-seed WebShell SSO
+        session expired mid-sweep ("mooncake master did not start: webshell relay redirected to SSO"), not because
+        of the arm (`mn_cap16_ours_L32_rerun_20261023.sh`). Phase B (load sweep) is running.
+
       - [ ] **Qwen3-8B + trained EAGLE3 head (AngelSlim) with MTP on 16 H20s, both on FA3 (2026-10-21;
         `bash tasks/pd_colocation/mn_qwen3_16g_mtp_20261021.sh`; sglang fc9847d2a, pods' flashinfer_backend.py md5
         ed98c8e1fd51; ours rows + verify on FA3, disagg `--attention-backend fa3`; router perf model calibrated on

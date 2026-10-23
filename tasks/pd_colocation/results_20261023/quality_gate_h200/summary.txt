@@ -1,0 +1,19 @@
+{"two/gsm8k": {"fa3_a": 0.7657316148597423, "fa3_b": 0.7657316148597423, "native": 0.7649734647460197, "delta": -0.0008, "band": 0.033, "native_fired": true, "baselines_clean": true, "PASS": true}, "two/passkey": {"fa3_a": 1.0, "fa3_b": 1.0, "native": 1.0, "delta": 0.0, "band": 0.0, "native_fired": true, "baselines_clean": true, "PASS": true}, "four/gsm8k": {"fa3_a": 0.7687642153146323, "fa3_b": 0.7543593631539045, "native": 0.7619408642911296, "delta": 0.0004, "band": 0.0476, "native_fired": true, "baselines_clean": true, "PASS": true}, "four/passkey": {"fa3_a": 1.0, "fa3_b": 1.0, "native": 1.0, "delta": 0.0, "band": 0.0, "native_fired": true, "baselines_clean": true, "PASS": true}}
+two_fa3_a gsm8k: acc=0.7657 errors=0 (37.3 s)
+two_fa3_a passkey: acc=1.0000 errors=0 (346.1 s)
+two_fa3_a NATIVE_PDL_CALL lines: 0
+two_native gsm8k: acc=0.7650 errors=0 (37.1 s)
+two_native passkey: acc=1.0000 errors=0 (342.8 s)
+two_native NATIVE_PDL_CALL lines: 606
+two_fa3_b gsm8k: acc=0.7657 errors=0 (36.9 s)
+two_fa3_b passkey: acc=1.0000 errors=0 (346.0 s)
+two_fa3_b NATIVE_PDL_CALL lines: 0
+four_fa3_a gsm8k: acc=0.7688 errors=0 (29.6 s)
+four_fa3_a passkey: acc=1.0000 errors=0 (366.2 s)
+four_fa3_a NATIVE_PDL_CALL lines: 0
+four_native gsm8k: acc=0.7619 errors=0 (29.7 s)
+four_native passkey: acc=1.0000 errors=0 (363.1 s)
+four_native NATIVE_PDL_CALL lines: 393
+four_fa3_b gsm8k: acc=0.7544 errors=0 (29.9 s)
+four_fa3_b passkey: acc=1.0000 errors=0 (366.6 s)
+four_fa3_b NATIVE_PDL_CALL lines: 0

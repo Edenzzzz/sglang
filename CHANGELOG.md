@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.35.0 — Native kernel passes the downstream quality gate; stage 1 reweighted by real traces (2026-10-23)
+
+- Quality gate (H200, Qwen2.5-7B): GSM8K and 32-60K passkey, native vs FA3 run twice, two- and four-mode. Native is
+  within FA3's own run-to-run spread on every task (GSM8K 76.50 vs 76.57/76.57, 76.19 vs 76.88/75.44), passkey 100%,
+  native path confirmed firing. PASS on all four checks.
+- Stage-1 kernel speedups reweighted by each workload's census of real mixed steps: 0.975-1.13x of mixed-step
+  attention time, not the 1.5-1.8x per-bucket headlines (those buckets are <1% of steps).
+- Audited Codex's Qwen2.5 v3 common-workload run: all checks pass; +5.8% agent throughput, -9.1% ITL (two-mode).
+
 ## v1.34.0 — Outline restructured by stage; two failed multi-node arms diagnosed as invalid (2026-10-23)
 
 - Paper outline section 6 now runs kernel -> single node -> multi-node with the baseline and claim at each stage.

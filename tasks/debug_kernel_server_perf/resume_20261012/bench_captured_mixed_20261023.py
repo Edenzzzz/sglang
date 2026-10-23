@@ -210,7 +210,7 @@ def main():
     report = dict(
         scope="Actual serving tensors and physical KV layout; attention launch only, excludes capture and once-per-forward planning",
         gpu=torch.cuda.get_device_name(0), records=[], captures=[],
-        expected_records=len(files) * (48 if arguments.geometry_policy else 40),
+        expected_records=len(files) * ((48 if arguments.geometry_policy else 40) + (8 if arguments.policy_v3 else 0)),
         source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         executor_sha256=hashlib.sha256(Path(__file__).with_name("native_fa3_fa2_pdl_20261023.py").read_bytes()).hexdigest(),
     )

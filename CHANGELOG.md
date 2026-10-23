@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.36.0 — Stage 1 on trace-proportional captures: role separation is the contribution (2026-10-23)
+
+- 96 real mixed serving steps sampled in proportion to the trace (two/four-mode, 32-64K and 128-256K), H200, v3
+  policy, all FP32-checked. Native is 1.23-1.57x faster than sglang's single FA3 call (every CI lower bound > 1.09),
+  but a pure-FA3 role split with one fixed setting is 1-2% faster than native: the gain is splitting the mixed step
+  by role, and the FA2 rows do not pay on the H200.
+- Resolves the stage-2 inconsistency (128-256K four-mode attention 1.37x faster, consistent with +10.6% throughput).
+- Fixes bench_captured_mixed's expected-record count for the added v3 arms (the data was complete; only the final
+  assertion was wrong).
+
 ## v1.35.0 — Native kernel passes the downstream quality gate; stage 1 reweighted by real traces (2026-10-23)
 
 - Quality gate (H200, Qwen2.5-7B): GSM8K and 32-60K passkey, native vs FA3 run twice, two- and four-mode. Native is

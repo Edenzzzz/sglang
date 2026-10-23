@@ -248,7 +248,7 @@ against stock forced onto the flashinfer backend are withdrawn (see the note at 
 
 | stage | question | baseline(s) | our claim | headline evidence | status |
 |---|---|---|---|---|---|
-| **1. Kernel** (6.2) | is role-specific FA3 + FA2 faster than FA3 on the mixed steps serving produces? | single varlen FA3 (sglang default), dual-stream FA3, SM-grid-tuned FA3; all tuned per shape | **C1**: heterogeneous attention wins on decode/verify-heavy mixed steps | per bucket up to 1.2-1.8x; **trace-weighted 0.975-1.13x** of mixed-step attention time (Qwen2.5, Qwen3; 2- and 4-mode) | bucket sample measured; trace-proportional sample needed; Llama-70B missing |
+| **1. Kernel** (6.2) | is role-specific FA3 + FA2 faster than FA3 on the mixed steps serving produces? | single varlen FA3 (sglang default), dual-stream FA3, SM-grid-tuned FA3; all tuned per shape | **C1**: heterogeneous attention wins on decode/verify-heavy mixed steps | **trace-sampled H200 steps: 1.23-1.36x over sglang's FA3 call**; ~0.99x vs a fixed role-split FA3, i.e. the gain is role separation | 32-64K done (v1 policy); v3 re-bench + 128-256K running; Llama-70B missing |
 | **2. Single node** (6.3) | does the kernel and the 4-mode schedule pay off in serving on one GPU? | sglang on FA3: mixed chunk, prefill-prioritized, each +/- MTP | **C2a** kernel at fixed schedule; **C2b** step predictability; C2c schedule as a latency trade | kernel: +10.6-11.3% agent tput, -21.5% agent ITL at 128-256K; step model 3.8x more accurate | C2a meets the 10% tput bar at long context only; ITL bar not met |
 | **3. Multi-node** (6.4) | does colocation + cache-first SLO routing beat PD disaggregation at scale? | PD disagg, P:D swept at worker granularity, KV pool on, same FA3 backend, with and without MTP | **C3**: higher sustainable load at SLO (capacity), widening with cache pressure and scale | capacity-at-SLO sweep running; overload point: +179% tput, thrashing lead +91% -> +277% | 16 GPUs: capacity sweep running; 32 GPUs: same protocol next |
 
@@ -348,6 +348,22 @@ causal-attention check (max head-relative error 0.0046-0.0078).
   the same plan run serially. Report it that way rather than as "fusion".
 - Honest limits: four small four-mode Qwen2.5 cases still regress 3-4%; GLM-4.5-Air four-mode regresses 2-58%
   (`three_model_screen_20261023.md`), so GLM is not a C1 model; Llama-3.3-70B has not been captured yet.
+- **Trace-PROPORTIONAL captures on the H200 (2026-10-23; same hardware as stage 2).** Every Nth real mixed serving
+  step captured (`CAPTURE_EVERY`, 24 per mode), so the set has the trace's own shape mix; Qwen2.5, 32-64K; every
+  record FP32-checked (worst 0.0075); `resume_20261012/trace_sampled_capture_h200_20261023.sh`,
+  `analyze_trace_sampled_20261023.py`. Native (v1 policy; v3 re-bench queued) against three baselines:
+  | 32-64K, trace-sampled | vs sglang's single FA3 call (deployed) | vs ONE fixed best FA3 config (deployable) | vs best FA3 per step (oracle) |
+  |---|---:|---:|---:|
+  | two-mode | **1.36x** [1.13-1.92], wins 19/24 | 0.993x [0.977-1.002] (dual-stream FA3, split 32) | 0.977x |
+  | four-mode | **1.23x** [1.09-1.55], wins 14/24 | 0.987x [0.981-0.993] (dual-stream FA3, split 8) | 0.976x |
+  **What this means for C1.** The gain over sglang is real and large on realistic steps, but it comes from SPLITTING
+  the mixed step by role -- prefill chunk and decode/verify rows as separate launches with separate split plans. The
+  best single fixed baseline is itself a role split (dual-stream FA3), and whether the rows then run on FA2 (native)
+  or FA3 makes +/-1% on the H200. So the defensible stage-1 contribution is **role-separated attention for mixed
+  steps: 1.23-1.36x over sglang's single varlen call on trace-sampled steps**, with native FA2 rows matching -- not
+  beating -- a role-split FA3. A reviewer will propose "just tune FA3's num_splits"; a single global setting does not
+  get there (sglang's default is the 1.0 column), but a role split with a fixed split does.
+  The earlier H20 per-bucket speedups (1.5-1.8x vs the best tuned FA3) do not reproduce on trace-sampled H200 steps.
 - **Correctness, end to end (passed 2026-10-23)**: GSM8K (1,319 questions) and 32-60K passkey retrieval, native vs FA3
   run twice for a noise floor, two- and four-mode: native 76.50% / 76.19% against FA3 76.57-76.57% / 75.44-76.88%,
   passkey 100% everywhere, native path confirmed firing. Not a paper claim (precision stays out of the paper, per the

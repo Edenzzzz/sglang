@@ -159,3 +159,21 @@ per-step attention time does not capture (one candidate: the row launch's SM foo
 decode-only steps that follow; the benchmark times each step in isolation). Caveat: the FA3 + FA2 numbers come from
 an earlier session with the v2 policy, not this session's v3 tree, so the comparison is across runs; a same-session
 three-way pair (FA3 / FA3 + FA2 v3 / role split) is the clean test.
+
+## Role-split FA3 in serving, 32-64K (2026-10-24, Claude)
+
+Same protocol and audit as the 128-256K role-split pair above (root
+`/opt/tiger/w/rolesplit_serving_h200_20261023/short`, exit 0). Relative to FA3, with the same-session-era FA3 + FA2
+native v3 result at 32-64K (common-workload screen, audited earlier today) alongside:
+
+| mode / tenant | tok/s | TTFT | request TPOT | token ITL | FA3 + FA2 native v3: tok/s / TPOT / ITL |
+|---|---:|---:|---:|---:|---|
+| four / agent | +5.6% | -5.6% | -7.1% | -2.6% | +1.7% / -5.4% / -7.4% |
+| four / chat | -0.1% | -6.3% | -6.1% | -5.7% | -0.0% / -3.4% / +0.5% |
+| two / agent | +5.0% | +1.2% | -9.0% | **-11.7%** | +5.8% / -6.5% / -9.1% |
+| two / chat | +0.0% | -8.2% | -6.0% | -2.9% | -0.0% / -8.7% / -6.0% |
+
+At 32-64K the two kernels are within a few points of each other on every metric, with no consistent winner (role
+split ahead on four-mode agent throughput and two-mode agent ITL; FA3 + FA2 ahead on four-mode agent ITL). The
+clear separation is only at 128-256K agent decode latency, where FA3 + FA2 led; the same-session FA3 + FA2 v3 pair at
+128-256K (`native_v3_long_serving_h200_20261024.sh`, running) is the clean test of that.

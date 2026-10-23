@@ -248,7 +248,7 @@ against stock forced onto the flashinfer backend are withdrawn (see the note at 
 
 | stage | question | baseline(s) | our claim | headline evidence | status |
 |---|---|---|---|---|---|
-| **1. Kernel** (6.2) | is role-specific FA3 + FA2 faster than FA3 on the mixed steps serving produces? | single varlen FA3 (sglang default), dual-stream FA3, SM-grid-tuned FA3; all tuned per shape | **C1**: heterogeneous attention with PDL wins on decode/verify-heavy mixed steps | 1.45-1.78x on captured small-query steps (Qwen2.5, 32K-394K); 1.45-1.67x on Qwen3; ~1.0x prefill-heavy | measured; Llama-70B capture missing |
+| **1. Kernel** (6.2) | is role-specific FA3 + FA2 faster than FA3 on the mixed steps serving produces? | single varlen FA3 (sglang default), dual-stream FA3, SM-grid-tuned FA3; all tuned per shape | **C1**: heterogeneous attention wins on decode/verify-heavy mixed steps | per bucket up to 1.2-1.8x; **trace-weighted 0.975-1.13x** of mixed-step attention time (Qwen2.5, Qwen3; 2- and 4-mode) | bucket sample measured; trace-proportional sample needed; Llama-70B missing |
 | **2. Single node** (6.3) | does the kernel and the 4-mode schedule pay off in serving on one GPU? | sglang on FA3: mixed chunk, prefill-prioritized, each +/- MTP | **C2a** kernel at fixed schedule; **C2b** step predictability; C2c schedule as a latency trade | kernel: +10.6-11.3% agent tput, -21.5% agent ITL at 128-256K; step model 3.8x more accurate | C2a meets the 10% tput bar at long context only; ITL bar not met |
 | **3. Multi-node** (6.4) | does colocation + cache-first SLO routing beat PD disaggregation at scale? | PD disagg, P:D swept at worker granularity, KV pool on, same FA3 backend, with and without MTP | **C3**: higher sustainable load at SLO (capacity), widening with cache pressure and scale | capacity-at-SLO sweep running; overload point: +179% tput, thrashing lead +91% -> +277% | 16 GPUs: capacity sweep running; 32 GPUs: same protocol next |
 
@@ -320,8 +320,30 @@ causal-attention check (max head-relative error 0.0046-0.0078).
 | Qwen3 four-mode, cached / small (after v3) | 3.5974 | 2.1576 | **1.67x** |
 | prefill-heavy steps (2046 prefill tokens, 2 rows) | -- | -- | 0.98-1.09x |
 
-- **C1 claim**: on the mixed steps where decode/verify rows meet deep context, role-specific attention is 1.2-1.8x
-  faster than the best FA3 we can tune per shape; where the prefill chunk dominates it is neutral (0.98-1.09x).
+- **The table above is per BUCKET, one real step each -- not what serving sees. Weighted by each bucket's frequency
+  in the same workload's census of mixed serving steps (trace time-weighted: total mixed-step attention time FA3 /
+  native; `resume_20261012/trace_weighted_kernel_20261023.py`):**
+  | model / mode / context | census steps | bucket mix fl/cl/fs/cs (%) | trace time-weighted speedup |
+  |---|---:|---|---:|
+  | Qwen2.5 two, 32-64K | 480 | 19/38/43/0 | **1.02x** |
+  | Qwen2.5 four, 32-64K | 292 | 19/52/29/0 | **0.975x** |
+  | Qwen2.5 two, 128-256K | 411 | 13/48/38/0 | **1.09x** |
+  | Qwen2.5 four, 128-256K | 203 | 11/73/16/0 | **1.03x** |
+  | Qwen2.5 two / four, ~394K (cold start, 30-34 steps) | 34 / 30 | | 1.69x / 1.20x |
+  | Qwen3 two / four, 32-64K | 596 / 500 | 19/32/48/1, 23/40/37/1 | **1.13x / 1.10x** |
+  The headline 1.5-1.8x speedups come mostly from the cached/small bucket, which is **under 1% of real mixed steps**;
+  the dominant bucket is cached-prefix / large-query (38-73% of steps), where the kernel is about even. On realistic
+  traces the kernel is worth roughly 0-13% of mixed-step attention time.
+- **C1 claim, as it can actually be stated**: role-specific attention is up to 1.2-1.8x faster on decode/verify-heavy
+  mixed steps, and neutral on prefill-dominated ones; weighted by real serving traces it saves 0-13% of mixed-step
+  attention time (Qwen3 1.10-1.13x, Qwen2.5 long-context 1.03-1.09x, Qwen2.5 32-64K four-mode a 2.5% regression).
+- **Inconsistency to resolve before quoting stage 2**: the kernel's trace-weighted attention gain at Qwen2.5 four-mode
+  128-256K is 1.03x, yet serving there measured +10.6% throughput -- attention sped up 3% cannot speed the whole step
+  10%. Either one capture per bucket is too coarse a proxy (within-bucket shapes vary widely) or that serving gain is
+  partly the speculative-acceptance difference Codex noted. **Fix, required for stage 1 to match real traces in both
+  2-mode and 4-mode**: capture a trace-PROPORTIONAL sample of mixed steps (e.g. 24 per mode, spread uniformly over the
+  census) rather than the first eligible step per bucket, bench every one against the same FA3 controls, and report
+  the time-weighted mean with a confidence interval.
 - Where the speedup comes from: most of it is role-specific attention and its split plan; PDL adds only 1-12% over
   the same plan run serially. Report it that way rather than as "fusion".
 - Honest limits: four small four-mode Qwen2.5 cases still regress 3-4%; GLM-4.5-Air four-mode regresses 2-58%

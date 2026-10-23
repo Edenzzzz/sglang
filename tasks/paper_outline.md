@@ -348,6 +348,10 @@ causal-attention check (max head-relative error 0.0046-0.0078).
   the same plan run serially. Report it that way rather than as "fusion".
 - Honest limits: four small four-mode Qwen2.5 cases still regress 3-4%; GLM-4.5-Air four-mode regresses 2-58%
   (`three_model_screen_20261023.md`), so GLM is not a C1 model; Llama-3.3-70B has not been captured yet.
+- **Correctness, end to end (passed 2026-10-23)**: GSM8K (1,319 questions) and 32-60K passkey retrieval, native vs FA3
+  run twice for a noise floor, two- and four-mode: native 76.50% / 76.19% against FA3 76.57-76.57% / 75.44-76.88%,
+  passkey 100% everywhere, native path confirmed firing. Not a paper claim (precision stays out of the paper, per the
+  user); it is the gate that lets the stage-2 speed numbers stand.
 - Sources: `resume_20261012/captured_kernel_results_20261023.md`, `geometry_policy_evaluation_20261023.md`,
   `pd_colocation/results_20261023/captured_sm_controls/captured_native_all29.{svg,csv}`.
 

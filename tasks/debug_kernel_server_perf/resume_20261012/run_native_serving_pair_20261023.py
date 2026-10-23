@@ -167,8 +167,11 @@ def run_arm(arguments, mode, repeat, arm):
             raise RuntimeError("No native attention calls after the workload barrier")
         if arm == "fa3" and "NATIVE_PDL_CALL" in server_log:
             raise RuntimeError("Native attention contaminated the FA3 control")
-        if mode == "four" and "MIXEDSPEC_STEPS" not in measured_log:
+        stock_mtp_control = arguments.ours and arm == "fa3"
+        if mode == "four" and not stock_mtp_control and "MIXEDSPEC_STEPS" not in measured_log:
             raise RuntimeError("No measured four-mode target merge")
+        if mode == "four" and stock_mtp_control and "MIXEDSPEC_STEPS" in measured_log:
+            raise RuntimeError("The stock-MTP control merged prefill into verify steps; it must run stock MTP")
         programs = json.loads((output / "requests/agent_programs.json").read_text())
         if programs["concurrency_limit"] != arguments.concurrency or programs["peak_active_programs"] != min(arguments.concurrency, arguments.sessions):
             raise RuntimeError("Requested program concurrency was not attained")

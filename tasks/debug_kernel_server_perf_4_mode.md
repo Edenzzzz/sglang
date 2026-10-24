@@ -18,23 +18,27 @@ Tasks, in priority order:
       Code: flashinfer-private `unified_dispatch_20261024` (port07: `fused_plan.cuh`, `unified_merge.cuh`,
       `prefill.cuh`, `tests/unified_dispatch_ext.cu`); sglang `tasks/debug_kernel_server_perf/resume_20261012/unified/`.
 
-      **Current result (H20 job `2f608c1b1a67cf09`, 78 SMs, 92 trace-sampled 4-mode MTP captures; flashinfer `cda2acf`;
-      `unified_h20_np2s_20261025.sh`, `unified_h20_np2s_stage1_20261025.sh`).** Every arm passes FP32 + 20 graph
-      replays on all 92 captures.
-      | | 32-64K two | 32-64K four | 128-256K two | 128-256K four |
+      **Current result: A6 beats native v3 on the H200.** Job `8574c727fab6ffbd`, 132 SMs, 96 fresh trace-sampled
+      4-mode MTP captures; flashinfer `cda2acf`; `unified/a6_h200_chain_20261025.sh` (capture, v3 re-bench, build,
+      check, stage 1). Every arm passes FP32 + 20 graph replays on all 96 captures (worst 0.0082).
+      | stage 1, time-weighted [95% CI] | 32-64K two | 32-64K four | 128-256K two | 128-256K four |
       |---|---|---|---|---|
-      | stage 1 vs native v3 | 0.998x | 1.008x [1.002-1.017] | 0.999x | 1.002x |
-      | stage 1 vs sglang's FA3 call | 1.19x | 1.23x | 1.19x | 1.10x |
-      | native v3 vs sglang's FA3 call | 1.19x | 1.22x | 1.19x | 1.09x |
-      FA2 rows alone, vs v3's FA2 launch: 5.30 vs 5.46 ms (two-mode, 1.03x) and 6.48 vs 7.16 ms (four-mode, 1.105x).
-      In the full step, FA2 runs under FA3 (PDL), so the step time is FA3's and the FA2 saving barely shows.
-      H200 (job `8574c727fab6ffbd`): re-capture and the same comparison running (`a6_h200_chain_20261025.sh`).
+      | A6 `geometry_fa3` vs native v3 | **1.033x** [1.006-1.051] | **1.047x** [1.035-1.057] | **1.027x** [1.018-1.036] | **1.027x** [1.018-1.041] |
+      | A6 `geometry_fa3` vs sglang's FA3 call | 1.48x | 1.43x | 1.51x | 1.44x |
+      | A6 `geometry_fa3` vs role-split FA3 (dual split32) | 1.015x | 1.020x | 1.014x | 1.018x |
+      | A6 `geometry` vs native v3 | 1.013x | 1.041x | 1.025x | 1.025x |
+      | native v3 vs sglang's FA3 call (re-bench) | | 1.36x | 1.47x | 1.40x |
+      H20 (job `2f608c1b1a67cf09`, 78 SMs, 92 captures): level with v3 (0.998-1.008x), 1.10-1.23x sglang's FA3 call.
+      There FA3 dominates the step and the FA2 path's 3-10% saving (5.30 vs 5.46 ms two-mode, 6.48 vs 7.16 ms
+      four-mode FA2 rows) hides under it. H200 FA2-rows two-mode: 5.49 vs 5.02 ms for v3. The four-mode FA2-rows
+      harness stops on a capture whose v3 row set differs from its `q_len <= 4` rows; the harness needs fixing, not the
+      kernel.
 
       **Requirements (user, 2026-10-24)**
       - [x] (Mandatory) One unified CPU plan per step for FA3 and FA2.
       - [x] (Mandatory) Fused unified reduction: FA2 and FA3 split partials reduced inside the FA2 launch by the plan's
             merge schedule, no merge launch.
-      - [ ] A6 beats native v3 on stage 1. Today: level (0.998-1.008x).
+      - [x] A6 beats native v3 on stage 1: H200 1.027-1.047x under `geometry_fa3` (H20: level).
       - [x] FA2 executor chosen with measured causes. v3's BatchPrefill body under our plan beats the persistent
             overlap + LPT kernel: 6.48 vs 9.93 ms on four-mode FA2 rows (H20, both under the same plan; the persistent
             number predates the race fix). The persistent kernel stays as the ablation.
@@ -91,7 +95,6 @@ Tasks, in priority order:
           0.999 / 1.002x). The steps a smaller cap wins are short.
 
       **6. Open**
-      - [ ] H200 stage 1 on fresh captures (running).
       - [ ] 48-row FA2 tile with its own warp layout (16 rows per warp), or 48 to FA3. GLM depends on it. A
             co-compiled 48 runner spills every class (1 436 B).
       - [ ] (Optional) DSMEM JIT reduction as MELD does it (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`

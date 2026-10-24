@@ -109,7 +109,21 @@ Tasks, in priority order:
               - **FA3 big prefills:** a static per-CTA list without flash-attention's L2 swizzle.
               - **The 48 tile:** compiled into the FA2 kernel it makes every class spill 1 436 B (2-class build:
                 16-24 B).
-      - [ ] Next: stock BatchAttention as a baseline arm (runner vs plan / merge); L2-swizzled FA3 item order; FA2 runner
+      - [x] 2026-10-24 **FA2 executor isolated** (`unified/fa2_rows_compare_20261024.py`; the q_len <= 4 rows of every
+            trace-sampled capture, identical tensors, graph replay, FP32-checked). Sums over the captures:
+            | set | unified FA2 | stock BatchAttention | BatchAttention / unified | stock BatchPrefill (no split) |
+            |---|---|---|---|---|
+            | 32-64K four | 2.70 ms | 2.44 ms | 0.90x | 18.2 ms |
+            | 128-256K two | 3.44 ms | 2.91 ms | 0.85x | 53.6 ms |
+            | 128-256K four | 4.56 ms | 4.66 ms | 1.02x | 53.1 ms |
+            | all four sets | 12.72 ms | 11.72 ms | 0.92x | 144.3 ms |
+            - **Stock BatchAttention beats our FA2 path by 8%** on the same rows. The runner family is the same, so
+              the loss is in our plan, queue and in-epilogue merge.
+            - **Split-tuned BatchPrefill (v3) beats both:** 0.068 vs 0.090 ms on the profiled capture. Untuned it is
+              11x slower, so its edge is the tuned split plus non-persistent hardware scheduling.
+      - [ ] FA3 L2-swizzled item order: implemented as `UNIFIED_FA3_ORDER=swizzle` (flashinfer port07), host-checked,
+            not yet measured.
+      - [ ] Next: close the FA2 plan / merge gap to BatchAttention, then to tuned BatchPrefill; FA2 runner
             mainloop vs BatchPrefill's; a 48 layout with 16 rows per warp.
       - [ ] P4 remaining: serving executor in the FA3 backend, stage 2 pairs.
       - **Claims are judged against native v3 and the role split** (user, 2026-10-24): A6 counts only gains over the

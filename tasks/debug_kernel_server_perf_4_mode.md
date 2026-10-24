@@ -237,7 +237,7 @@ Tasks, in priority order:
                   - **Cause 1, the uniform 1-2%:** FA3-dominated steps pay +1.3% in the same flash-attention kernel at
                     the same split. Ours runs through `UpstreamFA3SchedulerAdapter`; v3 uses stock FA3's own tile
                     scheduler (longest-first causal varlen tiles with a head swizzle). Fix being measured:
-                    `UNIFIED_FA3_STOCK=1` (flashinfer HEAD of unified_dispatch_20261024). The plan picks the split count, stock FA3
+                    `UNIFIED_FA3_STOCK=1` (flashinfer `848610b`). The plan picks the split count, stock FA3
                     runs with its own scheduler as v3 launches it, and the plan's FA3 merge items in the FA2 launch
                     reduce its partials (no combine launch). `unified/unified_h20_stock_20261025.sh`.
                   - **Cause 2, many verify rows at long KV:** the fixed FA2 rule picked an 8192 chunk where v3 uses

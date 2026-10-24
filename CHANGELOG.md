@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.53.0 — Unified dispatcher stage 1: correct on 96 captures, 2-5% behind native v3 (2026-10-24)
+
+- Unified tile dispatcher (A6) runs end to end on the trace-sampled captures with three KV-split policies.
+  - Correctness: FP32 worst 0.0067.
+  - vs sglang's FA3 call: 1.08-1.52x.
+  - vs native v3 and the role split: 0.89-0.98x, i.e. not yet better. The fixed policy is best; flashinfer's
+    persistent-LPT rule is worst.
+- Fix: the merges skip -inf partial slots. 0 x stale NaN produced one NaN row of a causal FA3 prefill.
+
 ## v1.52.0 — Unified tile dispatcher built and correct on captures; FA2 executor speed work (2026-10-24)
 
 - Unified dispatcher (A6), flashinfer branch `unified_dispatch_20261024`:

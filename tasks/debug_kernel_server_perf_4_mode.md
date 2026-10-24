@@ -72,7 +72,46 @@ Tasks, in priority order:
             - a tail that merges FA3's split rows after `griddepcontrol.wait`.
       - [ ] P3 FA3 standalone launch from task 3 (adapter); the PDL primary triggers dependents early; split rows
             write partials only (no combine launch).
-      - [ ] P4 ext op `unified_run`, Python executor, stage-1 bench arm, FP32 gate with a null case.
+      - [x] 2026-10-24 P2-P4 built: `unified_dispatch_ext.cu` (flashinfer `b865401`, branch `unified_dispatch_20261024`).
+            - FA3 runs from task 3 of the plan via `UpstreamFA3SchedulerAdapter` (168 regs, 0 spill).
+            - The FA2-only persistent kernel is PDL-dependent on FA3 and pulls items from a dynamic LPT queue, with
+              JIT merge groups per (merge tile, kv head) in the runner epilogue and the FA3 split rows merged in its
+              tail. No merge launch.
+            - FP32 gate passes on all 96 trace-sampled captures (worst 0.0067).
+            - 4 800 graph replays found no unwritten row.
+            - Bug fixed on the way: a split with no visible key has LSE -inf and an unwritten O slot, and the
+              two-pass merge turned 0 x stale NaN into NaN. Merges now skip -inf slots.
+      - [x] 2026-10-24 **Stage 1, unified vs baselines, three KV-split policies** (`unified/unified_policy_compare_h200_20261024.sh`,
+            root `/opt/tiger/w/unified_policy_v2_h200_20261024`; 2-class FA2 build 32/16, rows > 32 packed on FA3).
+            Time-weighted over 24 captures each, unified / baseline:
+            | context / mode | policy | vs sglang FA3 call | vs native v3 | vs role-split FA3 (dual split32) |
+            |---|---|---|---|---|
+            | 32-64K two | fixed | 1.24x | 0.95x | 0.94x |
+            | 32-64K two | flashinfer | 1.17x | 0.89x | 0.88x |
+            | 32-64K two | dynamic | 1.22x | 0.93x | 0.92x |
+            | 32-64K four | fixed | 1.14x | 0.95x | 0.93x |
+            | 32-64K four | flashinfer | 1.08x | 0.90x | 0.89x |
+            | 32-64K four | dynamic | 1.07x | 0.90x | 0.88x |
+            | 128-256K two | fixed | 1.52x | 0.98x | 0.98x |
+            | 128-256K two | flashinfer | 1.46x | 0.94x | 0.94x |
+            | 128-256K two | dynamic | 1.49x | 0.96x | 0.96x |
+            | 128-256K four | fixed | 1.32x | 0.97x | 0.97x |
+            | 128-256K four | flashinfer | 1.28x | 0.94x | 0.94x |
+            | 128-256K four | dynamic | 1.25x | 0.92x | 0.92x |
+            - **Unified does not yet beat native v3 or the role split** under any policy: 2-5% behind with the best
+              (fixed) policy, 6-11% behind with flashinfer's rule.
+            - flashinfer's persistent-LPT `kv_len_limit` splits FA2 rows finest, and every extra split costs a
+              partial plus a merge.
+            - Measured causes:
+              - **FA2 mainloop:** on one 4-mode capture, FA2 rows + in-kernel merges 0.090 ms vs v3's BatchPrefill
+                rows 0.068 + merge 0.0065 ms. Not occupancy (1-3 CTAs/SM tried), not the KV tile shape
+                (MMA_KV 1/4, 1q x 4kv tried).
+              - **FA3 big prefills:** a static per-CTA list without flash-attention's L2 swizzle.
+              - **The 48 tile:** compiled into the FA2 kernel it makes every class spill 1 436 B (2-class build:
+                16-24 B).
+      - [ ] Next: stock BatchAttention as a baseline arm (runner vs plan / merge); L2-swizzled FA3 item order; FA2 runner
+            mainloop vs BatchPrefill's; a 48 layout with 16 rows per warp.
+      - [ ] P4 remaining: serving executor in the FA3 backend, stage 2 pairs.
       - **Claims are judged against native v3 and the role split** (user, 2026-10-24): A6 counts only gains over the
         current naive v3 build.
       - [ ] 48-row FA2 tile (own warp layout; 1q x 4kv x 3 MMA spilled in A2).

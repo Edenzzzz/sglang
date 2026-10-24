@@ -85,8 +85,19 @@ Tasks, in priority order:
         - KV depth is not its gap. Its 16-row class uses MMA_KV 2, as v3's 16-row kernel does.
         - Raising it to MMA_KV 4 widens the per-stage KV tile to 256 keys (1 q warp x 4 kv warps x 16 x 4), i.e.
           128 KB of K+V shared memory. That leaves one CTA per SM, and FA2 rows lose 26-36%.
-        - Pending: chunk-parallel merge in its merge items, stock FA3, atomic resets; then the same FA2-rows and
-          stage-1 comparison as the v3-body executor.
+        - [x] Brought to parity with the v3-body executor's fixes (chunk-parallel merge items, stock FA3, atomic
+              resets; flashinfer `a79b31b`, `unified/unified_h20_persistent_20261025.sh`; FP32 + 20 graph replays pass on
+              all 92):
+              | executor, `geometry` | FA2 rows two-mode | FA2 rows four-mode | stage 1 vs v3 (32-64K two / four, 128-256K two / four) |
+              |---|---|---|---|
+              | v3's FA2 launch | 5.46 ms | 7.17 ms | |
+              | persistent overlap + LPT | 5.82 ms (0.94x) | 6.92 ms (1.035x) | 0.998 / 1.005 / 0.999 / 1.003x |
+              | v3 body (non-persistent) | 5.31 ms (1.03x) | 6.49 ms (1.10x) | 0.998 / 1.008 / 0.999 / 1.002x |
+              With like-for-like fixes the persistent kernel beats v3 on four-mode FA2 rows and matches it on stage 1.
+              On FA2 rows it is still 7-10% behind the v3 body.
+        - [ ] Locate the remaining 7-10% (persistent vs v3 body on FA2 rows): compute-only bound of each, then a
+              per-class profile. Candidates: one register budget for both runners (255 regs, 20-24 B spill, against
+              211), the per-item queue atomic, the persistent runner mainloop vs BatchPrefill's.
       - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
             current captures mix q=1 and q=4 rows, so this is untested.
 

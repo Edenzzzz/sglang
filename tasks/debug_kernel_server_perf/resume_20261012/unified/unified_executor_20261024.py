@@ -87,8 +87,11 @@ class UnifiedPlan:
         ex = self.ex
         if self.stock and self.fa3_rows:
             t = self.fa3_tokens
+            # stock FA3 takes page-1 KV as [tokens, kv_heads, d]; a [pages, 1, kv_heads, d] cache is the same storage
+            k3 = k_cache[:, 0] if k_cache.dim() == 4 and k_cache.size(1) == 1 else k_cache
+            v3 = v_cache[:, 0] if v_cache.dim() == 4 and v_cache.size(1) == 1 else v_cache
             torch.ops.stock_fa3_pdl.run(
-                q[:t], k_cache, v_cache, out[:t], self.pre_lse, self.pre_indptr, self.pre_lengths, self.pre_pages,
+                q[:t], k3, v3, out[:t], self.pre_lse, self.pre_indptr, self.pre_lengths, self.pre_pages,
                 self.po, self.plse, self.split_counts, self.tile_counter, max(1, self.stats["max_splits_fa3"]),
                 self.pre_max_q, ex.num_sm, float(scale), 2 if ex.pdl else 1, self.timeline)
         torch.ops.unified_dispatch.unified_run(

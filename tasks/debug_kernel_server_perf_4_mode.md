@@ -241,8 +241,20 @@ Tasks, in priority order:
                     runs with its own scheduler as v3 launches it, and the plan's FA3 merge items in the FA2 launch
                     reduce its partials (no combine launch). `unified/unified_h20_stock_20261025.sh`.
                   - **Cause 2, many verify rows at long KV:** the fixed FA2 rule picked an 8192 chunk where v3 uses
-                    4096, and our FA2 is 43% slower there. `geometry` (v3's FA2 split) on the v3-body executor is
-                    running (`unified/unified_h20_geometry_20261025.sh`).
+                    4096, and our FA2 is 43% slower there.
+                  - [x] 2026-10-25 `geometry` (v3's FA2 split too) on the v3-body executor
+                        (`unified/unified_h20_geometry_20261025.sh`; FP32 + graph replays pass on all 92):
+                        | executor | stage 1 vs v3 | FA2 rows vs v3 (two / four) |
+                        |---|---|---|
+                        | v3 body, last-arriver merge | 0.956 / 0.944 / 0.985 / 0.980x | 6.69 vs 5.47 / 11.80 vs 7.16 ms |
+                        | v3 body, ticketed merge items | 0.961 / 0.975 / 0.984 / 0.986x | 6.29 vs 5.47 / 7.81 vs 7.16 ms |
+                        With v3's fine FA2 chunks, spreading the merge over CTAs is what helps: four-mode FA2 rows go
+                        to 7.81 ms (best so far), and last-arriver gets worse. The FA3 deficit (cause 1) remains in
+                        every set.
+                  - Stock-FA3 path, first run: every check failed with `stock PDL prototype requires matching page-1
+                    NHD KV tensors`. Stock's op takes page-1 KV as `[tokens, kv_heads, d]`, while the FA2 launch takes
+                    `[pages, 1, kv_heads, d]`. Fixed by passing a 3-D view of the same storage. Five captures then
+                    pass FP32 + graph replays; the full run (both last-arriver and ticketed FA2 merges) is running.
       - [ ] **FA3 scheduling:** v3's geometry_v3 prefix split inside the unified plan; dynamic pulling with a
             causal-aware LPT cost in the adapter.
       - [ ] **(Optional) DSMEM JIT reduction, as the MELD paper does it** (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`,

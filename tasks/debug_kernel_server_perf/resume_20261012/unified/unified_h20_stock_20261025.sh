@@ -6,16 +6,18 @@
 cd /dev/shm/w/ub
 export TORCH_CUDA_ARCH_LIST=9.0a MAX_JOBS=${MAX_JOBS:-4} VERBOSE=1 UNIFIED_FA2_CLASSES=2 UNIFIED_FA2_DYNAMIC=1
 export PYTHONPATH=/dev/shm/w/ub:/dev/shm/w/up/python:/dev/shm/w/fi
-name=np_last_stock
 if [ "${1:-}" != run ]; then
-  rm -rf /opt/tiger/w/torch_ext_unified_$name/unified_dispatch_ext
-  env UNIFIED_FA2_NP=1 UNIFIED_NP_MERGE=0 UNIFIED_FA3_STOCK=1 TORCH_EXTENSIONS_DIR=/opt/tiger/w/torch_ext_unified_$name \
-    /dev/shm/w/venv/bin/python -u build_unified_h200_20261024.py /dev/shm/w/ub/port07_unified > build_$name.log 2>&1
-  grep -q UNIFIED_BUILD_OK build_$name.log || { grep -E " error" build_$name.log | head -5; echo BUILD_FAILED; exit 1; }
-  for want in UNIFIED_FA2_NP=1 UNIFIED_NP_MERGE=0 UNIFIED_FA3_STOCK=1; do
-    grep -q -- "-D$want" build_$name.log || { echo "FLAG_MISSING $want"; echo BUILD_FAILED; exit 1; }
+  for v in "np_last_stock UNIFIED_NP_MERGE=0" "np2_stock UNIFIED_NP_MERGE=1"; do
+    set -- $v; name=$1; shift
+    [ -f /opt/tiger/w/torch_ext_unified_$name/unified_dispatch_ext/unified_dispatch_ext.so ] && { echo "build $name cached"; continue; }
+    env UNIFIED_FA2_NP=1 "$@" UNIFIED_FA3_STOCK=1 TORCH_EXTENSIONS_DIR=/opt/tiger/w/torch_ext_unified_$name \
+      /dev/shm/w/venv/bin/python -u build_unified_h200_20261024.py /dev/shm/w/ub/port07_unified > build_$name.log 2>&1
+    grep -q UNIFIED_BUILD_OK build_$name.log || { grep -E " error" build_$name.log | head -5; echo BUILD_FAILED; exit 1; }
+    for want in UNIFIED_FA2_NP=1 "$@" UNIFIED_FA3_STOCK=1; do
+      grep -q -- "-D$want" build_$name.log || { echo "FLAG_MISSING $want"; echo BUILD_FAILED; exit 1; }
+    done
+    echo "build $name ok"
   done
-  echo "build $name ok"
   exit 0
 fi
 export CUDA_VISIBLE_DEVICES=0
@@ -26,6 +28,7 @@ export NATIVE_PDL_FA2_FP32_DIRECT_LIBRARY=/opt/tiger/w/torch_ext_native_fp32_dir
 export UNIFIED_FA3_MIN=33 UNIFIED_MERGE_ROWS=4 UNIFIED_FA3_STOCK=1
 B=/opt/tiger/w/trace_sampled_h20_20261024
 OUT=/opt/tiger/w/unified_h20_20261024
+for name in np_last_stock np2_stock; do
 so=/opt/tiger/w/torch_ext_unified_$name/unified_dispatch_ext/unified_dispatch_ext.so
 for pol in geometry_fa3 geometry; do
   label=u_${name}_${pol}
@@ -39,5 +42,6 @@ for pol in geometry_fa3 geometry; do
   for b in arm:native_pdl_geometry_v3 default; do
     /dev/shm/w/venv/bin/python analyze_trace_sampled_20261023.py $label --baseline $b $OUT/*/kernel_results.json | sed -E 's/ \|.*//'
   done
+done
 done
 echo H20STOCK_DONE

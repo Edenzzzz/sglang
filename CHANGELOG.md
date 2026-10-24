@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.55.0 — A6 requirements recorded; FA2 parity measured against v3's own FA2 launch (2026-10-24)
+
+- A6 requirements, per the user:
+  - Mandatory: the unified plan, and the split-KV reduction in the FA2 epilogue with no merge launches.
+  - The persistent overlap + LPT FA2 schedule stays the intended executor, demoted only with measured causes.
+  - Optional: DSMEM JIT handoff and multicast.
+  - Stages 2-3 run on v3 overnight.
+  - The paper shows all three models (maybe two later: Llama-3.3-70B and Qwen2.5-7B).
+- FA2 parity harness: new `v3rows` arm (v3's exact FA2 row launch). On identical rows ours is 6-13% slower
+  (4.74 / 4.33 ms v3 vs 5.03 / 4.98 ms ours). Matching v3's KV depth or split does not close the gap.
+- New plan options (flashinfer): `UNIFIED_SPLIT_POLICY=geometry` (v3's split) and `UNIFIED_MERGE_MODE=dsmem`
+  grouping (host-checked; no kernel uses it yet).
+- Reference lists now carry four bullets per paper (Core method/contributions added); the pd doc's entries are
+  completed. Four claims the sources contradict were corrected: Dynamo's threshold is 2048 / 0.7 and its planner
+  has a 5 s mode; semi-PD partitions dynamically; the delta-KV RFC is an open proposal.
+- MELD paper PDF filed as `tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`.
+
 ## v1.54.0 — Plan-scheduled merge items; unified level with native v3; docs deduplicated (2026-10-24)
 
 - A6: FA2 merge groups are cut into row ranges and queued after every compute item. Our FA2 rows go from 0.86x to

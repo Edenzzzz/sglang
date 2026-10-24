@@ -21,14 +21,25 @@ Tasks, in priority order:
       - **The merge lives in the FA2 kernel (user, 2026-10-24).** FA2 launches second, so it reduces every split row,
         FA2's and FA3's alike; FA3 tiles only write FP32 partials + LSE.
       - **The dispatcher must be fast.** It runs once per step on the CPU, so plan time is measured and optimized.
-      - **What A6 is judged on (user, 2026-10-24).** The baseline is native v3. Both arms run the same flash-attention
-        FA3 kernel, and v3's FA2 path is already our tuned BatchPrefill, not stock: it mixes tile sizes (the 64 tile
-        overridden to Q32), with FP32 partials, direct BF16 output and the geometry_v3 split. So FA3 time differences
-        between the arms are scheduling (split choice and tile order), not the kernel. What A6 adds is the one plan,
-        the overlap + LPT FA2 schedule and the plan-scheduled merge. Our FA2 runner is brought to parity with v3's FA2
-        optimizations first, so that only the schedule differs. Porting overlap + LPT onto v3 instead would be the
-        same experiment; the templated runner is the harder thing to port. A6 counts only gains over v3 and the role
-        split.
+      - **Requirements (user, 2026-10-24).**
+        - **Mandatory:**
+          (1) one unified CPU plan per step for FA3 and FA2;
+          (2) the split-KV reduction inside the FA2 kernel's epilogue, for FA2 and FA3 partials alike, with no
+          separate merge launches.
+          A6 is judged against native v3, which runs the same FA3 kernel. Its FA2 path is our tuned BatchPrefill:
+          Q32 override of the 64 tile, FP32 partials, direct BF16 output, geometry_v3 split. FA3 time differences
+          between the arms are therefore scheduling (split choice, tile order), not the kernel. Mandatory parts (1)
+          and (2) only remove v3's calls (two planners, the FA2-merge launch, the FA3-combine launch), so a correct
+          A6 cannot be slower than v3. If it measures slower, that is a bug to find.
+        - **FA2 executor: the persistent overlap + LPT schedule stays the intended one.** It is demoted only if
+          measurements show it cannot beat v3's FA2 launch, with the concrete causes recorded. v3's
+          non-persistent BatchPrefill runner, under the same plan and epilogue merge, is the comparison arm.
+        - **Optional:** DSMEM JIT handoff (the MELD paper's mechanism, the producer TMA-copying into the consumer's
+          shared-memory slot under a per-slot mbarrier) and FA3 / FA2 KV multicast (A5.5).
+        - **Overnight:** stages 2-3 run with v3 as the kernel and switch to A6 once A6 beats v3 on stage 1.
+        - **Partials:** FP32 or BF16 is fine as long as the FP32 gate passes.
+        - **Models:** all three are swept and the paper shows all three for now, with a note that it may show only
+          two (then Llama-3.3-70B and Qwen2.5-7B, the more mainstream). Every model's results are recorded here.
       - [x] 2026-10-24 **Why FA2 had a 64 class: no measured reason, and it loses to FA3.** On GLM-4.5-Air's 4-mode
             captures (48 packed rows per verify row, H20 TP4 rank 0), the same rows on FA3 (tuned dual) vs on FA2-64
             (native), prefill on FA3 in both: fresh small 0.0857 vs 0.1359 ms (FA3 1.59x), fresh large 0.5341 vs 0.5588
@@ -103,14 +114,41 @@ Tasks, in priority order:
             | 4 | 6.76 ms (0.69x) | 7.44 ms (0.95x) | 255, 60-180 B |
             | 8 | does not launch: over the shared-memory limit | | 255, 476-1132 B |
             Our FA2 path loses to BatchAttention on the two-mode sets (decode rows) and wins on four-mode.
-      - [ ] **FA2 parity with v3's FA2 path.** List every optimization v3's FA2 kernel carries (Q32 override, FP32
-            partials, direct BF16 output, geometry_v3 `row_split_size`, per-class KV depth), port each into our runner
-            and plan, and check FA2 rows alone against v3's tuned BatchPrefill on the two-mode decode rows.
+      - [ ] **FA2 executor vs v3's FA2 launch, on identical rows** (`unified/fa2_parity_20261024.sh` ->
+            `fa2_rows_compare_20261024.py`, arm `v3rows` = v3's own FA2 row launch with its merge; flashinfer
+            `b544bb9` + `UNIFIED_SPLIT_POLICY=geometry`, sglang `224e4675b`). Sums over the FA2 rows of each pair of
+            sets:
+            | arm | two-mode sets | four-mode sets |
+            |---|---|---|
+            | v3's FA2 launch (BatchPrefill + merge) | 4.74 ms | 4.33 ms |
+            | ours, fixed split | 5.03 ms (0.94x) | 4.98 ms (0.87x) |
+            | ours, v3's geometry split | 5.39 ms (0.88x) | 5.23 ms (0.83x) |
+            | ours, 32-row tile at v3's KV depth (MMA_KV 4) | 5.10 ms | 4.95 ms |
+            | stock BatchAttention | 4.62 ms | 7.10 ms |
+            - KV depth is not the cause. v3's dispatch gives the 16 tile MMA_KV 2 (the same as ours) and the 32 tile
+              MMA_KV 4; ours at 4 is unchanged. A 256-key 16-row tile needs 128 KB of shared memory and drops to 1
+              CTA/SM, which is why MMA_KV 4 on the 16 class lost 26-36%.
+            - v3's split makes ours worse, because more items means more queue and merge work.
+            - Precision difference: our FA2 partials are BF16, v3's FP32.
+            - Open: the cause of the 6-13% gap. Candidates: the persistent runner body vs BatchPrefill's, the
+              dynamic queue, and the merge items. Next step: per-launch NCU of both arms on the same capture, with
+              merge off as the bound.
       - [ ] **FA3 scheduling:** v3's geometry_v3 prefix split inside the unified plan; dynamic pulling with a
             causal-aware LPT cost in the adapter.
-      - [ ] **DSMEM JIT reduction (MELD, cluster barrier + send):** a group's split tiles run on the CTAs of one thread
-            block cluster; each sends its partial into the reducing CTA's shared memory and arrives on that CTA's
-            barrier. Compare with merge items on the FA2-rows harness and stage 1.
+      - [ ] **(Optional) DSMEM JIT reduction, as the MELD paper does it** (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`,
+            sections 4.3 and 5).
+            - Mechanism: each split group's partials go to one consumer CTA in the same cluster. The producer TMA-copies
+              its partial into the consumer's shared-memory slot, and a per-slot mbarrier counts the bytes
+              (`mbarrier.arrive.expect_tx` / `try_wait.parity`).
+            - The producer moves on to its next task at once, and the consumer reduces in its own shared memory after
+              its own work. The plan gives each CTA an ordered instruction list: longest first, short tasks
+              interleaved, reductions placed after their producers.
+            - Built so far (flashinfer, uncommitted): the plan-side grouping, `UNIFIED_MERGE_MODE=dsmem` with groups of
+              <= C splits on contiguous ranks of a C-wide cluster task. Host-checked on 44 geometries, with a corrupted
+              entry reported wrong as the null case.
+            - A cluster-barrier design (sketched, not built) is not what the paper does: it makes the cluster wait for its
+              slowest CTA.
+            - Compare with merge items on the FA2-rows harness and stage 1.
       - [ ] **48-row FA2 tile with its own warp layout** (16 rows per warp); if it does not beat FA3 on 48-row rows,
             48 goes to FA3. GLM depends on it.
       - [ ] Plan time on serving shapes, optimized and overlapped with the previous step.
@@ -118,9 +156,15 @@ Tasks, in priority order:
       - [ ] Stage 1 re-run vs sglang's FA3 call, the best fixed FA3 configuration, native v3 and the role split, with
             ablations: unified vs two plans; plan-scheduled merge vs separate merges; LPT vs non-persistent; 48 vs FA3.
       - [ ] Stage 2 audited pairs, only after stage 1 beats v3.
+- [ ] 2026-10-24 **Stages 2-3 overnight on v3** (user, 2026-10-24): native v3 is the kernel for these arms until A6
+      beats v3 on stage 1; then A6 replaces it. All three models are swept and shown (the paper may later keep only
+      Llama-3.3-70B and Qwen2.5-7B); every model's results are recorded.
 - [ ] 2026-10-24 **Llama-3.3-70B, stages 1-3** (provisioning on H20 pods 0-3: `pd_colocation/mn_provision_70b_20261024.sh`).
 - [ ] **Stage 3 with the full stack** (kernel + 4-mode MTP) vs stock PD with the P:D ratio swept, at higher load and
       with mixture spikes (`pd_colocation_vs_disagg.md`).
+- [ ] 2026-10-24 **Conditional-disagg comparison re-run at Dynamo's defaults** (2048 tokens, 0.7 of the prompt; the
+      earlier run used 4096), queued behind the stage-3 baselines (`pd_colocation_vs_disagg.md`).
+- [ ] **Fault tolerance:** prefill-role and decode-role workers killed mid-run (`pd_colocation_vs_disagg.md`).
 - [ ] **GLM-4.5-Air, stages 1-3,** after the 48 tile (its 4-token verify packs 48 rows).
 - [ ] **S4 step model re-fitted on the native FA3 + FA2 path.**
 
@@ -1762,6 +1806,12 @@ cluster-wide request volume, scheduling flexibility under load spikes / mixed wo
   - *Summary:* fuses dynamically sized, heterogeneous work into one persistent launch whose CTAs pull tasks from a
     device-side queue, with SMs cooperating on shared tasks and split partials reduced just in time instead of by a
     separate merge kernel; evaluated on kernel-level dynamic workloads against per-task launches.
+  - *Core method/contributions:* MeldKernel ("Meld"), a compiler framework for cross-SM kernel fusion of dynamically
+    shaped work: SM cooperation over on-chip SM-to-SM interconnects (clusters) splits phase-level dependencies into
+    sub-task-level ones, so a kernel sequence becomes one cross-SM pipeline; just-in-time reduction lands remote SMs'
+    partial states in local shared memory by asynchronous transfer before the reduction needs them; a decoupled
+    execution model maps the declared computation onto SMs at runtime from input shapes. 1.3x average on decode
+    attention over the best existing solution (from the abstract; the ACM full text was not accessible).
   - *Relation:* the template for our four-task plan (atomic cluster cursor, cross-role backfill) and the JIT
     reduction of split-KV partials we built (<= 0.6% of GPU time, then replaced by flashinfer 0.7's scheduled merge).
     We did not co-compile roles with different register needs into one body: our FA2 role spilled 21x that way, so
@@ -1775,6 +1825,10 @@ cluster-wide request volume, scheduling flexibility under load spikes / mixed wo
   - *Summary:* application- and stage-specific SLOs; a chunked-prefill planner (dynamic programming over token
     allocations) that co-plans speculative decoding and routes across replicas; evaluated on mixtures
     (summarization, coding, chat, tool calling, reasoning) crossed with load, reporting capacity under SLOs.
+  - *Core method/contributions:* a multi-SLO dynamic-programming planner that continuously optimizes token
+    allocations under application- and stage-specific SLOs, searching chunked-prefill sizes jointly with (optional)
+    speculative decoding; on top of it, multi-replica serving with dynamic request routing and resilience to bursty
+    arrivals. 2.2x average per-GPU serving capacity over prior systems.
   - *Relation:* its planner co-scheduling prefill chunks with speculation is the closest scheduling analogue of our
     4-mode step; it plans token budgets, we change what one step computes (fused FA3 + FA2 in one forward).
   - *Learn:* its evaluation -- per-tenant SLOs, mixture x rate sweeps, capacity at a fixed attainment -- is the
@@ -1783,6 +1837,10 @@ cluster-wide request volume, scheduling flexibility under load spikes / mixed wo
   [arXiv:2504.14489](https://arxiv.org/abs/2504.14489) *(sent; "the ASPLOS PD multiplexing paper")*
   - *Summary:* intra-GPU prefill/decode multiplexing (SM partitions via green contexts, layer-split prefill) with an
     SLO-aware dispatcher and a contention-tolerant latency estimator; goodput under SLO as the metric.
+  - *Core method/contributions:* intra-GPU prefill-decode multiplexing -- the two phases share a GPU but execute
+    independently, with compute allocation adapted dynamically and decoupled from memory management; three
+    components: a bubble-less multiplex engine, a contention-tolerant estimator of co-located latency, and an
+    SLO-aware dispatcher. 2.20x average (up to 3.06x) peak throughput under SLO over state-of-the-art baselines.
   - *Relation:* direct colocation baseline (= sglang `--enable-pdmux`, run 2026-10-17); our split is decided per
     step inside one forward and co-runs prefill with MTP verify rows, where pdmux partitions SMs at model level.
   - *Learn:* its estimator is the comparison point for our EDF step model (S4: mixed-step MAPE 7.8-8.5% on the
@@ -1793,6 +1851,11 @@ cluster-wide request volume, scheduling flexibility under load spikes / mixed wo
     cache/shape-aware path comparison and local SLO revalidation; no new kernels. Replays one-hour TraceLab segments
     with timestamps compressed by a load factor alpha (8-20x; request rate as the load axis), six TP4 GB300 servers
     (2P4D), SGLang, no stated evaluation SLO; its GLM-5.2 TraceLab mean ITL worsens 20.9-34.3%.
+  - *Core method/contributions:* elasticity on fixed P/D roles: decode workers advertise expiring, versioned leases
+    for compute, KV, projected output, transfers and spill slots; the router tracks uncached-token queue pressure,
+    compares ordinary P-to-D service with decode-local prefill per request, reserves capacity atomically and caps
+    cluster-wide borrowing; workers revalidate before each bounded prefill unit, and conversations keep their decode
+    home. 17.4% / 16.2% geometric-mean input / output throughput over static P/D.
   - *Relation:* direct cluster-policy baseline; it keeps fixed roles and decides per request where to prefill, we
     keep symmetric nodes and make local prefill + speculative decode cheap inside one step.
     [Analysis and comparison](debug_kernel_server_perf/resume_20261012/crossflow_analysis_20261014.md).
@@ -1804,6 +1867,10 @@ cluster-wide request volume, scheduling flexibility under load spikes / mixed wo
   - *Summary:* program-aware scheduling for agentic workflows; shows KV-cache thrashing (a session's cache evicted
     during a tool call and re-prefilled, up to 7.14x end-to-end); load axis is the number of parallel programs kept
     active (headline 96 programs on 8x H100).
+  - *Core method/contributions:* models agentic workflows as *LLM Programs*, one view of KV caches, system state and
+    tool assets (disk, network ports); a program-aware scheduler that maximizes KV-cache hit rate and mitigates memory
+    imbalance, and a tool resource manager that prepares tool environments asynchronously. 1.5-3.6x serving and
+    1.8-3.9x RL-rollout throughput, up to 4.2x disk-memory savings over state-of-the-art inference systems.
   - *Relation:* motivates PD point 2 -- best-effort migration leaves replicas where demand is, where disaggregation
     pins a session's cache to its prefill node.
   - *Learn:* **load protocol we follow** -- agent load is program concurrency C, never sessions/s; every agent arm
@@ -1814,6 +1881,11 @@ cluster-wide request volume, scheduling flexibility under load spikes / mixed wo
   `syfi_coding_trace.jsonl.gz` ([github](https://github.com/uw-syfi/TraceLab)) *(sent)*
   - *Summary:* characterization of Claude Code / Codex agent traces: context p50 ~124K, a quarter of Claude rounds
     >= 256K, short outputs, high prefix hit, long inter-round gaps.
+  - *Core method/contributions:* a characterization, not a serving mechanism: an open trace of ~4,300 Claude Code and
+    Codex sessions (~350K LLM steps, ~430K tool calls) from the authors' daily use, with the collection pipeline and
+    analysis code; findings (long autonomous loops, long contexts with short outputs, heavy-tailed tool calls, high but
+    imperfect prefix-cache hits) and their serving implications: lower-overhead tool calling, append-length-aware
+    prefill, semantic-aware tool-latency prediction, KV-cache management around human-paced gaps.
   - *Relation:* the coding-agent tenant in every mixed run (causal replay of prefix / append / output tokens).
   - *Learn:* its long-context, append-heavy rounds are where prefill and speculative decode collide -- the regime
     our 4-mode step targets; report results by uncached-prompt-length bucket, as its statistics suggest.
@@ -1830,6 +1902,10 @@ cluster-wide request volume, scheduling flexibility under load spikes / mixed wo
     agentic code generation, Microsoft-trace arrivals. 1.4-6.3x goodput (28.5-83.2% resource savings) vs Autellix,
     learning-to-rank, vLLM FCFS, Sarathi-Serve; within 3-9% of an oracle. SLOs are fixed per type: they do not scale
     with prompt length or with isolated latency.
+  - *Core method/contributions:* scheduling with imprecise request information -- conservative estimates of output
+    length and inter-call dependencies, relaxed as generation refines them; grouped margin goodput maximization, which
+    gives each request just enough bandwidth to meet its SLO just in time and leaves the residual capacity to others;
+    batch composition chosen for efficiency and goodput with provable guarantees.
   - *Relation:* a request-level scheduler -- it decides *who* runs when, on unchanged kernels; it does not change
     what one step costs. Our EDF is the same family (deadline-driven admission), but our contribution is that the
     fused 4-mode step makes the step cheaper and predictable (S4), and that colocation lets the cluster route a
@@ -1846,25 +1922,44 @@ cluster-wide request volume, scheduling flexibility under load spikes / mixed wo
     evaluation SLOs are separate choices and should be reported separately.
 - **semi-PD: Towards Efficient LLM Serving via Phase-Wise Disaggregated Computation and Unified Storage** -- K. Hong
   et al., [arXiv:2504.19867](https://arxiv.org/abs/2504.19867) ([code](https://github.com/infinigence/Semi-PD))
-  - *Summary:* splits each GPU's SMs between a prefill and a decode process over one shared KV store: no KV transfer,
-    no weight replication; the SM ratio is a deployment setting changed by relaunching (criticised as static in
-    arXiv:2504.19516).
-  - *Relation:* closest intra-GPU design; ours decides the split per step inside one forward, co-runs prefill chunks
-    with MTP verify rows, and lets the hardware backfill FA2 work onto SMs FA3 vacates.
-  - *Learn:* its static ratio is the foil for scheduling flexibility under workload variation -- show our per-step
-    split tracking a shift in the prefill/decode mix (load spike or tenant change) where a fixed ratio cannot.
+  - *Summary:* splits each GPU's SMs between a prefill and a decode process (CUDA MPS) over one shared KV store: no KV
+    transfer, no weight replication. MPS cannot resize a running process, so a ratio change starts new workers on the
+    weights and KV a resident process holds and retires each old worker after its current iteration; an SLO-aware
+    algorithm refits TTFT / TPOT models every window of iterations and steps the ratio toward the phase missing its SLO.
+    Paper's results: 1.27-2.58x lower mean end-to-end latency (DeepSeek), 1.55-1.72x more requests within latency
+    constraints (Llama).
+  - *Core method/contributions:* the claim that disaggregation's benefit comes from disaggregated computation, not
+    storage; a computation resource controller partitioning SMs between prefill and decode, a unified memory manager
+    serving both phases' asynchronous access to one KV store, a low-overhead resource adjustment mechanism between
+    the phases, and an SLO-aware dynamic partitioning algorithm that tunes the split for SLO attainment.
+  - *Relation:* closest intra-GPU design; its ratio does adapt, but between process generations every window of
+    iterations, while ours decides the split per step inside one forward, co-runs prefill chunks with MTP verify rows,
+    and lets the hardware backfill FA2 work onto SMs FA3 vacates. Its code is a separate sglang v0.4.4.post1 fork with
+    radix cache off and no speculative decoding, so it cannot serve our MTP arms as released; it has not been run (build
+    blocked, see Direct baselines).
+  - *Learn:* the comparison for scheduling flexibility under workload variation is reaction granularity, not static vs
+    dynamic -- show our per-step split tracking a step change in the prefill/decode mix (load spike or tenant change)
+    and, once it runs, how many iterations semi-PD's window takes to follow the same change.
 - **NVIDIA Dynamo -- KV router, conditional disaggregation, planner, KVBM**
   ([conditional disagg](https://docs.nvidia.com/dynamo/advanced-customizations/conditional-disaggregation);
   [router](https://docs.nvidia.com/dynamo/dev/knowledge-base/modular-components/router/routing-concepts);
   [planner](https://docs.nvidia.com/dynamo/v1.5.0/knowledge-base/modular-components/planner/overview);
   [delta-KV RFC](https://github.com/ai-dynamo/dynamo/discussions/7861))
   - *Summary:* KV-aware block-count cost router with no SLO term; prefills locally on the decode worker when the
-    uncached prompt is small (effective-ISL threshold 4096 by default) or remote prefill is loaded; minute-scale P/D
-    autoscaling planner; KVBM tiered KV store; the RFC would cut remote rounds to append-only transfer.
+    uncached prompt is small (default: effective ISL under 2048 tokens and under 0.7 of the prompt) or remote prefill is
+    loaded; a P/D replica planner (180 s throughput mode, 5 s load-based mode for bursts); KVBM tiered KV store; an open
+    RFC (a proposal with no replies, not shipped) would cut remote rounds to append-only transfer.
+  - *Core method/contributions:* a KV-aware router that scores workers by uncached prefill blocks (minus cache-hit
+    credits) plus projected decode blocks, with weighted deficit round robin across policy classes; conditional
+    disaggregation (`isl_bounding` / `prefill_load` / `isl_or_load` on effective ISL after the decode worker's cached
+    prefix; vLLM and TensorRT-LLM only); a planner sizing P and D replicas separately from load prediction and
+    TTFT/ITL targets (180 s throughput mode, 5 s load mode); KVBM, G1-G4 KV tiers moved over NIXL. The delta-KV RFC is
+    an open proposal (Kuaishou, 2026-04), not shipped.
   - *Relation:* closest multi-node baseline for agentic rounds (`pd_colocation_vs_disagg.md` point 6): most agent
     append rounds already avoid the KV transfer that PD point 5 measures. What stays ours: making local prefill +
     speculative decode co-execution efficient (4-mode step + fused kernel), symmetric nodes instead of fixed pools,
     and EDF/SLO-aware admission. Must be run as a baseline, not argued around.
-  - *Learn:* its static local-prefill threshold and minute-scale planner are the comparison for scheduling
-    flexibility under load spikes -- evaluate a step change in load where per-request, per-step decisions react
-    within seconds.
+  - *Learn:* its fixed local-prefill thresholds and a planner that reacts by changing worker counts (5 s decisions in
+    load-based mode, 180 s in throughput mode) are the comparison for scheduling flexibility under load spikes --
+    evaluate a step change in load and report the time to recover TTFT / ITL, where our per-request routing and
+    per-step prefill/decode mix react without adding or removing workers.

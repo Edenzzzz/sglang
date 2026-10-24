@@ -450,6 +450,9 @@ static mixture.
         - the KV reaches the decode worker through the cluster pool (write-through);
         - short appends prefill locally.
         Validity per arm: `cond_disagg_check.py` reports the remote share and the decode-side cached fraction.
+        - [ ] 2026-10-24 **Re-run at Dynamo's defaults (user, 2026-10-24):** remote prefill when the effective uncached
+          length exceeds 2048 tokens AND 0.7 of the prompt, not 4096 alone. Same arms; queued behind the stage-3
+          baselines. The 4096 numbers below stay as the earlier setting.
         Router unit test: `test_router_cond_disagg.py`. Phase A sweeps P = 2/4/6; phase B runs the best P at
         16/32/48 programs.
         **First arm, P = 2 at 64 programs + chat 16 (errors=0).** Chat attainment 94.6% (ours 94.2%, stock PD best
@@ -2501,10 +2504,11 @@ must move, it moves once, not every round).
 
 **Prior art that already blunts this, stated plainly.** NVIDIA Dynamo's *conditional
 disaggregation* prefills locally on the decode worker when the uncached part of the prompt is
-small (default effective-ISL threshold 4096 tokens) or remote prefill is loaded; with the median
-append at 860 tokens and the session prefix resident on its decode worker, most agent rounds
-then move no KV at all, and a proposed delta-KV RFC would cut the remaining remote rounds to
-append-only transfer (the 1-15 ms column above, not 143-587 ms). semi-PD avoids transfer
+small (defaults: effective ISL under 2048 tokens and under 0.7 of the prompt) or remote prefill
+is loaded; with the median append at 860 tokens and the session prefix resident on its decode
+worker, most agent rounds then move no KV at all. A delta-KV RFC would cut the remaining remote
+rounds to append-only transfer (the 1-15 ms column above, not 143-587 ms), but it is an open
+proposal with no replies (2026-10-24), not shipped behaviour. semi-PD avoids transfer
 entirely by splitting SMs inside one GPU over a shared KV store. So point 5 is decisive against
 stock sglang PD and against Dynamo's remote-prefill path; against Dynamo with conditional
 disaggregation the advantage that remains is (a) making the local prefill + speculative decode
@@ -2536,7 +2540,7 @@ transfer RFC][dyn-rfc]; full list under [References](#references).
 | **Router** (per request) | Picks the worker with the lowest block-count cost: pending prefill blocks minus a prefix-hit credit, plus active decode blocks, plus an optional per-request charge. Cache hits are just a load discount. There is no SLO or deadline term anywhere, and no time model. |
 | **Queueing** | Weighted round-robin across request classes, then the engine's own first-come order. No deadline ordering. |
 | **Conditional disaggregation** (experimental) | Separate prefill and decode pools. A request prefills locally on its decode worker only below static thresholds: uncached prompt under 2048 tokens and under 70% of the prompt, or when the prefill workers are busy. The local prefill then runs in the engine's ordinary mixed batch. It doesn't support SGLang (vLLM and TensorRT-LLM only). |
-| **Planner** | Rescales the number of prefill and decode replicas about every 3 minutes to meet TTFT/ITL targets. The older SLA planner works only with disaggregated pools. |
+| **Planner** | Sizes the prefill and decode replica counts separately to meet TTFT/ITL targets: a throughput mode every 180 s from load prediction, and a load-based mode every 5 s from per-iteration engine metrics to react to bursts (the two can run together). The older SLA planner works only with disaggregated pools. |
 | **KV placement** | KV is offloaded across memory tiers and fetched point to point when needed. Copies of hot prefixes exist only where routing and transfers happened to leave them. |
 
 **Where ours differs:**
@@ -2551,7 +2555,8 @@ transfer RFC][dyn-rfc]; full list under [References](#references).
   leaves to an ordinary batch, and the one we measured at TTFT -31% to -79% and throughput +11%
   to +36% versus stock MTP under load.
 - **Reacting to shifts:** the prefill/decode balance is re-chosen every step, against Dynamo's
-  roughly 3-minute replica rescaling.
+  planner, which changes how many prefill and decode workers exist (5 s decisions in load-based
+  mode, 180 s in throughput mode) rather than the mix of work inside a step.
 - **Cache:** we deliberately replicate hot prefixes through migration (point 2) and spread pulls
   across near-equal holders (point 4). Dynamo's copies are incidental.
 
@@ -2645,37 +2650,122 @@ thrashing comparison, and an intermittent TP4 forward-step hang on GLM-4.5-Air.
 Systems and papers this doc argues against or borrows from. *(sent)* marks the ones the user sent;
 the kernel-side reference list is at the end of `debug_kernel_server_perf_4_mode.md`.
 
-- **NVIDIA Dynamo** -- the main baseline for points 1, 5 and 6.
-  - [KV router: routing concepts][dyn-router] -- note: block-count cost with a prefix-hit credit,
-    DRR across policy classes, no SLO/deadline term (point 6).
-  - [Conditional disaggregation][dyn-cd] -- note: local prefill on the decode worker below a static
-    uncached-ISL threshold (2048, ratio 0.7) or when prefill is busy; vLLM/TRT-LLM only (points 5, 6).
-  - [Planner][dyn-planner] and the older [SLA-based planner][dyn-sla] -- note: minute-scale P/D
-    replica autoscaling from profiled performance and load prediction (point 6).
-  - [KVBM design][dyn-kvbm], [overall architecture][dyn-arch] -- note: G1-G4 KV tiers, NIXL
-    point-to-point transfer, incidental rather than deliberate replication (points 2, 6).
-  - [Delta-KV transfer RFC][dyn-rfc] -- note: would cut remote agent rounds to append-only
-    transfer (point 5).
+- **NVIDIA Dynamo** -- KV router, conditional disaggregation, planner, KVBM; the main baseline for
+  points 1, 5 and 6. Docs: [KV router: routing concepts][dyn-router]; [conditional
+  disaggregation][dyn-cd]; [planner][dyn-planner] and the older [SLA-based planner][dyn-sla];
+  [KVBM design][dyn-kvbm], [overall architecture][dyn-arch]; [delta-KV transfer RFC][dyn-rfc].
+  - *Summary:* the router picks the worker with the lowest block-count cost (pending prefill blocks
+    minus a prefix-hit credit, plus decode blocks), weighted DRR across policy classes, no SLO or
+    deadline term. Conditional disaggregation (experimental) prefills on the decode worker when
+    the effective ISL is under 2048 tokens and under 0.7 of the prompt (defaults), or when prefill
+    is busy; vLLM / TRT-LLM only. The planner sizes P and D replicas to TTFT/ITL targets (180 s
+    throughput mode, 5 s load-based mode). KVBM: G1-G4 KV tiers, NIXL point-to-point transfer,
+    replication only where routing happened to leave copies. The delta-KV RFC (append-only
+    transfer for remote rounds) is an open proposal with no replies, not shipped.
+  - *Core method/contributions:* KV-aware routing (prefill-block cost with cache-hit credits
+    plus projected decode blocks), conditional disaggregation on effective ISL, a planner sizing P
+    and D replicas from load prediction and TTFT/ITL targets, and KVBM tiered KV storage over NIXL.
+  - *Relation:* conditional disaggregation keeps most agent appends on the decode worker, so it
+    removes most of the per-round KV re-ship that point 5 charges stock sglang PD; our emulation
+    (`router.py cond_disagg`, 2 + 6 pods) matched ours on chat attainment at 64 programs (94.6 vs
+    94.2%), with ours +14% agent SLO goodput. What it lacks against ours: an SLO / deadline term in
+    routing (point 1), deliberate replication (point 2), an acceptance-aware step model (point 3),
+    symmetric nodes, and an efficient local path -- its local prefill runs in the engine's
+    ordinary mixed batch, where ours co-runs the chunk with MTP verify rows in the 4-mode step.
+  - *Learn:* its fixed thresholds and worker-count planner are the comparison for scheduling
+    flexibility under load spikes: run a step change in load and report the time to recover TTFT /
+    ITL, where our per-request routing and per-step prefill/decode mix need no worker changes; and
+    find the load knee (96 / 128 programs) where pinning prefill to 2 of 8 pods starts to cost
+    cluster-wide request volume that symmetric nodes keep.
 - **semi-PD: Towards Efficient LLM Serving via Phase-Wise Disaggregated Computation and Unified
-  Storage** -- K. Hong et al., [arXiv:2504.19867][semipd] ([code][semipd-code]) -- note: SM-level
-  prefill/decode split inside one GPU over a shared KV store; static ratio, relaunch to change.
+  Storage** -- K. Hong et al., [arXiv:2504.19867][semipd] ([code][semipd-code])
+  - *Summary:* SM-level prefill/decode split inside one GPU (CUDA MPS) over a shared KV store, so
+    no KV transfer and no weight replication. A ratio change starts new workers on the weights and
+    KV held by a resident process and retires the old ones after their current iteration; an
+    SLO-aware algorithm refits TTFT / TPOT models every window of iterations and steps the ratio.
+    1.27-2.58x lower mean end-to-end latency (DeepSeek), 1.55-1.72x more requests within latency
+    constraints (Llama).
+  - *Core method/contributions:* a computation resource controller (SM-level P/D partition), a
+    unified memory manager over one KV store, a low-overhead resource adjustment mechanism between
+    phases, and an SLO-aware dynamic partitioning algorithm.
+  - *Relation:* like ours it avoids transfer by keeping both phases on the GPU that holds the KV;
+    it differs in granularity -- its partition moves between process generations every window of
+    iterations, ours re-chooses the prefill/decode mix every step and co-runs prefill chunks with
+    MTP verify rows. Its released code is a separate sglang v0.4.4.post1 fork with radix cache off
+    and no speculative decoding, and it has not been run here (sgl-kernel build blocked).
+  - *Learn:* the flexibility comparison is reaction granularity, not static vs dynamic: measure how
+    many iterations its window needs to follow a shift in the prefill/decode mix against our
+    per-step split, and report per-node request volume next to it.
 - **Towards High-Goodput LLM Serving with Prefill-decode Multiplexing (MuxWise)** -- Y. Chen,
-  W. Cui et al., [arXiv:2504.14489][muxwise] *(sent)* -- note: intra-GPU P/D multiplexing with an
-  SLO-aware dispatcher; direct colocation baseline.
+  W. Cui et al., [arXiv:2504.14489][muxwise] *(sent)*
+  - *Summary:* intra-GPU P/D multiplexing with an SLO-aware dispatcher; peak throughput under SLO
+    2.20x on average (up to 3.06x) over state-of-the-art baselines. Run here as sglang
+    `--enable-pdmux`, the direct colocation baseline.
+  - *Core method/contributions:* intra-GPU P/D multiplexing with independent phase execution, a
+    bubble-less multiplex engine, a contention-tolerant latency estimator and an SLO-aware
+    dispatcher.
+  - *Relation:* the colocation design closest to ours at node level. On 8 H20s (pdmux + worker EDF,
+    non-speculative) it clears the bar against stock colocation + MTP except agent TTFT, but loses
+    TTFT 1.9-3.2x to stock colocation without speculation, because its SM groups cap prefill at 56
+    of H20's 78 SMs. Ours keeps the whole GPU for every step and splits work inside one forward.
+  - *Learn:* its H20 result shows a fixed SM partition costs prefill capacity, which lowers the
+    request volume a node sustains; report our per-step split against it on prefill-bound hardware,
+    with TTFT and ITL per tenant.
 - **Crossflow: Prefill–Decode Elasticity for Agentic LLM Serving** -- Y. Xu et al.,
-  [arXiv:2609.27085v1](https://arxiv.org/abs/2609.27085v1) *(sent)* -- note: direct elastic-P/D
-  baseline for points 1–4, not merely static disaggregation. It retains decode homes and lends
-  bounded local-prefill capacity through leases and SLO feedback; our symmetric placement,
-  replication and network benefits remain hypotheses requiring matched comparison.
-  [Detailed analysis](debug_kernel_server_perf/resume_20261012/crossflow_analysis_20261014.md).
+  [arXiv:2609.27085v1](https://arxiv.org/abs/2609.27085v1) *(sent)*
+  - *Summary:* fixed P/D roles with decode-local prefill admitted through revocable leases and SLO
+    feedback; one-hour trace replays compressed by a load factor on six TP4 GB300 servers; 17.4% /
+    16.2% geometric-mean input / output throughput over static P/D, with GLM-5.2 TraceLab mean ITL
+    20.9-34.3% worse. No new kernels.
+    [Detailed analysis](debug_kernel_server_perf/resume_20261012/crossflow_analysis_20261014.md).
+  - *Core method/contributions:* expiring, versioned decode-worker leases (compute, KV, output,
+    transfers, spill slots), a router that compares P-to-D service with decode-local prefill per
+    request and reserves capacity atomically under a cluster-wide borrowing cap, and per-unit local
+    revalidation before each bounded prefill.
+  - *Relation:* the direct elastic-P/D baseline for points 1-4, not merely static disaggregation:
+    it keeps decode homes and lends bounded local-prefill capacity; ours makes every node symmetric.
+    Our placement, replication and network benefits over it remain hypotheses until a matched
+    comparison is run (it has not been; the paper links no implementation).
+  - *Learn:* its ITL regression is the cost of decode-local prefill in an ordinary mixed batch,
+    which our 4-mode step and fused kernel target; report mean and p99 ITL per tenant next to TTFT
+    on the same replay, and use its timestamp compression as the request-rate load axis for chat.
 - **ThunderAgent: A Simple, Fast and Program-Aware Agentic Inference System** -- H. Kang et al.,
-  [arXiv:2602.13692][thunder] *(sent)* -- note: KV-cache thrashing in agentic serving; motivates the
-  replication argument (point 2).
+  [arXiv:2602.13692][thunder] *(sent)*
+  - *Summary:* KV-cache thrashing in agentic serving (a session's cache evicted during a tool call
+    and re-prefilled); load axis is the number of concurrent programs; 1.5-3.6x serving
+    throughput, 1.8-3.9x RL rollout, up to 4.2x disk-memory savings.
+  - *Core method/contributions:* agentic workflows modelled as LLM Programs; a program-aware
+    scheduler that maximizes KV-cache hit rate and mitigates memory imbalance; a tool resource
+    manager that prepares tool environments asynchronously.
+  - *Relation:* motivates point 2: colocation plus the cluster pool keeps session prefixes resident
+    where disagg's prefill pods recompute them. Measured as it poses it (program concurrency 32,
+    working set 1M-8M KV tokens): ours loses 10.6% throughput, disagg 55%.
+  - *Learn:* load is program concurrency C, never sessions/s; report C with measured in-flight
+    requests, and the cached fraction as the direct re-prefill measure behind cluster-wide request
+    volume.
 - **TraceLab: Characterizing Coding Agent Workloads for LLM Serving** -- K. Zhu et al.,
-  [arXiv:2606.30560][tracelab] ([dataset][tracelab-gh]) *(sent)* -- note: the agentic workload and
-  the per-round transfer numbers of point 5.
+  [arXiv:2606.30560][tracelab] ([dataset][tracelab-gh]) *(sent)*
+  - *Summary:* characterization of Claude Code / Codex sessions: long contexts (p50 ~124K) with
+    short outputs, long autonomous loops, heavy-tailed tool calls, high but imperfect prefix hits.
+  - *Core method/contributions:* an open trace of ~4,300 Claude Code / Codex sessions (~350K LLM
+    steps, ~430K tool calls), its collection pipeline and analysis code, and the characterization
+    (long loops, long contexts with short outputs, high but imperfect prefix-cache hits).
+  - *Relation:* the agentic workload of this doc and the source of point 5's per-round transfer
+    numbers (median append 860 tokens on a resident prefix).
+  - *Learn:* append-heavy rounds over long prefixes are where colocation avoids transfer and where
+    prefill meets speculative decode in one step; report results by uncached-prompt-length bucket.
 - **SLOs-Serve: Optimized Serving of Multi-SLO LLMs** -- S. Chen et al., [arXiv:2504.08784][slos]
-  *(sent)* -- note: per-application SLOs and mixture x load evaluation (point 3, experiments 5c/5d).
+  *(sent)*
+  - *Summary:* application- and stage-specific SLOs over mixtures (summarization, coding, chat,
+    tool calling, reasoning) crossed with load; 2.2x average per-GPU serving capacity.
+  - *Core method/contributions:* a multi-SLO dynamic-programming planner over chunked-prefill token
+    allocations and (optional) speculative decoding, with multi-replica dynamic request routing and
+    resilience to bursty arrivals.
+  - *Relation:* plans token budgets per step on unchanged kernels and routes across replicas; ours
+    changes what one step computes (4-mode step, fused kernel) and admits by EDF / SLO checks.
+  - *Learn:* its evaluation -- per-class SLOs, goodput rather than raw tok/s, mixture x rate
+    sweeps -- is the frame for experiments 5c / 5d, where scheduling flexibility under mixed
+    workloads and workload variation is visible.
 
 [dyn-router]: https://docs.nvidia.com/dynamo/dev/knowledge-base/modular-components/router/routing-concepts
 [dyn-cd]: https://docs.nvidia.com/dynamo/advanced-customizations/conditional-disaggregation

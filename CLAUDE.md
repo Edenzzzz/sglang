@@ -25,10 +25,11 @@
 
 # Reference Lists
 
-- Every paper in a task doc's reference list gets exactly three bullets:
+- Every paper in a task doc's reference list gets exactly four bullets:
   1. **Summary:** the method and how it is evaluated (models, hardware, workloads, load axis, metrics, headline numbers).
-  2. **Relation to our method:** where it overlaps with or differs from ours.
-  3. **What we can learn:** method or evaluation-setting lessons, used only to strengthen our core contributions:
+  2. **Core method/contributions:** the mechanisms the paper introduces and claims as its contributions.
+  3. **Relation to our method:** where it overlaps with or differs from ours.
+  4. **What we can learn:** method or evaluation-setting lessons, used only to strengthen our core contributions:
      the fused kernels, higher cluster-wide request volume, and scheduling flexibility under load spikes, mixed
      workloads and workload variation. Do not stack the paper's techniques onto our system: that makes our
      contribution look like an assembly of others' ideas.

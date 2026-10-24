@@ -364,9 +364,20 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
 - Graphs / metrics: time-weighted speedup over the 96 steps with a bootstrap 95% CI, per (context, mode), against
   each baseline; per-step speedup distribution (CDF); FP32 worst relative error; host plan time per step; ablation
   bars in 7
-- Status: unified dispatcher vs native v3 [pending] (previous build 0.97-1.00x of v3, `debug_kernel_server_perf_4_mode.md`
-  A6); Llama-3.3-70B [pending]; the role-split build below is measured:
-- Results (Qwen2.5-7B, H200, role-split serving build)
+- Status: unified dispatcher measured on Qwen2.5-7B (H200 and H20); Llama-3.3-70B [pending]; GLM-4.5-Air [pending]
+- Results (Qwen2.5-7B, H200, unified dispatcher: one plan, stock FA3 at the plan's split, v3's FA2 body with the
+  chunk-parallel in-launch merge; 96 fresh captures, all FP32-exact, worst 0.0082)
+
+  | context / mode | vs sglang's FA3 call | vs native v3 [95% CI] | vs role split on FA3 |
+  |---|---:|---:|---:|
+  | 32-64K, 2-mode | 1.48x | 1.033x [1.006-1.051] | 1.015x |
+  | 32-64K, 4-mode | 1.43x | 1.047x [1.035-1.057] | 1.020x |
+  | 128-256K, 2-mode | 1.51x | 1.027x [1.018-1.036] | 1.014x |
+  | 128-256K, 4-mode | 1.44x | 1.027x [1.018-1.041] | 1.018x |
+
+  - On H20 (78 SMs) the same build is level with v3 (0.998-1.008x) and 1.10-1.23x sglang's FA3 call. There FA3 sets
+    the step, and the FA2 path's 3-10% saving runs beneath it.
+- Earlier results (Qwen2.5-7B, H200, role-split serving build, earlier captures)
 
   | context / mode | vs sglang's FA3 call | vs best fixed FA3 config | vs per-step oracle |
   |---|---:|---:|---:|

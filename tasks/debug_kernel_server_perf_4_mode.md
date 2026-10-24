@@ -5,7 +5,13 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
 - **Bar:** >= 30% on TTFT and ITL (or their SLO attainment) and >= 10% throughput on realistic chat + TraceLab
   workloads.
 - **Models:** Qwen2.5-7B, Llama-3.3-70B (next), GLM-4.5-Air.
-- **Hardware:** H200 trial `34c7bd503d461dc1` for stages 1-2; H20 job `2f608c1b1a67cf09` for multi-node.
+- **Hardware:** H200 job `8574c727fab6ffbd` (vibecuda, forked 2026-10-24 23:25 from `34c7bd503d461dc1`, which ended
+  that evening; queued at the time of writing) for stages 1-2; H20 job `2f608c1b1a67cf09` for multi-node.
+  - Lost with the old pod: the 96 trace-sampled captures, the built extensions, and the `np_last` run.
+  - Restore: `unified/prov_h200_20261024.sh` with a 12 MB bundle. It contains the H20 serving tree's delta against
+    upstream, port07, v3's libraries built on the previous H200, v3's work dir, and the scripts; it then re-captures
+    with `trace_sampled_capture_h200_20261023.sh`.
+  - Every stage-1 number after the restore is re-measured on the new captures, v3 included.
 
 Tasks, in priority order:
 

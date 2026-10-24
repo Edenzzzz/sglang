@@ -137,7 +137,18 @@ Tasks, in priority order:
               check in, and the merge spreads over the CTAs that pull those items. Deadlock-free, because compute
               items are always pulled first.
             - 48 captures pass the FP32 gate, 0 failures in 50 graph replays each.
-            - Stage 1 on all 96 captures with merge items (4 / 2 rows): running, `unified/unified_mergeitems_stage1_20261024.sh`.
+            - **Stage 1 on all 96 captures with merge items: unified is now level with native v3**
+              (`unified/unified_mergeitems_stage1_20261024.sh`, root `/opt/tiger/w/unified_mi_h200_20261024`).
+              Time-weighted, 4-row merge items:
+              | set | vs native v3 | vs role-split FA3 | before merge items (vs v3) |
+              |---|---|---|---|
+              | 32-64K two | 0.972x | 0.960x | 0.947x |
+              | 32-64K four | 0.997x | 0.977x | 0.953x |
+              | 128-256K two | 0.996x | 0.999x | 0.979x |
+              | 128-256K four | 0.995x | 0.992x | 0.971x |
+            - vs sglang's FA3 call: 1.19-1.54x (2-row items), the same as v3. FP32 worst 0.0067.
+            - The FA2 rows are now 10% faster than stock BatchAttention, so the remaining gap to v3 is on the FA3
+              side: a static LPT list on a causal-blind cost, no L2 grouping, no dynamic pulling. That side is next.
       - [ ] FA3 L2-swizzled item order: implemented as `UNIFIED_FA3_ORDER=swizzle` (flashinfer port07), host-checked,
             not yet measured.
       - [ ] Next: close the FA2 plan / merge gap to BatchAttention, then to tuned BatchPrefill; FA2 runner

@@ -28,7 +28,15 @@ Tasks, in priority order:
       | A6 `geometry_fa3` vs role-split FA3 (dual split32) | 1.015x | 1.020x | 1.014x | 1.018x |
       | A6 `geometry` vs native v3 | 1.013x | 1.041x | 1.025x | 1.025x |
       | native v3 vs sglang's FA3 call (re-bench) | | 1.36x | 1.47x | 1.40x |
-      H20 (job `2f608c1b1a67cf09`, 78 SMs, 92 captures): level with v3 (0.998-1.008x), 1.10-1.23x sglang's FA3 call.
+      **Llama-3.3-70B, TP4 on H20 pod 0 (rank 0: 16 q / 2 kv heads), 32-64K** (`unified/a6_llama70b_h20_20261025.sh`;
+      38 captures, 14 two-mode + 24 four-mode; all FP32-exact):
+      | | 32-64K two | 32-64K four |
+      |---|---|---|
+      | A6 `geometry_fa3` vs native v3 | **1.009x** [1.004-1.018] | **1.011x** [1.005-1.020] |
+      | A6 vs sglang's FA3 call | 1.38x | 1.61x |
+      | native v3 vs sglang's FA3 call | 1.37x | 1.59x |
+      The 128-256K mixture does not fit Llama's 128K context without YaRN.
+      H20 Qwen2.5-7B (job `2f608c1b1a67cf09`, 78 SMs, 92 captures): level with v3 (0.998-1.008x), 1.10-1.23x sglang's FA3 call.
       There FA3 dominates the step and the FA2 path's 3-10% saving (5.30 vs 5.46 ms two-mode, 6.48 vs 7.16 ms
       four-mode FA2 rows) hides under it. H200 FA2-rows two-mode: 5.49 vs 5.02 ms for v3. The four-mode FA2-rows
       harness stops on a capture whose v3 row set differs from its `q_len <= 4` rows; the harness needs fixing, not the

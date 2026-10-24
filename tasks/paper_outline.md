@@ -364,7 +364,8 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
 - Graphs / metrics: time-weighted speedup over the 96 steps with a bootstrap 95% CI, per (context, mode), against
   each baseline; per-step speedup distribution (CDF); FP32 worst relative error; host plan time per step; ablation
   bars in 7
-- Status: unified dispatcher measured on Qwen2.5-7B (H200 and H20); Llama-3.3-70B [pending]; GLM-4.5-Air [pending]
+- Status: unified dispatcher measured on Qwen2.5-7B (H200 and H20) and Llama-3.3-70B (H20, TP4, 32-64K: 1.009x /
+  1.011x native v3 on two- / four-mode, 1.38x / 1.61x sglang's FA3 call); GLM-4.5-Air [pending]
 - Results (Qwen2.5-7B, H200, unified dispatcher: one plan, stock FA3 at the plan's split, v3's FA2 body with the
   chunk-parallel in-launch merge; 96 fresh captures, all FP32-exact, worst 0.0082)
 

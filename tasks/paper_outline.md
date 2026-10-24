@@ -154,7 +154,32 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
   merge kernel runs for either executor
 - executors: FA3 (flash-attention's mainloop, paged) and the persistent FA2 kernel with the LPT overlap schedule (two
   CTAs per SM on different tile classes), both reading the one work list; PDL between the launches
-- 48-row FA2 tile needs its own warp layout [in progress]
+- why not fuse FA2 and FA3 into one kernel: warp layout mismatch
+  - FA3 is warp-specialized: one producer warpgroup issues TMA loads and two consumer warpgroups run wgmma on a
+    128-row tile, so a CTA is 384 threads (12 warps) at 1 CTA per SM, ~98 KB of shared memory per CTA
+  - FA2 is not specialized: 4 warps (128 threads), each warp both loads and computes with mma.sync, 2 CTAs per SM;
+    its row tiles (16 / 32 / 48 query rows) are laid out over those 4 warps
+  - one `__global__` has one block size, so a fused kernel launches every CTA at FA3's 384 threads: the FA2 role
+    either leaves 256 of the 384 threads idle or is re-laid-out over 12 warps, which its small row tiles cannot fill
+  - the register and shared-memory costs are artifacts of that layout -- FA3's warp specialization needing more
+    warps per CTA -- not of either algorithm (measured 2026-10-06, H200, `-Xptxas -v` per named function)
+    - 384 threads x 1 CTA/SM caps each thread near 170 registers, and ptxas gives one budget per kernel, so the two
+      inlined role bodies share it: FA3 spills 33 676 B in the fused kernel vs 52 B alone in the identical template;
+      outlining FA2 takes FA3 to 64 B but moves 17 500 B of spill onto FA2
+    - FA2 at FA3's geometry: 168 registers / 1 136 B spill vs 255 registers / 0 B at its own 128 x 2; the SM-wide
+      register budget is the same (255 x 256 = 170 x 384), so the loss is the idle threads
+    - shared memory: FA3's 98 352 B leaves 134 048 B of the 232 448 B limit; FA2's tile-16 configuration needs
+      135 168 B, over by 1 120 B
+  - net: the fused kernel was 2.16x SLOWER than FA2 on everything (155.9 vs 72.3 us, both numerically correct; 1.83x
+    on a 16 823-token-KV fixture); two launches of the same executors at their own layouts were 1.21x FASTER
+  - SM sharing between two separate launches is a different question: co-running FA3 on B SMs beside FA2 gains 18%
+    only where the roles take comparable time, ties or loses elsewhere, and is bounded at ~1.2% of serving GPU time on
+    TraceLab (2026-10-17). So the executors are separate launches chained by PDL, and what they share is the plan:
+    tile classes, KV splits, slot placement and the merge schedule
+  - the same effect appears inside the FA2 executor: one persistent kernel holding the 48 / 32 / 16 runners compiles
+    to one register budget, and the 48 runner (1 q-warp x 3 MMAs at 4 warps) makes the whole kernel spill
+    1 436-1 444 B; with it compiled out the kernel spills 16-20 B (2026-10-24). So the 48 class needs a layout with
+    16 rows per warp, or its rows go to FA3 [in progress]
 - measured build so far (6.2) is the baseline for this: two separate plans (FA3's and flashinfer's), non-persistent
   FA2 rows, and two merge mechanisms (FA3 combine launch + flashinfer's merge)
 
@@ -216,6 +241,11 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
 
 ### 6.2 Kernel microbenchmarks
 
+- Graphs / metrics: time-weighted speedup over the 96 trace-sampled steps with a bootstrap 95% CI, per
+  (context, mode), against each baseline; per-step speedup distribution (CDF); FP32 worst relative error;
+  ablation bars (unified plan vs two plans, in-kernel merge vs merge launches, LPT vs non-persistent, 48 tile vs
+  pad / FA3); host plan time per step
+
 - Contribution: C1, mixed-step attention split by role
 - Rationale: in one varlen FA3 call a 4-token verify row (28-48 packed rows) is tiled at 128 rows; row-shaped tiles
   stop the padding, and LPT spreads row work of different sizes across SMs
@@ -242,6 +272,16 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
 
 ### 6.3 Single-node benchmarks
 
+- Graphs / metrics (every serving result carries per-request spread and per-repeat values):
+  - throughput vs interactivity Pareto curve: output tok/s vs per-user tok/s, median marker with p10-p90 bars
+    (p1-p99 whiskers), one point per load
+  - SLO attainment vs load per tenant (chat 0.5 s TTFT + 20 ms TPOT, agent 10 s + 80 ms), load swept on agent
+    concurrency and chat request rate
+  - TTFT and ITL / TPOT per tenant: mean, p50, p90, p99
+  - per-tenant SLO goodput (tok/s of requests meeting both SLOs)
+  - context mixtures 32-64K and 128-256K, two- and four-mode
+  - standalone sets: ShareGPT, math, coding, agentic web browsing, at load around capacity
+
 - Contribution: C2, the 4-mode step under deadline order with demote-on-miss, on the C1 kernel
 - Rationale: the kernel speeds the step; deadline order lets chat through the agent burst; demote-on-miss stops
   already-late agents from making chat late
@@ -263,6 +303,14 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
 - Llama-3.3-70B (one 4-GPU node) [pending]; GLM-4.5-Air [pending]
 
 ### 6.4 Multi-node benchmarks
+
+- Graphs / metrics:
+  - capacity at SLO: per-tenant attainment vs load for ours and each P:D split of the baseline; the load each
+    system holds at >= 90%
+  - the 6.3 Pareto curve (throughput vs tok/s/user, p10-p90 bars) at 16 and 32 GPUs
+  - scaling: capacity at 16 vs 32 GPUs
+  - cache: cached-prefix fraction and re-prefilled tokens vs working-set size
+  - load spikes and mixture shifts: attainment and throughput in 30 s windows around each event
 
 - Contribution: C3, symmetric nodes + SLO-checked cache-first routing + cluster KV pool
 - Rationale: colocation keeps the agent prefix where it was computed; disaggregation re-ships it every round
@@ -289,6 +337,15 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
   cached fraction, ours 10.6% and 3.1 [earlier settings; rerun with the full stack pending]
 
 ### 6.5 Fault tolerance
+
+- Experiment [pending]: kill one and then two workers mid-run, prefill-role and decode-role in the baseline, the same
+  workers for ours; full stack, 16 GPUs
+  - prefill down: ours should hold, because every node can prefill and the SLO router moves new prefills to the
+    survivors
+  - decode down: the baseline keeps its admission rate and loses ITL on the remaining decode pods; ours keeps ITL
+    by admitting fewer prefills (SLO check + EDF) and gives up some TTFT attainment instead
+- Graphs / metrics: per-tenant TTFT and ITL attainment and throughput in 30 s windows before / during / after;
+  lost requests; recovery time
 
 - kill 2 of 8 GPUs at 300 s: ours reroutes (agent attainment 96.4 -> 98.1%, chat 85.0%), PD disagg loses half its
   prefill capacity (18 -> 34%, chat 9-15%) [earlier settings; rerun with the full stack pending]

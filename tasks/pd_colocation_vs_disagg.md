@@ -540,6 +540,17 @@ static mixture.
           throughput 3.5x, agent TTFT -94%, chat TTFT -94..-97%.** Disaggregation again keeps the faster per-token decode
           (11 vs 29-41 ms) but its two prefill pods queue every request (TTFT ~40 s). The workers needed `libssl-dev`
           (HiCache's hash extension) and a bf16 draft config (`mn_provision_70b_post_20261021.sh`).
+      - [ ] 2026-10-24 **Fault tolerance, both failure roles, full stack, 16 GPUs (user, 2026-10-24).** Kill one
+        and then two workers mid-run, (a) PREFILL-role and (b) DECODE-role in the disagg baseline, with the same
+        workers killed for ours (whose nodes are symmetric). Same workload and load as the stage-3 capacity runs.
+        Report per-tenant TTFT / ITL SLO attainment and throughput before, during and after, in 30 s windows, plus
+        lost requests and time to recover.
+        Hypotheses to test, not to assume:
+        - **prefill down:** ours wins, because every node can prefill, and the SLO router moves new prefills to the
+          survivors while disagg's remaining prefill pods queue;
+        - **decode down:** disagg keeps admitting at the same rate and loses ITL on its remaining decode pods, while
+          ours holds ITL by admitting fewer prefills (the SLO check plus EDF), trading some TTFT attainment.
+        Baselines: stock sglang PD (health-check ejection on, `DISAGG_HEALTH=1`) at its best P:D split.
       - [x] **Fault tolerance: lose 2 of 8 GPUs mid-run (2026-10-20; same text fan-out C=32 + chat 8 req/s; at t = 300 s
         every worker on pod 1 is killed, `FAULT_AT` / `FAULT_POD` in mn_run.py -- under PD disagg pod 1 is one of the
         two prefill pods, under ours two colocated workers; our router marks a worker dead on a refused or broken

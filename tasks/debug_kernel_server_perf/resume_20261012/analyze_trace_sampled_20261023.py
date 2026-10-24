@@ -9,6 +9,7 @@ graph replay, averaged over both arm orders. Aggregates:
   python analyze_trace_sampled_20261023.py <native_arm> [--baseline best|default] <kernel_results.json> [...]
   --baseline best     min over every FA3 variant per capture: an ORACLE chosen per step with hindsight
   --baseline default  fa3_full_default, the single varlen call sglang actually makes: the DEPLOYABLE baseline
+  --baseline arm:<name>  any named arm (e.g. arm:native_pdl_geometry_v3, the current serving build)
   --baseline fixed    the ONE FA3 variant with the least total time over all captures, applied to every step: what a
                       single global num_splits / packing setting could achieve (deployable, stronger than default)
 Claude, 2026-10-23.
@@ -40,6 +41,8 @@ for path in args:
     for cap, arms in sorted(t.items()):
         if baseline == "best":
             fa3 = min(statistics.mean(v) for a, v in arms.items() if a.startswith("fa3_"))
+        elif baseline.startswith("arm:"):
+            fa3 = statistics.mean(arms[baseline[4:]])
         else:
             fa3 = statistics.mean(arms[fixed or "fa3_full_default"])
         if arm not in arms:

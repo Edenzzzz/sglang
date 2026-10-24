@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.52.0 — Unified tile dispatcher built and correct on captures; FA2 executor speed work (2026-10-24)
+
+- Unified dispatcher (A6), flashinfer branch `unified_dispatch_20261024`:
+  - `UnifiedTilePlan`: one plan per step with LPT placement, JIT merge groups and an FA3 work-based split.
+  - `unified_dispatch_ext.cu`: FA3 launched from task 3 of the plan, PDL-chained to an FA2-only persistent kernel
+    with the merge in its epilogue and an FA3 tail merge.
+- FP32 gate passes on real captures: all-FA2 0.0037, all-FA3 0.0037 (bit-identical to sglang's FA3 call), mixed
+  0.0058.
+- Speed is not there yet:
+  - FA3 side: 0.070 ms vs sglang's 0.135 after the work-based split.
+  - FA2 kernel: 0.25 ms vs native v3's 0.080 for the whole step. Cause traced to a single-CTA serial merge (two-pass
+    merge halved it) and to the 48 runner's spills (1 444 B; 16-20 B with it compiled out).
+- Outline:
+  - 5.1 explains the fused-kernel failure as a warp-layout mismatch, with the measured numbers.
+  - Each eval section lists its graphs and metrics.
+  - 6.5 gains the prefill-down / decode-down fault-tolerance experiment, also queued in `pd_colocation_vs_disagg.md`.
+
 ## v1.51.0 — C1 restated as the unified tile dispatcher + merge schedule; kernel items unchecked (2026-10-24)
 
 - C1 is one CPU-side plan that assigns every tile (FA2 16/32/48, FA3 > 48) and the split-KV merge schedule (JIT

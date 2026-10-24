@@ -70,6 +70,9 @@ class UnifiedPlan:
             if fa3 != [True] * rows + [False] * (len(ql) - rows):
                 raise ValueError("stock FA3 needs the FA3 rows to be a prefix of the batch")
             self.fa3_rows, self.fa3_tokens = rows, int(q[rows])
+            # no FA3 rows: correctly shaped placeholders (the FA2 launch checks the stock partial layout)
+            self.po = torch.empty((1, h, 1, 128), dtype=torch.float32, device=dev)
+            self.plse = torch.empty((1, h, 1), dtype=torch.float32, device=dev)
             if rows:
                 kvl = kv[:rows]
                 self.pre_indptr = q[:rows + 1].to(dev)

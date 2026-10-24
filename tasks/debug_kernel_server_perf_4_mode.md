@@ -269,6 +269,30 @@ Tasks, in priority order:
                         - The gain has to come from the FA2 side: per-row tile classes (four-mode decode rows on the
                           16 tile instead of v3's Q32), and closing the remaining FA2-rows gap (7.81 vs 7.16 ms).
 
+      - [x] 2026-10-25 **FA2 merge cost located and cut (H20, stock FA3, `geometry`)** (`unified/profile_fa2_rows_20261024.py`;
+            FA2 rows only, per kernel):
+            | capture | v3 prefill + merge kernels | ours, merge-free bound (`UNIFIED_MERGE_MODE=jit`, output wrong) | ours, merge items |
+            |---|---|---|---|
+            | 32-64K four, 2 rows | 42.6 + 3.5 us | 29.5 us | 57.3 us |
+            | 32-64K two, 3 rows | 32.0 + 3.2 us | 20.6 us | 42.2 us |
+            | 32-64K two, 47 rows | 77.3 + 5.4 us | 82.7 us | 93.2 us |
+            - **Our compute is faster than v3's** on few-row steps (BF16 partials against v3's FP32). The merge was
+              the cost: one warp per row walked all of a row's chunks in a serial loop.
+            - **Chunk-parallel merge** (8 chunk groups x 4 column groups per warp, 16-byte loads, three shuffle
+              rounds): FA2 rows 6.29 -> 5.80 ms (two-mode, 0.94x v3's 5.47) and 7.81 -> 7.37 ms (four-mode, 0.97x
+              v3's 7.17). Stage 1 with stock FA3: 0.997-1.005x v3.
+            - Last-arriver merge with the new reduction: 5.79 / 8.26 ms; worse on four-mode, where one CTA reduces a
+              28-row group.
+            - Interleaving merge items L groups behind their compute (`UNIFIED_MERGE_LAG`): no gain. Lag 8 gives
+              5.85 / 7.47 ms, lag 0 6.44 / 8.84 ms, against 5.80 / 7.37 ms without it. Not used.
+            - **Race found and fixed (2026-10-25).** The queue-driven ticketed kernel hit `cudaErrorIllegalAddress` mid-set;
+              the same captures alone, or in pairs, pass. The NP kernel is a PDL dependent whose compute CTAs never
+              wait, so the next graph replay can start as soon as this grid's CTAs exit. The last CTA's plain-store
+              reset of the ticket counter is not ordered before the next launch's ticket atomics, so a ticket can land
+              past the grid, and `queue[t]` reads out of bounds. The group and merged counters have the same exposure.
+              Fixed: every cross-launch reset is an `atomicExch`, in both the NP and persistent kernels, and an
+              out-of-range ticket traps. Rerun with three repeats plus FP32 + 20 graph replays on all 92:
+              `unified/unified_h20_np2r_20261025.sh`.
       - [ ] **FA3 scheduling:** v3's geometry_v3 prefix split inside the unified plan; dynamic pulling with a
             causal-aware LPT cost in the adapter.
       - [ ] **(Optional) DSMEM JIT reduction, as the MELD paper does it** (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`,

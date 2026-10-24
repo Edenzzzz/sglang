@@ -50,7 +50,16 @@ Tasks, in priority order:
         - **No group tables:** FusedPlanInfo has no per-item group id.
         - **No FA2-only executor:** there is no three-runner FA2 kernel with the merge in its epilogue.
         - **Planner overhead:** it calls `getenv` inside per-row loops.
-      - [ ] P1 planner:
+      - [x] 2026-10-24 P1 planner, host-validated: `UnifiedTilePlan` in port07 `fused_plan.cuh`, flashinfer
+            `dd090e7` (branch `unified_dispatch_20261024`, flashinfer-private). On 44 real serving geometries
+            (Qwen2.5 / Qwen3 / GLM): exact coverage, class routing and merge-group member counts; plan time 72 us
+            mean / 124 us worst.
+            - The inherited FA3 chunk rule split a 2048-token prefill into 128-token chunks (28,672 items, 3 ms
+              plan). It now splits only when the q tiles cannot fill the FA3 CTAs.
+            - FA2 slot balance is 1.3-1.9 max/mean at one item per slot; chunk tuning is a GPU question.
+            - Test: `port07/tests/test_unified_plan.cpp` (`g++ -O2 -std=c++17 -I../include
+              -I/opt/tiger/flashinfer/include test_unified_plan.cpp && ./a.out /tmp/capture_geoms.txt`).
+            Original spec of P1:
             (a) LPT placement of items onto each executor's CTA slots (cost 2 * rows + kv);
             (b) group tables (item -> group, group rows / members / counter) and the FA3 split-row list for the
                 tail merge;

@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.50.0 — Outline rewritten per stage; kernel goes back to the user's tile rule + LPT; Llama-70B provisioning (2026-10-24)
+
+- `tasks/paper_outline.md` rewritten: current goal; per-stage claim / rationale / baselines / results for the three
+  models. The old outline is archived as `tasks/archive/paper_outline_pre_rewrite_20261024.md`.
+- Kernel task reopened. The serving FA2 rows run a non-persistent kernel with a 64 tile and no LPT schedule, against
+  the rule (FA2 16/32/48, >=64 to FA3).
+- Llama-3.3-70B provisioning for H20 pods 0-3 (H200-built native kernel libraries, identical ABI);
+  `mn_cap16_cond_p1_20261024.sh` (conditional-disagg 1-prefill-pod split).
+
 ## v1.49.0 — 16-GPU sweep vs conditional disagg: ~17% more load at SLO (2026-10-24)
 
 - Conditional disagg (best split, 2 prefill pods) vs ours. Chat attainment is equal through 64 programs; at 96/128

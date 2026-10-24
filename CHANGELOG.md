@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.49.0 — 16-GPU sweep vs conditional disagg: ~17% more load at SLO (2026-10-24)
+
+- Conditional disagg (best split, 2 prefill pods) vs ours. Chat attainment is equal through 64 programs; at 96/128
+  ours leads by 4.8/11.7 points. Agent SLO goodput is +14..+37% from 48 programs. Interpolated load at 90% chat
+  attainment: ~91 vs ~78 programs.
+- The stage-3 claim is restated against this baseline. A 1-prefill-pod split is queued
+  (`mn_cap16_cond_p1_20261024.sh`).
+
 ## v1.48.0 — Conditional disagg matches ours at 64 programs on 16 GPUs (2026-10-24)
 
 - cond_p2 at 64 programs: chat attainment 94.6% vs ours 94.2% (stock PD 31.2%); agent SLO goodput 845 vs 964 tok/s.

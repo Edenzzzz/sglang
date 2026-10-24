@@ -462,6 +462,26 @@ static mixture.
         (96 / 128 programs, `mn_cap16_cond_high_20261024.sh`, queued) and from the axes that do not depend on
         transfer: co-executing prefill with spec decode (4-mode + fused kernel), cache-hit routing and
         replication across symmetric nodes, and SLO admission.
+        **Full sweep (2026-10-24, all errors=0).** Phase A at 64 programs: P = 2 / 4 / 6 prefill pods reached 94.6 /
+        81.7 / 12.7% chat attainment, so P = 2 is best. Chat attainment / agent SLO goodput (tok/s):
+        | agent programs + chat rate | ours | conditional disagg, 2 + 6 pods | stock PD, 6 + 2 pods |
+        |---|---|---|---|
+        | 16 + 4 | 99.5% / 293 | 99.6% / 275 | 92.8% / 282 |
+        | 32 + 8 | 99.0% / 568 | 98.9% / 518 | 67.8% / 359 |
+        | 48 + 12 | 96.6% / 772 | 96.0% / 635 | 45.8% / 231 |
+        | 64 + 16 | 94.2% / 964 | 94.6% / 845 | 31.2% / 165 |
+        | 96 + 24 | 89.2% / 1187 | 84.4% / 906 | -- |
+        | 128 + 32 | 72.6% / 1221 | 60.9% / 890 | -- |
+        Validity: remote prefills were 0.4-0.7% of requests at every load. Their decode-side cached fraction fell from
+        0.92 to 0.49 as load grew (pool pulls time out), which is too few requests to move the result.
+        **Against the strongest PD baseline:**
+        - Chat attainment is equal through 64 programs. Ours leads at the knee: +4.8 points at 96, +11.7 at 128.
+        - Ours' agent SLO goodput is +6% at 16, +10% at 32, +22% at 48, +14% at 64, +31% at 96 and +37% at 128.
+        - Interpolated load at 90% chat attainment: ours ~91 programs vs ~78 for conditional disagg, i.e. **~17% more
+          load at SLO**, with +31% agent SLO goodput at the knee.
+        - Mechanism: conditional disagg dedicates 4 of 16 workers to remote prefills that are 0.5% of the work.
+        - Open: a 1-prefill-pod split (`mn_cap16_cond_p1_20261024.sh`, running) is needed before this counts as
+          best-tuned.
       - [x] **Phase B: CAPACITY AT SLO, ours vs the two best-tuned disagg splits (2026-10-24,
         `mn_capacity_16g_phaseB_20261023.sh`, splits 6 and 7 picked automatically from phase A; all errors=0).**
         chat attainment (0.5 s + 20 ms) / agent SLO goodput (tok/s) / agent tok/s / agent TTFT:

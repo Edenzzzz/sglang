@@ -13,6 +13,7 @@
 set -u
 export PATH=$HOME/.merlin-cli/bin:$PATH
 cd "$(dirname "$0")"
+# DISAGG_SGL_PY: sglang tree for disagg arms (default clean upstream; our tree for the disagg + EDF baseline).
 # RA_OVERRIDE: use these router args verbatim instead of the calibration log's (mn_predictor_value_20261022.sh
 # perturbs the fitted perf model to price what predictor accuracy is worth).
 RA=${RA_OVERRIDE:-$(grep -oE "ROUTER_ARGS=.*" ${RA_LOG:-/tmp/h20/mn_slo_calibrate.log} | tail -1 | cut -d= -f2-)}
@@ -24,7 +25,7 @@ for arm in ${ARMS:-disagg_2p2d_mtps coloc_cache_edf_mtp coloc_slo_edf_mtp_hc}; d
   case $arm in
     coloc_slo_*) RUN_TAG=_8g_fanout${REP:-} ROUTER_ARGS="$RA --pool-kv-tokens ${POOL_KV_TOKENS:-3348000} --prefetch-policy timeout ${EXTRA_RA:-}" \
                             python3 -u mn_run.py $arm ;;
-    disagg_*) (unset CHUNK; RUN_TAG=_8g_fanout${REP:-} SGL_PY=/dev/shm/w/up_clean/python KERNEL=lpt PREEMPT=0 \
+    disagg_*) (unset CHUNK; RUN_TAG=_8g_fanout${REP:-} SGL_PY=${DISAGG_SGL_PY:-/dev/shm/w/up_clean/python} KERNEL=lpt PREEMPT=0 \
                  python3 -u mn_run.py $arm) ;;
     *) RUN_TAG=_8g_fanout${REP:-} python3 -u mn_run.py $arm ;;
   esac

@@ -412,9 +412,21 @@ static mixture.
         Ours at this load is being rerun: its phase-A arm aborted before starting because the cn-seed WebShell SSO
         session expired mid-sweep ("mooncake master did not start: webshell relay redirected to SSO"), not because
         of the arm (`mn_cap16_ours_L32_rerun_20261023.sh`).
-      - [ ] **32-GPU capacity (2026-10-24, running, `mn_capacity_32g_20261023.sh`)**. Phase A at 64 programs / chat
-        16: disagg P:D 1..7 chat attainment 10.5 / 20.6 / 31.5 / 44.2 / 48.9 / 55.9 / 48.7% vs ours 99.1% (agent SLO
-        goodput 1096 vs best 352 tok/s). Phase B at 32 programs: ours 99.6%, disagg 7+1 82.4%; 96 / 128 pending.
+      - [x] **32-GPU capacity (2026-10-24, `mn_capacity_32g_20261023.sh`, 8 pods x 4 H20, all on FA3, kernel off,
+        Qwen2.5-7B no spec).** Chat attainment (0.5 s + 20 ms) / agent SLO goodput (tok/s):
+        | agent programs + chat rate | ours | disagg 6 + 2 pods | disagg 7 + 1 pods |
+        |---|---|---|---|
+        | 32 + 8 req/s | **99.6%** / 569 | 83.7% / 430 | 82.4% / 409 |
+        | 64 + 16 req/s | **99.1%** / 1096 | 55.9% / 342 | 48.7% / 352 |
+        | 96 + 24 req/s | **98.2%** / 1546 | 37.2% / 227 | 22.6% / 205 |
+        | 128 + 32 req/s | **96.3%** / 1910 | 26.7% / 146 | 15.9% / 111 |
+        Phase A at 64 programs: disagg with 1..7 prefill pods reached 10.5 / 20.6 / 31.5 / 44.2 / 48.9 / 55.9 / 48.7%.
+        Best-tuned disagg reaches 90% at none of the tested loads, while ours holds >= 96% through 128 programs; ours'
+        agent SLO goodput grows with load (569 -> 1910) while disagg's falls after 32 programs.
+        **Caveat before quoting any ratio.** The disagg prefill pods ran clean upstream FCFS, so chat prefills queue
+        behind 64K-token agent prefills. Part of this gap may therefore be scheduling policy rather than
+        disaggregation. Disagg + deadline-ordered prefill admission (`apply_edf_prefill_role_20261024.py`,
+        `mn_cap16_disagg_edf_20261024.sh`) is being measured at 16 GPUs.
       - [x] **Phase B: CAPACITY AT SLO, ours vs the two best-tuned disagg splits (2026-10-24,
         `mn_capacity_16g_phaseB_20261023.sh`, splits 6 and 7 picked automatically from phase A; all errors=0).**
         chat attainment (0.5 s + 20 ms) / agent SLO goodput (tok/s) / agent tok/s / agent TTFT:

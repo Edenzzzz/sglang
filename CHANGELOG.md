@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.46.0 — 32-GPU capacity table; disagg + EDF prefill baseline (2026-10-24)
+
+- 32 GPUs: ours holds >= 96% chat attainment through 128 programs; best disagg split 83.7% at 32, 26.7% at 128.
+  Ours' agent SLO goodput rises 569 -> 1910 tok/s.
+- `apply_edf_prefill_role_20261024.py`: EDF deadlines on PD prefill-role workers (order only), so disagg can run
+  with the same deadline order as ours. `mn_fanout_8gpu_20261018.sh` gains `DISAGG_SGL_PY`;
+  `mn_cap16_disagg_edf_20261024.sh` reruns the 16-GPU load grid with disagg 6+2 + EDF.
+
 ## v1.45.0 — v3 single-node full stack: attainment bar met at 32-64K; no single-GPU capacity point at 128-256K (2026-10-24)
 
 - 32-64K, two repeats: chat strict attainment 49-50% -> 59-65%, relaxed 50% -> 83-85%, agent 45-52% -> 77-85%; chat

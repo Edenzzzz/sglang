@@ -172,9 +172,20 @@ Tasks, in priority order:
             - Where the loss sits on the persistent kernel (FA2 rows alone, per capture vs v3's FA2 launch): steps with
               1-2 FA2 rows at 37-155K KV take 0.71-0.74x of v3's time (0.050 vs 0.036 ms; 0.130 vs 0.095 ms), with
               the same 4096 chunk (38 chunks) in both. Many-row steps are at 0.83-1.00x.
-            - [ ] Rerun with the switch reaching the compiler (`unified/unified_np2_20261024.sh`, then
-                  `unified_geomfa3_20261024.sh`): v3's body with ticketed merge items under the same plan, plus v3's
-                  split (`geometry_fa3`, `geometry`) for both executors.
+            - [x] 2026-10-24 **v3's body under our plan, switch verified on the nvcc line**
+                  (`unified/unified_np2_20261024.sh`, flashinfer `a816f69`, build script forwarding `UNIFIED_FA2_NP`).
+                  FP32 + 20 graph replays pass on all 96 captures (worst 0.0067).
+                  | | FA2 rows two-mode, vs v3's FA2 launch | FA2 rows four-mode | stage 1 vs v3 (32-64K two / four, 128-256K two / four) |
+                  |---|---|---|---|
+                  | v3 body + ticketed merge items | 0.910x | 0.942x (4.59 vs 4.33 ms) | 0.956 / 0.991 / 0.995 / 0.995x |
+                  | persistent overlap + LPT | 0.936x | 0.841x (5.15 ms) | 0.966 / 0.992 / 0.997 / 0.991x |
+                  - On 4-mode FA2 rows v3's body is 12% faster than the persistent kernel; on 2-mode decode rows it is
+                    3% slower.
+                  - Worst steps are still 1-2 FA2 rows with long KV (0.72-0.86x). For those, the plan's fixed FA2 rule
+                    rounds work/CTAs up to the next power of two: 2048 at 2 rows x 37.6K KV, against v3's 1024. That
+                    gives ~150 CTAs of twice the length on 264 slots, an under-filled GPU.
+            - [ ] v3's split inside the plan for both executors (`unified/unified_geomfa3_20261024.sh`, running):
+                  `geometry_fa3` (FA3 only) and `geometry` (FA3 + FA2 `row_split_size`).
       - [ ] **FA3 scheduling:** v3's geometry_v3 prefix split inside the unified plan; dynamic pulling with a
             causal-aware LPT cost in the adapter.
       - [ ] **(Optional) DSMEM JIT reduction, as the MELD paper does it** (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`,

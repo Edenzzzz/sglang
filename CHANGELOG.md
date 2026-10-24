@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.56.0 — Fused unified reduction; v3's FA2 body as a second executor; multicast ceiling (2026-10-24)
+
+- A6, mandatory part: FA3's split rows are now reduced by plan-scheduled merge items in the FA2 launch, the same
+  mechanism as FA2's groups (no tail loop). FP32-exact on all 96 captures.
+- A6: `UNIFIED_FA2_NP=1` runs v3's own BatchPrefill body under the unified plan; v3's Q32 layout fix and
+  independent PDL are ported into port07 `prefill.cuh`.
+  - Both executors measure the same (0.96-1.00x v3), so the gap is not the persistent overlap + LPT schedule.
+  - The gap sits in the merge of few-row long-KV steps (0.71-0.74x there): a last-arriving CTA reduced whole
+    groups serially. Next: ticketed merge items in the non-persistent executor (deadlock-free by ticket order).
+- A5.5: shared-KV ceiling. FA2 under 1% (FA2 multicast not built). FA3 99% from one prefill row's q tiles, which
+  are already L2 hits.
+- New plan policy `geometry_fa3` (v3's FA3 split, fixed FA2 split); stage-1 run queued.
+
 ## v1.55.0 — A6 requirements recorded; FA2 parity measured against v3's own FA2 launch (2026-10-24)
 
 - A6 requirements, per the user:

@@ -36,7 +36,34 @@ Tasks, in priority order:
             (1.05x), cached large 1.2618 vs 1.2879 (1.02x). FA2 wins where its tile is small: 2-mode 12-row decode rows
             on FA2-16, 1.39x / 1.56x over FA3. Source: `pd_colocation/results_20261023/glm_captured/row_controls.json`.
             FA2-64 is removed. A dedicated FA2-48 tile must beat FA3 on these rows to stay, else 48 goes to FA3 too.
-      - [ ] Plan: FA2 classes 16 / 32 / 48 (no 64), FA3 for > 48, LPT over both, merge groups spanning FA2 and FA3 partials.
+      - **Code map (2026-10-24).** Base is port07 (the 0.7 wheel + overlay that the H200 builds), flashinfer branch
+        `unified_dispatch_20261024`. What exists:
+        - **Unified plan builder:** `FusedFourTaskPlan` = `EnumerateFusedWorkItems` + `BuildFusedMergeLayout`, exposed
+          as `fused_fa3.build_fused_plan`. Tile widths come from `FUSED_FA2_TILES`, the FA3 threshold from
+          `FUSED_FA3_MIN_PACKED`.
+        - **FA3 driven from task 3:** `UpstreamFA3SchedulerAdapter` + `UpstreamFA3Kernel` in
+          `hopper/fa3_upstream.cuh`; until now used only inside the co-compiled kernel.
+        - **JIT merge source:** `MergeGroupJIT` + the rendezvous in the 0.3.1 tree's `include/.../persistent.cuh`
+          (lines 650-735) and `jit_merge.cuh`.
+        What is missing:
+        - **No LPT:** the planner assigns items to CTA slots in plan order (`work_indptr = n * c / ctas`).
+        - **No group tables:** FusedPlanInfo has no per-item group id.
+        - **No FA2-only executor:** there is no three-runner FA2 kernel with the merge in its epilogue.
+        - **Planner overhead:** it calls `getenv` inside per-row loops.
+      - [ ] P1 planner:
+            (a) LPT placement of items onto each executor's CTA slots (cost 2 * rows + kv);
+            (b) group tables (item -> group, group rows / members / counter) and the FA3 split-row list for the
+                tail merge;
+            (c) FA2 classes 16 / 32 / 48 (no 64), FA3 for > 48;
+            (d) plan-time optimization: no `getenv` per row, no std::map, reused buffers; per-step plan time
+                measured.
+      - [ ] P2 FA2-only persistent kernel, runners 48 / 32 / 16:
+            - JIT reduction in the runner epilogue: the last member of a group merges it, partials handed off
+              through DSMEM within a cluster;
+            - a tail that merges FA3's split rows after `griddepcontrol.wait`.
+      - [ ] P3 FA3 standalone launch from task 3 (adapter); the PDL primary triggers dependents early; split rows
+            write partials only (no combine launch).
+      - [ ] P4 ext op `unified_run`, Python executor, stage-1 bench arm, FP32 gate with a null case.
       - **Claims are judged against native v3 and the role split** (user, 2026-10-24): A6 counts only gains over the
         current naive v3 build.
       - [ ] 48-row FA2 tile (own warp layout; 1q x 4kv x 3 MMA spilled in A2).

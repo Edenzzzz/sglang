@@ -452,6 +452,16 @@ static mixture.
         Validity per arm: `cond_disagg_check.py` reports the remote share and the decode-side cached fraction.
         Router unit test: `test_router_cond_disagg.py`. Phase A sweeps P = 2/4/6; phase B runs the best P at
         16/32/48 programs.
+        **First arm, P = 2 at 64 programs + chat 16 (errors=0).** Chat attainment 94.6% (ours 94.2%, stock PD best
+        31.2%). Agent SLO goodput 845 tok/s (ours 964, stock PD 165). Agent tok/s 863 (ours 991).
+        Only 0.5% of requests (110 / 20546) were prefilled remotely; 6050 long prompts were served locally from the
+        decode worker's own cache or the pool. Those 110 got 79% of their prefix from the pool (22 under 50%).
+        **Reading: conditional disagg captures nearly all of ours' gain over stock PD.** In this workload it is
+        effectively colocation on the decode pods. Ours' remaining edge at this load is agent SLO goodput (+14%,
+        using all 16 workers rather than 12 that take decode). The claim against it has to come from the knee
+        (96 / 128 programs, `mn_cap16_cond_high_20261024.sh`, queued) and from the axes that do not depend on
+        transfer: co-executing prefill with spec decode (4-mode + fused kernel), cache-hit routing and
+        replication across symmetric nodes, and SLO admission.
       - [x] **Phase B: CAPACITY AT SLO, ours vs the two best-tuned disagg splits (2026-10-24,
         `mn_capacity_16g_phaseB_20261023.sh`, splits 6 and 7 picked automatically from phase A; all errors=0).**
         chat attainment (0.5 s + 20 ms) / agent SLO goodput (tok/s) / agent tok/s / agent TTFT:

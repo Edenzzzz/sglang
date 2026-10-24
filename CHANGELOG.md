@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.48.0 — Conditional disagg matches ours at 64 programs on 16 GPUs (2026-10-24)
+
+- cond_p2 at 64 programs: chat attainment 94.6% vs ours 94.2% (stock PD 31.2%); agent SLO goodput 845 vs 964 tok/s.
+  Only 0.5% of requests were prefilled remotely, so most of ours' gain over stock PD is the per-round KV re-ship that
+  Dynamo-style conditional disaggregation already avoids. `mn_cap16_cond_high_20261024.sh` queues the knee (96/128).
+
 ## v1.47.0 — Disagg + EDF changes nothing; conditional-disaggregation (Dynamo) baseline (2026-10-24)
 
 - 16 GPUs, disagg 6+2 with deadline order on the prefill pods: chat attainment 92.5 / 70.7 / 46.7 / 30.5% at

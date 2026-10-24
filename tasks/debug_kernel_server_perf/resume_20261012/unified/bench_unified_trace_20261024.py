@@ -7,6 +7,7 @@ analyze_trace_sampled_20261023.py applies. Also records the host plan time per c
 Claude, 2026-10-24.
 """
 import argparse
+import os
 import json
 import sys
 import time
@@ -26,40 +27,64 @@ parser = argparse.ArgumentParser()
 parser.add_argument("captures", type=Path)
 parser.add_argument("output", type=Path)
 parser.add_argument("--iterations", type=int, default=20)
+parser.add_argument("--unified-only", action="store_true", help="skip the baselines (they ran in an earlier pass)")
+parser.add_argument("--label", default="unified", help="arm name for this unified configuration")
+parser.add_argument("--append", action="store_true", help="add records to an existing output")
 args = parser.parse_args()
-if args.output.exists():
+if args.output.exists() and not args.append:
     raise SystemExit("fresh output required")
 torch.backends.cuda.matmul.allow_tf32 = False
 files = sorted(args.captures.glob("*.pt"))
 report = dict(scope="unified dispatcher vs FA3 baselines and native v3, trace-sampled captures, graph replay",
               gpu=torch.cuda.get_device_name(0), records=[], captures=[])
+if args.append and args.output.exists():
+    report = json.loads(args.output.read_text())
 for path in files:
     case = B.load_case(path)
+    if os.environ.get("UNIFIED_ZERO_FILL") == "1":
+        # diagnostic: non-live pages zero instead of NaN (separates "reads a non-live page" from other faults)
+        case.key.nan_to_num_(0.0)
+        case.value.nan_to_num_(0.0)
     expected = B.fp32_reference(case)
     g = case.geometry
-    launches = {k: v for k, v in B.launches_for(case, policy_v3=True).items() if k in KEEP}
-    ex = U.UnifiedExecutor(g["heads"], g["kv_heads"], torch.device("cuda"))
+    launches = {} if args.unified_only else {k: v for k, v in B.launches_for(case, policy_v3=True).items() if k in KEEP}
+    import os
+    ex = U.UnifiedExecutor(g["heads"], g["kv_heads"], torch.device("cuda"),
+                           fa3_min_packed=int(os.environ.get("UNIFIED_FA3_MIN", "49")),
+                           fa2_ctas_per_sm=int(os.environ.get("UNIFIED_FA2_CPS", "2")))
     kv = [int(x) for x in case.cache_lengths.tolist()]
     t0 = time.perf_counter()
     for _ in range(10):
         plan = ex.plan(g["query_lengths"], kv, case.page_table)
     plan_ms = (time.perf_counter() - t0) / 10 * 1e3
-    launches["unified"] = lambda plan=plan: plan.run(case.query, case.key, case.value, g["scale"], case.output)
-    report["captures"].append(dict(file=path.name, plan_ms=plan_ms, plan_stats=plan.stats,
+    launches[args.label] = lambda plan=plan: plan.run(case.query, case.key, case.value, g["scale"], case.output)
+    report["captures"].append(dict(file=path.name, label=args.label, plan_ms=plan_ms, plan_stats=plan.stats,
                                    query_lengths=g["query_lengths"], kv_lengths=kv))
     for order in ("forward", "reverse"):
         entries = list(launches.items())
         if order == "reverse":
             entries.reverse()
         for arm, launch in entries:
-            r = B.measure(case, launch, expected, "graph", args.iterations)
+            try:
+                r = B.measure(case, launch, expected, "graph", args.iterations)
+            except AssertionError as e:
+                bad = (~torch.isfinite(case.output)).any(dim=-1)
+                cq = case.cumulative_query.tolist()
+                toks = sorted(set(int(t) for t in bad.nonzero()[:, 0].tolist()))
+                reqs = sorted(set(next(i for i in range(len(cq) - 1) if cq[i] <= t < cq[i + 1]) for t in toks))
+                ql = case.geometry["query_lengths"]
+                print(f"UNIFIED_BENCH_FAIL {path.name} arm={arm} order={order}: {e}; bad rows={int(bad.sum())} "
+                      f"requests={reqs[:10]} their q_len={[ql[r] for r in reqs[:10]]} heads={sorted(set(bad.nonzero()[:,1].tolist()))[:8]}",
+                      flush=True)
+                raise
             r.update(capture=path.name, mode=g["mode"], arm=arm, style="graph", order=order)
             report["records"].append(r)
     args.output.write_text(json.dumps(report, indent=1) + "\n")
-    u = [r["milliseconds"] for r in report["records"] if r["capture"] == path.name and r["arm"] == "unified"]
-    v = [r["milliseconds"] for r in report["records"] if r["capture"] == path.name and r["arm"] == "native_pdl_geometry_v3"]
-    d = [r["milliseconds"] for r in report["records"] if r["capture"] == path.name and r["arm"] == "fa3_full_default"]
-    print(f"UNIFIED_BENCH {path.name} unified={sum(u)/len(u):.4f} v3={sum(v)/len(v):.4f} default={sum(d)/len(d):.4f} "
+    def mean(arm):
+        x = [r["milliseconds"] for r in report["records"] if r["capture"] == path.name and r["arm"] == arm]
+        return sum(x) / len(x) if x else float("nan")
+    print(f"UNIFIED_BENCH {path.name} {args.label}={mean(args.label):.4f} v3={mean('native_pdl_geometry_v3'):.4f} "
+          f"default={mean('fa3_full_default'):.4f} "
           f"plan_ms={plan_ms:.3f} stats={plan.stats}", flush=True)
     del case, expected, launches, plan, ex
     torch.cuda.empty_cache()

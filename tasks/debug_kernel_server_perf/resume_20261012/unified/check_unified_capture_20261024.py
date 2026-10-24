@@ -81,12 +81,34 @@ for path in sys.argv[1:]:
     g = c["geometry"]
     import os
     ex = U.UnifiedExecutor(g["heads"], g["kv_heads"], torch.device("cuda"), fa3_min_packed=int(os.environ.get("UNIFIED_FA3_MIN", "49")), fa2_ctas_per_sm=int(os.environ.get("UNIFIED_FA2_CPS", "2")))
-    plan = ex.plan(g["query_lengths"], [int(x) for x in c["cache_lengths"].tolist()], c["page_table"])
+    for _ in range(int(os.environ.get("UNIFIED_PLAN_BUILDS", "1"))):
+        plan = ex.plan(g["query_lengths"], [int(x) for x in c["cache_lengths"].tolist()], c["page_table"])
     out = torch.zeros_like(c["query"])
     for _ in range(3):
         out.zero_()
         plan.run(c["query"], c["key"], c["value"], g["scale"], out)
     torch.cuda.synchronize()
+    if os.environ.get("UNIFIED_GRAPH") == "1":
+        # Graph replay, as the stage-1 bench measures: capture, poison the output, replay, then check.
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            plan.run(c["query"], c["key"], c["value"], g["scale"], out)
+        fails = 0
+        for rep in range(int(os.environ.get("UNIFIED_REPLAYS", "3"))):
+            out.fill_(float("nan"))
+            graph.replay()
+            torch.cuda.synchronize()
+            bad = (~torch.isfinite(out)).any(dim=-1)
+            if bad.any():
+                fails += 1
+                rows = bad.nonzero()
+                toks = sorted(set(int(t) for t in rows[:, 0].tolist()))
+                cq = c["cumulative_query"].tolist()
+                reqs = sorted(set(next(i for i in range(len(cq) - 1) if cq[i] <= t < cq[i + 1]) for t in toks))
+                heads = sorted(set(int(h) for h in rows[:, 1].tolist()))
+                if fails <= 3:
+                    print(f"GRAPH replay {rep}: {int(bad.sum())} rows unwritten; requests {reqs[:8]} heads {heads[:12]}", flush=True)
+        print(f"GRAPH_FAILS {fails}", flush=True)
     ref_fa3 = flash_attn_with_kvcache(q=c["query"], k_cache=c["key"], v_cache=c["value"], page_table=c["page_table"],
                                       cache_seqlens=c["cache_lengths"], cu_seqlens_q=c["cumulative_query"],
                                       max_seqlen_q=max(g["query_lengths"]), softmax_scale=g["scale"], causal=True)

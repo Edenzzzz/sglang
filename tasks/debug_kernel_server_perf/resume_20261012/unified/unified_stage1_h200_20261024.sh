@@ -8,7 +8,8 @@ export NATIVE_PDL_FA2_LIBRARY=/opt/tiger/w/torch_ext_native_h200_20261023/native
 export NATIVE_PDL_FA3_LIBRARY=/opt/tiger/w/torch_ext_stock_h200_20261023/stock_fa3_pdl/stock_fa3_pdl.so
 export NATIVE_PDL_FA2_FP32_LIBRARY=/opt/tiger/w/torch_ext_native_fp32_20261023/native_fa2_q32_fp32/native_fa2_q32_fp32.so
 export NATIVE_PDL_FA2_FP32_DIRECT_LIBRARY=/opt/tiger/w/torch_ext_native_fp32_direct_20261023/native_fa2_q32_fp32_direct/native_fa2_q32_fp32_direct.so
-OUT=/opt/tiger/w/unified_stage1_h200_20261024; mkdir -p $OUT
+OUT=${OUT:-/opt/tiger/w/unified_stage1_h200_20261024}; mkdir -p $OUT
+export UNIFIED_SO UNIFIED_FA3_MIN UNIFIED_FA2_CPS
 for d in mix32_two mix32_four mix128_two mix128_four; do
   mkdir -p $OUT/$d; /dev/shm/w/venv/bin/python -u bench_unified_trace_20261024.py /opt/tiger/w/trace_sampled_h200_20261023/$d/captures $OUT/$d/kernel_results.json 2>&1 | grep -E "UNIFIED_BENCH|Error|error|Traceback"
 done

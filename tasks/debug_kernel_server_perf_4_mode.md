@@ -184,8 +184,24 @@ Tasks, in priority order:
                   - Worst steps are still 1-2 FA2 rows with long KV (0.72-0.86x). For those, the plan's fixed FA2 rule
                     rounds work/CTAs up to the next power of two: 2048 at 2 rows x 37.6K KV, against v3's 1024. That
                     gives ~150 CTAs of twice the length on 264 slots, an under-filled GPU.
-            - [ ] v3's split inside the plan for both executors (`unified/unified_geomfa3_20261024.sh`, running):
-                  `geometry_fa3` (FA3 only) and `geometry` (FA3 + FA2 `row_split_size`).
+            - [x] 2026-10-24 **v3's split inside the plan** (`unified/unified_geomfa3_20261024.sh`; FP32 + 5 graph
+                  replays pass on all 96 for every arm). Stage 1 vs v3 (32-64K two / four, 128-256K two / four) and
+                  FA2 rows vs v3's FA2 launch (two / four):
+                  | arm | stage 1 | FA2 rows |
+                  |---|---|---|
+                  | v3 body, `geometry_fa3` (v3's FA3 split, fixed FA2) | 0.980 / 1.004 / 0.999 / 1.003x | 0.914 / 0.942x |
+                  | v3 body, `geometry` (v3's FA3 and FA2 split) | 0.951 / 0.993 / 0.994 / 1.004x | 0.854 / 0.881x |
+                  | persistent, `geometry` | 0.965 / 0.982 / 0.999 / 0.997x | 0.872 / 0.801x |
+                  - **v3's FA3 split helps:** 32-64K two goes from 0.956 to 0.980x, and two sets reach parity. It stays.
+                  - **v3's FA2 split makes ours worse even with v3's body:** with split, tile and body all matching v3,
+                    FA2 rows are 0.85x. The remaining difference is our in-launch merge machinery, whose cost grows with
+                    the chunk count:
+                    - a ticket atomic and an exit atomic on one global counter for every CTA (~700 CTAs per step);
+                    - hundreds of spin-waiting 4-row merge-item CTAs.
+                    v3 pays neither; its merge kernel is ~4 us per step.
+            - [ ] Last-arriver merge with blockIdx dispatch for the v3-body executor (`UNIFIED_NP_MERGE=0`: no ticket
+                  atomics, no merge CTAs; one counter per group), under `geometry_fa3` and `geometry`
+                  (`unified/unified_nplast_20261024.sh`, running).
       - [ ] **FA3 scheduling:** v3's geometry_v3 prefix split inside the unified plan; dynamic pulling with a
             causal-aware LPT cost in the adapter.
       - [ ] **(Optional) DSMEM JIT reduction, as the MELD paper does it** (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`,

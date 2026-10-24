@@ -52,6 +52,7 @@ load(
         "-DUNIFIED_SKIP_MERGE=" + os.environ.get("UNIFIED_SKIP_MERGE", "0"),
         "-DUNIFIED_FA2_DYNAMIC=" + os.environ.get("UNIFIED_FA2_DYNAMIC", "1"),
         "-DUNIFIED_FA2_NP=" + os.environ.get("UNIFIED_FA2_NP", "0"),
+        "-DUNIFIED_NP_MERGE=" + os.environ.get("UNIFIED_NP_MERGE", "0"),
         "-DUNIFIED_NP_KV16=" + os.environ.get("UNIFIED_NP_KV16", "2"),
         "-DUNIFIED_NP_KV32=" + os.environ.get("UNIFIED_NP_KV32", "4"),
         "-DUNIFIED_MMA_KV16=" + os.environ.get("UNIFIED_MMA_KV16", os.environ.get("UNIFIED_FA2_MMA_KV", "2")),

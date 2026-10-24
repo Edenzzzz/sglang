@@ -17,6 +17,10 @@
 - Condense and merge as findings supersede each other. A doc that accumulates
   every intermediate hypothesis is unreadable; keep the conclusion and the
   evidence, delete the path.
+- **Group by item / feature, never chronologically.** Each task item is organised around the things the user
+  asked to implement or try: the requirements as checkboxes, the current result, then one sub-section per
+  feature (status, key numbers, command, commit). Do not append dated entries as work happens. Superseded runs
+  are deleted or reduced to one line, and bugs found along the way go into one short list per item.
 
 - **Exception -- the paper draft.** `tasks/paper_outline.md` is a paper draft, not a task doc. It follows the format
   of the user's original outline (`tasks/AttentionFuse Outline OSDI 25'.docx`): title, the outline bullets, Abstract,

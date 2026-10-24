@@ -5,365 +5,114 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
 - **Bar:** >= 30% on TTFT and ITL (or their SLO attainment) and >= 10% throughput on realistic chat + TraceLab
   workloads.
 - **Models:** Qwen2.5-7B, Llama-3.3-70B (next), GLM-4.5-Air.
-- **Hardware:** H200 job `8574c727fab6ffbd` (vibecuda, forked 2026-10-24 23:25 from `34c7bd503d461dc1`, which ended
-  that evening; queued at the time of writing) for stages 1-2; H20 job `2f608c1b1a67cf09` for multi-node.
-  - Lost with the old pod: the 96 trace-sampled captures, the built extensions, and the `np_last` run.
-  - Restore: `unified/prov_h200_20261024.sh` with a 12 MB bundle. It contains the H20 serving tree's delta against
-    upstream, port07, v3's libraries built on the previous H200, v3's work dir, and the scripts; it then re-captures
-    with `trace_sampled_capture_h200_20261023.sh`.
-  - Every stage-1 number after the restore is re-measured on the new captures, v3 included.
+- **Hardware:** H200 job `8574c727fab6ffbd` (vibecuda; restored with `unified/prov_h200_20261024.sh` after
+  `34c7bd503d461dc1` ended) for stages 1-2; H20 job `2f608c1b1a67cf09` for multi-node and, meanwhile, kernel runs.
 
 Tasks, in priority order:
 
-- [ ] 2026-10-24 **A6. Unified fine-grained tile dispatcher + merge schedule (THE kernel contribution), then
-      re-measure from stage 1.**
-      - **One CPU-side plan function per step.** It assigns every tile of the mixed batch to an executor and a tile
-        class: FA2 16 / 32 / 48 for rows of <= 48 packed queries (user's rule, 2026-10-12), FA3 for rows above 48 and
-        for prefill. It splits KV and places tiles by LPT across both executors' slots.
-      - **The merge schedule comes from the same plan.** For each split row: its partial slots, its merge group, and
-        which tiles reduce it. No separate merge kernels, and no second plan call.
-      - **Executors:** flash-attention's FA3 kernel and the persistent FA2 kernel with the LPT overlap schedule (two
-        CTAs per SM on different classes), PDL-chained, both reading the one work list.
-      - **The merge lives in the FA2 kernel (user, 2026-10-24).** FA2 launches second, so it reduces every split row,
-        FA2's and FA3's alike; FA3 tiles only write FP32 partials + LSE.
-      - **The dispatcher must be fast.** It runs once per step on the CPU, so plan time is measured and optimized.
-      - **Requirements (user, 2026-10-24).** A6 is judged against native v3, which runs the same FA3 kernel; v3's FA2
-        path is our tuned BatchPrefill (Q32 override of the 64 tile, FP32 partials, direct BF16 output, geometry_v3
-        split). FA3 time differences between the arms are therefore scheduling (split choice, tile order), not the
-        kernel.
-        - [x] 2026-10-24 **(Mandatory) One unified CPU plan per step for FA3 and FA2.** Built (`UnifiedTilePlan`,
-              flashinfer `37b2129`). Host-validated on 44 geometries at 48-78 us mean; FP32-exact on all 96 captures.
-        - [ ] **(Mandatory) Fused unified reduction:** one reduction in the FA2 kernel's epilogue that merges FA2 and
-              FA3 split partials alike, scheduled by the unified plan's merge schedule, with no merge launches.
-              Unchecked 2026-10-24: what exists is two mechanisms. FA2 groups are reduced by plan-scheduled merge
-              items; FA3 split rows are reduced by a separate tail loop after `cudaGridDependencySynchronize`, outside
-              the plan's merge schedule. Both run inside the FA2 launch and are FP32-exact on 96 captures (worst
-              0.0067). To do: FA3 split rows become plan-scheduled merge items of the same reduction, queued after
-              the FA2 compute items, gated on the FA3 grid.
-        - [ ] **A6 beats native v3 on stage 1.** It only removes v3's calls (two planners, the FA2-merge launch, the
-              FA3-combine launch), so a correct A6 cannot be slower; if it measures slower, that is a bug. Now
-              0.97-1.00x, because our FA2 executor is 6-13% slower than v3's on identical rows (below).
-        - [ ] **FA2 executor: the persistent overlap + LPT schedule stays the intended one.** It is demoted only if
-              measurements show it cannot beat v3's FA2 launch, with the concrete causes recorded. The comparison arm
-              is v3's non-persistent BatchPrefill body under the same plan and in-launch merge (being built).
-              Per-kernel profile of both arms is running (`unified/fa2_profile_20261024.sh`).
-        - [ ] **(Optional) DSMEM JIT handoff,** as the MELD paper does it (item below).
-        - [ ] **(Optional) FA3 / FA2 KV multicast** (A5.5).
-        - [x] 2026-10-24 **Partials: FP32 or BF16, as long as the FP32 gate passes.** Ours are BF16 and pass
-              (worst 0.0067).
-        - [ ] **Serving stages 2-3 only after the kernel items are resolved** (user, 2026-10-24: "don't jump to
-              serving with kernel unresolved"). They run with v3 as the kernel until A6 beats v3.
-        - [ ] **All three models swept and shown in the paper**, with a note that it may show only two (then
-              Llama-3.3-70B and Qwen2.5-7B). Every model's results are recorded here.
-      - [x] 2026-10-24 **Why FA2 had a 64 class: no measured reason, and it loses to FA3.** On GLM-4.5-Air's 4-mode
-            captures (48 packed rows per verify row, H20 TP4 rank 0), the same rows on FA3 (tuned dual) vs on FA2-64
-            (native), prefill on FA3 in both: fresh small 0.0857 vs 0.1359 ms (FA3 1.59x), fresh large 0.5341 vs 0.5588
-            (1.05x), cached large 1.2618 vs 1.2879 (1.02x). FA2 wins where its tile is small: 2-mode 12-row decode rows
-            on FA2-16, 1.39x / 1.56x over FA3. Source: `pd_colocation/results_20261023/glm_captured/row_controls.json`.
-            FA2-64 is removed.
-      - [x] 2026-10-24 **Planner, host-validated:** `UnifiedTilePlan` in port07 `fused_plan.cuh` (flashinfer branch
-            `unified_dispatch_20261024`, flashinfer-private). On 44 real serving geometries (Qwen2.5 / Qwen3 / GLM):
-            exact coverage, class routing and merge-group member counts; plan time 48-78 us mean. FA3 rows split only
-            when their q tiles cannot fill the FA3 CTAs (the inherited rule cut a 2048-token prefill into 28,672 items,
-            3 ms of planning). Test: `port07/tests/test_unified_plan.cpp` (`g++ -O2 -std=c++17 -I../include
-            -I/opt/tiger/flashinfer/include test_unified_plan.cpp && ./a.out /tmp/capture_geoms.txt`).
-      - [x] 2026-10-24 **Executors built, FP32-exact** (`unified_dispatch_ext.cu`, flashinfer `b865401`):
-            - FA3 runs from task 3 of the plan via `UpstreamFA3SchedulerAdapter` (168 regs, 0 spill), as the PDL
-              primary.
-            - The FA2-only persistent kernel pulls items from a dynamic LPT queue, checks split items in on per-(merge
-              tile, kv head) groups, and merges FA3's split rows in its tail after `cudaGridDependencySynchronize`.
-              No merge launch.
-            - FP32 gate passes on all 96 trace-sampled captures (worst 0.0067); 4 800 graph replays found no
-              unwritten row.
-            - A split with no visible key has LSE -inf and an unwritten O slot; merges skip -inf slots (the two-pass
-              merge had turned 0 x stale NaN into NaN).
-            - Current build has 2 FA2 classes (32 / 16, rows > 32 packed on FA3): compiled into the same kernel, the
-              48 runner makes every class spill 1 436 B (2-class build: 16-24 B).
-      - [x] 2026-10-24 **KV-split policies** (`unified/unified_policy_compare_h200_20261024.sh`, root
-            `/opt/tiger/w/unified_policy_v2_h200_20261024`; before merge items). Time-weighted vs native v3 over 24
-            captures per set:
-            | set | fixed | flashinfer persistent-LPT `kv_len_limit` | dynamic makespan |
-            |---|---|---|---|
-            | 32-64K two | 0.95x | 0.89x | 0.93x |
-            | 32-64K four | 0.95x | 0.90x | 0.90x |
-            | 128-256K two | 0.98x | 0.94x | 0.96x |
-            | 128-256K four | 0.97x | 0.94x | 0.92x |
-            flashinfer's rule splits FA2 rows finest, and every extra split costs a partial plus a merge. Fixed is the
-            default since.
-      - [x] 2026-10-24 **The FA2 gap was the merge; plan-scheduled merge items fix it** (`unified/fa2_variants_20261024.sh`,
-            `unified/fa2_mergeitems_20261024.sh`; FA2 rows of 32-64K four-mode + 128-256K two-mode, identical tensors,
-            graph replay, FP32-checked; stock BatchAttention 5.36 ms):
-            | our FA2 variant | time | vs BatchAttention |
-            |---|---|---|
-            | dynamic queue, last-arriver JIT merge | 6.21 ms | 0.86x |
-            | static LPT, JIT merge | 5.90 ms | 0.91x |
-            | no merge (wrong output, timing bound) | 4.54 ms | 1.18x |
-            | **merge items, 4 rows** | **4.86 ms** | **1.10x** |
-            | merge items, 8 / 16 rows | 5.25 / 5.61 ms | 1.02x / 0.96x |
-            - The last-arriver merge was 27% of FA2 time: one CTA merged a whole group with 4 warps while its queued
-              items waited.
-            - The plan cuts each group into row ranges queued after every compute item; members only check in, and
-              the merge spreads over the CTAs that pull those items. Compute items are always pulled first, so it
-              cannot deadlock.
-      - [x] 2026-10-24 **Stage 1 on all 96 captures with merge items: level with native v3, not better**
-            (`unified/unified_mergeitems_stage1_20261024.sh`, root `/opt/tiger/w/unified_mi_h200_20261024`; sglang
-            `fecc759d2`, flashinfer `eaa4d88`). Time-weighted, 4-row merge items:
-            | set | vs native v3 [95% CI] | vs role-split FA3 | vs sglang's FA3 call | swizzled FA3 order, vs v3 |
-            |---|---|---|---|---|
-            | 32-64K two | 0.972x [0.920-0.996] | 0.960x | 1.27x | 0.976x |
-            | 32-64K four | 0.997x [0.965-1.013] | 0.977x | 1.19x | 0.991x |
-            | 128-256K two | 0.996x [0.967-1.006] | 0.999x | 1.54x | 0.996x |
-            | 128-256K four | 0.995x [0.972-1.006] | 0.992x | 1.36x | 0.992x |
-            - FP32 worst 0.0067.
-            - The L2-swizzled FA3 tile order (`UNIFIED_FA3_ORDER=swizzle`, flashinfer `42045a3`,
-              `unified/unified_swizzle_stage1_20261024.sh`, log `/opt/tiger/w/unified_swz.log`) is within the CI of
-              the plain order, so FA3 tile order is not the gap.
-            - Per-kernel profile, 32-64K two-mode: same FA3 kernel, 2-13% longer under our split than under v3's
-              geometry_v3 split; the FA2 side (2-mode decode rows on the 16 tile) 18-50% slower than v3's tuned
-              BatchPrefill + merge (fresh large 0.0966 vs 0.0643 + 0.0043 ms; fresh small 0.0602 vs 0.0474 + 0.0041).
-      - [x] 2026-10-24 **Deeper KV tile on the 16-row class does not help** (`unified/fa2_kvdepth_20261024.sh`,
-            flashinfer `b544bb9`, `UNIFIED_MMA_KV16`; FA2 rows of all four sets, fixed split, 4-row merge items):
-            | 16-row MMA_KV | two-mode sets | four-mode sets | regs / spill |
-            |---|---|---|---|
-            | 2 (default) | 4.98 ms (0.93x BatchAttention) | 4.99 ms (1.42x) | 16-24 B |
-            | 4 | 6.76 ms (0.69x) | 7.44 ms (0.95x) | 255, 60-180 B |
-            | 8 | does not launch: over the shared-memory limit | | 255, 476-1132 B |
-            Our FA2 path loses to BatchAttention on the two-mode sets (decode rows) and wins on four-mode.
-      - [ ] **FA2 executor vs v3's FA2 launch, on identical rows** (`unified/fa2_parity_20261024.sh` ->
-            `fa2_rows_compare_20261024.py`, arm `v3rows` = v3's own FA2 row launch with its merge; flashinfer
-            `b544bb9` + `UNIFIED_SPLIT_POLICY=geometry`, sglang `224e4675b`). Sums over the FA2 rows of each pair of
-            sets:
-            | arm | two-mode sets | four-mode sets |
-            |---|---|---|
-            | v3's FA2 launch (BatchPrefill + merge) | 4.74 ms | 4.33 ms |
-            | ours, fixed split | 5.03 ms (0.94x) | 4.98 ms (0.87x) |
-            | ours, v3's geometry split | 5.39 ms (0.88x) | 5.23 ms (0.83x) |
-            | ours, 32-row tile at v3's KV depth (MMA_KV 4) | 5.10 ms | 4.95 ms |
-            | stock BatchAttention | 4.62 ms | 7.10 ms |
-            - KV depth is not the cause. v3's dispatch gives the 16 tile MMA_KV 2 (the same as ours) and the 32 tile
-              MMA_KV 4; ours at 4 is unchanged. A 256-key 16-row tile needs 128 KB of shared memory and drops to 1
-              CTA/SM, which is why MMA_KV 4 on the 16 class lost 26-36%.
-            - v3's split makes ours worse, because more items means more queue and merge work.
-            - Precision difference: our FA2 partials are BF16, v3's FP32.
-            - **Per-kernel split** (`unified/fa2_profile_20261024.sh` -> `profile_fa2_rows_20261024.py`, torch
-              profiler, eager, same rows):
-              | set | v3 BatchPrefill kernel | v3 merge kernel | ours (one persistent kernel, merge included) |
-              |---|---|---|---|
-              | two-mode | 4.47 ms | 0.20 ms | 5.07 ms |
-              | four-mode | 4.00 ms | 0.27 ms | 4.94 ms |
-              v3's merge is ~5% of its FA2 time, so most of our gap is in the compute kernel, not the merge. The
-              merge-off bound did not run: `UNIFIED_SKIP_MERGE` with merge items leaves merge items waiting for
-              check-ins that never come (a diagnostic-mode artifact, killed).
-            - Next: v3's own BatchPrefill body as a second FA2 executor under the same plan and merge schedule
-              (`UNIFIED_FA2_NP=1`). This isolates the persistent overlap + LPT schedule as the only difference.
-      - [x] 2026-10-24 **Fused unified reduction + both FA2 executors under one plan, stage 1 on 96 captures**
-            (`unified/unified_fa3items_20261024.sh`, root `/opt/tiger/w/unified_fa3items_h200_20261024`; flashinfer
-            `a816f69` without its ticketed NP merge, i.e. the last-arriver version; sglang `7196b35f6`). Changes:
-            - FA3 split rows are reduced by plan-scheduled FA3 merge items inside the FA2 launch (no tail loop).
-            - `UNIFIED_FA2_NP=1` is meant to run v3's own BatchPrefill body (v3 traits; Q32 2x2 with its V2 barrier;
-              `independent_pdl`) under the same plan; see the retraction below.
-            FP32 + 20 graph replays pass on all 96 captures (worst 0.0067, 0 unwritten rows).
-            | set | persistent + FA3 merge items, vs v3 | previous (merge items), vs v3 |
-            |---|---|---|
-            | 32-64K two | 0.966x | 0.972x |
-            | 32-64K four | 0.992x | 0.997x |
-            | 128-256K two | 0.997x | 0.996x |
-            | 128-256K four | 0.991x | 0.995x |
-            - **Retracted 2026-10-24: every "np" / "np2" number was the persistent kernel.**
-              `build_unified_h200_20261024.py` forwards an explicit list of `-D` flags, and `UNIFIED_FA2_NP` was not
-              on it. The profiler's kernel name showed `UnifiedFA2Kernel` (the persistent kernel) in the np2 build.
-              So the claims "v3's body under our plan is as slow as the persistent kernel" and "ticketed merge items
-              change nothing" measured nothing. Fixed: the flag is forwarded, and each driver now fails unless the
-              build log's nvcc line carries the switch.
-            - Where the loss sits on the persistent kernel (FA2 rows alone, per capture vs v3's FA2 launch): steps with
-              1-2 FA2 rows at 37-155K KV take 0.71-0.74x of v3's time (0.050 vs 0.036 ms; 0.130 vs 0.095 ms), with
-              the same 4096 chunk (38 chunks) in both. Many-row steps are at 0.83-1.00x.
-            - [x] 2026-10-24 **v3's body under our plan, switch verified on the nvcc line**
-                  (`unified/unified_np2_20261024.sh`, flashinfer `a816f69`, build script forwarding `UNIFIED_FA2_NP`).
-                  FP32 + 20 graph replays pass on all 96 captures (worst 0.0067).
-                  | | FA2 rows two-mode, vs v3's FA2 launch | FA2 rows four-mode | stage 1 vs v3 (32-64K two / four, 128-256K two / four) |
-                  |---|---|---|---|
-                  | v3 body + ticketed merge items | 0.910x | 0.942x (4.59 vs 4.33 ms) | 0.956 / 0.991 / 0.995 / 0.995x |
-                  | persistent overlap + LPT | 0.936x | 0.841x (5.15 ms) | 0.966 / 0.992 / 0.997 / 0.991x |
-                  - On 4-mode FA2 rows v3's body is 12% faster than the persistent kernel; on 2-mode decode rows it is
-                    3% slower.
-                  - Worst steps are still 1-2 FA2 rows with long KV (0.72-0.86x). For those, the plan's fixed FA2 rule
-                    rounds work/CTAs up to the next power of two: 2048 at 2 rows x 37.6K KV, against v3's 1024. That
-                    gives ~150 CTAs of twice the length on 264 slots, an under-filled GPU.
-            - [x] 2026-10-24 **v3's split inside the plan** (`unified/unified_geomfa3_20261024.sh`; FP32 + 5 graph
-                  replays pass on all 96 for every arm). Stage 1 vs v3 (32-64K two / four, 128-256K two / four) and
-                  FA2 rows vs v3's FA2 launch (two / four):
-                  | arm | stage 1 | FA2 rows |
-                  |---|---|---|
-                  | v3 body, `geometry_fa3` (v3's FA3 split, fixed FA2) | 0.980 / 1.004 / 0.999 / 1.003x | 0.914 / 0.942x |
-                  | v3 body, `geometry` (v3's FA3 and FA2 split) | 0.951 / 0.993 / 0.994 / 1.004x | 0.854 / 0.881x |
-                  | persistent, `geometry` | 0.965 / 0.982 / 0.999 / 0.997x | 0.872 / 0.801x |
-                  - **v3's FA3 split helps:** 32-64K two goes from 0.956 to 0.980x, and two sets reach parity. It stays.
-                  - **v3's FA2 split makes ours worse even with v3's body:** with split, tile and body all matching v3,
-                    FA2 rows are 0.85x. The remaining difference is our in-launch merge machinery, whose cost grows with
-                    the chunk count:
-                    - a ticket atomic and an exit atomic on one global counter for every CTA (~700 CTAs per step);
-                    - hundreds of spin-waiting 4-row merge-item CTAs.
-                    v3 pays neither; its merge kernel is ~4 us per step.
-            - [ ] Last-arriver merge with blockIdx dispatch for the v3-body executor (`UNIFIED_NP_MERGE=0`: no ticket
-                  atomics, no merge CTAs; one counter per group), under `geometry_fa3` and `geometry`
-                  (`unified/unified_nplast_20261024.sh`, running).
-      - [x] 2026-10-25 **H20 (78 SMs) stage 1 on fresh captures, three FA2 executors under one plan, v3's FA3 split**
-            (H20 job `2f608c1b1a67cf09` pod 0, GPU 0, while the H200 re-fork queues).
-            - Captures: `unified/trace_sampled_capture_h20_20261024.sh`, 92 captures, same intervals as the H200.
-            - v3 baseline: `unified/rebench_trace_sampled_v3_h20_20261024.sh`.
-            - Comparison: `unified/unified_h20_compare_20261024.sh`, root `/opt/tiger/w/unified_h20_20261024`.
-            - Code: flashinfer `1de9b02`, sglang `HEAD`.
-            Native v3 vs sglang's FA3 call on H20: 1.190 / 1.219 / 1.187 / 1.094x (32-64K two / four, 128-256K two /
-            four), level with the per-step best FA3 variant (0.99-1.00x). FP32 + 5 graph replays pass on all 92 for
-            every arm.
-            | arm (geometry_fa3) | stage 1 vs v3 | vs sglang FA3 | FA2 rows vs v3's FA2 launch (two / four) |
-            |---|---|---|---|
-            | v3 body, last-arriver merge | 0.967 / 0.965 / 0.983 / 0.980x | 1.15-1.18x | 6.38 vs 5.45 / 10.16 vs 7.16 ms |
-            | v3 body, ticketed merge items | 0.966 / 0.974 / 0.982 / 0.982x | 1.07-1.19x | 6.49 vs 5.46 / 8.98 vs 7.16 ms |
-            | persistent overlap + LPT | (fixed-split run pending) | | 6.30 vs 5.47 / 9.93 vs 7.16 ms |
-            - **Every executor is 2-3.5% behind v3, with v3 faster on almost every capture (0/23 the other way),**
-              including FA3-dominated 128-256K steps. A loss that uniform points at a fixed per-step cost in our path,
-              not at the FA2 executor. Candidates: the FA3 launch through `UpstreamFA3SchedulerAdapter` vs stock FA3's
-              own scheduler under the same split, and a per-run page-table scatter or plan copy.
-            - FA2 rows on H20 lose more than on the H200: four-mode 0.70-0.80x of v3's FA2 launch.
-            - [x] 2026-10-25 **Per-launch profile, v3 vs unified (v3 body, last-arriver merge, geometry_fa3), H20**
-                  (`unified/profile_step_20261025.py`, torch profiler, eager; FA2 kernel times include PDL co-run time):
-                  | capture | v3 FA3 | our FA3 | v3 FA2 + merge kernel | our FA2 (merge in-kernel) |
-                  |---|---|---|---|---|
-                  | 128-256K four, 1 prefill + 1 verify row | 3521 us | 3566 us | 697 + 4 us | 251 us |
-                  | 128-256K four, 47 verify rows | 11.9 us | 11.8 us | 222.5 + 7.5 us | 330 us |
-                  | 32-64K two, 48 decode rows | 11.4 us | 11.6 us | 71.2 + 5.3 us | 76.6 us |
-                  - **Cause 1, the uniform 1-2%:** FA3-dominated steps pay +1.3% in the same flash-attention kernel at
-                    the same split. Ours runs through `UpstreamFA3SchedulerAdapter`; v3 uses stock FA3's own tile
-                    scheduler (longest-first causal varlen tiles with a head swizzle). Fix being measured:
-                    `UNIFIED_FA3_STOCK=1` (flashinfer `848610b`). The plan picks the split count, stock FA3
-                    runs with its own scheduler as v3 launches it, and the plan's FA3 merge items in the FA2 launch
-                    reduce its partials (no combine launch). `unified/unified_h20_stock_20261025.sh`.
-                  - **Cause 2, many verify rows at long KV:** the fixed FA2 rule picked an 8192 chunk where v3 uses
-                    4096, and our FA2 is 43% slower there.
-                  - [x] 2026-10-25 `geometry` (v3's FA2 split too) on the v3-body executor
-                        (`unified/unified_h20_geometry_20261025.sh`; FP32 + graph replays pass on all 92):
-                        | executor | stage 1 vs v3 | FA2 rows vs v3 (two / four) |
-                        |---|---|---|
-                        | v3 body, last-arriver merge | 0.956 / 0.944 / 0.985 / 0.980x | 6.69 vs 5.47 / 11.80 vs 7.16 ms |
-                        | v3 body, ticketed merge items | 0.961 / 0.975 / 0.984 / 0.986x | 6.29 vs 5.47 / 7.81 vs 7.16 ms |
-                        With v3's fine FA2 chunks, spreading the merge over CTAs is what helps: four-mode FA2 rows go
-                        to 7.81 ms (best so far), and last-arriver gets worse. The FA3 deficit (cause 1) remains in
-                        every set.
-                  - Stock-FA3 path, first run: every check failed with `stock PDL prototype requires matching page-1
-                    NHD KV tensors`. Stock's op takes page-1 KV as `[tokens, kv_heads, d]`, while the FA2 launch takes
-                    `[pages, 1, kv_heads, d]`. Fixed by passing a 3-D view of the same storage. Five captures then
-                    pass FP32 + graph replays.
-                  - [x] 2026-10-25 **Stock FA3 under the unified plan removes the uniform deficit: parity with v3**
-                        (`unified/unified_h20_stock_20261025.sh`, flashinfer `848610b`, sglang `50bb38462` executor; FP32
-                        + graph replays pass on all 92 captures for every arm). Stage 1 vs native v3 (32-64K two /
-                        four, 128-256K two / four) and vs sglang's FA3 call:
-                        | arm | vs v3 | vs sglang FA3 |
-                        |---|---|---|
-                        | ticketed merge, `geometry` | 0.994 / 1.002 / 0.997 / 1.001x | 1.18 / 1.22 / 1.18 / 1.10x |
-                        | ticketed merge, `geometry_fa3` | 0.998 / 1.002 / 0.996 / 0.999x | 1.19 / 1.22 / 1.18 / 1.09x |
-                        | last-arriver merge, `geometry` | 0.990 / 0.981 / 0.997 / 1.000x | 1.18 / 1.20 / 1.18 / 1.09x |
-                        - The FA3 scheduler was the 1-2% (cause 1).
-                        - A6 is now level with v3 but not ahead, so the call reduction alone is worth under 1%.
-                        - The gain has to come from the FA2 side: per-row tile classes (four-mode decode rows on the
-                          16 tile instead of v3's Q32), and closing the remaining FA2-rows gap (7.81 vs 7.16 ms).
+- [ ] **A6. Unified fine-grained tile dispatcher + merge schedule (THE kernel contribution).**
+      One CPU plan per step routes every row of the mixed batch to FA3 or an FA2 tile class, splits KV, and fixes the
+      merge schedule. FA3 and FA2 run as two PDL-chained launches. The FA2 launch reduces every split row, FA2's and
+      FA3's, so there is no merge launch. Judged against native v3, which runs the same FA3 kernel: v3's FA2 path is our
+      tuned BatchPrefill (Q32, FP32 partials, direct BF16 output, geometry_v3 split).
+      Code: flashinfer-private `unified_dispatch_20261024` (port07: `fused_plan.cuh`, `unified_merge.cuh`,
+      `prefill.cuh`, `tests/unified_dispatch_ext.cu`); sglang `tasks/debug_kernel_server_perf/resume_20261012/unified/`.
 
-      - [x] 2026-10-25 **FA2 merge cost located and cut (H20, stock FA3, `geometry`)** (`unified/profile_fa2_rows_20261024.py`;
-            FA2 rows only, per kernel):
-            | capture | v3 prefill + merge kernels | ours, merge-free bound (`UNIFIED_MERGE_MODE=jit`, output wrong) | ours, merge items |
-            |---|---|---|---|
-            | 32-64K four, 2 rows | 42.6 + 3.5 us | 29.5 us | 57.3 us |
-            | 32-64K two, 3 rows | 32.0 + 3.2 us | 20.6 us | 42.2 us |
-            | 32-64K two, 47 rows | 77.3 + 5.4 us | 82.7 us | 93.2 us |
-            - **Our compute is faster than v3's** on few-row steps (BF16 partials against v3's FP32). The merge was
-              the cost: one warp per row walked all of a row's chunks in a serial loop.
-            - **Chunk-parallel merge** (8 chunk groups x 4 column groups per warp, 16-byte loads, three shuffle
-              rounds): FA2 rows 6.29 -> 5.80 ms (two-mode, 0.94x v3's 5.47) and 7.81 -> 7.37 ms (four-mode, 0.97x
-              v3's 7.17). Stage 1 with stock FA3: 0.997-1.005x v3.
-            - Last-arriver merge with the new reduction: 5.79 / 8.26 ms; worse on four-mode, where one CTA reduces a
-              28-row group.
-            - Interleaving merge items L groups behind their compute (`UNIFIED_MERGE_LAG`): no gain. Lag 8 gives
-              5.85 / 7.47 ms, lag 0 6.44 / 8.84 ms, against 5.80 / 7.37 ms without it. Not used.
-            - **Race found and fixed (2026-10-25).** The queue-driven ticketed kernel hit `cudaErrorIllegalAddress` mid-set;
-              the same captures alone, or in pairs, pass. The NP kernel is a PDL dependent whose compute CTAs never
-              wait, so the next graph replay can start as soon as this grid's CTAs exit. The last CTA's plain-store
-              reset of the ticket counter is not ordered before the next launch's ticket atomics, so a ticket can land
-              past the grid, and `queue[t]` reads out of bounds. The group and merged counters have the same exposure.
-              Fixed: every cross-launch reset is an `atomicExch`, in both the NP and persistent kernels, and an
-              out-of-range ticket traps.
-              - With the atomic resets (`unified/unified_h20_np2r_20261025.sh`) the trap still fired on every FA2-rows
-                run: atomics were necessary but not sufficient.
-              - The real cause: the embedded BatchPrefill body ends with `griddepcontrol.launch_dependents`, so each
-                compute CTA released the next launch while it still had epilogue work (group check-in; for the last
-                CTA, the counter reset). Two launches of the same plan then overlapped on one counter and one partial
-                slab.
-              - Fixed with a Params trait, `suppress_pdl_trigger` (`prefill.cuh`), set by the NP executor: dependents
-                launch at CTA exit.
-            - [x] 2026-10-25 **Race-fixed executor beats v3's FA2 launch** (`unified/unified_h20_np2s_20261025.sh`;
-                  flashinfer `cda2acf`; three repeats; FP32 + 20 graph replays pass on all 92, the
-                  trap never fires):
-                  | | two-mode | four-mode |
-                  |---|---|---|
-                  | v3's FA2 launch | 5.46 ms | 7.16 ms |
-                  | ours (v3 body, chunk-parallel ticketed merge, `geometry`, stock FA3) | 5.30 ms (1.03x) | 6.48 ms (1.105x) |
-                  - Repeats agree to within 0.01 ms.
-                  - The early trigger had also let back-to-back launches overlap, which distorted every earlier FA2
-                    timing of this executor. Every NP FA2-rows number above this line predates the fix.
-            - [x] 2026-10-25 **Stage 1 with this executor: still parity** (`unified/unified_h20_np2s_stage1_20261025.sh`,
-                  flashinfer `cda2acf`):
-                  | split | vs v3 (32-64K two / four, 128-256K two / four) | vs sglang FA3 |
-                  |---|---|---|
-                  | `geometry` | 0.998 / 1.008 [1.002-1.017] / 0.999 / 1.002x | 1.19 / 1.23 / 1.19 / 1.10x |
-                  | `geometry_fa3` | 0.998 / 1.003 / 0.996 / 0.999x | 1.19 / 1.22 / 1.18 / 1.09x |
-                  FA2 rows alone are 3-10% faster than v3's FA2 launch. In the full step FA2 runs largely under FA3
-                  (PDL), so that saving barely reaches wall time: the step's critical path is FA3 plus whatever FA2
-                  work does not fit beside it.
-            - [x] 2026-10-25 **SM pre-assignment: no gain over PDL co-run (measured negative)**
-                  (`unified/unified_h20_smbudget_20261025.sh`, oracle `unified/sm_oracle_20261025.py`). Stage 1 with the
-                  FA3 grid capped at 70 / 62 / 54 / 46 of 78 SMs, FA2 starting on the free SMs at step start:
-                  | set | fixed 70 | fixed 46 | full SMs | per-step oracle over budgets | steps won by full SMs |
-                  |---|---|---|---|---|---|
-                  | 32-64K two | 0.869x | 0.612x | 0.998x | 0.999x | 10 / 22 |
-                  | 32-64K four | 0.891x | 0.621x | 1.008x | 1.008x | 12 / 24 |
-                  | 128-256K two | 0.859x | 0.602x | 0.999x | 0.999x | 13 / 23 |
-                  | 128-256K four | 0.862x | 0.604x | 1.002x | 1.002x | 18 / 23 |
-                  - Even a per-step oracle over budgets, which no cost model can beat, gains under 0.1% over giving FA3
-                    every SM.
-                  - The steps where a smaller FA3 budget wins are short ones that carry little time. Long steps are
-                    FA3-bound and lose in proportion to the SMs taken away.
-                  - Reserving SMs for FA2 adds nothing beyond PDL co-run, where FA2 fills FA3's gaps. This matches the
-                    2026-10-17 bound (co-run worth <= 2% of serving GPU time) and the 2026-10-21 serving negative for
-                    a per-step margin.
-            - **Where A6 stands on H20 (2026-10-25):**
-              - The kernel step is level with native v3 (0.998-1.008x) and 1.10-1.23x sglang's FA3 call.
-              - Inside it, the FA2 path is 3-10% faster than v3's (in-launch chunk-parallel merge, BF16 partials).
-              - The FA3 side runs stock flash-attention under the plan's split.
-              - Kernel-level headroom over v3 on these steps is essentially exhausted. The fused step's wall time is
-                FA3's, and neither SM partitioning nor merge placement moves it.
-      - [ ] **FA3 scheduling:** v3's geometry_v3 prefix split inside the unified plan; dynamic pulling with a
-            causal-aware LPT cost in the adapter.
-      - [ ] **(Optional) DSMEM JIT reduction, as the MELD paper does it** (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`,
-            sections 4.3 and 5).
-            - Mechanism: each split group's partials go to one consumer CTA in the same cluster. The producer TMA-copies
-              its partial into the consumer's shared-memory slot, and a per-slot mbarrier counts the bytes
-              (`mbarrier.arrive.expect_tx` / `try_wait.parity`).
-            - The producer moves on to its next task at once, and the consumer reduces in its own shared memory after
-              its own work. The plan gives each CTA an ordered instruction list: longest first, short tasks
-              interleaved, reductions placed after their producers.
-            - Built so far (flashinfer, uncommitted): the plan-side grouping, `UNIFIED_MERGE_MODE=dsmem` with groups of
-              <= C splits on contiguous ranks of a C-wide cluster task. Host-checked on 44 geometries, with a corrupted
-              entry reported wrong as the null case.
-            - A cluster-barrier design (sketched, not built) is not what the paper does: it makes the cluster wait for its
-              slowest CTA.
-            - Compare with merge items on the FA2-rows harness and stage 1.
-      - [ ] **48-row FA2 tile with its own warp layout** (16 rows per warp); if it does not beat FA3 on 48-row rows,
-            48 goes to FA3. GLM depends on it.
-      - [ ] Plan time on serving shapes, optimized and overlapped with the previous step.
-      - [ ] Serving executor in the FA3 backend: one plan per step, two PDL launches, no merge launch.
-      - [ ] Stage 1 re-run vs sglang's FA3 call, the best fixed FA3 configuration, native v3 and the role split, with
-            ablations: unified vs two plans; plan-scheduled merge vs separate merges; LPT vs non-persistent; 48 vs FA3.
-      - [ ] Stage 2 audited pairs, only after stage 1 beats v3.
+      **Current result (H20 job `2f608c1b1a67cf09`, 78 SMs, 92 trace-sampled 4-mode MTP captures; flashinfer `cda2acf`;
+      `unified_h20_np2s_20261025.sh`, `unified_h20_np2s_stage1_20261025.sh`).** Every arm passes FP32 + 20 graph
+      replays on all 92 captures.
+      | | 32-64K two | 32-64K four | 128-256K two | 128-256K four |
+      |---|---|---|---|---|
+      | stage 1 vs native v3 | 0.998x | 1.008x [1.002-1.017] | 0.999x | 1.002x |
+      | stage 1 vs sglang's FA3 call | 1.19x | 1.23x | 1.19x | 1.10x |
+      | native v3 vs sglang's FA3 call | 1.19x | 1.22x | 1.19x | 1.09x |
+      FA2 rows alone, vs v3's FA2 launch: 5.30 vs 5.46 ms (two-mode, 1.03x) and 6.48 vs 7.16 ms (four-mode, 1.105x).
+      In the full step, FA2 runs under FA3 (PDL), so the step time is FA3's and the FA2 saving barely shows.
+      H200 (job `8574c727fab6ffbd`): re-capture and the same comparison running (`a6_h200_chain_20261025.sh`).
+
+      **Requirements (user, 2026-10-24)**
+      - [x] (Mandatory) One unified CPU plan per step for FA3 and FA2.
+      - [x] (Mandatory) Fused unified reduction: FA2 and FA3 split partials reduced inside the FA2 launch by the plan's
+            merge schedule, no merge launch.
+      - [ ] A6 beats native v3 on stage 1. Today: level (0.998-1.008x).
+      - [x] FA2 executor chosen with measured causes. v3's BatchPrefill body under our plan beats the persistent
+            overlap + LPT kernel: 6.48 vs 9.93 ms on four-mode FA2 rows (H20, both under the same plan; the persistent
+            number predates the race fix). The persistent kernel stays as the ablation.
+      - [ ] (Optional) DSMEM JIT handoff (MELD).
+      - [x] (Optional) Multicast: under 1% of FA2's KV loads are shared, so FA2 multicast is not built. FA3's ceiling
+            is still open (A5.5).
+      - [x] Partials FP32 or BF16 if the FP32 gate passes: ours are BF16, worst error 0.0081.
+      - [ ] Serving (stages 2-3) only after the kernel is resolved; v3 is the kernel until A6 beats it.
+      - [ ] All three models swept and shown; the paper may keep only Llama-3.3-70B and Qwen2.5-7B.
+
+      **1. Unified plan** (`UnifiedTilePlan`)
+      - Routing: FA2 classes 16 / 32 (48 pending, item 6); rows above 32 packed queries go to FA3. FA2-64 was removed:
+        on GLM's 48-row verify rows FA3 beats it by 1.02-1.59x (`pd_colocation/results_20261023/glm_captured/row_controls.json`).
+      - Host test: 44 real serving geometries, exact coverage, class routing, group and queue invariants, with a
+        corrupted-entry null case (`port07/tests/test_unified_plan.cpp`). Plan time 55-97 us mean, 105-378 us worst.
+      - KV split policies (`UNIFIED_SPLIT_POLICY`), stage 1 vs v3:
+        | policy | FA3 split | FA2 split | result |
+        |---|---|---|---|
+        | `geometry` (used) | v3's geometry_v3 count | v3's `row_split_size` | best with the final executor |
+        | `geometry_fa3` | v3's | fixed | within 0.5% of `geometry` |
+        | `fixed` | work / 2 CTAs | power of two >= work / CTAs | under-fills few-row long-KV steps (8192 where v3 uses 4096) |
+        | `flashinfer`, `dynamic` | persistent-LPT `kv_len_limit` / makespan search | same | 4-8% behind `fixed` (H200, 2026-10-24) |
+
+      **2. FA3 executor**
+      - [x] Stock flash-attention with its own tile scheduler, launched as v3 does, with the plan's split count
+            (`UNIFIED_FA3_STOCK=1`, flashinfer `848610b`). This removed a uniform 1-2% loss: our adapter
+            (`UpstreamFA3SchedulerAdapter`) ran the same kernel 1.3% slower on FA3-bound steps (per-launch profile,
+            `profile_step_20261025.py`).
+      - [x] L2-swizzled tile order for the adapter: no change (within the CI, H200).
+
+      **3. FA2 executor**
+      - [x] v3's BatchPrefill body, non-persistent, both classes in one launch (`UNIFIED_FA2_NP=1`). v3's Q32 layout
+            (2x2 warps, V2 merge-union barrier) and `independent_pdl` are ported into port07's `prefill.cuh`.
+      - [x] Persistent overlap + LPT kernel (ablation). KV depth is not its gap: v3's dispatch uses MMA_KV 2 (16-row)
+            and 4 (32-row); a deeper 16-row tile drops to 1 CTA/SM and loses 26-36%.
+      - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
+            current captures mix q=1 and q=4 rows, so this is untested.
+
+      **4. Fused in-launch reduction**
+      - [x] Plan-scheduled merge items: each group is cut into 4-row items. A CTA takes a ticket; compute tickets come
+            first, so a merge item waits only on members that are already running.
+      - [x] FA3 split rows as merge items of the same schedule, gated on the FA3 grid (no combine launch).
+      - [x] Chunk-parallel merge: 8 chunk groups x 4 column groups per warp, 16-byte loads, three shuffle rounds. The
+            serial per-row loop had made our merge cost 21-28 us per step against v3's 3-8 us merge kernel. Our compute
+            alone is faster than v3's (20.6 vs 32.0 us on a 3-row step: BF16 partials).
+      - Measured negatives:
+        - Last-arriver merge with no tickets: worse on four-mode (one CTA reduces a 28-row group).
+        - Interleaving merge items behind their group's compute (`UNIFIED_MERGE_LAG`): slower at every lag.
+
+      **5. SM pre-assignment** (measured negative, `unified_h20_smbudget_20261025.sh`, `sm_oracle_20261025.py`)
+      - [x] FA3 grid capped at 70 / 62 / 54 / 46 of 78 SMs, FA2 starting on the free SMs:
+        - Fixed caps lose: 0.86-0.89x of v3 at 70 SMs, 0.60-0.62x at 46.
+        - Even a per-step oracle over the caps gains under 0.1% over full-SM FA3 plus PDL co-run (0.999 / 1.008 /
+          0.999 / 1.002x). The steps a smaller cap wins are short.
+
+      **6. Open**
+      - [ ] H200 stage 1 on fresh captures (running).
+      - [ ] 48-row FA2 tile with its own warp layout (16 rows per warp), or 48 to FA3. GLM depends on it. A
+            co-compiled 48 runner spills every class (1 436 B).
+      - [ ] (Optional) DSMEM JIT reduction as MELD does it (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`
+            §4.3, §5). The producer TMA-copies its partial into the consumer's slot under a per-slot mbarrier, and the
+            consumer reduces in shared memory. Plan-side grouping (`UNIFIED_MERGE_MODE=dsmem`) is built and host-checked;
+            the kernel is not.
+      - [ ] Plan time on serving shapes, overlapped with the previous step.
+      - [ ] Serving executor in the FA3 backend, then stage 2 audited pairs, once stage 1 beats v3.
+
+      **Bugs found on the way (all fixed)**
+      - Merges read unwritten partials: a split with no visible key has LSE -inf and an unwritten O slot. Merges skip
+        -inf slots.
+      - A build switch (`UNIFIED_FA2_NP`) never reached nvcc, so two runs measured the persistent kernel. Results
+        retracted; every driver now fails unless each switch is on the nvcc line.
+      - Stock FA3 takes page-1 KV as `[tokens, kv_heads, d]`; the executor passes a 3-D view.
+      - Cross-launch race: the embedded BatchPrefill body triggered the next PDL launch
+        (`griddepcontrol.launch_dependents`) before our epilogue had reset the ticket and group counters, so two launches
+        of one plan overlapped. Fixed with `suppress_pdl_trigger`, atomic resets and a trap on out-of-range tickets.
+        Every NP FA2-rows number taken before the fix is superseded by the table above.
+      - Lost H200: trial `34c7bd503d461dc1` ended on 2026-10-24 with its captures and builds. Re-forked as
+        `8574c727fab6ffbd` and restored with `unified/prov_h200_20261024.sh`.
 - [ ] 2026-10-24 **Stages 2-3 on v3, after the kernel items** (user, 2026-10-24): native v3 is the kernel for these
       arms until A6 beats v3 on stage 1; then A6 replaces it. All three models are swept and shown (the paper may later keep only
       Llama-3.3-70B and Qwen2.5-7B); every model's results are recorded.

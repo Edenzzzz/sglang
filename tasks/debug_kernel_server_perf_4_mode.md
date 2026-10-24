@@ -95,9 +95,29 @@ Tasks, in priority order:
               | v3 body (non-persistent) | 5.31 ms (1.03x) | 6.49 ms (1.10x) | 0.998 / 1.008 / 0.999 / 1.002x |
               With like-for-like fixes the persistent kernel beats v3 on four-mode FA2 rows and matches it on stage 1.
               On FA2 rows it is still 7-10% behind the v3 body.
-        - [ ] Locate the remaining 7-10% (persistent vs v3 body on FA2 rows): compute-only bound of each, then a
-              per-class profile. Candidates: one register budget for both runners (255 regs, 20-24 B spill, against
-              211), the per-item queue atomic, the persistent runner mainloop vs BatchPrefill's.
+        - [x] **The remaining 7-10% is the merge, not the runner** (`unified/unified_h20_compute_bound_20261025.sh`;
+              merge-free bounds, output wrong):
+              | compute only | two-mode | four-mode |
+              |---|---|---|
+              | persistent overlap + LPT | 4.72 ms (1.16x v3's FA2 launch) | 6.19 ms (1.16x) |
+              | v3 body | 5.11 ms (1.07x) | 6.24 ms (1.15x) |
+              - The persistent runner + schedule is the faster FA2 executor: 8% ahead of the v3 body on two-mode
+                decode rows.
+              - Its merge costs 1.10 / 0.73 ms, against 0.20 / 0.25 ms for the v3 body. Per step (47 rows at 58K KV):
+                20 us against 2.4 us.
+              - Cause: merge items sit after every compute item in the one LPT queue, so they run as a tail of about 2-3
+                dependent rounds once compute has drained. The v3 body's merge CTAs are separate blocks that the
+                hardware starts while the compute tail runs.
+              - Measured negatives:
+                - merge-item size (1-32 rows): 4 stays best;
+                - interleaving merge items into the queue: 6.14-6.80 / 7.60-9.37 ms, because it breaks LPT order;
+                - last-arriver merge in the runner epilogue: 5.92 / 7.97 ms.
+        - [ ] **Ready-queue merge** (`UNIFIED_MERGE_MODE=ready`, `unified/unified_h20_persistent_ready_20261025.sh`).
+              - The member that completes a group publishes that group's merge items into a separate ready queue.
+              - CTAs drain published merges (claimed by CAS) before pulling more LPT compute, so merges run as soon as
+                their group is complete, with no group spinning, and the compute order is kept.
+              - Producers only reserve and write codes, the data-driven hand-off of MELD's JIT reduction.
+              - Built; FP32 / graph check, FA2 rows x3 and stage 1 running.
       - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
             current captures mix q=1 and q=4 rows, so this is untested.
 

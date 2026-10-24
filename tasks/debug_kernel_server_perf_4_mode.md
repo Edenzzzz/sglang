@@ -319,10 +319,28 @@ Tasks, in priority order:
                   FA2 rows alone are 3-10% faster than v3's FA2 launch. In the full step FA2 runs largely under FA3
                   (PDL), so that saving barely reaches wall time: the step's critical path is FA3 plus whatever FA2
                   work does not fit beside it.
-            - [ ] **SM pre-assignment ceiling:** stage 1 at fixed FA3 SM budgets of 70 / 62 / 54 / 46 of 78 (FA2 starts
-                  on the free SMs at step start, not only in FA3's gaps). The per-capture oracle over budgets bounds
-                  what a per-step cost model in the plan could reach. `unified/unified_h20_smbudget_20261025.sh`,
-                  running.
+            - [x] 2026-10-25 **SM pre-assignment: no gain over PDL co-run (measured negative)**
+                  (`unified/unified_h20_smbudget_20261025.sh`, oracle `unified/sm_oracle_20261025.py`). Stage 1 with the
+                  FA3 grid capped at 70 / 62 / 54 / 46 of 78 SMs, FA2 starting on the free SMs at step start:
+                  | set | fixed 70 | fixed 46 | full SMs | per-step oracle over budgets | steps won by full SMs |
+                  |---|---|---|---|---|---|
+                  | 32-64K two | 0.869x | 0.612x | 0.998x | 0.999x | 10 / 22 |
+                  | 32-64K four | 0.891x | 0.621x | 1.008x | 1.008x | 12 / 24 |
+                  | 128-256K two | 0.859x | 0.602x | 0.999x | 0.999x | 13 / 23 |
+                  | 128-256K four | 0.862x | 0.604x | 1.002x | 1.002x | 18 / 23 |
+                  - Even a per-step oracle over budgets, which no cost model can beat, gains under 0.1% over giving FA3
+                    every SM.
+                  - The steps where a smaller FA3 budget wins are short ones that carry little time. Long steps are
+                    FA3-bound and lose in proportion to the SMs taken away.
+                  - Reserving SMs for FA2 adds nothing beyond PDL co-run, where FA2 fills FA3's gaps. This matches the
+                    2026-10-17 bound (co-run worth <= 2% of serving GPU time) and the 2026-10-21 serving negative for
+                    a per-step margin.
+            - **Where A6 stands on H20 (2026-10-25):**
+              - The kernel step is level with native v3 (0.998-1.008x) and 1.10-1.23x sglang's FA3 call.
+              - Inside it, the FA2 path is 3-10% faster than v3's (in-launch chunk-parallel merge, BF16 partials).
+              - The FA3 side runs stock flash-attention under the plan's split.
+              - Kernel-level headroom over v3 on these steps is essentially exhausted. The fused step's wall time is
+                FA3's, and neither SM partitioning nor merge placement moves it.
       - [ ] **FA3 scheduling:** v3's geometry_v3 prefix split inside the unified plan; dynamic pulling with a
             causal-aware LPT cost in the adapter.
       - [ ] **(Optional) DSMEM JIT reduction, as the MELD paper does it** (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`,

@@ -4,6 +4,8 @@
   plan.run(q, k_cache, v_cache, scale, out)              # FA3 (task 3) -> PDL -> FA2 + merges
 Claude, 2026-10-24.
 """
+import os
+
 import torch
 
 
@@ -54,9 +56,41 @@ class UnifiedPlan:
         self.plse = torch.empty(splits * h * self.total_q, dtype=torch.float32, device=dev)
         self.lse = torch.empty(self.total_q * h, dtype=torch.float32, device=dev)
         self.filled = False
+        # UNIFIED_FA3_STOCK=1 (must match a -DUNIFIED_FA3_STOCK=1 build): FA3 rows run as stock flash-attention with its
+        # own tile scheduler, launched the way native v3 launches it, with the unified plan's split count. Its split
+        # partials are reduced by the plan's FA3 merge items in the FA2 kernel (no combine launch).
+        self.stock = os.environ.get("UNIFIED_FA3_STOCK") == "1"
+        if self.stock:
+            if not hasattr(torch.ops, "stock_fa3_pdl") or not hasattr(torch.ops.stock_fa3_pdl, "run"):
+                torch.ops.load_library(os.environ["NATIVE_PDL_FA3_LIBRARY"])
+            g = ex.heads // ex.kv_heads
+            ql = (q[1:] - q[:-1]).tolist()
+            fa3 = [n * g >= ex.fa3_min_packed for n in ql]
+            rows = sum(fa3)
+            if fa3 != [True] * rows + [False] * (len(ql) - rows):
+                raise ValueError("stock FA3 needs the FA3 rows to be a prefix of the batch")
+            self.fa3_rows, self.fa3_tokens = rows, int(q[rows])
+            if rows:
+                kvl = kv[:rows]
+                self.pre_indptr = q[:rows + 1].to(dev)
+                self.pre_lengths = kv[:rows].to(dev)
+                self.pre_pages = page_table[:rows, :int(kvl.max())].contiguous()
+                self.pre_max_q = int(max(ql[:rows]))
+                self.po = torch.empty((splits, h, self.fa3_tokens, 128), dtype=torch.float32, device=dev)
+                self.plse = torch.empty((splits, h, self.fa3_tokens), dtype=torch.float32, device=dev)
+                self.pre_lse = torch.empty((h, self.fa3_tokens), dtype=torch.float32, device=dev)
+                self.split_counts = torch.full((rows,), splits, dtype=torch.int32, device=dev)
+                self.tile_counter = torch.zeros(1, dtype=torch.int32, device=dev)
+                self.timeline = torch.empty(0, dtype=torch.int64, device=dev)
 
     def run(self, q, k_cache, v_cache, scale, out):
         ex = self.ex
+        if self.stock and self.fa3_rows:
+            t = self.fa3_tokens
+            torch.ops.stock_fa3_pdl.run(
+                q[:t], k_cache, v_cache, out[:t], self.pre_lse, self.pre_indptr, self.pre_lengths, self.pre_pages,
+                self.po, self.plse, self.split_counts, self.tile_counter, max(1, self.stats["max_splits_fa3"]),
+                self.pre_max_q, ex.num_sm, float(scale), 2 if ex.pdl else 1, self.timeline)
         torch.ops.unified_dispatch.unified_run(
             q, k_cache, v_cache, self.kv_indices, out, ex.int_ws, ex.float_ws, self.plan_vec,
             ex.heads, ex.kv_heads, 1, float(scale), self.q_indptr, self.kv_indptr, self.kv_lens,

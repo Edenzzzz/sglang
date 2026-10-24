@@ -227,8 +227,22 @@ Tasks, in priority order:
               not at the FA2 executor. Candidates: the FA3 launch through `UpstreamFA3SchedulerAdapter` vs stock FA3's
               own scheduler under the same split, and a per-run page-table scatter or plan copy.
             - FA2 rows on H20 lose more than on the H200: four-mode 0.70-0.80x of v3's FA2 launch.
-            - [ ] Per-launch profile of v3 vs unified on the same captures (FA3 kernel time alone, FA2 kernel time
-                  alone, any extra kernels), on H20 now and on the H200 once the re-fork runs.
+            - [x] 2026-10-25 **Per-launch profile, v3 vs unified (v3 body, last-arriver merge, geometry_fa3), H20**
+                  (`unified/profile_step_20261025.py`, torch profiler, eager; FA2 kernel times include PDL co-run time):
+                  | capture | v3 FA3 | our FA3 | v3 FA2 + merge kernel | our FA2 (merge in-kernel) |
+                  |---|---|---|---|---|
+                  | 128-256K four, 1 prefill + 1 verify row | 3521 us | 3566 us | 697 + 4 us | 251 us |
+                  | 128-256K four, 47 verify rows | 11.9 us | 11.8 us | 222.5 + 7.5 us | 330 us |
+                  | 32-64K two, 48 decode rows | 11.4 us | 11.6 us | 71.2 + 5.3 us | 76.6 us |
+                  - **Cause 1, the uniform 1-2%:** FA3-dominated steps pay +1.3% in the same flash-attention kernel at
+                    the same split. Ours runs through `UpstreamFA3SchedulerAdapter`; v3 uses stock FA3's own tile
+                    scheduler (longest-first causal varlen tiles with a head swizzle). Fix being measured:
+                    `UNIFIED_FA3_STOCK=1` (flashinfer HEAD of unified_dispatch_20261024). The plan picks the split count, stock FA3
+                    runs with its own scheduler as v3 launches it, and the plan's FA3 merge items in the FA2 launch
+                    reduce its partials (no combine launch). `unified/unified_h20_stock_20261025.sh`.
+                  - **Cause 2, many verify rows at long KV:** the fixed FA2 rule picked an 8192 chunk where v3 uses
+                    4096, and our FA2 is 43% slower there. `geometry` (v3's FA2 split) on the v3-body executor is
+                    running (`unified/unified_h20_geometry_20261025.sh`).
       - [ ] **FA3 scheduling:** v3's geometry_v3 prefix split inside the unified plan; dynamic pulling with a
             causal-aware LPT cost in the adapter.
       - [ ] **(Optional) DSMEM JIT reduction, as the MELD paper does it** (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`,

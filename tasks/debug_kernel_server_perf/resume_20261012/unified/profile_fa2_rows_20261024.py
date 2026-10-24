@@ -22,7 +22,7 @@ torch.ops.load_library(os.environ["UNIFIED_SO"])
 ITERS = 20
 totals = {"v3rows": collections.Counter(), "unified": collections.Counter()}
 for d in sys.argv[1:]:
-    for path in sorted(Path(d).glob("*.pt")):
+    for path in sorted(Path(d).glob(os.environ.get("PROF_GLOB", "*.pt"))):
         case = B.load_case(path)
         g = case.geometry
         ql = g["query_lengths"]
@@ -71,7 +71,7 @@ for d in sys.argv[1:]:
             per = collections.Counter()
             for e in prof.events():
                 if e.device_type == torch.autograd.DeviceType.CUDA:
-                    per[e.name[:60]] += e.device_time_total / ITERS / 1000.0
+                    per[e.name[:int(os.environ.get("PROF_NAME", "60"))]] += e.device_time_total / ITERS / 1000.0
             totals[name].update(per)
             print(f"PROF {path.parent.parent.name}/{path.name} {name} "
                   + " ".join(f"{k}={v:.4f}ms" for k, v in per.most_common(4)), flush=True)

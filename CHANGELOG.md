@@ -6,9 +6,11 @@
   mechanism as FA2's groups (no tail loop). FP32-exact on all 96 captures.
 - A6: `UNIFIED_FA2_NP=1` runs v3's own BatchPrefill body under the unified plan; v3's Q32 layout fix and
   independent PDL are ported into port07 `prefill.cuh`.
-  - Both executors measure the same (0.96-1.00x v3), so the gap is not the persistent overlap + LPT schedule.
-  - The gap sits in the merge of few-row long-KV steps (0.71-0.74x there): a last-arriving CTA reduced whole
-    groups serially. Next: ticketed merge items in the non-persistent executor (deadlock-free by ticket order).
+  - Retracted the same day: the "np" builds never received `-DUNIFIED_FA2_NP` (the build script forwards a fixed
+    flag list), so their numbers measured the persistent kernel. The flag is now forwarded, and drivers fail if
+    the nvcc line lacks it.
+  - The persistent kernel's gap sits in few-row long-KV steps (0.71-0.74x of v3 there).
+  - Next: the non-persistent executor with ticketed merge items (deadlock-free by ticket order).
 - A5.5: shared-KV ceiling. FA2 under 1% (FA2 multicast not built). FA3 99% from one prefill row's q tiles, which
   are already L2 hits.
 - New plan policy `geometry_fa3` (v3's FA3 split, fixed FA2 split); stage-1 run queued.

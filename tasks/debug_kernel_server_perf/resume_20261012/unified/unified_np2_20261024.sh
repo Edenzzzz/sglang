@@ -20,7 +20,10 @@ for v in "np2 UNIFIED_FA2_NP=1"; do
   env "$@" UNIFIED_FA2_DYNAMIC=1 TORCH_EXTENSIONS_DIR=/opt/tiger/w/torch_ext_unified_$name /dev/shm/w/venv/bin/python -u \
     build_unified_h200_20261024.py /dev/shm/w/ub/port07_unified > build_$name.log 2>&1
   echo "build $name $(grep -c UNIFIED_BUILD_OK build_$name.log)"
-  grep -q UNIFIED_BUILD_OK build_$name.log || { grep -E " error" build_$name.log | head -5; echo BUILD_FAILED; exit 1; }; grep -B1 -A3 "entry function '_Z\(16UnifiedFA2Kernel\|18UnifiedFA2NPKernel\)" build_$name.log | grep -E 'spill|registers'
+  grep -q UNIFIED_BUILD_OK build_$name.log || { grep -E " error" build_$name.log | head -5; echo BUILD_FAILED; exit 1; }
+  # The executor switch must reach the compiler: the build log's nvcc line carries every -D flag.
+  want=$(echo "$@" | grep -oE 'UNIFIED_FA2_NP=[01]')
+  grep -q -- "-D$want" build_$name.log || { echo "FLAG_MISSING $want"; echo BUILD_FAILED; exit 1; }; grep -B1 -A3 "entry function '_Z\(16UnifiedFA2Kernel\|18UnifiedFA2NPKernel\)" build_$name.log | grep -E 'spill|registers'
   grep -E " error" build_$name.log | head -5
 done
 B=/opt/tiger/w/trace_sampled_h200_20261023

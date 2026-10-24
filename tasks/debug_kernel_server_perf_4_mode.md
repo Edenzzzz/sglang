@@ -154,28 +154,27 @@ Tasks, in priority order:
             (`unified/unified_fa3items_20261024.sh`, root `/opt/tiger/w/unified_fa3items_h200_20261024`; flashinfer
             `a816f69` without its ticketed NP merge, i.e. the last-arriver version; sglang `7196b35f6`). Changes:
             - FA3 split rows are reduced by plan-scheduled FA3 merge items inside the FA2 launch (no tail loop).
-            - `UNIFIED_FA2_NP=1` runs v3's own BatchPrefill body (v3 traits; Q32 2x2 with its V2 barrier;
-              `independent_pdl`) under the same plan. Each split group is reduced by its last-arriving chunk.
-            FP32 + 20 graph replays pass on all 96 captures for both (worst 0.0067, 0 unwritten rows).
-            | set | persistent + FA3 merge items, vs v3 | v3 body + last-arriver merge, vs v3 | previous (merge items), vs v3 |
-            |---|---|---|---|
-            | 32-64K two | 0.966x | 0.960x | 0.972x |
-            | 32-64K four | 0.992x | 0.982x | 0.997x |
-            | 128-256K two | 0.997x | 1.000x | 0.996x |
-            | 128-256K four | 0.991x | 0.990x | 0.995x |
-            FA2 rows alone, vs v3's FA2 launch: persistent 0.936x / 0.841x (two / four); v3 body 0.932x / 0.843x.
-            - **The FA2 executor body is not the cause of the gap.** v3's own body under our plan is as slow as the
-              persistent kernel.
-            - **The loss is concentrated where few rows carry long KV.** With 1-2 FA2 rows at 37-155K KV, both arms
-              pick the same 4096 chunk (38 chunks), yet ours takes 0.71-0.74x of v3's time (0.050 vs 0.036 ms, 0.130
-              vs 0.095 ms). Many-row steps are at 0.83-1.00x.
-            - The difference there is the merge. One last-arriving CTA reduces a whole (tile, head) group, 28 rows x
-              38 chunks on 4 warps, after every chunk has finished: a serial tail. v3's merge kernel spreads that
-              work over many CTAs.
-            - [ ] Fix running (`unified/unified_np2_20261024.sh`): ticketed merge items in the non-persistent
-                  executor. A CTA takes an atomic ticket instead of its blockIdx; compute tickets come first, then
-                  FA2 merge items of 4 rows, then FA3 merge items. A merge item waits only on members that are
-                  already running, so it cannot deadlock.
+            - `UNIFIED_FA2_NP=1` is meant to run v3's own BatchPrefill body (v3 traits; Q32 2x2 with its V2 barrier;
+              `independent_pdl`) under the same plan; see the retraction below.
+            FP32 + 20 graph replays pass on all 96 captures (worst 0.0067, 0 unwritten rows).
+            | set | persistent + FA3 merge items, vs v3 | previous (merge items), vs v3 |
+            |---|---|---|
+            | 32-64K two | 0.966x | 0.972x |
+            | 32-64K four | 0.992x | 0.997x |
+            | 128-256K two | 0.997x | 0.996x |
+            | 128-256K four | 0.991x | 0.995x |
+            - **Retracted 2026-10-24: every "np" / "np2" number was the persistent kernel.**
+              `build_unified_h200_20261024.py` forwards an explicit list of `-D` flags, and `UNIFIED_FA2_NP` was not
+              on it. The profiler's kernel name showed `UnifiedFA2Kernel` (the persistent kernel) in the np2 build.
+              So the claims "v3's body under our plan is as slow as the persistent kernel" and "ticketed merge items
+              change nothing" measured nothing. Fixed: the flag is forwarded, and each driver now fails unless the
+              build log's nvcc line carries the switch.
+            - Where the loss sits on the persistent kernel (FA2 rows alone, per capture vs v3's FA2 launch): steps with
+              1-2 FA2 rows at 37-155K KV take 0.71-0.74x of v3's time (0.050 vs 0.036 ms; 0.130 vs 0.095 ms), with
+              the same 4096 chunk (38 chunks) in both. Many-row steps are at 0.83-1.00x.
+            - [ ] Rerun with the switch reaching the compiler (`unified/unified_np2_20261024.sh`, then
+                  `unified_geomfa3_20261024.sh`): v3's body with ticketed merge items under the same plan, plus v3's
+                  split (`geometry_fa3`, `geometry`) for both executors.
       - [ ] **FA3 scheduling:** v3's geometry_v3 prefix split inside the unified plan; dynamic pulling with a
             causal-aware LPT cost in the adapter.
       - [ ] **(Optional) DSMEM JIT reduction, as the MELD paper does it** (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`,

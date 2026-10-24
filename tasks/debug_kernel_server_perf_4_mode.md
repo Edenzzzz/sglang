@@ -121,6 +121,23 @@ Tasks, in priority order:
               the loss is in our plan, queue and in-epilogue merge.
             - **Split-tuned BatchPrefill (v3) beats both:** 0.068 vs 0.090 ms on the profiled capture. Untuned it is
               11x slower, so its edge is the tuned split plus non-persistent hardware scheduling.
+      - [x] 2026-10-24 **The FA2 gap was the merge, and the plan-scheduled merge fixes it** (`unified/fa2_variants_20261024.sh`,
+            `unified/fa2_mergeitems_20261024.sh`; FA2 rows of 32-64K four-mode + 128-256K two-mode, stock
+            BatchAttention 5.36 ms):
+            | our FA2 variant | time | vs BatchAttention |
+            |---|---|---|
+            | dynamic queue, last-arriver JIT merge | 6.21 ms | 0.86x |
+            | static LPT, JIT merge | 5.90 ms | 0.91x |
+            | no merge (wrong output, timing bound) | 4.54 ms | 1.18x |
+            | **merge items, 4 rows** | **4.86 ms** | **1.10x** |
+            | merge items, 8 / 16 rows | 5.25 / 5.61 ms | 1.02x / 0.96x |
+            - **The last-arriver merge was 27% of FA2 time:** one CTA merged a whole group with 4 warps while its
+              queued items waited.
+            - **The fix:** the plan cuts each group into row ranges queued after every compute item, so members only
+              check in, and the merge spreads over the CTAs that pull those items. Deadlock-free, because compute
+              items are always pulled first.
+            - 48 captures pass the FP32 gate, 0 failures in 50 graph replays each.
+            - Stage 1 on all 96 captures with merge items (4 / 2 rows): running, `unified/unified_mergeitems_stage1_20261024.sh`.
       - [ ] FA3 L2-swizzled item order: implemented as `UNIFIED_FA3_ORDER=swizzle` (flashinfer port07), host-checked,
             not yet measured.
       - [ ] Next: close the FA2 plan / merge gap to BatchAttention, then to tuned BatchPrefill; FA2 runner

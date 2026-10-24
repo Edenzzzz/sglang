@@ -50,6 +50,7 @@ load(
         "-DUNIFIED_FA2_MIN_BLOCKS=" + os.environ.get("UNIFIED_FA2_MIN_BLOCKS", "1"),
         "-DUNIFIED_WQ32=" + os.environ.get("UNIFIED_WQ32", "0"),
         "-DUNIFIED_SKIP_MERGE=" + os.environ.get("UNIFIED_SKIP_MERGE", "0"),
+        "-DUNIFIED_FA2_DYNAMIC=" + os.environ.get("UNIFIED_FA2_DYNAMIC", "1"),
         "-DFLASHINFER_FA2_QSPLIT=" + os.environ.get("UNIFIED_FA2_QSPLIT", "0"),
         "--ptxas-options=-v",
         "-U__CUDA_NO_HALF_OPERATORS__", "-U__CUDA_NO_HALF_CONVERSIONS__", "-U__CUDA_NO_HALF2_OPERATORS__",

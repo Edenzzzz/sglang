@@ -51,6 +51,8 @@ load(
         "-DUNIFIED_WQ32=" + os.environ.get("UNIFIED_WQ32", "0"),
         "-DUNIFIED_SKIP_MERGE=" + os.environ.get("UNIFIED_SKIP_MERGE", "0"),
         "-DUNIFIED_FA2_DYNAMIC=" + os.environ.get("UNIFIED_FA2_DYNAMIC", "1"),
+        "-DUNIFIED_MMA_KV16=" + os.environ.get("UNIFIED_MMA_KV16", os.environ.get("UNIFIED_FA2_MMA_KV", "2")),
+        "-DUNIFIED_MMA_KV32=" + os.environ.get("UNIFIED_MMA_KV32", os.environ.get("UNIFIED_FA2_MMA_KV", "2")),
         "-DFLASHINFER_FA2_QSPLIT=" + os.environ.get("UNIFIED_FA2_QSPLIT", "0"),
         "--ptxas-options=-v",
         "-U__CUDA_NO_HALF_OPERATORS__", "-U__CUDA_NO_HALF_CONVERSIONS__", "-U__CUDA_NO_HALF2_OPERATORS__",

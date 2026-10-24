@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.54.0 — Plan-scheduled merge items; unified level with native v3; docs deduplicated (2026-10-24)
+
+- A6: FA2 merge groups are cut into row ranges and queued after every compute item. Our FA2 rows go from 0.86x to
+  1.10x stock BatchAttention, and stage 1 on 96 captures reaches 0.97-1.00x native v3 (level, not better).
+- A6 negatives: the L2-swizzled FA3 tile order and a deeper KV tile on the 16-row class (MMA_KV 4 spills; 8 exceeds
+  the shared-memory limit) do not help. Build knobs `UNIFIED_MMA_KV16` / `UNIFIED_MMA_KV32` (flashinfer `b544bb9`).
+- A6 restated: the baseline is native v3, which runs the same FA3 kernel and an already-tuned FA2 path. Our runner
+  reaches parity with v3's FA2 optimizations first, then the overlap + LPT schedule is measured on top. Open items:
+  MELD-style DSMEM JIT reduction and FA3 split/pulling.
+- Task doc deduplicated:
+  - Multicast is one item (A5.5, reopened for FA3 and FA2 under the unified plan; B3 is merged into it), and
+    backfill is one item (A5.6; B2 is merged into it).
+  - Superseded A6 sub-items are condensed, and the retracted session-rate EDF sweeps are reduced to their one
+    surviving finding.
+  - The stale MuxWise and Dynamo items are closed, and S0's models match the 2026-10-24 decision.
+
 ## v1.53.0 — Unified dispatcher stage 1: correct on 96 captures, 2-5% behind native v3 (2026-10-24)
 
 - Unified tile dispatcher (A6) runs end to end on the trace-sampled captures with three KV-split policies.

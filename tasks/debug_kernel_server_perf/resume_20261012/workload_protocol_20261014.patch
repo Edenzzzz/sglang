@@ -1,0 +1,47 @@
+--- a/python/sglang/benchmark/serving.py
++++ b/python/sglang/benchmark/serving.py
+@@ -109,6 +109,7 @@
+     error: str = ""
+     output_len: int = 0
+     start_time: float = 0.0
++    token_events: List[Tuple[int, float]] = field(default_factory=list)
+     cached_tokens: int = 0
+     cached_tokens_details: Optional[Dict[str, Any]] = None
+     spec_accept_length: float = 0.0
+@@ -784,6 +785,9 @@
+                                 timestamp = time.perf_counter()
+                                 generated_text = data["text"]
+                                 output_len = data["meta_info"]["completion_tokens"]
++
++                                if output_len > last_output_len:
++                                    output.token_events.append((int(output_len), timestamp - st))
+ 
+                                 # First token
+                                 if ttft == 0.0:
+@@ -1964,7 +1968,14 @@
+                 f"{args.backend}_{now}_{args.num_prompts}_{args.dataset_name}.jsonl"
+             )
+ 
++    from sglang.benchmark.workload_protocol import request_key
++
+     result_details = {
++        "request_keys": [request_key(request.prompt, request.output_len) for request in benchmark_requests],
++        "requested_output_lens": [int(request.output_len) for request in benchmark_requests],
++        "request_start_times": [output.start_time for output in outputs],
++        "request_end_times": [output.start_time + output.latency for output in outputs],
++        "token_events": [output.token_events for output in outputs],
+         "input_lens": [output.prompt_len for output in outputs],
+         "output_lens": output_lens,
+         "ttfts": [output.ttft for output in outputs],
+--- a/drivers/workload_driver.py
++++ b/drivers/workload_driver.py
+@@ -466,7 +466,8 @@
+             procs[sname] = (subprocess.Popen(
+                 [VENV_PY, "-m", "sglang.benchmark.serving", "--backend", "sglang",
+                  "--host", "127.0.0.1", "--port", str(PORT), "--model", MODEL,
+-                 *sargs, "--warmup-requests", "4", "--output-file", str(out),
++                 *sargs, *(["--max-concurrency", env["BENCH_MAX_CONCURRENCY"]] if env.get("BENCH_MAX_CONCURRENCY") else []),
++                 "--warmup-requests", "4", "--output-file", str(out),
+                  "--output-details", "--cache-report", "--disable-tqdm",
+                  "--tag", env.get("BENCH_TAG", "")],
+                 stdout=blog, stderr=subprocess.STDOUT, env=env, start_new_session=True), blog)

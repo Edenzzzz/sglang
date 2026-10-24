@@ -1,0 +1,59 @@
+diff --git a/dev/shm/stock_fa3_pdl_work_20261014/stock_fa3_reference.py b/dev/shm/stock_fa3_dispatch_work_20261014/strict_phase_reference.py
+index a3e4cde00..ef0de37ef 100644
+--- a/dev/shm/stock_fa3_pdl_work_20261014/stock_fa3_reference.py
++++ b/dev/shm/stock_fa3_dispatch_work_20261014/strict_phase_reference.py
+@@ -1063,6 +1063,54 @@ def main():
+         else:
+             print(f"[time] SKIPPED: this arm has {rows_bad} bad rows. "
+                   f"No timing is reported for an arm that does not pass.")
++    if rows_bad == 0 and os.environ.get("STRICT_PDL_COMPARE") == "1":
++        assert implementation in stock_phases and stock_arguments is not None
++        saved_implementation = implementation
++        projection = torch.randn((HQ * D, HQ * D), device=DEV, dtype=DT) / math.sqrt(HQ * D)
++        graphs = {}
++        for implementation in stock_phases:
++            for warmup in range(3):
++                run_selected()
++            torch.cuda.synchronize()
++            graph = torch.cuda.CUDAGraph()
++            with torch.cuda.graph(graph):
++                run_selected()
++                projected = o.reshape(o.shape[0], HQ * D) @ projection
++            graphs[implementation] = (graph, projected)
++        for iteration in range(4):
++            if iteration:
++                q.normal_()
++                k_cache.normal_()
++                v_cache.normal_()
++            snapshots = {}
++            projected_snapshots = {}
++            for implementation in stock_phases:
++                o.fill_(float("nan"))
++                stock_partial_o.fill_(float("nan"))
++                stock_partial_lse.fill_(float("nan"))
++                graph, projected = graphs[implementation]
++                graph.replay()
++                snapshots[implementation] = o.clone()
++                projected_snapshots[implementation] = projected.clone()
++            torch.cuda.synchronize()
++            assert all(torch.isfinite(snapshot).all() for snapshot in snapshots.values())
++            wrapped = snapshots["stock_wrapped"]
++            pdl = snapshots["stock_pdl"]
++            primary_differences = int(torch.count_nonzero(wrapped[:nfa3_rows].view(torch.uint8) != pdl[:nfa3_rows].view(torch.uint8)))
++            dependent_differences = int(torch.count_nonzero(wrapped[nfa3_rows:].view(torch.uint8) != pdl[nfa3_rows:].view(torch.uint8)))
++            original_differences = int(torch.count_nonzero(snapshots["stock"].view(torch.uint8) != wrapped.view(torch.uint8)))
++            projected_differences = int(torch.count_nonzero(
++                projected_snapshots["stock_wrapped"].view(torch.uint8) != projected_snapshots["stock_pdl"].view(torch.uint8)
++            ))
++            print(
++                f"STRICT_PDL_COMPARE iteration={iteration} primary_different_bytes={primary_differences} "
++                f"dependent_different_bytes={dependent_differences} projection_different_bytes={projected_differences} "
++                f"original_wrapper_different_bytes={original_differences}",
++                flush=True,
++            )
++            assert primary_differences == dependent_differences == projected_differences == 0
++        implementation = saved_implementation
++        print("STRICT_PDL_COMPARE_PASS", flush=True)
+     print("PASS" if rows_bad == 0 else "FAIL")
+     return 0 if rows_bad == 0 else 1
+ 

@@ -1,0 +1,722 @@
+{
+  "prefill8192_v24_sm112_independent_2.audit.json": {
+    "case": "prefill8192_v24_sm112_independent_2",
+    "mode": "independent",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 16.6165,
+    "unfused_ms": 14.4369,
+    "sha256": "85adc7ff71ec6c1e0e4e18bb5c8561c8ded708b4f6b669c2b9ab2589b91581b7"
+  },
+  "prefill8192_v24_sm112_stock_2.audit.json": {
+    "case": "prefill8192_v24_sm112_stock_2",
+    "mode": "stock",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 14.4279,
+    "unfused_ms": 14.4955,
+    "sha256": "c976b28d70280e51ede11c4d3008397852305a692fb46c3e58ba709fb0544bad"
+  },
+  "prefill8192_v24_sm112_stock_wrapped_2.audit.json": {
+    "case": "prefill8192_v24_sm112_stock_wrapped_2",
+    "mode": "stock_wrapped",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 14.4434,
+    "unfused_ms": 14.4681,
+    "sha256": "2f870429538958316d7e0182833679d0d157417e30ca06d8b89f83e1c6b0bdbb"
+  },
+  "prefill8192_v24_sm112_stock_pdl_2.audit.json": {
+    "case": "prefill8192_v24_sm112_stock_pdl_2",
+    "mode": "stock_pdl",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 14.4069,
+    "unfused_ms": 14.477,
+    "sha256": "19e16fabbb1746a3e7e035e51b400a62668e7f12816ffd853b63e80460fd075e"
+  },
+  "prefill8192_v24_small_independent_2.audit.json": {
+    "case": "prefill8192_v24_small_independent_2",
+    "mode": "independent",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 15.355,
+    "unfused_ms": 14.462,
+    "sha256": "acb648c9b95f44dbb0f18918052af548f3d8eded87538cec08efdda5d6a8b7f2"
+  },
+  "prefill8192_v24_small_stock_2.audit.json": {
+    "case": "prefill8192_v24_small_stock_2",
+    "mode": "stock",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 13.4026,
+    "unfused_ms": 14.5102,
+    "sha256": "b6b9f44f0b79bc6ef7237c69a316523856d84c536a9d874cf8c2bf37e17a655a"
+  },
+  "prefill8192_v24_small_stock_wrapped_2.audit.json": {
+    "case": "prefill8192_v24_small_stock_wrapped_2",
+    "mode": "stock_wrapped",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 13.4065,
+    "unfused_ms": 14.513,
+    "sha256": "9b25b9c9df941dc884581f152feac672a45cf5e5658760651c5879dd5e2b3947"
+  },
+  "prefill8192_v24_small_stock_pdl_2.audit.json": {
+    "case": "prefill8192_v24_small_stock_pdl_2",
+    "mode": "stock_pdl",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 13.4074,
+    "unfused_ms": 14.5492,
+    "sha256": "c1c7e75f9bd25c6c5cdb2529b86c3a168bdf0554dfb49bb80561ebd9d50a7cdf"
+  },
+  "prefill8192_v24_small_stock_pdl_1.audit.json": {
+    "case": "prefill8192_v24_small_stock_pdl_1",
+    "mode": "stock_pdl",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 13.3847,
+    "unfused_ms": 14.4769,
+    "sha256": "d67e69136efbbb943b4463c9b51fe23402f280f4469b11d27b23166c0ca2733d"
+  },
+  "prefill8192_v24_small_stock_wrapped_1.audit.json": {
+    "case": "prefill8192_v24_small_stock_wrapped_1",
+    "mode": "stock_wrapped",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 13.3521,
+    "unfused_ms": 14.5184,
+    "sha256": "11096c036967644ad1e9310be48b0c752651466240f93014e08323cc3b0bf73b"
+  },
+  "prefill8192_v24_small_stock_1.audit.json": {
+    "case": "prefill8192_v24_small_stock_1",
+    "mode": "stock",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 13.3797,
+    "unfused_ms": 14.5397,
+    "sha256": "a8e1df545adea79d54154f0433f058a475096a5339c0e28f162cd8dc21383393"
+  },
+  "prefill8192_v24_small_independent_1.audit.json": {
+    "case": "prefill8192_v24_small_independent_1",
+    "mode": "independent",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 15.3693,
+    "unfused_ms": 14.4501,
+    "sha256": "9b4730e93a8d8725fb050b3df5d4c73e5ad77d3d2925a4d7a793eaf1228018d4"
+  },
+  "prefill8192_v24_sm112_stock_pdl_1.audit.json": {
+    "case": "prefill8192_v24_sm112_stock_pdl_1",
+    "mode": "stock_pdl",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 14.4154,
+    "unfused_ms": 14.4752,
+    "sha256": "53f5af5cd57b23691546fa7d09b3c10cbc417011dd2c48c03733b0a1947be23c"
+  },
+  "prefill8192_v24_sm112_stock_wrapped_1.audit.json": {
+    "case": "prefill8192_v24_sm112_stock_wrapped_1",
+    "mode": "stock_wrapped",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 14.4191,
+    "unfused_ms": 14.4833,
+    "sha256": "e41461e0175c9c6ab6eccd594310b5337f95a0bf8b238d112442fd6b061d6214"
+  },
+  "prefill8192_v24_sm112_stock_1.audit.json": {
+    "case": "prefill8192_v24_sm112_stock_1",
+    "mode": "stock",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 14.4254,
+    "unfused_ms": 14.474,
+    "sha256": "a625b16d182adcdfc2339749798f1b79fc2bb51f12f0daa8c8c2b721984aa740"
+  },
+  "prefill8192_v24_sm112_independent_1.audit.json": {
+    "case": "prefill8192_v24_sm112_independent_1",
+    "mode": "independent",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 16.5588,
+    "unfused_ms": 14.4453,
+    "sha256": "3ad17921493fc1a0e930ca0156bb395a94280679313ecbfc8acba422d6aa47c8"
+  },
+  "split_q32_v8_sm112_independent_2.audit.json": {
+    "case": "split_q32_v8_sm112_independent_2",
+    "mode": "independent",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 0.1642,
+    "unfused_ms": 0.9843,
+    "sha256": "e3466bb74936bd9e00f74770fcf0155e426ce193b698feac6c9b2875ade5c8c6"
+  },
+  "split_q32_v8_sm112_stock_2.audit.json": {
+    "case": "split_q32_v8_sm112_stock_2",
+    "mode": "stock",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 0.1269,
+    "unfused_ms": 0.9853,
+    "sha256": "02f29571506d78bdbeeab43a50aa5cb7da35e1458b19b155a1fb49c91dec4106"
+  },
+  "split_q32_v8_sm112_stock_wrapped_2.audit.json": {
+    "case": "split_q32_v8_sm112_stock_wrapped_2",
+    "mode": "stock_wrapped",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 0.1269,
+    "unfused_ms": 0.9865,
+    "sha256": "d04058cef1594af2a5eb37f991eca6912b2bb29930d56c1320ab4024fc27576b"
+  },
+  "split_q32_v8_sm112_stock_pdl_2.audit.json": {
+    "case": "split_q32_v8_sm112_stock_pdl_2",
+    "mode": "stock_pdl",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 0.1266,
+    "unfused_ms": 0.985,
+    "sha256": "cc4e9aa78990d412598d4403f4e938598672a3699a34bea6f8b551b6e15a34bb"
+  },
+  "split_q32_v8_small_independent_2.audit.json": {
+    "case": "split_q32_v8_small_independent_2",
+    "mode": "independent",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 0.1578,
+    "unfused_ms": 0.9836,
+    "sha256": "801bbbb8c6afa727c5d6c1e0095dc23764c4e8dbacbdbee1df8bd89b80452ea3"
+  },
+  "split_q32_v8_small_stock_2.audit.json": {
+    "case": "split_q32_v8_small_stock_2",
+    "mode": "stock",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 0.1209,
+    "unfused_ms": 0.9895,
+    "sha256": "3e4fdde91c8458d59f02c958c42e09429df54059f3ba2909874dd3e5539b2161"
+  },
+  "split_q32_v8_small_stock_wrapped_2.audit.json": {
+    "case": "split_q32_v8_small_stock_wrapped_2",
+    "mode": "stock_wrapped",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 0.1208,
+    "unfused_ms": 0.984,
+    "sha256": "c310a60e74f6f4c00ec7b482a59e7108cf3b4a03420a49326bdcdc6596e93158"
+  },
+  "split_q32_v8_small_stock_pdl_2.audit.json": {
+    "case": "split_q32_v8_small_stock_pdl_2",
+    "mode": "stock_pdl",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 0.1232,
+    "unfused_ms": 0.9847,
+    "sha256": "7f4a996fe4d311a57c7b6aad90d9781f08508708318ef9107c55ce276f5abc71"
+  },
+  "split_q32_v8_small_stock_pdl_1.audit.json": {
+    "case": "split_q32_v8_small_stock_pdl_1",
+    "mode": "stock_pdl",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 0.1231,
+    "unfused_ms": 0.9839,
+    "sha256": "4f563e5b953d0c4a483e40075776e5b34123e450fdd366dc50e913fe65554c20"
+  },
+  "split_q32_v8_small_stock_wrapped_1.audit.json": {
+    "case": "split_q32_v8_small_stock_wrapped_1",
+    "mode": "stock_wrapped",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 0.1211,
+    "unfused_ms": 0.9856,
+    "sha256": "5843f98ad48e50849242a2f12bb4f3c52526ef27e6a5b48b0d9f69b1c02e6c47"
+  },
+  "split_q32_v8_small_stock_1.audit.json": {
+    "case": "split_q32_v8_small_stock_1",
+    "mode": "stock",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 0.1206,
+    "unfused_ms": 0.9842,
+    "sha256": "a58e0293e19368fdea9ba25d8d823f40bfdf96a67c74a94ea5b108c219d1d6c5"
+  },
+  "split_q32_v8_small_independent_1.audit.json": {
+    "case": "split_q32_v8_small_independent_1",
+    "mode": "independent",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 0.1579,
+    "unfused_ms": 0.9889,
+    "sha256": "ae96c55508f9d869f5d9cf20b4e9ea1e835bb15597fc1a7e639f0b217a5352eb"
+  },
+  "split_q32_v8_sm112_stock_pdl_1.audit.json": {
+    "case": "split_q32_v8_sm112_stock_pdl_1",
+    "mode": "stock_pdl",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 0.1262,
+    "unfused_ms": 0.9844,
+    "sha256": "25d83b49f49d524981c6142cba356934d441a9db7340bb88efa96b1e655629f3"
+  },
+  "split_q32_v8_sm112_stock_wrapped_1.audit.json": {
+    "case": "split_q32_v8_sm112_stock_wrapped_1",
+    "mode": "stock_wrapped",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 0.1272,
+    "unfused_ms": 0.9851,
+    "sha256": "ce0aa801fa0c1487d70e2a656aafcffbdf511c5e694d2b3f38260b5363c843a6"
+  },
+  "split_q32_v8_sm112_stock_1.audit.json": {
+    "case": "split_q32_v8_sm112_stock_1",
+    "mode": "stock",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 0.1271,
+    "unfused_ms": 0.9849,
+    "sha256": "a3d68b8316421b1b5be5bd41011734e3439e363c47d4405cc95b97ccd3a4d472"
+  },
+  "split_q32_v8_sm112_independent_1.audit.json": {
+    "case": "split_q32_v8_sm112_independent_1",
+    "mode": "independent",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 0.164,
+    "unfused_ms": 0.9833,
+    "sha256": "c0af5e8b7824a9a882d695f790b0bee3fc5300ff869190f03acbed8838e4dd0e"
+  },
+  "fa3_8x1024_sm112_independent_2.audit.json": {
+    "case": "fa3_8x1024_sm112_independent_2",
+    "mode": "independent",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 8.539,
+    "unfused_ms": 7.5173,
+    "sha256": "fbf9be554c599c49233fbf6c846e5ebcf219e4b0dc10a2d891f3810f6712ff75"
+  },
+  "fa3_8x1024_sm112_stock_2.audit.json": {
+    "case": "fa3_8x1024_sm112_stock_2",
+    "mode": "stock",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 7.2313,
+    "unfused_ms": 7.4673,
+    "sha256": "06380a36d04245b9dabbc023fc85817ab2e6254b28e41017bec6b084f8e1512f"
+  },
+  "fa3_8x1024_sm112_stock_wrapped_2.audit.json": {
+    "case": "fa3_8x1024_sm112_stock_wrapped_2",
+    "mode": "stock_wrapped",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 7.2278,
+    "unfused_ms": 7.4556,
+    "sha256": "3ad90da2af89dfa7d2d27a880592028ffcf23c34cbbefbc6098f13afafbae783"
+  },
+  "fa3_8x1024_sm112_stock_pdl_2.audit.json": {
+    "case": "fa3_8x1024_sm112_stock_pdl_2",
+    "mode": "stock_pdl",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 7.2043,
+    "unfused_ms": 7.4839,
+    "sha256": "c480003e86d96dede7c0c282fe45f240448635712c286a200ee7389be83e3c2b"
+  },
+  "fa3_8x1024_small_independent_2.audit.json": {
+    "case": "fa3_8x1024_small_independent_2",
+    "mode": "independent",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 7.7526,
+    "unfused_ms": 7.4904,
+    "sha256": "8bcebf5e60dcf409886b05e2757f6a393b2f8e435bada56d17459c1cd150890b"
+  },
+  "fa3_8x1024_small_stock_2.audit.json": {
+    "case": "fa3_8x1024_small_stock_2",
+    "mode": "stock",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 6.7131,
+    "unfused_ms": 7.4882,
+    "sha256": "11fabedc0de52bd571f181d2627f7ef6e0be5e79690deda9f95ab0965f0d0110"
+  },
+  "fa3_8x1024_small_stock_wrapped_2.audit.json": {
+    "case": "fa3_8x1024_small_stock_wrapped_2",
+    "mode": "stock_wrapped",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 6.6996,
+    "unfused_ms": 7.4418,
+    "sha256": "ef64c8c2526a70392b8530bd39ab697608278dbbfc20c41c51f4f431acd42b17"
+  },
+  "fa3_8x1024_small_stock_pdl_2.audit.json": {
+    "case": "fa3_8x1024_small_stock_pdl_2",
+    "mode": "stock_pdl",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 6.6825,
+    "unfused_ms": 7.4378,
+    "sha256": "e91be101009d0271e90b2e8334bcb3bacb1d93bc44327ac1172db6c39967a6f8"
+  },
+  "fa3_8x1024_small_stock_pdl_1.audit.json": {
+    "case": "fa3_8x1024_small_stock_pdl_1",
+    "mode": "stock_pdl",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 6.6817,
+    "unfused_ms": 7.4449,
+    "sha256": "a32b3c469cf88123a9f9b829658e5fad01c45cffaa9d05c3140733c2aeb7c829"
+  },
+  "fa3_8x1024_small_stock_wrapped_1.audit.json": {
+    "case": "fa3_8x1024_small_stock_wrapped_1",
+    "mode": "stock_wrapped",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 6.6707,
+    "unfused_ms": 7.5014,
+    "sha256": "3d2ef554c114372ded9bd9e97d4c5f4dce387de7b9f5a1bb33a333eb76a9e863"
+  },
+  "fa3_8x1024_small_stock_1.audit.json": {
+    "case": "fa3_8x1024_small_stock_1",
+    "mode": "stock",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 6.6878,
+    "unfused_ms": 7.4865,
+    "sha256": "d4348701dd309814839c708eac0d4b6aea99465c1947e656bda068753a7f8123"
+  },
+  "fa3_8x1024_small_independent_1.audit.json": {
+    "case": "fa3_8x1024_small_independent_1",
+    "mode": "independent",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 7.805,
+    "unfused_ms": 7.4962,
+    "sha256": "78e16e470978ebbb8647df56b7e5b0443a5bec81fcd218c7460e6775d4c5c1a3"
+  },
+  "fa3_8x1024_sm112_stock_pdl_1.audit.json": {
+    "case": "fa3_8x1024_sm112_stock_pdl_1",
+    "mode": "stock_pdl",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 7.2844,
+    "unfused_ms": 7.4867,
+    "sha256": "776d19bb1278e8aaf4306d68bb6a06b4d059a5148352edff777a69f7afa7e453"
+  },
+  "fa3_8x1024_sm112_stock_wrapped_1.audit.json": {
+    "case": "fa3_8x1024_sm112_stock_wrapped_1",
+    "mode": "stock_wrapped",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 7.2265,
+    "unfused_ms": 7.4803,
+    "sha256": "456256142ba176cfa0c37cff4e52264bd280ca775d224eb95b44657fd2234b65"
+  },
+  "fa3_8x1024_sm112_stock_1.audit.json": {
+    "case": "fa3_8x1024_sm112_stock_1",
+    "mode": "stock",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 7.231,
+    "unfused_ms": 7.4671,
+    "sha256": "81306e500fbf14ef7f6dc88053b9249055868d6556974389caf2db517fc72ce4"
+  },
+  "fa3_8x1024_sm112_independent_1.audit.json": {
+    "case": "fa3_8x1024_sm112_independent_1",
+    "mode": "independent",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 8.5537,
+    "unfused_ms": 7.5242,
+    "sha256": "7e8e3573f5c983de9a46cc34c8e5ef12f0ce09e4db518204ed5ee37d9ec9ce0b"
+  },
+  "append512_v46_sm112_independent_2.audit.json": {
+    "case": "append512_v46_sm112_independent_2",
+    "mode": "independent",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 2.3183,
+    "unfused_ms": 2.3113,
+    "sha256": "653f467d66e7709f990e26cd4ee70d53080e83a73aa8f5d76f7980d046bc17d4"
+  },
+  "append512_v46_sm112_stock_2.audit.json": {
+    "case": "append512_v46_sm112_stock_2",
+    "mode": "stock",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 2.1949,
+    "unfused_ms": 2.3157,
+    "sha256": "dfadbe43dfbbaa6f662ff9f771fb77c8eed91f6f4a6b6dd92ecef6555e7d2afe"
+  },
+  "append512_v46_sm112_stock_wrapped_2.audit.json": {
+    "case": "append512_v46_sm112_stock_wrapped_2",
+    "mode": "stock_wrapped",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 2.1973,
+    "unfused_ms": 2.3042,
+    "sha256": "c96f76bdc6ebe1b9c04d3f9904c91f7d6eaaff7293eb98ad78396d35595711e6"
+  },
+  "append512_v46_sm112_stock_pdl_2.audit.json": {
+    "case": "append512_v46_sm112_stock_pdl_2",
+    "mode": "stock_pdl",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 2.1876,
+    "unfused_ms": 2.3057,
+    "sha256": "2057914cb773fa13e369687e9d342774b70d040957dccfbcb9e133ac8dcd5cbd"
+  },
+  "append512_v46_small_independent_2.audit.json": {
+    "case": "append512_v46_small_independent_2",
+    "mode": "independent",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 2.3604,
+    "unfused_ms": 2.3164,
+    "sha256": "6c1fd3ff877e7511e2e936d4a416ea1b8eac031ef90032d5bc7317fa97f258be"
+  },
+  "append512_v46_small_stock_2.audit.json": {
+    "case": "append512_v46_small_stock_2",
+    "mode": "stock",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 2.2246,
+    "unfused_ms": 2.3132,
+    "sha256": "87971b66217e393286825fe4652749474c3d67bb9d970fe4f8b7702b90496d63"
+  },
+  "append512_v46_small_stock_wrapped_2.audit.json": {
+    "case": "append512_v46_small_stock_wrapped_2",
+    "mode": "stock_wrapped",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 2.2065,
+    "unfused_ms": 2.3078,
+    "sha256": "681ed5626cdfe11689f30cd192d0db4170db01edd176d136a4ca16012e563a41"
+  },
+  "append512_v46_small_stock_pdl_2.audit.json": {
+    "case": "append512_v46_small_stock_pdl_2",
+    "mode": "stock_pdl",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 2.2103,
+    "unfused_ms": 2.303,
+    "sha256": "288b55dc2be800a2caca8a1d333facde92fe59bc3e8398b9a1a051b1a649877e"
+  },
+  "append512_v46_small_stock_pdl_1.audit.json": {
+    "case": "append512_v46_small_stock_pdl_1",
+    "mode": "stock_pdl",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 2.2057,
+    "unfused_ms": 2.2994,
+    "sha256": "16dc9856dfa0277c623857cbd2a2a9e09afeba5791fea4b5677ce41a85e6d868"
+  },
+  "append512_v46_small_stock_wrapped_1.audit.json": {
+    "case": "append512_v46_small_stock_wrapped_1",
+    "mode": "stock_wrapped",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 2.2124,
+    "unfused_ms": 2.3077,
+    "sha256": "d2a481476e8ea77c86da39ddbb2a967eaa76769575c0d0af571b25569bd7b6a8"
+  },
+  "append512_v46_small_stock_1.audit.json": {
+    "case": "append512_v46_small_stock_1",
+    "mode": "stock",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 2.2111,
+    "unfused_ms": 2.3027,
+    "sha256": "2825cf3182ef996ddc6a3d4d8a2b4920b4ce19803fa0ba19f602a43c40c7449d"
+  },
+  "append512_v46_small_independent_1.audit.json": {
+    "case": "append512_v46_small_independent_1",
+    "mode": "independent",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 2.3627,
+    "unfused_ms": 2.3167,
+    "sha256": "5394d94d2eaa4b28081673e8020aa1e4f0904d66cb3e9c16c60252ed2e549768"
+  },
+  "append512_v46_sm112_stock_pdl_1.audit.json": {
+    "case": "append512_v46_sm112_stock_pdl_1",
+    "mode": "stock_pdl",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 2.1975,
+    "unfused_ms": 2.3048,
+    "sha256": "c9c9efc82610dff67fef2487b39b1de9be0d6dd274e3bdd67c35000d647d5bae"
+  },
+  "append512_v46_sm112_stock_wrapped_1.audit.json": {
+    "case": "append512_v46_sm112_stock_wrapped_1",
+    "mode": "stock_wrapped",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 2.2076,
+    "unfused_ms": 2.303,
+    "sha256": "c3b16fadb79b28e3e8dc123e734e6b05e5d5ac3155e203b0def072e9624e7c5a"
+  },
+  "append512_v46_sm112_stock_1.audit.json": {
+    "case": "append512_v46_sm112_stock_1",
+    "mode": "stock",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 2.2139,
+    "unfused_ms": 2.3126,
+    "sha256": "b638dbec63b0f930ef87ed1a2a97c4be92769df75df0f61d05769289de1cb474"
+  },
+  "append512_v46_sm112_independent_1.audit.json": {
+    "case": "append512_v46_sm112_independent_1",
+    "mode": "independent",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 2.3081,
+    "unfused_ms": 2.3131,
+    "sha256": "abd2e28a204a198c28925d3649680e5a811ded31da9722b7d0e2456b1c9e0f9d"
+  },
+  "prefill2048_v8_sm112_independent_2.audit.json": {
+    "case": "prefill2048_v8_sm112_independent_2",
+    "mode": "independent",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 4.2382,
+    "unfused_ms": 4.0687,
+    "sha256": "97310d609a9bfc91b782b63707aa4bd3b9fcde5f7a2ce8a5826c53b1cf3f4a03"
+  },
+  "prefill2048_v8_sm112_stock_2.audit.json": {
+    "case": "prefill2048_v8_sm112_stock_2",
+    "mode": "stock",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 3.6605,
+    "unfused_ms": 4.0052,
+    "sha256": "5ecb417c5a0db07724ac76380fb5ec8e2df619187136f0891c73f346b6b0e674"
+  },
+  "prefill2048_v8_sm112_stock_wrapped_2.audit.json": {
+    "case": "prefill2048_v8_sm112_stock_wrapped_2",
+    "mode": "stock_wrapped",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 3.6667,
+    "unfused_ms": 4.0224,
+    "sha256": "b2bea051e91ad9e3e17865888ef22b4f03b4fd61cc6f54766e3a27ba08139106"
+  },
+  "prefill2048_v8_sm112_stock_pdl_2.audit.json": {
+    "case": "prefill2048_v8_sm112_stock_pdl_2",
+    "mode": "stock_pdl",
+    "sm_budget": "112",
+    "repeat": 2,
+    "fused_ms": 3.6496,
+    "unfused_ms": 4.0151,
+    "sha256": "e82b8c41a3e6c8ef54a5331de6ffea7af723f4d9f2be4a33cee26fb5dd714531"
+  },
+  "prefill2048_v8_small_independent_2.audit.json": {
+    "case": "prefill2048_v8_small_independent_2",
+    "mode": "independent",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 4.2526,
+    "unfused_ms": 4.0418,
+    "sha256": "a0be0d188c50c7d17c967530e6da79ead68c75793de47c96c4f5cddda8ea8bd1"
+  },
+  "prefill2048_v8_small_stock_2.audit.json": {
+    "case": "prefill2048_v8_small_stock_2",
+    "mode": "stock",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 3.6445,
+    "unfused_ms": 4.0409,
+    "sha256": "fc12fbd62aa529bab9e698aeb74ab1dcb88e592210b5c1cadd0a15a31fb8dea8"
+  },
+  "prefill2048_v8_small_stock_wrapped_2.audit.json": {
+    "case": "prefill2048_v8_small_stock_wrapped_2",
+    "mode": "stock_wrapped",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 3.6426,
+    "unfused_ms": 3.9977,
+    "sha256": "211b1cfa1c1fc4191fa6781d8f3e4abfce3308e32ed0514533e593766376afff"
+  },
+  "prefill2048_v8_small_stock_pdl_2.audit.json": {
+    "case": "prefill2048_v8_small_stock_pdl_2",
+    "mode": "stock_pdl",
+    "sm_budget": "all",
+    "repeat": 2,
+    "fused_ms": 3.6675,
+    "unfused_ms": 4.0263,
+    "sha256": "8b041931d412478780543e64467e9a7b5d14e83ab2448ea73a073feafaafb817"
+  },
+  "prefill2048_v8_small_stock_pdl_1.audit.json": {
+    "case": "prefill2048_v8_small_stock_pdl_1",
+    "mode": "stock_pdl",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 3.6509,
+    "unfused_ms": 4.0088,
+    "sha256": "3d0ed3ccab1eb67b242617573b401ef251a804344e2d84c662c88b78aecdd850"
+  },
+  "prefill2048_v8_small_stock_wrapped_1.audit.json": {
+    "case": "prefill2048_v8_small_stock_wrapped_1",
+    "mode": "stock_wrapped",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 3.6554,
+    "unfused_ms": 4.0111,
+    "sha256": "f963472861e14ad8566edce883f0543a0861f6e6ef159fe3acfa1eb0f986387b"
+  },
+  "prefill2048_v8_small_stock_1.audit.json": {
+    "case": "prefill2048_v8_small_stock_1",
+    "mode": "stock",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 3.654,
+    "unfused_ms": 4.0482,
+    "sha256": "9add5aaff19fe771c3e57dab0e5f15ef09416d398ce172281f2b3a8a7fb1706c"
+  },
+  "prefill2048_v8_small_independent_1.audit.json": {
+    "case": "prefill2048_v8_small_independent_1",
+    "mode": "independent",
+    "sm_budget": "all",
+    "repeat": 1,
+    "fused_ms": 4.258,
+    "unfused_ms": 4.0202,
+    "sha256": "d9273e06f79fd1e1ae997338a414e1bc5085915264249071976c5f32204c63f3"
+  },
+  "prefill2048_v8_sm112_stock_pdl_1.audit.json": {
+    "case": "prefill2048_v8_sm112_stock_pdl_1",
+    "mode": "stock_pdl",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 3.6506,
+    "unfused_ms": 4.0758,
+    "sha256": "146af1fdec07cf2ce527793e8262b8493983251eeefa50f781d9cb50c513a380"
+  },
+  "prefill2048_v8_sm112_stock_wrapped_1.audit.json": {
+    "case": "prefill2048_v8_sm112_stock_wrapped_1",
+    "mode": "stock_wrapped",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 3.6598,
+    "unfused_ms": 4.0292,
+    "sha256": "34849ca5336fb91b182426698c92da2d9d63d932db46a69c80ea1edebd2537ae"
+  },
+  "prefill2048_v8_sm112_stock_1.audit.json": {
+    "case": "prefill2048_v8_sm112_stock_1",
+    "mode": "stock",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 3.6621,
+    "unfused_ms": 4.0533,
+    "sha256": "dc5bd70605ccbf971ab41426b03a41b413533059db48c7a5d4e67bd2e14ed8d0"
+  },
+  "prefill2048_v8_sm112_independent_1.audit.json": {
+    "case": "prefill2048_v8_sm112_independent_1",
+    "mode": "independent",
+    "sm_budget": "112",
+    "repeat": 1,
+    "fused_ms": 4.2363,
+    "unfused_ms": 4.041,
+    "sha256": "290a51acf54892c9271ca44a65d50167751debeee36b263aae5f29237ea3a1f0"
+  }
+}

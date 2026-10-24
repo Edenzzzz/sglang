@@ -1,0 +1,100 @@
+{
+  "archive_sha256": "27d3425c0b04e523c15719d814f03a884a88a05c352b20fc039641077e691b1e",
+  "verified_files": 89,
+  "serving": {
+    "v2/MTPMIXFUSED_B1_BOTH": {
+      "requests": 12,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "split_calls": 0,
+      "fused_calls": 3301
+    },
+    "v2/MTPMIX_SPLIT_B1_BASE": {
+      "requests": 12,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "split_calls": 3001,
+      "fused_calls": 0
+    },
+    "v2/MTPMIX_SPLIT_B1_BOTH": {
+      "requests": 12,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "split_calls": 3001,
+      "fused_calls": 0
+    },
+    "v2/MTPMIX_SPLIT_B1_CHAIN": {
+      "requests": 12,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "split_calls": 3001,
+      "fused_calls": 0
+    },
+    "v3/MTPMIXFUSED_B1_BOTH": {
+      "requests": 12,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "split_calls": 0,
+      "fused_calls": 3401
+    },
+    "v3/MTPMIX_SPLIT_B1_BASE": {
+      "requests": 12,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "split_calls": 3001,
+      "fused_calls": 0
+    },
+    "v3/MTPMIX_SPLIT_B1_BOTH": {
+      "requests": 12,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "split_calls": 3001,
+      "fused_calls": 0
+    },
+    "v3/MTPMIX_SPLIT_B1_CHAIN": {
+      "requests": 12,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "split_calls": 3001,
+      "fused_calls": 0
+    },
+    "v4/MTPMIXFUSED_B1_BOTH": {
+      "requests": 12,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "split_calls": 0,
+      "fused_calls": 3401
+    },
+    "v4/MTPMIX_SPLIT_B1_BASE": {
+      "requests": 12,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "split_calls": 3001,
+      "fused_calls": 0
+    },
+    "v4/MTPMIX_SPLIT_B1_BOTH": {
+      "requests": 12,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "split_calls": 3001,
+      "fused_calls": 0
+    },
+    "v4/MTPMIX_SPLIT_B1_CHAIN": {
+      "requests": 12,
+      "fallbacks": 0,
+      "tracebacks": 0,
+      "split_calls": 3001,
+      "fused_calls": 0
+    }
+  },
+  "shadow": {
+    "server_MTPMIX_SPLIT_B1_SHADOW.audit.json": {
+      "checks": 112,
+      "maximum_context": 12088
+    },
+    "server_MTPMIXFUSED_B1_SHADOW.audit.json": {
+      "checks": 113,
+      "maximum_context": 12085
+    }
+  }
+}

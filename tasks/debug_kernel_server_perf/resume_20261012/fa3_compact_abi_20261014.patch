@@ -1,0 +1,97 @@
+--- a/include/flashinfer/attention/persistent_fa3_fused.cuh
++++ b/include/flashinfer/attention/persistent_fa3_fused.cuh
+@@ -547,6 +547,28 @@
+ #endif
+   FusedPdlRecord<kPdlFa3End, true>(queue.pdl_timeline);
+ }
++
++#if !FLASHINFER_FA3_UPSTREAM && !FLASHINFER_FUSED_PAGED_TMA
++template <typename FA3Mainloop, typename FA3Epilogue, typename FA3Traits,
++          bool LEFT_SLIDING_WINDOW, bool CAUSAL, typename FA3TileScheduler>
++__global__ void __launch_bounds__(FA3Traits::NUM_WARPS * cutlass::NumThreadsPerWarp, 1)
++    CompactFA3PrimaryKernel(
++        CUTE_GRID_CONSTANT typename FA3Mainloop::Params const mainloop_params,
++        CUTE_GRID_CONSTANT typename FA3Epilogue::Params const epilogue_params,
++        CUTE_GRID_CONSTANT typename FA3TileScheduler::Params const scheduler_params,
++        unsigned long long* const timeline, const uint32_t entry_register_count) {
++  extern __shared__ uint8_t smem[];
++  asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
++  FusedPdlRecord<kPdlFa3Start>(timeline);
++  fa3_prefill_body<FA3Mainloop, FA3Epilogue, FA3Traits, LEFT_SLIDING_WINDOW, CAUSAL,
++                   FA3TileScheduler, false>(mainloop_params, epilogue_params, scheduler_params,
++                                           reinterpret_cast<char*>(smem), entry_register_count);
++  cute::tma_store_wait<0>();
++  cp_async::wait_group<0>();
++  __syncthreads();
++  FusedPdlRecord<kPdlFa3End, true>(timeline);
++}
++#endif
+ 
+ template <typename FA3Traits, typename Runner1, typename Runner2, typename Runner3>
+ __global__ void __launch_bounds__(128, 2)
+@@ -941,6 +963,28 @@
+                                                 Scheduler, Runner1, Runner2, Runner3>;
+     }
+   }
++  const bool compact_abi = [] {
++    const char* setting = std::getenv("FUSED_FA3_COMPACT_ABI");
++    return setting != nullptr && setting[0] == '1';
++  }();
++  if (compact_abi) {
++    if (launch_fa2 || !colaunch || symmetric) {
++      FLASHINFER_ERROR("compact FA3 ABI requires the asymmetric native-FA2 PDL path");
++      return cudaErrorInvalidValue;
++    }
++#if FLASHINFER_FA3_UPSTREAM || FLASHINFER_FUSED_PAGED_TMA
++    FLASHINFER_ERROR("compact FA3 ABI currently supports the gather primary only");
++    return cudaErrorInvalidValue;
++#else
++    kernel = (void*)CompactFA3PrimaryKernel<CollectiveMainloop, CollectiveEpilogue,
++                                          KernelTraits, LEFT_SLIDING_WINDOW, CAUSAL, Scheduler>;
++    static bool compact_logged = false;
++    if (!compact_logged) {
++      std::fprintf(stderr, "FA3_PRIMARY_COMPACT_ABI active\n");
++      compact_logged = true;
++    }
++#endif
++  }
+   cudaFuncAttributes kernel_attributes{};
+   FLASHINFER_CUDA_CALL(cudaFuncGetAttributes(&kernel_attributes, kernel));
+   uint32_t entry_register_count = uint32_t(kernel_attributes.numRegs);
+@@ -1151,6 +1195,12 @@
+                   &sm_split_arg,     (void*)&backfill,
+                   (void*)&queue, &entry_register_count};
+ #endif
++  void** launch_args = args;
++#if !FLASHINFER_FA3_UPSTREAM && !FLASHINFER_FUSED_PAGED_TMA
++  void* compact_args[] = {&mainloop_params, &epilogue_params, &scheduler_params,
++                         (void*)&queue.pdl_timeline, &entry_register_count};
++  if (compact_abi) launch_args = compact_args;
++#endif
+   // FLASHINFER_FUSED_CLUSTER=N launches with a real thread-block cluster, which
+   // is the prerequisite for sharing a gathered KV tile across cluster peers via
+   // distributed shared memory. flashinfer's attention has never launched with a
+@@ -1167,6 +1217,10 @@
+     const int v = e ? std::atoi(e) : 1;
+     return v < 1 ? 1 : v;
+   }();
++  if (compact_abi && cluster != 1) {
++    FLASHINFER_ERROR("compact FA3 ABI requires an unclustered primary");
++    return cudaErrorInvalidValue;
++  }
+ #if FLASHINFER_FUSED_PAGED_TMA
+   const char* dedicated_primary = std::getenv("FUSED_FA3_DEDICATED_PRIMARY");
+   if (cluster != 2 || !colaunch || symmetric || launch_fa2 ||
+@@ -1199,10 +1253,10 @@
+     attr[0].val.clusterDim.z = 1;
+     cfg.attrs = attr;
+     cfg.numAttrs = 1;
+-    FLASHINFER_CUDA_CALL(cudaLaunchKernelExC(&cfg, kernel, args));
++    FLASHINFER_CUDA_CALL(cudaLaunchKernelExC(&cfg, kernel, launch_args));
+   } else {
+     FLASHINFER_CUDA_CALL(
+-        cudaLaunchKernel(kernel, grid_dims, block_dims, args, smem_size, stream));
++        cudaLaunchKernel(kernel, grid_dims, block_dims, launch_args, smem_size, stream));
+   }
+   if (colaunch && launch_fa2) {
+     if (symmetric || cluster > 1) {

@@ -1,0 +1,28 @@
+diff --git a/dev/shm/stock_fa3_dispatch_work_20261014/candidate/flashinfer_backend.py b/dev/shm/stock_fa3_unsplit_work_20261014/serving/flashinfer_backend.py
+index 5f1c40a42..5839e614d 100644
+--- a/dev/shm/stock_fa3_dispatch_work_20261014/candidate/flashinfer_backend.py
++++ b/dev/shm/stock_fa3_unsplit_work_20261014/serving/flashinfer_backend.py
+@@ -310,6 +310,9 @@ FUSED_NATIVE_PDL = os.environ.get("SGLANG_FUSED_NATIVE_PDL", "0") == "1"
+ KERNEL_DISPATCH_AUDIT = os.environ.get("SGLANG_KERNEL_DISPATCH_AUDIT", "0") == "1"
+ STOCK_FA3_PDL = os.environ.get("SGLANG_STOCK_FA3_PDL", "0") == "1"
+ STOCK_FA3_PHASE = int(os.environ.get("SGLANG_STOCK_FA3_PHASE", "2"))
++STOCK_FA3_SPLIT_OVERRIDE = int(os.environ.get("SGLANG_STOCK_FA3_SPLIT_OVERRIDE", "0"))
++if not 0 <= STOCK_FA3_SPLIT_OVERRIDE <= 32:
++    raise ValueError("Stock FA3 split override must be zero or a split count from1 to32")
+ if STOCK_FA3_PDL and (not FUSED_NATIVE_PDL or STOCK_FA3_PHASE not in (0, 1, 2)):
+     raise ValueError("Stock FA3 requires native FA2 mode and primary phase0/1/2")
+ _stock_fa3_loaded = False
+@@ -2189,6 +2192,13 @@ class FlashInferAttnBackend(AttentionBackend):
+                                     os.environ[name] = value
+                         _stock_fa3_loaded = True
+                     primary["stock_split_count"] = int(primary["pers_plan"][54])
++                    if STOCK_FA3_SPLIT_OVERRIDE:
++                        primary["stock_split_count"] = STOCK_FA3_SPLIT_OVERRIDE
++                        policy_calls = getattr(self, "stock_split_policy_calls", 0) + 1
++                        self.stock_split_policy_calls = policy_calls
++                        if policy_calls % 100 == 1:
++                            logger.info("STOCK_FA3_SPLIT_POLICY calls=%d planned=%d selected=%d", policy_calls,
++                                        int(primary["pers_plan"][54]), primary["stock_split_count"])
+                     primary["stock_selected"] = 1 <= primary["stock_split_count"] <= 32
+                     if primary["stock_selected"]:
+                         query_count = primary["fa3_tokens"]

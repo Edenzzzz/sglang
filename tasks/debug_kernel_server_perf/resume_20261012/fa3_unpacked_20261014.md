@@ -36,3 +36,27 @@ SHA256 `7dd6207b1328d1d0b86ca87e06dcc763075aa856f73e2a43fc8abace9cb53846`.
 Baseline driver and changed-source hashes were checked on the trial before
 queuing; candidate hashes are checked after private-tree construction.
 The main task document and its large TODOs are untouched.
+
+## Completed GPU result
+
+The run exited successfully at04:40:56 +08:00. All16 numerical/graph gates and
+40 timed cases pass; raw-log hashes were rechecked during collection.
+Two-repeat candidate graph times, in milliseconds:
+
+| Fixture | Packed auto | Packed unsplit | Unpacked128 | Unpacked96 |
+|---|---:|---:|---:|---:|
+| Fresh512 +46 verify | 2.336943 | 2.335202 | 2.330976 | 2.332505 |
+| Prefill2048 +8 verify | 4.762935 | 4.751546 | 4.751112 | 4.954453 |
+| Append512 +46 verify | 3.238782 | 3.219771 | 3.233372 | 3.249014 |
+| FA3-only8x1024 | 9.536257 | 9.546193 | 9.480100 | 9.904263 |
+| Irregular lengths | 0.333568 | 1.249764 | 1.227718 | 1.309019 |
+
+Unpacking does not close the FA3 gap. KV128 differences on the four larger
+fixtures are below0.6%; KV96 is slower. Removing splitting on the irregular
+short-query fixture costs approximately3.7x. Retain packed auto, and do not
+promote this unsplit candidate into serving.
+
+`fa3_unpacked_complete_20261014_audit.json` contains the16 gate records and40
+timings. Full raw logs are in `paired_unpacked_complete_20261014.tar.gz`,
+43,021 bytes, SHA256
+`b42013039ba233e112489fc4058917c88dfaca81bf918ba28ed554bffbd451bf`.

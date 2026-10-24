@@ -1,0 +1,151 @@
+--- a/session_replay.py
++++ b/session_replay.py
+@@ -1,4 +1,5 @@
+ import asyncio
++import json
+ import os
+ import time
+ from pathlib import Path
+@@ -28,6 +29,25 @@
+     requests, send_request, request_rate, replay_timestamps=False, slowdown_factor=1.0
+ ):
+     """Serialize each session regardless of whether recorded think times are replayed."""
++    concurrency = os.environ.get("BENCH_SESSION_CONCURRENCY")
++    if concurrency is not None:
++        if request_rate != float("inf"):
++            raise ValueError("program-concurrency replay requires request-rate inf")
++        path = os.environ.get("BENCH_SESSION_AUDIT_FILE")
++        if not path:
++            raise ValueError("program-concurrency replay requires an audit output path")
++        from sglang.benchmark.session_concurrency import replay_concurrent_sessions
++
++        outputs, report = await replay_concurrent_sessions(
++            requests,
++            send_request,
++            int(concurrency),
++            replay_delays=replay_timestamps,
++            delay_scale=slowdown_factor,
++        )
++        Path(path).write_text(json.dumps(report, indent=2) + "\n")
++        print("PROGRAM_CONCURRENCY", json.dumps({key: value for key, value in report.items() if key not in ("events", "session_rounds")}), flush=True)
++        return outputs
+     if request_rate <= 0 or slowdown_factor < 0:
+         raise ValueError("Session arrival rate must be positive and slowdown nonnegative")
+     sessions = {}
+--- a/tracelab.py
++++ b/tracelab.py
+@@ -1,5 +1,6 @@
+ import gzip
+ import json
++import os
+ import random
+ from typing import Optional
+ from dataclasses import dataclass
+@@ -64,6 +65,8 @@
+             raise ValueError("Invalid TraceLab context-length selection interval")
+         opener = gzip.open if self.dataset_path.endswith(".gz") else open
+         sessions = {}
++        total_limit = int(os.environ.get("BENCH_TRACE_MAX_TOTAL_TOKENS", "0"))
++        excluded_by_window = 0
+         with opener(self.dataset_path, "rt") as source:
+             for line in source:
+                 record = json.loads(line)
+@@ -73,6 +76,9 @@
+                 output_length = int(record.get("output_tokens") or 0)
+                 prefix_length = int(record.get("prefix_tokens") or 0)
+                 append_length = int(record.get("newly_append_tokens") or 0)
++                if total_limit and context_length + output_length > total_limit:
++                    excluded_by_window += 1
++                    continue
+                 if not (
+                     self.min_context_len <= context_length <= self.max_context_len
+                     and output_length >= self.min_output_len
+@@ -166,6 +172,7 @@
+                     inter_round_delay_s=gap,
+                 ))
+         replayed = sorted(row.prompt_len for row in requests)
++        print(f"TraceLab context-window exclusions: {excluded_by_window}; total-token limit={total_limit}")
+         if replayed:
+             pick = lambda q: replayed[min(len(replayed) - 1, int(q * len(replayed)))]
+             print(
+--- a/driver.py
++++ b/driver.py
+@@ -124,6 +124,25 @@
+ 
+ 
+ SCENARIOS = {
++    "kernel_concurrency_env": {
++        "desc": "fixed program-concurrency TraceLab length replay plus natural ShareGPT; kernel screen",
++        "streams": {
++            "agent": codex(
++                int(_env("AGENT_N", "96")),
++                groups=int(_env("AGENT_GROUPS", "48")),
++                min_ctx=int(_env("AGENT_MIN_CTX", "32768")),
++                max_ctx=int(_env("AGENT_MAX_CTX", "65536")),
++                min_out=1,
++                rate=float("inf"),
++            ) + [
++                "--tracelab-providers", "claude,codex",
++                "--tracelab-allow-empty-prefix",
++                "--tracelab-session-weighting", "rounds",
++                "--tracelab-selection-seed", _env("AGENT_SEED", "20261014"),
++            ],
++            "chat": standalone("sharegpt", int(_env("OTHER_N", "2048")), _env("OTHER_RATE", "8")),
++        },
++    },
+     # S1/S2 evaluation matrix: agent + short chat with every axis from the environment, so one
+     # driver sweeps request rate and context range. CHAT_SECONDS sizes the chat stream to the
+     # offered rate, so every rate point runs for about the same wall time.
+@@ -459,6 +478,7 @@
+         env["BENCH_BARRIER_DIR"] = str(barrier)
+     try:
+         for sname, sargs in scenario["streams"].items():
++            env["BENCH_SESSION_AUDIT_FILE"] = str(outdir / f"{method}_{sname}_programs.json")
+             out = outdir / f"{method}_{sname}.json"
+             if out.exists():
+                 out.rename(out.with_suffix(f".previous.{time.time_ns()}.json"))
+--- a/eagle_worker_common.py
++++ b/eagle_worker_common.py
+@@ -70,6 +70,7 @@
+ 
+ logger = logging.getLogger(__name__)
+ _fused_chain_tree_calls = 0
++_fused_chain_tree_warmed = False
+ 
+ 
+ def duplicate_prefix_tail_to_draft_branches(
+@@ -461,6 +462,34 @@
+             tuple(draft_input.draft_probs.shape) if draft_input.draft_probs is not None else None,
+             tuple(parent_list.shape), tuple(top_scores_index.shape),
+         )
++    global _fused_chain_tree_warmed
++    if (
++        os.environ.get("BENCH_WARMUP_CHAIN") == "1"
++        and not _fused_chain_tree_warmed
++        and batch.seq_lens.is_cuda
++        and topk == 1
++        and num_draft_tokens == num_steps + 1
++        and num_draft_tokens <= 32
++    ):
++        from sglang.srt.speculative.fused_chain_tree import build_fused_chain_tree
++
++        assert not torch.cuda.is_current_stream_capturing()
++        for warm_batch in range(1, 49):
++            build_fused_chain_tree(
++                torch.zeros(warm_batch, dtype=draft_input.bonus_tokens.dtype, device=batch.seq_lens.device),
++                torch.zeros((warm_batch, num_steps), dtype=draft_tokens.dtype, device=batch.seq_lens.device),
++                torch.zeros(warm_batch, dtype=batch.seq_lens.dtype, device=batch.seq_lens.device),
++                0,
++                tree_mask_mode=mask_mode,
++                fill_prefix_mask=fill_mask,
++                req_pool_indices=torch.zeros(warm_batch, dtype=batch.req_pool_indices.dtype, device=batch.seq_lens.device),
++                req_to_token=batch.req_to_token_pool.req_to_token,
++                with_mrope=target_worker.model_runner.model_config.model_is_mrope
++                and all(value is None for value in batch.multimodal_inputs),
++            )
++        torch.cuda.synchronize()
++        _fused_chain_tree_warmed = True
++        logger.info("FUSED_CHAIN_WARMUP batches=48 complete")
+     use_fused_chain = (
+         os.environ.get("SGLANG_FUSED_CHAIN_TREE") == "1"
+         and batch.seq_lens.is_cuda

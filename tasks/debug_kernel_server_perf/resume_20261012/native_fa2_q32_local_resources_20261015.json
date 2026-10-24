@@ -1,0 +1,362 @@
+[
+  {
+    "tile_geometry": [
+      16,
+      1,
+      1,
+      8,
+      8,
+      1,
+      4
+    ],
+    "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      16,
+      1,
+      2,
+      8,
+      8,
+      1,
+      4
+    ],
+    "resource": "REG:178 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      16,
+      1,
+      4,
+      8,
+      8,
+      1,
+      4
+    ],
+    "resource": "REG:255 STACK:112 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      16,
+      1,
+      8,
+      8,
+      8,
+      1,
+      4
+    ],
+    "resource": "REG:255 STACK:456 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      32,
+      1,
+      1,
+      8,
+      8,
+      2,
+      2
+    ],
+    "resource": "REG:147 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      32,
+      1,
+      2,
+      8,
+      8,
+      2,
+      2
+    ],
+    "resource": "REG:160 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      32,
+      1,
+      4,
+      8,
+      8,
+      2,
+      2
+    ],
+    "resource": "REG:255 STACK:16 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      32,
+      1,
+      8,
+      8,
+      8,
+      2,
+      2
+    ],
+    "resource": "REG:255 STACK:136 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      64,
+      1,
+      1,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:128 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      64,
+      1,
+      2,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:153 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      64,
+      1,
+      4,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:174 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      64,
+      1,
+      8,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:255 STACK:24 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      128,
+      2,
+      1,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:246 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      128,
+      2,
+      2,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:246 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      128,
+      2,
+      4,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      16,
+      1,
+      1,
+      8,
+      8,
+      1,
+      4
+    ],
+    "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      16,
+      1,
+      2,
+      8,
+      8,
+      1,
+      4
+    ],
+    "resource": "REG:211 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      16,
+      1,
+      4,
+      8,
+      8,
+      1,
+      4
+    ],
+    "resource": "REG:255 STACK:80 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      16,
+      1,
+      8,
+      8,
+      8,
+      1,
+      4
+    ],
+    "resource": "REG:255 STACK:288 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      32,
+      1,
+      1,
+      8,
+      8,
+      2,
+      2
+    ],
+    "resource": "REG:145 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      32,
+      1,
+      2,
+      8,
+      8,
+      2,
+      2
+    ],
+    "resource": "REG:162 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      32,
+      1,
+      4,
+      8,
+      8,
+      2,
+      2
+    ],
+    "resource": "REG:182 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      32,
+      1,
+      8,
+      8,
+      8,
+      2,
+      2
+    ],
+    "resource": "REG:255 STACK:104 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      64,
+      1,
+      1,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:128 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      64,
+      1,
+      2,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:158 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      64,
+      1,
+      4,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:168 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      64,
+      1,
+      8,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:255 STACK:24 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      128,
+      2,
+      1,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:244 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      128,
+      2,
+      2,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:245 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "tile_geometry": [
+      128,
+      2,
+      4,
+      8,
+      8,
+      4,
+      1
+    ],
+    "resource": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:848 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  }
+]

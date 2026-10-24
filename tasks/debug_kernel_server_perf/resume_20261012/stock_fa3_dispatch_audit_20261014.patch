@@ -1,0 +1,35 @@
+diff --git a/dev/shm/stock_fa3_serving_work_20261014/candidate/flashinfer_backend.py b/dev/shm/stock_fa3_dispatch_work_20261014/candidate/flashinfer_backend.py
+index d3bc106cb..5f1c40a42 100644
+--- a/dev/shm/stock_fa3_serving_work_20261014/candidate/flashinfer_backend.py
++++ b/dev/shm/stock_fa3_dispatch_work_20261014/candidate/flashinfer_backend.py
+@@ -307,6 +307,7 @@ _FS_NP = {torch.int32: "int32", torch.int64: "int64"}
+ # fault to that extra plan rather than to the FA3 half.
+ FUSED_SPLIT_NO_FA2_WRAPPER = os.environ.get("SGLANG_FUSED_SPLIT_NOFA2", "0") == "1"
+ FUSED_NATIVE_PDL = os.environ.get("SGLANG_FUSED_NATIVE_PDL", "0") == "1"
++KERNEL_DISPATCH_AUDIT = os.environ.get("SGLANG_KERNEL_DISPATCH_AUDIT", "0") == "1"
+ STOCK_FA3_PDL = os.environ.get("SGLANG_STOCK_FA3_PDL", "0") == "1"
+ STOCK_FA3_PHASE = int(os.environ.get("SGLANG_STOCK_FA3_PHASE", "2"))
+ if STOCK_FA3_PDL and (not FUSED_NATIVE_PDL or STOCK_FA3_PHASE not in (0, 1, 2)):
+@@ -1687,6 +1688,22 @@ class FlashInferAttnBackend(AttentionBackend):
+         mask = np.asarray(mask, dtype=bool)
+         fa3_rows, fa2_rows = np.nonzero(mask)[0], np.nonzero(~mask)[0]
+         self.fused_split_plans += 1
++        if KERNEL_DISPATCH_AUDIT:
++            from sglang.srt.layers.attention.mixed_dispatch import DECODE_POPULATION_GUARD
++
++            two_sided = bool(len(fa3_rows) and len(fa2_rows))
++            long_selected = int(np.count_nonzero(mask & (_kv_tiles >= 256))) if two_sided else 0
++            self.kernel_dispatch_long_rows = getattr(self, "kernel_dispatch_long_rows", 0) + long_selected
++            self.kernel_dispatch_two_sided = getattr(self, "kernel_dispatch_two_sided", 0) + int(two_sided)
++            if self.fused_split_plans % 200 == 1 or long_selected and not getattr(self, "kernel_dispatch_long_logged", False):
++                logger.info(
++                    "KERNEL_DISPATCH_AUDIT guard=%d plans=%d two_sided=%d long_mixed_rows=%d selected_max_kv_tiles=%d",
++                    int(DECODE_POPULATION_GUARD), self.fused_split_plans,
++                    self.kernel_dispatch_two_sided, self.kernel_dispatch_long_rows,
++                    int(np.max(_kv_tiles[mask])) if two_sided else 0,
++                )
++                if long_selected:
++                    self.kernel_dispatch_long_logged = True
+         if len(fa3_rows) == 0 or len(fa2_rows) == 0:
+             # One-sided partition: nothing to split. The decode-population guard refuses
+             # fusion for pure long-prefill batches by design, so on a prefill-only workload

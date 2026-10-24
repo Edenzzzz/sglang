@@ -46,3 +46,34 @@ ShareGPT source text and controlled lengths, not unmodified ShareGPT length
 and output distributions. The sampler truncates/repeats prompts to256–512
 tokens and samples48–96 output tokens. It remains a controlled comparison;
 it is not evidence that all natural chat distributions meet the goal.
+
+## Completed three-range result
+
+All12 arms completed at04:23:45 +08:00 on2026-10-14. Every arm has the expected
+request count, graph decode, positive split/native execution counters, zero
+fallbacks and zero tracebacks. Collection independently rechecked server-log
+hashes and per-request completion/error counts. Two-repeat mean changes:
+
+| Context | Tenant | Output tok/s | Mean TTFT | Mean ITL | Mean TPOT |
+|---|---|---:|---:|---:|---:|
+| 32–64K | Chat | -0.06% | +2.32% | +1.19% | +1.22% |
+| 32–64K | Agent | -1.06% | +3.91% | +0.45% | +0.69% |
+| 64–128K | Chat | -0.07% | +0.56% | +0.15% | +0.27% |
+| 64–128K | Agent | -0.35% | +0.81% | -0.15% | +0.54% |
+| 128–256K | Chat | -1.88% | -1.06% | +1.91% | +1.92% |
+| 128–256K | Agent | +1.23% | +6.33% | -12.44% | -9.41% |
+
+The longest-context agent arm improves ITL, but worsens TTFT while chat loses
+throughput. This is not a uniform serving win and does not meet the goal's
+30% latency/10% throughput threshold against the split. Aggregate reported
+acceptance differences stay below0.4%; that alone does not prove equivalent
+per-request scheduling. Keep the plain stock-FA3/native-FA2 split as the
+serving control for subsequent model validation.
+
+`native_pdl_paired_serving_complete_20261014_audit.json` preserves all scalar
+metrics, execution audits and result-file hashes. The adjacent shared archive
+`paired_unpacked_complete_20261014.tar.gz` contains the serving CSV, environment,
+source hashes, gate comparison logs and run log, plus the unpacked kernel logs.
+Its SHA256 is
+`b42013039ba233e112489fc4058917c88dfaca81bf918ba28ed554bffbd451bf`.
+Full per-request serving outputs remain on the trial at the recorded root.

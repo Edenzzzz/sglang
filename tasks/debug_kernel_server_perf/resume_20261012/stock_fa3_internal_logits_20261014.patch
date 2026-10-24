@@ -1,0 +1,15 @@
+diff --git a/dev/shm/stock_fa3_dispatch_work_20261014/baseline/eagle_worker_v2.py b/dev/shm/stock_fa3_dispatch_work_20261014/candidate/eagle_worker_v2.py
+index 12cb2a68a..baa0e0484 100644
+--- a/dev/shm/stock_fa3_dispatch_work_20261014/baseline/eagle_worker_v2.py
++++ b/dev/shm/stock_fa3_dispatch_work_20261014/candidate/eagle_worker_v2.py
+@@ -1681,6 +1681,10 @@ class EAGLEWorkerV2(BaseSpecWorker):
+         lo = batch_output.logits_output
+         pre_logits = lo.next_token_logits[:n_pre_rows]
+         ver_logits = lo.next_token_logits[n_pre_rows:]
++        if os.environ.get("SGLANG_KERNEL_LOGIT_AUDIT"):
++            from sglang.srt.speculative.kernel_logit_audit import capture_mixed_logits
++
++            capture_mixed_logits(batch, running, verify_input, pre_logits, ver_logits)
+         pre_hidden = ver_hidden = None
+         if lo.hidden_states is not None:
+             # Bound the verify slice explicitly. These are FULL per-token states, and under a

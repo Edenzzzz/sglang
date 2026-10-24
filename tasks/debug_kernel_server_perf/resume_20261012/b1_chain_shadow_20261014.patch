@@ -1,0 +1,47 @@
+--- a/python/sglang/srt/speculative/eagle_worker_common.py
++++ b/python/sglang/srt/speculative/eagle_worker_common.py
+@@ -489,6 +489,44 @@
+         tree_outputs = tree_outputs[:6]
+         global _fused_chain_tree_calls
+         _fused_chain_tree_calls += 1
++        if _fused_chain_tree_calls <= 32 or _fused_chain_tree_calls % 10 == 0:
++            actual_lengths = batch.seq_lens.cpu().tolist()
++            reference_outputs = build_tree_kernel_efficient(
++                draft_input.bonus_tokens,
++                parent_list,
++                top_scores_index,
++                draft_tokens,
++                batch.seq_lens,
++                sum(actual_lengths),
++                topk,
++                num_steps,
++                num_draft_tokens,
++                mask_mode,
++                None,
++                fill_prefix_mask=True,
++            )
++            for output_index, (actual, expected) in enumerate(zip(tree_outputs, reference_outputs)):
++                if output_index == 0:
++                    actual = actual[:expected.numel()]
++                    if mask_mode == TreeMaskMode.FULL_MASK and not fill_mask:
++                        start = 0
++                        for length in actual_lengths:
++                            stop = start + num_draft_tokens * (length + num_draft_tokens)
++                            torch.testing.assert_close(
++                                actual[start:stop].view(num_draft_tokens, -1)[:, length:],
++                                expected[start:stop].view(num_draft_tokens, -1)[:, length:],
++                                rtol=0, atol=0,
++                            )
++                            start = stop
++                        continue
++                torch.testing.assert_close(actual, expected, rtol=0, atol=0)
++            columns = batch.seq_lens[:, None] + torch.arange(num_draft_tokens, device=batch.seq_lens.device)
++            expected_cache = batch.req_to_token_pool.req_to_token[batch.req_pool_indices[:, None], columns]
++            torch.testing.assert_close(prepared_out_cache_loc, expected_cache.flatten().long(), rtol=0, atol=0)
++            logger.info(
++                "FUSED_CHAIN_VALIDATED calls=%d batch=%d min_context=%d max_context=%d",
++                _fused_chain_tree_calls, bs, min(actual_lengths), max(actual_lengths),
++            )
+         if _fused_chain_tree_calls % 100 == 1:
+             logger.info(
+                 "FUSED_CHAIN_TREE calls=%d batch=%d width=%d mode=%d prefix=%s",

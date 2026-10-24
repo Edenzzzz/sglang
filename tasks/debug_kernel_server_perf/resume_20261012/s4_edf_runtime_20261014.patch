@@ -1,0 +1,175 @@
+--- a/python/sglang/srt/managers/scheduler.py
++++ b/python/sglang/srt/managers/scheduler.py
+@@ -1377,6 +1377,7 @@
+         )
+ 
+     def init_schedule_policy(self):
++        self._init_edf_runtime()
+         # Init schedule policy and new token estimation
+         self.policy = SchedulePolicy(
+             self.schedule_policy,
+@@ -3271,6 +3272,73 @@
+         req.update_finish_state()
+         self.output_streamer.stream_output([req], req.return_logprob)
+ 
++    def _init_edf_runtime(self):
++        self.edf_enabled = os.environ.get("SGLANG_EDF_SCHEDULING", "0") == "1"
++        self.edf_latency_predictor = None
++        self.edf_queue_calls = 0
++        self.edf_chunk_calls = 0
++        self.edf_observe_calls = 0
++        if self.edf_enabled:
++            from sglang.srt.managers.edf_scheduler import try_load_latency_predictor
++
++            self.edf_latency_predictor = try_load_latency_predictor()
++            logger.info("EDF_RUNTIME enabled=1 model=%s", self.edf_latency_predictor is not None)
++
++    def _edf_limit_chunk(self, running_batch, chunk_size):
++        if (not self.edf_enabled or self.edf_latency_predictor is None
++                or not self.is_mixed_chunk or not chunk_size or not running_batch.reqs):
++            return chunk_size
++        from sglang.srt.managers.edf_scheduler import (
++            edf_allow_prefill_at_kv_usage,
++            edf_compute_max_chunk_size,
++        )
++
++        usage = self.pool_stats_observer.get_pool_stats().get_max_pool_usage()
++        if not edf_allow_prefill_at_kv_usage(usage):
++            return 0
++        if self.chunked_req is not None:
++            prefix = self.chunked_req.prefix_len
++        elif self.waiting_queue:
++            candidate = self.waiting_queue[0]
++            candidate.init_next_round_input(self.tree_cache)
++            prefix = max(candidate.prefix_len, getattr(candidate, "host_hit_length", 0))
++        else:
++            return chunk_size
++        if running_batch.seq_lens_cpu is not None:
++            lengths = running_batch.seq_lens_cpu.tolist()
++        else:
++            lengths = [len(req.origin_input_ids) + len(req.output_ids) for req in running_batch.reqs]
++        average_kv = sum(lengths) / max(len(lengths), 1)
++        chosen = edf_compute_max_chunk_size(
++            running_batch.reqs, chunk_size, self.edf_latency_predictor.predict,
++            decode_avg_kv=average_kv, prefill_prefix_len=prefix,
++        )
++        chosen = chosen // self.page_size * self.page_size
++        self.edf_chunk_calls += 1
++        if self.edf_chunk_calls == 1 or self.edf_chunk_calls % 200 == 0:
++            logger.info("EDF_RUNTIME_CHUNK calls=%d requested=%d admitted=%d prefix=%d decode=%d kv=%.1f",
++                        self.edf_chunk_calls, chunk_size, chosen, prefix, len(lengths), average_kv)
++        return chosen
++
++    def _edf_observe_batch(self, batch):
++        if not self.edf_enabled:
++            return
++        from sglang.srt.managers.edf_scheduler import edf_observe_tokens
++
++        now = time.monotonic()
++        for req in batch.reqs:
++            previous = getattr(req, "_edf_prev_out", None)
++            current = len(req.output_ids)
++            if current > (previous if previous is not None else 0):
++                req._edf_last_step_time = now
++            edf_observe_tokens(req)
++            if previous is not None and current > previous:
++                self.edf_observe_calls += 1
++                if self.edf_observe_calls == 1 or self.edf_observe_calls % 2000 == 0:
++                    logger.info("EDF_RUNTIME_OBSERVE calls=%d emitted=%d request_ewma=%.4f",
++                                self.edf_observe_calls, current - previous,
++                                getattr(req, "_edf_acc_hat", 1.0))
++
+     def _add_request_to_queue(self, req: Req, is_retracted: bool = False):
+         if not self._set_or_validate_priority(req):
+             self._release_aborted_request(req)
+@@ -3284,6 +3352,17 @@
+                 self._release_aborted_request(req)
+                 return
+             self._prefetch_kvcache(req)
++            if self.edf_enabled:
++                from sglang.srt.managers.edf_scheduler import edf_set_priority, edf_set_retracted_priority
++
++                if is_retracted:
++                    edf_set_retracted_priority(req)
++                else:
++                    edf_set_priority(req)
++                self.edf_queue_calls += 1
++                if self.edf_queue_calls == 1 or self.edf_queue_calls % 200 == 0:
++                    logger.info("EDF_RUNTIME_QUEUE calls=%d retracted=%s priority=%.6f",
++                                self.edf_queue_calls, is_retracted, req.priority)
+             self.waiting_queue.append(req)
+             req.time_stats.set_wait_queue_entry_time()
+             req.arrival_processed_tokens = self.processed_tokens_counter
+@@ -3906,6 +3985,10 @@
+             dynamic_size = self.dynamic_chunk_sizer.predict(history_len)
+             if dynamic_size is not None:
+                 chunked_prefill_size = dynamic_size
++
++        chunked_prefill_size = self._edf_limit_chunk(running_batch, chunked_prefill_size)
++        if chunked_prefill_size == 0:
++            return None, running_batch
+ 
+         # Prefill policy
+         # Get BLOCK_M from the backend for tile-budget admission logic
+@@ -5056,6 +5139,11 @@
+             result.mixed_running_result = None
+             self.batch_result_processor.process_batch_result_decode(_mix_run, _mix_res)
+ 
++        if self.edf_enabled:
++            self._edf_observe_batch(batch)
++            if _mix_run is not None and _mix_run is not batch:
++                self._edf_observe_batch(_mix_run)
++
+         # Submit this batch's queued host backups before the next scheduler step.
+         self.tree_cache.flush_pending_backups()
+ 
+--- a/python/sglang/srt/managers/edf_scheduler.py
++++ b/python/sglang/srt/managers/edf_scheduler.py
+@@ -177,7 +177,9 @@
+     input_len = len(req.origin_input_ids)
+     slo_ms = compute_ttft_slo_ms(input_len)
+     # Use the monotonic arrival time we set in edf_set_priority
+-    arrival_time = getattr(req, "_edf_arrival_monotonic", req.last_tic)
++    arrival_time = getattr(req, "_edf_arrival_monotonic", None)
++    if arrival_time is None:
++        arrival_time = getattr(req, "last_tic", time.monotonic())
+     return arrival_time + slo_ms / 1000.0
+ 
+ 
+@@ -186,7 +188,10 @@
+ 
+     Uses last_tic which is time.monotonic() in schedule_batch.py.
+     """
+-    return req.last_tic + ITL_SLO_MS / 1000.0
++    completed = getattr(req, "_edf_last_step_time", None)
++    if completed is None:
++        completed = getattr(req, "last_tic", time.monotonic())
++    return completed + ITL_SLO_MS / 1000.0
+ 
+ 
+ def edf_set_priority(req: "Req") -> None:
+--- a/drivers/srv_correctness.py
++++ b/drivers/srv_correctness.py
+@@ -103,6 +103,13 @@
+     ]
+ 
+ 
++def priority_arguments():
++    if os.environ.get("SGLANG_EDF_SCHEDULING") != "1":
++        return []
++    return ["--enable-priority-scheduling", "--schedule-low-priority-values-first",
++            "--priority-scheduling-preemption-threshold", "999999"]
++
++
+ def run_arm(arm, outdir):
+     speculative_args = speculative_arguments() if arm.startswith("MTP") else []
+     os.makedirs(outdir, exist_ok=True)
+@@ -115,7 +122,7 @@
+             "--json-model-override-args",
+             '{"rope_scaling":{"factor":4.0,"original_max_position_embeddings":32768,"type":"yarn"}}',
+             "--watchdog-timeout", "600"]
+-    args += speculative_args
++    args += speculative_args + priority_arguments()
+     if os.environ.get("DISABLE_CUDA_GRAPH") == "1":
+         args.append("--disable-cuda-graph")
+     if os.environ.get("BENCH_CHUNK"):

@@ -1,0 +1,83 @@
+diff --git a/dev/shm/native_fa2_q32_work_20261015/port07/include/flashinfer/attention/prefill.cuh b/dev/shm/native_fa2_q32_v2_work_20261015/port07/include/flashinfer/attention/prefill.cuh
+index c726a43f3..c2be0edc1 100644
+--- a/dev/shm/native_fa2_q32_work_20261015/port07/include/flashinfer/attention/prefill.cuh
++++ b/dev/shm/native_fa2_q32_v2_work_20261015/port07/include/flashinfer/attention/prefill.cuh
+@@ -358,6 +358,7 @@ template <MaskMode MASK_MODE_, uint32_t CTA_TILE_Q_, uint32_t NUM_MMA_Q_, uint32
+           // budget, so a default of true would make those paths reserve a buffer they never read.
+           bool ENABLE_FP4_REPACK_ = false, bool ENABLE_NATIVE_Q32_ = false>
+ struct KernelTraits {
++  static constexpr bool ENABLE_NATIVE_Q32 = ENABLE_NATIVE_Q32_;
+   static constexpr uint32_t NUM_STAGES = 1;  // used for BatchAttention Template
+   static constexpr MaskMode MASK_MODE = MASK_MODE_;
+   static constexpr uint32_t NUM_MMA_Q = NUM_MMA_Q_;
+@@ -2228,6 +2229,9 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
+         }
+       }
+     }
++    if constexpr (KTraits::ENABLE_NATIVE_Q32) {
++      __syncthreads();
++    }
+   }
+ }
+ 
+diff --git a/dev/shm/stock_fa3_unsplit_work_20261014/serving/flashinfer_backend.py b/dev/shm/native_fa2_q32_serving_work_20261015/candidate/flashinfer_backend.py
+index 5839e614d..cfaca9931 100644
+--- a/dev/shm/stock_fa3_unsplit_work_20261014/serving/flashinfer_backend.py
++++ b/dev/shm/native_fa2_q32_serving_work_20261015/candidate/flashinfer_backend.py
+@@ -307,6 +307,10 @@ _FS_NP = {torch.int32: "int32", torch.int64: "int64"}
+ # fault to that extra plan rather than to the FA3 half.
+ FUSED_SPLIT_NO_FA2_WRAPPER = os.environ.get("SGLANG_FUSED_SPLIT_NOFA2", "0") == "1"
+ FUSED_NATIVE_PDL = os.environ.get("SGLANG_FUSED_NATIVE_PDL", "0") == "1"
++NATIVE_FA2_QUERY_TILE = int(os.environ.get("SGLANG_NATIVE_FA2_QUERY_TILE", "0"))
++if NATIVE_FA2_QUERY_TILE not in (0, 32, 64) or NATIVE_FA2_QUERY_TILE and not FUSED_NATIVE_PDL:
++    raise ValueError("Native FA2 query-tile override requires native PDL mode and tile32 or64")
++_native_q32_loaded = False
+ KERNEL_DISPATCH_AUDIT = os.environ.get("SGLANG_KERNEL_DISPATCH_AUDIT", "0") == "1"
+ STOCK_FA3_PDL = os.environ.get("SGLANG_STOCK_FA3_PDL", "0") == "1"
+ STOCK_FA3_PHASE = int(os.environ.get("SGLANG_STOCK_FA3_PHASE", "2"))
+@@ -2171,6 +2175,23 @@ class FlashInferAttnBackend(AttentionBackend):
+             )
+             if FUSED_NATIVE_PDL:
+                 primary = split_plan["fused_kernel"]
++                primary["fa2_max_query"] = int(np.asarray(qo_lens, dtype=np.int64)[fa2_rows].max())
++                if NATIVE_FA2_QUERY_TILE:
++                    global _native_q32_loaded
++                    if not _native_q32_loaded:
++                        from load_native_q32 import build
++
++                        saved = {name: os.environ.get(name) for name in ("TORCH_EXTENSIONS_DIR", "SGLANG_FUSED_MERGED_DIR")}
++                        os.environ["TORCH_EXTENSIONS_DIR"] = os.environ["NATIVE_Q32_EXTENSIONS"]
++                        try:
++                            build()
++                        finally:
++                            for name, value in saved.items():
++                                if value is None:
++                                    os.environ.pop(name, None)
++                                else:
++                                    os.environ[name] = value
++                        _native_q32_loaded = True
+                 primary["empty_lse"] = state["native_empty_lse"]
+                 primary["empty_timeline"] = state["native_empty_timeline"]
+                 if STOCK_FA3_PDL:
+@@ -2284,7 +2305,20 @@ class FlashInferAttnBackend(AttentionBackend):
+                 kernel["max_pages"], kernel["max_q"], kernel["kv_lens"], kernel["q_indptr"],
+                 kernel["kv_indptr"], kernel["empty_timeline"],
+             )
+-        ops.native_fa2_run(*native_args)
++        maximum_query = kernel.get("fa2_max_query", 0)
++        maximum_packed = maximum_query * (layer.tp_q_head_num // layer.tp_k_head_num)
++        query_tile_selected = bool(NATIVE_FA2_QUERY_TILE and native._plan_info[3] == 64 and 16 < maximum_packed <= 32)
++        if query_tile_selected:
++            torch.ops.native_fa2_q32.run(*native_args, 32 if NATIVE_FA2_QUERY_TILE == 32 else 0, maximum_query)
++        else:
++            ops.native_fa2_run(*native_args)
++        if NATIVE_FA2_QUERY_TILE:
++            counter_name = "native_query_tile_calls" if query_tile_selected else "native_query_tile_bypass_calls"
++            count = getattr(self, counter_name, 0) + 1
++            setattr(self, counter_name, count)
++            if count % 100 == 1:
++                logger.info("NATIVE_FA2_QUERY_TILE path=%s requested=%d calls=%d maximum_packed=%d original_cta=%d",
++                            counter_name, NATIVE_FA2_QUERY_TILE, count, maximum_packed, native._plan_info[3])
+         if stock_selected:
+             if kernel["stock_split_count"] > 1:
+                 torch.ops.stock_fa3_pdl.run(*stock_arguments, 3, kernel["empty_timeline"])

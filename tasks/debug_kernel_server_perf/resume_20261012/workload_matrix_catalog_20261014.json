@@ -1,0 +1,53 @@
+{
+  "protocol": "slos_serve_request_matched_v1",
+  "source": "https://arxiv.org/html/2504.08784v1",
+  "source_sections": ["Table 1", "Table 3", "Section 6"],
+  "reference": "same requests on stock MTP, client concurrency one, per-request TTFT",
+  "decode_metric": "maximum rolling ten-token TPOT from cumulative token arrival events",
+  "short_response_rule": "use all available post-first-token intervals; one-token responses have no decode constraint",
+  "capacity_violation_fraction_strictly_less_than": 0.1,
+  "requests_per_other_dataset": 128,
+  "methods": ["MTP_LPT", "MTPMIX_LPT", "MTPMIX_SPLIT"],
+  "context_profiles": {
+    "ctx128": {"context_length": 131072, "yarn_factor": 4.0},
+    "ctx256": {"context_length": 262144, "yarn_factor": 8.0}
+  },
+  "tracelab": {
+    "path": "{workdir}/workloads/tracelab/syfi_full_min.jsonl.gz",
+    "providers": "claude,codex",
+    "min_output_tokens": 1,
+    "allow_first_round": true,
+    "session_weighting": "rounds",
+    "ttft_slowdown": 3,
+    "tpot_ms": 50,
+    "mapping": "tool-loop class adaptation; no per-turn semantic stage labels",
+    "ranges": {
+      "mix32": {"min_context": 32768, "max_context": 65536, "requests": 36, "groups": 8, "context_profile": "ctx128"},
+      "mix64": {"min_context": 65536, "max_context": 131072, "requests": 24, "groups": 8, "context_profile": "ctx128"},
+      "mix128": {"min_context": 131072, "max_context": 262144, "requests": 16, "groups": 4, "context_profile": "ctx256"}
+    }
+  },
+  "datasets": {
+    "sharegpt": {"kind": "sharegpt", "rates": [4, 8, 16, 32], "rate_unit": "requests/s", "ttft_slowdown": 5, "tpot_ms": 100, "mapping": "ChatBot class; paper uses ShareGPT"},
+    "humaneval": {"kind": "sharegpt:{workdir}/workloads/standalone/humaneval.json", "rates": [8, 16, 32], "rate_unit": "requests/s", "ttft_slowdown": 5, "tpot_ms": 50, "mapping": "Coder class; paper uses HumanEval"},
+    "gsm8k": {"kind": "sharegpt:{workdir}/workloads/standalone/gsm8k.json", "rates": [8, 16, 32], "rate_unit": "requests/s", "ttft_slowdown": 3, "tpot_ms": 50, "mapping": "Reasoning-class adaptation; generation scored as thinking, no separate answer-stage annotation"},
+    "math500": {"kind": "sharegpt:{workdir}/workloads/standalone/math500.json", "rates": [8, 16, 32], "rate_unit": "requests/s", "ttft_slowdown": 3, "tpot_ms": 50, "mapping": "Reasoning-class adaptation; generation scored as thinking, no separate answer-stage annotation"},
+    "codefeedback": {"kind": "sharegpt:{workdir}/workloads/standalone/codefeedback.json", "rates": [8, 16, 32], "rate_unit": "requests/s", "ttft_slowdown": 5, "tpot_ms": 50, "mapping": "Coder-class adaptation"},
+    "mooncake_conversation": {"kind": "mooncake_conversation", "rates": [0.5, 1, 2], "rate_unit": "trace-speed multiplier", "ttft_slowdown": 5, "tpot_ms": 100, "mapping": "ChatBot-class adaptation; trace-derived hashed-prefix prompts"},
+    "mooncake_toolagent": {"kind": "mooncake_toolagent", "rates": [0.5, 1, 2], "rate_unit": "trace-speed multiplier", "ttft_slowdown": 3, "tpot_ms": 50, "mapping": "Tool-loop-class adaptation; no per-turn semantic stage labels; trace-derived hashed-prefix prompts"},
+    "longbench_v2": {"kind": "longbench_v2", "rates": [0.25, 0.5, 1], "rate_unit": "requests/s", "ttft_slowdown": 3, "tpot_ms": 100, "mapping": "Long-document/short-answer analogue of Summarizer; window exclusions must be reported"}
+  },
+  "mixed_rate_rule": "For request-rate datasets, agent session rate = groups * other request rate / other request count; both arrival spans scale together. For Mooncake, agent rate = 0.1 * trace-speed multiplier.",
+  "coverage": "Each other dataset standalone and alongside real TraceLab in each of three context bands, over all listed rates and all three methods. Full unfiltered TraceLab tails remain a separate pending requirement.",
+  "adaptations": [
+    "The model/hardware differ from the source paper; numeric SLO classes are transferred and zero-load TTFT is measured here.",
+    "Rolling ten-token windows are an explicit conservative operationalization of the paper's every-ten-token measurement.",
+    "Fixed finite request sets permit exact isolated/loaded matching; results are finite-replay measurements, not automatically steady-state capacity.",
+    "Application mappings outside ShareGPT and HumanEval are stated adaptations, not dataset-specific constants quoted by the paper."
+  ],
+  "secondary_reference": {
+    "url": "https://arxiv.org/html/2504.14489v1",
+    "reported_method": "P99 TTFT/TBT; 50 ms TBT for Llama3-8B and 100 ms for Llama3-70B; own-request TTFT budget 1 second per 1K newly processed tokens",
+    "status": "Separate sensitivity/reporting protocol; not interchangeable with ten-token speculative TPOT or silently used as the primary SLO."
+  }
+}

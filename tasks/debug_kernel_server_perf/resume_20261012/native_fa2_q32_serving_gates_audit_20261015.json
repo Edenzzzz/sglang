@@ -1,0 +1,43 @@
+{
+  "MTPMIXFUSED_Q32": {
+    "requests": 12,
+    "requested_tiles": [
+      32
+    ],
+    "selected_calls": 11701,
+    "reference_check": false,
+    "server_sha256": "6197fe5143f66ee929ab00bf75c5a9fd67751b60712fd249497ee9cf6766847e"
+  },
+  "MTPMIXFUSED_Q32_VERIFY": {
+    "requests": 12,
+    "requested_tiles": [
+      32
+    ],
+    "selected_calls": 11601,
+    "reference_check": true,
+    "server_sha256": "00cda93ea1d44b939e1a0b3651938e38e3368cfae3ee010e5021fa11e5b5def1"
+  },
+  "MTPMIXFUSED_Q64_VERIFY": {
+    "requests": 12,
+    "requested_tiles": [
+      64
+    ],
+    "selected_calls": 11601,
+    "reference_check": true,
+    "server_sha256": "07d70711edd0dafd3ab1f039e52cdd405e7ffe00685a95b0c4cc27e8eafde02e"
+  },
+  "MTPMIX_SPLIT_Q32_CONTROL": {
+    "requests": 12,
+    "requested_tiles": [],
+    "selected_calls": 0,
+    "reference_check": false,
+    "server_sha256": "2613c40cc23c1bec42491f98562ac93b058a5ea8144c3100b34dd37d9770797a"
+  },
+  "MTPMIX_SPLIT_Q32_REPEAT": {
+    "requests": 12,
+    "requested_tiles": [],
+    "selected_calls": 0,
+    "reference_check": false,
+    "server_sha256": "1407d06b2c8642c57223289dc4dedbc635f7fb35caac396d1e6aadeb1f4a9a07"
+  }
+}

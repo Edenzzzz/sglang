@@ -1,0 +1,17 @@
+--- a/python/sglang/srt/managers/scheduler.py
++++ b/python/sglang/srt/managers/scheduler.py
+@@ -4878,9 +4878,12 @@
+             trace = self._steptrace = []
+         is_extend = batch.forward_mode.is_extend()
+         seq_lens = batch.seq_lens_cpu.tolist() if batch.seq_lens_cpu is not None else []
++        extend_lens = batch.extend_lens if is_extend else [0] * len(batch.reqs)
++        if extend_lens is None or len(extend_lens) != len(batch.reqs):
++            raise ValueError("STEPTRACE requires per-row batch extend lengths")
+         n_p = p_tok = p_prefix = n_d = d_kv = max_ext = 0
+-        for i, req in enumerate(batch.reqs):
+-            ext = int(getattr(req, "extend_input_len", 0) or 0) if is_extend else 0
++        for i, extend_len in enumerate(extend_lens):
++            ext = int(extend_len)
+             sl = int(seq_lens[i]) if i < len(seq_lens) else 0
+             if ext > 1:
+                 n_p += 1

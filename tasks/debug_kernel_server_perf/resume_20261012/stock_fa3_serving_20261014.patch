@@ -1,0 +1,130 @@
+--- a/python/sglang/srt/layers/attention/flashinfer_backend.py
++++ b/python/sglang/srt/layers/attention/flashinfer_backend.py
+@@ -307,6 +307,11 @@
+ # fault to that extra plan rather than to the FA3 half.
+ FUSED_SPLIT_NO_FA2_WRAPPER = os.environ.get("SGLANG_FUSED_SPLIT_NOFA2", "0") == "1"
+ FUSED_NATIVE_PDL = os.environ.get("SGLANG_FUSED_NATIVE_PDL", "0") == "1"
++STOCK_FA3_PDL = os.environ.get("SGLANG_STOCK_FA3_PDL", "0") == "1"
++STOCK_FA3_PHASE = int(os.environ.get("SGLANG_STOCK_FA3_PHASE", "2"))
++if STOCK_FA3_PDL and (not FUSED_NATIVE_PDL or STOCK_FA3_PHASE not in (0, 1, 2)):
++    raise ValueError("Stock FA3 requires native FA2 mode and primary phase0/1/2")
++_stock_fa3_loaded = False
+ FUSED_KERNEL_EXEC = os.environ.get("SGLANG_FUSED_KERNEL_EXEC", "0") == "1" or FUSED_NATIVE_PDL
+ # Two-launch split: run the FA3 rows on a side stream (holding all but SGLANG_FUSED_SM_MARGIN SMs)
+ # concurrently with the stock FA2 rows on the current stream, instead of back to back. FA3 rows
+@@ -2147,6 +2152,38 @@
+                 primary = split_plan["fused_kernel"]
+                 primary["empty_lse"] = state["native_empty_lse"]
+                 primary["empty_timeline"] = state["native_empty_timeline"]
++                if STOCK_FA3_PDL:
++                    if self.page_size != 1 or iu.head_dim != 128:
++                        raise ValueError("Stock FA3 PDL serving requires page1/head128")
++                    global _stock_fa3_loaded
++                    if not _stock_fa3_loaded:
++                        from load_stock_fa3 import build
++
++                        saved = {name: os.environ.get(name) for name in ("TORCH_EXTENSIONS_DIR", "SGLANG_FUSED_MERGED_DIR")}
++                        os.environ["TORCH_EXTENSIONS_DIR"] = os.environ["STOCK_FA3_EXTENSIONS"]
++                        try:
++                            build()
++                        finally:
++                            for name, value in saved.items():
++                                if value is None:
++                                    os.environ.pop(name, None)
++                                else:
++                                    os.environ[name] = value
++                        _stock_fa3_loaded = True
++                    primary["stock_split_count"] = int(primary["pers_plan"][54])
++                    primary["stock_selected"] = 1 <= primary["stock_split_count"] <= 32
++                    if primary["stock_selected"]:
++                        query_count = primary["fa3_tokens"]
++                        head_count = iu.num_qo_heads
++                        elements = query_count * head_count
++                        primary["stock_lse"] = self._fs_dev_buf("stock_lse", elements, torch.float32, dev)
++                        primary["stock_partial_o"] = self._fs_dev_buf("stock_partial_o", elements * 128 * primary["stock_split_count"], torch.float32, dev)
++                        primary["stock_partial_lse"] = self._fs_dev_buf("stock_partial_lse", elements * primary["stock_split_count"], torch.float32, dev)
++                        primary["stock_splits"] = self._fs_upload("stock_splits", np.full(n_fa3, primary["stock_split_count"], dtype=np.int32), torch.int32, dev)
++                        primary["stock_counter"] = self._fs_dev_buf("stock_counter", 1, torch.int32, dev)
++                        page_shape = split_plan["page_table"].shape
++                        primary["stock_pages"] = self._fs_dev_buf("stock_pages", page_shape[0] * page_shape[1], torch.int32, dev).view(page_shape)
++                        primary["stock_pages"].copy_(split_plan["page_table"])
+                 if FUSED_SPLIT_VERIFY:
+                     full_pages = [
+                         (r2t[int(rp_cpu[row]), :int(original_kv[row]):self.page_size] // self.page_size).to(torch.int32)
+@@ -2191,26 +2228,49 @@
+             output2 = torch.empty_like(query2)
+         ops = getattr(torch.ops, kernel["op_namespace"])
+         native = self.fused_fa2_wrapper
++        stock_selected = kernel.get("stock_selected", False)
++        independent = not stock_selected or STOCK_FA3_PHASE == 2
+         native_args = (
+             query2, key_cache, value_cache, native._qo_indptr_buf,
+             native._paged_kv_indptr_buf, native._paged_kv_indices_buf,
+             native._paged_kv_last_page_len_buf, output2, kernel["empty_lse"],
+             native._float_workspace_buffer, native._int_workspace_buffer,
+-            list(native._plan_info), layer.scaling, True, True, kernel["empty_timeline"],
+-        )
+-        ops.fused_primary_compact(
+-            query3, key_cache, value_cache, kernel["kv_indices"], output3,
+-            kernel["pers_int"], kernel["pers_float"],
+-            kernel["pers_plan"], layer.tp_q_head_num, layer.tp_k_head_num, self.page_size,
+-            layer.scaling, kernel["sm_split"], kernel["num_requests"],
+-            kernel["max_pages"], kernel["max_q"], kernel["kv_lens"], kernel["q_indptr"],
+-            kernel["kv_indptr"], kernel["empty_timeline"],
+-        )
++            list(native._plan_info), layer.scaling, independent, independent, kernel["empty_timeline"],
++        )
++        if stock_selected:
++            stock_arguments = (
++                query3, key_cache.view(-1, layer.tp_k_head_num, layer.head_dim),
++                value_cache.view(-1, layer.tp_v_head_num, layer.v_head_dim), output3,
++                kernel["stock_lse"], kernel["q_indptr"], kernel["kv_lens"], kernel["stock_pages"],
++                kernel["stock_partial_o"], kernel["stock_partial_lse"], kernel["stock_splits"],
++                kernel["stock_counter"], kernel["stock_split_count"], kernel["max_q"], kernel["sm_split"],
++                layer.scaling,
++            )
++            torch.ops.stock_fa3_pdl.run(*stock_arguments, STOCK_FA3_PHASE, kernel["empty_timeline"])
++        else:
++            ops.fused_primary_compact(
++                query3, key_cache, value_cache, kernel["kv_indices"], output3,
++                kernel["pers_int"], kernel["pers_float"],
++                kernel["pers_plan"], layer.tp_q_head_num, layer.tp_k_head_num, self.page_size,
++                layer.scaling, kernel["sm_split"], kernel["num_requests"],
++                kernel["max_pages"], kernel["max_q"], kernel["kv_lens"], kernel["q_indptr"],
++                kernel["kv_indptr"], kernel["empty_timeline"],
++            )
+         ops.native_fa2_run(*native_args)
+-        ops.fused_primary_finish(
+-            output3, kernel["pers_int"], kernel["pers_float"], kernel["pers_plan"],
+-            kernel["num_requests"], layer.tp_q_head_num, layer.tp_k_head_num,
+-        )
++        if stock_selected:
++            if kernel["stock_split_count"] > 1:
++                torch.ops.stock_fa3_pdl.run(*stock_arguments, 3, kernel["empty_timeline"])
++        else:
++            ops.fused_primary_finish(
++                output3, kernel["pers_int"], kernel["pers_float"], kernel["pers_plan"],
++                kernel["num_requests"], layer.tp_q_head_num, layer.tp_k_head_num,
++            )
++        if STOCK_FA3_PDL:
++            counter_name = "stock_fa3_calls" if stock_selected else "stock_fa3_large_split_calls"
++            count = getattr(self, counter_name, 0) + 1
++            setattr(self, counter_name, count)
++            if count % 100 == 1:
++                logger.info("STOCK_FA3_SERVING path=%s calls=%d phase=%d splits=%d", counter_name, count, STOCK_FA3_PHASE, kernel["stock_split_count"])
+         if not use_views:
+             output.index_copy_(0, plan["fa3_tok"], output3)
+             output.index_copy_(0, plan["fa2_tok"], output2)
+--- a/python/sglang/srt/layers/attention/fused_fa3_loader.py
++++ b/python/sglang/srt/layers/attention/fused_fa3_loader.py
+@@ -289,6 +289,10 @@
+         sources=[src],
+         extra_include_paths=includes,
+         extra_cuda_cflags=[
++            *([
++                "--use_fast_math", "-DNDEBUG", "-DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED",
++                "-DCUTLASS_ENABLE_GDC_FOR_SM90", "-DCUTLASS_DEBUG_TRACE_LEVEL=0",
++            ] if os.environ.get("NATIVE_RELEASE_BUILD") == "1" else []),
+             # C++20, not the harness's 17: torch 2.14's headers require it.
+             "-std=c++20",
+             "--expt-relaxed-constexpr",

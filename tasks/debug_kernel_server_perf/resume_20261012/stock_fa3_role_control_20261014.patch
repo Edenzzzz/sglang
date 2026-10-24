@@ -1,0 +1,78 @@
+diff --git a/dev/shm/stock_fa3_dispatch_work_20261014/candidate/flashinfer_backend.py b/dev/shm/stock_fa3_role_control_work_20261014/candidate/flashinfer_backend.py
+index 5f1c40a42..a0963d024 100644
+--- a/dev/shm/stock_fa3_dispatch_work_20261014/candidate/flashinfer_backend.py
++++ b/dev/shm/stock_fa3_role_control_work_20261014/candidate/flashinfer_backend.py
+@@ -307,6 +307,9 @@ _FS_NP = {torch.int32: "int32", torch.int64: "int64"}
+ # fault to that extra plan rather than to the FA3 half.
+ FUSED_SPLIT_NO_FA2_WRAPPER = os.environ.get("SGLANG_FUSED_SPLIT_NOFA2", "0") == "1"
+ FUSED_NATIVE_PDL = os.environ.get("SGLANG_FUSED_NATIVE_PDL", "0") == "1"
++KERNEL_ROLE_CONTROL = os.environ.get("SGLANG_KERNEL_ROLE_CONTROL", "none")
++if KERNEL_ROLE_CONTROL not in ("none", "fa3", "fa2", "both"):
++    raise ValueError("SGLANG_KERNEL_ROLE_CONTROL must be none, fa3, fa2 or both")
+ KERNEL_DISPATCH_AUDIT = os.environ.get("SGLANG_KERNEL_DISPATCH_AUDIT", "0") == "1"
+ STOCK_FA3_PDL = os.environ.get("SGLANG_STOCK_FA3_PDL", "0") == "1"
+ STOCK_FA3_PHASE = int(os.environ.get("SGLANG_STOCK_FA3_PHASE", "2"))
+@@ -2247,7 +2250,9 @@ class FlashInferAttnBackend(AttentionBackend):
+         ops = getattr(torch.ops, kernel["op_namespace"])
+         native = self.fused_fa2_wrapper
+         stock_selected = kernel.get("stock_selected", False)
+-        independent = not stock_selected or STOCK_FA3_PHASE == 2
++        public_fa3 = KERNEL_ROLE_CONTROL in ("fa3", "both")
++        public_fa2 = KERNEL_ROLE_CONTROL in ("fa2", "both")
++        independent = not public_fa3 and (not stock_selected or STOCK_FA3_PHASE == 2)
+         native_args = (
+             query2, key_cache, value_cache, native._qo_indptr_buf,
+             native._paged_kv_indptr_buf, native._paged_kv_indices_buf,
+@@ -2255,7 +2260,18 @@ class FlashInferAttnBackend(AttentionBackend):
+             native._float_workspace_buffer, native._int_workspace_buffer,
+             list(native._plan_info), layer.scaling, independent, independent, kernel["empty_timeline"],
+         )
+-        if stock_selected:
++        if public_fa3:
++            from sglang.kernels.ops.attention.flash_attention import flash_attn_with_kvcache
++
++            public_output = flash_attn_with_kvcache(
++                q=query3, k_cache=key_cache, v_cache=value_cache,
++                page_table=plan["page_table"], cache_seqlens=plan["cache_seqlens"],
++                cu_seqlens_q=plan["cu_q"], max_seqlen_q=plan["max_q"],
++                softmax_scale=layer.scaling, causal=causal, softcap=0.0,
++                sm_margin=self.fused_sm_margin,
++            )
++            output3.copy_(public_output.view_as(output3))
++        elif stock_selected:
+             stock_arguments = (
+                 query3, key_cache.view(-1, layer.tp_k_head_num, layer.head_dim),
+                 value_cache.view(-1, layer.tp_v_head_num, layer.v_head_dim), output3,
+@@ -2274,8 +2290,17 @@ class FlashInferAttnBackend(AttentionBackend):
+                 kernel["max_pages"], kernel["max_q"], kernel["kv_lens"], kernel["q_indptr"],
+                 kernel["kv_indptr"], kernel["empty_timeline"],
+             )
+-        ops.native_fa2_run(*native_args)
+-        if stock_selected:
++        if public_fa2:
++            public_output = native.forward(
++                query2, (key_cache, value_cache) if self.page_size > 1 else kv_cache,
++                causal=causal, sm_scale=layer.scaling, logits_soft_cap=logits_soft_cap,
++            )
++            output2.copy_(public_output.view_as(output2))
++        else:
++            ops.native_fa2_run(*native_args)
++        if public_fa3:
++            pass
++        elif stock_selected:
+             if kernel["stock_split_count"] > 1:
+                 torch.ops.stock_fa3_pdl.run(*stock_arguments, 3, kernel["empty_timeline"])
+         else:
+@@ -2283,7 +2308,11 @@ class FlashInferAttnBackend(AttentionBackend):
+                 output3, kernel["pers_int"], kernel["pers_float"], kernel["pers_plan"],
+                 kernel["num_requests"], layer.tp_q_head_num, layer.tp_k_head_num,
+             )
+-        if STOCK_FA3_PDL:
++        if KERNEL_ROLE_CONTROL != "none":
++            self.kernel_role_control_calls = getattr(self, "kernel_role_control_calls", 0) + 1
++            if self.kernel_role_control_calls % 100 == 1:
++                logger.info("KERNEL_ROLE_CONTROL role=%s calls=%d", KERNEL_ROLE_CONTROL, self.kernel_role_control_calls)
++        if STOCK_FA3_PDL and not public_fa3:
+             counter_name = "stock_fa3_calls" if stock_selected else "stock_fa3_large_split_calls"
+             count = getattr(self, counter_name, 0) + 1
+             setattr(self, counter_name, count)

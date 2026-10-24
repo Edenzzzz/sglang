@@ -1,0 +1,232 @@
+diff --git a/dev/shm/stock_fa3_pdl_work_20261014/stock_fa3_pdl.cu b/dev/shm/stock_fa3_unsplit_work_20261014/stock_fa3_pdl.cu
+index eb0d03d5f..48fd8f902 100644
+--- a/dev/shm/stock_fa3_pdl_work_20261014/stock_fa3_pdl.cu
++++ b/dev/shm/stock_fa3_unsplit_work_20261014/stock_fa3_pdl.cu
+@@ -5,6 +5,10 @@
+ #include <flashinfer/attention/hopper/fa3_upstream.cuh>
+ #include <cutlass/device_kernel.h>
+ 
++#ifndef STOCK_FA3_UNSPLIT_SPECIALIZE
++#define STOCK_FA3_UNSPLIT_SPECIALIZE 0
++#endif
++
+ namespace {
+ 
+ template <int Slot, bool Maximum = false>
+@@ -44,6 +48,41 @@ void float_workspace(const at::Tensor& tensor, const at::Tensor& query, int64_t
+               "insufficient same-device float32 workspace");
+ }
+ 
++template <bool SplitKV>
++void launch_stock_primary(flashinfer::UpstreamFA3Plan const& plan, at::Tensor const& output,
++                          at::Tensor const& lse, at::Tensor const& page_table,
++                          at::Tensor const& partial_output, at::Tensor const& partial_lse,
++                          at::Tensor const& tile_counter, int sm_budget, int phase,
++                          at::Tensor const& timeline, cudaStream_t stream) {
++  C10_CUDA_CHECK(cudaMemsetAsync(tile_counter.data_ptr<int>(), 0, sizeof(int), stream));
++  auto scheduler = flashinfer::MakeUpstreamOwnSchedArgs(plan, tile_counter.data_ptr<int>());
++  auto mainloop = flashinfer::MakeUpstreamMainloopArgs<128, SplitKV>(
++      plan, page_table.data_ptr<int>(), int(page_table.size(1)), plan.num_fa3_requests);
++  auto epilogue = flashinfer::MakeUpstreamEpilogueArgs<128, SplitKV>(
++      plan, static_cast<cutlass::bfloat16_t*>(output.data_ptr()),
++      partial_output.data_ptr<float>(), lse.data_ptr<float>(), partial_lse.data_ptr<float>());
++  if (phase == 0) {
++    const auto status = flashinfer::LaunchUpstreamFA3OwnSched<128, SplitKV>(
++        mainloop, epilogue, scheduler, sm_budget, stream);
++    TORCH_CHECK(status == cudaSuccess, "stock FA3 launch failed: ", cudaGetErrorString(status));
++    return;
++  }
++  using Kernel = flashinfer::UpstreamFA3KernelOwnSched<128, SplitKV>;
++  cutlass::KernelHardwareInfo hardware{};
++  hardware.sm_count = sm_budget;
++  typename Kernel::Params params{
++      flashinfer::UpstreamFA3Mainloop<128, SplitKV>::to_underlying_arguments(mainloop),
++      flashinfer::UpstreamFA3Epilogue<128, SplitKV>::to_underlying_arguments(epilogue), hardware,
++      Kernel::TileScheduler::to_underlying_arguments(scheduler)};
++  auto kernel = StockFA3PdlPrimary<Kernel>;
++  C10_CUDA_CHECK(cudaFuncSetAttribute(
++      kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, Kernel::SharedStorageSize));
++  auto* timestamps = timeline.numel() ? reinterpret_cast<unsigned long long*>(timeline.data_ptr()) : nullptr;
++  kernel<<<Kernel::get_grid_shape(params), Kernel::get_block_shape(), Kernel::SharedStorageSize, stream>>>(
++      params, phase == 2, timestamps);
++  C10_CUDA_KERNEL_LAUNCH_CHECK();
++}
++
+ void run_stock_fa3(at::Tensor query, at::Tensor key_cache, at::Tensor value_cache,
+                   at::Tensor output, at::Tensor lse, at::Tensor query_indptr,
+                   at::Tensor kv_lengths, at::Tensor page_table, at::Tensor partial_output,
+@@ -133,33 +172,13 @@ void run_stock_fa3(at::Tensor query, at::Tensor key_cache, at::Tensor value_cach
+   C10_CUDA_CHECK(cudaGetDevice(&device));
+   C10_CUDA_CHECK(cudaDeviceGetAttribute(&device_sms, cudaDevAttrMultiProcessorCount, device));
+   TORCH_CHECK(sm_budget <= device_sms, "SM budget exceeds device capacity");
+-  C10_CUDA_CHECK(cudaMemsetAsync(tile_counter.data_ptr<int>(), 0, sizeof(int), stream));
+-  auto scheduler = flashinfer::MakeUpstreamOwnSchedArgs(plan, tile_counter.data_ptr<int>());
+-  auto mainloop = flashinfer::MakeUpstreamMainloopArgs<128>(
+-      plan, page_table.data_ptr<int>(), int(page_table.size(1)), int(batch));
+-  auto epilogue = flashinfer::MakeUpstreamEpilogueArgs<128>(
+-      plan, static_cast<cutlass::bfloat16_t*>(output.data_ptr()),
+-      partial_output.data_ptr<float>(), lse.data_ptr<float>(), partial_lse.data_ptr<float>());
+-  if (phase == 0) {
+-    const auto status = flashinfer::LaunchUpstreamFA3OwnSched<128>(
+-        mainloop, epilogue, scheduler, int(sm_budget), stream);
+-    TORCH_CHECK(status == cudaSuccess, "stock FA3 launch failed: ", cudaGetErrorString(status));
++  if (STOCK_FA3_UNSPLIT_SPECIALIZE && splits == 1) {
++    launch_stock_primary<false>(plan, output, lse, page_table, partial_output, partial_lse,
++                                tile_counter, int(sm_budget), int(phase), timeline, stream);
+     return;
+   }
+-  using Kernel = flashinfer::UpstreamFA3KernelOwnSched<128>;
+-  cutlass::KernelHardwareInfo hardware{};
+-  hardware.sm_count = int(sm_budget);
+-  typename Kernel::Params params{
+-      flashinfer::UpstreamFA3Mainloop<128>::to_underlying_arguments(mainloop),
+-      flashinfer::UpstreamFA3Epilogue<128>::to_underlying_arguments(epilogue), hardware,
+-      Kernel::TileScheduler::to_underlying_arguments(scheduler)};
+-  auto kernel = StockFA3PdlPrimary<Kernel>;
+-  C10_CUDA_CHECK(cudaFuncSetAttribute(
+-      kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, Kernel::SharedStorageSize));
+-  auto* timestamps = timeline.numel() ? reinterpret_cast<unsigned long long*>(timeline.data_ptr()) : nullptr;
+-  kernel<<<Kernel::get_grid_shape(params), Kernel::get_block_shape(), Kernel::SharedStorageSize, stream>>>(
+-      params, phase == 2, timestamps);
+-  C10_CUDA_KERNEL_LAUNCH_CHECK();
++  launch_stock_primary<true>(plan, output, lse, page_table, partial_output, partial_lse,
++                             tile_counter, int(sm_budget), int(phase), timeline, stream);
+ }
+ 
+ }
+diff --git a/dev/shm/stock_fa3_pdl_work_20261014/load_stock_fa3.py b/dev/shm/stock_fa3_unsplit_work_20261014/load_stock_fa3.py
+index 4d34b04fb..cd4344782 100644
+--- a/dev/shm/stock_fa3_pdl_work_20261014/load_stock_fa3.py
++++ b/dev/shm/stock_fa3_unsplit_work_20261014/load_stock_fa3.py
+@@ -8,7 +8,7 @@ from torch.utils.cpp_extension import load
+ def build():
+     root = Path(__file__).resolve().parent
+     merged = Path(
+-        os.environ.get("STOCK_FA3_MERGED", "/tmp/stock_fa3_pdl_release_merged_20261014")
++        os.environ.get("STOCK_FA3_MERGED", "/tmp/stock_fa3_unsplit_merged_20261014")
+     )
+     source = Path(os.environ.get("STOCK_FLASH_ATTENTION", root / "flash-attention"))
+     loader_path = (
+@@ -51,6 +51,7 @@ def build():
+             "-DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED",
+             "-DCUTLASS_ENABLE_GDC_FOR_SM90",
+             "-DCUTLASS_DEBUG_TRACE_LEVEL=0",
++            "-DSTOCK_FA3_UNSPLIT_SPECIALIZE=" + os.environ.get("STOCK_FA3_UNSPLIT_SPECIALIZE", "0"),
+             "--threads",
+             "8",
+         ],
+diff --git a/dev/shm/stock_fa3_pdl_work_20261014/port07/include/flashinfer/attention/hopper/fa3_upstream.cuh b/dev/shm/stock_fa3_unsplit_work_20261014/port07/include/flashinfer/attention/hopper/fa3_upstream.cuh
+index bbacff992..28973f159 100644
+--- a/dev/shm/stock_fa3_pdl_work_20261014/port07/include/flashinfer/attention/hopper/fa3_upstream.cuh
++++ b/dev/shm/stock_fa3_unsplit_work_20261014/port07/include/flashinfer/attention/hopper/fa3_upstream.cuh
+@@ -71,7 +71,7 @@ namespace flashinfer {
+ using UpstreamFA3ClusterShape =
+     cute::Shape<cute::Int<FLASHINFER_FA3_CLUSTER_M>, cute::_1, cute::_1>;
+ 
+-template <int HeadDim = 128>
++template <int HeadDim = 128, bool SplitKV = true>
+ using UpstreamFA3Mainloop = flash::CollectiveMainloopFwdSm90<
+     FLASHINFER_FA3_UPSTREAM_STAGES, UpstreamFA3ClusterShape,
+     cute::Shape<cute::_128, cute::_128, cute::Int<HeadDim>>, HeadDim, cutlass::bfloat16_t, float,
+@@ -101,13 +101,13 @@ using UpstreamFA3Mainloop = flash::CollectiveMainloopFwdSm90<
+ #define FLASHINFER_FA3_MMA_PV_RS 1
+ #endif
+     /*MmaPV_is_RS=*/bool(FLASHINFER_FA3_MMA_PV_RS), /*IntraWGOverlap=*/true, /*PackGQA=*/true,
+-    /*Split=*/true, /*V_colmajor=*/false>;
++    SplitKV, /*V_colmajor=*/false>;
+ 
+-template <int HeadDim = 128>
++template <int HeadDim = 128, bool SplitKV = true>
+ using UpstreamFA3Epilogue = flash::CollectiveEpilogueFwd<
+     cute::Shape<cute::_128, cute::Int<HeadDim>, cute::_128>,
+     UpstreamFA3ClusterShape, cutlass::bfloat16_t, cutlass::arch::Sm90,
+-    /*NumEpilogueThreads=*/256, /*Varlen=*/true, /*PackGQA=*/true, /*Split=*/true,
++    /*NumEpilogueThreads=*/256, /*Varlen=*/true, /*PackGQA=*/true, SplitKV,
+     /*FP8PermuteCol=*/false>;
+ 
+ // Upstream's Arguments conventions, read off flash_fwd_launch_template.h:85-120
+@@ -295,10 +295,10 @@ struct UpstreamFA3SchedulerAdapter {
+ // Varlen is on, so batch folds to 1 in shape_Q and the batch strides are 0 --
+ // per-request addressing comes from cu_seqlens_q / seqused_k, which are our
+ // qo_indptr / kv_lens unchanged.
+-template <int HeadDim = 128>
+-inline typename UpstreamFA3Mainloop<HeadDim>::Arguments MakeUpstreamMainloopArgs(
++template <int HeadDim = 128, bool SplitKV = true>
++inline typename UpstreamFA3Mainloop<HeadDim, SplitKV>::Arguments MakeUpstreamMainloopArgs(
+     UpstreamFA3Plan const& p, int const* dense_page_table, int max_pages_per_seq, int batch) {
+-  using ML = UpstreamFA3Mainloop<HeadDim>;
++  using ML = UpstreamFA3Mainloop<HeadDim, SplitKV>;
+   using cute::_1;
+   return typename ML::Arguments{
+       p.q_ptr,
+@@ -495,11 +495,11 @@ inline cudaError_t LaunchUpstreamCombine(UpstreamFA3Plan const& p, cutlass::bflo
+   return cudaGetLastError();
+ }
+ 
+-template <int HeadDim = 128>
+-inline typename UpstreamFA3Epilogue<HeadDim>::Arguments MakeUpstreamEpilogueArgs(
++template <int HeadDim = 128, bool SplitKV = true>
++inline typename UpstreamFA3Epilogue<HeadDim, SplitKV>::Arguments MakeUpstreamEpilogueArgs(
+     UpstreamFA3Plan const& p, cutlass::bfloat16_t* ptr_O, float* ptr_O_partial, float* ptr_LSE,
+     float* ptr_LSE_partial) {
+-  using EP = UpstreamFA3Epilogue<HeadDim>;
++  using EP = UpstreamFA3Epilogue<HeadDim, SplitKV>;
+   using cute::_1;
+   return typename EP::Arguments{
+       // ShapeO and StrideO carry a FIFTH num_splits dimension under Split, and
+@@ -655,7 +655,7 @@ inline typename UpstreamFA3Kernel<HeadDim, IdType>::Params MakeUpstreamFA3Params
+ //
+ // Prepared=false because that path expects num_m_blocks_ptr precomputed on device, which
+ // we do not supply.
+-template <int HeadDim = 128>
++template <int HeadDim = 128, bool SplitKV = true>
+ // Derived from the mainloop rather than hardcoded, because hardcoding these is how the
+ // port drifted from upstream before. Upstream computes each of them
+ // (flash_fwd_launch_template.h:60-66):
+@@ -691,7 +691,7 @@ template <int HeadDim = 128>
+ using UpstreamOwnScheduler = flash::VarlenDynamicPersistentTileScheduler<
+     /*kBlockM=*/128, /*kBlockN=*/128,
+     /*NumMmaThreads=*/UpstreamFA3Mainloop<128>::NumMmaThreads,
+-    /*NumProducerThreads=*/UpstreamFA3Mainloop<128>::NumProducerThreads, /*Split=*/true,
++    /*NumProducerThreads=*/UpstreamFA3Mainloop<128>::NumProducerThreads, SplitKV,
+     /*PackGQA=*/true, /*WarpSpecialized=*/true,
+     /*LPT=*/bool(FLASHINFER_FA3_SCHED_LPT), /*Sort=*/bool(FLASHINFER_FA3_SCHED_SORT),
+     /*Prepared=*/false>;
+@@ -707,10 +707,10 @@ static_assert(UpstreamFA3Mainloop<128>::NumMmaThreads == 256,
+ static_assert(UpstreamFA3Mainloop<128>::NumProducerThreads == 128,
+               "packed GQA forces the 128-thread producer form, per mainloop_fwd_sm90:56,121");
+ 
+-template <int HeadDim = 128>
++template <int HeadDim = 128, bool SplitKV = true>
+ using UpstreamFA3KernelOwnSched =
+-    flash::FlashAttnFwdSm90<UpstreamFA3Mainloop<HeadDim>, UpstreamFA3Epilogue<HeadDim>,
+-                            UpstreamOwnScheduler<HeadDim>>;
++    flash::FlashAttnFwdSm90<UpstreamFA3Mainloop<HeadDim, SplitKV>, UpstreamFA3Epilogue<HeadDim, SplitKV>,
++                            UpstreamOwnScheduler<HeadDim, SplitKV>>;
+ 
+ inline flash::TileSchedulerArguments MakeUpstreamOwnSchedArgs(UpstreamFA3Plan const& p,
+                                                               int* tile_count_semaphore) {
+@@ -771,17 +771,17 @@ inline typename UpstreamFA3SchedulerAdapter<IdType>::Params make_unified_wgmma_u
+ //
+ // tile_count_semaphore must be a device int, zeroed per launch: the dynamic persistent
+ // scheduler hands out tiles through it.
+-template <int HeadDim = 128>
++template <int HeadDim = 128, bool SplitKV = true>
+ inline cudaError_t LaunchUpstreamFA3OwnSched(
+-    typename UpstreamFA3Mainloop<HeadDim>::Arguments const& mainloop_args,
+-    typename UpstreamFA3Epilogue<HeadDim>::Arguments const& epilogue_args,
++    typename UpstreamFA3Mainloop<HeadDim, SplitKV>::Arguments const& mainloop_args,
++    typename UpstreamFA3Epilogue<HeadDim, SplitKV>::Arguments const& epilogue_args,
+     flash::TileSchedulerArguments const& sched_args, int sm_count, cudaStream_t stream) {
+-  using K = UpstreamFA3KernelOwnSched<HeadDim>;
++  using K = UpstreamFA3KernelOwnSched<HeadDim, SplitKV>;
+   cutlass::KernelHardwareInfo hw_info{};
+   hw_info.sm_count = sm_count;
+   typename K::Params params{
+-      UpstreamFA3Mainloop<HeadDim>::to_underlying_arguments(mainloop_args),
+-      UpstreamFA3Epilogue<HeadDim>::to_underlying_arguments(epilogue_args), hw_info,
++      UpstreamFA3Mainloop<HeadDim, SplitKV>::to_underlying_arguments(mainloop_args),
++      UpstreamFA3Epilogue<HeadDim, SplitKV>::to_underlying_arguments(epilogue_args), hw_info,
+       K::TileScheduler::to_underlying_arguments(sched_args)};
+ 
+   auto kernel = cutlass::device_kernel<K>;

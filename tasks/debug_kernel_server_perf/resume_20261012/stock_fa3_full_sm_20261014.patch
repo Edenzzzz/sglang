@@ -1,0 +1,14 @@
+--- a/python/sglang/srt/layers/attention/flashinfer_backend.py
++++ b/python/sglang/srt/layers/attention/flashinfer_backend.py
+@@ -2025,8 +2025,9 @@
+             # minimum of the fused kernel's makespan (0.0938 ms vs 0.1054 at 96 and 0.1508 at
+             # 120). Keep it overrideable for shape-specific serving sweeps.
+             sm_split = int(os.environ.get("SGLANG_FUSED_SM_FA3", "112"))
+-            if not 0 < sm_split < num_sm:
+-                raise ValueError(f"SM split {sm_split} must be between 1 and {num_sm - 1}")
++            maximum_sm_split = num_sm if FUSED_NATIVE_PDL else num_sm - 1
++            if not 0 < sm_split <= maximum_sm_split:
++                raise ValueError(f"SM split {sm_split} must be between 1 and {maximum_sm_split}")
+ 
+             if not FUSED_NATIVE_PDL and (int(fa3_rows[0]) != 0 or not np.array_equal(
+                 fa3_rows, np.arange(len(fa3_rows), dtype=fa3_rows.dtype)

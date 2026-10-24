@@ -1,0 +1,103 @@
+diff --git a/dev/shm/stock_fa3_pdl_work_20261014/port07/tests/native_prefill_bridge.cuh b/dev/shm/native_fa2_q32_work_20261015/native_prefill_bridge.cuh
+index 7c2dafe3b..96b399599 100644
+--- a/dev/shm/stock_fa3_pdl_work_20261014/port07/tests/native_prefill_bridge.cuh
++++ b/dev/shm/native_fa2_q32_work_20261015/native_prefill_bridge.cuh
+@@ -5,6 +5,7 @@
+ #include <flashinfer/attention/variants.cuh>
+ 
+ struct NativePagedParams {
++  static constexpr bool enable_native_q32 = true;
+   using DTypeQ = __nv_bfloat16;
+   using DTypeKV = __nv_bfloat16;
+   using DTypeO = __nv_bfloat16;
+@@ -54,7 +55,9 @@ void native_fa2_run(at::Tensor q, at::Tensor k_cache, at::Tensor v_cache,
+                     at::Tensor last_page_len, at::Tensor output, at::Tensor lse,
+                     at::Tensor float_workspace, at::Tensor int_workspace,
+                     std::vector<int64_t> plan_values, double sm_scale,
+-                    bool enable_pdl, bool independent_pdl, at::Tensor timeline) {
++                    bool enable_pdl, bool independent_pdl, at::Tensor timeline,
++                    int64_t query_tile, int64_t maximum_query) {
++  TORCH_CHECK(query_tile == 0 || query_tile == 32, "query tile override must be zero or32");
+   TORCH_CHECK(q.is_cuda() && q.dim() == 3 && q.size(2) == 128,
+               "native FA2 bridge requires CUDA Q with head dimension 128");
+   TORCH_CHECK(q.scalar_type() == at::kBFloat16 && k_cache.scalar_type() == at::kBFloat16 &&
+@@ -95,6 +98,15 @@ void native_fa2_run(at::Tensor q, at::Tensor k_cache, at::Tensor v_cache,
+   const cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
+   flashinfer::PrefillPlanInfo plan;
+   plan.FromVector(plan_values);
++  if (query_tile == 32) {
++    TORCH_CHECK(plan.cta_tile_q == 64, "Q32 requires an original64-row prefill plan");
++    TORCH_CHECK(maximum_query > 0 && maximum_query <= 32 &&
++                    maximum_query * (heads / kv_heads) > 16 &&
++                    maximum_query * (heads / kv_heads) <= 32 &&
++                    q.size(0) <= batch * maximum_query,
++                "Q32 requires a maximum of17..32 packed query rows");
++    plan.cta_tile_q = 32;
++  }
+   TORCH_CHECK(plan.total_num_rows >= q.size(0), "native FA2 plan has too few output rows");
+   void* integer_buffer = int_workspace.data_ptr();
+   void* float_buffer = float_workspace.data_ptr();
+diff --git a/dev/shm/stock_fa3_pdl_work_20261014/port07/include/flashinfer/attention/prefill.cuh b/dev/shm/native_fa2_q32_work_20261015/port07/include/flashinfer/attention/prefill.cuh
+index 6b0824640..c726a43f3 100644
+--- a/dev/shm/stock_fa3_pdl_work_20261014/port07/include/flashinfer/attention/prefill.cuh
++++ b/dev/shm/native_fa2_q32_work_20261015/port07/include/flashinfer/attention/prefill.cuh
+@@ -45,6 +45,13 @@
+ 
+ namespace flashinfer {
+ 
++template <typename Params, typename = void>
++struct NativeQ32Enabled : std::false_type {};
++
++template <typename Params>
++struct NativeQ32Enabled<Params, std::void_t<decltype(Params::enable_native_q32)>>
++    : std::bool_constant<Params::enable_native_q32> {};
++
+ DEFINE_HAS_MEMBER(maybe_q_rope_offset)
+ DEFINE_HAS_MEMBER(maybe_k_rope_offset)
+ // Also defined by hopper/prefill_sm90.cuh; the fused kernel includes both in one TU and these
+@@ -349,7 +356,7 @@ template <MaskMode MASK_MODE_, uint32_t CTA_TILE_Q_, uint32_t NUM_MMA_Q_, uint32
+           // pass this explicitly; every other instantiation of KernelTraits (pod, batch_pod,
+           // persistent) has neither a repack call site nor the staging term in its shared-memory
+           // budget, so a default of true would make those paths reserve a buffer they never read.
+-          bool ENABLE_FP4_REPACK_ = false>
++          bool ENABLE_FP4_REPACK_ = false, bool ENABLE_NATIVE_Q32_ = false>
+ struct KernelTraits {
+   static constexpr uint32_t NUM_STAGES = 1;  // used for BatchAttention Template
+   static constexpr MaskMode MASK_MODE = MASK_MODE_;
+@@ -422,7 +429,10 @@ struct KernelTraits {
+     // CTA_TILE_Q <= 32 in both large-head cases); the kernel-instantiation
+     // lists additionally drop the never-selected CTA_TILE_Q=32 for
+     // head_dim_qk >= 512 with head_dim_vo < 512.
+-    return ((HEAD_DIM_QK >= 512 ? (CTA_TILE_Q > 32) : (CTA_TILE_Q == 32)) || (NUM_MMA_D_VO < 4) ||
++    constexpr bool native_q32 = ENABLE_NATIVE_Q32_ && CTA_TILE_Q == 32 && HEAD_DIM_QK == 128 &&
++                                HEAD_DIM_VO == 128 && sizeof(DTypeQ_) == 2 && sizeof(DTypeKV_) == 2 &&
++                                NUM_MMA_Q == 1 && NUM_WARPS_Q == 2 && NUM_WARPS_KV == 2;
++    return (((HEAD_DIM_QK >= 512 ? (CTA_TILE_Q > 32) : (CTA_TILE_Q == 32)) && !native_q32) || (NUM_MMA_D_VO < 4) ||
+             (NUM_MMA_D_VO == 4 && NUM_MMA_KV % 2 == 1) ||
+             (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama && NUM_MMA_D_VO > 4 &&
+              NUM_MMA_D_VO % (2 * NUM_WARPS_Q) != 0) ||
+@@ -4722,9 +4732,12 @@ cudaError_t BatchPrefillWithPagedKVCacheDispatchedImpl(Params params,
+   // default 1x4 layout.
+   constexpr bool kBf16VOSplit = ((sizeof(DTypeKV) == 2) || is_fp4_type_v<DTypeKV>) &&
+                                 (HEAD_DIM_VO >= 512) && (CTA_TILE_Q == 32);
+-  constexpr uint32_t NUM_MMA_Q = kBf16VOSplit ? 1 : get_num_mma_q(CTA_TILE_Q);
+-  constexpr uint32_t NUM_WARPS_Q = kBf16VOSplit ? 2 : get_num_warps_q(CTA_TILE_Q);
+-  constexpr uint32_t NUM_WARPS_KV = kBf16VOSplit ? 2 : get_num_warps_kv(CTA_TILE_Q);
++  constexpr bool kNativeQ32 = NativeQ32Enabled<Params>::value && CTA_TILE_Q == 32 &&
++                              HEAD_DIM_QK == 128 && HEAD_DIM_VO == 128 &&
++                              std::is_same_v<DTypeQ, __nv_bfloat16> && std::is_same_v<DTypeKV, __nv_bfloat16>;
++  constexpr uint32_t NUM_MMA_Q = (kBf16VOSplit || kNativeQ32) ? 1 : get_num_mma_q(CTA_TILE_Q);
++  constexpr uint32_t NUM_WARPS_Q = (kBf16VOSplit || kNativeQ32) ? 2 : get_num_warps_q(CTA_TILE_Q);
++  constexpr uint32_t NUM_WARPS_KV = (kBf16VOSplit || kNativeQ32) ? 2 : get_num_warps_kv(CTA_TILE_Q);
+ 
+   if (padded_batch_size == 0) {
+     // No request, skip
+@@ -4817,7 +4830,7 @@ cudaError_t BatchPrefillWithPagedKVCacheDispatchedImpl(Params params,
+         using KTraits = KernelTraits<MASK_MODE, CTA_TILE_Q, NUM_MMA_Q, NUM_MMA_KV, NUM_MMA_D_QK,
+                                      NUM_MMA_D_VO, NUM_WARPS_Q, NUM_WARPS_KV, POS_ENCODING_MODE,
+                                      DTypeQ, DTypeKV, DTypeO, DTypeQKAccum, typename Params::IdType,
+-                                     AttentionVariant, ENABLE_FP4_REPACK>;
++                                     AttentionVariant, ENABLE_FP4_REPACK, kNativeQ32>;
+         if constexpr (KTraits::IsInvalid()) {
+           // Invalid configuration, skip
+           std::ostringstream err_msg;

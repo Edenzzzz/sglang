@@ -1,0 +1,33 @@
+--- a/python/sglang/srt/managers/edf_scheduler.py
++++ b/python/sglang/srt/managers/edf_scheduler.py
+@@ -485,8 +485,20 @@
+         import json
+ 
+         with open(path) as f:
+-            self.c = json.load(f)["coef"]
++            model = json.load(f)
++        self.c = model["coef"]
++        self.mode_coef = model.get("mode_coef")
++        if model.get("requires_mode_aware_predictor") and self.mode_coef is None:
++            raise ValueError("Mode-aware step model is missing mode coefficients")
+         logger.info("EDF linear step model loaded from %s: %s", path, self.c)
++        if self.mode_coef is not None:
++            if set(self.mode_coef) != {"decode", "extend"}:
++                raise ValueError("Step model must contain decode and extend coefficients")
++            for coefficients in self.mode_coef.values():
++                for name in ("c0", "c_tok", "c_attn", "c_bs", "c_kv"):
++                    if not math.isfinite(coefficients[name]) or coefficients[name] < 0:
++                        raise ValueError("Piecewise step coefficients must be finite and nonnegative")
++            logger.info("EDF piecewise step model active: %s", path)
+ 
+     def predict(
+         self,
+@@ -496,7 +508,7 @@
+         decode_bs: float,
+         acceptance_length: float = 1.0,
+     ) -> float:
+-        c = self.c
++        c = self.c if self.mode_coef is None else self.mode_coef["extend" if n_p > 0 else "decode"]
+         return (
+             c["c0"]
+             + c["c_tok"] * n_p

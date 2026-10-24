@@ -1,0 +1,222 @@
+{
+  "prefill8192_v24_enabled0_2.audit.json": {
+    "case": "prefill8192_v24_enabled0_2",
+    "enabled": false,
+    "active": false,
+    "repeat": 2,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 18.4136,
+    "unfused_ms": 14.5525,
+    "sha256": "53e0496a237376417a6b5811b4f1bf5708c77f68a1c4225f9aa213a7c9599130"
+  },
+  "prefill8192_v24_enabled1_2.audit.json": {
+    "case": "prefill8192_v24_enabled1_2",
+    "enabled": true,
+    "active": true,
+    "repeat": 2,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 18.3456,
+    "unfused_ms": 14.5341,
+    "sha256": "ba63d919ac1bc279e764c50dc2a7747ab8f00270245774ea111edad20adcfd20"
+  },
+  "prefill8192_v24_enabled1_1.audit.json": {
+    "case": "prefill8192_v24_enabled1_1",
+    "enabled": true,
+    "active": true,
+    "repeat": 1,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 18.3415,
+    "unfused_ms": 14.5366,
+    "sha256": "80b8ea4394364a1bcaf4e9e23e181ffecd2c89ee33ff5d7818965cc6cde81927"
+  },
+  "prefill8192_v24_enabled0_1.audit.json": {
+    "case": "prefill8192_v24_enabled0_1",
+    "enabled": false,
+    "active": false,
+    "repeat": 1,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 18.2262,
+    "unfused_ms": 14.3587,
+    "sha256": "4e7c71ab28a692b8a9fdcbce965f98202173bd15a505ee53d435c976ed7d71ce"
+  },
+  "split_q32_v8_enabled0_2.audit.json": {
+    "case": "split_q32_v8_enabled0_2",
+    "enabled": false,
+    "active": false,
+    "repeat": 2,
+    "merge_rows": 224,
+    "splits": 14,
+    "fused_ms": 0.1705,
+    "unfused_ms": 0.9844,
+    "sha256": "cafd275156e2a0ab4129fb888fde158f1a9c59db48b873ae8c3defe6f68e9002"
+  },
+  "split_q32_v8_enabled1_2.audit.json": {
+    "case": "split_q32_v8_enabled1_2",
+    "enabled": true,
+    "active": false,
+    "repeat": 2,
+    "merge_rows": 224,
+    "splits": 14,
+    "fused_ms": 0.1705,
+    "unfused_ms": 0.9813,
+    "sha256": "6bc41fbff5385057d8a997ca29f5f485098c4114b934e87ec9815b51c11bc07d"
+  },
+  "split_q32_v8_enabled1_1.audit.json": {
+    "case": "split_q32_v8_enabled1_1",
+    "enabled": true,
+    "active": false,
+    "repeat": 1,
+    "merge_rows": 224,
+    "splits": 14,
+    "fused_ms": 0.1707,
+    "unfused_ms": 0.9841,
+    "sha256": "1ded6482be96eeccd974f488ad8872495b8b8353ce425b21755b48b6cb68573c"
+  },
+  "split_q32_v8_enabled0_1.audit.json": {
+    "case": "split_q32_v8_enabled0_1",
+    "enabled": false,
+    "active": false,
+    "repeat": 1,
+    "merge_rows": 224,
+    "splits": 14,
+    "fused_ms": 0.1707,
+    "unfused_ms": 0.9858,
+    "sha256": "154a9b625e2acfdea69595feeb9cbc95f5a85de73868548f8a8c25da008f1efc"
+  },
+  "fa3_8x1024_enabled0_2.audit.json": {
+    "case": "fa3_8x1024_enabled0_2",
+    "enabled": false,
+    "active": false,
+    "repeat": 2,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 9.498,
+    "unfused_ms": 7.5864,
+    "sha256": "4c931049447a8188af7ab292e4ad51c110c83f563c38f39a3d89066c069a7ebc"
+  },
+  "fa3_8x1024_enabled1_2.audit.json": {
+    "case": "fa3_8x1024_enabled1_2",
+    "enabled": true,
+    "active": true,
+    "repeat": 2,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 9.3892,
+    "unfused_ms": 7.527,
+    "sha256": "18800666ab1ea958fa974acebb1e56953f351e6cf7898f8346c56cd3b8cdbf0e"
+  },
+  "fa3_8x1024_enabled1_1.audit.json": {
+    "case": "fa3_8x1024_enabled1_1",
+    "enabled": true,
+    "active": true,
+    "repeat": 1,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 9.4028,
+    "unfused_ms": 7.5536,
+    "sha256": "128821b8e62ed137049150bb5daf31ac6f874911188bc96ce26dbe2d322cd8bf"
+  },
+  "fa3_8x1024_enabled0_1.audit.json": {
+    "case": "fa3_8x1024_enabled0_1",
+    "enabled": false,
+    "active": false,
+    "repeat": 1,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 9.4962,
+    "unfused_ms": 7.5658,
+    "sha256": "1e1703e619cf49bb838ddc775818ca1aa602fd46350e16a1d692d9aba2fb62f0"
+  },
+  "append512_v46_enabled0_2.audit.json": {
+    "case": "append512_v46_enabled0_2",
+    "enabled": false,
+    "active": false,
+    "repeat": 2,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 2.373,
+    "unfused_ms": 2.3155,
+    "sha256": "6c97b26c1ad0ddd41913af269de4d35f1d134ca6142dd9396cd55ec37c47b31a"
+  },
+  "append512_v46_enabled1_2.audit.json": {
+    "case": "append512_v46_enabled1_2",
+    "enabled": true,
+    "active": true,
+    "repeat": 2,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 2.4117,
+    "unfused_ms": 2.3106,
+    "sha256": "ecc4172add42e42bf79125cbffedd7ad6cce629b8247bd09a62318277a580c81"
+  },
+  "append512_v46_enabled1_1.audit.json": {
+    "case": "append512_v46_enabled1_1",
+    "enabled": true,
+    "active": true,
+    "repeat": 1,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 2.3977,
+    "unfused_ms": 2.3203,
+    "sha256": "fc6b4ca2c00d524d084c3075e1ccac732f6220532e18b1431f18466b0278d5d9"
+  },
+  "append512_v46_enabled0_1.audit.json": {
+    "case": "append512_v46_enabled0_1",
+    "enabled": false,
+    "active": false,
+    "repeat": 1,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 2.4003,
+    "unfused_ms": 2.3271,
+    "sha256": "6c758809fc5d22b2309571aca9869fd0a141a56d7392ca9e24867773a26f2832"
+  },
+  "prefill2048_v8_enabled0_2.audit.json": {
+    "case": "prefill2048_v8_enabled0_2",
+    "enabled": false,
+    "active": false,
+    "repeat": 2,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 4.696,
+    "unfused_ms": 4.067,
+    "sha256": "835eebe03a39e8c5721a9643656c561576582de4627316bdff341fe5cd57bc02"
+  },
+  "prefill2048_v8_enabled1_2.audit.json": {
+    "case": "prefill2048_v8_enabled1_2",
+    "enabled": true,
+    "active": true,
+    "repeat": 2,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 4.6978,
+    "unfused_ms": 4.0659,
+    "sha256": "153929680bf02f09af48b491603a5075db38d0ffed76977c7c8bd99a68161c87"
+  },
+  "prefill2048_v8_enabled1_1.audit.json": {
+    "case": "prefill2048_v8_enabled1_1",
+    "enabled": true,
+    "active": true,
+    "repeat": 1,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 4.7198,
+    "unfused_ms": 4.0576,
+    "sha256": "b017e4e21f57cb5296ba01da4d674c70270d02e19ebe825209f6644b219ee862"
+  },
+  "prefill2048_v8_enabled0_1.audit.json": {
+    "case": "prefill2048_v8_enabled0_1",
+    "enabled": false,
+    "active": false,
+    "repeat": 1,
+    "merge_rows": 0,
+    "splits": 1,
+    "fused_ms": 4.6966,
+    "unfused_ms": 4.0939,
+    "sha256": "77df40f7c035be70f1d782035d721b83591ff009860f7136c46793202acf5335"
+  }
+}

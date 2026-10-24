@@ -1,0 +1,350 @@
+{
+  "prefill128_sm112": [
+    {
+      "iteration": 0,
+      "role": "fa3",
+      "different_bytes": 703955,
+      "total_bytes": 3670016,
+      "relative": 0.00374395982
+    },
+    {
+      "iteration": 0,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 1,
+      "role": "fa3",
+      "different_bytes": 820833,
+      "total_bytes": 3670016,
+      "relative": 0.00406382885
+    },
+    {
+      "iteration": 1,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 2,
+      "role": "fa3",
+      "different_bytes": 812873,
+      "total_bytes": 3670016,
+      "relative": 0.00422667479
+    },
+    {
+      "iteration": 2,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 3,
+      "role": "fa3",
+      "different_bytes": 813050,
+      "total_bytes": 3670016,
+      "relative": 0.00407772092
+    },
+    {
+      "iteration": 3,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    }
+  ],
+  "prefill128_small": [
+    {
+      "iteration": 0,
+      "role": "fa3",
+      "different_bytes": 703955,
+      "total_bytes": 3670016,
+      "relative": 0.00374395982
+    },
+    {
+      "iteration": 0,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 1,
+      "role": "fa3",
+      "different_bytes": 820833,
+      "total_bytes": 3670016,
+      "relative": 0.00406382885
+    },
+    {
+      "iteration": 1,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 2,
+      "role": "fa3",
+      "different_bytes": 812873,
+      "total_bytes": 3670016,
+      "relative": 0.00422667479
+    },
+    {
+      "iteration": 2,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 3,
+      "role": "fa3",
+      "different_bytes": 813050,
+      "total_bytes": 3670016,
+      "relative": 0.00407772092
+    },
+    {
+      "iteration": 3,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    }
+  ],
+  "prefill48_sm112": [
+    {
+      "iteration": 0,
+      "role": "fa3",
+      "different_bytes": 0,
+      "total_bytes": 3670016,
+      "relative": 0.0
+    },
+    {
+      "iteration": 0,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 1,
+      "role": "fa3",
+      "different_bytes": 0,
+      "total_bytes": 3670016,
+      "relative": 0.0
+    },
+    {
+      "iteration": 1,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 2,
+      "role": "fa3",
+      "different_bytes": 0,
+      "total_bytes": 3670016,
+      "relative": 0.0
+    },
+    {
+      "iteration": 2,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 3,
+      "role": "fa3",
+      "different_bytes": 0,
+      "total_bytes": 3670016,
+      "relative": 0.0
+    },
+    {
+      "iteration": 3,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    }
+  ],
+  "prefill48_small": [
+    {
+      "iteration": 0,
+      "role": "fa3",
+      "different_bytes": 0,
+      "total_bytes": 3670016,
+      "relative": 0.0
+    },
+    {
+      "iteration": 0,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 1,
+      "role": "fa3",
+      "different_bytes": 0,
+      "total_bytes": 3670016,
+      "relative": 0.0
+    },
+    {
+      "iteration": 1,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 2,
+      "role": "fa3",
+      "different_bytes": 0,
+      "total_bytes": 3670016,
+      "relative": 0.0
+    },
+    {
+      "iteration": 2,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 3,
+      "role": "fa3",
+      "different_bytes": 0,
+      "total_bytes": 3670016,
+      "relative": 0.0
+    },
+    {
+      "iteration": 3,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    }
+  ],
+  "split48_sm112": [
+    {
+      "iteration": 0,
+      "role": "fa3",
+      "different_bytes": 22403,
+      "total_bytes": 114688,
+      "relative": 0.00364465499
+    },
+    {
+      "iteration": 0,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 1,
+      "role": "fa3",
+      "different_bytes": 25477,
+      "total_bytes": 114688,
+      "relative": 0.00360341626
+    },
+    {
+      "iteration": 1,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 2,
+      "role": "fa3",
+      "different_bytes": 25616,
+      "total_bytes": 114688,
+      "relative": 0.00376249664
+    },
+    {
+      "iteration": 2,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 3,
+      "role": "fa3",
+      "different_bytes": 25525,
+      "total_bytes": 114688,
+      "relative": 0.00391079579
+    },
+    {
+      "iteration": 3,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    }
+  ],
+  "split48_small": [
+    {
+      "iteration": 0,
+      "role": "fa3",
+      "different_bytes": 22703,
+      "total_bytes": 114688,
+      "relative": 0.00331359892
+    },
+    {
+      "iteration": 0,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 1,
+      "role": "fa3",
+      "different_bytes": 25544,
+      "total_bytes": 114688,
+      "relative": 0.00387937576
+    },
+    {
+      "iteration": 1,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 2,
+      "role": "fa3",
+      "different_bytes": 25749,
+      "total_bytes": 114688,
+      "relative": 0.00362058543
+    },
+    {
+      "iteration": 2,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    },
+    {
+      "iteration": 3,
+      "role": "fa3",
+      "different_bytes": 25747,
+      "total_bytes": 114688,
+      "relative": 0.00407160399
+    },
+    {
+      "iteration": 3,
+      "role": "fa2",
+      "different_bytes": 0,
+      "total_bytes": 229376,
+      "relative": 0.0
+    }
+  ]
+}

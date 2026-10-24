@@ -1,30 +1,8 @@
 {
   "root": "/dev/shm/w/native_pdl_paired_serving_20261014",
-  "completed_arms": 5,
+  "completed_arms": 8,
   "rows": [
     {
-      "mixture": "mix32",
-      "arm": "NATIVE_1",
-      "stream": "chat",
-      "execution": {
-        "mixture": "mix32",
-        "arm": "NATIVE_1",
-        "method": "MTPMIXFUSED",
-        "execution_calls": 100901,
-        "overlapped": null,
-        "mixed_steps": 3851,
-        "compact_execution_calls": 100901,
-        "graph_decode_lines": 298,
-        "fallbacks": 0,
-        "tracebacks": 0,
-        "plan_counters": [
-          "FUSED_SPLIT_PLAN ok 3801: fa3=2 fa2=8 (onesided so far 322)"
-        ],
-        "one_sided_counters": [
-          "FUSED_SPLIT_ONESIDED 3801/3801: fa3=0 fa2=2 rows=2 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
-        ],
-        "server_log_sha256": "c2419ca732c3afe220162aa32897eaad70f5b9248ac494ceb5845fd69b43a348"
-      },
       "tag": "",
       "backend": "sglang",
       "dataset_name": "random",
@@ -74,24 +52,9 @@
       "max_output_tokens_per_s": 3006.0,
       "max_concurrent_requests": 504,
       "strict_draft_accept_rate": 0.34946953835857403,
-      "available_array_keys": [
-        "input_lens",
-        "output_lens",
-        "ttfts",
-        "itls",
-        "generated_texts",
-        "errors",
-        "spec_num_correct_drafts",
-        "spec_num_proposed_drafts",
-        "spec_verify_ct",
-        "cached_tokens",
-        "cached_tokens_details"
-      ]
-    },
-    {
       "mixture": "mix32",
       "arm": "NATIVE_1",
-      "stream": "codex",
+      "stream": "chat",
       "execution": {
         "mixture": "mix32",
         "arm": "NATIVE_1",
@@ -111,6 +74,9 @@
         ],
         "server_log_sha256": "c2419ca732c3afe220162aa32897eaad70f5b9248ac494ceb5845fd69b43a348"
       },
+      "result_sha256": "a5943c5926ce5151bf79bef083db610cf407f3b508d6e67e024347c98fd6cfd4"
+    },
+    {
       "tag": "",
       "backend": "sglang",
       "dataset_name": "tracelab-claude",
@@ -160,43 +126,31 @@
       "max_output_tokens_per_s": 441.0,
       "max_concurrent_requests": 8,
       "strict_draft_accept_rate": 0.8655290336993693,
-      "available_array_keys": [
-        "input_lens",
-        "output_lens",
-        "ttfts",
-        "itls",
-        "generated_texts",
-        "errors",
-        "spec_num_correct_drafts",
-        "spec_num_proposed_drafts",
-        "spec_verify_ct",
-        "cached_tokens",
-        "cached_tokens_details"
-      ]
-    },
-    {
       "mixture": "mix32",
-      "arm": "NATIVE_2",
-      "stream": "chat",
+      "arm": "NATIVE_1",
+      "stream": "codex",
       "execution": {
         "mixture": "mix32",
-        "arm": "NATIVE_2",
+        "arm": "NATIVE_1",
         "method": "MTPMIXFUSED",
-        "execution_calls": 100401,
+        "execution_calls": 100901,
         "overlapped": null,
-        "mixed_steps": 3801,
-        "compact_execution_calls": 100401,
-        "graph_decode_lines": 299,
+        "mixed_steps": 3851,
+        "compact_execution_calls": 100901,
+        "graph_decode_lines": 298,
         "fallbacks": 0,
         "tracebacks": 0,
         "plan_counters": [
-          "FUSED_SPLIT_PLAN ok 3801: fa3=1 fa2=18 (onesided so far 320)"
+          "FUSED_SPLIT_PLAN ok 3801: fa3=2 fa2=8 (onesided so far 322)"
         ],
         "one_sided_counters": [
-          "FUSED_SPLIT_ONESIDED 3801/3801: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
+          "FUSED_SPLIT_ONESIDED 3801/3801: fa3=0 fa2=2 rows=2 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
         ],
-        "server_log_sha256": "9a44c307c2058fbe64d3ecab512aa9208826f9954732b46385bd74e0810a7e16"
+        "server_log_sha256": "c2419ca732c3afe220162aa32897eaad70f5b9248ac494ceb5845fd69b43a348"
       },
+      "result_sha256": "824c808eb5181257f8a7eb166a8390c342065a7954baed69f120b4cfcab03748"
+    },
+    {
       "tag": "",
       "backend": "sglang",
       "dataset_name": "random",
@@ -246,24 +200,9 @@
       "max_output_tokens_per_s": 3038.0,
       "max_concurrent_requests": 509,
       "strict_draft_accept_rate": 0.3493644137748869,
-      "available_array_keys": [
-        "input_lens",
-        "output_lens",
-        "ttfts",
-        "itls",
-        "generated_texts",
-        "errors",
-        "spec_num_correct_drafts",
-        "spec_num_proposed_drafts",
-        "spec_verify_ct",
-        "cached_tokens",
-        "cached_tokens_details"
-      ]
-    },
-    {
       "mixture": "mix32",
       "arm": "NATIVE_2",
-      "stream": "codex",
+      "stream": "chat",
       "execution": {
         "mixture": "mix32",
         "arm": "NATIVE_2",
@@ -283,6 +222,9 @@
         ],
         "server_log_sha256": "9a44c307c2058fbe64d3ecab512aa9208826f9954732b46385bd74e0810a7e16"
       },
+      "result_sha256": "f028f94d35d451be6197ba858942af2f1770c2fa2508dd383529c1d5b46674c6"
+    },
+    {
       "tag": "",
       "backend": "sglang",
       "dataset_name": "tracelab-claude",
@@ -332,43 +274,31 @@
       "max_output_tokens_per_s": 419.0,
       "max_concurrent_requests": 8,
       "strict_draft_accept_rate": 0.8635201674472867,
-      "available_array_keys": [
-        "input_lens",
-        "output_lens",
-        "ttfts",
-        "itls",
-        "generated_texts",
-        "errors",
-        "spec_num_correct_drafts",
-        "spec_num_proposed_drafts",
-        "spec_verify_ct",
-        "cached_tokens",
-        "cached_tokens_details"
-      ]
-    },
-    {
       "mixture": "mix32",
-      "arm": "SPLIT_1",
-      "stream": "chat",
+      "arm": "NATIVE_2",
+      "stream": "codex",
       "execution": {
         "mixture": "mix32",
-        "arm": "SPLIT_1",
-        "method": "MTPMIX_SPLIT",
-        "execution_calls": 101501,
-        "overlapped": 0,
-        "mixed_steps": 3901,
-        "compact_execution_calls": 0,
-        "graph_decode_lines": 303,
+        "arm": "NATIVE_2",
+        "method": "MTPMIXFUSED",
+        "execution_calls": 100401,
+        "overlapped": null,
+        "mixed_steps": 3801,
+        "compact_execution_calls": 100401,
+        "graph_decode_lines": 299,
         "fallbacks": 0,
         "tracebacks": 0,
         "plan_counters": [
-          "FUSED_SPLIT_PLAN ok 3801: fa3=3 fa2=17 (onesided so far 320)"
+          "FUSED_SPLIT_PLAN ok 3801: fa3=1 fa2=18 (onesided so far 320)"
         ],
         "one_sided_counters": [
-          "FUSED_SPLIT_ONESIDED 4001/4001: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
+          "FUSED_SPLIT_ONESIDED 3801/3801: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
         ],
-        "server_log_sha256": "07576b396d3cfd96d92b763c5ffe3538ed54b9d4d7d6faeee17eced368dd3857"
+        "server_log_sha256": "9a44c307c2058fbe64d3ecab512aa9208826f9954732b46385bd74e0810a7e16"
       },
+      "result_sha256": "9462a4eb1f73ad01fccd283e0cba4f2a2d236f6c100dcf26b14e46c341af761b"
+    },
+    {
       "tag": "",
       "backend": "sglang",
       "dataset_name": "random",
@@ -418,24 +348,9 @@
       "max_output_tokens_per_s": 3039.0,
       "max_concurrent_requests": 511,
       "strict_draft_accept_rate": 0.34943766917533253,
-      "available_array_keys": [
-        "input_lens",
-        "output_lens",
-        "ttfts",
-        "itls",
-        "generated_texts",
-        "errors",
-        "spec_num_correct_drafts",
-        "spec_num_proposed_drafts",
-        "spec_verify_ct",
-        "cached_tokens",
-        "cached_tokens_details"
-      ]
-    },
-    {
       "mixture": "mix32",
       "arm": "SPLIT_1",
-      "stream": "codex",
+      "stream": "chat",
       "execution": {
         "mixture": "mix32",
         "arm": "SPLIT_1",
@@ -455,6 +370,9 @@
         ],
         "server_log_sha256": "07576b396d3cfd96d92b763c5ffe3538ed54b9d4d7d6faeee17eced368dd3857"
       },
+      "result_sha256": "fa63affb3d4664396999d638cb69445da1c6fc69ce90a380322ba0d9d4686619"
+    },
+    {
       "tag": "",
       "backend": "sglang",
       "dataset_name": "tracelab-claude",
@@ -504,43 +422,31 @@
       "max_output_tokens_per_s": 425.0,
       "max_concurrent_requests": 8,
       "strict_draft_accept_rate": 0.8685928912320601,
-      "available_array_keys": [
-        "input_lens",
-        "output_lens",
-        "ttfts",
-        "itls",
-        "generated_texts",
-        "errors",
-        "spec_num_correct_drafts",
-        "spec_num_proposed_drafts",
-        "spec_verify_ct",
-        "cached_tokens",
-        "cached_tokens_details"
-      ]
-    },
-    {
       "mixture": "mix32",
-      "arm": "SPLIT_2",
-      "stream": "chat",
+      "arm": "SPLIT_1",
+      "stream": "codex",
       "execution": {
         "mixture": "mix32",
-        "arm": "SPLIT_2",
+        "arm": "SPLIT_1",
         "method": "MTPMIX_SPLIT",
         "execution_calls": 101501,
         "overlapped": 0,
         "mixed_steps": 3901,
         "compact_execution_calls": 0,
-        "graph_decode_lines": 310,
+        "graph_decode_lines": 303,
         "fallbacks": 0,
         "tracebacks": 0,
         "plan_counters": [
-          "FUSED_SPLIT_PLAN ok 3801: fa3=1 fa2=6 (onesided so far 327)"
+          "FUSED_SPLIT_PLAN ok 3801: fa3=3 fa2=17 (onesided so far 320)"
         ],
         "one_sided_counters": [
-          "FUSED_SPLIT_ONESIDED 3801/3801: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
+          "FUSED_SPLIT_ONESIDED 4001/4001: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
         ],
-        "server_log_sha256": "f4eff5e969cb880cdd10db484739ea0eb8632055e397aae654182154475573e3"
+        "server_log_sha256": "07576b396d3cfd96d92b763c5ffe3538ed54b9d4d7d6faeee17eced368dd3857"
       },
+      "result_sha256": "52e05af68a309fe9870b9018f6ca5b32e62f211b7114e4832e30063080afb42d"
+    },
+    {
       "tag": "",
       "backend": "sglang",
       "dataset_name": "random",
@@ -590,24 +496,9 @@
       "max_output_tokens_per_s": 3129.0,
       "max_concurrent_requests": 509,
       "strict_draft_accept_rate": 0.34924952982127155,
-      "available_array_keys": [
-        "input_lens",
-        "output_lens",
-        "ttfts",
-        "itls",
-        "generated_texts",
-        "errors",
-        "spec_num_correct_drafts",
-        "spec_num_proposed_drafts",
-        "spec_verify_ct",
-        "cached_tokens",
-        "cached_tokens_details"
-      ]
-    },
-    {
       "mixture": "mix32",
       "arm": "SPLIT_2",
-      "stream": "codex",
+      "stream": "chat",
       "execution": {
         "mixture": "mix32",
         "arm": "SPLIT_2",
@@ -627,6 +518,9 @@
         ],
         "server_log_sha256": "f4eff5e969cb880cdd10db484739ea0eb8632055e397aae654182154475573e3"
       },
+      "result_sha256": "09407668056397ecd0f2ebe40c52b7a441f3ce0d5be5fae7064ca2946dfc207a"
+    },
+    {
       "tag": "",
       "backend": "sglang",
       "dataset_name": "tracelab-claude",
@@ -676,43 +570,327 @@
       "max_output_tokens_per_s": 443.0,
       "max_concurrent_requests": 8,
       "strict_draft_accept_rate": 0.8630003086737319,
-      "available_array_keys": [
-        "input_lens",
-        "output_lens",
-        "ttfts",
-        "itls",
-        "generated_texts",
-        "errors",
-        "spec_num_correct_drafts",
-        "spec_num_proposed_drafts",
-        "spec_verify_ct",
-        "cached_tokens",
-        "cached_tokens_details"
-      ]
+      "mixture": "mix32",
+      "arm": "SPLIT_2",
+      "stream": "codex",
+      "execution": {
+        "mixture": "mix32",
+        "arm": "SPLIT_2",
+        "method": "MTPMIX_SPLIT",
+        "execution_calls": 101501,
+        "overlapped": 0,
+        "mixed_steps": 3901,
+        "compact_execution_calls": 0,
+        "graph_decode_lines": 310,
+        "fallbacks": 0,
+        "tracebacks": 0,
+        "plan_counters": [
+          "FUSED_SPLIT_PLAN ok 3801: fa3=1 fa2=6 (onesided so far 327)"
+        ],
+        "one_sided_counters": [
+          "FUSED_SPLIT_ONESIDED 3801/3801: fa3=0 fa2=1 rows=1 max_kv_tiles=3 need_decode_rows>=6 (guard: kv_tiles<=decode_rows/2)"
+        ],
+        "server_log_sha256": "f4eff5e969cb880cdd10db484739ea0eb8632055e397aae654182154475573e3"
+      },
+      "result_sha256": "fae3bf44b1720c4adff172689cab4e470e5a5e2ec5bb2ec9d6e5b4d74ed94485"
     },
     {
+      "tag": "",
+      "backend": "sglang",
+      "dataset_name": "random",
+      "request_rate": 24.0,
+      "max_concurrency": null,
+      "sharegpt_output_len": null,
+      "random_input_len": 512,
+      "random_output_len": 96,
+      "random_range_ratio": 0.5,
+      "duration": 404.53441342897713,
+      "completed": 5760,
+      "total_input_tokens": 2206256,
+      "total_input_text_tokens": 2206256,
+      "total_input_vision_tokens": 0,
+      "total_output_tokens": 414164,
+      "total_output_tokens_retokenized": 414123,
+      "request_throughput": 14.238590856031747,
+      "input_throughput": 5453.8153659140935,
+      "output_throughput": 1023.804122100266,
+      "total_throughput": 6477.619488014359,
+      "mean_e2e_latency_ms": 89047.54004942952,
+      "median_e2e_latency_ms": 100601.27025470138,
+      "std_e2e_latency_ms": 44277.8973975137,
+      "p90_e2e_latency_ms": 140739.42605238408,
+      "p95_e2e_latency_ms": 150977.80542531982,
+      "p99_e2e_latency_ms": 155319.99531101433,
+      "mean_ttft_ms": 86325.05809875664,
+      "median_ttft_ms": 98641.57549664378,
+      "std_ttft_ms": 44357.804146373666,
+      "p90_ttft_ms": 138289.08422626555,
+      "p95_ttft_ms": 142761.24068964273,
+      "p99_ttft_ms": 152762.2611087002,
+      "mean_tpot_ms": 38.4569798935793,
+      "median_tpot_ms": 31.60969777534349,
+      "std_tpot_ms": 27.751294769760033,
+      "p90_tpot_ms": 54.8897518010438,
+      "p95_tpot_ms": 90.11286330065839,
+      "p99_tpot_ms": 165.2495808080683,
+      "mean_itl_ms": 38.39674078517795,
+      "median_itl_ms": 23.348256945610046,
+      "std_itl_ms": 63.91215606542802,
+      "p90_itl_ms": 89.24122154712677,
+      "p95_itl_ms": 121.02817790582773,
+      "p99_itl_ms": 259.8928948864341,
+      "concurrency": 1267.911489499928,
+      "accept_length": 2.111616932560642,
+      "max_output_tokens_per_s": 2428.0,
+      "max_concurrent_requests": 2424,
+      "strict_draft_accept_rate": 0.34913649991327833,
       "mixture": "mix64",
-      "arm": "SPLIT_1",
+      "arm": "NATIVE_1",
       "stream": "chat",
       "execution": {
         "mixture": "mix64",
-        "arm": "SPLIT_1",
-        "method": "MTPMIX_SPLIT",
-        "execution_calls": 55001,
-        "overlapped": 0,
+        "arm": "NATIVE_1",
+        "method": "MTPMIXFUSED",
+        "execution_calls": 55301,
+        "overlapped": null,
         "mixed_steps": 2051,
-        "compact_execution_calls": 0,
+        "compact_execution_calls": 55301,
         "graph_decode_lines": 213,
         "fallbacks": 0,
         "tracebacks": 0,
         "plan_counters": [
-          "FUSED_SPLIT_PLAN ok 2001: fa3=3 fa2=45 (onesided so far 202)"
+          "FUSED_SPLIT_PLAN ok 2001: fa3=1 fa2=47 (onesided so far 199)"
         ],
         "one_sided_counters": [
-          "FUSED_SPLIT_ONESIDED 2001/2001: fa3=0 fa2=3 rows=3 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+          "FUSED_SPLIT_ONESIDED 201/2085: fa3=0 fa2=39 rows=39 max_kv_tiles=959 need_decode_rows>=1918 (guard: kv_tiles<=decode_rows/2)"
         ],
-        "server_log_sha256": "49f412df1261fb09cdd03aec1dfd8212a64cdac60cf2fe81eeb72e63bbc1ffdd"
+        "server_log_sha256": "d083ed7594f7ed7316f4911d76b95ecce1890a3cdb2c553ade0b9a12ae368266"
       },
+      "result_sha256": "7b7551a89de4ae83e1de3d339dd4074adb77eafe93f6c5399f75dd6145b1681d"
+    },
+    {
+      "tag": "",
+      "backend": "sglang",
+      "dataset_name": "tracelab-claude",
+      "request_rate": 0.1,
+      "max_concurrency": null,
+      "sharegpt_output_len": null,
+      "random_input_len": 1024,
+      "random_output_len": 1024,
+      "random_range_ratio": 0.0,
+      "duration": 461.6719138547778,
+      "completed": 24,
+      "total_input_tokens": 2356851,
+      "total_input_text_tokens": 2356851,
+      "total_input_vision_tokens": 0,
+      "total_output_tokens": 65137,
+      "total_output_tokens_retokenized": 65131,
+      "request_throughput": 0.05198496871860689,
+      "input_throughput": 5105.034396225724,
+      "output_throughput": 141.08937114266237,
+      "total_throughput": 5246.123767368386,
+      "mean_e2e_latency_ms": 128646.6029486619,
+      "median_e2e_latency_ms": 127230.72968237102,
+      "std_e2e_latency_ms": 81477.4124603701,
+      "p90_e2e_latency_ms": 215610.7493938878,
+      "p95_e2e_latency_ms": 246714.91379309437,
+      "p99_e2e_latency_ms": 343796.13242415705,
+      "mean_ttft_ms": 64423.327443267524,
+      "median_ttft_ms": 61720.00524029136,
+      "std_ttft_ms": 48204.530290426665,
+      "p90_ttft_ms": 126119.14614047855,
+      "p95_ttft_ms": 135215.86155351248,
+      "p99_ttft_ms": 146593.88776661828,
+      "mean_tpot_ms": 26.6652287132438,
+      "median_tpot_ms": 19.152053270730768,
+      "std_tpot_ms": 20.69373924487983,
+      "p90_tpot_ms": 64.47602777715058,
+      "p95_tpot_ms": 75.80123358802743,
+      "p99_tpot_ms": 80.014308358357,
+      "mean_itl_ms": 23.672039568843708,
+      "median_itl_ms": 13.345591258257627,
+      "std_itl_ms": 47.42619626833923,
+      "p90_itl_ms": 42.14806280409297,
+      "p95_itl_ms": 70.66490361467004,
+      "p99_itl_ms": 200.7320593111217,
+      "concurrency": 6.68768963004123,
+      "accept_length": 2.144697317505083,
+      "max_output_tokens_per_s": 478.0,
+      "max_concurrent_requests": 9,
+      "strict_draft_accept_rate": 0.6961607156969668,
+      "mixture": "mix64",
+      "arm": "NATIVE_1",
+      "stream": "codex",
+      "execution": {
+        "mixture": "mix64",
+        "arm": "NATIVE_1",
+        "method": "MTPMIXFUSED",
+        "execution_calls": 55301,
+        "overlapped": null,
+        "mixed_steps": 2051,
+        "compact_execution_calls": 55301,
+        "graph_decode_lines": 213,
+        "fallbacks": 0,
+        "tracebacks": 0,
+        "plan_counters": [
+          "FUSED_SPLIT_PLAN ok 2001: fa3=1 fa2=47 (onesided so far 199)"
+        ],
+        "one_sided_counters": [
+          "FUSED_SPLIT_ONESIDED 201/2085: fa3=0 fa2=39 rows=39 max_kv_tiles=959 need_decode_rows>=1918 (guard: kv_tiles<=decode_rows/2)"
+        ],
+        "server_log_sha256": "d083ed7594f7ed7316f4911d76b95ecce1890a3cdb2c553ade0b9a12ae368266"
+      },
+      "result_sha256": "abb5f77485ba86f3e9dec03c4a915c8361ab7faee7948857a1efc17b3fdfdb80"
+    },
+    {
+      "tag": "",
+      "backend": "sglang",
+      "dataset_name": "random",
+      "request_rate": 24.0,
+      "max_concurrency": null,
+      "sharegpt_output_len": null,
+      "random_input_len": 512,
+      "random_output_len": 96,
+      "random_range_ratio": 0.5,
+      "duration": 406.53047220408916,
+      "completed": 5760,
+      "total_input_tokens": 2206256,
+      "total_input_text_tokens": 2206256,
+      "total_input_vision_tokens": 0,
+      "total_output_tokens": 414164,
+      "total_output_tokens_retokenized": 414114,
+      "request_throughput": 14.168679579592071,
+      "input_throughput": 5427.037210859806,
+      "output_throughput": 1018.7772585767657,
+      "total_throughput": 6445.814469436572,
+      "mean_e2e_latency_ms": 89104.4412880156,
+      "median_e2e_latency_ms": 101838.59286736697,
+      "std_e2e_latency_ms": 44219.741605705356,
+      "p90_e2e_latency_ms": 139674.66028574857,
+      "p95_e2e_latency_ms": 152029.0608455427,
+      "p99_e2e_latency_ms": 157149.56024300307,
+      "mean_ttft_ms": 86367.91804557272,
+      "median_ttft_ms": 99985.6071723625,
+      "std_ttft_ms": 44280.5738997039,
+      "p90_ttft_ms": 137342.1342274174,
+      "p95_ttft_ms": 149193.4226720594,
+      "p99_ttft_ms": 154653.1187804602,
+      "mean_tpot_ms": 38.59692673380267,
+      "median_tpot_ms": 31.678745427375866,
+      "std_tpot_ms": 27.66626554509038,
+      "p90_tpot_ms": 55.42742089982489,
+      "p95_tpot_ms": 92.53279223845941,
+      "p99_tpot_ms": 168.17538865614202,
+      "mean_itl_ms": 38.5947713099615,
+      "median_itl_ms": 23.330612340942025,
+      "std_itl_ms": 63.99740455654152,
+      "p90_itl_ms": 90.18997438251974,
+      "p95_itl_ms": 121.49811750277871,
+      "p99_itl_ms": 263.2357026450336,
+      "concurrency": 1262.4922777284673,
+      "accept_length": 2.11041804492329,
+      "max_output_tokens_per_s": 2479.0,
+      "max_concurrent_requests": 2457,
+      "strict_draft_accept_rate": 0.34896455151482125,
+      "mixture": "mix64",
+      "arm": "NATIVE_2",
+      "stream": "chat",
+      "execution": {
+        "mixture": "mix64",
+        "arm": "NATIVE_2",
+        "method": "MTPMIXFUSED",
+        "execution_calls": 54901,
+        "overlapped": null,
+        "mixed_steps": 2051,
+        "compact_execution_calls": 54901,
+        "graph_decode_lines": 214,
+        "fallbacks": 0,
+        "tracebacks": 0,
+        "plan_counters": [
+          "FUSED_SPLIT_PLAN ok 2001: fa3=4 fa2=44 (onesided so far 204)"
+        ],
+        "one_sided_counters": [
+          "FUSED_SPLIT_ONESIDED 2001/2001: fa3=0 fa2=4 rows=4 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+        ],
+        "server_log_sha256": "f1e26f42e58e4c35e46a277ed438d49284428948abaff46171a204dd24df935f"
+      },
+      "result_sha256": "309dc5dfe2e1a6ead5d80ed27000f8aa9afdcb72fcc71f32a0db637c48c87980"
+    },
+    {
+      "tag": "",
+      "backend": "sglang",
+      "dataset_name": "tracelab-claude",
+      "request_rate": 0.1,
+      "max_concurrency": null,
+      "sharegpt_output_len": null,
+      "random_input_len": 1024,
+      "random_output_len": 1024,
+      "random_range_ratio": 0.0,
+      "duration": 463.9799509756267,
+      "completed": 24,
+      "total_input_tokens": 2356851,
+      "total_input_text_tokens": 2356851,
+      "total_input_vision_tokens": 0,
+      "total_output_tokens": 65137,
+      "total_output_tokens_retokenized": 65128,
+      "request_throughput": 0.05172637298127725,
+      "input_throughput": 5079.639745304011,
+      "output_throughput": 140.38753153672735,
+      "total_throughput": 5220.0272768407385,
+      "mean_e2e_latency_ms": 129222.53116949773,
+      "median_e2e_latency_ms": 126329.45485785604,
+      "std_e2e_latency_ms": 83007.72754967671,
+      "p90_e2e_latency_ms": 221001.03744659573,
+      "p95_e2e_latency_ms": 247102.72095343092,
+      "p99_e2e_latency_ms": 345468.09627013275,
+      "mean_ttft_ms": 64021.0825597557,
+      "median_ttft_ms": 61657.039776444435,
+      "std_ttft_ms": 49168.24132968786,
+      "p90_ttft_ms": 125536.7238888517,
+      "p95_ttft_ms": 134108.24019014832,
+      "p99_ttft_ms": 146214.35262378305,
+      "mean_tpot_ms": 26.91895003067335,
+      "median_tpot_ms": 19.073301980975792,
+      "std_tpot_ms": 21.12281397656517,
+      "p90_tpot_ms": 64.62440338252274,
+      "p95_tpot_ms": 78.88426472816262,
+      "p99_tpot_ms": 81.28501022980912,
+      "mean_itl_ms": 24.0325840656079,
+      "median_itl_ms": 13.289946131408215,
+      "std_itl_ms": 48.41210285985016,
+      "p90_itl_ms": 43.43733657151461,
+      "p95_itl_ms": 75.61834305524826,
+      "p99_itl_ms": 200.3679294139146,
+      "concurrency": 6.684212844858164,
+      "accept_length": 2.1434425513324595,
+      "max_output_tokens_per_s": 486.0,
+      "max_concurrent_requests": 9,
+      "strict_draft_accept_rate": 0.6903695320727433,
+      "mixture": "mix64",
+      "arm": "NATIVE_2",
+      "stream": "codex",
+      "execution": {
+        "mixture": "mix64",
+        "arm": "NATIVE_2",
+        "method": "MTPMIXFUSED",
+        "execution_calls": 54901,
+        "overlapped": null,
+        "mixed_steps": 2051,
+        "compact_execution_calls": 54901,
+        "graph_decode_lines": 214,
+        "fallbacks": 0,
+        "tracebacks": 0,
+        "plan_counters": [
+          "FUSED_SPLIT_PLAN ok 2001: fa3=4 fa2=44 (onesided so far 204)"
+        ],
+        "one_sided_counters": [
+          "FUSED_SPLIT_ONESIDED 2001/2001: fa3=0 fa2=4 rows=4 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+        ],
+        "server_log_sha256": "f1e26f42e58e4c35e46a277ed438d49284428948abaff46171a204dd24df935f"
+      },
+      "result_sha256": "9d8a59831e5fc81db51707beb7c217786f982a916133f9afee8c7eae92d5cc7c"
+    },
+    {
       "tag": "",
       "backend": "sglang",
       "dataset_name": "random",
@@ -762,24 +940,9 @@
       "max_output_tokens_per_s": 2558.0,
       "max_concurrent_requests": 2438,
       "strict_draft_accept_rate": 0.3489988752520773,
-      "available_array_keys": [
-        "input_lens",
-        "output_lens",
-        "ttfts",
-        "itls",
-        "generated_texts",
-        "errors",
-        "spec_num_correct_drafts",
-        "spec_num_proposed_drafts",
-        "spec_verify_ct",
-        "cached_tokens",
-        "cached_tokens_details"
-      ]
-    },
-    {
       "mixture": "mix64",
       "arm": "SPLIT_1",
-      "stream": "codex",
+      "stream": "chat",
       "execution": {
         "mixture": "mix64",
         "arm": "SPLIT_1",
@@ -799,6 +962,9 @@
         ],
         "server_log_sha256": "49f412df1261fb09cdd03aec1dfd8212a64cdac60cf2fe81eeb72e63bbc1ffdd"
       },
+      "result_sha256": "5d66d771d009701214839b79d3ad3df47b63e46ba0f0326f71f83f85ec19bfb3"
+    },
+    {
       "tag": "",
       "backend": "sglang",
       "dataset_name": "tracelab-claude",
@@ -848,19 +1014,177 @@
       "max_output_tokens_per_s": 457.0,
       "max_concurrent_requests": 9,
       "strict_draft_accept_rate": 0.7020505484024797,
-      "available_array_keys": [
-        "input_lens",
-        "output_lens",
-        "ttfts",
-        "itls",
-        "generated_texts",
-        "errors",
-        "spec_num_correct_drafts",
-        "spec_num_proposed_drafts",
-        "spec_verify_ct",
-        "cached_tokens",
-        "cached_tokens_details"
-      ]
+      "mixture": "mix64",
+      "arm": "SPLIT_1",
+      "stream": "codex",
+      "execution": {
+        "mixture": "mix64",
+        "arm": "SPLIT_1",
+        "method": "MTPMIX_SPLIT",
+        "execution_calls": 55001,
+        "overlapped": 0,
+        "mixed_steps": 2051,
+        "compact_execution_calls": 0,
+        "graph_decode_lines": 213,
+        "fallbacks": 0,
+        "tracebacks": 0,
+        "plan_counters": [
+          "FUSED_SPLIT_PLAN ok 2001: fa3=3 fa2=45 (onesided so far 202)"
+        ],
+        "one_sided_counters": [
+          "FUSED_SPLIT_ONESIDED 2001/2001: fa3=0 fa2=3 rows=3 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+        ],
+        "server_log_sha256": "49f412df1261fb09cdd03aec1dfd8212a64cdac60cf2fe81eeb72e63bbc1ffdd"
+      },
+      "result_sha256": "2aedb6db1f322bc2759584cb7a9395c8d9527e7db3b89e1dbe984fffe123c600"
+    },
+    {
+      "tag": "",
+      "backend": "sglang",
+      "dataset_name": "random",
+      "request_rate": 24.0,
+      "max_concurrency": null,
+      "sharegpt_output_len": null,
+      "random_input_len": 512,
+      "random_output_len": 96,
+      "random_range_ratio": 0.5,
+      "duration": 404.3944018241018,
+      "completed": 5760,
+      "total_input_tokens": 2206256,
+      "total_input_text_tokens": 2206256,
+      "total_input_vision_tokens": 0,
+      "total_output_tokens": 414164,
+      "total_output_tokens_retokenized": 414115,
+      "request_throughput": 14.24352061754161,
+      "input_throughput": 5455.703615203972,
+      "output_throughput": 1024.1585890700526,
+      "total_throughput": 6479.862204274024,
+      "mean_e2e_latency_ms": 88414.94350679827,
+      "median_e2e_latency_ms": 100848.9586673677,
+      "std_e2e_latency_ms": 43765.55296916438,
+      "p90_e2e_latency_ms": 137660.5789648369,
+      "p95_e2e_latency_ms": 150165.40182484314,
+      "p99_e2e_latency_ms": 155091.45983476192,
+      "mean_ttft_ms": 85692.16594341106,
+      "median_ttft_ms": 99034.23297870904,
+      "std_ttft_ms": 43825.569693105004,
+      "p90_ttft_ms": 135254.36597503722,
+      "p95_ttft_ms": 147446.29996912554,
+      "p99_ttft_ms": 152606.81626426053,
+      "mean_tpot_ms": 38.36503029499396,
+      "median_tpot_ms": 31.50756958388516,
+      "std_tpot_ms": 27.563471757614664,
+      "p90_tpot_ms": 55.68055732609448,
+      "p95_tpot_ms": 93.28296464072858,
+      "p99_tpot_ms": 162.17297464630636,
+      "mean_itl_ms": 38.40089539678051,
+      "median_itl_ms": 23.040329416592915,
+      "std_itl_ms": 63.99729451617403,
+      "p90_itl_ms": 88.92978830263023,
+      "p95_itl_ms": 121.49920202791688,
+      "p99_itl_ms": 261.6189151257273,
+      "concurrency": 1259.3400707378578,
+      "accept_length": 2.11159028193551,
+      "max_output_tokens_per_s": 2564.0,
+      "max_concurrent_requests": 2436,
+      "strict_draft_accept_rate": 0.34917598708933567,
+      "mixture": "mix64",
+      "arm": "SPLIT_2",
+      "stream": "chat",
+      "execution": {
+        "mixture": "mix64",
+        "arm": "SPLIT_2",
+        "method": "MTPMIX_SPLIT",
+        "execution_calls": 55001,
+        "overlapped": 0,
+        "mixed_steps": 2051,
+        "compact_execution_calls": 0,
+        "graph_decode_lines": 214,
+        "fallbacks": 0,
+        "tracebacks": 0,
+        "plan_counters": [
+          "FUSED_SPLIT_PLAN ok 2001: fa3=3 fa2=42 (onesided so far 201)"
+        ],
+        "one_sided_counters": [
+          "FUSED_SPLIT_ONESIDED 2001/2001: fa3=0 fa2=3 rows=3 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+        ],
+        "server_log_sha256": "6f520931a72c8ee559e78b01e91486c8a4a3e333871d6da2088b99040fbc24fe"
+      },
+      "result_sha256": "e01a148604318cf70daeda656baac9b130822e514e2aa551a67e56f679065165"
+    },
+    {
+      "tag": "",
+      "backend": "sglang",
+      "dataset_name": "tracelab-claude",
+      "request_rate": 0.1,
+      "max_concurrency": null,
+      "sharegpt_output_len": null,
+      "random_input_len": 1024,
+      "random_output_len": 1024,
+      "random_range_ratio": 0.0,
+      "duration": 460.6404398828745,
+      "completed": 24,
+      "total_input_tokens": 2356851,
+      "total_input_text_tokens": 2356851,
+      "total_input_vision_tokens": 0,
+      "total_output_tokens": 65137,
+      "total_output_tokens_retokenized": 65129,
+      "request_throughput": 0.05210137435198351,
+      "input_throughput": 5116.465676785278,
+      "output_throughput": 141.40530088188126,
+      "total_throughput": 5257.87097766716,
+      "mean_e2e_latency_ms": 128243.68730047718,
+      "median_e2e_latency_ms": 124877.22496595234,
+      "std_e2e_latency_ms": 82555.4359204196,
+      "p90_e2e_latency_ms": 219520.8480142057,
+      "p95_e2e_latency_ms": 245802.01253751287,
+      "p99_e2e_latency_ms": 343649.1619252599,
+      "mean_ttft_ms": 63654.37801221075,
+      "median_ttft_ms": 61634.674035944045,
+      "std_ttft_ms": 48639.2008229437,
+      "p90_ttft_ms": 124914.56788759679,
+      "p95_ttft_ms": 134895.05460895595,
+      "p99_ttft_ms": 143639.24863582477,
+      "mean_tpot_ms": 26.579620764280136,
+      "median_tpot_ms": 19.365238793481847,
+      "std_tpot_ms": 20.90375595817641,
+      "p90_tpot_ms": 64.02053676695444,
+      "p95_tpot_ms": 77.39474667635916,
+      "p99_tpot_ms": 80.46223053588606,
+      "mean_itl_ms": 23.80695526614837,
+      "median_itl_ms": 13.275024946779013,
+      "std_itl_ms": 47.69212412804481,
+      "p90_itl_ms": 42.96255763620138,
+      "p95_itl_ms": 73.47390241920948,
+      "p99_itl_ms": 199.10034179687497,
+      "concurrency": 6.681672360320875,
+      "accept_length": 2.145078490533036,
+      "max_output_tokens_per_s": 462.0,
+      "max_concurrent_requests": 9,
+      "strict_draft_accept_rate": 0.6977914984564236,
+      "mixture": "mix64",
+      "arm": "SPLIT_2",
+      "stream": "codex",
+      "execution": {
+        "mixture": "mix64",
+        "arm": "SPLIT_2",
+        "method": "MTPMIX_SPLIT",
+        "execution_calls": 55001,
+        "overlapped": 0,
+        "mixed_steps": 2051,
+        "compact_execution_calls": 0,
+        "graph_decode_lines": 214,
+        "fallbacks": 0,
+        "tracebacks": 0,
+        "plan_counters": [
+          "FUSED_SPLIT_PLAN ok 2001: fa3=3 fa2=42 (onesided so far 201)"
+        ],
+        "one_sided_counters": [
+          "FUSED_SPLIT_ONESIDED 2001/2001: fa3=0 fa2=3 rows=3 max_kv_tiles=4 need_decode_rows>=8 (guard: kv_tiles<=decode_rows/2)"
+        ],
+        "server_log_sha256": "6f520931a72c8ee559e78b01e91486c8a4a3e333871d6da2088b99040fbc24fe"
+      },
+      "result_sha256": "9dbb8de5586c991d4fa3f22df6b31b9d96fa9aef965938f512740095b51247a4"
     }
   ]
 }

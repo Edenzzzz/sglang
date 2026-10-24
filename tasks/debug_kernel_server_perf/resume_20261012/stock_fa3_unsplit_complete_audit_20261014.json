@@ -1,0 +1,43 @@
+{
+  "MTPMIXFUSED_UNSPLIT_GENERIC_VERIFY": {
+    "requests": 12,
+    "stock_calls": 11701,
+    "split_counts": [
+      1
+    ],
+    "same_input_attention_check": true,
+    "server_sha256": "642dfa3bb15b924fa44a6c132b29efc3de2198a80332aadc97cf1eddadfd7ed0"
+  },
+  "MTPMIXFUSED_UNSPLIT_SPECIALIZED": {
+    "requests": 12,
+    "stock_calls": 11701,
+    "split_counts": [
+      1
+    ],
+    "same_input_attention_check": false,
+    "server_sha256": "392e64fcd66a452244da6c5f5bc7668367bcab9352a6ebe082523d22b5108ee6"
+  },
+  "MTPMIXFUSED_UNSPLIT_SPECIALIZED_VERIFY": {
+    "requests": 12,
+    "stock_calls": 11701,
+    "split_counts": [
+      1
+    ],
+    "same_input_attention_check": true,
+    "server_sha256": "a76ac3feecb80e615a6452b5befbc206391a4ab21ee16b6c27b030765e2b2868"
+  },
+  "MTPMIX_SPLIT_UNSPLIT_CONTROL": {
+    "requests": 12,
+    "stock_calls": 0,
+    "split_counts": [],
+    "same_input_attention_check": false,
+    "server_sha256": "b4075faf78c2f21a1eac1c107f7a036fd638fe73bbe727ef3c74ec24292160c6"
+  },
+  "MTPMIX_SPLIT_UNSPLIT_REPEAT": {
+    "requests": 12,
+    "stock_calls": 0,
+    "split_counts": [],
+    "same_input_attention_check": false,
+    "server_sha256": "f0d56fd11bf1a085b410c294f0ea0a196ed6fe0a54a4ef39a200f37c5c401ddd"
+  }
+}

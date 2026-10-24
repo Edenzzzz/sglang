@@ -1,0 +1,89 @@
+--- a/port07/include/flashinfer/attention/hopper/utils.cuh
++++ b/port07/include/flashinfer/attention/hopper/utils.cuh
+@@ -33,6 +33,19 @@
+ namespace flashinfer {
+ 
+ using namespace cute;
++
++#ifndef FUSED_FA3_STATIC_GQA
++#define FUSED_FA3_STATIC_GQA 0
++#endif
++static_assert(FUSED_FA3_STATIC_GQA >= 0);
++
++CUTLASS_DEVICE int FusedFa3GqaSize(int runtime_group_size) {
++#if FUSED_FA3_STATIC_GQA > 0
++  return FUSED_FA3_STATIC_GQA;
++#else
++  return runtime_group_size;
++#endif
++}
+ 
+ template <int CTA_Q, int CTA_KV>
+ CUTLASS_DEVICE int get_swa_begin_kv_tile_idx(int window_left, int q_tile_idx, const int qo_len,
+--- a/port07/include/flashinfer/attention/hopper/mainloop_mma.cuh
++++ b/port07/include/flashinfer/attention/hopper/mainloop_mma.cuh
+@@ -132,7 +132,7 @@
+   // group_size is 1 on every non-packed path, so the division is an identity there and this
+   // expression reduces to 0.7's exactly.
+ #ifdef FLASHINFER_FUSED_PACKED_Q
+-  const int gqa_g = mainloop_params.group_size;
++  const int gqa_g = FusedFa3GqaSize(mainloop_params.group_size);
+   const int qo_len_tok = qo_len / gqa_g;
+   const int ckv = (causal_kv_len >= 0) ? causal_kv_len : kv_len;
+   auto col_limit_right = [&](int qo_idx) {
+--- a/port07/include/flashinfer/attention/hopper/sparse_mainloop.cuh
++++ b/port07/include/flashinfer/attention/hopper/sparse_mainloop.cuh
+@@ -266,7 +266,7 @@
+       // The tile's last packed row is (q_tile_idx + 1) * CTA_Q - 1, whose TOKEN is that divided
+       // by G; the causal bound is that token + 1 + kv_len - qo_tokens. At G=1 this reduces to
+       // 0.7's expression exactly, which is why the G=1 arms passed either way.
+-      const int g_pk = mainloop_params.group_size;
++      const int g_pk = FusedFa3GqaSize(mainloop_params.group_size);
+       const int last_tok = ((q_tile_idx + 1) * CTA_Q - 1) / g_pk;
+       const int ckv = (causal_kv_len >= 0) ? causal_kv_len : kv_len;
+       num_kv_tiles =
+@@ -674,7 +674,7 @@
+       // validate the mapping end to end; the async form is the optimisation that
+       // follows, and the mapping does not change with it.
+       {
+-        const int G = mainloop_params.group_size;
++        const int G = FusedFa3GqaSize(mainloop_params.group_size);
+         Tensor mQ_raw = make_tensor(make_gmem_ptr(mainloop_params.packed_Q_ptr), mainloop_params.layout_Q);
+         auto gQp = get_packed_gqa_tensor(mQ_raw, select<0, 2>(TileShape_QKD{}), kv_head_idx, G,
+                                         qo_indptr, qo_len / G);
+--- a/port07/include/flashinfer/attention/hopper/epilogue.cuh
++++ b/port07/include/flashinfer/attention/hopper/epilogue.cuh
+@@ -187,8 +187,9 @@
+   // (token, head-in-group). Without this branch the epilogue clamps on the packed extent and
+   // writes packed rows as if they were tokens: measured qo_len=1024 / rows_left=1024 against an
+   // `o` of 256 token rows, residual 3.076e+06.
++  const int packed_group_size = FusedFa3GqaSize(group_size);
+   write_packed(O, layout_O, tile_shape_O, sO, thread_idx, NUM_COPY_THREADS, qo_tile_idx,
+-               qo_head_idx / group_size, group_size, qo_indptr, qo_len);
++               qo_head_idx / packed_group_size, packed_group_size, qo_indptr, qo_len);
+ #else
+   write_tiled<NUM_COPY_THREADS>(O, tiled_copy_O, layout_O, tile_shape_O, sO, thread_idx,
+                                 qo_tile_idx, qo_head_idx, qo_indptr, qo_len);
+--- a/port07/tests/fused_fa3_persistent_ext.cu
++++ b/port07/tests/fused_fa3_persistent_ext.cu
+@@ -218,6 +218,10 @@
+                int64_t max_seqlen_q, at::Tensor kv_lens_per_req,
+                at::Tensor q_indptr_per_req, at::Tensor kv_indptr_per_req,
+                bool native_fa2, at::Tensor timeline) {
++#if FUSED_FA3_STATIC_GQA > 0
++  TORCH_CHECK(num_kv_heads > 0 && num_qo_heads == FUSED_FA3_STATIC_GQA * num_kv_heads,
++              "FA3 static GQA specialization does not match head ratio");
++#endif
+ #if FLASHINFER_FUSED_PAGED_TMA
+   TORCH_CHECK(native_fa2 && page_size == 128 && k_cache.dim() == 4 &&
+               k_cache.size(1) == page_size && k_cache.size(2) == num_kv_heads &&
+--- a/up_racefix/python/sglang/srt/layers/attention/fused_fa3_loader.py
++++ b/up_racefix/python/sglang/srt/layers/attention/fused_fa3_loader.py
+@@ -303,6 +303,7 @@
+             # is the measured race. 2 stages fits once ALIAS_SMEM is on (below).
+             "-DFUSED_FA3_STAGES=" + os.environ.get("FA3_STAGES", "2"),
+             "-DFUSED_FA3_CONSUMER_REGS=" + os.environ.get("SGLANG_FUSED_FA3_CONSUMER_REGS", "0"),
++            "-DFUSED_FA3_STATIC_GQA=" + os.environ.get("SGLANG_FUSED_FA3_STATIC_GQA", "0"),
+             # Store-completion handshake: the producer cannot refill smem_v (which sO aliases)
+             # until the consumer has finished reading sO for the current work item. Off by
+             # default until measured -- a mismatched arrival count here deadlocks the kernel.

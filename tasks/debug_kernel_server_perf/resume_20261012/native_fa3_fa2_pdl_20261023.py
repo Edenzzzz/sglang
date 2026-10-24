@@ -447,6 +447,9 @@ class UnifiedServingPlan:
     total_calls = 0
 
     def run(self, query, key, value, scale, output, pdl=True, query_tile=None, timeline=None):
+        if output is None:  # the backend passes no preallocated output on some paths, as for NativePdlPlan
+            import torch
+            output = torch.empty_like(query)
         self.plan.run(query, key, value, scale, output)
         self.calls += 1
         UnifiedServingPlan.total_calls += 1

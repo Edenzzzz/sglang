@@ -39,9 +39,10 @@ Tasks, in priority order:
       - [x] (Mandatory) Fused unified reduction: FA2 and FA3 split partials reduced inside the FA2 launch by the plan's
             merge schedule, no merge launch.
       - [x] A6 beats native v3 on stage 1: H200 1.027-1.047x under `geometry_fa3` (H20: level).
-      - [x] FA2 executor chosen with measured causes. v3's BatchPrefill body under our plan beats the persistent
-            overlap + LPT kernel: 6.48 vs 9.93 ms on four-mode FA2 rows (H20, both under the same plan; the persistent
-            number predates the race fix). The persistent kernel stays as the ablation.
+      - [ ] FA2 executor: optimize the persistent overlap + LPT kernel (the intended executor). Today the v3-body
+            executor leads, 6.48 vs 9.93 ms on four-mode FA2 rows (H20), but the comparison is not like for like. The
+            persistent number predates three fixes the v3 body already has: the chunk-parallel merge, stock FA3 and
+            atomic counter resets. Next: port the three, then re-measure both executors under the same plan.
       - [ ] (Optional) DSMEM JIT handoff (MELD).
       - [x] (Optional) Multicast: under 1% of FA2's KV loads are shared, so FA2 multicast is not built. FA3's ceiling
             is still open (A5.5).
@@ -72,8 +73,12 @@ Tasks, in priority order:
       **3. FA2 executor**
       - [x] v3's BatchPrefill body, non-persistent, both classes in one launch (`UNIFIED_FA2_NP=1`). v3's Q32 layout
             (2x2 warps, V2 merge-union barrier) and `independent_pdl` are ported into port07's `prefill.cuh`.
-      - [x] Persistent overlap + LPT kernel (ablation). KV depth is not its gap: v3's dispatch uses MMA_KV 2 (16-row)
-            and 4 (32-row); a deeper 16-row tile drops to 1 CTA/SM and loses 26-36%.
+      - [ ] Persistent overlap + LPT kernel (the intended executor, being optimized).
+        - KV depth is not its gap. Its 16-row class uses MMA_KV 2, as v3's 16-row kernel does.
+        - Raising it to MMA_KV 4 widens the per-stage KV tile to 256 keys (1 q warp x 4 kv warps x 16 x 4), i.e.
+          128 KB of K+V shared memory. That leaves one CTA per SM, and FA2 rows lose 26-36%.
+        - Pending: chunk-parallel merge in its merge items, stock FA3, atomic resets; then the same FA2-rows and
+          stage-1 comparison as the v3-body executor.
       - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
             current captures mix q=1 and q=4 rows, so this is untested.
 

@@ -291,8 +291,26 @@ Tasks, in priority order:
               reset of the ticket counter is not ordered before the next launch's ticket atomics, so a ticket can land
               past the grid, and `queue[t]` reads out of bounds. The group and merged counters have the same exposure.
               Fixed: every cross-launch reset is an `atomicExch`, in both the NP and persistent kernels, and an
-              out-of-range ticket traps. Rerun with three repeats plus FP32 + 20 graph replays on all 92:
-              `unified/unified_h20_np2r_20261025.sh`.
+              out-of-range ticket traps.
+              - With the atomic resets (`unified/unified_h20_np2r_20261025.sh`) the trap still fired on every FA2-rows
+                run: atomics were necessary but not sufficient.
+              - The real cause: the embedded BatchPrefill body ends with `griddepcontrol.launch_dependents`, so each
+                compute CTA released the next launch while it still had epilogue work (group check-in; for the last
+                CTA, the counter reset). Two launches of the same plan then overlapped on one counter and one partial
+                slab.
+              - Fixed with a Params trait, `suppress_pdl_trigger` (`prefill.cuh`), set by the NP executor: dependents
+                launch at CTA exit.
+            - [x] 2026-10-25 **Race-fixed executor beats v3's FA2 launch** (`unified/unified_h20_np2s_20261025.sh`;
+                  flashinfer `136635f` + the trigger fix; three repeats; FP32 + 20 graph replays pass on all 92, the
+                  trap never fires):
+                  | | two-mode | four-mode |
+                  |---|---|---|
+                  | v3's FA2 launch | 5.46 ms | 7.16 ms |
+                  | ours (v3 body, chunk-parallel ticketed merge, `geometry`, stock FA3) | 5.30 ms (1.03x) | 6.48 ms (1.105x) |
+                  - Repeats agree to within 0.01 ms.
+                  - The early trigger had also let back-to-back launches overlap, which distorted every earlier FA2
+                    timing of this executor. Every NP FA2-rows number above this line predates the fix.
+            - [ ] Stage 1 with this executor (`unified/unified_h20_np2s_stage1_20261025.sh`, running).
       - [ ] **FA3 scheduling:** v3's geometry_v3 prefix split inside the unified plan; dynamic pulling with a
             causal-aware LPT cost in the adapter.
       - [ ] **(Optional) DSMEM JIT reduction, as the MELD paper does it** (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`,

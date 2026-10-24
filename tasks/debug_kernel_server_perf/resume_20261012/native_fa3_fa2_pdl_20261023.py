@@ -434,6 +434,51 @@ class NativePdlPlan:
         return output
 
 
+class UnifiedServingPlan:
+    """A6 in serving: one unified plan per forward batch (shared by every layer), the same run() interface as
+    NativePdlPlan. FA3 rows run as stock flash-attention at the plan's split count; FA2 rows run v3's BatchPrefill body
+    with the plan's in-launch merge schedule (FA2 groups and FA3 split rows); no merge launch."""
+
+    def __init__(self, plan):
+        self.plan = plan
+        self.shape = SimpleNamespace()
+        self.calls = 0
+
+    total_calls = 0
+
+    def run(self, query, key, value, scale, output, pdl=True, query_tile=None, timeline=None):
+        self.plan.run(query, key, value, scale, output)
+        self.calls += 1
+        UnifiedServingPlan.total_calls += 1
+        if UnifiedServingPlan.total_calls % 100 == 1:
+            st = self.plan.stats
+            logger.info("NATIVE_PDL_CALL calls=%d a6_unified=1 fa3_rows=%d items16=%d items32=%d fa3_splits=%d "
+                        "verify_tokens=%d", UnifiedServingPlan.total_calls, getattr(self.plan, "fa3_rows", -1),
+                        st["items16"], st["items32"], st["max_splits_fa3"],
+                        getattr(self.shape, "mixed_verify_tokens", 0))
+        return output
+
+
+def prepare_unified(backend, queries, prefixes, metadata):
+    executor = getattr(backend, "_a6_unified_executor", None)
+    if executor is None:
+        import torch
+        torch.ops.load_library(os.environ["UNIFIED_SO"])
+        import unified_executor_20261024 as unified
+        executor = unified.UnifiedExecutor(
+            backend.num_attention_heads, backend.num_kv_heads, backend.device,
+            fa3_min_packed=int(os.environ.get("UNIFIED_FA3_MIN", "33")))
+        backend._a6_unified_executor = executor
+        logger.info("A6_UNIFIED executor heads=%d kv_heads=%d fa3_min=%d stock_fa3=%s policy=%s",
+                    backend.num_attention_heads, backend.num_kv_heads, executor.fa3_min_packed,
+                    os.environ.get("UNIFIED_FA3_STOCK"), os.environ.get("UNIFIED_SPLIT_POLICY"))
+    plan = executor.plan(list(queries), [p + q for p, q in zip(prefixes, queries)], metadata.page_table)
+    backend._a6_unified_plans = getattr(backend, "_a6_unified_plans", 0) + 1
+    if backend._a6_unified_plans % 200 == 1:
+        logger.info("A6_UNIFIED_PLAN plans=%d stats=%s", backend._a6_unified_plans, plan.stats)
+    return UnifiedServingPlan(plan)
+
+
 def prepare_native_pdl(backend, forward_batch, metadata):
     if backend.page_size != 1 or backend.use_mla or backend.topk > 1 or backend.fa_impl_ver != 3:
         return None
@@ -449,6 +494,8 @@ def prepare_native_pdl(backend, forward_batch, metadata):
             backend._native_pdl_bypass_logged = True
             logger.warning("NATIVE_PDL_BYPASS queries=%s heads=%d kv_heads=%d", queries, heads, kv_heads)
         return None
+    if os.environ.get("SGLANG_A6_UNIFIED") == "1":
+        return prepare_unified(backend, queries, prefixes, metadata)
     fp32_partials = os.environ.get("SGLANG_NATIVE_PDL_FP32_PARTIALS") == "1"
     direct_bf16_output = os.environ.get("SGLANG_NATIVE_PDL_DIRECT_BF16_OUTPUT") == "1"
     executor_name = "_native_pdl_fp32_executor" if fp32_partials else "_native_pdl_executor"

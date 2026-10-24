@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.57.0 — A6 beats native v3 on the H200; serving integration of the unified dispatcher (2026-10-25)
+
+- A6 stage 1 on the re-forked H200 (96 fresh captures): 1.027-1.047x native v3 and 1.43-1.51x sglang's FA3 call
+  under `geometry_fa3`, all FP32-exact. On H20 it is level with v3.
+- What got it there:
+  - Stock flash-attention for FA3 at the plan's split, which removed a uniform 1-2% scheduler loss.
+  - v3's BatchPrefill body as the FA2 executor, with a chunk-parallel in-launch merge.
+  - A fixed race: the embedded body triggered the next PDL launch before the counters were reset
+    (`suppress_pdl_trigger`, atomic resets, ticket trap).
+- Measured negatives: SM pre-assignment (a per-step oracle gains < 0.1%), interleaved merge items, last-arriver merge
+  on four-mode, deeper KV tiles.
+- Serving: `SGLANG_A6_UNIFIED=1` in `prepare_native_pdl` builds one unified plan per forward batch. The pair driver
+  takes `--native-env`. Stage 2 (full stack vs stock, with v3 and A6 as the kernel) and Llama-3.3-70B stage 1 (TP4,
+  H20) are set up.
+- H200 restore: `prov_h200_20261024.sh` plus `fix_serving_src_20261025.sh` (serving-protocol client,
+  `mn_bench_pair.sh`).
+- Docs: A6 regrouped by requirement / feature; CLAUDE.md: group by item, never chronologically.
+
 ## v1.56.0 — Fused unified reduction; v3's FA2 body as a second executor; multicast ceiling (2026-10-24)
 
 - A6, mandatory part: FA3's split rows are now reduced by plan-scheduled merge items in the FA2 launch, the same

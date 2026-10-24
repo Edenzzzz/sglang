@@ -63,3 +63,5 @@ if [ ! -d $S/python ]; then
 fi
 cp $W/perf/rss/*.py $S/; cp $W/pdc/mn_bench.sh $S/; cp $B/tracelab.jsonl.gz $S/tracelab_unique.jsonl.gz
 log "PROVISION_DONE sgl=$($P -c 'import sgl_kernel' 2>/dev/null && echo 1) fi=$($P -c 'import flashinfer' 2>/dev/null && echo 1) qwen=$(ls qwen7b/*.safetensors 2>/dev/null | wc -l) draft=$([ -f qwen7b_eagle3/model.safetensors ] && echo 1) fa=$([ -d $NK/flash-attention/hopper ] && echo 1)"
+# Serving-protocol pieces for the pair driver (patched client, workload_protocol, mn_bench_pair.sh).
+bash $W/ub/fix_serving_src_20261025.sh && log "serving source fixed"

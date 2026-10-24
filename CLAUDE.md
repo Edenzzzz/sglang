@@ -18,6 +18,11 @@
   every intermediate hypothesis is unreadable; keep the conclusion and the
   evidence, delete the path.
 
+- **Exception -- the paper draft.** `tasks/paper_outline.md` is a paper draft, not a task doc. It follows the format
+  of the user's original outline (`tasks/AttentionFuse Outline OSDI 25'.docx`): title, the outline bullets, Abstract,
+  then sections 1-9 with the docx's subsection names. It has no `# Current goal`, no checklists and no dated
+  TODO items; open work goes into the task docs, and pending results appear inline as `[pending]`.
+
 # Reference Lists
 
 - Every paper in a task doc's reference list gets exactly three bullets:

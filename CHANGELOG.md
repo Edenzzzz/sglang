@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.51.0 — C1 restated as the unified tile dispatcher + merge schedule; kernel items unchecked (2026-10-24)
+
+- C1 is one CPU-side plan that assigns every tile (FA2 16/32/48, FA3 > 48) and the split-KV merge schedule (JIT
+  reduction by the last partial, no merge kernel). Running FA3 and FA2 side by side is not the contribution.
+- Task file: the "Where it stands" block is removed; the current goal is rewritten; A and B are unchecked (never
+  built); A6 now specifies the unified plan.
+- `paper_outline.md` follows the original docx outline format. CLAUDE.md records it as the exception to the task-doc
+  format.
+
 ## v1.50.0 — Outline rewritten per stage; kernel goes back to the user's tile rule + LPT; Llama-70B provisioning (2026-10-24)
 
 - `tasks/paper_outline.md` rewritten: current goal; per-stage claim / rationale / baselines / results for the three

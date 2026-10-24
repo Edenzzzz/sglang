@@ -1,178 +1,62 @@
 # Current goal
 
-Fused FA3+FA2 SM pre-assignment attention for a 4-mode MTP (EAGLE3) serving schedule, optimised
-on real serving workloads, then the EDF model and the PD-colocation argument
-(`tasks/pd_colocation_vs_disagg.md`). Bar: >=30% TTFT and ITL, >=10% throughput on realistic
-chat + TraceLab workloads. Single H200 trial `095f01a3e1585eea` (`vibecuda`); H20 multi-node only
-after the kernel items close (<=16 GPUs).
+Fused FA3 + FA2 attention for the 4-mode MTP (EAGLE3) serving schedule, built to the user's tile rule and optimised on
+real serving steps, then the EDF step model and the PD-colocation argument (`pd_colocation_vs_disagg.md`).
+- **Bar:** >= 30% on TTFT and ITL (or their SLO attainment) and >= 10% throughput on realistic chat + TraceLab
+  workloads.
+- **Models:** Qwen2.5-7B, Llama-3.3-70B (next), GLM-4.5-Air.
+- **Hardware:** H200 trial `34c7bd503d461dc1` for stages 1-2; H20 job `2f608c1b1a67cf09` for multi-node.
 
-**Where it stands (2026-10-18):**
-- [x] Kernel items A, B and A5 closed (2026-10-17). The FA3 role runs flash-attention's kernel (paged TMA, `-DNDEBUG`,
-  fast math, dynamic scheduler) at parity with sgl-kernel FA3; FA3 || FA2 co-running buys -18% on balanced steps but
-  is bounded at ~1.2% of serving GPU time on TraceLab. Multicast, q-tile choice, split reduction and in-kernel
-  backfill are closed by measurement or measured bound (A5).
-- [x] Best serving config (single H200): PD multiplexing + worker-side EDF with uncached-token TTFT deadlines, decode
-  divisor 30 -- vs stock MTP all 12 bar metrics clear in the mean (C=8 four repeats, C=16 three), output gate PASS.
-  (Direct baselines -> PD multiplexing + EDF.) **Not our method (user, 2026-10-18): pdmux is a baseline only.** It
-  cannot use the CPU-GPU overlap scheduler (our pdmux arms run `--disable-overlap-schedule`; the 4-mode arms run with
-  `disable_overlap_schedule: False`) and it multiplies the CUDA graphs to capture by the number of green-context SM
-  groups (5 on H20, 8 configured on H200), where the 4-mode step keeps one graph set. Both are advantages of ours to
-  state in the paper; the bar is judged on the 4-mode fused schedule.
-- [x] S4 step model on that schedule: decode ITL predictable to ~9% held-out vs 35-117% on the unfused schedules.
-- [x] 8 H20s (`pd_colocation_vs_disagg.md`): the same workers plus per-step SM sharing (TTFT deadlines + 24 ms ITL
-  budget) clear all 12 vs stock colocation + MTP in both repeats (smallest -39%), H20 output gate PASS.
-- [ ] **4-mode MTP schedule on H200 (2026-10-18, re-forked trial `d6a80befdd4e4da5`, provisioned from the H20 recipe:
-  upstream 3fef129 + `h20_overlay.tgz` + port07 + uncached deadlines; harness `mn_h200_fourmode_20261018.sh`, one worker,
-  agent C=8 + ShareGPT 8 req/s, 48 agent requests; all runs 0 tracebacks / 0 fallbacks).** vs stock MTP (same harness,
-  same session): chunk 2048 agent +42% / -24% / -34%, chat TTFT -68% / ITL -23%; chunk 1024 agent +41% / -17% / -50%, chat
-  -64% / -29.7%; chunk 512 agent -8% / +48% / -51%. Chat throughput = offered load in every arm. Misses at 1024: agent TTFT
-  and chat ITL (0.3 point short). **Deadline-driven chunk (small 1024, large 4096, only late requests longer than one
-  small chunk count; `SKIP_BASE=1 CHUNKS=4096 DEADLINE_CHUNK=1024:4096:<tok/s> bash mn_h200_fourmode_20261018.sh`, both
-  clean):** pace 12000 agent +46% / -28.5% / -31.0%, chat TTFT -70.8% / ITL -21.2%; pace 6000 agent +47.7% / -29.9% /
-  -31.0%, chat TTFT -71.7% / ITL -22.4%. **The 4-mode MTP schedule on H200 reaches the bar on agent throughput, TTFT
-  (-29.9%) and ITL and on chat TTFT; chat ITL (-22%) is the remaining miss** (single repeats; chat throughput is the
-  offered load). Repeat 2 of pace 6000: agent +48.0% / -28.9% / -33.3%, chat -72.3% / -23.0%. **Large chunk 2048 instead of
-  4096 (`DEADLINE_CHUNK=1024:2048:6000`, clean): agent +51.8% / -29.7% / -40.7%, chat TTFT -73.7% / ITL -26.7%** --
-  better on every metric; remaining gaps agent TTFT (0.3 point) and chat ITL (3.3 points). **Chunk pairs 768/2048 and 1024/1536 (clean):** agent +50% / -29.1% / -41.9%, chat -73.1% / -26.1%; agent +44% /
-  -25.4% / -36.0%, chat -69.0% / -26.1%. Across all five chunk settings chat ITL stays at 12.1-12.7 ms (-23..-27% vs
-  stock MTP's 16.5 ms) whatever the mixed-step length, so the remaining chat-ITL gap is the MTP decode step itself
-  (3 draft steps + a 4-token verify at ~2.1 accepted tokens), not prefill interference; -30% needs <= 11.55 ms. Best
-  setting 1024/2048: agent +52% / -29.7% / -40.7%, chat TTFT -73.7% / ITL -26.7%. Composition counter (worker log,
-  `FUSED_SPLIT_CALLS`, logged every 500): >= 66001 split attention calls (~2.36K 4-mode steps x 28 layers) in the
-  1024/2048 arm and in its 2-step / 3-token repeat; 0 in stock MTP; fallbacks 0 everywhere.
-  - [x] 2026-10-18 matched repeat of the best setting (stock MTP + ours 1024/2048, same session; clean): rep 2 agent
-    +42.4% / -28.9% / -32.0%, chat TTFT -71.8% / ITL -22.8% (rep 1: +51.8% / -29.7% / -40.7%, chat -73.7% / -26.7%).
-    Two-rep means: agent 105.9 vs 72.0 tok/s (+47%), TTFT 12.14 vs 17.18 s (-29.3%), ITL 16.5 vs 25.9 ms (-36%); chat
-    TTFT 2.67 vs 9.79 s (-72.7%), ITL 12.3 vs 16.4 ms (-25%); chat throughput = offered load. Per-request tok/s/user
-    (p1 / p10 / median / p90 / p99), rep 1 | rep 2 -- agent stock 5.2/21.4/49.8/84.8/97.9 | 5.2/17.2/49.8/81.7/94.3, ours
-    25.9/37.5/57.0/113.5/143.5 | 21.0/33.4/53.6/98.2/132.3; chat stock 11.5/27.5/81.8/253.0/335.8 |
-    11.7/27.3/95.3/253.3/336.4, ours 20.3/33.2/184.3/264.2/354.2 | 19.6/32.8/179.9/262.2/344.6. The tail moves most (agent
-    p1 4-5x). Figure `tasks/pd_colocation/figs/h200_fourmode_best_reps_20261018.png` (+ `.csv`). Agent TTFT (-29%) and
-    chat ITL (-23..-27%) stay below -30% in both reps; the rest clear. sglang `76cfe56b8`; `SPEC_TAG=_rep2 CHUNKS=2048
-    DEADLINE_CHUNK=1024:2048:6000 bash tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; figure `SID=d6a80befdd4e4da5
-    MN_CP=i18n-bd python3 tasks/pd_colocation/mn_ab_figure.py figs/h200_fourmode_best_reps_20261018
-    stock_mtp=coloc_sgl_mtps_h200_c8,ours_4mode=coloc_cache_edf_mtp_h200_4mode_unc_ch2048_dl1024-2048-6000_c8` (stock rep 1
-    is directory `..._c8b`, linked as `_c8_rep1`; `_c8` is the aborted metrics-port attempt).
-  - [x] 2026-10-18 where chat ITL goes, and a step-time budget on the chunk (negative). Chat ITL is the mean step
-    interval; split by interval (rep 2, share of chat ITL time): stock < 10 ms 21% / 20-80 ms 31% / > 80 ms 34% (mean
-    237 ms); ours 24% / 46% / 16% (mean 110 ms -- 2048 chunks over 32-64K prefixes). `apply_edf_step_budget.py`
-    (`STEP_BUDGET=budget_ms:a:b`: largest chunk with a*c + b*c*(prefix + c/2) <= budget, a=0.02, b=5e-7) tests whether
-    shortening deep-context mixed steps buys chat ITL. vs the two stock reps' means: budget 50 ms on 1024/2048 (caps
-    verified depth-dependent: 2048 -> 1101 at a 50K prefix, -> 1902 at 12K; 782 capped steps; >= 71001 split calls; 0
-    tracebacks / fallbacks) agent +37.9% / -21.8% / -34.6%, chat -65.7% / -23.5% -- worse TTFT, same chat ITL (12.5 vs
-    12.3 ms). The first sweep (budgets 60 / 80 on 1024/4096) read `prefix_len`, which is not refreshed between chunks,
-    so it capped by token count only (~3000 / ~4000), not by depth -- not a test of the rule (agent +40% / -25.1% /
-    -34.6%, chat -68.3% / -22.3%; +42.4% / -26.2% / -32.3%, -69.4% / -21.1%). Conclusion: at a fixed prefill total,
-    re-slicing it does not move the mean step interval chat sees; 1024/2048 stays best. sglang `708cd9dfe` + this
-    commit; `SKIP_BASE=1 CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 STEP_BUDGET=50:0.02:5e-7 REP_SUFFIX=_v2 bash
-    tasks/pd_colocation/mn_h200_fourmode_20261018.sh` (patch applied on the pod tree, removed after).
-  - [x] 2026-10-18 traced A/B (STEP_TRACE=1, both arms; clean, >= split calls as above): rep 3 of the best setting vs its
-    own stock MTP: agent +45.5% / -29.0% / -35.7%, chat TTFT -71.5% / ITL -23.8% (three reps: agent TTFT -29.7 / -28.9 /
-    -29.0%, chat ITL -26.7 / -22.8 / -23.8%). (a) Host overhead is not the remaining lever: 4-mode mixed steps cannot use
-    the prefill CUDA graph (`can_run_graph` rejects MIXED) and run eager, but the GPU sits idle only 3.2 ms after each one
-    (2742 steps, 8.8 s) and 0.16 ms after each decode step (3.0 s), against 297 s of GPU time -- <= 4% even if all of it
-    were recovered. Per kind, ours: decode 9.14 ms x 18808, mixed 44.0 ms x 2742 (743 prefill tokens mean); stock
-    MTP: decode 10.94 ms x 15448, mixed 59.0 ms x 2151. (b) EDF step model (S4; `fit_pdmux_step.py`, the stock 5-term
-    form, fit on the first half, tested on the second): decode-only GPU time MAPE 3.6% ours / 2.7% stock; mixed steps
-    26.7% (p90 38.0%) ours vs 53.5% (p90 94.1%) stock -- the 4-mode step is twice as predictable where EDF needs it.
-    `STEP_TRACE=1 SPEC_TAG=_trace CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 bash
-    tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; `tasks/perf_model/steptrace_util.py` and
-    `tasks/perf_model/fit_pdmux_step.py` on the two `worker_r0_g0.log`. sglang `f04f12557` + this commit.
-  - [x] 2026-10-18 steeper EDF deadline slope (negative for the bar). Default deadlines grow 1000 ms per 5000 uncached
-    tokens (~ the H200 prefill time), so agents are ordered near arrival + service time; `TTFT_SCALE_MS=5000` (5x)
-    pushes agent order toward shortest-first. vs the two stock reps' means, pace 6000 / 2000: agent +40.8% / -21.2% /
-    -38.1% and +44.9% / -26.0% / -38.9%; chat TTFT -98.7% / -98.6% (127 / 138 ms), ITL -20.5% / -21.1%. Agent median TTFT
-    drops to 5.0 / 4.0 s (from ~11 s) but the longest prompts wait behind every shorter one (p99 45.7 / 43.1 s vs 23 s), so
-    mean agent TTFT -- the bar's metric -- gets worse. Middle slope `TTFT_SCALE_MS=2000`, pace 3000: agent +43.9% / -26.2% /
-    -38.1%, chat TTFT -86.8% / ITL -23.5% (agent median 7.8 s, p99 29.9 s) -- same trade, smaller. Clean (0 tracebacks /
-    fallbacks); the default slope stays best for mean agent TTFT. `SKIP_BASE=1 TTFT_SCALE_MS=5000
-    CHUNKS=2048 DEADLINE_CHUNK=1024:2048:{6000,2000} bash tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; sglang
-    `562fd566d` + this commit.
-  - [x] 2026-10-18 GPU bubbles inside mixed steps, and per-chunk radix checkpoints (negative). Torch profile of 60 steps
-    during a 40K prefill over 8 decoding rows (`tasks/pd_colocation/prof/prof_mixed_20261018.py`, GPU activity only):
-    ours GPU-busy 74.8% of the window (690 ms idle of 2735 ms) vs stock MTP 91.6% (stock's window holds 8192-token
-    prefill steps). With stacks (`prof/sync_sites.py`; CPU tracing inflates host gaps ~2x) the largest idle time
-    preceded: the per-chunk radix checkpoint of the chunked request (checkpoint_into_tree / _add_new_node /
-    collect_full_device_indices, ~194 ms over 43 chunks), CUDA-graph input copies (fill_from, 125 ms), flashinfer plan()
-    on the base wrapper (85 ms, 567 DtoH syncs), prepare_for_draft in forward_mixed_spec (66 ms). Skipping the base plan
-    was measured harmful on 10-09 (unplanned-wrapper fallback), so the checkpoint was tested: `apply_checkpoint_every.py`
-    (`CKPT_EVERY=8192`: checkpoint a chunked prefill every 8192 computed tokens, stock's rate; gate PASS, divergence
-    identical to the chunk-size null case). Serving (traced, >= 601 checkpoints skipped, >= 66001 split calls, 0
-    tracebacks / fallbacks): agent 104.1 tok/s / 12.21 s / 17.4 ms, chat 2.76 s / 12.5 ms -- unchanged (-28.9% agent TTFT
-    vs the stock mean); mixed step 44.17 ms vs 43.96 ms. The checkpoint's host time overlaps GPU work in serving; the
-    profile window's idle share does not translate into step time. `SKIP_BASE=1 STEP_TRACE=1 CKPT_EVERY=8192
-    CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 bash tasks/pd_colocation/mn_h200_fourmode_20261018.sh`; gate `bash
-    /dev/shm/w/mn/gate_h200_ckpt_20261018.sh`; sglang `d15297007` + this commit (patch removed from the pod tree after).
-  - [x] 2026-10-19 FA3 prefill-chunk launch shape (negative, no lever). The mixed step's FA3 call (one chunked request,
-    causal, `num_splits` / `pack_gqa` left to the auto heuristic) was suspected of leaving SMs idle when a chunk has
-    under 1-2 waves of tiles. Microbench, Qwen-7B shapes (28/4 heads, d128), H200: time is linear in chunk length at
-    every depth (prefix 4K / 16K / 50K / 120K x chunk 512 / 1024 / 2048: 66-272 us, 231-925, 724-2829, 1650-6573 us),
-    and forced splits 1-6 or pack_gqa on / off are all within +-2% of auto (split >= 2 is 5-20% slower at 4K-16K).
-    50K x 1024 runs at ~540 TFLOP/s. A 743-token chunk at 50K depth costs ~1 ms of attention per layer, ~28 ms of the
-    44 ms mixed step, so the step is attention-FLOP-bound on work the bar holds fixed; chat ITL on the standard mix is
-    not limited by launch shape. `tasks/perf_model/fa3_chunk_splits.py` on pod `d6a80befdd4e4da5` (sgl-kernel FA3).
-  - [x] 2026-10-18 FP8 linear layers on both arms (`WORKER_EXTRA="--quantization fp8"`, BF16 KV cache; exploratory --
-    FP8 changes model numerics, no output gate run, not a bar result). First run: our arm took no split at all -- under
-    FP8 linear the attention layers carry k/v_scale_float = 1.0 and `_fused_split_dispatch` refused any layer with a
-    scale (its fp8-KV guard), so every layer went to the single-wrapper path with nothing logged as a fallback (agent
-    72.1 tok/s / 18.86 s, worse than stock). Fixed by `apply_split_unit_kv_scale.py` (refuse only a non-unit scale or an
-    fp8 KV cache). Rerun (>= 66001 split calls, 0 tracebacks / fallbacks) vs stock MTP + FP8 (78.1 / 15.46 s / 24.3 ms,
-    chat 7.89 s / 15.0 ms): agent +36.2% / -31.2% / -25.9%, chat TTFT -76.5% / ITL -26.7%. FP8 shortens the GEMM share
-    of both arms' steps; agent TTFT now clears, agent ITL falls short instead, chat ITL is unchanged in ratio. Single
-    rep each. `WORKER_EXTRA="--quantization fp8" SPEC_TAG=_fp8 CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 bash
-    tasks/pd_colocation/mn_h200_fourmode_20261018.sh` (ours rerun with `SKIP_BASE=1 REP_SUFFIX=_unitkv` after the
-    patch); sglang `fb9b617ff` + this commit.
-  - [x] 2026-10-18 output gate on this pod, PASS (`tasks/pd_colocation/gate_h200_fourmode_20261018.sh`, srv_correctness
-    vs stock MTP; driver now takes SRV_ARGS and counts mixed composition records). Noise floor MTP_REP: long prompts agree
-    >= 18 tokens, short >= 63; null case MTP_C2048 (stock MTP at the config's chunk 2048): long >= 11, short 0 (s1's
-    first decode token flips on chunking alone); config MTP_MIX_SPLIT_EDF (mtpsplit 112 FA3 SMs + EDF + chunk preemption
-    + uncached deadlines + deadline chunk 1024/2048:6000): long >= 11, short 0 -- the same requests diverge at the same
-    positions as the null case (s0 132, s2 298, s5 63, l1/l5 11), so the remaining divergence is the chunk size, not the
-    split or the schedule. Config arm: >= 1501 split calls, 0 tracebacks, 0 fallbacks, priority scheduling on.
-    sglang `3717b3638` + this commit; `bash /dev/shm/w/mn/gate_h200_fourmode_20261018.sh` on pod `d6a80befdd4e4da5`.
-  - [x] 2026-10-18 shorter MTP step (2 draft steps, 3 verify tokens, both arms; clean: tracebacks 0, fallbacks 0): stock MTP
-    agent 68.6 tok/s / 17.49 s / 27.9 ms, chat 10.19 s / 16.8 ms; ours (1024/2048) agent 99.6 / 12.25 s / 19.4 ms, chat
-    2.94 s / 12.9 ms -> agent +45.2% / -30.0% / -30.5%, chat TTFT -71.1% / ITL -23.2%. Stock MTP's chat ITL does not
-    move with the shorter step (16.5 -> 16.8 ms) and neither does ours (12.1-12.7 -> 12.9 ms), so the draft depth is not
-    what holds chat ITL at -23..-27%; agent ITL gain shrinks (-40.7% -> -30.5%). The 3-step / 4-token setting stays best.
-    sglang `dd200bb1d`; `SPEC_STEPS=2 SPEC_TOKENS=3 SPEC_TAG=_s2t3 CHUNKS=2048 DEADLINE_CHUNK=1024:2048:6000 bash
-    tasks/pd_colocation/mn_h200_fourmode_20261018.sh` (log `/tmp/h20/mn_h200_s2t3.log`).
-- [ ] Not met: vs stock colocation *without* speculation on H20 (agent TTFT at a ~5.9 s compute floor; best -18% /
-  -21%), and node-count scaling (needs > 16 GPUs). Both wait on the user: which baseline the bar uses, and the GPU cap.
+Tasks, in priority order:
 
-**Earlier standing (2026-10-13, superseded):** the serving kernel is now the two-launch split
-(FA3 prefill rows + stock FA2 BatchPrefill verify rows): vs stock MTP it clears the bar at mix32
-16/24 and mix128 24/s for both tenants (e.g. mix128 24/s chat +56% tput / -55% TTFT / -45% TPOT)
-and misses only agent TTFT/TPOT at mix128 16/s (-26%). Earlier summary, fused co-launch: under load the fused 4-mode arm beats stock MTP by TTFT
--31..-79%, throughput +11..+36%, per-token latency -19..-30%; below capacity the arms are equal.
-TTFT and throughput clear the bar wherever the server is loaded; per-token latency clears it only
-at some points. The graphs-on 4-mode crash is fixed (a schedule-stream publish raced the forward stream); 4-mode arms now run without the mixed-step barrier.
+- [ ] 2026-10-24 **A6. Unified fine-grained tile dispatcher + merge schedule (THE kernel contribution), then
+      re-measure from stage 1.**
+      - **One CPU-side plan function per step.** It assigns every tile of the mixed batch to an executor and a tile
+        class: FA2 16 / 32 / 48 for rows of <= 48 packed queries (user's rule, 2026-10-12), FA3 for rows above 48 and
+        for prefill. It splits KV and places tiles by LPT across both executors' slots.
+      - **The merge schedule comes from the same plan.** For each split row: its partial slots, its merge group, and
+        which tile reduces it (the last to finish, by JIT reduction in-kernel). No separate merge kernels, and no
+        second plan call.
+      - **Executors:** FA3 and the persistent FA2 kernel with the LPT overlap schedule (two CTAs per SM on different
+        classes), PDL-chained, both reading the one work list.
+      - **Why this is new work.** Serving today calls FA3's and flashinfer's planners separately and merges twice
+        (FA3 combine launch + flashinfer's merge); FA2 rows run non-persistent with a 64 tile (`--packed-query-limit
+        64`). Porting the two kernels side by side is not a contribution.
+      - **Starting point.** port07's 4-task `TwoStageHolisticPlan` (FA3 as task 3 of the same plan, with a JIT-reduction
+        group). Its FA2 classes are 128/64/16, and the JIT rendezvous was dropped in K1a on a flashinfer-era 0.6% bound.
+      - [ ] Plan: FA2 classes 48 / 32 / 16, FA3 for > 48, LPT over both, merge groups spanning FA2 and FA3 partials.
+      - [ ] 48-row FA2 tile (own warp layout; 1q x 4kv x 3 MMA spilled in A2).
+      - [ ] In-kernel JIT reduction from the plan's merge schedule in both executors; DSMEM handoff opt-in.
+      - [ ] Executor in the serving FA3 backend: one plan per step, two PDL launches, no merge launch.
+      - [ ] Stage 1 on the 96 trace-sampled steps vs sglang's FA3 call, the best fixed FA3 configuration and native v3.
+            Ablations: unified vs two plans; plan-scheduled JIT merge vs separate merges; LPT vs non-persistent;
+            48 vs pad-to-64.
+      - [ ] Stage 2 audited pairs.
+- [ ] 2026-10-24 **Llama-3.3-70B, stages 1-3** (provisioning on H20 pods 0-3: `pd_colocation/mn_provision_70b_20261024.sh`).
+- [ ] **Stage 3 with the full stack** (kernel + 4-mode MTP) vs stock PD with the P:D ratio swept, at higher load and
+      with mixture spikes (`pd_colocation_vs_disagg.md`).
+- [ ] **GLM-4.5-Air, stages 1-3,** after the 48 tile (its 4-token verify packs 48 rows).
+- [ ] **S4 step model re-fitted on the native FA3 + FA2 path.**
 
 ## Baselines
 
-What every bar result is judged against (user, 2026-10-18 / 2026-10-19). Bar: >= 30% on TTFT and ITL, or on their SLO
-attainment rates, and >= 10% throughput, realistic mixed workloads (chat + TraceLab), same session and workload. SLO
-control = the decode-first worker rule plus, multi-node, the load-aware SLO-checked router. Full tables, commands and
-commits: `realistic_workload_analysis.md` ## Baselines (single node), `pd_colocation_vs_disagg.md` (multi-node).
-
-| setting | our arm | baselines | priority | status (2026-10-20) |
-|---|---|---|---|---|
-| single node, no SLO control | fused split (FA3 prefill + FA2 decode, overlapped), EDF + deadline chunk; without MTP and with MTP (4-mode) | sglang mixed chunk and prefill-prioritized chunked prefill, default kernel; each without spec and with MTP | required | vs mixed chunk: MTP pair clears (chat attainment +72%, agent 15x, throughput +55%), no MTP at the line (chat +29.7%); vs prefill-prioritized: agents clear, chat attainment +16.5% / +20% (short) |
-| single node, SLO control | the same + decode-first | pdmux (stock `decode_bs_divisor` 36) | nice to have | decode-first (per step and per row) starves prefill on one node; not a gain |
-| multi-node, SLO control | symmetric colocated nodes, SLO-checked hit-first router, cluster KV pool; without and with MTP | PD disaggregation (sglang roles, mooncake) without and with MTP on decode; semi-PD with an sglang implementation | required (main claim) | vs PD disagg on 8 H20s: chat attainment 91% vs 26%, agent goodput 6x; holds through a 3x chat spike and a 2x agent shift; Qwen2.5-14B: disagg collapses (agent TTFT ~290 s); semi-PD not run |
-
-- Model: Qwen2.5-7B-Instruct + EAGLE3 (second model Qwen2.5-14B, no MTP). FP8 out of scope. Agent load is program
-  concurrency, chat by request rate.
-- MTP is required, not optional (disaggregation runs MTP on its decode nodes). Every MTP arm runs at sglang's
-  speculative default of 48 running requests, each system's best cap (64 and 128 are worse for all).
-- Stock mixed chunk is bimodal across repeats (slow mode in 5 of 6); comparisons use the six-repeat mean with error bars.
+Per stage, all on sglang's FA3 backend (its Hopper default):
+- **Kernel:** sglang's single varlen FA3 call; the best single fixed FA3 configuration; a per-step oracle over all FA3
+  variants.
+- **Single node:** sglang mixed chunk on FA3, with stock EAGLE3 MTP in four-mode; same frozen tree, audited
+  opposite-order pairs, two repeats.
+- **Multi-node:** sglang PD disaggregation (mooncake) with the P:D ratio swept at worker granularity and the KV pool
+  on. Reference: the conditional-disagg policy (`router.py cond_disagg`; Dynamo lists SGLang as unsupported).
+- pdmux is a baseline only.
+- Results, commands and commits: `debug_kernel_server_perf/resume_20261012/native_kernel_serving_attribution_20261023.md`
+  (single node) and `pd_colocation_vs_disagg.md` (multi-node).
 
 ## Tasks, in priority order
 
 A and B are the two kernel items; S is the server/workload evaluation the user specified.
 Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = partly, `[ ]` = not run.
 
-### [x] A. Ultra fine-grained tile dispatcher
+### [ ] A. Ultra fine-grained tile dispatcher (unchecked 2026-10-24: never built -- the unified plan + merge schedule is A6)
 
 - [x] **A-fix, FA2 out of the co-compiled kernel (2026-10-12):** FA2 spilled inside the fused
   kernel (168 regs, 4200 B stack, 21x slower per item than `BatchAttention`); now FA3 grid on
@@ -186,7 +70,7 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   so twice the KV traffic on memory-bound items) and faster by >3% on 3 cells, up to 24% (kv 1024, 1 row,
   qo 16 -- short-KV, few-row items). A per-item q-tile choice therefore has a real, narrow win region;
   reopened as part of the FA3 technique study (S-kernel, below), to be measured on serving-shaped items.
-- [x] **A2, FA2 tile classes (2026-10-12):** 48/32/16 refuted (tile 48 = 1 q-warp x 4 kv-warps,
+- [ ] **A2, FA2 tile classes (2026-10-12; reopened 2026-10-24 -> A6):** the adoption of 64/32/16 broke the user's rule (FA2 for 16/32/48 only, >= 64 to FA3) instead of fixing the 48 layout. Original finding: 48/32/16 refuted (tile 48 = 1 q-warp x 4 kv-warps,
   3x accumulator, spills; 1.6-2.2x slower at q8); **64/32/16** adopted (96 B stack). Per-item tail
   dispatch kept (bit-identical outputs). FA2 split-KV chunk = `auto` (sized to the FA2 CTA slots;
   matches or beats the best fixed chunk on every fixture). ([evidence](debug_kernel_server_perf/resume_20261012/colaunch_20261012.md))
@@ -520,7 +404,7 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     concurrently, and the serving bound for any co-run is 1.2% of GPU time on TraceLab (A5.3); the hardware
     co-launch already backfills. Not rebuilt on the flash-attention role.
 
-### [x] B. Fuse draft/verify epilogue ops
+### [ ] B. Fuse draft/verify epilogue ops (unchecked 2026-10-24: the epilogue fusion was never built, only bounded in B1; B2 backfill and B3 multicast were measured on the old fused path, not the serving one)
 
 - [x] **B1, fusion headroom (2026-10-13, measured):** 60 serving steps per arm profiled (torch
   profiler, GPU activity), mix32 chat 16/s + agent 0.1/s, race-fixed tree, no barrier

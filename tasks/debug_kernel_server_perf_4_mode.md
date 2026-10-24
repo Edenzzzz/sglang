@@ -30,7 +30,15 @@ Tasks, in priority order:
         64`). Porting the two kernels side by side is not a contribution.
       - **Starting point.** port07's 4-task `TwoStageHolisticPlan` (FA3 as task 3 of the same plan, with a JIT-reduction
         group). Its FA2 classes are 128/64/16, and the JIT rendezvous was dropped in K1a on a flashinfer-era 0.6% bound.
-      - [ ] Plan: FA2 classes 48 / 32 / 16, FA3 for > 48, LPT over both, merge groups spanning FA2 and FA3 partials.
+      - [x] 2026-10-24 **Why FA2 had a 64 class: no measured reason, and it loses to FA3.** On GLM-4.5-Air's 4-mode
+            captures (48 packed rows per verify row, H20 TP4 rank 0), the same rows on FA3 (tuned dual) vs on FA2-64
+            (native), prefill on FA3 in both: fresh small 0.0857 vs 0.1359 ms (FA3 1.59x), fresh large 0.5341 vs 0.5588
+            (1.05x), cached large 1.2618 vs 1.2879 (1.02x). FA2 wins where its tile is small: 2-mode 12-row decode rows
+            on FA2-16, 1.39x / 1.56x over FA3. Source: `pd_colocation/results_20261023/glm_captured/row_controls.json`.
+            FA2-64 is removed. A dedicated FA2-48 tile must beat FA3 on these rows to stay, else 48 goes to FA3 too.
+      - [ ] Plan: FA2 classes 16 / 32 / 48 (no 64), FA3 for > 48, LPT over both, merge groups spanning FA2 and FA3 partials.
+      - **Claims are judged against native v3 and the role split** (user, 2026-10-24): A6 counts only gains over the
+        current naive v3 build.
       - [ ] 48-row FA2 tile (own warp layout; 1q x 4kv x 3 MMA spilled in A2).
       - [ ] JIT reduction in the FA2 epilogue for FA2 and FA3 partials, scheduled by the plan; DSMEM handoff
             among FA2 cluster peers.

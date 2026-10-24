@@ -254,7 +254,21 @@ Tasks, in priority order:
                   - Stock-FA3 path, first run: every check failed with `stock PDL prototype requires matching page-1
                     NHD KV tensors`. Stock's op takes page-1 KV as `[tokens, kv_heads, d]`, while the FA2 launch takes
                     `[pages, 1, kv_heads, d]`. Fixed by passing a 3-D view of the same storage. Five captures then
-                    pass FP32 + graph replays; the full run (both last-arriver and ticketed FA2 merges) is running.
+                    pass FP32 + graph replays.
+                  - [x] 2026-10-25 **Stock FA3 under the unified plan removes the uniform deficit: parity with v3**
+                        (`unified/unified_h20_stock_20261025.sh`, flashinfer `848610b`, sglang `50bb38462` executor; FP32
+                        + graph replays pass on all 92 captures for every arm). Stage 1 vs native v3 (32-64K two /
+                        four, 128-256K two / four) and vs sglang's FA3 call:
+                        | arm | vs v3 | vs sglang FA3 |
+                        |---|---|---|
+                        | ticketed merge, `geometry` | 0.994 / 1.002 / 0.997 / 1.001x | 1.18 / 1.22 / 1.18 / 1.10x |
+                        | ticketed merge, `geometry_fa3` | 0.998 / 1.002 / 0.996 / 0.999x | 1.19 / 1.22 / 1.18 / 1.09x |
+                        | last-arriver merge, `geometry` | 0.990 / 0.981 / 0.997 / 1.000x | 1.18 / 1.20 / 1.18 / 1.09x |
+                        - The FA3 scheduler was the 1-2% (cause 1).
+                        - A6 is now level with v3 but not ahead, so the call reduction alone is worth under 1%.
+                        - The gain has to come from the FA2 side: per-row tile classes (four-mode decode rows on the
+                          16 tile instead of v3's Q32), and closing the remaining FA2-rows gap (7.81 vs 7.16 ms).
+
       - [ ] **FA3 scheduling:** v3's geometry_v3 prefix split inside the unified plan; dynamic pulling with a
             causal-aware LPT cost in the adapter.
       - [ ] **(Optional) DSMEM JIT reduction, as the MELD paper does it** (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`,

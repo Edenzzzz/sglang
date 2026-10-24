@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.47.0 — Disagg + EDF changes nothing; conditional-disaggregation (Dynamo) baseline (2026-10-24)
+
+- 16 GPUs, disagg 6+2 with deadline order on the prefill pods: chat attainment 92.5 / 70.7 / 46.7 / 30.5% at
+  16/32/48/64 programs, the same as FCFS. The limit is the per-round KV re-ship: at L64 the decode pods hold 52-55
+  requests in `#transfer-req`.
+- `router.py --policy cond_disagg`: Dynamo's conditional disaggregation on the same colocated workers as ours. Long
+  uncached prompts prefill remotely, with KV delivered through the pool by write-through; short appends prefill
+  locally.
+  - `mn_run.py` adds `cond_p<P>` arms; `mn_fanout_8gpu_20261018.sh` adds a `cond_*` case.
+  - `cond_disagg_check.py` checks validity; `test_router_cond_disagg.py` is the unit test.
+  - `mn_cap16_cond_disagg_20261024.sh` runs the sweep.
+
 ## v1.46.0 — 32-GPU capacity table; disagg + EDF prefill baseline (2026-10-24)
 
 - 32 GPUs: ours holds >= 96% chat attainment through 128 programs; best disagg split 83.7% at 32, 26.7% at 128.

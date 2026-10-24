@@ -425,8 +425,33 @@ static mixture.
         agent SLO goodput grows with load (569 -> 1910) while disagg's falls after 32 programs.
         **Caveat before quoting any ratio.** The disagg prefill pods ran clean upstream FCFS, so chat prefills queue
         behind 64K-token agent prefills. Part of this gap may therefore be scheduling policy rather than
-        disaggregation. Disagg + deadline-ordered prefill admission (`apply_edf_prefill_role_20261024.py`,
-        `mn_cap16_disagg_edf_20261024.sh`) is being measured at 16 GPUs.
+        disaggregation. That was tested at 16 GPUs (next item): it is not the cause.
+      - [x] **Disagg + EDF on the prefill pods (2026-10-24, `mn_cap16_disagg_edf_20261024.sh`, 16 GPUs, 6 + 2 pods).**
+        Our tree on every disagg worker with `apply_edf_prefill_role_20261024.py` (deadline order on the prefill
+        queue; `EDF_PREFILL_ROLE_QUEUE` logged on every arm; errors=0), otherwise identical to phase B:
+        | agent programs + chat rate | chat attainment, FCFS -> EDF | agent SLO goodput, FCFS -> EDF | cached prefix fraction (EDF) |
+        |---|---|---|---|
+        | 16 + 4 | 92.8% -> 92.5% | 282 -> 283 | 0.966 |
+        | 32 + 8 | 67.8% -> 70.7% | 359 -> 298 | 0.836 |
+        | 48 + 12 | 45.8% -> 46.7% | 231 -> 226 | 0.788 |
+        | 64 + 16 | 31.2% -> 30.5% | 165 -> 163 | 0.814 |
+        **Deadline order does not move disagg.** Its limit is the prefill -> decode KV transfer, not the prefill queue.
+        At 64 programs the decode workers hold 52-55 requests in `#transfer-req` (mean; max 108) while running only
+        ~7 each at 63-68% KV usage, and the prefill workers' queues stay short (mean 3.5-6). Every agent round
+        re-ships its whole ~64K-token prefix (~3.7 GB of KV for Qwen2.5-7B) from a prefill pod to a decode pod. So
+        the multi-node gap against STOCK sglang PD is the per-round re-ship (point 5). NVIDIA Dynamo's conditional
+        disaggregation avoids most of it by prefilling short appends locally on the decode worker. **That is the
+        baseline the capacity claim has to beat**:
+      - [ ] **Conditional disaggregation (Dynamo's policy) at 16 GPUs (2026-10-24, `mn_cap16_cond_disagg_20261024.sh`).**
+        `router.py --policy cond_disagg` on the same colocated workers as ours (EDF, chunk preemption, FA3, pool),
+        so only placement differs:
+        - workers on the first P pods take remote prefills of prompts whose effective uncached length on the chosen
+          decode worker exceeds 4096 tokens;
+        - the KV reaches the decode worker through the cluster pool (write-through);
+        - short appends prefill locally.
+        Validity per arm: `cond_disagg_check.py` reports the remote share and the decode-side cached fraction.
+        Router unit test: `test_router_cond_disagg.py`. Phase A sweeps P = 2/4/6; phase B runs the best P at
+        16/32/48 programs.
       - [x] **Phase B: CAPACITY AT SLO, ours vs the two best-tuned disagg splits (2026-10-24,
         `mn_capacity_16g_phaseB_20261023.sh`, splits 6 and 7 picked automatically from phase A; all errors=0).**
         chat attainment (0.5 s + 20 ms) / agent SLO goodput (tok/s) / agent tok/s / agent TTFT:

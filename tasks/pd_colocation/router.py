@@ -505,6 +505,57 @@ class Router:
                         "ttft_pred": best_pred[0], "pull_pred": best_pred[1], "pull_raw": best_pred[2],
                         "pool_hit": pool_hit * blk}
 
+    async def cond_disagg_route(self, payload, hashes, blk, n_tok, deadline):
+        """Conditional disaggregation (NVIDIA Dynamo's policy), the PD baseline that does not re-ship every round.
+
+        Workers [0, N) are prefill workers, the rest decode workers; all run the same colocated sglang as ours. The
+        decode worker is picked cache-aware (longest prefix hit, then least loaded). If the prompt's effective
+        uncached length there -- after its own hit or what it can pull from the cluster pool -- exceeds
+        --cond-disagg-threshold, the prefill runs remotely: the prompt is computed on a prefill worker
+        (max_new_tokens=1; the workers write every computed block through to the pool), then the request goes to
+        the decode worker, which pulls the prefix from the pool and decodes. Otherwise the decode worker prefills
+        locally, so an agent's short append moves no KV. Transfer is through the pool instead of a direct RDMA push,
+        and the remote prefill's wall time is part of the request's TTFT, as in Dynamo."""
+        n_pre = self.a.cond_disagg_prefill_workers
+        alive = [j for j, w in enumerate(self.workers) if not w.dead] or list(range(len(self.workers)))
+        dec = [j for j in alive if j >= n_pre] or alive
+        pre = [j for j in alive if j < n_pre]
+        hits = [w.hit(hashes) for w in self.workers]
+        pool_hit = self.pool.hit(hashes) if self.pool else 0
+        rt = max(1, self.a.rand_thresh)
+        d = min(dec, key=lambda j: (-(hits[j] // rt), len(self.workers[j].inflight), random.random()))
+        effective = max(0, n_tok - max(hits[d], pool_hit) * blk)
+        info = {"hit": hits[d] * blk, "pool_hit": pool_hit * blk, "remote_prefill": False,
+                "effective_uncached": effective}
+        if effective <= self.a.cond_disagg_threshold or not pre:
+            return d, info
+        p = min(pre, key=lambda j: (-(hits[j] // rt), len(self.workers[j].inflight), random.random()))
+        pw = self.workers[p]
+        body = {k: v for k, v in payload.items() if k != "rid"}
+        body["sampling_params"] = dict(body.get("sampling_params") or {}, max_new_tokens=1)
+        body["stream"] = False
+        self.rid += 1
+        key = ("prefill", self.rid)
+        t0 = time.time()
+        pw.inflight[key] = dict(prefill=max(0, n_tok - hits[p] * blk), decode_left=1, decode_total=1,
+                                deadline=deadline, t0=t0, kv=n_tok, t_first=None, itl_slo=self.itl_slo_for(n_tok))
+        try:
+            async with self.session.post(pw.url + "/generate", json=body) as r:
+                await r.read()
+                if r.status != 200:
+                    raise RuntimeError(f"remote prefill on worker {p} returned HTTP {r.status}")
+        except (aiohttp.ServerDisconnectedError, aiohttp.ClientOSError) as e:
+            self.mark_dead(pw, p, e)
+            raise WorkerDown() from e
+        finally:
+            pw.inflight.pop(key, None)
+        pw.insert(hashes)
+        if self.pool is not None:
+            self.pool.insert(hashes)
+        info.update(remote_prefill=True, prefill_worker=p, remote_prefill_ms=(time.time() - t0) * 1000.0,
+                    pool_hit=len(hashes) * blk)
+        return d, info
+
     def mark_dead(self, w, i, err):
         if not w.dead:
             w.dead = True
@@ -531,7 +582,10 @@ class Router:
         # (edf_scheduler.compute_ttft_slo_ms): base + 1 s per 5 000 prompt tokens beyond 4 096.
         slo_ms = self.a.ttft_slo_ms + max(0, n_tok - 4096) / 5000.0 * 1000.0
         deadline = time.time() + slo_ms / 1000.0
-        i, info = self.choose(hashes, blk, n_tok, deadline)
+        if self.a.policy == "cond_disagg":
+            i, info = await self.cond_disagg_route(payload, hashes, blk, n_tok, deadline)
+        else:
+            i, info = self.choose(hashes, blk, n_tok, deadline)
         w = self.workers[i]
         self.rid += 1
         rid = self.rid
@@ -743,8 +797,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", nargs="+", required=True)
     ap.add_argument("--port", type=int, default=31000)
-    ap.add_argument("--policy", choices=["rr", "cache", "cache_rand", "cache_slo", "cache_slo_rand"],
+    ap.add_argument("--policy", choices=["rr", "cache", "cache_rand", "cache_slo", "cache_slo_rand", "cond_disagg"],
                     default="cache_slo")
+    ap.add_argument("--cond-disagg-prefill-workers", type=int, default=0,
+                    help="cond_disagg: workers [0, N) are prefill workers, the rest decode workers")
+    ap.add_argument("--cond-disagg-threshold", type=int, default=4096,
+                    help="cond_disagg: uncached tokens above which the prefill runs remotely (Dynamo's default 4096)")
     ap.add_argument("--rand-thresh", type=int, default=4, help="blocks within which hits tie")
     ap.add_argument("--edf", action="store_true")
     ap.add_argument("--ttft-slo-ms", type=float, default=5000)

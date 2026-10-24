@@ -25,6 +25,11 @@ for arm in ${ARMS:-disagg_2p2d_mtps coloc_cache_edf_mtp coloc_slo_edf_mtp_hc}; d
   case $arm in
     coloc_slo_*) RUN_TAG=_8g_fanout${REP:-} ROUTER_ARGS="$RA --pool-kv-tokens ${POOL_KV_TOKENS:-3348000} --prefetch-policy timeout ${EXTRA_RA:-}" \
                             python3 -u mn_run.py $arm ;;
+    # cond_*: conditional disaggregation (router.py cond_disagg). Remote prefills reach the decode worker through the
+    # pool, so every computed block is written through (worker HC_WRITE and the router's mirror agree).
+    cond_*) RUN_TAG=_8g_fanout${REP:-} HC_WRITE=write_through \
+              ROUTER_ARGS="$RA --pool-kv-tokens ${POOL_KV_TOKENS:-3348000} --prefetch-policy timeout --pool-write-policy write_through ${EXTRA_RA:-}" \
+              python3 -u mn_run.py $arm ;;
     disagg_*) (unset CHUNK; RUN_TAG=_8g_fanout${REP:-} SGL_PY=${DISAGG_SGL_PY:-/dev/shm/w/up_clean/python} KERNEL=lpt PREEMPT=0 \
                  python3 -u mn_run.py $arm) ;;
     *) RUN_TAG=_8g_fanout${REP:-} python3 -u mn_run.py $arm ;;

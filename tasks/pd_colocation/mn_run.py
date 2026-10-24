@@ -7,7 +7,8 @@ Every arm: kill leftovers -> start workers in the arm's layout -> wait until eve
 /health is 200 -> start the arm's router on pod 0 -> run mn_bench.sh -> print the per-stream
 summary -> tear down. Logs and JSON stay on pod 0 under /dev/shm/w/mn/<arm>/.
 """
-import json, os, sys, time
+import fcntl, hashlib, json, os, sys, tempfile, time
+from contextlib import contextmanager
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from px_multi import Cluster
 
@@ -16,6 +17,24 @@ NPODS = int(os.environ.get("NPODS", "8"))
 W = "/dev/shm/w"
 C = Cluster(SID, os.environ.get("MN_CP", "cn-seed"), nodes=[f"worker-{i}" for i in range(NPODS)])  # MN_CP: control plane
 RPORT = 31000
+
+@contextmanager
+def cluster_lock(control_plane, sid, directory=None):
+    key = hashlib.sha256(f"{control_plane}/{sid}".encode()).hexdigest()
+    path = os.path.join(directory or tempfile.gettempdir(), f"mn_cluster_{key}.lock")
+    with open(path, "a+") as handle:
+        print(f"Waiting for cluster lock: {control_plane}/{sid}", flush=True)
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            handle.seek(0)
+            handle.truncate()
+            handle.write(f"pid={os.getpid()} pods={NPODS} argv={sys.argv!r}\n")
+            handle.flush()
+            print(f"Acquired cluster lock: {control_plane}/{sid}", flush=True)
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
 
 ARMS = {
     # name: (layout per pod, router)
@@ -34,6 +53,10 @@ ARMS = {
 # disagg_p<P>: the first P pods prefill, the other NPODS - P decode -- any P:D split, for ratio sweeps (2026-10-21).
 for _p in range(1, NPODS):
     ARMS[f"disagg_p{_p}"] = (["prefill"] * _p + ["decode"] * (NPODS - _p), "sgl:pd")
+# cond_p<P>: conditional disaggregation (Dynamo's policy, router.py cond_disagg) on colocated workers -- the first P
+# pods' workers take remote prefills of long uncached prompts, the rest decode and prefill short appends locally.
+for _p in range(1, NPODS):
+    ARMS[f"cond_p{_p}"] = (["coloc"] * NPODS, "ours:cond_disagg")
 
 
 def hosts():
@@ -160,8 +183,12 @@ def run_arm(arm):
         # LOAD_PUB=1: colocated workers publish their LoadStat on the (otherwise unused) bootstrap port.
         lep = (" --load-endpoints " + " ".join(f"tcp://[{hs[r]}]:{b}" for _, b, r in all_w)
                if os.environ.get("LOAD_PUB", "0") == "1" else "")
+        cond = ""
+        if pol == "cond_disagg":
+            n_pre = int(base.split("_p", 1)[1]) * len(PORTS[0])
+            cond = f" --cond-disagg-prefill-workers {n_pre} --cond-disagg-threshold {os.environ.get('COND_THRESHOLD', '4096')}"
         rcmd = (f"{W}/venv/bin/python {W}/tasks/pd_colocation/router.py --workers {ws} --port {RPORT} "
-                f"--policy {pol} --log {log}/router_decisions.jsonl {os.environ.get('ROUTER_ARGS', '')}{lep}")
+                f"--policy {pol} --log {log}/router_decisions.jsonl {os.environ.get('ROUTER_ARGS', '')}{lep}{cond}")
     elif pol == "cache_aware":
         ws = " ".join(u for u, _, _ in all_w)
         rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --worker-urls {ws} --policy cache_aware {lenient} --host 0.0.0.0 --port {RPORT} --prometheus-port {RPORT + 1}"
@@ -258,6 +285,7 @@ def calibrate():
 
 
 if __name__ == "__main__":
-    for arm in sys.argv[1:]:
-        calibrate() if arm == "calibrate" else run_arm(arm)
+    with cluster_lock(C.cp, SID):
+        for arm in sys.argv[1:]:
+            calibrate() if arm == "calibrate" else run_arm(arm)
     print("MNRUNDONE", flush=True)

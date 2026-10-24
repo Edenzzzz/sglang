@@ -301,7 +301,7 @@ Tasks, in priority order:
               - Fixed with a Params trait, `suppress_pdl_trigger` (`prefill.cuh`), set by the NP executor: dependents
                 launch at CTA exit.
             - [x] 2026-10-25 **Race-fixed executor beats v3's FA2 launch** (`unified/unified_h20_np2s_20261025.sh`;
-                  flashinfer `136635f` + the trigger fix; three repeats; FP32 + 20 graph replays pass on all 92, the
+                  flashinfer `cda2acf`; three repeats; FP32 + 20 graph replays pass on all 92, the
                   trap never fires):
                   | | two-mode | four-mode |
                   |---|---|---|
@@ -310,7 +310,19 @@ Tasks, in priority order:
                   - Repeats agree to within 0.01 ms.
                   - The early trigger had also let back-to-back launches overlap, which distorted every earlier FA2
                     timing of this executor. Every NP FA2-rows number above this line predates the fix.
-            - [ ] Stage 1 with this executor (`unified/unified_h20_np2s_stage1_20261025.sh`, running).
+            - [x] 2026-10-25 **Stage 1 with this executor: still parity** (`unified/unified_h20_np2s_stage1_20261025.sh`,
+                  flashinfer `cda2acf`):
+                  | split | vs v3 (32-64K two / four, 128-256K two / four) | vs sglang FA3 |
+                  |---|---|---|
+                  | `geometry` | 0.998 / 1.008 [1.002-1.017] / 0.999 / 1.002x | 1.19 / 1.23 / 1.19 / 1.10x |
+                  | `geometry_fa3` | 0.998 / 1.003 / 0.996 / 0.999x | 1.19 / 1.22 / 1.18 / 1.09x |
+                  FA2 rows alone are 3-10% faster than v3's FA2 launch. In the full step FA2 runs largely under FA3
+                  (PDL), so that saving barely reaches wall time: the step's critical path is FA3 plus whatever FA2
+                  work does not fit beside it.
+            - [ ] **SM pre-assignment ceiling:** stage 1 at fixed FA3 SM budgets of 70 / 62 / 54 / 46 of 78 (FA2 starts
+                  on the free SMs at step start, not only in FA3's gaps). The per-capture oracle over budgets bounds
+                  what a per-step cost model in the plan could reach. `unified/unified_h20_smbudget_20261025.sh`,
+                  running.
       - [ ] **FA3 scheduling:** v3's geometry_v3 prefix split inside the unified plan; dynamic pulling with a
             causal-aware LPT cost in the adapter.
       - [ ] **(Optional) DSMEM JIT reduction, as the MELD paper does it** (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`,

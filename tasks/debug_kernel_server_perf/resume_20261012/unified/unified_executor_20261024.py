@@ -70,6 +70,11 @@ class UnifiedPlan:
             if fa3 != [True] * rows + [False] * (len(ql) - rows):
                 raise ValueError("stock FA3 needs the FA3 rows to be a prefix of the batch")
             self.fa3_rows, self.fa3_tokens = rows, int(q[rows])
+            # SM pre-assignment: the FA3 grid's SM budget (UNIFIED_FA3_SM; default every SM). The FA2 launch fills the
+            # SMs FA3 leaves free from the start of the step instead of only the gaps FA3 opens.
+            self.fa3_sm = int(os.environ.get("UNIFIED_FA3_SM", str(ex.num_sm)))
+            if not 0 < self.fa3_sm <= ex.num_sm:
+                raise ValueError("FA3 SM budget outside the device")
             # no FA3 rows: correctly shaped placeholders (the FA2 launch checks the stock partial layout)
             self.po = torch.empty((1, h, 1, 128), dtype=torch.float32, device=dev)
             self.plse = torch.empty((1, h, 1), dtype=torch.float32, device=dev)
@@ -96,7 +101,7 @@ class UnifiedPlan:
             torch.ops.stock_fa3_pdl.run(
                 q[:t], k3, v3, out[:t], self.pre_lse, self.pre_indptr, self.pre_lengths, self.pre_pages,
                 self.po, self.plse, self.split_counts, self.tile_counter, max(1, self.stats["max_splits_fa3"]),
-                self.pre_max_q, ex.num_sm, float(scale), 2 if ex.pdl else 1, self.timeline)
+                self.pre_max_q, self.fa3_sm, float(scale), 2 if ex.pdl else 1, self.timeline)
         torch.ops.unified_dispatch.unified_run(
             q, k_cache, v_cache, self.kv_indices, out, ex.int_ws, ex.float_ws, self.plan_vec,
             ex.heads, ex.kv_heads, 1, float(scale), self.q_indptr, self.kv_indptr, self.kv_lens,

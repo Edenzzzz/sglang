@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.44.0 — Demote-on-miss adopted; v3 single-node run; 16-GPU capacity point (2026-10-24)
+
+- 128-256K screen: demoting a prefill only after its deadline passes (`SGLANG_EDF_LATE_DEMOTE_TOK_S=1e12`) beats v2's
+  6000 tok/s feasibility test on every axis. Four-mode agent tput +1.4% (v2 -6.4%); chat strict attainment 26.7%
+  (v2 18%).
+- `ours_full_stack_v3_h200_20261024.sh`: both stages + agent-concurrency capacity sweep (C=1, 2).
+- 16 GPUs: ours 89.2% / 72.6% chat attainment at 96 / 128 programs, so ours' capacity is 64-96 programs vs disagg's
+  16-48. 32-GPU phase A: ours 99.1% vs best disagg split 55.9% at 64 programs.
+
 ## v1.43.0 — v2 single-node full stack: two-mode wins attainment everywhere, four-mode does not (2026-10-24)
 
 - Two repeats at 128-256K (chat 4/2/1 req/s) and 32-64K. Every cell: chat TTFT -95..-99%, agent TPOT -12..-55%,

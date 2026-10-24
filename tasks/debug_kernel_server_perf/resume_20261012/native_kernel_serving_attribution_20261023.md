@@ -208,10 +208,11 @@ is the one to ship**; the role split is the right ablation to report beside it.
       chat TTFT 96-98%. Chosen for v2.
 - [x] 2026-10-24 v2 (per-tenant deadlines + late demotion), all stages, two repeats: mixed. Ours wins two-mode
       everywhere; four-mode at 128-256K loses chat strict attainment and 6-9% agent throughput. Details below.
-- [ ] Capacity sweep on AGENT concurrency at 128-256K. The chat-rate sweep never reached any system's capacity:
-      agents alone saturate one GPU.
-- [ ] Demote-on-miss variant at 128-256K. The 6000 tok/s feasibility rate demotes every cold 128-256K agent on
-      arrival (four-mode agent TTFT +33-50%).
+- [x] 2026-10-24 demote-on-miss screen at 128-256K, one repeat: better than v2 on every axis (four-mode agent tput
+      +1.4% vs -6.4%, chat strict attainment 26.7% vs 18%). Adopted for v3.
+- [ ] v3 definitive run (demote-on-miss): both stages + AGENT-concurrency capacity sweep (C=1, 2 at 128-256K, chat
+      2/s), two repeats each. `ours_full_stack_v3_h200_20261024.sh`, root
+      `/opt/tiger/w/ours_full_stack_v3_h200_20261024` (running).
 
 Command (H200 34c7bd503d461dc1, sglang `6acf9a297` + the audit fix in this commit):
 `bash ours_full_stack_h200_20261024.sh now`. It runs `run_native_serving_pair_20261023.py <root> --stage mix128
@@ -372,3 +373,20 @@ Reading:
 - **Bar status, single node: not met as a whole.** Two-mode meets it on chat TTFT, agent TPOT and attainment; the
   throughput bar is met only at 128-256K chat 4/s (+10.5%). Four-mode misses on throughput and chat strict
   attainment.
+
+### Demote-on-miss screen, 128-256K (2026-10-24, one repeat, root `/opt/tiger/w/edf_demote_on_miss_h200_20261024`)
+
+Command: `bash edf_demote_on_miss_h200_20261024.sh now`. It is v2's configuration with
+`SGLANG_EDF_LATE_DEMOTE_TOK_S=1e12`, so a prefill is demoted only after its deadline has passed. Load: agent conc 4,
+chat 4 req/s.
+
+| mode | agent tok/s | agent TTFT | agent TPOT | chat TTFT | chat TPOT | chat strict | chat relaxed | agent attain. |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| four | +1.4% | +33.7% | -53.0% | -98.8% | +80.6% | 18.8 -> 26.7% | 19.6 -> 32.0% | 18.8 -> 50.0% |
+| two | +10.4% | +0.8% | -40.6% | -98.6% | +50.7% | 16.8 -> 36.6% | 17.4 -> 42.0% | 12.5 -> 50.0% |
+
+Against v2 at the same point (four / two), demote-on-miss is better on every axis:
+- **Agent throughput:** +1.4 / +10.4% (v2: -6.4 / +10.5%).
+- **Chat strict attainment:** 26.7 / 36.6% (v2: 18.3 / 36.1%).
+
+The four-mode chat TPOT penalty, prefill riding in the verify steps, is unchanged.

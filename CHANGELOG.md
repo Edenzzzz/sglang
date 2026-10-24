@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.45.0 — v3 single-node full stack: attainment bar met at 32-64K; no single-GPU capacity point at 128-256K (2026-10-24)
+
+- 32-64K, two repeats: chat strict attainment 49-50% -> 59-65%, relaxed 50% -> 83-85%, agent 45-52% -> 77-85%; chat
+  TTFT -96%; agent tput +1.7% (two) / -8.5% (four); chat TPOT +35-56%.
+- 128-256K at agent concurrency 1 / 2 / 4: neither system reaches 90% for either tenant. Agent attainment caps at 50%
+  (cold first turns cannot prefill in 10 s), and chat strict stays <= 46%. Ours still gains attainment at C=4.
+- Outline 6.3 C2d rewritten on v3; C2c marked superseded for the full stack.
+
 ## v1.44.0 — Demote-on-miss adopted; v3 single-node run; 16-GPU capacity point (2026-10-24)
 
 - 128-256K screen: demoting a prefill only after its deadline passes (`SGLANG_EDF_LATE_DEMOTE_TOK_S=1e12`) beats v2's

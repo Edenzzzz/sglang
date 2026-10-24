@@ -210,9 +210,9 @@ is the one to ship**; the role split is the right ablation to report beside it.
       everywhere; four-mode at 128-256K loses chat strict attainment and 6-9% agent throughput. Details below.
 - [x] 2026-10-24 demote-on-miss screen at 128-256K, one repeat: better than v2 on every axis (four-mode agent tput
       +1.4% vs -6.4%, chat strict attainment 26.7% vs 18%). Adopted for v3.
-- [ ] v3 definitive run (demote-on-miss): both stages + AGENT-concurrency capacity sweep (C=1, 2 at 128-256K, chat
-      2/s), two repeats each. `ours_full_stack_v3_h200_20261024.sh`, root
-      `/opt/tiger/w/ours_full_stack_v3_h200_20261024` (running).
+- [x] 2026-10-24 v3 definitive run (demote-on-miss), two repeats, all stages. 32-64K: attainment bar met for both
+      tenants, throughput not (+1.7 / -8.5%). 128-256K: no configuration of either system reaches 90% at any agent
+      concurrency on one GPU (agent cold turns cap attainment at 50%). Details below.
 
 Command (H200 34c7bd503d461dc1, sglang `6acf9a297` + the audit fix in this commit):
 `bash ours_full_stack_h200_20261024.sh now`. It runs `run_native_serving_pair_20261023.py <root> --stage mix128
@@ -390,3 +390,55 @@ Against v2 at the same point (four / two), demote-on-miss is better on every axi
 - **Chat strict attainment:** 26.7 / 36.6% (v2: 18.3 / 36.1%).
 
 The four-mode chat TPOT penalty, prefill riding in the verify steps, is unchanged.
+
+### v3 definitive run (2026-10-24, root `/opt/tiger/w/ours_full_stack_v3_h200_20261024`, audits exit 0)
+
+Command: `bash ours_full_stack_v3_h200_20261024.sh now` (sglang `51ad19a2b`). Ours = per-tenant deadlines +
+demote-on-miss + chunk preemption + deadline-sized chunks + FA3 + FA2 v3 + 4-mode; stock = sglang mixed chunk on FA3
+(stock EAGLE3 MTP in four-mode). Two opposite-order repeats.
+
+Audit, ours vs stock:
+
+| stage | mode | agent tok/s | agent TTFT | agent TPOT | agent ITL | chat TTFT | chat TPOT | chat ITL |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| 128-256K, C=4, chat 4/s | four | +2.4% | +28.1% | -36.1% | -35.6% | -98.5% | +73.5% | +47.8% |
+| 128-256K, C=4, chat 4/s | two | +10.6% | -2.4% | -36.1% | -18.7% | -98.5% | +51.0% | +29.4% |
+| 32-64K, C=8, chat 8/s | four | -8.5% | +42.4% | -49.1% | -47.1% | -95.2% | +56.4% | +32.6% |
+| 32-64K, C=8, chat 8/s | two | +1.7% | +3.6% | -16.6% | -11.9% | -96.2% | +34.6% | +18.1% |
+| 128-256K, C=2, chat 2/s | four | -1.2% | +27.0% | -6.8% | -17.5% | -95.2% | +102.2% | +50.6% |
+| 128-256K, C=2, chat 2/s | two | +4.3% | +7.0% | -35.7% | -10.9% | -96.3% | +128.5% | +47.6% |
+| 128-256K, C=1, chat 2/s | four | -2.7% | +13.9% | -60.4% | -23.6% | -96.0% | +130.3% | +102.7% |
+| 128-256K, C=1, chat 2/s | two | +2.9% | +2.7% | -43.9% | -9.5% | -96.0% | +166.9% | +66.0% |
+
+SLO attainment, stock -> ours, r1 / r2:
+
+| stage | mode | chat strict (0.5 s + 20 ms) | chat relaxed (1 s + 30 ms) | agent (10 s + 80 ms) |
+|---|---|---|---|---|
+| 128-256K, C=4 | four | 19.5/19.6 -> 27.0/28.1% | 19.8/20.0 -> 30.9/33.0% | 12.5/18.8 -> 43.8/43.8% |
+| 128-256K, C=4 | two | 16.6/16.8 -> 36.8/35.9% | 17.1/17.3 -> 42.2/41.5% | 18.8/12.5 -> 50.0/50.0% |
+| **32-64K, C=8** | **four** | 50.1/49.8 -> **58.8/59.1%** | 50.4/50.2 -> **84.3/82.3%** | 46.7/43.3 -> **76.7/76.7%** |
+| **32-64K, C=8** | **two** | 49.1/49.0 -> **65.1/65.6%** | 49.6/49.4 -> **85.2/85.5%** | 50.0/53.3 -> **86.7/83.3%** |
+| 128-256K, C=2 | four | 32.7/32.7 -> 33.5/35.8% | 36.5/35.6 -> 39.0/41.7% | 50.0/50.0 -> 50.0/43.8% |
+| 128-256K, C=2 | two | 34.4/36.0 -> 42.7/41.7% | 37.9/38.8 -> 48.3/47.7% | 50.0/50.0 -> 50.0/50.0% |
+| 128-256K, C=1 | four | 34.0/34.0 -> 34.4/37.1% | 36.9/36.9 -> 42.9/43.5% | 50.0/50.0 -> 50.0/50.0% |
+| 128-256K, C=1 | two | 41.0/41.0 -> 45.8/46.0% | 44.0/44.0 -> 54.4/53.8% | 50.0/50.0 -> 50.0/50.0% |
+
+Reading:
+- **32-64K: the attainment bar is met for both tenants in both modes; the throughput bar is not.**
+  - Chat strict attainment rises 18-34% relative, chat relaxed 64-73%, and agent 64-77% (43-53% -> 77-87%).
+  - Agent TPOT falls 17-49% and chat TTFT 95-96%.
+  - Agent throughput is +1.7% (two-mode) and -8.5% (four-mode).
+  - This is the single-node result to headline: the agent burst (all 32 requests in the first 60 s) is where
+    deadline order plus demote-on-miss pays.
+- **128-256K: neither system reaches 90% for either tenant at any agent concurrency (1, 2 or 4) on one H200.** The
+  ceiling is structural:
+  - **Agent attainment caps at exactly 50%** at C <= 2 in every arm of both systems: a cold first turn of 128-256K
+    tokens cannot prefill inside 10 s, and second turns always can.
+  - **Chat strict attainment stays at or below 46% even with a single agent.** Chat that is admitted decodes beside
+    that agent's continuous long prefill: ours' chat TPOT p50 is 22-46 ms against stock's 11-15 ms. Stock's chat
+    TPOT looks better only because its chat waits 4.7-6.5 s and decodes later.
+- **There is therefore no single-GPU capacity point at 128-256K to compare.** That regime needs more than one node,
+  which is where stage 3's routing separates the tenants. At C=4, ours still gains chat strict attainment (+8-19
+  points), agent attainment (+25-38 points) and +10.6% two-mode throughput.
+- **Standing costs:** chat TPOT +35..+167% in every cell, and four-mode agent TTFT +14..+42% (prefill merged into
+  verify steps; demoted agents finish later).

@@ -249,7 +249,7 @@ against stock forced onto the flashinfer backend are withdrawn (see the note at 
 | stage | question | baseline(s) | our claim | headline evidence | status |
 |---|---|---|---|---|---|
 | **1. Kernel** (6.2) | is role-specific FA3 + FA2 faster than FA3 on the mixed steps serving produces? | single varlen FA3 (sglang default), dual-stream FA3, SM-grid-tuned FA3; all tuned per shape | **C1**: heterogeneous attention wins on decode/verify-heavy mixed steps | **role-separated attention 1.23-1.57x over sglang's FA3 call** on 96 trace-sampled steps (2/4-mode, 32-256K); in serving the FA2 rows add a further 15-25 pts of agent decode latency over a role-split FA3 | done (v3, H200); Llama-70B missing |
-| **2. Single node** (6.3) | does the kernel and the 4-mode schedule pay off in serving on one GPU? | sglang on FA3: mixed chunk, prefill-prioritized, each +/- MTP | **C2a** kernel at fixed schedule; **C2b** step predictability; C2c schedule as a latency trade | kernel: +10.6-11.3% agent tput, -21.5% agent ITL at 128-256K; step model 3.8x more accurate; **full stack (C2d) at 128-256K: +12% agent tput, chat TTFT -69..-79%, agent ITL -31% (4-mode)**, chat TPOT +17-30% | C2d meets tput + TTFT/ITL bars at 128-256K; 32-64K running; attainment-vs-rate curve pending |
+| **2. Single node** (6.3) | does the kernel and the 4-mode schedule pay off in serving on one GPU? | sglang on FA3: mixed chunk, each +/- MTP; same frozen tree, audited pairs | **C2a** kernel at fixed schedule; **C2b** step predictability; **C2d** full stack raises attainment | kernel: +10.6-11.3% agent tput, -21.5% agent ITL at 128-256K; step model 3.8x more accurate; **full stack at 32-64K: chat attainment +18-34% (strict) / +64-73% (relaxed), agent attainment +64-77%, chat TTFT -96%** | attainment bar met at 32-64K; tput bar only kernel-at-128-256K; 128-256K has no single-GPU capacity point (both systems < 50%) |
 | **3. Multi-node** (6.4) | does colocation + cache-first SLO routing beat PD disaggregation at scale? | PD disagg, P:D swept at worker granularity, KV pool on, same FA3 backend, with and without MTP | **C3**: higher sustainable load at SLO (capacity), widening with cache pressure and scale | **16 GPUs: ours holds >= 90% chat attainment to 64 programs (94.2%; 89.2% at 96, 72.6% at 128), best-tuned disagg only to 16 (92.8%; 45.8% at 48)**; 32 GPUs at 64 programs: ours 99.1% vs best disagg split 55.9%; thrashing lead +91% -> +277% | 16 GPUs done; 32 GPUs phase B running |
 
 ### 6.1 Settings
@@ -411,31 +411,37 @@ second-half scored, same features: ours + MTP on the fused path 0.4% decode / 3.
 FA3 1.5% / 5.7% (3.8x / 1.8x better); the same 4-mode schedule on unmodified FA3 is 2.7-4.5x worse, so the fused
 split is what buys the predictability (`server_perf_model.md`).
 
-**C2c: the colocated schedule on one GPU is a latency trade, not a win.** Against sglang mixed chunk on FA3 at agent
+**C2c (superseded by C2d for the full stack; kept for the schedule without demote-on-miss): the colocated schedule on one GPU is a latency trade, not a win.** Against sglang mixed chunk on FA3 at agent
 concurrency 8 + chat 8 req/s: chat TTFT -77%, agent ITL p99 -71%, chat ITL p99 -62%, but agent TTFT +57% and
 throughput -5.5%; against prefill-prioritized the chat ITL tail is 4x worse. At saturation (agent concurrency 16-24)
 it does not beat stock even at its best chunk. Report this as the motivation for stage 3: the schedule's advantage
 needs a routing dimension a single GPU does not have. Source: `realistic_workload_analysis.md`.
 
-**C2d: the full single-node stack against stock sglang on FA3 (128-256K).** Stock = sglang mixed chunk on FA3
-(stock EAGLE3 MTP in four-mode, no prefill merged into verify steps); ours = uncached-token deadline ordering + chunk
-preemption + deadline-sized chunks (1024:2048:6000) + the FA3 + FA2 kernel (v3) + the 4-mode MTP step. Same frozen
-tree and audited paired protocol (opposite orders, two repeats, raw token arrivals; the audit also requires the stock
-control to show zero merged steps). Agent concurrency 4 / 8 sessions + chat 4 req/s, 960 chat requests:
+**C2d: the full single-node stack against stock sglang on FA3.** Stock = sglang mixed chunk on FA3 (stock EAGLE3
+MTP in four-mode). Ours = deadline ordering with per-tenant deadlines + demote-on-miss (a prefill whose deadline has
+passed ranks behind every one that can still make it: EDF's overload rule) + chunk preemption + deadline-sized
+chunks + the FA3 + FA2 kernel + the 4-mode MTP step. Same frozen tree, audited paired protocol, two opposite-order
+repeats (`resume_20261012/ours_full_stack_v3_h200_20261024.sh`). Agent burst workload at 32-64K (32 agent requests
+in the first 60 s + chat 8 req/s):
 
-| mode | agent tok/s | agent ITL | agent TPOT p90 | chat TTFT | chat TPOT (mean) | chat attain. 0.5 s/20 ms | agent attain. 10 s/80 ms |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| four (stock MTP -> ours) | **+12.4%** | **-30.6%** | 115/126 -> 81/64 ms | **-68.6%** (23.0/23.6 -> 6.9/7.7 s) | +17.2% | 17.9/17.5% -> 27.7/27.0% | 2/16 -> 5/16 (both reps) |
-| two (stock -> ours) | **+11.8%** | -11.7% | 123/114 -> 61/59 ms | **-79.4%** (21.6/21.0 -> 3.1/5.7 s) | +30.5% | 16.8/16.8% -> 32.1/31.5% | 2/16 -> 7/16, 8/16 |
+| mode | chat strict attain. | chat relaxed (1 s/30 ms) | agent attain. | agent TPOT | chat TTFT | agent tok/s |
+|---|---:|---:|---:|---:|---:|---:|
+| four (stock MTP -> ours) | 50.0 -> **59.0%** | 50.3 -> **83.3%** | 45.0 -> **76.7%** | **-49.1%** | **-95.2%** | -8.5% |
+| two (stock -> ours) | 49.1 -> **65.4%** | 49.5 -> **85.4%** | 51.7 -> **85.0%** | -16.6% | **-96.2%** | +1.7% |
 
-- Claim: on one GPU at long context the full stack clears the 10% throughput bar and the 30% TTFT / ITL bar on the
-  tenant each mechanism targets (chat TTFT, agent ITL in four-mode); the price is chat decode (mean TPOT +17-30%,
-  p50 unchanged, p90 tail grows) because deadline order lets agent prefill chunks share chat decode steps.
-- Do not headline the attainment ratios: this load is past both systems' capacity (stock 17%, ours 27-32% chat
-  attainment) and agent n=16, so 2/16 -> 5/16 is a small-count ratio. The paper figure is attainment vs chat rate
-  (pending), where the gap shows as the load each system sustains at 90%.
-- 32-64K: no bar met (agent tput -3.4% / +5.0%, chat attainment flat ~50% in both arms because every agent lands in the first 60 s and ours' deadlines were set to a 2 s chat SLO, not the scored 0.5 s, with no overload handling). Screen (one repeat): per-tenant deadlines + late demotion (EDF's overload rule: a prefill that can no longer meet its deadline ranks behind every feasible one) cuts chat TTFT 96-98% and lifts chat attainment at 1 s/30 ms 50% -> 84-86%; the strict 20 ms chat TPOT stays bound by decoding beside continuous long-context prefill, a single-GPU limit the multi-node routing addresses. v2 definitive run (two repeats, all stages): chat TTFT -95..-99% and agent TPOT -12..-55% in every cell, agent attainment up or equal everywhere; but chat TPOT +26..+84%, four-mode agent tput -6..-16%, and at 128-256K four-mode ours LOSES chat strict attainment (18-24% vs 18-34%). Two-mode wins every attainment cell; tput bar only at 128-256K chat 4/s (+10.5%). Chat-rate sweep is the wrong axis (agents alone saturate one GPU at 128-256K); agent-concurrency sweep and a demote-on-miss variant next. Source: `resume_20261012/native_kernel_serving_attribution_20261023.md` (full-stack section),
-  `resume_20261012/ours_full_stack_h200_20261024.sh`.
+- Claim: on one GPU, ours raises SLO attainment for both tenants by 18-77% relative (the 30% bar on attainment) and
+  cuts chat TTFT ~96%, at equal throughput (two-mode) or -8.5% (four-mode). The cost is chat TPOT +35-56%: chat
+  admitted during the burst decodes beside it, where stock simply makes chat wait 4.5-4.9 s.
+- At 128-256K there is no single-GPU capacity point. Neither system reaches 90% for either tenant at any agent
+  concurrency (1, 2, 4): cold 128-256K first turns cannot prefill in 10 s (agent attainment caps at exactly 50%),
+  and chat decoding beside one continuous long prefill misses 20 ms. Ours still gains +8-19 points of chat strict
+  and +25-38 points of agent attainment at C=4 (+10.6% two-mode throughput). This regime motivates stage 3, where
+  routing separates the tenants across nodes.
+- Throughput bar on one node: met only by the kernel at 128-256K (C2a, +10.6-11.3%). The full stack trades its
+  throughput for attainment; the throughput claim at scale is capacity (stage 3).
+- Path to this configuration (all audited): v1 with a 2 s chat deadline and no demotion was +12% throughput at
+  128-256K but left chat attainment flat at 50% at 32-64K; v2 demoted on predicted miss at 6000 tok/s, which
+  demoted every cold 128-256K agent on arrival. Source: `resume_20261012/native_kernel_serving_attribution_20261023.md`.
 
 > Superseded: the earlier 6.3 table (ours +41-55% throughput, 15x agent attainment over mixed chunk) compared against
 > stock forced onto the flashinfer backend, half the throughput of FA3 on this workload. It must not be quoted.

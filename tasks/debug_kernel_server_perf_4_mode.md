@@ -208,6 +208,27 @@ Tasks, in priority order:
             - [ ] Last-arriver merge with blockIdx dispatch for the v3-body executor (`UNIFIED_NP_MERGE=0`: no ticket
                   atomics, no merge CTAs; one counter per group), under `geometry_fa3` and `geometry`
                   (`unified/unified_nplast_20261024.sh`, running).
+      - [x] 2026-10-25 **H20 (78 SMs) stage 1 on fresh captures, three FA2 executors under one plan, v3's FA3 split**
+            (H20 job `2f608c1b1a67cf09` pod 0, GPU 0, while the H200 re-fork queues).
+            - Captures: `unified/trace_sampled_capture_h20_20261024.sh`, 92 captures, same intervals as the H200.
+            - v3 baseline: `unified/rebench_trace_sampled_v3_h20_20261024.sh`.
+            - Comparison: `unified/unified_h20_compare_20261024.sh`, root `/opt/tiger/w/unified_h20_20261024`.
+            - Code: flashinfer `1de9b02`, sglang `HEAD`.
+            Native v3 vs sglang's FA3 call on H20: 1.190 / 1.219 / 1.187 / 1.094x (32-64K two / four, 128-256K two /
+            four), level with the per-step best FA3 variant (0.99-1.00x). FP32 + 5 graph replays pass on all 92 for
+            every arm.
+            | arm (geometry_fa3) | stage 1 vs v3 | vs sglang FA3 | FA2 rows vs v3's FA2 launch (two / four) |
+            |---|---|---|---|
+            | v3 body, last-arriver merge | 0.967 / 0.965 / 0.983 / 0.980x | 1.15-1.18x | 6.38 vs 5.45 / 10.16 vs 7.16 ms |
+            | v3 body, ticketed merge items | 0.966 / 0.974 / 0.982 / 0.982x | 1.07-1.19x | 6.49 vs 5.46 / 8.98 vs 7.16 ms |
+            | persistent overlap + LPT | (fixed-split run pending) | | 6.30 vs 5.47 / 9.93 vs 7.16 ms |
+            - **Every executor is 2-3.5% behind v3, with v3 faster on almost every capture (0/23 the other way),**
+              including FA3-dominated 128-256K steps. A loss that uniform points at a fixed per-step cost in our path,
+              not at the FA2 executor. Candidates: the FA3 launch through `UpstreamFA3SchedulerAdapter` vs stock FA3's
+              own scheduler under the same split, and a per-run page-table scatter or plan copy.
+            - FA2 rows on H20 lose more than on the H200: four-mode 0.70-0.80x of v3's FA2 launch.
+            - [ ] Per-launch profile of v3 vs unified on the same captures (FA3 kernel time alone, FA2 kernel time
+                  alone, any extra kernels), on H20 now and on the H200 once the re-fork runs.
       - [ ] **FA3 scheduling:** v3's geometry_v3 prefix split inside the unified plan; dynamic pulling with a
             causal-aware LPT cost in the adapter.
       - [ ] **(Optional) DSMEM JIT reduction, as the MELD paper does it** (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`,

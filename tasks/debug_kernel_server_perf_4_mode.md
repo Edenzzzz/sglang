@@ -19,6 +19,12 @@ Tasks, in priority order:
         second plan call.
       - **Executors:** FA3 and the persistent FA2 kernel with the LPT overlap schedule (two CTAs per SM on different
         classes), PDL-chained, both reading the one work list.
+      - **The merge lives in the FA2 epilogue (user, 2026-10-24).** FA2 launches second, so its epilogue performs the
+        JIT reduction for every split row, FA2's and FA3's alike. FA3 tiles only write FP32 partials + LSE. FA2
+        partials of the same group hand off through DSMEM within a cluster; FA3 partials are read from global/L2.
+      - **The dispatcher must be fast.** Fine-grained dispatch over both executors runs once per step on the CPU, so
+        planning cost is a measured, optimized quantity (target: below the step's GPU time by a wide margin, and
+        overlapped with the previous step under the overlap scheduler).
       - **Why this is new work.** Serving today calls FA3's and flashinfer's planners separately and merges twice
         (FA3 combine launch + flashinfer's merge); FA2 rows run non-persistent with a 64 tile (`--packed-query-limit
         64`). Porting the two kernels side by side is not a contribution.
@@ -26,7 +32,9 @@ Tasks, in priority order:
         group). Its FA2 classes are 128/64/16, and the JIT rendezvous was dropped in K1a on a flashinfer-era 0.6% bound.
       - [ ] Plan: FA2 classes 48 / 32 / 16, FA3 for > 48, LPT over both, merge groups spanning FA2 and FA3 partials.
       - [ ] 48-row FA2 tile (own warp layout; 1q x 4kv x 3 MMA spilled in A2).
-      - [ ] In-kernel JIT reduction from the plan's merge schedule in both executors; DSMEM handoff opt-in.
+      - [ ] JIT reduction in the FA2 epilogue for FA2 and FA3 partials, scheduled by the plan; DSMEM handoff
+            among FA2 cluster peers.
+      - [ ] Fast unified planner: measure per-step plan time on serving shapes and optimize it.
       - [ ] Executor in the serving FA3 backend: one plan per step, two PDL launches, no merge launch.
       - [ ] Stage 1 on the 96 trace-sampled steps vs sglang's FA3 call, the best fixed FA3 configuration and native v3.
             Ablations: unified vs two plans; plan-scheduled JIT merge vs separate merges; LPT vs non-persistent;

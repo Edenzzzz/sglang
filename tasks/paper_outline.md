@@ -146,9 +146,12 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
   - classifies every row by packed query length: <= 16 / <= 32 / <= 48 -> FA2 tile classes, > 48 -> FA3
   - cuts each row's KV into chunks sized to balance SM load; LPT (longest first onto the least-loaded slot) across
     both executors' slots
-  - emits the merge schedule with the work list: for every split row, the partial slots and the merge group; the
-    last tile of a group to finish reduces it in-kernel (JIT reduction), DSMEM handoff when the group shares a
-    cluster [optional]
+  - emits the merge schedule with the work list: for every split row, the partial slots and the merge group
+  - fast: one plan per step on the CPU, built incrementally and overlapped with the previous step [plan-time
+    numbers pending]
+- one merge, in the FA2 epilogue: FA2 runs second under PDL, so the FA2 tile that completes a merge group reduces
+  it just in time -- FA2 partials handed off through DSMEM within a cluster, FA3 partials read from L2 -- and no
+  merge kernel runs for either executor
 - executors: FA3 (flash-attention's mainloop, paged) and the persistent FA2 kernel with the LPT overlap schedule (two
   CTAs per SM on different tile classes), both reading the one work list; PDL between the launches
 - 48-row FA2 tile needs its own warp layout [in progress]

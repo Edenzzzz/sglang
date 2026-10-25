@@ -22,6 +22,12 @@
   feature (status, key numbers, command, commit). Do not append dated entries as work happens. Superseded runs
   are deleted or reduced to one line, and bugs found along the way go into one short list per item.
 
+- **Fill the paper draft as experiments land.** `tasks/paper_outline.md` is the submission draft. Its story runs kernel
+  -> single node -> multi node with SLO control, and each stage states its claimed contributions, the gains, and the
+  metrics / graphs to show. When a result is measured, write it into its section at once (replacing that `[pending]`),
+  so the draft is always a full paper with only the missing pieces open. Keep the claims consistent across sections:
+  a result that changes a claim is reflected everywhere the claim appears (abstract, intro, the stage section).
+
 - **Exception -- the paper draft.** `tasks/paper_outline.md` is a paper draft, not a task doc. It follows the format
   of the user's original outline (`tasks/AttentionFuse Outline OSDI 25'.docx`): title, the outline bullets, Abstract,
   then sections 1-9 with the docx's subsection names. It has no `# Current goal`, no checklists and no dated

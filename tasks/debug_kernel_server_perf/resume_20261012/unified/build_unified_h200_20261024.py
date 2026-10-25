@@ -54,6 +54,7 @@ load(
         "-DUNIFIED_FA2_DYNAMIC=" + os.environ.get("UNIFIED_FA2_DYNAMIC", "1"),
         "-DUNIFIED_FA2_NP=" + os.environ.get("UNIFIED_FA2_NP", "0"),
         "-DUNIFIED_NP_MERGE=" + os.environ.get("UNIFIED_NP_MERGE", "0"),
+        "-DUNIFIED_NP_PERSIST=" + os.environ.get("UNIFIED_NP_PERSIST", "0"),
         "-DUNIFIED_FA3_STOCK=" + os.environ.get("UNIFIED_FA3_STOCK", "0"),
         "-DUNIFIED_TIMELINE=" + os.environ.get("UNIFIED_TIMELINE", "0"),
         "-DUNIFIED_NP_KV16=" + os.environ.get("UNIFIED_NP_KV16", "2"),

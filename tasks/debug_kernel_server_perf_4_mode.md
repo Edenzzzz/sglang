@@ -173,8 +173,14 @@ Tasks, in priority order:
                     - Two-mode improves.
                     - Four-mode gets worse: a 28-row group yields 7 merge items, and taking them ahead of compute
                       delays the longest LPT compute items that set the step's tail.
-                    - [ ] Next: choose the merge priority from the step (merges first when groups are small, compute
-                          first while long compute items remain), rather than fixing it.
+                    - [x] Merge-priority threshold (`UNIFIED_READY_FRAC`, flashinfer `21be81d`,
+                          `unified/unified_h20_persistent_readyfrac_20261025.sh`): every value, 0 to 1, gives
+                          5.85-5.87 / 8.26-8.32 ms, slower than the plain ready queue, including 0, which should
+                          match it. The one change was an extra L2 atomic read of the compute cursor per pull, so a
+                          pull's atomic count is itself a first-order cost of this loop (four L2 atomics per pull). FP32
+                          check passes at 0.75.
+                    - [ ] Polls as coherent L2 loads (`__ldcg`), atomics only for claims; then the threshold again
+                          (`unified/unified_h20_persistent_readyfrac2_20261025.sh`, running).
       - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
             current captures mix q=1 and q=4 rows, so this is untested.
 

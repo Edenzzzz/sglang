@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.59.0 — Persistent FA2 executor at parity; plan-chosen instantiations (2026-10-25)
+
+- Persistent overlap + LPT FA2 kernel: residency was register-bound at 2 CTAs/SM. The plan now picks one of two
+  instantiations: 16-row-only plans get 3 CTAs/SM with the wide runners compiled out; plans with 32-row items get
+  2 CTAs/SM with the 32-row class at MMA_KV 4 (v3's Q32 depth). Each plan also gets its own dynamic smem, and an
+  undersized launch traps.
+- FA2 rows (H20): 5.37 / 6.66 ms vs v3's FA2 launch 5.46 / 7.17. Stage 1 on the H200: 1.024-1.031x vs v3, within
+  1% of the NP executor, which stays the default.
+- A5.5: FA3 zero-KV-load ceiling driver on the flash-attention role (`a5_fa3_skipkv_ceiling_h20_20261025.sh`), with
+  a timing-bound mode in the stage-1 bench.
+
 ## v1.58.0 — S4 step model on A6; persistent FA2 timeline; batched merge rows (2026-10-25)
 
 - S4: the step model re-fitted on A6 serving traces (H200) predicts held-out steps at 2.0% MAPE vs 1.9% for stock's

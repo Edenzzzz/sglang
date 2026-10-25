@@ -98,10 +98,10 @@ Tasks, in priority order:
       - [x] (Mandatory) Fused unified reduction: FA2 and FA3 split partials reduced inside the FA2 launch by the plan's
             merge schedule, no merge launch.
       - [x] A6 beats native v3 on stage 1: H200 1.027-1.047x under `geometry_fa3` (H20: level).
-      - [ ] FA2 executor: optimize the persistent overlap + LPT kernel (the intended executor). Today the v3-body
-            executor leads, 6.48 vs 9.93 ms on four-mode FA2 rows (H20), but the comparison is not like for like. The
-            persistent number predates three fixes the v3 body already has: the chunk-parallel merge, stock FA3 and
-            atomic counter resets. Next: port the three, then re-measure both executors under the same plan.
+      - [x] FA2 executor: persistent overlap + LPT optimized and compared like for like (2026-10-25, section 3).
+            - FA2 rows alone it beats v3's FA2 launch on the H20 (1.018x / 1.076x).
+            - In the H200 step it ties the v3-body executor (0.991-1.006x) and beats v3 by 2.4-3.1%.
+            - NP stays the default for measured reasons (section 3, Decision).
       - [ ] (Optional) DSMEM JIT handoff (MELD).
       - [x] (Optional) Multicast: under 1% of FA2's KV loads are shared, so FA2 multicast is not built. FA3's ceiling
             is still open (A5.5).
@@ -257,8 +257,27 @@ Tasks, in priority order:
                     the FA2 gain does not reach the step.
               - Remaining gap to NP (2.6% / 3.7%): the persistent kernel's compute alone is faster than NP's (merge-free
                 bounds, above), so the gap is in the merge round trips and per-pull cost (timeline).
-              - [ ] H200 stage 1, persistent (plan-chosen) vs NP under the same plan, where A6 leads v3 by 3-5% and FA2
-                    is a larger share of the step.
+              - [x] **H200 stage 1, persistent (plan-chosen) vs NP under the same plan** (job `8574c727fab6ffbd`, 96
+                    fresh captures, `geometry_fa3`, flashinfer `22d8d03`, `unified/a6_h200_pers_20261025.sh`). FP32 + 20
+                    graph replays pass on all 96 for both.
+                    | stage 1 (32-64K two / four, 128-256K two / four) | vs native v3 | vs sglang FA3 |
+                    |---|---|---|
+                    | NP executor, batched merge | 1.036 / 1.041 / 1.023 / 1.027x | 1.48 / 1.42 / 1.50 / 1.44x |
+                    | persistent overlap + LPT, plan-chosen | 1.028 / 1.031 / 1.029 / 1.024x | 1.47 / 1.41 / 1.51 / 1.44x |
+                    | persistent vs NP | 0.993 / **0.991** [0.984-0.997] / 1.006 / 0.997x | |
+                    - Both beat v3 by 2.3-4.1%. The persistent kernel is within 1% of NP on every set: NP wins on
+                      32-64K four-mode (CI below 1), and the persistent kernel is slightly ahead on 128-256K two-mode.
+                    - FA2 rows alone, two-mode: persistent 5.34 ms, NP 5.56, v3's FA2 launch 5.02. On the H200 v3's
+                      launch is faster alone, but inside the step both A6 executors win, because the step is FA3-bound
+                      and A6 drops v3's merge launch. The four-mode FA2-rows harness stops on these captures: v3 sends
+                      a different row set to its FA2 launch (harness limit, not a kernel failure).
+              - **Decision, with measured reasons:** the NP executor stays the default.
+                - It leads or ties on stage 1 on both GPUs: H20 +0.0-0.3%; H200 +0.3..+0.9% on three sets and -0.6% on
+                  one.
+                - The persistent kernel's compute alone is faster, but it loses that lead to its merge round trips
+                  (~6 us per merge item, a chain of dependent global accesses) and its per-pull queue atomics.
+                - It also needs two register-targeted instantiations per plan to reach parity.
+                - It remains the measured alternative executor (`UNIFIED_FA2_NP=0`).
       - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
             current captures mix q=1 and q=4 rows, so this is untested.
 

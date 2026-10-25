@@ -697,6 +697,15 @@ Tasks, in priority order:
       | two-mode, ours | 17.5 / 17.5 | 349 / 347 | 64 / 73 ms | 45.1 / 43.9 s | 8.8 / 10.1 s | 130-135 ms |
       - Four-mode: chat TTFT -85%, agent TPOT -45..-54%, throughput +2-3%. Costs: agent TTFT +23-28%, chat TPOT +20%.
       - SLO attainment is near zero in both arms at this load.
+    - [x] **The same load without the deadline chunk cap** (`over_a6_nodc`, 2026-10-26, `--deadline-chunk=`, two
+          repeats). Ours vs stock:
+          | mode | agent tok/s | agent TPOT | agent worst-10-token TPOT | agent TTFT | chat tok/s | chat TTFT | chat TPOT | chat att 2 s / 100 ms | chat e2e mean |
+          |---|---|---|---|---|---|---|---|---|---|
+          | four | **+8.9%** | -46% | -64% | +12% | **+9.9%** | -84% | +31% | 27-29 vs 0% | 30 vs 67 s |
+          | two | +7.3% | -38% | -35% | +6% | +5.5% | -73% | +38% | 20-23 vs 0% | 35-39 vs 66 s |
+          - Throughput rises from +2-3% (capped) to +9-10% (four-mode).
+          - Chat attainment at 2 s / 100 ms goes from 0% to 20-29%, and chat e2e latency halves.
+          - Chat mean TPOT rises for the reason found at low load: the first-gap tail.
     - [x] agent C=2 + chat 0.5/s (`low_a6`, 2026-10-26, two repeats, 12 agent requests per arm, same driver): ours vs
           stock, change in the mean:
           | mode | agent tok/s | agent TTFT | agent TPOT | agent worst-10-token TPOT | chat TTFT | chat TPOT | chat ITL |

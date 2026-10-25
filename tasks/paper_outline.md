@@ -675,6 +675,10 @@ arms), with 32-64K agents at concurrency 4 plus chat at 2 req/s, far above capac
 by 85% (6-7 s vs 46 s) and agent TPOT by 45-54%, with throughput +2-3%, at the cost of agent TTFT +23-28% and chat
 TPOT +20%. In two-mode, chat TTFT falls 78-81%, agent TPOT 34-35%, and throughput rises 8-9%.
 
+Without the deadline-sized chunk cap (below), the same overloaded load gives agent throughput +8.9% and chat
+throughput +9.9% in four-mode (+7.3% / +5.5% in two-mode), agent TPOT -46% (-38%), chat TTFT -84% (-73%), and chat SLO
+attainment at 2 s / 100 ms of 27-29% against 0% for stock; chat end-to-end latency halves (30 vs 67 s).
+
 Near capacity (2 agent programs plus chat at 0.5 req/s), chat TTFT falls 83-86% and agent TPOT 17-39%, with agent
 throughput +3.6-3.8%. Chat SLO attainment improves from 67% to 72-74% at 2 s / 100 ms, and from 64-66% to 67-68% at
 2 s / 50 ms. Chat end-to-end latency falls 10-19%.
@@ -687,8 +691,8 @@ distributions per tenant). This run also drops a per-step deadline-sized chunk c
 used. The cap doubled the number of mixed steps chat rode in, and removing it improved every chat metric.
 
 **Bar status.** Throughput: the 10% bar is met only for GLM-4.5-Air (+18-19% four-mode, +12-14% two-mode), at an
-overloaded point; it is not met for Qwen2.5-7B (-8.5% four-mode, +1.7% two-mode) or for Llama-3.3-70B (+2-3%
-four-mode, +8-9% two-mode). Latency: chat TTFT improves by more than 30% for every model; agent TPOT improves by more
+overloaded point; it is not met for Qwen2.5-7B (-8.5% four-mode, +1.7% two-mode) and narrowly missed for
+Llama-3.3-70B (+8.9% agent / +9.9% chat four-mode without the chunk cap; +2-3% with it). Latency: chat TTFT improves by more than 30% for every model; agent TPOT improves by more
 than 30% except for Qwen2.5-7B two-mode (-16.6%) and GLM-4.5-Air two-mode (-17..-28%). Rate sweeps, Pareto curves,
 near-capacity points and standalone sets are [pending].
 

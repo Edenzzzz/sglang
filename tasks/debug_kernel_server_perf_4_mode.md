@@ -62,10 +62,17 @@ Tasks, in priority order:
       |---|---|---|
       | 32-64K | 54-57% -> 95-98% | about +10 points in four-mode, flat in two-mode |
       | 128-256K | 18-21% -> 58-63% | 12-19% -> 37-50% |
+      - Data note: the H200 restore copied the raw TraceLab file as `tracelab_unique.jsonl.gz`, where 2026-10-23 used
+        the deduplicated set (`deduplicate_trace_rounds_20261023.py`). Arms within this stage share the data, so they
+        compare with each other, but not directly with the 2026-10-23 numbers. Runs from S4 on use the deduplicated file.
       - **Latency and attainment clear the >= 30% bar against stock on both workloads.**
       - **Raw throughput does not clear the >= 10% bar.** Agent output is -9% to +10.5%, and chat output is pinned at
         the offered rate. SLO goodput does clear it: chat 2 s / 50 ms goodput is ~1,600 vs ~850 tok/s on 32-64K and
         520-540 vs 140-160 tok/s on 128-256K.
+      - [ ] Throughput at higher agent load (128-256K four-mode, agent concurrency 8 and 16, A6;
+            `unified/a6_load_h200_20261025.sh`, running).
+      - [ ] S4: step model on the final kernel vs stock's single FA3 call, matched four-mode schedule, fit on repeat 1
+            and scored on repeat 2 (`unified/a6_s4_steptrace_h200_20261025.sh`, queued behind the load run).
       - **A6 vs v3:** in both four-mode workloads A6 degrades agent TTFT much less against stock (+17% vs +31%;
         +14% vs +27%) and degrades chat TPOT / ITL less; agent TPOT gains a few points less; two-mode is level. This is
         consistent with a 3-5% faster attention step.

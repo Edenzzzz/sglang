@@ -499,10 +499,21 @@ Tasks, in priority order:
             (applied only where the base files match the checked md5). Smoke test on one worker passed: a 62K-token
             prompt plus 12 concurrent short requests under 4-mode MTP, about 900 A6 calls (`a6_unified=1`), no
             tracebacks.
-      - [ ] Run (`pd_colocation/mn_stage3_a6_16g_20261025.sh`, running): router step model calibrated on an A6 + MTP
-            worker; stock PD P = 1 / 2 / 3 of 4 pods at 64 programs + 16 chat/s; ours, conditional disagg (2048 /
-            0.7, same A6 workers) and the best two PD splits at 32 / 64 / 96 / 128 programs; then a 32-program fan-out
-            spike from t = 300 s.
+      - [x] Run (`pd_colocation/mn_stage3_a6_16g_20261025.sh`; Qwen2.5-7B, 16 H20 = 4 pods x 4, router step model
+            calibrated on an A6 + MTP worker; flashinfer `396b04b` np64 build; one repeat per point). Chat attainment
+            (0.5 s + 20 ms) / agent SLO goodput (10 s + 80 ms, tok/s):
+            | agent programs + chat/s | ours (full stack) | conditional disagg (2048 / 0.7) | stock PD 2 + 2 | stock PD 3 + 1 |
+            |---|---|---|---|---|
+            | 32 + 8 | 97.4% / 601 | 97.8% / 527 | 40.1% / 107 | 53.2% / 162 |
+            | 64 + 16 | 93.6% / 1100 | 96.0% / 821 | 13.4% / 52 | 13.1% / 80 |
+            | 96 + 24 | 90.0% / 1403 | 90.5% / 1136 | 10.0% / 15 | 0.0% / 4 |
+            | 128 + 32 | 79.1% / 1564 | 71.4% / 1143 | 0.3% / 6 | 0.1% / 6 |
+            | 64 + 16 + 32-program spike | 93.2% / 1053 | 94.4% / 873 | (running) | 8.0% / 46 |
+            - Stock PD with 1 prefill pod: 1.6% / 2 at 64 + 16.
+            - Against conditional disaggregation: agent SLO goodput +14 / +34 / +24 / +37% and +21% under the spike;
+              chat attainment within 2.4 points through 96 programs and +7.7 at 128.
+            - Against stock PD: every point, by 3.7-260x in agent SLO goodput.
+            - Missing: repeats, and error bars from per-request distributions (`fanout_per_tenant.py` outputs on pod 0).
 - [ ] 2026-10-24 **Conditional-disagg comparison re-run at Dynamo's defaults** (2048 tokens, 0.7 of the prompt; the
       earlier run used 4096), queued behind the stage-3 baselines (`pd_colocation_vs_disagg.md`).
 - [ ] **Fault tolerance:** prefill-role and decode-role workers killed mid-run (`pd_colocation_vs_disagg.md`).
@@ -2273,7 +2284,7 @@ cluster-wide request volume, scheduling flexibility under load spikes / mixed wo
     [Analysis and comparison](debug_kernel_server_perf/resume_20261012/crossflow_analysis_20261014.md).
   - *Learn:* its ITL regression under decode-local prefill is exactly the cost our fused step removes -- report
     ITL alongside TTFT on the same replay; its timestamp-compression protocol is the request-rate load axis for
-    chat-like tenants (agent tenants use program concurrency, below).
+    chat-like tenants (agent tenants use program concurrency, below). It also confirms our claim that P/D demands can vary largely during online serving
 - **ThunderAgent: A Simple, Fast and Program-Aware Agentic Inference System** -- H. Kang et al.,
   [arXiv:2602.13692](https://arxiv.org/abs/2602.13692) *(sent)*
   - *Summary:* program-aware scheduling for agentic workflows; shows KV-cache thrashing (a session's cache evicted

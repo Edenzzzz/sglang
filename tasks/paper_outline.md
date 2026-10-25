@@ -63,8 +63,9 @@
     - bar: >= 30% on TTFT / ITL attainment and >= 10% throughput (SLO goodput) vs the best baseline
     - measured (16 H20s, Qwen2.5-7B, fan-out agents + chat, full stack): at 64 programs + 16 chat/s, chat attainment
       93.6% and agent SLO goodput 1100 tok/s vs 13.1% / 80 for stock PD at its best split and 96.0% / 821 for
-      conditional disaggregation at Dynamo's defaults (+34% goodput); 90.0% / 1403 at 96 programs [pending: higher
-      loads, spike, Llama-3.3-70B]
+      conditional disaggregation at Dynamo's defaults (+34% goodput); against conditional disaggregation +14..+37%
+      agent SLO goodput at every load (32-128 programs) and +21% under a load spike, chat attainment equal through
+      96 programs and +7.7 points at 128 [pending: Llama-3.3-70B, 32 GPUs]
     - figures: per-tenant attainment and SLO goodput vs load, the 90% capacity marked per system; P:D sweep; load-spike
       time series; fault-tolerance windows
 
@@ -86,7 +87,8 @@ an H200 and 2.3-4.1% faster than the best two-launch split, with FP32-exact outp
 attainment rises for both tenants (Qwen2.5-7B: chat 50 -> 59-65%, agents 45-52 -> 77-85%, chat TTFT -96%;
 GLM-4.5-Air: throughput +18-19% for both tenants, agent TPOT -41..-48%). On 16 H20s, at 64 agent programs plus chat,
 ours keeps 93.6% chat attainment with 1100 tok/s agent SLO goodput, where PD disaggregation at its best P:D ratio
-reaches 13.1% and 80 tok/s, and conditional disaggregation 96.0% and 821 tok/s. [Llama-3.3-70B, higher loads pending.]
+reaches 13.1% and 80 tok/s; against conditional disaggregation ours carries 14-37% more agent SLO goodput at every
+load and 21% more under a load spike. [Llama-3.3-70B pending.]
 
 ## 1. Introduction
 
@@ -540,14 +542,18 @@ reaches 13.1% and 80 tok/s, and conditional disaggregation 96.0% and 821 tok/s. 
   |---|---|---|---|---|
   | 32 + 8 | 97.4% / 601 | 97.8% / 527 | 40.1% / 107 | 53.2% / 162 |
   | 64 + 16 | 93.6% / 1100 | 96.0% / 821 | 13.4% / 52 | 13.1% / 80 |
-  | 96 + 24 | 90.0% / 1403 | [pending] | [pending] | [pending] |
-  | 128 + 32 | [pending] | [pending] | [pending] | [pending] |
+  | 96 + 24 | 90.0% / 1403 | 90.5% / 1136 | 10.0% / 15 | 0.0% / 4 |
+  | 128 + 32 | **79.1% / 1564** | 71.4% / 1143 | 0.3% / 6 | 0.1% / 6 |
+  | 64 + 16, + 32-program spike from 300 s for 300 s | 93.2% / 1053 | 94.4% / 873 | [pending] | 8.0% / 46 |
 
   - stock PD with 1 prefill pod: 1.6% / 2 tok/s at 64 + 16
-  - vs conditional disaggregation: agent SLO goodput +14% at 32 and +34% at 64 programs at chat attainment within
-    0.4-2.4 points; the full stack adds 14% agent SLO goodput over the schedule-only run at 64 programs (1100 vs 964)
-  - mixture spike (a second 32-program fan-out wave from 300 s for 300 s on 64 + 16) [pending]
-  - 32 GPUs [pending]
+  - vs stock PD at its best split: chat attainment 97.4 vs 53.2% at 32 programs and 93.6 vs 13.1% at 64; agent SLO
+    goodput 3.7x at 32 and 14x at 64; stock PD holds no load point at >= 90%
+  - vs conditional disaggregation: agent SLO goodput +14% / +34% / +24% / +37% at 32 / 64 / 96 / 128 programs and
+    +21% under the spike. Chat attainment is within 0.4-2.4 points through 96 programs and +7.7 points at 128, where
+    conditional disaggregation's chat TPOT p90 reaches 46.6 ms (ours 24.8 ms)
+  - the full stack adds 14% agent SLO goodput over the schedule-only run at 64 programs (1100 vs 964)
+  - 32 GPUs, and Llama-3.3-70B [pending]
 - Llama-3.3-70B (4 TP4 replicas on 16 H20s) [pending]; GLM-4.5-Air after Qwen2.5-7B and Llama-3.3-70B
 - Cache pressure: working set 1M -> 8M KV tokens against a 6.7M pool; disagg loses 55% throughput and 28.5 points of
   cached fraction, ours 10.6% and 3.1 [earlier settings; rerun with the full stack pending]

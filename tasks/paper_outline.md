@@ -44,7 +44,8 @@
       H20 level with v3 for Qwen2.5-7B, Llama-3.3-70B (1.38-1.61x sglang) and GLM-4.5-Air (1.28-1.41x sglang);
       step model 2.0% held-out MAPE, mixed steps 5.9% vs 7.7% for the single FA3 call
     - figures: time-weighted speedup per (model, context, mode) with 95% CI vs sglang FA3 and v3; per-item timeline
-      of one step; ablation bars (plan, merge, LPT order, PDL overlap, executor) [pending: schedule ablations]
+      of one step; ablation bars: FA2 / FA3 overlap by PDL 2.2-6.1% of the step, longest-first order <= 0.7%,
+      persistent vs hardware dispatch -0.2..-1.3% (H200, Qwen2.5-7B) [pending: JIT reduction, Llama-3.3-70B]
   - stage 2, single node (C2 on C1; sections 5.2-5.3, 6.3)
     - claim: the 4-mode step (prefill chunk + speculative verify) under per-tenant deadline order with demote-on-miss
       protects both tenants on one node

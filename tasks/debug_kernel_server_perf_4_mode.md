@@ -295,13 +295,24 @@ Tasks, in priority order:
                       - Both walk the same plan queue. It is one FA2 queue, longest first; NP's tickets follow it in
                         launch order. So the schedule (LPT order, splits, merge items, PDL overlap) is common to both,
                         and the earlier comparisons mixed dispatch with tile code.
-                - [ ] Separate the three (`unified/a6_h200_dispatch_schedule_20261025.sh`, flashinfer `2e6eecc`, running):
-                  - dispatch with the tile code fixed: `UNIFIED_NP_PERSIST=1`, the BatchPrefill body on a persistent
-                    grid pulling the same queue, vs NP;
-                  - the schedule itself on one executor: LPT vs enumeration order (`UNIFIED_FA2_ORDER=fifo`), and
-                    PDL overlap with FA3 vs serial (`UNIFIED_PDL=0`).
-                - Goal: the persistent tile overlap + LPT schedule beats NP for a reason we can show, so it can be
-                  claimed as a contribution.
+                - [x] **Dispatch, tile code and schedule separated** (H200, 96 captures, geometry_fa3, flashinfer
+                      `905660d`, `unified/a6_h200_dispatch_schedule_20261025.sh`). FP32 + 20 graph replays pass on all 96
+                      for the new build.
+                      | stage 1 vs the NP executor (32-64K two / four, 128-256K two / four) | |
+                      |---|---|
+                      | NP rerun (noise floor) | 0.998 / 1.001 / 1.003 / 1.000x |
+                      | same BatchPrefill body on a persistent LPT pull loop (2 CTAs/SM) | 0.987 / 0.998 / 0.996 / 0.993x |
+                      | enumeration order instead of longest first | 0.993 / 0.996 / 1.001 / 1.001x |
+                      | FA2 launch serial after FA3 (PDL off) | **0.939 / 0.967 / 0.975 / 0.978x** |
+                      | flashinfer's persistent runner vs the persistent BatchPrefill loop | 1.005 / 0.993 / 1.011 / 1.004x |
+                      - Overlapping FA2 with FA3 is worth 2.2-6.1% of the step. That is the schedule's measurable
+                        contribution, larger than A6's whole lead over v3 (2.3-4.1%).
+                      - Longest-first order is worth at most 0.7%, inside the noise on three of the four sets.
+                      - Persistent dispatch gains nothing over hardware-launched CTAs at equal tile code (-0.2..-1.3%).
+                - [ ] **Persistent loop + JIT reduction** (user, 2026-10-25): release each split group's merge items the
+                      moment the group's last member completes (ready queue) on the persistent BatchPrefill loop, so the
+                      merges overlap the remaining compute instead of forming a tail. This is the one way left for a
+                      persistent loop to beat hardware dispatch.
               - **Decision so far** (the NP executor is the default):
                 - It leads or ties on stage 1 on both GPUs: H20 +0.0-0.3%; H200 +0.3..+0.9% on three sets and -0.6% on
                   one.

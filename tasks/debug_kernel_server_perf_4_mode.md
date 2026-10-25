@@ -201,6 +201,34 @@ Tasks, in priority order:
                             slower than the plain ready queue, and the threshold value barely matters.
                           - The threshold check is off by default now (it runs only when `UNIFIED_READY_FRAC > 0`).
                           - FP32 + graph checks pass and the watchdog never fires.
+        - [x] **Per-item timeline** (`UNIFIED_TIMELINE=1`, globaltimer per item; flashinfer `6a608d9`,
+              `unified/unified_h20_persistent_timeline_20261025.sh`, `timeline_fa2_rows_20261025.py`):
+              - Most steps are 1-4 compute rounds of 31-43 us items (144-680 items on 156 CTAs), then one merge round.
+              - A 4-row merge item takes 6-7 us. Its rows have ~18 chunks, so the time is a chain of dependent round
+                trips (plan indices, partial loads, fence, counter atomic), not bandwidth.
+              - Ready queue: a pull costs ~2 us against 0.7 us at the queue tail, and per-CTA idle time doubles on
+                four-mode (1.04 vs 0.56 ms summed). This is why the ready queue loses on four-mode.
+              - Long steps (128-256K, 46 rows): item times spread from small to 159 us. The longest item, not the
+                merge, sets the step.
+        - [x] **Batched online-max merge rows** (`UnifiedMergeRowCG`, both executors; flashinfer `0ab3886`,
+              `unified/unified_h20_merge_unroll_20261025.sh`). Each chunk group keeps its own max and has 4 chunks in
+              flight, with no separate max pass. FP32 + 20 graph replays pass on all 92 for every arm.
+              | FA2 rows (two / four-mode) | before | after | stage 1 vs v3 after (32-64K two / four, 128-256K two / four) |
+              |---|---|---|---|
+              | v3's FA2 launch | 5.47 / 7.17 ms | | |
+              | persistent, merge items at the queue tail | 5.82 / 6.92 | **5.42 / 6.98** | 0.998 / 1.006 / 1.000 / 1.008x |
+              | persistent, ready queue | 5.70 / 7.66 | 5.62 / 7.66 | 0.996 / 1.000 / 0.999 / 1.002x |
+              | v3 body (NP) | 5.31 / 6.49 | **5.23 / 6.42** | 0.999 / 1.008 / 1.000 / 1.006x |
+              - The persistent kernel now beats v3's FA2 launch on both modes (1.009x / 1.027x). It still trails the
+                NP executor by 4% / 9%, and the gap holds on every four-mode capture, including 1-row steps.
+              - A merge item still takes ~6 us, so the gain does not come from the merge loop; the build's register
+                allocation also changed. The open cause is the runner configuration (next item).
+        - [ ] **Runner configuration vs v3's** (`unified/unified_h20_persistent_occ_20261025.sh`, running).
+              - The persistent 32-row class is 2q x 2kv warps at MMA_KV 2, a 64-key KV tile. v3's Q32 is the same layout
+                at MMA_KV 4 (128 keys).
+              - The persistent grid is 2 CTAs per SM of 4 warps each, i.e. 8 warps per SM. v3's non-persistent grid
+                keeps more CTAs resident.
+              - Sweep: MMA_KV32 2 / 4, CTAs per SM 2 / 3 / 4.
       - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
             current captures mix q=1 and q=4 rows, so this is untested.
 

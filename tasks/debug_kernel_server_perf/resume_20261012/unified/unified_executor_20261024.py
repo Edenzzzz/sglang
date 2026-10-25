@@ -14,7 +14,8 @@ class UnifiedExecutor:
                  int_bytes=256 << 20, pdl=True):
         self.heads, self.kv_heads, self.device = heads, kv_heads, device
         self.num_sm = torch.cuda.get_device_properties(device).multi_processor_count
-        self.fa2_ctas = fa2_ctas_per_sm * self.num_sm
+        # Persistent FA2 grid: UNIFIED_FA2_CTAS_PER_SM resident CTAs per SM (the plan's LPT slots).
+        self.fa2_ctas = int(os.environ.get("UNIFIED_FA2_CTAS_PER_SM", fa2_ctas_per_sm)) * self.num_sm
         self.fa3_ctas = self.num_sm
         self.fa3_min_packed = fa3_min_packed
         self.int_ws = torch.empty(int_bytes, dtype=torch.uint8, device=device)

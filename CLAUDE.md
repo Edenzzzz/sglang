@@ -28,6 +28,15 @@
   so the draft is always a full paper with only the missing pieces open. Keep the claims consistent across sections:
   a result that changes a claim is reflected everywhere the claim appears (abstract, intro, the stage section).
 
+- **The draft is written for human readers, towards a full high-quality conference submission (deadline 2026-10-30).**
+  Every section is prose a reviewer can follow without the task docs. Define each term before using it; one idea per
+  paragraph; no internal shorthand (build names, env flags, arm labels, capture-set names) outside the artifact
+  appendix; numbers carry their unit and baseline. Lay out every stage (kernel -> single node -> multi node with SLO
+  control) the same way: the claimed contribution, the gain, and the metric and figure that show it. Each figure is
+  described in place (axes, arms, workload) with `[pending]` where the data is not in yet, so finishing the paper means
+  only filling in measured pieces. After each result lands, reread the section it touches and keep the story
+  coherent.
+
 - **Exception -- the paper draft.** `tasks/paper_outline.md` is a paper draft, not a task doc. It follows the format
   of the user's original outline (`tasks/AttentionFuse Outline OSDI 25'.docx`): title, the outline bullets, Abstract,
   then sections 1-9 with the docx's subsection names. It has no `# Current goal`, no checklists and no dated

@@ -77,8 +77,10 @@ for d in sys.argv[2:]:
         idle = sum((end - a) / 1e3 for a in first.values()) - busy
         nctas = len(first)
         records[f"{path.parent.parent.name}/{path.name}"] = r
+        cspan = (compute_end - t0) / 1e3
+        agg["cspan"] = agg.get("cspan", 0.0) + cspan
         print(f"TL {path.parent.parent.name}/{path.name} rows={len(keep)} items={int(comp.sum())}+{int(mrg.sum())}m "
-              f"ctas={nctas} span={span:.1f}us tail={tail:.1f}us pull_mean={pull.mean():.2f}us "
+              f"ctas={nctas} span={span:.1f}us compute_span={cspan:.1f}us tail={tail:.1f}us pull_mean={pull.mean():.2f}us "
               f"pull_cta_total={pull.sum() / max(nctas, 1):.1f}us wait_mean={wait.mean().item() if mrg.any() else 0:.2f}us "
               f"merge_mean={mdur.mean().item() if mrg.any() else 0:.2f}us compute_mean={cdur.mean():.2f}us "
               f"compute_max={cdur.max():.2f}us idle_per_cta={idle / max(nctas, 1):.1f}us", flush=True)

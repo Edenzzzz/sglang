@@ -105,7 +105,9 @@ Tasks, in priority order:
       - [ ] (Optional) DSMEM JIT handoff (MELD).
       - [x] (Optional) Multicast for FA3 and FA2, closed by measured bounds (A5.5).
             - FA2: under 1% of its KV loads are shared, so multicast is not built.
-            - FA3: zero KV loads would make the step only 0.1-1.3% faster, so multicast is not built.
+            - FA3: zero KV loads would make the step only 0.1-1.3% faster.
+            - [ ] Build FA3 multicast under the unified plan anyway (user, 2026-10-25): the plan can pair tiles on a
+                  cluster, which upstream's scheduler could not. Measure it against the <= 0.7% bound.
       - [x] Partials FP32 or BF16 if the FP32 gate passes: ours are BF16, worst error 0.0081.
       - [ ] Serving (stages 2-3) only after the kernel is resolved; v3 is the kernel until A6 beats it.
       - [ ] All three models swept and shown; the paper may keep only Llama-3.3-70B and Qwen2.5-7B.
@@ -272,7 +274,17 @@ Tasks, in priority order:
                       launch is faster alone, but inside the step both A6 executors win, because the step is FA3-bound
                       and A6 drops v3's merge launch. The four-mode FA2-rows harness stops on these captures: v3 sends
                       a different row set to its FA2 launch (harness limit, not a kernel failure).
-              - **Decision, with measured reasons:** the NP executor stays the default.
+              - [ ] **The gap to NP is unexplained (unchecked 2026-10-25, user).**
+                - Both executors run the same merge (plan-scheduled merge items, `UnifiedMergeRowCG`, tickets after
+                  compute), so "the merge" cannot be the difference. The "persistent compute alone is faster" bound
+                  was taken in different modes for the two executors, on an older persistent build.
+                - Candidates: who runs a merge item (a resident hardware-launched CTA vs a persistent CTA after its
+                  compute item), residency (2-3 vs NP's CTAs per SM), and per-pull queue atomics.
+                - Measuring: the same per-item timeline in both executors, on the same captures
+                  (`unified/a6_h200_timeline_np_vs_pers_20261025.sh`, H200, running).
+                - Goal: the persistent tile overlap + LPT schedule beats NP for a reason we can show, so it can be
+                  claimed as a contribution.
+              - **Decision so far** (the NP executor is the default):
                 - It leads or ties on stage 1 on both GPUs: H20 +0.0-0.3%; H200 +0.3..+0.9% on three sets and -0.6% on
                   one.
                 - The persistent kernel's compute alone is faster, but it loses that lead to its merge round trips

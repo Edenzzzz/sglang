@@ -21,13 +21,13 @@ export NATIVE_PDL_FA2_FP32_LIBRARY=$A/native_fa2_q32_fp32.so NATIVE_PDL_FA2_FP32
 export UNIFIED_SO=$A/unified_dispatch_ext.so UNIFIED_FA3_STOCK=1 UNIFIED_SPLIT_POLICY=geometry_fa3 UNIFIED_MERGE_ROWS=4 UNIFIED_FA3_MIN=65
 COMMON="--split-policy geometry_v3 --direct-output --packed-query-limit 64 --repeats 2 --ours --model-dir glm45air --draft-dir nextn --tp-size 4 --no-yarn"
 FIX="--ours-env SGLANG_TTFT_SLO_MS=500 --ours-env SGLANG_EDF_LONG_PROMPT_TOKENS=8192 --ours-env SGLANG_EDF_LONG_TTFT_SLO_MS=10000 --ours-env SGLANG_EDF_LATE_DEMOTE=1 --ours-env SGLANG_EDF_LATE_DEMOTE_TOK_S=1e12"
-R=$BASE/short_a6
+R=$BASE/${GLM_ROOT:-short_a6}
 mkdir -p $R
 test -d $R/python || cp -a $SRC/python $R/python
 cp $SRC/*.py $SRC/*.sh $SRC/tracelab_unique.jsonl.gz $R/
 export PYTHONPATH=$R/python:$R:$W/fi:$W/drivers/serving TRACE_DATASET_PATH=$R/tracelab_unique.jsonl.gz
 cd $R
-/dev/shm/w/venv/bin/python -u run_native_serving_pair_20261023.py "$R" --stage mix32 --modes four two $COMMON $FIX --native-env SGLANG_A6_UNIFIED=1
+/dev/shm/w/venv/bin/python -u run_native_serving_pair_20261023.py "$R" --stage mix32 --modes ${GLM_MODES:-four two} ${GLM_LOAD:-} $COMMON $FIX --native-env SGLANG_A6_UNIFIED=1
 /dev/shm/w/venv/bin/python audit_native_serving_pair_20261023.py "$R" "$R/audit.json" || true
 n=$(cat $R/*_native/server.log 2>/dev/null | grep -c "a6_unified=1" || true)
 echo "a6 composition: $n"; [ "$n" -gt 0 ] || { echo A6_NOT_ACTIVE; exit 1; }

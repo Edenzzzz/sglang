@@ -462,10 +462,40 @@ Tasks, in priority order:
                   vs sglang FA3 with the 64-row class: GLM 1.28x / 1.41x; Qwen 1.19 / 1.22 / 1.19 / 1.09x.
             - The persistent kernel's co-compiled 48 runner spilled every class (1 436 B); NP avoids this by
               instantiating per plan.
-      - [ ] (Optional) DSMEM JIT reduction as MELD does it (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`
-            §4.3, §5). The producer TMA-copies its partial into the consumer's slot under a per-slot mbarrier, and the
-            consumer reduces in shared memory. Plan-side grouping (`UNIFIED_MERGE_MODE=dsmem`) is built and host-checked;
-            the kernel is not.
+      - [ ] **Open kernel gaps (2026-10-25, user): close all before stages 2-3 continue.**
+        - [ ] **DSMEM-cluster JIT reduction** (`UNIFIED_MERGE_MODE=dsmem`, `UnifiedFA2NPClusterKernel`, flashinfer
+              `f62b92a`, `unified/a6_h200_dsmem_jit_20261025.sh`, H200, 96 captures). It is exact: FP32 + 20 graph
+              replays pass on all captures at C=2 and C=4. It is slow:
+              | C=2, stage 1 | 32-64K two | 32-64K four | 128-256K two | 128-256K four |
+              |---|---|---|---|---|
+              | vs ticketed merge items | 0.597x | 0.667x | 0.622x | 0.703x |
+              | vs native v3 | 0.618x | 0.695x | 0.637x | 0.722x |
+              - Cause (from the plan): to fit a split group in one cluster, the plan raises the FA2 chunk to
+                >= kv_max / C. At C=2 the longest request runs as two chunks and bounds the step. The cluster barrier
+                also holds every CTA of a task until its slowest entry is done. C = 4 / 8 / 16 are running.
+              - [ ] Make the split count independent of C. Either a group spans several clusters, with a DSMEM merge
+                    inside each cluster and one global merge across them, or the plan packs a request's chunks so
+                    tasks finish together. Then re-measure against the ticketed merge.
+        - [ ] **Why MELD (SOSP '26) reports large JIT gains and we see none.** Compare its workloads (split counts,
+              batch sizes, KV spread, separate-merge-launch baseline) with ours. Measure ours per capture with
+              `unified/plan_balance_20261025.py` (`a6_h200_plan_balance_20261025.sh`, queued behind the DSMEM run):
+              batch size, FA2 KV min / median / max, chunk size, split groups, items, and FA2 span vs the two balance
+              floors (sum of work / CTA slots, and the longest item).
+        - [ ] **Splits and load imbalance on four-mode steps:** is it true that no FA2 split groups occur, and FA3
+              split rows never occur under `geometry_fa3`? Is a four-mode step ever imbalanced? Answer from the same
+              per-capture run, then build synthetic steps that are imbalanced (long-tailed KV) to show where the
+              reduction matters.
+        - [ ] **L2-swizzled FA2 order in the persistent loop.** The old `HolisticPlanInfo<4>` design was "L2-swizzled
+              LPT", but A6's FA2 queue has only LPT / FIFO (swizzle exists for FA3 only, `UNIFIED_FA3_ORDER=swizzle`,
+              no change). Add a swizzled order: items that read the same KV pages (same request + KV head + chunk,
+              and shared-prefix pages across requests, e.g. agent fan-out) run adjacent in time. Measure it on the
+              captures and on shared-prefix synthetic steps.
+        - [ ] **CTA count / launch overhead at large batch:** the NP grid launches one CTA per item (thousands at
+              large batch). Synthetic sweep at bs 64-4096, decode-only and verify-only rows, short and long KV: NP
+              grid vs the persistent loop on the same BatchPrefill tile code (`h200_npp`), isolating launch / prologue
+              cost from tile code.
+        - [ ] Paper 5.1 / 7 rewritten from these results. The pushed text claims there is no locality for a swizzle;
+              that claim is withdrawn until the swizzle is measured.
       - [x] **Plan time on serving shapes, overlapped with the previous step.**
         - [x] 2026-10-25 Found and fixed a serving stall (`unified/plan_overlap_20261025.py`,
               `a6_plan_overlap_h200_20261025.sh`, H200, 24 captures).
@@ -2414,3 +2444,70 @@ cluster-wide request volume, scheduling flexibility under load spikes / mixed wo
     load-based mode, 180 s in throughput mode) are the comparison for scheduling flexibility under load spikes --
     evaluate a step change in load and report the time to recover TTFT / ITL, where our per-request routing and
     per-step prefill/decode mix react without adding or removing workers.
+- **FlowPrefill: Decoupling Preemption from Prefill Scheduling Granularity to Mitigate Head-of-Line Blocking in LLM
+  Serving** -- C. Hsieh, Z. Zong, X. Chen, J. Li, J. Zhai, L. Wen, [arXiv:2602.16603](https://arxiv.org/abs/2602.16603)
+  ([code](https://github.com/HSIEHCHIACHI/FlowPrefill)) *(sent)*
+  - *Summary:* a prefill scheduler for PD-disaggregated serving, built for TTFT goodput, on vLLM 0.11.2; 8x A800-80GB;
+    Llama3-8B / Qwen2.5-14B / Llama3-70B (TP 1/2/4) plus Qwen3-30B-A3B; QwenTrace production trace (four task types,
+    per-type TTFT SLOs, text strictest, search/file loosest); load axis is a request-rate scale; goodput = max rate at
+    90% TTFT attainment. Baselines are DistServe 1P1D (FCFS) and DistServe + chunked prefill + EDF (2K / 8K chunks),
+    plus vLLM with 2K chunks for colocation. 4.7-5.6x goodput over DistServe, up to 2.0x / 4.5x over the 2K / 8K-chunk
+    variants, 1.5-3.1x tighter SLOs met; colocated (intra-PD) variant: TBT attainment up to 1.6x.
+  - *Core method/contributions:* operator-level preemption: each request runs in its own thread and CUDA stream, and
+    a preemption flag is checked at operator boundaries (qkv_proj, attn, o_proj, gate_up_proj, ...), so preemption
+    latency is bounded by one operator without paying for small chunks; event-driven scheduling that runs only on
+    arrival or completion; slack-aware EDF (earliest deadline among requests with non-negative slack, so requests
+    that can no longer meet their deadline are deprioritized) plus SLO-aware batching of compatible prefills.
+  - *Relation:* the same problem as our chunk preemption + EDF (long prefills blocking tighter-SLO requests) and the
+    same policy family (its negative-slack deprioritization corresponds to our demote-on-miss). It preempts on a
+    prefill-only instance, so a preempted prefill never shares a step with decode; ours preempts at chunk boundaries
+    inside a mixed 4-mode step where the prefill chunk co-runs with MTP verify rows, and the fused kernel makes small
+    deadline-sized chunks cheap instead of avoiding chunking.
+  - *Learn:* its premise -- chunk size trades execution overhead against blocking -- is the claim our kernel has to
+    refute on the mixed step: report step cost vs chunk size (fused vs stock chunked prefill), then TTFT goodput at
+    90% attainment under per-type TTFT SLOs on a production-like trace with a rate-scale axis, plus the tightest SLO
+    scale each system meets; report TBT attainment beside TTFT, as its colocated result does.
+- **POD-Attention: Unlocking Full Prefill-Decode Overlap for Faster LLM Inference** -- A. K. Kamath, R. Prabhu,
+  J. Mohan, S. Peter, R. Ramjee, A. Panwar, ASPLOS '25 ([arXiv:2410.18038](https://arxiv.org/abs/2410.18038)) *(sent)*
+  - *Summary:* one attention kernel for hybrid (prefill chunk + decode) batches that runs prefill and decode work
+    concurrently on the same SM; built from FlashAttention-2 kernels on A100 (108 SMs) and integrated into
+    Sarathi-Serve; Yi-6B on 1 A100, Llama-2-7B / Llama-3-8B on 2 A100s (TP2). Kernel baselines: serial FA, FA on two
+    streams, HFuse horizontal fusion, FlashInfer batched; end-to-end: offline requests/min and online TTFT / TBT /
+    request latency at fixed QPS on an internal enterprise workload and arXiv-Summarization (4K-32K contexts).
+    Attention up to 59% faster (mean 28%), throughput up to 22% over Sarathi-Serve, P99 TTFT up to 4.3x lower.
+  - *Core method/contributions:* SM-aware CTA scheduling: each CTA reads its SM id and an atomic per-SM counter at
+    runtime to pick prefill or decode work, so both phases share every SM; a 16-row decode query tile (the A100
+    CUTLASS minimum) that leaves tensor cores to prefill; 2 or 4 CTAs per SM chosen by whether the batch is
+    prefill-dominant; virtual decode CTAs (one warp each) to balance shared memory. FA-3 / Hopper is left to future
+    work.
+  - *Relation:* the closest kernel work -- the same goal of overlapping compute-bound prefill with memory-bound decode
+    in one mixed step, and its decode tile matches our 16-row FA2 tile class. But it supports only FA2 (Ampere-style
+    mma), is slow on other architectures, and we confirmed that MMA instructions of different sizes cannot be
+    overlapped within one kernel on Hopper and Blackwell (wgmma / tcgen05). That is why our design keeps FA3 (prefill
+    rows) and FA2 (decode / verify rows) as separate launches co-running via PDL and puts the fusion in the one CPU
+    plan and the unified in-launch merge. Its hybrid batch has no speculative verify rows.
+  - *Learn:* its kernel evidence -- a grid of hybrid batches labelled memory-bound / balanced / compute-bound,
+    speedup over serial, two-stream and horizontally fused execution, and distance to the ideal overlap -- is the
+    format for our kernel claim on Hopper, where it cannot run; cite it as the Ampere design point our plan + merge
+    generalizes. Its "% of requests with > 200 / 500 ms stalls" is a cheap tail metric for our TPOT claims.
+- **SARATHI: Efficient LLM Inference by Piggybacking Decodes with Chunked Prefills** -- A. Agrawal, A. Panwar,
+  J. Mohan, N. Kwatra, B. S. Gulavani, R. Ramjee, [arXiv:2308.16369](https://arxiv.org/abs/2308.16369) *(sent)*
+  - *Summary:* the original chunked-prefill paper: split each prompt into equal chunks and fill every batch with one
+    chunk plus decodes. nanoGPT + xformers attention; LLaMA-13B on 1 A6000 and LLaMA-33B on 1 A100-80GB (deployed),
+    GPT-3 with 8-way PP x 8-way TP on 64 simulated A100s; offline throughput across sequence length, batch size and
+    P:D ratio, against separate prefill/decode iterations and Orca-style iteration-level batching. Decode throughput
+    up to 10x (13B) / 4.25x (33B), end-to-end 1.33x / 1.25x; GPT-3 pipeline bubbles 6.29x fewer, 1.91x end-to-end.
+  - *Core method/contributions:* chunked prefills (per-chunk causal masks; chunk size picked per model-hardware by
+    profiling, with tile-quantization jumps when the token count just exceeds a tile multiple); decode-maximal
+    batching: one prefill chunk plus up to B-1 decodes, with all linear layers fused into one matmul so decodes reuse
+    the weights the chunk loads (per-token decode 12.49 ms -> 1.2 ms in its example); uniform-compute micro-batches
+    that cut pipeline bubbles.
+  - *Relation:* the chunked-prefill baseline whose mixed step (decode rows piggybacked on a prefill chunk) our 4-mode
+    step and tile classes improve on. SARATHI fuses only the linear layers -- prefill and decode attention stay
+    separate calls, "the attention cost remains unchanged"; stock sglang's mixed chunk runs both in one varlen
+    attention call with one tile shape. Our step adds MTP verify rows, routes prefill rows to FA3 and decode / verify
+    rows to the 16 / 32-row FA2 tile classes, and reduces all splits in one merge.
+  - *Learn:* its analysis isolates exactly the cost piggybacking cannot hide -- attention -- and makes the P:D ratio
+    and chunk size the knobs; report our attention and step time against stock chunked prefill on the same axes (P:D
+    ratio x chunk size, including non-multiples of the tile), so the attention share SARATHI leaves is the part our
+    kernel is shown to remove.

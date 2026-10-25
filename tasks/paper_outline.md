@@ -265,17 +265,10 @@ load and 21% more under a load spike. [Llama-3.3-70B pending.]
     launches disappear. With every merge, check-in fence and counter atomic removed (output wrong; a timing bound), the
     step is at most 0.9% faster, so the in-launch merge costs under 1% of the step (7).
   - Why the default FA2 executor is non-persistent:
-    - A persistent LPT kernel was the intended design, for two expected advantages: better L2 locality, and an easy
-      in-epilogue reduction.
-    - Neither materializes on these rows. FA2's rows share under 1% of their KV loads (they are decode / verify rows of
-      different requests), so there is no locality for an L2-swizzled order to exploit; longest-first order itself is
-      worth <= 0.7%.
-    - The non-persistent launch reduces in the same launch too, as plan-scheduled merge items, or per cluster with one
-      cluster barrier (the DSMEM variant).
-    - The persistent kernel's other lever, co-resident CTAs of different tile classes on one SM, also has nothing to
-      pair: the classes are all bandwidth bound, and a step never mixes them (four-mode steps are all 32-row verify
-      rows, two-mode steps all 16-row decode rows). The old design's win came from pairing a 128-row prefill tile with
-      a 16-row decode tile, and that pairing now happens across the two launches.
+    - A persistent LPT kernel was the intended design, for three expected advantages: an L2-swizzled order (items
+      that read the same KV pages run together), fewer CTA launches at large batch, and cluster-scheduled reduction
+      in the epilogue. Measured: L2-swizzled FA2 order [pending]; CTA launch cost vs batch size [pending]; DSMEM
+      cluster reduction [pending]. Longest-first order itself is worth <= 0.7% (7).
     - Measured at equal tile code, persistent dispatch is level with hardware-launched CTAs (-0.2..-1.3%), and
       event-driven merge release adds polling that slows the compute (7).
 - why not fuse FA2 and FA3 into one kernel: warp layout mismatch

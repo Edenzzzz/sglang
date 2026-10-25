@@ -20,7 +20,7 @@ class UnifiedExecutor:
         self.int_ws = torch.empty(int_bytes, dtype=torch.uint8, device=device)
         self.pinned = torch.empty(int_bytes, dtype=torch.uint8, pin_memory=True)
         self.float_ws = torch.empty(1 << 20, dtype=torch.float32, device=device)
-        self.pdl = pdl
+        self.pdl = pdl and os.environ.get("UNIFIED_PDL", "1") != "0"  # UNIFIED_PDL=0: serial launches (diagnostic)
 
     def plan(self, query_lengths, kv_lengths, page_table):
         q = torch.tensor([0, *query_lengths], dtype=torch.int32).cumsum(0, dtype=torch.int32)

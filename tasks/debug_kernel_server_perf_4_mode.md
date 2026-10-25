@@ -148,9 +148,17 @@ Tasks, in priority order:
               - Status: hangs intermittently. Each per-set check reached its 20-minute limit after 5-9 captures, all
                 of which passed, and the capture it stalled on passes when run alone. So it is a race in the claim /
                 publish protocol, not a deterministic bug.
-              - Hunt running: a watchdog build prints the queue state (head, tail, total merges, compute cursor,
-                queue length, the slot waited on) and traps
-                (`unified/unified_h20_persistent_ready_debug_20261025.sh`).
+              - Root cause, found with a watchdog build that prints the queue state and traps
+                (`unified/unified_h20_persistent_ready_debug_20261025.sh`):
+                - Every hang lost exactly one group: `head=22 tail=22 total=24`, all compute pulled. It reproduced with
+                  PDL off (`UNIFIED_PDL=0`), so it is not launch overlap.
+                - In the runner's check-in hook, every thread wrote `unified_last = 0` while thread 0 still had to read
+                  the flag to decide whether to publish. When another warp's write landed first, the group was never
+                  published.
+                - Fixed (flashinfer `HEAD`): the flag is read into a register after the sync. The JIT branch used the
+                  same pattern and was fixed the same way.
+              - Rerun: FP32 + 20 graph replays on all 92, FA2 rows x3, stage 1
+                (`unified/unified_h20_persistent_ready2_20261025.sh`, running).
       - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
             current captures mix q=1 and q=4 rows, so this is untested.
 

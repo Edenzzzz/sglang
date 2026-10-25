@@ -329,7 +329,21 @@ Tasks, in priority order:
             §4.3, §5). The producer TMA-copies its partial into the consumer's slot under a per-slot mbarrier, and the
             consumer reduces in shared memory. Plan-side grouping (`UNIFIED_MERGE_MODE=dsmem`) is built and host-checked;
             the kernel is not.
-      - [ ] Plan time on serving shapes, overlapped with the previous step.
+      - [ ] **Plan time on serving shapes, overlapped with the previous step.**
+        - [x] 2026-10-25 Found and fixed a serving stall (`unified/plan_overlap_20261025.py`,
+              `a6_plan_overlap_h200_20261025.sh`, H200, 24 captures).
+              - The A6 serving plan made five blocking host-to-device copies per mixed step. A PyTorch `.to(device)`
+                from CPU memory synchronizes the stream, so building the next step's plan waited for the previous
+                step's kernels to drain.
+              - With ~20 attention calls queued, the old plan took 1.5-161 ms of host time (median 4.8 ms), i.e. the
+                queued GPU time. It is now built from the FA3 backend's device metadata (`cu_seqlens_q`,
+                `cache_seqlens_int32`), checked against the host lengths on the first three steps, with
+                double-buffered pinned staging guarded by per-buffer events, as v3 does.
+              - It now takes 0.4-1.1 ms (median 0.71 ms) whatever is queued. Outputs are bit-identical on all 24, and
+                FP32 + 20 graph replays pass on all 96.
+              - Stage 2's A6 numbers were measured with the stall.
+        - [ ] Serving A/B, old vs new plan path (`unified/a6_plan_serving_ab_h200_20261025.sh`, running): stage 2's
+              short set, four-mode, two repeats each, stock FA3 as the common reference.
       - [x] Serving executor in the FA3 backend (`SGLANG_A6_UNIFIED=1`) and stage 2 pairs (above).
 
       **Bugs found on the way (all fixed)**

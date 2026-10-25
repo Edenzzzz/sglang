@@ -37,6 +37,10 @@ torch.backends.cuda.matmul.allow_tf32 = False
 files = sorted(args.captures.glob("*.pt"))
 report = dict(scope="unified dispatcher vs FA3 baselines and native v3, trace-sampled captures, graph replay",
               gpu=torch.cuda.get_device_name(0), records=[], captures=[])
+if os.environ.get("UNIFIED_TIMING_BOUND") == "1":
+    # Timing bound only (e.g. FA3 with its KV loads compiled out): the output is garbage by construction, so it is
+    # not validated; the records carry bound=True.
+    B.validate = lambda output, expected: float("nan")
 if args.append and args.output.exists():
     report = json.loads(args.output.read_text())
 for path in files:
@@ -77,7 +81,8 @@ for path in files:
                       f"requests={reqs[:10]} their q_len={[ql[r] for r in reqs[:10]]} heads={sorted(set(bad.nonzero()[:,1].tolist()))[:8]}",
                       flush=True)
                 raise
-            r.update(capture=path.name, mode=g["mode"], arm=arm, style="graph", order=order)
+            r.update(capture=path.name, mode=g["mode"], arm=arm, style="graph", order=order,
+                     bound=os.environ.get("UNIFIED_TIMING_BOUND") == "1")
             report["records"].append(r)
     args.output.write_text(json.dumps(report, indent=1) + "\n")
     def mean(arm):

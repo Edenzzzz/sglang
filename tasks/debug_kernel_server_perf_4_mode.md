@@ -333,6 +333,9 @@ Tasks, in priority order:
       - [ ] **Rows of 33-64 packed queries (GLM-4.5-Air's 4-token verify rows pack 48)** (unchecked 2026-10-25, user).
             - The FA3 arm below ran FA3 at its 128-row tile, which pads 48-row rows 62%, so the FA2-64 win was never
               ablated against FA3 at its 64-row tile (wgmma's smallest M). FA3 cannot run 48; FA2 can.
+            - Deferred (user, 2026-10-25): Qwen and Llama come first, and GLM is the only model with these rows. The run
+              already in flight is left to finish and recorded; no further work on it until the Qwen / Llama kernel
+              items are done.
             - [ ] Ablation (`unified/glm_tile_ablation_h20_20261025.sh`, H20 pod 4, 43 GLM captures, running), with the
                   verify rows alone and stage 1 per arm:
                   - FA3 q tile 128;

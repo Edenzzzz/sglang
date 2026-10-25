@@ -68,7 +68,28 @@ Tasks, in priority order:
         the same workload. Runs from S4 on use the deduplicated file.
       - [ ] **Rerun without the deadline chunk cap** (2026-10-26, `unified/a6_stage2_h200_nodc_20261026.sh`, root
             `/opt/tiger/w/a6_stage2_h200_nodc_20261026`; A6 only, serving library `serving_np64_20261026`, FA3_MIN=65).
-            On Llama-70B the cap cost throughput (+2-3% -> +9-10% without it). Running.
+            On Llama-70B the cap cost throughput (+2-3% -> +9-10% without it). **Done 2026-10-26** (two repeats; A6
+            active, 1080 call lines). Ours vs stock, with the capped run in parentheses:
+            | workload | mode | agent tok/s | agent TPOT | agent TTFT | chat TTFT | chat TPOT (mean) |
+            |---|---|---|---|---|---|---|
+            | 128-256K, conc 4 + chat 4/s | four | **+8.1%** (+4.0%) | -39% | +12% | -98% | +68% |
+            | | two | **+10.6%** (+10.4%) | -36% | +1% | -98% | +51% |
+            | 32-64K, conc 8 + chat 8/s | four | -3.6% (-9.3%) | -44% | +15% | -96% | +48% |
+            | | two | +2.7% (+0.9%) | -20% | +2% | -94% | +38% |
+            Attainment under the paper SLOs, stock -> ours:
+            | workload | mode | chat 2 s / 50 ms | chat 2 s / 100 ms | chat e2e mean | agent 10 s (20 s > 200K) / 80 ms | agent SLO goodput |
+            |---|---|---|---|---|---|---|
+            | 128-256K | four | 21.0 -> 63.1% | 21.0 -> 94.9% | 27.1 -> 8.1 s | 18.8 -> 43.8% | 16-24 -> 41 tok/s |
+            | | two | 18.8 -> 62.8% | 18.9 -> 92.6% | 25.6 -> 8.3 s | 12.5-18.8 -> 50.0% | 14-22 -> 37 tok/s |
+            | 32-64K | four | 56.4 -> 97.2% | 56.5 -> 99.6% | 5.8 -> 2.8 s | 70.0-73.3 -> 80.0% | 74-84 -> 85-86 tok/s |
+            | | two | 54.3 -> 95.4% | 54.4 -> 99.8% | 5.7 -> 2.8 s | 83.3 -> 83.3-86.7% (loose 100 ms: 90-93 -> 83-87%) | 101-107 -> 88-90 tok/s |
+            - Chat attainment (+38 to +74 points) and chat e2e latency (-51 to -70%) clear the 30% bar everywhere.
+            - Agent SLO goodput rises 70-190% on 128-256K and is level on 32-64K four-mode.
+            - Agent SLO goodput falls 13% on 32-64K two-mode, where deadline order gives chat priority over
+              agents that stock had already been serving well.
+            - Raw agent throughput clears 10% only on 128-256K two-mode (+10.6%).
+            - Sample sizes are small (16 / 30 agent requests per arm). Scripts: `/dev/shm/w/ub/cta.py`
+              (`drivers/serving/chat_tail_attainment_20261026.py`), `/dev/shm/w/ub/aatt.py`.
       - **Latency and attainment clear the >= 30% bar against stock on both workloads.**
       - **Raw throughput does not clear the >= 10% bar.** Agent output is -9% to +10.5%, and chat output is pinned at
         the offered rate. SLO goodput does clear it: chat 2 s / 50 ms goodput is ~1,600 vs ~850 tok/s on 32-64K and

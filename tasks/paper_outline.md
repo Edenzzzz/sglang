@@ -329,15 +329,25 @@ overlap off costs 2.2-6.1% of the step (section 7).
 
 One merge serves both executors. It runs in the FA2 launch and is scheduled by the same plan, so the two-launch
 baseline's separate FA2-merge and FA3-combine launches disappear. With every merge, check-in fence and counter atomic
-removed (the output is then wrong; this is a timing bound), the step is at most 0.9% faster, so the in-launch merge
-costs under 1% of the step (section 7).
+removed (the output is then wrong; this is a timing bound), two-mode trace-sampled steps are at most 0.9% faster
+[pending: the four-mode bound, which measured slower than the real merge and is being re-examined]. Large decode
+batches are where the merge matters: on synthetic ShareGPT and shared-prefix decode steps of 64-256 rows it costs
+6-13% of the step (section 7).
 
 **Why the default FA2 executor is not persistent.** A persistent LPT kernel was the intended design, for three
 expected advantages: an L2-swizzled order in which items that read the same KV pages run together, fewer CTA launches
-at large batch, and cluster-scheduled reduction in the epilogue. Measured: L2-swizzled FA2 order [pending]; CTA launch
-cost vs batch size [pending]; DSMEM cluster reduction [pending]. Longest-first order itself is worth <= 0.7%
-(section 7). At equal tile code, persistent dispatch is level with hardware-launched CTAs (-0.2..-1.3%), and releasing
-merges as soon as their partials are ready adds polling that slows the compute (section 7).
+at large batch, and cluster-scheduled reduction in the epilogue. We measured each:
+- *CTA launches.* Launching one CTA per item costs nothing measurable, even at 4096 items (decode batches of 1024
+  rows): the persistent pull loop running the same tile code is 0.89-0.98x of the hardware-launched grid. The
+  persistent runner does win on large decode batches (1.08-1.14x at 256-1024 rows), but through occupancy: its
+  decode-only instantiation fits 3 CTAs per SM where the non-persistent kernel fits 2. We therefore give the
+  non-persistent executor the same plan-chosen decode-only instantiation [pending: measurement].
+- *Cluster-scheduled reduction.* Reducing partials inside a thread-block cluster through DSMEM is exact but slower at
+  every cluster size (0.60-0.98x), because one split group must fit one cluster (section 7).
+- *L2 order.* A KV-position-major order, which makes rows that share a prefix read its pages in the same wave, is
+  [pending].
+Longest-first order itself is worth <= 0.7% on the trace-sampled steps (section 7). Releasing merges as soon as their
+partials are ready adds polling that slows the compute (section 7).
 
 **Why not one kernel for FA2 and FA3: the warp layouts differ.** FA3 is warp-specialized: one producer warpgroup
 issues tensor-memory-accelerator (TMA) loads and two consumer warpgroups run wgmma on a 128-row tile, so a CTA has
@@ -864,7 +874,9 @@ the chunk size per step to protect chat TPOT starves prefill: the cap binds on 8
 **Figures.**
 
 Figure 25: kernel ablation bars: time-weighted speedup per ablation (Tables 11 and 12) per (context, mode); H200,
-Qwen2.5-7B measured; Llama-3.3-70B [pending]; DSMEM C = 16 [pending].
+Qwen2.5-7B measured; Llama-3.3-70B [pending]. Figure 25b: the same executors on synthetic decode / verify batches of
+16-1024 rows (ShareGPT, math, long-tail and shared-prefix length mixes), time relative to the default executor vs
+batch size [pending: decode-only instantiation and chunk rounding].
 
 Figure 26: schedule and router ablations: per-tenant attainment and throughput for stock, deadlines alone, deadlines
 with demotion, and each routing policy, on the section 6.3 / 6.4 workloads. Router [pending].

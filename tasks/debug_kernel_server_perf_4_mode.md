@@ -155,7 +155,7 @@ Tasks, in priority order:
                 - In the runner's check-in hook, every thread wrote `unified_last = 0` while thread 0 still had to read
                   the flag to decide whether to publish. When another warp's write landed first, the group was never
                   published.
-                - Fixed (flashinfer `HEAD`): the flag is read into a register after the sync. The JIT branch used the
+                - Fixed (flashinfer `adcaaef`): the flag is read into a register after the sync. The JIT branch used the
                   same pattern and was fixed the same way.
               - Rerun: FP32 + 20 graph replays on all 92, FA2 rows x3, stage 1
                 (`unified/unified_h20_persistent_ready2_20261025.sh`, running).

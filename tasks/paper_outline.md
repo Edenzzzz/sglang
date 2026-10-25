@@ -493,7 +493,12 @@ load and 21% more under a load spike. [Llama-3.3-70B pending.]
   - this load is far above the node's capacity (TTFT tens of seconds in both systems); the at-capacity point [pending]
   - running GLM under tensor parallelism exposed a requirement of deadline scheduling: every TP rank must judge
     deadlines on the same clock, so rank 0's clock rides the per-iteration request broadcast
-- Llama-3.3-70B (one 4-GPU node) [pending]
+- Llama-3.3-70B, one 4-GPU H20 node (TP4, EAGLE3 head held at 3.0 tokens per verify in both arms), 32-64K agents at
+  concurrency 4 + chat 2/s, far above capacity:
+  - four-mode, ours vs stock: chat TTFT -85% (6-7 s vs 46 s), agent TPOT -45..-54%, throughput +2-3%; agent TTFT
+    +23-28%, chat TPOT +20%
+  - two-mode: chat TTFT -78..-81%, agent TPOT -34..-35%, throughput +8-9%
+  - a load near capacity [pending]
 
 ### 6.4 Multi-node benchmarks
 

@@ -507,6 +507,19 @@ Tasks, in priority order:
       arms until A6 beats v3 on stage 1; then A6 replaces it. All three models are swept and shown (the paper may later keep only
       Llama-3.3-70B and Qwen2.5-7B); every model's results are recorded.
 - [ ] 2026-10-24 **Llama-3.3-70B, stages 1-3** (provisioning on H20 pods 0-3: `pd_colocation/mn_provision_70b_20261024.sh`).
+  - [x] Stage 1: 1.009 / 1.011x native v3 on two- / four-mode (H20, TP4, 32-64K), 1.38 / 1.61x sglang FA3.
+  - [ ] Stage 2 (H20 pod 4, TP4, `unified/a6_stage2_llama_h20_20261025.sh`; both arms hold the EAGLE3 head at 3.0
+        tokens per verify via `--common-env SGLANG_SIMULATE_ACC_LEN=3.0`, since the trained head accepts ~1.3 here):
+    - [x] 2026-10-25 agent C=4 + chat 2/s (`cap_a6`), two repeats; far above capacity (TTFT 40-55 s in both arms):
+      | Llama-3.3-70B | agent tok/s | chat tok/s | agent TPOT | agent TTFT | chat TTFT | chat TPOT |
+      |---|---|---|---|---|---|---|
+      | four-mode, stock | 16.7 / 16.7 | 324 / 323 | 127 / 107 ms | 42.3 / 43.6 s | 46.0 / 46.4 s | 97 ms |
+      | four-mode, ours | 17.0 / 17.0 | 333 / 332 | 58 / 64 ms | 53.6 / 55.6 s | 7.1 / 6.2 s | 119-120 ms |
+      | two-mode, stock | 16.2 / 16.2 | 320 / 319 | 97 / 112 ms | 45.0 / 43.5 s | 46.6 / 46.4 s | 98-102 ms |
+      | two-mode, ours | 17.5 / 17.5 | 349 / 347 | 64 / 73 ms | 45.1 / 43.9 s | 8.8 / 10.1 s | 130-135 ms |
+      - Four-mode: chat TTFT -85%, agent TPOT -45..-54%, throughput +2-3%. Costs: agent TTFT +23-28%, chat TPOT +20%.
+      - SLO attainment is near zero in both arms at this load.
+    - [ ] agent C=2 + chat 0.5/s (`low_a6`, running): a load near capacity.
 - [ ] **Stage 3 with the full stack** (kernel + 4-mode MTP) vs stock PD with the P:D ratio swept, at higher load and
       with mixture spikes (`pd_colocation_vs_disagg.md`).
       - [x] 2026-10-25 A6 on the multi-node workers: `KERNEL=a6` in `mn_node.sh` (FA3 backend, the libraries under

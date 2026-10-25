@@ -94,6 +94,8 @@ def run_arm(arguments, mode, repeat, arm):
         # --native-env: the native arm's kernel configuration (e.g. SGLANG_A6_UNIFIED=1 for the unified dispatcher);
         # every SGLANG_* key is stripped from the inherited environment, so it is set explicitly.
         environment.update(item.split("=", 1) for item in arguments.native_env)
+    # --common-env: settings both arms share (e.g. SGLANG_SIMULATE_ACC_LEN to hold every arm at one acceptance length).
+    environment.update(item.split("=", 1) for item in arguments.common_env)
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -229,6 +231,8 @@ def main():
     parser.add_argument("--role-row-splits", type=int, default=32)
     parser.add_argument("--native-env", action="append", default=[], metavar="KEY=VALUE",
                         help="extra environment for the native arm only (kernel configuration)")
+    parser.add_argument("--common-env", action="append", default=[], metavar="KEY=VALUE",
+                        help="environment for BOTH arms (e.g. a fixed simulated acceptance length)")
     arguments = parser.parse_args()
     if min(arguments.concurrency, arguments.sessions, arguments.chat_rate, arguments.chat_requests, arguments.repeats, arguments.tp_size) <= 0:
         raise ValueError("Positive workload dimensions are required")

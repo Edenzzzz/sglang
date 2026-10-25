@@ -515,10 +515,25 @@ Tasks, in priority order:
                 probe queued (`unified/a6_h200_nosync_probe_20261025.sh`).
               - The baseline pass on four-mode bs >= 512 overflowed the native harness's 512 MB workspace; it is
                 rerunning with growth to 4 GB (`unified/a6_h200_synth_base_rerun_20261025.sh`).
-        - [ ] **Decode-only NP instantiation** (flashinfer `64f40c7`: 32-row body compiled out,
-              `__launch_bounds__(128, 3)`, 16-row smem, chosen by the plan when every FA2 item is 16-row;
-              `UNIFIED_NP_ONLY16=0` ablation; 28 B spill). Gate + time on captures and synthetic sets:
-              `unified/a6_h200_np16_20261025.sh` (queued).
+        - [x] **Decode-only NP instantiation** (flashinfer `64f40c7`: 32-row body compiled out,
+              `__launch_bounds__(128, 3)`, 16-row smem, chosen by the plan when every FA2 item is 16-row; 28 B spill;
+              `unified/a6_h200_np16_20261025.sh`, H200, 2026-10-26).
+              - Gate: FP32 + 20 graph replays pass on all 96 captures and all synthetic two-mode sets; 3 CTAs/SM
+                for decode-only plans (`UNIFIED_NP_OCC variant=only16 blocks/SM=3`), 2 for mixed.
+              - Captures, on vs off (same build): 1.000 / 0.995 / 1.000 / 1.002x. A6 vs v3 with it:
+                1.025-1.050x.
+              - Synthetic decode, on vs off: shared 4K prefix 1.00 / 1.08 / 1.15x (bs 64-256); ShareGPT 1.05 / 1.01
+                / 0.92 / 1.03 / 1.06x (bs 64-1024); math 1.00 / 0.95 / 0.93 / 0.87x; long tail 0.93-0.99x; 48K
+                shared prefix 0.91-0.97x. Geometric mean ~0.98x.
+              - The persistent runner (also 3 CTAs/SM) still beats it on math by 1.15x. So occupancy alone does
+                not reproduce the runner's long-KV decode advantage; its tile code (persistent.cuh body, no spill)
+                matters.
+              - Outcome: opt-in only (`UNIFIED_NP_ONLY16=1`, flashinfer `ffdd579`). The chunk-rounding run was built
+                before this change, so both of its arms have it on.
+              - [ ] Plan-chosen executor per step (persistent runner for decode-only plans, NP for mixed): the
+                    runner wins two-mode decode batches >= 64 rows by 3-14% on synthetic steps but is level on the
+                    captures and loses on four-mode (0.91-1.00x). It needs both executors in one build. Deferred
+                    until a serving workload shows large decode-only batches.
         - [ ] **Tile-rounded FA2 chunk** (`UNIFIED_FA2_CHUNK_ROUND=tile`, flashinfer `5797024`: the per-slot share
               rounded up to 256 keys, not a power of two): `unified/a6_h200_chunk_round_20261025.sh` (queued).
         - [ ] **Why MELD (SOSP '26) reports large JIT gains and we see none.** MELD's GQA comparison is decode-only

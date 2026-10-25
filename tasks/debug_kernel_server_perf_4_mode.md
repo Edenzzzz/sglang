@@ -330,7 +330,15 @@ Tasks, in priority order:
           0.999 / 1.002x). The steps a smaller cap wins are short.
 
       **6. Open**
-      - [x] **Rows of 33-64 packed queries (GLM-4.5-Air's 4-token verify rows pack 48).**
+      - [ ] **Rows of 33-64 packed queries (GLM-4.5-Air's 4-token verify rows pack 48)** (unchecked 2026-10-25, user).
+            - The FA3 arm below ran FA3 at its 128-row tile, which pads 48-row rows 62%, so the FA2-64 win was never
+              ablated against FA3 at its 64-row tile (wgmma's smallest M). FA3 cannot run 48; FA2 can.
+            - [ ] Ablation (`unified/glm_tile_ablation_h20_20261025.sh`, H20 pod 4, 43 GLM captures, running), with the
+                  verify rows alone and stage 1 per arm:
+                  - FA3 q tile 128;
+                  - FA3 q tile 64 (`FLASHINFER_FA3_BLOCK_M=64` in the stock FA3 build);
+                  - FA2 64-row class;
+                  - FA2 48-row class (1q x 4kv, 3 MMAs per warp).
             - [x] GLM stage 1 with these rows on FA3 (`UNIFIED_FA3_MIN=33`; H20 pod 0, TP4, rank-0 attention, 43
                   trace-sampled captures with NEXTN MTP; `unified/a6_glm_h20_20261025.sh`, flashinfer `22d8d03`).
                   FP32 + 20 graph replays pass on all 43.

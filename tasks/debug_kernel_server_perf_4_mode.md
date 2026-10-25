@@ -66,6 +66,9 @@ Tasks, in priority order:
         the deduplicated set (`deduplicate_trace_rounds_20261023.py`). Arms within this stage share the data, so they
         compare with each other. Deduplication removes 514 of 357,161 records (0.14%), so the two sets are effectively
         the same workload. Runs from S4 on use the deduplicated file.
+      - [ ] **Rerun without the deadline chunk cap** (2026-10-26, `unified/a6_stage2_h200_nodc_20261026.sh`, root
+            `/opt/tiger/w/a6_stage2_h200_nodc_20261026`; A6 only, serving library `serving_np64_20261026`, FA3_MIN=65).
+            On Llama-70B the cap cost throughput (+2-3% -> +9-10% without it). Running.
       - **Latency and attainment clear the >= 30% bar against stock on both workloads.**
       - **Raw throughput does not clear the >= 10% bar.** Agent output is -9% to +10.5%, and chat output is pinned at
         the offered rate. SLO goodput does clear it: chat 2 s / 50 ms goodput is ~1,600 vs ~850 tok/s on 32-64K and

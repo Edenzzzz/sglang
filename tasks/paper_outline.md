@@ -266,8 +266,10 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
 - Contribution: supports C2 and C3: EDF and the router price a request from predicted step time
 - Experiments: fit on logged serving steps of the current kernel, per model; held-out steps
 - Graphs / metrics: predicted vs measured step time scatter; MAPE per step type (decode, prefill, mixed, 4-mode)
-- Status: re-fit on the current kernel [pending]; earlier fits on the fused path: 0.4% decode / 3.2% prefill-step
-  MAPE
+- Result (Qwen2.5-7B, H200, four-mode serving, fit on one repeat and scored on the other): held-out MAPE 2.0% for
+  our kernel vs 1.9% for the stock single FA3 call; decode 1.4 vs 1.2%, mixed steps 5.9 vs 7.7%, prefill 8.7 vs 7.5%.
+  The fused step is as predictable as the stock one, and the mixed steps that admission prices are more so.
+- Status: Llama-3.3-70B and GLM fits [pending]; scatter plot [pending]
 
 #### 5.2.3 Fair Resource sharing
 

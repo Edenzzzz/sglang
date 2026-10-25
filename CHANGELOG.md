@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.58.0 — S4 step model on A6; persistent FA2 timeline; batched merge rows (2026-10-25)
+
+- S4: the step model re-fitted on A6 serving traces (H200) predicts held-out steps at 2.0% MAPE vs 1.9% for stock's
+  single FA3 call, and mixed steps better (5.9 vs 7.7%).
+- `UNIFIED_TIMELINE=1` logs one globaltimer record per persistent-loop item (`timeline_fa2_rows_20261025.py`). It
+  shows the persistent kernel's merge gap is the merge items' own latency (6-7 us for 4 rows) and the ready queue's
+  pull cost (~2 us per pull vs 0.7 us).
+- `UnifiedMergeRowCG`: one merge row helper for both FA2 executors, online max per chunk group and 4 chunks in flight
+  per batch (was a max pass plus one dependent load round per chunk).
+- Ready-queue polls use `__ldcg`; the priority threshold only runs when `UNIFIED_READY_FRAC > 0`.
+
 ## v1.57.0 — A6 beats native v3 on the H200; serving integration of the unified dispatcher (2026-10-25)
 
 - A6 stage 1 on the re-forked H200 (96 fresh captures): 1.027-1.047x native v3 and 1.43-1.51x sglang's FA3 call

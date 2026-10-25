@@ -76,8 +76,19 @@ Tasks, in priority order:
             nor MTP adds single-node throughput, so the >= 10% throughput claim has to come from the multi-node
             schedule (colocation vs PD disaggregation, `pd_colocation_vs_disagg.md`). Concurrency 16 was not run; the
             four-mode-only pair also tripped the audit's both-modes check.
-      - [ ] S4: step model on the final kernel vs stock's single FA3 call, matched four-mode schedule, fit on repeat 1
-            and scored on repeat 2 (`unified/a6_s4_steptrace_h200_20261025.sh`, running).
+      - [x] S4: step model on the final kernel vs stock's single FA3 call (H200 `8574c727fab6ffbd`, mix32 four-mode,
+            agent C=8 + chat 8 req/s, both arms on the same four-mode schedule, A6 active in 407 logged calls; fit on
+            repeat 1, scored on repeat 2; `unified/a6_s4_steptrace_h200_20261025.sh`, sglang `a21e5b345`, flashinfer
+            `21be81d`). The result file's scope string says H20; the run was on the H200.
+            | held-out MAPE, primary model (MLP + causal acceptance) | all | decode | mixed | prefill |
+            |---|---|---|---|---|
+            | stock single FA3 call (10 673 steps in repeat 1) | 1.87% | 1.17% | 7.66% | 7.54% |
+            | A6 (FA3 + FA2, one plan) | 2.03% | 1.42% | **5.92%** | 8.71% |
+            - A6's step is as predictable as stock's, so the EDF predictor carries over unchanged. The mixed steps EDF
+              prices before admitting a prefill are more predictable (5.9 vs 7.7%). Without acceptance (MLP alone):
+              1.79 vs 1.88% all, 6.87 vs 8.08% mixed. GBT is 1.5-1.7% all for both.
+            - The same pairs, kernel effect only: agent tok/s 110.6 / 110.0 vs 109.0 / 107.2 (+2%), agent TPOT
+              12.93 / 12.94 vs 14.24 / 13.53 ms (-6%), chat TTFT 5.13 / 5.17 vs 5.77 / 5.67 s (-10%).
       - **A6 vs v3:** in both four-mode workloads A6 degrades agent TTFT much less against stock (+17% vs +31%;
         +14% vs +27%) and degrades chat TPOT / ITL less; agent TPOT gains a few points less; two-mode is level. This is
         consistent with a 3-5% faster attention step.
@@ -242,7 +253,8 @@ Tasks, in priority order:
       earlier run used 4096), queued behind the stage-3 baselines (`pd_colocation_vs_disagg.md`).
 - [ ] **Fault tolerance:** prefill-role and decode-role workers killed mid-run (`pd_colocation_vs_disagg.md`).
 - [ ] **GLM-4.5-Air, stages 1-3,** after the 48 tile (its 4-token verify packs 48 rows).
-- [ ] **S4 step model re-fitted on the native FA3 + FA2 path.**
+- [x] **S4 step model re-fitted on the final kernel (A6)** (2026-10-25): held-out MAPE 2.0% vs stock's 1.9%, mixed steps
+  5.9% vs 7.7%; details under A6 stage 2.
 
 ## Baselines
 

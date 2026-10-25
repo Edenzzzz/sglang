@@ -1389,8 +1389,20 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
               - The queue trigger was justified by long-context runs, where steps are GPU-bound and the eager cost
                 is hidden.
               - [ ] Control with the queue trigger off (prefills >= 8192 tokens still mix):
-                    `unified/a6_standalone_noq_h200_20261026.sh` (queued). Then re-measure the trigger's value on the
-                    mixed chat + agent workload before changing the default.
+                    `unified/a6_standalone_noq_h200_20261026.sh` (queued).
+              - [x] **The trigger's value on the mixed workload** (GLM-4.5-Air overloaded four-mode, pod 4,
+                    `short_a6_nodc_noq`, 2026-10-26, two repeats).
+                    - With the trigger off, agent throughput vs stock is +14% (25.3 vs 22.1 tok/s, r2), against +28%
+                      with it on.
+                    - Chat attainment at 2 s / 100 ms: 70.6-74.5% vs 76.7-77.5% with it.
+                    - Eager prefill steps: 563 of 1306 vs 1078 of 1084.
+                    - So the trigger pays when long agent rows are running and costs when every row is short.
+              - [ ] **Fix: `SGLANG_MIXED_SPEC_QUEUE_LONG_ROWS=1`** (`unified/apply_mixed_spec_queue_long_20261026.py`,
+                    opt-in). The queue trigger needs a running row with context >= `MIN_CTX`. Under test:
+                    - GLM overloaded four-mode (pod 4, `short_a6_nodc_qlong`): must keep +28%.
+                    - ShareGPT 32 req/s four-mode (`unified/a6_standalone_qlong_h200_20261026.sh`, H200): must
+                      remove the regression.
+                    If both hold, it becomes part of the final configuration.
         - [ ] MATH-500 / GSM8K / Code-Feedback: resuming (`unified/a6_standalone_resume_20261026.sh`; the native-call
               check is now recorded rather than required for standalone runs).
         Standalone: ShareGPT, GSM8K / MATH-500, HumanEval / Code-Feedback, WebShop (`prep_standalone.py`,

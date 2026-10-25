@@ -1,0 +1,423 @@
+diff -ru /tmp/fa_src_20261025/flash-attention/hopper/flash_fwd_kernel_sm90.h hopper/flash_fwd_kernel_sm90.h
+--- /tmp/fa_src_20261025/flash-attention/hopper/flash_fwd_kernel_sm90.h	2026-10-04 08:15:54.000000000 +0800
++++ hopper/flash_fwd_kernel_sm90.h	2026-10-25 19:20:48.517630139 +0800
+@@ -213,6 +213,9 @@
+                 shared_storage.pipelines.barrier_Qv.init(Use_TMA_Q ? 1 : NumProducerThreads /*numThreads*/);
+             }
+             shared_storage.pipelines.barrier_O.init(size(ClusterShape{}) * (Use_TMA_O ? 1 : NumMmaThreads) /*numThreads*/);
++            if constexpr (CollectiveMainloop::KvExchange) {
++                TileScheduler::init_pair_mailbox(reinterpret_cast<typename TileScheduler::SharedStorage*>(&shared_storage.pipelines.smem_scheduler));
++            }
+         }
+ 
+         // We're counting on pipeline_k to call cutlass::arch::fence_barrier_init();
+@@ -220,9 +223,12 @@
+         pipeline_params_k.role = warp_group_idx == 0
+             ? MainloopPipelineK::ThreadCategory::Producer
+             : MainloopPipelineK::ThreadCategory::Consumer;
+-        if constexpr (Use_TMA_KV) {
++        static constexpr bool KvExchange = CollectiveMainloop::KvExchange;
++        if constexpr (Use_TMA_KV || KvExchange) {
+             pipeline_params_k.transaction_bytes = CollectiveMainloop::TmaTransactionBytesK;
+-            pipeline_params_k.is_leader = warp_group_thread_idx == 0;
++            // KV exchange: no leader arrives at acquire; the producer's thread 0 arrives (expecting the peer's half)
++            // once the local half of the tile has landed.
++            pipeline_params_k.is_leader = !KvExchange && warp_group_thread_idx == 0;
+             pipeline_params_k.num_consumers = !LargeHeadDimV ? NumMmaThreads : cutlass::NumThreadsPerWarpGroup;
+         } else {
+             pipeline_params_k.consumer_arv_count = !LargeHeadDimV ? NumMmaThreads : cutlass::NumThreadsPerWarpGroup;
+@@ -239,7 +245,7 @@
+         }
+ 
+         MainloopPipelineK pipeline_k = [&] {
+-            if constexpr (Use_TMA_KV) {
++            if constexpr (Use_TMA_KV || KvExchange) {
+                 return MainloopPipelineK(shared_storage.pipelines.pipeline_k, pipeline_params_k, ClusterShape{});
+             } else {
+                 return MainloopPipelineK(shared_storage.pipelines.pipeline_k, pipeline_params_k);
+@@ -249,7 +255,7 @@
+         MainloopPipelineV pipeline_v = [&] {
+             if constexpr (!Transpose_V) {
+                 static_assert(is_same_v<PipelineParamsK, PipelineParamsV>);
+-                if constexpr (Use_TMA_KV) {
++                if constexpr (Use_TMA_KV || KvExchange) {
+                     return MainloopPipelineV(shared_storage.pipelines.pipeline_v, pipeline_params_vt, ClusterShape{});
+                 } else {
+                     return MainloopPipelineV(shared_storage.pipelines.pipeline_v, pipeline_params_vt);
+@@ -270,7 +276,7 @@
+         // Technically for pipeline_params_vt, warp0 of WG0 is the producer and all of WG0 are consumers.
+         // However, the thread role isn't used in the pipeline implementation.
+         MainloopPipelineVt pipeline_vt = [&] {
+-            if constexpr (Use_TMA_KV) {
++            if constexpr (Use_TMA_KV || KvExchange) {
+                 pipeline_params_vt.num_consumers = NumProducerThreads; // TMA_V is only consumed by the producer WG
+                 return MainloopPipelineVt(shared_storage.pipelines.pipeline_vt, pipeline_params_vt, ClusterShape{});
+             } else {
+@@ -450,6 +456,11 @@
+             }
+             epilogue.store_tail();
+         }
++        if constexpr (CollectiveMainloop::KvExchange) {
++            // The peer may still be bulk-copying into this CTA's shared memory (or reading it): leave together.
++            cute::cluster_arrive_relaxed();
++            cute::cluster_wait();
++        }
+ 
+     }
+ 
+diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp
+--- /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp	2026-10-07 09:43:09.000000000 +0800
++++ hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp	2026-10-25 19:19:44.897648637 +0800
+@@ -55,6 +55,15 @@
+     static constexpr bool Transpose_V = Is_FP8 && !V_colmajor;
+     static constexpr bool Use_TMA_Q = !PackGQA;
+     static constexpr bool Use_TMA_KV = !PagedKVNonTMA;
++#ifndef FLASHINFER_FA3_KV_EXCHANGE
++#define FLASHINFER_FA3_KV_EXCHANGE 0
++#endif
++    // FLASHINFER_FA3_KV_EXCHANGE: page-size-1 KV (cp.async gather, no TMA) shared by a 2-CTA cluster working on adjacent
++    // m-blocks of one row. Each CTA gathers half of every K / V tile (head-dim columns [rank * D/2, (rank+1) * D/2)) and
++    // bulk-copies it into the peer's stage over DSMEM; the K / V pipelines are the cluster transaction pipelines, so a
++    // stage is reused only after both CTAs' consumers released it.
++    static constexpr bool KvExchange = PagedKVNonTMA && bool(FLASHINFER_FA3_KV_EXCHANGE) && CUTE_STATIC_V(cute::size(ClusterShape{})) == 2;
++    static constexpr bool Use_TMA_KV_Pipe = Use_TMA_KV || KvExchange;
+     static_assert(Use_TMA_KV || CUTE_STATIC_V(size(ClusterShape{})) == 1, "If not using TMA for KV, ClusterShape must be 1");
+     static_assert(Use_TMA_KV || !V_colmajor, "If not using TMA for KV, V_colmajor is not supported");
+     static constexpr bool SameHeadDim = get<2>(TileShape_MNK{}) == kHeadDimV;
+@@ -281,9 +290,9 @@
+     static constexpr uint32_t TmaTransactionBytesQv = static_cast<uint32_t>(size(SmemLayoutQv{}) * cutlass::sizeof_bits_v<Element> / 8);
+ 
+     using PipelineTmaAsync = std::conditional_t<CUTE_STATIC_V(size(ClusterShape{})) == 1, typename cutlass::PipelineTmaAsyncNoCluster<kStages>, typename cutlass::PipelineTmaAsync<kStages>>;
+-    using MainloopPipelineK = std::conditional_t<Use_TMA_KV, PipelineTmaAsync, typename cutlass::PipelineAsync<kStages>>;
+-    using MainloopPipelineV = std::conditional_t<!Transpose_V && Use_TMA_KV, PipelineTmaAsync, typename cutlass::PipelineAsync<kStages>>;
+-    using MainloopPipelineVt = std::conditional_t<Use_TMA_KV, PipelineTmaAsync, typename cutlass::PipelineAsync<kStages>>;
++    using MainloopPipelineK = std::conditional_t<Use_TMA_KV_Pipe, PipelineTmaAsync, typename cutlass::PipelineAsync<kStages>>;
++    using MainloopPipelineV = std::conditional_t<!Transpose_V && Use_TMA_KV_Pipe, PipelineTmaAsync, typename cutlass::PipelineAsync<kStages>>;
++    using MainloopPipelineVt = std::conditional_t<Use_TMA_KV_Pipe, PipelineTmaAsync, typename cutlass::PipelineAsync<kStages>>;
+     // We always use TMA for K_new and V_new
+     using MainloopPipelineKVNew = PipelineTmaAsync;
+     using PipelineState = cutlass::PipelineState<kStages>;
+@@ -609,6 +618,16 @@
+             seqlen_info, m_block, bidb, split_idx, params.num_splits,
+             params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
+             params.qhead_per_khead_divmod);
++        if constexpr (KvExchange) {
++            // Both CTAs of the pair walk the union of their n-block ranges (one shared KV stream); the extra causal
++            // block of the lower m-block is fully masked for it.
++            auto [pmin, pmax] = BlockMN_t::get_n_block_min_max(
++                seqlen_info, m_block ^ 1, bidb, split_idx, params.num_splits,
++                params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
++                params.qhead_per_khead_divmod);
++            n_block_min = std::min(n_block_min, pmin);
++            n_block_max = std::max(n_block_max, pmax);
++        }
+         // It's possible to have n_block_max <= n_block_min. Loading K can cause illegal memory access.
+         if constexpr (Is_causal || Is_local || Varlen || Split) {
+             if (n_block_max <= n_block_min) {
+@@ -644,6 +663,28 @@
+         int const thread_idx = threadIdx.x % NumProducerThreads;
+         int const bidh_kv = !PackGQA ? params.qhead_per_khead_divmod.divide(bidh) : bidh;
+         int const bidb_kv = params.kv_batch_idx == nullptr ? bidb : params.kv_batch_idx[bidb];
++#ifndef FLASHINFER_FA3_KV_EXCHANGE_CHECK
++#define FLASHINFER_FA3_KV_EXCHANGE_CHECK 0
++#endif
++        if constexpr (KvExchange && bool(FLASHINFER_FA3_KV_EXCHANGE_CHECK)) {
++            // The exchange moves each head-dim half of a stage as ONE contiguous block at offset half * (stage / 2):
++            // check that the gather layouts really place columns [h * D/2, (h+1) * D/2) of every row there.
++            if (thread_idx == 0 && work_idx == 0) {
++                int bad = 0;
++                for (int h = 0; h < 2; ++h)
++                    for (int r = 0; r < kBlockN; ++r) {
++                        for (int c = h * kHeadDim / 2; c < (h + 1) * kHeadDim / 2; ++c) {
++                            int const off = SmemLayoutK{}(make_coord(r, c, 0));
++                            bad += off < h * (kBlockN * kHeadDim / 2) || off >= (h + 1) * (kBlockN * kHeadDim / 2);
++                        }
++                        for (int c = h * kHeadDimV / 2; c < (h + 1) * kHeadDimV / 2; ++c) {
++                            int const off = SmemLayoutVCpAsync{}(make_coord(r, c, 0));
++                            bad += off < h * (kBlockN * kHeadDimV / 2) || off >= (h + 1) * (kBlockN * kHeadDimV / 2);
++                        }
++                    }
++                if (bad) { printf("FA3_KV_EXCHANGE_LAYOUT_BAD %d\n", bad); __trap(); }
++            }
++        }
+ 
+         // Prepare the TMA loads
+         uint32_t block_rank_in_cluster = cute::block_rank_in_cluster();
+@@ -746,9 +787,50 @@
+             }
+         }
+ 
++        // KV exchange: the gather of each tile is finalized (local half landed -> arrive on the local full barrier with
++        // the peer's half as expected transaction bytes, then bulk-push the local half into the peer's stage) after the
++        // NEXT tile's gather has been issued, so the push overlaps the following gather.
++        uint32_t const xchg_rank = KvExchange ? cute::block_rank_in_cluster() : 0;
++        int xchg_prev_kind = 0;  // 0 none, 1 K, 2 V
++        PipelineState xchg_prev_state = smem_pipe_write;
++        auto xchg_finalize = [&](auto wait_all) {
++            if constexpr (KvExchange) {
++                if (xchg_prev_kind == 0) { return; }
++                if constexpr (decltype(wait_all)::value) { cute::cp_async_wait<0>(); } else { cute::cp_async_wait<1>(); }
++                cutlass::arch::NamedBarrier::sync(NumProducerThreads, static_cast<uint32_t>(FwdNamedBarriers::PEmpty) + 1 + cutlass::arch::NamedBarrier::ReservedNamedBarrierCount);
++                if (thread_idx == 0) {
++                    bool const is_k = xchg_prev_kind == 1;
++                    int const idx = xchg_prev_state.index();
++                    uint64_t* bar = is_k ? reinterpret_cast<uint64_t*>(pipeline_k.producer_get_barrier(xchg_prev_state))
++                                         : reinterpret_cast<uint64_t*>(pipeline_v.producer_get_barrier(xchg_prev_state));
++                    Element* stage = is_k ? shared_storage.tensors.mainloop.smem_k.data() + idx * (kBlockN * kHeadDim)
++                                          : shared_storage.tensors.mainloop.smem_v.data() + idx * (kBlockN * kHeadDimV);
++                    uint32_t const half_bytes = uint32_t(kBlockN * (is_k ? kHeadDim : kHeadDimV) / 2 * sizeof(Element));
++                    Element* half = stage + xchg_rank * (half_bytes / sizeof(Element));
++                    uint32_t const lbar = static_cast<uint32_t>(__cvta_generic_to_shared(bar));
++                    uint32_t const lhalf = static_cast<uint32_t>(__cvta_generic_to_shared(half));
++                    uint32_t rbar, rhalf;
++                    asm volatile("mapa.shared::cluster.u32 %0, %1, %2;" : "=r"(rhalf) : "r"(lhalf), "r"(xchg_rank ^ 1u));
++                    asm volatile("mapa.shared::cluster.u32 %0, %1, %2;" : "=r"(rbar) : "r"(lbar), "r"(xchg_rank ^ 1u));
++                    asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
++                    asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;" :: "r"(lbar), "r"(half_bytes) : "memory");
++                    asm volatile("cp.async.bulk.shared::cluster.shared::cta.mbarrier::complete_tx::bytes [%0], [%1], %2, [%3];"
++                                 :: "r"(rhalf), "r"(lhalf), "r"(half_bytes), "r"(rbar) : "memory");
++                }
++                xchg_prev_kind = 0;
++            }
++        };
++
+         auto load_K = [&] (int const n_block, auto const& smem_pipe_write, auto need_seqlenk_masking_type) {
+             pipeline_k.producer_acquire(smem_pipe_write);
+-            if constexpr (!PagedKVNonTMA) {
++            if constexpr (KvExchange) {
++                constexpr bool Seqlenk_mask = decltype(need_seqlenk_masking_type)::value;
++                paged_kv_manager.template load_K<Seqlenk_mask>(n_block, sK_pi(_, _, smem_pipe_write.index()), int(xchg_rank));
++                cute::cp_async_fence();
++                xchg_finalize(cute::false_type{});
++                xchg_prev_kind = 1;
++                xchg_prev_state = smem_pipe_write;
++            } else if constexpr (!PagedKVNonTMA) {
+                 auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_K_TMA();
+                 copy(params.tma_load_K.with(*pipeline_k.producer_get_barrier(smem_pipe_write), mcast_mask_kv, TMA::CacheHintSm90::EVICT_LAST),
+                     tKgK_TMA(_, n_block_idx, bidb_kv_idx), tKsK_TMA(_, smem_pipe_write.index()));
+@@ -767,7 +849,14 @@
+         auto load_V = [&] (int const n_block, auto const& smem_pipe_write, auto need_seqlenk_masking_type) {
+             auto pipeline_v_load = cute::conditional_return<!Transpose_V>(pipeline_v, pipeline_vt);
+             pipeline_v_load.producer_acquire(smem_pipe_write);
+-            if constexpr (!PagedKVNonTMA) {
++            if constexpr (KvExchange) {
++                constexpr bool Seqlenk_mask = decltype(need_seqlenk_masking_type)::value;
++                paged_kv_manager.template load_V<Seqlenk_mask>(n_block, sVcpasync(_, _, smem_pipe_write.index()), int(xchg_rank));
++                cute::cp_async_fence();
++                xchg_finalize(cute::false_type{});
++                xchg_prev_kind = 2;
++                xchg_prev_state = smem_pipe_write;
++            } else if constexpr (!PagedKVNonTMA) {
+                 auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_V_TMA();
+                 copy(params.tma_load_V.with(*pipeline_v_load.producer_get_barrier(smem_pipe_write), mcast_mask_kv, TMA::CacheHintSm90::EVICT_LAST),
+                     tVgVt_TMA(_, n_block_idx, bidb_kv_idx), tVsVt_TMA(_, smem_pipe_write.index()));
+@@ -891,6 +980,7 @@
+         if constexpr (!Transpose_V && IntraWGOverlap) {
+             if (should_load_KV) { load_V(n_block_prev, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/); }
+         }
++        xchg_finalize(cute::true_type{});
+         if constexpr (Transpose_V) { copy_Vt_to_V(smem_pipe_write); }
+         ++smem_pipe_write;
+         // At the end, all threads have the correct smem_pipe_write.
+@@ -985,6 +1075,16 @@
+             seqlen_info, m_block, bidb, split_idx, params.num_splits,
+             params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
+             params.qhead_per_khead_divmod);
++        if constexpr (KvExchange) {
++            // Both CTAs of the pair walk the union of their n-block ranges (one shared KV stream); the extra causal
++            // block of the lower m-block is fully masked for it.
++            auto [pmin, pmax] = BlockMN_t::get_n_block_min_max(
++                seqlen_info, m_block ^ 1, bidb, split_idx, params.num_splits,
++                params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
++                params.qhead_per_khead_divmod);
++            n_block_min = std::min(n_block_min, pmin);
++            n_block_max = std::max(n_block_max, pmax);
++        }
+         // It's possible to have n_block_max <= n_block_min. We don't want to load Q or change any barrier
+         if constexpr (Is_causal || Is_local || Varlen || Split) {
+             if (n_block_max <= n_block_min) { return false; }
+@@ -1379,6 +1479,16 @@
+             seqlen_info, m_block, bidb, split_idx, params.num_splits,
+             params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
+             params.qhead_per_khead_divmod);
++        if constexpr (KvExchange) {
++            // Both CTAs of the pair walk the union of their n-block ranges (one shared KV stream); the extra causal
++            // block of the lower m-block is fully masked for it.
++            auto [pmin, pmax] = BlockMN_t::get_n_block_min_max(
++                seqlen_info, m_block ^ 1, bidb, split_idx, params.num_splits,
++                params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
++                params.qhead_per_khead_divmod);
++            n_block_min = std::min(n_block_min, pmin);
++            n_block_max = std::max(n_block_max, pmax);
++        }
+         // It's possible to have n_block_max <= n_block_min. We don't want to load Q or change any barrier
+         if constexpr (Is_causal || Is_local || Varlen || Split) {
+             if (n_block_max <= n_block_min) { return false; }
+diff -ru /tmp/fa_src_20261025/flash-attention/hopper/paged_kv.h hopper/paged_kv.h
+--- /tmp/fa_src_20261025/flash-attention/hopper/paged_kv.h	2026-10-04 08:15:54.000000000 +0800
++++ hopper/paged_kv.h	2026-10-25 19:14:59.086731739 +0800
+@@ -204,9 +204,11 @@
+         }
+     };
+ 
++    // half >= 0 (FA3 KV exchange, FLASHINFER_FA3_KV_EXCHANGE): load only head-dim columns [half * D/2, (half+1) * D/2)
++    // of every row; the other half arrives from the cluster peer over DSMEM.
+     template <bool Seqlenk_mask=false, typename TensorK>
+     CUTLASS_DEVICE
+-    void load_K(const int n_block, TensorK &&sK) {
++    void load_K(const int n_block, TensorK &&sK, int const half = -1) {
+         // Do we need bound check to make sure the row doesn't go above kBlockN
+         static constexpr bool EvenN = kBlockN % CUTE_STATIC_V(shape<0>(GmemLayoutAtomKVCpAsync{})) == 0;
+ 
+@@ -236,6 +238,7 @@
+             if (should_load) {
+                 #pragma unroll
+                 for (int k = 0; k < size<2>(tKsK); ++k) {
++                    if (half >= 0 && get<1>(tKcK(_0{}, _0{}, k)) / (kHeadDim / 2) != half) { continue; }
+                     int const ki = get<1>(tKcK(_0{}, _0{}, k)) / kGmemElemsPerLoad;
+                     cute::copy(gmem_tiled_copy_kv.with(tKpK(_0{}, k)), mK_paged_cur_copy(_, ki), tKsK(_, m, k));
+                 }
+@@ -245,7 +248,7 @@
+ 
+     template <bool Seqlenk_mask=false, typename TensorV>
+     CUTLASS_DEVICE
+-    void load_V(const int n_block, TensorV &&sV) {
++    void load_V(const int n_block, TensorV &&sV, int const half = -1) {
+         // Do we need bound check to make sure the row doesn't go above kBlockN
+         static constexpr bool EvenN = kBlockN % CUTE_STATIC_V(shape<0>(GmemLayoutAtomKVCpAsync{})) == 0;
+ 
+@@ -272,6 +275,7 @@
+                 Tensor mV_paged_cur_copy = cute::tiled_divide(mV_paged_cur, Shape<Int<kGmemElemsPerLoad>>{});
+                 #pragma unroll
+                 for (int k = 0; k < size<2>(tVsV); ++k) {
++                    if (half >= 0 && get<1>(tVcV(_0{}, _0{}, k)) / (kHeadDimV / 2) != half) { continue; }
+                     int const ki = get<1>(tVcV(_0{}, _0{}, k)) / kGmemElemsPerLoad;
+                     cute::copy(gmem_tiled_copy_kv.with(tVpV(_0{}, k) && should_load), mV_paged_cur_copy(_, ki), tVsV(_, m, k));
+                 }
+diff -ru /tmp/fa_src_20261025/flash-attention/hopper/tile_scheduler.hpp hopper/tile_scheduler.hpp
+--- /tmp/fa_src_20261025/flash-attention/hopper/tile_scheduler.hpp	2026-10-04 08:15:54.000000000 +0800
++++ hopper/tile_scheduler.hpp	2026-10-25 19:18:18.792673673 +0800
+@@ -496,10 +496,33 @@
+     static constexpr int NumThreads = WarpSpecialized ? NumMmaThreads + NumProducerThreads : NumMmaThreads;
+ 
+ public:
+-    using SharedStorage = int4;
++#ifndef FLASHINFER_FA3_KV_EXCHANGE
++#define FLASHINFER_FA3_KV_EXCHANGE 0
++#endif
++    // FLASHINFER_FA3_KV_EXCHANGE: tiles go to 2-CTA clusters in pairs of adjacent m-blocks (same batch, head, split),
++    // so the pair can share each KV tile. Rank 0 takes the pair index and mails it to rank 1 (DSMEM, double-buffered).
++    static constexpr bool PairM = bool(FLASHINFER_FA3_KV_EXCHANGE);
++    struct PairStorage {
++        int4 work;
++        int tile[2];
++        alignas(8) uint64_t bar[2];
++    };
++    using SharedStorage = std::conditional_t<PairM, PairStorage, int4>;
+ 
+ protected:
+     SharedStorage* const work_info_smem;
++    mutable int pair_count = 0;  // pulls so far by this CTA's producer thread 0 (mailbox slot and phase)
++    CUTLASS_DEVICE int4* work_slot() const { return reinterpret_cast<int4*>(work_info_smem); }
++
++public:
++    CUTLASS_DEVICE static void init_pair_mailbox(SharedStorage* st) {
++        if constexpr (PairM) {
++            for (int i = 0; i < 2; ++i) {
++                uint32_t b = static_cast<uint32_t>(__cvta_generic_to_shared(&st->bar[i]));
++                asm volatile("mbarrier.init.shared::cta.b64 [%0], 1;" :: "r"(b));
++            }
++        }
++    }
+ 
+ public:
+ 
+@@ -569,8 +592,9 @@
+                     return virtual_batch;
+                 }
+             };
++            int const m_block = !PairM ? block : block * 2 + int(cute::block_rank_in_cluster());
+             if constexpr (!Split) {
+-                return {block, bidh, get_actual_batch(bidb), 0 /*split_idx*/};
++                return {m_block, bidh, get_actual_batch(bidb), 0 /*split_idx*/};
+             } else {
+                 // the top 8 bits of bidh store num_splits and the next 8 bits store split_idx
+                 // reinterpret_cast to uint32_t to make sure we're not doing sign extension when we shift
+@@ -584,7 +608,7 @@
+                 // if (threadIdx.x == 128) {
+                 //     printf("blockIdx.x = %d, bidb = %d, bidh = %d, bidh_actual = %d, split_idx = %d\n", blockIdx.x, bidb, bidh, bidh_actual, split_idx);
+                 // }
+-                return {block, bidh_actual, get_actual_batch(bidb), split_idx};
++                return {m_block, bidh_actual, get_actual_batch(bidb), split_idx};
+             }
+         }
+     };
+@@ -616,7 +640,7 @@
+                     if constexpr (PackGQA) { seqlen *= params.qhead_per_khead; }
+                 }
+                 return batch_idx < params.num_batch && lane < cutlass::NumThreadsPerWarp - 1
+-                    ? cute::ceil_div(seqlen, kBlockM) : 0;
++                    ? (!PairM ? cute::ceil_div(seqlen, kBlockM) : cute::ceil_div(cute::ceil_div(seqlen, kBlockM), 2)) : 0;
+                     // ? params.num_m_blocks_ptr[batch_idx] : 0;
+             }
+         };
+@@ -762,9 +786,9 @@
+     WorkTileInfo
+     get_initial_work(Params const& params) const {
+         if constexpr (IsProducerWarp) {
+-            WorkTileInfo work_info = tile_idx_to_work_tile(params, int(blockIdx.x), {0, 0, 0, 0});
++            WorkTileInfo work_info = tile_idx_to_work_tile(params, !PairM ? int(blockIdx.x) : int(blockIdx.x) / 2, {0, 0, 0, 0});
+             if (threadIdx.x % cutlass::NumThreadsPerWarp == 0) {
+-                *work_info_smem = make_int4(work_info.tile_idx, work_info.block, work_info.bidh, work_info.bidb);
++                *work_slot() = make_int4(work_info.tile_idx, work_info.block, work_info.bidh, work_info.bidb);
+             }
+             flash::named_barrier_arrive(NumThreads, cutlass::arch::ReservedNamedBarriers::StreamkBarrier1 /*id*/);  // TileCountSmemFull
+             return work_info;
+@@ -783,7 +807,30 @@
+     void
+     prefetch_next_work(Params const& params, WorkTileInfo& current_work) const {
+         if (threadIdx.x % NumProducerThreads == 0) {
+-            current_work.tile_idx = atomicAdd(params.tile_count_semaphore, 1) + int(gridDim.x);
++            if constexpr (!PairM) {
++                current_work.tile_idx = atomicAdd(params.tile_count_semaphore, 1) + int(gridDim.x);
++            } else {
++                int const slot = pair_count & 1;
++                uint32_t const phase = (pair_count >> 1) & 1;
++                ++pair_count;
++                uint32_t const bar = static_cast<uint32_t>(__cvta_generic_to_shared(&work_info_smem->bar[slot]));
++                uint32_t const cell = static_cast<uint32_t>(__cvta_generic_to_shared(&work_info_smem->tile[slot]));
++                if (cute::block_rank_in_cluster() == 0) {
++                    int const v = atomicAdd(params.tile_count_semaphore, 1) + int(gridDim.x) / 2;
++                    uint32_t rcell, rbar;
++                    asm volatile("mapa.shared::cluster.u32 %0, %1, 1;" : "=r"(rcell) : "r"(cell));
++                    asm volatile("mapa.shared::cluster.u32 %0, %1, 1;" : "=r"(rbar) : "r"(bar));
++                    asm volatile("st.async.shared::cluster.mbarrier::complete_tx::bytes.b32 [%0], %1, [%2];"
++                                 :: "r"(rcell), "r"(v), "r"(rbar) : "memory");
++                    current_work.tile_idx = v;
++                } else {
++                    asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], 4;" :: "r"(bar) : "memory");
++                    asm volatile("{\n .reg .pred p;\n WAIT_PAIR:\n"
++                                 " mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64 p, [%0], %1;\n"
++                                 " @!p bra WAIT_PAIR;\n}\n" :: "r"(bar), "r"(phase) : "memory");
++                    current_work.tile_idx = *reinterpret_cast<volatile int*>(&work_info_smem->tile[slot]);
++                }
++            }
+         }
+     }
+ 
+@@ -798,13 +845,13 @@
+             work_info = tile_idx_to_work_tile(params, new_tile_idx, work_info);
+             flash::named_barrier_sync(NumThreads, cutlass::arch::ReservedNamedBarriers::StreamkBarrier0 /*id*/);  // TileCountSmemEmpty
+             if (threadIdx.x % cutlass::NumThreadsPerWarp == 0) {
+-                *work_info_smem = make_int4(work_info.tile_idx, work_info.block, work_info.bidh, work_info.bidb);
++                *work_slot() = make_int4(work_info.tile_idx, work_info.block, work_info.bidh, work_info.bidb);
+             }
+             flash::named_barrier_arrive(NumThreads, cutlass::arch::ReservedNamedBarriers::StreamkBarrier1 /*id*/);  // TileCountSmemFull
+             return work_info;
+         } else {
+             flash::named_barrier_sync(NumThreads, cutlass::arch::ReservedNamedBarriers::StreamkBarrier1 /*id*/);  // TileCountSmemFull
+-            int4 work_info = *work_info_smem;
++            int4 work_info = *work_slot();
+             flash::named_barrier_arrive(NumThreads, cutlass::arch::ReservedNamedBarriers::StreamkBarrier0 /*id*/);  // TileCountSmemEmpty
+             return WorkTileInfo{work_info.x, work_info.y, work_info.z, work_info.w};
+         }

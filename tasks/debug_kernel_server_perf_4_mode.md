@@ -787,7 +787,14 @@ Tasks, in priority order:
             - Against conditional disaggregation: agent SLO goodput +14 / +34 / +24 / +37% and +21% under the spike;
               chat attainment within 2.4 points through 96 programs and +7.7 at 128.
             - Against stock PD: every point, by 3.7-260x in agent SLO goodput.
-            - Missing: repeats, and error bars from per-request distributions (`fanout_per_tenant.py` outputs on pod 0).
+            - [x] **Repeat r2 (2026-10-26, `R=r2 BEST_SPLITS="3 2"`, log `/tmp/h20/mn_stage3_a6_16g_r2.log`).** Ours vs
+                  conditional: 97.3% / 611 vs 97.7% / 547 (32); 93.8% / 1093 vs 95.5% / 932 (64); 90.3% / 1463 vs
+                  89.3% / 1181 (96); 77.1% / 1532 vs 69.4% / 1212 (128); spike 93.7% / 1064 vs 93.9% / 855.
+                  - Agent SLO goodput vs conditional, r1 / r2: +14 / +12, +34 / +17, +24 / +24, +37 / +26% at
+                    32 / 64 / 96 / 128 programs; +21 / +24% under the spike. Stock PD collapses again (0-58% chat).
+                  - Paper SLO matrix (`PAPER` line, chat 2 s + 50 ms, agent 10 s + 80 ms): ours 95.5-98.9% chat and
+                    96.8-98.4% agent attainment at every load; conditional 90.4-99.6% / 91.3-98.4%.
+            - [ ] Error bars from per-request distributions (per-request tok/s/user p1..p99 + figure).
 - [ ] 2026-10-24 **Conditional-disagg comparison re-run at Dynamo's defaults** (2048 tokens, 0.7 of the prompt; the
       earlier run used 4096), queued behind the stage-3 baselines (`pd_colocation_vs_disagg.md`).
 - [ ] **Fault tolerance:** prefill-role and decode-role workers killed mid-run (`pd_colocation_vs_disagg.md`).

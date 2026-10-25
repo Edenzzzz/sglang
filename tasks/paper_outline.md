@@ -683,7 +683,7 @@ trails stock prefill-prioritized with MTP at the 80 ms ITL SLO (62.2 / 64.4 vs 6
 **Result: GLM-4.5-Air.** On one 4-GPU H20 node (TP4, built-in MTP), with 32-64K agents at concurrency 8 plus chat at
 8 req/s (two repeats), the full stack raises four-mode throughput by 18-19% for both tenants, cuts agent TPOT by
 41-48% and chat TTFT by 68-83% (Table 8). This load is far above the node's capacity (TTFT is tens of seconds in both
-systems); the at-capacity point is [pending].
+systems); the at-capacity point follows Table 8.
 
 Table 8: full stack vs stock sglang on FA3, GLM-4.5-Air, one H20 node, TP4, overloaded. "Chat at 2 s / 50 ms" is chat
 attainment under a relaxed SLO.

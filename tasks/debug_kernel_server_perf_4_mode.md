@@ -145,7 +145,12 @@ Tasks, in priority order:
               - CTAs drain published merges (claimed by CAS) before pulling more LPT compute, so merges run as soon as
                 their group is complete, with no group spinning, and the compute order is kept.
               - Producers only reserve and write codes, the data-driven hand-off of MELD's JIT reduction.
-              - Built; FP32 / graph check, FA2 rows x3 and stage 1 running.
+              - Status: hangs intermittently. Each per-set check reached its 20-minute limit after 5-9 captures, all
+                of which passed, and the capture it stalled on passes when run alone. So it is a race in the claim /
+                publish protocol, not a deterministic bug.
+              - Hunt running: a watchdog build prints the queue state (head, tail, total merges, compute cursor,
+                queue length, the slot waited on) and traps
+                (`unified/unified_h20_persistent_ready_debug_20261025.sh`).
       - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
             current captures mix q=1 and q=4 rows, so this is untested.
 

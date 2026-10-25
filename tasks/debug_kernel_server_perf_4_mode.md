@@ -42,6 +42,34 @@ Tasks, in priority order:
       harness stops on a capture whose v3 row set differs from its `q_len <= 4` rows; the harness needs fixing, not the
       kernel.
 
+      **Stage 2: serving on the H200** (`unified/a6_stage2_h200_20261025.sh`, root `/opt/tiger/w/a6_stage2_h200_20261025`;
+      Qwen2.5-7B + EAGLE3; full stack = EDF with per-tenant deadlines, demote-on-miss and the 4-mode MTP step, against
+      stock sglang on FA3; native v3 or A6 as the kernel; two opposite-order repeats; all four roots pass the audit;
+      A6 active in 1,883 / 1,265 logged call lines). Relative change against stock, A6 / v3 as the kernel:
+      | workload | metric | four-mode | two-mode |
+      |---|---|---|---|
+      | 128-256K, agent conc 4, chat 4 req/s | chat TTFT | -98% / -98% | -99% / -99% |
+      | | agent TPOT | -42% / -38% | -21% / -23% |
+      | | agent output tok/s | +4.0% / +4.0% | +10.4% / +10.5% |
+      | | agent TTFT | +17% / +31% | -8% / -10% |
+      | | chat TPOT | +65% / +72% | +49% / +49% |
+      | 32-64K, agent conc 8, chat 8 req/s | chat TTFT | -95% / -92% | -95% / -97% |
+      | | agent TPOT | -31% / -40% | -11% / -17% |
+      | | agent output tok/s | -9.3% / -10.6% | +0.9% / +0.8% |
+      | | agent TTFT | +14% / +27% | -7% / -5% |
+      SLO attainment, stock -> ours:
+      | workload | chat at 2 s / 50 ms | agent at 10 s / 80 ms |
+      |---|---|---|
+      | 32-64K | 54-57% -> 95-98% | about +10 points in four-mode, flat in two-mode |
+      | 128-256K | 18-21% -> 58-63% | 12-19% -> 37-50% |
+      - **Latency and attainment clear the >= 30% bar against stock on both workloads.**
+      - **Raw throughput does not clear the >= 10% bar.** Agent output is -9% to +10.5%, and chat output is pinned at
+        the offered rate. SLO goodput does clear it: chat 2 s / 50 ms goodput is ~1,600 vs ~850 tok/s on 32-64K and
+        520-540 vs 140-160 tok/s on 128-256K.
+      - **A6 vs v3:** in both four-mode workloads A6 degrades agent TTFT much less against stock (+17% vs +31%;
+        +14% vs +27%) and degrades chat TPOT / ITL less; agent TPOT gains a few points less; two-mode is level. This is
+        consistent with a 3-5% faster attention step.
+
       **Requirements (user, 2026-10-24)**
       - [x] (Mandatory) One unified CPU plan per step for FA3 and FA2.
       - [x] (Mandatory) Fused unified reduction: FA2 and FA3 split partials reduced inside the FA2 launch by the plan's
@@ -146,7 +174,7 @@ Tasks, in priority order:
             consumer reduces in shared memory. Plan-side grouping (`UNIFIED_MERGE_MODE=dsmem`) is built and host-checked;
             the kernel is not.
       - [ ] Plan time on serving shapes, overlapped with the previous step.
-      - [ ] Serving executor in the FA3 backend, then stage 2 audited pairs, once stage 1 beats v3.
+      - [x] Serving executor in the FA3 backend (`SGLANG_A6_UNIFIED=1`) and stage 2 pairs (above).
 
       **Bugs found on the way (all fixed)**
       - Merges read unwritten partials: a split with no visible key has LSE -inf and an unwritten O slot. Merges skip

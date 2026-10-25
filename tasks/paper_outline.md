@@ -721,6 +721,18 @@ ours (16.0 vs 17.6 ms); the mean is carried by those single first gaps (Figure 1
 distributions per tenant). This run also drops a per-step deadline-sized chunk cap that the earlier single-node runs
 used. The cap doubled the number of mixed steps chat rode in, and removing it improved every chat metric.
 
+**Result: standalone workloads (no-regression check).** On short-prompt standalone sets served alone on one H200
+(Qwen2.5-7B, two repeats each), the full stack matches stock sglang. ShareGPT at 16 req/s, MATH-500 at 16, GSM8K at 32
+and Code-Feedback at 16 are all within -0.3..+0.2% throughput, with 99.7-100% chat attainment at 2 s / 50 ms for both
+systems; ShareGPT at 32 req/s in two-mode is level too (+0.1%). Their prompts are below the context floor where the
+four-mode step and the FA2 tile classes engage, so the system behaves as stock.
+
+The one exception exposed a policy flaw. At ShareGPT 32 req/s in four-mode, a backlog trigger forced short prefills
+into mixed steps that cannot replay CUDA graphs: -7.2% throughput and 3.8 s TTFT vs 0.16 s. Requiring a long-context
+running row before the trigger fires removes the flaw on the mixed agent workload while improving it there
+(GLM-4.5-Air: +27-34% agent throughput, chat attainment 81-82% vs 77-78%); the ShareGPT rerun with this rule is
+[pending].
+
 **Bar status.** Throughput: the 10% bar is met for GLM-4.5-Air (+27-28% four-mode, +15-17% two-mode with the final
 configuration), at an overloaded point; it is not met for Qwen2.5-7B (-8.5% four-mode, +1.7% two-mode) and narrowly missed for
 Llama-3.3-70B (+8.9% agent / +9.9% chat four-mode without the chunk cap; +2-3% with it). Latency: chat TTFT improves by more than 30% for every model; agent TPOT improves by more

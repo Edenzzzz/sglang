@@ -1418,8 +1418,10 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
                     - ShareGPT 32 req/s four-mode (`unified/a6_standalone_qlong_h200_20261026.sh`, H200): must
                       remove the regression.
                     If both hold, it becomes part of the final configuration.
-        - [ ] MATH-500 / GSM8K / Code-Feedback: resuming (`unified/a6_standalone_resume_20261026.sh`; the native-call
-              check is now recorded rather than required for standalone runs).
+        - [x] MATH-500 16 / GSM8K 32 / Code-Feedback 16 req/s (two repeats each, `unified/a6_standalone_resume_20261026.sh`,
+              summary `/dev/shm/w/ub/st_sum.py`): ours vs stock tok/s -0.0..+0.2% in both modes, chat attainment at
+              2 s / 50 ms 100% for both, TTFT 20-24 vs 19-30 ms. Level, as expected for short prompts below
+              capacity.
         Standalone: ShareGPT, GSM8K / MATH-500, HumanEval / Code-Feedback, WebShop (`prep_standalone.py`,
         `prep_webshop_agentic.py`); Poisson rate around capacity; WebShop at C = 8 / 16 / 32 / 64. This is the
         no-regression case (one H200 so far: ShareGPT at saturation +3% throughput, -15% TTFT).

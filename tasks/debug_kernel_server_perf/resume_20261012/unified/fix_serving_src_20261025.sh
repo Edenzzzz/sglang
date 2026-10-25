@@ -2,7 +2,7 @@
 # Serving-protocol pieces of the capture / pair source tree (as native_serving_pair_h200_20261023.sh makes them):
 # patched benchmark client, workload_protocol beside it, mn_bench_pair.sh. Claude, 2026-10-25.
 set -euo pipefail
-S=/dev/shm/w/qwen25_v3_common_screen_h200_20261023
+S=${1:-/dev/shm/w/qwen25_v3_common_screen_h200_20261023}
 cp /dev/shm/w/drivers/serving/workload_protocol.py $S/
 cd $S
 /dev/shm/w/venv/bin/python - "$S" <<'PY'

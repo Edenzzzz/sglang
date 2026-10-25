@@ -62,16 +62,17 @@ if [ "${KERNEL:-lpt}" = mtpsplit ]; then
 fi
 # KERNEL=a6: the unified FA3 + FA2 dispatcher on sglang's FA3 backend (ATTN_BACKEND=fa3): one plan per step, stock
 # FA3 at the plan's KV split, v3's FA2 body, every split row reduced inside the FA2 launch. The bundle in $W/a6 comes
-# from mn_deploy_a6_20261025.sh; the server logs NATIVE_PDL_CALL ... a6_unified=1 per call.
+# from mn_deploy_a6_20261025.sh, its libraries in /opt/tiger/w/a6lib (/dev/shm is noexec on the H20 pods); rows up to
+# 64 packed queries go to FA2 (64-row class), as in v3. The server logs NATIVE_PDL_CALL ... a6_unified=1 per call.
 if [ "${KERNEL:-lpt}" = a6 ]; then
   [ -f $W/a6/native_fa3_fa2_pdl_20261023.py ] || { echo "KERNEL=a6 without the a6 bundle" >&2; exit 1; }
   export PYTHONPATH=$PYTHONPATH:$W/a6
   export SGLANG_NATIVE_PDL=1 SGLANG_A6_UNIFIED=1 SGLANG_NATIVE_PDL_FP32_PARTIALS=1 SGLANG_NATIVE_PDL_SPLIT_POLICY=geometry_v3
   export SGLANG_NATIVE_PDL_DIRECT_BF16_OUTPUT=1 NATIVE_PDL_PACKED_QUERY_LIMIT=64 SGLANG_NATIVE_PDL_VERIFY=0
-  export NATIVE_PDL_FA2_LIBRARY=$W/a6/lib/native_fa2_q32.so NATIVE_PDL_FA3_LIBRARY=$W/a6/lib/stock_fa3_pdl.so
-  export NATIVE_PDL_FA2_FP32_LIBRARY=$W/a6/lib/native_fa2_q32_fp32.so
-  export NATIVE_PDL_FA2_FP32_DIRECT_LIBRARY=$W/a6/lib/native_fa2_q32_fp32_direct.so UNIFIED_SO=$W/a6/lib/unified_dispatch_ext.so
-  export UNIFIED_FA3_STOCK=1 UNIFIED_SPLIT_POLICY=geometry_fa3 UNIFIED_MERGE_ROWS=4 UNIFIED_FA3_MIN=33
+  export NATIVE_PDL_FA2_LIBRARY=/opt/tiger/w/a6lib/native_fa2_q32.so NATIVE_PDL_FA3_LIBRARY=/opt/tiger/w/a6lib/stock_fa3_pdl.so
+  export NATIVE_PDL_FA2_FP32_LIBRARY=/opt/tiger/w/a6lib/native_fa2_q32_fp32.so
+  export NATIVE_PDL_FA2_FP32_DIRECT_LIBRARY=/opt/tiger/w/a6lib/native_fa2_q32_fp32_direct.so UNIFIED_SO=/opt/tiger/w/a6lib/unified_dispatch_ext.so
+  export UNIFIED_FA3_STOCK=1 UNIFIED_SPLIT_POLICY=geometry_fa3 UNIFIED_MERGE_ROWS=4 UNIFIED_FA3_MIN=65
 fi
 if [ "${KERNEL:-lpt}" = split ]; then
   export SGLANG_MIXED_ATTENTION_KERNEL=persistent SGLANG_TWO_EXEC=1 SGLANG_FUSED_FA3_SM_SPLIT=1

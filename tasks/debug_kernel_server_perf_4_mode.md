@@ -507,8 +507,9 @@ Tasks, in priority order:
                 rows go unsplit. Four-mode ShareGPT bs 1024: one 32K row runs 786 us against a balanced 634 us
                 (1.24x). bs 64: span 1.35-1.47x the balanced bound (tail).
                 -> tile-rounded chunk built (flashinfer `5797024`, below).
-              - A6 beats v3 by up to 1.21x on four-mode ShareGPT (bs 256) and 1.10x on shared prefix; it trails v3
-                on long-tail four-mode at bs 64 (0.89x) and math two-mode at bs 256 (0.92x... v3 faster there).
+              - A6 beats v3 by up to 1.21x on four-mode ShareGPT (bs 256), 1.15x on shared prefix and 1.09x on math
+                two-mode at bs 256. v3 is faster on long-tail four-mode at bs 64 (A6 0.89x) and on math two-mode at
+                bs 16 / 64 (A6 0.96 / 0.95x).
               - **The merge-free bound is SLOWER than the real merge on four-mode** (0.71-0.86x here; 0.980 / 0.988x on
                 the captures). The "<= 0.9%" ceiling is therefore not established for four-mode. Per-item timeline
                 probe queued (`unified/a6_h200_nosync_probe_20261025.sh`).

@@ -105,7 +105,7 @@ sub(
 
         if getattr(self, "_fs_cost", None) is None:
             props = torch.cuda.get_device_properties(forward_batch.seq_lens.device)
-            h20 = "H20" in props.name
+            h20 = "H20" in props.name.replace("-", " ").split()
             self._fs_cost = dict(
                 nsm=props.multi_processor_count,
                 tflops=float(os.environ.get("SGLANG_SPLIT_FA3_TFLOPS", "120" if h20 else "600")) * 1e12,

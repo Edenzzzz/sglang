@@ -344,8 +344,12 @@ at large batch, and cluster-scheduled reduction in the epilogue. We measured eac
   persistent runner does win on large decode batches (1.08-1.14x at 256-1024 rows), but through occupancy: its
   decode-only instantiation fits 3 CTAs per SM where the non-persistent kernel fits 2. We therefore give the
   non-persistent executor the same plan-chosen decode-only instantiation [pending: measurement].
-- *Cluster-scheduled reduction.* Reducing partials inside a thread-block cluster through DSMEM is exact but slower at
-  every cluster size (0.60-0.98x), because one split group must fit one cluster (section 7).
+- *Cluster-scheduled reduction.* Reducing partials inside a thread-block cluster, over DSMEM and one cluster barrier,
+  is exact but slower at every cluster size. Our first design capped each request's splits at the cluster size
+  (0.60-0.98x). The second lets large groups span clusters and reduces them by their last member; it reaches
+  0.988-0.993x on trace-sampled steps but no further. The remaining cost is gang scheduling: a cluster's CTAs start
+  together and hold their SMs until the slowest one ends, which costs 1-11% even on steps with nothing to reduce. Our
+  in-launch merge instead spreads each group over many independently scheduled CTAs (section 7).
 - *L2 order.* A KV-position-major order makes rows that share a prefix read its pages in the same wave. It helps
   only when the shared prefix exceeds L2 and its rows are split (1.08x on a 48K shared prefix). Elsewhere it breaks
   longest-first order and loses up to 29%; applying it only among equal-cost chunks keeps longest-first order but
@@ -854,6 +858,8 @@ Table 12: FA2 executor, same plan and merge, H200 (32-64K two / 32-64K four / 12
 | DSMEM cluster reduction, C = 4 | 0.81-0.87x of the two-launch baseline |
 | DSMEM cluster reduction, C = 8 | 0.925 / 0.927 / 0.913 / 0.940x |
 | DSMEM cluster reduction, C = 16 (non-portable cluster) | 0.967 / 0.984 / 0.967 / 0.978x |
+| DSMEM cluster reduction, splits uncapped, groups larger than a cluster reduced by their last member, C = 4 (vs the in-launch merge, same build) | 0.993 / 0.988 / 0.992 / 0.993x |
+| the same, C = 8 / 16 | 0.974-0.990x / 0.955-0.983x |
 
 On FA2 rows alone, the plan-scheduled merge items took 4.86 ms, against 6.21 ms for a merge done by the last CTA to
 arrive and 5.36 ms for stock flashinfer BatchAttention. flashinfer's persistent runner needed two register-targeted

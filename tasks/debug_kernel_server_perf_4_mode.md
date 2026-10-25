@@ -481,14 +481,33 @@ Tasks, in priority order:
                 captures (merge-free bound), so no reduction scheme can win more than that here. Synthetic
                 MELD-shaped batches (`unified/a6_h200_synth_meld_20261025.sh`, running) test where the reduction
                 costs more.
-              - [ ] **v2, split count independent of C** (flashinfer `24c0545`; the old cap is
-                    `UNIFIED_DSMEM_CAP_CHUNK=1`).
-                    - The chunk comes from the normal policy.
-                    - Groups of <= C members reduce inside their cluster after the cluster barrier.
-                    - A member of a larger group checks in on the global counter, and the last arrival reduces the
-                      whole group. No CTA waits, so it is safe under any cluster scheduling order.
-                    - Gate + timing vs the ticketed merge, same build, captures + synthetic, C = 4 / 8 / 16:
-                      `unified/a6_h200_dsmem2_20261026.sh` (running).
+              - [x] **v2, split count independent of C** (flashinfer `24c0545`; the old cap is
+                    `UNIFIED_DSMEM_CAP_CHUNK=1`; `unified/a6_h200_dsmem2_20261026.sh`, H200, 2026-10-26).
+                    - Design: the chunk comes from the normal policy. Groups of <= C members reduce inside their
+                      cluster after the cluster barrier; a member of a larger group checks in on the global counter,
+                      and the last arrival reduces the whole group (no waits).
+                    - Gate: FP32 + 20 graph replays pass at C = 4 and 8 on all 96 captures and six synthetic sets.
+                    - Results vs the ticketed merge, same build:
+                      | set | C = 4 | C = 8 | C = 16 |
+                      |---|---|---|---|
+                      | captures (32-64K two / four, 128-256K two / four) | 0.993 / 0.988 / 0.992 / 0.993x | 0.974-0.990x | 0.955-0.983x |
+                      | ShareGPT two, bs 512 / 1024 (zero split groups) | 0.994 / 0.970x | 0.964 / 0.935x | 0.928 / 0.892x |
+                      | ShareGPT four | 0.946-0.973x | 0.929-0.954x | 0.900-0.930x |
+                      | shared 4K prefix | 0.71-0.90x | 0.70-0.89x | 0.69-0.86x |
+                      | 48K shared prefix | 0.38-0.76x | 0.38-0.77x | 0.38-0.77x |
+                      | long tail / math | 0.74-1.02x | 0.73-1.01x | 0.75-0.97x |
+                    - v1's chunk coupling is gone (captures 0.60-0.87x -> 0.988-0.993x at C <= 4), but two costs
+                      remain:
+                      1. **Gang scheduling.** A cluster's CTAs launch together and hold their SMs until the slowest
+                         member ends. With items of different lengths in one task this breaks longest-first balance;
+                         it costs 1-11% even with nothing to reduce (ShareGPT two, bs 512 / 1024), growing with C.
+                      2. **Groups larger than a cluster** are reduced by one CTA. The plan-scheduled merge spreads a
+                         big group's rows over many CTAs; the last-arriver reduction serializes them (48K shared
+                         prefix, 0.38-0.77x).
+                    - **Outcome: closed as a measured negative.** On these workloads the in-launch, plan-scheduled
+                      merge beats both cluster designs. A cluster reduction would need tasks of equal-cost items and
+                      a parallel reduction for big groups, which is what the ticketed merge already provides without
+                      gang scheduling.
         - [x] **Synthetic MELD-shaped steps (2026-10-25, H200, Qwen2.5-7B geometry, every arm FP32-gated;
               `unified/gen_synth_meld_20261025.py`, `unified/a6_h200_synth_meld_20261025.sh`, flashinfer `f62b92a`).**
               One 512-token prefill chunk plus bs decode (two) or verify (four) rows. Values are A6-default time /

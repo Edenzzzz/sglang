@@ -368,7 +368,11 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
   each baseline; per-step speedup distribution (CDF); FP32 worst relative error; host plan time per step; ablation
   bars in 7
 - Status: unified dispatcher measured on Qwen2.5-7B (H200 and H20) and Llama-3.3-70B (H20, TP4, 32-64K: 1.009x /
-  1.011x native v3 on two- / four-mode, 1.38x / 1.61x sglang's FA3 call); GLM-4.5-Air [pending]
+  1.011x native v3 on two- / four-mode, 1.38x / 1.61x sglang's FA3 call) and GLM-4.5-Air (H20, TP4, 32-64K, 43 captures:
+  0.998x / 1.000x native v3, 1.28x / 1.41x sglang's FA3 call).
+- GLM-4.5-Air needs the third FA2 tile class. Its 4-token verify rows pack 48 queries per KV head, and sending them to
+  FA3 cost 28% of the four-mode step. A 64-row FA2 class, launched as its own instantiation so it does not raise the
+  smaller classes' register use, recovers it.
 - Results (Qwen2.5-7B, H200, unified dispatcher: one plan, stock FA3 at the plan's split, v3's FA2 body with the
   chunk-parallel in-launch merge; 96 fresh captures, all FP32-exact, worst 0.0082)
 

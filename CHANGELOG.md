@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.60.0 — 64-row FA2 class for GLM; A5.5 closed; stage-3 A6 worker mode (2026-10-25)
+
+- A6 NP executor: a 64-row class (v3's BatchPrefill 64-row tile) in its own instantiation for plans with 64-row
+  items. GLM-4.5-Air four-mode stage 1 goes from 0.724x to 1.000x of native v3. Qwen is unchanged.
+- GLM-4.5-Air stage 1 pipeline: trace-sampled capture with NEXTN MTP, TP4 on H20.
+- A5.5: FA3 zero-KV-load ceiling on the flash-attention role is 0.1-1.3% of the step (the loads were verified
+  removed), so FA3 multicast is not built.
+- Stage 3: `KERNEL=a6` worker mode in `mn_node.sh`, plus `mn_deploy_a6_20261025.sh` to push the A6 serving kernel to
+  the H20 pods.
+
 ## v1.59.0 — Persistent FA2 executor at parity; plan-chosen instantiations (2026-10-25)
 
 - Persistent overlap + LPT FA2 kernel: residency was register-bound at 2 CTAs/SM. The plan now picks one of two

@@ -300,7 +300,7 @@ Tasks, in priority order:
           0.999 / 1.002x). The steps a smaller cap wins are short.
 
       **6. Open**
-      - [ ] **Rows of 33-64 packed queries (GLM-4.5-Air's 4-token verify rows pack 48).**
+      - [x] **Rows of 33-64 packed queries (GLM-4.5-Air's 4-token verify rows pack 48).**
             - [x] GLM stage 1 with these rows on FA3 (`UNIFIED_FA3_MIN=33`; H20 pod 0, TP4, rank-0 attention, 43
                   trace-sampled captures with NEXTN MTP; `unified/a6_glm_h20_20261025.sh`, flashinfer `22d8d03`).
                   FP32 + 20 graph replays pass on all 43.
@@ -312,11 +312,17 @@ Tasks, in priority order:
                     FA2 BatchPrefill's 64-row tile.
                   - The earlier row control (FA3 1.02-1.59x faster than a 64-row FA2 class) measured our old persistent
                     FA2 runner, not v3's BatchPrefill tile.
-            - [ ] A 64-row class in the NP executor: v3's BatchPrefill 64-row tile, 4q x 1kv warps, NUM_MMA_KV 8 as
-                  flashinfer's dispatch picks. It is launched as a separate instantiation for plans with 64-row items,
-                  so the 16 / 32-row launches keep their registers. With `UNIFIED_FA3_MIN=65` it routes rows as v3
-                  does (flashinfer `396b04b`, `unified/a6_np64_glm_h20_20261025.sh`, running; GLM, plus a Qwen
-                  regression check).
+            - [x] **A 64-row class in the NP executor** (flashinfer `396b04b`, `unified/a6_np64_glm_h20_20261025.sh`):
+                  v3's BatchPrefill 64-row tile, 4q x 1kv warps, NUM_MMA_KV 8 (flashinfer's dispatch choice). It is
+                  launched as a separate instantiation for plans with 64-row items (that one spills 88 B; the 16 /
+                  32-row instantiation is unchanged). With `UNIFIED_FA3_MIN=65`, rows route as in v3. FP32 + 20 graph
+                  replays pass on all 43 GLM and all 92 Qwen captures.
+                  | stage 1 vs native v3 | 32-64K two | 32-64K four | 128-256K two | 128-256K four |
+                  |---|---|---|---|---|
+                  | GLM-4.5-Air, 48-row rows on FA3 (before) | 1.005x | 0.724x | | |
+                  | GLM-4.5-Air, 64-row NP class | 0.998x | **1.000x** | | |
+                  | Qwen2.5-7B, same build (regression) | 0.999x | 1.003x | 0.998x | 0.999x |
+                  vs sglang FA3 with the 64-row class: GLM 1.28x / 1.41x; Qwen 1.19 / 1.22 / 1.19 / 1.09x.
             - The persistent kernel's co-compiled 48 runner spilled every class (1 436 B); NP avoids this by
               instantiating per plan.
       - [ ] (Optional) DSMEM JIT reduction as MELD does it (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`

@@ -589,6 +589,14 @@ Tasks, in priority order:
               - [ ] Rebuild the serving library (`/opt/tiger/w/a6lib/unified_dispatch_ext.so`) with this default
                     and redeploy to the H20 pods before the next serving runs. Record the build SHA in each arm's
                     protocol.
+                    - [x] H200 build of the serving configuration (np64: 3 FA2 classes 64 / 32 / 16, NP + in-launch
+                          merge, stock FA3; flashinfer `24c0545`, `fused_plan.cuh` md5 `ac0ce78c83a1`,
+                          `unified_dispatch_ext.cu` `a7e28a43983e`; `unified/a6_h200_serving_lib_20261026.sh`).
+                          - FP32 + 20 graph replays pass with FA3_MIN=65 on 96 captures + 4 synthetic sets.
+                          - vs native v3: 1.042 / 1.035 / 1.028 / 1.030x (32-64K four / two, 128-256K four / two).
+                          - tile vs power of two, same build: 1.000-1.005x.
+                    - [ ] H20 build from the same source on pod 4 (after the Llama run), gate on Llama captures, deploy
+                          to pods 0-3 after the Qwen stage-3 r2 sweep.
         - [x] **Why MELD (SOSP '26) reports large JIT gains and we see none** (answered 2026-10-26). MELD's GQA comparison is decode-only
               at bs 128-1024 against FlashInfer 0.6, whose combine runs as a separate kernel (37% of the time in its
               FlashMLA example), and it gains most at small batch from fine-grained balance. A6 already merges inside

@@ -300,8 +300,25 @@ Tasks, in priority order:
           0.999 / 1.002x). The steps a smaller cap wins are short.
 
       **6. Open**
-      - [ ] 48-row FA2 tile with its own warp layout (16 rows per warp), or 48 to FA3. GLM depends on it. A
-            co-compiled 48 runner spills every class (1 436 B).
+      - [ ] **Rows of 33-64 packed queries (GLM-4.5-Air's 4-token verify rows pack 48).**
+            - [x] GLM stage 1 with these rows on FA3 (`UNIFIED_FA3_MIN=33`; H20 pod 0, TP4, rank-0 attention, 43
+                  trace-sampled captures with NEXTN MTP; `unified/a6_glm_h20_20261025.sh`, flashinfer `22d8d03`).
+                  FP32 + 20 graph replays pass on all 43.
+                  | stage 1, GLM-4.5-Air | 32-64K two | 32-64K four |
+                  |---|---|---|
+                  | native v3 vs sglang FA3 | 1.28x | 1.41x |
+                  | A6 vs native v3 | 1.005x | **0.724x** [0.540-0.830] |
+                  - A6 loses 28% on four-mode because it sends the 48-row verify rows to FA3, where v3 runs them on
+                    FA2 BatchPrefill's 64-row tile.
+                  - The earlier row control (FA3 1.02-1.59x faster than a 64-row FA2 class) measured our old persistent
+                    FA2 runner, not v3's BatchPrefill tile.
+            - [ ] A 64-row class in the NP executor: v3's BatchPrefill 64-row tile, 4q x 1kv warps, NUM_MMA_KV 8 as
+                  flashinfer's dispatch picks. It is launched as a separate instantiation for plans with 64-row items,
+                  so the 16 / 32-row launches keep their registers. With `UNIFIED_FA3_MIN=65` it routes rows as v3
+                  does (flashinfer `396b04b`, `unified/a6_np64_glm_h20_20261025.sh`, running; GLM, plus a Qwen
+                  regression check).
+            - The persistent kernel's co-compiled 48 runner spilled every class (1 436 B); NP avoids this by
+              instantiating per plan.
       - [ ] (Optional) DSMEM JIT reduction as MELD does it (`tasks/archive/meld_taming_dynamism_cross_sm_fusion_sosp26.pdf`
             §4.3, §5). The producer TMA-copies its partial into the consumer's slot under a per-slot mbarrier, and the
             consumer reduces in shared memory. Plan-side grouping (`UNIFIED_MERGE_MODE=dsmem`) is built and host-checked;

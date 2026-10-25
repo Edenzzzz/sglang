@@ -794,7 +794,20 @@ Tasks, in priority order:
                     32 / 64 / 96 / 128 programs; +21 / +24% under the spike. Stock PD collapses again (0-58% chat).
                   - Paper SLO matrix (`PAPER` line, chat 2 s + 50 ms, agent 10 s + 80 ms): ours 95.5-98.9% chat and
                     96.8-98.4% agent attainment at every load; conditional 90.4-99.6% / 91.3-98.4%.
-            - [ ] Error bars from per-request distributions (per-request tok/s/user p1..p99 + figure).
+            - [x] Error bars from per-request distributions (2026-10-26, `perf_model/fanout_tok_s_user_20261026.py`, arrays
+                  in pod 0 `/dev/shm/w/mn/stage3_tok_s_user_20261026.json`). Per-request decode speed, tok/s/user,
+                  p10 / p50 / p90, r1 ; r2:
+                  | load | tenant | ours | conditional disagg |
+                  |---|---|---|---|
+                  | 64 + 16 | agent | 74 / 139 / 219 ; 72 / 136 / 216 | 25 / 74 / 199 ; 41 / 104 / 198 |
+                  | 64 + 16 | chat | 111 / 267 / 370 ; 104 / 273 / 373 | 135 / 286 / 373 ; 112 / 267 / 364 |
+                  | 128 + 32 | agent | 23 / 48 / 112 ; 22 / 45 / 114 | 15 / 36 / 111 ; 17 / 36 / 110 |
+                  | 128 + 32 | chat | 40 / 138 / 315 ; 38 / 136 / 317 | 22 / 118 / 300 ; 21 / 105 / 292 |
+                  | spike | agent | 54 / 120 / 208 ; 52 / 121 / 212 | 30 / 78 / 193 ; 29 / 76 / 195 |
+                  - Stock PD's p99 (up to 250K tok/s/user) is a measurement artifact: tokens arrive in bulk after the
+                    KV transfer, so the per-request decode interval collapses. Its medians (55-183) are the usable
+                    statistic.
+                  - [ ] Figure: CDF of agent / chat tok/s/user per system at 64 and 128 programs (paper Figure 20).
 - [ ] 2026-10-24 **Conditional-disagg comparison re-run at Dynamo's defaults** (2048 tokens, 0.7 of the prompt; the
       earlier run used 4096), queued behind the stage-3 baselines (`pd_colocation_vs_disagg.md`).
 - [ ] **Fault tolerance:** prefill-role and decode-role workers killed mid-run (`pd_colocation_vs_disagg.md`).

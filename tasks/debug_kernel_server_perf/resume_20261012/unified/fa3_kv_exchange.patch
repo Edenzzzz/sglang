@@ -67,8 +67,8 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/flash_fwd_kernel_sm90.h hop
  
 diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp
 --- /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp	2026-10-07 09:43:09.000000000 +0800
-+++ hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp	2026-10-25 19:47:06.586181800 +0800
-@@ -55,7 +55,16 @@
++++ hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp	2026-10-25 20:06:35.401857733 +0800
+@@ -55,7 +55,21 @@
      static constexpr bool Transpose_V = Is_FP8 && !V_colmajor;
      static constexpr bool Use_TMA_Q = !PackGQA;
      static constexpr bool Use_TMA_KV = !PagedKVNonTMA;
@@ -82,11 +82,16 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
 +    // stage is reused only after both CTAs' consumers released it.
 +    static constexpr bool KvExchange = PagedKVNonTMA && bool(FLASHINFER_FA3_KV_EXCHANGE) && CUTE_STATIC_V(cute::size(ClusterShape{})) == 2;
 +    static constexpr bool Use_TMA_KV_Pipe = Use_TMA_KV || KvExchange;
++#ifndef FLASHINFER_FA3_KV_EXCHANGE_NOPUSH
++#define FLASHINFER_FA3_KV_EXCHANGE_NOPUSH 0
++#endif
++    // Ablation: the exchange's pairing and cluster pipelines without the exchange -- each CTA gathers its full tile.
++    static constexpr bool XchgNoPush = KvExchange && bool(FLASHINFER_FA3_KV_EXCHANGE_NOPUSH);
 +    static_assert(Use_TMA_KV || KvExchange || CUTE_STATIC_V(size(ClusterShape{})) == 1, "If not using TMA for KV, ClusterShape must be 1 (or the 2-CTA KV exchange)");
      static_assert(Use_TMA_KV || !V_colmajor, "If not using TMA for KV, V_colmajor is not supported");
      static constexpr bool SameHeadDim = get<2>(TileShape_MNK{}) == kHeadDimV;
      static constexpr bool LargeHeadDimV = kHeadDimV > 256;
-@@ -281,9 +290,9 @@
+@@ -281,9 +295,9 @@
      static constexpr uint32_t TmaTransactionBytesQv = static_cast<uint32_t>(size(SmemLayoutQv{}) * cutlass::sizeof_bits_v<Element> / 8);
  
      using PipelineTmaAsync = std::conditional_t<CUTE_STATIC_V(size(ClusterShape{})) == 1, typename cutlass::PipelineTmaAsyncNoCluster<kStages>, typename cutlass::PipelineTmaAsync<kStages>>;
@@ -99,7 +104,7 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
      // We always use TMA for K_new and V_new
      using MainloopPipelineKVNew = PipelineTmaAsync;
      using PipelineState = cutlass::PipelineState<kStages>;
-@@ -609,6 +618,16 @@
+@@ -609,6 +623,16 @@
              seqlen_info, m_block, bidb, split_idx, params.num_splits,
              params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
              params.qhead_per_khead_divmod);
@@ -116,7 +121,7 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
          // It's possible to have n_block_max <= n_block_min. Loading K can cause illegal memory access.
          if constexpr (Is_causal || Is_local || Varlen || Split) {
              if (n_block_max <= n_block_min) {
-@@ -644,6 +663,28 @@
+@@ -644,6 +668,28 @@
          int const thread_idx = threadIdx.x % NumProducerThreads;
          int const bidh_kv = !PackGQA ? params.qhead_per_khead_divmod.divide(bidh) : bidh;
          int const bidb_kv = params.kv_batch_idx == nullptr ? bidb : params.kv_batch_idx[bidb];
@@ -145,7 +150,7 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
  
          // Prepare the TMA loads
          uint32_t block_rank_in_cluster = cute::block_rank_in_cluster();
-@@ -746,9 +787,52 @@
+@@ -746,9 +792,56 @@
              }
          }
  
@@ -176,10 +181,14 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
 +                    uint32_t rbar, rhalf;
 +                    asm volatile("mapa.shared::cluster.u32 %0, %1, %2;" : "=r"(rhalf) : "r"(lhalf), "r"(xchg_rank ^ 1u));
 +                    asm volatile("mapa.shared::cluster.u32 %0, %1, %2;" : "=r"(rbar) : "r"(lbar), "r"(xchg_rank ^ 1u));
-+                    asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
-+                    asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;" :: "r"(lbar), "r"(half_bytes) : "memory");
-+                    asm volatile("cp.async.bulk.shared::cluster.shared::cta.mbarrier::complete_tx::bytes [%0], [%1], %2, [%3];"
-+                                 :: "r"(rhalf), "r"(lhalf), "r"(half_bytes), "r"(rbar) : "memory");
++                    if constexpr (XchgNoPush) {
++                        asm volatile("mbarrier.arrive.shared::cta.b64 _, [%0];" :: "r"(lbar) : "memory");
++                    } else {
++                        asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
++                        asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;" :: "r"(lbar), "r"(half_bytes) : "memory");
++                        asm volatile("cp.async.bulk.shared::cluster.shared::cta.mbarrier::complete_tx::bytes [%0], [%1], %2, [%3];"
++                                     :: "r"(rhalf), "r"(lhalf), "r"(half_bytes), "r"(rbar) : "memory");
++                    }
 +                }
 +                xchg_prev_kind = 0;
 +            }
@@ -190,7 +199,7 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
 -            if constexpr (!PagedKVNonTMA) {
 +            if constexpr (KvExchange) {
 +                constexpr bool Seqlenk_mask = decltype(need_seqlenk_masking_type)::value;
-+                paged_kv_manager.template load_K<Seqlenk_mask>(n_block, sK_pi(_, _, smem_pipe_write.index()), int(xchg_rank));
++                paged_kv_manager.template load_K<Seqlenk_mask>(n_block, sK_pi(_, _, smem_pipe_write.index()), XchgNoPush ? -1 : int(xchg_rank));
 +                cute::cp_async_fence();
 +                xchg_finalize(cute::false_type{});
 +                xchg_prev_kind = 1;
@@ -199,14 +208,14 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
                  auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_K_TMA();
                  copy(params.tma_load_K.with(*pipeline_k.producer_get_barrier(smem_pipe_write), mcast_mask_kv, TMA::CacheHintSm90::EVICT_LAST),
                      tKgK_TMA(_, n_block_idx, bidb_kv_idx), tKsK_TMA(_, smem_pipe_write.index()));
-@@ -767,7 +851,14 @@
+@@ -767,7 +860,14 @@
          auto load_V = [&] (int const n_block, auto const& smem_pipe_write, auto need_seqlenk_masking_type) {
              auto pipeline_v_load = cute::conditional_return<!Transpose_V>(pipeline_v, pipeline_vt);
              pipeline_v_load.producer_acquire(smem_pipe_write);
 -            if constexpr (!PagedKVNonTMA) {
 +            if constexpr (KvExchange) {
 +                constexpr bool Seqlenk_mask = decltype(need_seqlenk_masking_type)::value;
-+                paged_kv_manager.template load_V<Seqlenk_mask>(n_block, sVcpasync(_, _, smem_pipe_write.index()), int(xchg_rank));
++                paged_kv_manager.template load_V<Seqlenk_mask>(n_block, sVcpasync(_, _, smem_pipe_write.index()), XchgNoPush ? -1 : int(xchg_rank));
 +                cute::cp_async_fence();
 +                xchg_finalize(cute::false_type{});
 +                xchg_prev_kind = 2;
@@ -215,7 +224,7 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
                  auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_V_TMA();
                  copy(params.tma_load_V.with(*pipeline_v_load.producer_get_barrier(smem_pipe_write), mcast_mask_kv, TMA::CacheHintSm90::EVICT_LAST),
                      tVgVt_TMA(_, n_block_idx, bidb_kv_idx), tVsVt_TMA(_, smem_pipe_write.index()));
-@@ -891,6 +982,7 @@
+@@ -891,6 +991,7 @@
          if constexpr (!Transpose_V && IntraWGOverlap) {
              if (should_load_KV) { load_V(n_block_prev, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/); }
          }
@@ -223,7 +232,7 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
          if constexpr (Transpose_V) { copy_Vt_to_V(smem_pipe_write); }
          ++smem_pipe_write;
          // At the end, all threads have the correct smem_pipe_write.
-@@ -985,6 +1077,16 @@
+@@ -985,6 +1086,16 @@
              seqlen_info, m_block, bidb, split_idx, params.num_splits,
              params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
              params.qhead_per_khead_divmod);
@@ -240,7 +249,7 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
          // It's possible to have n_block_max <= n_block_min. We don't want to load Q or change any barrier
          if constexpr (Is_causal || Is_local || Varlen || Split) {
              if (n_block_max <= n_block_min) { return false; }
-@@ -1379,6 +1481,16 @@
+@@ -1379,6 +1490,16 @@
              seqlen_info, m_block, bidb, split_idx, params.num_splits,
              params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
              params.qhead_per_khead_divmod);

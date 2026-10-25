@@ -309,10 +309,27 @@ Tasks, in priority order:
                         contribution, larger than A6's whole lead over v3 (2.3-4.1%).
                       - Longest-first order is worth at most 0.7%, inside the noise on three of the four sets.
                       - Persistent dispatch gains nothing over hardware-launched CTAs at equal tile code (-0.2..-1.3%).
-                - [ ] **Persistent loop + JIT reduction** (user, 2026-10-25): release each split group's merge items the
-                      moment the group's last member completes (ready queue) on the persistent BatchPrefill loop, so the
-                      merges overlap the remaining compute instead of forming a tail. This is the one way left for a
-                      persistent loop to beat hardware dispatch.
+                - [x] **Persistent loop + JIT reduction** (user, 2026-10-25; flashinfer `bfa7e2a`,
+                      `unified/a6_h200_npp_jit_20261025.sh`, H200, 96 captures).
+                      - The member that completes a split group publishes the group's merge items into a ready queue,
+                        and CTAs take published merges before further compute (claimed by CAS, `__ldcg` polls).
+                      - FP32 + 20 graph replays pass on all 96; the watchdog never fires.
+                      | stage 1 (32-64K two / four, 128-256K two / four) | |
+                      |---|---|
+                      | JIT (ready) vs merge items after compute (ticket), same persistent loop | 0.997 / **0.982** / 1.003 / 1.005x |
+                      | JIT vs the hardware-launched NP executor | 0.982 / 0.979 / 0.997 / 0.995x |
+                      | timeline, summed over captures (two / four-mode) | ticket | JIT |
+                      |---|---|---|
+                      | tail after the last compute item | 0.24 / 0.28 ms | 0.37 / 0.77 ms |
+                      | pull time | 0.05 / 0.05 ms | 0.15 / 0.27 ms |
+                      | compute | 3.72 / 3.16 ms | 3.92 / 3.41 ms |
+                      - Measured reason it loses: idle CTAs polling the ready queue add atomics and L2 traffic that slow
+                        the compute still running, and the tail grows instead of shrinking.
+                      - Its ceiling is small: it can only remove the ticket-mode tail, ~5 us per step, a few percent of
+                        the FA2 rows, and most of that runs under FA3 in the full step.
+                      - Outcome: neither persistence nor JIT release beats hardware-launched CTAs at equal tile code.
+                        The kernel's schedule contribution is the plan's FA2 / FA3 overlap (2.2-6.1% of the step), plus
+                        the plan and the in-launch merge.
               - **Decision so far** (the NP executor is the default):
                 - It leads or ties on stage 1 on both GPUs: H20 +0.0-0.3%; H200 +0.3..+0.9% on three sets and -0.6% on
                   one.

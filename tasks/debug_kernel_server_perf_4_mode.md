@@ -280,8 +280,26 @@ Tasks, in priority order:
                   was taken in different modes for the two executors, on an older persistent build.
                 - Candidates: who runs a merge item (a resident hardware-launched CTA vs a persistent CTA after its
                   compute item), residency (2-3 vs NP's CTAs per SM), and per-pull queue atomics.
-                - Measuring: the same per-item timeline in both executors, on the same captures
-                  (`unified/a6_h200_timeline_np_vs_pers_20261025.sh`, H200, running).
+                - [x] Same per-item timeline in both executors, same 96 H200 captures, same ticketed merge items
+                      (`unified/a6_h200_timeline_np_vs_pers_20261025.sh`, flashinfer `22d8d03` + NP timeline):
+                      | in-kernel span, summed | NP | persistent |
+                      |---|---|---|---|
+                      | two-mode | 5.38 ms | **5.23 ms** |
+                      | four-mode | 4.44 ms | **4.38 ms** |
+                      | tail after the last compute item (two / four) | 0.27 / 0.28 ms | 0.23 / 0.23 ms |
+                      | merge item duration | 4-6 us | 4-6 us |
+                      - The merge is the same, and the persistent schedule is not behind.
+                      - The per-item compute time differs, e.g. 45.9 vs 51.8 us on a 46-row step. The two executors
+                        run different tile code: NP runs v3's BatchPrefill body, the persistent kernel runs
+                        flashinfer's persistent runner at a capped register budget.
+                      - Both walk the same plan queue. It is one FA2 queue, longest first; NP's tickets follow it in
+                        launch order. So the schedule (LPT order, splits, merge items, PDL overlap) is common to both,
+                        and the earlier comparisons mixed dispatch with tile code.
+                - [ ] Separate the three (`unified/a6_h200_dispatch_schedule_20261025.sh`, flashinfer `2e6eecc`, running):
+                  - dispatch with the tile code fixed: `UNIFIED_NP_PERSIST=1`, the BatchPrefill body on a persistent
+                    grid pulling the same queue, vs NP;
+                  - the schedule itself on one executor: LPT vs enumeration order (`UNIFIED_FA2_ORDER=fifo`), and
+                    PDL overlap with FA3 vs serial (`UNIFIED_PDL=0`).
                 - Goal: the persistent tile overlap + LPT schedule beats NP for a reason we can show, so it can be
                   claimed as a contribution.
               - **Decision so far** (the NP executor is the default):

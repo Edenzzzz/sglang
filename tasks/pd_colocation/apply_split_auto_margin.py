@@ -59,7 +59,7 @@ sub(
         \"\"\"SMs to leave the rows: their predicted share of the step's attention time, scaled.\"\"\"
         if getattr(self, "_fs_cost", None) is None:
             props = torch.cuda.get_device_properties(dev)
-            h20 = "H20" in props.name.replace("-", " ").split()
+            h20 = "H20" in props.name
             self._fs_cost = dict(
                 nsm=props.multi_processor_count,
                 tflops=float(os.environ.get("SGLANG_SPLIT_FA3_TFLOPS", "120" if h20 else "600")) * 1e12,

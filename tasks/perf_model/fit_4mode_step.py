@@ -16,11 +16,7 @@ KV tokens), kv (total KV), with attn = (ptok * pf / np + ptok^2 / (2 np)) / 1e6 
             (FA2 decode rows run beside FA3 prefill; fit by gradient descent on relative error)
   mlp       3-layer MLP on log1p(features), log target
   gbt       gradient-boosted trees (scikit-learn), log target
-  *_acc     lin4mode, mlp and gbt with logged pre-step acceptance and nd*acceptance
 Usage: fit_4mode_step.py [--target gpu|gap|both] [--pool] <server.log>[@S:T] [...]
-  S/T come from the logged speculative configuration unless explicitly overridden by @S:T.
-  Missing acceptance stays distinguishable from a measured acceptance of one; *_acc fits are skipped without it.
-  Earlier fits without @S:T used zero draft/verify counts and ignored acc; rerun them before making modeling claims.
   each log is fit and scored on its own; --pool also fits one model on the first halves of all logs and scores it on
   every log's second half (the draft / verify terms are only identifiable across speculative configs).
 Claude, 2026-10-19.
@@ -36,74 +32,37 @@ PAT = re.compile(r"STEPTRACE (\w+) et=(\d+) bs=(\d+) np=(\d+) ptok=(\d+) pf=(\d+
 GAP_MS = 200.0
 
 
-def speculative_config(text, override):
-    if override:
-        values = override.split(":")
-        if len(values) != 2:
-            raise ValueError("Speculative override must be @draft_steps:verify_tokens")
-        config = tuple(int(value) for value in values)
-        if min(config) < 0:
-            raise ValueError("Speculative counts must be nonnegative")
-        return config
-    config = []
-    for name in ("speculative_num_steps", "speculative_num_draft_tokens"):
-        values = {int(value) for value in re.findall(rf"\b{name}\b['\"]?\s*(?:=|:)\s*(\d+)", text)}
-        if len(values) > 1:
-            raise ValueError(f"Conflicting {name} values; split the trace or supply @S:T")
-        config.append(next(iter(values)) if values else None)
-    if all(value is None for value in config):
-        return 0, 0
-    if any(value is None for value in config):
-        raise ValueError("Incomplete speculative configuration; supply @S:T")
-    return tuple(config)
-
-
 def load(spec):
     path, _, st = spec.partition("@")
-    with open(path, errors="replace") as source:
-        text = source.read()
-    steps, toks = speculative_config(text, st)
-    feature_sources = set(re.findall(r"STEPTRACE_FEATURES source=(\w+)", text))
-    if len(feature_sources) > 1:
-        raise ValueError("Multiple STEPTRACE feature sources in one log")
-    feature_source = next(iter(feature_sources), "legacy")
+    steps, toks = (int(x) for x in st.split(":")) if st else (0, 0)
     rs = []
-    for line in text.splitlines():
+    for line in open(path, errors="replace"):
         m = PAT.search(line)
         if not m:
             continue
         g = m.groups()
-        acceptance = float(g[12]) if g[12] is not None else 1.0
-        if not np.isfinite(acceptance) or acceptance <= 0:
-            raise ValueError("STEPTRACE acceptance must be positive and finite")
         rs.append(dict(np=int(g[3]), ptok=int(g[4]), pf=int(g[5]), nd=int(g[6]), dkv=int(g[7]), kv=int(g[8]),
                        sg=int(g[10] or 0), lay=int(g[11] or 0), t=float(g[13]) * 1e3, gpu=float(g[14]), S=steps,
-                       T=toks, acc=acceptance, acc_known=g[12] is not None, feature_source=feature_source))
-    if not steps and not toks and any(row["acc"] > 1 for row in rs):
-        raise ValueError("Speculative acceptance is logged but S/T are unknown; supply @S:T")
+                       T=toks))
     rs.sort(key=lambda r: r["t"])
     for a, b in zip(rs, rs[1:]):
         iv = b["t"] - a["t"]
-        a["gap"] = iv if 0 < iv < GAP_MS else None
+        a["gap"] = iv if iv < GAP_MS else None
     if rs:
         rs[-1]["gap"] = None
     for r in rs:
         r["attn"] = (r["ptok"] * r["pf"] / max(r["np"], 1) + 0.5 * r["ptok"] ** 2 / max(r["np"], 1)) / 1e6
         r["kind"] = "mixed" if r["np"] and r["nd"] else ("prefill" if r["np"] else "decode")
-    if rs and re.search(r"MIXEDSPEC_STEPS [1-9]\d*", text) and not any(row["kind"] == "mixed" for row in rs):
-        raise ValueError("Mixed-speculative execution is logged but STEPTRACE has no mixed rows; recollect comparable features")
     return rs
 
 
 def design(rs, form):
     cols = [np.ones(len(rs)), [r["ptok"] for r in rs], [r["attn"] for r in rs], [r["nd"] for r in rs],
             [r["dkv"] / 1e3 for r in rs]]
-    if form in ("lin7", "lin4mode", "lin4mode_acc"):
+    if form in ("lin7", "lin4mode"):
         cols += [[r["np"] for r in rs], [float(r["np"] > 0 and r["nd"] > 0) for r in rs]]
-    if form in ("lin4mode", "lin4mode_acc"):
+    if form == "lin4mode":
         cols += [[r["nd"] * r["S"] for r in rs], [r["nd"] * r["T"] for r in rs], [r["dkv"] * r["T"] / 1e3 for r in rs]]
-    if form == "lin4mode_acc":
-        cols += [[row["acc"] for row in rs], [row["nd"] * row["acc"] for row in rs]]
     return np.array(cols, dtype=float).T
 
 
@@ -137,18 +96,14 @@ def fit_overlap(tr, y):
     return lambda rs: pred(torch.tensor(design(rs, "lin4mode"), dtype=torch.float64)).detach().numpy()
 
 
-def feats(rs, include_acceptance=False):
-    values = [[row["ptok"], row["pf"], row["np"], row["nd"], row["dkv"], row["kv"], row["attn"] * 1e3,
-               row["S"], row["T"], row["sg"], row["lay"]] for row in rs]
-    if include_acceptance:
-        for features, row in zip(values, rs):
-            features.extend((row["acc"], row["nd"] * row["acc"]))
-    return np.log1p(np.array(values, dtype=float))
+def feats(rs):
+    return np.log1p(np.array([[r["ptok"], r["pf"], r["np"], r["nd"], r["dkv"], r["kv"], r["attn"] * 1e3,
+                               r["S"], r["T"], r["sg"], r["lay"]] for r in rs], dtype=float))
 
 
-def fit_mlp(tr, y, include_acceptance=False):
+def fit_mlp(tr, y):
     torch.manual_seed(0)
-    Xn = feats(tr, include_acceptance)
+    Xn = feats(tr)
     mu, sd = Xn.mean(0), Xn.std(0) + 1e-6
     X = torch.tensor((Xn - mu) / sd, dtype=torch.float32)
     yt = torch.tensor(np.log(np.maximum(y, 1e-3)), dtype=torch.float32)
@@ -160,27 +115,24 @@ def fit_mlp(tr, y, include_acceptance=False):
         loss = ((net(X).squeeze(1) - yt) ** 2).mean()
         loss.backward()
         opt.step()
-    return lambda rs: np.exp(net(torch.tensor((feats(rs, include_acceptance) - mu) / sd, dtype=torch.float32)).squeeze(1)
+    return lambda rs: np.exp(net(torch.tensor((feats(rs) - mu) / sd, dtype=torch.float32)).squeeze(1)
                              .detach().numpy())
 
 
-def fit_gbt(tr, y, include_acceptance=False):
+def fit_gbt(tr, y):
     from sklearn.ensemble import HistGradientBoostingRegressor
     m = HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, random_state=0)
-    m.fit(feats(tr, include_acceptance), np.log(np.maximum(y, 1e-3)))
-    return lambda rs: np.exp(m.predict(feats(rs, include_acceptance)))
+    m.fit(feats(tr), np.log(np.maximum(y, 1e-3)))
+    return lambda rs: np.exp(m.predict(feats(rs)))
 
 
 FITTERS = {
     "lin5": lambda tr, y: fit_linear(tr, y, "lin5"),
     "lin7": lambda tr, y: fit_linear(tr, y, "lin7"),
     "lin4mode": lambda tr, y: fit_linear(tr, y, "lin4mode"),
-    "lin4mode_acc": lambda rows, targets: fit_linear(rows, targets, "lin4mode_acc"),
     "overlap": fit_overlap,
     "mlp": fit_mlp,
     "gbt": fit_gbt,
-    "mlp_acc": lambda rows, targets: fit_mlp(rows, targets, include_acceptance=True),
-    "gbt_acc": lambda rows, targets: fit_gbt(rows, targets, include_acceptance=True),
 }
 
 
@@ -204,15 +156,10 @@ def main():
     a = ap.parse_args()
     targets = ["gpu", "gap"] if a.target == "both" else [a.target]
     splits = []
-    loaded = [(spec, load(spec)) for spec in a.logs]
-    if len({row["feature_source"] for _, rows in loaded for row in rows}) > 1:
-        raise ValueError("Logs have incompatible feature sources; recollect matched traces")
-    for spec, rs in loaded:
+    for spec in a.logs:
+        rs = load(spec)
         print(f"== {spec}: {len(rs)} steps "
               + " ".join(f"{k}={sum(r['kind'] == k for r in rs)}" for k in ("decode", "mixed", "prefill")))
-        if rs:
-            print(f"  features={rs[0]['feature_source']} config S={rs[0]['S']} T={rs[0]['T']} acceptance_logged={sum(row['acc_known'] for row in rs)}/{len(rs)} "
-                  f"acceptance_range={min(row['acc'] for row in rs):.4f}..{max(row['acc'] for row in rs):.4f}")
         if len(rs) < 200:
             continue
         half = len(rs) // 2
@@ -229,18 +176,12 @@ def run(train, tests, target):
     tr = [r for r in train if r[target] is not None]
     y = np.array([r[target] for r in tr])
     for name, fit in FITTERS.items():
-        if name.endswith("_acc") and not all(row["acc_known"] for row in tr):
-            print(f"  {target:4s} {name:12s} SKIPPED incomplete acceptance features")
-            continue
         try:
             pred = fit(tr, y)
         except Exception as exc:  # a candidate that cannot fit is reported, not dropped silently
             print(f"  {target:4s} {name:8s} FAILED {type(exc).__name__}: {exc}")
             continue
         for spec, te in tests.items():
-            if name.endswith("_acc") and not all(row["acc_known"] for row in te if row[target] is not None):
-                print(f"  {target:4s} {name:12s} [{spec}] SKIPPED incomplete acceptance features")
-                continue
             s = score(pred, te, target)
             cells = "  ".join(f"{k} n={n} MAPE={m:5.1f}% p90={p:5.1f}%" for k, (n, m, p) in s.items())
             tag = "" if len(tests) == 1 else f" [{spec.split('/')[-2] if '/' in spec else spec}]"

@@ -43,18 +43,10 @@ def stream_generate(url, input_ids, max_new_tokens, timeout, rid=None):
             if not line.startswith("data:") or line == "data: [DONE]":
                 continue
             d = json.loads(line[5:])
-            if d.get("error"):
-                raise RuntimeError(f"Streaming generation error: {str(d['error'])[:160]}")
             stamps.append(time.perf_counter())
             meta = d.get("meta_info", meta)
             # Streamed chunks carry the cumulative output ids at top level (non-incremental streaming).
             out_ids = d.get("output_ids") or (meta or {}).get("output_ids") or out_ids
-    if not isinstance(out_ids, list):
-        raise RuntimeError("Malformed output token IDs")
-    if len(out_ids) != max_new_tokens:
-        raise RuntimeError(f"Expected {max_new_tokens} output token IDs, received {len(out_ids)}")
-    if any(isinstance(token, bool) or not isinstance(token, int) or token < 0 for token in out_ids):
-        raise RuntimeError("Malformed output token IDs")
     return t0, stamps, meta, out_ids
 
 

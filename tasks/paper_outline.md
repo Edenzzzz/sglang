@@ -436,7 +436,18 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
   `debug_kernel_server_perf_4_mode.md`): ours no MTP agent attainment 86.7 / 95.6% vs stock mixed chunk 84.4 /
   84.4%; ours + MTP behind stock prefill-prioritized + MTP at the 80 ms ITL SLO (62.2 / 64.4 vs 66.7 / 68.9%), ahead at 30 ms (55.6 /
   51.1 vs 46.7 / 48.9%); higher agent concurrency [pending]
-- Llama-3.3-70B (one 4-GPU node) [pending]; GLM-4.5-Air [pending]
+- GLM-4.5-Air, one 4-GPU H20 node (TP4, built-in MTP, 32-64K agents at concurrency 8 + chat 8/s, two repeats; full
+  stack vs stock sglang on FA3):
+
+  | mode | agent tok/s | chat tok/s | agent TPOT | chat TTFT | chat at 2 s / 50 ms | agent attainment |
+  |---|---:|---:|---:|---:|---:|---:|
+  | 4-mode (stock MTP -> ours) | +18-19% | +18-19% | -41..-48% | -68..-83% | 0 -> 65-76% | 20 -> 37-43% |
+  | 2-mode (stock -> ours) | +12-14% | | -17..-28% | -63..-64% | 0 -> 60-64% | 23 -> 23-30% |
+
+  - this load is far above the node's capacity (TTFT tens of seconds in both systems); the at-capacity point [pending]
+  - running GLM under tensor parallelism exposed a requirement of deadline scheduling: every TP rank must judge
+    deadlines on the same clock, so rank 0's clock rides the per-iteration request broadcast
+- Llama-3.3-70B (one 4-GPU node) [pending]
 
 ### 6.4 Multi-node benchmarks
 

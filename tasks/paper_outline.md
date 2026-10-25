@@ -517,8 +517,12 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
   - DSMEM handoff of partials (optional; just-in-time reduction from "Taming Dynamism on GPUs", SOSP '26): the
     producer CTA TMA-copies its partial into the consumer CTA's shared-memory slot, a per-slot mbarrier counts the
     bytes (expect_tx), and the consumer reduces in local shared memory; vs the merge in the FA2 epilogue [pending]
-  - KV multicast for FA3 and FA2 (optional): shared-KV ceiling on the 96 captures [pending], then multicast under the
-    unified plan [pending]; earlier runs on the old flashinfer mainloop gave -0.2..+1.7% vs unicast
+  - KV multicast for FA3 and FA2 (optional), bounded before building:
+    - FA2: across the 96 captures, 0.3-0.9% of its KV page reads are shared with another tile.
+    - FA3: 99% of its reads are re-reads by the same prefill row's other q tiles, but they are L2 hits. With its KV
+      loads compiled out, the step is only 0.1-1.3% faster (Qwen2.5-7B, H20, 92 captures).
+    - So multicast for either executor is bounded under ~1% and is not built. Earlier TMA multicast on the old
+      flashinfer mainloop gave -0.2..+1.7% vs unicast.
   - 48-row FA2 tile vs FA3 for rows of 33-48 packed queries [pending]; a 64-row FA2 class lost to FA3 on GLM-4.5-Air
     4-mode rows (FA3 1.02-1.59x faster), so rows above 48 go to FA3
   - KV split policy (before merge items, vs native v3): fixed 0.95-0.98x, flashinfer's `kv_len_limit` 0.89-0.94x,

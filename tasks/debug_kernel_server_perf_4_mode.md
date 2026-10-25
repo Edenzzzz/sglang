@@ -103,8 +103,9 @@ Tasks, in priority order:
             - In the H200 step it ties the v3-body executor (0.991-1.006x) and beats v3 by 2.4-3.1%.
             - NP stays the default for measured reasons (section 3, Decision).
       - [ ] (Optional) DSMEM JIT handoff (MELD).
-      - [x] (Optional) Multicast: under 1% of FA2's KV loads are shared, so FA2 multicast is not built. FA3's ceiling
-            is still open (A5.5).
+      - [x] (Optional) Multicast for FA3 and FA2, closed by measured bounds (A5.5).
+            - FA2: under 1% of its KV loads are shared, so multicast is not built.
+            - FA3: zero KV loads would make the step only 0.1-1.3% faster, so multicast is not built.
       - [x] Partials FP32 or BF16 if the FP32 gate passes: ours are BF16, worst error 0.0081.
       - [ ] Serving (stages 2-3) only after the kernel is resolved; v3 is the kernel until A6 beats it.
       - [ ] All three models swept and shown; the paper may keep only Llama-3.3-70B and Qwen2.5-7B.
@@ -688,7 +689,8 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
   - [x] A5.4 L2 locality (closed by measurement, 2026-10-17): on the parity build L2 hit rate is already 98% for both
     our role and sgl-kernel FA3 (NCU, prefill 2048 @ 64K / agent 4 x 512 @ 64K); the 2026-10-14 pairing gain was on
     the flashinfer mainloop's 12% hit rate.
-  - [ ] A5.5 KV multicast, FA3 and FA2 (reopened 2026-10-24: the earlier tests below ran on the flashinfer mainloop or
+  - [x] A5.5 KV multicast, FA3 and FA2 (closed by measured bounds 2026-10-25: FA2 shares <1% of its KV loads, FA3's
+    zero-load step ceiling is 0.1-1.3%; reopened 2026-10-24 because the earlier tests below ran on the flashinfer mainloop or
     deadlocked on the flash-attention role, never under the unified plan). Prior B3 is merged here.
     - [x] 2026-10-24 **Shared-KV ceiling on the 96 captures** (`unified/kv_share_ceiling_20261024.py`, CPU only, page
       ids from each capture's page table; rows routed as in stage 1). Fraction of each role's KV page reads, per kv
@@ -704,10 +706,22 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       - **FA3:** nearly all KV is re-read by the same prefill row's other q tiles, which is the multicast case. Those
         re-reads are already L2 hits (98% on the parity build), and FA3 there is not load-bound (72% tensor-pipe
         activity). So multicast would save L2-to-SM traffic, not HBM traffic.
-      - Next for FA3: the zero-KV-load time ceiling on the flash-attention role itself (never measured; the 19-22%
-        figure is from the flashinfer mainloop).
-    - [ ] FA3 multicast under the unified plan: the plan places paired tiles (same request, KV head and KV range) on
-      the two CTAs of a cluster, which is what upstream's varlen scheduler could not provide (deadlock below).
+    - [x] 2026-10-25 **Zero-KV-load ceiling on the flash-attention role** (H20, 92 trace-sampled captures, A6 with the
+      NP executor; `unified/a5_fa3_skipkv_ceiling_h20_20261025.sh`, `load_stock_fa3_variant.py`, flash-attention
+      e9515d5 + `fa3_skip_kv_load_flash_attention.patch`, flashinfer `22d8d03`).
+      - `stock_fa3_pdl` was rebuilt twice from one tree: a control, and a build with the paged K/V cp.async loads
+        compiled out (the pipeline still commits).
+      - The control matches the serving library (0.997-1.000x).
+      - The skip build really removes the loads: its FA3 rows come out non-finite while its FA2 rows match the
+        control exactly.
+      | stage 1, zero KV loads vs control | 32-64K two | 32-64K four | 128-256K two | 128-256K four |
+      |---|---|---|---|---|
+      | step speedup (bound) | 1.013x | 1.003x | 1.003x | 1.001x |
+      - Free KV loads would make the step at most 1.3% faster. A 2-CTA cluster removes at most half of the shared
+        loads, so FA3 multicast is bounded at ~0.7%.
+      - FA3 multicast under the unified plan is therefore not built. It would also have to pair tiles in lockstep
+        on each cluster, which deadlocked upstream (below).
+      - The flashinfer-mainloop figure of 19-22% (below) measured a load-bound mainloop that serving no longer runs.
     - [x] 2026-10-24 FA2 multicast (leader CTA loads with cp.async, then sends to its cluster peers over DSMEM):
       not built. The ceiling above leaves under 1% of FA2's KV loads to share.
     - Earlier results (2026-10-13..17):

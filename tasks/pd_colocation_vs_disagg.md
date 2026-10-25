@@ -451,8 +451,12 @@ static mixture.
         - short appends prefill locally.
         Validity per arm: `cond_disagg_check.py` reports the remote share and the decode-side cached fraction.
         - [ ] 2026-10-24 **Re-run at Dynamo's defaults (user, 2026-10-24):** remote prefill when the effective uncached
-          length exceeds 2048 tokens AND 0.7 of the prompt, not 4096 alone. Same arms; queued behind the stage-3
-          baselines. The 4096 numbers below stay as the earlier setting.
+          length exceeds 2048 tokens AND 0.7 of the prompt, not 4096 alone. The 4096 numbers below stay as the earlier
+          setting.
+          - [x] 2026-10-25 `router.py --cond-disagg-min-frac` (`COND_FRAC` in mn_run.py). Unit test: a 3000-token
+                append to a cached 20K session goes remote at 2048 alone and stays local at 2048 + 0.7
+                (`test_router_cond_disagg.py`, 3 cases pass).
+          - [ ] Run inside stage 3 on the A6 workers (`mn_stage3_a6_16g_20261025.sh`, running).
         Router unit test: `test_router_cond_disagg.py`. Phase A sweeps P = 2/4/6; phase B runs the best P at
         16/32/48 programs.
         **First arm, P = 2 at 64 programs + chat 16 (errors=0).** Chat attainment 94.6% (ours 94.2%, stock PD best

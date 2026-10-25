@@ -350,6 +350,15 @@ Tasks, in priority order:
 - [ ] 2026-10-24 **Llama-3.3-70B, stages 1-3** (provisioning on H20 pods 0-3: `pd_colocation/mn_provision_70b_20261024.sh`).
 - [ ] **Stage 3 with the full stack** (kernel + 4-mode MTP) vs stock PD with the P:D ratio swept, at higher load and
       with mixture spikes (`pd_colocation_vs_disagg.md`).
+      - [x] 2026-10-25 A6 on the multi-node workers: `KERNEL=a6` in `mn_node.sh` (FA3 backend, the libraries under
+            /opt/tiger since /dev/shm is noexec on the H20 pods), deployed to pods 0-3 by `mn_deploy_a6_20261025.sh`
+            (applied only where the base files match the checked md5). Smoke test on one worker passed: a 62K-token
+            prompt plus 12 concurrent short requests under 4-mode MTP, about 900 A6 calls (`a6_unified=1`), no
+            tracebacks.
+      - [ ] Run (`pd_colocation/mn_stage3_a6_16g_20261025.sh`, running): router step model calibrated on an A6 + MTP
+            worker; stock PD P = 1 / 2 / 3 of 4 pods at 64 programs + 16 chat/s; ours, conditional disagg (2048 /
+            0.7, same A6 workers) and the best two PD splits at 32 / 64 / 96 / 128 programs; then a 32-program fan-out
+            spike from t = 300 s.
 - [ ] 2026-10-24 **Conditional-disagg comparison re-run at Dynamo's defaults** (2048 tokens, 0.7 of the prompt; the
       earlier run used 4096), queued behind the stage-3 baselines (`pd_colocation_vs_disagg.md`).
 - [ ] **Fault tolerance:** prefill-role and decode-role workers killed mid-run (`pd_colocation_vs_disagg.md`).

@@ -102,8 +102,14 @@ Tasks, in priority order:
             - FA2 rows alone it beats v3's FA2 launch on the H20 (1.018x / 1.076x).
             - In the H200 step it ties the v3-body executor (0.991-1.006x) and beats v3 by 2.4-3.1%.
             - NP stays the default for measured reasons (section 3, Decision).
-      - [ ] (Optional) DSMEM JIT handoff (MELD).
-      - [x] (Optional) Multicast for FA3 and FA2, closed by measured bounds (A5.5).
+      - [x] (Optional) JIT reduction (MELD), 2026-10-25.
+            - Built as event-driven merge release on the persistent loop (ready queue). Measured 0.982-1.005x vs merges
+              queued after compute: the polling slows the remaining compute (section 3).
+            - The DSMEM-handoff form is not built, for two measured reasons:
+              - it can remove at most the merge tail, ~5 us per step (timeline);
+              - putting a split group in one cluster caps its splits at the cluster size, and pairing CTAs in lockstep
+                alone cost 6% on FA3 (A5.5).
+      - [x] (Optional) Multicast for FA3 and FA2 (A5.5): FA2 bounded at <1% shared loads; FA3 built, exact, 0.76-0.77x.
             - FA2: under 1% of its KV loads are shared, so multicast is not built.
             - FA3: zero KV loads would make the step only 0.1-1.3% faster; the built 2-CTA exchange runs 0.76-0.77x
               (pairing alone 0.93-0.94x), details in A5.5.

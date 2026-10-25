@@ -16,8 +16,8 @@
     the batch to an executor and a tile class (FA2 classes 16 / 32 / 48 for decode / verify rows, FA3 for rows > 48
     packed queries and prefill), splits KV where it balances the SMs, and in the same pass fixes the merge schedule:
     which tiles of a row are partials, and which tile merges them inside the launch, so no separate merge kernel runs
-  - the executors are stock FA3 and the persistent FA2 kernel with the LPT overlap schedule, chained by PDL; FA2
-    runs second and reduces every split row, FA2's and FA3's, in its epilogue, which removes native v3's FA2-merge
+  - the executors are stock FA3 and FA2's BatchPrefill body (one CTA per plan item, both tile classes in one launch),
+    chained by PDL; FA2 runs second and reduces every split row, FA2's and FA3's, in its epilogue, which removes native v3's FA2-merge
     and FA3-combine launches; the plan and that merge, not either kernel, are the contribution
   - 4-mode step: prefill chunk + speculative verify rows in one forward
   - why does this help? rows stop paying prefill-width tiles, and the step time becomes a function of shape that a
@@ -207,8 +207,9 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
 - one merge, in the FA2 epilogue: FA2 runs second under PDL, so it reduces every split row, FA2's and FA3's
   alike, from merge items the plan queues after the compute items; FA3 tiles only write FP32 partials + LSE, and no
   merge kernel runs for either executor
-- executors: stock FA3 (flash-attention's mainloop, paged) and the persistent FA2 kernel with the LPT overlap
-  schedule (two CTAs per SM on different tile classes), both reading the one work list; PDL between the launches
+- executors: stock FA3 (flash-attention's mainloop, paged) and FA2's BatchPrefill body, one CTA per plan item, both
+  reading the one work list; PDL between the launches. A persistent FA2 executor that pulls the plan's items in LPT
+  order is the ablated alternative (7)
 - optional, ablated in 7: DSMEM handoff of partials to the reducing CTA; KV multicast for FA3 and FA2
 - why not fuse FA2 and FA3 into one kernel: warp layout mismatch
   - FA3 is warp-specialized: one producer warpgroup issues TMA loads and two consumer warpgroups run wgmma on a
@@ -506,9 +507,13 @@ holds >= 90% chat attainment up to 4x the load of the best-tuned PD disaggregati
   - merge in the FA2 epilogue vs separate merge launches [pending] on the unified dispatcher; on FA2 rows alone
     (2026-10-24) the plan-scheduled merge items took 4.86 ms vs 6.21 ms for a last-arriver merge and 5.36 ms for stock
     BatchAttention
-  - persistent overlap + LPT FA2 vs v3's non-persistent BatchPrefill FA2 under the same plan and merge [pending];
-    current build, 2026-10-24, identical FA2 rows: ours 5.03 / 4.98 ms vs v3 4.74 / 4.33 ms (two-mode / four-mode
-    sets), under diagnosis
+  - persistent overlap + LPT FA2 vs the non-persistent BatchPrefill body under the same plan and merge:
+    - Step time ties: 0.991-1.006x on the H200, four workload sets (Qwen2.5-7B, 96 captures). The persistent
+      kernel's compute alone is faster, but its merge items and queue pulls are chains of dependent global accesses.
+    - Getting there took two register-targeted instantiations chosen by the plan: 3 CTAs per SM for decode-only plans,
+      2 with deeper KV tiles for verify plans. The default stays non-persistent.
+    - FA2 rows alone on the H20: persistent 5.37 / 6.66 ms, non-persistent 5.23 / 6.42, v3's FA2 launch
+      5.46 / 7.17 (two- / four-mode)
   - DSMEM handoff of partials (optional; just-in-time reduction from "Taming Dynamism on GPUs", SOSP '26): the
     producer CTA TMA-copies its partial into the consumer CTA's shared-memory slot, a per-slot mbarrier counts the
     bytes (expect_tx), and the consumer reduces in local shared memory; vs the merge in the FA2 epilogue [pending]

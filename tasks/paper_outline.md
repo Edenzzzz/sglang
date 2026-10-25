@@ -665,8 +665,18 @@ attainment under a relaxed SLO.
 **Result: Llama-3.3-70B.** On one 4-GPU H20 node (TP4, EAGLE3 head held at 3.0 accepted tokens per verify in both
 arms), with 32-64K agents at concurrency 4 plus chat at 2 req/s, far above capacity: in four-mode, ours cuts chat TTFT
 by 85% (6-7 s vs 46 s) and agent TPOT by 45-54%, with throughput +2-3%, at the cost of agent TTFT +23-28% and chat
-TPOT +20%. In two-mode, chat TTFT falls 78-81%, agent TPOT 34-35%, and throughput rises 8-9%. A load near capacity is
-[pending].
+TPOT +20%. In two-mode, chat TTFT falls 78-81%, agent TPOT 34-35%, and throughput rises 8-9%.
+
+Near capacity (2 agent programs plus chat at 0.5 req/s), chat TTFT falls 83-86% and agent TPOT 17-39%, with agent
+throughput +3.6-3.8%. Chat SLO attainment improves from 67% to 72-74% at 2 s / 100 ms, and from 64-66% to 67-68% at
+2 s / 50 ms. Chat end-to-end latency falls 10-19%.
+
+Chat's mean TPOT rises (13% four-mode, 57% two-mode), and the reason is instructive. Deadline order serves a chat
+prefill before the agent prefill it would have waited behind, so the wait for one agent-chunk step (about 1 s for a
+2048-token chunk at TP4) moves from chat's TTFT into its first inter-token gap. The median chat TPOT is lower in
+ours (16.0 vs 17.6 ms); the mean is carried by those single first gaps (Figure 18 shows the TTFT / ITL
+distributions per tenant). This run also drops a per-step deadline-sized chunk cap that the earlier single-node runs
+used. The cap doubled the number of mixed steps chat rode in, and removing it improved every chat metric.
 
 **Bar status.** Throughput: the 10% bar is met only for GLM-4.5-Air (+18-19% four-mode, +12-14% two-mode), at an
 overloaded point; it is not met for Qwen2.5-7B (-8.5% four-mode, +1.7% two-mode) or for Llama-3.3-70B (+2-3%

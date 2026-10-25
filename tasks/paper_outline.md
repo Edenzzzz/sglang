@@ -91,7 +91,7 @@ prefill that can still meet its deadline. The third is a cluster of symmetric no
 routing and a cluster-wide KV pool.
 
 On 96 mixed steps sampled from Qwen2.5-7B serving traces and replayed on an H200, mixed-step attention is 1.43-1.51x
-faster than sglang's single FA3 call and 2.3-4.1% faster than the best two-launch split, with FP32-exact output; on
+faster than sglang's single FA3 call and 2.7-4.7% faster than the best two-launch split, with FP32-exact output; on
 H20 GPUs it is level with that split for Qwen2.5-7B, Llama-3.3-70B and GLM-4.5-Air. On one node, SLO attainment rises
 for both tenants (Qwen2.5-7B: chat 50 -> 59-65%, agents 45-52 -> 77-85%, chat time to first token -96%; GLM-4.5-Air:
 throughput +18-19% for both tenants, agent time per output token -41..-48%), although Qwen2.5-7B's four-mode agent

@@ -484,7 +484,48 @@ Tasks, in priority order:
               - [ ] Make the split count independent of C. Either a group spans several clusters, with a DSMEM merge
                     inside each cluster and one global merge across them, or the plan packs a request's chunks so
                     tasks finish together. Then re-measure against the ticketed merge.
-        - [ ] **Why MELD (SOSP '26) reports large JIT gains and we see none.** Compare its workloads (split counts,
+        - [x] **Synthetic MELD-shaped steps (2026-10-25, H200, Qwen2.5-7B geometry, every arm FP32-gated;
+              `unified/gen_synth_meld_20261025.py`, `unified/a6_h200_synth_meld_20261025.sh`, flashinfer `f62b92a`).**
+              One 512-token prefill chunk plus bs decode (two) or verify (four) rows. Values are A6-default time /
+              arm time (> 1 = the arm is faster):
+              | set, mode | bs | native v3 | merge-free bound | persistent loop, same tile | persistent runner (3 CTAs/SM decode) | DSMEM C=8 |
+              |---|---|---|---|---|---|---|
+              | ShareGPT, two | 64 / 256 / 1024 | 1.01 / 0.95 / 0.94 | 1.13 / 1.06 / 1.01 | 0.93 / 0.95 / 0.98 | 1.03 / **1.12** / **1.08** | -- |
+              | ShareGPT, four | 64 / 128 / 256 | 0.91 / 0.85 / 0.83 | 0.85 / 0.86 / 0.74 | 0.91 / 0.97 / 0.89 | 0.91 / 1.00 / 0.93 | -- |
+              | math, two | 16 / 64 / 256 | 1.04 / 1.05 / 0.92 | 1.06 / 1.05 / 1.01 | 0.97 / 0.95 / 0.97 | 0.98 / **1.12** / 1.03 | -- |
+              | shared 4K prefix, two | 64 / 128 / 256 | 0.97 / 0.96 / 0.91 | 1.07 / 1.10 / 1.08 | 0.91 / 0.93 / 0.92 | 1.11 / 1.05 / **1.14** | -- |
+              | long tail (10% at 64-200K), four | 16 / 64 / 128 | 1.04 / 1.13 / 1.02 | 0.82 / 0.71 / 0.75 | 0.91 / 0.89 / 0.90 | 0.96 / 0.94 / 0.99 | 0.40 / 0.78 / 0.67 |
+              - **Merge cost:** up to 13% of the step on two-mode decode batches (bs 64; 6-10% at bs 128-256), against
+                <= 0.9% on the captures. This is where a cheaper reduction pays.
+              - **The persistent runner wins at large decode batch (1.08-1.14x), but not because of CTA launch
+                overhead.** The persistent pull loop on the SAME tile code is slower (0.89-0.98x), so hardware CTA
+                launch of thousands of CTAs is not the cost. The win is occupancy: its decode-only instantiation runs
+                3 CTAs/SM; the NP kernel runs 2 (register-bound, `UNIFIED_NPP per_sm=2`).
+                -> decode-only NP instantiation built (flashinfer `64f40c7`, below).
+              - **Load imbalance exists at large batch, and the split policy causes it** (per-capture FA2 balance,
+                `plan_balance_20261025.py`). The FA2 chunk grows with batch (2048 at bs 64, 32768 at bs 1024), so long
+                rows go unsplit. Four-mode ShareGPT bs 1024: one 32K row runs 786 us against a balanced 634 us
+                (1.24x). bs 64: span 1.35-1.47x the balanced bound (tail).
+                -> tile-rounded chunk built (flashinfer `5797024`, below).
+              - A6 beats v3 by up to 1.21x on four-mode ShareGPT (bs 256) and 1.10x on shared prefix; it trails v3
+                on long-tail four-mode at bs 64 (0.89x) and math two-mode at bs 256 (0.92x... v3 faster there).
+              - **The merge-free bound is SLOWER than the real merge on four-mode** (0.71-0.86x here; 0.980 / 0.988x on
+                the captures). The "<= 0.9%" ceiling is therefore not established for four-mode. Per-item timeline
+                probe queued (`unified/a6_h200_nosync_probe_20261025.sh`).
+              - The baseline pass on four-mode bs >= 512 overflowed the native harness's 512 MB workspace; it is
+                rerunning with growth to 4 GB (`unified/a6_h200_synth_base_rerun_20261025.sh`).
+        - [ ] **Decode-only NP instantiation** (flashinfer `64f40c7`: 32-row body compiled out,
+              `__launch_bounds__(128, 3)`, 16-row smem, chosen by the plan when every FA2 item is 16-row;
+              `UNIFIED_NP_ONLY16=0` ablation; 28 B spill). Gate + time on captures and synthetic sets:
+              `unified/a6_h200_np16_20261025.sh` (queued).
+        - [ ] **Tile-rounded FA2 chunk** (`UNIFIED_FA2_CHUNK_ROUND=tile`, flashinfer `5797024`: the per-slot share
+              rounded up to 256 keys, not a power of two): `unified/a6_h200_chunk_round_20261025.sh` (queued).
+        - [ ] **Why MELD (SOSP '26) reports large JIT gains and we see none.** MELD's GQA comparison is decode-only
+              at bs 128-1024 against FlashInfer 0.6, whose combine runs as a separate kernel (37% of the time in its
+              FlashMLA example), and it gains most at small batch from fine-grained balance. A6 already merges inside
+              the launch and balances by LPT, so MELD's "decouple" step is already in our baseline. Its "cooperate"
+              step (DSMEM) can only win the merge cost, which is <= 0.9% on captures but up to 13% on large decode
+              batches (above). Compare its workloads (split counts,
               batch sizes, KV spread, separate-merge-launch baseline) with ours. Measure ours per capture with
               `unified/plan_balance_20261025.py` (`a6_h200_plan_balance_20261025.sh`, queued behind the DSMEM run):
               batch size, FA2 KV min / median / max, chunk size, split groups, items, and FA2 span vs the two balance

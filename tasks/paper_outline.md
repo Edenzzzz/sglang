@@ -692,14 +692,14 @@ attainment under a relaxed SLO.
 |---|---:|---:|---:|---:|---:|---:|
 | 4-mode (stock MTP -> ours) | +18-19% | +18-19% | -41..-48% | -68..-83% | 0 -> 65-76% | 20 -> 37-43% |
 | 2-mode (stock -> ours) | +12-14% | | -17..-28% | -63..-64% | 0 -> 60-64% | 23 -> 23-30% |
-| 4-mode, final configuration (no chunk cap) | **+28%** | **+27%** | -32% | -71% | 0 -> 64% (2 s / 100 ms: 0 -> 77%) | 20 -> 30% |
-| 2-mode, final configuration | +17% | +15% | -37% | -55% | 0 -> 52% (2 s / 100 ms: 0 -> 66%) | 23 -> 33% |
+| 4-mode, final configuration (no chunk cap) | **+28%** | **+27%** | -32% | -71% | 0 -> 64-66% (2 s / 100 ms: 0 -> 77-78%) | 20 -> 30-33% |
+| 2-mode, final configuration | +17% | +15% | -37% | -55% | 0 -> 47-52% (2 s / 100 ms: 0 -> 63-66%) | 23 -> 33-43% |
 
 With the final configuration (tile-rounded KV splits, no per-step chunk cap), four-mode throughput rises 27-28% for
-both tenants and chat end-to-end latency falls from 111 s to 40 s (two-mode 105 s to 55 s); one repeat. At capacity
+both tenants and chat end-to-end latency falls from 110-111 s to 36-40 s (two-mode 105-108 s to 55-56 s); two repeats. At capacity
 (4 agent programs plus chat at 2 req/s), four-mode agent throughput rises 18%. Chat attainment at 2 s / 100 ms goes
-from 51.5% to 82.5%, chat end-to-end latency from 13.4 s to 7.9 s, and agent SLO goodput from 8 to 18 tok/s
-(two-mode: +9% throughput, chat 57.9% -> 82.1%).
+from 49-52% to 82-84%, chat end-to-end latency from 13.4-13.9 s to 7.9-8.2 s, and agent SLO goodput from 8-17 to 18-24 tok/s
+(two-mode: +9% throughput, chat 58% -> 81-82%; two repeats).
 
 **Result: Llama-3.3-70B.** On one 4-GPU H20 node (TP4, EAGLE3 head held at 3.0 accepted tokens per verify in both
 arms), with 32-64K agents at concurrency 4 plus chat at 2 req/s, far above capacity: in four-mode, ours cuts chat TTFT

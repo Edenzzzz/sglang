@@ -35,8 +35,11 @@ load() { export AGENT_CONC=$1 CHAT_RATE=$2 CHAT_N=$(( $2 * 900 )); }
 ours() { KERNEL=a6 EXTRA_RA="$RA_SLO" REP=$1 ARMS=coloc_slo_edf_mtp_hc bash mn_fanout_8gpu_20261018.sh; score coloc_slo_edf_mtp_hc_8g_fanout$1; }
 pd() { REP=$2 ARMS=disagg_p$1_mtps_hc bash mn_fanout_8gpu_20261018.sh; score disagg_p$1_mtps_hc_8g_fanout$2; }
 cond() { KERNEL=a6 COND_THRESHOLD=2048 COND_FRAC=0.7 REP=$1 ARMS=cond_p1_edf_mtp_hc bash mn_fanout_8gpu_20261018.sh; score cond_p1_edf_mtp_hc_8g_fanout$1; }
+# R: repeat tag. Repeats > 1 reuse phase A's splits (BEST_SPLITS) and skip it.
+R=${R:-r1}
 # Phase A: stock PD P:D split at 64 + 16
 load 64 16
+if [ -n "${BEST_SPLITS:-}" ]; then BEST=$BEST_SPLITS; else
 for P in 1 2 3; do pd $P _s3_L64_r1; done
 BEST=$(grep -E "^SCORE disagg_p[0-9]_mtps_hc_8g_fanout_s3_L64_r1" ${STAGE3_LOG:?} | python3 -c "
 import re,sys
@@ -45,17 +48,18 @@ for l in sys.stdin:
     m=re.match(r'SCORE disagg_p(\d)_.*agent 10s/80ms=\s*([0-9.]+)tok/s', l)
     if m: rows.append((float(m.group(2)), m.group(1)))
 rows.sort(reverse=True); print(' '.join(p for _, p in rows[:2]))")
+fi
 [ -n "$BEST" ] || BEST="1 2"
 echo "best stock PD splits (prefill pods of 4): $BEST"
 # Phase B: ours / cond / best PD splits across load
 for L in "64 16" "32 8" "96 24" "128 32"; do
   set -- $L; load $1 $2
-  ours _s3_L$1_r1
-  cond _s3_L$1_r1
-  if [ $1 != 64 ]; then for P in $BEST; do pd $P _s3_L$1_r1; done; fi
+  ours _s3_L$1_$R
+  cond _s3_L$1_$R
+  if [ $1 != 64 ] || [ $R != r1 ]; then for P in $BEST; do pd $P _s3_L$1_$R; done; fi
 done
 # Mixture spike on 64 + 16
 load 64 16; export FO_SPIKE=300:32:300
-ours _s3_spike_r1; cond _s3_spike_r1; for P in $BEST; do pd $P _s3_spike_r1; done
+ours _s3_spike_$R; cond _s3_spike_$R; for P in $BEST; do pd $P _s3_spike_$R; done
 unset FO_SPIKE
 echo STAGE3_DONE

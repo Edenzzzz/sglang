@@ -164,8 +164,17 @@ Tasks, in priority order:
                   published.
                 - Fixed (flashinfer `adcaaef`): the flag is read into a register after the sync. The JIT branch used the
                   same pattern and was fixed the same way.
-              - Rerun: FP32 + 20 graph replays on all 92, FA2 rows x3, stage 1
-                (`unified/unified_h20_persistent_ready2_20261025.sh`, running).
+              - [x] 2026-10-25 After the fix (`unified/unified_h20_persistent_ready2_20261025.sh`): FP32 + 20 graph
+                    replays pass on all 92, the watchdog never fires, and 3 FA2-rows repeats agree within 0.01 ms.
+                    | persistent merge | FA2 rows two-mode | FA2 rows four-mode | stage 1 vs v3 (32-64K two / four, 128-256K two / four) |
+                    |---|---|---|---|
+                    | merge items at the queue tail | 5.82 ms | 6.92 ms | 0.998 / 1.005 / 0.999 / 1.003x |
+                    | ready queue | 5.70 ms | 7.66 ms | 0.996 / 1.001 / 1.002 / **1.006x** [1.005-1.008] |
+                    - Two-mode improves.
+                    - Four-mode gets worse: a 28-row group yields 7 merge items, and taking them ahead of compute
+                      delays the longest LPT compute items that set the step's tail.
+                    - [ ] Next: choose the merge priority from the step (merges first when groups are small, compute
+                          first while long compute items remain), rather than fixing it.
       - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
             current captures mix q=1 and q=4 rows, so this is untested.
 

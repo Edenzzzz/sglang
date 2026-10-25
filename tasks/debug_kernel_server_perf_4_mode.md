@@ -619,8 +619,16 @@ Tasks, in priority order:
                           - FP32 + 20 graph replays pass with FA3_MIN=65 on 96 captures + 4 synthetic sets.
                           - vs native v3: 1.042 / 1.035 / 1.028 / 1.030x (32-64K four / two, 128-256K four / two).
                           - tile vs power of two, same build: 1.000-1.005x.
-                    - [ ] H20 build from the same source on pod 4 (after the Llama run), gate on Llama captures, deploy
-                          to pods 0-3 after the Qwen stage-3 r2 sweep.
+                    - [x] H20 build from the same source on pod 4 (`unified/pod4_srv_build_20261026.sh`, library md5
+                          `bc43aedeb9ed`). FP32 + 20 graph replays pass on all 43 GLM-4.5-Air captures (24 four, 19
+                          two); vs native v3, GLM two-mode 1.006x.
+                          - The GLM four-mode timing pass stopped in the v3 baseline's setup ("not native-split
+                            eligible" for one capture), a harness limit of the v3 control, not the new library.
+                          - Build fixes on the pod: add `native_q32_check_20261023` to the loader path, and copy the
+                            flash-attention tree the H200 used (md5 `0d9da1edeb00`; pod 4 had `76b466e00f7b`).
+                    - [ ] Deploy to pods 0-3 after the r2 sweep (`pd_colocation/mn_deploy_a6lib_20261026.sh`, chained to
+                          the driver's exit; the previous library is kept as `.np64_20261025`). Llama-capture gate on
+                          pod 0 afterwards.
         - [x] **Why MELD (SOSP '26) reports large JIT gains and we see none** (answered 2026-10-26). MELD's GQA comparison is decode-only
               at bs 128-1024 against FlashInfer 0.6, whose combine runs as a separate kernel (37% of the time in its
               FlashMLA example), and it gains most at small batch from fine-grained balance. A6 already merges inside

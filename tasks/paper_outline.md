@@ -692,6 +692,11 @@ attainment under a relaxed SLO.
 |---|---:|---:|---:|---:|---:|---:|
 | 4-mode (stock MTP -> ours) | +18-19% | +18-19% | -41..-48% | -68..-83% | 0 -> 65-76% | 20 -> 37-43% |
 | 2-mode (stock -> ours) | +12-14% | | -17..-28% | -63..-64% | 0 -> 60-64% | 23 -> 23-30% |
+| 4-mode, final configuration (no chunk cap) | **+28%** | **+27%** | -32% | -71% | 0 -> 64% (2 s / 100 ms: 0 -> 77%) | 20 -> 30% |
+| 2-mode, final configuration | +17% | +15% | -37% | -55% | 0 -> 52% (2 s / 100 ms: 0 -> 66%) | 23 -> 33% |
+
+With the final configuration (tile-rounded KV splits, no per-step chunk cap), four-mode throughput rises 27-28% for
+both tenants and chat end-to-end latency falls from 111 s to 40 s (two-mode 105 s to 55 s); one repeat.
 
 **Result: Llama-3.3-70B.** On one 4-GPU H20 node (TP4, EAGLE3 head held at 3.0 accepted tokens per verify in both
 arms), with 32-64K agents at concurrency 4 plus chat at 2 req/s, far above capacity: in four-mode, ours cuts chat TTFT
@@ -713,8 +718,8 @@ ours (16.0 vs 17.6 ms); the mean is carried by those single first gaps (Figure 1
 distributions per tenant). This run also drops a per-step deadline-sized chunk cap that the earlier single-node runs
 used. The cap doubled the number of mixed steps chat rode in, and removing it improved every chat metric.
 
-**Bar status.** Throughput: the 10% bar is met only for GLM-4.5-Air (+18-19% four-mode, +12-14% two-mode), at an
-overloaded point; it is not met for Qwen2.5-7B (-8.5% four-mode, +1.7% two-mode) and narrowly missed for
+**Bar status.** Throughput: the 10% bar is met for GLM-4.5-Air (+27-28% four-mode, +15-17% two-mode with the final
+configuration), at an overloaded point; it is not met for Qwen2.5-7B (-8.5% four-mode, +1.7% two-mode) and narrowly missed for
 Llama-3.3-70B (+8.9% agent / +9.9% chat four-mode without the chunk cap; +2-3% with it). Latency: chat TTFT improves by more than 30% for every model; agent TPOT improves by more
 than 30% except for Qwen2.5-7B two-mode (-16.6%) and GLM-4.5-Air two-mode (-17..-28%). Rate sweeps, Pareto curves,
 near-capacity points and standalone sets are [pending].

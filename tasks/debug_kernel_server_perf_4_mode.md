@@ -840,6 +840,13 @@ Tasks, in priority order:
             (>= 30% latency, >= 10% throughput) are met for GLM on one node.
           - The load is far above GLM-Air's capacity on 4 H20s (TTFT tens of seconds in both arms), so this is the
             overloaded end of the curve.
+    - [x] **Final configuration, same load** (2026-10-26, `short_a6_nodc`, `--deadline-chunk=`, deployed lib
+          `bc43aedeb9ed`, one repeat). Ours vs stock:
+          | mode | agent tok/s | chat tok/s | agent TPOT | agent TTFT | chat TTFT | chat att 2 s / 100 ms | agent att 10 s / 80 ms | chat e2e |
+          |---|---|---|---|---|---|---|---|---|
+          | four | **+28%** | **+27%** | -32% | -23% | -71% | 0 -> 77% | 20 -> 30% | 111 -> 40 s |
+          | two | +17% | +15% | -37% | -13% | -55% | 0 -> 66% | 23 -> 33% | 105 -> 55 s |
+          With the cap, four-mode throughput was +18-19%.
     - [ ] A load at capacity (agent C = 2-4, chat 2-4 req/s) for the curve's other end.
 - [x] **S4 step model re-fitted on the final kernel (A6)** (2026-10-25): held-out MAPE 2.0% vs stock's 1.9%, mixed steps
   5.9% vs 7.7%; details under A6 stage 2.

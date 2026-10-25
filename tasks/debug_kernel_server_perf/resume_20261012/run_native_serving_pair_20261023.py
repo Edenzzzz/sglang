@@ -174,7 +174,9 @@ def run_arm(arguments, mode, repeat, arm):
             log.seek(offset)
             measured_log = log.read().decode(errors="replace")
         native_calls = [int(value) for value in re.findall(r"NATIVE_PDL_CALL calls=(\d+)", measured_log)]
-        if arm == "native" and not native_calls:
+        # A standalone set of short prompts may never reach the native mixed-step path (decode and small prefills run
+        # stock), so there the call count is recorded rather than required.
+        if arm == "native" and not native_calls and not arguments.standalone:
             raise RuntimeError("No native attention calls after the workload barrier")
         if arm == "fa3" and "NATIVE_PDL_CALL" in server_log:
             raise RuntimeError("Native attention contaminated the FA3 control")

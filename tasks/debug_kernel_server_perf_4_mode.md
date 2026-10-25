@@ -1361,6 +1361,21 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
         MATH-500 16, GSM8K 32, Code-Feedback 16; final config vs stock, four / two-mode, two repeats; harness
         `--standalone` mode, `apply_bench_pair_standalone_20261026.py`). Datasets were prepared on the H200
         (`/dev/shm/w/workloads/standalone`). WebShop is not yet prepared.
+        - [x] ShareGPT 16 req/s: level in both modes (chat attainment 99.7-100% both arms; tok/s within 0.3%).
+        - [x] ShareGPT 32 req/s two-mode: level (tok/s 6283-6285 vs 6273-6286); ours 98% vs 94-95% at 1 s / 100 ms.
+        - [ ] **ShareGPT 32 req/s four-mode: REGRESSION, root-caused.**
+              - Ours 5909-5983 vs 6401-6418 tok/s (-7%); TTFT 3.3-4.2 s vs 0.16 s; attainment 92% vs 100%.
+              - Cause: `SGLANG_MIXED_SPEC_MIN_QUEUE=4` re-enables the 4-mode mixed step for short prefills whenever
+                4+ requests wait. The prefill CUDA-graph runner refuses MIXED batches, so 2979 of 3247 prefill steps
+                ran eager (stock MTP: 0 of 3190).
+              - This is a feedback loop: lower throughput, longer queue, more mixing; queue 114 vs 2.7.
+              - The queue trigger was justified by long-context runs, where steps are GPU-bound and the eager cost
+                is hidden.
+              - [ ] Control with the queue trigger off (prefills >= 8192 tokens still mix):
+                    `unified/a6_standalone_noq_h200_20261026.sh` (queued). Then re-measure the trigger's value on the
+                    mixed chat + agent workload before changing the default.
+        - [ ] MATH-500 / GSM8K / Code-Feedback: resuming (`unified/a6_standalone_resume_20261026.sh`; the native-call
+              check is now recorded rather than required for standalone runs).
         Standalone: ShareGPT, GSM8K / MATH-500, HumanEval / Code-Feedback, WebShop (`prep_standalone.py`,
         `prep_webshop_agentic.py`); Poisson rate around capacity; WebShop at C = 8 / 16 / 32 / 64. This is the
         no-regression case (one H200 so far: ShareGPT at saturation +3% throughput, -15% TTFT).

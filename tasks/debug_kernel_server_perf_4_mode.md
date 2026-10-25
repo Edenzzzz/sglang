@@ -908,8 +908,19 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     FA2 run concurrently, and the serving bound for any co-run is 1.2% of GPU time on TraceLab (A5.3). Not rebuilt on
     the flash-attention role.
 
-### [ ] B. Fuse draft/verify epilogue ops (unchecked 2026-10-24: the epilogue fusion was never built, only bounded in B1; backfill lives in A5.6 and multicast in A5.5)
+### [x] B. Fuse draft/verify epilogue ops (bounded at ~4% of kernel time on A6, 2026-10-25, not built; backfill lives in A5.6 and multicast in A5.5)
 
+- [x] **B1 re-bound on A6 (2026-10-25)** (H200, one stage-2 pair, mix32 four-mode, agent C=8 + chat 8/s; torch
+  profiler over 60 steps of each arm 150 s into its run; `unified/a6_epilogue_bound_h200_20261025.sh`,
+  `drivers/serving/parse_kernel_tail.py` with A6's kernel names added to the attention bucket):
+  | arm | GPU busy of span | GEMM | attention | index / copy | elementwise / norm | sampling / verify | other |
+  |---|---|---|---|---|---|---|---|
+  | stock FA3 | 72.1% | 81.1% | 11.3% | 3.6% | 2.4% | 0.6% | 1.0% |
+  | ours, A6 | 84.4% | 80.5% | 12.0% | 3.3% | 2.7% | 0.6% | 0.9% |
+  - The draft / verify epilogue lives in the sampling / verify bucket (0.6%) and part of index / copy (<= 3.3%). The
+    elementwise / norm kernels are the model's own layer ops (act-and-mul, RoPE, norms), not the epilogue.
+  - So fusing the epilogue is bounded at ~4% of kernel time on A6, against GEMM's 80%; not built.
+  - In this window ours keeps the GPU busier (84 vs 72% of the span).
 - [x] **B1, fusion headroom (2026-10-13, measured):** 60 serving steps per arm profiled (torch
   profiler, GPU activity), mix32 chat 16/s + agent 0.1/s, race-fixed tree, no barrier
   (`b1_tail_profile_20261013.sh`, `drivers/serving/parse_kernel_tail.py`).

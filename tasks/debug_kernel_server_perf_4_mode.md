@@ -619,15 +619,25 @@ Tasks, in priority order:
           | two | +3.3% | +1.6% | -11% | -37% | -90% | +41% | +27% |
           - Near capacity the deadline order still moves chat prefills ahead (chat TTFT -89%) and steadies agent
             decode, but chat decode gets ~40% slower.
-          - [ ] **Chat TPOT regression (open, cause found 2026-10-26):** both arms prefill the same tokens (550K), but
-                ours runs 47% more prefill batches (570 vs 387, two-mode). Most are 512-2047-token pieces (402 vs
-                228), so chat decode rows ride in about twice as many mixed steps.
-                - Source: the "ours" arm sets `SGLANG_EDF_DEADLINE_CHUNK=1024:2048:6000`
-                  (`run_native_serving_pair_20261023.py` default). That caps every chunk at 1024 unless the
-                  deadline backlog would miss at 6000 tok/s, a Qwen-calibrated pace.
-                - It is a per-step chunk cap, the kind that lost in every earlier EDF study ("order, don't cap").
-                - Rerun with the cap off (`--deadline-chunk=`, everything else unchanged): `low_a6_nodc` on pod 4,
-                  `/dev/shm/w/a6_stage2_llama_low_nodc.log`, running.
+          - [x] **Chat TPOT "regression" resolved (2026-10-26): it is a tail, and attainment improves.**
+                - Two causes:
+                  1. The deadline chunk cap (`SGLANG_EDF_DEADLINE_CHUNK=1024:2048:6000`, Qwen-calibrated pace) gave
+                     47% more prefill batches (570 vs 387).
+                  2. Deadline order serves chat prefill first, so the wait for one agent-chunk step (~1 s on 70B
+                     TP4) moves from chat TTFT into chat's first inter-token gap. 48 chat requests have a single
+                     > 1 s gap vs 22 in stock, and those carry 70% of the summed TPOT.
+                - Median chat TPOT is better in ours (16.0 vs 17.6 ms two-mode; 6.1 vs 6.2 four-mode).
+                - Rerun with the cap off (`low_a6_nodc`, `--deadline-chunk=`, two repeats): prefill batches 404 vs
+                  387. Ours vs stock:
+                  | mode | agent tok/s | agent TPOT | chat TTFT | chat mean TPOT | chat att 2 s / 50 ms | chat att 2 s / 100 ms | chat e2e mean |
+                  |---|---|---|---|---|---|---|---|
+                  | four | +3.8% | -39% | -86% | +13% | 67.2-67.8 vs 66.1% | 73.9 vs 66.7% | 10.1 vs 12.4 s |
+                  | two | +3.6% | -17% | -83% | +57% | 67.2-67.8 vs 63.9-64.4% | 72.2-73.3 vs 67.2% | 12.9 vs 14.3 s |
+                  (capped run: four 65.6 vs 66.1% / 73.3 vs 66.7%, e2e 10.7 vs 12.3 s; two 67.8 vs 64.4-65.6% /
+                  75.0 vs 67.2%)
+                - Decision: later single-node runs drop the cap (`--deadline-chunk=`). The paper reports
+                  per-tenant attainment and tail ITL, not mean TPOT.
+                - Tools: `/tmp/chat_tail.py`, `/tmp/chat_att.py` (copied to `drivers/serving/chat_tail_attainment_20261026.py`).
           - Agent sample is small (12 requests per arm); per-request distributions and error bars are pending.
 - [ ] **Stage 3 with the full stack** (kernel + 4-mode MTP) vs stock PD with the P:D ratio swept, at higher load and
       with mixture spikes (`pd_colocation_vs_disagg.md`).

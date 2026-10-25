@@ -810,6 +810,11 @@ Tasks, in priority order:
                     KV transfer, so the per-request decode interval collapses. Its medians (55-183) are the usable
                     statistic.
                   - [ ] Figure: CDF of agent / chat tok/s/user per system at 64 and 128 programs (paper Figure 20).
+- [ ] **Stage 3, Llama-3.3-70B, full stack, 16 H20** (2026-10-26, `pd_colocation/mn_stage3_llama_16g_20261026.sh`,
+      log `/tmp/h20/mn_stage3_llama_16g.log`): 4 TP4 workers, one per pod, trained EAGLE3 head (real acceptance on
+      natural-text fan-out), deployed lib `bc43aedeb9ed`, programs C = 4 / 8 / 12 / 16 with chat C/4 req/s, 32K
+      prefixes on 8 tasks, P:D split search at C = 8, then the spike. Weights provisioned on pods 1-3 (30/30 shards).
+      Running.
 - [ ] 2026-10-24 **Conditional-disagg comparison re-run at Dynamo's defaults** (2048 tokens, 0.7 of the prompt; the
       earlier run used 4096), queued behind the stage-3 baselines (`pd_colocation_vs_disagg.md`).
 - [ ] **Fault tolerance:** prefill-role and decode-role workers killed mid-run (`pd_colocation_vs_disagg.md`).

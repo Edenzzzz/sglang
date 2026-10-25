@@ -223,12 +223,23 @@ Tasks, in priority order:
                 NP executor by 4% / 9%, and the gap holds on every four-mode capture, including 1-row steps.
               - A merge item still takes ~6 us, so the gain does not come from the merge loop; the build's register
                 allocation also changed. The open cause is the runner configuration (next item).
-        - [ ] **Runner configuration vs v3's** (`unified/unified_h20_persistent_occ_20261025.sh`, running).
-              - The persistent 32-row class is 2q x 2kv warps at MMA_KV 2, a 64-key KV tile. v3's Q32 is the same layout
-                at MMA_KV 4 (128 keys).
-              - The persistent grid is 2 CTAs per SM of 4 warps each, i.e. 8 warps per SM. v3's non-persistent grid
-                keeps more CTAs resident.
-              - Sweep: MMA_KV32 2 / 4, CTAs per SM 2 / 3 / 4.
+        - [ ] **Runner configuration vs v3's** (H20; `unified/unified_h20_persistent_occ_20261025.sh`,
+              `unified/unified_h20_persistent_smem_20261025.sh` with flashinfer `d5944d7`; FA2 rows two / four-mode):
+              | 32-row KV depth | 2 CTAs/SM | 3 | 4 |
+              |---|---|---|---|
+              | MMA_KV 2 (64-key tile) | 5.42 / 6.99 ms | 5.41 / 6.98 | 5.41 / 6.99 |
+              | MMA_KV 4 (128 keys, v3's Q32) | 5.71 / 6.66 | 5.72 / 6.66 | 5.71 / 6.65 |
+              - MMA_KV 4 on the 32-row class gives four-mode 6.65 ms (1.077x v3's FA2 launch) but two-mode 5.71 ms, so
+                neither depth wins both. FP32 + 20 graph replays pass on all 92 at MMA_KV 4. Stage 1 vs v3:
+                0.997 / 1.006 / 0.998 / 1.003x.
+              - The CTA count does nothing: the kernel holds **2 CTAs per SM at every smem size** (occupancy query:
+                128 threads, 68 KB for the 16-row class, 40 / 72 KB for the 32-row class at MMA_KV 2 / 4).
+                `__launch_bounds__(128, 1)` leaves the compiler up to 255 registers, and that, not shared memory,
+                caps residency (3 x 68 KB fits in 228 KB).
+              - Per-plan dynamic smem (16-row-only plans launch with the 16-row class's size; the kernel traps on
+                an undersized launch) is built but changes nothing while registers bind.
+              - [ ] `UNIFIED_FA2_MIN_BLOCKS=3` (at most ~170 registers per thread, 3 CTAs per SM), MMA_KV32 2 and 4
+                    (`unified/unified_h20_persistent_minblocks_20261025.sh`, running).
       - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
             current captures mix q=1 and q=4 rows, so this is untested.
 

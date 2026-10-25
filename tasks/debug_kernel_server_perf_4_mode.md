@@ -534,8 +534,25 @@ Tasks, in priority order:
                     runner wins two-mode decode batches >= 64 rows by 3-14% on synthetic steps but is level on the
                     captures and loses on four-mode (0.91-1.00x). It needs both executors in one build. Deferred
                     until a serving workload shows large decode-only batches.
-        - [ ] **Tile-rounded FA2 chunk** (`UNIFIED_FA2_CHUNK_ROUND=tile`, flashinfer `5797024`: the per-slot share
-              rounded up to 256 keys, not a power of two): `unified/a6_h200_chunk_round_20261025.sh` (queued).
+        - [x] **Tile-rounded FA2 chunk, now the default** (flashinfer `5797024`, default since `73d2502`: the per-slot
+              share rounded up to 256 keys, not a power of two; `UNIFIED_FA2_CHUNK_ROUND=pow2` = ablation;
+              `unified/a6_h200_chunk_round_20261025.sh`, H200, 2026-10-26, same build both arms). FP32 + 20 graph
+              replays pass (mix32_four, mix128_two, ShareGPT two / four, long-tail four).
+              | set | tile vs power of two |
+              |---|---|
+              | 96 captures | 1.006 / 1.003 / 1.004 / 1.004x (32-64K four / two, 128-256K two / four) |
+              | 48K shared prefix four, bs 16 / 32 / 64 / 128 | **1.221 / 1.279** / 1.083 / 1.015x |
+              | 48K shared prefix two | 1.170 / 1.194 / 1.034 / 0.998x |
+              | long tail four | 1.020 / 1.062 / **1.208** / 1.120x |
+              | math four / two | 1.000-1.140x / 1.005-1.101x |
+              | ShareGPT four, bs 64-1024 | 0.981-1.000x, bs 1024 **1.112x** |
+              | ShareGPT two | 1.058 / 0.979 / **1.183** / 1.036 / 1.000x |
+              | shared 4K prefix, long tail two | 0.994-1.034x |
+              - Balance after the change (four-mode ShareGPT): FA2 span 1.16x its balanced bound, down from 1.24x at
+                bs 1024. The two-mode bound uses 2 CTAs/SM while that build ran 3, so its ratio < 1 is not meaningful.
+              - [ ] Rebuild the serving library (`/opt/tiger/w/a6lib/unified_dispatch_ext.so`) with this default
+                    and redeploy to the H20 pods before the next serving runs. Record the build SHA in each arm's
+                    protocol.
         - [ ] **Why MELD (SOSP '26) reports large JIT gains and we see none.** MELD's GQA comparison is decode-only
               at bs 128-1024 against FlashInfer 0.6, whose combine runs as a separate kernel (37% of the time in its
               FlashMLA example), and it gains most at small batch from fine-grained balance. A6 already merges inside

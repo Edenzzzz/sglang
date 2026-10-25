@@ -884,7 +884,10 @@ the chunk size per step to protect chat TPOT starves prefill: the cap binds on 8
 **Figures.**
 
 Figure 25: kernel ablation bars: time-weighted speedup per ablation (Tables 11 and 12) per (context, mode); H200,
-Qwen2.5-7B measured; Llama-3.3-70B [pending]. Figure 25b: the same executors on synthetic decode / verify batches of
+Qwen2.5-7B measured; Llama-3.3-70B [pending]. KV-split sizing matters on large batches: rounding the per-slot share up to 256 keys instead of a power of two keeps
+the longest unsplit row from setting the step. It is 1.003-1.006x on the trace-sampled steps and up to 1.28x on
+synthetic shared-prefix, long-tail and math batches. Figure 25b: the same executors on synthetic decode / verify
+batches of
 16-1024 rows (ShareGPT, math, long-tail and shared-prefix length mixes), time relative to the default executor vs
 batch size [pending: decode-only instantiation and chunk rounding].
 

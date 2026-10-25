@@ -52,6 +52,10 @@ def run_arm(arguments, mode, repeat, arm):
     config = configuration(arguments.stage)
     config.update(AGENT_CONC=str(arguments.concurrency), SESSIONS=str(arguments.sessions), CHAT_RATE=str(arguments.chat_rate), CHAT_N=str(arguments.chat_requests), TURNS="2")
     config["MODEL_DIR"] = arguments.model_dir
+    if arguments.standalone:
+        # Standalone workload (paper set (c)): one ShareGPT-format dataset at --chat-rate, no agent tenant;
+        # mn_bench_pair.sh runs it as the only client when STANDALONE_PATH is set.
+        config["STANDALONE_PATH"] = str(arguments.standalone)
     config["TRACE_DATASET_PATH"] = os.environ.get("TRACE_DATASET_PATH", str(WORK / "workloads/tracelab/syfi_full_min.jsonl.gz"))
     if arguments.step_trace and "STEPTRACE_FEATURES source=request_cpu_v2" not in (arguments.root / "python/sglang/srt/managers/scheduler.py").read_text():
         raise ValueError("Step tracing requires the CPU-feature patch")
@@ -175,21 +179,29 @@ def run_arm(arguments, mode, repeat, arm):
         if arm == "fa3" and "NATIVE_PDL_CALL" in server_log:
             raise RuntimeError("Native attention contaminated the FA3 control")
         stock_mtp_control = arguments.ours and arm == "fa3"
-        if mode == "four" and not stock_mtp_control and "MIXEDSPEC_STEPS" not in measured_log:
+        # Short standalone prompts are below the mixed-step context floor (SGLANG_MIXED_SPEC_MIN_CTX), so a standalone
+        # four-mode arm may legitimately never merge a prefill into a verify step; that is recorded, not an error.
+        if mode == "four" and not stock_mtp_control and "MIXEDSPEC_STEPS" not in measured_log and not arguments.standalone:
             raise RuntimeError("No measured four-mode target merge")
         if mode == "four" and stock_mtp_control and "MIXEDSPEC_STEPS" in measured_log:
             raise RuntimeError("The stock-MTP control merged prefill into verify steps; it must run stock MTP")
-        programs = json.loads((output / "requests/agent_programs.json").read_text())
-        if programs["concurrency_limit"] != arguments.concurrency or programs["peak_active_programs"] != min(arguments.concurrency, arguments.sessions):
-            raise RuntimeError("Requested program concurrency was not attained")
+        if arguments.standalone:
+            programs = dict(peak_active_programs=0)
+            streams = (("chat", arguments.chat_requests),)
+        else:
+            programs = json.loads((output / "requests/agent_programs.json").read_text())
+            if programs["concurrency_limit"] != arguments.concurrency or programs["peak_active_programs"] != min(arguments.concurrency, arguments.sessions):
+                raise RuntimeError("Requested program concurrency was not attained")
+            streams = (("agent", arguments.sessions * 2), ("chat", arguments.chat_requests))
         tenants, raw_tenants = {}, {}
-        for tenant, expected in (("agent", arguments.sessions * 2), ("chat", arguments.chat_requests)):
+        for tenant, expected in streams:
             data = json.loads((output / "requests" / f"{tenant}.json").read_text())
             raw_tenants[tenant] = data
             tenants[tenant] = summarize_stream(data, expected)
             if mode == "four" and tenants[tenant]["tokens_per_verify"] is None:
                 raise RuntimeError("Missing actual speculative acceptance counters")
-        report = dict(protocol=protocol, tenants=tenants, peak_active_programs=programs["peak_active_programs"], logged_native_calls_after_barrier=len(native_calls))
+        report = dict(protocol=protocol, tenants=tenants, peak_active_programs=programs["peak_active_programs"], logged_native_calls_after_barrier=len(native_calls),
+                      mixed_spec_steps_logged="MIXEDSPEC_STEPS" in measured_log)
         if arguments.step_trace:
             first_request = min(min(data["request_start_times"]) for data in raw_tenants.values())
             last_request = max(max(data["request_end_times"]) for data in raw_tenants.values())
@@ -226,6 +238,8 @@ def main():
     parser.add_argument("--ours", action="store_true",
                         help="control = stock sglang on FA3 (stock MTP in four-mode); candidate = our deadline scheduler + native kernel")
     parser.add_argument("--deadline-chunk", default="1024:2048:6000")
+    parser.add_argument("--standalone", type=Path, default=None,
+                        help="ShareGPT-format dataset served alone at --chat-rate for --chat-requests (no agent tenant)")
     parser.add_argument("--ours-env", action="append", default=[], metavar="KEY=VALUE",
                         help="extra SGLANG_* setting for the --ours candidate arm (repeatable)")
     parser.add_argument("--role-row-splits", type=int, default=32)

@@ -1327,7 +1327,11 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
         calls/s. Sweep 4-5 C points from under capacity to overloaded around 90% attainment, plus the program and chat
         spikes. Missing: a third stream in `mn_bench.sh` (only one `SECOND`); the stage-3 agent tenant is synthetic
         fan-out today.
-  - [ ] (c) Standalone: ShareGPT, GSM8K / MATH-500, HumanEval / Code-Feedback, WebShop (`prep_standalone.py`,
+  - [ ] (c) **Running 2026-10-26 on the H200** (`unified/a6_standalone_h200_20261026.sh`: ShareGPT 16 / 32 req/s,
+        MATH-500 16, GSM8K 32, Code-Feedback 16; final config vs stock, four / two-mode, two repeats; harness
+        `--standalone` mode, `apply_bench_pair_standalone_20261026.py`). Datasets were prepared on the H200
+        (`/dev/shm/w/workloads/standalone`). WebShop is not yet prepared.
+        Standalone: ShareGPT, GSM8K / MATH-500, HumanEval / Code-Feedback, WebShop (`prep_standalone.py`,
         `prep_webshop_agentic.py`); Poisson rate around capacity; WebShop at C = 8 / 16 / 32 / 64. This is the
         no-regression case (one H200 so far: ShareGPT at saturation +3% throughput, -15% TTFT).
   - [ ] Figures: per-tenant SLO attainment vs load; goodput at 90% attainment; tightest SLO scale met; throughput vs

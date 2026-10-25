@@ -398,7 +398,20 @@ Tasks, in priority order:
     - [x] Fix (`pd_colocation/apply_edf_tp_clock_20261025.py`, applied to the serving tree): rank 0 reads the clock
           once per scheduling iteration and ships it inside the request broadcast it already makes. Every EDF decision
           on every rank uses that value (`edf_now()`). TP = 1 is unchanged.
-    - [ ] Rerun with the fix, two repeats (running).
+    - [x] **Rerun with the fix** (H20 pod 4, sglang serving tree + `apply_edf_tp_clock_20261025.py`, A6 build np64,
+          flashinfer `396b04b`). All 8 arms completed with no hang; 12 120 A6 call lines logged, acceptance 3.0-3.1
+          tokens per verify. Ours (EDF + 4-mode MTP on A6) vs stock sglang on FA3, per repeat:
+          | GLM-4.5-Air, mix32 | agent tok/s | chat tok/s | agent TPOT | chat TTFT | chat attain. 2 s + 50 ms | agent attain. 10 s + 80 ms |
+          |---|---|---|---|---|---|---|
+          | four-mode, ours | 26.4 / 27.4 | 677 / 706 | 56.9 / 55.5 ms | 32.1 / 16.0 s | 65.4 / 75.5% | 36.7 / 43.3% |
+          | four-mode, stock | 22.3 / 23.1 | 575 / 595 | 110.4 / 94.6 ms | 99.7 / 93.4 s | 0.0 / 0.0% | 20.0 / 20.0% |
+          | two-mode, ours | 25.1 / 25.7 | | 84.9 / 76.6 ms | 34.9 / 34.0 s | 59.7 / 63.5% | 23.3 / 30.0% |
+          | two-mode, stock | 22.4 / 22.6 | | 102.8 / 106.4 ms | 95.1 / 94.3 s | 0.0 / 0.0% | 23.3 / 23.3% |
+          - Four-mode: agent and chat throughput +18-19%, agent TPOT -41..-48%, chat TTFT -68..-83%. Both bars
+            (>= 30% latency, >= 10% throughput) are met for GLM on one node.
+          - The load is far above GLM-Air's capacity on 4 H20s (TTFT tens of seconds in both arms), so this is the
+            overloaded end of the curve.
+    - [ ] A load at capacity (agent C = 2-4, chat 2-4 req/s) for the curve's other end.
 - [x] **S4 step model re-fitted on the final kernel (A6)** (2026-10-25): held-out MAPE 2.0% vs stock's 1.9%, mixed steps
   5.9% vs 7.7%; details under A6 stage 2.
 

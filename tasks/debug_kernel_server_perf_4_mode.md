@@ -481,9 +481,14 @@ Tasks, in priority order:
                 captures (merge-free bound), so no reduction scheme can win more than that here. Synthetic
                 MELD-shaped batches (`unified/a6_h200_synth_meld_20261025.sh`, running) test where the reduction
                 costs more.
-              - [ ] Make the split count independent of C. Either a group spans several clusters, with a DSMEM merge
-                    inside each cluster and one global merge across them, or the plan packs a request's chunks so
-                    tasks finish together. Then re-measure against the ticketed merge.
+              - [ ] **v2, split count independent of C** (flashinfer `24c0545`; the old cap is
+                    `UNIFIED_DSMEM_CAP_CHUNK=1`).
+                    - The chunk comes from the normal policy.
+                    - Groups of <= C members reduce inside their cluster after the cluster barrier.
+                    - A member of a larger group checks in on the global counter, and the last arrival reduces the
+                      whole group. No CTA waits, so it is safe under any cluster scheduling order.
+                    - Gate + timing vs the ticketed merge, same build, captures + synthetic, C = 4 / 8 / 16:
+                      `unified/a6_h200_dsmem2_20261026.sh` (running).
         - [x] **Synthetic MELD-shaped steps (2026-10-25, H200, Qwen2.5-7B geometry, every arm FP32-gated;
               `unified/gen_synth_meld_20261025.py`, `unified/a6_h200_synth_meld_20261025.sh`, flashinfer `f62b92a`).**
               One 512-token prefill chunk plus bs decode (two) or verify (four) rows. Values are A6-default time /

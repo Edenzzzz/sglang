@@ -84,7 +84,9 @@ def summarize_stream(data, expected):
 
 
 def assert_same_requests(first, second):
-    for tenant in ("agent", "chat"):
+    if set(first["tenants"]) != set(second["tenants"]):
+        raise ValueError("Arms served different tenant sets")
+    for tenant in sorted(first["tenants"]):
         left = [(row["request_key"], row["output_tokens"]) for row in first["tenants"][tenant]["requests_detail"]]
         right = [(row["request_key"], row["output_tokens"]) for row in second["tenants"][tenant]["requests_detail"]]
         if left != right:

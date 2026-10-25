@@ -508,7 +508,7 @@ Tasks, in priority order:
             | 64 + 16 | 93.6% / 1100 | 96.0% / 821 | 13.4% / 52 | 13.1% / 80 |
             | 96 + 24 | 90.0% / 1403 | 90.5% / 1136 | 10.0% / 15 | 0.0% / 4 |
             | 128 + 32 | 79.1% / 1564 | 71.4% / 1143 | 0.3% / 6 | 0.1% / 6 |
-            | 64 + 16 + 32-program spike | 93.2% / 1053 | 94.4% / 873 | (running) | 8.0% / 46 |
+            | 64 + 16 + 32-program spike | 93.2% / 1053 | 94.4% / 873 | 8.8% / 32 | 8.0% / 46 |
             - Stock PD with 1 prefill pod: 1.6% / 2 at 64 + 16.
             - Against conditional disaggregation: agent SLO goodput +14 / +34 / +24 / +37% and +21% under the spike;
               chat attainment within 2.4 points through 96 programs and +7.7 at 128.

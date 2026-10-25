@@ -462,7 +462,8 @@ Tasks, in priority order:
                   vs sglang FA3 with the 64-row class: GLM 1.28x / 1.41x; Qwen 1.19 / 1.22 / 1.19 / 1.09x.
             - The persistent kernel's co-compiled 48 runner spilled every class (1 436 B); NP avoids this by
               instantiating per plan.
-      - [ ] **Open kernel gaps (2026-10-25, user): close all before stages 2-3 continue.**
+      - [x] **Open kernel gaps (2026-10-25, user): all closed 2026-10-26.** New defaults: tile-rounded FA2 chunk. Every
+            other item is measured, with its mechanism, below.
         - [ ] **DSMEM-cluster JIT reduction** (`UNIFIED_MERGE_MODE=dsmem`, `UnifiedFA2NPClusterKernel`, flashinfer
               `f62b92a`, `unified/a6_h200_dsmem_jit_20261025.sh`, H200, 96 captures). It is exact: FP32 + 20 graph
               replays pass on all captures at C=2 and C=4. It is slow:
@@ -588,7 +589,7 @@ Tasks, in priority order:
               - [ ] Rebuild the serving library (`/opt/tiger/w/a6lib/unified_dispatch_ext.so`) with this default
                     and redeploy to the H20 pods before the next serving runs. Record the build SHA in each arm's
                     protocol.
-        - [ ] **Why MELD (SOSP '26) reports large JIT gains and we see none.** MELD's GQA comparison is decode-only
+        - [x] **Why MELD (SOSP '26) reports large JIT gains and we see none** (answered 2026-10-26). MELD's GQA comparison is decode-only
               at bs 128-1024 against FlashInfer 0.6, whose combine runs as a separate kernel (37% of the time in its
               FlashMLA example), and it gains most at small batch from fine-grained balance. A6 already merges inside
               the launch and balances by LPT, so MELD's "decouple" step is already in our baseline. Its "cooperate"
@@ -598,7 +599,13 @@ Tasks, in priority order:
               `unified/plan_balance_20261025.py` (`a6_h200_plan_balance_20261025.sh`, queued behind the DSMEM run):
               batch size, FA2 KV min / median / max, chunk size, split groups, items, and FA2 span vs the two balance
               floors (sum of work / CTA slots, and the longest item).
-        - [ ] **Splits and load imbalance on four-mode steps:** is it true that no FA2 split groups occur, and FA3
+        - [x] **Splits and load imbalance on four-mode steps** (answered 2026-10-26).
+              - Every one of the 96 captures has FA2 split groups.
+              - On captures, FA2 shares SMs with FA3, so the FA2 span (1.13-1.61x its balance bound) is not pure
+                imbalance.
+              - On synthetic large batches, imbalance is real and comes from the power-of-two chunk; fixed by tile
+                rounding (above).
+              - Original question: is it true that no FA2 split groups occur, and FA3
               split rows never occur under `geometry_fa3`? Is a four-mode step ever imbalanced? Answer from the same
               per-capture run, then build synthetic steps that are imbalanced (long-tailed KV) to show where the
               reduction matters.
@@ -621,11 +628,13 @@ Tasks, in priority order:
                 `unified/a6_h200_lptpos_20261026.sh`): level everywhere (captures 0.998-1.002x, synthetic
                 0.981-1.019x). **L2 order closed:** grouping by KV position helps only by breaking longest-first
                 order, which costs more elsewhere. The default stays LPT.
-        - [ ] **CTA count / launch overhead at large batch:** the NP grid launches one CTA per item (thousands at
+        - [x] **CTA count / launch overhead at large batch** (answered 2026-10-26): none measurable. The persistent pull
+              loop on the same tile code is 0.89-0.98x of the hardware grid up to 4096 items; the runner's
+              large-batch edge is occupancy plus its tile code (above). Original question: the NP grid launches one CTA per item (thousands at
               large batch). Synthetic sweep at bs 64-4096, decode-only and verify-only rows, short and long KV: NP
               grid vs the persistent loop on the same BatchPrefill tile code (`h200_npp`), isolating launch / prologue
               cost from tile code.
-        - [ ] Paper 5.1 / 7 rewritten from these results. The pushed text claims there is no locality for a swizzle;
+        - [x] Paper 5.1 / 7 rewritten from these results (2026-10-26). The pushed text claims there is no locality for a swizzle;
               that claim is withdrawn until the swizzle is measured.
       - [x] **Plan time on serving shapes, overlapped with the previous step.**
         - [x] 2026-10-25 Found and fixed a serving stall (`unified/plan_overlap_20261025.py`,

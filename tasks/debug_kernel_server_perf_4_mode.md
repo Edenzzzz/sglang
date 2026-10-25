@@ -384,7 +384,21 @@ Tasks, in priority order:
 - [ ] 2026-10-24 **Conditional-disagg comparison re-run at Dynamo's defaults** (2048 tokens, 0.7 of the prompt; the
       earlier run used 4096), queued behind the stage-3 baselines (`pd_colocation_vs_disagg.md`).
 - [ ] **Fault tolerance:** prefill-role and decode-role workers killed mid-run (`pd_colocation_vs_disagg.md`).
-- [ ] **GLM-4.5-Air, stages 1-3,** after the 48 tile (its 4-token verify packs 48 rows).
+- [ ] **GLM-4.5-Air, stages 1-3** (stage 1 at parity with v3 after the 64-row class, A6 section 6).
+  - [ ] Stage 2 (H20 pod 4, TP4, NEXTN MTP, mix32: agent C=8 + chat 8 req/s;
+        `unified/a6_stage2_glm_h20_20261025.sh`).
+    - [x] 2026-10-25 First attempt. Repeat 1, four-mode, ours vs stock:
+      - agent tok/s 26.9 vs 22.6 (+19%), agent TPOT 58 vs 107 ms (-46%), agent TTFT 52 vs 61 s;
+      - chat TTFT 19.6 vs 97.6 s. The load is far above GLM-Air's capacity here.
+      - Repeat 2's ours arm hung, with every TP rank stuck to the 600 s watchdog.
+    - [x] Cause: **TP ranks diverged.** The EDF code read each rank's own `time.monotonic()` (arrival stamps, late
+          demotion, deadline-sized chunks, ITL slack), so a deadline near "now" could be judged differently per rank.
+          At the hang, rank 0 ran a batch of 2 while ranks 1-2 ran 4, and the collectives deadlocked. Stage 2 on the
+          H200 was TP1, so it never showed.
+    - [x] Fix (`pd_colocation/apply_edf_tp_clock_20261025.py`, applied to the serving tree): rank 0 reads the clock
+          once per scheduling iteration and ships it inside the request broadcast it already makes. Every EDF decision
+          on every rank uses that value (`edf_now()`). TP = 1 is unchanged.
+    - [ ] Rerun with the fix, two repeats (running).
 - [x] **S4 step model re-fitted on the final kernel (A6)** (2026-10-25): held-out MAPE 2.0% vs stock's 1.9%, mixed steps
   5.9% vs 7.7%; details under A6 stage 2.
 

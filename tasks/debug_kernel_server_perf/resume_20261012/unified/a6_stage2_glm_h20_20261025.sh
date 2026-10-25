@@ -10,6 +10,7 @@ mkdir -p $SRC $BASE
 [ -f $SRC/run_native_serving_pair_20261023.py ] || { tar xzf $W/s2src.tgz -C $SRC; cp $W/ub/*.py $SRC/; }
 test -d $SRC/python || cp -a $W/python $SRC/python
 grep -q SGLANG_EDF_LATE_DEMOTE $SRC/python/sglang/srt/managers/scheduler.py
+grep -q EDF_TP_CLOCK $SRC/python/sglang/srt/managers/scheduler_components/request_receiver.py  # TP ranks share one EDF clock
 grep -q SGLANG_NATIVE_PDL $SRC/python/sglang/srt/layers/attention/flashattention_backend.py
 grep -q prepare_unified $SRC/native_fa3_fa2_pdl_20261023.py
 test -z "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)"

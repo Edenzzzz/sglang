@@ -1,10 +1,10 @@
 #!/bin/bash
 # Persistent overlap + LPT FA2 kernel (A6, H20): plan-chosen instantiation -- 16-row-only plans run a 3-CTA/SM register
-# cap (MIN_BLOCKS16=3), plans with 32-row items the 2-CTA build with the 32-row class at MMA_KV 4. FA2 rows, occupancy
+# cap (MIN_BLOCKS16=3, wide runners compiled out), plans with 32-row items the 2-CTA build with the 32-row class at MMA_KV 4. FA2 rows, occupancy
 # printed, FP32 + 20 graph replays and stage 1. Claude, 2026-10-25.
 set -u
 cd /dev/shm/w/ub
-grep -q "UNIFIED_OCC variant" port07_unified/tests/unified_dispatch_ext.cu || { echo STALE; exit 1; }
+grep -q "bool ONLY16 = false" port07_unified/tests/unified_dispatch_ext.cu || { echo STALE; exit 1; }
 export TORCH_CUDA_ARCH_LIST=9.0a MAX_JOBS=8 VERBOSE=1 UNIFIED_FA2_CLASSES=2 UNIFIED_FA2_DYNAMIC=1 PYTHONPATH=/dev/shm/w/ub:/dev/shm/w/up/python:/dev/shm/w/fi
 build() {  # name, flags...
   local name=$1; shift

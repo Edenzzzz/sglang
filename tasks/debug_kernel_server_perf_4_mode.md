@@ -243,10 +243,22 @@ Tasks, in priority order:
                     gives 5.57 / 7.81 ms (spills 76 / 192 B). Two-mode improves to **1.019x** v3's FA2 launch; four-mode
                     loses 13-18% (its 32-row items need the registers). FP32 + 20 graph replays pass on all 92. Stage 1
                     vs v3: 1.000 / 1.007 / 0.999 / 1.006x.
-              - [ ] Plan-chosen instantiation (flashinfer `376c715`): 16-row-only plans run a 3-CTA/SM build, plans
-                    with 32-row items the 2-CTA build at MMA_KV32 4 (`unified/unified_h20_persistent_dual_20261025.sh`,
-                    running). Expected: 5.36 / 6.65 ms, if the 16-row path keeps its registers with the deeper 32-row
-                    class compiled in.
+              - [x] **Plan-chosen instantiation** (flashinfer `22d8d03`, `unified/unified_h20_persistent_dual_20261025.sh`):
+                    16-row-only plans launch a 3-CTA/SM instantiation with the wide runners compiled out (with them
+                    compiled in it ran 5.55 ms); plans with 32-row items launch the 2-CTA build at MMA_KV32 4. The
+                    executor sizes the LPT grid to match (`UNIFIED_FA2_CTAS_PER_SM16=3`). FP32 + 20 graph replays
+                    pass on all 92.
+                    | FA2 rows | two-mode | four-mode |
+                    |---|---|---|
+                    | v3's FA2 launch | 5.46 ms | 7.17 ms |
+                    | persistent overlap + LPT, plan-chosen | **5.37 (1.018x)** | **6.66 (1.076x)** |
+                    | v3 body (NP) | 5.23 (1.044x) | 6.42 (1.117x) |
+                    Stage 1 vs v3 (H20): 1.000 / 1.006 / 0.999 / 1.005x. On the H20 the FA2 launch runs under FA3, so
+                    the FA2 gain does not reach the step.
+              - Remaining gap to NP (2.6% / 3.7%): the persistent kernel's compute alone is faster than NP's (merge-free
+                bounds, above), so the gap is in the merge round trips and per-pull cost (timeline).
+              - [ ] H200 stage 1, persistent (plan-chosen) vs NP under the same plan, where A6 leads v3 by 3-5% and FA2
+                    is a larger share of the step.
       - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
             current captures mix q=1 and q=4 rows, so this is untested.
 

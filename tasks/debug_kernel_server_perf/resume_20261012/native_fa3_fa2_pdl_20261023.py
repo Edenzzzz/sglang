@@ -475,8 +475,18 @@ def prepare_unified(backend, queries, prefixes, metadata):
         logger.info("A6_UNIFIED executor heads=%d kv_heads=%d fa3_min=%d stock_fa3=%s policy=%s",
                     backend.num_attention_heads, backend.num_kv_heads, executor.fa3_min_packed,
                     os.environ.get("UNIFIED_FA3_STOCK"), os.environ.get("UNIFIED_SPLIT_POLICY"))
-    plan = executor.plan(list(queries), [p + q for p, q in zip(prefixes, queries)], metadata.page_table)
+    kv_lengths = [p + q for p, q in zip(prefixes, queries)]
+    plan = executor.plan(list(queries), kv_lengths, metadata.page_table, metadata.cu_seqlens_q,
+                         metadata.cache_seqlens_int32)
     backend._a6_unified_plans = getattr(backend, "_a6_unified_plans", 0) + 1
+    if backend._a6_unified_plans <= 3:
+        # The device metadata replaces the plan's host copies: check it against the host lengths (one sync each, first
+        # three steps only).
+        import torch
+        host_q = torch.tensor([0, *queries], dtype=torch.int32).cumsum(0, dtype=torch.int32)
+        if not (torch.equal(metadata.cu_seqlens_q.cpu(), host_q) and
+                torch.equal(metadata.cache_seqlens_int32.cpu(), torch.tensor(kv_lengths, dtype=torch.int32))):
+            raise RuntimeError("A6: device metadata does not match the host query / KV lengths")
     if backend._a6_unified_plans % 200 == 1:
         logger.info("A6_UNIFIED_PLAN plans=%d stats=%s", backend._a6_unified_plans, plan.stats)
     return UnifiedServingPlan(plan)

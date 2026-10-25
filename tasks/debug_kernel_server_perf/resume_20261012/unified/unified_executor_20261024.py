@@ -22,33 +22,54 @@ class UnifiedExecutor:
         self.fa3_ctas = self.num_sm
         self.fa3_min_packed = fa3_min_packed
         self.int_ws = torch.empty(int_bytes, dtype=torch.uint8, device=device)
-        self.pinned = torch.empty(int_bytes, dtype=torch.uint8, pin_memory=True)
+        # Two pinned staging buffers, alternated per plan: the host writes plan N+1 while plan N's copy may still be
+        # queued. Each buffer's event marks its copy done; the host waits on it only before reusing that buffer.
+        self.pinned = [torch.empty(int_bytes // 2, dtype=torch.uint8, pin_memory=True) for _ in range(2)]
+        self.pinned_done = [None, None]
+        self.pinned_next = 0
         self.float_ws = torch.empty(1 << 20, dtype=torch.float32, device=device)
         self.pdl = pdl and os.environ.get("UNIFIED_PDL", "1") != "0"  # UNIFIED_PDL=0: serial launches (diagnostic)
 
-    def plan(self, query_lengths, kv_lengths, page_table):
+    def plan(self, query_lengths, kv_lengths, page_table, q_indptr_dev=None, kv_lens_dev=None):
+        """q_indptr_dev / kv_lens_dev: the step's cumulative query lengths and KV lengths already on the device (int32,
+        e.g. the FA3 backend's cu_seqlens_q / cache_seqlens_int32). With them the plan issues no blocking host-to-device
+        copy, so building it does not wait for the previous step's kernels."""
         q = torch.tensor([0, *query_lengths], dtype=torch.int32).cumsum(0, dtype=torch.int32)
         kv = torch.tensor(kv_lengths, dtype=torch.int32)
         kvp = torch.cat([torch.zeros(1, dtype=torch.int32), kv.cumsum(0, dtype=torch.int32)])
         g = self.heads // self.kv_heads
         only16 = all(n * g <= 16 for n in query_lengths if n * g < self.fa3_min_packed)
+        b = self.pinned_next
+        self.pinned_next ^= 1
+        if self.pinned_done[b] is not None:
+            self.pinned_done[b].synchronize()
         plan, stats = torch.ops.unified_dispatch.build_unified_plan(
-            self.int_ws, self.pinned, self.float_ws, q, kvp, kv, self.heads, self.kv_heads, 1,
+            self.int_ws, self.pinned[b], self.float_ws, q, kvp, kv, self.heads, self.kv_heads, 1,
             self.num_sm, self.fa2_ctas16 if only16 else self.fa2_ctas, self.fa3_ctas, self.fa3_min_packed)
-        return UnifiedPlan(self, plan, stats, q, kvp, kv, page_table)
+        done = torch.cuda.Event()
+        done.record()
+        self.pinned_done[b] = done
+        return UnifiedPlan(self, plan, stats, q, kvp, kv, page_table, q_indptr_dev, kv_lens_dev)
 
 
 class UnifiedPlan:
     STATS = ("max_splits_fa3", "fa3_requests", "items48", "items32", "items16", "items_fa3",
              "merge_rows", "merge_groups", "fa3_merge_reqs", "fa2_chunk", "fa3_chunk", "int_bytes", "float_bytes")
 
-    def __init__(self, ex, plan, stats, q, kvp, kv, page_table):
+    def __init__(self, ex, plan, stats, q, kvp, kv, page_table, q_indptr_dev=None, kv_lens_dev=None):
         self.ex, self.plan_vec = ex, list(plan)
         self.stats = dict(zip(self.STATS, stats))
         dev = ex.device
-        self.q_indptr = q.to(dev)
-        self.kv_indptr = kvp.to(dev)
-        self.kv_lens = kv.to(dev)
+        on_device = q_indptr_dev is not None and kv_lens_dev is not None
+        if on_device:
+            self.q_indptr = q_indptr_dev
+            self.kv_lens = kv_lens_dev
+            self.kv_indptr = torch.cat([torch.zeros(1, dtype=torch.int32, device=dev),
+                                        kv_lens_dev.cumsum(0, dtype=torch.int32)])
+        else:
+            self.q_indptr = q.to(dev)
+            self.kv_indptr = kvp.to(dev)
+            self.kv_lens = kv.to(dev)
         rows = [page_table[i, :int(kv[i])] for i in range(len(kv))]
         self.kv_indices = torch.cat(rows).to(torch.int32).contiguous()
         self.total_q = int(q[-1])
@@ -86,8 +107,8 @@ class UnifiedPlan:
             self.plse = torch.empty((1, h, 1), dtype=torch.float32, device=dev)
             if rows:
                 kvl = kv[:rows]
-                self.pre_indptr = q[:rows + 1].to(dev)
-                self.pre_lengths = kv[:rows].to(dev)
+                self.pre_indptr = self.q_indptr[:rows + 1]
+                self.pre_lengths = self.kv_lens[:rows]
                 self.pre_pages = page_table[:rows, :int(kvl.max())].contiguous()
                 self.pre_max_q = int(max(ql[:rows]))
                 self.po = torch.empty((splits, h, self.fa3_tokens, 128), dtype=torch.float32, device=dev)

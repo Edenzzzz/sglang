@@ -386,6 +386,10 @@ reaches 13.1% and 80 tok/s, and conditional disaggregation 96.0% and 821 tok/s. 
   tenant; every serving result shows per-request spread and per-repeat values
 - Protocol: same frozen tree for both arms, opposite-order pairs, two repeats, metrics recomputed from raw token
   arrivals, CUDA graphs and overlap on; quality gate (GSM8K + passkey at 32-60K) vs a baseline-vs-baseline noise floor
+- software: every arm, ours and every baseline, runs upstream sglang main at `3fef129ff` (2026-10-08); the stock
+  baselines run that tree unmodified, ours adds the overlay (EDF, 4-mode step, kernel hooks, router). Conditional
+  disaggregation is Dynamo's policy (remote prefill above 2048 uncached tokens and 0.7 of the prompt, KV through the
+  pool) implemented in our router on the same workers as ours, since Dynamo does not support SGLang
 - Contribution: common setting for C1-C3
 - Experiments: 3 models x 3 stages (kernel, single node, 16 / 32 GPUs) + fault tolerance
 - Graphs / metrics: as listed above

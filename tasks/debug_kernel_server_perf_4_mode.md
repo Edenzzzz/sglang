@@ -611,7 +611,18 @@ Tasks, in priority order:
       | two-mode, ours | 17.5 / 17.5 | 349 / 347 | 64 / 73 ms | 45.1 / 43.9 s | 8.8 / 10.1 s | 130-135 ms |
       - Four-mode: chat TTFT -85%, agent TPOT -45..-54%, throughput +2-3%. Costs: agent TTFT +23-28%, chat TPOT +20%.
       - SLO attainment is near zero in both arms at this load.
-    - [ ] agent C=2 + chat 0.5/s (`low_a6`, running): a load near capacity.
+    - [x] agent C=2 + chat 0.5/s (`low_a6`, 2026-10-26, two repeats, 12 agent requests per arm, same driver): ours vs
+          stock, change in the mean:
+          | mode | agent tok/s | agent TTFT | agent TPOT | agent worst-10-token TPOT | chat TTFT | chat TPOT | chat ITL |
+          |---|---|---|---|---|---|---|---|
+          | four | -4.7% | +24% | -36% | -51% | -89% | +38% | +45% |
+          | two | +3.3% | +1.6% | -11% | -37% | -90% | +41% | +27% |
+          - Near capacity the deadline order still moves chat prefills ahead (chat TTFT -89%) and steadies agent
+            decode, but chat decode gets ~40% slower.
+          - [ ] **Chat TPOT regression (open):** find which steps chat decode rows share. Suspected: they ride in
+                mixed steps with agent prefill chunks that stock would have run in separate decode steps. Check the
+                step log's mode mix per chat request before the paper claims ITL for Llama.
+          - Agent sample is small (12 requests per arm); per-request distributions and error bars are pending.
 - [ ] **Stage 3 with the full stack** (kernel + 4-mode MTP) vs stock PD with the P:D ratio swept, at higher load and
       with mixture spikes (`pd_colocation_vs_disagg.md`).
       - [x] 2026-10-25 A6 on the multi-node workers: `KERNEL=a6` in `mn_node.sh` (FA3 backend, the libraries under

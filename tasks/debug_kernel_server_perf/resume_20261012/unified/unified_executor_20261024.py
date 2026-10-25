@@ -15,7 +15,10 @@ class UnifiedExecutor:
         self.heads, self.kv_heads, self.device = heads, kv_heads, device
         self.num_sm = torch.cuda.get_device_properties(device).multi_processor_count
         # Persistent FA2 grid: UNIFIED_FA2_CTAS_PER_SM resident CTAs per SM (the plan's LPT slots).
+        # UNIFIED_FA2_CTAS_PER_SM16: the grid for plans whose FA2 rows all fit the 16-row tile (the kernel launches its
+        # UNIFIED_FA2_MIN_BLOCKS16 instantiation for those).
         self.fa2_ctas = int(os.environ.get("UNIFIED_FA2_CTAS_PER_SM", fa2_ctas_per_sm)) * self.num_sm
+        self.fa2_ctas16 = int(os.environ.get("UNIFIED_FA2_CTAS_PER_SM16", self.fa2_ctas // self.num_sm)) * self.num_sm
         self.fa3_ctas = self.num_sm
         self.fa3_min_packed = fa3_min_packed
         self.int_ws = torch.empty(int_bytes, dtype=torch.uint8, device=device)
@@ -27,9 +30,11 @@ class UnifiedExecutor:
         q = torch.tensor([0, *query_lengths], dtype=torch.int32).cumsum(0, dtype=torch.int32)
         kv = torch.tensor(kv_lengths, dtype=torch.int32)
         kvp = torch.cat([torch.zeros(1, dtype=torch.int32), kv.cumsum(0, dtype=torch.int32)])
+        g = self.heads // self.kv_heads
+        only16 = all(n * g <= 16 for n in query_lengths if n * g < self.fa3_min_packed)
         plan, stats = torch.ops.unified_dispatch.build_unified_plan(
             self.int_ws, self.pinned, self.float_ws, q, kvp, kv, self.heads, self.kv_heads, 1,
-            self.num_sm, self.fa2_ctas, self.fa3_ctas, self.fa3_min_packed)
+            self.num_sm, self.fa2_ctas16 if only16 else self.fa2_ctas, self.fa3_ctas, self.fa3_min_packed)
         return UnifiedPlan(self, plan, stats, q, kvp, kv, page_table)
 
 

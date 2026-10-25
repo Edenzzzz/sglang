@@ -48,6 +48,7 @@ load(
         "-DFLASHINFER_FA2_MMA_KV=" + os.environ.get("UNIFIED_FA2_MMA_KV", "2"),
         "-DUNIFIED_FA2_CLASSES=" + os.environ.get("UNIFIED_FA2_CLASSES", "3"),
         "-DUNIFIED_FA2_MIN_BLOCKS=" + os.environ.get("UNIFIED_FA2_MIN_BLOCKS", "1"),
+        "-DUNIFIED_FA2_MIN_BLOCKS16=" + os.environ.get("UNIFIED_FA2_MIN_BLOCKS16", os.environ.get("UNIFIED_FA2_MIN_BLOCKS", "1")),
         "-DUNIFIED_WQ32=" + os.environ.get("UNIFIED_WQ32", "0"),
         "-DUNIFIED_SKIP_MERGE=" + os.environ.get("UNIFIED_SKIP_MERGE", "0"),
         "-DUNIFIED_FA2_DYNAMIC=" + os.environ.get("UNIFIED_FA2_DYNAMIC", "1"),

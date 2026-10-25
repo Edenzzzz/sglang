@@ -238,8 +238,15 @@ Tasks, in priority order:
                 caps residency (3 x 68 KB fits in 228 KB).
               - Per-plan dynamic smem (16-row-only plans launch with the 16-row class's size; the kernel traps on
                 an undersized launch) is built but changes nothing while registers bind.
-              - [ ] `UNIFIED_FA2_MIN_BLOCKS=3` (at most ~170 registers per thread, 3 CTAs per SM), MMA_KV32 2 and 4
-                    (`unified/unified_h20_persistent_minblocks_20261025.sh`, running).
+              - [x] `UNIFIED_FA2_MIN_BLOCKS=3` (3 CTAs per SM confirmed by the occupancy query;
+                    `unified/unified_h20_persistent_minblocks_20261025.sh`): MMA_KV32 2 gives 5.36 / 7.89 ms, MMA_KV32 4
+                    gives 5.57 / 7.81 ms (spills 76 / 192 B). Two-mode improves to **1.019x** v3's FA2 launch; four-mode
+                    loses 13-18% (its 32-row items need the registers). FP32 + 20 graph replays pass on all 92. Stage 1
+                    vs v3: 1.000 / 1.007 / 0.999 / 1.006x.
+              - [ ] Plan-chosen instantiation (flashinfer `376c715`): 16-row-only plans run a 3-CTA/SM build, plans
+                    with 32-row items the 2-CTA build at MMA_KV32 4 (`unified/unified_h20_persistent_dual_20261025.sh`,
+                    running). Expected: 5.36 / 6.65 ms, if the 16-row path keeps its registers with the deeper 32-row
+                    class compiled in.
       - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
             current captures mix q=1 and q=4 rows, so this is untested.
 

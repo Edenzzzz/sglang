@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.61.0 — Paper draft as prose; DSMEM cluster reduction measured; workload/SLO matrix (2026-10-25)
+- Paper draft (`tasks/paper_outline.md`) rewritten from bullets into conference prose. Every evaluation stage gives its
+  claim, bar, setup, results and figure captions; internal shorthand moved to an artifact-notes list. Headline numbers
+  reconciled with the task doc: 1.027-1.047x vs v3 and 1.43-1.51x vs sglang FA3; JIT ready-queue 0.997-1.005x vs its
+  own ticketed loop.
+- DSMEM-cluster JIT reduction: exact at C = 2 / 4 / 8 / 16 on 96 H200 captures, but 0.60-0.70x / 0.93x / 0.97x of the
+  ticketed in-launch merge. The plan's chunk cap (KV chunk >= kv_max / C) leaves the longest request too few splits.
+  The merge-free bound caps any reduction scheme at 0.9% on these captures.
+- FA2 L2 order (`UNIFIED_FA2_ORDER=kvpos`, flashinfer `f2703e4`): KV-position-major, for shared-prefix rows; measured
+  on captures plus synthetic sets (running).
+- Synthetic MELD-shaped steps (`unified/gen_synth_meld_20261025.py`): ShareGPT / math / long-tail / shared-prefix
+  decode and verify rows at batch 16-1024; every executor arm plus native v3. The native harness's float workspace
+  can now grow to 4 GB.
+- Per-capture plan shape and FA2 balance tool (`unified/plan_balance_20261025.py`).
+- Serving workload/SLO matrix in S, taken from JITServe / SLOs-Serve: chat 2 s + 50/100 ms; agent 10 s, 20 s above 200K
+  tokens; TraceLab replay, mixed stream with agent share > 50%, standalone sets.
+- CLAUDE.md: the draft is written for human readers; deadline 2026-10-30.
+
 ## v1.60.0 — 64-row FA2 class for GLM; A5.5 closed; stage-3 A6 worker mode (2026-10-25)
 
 - A6 NP executor: a 64-row class (v3's BatchPrefill 64-row tile) in its own instantiation for plans with 64-row

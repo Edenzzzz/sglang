@@ -466,13 +466,21 @@ Tasks, in priority order:
         - [ ] **DSMEM-cluster JIT reduction** (`UNIFIED_MERGE_MODE=dsmem`, `UnifiedFA2NPClusterKernel`, flashinfer
               `f62b92a`, `unified/a6_h200_dsmem_jit_20261025.sh`, H200, 96 captures). It is exact: FP32 + 20 graph
               replays pass on all captures at C=2 and C=4. It is slow:
-              | C=2, stage 1 | 32-64K two | 32-64K four | 128-256K two | 128-256K four |
+              FP32 + 20 graph replays pass on all 96 captures at every C.
+              | stage 1, vs ticketed merge items | 32-64K two | 32-64K four | 128-256K two | 128-256K four |
               |---|---|---|---|---|
-              | vs ticketed merge items | 0.597x | 0.667x | 0.622x | 0.703x |
-              | vs native v3 | 0.618x | 0.695x | 0.637x | 0.722x |
+              | C=2 | 0.597x | 0.667x | 0.622x | 0.703x |
+              | C=8 | 0.925x | 0.927x | 0.913x | 0.940x |
+              | C=16 (non-portable) | 0.967x | 0.984x | 0.967x | 0.978x |
+              vs native v3: C=2 0.62-0.72x, C=4 0.81-0.87x, C=8 0.93-0.97x, C=16 0.989-1.025x.
               - Cause (from the plan): to fit a split group in one cluster, the plan raises the FA2 chunk to
-                >= kv_max / C. At C=2 the longest request runs as two chunks and bounds the step. The cluster barrier
-                also holds every CTA of a task until its slowest entry is done. C = 4 / 8 / 16 are running.
+                >= kv_max / C. At C=2 the longest request runs as two chunks and bounds the step. The loss shrinks
+                monotonically as C relaxes the cap, but it never passes the ticketed merge. The cluster barrier also
+                holds every CTA of a task until its slowest entry is done.
+              - Ceiling: with every merge, fence and atomic removed, the step is at most 0.9% faster on these
+                captures (merge-free bound), so no reduction scheme can win more than that here. Synthetic
+                MELD-shaped batches (`unified/a6_h200_synth_meld_20261025.sh`, running) test where the reduction
+                costs more.
               - [ ] Make the split count independent of C. Either a group spans several clusters, with a DSMEM merge
                     inside each cluster and one global merge across them, or the plan packs a request's chunks so
                     tasks finish together. Then re-measure against the ticketed merge.
@@ -1083,6 +1091,41 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
     of rows (ties), so an fp32-accumulator epilogue would be more exact, not faster.
     (`b1_lmhead_epilogue_ceiling_20261015.py`, log `b1_lmhead_ceiling_20261015.log`)
 ### [ ] S. Server / workload evaluation
+
+- [ ] **Paper workload and SLO matrix (2026-10-25, user: SLOs from the papers' common settings; TTFT deadline x2 for
+      prefills > 200K; agent share > 50% in the mix; 16 GPUs = 4 pods x TP4 first, then 32; Qwen2.5-7B and
+      Llama-3.3-70B first, then GLM).**
+  - SLOs per class (sources: JITServe, SLOs-Serve section 6; Crossflow states no evaluation SLO):
+    | class | TTFT | TPOT (mean per request) | source |
+    |---|---|---|---|
+    | chat / ShareGPT / math / code | 2 s; also 3x / 5x the unloaded TTFT | 50 ms tight / 100 ms loose | JITServe; SLOs-Serve |
+    | web agent (WebShop) | 20 s end to end x stages | -- | JITServe compound |
+    | TraceLab agent round | 10 s if <= 200K uncached tokens, 20 s above | 80 ms tight / 100 ms loose | JITServe deadline-sensitive; user rule for > 200K |
+    | every class | SLO scale swept 0.8-1.5x | | JITServe |
+  - Decisions on the conflicts in our scoring:
+    - Chat 0.5 s / 20 ms had no source and is unreachable for Llama-70B (chat TPOT 97-135 ms in both arms). It is
+      replaced by the table above.
+    - Llama-3.3-70B uses the relative form (3x / 5x unloaded TTFT and TPOT), which needs the unloaded reference runs.
+    - TPOT is the per-request mean (DistServe / SLOs-Serve); p99 ITL is reported beside it, never mixed into
+      attainment.
+    - Scheduler deadlines (EDF / router) are kept separate from evaluation SLOs, and both are stated.
+    - The > 200K tier is applied in one scorer for every figure.
+  - [ ] (a) TraceLab replay as Crossflow does: one-hour windows of `syfi_coding_trace` (deduplicated), session starts at
+        the trace's own timestamps / alpha, alpha swept around capacity. Report measured in-flight programs, LLM
+        calls/s, uncached-input and output tok/s per point. Missing:
+        - the timestamp-scaled replay (`session_replay.py` draws Poisson starts);
+        - natural-text prompts (random vocabulary gives MTP near-zero acceptance).
+  - [ ] (b) Mixed: TraceLab agents (program concurrency C) + chat + math, agent 60% / chat 30% / math 10% of LLM
+        calls/s. Sweep 4-5 C points from under capacity to overloaded around 90% attainment, plus the program and chat
+        spikes. Missing: a third stream in `mn_bench.sh` (only one `SECOND`); the stage-3 agent tenant is synthetic
+        fan-out today.
+  - [ ] (c) Standalone: ShareGPT, GSM8K / MATH-500, HumanEval / Code-Feedback, WebShop (`prep_standalone.py`,
+        `prep_webshop_agentic.py`); Poisson rate around capacity; WebShop at C = 8 / 16 / 32 / 64. This is the
+        no-regression case (one H200 so far: ShareGPT at saturation +3% throughput, -15% TTFT).
+  - [ ] Figures: per-tenant SLO attainment vs load; goodput at 90% attainment; tightest SLO scale met; throughput vs
+        tok/s/user Pareto with p10-p90; TTFT and ITL (mean, p99) side by side; recovery time after a load step; share
+        of requests with > 200 / 500 ms stalls; results by uncached-prompt bucket.
+  - [ ] Unloaded reference runs per model (for the relative SLOs).
 
 - [ ] **S0b, EVERY single-node comparison must be redone on sglang's FA3 backend (2026-10-22).** The backend-class
   control (`tasks/realistic_workload_analysis.md`, "THE COST IS THE FLASHINFER BACKEND CLASS") measured the same stock

@@ -131,7 +131,7 @@ def launches_for(case, geometry_policy=False, policy_v3=False):
     if geometry_policy:
         adaptive = NativePdlExecutor(
             geometry["heads"], geometry["kv_heads"], case.query.device,
-            adaptive_splits=True, workspace_bytes=512 << 20,
+            adaptive_splits=True, workspace_bytes=512 << 20, max_workspace_bytes=4 << 30,
         )
         adaptive_plan = adaptive.plan(
             geometry["query_lengths"], geometry["prefix_lengths"], case.page_table,
@@ -149,7 +149,7 @@ def launches_for(case, geometry_policy=False, policy_v3=False):
         v3 = NativePdlExecutor(
             geometry["heads"], geometry["kv_heads"], case.query.device, adaptive_splits=True,
             policy_version="geometry_v3", fp32_partials=True, direct_bf16_output=True, packed_query_limit=64,
-            workspace_bytes=512 << 20,
+            workspace_bytes=512 << 20, max_workspace_bytes=4 << 30,
         )
         v3_plan = v3.plan(
             geometry["query_lengths"], geometry["prefix_lengths"], case.page_table,

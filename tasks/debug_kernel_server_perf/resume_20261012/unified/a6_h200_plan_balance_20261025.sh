@@ -1,11 +1,12 @@
 #!/bin/bash
 # Plan shape + FA2 balance of the 96 H200 captures (plan_balance_20261025.py): default plan on the NP timeline build
 # (splits, items, span vs balance bounds), then the dsmem plan's chunk inflation at C = 2 / 4 / 8 / 16 (stats only).
-# Waits for the DSMEM run to free the GPU. Claude, 2026-10-25.
+# Waits for the synthetic MELD-shaped sweep to free the GPU. Claude, 2026-10-25.
 set -u
 cd /dev/shm/w/ub
-until grep -q DSMEM_JIT_DONE a6_dsmem.log 2>/dev/null; do sleep 60; done
+until grep -q SYNTH_MELD_DONE a6_synth_meld.log 2>/dev/null; do sleep 60; done
 export CUDA_VISIBLE_DEVICES=0 PYTHONPATH=/dev/shm/w/ub:/dev/shm/w/up/python:/dev/shm/w/fi
+export NATIVE_PDL_FA2_LIBRARY=/opt/tiger/w/torch_ext_native_h200_20261023/native_fa2_q32/native_fa2_q32.so NATIVE_PDL_FA3_LIBRARY=/opt/tiger/w/torch_ext_stock_h200_20261023/stock_fa3_pdl/stock_fa3_pdl.so
 export UNIFIED_MERGE_ROWS=4 UNIFIED_FA3_STOCK=1 UNIFIED_FA3_MIN=33 UNIFIED_SPLIT_POLICY=geometry_fa3
 B=/opt/tiger/w/trace_sampled_h200_20261025
 SETS="mix32_two mix32_four mix128_two mix128_four"

@@ -511,7 +511,7 @@ class Router:
         Workers [0, N) are prefill workers, the rest decode workers; all run the same colocated sglang as ours. The
         decode worker is picked cache-aware (longest prefix hit, then least loaded). If the prompt's effective
         uncached length there -- after its own hit or what it can pull from the cluster pool -- exceeds
-        --cond-disagg-threshold, the prefill runs remotely: the prompt is computed on a prefill worker
+        --cond-disagg-threshold (and --cond-disagg-min-frac of the prompt), the prefill runs remotely: the prompt is computed on a prefill worker
         (max_new_tokens=1; the workers write every computed block through to the pool), then the request goes to
         the decode worker, which pulls the prefix from the pool and decodes. Otherwise the decode worker prefills
         locally, so an agent's short append moves no KV. Transfer is through the pool instead of a direct RDMA push,
@@ -527,7 +527,10 @@ class Router:
         effective = max(0, n_tok - max(hits[d], pool_hit) * blk)
         info = {"hit": hits[d] * blk, "pool_hit": pool_hit * blk, "remote_prefill": False,
                 "effective_uncached": effective}
-        if effective <= self.a.cond_disagg_threshold or not pre:
+        # Dynamo's defaults: remote only when the effective uncached length exceeds the threshold AND that fraction of
+        # the prompt (--cond-disagg-min-frac 0.7 with --cond-disagg-threshold 2048).
+        if (effective <= self.a.cond_disagg_threshold or effective <= self.a.cond_disagg_min_frac * n_tok
+                or not pre):
             return d, info
         p = min(pre, key=lambda j: (-(hits[j] // rt), len(self.workers[j].inflight), random.random()))
         pw = self.workers[p]
@@ -802,7 +805,10 @@ def main():
     ap.add_argument("--cond-disagg-prefill-workers", type=int, default=0,
                     help="cond_disagg: workers [0, N) are prefill workers, the rest decode workers")
     ap.add_argument("--cond-disagg-threshold", type=int, default=4096,
-                    help="cond_disagg: uncached tokens above which the prefill runs remotely (Dynamo's default 4096)")
+                    help="cond_disagg: uncached tokens above which the prefill runs remotely")
+    ap.add_argument("--cond-disagg-min-frac", type=float, default=0.0,
+                    help="cond_disagg: the effective uncached length must also exceed this fraction of the prompt "
+                         "(Dynamo's default 0.7, with threshold 2048)")
     ap.add_argument("--rand-thresh", type=int, default=4, help="blocks within which hits tie")
     ap.add_argument("--edf", action="store_true")
     ap.add_argument("--ttft-slo-ms", type=float, default=5000)

@@ -186,7 +186,7 @@ def run_arm(arm):
         cond = ""
         if pol == "cond_disagg":
             n_pre = int(base.split("_p", 1)[1]) * len(PORTS[0])
-            cond = f" --cond-disagg-prefill-workers {n_pre} --cond-disagg-threshold {os.environ.get('COND_THRESHOLD', '4096')}"
+            cond = f" --cond-disagg-prefill-workers {n_pre} --cond-disagg-threshold {os.environ.get('COND_THRESHOLD', '4096')} --cond-disagg-min-frac {os.environ.get('COND_FRAC', '0')}"
         rcmd = (f"{W}/venv/bin/python {W}/tasks/pd_colocation/router.py --workers {ws} --port {RPORT} "
                 f"--policy {pol} --log {log}/router_decisions.jsonl {os.environ.get('ROUTER_ARGS', '')}{lep}{cond}")
     elif pol == "cache_aware":
@@ -259,7 +259,8 @@ def calibrate():
             f"MEM_FRAC={os.environ.get('MEM_FRAC', '0.85')} SM_FA3={os.environ.get('SM_FA3', '66')} "
             f"SPLIT_OVERLAP={os.environ.get('SPLIT_OVERLAP', '0')} SPLIT_ROWS_FA3={os.environ.get('SPLIT_ROWS_FA3', '0')} "
             f"VERIFY_FA3={os.environ.get('VERIFY_FA3', '0')} DECODE_FA3={os.environ.get('DECODE_FA3', '0')} "
-            f"SPLIT_MARGIN_AUTO={os.environ.get('SPLIT_MARGIN_AUTO', '0')} SPLIT_POLICY={os.environ.get('SPLIT_POLICY', '0')} SPLIT_NEVER={os.environ.get('SPLIT_NEVER', '0')} SPLIT_FASTPATH={os.environ.get('SPLIT_FASTPATH', '0')} DRAFT_FA3={os.environ.get('DRAFT_FA3', '0')} SKIP_BASE_PLAN={os.environ.get('SKIP_BASE_PLAN', '0')} CHAT_TEMPLATE={os.environ.get('CHAT_TEMPLATE', '0')}")
+            f"SPLIT_MARGIN_AUTO={os.environ.get('SPLIT_MARGIN_AUTO', '0')} SPLIT_POLICY={os.environ.get('SPLIT_POLICY', '0')} SPLIT_NEVER={os.environ.get('SPLIT_NEVER', '0')} SPLIT_FASTPATH={os.environ.get('SPLIT_FASTPATH', '0')} DRAFT_FA3={os.environ.get('DRAFT_FA3', '0')} SKIP_BASE_PLAN={os.environ.get('SKIP_BASE_PLAN', '0')} CHAT_TEMPLATE={os.environ.get('CHAT_TEMPLATE', '0')} "
+            f"ATTN_BACKEND={os.environ.get('ATTN_BACKEND', 'flashinfer')} EDF_UNCACHED={os.environ.get('EDF_UNCACHED', '0')}")
     C.run(0, f"rm -rf {log}; mkdir -p {log}; {cenv} bash {W}/tasks/pd_colocation/mn_node.sh coloc {log}")
     hs = hosts()
     t0 = time.time()

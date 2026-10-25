@@ -329,7 +329,7 @@ Tasks, in priority order:
             §4.3, §5). The producer TMA-copies its partial into the consumer's slot under a per-slot mbarrier, and the
             consumer reduces in shared memory. Plan-side grouping (`UNIFIED_MERGE_MODE=dsmem`) is built and host-checked;
             the kernel is not.
-      - [ ] **Plan time on serving shapes, overlapped with the previous step.**
+      - [x] **Plan time on serving shapes, overlapped with the previous step.**
         - [x] 2026-10-25 Found and fixed a serving stall (`unified/plan_overlap_20261025.py`,
               `a6_plan_overlap_h200_20261025.sh`, H200, 24 captures).
               - The A6 serving plan made five blocking host-to-device copies per mixed step. A PyTorch `.to(device)`
@@ -342,8 +342,16 @@ Tasks, in priority order:
               - It now takes 0.4-1.1 ms (median 0.71 ms) whatever is queued. Outputs are bit-identical on all 24, and
                 FP32 + 20 graph replays pass on all 96.
               - Stage 2's A6 numbers were measured with the stall.
-        - [ ] Serving A/B, old vs new plan path (`unified/a6_plan_serving_ab_h200_20261025.sh`, running): stage 2's
-              short set, four-mode, two repeats each, stock FA3 as the common reference.
+        - [x] Serving A/B, old vs new plan path (`unified/a6_plan_serving_ab_h200_20261025.sh`, H200, stage 2's short
+              set, four-mode, two repeats each, 449 / 453 A6 calls logged; stock FA3 reference 137-138 agent tok/s in
+              both roots):
+              | A6 arm | agent tok/s | agent TPOT | agent token-weighted ITL |
+              |---|---|---|---|
+              | old plan (blocking copies) | 124.8 / 123.6 | 14.05 / 13.46 ms | 12.0 / 11.9 ms |
+              | new plan (device metadata) | 124.6 / 125.0 | 13.97 / 14.01 ms | 11.1 / 12.4 ms |
+              - No measurable serving effect: in this server the next step's host work does not run far ahead of the
+                GPU on mixed steps, so the stall had little to wait for.
+              - The fix stays, since it removes a dependence on that, and stage 2's A6 numbers stand.
       - [x] Serving executor in the FA3 backend (`SGLANG_A6_UNIFIED=1`) and stage 2 pairs (above).
 
       **Bugs found on the way (all fixed)**

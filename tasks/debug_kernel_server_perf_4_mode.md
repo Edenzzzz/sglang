@@ -105,7 +105,22 @@ Tasks, in priority order:
       - [x] (Optional) JIT reduction (MELD), 2026-10-25.
             - Built as event-driven merge release on the persistent loop (ready queue). Measured 0.982-1.005x vs merges
               queued after compute: the polling slows the remaining compute (section 3).
-            - The DSMEM-handoff form is not built, for two measured reasons:
+            - [x] Where the unified merge sits in the full step (H200, 96 captures, FA2 timeline + the stock FA3 grid's
+                  start / end; `unified/timeline_step_20261025.py`). Merge time after both FA3 and FA2 compute are done,
+                  i.e. what any faster merge could remove:
+                  | set | step (sum) | exposed merge | share |
+                  |---|---|---|---|
+                  | 32-64K two | 11.19 ms | 0.068 ms | 0.6% |
+                  | 32-64K four | 14.42 ms | 0.146 ms | 1.0% |
+                  | 128-256K two | 31.54 ms | 0.113 ms | 0.4% |
+                  | 128-256K four | 43.79 ms | 0.093 ms | 0.2% |
+                  - FA3-dominated steps (most of the time): every merge item finishes before FA3 ends, so 0 us is
+                    exposed.
+                  - FA2-dominated steps (verify / decode rows beside a tiny prefill, FA3 8-58 us): the merge is the
+                    step's tail, 2.5-8.2 us of 63-265 us (3-5% of those steps).
+                  - FA3 split no row in any capture under `geometry_fa3`, so the unified merge never had FA3 rows to
+                    reduce here.
+            - The DSMEM-handoff form is not built, for two measured reasons (the ceiling above is 0.2-1.0% of the step):
               - it can remove at most the merge tail, ~5 us per step (timeline);
               - putting a split group in one cluster caps its splits at the cluster size, and pairing CTAs in lockstep
                 alone cost 6% on FA3 (A5.5).
@@ -2284,7 +2299,7 @@ cluster-wide request volume, scheduling flexibility under load spikes / mixed wo
     [Analysis and comparison](debug_kernel_server_perf/resume_20261012/crossflow_analysis_20261014.md).
   - *Learn:* its ITL regression under decode-local prefill is exactly the cost our fused step removes -- report
     ITL alongside TTFT on the same replay; its timestamp-compression protocol is the request-rate load axis for
-    chat-like tenants (agent tenants use program concurrency, below). It also confirms our claim that P/D demands can vary largely during online serving
+    chat-like tenants (agent tenants use program concurrency, below). **It also confirms our claim that P/D demands can vary largely during online serving**
 - **ThunderAgent: A Simple, Fast and Program-Aware Agentic Inference System** -- H. Kang et al.,
   [arXiv:2602.13692](https://arxiv.org/abs/2602.13692) *(sent)*
   - *Summary:* program-aware scheduling for agentic workflows; shows KV-cache thrashing (a session's cache evicted

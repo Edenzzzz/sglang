@@ -21,7 +21,10 @@ constexpr int kRows = 128;        // kBlockN
 constexpr int kD = 128;           // head dim
 constexpr int kRowBytes = kD * 2;  // 256 B
 constexpr int kTileBytes = kRows * kRowBytes;  // 32 KB
-constexpr int kStages = 2;
+#ifndef KVX_STAGES
+#define KVX_STAGES 2
+#endif
+constexpr int kStages = KVX_STAGES;  // pipeline depth (2 or 4; 4 x 32 KB fits one CTA per SM)
 constexpr int kProducer = 128;    // producer threads (flash-attention's paged path uses 128)
 constexpr int kConsumer = 256;    // two consumer warpgroups
 constexpr int kThreads = kProducer + kConsumer;
@@ -66,6 +69,16 @@ __device__ __forceinline__ void st_async16(void* dst, uint4 v, uint64_t* bar, ui
                "r"(v.x), "r"(v.y), "r"(v.z), "r"(v.w), "r"(rbar) : "memory");
 }
 
+// Bulk copy of `bytes` from this CTA's shared memory to the same offset in CTA `rank`, counted on the remote mbarrier.
+__device__ __forceinline__ void bulk_push(void* src, uint32_t bytes, uint64_t* bar, uint32_t rank) {
+  uint32_t rdst, rbar;
+  asm volatile("mapa.shared::cluster.u32 %0, %1, %2;" : "=r"(rdst) : "r"(smem_u32(src)), "r"(rank));
+  asm volatile("mapa.shared::cluster.u32 %0, %1, %2;" : "=r"(rbar) : "r"(smem_u32(bar)), "r"(rank));
+  asm volatile("cp.async.bulk.shared::cluster.shared::cta.mbarrier::complete_tx::bytes [%0], [%1], %2, [%3];" ::"r"(rdst),
+               "r"(smem_u32(src)), "r"(bytes), "r"(rbar) : "memory");
+}
+__device__ __forceinline__ void producer_bar() { asm volatile("bar.sync 1, %0;" ::"n"(kProducer) : "memory"); }
+
 struct alignas(128) Smem {
   __nv_bfloat16 tile[kStages][kRows * kD];
   uint64_t full[kStages];
@@ -100,8 +113,19 @@ __global__ void __launch_bounds__(kThreads, 1) kv_exchange_kernel(const __nv_bfl
   }
   cluster.sync();
   if (tid < kProducer) {
-    // Producer: 8 threads per row, 16 B each (flash-attention's layout for the paged gather).
-    const int sub = tid % 8, r0 = tid / 8;  // 16 rows per pass
+    // Producer. MODE 0: the CTA gathers all 128 rows. MODE 1: it gathers rows [rank * 64, rank * 64 + 64), a contiguous
+    // 16 KB half, and one thread bulk-copies that half into the peer's stage; the copy of stage n - 1 is issued after
+    // the gathers of stage n, so the push overlaps the next gather.
+    constexpr int kChunks = kRowBytes / 16;  // 16 chunks of 16 B per row
+    const int row_lo = MODE == 1 ? int(rank) * (kRows / 2) : 0;
+    const int nrows = MODE == 1 ? kRows / 2 : kRows;
+    auto push = [&](int m) {  // stage of tile m: all its local gathers landed (wait_group + barrier below)
+      const int s = m % kStages;
+      if (tid == 0) {
+        asm volatile("fence.proxy.async.shared::cta;" ::: "memory");  // generic-proxy writes -> async-proxy read
+        bulk_push(sm.tile[s] + row_lo * kD, kTileBytes / 2, &sm.full[s], peer);
+      }
+    };
     for (int n = 0; n < n_blocks; ++n) {
       const int s = n % kStages;
       const uint32_t ph = (n / kStages) & 1u;
@@ -111,24 +135,22 @@ __global__ void __launch_bounds__(kThreads, 1) kv_exchange_kernel(const __nv_bfl
       }
       if (MODE == 1 && tid == 0) mbar_expect_tx(&sm.full[s], kTileBytes / 2);
       __nv_bfloat16* stage = sm.tile[s];
-      // MODE 1: this CTA gathers rows with (row % 2 == rank); MODE 0: every row.
-      for (int r = r0; r < kRows; r += kProducer / 8) {
-        if (MODE == 1 && (r & 1) != int(rank)) continue;
-        const int32_t page = pt[n * kRows + r];
-        const __nv_bfloat16* src = k + int64_t(page) * kD + sub * 8;
-        cp_async16(stage + r * kD + sub * 8, src);
+      for (int i = tid; i < nrows * kChunks; i += kProducer) {
+        const int r = row_lo + i / kChunks, c = i % kChunks;
+        cp_async16(stage + r * kD + c * 8, k + int64_t(pt[n * kRows + r]) * kD + c * 8);
       }
+      asm volatile("cp.async.commit_group;" ::: "memory");
       cp_async_arrive_noinc(&sm.full[s]);
-      if (MODE == 1) {
-        // Push the local half to the peer once it has landed in this CTA's shared memory.
-        asm volatile("cp.async.wait_all;" ::: "memory");
-        asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
-        for (int r = r0; r < kRows; r += kProducer / 8) {
-          if ((r & 1) != int(rank)) continue;
-          const uint4 v = *reinterpret_cast<const uint4*>(stage + r * kD + sub * 8);
-          st_async16(stage + r * kD + sub * 8, v, &sm.full[s], peer);
-        }
+      if (MODE == 1 && n > 0) {
+        asm volatile("cp.async.wait_group 1;" ::: "memory");  // tile n - 1's gathers by this thread have landed
+        producer_bar();                                        // ... and every producer thread's
+        push(n - 1);
       }
+    }
+    if (MODE == 1 && n_blocks > 0) {
+      asm volatile("cp.async.wait_group 0;" ::: "memory");
+      producer_bar();
+      push(n_blocks - 1);
     }
   } else {
     // Consumer: each warp reduces the whole tile (stands in for the QK / PV MMAs' smem reads).
@@ -212,17 +234,22 @@ __global__ void __launch_bounds__(kThreads, 1) kv_exchange_check(const __nv_bflo
   }
   cluster.sync();
   if (tid < kProducer) {
-    const int sub = tid % 8, r0 = tid / 8;
+    // The benchmark's MODE 1 path for one tile: gather the contiguous half, then bulk-push it to the peer.
+    constexpr int kChunks = kRowBytes / 16;
+    const int row_lo = int(rank) * (kRows / 2);
     if (tid == 0) mbar_expect_tx(&sm.full[0], kTileBytes / 2);
-    for (int r = r0; r < kRows; r += kProducer / 8)
-      if ((r & 1) == int(rank)) cp_async16(sm.tile[0] + r * kD + sub * 8, k + int64_t(pt[r]) * kD + sub * 8);
+    for (int i = tid; i < (kRows / 2) * kChunks; i += kProducer) {
+      const int r = row_lo + i / kChunks, c = i % kChunks;
+      cp_async16(sm.tile[0] + r * kD + c * 8, k + int64_t(pt[r]) * kD + c * 8);
+    }
+    asm volatile("cp.async.commit_group;" ::: "memory");
     cp_async_arrive_noinc(&sm.full[0]);
-    asm volatile("cp.async.wait_all;" ::: "memory");
-    asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
-    for (int r = r0; r < kRows; r += kProducer / 8)
-      if ((r & 1) == int(rank))
-        st_async16(sm.tile[0] + r * kD + sub * 8, *reinterpret_cast<const uint4*>(sm.tile[0] + r * kD + sub * 8),
-                   &sm.full[0], peer);
+    asm volatile("cp.async.wait_group 0;" ::: "memory");
+    producer_bar();
+    if (tid == 0) {
+      asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
+      bulk_push(sm.tile[0] + row_lo * kD, kTileBytes / 2, &sm.full[0], peer);
+    }
   }
   mbar_wait(&sm.full[0], 0);
   for (int i = tid; i < kRows * kD; i += kThreads) {

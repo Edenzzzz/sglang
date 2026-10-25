@@ -108,6 +108,34 @@ Tasks, in priority order:
             - FA3: zero KV loads would make the step only 0.1-1.3% faster.
             - [ ] Build FA3 multicast under the unified plan anyway (user, 2026-10-25): the plan can pair tiles on a
                   cluster, which upstream's scheduler could not. Measure it against the <= 0.7% bound.
+                  - Constraint: serving uses page size 1, so FA3's KV loads are per-row `cp.async` gathers through the
+                    page table, and Hopper TMA cannot gather. Upstream flash-attention disables cluster multicast for
+                    causal / varlen / paged / split calls, i.e. for every serving FA3 call. So multicast here is a 2-CTA
+                    cluster exchange: each CTA gathers half of each KV tile and pushes it to its peer over DSMEM.
+                  - [x] Step 1, tile-delivery microbenchmark (`unified/kv_exchange_bench_20261025.{cu,py}`, H200,
+                        66 pairs, 128-row bf16 tiles of head dim 128, page-1 gather):
+                        - the full tile gathered per CTA, as FA3 does;
+                        - vs each CTA gathering a contiguous 16 KB half and one thread bulk-copying it into the
+                          peer's stage (`cp.async.bulk.shared::cluster` with `complete_tx`), overlapped with the next
+                          gather, with stage reuse guarded by remote consumer releases.
+                        The exchanged tiles match the gathered rows exactly.
+                        | delivered GB/s (L2-hot / cold) | full gather | half + push, 2 stages | half + push, 4 stages |
+                        |---|---|---|---|
+                        | 64 tiles | 3886 / 2053 | 2479 / 1825 | **5069 / 3074** (1.30x / 1.50x) |
+                        | 256 tiles | 4043 / 2115 | 2519 / 1859 | **5412 / 3216** (1.34x / 1.52x) |
+                        - The full gather does not speed up with depth: it is bound by issuing per-row page lookups and
+                          `cp.async`s, which halving the rows per CTA halves. The DSMEM push is cheap once it overlaps
+                          (4 stages).
+                        - So the exchange can deliver FA3's KV tiles ~1.3x faster even when L2-hot. Its step-level
+                          value stays bounded by the zero-KV-load ceiling (0.1-1.3%).
+                        - Bugs on the way: a first version copied half of each 256 B row, so the pushes never met the
+                          barrier's expected bytes and hung. A 16 B-per-thread push without overlap ran 2.7-3.7x slower.
+                  - [ ] Step 2, integration into flash-attention:
+                        - a cluster-level tile pull giving a pair adjacent m-blocks of one row;
+                        - the extra causal n-blocks one CTA of a pair loads alone;
+                        - the half-gather + bulk-push producer on FA3's 4-stage K / V pipelines;
+                        - consumer releases arriving on both CTAs.
+                        Measured on stage 1 against the ceiling.
       - [x] Partials FP32 or BF16 if the FP32 gate passes: ours are BF16, worst error 0.0081.
       - [ ] Serving (stages 2-3) only after the kernel is resolved; v3 is the kernel until A6 beats it.
       - [ ] All three models swept and shown; the paper may keep only Llama-3.3-70B and Qwen2.5-7B.

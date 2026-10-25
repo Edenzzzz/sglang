@@ -535,11 +535,23 @@ Tasks, in priority order:
               split rows never occur under `geometry_fa3`? Is a four-mode step ever imbalanced? Answer from the same
               per-capture run, then build synthetic steps that are imbalanced (long-tailed KV) to show where the
               reduction matters.
-        - [ ] **L2-swizzled FA2 order in the persistent loop.** The old `HolisticPlanInfo<4>` design was "L2-swizzled
-              LPT", but A6's FA2 queue has only LPT / FIFO (swizzle exists for FA3 only, `UNIFIED_FA3_ORDER=swizzle`,
-              no change). Add a swizzled order: items that read the same KV pages (same request + KV head + chunk,
-              and shared-prefix pages across requests, e.g. agent fan-out) run adjacent in time. Measure it on the
-              captures and on shared-prefix synthetic steps.
+        - [ ] **L2 order for FA2** (the old `HolisticPlanInfo<4>` design was "L2-swizzled LPT"; flashinfer `34cfdf8`
+              recorded that its host-side section ordering never crossed the L2 budget, and the balance gain came from
+              the per-section KV limit).
+          - [x] **KV-position-major order** (`UNIFIED_FA2_ORDER=kvpos`, flashinfer `f2703e4`;
+                `unified/a6_h200_kvpos_20261025.sh`; H200, same build, vs LPT; FP32 gate passes everywhere):
+                | set | result |
+                |---|---|
+                | 96 captures | 1.000 / 1.003 / 0.998 / 1.000x |
+                | 48K shared prefix (exceeds L2), four-mode, bs 16 / 32 / 64 | 1.016 / 1.014 / **1.081x** |
+                | 48K shared prefix, two-mode (rows unsplit, order = LPT) | 1.00-1.03x |
+                | 4K shared prefix (fits L2) | 0.995-1.012x |
+                | long tail two-mode | 1.017-1.032x |
+                | ShareGPT split batches, bs 64-256 | **0.71-0.88x** (breaks longest-first: long chunks land in the tail) |
+                L2 grouping helps only where a shared prefix exceeds L2 and its rows are split, and it must not
+                break longest-first order.
+          - [ ] **lptpos** (flashinfer `e422c9d`: longest first, equal-cost chunks by KV position):
+                `unified/a6_h200_lptpos_20261026.sh` (queued behind chunk rounding).
         - [ ] **CTA count / launch overhead at large batch:** the NP grid launches one CTA per item (thousands at
               large batch). Synthetic sweep at bs 64-4096, decode-only and verify-only rows, short and long KV: NP
               grid vs the persistent loop on the same BatchPrefill tile code (`h200_npp`), isolating launch / prologue
@@ -1152,7 +1164,15 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       attainment.
     - Scheduler deadlines (EDF / router) are kept separate from evaluation SLOs, and both are stated.
     - The > 200K tier is applied in one scorer for every figure.
-  - [ ] (a) TraceLab replay as Crossflow does: one-hour windows of `syfi_coding_trace` (deduplicated), session starts at
+  - [ ] (a) TraceLab replay as Crossflow does. **Tooling built and tested offline (2026-10-26, 31/31 checks,
+        `drivers/serving/test_tracelab_window.py`; overlay `drivers/serving/bench_overlay_20261026/`):**
+        - `AGENT_MODE=tracelab_ts WINDOW_START=<s> ALPHA=<a> WINDOW_ROUNDS=segment` in `mn_bench.sh`;
+        - natural-text prompts from ShareGPT by default;
+        - math tenant via `MATH_RATE`.
+        Decisions: `segment` rounds, Crossflow's one-hour segment (session mode replays for days on this trace).
+        The trace is sparse (<= 0.17 calls/s per hour), so alpha ~20-100 is needed to reach capacity. Candidate
+        windows: 19537200 (24 sessions / 519 rounds), 14868000 (16 / 369, most uncached input), 19692000 (11 / 602).
+        Not yet run end to end on a pod. Spec: one-hour windows of `syfi_coding_trace` (deduplicated), session starts at
         the trace's own timestamps / alpha, alpha swept around capacity. Report measured in-flight programs, LLM
         calls/s, uncached-input and output tok/s per point. Missing:
         - the timestamp-scaled replay (`session_replay.py` draws Poisson starts);

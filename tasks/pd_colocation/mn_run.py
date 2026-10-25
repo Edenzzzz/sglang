@@ -196,8 +196,12 @@ def run_arm(arm):
         pre = [i for i, m in enumerate(layout) if m == "prefill"]
         dec = [i for i, m in enumerate(layout) if m == "decode"]
         p_args = " ".join(f"--prefill {u} {b}" for u, b, _ in urls(hs, pre))
-        d_args = " ".join(f"--decode {u}" for u, _, _ in urls(hs, dec))
-        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --pd-disaggregation {p_args} {d_args} --prefill-policy cache_aware --decode-policy power_of_two {lenient} --host 0.0.0.0 --port {RPORT} --prometheus-port {RPORT + 1}"
+        d_urls = urls(hs, dec)
+        d_args = " ".join(f"--decode {u}" for u, _, _ in d_urls)
+        # power_of_two needs >= 2 decode workers (sglang_router rejects it otherwise); with one decode worker -- e.g.
+        # TP4 Llama-70B at P = 3 of 4 pods -- every policy sends every request to it, so round_robin is equivalent.
+        dpol = "power_of_two" if len(d_urls) >= 2 else "round_robin"
+        rcmd = f"{W}/venv/bin/python -m sglang_router.launch_router --pd-disaggregation {p_args} {d_args} --prefill-policy cache_aware --decode-policy {dpol} {lenient} --host 0.0.0.0 --port {RPORT} --prometheus-port {RPORT + 1}"
     # setsid -f with every fd redirected: a backgrounded "cd && cmd" list keeps a subshell whose
     # stdout is the webshell pipe, which held each launch call open for its 100 s timeout.
     C.run(0, f"ulimit -n $(ulimit -Hn); cd {W} && PYTHONPATH={W}/python setsid -f {rcmd} > {log}/router.log 2>&1 < /dev/null; sleep 8; "

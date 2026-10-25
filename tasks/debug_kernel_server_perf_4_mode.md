@@ -815,6 +815,17 @@ Tasks, in priority order:
       natural-text fan-out), deployed lib `bc43aedeb9ed`, programs C = 4 / 8 / 12 / 16 with chat C/4 req/s, 32K
       prefixes on 8 tasks, P:D split search at C = 8, then the spike. Weights provisioned on pods 1-3 (30/30 shards).
       Running.
+      - C = 8 + chat 2/s, chat 0.5 s / 20 ms ; 2 s / 50 ms ; agent SLO goodput:
+        | arm | chat 0.5 s / 20 ms | chat 2 s / 50 ms | agent goodput |
+        |---|---|---|---|
+        | ours | 86.5% | 95.4% | 105 tok/s |
+        | stock PD 2 + 2 | 64.2% | 85.0% | 98 tok/s |
+        | stock PD 1 + 3 | 30.4% | 67.7% | 87 tok/s |
+      - Bug: stock PD 3 + 1 never ran. sglang_router rejects `--decode-policy power_of_two` with one decode worker
+        (TP4 leaves one decode pod at P = 3), so the clients timed out. Fixed in `mn_run.py` (round_robin when
+        there is one decode worker; equivalent there).
+        - [ ] Rerun the 3 + 1 arm at C = 8 after the sweep. If it ranks in the top two, rerun stock PD with it at
+              the other loads.
 - [ ] 2026-10-24 **Conditional-disagg comparison re-run at Dynamo's defaults** (2048 tokens, 0.7 of the prompt; the
       earlier run used 4096), queued behind the stage-3 baselines (`pd_colocation_vs_disagg.md`).
 - [ ] **Fault tolerance:** prefill-role and decode-role workers killed mid-run (`pd_colocation_vs_disagg.md`).

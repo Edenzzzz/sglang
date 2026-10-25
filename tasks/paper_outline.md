@@ -329,8 +329,10 @@ overlap off costs 2.2-6.1% of the step (section 7).
 
 One merge serves both executors. It runs in the FA2 launch and is scheduled by the same plan, so the two-launch
 baseline's separate FA2-merge and FA3-combine launches disappear. With every merge, check-in fence and counter atomic
-removed (the output is then wrong; this is a timing bound), two-mode trace-sampled steps are at most 0.9% faster
-[pending: the four-mode bound, which measured slower than the real merge and is being re-examined]. Large decode
+removed (the output is then wrong; this is a timing bound), two-mode trace-sampled steps are at most 0.9% faster,
+and per-item timelines put the merge at 0.8% of four-mode steps. (Compiling the merge out does not give a four-mode
+bound: it changes the compiler's register allocation for the 32-row tile, which then runs slower even where no merge
+executes.) Large decode
 batches are where the merge matters: on synthetic ShareGPT and shared-prefix decode steps of 64-256 rows it costs
 6-13% of the step (section 7).
 
@@ -344,8 +346,10 @@ at large batch, and cluster-scheduled reduction in the epilogue. We measured eac
   non-persistent executor the same plan-chosen decode-only instantiation [pending: measurement].
 - *Cluster-scheduled reduction.* Reducing partials inside a thread-block cluster through DSMEM is exact but slower at
   every cluster size (0.60-0.98x), because one split group must fit one cluster (section 7).
-- *L2 order.* A KV-position-major order, which makes rows that share a prefix read its pages in the same wave, is
-  [pending].
+- *L2 order.* A KV-position-major order makes rows that share a prefix read its pages in the same wave. It helps
+  only when the shared prefix exceeds L2 and its rows are split (1.08x on a 48K shared prefix). Elsewhere it breaks
+  longest-first order and loses up to 29%; applying it only among equal-cost chunks keeps longest-first order but
+  gains nothing (0.98-1.02x). The trace-sampled steps are level under every order (1.000 / 1.003 / 0.998 / 1.000x).
 Longest-first order itself is worth <= 0.7% on the trace-sampled steps (section 7). Releasing merges as soon as their
 partials are ready adds polling that slows the compute (section 7).
 

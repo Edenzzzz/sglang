@@ -510,9 +510,20 @@ Tasks, in priority order:
               - A6 beats v3 by up to 1.21x on four-mode ShareGPT (bs 256), 1.15x on shared prefix and 1.09x on math
                 two-mode at bs 256. v3 is faster on long-tail four-mode at bs 64 (A6 0.89x) and on math two-mode at
                 bs 16 / 64 (A6 0.96 / 0.95x).
-              - **The merge-free bound is SLOWER than the real merge on four-mode** (0.71-0.86x here; 0.980 / 0.988x on
-                the captures). The "<= 0.9%" ceiling is therefore not established for four-mode. Per-item timeline
-                probe queued (`unified/a6_h200_nosync_probe_20261025.sh`).
+              - **The four-mode merge-free bound was a code-generation artifact (resolved 2026-10-26).**
+                - Interleaved control (`unified/a6_h200_nosync_control_20261026.sh`, both builds, graph replay, two
+                  repeats): no-sync is 0.71-0.86x on four-mode ShareGPT / long tail. This holds even at bs 512 / 1024,
+                  where the plan has zero split groups and zero merge items, so the merge path never runs.
+                - Cause: compiling the check-in branch out changes how ptxas allocates the 32-row body. The NP kernel
+                  is 255 registers + 16 B spill with merges vs 209 registers, no spill without; both fit 2 CTAs/SM,
+                  but the 209-register schedule runs the four-mode body slower.
+                - Valid four-mode bound: the per-item timeline pair, whose builds match in codegen (40-44 B spill
+                  each; `unified/a6_h200_nosync_probe_20261025.sh`). Merges cost 0.8% of the step on 32-64K
+                  four-mode captures (14.43 vs 14.31 ms) and ~0 on synthetic four-mode.
+                - Two-mode is unaffected (bs 512 / 1024 with no merges: 0.99-1.00x), so the 4-13% two-mode merge cost
+                  at bs 64-256 is real.
+                - Lesson: a bound built by deleting code is only valid if the kernel's register allocation is
+                  unchanged; check ptxas output first.
               - The baseline pass on four-mode bs >= 512 overflowed the native harness's 512 MB workspace; it is
                 rerunning with growth to 4 GB (`unified/a6_h200_synth_base_rerun_20261025.sh`).
         - [x] **Decode-only NP instantiation** (flashinfer `64f40c7`: 32-row body compiled out,
@@ -582,8 +593,10 @@ Tasks, in priority order:
                 | ShareGPT split batches, bs 64-256 | **0.71-0.88x** (breaks longest-first: long chunks land in the tail) |
                 L2 grouping helps only where a shared prefix exceeds L2 and its rows are split, and it must not
                 break longest-first order.
-          - [ ] **lptpos** (flashinfer `e422c9d`: longest first, equal-cost chunks by KV position):
-                `unified/a6_h200_lptpos_20261026.sh` (queued behind chunk rounding).
+          - [x] **lptpos** (flashinfer `e422c9d`: longest first, equal-cost chunks by KV position;
+                `unified/a6_h200_lptpos_20261026.sh`): level everywhere (captures 0.998-1.002x, synthetic
+                0.981-1.019x). **L2 order closed:** grouping by KV position helps only by breaking longest-first
+                order, which costs more elsewhere. The default stays LPT.
         - [ ] **CTA count / launch overhead at large batch:** the NP grid launches one CTA per item (thousands at
               large batch). Synthetic sweep at bs 64-4096, decode-only and verify-only rows, short and long KV: NP
               grid vs the persistent loop on the same BatchPrefill tile code (`h200_npp`), isolating launch / prologue

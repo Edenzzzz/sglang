@@ -253,6 +253,31 @@ load and 21% more under a load spike. [Llama-3.3-70B pending.]
   reading the one work list; PDL between the launches. A persistent FA2 executor that pulls the plan's items in LPT
   order is the ablated alternative (7)
 - optional, ablated in 7: DSMEM handoff of partials to the reducing CTA; KV multicast for FA3 and FA2
+- design rationale: what is fused, and why there
+  - The fusion is in the plan and the reduction, not in the instruction stream. Prefill rows want wgmma on 64-row
+    multiples behind a warp-specialized producer; decode / verify rows want small mma.sync tiles over long KV. Hopper
+    (wgmma) and Blackwell (tcgen05) cannot overlap MMA instructions of different shapes inside one kernel. Single-kernel
+    P/D overlap (POD-Attention) is therefore FA2-only, and our own co-compiled FA3 + FA2 kernel was 2.16x slower (below).
+  - What the two roles do share is complementary hardware: FA3 prefill tiles are tensor-core bound, FA2 rows are
+    bandwidth bound. So the plan places the FA2 rows to run beside FA3's tail through PDL; turning that overlap off
+    costs 2.2-6.1% of the step (7).
+  - One merge for both executors, in the FA2 launch, scheduled by the same plan: v3's separate FA2-merge and FA3-combine
+    launches disappear. With every merge, check-in fence and counter atomic removed (output wrong; a timing bound), the
+    step is at most 0.9% faster, so the in-launch merge costs under 1% of the step (7).
+  - Why the default FA2 executor is non-persistent:
+    - A persistent LPT kernel was the intended design, for two expected advantages: better L2 locality, and an easy
+      in-epilogue reduction.
+    - Neither materializes on these rows. FA2's rows share under 1% of their KV loads (they are decode / verify rows of
+      different requests), so there is no locality for an L2-swizzled order to exploit; longest-first order itself is
+      worth <= 0.7%.
+    - The non-persistent launch reduces in the same launch too, as plan-scheduled merge items, or per cluster with one
+      cluster barrier (the DSMEM variant).
+    - The persistent kernel's other lever, co-resident CTAs of different tile classes on one SM, also has nothing to
+      pair: the classes are all bandwidth bound, and a step never mixes them (four-mode steps are all 32-row verify
+      rows, two-mode steps all 16-row decode rows). The old design's win came from pairing a 128-row prefill tile with
+      a 16-row decode tile, and that pairing now happens across the two launches.
+    - Measured at equal tile code, persistent dispatch is level with hardware-launched CTAs (-0.2..-1.3%), and
+      event-driven merge release adds polling that slows the compute (7).
 - why not fuse FA2 and FA3 into one kernel: warp layout mismatch
   - FA3 is warp-specialized: one producer warpgroup issues TMA loads and two consumer warpgroups run wgmma on a
     128-row tile, so a CTA is 384 threads (12 warps) at 1 CTA per SM, ~98 KB of shared memory per CTA
@@ -588,20 +613,25 @@ load and 21% more under a load spike. [Llama-3.3-70B pending.]
   (schedule, router)
 - Status: per item below
 - kernel
-  - unified plan vs two plans [pending]
-  - merge in the FA2 epilogue vs separate merge launches [pending] on the unified dispatcher; on FA2 rows alone
-    (2026-10-24) the plan-scheduled merge items took 4.86 ms vs 6.21 ms for a last-arriver merge and 5.36 ms for stock
-    BatchAttention
-  - persistent overlap + LPT FA2 vs the non-persistent BatchPrefill body under the same plan and merge:
-    - Step time ties: 0.991-1.006x on the H200, four workload sets (Qwen2.5-7B, 96 captures). The persistent
-      kernel's compute alone is faster, but its merge items and queue pulls are chains of dependent global accesses.
-    - Getting there took two register-targeted instantiations chosen by the plan: 3 CTAs per SM for decode-only plans,
-      2 with deeper KV tiles for verify plans. The default stays non-persistent.
-    - FA2 rows alone on the H20: persistent 5.37 / 6.66 ms, non-persistent 5.23 / 6.42, v3's FA2 launch
-      5.46 / 7.17 (two- / four-mode)
-  - DSMEM handoff of partials (optional; just-in-time reduction from "Taming Dynamism on GPUs", SOSP '26): the
-    producer CTA TMA-copies its partial into the consumer CTA's shared-memory slot, a per-slot mbarrier counts the
-    bytes (expect_tx), and the consumer reduces in local shared memory; vs the merge in the FA2 epilogue [pending]
+  - unified plan + one in-launch merge vs native v3 (two plans, separate merge launches), same FA3 and FA2 kernels:
+    1.023-1.041x on the H200 (96 steps); level on H20
+  - merge-free bound (every check-in fence, counter atomic and merge item removed, output wrong): 1.009 / 0.980 /
+    1.004 / 0.988x (H200, 32-64K two / four, 128-256K two / four), so the unified merge costs <= 0.9% of the step;
+    full-step timeline: merge time left after both FA3 and FA2 compute 0.2-1.0% of the step (0 on FA3-bound steps)
+  - FA2 / FA3 overlap by PDL vs serial launches: serial is 0.939 / 0.967 / 0.975 / 0.978x
+  - FA2 work order: enumeration order vs longest first 0.993 / 0.996 / 1.001 / 1.001x
+  - FA2 executor (same plan, same merge), H200 stage 1:
+    | executor | vs non-persistent BatchPrefill body |
+    |---|---|
+    | BatchPrefill body on a persistent LPT pull loop | 0.987 / 0.998 / 0.996 / 0.993x |
+    | flashinfer's persistent runner, plan-chosen 2-3 CTAs/SM | 0.993 / 0.991 / 1.006 / 0.997x |
+    | persistent loop + event-driven merge release (JIT via a global ready queue) | 0.982 / 0.979 / 0.997 / 0.995x |
+    | DSMEM-cluster JIT reduction (cluster barrier, no global sync), cluster 2 / 4 / 8 / 16 | [pending] |
+  - on FA2 rows alone (2026-10-24) the plan-scheduled merge items took 4.86 ms vs 6.21 ms for a last-arriver merge
+    and 5.36 ms for stock BatchAttention
+  - the persistent runner needed two register-targeted instantiations chosen by the plan to reach parity (3 CTAs per
+    SM for decode-only plans, 2 with deeper KV tiles for verify plans); FA2 rows alone on the H20: persistent 5.37 /
+    6.66 ms, non-persistent 5.23 / 6.42, v3's FA2 launch 5.46 / 7.17 (two- / four-mode)
   - KV multicast for FA3 and FA2 (optional), bounded before building:
     - FA2: across the 96 captures, 0.3-0.9% of its KV page reads are shared with another tile.
     - FA3: 99% of its reads are re-reads by the same prefill row's other q tiles, but they are L2 hits. With its KV
@@ -617,7 +647,6 @@ load and 21% more under a load spike. [Llama-3.3-70B pending.]
     4-mode rows (FA3 1.02-1.59x faster), so rows above 48 go to FA3
   - KV split policy (before merge items, vs native v3): fixed 0.95-0.98x, flashinfer's `kv_len_limit` 0.89-0.94x,
     dynamic makespan 0.90-0.96x; fixed is the default
-  - PDL vs serial launches [pending]
 - FA2 rows vs FA3 rows (role split): equal throughput, FA2 rows 15-25 points better agent ITL
 - schedule: per-tenant deadlines alone (no change) vs + demote-on-miss (chat TTFT -96..-98%); feasibility demotion at
   a fixed rate demoted every cold 128-256K agent on arrival

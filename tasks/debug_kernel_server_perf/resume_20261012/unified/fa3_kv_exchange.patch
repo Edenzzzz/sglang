@@ -67,11 +67,12 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/flash_fwd_kernel_sm90.h hop
  
 diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp
 --- /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp	2026-10-07 09:43:09.000000000 +0800
-+++ hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp	2026-10-25 19:19:44.897648637 +0800
-@@ -55,6 +55,15 @@
++++ hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp	2026-10-25 19:47:06.586181800 +0800
+@@ -55,7 +55,16 @@
      static constexpr bool Transpose_V = Is_FP8 && !V_colmajor;
      static constexpr bool Use_TMA_Q = !PackGQA;
      static constexpr bool Use_TMA_KV = !PagedKVNonTMA;
+-    static_assert(Use_TMA_KV || CUTE_STATIC_V(size(ClusterShape{})) == 1, "If not using TMA for KV, ClusterShape must be 1");
 +#ifndef FLASHINFER_FA3_KV_EXCHANGE
 +#define FLASHINFER_FA3_KV_EXCHANGE 0
 +#endif
@@ -81,9 +82,10 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
 +    // stage is reused only after both CTAs' consumers released it.
 +    static constexpr bool KvExchange = PagedKVNonTMA && bool(FLASHINFER_FA3_KV_EXCHANGE) && CUTE_STATIC_V(cute::size(ClusterShape{})) == 2;
 +    static constexpr bool Use_TMA_KV_Pipe = Use_TMA_KV || KvExchange;
-     static_assert(Use_TMA_KV || CUTE_STATIC_V(size(ClusterShape{})) == 1, "If not using TMA for KV, ClusterShape must be 1");
++    static_assert(Use_TMA_KV || KvExchange || CUTE_STATIC_V(size(ClusterShape{})) == 1, "If not using TMA for KV, ClusterShape must be 1 (or the 2-CTA KV exchange)");
      static_assert(Use_TMA_KV || !V_colmajor, "If not using TMA for KV, V_colmajor is not supported");
      static constexpr bool SameHeadDim = get<2>(TileShape_MNK{}) == kHeadDimV;
+     static constexpr bool LargeHeadDimV = kHeadDimV > 256;
 @@ -281,9 +290,9 @@
      static constexpr uint32_t TmaTransactionBytesQv = static_cast<uint32_t>(size(SmemLayoutQv{}) * cutlass::sizeof_bits_v<Element> / 8);
  
@@ -143,7 +145,7 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
  
          // Prepare the TMA loads
          uint32_t block_rank_in_cluster = cute::block_rank_in_cluster();
-@@ -746,9 +787,50 @@
+@@ -746,9 +787,52 @@
              }
          }
  
@@ -157,7 +159,9 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
 +            if constexpr (KvExchange) {
 +                if (xchg_prev_kind == 0) { return; }
 +                if constexpr (decltype(wait_all)::value) { cute::cp_async_wait<0>(); } else { cute::cp_async_wait<1>(); }
-+                cutlass::arch::NamedBarrier::sync(NumProducerThreads, static_cast<uint32_t>(FwdNamedBarriers::PEmpty) + 1 + cutlass::arch::NamedBarrier::ReservedNamedBarrierCount);
++                // Hardware barriers 8-15 are FA3's own; TransposeBarrier is only used to transpose FP8 V, so it is free here.
++                static_assert(!Transpose_V, "the KV exchange borrows TransposeBarrier");
++                cutlass::arch::NamedBarrier::sync(NumProducerThreads, cutlass::arch::ReservedNamedBarriers::TransposeBarrier);
 +                if (thread_idx == 0) {
 +                    bool const is_k = xchg_prev_kind == 1;
 +                    int const idx = xchg_prev_state.index();
@@ -195,7 +199,7 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
                  auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_K_TMA();
                  copy(params.tma_load_K.with(*pipeline_k.producer_get_barrier(smem_pipe_write), mcast_mask_kv, TMA::CacheHintSm90::EVICT_LAST),
                      tKgK_TMA(_, n_block_idx, bidb_kv_idx), tKsK_TMA(_, smem_pipe_write.index()));
-@@ -767,7 +849,14 @@
+@@ -767,7 +851,14 @@
          auto load_V = [&] (int const n_block, auto const& smem_pipe_write, auto need_seqlenk_masking_type) {
              auto pipeline_v_load = cute::conditional_return<!Transpose_V>(pipeline_v, pipeline_vt);
              pipeline_v_load.producer_acquire(smem_pipe_write);
@@ -211,7 +215,7 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
                  auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_V_TMA();
                  copy(params.tma_load_V.with(*pipeline_v_load.producer_get_barrier(smem_pipe_write), mcast_mask_kv, TMA::CacheHintSm90::EVICT_LAST),
                      tVgVt_TMA(_, n_block_idx, bidb_kv_idx), tVsVt_TMA(_, smem_pipe_write.index()));
-@@ -891,6 +980,7 @@
+@@ -891,6 +982,7 @@
          if constexpr (!Transpose_V && IntraWGOverlap) {
              if (should_load_KV) { load_V(n_block_prev, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/); }
          }
@@ -219,7 +223,7 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
          if constexpr (Transpose_V) { copy_Vt_to_V(smem_pipe_write); }
          ++smem_pipe_write;
          // At the end, all threads have the correct smem_pipe_write.
-@@ -985,6 +1075,16 @@
+@@ -985,6 +1077,16 @@
              seqlen_info, m_block, bidb, split_idx, params.num_splits,
              params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
              params.qhead_per_khead_divmod);
@@ -236,7 +240,7 @@ diff -ru /tmp/fa_src_20261025/flash-attention/hopper/mainloop_fwd_sm90_tma_gmma_
          // It's possible to have n_block_max <= n_block_min. We don't want to load Q or change any barrier
          if constexpr (Is_causal || Is_local || Varlen || Split) {
              if (n_block_max <= n_block_min) { return false; }
-@@ -1379,6 +1479,16 @@
+@@ -1379,6 +1481,16 @@
              seqlen_info, m_block, bidb, split_idx, params.num_splits,
              params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
              params.qhead_per_khead_divmod);

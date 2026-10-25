@@ -577,7 +577,8 @@ Table 5: unified dispatcher speedup, Qwen2.5-7B, H200, 96 captures.
 (0.998-1.008x) and 1.10-1.23x faster than sglang's FA3 call. There FA3 sets the step time, and the FA2 path's 3-10%
 saving runs beneath it. Llama-3.3-70B (TP4, 32-64K) is 1.009x / 1.011x the two-launch baseline on two- / four-mode
 steps and 1.38x / 1.61x sglang's FA3 call. GLM-4.5-Air (TP4, 32-64K, 43 captures) is 0.998x / 1.000x the two-launch
-baseline and 1.28x / 1.41x sglang's FA3 call.
+baseline and 1.28x / 1.41x sglang's FA3 call. With tile-rounded KV splits (the final serving build), Llama-3.3-70B is
+1.009x / 1.017x the two-launch baseline (two- / four-mode, 38 captures) and GLM-4.5-Air two-mode 1.006x.
 
 GLM-4.5-Air needs the third FA2 tile class. Its 4-token verify rows pack 48 queries per KV head, and sending them to
 FA3 cost 28% of the four-mode step. A 64-row FA2 class, launched as its own instantiation so that it does not raise
@@ -598,8 +599,9 @@ Table 6: role-split serving build, Qwen2.5-7B, H200, earlier captures.
 | 128-256K, 2-mode | 1.57x [1.24-2.64] | 0.99x | 0.98x |
 | 128-256K, 4-mode | 1.37x [1.16-1.89] | 0.99x | 0.99x |
 
-**Bar status.** The bar is met on the H200 for Qwen2.5-7B. On H20 the unified dispatcher is level with the two-launch
-baseline for all three models, not faster.
+**Bar status.** The bar is met on the H200 for Qwen2.5-7B (1.028-1.042x the two-launch baseline with the final
+build). On H20 the unified dispatcher is ahead of the two-launch baseline by 0.6-1.7% (Llama-3.3-70B, GLM-4.5-Air two-
+mode) and level for Qwen2.5-7B; FA3 sets the H20 step time, so the FA2-side savings run beneath it.
 
 **Figures.**
 

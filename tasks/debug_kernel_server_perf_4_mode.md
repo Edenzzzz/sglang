@@ -626,9 +626,11 @@ Tasks, in priority order:
                             eligible" for one capture), a harness limit of the v3 control, not the new library.
                           - Build fixes on the pod: add `native_q32_check_20261023` to the loader path, and copy the
                             flash-attention tree the H200 used (md5 `0d9da1edeb00`; pod 4 had `76b466e00f7b`).
-                    - [ ] Deploy to pods 0-3 after the r2 sweep (`pd_colocation/mn_deploy_a6lib_20261026.sh`, chained to
-                          the driver's exit; the previous library is kept as `.np64_20261025`). Llama-capture gate on
-                          pod 0 afterwards.
+                    - [x] Deployed to pods 0-3 (2026-10-26, `pd_colocation/mn_deploy_a6lib_20261026.sh`; md5
+                          `bc43aedeb9ed` everywhere; previous `c76894e92792` kept as `.np64_20261025`).
+                    - [x] Llama-3.3-70B gate on pod 0 (`unified/pod0_llama_gate_20261026.sh`): FP32 + 20 graph replays
+                          pass on all 38 captures. Deployed lib vs native v3: four-mode **1.017x** [1.012-1.027], two-mode
+                          **1.009x** [1.005-1.019]. Before tile rounding, Llama on H20 was level with v3.
         - [x] **Why MELD (SOSP '26) reports large JIT gains and we see none** (answered 2026-10-26). MELD's GQA comparison is decode-only
               at bs 128-1024 against FlashInfer 0.6, whose combine runs as a separate kernel (37% of the time in its
               FlashMLA example), and it gains most at small batch from fine-grained balance. A6 already merges inside

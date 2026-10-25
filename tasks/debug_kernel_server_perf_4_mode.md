@@ -619,9 +619,15 @@ Tasks, in priority order:
           | two | +3.3% | +1.6% | -11% | -37% | -90% | +41% | +27% |
           - Near capacity the deadline order still moves chat prefills ahead (chat TTFT -89%) and steadies agent
             decode, but chat decode gets ~40% slower.
-          - [ ] **Chat TPOT regression (open):** find which steps chat decode rows share. Suspected: they ride in
-                mixed steps with agent prefill chunks that stock would have run in separate decode steps. Check the
-                step log's mode mix per chat request before the paper claims ITL for Llama.
+          - [ ] **Chat TPOT regression (open, cause found 2026-10-26):** both arms prefill the same tokens (550K), but
+                ours runs 47% more prefill batches (570 vs 387, two-mode). Most are 512-2047-token pieces (402 vs
+                228), so chat decode rows ride in about twice as many mixed steps.
+                - Source: the "ours" arm sets `SGLANG_EDF_DEADLINE_CHUNK=1024:2048:6000`
+                  (`run_native_serving_pair_20261023.py` default). That caps every chunk at 1024 unless the
+                  deadline backlog would miss at 6000 tok/s, a Qwen-calibrated pace.
+                - It is a per-step chunk cap, the kind that lost in every earlier EDF study ("order, don't cap").
+                - Rerun with the cap off (`--deadline-chunk=`, everything else unchanged): `low_a6_nodc` on pod 4,
+                  `/dev/shm/w/a6_stage2_llama_low_nodc.log`, running.
           - Agent sample is small (12 requests per arm); per-request distributions and error bars are pending.
 - [ ] **Stage 3 with the full stack** (kernel + 4-mode MTP) vs stock PD with the P:D ratio swept, at higher load and
       with mixture spikes (`pd_colocation_vs_disagg.md`).

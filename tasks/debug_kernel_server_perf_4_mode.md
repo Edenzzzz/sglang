@@ -337,8 +337,9 @@ Tasks, in priority order:
                   (~6 us per merge item, a chain of dependent global accesses) and its per-pull queue atomics.
                 - It also needs two register-targeted instantiations per plan to reach parity.
                 - It remains the measured alternative executor (`UNIFIED_FA2_NP=0`).
-      - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
-            current captures mix q=1 and q=4 rows, so this is untested.
+      - [x] Per-row tile classes in four-mode (2026-10-25, closed by construction): in the 4-mode MTP schedule every
+            running request verifies 4 tokens, and two-mode steps carry only q=1 rows. A step never mixes decode and
+            verify rows, so per-row classes inside a step have nothing to separate.
 
       **4. Fused in-launch reduction**
       - [x] Plan-scheduled merge items: each group is cut into 4-row items. A CTA takes a ticket; compute tickets come
@@ -893,7 +894,13 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       equal to sgl-kernel FA3 (881.5M vs 881.2M on prefill 2048 @ 64K), so K/V loads are not the bound.
       `a5_fa3_ncu_parity_20261017.sh`.
     - Outcome: multicast is not pursued.
-  - [x] A5.6 cross-role backfill (2026-10-12, closed by bound 2026-10-17; the only backfill item, B2 merged here
+  - [x] A5.6 cross-role backfill. On A6 (2026-10-25) it is built and measured:
+    - The FA3 launch triggers its PDL dependent at kernel entry (`griddepcontrol.launch_dependents` in
+      `StockFA3PdlPrimary`) and drains its TMA stores (`tma_store_wait`) before exit. So FA2 CTAs fill each SM an FA3
+      CTA frees, and FA2 rows run beside FA3's tail.
+    - Worth 2.2-6.1% of the step: the PDL-off ablation, H200, 96 captures (A6 section 3, `a6_h200_dispatch_schedule_20261025.sh`).
+    - In-kernel backfill (an FA3 CTA taking FA2 work itself) needs the co-compiled kernel, measured and dropped below.
+    Earlier history: 2026-10-12, closed by bound 2026-10-17; the only backfill item, B2 merged here
     2026-10-24). On the flashinfer-mainloop fused path, co-launch hardware backfill was worth up to 2.9x when FA2 work
     exceeds the slots beside FA3 and nothing on small mixes; in-kernel `tma_store_wait` backfill was correct and worth
     1.4-5.5x over none, but that whole path was 2-6x slower, so co-launch shipped

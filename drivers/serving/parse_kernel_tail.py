@@ -14,7 +14,7 @@ import gzip, json, re, sys
 from collections import defaultdict
 
 BUCKETS = [
-    ("attention", r"flash|fmha|attention|attn|persistent_fa3|FA2Executor|BatchPrefill|BatchDecode|"
+    ("attention", r"flash|fmha|attention|attn|persistent_fa3|FA2Executor|BatchPrefill|BatchDecode|UnifiedFA2|StockFA3|"
                   r"merge_state|mla|paged"),
     ("gemm", r"gemm|cutlass|cublas|sm90_xmma|nvjet|matmul|wgmma|_mm_|splitk"),
     ("sampling_verify", r"argmax|topk|top_k|sample|softmax|verify|accept|tree|eagle|draft|"

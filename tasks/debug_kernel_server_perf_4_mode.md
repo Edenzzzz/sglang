@@ -1399,7 +1399,11 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
                     - So the trigger pays when long agent rows are running and costs when every row is short.
               - [ ] **Fix: `SGLANG_MIXED_SPEC_QUEUE_LONG_ROWS=1`** (`unified/apply_mixed_spec_queue_long_20261026.py`,
                     opt-in). The queue trigger needs a running row with context >= `MIN_CTX`. Under test:
-                    - GLM overloaded four-mode (pod 4, `short_a6_nodc_qlong`): must keep +28%.
+                    - [x] GLM overloaded four-mode (pod 4, `short_a6_nodc_qlong`, two repeats): agent 27.6 / 28.9 vs
+                          21.8 / 21.6 tok/s (**+27 / +34%**, vs +28% with the plain trigger). Chat attainment at
+                          2 s / 100 ms is **81.2-82.4%** (plain trigger 76.7-77.5%), chat e2e 28-31 s (36-40 s).
+                          Prefill steps: 739 eager / 397 graph (plain trigger 1078 / 6). The rule keeps the gain and
+                          improves chat.
                     - ShareGPT 32 req/s four-mode (`unified/a6_standalone_qlong_h200_20261026.sh`, H200): must
                       remove the regression.
                     If both hold, it becomes part of the final configuration.

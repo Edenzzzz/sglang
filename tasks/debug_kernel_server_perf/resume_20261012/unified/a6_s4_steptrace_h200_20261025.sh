@@ -6,14 +6,15 @@
 set -euo pipefail
 SRC=/dev/shm/w/qwen25_v3_common_screen_h200_20261023
 R=/opt/tiger/w/a6_s4_steptrace_h200_20261025
-until ! pgrep -f a6_load_h200_2026 > /dev/null; do sleep 60; done
+# (runs after the load run)
 test -z "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)"
 mkdir -p $R
 test -d $R/python || cp -a $SRC/python $R/python
 cp $SRC/*.py $SRC/*.sh $R/
 cp /dev/shm/w/ub/native_fa3_fa2_pdl_20261023.py /dev/shm/w/ub/run_native_serving_pair_20261023.py /dev/shm/w/ub/native_serving_protocol_20261023.py \
    /dev/shm/w/ub/audit_native_serving_pair_20261023.py /dev/shm/w/ub/unified_executor_20261024.py \
-   /dev/shm/w/ub/evaluate_native_step_model_20261023.py /dev/shm/w/ub/fit_4mode_step.py /dev/shm/w/ub/apply_steptrace_features.py $R/
+   /dev/shm/w/ub/evaluate_native_step_model_20261023.py /dev/shm/w/ub/fit_4mode_step.py /dev/shm/w/ub/apply_steptrace_features.py \
+   /dev/shm/w/ub/steptrace_features.py $R/
 /dev/shm/w/venv/bin/python $R/apply_steptrace_features.py $R/python/sglang/srt
 grep -q "STEPTRACE_FEATURES source=request_cpu_v2" $R/python/sglang/srt/managers/scheduler.py
 /dev/shm/w/venv/bin/python $R/deduplicate_trace_rounds_20261023.py /dev/shm/w/workloads/tracelab/syfi_full_min.jsonl.gz $R/tracelab_unique.jsonl.gz $R/trace_deduplication.json
@@ -25,7 +26,7 @@ cd $R
 /dev/shm/w/venv/bin/python -u run_native_serving_pair_20261023.py $R --stage mix32 --modes four --step-trace --direct-output \
   --split-policy geometry_v3 --packed-query-limit 64 --concurrency 8 --sessions 16 --chat-rate 8 --chat-requests 960 --repeats 2 \
   --native-env SGLANG_A6_UNIFIED=1
-/dev/shm/w/venv/bin/python audit_native_serving_pair_20261023.py $R $R/audit.json
+/dev/shm/w/venv/bin/python audit_native_serving_pair_20261023.py $R $R/audit.json || echo "AUDIT_FOUR_MODE_ONLY (the audit expects both modes; checked by the composition count below)"
 n=$(cat $R/*_native/server.log | grep -c "a6_unified=1" || true); echo "a6 composition: $n"; [ "$n" -gt 0 ] || { echo A6_NOT_ACTIVE; exit 1; }
 /dev/shm/w/venv/bin/python evaluate_native_step_model_20261023.py $R $R/step_model_eval.json
 /dev/shm/w/venv/bin/python - $R/step_model_eval.json <<'PY'

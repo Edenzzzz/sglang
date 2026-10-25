@@ -7,7 +7,7 @@
 set -euo pipefail
 [ -z "${1:-}" ] || while kill -0 "$1" 2>/dev/null; do sleep 60; done
 J=2f608c1b1a67cf09; P=merlin-ssh-proxy-cn.byted.org; WANT=bc43aedeb9ed
-ssh_w() { timeout 300 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -p 22222 $J.worker_$1.seedjob.wenxuan-tan@$P "$2" 2>&1 | grep -v Warning; }
+ssh_w() { timeout 300 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -p 22222 $J.worker_$1.seedjob.wenxuan-tan@$P "$2" 2>&1 | { grep -v Warning || true; }; }
 L=/tmp/a6srv_20261026; mkdir -p $L
 timeout 600 scp -q -o StrictHostKeyChecking=no -P 22222 $J.worker_4.seedjob.wenxuan-tan@$P:/dev/shm/w/a6srv/unified_dispatch_ext.so $L/ 2>&1 | grep -v Warning || true
 [ "$(md5sum $L/unified_dispatch_ext.so | cut -c1-12)" = $WANT ] || { echo LOCAL_MD5_BAD; exit 1; }

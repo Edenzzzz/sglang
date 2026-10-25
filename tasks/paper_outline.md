@@ -97,7 +97,7 @@ for both tenants (Qwen2.5-7B: chat 50 -> 59-65%, agents 45-52 -> 77-85%, chat ti
 throughput +18-19% for both tenants, agent time per output token -41..-48%), although Qwen2.5-7B's four-mode agent
 throughput falls 8.5% on one node. On 16 H20s, at 64 agent programs plus chat, AttentionFuse keeps 93.6% chat
 attainment with 1100 tok/s of agent SLO goodput, where PD disaggregation at its best P:D ratio reaches 13.1% and
-80 tok/s; against conditional disaggregation it carries 14-37% more agent SLO goodput at every load and 21% more under
+80 tok/s; against conditional disaggregation it carries 12-37% more agent SLO goodput at every load (two repeats) and 21-24% more under
 a load spike. [Llama-3.3-70B pending.]
 
 ## 1. Introduction
@@ -767,21 +767,33 @@ the pool) runs Qwen2.5-7B on 16 H20s (4 pods of 4 GPUs) with fan-out agents and 
 on every role with the P:D ratio swept; conditional disaggregation runs at Dynamo's defaults on the same workers as
 ours. Table 10 reports chat attainment (0.5 s + 20 ms) and agent SLO goodput (10 s + 80 ms).
 
-Table 10: full stack, Qwen2.5-7B, 16 H20s; chat attainment / agent SLO goodput (tok/s).
+Table 10: full stack, Qwen2.5-7B, 16 H20s; chat attainment (0.5 s + 20 ms) / agent SLO goodput (tok/s, 10 s +
+80 ms). Two repeats, r1 / r2.
 
 | agent programs + chat/s | ours | conditional disagg (2048 / 0.7) | stock PD, 2 + 2 pods | stock PD, 3 + 1 pods |
 |---|---|---|---|---|
-| 32 + 8 | 97.4% / 601 | 97.8% / 527 | 40.1% / 107 | 53.2% / 162 |
-| 64 + 16 | 93.6% / 1100 | 96.0% / 821 | 13.4% / 52 | 13.1% / 80 |
-| 96 + 24 | 90.0% / 1403 | 90.5% / 1136 | 10.0% / 15 | 0.0% / 4 |
-| 128 + 32 | **79.1% / 1564** | 71.4% / 1143 | 0.3% / 6 | 0.1% / 6 |
-| 64 + 16, + 32-program spike from 300 s for 300 s | 93.2% / 1053 | 94.4% / 873 | 8.8% / 32 | 8.0% / 46 |
+| 32 + 8 | 97.4 / 97.3% ; 601 / 611 | 97.8 / 97.7% ; 527 / 547 | 40.1 / 37.5% ; 107 / 93 | 53.2 / 52.7% ; 162 / 148 |
+| 64 + 16 | 93.6 / 93.8% ; 1100 / 1093 | 96.0 / 95.5% ; 821 / 932 | 13.4 / 17.3% ; 52 / 55 | 13.1 / 3.2% ; 80 / 56 |
+| 96 + 24 | 90.0 / 90.3% ; 1403 / 1463 | 90.5 / 89.3% ; 1136 / 1181 | 10.0 / 5.4% ; 15 / 12 | 0.0 / 2.5% ; 4 / 25 |
+| 128 + 32 | **79.1 / 77.1% ; 1564 / 1532** | 71.4 / 69.4% ; 1143 / 1212 | 0.3 / 4.9% ; 6 / 6 | 0.1 / 0.0% ; 6 / 7 |
+| 64 + 16, + 32-program spike from 300 s for 300 s | 93.2 / 93.7% ; 1053 / 1064 | 94.4 / 93.9% ; 873 / 855 | 8.8 / 6.2% ; 32 / 38 | 8.0 / 2.1% ; 46 / 31 |
+
+Under the paper's SLO matrix (chat 2 s + 50 ms mean TPOT; agents 10 s + 80 ms), ours keeps 95.5-98.9% chat attainment
+and 96.8-98.4% agent attainment at every load, against 90.4-99.6% / 91.3-98.4% for conditional disaggregation and
+0-60% / 2-63% for stock PD; the goodput figures are unchanged (r1 / r2 identical within 1%).
 
 Stock PD with one prefill pod reaches 1.6% / 2 tok/s at 64 + 16. Against stock PD at its best split, ours has 97.4 vs
 53.2% chat attainment at 32 programs and 93.6 vs 13.1% at 64, and 3.7x the agent SLO goodput at 32 and 14x at 64; stock
-PD holds no load point at >= 90%. Against conditional disaggregation, ours has 14%, 34%, 24% and 37% more agent SLO
-goodput at 32, 64, 96 and 128 programs and 21% more under the spike. Chat attainment is within 0.4-2.4 points through
-96 programs (conditional disaggregation slightly higher) and 7.7 points higher for ours at 128, where conditional
+PD holds no load point at >= 90%. Against conditional disaggregation, ours has more agent SLO goodput at every load and
+in both repeats:
+- 32 programs: +14 / +12%
+- 64 programs: +34 / +17%
+- 96 programs: +24 / +24%
+- 128 programs: +37 / +26%
+- under the spike: +21 / +24%
+
+Chat attainment is within 0.4-2.4 points through 96 programs (conditional disaggregation slightly higher) and 7.7-7.8
+points higher for ours at 128 programs. There, conditional
 disaggregation's chat TPOT p90 reaches 46.6 ms (ours 24.8 ms). The full stack adds 14% agent SLO goodput over the
 scheduler-only run at 64 programs (1100 vs 964).
 
@@ -790,7 +802,7 @@ disaggregation loses 55% throughput and 28.5 points of cached fraction, ours 10.
 settings; a rerun with the full stack is [pending].
 
 **Bar status.** Against stock PD at its best split the bar is met at every measured load. Against conditional
-disaggregation, the goodput side is met at every load (+14..+37%); chat attainment is level through 96 programs and
+disaggregation, the goodput side is met at every load in both repeats (+12..+37%); chat attainment is level through 96 programs and
 ahead only at 128 programs. 32 GPUs with the full stack, Llama-3.3-70B (4 TP4 replicas on 16 H20s) are [pending];
 GLM-4.5-Air follows Qwen2.5-7B and Llama-3.3-70B.
 

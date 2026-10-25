@@ -595,8 +595,13 @@ reaches 13.1% and 80 tok/s, and conditional disaggregation 96.0% and 821 tok/s. 
     - FA2: across the 96 captures, 0.3-0.9% of its KV page reads are shared with another tile.
     - FA3: 99% of its reads are re-reads by the same prefill row's other q tiles, but they are L2 hits. With its KV
       loads compiled out, the step is only 0.1-1.3% faster (Qwen2.5-7B, H20, 92 captures).
-    - So multicast for either executor is bounded under ~1% and is not built. Earlier TMA multicast on the old
-      flashinfer mainloop gave -0.2..+1.7% vs unicast.
+    - So multicast for either executor is bounded under ~1%.
+    - Built anyway for FA3, as a 2-CTA exchange. Page-1 KV cannot use TMA multicast, so each CTA gathers half of each
+      tile and pushes it to its peer over DSMEM. It delivers tiles 1.3-1.5x faster in isolation, and it is exact on
+      all 96 steps.
+    - In the step it runs 0.76-0.77x: pairing two CTAs in lockstep alone costs 6%, more than the ceiling, and the
+      push stalls FA3's two-stage pipeline. Evidence for the design point: FA3's KV loads are already hidden, and
+      the step's lever is overlap between the two executors, not KV traffic.
   - 48-row FA2 tile vs FA3 for rows of 33-48 packed queries [pending]; a 64-row FA2 class lost to FA3 on GLM-4.5-Air
     4-mode rows (FA3 1.02-1.59x faster), so rows above 48 go to FA3
   - KV split policy (before merge items, vs native v3): fixed 0.95-0.98x, flashinfer's `kv_len_limit` 0.89-0.94x,

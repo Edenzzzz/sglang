@@ -105,8 +105,9 @@ Tasks, in priority order:
       - [ ] (Optional) DSMEM JIT handoff (MELD).
       - [x] (Optional) Multicast for FA3 and FA2, closed by measured bounds (A5.5).
             - FA2: under 1% of its KV loads are shared, so multicast is not built.
-            - FA3: zero KV loads would make the step only 0.1-1.3% faster.
-            - [ ] Build FA3 multicast under the unified plan anyway (user, 2026-10-25): the plan can pair tiles on a
+            - FA3: zero KV loads would make the step only 0.1-1.3% faster; the built 2-CTA exchange runs 0.76-0.77x
+              (pairing alone 0.93-0.94x), details in A5.5.
+            - [x] Build FA3 multicast under the unified plan anyway (user, 2026-10-25): the plan can pair tiles on a
                   cluster, which upstream's scheduler could not. Measure it against the <= 0.7% bound.
                   - Constraint: serving uses page size 1, so FA3's KV loads are per-row `cp.async` gathers through the
                     page table, and Hopper TMA cannot gather. Upstream flash-attention disables cluster multicast for
@@ -130,12 +131,29 @@ Tasks, in priority order:
                           value stays bounded by the zero-KV-load ceiling (0.1-1.3%).
                         - Bugs on the way: a first version copied half of each 256 B row, so the pushes never met the
                           barrier's expected bytes and hung. A 16 B-per-thread push without overlap ran 2.7-3.7x slower.
-                  - [ ] Step 2, integration into flash-attention:
-                        - a cluster-level tile pull giving a pair adjacent m-blocks of one row;
-                        - the extra causal n-blocks one CTA of a pair loads alone;
-                        - the half-gather + bulk-push producer on FA3's 4-stage K / V pipelines;
-                        - consumer releases arriving on both CTAs.
-                        Measured on stage 1 against the ceiling.
+                  - [x] Step 2, integration into flash-attention (`unified/fa3_kv_exchange.patch` on flash-attention
+                        e9515d5, `unified/a5_fa3_exchange_h200_20261025.sh`, H200, 96 captures, A6 NP executor):
+                        - a pair-aware varlen scheduler: rank 0 takes the pair index and mails it to rank 1 over DSMEM;
+                        - both CTAs walk the pair's union causal n-range;
+                        - cluster transaction pipelines for K / V;
+                        - the half-gather + bulk-push producer, finalized one tile late so the push overlaps the next
+                          gather;
+                        - a cluster launch.
+                        All 96 captures pass FP32 + 20 graph replays in both exchange builds, and the device check finds
+                        each half stage contiguous. Bugs on the way: the producer sync used a named-barrier id past
+                        hardware id 15, which cutlass offsets again, so it wrapped onto FA3's own barrier and trapped
+                        intermittently; and an upstream assert forbade clusters on the paged path.
+                        | stage 1 vs control: same tree, no exchange (32-64K two / four, 128-256K two / four) | |
+                        |---|---|
+                        | control vs the serving FA3 library | 1.001 / 1.002 / 1.003 / 1.001x |
+                        | 2-CTA pairing + cluster pipelines, full gather per CTA (no push) | 0.931 / 0.939 / 0.943 / 0.940x |
+                        | pairing + half gather + DSMEM push (the exchange) | 0.762 / 0.762 / 0.774 / 0.769x |
+                        - Pairing alone costs ~6%: lockstep pairs, half as many independent tiles for FA3's scheduler,
+                          and cross-CTA stage releases. That is more than the whole zero-KV-load ceiling (0.1-1.3%), so
+                          no multicast built on this pairing can win.
+                        - The push adds ~17%: with FA3's 2 K + 2 V stages, finalizing each tile (wait, producer sync,
+                          push) delays the tile's arrival, which the 4-stage microbenchmark could hide and FA3 cannot.
+                        - Outcome: built, correct, measured negative. Not used.
       - [x] Partials FP32 or BF16 if the FP32 gate passes: ours are BF16, worst error 0.0081.
       - [ ] Serving (stages 2-3) only after the kernel is resolved; v3 is the kernel until A6 beats it.
       - [ ] All three models swept and shown; the paper may keep only Llama-3.3-70B and Qwen2.5-7B.

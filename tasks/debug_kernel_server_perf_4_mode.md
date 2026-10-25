@@ -184,8 +184,12 @@ Tasks, in priority order:
                           match it. The one change was an extra L2 atomic read of the compute cursor per pull, so a
                           pull's atomic count is itself a first-order cost of this loop (four L2 atomics per pull). FP32
                           check passes at 0.75.
-                    - [ ] Polls as coherent L2 loads (`__ldcg`), atomics only for claims; then the threshold again
-                          (`unified/unified_h20_persistent_readyfrac2_20261025.sh`, running).
+                    - [x] Polls as coherent L2 loads (`__ldcg`), atomics only for claims
+                          (`unified/unified_h20_persistent_readyfrac2_20261025.sh`):
+                          - 5.81-5.84 / 8.12-8.15 ms at threshold 0 / 0.75 / 1. Better than with atomic polls, still
+                            slower than the plain ready queue, and the threshold value barely matters.
+                          - The threshold check is off by default now (it runs only when `UNIFIED_READY_FRAC > 0`).
+                          - FP32 + graph checks pass and the watchdog never fires.
       - [ ] Per-row tile classes in four-mode (decode rows on the 16 tile where v3 pads them to Q32): none of the
             current captures mix q=1 and q=4 rows, so this is untested.
 

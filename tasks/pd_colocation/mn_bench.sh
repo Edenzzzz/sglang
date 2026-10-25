@@ -34,13 +34,31 @@ if [ "${WORKLOAD:-}" = fanout ]; then
       ${FO_TEXT:+--text-source $W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json} > $OUT/bench_fanout_spike.log 2>&1 &
     FO_SP=$!
   fi
+elif [ "${AGENT_MODE:-}" = tracelab_ts ]; then
+  # Crossflow-style timestamp replay: every session whose first eligible round starts in
+  # [WINDOW_START, WINDOW_START+WINDOW_S) trace seconds with all its rounds (WINDOW_ROUNDS=segment: only rounds
+  # starting inside the window); offsets and gaps divided by ALPHA;
+  # round r goes out at max(finish_{r-1} + gap_r/ALPHA, offset_r/ALPHA). Contents are tokenized ShareGPT text
+  # (TEXT_SOURCE; TEXT_SOURCE=random keeps random ids). Measured programs/starts/calls go to agent_programs.json.
+  TS_TEXT=${TEXT_SOURCE:-$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json}
+  [ "$TS_TEXT" = random ] && TS_TEXT=
+  export BENCH_SESSION_AUDIT_FILE=$OUT/agent_programs.json
+  $W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/${MODEL_DIR:-qwen7b} \
+    --dataset-name tracelab-claude --dataset-path "${TRACE_DATASET_PATH:-$W/workloads/tracelab/syfi_full_min.jsonl.gz}" --tokenize-prompt \
+    --tracelab-min-context-len ${MIN_CTX:-0} --tracelab-max-context-len ${MAX_CTX:-65536} --tracelab-min-output-len 1 \
+    --tracelab-providers claude,codex --tracelab-allow-empty-prefix \
+    --tracelab-window-start-s ${WINDOW_START:?AGENT_MODE=tracelab_ts needs WINDOW_START} --tracelab-window-s ${WINDOW_S:-3600} \
+    --tracelab-time-scale ${ALPHA:-1} --tracelab-window-rounds ${WINDOW_ROUNDS:-session} \
+    ${TS_TEXT:+--tracelab-text-source "$TS_TEXT"} --request-rate inf \
+    --warmup-requests 2 --output-file $OUT/agent.json --output-details --disable-tqdm > $OUT/bench_agent.log 2>&1 &
+  unset BENCH_SESSION_AUDIT_FILE
 elif [ -n "${AGENT_CONC:-}" ]; then
   # Program concurrency (ThunderAgent protocol; the only agent load axis -- user, 2026-10-15): AGENT_CONC
   # sessions kept active, the next starts when one finishes, rounds back to back. Same TraceLab
   # cohort selection as the single-GPU kernel_concurrency_env (providers, round weighting, seed).
   export BENCH_SESSION_CONCURRENCY=$AGENT_CONC BENCH_SESSION_AUDIT_FILE=$OUT/agent_programs.json
   $W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/${MODEL_DIR:-qwen7b} \
-    --dataset-name tracelab-claude --dataset-path $W/workloads/tracelab/syfi_full_min.jsonl.gz --tokenize-prompt \
+    --dataset-name tracelab-claude --dataset-path "${TRACE_DATASET_PATH:-$W/workloads/tracelab/syfi_full_min.jsonl.gz}" --tokenize-prompt \
     --tracelab-num-groups $S --tracelab-min-context-len ${MIN_CTX:-32768} --tracelab-max-context-len ${MAX_CTX:-65536} \
     --tracelab-min-output-len 1 --num-prompts $((S * T)) --request-rate inf \
     --tracelab-providers claude,codex --tracelab-allow-empty-prefix --tracelab-session-weighting rounds \
@@ -75,14 +93,27 @@ $W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1
   "${SECOND[@]}" --request-rate ${CHAT_RATE:-16} --num-prompts ${CHAT_N:-3200} \
   --warmup-requests 2 --output-file $OUT/chat.json --output-details --disable-tqdm > $OUT/bench_chat.log 2>&1 &
 C=$!
+# MATH_RATE (optional third tenant): math problems in ShareGPT format from drivers/serving/prep_standalone.py
+# (MATH_SET=math500|gsm8k under $W/workloads/standalone), replayed by the sharegpt loader with each output length
+# from its reference solution; own count, seed and directory $OUT/math.
+M=; NREADY=2
+if [ -n "${MATH_RATE:-}" ]; then
+  mkdir -p $OUT/math
+  MATH_ARGS=(--dataset-name sharegpt --dataset-path ${MATH_PATH:-$W/workloads/standalone/${MATH_SET:-math500}.json})
+  [ "${CHAT_TEMPLATE:-0}" = 1 ] && MATH_ARGS+=(--apply-chat-template)
+  $W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/${MODEL_DIR:-qwen7b} \
+    "${MATH_ARGS[@]}" --request-rate $MATH_RATE --num-prompts ${MATH_N:-500} --seed ${MATH_SEED:-3} \
+    --warmup-requests 2 --output-file $OUT/math/math.json --output-details --disable-tqdm > $OUT/math/bench_math.log 2>&1 &
+  M=$!; NREADY=3
+fi
 for i in $(seq 1 3000); do
   n=$(ls $BENCH_BARRIER_DIR 2>/dev/null | grep -c ready_)
-  [ "$n" -ge 2 ] && break
-  kill -0 $A 2>/dev/null && kill -0 $C 2>/dev/null || break
+  [ "$n" -ge $NREADY ] && break
+  kill -0 $A 2>/dev/null && kill -0 $C 2>/dev/null && { [ -z "$M" ] || kill -0 $M 2>/dev/null; } || break
   sleep 0.2
 done
 mkdir -p $BENCH_BARRIER_DIR && touch $BENCH_BARRIER_DIR/go
-echo "released: $n/2 ready"
+echo "released: $n/$NREADY ready"
 # CHAT_SPIKE="delay_s:rate:n" (5e load spike): delay_s after release a second chat stream at `rate` req/s sends n
 # requests on top of the base load; its own seed so it does not replay the base stream's prompts, no barrier.
 S=
@@ -94,5 +125,9 @@ if [ -n "${CHAT_SPIKE:-}" ]; then
       --output-file $OUT/chat_spike.json --output-details --disable-tqdm ) > $OUT/bench_chat_spike.log 2>&1 &
   S=$!
 fi
-wait $A $C $S ${FO_BASE:-} ${FO_SP:-}
+wait_status=0
+for client_pid in $A $C $S $M ${FO_BASE:-} ${FO_SP:-}; do
+  wait "$client_pid" || wait_status=$?
+done
+[ "$wait_status" -eq 0 ] || exit "$wait_status"
 echo MNBENCHDONE

@@ -1,0 +1,5 @@
+Benchmark-client overlay for the pods (2026-10-26): the pod copies of serving.py / session_replay.py / tracelab.py plus
+the Crossflow-style timestamp-window TraceLab replay (--tracelab-window-start-s / -window-s / -time-scale /
+-window-rounds segment, start-at-timestamps scheduling) and the natural-text token source (--tracelab-text-source);
+session_concurrency.py is the pod copy, unchanged. Tests: drivers/serving/test_tracelab_window.py. Deploy all four
+together into $W/up/python/sglang/benchmark/ (tracelab.py into datasets/).

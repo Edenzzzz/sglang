@@ -1522,10 +1522,17 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
                               - Target forwards replay full graphs in both arms (~3000 replays; no refusals).
                               - **Still -6.2%** (6025 vs 6424 tok/s; TTFT 3.7 s vs 0.13 s).
                               - So graph coverage of the target's merged step is NOT the cause.
-                        - [ ] Experiment 2 (`unified/a6_fullcg_exp2_h200_20261026.sh`): ours with SGLANG_MIXED_SPEC=0
-                              (EDF + stock MTP steps), same full backend. Level -> the merged step's extra work (its
-                              eager draft extends) is the cost; still slow -> the deadline scheduler's per-step cost
-                              once the queue grows.
+                        - [x] **Experiment 2** (`unified/a6_fullcg_exp2_h200_20261026.sh`): ours with SGLANG_MIXED_SPEC=0
+                              (EDF + stock MTP steps), same full backend: 6393 vs 6426 tok/s (-0.5%), TTFT 67 vs 134 ms.
+                              - The deadline scheduler is not the cost; **the merged step is**.
+                              - With the merge on, the same prefill work (1.20M tokens in ~3200 batches) leaves 46
+                                running vs 35 and a queue of 105 vs 2, and TPOT is 8.0 vs 5.7 ms.
+                              - Both paths run the same forwards, and every forward replays a graph (no refusals in
+                                either arm under the full backend). So the time is lost outside the GPU forward
+                                work: suspect host-side cost or broken CPU / GPU overlap in the merged path.
+                        - [ ] Experiment 3 (`unified/a6_fullcg_exp3_h200_20261026.sh`): `SGLANG_STEP_TRACE=1` in both
+                              arms (host launch time + GPU time per forward, event-based): wall vs GPU time per step
+                              type.
                         - Correctness gate: `drivers/serving/compare_outputs_20261026.py` (greedy-output agreement vs
                           the breakable runs, two breakable repeats as the noise floor).
                       - [ ] Experiment 1 (`unified/a6_fullcg_exp1_h200_20261026.sh`): the full prefill

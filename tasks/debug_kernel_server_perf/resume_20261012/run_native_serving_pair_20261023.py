@@ -110,6 +110,9 @@ def run_arm(arguments, mode, repeat, arm):
         "--max-running-requests", "48", "--cuda-graph-max-bs-decode", "48", "--context-length", config["CTX_LEN"],
         "--watchdog-timeout", "600", "--tp-size", str(arguments.tp_size),
     ]
+    # --server-arg: extra launch_server arguments for BOTH arms (e.g. the prefill CUDA-graph backend).
+    for item in arguments.server_arg:
+        command += item.split()
     if arguments.ours and arm == "native":
         command += ["--enable-priority-scheduling", "--schedule-low-priority-values-first",
                     "--priority-scheduling-preemption-threshold", "999999"]
@@ -240,6 +243,8 @@ def main():
     parser.add_argument("--ours", action="store_true",
                         help="control = stock sglang on FA3 (stock MTP in four-mode); candidate = our deadline scheduler + native kernel")
     parser.add_argument("--deadline-chunk", default="1024:2048:6000")
+    parser.add_argument("--server-arg", action="append", default=[], metavar="ARGS",
+                        help="extra launch_server arguments for both arms, whitespace-split (repeatable)")
     parser.add_argument("--standalone", type=Path, default=None,
                         help="ShareGPT-format dataset served alone at --chat-rate for --chat-requests (no agent tenant)")
     parser.add_argument("--ours-env", action="append", default=[], metavar="KEY=VALUE",

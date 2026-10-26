@@ -1501,6 +1501,12 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
                         The FA2 NP kernel launches one CTA per item, so it needs a max grid with early exit. The
                         persistent FA2 executor is graph-friendly as built.
                       - Sweep captured buckets / slot counts against memory so large batches still fit.
+                      - [ ] Experiment 1 (running, `unified/a6_fullcg_exp1_h200_20261026.sh`): the full prefill
+                            backend (`--cuda-graph-backend-prefill full`, via the harness's new `--server-arg`) in BOTH
+                            arms, our 4-mode schedule on stock FA3 attention, ShareGPT 32 req/s four-mode, refusal
+                            counters in both arms. The FA3 backend already has full-graph prefill metadata
+                            (`_init_full_cg_prefill_metadata`). With topk = 1, a verify row is a plain 4-token causal
+                            extend, so a merged step has a prefill batch's attention shape.
                       - Steps: (1) check the full backend's support for the FA3 attention backend and for
                         target-verify (spec) batches; (2) make A6 capturable; (3) enable the merged 4-mode step;
                         (4) sweep buckets and padding; (5) ShareGPT 32 req/s four-mode + the mixed workload.

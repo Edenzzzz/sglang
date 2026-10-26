@@ -5,8 +5,8 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
 - **Bar:** >= 30% on TTFT and ITL (or their SLO attainment) and >= 10% throughput on realistic chat + TraceLab
   workloads.
 - **Models:** Qwen2.5-7B, Llama-3.3-70B (next), GLM-4.5-Air.
-- **Hardware (2026-10-26, user):** ONE 4-GPU H200 trial for the kernel and single-node stages, `d4b20cad59170ebd`
-  (vibecuda4, trial 304732180, forked from `5b256eb857aa98d9` with gpu=4 / cpu 96 / 876544 MB and
+- **Hardware (2026-10-26, user):** ONE 4-GPU H200 trial for the kernel and single-node stages, `bf7d041fb8313d8a`
+  (vibecuda, trial 304747380; replaced the misnamed vibecuda4 `d4b20cad59170ebd` on 2026-10-27 after 6.5 h queued; forked from `5b256eb857aa98d9` with gpu=4 / cpu 96 / 876544 MB and
   `overrides.attachments=[]`). The queued 1-GPU fork `5b256eb857aa98d9` was stopped. Llama-3.3-70B and GLM-4.5-Air TP4
   single-node runs move here from H20. If the trial is killed for any reason other than underutilization (e.g. a
   high-priority preemption), fall back to the H20 pods.

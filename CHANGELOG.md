@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.68.3 — H200 trial renamed vibecuda (2026-10-27)
+- The 4-GPU H200 trial is now `bf7d041fb8313d8a`, named vibecuda as required; the misnamed vibecuda4 request was stopped (it never ran).
+
 ## v1.68.2 — Demand-shift replay results so far (2026-10-27)
 - Superposed TraceLab replay on 16 H20s, alpha 3, ours vs conditional disaggregation: chat attainment 65.1 vs 50.9%,
   agent attainment 72.6 vs 63.9%, agent SLO goodput 1501 vs 956 tok/s (+57%), chat TTFT p90 1.12 vs 8.74 s.

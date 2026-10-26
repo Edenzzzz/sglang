@@ -1167,9 +1167,13 @@ Figure 20: throughput vs per-user tok/s Pareto curve (p10-p90 bars) at 16 and 32
 Figure 21: scaling: load held at >= 90% attainment on 16 vs 32 GPUs, ours vs best PD disaggregation (scheduler only
 measured; full stack [pending]).
 
-Figure 22: cached-prefix fraction, re-prefilled tokens and agent tok/s vs working-set size (1M, 4M, 8M KV tokens
-against a 6.7M-token pool), ours vs stock PD; 16 H20s, 32 agent programs (earlier settings measured; full stack
-[pending]).
+![Figure 22](paper_figures/fig22_thrashing.png)
+
+Figure 22: cache thrashing, in ThunderAgent's setting. Qwen2.5-7B on 16 H20s at 32 agent programs, with the working set
+grown from ~1M to ~8M live KV tokens by the number of distinct 64K-token agent tasks (dashed: the ~6.7M-token cluster
+KV capacity). Ours (colocated, cluster pool) vs stock PD 2 + 2, scheduler-only settings. Panels: cached prompt
+fraction, agent output tok/s, and mean agent TTFT. Ours loses 3.1 points of cached fraction and 10.6% of throughput;
+stock PD loses 28.5 points and 55%. Full stack [pending]. Source: `tasks/paper_figures/fig22_thrashing.py`.
 
 Figure 23: demand shift and load spike over time, in 30 s windows.
 - Top: offered prefill demand (uncached prompt tok/s) and decode demand (output tok/s) of the superposed TraceLab

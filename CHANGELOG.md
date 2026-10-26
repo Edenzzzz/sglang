@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.66.2 — Paper Figure 22 (cache thrashing) (2026-10-26)
+- `tasks/paper_figures/fig22_thrashing.py`: cached fraction, agent tok/s and agent TTFT against working-set size,
+  ours vs stock PD 2 + 2 on 16 H20s; embedded in section 6.4.
+
 ## v1.66.1 — Paper Figure 2 (P:D ratio sweep) (2026-10-26)
 - `tasks/paper_figures/fig02_pd_sweep.py`: stock PD chat attainment and agent SLO goodput against prefill pods
   (16 and 32 H20s), with ours as a reference line; embedded in section 2.3.

@@ -789,7 +789,7 @@ Table 4b: workloads, loads and hardware per stage.
 | 2, single node | TraceLab sessions, 32-64K or 128-256K contexts, two- or four-mode | ShareGPT with the chat template | Qwen2.5-7B: 8 programs + 8 req/s (32-64K), 4 + 4 (128-256K); Llama-3.3-70B: 2 + 0.5 (near capacity), 4 + 2 (overload); GLM-4.5-Air: 4 + 2, 8 + 8 | one H200 (Qwen2.5-7B); 4 GPUs (Llama-3.3-70B, GLM-4.5-Air) |
 | 2, standalone | -- | ShareGPT, MATH-500, GSM8K, Code-Feedback, each served alone | 16 / 32, 16, 32, 16 req/s | one H200 |
 | 3, cluster | fan-out coding agents: 32 tasks with 64K-token repository prefixes (8 x 32K for Llama-3.3-70B), Zipf(1.2) task popularity rotating every 180 s, 4 rounds of 1024-token appends and 128-token outputs, 5 s tool gaps | ShareGPT, C/4 req/s for C programs | Qwen2.5-7B: C = 32 / 64 / 96 / 128; Llama-3.3-70B: C = 4 / 8 / 12 / 16; spike: +C/2 programs from 300 s for 300 s | 16 H20s (4 nodes x 4) |
-| 3, demand shift | TraceLab replay: the 24 busiest trace hours, superposed, each round at max(previous finish + recorded gap / alpha, trace time / alpha) | ShareGPT 8 req/s; surge +16 req/s from 200 s for 200 s | alpha = 4 / 6 / 8 | 16 H20s |
+| 3, demand shift | TraceLab replay: the 24 busiest trace hours, superposed, each round at max(previous finish + recorded gap / alpha, trace time / alpha), over a horizon of 1.5x the scaled hour | ShareGPT 8 req/s; surge +16 req/s from 300 s for 300 s | alpha = 3 / 6 | 16 H20s |
 | 3, fault | the stage-3 fan-out workload | ShareGPT 8 req/s | 32 programs; all 4 workers of one node killed at 300 s | 16 H20s |
 
 **SLOs.**
@@ -1135,9 +1135,12 @@ superpose the 24 busiest non-overlapping trace hours on one clock, one developer
 issued at the later of its previous round's finish plus the recorded tool gap / alpha and its trace time / alpha.
 - *Load:* the replay offers 13.4K LLM calls, 43M uncached prompt tokens and 5.7M output tokens per trace hour. The
   trace's own mix of cold long prefixes and short appends makes the ratio of prefill to decode demand swing within
-  the run; alpha = 4 / 6 / 8 runs it from below to above the cluster's prefill capacity.
-- *Ratio change:* a chat surge of +16 req/s for 200 s (on 8 req/s) adds a decode-heavy shift on top of the trace's
-  own swings.
+  the run; alpha = 3 and 6 put it below and above the cluster's prefill capacity.
+- *Fixed horizon:* every system is measured over the same wall-clock window, 1.5x the scaled trace hour. A round
+  that would be issued later is not, and the rounds a system leaves unissued are its backlog: a slower system falls
+  behind the trace, because each round waits for its predecessor.
+- *Ratio change:* at alpha = 3, a chat surge of +16 req/s for 300 s (on 8 req/s) adds a decode-heavy shift on top of
+  the trace's own swings.
 - *Arms:* ours, conditional disaggregation and stock PD at fixed 2 + 2 and 3 + 1 splits.
 - *Reported:* per-tenant attainment, SLO goodput, and a 30 s time series of offered prefill and decode demand against
   attainment.
@@ -1184,7 +1187,7 @@ stock PD loses 28.5 points and 55%. Full stack [pending]. Source: `tasks/paper_f
 
 Figure 23: demand shift and load spike over time, in 30 s windows.
 - Top: offered prefill demand (uncached prompt tok/s) and decode demand (output tok/s) of the superposed TraceLab
-  replay at alpha = 6, with the chat surge shaded.
+  replay at alpha = 3, with the chat surge shaded.
 - Below, per system (ours, conditional disaggregation, stock PD 2 + 2 and 3 + 1): chat and agent attainment, and
   throughput.
 - A second panel shows the fan-out spike (+32 programs from 300 s for 300 s, on 64 programs + 16 chat req/s).

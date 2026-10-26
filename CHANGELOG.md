@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.67.2 — Paper: demand-shift setup updated to the v2 protocol (2026-10-26)
+- Section 6.4, Table 4b and Figure 23 describe alpha 3 / 6, the fixed horizon, and the 300 s surge at alpha 3.
+
 ## v1.67.1 — Trace replay over a fixed horizon (2026-10-26)
 - Session replay: `BENCH_REPLAY_HORIZON_S`. A round whose issue time falls past the horizon is not issued, nor are its
   session's later rounds; each gets a failed output marked "not issued". The scorer drops these from the tenant rows

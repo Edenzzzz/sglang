@@ -1128,7 +1128,7 @@ Table 10b: Llama-3.3-70B, 16 H20s, repeats r1 / r2; chat attainment (2 s + 50 ms
 | 16 + 4 | 90.8 / 90.5% ; 165 / 159 | 97.9 / 97.6% ; 85 / 97 | 68.2 / 66.6% ; 160 / 163 | 74.9 / 67.2% ; 123 / 106 | 1.3% ; 93 |
 | 8 + 2, + 4-program spike | 95.8 / 96.3% ; 101 / 100 | 98.5 / 97.9% ; 70 / 79 | 86.9 / 84.4% ; 101 / 101 | 89.9 / 89.6% ; 99 / 96 | 63.9% ; 92 |
 
-**Result: prefill / decode demand shift on a real trace [pending].** Crossflow observes that agentic serving's
+**Result: prefill / decode demand shift on a real trace.** Crossflow observes that agentic serving's
 prefill and decode demand changes sharply over time; it replays one-hour TraceLab segments with timestamps compressed
 by a factor alpha. One trace hour holds only 3-6 concurrent sessions, too few to load 16 GPUs. We therefore
 superpose the 24 busiest non-overlapping trace hours on one clock, one developer's hour per segment, with each round
@@ -1146,7 +1146,33 @@ issued at the later of its previous round's finish plus the recorded tool gap / 
   attainment.
 
 A fixed P:D split is tuned for one ratio and misses when the ratio moves; colocated nodes take whichever phase
-arrives. [pending]
+arrives.
+
+Table 10d: superposed TraceLab replay on 16 H20s (Qwen2.5-7B), one repeat. Each cell gives chat attainment
+(2 s + 50 ms) ; agent attainment (10 s, 20 s above 200K uncached tokens, + 80 ms) ; agent SLO goodput ; agent rounds
+issued within the horizon. In the surge row, chat attainment is for the base stream / the surge stream.
+
+| point | ours | conditional disagg | stock PD 2 + 2 | stock PD 3 + 1 |
+|---|---|---|---|---|
+| alpha 3 | 65.1% ; 72.6% ; 1501 tok/s ; 8995 | 50.9% ; 63.9% ; 956 tok/s ; 7264 | 9.9% ; 11.6% ; 49 tok/s ; 1457 | 2.2% ; 1.8% ; 7 tok/s ; 1971 |
+| alpha 3 + chat surge | 57.4 / 46.2% ; 69.3% ; 1266 tok/s ; 8554 | 36.5 / 27.1% ; 53.8% ; 668 tok/s ; 6081 | [pending] | [pending] |
+| alpha 6 (overload) | 31.8% ; 50.0% ; 890 tok/s ; 4818 | 57.2% ; 51.1% ; 720 tok/s ; 3850 | 8.2% ; [pending] | 3.6% ; 1.9% ; 6 tok/s ; 1227 |
+
+**Result.**
+- *Below and at capacity (alpha 3)*, ours leads conditional disaggregation on both tenants: +14 points of chat
+  attainment (chat TTFT p90 1.1 vs 8.7 s), +8.7 points of agent attainment, and 57% more agent SLO goodput. It issues
+  24% more of the trace's rounds within the same window, because each agent round returns sooner and its successor
+  goes out sooner.
+- *Under the chat surge*, the gap widens: +21 points of chat attainment on the base stream and +19 on the surge
+  stream, 90% more agent SLO goodput, and chat TTFT p90 1.2 vs 34.9 s. Conditional disaggregation sends every long
+  uncached prompt to its fixed prefill workers, which queue behind the trace's own prefill swings; ours spreads the
+  same prefills over every node the router finds feasible.
+- *Stock PD collapses at both loads*: its median TTFT is 170-200 s for both tenants, and its router cuts many requests
+  mid-stream (3,568 failed chat requests for the 2 + 2 split at alpha 3).
+- *At alpha 6*, far past capacity, ours still carries 24% more agent goodput than conditional disaggregation and
+  issues 25% more rounds. But its chat TPOT (p50 72 vs 28 ms) puts chat attainment behind (31.8 vs 57.2%): with fixed
+  2048-token chunks, every node's chat decodes share steps with agent prefill chunks. The SLO-budgeted chunk of
+  section 5.2.3 targets this case [pending].
 
 **Result: cache pressure.** With the working set grown from 1M to 8M KV tokens against a 6.7M-token pool,
 disaggregation loses 55% throughput and 28.5 points of cached fraction, ours 10.6% and 3.1 points, in earlier

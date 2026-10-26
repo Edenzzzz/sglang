@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.69.0 — Paper section 6.4: demand-shift results (Table 10d) (2026-10-27)
+- Superposed TraceLab replay on 16 H20s.
+  - Alpha 3, ours vs conditional disaggregation: chat +14 points, agent +8.7 points, agent goodput +57%.
+  - Alpha 3 + chat surge: base chat 57.4 vs 36.5%, surge chat 46.2 vs 27.1%, agent goodput +90%, chat TTFT p90 1.2 vs
+    34.9 s.
+  - Alpha 6: ours +24% agent goodput, chat behind.
+  - Stock PD collapses at both loads.
+  - Stock PD surge rows and the 2 + 2 alpha-6 agent rerun are pending.
+
 ## v1.68.4 — Demand shift at alpha 3: stock PD rows (2026-10-27)
 - Stock PD 2 + 2 / 3 + 1 at alpha 3: chat attainment 9.9 / 2.2%, agent SLO goodput 49 / 7 tok/s, median TTFT about 170-200 s; many requests cut by the stock PD router.
 

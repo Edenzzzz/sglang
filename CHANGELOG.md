@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.66.3 — H200 kernel-ladder chain (2026-10-26)
+- `unified/a6_h200x4_kernel_ladder_20261026.sh`: on the 4-H200 trial, recaptures the trace-sampled steps; re-benches
+  sglang FA3, the role split and v3; builds and checks A6 np64; benches naive FA3 + stock FA2 (serial and two
+  streams, pip flashinfer in its own process); reports time-weighted speedups over every baseline.
+
 ## v1.66.2 — Paper Figure 22 (cache thrashing) (2026-10-26)
 - `tasks/paper_figures/fig22_thrashing.py`: cached fraction, agent tok/s and agent TTFT against working-set size,
   ours vs stock PD 2 + 2 on 16 H20s; embedded in section 6.4.

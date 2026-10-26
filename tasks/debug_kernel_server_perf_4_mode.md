@@ -5,7 +5,13 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
 - **Bar:** >= 30% on TTFT and ITL (or their SLO attainment) and >= 10% throughput on realistic chat + TraceLab
   workloads.
 - **Models:** Qwen2.5-7B, Llama-3.3-70B (next), GLM-4.5-Air.
-- **Hardware:** H200 job `8574c727fab6ffbd` (vibecuda; restored with `unified/prov_h200_20261024.sh` after
+- **Hardware (2026-10-26):** H200 trial `8574c727fab6ffbd` ended (status `done`; the webshell returned a bare EOF,
+  the same as a network fault). Re-forked as `5b256eb857aa98d9` (vibecuda). Re-provision with
+  `unified/prov_h200_20261024.sh` from a rebuilt bundle (`/tmp/h200r2/bundle.tar.gz`: current port07 subset, current
+  scripts, the same native libraries / flash-attention / overlay). Lost with the pod and to be regenerated: the 96
+  trace-sampled captures, the synthetic and standalone sets, every A6 build, and experiment 4 (sync-free merge),
+  whose result was never read.
+- **Hardware (before):** H200 job `8574c727fab6ffbd` (vibecuda; restored with `unified/prov_h200_20261024.sh` after
   `34c7bd503d461dc1` ended) for stages 1-2; H20 job `2f608c1b1a67cf09` for multi-node and, meanwhile, kernel runs.
 
 Tasks, in priority order:

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.65.0 — SLO-budgeted prefill chunk patch (2026-10-26)
+- `unified/apply_slo_budget_chunk_20261026.py`: per step, the largest prefill chunk whose predicted step time keeps
+  every running decode row within its mean-TPOT slack (per tenant, headroom h). With no decode rows it uses the
+  server's full chunk size. Optional `demote` excludes rows already past their SLO. It hooks the chunk variable
+  passed to PrefillAdder, so it composes with the EDF patches; a zero chunk skips prefill for that step.
+- `perf_model/fit_4mode_step.py --export-lin4mode`: writes the lin4mode step model (gap / gpu targets, S / T) that the
+  patch reads.
+
 ## v1.64.0 — Superposed TraceLab replay for the P/D demand-shift experiment (2026-10-26)
 - TraceLab loader (`drivers/serving/bench_overlay_20261026/tracelab.py`): `--tracelab-window-starts s1,s2,...`
   superposes several one-hour trace segments on one clock, each timed from its own start, with session ids suffixed

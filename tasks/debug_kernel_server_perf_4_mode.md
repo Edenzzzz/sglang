@@ -24,6 +24,17 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
   - Arms on the same captures: sglang's single FA3 call, naive FA3 + FA2 (serial / streams), v3, A6.
 - **To test alongside the naive FA3 + FA2 baseline (user, 2026-10-26), on the H200:**
   - [ ] **SLO-budgeted prefill chunk size from the EDF step model.**
+    - Code (2026-10-26, unit-checked on a stub scheduler, not yet served):
+      - `unified/apply_slo_budget_chunk_20261026.py`, enabled by
+        `SGLANG_SLO_CHUNK="<model.json>:<h>:<chat_ms>:<agent_ms>:<agent_prompt_tokens>[:demote]"`;
+      - the step model is `perf_model/fit_4mode_step.py --export-lin4mode` (lin4mode on the gap target);
+      - the server runs with `--chunked-prefill-size 16384` so that the chunk can grow.
+      - Unit check (toy coefficients):
+        - no decode rows: 16384;
+        - 8 fresh chat rows on a 30K prefix: 1716;
+        - 4 agent rows at 80 ms: 10373;
+        - one row 10 s behind: 0 without `demote`, 1709 with it.
+    - Order on the H200: collect A6 STEPTRACE at the Table 7b loads, export the model, then run the arms below.
     - Problem: every serving arm prefills in fixed 2048-token chunks (`CHUNK=2048`, `--chunked-prefill-size`). That
       wastes the step when prefill load is high and decode load is low, e.g. cold 128-256K agent turns with few rows
       decoding.

@@ -819,6 +819,26 @@ points higher for ours at 128 programs. There, conditional
 disaggregation's chat TPOT p90 reaches 46.6 ms (ours 24.8 ms). The full stack adds 14% agent SLO goodput over the
 scheduler-only run at 64 programs (1100 vs 964).
 
+**Result: Llama-3.3-70B, full stack, 16 H20s (4 TP4 replicas).** Under the paper's SLOs (Table 10b), ours carries
+the most agent SLO goodput at every load: 6-94% more than conditional disaggregation and 2-7% more than stock PD at its
+best split (level under the spike). Ours holds 90.8-98.1% chat attainment, against 79.6-91.4% for stock PD and
+97.7-98.5% for conditional disaggregation. Against conditional disaggregation the trade is therefore agent goodput for
+chat attainment (-0.3 to -7.1 points). With only four replicas, a 70B prefill chunk on a colocated node holds every
+co-resident chat decode for one long step, and the router has four nodes to choose from rather than sixteen.
+[pending: second repeat; the stock PD 3 + 1 split and the 2 + 2 split at 16 programs, which failed for
+infrastructure reasons]
+
+Table 10b: Llama-3.3-70B, 16 H20s, one repeat; chat attainment (2 s + 50 ms) ; agent SLO goodput, tok/s (agent
+attainment, 10 s + 80 ms).
+
+| agent programs + chat/s | ours | conditional disagg | stock PD 2 + 2 | stock PD 1 + 3 |
+|---|---|---|---|---|
+| 4 + 1 | 98.1% ; 57 (95.0%) | 98.4% ; 54 (97.5%) | 91.4% ; 55 (95.1%) | 84.0% ; 54 (94.8%) |
+| 8 + 2 | 95.4% ; 105 (95.1%) | 98.2% ; 83 (98.2%) | 85.0% ; 98 (93.8%) | 67.7% ; 87 (90.4%) |
+| 12 + 3 | 93.4% ; 139 (94.2%) | 97.7% ; 99 (93.7%) | 79.6% ; 136 (93.1%) | 27.1% ; 110 (89.4%) |
+| 16 + 4 | 90.8% ; 165 (94.3%) | 97.9% ; 85 (73.8%) | [pending] | 1.3% ; 93 (79.2%) |
+| 8 + 2, + 4-program spike | 95.8% ; 101 (95.0%) | 98.5% ; 70 (93.9%) | 86.9% ; 101 (95.1%) | 63.9% ; 92 (92.7%) |
+
 **Result: cache pressure.** With the working set grown from 1M to 8M KV tokens against a 6.7M-token pool,
 disaggregation loses 55% throughput and 28.5 points of cached fraction, ours 10.6% and 3.1 points, in earlier
 settings; a rerun with the full stack is [pending].

@@ -826,7 +826,22 @@ Tasks, in priority order:
         there is one decode worker; equivalent there).
         - [ ] Rerun the 3 + 1 arm at C = 8 after the sweep. If it ranks in the top two, rerun stock PD with it at
               the other loads.
-      - Loads so far (r1), chat 0.5 s / 20 ms ; agent SLO goodput (tok/s):
+      - **r1 complete 2026-10-26** (except the two stock PD reruns). Paper SLO matrix (chat 2 s + 50 ms; agent 10 s,
+        20 s > 200K, + 80 ms): chat attainment ; agent SLO goodput (agent attainment):
+        | C + chat/s | ours | conditional disagg | stock PD 2 + 2 | stock PD 1 + 3 |
+        |---|---|---|---|---|
+        | 4 + 1 | 98.1% ; 57 (95.0%) | 98.4% ; 54 (97.5%) | 91.4% ; 55 (95.1%) | 84.0% ; 54 (94.8%) |
+        | 8 + 2 | 95.4% ; 105 (95.1%) | 98.2% ; 83 (98.2%) | 85.0% ; 98 (93.8%) | 67.7% ; 87 (90.4%) |
+        | 12 + 3 | 93.4% ; 139 (94.2%) | 97.7% ; 99 (93.7%) | 79.6% ; 136 (93.1%) | 27.1% ; 110 (89.4%) |
+        | 16 + 4 | 90.8% ; 165 (94.3%) | 97.9% ; 85 (73.8%) | rerun queued | 1.3% ; 93 (79.2%) |
+        | spike (8 + 2, + 4 programs) | 95.8% ; 101 (95.0%) | 98.5% ; 70 (93.9%) | 86.9% ; 101 (95.1%) | 63.9% ; 92 (92.7%) |
+        - vs conditional: agent goodput +6 / +27 / +40 / +94%, spike +44%; chat attainment -0.3 / -2.8 / -4.3 /
+          -7.1 points, spike -2.7.
+        - vs stock PD (best split): chat +7 to +14 points at 4-12 programs (+9 under the spike); agent goodput
+          +4 / +7 / +2% and level under the spike.
+        - Llama differs from Qwen: on 4 TP4 replicas the router has 4 choices instead of 16, and a 70B prefill
+          chunk on a colocated node holds every co-resident chat decode for one long step.
+      - Original scoring (r1), chat 0.5 s / 20 ms ; agent SLO goodput (tok/s):
         | C + chat/s | ours | conditional disagg | stock PD 2 + 2 | stock PD 1 + 3 |
         |---|---|---|---|---|
         | 4 + 1 | 92.7% ; 57 | 93.9% ; 54 | 80.4% ; 55 | 66.6% ; 54 |

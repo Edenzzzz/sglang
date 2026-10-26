@@ -27,6 +27,10 @@ if "_pcg_no(" not in s:
             out.append(line)
     helper = '''    def _pcg_no(self, tag):
         if os.environ.get("SGLANG_PCG_REASON") == "1":
+            mr = getattr(self, "model_runner", None)
+            role = "draft" if getattr(mr, "is_draft_worker", False) else "target"
+            mode = getattr(getattr(self, "capture_hidden_mode", None), "name", "?")
+            tag = f"{role}/{mode}/{tag}"
             c = self.__dict__.setdefault("_pcg_counts", {})
             c[tag] = c.get(tag, 0) + 1
             n = sum(c.values())
@@ -38,6 +42,10 @@ if "_pcg_no(" not in s:
     def _pcg_yes(self):
         if os.environ.get("SGLANG_PCG_REASON") == "1":
             self.__dict__["_pcg_ok"] = self.__dict__.get("_pcg_ok", 0) + 1
+            n = self.__dict__["_pcg_ok"]
+            if n % 500 == 1:
+                mr = getattr(self, "model_runner", None)
+                logger.info("PCG_REPLAY role=%s replayed=%d", "draft" if getattr(mr, "is_draft_worker", False) else "target", n)
         return True
 
 '''

@@ -1432,7 +1432,17 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
                       request-slot padding (zero-length sentinels up to a captured slot count). Decode / verify use
                       a separate per-bs graph set (`decode_cuda_graph_runner`, attention inside).
                     - Diagnostic run 1 failed at server start: the patch put `import os` above
-                      `from __future__`. Fixed with a `compile()` check; rerunning.
+                      `from __future__`. Fixed with a `compile()` check.
+                    - **Run 2 corrects the diagnosis** (ShareGPT 32 req/s four-mode):
+                      - The target's extend forwards DO replay: 3369 replays vs 3302 prefill steps.
+                      - The batch log's "cuda graph: False" on merged steps is hard-coded
+                        (`forward_mixed_spec` returns `can_run_cuda_graph=False`), not a measurement. My earlier
+                        "2979 eager steps" counted that flag.
+                      - The real refusals are ~9000 other forwards (~3 per step). All fail the hidden-state check:
+                        `capture_hidden_mode` of the graph < requested.
+                      - Suspect: the draft model's extend in the merged step requests FULL, while the breakable EAGLE
+                        draft captures LAST.
+                      - Run 3 tags each refusal with draft / target and the capture mode (running).
               - [ ] **Stopgap: `SGLANG_MIXED_SPEC_QUEUE_LONG_ROWS=1`** (`unified/apply_mixed_spec_queue_long_20261026.py`,
                     opt-in). The queue trigger needs a running row with context >= `MIN_CTX`. Under test:
                     - [x] GLM overloaded four-mode (pod 4, `short_a6_nodc_qlong`, two repeats): agent 27.6 / 28.9 vs

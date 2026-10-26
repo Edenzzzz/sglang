@@ -62,7 +62,7 @@ for spec in "sharegpt_r32 $T/ShareGPT_V3_unfiltered_cleaned_split.json 32 3840";
   echo "##### $name rate=$rate n=$n (prefill CUDA-graph refusal reasons)"
   /dev/shm/w/venv/bin/python -u run_native_serving_pair_20261023.py "$R" --stage mix32 --modes four --standalone $path \
     --chat-rate $rate --chat-requests $n $COMMON $FIX --repeats 1 --ours-env SGLANG_PCG_REASON=1 --native-env SGLANG_A6_UNIFIED=1
-  for a in $R/mix32_four_r*_native; do grep PCG_REASON $a/server.log | tail -3 | cut -c1-600; done
+  for a in $R/mix32_four_r*_native; do grep -E "PCG_REASON|PCG_REPLAY" $a/server.log | tail -6 | cut -c1-600; done
   for a in $R/mix32_four_r*_*; do o=$(cat $a/requests/server_log_offset); echo "$(basename $a) prefill_eager=$(tail -c +$o $a/server.log | grep 'Prefill batch' | grep -c 'cuda graph: False') prefill_graph=$(tail -c +$o $a/server.log | grep 'Prefill batch' | grep -c 'cuda graph: True')"; done
 done
 echo PCG_DIAG_DONE

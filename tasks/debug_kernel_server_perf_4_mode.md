@@ -826,6 +826,20 @@ Tasks, in priority order:
         there is one decode worker; equivalent there).
         - [ ] Rerun the 3 + 1 arm at C = 8 after the sweep. If it ranks in the top two, rerun stock PD with it at
               the other loads.
+      - Loads so far (r1), chat 0.5 s / 20 ms ; agent SLO goodput (tok/s):
+        | C + chat/s | ours | conditional disagg | stock PD 2 + 2 | stock PD 1 + 3 |
+        |---|---|---|---|---|
+        | 4 + 1 | 92.7% ; 57 | 93.9% ; 54 | 80.4% ; 55 | 66.6% ; 54 |
+        | 8 + 2 | 86.5% ; 105 | 91.7% ; 83 | 64.2% ; 98 | 30.4% ; 87 |
+        | 12 + 3 | 79.0% ; 139 | 88.1% ; 99 | 47.2% ; 136 | 4.2% ; 110 |
+        | 16 + 4 | 68.3% ; 165 | 86.2% ; 85 | arm failed (rerun queued) | running |
+        - Agent goodput vs conditional: +6 / +27 / +40 / +94%.
+        - **Chat attainment trails conditional by 1-18 points** (unlike Qwen, where it was level). Ours runs chat
+          TPOT p90 31.7 ms vs 17.6 ms at 16 + 4. Before the paper claims Llama chat, this needs the per-step
+          explanation (chat decodes sharing steps with agent prefill chunks on every colocated TP4 node, vs
+          conditional's local-only short appends).
+      - Bug: the stock PD 2 + 2 arm at 16 + 4 aborted because pod 0 claimed no ports (3 / 4 workers up after 40 min).
+        Rerun queued (`pd_colocation/mn_llama_p2l16_rerun_20261026.sh`).
 - [ ] 2026-10-24 **Conditional-disagg comparison re-run at Dynamo's defaults** (2048 tokens, 0.7 of the prompt; the
       earlier run used 4096), queued behind the stage-3 baselines (`pd_colocation_vs_disagg.md`).
 - [ ] **Fault tolerance:** prefill-role and decode-role workers killed mid-run (`pd_colocation_vs_disagg.md`).

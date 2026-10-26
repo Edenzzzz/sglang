@@ -1641,7 +1641,8 @@ async def benchmark(
             input_requests, send_session_request, request_rate,
             replay_timestamps=use_trace_timestamps,
             slowdown_factor=mooncake_slowdown_factor,
-            start_at_timestamps=getattr(args, "tracelab_window_start_s", None) is not None,
+            start_at_timestamps=(getattr(args, "tracelab_window_start_s", None) is not None
+                                 or bool(getattr(args, "tracelab_window_starts", None))),
         )
     else:
         async for request in request_generator:
@@ -1975,6 +1976,10 @@ async def benchmark(
         "spec_num_correct_drafts": [output.spec_num_correct_drafts for output in outputs],
         "spec_num_proposed_drafts": [output.spec_num_proposed_drafts for output in outputs],
         "spec_verify_ct": [output.spec_verify_ct for output in outputs],
+        # Wall-clock request start (perf_counter start shifted to the epoch), so streams written by separate client
+        # processes share one time axis for windowed scoring; cached prompt tokens per request (0 if unreported).
+        "request_start_epoch": [output.start_time + (time.time() - time.perf_counter()) for output in outputs],
+        "cached_tokens": [output.cached_tokens for output in outputs],
     }
     proposed_drafts = sum(output.spec_num_proposed_drafts or 0 for output in outputs)
     correct_drafts = sum(output.spec_num_correct_drafts or 0 for output in outputs)
@@ -1983,7 +1988,6 @@ async def benchmark(
     )
 
     if args.cache_report:
-        result_details["cached_tokens"] = [o.cached_tokens for o in outputs]
         result_details["cached_tokens_details"] = [
             o.cached_tokens_details for o in outputs
         ]
@@ -2399,6 +2403,10 @@ def cli_main():
     tracelab_group.add_argument("--tracelab-text-source", type=str, default=None,
                                 help="ShareGPT JSON whose tokenized text, drawn sequentially, fills "
                                 "the token contents instead of random vocabulary ids.")
+    tracelab_group.add_argument("--tracelab-window-starts", type=str, default=None,
+                                help="Comma-separated window starts (trace seconds): superpose these "
+                                "segments on one clock, each timed from its own start. Excludes "
+                                "--tracelab-window-start-s.")
     parser.add_argument(
         "--speed-bench-category",
         type=str,

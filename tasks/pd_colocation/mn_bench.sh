@@ -35,11 +35,15 @@ if [ "${WORKLOAD:-}" = fanout ]; then
     FO_SP=$!
   fi
 elif [ "${AGENT_MODE:-}" = tracelab_ts ]; then
+  # WINDOW_STARTS="s1,s2,...": superpose those one-hour segments on one clock (each timed from its own start), so the
+  # replay carries many developers' sessions at once; mutually exclusive with WINDOW_START.
   # Crossflow-style timestamp replay: every session whose first eligible round starts in
   # [WINDOW_START, WINDOW_START+WINDOW_S) trace seconds with all its rounds (WINDOW_ROUNDS=segment: only rounds
   # starting inside the window); offsets and gaps divided by ALPHA;
   # round r goes out at max(finish_{r-1} + gap_r/ALPHA, offset_r/ALPHA). Contents are tokenized ShareGPT text
   # (TEXT_SOURCE; TEXT_SOURCE=random keeps random ids). Measured programs/starts/calls go to agent_programs.json.
+  if [ -n "${WINDOW_STARTS:-}" ]; then WINDOW_ARGS=(--tracelab-window-starts "$WINDOW_STARTS")
+  else WINDOW_ARGS=(--tracelab-window-start-s "${WINDOW_START:?AGENT_MODE=tracelab_ts needs WINDOW_START or WINDOW_STARTS}"); fi
   TS_TEXT=${TEXT_SOURCE:-$W/workloads/ShareGPT_V3_unfiltered_cleaned_split.json}
   [ "$TS_TEXT" = random ] && TS_TEXT=
   export BENCH_SESSION_AUDIT_FILE=$OUT/agent_programs.json
@@ -47,7 +51,7 @@ elif [ "${AGENT_MODE:-}" = tracelab_ts ]; then
     --dataset-name tracelab-claude --dataset-path "${TRACE_DATASET_PATH:-$W/workloads/tracelab/syfi_full_min.jsonl.gz}" --tokenize-prompt \
     --tracelab-min-context-len ${MIN_CTX:-0} --tracelab-max-context-len ${MAX_CTX:-65536} --tracelab-min-output-len 1 \
     --tracelab-providers claude,codex --tracelab-allow-empty-prefix \
-    --tracelab-window-start-s ${WINDOW_START:?AGENT_MODE=tracelab_ts needs WINDOW_START} --tracelab-window-s ${WINDOW_S:-3600} \
+    "${WINDOW_ARGS[@]}" --tracelab-window-s ${WINDOW_S:-3600} \
     --tracelab-time-scale ${ALPHA:-1} --tracelab-window-rounds ${WINDOW_ROUNDS:-session} \
     ${TS_TEXT:+--tracelab-text-source "$TS_TEXT"} --request-rate inf \
     --warmup-requests 2 --output-file $OUT/agent.json --output-details --disable-tqdm > $OUT/bench_agent.log 2>&1 &

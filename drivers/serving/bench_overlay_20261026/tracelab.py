@@ -59,6 +59,10 @@ class TraceLabClaudeDataset(BaseDataset):
     window_rounds: str = "session"
     # ShareGPT JSON whose tokenized text fills the token contents instead of random vocabulary.
     text_source: Optional[str] = None
+    # Superposed segments: several window starts, each segment's sessions replayed on one common clock (every segment's
+    # offsets measured from its own start), the way one cluster serves many developers' sessions at once. Session ids
+    # get an "@<k>" suffix so a session cut by two windows stays two independent replays.
+    window_starts: Optional[tuple] = None
 
     @classmethod
     def from_args(cls, args):
@@ -80,13 +84,21 @@ class TraceLabClaudeDataset(BaseDataset):
             float(getattr(args, "tracelab_time_scale", 1.0)),
             getattr(args, "tracelab_window_rounds", "session"),
             getattr(args, "tracelab_text_source", None),
+            _parse_window_starts(getattr(args, "tracelab_window_starts", None)),
         )
 
     def load(self, tokenizer, model_id=None):
         if not self.dataset_path:
             raise ValueError("--dataset-path must identify a TraceLab JSONL(.gz) file")
+        if self.window_starts:
+            if self.window_start_s is not None:
+                raise ValueError("--tracelab-window-starts excludes --tracelab-window-start-s")
+            self.window_start_s = self.window_starts[0]
         windowed = self.window_start_s is not None
         if windowed:
+            for start in self.window_starts or (self.window_start_s,):
+                if not (math.isfinite(start) and start >= 0):
+                    raise ValueError("TraceLab window starts must be finite and nonnegative")
             if not (math.isfinite(self.window_start_s) and self.window_start_s >= 0):
                 raise ValueError("--tracelab-window-start-s must be finite and nonnegative")
             if not (math.isfinite(self.window_s) and self.window_s > 0):
@@ -132,9 +144,14 @@ class TraceLabClaudeDataset(BaseDataset):
                 sessions.setdefault(session_id, []).append(record)
 
         if windowed:
-            selected, session_records, window_start_ms = self._select_window(
-                sessions, trace_origin_ms
-            )
+            selected, session_records, session_window_ms = [], {}, {}
+            for index, start_s in enumerate(self.window_starts or (self.window_start_s,)):
+                picked, records_of, start_ms = self._select_window(sessions, trace_origin_ms, start_s)
+                for session_id in picked:
+                    key = f"{session_id}@{index}" if self.window_starts else session_id
+                    selected.append(key)
+                    session_records[key] = records_of[session_id]
+                    session_window_ms[key] = start_ms
         else:
             quotas = [
                 (index + 1) * self.num_requests // self.num_groups
@@ -224,7 +241,7 @@ class TraceLabClaudeDataset(BaseDataset):
                     row.inter_round_delay_s = gap / self.time_scale
                     # Scaled offset from the window start; session_replay's
                     # start-at-timestamps mode issues rounds against it.
-                    row.trace_offset_s = (start_ms - window_start_ms) / 1000 / self.time_scale
+                    row.trace_offset_s = (start_ms - session_window_ms[session_id]) / 1000 / self.time_scale
                 requests.append(row)
         replayed = sorted(row.prompt_len for row in requests)
         if replayed:
@@ -236,7 +253,7 @@ class TraceLabClaudeDataset(BaseDataset):
         if windowed:
             self.num_groups = len(plan)
             self.num_requests = len(requests)
-            self._print_window_stats(plan, window_start_ms)
+            self._print_window_stats(plan, session_window_ms)
         contents = (
             f"natural text from {self.text_source} ({text_stream.describe()})"
             if text_stream is not None else "synthetic token contents"
@@ -248,10 +265,10 @@ class TraceLabClaudeDataset(BaseDataset):
         )
         return warmups + requests
 
-    def _select_window(self, sessions, trace_origin_ms):
+    def _select_window(self, sessions, trace_origin_ms, start_s):
         if trace_origin_ms is None:
             raise ValueError("TraceLab window selection requires timing_events timestamps")
-        window_start_ms = trace_origin_ms + self.window_start_s * 1000
+        window_start_ms = trace_origin_ms + start_s * 1000
         window_end_ms = window_start_ms + self.window_s * 1000
         firsts = []
         session_records = {}
@@ -274,24 +291,23 @@ class TraceLabClaudeDataset(BaseDataset):
                 firsts.append((first_start_ms, session_id))
         if not firsts:
             raise ValueError(
-                f"TraceLab window [{self.window_start_s}, {self.window_start_s + self.window_s}) s "
+                f"TraceLab window [{start_s}, {start_s + self.window_s}) s "
                 f"contains no eligible {self.window_rounds} rounds"
             )
         firsts.sort()
         return [session_id for _, session_id in firsts], session_records, window_start_ms
 
-    def _print_window_stats(self, plan, window_start_ms):
-        window_end_ms = window_start_ms + self.window_s * 1000
+    def _print_window_stats(self, plan, session_window_ms):
+        offset = lambda key, record: (_record_span_ms(record)[0] - session_window_ms[key]) / 1000
         rounds = [record for _, records in plan for record in records]
-        inside = [record for record in rounds if _record_span_ms(record)[0] < window_end_ms]
-        span_s = max(
-            (_record_span_ms(record)[0] - window_start_ms) / 1000 for record in rounds
-        )
+        inside = [record for key, records in plan for record in records if offset(key, record) < self.window_s]
+        span_s = max(offset(key, record) for key, records in plan for record in records)
         append = sum(int(record["newly_append_tokens"]) for record in inside)
         output = sum(int(record["output_tokens"]) for record in inside)
         alpha, window = self.time_scale, self.window_s
         print(
-            f"TraceLab window ({self.window_rounds}): start={self.window_start_s:g}s "
+            f"TraceLab window ({self.window_rounds}): "
+            f"starts={','.join(f'{start:g}' for start in (self.window_starts or (self.window_start_s,)))}s "
             f"length={window:g}s alpha={alpha:g} "
             f"-> num_groups(sessions)={len(plan)} num_prompts(rounds)={len(rounds)} "
             f"(rounds starting inside window: {len(inside)}; last round offset {span_s:.0f}s "
@@ -305,6 +321,12 @@ class TraceLabClaudeDataset(BaseDataset):
                 f"output tok/s={output / window * scale:.1f} "
                 "(rounds starting inside the window, over its length)"
             )
+
+
+def _parse_window_starts(value):
+    if value is None or value == "":
+        return None
+    return tuple(float(item) for item in str(value).split(",") if item.strip())
 
 
 def _record_span_ms(record):

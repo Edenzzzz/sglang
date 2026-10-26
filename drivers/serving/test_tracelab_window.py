@@ -197,6 +197,32 @@ class Output:
         self.success = success
 
 
+def test_superposed(path, tokenizer, starts):
+    """Superposed segments: each segment replays exactly as it would alone, on one shared clock."""
+    base = dict(min_context_len=0, max_context_len=131072, min_output_len=1, allow_empty_prefix=True,
+                window_s=3600.0, time_scale=10.0, window_rounds="segment", providers=("claude", "codex"))
+    alone = [measured(load_seeded(make(tracelab, path, window_start_s=start, **base), tokenizer, 1))
+             for start in starts]
+    both = measured(load_seeded(make(tracelab, path, window_starts=tuple(starts), **base), tokenizer, 1))
+    check(len(both) == sum(len(rows) for rows in alone),
+          f"superposed: {len(both)} rounds = sum of the {len(starts)} segments alone")
+    for index, rows in enumerate(alone):
+        mine = [row for row in both if row.session_id.endswith(f"@{index}")]
+        check([(row.session_id.rsplit("@", 1)[0], row.round_index) for row in mine]
+              == [(row.session_id, row.round_index) for row in rows],
+              f"superposed: segment {index} keeps its own {len(rows)} rounds in order, ids suffixed @{index}")
+        check(all(abs(a.trace_offset_s - b.trace_offset_s) < 1e-9 and abs(a.inter_round_delay_s - b.inter_round_delay_s) < 1e-9
+                  and a.prompt_len == b.prompt_len and a.output_len == b.output_len for a, b in zip(mine, rows)),
+              f"superposed: segment {index} offsets, gaps and lengths equal its standalone replay")
+        check(min(row.trace_offset_s for row in mine) >= 0 and min(row.trace_offset_s for row in mine) < 360.0,
+              f"superposed: segment {index} starts on the shared clock within its scaled hour")
+    try:
+        make(tracelab, path, window_starts=tuple(starts), window_start_s=starts[0], **base).load(tokenizer)
+        check(False, "superposed: --tracelab-window-starts with --tracelab-window-start-s is rejected")
+    except ValueError:
+        check(True, "superposed: --tracelab-window-starts with --tracelab-window-start-s is rejected")
+
+
 def test_replay_rule():
     # (offsets, gaps, service seconds) per session; times in seconds, kept short.
     plan = {
@@ -298,6 +324,8 @@ def main():
     parser.add_argument("--reference", default="/tmp/tlwin_ref/tracelab_orig.py")
     parser.add_argument("--window-start", type=float, default=4130 * 3600.0)
     parser.add_argument("--stats-windows", default="")
+    parser.add_argument("--superpose", default="17915400,14773800",
+                        help="window starts for the superposed-segment check")
     parser.add_argument("--stats-max-context", type=int, default=131072)
     parser.add_argument("--stats-alphas", default="1,10")
     args = parser.parse_args()
@@ -312,6 +340,7 @@ def main():
         check(False, f"reference loader {args.reference} missing; default path not compared")
     index = trace_index(args.trace)
     test_window(args.trace, tokenizer, index, args.window_start, args.text_source)
+    test_superposed(args.trace, tokenizer, [float(x) for x in args.superpose.split(",")])
     if args.stats_windows:
         print_window_stats(args.trace, tokenizer, [float(s) for s in args.stats_windows.split(",")],
                            args.stats_max_context, [float(a) for a in args.stats_alphas.split(",")])

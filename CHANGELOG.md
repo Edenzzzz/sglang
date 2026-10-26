@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.64.0 — Superposed TraceLab replay for the P/D demand-shift experiment (2026-10-26)
+- TraceLab loader (`drivers/serving/bench_overlay_20261026/tracelab.py`): `--tracelab-window-starts s1,s2,...`
+  superposes several one-hour trace segments on one clock, each timed from its own start, with session ids suffixed
+  `@k`. One trace hour holds only 3-6 concurrent sessions, too few for 16 GPUs. Tests: superposed segments equal
+  their standalone replays (`test_tracelab_window.py`, ALL PASS on the full release).
+- Bench client: `request_start_epoch` and `cached_tokens` per request, so separate client processes share one time
+  axis.
+- `mn_bench.sh` `WINDOW_STARTS`; `mn_run.py` forwards the TraceLab / window / math knobs to the bench (they were
+  dropped before, so the timestamp mode never ran multi-node).
+- `tasks/perf_model/tracelab_windows.py`: per-tenant paper-SLO attainment and SLO goodput for trace-replay arms, plus a
+  30 s series of offered prefill / decode demand and attainment.
+- `pd_colocation/mn_tracelab_shift_16g_20261026.sh`: 24 superposed busiest hours (at least one hour apart), alpha
+  4 / 6 / 8 plus a chat surge, with ours, conditional disaggregation, and stock PD 2 + 2 / 3 + 1 on 16 H20s.
+  Queued behind the fault-tolerance run.
+
 ## v1.63.1 — Paper sync: tables render as real bordered tables (2026-10-26)
 - `tasks/paper_sync_gdrive.py`: pandoc's tables referenced an undefined "Table" style, so they showed borderless, like
   text. Every table now gets grid borders at full width, with a shaded bold header row. The script fails if the docx

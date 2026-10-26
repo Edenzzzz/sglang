@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.62.1 — Paper 5.2.3: SLO-budgeted chunk size (pending validation); 4-H200 trial (2026-10-26)
+- Section 5.2.3 states the chunk rule: the largest chunk whose predicted step keeps every decode row within its
+  mean-TPOT slack, with headroom h, and unbounded with no decodes. It is marked [pending validation]; the measured
+  results still use fixed 2048-token chunks. The backlog cap moves to "what did not work".
+- Task doc: the chunk-size test plan sits beside the naive FA3 + FA2 baseline. One 4-H200 trial (`d4b20cad59170ebd`)
+  for the kernel and single-node stages; the queued 1-GPU trial was stopped.
+
 ## v1.62.0 — Paper draft: router design in detail, conclusion, stale parts cleaned (2026-10-26)
 - Section 5.2.1 now describes the router as built: block-chained prefix index plus a pool mirror, the in-flight table,
   calibrated prefill curve and decode grid, online EWMAs, and optional piggybacked node load. It gives the TTFT / TPOT

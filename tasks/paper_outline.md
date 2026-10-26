@@ -584,19 +584,37 @@ Figure 10: predicted vs measured step time, per step type (decode, prefill, mixe
 
 #### 5.2.3 Fair Resource sharing
 
-Prefill runs in fixed 2048-token chunks. When a request with an earlier deadline arrives, the chunked prefill in
-progress yields at its next chunk boundary and resumes in deadline order. This is part of C3.
+**Chunk size from the decode SLOs [pending validation].** A fixed chunk size is wrong at both ends of the load. When
+prefill load is high and few rows are decoding, a 2048-token chunk wastes the step: each chunk re-reads the prefix's
+KV and pays a step's fixed cost. When many rows are decoding, any chunk lengthens every resident's inter-token gap.
+We therefore size each step's chunk from the step-time model of section 5.2.2. The chunk is the largest c whose
+predicted step time keeps every running decode row within its SLO, with a small headroom h:
 
-We also tried sizing chunks from the EDF backlog, with a per-step cap of 1024 or 2048 tokens while chat waits. It did
-not pay:
+  step(c, decode rows, their KV, the prefix, acceptance) <= (1 - h) x min over running rows r of budget_r.
+
+Here budget_r is row r's remaining mean-TPOT slack: its tenant's TPOT target times the tokens it will have emitted
+after this step, minus the decode time it has already spent. A row ahead of its target lends slack, and a row behind
+it shrinks the budget. With no rows decoding, the chunk is bounded only by memory. The router prices a prefill's TTFT
+under the same rule, walking it chunk by chunk under each node's decode load.
+
+This rule grows chunks when slack allows, and it budgets against per-tenant TPOT targets (50 / 80 ms). An earlier
+rule priced every step against one 20 ms budget and could only shrink chunks below 2048; it lowered chat attainment
+from 91.4% to 65.1% on 8 H20s. The comparison against fixed 2048, 8192 and 16384-token chunks, at h = 0, 10% and
+20%, on prefill-heavy agent loads, the mixed loads of Table 7b and ShareGPT, is [pending].
+
+**Preemption.** When a request with an earlier deadline arrives, the chunked prefill in progress yields at its next
+chunk boundary and resumes in deadline order. Preemption on vs off is [pending]. This is part of C3.
+
+**What did not work: a backlog cap.** Capping each step's chunk at 1024 or 2048 tokens while chat waits did not pay:
 - the cap binds on 86% of steps;
 - it doubles the number of mixed steps a chat request rides in;
 - removing it improved every chat metric on Llama-3.3-70B (section 6.3).
 
-The final configuration therefore has no cap. Preemption on vs off is [pending].
+The measured results in section 6 therefore use fixed 2048-token chunks without the cap.
 
-Figure 11: per-tenant TTFT / ITL attainment and agent throughput for fixed chunks with and without preemption, and with
-the per-step cap; one node, three models [pending].
+Figure 11: per-tenant TTFT / TPOT attainment, agent throughput and the distribution of chosen chunk sizes, for fixed
+2048 / 8192 / 16384-token chunks and the SLO-budgeted chunk at h = 0 / 10 / 20%, with and without preemption;
+predicted vs measured step time per chunk size; one node, three models [pending].
 
 ### 5.3 SLO-aware scheduling
 

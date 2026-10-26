@@ -828,6 +828,7 @@ Tasks, in priority order:
               - It ranks second by agent goodput (2 + 2: 98, 3 + 1: 94, 1 + 3: 87), so the best splits are 2 + 2 and
                 3 + 1, not 1 + 3.
               - Ours at C = 8: 95.4% ; 105.
+              - [x] 2 + 2 at C = 16 rerun (`_r1b`): chat 68.2% ; agent 160 tok/s (90.7%). Ours 90.8% ; 165.
               - [ ] 3 + 1 at C = 4 / 12 / 16 and the spike (`pd_colocation/mn_llama_p3_loads_20261026.sh`, queued
                     behind the 2 + 2 C = 16 rerun).
       - **r1 complete 2026-10-26** (except the two stock PD reruns). Paper SLO matrix (chat 2 s + 50 ms; agent 10 s,
@@ -1475,7 +1476,34 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
                         `capture_hidden_mode` of the graph < requested.
                       - Suspect: the draft model's extend in the merged step requests FULL, while the breakable EAGLE
                         draft captures LAST.
-                      - Run 3 tags each refusal with draft / target and the capture mode (running).
+                      - Runs 3-5:
+                        - The refusals are the DRAFT model's prefill-graph runner (captures LAST), on
+                          `DRAFT_EXTEND_V2` forwards requesting FULL, bs 45-48: the verify rows' draft extend falling
+                          through to eager.
+                        - The draft-extend graph runner logged NO refusals, and neither arm logged a draft-extend
+                          capture, so that path is eager in both arms. The refusal counter ran only in ours
+                          (`--ours-env`), so "stock: 0 refusals" was not evidence. The draft path does not explain
+                          the gap.
+                    - **Explanation consistent with all runs:**
+                      - Stock MTP runs verify as its own step on the decode CUDA graph (whole forward incl.
+                        attention, one launch), and a short prefill on the breakable prefill graph.
+                      - The 4-mode step merges both into one forward on the breakable prefill graph, where attention
+                        (and its metadata, and the A6 plan) runs eager per layer.
+                      - On short-prompt, high-rate ShareGPT the extra CPU launch work per step is the -7%. On long
+                        contexts GPU time hides it.
+                    - **Plan (user's design):**
+                      - One shared graph set keyed by token-count bucket, attention inside the graph, request-slot
+                        padding with zero-length sentinel requests, attention metadata refreshed outside the graph
+                        (the shape of sglang's "full" prefill backend). It serves decode, verify, prefill and mixed
+                        steps; only the batch fill changes.
+                      - A6 must be graph-capturable: the plan writes static device buffers (the device-metadata path
+                        already does), and launch grids are fixed. Stock FA3's persistent scheduler is fixed-grid.
+                        The FA2 NP kernel launches one CTA per item, so it needs a max grid with early exit. The
+                        persistent FA2 executor is graph-friendly as built.
+                      - Sweep captured buckets / slot counts against memory so large batches still fit.
+                      - Steps: (1) check the full backend's support for the FA3 attention backend and for
+                        target-verify (spec) batches; (2) make A6 capturable; (3) enable the merged 4-mode step;
+                        (4) sweep buckets and padding; (5) ShareGPT 32 req/s four-mode + the mixed workload.
               - [ ] **Stopgap: `SGLANG_MIXED_SPEC_QUEUE_LONG_ROWS=1`** (`unified/apply_mixed_spec_queue_long_20261026.py`,
                     opt-in). The queue trigger needs a running row with context >= `MIN_CTX`. Under test:
                     - [x] GLM overloaded four-mode (pod 4, `short_a6_nodc_qlong`, two repeats): agent 27.6 / 28.9 vs

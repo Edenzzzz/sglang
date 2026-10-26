@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.62.2 — Paper draft synced to Google Drive; 5.2.3 chunk-size framing corrected (2026-10-26)
+- `tasks/paper_sync_gdrive.py` compiles `tasks/paper_outline.md` to .docx with pandoc, using the user's outline docx
+  as the style reference, and uploads it to Drive as `attn_fuse_draft_2026.docx` (updated in place). Credentials stay
+  outside the repo (`~/.config/attn_fuse/`). A local post-commit hook runs it whenever a commit touches the draft.
+- Section 5.2.3: fixed 2048-token chunks are the configuration behind every measured result. The SLO-budgeted chunk
+  replaces them only if it wins on prefill-heavy loads with no regression on decode-heavy and mixed loads (pending
+  validation).
+
 ## v1.62.1 — Paper 5.2.3: SLO-budgeted chunk size (pending validation); 4-H200 trial (2026-10-26)
 - Section 5.2.3 states the chunk rule: the largest chunk whose predicted step keeps every decode row within its
   mean-TPOT slack, with headroom h, and unbounded with no decodes. It is marked [pending validation]; the measured

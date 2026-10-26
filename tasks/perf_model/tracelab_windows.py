@@ -41,10 +41,12 @@ def load(path, tenant):
             NOT_ISSUED[tenant] = NOT_ISSUED.get(tenant, 0) + 1
             continue
         n = d["output_lens"][i]
-        ok = not error and n > 1 and d["ttfts"][i] is not None
+        # A one-token reply (the trace has them) has no inter-token gap: it is judged on TTFT alone.
+        ok = not error and n >= 1 and d["ttfts"][i] is not None
         itl = sum(d["itls"][i]) if ok else 0.0
         out.append(dict(tenant=tenant, ok=ok, start=starts[i], ttft=d["ttfts"][i] if ok else None,
-                        tpot_ms=itl / (n - 1) * 1e3 if ok else None, end=starts[i] + (d["ttfts"][i] or 0) + itl,
+                        tpot_ms=(itl / (n - 1) * 1e3 if n > 1 else 0.0) if ok else None,
+                        end=starts[i] + (d["ttfts"][i] or 0) + itl,
                         out=n, uncached=max(0, d["input_lens"][i] - (cached[i] or 0))))
     return out
 

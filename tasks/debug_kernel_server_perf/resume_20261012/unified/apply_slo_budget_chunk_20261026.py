@@ -32,22 +32,30 @@ if "def _slo_budget_chunk" in s:
     print("already")
     sys.exit(0)
 
-call = re.search(r"\n(        # Prefill policy\n)?        adder = PrefillAdder\(\n((?:            .*\n){6})            (\w+),\n", s)
-assert call, "PrefillAdder call not found"
-var = call.group(3)
-assert var in ("effective_chunk_size", "chunked_prefill_size"), var
-anchor = call.group(0)
-hook = (f"\n        {var} = self._slo_budget_chunk({var})\n        if {var} == 0:\n            return None" + anchor)
-assert s.count(anchor) == 1
-s = s.replace(anchor, hook, 1)
+EDF_CHAIN = "        chunked_prefill_size = self._edf_limit_chunk(running_batch, chunked_prefill_size)\n"
+if EDF_CHAIN in s:
+    # Our serving tree: the EDF chunk rules run in sequence and a zero chunk already means "no prefill this step".
+    var = "chunked_prefill_size"
+    assert s.count(EDF_CHAIN) == 1
+    s = s.replace(EDF_CHAIN, EDF_CHAIN + "        chunked_prefill_size = self._slo_budget_chunk(chunked_prefill_size, running_batch)\n", 1)
+else:
+    call = re.search(r"\n(        # Prefill policy\n)?        adder = PrefillAdder\(\n((?:            .*\n){6})            (\w+),\n", s)
+    assert call, "PrefillAdder call not found"
+    var = call.group(3)
+    assert var in ("effective_chunk_size", "chunked_prefill_size"), var
+    anchor = call.group(0)
+    hook = (f"\n        {var} = self._slo_budget_chunk({var})\n        if {var} == 0:\n            return None" + anchor)
+    assert s.count(anchor) == 1
+    s = s.replace(anchor, hook, 1)
 
 method = '''
-    def _slo_budget_chunk(self, chunk_size):
+    def _slo_budget_chunk(self, chunk_size, running_batch=None):
         """Largest prefill chunk whose predicted step keeps every running decode row within its mean-TPOT SLO."""
         spec = os.environ.get("SGLANG_SLO_CHUNK", "")
         if not spec or not chunk_size or chunk_size <= 0:
             return chunk_size
-        rows = self.running_batch.reqs if self.running_batch is not None else []
+        running_batch = running_batch if running_batch is not None else self.running_batch
+        rows = running_batch.reqs if running_batch is not None else []
         if not rows:
             return chunk_size
         cfg = getattr(self, "_slo_chunk_cfg", None)
@@ -89,11 +97,19 @@ method = '''
             out = chunk_size
         else:
             budget *= 1.0 - cfg["h"]
+            def prefix_of(req):
+                # Our serving tree tracks the computed prefix on req.kv / prefix_len and the enqueue match in
+                # _edf_cached_len; the upstream tree keeps prefix_indices.
+                kv = getattr(req, "kv", None)
+                committed = getattr(kv, "kv_committed_len", 0) if kv is not None else 0
+                indices = getattr(req, "prefix_indices", None)
+                return max(getattr(req, "prefix_len", 0) or 0, committed or 0, getattr(req, "_edf_cached_len", 0) or 0,
+                           len(indices) if indices is not None else 0)
+
             if self.chunked_req is not None:
-                pf = len(self.chunked_req.prefix_indices)
+                pf = prefix_of(self.chunked_req)
             elif self.waiting_queue:
-                nxt = self.waiting_queue[0]
-                pf = len(nxt.prefix_indices) if nxt.prefix_indices is not None else 0
+                pf = prefix_of(self.waiting_queue[0])
             else:
                 pf = 0
             c0, c_tok, c_attn, c_bs, c_kv, c_np, c_mixed, c_draft, c_ver, c_vkv = cfg["coef"]
@@ -124,7 +140,7 @@ method = '''
                         chunk_size, out)
         return out
 '''
-anchor2 = "\n    def get_new_batch_prefill(self) -> Optional[ScheduleBatch]:"
+anchor2 = re.search(r"\n    def get_new_batch_prefill\(self[^)]*\)[^:]*:", s).group(0)
 assert s.count(anchor2) == 1
 s = s.replace(anchor2, method + anchor2, 1)
 for module in ("import os\n", "import time\n"):

@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.68.0 — SLO-budgeted chunk on H20; trace scorer counts one-token replies by TTFT (2026-10-27)
+- `apply_slo_budget_chunk_20261026.py` applies to our serving tree: it hooks after `_edf_limit_chunk`, takes
+  `running_batch` as a parameter, and reads the prefix from the tree's own fields. Applied to a tree copy
+  (`/dev/shm/w/python_slo`) on all four H20 pods; `mn_run.py` / `mn_node.sh` forward `SLO_CHUNK`.
+- `pd_colocation/mn_slo_chunk_16g_20261027.sh`: step trace, lin4mode fit, then the SLO-budgeted chunk on the trace
+  replay (alpha 6 / 3 / surge). Queued after the 64-program fault test.
+- `tracelab_windows.py`: trace rounds with a one-token reply are judged on TTFT alone; they were counted as failures
+  before. Demand shift at alpha 6 (v2, fixed 900 s horizon), ours vs conditional disaggregation: agent goodput 890 vs
+  720 tok/s, rounds issued 4818 vs 3850, agent TTFT p90 13.0 vs 73.1 s; chat attainment 31.8 vs 57.2% (chat TPOT p50
+  72 vs 28 ms).
+
 ## v1.67.2 — Paper: demand-shift setup updated to the v2 protocol (2026-10-26)
 - Section 6.4, Table 4b and Figure 23 describe alpha 3 / 6, the fixed horizon, and the 300 s surge at alpha 3.
 

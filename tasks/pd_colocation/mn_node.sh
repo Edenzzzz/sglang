@@ -191,6 +191,9 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   [ "${EDF_UNCACHED:-0}" = 1 ] && export SGLANG_EDF_UNCACHED_DEADLINE=1
   # DEADLINE_CHUNK="small:large:tok_s": per-step prefill chunk from EDF deadlines (apply_edf_deadline_chunk.py).
   [ -n "${DEADLINE_CHUNK:-}" ] && export SGLANG_EDF_DEADLINE_CHUNK=$DEADLINE_CHUNK
+  # SLO_CHUNK="<model.json>:<h>:<chat_ms>:<agent_ms>:<agent_tokens>[:demote]": SLO-budgeted prefill chunk
+  # (apply_slo_budget_chunk_20261026.py in the SGL_PY tree); pair it with a large CHUNK so the chunk can grow.
+  [ -n "${SLO_CHUNK:-}" ] && export SGLANG_SLO_CHUNK=$SLO_CHUNK
   # STEP_BUDGET="budget_ms:a:b": cap that chunk to a predicted mixed-step time over its prefix (apply_edf_step_budget.py).
   [ -n "${STEP_BUDGET:-}" ] && export SGLANG_EDF_STEP_BUDGET=$STEP_BUDGET
   # ITL_SLO="slo_ms:tokens_per_step:base_ms:a:b": largest chunk keeping running decodes within their ITL SLO, no

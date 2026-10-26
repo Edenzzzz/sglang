@@ -35,6 +35,19 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
         - 4 agent rows at 80 ms: 10373;
         - one row 10 s behind: 0 without `demote`, 1709 with it.
     - Order on the H200: collect A6 STEPTRACE at the Table 7b loads, export the model, then run the arms below.
+    - 2026-10-27, also on 16 H20s (queued, `pd_colocation/mn_slo_chunk_16g_20261027.sh`, log
+      `/tmp/h20/mn_slo_chunk_16g_r1.log`).
+      - Why there: at alpha 6 in the demand-shift replay, ours beats conditional disaggregation on agent goodput
+        (890 vs 720 tok/s), but its chat TPOT p50 is 72 ms vs 28 ms with fixed 2048-token chunks.
+      - Steps:
+        1. ours at alpha 3 with STEP_TRACE;
+        2. fit lin4mode on pod 0's workers and copy it to every pod;
+        3. ours with `SLO_CHUNK=<model>:0.1:50:80:24000:demote`, `CHUNK=16384` and `SGL_PY=/dev/shm/w/python_slo`
+           (the patch applied to a copy of the tree), at alpha 6, alpha 3 and the alpha-3 surge.
+      - The patch now handles both scheduler shapes:
+        - in our serving tree it runs after `_edf_limit_chunk`, where a zero chunk already means no prefill;
+        - in the upstream shape it hooks PrefillAdder;
+        - the prefix is read from `kv_committed_len` / `prefix_len` / `_edf_cached_len`.
     - Problem: every serving arm prefills in fixed 2048-token chunks (`CHUNK=2048`, `--chunked-prefill-size`). That
       wastes the step when prefill load is high and decode load is low, e.g. cold 128-256K agent turns with few rows
       decoding.

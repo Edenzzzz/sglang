@@ -11,6 +11,15 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
   scripts, the same native libraries / flash-attention / overlay). Lost with the pod and to be regenerated: the 96
   trace-sampled captures, the synthetic and standalone sets, every A6 build, and experiment 4 (sync-free merge),
   whose result was never read.
+- **Kernel claim baseline (user, 2026-10-26):** gains are measured on 4-mode inputs against NAIVE FA3 + FA2: stock
+  flash-attention FA3 on the prefill rows plus STOCK flashinfer FA2 (`BatchPrefillWithPagedKVCacheWrapper`,
+  backend fa2, its own plan / tile choice / split-KV merge), serial and two-stream
+  (`unified/bench_naive_fa3_fa2_20261026.py`, run with the pip flashinfer 0.7.0.post1, not port07). The v3 build is
+  our own earlier design and must not be the baseline. Microbenchmarks and single-node runs on the H200 only (the H20
+  is compute-curtailed). Plan on the re-forked H200:
+  - Qwen captures are regenerated.
+  - Llama / GLM TP4 rank-0 captures are replayed from the H20 copies.
+  - Arms on the same captures: sglang's single FA3 call, naive FA3 + FA2 (serial / streams), v3, A6.
 - **Hardware (before):** H200 job `8574c727fab6ffbd` (vibecuda; restored with `unified/prov_h200_20261024.sh` after
   `34c7bd503d461dc1` ended) for stages 1-2; H20 job `2f608c1b1a67cf09` for multi-node and, meanwhile, kernel runs.
 

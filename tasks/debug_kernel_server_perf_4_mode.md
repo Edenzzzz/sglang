@@ -824,8 +824,12 @@ Tasks, in priority order:
       - Bug: stock PD 3 + 1 never ran. sglang_router rejects `--decode-policy power_of_two` with one decode worker
         (TP4 leaves one decode pod at P = 3), so the clients timed out. Fixed in `mn_run.py` (round_robin when
         there is one decode worker; equivalent there).
-        - [ ] Rerun the 3 + 1 arm at C = 8 after the sweep. If it ranks in the top two, rerun stock PD with it at
-              the other loads.
+        - [x] Rerun the 3 + 1 arm at C = 8 (`_r1b`): chat 92.3% (paper SLO) ; agent 94 tok/s (94.5%).
+              - It ranks second by agent goodput (2 + 2: 98, 3 + 1: 94, 1 + 3: 87), so the best splits are 2 + 2 and
+                3 + 1, not 1 + 3.
+              - Ours at C = 8: 95.4% ; 105.
+              - [ ] 3 + 1 at C = 4 / 12 / 16 and the spike (`pd_colocation/mn_llama_p3_loads_20261026.sh`, queued
+                    behind the 2 + 2 C = 16 rerun).
       - **r1 complete 2026-10-26** (except the two stock PD reruns). Paper SLO matrix (chat 2 s + 50 ms; agent 10 s,
         20 s > 200K, + 80 ms): chat attainment ; agent SLO goodput (agent attainment):
         | C + chat/s | ours | conditional disagg | stock PD 2 + 2 | stock PD 1 + 3 |

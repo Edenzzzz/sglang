@@ -75,7 +75,10 @@
       agent SLO goodput at every load (32-128 programs, two repeats) and +21-24% under a load spike, chat attainment
       within 2.4 points through 96 programs and +7.7 points at 128; Llama-3.3-70B (4 TP4 replicas, two
       repeats): vs stock PD's best split +3..+23 points chat attainment at -2..+7% agent SLO goodput; vs conditional
-      disaggregation +4..+94% agent SLO goodput at -0.3..-7.1 points chat attainment [pending: 32 GPUs]
+      disaggregation +4..+94% agent SLO goodput at -0.3..-7.1 points chat attainment; superposed TraceLab replay
+      (demand shift): +57% agent SLO goodput and +14 points chat vs conditional disaggregation at alpha 3, +90% and
+      +21 points under a chat surge, stock PD collapsing; fault (one node of four killed): ours -9% goodput with no
+      attainment dip, stock PD -1/3 [pending: 32 GPUs]
     - figures: per-tenant attainment and SLO goodput vs load, the 90% capacity marked per system; P:D sweep; load-spike
       time series; fault-tolerance windows
 
@@ -109,8 +112,11 @@ rises by 38-74 points, and at 128-256K contexts agent attainment rises from 13-1
 throughput; on GLM-4.5-Air, throughput rises 27-28% for both tenants. On 16 H20s, at 64 agent programs plus chat, AttentionFuse keeps 93.6% chat
 attainment with 1100 tok/s of agent SLO goodput, where PD disaggregation at its best P:D ratio reaches 13.1% and
 80 tok/s; against conditional disaggregation it carries 12-37% more agent SLO goodput at every load (two repeats) and 21-24% more under
-a load spike. With Llama-3.3-70B on the same 16 GPUs, it holds 3-23 points more chat attainment than stock PD at
-its best split, at equal agent goodput (-2..+7%), and 4-94% more agent goodput than conditional disaggregation.
+a load spike. On a replay of real coding-agent traces whose prefill / decode demand swings within minutes, it
+carries 57% more agent SLO goodput than conditional disaggregation with 14 points more chat attainment, and 90% more
+with 21 points more under a chat surge; stock PD collapses at the same load. With Llama-3.3-70B on the same 16 GPUs,
+it holds 3-23 points more chat attainment than stock PD at its best split, at equal agent goodput (-2..+7%), and
+4-94% more agent goodput than conditional disaggregation.
 
 ## 1. Introduction
 
@@ -162,8 +168,11 @@ rises by 38-74 points under the paper's SLOs, agent attainment at 128-256K rises
 GLM-4.5-Air throughput rises 27-28%. On 16 GPUs with the full stack, AttentionFuse holds 93.6% chat attainment and
 1100 tok/s agent SLO goodput at 64 agent programs, against 13.1% / 80 for the best stock PD configuration and
 96.0% / 821 for conditional disaggregation, and carries 12-37% more agent SLO goodput than conditional
-disaggregation from 32 to 128 programs. With Llama-3.3-70B, it holds 3-23 points more chat attainment than stock PD
-at equal agent goodput, and 4-94% more agent goodput than conditional disaggregation. [32 GPUs pending]
+disaggregation from 32 to 128 programs. On a replay of the TraceLab trace with shifting prefill / decode demand, it
+carries 57% more agent SLO goodput than conditional disaggregation (90% under a chat surge) with 14-21 points more
+chat attainment, and it loses no requests and no attainment when a quarter of the cluster fails. With
+Llama-3.3-70B, it holds 3-23 points more chat attainment than stock PD at equal agent goodput, and 4-94% more agent
+goodput than conditional disaggregation. [32 GPUs pending]
 
 ## 2. Background
 

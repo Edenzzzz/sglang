@@ -1,5 +1,7 @@
 # Changelog
 
+## v1.69.2 — Abstract, intro and story carry the demand-shift and fault results (2026-10-27)
+
 ## v1.69.1 — Paper Figure 23 (demand shift over time) (2026-10-27)
 - `tasks/paper_figures/fig23_demand_shift.py`: issued prefill / decode demand and per-tenant attainment in 30 s
   windows, alpha 3 + chat surge, ours vs conditional disaggregation (data under `paper_figures/data/demand_shift/`).

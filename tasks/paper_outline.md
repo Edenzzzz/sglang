@@ -825,7 +825,7 @@ best split (level under the spike). Ours holds 90.8-98.1% chat attainment, again
 97.7-98.5% for conditional disaggregation. Against conditional disaggregation the trade is therefore agent goodput for
 chat attainment (-0.3 to -7.1 points). With only four replicas, a 70B prefill chunk on a colocated node holds every
 co-resident chat decode for one long step, and the router has four nodes to choose from rather than sixteen.
-Against stock PD's best split at each load (2 + 2 or 3 + 1), ours holds 5-16 points more chat attainment and 2-34% more
+Against stock PD's best split at each load (2 + 2 or 3 + 1), ours holds 3-16 points more chat attainment and 2-7% more
 agent SLO goodput. [pending: second repeat; stock PD 3 + 1 under the spike]
 
 Table 10b: Llama-3.3-70B, 16 H20s, one repeat; chat attainment (2 s + 50 ms) ; agent SLO goodput, tok/s (agent

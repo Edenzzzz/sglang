@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.68.2 — Demand-shift replay results so far (2026-10-27)
+- Superposed TraceLab replay on 16 H20s, alpha 3, ours vs conditional disaggregation: chat attainment 65.1 vs 50.9%,
+  agent attainment 72.6 vs 63.9%, agent SLO goodput 1501 vs 956 tok/s (+57%), chat TTFT p90 1.12 vs 8.74 s.
+- Alpha 6: ours +24% agent goodput, chat behind (TPOT p50 72 vs 28 ms). Stock PD collapses at alpha 6.
+- Task doc item (a').
+
 ## v1.68.1 — Trace replay survives a failed round (2026-10-27)
 - In the v2 demand-shift run, the stock PD 2 + 2 arm at alpha 6 lost its whole agent client at 01:09: one round failed
   (the stock PD router cut a response mid-stream), and the timestamp replay raised on any failure.

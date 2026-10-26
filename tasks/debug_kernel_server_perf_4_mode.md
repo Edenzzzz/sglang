@@ -1467,6 +1467,24 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       attainment.
     - Scheduler deadlines (EDF / router) are kept separate from evaluation SLOs, and both are stated.
     - The > 200K tier is applied in one scorer for every figure.
+  - [ ] (a') **Demand shift on the superposed TraceLab replay, 16 H20s, full stack** (2026-10-27, running;
+        `pd_colocation/mn_tracelab_shift_v2_16g_20261026.sh`, log `/tmp/h20/mn_tracelab_shift_16g_r1.log`; scorer
+        `perf_model/tracelab_windows.py --windows 30`; client overlay and replay `drivers/serving/bench_overlay_20261026/`).
+    - Setup:
+      - the 24 busiest non-overlapping trace hours superposed on one clock; ShareGPT chat at 8 req/s;
+      - each arm measured over 1.5x the scaled trace hour; rounds past it are not issued and count as backlog.
+    - Paper SLOs, one repeat. Chat 2 s + 50 ms (2 s + 100 ms) ; agent 10 s + 80 ms attainment ; agent SLO goodput ;
+      agent rounds issued (not issued):
+      | alpha | ours | conditional disagg | stock PD 2 + 2 | stock PD 3 + 1 |
+      |---|---|---|---|---|
+      | 6 (overload) | 31.8 (56.8)% ; 50.0% ; 890 tok/s ; 4818 (8254) | 57.2 (67.6)% ; 51.1% ; 720 ; 3850 (9222) | chat 8.2%, chat TTFT p50 225 s; agent client aborted, rerun queued | 3.6 (3.6)% ; 1.9% ; 6 ; 1227 (10594, plus 1251 lost after failed rounds) |
+      | 3 | 65.1 (81.2)% ; 72.6% ; 1501 tok/s ; 8995 (4077) | 50.9 (68.6)% ; 63.9% ; 956 ; 7264 (5808) | running | queued |
+    - alpha 3, ours vs conditional disaggregation:
+      - chat attainment +14 points (+28% relative), chat TTFT p90 1.12 vs 8.74 s;
+      - agent attainment +8.7 points, agent SLO goodput +57%, rounds issued +24%, agent TTFT p90 8.2 vs 21.2 s.
+    - alpha 6: ours issues 25% more rounds and carries 24% more agent goodput, but its chat TPOT p50 is 72 vs 28 ms,
+      which the SLO-budgeted chunk test addresses.
+    - Both stock PD splits collapse at alpha 6 (median TTFT about 200 s for both tenants).
   - [ ] (a) TraceLab replay as Crossflow does. **Tooling built and tested offline (2026-10-26, 31/31 checks,
         `drivers/serving/test_tracelab_window.py`; overlay `drivers/serving/bench_overlay_20261026/`):**
         - `AGENT_MODE=tracelab_ts WINDOW_START=<s> ALPHA=<a> WINDOW_ROUNDS=segment` in `mn_bench.sh`;

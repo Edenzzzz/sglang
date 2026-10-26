@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.62.0 — Paper draft: router design in detail, conclusion, stale parts cleaned (2026-10-26)
+- Section 5.2.1 now describes the router as built: block-chained prefix index plus a pool mirror, the in-flight table,
+  calibrated prefill curve and decode grid, online EWMAs, and optional piggybacked node load. It gives the TTFT / TPOT
+  prediction step by step (pool pull, prefill cost T(n) - T(n - u), EDF queue wait, decode rows ahead), the four
+  feasibility checks, the choice order, and measured accuracy and ablations.
+- Kernel claim restated against naive FA3 + stock FA2 (pending on the H200); v3 is now "our two-plan build", an
+  ablation of the one plan and merge. Tile classes are 16 / 32 / 64 everywhere (48 was stale).
+- Portability (FA4 + FA2 on Blackwell) folded into section 5.1; the standalone 5.6 is removed. The conclusion now
+  covers each stage, the lessons and the limitations.
+- Stale parts fixed: Llama-3.3-70B stage 2 / 3 results, paper SLOs, final-configuration numbers in the abstract and
+  intro, EDF deadline rule (2 s + 1 s per 5000 uncached tokens), chunk cap dropped, CUDA-graph root cause, router
+  ablation results, internal jargon in References.
+
 ## v1.61.0 — Paper draft as prose; DSMEM cluster reduction measured; workload/SLO matrix (2026-10-25)
 - Paper draft (`tasks/paper_outline.md`) rewritten from bullets into conference prose. Every evaluation stage gives its
   claim, bar, setup, results and figure captions; internal shorthand moved to an artifact-notes list. Headline numbers

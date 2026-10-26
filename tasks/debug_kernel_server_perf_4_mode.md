@@ -20,6 +20,41 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
   - Qwen captures are regenerated.
   - Llama / GLM TP4 rank-0 captures are replayed from the H20 copies.
   - Arms on the same captures: sglang's single FA3 call, naive FA3 + FA2 (serial / streams), v3, A6.
+- **To test alongside the naive FA3 + FA2 baseline (user, 2026-10-26), on the H200:**
+  - [ ] **SLO-budgeted prefill chunk size from the EDF step model.**
+    - Problem: every serving arm prefills in fixed 2048-token chunks (`CHUNK=2048`, `--chunked-prefill-size`). That
+      wastes the step when prefill load is high and decode load is low, e.g. cold 128-256K agent turns with few rows
+      decoding.
+    - Rule, per step:
+      - c* = the largest chunk whose predicted step time keeps every running decode row within its SLO, with headroom
+        h: step(c, rows, KV, prefix, acceptance) <= (1 - h) x min_r budget_r;
+      - budget_r is row r's remaining mean-TPOT slack, s_r x (tokens_r + acceptance) - elapsed_r, with s_r its tenant's
+        SLO (chat 50 ms, agent 80 ms);
+      - with no decode rows, c* is bounded only by memory and the activation buffers.
+    - Model: the 4-mode step fit (`tasks/perf_model/fit_4mode_step.py`, 2.0% held-out MAPE), refit on A6 steps that
+      cover chunks above 2048.
+    - Router: price TTFT with the same rule (`router.py --slo-chunk` already walks a prefill chunk by chunk under a
+      node's decode load).
+    - Prior evidence, to beat:
+      - the 8-H20 decode-first rule (`apply_edf_itl_slo_chunk.py`: a 20 ms per-step budget, and its per-row slack
+        variant) only ever shrank chunks below 2048, and lost to no control (chat attainment 91.4% -> 65.1%);
+      - every per-step cap so far lost (memory: EDF order, don't cap).
+      - This rule differs: it grows chunks when slack allows, against per-tenant 50 / 80 ms SLOs instead of 20 ms.
+    - Arms:
+      - fixed 2048 (today);
+      - fixed 8192 and 16384;
+      - the SLO-budgeted rule at h = 0 / 10 / 20%.
+    - Workloads:
+      - prefill-heavy, low decode: 128-256K agents at concurrency 1-2;
+      - the Table 7b loads: 128-256K at concurrency 4 + chat 4/s, and 32-64K at 8 + 8/s;
+      - ShareGPT 16 / 32 req/s.
+    - Record:
+      - per-tenant attainment, TTFT, and TPOT p50 / p90 / p99;
+      - throughput;
+      - the distribution of chosen chunk sizes;
+      - predicted vs measured step time.
+    - Order: Qwen first, then Llama / GLM.
+    - CUDA graphs: chunks above the captured token buckets run without graphs, so record graph coverage per arm.
 - **Hardware (before):** H200 job `8574c727fab6ffbd` (vibecuda; restored with `unified/prov_h200_20261024.sh` after
   `34c7bd503d461dc1` ended) for stages 1-2; H20 job `2f608c1b1a67cf09` for multi-node and, meanwhile, kernel runs.
 

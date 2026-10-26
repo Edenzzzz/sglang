@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.65.1 — Paper: kernel and scheduling policy explained step by step; evaluation settings table (2026-10-26)
+- Section 5.1 opens with what a mixed step asks of attention (packed rows, tile fill), the plan's four decisions
+  (tile class, KV split, LPT placement, merge schedule), the two launches with one in-launch merge, and a worked
+  Qwen2.5-7B example.
+- Section 5.3 states the four scheduling mechanisms as built: deadlines from uncached work (single-node 0.5 s / 10 s;
+  multi-node 2 s + 1 s per 5000 tokens), deadline order with demotion of missed prefills (single node), parking a long
+  chunked prefill, and reserving budget for earlier deadlines.
+- Section 6.1 Table 4b lists every stage's workload, load points, SLOs and hardware. Section 6.4 adds the trace-replay
+  demand-shift experiment (pending), and section 6.5 the full-stack fault setup (pending).
+
 ## v1.65.0 — SLO-budgeted prefill chunk patch (2026-10-26)
 - `unified/apply_slo_budget_chunk_20261026.py`: per step, the largest prefill chunk whose predicted step time keeps
   every running decode row within its mean-TPOT slack (per tenant, headroom h). With no decode rows it uses the

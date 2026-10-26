@@ -321,25 +321,67 @@ alone and at 16 GPUs for the full stack (section 6.4); single-node capacity from
 
 ### 5.1 Persistent Kernel with overlap Schedule
 
-**The plan.** The unified tile dispatcher builds one CPU-side plan per step, shared by all layers. It classifies each
-row by its packed query length: rows of at most 16, 32 or 64 packed queries go to the smallest FA2 tile class that holds
-them, and longer rows, prefill chunks among them, go to FA3. It cuts each row's KV into chunks sized to balance SM load, and places the resulting work items
-with longest-processing-time-first (LPT) order: the longest item goes onto the least-loaded slot, across the slots of
-both executors. With the work list it emits the merge schedule: for every split row, which slots hold its partial
-results and which merge group combines them. The plan is built incrementally on the CPU and overlapped with the
-previous step; host plan time is 48-78 us mean on 44 serving geometries, and its overlap on serving shapes is
-[pending].
+This section describes the kernel in three parts: what one mixed step asks of attention, the plan that decides how
+it is computed, and how the two executors run that plan in two launches with one merge.
 
-**One merge, in the FA2 launch.** FA2 runs second under PDL, so it can reduce every split row, its own and FA3's, from
-merge items that the plan queues after the compute items. FA3 tiles only write FP32 partial outputs and their
-log-sum-exp (LSE) values. No merge kernel runs for either executor.
+**What one mixed step asks of attention.** A four-mode step's batch holds three kinds of rows:
+- a prefill chunk: hundreds to thousands of query tokens over a long cached prefix;
+- decode rows of one query token;
+- speculative verify rows of a few tokens (4 with a 3-step draft).
 
-**Executors.** The executors are stock FA3 (flash-attention's mainloop over the paged KV cache) and FA2's BatchPrefill
-body, which runs one thread block (CTA) per plan item. Both read the one work list, and PDL chains the two launches so
-that the second can start while the first drains. A persistent FA2 executor, which keeps its CTAs resident and pulls
-the plan's items in LPT order, is the alternative we ablate in section 7, together with two optional mechanisms:
-handing partials to the reducing CTA through distributed shared memory (DSMEM, the shared memory of a thread-block
-cluster), and multicasting KV loads for FA3 and FA2.
+Under grouped-query attention, a row of q tokens on a model with G query heads per KV head becomes q x G "packed"
+query rows against one KV head:
+- Qwen2.5-7B (G = 7): a decode row packs 7 rows and a verify row 28;
+- Llama-3.3-70B at TP4 (G = 8): a verify row packs 32;
+- GLM-4.5-Air at TP4 (G = 12): a verify row packs 48.
+
+FA3's tile is 128 packed rows, so sglang's single call fills 22% of each verify-row tile on Qwen2.5-7B and 5% of each
+decode-row tile. Decode and verify rows also read KV that is 10-100x longer than their queries, so they are
+memory-bound, while the prefill chunk is bound by the tensor cores.
+
+**The plan.** Once per step, on the CPU, the dispatcher builds one plan that every layer reuses. It makes four
+decisions.
+1. *Tile class per row.* A row of p packed queries goes to the smallest FA2 tile class that holds it (16, 32 or 64
+   rows). Rows of more than 64, which includes every prefill chunk, go to FA3. On Qwen2.5-7B a verify row then fills
+   28 of 32 rows (88%) and a decode row 7 of 16 (44%).
+2. *KV split.* Each (row, KV head) pair's keys are cut into chunks so that the step's FA2 work fills the SMs. The
+   chunk length is a multiple of 256 keys, so the last chunk of a row is never a sliver. FA3's prefill rows get the
+   split the plan chooses for them, run by stock FA3.
+3. *Placement.* The work items, one per (row, KV head, chunk), are sorted by cost (packed rows x keys) and placed
+   longest-processing-time first (LPT): each goes to the least-loaded execution slot.
+4. *Merge schedule.* Every row that was split becomes a merge group, holding its chunks' partial outputs, their
+   log-sum-exp (LSE) values and a counter. The plan appends one merge item per group behind the compute items.
+
+The plan costs 48-78 us of host time per step (mean over 44 serving geometries). It is built while the previous step
+runs on the GPU; that overlap on serving shapes is [pending].
+
+**Two launches, one merge.**
+- *First launch: stock FA3* (flash-attention's paged-KV mainloop) over the prefill rows. Its split rows write FP32
+  partial outputs and LSEs.
+- *Second launch: FA2* (flashinfer's BatchPrefill body). Programmatic dependent launch (PDL) starts it while FA3
+  drains, so FA2's memory-bound rows fill the SMs that FA3's tail leaves idle. It runs one thread block (CTA) per plan
+  item:
+  - a compute item stores its partial and checks in on its group's counter (fence, then atomic increment);
+  - a merge item reduces its group once every member has checked in, one warp per row, eight chunks in parallel per
+    warp, and writes BF16 output straight into the batch's output tensor;
+  - FA3's split rows are reduced by merge items after `griddepcontrol.wait`, which orders them behind the whole FA3
+    grid.
+
+No merge kernel runs for either executor. sglang's single FA3 call and naive FA3 + FA2 both pay at least one extra
+merge or combine launch per split.
+
+**Worked example.** One Qwen2.5-7B four-mode step on an H200:
+- a 2048-token prefill chunk on a 48K-token prefix, and 32 verify rows with 30-60K-token KV;
+- the chunk goes to FA3;
+- the 32 verify rows x 4 KV heads become 128 (row, KV head) pairs on 32-row FA2 tiles, each cut into KV chunks;
+- the LPT order puts the longest rows' chunks first, so they do not set the end of the step;
+- the merge items reduce each row's chunks inside the FA2 launch, as soon as its last chunk checks in.
+
+Per-step timing of such steps is Figure 15.
+
+**Alternatives we measured.** A persistent FA2 executor, which keeps its CTAs resident and pulls the plan's items in
+LPT order, is ablated in section 7, together with two optional mechanisms: handing partials to the reducing CTA
+through distributed shared memory (DSMEM, the shared memory of a thread-block cluster), and multicasting KV loads.
 
 **What is fused, and why there.** The fusion is in the plan and the reduction, not in the instruction stream. Prefill
 rows want Hopper's warpgroup MMA (wgmma) on multiples of 64 rows behind a warp-specialized producer; decode and verify
@@ -616,22 +658,37 @@ models [pending].
 
 ### 5.3 SLO-aware scheduling
 
-Each prefill gets a deadline at arrival from its uncached tokens: 2 s plus 1 s for every 5000 uncached tokens beyond
-4096. A cold 64K-token agent prompt gets about 14 s. An agent round whose 64K prefix is cached and which appends 2K
-tokens gets 2 s, like chat. The uncached length is read at enqueue by a read-only prefix match, so a follow-up round
-does not get a cold prompt's late deadline. Prefills are served in deadline order. A prefill whose deadline has already passed ranks behind every prefill
-that can still meet its deadline, which is EDF's standard overload rule; decodes that were retracted for memory are
-never demoted. This is C3's scheduling rule.
+Each worker orders prefills by deadline. Four mechanisms make up the policy (C3); the first two set and use the
+deadline, the last two let a short urgent request get past a long prefill already under way.
+
+1. *Deadlines from uncached work.* A prefill's deadline is its arrival time plus a TTFT budget that depends on its
+   uncached tokens: the prompt minus the prefix already in the node's cache, read at enqueue by a read-only prefix
+   match. An agent round whose 64K-token prefix is cached therefore gets a chat-like deadline instead of a cold
+   prompt's. The budget comes from the tenant SLOs:
+   - single-node runs: 0.5 s below 8192 uncached tokens and 10 s above;
+   - multi-node runs: 2 s plus 1 s per 5000 uncached tokens beyond 4096 (a cold 64K prompt gets about 14 s).
+2. *Deadline order with demotion of missed prefills.* Prefills are admitted in deadline order. A prefill whose
+   deadline has already passed ranks behind every prefill that can still meet its deadline; demoted prefills keep
+   deadline order among themselves. Without demotion, plain EDF serves the most overdue request first, so under
+   overload each late agent prefill makes the chat behind it late too. Decodes returning from memory retraction are
+   never demoted. Demotion is on in the single-node runs; the multi-node workers run deadline order without it.
+3. *Parking a long chunked prefill.* sglang continues a chunked prefill with each step's whole budget. The policy
+   instead parks it when a waiting request is due earlier, is short, and has less than half the parked prefill's
+   remaining work. The parked request's computed prefix stays in the radix cache, so it loses no work and resumes in
+   deadline order.
+4. *Reserving budget for earlier deadlines.* When a chunk continues, it leaves room in the step's token budget for
+   waiting requests that are due before it.
 
 On one H200 with Qwen2.5-7B, under a 32-64K agent burst plus chat, per-tenant deadlines alone change nothing, while
-adding demotion of missed prefills cuts chat TTFT by 96-98% (section 7). The same comparison on one 4-GPU H20 pod for
-Llama-3.3-70B and GLM-4.5-Air is [pending].
+adding demotion of missed prefills cuts chat TTFT by 96-98% (section 7). The same comparison on Llama-3.3-70B and
+GLM-4.5-Air is [pending].
 
-Running under tensor parallelism exposed one requirement: every TP rank must judge deadlines on the same clock, so
-rank 0's clock rides the per-iteration request broadcast.
+Under tensor parallelism, every TP rank must judge deadlines on the same clock, so rank 0's clock rides the
+per-iteration request broadcast.
 
 Figure 12: chat TTFT distribution and per-tenant attainment for stock, per-tenant deadlines alone, and deadlines with
-demotion of missed prefills; one H200 (Qwen2.5-7B) and one H20 pod (Llama-3.3-70B, GLM-4.5-Air). H20 models [pending].
+demotion of missed prefills; one node per model (Qwen2.5-7B on one H200; Llama-3.3-70B and GLM-4.5-Air on four
+H200s). Llama-3.3-70B / GLM-4.5-Air [pending].
 
 ### 5.4 KV Cache pooling policy
 
@@ -714,10 +771,21 @@ come from one 4-GPU H20 node and their kernel captures from TP4 rank 0 on H20 [p
   final-configuration result (Table 7b, the GLM-4.5-Air and Llama-3.3-70B final rows) and in the full-stack
   multi-node runs (Tables 10 and 10b). Earlier tables used the role-split build and say so.
 
-**Workloads.** TraceLab coding-agent traces with context mixtures from 32K to a few hundred K (32-64K and 128-256K,
-multi-round), with ShareGPT chat; fan-out coding agents on shared 64K-token repository prefixes with ShareGPT chat
-(multi-node); and standalone sets (ShareGPT, math, coding, agentic web browsing) at load around capacity. Agent load
-is program concurrency; chat load is request rate.
+**Workloads.** Every workload pairs an agent tenant with a chat tenant, with agents the majority of LLM calls, plus
+standalone sets that check for regressions. Agent load is the number of concurrent agent programs (each program
+issues its next round when the previous one returns, after its tool gap), or for trace replay the time-compression
+factor alpha; chat load is a Poisson request rate. Table 4b lists every setting.
+
+Table 4b: workloads, loads and hardware per stage.
+
+| stage | agent tenant | chat tenant | load points | hardware |
+|---|---|---|---|---|
+| 1, kernel | steps captured from serving the stage-2 workloads (24 per context x mode cell) | -- | 96 steps per model | one H200 |
+| 2, single node | TraceLab sessions, 32-64K or 128-256K contexts, two- or four-mode | ShareGPT with the chat template | Qwen2.5-7B: 8 programs + 8 req/s (32-64K), 4 + 4 (128-256K); Llama-3.3-70B: 2 + 0.5 (near capacity), 4 + 2 (overload); GLM-4.5-Air: 4 + 2, 8 + 8 | one H200 (Qwen2.5-7B); 4 GPUs (Llama-3.3-70B, GLM-4.5-Air) |
+| 2, standalone | -- | ShareGPT, MATH-500, GSM8K, Code-Feedback, each served alone | 16 / 32, 16, 32, 16 req/s | one H200 |
+| 3, cluster | fan-out coding agents: 32 tasks with 64K-token repository prefixes (8 x 32K for Llama-3.3-70B), Zipf(1.2) task popularity rotating every 180 s, 4 rounds of 1024-token appends and 128-token outputs, 5 s tool gaps | ShareGPT, C/4 req/s for C programs | Qwen2.5-7B: C = 32 / 64 / 96 / 128; Llama-3.3-70B: C = 4 / 8 / 12 / 16; spike: +C/2 programs from 300 s for 300 s | 16 H20s (4 nodes x 4) |
+| 3, demand shift | TraceLab replay: the 24 busiest trace hours, superposed, each round at max(previous finish + recorded gap / alpha, trace time / alpha) | ShareGPT 8 req/s; surge +16 req/s from 200 s for 200 s | alpha = 4 / 6 / 8 | 16 H20s |
+| 3, fault | the stage-3 fan-out workload | ShareGPT 8 req/s | 32 programs; all 4 workers of one node killed at 300 s | 16 H20s |
 
 **SLOs.**
 - Chat, math and code: 2 s TTFT with 50 ms (tight) or 100 ms (loose) mean TPOT.
@@ -1048,6 +1116,23 @@ Table 10b: Llama-3.3-70B, 16 H20s, repeats r1 / r2; chat attainment (2 s + 50 ms
 | 16 + 4 | 90.8 / 90.5% ; 165 / 159 | 97.9 / 97.6% ; 85 / 97 | 68.2 / 66.6% ; 160 / 163 | 74.9 / 67.2% ; 123 / 106 | 1.3% ; 93 |
 | 8 + 2, + 4-program spike | 95.8 / 96.3% ; 101 / 100 | 98.5 / 97.9% ; 70 / 79 | 86.9 / 84.4% ; 101 / 101 | 89.9 / 89.6% ; 99 / 96 | 63.9% ; 92 |
 
+**Result: prefill / decode demand shift on a real trace [pending].** Crossflow observes that agentic serving's
+prefill and decode demand changes sharply over time; it replays one-hour TraceLab segments with timestamps compressed
+by a factor alpha. One trace hour holds only 3-6 concurrent sessions, too few to load 16 GPUs. We therefore
+superpose the 24 busiest non-overlapping trace hours on one clock, one developer's hour per segment, with each round
+issued at the later of its previous round's finish plus the recorded tool gap / alpha and its trace time / alpha.
+- *Load:* the replay offers 13.4K LLM calls, 43M uncached prompt tokens and 5.7M output tokens per trace hour. The
+  trace's own mix of cold long prefixes and short appends makes the ratio of prefill to decode demand swing within
+  the run; alpha = 4 / 6 / 8 runs it from below to above the cluster's prefill capacity.
+- *Ratio change:* a chat surge of +16 req/s for 200 s (on 8 req/s) adds a decode-heavy shift on top of the trace's
+  own swings.
+- *Arms:* ours, conditional disaggregation and stock PD at fixed 2 + 2 and 3 + 1 splits.
+- *Reported:* per-tenant attainment, SLO goodput, and a 30 s time series of offered prefill and decode demand against
+  attainment.
+
+A fixed P:D split is tuned for one ratio and misses when the ratio moves; colocated nodes take whichever phase
+arrives. [pending]
+
 **Result: cache pressure.** With the working set grown from 1M to 8M KV tokens against a 6.7M-token pool,
 disaggregation loses 55% throughput and 28.5 points of cached fraction, ours 10.6% and 3.1 points, in earlier
 settings; a rerun with the full stack is [pending].
@@ -1078,25 +1163,40 @@ Figure 22: cached-prefix fraction, re-prefilled tokens and agent tok/s vs workin
 against a 6.7M-token pool), ours vs stock PD; 16 H20s, 32 agent programs (earlier settings measured; full stack
 [pending]).
 
-Figure 23: load spike and mixture shift: per-tenant attainment and throughput in 30 s windows around a 32-program
-spike starting at 300 s and lasting 300 s, on top of 64 programs + 16 chat/s; ours, conditional disaggregation, stock
-PD. Mixture shifts [pending].
+Figure 23: demand shift and load spike over time, in 30 s windows.
+- Top: offered prefill demand (uncached prompt tok/s) and decode demand (output tok/s) of the superposed TraceLab
+  replay at alpha = 6, with the chat surge shaded.
+- Below, per system (ours, conditional disaggregation, stock PD 2 + 2 and 3 + 1): chat and agent attainment, and
+  throughput.
+- A second panel shows the fan-out spike (+32 programs from 300 s for 300 s, on 64 programs + 16 chat req/s).
+
+Trace replay [pending]; fan-out spike measured (Table 10).
 
 ### 6.5 Fault tolerance
 
-Symmetric nodes and rerouting away from dead workers should keep both tenants' SLOs when workers fail (C4). We will
-kill one and then two workers mid-run, in prefill and in decode roles for the baseline (stock PD at its best P:D split,
-health-check ejection on) and the same workers for ours, with the full stack on 16 GPUs at the stage-3 workload and
-load, for all three models. When a prefill worker dies, ours should hold, because every node can prefill and the SLO
-router moves new prefills to the survivors. When a decode worker dies, the baseline keeps its admission rate and loses
-ITL on the remaining decode pods; ours should keep ITL by admitting fewer prefills (SLO check and EDF) and give up some
-TTFT attainment instead. The prefill-role and decode-role kills with the full stack are [pending].
+Symmetric nodes and rerouting away from dead workers should keep both tenants' SLOs when workers fail (C4). The
+router marks a worker dead on a refused or broken connection and routes later requests elsewhere. The stock PD router
+ejects a worker after three failed health checks, 10 s apart.
+
+**Setup.** Qwen2.5-7B on 16 H20s, the stage-3 fan-out workload at 32 programs plus 8 chat req/s. At 300 s all four
+workers of one node (a quarter of the cluster) are killed:
+- ours and conditional disaggregation: node 1;
+- stock PD 2 + 2: node 1 (a prefill node) in one run, and node 2 (a decode node) in another.
+
+**Expectations.**
+- *A prefill node dies:* ours should hold, because every node can prefill and the router moves new prefills to the
+  survivors.
+- *A decode node dies:* the baseline keeps its admission rate and loses ITL on the remaining decode node. Ours should
+  keep ITL by admitting fewer prefills (the SLO check and EDF) and give up some TTFT attainment instead.
+
+Result: [pending].
 
 In earlier settings (8 GPUs, scheduler only, 2 of 8 GPUs killed at 300 s), ours reroutes (agent attainment 96.4 ->
 98.1%, chat 85.0%), while PD disaggregation loses half its prefill capacity (18 -> 34%, chat 9-15%).
 
 Figure 24: per-tenant TTFT and ITL attainment and throughput in 30 s windows before, during and after each kill, with
-lost requests and recovery time; ours vs stock PD, three models [pending].
+lost requests and recovery time; ours, conditional disaggregation and stock PD (prefill-node and decode-node kills);
+Qwen2.5-7B on 16 H20s [pending].
 
 ## 7. Ablation study
 

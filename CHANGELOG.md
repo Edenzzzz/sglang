@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.66.4 — Fault test at a chosen load (2026-10-26)
+- `pd_colocation/mn_fault_load_16g_20261026.sh`: the full-stack fault test with `FAULT_LOAD=C:rate` and `FAULT_ARMS`.
+  At 32 programs both colocated systems ride through a node kill (ours agent attainment 95.0 -> 95.5 -> 96.8%,
+  conditional disaggregation 94.1 -> 93.2 -> 98.7%, no agent requests lost), so a 64-program point is queued behind
+  the demand-shift run.
+
 ## v1.66.3 — H200 kernel-ladder chain (2026-10-26)
 - `unified/a6_h200x4_kernel_ladder_20261026.sh`: on the 4-H200 trial, recaptures the trace-sampled steps; re-benches
   sglang FA3, the role split and v3; builds and checks A6 np64; benches naive FA3 + stock FA2 (serial and two

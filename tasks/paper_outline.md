@@ -498,6 +498,26 @@ and graph count and capture memory vs PD-Multiplexing, are [pending].
 
 Table 4: CUDA graph count, capture memory and decode step time, ours vs PD-Multiplexing, graphs on vs off [pending].
 
+### 5.6 Portability across GPU generations
+
+The design keeps the large-tile and small-tile attention kernels separate, and fuses only what sits above them: the
+one plan that routes rows to tile classes and splits their KV, and the one merge that reduces every split row inside
+the small-tile launch. Neither executor is modified beyond the interface the plan needs: the prefill executor reports
+its split-KV partials (output and log-sum-exp) per split, and the small-tile executor reads its work items and merge
+items from the plan.
+
+This is what makes the design portable. A single kernel that overlaps prefill and decode tiles inside one launch has
+to interleave two instruction streams, and the MMA instructions of different tile shapes cannot overlap within one
+kernel on either Hopper (wgmma) or Blackwell (tcgen05). Such a design is tied to one architecture's instruction set:
+POD-Attention is FA2-only for this reason, and our own co-compiled FA3 + FA2 kernel was 2.16x slower than the two
+separate kernels (section 7). Keeping the executors separate avoids both problems.
+
+On Blackwell, FlashAttention-4 (tcgen05) takes the place of FA3 for prefill rows. FA2's mma.sync kernels run on
+Blackwell unchanged, so the decode / verify tile classes and the in-launch merge carry over as they are, and PDL is
+available there as on Hopper. The port therefore replaces one executor behind an unchanged plan, rather than
+rewriting a fused kernel. The interface FA4 must provide is the one FA3 provides here: split-KV partials, or an
+unsplit run whose rows the plan does not split. [pending: measurement on Blackwell]
+
 ## 6. Evaluation
 
 ### 6.1 Settings
@@ -1027,7 +1047,8 @@ routing raise SLO attainment on one node and the load held at SLO on a cluster, 
   would need chunks below about 200 tokens.
 - 128-256K agents have no single-GPU operating point at a 10 s TTFT SLO.
 - Four-mode agent throughput falls 8.5% at 32-64K on one node.
-- The implementation is Hopper only; Blackwell needs new FA3 and FA2 builds.
+- Measured on Hopper (H200, H20) only. On Blackwell, FA4 replaces FA3 behind the same plan and FA2 runs unchanged
+  (section 5.6); that port is not yet measured.
 
 ## Artifact notes
 

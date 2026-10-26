@@ -947,6 +947,13 @@ Table 7b: Qwen2.5-7B, one H200, final configuration, two repeats (16 / 30 agent 
 | 32-64K (agent conc 8, chat 8/s), 4-mode | 56.4 -> 97.2% | 56.5 -> 99.6% | 5.8 -> 2.8 s | 70.0-73.3 -> 80.0% | 74-84 -> 85-86 tok/s | -3.6% |
 | 32-64K, 2-mode | 54.3 -> 95.4% | 54.4 -> 99.8% | 5.7 -> 2.8 s | 83.3 -> 83.3-86.7% | 101-107 -> 88-90 tok/s | +2.7% |
 
+![Figure 16a](paper_figures/fig16a_single_node.png)
+
+Figure 16a: single-node SLO attainment under the paper's SLOs, stock sglang (mixed chunk on FA3, stock MTP in
+four-mode) vs ours (final configuration), Qwen2.5-7B on one H200, at the Table 7b loads. Bars are the mean of two
+repeats, with whiskers where the repeats differ; dashed: the 90% target. Source:
+`tasks/paper_figures/fig16a_single_node.py`.
+
 At 128-256K, neither system reaches 90% attainment for either tenant at agent concurrency 1, 2 or 4 on one GPU,
 because cold 128-256K turns cannot prefill within 10 s. Ours is still 8-19 points ahead on chat and 25-38 points ahead
 on agent attainment at concurrency 4. This is the case that motivates the multi-node stage.

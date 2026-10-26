@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.66.5 — Paper Figure 16a (single-node attainment) (2026-10-26)
+- `tasks/paper_figures/fig16a_single_node.py`: Table 7b as grouped bars, three SLO panels, stock vs ours; embedded in
+  section 6.3.
+
 ## v1.66.4 — Fault test at a chosen load (2026-10-26)
 - `pd_colocation/mn_fault_load_16g_20261026.sh`: the full-stack fault test with `FAULT_LOAD=C:rate` and `FAULT_ARMS`.
   At 32 programs both colocated systems ride through a node kill (ours agent attainment 95.0 -> 95.5 -> 96.8%,

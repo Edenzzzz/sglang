@@ -1149,10 +1149,13 @@ ahead only at 128 programs. For Llama-3.3-70B (two repeats):
 
 **Figures.**
 
-Figure 19: capacity at SLO: per-tenant TTFT / ITL attainment and SLO goodput vs load, for ours, each P:D split of
-stock PD, and conditional disaggregation, with the load each system holds at >= 90% marked; 16 H20s, Qwen2.5-7B
-(scheduler only and full stack) and Llama-3.3-70B (full stack) measured; 32 GPUs full stack and GLM-4.5-Air
-[pending].
+![Figure 19](paper_figures/fig19_capacity.png)
+
+Figure 19: capacity at SLO on 16 H20s with the full stack. Chat attainment (2 s TTFT + 50 ms mean TPOT; dashed line:
+the 90% target) and agent SLO goodput (10 s TTFT, 20 s above 200K uncached tokens, + 80 ms) against agent programs,
+with chat at programs / 4 req/s. Each point is the mean of two repeats, and the bar spans them. Top: Qwen2.5-7B;
+bottom: Llama-3.3-70B. Ours, conditional disaggregation, and stock PD at its two best splits. 32 GPUs and
+GLM-4.5-Air [pending]. Source: `tasks/paper_figures/fig19_capacity.py`.
 
 Figure 20: throughput vs per-user tok/s Pareto curve (p10-p90 bars) at 16 and 32 GPUs, ours vs baselines [pending].
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.66.0 — Paper Figure 19 (capacity at SLO) from measured stage-3 data; fault scorer (2026-10-26)
+- `tasks/paper_figures/fig19_capacity.py`: chat attainment and agent SLO goodput vs agent programs on 16 H20s, for
+  Qwen2.5-7B and Llama-3.3-70B, comparing ours, conditional disaggregation and stock PD 2 + 2 / 3 + 1 (mean of two
+  repeats with a span bar; validated categorical palette; de-collided direct labels). The data are the saved
+  paper-SLO score lines (`tasks/paper_figures/data/`). Embedded in the draft; the Drive sync now resolves images.
+- `tasks/perf_model/fault_windows.py`: paper-SLO attainment, losses and recovery time around a node kill.
+
 ## v1.65.1 — Paper: kernel and scheduling policy explained step by step; evaluation settings table (2026-10-26)
 - Section 5.1 opens with what a mixed step asks of attention (packed rows, tile fill), the plan's four decisions
   (tile class, KV split, LPT placement, merge schedule), the two launches with one in-launch merge, and a worked

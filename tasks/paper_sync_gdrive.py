@@ -55,7 +55,8 @@ def format_tables(document):
 
 def compile_docx():
     raw = OUTPUT.with_suffix(".raw.docx")
-    command = [str(PANDOC), str(DRAFT), "-f", "gfm", "-t", "docx", "-o", str(raw), "--toc"]
+    command = [str(PANDOC), str(DRAFT), "-f", "gfm", "-t", "docx", "-o", str(raw), "--toc",
+               f"--resource-path={DRAFT.parent}"]
     if REFERENCE_DOC.exists():
         command += ["--reference-doc", str(REFERENCE_DOC)]
     subprocess.run(command, check=True)

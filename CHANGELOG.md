@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.68.4 — Demand shift at alpha 3: stock PD rows (2026-10-27)
+- Stock PD 2 + 2 / 3 + 1 at alpha 3: chat attainment 9.9 / 2.2%, agent SLO goodput 49 / 7 tok/s, median TTFT about 170-200 s; many requests cut by the stock PD router.
+
 ## v1.68.3 — H200 trial renamed vibecuda (2026-10-27)
 - The 4-GPU H200 trial is now `bf7d041fb8313d8a`, named vibecuda as required; the misnamed vibecuda4 request was stopped (it never ran).
 

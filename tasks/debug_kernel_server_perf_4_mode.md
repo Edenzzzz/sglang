@@ -862,60 +862,38 @@ Tasks, in priority order:
                     KV transfer, so the per-request decode interval collapses. Its medians (55-183) are the usable
                     statistic.
                   - [ ] Figure: CDF of agent / chat tok/s/user per system at 64 and 128 programs (paper Figure 20).
-- [ ] **Stage 3, Llama-3.3-70B, full stack, 16 H20** (2026-10-26, `pd_colocation/mn_stage3_llama_16g_20261026.sh`,
-      log `/tmp/h20/mn_stage3_llama_16g.log`): 4 TP4 workers, one per pod, trained EAGLE3 head (real acceptance on
-      natural-text fan-out), deployed lib `bc43aedeb9ed`, programs C = 4 / 8 / 12 / 16 with chat C/4 req/s, 32K
-      prefixes on 8 tasks, P:D split search at C = 8, then the spike. Weights provisioned on pods 1-3 (30/30 shards).
-      Running.
-      - C = 8 + chat 2/s, chat 0.5 s / 20 ms ; 2 s / 50 ms ; agent SLO goodput:
-        | arm | chat 0.5 s / 20 ms | chat 2 s / 50 ms | agent goodput |
-        |---|---|---|---|
-        | ours | 86.5% | 95.4% | 105 tok/s |
-        | stock PD 2 + 2 | 64.2% | 85.0% | 98 tok/s |
-        | stock PD 1 + 3 | 30.4% | 67.7% | 87 tok/s |
-      - Bug: stock PD 3 + 1 never ran. sglang_router rejects `--decode-policy power_of_two` with one decode worker
-        (TP4 leaves one decode pod at P = 3), so the clients timed out. Fixed in `mn_run.py` (round_robin when
-        there is one decode worker; equivalent there).
-        - [x] Rerun the 3 + 1 arm at C = 8 (`_r1b`): chat 92.3% (paper SLO) ; agent 94 tok/s (94.5%).
-              - It ranks second by agent goodput (2 + 2: 98, 3 + 1: 94, 1 + 3: 87), so the best splits are 2 + 2 and
-                3 + 1, not 1 + 3.
-              - Ours at C = 8: 95.4% ; 105.
-              - [x] 2 + 2 at C = 16 rerun (`_r1b`): chat 68.2% ; agent 160 tok/s (90.7%). Ours 90.8% ; 165.
-              - [x] 3 + 1 results (paper SLO): C=4 92.7% ; 53, C=12 83.1% ; 122, C=16 74.9% ; 123, spike 89.9% ; 99.
-              - (done) 3 + 1 at C = 4 / 12 / 16 and the spike (`pd_colocation/mn_llama_p3_loads_20261026.sh`, queued
-                    behind the 2 + 2 C = 16 rerun).
-      - **r1 complete 2026-10-26** (except the two stock PD reruns). Paper SLO matrix (chat 2 s + 50 ms; agent 10 s,
-        20 s > 200K, + 80 ms): chat attainment ; agent SLO goodput (agent attainment):
-        | C + chat/s | ours | conditional disagg | stock PD 2 + 2 | stock PD 1 + 3 |
-        |---|---|---|---|---|
-        | 4 + 1 | 98.1% ; 57 (95.0%) | 98.4% ; 54 (97.5%) | 91.4% ; 55 (95.1%) | 84.0% ; 54 (94.8%) |
-        | 8 + 2 | 95.4% ; 105 (95.1%) | 98.2% ; 83 (98.2%) | 85.0% ; 98 (93.8%) | 67.7% ; 87 (90.4%) |
-        | 12 + 3 | 93.4% ; 139 (94.2%) | 97.7% ; 99 (93.7%) | 79.6% ; 136 (93.1%) | 27.1% ; 110 (89.4%) |
-        | 16 + 4 | 90.8% ; 165 (94.3%) | 97.9% ; 85 (73.8%) | rerun queued | 1.3% ; 93 (79.2%) |
-        | spike (8 + 2, + 4 programs) | 95.8% ; 101 (95.0%) | 98.5% ; 70 (93.9%) | 86.9% ; 101 (95.1%) | 63.9% ; 92 (92.7%) |
-        - vs conditional: agent goodput +6 / +27 / +40 / +94%, spike +44%; chat attainment -0.3 / -2.8 / -4.3 /
-          -7.1 points, spike -2.7.
-        - vs stock PD (best split): chat +7 to +14 points at 4-12 programs (+9 under the spike); agent goodput
-          +4 / +7 / +2% and level under the spike.
-        - Llama differs from Qwen: on 4 TP4 replicas the router has 4 choices instead of 16, and a 70B prefill
-          chunk on a colocated node holds every co-resident chat decode for one long step.
-      - Original scoring (r1), chat 0.5 s / 20 ms ; agent SLO goodput (tok/s):
-        | C + chat/s | ours | conditional disagg | stock PD 2 + 2 | stock PD 1 + 3 |
-        |---|---|---|---|---|
-        | 4 + 1 | 92.7% ; 57 | 93.9% ; 54 | 80.4% ; 55 | 66.6% ; 54 |
-        | 8 + 2 | 86.5% ; 105 | 91.7% ; 83 | 64.2% ; 98 | 30.4% ; 87 |
-        | 12 + 3 | 79.0% ; 139 | 88.1% ; 99 | 47.2% ; 136 | 4.2% ; 110 |
-        | 16 + 4 | 68.3% ; 165 | 86.2% ; 85 | arm failed (rerun queued) | running |
-        - Agent goodput vs conditional: +6 / +27 / +40 / +94%.
-        - **Chat attainment trails conditional by 1-18 points** (unlike Qwen, where it was level). Ours runs chat
-          TPOT p90 31.7 ms vs 17.6 ms at 16 + 4. Before the paper claims Llama chat, this needs the per-step
-          explanation (chat decodes sharing steps with agent prefill chunks on every colocated TP4 node, vs
-          conditional's local-only short appends).
-      - Bug: the stock PD 2 + 2 arm at 16 + 4 aborted because pod 0 claimed no ports (3 / 4 workers up after 40 min).
-        Rerun queued (`pd_colocation/mn_llama_p2l16_rerun_20261026.sh`).
+- [x] **Stage 3, Llama-3.3-70B, full stack, 16 H20** (2026-10-26, two repeats; `pd_colocation/mn_stage3_llama_16g_20261026.sh`,
+      r2 as `R=r2 BEST_SPLITS="2 3"`; logs `/tmp/h20/mn_stage3_llama_16g.log`, `/tmp/h20/mn_stage3_llama_16g_r2.log`).
+  - Setup:
+    - 4 TP4 workers, one per pod; trained EAGLE3 head with real acceptance on the natural-text fan-out; deployed lib
+      `bc43aedeb9ed`;
+    - load: programs C = 4 / 8 / 12 / 16 with chat C/4 req/s, on 32K prefixes over 8 tasks;
+    - P:D split searched at C = 8 (2 + 2: 98 tok/s, 3 + 1: 94, 1 + 3: 87), then the spike (+4 programs).
+  - Score: paper SLOs (chat 2 s + 50 ms; agent 10 s, 20 s > 200K, + 80 ms), `fanout_per_tenant.py` PAPER line.
+  - Results, chat attainment ; agent SLO goodput tok/s, r1 / r2:
+    | C + chat/s | ours | conditional disagg | stock PD 2 + 2 | stock PD 3 + 1 | stock PD 1 + 3 (r1) |
+    |---|---|---|---|---|---|
+    | 4 + 1 | 98.1 / 98.0% ; 57 / 58 | 98.4 / 98.6% ; 54 / 56 | 91.4 / 90.8% ; 55 / 56 | 92.7 / 92.2% ; 53 / 55 | 84.0% ; 54 |
+    | 8 + 2 | 95.4 / 96.8% ; 105 / 107 | 98.2 / 98.2% ; 83 / 79 | 85.0 / 85.1% ; 98 / 98 | 92.3 / 91.0% ; 94 / 102 | 67.7% ; 87 |
+    | 12 + 3 | 93.4 / 94.3% ; 139 / 139 | 97.7 / 97.7% ; 99 / 101 | 79.6 / 78.6% ; 136 / 134 | 83.1 / 81.7% ; 122 / 120 | 27.1% ; 110 |
+    | 16 + 4 | 90.8 / 90.5% ; 165 / 159 | 97.9 / 97.6% ; 85 / 97 | 68.2 / 66.6% ; 160 / 163 | 74.9 / 67.2% ; 123 / 106 | 1.3% ; 93 |
+    | spike | 95.8 / 96.3% ; 101 / 100 | 98.5 / 97.9% ; 70 / 79 | 86.9 / 84.4% ; 101 / 101 | 89.9 / 89.6% ; 99 / 96 | 63.9% ; 92 |
+  - vs stock PD's best split per load: chat attainment +3..+23 points; agent goodput -2..+7%.
+  - vs conditional disaggregation: agent goodput +4..+94%; chat attainment -0.3..-7.1 points.
+  - Why Llama differs from Qwen: on 4 TP4 replicas the router has 4 choices instead of 16, and a 70B prefill chunk
+    on a colocated node holds every co-resident chat decode for one long step.
+  - Bugs found and fixed:
+    - `sglang_router` rejects `power_of_two` with one decode worker, so it now uses `round_robin` there;
+    - one 2 + 2 arm lost its pod-0 ports and was rerun.
 - [ ] 2026-10-24 **Conditional-disagg comparison re-run at Dynamo's defaults** (2048 tokens, 0.7 of the prompt; the
       earlier run used 4096), queued behind the stage-3 baselines (`pd_colocation_vs_disagg.md`).
-- [ ] **Fault tolerance:** prefill-role and decode-role workers killed mid-run (`pd_colocation_vs_disagg.md`).
+- [ ] **Fault tolerance with the full stack** (2026-10-26 running, `pd_colocation/mn_fault_fullstack_16g_20261026.sh`, log
+      `/tmp/h20/mn_fault_fullstack_16g_r1.log`).
+  - Setup: Qwen2.5-7B on 16 H20, 32 programs + chat 8/s; every worker on one pod (4 of 16 GPUs) killed at 300 s.
+  - Arms:
+    - ours, pod 1 killed;
+    - conditional disaggregation, pod 1 (decode) killed;
+    - stock PD 2 + 2 with health-check ejection, pod 1 (prefill) or pod 2 (decode) killed.
 - [ ] **GLM-4.5-Air, stages 1-3** (stage 1 at parity with v3 after the 64-row class, A6 section 6).
   - [ ] Stage 2 (H20 pod 4, TP4, NEXTN MTP, mix32: agent C=8 + chat 8 req/s;
         `unified/a6_stage2_glm_h20_20261025.sh`).

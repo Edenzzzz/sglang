@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.63.0 — Llama-3.3-70B stage 3 second repeat; full-stack fault-tolerance driver (2026-10-26)
+- Llama-3.3-70B stage 3 r2 reproduces r1. Against stock PD's best split: +3..+23 points chat attainment at -2..+7%
+  agent goodput. Against conditional disaggregation: +4..+94% agent goodput at -0.3..-7.1 points chat attainment.
+  Table 10b now has both repeats, and the claims of "most goodput at every load" are corrected.
+- `pd_colocation/mn_fault_fullstack_16g_20261026.sh`: full-stack fault tolerance on 16 H20s (one pod killed at 300 s;
+  ours, conditional disaggregation, stock PD prefill-role and decode-role kills).
+
 ## v1.62.2 — Paper draft synced to Google Drive; 5.2.3 chunk-size framing corrected (2026-10-26)
 - `tasks/paper_sync_gdrive.py` compiles `tasks/paper_outline.md` to .docx with pandoc, using the user's outline docx
   as the style reference, and uploads it to Drive as `attn_fuse_draft_2026.docx` (updated in place). Credentials stay

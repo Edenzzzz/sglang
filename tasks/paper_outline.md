@@ -73,10 +73,9 @@
       93.6% and agent SLO goodput 1100 tok/s vs 13.1% / 80 for stock PD at its best split and 96.0% / 821 for
       conditional disaggregation at Dynamo's defaults (+34% goodput); against conditional disaggregation +12..+37%
       agent SLO goodput at every load (32-128 programs, two repeats) and +21-24% under a load spike, chat attainment
-      within 2.4 points through 96 programs and +7.7 points at 128; Llama-3.3-70B (4 TP4 replicas, one repeat): the
-      most agent SLO goodput at every load (+6..+94% vs conditional disaggregation, +2..+7% vs stock PD's best split),
-      chat attainment 3-16 points above stock PD and 0.3-7.1 below conditional disaggregation [pending: second
-      Llama-3.3-70B repeat, 32 GPUs]
+      within 2.4 points through 96 programs and +7.7 points at 128; Llama-3.3-70B (4 TP4 replicas, two
+      repeats): vs stock PD's best split +3..+23 points chat attainment at -2..+7% agent SLO goodput; vs conditional
+      disaggregation +4..+94% agent SLO goodput at -0.3..-7.1 points chat attainment [pending: 32 GPUs]
     - figures: per-tenant attainment and SLO goodput vs load, the 90% capacity marked per system; P:D sweep; load-spike
       time series; fault-tolerance windows
 
@@ -110,8 +109,8 @@ rises by 38-74 points, and at 128-256K contexts agent attainment rises from 13-1
 throughput; on GLM-4.5-Air, throughput rises 27-28% for both tenants. On 16 H20s, at 64 agent programs plus chat, AttentionFuse keeps 93.6% chat
 attainment with 1100 tok/s of agent SLO goodput, where PD disaggregation at its best P:D ratio reaches 13.1% and
 80 tok/s; against conditional disaggregation it carries 12-37% more agent SLO goodput at every load (two repeats) and 21-24% more under
-a load spike. With Llama-3.3-70B on the same 16 GPUs it carries the most agent SLO goodput at every load
-measured.
+a load spike. With Llama-3.3-70B on the same 16 GPUs, it holds 3-23 points more chat attainment than stock PD at
+its best split, at equal agent goodput (-2..+7%), and 4-94% more agent goodput than conditional disaggregation.
 
 ## 1. Introduction
 
@@ -163,8 +162,8 @@ rises by 38-74 points under the paper's SLOs, agent attainment at 128-256K rises
 GLM-4.5-Air throughput rises 27-28%. On 16 GPUs with the full stack, AttentionFuse holds 93.6% chat attainment and
 1100 tok/s agent SLO goodput at 64 agent programs, against 13.1% / 80 for the best stock PD configuration and
 96.0% / 821 for conditional disaggregation, and carries 12-37% more agent SLO goodput than conditional
-disaggregation from 32 to 128 programs. With Llama-3.3-70B it carries the most agent SLO goodput at every load
-measured. [32 GPUs pending]
+disaggregation from 32 to 128 programs. With Llama-3.3-70B, it holds 3-23 points more chat attainment than stock PD
+at equal agent goodput, and 4-94% more agent goodput than conditional disaggregation. [32 GPUs pending]
 
 ## 2. Background
 
@@ -739,7 +738,7 @@ disaggregation is implemented in our router on the same workers as ours, since D
 
 **Status.**
 - Stages 1 and 2: measured for all three models; Llama-3.3-70B and GLM-4.5-Air on H20, their H200 reruns [pending].
-- Stage 3: measured on 16 H20s for Qwen2.5-7B (two repeats) and Llama-3.3-70B (one repeat).
+- Stage 3: measured on 16 H20s for Qwen2.5-7B and Llama-3.3-70B (two repeats each).
 - [pending]: GLM-4.5-Air's stage 3 and the 32-GPU runs.
 
 ### 6.2 Kernel microbenchmarks
@@ -1025,25 +1024,29 @@ points higher for ours at 128 programs. There, conditional
 disaggregation's chat TPOT p90 reaches 46.6 ms (ours 24.8 ms). The full stack adds 14% agent SLO goodput over the
 scheduler-only run at 64 programs (1100 vs 964).
 
-**Result: Llama-3.3-70B, full stack, 16 H20s (4 TP4 replicas).** Under the paper's SLOs (Table 10b), ours carries
-the most agent SLO goodput at every load: 6-94% more than conditional disaggregation and 2-7% more than stock PD at its
-best split (level under the spike). Ours holds 90.8-98.1% chat attainment, against 79.6-91.4% for stock PD and
-97.7-98.5% for conditional disaggregation. Against conditional disaggregation the trade is therefore agent goodput for
-chat attainment (-0.3 to -7.1 points). With only four replicas, a 70B prefill chunk on a colocated node holds every
-co-resident chat decode for one long step, and the router has four nodes to choose from rather than sixteen.
-Against stock PD's best split at each load (2 + 2 or 3 + 1), ours holds 3-16 points more chat attainment and 2-7% more
-agent SLO goodput (under the spike: +5.9 points, level goodput). [pending: second repeat]
+**Result: Llama-3.3-70B, full stack, 16 H20s (4 TP4 replicas).** Under the paper's SLOs (Table 10b, two repeats),
+ours trades differently against each baseline:
+- *Against stock PD at its best split per load* (2 + 2 or 3 + 1): 3-23 points more chat attainment, at -2..+7% agent
+  SLO goodput. The chat gap grows with load, from 3-6 points at 4-8 programs to 16-23 at 16 programs, where stock
+  PD's chat attainment falls to 67-75%.
+- *Against conditional disaggregation:* 4-94% more agent SLO goodput at every load, at 0.3-7.1 points less chat
+  attainment.
 
-Table 10b: Llama-3.3-70B, 16 H20s, one repeat; chat attainment (2 s + 50 ms) ; agent SLO goodput, tok/s (agent
-attainment, 10 s + 80 ms).
+Neither baseline reaches ours on both tenants at once. With only four replicas, a 70B prefill chunk on a colocated
+node holds every co-resident chat decode for one long step, and the router has four nodes to choose from rather than
+sixteen; conditional disaggregation keeps those chunks off the decode nodes, at the cost of the agents' remote
+prefills.
 
-| agent programs + chat/s | ours | conditional disagg | stock PD 2 + 2 | stock PD 1 + 3 | stock PD 3 + 1 |
+Table 10b: Llama-3.3-70B, 16 H20s, repeats r1 / r2; chat attainment (2 s + 50 ms) ; agent SLO goodput, tok/s (10 s +
+80 ms). Stock PD 1 + 3 was run in r1 only.
+
+| agent programs + chat/s | ours | conditional disagg | stock PD 2 + 2 | stock PD 3 + 1 | stock PD 1 + 3 |
 |---|---|---|---|---|---|
-| 4 + 1 | 98.1% ; 57 (95.0%) | 98.4% ; 54 (97.5%) | 91.4% ; 55 (95.1%) | 84.0% ; 54 (94.8%) | 92.7% ; 53 (94.5%) |
-| 8 + 2 | 95.4% ; 105 (95.1%) | 98.2% ; 83 (98.2%) | 85.0% ; 98 (93.8%) | 67.7% ; 87 (90.4%) | 92.3% ; 94 (94.5%) |
-| 12 + 3 | 93.4% ; 139 (94.2%) | 97.7% ; 99 (93.7%) | 79.6% ; 136 (93.1%) | 27.1% ; 110 (89.4%) | 83.1% ; 122 (94.4%) |
-| 16 + 4 | 90.8% ; 165 (94.3%) | 97.9% ; 85 (73.8%) | 68.2% ; 160 (90.7%) | 1.3% ; 93 (79.2%) | 74.9% ; 123 (91.9%) |
-| 8 + 2, + 4-program spike | 95.8% ; 101 (95.0%) | 98.5% ; 70 (93.9%) | 86.9% ; 101 (95.1%) | 63.9% ; 92 (92.7%) | 89.9% ; 99 (96.7%) |
+| 4 + 1 | 98.1 / 98.0% ; 57 / 58 | 98.4 / 98.6% ; 54 / 56 | 91.4 / 90.8% ; 55 / 56 | 92.7 / 92.2% ; 53 / 55 | 84.0% ; 54 |
+| 8 + 2 | 95.4 / 96.8% ; 105 / 107 | 98.2 / 98.2% ; 83 / 79 | 85.0 / 85.1% ; 98 / 98 | 92.3 / 91.0% ; 94 / 102 | 67.7% ; 87 |
+| 12 + 3 | 93.4 / 94.3% ; 139 / 139 | 97.7 / 97.7% ; 99 / 101 | 79.6 / 78.6% ; 136 / 134 | 83.1 / 81.7% ; 122 / 120 | 27.1% ; 110 |
+| 16 + 4 | 90.8 / 90.5% ; 165 / 159 | 97.9 / 97.6% ; 85 / 97 | 68.2 / 66.6% ; 160 / 163 | 74.9 / 67.2% ; 123 / 106 | 1.3% ; 93 |
+| 8 + 2, + 4-program spike | 95.8 / 96.3% ; 101 / 100 | 98.5 / 97.9% ; 70 / 79 | 86.9 / 84.4% ; 101 / 101 | 89.9 / 89.6% ; 99 / 96 | 63.9% ; 92 |
 
 **Result: cache pressure.** With the working set grown from 1M to 8M KV tokens against a 6.7M-token pool,
 disaggregation loses 55% throughput and 28.5 points of cached fraction, ours 10.6% and 3.1 points, in earlier
@@ -1051,12 +1054,13 @@ settings; a rerun with the full stack is [pending].
 
 **Bar status.** Against stock PD at its best split the bar is met at every measured load. Against conditional
 disaggregation, the goodput side is met at every load in both repeats (+12..+37%); chat attainment is level through 96 programs and
-ahead only at 128 programs. For Llama-3.3-70B (one repeat):
-- against stock PD's best split, ours is ahead on chat attainment at every load and on goodput at every load except
-  the spike, where it is level;
-- against conditional disaggregation, ours is ahead on agent goodput at a cost of 0.3-7.1 points of chat attainment.
+ahead only at 128 programs. For Llama-3.3-70B (two repeats):
+- against stock PD's best split, ours is ahead on chat attainment at every load (+3..+23 points), with agent goodput
+  level (-2..+7%); the chat side of the bar is met from 12 programs up;
+- against conditional disaggregation, ours is ahead on agent goodput (+4..+94%) at a cost of 0.3-7.1 points of chat
+  attainment.
 
-[pending]: 32 GPUs with the full stack, the second Llama-3.3-70B repeat and GLM-4.5-Air.
+[pending]: 32 GPUs with the full stack, and GLM-4.5-Air.
 
 **Figures.**
 
@@ -1263,7 +1267,8 @@ as a tuning knob and the per-round KV re-ship as a bottleneck. On 16 H20s with Q
 - it carries 12-37% more agent SLO goodput than conditional disaggregation at every load, and 21-24% more under a
   load spike.
 
-With Llama-3.3-70B it carries the most agent goodput at every load.
+With Llama-3.3-70B, it holds 3-23 points more chat attainment than stock PD at equal agent goodput, and 4-94% more
+agent goodput than conditional disaggregation.
 
 **Lessons.**
 1. For mixed steps, the fusion that pays is in scheduling and reduction, not in co-compiled kernels. Persistent

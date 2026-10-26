@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.66.1 — Paper Figure 2 (P:D ratio sweep) (2026-10-26)
+- `tasks/paper_figures/fig02_pd_sweep.py`: stock PD chat attainment and agent SLO goodput against prefill pods
+  (16 and 32 H20s), with ours as a reference line; embedded in section 2.3.
+
 ## v1.66.0 — Paper Figure 19 (capacity at SLO) from measured stage-3 data; fault scorer (2026-10-26)
 - `tasks/paper_figures/fig19_capacity.py`: chat attainment and agent SLO goodput vs agent programs on 16 H20s, for
   Qwen2.5-7B and Llama-3.3-70B, comparing ours, conditional disaggregation and stock PD 2 + 2 / 3 + 1 (mean of two

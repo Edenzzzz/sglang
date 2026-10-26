@@ -220,8 +220,13 @@ pods from 1 to 7 of 8 at 32 agent programs plus chat at 8 req/s. Chat attainment
 to 67.8% with six (the best), and falls to 50.0% with seven. This motivates C4. The sweep for Llama-3.3-70B and
 GLM-4.5-Air is [pending].
 
-Figure 2: chat attainment and agent SLO goodput vs number of prefill pods (1..7 of 8), stock PD; 16 H20s, Qwen2.5-7B,
-32 agent programs + chat 8 req/s. Llama-3.3-70B / GLM-4.5-Air [pending].
+![Figure 2](paper_figures/fig02_pd_sweep.png)
+
+Figure 2: stock PD disaggregation against its P:D ratio, Qwen2.5-7B without speculation, KV pool on. Left: chat
+attainment (0.5 s + 20 ms) against the number of prefill pods out of 8, on 16 H20s at 32 agent programs + 8 chat req/s
+and on 32 H20s at 64 programs + 16 req/s. Right: agent SLO goodput on 16 H20s. Dashed: ours, colocated, at the same
+loads. The best ratio (6 prefill pods) reaches 68% / 56% chat attainment against ours' 99%. Llama-3.3-70B /
+GLM-4.5-Air [pending]. Source: `tasks/paper_figures/fig02_pd_sweep.py`.
 
 ### 2.4 KV-cache centric scheduling
 

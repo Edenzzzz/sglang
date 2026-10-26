@@ -1211,14 +1211,22 @@ KV capacity). Ours (colocated, cluster pool) vs stock PD 2 + 2, scheduler-only s
 fraction, agent output tok/s, and mean agent TTFT. Ours loses 3.1 points of cached fraction and 10.6% of throughput;
 stock PD loses 28.5 points and 55%. Full stack [pending]. Source: `tasks/paper_figures/fig22_thrashing.py`.
 
-Figure 23: demand shift and load spike over time, in 30 s windows.
-- Top: offered prefill demand (uncached prompt tok/s) and decode demand (output tok/s) of the superposed TraceLab
-  replay at alpha = 3, with the chat surge shaded.
-- Below, per system (ours, conditional disaggregation, stock PD 2 + 2 and 3 + 1): chat and agent attainment, and
-  throughput.
-- A second panel shows the fan-out spike (+32 programs from 300 s for 300 s, on 64 programs + 16 chat req/s).
+![Figure 23](paper_figures/fig23_demand_shift.png)
 
-Trace replay [pending]; fan-out spike measured (Table 10).
+Figure 23: the superposed TraceLab replay at alpha = 3 with a chat surge of +16 req/s from 300 s to 600 s (shaded),
+on 16 H20s, in 30 s windows by request start, for ours and conditional disaggregation. From top: issued prefill
+demand (uncached prompt tokens / s), issued decode demand (requested output tokens / s), chat attainment
+(2 s + 50 ms, base stream), and agent attainment (10 s + 80 ms). Issued demand differs by system, because a round
+goes out only after its predecessor returns.
+
+The trace's prefill demand swings between about 100K and 500K uncached tokens / s within minutes, and the surge
+doubles decode demand. Both systems lose chat attainment during the surge. Ours recovers within a minute after the
+surge; conditional disaggregation recovers only partly, and from about 1100 s its fixed prefill workers fall behind
+the trace for good: both tenants' attainment stays near zero while ours holds 40-90%. In the first 300 s, the
+segment-opening cold prefills make ours' chat attainment noisier (34-89%) than conditional disaggregation's (95-99%),
+which keeps those prefills off the decode nodes. Source: `tasks/paper_figures/fig23_demand_shift.py`. The stock PD
+series and the fan-out spike (+32 programs from 300 s for 300 s on 64 programs + 16 chat req/s, Table 10) are
+[pending] in this figure.
 
 ### 6.5 Fault tolerance
 

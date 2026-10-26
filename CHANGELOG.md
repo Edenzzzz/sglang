@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.69.1 — Paper Figure 23 (demand shift over time) (2026-10-27)
+- `tasks/paper_figures/fig23_demand_shift.py`: issued prefill / decode demand and per-tenant attainment in 30 s
+  windows, alpha 3 + chat surge, ours vs conditional disaggregation (data under `paper_figures/data/demand_shift/`).
+  Conditional disaggregation's prefill side falls behind from about 1100 s and never recovers; ours recovers within a
+  minute of the surge.
+
 ## v1.69.0 — Paper section 6.4: demand-shift results (Table 10d) (2026-10-27)
 - Superposed TraceLab replay on 16 H20s.
   - Alpha 3, ours vs conditional disaggregation: chat +14 points, agent +8.7 points, agent goodput +57%.

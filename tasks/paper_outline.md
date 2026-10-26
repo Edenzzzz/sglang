@@ -490,10 +490,6 @@ and graph count and capture memory vs PD-Multiplexing, are [pending].
 
 Table 4: CUDA graph count, capture memory and decode step time, ours vs PD-Multiplexing, graphs on vs off [pending].
 
-### 5.6 DeepEP with auto schedule?
-
-Expert-parallel dispatch is out of scope: the evaluated models are dense or, for GLM-4.5-Air, run at TP4.
-
 ## 6. Evaluation
 
 ### 6.1 Settings

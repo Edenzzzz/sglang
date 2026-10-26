@@ -826,7 +826,7 @@ best split (level under the spike). Ours holds 90.8-98.1% chat attainment, again
 chat attainment (-0.3 to -7.1 points). With only four replicas, a 70B prefill chunk on a colocated node holds every
 co-resident chat decode for one long step, and the router has four nodes to choose from rather than sixteen.
 Against stock PD's best split at each load (2 + 2 or 3 + 1), ours holds 3-16 points more chat attainment and 2-7% more
-agent SLO goodput. [pending: second repeat; stock PD 3 + 1 under the spike]
+agent SLO goodput (under the spike: +5.9 points, level goodput). [pending: second repeat]
 
 Table 10b: Llama-3.3-70B, 16 H20s, one repeat; chat attainment (2 s + 50 ms) ; agent SLO goodput, tok/s (agent
 attainment, 10 s + 80 ms).
@@ -837,7 +837,7 @@ attainment, 10 s + 80 ms).
 | 8 + 2 | 95.4% ; 105 (95.1%) | 98.2% ; 83 (98.2%) | 85.0% ; 98 (93.8%) | 67.7% ; 87 (90.4%) | 92.3% ; 94 (94.5%) |
 | 12 + 3 | 93.4% ; 139 (94.2%) | 97.7% ; 99 (93.7%) | 79.6% ; 136 (93.1%) | 27.1% ; 110 (89.4%) | 83.1% ; 122 (94.4%) |
 | 16 + 4 | 90.8% ; 165 (94.3%) | 97.9% ; 85 (73.8%) | 68.2% ; 160 (90.7%) | 1.3% ; 93 (79.2%) | 74.9% ; 123 (91.9%) |
-| 8 + 2, + 4-program spike | 95.8% ; 101 (95.0%) | 98.5% ; 70 (93.9%) | 86.9% ; 101 (95.1%) | 63.9% ; 92 (92.7%) | [pending] |
+| 8 + 2, + 4-program spike | 95.8% ; 101 (95.0%) | 98.5% ; 70 (93.9%) | 86.9% ; 101 (95.1%) | 63.9% ; 92 (92.7%) | 89.9% ; 99 (96.7%) |
 
 **Result: cache pressure.** With the working set grown from 1M to 8M KV tokens against a 6.7M-token pool,
 disaggregation loses 55% throughput and 28.5 points of cached fraction, ours 10.6% and 3.1 points, in earlier

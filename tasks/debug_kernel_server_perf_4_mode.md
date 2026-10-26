@@ -829,8 +829,8 @@ Tasks, in priority order:
                 3 + 1, not 1 + 3.
               - Ours at C = 8: 95.4% ; 105.
               - [x] 2 + 2 at C = 16 rerun (`_r1b`): chat 68.2% ; agent 160 tok/s (90.7%). Ours 90.8% ; 165.
-              - 3 + 1 results (paper SLO): C=4 92.7% ; 53, C=12 83.1% ; 122, C=16 74.9% ; 123 (spike running).
-              - [ ] 3 + 1 at C = 4 / 12 / 16 and the spike (`pd_colocation/mn_llama_p3_loads_20261026.sh`, queued
+              - [x] 3 + 1 results (paper SLO): C=4 92.7% ; 53, C=12 83.1% ; 122, C=16 74.9% ; 123, spike 89.9% ; 99.
+              - (done) 3 + 1 at C = 4 / 12 / 16 and the spike (`pd_colocation/mn_llama_p3_loads_20261026.sh`, queued
                     behind the 2 + 2 C = 16 rerun).
       - **r1 complete 2026-10-26** (except the two stock PD reruns). Paper SLO matrix (chat 2 s + 50 ms; agent 10 s,
         20 s > 200K, + 80 ms): chat attainment ; agent SLO goodput (agent attainment):

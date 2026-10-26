@@ -37,6 +37,28 @@ if "SGLANG_FULL_CG_MIXED" not in s:
             return forward_batch.batch_size"""
     assert s.count(old) == 1, "logits-buffer layout changed"
     s = s.replace(old, new)
+    # ... and the replay output must keep those rows: the full backend trimmed next_token_logits to one row per
+    # request (raw_bs), cutting a merged step's verify logits to one per verify row (shape [4, 4] for 4 values).
+    old = """        bs = forward_batch.batch_size
+        self.raw_bs = bs
+"""
+    new = """        bs = forward_batch.batch_size
+        self.raw_bs = bs
+        self.raw_logits_rows = (
+            self._prefill_logits_buffer_rows(forward_batch)
+            if int(getattr(forward_batch, "mixed_verify_tokens", 0) or 0)
+            and not forward_batch.return_logprob
+            else bs
+        )
+"""
+    assert s.count(old) == 1, "load_batch layout changed"
+    s = s.replace(old, new)
+    old = """        logits_rows = self.raw_bs if self._is_full_backend else self.raw_num_tokens"""
+    new = """        logits_rows = (
+            getattr(self, "raw_logits_rows", self.raw_bs) if self._is_full_backend else self.raw_num_tokens
+        )"""
+    assert s.count(old) == 1, "trim layout changed"
+    s = s.replace(old, new)
     compile(s, str(p), "exec")
     p.write_text(s)
 print("FULL_CG_MIXED", "SGLANG_FULL_CG_MIXED" in p.read_text())

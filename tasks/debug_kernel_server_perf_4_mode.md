@@ -1509,7 +1509,11 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
                         - The 4-mode arm crashed on merged steps: the full backend's static logits buffer had one row
                           per request, but a merged step keeps every verify token's logits
                           (`eagle_sample: shape [5, 4] invalid for 5`). Fixed: rows = batch_size - verify_rows +
-                          verify_tokens. Rerunning.
+                          verify_tokens.
+                        - Still failing with the same error: the logits processor computed the right rows
+                          (`mvt=16`, extend lens `[199, 4, 4, 4, 4]`, 17 rows), but `_trim_logits_output` cut the
+                          full backend's output to one row per request (`raw_bs`). Fixed: trim to the per-step logits
+                          row count recorded at load. Rerunning.
                         - Correctness gate: `drivers/serving/compare_outputs_20261026.py` (greedy-output agreement vs
                           the breakable runs, two breakable repeats as the noise floor).
                       - [ ] Experiment 1 (`unified/a6_fullcg_exp1_h200_20261026.sh`): the full prefill

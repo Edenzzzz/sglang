@@ -5,12 +5,14 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
 - **Bar:** >= 30% on TTFT and ITL (or their SLO attainment) and >= 10% throughput on realistic chat + TraceLab
   workloads.
 - **Models:** Qwen2.5-7B, Llama-3.3-70B (next), GLM-4.5-Air.
-- **Hardware (2026-10-26):** H200 trial `8574c727fab6ffbd` ended (status `done`; the webshell returned a bare EOF,
-  the same as a network fault). Re-forked as `5b256eb857aa98d9` (vibecuda). Re-provision with
-  `unified/prov_h200_20261024.sh` from a rebuilt bundle (`/tmp/h200r2/bundle.tar.gz`: current port07 subset, current
-  scripts, the same native libraries / flash-attention / overlay). Lost with the pod and to be regenerated: the 96
-  trace-sampled captures, the synthetic and standalone sets, every A6 build, and experiment 4 (sync-free merge),
-  whose result was never read.
+- **Hardware (2026-10-26, user):** ONE 4-GPU H200 trial for the kernel and single-node stages, `d4b20cad59170ebd`
+  (vibecuda4, trial 304732180, forked from `5b256eb857aa98d9` with gpu=4 / cpu 96 / 876544 MB and
+  `overrides.attachments=[]`). The queued 1-GPU fork `5b256eb857aa98d9` was stopped. Llama-3.3-70B and GLM-4.5-Air TP4
+  single-node runs move here from H20. If the trial is killed for any reason other than underutilization (e.g. a
+  high-priority preemption), fall back to the H20 pods.
+  - Re-provision: `unified/prov_h200_20261024.sh` from `/tmp/h200r2/bundle.tar.gz`.
+  - Lost with the earlier trial `8574c727fab6ffbd`, to be regenerated: the 96 trace-sampled captures, the synthetic
+    and standalone sets, every A6 build, and experiment 4 (sync-free merge), whose result was never read.
 - **Kernel claim baseline (user, 2026-10-26):** gains are measured on 4-mode inputs against NAIVE FA3 + FA2: stock
   flash-attention FA3 on the prefill rows plus STOCK flashinfer FA2 (`BatchPrefillWithPagedKVCacheWrapper`,
   backend fa2, its own plan / tile choice / split-KV merge), serial and two-stream

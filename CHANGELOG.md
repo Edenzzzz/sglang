@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.67.0 — Full-stack fault tolerance measured (2026-10-26)
+- Qwen2.5-7B on 16 H20s, 32 programs + chat 8/s, one node killed at 300 s. Ours holds both tenants (agent 95.0 ->
+  95.5 -> 96.8%, chat 98.7%, -9% goodput). Conditional disaggregation: -16% goodput. Stock PD 2 + 2 with a prefill node
+  killed: agent 50.8 -> 21.8 -> 29.6%, chat 30%, -1/3 goodput; with a decode node killed it is level. Paper section
+  6.5, Table 10c; task doc.
+
 ## v1.66.5 — Paper Figure 16a (single-node attainment) (2026-10-26)
 - `tasks/paper_figures/fig16a_single_node.py`: Table 7b as grouped bars, three SLO panels, stock vs ours; embedded in
   section 6.3.

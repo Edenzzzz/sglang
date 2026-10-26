@@ -898,13 +898,23 @@ Tasks, in priority order:
     - one 2 + 2 arm lost its pod-0 ports and was rerun.
 - [ ] 2026-10-24 **Conditional-disagg comparison re-run at Dynamo's defaults** (2048 tokens, 0.7 of the prompt; the
       earlier run used 4096), queued behind the stage-3 baselines (`pd_colocation_vs_disagg.md`).
-- [ ] **Fault tolerance with the full stack** (2026-10-26 running, `pd_colocation/mn_fault_fullstack_16g_20261026.sh`, log
-      `/tmp/h20/mn_fault_fullstack_16g_r1.log`).
-  - Setup: Qwen2.5-7B on 16 H20, 32 programs + chat 8/s; every worker on one pod (4 of 16 GPUs) killed at 300 s.
-  - Arms:
-    - ours, pod 1 killed;
-    - conditional disaggregation, pod 1 (decode) killed;
-    - stock PD 2 + 2 with health-check ejection, pod 1 (prefill) or pod 2 (decode) killed.
+- [x] **Fault tolerance with the full stack, 32 programs** (2026-10-26, one repeat; `pd_colocation/mn_fault_fullstack_16g_20261026.sh`,
+      log `/tmp/h20/mn_fault_fullstack_16g_r1.log`; scored by `perf_model/fault_windows.py --series` after copying
+      `fault_t.txt` from the killed pod, and by `fanout_per_tenant.py` (paper SLOs)).
+  - Results: agent attainment before -> first 60 s after the kill -> rest of run; overall chat attainment ; agent SLO
+    goodput (the no-fault reference at 32 + 8 is from Table 10, r1 / r2):
+    | arm (node killed) | agent windows | chat (2 s + 50 ms) | agent goodput | no-fault goodput |
+    |---|---|---|---|---|
+    | ours (node 1) | 95.0 -> 95.5 -> 96.8%, 0 lost | 98.7% | 552 tok/s | 601 / 611 |
+    | conditional disagg (node 1, decode) | 94.1 -> 93.2 -> 98.7%, 0 lost | 99.4% | 449 tok/s | 527 / 547 |
+    | stock PD 2 + 2, prefill node 1 | 50.8 -> 21.8 -> 29.6%, 1 lost; chat 45.7 -> 19.7 -> 23.1%, 5 lost | 30.0% | 64 tok/s | 101 / 87 |
+    | stock PD 2 + 2, decode node 2 | 52.7 -> 43.8 -> 50.9%, 1 lost; chat 46.3 -> 33.9 -> 49.3% | 47.6% | 107 tok/s | 101 / 87 |
+  - Losing a quarter of the cluster costs ours 9% of agent goodput, with no attainment dip for either tenant.
+    Conditional disaggregation loses 16%. Stock PD loses about a third when a prefill node dies (agent attainment
+    halves and does not recover), and is level when a decode node dies: its bottleneck is the prefill / transfer
+    side, not decode.
+- [ ] **Fault at 64 programs** (`pd_colocation/mn_fault_load_16g_20261026.sh`, `FAULT_LOAD=64:16`): queued behind the
+      demand-shift run. At 32 programs both colocated systems have spare capacity.
 - [ ] **GLM-4.5-Air, stages 1-3** (stage 1 at parity with v3 after the 64-row class, A6 section 6).
   - [ ] Stage 2 (H20 pod 4, TP4, NEXTN MTP, mix32: agent C=8 + chat 8 req/s;
         `unified/a6_stage2_glm_h20_20261025.sh`).

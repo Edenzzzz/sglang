@@ -212,7 +212,8 @@ def run_arm(arm):
                       "AGENT_SEED", "CHAT_SHAREGPT", "WORKLOAD", "FO_TASKS", "FO_PREFIX", "FO_ROUNDS", "FO_APPEND",
                       "FO_OUT", "FO_GAP", "FO_ZIPF", "FO_ROTATE", "FO_DURATION", "FO_TEXT", "CHAT_SPIKE", "FO_SPIKE", "MODEL_DIR", "CHAT_TEMPLATE",
                       "AGENT_MODE", "WINDOW_START", "WINDOW_STARTS", "WINDOW_S", "ALPHA", "WINDOW_ROUNDS",
-                      "TRACE_DATASET_PATH", "TEXT_SOURCE", "MATH_RATE", "MATH_N", "MATH_SET", "MATH_SEED") if k in os.environ)
+                      "TRACE_DATASET_PATH", "TEXT_SOURCE", "MATH_RATE", "MATH_N", "MATH_SET", "MATH_SEED",
+                      "BENCH_REPLAY_HORIZON_S") if k in os.environ)
     # The launch call itself can fail on the webshell, and nothing else would notice: the arm then waits out its
     # 90 min timeout with no bench (and FAULT_AT fires anyway). Check that the bench log exists; relaunch if not.
     for attempt in range(4):

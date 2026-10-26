@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.67.1 — Trace replay over a fixed horizon (2026-10-26)
+- Session replay: `BENCH_REPLAY_HORIZON_S`. A round whose issue time falls past the horizon is not issued, nor are its
+  session's later rounds; each gets a failed output marked "not issued". The scorer drops these from the tenant rows
+  and reports them as backlog. Every arm is then measured over the same wall-clock window. Test: replay horizon
+  check, ALL PASS.
+- Without it, ours' alpha = 6 replay was still half done after 22 min (completion-dependent rounds stretch under
+  overload), and stock PD would have exceeded mn_run's 90-min limit. The demand-shift driver was restarted as v2
+  (`mn_tracelab_shift_v2_16g_20261026.sh`): horizon 1.5x the scaled trace hour; alpha 6 and 3, then a chat surge at
+  alpha 3.
+
 ## v1.67.0 — Full-stack fault tolerance measured (2026-10-26)
 - Qwen2.5-7B on 16 H20s, 32 programs + chat 8/s, one node killed at 300 s. Ours holds both tenants (agent 95.0 ->
   95.5 -> 96.8%, chat 98.7%, -9% goodput). Conditional disaggregation: -16% goodput. Stock PD 2 + 2 with a prefill node

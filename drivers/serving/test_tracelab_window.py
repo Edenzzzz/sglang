@@ -223,6 +223,37 @@ def test_superposed(path, tokenizer, starts):
         check(True, "superposed: --tracelab-window-starts with --tracelab-window-start-s is rejected")
 
 
+def test_replay_horizon():
+    """Rounds scheduled past BENCH_REPLAY_HORIZON_S are not issued; their outputs come from skipped_output."""
+    plan = {"A": [0.00, 0.05, 0.40], "B": [0.30, 0.35]}  # horizon 0.2 s: A2 and all of B are past it
+    requests = []
+    for session, offsets in plan.items():
+        for round_index, offset in enumerate(offsets):
+            row = common.DatasetRow(prompt=[1], prompt_len=1, output_len=1, session_id=session,
+                                    round_index=round_index, inter_round_delay_s=0.0)
+            row.trace_offset_s = offset
+            requests.append(row)
+
+    async def send(row):
+        await asyncio.sleep(0.01)
+        return Output()
+
+    skipped = []
+    with tempfile.TemporaryDirectory() as directory:
+        os.environ["BENCH_SESSION_AUDIT_FILE"] = os.path.join(directory, "a.json")
+        os.environ["BENCH_REPLAY_HORIZON_S"] = "0.2"
+        try:
+            outputs = asyncio.run(replay.replay_sessions(
+                requests, send, float("inf"), start_at_timestamps=True,
+                skipped_output=lambda row: skipped.append(row) or "SKIPPED"))
+        finally:
+            del os.environ["BENCH_SESSION_AUDIT_FILE"], os.environ["BENCH_REPLAY_HORIZON_S"]
+        report = json.loads(Path(directory, "a.json").read_text())
+    issued = [(r.session_id, r.round_index) for r, o in zip(requests, outputs) if o != "SKIPPED"]
+    check(issued == [("A", 0), ("A", 1)] and len(skipped) == 3 and report["rounds_not_issued"] == 3,
+          "replay horizon: rounds past the horizon are not issued and come back as skipped outputs")
+
+
 def test_replay_rule():
     # (offsets, gaps, service seconds) per session; times in seconds, kept short.
     plan = {
@@ -318,7 +349,7 @@ def print_window_stats(path, tokenizer, starts, max_context, alphas):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--trace", default="/tmp/tl/syfi_coding_trace.jsonl.gz")
+    parser.add_argument("--trace", default="/opt/tiger/sglang/workloads/tracelab/syfi_coding_trace.jsonl.gz")
     parser.add_argument("--tokenizer", default="/opt/tiger/models/Qwen2.5-7B-Instruct")
     parser.add_argument("--text-source", default="/opt/tiger/sglang/workloads/ShareGPT_V3_unfiltered_cleaned_split.json")
     parser.add_argument("--reference", default="/tmp/tlwin_ref/tracelab_orig.py")
@@ -334,6 +365,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     started = time.time()
     test_replay_rule()
+    test_replay_horizon()
     if args.reference and Path(args.reference).exists():
         test_default_unchanged(args.reference, args.trace, tokenizer)
     else:

@@ -1643,6 +1643,8 @@ async def benchmark(
             slowdown_factor=mooncake_slowdown_factor,
             start_at_timestamps=(getattr(args, "tracelab_window_start_s", None) is not None
                                  or bool(getattr(args, "tracelab_window_starts", None))),
+            skipped_output=lambda request: RequestFuncOutput(
+                prompt_len=request.prompt_len, error="not issued: replay horizon"),
         )
     else:
         async for request in request_generator:

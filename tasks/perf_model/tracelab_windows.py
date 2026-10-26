@@ -24,6 +24,7 @@ import numpy as np
 CHAT = {"tight": (2.0, 50.0), "loose": (2.0, 100.0)}
 AGENT_TPOT = {"tight": 80.0, "loose": 100.0}
 LONG_UNCACHED = 200_000
+NOT_ISSUED = {}  # tenant -> rounds past the replay horizon (BENCH_REPLAY_HORIZON_S): the arm's backlog
 
 
 def load(path, tenant):
@@ -36,6 +37,9 @@ def load(path, tenant):
     cached = d.get("cached_tokens") or [0] * len(starts)
     out = []
     for i, error in enumerate(d["errors"]):
+        if error and error.startswith("not issued"):
+            NOT_ISSUED[tenant] = NOT_ISSUED.get(tenant, 0) + 1
+            continue
         n = d["output_lens"][i]
         ok = not error and n > 1 and d["ttfts"][i] is not None
         itl = sum(d["itls"][i]) if ok else 0.0
@@ -67,6 +71,8 @@ def summary(rows, duration):
             cells.append(f"{level}={len(good) / len(rs) * 100:5.1f}% ({sum(r['out'] for r in good) / duration:.0f} tok/s)")
         done = [r for r in rs if r["ok"]]
         p = lambda xs, q: float(np.percentile(xs, q)) if xs else float("nan")
+        if NOT_ISSUED.get(tenant):
+            cells.append(f"not_issued={NOT_ISSUED[tenant]}")
         cells.append(f"TTFT p50/p90={p([r['ttft'] for r in done], 50):.2f}/{p([r['ttft'] for r in done], 90):.2f}s "
                      f"TPOT p50/p90={p([r['tpot_ms'] for r in done], 50):.1f}/{p([r['tpot_ms'] for r in done], 90):.1f}ms "
                      f"n={len(rs)} failed={len(rs) - len(done)}")
@@ -96,6 +102,7 @@ def main():
     parser.add_argument("dirs", nargs="+")
     args = parser.parse_args()
     for d in map(Path, args.dirs):
+        NOT_ISSUED.clear()
         rows = (load(d / "agent.json", "agent") + load(d / "chat.json", "chat")
                 + load(d / "chat_spike.json", "chat_spike") + load(d / "math" / "math.json", "math"))
         t0 = min(r["start"] for r in rows)

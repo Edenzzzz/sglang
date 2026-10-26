@@ -39,7 +39,7 @@ def _write_audit(report, label):
 
 async def replay_sessions(
     requests, send_request, request_rate, replay_timestamps=False, slowdown_factor=1.0,
-    start_at_timestamps=False,
+    start_at_timestamps=False, skipped_output=None,
 ):
     """Serialize each session regardless of whether recorded think times are replayed.
 
@@ -51,7 +51,9 @@ async def replay_sessions(
             raise ValueError("start-at-timestamps replay excludes program-concurrency replay")
         if request_rate != float("inf"):
             raise ValueError("start-at-timestamps replay requires request-rate inf")
-        outputs, report = await replay_timestamp_sessions(requests, send_request)
+        horizon = float(os.environ.get("BENCH_REPLAY_HORIZON_S", "inf"))
+        outputs, report = await replay_timestamp_sessions(
+            requests, send_request, horizon_s=horizon, skipped_output=skipped_output)
         _write_audit(report, "TRACE_TIMESTAMP_REPLAY")
         return outputs
     concurrency = os.environ.get("BENCH_SESSION_CONCURRENCY")
@@ -115,7 +117,8 @@ async def replay_sessions(
 
 
 async def replay_timestamp_sessions(
-    requests, send_request, *, clock=time.perf_counter, sleep=asyncio.sleep
+    requests, send_request, *, clock=time.perf_counter, sleep=asyncio.sleep, horizon_s=float("inf"),
+    skipped_output=None,
 ):
     """Replay a time-scaled trace window, keeping sessions causal.
 
@@ -131,6 +134,10 @@ async def replay_timestamp_sessions(
     stays causal under load; when the server keeps up, rounds land on their trace offsets.
     Issue lag (issue_r - o_r) measures how far completion dependence pushed the session
     behind the trace.
+
+    horizon_s: a round whose issue time would fall after the horizon is not issued, and neither are the session's later
+    rounds; each gets skipped_output(request) (a failed output marked "not issued"), so every system is measured over
+    the same wall-clock window and its unissued rounds are its backlog.
 
     Returns (outputs in input order, audit report with per-session start and per-round
     scheduled/issue/finish times plus measured in-flight programs, session starts/s and
@@ -157,7 +164,7 @@ async def replay_timestamp_sessions(
     details = {}
     events = []
     epoch = clock()
-    state = {"programs": 0, "calls": 0, "peak_programs": 0, "peak_calls": 0}
+    state = {"programs": 0, "calls": 0, "peak_programs": 0, "peak_calls": 0, "skipped": 0}
 
     def now():
         return clock() - epoch
@@ -176,6 +183,11 @@ async def replay_timestamp_sessions(
                 scheduled = request.trace_offset_s
                 if position:
                     scheduled = max(previous_finish + (request.inter_round_delay_s or 0.0), scheduled)
+                if scheduled > horizon_s:
+                    for idx, req in records[position:]:
+                        outputs[idx] = skipped_output(req)
+                    state["skipped"] += len(records) - position
+                    break
                 await wait_until(scheduled)
                 issued = now()
                 if not position:
@@ -239,6 +251,8 @@ async def replay_timestamp_sessions(
         "rule": "issue_0 = offset_0; issue_r = max(finish_{r-1} + scaled_gap_r, offset_r)",
         "sessions": len(sessions),
         "rounds": len(requests),
+        "horizon_s": horizon_s,
+        "rounds_not_issued": state["skipped"],
         "duration_s": duration,
         "peak_active_programs": state["peak_programs"],
         "mean_active_programs": program_seconds / duration if duration else 0.0,

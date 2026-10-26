@@ -47,7 +47,7 @@
       of one step; ablation bars: FA2 / FA3 overlap by PDL 2.2-6.1% of the step, longest-first order <= 0.7%,
       persistent vs hardware dispatch -0.2..-1.3%, JIT release of merges (ready queue) -1.8..+0.5% vs the same loop with ticketed merges (H200,
       Qwen2.5-7B) [pending: Llama-3.3-70B]
-  - stage 2, single node (C2 on C1; sections 5.2-5.3, 6.3)
+  - stage 2, single node (C2 + C3 on C1; sections 5.2-5.3, 6.3)
     - claim: the 4-mode step (prefill chunk + speculative verify) under per-tenant deadline order with demote-on-miss
       protects both tenants on one node
     - bar: >= 30% better TTFT and ITL (or their SLO attainment) and >= 10% throughput vs stock sglang (mixed chunk on
@@ -57,7 +57,7 @@
       throughput +18-19% for both tenants, agent TPOT -41..-48%, chat TTFT -68..-83%; Llama-3.3-70B [pending]
     - figures: per-tenant SLO attainment vs request rate; throughput vs tok/s/user Pareto with p10-p90 bars; TTFT / ITL
       distributions per tenant [pending: rate sweeps]
-  - stage 3, multi node with SLO control (C3 on C1 + C2; sections 5.2-5.4, 6.4, 6.5)
+  - stage 3, multi node with SLO control (C4 on C1-C3; sections 5.2-5.4, 6.4, 6.5)
     - claim: symmetric colocated nodes with SLO-checked cache-first routing, a cluster KV pool and the stage-2 workers
       carry more load at SLO than PD disaggregation at its best P:D ratio, and than conditional disaggregation
     - bar: >= 30% on TTFT / ITL attainment and >= 10% throughput (SLO goodput) vs the best baseline
@@ -81,14 +81,16 @@ long agent prefills. Disaggregation places prefill and decode on separate nodes,
 prefix KV from a prefill node to a decode node, and the ratio of prefill to decode nodes (the P:D ratio) must be tuned
 to the workload.
 
-We present AttentionFuse, a colocated serving system with three parts. The first is a unified tile dispatcher: one
+We present AttentionFuse, a colocated serving system with four parts. The first is a unified tile dispatcher: one
 CPU-side plan per mixed step assigns every attention tile to FlashAttention-3 (FA3) or to a row-sized FlashAttention-2
 (FA2) tile class, balances the tiles across the GPU's streaming multiprocessors (SMs), and schedules the merge of
 split-KV partial results in the same plan, so the partials are reduced inside the FA2 launch instead of by separate
-merge kernels. The second is a four-mode step, which merges a prefill chunk into the speculative-decoding verify
-forward, scheduled in per-tenant deadline order; a prefill whose deadline has already passed is demoted behind every
-prefill that can still meet its deadline. The third is a cluster of symmetric nodes with cache-first, SLO-checked
-routing and a cluster-wide KV pool.
+merge kernels. The second fuses speculative decoding into colocation: because every row gets a tile of its own size,
+a prefill chunk and the speculative (MTP / EAGLE) verify rows of the running requests run in one forward, the
+four-mode step. Prior colocation systems, POD-Attention and PD multiplexing among them, do not support speculative
+decoding, which frontier models are served with. The third schedules these steps in per-tenant deadline order; a
+prefill whose deadline has already passed is demoted behind every prefill that can still meet its deadline. The
+fourth is a cluster of symmetric nodes with cache-first, SLO-checked routing and a cluster-wide KV pool.
 
 On 96 mixed steps sampled from Qwen2.5-7B serving traces and replayed on an H200, mixed-step attention is 1.43-1.51x
 faster than sglang's single FA3 call and 2.7-4.7% faster than the best two-launch split, with FP32-exact output; on
@@ -133,9 +135,15 @@ admitting it.
   and FA3 tiles, orders work longest first, and builds the split-KV merge schedule into the same plan, so FA2 and FA3
   partial results are reduced inside the FA2 launch and no merge launch runs. Stock FA3 and FA2's BatchPrefill body
   execute the plan, overlapped by programmatic dependent launch (PDL).
-- C2, single node: the four-mode step under per-tenant deadline order with demotion of prefills that have already
+- C2, speculative decoding inside colocation: because the dispatcher gives each row a tile class of its own size, a
+  prefill chunk and the MTP / EAGLE verify rows of the running requests run as one target forward, the four-mode step,
+  with the verify rows on 32-row FA2 tiles and the chunk on FA3. Prior colocation designs do not support speculative
+  decoding: POD-Attention overlaps a prefill chunk with one-token decode rows inside an FA2 kernel, and PD multiplexing
+  (MuxWise, sglang's pdmux) runs the prefill split across iterations without the draft model's state. Frontier models
+  are served with speculative decoding, so this is what makes a colocated schedule practical for them.
+- C3, single node: per-tenant deadline order over the four-mode step, with demotion of prefills that have already
   missed their deadline.
-- C3, cluster: symmetric nodes, SLO-checked cache-first routing, and a cluster KV pool.
+- C4, cluster: symmetric nodes, SLO-checked cache-first routing, and a cluster KV pool.
 
 **Results.** The kernel is 1.43-1.51x faster than sglang's FA3 call and 1.027-1.047x faster than the two-launch
 baseline (FA3 and FA2 in separate launches, each with its own plan and merge) on trace-sampled steps on an H200, and level with the two-launch baseline on H20 for all three models. On one
@@ -180,7 +188,7 @@ groups; it has no CPU-GPU overlap schedule and needs a CUDA graph set per SM gro
 No stock schedule protects both tenants; each moves latency from one tenant to the other. On one H200 serving
 Qwen2.5-7B on sglang's FA3 backend, with chat at 8 req/s and an agent program concurrency of 8 (two repeats), stock
 mixed chunk gives a chat TTFT mean of 579.5 ms and an agent inter-token latency (ITL) p99 of 417.8 ms. Stock
-prefill-prioritized brings chat ITL p99 down to 27.3 ms but makes chat TTFT worse. This motivates C2. The same
+prefill-prioritized brings chat ITL p99 down to 27.3 ms but makes chat TTFT worse. This motivates C3. The same
 comparison for Llama-3.3-70B and GLM-4.5-Air is [pending].
 
 Figure 1: per schedule (mixed chunk, prefill-prioritized, each with and without MTP), per tenant: TTFT mean, ITL p99
@@ -196,7 +204,7 @@ tenant mix, and decode nodes leave their compute idle.
 Disaggregation therefore needs a tuned P:D ratio, and even the best ratio misses the chat SLO. On 16 H20s (8 pods of
 2 GPUs) serving Qwen2.5-7B without speculation, with stock sglang PD and the KV pool on, we swept the number of prefill
 pods from 1 to 7 of 8 at 32 agent programs plus chat at 8 req/s. Chat attainment rises from 16.2% with one prefill pod
-to 67.8% with six (the best), and falls to 50.0% with seven. This motivates C3. The sweep for Llama-3.3-70B and
+to 67.8% with six (the best), and falls to 50.0% with seven. This motivates C4. The sweep for Llama-3.3-70B and
 GLM-4.5-Air is [pending].
 
 Figure 2: chat attainment and agent SLO goodput vs number of prefill pods (1..7 of 8), stock PD; 16 H20s, Qwen2.5-7B,
@@ -208,7 +216,7 @@ Multi-round agents re-read 32-256K-token prefixes, so cache-aware routing and KV
 case, studied by ThunderAgent, is thrashing: the working set of active prefixes is larger than one node's KV
 capacity. On 16 H20s at an agent program concurrency of 32, we swept the working set over 16, 64 and 128 tasks with
 64K-token prefixes (about 1M, 4M and 8M KV tokens, against about 6.7M tokens of capacity). The cached-prefix fraction
-of PD disaggregation falls from 0.890 to 0.605, while ours falls from 0.980 to 0.949. This motivates C3's cache-first
+of PD disaggregation falls from 0.890 to 0.605, while ours falls from 0.980 to 0.949. This motivates C4's cache-first
 routing and cluster KV pool; Figure 22 (section 6.4) plots it.
 
 ## 3. Challenges and motivation
@@ -234,7 +242,7 @@ Under disaggregation, each agent round re-ships its prefix: about 3.7 GB of KV p
 each decode pod holds 52-55 requests waiting on KV transfer (at most 108) while running only about 7, at 63-68% KV
 usage. The decode pods are neither compute- nor memory-full; they wait for KV. Putting the prefill pods in deadline
 order instead of first-come-first-served (FCFS) moves chat attainment from 31.2% to 30.5%. The limit of disaggregation is the
-per-round KV transfer, not the prefill queue, which motivates C3. The same measurement for Llama-3.3-70B and
+per-round KV transfer, not the prefill queue, which motivates C4. The same measurement for Llama-3.3-70B and
 GLM-4.5-Air is [pending].
 
 Figure 5: decode-pod time series of requests waiting on transfer, running requests and KV usage, with chat
@@ -247,7 +255,7 @@ An agent burst of 32 requests within 60 s at 32-64K context holds chat TTFT at 4
 one H200 (Qwen2.5-7B, ShareGPT chat at 8 req/s). Deadline order alone does not fix this. Under overload, plain
 earliest-deadline-first (EDF) serves the agent prefills that are already late, because their deadlines are earliest,
 and so makes chat late too; per-tenant deadlines alone change nothing (section 7). Deadline order needs a rule that
-demotes requests that have already missed, which motivates C2. Llama-3.3-70B / GLM-4.5-Air: [pending].
+demotes requests that have already missed, which motivates C3. Llama-3.3-70B / GLM-4.5-Air: [pending].
 
 Figure 6: chat TTFT over time around the agent burst, and per-tenant attainment for stock mixed chunk, per-tenant
 deadlines alone, and deadlines with demotion of missed prefills; one H200, Qwen2.5-7B. Llama-3.3-70B / GLM-4.5-Air
@@ -265,7 +273,7 @@ padding; 96 captures, Qwen2.5-7B. Padding fraction [pending].
 ### 3.5 Can we increase request capacity while maintaining SLOs?
 
 Yes, if rows get their own kernel tiles, chat is not queued behind prefills that can no longer meet their deadlines,
-and nodes stay symmetric so that routing follows the cache. C1-C3 together are that answer. We measure it as the load
+and nodes stay symmetric so that routing follows the cache. C1-C4 together are that answer. We measure it as the load
 each system holds at >= 90% per-tenant attainment (Figure 19). With the scheduler alone on 16 GPUs, ours holds 64
 agent programs against 16 for PD disaggregation (section 6.4); the full-stack capacity is [pending].
 
@@ -281,11 +289,11 @@ SLO if it meets both of its tenant's targets. The objective is the load a system
 least 90% attainment, not mean latency. Agent load is the number of concurrent agent programs; chat load is the
 request rate.
 
-The design acts at three levels against that one objective. Per step (C1), one plan assigns every attention tile to
+The design acts at three levels against that one objective. Per step (C1, C2), one plan assigns every attention tile to
 FA3 (rows of more than 32 packed queries) or to an FA2 tile class (16 or 32 rows; a 64-row class takes rows of 33-64
 packed queries for models whose verify rows pack that many, such as GLM-4.5-Air), and fixes the merge schedule
-for split rows. Per worker (C2), prefills are ordered by deadlines computed from their uncached tokens, and a prefill
-whose deadline has passed is demoted. Per cluster (C3), a request goes to the node with the highest prefix-cache hit
+for split rows, and the verify rows of speculative decoding ride in the same forward as a prefill chunk. Per worker (C3), prefills are ordered by deadlines computed from their uncached tokens, and a prefill
+whose deadline has passed is demoted. Per cluster (C4), a request goes to the node with the highest prefix-cache hit
 that is predicted to meet its SLO; if that is not its best cache holder, the node pulls the prefix from the cluster
 pool.
 
@@ -418,7 +426,7 @@ Figure 8: host plan time per step (mean and p99) vs batch size, on captured serv
 
 The router is cache-first. It orders nodes by prefix-hit bucket, then by load, and takes the first node that passes
 an SLO check. The check prices the request's own prefill plus the deadline-ordered queue ahead of it and the decode
-load beside it, using the step-time model of section 5.2.2. This is part of C3. We will compare cache-first routing
+load beside it, using the step-time model of section 5.2.2. This is part of C4. We will compare cache-first routing
 with the SLO check against cache-only and round-robin routing on 16 H20s, all three models, fan-out agents plus chat,
 with load swept on agent program concurrency. Result: [pending].
 
@@ -429,7 +437,7 @@ cache-only, round-robin); 16 H20s, three models [pending].
 
 One model predicts the fused step's time. Its inputs are the prefill tokens, the prefix length, the number of decode
 and verify rows and their KV lengths, and the predicted speculative acceptance length, tracked per worker as an
-exponentially weighted moving average (EWMA). EDF (C2) and the router (C3) price a request from this predicted step
+exponentially weighted moving average (EWMA). EDF (C3) and the router (C4) price a request from this predicted step
 time. The model is fit on logged serving steps of the current kernel, per model, and scored on held-out steps.
 
 On Qwen2.5-7B on an H200 in four-mode serving, fit on one repeat and scored on the other, held-out mean absolute
@@ -451,7 +459,7 @@ Figure 10: predicted vs measured step time, per step type (decode, prefill, mixe
 #### 5.2.3 Fair Resource sharing
 
 Prefill chunks are sized from the EDF backlog (1024 or 2048 tokens), and a chunk is preempted when a request with an
-earlier deadline arrives. This is part of C2. We will compare deadline-sized chunks with a fixed chunk size, and
+earlier deadline arrives. This is part of C3. We will compare deadline-sized chunks with a fixed chunk size, and
 preemption on vs off, on one node for all three models under an agent burst plus chat. Result: [pending].
 
 Figure 11: per-tenant TTFT / ITL attainment and agent throughput for fixed vs deadline-sized chunks, with and without
@@ -462,7 +470,7 @@ preemption; one node, three models [pending].
 Each prefill gets a deadline from its uncached tokens and its tenant's SLO: 0.5 s below 8192 uncached tokens and 10 s
 above. Prefills are served in deadline order. A prefill whose deadline has already passed ranks behind every prefill
 that can still meet its deadline, which is EDF's standard overload rule; decodes that were retracted for memory are
-never demoted. This is C2's scheduling rule.
+never demoted. This is C3's scheduling rule.
 
 On one H200 with Qwen2.5-7B, under a 32-64K agent burst plus chat, per-tenant deadlines alone change nothing, while
 adding demotion of missed prefills cuts chat TTFT by 96-98% (section 7). The same comparison on one 4-GPU H20 pod for
@@ -478,7 +486,7 @@ demotion of missed prefills; one H200 (Qwen2.5-7B) and one H20 pod (Llama-3.3-70
 
 The cluster KV pool is Mooncake's distributed store. Selected prefixes are written through to it, and the router keeps
 a mirror of the pool's contents so it can price a pull when it routes a request away from the prefix's best holder.
-This is C3's cluster KV pool. Under the thrashing sweep of section 6.4 (working set 1M -> 8M KV tokens against a
+This is C4's cluster KV pool. Under the thrashing sweep of section 6.4 (working set 1M -> 8M KV tokens against a
 6.7M-token pool), ours loses 10.6% throughput and 3.1 points of cached fraction, vs 55% and 28.5 points for
 disaggregation, in earlier settings (Figure 22). Pool on vs off is [pending].
 
@@ -865,7 +873,7 @@ PD. Mixture shifts [pending].
 
 ### 6.5 Fault tolerance
 
-Symmetric nodes and rerouting away from dead workers should keep both tenants' SLOs when workers fail (C3). We will
+Symmetric nodes and rerouting away from dead workers should keep both tenants' SLOs when workers fail (C4). We will
 kill one and then two workers mid-run, in prefill and in decode roles for the baseline (stock PD at its best P:D split,
 health-check ejection on) and the same workers for ours, with the full stack on 16 GPUs at the stage-3 workload and
 load, for all three models. When a prefill worker dies, ours should hold, because every node can prefill and the SLO
@@ -881,7 +889,7 @@ lost requests and recovery time; ours vs stock PD, three models [pending].
 
 ## 7. Ablation study
 
-**Claim.** The ablations isolate which parts of C1-C3 carry the gains: for the kernel, the one plan and in-launch
+**Claim.** The ablations isolate which parts of C1-C4 carry the gains: for the kernel, the one plan and in-launch
 merge, PDL overlap, longest-first order and the executor choice; for the schedule, demotion of missed prefills; for
 the cluster, the routing policy.
 
@@ -992,7 +1000,10 @@ cache, and use conditional disaggregation as our strongest baseline.
 
 **Colocation and multiplexing.** Sarathi-Serve introduced chunked prefill, which bounds decode stalls by cutting
 prefill into chunks run beside decode. PD-Multiplexing (MuxWise) runs prefill and decode in separate SM groups with
-green contexts. POD-Attention fuses prefill and decode attention in a single FA2 kernel. Ours keeps two separate
+green contexts. POD-Attention fuses prefill and decode attention in a single FA2 kernel. Neither supports speculative
+decoding: POD-Attention's hybrid batch has one-token decode rows only, and sglang's multiplexing loop runs the whole
+target forward for extend batches and does not carry the EAGLE draft state through its layer-split prefill. Ours
+gives verify rows their own tile class, so the verify forward absorbs the prefill chunk (C2). Ours keeps two separate
 executors at their own layouts and shares one plan between them, because on Hopper a single kernel cannot overlap MMA
 instructions of different shapes (section 5.1).
 
@@ -1038,3 +1049,39 @@ routing raise SLO attainment on one node and the load held at SLO on a cluster, 
 - KV split policy "flashinfer's KV-length limit" is flashinfer's `kv_len_limit`.
 - The KV pool is Mooncake's L3 store with sglang's write-through-selective policy.
 - PD-Multiplexing is the `pdmux` baseline.
+
+## References
+
+[1] J. He, G. Sun, T. Li, D. Du, Y. Xia, H. Chen. Taming Dynamism on GPUs: Cross-SM Kernel Fusion via SM Cooperation
+and Just-in-Time Reduction (MELD). SOSP '26.
+
+[2] S. Chen, Z. Jia, S. Khan, A. Krishnamurthy, P. B. Gibbons. SLOs-Serve: Optimized Serving of Multi-SLO LLMs.
+arXiv:2504.08784.
+
+[3] Y. Chen, W. Cui, et al. Towards High-Goodput LLM Serving with Prefill-decode Multiplexing (MuxWise).
+arXiv:2504.14489.
+
+[4] Y. Xu, et al. Crossflow: Prefill-Decode Elasticity for Agentic LLM Serving. arXiv:2609.27085.
+
+[5] H. Kang, et al. ThunderAgent: A Simple, Fast and Program-Aware Agentic Inference System. arXiv:2602.13692.
+
+[6] K. Zhu, M. Jacob, C. Ma, Y. Pan, S. Wang, A. Krishnamurthy, B. Kasikci. TraceLab: Characterizing Coding Agent
+Workloads for LLM Serving. arXiv:2606.30560. Dataset: https://github.com/uw-syfi/TraceLab.
+
+[7] W. Zhang, Z. Wu, Y. Mu, R. Ning, B. Liu, N. Sarda, M. Lee, F. Lai. JITServe: SLO-aware LLM Serving with Imprecise
+Request Information. NSDI '26. arXiv:2504.20068.
+
+[8] K. Hong, et al. semi-PD: Towards Efficient LLM Serving via Phase-Wise Disaggregated Computation and Unified Storage.
+arXiv:2504.19867.
+
+[9] NVIDIA. Dynamo: KV-aware router, conditional disaggregation, planner and KV block manager. Documentation,
+https://docs.nvidia.com/dynamo/.
+
+[10] C. Hsieh, Z. Zong, X. Chen, J. Li, J. Zhai, L. Wen. FlowPrefill: Decoupling Preemption from Prefill Scheduling
+Granularity to Mitigate Head-of-Line Blocking in LLM Serving. arXiv:2602.16603.
+
+[11] A. K. Kamath, R. Prabhu, J. Mohan, S. Peter, R. Ramjee, A. Panwar. POD-Attention: Unlocking Full Prefill-Decode
+Overlap for Faster LLM Inference. ASPLOS '25. arXiv:2410.18038.
+
+[12] A. Agrawal, A. Panwar, J. Mohan, N. Kwatra, B. S. Gulavani, R. Ramjee. SARATHI: Efficient LLM Inference by
+Piggybacking Decodes with Chunked Prefills. arXiv:2308.16369.

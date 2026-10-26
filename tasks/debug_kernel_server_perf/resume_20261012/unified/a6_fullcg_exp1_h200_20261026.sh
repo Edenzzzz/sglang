@@ -45,6 +45,7 @@ make_root() {
   /dev/shm/w/venv/bin/python /dev/shm/w/ub/apply_bench_pair_standalone_20261026.py "$R" | grep -q "STANDALONE_BRANCH True"
   /dev/shm/w/venv/bin/python /dev/shm/w/ub/apply_pcg_reason_20261026.py "$R" | grep -q "PCG_REASON True"
   /dev/shm/w/venv/bin/python /dev/shm/w/ub/apply_dex_reason_20261026.py "$R" | grep -q "DEX_REASON True"
+  /dev/shm/w/venv/bin/python /dev/shm/w/ub/apply_full_cg_mixed_20261026.py "$R" | grep -q "FULL_CG_MIXED True"
 }
 export CUDA_VISIBLE_DEVICES=0 TORCH_CUDA_ARCH_LIST=9.0a HF_HOME=/dev/shm/w/hf FI_ROOT=/dev/shm/w/fi
 export NATIVE_PDL_FA2_LIBRARY=/opt/tiger/w/torch_ext_native_h200_20261023/native_fa2_q32/native_fa2_q32.so
@@ -56,7 +57,6 @@ export UNIFIED_FA3_STOCK=1 UNIFIED_SPLIT_POLICY=geometry_fa3 UNIFIED_MERGE_ROWS=
 COMMON="--split-policy geometry_v3 --direct-output --packed-query-limit 64 --repeats 2 --ours --deadline-chunk="
 FIX="--ours-env SGLANG_TTFT_SLO_MS=500 --ours-env SGLANG_EDF_LONG_PROMPT_TOKENS=8192 --ours-env SGLANG_EDF_LONG_TTFT_SLO_MS=10000 --ours-env SGLANG_EDF_LATE_DEMOTE=1 --ours-env SGLANG_EDF_LATE_DEMOTE_TOK_S=1e12"
 T=/dev/shm/w/workloads
-until grep -qE 'A6_STANDALONE_NOQ_DONE' /dev/shm/w/ub/a6_standalone_noq.log 2>/dev/null; do sleep 60; done
 for spec in "sharegpt_r32 $T/ShareGPT_V3_unfiltered_cleaned_split.json 32 3840"; do
   set -- $spec; name=$1; path=$2; rate=$3; n=$4
   R=$BASE/$name
@@ -65,7 +65,7 @@ for spec in "sharegpt_r32 $T/ShareGPT_V3_unfiltered_cleaned_split.json 32 3840";
   cd "$R"
   echo "##### $name rate=$rate n=$n (full prefill graphs, stock attention)"
   /dev/shm/w/venv/bin/python -u run_native_serving_pair_20261023.py "$R" --stage mix32 --modes four --standalone $path \
-    --chat-rate $rate --chat-requests $n $COMMON $FIX --repeats 1 --common-env SGLANG_PCG_REASON=1 --native-env SGLANG_NATIVE_PDL=0 --server-arg '--cuda-graph-backend-prefill full'
+    --chat-rate $rate --chat-requests $n $COMMON $FIX --repeats 1 --common-env SGLANG_PCG_REASON=1 --common-env SGLANG_FULL_CG_MIXED=1 --native-env SGLANG_NATIVE_PDL=0 --server-arg '--cuda-graph-config {"prefill":{"backend":"full","full_prefill_max_req":64}}'
   for a in $R/mix32_four_r*_*; do echo "== $(basename $a)"; grep -E "PCG_REASON|PCG_REPLAY" $a/server.log | tail -2; grep DEX_REASON $a/server.log | head -8 | cut -c1-600; done
   for a in $R/mix32_four_r*_*; do o=$(cat $a/requests/server_log_offset); echo "$(basename $a) prefill_eager=$(tail -c +$o $a/server.log | grep 'Prefill batch' | grep -c 'cuda graph: False') prefill_graph=$(tail -c +$o $a/server.log | grep 'Prefill batch' | grep -c 'cuda graph: True')"; done
 done

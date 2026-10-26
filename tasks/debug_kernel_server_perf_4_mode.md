@@ -1501,7 +1501,18 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
                         The FA2 NP kernel launches one CTA per item, so it needs a max grid with early exit. The
                         persistent FA2 executor is graph-friendly as built.
                       - Sweep captured buckets / slot counts against memory so large batches still fit.
-                      - [ ] Experiment 1 (running, `unified/a6_fullcg_exp1_h200_20261026.sh`): the full prefill
+                      - Experiment 1 progress:
+                        - Upstream asserts "Mixed chunk prefill requires the breakable prefill CUDA graph backend"
+                          (no reason given). Lifted behind `SGLANG_FULL_CG_MIXED=1`
+                          (`unified/apply_full_cg_mixed_20261026.py`), 64 request slots.
+                        - Stock MTP under the full backend: 6412 tok/s (breakable: 6401-6418).
+                        - The 4-mode arm crashed on merged steps: the full backend's static logits buffer had one row
+                          per request, but a merged step keeps every verify token's logits
+                          (`eagle_sample: shape [5, 4] invalid for 5`). Fixed: rows = batch_size - verify_rows +
+                          verify_tokens. Rerunning.
+                        - Correctness gate: `drivers/serving/compare_outputs_20261026.py` (greedy-output agreement vs
+                          the breakable runs, two breakable repeats as the noise floor).
+                      - [ ] Experiment 1 (`unified/a6_fullcg_exp1_h200_20261026.sh`): the full prefill
                             backend (`--cuda-graph-backend-prefill full`, via the harness's new `--server-arg`) in BOTH
                             arms, our 4-mode schedule on stock FA3 attention, ShareGPT 32 req/s four-mode, refusal
                             counters in both arms. The FA3 backend already has full-graph prefill metadata

@@ -1530,9 +1530,30 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
                               - Both paths run the same forwards, and every forward replays a graph (no refusals in
                                 either arm under the full backend). So the time is lost outside the GPU forward
                                 work: suspect host-side cost or broken CPU / GPU overlap in the merged path.
-                        - [ ] Experiment 3 (`unified/a6_fullcg_exp3_h200_20261026.sh`): `SGLANG_STEP_TRACE=1` in both
-                              arms (host launch time + GPU time per forward, event-based): wall vs GPU time per step
-                              type.
+                        - [x] **Experiment 3, root cause found** (`SGLANG_STEP_TRACE=1` in both arms;
+                              `perf_model/steptrace_wall_vs_gpu_20261026.py`):
+                              | arm | step type | n | GPU ms | wall ms |
+                              |---|---|---|---|---|
+                              | ours | merged (prefill + verify) | 3213 | 22.0 | **27.5** |
+                              | ours | verify | 5780 | 8.2 | 8.2 |
+                              | stock | MIXED (prefill + decode tails, upstream) | 3266 | 14.2 | 11.6 |
+                              | stock | verify | 10066 | 7.3 | 8.7 |
+                              - GPU work matches (22.0 vs 14.2 + 7.3 = 21.5 ms). But the merged step's wall time
+                                exceeds its GPU time by 5.5 ms, while stock's steps overlap the next launch.
+                              - Cause: `mix_with_verify` calls `running_batch.seq_lens.cpu()` (the running rows'
+                                committed prefix). Under the overlap scheduler that waits for the GPU queue to drain,
+                                every merged step. The code's own TODO(sync) notes it.
+                        - [ ] **Fix: sync-free merge** (`SGLANG_MIX_SYNC_FREE=1`, `unified/apply_sync_free_mix_20261026.py`).
+                              - The host copies of the verify rows' prefix / seq_lens become an upper bound (mirror +
+                                n; the device leads the mirror by at most one step's acceptance).
+                              - The exact prefix stays on the device, and `ForwardBatch.init_new` writes it into the
+                                verify rows of `extend_prefix_lens` before positions are computed.
+                              - The stock FA3 path reads the host values only for maxima.
+                              - A6 needs one more change: its compact KV index list is built from host lengths
+                                (`torch.cat(page_table[i, :kv[i]])`) while its indptr comes from device lengths, so it
+                                must gather on the device (`create_flashinfer_kv_indices_triton`). Its plan tolerates
+                                upper bounds because the kernels clamp chunks to the device KV length.
+                              - Experiment 4 (stock FA3, full graphs, step trace): running.
                         - Correctness gate: `drivers/serving/compare_outputs_20261026.py` (greedy-output agreement vs
                           the breakable runs, two breakable repeats as the noise floor).
                       - [ ] Experiment 1 (`unified/a6_fullcg_exp1_h200_20261026.sh`): the full prefill

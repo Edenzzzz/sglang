@@ -1419,6 +1419,20 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
                       `unified/a6_pcg_diag_h200_20261026.sh`).
                     - Then implement the replay for that path. The long-row trigger below is a stopgap, not the
                       fix; its ShareGPT test was cancelled for this.
+                    - Design requirements (user, 2026-10-26):
+                      - Mixed steps run under CUDA graphs.
+                      - Sweep the captured sizes and padding to balance speed against memory, so large batches can
+                        still be admitted.
+                      - Pad with request padding as sglang does (zero-length sentinel request slots).
+                      - Since prefill, decode and mixed steps use the same kernels, capture one shared graph set and
+                        change only how each graph's batch is filled.
+                    - Current code: the default prefill backend ("breakable") already captures the transformer body
+                      per token-count bucket. Attention metadata, attention and the logits tail run outside the
+                      graph, so a body graph is independent of request composition. The "full" backend adds
+                      request-slot padding (zero-length sentinels up to a captured slot count). Decode / verify use
+                      a separate per-bs graph set (`decode_cuda_graph_runner`, attention inside).
+                    - Diagnostic run 1 failed at server start: the patch put `import os` above
+                      `from __future__`. Fixed with a `compile()` check; rerunning.
               - [ ] **Stopgap: `SGLANG_MIXED_SPEC_QUEUE_LONG_ROWS=1`** (`unified/apply_mixed_spec_queue_long_20261026.py`,
                     opt-in). The queue trigger needs a running row with context >= `MIN_CTX`. Under test:
                     - [x] GLM overloaded four-mode (pod 4, `short_a6_nodc_qlong`, two repeats): agent 27.6 / 28.9 vs

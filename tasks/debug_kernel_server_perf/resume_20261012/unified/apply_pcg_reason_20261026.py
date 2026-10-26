@@ -42,9 +42,13 @@ if "_pcg_no(" not in s:
 
 '''
     s = s[:a] + helper + "\n".join(out) + s[b:]
-    if "\nimport os\n" not in s:
-        s = "import os\n" + s
-    if "\nlogger = " not in s:
-        s = s.replace("\nimport os\n", "\nimport os\nimport logging\nlogger = logging.getLogger(__name__)\n", 1)
+    lines = s.split("\n")
+    if "import os" not in lines:
+        # after the module's __future__ imports, which must stay first
+        k = max([i for i, l in enumerate(lines) if l.startswith("from __future__")], default=-1)
+        lines.insert(k + 1, "import os")
+        s = "\n".join(lines)
+    assert "\nlogger = " in s, "runner has no module logger"
+    compile(s, str(p), "exec")
     p.write_text(s)
 print("PCG_REASON", "_pcg_no(" in p.read_text(), p.read_text().count("_pcg_no("))

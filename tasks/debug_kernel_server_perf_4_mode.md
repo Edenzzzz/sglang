@@ -829,6 +829,7 @@ Tasks, in priority order:
                 3 + 1, not 1 + 3.
               - Ours at C = 8: 95.4% ; 105.
               - [x] 2 + 2 at C = 16 rerun (`_r1b`): chat 68.2% ; agent 160 tok/s (90.7%). Ours 90.8% ; 165.
+              - 3 + 1 results (paper SLO): C=4 92.7% ; 53, C=12 83.1% ; 122, C=16 74.9% ; 123 (spike running).
               - [ ] 3 + 1 at C = 4 / 12 / 16 and the spike (`pd_colocation/mn_llama_p3_loads_20261026.sh`, queued
                     behind the 2 + 2 C = 16 rerun).
       - **r1 complete 2026-10-26** (except the two stock PD reruns). Paper SLO matrix (chat 2 s + 50 ms; agent 10 s,
@@ -1513,7 +1514,18 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
                         - Still failing with the same error: the logits processor computed the right rows
                           (`mvt=16`, extend lens `[199, 4, 4, 4, 4]`, 17 rows), but `_trim_logits_output` cut the
                           full backend's output to one row per request (`raw_bs`). Fixed: trim to the per-step logits
-                          row count recorded at load. Rerunning.
+                          row count recorded at load.
+                        - [x] **Experiment 1 result** (ShareGPT 32 req/s four-mode, full backend both arms, our 4-mode
+                              schedule on stock FA3 attention, one repeat):
+                              - **Correct:** greedy outputs agree with the breakable runs at the noise floor (44-45%
+                                identical vs 45-47% between two breakable repeats; common prefix 62-64% vs 63-65%).
+                              - Target forwards replay full graphs in both arms (~3000 replays; no refusals).
+                              - **Still -6.2%** (6025 vs 6424 tok/s; TTFT 3.7 s vs 0.13 s).
+                              - So graph coverage of the target's merged step is NOT the cause.
+                        - [ ] Experiment 2 (`unified/a6_fullcg_exp2_h200_20261026.sh`): ours with SGLANG_MIXED_SPEC=0
+                              (EDF + stock MTP steps), same full backend. Level -> the merged step's extra work (its
+                              eager draft extends) is the cost; still slow -> the deadline scheduler's per-step cost
+                              once the queue grows.
                         - Correctness gate: `drivers/serving/compare_outputs_20261026.py` (greedy-output agreement vs
                           the breakable runs, two breakable repeats as the noise floor).
                       - [ ] Experiment 1 (`unified/a6_fullcg_exp1_h200_20261026.sh`): the full prefill

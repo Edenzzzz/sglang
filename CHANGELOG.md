@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.68.1 — Trace replay survives a failed round (2026-10-27)
+- In the v2 demand-shift run, the stock PD 2 + 2 arm at alpha 6 lost its whole agent client at 01:09: one round failed
+  (the stock PD router cut a response mid-stream), and the timestamp replay raised on any failure.
+- Now a failed round ends only its own session. Its later rounds come back as "not issued: failed predecessor", the
+  audit counts failed sessions and lost rounds, and the scorer reports `lost_after_failure` separately from the
+  horizon backlog. Test added; all replay tests pass.
+- The stuck arm was killed. Its rerun (`_tl2_a6_r1b`) heads the queued chunk-size driver.
+
 ## v1.68.0 — SLO-budgeted chunk on H20; trace scorer counts one-token replies by TTFT (2026-10-27)
 - `apply_slo_budget_chunk_20261026.py` applies to our serving tree: it hooks after `_edf_limit_chunk`, takes
   `running_batch` as a parameter, and reads the prefix from the tree's own fields. Applied to a tree copy

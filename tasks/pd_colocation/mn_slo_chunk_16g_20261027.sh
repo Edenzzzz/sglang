@@ -35,6 +35,11 @@ ours() {  # ours <tag> [extra env assignments...]
   score coloc_slo_edf_mtp_hc$tag
 }
 load() { export ALPHA=$1; local dur=$(( 3600 / $1 )); export CHAT_RATE=8 CHAT_N=$(( 8 * dur * 3 / 2 )) BENCH_REPLAY_HORIZON_S=$(( dur * 3 / 2 )); }
+# 0. rerun of the v2 stock PD 2 + 2 arm at alpha 6: its agent client aborted at 01:09 when one round failed (the stock PD
+#    router cut a response mid-stream); the replay now ends only that session (session_replay.py, failed predecessor).
+load 6
+(unset CHUNK; RUN_TAG=_tl2_a6_r1b SGL_PY=/dev/shm/w/up_clean/python KERNEL=lpt PREEMPT=0 python3 -u mn_run.py disagg_p2_mtps_hc)
+score disagg_p2_mtps_hc_tl2_a6_r1b
 # 1. step trace at alpha 3, fixed 2048 chunk
 load 3
 D=/dev/shm/w/mn/coloc_slo_edf_mtp_hc_tl2_a3_steptrace_r1

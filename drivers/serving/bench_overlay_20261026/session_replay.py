@@ -164,7 +164,8 @@ async def replay_timestamp_sessions(
     details = {}
     events = []
     epoch = clock()
-    state = {"programs": 0, "calls": 0, "peak_programs": 0, "peak_calls": 0, "skipped": 0}
+    state = {"programs": 0, "calls": 0, "peak_programs": 0, "peak_calls": 0, "skipped": 0, "failed_sessions": 0,
+             "lost_rounds": 0}
 
     def now():
         return clock() - epoch
@@ -212,12 +213,24 @@ async def replay_timestamp_sessions(
                     "finish_s": previous_finish,
                     "success": bool(output.success),
                 })
-                if not output.success:
-                    raise RuntimeError(
-                        f"Session {session_id} round {request.round_index} failed; "
-                        "dependent rounds not issued"
-                    )
                 outputs[index] = output
+                if not output.success:
+                    # A failed round ends its session, as it would for a real agent: its later rounds depend on this
+                    # reply. They come back as "not issued: failed predecessor" (counted as lost by the scorer), and
+                    # every other session keeps running. With no skipped_output factory the old behavior (abort) holds.
+                    if skipped_output is None:
+                        raise RuntimeError(
+                            f"Session {session_id} round {request.round_index} failed; "
+                            "dependent rounds not issued"
+                        )
+                    for idx, req in records[position + 1:]:
+                        lost = skipped_output(req)
+                        if hasattr(lost, "error"):
+                            lost.error = "not issued: failed predecessor"
+                        outputs[idx] = lost
+                    state["failed_sessions"] += 1
+                    state["lost_rounds"] += len(records) - position - 1
+                    break
         finally:
             if "start_s" in detail:
                 detail["end_s"] = now()
@@ -253,6 +266,8 @@ async def replay_timestamp_sessions(
         "rounds": len(requests),
         "horizon_s": horizon_s,
         "rounds_not_issued": state["skipped"],
+        "failed_sessions": state["failed_sessions"],
+        "rounds_lost_to_failed_predecessor": state["lost_rounds"],
         "duration_s": duration,
         "peak_active_programs": state["peak_programs"],
         "mean_active_programs": program_seconds / duration if duration else 0.0,

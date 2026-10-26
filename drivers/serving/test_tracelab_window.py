@@ -254,6 +254,43 @@ def test_replay_horizon():
           "replay horizon: rounds past the horizon are not issued and come back as skipped outputs")
 
 
+def test_replay_failed_session():
+    """With skipped_output, a failed round ends only its own session; its later rounds come back as lost."""
+    plan = {"A": [0.00, 0.02, 0.04], "B": [0.00, 0.03]}
+    requests = []
+    for session, offsets in plan.items():
+        for round_index, offset in enumerate(offsets):
+            row = common.DatasetRow(prompt=[1], prompt_len=1, output_len=1, session_id=session,
+                                    round_index=round_index, inter_round_delay_s=0.0)
+            row.trace_offset_s = offset
+            requests.append(row)
+
+    async def send(row):
+        await asyncio.sleep(0.005)
+        out = Output()
+        if row.session_id == "A" and row.round_index == 1:
+            out.success = False
+        return out
+
+    class Skipped:
+        def __init__(self):
+            self.error = "not issued: replay horizon"
+            self.success = False
+
+    with tempfile.TemporaryDirectory() as directory:
+        os.environ["BENCH_SESSION_AUDIT_FILE"] = os.path.join(directory, "a.json")
+        try:
+            outputs = asyncio.run(replay.replay_sessions(requests, send, float("inf"), start_at_timestamps=True,
+                                                         skipped_output=lambda row: Skipped()))
+        finally:
+            del os.environ["BENCH_SESSION_AUDIT_FILE"]
+        report = json.loads(Path(directory, "a.json").read_text())
+    lost = [getattr(o, "error", "") for o in outputs]
+    check(lost[2] == "not issued: failed predecessor" and outputs[3].success and outputs[4].success
+          and report["failed_sessions"] == 1 and report["rounds_lost_to_failed_predecessor"] == 1,
+          "replay: a failed round ends only its own session; the rest of the replay continues")
+
+
 def test_replay_rule():
     # (offsets, gaps, service seconds) per session; times in seconds, kept short.
     plan = {
@@ -366,6 +403,7 @@ def main():
     started = time.time()
     test_replay_rule()
     test_replay_horizon()
+    test_replay_failed_session()
     if args.reference and Path(args.reference).exists():
         test_default_unchanged(args.reference, args.trace, tokenizer)
     else:

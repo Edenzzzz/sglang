@@ -25,6 +25,7 @@ CHAT = {"tight": (2.0, 50.0), "loose": (2.0, 100.0)}
 AGENT_TPOT = {"tight": 80.0, "loose": 100.0}
 LONG_UNCACHED = 200_000
 NOT_ISSUED = {}  # tenant -> rounds past the replay horizon (BENCH_REPLAY_HORIZON_S): the arm's backlog
+LOST = {}  # tenant -> rounds never issued because an earlier round of their session failed
 
 
 def load(path, tenant):
@@ -37,6 +38,9 @@ def load(path, tenant):
     cached = d.get("cached_tokens") or [0] * len(starts)
     out = []
     for i, error in enumerate(d["errors"]):
+        if error and error.startswith("not issued: failed predecessor"):
+            LOST[tenant] = LOST.get(tenant, 0) + 1
+            continue
         if error and error.startswith("not issued"):
             NOT_ISSUED[tenant] = NOT_ISSUED.get(tenant, 0) + 1
             continue
@@ -75,6 +79,8 @@ def summary(rows, duration):
         p = lambda xs, q: float(np.percentile(xs, q)) if xs else float("nan")
         if NOT_ISSUED.get(tenant):
             cells.append(f"not_issued={NOT_ISSUED[tenant]}")
+        if LOST.get(tenant):
+            cells.append(f"lost_after_failure={LOST[tenant]}")
         cells.append(f"TTFT p50/p90={p([r['ttft'] for r in done], 50):.2f}/{p([r['ttft'] for r in done], 90):.2f}s "
                      f"TPOT p50/p90={p([r['tpot_ms'] for r in done], 50):.1f}/{p([r['tpot_ms'] for r in done], 90):.1f}ms "
                      f"n={len(rs)} failed={len(rs) - len(done)}")
@@ -105,6 +111,7 @@ def main():
     args = parser.parse_args()
     for d in map(Path, args.dirs):
         NOT_ISSUED.clear()
+        LOST.clear()
         rows = (load(d / "agent.json", "agent") + load(d / "chat.json", "chat")
                 + load(d / "chat_spike.json", "chat_spike") + load(d / "math" / "math.json", "math"))
         t0 = min(r["start"] for r in rows)

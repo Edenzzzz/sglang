@@ -1408,7 +1408,18 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
                     - Chat attainment at 2 s / 100 ms: 70.6-74.5% vs 76.7-77.5% with it.
                     - Eager prefill steps: 563 of 1306 vs 1078 of 1084.
                     - So the trigger pays when long agent rows are running and costs when every row is short.
-              - [ ] **Fix: `SGLANG_MIXED_SPEC_QUEUE_LONG_ROWS=1`** (`unified/apply_mixed_spec_queue_long_20261026.py`,
+              - [ ] **Root fix (user, 2026-10-26): the 4-mode merged step must replay CUDA graphs under
+                    `--enable-mixed-chunk`.**
+                    - Plain mixed-chunk batches already replay: two-mode ShareGPT runs 3472 of 3473 prefill steps on
+                      graphs in both arms.
+                    - The eager steps are only the merged steps (prefill chunk riding in the verify forward):
+                      2979 of 3247.
+                    - Diagnosis running: `SGLANG_PCG_REASON=1` counts which eligibility check of
+                      `PrefillCudaGraphRunner` refuses each batch (`unified/apply_pcg_reason_20261026.py`,
+                      `unified/a6_pcg_diag_h200_20261026.sh`).
+                    - Then implement the replay for that path. The long-row trigger below is a stopgap, not the
+                      fix; its ShareGPT test was cancelled for this.
+              - [ ] **Stopgap: `SGLANG_MIXED_SPEC_QUEUE_LONG_ROWS=1`** (`unified/apply_mixed_spec_queue_long_20261026.py`,
                     opt-in). The queue trigger needs a running row with context >= `MIN_CTX`. Under test:
                     - [x] GLM overloaded four-mode (pod 4, `short_a6_nodc_qlong`, two repeats): agent 27.6 / 28.9 vs
                           21.8 / 21.6 tok/s (**+27 / +34%**, vs +28% with the plain trigger). Chat attainment at

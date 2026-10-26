@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.63.1 — Paper sync: tables render as real bordered tables (2026-10-26)
+- `tasks/paper_sync_gdrive.py`: pandoc's tables referenced an undefined "Table" style, so they showed borderless, like
+  text. Every table now gets grid borders at full width, with a shaded bold header row. The script fails if the docx
+  table count differs from the markdown's. Verified through a temporary Google Docs conversion: 13 tables, all with
+  solid borders, with the same row and cell counts as the markdown.
+
 ## v1.63.0 — Llama-3.3-70B stage 3 second repeat; full-stack fault-tolerance driver (2026-10-26)
 - Llama-3.3-70B stage 3 r2 reproduces r1. Against stock PD's best split: +3..+23 points chat attainment at -2..+7%
   agent goodput. Against conditional disaggregation: +4..+94% agent goodput at -0.3..-7.1 points chat attainment.

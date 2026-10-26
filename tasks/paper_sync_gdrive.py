@@ -10,8 +10,10 @@ Claude, 2026-10-26.
 """
 import argparse
 import json
+import re
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import requests
@@ -28,12 +30,51 @@ NAME = "attn_fuse_draft_2026.docx"
 MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
+BORDERS = ("<w:tblBorders>" + "".join(
+    f'<w:{side} w:val="single" w:sz="4" w:space="0" w:color="808080"/>'
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV")) + "</w:tblBorders>")
+HEADER_SHADE = '<w:shd w:val="clear" w:color="auto" w:fill="E7E6E6"/>'
+
+
+def format_tables(document):
+    """Pandoc's tables use a "Table" style that the reference document does not define, so Word and Google Docs show
+    them borderless, like text. Give every table grid borders at full page width, and shade and bold its header row."""
+    document = document.replace('<w:tblW w:type="auto" w:w="0" />', '<w:tblW w:type="pct" w:w="5000" />')
+    document = re.sub(r"<w:tblPr>(.*?)</w:tblPr>",
+                      lambda m: "<w:tblPr>" + m.group(1).replace("<w:tblLook", BORDERS + "<w:tblLook", 1)
+                      + "</w:tblPr>", document, flags=re.S)
+
+    def header(row):
+        row = row.replace("<w:tcPr />", f"<w:tcPr>{HEADER_SHADE}</w:tcPr>")
+        return re.sub(r"<w:r>(<w:rPr>.*?</w:rPr>)?<w:t", lambda m: "<w:r><w:rPr><w:b/></w:rPr><w:t"
+                      if not m.group(1) else "<w:r>" + m.group(1).replace("<w:rPr>", "<w:rPr><w:b/>", 1) + "<w:t",
+                      row)
+    return re.sub(r'<w:tr><w:trPr><w:tblHeader w:val="on" /></w:trPr>.*?</w:tr>', lambda m: header(m.group(0)),
+                  document, flags=re.S)
+
+
 def compile_docx():
-    command = [str(PANDOC), str(DRAFT), "-f", "gfm", "-t", "docx", "-o", str(OUTPUT), "--toc"]
+    raw = OUTPUT.with_suffix(".raw.docx")
+    command = [str(PANDOC), str(DRAFT), "-f", "gfm", "-t", "docx", "-o", str(raw), "--toc"]
     if REFERENCE_DOC.exists():
         command += ["--reference-doc", str(REFERENCE_DOC)]
     subprocess.run(command, check=True)
+    with zipfile.ZipFile(raw) as source, zipfile.ZipFile(OUTPUT, "w", zipfile.ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if item.filename == "word/document.xml":
+                data = format_tables(data.decode("utf-8")).encode("utf-8")
+            target.writestr(item, data)
+    raw.unlink()
     return OUTPUT
+
+
+def table_report(path):
+    document = zipfile.ZipFile(path).read("word/document.xml").decode("utf-8")
+    tables = re.findall(r"<w:tbl>.*?</w:tbl>", document, flags=re.S)
+    shapes = [(len(re.findall(r"<w:tr>", table)), len(re.findall(r"<w:gridCol ", table))) for table in tables]
+    bordered = sum("<w:tblBorders>" in table for table in tables)
+    return len(tables), bordered, shapes
 
 
 def access_token():
@@ -89,7 +130,12 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="compile only")
     arguments = parser.parse_args()
     path = compile_docx()
-    print(f"PAPER_DOCX {path} {path.stat().st_size} bytes", flush=True)
+    count, bordered, shapes = table_report(path)
+    print(f"PAPER_DOCX {path} {path.stat().st_size} bytes; {count} tables ({bordered} bordered), rows x cols {shapes}",
+          flush=True)
+    expected = len(re.findall(r"^\|[\s:|-]+\|\s*$", DRAFT.read_text(), flags=re.M))
+    if count != expected or bordered != count:
+        raise SystemExit(f"table check failed: {expected} markdown tables, {count} in the docx, {bordered} bordered")
     if arguments.dry_run:
         return
     info = upload(path)

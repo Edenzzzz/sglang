@@ -394,10 +394,15 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             |---|---|---|---|---|---|
             | full (A6 + four-mode) | 90.6% | 94.2% | 2471 | 11.8 / 17.5 ms | 17.7 / 22.3 ms |
             | noC2 (A6 + stock MTP) | 90.6% | 93.8% | 2492 | 11.0 / 18.2 ms | 17.2 / 22.8 ms |
-            Identical within the noise floor, and noC2 is nominally faster. The Amdahl bound explains it: merged
-            steps are only ~11% of steps in this replay, so no per-step win on them can move the aggregate. C2's
-            contribution at this workload is ZERO and must not be claimed from it; its evidence has to come from a
-            workload where merged steps dominate, or C2 is demoted to an enabling mechanism rather than a gain.
+            Identical within the noise floor, and noC2 is nominally faster.
+            **Correction to the first explanation: this is NOT an Amdahl bound.** Merged steps are 11.6% of steps
+            but **67.2% of GPU time** (decode-only 83.9% of steps / 27.6% of time; prefill-only 4.5% / 5.1%), so the
+            four-mode step applies to two thirds of the GPU time and still changes nothing.
+            The real reason is that **upstream already does the equivalent**: sglang's spec-aware MIXED step merges
+            decode tails into a prefill step, so our four-mode step duplicates a capability the baseline has. C2's
+            measurable contribution over upstream at this workload is ZERO. It must be presented as an enabling
+            mechanism for the fused kernel's row classes, not as a source of gain, unless a workload is found where
+            it beats upstream's MIXED step.
             Remaining candidates for the +25% / -45% over stock colocated: chunk size (2048 vs upstream default),
             our router vs sglang's `cache_aware`, and other deltas between our tree and upstream. Arms `dchunk` and
             `sglrt` are running.

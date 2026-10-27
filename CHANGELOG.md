@@ -4,7 +4,9 @@
 - At the best configuration (cache router + FCFS), removing the four-mode step changes nothing: 90.6/93.8/2492 tok/s
   against 90.6/94.2/2471 with it, identical within the noise floor and nominally faster without. The hypothesis that
   C2 carried the -45% TPOT over stock colocated sglang is falsified.
-- Cause: merged steps are ~11% of steps in this replay, so no per-step win on them moves the aggregate.
+- CORRECTION to that entry's first explanation: not an Amdahl bound. Merged steps are 11.6% of steps but 67.2% of
+  GPU time, so C2 applies to two thirds of GPU time and still changes nothing. The real cause is that upstream's
+  spec-aware MIXED step already merges decode tails into prefill steps -- C2 duplicates a baseline capability.
 - C2 cannot be claimed as a gain here; it needs a merged-step-dominated workload or demotion to an enabling
   mechanism. Chunk size and router remain the candidates for the +25% / -45%; arms dchunk and sglrt running.
 

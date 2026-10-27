@@ -124,6 +124,20 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     - A6 beats our earlier v3 design by 1.34-1.92x, so the one-plan + in-launch-merge build is the right one to
       carry forward; v3 is retired as an arm.
     - Consistent with serving: 4-9% on captures, 1.04x whole-step in the cluster replay, and falling with context.
+  - [ ] **SLO-budgeted chunk WITHOUT a DP (user, 2026-10-28): learn the chunk from the state.**
+    - The user does not want SLOs-Serve's dynamic program (it would read as borrowing their method). Instead predict
+      the chunk from state we already have, using the step model that the fused kernel makes easy to fit.
+    - Inputs, all already logged per step in STEPTRACE: chunk tokens, prefix length, decode rows and their KV
+      lengths, batch size, acceptance EWMA; **plus** each running row's remaining mean-TPOT slack
+      (`s_r * (o_r + a) - E_r`, already computed inside apply_slo_budget_chunk_20261026.py) and its SLO class.
+    - Target: the largest chunk whose predicted step keeps every row inside its slack. Two options:
+      1. **Direct regression** to the max safe chunk -- one forward pass, no search, no DP.
+      2. **Reuse the validated step-time MLP and binary-search it** (6 evaluations), which is what
+         `edf_compute_max_chunk_size` already does and needs no new model.
+      Option 2 is preferred unless the search cost shows up, because that MLP is already validated to 3.4-4.0% on
+      merged steps; option 1 only removes a search we can already afford. Either way it is a learned predictor over
+      our own fused step, not a borrowed formula.
+    - Labels come from traces we already hold, so training needs no new GPU time.
   - [ ] **NEXT KERNEL ITEM (user, 2026-10-28): pipeline the draft head against the verify forward.**
     - The user's observation: the baseline runs the draft and the verify as SEPARATE attention calls, so can the
       draft of the current step overlap the verify of the previous batch?
@@ -550,12 +564,22 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
               | conditional disaggregation | 58.2% | 53.8% | 725 | 9264 |
               - **Deadline ordering finally separates under overload: +7.5% agent goodput and +2.5 points over
                 FCFS**, against nothing at alpha 3.
-              - **Why FCFS does NOT blow up TPOT here (user expected it to).** Both arms run the SAME fixed 2048
-                chunk, so each step injects the same amount of prefill into the decode batch; EDF changes only WHICH
-                request receives that chunk, not how much prefill lands per step. Measured: chat TPOT p90 109.0
-                (FCFS) against 111.2 ms (EDF), and FCFS is WORSE on TTFT (chat p90 8.52 against 7.18 s). TPOT is set
-                by the per-step prefill volume, i.e. the chunk size, not by queue order -- which is precisely why
-                the SLO-budgeted chunk, not the ordering, is the mechanism that protects TPOT. This is C3-worker's regime and the only load where it pays;
+              - **[!] THE FCFS ARM WAS DESIGNED WRONG (user, 2026-10-28). Do not reuse this comparison.** Both arms
+                were given OUR `CHUNK=2048`, so ordering was the only difference, which guaranteed the TPOT result
+                and measured nothing. Measured anyway, for the record: chat TPOT p90 109.0 (FCFS) against 111.2 ms
+                (EDF), FCFS worse on TTFT (chat p90 8.52 against 7.18 s).
+                - **Rule: never give the baseline our chunk control.** The baseline is sglang's own
+                  prefill-prioritized (or mixed-chunk) schedule with sglang's own chunk policy.
+                - **Rule: our node-level schedule is COUPLED with the chunk rule.** EDF ordering and the
+                  SLO-budgeted chunk are one mechanism and must be evaluated together, never as separate ablations
+                  of each other.
+                - **Rule: no fixed chunk in OUR arm either.** A constant 2048 is an ad-hoc hack with a clean
+                  counterexample: at the start of serving, many prefills arrive with few running decodes, there is
+                  nothing to protect, and the cap throttles prefill -- starving the decode batch that would have
+                  formed and costing throughput. The earlier "chunk size contributes nothing" result at alpha 3 is
+                  just what a harmless constant looks like at one load; it does not generalise.
+                - Corrected arm set for the next cluster run: baseline = sglang prefill-prioritized + sglang chunk
+                  policy; ours = EDF + SLO-budgeted chunk (coupled), swept at alpha 3 and alpha 6. This is C3-worker's regime and the only load where it pays;
                 at 128K single-node it costs 8.5% of TPOT and at alpha 3 it is inside the noise.
               - Conditional disaggregation degrades much faster than colocation under overload (53.8% agent against
                 76-79%), and issues 9264 fewer rounds: the re-shipped prefill competes with decode exactly when

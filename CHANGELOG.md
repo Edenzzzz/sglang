@@ -6,9 +6,14 @@
   remaining item that deletes serial time instead of shaving row-side work. Requires a two-group staggered batch,
   since draft(N+1) depends on verify(N) within a group. First measure the draft share of decode wall time; that is
   the ceiling. Acceptance to protect: 3.35-3.55 at 128K.
-- Explained the FCFS/TPOT question with data: both arms use the same fixed 2048 chunk, so per-step prefill volume
-  is identical and only the order changes. chat TPOT p90 109.0 (FCFS) vs 111.2 (EDF); FCFS is worse on TTFT (8.52
-  vs 7.18 s p90). TPOT is governed by chunk size, not queue order.
+- CORRECTION (user): the FCFS arm was designed wrong -- both arms were given OUR fixed 2048 chunk, so ordering was
+  the only difference and the TPOT result was guaranteed. Three rules recorded: never give the baseline our chunk
+  control (baseline = sglang prefill-prioritized + sglang chunk policy); our node schedule is COUPLED with the
+  chunk rule and must not be ablated against it; and no fixed chunk in our arm either (at serving start, many
+  prefills with few decodes make a 2048 cap throttle prefill and starve the decode batch).
+- SLO-budgeted chunk without a DP: learn it from state we already log (step features + per-row remaining TPOT slack
+  + SLO class), either by direct regression to the max safe chunk or by binary-searching the validated step MLP;
+  labels come from existing traces, so no new GPU time.
 - Llama-70B ladder finished (LADDER_llama70b_DONE); A6 is 6.7x sglang's call on mix32_two, role split dominant.
 - BLOCKER: pods 1-3 need `merlin-cli login --control-plane cn-seed --force` (WebShell SSO expired); pod 0 still
   reachable over ssh. Cluster runs cannot launch until that is refreshed.

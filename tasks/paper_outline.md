@@ -44,8 +44,7 @@
       split, in which stock FA2 picks one query tile for all of its rows
     - bar: faster than naive FA3 + FA2 on every model, with FP32-exact output; the step stays predictable for the
       router and EDF
-    - measured: 1.43-1.51x sglang's FA3 call on the H200 (Qwen2.5-7B, 96 trace-sampled steps), of which the one plan
-      and the in-launch merge are 2.7-4.7% (against our own two-plan build of the same kernels); vs naive FA3 + FA2
+    - measured: 1.43-1.51x sglang's FA3 call on the H200 (Qwen2.5-7B, 96 trace-sampled steps); vs naive FA3 + FA2
       [pending: H200]; Llama-3.3-70B 1.38-1.61x and GLM-4.5-Air 1.28-1.41x sglang on H20 [pending: H200 replay of the
       same captures]; step model 2.0% held-out MAPE, mixed steps 5.9% vs 7.7% for the single FA3 call
     - figures: time-weighted speedup per (model, context, mode) with 95% CI vs sglang FA3 and v3; per-item timeline
@@ -162,8 +161,7 @@ admitting it.
 - C4, cluster: symmetric nodes, SLO-checked cache-first routing, and a cluster KV pool.
 
 **Results.** On trace-sampled steps on an H200, the kernel is 1.43-1.51x faster than sglang's FA3 call and [pending]
-faster than naive FA3 + FA2. The one plan and the in-launch merge account for 2.7-4.7% of that, measured against our
-own build of the same kernels under two plans with separate merge launches. On one node, Qwen2.5-7B chat attainment
+faster than naive FA3 + FA2. On one node, Qwen2.5-7B chat attainment
 rises by 38-74 points under the paper's SLOs, agent attainment at 128-256K rises from 13-19% to 44-50%, and
 GLM-4.5-Air throughput rises 27-28%. On 16 GPUs with the full stack, AttentionFuse holds 93.6% chat attainment and
 1100 tok/s agent SLO goodput at 64 agent programs, against 13.1% / 80 for the best stock PD configuration and
@@ -415,8 +413,8 @@ What the two roles do share is complementary hardware demand: FA3 prefill tiles 
 rows by memory bandwidth. The plan therefore places the FA2 rows to run beside FA3's tail through PDL; turning that
 overlap off costs 2.2-6.1% of the step (section 7).
 
-One merge serves both executors. It runs in the FA2 launch and is scheduled by the same plan, so the two-plan
-build's separate FA2-merge and FA3-combine launches disappear. With every merge, check-in fence and counter atomic
+One merge serves both executors. It runs in the FA2 launch and is scheduled by the same plan, so no separate FA2-merge
+or FA3-combine launch runs. With every merge, check-in fence and counter atomic
 removed (the output is then wrong; this is a timing bound), two-mode trace-sampled steps are at most 0.9% faster,
 and per-item timelines put the merge at 0.8% of four-mode steps. (Compiling the merge out does not give a four-mode
 bound: it changes the compiler's register allocation for the 32-row tile, which then runs slower even where no merge
@@ -492,9 +490,7 @@ use (section 6.2).
 **Baselines for this design.** The baseline is naive FA3 + FA2: stock FA3 on the prefill rows and stock flashinfer
 FA2 on the decode and verify rows, two kernels with two plans, each splitting KV and merging its own way. Stock FA2
 picks one query tile for the whole launch from its rows' average packed length (16, 64 or 128 rows), so it either
-pads one-token decode rows into 64-row tiles or runs 4-token verify rows on 16-row tiles. To isolate the one plan and
-the in-launch merge, we also measure our own two-plan build: the same FA3 kernel and our tuned FA2 BatchPrefill
-kernel, with FA3's and FA2's plans kept separate and two merge launches (FA3's combine and flashinfer's merge). C1's
+pads one-token decode rows into 64-row tiles or runs 4-token verify rows on 16-row tiles. C1's
 mandatory parts are the one plan and the split-KV reduction of FA2 and FA3 partials in the FA2 launch with no merge
 launch.
 
@@ -773,9 +769,7 @@ come from one 4-GPU H20 node and their kernel captures from TP4 rank 0 on H20 [p
   - naive FA3 + FA2, the headline baseline: stock FA3 on the prefill rows and stock flashinfer FA2 on the decode /
     verify rows, run serially or on two streams;
   - the best single fixed FA3 configuration, and a per-step FA3 oracle;
-  - the role split on FA3: FA3 for both roles, in separate calls;
-  - as an ablation, our two-plan build: the same FA3 and our tuned BatchPrefill FA2, each with its own plan and its
-    own merge or combine launch.
+  - the role split on FA3: FA3 for both roles, in separate calls.
 - Single node: sglang mixed chunk and prefill-prioritized on FA3, with stock EAGLE3 MTP for the four-mode comparison;
   PD-Multiplexing.
 - Multi node: sglang with Mooncake PD disaggregation, the P:D ratio swept at worker granularity, KV pool on. Reference
@@ -840,30 +834,28 @@ for the router and EDF (section 5.2.2).
 each with its own tensors. Contexts are 32-64K and 128-256K; modes are two-mode (prefill chunk + decode rows) and
 four-mode (prefill chunk + verify rows). Qwen2.5-7B runs on one H200; Llama-3.3-70B and GLM-4.5-Air run at TP4 on H20,
 measured on rank 0 (H200 replay of the same captures [pending]). Baselines are sglang's FA3 call, naive FA3 + FA2, the best fixed FA3 configuration, the per-step FA3
-oracle and the role split on FA3; our two-plan build isolates the one plan and merge.
+oracle and the role split on FA3.
 We report time-weighted speedup over each cell's steps with a
 bootstrap 95% confidence interval (CI), and FP32 worst relative error.
 
-**Results on the H200.** The unified dispatcher runs one plan, stock FA3 at the plan's split, and the two-plan
-build's FA2 body with the chunk-parallel in-launch merge. On 96 fresh Qwen2.5-7B captures, all FP32-exact (worst
-relative error 0.0082), it is 1.43-1.51x faster than sglang's FA3 call and 1.027-1.047x faster than our two-plan
-build (Table 5). Naive FA3 + FA2 on the same captures is [pending: H200].
+**Results on the H200.** The unified dispatcher runs one plan, stock FA3 at the plan's split, and our tuned FA2
+BatchPrefill body with the chunk-parallel in-launch merge. On 96 fresh Qwen2.5-7B captures, all FP32-exact (worst
+relative error 0.0082), it is 1.43-1.51x faster than sglang's FA3 call (Table 5). Naive FA3 + FA2 on the same
+captures is [pending: H200].
 
 Table 5: unified dispatcher speedup, Qwen2.5-7B, H200, 96 captures.
 
-| context / mode | vs sglang's FA3 call | vs naive FA3 + FA2 | vs our two-plan build [95% CI] | vs role split on FA3 |
-|---|---:|---:|---:|---:|
-| 32-64K, 2-mode | 1.48x | [pending] | 1.033x [1.006-1.051] | 1.015x |
-| 32-64K, 4-mode | 1.43x | [pending] | 1.047x [1.035-1.057] | 1.020x |
-| 128-256K, 2-mode | 1.51x | [pending] | 1.027x [1.018-1.036] | 1.014x |
-| 128-256K, 4-mode | 1.44x | [pending] | 1.027x [1.018-1.041] | 1.018x |
+| context / mode | vs sglang's FA3 call | vs naive FA3 + FA2 | vs role split on FA3 |
+|---|---:|---:|---:|
+| 32-64K, 2-mode | 1.48x | [pending] | 1.015x |
+| 32-64K, 4-mode | 1.43x | [pending] | 1.020x |
+| 128-256K, 2-mode | 1.51x | [pending] | 1.014x |
+| 128-256K, 4-mode | 1.44x | [pending] | 1.018x |
 
-**Results on H20.** On the H20 (78 SMs), the same build is level with our two-plan build on Qwen2.5-7B
-(0.998-1.008x) and 1.10-1.23x faster than sglang's FA3 call. There FA3 sets the step time, and the FA2 path's 3-10%
-saving runs beneath it. Llama-3.3-70B (TP4, 32-64K) is 1.009x / 1.011x our two-plan build on two- / four-mode
-steps and 1.38x / 1.61x sglang's FA3 call. GLM-4.5-Air (TP4, 32-64K, 43 captures) is 0.998x / 1.000x our two-plan
-build and 1.28x / 1.41x sglang's FA3 call. With tile-rounded KV splits (the final serving build), Llama-3.3-70B is
-1.009x / 1.017x our two-plan build (two- / four-mode, 38 captures) and GLM-4.5-Air two-mode 1.006x.
+**Results on H20.** On the H20 (78 SMs), the same build is 1.10-1.23x faster than sglang's FA3 call on Qwen2.5-7B;
+there FA3 sets the step time, and the FA2 path's savings run beneath it. Llama-3.3-70B (TP4, 32-64K) is 1.38x /
+1.61x sglang's FA3 call on two- / four-mode steps, and GLM-4.5-Air (TP4, 32-64K, 43 captures) 1.28x / 1.41x. These
+H20 numbers are to be replaced by H200 replays of the same captures [pending].
 
 GLM-4.5-Air needs the third FA2 tile class. Its 4-token verify rows pack 48 queries per KV head, and sending them to
 FA3 cost 28% of the four-mode step. A 64-row FA2 class, launched as its own instantiation so that it does not raise
@@ -883,14 +875,11 @@ Table 6: role-split serving build, Qwen2.5-7B, H200, earlier captures.
 | 128-256K, 2-mode | 1.57x [1.24-2.64] | 0.99x | 0.98x |
 | 128-256K, 4-mode | 1.37x [1.16-1.89] | 0.99x | 0.99x |
 
-**Bar status.** Not yet judged: naive FA3 + FA2 on the H200 is [pending]. The one plan and merge are worth 2.7-4.7%
-over our two-plan build on the H200 (Qwen2.5-7B). On H20, FA3 sets the step time and the FA2-side savings run beneath
-it: there they are worth 0.6-1.7% (Llama-3.3-70B, GLM-4.5-Air two-mode) and nothing for Qwen2.5-7B.
+**Bar status.** Not yet judged: naive FA3 + FA2 on the H200 is [pending].
 
 **Figures.**
 
-Figure 13: time-weighted speedup per (model, context, mode) with bootstrap 95% CI, against sglang's FA3 call, naive FA3 + FA2 and
-our two-plan build. Qwen2.5-7B (H200, four cells) and Llama-3.3-70B / GLM-4.5-Air at 32-64K (H20) measured; the
+Figure 13: time-weighted speedup per (model, context, mode) with bootstrap 95% CI, against sglang's FA3 call and naive FA3 + FA2. Qwen2.5-7B (H200, four cells) and Llama-3.3-70B / GLM-4.5-Air at 32-64K (H20) measured; the
 remaining Llama-3.3-70B / GLM-4.5-Air cells [pending].
 
 Figure 14: CDF of per-step speedup over the 96 captures, per (context, mode), against each baseline; Qwen2.5-7B,
@@ -1098,7 +1087,7 @@ Under the paper's SLO matrix (chat 2 s + 50 ms mean TPOT; agents 10 s + 80 ms), 
 and 96.8-98.4% agent attainment at every load, against 90.4-99.6% / 91.3-98.4% for conditional disaggregation and
 0-60% / 2-63% for stock PD; the goodput figures are unchanged (r1 / r2 identical within 1%).
 
-Stock PD with one prefill pod reaches 1.6% / 2 tok/s at 64 + 16. Against stock PD at its best split, ours has 97.4 vs
+Stock PD with one prefill pod reaches 1.6% / 2 to k/s at 64 + 16. Against stock PD at its best split, ours has 97.4 vs
 53.2% chat attainment at 32 programs and 93.6 vs 13.1% at 64, and 3.7x the agent SLO goodput at 32 and 14x at 64; stock
 PD holds no load point at >= 90%. Against conditional disaggregation, ours has more agent SLO goodput at every load and
 in both repeats:
@@ -1306,8 +1295,7 @@ alone; each value is the time-weighted speedup for 32-64K two-mode / 32-64K four
 four-mode. Schedule and router ablations run on the workloads of sections 6.3 and 6.4. Llama-3.3-70B kernel ablations
 are [pending].
 
-**Result: the plan and the merge.** The unified plan with one in-launch merge is 1.027-1.047x faster than our two-plan
-build (two plans, separate merge launches, same FA3 and FA2 kernels) on the H200, and level on H20. Removing every
+**Result: the plan and the merge.** Removing every
 check-in fence, counter atomic and merge item (a timing bound with wrong output) gives 1.009 / 0.980 / 1.004 / 0.988x,
 so the unified merge costs <= 0.9% of the step. A full-step timeline agrees: merge time left after both FA3 and FA2
 compute is 0.2-1.0% of the step, and 0 on steps where FA3 sets the step time. The reason the merge is so cheap is the
@@ -1343,7 +1331,6 @@ Table 12: FA2 executor, same plan and merge, H200 (32-64K two / 32-64K four / 12
 | flashinfer's persistent runner, plan-chosen 2-3 CTAs/SM | 0.993 / 0.991 / 1.006 / 0.997x |
 | persistent loop + merges released from a global ready queue as partials complete (vs the same loop with ticketed merge items) | 0.997 / 0.982 / 1.003 / 1.005x |
 | DSMEM cluster reduction (cluster barrier, no global sync), C = 2 | 0.597 / 0.667 / 0.622 / 0.703x |
-| DSMEM cluster reduction, C = 4 | 0.81-0.87x of our two-plan build |
 | DSMEM cluster reduction, C = 8 | 0.925 / 0.927 / 0.913 / 0.940x |
 | DSMEM cluster reduction, C = 16 (non-portable cluster) | 0.967 / 0.984 / 0.967 / 0.978x |
 | DSMEM cluster reduction, splits uncapped, groups larger than a cluster reduced by their last member, C = 4 (vs the in-launch merge, same build) | 0.993 / 0.988 / 0.992 / 0.993x |
@@ -1352,8 +1339,8 @@ Table 12: FA2 executor, same plan and merge, H200 (32-64K two / 32-64K four / 12
 On FA2 rows alone, the plan-scheduled merge items took 4.86 ms, against 6.21 ms for a merge done by the last CTA to
 arrive and 5.36 ms for stock flashinfer BatchAttention. flashinfer's persistent runner needed two register-targeted
 instantiations, chosen by the plan, to reach parity: 3 CTAs per SM for decode-only plans, and 2 with deeper KV tiles
-for verify plans. On FA2 rows alone on the H20, the persistent executor takes 5.37 / 6.66 ms, the non-persistent one
-5.23 / 6.42 ms, and the two-plan build's FA2 launch 5.46 / 7.17 ms (two- / four-mode).
+for verify plans. On FA2 rows alone on the H20, the persistent executor takes 5.37 / 6.66 ms and the non-persistent
+one 5.23 / 6.42 ms (two- / four-mode).
 
 **Result: KV multicast.** We bounded multicast before building it. For FA2, only 0.3-0.9% of KV page reads across the
 96 captures are shared with another tile. For FA3, 99% of reads are re-reads by the same prefill row's other query
@@ -1365,12 +1352,11 @@ DSMEM. It delivers tiles 1.3-1.5x faster in isolation and is exact on all 96 ste
 pipeline. FA3's KV loads are already hidden; the step's lever is overlap between the two executors, not KV traffic.
 
 **Result: tile classes and KV splits.** GLM-4.5-Air's four-mode verify rows pack
-48 queries; sending them to FA3 lost 28% against our two-plan build (0.724x), and a 64-row FA2 class built from the
-BatchPrefill tile recovers it (1.000x), so rows up to 64 packed queries stay on FA2. (An earlier control in which FA3 beat
+48 queries. Sending them to FA3 makes the four-mode step 1.38x slower than placing them on a 64-row FA2 class built
+from the BatchPrefill tile, so rows up to 64 packed queries stay on FA2. (An earlier control in which FA3 beat
 a 64-row FA2 class by 1.02-1.59x measured the old persistent FA2 runner, not this tile.) Among
-KV split policies, measured against our two-plan build before merge items existed, a fixed split gave
-0.95-0.98x, flashinfer's KV-length limit 0.89-0.94x and a dynamic makespan split 0.90-0.96x; the fixed split is the
-default. Running decode and verify rows on FA2 instead of FA3 (the role split) keeps throughput equal and improves
+KV split policies, measured before merge items existed, the fixed split was the fastest overall, ahead of flashinfer's
+KV-length limit and a dynamic makespan split, and is the default. Running decode and verify rows on FA2 instead of FA3 (the role split) keeps throughput equal and improves
 agent ITL by 15-25 points.
 
 **Result: schedule.** Per-tenant deadlines alone change nothing; adding demotion of missed prefills cuts chat TTFT by
@@ -1495,8 +1481,8 @@ agent goodput than conditional disaggregation.
 
 - Software base: every arm runs upstream sglang main at `3fef129ff` (2026-10-08); ours is the overlay on that tree.
   Conditional disaggregation is the `cond_disagg` policy in our router.
-- Build names: naive FA3 + FA2 is `bench_naive_fa3_fa2_20261026.py` on the pip flashinfer release; our two-plan build
-  is the "native v3" build; the unified dispatcher is the A6 build; the
+- Build names: naive FA3 + FA2 is `bench_naive_fa3_fa2_20261026.py` on the pip flashinfer release; the unified
+  dispatcher is the A6 build; the
   role-split serving build is the earlier serving build of `debug_kernel_server_perf_4_mode.md`.
 - Merge naming in the task docs: the plan-scheduled in-launch merge is the "ticketed" merge; merges released from a
   global ready queue are the "JIT (ready queue)" mode; the DSMEM cluster reduction is the DSMEM-cluster JIT mode. The

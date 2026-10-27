@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.70.1 — Paper: results vs our two-plan build removed (user, 2026-10-27)
+- Removed the "vs our two-plan build [95% CI]" column from Table 5, and every result quoted against that build: the
+  stage-1 summary, the intro, the H200 and H20 kernel paragraphs, the kernel bar status, Figure 13's arms, section 7's
+  plan-and-merge result, the DSMEM C = 4 row, FA2-rows-alone timing, GLM's 64-row class (now stated as 1.38x between
+  the two placements) and the KV-split comparison (now stated as an ordering). The build's description as a baseline
+  is gone too (sections 5.1 and 6.1, the artifact notes).
+
 ## v1.70.0 — Fault tolerance at 64 programs (2026-10-27)
 - One node of four killed at 300 s, 64 programs + 16 chat/s:
   - ours holds (agent 95.9 -> 93.4 -> 97.3%, chat 95.8%, -11% goodput);

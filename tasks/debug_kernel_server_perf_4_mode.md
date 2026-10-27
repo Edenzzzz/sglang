@@ -57,8 +57,17 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     | no spec decoding + stock FA3 | 25.4 | 25.5 | 77.9 | 131.9 |
     - Ours vs the stock control: **-38% TPOT, -27% ITL, -57% on the worst-decile tail**, at equal throughput. Same
       direction and size as the cluster's -45% TPOT over stock colocated sglang, on one GPU with no router or pool.
-    - **This does NOT separate C1 from C2:** the harness's `four`-mode control removes BOTH (stock MTP and the stock
-      FA3 call), and its `two` mode disables the draft model entirely (`draft_model=... if mode == "four" else None`,
+    - **CORRECTION (same day): the -38% bundles THREE contributions, not two.** With `--ours` the native arm also
+      enables the worker scheduler -- `SGLANG_EDF_SCHEDULING`, uncached-token deadlines, `SGLANG_EDF_PREEMPT_CHUNK=1`
+      (chunk preemption / parking) and deadline-sized chunks (run_native_serving_pair_20261023.py:86-95) -- while the
+      control is plain stock sglang. So the row is **our full single-node stack vs stock sglang (C1 + C2 +
+      C3-worker)**, and it includes the preemption that costs ~25% of goodput at cluster scale. It is a valid
+      end-to-end stage-2 headline and attributes nothing.
+      - To separate them: `unified/a6_noours_singlenode_h200_20261028.sh` repeats both stages WITHOUT `--ours`, so
+        both sides run sglang's FCFS admission and the pass measures **C1 + C2 alone**; the difference against this
+        pass then measures **C3-worker** on one node. Queued behind the mix128 stage on the same GPU lock.
+    - **This does NOT separate C1 from C2 either:** the harness's `four`-mode control removes BOTH (stock MTP and the
+      stock FA3 call), and its `two` mode disables the draft model entirely (`draft_model=... if mode == "four" else None`,
       run_native_serving_pair_20261023.py:128), so the `two` rows are a no-speculation baseline, not "stock MTP".
       An earlier reading of these rows as a C1 x C2 interaction was wrong and is withdrawn.
     - The `two` rows do isolate the kernel without speculation: **-6.7% TPOT, -10% ITL**, consistent with C1's

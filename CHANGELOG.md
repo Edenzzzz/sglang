@@ -3,7 +3,10 @@
 ## v1.82.0 — Single-node A/B on H200: -38% TPOT, -57% tail vs stock sglang (2026-10-28)
 - mix32, Qwen2.5-7B, two repeats, A6 composition verified: four-mode + A6 gives TPOT 14.3 ms / ITL 15.0 / worst
   decile 32.4 against stock MTP + stock FA3 at 22.9 / 20.6 / 75.9, equal throughput. Matches the cluster direction.
-- Does NOT separate C1 from C2: the control removes both, and the harness's "two" mode disables the draft model
+- CORRECTION: the -38% bundles C1 + C2 + C3-worker, not two contributions -- `--ours` also turns on EDF
+  scheduling, uncached deadlines, chunk preemption and deadline-sized chunks. It is an end-to-end stage-2 headline
+  and attributes nothing. a6_noours_singlenode_h200_20261028.sh repeats it without --ours to isolate C1 + C2.
+- Does NOT separate C1 from C2 either: the control removes both, and the harness's "two" mode disables the draft model
   entirely (no speculation), so those rows are not a stock-MTP arm. An earlier C1xC2 interaction reading is
   withdrawn. The no-speculation rows isolate the kernel at -6.7% TPOT, consistent with 4-9% on captures.
 

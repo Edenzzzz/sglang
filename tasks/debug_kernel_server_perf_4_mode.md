@@ -503,9 +503,22 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
               cached prefix; the cheap tie-break does not.
             (superseded plan) Arms `dchunk` and `sglrt` were the decisive ones: if both land inside the noise, the
             margin belongs to the tree delta and must be traced to a specific mechanism before anything is claimed.
-            - Overload point for the C3 question (`gap_r1`, alpha 6, cache routing + FCFS): chat **58.0%**, agent
-              **76.2%**, 1956 tok/s, chat TPOT p90 109 ms. This is the load-spike regime where deadline ordering
-              should finally separate from FCFS; the EDF arm at the same load runs next.
+            - **Overload point, alpha 6 (`gap_r1`), complete:**
+              | arm | chat | agent | agent tok/s | not issued |
+              |---|---:|---:|---:|---:|
+              | ours, cache routing + FCFS | 58.0% | 76.2% | 1956 | 6946 |
+              | ours, cache routing + EDF | 57.6% | **78.7%** | **2102** | 6913 |
+              | stock colocated sglang (upstream tree) | 60.3% | 66.7% | 1292 | 7756 |
+              | conditional disaggregation | 58.2% | 53.8% | 725 | 9264 |
+              - **Deadline ordering finally separates under overload: +7.5% agent goodput and +2.5 points over
+                FCFS**, against nothing at alpha 3. This is C3-worker's regime and the only load where it pays;
+                at 128K single-node it costs 8.5% of TPOT and at alpha 3 it is inside the noise.
+              - Conditional disaggregation degrades much faster than colocation under overload (53.8% agent against
+                76-79%), and issues 9264 fewer rounds: the re-shipped prefill competes with decode exactly when
+                there is no headroom. This arm runs OUR router on OUR tree, so it is not affected by the RoPE
+                defect and the comparison stands.
+              - The stock colocated row (66.7%, 1292 tok/s) carries the wrong RoPE base and is NOT comparable;
+                `mn_stockfix_16g_20261028.sh` re-measures it.
           - Remaining differences between the two rows, to be separated: A6 kernel, four-mode step, chunk 2048 vs
             upstream default, our router's load tie-break vs sglang's `cache_aware`.
     - [!!] **INVALID BASELINE: the stock colocated arm ran Qwen2.5-7B with the WRONG RoPE base (2026-10-28).**

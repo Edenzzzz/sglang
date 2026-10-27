@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.88.0 — Overload (alpha 6) point complete (2026-10-28)
+- Deadline ordering separates from FCFS only under overload: agent 78.7% / 2102 tok/s vs 76.2% / 1956 (+7.5%
+  goodput, +2.5 points). At alpha 3 the two are identical and at 128K single-node EDF costs 8.5% of TPOT, so
+  C3-worker is an overload mechanism, not a general win.
+- Conditional disaggregation collapses faster than colocation under overload: agent 53.8% / 725 tok/s against
+  76-79% / 1956-2102, and 9264 rounds never issued. That arm runs our router on our tree, so it is RoPE-clean.
+- The stock colocated alpha-6 row (66.7%, 1292) carries the wrong RoPE base and is not comparable; re-run queued.
+
 ## v1.87.0 — Cluster decomposition complete: the router is the one contribution that measures (2026-10-28)
 - All four arms on our tree, acceptance 1.983-1.997 (internally valid). Our cache router with a load tie-break
   against sglang's cache_aware: chat attainment 90.6% vs 83.3% (+7.3 points) and chat TTFT p90 0.67 s vs 3.24 s

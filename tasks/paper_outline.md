@@ -1164,7 +1164,7 @@ issued within the horizon. In the surge row, chat attainment is for the base str
 | point | ours | conditional disagg | stock PD 2 + 2 | stock PD 3 + 1 |
 |---|---|---|---|---|
 | alpha 3 | 65.1% ; 72.6% ; 1501 tok/s ; 8995 | 50.9% ; 63.9% ; 956 tok/s ; 7264 | 9.9% ; 11.6% ; 49 tok/s ; 1457 | 2.2% ; 1.8% ; 7 tok/s ; 1971 |
-| alpha 3 + chat surge | 57.4 / 46.2% ; 69.3% ; 1266 tok/s ; 8554 | 36.5 / 27.1% ; 53.8% ; 668 tok/s ; 6081 | 17.2 / 11.1% ; 4.7% ; 13 tok/s ; 1169 | 3.0 / 2.1% ; 4.2% ; 11 tok/s ; 1823 |
+| alpha 3 + chat surge | 57.4 / 46.2% ; 69.3% ; 1266 tok/s ; 8554 | 36.5 / 27.1% ; 53.8% ; 668 tok/s ; 6081 | 17.2 / 11.1% ; 4.7% ; 13 tok/s ; 1169 | 2.2 / 0.0% ; 2.7% ; 9 tok/s ; 1894 |
 | alpha 6 (overload) | 31.8% ; 50.0% ; 890 tok/s ; 4818 | 57.2% ; 51.1% ; 720 tok/s ; 3850 | 8.2% ; [pending] | 3.6% ; 1.9% ; 6 tok/s ; 1227 |
 
 **Result.**

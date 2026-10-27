@@ -27,7 +27,8 @@
   - symmetric colocated nodes; the router sends each request to the highest-cache-hit node that can still meet its
     SLO, from a step model and the EDF queue ahead of it
   - EDF on every worker, deadlines from uncached tokens, per-tenant SLOs; demote-on-miss under overload
-  - cluster KV pool: a request routed away from its best holder pulls the prefix instead of recomputing it
+  - the KV pool is sglang's hierarchical cache over Mooncake (reused, not ours); the router predicts how much of a
+    missing prefix a node pulls from it while the request waits, so routing away from the best holder is priced
 - evaluation (three stages, three models: Qwen2.5-7B, Llama-3.3-70B, GLM-4.5-Air, all shown in every stage)
   - kernel: faster mixed-step attention than naive FA3 + FA2 (stock FA3 on the prefill rows, stock flashinfer FA2 on
     the decode / verify rows, each with its own plan) and than sglang's single FA3 call, on steps sampled from real
@@ -156,9 +157,24 @@ admitting it.
   decoding: POD-Attention overlaps a prefill chunk with one-token decode rows inside an FA2 kernel, and PD multiplexing
   (MuxWise, sglang's pdmux) runs the prefill split across iterations without the draft model's state. Frontier models
   are served with speculative decoding, so this is what makes a colocated schedule practical for them.
-- C3, single node: per-tenant deadline order over the four-mode step, with demotion of prefills that have already
-  missed their deadline.
-- C4, cluster: symmetric nodes, SLO-checked cache-first routing, and a cluster KV pool.
+- C3, per-worker deadline scheduling for the colocated step. Each prefill's deadline comes from its uncached tokens,
+  read by a prefix match at enqueue, so a cached agent round gets a chat-like deadline. Prefills run in deadline order,
+  and a prefill that has already missed its deadline is demoted behind those that can still meet theirs. A long
+  chunked prefill is parked, with its computed prefix kept in the cache, when a short request with an earlier
+  deadline arrives, and each chunk leaves budget for waiting requests due before it.
+- C4, an SLO-checked router for symmetric colocated nodes. For each request and node, from state the router keeps
+  itself, it predicts:
+  - TTFT: the deadline-ordered work queued ahead of the request, the cost of its uncached tokens on top of the cached
+    prefix (a calibrated prefill curve), minus the prefix pages the node can pull from the cluster pool while the
+    request waits;
+  - TPOT: the rows that will decode beside the request.
+  It sends the request to the highest-hit node that passes four checks: the request's own TTFT and TPOT, the
+  deadlines of requests queued behind it, and the TPOT of requests already decoding there (section 5.2.1).
+
+*What we reuse.* The cluster KV pool is sglang's hierarchical cache over the Mooncake distributed store, with sglang's
+selective write-through and timeout prefetch; we add only the router-side mirror of its contents that prices a pull.
+The serving engine is upstream sglang at a pinned commit, and both attention executors are stock kernels (FA3 from
+flash-attention, FA2's BatchPrefill body from flashinfer).
 
 **Results.** On trace-sampled steps on an H200, the kernel is 1.43-1.51x faster than sglang's FA3 call and [pending]
 faster than naive FA3 + FA2. On one node, Qwen2.5-7B chat attainment
@@ -811,6 +827,24 @@ retrieval at 32-60K) is judged against a baseline-vs-baseline noise floor.
 **Software.** Every arm, ours and every baseline, runs the same pinned upstream sglang main. The stock baselines run
 it unmodified; ours adds an overlay with EDF, the four-mode step, the kernel hooks and the router. Conditional
 disaggregation is implemented in our router on the same workers as ours, since Dynamo does not support SGLang for it.
+
+**Attribution.** Every gain is tied to a contribution by removing that contribution alone (Table 4c).
+- At the kernel level the comparison arms remove parts of C1.
+- At the single-node and cluster levels, each ablation arm runs the full stack minus one contribution, on the same
+  workload and load.
+- Gains against stock PD disaggregation come from colocation itself, which C1-C3 make cheap enough: the decode side
+  no longer waits on a per-round KV transfer (sections 3.2 and 6.4).
+
+Table 4c: gain attribution by contribution. Removing the contribution costs what is listed; "[pending]" marks the
+leave-one-out arms queued on the trace replay at alpha 3 (16 H20s) and the single-node ablation (H200).
+
+| contribution | removed by | measured cost of removing it | where |
+|---|---|---|---|
+| C1 unified dispatcher | sglang's single FA3 call for every row | attention 1.43-1.51x slower on trace-sampled steps; with the schedule unchanged, agent throughput -10.7% and TPOT +24% at 128-256K (four-mode); running the rows on FA3 instead of FA2 tiles costs 15-25 points of agent ITL; trace replay [pending] | 6.2, 6.3, 7 |
+| C1 parts | PDL overlap off; enumeration instead of longest-first order; merge-free bound | 2.2-6.1%; <= 0.7%; the merge costs <= 0.9% of trace-sampled steps and 6-13% of decode-heavy batches | 7 |
+| C2 four-mode step | stock MTP steps (verify on its own step) | trace replay [pending]; short-prompt ShareGPT: the merged step's host read-back cost 6-7% (section 5.5) | 5.5, 6.4 |
+| C3 deadline scheduling | per-tenant deadlines without demotion; FCFS | without demotion, chat TTFT is 25-50x higher under an agent burst (-96..-98% with it); deadline order on stock PD's prefill pods changes nothing, so the gap to PD is not scheduling; trace replay [pending] | 3.3, 5.3, 6.4 |
+| C4 SLO-checked router | cache affinity only (load tie-break) | earlier 8-H20 runs: at 32 agent programs, agent throughput -24% and chat ITL +32% without the check; on a hot shared-prefix mix, chat TTFT 10x; the resident check alone is worth 32% of chat ITL; trace replay [pending] | 5.2.1, 7 |
 
 **Status.**
 - Stages 1 and 2: measured for all three models; Llama-3.3-70B and GLM-4.5-Air on H20, their H200 reruns [pending].

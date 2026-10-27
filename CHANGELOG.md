@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.71.0 — Contributions stated precisely; gains tied to contributions; leave-one-out ablation queued (2026-10-27)
+- Paper section 1:
+  - C3 and C4 are now the mechanisms as built;
+  - "what we reuse" states that the KV pool is sglang's hierarchical cache over Mooncake (ours is only the router's
+    pull pricing), and that the executors are stock FA3 / FA2.
+- Section 6.1: an attribution paragraph and Table 4c (contribution -> how it is removed -> measured cost), with the
+  trace-replay leave-one-out cells pending.
+- `pd_colocation/mn_ablation_contrib_16g_20261027.sh` runs the full stack minus C1 / C2 / C3 / C4 on the trace replay
+  at alpha 3. Queued after the chunk-size test.
+
 ## v1.70.1 — Paper: results vs our two-plan build removed (user, 2026-10-27)
 - Removed the "vs our two-plan build [95% CI]" column from Table 5, and every result quoted against that build: the
   stage-1 summary, the intro, the H200 and H20 kernel paragraphs, the kernel bar status, Figure 13's arms, section 7's

@@ -27,7 +27,7 @@ H0=2f608c1b1a67cf09.worker_0.seedjob.wenxuan-tan@merlin-ssh-proxy-cn.byted.org
 score() { ssh -o StrictHostKeyChecking=no -p 22222 $H0 "/dev/shm/w/venv/bin/python /dev/shm/w/perf/tracelab_windows.py --windows 30 /dev/shm/w/mn/$1 2>&1 | tail -1" 2>/dev/null | sed 's/^/SCORE /'; }
 acc() { ssh -o StrictHostKeyChecking=no -p 22222 $H0 "cat /dev/shm/w/mn/$1/worker_r0_g*.log | grep -o 'accept len: [0-9.]*' | awk '{s+=\$3;n++} END {printf \"ACCEPT %s mean=%.3f n=%d\n\", \"$1\", s/n, n}'" 2>/dev/null; }
 export ALPHA=3 CHAT_RATE=8 CHAT_N=$(( 8 * 1200 * 3 / 2 )) BENCH_REPLAY_HORIZON_S=1800
-T=_tl2_a3_ropefix_r1
+T=_tl2_a3_ropefix_r3
 (unset CHUNK; RUN_TAG=${T}_stock SGL_PY=/dev/shm/w/up_clean/python KERNEL=lpt python3 -u mn_run.py coloc_sgl_mtps_hc)
 score coloc_sgl_mtps_hc${T}_stock; acc coloc_sgl_mtps_hc${T}_stock
 export CHUNK=2048

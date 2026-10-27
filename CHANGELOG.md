@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.89.0 — SLO chunk works but was mis-tuned; cluster push gotcha (2026-10-28)
+- alpha 6 chunk arms rescored on TPOT (user: TPOT matters more than TTFT): the SLO-budgeted chunk cuts chat TPOT p90
+  from 214 ms (fixed 2048) to 64 ms and agent p90 from 165 to 79 ms, but attainment collapses to 7.9% and goodput to
+  107 tok/s -- it was run with the old bank=4 default, which turns the mean-TPOT rule into a per-step ITL bound and
+  starves admission. The mechanism is sound; the operating point is wrong. The patch now defaults to unlimited
+  banking, which is the correct reading of mean TPOT. Sweep at alpha 6 on the cache router is the next step.
+- Earlier "chunk size contributes nothing" was an alpha-3 artifact: at low load there is nothing to protect.
+- At alpha 6 deadline ordering is TPOT-NEUTRAL (chat p90 111 vs 109 ms, agent 98 vs 102); its gains are goodput
+  (+7.5%) and TTFT tails. Ordering reorders who waits; it does not protect the rate of admitted requests.
+- Cluster gotcha: Cluster() without nodes= sends every push/run to one default instance (not even worker-0..3), so
+  two "corrected" stock re-runs silently used the old mn_node.sh. ROPE_THETA also had to be added to mn_run.py's
+  explicit env string. ropefix_r3 is the first run that actually carries the fix.
+
 ## v1.88.0 — Overload (alpha 6) point complete (2026-10-28)
 - Deadline ordering separates from FCFS only under overload: agent 78.7% / 2102 tok/s vs 76.2% / 1956 (+7.5%
   goodput, +2.5 points). At alpha 3 the two are identical and at 128K single-node EDF costs 8.5% of TPOT, so

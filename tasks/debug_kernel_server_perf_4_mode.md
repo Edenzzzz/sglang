@@ -557,6 +557,16 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             - Arms confirmed CLEAN (acceptance 1.98-2.00, our tree): every `bdec_r1_*`, `best_r1_cacheFCFS`,
               `coloc_slo_edf_mtp_hc_tl2_a3_r1`, `cond_p1_edf_mtp_hc_tl2_a3_best_r1_cond`. Conditional
               disaggregation runs OUR router on our tree, so that arm is valid.
+    - [!] **Deployment gotcha that invalidated two re-runs (2026-10-28).** `px_multi.Cluster(sid, cp)` without
+          `nodes=` omits `pod_name`, so merlin-cli sends EVERY `run`/`push` to one default instance -- which on this
+          job is not even one of `worker-0..3`. Two "corrected" stock re-runs (`ropefix_r1`, `ropefix_r2`) therefore
+          ran with the OLD `mn_node.sh` and simply reproduced the original arm (acceptance 1.368 against 1.420).
+          Always construct it as `mn_run.py:18` does: `Cluster(SID, cp, nodes=[f"worker-{i}" for i in range(NPODS)])`,
+          then verify with `hostname` that the four pods are distinct before trusting a push.
+          Also note the ssh entry point (`...worker_0...@merlin-ssh-proxy-cn`) is pod 0, but the merlin-cli DEFAULT
+          instance is a different container: files and scorers visible over ssh are not necessarily on the pods.
+          `ROPE_THETA` additionally had to be added to `mn_run.py`'s explicit env string (it is not inherited).
+          `ropefix_r3` is the first run that actually carries the fix.
     - [!] **Scorer bug: the client's `cached_tokens` is 0 for every request in every arm**, so the agent tenant's
           >200K-uncached TTFT allowance (20 s instead of 10 s) never fires and `uncached` equals the full prompt.
           Attainment is therefore scored slightly PESSIMISTICALLY for long rounds, in every arm equally. Fix before

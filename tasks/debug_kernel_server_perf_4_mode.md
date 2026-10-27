@@ -219,6 +219,18 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
           arm). So removing C1 costs 3.4-6.8 points of chat attainment, 2.5-8.6 points of agent attainment and
           7.5-21% of agent SLO goodput. The full-stack repeats differ by 17% on goodput, so the range is wide and a
           second noC1 repeat is needed before the paper quotes a single number.
+    - [x] **Leave-one-out, arm 2 of 4: without C2** (2026-10-27; `coloc_slo_edf_mtps_hc`, i.e. stock MTP steps
+          instead of the merged 4-mode step, A6 kernel / deadline order / router unchanged). Chat 69.1% ; agent
+          77.4% ; 1638 tok/s ; 9443 rounds issued.
+          **This is inside the full-stack repeat spread** (65.1 / 72.6 / 1501 and 68.5 / 78.7 / 1763): better than
+          r1, worse than r2 on every column. So on this cluster replay at alpha 3, merging the prefill chunk into
+          the verify forward is worth about nothing, and the honest statement is "no measurable effect here".
+          Consistent with the step census: only ~11% of steps are merged (~2,500 of ~22,000 per worker), because the
+          mix gate needs >= 8192 context or >= 4 queued requests, so C2 is diluted. Its measured value is at long
+          context on one node (128-256K: agent tok/s +8.1% four-mode, TPOT -39%) and its paper claim is that prior
+          colocation designs cannot run speculative decoding at all (POD-Attention, pdmux), not that merging beats
+          stock MTP on every workload. Note the arm still runs speculation, so this is "merged vs separate verify
+          step", not "spec vs no spec".
     - [x] **Audit of the rule against recorded steps** (2026-10-27, `perf_model/chunk_budget_audit.py` on the four
           alpha-3 worker traces, 87,932 steps; user asked whether the implementation is wrong):
           - Decode-only steps cost 8-52 ms (p50 27.7, p90 44.9) and **never** exceed the chat allowance

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.74.1 — Ablation arm 2: C2 is within repeat noise at alpha 3 (2026-10-27)
+- Without C2 (stock MTP steps instead of the merged 4-mode step): chat 69.1%, agent 77.4%, 1638 tok/s, inside the
+  full-stack repeat spread (1501 and 1763). Only ~11% of steps are merged here, so the effect is diluted; C2's
+  measured value is at long context on one node, and its paper claim is enabling speculation inside colocation.
+
 ## v1.74.0 — Closed-form chunk sizing from the kernel's cost law; first ablation arm (2026-10-27)
 - Design recorded: the fused kernel's `max + beta x min` law is invertible, so the chunk solves in closed form, while
   the split-kernel baseline (beta = 2.19 when fit) forces a search. The balance-point chunk grows with decode load

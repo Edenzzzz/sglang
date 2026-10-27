@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.75.2 — Decomposition arm 2: C3's worker level survives as ordering + demotion (2026-10-27)
+- Ordering + demotion, no preemption: chat 73.8%, agent 84.7%, 1986 tok/s -- matches FCFS on chat and beats it on
+  agent attainment and goodput, and beats the shipped ordering + parking configuration on everything.
+- Demotion recovers what plain ordering lost (68.8 -> 73.8 chat) at no throughput cost. Chunk preemption/parking is
+  the mechanism to drop.
+- A fourth arm (cache routing + ordering + demotion) is added to the best-configuration driver.
+
 ## v1.75.1 — Decomposition arm 1: preemption/parking is the cost, not deadline ordering (2026-10-27)
 - EDF ordering with preemption and parking off: 1912 tok/s, level with FCFS (1922) and well above the full stack
   (1501-1763). Chat attainment 68.8% vs 73.9% (FCFS).

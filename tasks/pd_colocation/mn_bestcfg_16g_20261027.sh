@@ -49,6 +49,10 @@ score coloc_cache_mtp_hc${T}_cacheFCFS
 # repeat of the best measured arm (cache routing + EDF workers), for confidence on 91.4% / 2514 tok/s.
 KERNEL=a6 EDF=1 RUN_TAG=${T}_cacheEDF ROUTER_ARGS="$ROUTER_ARGS_ALL" python3 -u mn_run.py coloc_cache_edf_mtp_hc
 score coloc_cache_edf_mtp_hc${T}_cacheEDF
+# cache routing + EDF ordering + demotion, no preemption: the decomposition's best worker policy (73.8 / 84.7 /
+# 1986 with the SLO router still on) combined with the best router policy. This is the true best candidate.
+KERNEL=a6 EDF=1 PREEMPT=0 LATE_DEMOTE=1 RUN_TAG=${T}_cacheDemote ROUTER_ARGS="$ROUTER_ARGS_ALL" python3 -u mn_run.py coloc_cache_edf_mtp_hc
+score coloc_cache_edf_mtp_hc${T}_cacheDemote
 # conditional disaggregation, same session, Dynamo defaults.
 KERNEL=a6 HC_WRITE=write_through COND_THRESHOLD=2048 COND_FRAC=0.7 EDF=1 RUN_TAG=${T}_cond \
   ROUTER_ARGS="$ROUTER_ARGS_ALL --pool-write-policy write_through" python3 -u mn_run.py cond_p1_edf_mtp_hc

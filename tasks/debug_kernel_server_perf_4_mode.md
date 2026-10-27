@@ -300,7 +300,23 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             10% of chat requests, but the TPOT it costs (27-30 vs 21.5-23.7 ms) decides more.
           - So the mechanism is not "EDF is wrong" but "parking a long chunked prefill is too expensive here". That
             is a sharper and more defensible statement for the paper than the wholesale arm-3 result.
-    - [ ] **C3-worker decomposition, remaining arms** (`mn_c3worker_decomp_16g_20261027.sh`, 3 arms, same alpha-3 replay):
+    - [x] **Decomposition arm 2: ordering + demotion, no preemption -- C3's worker level survives in this form**
+          (2026-10-27; first multi-node test of demotion). Chat **73.8%** ; agent **84.7%** ; **1986 tok/s** ;
+          10,275 rounds issued. Worker policies at alpha 3, SLO router on throughout:
+          | worker policy | chat | agent | goodput | chat TTFT p90 | chat TPOT p50 |
+          |---|---|---|---|---|---|
+          | ordering + preemption/parking (what we shipped) | 65.1-68.5% | 72.6-78.7% | 1501-1763 | 1.03-1.19 s | 27-30 ms |
+          | ordering only | 68.8% | 81.7% | 1912 | 4.10 s | 23.7 ms |
+          | FCFS | 73.9% | 83.2% | 1922 | 3.03 s | 21.5 ms |
+          | **ordering + demotion** | **73.8%** | **84.7%** | **1986** | 2.92 s | 21.7 ms |
+          - Demotion recovers exactly what plain ordering lost (chat 68.8 -> 73.8) and costs nothing: it matches FCFS
+            on chat and beats it on agent attainment (+1.5 points) and goodput (+3.3%).
+          - **So C3's worker level is deadline ordering + demotion, and chunk preemption / parking is a mechanism we
+            tried and should drop.** The single-node evidence for demotion (chat TTFT -96..-98% under a burst) and
+            this multi-node result agree; the wholesale arm-3 loss was parking's, not ordering's.
+          - Still open: all four arms ran with the SLO router on, which arm 4 showed is itself costly. The best
+            candidate is cache routing + ordering + demotion, added as a fourth arm to the best-configuration driver.
+    - [ ] **C3-worker decomposition, arm 3 (second without-C1 repeat)** (`mn_c3worker_decomp_16g_20261027.sh`, 3 arms, same alpha-3 replay):
           - `ord`: EDF ordering only (`PREEMPT=0`), isolating preemption/parking;
           - `demote`: ordering + demotion, still no preemption -- the first multi-node test of the single-node
             mechanism;

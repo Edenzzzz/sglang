@@ -17,6 +17,9 @@ every running decode row within its mean-TPOT SLO, with headroom h; with no rows
   stops prefill on the node. (A first version dropped such rows from the minimum, which at overload, when every row is
   late, removed the bound and let chunks reach the maximum.)
 - ":bank=K" (default 4): a row's banked slack counts for at most K steps' allowance.
+- ":ttft": TTFT floor. The earliest-deadline prefill (in-progress chunk, else the head of the deadline-ordered queue),
+  while it can still meet its deadline, gets at least the chunk that finishes its remaining tokens by the deadline at
+  the predicted step time. A TPOT-only budget starved prefill far past capacity (alpha 6: chat TTFT p50 74 s).
 - a, the tokens one step emits per row, is the EWMA of the scheduler's speculative acceptance (accepted tokens per
   verify forward); the first version measured rows' progress between calls, which spans several steps.
 - The chunk solves model(c) <= budget (quadratic in c through attn). Under mixed chunk the scheduler charges one token
@@ -74,7 +77,8 @@ method = '''
                 coef=model[target]["coef"], S=float(model["S"]), T=float(model["T"]), h=float(fields[1]),
                 chat_ms=float(fields[2]), agent_ms=float(fields[3]), agent_tokens=int(fields[4]),
                 demote="demote" in fields[5:],
-                bank_steps=float(next((f[5:] for f in fields[5:] if f.startswith("bank=")), 4)))
+                bank_steps=float(next((f[5:] for f in fields[5:] if f.startswith("bank=")), 4)),
+                ttft="ttft" in fields[5:])
             logger.info("SLO_CHUNK model=%s target=%s S=%g T=%g h=%g chat=%gms agent=%gms (>= %d tokens) demote=%s",
                         fields[0], target, cfg["S"], cfg["T"], cfg["h"], cfg["chat_ms"], cfg["agent_ms"],
                         cfg["agent_tokens"], cfg["demote"])
@@ -147,12 +151,40 @@ method = '''
                 out = 0
             elif self.is_mixed_chunk:
                 out += mixed_rows
+        if cfg["ttft"] and out < chunk_size:
+            # TTFT floor: the earliest-deadline prefill that can still meet its deadline gets at least the chunk
+            # that finishes its remaining tokens by then at the predicted step time; a late one gets no floor.
+            head = self.chunked_req if self.chunked_req is not None else (self.waiting_queue[0] if self.waiting_queue else None)
+            deadline = getattr(head, "priority", None) if head is not None else None
+            if deadline is not None and deadline > now:
+                ids = getattr(head, "full_untruncated_fill_ids", None) or head.origin_input_ids
+                done = max(getattr(head, "prefix_len", 0) or 0, getattr(head, "_edf_cached_len", 0) or 0)
+                remaining = max(0, len(ids) - done)
+                window_ms = (deadline - now) * 1000.0
+                c0_, c_tok_, c_attn_, c_bs_, c_kv_, c_np_, c_mixed_, c_draft_, c_ver_, c_vkv_ = cfg["coef"]
+                nd_ = len(rows)
+                dkv_ = sum(len(r.origin_input_ids) + len(r.output_ids) for r in rows)
+                base = (c0_ + c_bs_ * nd_ + c_kv_ * dkv_ / 1e3 + c_np_ + c_mixed_ + c_draft_ * nd_ * cfg["S"]
+                        + c_ver_ * nd_ * cfg["T"] + c_vkv_ * dkv_ * cfg["T"] / 1e3)
+                floor, meets = max(out, self.page_size, 256), False
+                while remaining > 0:
+                    step = base + c_tok_ * floor + c_attn_ * (floor * done + floor * floor / 2) / 1e6
+                    if remaining / floor * step <= window_ms:
+                        meets = True
+                        break
+                    if floor >= chunk_size:
+                        break
+                    floor = min(chunk_size, int(floor * 1.5))
+                # A prefill that cannot meet its deadline at any chunk size is treated as late: no floor.
+                if meets and floor > out:
+                    self.slo_chunk_floored = getattr(self, "slo_chunk_floored", 0) + 1
+                    out = int(floor)
         self.slo_chunk_capped = getattr(self, "slo_chunk_capped", 0) + int(out < chunk_size)
         self.slo_chunk_zero = getattr(self, "slo_chunk_zero", 0) + int(out == 0)
         if self.slo_chunk_calls % 500 == 1:
-            logger.info("SLO_CHUNK calls=%d capped=%d zero=%d rows=%d tps=%.2f budget_ms=%.1f chunk=%d->%d",
-                        self.slo_chunk_calls, self.slo_chunk_capped, self.slo_chunk_zero, len(rows), tps, budget,
-                        chunk_size, out)
+            logger.info("SLO_CHUNK calls=%d capped=%d zero=%d floored=%d rows=%d tps=%.2f budget_ms=%.1f chunk=%d->%d",
+                        self.slo_chunk_calls, self.slo_chunk_capped, self.slo_chunk_zero,
+                        getattr(self, "slo_chunk_floored", 0), len(rows), tps, budget, chunk_size, out)
         return out
 '''
 anchor2 = re.search(r"\n    def get_new_batch_prefill\(self[^)]*\)[^:]*:", s).group(0)

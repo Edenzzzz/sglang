@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.72.5 — Budgeted chunk: TTFT floor option (2026-10-27)
+- `apply_slo_budget_chunk_20261026.py` adds `:ttft`: the earliest-deadline prefill that can still meet its deadline
+  gets at least the chunk that finishes its remaining tokens by then. A late, or impossible, prefill gets none.
+- Stub check, 20K tokens: 4 s left -> 576, 10-30 s left -> 256, 2 s left (infeasible) and late -> the TPOT budget
+  (58).
+- Tree `/dev/shm/w/python_slo2` on all pods. Driver `mn_slo_chunk_v6_16g_20261027.sh` is queued after the
+  leave-one-out ablation.
+
 ## v1.72.4 — Budgeted chunk v5 at alpha 6: TPOT protected, prefill starved (2026-10-27)
 - Chat TPOT p50 47 ms (vs 72) but chat TTFT p50 74 s (vs 0.40 s); attainment 7.9 / 15.0% vs 31.8 / 50.0%. A
   TPOT-only budget starves prefill far past capacity. Next: a TTFT floor from the earliest feasible deadline.

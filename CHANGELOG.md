@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.75.3 — Paper: C3's worker level is ordering + demotion; parking reported as dropped (2026-10-27)
+- Sections 1, 5.2.3 and Table 4c now state the mechanism as deadline ordering plus demotion, with preemption and
+  parking described as built, measured and dropped (a quarter of agent goodput for the chat TTFT tail alone).
+
 ## v1.75.2 — Decomposition arm 2: C3's worker level survives as ordering + demotion (2026-10-27)
 - Ordering + demotion, no preemption: chat 73.8%, agent 84.7%, 1986 tok/s -- matches FCFS on chat and beats it on
   agent attainment and goodput, and beats the shipped ordering + parking configuration on everything.

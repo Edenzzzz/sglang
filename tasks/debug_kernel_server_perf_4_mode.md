@@ -97,6 +97,15 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
           - banked slack is capped at 4 steps (`bank=K`).
           Stub check: all rows late -> chunk 398 (was 16384); large banked slack -> 2530. The alpha-3 v4 arm was
           stopped and all three arms rerun as v5 (`mn_slo_chunk_v5_16g_20261027.sh`).
+    - [x] v5, alpha 6 (2026-10-27, log `/tmp/h20/mn_slo_chunk_16g_r1.log`): **TPOT is now protected, but prefill
+          starves.**
+          - Chat TPOT p50 / p90: 47 / 64 ms (fixed 2048: 72 / 214); agent TPOT p50 54 ms (71).
+          - Chat TTFT p50: 74 s (0.40 s); agent TTFT p50: 55 s (1.1 s).
+          - Attainment: chat 7.9% (31.8%), agent 15.0% (50.0%); agent goodput 107 tok/s (890).
+          - Far past capacity, a TPOT-only budget leaves too little prefill and the backlog grows without bound. This
+            matches the earlier finding that every per-step chunk cap loses.
+          - Next: a TTFT floor. The chunk is the max of the TPOT budget and the tokens per step the earliest-deadline
+            prefill still able to meet its deadline needs; late prefills get no floor, mirroring demotion.
         - [ ] The chunk budget still uses lin4mode on GPU time (25%). The patch takes only a linear model; a nonlinear
               model in the patch (or a per-step lookup) is the next step if the chunk arms show mispricing.
       Earlier 4-mode STEPTRACE fits (the 2.0% MAPE in the paper's Table 3 came from an H200 log) must be checked for

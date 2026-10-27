@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.72.4 — Budgeted chunk v5 at alpha 6: TPOT protected, prefill starved (2026-10-27)
+- Chat TPOT p50 47 ms (vs 72) but chat TTFT p50 74 s (vs 0.40 s); attainment 7.9 / 15.0% vs 31.8 / 50.0%. A
+  TPOT-only budget starves prefill far past capacity. Next: a TTFT floor from the earliest feasible deadline.
+
 ## v1.72.3 — SLO-budgeted chunk: tokens-per-step and demotion bugs fixed (2026-10-27)
 - At alpha 6 the v4 budgeted chunk was worse than fixed 2048 on every metric (chat 27.0 vs 31.8%, agent goodput 647
   vs 890 tok/s). Its budgets reached seconds or infinity:

@@ -926,8 +926,12 @@ Tasks, in priority order:
     Conditional disaggregation loses 16%. Stock PD loses about a third when a prefill node dies (agent attainment
     halves and does not recover), and is level when a decode node dies: its bottleneck is the prefill / transfer
     side, not decode.
-- [ ] **Fault at 64 programs** (`pd_colocation/mn_fault_load_16g_20261026.sh`, `FAULT_LOAD=64:16`): queued behind the
-      demand-shift run. At 32 programs both colocated systems have spare capacity.
+- [x] **Fault at 64 programs** (2026-10-27, `FAULT_LOAD=64:16 FAULT_ARMS="ours cond pd_p1" bash
+      pd_colocation/mn_fault_load_16g_20261026.sh`, log `/tmp/h20/mn_fault_L64_16g_r1.log`; same scoring).
+  - Agent windows (before -> first 60 s -> after) ; chat ; agent goodput (no-fault reference from Table 10):
+    - ours: 95.9 -> 93.4 -> 97.3%, 0 lost ; 95.8% ; 974 tok/s (1093-1100);
+    - conditional disaggregation: 93.4 -> 94.1 -> 95.4% ; 98.4% ; 756 (821-932);
+    - stock PD 2 + 2, prefill node 1: 25.6 -> 3.1 -> 0.0%, never recovers ; 6.0% ; 19 (52-55).
 - [ ] **GLM-4.5-Air, stages 1-3** (stage 1 at parity with v3 after the 64-row class, A6 section 6).
   - [ ] Stage 2 (H20 pod 4, TP4, NEXTN MTP, mix32: agent C=8 + chat 8 req/s;
         `unified/a6_stage2_glm_h20_20261025.sh`).

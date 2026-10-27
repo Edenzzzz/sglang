@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.70.0 — Fault tolerance at 64 programs (2026-10-27)
+- One node of four killed at 300 s, 64 programs + 16 chat/s:
+  - ours holds (agent 95.9 -> 93.4 -> 97.3%, chat 95.8%, -11% goodput);
+  - conditional disaggregation holds (-8..-19%);
+  - stock PD losing a prefill node never recovers (0% after the kill, -64%).
+- Table 10c and task doc.
+
 ## v1.69.6 — Paper section 6.4 bar status includes the trace replay (2026-10-27)
 
 ## v1.69.4 — Demand shift v2 complete (2026-10-27)

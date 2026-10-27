@@ -1257,7 +1257,7 @@ workers of one node (a quarter of the cluster) are killed:
 - *A decode node dies:* the baseline keeps its admission rate and loses ITL on the remaining decode node. Ours should
   keep ITL by admitting fewer prefills (the SLO check and EDF) and give up some TTFT attainment instead.
 
-**Result (Qwen2.5-7B, 32 programs, one repeat).** Table 10c reports agent attainment in the windows before the kill,
+**Result (Qwen2.5-7B, 32 and 64 programs, one repeat).** Table 10c reports agent attainment in the windows before the kill,
 in the first 60 s after it, and for the rest of the run, with overall chat attainment and agent SLO goodput.
 - *Ours* holds both tenants through the kill (agent 95.0 -> 95.5 -> 96.8%, chat 98.7%) and loses none of its
   in-flight requests. Its goodput falls 9% (552 vs 601-611 tok/s without the fault), the capacity of the lost node at
@@ -1266,9 +1266,13 @@ in the first 60 s after it, and for the rest of the run, with overall chat attai
 - *Stock PD* loses a third of its goodput when a prefill node dies: agent attainment falls from 50.8% to 21.8% and
   stays near 30%, and chat falls to 30% overall. Losing a decode node costs it little, because its limit is the
   prefill and KV-transfer side (section 3.2).
-- At 64 programs, where losing a quarter of the cluster binds, [pending].
+- At 64 programs (Table 10c, lower rows), ours still holds both tenants: agent 95.9 -> 93.4 -> 97.3%, chat 95.8%, no
+  agent request lost, and 11% less goodput than without the fault. Conditional disaggregation also holds (-8..-19%).
+  Stock PD, losing a prefill node, never recovers: both tenants fall to 0% attainment for the rest of the run, and
+  its goodput falls 64%.
 
-Table 10c: fault tolerance, Qwen2.5-7B, 16 H20s, 32 programs + 8 chat req/s; one node (4 of 16 GPUs) killed at 300 s.
+Table 10c: fault tolerance, Qwen2.5-7B, 16 H20s, 32 programs + 8 chat req/s (upper rows) and 64 + 16 (lower rows); one
+node (4 of 16 GPUs) killed at 300 s; one repeat.
 
 | system (node killed) | agent attainment: before / first 60 s / after | chat attainment (2 s + 50 ms) | agent SLO goodput (no fault) |
 |---|---|---|---|
@@ -1276,6 +1280,10 @@ Table 10c: fault tolerance, Qwen2.5-7B, 16 H20s, 32 programs + 8 chat req/s; one
 | conditional disagg (a decode node) | 94.1 / 93.2 / 98.7% | 99.4% | 449 (527-547) tok/s |
 | stock PD 2 + 2 (a prefill node) | 50.8 / 21.8 / 29.6% | 30.0% | 64 (87-101) tok/s |
 | stock PD 2 + 2 (a decode node) | 52.7 / 43.8 / 50.9% | 47.6% | 107 (87-101) tok/s |
+| *64 programs + 16 chat req/s* | | | |
+| ours (any node) | 95.9 / 93.4 / 97.3% | 95.8% | 974 (1093-1100) tok/s |
+| conditional disagg (a decode node) | 93.4 / 94.1 / 95.4% | 98.4% | 756 (821-932) tok/s |
+| stock PD 2 + 2 (a prefill node) | 25.6 / 3.1 / 0.0% | 6.0% | 19 (52-55) tok/s |
 
 Earlier, on 8 GPUs with the scheduler only (2 of 8 GPUs killed at 300 s), ours rerouted (agent attainment 96.4 ->
 98.1%, chat 85.0%), while PD disaggregation loses half its prefill capacity (18 -> 34%, chat 9-15%).

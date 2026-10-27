@@ -16,7 +16,11 @@ every running decode row within its mean-TPOT SLO, with headroom h; with no rows
   the step at their per-step allowance s_r x a (each new token costs at most its target); without it, one late row
   stops prefill on the node. (A first version dropped such rows from the minimum, which at overload, when every row is
   late, removed the bound and let chunks reach the maximum.)
-- ":bank=K" (default 4): a row's banked slack counts for at most K steps' allowance.
+- ":bank=K" (default unlimited): a row's banked slack counts for at most K steps' allowance. The SLO is a request's
+  MEAN TPOT, so banking must be unlimited by default: a row that has been decoding at 30 ms against a 50 ms target
+  has earned the time for an occasional 446 ms merged step, and that is what the fixed-chunk arms rely on. Capping it
+  at 4 steps turned the rule into a per-step (ITL) bound and lost every metric at alpha 3, chat TPOT included
+  (45.0 vs 30.0 ms p50).
 - ":ttft": TTFT floor. The earliest-deadline prefill (in-progress chunk, else the head of the deadline-ordered queue),
   while it can still meet its deadline, gets at least the chunk that finishes its remaining tokens by the deadline at
   the predicted step time. A TPOT-only budget starved prefill far past capacity (alpha 6: chat TTFT p50 74 s).
@@ -77,7 +81,7 @@ method = '''
                 coef=model[target]["coef"], S=float(model["S"]), T=float(model["T"]), h=float(fields[1]),
                 chat_ms=float(fields[2]), agent_ms=float(fields[3]), agent_tokens=int(fields[4]),
                 demote="demote" in fields[5:],
-                bank_steps=float(next((f[5:] for f in fields[5:] if f.startswith("bank=")), 4)),
+                bank_steps=float(next((f[5:] for f in fields[5:] if f.startswith("bank=")), "inf")),
                 ttft="ttft" in fields[5:])
             logger.info("SLO_CHUNK model=%s target=%s S=%g T=%g h=%g chat=%gms agent=%gms (>= %d tokens) demote=%s",
                         fields[0], target, cfg["S"], cfg["T"], cfg["h"], cfg["chat_ms"], cfg["agent_ms"],

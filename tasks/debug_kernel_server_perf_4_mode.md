@@ -136,9 +136,21 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
           (10,185 of 87,932), so "every step within one allowance" is far stricter than "mean within target". The
           banking term existed to amortise that, and v5's `bank=4` cap destroyed it; v4 left banking uncapped but
           mispriced tokens per step and dropped the bound for late rows. Both directions therefore failed.
-          The surge arm was stopped; `apply_slo_budget_chunk_20261026.py` is retired in favour of sglang's own
-          `edf_compute_max_chunk_size`, which binds on the slow tail only (`ITL_QUANTILE`), measures slack against
-          the previous step, and falls back to a pure-decode step when decode alone exceeds the slack.
+          The surge arm was stopped.
+          **Correction (user, 2026-10-27): the SLO is mean TPOT, so the fix is the cumulative budget, not sglang's
+          solver.** Checked on both sides:
+          - our scorer uses `sum(itls) / (output_len - 1)`, a request's mean;
+          - `edf_compute_max_chunk_size` uses `slack = ITL_SLO_MS x a - elapsed_since_last_step`, a per-step (ITL)
+            bound, which its own comment calls "the strict per-step controller" at the default
+            `SGLANG_EDF_ITL_QUANTILE=0`. It carries the same mismatch, so adopting it unchanged would repeat the
+            failure; its quantile knob is a tail approximation of the mean, worth testing separately.
+          The cumulative form `s_r x (o_r + a) - E_r` is the one that matches a mean SLO, and that was v4's formula.
+          v4 failed on two unrelated bugs (tokens per step measured across several steps, and demotion dropping late
+          rows from the minimum), which v5 fixed while adding the `bank=4` cap that re-imposed a per-step bound.
+          Default banking is now unlimited. Stub check at a 50 ms target: a row at target gets 491 tokens, a row
+          decoding at 30 ms (the measured alpha-3 condition) gets 15,246 (so full chunks, matching fixed 2048), a row
+          at 70 ms gets 491, and the v5 cap would have given 3,079. Deployed as `/dev/shm/w/python_slo3`; the A/B
+          (`mn_slo_chunk_v7_16g_20261027.sh`, alpha 3 first) is queued after the ablation.
     - [x] v5, alpha 6 (2026-10-27, log `/tmp/h20/mn_slo_chunk_16g_v5_a6.log`): **TPOT is protected, but prefill
           starves.**
           - Chat TPOT p50 / p90: 47 / 64 ms (fixed 2048: 72 / 214); agent TPOT p50 54 ms (71).

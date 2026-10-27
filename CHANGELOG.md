@@ -5,8 +5,10 @@
   80.7 s. At that load fixed chunks already met the 50 ms target, so no throttling was warranted.
 - Cause: the rule bounds every step by one TPOT allowance, while the SLO is a request's mean TPOT and only 12% of
   steps carry a prefill chunk. v5's banking cap removed the amortisation; v4 removed the bound instead.
-- `apply_slo_budget_chunk_20261026.py` is retired in favour of sglang's `edf_compute_max_chunk_size` (slow-tail
-  quantile, slack against the previous step, pure-decode fallback) driven by the analytic model.
+- Correction: the SLO is mean TPOT (`sum(itls)/(n-1)`), and sglang's `edf_compute_max_chunk_size` is itself a
+  per-step ITL bound, so it carries the same mismatch. The fix is the cumulative budget `s x (o + a) - E` with
+  unlimited banking (v4's formula plus v5's tokens-per-step and demotion fixes, minus the cap). Stub: a row at
+  30 ms/token against a 50 ms target now earns full chunks. A/B queued (v7, alpha 3 first).
 
 ## v1.73.0 — Use the existing SLO chunk solver; H20 constants for the analytic model (2026-10-27)
 - Inventory: `edf_compute_max_chunk_size()` already binary-searches the largest chunk that fits the tightest row's

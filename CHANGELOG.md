@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.95.0 — Cross-role KV reuse gated out on the session replay (zero GPU cost) (2026-10-28)
+- The gating measurement is answered structurally: (1) tracelab.py draws each session's tokens independently from
+  the global RNG, so concurrent sessions share NO prefix -- our 92.7% hit is temporal (round N+1 reusing round N),
+  not spatial; (2) a session's rounds are sequential, so the session being prefilled has no decode rows of its own
+  in that step. Cross-role page overlap is therefore ~0 by construction on the TraceLab replay.
+- Scope: the mechanism is viable only on fan-out / branching workloads (siblings of one parent concurrent, one
+  prefilling over the parent prefix while another decodes) -- drivers/serving/fanout_agents.py, the ThunderAgent
+  setting of goal point 2. Must not be claimed on the session replay.
+- Also explains the weak version's behaviour: KV-position ordering gave 1.08x on a synthetic 48K shared prefix and
+  -29% on the trace, because the trace has no shared prefix to order around.
+- Corrected arm driver committed (mn_chunk_vs_sglang_20261028.sh): baseline = upstream tree with sglang's own
+  schedule and chunk policy (CHUNK and SLO_CHUNK unset); ours = EDF coupled to the SLO chunk, launched at 16384 so
+  the rule decides. Both alpha 3 and alpha 6, acceptance logged per arm.
+
 ## v1.94.0 — SLO-budgeted chunk rule defined and validated offline, no DP (2026-10-28)
 - tasks/perf_model/chunk_predictor.py: budget = (1-h) * min_r [s_r*(o_r+a) - E_r]; chunk = largest c with
   T_step(c) <= budget, by bisection over the fitted step model. Three lines plus 16 model evaluations (~2 us); no

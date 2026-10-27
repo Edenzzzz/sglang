@@ -194,9 +194,24 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       tree attention. See the reference entry.
     - Weak version already measured: KV-position ordering gave 1.08x on a 48K shared prefix and -29% elsewhere, so
       any version must be gated on measured sharing.
-    - **Measure first, at zero GPU cost:** the fraction of KV pages that both roles touch in the same step, over the
-      trace replay. DeFT's 73-99% comes from trees where sharing is near-total; ours depends on fan-out and hit
-      rate, so this number decides whether the item is worth building.
+    - **[x] GATING MEASUREMENT ANSWERED (2026-10-28), at zero GPU cost: the overlap is ~0 on our main workload,
+      for two structural reasons, so this item is NOT buildable against the TraceLab replay.**
+      1. *The replay has no spatial sharing.* `drivers/serving/bench_overlay_20261026/tracelab.py` synthesises each
+         session's tokens with `draw(n)` from the global RNG (it is a length/session trace, not real agent text), so
+         two concurrent sessions share no prefix. Our 92.7% prefix hit is entirely TEMPORAL -- round N+1 reusing
+         round N within one session -- not spatial across concurrent requests.
+      2. *A session cannot occupy both roles at once.* Rounds within a session are sequential, so the session whose
+         chunk is prefilling has no decode rows of its own in that step. Cross-ROLE sharing therefore requires two
+         DIFFERENT requests that share a prefix and are concurrent -- which (1) says does not happen here.
+      - **Consequence:** cross-role shared-prefix reuse is viable only on fan-out / branching workloads, where
+        siblings of one parent are concurrent (one child prefilling over the parent prefix while another decodes
+        over it). We have that workload in `drivers/serving/fanout_agents.py`, and it is the ThunderAgent-style
+        setting the goal's point 2 describes. Any claim for this mechanism must be made on fan-out, with the page
+        overlap reported, and must NOT be claimed on the session replay.
+      - This also explains why the weak version (KV-position ordering) gave 1.08x only on a synthetic 48K shared
+        prefix and -29% on the trace: the trace has no shared prefix to order around.
+      - DeFT's 73-99% KV IO saving comes from trees inside ONE call, where sharing is near-total by construction.
+        Our setting only reaches that regime under fan-out.
   - [ ] **KERNEL INNOVATION 3 (2026-10-28): deferred KV commit for rejected draft tokens.**
     - Verify computes and writes paged KV for all 4 draft tokens, but acceptance is ~2.0 on the cluster (3.35-3.55
       at 128K single node), so a large share of verify KV writes are discarded. Holding the draft chain's KV in a

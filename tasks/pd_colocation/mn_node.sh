@@ -126,8 +126,12 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   ARGS=(--model $W/${MODEL_DIR:-qwen7b} --attention-backend ${ATTN_BACKEND:-flashinfer} --mem-fraction-static ${MEM_FRAC:-0.85}
         --host :: --port $PORT --nccl-port $NCCL --context-length ${CTX_LEN:-131072} --watchdog-timeout ${WATCHDOG:-600})
   # YaRN to CTX_LEN for the 32K-native Qwen models; YARN_FACTOR=0 for a model native at CTX_LEN (GLM-4.5-Air, 128K).
+  # ROPE_THETA carries the model's base frequency INSIDE the override dict. Upstream sglang replaces the whole
+  # rope_scaling dict and so drops rope_theta, falling back to 10000 while Qwen2.5 needs 1e6; that mis-configures
+  # every upstream-tree baseline (measured 2026-10-28: draft acceptance 1.420 against 1.991). Our tree preserves it
+  # in utils/hf_transformers/config.py, so setting it here makes both trees build the same RoPE.
   [ "${YARN_FACTOR:-4.0}" != 0 ] && ARGS+=(--json-model-override-args \
-    '{"rope_scaling":{"factor":'${YARN_FACTOR:-4.0}',"original_max_position_embeddings":32768,"type":"yarn"}}')
+    '{"rope_scaling":{"factor":'${YARN_FACTOR:-4.0}',"original_max_position_embeddings":32768,"type":"yarn"'${ROPE_THETA:+,"rope_theta":$ROPE_THETA}'}}')
   # Shared L3 prefix cache (goal points 2 and 4): every colocated worker writes the prefixes it
   # computes through to a cluster-wide mooncake store (RDMA, host DRAM) and prefetches a request's
   # prefix from it on a local miss, so any node can pull from any other -- a complete graph, with

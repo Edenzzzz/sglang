@@ -472,6 +472,32 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
               should finally separate from FCFS; the EDF arm at the same load runs next.
           - Remaining differences between the two rows, to be separated: A6 kernel, four-mode step, chunk 2048 vs
             upstream default, our router's load tie-break vs sglang's `cache_aware`.
+    - [!!] **INVALID BASELINE: the stock colocated arm ran Qwen2.5-7B with the WRONG RoPE base (2026-10-28).**
+          `mn_node.sh` always passes `--json-model-override-args '{"rope_scaling":{...}}'` (YaRN to 126976).
+          Upstream sglang REPLACES the whole `rope_scaling` dict, dropping the model's `rope_theta`, so
+          `get_rope_config` falls back to **10000 while Qwen2.5-7B needs 1e6**. Our tree preserves it
+          (`utils/hf_transformers/config.py`, the only functional difference in that file), so every arm on
+          `SGL_PY=/dev/shm/w/up_clean/python` -- the stock colocated baseline -- served a mis-configured model.
+          Measured consequence, mean draft acceptance length over all decode batches:
+          | arm | tree | mean accept len |
+          |---|---|---|
+          | stock colocated (`gap_r1_stock`) | upstream `up_clean` | **1.420** |
+          | ours (`best_r1_cacheFCFS`) | our tree | **1.991** |
+          | ours noC2 (`bdec_r1_noC2`) | our tree | 1.995 |
+          With MTP, served throughput scales with acceptance length: 1.991 / 1.420 = **1.40x**, which alone covers
+          the **+25% throughput and -45% TPOT we reported over stock colocated sglang**. That comparison is
+          **WITHDRAWN** until re-measured; so is the "+25% at equal cache hit" framing built on it.
+          - This also explains why C1, C2, the chunk size and the router all measured zero inside our own tree while
+            the margin over upstream looked large: the margin was never ours, it was the baseline's broken RoPE.
+          - **Not affected:** the single-node H200 A/Bs (the harness copies ONE tree for both arms, so both have the
+            fix), the kernel ladder (same tree, same model), and every ours-vs-ours leave-one-out.
+          - Fix, no upstream patch needed: carry the base frequency inside the override dict. `mn_node.sh` now
+            appends `"rope_theta":$ROPE_THETA` when `ROPE_THETA` is set, so both trees build the same RoPE.
+            `mn_stockfix_16g_20261028.sh` re-runs the stock baseline with `ROPE_THETA=1000000` plus our arm as a
+            control; log `/tmp/h20/mn_stockfix_16g_r1.log`.
+          - **Every past upstream-tree arm is suspect**, including the PD-disaggregation arms
+            (`disagg_p*_mtps_*`, which also run `up_clean`). Their acceptance must be checked before any of their
+            numbers are quoted again.
     - [!] **Scorer bug: the client's `cached_tokens` is 0 for every request in every arm**, so the agent tenant's
           >200K-uncached TTFT allowance (20 s instead of 10 s) never fires and `uncached` equals the full prompt.
           Attainment is therefore scored slightly PESSIMISTICALLY for long rounds, in every arm equally. Fix before

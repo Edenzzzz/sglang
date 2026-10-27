@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.85.0 — INVALID BASELINE: upstream arms ran Qwen with rope base 1e4, not 1e6 (2026-10-28)
+- mn_node.sh's YaRN override replaces the rope_scaling dict; upstream sglang drops rope_theta with it and falls back
+  to 10000, while Qwen2.5-7B needs 1e6. Our tree preserves it, so every up_clean arm served a mis-configured model.
+- Measured: mean draft acceptance 1.420 (stock colocated, upstream tree) vs 1.991 (ours). 1.40x on acceptance alone
+  covers the +25% throughput / -45% TPOT we reported over stock colocated sglang. That claim is WITHDRAWN.
+- This explains the puzzle of the last several hours: C1, C2, chunk and router all measured zero inside our tree
+  while the margin over upstream looked large. The margin was the baseline's broken RoPE, not a contribution.
+- NOT affected: single-node H200 A/Bs (one tree for both arms), the kernel ladder, all ours-vs-ours ablations.
+- Fix without patching upstream: mn_node.sh now appends "rope_theta":$ROPE_THETA to the override when ROPE_THETA is
+  set. mn_stockfix_16g_20261028.sh re-runs the stock baseline with ROPE_THETA=1000000 plus our arm as a control.
+- All past up_clean arms are suspect, including the PD-disaggregation baselines; check acceptance before quoting.
+
 ## v1.84.0 — C2's contradiction resolved: it is gated on uncached prefill length (2026-10-28)
 - The four-mode step gives -38% TPOT on one node and zero on the cluster because of its gate
   (SGLANG_MIXED_SPEC_MIN_CTX=8192). At 92.7% prefix hit a cluster agent round carries only ~1085 uncached tokens,

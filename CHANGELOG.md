@@ -1,5 +1,7 @@
 # Changelog
 
+## v1.69.6 — Paper section 6.4 bar status includes the trace replay (2026-10-27)
+
 ## v1.69.4 — Demand shift v2 complete (2026-10-27)
 - Surge, stock PD 3 + 1: chat 2.2 / 0.0%, agent 2.7%, 9 tok/s (corrected in v1.69.5; the first entry was written before the score was read). Table 10d is complete except stock PD 2 + 2's agent side at alpha 6 (rerun queued).
 

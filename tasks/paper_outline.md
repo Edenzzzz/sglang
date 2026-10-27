@@ -1189,7 +1189,10 @@ settings; a rerun with the full stack is [pending].
 
 **Bar status.** Against stock PD at its best split the bar is met at every measured load. Against conditional
 disaggregation, the goodput side is met at every load in both repeats (+12..+37%); chat attainment is level through 96 programs and
-ahead only at 128 programs. For Llama-3.3-70B (two repeats):
+ahead only at 128 programs. On the superposed TraceLab replay (Table 10d), the bar is met against conditional
+disaggregation on both tenants at alpha 3, with and without the chat surge: chat attainment +28% and +57% relative
+(+14 and +21 points), agent SLO goodput +57% and +90%. At alpha 6, only the goodput side is met (+24%). For
+Llama-3.3-70B (two repeats):
 - against stock PD's best split, ours is ahead on chat attainment at every load (+3..+23 points), with agent goodput
   level (-2..+7%); the chat side of the bar is met from 12 programs up;
 - against conditional disaggregation, ours is ahead on agent goodput (+4..+94%) at a cost of 0.3-7.1 points of chat

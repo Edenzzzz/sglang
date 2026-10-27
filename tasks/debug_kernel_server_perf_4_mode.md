@@ -67,6 +67,24 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     - The no-speculation rows isolate the kernel with no MTP and no worker scheduler: -6.7% TPOT at 32K, -2.8% at
       128K, with +7-10% throughput. Small, and shrinking with context, exactly as the capture ladder and the
       cluster step-time analysis predict.
+    - [x] **SINGLE-NODE ATTRIBUTION, complete (2026-10-28).** Combining the `--ours` and no-`--ours` passes gives a
+      cumulative decomposition on one tree, two repeats per arm, fused path verified (composition 1091 / 2333):
+      | arm, added cumulatively | 32K TPOT | step | 128K TPOT | step |
+      |---|---:|---|---:|---|
+      | stock MTP + stock FA3, FCFS | 22.9 ms | - | 97.3 ms | - |
+      | + four-mode step (C2) | 14.2 | **-38%** | 48.0 | **-51%** |
+      | + A6 unified kernel (C1) | 14.2 | 0% | 41.3 | **-14%** |
+      | + EDF and chunk preemption (C3-worker) | 14.3 | ~0% | 44.8 | **+8.5% WORSE** |
+      - **C2 carries the single-node result**, as the gate analysis predicts: these stages carry 32K-128K uncached
+        prefill, far above the 8192 gate, so the four-mode step fires on every chunk.
+      - **C1 is 0% at 32K and at most -14% at 128K**, and that -14% is **confounded**: the A6 arm also shows higher
+        draft acceptance at 128K (3.27 against 2.94 tokens per verify, +11%), while at 32K acceptance matches
+        (3.53 / 3.54). Acceptance feeds straight into TPOT, so part of the 128K gain is numerics, not kernel speed
+        (FP32 worst relative error 0.0083 is enough to flip marginal draft tokens). Do not quote -14% as pure kernel.
+      - **C3-worker costs 8.5% of TPOT at 128K** on one node, matching the cluster result that chunk preemption /
+        parking costs goodput. The worker scheduler should be presented as useful only under overload (alpha 6:
+        +7.5% goodput), not as a general win.
+      - Throughput: C1 alone +6.9% at 32K and +8.4% at 128K (the latter carrying the same acceptance confound).
     - **CORRECTION (same day): the -38% bundles THREE contributions, not two.** With `--ours` the native arm also
       enables the worker scheduler -- `SGLANG_EDF_SCHEDULING`, uncached-token deadlines, `SGLANG_EDF_PREEMPT_CHUNK=1`
       (chunk preemption / parking) and deadline-sized chunks (run_native_serving_pair_20261023.py:86-95) -- while the

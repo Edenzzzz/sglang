@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.86.0 — Single-node attribution complete (2026-10-28)
+- Cumulative on one tree, two repeats: stock 97.3 ms TPOT at 128K -> 48.0 with the four-mode step (-51%) -> 41.3
+  with the A6 kernel (-14%) -> 44.8 with EDF and preemption (+8.5% WORSE). At 32K: 22.9 -> 14.2 (-38%) -> 14.2 (0%)
+  -> 14.3 (~0%).
+- C2 (four-mode) carries the single-node result, as its 8192-token gate predicts. C1 is 0% at 32K and at most -14%
+  at 128K, and that is confounded by a +11% draft-acceptance difference (3.27 vs 2.94 tokens/verify) caused by the
+  kernel's numerics; at 32K acceptance matches and C1's TPOT effect is zero.
+- C3-worker costs 8.5% of TPOT at 128K, matching the cluster's preemption finding; it helps only under overload.
+
 ## v1.85.0 — INVALID BASELINE: upstream arms ran Qwen with rope base 1e4, not 1e6 (2026-10-28)
 - mn_node.sh's YaRN override replaces the rope_scaling dict; upstream sglang drops rope_theta with it and falls back
   to 10000, while Qwen2.5-7B needs 1e6. Our tree preserves it, so every up_clean arm served a mis-configured model.

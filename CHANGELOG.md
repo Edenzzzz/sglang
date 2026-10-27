@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.76.0 — vLLM PR 61869 reviewed; C1 leave-one-out is within noise (2026-10-27)
+- PR 61869 is post-forward sampling work (fused draft-sampling kernel, post-forward CUDA graph), not an attention
+  epilogue, and its "fused Markov loop" is a host loop over per-position kernels. Its gains (-37 us on a 4 ms step)
+  are below our noise floor at 20-40 ms steps, and its graph is gated off any step containing prefill. Two items
+  worth taking: the batched host-state-to-device copy (answers our merged-step read-back) and the self-resetting
+  arrival counter (needed for A6 graph capture, where a host plan upload cannot re-zero it).
+- Second without-C1 repeat: 1504 tok/s vs 1388 (r1), against 1501-1763 for the full stack. The ranges overlap, so
+  C1's cluster-level leave-one-out effect is within noise and the earlier 7.5-21% range is withdrawn; C1's evidence
+  stays the kernel microbenchmarks and the single-node long-context runs.
+
 ## v1.75.3 — Paper: C3's worker level is ordering + demotion; parking reported as dropped (2026-10-27)
 - Sections 1, 5.2.3 and Table 4c now state the mechanism as deadline ordering plus demotion, with preemption and
   parking described as built, measured and dropped (a quarter of agent goodput for the chat TTFT tail alone).

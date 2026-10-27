@@ -45,6 +45,38 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       for long uncached prompts or deep EDF queues.
     - [ ] A/B on the trace replay, alpha 3 and 6, with SLO-budgeted workers: `cache_slo` (four vetoes, most-slack
           fallback) vs `cache_slo_h`. This waits for the user's go-ahead and for the chunk-size results.
+  - **vLLM PR 61869 reviewed (user, 2026-10-27): orthogonal to our epilogue, two small things worth taking.**
+    - What it is: "DSpark draft on the specialized decode, with a fused Markov loop and a post-forward CUDA graph",
+      DeepSeek-V4.1-Flash only, behind `decode_backend=latency_specialized`. Open, `needs-rebase`, no approving
+      review, depends on PR 61868. Despite the name there is **no persistent sampling loop over steps**: the driver
+      is still a Python `for i in range(n_spec)` calling one fused kernel per draft position
+      (`spec_decode/dspark/fused_sample.py::_markov_sample_kernel`), which keeps the bias GEMM and folds the other
+      ~9 launches per position into one.
+    - Every mechanism sits **after the model forward** (LM head, rejection sampler, request-state update, draft input
+      prep) or inside the draft head. Nothing touches attention tiles, split-KV, the merge or PDL. It would sit
+      downstream of our two launches, not inside them.
+    - It attacks host launch overhead, the same class as our merged-step read-back regression, but the magnitude does
+      not transfer: their post-forward CUDA graph is -37 us on a 4,075 us GB300 TP4 batch-1 step (0.9%), and their
+      headline 6.4% comes from a step with ~1.5 ms of host loop. Our steps are 20-40 ms, so the same region is
+      ~0.1-0.2%, below our 2-3% noise floor -- the same Amdahl bound that killed the argmax-into-LM-head idea.
+    - Their graph is also gated off exactly our step: `_step_eligible` returns false on `input_batch.has_prefill` and
+      requires `num_scheduled_tokens == num_steps + 1` everywhere, i.e. uniform pure decode only. Our 4-mode merged
+      step would never qualify.
+    - **Worth taking (two items, both small and concrete):**
+      - `_copy_step_tensors_kernel` + `_reading_copies`: batch every per-step host-backed value into device buffers in
+        one launch and repoint readers at the copies, so no stage reads host state mid-step. This is a direct answer
+        to the merged-step host read-back that cost 6-7% on short-prompt ShareGPT, and it needs no CUDA graph.
+      - The self-resetting arrival counter (`atomic_xchg` to 0 by the finishing block). Our shipped non-persistent
+        path has **no** per-launch memset to remove (the plan stages the counter as zero and copies it), so this is a
+        no-op today -- but it is exactly what the pending "make A6 graph-capturable" item needs, since a replayed
+        graph cannot rely on a host-side plan upload to re-zero the counter. The only `cudaMemsetAsync` we have is
+        `persistent_fa3_fused.cuh:1007` (the persistent variant's cluster cursor), which that pattern would remove.
+    - **Negative lesson on persistence, from their own numbers:** the genuinely persistent, cooperative, cross-rank
+      sharded Markov kernel bought -8 to -20 us, while the plain per-position fused kernel bought -93 us -- launch
+      count beat persistence by ~5x, at far less complexity and without their spin-wait-in-a-graph hang risk. That
+      agrees with our persistent-LPT ablation (0.987-0.998x) rather than contradicting it.
+    - Nothing here changes a paper claim; at most a one-line related-work note that concurrent vLLM work attacks the
+      same host-overhead class in the sampling stage, which C1 does not claim.
   - **Closed-form chunk sizing from the fused kernel's cost law (2026-10-27, user: can we avoid SLOs-Serve's DP and
     tie this to our own contributions?).**
     - Why they need a DP and we do not: SLOs-Serve searches token allocations over `(n_1 ... n_L)` SLO-class states
@@ -217,8 +249,11 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
           comparison). Chat 61.7% ; agent 70.1% ; 1388 tok/s ; 8653 rounds issued.
           Full stack at alpha 3: 65.1% / 72.6% / 1501 / 8995 (r1) and 68.5% / 78.7% / 1763 / 9665 (r2, the traced
           arm). So removing C1 costs 3.4-6.8 points of chat attainment, 2.5-8.6 points of agent attainment and
-          7.5-21% of agent SLO goodput. The full-stack repeats differ by 17% on goodput, so the range is wide and a
-          second noC1 repeat is needed before the paper quotes a single number.
+          7.5-21% of agent SLO goodput. **Second repeat (2026-10-27): 63.4% / 73.2% / 1504 tok/s / 8,901 rounds.**
+          With noC1 at 1388-1504 and the full stack at 1501-1763, the ranges overlap, so **C1's leave-one-out effect
+          on this cluster workload is within noise** and the 7.5-21% range is withdrawn. C1's evidence is the kernel
+          microbenchmarks (1.43-1.51x sglang's FA3 call) and the single-node long-context runs (+10.7% agent
+          throughput, -24% TPOT at 128-256K), not this replay.
     - [x] **Leave-one-out, arm 2 of 4: without C2** (2026-10-27; `coloc_slo_edf_mtps_hc`, i.e. stock MTP steps
           instead of the merged 4-mode step, A6 kernel / deadline order / router unchanged). Chat 69.1% ; agent
           77.4% ; 1638 tok/s ; 9443 rounds issued.

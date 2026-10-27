@@ -284,7 +284,23 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             `cond_disagg_route`, which never applied our four-check SLO test, so it was never handicapped by the
             mechanism that cost us; the earlier comparison was unfair against us, not for us.
           Until this runs, no best-vs-best claim is restated in the paper.
-    - [ ] **C3-worker decomposition, queued** (`mn_c3worker_decomp_16g_20261027.sh`, 3 arms, same alpha-3 replay):
+    - [x] **Decomposition arm 1: EDF ordering only (`PREEMPT=0`)** (2026-10-27,
+          `mn_c3worker_decomp_16g_20261027.sh`, log `/tmp/h20/mn_c3worker_decomp_16g_r1.log`): chat 68.8% ; agent
+          81.7% ; **1912 tok/s** ; 10,017 rounds issued.
+          Placed against the others at alpha 3:
+          | arm | chat | agent | goodput | chat TTFT p50/p90 | chat TPOT p50 |
+          |---|---|---|---|---|---|
+          | full stack (ordering + preemption/parking) | 65.1-68.5% | 72.6-78.7% | 1501-1763 | 0.13-0.15 / 1.03-1.19 s | 27-30 ms |
+          | ordering only | 68.8% | 81.7% | 1912 | 0.12 / 4.10 s | 23.7 ms |
+          | FCFS | 73.9% | 83.2% | 1922 | 0.11 / 3.03 s | 21.5 ms |
+          - **Chunk preemption and parking cost essentially all of the goodput gap**: dropping them recovers
+            1501-1763 -> 1912 tok/s, level with FCFS (1922). Deadline ordering itself is nearly free on throughput.
+          - What preemption buys is the chat TTFT tail, and it is the only thing that buys it: p90 1.03-1.19 s with
+            it, 3.03-4.10 s without (FCFS and ordering-only alike). Under a 2 s TTFT SLO that tail decides roughly
+            10% of chat requests, but the TPOT it costs (27-30 vs 21.5-23.7 ms) decides more.
+          - So the mechanism is not "EDF is wrong" but "parking a long chunked prefill is too expensive here". That
+            is a sharper and more defensible statement for the paper than the wholesale arm-3 result.
+    - [ ] **C3-worker decomposition, remaining arms** (`mn_c3worker_decomp_16g_20261027.sh`, 3 arms, same alpha-3 replay):
           - `ord`: EDF ordering only (`PREEMPT=0`), isolating preemption/parking;
           - `demote`: ordering + demotion, still no preemption -- the first multi-node test of the single-node
             mechanism;

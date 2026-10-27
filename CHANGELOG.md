@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.75.1 — Decomposition arm 1: preemption/parking is the cost, not deadline ordering (2026-10-27)
+- EDF ordering with preemption and parking off: 1912 tok/s, level with FCFS (1922) and well above the full stack
+  (1501-1763). Chat attainment 68.8% vs 73.9% (FCFS).
+- Preemption/parking is the only thing that buys the chat TTFT tail (p90 1.03-1.19 s with it, 3.03-4.10 s without),
+  and it costs ~25% of goodput to do so.
+
 ## v1.75.0 — Ablation arm 4: removing C3's router wins by a wide margin (2026-10-27)
 - Plain cache-affinity routing (no SLO check) reaches chat 91.4%, agent 94.3%, 2514 tok/s against 65.1-68.5% /
   72.6-78.7% / 1501-1763 for the full stack: +23..+26 points chat, +43..+67% goodput, with every latency column

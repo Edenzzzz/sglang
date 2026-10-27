@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.69.3 — Demand shift, surge: stock PD 2 + 2 row (2026-10-27)
+- Chat 17.2 / 11.1%, agent 4.7%, 13 tok/s goodput; Table 10d and task doc.
+
 ## v1.69.2 — Abstract, intro and story carry the demand-shift and fault results (2026-10-27)
 
 ## v1.69.1 — Paper Figure 23 (demand shift over time) (2026-10-27)

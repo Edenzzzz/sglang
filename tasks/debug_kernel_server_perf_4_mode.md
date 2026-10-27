@@ -1479,6 +1479,12 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       |---|---|---|---|---|
       | 6 (overload) | 31.8 (56.8)% ; 50.0% ; 890 tok/s ; 4818 (8254) | 57.2 (67.6)% ; 51.1% ; 720 ; 3850 (9222) | chat 8.2%, chat TTFT p50 225 s; agent client aborted, rerun queued | 3.6 (3.6)% ; 1.9% ; 6 ; 1227 (10594, plus 1251 lost after failed rounds) |
       | 3 | 65.1 (81.2)% ; 72.6% ; 1501 tok/s ; 8995 (4077) | 50.9 (68.6)% ; 63.9% ; 956 ; 7264 (5808) | 9.9 (9.9)% ; 11.6% ; 49 ; 1457 (4903, plus 6712 lost after failed rounds; 3568 chat requests failed) | 2.2 (2.2)% ; 1.8% ; 7 ; 1971 (7162, plus 3939 lost) |
+    - alpha 3 + chat surge (base / surge chat):
+      - ours 57.4 / 46.2% ; 69.3% ; 1266 tok/s ; 8554;
+      - conditional 36.5 / 27.1% ; 53.8% ; 668 ; 6081;
+      - stock PD 2 + 2: 17.2 / 11.1% ; 4.7% ; 13 ; 1169 (4769 failed chat requests, 10677 agent rounds lost after
+        failed rounds);
+      - stock PD 3 + 1: running.
     - alpha 3, ours vs conditional disaggregation:
       - chat attainment +14 points (+28% relative), chat TTFT p90 1.12 vs 8.74 s;
       - agent attainment +8.7 points, agent SLO goodput +57%, rounds issued +24%, agent TTFT p90 8.2 vs 21.2 s.

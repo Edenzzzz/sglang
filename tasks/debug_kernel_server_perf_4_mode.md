@@ -126,7 +126,20 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
           - banked slack is capped at 4 steps (`bank=K`).
           Stub check: all rows late -> chunk 398 (was 16384); large banked slack -> 2530. The alpha-3 v4 arm was
           stopped and all three arms rerun as v5 (`mn_slo_chunk_v5_16g_20261027.sh`).
-    - [x] v5, alpha 6 (2026-10-27, log `/tmp/h20/mn_slo_chunk_16g_r1.log`): **TPOT is now protected, but prefill
+    - [x] **v5, alpha 3: the rule is wrong, not just mis-levered** (2026-10-27). Fixed 2048 vs v5:
+          - chat attainment 65.1% -> **12.7%**, chat TTFT p50 0.14 -> **80.7 s**;
+          - chat TPOT p50 30.0 -> **45.0 ms**, i.e. the budget made the metric it protects *worse*;
+          - agent 72.6% -> 26.1%, goodput 1501 -> 194 tok/s.
+          **Diagnosis.** At alpha 3 under fixed chunks chat TPOT p50 is already 30 ms against a 50 ms target, so
+          nothing needed throttling; the rule still cut the chunk about 7x. The SLO is a request's *mean* TPOT, but
+          the rule enforces a *per-step* bound as if every step were merged. Merged steps are only 12% of steps
+          (10,185 of 87,932), so "every step within one allowance" is far stricter than "mean within target". The
+          banking term existed to amortise that, and v5's `bank=4` cap destroyed it; v4 left banking uncapped but
+          mispriced tokens per step and dropped the bound for late rows. Both directions therefore failed.
+          The surge arm was stopped; `apply_slo_budget_chunk_20261026.py` is retired in favour of sglang's own
+          `edf_compute_max_chunk_size`, which binds on the slow tail only (`ITL_QUANTILE`), measures slack against
+          the previous step, and falls back to a pure-decode step when decode alone exceeds the slack.
+    - [x] v5, alpha 6 (2026-10-27, log `/tmp/h20/mn_slo_chunk_16g_v5_a6.log`): **TPOT is protected, but prefill
           starves.**
           - Chat TPOT p50 / p90: 47 / 64 ms (fixed 2048: 72 / 214); agent TPOT p50 54 ms (71).
           - Chat TTFT p50: 74 s (0.40 s); agent TTFT p50: 55 s (1.1 s).

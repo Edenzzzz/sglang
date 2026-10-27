@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.73.1 — The ad-hoc chunk rule is retired (2026-10-27)
+- v5 at alpha 3 made every metric worse than fixed 2048, including chat TPOT (45.0 vs 30.0 ms p50), with TTFT p50
+  80.7 s. At that load fixed chunks already met the 50 ms target, so no throttling was warranted.
+- Cause: the rule bounds every step by one TPOT allowance, while the SLO is a request's mean TPOT and only 12% of
+  steps carry a prefill chunk. v5's banking cap removed the amortisation; v4 removed the bound instead.
+- `apply_slo_budget_chunk_20261026.py` is retired in favour of sglang's `edf_compute_max_chunk_size` (slow-tail
+  quantile, slack against the previous step, pure-decode fallback) driven by the analytic model.
+
 ## v1.73.0 — Use the existing SLO chunk solver; H20 constants for the analytic model (2026-10-27)
 - Inventory: `edf_compute_max_chunk_size()` already binary-searches the largest chunk that fits the tightest row's
   slack, behind `SGLANG_EDF_LATENCY_MODEL`, which our runs left empty (hence the fixed 2048 chunk). Predictors:

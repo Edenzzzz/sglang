@@ -982,6 +982,30 @@ rate, over context mixtures from 32K to a few hundred K (32-64K, 128-256K), in t
 sets (ShareGPT, math, coding, agentic web browsing) at load around capacity. SLOs are those of section 6.1. Every
 result carries per-request spread and per-repeat values.
 
+**Result: the full single-node stack against stock sglang (2026-10-28, four H200 trial).** Qwen2.5-7B on one H200,
+agent concurrency 8 with chat at 8 requests per second, two repeats per arm in opposite order, with the fused path
+confirmed active by its composition counter (1144 at 32K, 2478 at 128K).
+
+| arm (mean of two repeats) | mean TPOT (ms) | mean ITL (ms) | worst-decile TPOT (ms) | agent tokens/s |
+|---|---:|---:|---:|---:|
+| **32K stage** | | | | |
+| ours: four-mode step, unified kernel, deadline scheduler | **14.3** | **15.0** | **32.4** | 137.5 |
+| stock sglang: stock MTP, single FA3 call, FCFS | 22.9 | 20.6 | 75.9 | 138.5 |
+| **128K stage** | | | | |
+| ours | **44.8** | **34.4** | **95.7** | **54.4** |
+| stock sglang | 97.3 | 61.0 | 231.4 | 48.8 |
+
+At 32K this is 38% lower mean TPOT, 27% lower ITL and 57% lower worst-decile tail at equal throughput; at 128K it is
+54% lower TPOT, 44% lower ITL, 59% lower tail and 11% higher throughput. The 128K point clears both bars at once, and
+the margin grows with context, which is the regime the agentic workload occupies.
+
+Removing the pieces one at a time on the same node separates them. With both arms running the four-mode step and
+neither running the deadline scheduler, the kernel alone leaves mean TPOT unchanged and raises throughput by 6.9%;
+with no speculation at all it is 6.7% of TPOT at 32K and 2.8% at 128K. The four-mode step, with the kernel held at
+the stock FA3 call, accounts for the large share: mean TPOT falls from 22.9 to 14.2 ms at 32K. This is the opposite
+of what the same removal shows on the cluster, and section 6.4 explains why: the four-mode step only engages once a
+step carries at least 8192 uncached tokens, and cluster rounds carry about 1085.
+
 **Result: the kernel alone, same schedule.** On Qwen2.5-7B at 128-256K, with agent concurrency 4 and chat at 4 req/s,
 the fused kernel raises four-mode agent throughput by 10.7% and cuts agent TPOT by 24.2% and ITL by 20.8%; two-mode
 gains are +11.6%, -20.1% and -16.7%. Against a role split that runs FA3 for both roles, throughput is equal but agent

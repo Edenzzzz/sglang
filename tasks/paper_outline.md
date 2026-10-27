@@ -164,8 +164,9 @@ admitting it.
   - *Per worker: deadline scheduling of the colocated step.* Each prefill's deadline comes from its uncached tokens,
     read by a prefix match at enqueue, so a cached agent round gets a chat-like deadline. Prefills run in deadline
     order, and a prefill that has already missed its deadline is demoted behind those that can still meet theirs. A
-    long chunked prefill is parked, with its computed prefix kept in the cache, when a short request with an earlier
-    deadline arrives, and each chunk leaves budget for waiting requests due before it.
+    Ordering and demotion are the whole mechanism: we also built preemption of an in-progress chunked prefill
+    (parking it with its computed prefix kept in the cache) and reservation of chunk budget for earlier deadlines,
+    measured both, and dropped them (sections 5.2.3 and 7).
   - *Per cluster: an SLO-checked router over symmetric nodes.* For each request and node, from state the router keeps
     itself, it predicts:
     - TTFT: the deadline-ordered work queued ahead of the request, the cost of its uncached tokens on top of the
@@ -701,13 +702,16 @@ mixed loads. The comparison is [pending]:
 - arms: fixed 2048 (the current configuration), fixed 8192 and 16384, and the rule at h = 0, 10% and 20%;
 - loads: prefill-heavy agent loads, the mixed loads of Table 7b, decode-heavy loads, and ShareGPT.
 
-**Preemption.** When a request with an earlier deadline arrives, the chunked prefill in progress yields at its next
-chunk boundary and resumes in deadline order. This is part of C3. Preemption on vs off is [pending].
+**Preemption and parking: measured and dropped.** We built preemption of the in-progress chunked prefill (it yields
+at its next chunk boundary and is parked with its computed prefix kept in the radix cache) and reservation of chunk
+budget for requests due earlier. On the cluster trace replay they cost about a quarter of agent SLO goodput
+(1501-1763 tok/s with them, 1912 without) and 5-9 points of chat attainment, and what they buy is only the chat TTFT
+tail (p90 1.03-1.19 s with them, 2.92-4.10 s without). Under a 2 s TTFT and 50 ms TPOT SLO that trade loses, so the
+final configuration runs deadline order and demotion alone (section 7).
 
 Figure 11: per-tenant TTFT / TPOT attainment, agent throughput and the distribution of chosen chunk sizes, for fixed
 2048 / 8192 / 16384-token chunks and the SLO-budgeted chunk at h = 0 / 10 / 20%, on prefill-heavy, mixed and
-decode-heavy loads, with and without preemption; predicted vs measured step time per chunk size; one node, three
-models [pending].
+decode-heavy loads; predicted vs measured step time per chunk size; one node, three models [pending].
 
 ### 5.3 SLO-aware scheduling
 
@@ -728,7 +732,8 @@ deadline, the last two let a short urgent request get past a long prefill alread
 3. *Parking a long chunked prefill.* sglang continues a chunked prefill with each step's whole budget. The policy
    instead parks it when a waiting request is due earlier, is short, and has less than half the parked prefill's
    remaining work. The parked request's computed prefix stays in the radix cache, so it loses no work and resumes in
-   deadline order.
+   deadline order. Measured on the cluster replay this costs about a quarter of agent SLO goodput, so the final
+   configuration does not park (section 7).
 4. *Reserving budget for earlier deadlines.* When a chunk continues, it leaves room in the step's token budget for
    waiting requests that are due before it.
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.72.6 — Chunk-budget audit against recorded steps (2026-10-27)
+- `perf_model/chunk_budget_audit.py`: on 87,932 alpha-3 steps, decode-only steps (8-52 ms) never exceed the chat
+  per-step allowance (100 ms), while a 2048-token chunk costs 446 ms, 4.5 allowances, on 98.1% of merged steps. The
+  ~300-token chunk the rule picks is what the allowance buys, and it is what cut chat TPOT p50 from 72 to 47 ms.
+- So the rule computes the right number; its prefill rate is 35% lower, which is ruinous only because alpha 6 is
+  3.5-5x past prefill capacity. At overload the correct lever is request-level admission (EDF + demotion), not a
+  per-step cap.
+
 ## v1.72.5 — Budgeted chunk: TTFT floor option (2026-10-27)
 - `apply_slo_budget_chunk_20261026.py` adds `:ttft`: the earliest-deadline prefill that can still meet its deadline
   gets at least the chunk that finishes its remaining tokens by then. A late, or impossible, prefill gets none.

@@ -104,8 +104,25 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
           - Attainment: chat 7.9% (31.8%), agent 15.0% (50.0%); agent goodput 107 tok/s (890).
           - Far past capacity, a TPOT-only budget leaves too little prefill and the backlog grows without bound. This
             matches the earlier finding that every per-step chunk cap loses.
-          - Next: a TTFT floor. The chunk is the max of the TPOT budget and the tokens per step the earliest-deadline
-            prefill still able to meet its deadline needs; late prefills get no floor, mirroring demotion.
+    - [x] **Audit of the rule against recorded steps** (2026-10-27, `perf_model/chunk_budget_audit.py` on the four
+          alpha-3 worker traces, 87,932 steps; user asked whether the implementation is wrong):
+          - Decode-only steps cost 8-52 ms (p50 27.7, p90 44.9) and **never** exceed the chat allowance
+            (50 ms x acceptance 2.0 = 100 ms per step). So the rule's floor is never the binding term: there is
+            48-92 ms of room for a chunk at 1-28 rows.
+          - A 2048-token chunk makes the step 446 ms (p90 742): **4.5 chat allowances**, and 98.1% of merged steps
+            exceed the allowance. Every resident row waits 4.5x its own SLO budget for one such step. This is the
+            mechanism behind chat TPOT p50 72 ms / p90 214 ms under fixed chunks.
+          - The chunk the allowance actually buys is 60 ms / (0.099 + 2.908 x 32768 / 1e6) ms per token ~ 300 tokens,
+            which is what the rule chose (logged 235-297) and what cut chat TPOT p50 to 47 ms.
+          - **The arithmetic is right; the lever is wrong under overload.** Per worker, fixed chunks prefill at
+            2048 / 446 ms ~ 4.6K tok/s and the budget at ~300 / 100 ms ~ 3.0K tok/s (-35%). At alpha 6 the replay
+            offers ~260K uncached tok/s against 16 x 4.6K = 73K, so the cluster is 3.5-5x past prefill capacity
+            either way and a 35% cut turns a deep queue into a much deeper one (TTFT p50 0.4 -> 74 s).
+          - At overload the right lever is request-level admission (serve fewer sessions fully), which EDF plus
+            demotion already does; a per-step chunk cap keeps every request in the system and misses TTFT for all of
+            them. This is the same conclusion as "EDF: order, don't cap".
+          - The informative point is therefore alpha 3, where the cluster is near capacity (running), and the TTFT
+            floor (v6), which makes the rule serve both SLOs instead of TPOT alone.
         - [ ] The chunk budget still uses lin4mode on GPU time (25%). The patch takes only a linear model; a nonlinear
               model in the patch (or a per-step lookup) is the next step if the chunk arms show mispricing.
       Earlier 4-mode STEPTRACE fits (the 2.0% MAPE in the paper's Table 3 came from an H200 log) must be checked for

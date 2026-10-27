@@ -66,6 +66,18 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       - `pd_colocation/apply_steptrace_verify_rows_20261027.py` now takes the running rows' KV from their requests. It
         is applied to both trees on all pods (v1 reverted), and the run continues as
         `mn_slo_chunk_v3_16g_20261027.sh`.
+      - Fixed tracer, verified: about 2,500 merged steps per worker are logged as mixed (nd > 0).
+      - Fit (2026-10-27, `fit_4mode_step.py --target gap --export-lin4mode`, pod 0's 4 workers, trace
+        `coloc_slo_edf_mtp_hc_tl2_a3_steptrace3_r1`; log `/tmp/h20/mn_slo_chunk_16g_v3_fit.log`):
+        - The gap target (launch to launch, including host waits under the overlap scheduler) is not fittable by
+          lin4mode. Held-out decode 43-59%, prefill 46-52%, mixed 18-24% MAPE. Its coefficients are unphysical
+          (c_tok = -0.0005 ms/token, c_mixed = 53 ms).
+        - The GPU-time target fits better: 25% in-sample MAPE, and physically sensible coefficients (decode-only
+          step 21.7 ms at 8 rows x 30K KV; a 2048-token chunk on a 32K prefix 435 ms).
+        - The alpha-6 arm on the gap model was stopped. The arms rerun on the GPU-only model
+          (`tasks/perf_model/step_qwen_h20_a6_gpu_20261027.json`) as `mn_slo_chunk_v4_16g_20261027.sh`.
+        - Open: an MLP / acceptance-aware fit on the corrected traces, for the paper's step-model claim (H200 Table 3
+          used an MLP at 2%), and so the chunk budget can price steps better than 25%.
       Earlier 4-mode STEPTRACE fits (the 2.0% MAPE in the paper's Table 3 came from an H200 log) must be checked for
       the same misclassification before the paper quotes them.
     - 2026-10-27, also on 16 H20s (queued, `pd_colocation/mn_slo_chunk_16g_20261027.sh`, log

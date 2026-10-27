@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.72.1 — Chunk test on a GPU-time step model (2026-10-27)
+- The corrected trace fits poorly on the gap target (lin4mode 45% MAPE, unphysical coefficients). The GPU-time fit is
+  sensible (25% in-sample). The alpha-6 arm on the gap model was stopped; the budgeted-chunk arms rerun on the
+  GPU-only model (driver v4, `tasks/perf_model/step_qwen_h20_a6_gpu_20261027.json`).
+
 ## v1.72.0 — Router policy cache_slo_h: placement, with SLO enforcement left to the worker (2026-10-27)
 - `pd_colocation/router.py --policy cache_slo_h --budget-chunk <model>:<h>:<chat_ms>:<agent_ms>:<agent_tokens>:<chunk_max>`.
   - TTFT is priced under the worker's SLO-budgeted chunk, simulated with the same step model.

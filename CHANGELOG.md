@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.71.3 — Demand shift: stock PD 2 + 2 at alpha 6 rerun (2026-10-27)
+- Chat 6.2%, agent 4.9%, 23 tok/s, 1096 rounds issued. Table 10d is complete.
+
 ## v1.71.2 — Paper: C3 is SLO control without disaggregation (user, 2026-10-27)
 - C3 now covers both levels of SLO control:
   - per-worker deadline scheduling;

@@ -1481,7 +1481,7 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       agent rounds issued (not issued):
       | alpha | ours | conditional disagg | stock PD 2 + 2 | stock PD 3 + 1 |
       |---|---|---|---|---|
-      | 6 (overload) | 31.8 (56.8)% ; 50.0% ; 890 tok/s ; 4818 (8254) | 57.2 (67.6)% ; 51.1% ; 720 ; 3850 (9222) | chat 8.2%, chat TTFT p50 225 s; agent client aborted, rerun queued | 3.6 (3.6)% ; 1.9% ; 6 ; 1227 (10594, plus 1251 lost after failed rounds) |
+      | 6 (overload) | 31.8 (56.8)% ; 50.0% ; 890 tok/s ; 4818 (8254) | 57.2 (67.6)% ; 51.1% ; 720 ; 3850 (9222) | rerun `_r1b`: 6.2 (6.2)% ; 4.9% ; 23 ; 1096 (11757, plus 219 lost); the first run's agent client aborted (chat 8.2%) | 3.6 (3.6)% ; 1.9% ; 6 ; 1227 (10594, plus 1251 lost after failed rounds) |
       | 3 | 65.1 (81.2)% ; 72.6% ; 1501 tok/s ; 8995 (4077) | 50.9 (68.6)% ; 63.9% ; 956 ; 7264 (5808) | 9.9 (9.9)% ; 11.6% ; 49 ; 1457 (4903, plus 6712 lost after failed rounds; 3568 chat requests failed) | 2.2 (2.2)% ; 1.8% ; 7 ; 1971 (7162, plus 3939 lost) |
     - alpha 3 + chat surge (base / surge chat):
       - ours 57.4 / 46.2% ; 69.3% ; 1266 tok/s ; 8554;

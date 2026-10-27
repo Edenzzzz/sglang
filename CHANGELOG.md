@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.72.0 — Router policy cache_slo_h: placement, with SLO enforcement left to the worker (2026-10-27)
+- `pd_colocation/router.py --policy cache_slo_h --budget-chunk <model>:<h>:<chat_ms>:<agent_ms>:<agent_tokens>:<chunk_max>`.
+  - TTFT is priced under the worker's SLO-budgeted chunk, simulated with the same step model.
+  - Nodes rank by feasibility, then cache hit, then added lateness to later-deadline queued requests, then load.
+  - With no feasible node: least total lateness. No resident or own-TPOT veto; the router never holds a request.
+- `build_parser()` factored out. `test_router_slo_h.py`: 7 / 7 pass.
+
 ## v1.71.6 — STEPTRACE fix, second attempt (2026-10-27)
 - The merge happens inside the worker after `_steptrace_begin`. The tracer's own `mixed_spec_running` block skipped
   the running rows when there was no host `seq_lens_cpu`; their KV now comes from the requests. The ineffective v1 fix

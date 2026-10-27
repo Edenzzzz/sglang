@@ -23,6 +23,28 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
   - Llama / GLM TP4 rank-0 captures are replayed from the H20 copies.
   - Arms on the same captures: sglang's single FA3 call, naive FA3 + FA2 (serial / streams), v3, A6.
 - **To test alongside the naive FA3 + FA2 baseline (user, 2026-10-26), on the H200:**
+  - [ ] **Router / local-scheduler split (user, 2026-10-27): router `cache_slo_h` policy.**
+    - Problem: the measured router (`cache_slo`) applies four hard vetoes joined by AND: own TTFT, own TPOT,
+      later-deadline queued requests, resident TPOT. It overlaps with the worker. A resident-TPOT veto priced from
+      coarse router bookkeeping mostly moves requests off their cached prefix: earlier it bought -32% chat ITL for +26%
+      agent TTFT.
+    - Design: the worker enforces resident SLOs with the SLO-budgeted chunk; the router places.
+      1. TTFT priced under the worker's own budget rule, by simulating its chunk choice with the workers' step model
+         (`--budget-chunk`);
+      2. cache hit;
+      3. lateness added to later-deadline queued requests (ranking, not a veto);
+      4. load.
+    - No feasible node: least total lateness, cache breaking ties. The router never holds a request, since the worker's
+      EDF queue and demotion already do.
+    - Implemented: `pd_colocation/router.py` (`--policy cache_slo_h`, `build_parser()` factored out for tests).
+    - Unit checks: `test_router_slo_h.py`, 7 / 7 pass; `test_router_cond_disagg.py` passes.
+      `test_router_dead_worker.py` and `test_router_loaded_prefill.py` fail identically on the pre-change router (stale
+      tests).
+    - Finding from the simulation: under the worker's budget rule a cache holder is rarely too slow. Rows at their
+      target keep earning about s x a of budget per step, and rows past it are demoted, so moving a request pays mainly
+      for long uncached prompts or deep EDF queues.
+    - [ ] A/B on the trace replay, alpha 3 and 6, with SLO-budgeted workers: `cache_slo` (four vetoes, most-slack
+          fallback) vs `cache_slo_h`. This waits for the user's go-ahead and for the chunk-size results.
   - [ ] **SLO-budgeted prefill chunk size from the EDF step model.**
     - Code (2026-10-26, unit-checked on a stub scheduler, not yet served):
       - `unified/apply_slo_budget_chunk_20261026.py`, enabled by

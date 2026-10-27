@@ -7,6 +7,12 @@ Policies, each one switchable so its contribution can be measured on its own:
   cache       highest prefix-hit worker (cache-affinity-only baseline)
   cache_rand  highest hit, but uniform among workers within --rand-thresh of the best hit
               (spreads KV pulls over replicas instead of hammering one holder; point 4)
+  cache_slo_h prioritized placement for workers that run the SLO-budgeted chunk (apply_slo_budget_chunk):
+              the worker protects its decoding requests step by step, so the router does not veto on them. It
+              predicts the request's TTFT under that worker's own chunk budget (simulated with the workers' step
+              model, --budget-chunk) and ranks nodes: (1) TTFT within the deadline, (2) cache hit, (3) lateness the
+              request adds to later-deadline requests queued there, (4) load. With no feasible node it takes the
+              least total lateness (its own plus added), cache hit breaking ties; it never holds a request.
   cache_slo   cache_rand + EDF/SLO check: walk candidates by hit length and take the first
               whose predicted TTFT/TPOT keeps this request AND the tighter-deadline requests
               already queued there within SLO; else the least-bad worker (point 1)
@@ -210,6 +216,15 @@ class Router:
         if a.step_model:
             self.pm.step = json.load(open(a.step_model))["coef"]
             print(f"step model: {self.pm.step}", flush=True)
+        self.budget = None
+        if a.budget_chunk:
+            fields = a.budget_chunk.split(":")
+            model = json.load(open(fields[0]))
+            target = "gap" if "gap" in model else "gpu"
+            self.budget = dict(coef=model[target]["coef"], S=float(model["S"]), T=float(model["T"]), h=float(fields[1]),
+                               chat_ms=float(fields[2]), agent_ms=float(fields[3]), agent_tokens=int(fields[4]),
+                               chunk_max=int(fields[5]))
+            print(f"budget chunk model: {fields[0]} ({target}) {self.budget}", flush=True)
         self.pool = Worker("pool", a.pool_kv_tokens, BLOCK_TOK) if a.pool_kv_tokens > 0 else None
         self.pull_bps = a.pull_gbps * 1e9  # bytes/s, raised by observed complete pulls
         self.pull_realized = 1.0  # EWMA of pulled / predicted tokens (see observe_pull)
@@ -417,6 +432,97 @@ class Router:
             return False, ttft, tpot
         return True, ttft, tpot
 
+    def budget_prefill_ms(self, w, uncached, ctx, now):
+        """Prefill time of `uncached` tokens on top of a (ctx - uncached)-token prefix on w, when w runs the
+        SLO-budgeted chunk: each step's chunk is the largest whose step-model time keeps every decoding row within
+        its mean-TPOT slack, (1 - h) x min_r [s_r x (o_r + a) - E_r], rows already past their SLO demoted. The
+        router's own bookkeeping supplies the rows (emitted tokens, decode time so far, remaining tokens); each
+        simulated step advances them by `a` tokens (the node's acceptance EWMA, 1 without speculation)."""
+        b = self.budget
+        c0, c_tok, c_attn, c_bs, c_kv, c_np, c_mixed, c_draft, c_ver, c_vkv = b["coef"]
+        a_tok = w.accept if w.accept else 1.0
+        rows = []
+        for r in w.inflight.values():
+            if r.get("t_first") is None or r["decode_left"] <= 0:
+                continue
+            s_r = b["agent_ms"] if r.get("kv", 0) >= b["agent_tokens"] else b["chat_ms"]
+            rows.append([s_r, float(r["decode_total"] - r["decode_left"]), (now - r["t_first"]) * 1000.0,
+                         float(r["decode_left"]), float(r.get("kv", 0))])
+        left, pf, t = float(uncached), float(max(0, ctx - uncached)), 0.0
+        for _ in range(self.a.slo_chunk_max_steps):
+            if left <= 0:
+                return t
+            live = [x for x in rows if x[3] > 0]
+            nd = len(live)
+            dkv = sum(x[4] + x[1] for x in live)
+            fixed_decode = (c0 + c_bs * nd + c_kv * dkv / 1e3 + c_draft * nd * b["S"] + c_ver * nd * b["T"]
+                            + c_vkv * dkv * b["T"] / 1e3)
+            budget = float("inf")
+            for s_r, o, e, _, _ in live:
+                if e > s_r * max(o, 1.0):  # already past its SLO: demoted, as on the worker
+                    continue
+                budget = min(budget, s_r * (o + a_tok) - e)
+            if budget == float("inf"):
+                c = min(float(b["chunk_max"]), left)
+            else:
+                room = (1.0 - b["h"]) * budget - fixed_decode - c_np - (c_mixed if nd else 0.0)
+                qa, qb = c_attn / 2e6, c_tok + c_attn * pf / 1e6
+                if room <= 0:
+                    c = 0.0
+                elif qa <= 0:
+                    c = room / qb if qb > 0 else float(b["chunk_max"])
+                else:
+                    c = (-qb + (qb * qb + 4 * qa * room) ** 0.5) / (2 * qa)
+                c = min(c, float(b["chunk_max"]), left)
+                if c < 1.0:
+                    c = 0.0
+            if c > 0:
+                step = fixed_decode + c_np + (c_mixed if nd else 0.0) + c_tok * c + c_attn * (c * pf + c * c / 2) / 1e6
+                left -= c
+                pf += c
+            else:
+                step = fixed_decode
+            t += step
+            for x in live:
+                x[1] += a_tok
+                x[2] += step
+                x[3] -= a_tok
+        return float("inf")
+
+    def added_lateness_s(self, w, deadline, own_prefill_ms, now):
+        """Total lateness (s) that running a request with this deadline and prefill time first adds to the
+        later-deadline requests still waiting for prefill on w: EDF serves the new request ahead of them."""
+        added = 0.0
+        for r in w.inflight.values():
+            if r["deadline"] > deadline and r["decode_left"] == r["decode_total"]:
+                start = now + self.drain_ms(w, r["deadline"]) / 1000.0
+                added += max(0.0, start + own_prefill_ms / 1000.0 - r["deadline"]) - max(0.0, start - r["deadline"])
+        return added
+
+    def choose_h(self, hashes, blk, n_tok, deadline, now, alive, hits, pool_hit):
+        cands = []
+        for i in alive:
+            w = self.workers[i]
+            uncached = max(0, n_tok - hits[i] * blk)
+            missing = max(0, pool_hit - hits[i]) * blk if self.pool else 0
+            wait_ms = self.drain_ms(w, deadline)
+            got, wait_s = self.pulled(wait_ms / 1000.0, missing)
+            own_ms = self.budget_prefill_ms(w, max(0, uncached - got), n_tok, now)
+            ttft = wait_s * 1000.0 + own_ms
+            feasible = now + ttft * self.ttft_margin(n_tok) / 1000.0 <= deadline
+            added = self.added_lateness_s(w, deadline, own_ms, now)
+            own_late = max(0.0, now + ttft / 1000.0 - deadline)
+            cands.append(dict(i=i, feasible=feasible, bucket=hits[i] // max(1, self.a.rand_thresh), added=added,
+                              lateness=own_late + added, load=len(w.inflight), ttft=ttft, pull=got, hit=hits[i]))
+        feasible = [c for c in cands if c["feasible"]]
+        if feasible:
+            best = min(feasible, key=lambda c: (-c["bucket"], c["added"], c["load"], random.random()))
+        else:
+            best = min(cands, key=lambda c: (c["lateness"], -c["bucket"], c["load"], random.random()))
+        return best["i"], {"hit": best["hit"] * blk, "ttft_pred": best["ttft"], "pull_pred": best["pull"],
+                           "pull_raw": self.last_pull_raw, "pool_hit": pool_hit * blk, "added_lateness_s": best["added"],
+                           "feasible_nodes": len(feasible), "least_bad": not feasible}
+
     def choose(self, hashes, blk, n_tok, deadline):
         pol = self.a.policy
         now = time.time()
@@ -427,6 +533,8 @@ class Router:
         hits = [w.hit(hashes) if not w.dead else -1 for w in self.workers]
         best = max(hits)
         pool_hit = max(best, self.pool.hit(hashes)) if self.pool else 0
+        if pol == "cache_slo_h":
+            return self.choose_h(hashes, blk, n_tok, deadline, now, alive, hits, pool_hit)
         if pol == "cache":
             # Ties on load are broken at random. A bare min() returned the lowest-index worker
             # whenever loads tied, and every session's first turn (and every chat request) ties at
@@ -796,11 +904,12 @@ def subscribe_loads(router, endpoints):
                 dms=float(v[LS_DECODE_STEP_MS]) if len(v) > LS_DECODE_STEP_MS else 0.0)
 
 
-def main():
+def build_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", nargs="+", required=True)
     ap.add_argument("--port", type=int, default=31000)
-    ap.add_argument("--policy", choices=["rr", "cache", "cache_rand", "cache_slo", "cache_slo_rand", "cond_disagg"],
+    ap.add_argument("--policy", choices=["rr", "cache", "cache_rand", "cache_slo", "cache_slo_rand", "cache_slo_h",
+                                         "cond_disagg"],
                     default="cache_slo")
     ap.add_argument("--cond-disagg-prefill-workers", type=int, default=0,
                     help="cond_disagg: workers [0, N) are prefill workers, the rest decode workers")
@@ -870,7 +979,16 @@ def main():
                     default="write_through_selective", help="must match the workers' --hicache-write-policy")
     ap.add_argument("--prefetch-timeout-base", type=float, default=1.0)
     ap.add_argument("--prefetch-timeout-per-ktok", type=float, default=0.25)
-    a = ap.parse_args()
+    ap.add_argument("--budget-chunk", default="",
+                    help="cache_slo_h: '<lin4mode model.json>:<h>:<chat_ms>:<agent_ms>:<agent_tokens>:<chunk_max>', the "
+                         "workers' SGLANG_SLO_CHUNK settings plus their --chunked-prefill-size")
+    return ap
+
+
+def main():
+    a = build_parser().parse_args()
+    if a.policy == "cache_slo_h" and not a.budget_chunk:
+        raise SystemExit("cache_slo_h needs --budget-chunk")
     r = Router(a)
     if a.load_endpoints:
         assert len(a.load_endpoints) == len(a.workers), (len(a.load_endpoints), len(a.workers))

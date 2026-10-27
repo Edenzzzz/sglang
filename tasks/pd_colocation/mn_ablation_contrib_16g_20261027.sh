@@ -6,10 +6,10 @@
 #       schedule, same deadline order, same router
 #   -C2 four-mode step (verify rows in the prefill chunk's forward): the _mtps suffix -> stock MTP steps (upstream's
 #       spec-aware MIXED step for decode tails), A6 kernel, deadline order, router unchanged
-#   -C3 per-worker deadline order (uncached-token deadlines, chunk parking, budget reservation): no _edf suffix ->
-#       sglang's FCFS admission on every worker
-#   -C4 SLO-checked routing: router policy `cache` (highest prefix hit, load tie-break, no TTFT / TPOT check, no pull
-#       pricing); the Mooncake pool stays on in every arm, since it is sglang's, not ours
+#   -C3 worker level (uncached-token deadlines, chunk parking, budget reservation): no _edf suffix -> sglang's FCFS
+#       admission on every worker
+#   -C3 router level (SLO-checked routing): router policy `cache` (highest prefix hit, load tie-break, no TTFT / TPOT
+#       check, no pull pricing); the Mooncake pool stays on in every arm, since it is sglang's, not ours
 # Same workload, horizon, chat stream and scorer as v2. Claude.
 set -u
 export PATH=$HOME/.merlin-cli/bin:$PATH
@@ -33,8 +33,8 @@ KERNEL=lpt EDF=1 RUN_TAG=${T}_noC1 ROUTER_ARGS="$ROUTER_ARGS_ALL" python3 -u mn_
 score coloc_slo_edf_mtp_hc${T}_noC1
 KERNEL=a6 EDF=1 RUN_TAG=${T}_noC2 ROUTER_ARGS="$ROUTER_ARGS_ALL" python3 -u mn_run.py coloc_slo_edf_mtps_hc
 score coloc_slo_edf_mtps_hc${T}_noC2
-KERNEL=a6 RUN_TAG=${T}_noC3 ROUTER_ARGS="$ROUTER_ARGS_ALL" python3 -u mn_run.py coloc_slo_mtp_hc
-score coloc_slo_mtp_hc${T}_noC3
-KERNEL=a6 EDF=1 RUN_TAG=${T}_noC4 ROUTER_ARGS="$ROUTER_ARGS_ALL" python3 -u mn_run.py coloc_cache_edf_mtp_hc
-score coloc_cache_edf_mtp_hc${T}_noC4
+KERNEL=a6 RUN_TAG=${T}_noC3worker ROUTER_ARGS="$ROUTER_ARGS_ALL" python3 -u mn_run.py coloc_slo_mtp_hc
+score coloc_slo_mtp_hc${T}_noC3worker
+KERNEL=a6 EDF=1 RUN_TAG=${T}_noC3router ROUTER_ARGS="$ROUTER_ARGS_ALL" python3 -u mn_run.py coloc_cache_edf_mtp_hc
+score coloc_cache_edf_mtp_hc${T}_noC3router
 echo MN_ABLATION_CONTRIB_DONE

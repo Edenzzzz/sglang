@@ -65,7 +65,7 @@
       [pending: Llama-3.3-70B and GLM-4.5-Air on H200s]
     - figures: per-tenant SLO attainment vs request rate; throughput vs tok/s/user Pareto with p10-p90 bars; TTFT / ITL
       distributions per tenant [pending: rate sweeps]
-  - stage 3, multi node with SLO control (C1-C3 at cluster scale, with the SLO-checked router; sections 5.2-5.4, 6.4, 6.5)
+  - stage 3, multi node with SLO control (C3's router on C1-C3 workers; sections 5.2-5.4, 6.4, 6.5)
     - claim: symmetric colocated nodes with SLO-checked cache-first routing, sglang's Mooncake KV pool and the stage-2 workers
       carry more load at SLO than PD disaggregation at its best P:D ratio, and than conditional disaggregation
     - bar: >= 30% on TTFT / ITL attainment and >= 10% throughput (SLO goodput) vs the best baseline
@@ -101,10 +101,10 @@ split-KV partial results in the same plan, so the partials are reduced inside th
 merge kernels. The second fuses speculative decoding into colocation: because every row gets a tile of its own size,
 a prefill chunk and the speculative (MTP / EAGLE) verify rows of the running requests run in one forward, the
 four-mode step. Prior colocation systems, POD-Attention and PD multiplexing among them, do not support speculative
-decoding, which frontier models are served with. The third schedules these steps in per-tenant deadline order; a
-prefill whose deadline has already passed is demoted behind every prefill that can still meet its deadline. Across
-a cluster, nodes stay symmetric: a router predicts each request's TTFT and TPOT on every node and sends it to the
-node with the most cached prefix that can still meet its SLOs.
+decoding, which frontier models are served with. The third is SLO control without disaggregation, which replaces the
+phase isolation disaggregation buys with fixed roles. Each worker orders prefills by deadline and demotes those that
+have already missed. Across symmetric nodes, a router predicts each request's TTFT and TPOT on every node and sends it
+to the node with the most cached prefix that can still meet its SLOs and those of the requests already there.
 
 On 96 mixed steps sampled from Qwen2.5-7B serving traces and replayed on an H200, mixed-step attention is 1.43-1.51x
 faster than sglang's single FA3 call, with FP32-exact output, and [pending] faster than stock FA3 and stock FA2 run
@@ -158,21 +158,24 @@ admitting it.
   decoding: POD-Attention overlaps a prefill chunk with one-token decode rows inside an FA2 kernel, and PD multiplexing
   (MuxWise, sglang's pdmux) runs the prefill split across iterations without the draft model's state. Frontier models
   are served with speculative decoding, so this is what makes a colocated schedule practical for them.
-- C3, per-worker deadline scheduling for the colocated step. Each prefill's deadline comes from its uncached tokens,
-  read by a prefix match at enqueue, so a cached agent round gets a chat-like deadline. Prefills run in deadline order,
-  and a prefill that has already missed its deadline is demoted behind those that can still meet theirs. A long
-  chunked prefill is parked, with its computed prefix kept in the cache, when a short request with an earlier
-  deadline arrives, and each chunk leaves budget for waiting requests due before it.
-*Supporting mechanism: an SLO-checked router for symmetric colocated nodes.* It is not a headline contribution: on
-its own its measured gain is moderate (section 7), and the cluster-level gains come mainly from colocation, which
-C1-C3 make practical. For each request and node, from state the router keeps
-  itself, it predicts:
-  - TTFT: the deadline-ordered work queued ahead of the request, the cost of its uncached tokens on top of the cached
-    prefix (a calibrated prefill curve), minus the prefix pages the node can pull from the cluster pool while the
-    request waits;
-  - TPOT: the rows that will decode beside the request.
-  It sends the request to the highest-hit node that passes four checks: the request's own TTFT and TPOT, the
-  deadlines of requests queued behind it, and the TPOT of requests already decoding there (section 5.2.1).
+- C3, SLO control without disaggregation. Disaggregation meets TPOT by isolating decode on its own nodes; colocation
+  must instead keep each tenant within its SLOs by deciding where and when every prefill runs. C3 does this at two
+  levels.
+  - *Per worker: deadline scheduling of the colocated step.* Each prefill's deadline comes from its uncached tokens,
+    read by a prefix match at enqueue, so a cached agent round gets a chat-like deadline. Prefills run in deadline
+    order, and a prefill that has already missed its deadline is demoted behind those that can still meet theirs. A
+    long chunked prefill is parked, with its computed prefix kept in the cache, when a short request with an earlier
+    deadline arrives, and each chunk leaves budget for waiting requests due before it.
+  - *Per cluster: an SLO-checked router over symmetric nodes.* For each request and node, from state the router keeps
+    itself, it predicts:
+    - TTFT: the deadline-ordered work queued ahead of the request, the cost of its uncached tokens on top of the
+      cached prefix (a calibrated prefill curve), minus the prefix pages the node can pull from the cluster pool while
+      the request waits;
+    - TPOT: the rows that will decode beside the request.
+
+    It sends the request to the highest-hit node that passes four checks: the request's own TTFT and TPOT, the
+    deadlines of requests queued behind it, and the TPOT of requests already decoding there (section 5.2.1). Routing
+    is therefore an admission decision priced in SLO terms, not just cache affinity plus load balance.
 
 *What we reuse.* The cluster KV pool is sglang's hierarchical cache over the Mooncake distributed store, with sglang's
 selective write-through and timeout prefetch; we add only the router-side mirror of its contents that prices a pull.
@@ -321,7 +324,7 @@ padding; 96 captures, Qwen2.5-7B. Padding fraction [pending].
 ### 3.5 Can we increase request capacity while maintaining SLOs?
 
 Yes, if rows get their own kernel tiles, chat is not queued behind prefills that can no longer meet their deadlines,
-and nodes stay symmetric so that routing follows the cache. C1-C3, with the router, are that answer. We measure it as the load
+and nodes stay symmetric so that routing follows the cache. C1-C3 are that answer. We measure it as the load
 each system holds at >= 90% per-tenant attainment (Figure 19). With the scheduler alone on 16 GPUs, ours holds 64
 agent programs against 16 for PD disaggregation (section 6.4). With the full stack, ours keeps >= 90% chat attainment
 through 96 programs plus 24 chat/s, where stock PD at its best split holds no measured load point (Table 10).
@@ -341,7 +344,7 @@ request rate.
 The design acts at three levels against that one objective. Per step (C1, C2), one plan assigns every attention tile to
 FA3 (prefill rows and rows of more than 64 packed queries) or to an FA2 tile class of 16, 32 or 64 rows, and fixes
 the merge schedule for split rows, and the verify rows of speculative decoding ride in the same forward as a prefill chunk. Per worker (C3), prefills are ordered by deadlines computed from their uncached tokens, and a prefill
-whose deadline has passed is demoted. Per cluster (the router, section 5.2.1), a request goes to the node with the highest prefix-cache hit
+whose deadline has passed is demoted. Per cluster (C3's router), a request goes to the node with the highest prefix-cache hit
 that is predicted to meet its SLO; if that is not its best cache holder, the node pulls the prefix from the cluster
 pool.
 
@@ -528,7 +531,7 @@ Figure 8: host plan time per step (mean and p99) vs batch size, on captured serv
 The router is a streaming proxy in front of the workers, and every node serves both prefill and decode. For each
 request it picks the node that reuses the most cached prefix while still meeting the request's TTFT and TPOT SLOs,
 and the SLOs of the requests already on that node. It decides from state it keeps itself, so no worker is queried on
-the request path. It is a supporting mechanism, not a headline contribution (section 1).
+the request path. This is C3's cluster level.
 
 **What the router knows about each node.**
 
@@ -847,8 +850,8 @@ leave-one-out arms queued on the trace replay at alpha 3 (16 H20s) and the singl
 | C1 unified dispatcher | sglang's single FA3 call for every row | attention 1.43-1.51x slower on trace-sampled steps; with the schedule unchanged, agent throughput -10.7% and TPOT +24% at 128-256K (four-mode); running the rows on FA3 instead of FA2 tiles costs 15-25 points of agent ITL; trace replay [pending] | 6.2, 6.3, 7 |
 | C1 parts | PDL overlap off; enumeration instead of longest-first order; merge-free bound | 2.2-6.1%; <= 0.7%; the merge costs <= 0.9% of trace-sampled steps and 6-13% of decode-heavy batches | 7 |
 | C2 four-mode step | stock MTP steps (verify on its own step) | trace replay [pending]; short-prompt ShareGPT: the merged step's host read-back cost 6-7% (section 5.5) | 5.5, 6.4 |
-| C3 deadline scheduling | per-tenant deadlines without demotion; FCFS | without demotion, chat TTFT is 25-50x higher under an agent burst (-96..-98% with it); deadline order on stock PD's prefill pods changes nothing, so the gap to PD is not scheduling; trace replay [pending] | 3.3, 5.3, 6.4 |
-| supporting: SLO-checked router | cache affinity only (load tie-break) | earlier 8-H20 runs: at 32 agent programs, agent throughput -24% and chat ITL +32% without the check; on a hot shared-prefix mix, chat TTFT 10x; the resident check alone is worth 32% of chat ITL; trace replay [pending] | 5.2.1, 7 |
+| C3 per-worker deadline scheduling | per-tenant deadlines without demotion; FCFS | without demotion, chat TTFT is 25-50x higher under an agent burst (-96..-98% with it); deadline order on stock PD's prefill pods changes nothing, so the gap to PD is not scheduling; trace replay [pending] | 3.3, 5.3, 6.4 |
+| C3 router (cluster level) | cache affinity only (load tie-break) | earlier 8-H20 runs: at 32 agent programs, agent throughput -24% and chat ITL +32% without the check; on a hot shared-prefix mix, chat TTFT 10x; the resident check alone is worth 32% of chat ITL; trace replay [pending] | 5.2.1, 7 |
 
 **Status.**
 - Stages 1 and 2: measured for all three models; Llama-3.3-70B and GLM-4.5-Air on H20, their H200 reruns [pending].
@@ -1321,7 +1324,7 @@ Qwen2.5-7B on 16 H20s [pending].
 
 ## 7. Ablation study
 
-**Claim.** The ablations isolate which parts of C1-C3 and the router carry the gains: for the kernel, the one plan and in-launch
+**Claim.** The ablations isolate which parts of C1-C3 carry the gains: for the kernel, the one plan and in-launch
 merge, PDL overlap, longest-first order and the executor choice; for the schedule, demotion of missed prefills; for
 the cluster, the routing policy.
 

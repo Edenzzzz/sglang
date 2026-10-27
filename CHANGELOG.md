@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.71.2 — Paper: C3 is SLO control without disaggregation (user, 2026-10-27)
+- C3 now covers both levels of SLO control:
+  - per-worker deadline scheduling;
+  - the SLO-checked router: routing as admission priced in SLO terms, with four checks.
+- This replaces the phase isolation that disaggregation buys with fixed roles. The pool stays credited to sglang /
+  Mooncake. The abstract, sections 1, 4.1, 5.2.1, 6.1 (Table 4c) and 7 are updated.
+
 ## v1.71.1 — Paper: three contributions; the router is a supporting mechanism (user, 2026-10-27)
 - C4 is dropped as a headline contribution:
   - the pool is sglang's (hierarchical cache over Mooncake), and the router's isolated gain so far is moderate;

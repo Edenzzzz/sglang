@@ -431,9 +431,17 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             measurable contribution over upstream at this workload is ZERO. It must be presented as an enabling
             mechanism for the fused kernel's row classes, not as a source of gain, unless a workload is found where
             it beats upstream's MIXED step.
-            Remaining candidates for the +25% / -45% over stock colocated: chunk size (2048 vs upstream default),
-            our router vs sglang's `cache_aware`, and other deltas between our tree and upstream. Arms `dchunk` and
-            `sglrt` are running.
+            **noC1 at the same best configuration (2026-10-28): also zero.** Replacing A6 with sglang's single
+            varlen FA3 call gives chat 89.2% / agent 94.0% / **2436 tok/s** against 90.6 / 94.2 / 2471 -- a 1.4%
+            goodput difference, inside the noise floor.
+            **So at cluster scale C1 and C2 both measure zero, yet the stack still beats stock colocated sglang by
+            +25% goodput and -45% TPOT.** The remaining candidates are the chunk size (2048 vs upstream default),
+            our router against sglang's `cache_aware`, and the 32-file delta between our serving tree and upstream.
+            Arms `dchunk` and `sglrt` are running and are now the decisive ones: if both land inside the noise, the
+            margin belongs to the tree delta and must be traced to a specific mechanism before anything is claimed.
+            - Overload point for the C3 question (`gap_r1`, alpha 6, cache routing + FCFS): chat **58.0%**, agent
+              **76.2%**, 1956 tok/s, chat TPOT p90 109 ms. This is the load-spike regime where deadline ordering
+              should finally separate from FCFS; the EDF arm at the same load runs next.
           - Remaining differences between the two rows, to be separated: A6 kernel, four-mode step, chunk 2048 vs
             upstream default, our router's load tie-break vs sglang's `cache_aware`.
     - [!] **Scorer bug: the client's `cached_tokens` is 0 for every request in every arm**, so the agent tenant's

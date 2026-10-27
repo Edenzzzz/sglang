@@ -6,8 +6,9 @@
   better.
 - Mechanism: on session-affine agent traces each session has one cache holder, and a wide TTFT prediction moves
   requests off it for nothing. The opposite held on the fan-out workload, where prefixes are replicated.
-- Consequence: the reported "ours" is not our best measured configuration. A best-vs-best comparison against
-  conditional disaggregation and stock PD is queued before any claim is restated.
+- Consequence: the reported "ours" is not our best measured configuration. `mn_bestcfg_16g_20261027.sh` is queued:
+  cache routing + FCFS workers (a combination no ablation arm covered), a repeat of the best measured arm, and
+  conditional disaggregation in the same session. No claim is restated until it runs.
 
 ## v1.74.3 — Paper Table 4c carries the measured leave-one-out arms (2026-10-27)
 - C1: -3.4..-6.8 points chat and -7.5..-21% agent goodput when removed (range not yet separated by the repeats).

@@ -274,9 +274,16 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             2514, i.e. +40 points of chat attainment and 2.6x the agent goodput.
           - Follow-up queued below: the best configuration against conditional disaggregation and stock PD at the
             same point, so the comparison is best-vs-best rather than our-full-stack-vs-theirs.
-    - [ ] **Best-configuration comparison, queued** (`mn_bestcfg_16g_20261027.sh`): A6 + 4-mode + `cache` routing +
-          FCFS workers vs conditional disaggregation and stock PD 2 + 2 at alpha 3, plus a repeat of the best
-          configuration itself. Until this runs, no best-vs-best claim is made.
+    - [ ] **Best-configuration comparison, queued** (`mn_bestcfg_16g_20261027.sh`, 3 arms, alpha 3), after the
+          decomposition:
+          - `cacheFCFS`: A6 + 4-mode + `cache` routing + FCFS workers. **No ablation arm covered this combination**
+            -- arm 3 removed the worker level with the SLO router still on, arm 4 removed the router with worker EDF
+            still on. It is the predicted best.
+          - `cacheEDF`: a repeat of arm 4 (the best measured so far), for confidence on 91.4% / 2514 tok/s.
+          - `cond`: conditional disaggregation in the same session at Dynamo's defaults. Note it routes through
+            `cond_disagg_route`, which never applied our four-check SLO test, so it was never handicapped by the
+            mechanism that cost us; the earlier comparison was unfair against us, not for us.
+          Until this runs, no best-vs-best claim is restated in the paper.
     - [ ] **C3-worker decomposition, queued** (`mn_c3worker_decomp_16g_20261027.sh`, 3 arms, same alpha-3 replay):
           - `ord`: EDF ordering only (`PREEMPT=0`), isolating preemption/parking;
           - `demote`: ordering + demotion, still no preemption -- the first multi-node test of the single-node

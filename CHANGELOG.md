@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.84.0 — C2's contradiction resolved: it is gated on uncached prefill length (2026-10-28)
+- The four-mode step gives -38% TPOT on one node and zero on the cluster because of its gate
+  (SGLANG_MIXED_SPEC_MIN_CTX=8192). At 92.7% prefix hit a cluster agent round carries only ~1085 uncached tokens,
+  7.5x below the gate, so it rarely fires; the single-node stages (32K/128K uncached) always clear it.
+- C2 therefore pays when prefills are long and cold and is inert once cache affinity shrinks them. This is a real
+  tension between our contributions: cache-first routing removes the condition that makes the four-mode step pay.
+- Supersedes two earlier wrong readings: the Amdahl explanation, and "C2 duplicates upstream's MIXED step" (_mtps
+  has no mixing at all; it is not upstream's spec-aware mixed step).
+- dchunk arm: upstream's default chunk matches CHUNK=2048 (2499 vs 2471 tok/s), so chunk size contributes nothing.
+- alpha 6 overload: EDF beats FCFS by +7.5% agent goodput (2102 vs 1956) and +2.5 points, the first regime where
+  the worker scheduler separates; at alpha 3 they are identical.
+- Single-node kernel alone (both arms four-mode, no worker scheduler): TPOT unchanged, throughput +6.9%.
+
 ## v1.83.0 — Single-node 128K: -54% TPOT and +11% throughput vs stock sglang (2026-10-28)
 - mix128 stage: our full stack 44.8 ms TPOT / 34.4 ITL / 95.7 worst-decile / 54.4 tok/s against stock MTP + stock
   FA3 at 97.3 / 61.0 / 231.4 / 48.8. Clears both bars at once (>=30% latency, >=10% throughput) and is larger than

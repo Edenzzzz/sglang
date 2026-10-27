@@ -433,7 +433,25 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             | full (A6 + four-mode) | 90.6% | 94.2% | 2471 | 11.8 / 17.5 ms | 17.7 / 22.3 ms |
             | noC2 (A6 + stock MTP) | 90.6% | 93.8% | 2492 | 11.0 / 18.2 ms | 17.2 / 22.8 ms |
             Identical within the noise floor, and noC2 is nominally faster.
-            **Correction to the first explanation: this is NOT an Amdahl bound.** Merged steps are 11.6% of steps
+            **RESOLUTION (2026-10-28, supersedes both explanations below).** The same toggle gives -38% TPOT on one
+            node and zero on the cluster, and the reason is the four-mode step's **load/context gate**:
+            `SGLANG_MIXED_SPEC_MIN_CTX=8192` (or >= 4 queued requests). `_mtp` sets
+            `SGLANG_ALLOW_MIXED_CHUNK_SPEC=1 SGLANG_MIXED_SPEC=1`; `_mtps` does not (mn_node.sh:251), so both the
+            cluster noC2 arm and the single-node `--ours` control disable the same mechanism.
+            - On the cluster the stack reaches 92.7% prefix hit, so a typical agent round carries only
+              **12.4M new tokens / 11,424 rounds = ~1085 uncached tokens**, about **7.5x BELOW the 8192 gate**. The
+              four-mode step therefore rarely fires, and removing it costs nothing.
+            - On the single node the stages are 32K and 128K of uncached prefill, always above the gate, so it fires
+              on every chunk and is worth -38% TPOT (22.9 -> 14.2 ms at 32K with the kernel held at stock FA3).
+            - **So C2's value scales with how much UNCACHED prefill a step carries.** It pays when prefills are long
+              and cold (new sessions, long documents, low hit rate) and is inert when cache affinity has already
+              reduced the prefill to ~1K tokens. This is a real tension between our own contributions: C3's
+              cache-first routing removes the condition that makes C2 valuable. Both the claim and the tension
+              belong in the paper; neither is a defect.
+            - Consequence for the earlier entries: C2 is NOT "duplicating an upstream capability" (that reading was
+              wrong -- `_mtps` has no mixing at all, it is not upstream's spec-aware MIXED step), and the null is NOT
+              an Amdahl effect. Both superseded.
+            **Superseded explanation (kept for the record): this is NOT an Amdahl bound.** Merged steps are 11.6% of steps
             but **67.2% of GPU time** (decode-only 83.9% of steps / 27.6% of time; prefill-only 4.5% / 5.1%), so the
             four-mode step applies to two thirds of the GPU time and still changes nothing.
             The real reason is that **upstream already does the equivalent**: sglang's spec-aware MIXED step merges

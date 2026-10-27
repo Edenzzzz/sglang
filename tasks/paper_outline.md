@@ -1470,7 +1470,12 @@ cache, and use conditional disaggregation as our strongest baseline.
 
 **Colocation and multiplexing.** Sarathi-Serve introduced chunked prefill, which bounds decode stalls by cutting
 prefill into chunks run beside decode. PD-Multiplexing (MuxWise) runs prefill and decode in separate SM groups with
-green contexts. POD-Attention fuses prefill and decode attention in a single FA2 kernel. Neither supports speculative
+green contexts. POD-Attention fuses prefill and decode attention in a single FA2 kernel. That fusion is available
+only in FA2: its CTA-level interleaving of a large prefill tile with small decode tiles depends on both roles using
+Ampere-style mma.sync in one kernel body, and Hopper's wgmma and Blackwell's tcgen05 cannot overlap MMA instructions
+of different shapes inside one kernel (section 5.1). A POD-style design on Hopper or Blackwell therefore gives up
+FA3 / FA4 for the prefill tiles, which is where most of a long-context step's time is: on H20, a 2048-token chunk
+over a 128K prefix is about 0.73 s of attention FLOPs, essentially the whole step. Neither supports speculative
 decoding: POD-Attention's hybrid batch has one-token decode rows only, and sglang's multiplexing loop runs the whole
 target forward for extend batches and does not carry the EAGLE draft state through its layer-split prefill. Ours
 gives verify rows their own tile class, so the verify forward absorbs the prefill chunk (C2). Ours keeps two separate

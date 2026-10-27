@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.78.0 — Where C1's gain actually is; POD's FA2-only limitation (2026-10-27)
+- Step-for-step A6 vs stock FA3 on the same replay (A6 validity confirmed: 70,701 a6_unified calls vs 0): speedup
+  FALLS with chunk prefix, 1.147x below 8K to 1.006x above 128K. The step is attention-dominated (a 2048-token chunk
+  over 128K is 1.08e14 FLOP = 0.73 s at H20's 148 TFLOP/s, matching the 727 ms measured), but both arms run that
+  chunk on FA3 identically. C1 optimises the rows only, so it is nearly inert where the chunk dominates.
+- Recorded: PDL is not the persistent-FA2 large-tile/small-tile overlap; that idea left when the chunk moved to FA3.
+  MELD's JIT reduction pays on many-partial tasks; our steps have <= 0.9% merge. Draft/verify cannot be fused
+  (sequential dependency).
+- Related work: POD-Attention's tile overlap is FA2-only and cannot carry to FA3 / FA4 on Hopper / Blackwell.
+
 ## v1.77.0 — Demotion never ran; noise floor measured; best-config arm 1 (2026-10-27)
 - CORRECTION: the demote code is gated behind `SGLANG_EDF_PREEMPT_CHUNK=1`, so both decomposition arms (PREEMPT=0)
   ran it never -- zero EDF_LATE_DEMOTE lines. The two arms were identical, so their gap (chat 68.8 vs 73.8, goodput

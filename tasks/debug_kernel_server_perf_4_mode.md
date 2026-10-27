@@ -45,6 +45,40 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       for long uncached prompts or deep EDF queues.
     - [ ] A/B on the trace replay, alpha 3 and 6, with SLO-budgeted workers: `cache_slo` (four vetoes, most-slack
           fallback) vs `cache_slo_h`. This waits for the user's go-ahead and for the chunk-size results.
+  - **Where C1's gain actually is, measured step-for-step (2026-10-27, user challenged the 4% figure).**
+    - Method: STEPTRACE from two arms of the same alpha-3 replay, same schedule and router, matched by step shape.
+      A6 arm `..._steptrace3_r1` (validity check: 70,701 `NATIVE_PDL_CALL ... a6_unified=1`), stock arm
+      `..._abl_r1_noC1` (`KERNEL=lpt` on `ATTN_BACKEND=fa3`, zero a6 calls). Whole-step GPU time, merged steps with
+      a 1024-2048 token chunk, bucketed by the chunk's prefix depth:
+      | chunk prefix | A6 | stock FA3 | speedup | n (A6 / stock) |
+      |---|---|---|---|---|
+      | < 8K | 286 ms | 329 ms | **1.147x** | 296 / 275 |
+      | 8-32K | 358 | 374 | 1.047x | 3355 / 3104 |
+      | 32-64K | 513 | 545 | 1.062x | 3151 / 2979 |
+      | 64-128K | 727 | 746 | 1.026x | 2231 / 2183 |
+      | > 128K | 682 | 686 | 1.006x | 75 / 77 |
+      All steps weighted: 1.041x (merged 1.055x, decode 1.011x, prefill 1.004x).
+    - **The step IS attention-dominated, which confirms the objection rather than contradicting it.** A 2048-token
+      chunk over a 128K prefix costs 2 x (2 x 2048 x 131072 x 128) x 28 heads x 28 layers = 1.08e14 FLOP; at H20's
+      ~148 TFLOP/s bf16 that is 0.73 s, against the measured 727 ms step. Attention is ~100% of that step.
+    - **So the small gain is not a small attention share; it is that both arms compute the dominant term
+      identically.** Both send the prefill chunk to FA3. C1 only changes how the decode / verify ROWS are computed,
+      and at 128K the chunk outweighs the rows by orders of magnitude. The speedup therefore FALLS with context
+      (1.147x -> 1.006x), which is the signature of a row-side optimisation, not of a general attention speedup.
+    - Consequences:
+      - C1 pays where rows dominate: decode-heavy, high concurrency, short-to-medium context. It is nearly inert on
+        the long-context chunk-dominated steps that define the TraceLab agent workload.
+      - The 96-capture set that produced 1.43-1.51x (H200) over-represents row-heavy shapes relative to the trace.
+        On H20 the same build is 1.10-1.23x on captures, and 1.04x in serving.
+      - A real kernel win on this workload must come from the CHUNK's own FA3 attention, or from genuine
+        large-tile / small-tile overlap so the rows ride inside the chunk's 727 ms instead of adding to it.
+    - **We do not have that overlap.** PDL only lets the FA2 launch begin as FA3 drains; it is not the persistent-FA2
+      design that interleaved a 128-row prefill tile with 16-row row tiles on the same SMs. Once the chunk moved to
+      FA3 that idea left the system, and the fitted beta = 0.796 on H20 measures how little is hidden.
+    - Why MELD's JIT reduction pays for them and not for us: their tasks carry many split partials, while our
+      trace-sampled steps are typically one chunk plus a couple of verify rows, so the merge is <= 0.9% of the step.
+      On synthetic decode-heavy batches of 64-256 rows it is 6-13%, so the mechanism is not useless -- our steps lack
+      the structure. Draft-and-verify fusion is impossible: the three draft forwards are sequentially dependent.
   - **vLLM PR 61869 reviewed (user, 2026-10-27): orthogonal to our epilogue, two small things worth taking.**
     - What it is: "DSpark draft on the specialized decode, with a fused Markov loop and a post-forward CUDA graph",
       DeepSeek-V4.1-Flash only, behind `decode_backend=latency_specialized`. Open, `needs-rebase`, no approving

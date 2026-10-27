@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.82.0 — Single-node A/B on H200: -38% TPOT, -57% tail vs stock sglang (2026-10-28)
+- mix32, Qwen2.5-7B, two repeats, A6 composition verified: four-mode + A6 gives TPOT 14.3 ms / ITL 15.0 / worst
+  decile 32.4 against stock MTP + stock FA3 at 22.9 / 20.6 / 75.9, equal throughput. Matches the cluster direction.
+- Does NOT separate C1 from C2: the control removes both, and the harness's "two" mode disables the draft model
+  entirely (no speculation), so those rows are not a stock-MTP arm. An earlier C1xC2 interaction reading is
+  withdrawn. The no-speculation rows isolate the kernel at -6.7% TPOT, consistent with 4-9% on captures.
+
 ## v1.81.0 — C2 (four-mode step) contributes zero at the cluster workload (2026-10-28)
 - At the best configuration (cache router + FCFS), removing the four-mode step changes nothing: 90.6/93.8/2492 tok/s
   against 90.6/94.2/2471 with it, identical within the noise floor and nominally faster without. The hypothesis that

@@ -45,6 +45,25 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       for long uncached prompts or deep EDF queues.
     - [ ] A/B on the trace replay, alpha 3 and 6, with SLO-budgeted workers: `cache_slo` (four vetoes, most-slack
           fallback) vs `cache_slo_h`. This waits for the user's go-ahead and for the chunk-size results.
+  - [x] **Single-node A/B on the H200 (2026-10-28): our full stack vs stock sglang, 32K stage.**
+    `unified/a6_c1c2_singlenode_h200_20261028.sh` on trial `bf7d041fb8313d8a`, log `/opt/tiger/w/c1c2_singlenode.log`;
+    Qwen2.5-7B TP1, agent C=8 + chat 8 req/s, two repeats per arm in opposite order, A6 composition counter 1144
+    (non-zero, so the fused path really ran).
+    | arm (mix32, mean of 2) | TPOT ms | ITL ms | worst-decile TPOT ms | tok/s |
+    |---|---:|---:|---:|---:|
+    | four-mode + A6 (ours) | **14.3** | **15.0** | **32.4** | 137.5 |
+    | stock MTP + stock FA3 (control) | 22.9 | 20.6 | 75.9 | 138.5 |
+    | no spec decoding + A6 | 23.7 | 22.9 | 72.5 | 140.5 |
+    | no spec decoding + stock FA3 | 25.4 | 25.5 | 77.9 | 131.9 |
+    - Ours vs the stock control: **-38% TPOT, -27% ITL, -57% on the worst-decile tail**, at equal throughput. Same
+      direction and size as the cluster's -45% TPOT over stock colocated sglang, on one GPU with no router or pool.
+    - **This does NOT separate C1 from C2:** the harness's `four`-mode control removes BOTH (stock MTP and the stock
+      FA3 call), and its `two` mode disables the draft model entirely (`draft_model=... if mode == "four" else None`,
+      run_native_serving_pair_20261023.py:128), so the `two` rows are a no-speculation baseline, not "stock MTP".
+      An earlier reading of these rows as a C1 x C2 interaction was wrong and is withdrawn.
+    - The `two` rows do isolate the kernel without speculation: **-6.7% TPOT, -10% ITL**, consistent with C1's
+      4-9% on captures.
+    - Still needed to separate them on one node: a four-mode + stock-FA3 arm. mix128 stage running.
   - [x] **KERNEL LADDER ON THE 4-H200 TRIAL vs NAIVE FA3 + STOCK FA2 (2026-10-28, the user's mandated baseline).**
     Trial `bf7d041fb8313d8a` (vibecuda, 4x H200), `unified/a6_h200x4_kernel_ladder_20261026.sh`, log
     `/opt/tiger/w/kernel_ladder.log`; 96 trace-sampled Qwen2.5-7B captures (24 per cell) from real 4-mode MTP

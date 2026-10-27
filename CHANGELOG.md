@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.71.4 — STEPTRACE counts verify rows as decode rows; chunk test restarted (2026-10-27)
+- The step tracer classified rows only by extend length, so a merged step's 4-token verify rows were logged as prefill
+  rows. `apply_steptrace_verify_rows_20261027.py` fixes it; it is applied on all H20 pods, and the chunk-size driver
+  is rerun (v2).
+- The traced alpha-3 arm serves as a second repeat of ours: chat 68.5%, agent 78.7%, 1763 tok/s.
+
 ## v1.71.3 — Demand shift: stock PD 2 + 2 at alpha 6 rerun (2026-10-27)
 - Chat 6.2%, agent 4.9%, 23 tok/s, 1096 rounds issued. Table 10d is complete.
 

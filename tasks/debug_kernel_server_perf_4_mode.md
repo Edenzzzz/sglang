@@ -35,6 +35,12 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
         - 4 agent rows at 80 ms: 10373;
         - one row 10 s behind: 0 without `demote`, 1709 with it.
     - Order on the H200: collect A6 STEPTRACE at the Table 7b loads, export the model, then run the arms below.
+    - Bug (2026-10-27): the step tracer logged a 4-mode step's 4-token verify rows as prefill rows (nd = 0 on all
+      ~2300 merged steps per worker), so fit_4mode_step.py refused to fit and the v1 chunk driver stopped.
+      `pd_colocation/apply_steptrace_verify_rows_20261027.py` counts the tail `mixed_verify_rows` as decode rows; it
+      is applied to both trees on all pods, and the driver was rerun as `mn_slo_chunk_v2_16g_20261027.sh`.
+      Earlier 4-mode STEPTRACE fits (the 2.0% MAPE in the paper's Table 3 came from an H200 log) must be checked for
+      the same misclassification before the paper quotes them.
     - 2026-10-27, also on 16 H20s (queued, `pd_colocation/mn_slo_chunk_16g_20261027.sh`, log
       `/tmp/h20/mn_slo_chunk_16g_r1.log`).
       - Why there: at alpha 6 in the demand-shift replay, ours beats conditional disaggregation on agent goodput
@@ -1490,6 +1496,9 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
         failed rounds);
       - stock PD 3 + 1: 2.2 / 0.0% ; 2.7% ; 9 ; 1894 (8020 not issued, 3158 lost after failed rounds).
     - v2 driver complete 2026-10-27 08:5x; the stock PD 2 + 2 agent side at alpha 6 is rerun in the chunk driver.
+    - Second repeat of ours at alpha 3 (the traced arm `_tl2_a3_steptrace_r1`, fixed 2048 chunk): chat 68.5 (84.3)% ;
+      agent 78.7% ; 1763 tok/s ; 9665 issued (3407 not). This is above r1 (65.1% ; 72.6% ; 1501), so the gap to
+      conditional disaggregation holds.
     - alpha 3, ours vs conditional disaggregation:
       - chat attainment +14 points (+28% relative), chat TTFT p90 1.12 vs 8.74 s;
       - agent attainment +8.7 points, agent SLO goodput +57%, rounds issued +24%, agent TTFT p90 8.2 vs 21.2 s.

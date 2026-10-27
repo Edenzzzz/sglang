@@ -136,7 +136,38 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     - A6 beats our earlier v3 design by 1.34-1.92x, so the one-plan + in-launch-merge build is the right one to
       carry forward; v3 is retired as an arm.
     - Consistent with serving: 4-9% on captures, 1.04x whole-step in the cluster replay, and falling with context.
-  - [ ] **SLO-budgeted chunk WITHOUT a DP (user, 2026-10-28): learn the chunk from the state.**
+  - [x] **SLO-BUDGETED CHUNK: rule defined and validated offline (2026-10-28), no DP, no fixed cap.**
+    `tasks/perf_model/chunk_predictor.py`, validated on the 10,185 merged steps of the alpha-3 replay traces
+    (`/tmp/pfix/st3/w*.log`) with the fitted step model `step_qwen_h20_a6_gpu_20261027.json`. The rule:
+
+        budget_ms = (1 - h) * min over running rows r of [ s_r * (o_r + a) - E_r ]
+        chunk     = max { c : T_step(c, prefix, nd, dkv) <= budget_ms }     (bisection, 16 model evaluations)
+
+    s_r = row r's mean-TPOT target, o_r tokens emitted, E_r time spent, a = acceptance EWMA, h = headroom.
+    - **Step model accuracy on the chunk the run actually used: MAPE 4.7%, p90 7.5%** -- the fused kernel's step is
+      predictable enough to size the chunk from, which is the premise of the whole mechanism.
+    - **What the fixed 2048 chunk costs: its predicted step is 5.1x the per-step allowance (p90 8.4x).** That is
+      the TPOT damage the rule removes, and it is why a constant chunk cannot be defended.
+    - **The rule is adaptive in BOTH directions** (rows decode at 13.9 ms against a 50 ms target, so each emitted
+      token banks 36.1 ms of slack):
+      | tokens a row has emitted | banked slack | chunk p50 | chunk p90 | steps allowing >= 2048 |
+      |---|---:|---:|---:|---:|
+      | 0 (just admitted) | 0 ms | 192 | 320 | 0% |
+      | 10 | 361 ms | 1600 | 2624 | 31% |
+      | 20 | 722 ms | 3072 | 4800 | 84% |
+      | 50 | 1806 ms | 7168 | 10816 | 100% |
+      | 200 | 7224 ms | 16384 | 16384 | 100% |
+      So it admits FAR MORE than 2048 in steady state (up to the server maximum) and clamps only when rows are
+      fresh and have no slack -- answering both halves of the user's objection: no throttling when there is nothing
+      to protect, real protection when there is.
+    - **Why banking must be unlimited:** the SLO is a request's MEAN TPOT. With no banked slack the rule picks
+      64-320 tokens and starves prefill, which is exactly the measured `slochunkh` arm (chat TPOT p90 64 ms but
+      7.9% attainment, 107 tok/s). The `bank=4` default that produced it turned a mean-TPOT rule into a per-step
+      ITL bound. Unlimited banking is the correct reading and is now the default.
+    - Simplicity is the point (user): three lines of arithmetic plus a bisection over a 10-term linear model
+      (~2 us), no dynamic program, nothing borrowed from SLOs-Serve.
+    - Still to run on the cluster: the arm set with this rule against sglang's own schedule and chunk policy.
+  - [ ] **Chunk predictor, optional refinement: a learned head instead of bisection.**
     - The user does not want SLOs-Serve's dynamic program (it would read as borrowing their method). Instead predict
       the chunk from state we already have, using the step model that the fused kernel makes easy to fit.
     - Inputs, all already logged per step in STEPTRACE: chunk tokens, prefix length, decode rows and their KV

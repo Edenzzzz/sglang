@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.94.0 — SLO-budgeted chunk rule defined and validated offline, no DP (2026-10-28)
+- tasks/perf_model/chunk_predictor.py: budget = (1-h) * min_r [s_r*(o_r+a) - E_r]; chunk = largest c with
+  T_step(c) <= budget, by bisection over the fitted step model. Three lines plus 16 model evaluations (~2 us); no
+  dynamic program, nothing borrowed.
+- Validated on 10,185 merged steps of the alpha-3 replay: step-model MAPE 4.7% (p90 7.5%) on the chunk actually
+  used, so the fused step is predictable enough to size from.
+- The fixed 2048 chunk's predicted step is 5.1x the per-step allowance (p90 8.4x) -- the TPOT damage removed.
+- The rule is adaptive both ways: rows bank 36.1 ms/token (13.9 ms observed against a 50 ms target), so chunk p50
+  goes 192 -> 1600 -> 3072 -> 7168 -> 16384 tokens as a row emits 0, 10, 20, 50, 200 tokens. It admits far MORE
+  than 2048 in steady state and clamps only when rows are fresh.
+- Confirms why bank=4 starved (slochunkh: TPOT p90 64 ms but 7.9% attainment, 107 tok/s): it turned a mean-TPOT
+  rule into a per-step ITL bound. Unlimited banking is the correct reading of mean TPOT.
+
 ## v1.93.0 — Llama-70B ladder completes the three-model kernel picture; H20 job ended (2026-10-28)
 - Llama-3.3-70B, 38 captures, FP32-checked: A6 is 1.028-1.049x over the naive role split (2.8-4.9%), while the role
   split alone is 6.7-7.7x of sglang's single FA3 call.

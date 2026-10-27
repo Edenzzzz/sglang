@@ -124,6 +124,25 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     - A6 beats our earlier v3 design by 1.34-1.92x, so the one-plan + in-launch-merge build is the right one to
       carry forward; v3 is retired as an arm.
     - Consistent with serving: 4-9% on captures, 1.04x whole-step in the cluster replay, and falling with context.
+  - [x] **GLM-4.5-Air kernel ladder on the H200 (2026-10-28): the tile-class hypothesis is REFUTED.**
+    `unified/a6_ladder_model_h200_20261028.sh /opt/tiger/w/trace_sampled_glm_h20_20261025 glm`, log
+    `/opt/tiger/w/ladder_glm.log`; 43 rank-0 captures copied from the H20 (24 four-mode, 19 two-mode), FP32 worst
+    relative error 0.0064, 20 graph replays, 0 correctness failures.
+    | GLM cell | A6 vs naive serial | A6 vs naive streams | A6 vs sglang's single FA3 call |
+    |---|---:|---:|---:|
+    | mix32, 4-mode | **1.020x** | 1.028x | 6.029x |
+    | mix32, 2-mode | **1.023x** | 1.025x | 5.328x |
+    - GLM was the best candidate for a larger kernel claim: its verify rows pack to 48 queries, which is what the
+      FA2 64-row tile class was built for, and an earlier H20 measurement showed 1.38x for that class. **It is in
+      fact where our dispatcher matters LEAST: 2.0-2.8% over the naive role split, against 4.0-8.7% on Qwen.**
+    - Why: GLM gains **5.3-6.0x** from the role split alone (Qwen 1.76-2.80x), because FA3's tiles serve 48-row
+      verify rows badly. But stock flashinfer FA2 already picks a good tile for them, so our classes add ~2%. The
+      earlier 1.38x was measured against FA3, not against a competent FA2 -- the wrong baseline made the tile
+      classes look like the mechanism when the role split was.
+    - **Conclusion across three models: C1 is 2-9% over a fair baseline, and every large number (1.8x, 2.9x, 6.0x)
+      belongs to the role split, which is not our contribution.** No further kernel item has produced a significant
+      gain; the remaining untested idea is cross-role backfill (needs `tma_store_wait`), which is the only one that
+      attacks beta (0.796 on H20) rather than the row-side work.
   - **Where C1's gain actually is, measured step-for-step (2026-10-27, user challenged the 4% figure).**
     - Method: STEPTRACE from two arms of the same alpha-3 replay, same schedule and router, matched by step shape.
       A6 arm `..._steptrace3_r1` (validity check: 70,701 `NATIVE_PDL_CALL ... a6_unified=1`), stock arm

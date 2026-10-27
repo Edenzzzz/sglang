@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.90.0 — GLM ladder: the tile-class hypothesis is refuted (2026-10-28)
+- GLM-4.5-Air, 43 captures, FP32-checked: A6 is 1.020-1.023x over the naive role split (serial), i.e. 2.0-2.8% --
+  LESS than Qwen's 4.0-8.7%, on the model the 64-row tile class was designed for.
+- Cause: GLM gains 5.3-6.0x from the role split alone because FA3 tiles its 48-row verify rows badly, but stock
+  flashinfer FA2 already tiles them well. The earlier 1.38x for the 64-row class was measured against FA3, the
+  wrong baseline.
+- Across three models C1 is 2-9% over a fair baseline; every large figure belongs to the role split, not to us.
+  Only cross-role backfill (tma_store_wait) remains untested, and it is the only idea that targets beta.
+
 ## v1.89.0 — SLO chunk works but was mis-tuned; cluster push gotcha (2026-10-28)
 - alpha 6 chunk arms rescored on TPOT (user: TPOT matters more than TTFT): the SLO-budgeted chunk cuts chat TPOT p90
   from 214 ms (fixed 2048) to 64 ms and agent p90 from 165 to 79 ms, but attainment collapses to 7.9% and goodput to

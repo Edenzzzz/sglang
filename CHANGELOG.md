@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.73.0 — Use the existing SLO chunk solver; H20 constants for the analytic model (2026-10-27)
+- Inventory: `edf_compute_max_chunk_size()` already binary-searches the largest chunk that fits the tightest row's
+  slack, behind `SGLANG_EDF_LATENCY_MODEL`, which our runs left empty (hence the fixed 2048 chunk). Predictors:
+  trained MLP (.pt), `linear:<json>`, or `analytic` (the closed-form overlap model built for the fused kernel).
+- `perf_model/fit_overlap_params_from_steptrace.py` fits the analytic model's seven per-GPU constants from STEPTRACE
+  logs. On 87,932 corrected H20 steps: held-out 4.2% MAPE on merged steps (the ones the solver prices), beta 0.796.
+  Parameters in `perf_model/overlap_params_h20_qwen7b_20261027.json`.
+
 ## v1.72.6 — Chunk-budget audit against recorded steps (2026-10-27)
 - `perf_model/chunk_budget_audit.py`: on 87,932 alpha-3 steps, decode-only steps (8-52 ms) never exceed the chat
   per-step allowance (100 ms), while a 2048-token chunk costs 446 ms, 4.5 allowances, on 98.1% of merged steps. The

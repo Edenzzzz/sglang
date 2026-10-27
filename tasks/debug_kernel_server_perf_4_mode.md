@@ -45,6 +45,35 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       for long uncached prompts or deep EDF queues.
     - [ ] A/B on the trace replay, alpha 3 and 6, with SLO-budgeted workers: `cache_slo` (four vetoes, most-slack
           fallback) vs `cache_slo_h`. This waits for the user's go-ahead and for the chunk-size results.
+  - **Inventory of predictors and the chunk solver (2026-10-27, user asked; the fixed 2048 chunk is not a design
+    choice but an unset env var).** Our tree already contains the SLO-aware chunk-size solver:
+    - `managers/edf_scheduler.py` `edf_compute_max_chunk_size()`: binary-searches the largest chunk whose predicted
+      step fits the tightest running row's remaining slack (`ITL_SLO_MS x tokens_per_step - elapsed`), with a
+      safety margin, plan overhead, and a guard that returns 0 when decode alone already exceeds the slack. This is
+      exactly "solve for the largest chunk that does not violate the SLO".
+    - It is wired into `get_new_batch_prefill` and gated on `SGLANG_EDF_LATENCY_MODEL`, which our multi-node runs set
+      to the empty string. That is why every arm so far ran a fixed 2048 chunk.
+    - Three interchangeable predictors (same `predict(n_p, r_p, decode_avg_kv, decode_bs)` contract):
+      - `.pt` -> `LatencyPredictor`, the trained MLP (5 features, evaluated in NumPy, ~us per call);
+      - `linear:<json>` -> `LinearStepPredictor`, from `perf_model/fit_mtp_step.py` (includes a `c_acc` term);
+      - `analytic` -> `AnalyticOverlapPredictor` (`managers/overlap_cost_model.py`), the closed form built for the
+        fused kernel: `T_attn = max(T_p, T_d) + beta x min(T_p, T_d)`, constants per GPU via
+        `SGLANG_OVERLAP_COST_PARAMS`.
+    - The router's model is separate and coarser (calibrated cold-prefill curve + decode grid + EWMAs); it predicts
+      placement, not steps.
+    - **The analytic model is the one tied to C1**: its docstring records that the split-kernel baseline's mixed cost
+      is super-additive in its parts (up to 8.1x; fitting max + beta x min gives beta = 2.19), so no closed-form
+      controller can invert it, while the fused kernel obeys the law to 3.1% MAPE. The fused kernel is what makes
+      SLO-aware chunk sizing possible, which is the C1 -> C3 link the paper should make.
+    - [x] **H20 constants fit from real steps** (2026-10-27, `perf_model/fit_overlap_params_from_steptrace.py` on the
+      87,932 corrected alpha-3 steps, first half fit / second half scored;
+      `perf_model/overlap_params_h20_qwen7b_20261027.json`): held-out MAPE **4.2% on merged steps** (p90 8.8%), the
+      steps the chunk solver actually prices; prefill-only 39.9%, decode-only 55.0% (a mix of MTP draft and verify
+      steps that one roofline does not separate), all 48.5%. beta = 0.796 on H20 vs 0.529 on H800.
+    - [ ] Next: run the existing solver with `SGLANG_EDF_LATENCY_MODEL=analytic` +
+      `SGLANG_OVERLAP_COST_PARAMS=<h20 json>` against fixed 2048 at alpha 3, and retire the ad-hoc
+      `apply_slo_budget_chunk_20261026.py` (it duplicates the solver with a worse model and no decode-only guard).
+      The decode-only guard needs the measured decode step time rather than the 55%-error prediction.
   - [ ] **SLO-budgeted prefill chunk size from the EDF step model.**
     - Code (2026-10-26, unit-checked on a stub scheduler, not yet served):
       - `unified/apply_slo_budget_chunk_20261026.py`, enabled by

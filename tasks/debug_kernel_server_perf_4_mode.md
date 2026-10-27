@@ -49,14 +49,24 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     `unified/a6_c1c2_singlenode_h200_20261028.sh` on trial `bf7d041fb8313d8a`, log `/opt/tiger/w/c1c2_singlenode.log`;
     Qwen2.5-7B TP1, agent C=8 + chat 8 req/s, two repeats per arm in opposite order, A6 composition counter 1144
     (non-zero, so the fused path really ran).
-    | arm (mix32, mean of 2) | TPOT ms | ITL ms | worst-decile TPOT ms | tok/s |
+    | arm (mean of 2 repeats) | TPOT ms | ITL ms | worst-decile TPOT ms | tok/s |
     |---|---:|---:|---:|---:|
-    | four-mode + A6 (ours) | **14.3** | **15.0** | **32.4** | 137.5 |
+    | **32K stage** | | | | |
+    | our full stack | **14.3** | **15.0** | **32.4** | 137.5 |
     | stock MTP + stock FA3 (control) | 22.9 | 20.6 | 75.9 | 138.5 |
     | no spec decoding + A6 | 23.7 | 22.9 | 72.5 | 140.5 |
     | no spec decoding + stock FA3 | 25.4 | 25.5 | 77.9 | 131.9 |
-    - Ours vs the stock control: **-38% TPOT, -27% ITL, -57% on the worst-decile tail**, at equal throughput. Same
-      direction and size as the cluster's -45% TPOT over stock colocated sglang, on one GPU with no router or pool.
+    | **128K stage** | | | | |
+    | our full stack | **44.8** | **34.4** | **95.7** | **54.4** |
+    | stock MTP + stock FA3 (control) | 97.3 | 61.0 | 231.4 | 48.8 |
+    | no spec decoding + A6 | 86.3 | 67.9 | 218.5 | 53.8 |
+    | no spec decoding + stock FA3 | 88.8 | 70.2 | 218.1 | 49.0 |
+    - Ours vs the stock control: **-38% TPOT / -27% ITL / -57% tail at 32K (equal throughput), and -54% TPOT /
+      -44% ITL / -59% tail / +11% throughput at 128K.** The 128K point clears BOTH publishability bars at once, and
+      the advantage grows with context. A6 composition counters 1144 (32K) and 2478 (128K) confirm the fused path ran.
+    - The no-speculation rows isolate the kernel with no MTP and no worker scheduler: -6.7% TPOT at 32K, -2.8% at
+      128K, with +7-10% throughput. Small, and shrinking with context, exactly as the capture ladder and the
+      cluster step-time analysis predict.
     - **CORRECTION (same day): the -38% bundles THREE contributions, not two.** With `--ours` the native arm also
       enables the worker scheduler -- `SGLANG_EDF_SCHEDULING`, uncached-token deadlines, `SGLANG_EDF_PREEMPT_CHUNK=1`
       (chunk preemption / parking) and deadline-sized chunks (run_native_serving_pair_20261023.py:86-95) -- while the

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.83.0 — Single-node 128K: -54% TPOT and +11% throughput vs stock sglang (2026-10-28)
+- mix128 stage: our full stack 44.8 ms TPOT / 34.4 ITL / 95.7 worst-decile / 54.4 tok/s against stock MTP + stock
+  FA3 at 97.3 / 61.0 / 231.4 / 48.8. Clears both bars at once (>=30% latency, >=10% throughput) and is larger than
+  the -38% at 32K, so the margin grows with context. Fused path verified (2478 composition events).
+- No-speculation rows isolate the kernel alone: -6.7% TPOT at 32K, -2.8% at 128K -- small and shrinking with
+  context, consistent with the capture ladder and the cluster step-time analysis.
+- Still bundles C1+C2+C3worker; the no-ours pass separating them is running.
+
 ## v1.82.0 — Single-node A/B on H200: -38% TPOT, -57% tail vs stock sglang (2026-10-28)
 - mix32, Qwen2.5-7B, two repeats, A6 composition verified: four-mode + A6 gives TPOT 14.3 ms / ITL 15.0 / worst
   decile 32.4 against stock MTP + stock FA3 at 22.9 / 20.6 / 75.9, equal throughput. Matches the cluster direction.

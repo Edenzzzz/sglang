@@ -124,6 +124,25 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     - A6 beats our earlier v3 design by 1.34-1.92x, so the one-plan + in-launch-merge build is the right one to
       carry forward; v3 is retired as an arm.
     - Consistent with serving: 4-9% on captures, 1.04x whole-step in the cluster replay, and falling with context.
+  - [ ] **NEXT KERNEL ITEM (user, 2026-10-28): pipeline the draft head against the verify forward.**
+    - The user's observation: the baseline runs the draft and the verify as SEPARATE attention calls, so can the
+      draft of the current step overlap the verify of the previous batch?
+    - Why this is the best remaining item. EAGLE3 runs 3 sequential draft forwards of a ONE-layer model per step and
+      then one 28-layer verify. In arithmetic the draft is ~3% of the step, but each draft forward is a tiny launch
+      at one token per request, so it is latency-bound and costs far more wall-clock than its FLOPs. **It is the only
+      remaining idea that deletes SERIAL time instead of shaving row-side work** -- which is exactly why every other
+      mechanism (DSMEM, persistent, ready-queue JIT, multicast, L2 order, two-stream) measured zero: none of them
+      changed what the step waits on. It also attacks the same quantity as cross-role backfill, beta = 0.796.
+    - The dependency, and how to break it: draft(N+1) for a request depends on verify(N) for that request, so they
+      cannot overlap within one group. Split the running batch into two staggered groups: group A's verify runs
+      concurrently with group B's draft, then the roles swap -- a two-stage pipeline in which the draft head rides
+      in the verify's shadow. This is specific to the four-mode step, not borrowed from another paper.
+    - Costs to measure, not assume: a staggered batch halves each group's size (worse GPU efficiency per launch, and
+      CUDA-graph capture must cover both phases), and acceptance may shift because a group now drafts against a
+      slightly older target state. Measured acceptance to protect: 3.35-3.55 at 128K (rate 0.78-0.85).
+    - First measurement needed, before any implementation: the draft share of decode step wall time (nsys or a CUDA
+      event around the draft forwards). That share is the ceiling on the gain; if it is under ~10% this is not worth
+      building, and the item should be closed with that number recorded.
   - [x] **GLM-4.5-Air kernel ladder on the H200 (2026-10-28): the tile-class hypothesis is REFUTED.**
     `unified/a6_ladder_model_h200_20261028.sh /opt/tiger/w/trace_sampled_glm_h20_20261025 glm`, log
     `/opt/tiger/w/ladder_glm.log`; 43 rank-0 captures copied from the H20 (24 four-mode, 19 two-mode), FP32 worst
@@ -530,7 +549,13 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
               | stock colocated sglang (upstream tree) | 60.3% | 66.7% | 1292 | 7756 |
               | conditional disaggregation | 58.2% | 53.8% | 725 | 9264 |
               - **Deadline ordering finally separates under overload: +7.5% agent goodput and +2.5 points over
-                FCFS**, against nothing at alpha 3. This is C3-worker's regime and the only load where it pays;
+                FCFS**, against nothing at alpha 3.
+              - **Why FCFS does NOT blow up TPOT here (user expected it to).** Both arms run the SAME fixed 2048
+                chunk, so each step injects the same amount of prefill into the decode batch; EDF changes only WHICH
+                request receives that chunk, not how much prefill lands per step. Measured: chat TPOT p90 109.0
+                (FCFS) against 111.2 ms (EDF), and FCFS is WORSE on TTFT (chat p90 8.52 against 7.18 s). TPOT is set
+                by the per-step prefill volume, i.e. the chunk size, not by queue order -- which is precisely why
+                the SLO-budgeted chunk, not the ordering, is the mechanism that protects TPOT. This is C3-worker's regime and the only load where it pays;
                 at 128K single-node it costs 8.5% of TPOT and at alpha 3 it is inside the noise.
               - Conditional disaggregation degrades much faster than colocation under overload (53.8% agent against
                 76-79%), and issues 9264 fewer rounds: the re-shipped prefill competes with decode exactly when

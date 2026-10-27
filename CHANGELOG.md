@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.91.0 — Draft/verify pipelining queued as the next kernel item; why FCFS is TPOT-neutral (2026-10-28)
+- User's kernel idea recorded: overlap the draft head of the current step with the verify of another group. The
+  draft is 3 sequential one-layer forwards per step, latency-bound rather than FLOP-bound, so it is the only
+  remaining item that deletes serial time instead of shaving row-side work. Requires a two-group staggered batch,
+  since draft(N+1) depends on verify(N) within a group. First measure the draft share of decode wall time; that is
+  the ceiling. Acceptance to protect: 3.35-3.55 at 128K.
+- Explained the FCFS/TPOT question with data: both arms use the same fixed 2048 chunk, so per-step prefill volume
+  is identical and only the order changes. chat TPOT p90 109.0 (FCFS) vs 111.2 (EDF); FCFS is worse on TTFT (8.52
+  vs 7.18 s p90). TPOT is governed by chunk size, not queue order.
+- Llama-70B ladder finished (LADDER_llama70b_DONE); A6 is 6.7x sglang's call on mix32_two, role split dominant.
+- BLOCKER: pods 1-3 need `merlin-cli login --control-plane cn-seed --force` (WebShell SSO expired); pod 0 still
+  reachable over ssh. Cluster runs cannot launch until that is refreshed.
+
 ## v1.90.0 — GLM ladder: the tile-class hypothesis is refuted (2026-10-28)
 - GLM-4.5-Air, 43 captures, FP32-checked: A6 is 1.020-1.023x over the naive role split (serial), i.e. 2.0-2.8% --
   LESS than Qwen's 4.0-8.7%, on the model the 64-row tile class was designed for.

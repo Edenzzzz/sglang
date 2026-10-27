@@ -37,8 +37,13 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     - Order on the H200: collect A6 STEPTRACE at the Table 7b loads, export the model, then run the arms below.
     - Bug (2026-10-27): the step tracer logged a 4-mode step's 4-token verify rows as prefill rows (nd = 0 on all
       ~2300 merged steps per worker), so fit_4mode_step.py refused to fit and the v1 chunk driver stopped.
-      `pd_colocation/apply_steptrace_verify_rows_20261027.py` counts the tail `mixed_verify_rows` as decode rows; it
-      is applied to both trees on all pods, and the driver was rerun as `mn_slo_chunk_v2_16g_20261027.sh`.
+      - Root cause: the merge runs inside the speculative worker after `_steptrace_begin`. The tracer reads the running
+        rows from `batch.mixed_spec_running`, but skipped them because the serving path keeps no host `seq_lens_cpu`.
+      - The first fix keyed on `mixed_verify_rows` (set only on the merged object inside the worker) and changed
+        nothing: the v2 re-trace still had 0 mixed rows, and it was stopped.
+      - `pd_colocation/apply_steptrace_verify_rows_20261027.py` now takes the running rows' KV from their requests. It
+        is applied to both trees on all pods (v1 reverted), and the run continues as
+        `mn_slo_chunk_v3_16g_20261027.sh`.
       Earlier 4-mode STEPTRACE fits (the 2.0% MAPE in the paper's Table 3 came from an H200 log) must be checked for
       the same misclassification before the paper quotes them.
     - 2026-10-27, also on 16 H20s (queued, `pd_colocation/mn_slo_chunk_16g_20261027.sh`, log

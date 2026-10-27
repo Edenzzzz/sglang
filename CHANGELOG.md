@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.71.6 — STEPTRACE fix, second attempt (2026-10-27)
+- The merge happens inside the worker after `_steptrace_begin`. The tracer's own `mixed_spec_running` block skipped
+  the running rows when there was no host `seq_lens_cpu`; their KV now comes from the requests. The ineffective v1 fix
+  is reverted.
+- Chunk-size driver v3 started; a background check confirms merged steps are traced with decode rows.
+
 ## v1.71.5 — Paper: step-model per-type claim withdrawn pending a corrected tracer (2026-10-27)
 - Table 3's step model came from the same tracer, so the four-mode merged steps were logged in "prefill" (ours 8.7% vs
   7.5%), not in "mixed".

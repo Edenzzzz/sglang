@@ -2,7 +2,8 @@
 # Leave-one-contribution-out on the superposed TraceLab replay at alpha 3 (16 H20s, Qwen2.5-7B TP1 x 16), 2026-10-27.
 # The full stack at this point is coloc_slo_edf_mtp_hc_tl2_a3_r1 (mn_tracelab_shift_v2_16g_20261026.sh). Each arm here
 # removes exactly one contribution and keeps the rest:
-#   -C1 unified FA3 + FA2 dispatcher: KERNEL=lpt on ATTN_BACKEND=fa3 -> sglang's single varlen FA3 call, same 4-mode
+#   -C1 unified FA3 + FA2 dispatcher (traced, STEP_TRACE=1, for the fused-vs-unfused step-model comparison on the same
+#       schedule): KERNEL=lpt on ATTN_BACKEND=fa3 -> sglang's single varlen FA3 call, same 4-mode
 #       schedule, same deadline order, same router
 #   -C2 four-mode step (verify rows in the prefill chunk's forward): the _mtps suffix -> stock MTP steps (upstream's
 #       spec-aware MIXED step for decode tails), A6 kernel, deadline order, router unchanged
@@ -29,7 +30,7 @@ H0=2f608c1b1a67cf09.worker_0.seedjob.wenxuan-tan@merlin-ssh-proxy-cn.byted.org
 score() { ssh -o StrictHostKeyChecking=no -p 22222 $H0 "/dev/shm/w/venv/bin/python /dev/shm/w/perf/tracelab_windows.py --windows 30 /dev/shm/w/mn/$1 2>&1 | tail -1" 2>/dev/null | sed 's/^/SCORE /'; }
 export ALPHA=3 CHAT_RATE=8 CHAT_N=$(( 8 * 1200 * 3 / 2 )) BENCH_REPLAY_HORIZON_S=1800
 T=_tl2_a3_abl_r1
-KERNEL=lpt EDF=1 RUN_TAG=${T}_noC1 ROUTER_ARGS="$ROUTER_ARGS_ALL" python3 -u mn_run.py coloc_slo_edf_mtp_hc
+KERNEL=lpt EDF=1 STEP_TRACE=1 RUN_TAG=${T}_noC1 ROUTER_ARGS="$ROUTER_ARGS_ALL" python3 -u mn_run.py coloc_slo_edf_mtp_hc
 score coloc_slo_edf_mtp_hc${T}_noC1
 KERNEL=a6 EDF=1 RUN_TAG=${T}_noC2 ROUTER_ARGS="$ROUTER_ARGS_ALL" python3 -u mn_run.py coloc_slo_edf_mtps_hc
 score coloc_slo_edf_mtps_hc${T}_noC2

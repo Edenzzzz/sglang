@@ -647,8 +647,22 @@ fused step is as predictable as the stock one.
 The per-type split must be read with care. The step tracer that produced Table 3 classified rows by token count, so a
 four-mode step's 4-token verify rows were logged as prefill rows. The merged prefill + verify steps therefore fall in
 the "prefill" row, where ours is less predictable (8.7% vs 7.5%). The "mixed" row holds only prefill chunks beside
-one-token decode rows. A re-fit with the tracer corrected (verify rows counted as decode rows) is [pending], on H20
-traces of the trace replay and on the H200. Llama-3.3-70B and GLM-4.5-Air fits are [pending].
+one-token decode rows.
+
+With the tracer corrected (verify rows counted as decode rows), the per-type split is clean. On the trace replay at
+alpha 3 (Qwen2.5-7B, 16 H20 workers, about 2,500 merged steps per worker), a model fit on the first half of four
+workers' traces and scored on the second half has these held-out errors:
+
+| step type | MLP with acceptance | GBT |
+|---|---:|---:|
+| merged prefill chunk + verify rows | 3.4-4.0% | 2.8-3.6% |
+| prefill | 4.6-5.5% | 6.9-7.8% |
+| decode | 18-23% (short steps of about 10-20 ms) | 21-25% |
+
+The comparison with sglang's single FA3 call on the same schedule is [pending]: the traced leave-one-out arm without
+C1. A linear model does not suffice: lin4mode reaches only 25% in-sample on GPU time, and the launch-to-launch gap
+(which includes host waits) is not fittable at all (45%). The chunk budget of section 5.2.3 therefore needs the
+nonlinear model [pending]. Llama-3.3-70B and GLM-4.5-Air fits are [pending].
 
 Table 3: held-out step-time MAPE by step type (Qwen2.5-7B, H200, four-mode serving). "prefill" includes the four-mode
 merged steps (see above); "mixed" is a prefill chunk beside one-token decode rows.

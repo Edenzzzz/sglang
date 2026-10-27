@@ -76,8 +76,15 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
           step 21.7 ms at 8 rows x 30K KV; a 2048-token chunk on a 32K prefix 435 ms).
         - The alpha-6 arm on the gap model was stopped. The arms rerun on the GPU-only model
           (`tasks/perf_model/step_qwen_h20_a6_gpu_20261027.json`) as `mn_slo_chunk_v4_16g_20261027.sh`.
-        - Open: an MLP / acceptance-aware fit on the corrected traces, for the paper's step-model claim (H200 Table 3
-          used an MLP at 2%), and so the chunk budget can price steps better than 25%.
+        - [x] Nonlinear fits on the corrected traces (2026-10-27, local, `fit_4mode_step.py --target gpu --pool` on
+              the STEPTRACE / MIXEDSPEC lines of pod 0's four workers, copied to `/tmp/pfix/st3/`). Held-out errors,
+              pooled across the four workers, per worker:
+              - MLP with acceptance: mixed (merged) 3.4-4.0%, prefill 4.6-5.5%, decode 18-23%;
+              - MLP: mixed 3.4-4.2%, prefill 5.5-6.3%, decode 21-23%;
+              - GBT: mixed 2.8-3.6%, prefill 6.9-7.8%, decode 21-25%.
+        - [ ] Stock comparison on the same schedule: the leave-one-out arm without C1 is now traced (`STEP_TRACE=1`).
+        - [ ] The chunk budget still uses lin4mode on GPU time (25%). The patch takes only a linear model; a nonlinear
+              model in the patch (or a per-step lookup) is the next step if the chunk arms show mispricing.
       Earlier 4-mode STEPTRACE fits (the 2.0% MAPE in the paper's Table 3 came from an H200 log) must be checked for
       the same misclassification before the paper quotes them.
     - 2026-10-27, also on 16 H20s (queued, `pd_colocation/mn_slo_chunk_16g_20261027.sh`, log

@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.72.2 — Step model on corrected traces (2026-10-27)
+- Corrected H20 traces (alpha 3 trace replay, four workers, held-out): MLP with acceptance predicts merged prefill +
+  verify steps at 3.4-4.0% and prefill at 4.6-5.5%; decode-only steps (10-20 ms) at 18-23%. Paper section 5.2.2 is
+  updated, with the stock comparison pending.
+- The leave-one-out arm without C1 is now traced, which provides that comparison on the same schedule.
+
 ## v1.72.1 — Chunk test on a GPU-time step model (2026-10-27)
 - The corrected trace fits poorly on the gap target (lin4mode 45% MAPE, unphysical coefficients). The GPU-time fit is
   sensible (25% in-sample). The alpha-6 arm on the gap model was stopped; the budgeted-chunk arms rerun on the

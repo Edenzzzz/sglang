@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.87.0 — Cluster decomposition complete: the router is the one contribution that measures (2026-10-28)
+- All four arms on our tree, acceptance 1.983-1.997 (internally valid). Our cache router with a load tie-break
+  against sglang's cache_aware: chat attainment 90.6% vs 83.3% (+7.3 points) and chat TTFT p90 0.67 s vs 3.24 s
+  (-79%), at identical agent goodput (2471 vs 2482) and acceptance.
+- C1 1.4%, C2 0%, chunk size 0% at cluster scale -- all within the noise floor.
+- The winning router is the PLAIN cache router with a load tie-break, not the SLO-checked cache_slo router, which
+  loses badly on session-affine traces (65.1-68.5% chat) by moving requests off their cached prefix.
+
 ## v1.86.0 — Single-node attribution complete (2026-10-28)
 - Cumulative on one tree, two repeats: stock 97.3 ms TPOT at 128K -> 48.0 with the four-mode step (-51%) -> 41.3
   with the A6 kernel (-14%) -> 44.8 with EDF and preemption (+8.5% WORSE). At 32K: 22.9 -> 14.2 (-38%) -> 14.2 (0%)

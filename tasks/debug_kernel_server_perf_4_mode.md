@@ -483,7 +483,25 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             **So at cluster scale C1 and C2 both measure zero, yet the stack still beats stock colocated sglang by
             +25% goodput and -45% TPOT.** The remaining candidates are the chunk size (2048 vs upstream default),
             our router against sglang's `cache_aware`, and the 32-file delta between our serving tree and upstream.
-            Arms `dchunk` and `sglrt` are running and are now the decisive ones: if both land inside the noise, the
+            **COMPLETE (2026-10-28).** All four arms on our tree with acceptance 1.983-1.997 (so internally valid,
+            unlike the withdrawn stock comparison):
+            | arm | chat attain | chat TTFT p90 | agent attain | agent tok/s |
+            |---|---:|---:|---:|---:|
+            | full stack (our cache router + load tie-break) | **90.6%** | **0.67 s** | 94.2% | 2471 |
+            | sglang's `cache_aware` router instead (`sglrt`) | 83.3% | 3.24 s | 94.3% | 2482 |
+            | noC1 | 89.2% | 0.86 s | 94.0% | 2436 |
+            | noC2 | 90.6% | 0.67 s | 93.8% | 2492 |
+            | upstream default chunk (`dchunk`) | 90.1% | 0.64 s | 94.4% | 2499 |
+            - **The router is the only cluster-level contribution that measures: +7.3 points of chat attainment and
+              a 79% lower chat TTFT tail (3.24 -> 0.67 s), at identical agent goodput and acceptance.** The
+              mechanism is the load tie-break among workers whose prefix hit ties; sglang's `cache_aware` picks on
+              hit length alone and piles chat onto whichever worker holds the prefix.
+            - C1 (1.4%), C2 (0%) and chunk size (0%) all measure zero at cluster scale, for the reasons recorded
+              above (row-side kernel gain; the four-mode gate against ~1085 uncached tokens per round).
+            - Note this is the PLAIN cache router with a load tie-break, not the SLO-checked `cache_slo` router,
+              which loses on these session-affine traces (65.1-68.5% chat). The SLO checks move requests off their
+              cached prefix; the cheap tie-break does not.
+            (superseded plan) Arms `dchunk` and `sglrt` were the decisive ones: if both land inside the noise, the
             margin belongs to the tree delta and must be traced to a specific mechanism before anything is claimed.
             - Overload point for the C3 question (`gap_r1`, alpha 6, cache routing + FCFS): chat **58.0%**, agent
               **76.2%**, 1956 tok/s, chat TPOT p90 109 ms. This is the load-spike regime where deadline ordering

@@ -6,7 +6,9 @@
 - The machinery buys a better TTFT tail (chat p90 1.03-1.19 vs 3.03 s) and pays for it in TPOT (p50 27-30 vs
   21.5 ms); under a 2 s + 50 ms SLO that trade loses. C3's worker level must not be claimed as a cluster-level gain;
   its evidence is the single-node agent burst.
-- A decomposition arm set is queued to separate deadline ordering from preemption/parking.
+- Correction: demotion was never enabled in any H20 multi-node arm (`mn_node.sh` had no `LATE_DEMOTE` until today),
+  so the arm removed ordering + preemption/parking + reservation only. `LATE_DEMOTE` is now plumbed through.
+- Decomposition queued ahead of the chunk A/B: ordering only, ordering + demotion, and a second without-C1 repeat.
 
 ## v1.74.1 — Ablation arm 2: C2 is within repeat noise at alpha 3 (2026-10-27)
 - Without C2 (stock MTP steps instead of the merged 4-mode step): chat 69.1%, agent 77.4%, 1638 tok/s, inside the

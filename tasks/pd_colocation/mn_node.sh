@@ -173,6 +173,10 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   if [ "${PREEMPT:-0}" = 1 ]; then
     export SGLANG_EDF_PREEMPT_CHUNK=1 SGLANG_EDF_RESERVE_EARLIER=1 SGLANG_EDF_PREEMPT_MAX_TOKENS=1000000000
   fi
+  # LATE_DEMOTE=1 (with EDF=1): a prefill that can no longer meet its deadline ranks behind every prefill that can
+  # (apply_edf_late_demote_20261024.py, already in the tree). This is the mechanism with the single-node evidence
+  # (chat TTFT -96..-98% under an agent burst) and it has never been enabled in a multi-node arm.
+  [ "${LATE_DEMOTE:-0}" = 1 ] && export SGLANG_EDF_LATE_DEMOTE=1 SGLANG_EDF_LATE_DEMOTE_TOK_S=${LATE_DEMOTE_TOK_S:-1e12}
   [ -n "${CHUNK:-}" ] && ARGS+=(--chunked-prefill-size $CHUNK)
   # MEM_FRAC: static memory fraction. PDMUX arms need ~0.70 on H20: prefill is unchunked, and at 0.85 a 32-64K agent
   # prefill OOMed with 6.3 GB left after the KV pool (2026-10-17).

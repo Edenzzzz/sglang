@@ -245,12 +245,19 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             lowered attainment below the uncontrolled arm.
           - **Do not report C3's worker level as a cluster-level gain.** Its measured value is the single-node agent
             burst (chat TTFT -96..-98% from demotion), a different workload. On this replay it costs.
-          - Open: the arm removes deadline ordering, demotion, chunk parking and budget reservation together, so it
-            does not say which one costs. Queued decomposition below.
-    - [ ] **C3-worker decomposition** (`mn_c3worker_decomp_16g_20261027.sh`): EDF ordering only (no preemption, no
-          parking), then ordering + demotion, against FCFS and the full stack, same alpha-3 replay. Chunk parking and
-          preemption (`SGLANG_EDF_PREEMPT_CHUNK`, `SGLANG_EDF_RESERVE_EARLIER`) are the prime suspects, since they
-          add work per step and can thrash a long chunked prefill.
+          - **Correction after checking `mn_node.sh`: demotion was never active in any H20 multi-node arm.** The
+            file had no `SGLANG_EDF_LATE_DEMOTE` until 2026-10-27, though the scheduler carries the code. So C3's
+            worker level here is EDF ordering + chunk preemption/parking + budget reservation, and the mechanism
+            with the single-node evidence has never been tested multi-node. `LATE_DEMOTE=1` is now plumbed through
+            `mn_node.sh` / `mn_run.py`.
+          - The arm removes three mechanisms at once, so it does not say which one costs; preemption/parking is the
+            prime suspect (per-step work, and it can thrash a long chunked prefill).
+    - [ ] **C3-worker decomposition, queued** (`mn_c3worker_decomp_16g_20261027.sh`, 3 arms, same alpha-3 replay):
+          - `ord`: EDF ordering only (`PREEMPT=0`), isolating preemption/parking;
+          - `demote`: ordering + demotion, still no preemption -- the first multi-node test of the single-node
+            mechanism;
+          - `noC1b`: a second without-C1 repeat, to tighten that arm's 7.5-21% goodput range.
+          It runs before the chunk A/B, since the C3 finding matters more to the paper.
     - [x] **Audit of the rule against recorded steps** (2026-10-27, `perf_model/chunk_budget_audit.py` on the four
           alpha-3 worker traces, 87,932 steps; user asked whether the implementation is wrong):
           - Decode-only steps cost 8-52 ms (p50 27.7, p90 44.9) and **never** exceed the chat allowance

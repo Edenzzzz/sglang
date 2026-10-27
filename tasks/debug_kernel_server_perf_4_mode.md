@@ -532,8 +532,18 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             `mn_stockfix_16g_20261028.sh` re-runs the stock baseline with `ROPE_THETA=1000000` plus our arm as a
             control; log `/tmp/h20/mn_stockfix_16g_r1.log`.
           - **Every past upstream-tree arm is suspect**, including the PD-disaggregation arms
-            (`disagg_p*_mtps_*`, which also run `up_clean`). Their acceptance must be checked before any of their
-            numbers are quoted again.
+            (`disagg_p*_mtps_*`). Verified 2026-10-28: those arms do pass the same YaRN override and do run
+            `SGL_PY=/dev/shm/w/up_clean/python` (mn_tracelab_shift_v2_16g_20261026.sh:50), so they carry the same
+            wrong RoPE base. Their decode-side acceptance could not be read from here -- only pod 0's worker logs
+            are collected to the head node, and in `disagg_p3` pod 0 holds prefill workers with no decode batches;
+            reading it needs an ssh to each decode pod.
+            - The disaggregation comparison is **less** distorted than the stock-colocation one, because its gap was
+              dominated by an 8x prefix-cache difference (11.2% against ~92%) rather than by acceptance. But the
+              acceptance defect pushes the same direction, so the PD numbers overstate our margin by an unknown
+              amount and must be re-run with `ROPE_THETA` before they appear in the paper.
+            - Arms confirmed CLEAN (acceptance 1.98-2.00, our tree): every `bdec_r1_*`, `best_r1_cacheFCFS`,
+              `coloc_slo_edf_mtp_hc_tl2_a3_r1`, `cond_p1_edf_mtp_hc_tl2_a3_best_r1_cond`. Conditional
+              disaggregation runs OUR router on our tree, so that arm is valid.
     - [!] **Scorer bug: the client's `cached_tokens` is 0 for every request in every arm**, so the agent tenant's
           >200K-uncached TTFT allowance (20 s instead of 10 s) never fires and `uncached` equals the full prompt.
           Attainment is therefore scored slightly PESSIMISTICALLY for long rounds, in every arm equally. Fix before

@@ -54,7 +54,7 @@ elif [ "${AGENT_MODE:-}" = tracelab_ts ]; then
     "${WINDOW_ARGS[@]}" --tracelab-window-s ${WINDOW_S:-3600} \
     --tracelab-time-scale ${ALPHA:-1} --tracelab-window-rounds ${WINDOW_ROUNDS:-session} \
     ${TS_TEXT:+--tracelab-text-source "$TS_TEXT"} --request-rate inf \
-    --warmup-requests 2 --output-file $OUT/agent.json --output-details --disable-tqdm > $OUT/bench_agent.log 2>&1 &
+    --warmup-requests 2 --output-file $OUT/agent.json --output-details --cache-report --disable-tqdm > $OUT/bench_agent.log 2>&1 &
   unset BENCH_SESSION_AUDIT_FILE
 elif [ -n "${AGENT_CONC:-}" ]; then
   # Program concurrency (ThunderAgent protocol; the only agent load axis -- user, 2026-10-15): AGENT_CONC
@@ -67,7 +67,7 @@ elif [ -n "${AGENT_CONC:-}" ]; then
     --tracelab-min-output-len 1 --num-prompts $((S * T)) --request-rate inf \
     --tracelab-providers claude,codex --tracelab-allow-empty-prefix --tracelab-session-weighting rounds \
     --tracelab-selection-seed ${AGENT_SEED:-20261014} \
-    --warmup-requests 2 --output-file $OUT/agent.json --output-details --disable-tqdm > $OUT/bench_agent.log 2>&1 &
+    --warmup-requests 2 --output-file $OUT/agent.json --output-details --cache-report --disable-tqdm > $OUT/bench_agent.log 2>&1 &
   unset BENCH_SESSION_CONCURRENCY BENCH_SESSION_AUDIT_FILE
 else
 $W/venv/bin/python -m sglang.bench_serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/${MODEL_DIR:-qwen7b} \
@@ -75,7 +75,7 @@ $W/venv/bin/python -m sglang.bench_serving --backend sglang --host 127.0.0.1 --p
   --tracelab-num-groups $S --tracelab-min-context-len ${MIN_CTX:-16384} --tracelab-max-context-len ${MAX_CTX:-49152} \
   --tracelab-min-output-len 64 --num-prompts $((S * T)) --request-rate ${SESSION_RATE:-0.5} \
   --use-trace-timestamps --mooncake-slowdown-factor ${SLOWDOWN:-0.1} \
-  --warmup-requests 2 --output-file $OUT/agent.json --output-details --disable-tqdm > $OUT/bench_agent.log 2>&1 &
+  --warmup-requests 2 --output-file $OUT/agent.json --output-details --cache-report --disable-tqdm > $OUT/bench_agent.log 2>&1 &
 fi
 A=$!
 # HOT=1 (point 4): the second tenant shares a few long system prompts instead of sending fresh
@@ -95,7 +95,7 @@ else
 fi
 $W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/${MODEL_DIR:-qwen7b} \
   "${SECOND[@]}" --request-rate ${CHAT_RATE:-16} --num-prompts ${CHAT_N:-3200} \
-  --warmup-requests 2 --output-file $OUT/chat.json --output-details --disable-tqdm > $OUT/bench_chat.log 2>&1 &
+  --warmup-requests 2 --output-file $OUT/chat.json --output-details --cache-report --disable-tqdm > $OUT/bench_chat.log 2>&1 &
 C=$!
 # MATH_RATE (optional third tenant): math problems in ShareGPT format from drivers/serving/prep_standalone.py
 # (MATH_SET=math500|gsm8k under $W/workloads/standalone), replayed by the sharegpt loader with each output length
@@ -107,7 +107,7 @@ if [ -n "${MATH_RATE:-}" ]; then
   [ "${CHAT_TEMPLATE:-0}" = 1 ] && MATH_ARGS+=(--apply-chat-template)
   $W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT --model $W/${MODEL_DIR:-qwen7b} \
     "${MATH_ARGS[@]}" --request-rate $MATH_RATE --num-prompts ${MATH_N:-500} --seed ${MATH_SEED:-3} \
-    --warmup-requests 2 --output-file $OUT/math/math.json --output-details --disable-tqdm > $OUT/math/bench_math.log 2>&1 &
+    --warmup-requests 2 --output-file $OUT/math/math.json --output-details --cache-report --disable-tqdm > $OUT/math/bench_math.log 2>&1 &
   M=$!; NREADY=3
 fi
 for i in $(seq 1 3000); do
@@ -126,7 +126,7 @@ if [ -n "${CHAT_SPIKE:-}" ]; then
   ( sleep $SP_DELAY; date +%s.%N > $OUT/chat_spike.start
     BENCH_BARRIER_DIR= $W/venv/bin/python -m sglang.benchmark.serving --backend sglang --host 127.0.0.1 --port $RPORT \
       --model $W/${MODEL_DIR:-qwen7b} "${SECOND[@]}" --seed 7 --request-rate $SP_RATE --num-prompts $SP_N --warmup-requests 0 \
-      --output-file $OUT/chat_spike.json --output-details --disable-tqdm ) > $OUT/bench_chat_spike.log 2>&1 &
+      --output-file $OUT/chat_spike.json --output-details --cache-report --disable-tqdm ) > $OUT/bench_chat_spike.log 2>&1 &
   S=$!
 fi
 wait_status=0

@@ -138,7 +138,28 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       merged steps; option 1 only removes a search we can already afford. Either way it is a learned predictor over
       our own fused step, not a borrowed formula.
     - Labels come from traces we already hold, so training needs no new GPU time.
-  - [ ] **NEXT KERNEL ITEM (user, 2026-10-28): pipeline the draft head against the verify forward.**
+  - [ ] **KERNEL INNOVATION 1 (2026-10-28, user approved): cross-role shared-prefix KV reuse.**
+    - In our fan-out agent workload a parent session spawns children sharing its prefix, and the stack runs at 92.7%
+      prefix hit. So within ONE four-mode step the prefill chunk (a child's new round) and the decode/verify rows
+      (its siblings) often read the SAME prefix KV pages, and today each role streams them from HBM independently.
+    - Both roles are in one step under one plan, so the plan can detect the overlap (the radix tree already reports
+      shared prefix length) and group the work by KV page rather than by request, fetching shared pages once.
+    - **Not available to a disaggregated or separate-call design**: there the roles are in different kernels, often
+      on different nodes. It is a direct consequence of C2 putting both roles in one step.
+    - **DeFT (arXiv 2404.00242) validates the mechanism** (KV-guided grouping, 73-99% KV IO saved) but only for a
+      tree inside ONE generation call. Our novelty must be the CROSS-ROLE and CROSS-REQUEST grouping; do not adopt
+      tree attention. See the reference entry.
+    - Weak version already measured: KV-position ordering gave 1.08x on a 48K shared prefix and -29% elsewhere, so
+      any version must be gated on measured sharing.
+    - **Measure first, at zero GPU cost:** the fraction of KV pages that both roles touch in the same step, over the
+      trace replay. DeFT's 73-99% comes from trees where sharing is near-total; ours depends on fan-out and hit
+      rate, so this number decides whether the item is worth building.
+  - [ ] **KERNEL INNOVATION 3 (2026-10-28): deferred KV commit for rejected draft tokens.**
+    - Verify computes and writes paged KV for all 4 draft tokens, but acceptance is ~2.0 on the cluster (3.35-3.55
+      at 128K single node), so a large share of verify KV writes are discarded. Holding the draft chain's KV in a
+      scratch buffer and committing only accepted entries saves that write bandwidth. Speculation-specific; check
+      first whether sglang already elides these writes.
+  - [ ] **KERNEL INNOVATION 2 (user, 2026-10-28): pipeline the draft head against the verify forward.**
     - The user's observation: the baseline runs the draft and the verify as SEPARATE attention calls, so can the
       draft of the current step overlap the verify of the previous batch?
     - Why this is the best remaining item. EAGLE3 runs 3 sequential draft forwards of a ONE-layer model per step and
@@ -3587,6 +3608,29 @@ Papers and systems this work draws on. *(sent)* marks the ones the user sent. Ea
 method, and what we take from it -- only where it strengthens our own contributions (fused kernels, higher
 cluster-wide request volume, scheduling flexibility under load spikes / mixed workloads / workload variation).
 
+- **DeFT: Decoding with Flash Tree-attention for Efficient Tree-structured LLM Inference** *(sent, 2026-10-28;
+  arXiv 2404.00242)*
+  - **Summary:** Attention kernel for tree-structured decoding -- few-shot prompting, multi-step reasoning,
+    speculative decoding -- where many generation calls share a prefix. Evaluated on three tree-based workloads
+    against state-of-the-art attention kernels; reports 73-99% less KV-cache IO and nearly 100% less IO for partial
+    results, giving up to 2.23x end-to-end and 3.59x attention speedup.
+  - **Core method / contributions:** (1) *KV-Guided Grouping*: partition work by KV rather than by query, so a
+    shared prefix's KV is loaded once and reused across every query that shares it, instead of being re-read per
+    branch. (2) *Flattened Tree KV Splitting*: split the tree's KV evenly across partitions with little redundant
+    computation, so the splits are load-balanced and GPU utilisation stays high.
+  - **Relation to our method:** DeFT's grouping is the same insight as our proposed cross-role shared-prefix reuse,
+    and it confirms the mechanism is worth real money (73-99% IO). But its setting is a TREE WITHIN one generation
+    call (speculative tree, beam, reasoning branches), so the queries sharing a prefix are all decode queries of the
+    same request. Ours is different in two ways that only exist because of C2: the sharing is **across the two
+    roles of one fused step** (the prefill chunk and the decode/verify rows read the same session prefix) and
+    **across different requests** (fan-out siblings of one agent session). A tree-attention kernel cannot express
+    that, because the chunk is not a branch of the decode tree. Their load-balanced splitting is also the same
+    problem our LPT placement solves, and our measurement says placement is worth <= 0.7% on our shapes -- their
+    gain is in the IO term, not the balance term.
+  - **What we can learn:** group by KV, not by query, when the plan shows two work items reading the same pages --
+    and measure the page-overlap fraction FIRST, because their 73-99% comes from trees where sharing is near-total,
+    whereas our sharing depends on the workload's fan-out and cache hit. Do not adopt their tree machinery: our
+    contribution has to be the cross-role grouping the fused step makes possible, not tree attention.
 - **Taming Dynamism on GPUs: Cross-SM Kernel Fusion via SM Cooperation and Just-in-Time Reduction** *(sent; PDF)*
   - *Summary:* fuses dynamically sized, heterogeneous work into one persistent launch whose CTAs pull tasks from a
     device-side queue, with SMs cooperating on shared tasks and split partials reduced just in time instead of by a

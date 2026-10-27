@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.69.4 — Demand shift v2 complete (2026-10-27)
+- Surge, stock PD 3 + 1: chat 3.0 / 2.1%, agent 4.2%, 11 tok/s. Table 10d is complete except stock PD 2 + 2's agent side at alpha 6 (rerun queued).
+
 ## v1.69.3 — Demand shift, surge: stock PD 2 + 2 row (2026-10-27)
 - Chat 17.2 / 11.1%, agent 4.7%, 13 tok/s goodput; Table 10d and task doc.
 

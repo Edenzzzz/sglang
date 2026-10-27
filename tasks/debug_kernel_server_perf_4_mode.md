@@ -1484,7 +1484,8 @@ Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = p
       - conditional 36.5 / 27.1% ; 53.8% ; 668 ; 6081;
       - stock PD 2 + 2: 17.2 / 11.1% ; 4.7% ; 13 ; 1169 (4769 failed chat requests, 10677 agent rounds lost after
         failed rounds);
-      - stock PD 3 + 1: running.
+      - stock PD 3 + 1: 3.0 / 2.1% ; 4.2% ; 11 ; 1823.
+    - v2 driver complete 2026-10-27 08:5x; the stock PD 2 + 2 agent side at alpha 6 is rerun in the chunk driver.
     - alpha 3, ours vs conditional disaggregation:
       - chat attainment +14 points (+28% relative), chat TTFT p90 1.12 vs 8.74 s;
       - agent attainment +8.7 points, agent SLO goodput +57%, rounds issued +24%, agent TTFT p90 8.2 vs 21.2 s.

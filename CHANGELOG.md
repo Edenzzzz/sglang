@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.74.0 — Closed-form chunk sizing from the kernel's cost law; first ablation arm (2026-10-27)
+- Design recorded: the fused kernel's `max + beta x min` law is invertible, so the chunk solves in closed form, while
+  the split-kernel baseline (beta = 2.19 when fit) forces a search. The balance-point chunk grows with decode load
+  (162 tok at 4 rows -> 761 at 48), the opposite of a cap; acceptance widens it through the `s x a` allowance. H20
+  beta = 0.796 makes the discount ~10%, so the claim belongs on the H200.
+- Ablation arm 1 (without C1): chat 61.7%, agent 70.1%, 1388 tok/s vs 1501-1763 for the full stack, i.e. C1 is worth
+  7.5-21% of agent goodput; the full-stack repeats differ by 17%, so a second noC1 repeat is needed.
+
 ## v1.73.2 — Metric audit and the capacity-reservation design (2026-10-27)
 - Crossflow scores ITL (mean, plus a 120 ms p99 constraint); SLOs-Serve, JITServe and our scorer use mean TPOT. We
   keep mean TPOT for attainment and now also report mean and p99 ITL per tenant (`tracelab_windows.py`), since

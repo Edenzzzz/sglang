@@ -45,6 +45,31 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       for long uncached prompts or deep EDF queues.
     - [ ] A/B on the trace replay, alpha 3 and 6, with SLO-budgeted workers: `cache_slo` (four vetoes, most-slack
           fallback) vs `cache_slo_h`. This waits for the user's go-ahead and for the chunk-size results.
+  - **Closed-form chunk sizing from the fused kernel's cost law (2026-10-27, user: can we avoid SLOs-Serve's DP and
+    tie this to our own contributions?).**
+    - Why they need a DP and we do not: SLOs-Serve searches token allocations over `(n_1 ... n_L)` SLO-class states
+      because its mixed-step cost is not invertible. Ours is, and only because of C1: the fused kernel obeys
+      `T_attn = max(T_p, T_d) + beta x min(T_p, T_d)`, a quadratic in the chunk, solvable in closed form. The same
+      law fit to the split-kernel baseline gives beta = 2.19 (its mixed cost is super-additive in its parts), so a
+      split-kernel system has no closed-form controller and must search. "The kernel turns chunk sizing from a search
+      into one equation" is the C1 -> C3 claim.
+    - Balance-point chunk `c*`: the largest chunk whose attention still fits inside the decode pass (`T_p = T_d`), so
+      it rides in its shadow and costs only `beta` of its own time. With the fitted H20 constants, 30K KV per row,
+      32K prefix:
+      | decode rows | decode-only step | c* | step at c* | step at 2048 |
+      |---|---|---|---|---|
+      | 4 | 27.7 ms | 162 tok | 55.9 ms | 427 ms |
+      | 16 | 44.9 ms | 326 tok | 101.8 ms | 441 ms |
+      | 48 | 91.0 ms | 761 tok | 223.8 ms | 478 ms |
+      The policy is the opposite of a cap: **the busier the decode pool, the larger the free chunk** (162 -> 761
+      tokens), because a longer decode pass casts a longer shadow. Every per-step cap we have tried shrinks exactly
+      when this says to grow, which is consistent with "EDF: order, don't cap".
+    - Acceptance enters as the per-step allowance `s x a`, so MTP at a ~ 2 doubles each row's budget per step and
+      widens the admissible chunk: a direct C2 tie-in, with `a` already tracked per worker as an EWMA.
+    - **Honest caveat:** the fitted H20 beta is 0.796, so only ~20% of the chunk's attention hides. Prefill
+      efficiency at `c*` is 5.7 tokens per ms of added step time vs 5.1 at 2048, about 10%, not a step change. The
+      published H800 beta is 0.529, where the discount is much larger. Present the mechanism on H20 and measure the
+      claim on the H200 kernel stage; do not headline 10%.
   - **Which latency metric each system scores (2026-10-27, user asked whether to switch to ITL).**
     - Ours, SLOs-Serve and JITServe score a request's **mean TPOT** (`sum(itls) / (output_len - 1)`). SLOs-Serve uses
       TPOT 50 / 100 ms with TTFT 3x / 5x the zero-load latency; JITServe states it as a per-token deadline, token i on
@@ -186,6 +211,14 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
           - Attainment: chat 7.9% (31.8%), agent 15.0% (50.0%); agent goodput 107 tok/s (890).
           - Far past capacity, a TPOT-only budget leaves too little prefill and the backlog grows without bound. This
             matches the earlier finding that every per-step chunk cap loses.
+    - [x] **Leave-one-out, arm 1 of 4: without C1** (2026-10-27, `mn_ablation_contrib_16g_20261027.sh`, log
+          `/tmp/h20/mn_ablation_contrib_16g_r1.log`; KERNEL=lpt on ATTN_BACKEND=fa3, i.e. sglang's single varlen FA3
+          call, with our 4-mode schedule, deadline order and router unchanged; STEP_TRACE=1 for the step-model
+          comparison). Chat 61.7% ; agent 70.1% ; 1388 tok/s ; 8653 rounds issued.
+          Full stack at alpha 3: 65.1% / 72.6% / 1501 / 8995 (r1) and 68.5% / 78.7% / 1763 / 9665 (r2, the traced
+          arm). So removing C1 costs 3.4-6.8 points of chat attainment, 2.5-8.6 points of agent attainment and
+          7.5-21% of agent SLO goodput. The full-stack repeats differ by 17% on goodput, so the range is wide and a
+          second noC1 repeat is needed before the paper quotes a single number.
     - [x] **Audit of the rule against recorded steps** (2026-10-27, `perf_model/chunk_budget_audit.py` on the four
           alpha-3 worker traces, 87,932 steps; user asked whether the implementation is wrong):
           - Decode-only steps cost 8-52 ms (p50 27.7, p90 44.9) and **never** exceed the chat allowance

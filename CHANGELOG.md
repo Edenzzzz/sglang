@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.71.1 — Paper: three contributions; the router is a supporting mechanism (user, 2026-10-27)
+- C4 is dropped as a headline contribution:
+  - the pool is sglang's (hierarchical cache over Mooncake), and the router's isolated gain so far is moderate;
+  - the router stays, labelled as a supporting mechanism (sections 1, 5.2.1, Table 4c);
+  - every C4 reference is rewritten (abstract, motivation, design, sections 5.4 / 6.5 / 7);
+  - it would be re-promoted only if the trace-replay leave-one-out shows a large gain.
+
 ## v1.71.0 — Contributions stated precisely; gains tied to contributions; leave-one-out ablation queued (2026-10-27)
 - Paper section 1:
   - C3 and C4 are now the mechanisms as built;

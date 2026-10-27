@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.75.0 — Ablation arm 4: removing C3's router wins by a wide margin (2026-10-27)
+- Plain cache-affinity routing (no SLO check) reaches chat 91.4%, agent 94.3%, 2514 tok/s against 65.1-68.5% /
+  72.6-78.7% / 1501-1763 for the full stack: +23..+26 points chat, +43..+67% goodput, with every latency column
+  better.
+- Mechanism: on session-affine agent traces each session has one cache holder, and a wide TTFT prediction moves
+  requests off it for nothing. The opposite held on the fan-out workload, where prefixes are replicated.
+- Consequence: the reported "ours" is not our best measured configuration. A best-vs-best comparison against
+  conditional disaggregation and stock PD is queued before any claim is restated.
+
 ## v1.74.3 — Paper Table 4c carries the measured leave-one-out arms (2026-10-27)
 - C1: -3.4..-6.8 points chat and -7.5..-21% agent goodput when removed (range not yet separated by the repeats).
 - C2: within the repeat spread on the cluster replay (~11% merged steps there); its value is the single-node

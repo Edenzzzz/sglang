@@ -252,6 +252,31 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             `mn_node.sh` / `mn_run.py`.
           - The arm removes three mechanisms at once, so it does not say which one costs; preemption/parking is the
             prime suspect (per-step work, and it can thrash a long chunked prefill).
+    - [x] **Leave-one-out, arm 4 of 4: without C3's router -- REMOVING IT WINS BY A LARGE MARGIN** (2026-10-27;
+          `coloc_cache_edf_mtp_hc`, i.e. router policy `cache` (highest prefix hit, load tie-break, no TTFT/TPOT
+          check, no pull pricing), with the A6 kernel, the 4-mode step and worker EDF unchanged).
+          Chat **91.4%** ; agent **94.3%** ; **2514 tok/s** ; 11,440 rounds issued (1,632 not).
+          Against the full stack (65.1 / 72.6 / 1501 / 8995 and 68.5 / 78.7 / 1763 / 9665): **+23 to +26 points of
+          chat attainment, +16 to +22 points of agent attainment, +43 to +67% agent SLO goodput**, and every latency
+          column improves (chat TTFT p50 0.07 vs 0.13-0.15 s, p90 0.59 vs 1.03-1.19 s; chat TPOT p50 11.6 vs
+          27.3-30.0 ms; ITL mean 19.0 vs ~51 ms).
+          - Mechanism: on this workload each session has exactly one cache holder, and the SLO check moves a request
+            off its holder whenever it predicts a miss. The prediction is wide (measured / predicted TTFT p90 2.3x),
+            so it moves requests that did not need moving, and each move recomputes a long prefix. Plain affinity
+            keeps every session on its holder.
+          - This does not contradict the earlier 8-GPU result where the SLO check won (+24% agent throughput at
+            C=32): that was the fan-out workload, where a prefix is replicated across many nodes and moving a request
+            is cheap. **The router's value is workload-dependent, and on session-affine agent traces it is negative.**
+          - **Consequence for the paper: the configuration we have been reporting as "ours" is not our best measured
+            configuration.** A6 + 4-mode + cache-affinity routing + FCFS workers beats it on every column. Table 10d's
+            "ours" row at alpha 3 (65.1% / 1501) should be read as the full stack, with the best configuration
+            reported beside it; against conditional disaggregation (50.9% / 956) the best configuration is 91.4% /
+            2514, i.e. +40 points of chat attainment and 2.6x the agent goodput.
+          - Follow-up queued below: the best configuration against conditional disaggregation and stock PD at the
+            same point, so the comparison is best-vs-best rather than our-full-stack-vs-theirs.
+    - [ ] **Best-configuration comparison, queued** (`mn_bestcfg_16g_20261027.sh`): A6 + 4-mode + `cache` routing +
+          FCFS workers vs conditional disaggregation and stock PD 2 + 2 at alpha 3, plus a repeat of the best
+          configuration itself. Until this runs, no best-vs-best claim is made.
     - [ ] **C3-worker decomposition, queued** (`mn_c3worker_decomp_16g_20261027.sh`, 3 arms, same alpha-3 replay):
           - `ord`: EDF ordering only (`PREEMPT=0`), isolating preemption/parking;
           - `demote`: ordering + demotion, still no preemption -- the first multi-node test of the single-node

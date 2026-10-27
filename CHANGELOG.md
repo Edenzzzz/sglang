@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.80.0 — Kernel ladder on 4x H200 vs the mandated naive FA3 + stock FA2 baseline (2026-10-28)
+- 96 trace-sampled captures, FP32-checked, 20 graph replays. A6 is 1.86-2.92x sglang's single varlen FA3 call, but
+  the naive role split (stock FA3 + stock flashinfer FA2) is itself 1.76-2.80x. **A6's own gain over that fair
+  baseline is 4.0-8.7%** -- the honest C1 claim; the ~2x figure is not ours to quote.
+- Two-stream naive overlap buys nothing over serial (1.763 vs 1.759x), bounding launch-level overlap and confirming
+  the large-tile/small-tile overlap is gone once the chunk runs on FA3.
+- A6 beats the earlier two-plan v3 by 1.34-1.92x; v3 retired as an arm.
+- Round-robin routing collapses the cluster (chat 11.4%, agent 10.3%, 49 tok/s), so cache affinity is worth ~50x --
+  but stock sglang's own cache_aware router already achieves it.
+
 ## v1.79.0 — The disaggregation gap is a cache gap (not ours); our gain holds at equal hit rate (2026-10-28)
 - Stock upstream sglang, colocated behind its own cache_aware router, reaches 91.8% prefix hit vs our 92.7%. So the
   8x prefill-work advantage over conditional disaggregation (11.2% hit) belongs to the LAYOUT and sglang's shipped

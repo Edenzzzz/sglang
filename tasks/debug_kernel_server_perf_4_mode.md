@@ -45,6 +45,29 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       for long uncached prompts or deep EDF queues.
     - [ ] A/B on the trace replay, alpha 3 and 6, with SLO-budgeted workers: `cache_slo` (four vetoes, most-slack
           fallback) vs `cache_slo_h`. This waits for the user's go-ahead and for the chunk-size results.
+  - [x] **KERNEL LADDER ON THE 4-H200 TRIAL vs NAIVE FA3 + STOCK FA2 (2026-10-28, the user's mandated baseline).**
+    Trial `bf7d041fb8313d8a` (vibecuda, 4x H200), `unified/a6_h200x4_kernel_ladder_20261026.sh`, log
+    `/opt/tiger/w/kernel_ladder.log`; 96 trace-sampled Qwen2.5-7B captures (24 per cell) from real 4-mode MTP
+    serving; A6 = `u_np64` (FA2 classes 64/32/16, stock FA3 for >64 packed rows, one plan, ticketed in-launch
+    merge); every arm FP32-checked (worst head relative error 0.0083) and graph-replayed 20x.
+    | arm | mix32_two | mix32_four | mix128_two | mix128_four |
+    |---|---|---|---|---|
+    | A6 vs sglang's single varlen FA3 call | 2.107x | 2.647x | 2.921x | 1.861x |
+    | naive FA3 + stock FA2, serial, vs that call | 1.954x | 2.436x | 2.796x | 1.759x |
+    | naive FA3 + stock FA2, two streams, vs that call | 2.026x | 2.474x | 2.804x | 1.763x |
+    | **A6 vs naive serial** | **1.079x** | **1.087x** | **1.044x** | **1.058x** |
+    | **A6 vs naive two-stream** | **1.040x** | **1.070x** | **1.042x** | **1.056x** |
+    | A6 vs our earlier two-plan v3 | 1.343x | 1.924x | 1.769x | 1.366x |
+    | A6 vs fa3_dual_split32 | 1.440x | 1.846x | 1.920x | 1.355x |
+    - **The honest kernel claim is 4-9% over a fair baseline, not ~2x.** Splitting the single varlen call by role is
+      worth 1.76-2.80x and is the obvious engineering step; our dispatcher adds **4.0-8.7%** on top of it. The ~2x
+      figure is only against sglang's shipped call and must not be quoted as our contribution.
+    - **Two-stream overlap buys nothing over serial** (1.763x vs 1.759x on mix128_four; 2.026 vs 1.954 at mix32_two
+      is the only cell above noise). This independently confirms that the large-tile / small-tile overlap is absent
+      once the chunk goes to FA3, and bounds what PDL can be worth.
+    - A6 beats our earlier v3 design by 1.34-1.92x, so the one-plan + in-launch-merge build is the right one to
+      carry forward; v3 is retired as an arm.
+    - Consistent with serving: 4-9% on captures, 1.04x whole-step in the cluster replay, and falling with context.
   - **Where C1's gain actually is, measured step-for-step (2026-10-27, user challenged the 4% figure).**
     - Method: STEPTRACE from two arms of the same alpha-3 replay, same schedule and router, matched by step shape.
       A6 arm `..._steptrace3_r1` (validity check: 70,701 `NATIVE_PDL_CALL ... a6_unified=1`), stock arm

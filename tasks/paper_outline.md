@@ -916,12 +916,19 @@ captures is [pending: H200].
 
 Table 5: unified dispatcher speedup, Qwen2.5-7B, H200, 96 captures.
 
-| context / mode | vs sglang's FA3 call | vs naive FA3 + FA2 | vs role split on FA3 |
+| capture cell | vs sglang's single FA3 call | vs naive FA3 + stock FA2 (serial) | vs naive (two streams) |
 |---|---:|---:|---:|
-| 32-64K, 2-mode | 1.48x | [pending] | 1.015x |
-| 32-64K, 4-mode | 1.43x | [pending] | 1.020x |
-| 128-256K, 2-mode | 1.51x | [pending] | 1.014x |
-| 128-256K, 4-mode | 1.44x | [pending] | 1.018x |
+| 32K context, 2-mode | 2.107x | 1.079x | 1.040x |
+| 32K context, 4-mode | 2.647x | 1.087x | 1.070x |
+| 128K context, 2-mode | 2.921x | 1.044x | 1.042x |
+| 128K context, 4-mode | 1.861x | 1.058x | 1.056x |
+
+Measured on an H200 over 96 captures taken from real four-mode serving (24 per cell), every arm checked against an
+FP32 reference (worst head relative error 0.0083). The middle column is the comparison that matters: separating the
+roles into a stock FA3 call for the chunk and a stock FA2 call for the rows is worth 1.76-2.80x by itself, and is
+the obvious engineering step rather than a contribution. Our dispatcher's own gain over that fair baseline is
+**4.0 to 8.7%**. Running the two naive calls on separate streams instead of serially adds nothing (1.763x against
+1.759x in the 128K four-mode cell), which bounds how much any launch-level overlap can be worth here.
 
 **Results on H20.** On the H20 (78 SMs), the same build is 1.10-1.23x faster than sglang's FA3 call on Qwen2.5-7B;
 there FA3 sets the step time, and the FA2 path's savings run beneath it. Llama-3.3-70B (TP4, 32-64K) is 1.38x /

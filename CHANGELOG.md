@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.77.0 — Demotion never ran; noise floor measured; best-config arm 1 (2026-10-27)
+- CORRECTION: the demote code is gated behind `SGLANG_EDF_PREEMPT_CHUNK=1`, so both decomposition arms (PREEMPT=0)
+  ran it never -- zero EDF_LATE_DEMOTE lines. The two arms were identical, so their gap (chat 68.8 vs 73.8, goodput
+  1912 vs 1986) is the **run-to-run noise floor: ~5 points chat, ~4% goodput**. "Ordering + demotion beats FCFS" is
+  withdrawn; parking's ~25% cost survives (outside the floor). Deadline rescoring onto uncached tokens is behind the
+  same gate, so both arms ordered by full-prompt-length priority.
+- Best config arm 1 (cache routing + FCFS): 90.6% / 94.2% / 2471 tok/s, within noise of cache + EDF (91.4 / 94.3 /
+  2514). The router, not the worker policy, is the whole cluster-level effect.
+- `apply_edf_model_demote_20261027.py` drafts the user's design (never preempt; demote on model-predicted TTFT
+  miss) but must be moved out of the gated method before use.
+
 ## v1.76.0 — vLLM PR 61869 reviewed; C1 leave-one-out is within noise (2026-10-27)
 - PR 61869 is post-forward sampling work (fused draft-sampling kernel, post-forward CUDA graph), not an attention
   epilogue, and its "fused Markov loop" is a host loop over per-position kernels. Its gains (-37 us on a 4 ms step)

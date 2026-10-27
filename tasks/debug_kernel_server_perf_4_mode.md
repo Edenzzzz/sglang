@@ -309,7 +309,13 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             2514, i.e. +40 points of chat attainment and 2.6x the agent goodput.
           - Follow-up queued below: the best configuration against conditional disaggregation and stock PD at the
             same point, so the comparison is best-vs-best rather than our-full-stack-vs-theirs.
-    - [ ] **Best-configuration comparison, queued** (`mn_bestcfg_16g_20261027.sh`, 3 arms, alpha 3), after the
+    - [x] **Best configuration, arm 1: cache routing + FCFS workers** (2026-10-27,
+          `mn_bestcfg_16g_20261027.sh`, log `/tmp/h20/mn_bestcfg_16g_r1.log`): chat **90.6%** ; agent **94.2%** ;
+          **2471 tok/s** ; 11,424 rounds issued; chat TTFT p50/p90 0.07 / 0.67 s, TPOT p50 11.8 ms.
+          Against cache routing + worker EDF (the ablation's arm 4: 91.4% / 94.3% / 2514): the two differ by 0.8
+          points and 1.7%, **inside the noise floor**. So on this workload the worker policy barely matters and the
+          router is the whole effect: cache affinity 90.6-91.4% chat against 65.1-68.5% for the SLO-checked router.
+    - [ ] **Best-configuration comparison, remaining arms** (`mn_bestcfg_16g_20261027.sh`, 3 arms, alpha 3), after the
           decomposition:
           - `cacheFCFS`: A6 + 4-mode + `cache` routing + FCFS workers. **No ablation arm covered this combination**
             -- arm 3 removed the worker level with the SLO router still on, arm 4 removed the router with worker EDF
@@ -335,7 +341,31 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             10% of chat requests, but the TPOT it costs (27-30 vs 21.5-23.7 ms) decides more.
           - So the mechanism is not "EDF is wrong" but "parking a long chunked prefill is too expensive here". That
             is a sharper and more defensible statement for the paper than the wholesale arm-3 result.
-    - [x] **Decomposition arm 2: ordering + demotion, no preemption -- C3's worker level survives in this form**
+    - [!] **CORRECTION (2026-10-27): demotion never ran in either decomposition arm.** The demote code sits inside
+          `_edf_rescore_and_park`, which returns at its first line unless `SGLANG_EDF_PREEMPT_CHUNK=1`; both arms ran
+          `PREEMPT=0`. Worker logs confirm it: **zero** `EDF_LATE_DEMOTE` lines in `c3d_r1_ord` and `c3d_r1_demote`.
+          The two arms were therefore mechanically identical, and their difference is run-to-run variance:
+          | two identical configurations | chat | agent | goodput |
+          |---|---|---|---|
+          | `ord` | 68.8% | 81.7% | 1912 |
+          | `demote` | 73.8% | 84.7% | 1986 |
+          **So the noise floor on this workload is about 5 points of chat attainment and 4% of agent goodput.** Every
+          arm needs >= 2 repeats before it is quoted, and several earlier effects sit at or below this floor.
+          - **Withdrawn:** "ordering + demotion beats FCFS". Demotion did not run, and ordering vs FCFS (1912, 1986
+            vs 1922) is inside the floor.
+          - **Survives:** chunk preemption / parking costs about 25% of goodput -- two no-parking arms (1912, 1986)
+            against two with it (1501, 1763), a gap well outside the floor.
+          - **Still untested multi-node:** demotion itself; its evidence remains the single-node burst.
+          - Second defect in the same block: the deadline **rescoring onto uncached tokens** is also behind that early
+            return, so with `PREEMPT=0` both arms ordered by the enqueue priority, which uses the full prompt length.
+            A cached agent round was ranked like a cold prompt in both.
+          - Fix required before retesting: lift demotion and rescoring out of the parking gate.
+            `pd_colocation/apply_edf_model_demote_20261027.py` (model-based demote-on-predicted-miss, user's design:
+            never preempt, walk the remaining chunks through the step model under the current decode load and demote
+            if the prediction misses) currently inserts into the same gated method and must be restructured first.
+            It only evaluates the model forward, so the trained MLP works directly; inversion is needed only for
+            chunk sizing, which `edf_compute_max_chunk_size` does by binary search over the same predictor.
+    - [~] **Decomposition arm 2 (as run): identical to arm 1, see the correction above**
           (2026-10-27; first multi-node test of demotion). Chat **73.8%** ; agent **84.7%** ; **1986 tok/s** ;
           10,275 rounds issued. Worker policies at alpha 3, SLO router on throughout:
           | worker policy | chat | agent | goodput | chat TTFT p90 | chat TPOT p50 |

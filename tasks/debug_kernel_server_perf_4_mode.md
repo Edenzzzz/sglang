@@ -83,6 +83,20 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
               - MLP: mixed 3.4-4.2%, prefill 5.5-6.3%, decode 21-23%;
               - GBT: mixed 2.8-3.6%, prefill 6.9-7.8%, decode 21-25%.
         - [ ] Stock comparison on the same schedule: the leave-one-out arm without C1 is now traced (`STEP_TRACE=1`).
+    - [x] v4, alpha 6, budgeted chunk on the GPU-time model (2026-10-27, `mn_slo_chunk_v4_16g_20261027.sh`, log
+          `/tmp/h20/mn_slo_chunk_16g_v4.log`). **Worse than fixed 2048 on every metric**:
+          - chat 27.0% vs 31.8%, chat TPOT p50 88.6 vs 72 ms;
+          - agent 44.8% vs 50.0%, agent SLO goodput 647 vs 890 tok/s.
+          Cause, read from the SLO_CHUNK lines: budgets of 243 ms, 3.7 s and infinity, and median chunk 8414 tokens.
+          - Tokens per step came from the rows' progress between calls. Calls skip decode-only steps, so it read 8.8
+            at acceptance ~2.
+          - Demotion dropped late rows from the bound, so at overload, when every row is late, the budget was infinite.
+          Fixed in `apply_slo_budget_chunk_20261026.py`:
+          - tokens per step = EWMA of the scheduler's accepted tokens per verify forward;
+          - demoted rows still bound the step at s_r x a;
+          - banked slack is capped at 4 steps (`bank=K`).
+          Stub check: all rows late -> chunk 398 (was 16384); large banked slack -> 2530. The alpha-3 v4 arm was
+          stopped and all three arms rerun as v5 (`mn_slo_chunk_v5_16g_20261027.sh`).
         - [ ] The chunk budget still uses lin4mode on GPU time (25%). The patch takes only a linear model; a nonlinear
               model in the patch (or a per-step lookup) is the next step if the chunk arms show mispricing.
       Earlier 4-mode STEPTRACE fits (the 2.0% MAPE in the paper's Table 3 came from an H200 log) must be checked for

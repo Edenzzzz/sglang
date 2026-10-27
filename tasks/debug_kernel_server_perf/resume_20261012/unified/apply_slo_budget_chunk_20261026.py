@@ -12,8 +12,13 @@ every running decode row within its mean-TPOT SLO, with headroom h; with no rows
   this rule first saw r decoding, a the tokens one step emits per row (EWMA of the rows' observed progress; 1 without
   speculation). s_r is agent_ms for prompts of at least agent_prompt_tokens, else chat_ms. The step budget is
   (1 - h) * min_r budget_r.
-- ":demote": rows already past their SLO (mean TPOT so far above s_r) leave the minimum, the same rule EDF applies to
-  prefills that have missed their deadline; without it, one late row stops prefill on the node.
+- ":demote": rows already past their SLO (mean TPOT so far above s_r) are not rescued on their mean, but still bound
+  the step at their per-step allowance s_r x a (each new token costs at most its target); without it, one late row
+  stops prefill on the node. (A first version dropped such rows from the minimum, which at overload, when every row is
+  late, removed the bound and let chunks reach the maximum.)
+- ":bank=K" (default 4): a row's banked slack counts for at most K steps' allowance.
+- a, the tokens one step emits per row, is the EWMA of the scheduler's speculative acceptance (accepted tokens per
+  verify forward); the first version measured rows' progress between calls, which spans several steps.
 - The chunk solves model(c) <= budget (quadratic in c through attn). Under mixed chunk the scheduler charges one token
   per running row against the chunk, so the rows are added back. Less than one page: no prefill this step.
 
@@ -68,19 +73,24 @@ method = '''
             cfg = self._slo_chunk_cfg = dict(
                 coef=model[target]["coef"], S=float(model["S"]), T=float(model["T"]), h=float(fields[1]),
                 chat_ms=float(fields[2]), agent_ms=float(fields[3]), agent_tokens=int(fields[4]),
-                demote="demote" in fields[5:])
+                demote="demote" in fields[5:],
+                bank_steps=float(next((f[5:] for f in fields[5:] if f.startswith("bank=")), 4)))
             logger.info("SLO_CHUNK model=%s target=%s S=%g T=%g h=%g chat=%gms agent=%gms (>= %d tokens) demote=%s",
                         fields[0], target, cfg["S"], cfg["T"], cfg["h"], cfg["chat_ms"], cfg["agent_ms"],
                         cfg["agent_tokens"], cfg["demote"])
         now = time.monotonic()
-        # Tokens per step per row: EWMA of the rows' observed progress between consecutive calls.
-        seen = getattr(self, "_slo_chunk_seen", {})
-        progressed = [len(r.output_ids) - seen[r.rid] for r in rows if r.rid in seen]
-        if progressed:
-            sample = max(1.0, sum(progressed) / len(progressed))
+        # Tokens per step per row: EWMA of the speculative acceptance length (accepted tokens per verify forward,
+        # from the scheduler's metrics), 1 without speculation. Progress between two calls of this method spans
+        # several decode-only steps, so it overstates the per-step rate (it read 8.8 at acceptance ~2).
+        reporter = getattr(self, "metrics_reporter", None)
+        tok = getattr(reporter, "spec_total_num_accept_tokens", 0) or 0
+        fwd = getattr(reporter, "spec_total_num_forward_ct", 0) or 0
+        last = getattr(self, "_slo_chunk_acc_last", None)
+        self._slo_chunk_acc_last = (tok, fwd)
+        if last is not None and fwd > last[1]:
+            sample = max(1.0, (tok - last[0]) / (fwd - last[1]))
             prev = getattr(self, "_slo_chunk_tps", None)
             self._slo_chunk_tps = sample if prev is None else 0.9 * prev + 0.1 * sample
-        self._slo_chunk_seen = {r.rid: len(r.output_ids) for r in rows}
         tps = getattr(self, "_slo_chunk_tps", None) or 1.0
         budget = float("inf")
         for r in rows:
@@ -89,9 +99,14 @@ method = '''
             s_r = cfg["agent_ms"] if len(r.origin_input_ids) >= cfg["agent_tokens"] else cfg["chat_ms"]
             o = len(r.output_ids) - r._slo_o0
             spent = (now - r._slo_t0) * 1000.0
+            per_step = s_r * tps
             if cfg["demote"] and spent > s_r * max(o, 1):
+                # Already past its SLO: it cannot be rescued on its mean, but each new token still costs at most
+                # its target, so the step is bounded by its per-step allowance (no backlog recovery, no banking).
+                budget = min(budget, per_step)
                 continue
-            budget = min(budget, s_r * (o + tps) - spent)
+            # Banked slack is capped at BANK_STEPS steps' worth, so one step cannot stall a row for seconds.
+            budget = min(budget, s_r * (o + tps) - spent, cfg["bank_steps"] * per_step)
         self.slo_chunk_calls = getattr(self, "slo_chunk_calls", 0) + 1
         if budget == float("inf"):
             out = chunk_size

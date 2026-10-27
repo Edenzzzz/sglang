@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.72.3 — SLO-budgeted chunk: tokens-per-step and demotion bugs fixed (2026-10-27)
+- At alpha 6 the v4 budgeted chunk was worse than fixed 2048 on every metric (chat 27.0 vs 31.8%, agent goodput 647
+  vs 890 tok/s). Its budgets reached seconds or infinity:
+  - tokens per step was measured across several steps;
+  - demotion dropped late rows from the bound.
+- Now tokens per step come from the acceptance EWMA, late rows bound the step at their per-step allowance, and banked
+  slack is capped at 4 steps. Rerun as v5.
+
 ## v1.72.2 — Step model on corrected traces (2026-10-27)
 - Corrected H20 traces (alpha 3 trace replay, four workers, held-out): MLP with acceptance predicts merged prefill +
   verify steps at 3.4-4.0% and prefill at 4.6-5.5%; decode-only steps (10-20 ms) at 18-23%. Paper section 5.2.2 is

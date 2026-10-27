@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.74.2 — Ablation arm 3: removing C3's worker level WINS on the trace replay (2026-10-27)
+- FCFS admission (no deadline order, demotion, parking or reservation) beats the full stack at alpha 3: chat 73.9%
+  vs 65.1-68.5%, agent 83.2% vs 72.6-78.7%, 1922 vs 1501-1763 tok/s, outside the repeat spread.
+- The machinery buys a better TTFT tail (chat p90 1.03-1.19 vs 3.03 s) and pays for it in TPOT (p50 27-30 vs
+  21.5 ms); under a 2 s + 50 ms SLO that trade loses. C3's worker level must not be claimed as a cluster-level gain;
+  its evidence is the single-node agent burst.
+- A decomposition arm set is queued to separate deadline ordering from preemption/parking.
+
 ## v1.74.1 — Ablation arm 2: C2 is within repeat noise at alpha 3 (2026-10-27)
 - Without C2 (stock MTP steps instead of the merged 4-mode step): chat 69.1%, agent 77.4%, 1638 tok/s, inside the
   full-stack repeat spread (1501 and 1763). Only ~11% of steps are merged here, so the effect is diluted; C2's

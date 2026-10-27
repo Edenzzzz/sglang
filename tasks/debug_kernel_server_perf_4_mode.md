@@ -231,6 +231,26 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
           colocation designs cannot run speculative decoding at all (POD-Attention, pdmux), not that merging beats
           stock MTP on every workload. Note the arm still runs speculation, so this is "merged vs separate verify
           step", not "spec vs no spec".
+    - [x] **Leave-one-out, arm 3 of 4: without C3's worker level -- REMOVING IT WINS** (2026-10-27;
+          `coloc_slo_mtp_hc`, i.e. sglang FCFS admission on every worker, with the A6 kernel, the 4-mode step and the
+          SLO-checked router unchanged). Chat **73.9%** ; agent **83.2%** ; **1922 tok/s** ; 10,022 rounds issued.
+          Against the full stack (65.1 / 72.6 / 1501 / 8995 and 68.5 / 78.7 / 1763 / 9665) that is **+5.4 to +8.8
+          points of chat attainment, +4.5 to +10.6 points of agent attainment and +9 to +28% agent SLO goodput**,
+          i.e. clearly outside the repeat spread.
+          - Where the trade sits: FCFS gives better TPOT (chat p50 21.5 vs 27.3-30.0 ms, ITL mean 35.8 vs ~51 ms) and
+            a worse TTFT tail (chat p90 3.03 vs 1.03-1.19 s) at the same median TTFT (0.11 vs 0.13-0.15 s). Under a
+            2 s TTFT + 50 ms TPOT SLO that trade favours FCFS, so our deadline machinery is spending TPOT to protect
+            a TTFT tail that the SLO does not charge for.
+          - This is the same shape as the 2026-10-20 single-node finding that every strict decode-first variant
+            lowered attainment below the uncontrolled arm.
+          - **Do not report C3's worker level as a cluster-level gain.** Its measured value is the single-node agent
+            burst (chat TTFT -96..-98% from demotion), a different workload. On this replay it costs.
+          - Open: the arm removes deadline ordering, demotion, chunk parking and budget reservation together, so it
+            does not say which one costs. Queued decomposition below.
+    - [ ] **C3-worker decomposition** (`mn_c3worker_decomp_16g_20261027.sh`): EDF ordering only (no preemption, no
+          parking), then ordering + demotion, against FCFS and the full stack, same alpha-3 replay. Chunk parking and
+          preemption (`SGLANG_EDF_PREEMPT_CHUNK`, `SGLANG_EDF_RESERVE_EARLIER`) are the prime suspects, since they
+          add work per step and can thrash a long chunked prefill.
     - [x] **Audit of the rule against recorded steps** (2026-10-27, `perf_model/chunk_budget_audit.py` on the four
           alpha-3 worker traces, 87,932 steps; user asked whether the implementation is wrong):
           - Decode-only steps cost 8-52 ms (p50 27.7, p90 44.9) and **never** exceed the chat allowance

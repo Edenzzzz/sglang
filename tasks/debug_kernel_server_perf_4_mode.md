@@ -45,6 +45,34 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       for long uncached prompts or deep EDF queues.
     - [ ] A/B on the trace replay, alpha 3 and 6, with SLO-budgeted workers: `cache_slo` (four vetoes, most-slack
           fallback) vs `cache_slo_h`. This waits for the user's go-ahead and for the chunk-size results.
+  - **Which latency metric each system scores (2026-10-27, user asked whether to switch to ITL).**
+    - Ours, SLOs-Serve and JITServe score a request's **mean TPOT** (`sum(itls) / (output_len - 1)`). SLOs-Serve uses
+      TPOT 50 / 100 ms with TTFT 3x / 5x the zero-load latency; JITServe states it as a per-token deadline, token i on
+      time if done by `TTFT_SLO + i x TBT_SLO`, which is the same mean constraint expressed as a deadline.
+    - **Crossflow scores ITL**: it reports mean ITL and carries a 120 ms p99-ITL constraint (which our analysis notes
+      comes from its Figure 3 characterization, not a per-dataset SLO). Its headline weakness is a mean-ITL
+      regression of 20.9-34.3% on GLM-5.2 TraceLab under decode-local prefill, which is the cost our fused step is
+      meant to remove.
+    - Decision: keep mean TPOT for attainment (it is what our SLO numbers were taken from), and **also report mean and
+      p99 ITL per tenant**, since Crossflow is the closest workload comparison and ITL is its currency. Added to
+      `perf_model/tracelab_windows.py` (ITL percentiles over every inter-token gap) and deployed on pod 0.
+    - Do not switch the controller to a per-step ITL bound: that is strictly stricter than what we claim, and v5
+      measured its cost (chat 65.1 -> 12.7% at alpha 3).
+  - **How to reserve capacity under a mean-TPOT SLO (2026-10-27).** A per-step bound is easy but wrong; the mean's
+    slack depends on the unknown remaining output length. Two published answers:
+    - **SLOs-Serve** turns TPOT into a **rate reservation**: a token budget per time unit, with the DP tracking
+      accepted request counts per TPOT class `(n_1 ... n_L)`. Decode needs `sum(n_l / s_l)` tokens/s; prefill gets the
+      residual capacity. It pairs this with **soft admission control**: admitted requests are guaranteed their SLOs,
+      and requests whose SLOs are unattainable are routed to another replica or served best effort.
+    - **JITServe** keeps a per-token deadline and avoids greedy spending with a predicted upper-bound output length
+      (quantile regression forest, refined every ~50 tokens), giving each request just enough bandwidth to meet its
+      SLO just in time.
+    - Design for the next iteration: (1) decode rate reservation `sum(n_l / s_l)` from the step model, prefill takes
+      the residual, so the chunk grows when few rows decode and shrinks when many; (2) when the reservation exceeds
+      capacity, the lever is admission, not throttling, which our router (placement) and demotion (best effort)
+      already provide; (3) the per-token deadline `arrival + TTFT_SLO + i x s` unifies TTFT and TPOT on one line, so
+      the router and the worker price the same quantity. The queued v7 arm uses the cumulative-credit form and is a
+      data point on greedy spending, not the final design.
   - **Inventory of predictors and the chunk solver (2026-10-27, user asked; the fixed 2048 chunk is not a design
     choice but an unset env var).** Our tree already contains the SLO-aware chunk-size solver:
     - `managers/edf_scheduler.py` `edf_compute_max_chunk_size()`: binary-searches the largest chunk whose predicted

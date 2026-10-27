@@ -48,9 +48,10 @@ def load(path, tenant):
         # A one-token reply (the trace has them) has no inter-token gap: it is judged on TTFT alone.
         ok = not error and n >= 1 and d["ttfts"][i] is not None
         itl = sum(d["itls"][i]) if ok else 0.0
+        gaps = d["itls"][i] if ok else []
         out.append(dict(tenant=tenant, ok=ok, start=starts[i], ttft=d["ttfts"][i] if ok else None,
                         tpot_ms=(itl / (n - 1) * 1e3 if n > 1 else 0.0) if ok else None,
-                        end=starts[i] + (d["ttfts"][i] or 0) + itl,
+                        end=starts[i] + (d["ttfts"][i] or 0) + itl, gaps=gaps,
                         out=n, uncached=max(0, d["input_lens"][i] - (cached[i] or 0))))
     return out
 
@@ -76,13 +77,17 @@ def summary(rows, duration):
             good = [r for r in rs if meets(r, level)]
             cells.append(f"{level}={len(good) / len(rs) * 100:5.1f}% ({sum(r['out'] for r in good) / duration:.0f} tok/s)")
         done = [r for r in rs if r["ok"]]
-        p = lambda xs, q: float(np.percentile(xs, q)) if xs else float("nan")
+        p = lambda xs, q: float(np.percentile(xs, q)) if len(xs) else float("nan")
         if NOT_ISSUED.get(tenant):
             cells.append(f"not_issued={NOT_ISSUED[tenant]}")
         if LOST.get(tenant):
             cells.append(f"lost_after_failure={LOST[tenant]}")
+        # Crossflow scores agentic serving on ITL (mean, and a 120 ms p99 constraint), where SLOs-Serve / JITServe
+        # and our attainment use a request's mean TPOT. Report both; ITL percentiles are over every inter-token gap.
+        all_gaps = [g * 1e3 for r in done for g in r["gaps"]]
         cells.append(f"TTFT p50/p90={p([r['ttft'] for r in done], 50):.2f}/{p([r['ttft'] for r in done], 90):.2f}s "
                      f"TPOT p50/p90={p([r['tpot_ms'] for r in done], 50):.1f}/{p([r['tpot_ms'] for r in done], 90):.1f}ms "
+                     f"ITL mean/p99={(np.mean(all_gaps) if all_gaps else float('nan')):.1f}/{p(all_gaps, 99):.1f}ms "
                      f"n={len(rs)} failed={len(rs) - len(done)}")
         parts.append(f"{tenant}: " + " ".join(cells))
     return " | ".join(parts)

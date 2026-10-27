@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.73.2 — Metric audit and the capacity-reservation design (2026-10-27)
+- Crossflow scores ITL (mean, plus a 120 ms p99 constraint); SLOs-Serve, JITServe and our scorer use mean TPOT. We
+  keep mean TPOT for attainment and now also report mean and p99 ITL per tenant (`tracelab_windows.py`), since
+  Crossflow is the closest workload comparison.
+- Recorded the published answers to "how do you reserve prefill capacity under a mean SLO": SLOs-Serve's per-class
+  rate reservation `sum(n_l / s_l)` plus soft admission control, and JITServe's per-token deadline with a predicted
+  output length. These define the next chunk-control iteration.
+
 ## v1.73.1 — The ad-hoc chunk rule is retired (2026-10-27)
 - v5 at alpha 3 made every metric worse than fixed 2048, including chat TPOT (45.0 vs 30.0 ms p50), with TTFT p50
   80.7 s. At that load fixed chunks already met the 50 ms target, so no throttling was warranted.

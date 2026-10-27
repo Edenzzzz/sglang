@@ -8,6 +8,10 @@
   model's verify rows, the larger the role-split gain and the smaller our marginal gain.
 - DeFT (arXiv 2404.00242) added to the reference list: KV-guided grouping saves 73-99% KV IO but only for a tree
   within ONE call; our cross-role/cross-request grouping is the differentiator and exists only because of C2.
+- NEW H20 CLUSTER: 8d89d1880003f89d, named vibecuda, forked from the finished job (needs overrides.attachments=[]).
+  Same 4x4 H20 layout; needs re-provisioning before arms can run.
+- Diagnosis note: a finished job makes merlin-cli report "webshell relay redirected to SSO", which looks like an
+  auth failure but is not -- check job status first; the ssh proxy reports it honestly.
 - H20 job 2f608c1b1a67cf09 finished at 06:29 CST (status done). The last gap-source arm and the corrected stock
   baseline died with it; /dev/shm on those pods is gone. All measured results are already in the docs. Multi-node
   work needs a fresh H20 allocation (vibecuda, <= 16 GPUs). The H200 trial is unaffected.

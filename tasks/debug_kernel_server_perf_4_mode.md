@@ -5,6 +5,18 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
 - **Bar:** >= 30% on TTFT and ITL (or their SLO attainment) and >= 10% throughput on realistic chat + TraceLab
   workloads.
 - **Models:** Qwen2.5-7B, Llama-3.3-70B (next), GLM-4.5-Air.
+- **Multi-node H20 cluster (2026-10-28): `8d89d1880003f89d`, named `vibecuda`**, forked from the finished
+  `2f608c1b1a67cf09` with `overrides={"name":"vibecuda","attachments":[]}` (the fork fails without the explicit
+  empty attachments array). Same 4 pods x 4 H20 configuration, within the user's <= 16 GPU limit.
+  - The previous job ended at 06:29 CST on 2026-10-28 (`status: done`, `trial_status: finished`), taking its
+    `/dev/shm/w` with it. **Note for diagnosis: when pods become unreachable and merlin-cli reports "webshell relay
+    redirected to SSO", CHECK THE JOB STATUS FIRST** -- a finished job produces exactly that error, and the login
+    token may be perfectly valid. The ssh proxy gives the honest message ("job run ... is not running").
+  - Re-provisioning needed on the new job before any arm: the serving tree, workloads, models, the SLO-chunk tree
+    (`/dev/shm/w/python_slo`) and the step model, plus `tasks/pd_colocation/` with today's `mn_node.sh`
+    (`ROPE_THETA`) and `mn_run.py` (`ROPE_THETA` in the env string).
+  - Push files with `Cluster(SID, cp, nodes=[f"worker-{i}" for i in range(NPODS)])`; without `nodes=` every call
+    goes to one default instance that is not even one of the workers.
 - **Hardware (2026-10-26, user):** ONE 4-GPU H200 trial for the kernel and single-node stages, `bf7d041fb8313d8a`
   (vibecuda, trial 304747380; replaced the misnamed vibecuda4 `d4b20cad59170ebd` on 2026-10-27 after 6.5 h queued; forked from `5b256eb857aa98d9` with gpu=4 / cpu 96 / 876544 MB and
   `overrides.attachments=[]`). The queued 1-GPU fork `5b256eb857aa98d9` was stopped. Llama-3.3-70B and GLM-4.5-Air TP4

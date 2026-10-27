@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.71.5 — Paper: step-model per-type claim withdrawn pending a corrected tracer (2026-10-27)
+- Table 3's step model came from the same tracer, so the four-mode merged steps were logged in "prefill" (ours 8.7% vs
+  7.5%), not in "mixed".
+- Withdrawn wherever it appeared: "mixed steps are more predictable (5.9 vs 7.7%)" (stage-1 summary, section 5.2.2,
+  the MuxWise reference entry).
+- The overall 2.0% vs 1.9% stands. Table 3's caption states what each row holds. A re-fit is pending.
+
 ## v1.71.4 — STEPTRACE counts verify rows as decode rows; chunk test restarted (2026-10-27)
 - The step tracer classified rows only by extend length, so a merged step's 4-token verify rows were logged as prefill
   rows. `apply_steptrace_verify_rows_20261027.py` fixes it; it is applied on all H20 pods, and the chunk-size driver

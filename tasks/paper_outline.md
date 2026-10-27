@@ -47,7 +47,7 @@
       router and EDF
     - measured: 1.43-1.51x sglang's FA3 call on the H200 (Qwen2.5-7B, 96 trace-sampled steps); vs naive FA3 + FA2
       [pending: H200]; Llama-3.3-70B 1.38-1.61x and GLM-4.5-Air 1.28-1.41x sglang on H20 [pending: H200 replay of the
-      same captures]; step model 2.0% held-out MAPE, mixed steps 5.9% vs 7.7% for the single FA3 call
+      same captures]; step model 2.0% held-out MAPE vs 1.9% for the single FA3 call (per-step-type split [pending: re-fit with the corrected tracer])
     - figures: time-weighted speedup per (model, context, mode) with 95% CI vs sglang FA3 and v3; per-item timeline
       of one step; ablation bars: FA2 / FA3 overlap by PDL 2.2-6.1% of the step, longest-first order <= 0.7%,
       persistent vs hardware dispatch -0.2..-1.3%, JIT release of merges (ready queue) -1.8..+0.5% vs the same loop with ticketed merges (H200,
@@ -641,11 +641,17 @@ prices with the calibrated curves of section 5.2.1, and the worker's EDF orders 
 Pricing with this step model in the router is [pending].
 
 On Qwen2.5-7B on an H200 in four-mode serving, fit on one repeat and scored on the other, held-out mean absolute
-percentage error (MAPE) is 2.0% for our kernel vs 1.9% for the stock single FA3 call (Table 3). The fused step is as
-predictable as the stock one, and the mixed steps that admission prices are more predictable. Llama-3.3-70B and
-GLM-4.5-Air fits are [pending].
+percentage error (MAPE) is 2.0% for our kernel vs 1.9% for the stock single FA3 call (Table 3): over all steps, the
+fused step is as predictable as the stock one.
 
-Table 3: held-out step-time MAPE by step type (Qwen2.5-7B, H200, four-mode serving).
+The per-type split must be read with care. The step tracer that produced Table 3 classified rows by token count, so a
+four-mode step's 4-token verify rows were logged as prefill rows. The merged prefill + verify steps therefore fall in
+the "prefill" row, where ours is less predictable (8.7% vs 7.5%). The "mixed" row holds only prefill chunks beside
+one-token decode rows. A re-fit with the tracer corrected (verify rows counted as decode rows) is [pending], on H20
+traces of the trace replay and on the H200. Llama-3.3-70B and GLM-4.5-Air fits are [pending].
+
+Table 3: held-out step-time MAPE by step type (Qwen2.5-7B, H200, four-mode serving). "prefill" includes the four-mode
+merged steps (see above); "mixed" is a prefill chunk beside one-token decode rows.
 
 | step type | ours | stock single FA3 call |
 |---|---:|---:|
@@ -1592,8 +1598,8 @@ flexibility under load spikes, mixed workloads and workload variation).
     SLO-aware dispatcher. 2.20x average (up to 3.06x) peak throughput under SLO over state-of-the-art baselines.
   - *Relation:* direct colocation baseline (= sglang `--enable-pdmux`, run 2026-10-17); our split is decided per
     step inside one forward and co-runs prefill with MTP verify rows, where pdmux partitions SMs at model level.
-  - *Learn:* its estimator is the comparison point for our step model: held-out mixed-step MAPE is 5.9% for the
-    fused step vs 7.7% for sglang's single FA3 call (section 5.2.2). Predictability of the fused step is our argument,
+  - *Learn:* its estimator is the comparison point for our step model: held-out MAPE is 2.0% for the fused step vs
+    1.9% for sglang's single FA3 call over all steps (section 5.2.2). Predictability of the fused step is our argument,
     not theirs.
 - **Crossflow: Prefill–Decode Elasticity for Agentic LLM Serving** -- Y. Xu et al.,
   [arXiv:2609.27085v1](https://arxiv.org/abs/2609.27085v1)

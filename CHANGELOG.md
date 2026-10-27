@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.79.0 — The disaggregation gap is a cache gap (not ours); our gain holds at equal hit rate (2026-10-28)
+- Stock upstream sglang, colocated behind its own cache_aware router, reaches 91.8% prefix hit vs our 92.7%. So the
+  8x prefill-work advantage over conditional disaggregation (11.2% hit) belongs to the LAYOUT and sglang's shipped
+  routing, not to us. Reported as a finding; the cache hit is no longer claimed as a contribution.
+- Against that strongest baseline at equal hit rate: +25% agent SLO goodput (2471 vs 1976 tok/s), -45% TPOT
+  (11.8 vs 21.6 ms), -37% mean ITL, chat misses halved, 11,424 rounds served vs 9,656. Clears the >=10% throughput
+  and >=30% latency bars against an unhandicapped baseline.
+- -45% TPOT >> C1's 4% of step time, so C2 (four-mode step) is the likely carrier; its earlier within-noise verdict
+  came from an SLO-router arm where only ~11% of steps merged. Clean decomposition at the best config queued.
+- Found: the client's cached_tokens is 0 in every arm, so the agent >200K TTFT allowance never fires (pessimistic
+  for long rounds, equally in all arms). Worker-log hit rates unaffected.
+
 ## v1.78.0 — Where C1's gain actually is; POD's FA2-only limitation (2026-10-27)
 - Step-for-step A6 vs stock FA3 on the same replay (A6 validity confirmed: 70,701 a6_unified calls vs 0): speedup
   FALLS with chunk prefix, 1.147x below 8K to 1.006x above 128K. The step is attention-dominated (a 2048-token chunk

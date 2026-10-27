@@ -855,7 +855,10 @@ retrieval at 32-60K) is judged against a baseline-vs-baseline noise floor.
 it unmodified; ours adds an overlay with EDF, the four-mode step, the kernel hooks and the router. Conditional
 disaggregation is implemented in our router on the same workers as ours, since Dynamo does not support SGLang for it.
 
-**Attribution.** Every gain is tied to a contribution by removing that contribution alone (Table 4c).
+**Attribution.** Every gain is tied to a contribution by removing that contribution alone (Table 4c). The
+leave-one-out arms are run on one workload and load (the cluster trace replay at alpha 3), so a contribution can
+help on one workload and cost on another; where that happens Table 4c says so rather than quoting the favourable
+case.
 - At the kernel level the comparison arms remove parts of C1.
 - At the single-node and cluster levels, each ablation arm runs the full stack minus one contribution, on the same
   workload and load.
@@ -867,10 +870,10 @@ leave-one-out arms queued on the trace replay at alpha 3 (16 H20s) and the singl
 
 | contribution | removed by | measured cost of removing it | where |
 |---|---|---|---|
-| C1 unified dispatcher | sglang's single FA3 call for every row | attention 1.43-1.51x slower on trace-sampled steps; with the schedule unchanged, agent throughput -10.7% and TPOT +24% at 128-256K (four-mode); running the rows on FA3 instead of FA2 tiles costs 15-25 points of agent ITL; trace replay [pending] | 6.2, 6.3, 7 |
+| C1 unified dispatcher | sglang's single FA3 call for every row | attention 1.43-1.51x slower on trace-sampled steps; with the schedule unchanged, agent throughput -10.7% and TPOT +24% at 128-256K (four-mode); running the rows on FA3 instead of FA2 tiles costs 15-25 points of agent ITL; on the cluster replay (alpha 3) -3.4..-6.8 points chat attainment and -7.5..-21% agent SLO goodput, a range the full-stack repeats do not yet separate [second repeat pending] | 6.2, 6.3, 7 |
 | C1 parts | PDL overlap off; enumeration instead of longest-first order; merge-free bound | 2.2-6.1%; <= 0.7%; the merge costs <= 0.9% of trace-sampled steps and 6-13% of decode-heavy batches | 7 |
-| C2 four-mode step | stock MTP steps (verify on its own step) | trace replay [pending]; short-prompt ShareGPT: the merged step's host read-back cost 6-7% (section 5.5) | 5.5, 6.4 |
-| C3 per-worker deadline scheduling | per-tenant deadlines without demotion; FCFS | without demotion, chat TTFT is 25-50x higher under an agent burst (-96..-98% with it); deadline order on stock PD's prefill pods changes nothing, so the gap to PD is not scheduling; trace replay [pending] | 3.3, 5.3, 6.4 |
+| C2 four-mode step | stock MTP steps (verify on its own step) | single node at 128-256K: agent tok/s +8.1%, TPOT -39%. On the cluster replay, **within the repeat spread** (chat 69.1%, agent 77.4%, 1638 tok/s against 65.1-68.5% / 72.6-78.7% / 1501-1763): only ~11% of steps there are merged, so the effect is diluted. Short-prompt ShareGPT: the merged step's host read-back cost 6-7% (section 5.5) | 5.5, 6.3, 6.4 |
+| C3 per-worker deadline scheduling | FCFS admission | single node, agent burst: demotion cuts chat TTFT 96-98%. **On the cluster replay it costs**: FCFS reaches chat 73.9% / agent 83.2% / 1922 tok/s against 65.1-68.5% / 72.6-78.7% / 1501-1763 for the full stack. It buys a TTFT tail (chat p90 1.03-1.19 vs 3.03 s) and pays in TPOT (p50 27-30 vs 21.5 ms), which a 2 s + 50 ms SLO does not reward. The H20 arms ran ordering + chunk preemption / parking and never demotion; a decomposition separating them is [pending] | 3.3, 5.3, 6.4, 7 |
 | C3 router (cluster level) | cache affinity only (load tie-break) | earlier 8-H20 runs: at 32 agent programs, agent throughput -24% and chat ITL +32% without the check; on a hot shared-prefix mix, chat TTFT 10x; the resident check alone is worth 32% of chat ITL; trace replay [pending] | 5.2.1, 7 |
 
 **Status.**

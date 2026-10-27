@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.74.3 — Paper Table 4c carries the measured leave-one-out arms (2026-10-27)
+- C1: -3.4..-6.8 points chat and -7.5..-21% agent goodput when removed (range not yet separated by the repeats).
+- C2: within the repeat spread on the cluster replay (~11% merged steps there); its value is the single-node
+  long-context case.
+- C3 worker level: removing it *wins* on the replay (73.9% vs 65.1-68.5% chat), stated plainly with the TTFT-tail vs
+  TPOT trade and the note that demotion was never active in those arms.
+
 ## v1.74.2 — Ablation arm 3: removing C3's worker level WINS on the trace replay (2026-10-27)
 - FCFS admission (no deadline order, demotion, parking or reservation) beats the full stack at alpha 3: chat 73.9%
   vs 65.1-68.5%, agent 83.2% vs 72.6-78.7%, 1922 vs 1501-1763 tok/s, outside the repeat spread.

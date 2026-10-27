@@ -387,10 +387,20 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
             ITL**, chat SLO misses halved (18.9% -> 9.4%), 11,424 rounds served against 9,656. This clears the
             publishability bar (>= 10% throughput, >= 30% on a latency metric) against a baseline that is not
             handicapped.
-          - **Attribution open:** -45% TPOT is far larger than C1's 4% of step time, so C2 (the four-mode step) is
-            the likely carrier. Its earlier "within noise" verdict came from an arm on the SLO router where only
-            ~11% of steps merged, which masked it. The clean decomposition at the BEST configuration (cache router +
-            FCFS, removing A6 or the four-mode step one at a time) is queued.
+          - **Attribution (2026-10-28, `mn_bestdecomp_16g_20261028.sh`, log `/tmp/h20/mn_bestdecomp_16g_r1.log`).**
+            The hypothesis that C2 carries the -45% TPOT is **FALSIFIED**. At the best configuration (cache router +
+            FCFS workers), removing the four-mode step changes nothing:
+            | arm | chat | agent | agent tok/s | TPOT p50 chat/agent | ITL mean chat/agent |
+            |---|---|---|---|---|---|
+            | full (A6 + four-mode) | 90.6% | 94.2% | 2471 | 11.8 / 17.5 ms | 17.7 / 22.3 ms |
+            | noC2 (A6 + stock MTP) | 90.6% | 93.8% | 2492 | 11.0 / 18.2 ms | 17.2 / 22.8 ms |
+            Identical within the noise floor, and noC2 is nominally faster. The Amdahl bound explains it: merged
+            steps are only ~11% of steps in this replay, so no per-step win on them can move the aggregate. C2's
+            contribution at this workload is ZERO and must not be claimed from it; its evidence has to come from a
+            workload where merged steps dominate, or C2 is demoted to an enabling mechanism rather than a gain.
+            Remaining candidates for the +25% / -45% over stock colocated: chunk size (2048 vs upstream default),
+            our router vs sglang's `cache_aware`, and other deltas between our tree and upstream. Arms `dchunk` and
+            `sglrt` are running.
           - Remaining differences between the two rows, to be separated: A6 kernel, four-mode step, chunk 2048 vs
             upstream default, our router's load tie-break vs sglang's `cache_aware`.
     - [!] **Scorer bug: the client's `cached_tokens` is 0 for every request in every arm**, so the agent tenant's

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.81.0 — C2 (four-mode step) contributes zero at the cluster workload (2026-10-28)
+- At the best configuration (cache router + FCFS), removing the four-mode step changes nothing: 90.6/93.8/2492 tok/s
+  against 90.6/94.2/2471 with it, identical within the noise floor and nominally faster without. The hypothesis that
+  C2 carried the -45% TPOT over stock colocated sglang is falsified.
+- Cause: merged steps are ~11% of steps in this replay, so no per-step win on them moves the aggregate.
+- C2 cannot be claimed as a gain here; it needs a merged-step-dominated workload or demotion to an enabling
+  mechanism. Chunk size and router remain the candidates for the +25% / -45%; arms dchunk and sglrt running.
+
 ## v1.80.0 — Kernel ladder on 4x H200 vs the mandated naive FA3 + stock FA2 baseline (2026-10-28)
 - 96 trace-sampled captures, FP32-checked, 20 graph replays. A6 is 1.86-2.92x sglang's single varlen FA3 call, but
   the naive role split (stock FA3 + stock flashinfer FA2) is itself 1.76-2.80x. **A6's own gain over that fair

@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.93.0 — Llama-70B ladder completes the three-model kernel picture; H20 job ended (2026-10-28)
+- Llama-3.3-70B, 38 captures, FP32-checked: A6 is 1.028-1.049x over the naive role split (2.8-4.9%), while the role
+  split alone is 6.7-7.7x of sglang's single FA3 call.
+- Three-model summary of C1 against the fair baseline: Qwen 4.0-8.7%, Llama-70B 2.8-5.8%, GLM 2.0-2.8%. Every large
+  figure (1.8x-7.7x) belongs to the role split, which is not our contribution. The worse sglang's call serves a
+  model's verify rows, the larger the role-split gain and the smaller our marginal gain.
+- DeFT (arXiv 2404.00242) added to the reference list: KV-guided grouping saves 73-99% KV IO but only for a tree
+  within ONE call; our cross-role/cross-request grouping is the differentiator and exists only because of C2.
+- H20 job 2f608c1b1a67cf09 finished at 06:29 CST (status done). The last gap-source arm and the corrected stock
+  baseline died with it; /dev/shm on those pods is gone. All measured results are already in the docs. Multi-node
+  work needs a fresh H20 allocation (vibecuda, <= 16 GPUs). The H200 trial is unaffected.
+
 ## v1.91.0 — Draft/verify pipelining queued as the next kernel item; why FCFS is TPOT-neutral (2026-10-28)
 - User's kernel idea recorded: overlap the draft head of the current step with the verify of another group. The
   draft is 3 sequential one-layer forwards per step, latency-bound rather than FLOP-bound, so it is the only

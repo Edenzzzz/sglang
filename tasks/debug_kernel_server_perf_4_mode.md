@@ -178,6 +178,22 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     - First measurement needed, before any implementation: the draft share of decode step wall time (nsys or a CUDA
       event around the draft forwards). That share is the ceiling on the gain; if it is under ~10% this is not worth
       building, and the item should be closed with that number recorded.
+  - [x] **Llama-3.3-70B kernel ladder on the H200 (2026-10-28), completing the three-model set.**
+    `unified/a6_ladder_model_h200_20261028.sh /opt/tiger/w/trace_sampled_llama70b_h20_20261025 llama70b`, log
+    `/opt/tiger/w/ladder_llama.log`; 38 rank-0 captures replayed from the H20, FP32 worst error 0.0059, 0 failures.
+    | Llama-70B cell | A6 vs naive serial | A6 vs naive streams | A6 vs sglang's single FA3 call |
+    |---|---:|---:|---:|
+    | mix32, 4-mode | **1.049x** | 1.058x | 7.749x |
+    | mix32, 2-mode | **1.028x** | 1.037x | 6.724x |
+    - **Three-model summary of C1 against the fair baseline (the naive role split):**
+      | model | A6 vs naive role split | role split vs sglang's call (NOT ours) |
+      |---|---|---|
+      | Qwen2.5-7B | 1.040-1.087x (4.0-8.7%) | 1.76-2.80x |
+      | Llama-3.3-70B | 1.028-1.058x (2.8-5.8%) | ~6.4-7.4x |
+      | GLM-4.5-Air | 1.020-1.028x (2.0-2.8%) | 5.3-6.0x |
+    - **C1 is 2-9% across every model tested, and the large figures (1.8x to 7.7x) all belong to the role split.**
+      The pattern is consistent: the worse sglang's single varlen call serves a model's verify rows, the bigger the
+      role-split gain and the SMALLER our marginal gain, because stock flashinfer FA2 already tiles those rows well.
   - [x] **GLM-4.5-Air kernel ladder on the H200 (2026-10-28): the tile-class hypothesis is REFUTED.**
     `unified/a6_ladder_model_h200_20261028.sh /opt/tiger/w/trace_sampled_glm_h20_20261025 glm`, log
     `/opt/tiger/w/ladder_glm.log`; 43 rank-0 captures copied from the H20 (24 four-mode, 19 two-mode), FP32 worst

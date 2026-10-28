@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.70.0 — Per-tenant acceptance logging, written but deliberately not deployed yet (2026-10-28)
+- `unified/apply_accept_per_tenant_20261028.py`: splits the acceptance mean by tenant class on the same prompt
+  threshold the SLO machinery uses, emitting `ACCEPT_TENANT chat=<mean>/<n> agent=<mean>/<n>` beside the existing
+  line. Off unless `SGLANG_ACCEPT_PER_TENANT` is set, so no other arm's output changes. Dry-run verified on a copy:
+  parses, inserts once, idempotent on a second application.
+- This is what separates the two surviving explanations for pp's 1.795 against our 1.982: matching per-tenant
+  acceptance means the gap is request mix and the +9.3% goodput margin is real; differing means the merged step
+  changes what the draft sees, which is a finding about C2 rather than about the schedule.
+- NOT deployed: `mc` and `pdmux` are running against those trees now, and patching a tree mid-chain invalidates
+  whatever is in flight with no visible error. It goes out after the ladder finishes.
+
 ## v2.69.0 — The acceptance gap is not a draft-config difference (2026-10-28)
 - Both alpha-6 arms resolve identical speculative settings: EAGLE3, eagle_topk 1, num_draft_tokens 4, num_steps 3,
   accept thresholds 1.0, attention_mode prefill. So pp's 1.795 against our 1.982 is not a configuration artifact.

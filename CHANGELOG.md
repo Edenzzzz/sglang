@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.97.0 — Queue the alpha-3 chunk-rule retry; the driver fix is confirmed working (2026-10-28)
+- The health-poll fix takes effect per arm, since each arm is a fresh `python3 -u mn_run.py`. Confirmed on the
+  next arm: `a6_tail_r1_ours` reported "16 workers healthy after 156 s" and launched its router -- the exact step
+  that crashed with IndexError on the alpha-3 arm.
+- `tasks/pd_colocation/mn_tailchunk_a3retry_20261028.sh`: re-runs ONLY our alpha-3 arm (`_tail_r2`), since c2048 at
+  alpha 3 already scored (90.6% / 93.8% / 2473 tok/s). Chained behind the PD re-measurement so it does not contend
+  for the cluster.
+- After this the chunk rule will have been attempted five times: three invalidated by budget bugs now fixed and
+  covered by an offline test, one by this driver crash, and two arms (alpha 3 retry and alpha 6) pending.
+
 ## v2.96.0 — Root cause of the failed chunk arm: a driver crash, not the policy (2026-10-28)
 - `mn_run.py:153` indexed `[l for l in out.splitlines() if l.startswith("UP=")][-1]`. The worker health poll
   returned output with no UP= line, so the list was empty, IndexError aborted the arm before the router launched,

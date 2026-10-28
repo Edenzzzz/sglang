@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.54.0 — Queue the overload point (alpha 6), which no run on this cluster had reached (2026-10-28)
+- `tasks/pd_colocation/mn_overload_decomp_16g_20261028.sh`: the alpha = 6 decomposition (L0, L1, pp, mc, pdmux) on
+  the 16 H20s, chained after the :life arm. Every earlier driver declared `for A in 3 6` and was stopped or
+  re-scoped before leaving alpha 3, so the second half of the node-level goal -- better TPOT attainment under high
+  load -- is entirely unmeasured. Deadline ordering is neutral at capacity by construction, so this is where it
+  earns its place or does not.
+- `superset_report.py` now reads any sweep tag (superset / decomp / overload / life) and takes `--ours <arm>`, so
+  the decomposition rungs can be judged against the baselines in one table.
+
 ## v2.53.0 — H200 trial re-forked after an under-utilisation kill; paper Table 9c (2026-10-28)
 - The authorized 4-GPU H200 trial `bf7d041fb8313d8a` was killed at 2026-10-28 04:02 UTC with `exit_code -77777`,
   "资源利用率不达标被查杀" -- resource under-utilisation, because it sat idle while the overnight work ran on the H20

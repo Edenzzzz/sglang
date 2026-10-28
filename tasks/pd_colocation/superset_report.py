@@ -19,7 +19,10 @@ Claude, 2026-10-28.
 import argparse
 import re
 
-ARM = re.compile(r"_tl2_a(\d+)_(superset|qcap)_r\d+_(\w+)")
+# The middle group is the sweep tag (superset / qcap / decomp / overload / life / ...); it is kept so
+# that arms from different drivers can be read into one table, with the tag appended to the arm name
+# when it is not the plain "superset" sweep.
+ARM = re.compile(r"_tl2_a(\d+)_([a-z_]+)_r\d+_(\w+)")
 
 
 def parse_tenant(block):
@@ -40,6 +43,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("logs", nargs="+", help="sweep log(s); a qcap log adds an ours_qcap row")
     ap.add_argument("--min-accept", type=float, default=1.8)
+    # Which arm is "ours". Defaults to the arm literally named ours; the decomposition drivers name their rungs
+    # L0 / L1 instead, so pass e.g. --ours L1_overload to judge that rung against the baselines.
+    ap.add_argument("--ours", default="ours")
     a = ap.parse_args()
     arms, accept = {}, {}
     for line in (l for f in a.logs for l in open(f)):
@@ -48,7 +54,7 @@ def main():
             m = ARM.search(name)
             if not m:
                 continue
-            alpha, kind = int(m.group(1)), m.group(3) + ("_qcap" if m.group(2) == "qcap" else "")
+            alpha, kind = int(m.group(1)), m.group(3) + ("" if m.group(2) == "superset" else "_" + m.group(2))
             chat = line.split("chat:", 1)[1].split("|", 1)[0] if "chat:" in line else ""
             agent = line.split("agent:", 1)[1] if "agent:" in line else ""
             arms[(alpha, kind)] = dict(chat=parse_tenant(chat), agent=parse_tenant(agent))
@@ -57,7 +63,7 @@ def main():
             m = ARM.search(parts[1])
             v = re.search(r"accept=([\d.]+)", line)
             if m and v:
-                accept[(int(m.group(1)), m.group(3) + ("_qcap" if m.group(2) == "qcap" else ""))] = float(v.group(1))
+                accept[(int(m.group(1)), m.group(3) + ("" if m.group(2) == "superset" else "_" + m.group(2)))] = float(v.group(1))
     if not arms:
         raise SystemExit("no SCORE PAPER lines for superset arms in this log")
 
@@ -66,7 +72,7 @@ def main():
                ("chat", "tpot90", -1), ("agent", "tpot90", -1)]
     for alpha in sorted({k[0] for k in arms}):
         print(f"\n=== load factor alpha = {alpha}")
-        print(f"{'arm':7}{'accept':>8}{'valid':>7}{'chat%':>8}{'agent%':>8}{'agent tok/s':>12}"
+        print(f"{'arm':16}{'accept':>8}{'valid':>7}{'chat%':>8}{'agent%':>8}{'agent tok/s':>12}"
               f"{'chat TPOT p50/p90':>19}{'agent TPOT p50/p90':>20}")
         valid = {}
         for (al, kind), d in sorted(arms.items()):
@@ -76,20 +82,20 @@ def main():
             ok = acc is not None and acc >= a.min_accept
             valid[kind] = ok
             c, g = d["chat"], d["agent"]
-            print(f"{kind:7}{(f'{acc:.3f}' if acc else '?'):>8}{('yes' if ok else 'NO'):>7}"
+            print(f"{kind:16}{(f'{acc:.3f}' if acc else '?'):>8}{('yes' if ok else 'NO'):>7}"
                   f"{c.get('attain', float('nan')):>7.1f}%{g.get('attain', float('nan')):>7.1f}%"
                   f"{g.get('goodput', float('nan')):>12.0f}"
                   f"{c.get('tpot50', float('nan')):>10.1f}/{c.get('tpot90', float('nan')):<8.1f}"
                   f"{g.get('tpot50', float('nan')):>11.1f}/{g.get('tpot90', float('nan')):<8.1f}")
-        ours = arms.get((alpha, "ours"))
+        ours = arms.get((alpha, a.ours))
         if not ours:
-            print("  no 'ours' arm at this load")
+            print(f"  no {a.ours!r} arm at this load")
             continue
-        if not valid.get("ours"):
+        if not valid.get(a.ours):
             print("  OUR ARM FAILS THE ACCEPTANCE GATE -- nothing at this load can be used")
             continue
         losses = []
-        for kind in sorted(k for (al, k) in arms if al == alpha and k != "ours"):
+        for kind in sorted(k for (al, k) in arms if al == alpha and k != a.ours):
             if not valid.get(kind):
                 base = arms[(alpha, kind)]
                 wins = [f"{t} {k}" for t, k, sg in metrics
@@ -109,7 +115,7 @@ def main():
         print("  SUPERSET HOLDS at this load" if not losses else "  SUPERSET VIOLATED -- investigate each:")
         for l in losses:
             print("    " + l)
-        valid_bases = [k for (al, k) in arms if al == alpha and k != "ours" and valid.get(k)]
+        valid_bases = [k for (al, k) in arms if al == alpha and k != a.ours and valid.get(k)]
         if valid_bases:
             best_tpot = min(arms[(alpha, k)]["agent"].get("tpot90", 1e9) for k in valid_bases)
             best_gp = max(arms[(alpha, k)]["agent"].get("goodput", 0) for k in valid_bases)

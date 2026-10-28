@@ -43,20 +43,18 @@
        `SMOKE_FAIL` and points at the pod-side `bench_agent.log`. Log `/tmp/h20/smoke_then_sweep.log`. This
        removes the failure mode that cost r1, r2 and r3 -- a sweep running for 40 minutes against dead clients
        while the driver log looked healthy.
-   - **[ ] STILL BLOCKED (2026-10-28, end of session): the smoke arm's workers do not come up.** smoke3 reaches
-     the "ports" stage and then `worker_r0_g0.log` is never created, so `mn_node.sh` exits before the launch
-     redirect. smoke2 reached "16 workers healthy after 482 s" and then failed only at the bench client, so the
-     server side CAN work -- which makes this a launch-path regression introduced after smoke2, i.e. by one of the
-     edits between them: the `mn_bench.sh` BENCH_PY change (client only, should be inert for the launch) or the
-     `sglang/benchmark/` copy into `ourpy/python` and `python_slo` (could matter: the BASELINE arm launches from
-     `up/python`, but `python_slo` and `ourpy` were both modified).
-     - **Next diagnostic, in order:** (1) run `mn_node.sh` by hand on pod 0 with the smoke arm's env and capture
-       stderr directly, since `mn_run.py` discards it and that is why three faults in a row were invisible;
-       (2) check whether `cp .../benchmark` into `python_slo` broke that tree's import (the baseline arm does not
-       use it, but confirm); (3) diff the env between smoke2 (worked) and smoke3 (did not).
-     - The cluster arms -- the corrected arm set, the alpha 3 / alpha 6 sweep, and the re-measured
-       colocation-vs-disaggregation comparison -- are all blocked behind this. Nothing about the kernel results
-       depends on it.
+   - **[x] RESOLVED (2026-10-28): it was NOT a launch-path regression -- every GPU was held by my own orphans.**
+     The earlier diagnosis ("mn_node.sh exits before the launch redirect") was wrong. `worker_r0_g0.log` was absent
+     only because the retry loop renames each failed attempt to `worker_r0_g0.bindfailN.log`; all five of smoke3's
+     attempts died with `torch.OutOfMemoryError ... 18.88 MiB is free. Process 4061538 has 84.60 GiB`.
+     - Cause: **all 16 GPUs held ~86.7 GB each by servers up to 3.2 h old** -- the 16-server sets of superset r2/r3
+       and smoke2. I had stopped those runs by `kill -9` on their LOCAL drivers, which never runs `mn_run.py`'s
+       teardown, so the remote servers kept running. Every launch since then OOMed against them.
+     - Fixed: killed the remote processes by PID (collected via `ps`, so the kill cannot match its own shell): 22 on
+       pod 0, 12 on each other pod; all 16 GPUs read 0 MiB afterwards.
+     - **Guard added** (`/tmp/gate4.sh`): a preflight that reads every GPU's memory and ABORTS naming the busy ones,
+       run before the smoke arm and again before the sweep. Rule: never stop a cluster driver without clearing the
+       pods, and never launch without the preflight.
    - **[!] Fifth and sixth faults, both mine, in the smoke runs themselves (2026-10-28):**
      1. **Both smoke attempts used `RUN_TAG=_smoke1`**, so they wrote into ONE directory
         (`coloc_sgl_mtps_hc_smoke1`) and their logs interleaved -- which made the diagnosis read as a contradiction

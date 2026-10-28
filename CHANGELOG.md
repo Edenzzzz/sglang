@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.27.0 — Cluster blocker resolved: my own orphaned servers held every GPU (2026-10-28)
+- CORRECTION: the "launch-path regression" diagnosis was wrong. worker_r0_g0.log was missing only because each
+  failed retry is renamed to bindfailN.log; all five smoke3 attempts died of CUDA OOM ("Process 4061538 has
+  84.60 GiB"). All 16 GPUs held ~86.7 GB each by servers up to 3.2 h old: the superset r2/r3 and smoke2 server sets,
+  orphaned when I stopped their local drivers with kill -9 (which skips mn_run.py's teardown).
+- Cleared by PID on every pod (22 + 12 + 12 + 12 processes); all 16 GPUs at 0 MiB.
+- gate4.sh adds a GPU-memory preflight that aborts naming busy GPUs, before the smoke arm and before the sweep.
+- Kernel item 18 (q64 x q16 intra-CTA overlap) delegated to a separate worker with the measured upper bound
+  (1.1-2.3% at 128K) as its sanity check; the cluster path stays on the main thread.
+
 ## v2.26.0 — Item 18's upper bound measured per model: 1.1-2.3% at 128K (2026-10-28)
 - bench_q64_piggyback_ub_20261028.py: if every row tile rode free inside a chunk CTA the gain equals the share of
   attention time rows cost today. Chunk 2048 (32 q64 tiles) beside 32 rows, H200.

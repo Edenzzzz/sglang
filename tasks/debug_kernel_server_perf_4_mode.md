@@ -298,8 +298,17 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
         overlap scheduler hides essentially all host work. There is no launch-overhead or host-side time to recover
         at decode steps, which independently explains why the vLLM PR 61869 style launch-count reduction measured
         below our noise floor.
-      - The draft share therefore needs in-step instrumentation (CUDA events around the 3 draft forwards, or nsys)
-        on the H200. Until that number exists this item stays open and unbuilt -- it must not be claimed.
+      - The draft share therefore needs in-step instrumentation. Built: `unified/apply_draft_share_events_20261028.py`
+        wraps `EagleDraftWorker.draft_forward` and `EAGLEWorkerV2.verify` in CUDA events at MODULE SCOPE (no method
+        body is edited), synchronising only at report time; off unless `SGLANG_DRAFT_SHARE=1`, so no other arm
+        changes. Driver `unified/a6_draftshare_h200_20261028.sh` (32K four-mode, one repeat, both arms instrumented
+        through `--common-env`), log `/opt/tiger/w/draftshare2.log`.
+      - **Deployment gotcha that wasted the first run:** that driver's `make_root` copies the tree from
+        `$SRC=/dev/shm/w/qwen25_v3_common_screen_h200_20261023` on EVERY run, so patching a previous run's `root/`
+        has no effect -- the patch must go into `$SRC/python/sglang/srt`. The first attempt produced zero
+        `DRAFT_SHARE` lines for exactly this reason. Patch `$SRC` and check for
+        "DRAFT_SHARE instrumentation active" in `server.log` before trusting a run.
+      - Result: [pending, run in flight]. Until the number exists this item stays open and must not be claimed.
   - [x] **Llama-3.3-70B kernel ladder on the H200 (2026-10-28), completing the three-model set.**
     `unified/a6_ladder_model_h200_20261028.sh /opt/tiger/w/trace_sampled_llama70b_h20_20261025 llama70b`, log
     `/opt/tiger/w/ladder_llama.log`; 38 rank-0 captures replayed from the H20, FP32 worst error 0.0059, 0 failures.

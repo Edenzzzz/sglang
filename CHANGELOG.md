@@ -11,8 +11,11 @@
 - Closed: cross-role backfill cannot exceed low single digits on this workload and PDL already collects most of it;
   tma_store_wait would add persistent-kernel structure measured at 0.987-1.006x. Interesting only for balanced
   roles (short context, many rows).
-- Draft-share CUDA-event instrumentation written and running on the H200 (apply_draft_share_events_20261028.py,
-  module-scope wrapper, off unless SGLANG_DRAFT_SHARE=1); validated on a throwaway copy before deployment.
+- Draft-share CUDA-event instrumentation written (apply_draft_share_events_20261028.py, module-scope wrapper, off
+  unless SGLANG_DRAFT_SHARE=1), validated on a throwaway copy, and running on the H200 via
+  a6_draftshare_h200_20261028.sh. The first attempt measured nothing: that driver's make_root re-copies the tree
+  from $SRC every run, so the patch must be applied to $SRC/python/sglang/srt, not to a previous run's root. Check
+  for "DRAFT_SHARE instrumentation active" in server.log before trusting such a run.
 
 ## v1.98.0 — The superset claim, and the valid single-node baselines (2026-10-28)
 - User's two deliverables recorded at the top of the task doc: (1) kernel gains from fusing tile classes in one

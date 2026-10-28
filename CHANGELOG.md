@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.27.0 — Paper 6.4 leads the disaggregation comparison with the replay result (2026-10-28)
+- Added the alpha-3 conditional-disaggregation table: chat attainment 91.2% against 50.5% (+40.7 points), agent
+  94.3% against 64.9%, agent SLO goodput 2493 against 905 (2.75x), chat mean-TPOT p90 29.8 against 193.8 ms
+  (-85%), agent p90 38.0 against 188.2. Both arms completed every request at matched acceptance.
+- States why this dwarfs the fan-out margin, because that contrast is the argument rather than a caveat: fan-out
+  gives every program of a task the same prefix, so a local-append rule keeps the work local and the baseline
+  nearly matches us; in the replay each session carries its own 119K-token history, so the append is local but the
+  history must still be where the decode is. The cost 3.4 predicts is visible only on the workload with
+  per-session state -- the one agentic serving actually produces.
+
 ## v3.26.0 — Conditional disaggregation at alpha 3: valid, and our margin is far larger on the replay (2026-10-28)
 - cond_p1 at alpha 3, accept 2.003, failed=0 on both tenants (passing the gates the stock-PD arm failed): chat
   50.5% / 665 tok/s with TPOT p50/p90 44.8/193.8 ms; agent 64.9% / 905 tok/s, not_issued 6148.

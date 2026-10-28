@@ -1454,6 +1454,27 @@ inside it. So ordering by deadline costs nothing when nothing is in danger and p
 which is the behaviour the design intends -- but it is not on its own close to the gains reported in section 6.4,
 and C3's case rests on the chunk-sizing layer built above it. One repeat; a second is [pending].
 
+**Result: against conditional disaggregation on the realistic replay.** Conditional disaggregation is the
+strongest disaggregated design, because it prefills a round's short append locally and so avoids shipping the
+append itself; only the session's existing prefix must be where the decode runs. On the superposed TraceLab replay
+plus chat at load factor 3, on the same 16 H20s, with both arms completing every request and at matched draft
+acceptance:
+
+| metric, load factor 3 | ours | conditional disaggregation | change |
+|---|---:|---:|---:|
+| chat SLO attainment | **91.2%** | 50.5% | +40.7 points |
+| agent SLO attainment | **94.3%** | 64.9% | +29.4 points |
+| agent SLO goodput (tok/s) | **2 493** | 905 | **2.75x** |
+| chat mean TPOT, p90 (ms) | **29.8** | 193.8 | **-85%** |
+| agent mean TPOT, p90 (ms) | **38.0** | 188.2 | -80% |
+
+This margin is far larger than the 12-37% of agent goodput we report on the fan-out workload, and the difference
+between the two workloads is the point. Fan-out gives every concurrent program of a task the *same* task prefix, so
+a local-append rule keeps nearly all of the work local and conditional disaggregation nearly matches us. In the
+replay each session carries its *own* history -- a median of 119K cached tokens -- so the append is local but the
+history still has to be wherever the decode is. That is the cost section 3.4's first consequence predicts, and it
+is visible only on the workload with per-session state, which is the one agentic serving actually produces.
+
 **Result: the schedule alone, without the kernel or speculation.** This arm isolates colocation from C1 and C2
 (Table 15). Ours holds at least 90% chat attainment up to 64 agent programs; stock disaggregation only to 16, at
 every P:D ratio swept, and deadline order on its prefill pods changes nothing. The gap is the per-round KV re-ship,

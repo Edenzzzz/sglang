@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.82.0 — C4: the mixed-traffic evaluation becomes its own contribution (2026-10-28)
+- New contribution item for the scenario, which is compelling on its own: an agentic coding product and a chat
+  product sharing GPUs, as Codex and ChatGPT traffic do -- TraceLab coding sessions on real timestamps (10 s TTFT /
+  80 ms TPOT) concurrent with ShareGPT chat (2 s / 50 ms) on four nodes of four GPUs.
+- States the measured margins against both baseline families: 3.7-14x agent SLO goodput and up to 80 points of
+  chat attainment over stock PD at its best ratio; +12-37% goodput over conditional disaggregation (+57% on the
+  shifting-demand replay, +90% under a chat surge); +14.2% goodput and +8.0 points chat attainment over sglang's
+  mixed chunk at overload, and -32% chat mean TPOT with a -79% TTFT tail against prefill-prioritized at capacity.
+- Framed as a throughput-latency frontier (higher attainment and lower mean TPOT at fixed throughput, more load at
+  fixed attainment), with the Pareto curve marked pending, and the prefill-prioritized goodput margin explicitly
+  withheld pending the acceptance question.
+
 ## v2.81.0 — C3 stated concisely, with the workload it is evaluated on (2026-10-28)
 - C3's worker paragraph tightened (it also had a dangling "A" and a number-agreement error), and the dropped
   mechanisms compressed to one clause.

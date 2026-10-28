@@ -204,6 +204,28 @@ chat attainment, and it loses no requests and no attainment when a quarter of th
 Llama-3.3-70B, it holds 3-23 points more chat attainment than stock PD at equal agent goodput, and 4-94% more agent
 goodput than conditional disaggregation. [32 GPUs pending]
 
+- C4, an evaluation on concurrently mixed, differently-SLO'd traffic. The scenario is one many clusters already
+  serve: an agentic coding product and a chat product sharing the same GPUs, as Codex and ChatGPT traffic do. We
+  replay TraceLab's agentic coding sessions on their real arrival timestamps -- rounds carrying tens to hundreds of
+  thousands of cached tokens, under a 10 s time-to-first-token and 80 ms mean-TPOT target -- concurrently with
+  ShareGPT chat turns of a few hundred tokens under 2 s and 50 ms, on **four nodes of four GPUs**, sweeping load
+  until both tenants' targets break. Measured on that mixture, AttentionFuse beats both families of baseline:
+  - against **PD disaggregation** at its best prefill-to-decode ratio, 3.7x the agent SLO goodput at 32 agent
+    programs and 14x at 64, with chat SLO attainment 97.4% against 53.2% and 93.6% against 13.1%; no disaggregated
+    configuration holds any load point at 90% attainment;
+  - against **conditional disaggregation** (Dynamo's defaults), which prefills appends locally and is the stronger
+    disaggregated design, 12-37% more agent SLO goodput at every load in two repeats, rising to 57% on the
+    shifting-demand replay and 90% under a chat surge, with 14-21 points more chat attainment;
+  - against **sglang's own colocated schedules** on the same cluster and workload, 14.2% more agent SLO goodput and
+    8.0 points more chat attainment than mixed chunk at overload, with chat TTFT 58% lower at the 90th percentile
+    and agent mean TPOT 13% lower; and 32% lower chat mean TPOT with a 79% shorter chat TTFT tail than
+    prefill-prioritized at capacity.
+  The shape of the result is a throughput-latency frontier rather than a single point: at a fixed throughput target
+  we deliver higher SLO attainment and lower mean TPOT, and at fixed attainment we carry more load. The Pareto
+  curve that states this directly, and the per-tenant distributions behind it, are [pending]. One margin is
+  deliberately withheld: our goodput advantage over prefill-prioritized coincides with a draft-acceptance
+  difference large enough to explain it, and we do not claim it until per-tenant acceptance separates the two.
+
 ## 2. Background
 
 ### 2.1 LLM Serving

@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.38.0 — superset_report.py: judge the sweep by the agreed rules the moment it lands (2026-10-28)
+- tasks/pd_colocation/superset_report.py reads the sweep log's SCORE / ACCEPT lines and prints, per load: every arm's
+  chat and agent attainment, agent goodput and TPOT p50/p90; an acceptance VALIDITY gate (default 1.8; the
+  rope-base-broken baseline measured 1.42 against a clean 1.99); the SUPERSET verdict listing every metric where a
+  valid baseline beats us; and the 30% TPOT / 10% throughput bar against the BEST valid baseline per metric.
+- An invalid baseline that would have beaten us is called out explicitly with "RE-RUN it with a fixed model rather
+  than drop it" -- silently excluding a winning baseline would make the comparison non-credible.
+- Tested on a synthetic log in the drivers' exact format, including a deliberately broken baseline: gate, superset
+  check and bar all fire as intended.
+
 ## v2.37.0 — Slim windowed trace: 4.6 MB, field- and span-equivalent, ~10 min to the pods (2026-10-28)
 - The 22 MB windowed trace was still uploading at ~0.5%/min (~2 h). Larger exec chunks are not an option: 400 KB
   chunks are rejected (ok=False), and 60 KB costs ~6.5 s per call.

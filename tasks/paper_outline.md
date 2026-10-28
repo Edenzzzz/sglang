@@ -2,8 +2,16 @@
 
 ## Paper Outline (10/24)
 
-- **goal** - meet per-tenant SLOs while maximizing throughput for mixed chat + agent LLM workloads, without a fixed
-  prefill:decode node ratio
+- **goal** -- meet per-tenant SLOs **without** disaggregation, and do it with one mechanism rather than a
+  configuration:
+  - *push the throughput / interactivity frontier*, i.e. at a fixed throughput target deliver higher SLO
+    attainment and lower mean time-per-output-token, and at fixed attainment carry more load;
+  - *stay flexible across loads*, because the knob is a latency bound solved against a measured step-time model
+    rather than a token constant: loosening it reproduces a mixed-chunk-like schedule (long merged steps, high
+    throughput, poor tails) and tightening it reproduces a prefill-prioritized-like one (short uniform steps,
+    protected tails, starved prefill). **The claim is therefore that sweeping the bound ENVELOPES the baselines'
+    operating points, not that one setting dominates them all** -- a frontier claim, which is what SLO control plus
+    a perf model buys and what a static policy cannot express.
 - **motivation** -- agentic serving does not look like the workload disaggregation was designed for. An agent
   session is **long decode interleaved with small prefills**: each round appends a tool result or a short
   instruction -- a median of under a thousand uncached tokens -- on top of a prefix of tens to hundreds of

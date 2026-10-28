@@ -1,5 +1,21 @@
 # Changelog
 
+## v3.16.0 — State the goal, and restate "superset of all baselines" as a frontier claim (2026-10-28)
+- The outline's goal bullet now says it: meet per-tenant SLOs WITHOUT disaggregation, push the
+  throughput/interactivity frontier (higher attainment and lower mean TPOT at fixed throughput; more load at fixed
+  attainment), and stay flexible because the knob is a latency bound solved against a measured step model rather
+  than a token constant.
+- Story audit: the motivation chain is consistent and each link is measured. But "a superset of all baselines" is
+  NOT supported -- no configuration of ours dominates every baseline on every metric (at alpha 6 we beat mixed
+  chunk on all, but lose both tails to prefill-prioritized; the chunk rule at 600 ms wins tail TPOT 51% while
+  losing 37 points of attainment). Restated as a claim about the policy SPACE: loosening the bound approximates
+  mixed chunk, tightening it approximates prefill-prioritized, so sweeping it should ENVELOPE their operating
+  points. That is what the capsweep measures and what a static policy cannot claim.
+- Recorded the fallback: if the frontier does not envelope them, a single per-step bound is not expressive enough
+  and the next lever is the per-tenant form, not a tighter constant.
+- Recorded for motivation 2: plot the P/D demand RATIO over time from the data fig23_demand_shift.py already
+  extracts. Our two spike arms move the ratio in opposite directions, which a load factor cannot do.
+
 ## v3.15.0 — Claim 3 is already measured; trim the outline's kernel design bullet (2026-10-28)
 - Claim 3 ("provisioning for either phase wastes the other's throughput") is supported once stated as the
   consequence rather than the mechanism: the spike arm gives stock PD at its best swept ratio 32-46 tok/s of agent

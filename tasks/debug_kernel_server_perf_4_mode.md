@@ -436,6 +436,33 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     sensitivity sweep on that one number, not another redesign of the budget.
   - Against mixed chunk, which shares our mechanism, a large tail win IS expected: mc's chat TPOT p90 is 102.0 ms
     with no bound either.
+- **[ ] STORY CONSISTENCY AUDIT (2026-10-28). The motivations and the goal line up, with ONE claim that must be
+  restated because it is not supported as written.**
+  - **The chain is consistent:** agentic sessions are long decode with small interleaved prefills (measured: median
+    875 uncached tokens over a median 119K cached prefix) -> disaggregation re-ships the prefix every round
+    (measured: conditional disagg, which prefills appends locally, matches us to 64 programs at 94.6% while stock
+    PD falls to 31.2%) -> a static P:D split collapses when the mix moves (measured: 32-46 tok/s against our
+    1 053 under a +32-program spike) -> so the goal is to meet SLOs WITHOUT disaggregation, which requires the
+    colocated step to be both fast (C1, C2) and controllable (C3).
+  - **The claim that does NOT hold as written: "a superset of all baselines".** No configuration of ours dominates
+    every baseline on every metric. At alpha 6 we beat mixed chunk on all of them, but against prefill-prioritized
+    we win throughput, TTFT and the mean TPOTs and LOSE both tails; and the chunk rule at `stepcap=600` wins chat
+    tail TPOT by 51% while losing 37 points of chat attainment. Different configurations win different metrics,
+    which is the opposite of a superset.
+    - **Restate it as a frontier claim about the policy SPACE, which the evidence can support:** the bound is a
+      latency, so loosening it approximates mixed chunk (long merged steps, high throughput, poor tails) and
+      tightening it approximates prefill-prioritized (short uniform steps, protected tails, starved prefill). The
+      claim is that sweeping it ENVELOPES the baselines' operating points. That is exactly what the capsweep
+      measures, and it is a claim a static policy cannot make by construction.
+    - If the sweep's frontier does NOT envelope them, the honest finding is that a single per-step latency bound
+      is not expressive enough, and the next lever is the per-tenant form (cap by the tightest RESIDENT tenant's
+      target), not a tighter constant.
+  - **Also needed for motivation 2 and now cheap:** plot the P/D demand RATIO over time, not two separate demand
+    panels. `fig23_demand_shift.py` already extracts issued prefill tokens/s and issued decode tokens/s, so
+    dividing them turns "no static ratio wins" into "the ratio itself moves by Nx during the surge, so no static
+    split can track it". Our two spike arms move it in OPPOSITE directions -- the chat surge toward decode at a
+    fixed agent rate, the fan-out spike toward prefill -- which is stronger than compressing timestamps, since a
+    load factor preserves the trace's P:D proportion while making everything arrive faster.
 - **[ ] DOES THE EVIDENCE SUPPORT THE REWRITTEN MOTIVATION? Audited 2026-10-28; two of three claims hold, one is
   weak and needs a figure.**
   1. **"The KV cache is transferred over and over, scaling with session history rather than with the tokens the

@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.84.0 — Abstract rewritten: 606 -> ~290 words, key results in it (2026-10-28)
+- The abstract was 606 words and carried no headline number in its first half. Rewritten to four paragraphs:
+  the scenario (agentic coding and chat on one cluster, lengths and targets an order of magnitude apart), why both
+  deployed answers fail (disaggregation re-ships the KV every round; colocated schedules compute a one-token row at
+  the chunk's 128-row tile and block a chat turn behind a 64K prompt), what we do, and the results.
+- Results now in the abstract, bolded: 4.0-8.7% over the fair kernel baseline; on four nodes of four GPUs,
+  3.7-14x the agent SLO goodput of disaggregation at its best ratio (93.6% against 13.1% chat attainment), +12-37%
+  over conditional disaggregation and +57% under shifting demand, +14.2% and +8.0 points over sglang's mixed chunk,
+  -32% chat mean TPOT and -79% chat TTFT tail against prefill-prioritized, and no requests lost when a quarter of
+  the cluster fails.
+- The prefill-prioritized goodput margin is still excluded, pending the acceptance question.
+
 ## v2.83.0 — Highlight the headline results so the paper is skimmable (2026-10-28)
 - Bolded the numbers a reader should find without reading prose, in the abstract and the introduction's results
   paragraph: the kernel's 4.0-8.7% over the fair baseline, single-node chat attainment +38-74 points and agent

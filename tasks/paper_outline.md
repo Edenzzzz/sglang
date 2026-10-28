@@ -86,41 +86,25 @@
 
 ## Abstract
 
-Large language model (LLM) serving increasingly mixes two tenants on one cluster: interactive chat, with short
-prompts and tight latency targets, and coding agents, which re-read 32-256K-token contexts on every round and add a
-few hundred tokens each time. Every request first runs prefill, which turns the prompt into the key-value (KV) cache
-and is compute-bound, and then decode, which generates one token per step and is memory-bound. Production systems
-serve the two phases in one of two ways. Colocation under a chunked-prefill schedule runs a prefill chunk and the
-decode rows in one attention call, so every decode row pays for prefill-width attention tiles and chat waits behind
-long agent prefills. Disaggregation places prefill and decode on separate nodes, so every agent round re-ships its
-prefix KV from a prefill node to a decode node, and the ratio of prefill to decode nodes (the P:D ratio) must be tuned
-to the workload.
+Production clusters increasingly serve an agentic coding product and a chat product on the same GPUs, with request
+lengths and latency targets an order of magnitude apart. Prefill-decode disaggregation meets decode targets by
+isolating decode on its own nodes, but every agent round re-ships its growing KV cache across the network.
+Colocation avoids that transfer and is the cheaper arrangement, yet the schedules deployed today cannot bound
+either tenant's latency: a single attention call computes a one-token decode row at the prefill chunk's 128-row
+tile width, and admitting prefill in arrival order blocks a 200-token chat turn behind a 64K-token prompt.
 
-We present AttentionFuse, a colocated serving system with three contributions. The first is a unified tile dispatcher: one
-CPU-side plan per mixed step assigns every attention tile to FlashAttention-3 (FA3) or to a row-sized FlashAttention-2
-(FA2) tile class, balances the tiles across the GPU's streaming multiprocessors (SMs), and schedules the merge of
-split-KV partial results in the same plan, so the partials are reduced inside the FA2 launch instead of by separate
-merge kernels. The second fuses speculative decoding into colocation: because every row gets a tile of its own size,
-a prefill chunk and the speculative (MTP / EAGLE) verify rows of the running requests run in one forward, the
-four-mode step. Prior colocation systems, POD-Attention and PD multiplexing among them, do not support speculative
-decoding, which frontier models are served with. The third is SLO control without disaggregation, which replaces the
-phase isolation disaggregation buys with fixed roles. Each worker orders prefills by deadline and demotes those that
-have already missed. Across symmetric nodes, a router predicts each request's TTFT and TPOT on every node and sends it
-to the node with the most cached prefix that can still meet its SLOs and those of the requests already there.
+AttentionFuse makes colocation meet SLOs. One CPU-side plan per step gives every row a tile of its own size and
+reduces all split rows inside one launch, which costs **4.0-8.7%** less attention time than running stock FA3 and
+stock FA2 as two planned kernels and lets a prefill chunk and speculative verify rows share one forward. Each
+worker then orders prefills by deadline and sizes each chunk from a measured step-time model, and a router places
+requests on the symmetric node with the most cached prefix that can still meet every SLO.
 
-On 96 mixed steps sampled from Qwen2.5-7B serving traces and replayed on an H200, mixed-step attention is **4.0-8.7%
-faster**, with FP32-exact output, than stock FA3 and stock FA2 run as two separately planned kernels -- the fair
-baseline, since splitting sglang's single varlen call by role is itself an obvious engineering step worth 1.8-2.8x.
-The same margin over the naive role split is 2.8-5.8% on Llama-3.3-70B and 2.0-2.8% on GLM-4.5-Air. On one node, SLO attainment rises for both tenants: on Qwen2.5-7B, chat attainment
-rises by **38-74 points**, and at 128-256K contexts agent attainment rises from **13-19% to 44-50%** with **8-11% more agent
-throughput**; on GLM-4.5-Air, throughput rises **27-28%** for both tenants. On 16 H20s, at 64 agent programs plus chat, AttentionFuse keeps **93.6% chat
-attainment with 1100 tok/s** of agent SLO goodput, where PD disaggregation at its best P:D ratio reaches 13.1% and
-80 tok/s; against conditional disaggregation it carries **12-37% more agent SLO goodput** at every load (two repeats) and **21-24% more** under
-a load spike. On a replay of real coding-agent traces whose prefill / decode demand swings within minutes, it
-carries 57% more agent SLO goodput than conditional disaggregation with 14 points more chat attainment, and 90% more
-with 21 points more under a chat surge; stock PD collapses at the same load. With Llama-3.3-70B on the same 16 GPUs,
-it holds 3-23 points more chat attainment than stock PD at its best split, at equal agent goodput (-2..+7%), and
-4-94% more agent goodput than conditional disaggregation.
+On four nodes of four GPUs replaying agentic coding sessions concurrently with chat, AttentionFuse carries
+**3.7-14x** the agent SLO goodput of disaggregation at its best prefill-to-decode ratio (**93.6% against 13.1%**
+chat SLO attainment), **12-37%** more than conditional disaggregation and **57%** more under shifting
+prefill-decode demand, and **14.2%** more than sglang's mixed chunk at **8.0 points** higher chat attainment, while
+cutting chat mean time-per-output-token **32%** and the chat time-to-first-token tail **79%** against
+prefill-prioritized scheduling. It loses no requests when a quarter of the cluster fails.
 
 ## 1. Introduction
 

@@ -254,6 +254,17 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     (`ROPE_THETA`) and `mn_run.py` (`ROPE_THETA` in the env string).
   - Push files with `Cluster(SID, cp, nodes=[f"worker-{i}" for i in range(NPODS)])`; without `nodes=` every call
     goes to one default instance that is not even one of the workers.
+- **H200 trial re-forked 2026-10-28 17:10 CST: `3f9e6a55ef7ae47e`** (vibecuda, 4x H200, i18n-bd), because
+  `bf7d041fb8313d8a` was **killed at 2026-10-28 04:02 UTC for resource under-utilisation** (`exit_code -77777`,
+  "trial 因资源利用率不达标被查杀"; read with `merlin-cli job list-trial-exit-info --json '{"trial_id":"304747380"}'`
+  -- `job-v2 runs get` only reports `trial_status: killed`). It had been idle since the overnight work moved to the
+  H20 cluster. Under-utilisation is the one kill reason the user's fallback rule tells us to re-fork rather than
+  retreat to H20, so the GPUs must be kept loaded from now on. Fork body (CLI 0.2.298 rejects the older
+  `source_sid` / `name` / `overrides` field names and requires `queue_name`): `/tmp/h200_fork_20261028.json` =
+  `{source_job_run_id: bf7d041fb8313d8a, caption: "vibecuda", resource_config.arnold_config.roles: [{name: worker,
+  num: 1, cpu: 96, gpu: 4, gpuv: NVIDIA_H200, memory: 876544, ports: 19, queue_name:
+  "h100-sxm-80gb.vmss-eastus2-vlmh200.agent.merge"}]}`, run with `merlin-cli job fork-run --control-plane i18n-bd
+  --from-file`. Re-provision with `unified/prov_h200_20261024.sh` from `/tmp/h200r2/bundle.tar.gz`.
 - **Hardware (2026-10-26, user):** ONE 4-GPU H200 trial for the kernel and single-node stages, `bf7d041fb8313d8a`
   (vibecuda, trial 304747380; replaced the misnamed vibecuda4 `d4b20cad59170ebd` on 2026-10-27 after 6.5 h queued; forked from `5b256eb857aa98d9` with gpu=4 / cpu 96 / 876544 MB and
   `overrides.attachments=[]`). The queued 1-GPU fork `5b256eb857aa98d9` was stopped. Llama-3.3-70B and GLM-4.5-Air TP4

@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.53.0 — H200 trial re-forked after an under-utilisation kill; paper Table 9c (2026-10-28)
+- The authorized 4-GPU H200 trial `bf7d041fb8313d8a` was killed at 2026-10-28 04:02 UTC with `exit_code -77777`,
+  "资源利用率不达标被查杀" -- resource under-utilisation, because it sat idle while the overnight work ran on the H20
+  cluster. Read the reason with `merlin-cli job list-trial-exit-info --json '{"trial_id":"304747380"}'`; `job-v2 runs
+  get` only reports `trial_status: killed`. Under-utilisation is the one reason the user's rule says to re-fork rather
+  than fall back to H20, so the replacement trial `3f9e6a55ef7ae47e` (vibecuda, 4x H200) is queued, and the GPUs are
+  to be kept loaded.
+- Fork body recorded in the task doc: the current CLI (0.2.298) rejects the older `source_sid` / `name` / `overrides`
+  field names and requires `roles[].queue_name`.
+- Paper 6.4 gains Table 9c, the scheduling decomposition (sglang prefill-prioritized / L0 / L1) with the noise floor
+  stated, and §7 "Result: schedule" now carries the end-to-end confirmation that deadline ordering alone is neutral
+  and the per-step SLO chunk is a regression, with its structural cause.
+
 ## v2.52.0 — Decomposition L1: EDF ordering is neutral at alpha 3 (2026-10-28)
 - L1 (L0 + EDF, sglang's default chunk), acceptance 1.993: chat 90.9% / agent 93.9% / 2481 tok/s, chat TPOT p50/p90
   11.4/32.0 ms, agent TPOT p90 40.4, chat ITL p99 185.5. Against L0 (FCFS: 91.2 / 94.3 / 2493, 10.8/29.8, 38.0,

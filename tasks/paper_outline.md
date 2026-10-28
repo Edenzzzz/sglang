@@ -1383,6 +1383,28 @@ attainment and goodput are inside the run-to-run noise floor (about 5 points and
 worse. Against the bar this is partial: chat TPOT and TTFT clear 30%, agent TPOT reaches 19.5%, and combined SLO
 goodput rises 5.2%, short of 10%.
 
+**Result: which scheduler layer earns the gain.** Table 9a's configuration is the first rung of a ladder that adds
+our scheduling layers one at a time on the same cluster, workload and load factor, so that the gain over sglang can be
+attributed. Rung L0 is the configuration of Table 9a: our serving tree (unified dispatcher, four-mode step, our
+router) admitting in arrival order with sglang's default chunk policy. Rung L1 adds per-tenant deadline ordering.
+
+Table 9c: scheduling decomposition, Qwen2.5-7B, 16 H20s, load factor 3; the noise floor on this cluster is about 5
+points of attainment, 4% of goodput and 3 ms of TPOT p90.
+
+| rung | chat attain | agent attain | agent goodput (tok/s) | chat TPOT p50/p90 (ms) | agent TPOT p90 (ms) | chat ITL p99 (ms) |
+|---|---:|---:|---:|---:|---:|---:|
+| sglang prefill-prioritized | 83.2% | 93.2% | 2 448 | 15.8 / 41.9 | 47.2 | 130.8 |
+| L0: our tree, arrival order, sglang chunk | 91.2% | 94.3% | 2 493 | 10.8 / 29.8 | 38.0 | 162.9 |
+| L1: L0 + per-tenant deadline order | 90.9% | 93.9% | 2 481 | 11.4 / 32.0 | 40.4 | 185.5 |
+
+At this load the entire gain over sglang comes from L0. Deadline ordering is neutral: every L1-to-L0 difference is
+inside the noise floor. Two details are worth stating rather than rounding away. All of them point the same way,
+slightly worse, which is what ordering by deadline should do when no deadline is in danger -- it trades a little
+locality for an ordering that buys nothing. And the inter-token tail grows on both rungs relative to sglang (chat p99
+130.8 -> 162.9 -> 185.5 ms), because our tree runs longer steps that fold a prefill chunk into the verify forward. This
+satisfies the design goal of no regression at low load, and it means deadline ordering has to earn its place under
+overload, where a deadline is in danger; that measurement is [pending].
+
 An earlier version of our scheduler layer -- deadline ordering coupled with the SLO-budgeted chunk -- did worse than
 this configuration and worse than the baseline (agent attainment 90.3%, goodput 2 259 tok/s), because its per-step
 budget is a minimum over resident rows and a just-admitted row, having banked no slack, pins every step to its bare
@@ -1703,7 +1725,11 @@ agent ITL by 15-25 points.
 
 **Result: schedule.** Per-tenant deadlines alone change nothing; adding demotion of missed prefills cuts chat TTFT by
 96-98%. Demoting by feasibility at a fixed processing rate instead demoted every cold 128-256K agent on arrival. Capping
-the chunk size per step to protect chat TPOT starves prefill: the cap binds on 86% of steps.
+the chunk size per step to protect chat TPOT starves prefill: the cap binds on 86% of steps. On the 16-H20 TraceLab
+replay at load factor 3 the same conclusion holds end to end (Table 9c): deadline ordering alone is neutral on every
+metric, and the SLO-budgeted chunk in its per-step form is a large regression, taking agent SLO goodput from 2 493 to
+2 259 tok/s. The cause is structural rather than a tuning accident: the budget is a minimum over resident rows, and a
+row admitted this step has banked no slack, so its bare per-token allowance pins the whole step.
 
 **Result: router.** Measured with the scheduler only, in earlier settings:
 - Round-robin vs cache affinity (16 H20s): round-robin finds 12.7% of prompt tokens cached, against 72.9%, and its

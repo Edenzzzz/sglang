@@ -25,7 +25,8 @@
     chained by PDL; FA2 runs second and reduces every split row, FA2's and FA3's, in its epilogue, which removes the FA2-merge
     and FA3-combine launches that two separately planned kernels need; the plan and that merge, not either kernel, are the contribution
   - **4-mode step:** prefill chunk + speculative verify rows in one forward
-  - why does this help? rows stop paying prefill-width tiles, and the step time becomes a function of shape that a
+  - why does this help? the small-query-tile work -- decode rows, draft steps and speculative verify rows -- stops
+    paying the cost of the prefill chunk's large query tiles, and the step time becomes a function of shape that a
     model can predict
 - **distributed inference**
   - **symmetric colocated nodes;** the router sends each request to the highest-cache-hit node that can still meet its
@@ -1809,7 +1810,7 @@ to this work.
 ## 9. Conclusion and limitations
 
 **Conclusion.** Mixed chat and agent traffic breaks both ways production systems serve the two phases of inference.
-- Colocation under chunked prefill makes every decode row pay for prefill-width attention tiles, and makes chat wait
+- Colocation under chunked prefill makes the small-query-tile work -- decode, draft and verify rows -- pay the cost of the prefill chunk's large query tiles in attention tiles, and makes chat wait
   behind long agent prefills.
 - Disaggregation re-ships every agent round's prefix KV, and needs a P:D ratio tuned to a mix that keeps changing.
 

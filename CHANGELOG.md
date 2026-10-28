@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.12.0 — Replace the "prefill-width tiles" shorthand with what it means (2026-10-28)
+- "rows stop paying prefill-width tiles" assumed the reader already knows which work has small query tiles and
+  that the chunk's tiles are the large ones. Now stated: the small-query-tile work -- decode rows, draft steps and
+  speculative verify rows -- stops paying the cost of the prefill chunk's large query tiles.
+- Same shorthand replaced in the artifact notes. No instance of "prefill-width" remains.
+
 ## v3.11.0 — The outline's motivation states the motivation, not just the baselines (2026-10-28)
 - The motivation bullet listed four existing systems and their flaws without ever saying what problem the paper is
   solving. It now leads with it: one cluster serving an agentic coding product and a chat product at once, whose

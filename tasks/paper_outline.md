@@ -161,16 +161,20 @@ admitting it.
   decoding: POD-Attention overlaps a prefill chunk with one-token decode rows inside an FA2 kernel, and PD multiplexing
   (MuxWise, sglang's pdmux) runs the prefill split across iterations without the draft model's state. Frontier models
   are served with speculative decoding, so this is what makes a colocated schedule practical for them.
-- C3, SLO control without disaggregation. Disaggregation meets TPOT by isolating decode on its own nodes; colocation
-  must instead keep each tenant within its SLOs by deciding where and when every prefill runs. C3 does this at two
-  levels.
-  - *Per worker: deadline scheduling of the colocated step.* Each prefill's deadline comes from its uncached tokens,
-    read by a prefix match at enqueue, so a cached agent round gets a chat-like deadline. Prefills run in deadline
-    order, and a prefill that has already missed its deadline is demoted behind those that can still meet theirs. A
-    Ordering and demotion are the whole mechanism: we also built preemption of an in-progress chunked prefill
-    (parking it with its computed prefix kept in the cache) and reservation of chunk budget for earlier deadlines,
-    measured both, and dropped them (sections 5.2.3 and 7). A prefill the step model predicts will miss its deadline
-    is demoted rather than any running request being preempted.
+- C3, SLO control without disaggregation. Disaggregation meets TPOT by isolating decode on its own nodes;
+  colocation must instead keep each tenant within its SLOs by deciding where and when every prefill runs. C3 does
+  this at two levels, per worker and per cluster. We evaluate both on the case that motivates them: a cluster
+  serving several kinds of request at once, with different lengths and different SLOs -- a replay of TraceLab's
+  agentic coding sessions on their real arrival timestamps, whose rounds carry tens to hundreds of thousands of
+  cached tokens, mixed with ShareGPT chat turns of a few hundred tokens under a far tighter latency target. That
+  mixture, rather than a single-workload benchmark, is what industry-scale serving looks like, and it is where a
+  policy that cannot tell the two apart fails.
+  - *Per worker: deadline scheduling of the colocated step.* Each prefill's deadline comes from its uncached
+    tokens, read by a prefix match at enqueue, so a cached agent round gets a chat-like deadline. Prefills run in
+    deadline order; one that has already missed its deadline is demoted behind those that can still meet theirs,
+    and one the step model predicts will miss is demoted rather than any running request being preempted. Ordering
+    and demotion are the whole mechanism -- we built preemption and chunk-budget reservation, measured both, and
+    dropped them (sections 5.2.3 and 7). The chunk size each step admits is solved from the same step model.
   - *Per cluster: an SLO-checked router over symmetric nodes.* For each request and node, from state the router keeps
     itself, it predicts:
     - TTFT: the deadline-ordered work queued ahead of the request, the cost of its uncached tokens on top of the

@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.81.0 — C3 stated concisely, with the workload it is evaluated on (2026-10-28)
+- C3's worker paragraph tightened (it also had a dangling "A" and a number-agreement error), and the dropped
+  mechanisms compressed to one clause.
+- C3 now names the setting that motivates it: a cluster serving several kinds of request at once with different
+  lengths and different SLOs -- TraceLab's agentic CODING sessions replayed on their real arrival timestamps
+  (rounds carrying tens to hundreds of thousands of cached tokens) mixed with ShareGPT chat turns of a few hundred
+  tokens under a much tighter target. Recorded for accuracy: the cluster mix is TraceLab coding + ShareGPT chat;
+  there is no separate code stream, and math/coding standalone sets are separate single-workload runs.
+
 ## v2.80.0 — Add the fixed-2048 baseline to the queued chunk arm (2026-10-28)
 - `mn_tailchunk_16g_20261028.sh` gains a `c2048` arm at both loads: identical tree, A6 kernel, four-mode step,
   router and EDF ordering, differing only in that the chunk is a fixed 2048 tokens instead of solved from the step

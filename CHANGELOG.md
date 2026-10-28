@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.62.0 — Cross-role shared-prefix KV reuse closed on fan-out too (2026-10-28)
+- `tasks/perf_model/fanout_role_overlap.py`: the gating number for the one kernel mechanism that only C2 makes
+  possible (both roles in one step, so the plan could group by KV page instead of by request).
+- Fan-out has the spatial sharing the TraceLab replay lacks, by construction: every program of a task starts from
+  the same L-token task prefix. Page overlap ceiling **98.6%** of the prefilling program's KV reads (94.6% at the
+  Llama 32K configuration), given a resident sibling.
+- **It is still closed, by the measurement that closed multicast:** compiling FA3's KV loads out entirely makes the
+  step only 0.1-1.3% faster, because they are hidden behind compute and hit in L2. So cross-role dedup is worth
+  <= 1.3% at any overlap. The high overlap shows the workload has the right structure, on a step whose KV traffic
+  is not the bottleneck -- it would need a much smaller model or far less bandwidth per flop to matter.
+
 ## v2.61.0 — No lab bookkeeping in the paper (2026-10-28)
 - New CLAUDE.md rule: the draft mentions a failed experiment, bug, misconfiguration, superseded run or pending
   re-measurement only when it clarifies why we landed on a core method. The FA2/FA3 fusion failing on warp layout

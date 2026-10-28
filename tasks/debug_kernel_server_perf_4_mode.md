@@ -643,7 +643,7 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       have measured repeatedly at 0.987-1.006x. The item is closed on evidence rather than left untested; it would
       only become interesting on a workload whose two roles are balanced (short contexts with many rows).
   - [x] **CROSS-ROLE SHARED-PREFIX KV REUSE: gated out on the session replay (see below), scoped to fan-out.**
-  - [ ] **(scoped, fan-out only) cross-role shared-prefix KV reuse.**
+  - [x] **(scoped, fan-out only) cross-role shared-prefix KV reuse -- CLOSED on both workloads.**
     - In our fan-out agent workload a parent session spawns children sharing its prefix, and the stack runs at 92.7%
       prefix hit. So within ONE four-mode step the prefill chunk (a child's new round) and the decode/verify rows
       (its siblings) often read the SAME prefix KV pages, and today each role streams them from HBM independently.
@@ -672,6 +672,25 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
         overlap reported, and must NOT be claimed on the session replay.
       - This also explains why the weak version (KV-position ordering) gave 1.08x only on a synthetic 48K shared
         prefix and -29% on the trace: the trace has no shared prefix to order around.
+    - **[x] CLOSED ON FAN-OUT TOO (2026-10-28, zero GPU cost): the page overlap is nearly total and the time it can
+      buy is still <= 1.3%.** `tasks/perf_model/fanout_role_overlap.py`.
+      - Fan-out DOES have the spatial sharing the replay lacks, by construction: `fanout_agents.py:129` starts every
+        program of a task from `list(prefixes[task])`, so all concurrent programs of one task share the same L-token
+        prefix exactly (default L = 131072, K = 8 tasks, C = 32 programs, so ~3 siblings per task).
+      - **Page overlap ceiling: 98.6%** of the prefilling program's KV reads are also read by a sibling decode row in
+        the same step (per round: 100 / 99.0 / 98.1 / 97.2% as its own history grows), given a resident sibling;
+        94.6% at the Llama-3.3-70B 32K configuration. Scaled by sibling residency: 73.9% at 75%, 49.3% at 50%.
+      - **But page redundancy is not time, and the time bound is the one that already closed multicast.** Compiling
+        FA3's KV loads out of the kernel ENTIRELY makes the step only **0.1-1.3% faster** (A5.5, 92 captures): the
+        loads are hidden behind compute and hit in L2, since 99% of FA3's reads are already re-reads by the same
+        prefill row's other query tiles. So removing cross-ROLE redundancy cannot be worth more than 1.3% of the
+        step even at 98.6% overlap -- before paying for the grouping and the indirection it needs.
+      - **Verdict: the item is closed, and the high overlap is not a reason to build it.** What the number shows is
+        that the workload has the structure the mechanism wants, on a step whose KV traffic is not the bottleneck.
+        It would only become interesting on a step where the chunk's KV loads are NOT hidden -- a much smaller
+        model, or a device with far less bandwidth per flop than H200/H20.
+      - Remaining cheap instrumentation if we ever revisit: a CPU-side count in the plan of merged steps where a
+        decode row shares the chunk's task. No GPU time; ~0 on the session replay by construction.
       - DeFT's 73-99% KV IO saving comes from trees inside ONE call, where sharing is near-total by construction.
         Our setting only reaches that regime under fan-out.
   - [x] **KERNEL INNOVATION 3 CLOSED (2026-10-28): deferred KV commit has nothing to recover.**

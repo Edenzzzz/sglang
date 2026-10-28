@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.74.0 — 3.4 now explains WHY mixed chunk falls behind, from the tile composition (2026-10-28)
+- Table 3's reading explained why OUR gain is small but never why the baseline loses. Added the arithmetic, which
+  closes the gap quantitatively: on the replay's median merged step (2048-token chunk, 119K cached prefix, 14
+  one-token decode rows) the rows need 14 x 7 = 98 query rows of work, 4.6% of the chunk -- but padded to a 128-row
+  tile each they become 1792, 87% of the chunk. The step goes from 2146 row-equivalents to 3840, a factor of 1.79x,
+  against the 1.86x measured for sglang's shipped single call on the 128K four-mode captures. Mixed chunk loses
+  because it computes 98 rows of work as 1792, not because the shape is hard.
+- The opening paragraph is now labelled "What sglang's mixed chunk actually runs", so the baseline is named as the
+  starting point rather than reading as preamble.
+
 ## v2.73.0 — Section 7 leads with per-contribution leave-one-out; negatives to one line each (2026-10-28)
 - The ablation now opens with the figure SLOs-Serve's Figure 14 does: remove one contribution at a time from the
   full system. New table collects C1, C2, C3-worker (ordering and chunk separately), C3-router and the pool, each

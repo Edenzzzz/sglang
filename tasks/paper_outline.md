@@ -322,7 +322,8 @@ deadlines alone, and deadlines with demotion of missed prefills; one H200, Qwen2
 
 ### 3.4 Mixed-chunk prefill reduces throughput
 
-A single attention call uses one tile shape for both roles, so decode and verify rows are padded to the prefill
+**What sglang's mixed chunk actually runs.** A single variable-length attention call uses one tile shape for both
+roles, so decode and verify rows are padded to the prefill
 chunk's 128-row query tiles. Splitting the call by role, with FA3 on both sides, already gives 1.40-1.49x attention
 speed on the trace-sampled captures of section 6.2. The obvious next step, stock FA2 for the rows, still picks one
 query tile for all of them from their average packed length, so a batch of 4-token verify rows beside one-token
@@ -358,6 +359,16 @@ grouped-query ratio changes.
 | Qwen2.5-7B | 69.3% | 13.5% | 0.1% | 1.2% | 16.0% |
 | Llama-3.3-70B | 69.3% | 13.5% | 0.1% | 1.2% | 16.0% |
 | GLM-4.5-Air | 69.3% | 0.1% | 13.5% | 1.2% | 16.0% |
+
+**Why mixed chunk falls behind, from the tile composition alone.** Attention work scales as query rows times KV
+length, and in a single variable-length call every row is computed at the chunk's 128-row tile width. Take the
+replay's median merged step: a 2 048-token chunk over a 119K-token cached prefix beside 14 one-token decode rows.
+Those rows need 14 x 7 = 98 query rows of work, which is 4.6% of the chunk's 2 048 -- genuinely cheap. Padded to a
+128-row tile each, they become 14 x 128 = 1 792, which is 87% of the chunk. So the step goes from 2 146
+row-equivalents to 3 840, a factor of **1.79x**, and that is essentially the whole gap: the shipped single call
+measures 1.86x our time on the 128K four-mode captures. Mixed chunk does not fall behind because attention is hard
+on this shape; it falls behind because it computes 98 rows of work as 1 792. The same arithmetic explains why the
+gap grows at shorter context (2.11-2.92x), where the chunk is smaller and the padded rows dominate it sooner.
 
 Table 3 is the central tension of the dispatcher, and it sets the reader's expectation for section 6.2: **16-row
 tiles are 69% of all tiles and 128-row chunk tiles only 16%, yet at a 119K prefix the chunk carries essentially all

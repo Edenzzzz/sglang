@@ -310,9 +310,21 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     - **CAVEAT THAT MAY ACCOUNT FOR MOST OF THE +9.3%: pp's draft acceptance is 1.795 against our 1.982, which is
       BELOW our own validity gate of 1.8.** A 9.4% lower acceptance costs that arm about 9% more target forwards per
       output token -- the same order as the goodput gap we are claiming. The upstream tree is the one that drops
-      `rope_theta`, and although this driver exports `ROPE_THETA=1000000`, the gap needs explaining before the
-      goodput number is used: check the pp worker logs for the effective rope base and re-run if it did not take.
-      Until then the +9.3% is NOT a usable result.
+      **Checked (2026-10-28): the rope base DID take.** `worker_r0_g0.log` carries
+      `rope_scaling {factor 4.0, original_max_position_embeddings 32768, type yarn}` AND `rope_theta 1000000`, so
+      this is not the 2026-10-28 defect and the arm runs the correct Qwen2.5.
+      - The acceptance gap is therefore **unexplained, which is worse for the claim than a known cause.** Acceptance
+        length is a property of the draft model against the target's state; a schedule should not move it 9%.
+        Candidates, in order of likelihood: (a) pp runs stock MTP (`mtps`, verify on its own step) against our
+        four-mode merged step, and the two arms may resolve different `speculative-num-steps` / draft settings,
+        which would make this a configuration difference rather than a result; (b) acceptance is averaged over a
+        different request mix, since pp issued 5 984 agent rounds against our 6 373 and acceptance varies with
+        context length; (c) the merged step genuinely changes what the draft sees. Only (c) would be ours to claim.
+      - **Until one is established the +9.3% goodput margin is NOT usable**, since the acceptance deficit alone
+        costs pp ~9% more target forwards per output token. The acceptance-independent results stand on their own:
+        chat TTFT p90 -62%, and the inter-token tails we lose.
+      - Next step, cheap: diff the two arms' resolved speculative configuration from their worker logs
+        (`speculative_num_steps`, `speculative_eagle_topk`, `speculative_num_draft_tokens`) before re-running.
   - mc and pdmux follow on the same cluster and window set.
 - **[x] ROPE-BASE DEFECT: THE SCOPE IS EVERY UPSTREAM-TREE BASELINE, INCLUDING THE PAPER'S HEADLINE PD BASELINE
   (verified 2026-10-28).** Loaded `ModelConfig("/dev/shm/w/qwen7b", model_override_args=<the YaRN override>)` under

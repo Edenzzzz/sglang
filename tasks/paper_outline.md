@@ -324,11 +324,14 @@ The policy is chosen for throughput, and it delivers it. Admitting prefill eager
 as the memory allows, and a large decode batch is what amortizes the per-step cost of reading the weights, so
 tokens per second is high. The scheduler never leaves the tensor cores idle waiting for work to arrive.
 
-What it cannot do is bound anyone's latency, because arrival order and a fixed chunk size together ignore both how
-long a request will occupy the prefill side and how urgent it is. The failure is head-of-line blocking, and it is
-severe rather than marginal: a 64K-token prompt admitted one chunk at a time holds the prefill side for tens of
-consecutive steps, and every request that arrives behind it waits for all of them -- including a 200-token chat turn
-whose own prefill would take a single step. Two measurements, in the settings section 6 evaluates. On one H200
+What it cannot do is bound the latency of the requests already running, and the reason is the priority itself.
+Because the waiting queue is served before the decode rows, an arriving prefill takes the step's budget and the
+rows already mid-generation get whatever is left -- often nothing. This is head-of-line blocking of decode by
+prefill, and it is severe rather than marginal: a 64K-token prompt occupies the prefill side for tens of
+consecutive steps, and for all of them every request already generating sees its inter-token gap stretched by a
+chunk of someone else's prompt. The damage therefore lands on the running requests' time-per-output-token, which is
+the quantity a user experiences as the response stalling mid-sentence, and it is inflicted by a request that has
+not produced a single token yet. Two measurements, in the settings section 6 evaluates. On one H200
 with Qwen2.5-7B, an agent burst of 32 requests arriving within 60 s at 32-64K context holds chat
 time-to-first-token at **4.5-13.9 s** against a 2 s target while the server's throughput is unharmed (the
 single-node setting of section 6.3). On 16 H20s under the superposed TraceLab replay plus chat at load factor 6 --

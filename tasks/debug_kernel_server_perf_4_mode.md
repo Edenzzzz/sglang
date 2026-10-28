@@ -261,12 +261,21 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     `stepcap=600` is that bound, so the folded steps that inflate the tail are capped. Predict our chat TPOT p90
     drops from 105.2 ms toward the 600 ms cap's implied ceiling, i.e. materially below 105 and plausibly below
     pp's 94.9.
-  - **But pp's head-of-line blocking lands on TTFT, not on TPOT, and this matters for how the win is claimed.**
-    pp serializes prefill into its own steps and runs stock MTP (verify on a separate step), so its individual
-    steps stay short and its decode rows see a uniform cadence: its TPOT p90 of 94.9 ms is the STRENGTH its policy
-    buys, paid for with chat TTFT p90 of 9.02 s against our 3.42 s. Beating pp by a lot on tail TPOT would mean
-    beating it at what it optimises. The large, structural win against pp is TTFT and SLO attainment; the tail-TPOT
-    result to expect is parity-or-better, not a rout.
+  - **CORRECTION (user, 2026-10-28): head-of-line blocking is INCOMING PREFILL BLOCKING RUNNING DECODE, and the
+    claim above was wrong.** sglang fills each step's token budget from the waiting queue BEFORE the decode rows, so
+    an arriving prefill stalls requests that are already mid-generation and the damage lands squarely on their
+    TPOT -- not on TTFT, and not on prefill queuing behind prefill, which is what I had described.
+  - **Which raises the question of why pp MEASURED the better TPOT tail (94.9 vs our 105.2 ms p90), and the answer
+    looks like survivor bias in the metric.** pp left **7 088** agent rounds unissued against our 6 699 and served
+    **5 984** against our 6 373, at chat attainment 57.8% against 61.8%. A request that is never admitted
+    contributes no TPOT sample at all -- it appears in TTFT and in attainment instead -- so pp's TPOT percentiles
+    are computed over a smaller and more favourable population, with fewer rows sharing each step. Our arm admits
+    more work and then reports the TPOT of all of it.
+  - **This needs settling before any tail-TPOT comparison is published, and it is cheap:** re-score both arms'
+    saved records over the SAME request set (the intersection of sessions both arms issued), and report TPOT
+    percentiles conditioned on admission. If pp's advantage disappears on a common population, its "better tail" is
+    an artefact of serving less; if it survives, the tail cost of our longer steps is real. The records are on the
+    pods and need no re-run.
   - **Falsifiable form.** If the arm shows chat TPOT p90 <= 95 ms AND chat attainment above L1's 61.8%, the chunk
     rule works and the claim is "we match or beat prefill-prioritized on the tail of the mean while keeping a 62%
     shorter TTFT tail". If TPOT p90 stays above 100 ms, the 600 ms cap is too loose and the next step is the

@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.91.0 — Correct the head-of-line-blocking mechanism, and flag survivor bias in the TPOT tails (2026-10-28)
+- 3.3 described the wrong mechanism: prefill queuing behind prefill (a TTFT effect). The real one, per the user, is
+  incoming prefill blocking RUNNING decode -- sglang serves the waiting queue before the decode rows, so an
+  arriving prefill stretches the inter-token gaps of requests already generating, and the damage lands on their
+  TPOT. Rewritten to say that, and to name it as damage inflicted by a request that has produced no token yet.
+- That makes pp's better measured TPOT tail (94.9 vs our 105.2 ms p90) suspect: pp left 7088 agent rounds unissued
+  against our 6699 and served 5984 against 6373, at 57.8% chat attainment against 61.8%. A request never admitted
+  contributes no TPOT sample, so pp's percentiles are over a smaller, more favourable population with fewer rows
+  per step.
+- Action recorded, no re-run needed: re-score both arms over the intersection of sessions both issued and report
+  TPOT conditioned on admission. If pp's advantage vanishes on a common population it is an artefact of serving
+  less; if it survives, our longer steps really do cost the tail.
+
 ## v2.90.0 — Register the tail-TPOT prediction before the arm lands (2026-10-28)
 - Our own tail should improve a lot: L1's chat TPOT p90 of 105.2 ms was measured with no bound on step length at
   all, and stepcap=600 is that bound.

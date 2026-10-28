@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.79.0 — Fixed chunk 2048 stays as a baseline, not as our policy (2026-10-28)
+- The 6.1 marker conflated two things. Corrected: for OUR arms the constant is being replaced, because a constant
+  cannot be justified across loads; as a BASELINE the fixed 2048-token chunk stays, since it is the simple ad-hoc
+  policy a deployed system actually uses and a model-driven scheduler has to beat it to justify its complexity.
+  Marked as removable only if the final arm set makes it redundant beside sglang's own chunk policy.
+
 ## v2.78.0 — Motivation sections now carry data from the settings we evaluate (2026-10-28)
 - 3.3 gains the cluster-scale measurement of head-of-line blocking, in section 6.4's own setting: on 16 H20s under
   the superposed TraceLab replay plus chat at alpha 6, sglang's prefill-prioritized schedule holds chat TTFT p90 at

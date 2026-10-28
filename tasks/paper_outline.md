@@ -946,10 +946,18 @@ Table 6: CUDA graph count, capture memory and decode step time, ours vs PD-Multi
 
 ### 6.1 Settings
 
-> **TO BE REPLACED.** Every serving result in section 6, single node and cluster, was produced with a fixed
-> 2048-token prefill chunk, because the predicted-chunk rule of section 5.2.3 was not working when they were run.
-> No number in the submitted paper will rest on a chunk constant: the arms are being re-run with the predicted
-> chunk, and constant-chunk configurations survive only as reference points beside sglang's own chunk policy.
+> **Note on the chunk size, to be revisited before submission.** Every serving result in section 6 was produced
+> with a fixed 2048-token prefill chunk, because the predicted-chunk rule of section 5.2.3 was not yet working when
+> they were run. Two things follow, and they differ.
+>
+> For **our** arms the constant is being replaced: no result we claim will rest on a chunk constant, since a
+> constant cannot be justified across loads and is not a policy a reader can transfer to another cluster or model
+> (section 5.2.3). Those arms are being re-run with the predicted chunk.
+>
+> As a **baseline**, the fixed 2048-token chunk stays. It is the simple, ad-hoc policy that a deployed system
+> actually uses, and a scheduler that sizes the chunk from a latency model has to beat it to be worth its
+> complexity -- so it is the comparison that matters most, not one to retire for being unprincipled. It is marked
+> here as potentially removable only if the final arm set makes it redundant beside sglang's own chunk policy.
 > Sizing the chunk from predicted latency is what FlowPrefill, PD-Multiplexing and SLOs-Serve all do; the
 > regression we measured was in our budget, not in the policy.
 

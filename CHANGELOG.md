@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.71.0 — POD-first kernel argument, references restored, chunk-2048 results marked (2026-10-28)
+- 3.4 restructured into the order the story needs: POD first (its design is FA2-only, and FA2 is the problem on
+  Hopper -- measured at 3.45-3.69x our attention time, while moving the chunk to FA3 is worth 1.76-7.7x), then why
+  FA3 and FA2 cannot be fused (incompatible warp layouts, one block size, one register budget; co-compiled 2.16x
+  slower against two launches 1.21x faster), then the one overlap the layouts do permit -- a 16-row mma.sync tile
+  beside a 64-row wgmma tile in one CTA -- with its 1.1-2.3% ceiling and a forward reference to section 7.
+- The full annotated reference list is back in the paper (12 entries, four bullets each); the split-off task-doc
+  copy is removed so there is one source of truth.
+- Section 6.1 carries a standing TO BE REPLACED marker: every serving result in section 6 used a fixed 2048-token
+  chunk because the predicted-chunk rule was not working when they ran. No submitted number will rest on a chunk
+  constant.
+- Status of the SLO-budgeted chunk, stated plainly: no positive result yet. All three arms so far are below rung
+  L0 (2259, similar, 2323 against 2493 tok/s), but none tested the policy -- two used the wrong budget form and
+  :life never executed its lifetime branch. The queued tail-bounded arm is the first on the fixed tree.
+
 ## v2.70.0 — Per-tenant acceptance logging, written but deliberately not deployed yet (2026-10-28)
 - `unified/apply_accept_per_tenant_20261028.py`: splits the acceptance mean by tenant class on the same prompt
   threshold the SLO machinery uses, emitting `ACCEPT_TENANT chat=<mean>/<n> agent=<mean>/<n>` beside the existing

@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.09.0 — Kernel items consolidated into one results table (2026-10-28)
+- Added "Kernel items: one table, every measured result" at the top of section A: 17 mechanisms, each with its
+  measured effect, verdict and evidence pointer, plus four end-to-end checks of the shipped dispatcher and the four
+  facts that establish the ceiling is real rather than a missed optimisation.
+- The top-of-doc deliverables section now points at that table. The evidence had been split across three places,
+  which is how cross-role backfill came to be described as "untested" in one section while A5.6 recorded it as
+  shipped and measured at 2.2-6.1%.
+
 ## v2.08.0 — Two more self-inflicted faults in the smoke runs (2026-10-28)
 - Both smoke attempts reused RUN_TAG=_smoke1, so they shared one directory and interleaved logs, making the failure
   read as a contradiction (ls showed worker_r0_g0.log while grep reported it missing; bindfail5 logs came from port

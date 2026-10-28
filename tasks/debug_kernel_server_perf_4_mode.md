@@ -2,7 +2,10 @@
 
 ## The two deliverables (user, 2026-10-28)
 
-1. **Colocation kernel gains from fusing multiple tile classes in one forward.** Measured against the fair baseline
+1. **Colocation kernel gains from fusing multiple tile classes in one forward.** **All kernel-item results are in
+   ONE table: section A, "Kernel items: one table, every measured result".** (Before 2026-10-28 the evidence was
+   split between this section, section A's per-item narrative and `paper_outline.md`, which is how backfill came to
+   be described here as "untested" while A5.6 recorded it as shipped and measured.) Measured against the fair baseline
    (a stock FA3 call for the chunk plus a stock FA2 call for the rows), this is **2-9%** across Qwen2.5-7B,
    Llama-3.3-70B and GLM-4.5-Air. The 1.8x-7.7x figures belong to the role split itself and are not ours.
 2. **Scheduling: be a SUPERSET of every baseline, through simple SLO control and a latency model.** With a step
@@ -1961,6 +1964,47 @@ A and B are the two kernel items; S is the server/workload evaluation the user s
 Supporting gates are prerequisites, not substitutes. `[x]` = measured, `[~]` = partly, `[ ]` = not run.
 
 ### [ ] A. Ultra fine-grained tile dispatcher (unchecked 2026-10-24: never built -- the unified plan + merge schedule is A6)
+
+#### Kernel items: one table, every measured result (consolidated 2026-10-28)
+
+Single place to look. Each row is a mechanism, its measured effect, the verdict, and where the evidence lives. The
+per-item narrative follows below; the reader-facing summary is `paper_outline.md` section 5.1.
+
+| # | mechanism | measured effect | verdict | evidence |
+|---|---|---|---|---|
+| 1 | **A6 unified dispatcher vs NAIVE FA3 + stock FA2** (the fair baseline) | Qwen2.5-7B **1.040-1.087x**; Llama-3.3-70B 1.028-1.058x; GLM-4.5-Air 1.020-1.028x | **SHIPPED. This is the C1 claim: 2-9%.** | `a6_h200x4_kernel_ladder_20261026.sh`, `a6_ladder_model_h200_20261028.sh`; 96 + 38 + 43 captures, FP32-checked |
+| 2 | role split alone (chunk->FA3, rows->FA2) vs sglang's single varlen call | Qwen 1.76-2.80x; Llama 6.7-7.7x; GLM 5.3-6.0x | **NOT OURS** -- the obvious engineering step; must never be quoted as our gain | same ladders |
+| 3 | **cross-role backfill, `tma_store_wait`** (FA3 drains TMA stores, FA2 CTAs fill freed SMs) | **2.2-6.1%** of the step | **SHIPPED** (co-launch form) | A5.6; PDL-off ablation, 96 captures |
+| 4 | in-kernel backfill (an FA3 CTA takes FA2 work itself) | correct, 1.4-5.5x over no backfill, but the co-compiled path is 2-6x slower | built, measured, DROPPED | A5.6, `colaunch_20261012.md` |
+| 5 | longest-processing-time placement | <= 0.7% | kept (free), not a claim | A6 section 3 |
+| 6 | in-launch ticketed merge (no separate merge launch) | <= 0.9% on trace steps; 6-13% on decode-heavy batches | kept; claim only the decode-heavy figure in context | merge-free bound |
+| 7 | two naive calls on separate streams vs serial | 1.763x vs 1.759x -- nothing | bounds all launch-level overlap | ladder |
+| 8 | DSMEM cluster reduction | 0.597-0.993x | harmful, DROPPED | A6 ablations |
+| 9 | persistent LPT pull loop | 0.987-0.998x | parity, DROPPED | A6 ablations |
+| 10 | flashinfer persistent runner | 0.993-1.006x | parity, DROPPED | A6 ablations |
+| 11 | JIT ready-queue merge release | 0.997-1.005x | parity, DROPPED | A6 ablations |
+| 12 | **KV multicast** | FA2 shares <1% of its KV loads; 0.76-0.77x in-step | **TESTED, harmful, DROPPED** | A5.5 |
+| 13 | L2 / KV-position ordering | L2 hit already 98%; 1.08x on a synthetic 48K shared prefix, -29% on the trace | workload-gated, not claimed | A5.4 |
+| 14 | cross-role shared-prefix KV reuse (DeFT-style KV grouping) | page overlap **~0 by construction** on the session replay | closed for this workload; viable only on fan-out | gating analysis, 2026-10-28 |
+| 15 | deferred KV commit for rejected draft tokens | premise false: the writes are required by the verify forward | closed, not built | `eagle_info_v2.py:405` |
+| 16 | draft/verify pipelining across staggered groups | ceiling UNMEASURED after 3 instrumentation attempts | **OPEN**, not claimed | `apply_draft_share_events_20261028.py` |
+| 17 | draft/verify epilogue op fusion | bounded ~4% of kernel time | not built | section B |
+
+**End-to-end checks of item 1, which is what the paper rests on:**
+
+| check | result |
+|---|---|
+| whole-step GPU time, A6 vs stock FA3, same schedule (cluster replay) | 1.041x overall; merged 1.055x, decode 1.011x, prefill 1.004x |
+| the same, bucketed by chunk prefix depth | 1.147x (<8K) -> 1.047x (8-32K) -> 1.062x (32-64K) -> 1.026x (64-128K) -> 1.006x (>128K) |
+| single node, kernel alone, no speculation, no worker scheduler | -6.7% TPOT at 32K, -2.8% at 128K; +7-10% throughput |
+| cluster leave-one-out (remove A6, keep everything else) | 2436 vs 2471 tok/s = 1.4%, inside the noise floor |
+
+**Why the ceiling is real and not a missed optimisation** (the four facts to cite if challenged): a 2048-token chunk
+over a 128K prefix is 1.08e14 FLOP, ~0.73 s on an H20 and essentially the whole step, and BOTH arms run that chunk
+through identical FA3 code; only 0.2% of decode-step wall time lies outside the traced forward, so there is no
+host-side slack; two independent overlap mechanisms (streams, PDL) find 0% and 1.4-6.2%; and six persistence /
+reduction / locality mechanisms all land at or below parity.
+
 
 - [x] **A-fix, FA2 out of the co-compiled kernel (2026-10-12):** FA2 spilled inside the fused
   kernel (168 regs, 4200 B stack, 21x slower per item than `BatchAttention`); now FA3 grid on

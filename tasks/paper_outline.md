@@ -115,9 +115,10 @@ requests on the symmetric node with the most cached prefix that can still meet e
 
 On four nodes of four GPUs replaying agentic coding sessions concurrently with chat, AttentionFuse carries
 3.7-14x the agent SLO goodput of disaggregation at its best prefill-to-decode ratio (93.6% against 13.1%
-chat SLO attainment), **2.75x** the agent SLO goodput of conditional disaggregation on a replay of real agentic
-sessions at 40.7 points higher chat attainment, and 57% more under shifting
-prefill-decode demand, and 14.2% more than sglang's mixed chunk at 8.0 points higher chat attainment, while
+chat SLO attainment), and 2.75x that of conditional disaggregation, the strongest disaggregated design, at 40.7
+points higher chat SLO attainment and 85% lower chat mean time-per-output-token at the tail. Under shifting
+prefill-decode demand it carries 57% more agent SLO goodput than that baseline, and 14.2% more than sglang's
+mixed chunk at 8.0 points higher chat attainment, while
 cutting chat mean time-per-output-token 32% and the chat time-to-first-token tail 79% against
 prefill-prioritized scheduling. It loses no requests when a quarter of the cluster fails.
 

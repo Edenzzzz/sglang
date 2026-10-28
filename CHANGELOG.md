@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.30.0 — Fix the abstract edit: no bold, and no dangling clause (2026-10-29)
+- The previous commit put a bold span into the abstract, contradicting the standing instruction that abstracts are
+  not typeset with emphasis, and left "57% more under shifting prefill-decode demand" dangling from the clause it
+  replaced.
+- Rewritten as two sentences: 2.75x the agent SLO goodput of conditional disaggregation at 40.7 points higher chat
+  attainment and 85% lower chat mean-TPOT at the tail; then the shifting-demand and mixed-chunk figures. No bold
+  spans remain in the abstract.
+
 ## v3.29.0 — The abstract understated the conditional-disaggregation margin (2026-10-28)
 - It quoted +12-37% agent SLO goodput, which is the FAN-OUT figure, while the realistic replay measures 2.75x at
   40.7 points higher chat attainment. Fan-out gives every program of a task the same prefix, so the baseline's

@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.19.0 — TWO RETRACTIONS on item 18, and its reach is ~95%, not 1.15% (2026-10-28)
+- RETRACTED: the two-stream sweep does NOT test item 18. Item 18 is INTRA-CTA (the FA3 CTA is already resident, its
+  second warpgroup already allocated, so rows ride inside it and SM saturation is irrelevant). The sweep also varied
+  the CHUNK, i.e. the number of tiles, while flash-attention chose its tile internally -- it never varied the tile
+  size. The "q64 hypothesis refuted" claim was wrong on both counts and is withdrawn. What the sweep does establish
+  is the SM-saturation evidence for paper 5.1 reason (4): 4.5% at best, 1.006x (harmful) at a 2048-token chunk.
+- RETRACTED: the 1.15% reach figure assumed only a chunk REMAINDER runs at q64. If the whole chunk runs at q64,
+  every tile frees a warpgroup. Recounted over 10,185 merged steps: 94.75% of row items hostable (127,384 of
+  134,443), 91.1% of steps fit their rows entirely, median 31 freed warpgroups against 13 rows.
+- Consequence: item 18 is untested and now the most valuable open kernel idea, not a curiosity. Next steps are the
+  compile test (does q64 clear the 1,436 B spill?) then an implementation issuing mma.sync from the freed warpgroup.
+
 ## v2.18.0 — MEASURED the tile-16-with-FA3 overlap gain; q64 hypothesis refuted (2026-10-28)
 - bench_q64_overlap_20261028.py on the H200: chunk/rows concurrency over a 131K prefix. streams/serial = 0.966x at
   chunk 64, 0.955x at 128, 0.973x at 256, and 1.006x (harmful) at 2048; gap-to-ideal recovered 13 / 48 / 41 / 0%.

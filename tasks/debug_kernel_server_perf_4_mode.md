@@ -2039,20 +2039,19 @@ issue `mma.sync` for 16-row rows alongside.
 - **Two cheap tests, in order:**
   1. **Compile only, no GPU:** build the co-compiled kernel with the FA3 role at q64 and read `ptxas -v` registers
      and spill bytes. The first co-compiled attempt spilled 1,436 B; if q64 clears it and fits 2 CTAs/SM, proceed.
-  2. **[x] Plan only, DONE (2026-10-28), and it bounds the mechanism tightly.** Counted per step over the 87 932
-     steps of the alpha-3 replay (`/tmp/pfix/st3/w*.log`): a chunk remainder above 48 rows takes the 64 class and
-     frees one warpgroup, which hosts ONE 16-row tile.
-     | quantity | measured |
+  2. **[!] RETRACTED (2026-10-28) -- the plan-only count used the wrong assumption.** It assumed only a chunk's
+     REMAINDER tile runs at q64, giving 1.15% of row items hostable. But the tile size is a kernel-internal choice
+     independent of the chunk's token count: a 2048-token chunk is 32 tiles of 64 rows OR 16 tiles of 128 rows.
+     If the WHOLE chunk runs at q64 then EVERY tile frees a warpgroup. Recounted over the 10,185 merged steps:
+     | reach of intra-CTA hosting | measured |
      |---|---|
-     | steps carrying decode / verify rows | 83 959 |
-     | of those, steps that also have a q64 chunk remainder (so spare capacity exists) | **9 516 (11.3%)** |
-     | row items that could move into a freed warpgroup | **9 516 of 828 705 = 1.15%** |
-     | within the steps that have capacity, share of that step's rows movable | p50 **7.7%**, p90 16.7% |
-     - **The binding constraint is the RATIO of q64 chunk tiles to row tiles, not whether the overlap works.** One
-       q64 tile frees one warpgroup and hosts one 16-row tile, while a step carrying rows has many of them, so even
-       where capacity exists only 7.7% of that step's rows can move.
-     - This matches Table 3 independently (64-row tiles are 1.2% of all query tiles) and matches the user's own
-       read that the mechanism is "a small percentage".
+     | only the chunk remainder at q64 (the retracted assumption) | 9,516 of 134,443 row items = 7.08% |
+     | **whole chunk at q64, one warpgroup freed per tile** | **127,384 of 134,443 = 94.75%** |
+     | merged steps whose rows fit ENTIRELY in the freed warpgroups | **9,277 of 10,185 = 91.1%** |
+     | share of a step's rows hostable | p10 **100%**, p50 100%, p90 100% |
+     Median chunk 2,033 tokens gives **31 q64 tiles** against a median of **13 rows**: capacity exceeds demand by
+     more than 2x. **So the mechanism's reach is NOT small -- essentially all row work could ride inside the
+     chunk's own CTAs.** This raises item 18 from a curiosity to the most valuable untested kernel idea.
   3. **[x] MEASURED the overlap gain itself (2026-10-28), which the plan-only count did not give.**
      `unified/bench_q64_overlap_20261028.py` on the H200 (one GPU, stock FA3 via `sgl_kernel.flash_attn` for the
      chunk and stock flashinfer FA2 for 32 one-token rows, KV 131072, row KV 4096):
@@ -2062,17 +2061,23 @@ issue `mma.sync` for 16-row rows alongside.
      | 128 | 0.6920 | 0.0733 | 0.7640 | 0.7294 | **0.955x** | **48%** |
      | 256 | 1.1043 | 0.0731 | 1.1813 | 1.1498 | 0.973x | 41% |
      | 2048 | 7.0750 | 0.0750 | 7.1880 | 7.2284 | **1.006x** | 0% |
-     - **The q64 hypothesis is REFUTED as stated: chunk 128 overlaps BETTER than chunk 64** (48% of the gap against
-       13%). The query tile is not what decides it -- the absolute size of the FA3 work is. At chunk 64 FA3 already
-       splits the 131K KV across many CTAs to fill the GPU, so no SM slack remains; at chunk 2048 it fills every SM
-       and two streams are slightly HARMFUL (1.006x).
+     - **[!] This measures LAUNCH-LEVEL concurrency and does NOT test item 18.** Item 18 is INTRA-CTA: the FA3 CTA
+       is already resident and its second warpgroup already allocated, so the rows ride inside it and SM saturation
+       is irrelevant. The sweep also varied the CHUNK (the number of tiles) while flash-attention chose its tile
+       internally throughout -- so it never varied the tile size at all. An earlier claim here that "the q64
+       hypothesis is refuted" was wrong on both counts and is withdrawn.
+     - What the sweep DOES establish, and it is still useful: two-stream concurrency recovers 4.5% of the step at
+       best and nothing at a 2048-token chunk (1.006x, marginally harmful), because FA3 fills the device either by
+       splitting the key range (small chunk) or by tile count (large chunk). That is evidence for the
+       SM-saturation argument in paper 5.1 reason (4), not a bound on intra-CTA sharing.
      - **Absolute ceiling: 4.5% of the step at best (chunk 128), and 0% at the 2048-token chunk real steps use**,
        because the row work is ~1% of serial time there. Independently consistent with the 1.763x vs 1.759x
        two-stream result on the real captures.
-     - Scope note: this measures LAUNCH-level concurrency (two streams), which depends on SM slack. True intra-CTA
-       warpgroup sharing does not, but its reach is the 1.15% of row items from test 2. Both bounds are small, by
-       different mechanisms, which is why the conclusion holds either way.
-     - **Verdict: not worth building for throughput on this workload.** Its value is as EVIDENCE for the
+     - **Verdict, corrected: item 18 is UNTESTED and now looks worth building.** Its reach is ~95% of row items
+       (test 2, recounted), not 1.15%, and no measurement yet bounds its per-step gain, because launch-level
+       concurrency is a different mechanism. The remaining work is the compile test (does q64 clear the 1,436 B
+       spill?) and then an implementation that issues `mma.sync` row work from the freed warpgroup.
+     - (The paragraph below was written under the retracted framing.) Previously stated verdict: Its value is as EVIDENCE for the
        architectural claim (paper 5.1): it is the only intra-SM overlap Hopper permits, and measuring its reach at
        1.15% is what makes "POD-style overlap does not carry to Hopper" a quantified statement rather than an
        opinion. Test 1 (the compile) is still worth running for the same reason -- to show the register wall is

@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.40.0 — The "ours" arm's serving tree rebuilt on the correct lineage before the sweep reached it (2026-10-28)
+- Found while smoke9 ran: the stage-2 push used the REPO tree as the serving tree, which has no A6 hooks and no
+  late-demote EDF. Every prior cluster result ran the H20 serving tree (upstream 3fef129 + 31-file overlay
+  up_overlay_h20_20261024.tgz + A6 bundle files). KERNEL=a6 would have died at launch, and python_slo carried the
+  wrong scheduler lineage -- the sweep's "ours" arm would not have been our system.
+- Rebuilt on all four pods: h20py = upstream + overlay; A6 backend/scheduler copied in under the deploy guard (the
+  overlay's scheduler.py md5 f8fbbdb95e9b is exactly the guard's expected base); A6 executor modules into $W/a6;
+  python_slo = h20py + SLO-chunk patch; $W/python -> h20py. Verified: A6 hooks, late demote, SLO patch, RoPE fix
+  present, all touched files parse.
+- The baseline-only smoke arm could not catch this. Server-side dry-run (import the serving tree) noted as needed.
+
 ## v2.39.0 — Agent client dry-runs clean; the slim trace reproduces the old replay round for round (2026-10-28)
 - smoke8: the slim trace arrived intact (md5 d55fcf85dd87, 629 s). The agent client then failed with
   "DatasetRow.__init__() got an unexpected keyword argument 'session_id'": upstream's DatasetRow lacks the

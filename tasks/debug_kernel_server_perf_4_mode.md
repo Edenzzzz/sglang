@@ -43,6 +43,20 @@
        `SMOKE_FAIL` and points at the pod-side `bench_agent.log`. Log `/tmp/h20/smoke_then_sweep.log`. This
        removes the failure mode that cost r1, r2 and r3 -- a sweep running for 40 minutes against dead clients
        while the driver log looked healthy.
+   - **[!] The "ours" arm would not have run our system (found 2026-10-28, before the sweep reached it).** The
+     stage-2 push used the REPO tree (`python/sglang` at HEAD) as the serving tree. That tree has NO A6 hooks
+     (`SGLANG_NATIVE_PDL` count 0) and NO late-demote EDF; every prior cluster result ran on the H20 SERVING tree
+     instead -- clean upstream 3fef129 + the 31-file overlay `up_overlay_h20_20261024.tgz` + the A6 bundle's
+     backend and scheduler. `KERNEL=a6` would have died at launch ("without the a6 bundle": its executor modules
+     were never copied), and `python_slo` was built on the wrong scheduler lineage.
+     - Rebuilt on all four pods the way the old cluster had it: `h20py` = upstream + overlay; the A6 bundle's
+       `flashattention_backend.py` and `scheduler.py` copied in under `mn_deploy_a6_20261025.sh`'s guard (base md5s
+       9ca27e6a5c34 / f8fbbdb95e9b -- the overlay's scheduler.py IS f8fbbdb95e9b, confirming the lineage);
+       `native_fa3_fa2_pdl_20261023.py` + `unified_executor_20261024.py` into `$W/a6`; `python_slo` = h20py + the
+       SLO-chunk patch; `$W/python` -> h20py. Verified per pod: A6 hooks 5, late demote 3, SLO patch 1, RoPE fix 1,
+       and all six touched files parse.
+     - The smoke arm (baseline only, upstream tree) could not have caught this; the dry-run idea should be extended
+       to the server side: import the serving tree's scheduler and backend before any arm that uses it.
    - **[x] RESOLVED (2026-10-28): it was NOT a launch-path regression -- every GPU was held by my own orphans.**
      The earlier diagnosis ("mn_node.sh exits before the launch redirect") was wrong. `worker_r0_g0.log` was absent
      only because the retry loop renames each failed attempt to `worker_r0_g0.bindfailN.log`; all five of smoke3's

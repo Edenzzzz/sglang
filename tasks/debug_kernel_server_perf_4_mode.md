@@ -444,7 +444,26 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     PD falls to 31.2%) -> a static P:D split collapses when the mix moves (measured: 32-46 tok/s against our
     1 053 under a +32-program spike) -> so the goal is to meet SLOs WITHOUT disaggregation, which requires the
     colocated step to be both fast (C1, C2) and controllable (C3).
-  - **The claim that does NOT hold as written: "a superset of all baselines".** No configuration of ours dominates
+  - **"SUPERSET" CLARIFIED BY THE USER (2026-10-28), and this version IS supportable: we attain the same control
+    as disaggregation while being able to move P/D resources to maximise throughput at fixed SLOs.**
+    - *Same control.* Disaggregation protects decode latency by isolating decode on separate nodes so an arriving
+      prefill cannot interfere. A per-step latency bound buys the same thing in software, and the measurement
+      exists: `stepcap=600` cut chat tail TPOT 51% and agent 43%. That is the control half, demonstrated.
+    - *More flexible.* Disaggregation's allocation is an integer partition of nodes fixed before the run; ours is a
+      latency in milliseconds solved per step against a step model, so the effective P:D division tracks the load.
+      **Disaggregation is the limit of our knob rather than a different design**, which is the precise sense of
+      "superset" -- a claim about expressiveness, not about dominating every metric.
+    - *Therefore highest throughput at fixed SLOs.* Once the bound holds latency, resources not needed to hold it
+      serve prefill, including capacity a static split would strand. Measured support for the payoff already
+      exists at the extreme: under a +32-program spike, stock PD at its best ratio gives 32-46 tok/s against our
+      1 053.
+    - **What is still missing is the middle of the curve**, which is what the capsweep supplies: at a tight bound
+      we have control without throughput (600 ms: tail TPOT -51%, attainment 23.6%), and at a loose one throughput
+      without control (the 2048 constant: 114.6 ms tail, 60.5%). The claim needs a setting that holds the tail
+      while keeping attainment at or above the constant's. If no setting does, a single global bound is not
+      expressive enough and the per-tenant form (cap by the tightest RESIDENT tenant's target) is the next lever.
+  - (superseded reading) The claim as *I* had written it -- "dominates every baseline on every metric" -- does not
+    hold and was never the intent: No configuration of ours dominates
     every baseline on every metric. At alpha 6 we beat mixed chunk on all of them, but against prefill-prioritized
     we win throughput, TTFT and the mean TPOTs and LOSE both tails; and the chunk rule at `stepcap=600` wins chat
     tail TPOT by 51% while losing 37 points of chat attainment. Different configurations win different metrics,

@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.17.0 — "Superset" means the same control as disaggregation plus a continuous knob (2026-10-28)
+- Per the user, the superset claim is about expressiveness against disaggregation, not about dominating every
+  baseline on every metric. Rewrote the goal around it: (a) the same control -- disaggregation protects decode by
+  isolating it on its own nodes, and a per-step latency bound buys the same protection in software, demonstrated by
+  stepcap=600 cutting chat tail TPOT 51% and agent 43%; (b) a continuous knob instead of a static integer
+  partition, so disaggregation's behaviour is the LIMIT of our knob rather than a different design; (c) therefore
+  the highest throughput at fixed SLOs, since resources not needed to hold latency serve prefill instead of being
+  stranded on the wrong side of a fixed split.
+- Measured support exists at both extremes (600 ms: control without throughput; 2048: throughput without control)
+  and under the spike (stock PD 32-46 tok/s against our 1053). What is missing is the middle of the curve, which
+  the capsweep supplies: a setting that holds the tail while keeping attainment at or above the constant's.
+
 ## v3.16.0 — State the goal, and restate "superset of all baselines" as a frontier claim (2026-10-28)
 - The outline's goal bullet now says it: meet per-tenant SLOs WITHOUT disaggregation, push the
   throughput/interactivity frontier (higher attainment and lower mean TPOT at fixed throughput; more load at fixed

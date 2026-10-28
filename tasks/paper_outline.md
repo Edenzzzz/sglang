@@ -2,21 +2,8 @@
 
 ## Paper Outline (10/24)
 
-- **goal** -- meet per-tenant SLOs **without** disaggregation, by attaining the same latency control it provides
-  and then using the resources it has to leave idle:
-  - *the same control.* Disaggregation protects decode latency by isolating decode on its own nodes, so an
-    arriving prefill cannot interfere with it. We attain the same protection in software, by bounding what one
-    colocated step may cost: a tight bound makes a prefill chunk unable to stall the resident decode rows, which
-    is what physical isolation buys.
-  - *a continuous knob instead of a static split.* Disaggregation's allocation is an integer partition of nodes,
-    chosen before the run and fixed for it. Ours is a latency in milliseconds, solved per step against a measured
-    step-time model, so the effective prefill-to-decode division moves with the load rather than being configured
-    for it. **Disaggregation's behaviour is the limit of our knob, not a different design** -- which is the sense
-    in which the policy is a superset.
-  - *therefore the highest throughput at fixed SLOs.* Once latency is held by the bound, every resource not needed
-    to hold it can serve prefill, including capacity that a fixed split would have stranded on the wrong side. The
-    claim to measure is the frontier: at fixed SLO attainment, more load carried; at fixed load, higher attainment
-    and lower mean time-per-output-token.
+- **goal** -- meet per-tenant SLOs while maximizing throughput for mixed agentic + chat LLM workloads, without a
+  fixed prefill:decode node ratio
 - **motivation** -- agentic serving does not look like the workload disaggregation was designed for. An agent
   session is **long decode interleaved with small prefills**: each round appends a tool result or a short
   instruction -- a median of under a thousand uncached tokens -- on top of a prefix of tens to hundreds of

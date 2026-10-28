@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.18.0 — Restore the outline's one-line goal (2026-10-28)
+- Reverted the goal bullet to its original one-liner (meet per-tenant SLOs while maximizing throughput for mixed
+  agentic + chat workloads, without a fixed prefill:decode node ratio). The outline is a scaffold; the expanded
+  argument -- same control as disaggregation, continuous knob instead of a static partition, therefore highest
+  throughput at fixed SLOs -- stays in the task doc and in the body sections where it is argued and measured.
+
 ## v3.17.0 — "Superset" means the same control as disaggregation plus a continuous knob (2026-10-28)
 - Per the user, the superset claim is about expressiveness against disaggregation, not about dominating every
   baseline on every metric. Rewrote the goal around it: (a) the same control -- disaggregation protects decode by

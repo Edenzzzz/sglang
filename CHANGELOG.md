@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.21.0 — Crossflow's methodology read from the paper: rate-only load axis, trace-analysis evidence (2026-10-28)
+- Verified rather than recalled: "A load factor alpha divides every timestamp offset from the first arrival by
+  alpha, increasing rate without changing the trace's temporal shape." So its load axis is only the rate and it
+  does not independently vary the P:D mix, as suspected.
+- Its P/D-variation evidence is trace analysis on the SAME quantity we measured (uncached input to output ratio):
+  peak-to-mean up to 4.7x at minute timescales, and a median 24.5x hourly span within a single day over 2,959
+  hours of TraceLab. And it frames rigidity as a timescale mismatch -- the ratio moves at minute scale "while
+  reassigning a replica takes tens of minutes" -- which is sharper than our phrasing and worth adopting.
+- How to use it without borrowing: cite theirs as independent evidence the phenomenon is general, report ours as
+  in-run and causal (median ratio halves inside our surge window, 38.4 vs 85.1; 3.4-4.2x spread with no surge),
+  and keep the claim ours -- a per-step bound corrects at step granularity, faster than the disturbance.
+- Tooling note: pypdf works via `pip install --target` plus PYTHONPATH; a plain install silently lands elsewhere.
+  8 of 11 downloads were truncated, and a truncated PDF still has a valid %PDF header -- verify by extracting
+  page 1. Re-download with retries running.
+
 ## v3.20.0 — All 11 reference PDFs on disk; text extraction still missing (2026-10-28)
 - `/opt/tiger/papers/` holds 11 arXiv PDFs, outside the repo so no binaries are committed. Each was verified by its
   %PDF magic bytes, since a wrong id returns an HTML error page with exit status 0.

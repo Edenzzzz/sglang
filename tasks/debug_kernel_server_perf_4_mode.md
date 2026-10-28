@@ -439,11 +439,35 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
 - **[ ] REFERENCE PAPERS ARE NOW ON DISK: `/opt/tiger/papers/`, 11 arXiv PDFs (2026-10-28).** Downloaded outside
   the repo so no binaries are committed; `arxiv.org` is reachable from this box, and each file was checked for the
   `%PDF` magic bytes because a wrong id returns an HTML error page with exit status 0.
-  - **Text extraction is NOT available yet:** `pdftotext` is absent, and `pip install pypdf` reports success while
+  - **Text extraction works via `PYTHONPATH=/opt/tiger/papers/pylib` (pypdf installed with `pip install --target`;
+    a plain `pip install` reports success but lands in another interpreter's site-packages).** 8 of the 11 initial
+    downloads were TRUNCATED -- pypdf reports "Stream has ended unexpectedly" and "EOF marker not found" -- so
+    always verify a downloaded PDF by extracting page 1, not by checking the `%PDF` header, which a partial file
+    still has. A re-download with retries is running; log `/opt/tiger/papers/redownload.log`.
+  - (superseded) Text extraction is NOT available: `pdftotext` is absent, and `pip install pypdf` reports success while
     the module stays unimportable (it is landing in a different interpreter's site-packages). The Read tool reads
     PDFs natively via its `pages` parameter, which is the reliable path, but it costs context -- so read specific
     page ranges rather than whole papers.
-  - **First question to answer from the papers rather than from our own notes:** how Crossflow varies
+  - **[x] CROSSFLOW'S METHODOLOGY VERIFIED FROM THE PAPER (2026-10-28, `/opt/tiger/papers/2609.27085.pdf`), and
+    it both confirms our note and gives us a better framing.**
+    - **Its load axis is only the rate, stated explicitly:** "A load factor alpha divides every timestamp offset
+      from the first arrival by alpha, **increasing rate without changing the trace's temporal shape**." It replays
+      one-hour TraceLab segments "preserving timestamps, conversation order, prefix relationships, and token work".
+      So it does NOT independently vary the P:D mix, exactly as we suspected -- rate scaling cannot.
+    - **Its evidence for P/D variation is TRACE ANALYSIS, on the same quantity we just measured** (uncached input
+      to output token ratio): "peak-to-mean ratios up to **4.7x at minute timescales**"; "in a public agentic trace
+      the hourly ratio spans a median **24.5x within a single day**", over 2,959 hours of TraceLab and 134 complete
+      days; "the hourly uncached-input-to-output ratio swings widely within a single day, even after each hour is
+      normalized against its own day's mean to remove inter-month drift".
+    - **And it states the rigidity as a TIMESCALE MISMATCH, which is sharper than our phrasing:** the ratio moves
+      at minute scale "while reassigning a replica takes tens of minutes". We should adopt that form -- the
+      problem is not that a static ratio is wrong, it is that the correction is slower than the disturbance.
+    - **How to use this without borrowing their contribution.** Their statistics are trace-wide (4.7x at minute
+      scale, 24.5x hourly within a day); ours are in-run and causal (the ratio's median halves inside our surge
+      window, 38.4 against 85.1, with 3.4-4.2x spread even with no surge). Cite theirs as independent evidence
+      that the phenomenon is general, report ours as what our own workload does, and keep the claim ours: a per-step
+      latency bound corrects at step granularity, which is faster than the disturbance rather than slower.
+  - (superseded) First question to answer from the papers rather than from our own notes: how Crossflow varies
     prefill/decode demand. Our four-bullet entry says its load axis is request rate via timestamp compression
     (alpha 8-20x), which if correct means it does NOT independently vary the P:D mix either -- the variation comes
     from the trace's structure. That matters because our own ratio measurement (2.2x shift in the surge window)

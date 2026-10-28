@@ -293,6 +293,15 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     - Simplicity is the point (user): three lines of arithmetic plus a bisection over a 10-term linear model
       (~2 us), no dynamic program, nothing borrowed from SLOs-Serve.
     - Still to run on the cluster: the arm set with this rule against sglang's own schedule and chunk policy.
+  - [ ] **CONSISTENCY CHECK NEEDED before the paper's chunk claims are final (2026-10-28).** paper_outline.md says
+    "a linear model does not suffice: lin4mode reaches only 25% in-sample on GPU time", while
+    `chunk_predictor.py` uses that SAME lin4mode model (`step_qwen_h20_a6_gpu_20261027.json`) and reports 4.7% MAPE.
+    Both can hold -- the 25% is plausibly over ALL steps, where short 10-20 ms decode steps dominate relative error
+    (the MLP itself is 18-23% on decode), while 4.7% is on MERGED steps only, which is where the chunk rule acts --
+    but the paper currently reads as self-contradictory. To do: (1) recompute lin4mode's error per step type on the
+    same held-out split the MLP table uses; (2) re-run `chunk_predictor.py` with the step MLP (`model.pt`, held-out
+    3.4-4.0% on merged steps) via bisection and report whether the chosen chunks differ; (3) state in 5.2.3 which
+    model the rule uses and why the per-type error is the relevant one.
   - [ ] **Chunk predictor, optional refinement: a learned head instead of bisection.**
     - The user does not want SLOs-Serve's dynamic program (it would read as borrowing their method). Instead predict
       the chunk from state we already have, using the step model that the fused kernel makes easy to fit.

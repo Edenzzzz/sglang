@@ -66,9 +66,12 @@ for A in 3 6; do
   # 10,185 recorded steps calls for (tasks/perf_model/chunk_predictor.py --rule): the ceiling is 600 ms, the chat
   # p99 inter-token target, not 2000 ms. At 2000 ms the mean-TPOT budget (16.3 s at a 13.9 ms/token observed rate
   # against a 50 ms target) never binds and neither does the ceiling, so the arm measures an uncapped chunk; at
-  # 600 ms the rule picks a median 2 176 tokens while admitting more than sglang's chunk policy on 65% of steps
+  # 600 ms the rule picks a median 2 176 tokens. `:qcap` is REMOVED: it capped a step by the nearest WAITING
+  # request's remaining TTFT slack, but a queued deadline says when that request must be ADMITTED, not what one
+  # step may cost, so with a deep queue it collapsed the chunk exactly under load (measured offline: 518 tokens at
+  # a 0.1 s nearest deadline, 2 264 at 0.3 s). The tail target below is the only per-step bound we keep
   # and less on 35%, which is the adaptivity a constant cannot express.
-  KERNEL=a6 EDF=1 CHUNK=16384 SLO_CHUNK="$MODEL:0.1:50:80:24000:demote:ttft:qcap:stepcap=600:life" \
+  KERNEL=a6 EDF=1 CHUNK=16384 SLO_CHUNK="$MODEL:0.1:50:80:24000:demote:ttft:stepcap=600:life" \
     SGL_PY=/dev/shm/w/python_slo_life RUN_TAG=${T}_ours ROUTER_ARGS="$ROUTER_ARGS_ALL" \
     python3 -u mn_run.py coloc_cache_edf_mtp_hc
   report coloc_cache_edf_mtp_hc${T}_ours

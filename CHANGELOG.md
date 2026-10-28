@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.72.0 — Third chunk-rule bug found offline: :qcap starves prefill under load (2026-10-28)
+- The user's position that a chunk-sizing regression "can't go wrong -- there must be a bug" is right, and this is
+  the third of the same family. `:qcap` caps a step by the tightest WAITING request's remaining TTFT slack, but a
+  queued request's deadline says when it must be ADMITTED, not what one step may cost. With a deep queue there is
+  always a request due in tens of milliseconds, so the cap collapses the chunk exactly under load.
+- Measured offline in `test_slo_chunk_rule.py` (new queue cases): chunk 4753 tokens at a 5 s or 1 s nearest
+  deadline, 2264 at 0.3 s, **518 at 0.1 s**. It had already bound 13% of steps (qcapped=927 of 7001) while the far
+  tighter per-step budget was also active, so with the lifetime budget fixed it becomes the binding constraint.
+- Removed from the queued tail-bounded arm, which had not yet started; the tail target (`stepcap=600`, the chat p99
+  inter-token SLO) is now the only per-step bound. Replaced atomically with mv rather than edited in place.
+- Restating the record: every measured SLO-chunk regression predates these fixes. The `:life` arm's own log proves
+  its lifetime branch never executed (budget_ms ~90, capped 7001/7001), so no arm has yet tested the policy.
+
 ## v2.71.0 — POD-first kernel argument, references restored, chunk-2048 results marked (2026-10-28)
 - 3.4 restructured into the order the story needs: POD first (its design is FA2-only, and FA2 is the problem on
   Hopper -- measured at 3.45-3.69x our attention time, while moving the chunk to FA3 is worth 1.76-7.7x), then why

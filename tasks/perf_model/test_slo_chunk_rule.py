@@ -56,13 +56,21 @@ def load_method(patch_path):
     return ns["_slo_budget_chunk"]
 
 
+class Waiting:
+    """A queued request, as the `:qcap` cap sees it: only its deadline matters."""
+
+    def __init__(self, due_in_s, now):
+        self.priority = now + due_in_s
+        self.origin_input_ids = [0] * 1000
+
+
 class Shim:
     """Stands in for the Scheduler: the rule only touches these attributes."""
 
-    def __init__(self, fn, reqs, tps=1.8, rate_ms=13.9, life=None, mixed_chunk=True):
+    def __init__(self, fn, reqs, tps=1.8, rate_ms=13.9, life=None, mixed_chunk=True, waiting=None):
         self._fn = fn
         self.running_batch = Batch(reqs)
-        self.waiting_queue = []
+        self.waiting_queue = waiting or []
         self.chunked_req = None
         # The rule prices the step differently when the prefill chunk shares the forward with the decode rows,
         # which is our four-mode step, so the default here is the configuration the cluster arms run.
@@ -125,6 +133,15 @@ def main():
                   healthy(14, 1), "small", {"chat": (0.0, 3)}))
     cases.append(("lifetime length learned, rows 1 token in (projection keeps the chunk open)",
                   healthy(14, 1), "big"))
+
+    # The `:qcap` cap, tested separately because it takes its bound from the WAITING queue rather than from the
+    # resident rows. A queued request's deadline says when it must be ADMITTED, not what one step may cost, so
+    # capping every step by the nearest deadline shrinks the chunk exactly when the queue is deep -- the same
+    # category of error as judging a fresh row on a mean it does not have.
+    print("\n-- the :qcap cap, against a queue of requests due soon")
+    for due in (5.0, 1.0, 0.3, 0.1):
+        sh = Shim(fn, healthy(14, 60), waiting=[Waiting(due, now) for _ in range(8)])
+        print(f"   nearest queued deadline {due:>4.1f} s -> chunk {sh.budget_chunk(MAX):>6} tokens")
 
     fails = 0
     for case in cases:

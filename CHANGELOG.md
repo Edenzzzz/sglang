@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.60.0 — Paper: readable for a first external read (2026-10-28)
+- §5.1 renamed "Fused Kernel for Fine-Grained Tile Dispatch": the design is no longer a persistent kernel, and the
+  old title named a mechanism that section 7 shows does not win.
+- Length: 30 169 -> ~25 000 words. The annotated bibliography (3 435 words) moves to `tasks/paper_references.md`,
+  where the four-bullet reading notes belong; in the submission those entries are ordinary citations. §3.4 cut from
+  2 112 to ~1 000 words and §5.1 from 2 660 to ~1 500, mostly by deleting failed-experiment detail that section 7
+  already reports with its numbers (persistent executor, DSMEM cluster reduction, L2 ordering, multicast) and by
+  cutting "Portability" from two paragraphs to three sentences.
+- Deleted a duplicate: §3.4's normalized-latency table and §6.2's speedup table were the same measurements twice.
+  The normalized form (ours as a row, 1.00) is kept, in §6.2 where the evaluation belongs.
+- Deleted the retracted intra-CTA shared-memory/register table and its three paragraphs of reading; the mechanism
+  is now one honest paragraph in §7 with its measured ceiling (1.1-2.3% at 128K) and the replace-a-consumer build
+  marked [pending].
+- Numbering: tables renumbered 1-22 and figures 1-28 into reading order (the draft had Table 9a three pages before
+  Table 9, and a dangling Table 2b and Figure 25b). `/tmp/renumber_tables.py` does this and refuses to write while
+  any reference does not resolve.
+
 ## v2.59.0 — Offline test for the chunk rule; smaller tables in the docx sync (2026-10-28)
 - `tasks/perf_model/test_slo_chunk_rule.py`: lifts the injected `_slo_budget_chunk` out of the patch and runs it
   against synthetic rows, 8/8 passing. The decisive pair is rows one token in: 751 tokens under the old fallback

@@ -250,9 +250,16 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     - Costs to measure, not assume: a staggered batch halves each group's size (worse GPU efficiency per launch, and
       CUDA-graph capture must cover both phases), and acceptance may shift because a group now drafts against a
       slightly older target state. Measured acceptance to protect: 3.35-3.55 at 128K (rate 0.78-0.85).
-    - First measurement needed, before any implementation: the draft share of decode step wall time (nsys or a CUDA
-      event around the draft forwards). That share is the ceiling on the gain; if it is under ~10% this is not worth
-      building, and the item should be closed with that number recorded.
+    - **Zero-cost attempt at the ceiling (2026-10-28): INCONCLUSIVE for the draft share, but it rules out host-side
+      headroom.** On 18,075 consecutive decode-step pairs from the alpha-3 traces, the wall gap between successive
+      target forwards is p50 30.08 ms while the traced `gpu=` of the forward itself is p50 30.98 ms. So `gpu=`
+      already spans the whole step (draft forwards included) and the two cannot be separated from the trace.
+      - What it DOES establish: only **0.2% (p90 1.7%) of decode wall time lies outside the traced forward**, so the
+        overlap scheduler hides essentially all host work. There is no launch-overhead or host-side time to recover
+        at decode steps, which independently explains why the vLLM PR 61869 style launch-count reduction measured
+        below our noise floor.
+      - The draft share therefore needs in-step instrumentation (CUDA events around the 3 draft forwards, or nsys)
+        on the H200. Until that number exists this item stays open and unbuilt -- it must not be claimed.
   - [x] **Llama-3.3-70B kernel ladder on the H200 (2026-10-28), completing the three-model set.**
     `unified/a6_ladder_model_h200_20261028.sh /opt/tiger/w/trace_sampled_llama70b_h20_20261025 llama70b`, log
     `/opt/tiger/w/ladder_llama.log`; 38 rank-0 captures replayed from the H20, FP32 worst error 0.0059, 0 failures.

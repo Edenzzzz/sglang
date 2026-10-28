@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.97.0 — Draft-share ceiling inconclusive from traces; no host headroom at decode (2026-10-28)
+- Tried to bound draft/verify pipelining at zero GPU cost: on 18,075 consecutive decode-step pairs the wall gap
+  between target forwards is p50 30.08 ms against a traced forward GPU time of p50 30.98 ms, so `gpu=` already
+  covers the draft forwards and they cannot be separated from the trace. The ceiling needs in-step CUDA events.
+- Useful negative result: only 0.2% (p90 1.7%) of decode wall time is outside the traced forward, so the overlap
+  scheduler hides all host work. No launch-overhead/host-side time exists to recover at decode -- consistent with
+  vLLM PR 61869's launch-count reduction measuring below our noise floor.
+
 ## v1.96.0 — New cluster fully re-provisioned (2026-10-28)
 - Stage 1 on all 4 pods: venv/torch/sgl_kernel/flashinfer, Qwen2.5-7B + EAGLE3, ShareGPT, TraceLab.
 - Stage 2 pushed from the repo: our serving tree (ourpy/python -> python), port07 kernel sources, drivers/serving,

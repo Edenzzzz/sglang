@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.22.0 — POD measured on Hopper instead of called not-implementable (2026-10-28)
+- User correction: POD is FA2-based, so it RUNS on Hopper and should be measured, not ruled out.
+  bench_pod_proxy_20261028.py times POD's structure (one stock flashinfer FA2 call covering the chunk AND the rows)
+  against ours (stock FA3 chunk + stock FA2 rows) on identical shapes: 24.29 ms vs 7.03 ms at a 128K prefix with a
+  2048-token chunk (ours 3.45x faster), and 6.15 vs 1.67 ms at 32K (3.69x).
+- This is an UPPER bound for POD on Hopper: its prefill half issues mma.sync where ours issues wgmma, and any
+  CTA interleaving POD adds sits on top of that same kernel, so it cannot recover the instruction gap.
+- Table 4's POD row now carries the measured factors rather than "not implementable"; the rationale paragraph cites
+  both context points.
+
 ## v2.21.0 — Kernel section condensed to match its gains; Tables 4 and 5 added (2026-10-28)
 - User: writing on the kernel items must be proportional to their gains. The POD-on-Hopper argument is cut from
   five numbered paragraphs to one, keeping the hardware rationale (wgmma/tcgen05 CTAs sized to fill the SM) and all

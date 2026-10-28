@@ -1995,6 +1995,7 @@ per-item narrative follows below; the reader-facing summary is `paper_outline.md
 | 15 | deferred KV commit for rejected draft tokens | premise false: the writes are required by the verify forward | closed, not built | `eagle_info_v2.py:405` |
 | 16 | draft/verify pipelining across staggered groups | ceiling UNMEASURED after 3 instrumentation attempts | **OPEN**, not claimed | `apply_draft_share_events_20261028.py` |
 | 17 | draft/verify epilogue op fusion | bounded ~4% of kernel time | not built | section B |
+| 17b | **POD-Attention's structure on Hopper, MEASURED** (one stock FA2 call covering chunk and rows, against our FA3 chunk + FA2 rows) | ours **3.69x** faster at 32K, **3.45x** at 128K (2048-token chunk, 32 rows) | POD runs on Hopper but lags; this is an UPPER bound for it, since its CTA interleaving sits on top of the same kernel | `unified/bench_pod_proxy_20261028.py` |
 | 18 | **FA3 q-tile 64 co-scheduled with an `mma.sync` 16-row warpgroup in ONE CTA** (user, 2026-10-28); q128 rows keep the separate-launch PDL path | [pending: first test is a compile, no GPU] | **OPEN, the most promising untried overlap** | proposal below |
 
 **Item 18, the user's proposal, and why it is the one overlap idea not already ruled out.** The Hopper restriction

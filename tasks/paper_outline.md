@@ -371,7 +371,11 @@ it: the prefill role must leave FA2 (the role split is worth 1.76-7.7x, section 
 15-25 points of agent ITL); `wgmma` cannot interleave shapes within a warpgroup; co-compiling both mainloops into
 one kernel required disabling FA3's register protocol, spilled 1 436 bytes per tile class and ran 2-6x slower; and
 launch-level overlap is then nearly empty, with PDL worth 1.4-6.2% and two streams worth 4.5% at best and nothing at
-a 2 048-token chunk. Table 4 reports these arms. The conclusion is architectural and the opposite of POD's: on
+a 2 048-token chunk. POD's structure is portable to Hopper -- FA2 runs there -- so we measured it rather than ruling
+it out: a single FA2 call covering the chunk and the rows takes 24.3 ms against our 7.0 ms at a 128K prefix with a
+2 048-token chunk, and 6.1 against 1.7 ms at 32K. Its prefill half issues `mma.sync` where ours issues `wgmma`, and
+any CTA interleaving POD adds sits on top of that kernel, so this is an upper bound for the design on this hardware.
+Table 4 reports these arms. The conclusion is architectural and the opposite of POD's: on
 Hopper and later the gain comes from giving each role the executor its tile shape deserves, not from fusing them --
 and because CTAs occupy more of the SM with each generation, designs that need spare SM capacity should age badly.
 
@@ -392,7 +396,7 @@ reach; we have not built it, and claim no gain from it.
 | naive role split: stock FA3 chunk + stock FA2 rows, serial | 1.079x | 1.044x |
 | the same two calls on two streams | 1.040x | 1.042x |
 | our earlier two-plan build (v3) | 1.343x | 1.769x |
-| POD-Attention style single-kernel fusion | not implementable on Hopper (see above) | - |
+| POD-Attention's structure: one FA2 kernel covering chunk and rows | **3.69x** | **3.45x** |
 
 **Table 5: the same, four-mode steps** (prefill chunk beside speculative verify rows).
 

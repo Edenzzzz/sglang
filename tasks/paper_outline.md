@@ -2,17 +2,17 @@
 
 ## Paper Outline (10/24)
 
-- goal - meet per-tenant SLOs while maximizing throughput for mixed chat + agent LLM workloads, without a fixed
+- **goal** - meet per-tenant SLOs while maximizing throughput for mixed chat + agent LLM workloads, without a fixed
   prefill:decode node ratio
-- motivation
-  - mixed-chunk prefill (sglang on FA3) - every decode / verify row pays prefill-width attention tiles in the one
+- **motivation**
+  - **mixed-chunk prefill (sglang on FA3)** -- every decode / verify row pays prefill-width attention tiles in the one
     varlen call; chat waits behind long agent prefills (chat TTFT 4.5-23 s on one H200)
-  - prefill prioritized - decode stalls behind prefill; TBT blows up
-  - pd disaggregation - re-ships each agent round's prefix KV from prefill to decode (decode pods hold 52-55 requests
+  - **prefill prioritized** -- an arriving prefill takes the step's budget before the decode rows, so requests already generating stall; time-between-tokens blows up
+  - **pd disaggregation** -- re-ships each agent round's prefix KV from prefill to decode (decode pods hold 52-55 requests
     in KV transfer at 64 agent programs on 16 H20s), leaves decode compute idle, needs a tuned P:D ratio
-  - pd multiplexing - no CPU-GPU overlap schedule, CUDA graphs multiplied by SM groups; a baseline only
-- design
-  - kernel: a unified fine-grained tile dispatcher for the mixed step - ONE CPU-side plan assigns every work tile of
+  - **pd multiplexing** -- same latency protection as ours but attained structurally, by partitioning SMs; no CPU-GPU overlap schedule, CUDA graphs multiplied by SM groups; a baseline only
+- **design**
+  - **kernel:** a unified fine-grained tile dispatcher for the mixed step - ONE CPU-side plan assigns every work tile of
     the batch to an executor and a tile class (FA2 classes of 16, 32 and 64 packed query rows for decode / verify
     rows, FA3 for prefill rows and rows of more than 64 packed queries), orders them longest first, splits
     KV where it balances the SMs, and in the same pass fixes the merge schedule:
@@ -20,53 +20,53 @@
   - the executors are stock FA3 and FA2's BatchPrefill body (one CTA per plan item, both tile classes in one launch),
     chained by PDL; FA2 runs second and reduces every split row, FA2's and FA3's, in its epilogue, which removes the FA2-merge
     and FA3-combine launches that two separately planned kernels need; the plan and that merge, not either kernel, are the contribution
-  - 4-mode step: prefill chunk + speculative verify rows in one forward
+  - **4-mode step:** prefill chunk + speculative verify rows in one forward
   - why does this help? rows stop paying prefill-width tiles, and the step time becomes a function of shape that a
     model can predict
-- distributed inference
-  - symmetric colocated nodes; the router sends each request to the highest-cache-hit node that can still meet its
+- **distributed inference**
+  - **symmetric colocated nodes;** the router sends each request to the highest-cache-hit node that can still meet its
     SLO, from a step model and the EDF queue ahead of it
-  - EDF on every worker, deadlines from uncached tokens, per-tenant SLOs; demote-on-miss under overload
+  - **EDF on every worker,** deadlines from uncached tokens, per-tenant SLOs; demote-on-miss under overload
   - the KV pool is sglang's hierarchical cache over Mooncake (reused, not ours); the router predicts how much of a
     missing prefix a node pulls from it while the request waits, so routing away from the best holder is priced
-- evaluation (three stages, three models: Qwen2.5-7B, Llama-3.3-70B, GLM-4.5-Air, all shown in every stage)
-  - kernel: faster mixed-step attention than naive FA3 + FA2 (stock FA3 on the prefill rows, stock flashinfer FA2 on
+- **evaluation** (three stages, three models: Qwen2.5-7B, Llama-3.3-70B, GLM-4.5-Air, all shown in every stage)
+  - **kernel:** faster mixed-step attention than naive FA3 + FA2 (stock FA3 on the prefill rows, stock flashinfer FA2 on
     the decode / verify rows, each with its own plan) and than sglang's single FA3 call, on steps sampled from real
     serving traces, 2-mode and 4-mode
-  - single node: higher SLO attainment for both tenants than sglang mixed chunk (+/- MTP)
-  - multi node: more load at SLO than PD disaggregation, scaling 16 -> 32 GPUs, under load spikes and mixture shifts
-  - fault tolerance
+  - **single node:** higher SLO attainment for both tenants than sglang mixed chunk (+/- MTP)
+  - **multi node:** more load at SLO than PD disaggregation, scaling 16 -> 32 GPUs, under load spikes and mixture shifts
+  - **fault tolerance**
 
-- story, one stage per section of the evaluation; each stage's claim, the gain we need, what is measured, and the
+- **story**, one stage per section of the evaluation; each stage's claim, the gain we need, what is measured, and the
   figures that show it (filled in as results land)
   - stage 1, kernel (C1; sections 5.1, 6.2, 7)
-    - claim: one plan per mixed step (tile classes, KV splits, LPT order, in-launch merge, FA3 / FA2 overlap by PDL)
+    - **claim:** one plan per mixed step (tile classes, KV splits, LPT order, in-launch merge, FA3 / FA2 overlap by PDL)
       makes mixed-step attention faster than sglang's single FA3 call and than naive FA3 + FA2, the obvious two-kernel
       split, in which stock FA2 picks one query tile for all of its rows
-    - measured on the H200, 96 fresh Qwen2.5-7B captures: **1.040-1.087x over naive FA3 + stock FA2**, which is the
+    - **measured** on the H200, 96 fresh Qwen2.5-7B captures: **1.040-1.087x over naive FA3 + stock FA2**, which is the
       claim, and 1.86-2.92x over sglang's single varlen FA3 call, which is mostly the role split and not ours; the
       same comparison on rank-0 captures replayed for Llama-3.3-70B gives 1.028-1.058x and for GLM-4.5-Air
       1.020-1.028x over the naive role split; step model 2.0% held-out MAPE vs 1.9% for the single FA3 call (per-step-type split [pending:
       re-fit with the corrected tracer])
-    - figures: time-weighted speedup per (model, context, mode) with 95% CI vs sglang FA3 and v3; per-item timeline
+    - *figures:* time-weighted speedup per (model, context, mode) with 95% CI vs sglang FA3 and v3; per-item timeline
       of one step; ablation bars: FA2 / FA3 overlap by PDL 2.2-6.1% of the step, longest-first order <= 0.7%,
       persistent vs hardware dispatch -0.2..-1.3%, JIT release of merges (ready queue) -1.8..+0.5% vs the same loop with ticketed merges (H200,
       Qwen2.5-7B) [pending: Llama-3.3-70B]
   - stage 2, single node (C2 + C3 on C1; sections 5.2-5.3, 6.3)
-    - claim: the 4-mode step (prefill chunk + speculative verify) under per-tenant deadline order with demote-on-miss
+    - **claim:** the 4-mode step (prefill chunk + speculative verify) under per-tenant deadline order with demote-on-miss
       protects both tenants on one node
-    - measured (final configuration, paper SLOs): Qwen2.5-7B (H200) chat attainment +38..+74 points (to 93-100% at
+    - **measured** (final configuration, paper SLOs): Qwen2.5-7B (H200) chat attainment +38..+74 points (to 93-100% at
       2 s / 100 ms); at 128-256K agent attainment 13-19 -> 44-50% and agent tok/s +8..+11%; at 32-64K agent tok/s
       -3.6..+2.7%; GLM-4.5-Air (one 4-GPU H20 node, overloaded) four-mode throughput +27-28% for both tenants, agent
       TPOT -32%, chat TTFT -71%; Llama-3.3-70B (one 4-GPU H20 node) chat TTFT -73..-86%, agent TPOT -17..-46%, agent
       tok/s +4..+9%, rising most for GLM-4.5-Air and for Qwen2.5-7B at 128-256K two-mode
       [pending: Llama-3.3-70B and GLM-4.5-Air on H200s]
-    - figures: per-tenant SLO attainment vs request rate; throughput vs tok/s/user Pareto with p10-p90 bars; TTFT / ITL
+    - *figures:* per-tenant SLO attainment vs request rate; throughput vs tok/s/user Pareto with p10-p90 bars; TTFT / ITL
       distributions per tenant [pending: rate sweeps]
   - stage 3, multi node with SLO control (C3's router on C1-C3 workers; sections 5.2-5.4, 6.4, 6.5)
-    - claim: symmetric colocated nodes with SLO-checked cache-first routing, sglang's Mooncake KV pool and the stage-2 workers
+    - **claim:** symmetric colocated nodes with SLO-checked cache-first routing, sglang's Mooncake KV pool and the stage-2 workers
       carry more load at SLO than PD disaggregation at its best P:D ratio, and than conditional disaggregation
-    - measured (16 H20s, Qwen2.5-7B, fan-out agents + chat, full stack): at 64 programs + 16 chat/s, chat attainment
+    - **measured** (16 H20s, Qwen2.5-7B, fan-out agents + chat, full stack): at 64 programs + 16 chat/s, chat attainment
       93.6% and agent SLO goodput 1100 tok/s vs 13.1% / 80 for stock PD at its best split and 96.0% / 821 for
       conditional disaggregation at Dynamo's defaults (+34% goodput); against conditional disaggregation +12..+37%
       agent SLO goodput at every load (32-128 programs, two repeats) and +21-24% under a load spike, chat attainment
@@ -76,7 +76,7 @@
       (demand shift): +57% agent SLO goodput and +14 points chat vs conditional disaggregation at alpha 3, +90% and
       +21 points under a chat surge, stock PD collapsing; fault (one node of four killed): ours -9% goodput with no
       attainment dip, stock PD -1/3 [pending: 32 GPUs]
-    - figures: per-tenant attainment and SLO goodput vs load, the 90% capacity marked per system; P:D sweep; load-spike
+    - *figures:* per-tenant attainment and SLO goodput vs load, the 90% capacity marked per system; P:D sweep; load-spike
       time series; fault-tolerance windows
 
 ## Abstract

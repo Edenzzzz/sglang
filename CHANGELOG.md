@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.05.0 — Highlight the outline scaffold so it is skimmable (2026-10-28)
+- Bolded 27 anchors in "Paper Outline (10/24)": the six top-level headings (goal, motivation, design, distributed
+  inference, evaluation, story), each motivation item's subject, the design and evaluation subjects, and every
+  stage's `claim:` / `measured` label, with `figures:` italicised so it reads as the lower tier it is.
+- Two outline lines were also corrected while highlighting, since they stated the wrong mechanism and the body text
+  had already been fixed: prefill-prioritized now says an arriving prefill takes the step's budget before the
+  decode rows, so requests already generating stall (not prefill queuing behind prefill), and pd multiplexing now
+  notes it attains the same latency protection as ours structurally, by partitioning SMs.
+- Synced to Drive.
+
 ## v3.04.0 — Queue the stepcap sweep: fill the interior of the frontier we already bracket (2026-10-28)
 - `tasks/pd_colocation/mn_capsweep_16g_20261028.sh`: stepcap at 1000 / 1500 / 2000 / 3000 ms, alpha 6, chained
   last. The measured arm says the mechanism works (-51% chat tail TPOT) and the 600 ms value starves prefill

@@ -310,15 +310,28 @@ attainment under FCFS and under deadline order on the prefill pods; 16 H20s, sto
 
 ### 3.3 Chunked Prefill cannot adhere to SLOs
 
-An agent burst of 32 requests within 60 s at 32-64K context holds chat TTFT at 4.5-13.9 s under stock mixed chunk on
-one H200 (Qwen2.5-7B, ShareGPT chat at 8 req/s). Deadline order alone does not fix this. Under overload, plain
-earliest-deadline-first (EDF) serves the agent prefills that are already late, because their deadlines are earliest,
-and so makes chat late too; per-tenant deadlines alone change nothing (section 7). Deadline order needs a rule that
-demotes requests that have already missed, which motivates C3. Llama-3.3-70B / GLM-4.5-Air: [pending].
+sglang's default schedule is prefill-prioritized chunked prefill. At every step the scheduler first fills the step's
+token budget from the waiting queue, in arrival order, splitting a long prompt into chunks of at most the configured
+chunk size; whatever budget is left over, if any, goes to the decode rows. A prompt therefore occupies the prefill
+side of consecutive steps until it is finished, and no waiting request can overtake it.
 
-Figure 6: chat TTFT over time around the agent burst, and per-tenant attainment for stock mixed chunk, per-tenant
-deadlines alone, and deadlines with demotion of missed prefills; one H200, Qwen2.5-7B. Llama-3.3-70B / GLM-4.5-Air
-[pending].
+The policy is chosen for throughput, and it delivers it. Admitting prefill eagerly keeps the decode batch as large
+as the memory allows, and a large decode batch is what amortizes the per-step cost of reading the weights, so
+tokens per second is high. The scheduler never leaves the tensor cores idle waiting for work to arrive.
+
+What it cannot do is bound anyone's latency, because arrival order and a fixed chunk size together ignore both how
+long a request will occupy the prefill side and how urgent it is. The failure is head-of-line blocking, and it is
+severe rather than marginal: a 64K-token prompt admitted one chunk at a time holds the prefill side for tens of
+consecutive steps, and every request that arrives behind it waits for all of them -- including a 200-token chat turn
+whose own prefill would take a single step. Measured on one H200 with Qwen2.5-7B, an agent burst of 32 requests
+arriving within 60 s at 32-64K context holds chat time-to-first-token at **4.5-13.9 s** against a 2 s target, while
+the server's throughput is unharmed. The blocking is also self-inflicted in a way a larger chunk cannot fix: raising
+the chunk size shortens the queue of chunks but lengthens each step, which pushes the cost onto the resident decode
+rows' inter-token latency instead. The two knobs trade one tenant's latency against the other's, and neither knob
+knows which tenant is waiting. Llama-3.3-70B and GLM-4.5-Air: [pending].
+
+Figure 6: chat TTFT over time around the agent burst, with per-tenant attainment, under sglang's prefill-prioritized
+schedule at several chunk sizes; one H200, Qwen2.5-7B. Llama-3.3-70B / GLM-4.5-Air [pending].
 
 ### 3.4 Mixed-chunk prefill reduces throughput
 

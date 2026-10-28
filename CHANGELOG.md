@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.75.0 — 3.3 explains sglang's prefill-prioritized policy instead of pre-empting our solution (2026-10-28)
+- The section argued about EDF and demotion, which are C3's mechanisms and belong in section 5; a motivation
+  section should only establish that the deployed policy fails. Rewritten to state what the policy IS (fill each
+  step's token budget from the waiting queue in arrival order, chunks capped at the configured size, decode gets
+  the remainder), why it is chosen (eager prefill keeps the decode batch large, which amortizes the weight read, so
+  throughput is high), and why it cannot bound latency (arrival order plus a fixed chunk ignore both how long a
+  request occupies the prefill side and how urgent it is).
+- The failure is named as head-of-line blocking and quantified: a 64K prompt holds the prefill side for tens of
+  consecutive steps, and the measured agent burst holds chat TTFT at 4.5-13.9 s against a 2 s target while
+  throughput is unharmed. Also notes why a larger chunk cannot fix it -- it shortens the chunk queue but lengthens
+  each step, moving the cost onto the resident rows' inter-token latency.
+
 ## v2.74.0 — 3.4 now explains WHY mixed chunk falls behind, from the tile composition (2026-10-28)
 - Table 3's reading explained why OUR gain is small but never why the baseline loses. Added the arithmetic, which
   closes the gap quantitatively: on the replay's median merged step (2048-token chunk, 119K cached prefix, 14

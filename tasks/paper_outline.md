@@ -320,6 +320,33 @@ tile for all of them from their average packed length (16, 64 or 128 rows), so a
 one-token decode rows pays either a 64-row tile per decode row or 16-row tiles for every verify row. Rows need tiles
 of their own size, under one plan that also balances and merges them, which motivates C1.
 
+**Which work maps to which tile.** The packed row count of a work item is the product of its token count and the
+model's grouped-query ratio, so the tile a row needs is a property of the model and the role, not a tuning choice.
+
+| work item | tokens | grouped-query heads | packed rows | tile it needs | executor |
+|---|---:|---:|---:|---:|---|
+| Qwen2.5-7B decode row | 1 | 7 | 7 | 16 | FA2 |
+| Llama-3.3-70B decode row | 1 | 8 | 8 | 16 | FA2 |
+| GLM-4.5-Air decode row | 1 | 12 | 12 | 16 | FA2 |
+| Qwen2.5-7B verify row (4 draft tokens) | 4 | 7 | 28 | 32 | FA2 |
+| Llama-3.3-70B verify row | 4 | 8 | 32 | 32 | FA2 |
+| GLM-4.5-Air verify row | 4 | 12 | 48 | 48 / 64 | FA2 |
+| prefill chunk, per step | the step's chunk size | 1 | = chunk size | 128 (64 for a small chunk or the remainder) | FA3 |
+
+The three decode rows all land in the same 16-row tile while the verify rows span 28 to 48 packed rows, which is why
+a single query tile for every row wastes most of it: a 64-row tile holds one 7-row decode item at 11% occupancy, and
+16-row tiles force a 48-row GLM verify row into three tiles. This is the padding that C1 removes, and it explains
+the model ordering in section 6.2 -- the further a model's verify row sits from the single call's tile, the more the
+role split alone recovers.
+
+On the prefill side the tile follows the chunk, so it follows the scheduler. In the cluster trace a round appends a
+median of 875 uncached tokens over a median 119K-token cached prefix (10th/90th percentile 199 / 7 119 tokens), and
+only 0.4% of rounds append 64 tokens or fewer -- so from the workload alone the chunk role is almost always several
+128-row tiles. But chunked prefill splits that append across steps, and the SLO-budgeted rule of section 5.2.3
+chooses 192 to 16 384 tokens depending on the resident rows' slack. The per-step query count, and therefore the
+tile mix, is set by the scheduler rather than by the trace: at a 192-token chunk the prefill role occupies one or
+two tiles beside many row tiles, and at a 16 384-token chunk it occupies 128 of them.
+
 Figure 7: per-step attention time of the single FA3 call vs the role split, and the fraction of row tiles that are
 padding; 96 captures, Qwen2.5-7B. Padding fraction [pending].
 

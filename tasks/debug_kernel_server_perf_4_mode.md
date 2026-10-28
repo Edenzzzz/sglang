@@ -2024,9 +2024,18 @@ issue `mma.sync` for 16-row rows alongside.
   across them. PDL cannot (two launches, capacity fixed per launch); POD-Attention cannot (FA2-only, no wgmma role
   to free a warpgroup from); DeFT does not (one call, one role). This is the first mechanism in this project whose
   novelty rests on the unified plan itself rather than on tile sizing.
-- **Honest bound, from A5.3:** co-running the FA3 role with FA2 on the remaining SMs measured **18% where the roles
-  balance**, but only **<= 2% of serving GPU time on TraceLab** is in that balanced regime. So expect gains at
-  short-to-medium context with many rows and ~nothing where the chunk dominates. Claim it scoped to that regime.
+- **Bound, and a correction the user prompted (2026-10-28).** A5.3 measured co-running the roles at **18% where
+  they balance**, with <= 2% of serving GPU time in that regime. I had then restricted item 18 to "short-to-medium
+  context", which was wrong on the reasoning: the user pointed out that agent tool-call results become prefills
+  even at 100K+ context. Measured from the trace, though, those appends are NOT short -- median **875** uncached
+  tokens (p10/p90 199 / 7 119), and only **0.4%** of rounds append <= 64 tokens; at >= 100K prefix (58.3% of
+  rounds) only 0.5% do. So the workload alone almost always gives the chunk role several q128 tiles.
+  - **The q64 regime is created by OUR CHUNK RULE, not by the trace.** Chunked prefill splits that 875-token append
+    across steps, so the kernel sees the CHUNK SIZE per step, and the SLO-budgeted rule picks 192-16 384 tokens
+    depending on resident slack. At a 192-token chunk the FA3 role holds one or two tiles beside many row tiles --
+    exactly item 18's regime. The tile mix is a function of C3's chunk sizing, which couples the two contributions
+    and is an argument FOR the mechanism rather than against it.
+  - Test 2 below must therefore be run against the chunk sizes the rule actually picks, not against a fixed 2048.
 - **Two cheap tests, in order:**
   1. **Compile only, no GPU:** build the co-compiled kernel with the FA3 role at q64 and read `ptxas -v` registers
      and spill bytes. The first co-compiled attempt spilled 1,436 B; if q64 clears it and fits 2 CTAs/SM, proceed.

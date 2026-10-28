@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.12.0 — Tile-mapping table in the paper; q64 regime comes from our chunk rule (2026-10-28)
+- Added a work-item -> tile table to paper section 5.1: decode rows are 7 / 8 / 12 packed rows (Qwen / Llama-70B /
+  GLM) and all need the 16-row tile, while verify rows are 28 / 32 / 48 and need 32 / 32 / 48-64; the prefill chunk
+  follows the step's chunk size. This is the padding C1 removes and it explains the model ordering in 6.2.
+- Measured the trace to test the user's point that agent tool-call prefills coexist with rows at long context:
+  appends are median 875 uncached tokens (p10/p90 199 / 7 119) over a median 119K prefix, and only 0.4% of rounds
+  append <=64 tokens (0.5% at >=100K prefix). So the workload alone almost always gives several q128 tiles.
+- Correction recorded: my "short-to-medium context only" restriction on item 18 was wrong in its reasoning. The q64
+  regime is created by the SLO-budgeted CHUNK RULE (192-16384 tokens depending on slack), not by append lengths --
+  so the tile mix is a function of C3's chunk sizing, coupling the two contributions. Item 18's plan-only test must
+  use the chunk sizes the rule picks, not a fixed 2048.
+
 ## v2.11.0 — Item 18 extended: tile-16 offload from FA2 to FA3 q64 CTAs (2026-10-28)
 - User's extension: the warpgroup freed by running the FA3 role at q64 is extra tile-16 CAPACITY sized by the number
   of q64 chunk tiles, so the plan can offload tile-16 rows from the FA2 executor into FA3 CTAs

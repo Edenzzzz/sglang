@@ -436,6 +436,22 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     sensitivity sweep on that one number, not another redesign of the budget.
   - Against mixed chunk, which shares our mechanism, a large tail win IS expected: mc's chat TPOT p90 is 102.0 ms
     with no bound either.
+- **[ ] REFERENCE PAPERS ARE NOW ON DISK: `/opt/tiger/papers/`, 11 arXiv PDFs (2026-10-28).** Downloaded outside
+  the repo so no binaries are committed; `arxiv.org` is reachable from this box, and each file was checked for the
+  `%PDF` magic bytes because a wrong id returns an HTML error page with exit status 0.
+  - **Text extraction is NOT available yet:** `pdftotext` is absent, and `pip install pypdf` reports success while
+    the module stays unimportable (it is landing in a different interpreter's site-packages). The Read tool reads
+    PDFs natively via its `pages` parameter, which is the reliable path, but it costs context -- so read specific
+    page ranges rather than whole papers.
+  - **First question to answer from the papers rather than from our own notes:** how Crossflow varies
+    prefill/decode demand. Our four-bullet entry says its load axis is request rate via timestamp compression
+    (alpha 8-20x), which if correct means it does NOT independently vary the P:D mix either -- the variation comes
+    from the trace's structure. That matters because our own ratio measurement (2.2x shift in the surge window)
+    is the thing a reviewer would compare against their setup, and because citing a methodology from a summary
+    rather than the paper is how a mis-citation gets in.
+  - Also worth reading directly, for the same reason: SLOs-Serve's dynamic program (we claim we avoid it), DeFT's
+    KV-guided grouping (we claim our cross-ROLE grouping differs), and POD-Attention's overlap structure (we claim
+    it is FA2-only and so does not carry to Hopper).
 - **[ ] STORY CONSISTENCY AUDIT (2026-10-28). The motivations and the goal line up, with ONE claim that must be
   restated because it is not supported as written.**
   - **The chain is consistent:** agentic sessions are long decode with small interleaved prefills (measured: median

@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.20.0 — All 11 reference PDFs on disk; text extraction still missing (2026-10-28)
+- `/opt/tiger/papers/` holds 11 arXiv PDFs, outside the repo so no binaries are committed. Each was verified by its
+  %PDF magic bytes, since a wrong id returns an HTML error page with exit status 0.
+- pdftotext is absent and `pip install pypdf` reports success while the module stays unimportable, so bulk grep is
+  not available. The Read tool reads PDFs natively by page range, which is the reliable path but costs context.
+- Recorded what to read first and why: Crossflow's load axis (our note says request rate via timestamp
+  compression, which would mean it does not independently vary the P:D mix either -- relevant to how our 2.2x
+  ratio shift is compared against its setup), plus SLOs-Serve's DP, DeFT's KV-guided grouping and POD's overlap
+  structure, since the paper makes a differentiating claim against each and currently cites all four from my own
+  summaries rather than from the papers.
+
 ## v3.19.0 — Motivation 2 measured: the P/D demand ratio shifts 2.2x within minutes (2026-10-28)
 - `tasks/paper_figures/pd_ratio_20261028.py`, zero GPU cost, from the demand-shift figure's own data: the
   prefill-to-decode demand ratio has median 82.4 on the colocated no-surge arm and spans 4.2x over the run; on the

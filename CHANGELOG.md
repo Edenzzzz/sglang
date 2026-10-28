@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.90.0 — Register the tail-TPOT prediction before the arm lands (2026-10-28)
+- Our own tail should improve a lot: L1's chat TPOT p90 of 105.2 ms was measured with no bound on step length at
+  all, and stepcap=600 is that bound.
+- But pp's head-of-line blocking lands on TTFT, not TPOT. pp serializes prefill into its own steps and runs stock
+  MTP, so its steps stay short and its TPOT p90 of 94.9 ms is the strength its policy buys -- paid for with chat
+  TTFT p90 of 9.02 s against our 3.42 s. The structural win against pp is TTFT and attainment; on tail TPOT the
+  result to expect is parity-or-better, not a rout. Against mixed chunk, which shares our mechanism and also has no
+  bound (102.0 ms), a large tail win IS expected.
+- Falsifiable form recorded: chat TPOT p90 <= 95 ms with attainment above 61.8% means the rule works; above 100 ms
+  means the 600 ms cap is too loose and the next step is a sweep on that number, not another budget redesign.
+
 ## v2.89.0 — Report TPOT only, not inter-token percentiles (2026-10-28)
 - `tracelab_windows.py` no longer prints the ITL cell. TPOT p50/p90/p99 is the latency metric: a per-request mean
   is what the SLO is written against and what a user feels, while an inter-token percentile is taken over every gap

@@ -254,6 +254,25 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     (`ROPE_THETA`) and `mn_run.py` (`ROPE_THETA` in the env string).
   - Push files with `Cluster(SID, cp, nodes=[f"worker-{i}" for i in range(NPODS)])`; without `nodes=` every call
     goes to one default instance that is not even one of the workers.
+- **[ ] PREDICTION REGISTERED BEFORE THE TAIL-CHUNK ARM LANDS (2026-10-28), so it is judged against a stated
+  expectation rather than post hoc.** User's expectation: with the SLO-budgeted chunk on we should win by a lot on
+  tail TPOT, because pp suffers significant head-of-line blocking.
+  - **Agreed, for our own tail:** L1's chat TPOT p90 of 105.2 ms was measured with NO bound on step length;
+    `stepcap=600` is that bound, so the folded steps that inflate the tail are capped. Predict our chat TPOT p90
+    drops from 105.2 ms toward the 600 ms cap's implied ceiling, i.e. materially below 105 and plausibly below
+    pp's 94.9.
+  - **But pp's head-of-line blocking lands on TTFT, not on TPOT, and this matters for how the win is claimed.**
+    pp serializes prefill into its own steps and runs stock MTP (verify on a separate step), so its individual
+    steps stay short and its decode rows see a uniform cadence: its TPOT p90 of 94.9 ms is the STRENGTH its policy
+    buys, paid for with chat TTFT p90 of 9.02 s against our 3.42 s. Beating pp by a lot on tail TPOT would mean
+    beating it at what it optimises. The large, structural win against pp is TTFT and SLO attainment; the tail-TPOT
+    result to expect is parity-or-better, not a rout.
+  - **Falsifiable form.** If the arm shows chat TPOT p90 <= 95 ms AND chat attainment above L1's 61.8%, the chunk
+    rule works and the claim is "we match or beat prefill-prioritized on the tail of the mean while keeping a 62%
+    shorter TTFT tail". If TPOT p90 stays above 100 ms, the 600 ms cap is too loose and the next step is the
+    sensitivity sweep on that one number, not another redesign of the budget.
+  - Against mixed chunk, which shares our mechanism, a large tail win IS expected: mc's chat TPOT p90 is 102.0 ms
+    with no bound either.
 - **[ ] ALPHA 6 OVERLOAD DECOMPOSITION (running 2026-10-28 from 17:45, `mn_overload_decomp_16g_20261028.sh`, log
   `/tmp/h20/mn_overload_r1.log`).** Arms L0, L1, pp, mc, pdmux at load factor 6 on the 16 H20s; every earlier driver
   declared `for A in 3 6` and was stopped before leaving alpha 3, so this is the first measurement of the second

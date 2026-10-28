@@ -2039,9 +2039,25 @@ issue `mma.sync` for 16-row rows alongside.
 - **Two cheap tests, in order:**
   1. **Compile only, no GPU:** build the co-compiled kernel with the FA3 role at q64 and read `ptxas -v` registers
      and spill bytes. The first co-compiled attempt spilled 1,436 B; if q64 clears it and fits 2 CTAs/SM, proceed.
-  2. **Plan only, no kernel change:** from the trace replay, count per step the q64 chunk tiles and the pending
-     tile-16 rows, and report how many rows COULD move and what fraction of FA2 tile slots that is. That bounds the
-     gain before any kernel work, the same way the page-overlap count bounded cross-role reuse (item 14).
+  2. **[x] Plan only, DONE (2026-10-28), and it bounds the mechanism tightly.** Counted per step over the 87 932
+     steps of the alpha-3 replay (`/tmp/pfix/st3/w*.log`): a chunk remainder above 48 rows takes the 64 class and
+     frees one warpgroup, which hosts ONE 16-row tile.
+     | quantity | measured |
+     |---|---|
+     | steps carrying decode / verify rows | 83 959 |
+     | of those, steps that also have a q64 chunk remainder (so spare capacity exists) | **9 516 (11.3%)** |
+     | row items that could move into a freed warpgroup | **9 516 of 828 705 = 1.15%** |
+     | within the steps that have capacity, share of that step's rows movable | p50 **7.7%**, p90 16.7% |
+     - **The binding constraint is the RATIO of q64 chunk tiles to row tiles, not whether the overlap works.** One
+       q64 tile frees one warpgroup and hosts one 16-row tile, while a step carrying rows has many of them, so even
+       where capacity exists only 7.7% of that step's rows can move.
+     - This matches Table 3 independently (64-row tiles are 1.2% of all query tiles) and matches the user's own
+       read that the mechanism is "a small percentage".
+     - **Verdict: not worth building for throughput on this workload.** Its value is as EVIDENCE for the
+       architectural claim (paper 5.1): it is the only intra-SM overlap Hopper permits, and measuring its reach at
+       1.15% is what makes "POD-style overlap does not carry to Hopper" a quantified statement rather than an
+       opinion. Test 1 (the compile) is still worth running for the same reason -- to show the register wall is
+       real -- but no serving gain should be claimed.
 
 **End-to-end checks of item 1, which is what the paper rests on:**
 

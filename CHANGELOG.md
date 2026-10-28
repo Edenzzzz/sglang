@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.16.0 — Item 18 bounded by a plan-only count: 1.15% of row items could move (2026-10-28)
+- Counted over the 87,932-step alpha-3 replay: 83,959 steps carry rows; only 9,516 of them (11.3%) also have a q64
+  chunk remainder, so 9,516 of 828,705 row items (1.15%) could move into a freed warpgroup, and even where capacity
+  exists only 7.7% of that step's rows fit (p90 16.7%).
+- The binding constraint is the ratio of q64 chunk tiles to row tiles, not whether the overlap works: one q64 tile
+  frees one warpgroup hosting one 16-row tile, while a row-carrying step has many. Agrees independently with
+  Table 3's 1.2% of query tiles.
+- Verdict: not worth building for throughput. Its value is as EVIDENCE for the architectural claim -- measuring the
+  only intra-SM overlap Hopper permits at 1.15% is what makes "POD-style overlap does not carry to Hopper" a
+  quantified statement. Paper 5.1 updated with all three figures; no serving gain claimed.
+
 ## v2.15.0 — Negative result promoted to a claim: POD-style overlap does not carry to Hopper (2026-10-28)
 - User's framing, written into paper 5.1 with the full evidence chain: POD-Attention's fusion needs both roles
   issuing Ampere mma.sync from one kernel body, and on Hopper that fails four ways we MEASURED, not assumed.

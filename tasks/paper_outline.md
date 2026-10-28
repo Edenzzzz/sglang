@@ -388,9 +388,13 @@ across CTAs. That design depends on both roles issuing the same class of tensor-
 The one intra-SM overlap that Hopper does permit is narrow and specific: FA3 at a 64-row query tile occupies a
 single consumer warpgroup instead of two, which frees a warpgroup that can issue `mma.sync` for 16-row rows in the
 same CTA. Different warpgroups may issue different instruction classes concurrently, so this is not blocked by (2).
-But Table 3 bounds its reach: 64-row tiles are **1.2%** of all query tiles on the long-context agent replay, because
-they arise only as the remainder of a prefill chunk. We therefore report it as a mechanism with a measured ceiling
-rather than a general technique.
+But its reach is bounded twice over. Table 3 shows 64-row tiles are **1.2%** of all query tiles on the long-context
+agent replay, because they arise only as the remainder of a prefill chunk; and planning the offload over the same
+87 932 steps shows that only **11.3%** of row-carrying steps have such a remainder at all, that **1.15%** of all row
+items could move into a freed warpgroup, and that even inside a step with spare capacity just **7.7%** of its rows
+fit (median). The binding constraint is the ratio of 64-row chunk tiles to row tiles, not whether the overlap
+functions. We therefore report this as a mechanism with a measured ceiling rather than a general technique, and we
+claim no serving gain from it.
 
 The conclusion we draw is architectural, and it is the opposite of POD's: **on Hopper and later, the gain comes from
 giving each role the executor its tile shape deserves, not from fusing the roles into one kernel.** Fusion was the

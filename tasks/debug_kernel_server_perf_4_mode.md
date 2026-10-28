@@ -339,7 +339,19 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
   - **Arm 4, mc (sglang's mixed chunk, its own chunk policy), accept 1.765:** chat tight 53.8% (684 tok/s), TTFT
     p50/p90 0.35/8.19 s, TPOT p50/p90 38.3/102.0 ms, ITL p99 1245.9 ms; agent tight 77.4% (1926 tok/s),
     not_issued 7223, TPOT p50/p90 46.5/108.4 ms, ITL p99 1301.3 ms.
-  - **THIS REFRAMES THE ITL-TAIL REGRESSION, and the ordering is the mechanism.** The three arms' chat ITL p99:
+  - **WHY WE LOSE A TAIL TO pp AT ALL, which the earlier entries did not say plainly (user, 2026-10-28): the arm
+    measured has the TPOT-protecting mechanism DISABLED.** L1 is a decomposition rung -- our tree, A6 kernel,
+    four-mode step, router and EDF ordering, with **sglang's default chunk policy**. The mechanism designed to
+    protect TPOT is the chunk sizing, and it is not in this arm. So these numbers measure our longer fused steps
+    with no latency bound on them whatsoever; `stepcap=600` is exactly that bound and is in the arm now running.
+    The comparison must not be reported as "our system loses the tail to prefill-prioritized".
+  - **Separate the two tail metrics, because they say different things.** TPOT is a MEAN over a request's tokens,
+    so one long step is amortized: chat TPOT p50 is 35.2 ms for us against pp's 35.6 (we are ahead) and p90 is
+    105.2 against 94.9 (+10.9%). ITL p99 is a percentile over individual gaps, so one folded step lands straight
+    in it: 999.0 against 502.5 ms (+99%). **Tail TPOT is the user-facing metric** -- a user feels their own
+    request's typical token rate -- and we lose it by 11%, not 2x. The scorer now reports TPOT p99 alongside
+    p50/p90 so the tail of the mean is visible without reading ITL.
+  - **The ITL ordering is still the mechanism.** The three arms' chat ITL p99:
     **pp 503 ms < ours 999 ms < mc 1246 ms** (agent: 514 < 920 < 1301). Mixed chunk folds prefill into decode steps
     -- the same thing our four-mode step does -- and it has the WORST tail of the three; prefill-prioritized
     serializes prefill into its own steps and has the best. Our tail sits between them, i.e. **we are better than

@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.88.0 — The alpha-6 tail loss is an arm without the chunk layer, and tail TPOT is the metric (2026-10-28)
+- Stated plainly what the earlier entries implied but did not say: L1 is a decomposition rung carrying sglang's
+  default chunk policy, so the mechanism that protects TPOT -- the chunk sizing -- is NOT in the arm that loses the
+  tail to prefill-prioritized. Those numbers measure our longer fused steps with no latency bound at all, which is
+  what stepcap=600 supplies in the arm now running. The comparison must not be reported as "our system loses the
+  tail".
+- Separated the two tail metrics: TPOT is a mean over a request's tokens so a long step is amortized (chat p50
+  35.2 vs pp's 35.6 ms -- we are ahead; p90 105.2 vs 94.9, +10.9%), while ITL p99 is a percentile over individual
+  gaps so one folded step lands in it (999 vs 503 ms, +99%). Tail TPOT is the user-facing quantity and we lose it
+  by 11%, not 2x.
+- `tracelab_windows.py` now reports TPOT p50/p90/p99, so the tail of the mean is visible without reading ITL, with
+  a comment on why tail TPOT is read first.
+
 ## v2.87.0 — Remove the internal publishability target from the paper (2026-10-28)
 - Dropped all seven "**Bar.**" / "**Bar status.**" paragraphs and every remaining reference to the 30% latency /
   10% throughput target. That target is our own decision rule for whether to keep pursuing a direction; it is not

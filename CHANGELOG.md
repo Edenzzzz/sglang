@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.69.0 — The acceptance gap is not a draft-config difference (2026-10-28)
+- Both alpha-6 arms resolve identical speculative settings: EAGLE3, eagle_topk 1, num_draft_tokens 4, num_steps 3,
+  accept thresholds 1.0, attention_mode prefill. So pp's 1.795 against our 1.982 is not a configuration artifact.
+- Remaining causes are the request mix (pp issued 5984 agent rounds against 6373, chat 7200 in both; acceptance
+  rises with cached context) or a genuine effect of the merged step. This run's logs cannot separate them, because
+  acceptance is a single mean over all requests.
+- The +9.3% goodput margin stays held back. The fix is instrumentation, not a re-run: bucket `accept len` by tenant
+  class so per-tenant acceptance can be compared. Matching per-tenant acceptance would make the margin real;
+  differing would be a finding about C2 itself.
+
 ## v2.68.0 — pp's low acceptance is NOT the rope defect, and is now unexplained (2026-10-28)
 - Checked the pp arm's worker log: the YaRN override carries `rope_theta 1000000`, so the arm runs the correct
   Qwen2.5 and the 1.795 acceptance is not the 2026-10-28 defect.

@@ -323,8 +323,19 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       - **Until one is established the +9.3% goodput margin is NOT usable**, since the acceptance deficit alone
         costs pp ~9% more target forwards per output token. The acceptance-independent results stand on their own:
         chat TTFT p90 -62%, and the inter-token tails we lose.
-      - Next step, cheap: diff the two arms' resolved speculative configuration from their worker logs
-        (`speculative_num_steps`, `speculative_eagle_topk`, `speculative_num_draft_tokens`) before re-running.
+      - **Candidate (a) RULED OUT (2026-10-28): the two arms' speculative configuration is identical** --
+        `speculative_algorithm EAGLE3`, `eagle_topk 1`, `num_draft_tokens 4`, `num_steps 3`,
+        `accept_threshold_acc/single 1.0`, `attention_mode prefill`, read from both arms' `worker_r0_g0.log`. So the
+        gap is not a draft-configuration difference.
+      - That leaves (b) request mix and (c) a genuine effect of the merged step, and **this run's logs cannot
+        separate them**: acceptance is reported as one mean over all `accept len:` lines (pp n=1230, L1 n=1326), and
+        the arms served different mixes (pp issued 5 984 agent rounds against L1's 6 373, with chat n=7 200 in
+        both). Since acceptance rises with cached context, a mix shifted toward chat would depress it on its own.
+      - **The +9.3% goodput margin therefore stays held back**, and the fix is one line of instrumentation rather
+        than a re-run of the ladder: log `accept len` bucketed by tenant class (prompt length against
+        `agent_tokens`), so per-tenant acceptance can be compared directly. If per-tenant acceptance matches across
+        arms, the gap is mix and the margin is real; if it does not, (c) holds and the merged step changes what the
+        draft sees -- which would itself be a finding about C2 rather than about the schedule.
   - mc and pdmux follow on the same cluster and window set.
 - **[x] ROPE-BASE DEFECT: THE SCOPE IS EVERY UPSTREAM-TREE BASELINE, INCLUDING THE PAPER'S HEADLINE PD BASELINE
   (verified 2026-10-28).** Loaded `ModelConfig("/dev/shm/w/qwen7b", model_override_args=<the YaRN override>)` under

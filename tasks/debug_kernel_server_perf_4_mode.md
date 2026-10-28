@@ -2250,8 +2250,9 @@ issue `mma.sync` for 16-row rows alongside.
   missing is correctness and a timing, and neither is worth the GPU hours given 1c: the launchable configuration is
   the one whose chunk loses `wgmma` pipelining, so the mechanism's best case is bounded above by an upper bound of
   1.1-2.3% at 128K while its cost to the chunk is unbounded and unmeasured.
-  `unified/run_q64_piggyback_gate_20261028.sh` waits for the H200 and rebuilds both arms there, as independent
-  confirmation of 1b on the trial's toolchain.
+  `unified/run_q64_piggyback_gate_20261028.sh` waits for the H200 and rebuilds both arms there; the host did not
+  return before the session ended (ssh refused for over an hour), so that confirmation is still OPEN -- though 1d
+  shows the two toolchains agree bit for bit on the shared arm, so it is a check rather than a dependency.
 - **Standing verdict (2026-10-28): CLOSED as proposed, and it should not be claimed as a gain.** Four independent
   reasons, in order of strength:
   1. **The two constraints point opposite ways (1c).** The piggyback can only be LAUNCHED at the 64-row chunk tile

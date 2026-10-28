@@ -283,7 +283,17 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
         prefix and -29% on the trace: the trace has no shared prefix to order around.
       - DeFT's 73-99% KV IO saving comes from trees inside ONE call, where sharing is near-total by construction.
         Our setting only reaches that regime under fan-out.
-  - [ ] **KERNEL INNOVATION 3 (2026-10-28): deferred KV commit for rejected draft tokens.**
+  - [x] **KERNEL INNOVATION 3 CLOSED (2026-10-28): deferred KV commit has nothing to recover.**
+    - The idea was that verify writes paged KV for all 4 draft tokens while only ~2 are accepted, so holding them
+      in scratch and committing the accepted ones would save write bandwidth.
+    - Reading the path shows the premise is wrong. `fill_accepted_out_cache_loc` (`eagle_info_v2.py:405`) already
+      compacts only the ACCEPTED slots after verify, and the rejected slots are freed. More importantly the writes
+      themselves are **required by the computation, not speculative waste**: the draft chain's later positions
+      attend to the earlier draft tokens inside the SAME verify forward, so their K/V must be in the cache before
+      the forward can finish, and acceptance is known only after that forward produces logits. There is no ordering
+      in which the rejected tokens' KV could be skipped.
+    - Closed with no GPU time spent. (Superseded entry below kept for the record.)
+  - [x] (superseded premise) **KERNEL INNOVATION 3: deferred KV commit for rejected draft tokens.**
     - Verify computes and writes paged KV for all 4 draft tokens, but acceptance is ~2.0 on the cluster (3.35-3.55
       at 128K single node), so a large share of verify KV writes are discarded. Holding the draft chain's KV in a
       scratch buffer and committing only accepted entries saves that write bandwidth. Speculation-specific; check

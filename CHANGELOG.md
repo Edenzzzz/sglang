@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.01.0 — Deferred KV commit closed; draft-share threshold lowered (2026-10-28)
+- Deferred KV commit for rejected draft tokens is CLOSED with no GPU time: sglang already compacts only the
+  accepted slots after verify (fill_accepted_out_cache_loc, eagle_info_v2.py:405), and the draft tokens' KV writes
+  are required by the computation rather than wasted -- the chain's later positions attend to earlier draft tokens
+  inside the same verify forward, and acceptance is only known after that forward produces logits.
+- Draft-share measurement: the wrapper installed correctly but reported only every 200 verify calls, which the short
+  arm never reached; threshold lowered to 20 and relaunched. Two earlier failures recorded: make_root re-copies the
+  tree from $SRC each run (so patching a previous root does nothing), and the report threshold.
+- Paper: 5.2.3 (SLO-budgeted chunk) and 5.1 (three-model kernel table plus the four bounding measurements) now
+  carry measured results instead of placeholders.
+
 ## v2.00.0 — Fixed the invalid override JSON that killed every worker (2026-10-28)
 - My ROPE_THETA edit was wrong: bash strips the quotes inside ${VAR:+...}, so the override became
   `,rope_theta:1000000` (unquoted key) and every worker died with JSONDecodeError at column 86. The first superset

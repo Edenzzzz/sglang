@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.37.0 — Slim windowed trace: 4.6 MB, field- and span-equivalent, ~10 min to the pods (2026-10-28)
+- The 22 MB windowed trace was still uploading at ~0.5%/min (~2 h). Larger exec chunks are not an option: 400 KB
+  chunks are rejected (ok=False), and 60 KB costs ~6.5 s per call.
+- tracelab.py reads only eight record fields and, from timing_events, only the min and max timestamp
+  (_record_span_ms). make_windowed_trace_20261028.py --slim keeps exactly those, with the earliest and latest event
+  per round: 4,633,585 bytes (md5 d55fcf85dd87), 158,849 records, ZERO mismatches in kept fields or per-record span.
+- Superseded uploads stopped by PID; chain8 pushes the slim file, requires the md5, then runs smoke8 -> superset r4.
+
 ## v2.36.0 — Paper sections 3.1 and 6.2 filled from measured data; stale H20 kernel figures replaced (2026-10-28)
 - 3.1 step census (87,932 steps of the cluster replay): chunk-plus-rows steps are 11.6% of steps but 67.2% of GPU
   time; rows-only 83.9% / 27.6%; prefill-only 4.5% / 5.1%. Attention share of a long-context mixed step stated as an

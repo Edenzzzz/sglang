@@ -361,77 +361,52 @@ spends most of its tiles on the cheapest work. That is why removing the row clas
 rather than a factor, and why the 64 class -- 1.2% of tiles, all of them chunk remainders -- is interesting out of
 proportion to its count: it is the only place where a chunk tile is small enough to share an SM with rows.
 
-**Why POD-Attention-style overlap does not carry to Hopper and later, and what replaces it.** POD-Attention fuses a
-prefill chunk and one-token decode rows inside a single FA2 kernel, interleaving a large query tile with small ones
-across CTAs. That design depends on both roles issuing the same class of tensor-core instruction -- Ampere's
-`mma.sync` -- from one kernel body. On Hopper it does not survive, for four reasons we measured rather than assumed.
+**Why we do not fuse the two roles into one kernel.** POD-Attention interleaves a prefill chunk with one-token
+decode rows inside a single FA2 kernel. That depends on both roles issuing Ampere's warp-level `mma.sync` over a
+small tile, so many warps from several CTAs share an SM and the kernel has slack to interleave. Hopper's `wgmma` and
+Blackwell's `tcgen05.mma` make the opposite trade: warpgroup- and CTA-level instructions over large tiles, driven by
+warp specialisation, so one throughput-tuned CTA is sized to fill the SM (384 threads at ~168 registers is the whole
+register budget, and the K/V pipeline claims the shared memory). We confirmed each consequence rather than assuming
+it: the prefill role must leave FA2 (the role split is worth 1.76-7.7x, section 6.2, while running rows on FA3 costs
+15-25 points of agent ITL); `wgmma` cannot interleave shapes within a warpgroup; co-compiling both mainloops into
+one kernel required disabling FA3's register protocol, spilled 1 436 bytes per tile class and ran 2-6x slower; and
+launch-level overlap is then nearly empty, with PDL worth 1.4-6.2% and two streams worth 4.5% at best and nothing at
+a 2 048-token chunk. Table 4 reports these arms. The conclusion is architectural and the opposite of POD's: on
+Hopper and later the gain comes from giving each role the executor its tile shape deserves, not from fusing them --
+and because CTAs occupy more of the SM with each generation, designs that need spare SM capacity should age badly.
 
-1. *The prefill role has to leave FA2, and the instruction that replaces it monopolises the SM by design.*
-   Ampere's `mma.sync` is a warp-level instruction over a small tile (16x8x16). Many warps from several CTAs
-   coexist on one SM, each holding a modest slice of the register file, so a kernel can genuinely interleave a large
-   prefill tile with small decode tiles -- POD's premise is that the SM has slack. Hopper's `wgmma` and Blackwell's
-   `tcgen05.mma` are built on the opposite trade: they are warpgroup- and CTA-level instructions over large tiles
-   (64 rows by N, and whole-tile operations staged through tensor memory), and they are meant to be driven by warp
-   specialisation -- a producer warp issuing TMA loads into a deep shared-memory pipeline while consumer warpgroups
-   issue back-to-back MMAs. A single FA3 CTA is therefore *sized to fill the SM*: 384 threads at roughly 168
-   registers each is the whole register budget, and its K/V pipeline claims the shared memory. One CTA, in some
-   configurations one instruction, consumes the SM's capacity because that is how these architectures convert area
-   into throughput. The slack POD exploits does not exist, and it is becoming scarcer with each generation rather
-   than more plentiful.
-   The measurements agree with the hardware argument: separating the roles so the chunk runs on FA3 and the rows on
-   FA2 is worth 1.76x to 7.7x of attention time over a single variable-length call (section 6.2), while running the
-   rows on FA3 tiles instead costs 15 to 25 points of agent inter-token latency. A Hopper design that keeps the
-   chunk in an FA2 kernel to preserve POD's interleaving gives up far more than the interleaving can return.
-2. *The two roles cannot share a warpgroup.* `wgmma` is issued per warpgroup and cannot interleave operand shapes
-   within one, so a single warpgroup cannot alternate between a 128-row chunk tile and a 16-row row tile the way
-   `mma.sync` can.
-3. *Nor can they share a kernel body.* We built the co-compiled kernel: FA3's mainloop and FA2's mainloop in one
-   translation unit, one launch. It required disabling FA3's warpgroup register protocol, because that protocol
-   balances exactly at a 168-register baseline that the combined body cannot hold; the persistent form then spilled
-   every tile class (1 436 bytes), and the whole path ran 2 to 6 times slower than two launches. Correct, and
-   unusable.
-4. *So overlap reduces to the launch level, where little is left.* With the roles in separate launches, programmatic
-   dependent launch recovers 1.4 to 6.2% of the step and two independent streams recover nothing (1.763x against
-   1.759x on the 128K four-mode captures). A controlled sweep of the chunk size shows why, and shows that the query
-   tile is not the variable: running a chunk and 32 one-token rows concurrently on two streams over a 131K-token
-   cached prefix recovers 4.5% of the step at a 128-token chunk, 3.4% at 64, 2.7% at 256, and **nothing at a
-   2 048-token chunk, where it is marginally harmful (1.006x)**. At a small chunk FA3 already splits the key range
-   across enough CTAs to fill the device, and at a large one it fills every streaming multiprocessor outright; in
-   neither case is there room for a second role, and the row work is about one per cent of the step's time anyway. Six further mechanisms -- a persistent runner, a longest-processing-time
-   pull loop, a just-in-time ready queue, cluster-level reduction through distributed shared memory, KV multicast,
-   and KV-position ordering -- all land at or below parity.
+The one exception follows from the register wall: **a 128-row FA3 tile cannot share a CTA with 16-row row work, but
+a 64-row tile can.** At 128 rows FA3 runs two consumer warpgroups and the register file is spent; at 64 rows it runs
+one, and a 16-row tile needs only sixteen accumulator registers per thread. The freed warpgroup fits, and because
+the CTA is already resident this is immune to the SM-saturation argument above. Tiling a chunk at 64 rows instead of
+128 frees one warpgroup per tile, which over the four-mode steps of our replay could host **94.8%** of all row
+items, with the rows fitting entirely in 91.1% of steps (median 31 freed warpgroups against 13 rows). We report the
+reach; we have not built it, and claim no gain from it.
 
-The one overlap this architecture still permits follows directly from the register wall in (3), and it is specific:
-**a 128-row FA3 tile cannot share a CTA with 16-row row work, but a 64-row tile can.** The arithmetic is the whole
-argument. FA3 at a 128-row tile runs two consumer warpgroups at roughly 168 registers per thread, which is the SM's
-entire register budget -- adding a third warpgroup to issue `mma.sync` is what made our co-compiled kernel spill
-1 436 bytes per tile class and run 2 to 6 times slower. At a 64-row tile FA3 runs ONE consumer warpgroup, leaving
-roughly a third of the register file free, and a 16-row tile is register-light: at head dimension 128 it needs only
-sixteen accumulator registers per thread. The freed warpgroup therefore fits without spilling. Different warpgroups
-may issue different instruction classes concurrently, so (2) does not block it either: the restriction is on shapes
-within a warpgroup, not across them.
+**Table 4: our dispatcher against every alternative we could run, two-mode steps** (time-weighted attention speedup,
+96 captures per cell, FP32-checked; higher is better for us).
 
-This is why the overlap is **intra-CTA** rather than inter-kernel, and why it is immune to (1). The CTA is already
-resident and its second warpgroup already allocated; the rows ride inside the chunk's own CTAs instead of competing
-for streaming multiprocessors. Nothing about spare SM capacity is required, which is precisely what two-stream
-concurrency needs and cannot find: that recovers 4.5% of the step at best and is marginally harmful at a
-2 048-token chunk.
-Its reach, by contrast, is large. The tile is a kernel-internal choice rather than a property of the chunk: a
-2 048-token chunk is thirty-two 64-row tiles or sixteen 128-row tiles, so running the chunk at 64 rows frees one
-warpgroup per tile. Planning that offload over the 10 185 four-mode steps of the replay, **94.8%** of all row items
-could be hosted inside the chunk's own CTAs, and in **91.1%** of those steps the rows fit entirely -- the median
-step offers thirty-one freed warpgroups against thirteen rows. We have not yet built it, so we claim no gain from
-it; we report the reach because it is the one mechanism this architecture still permits, and because it is intra-CTA
-it does not depend on the spare streaming-multiprocessor capacity that reason (1) shows no longer exists.
+| baseline | 32K context | 128K context |
+|---|---:|---:|
+| sglang's single variable-length FA3 call | 2.107x | 2.921x |
+| naive role split: stock FA3 chunk + stock FA2 rows, serial | 1.079x | 1.044x |
+| the same two calls on two streams | 1.040x | 1.042x |
+| our earlier two-plan build (v3) | 1.343x | 1.769x |
+| POD-Attention style single-kernel fusion | not implementable on Hopper (see above) | - |
 
-The conclusion we draw is architectural, and it is the opposite of POD's: **on Hopper and later, the gain comes from
-giving each role the executor its tile shape deserves, not from fusing the roles into one kernel.** The trend in the
-instruction set is the reason, and it points the same way for Blackwell: as the MMA unit grows and moves behind warp
-specialisation and tensor memory, a throughput-tuned CTA occupies more of the SM, not less, so intra-SM co-residency
-of two differently shaped roles becomes harder with each generation. Designs that depend on spare SM capacity should
-be expected to age badly; designs that schedule whole tiles onto the right executor should not. Fusion was the
-right answer when both roles spoke `mma.sync`; once the prefill role must speak `wgmma` to be competitive, the roles
-are better separated and merely sequenced. This is why C1 is a dispatcher and a plan rather than a fused mainloop.
+**Table 5: the same, four-mode steps** (prefill chunk beside speculative verify rows).
+
+| baseline | 32K context | 128K context |
+|---|---:|---:|
+| sglang's single variable-length FA3 call | 2.647x | 1.861x |
+| naive role split, serial | 1.087x | 1.058x |
+| the same two calls on two streams | 1.070x | 1.056x |
+| our earlier two-plan build (v3) | 1.924x | 1.366x |
+
+The honest reading of Tables 4 and 5 is that the large factors belong to separating the roles, which any
+implementation gets, and that our dispatcher adds 4-9% on top by giving each row its own tile class and merging the
+splits in the launch. We therefore keep this section short in proportion to that gain, and spend the paper's space
+on the schedule, where the effects are larger.
 
 Second, the tile classes are not evenly used. In a four-mode step the 16-row class carries the many decode rows, one
 or two 32- or 48-row tiles carry the verify rows, and the 128-row class carries nearly all of the arithmetic, because

@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.21.0 — Kernel section condensed to match its gains; Tables 4 and 5 added (2026-10-28)
+- User: writing on the kernel items must be proportional to their gains. The POD-on-Hopper argument is cut from
+  five numbered paragraphs to one, keeping the hardware rationale (wgmma/tcgen05 CTAs sized to fill the SM) and all
+  the measured consequences inline, and the section now ends by saying explicitly that it is kept short in
+  proportion to a 4-9% gain so the paper's space goes to the schedule.
+- Table 4 (two-mode) and Table 5 (four-mode) give our dispatcher against every alternative we could run: sglang's
+  single FA3 call (2.107x / 2.921x two-mode; 2.647x / 1.861x four-mode), the naive role split serial (1.079 / 1.044;
+  1.087 / 1.058), the same on two streams (1.040 / 1.042; 1.070 / 1.056), our earlier v3 build, and POD-style
+  single-kernel fusion marked not implementable on Hopper with the reasons above it.
+- The q64-with-q16 exception is stated as the register-wall consequence with its 94.8% reach, reported as reach
+  only, no gain claimed.
+
 ## v2.20.0 — Item 18's causal chain stated precisely: the register wall is why q64 and not q128 (2026-10-28)
 - The point, in one line: q128 cannot share a CTA with q16 because its TWO consumer warpgroups at ~168 registers
   each already consume the register budget (the measured 1,436 B spill, 2-6x slowdown); q64 uses ONE consumer

@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.51.0 — Paper 6.4: Table 9a, our stack against sglang's own colocated schedule on one cluster (2026-10-28)
+- New first result in 6.4, before the disaggregation tables: L0 vs sglang prefill-prioritized, same 16 H20s, same
+  superposed TraceLab + chat at load factor 3, both arms checked by draft acceptance (1.99 / 1.84).
+- Reported with every metric, including the one we lose (chat p99 ITL +25%), the bar stated as partial (chat TPOT and
+  TTFT clear 30%; agent TPOT -19.5%; combined goodput +5.2%), and the earlier scheduler layer's regression and its
+  diagnosed cause stated plainly, with the redesigned budget marked [pending].
+
 ## v2.50.0 — Decomposition L0: our stack beats sglang prefill-prioritized on every metric; the chunk rule is the loser (2026-10-28)
 - L0 = our tree (H20 lineage), A6 kernel, four-mode MTP step, our cache router, with sglang's FCFS and sglang's own
   default chunk; acceptance 1.993. vs sglang prefill-prioritized at alpha 3: chat 91.2 vs 83.2% (+8.0 pts), agent

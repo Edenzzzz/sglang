@@ -1359,6 +1359,37 @@ conditional disaggregation at Dynamo's defaults (2048 tokens / 0.7 of the prompt
 MTP, EDF, routing, pool) is compared with stock PD with the P:D ratio swept, at higher load and with mixture spikes.
 SLOs are those of section 6.1; every result carries per-request spread and per-repeat values.
 
+**Result: against sglang's own colocated schedule, same cluster and load.** Before comparing against
+disaggregation, we compare against the strongest colocated baseline: sglang's default prefill-prioritized schedule,
+with its own chunk policy, its own cache-aware router and stock MTP, on the same 16 H20s and the same superposed
+TraceLab replay plus chat at load factor 3 (Qwen2.5-7B, TP1 x 16). Both arms are checked for model fidelity by their
+draft acceptance (1.99 for ours, 1.84 for the baseline; a mis-configured model shows about 1.4).
+
+Table 9a: our stack against sglang prefill-prioritized, Qwen2.5-7B, 16 H20s, load factor 3.
+
+| metric | ours | sglang prefill-prioritized | change |
+|---|---:|---:|---:|
+| chat SLO attainment | 91.2% | 83.2% | +8.0 pts |
+| agent SLO attainment | 94.3% | 93.2% | +1.1 pts |
+| agent SLO goodput (tok/s) | 2 493 | 2 448 | +1.8% |
+| chat mean TPOT, median / p90 (ms) | 10.8 / 29.8 | 15.8 / 41.9 | -32% / -29% |
+| agent mean TPOT, p90 (ms) | 38.0 | 47.2 | -19.5% |
+| chat TTFT, p90 (s) | 0.60 | 2.81 | -79% |
+| chat inter-token latency, p99 (ms) | 162.9 | 130.8 | +25% |
+
+Ours here is the serving tree with the unified dispatcher, the four-mode step and our router, admitting in arrival
+order with sglang's default chunk. It improves every SLO metric for chat and the TPOT tail for agents; agent
+attainment and goodput are inside the run-to-run noise floor (about 5 points and 4%), and the chat inter-token tail is
+worse. Against the bar this is partial: chat TPOT and TTFT clear 30%, agent TPOT reaches 19.5%, and combined SLO
+goodput rises 5.2%, short of 10%.
+
+An earlier version of our scheduler layer -- deadline ordering coupled with the SLO-budgeted chunk -- did worse than
+this configuration and worse than the baseline (agent attainment 90.3%, goodput 2 259 tok/s), because its per-step
+budget is a minimum over resident rows and a just-admitted row, having banked no slack, pins every step to its bare
+allowance; long agent prefills then advance a few hundred tokens a step and miss their TTFT target (p90 9.5 s against
+the baseline's 3.4 s). The redesigned budget, which projects each row's mean TPOT over its whole output, is
+[pending].
+
 **Result: scheduler only.** With the kernel off and no speculation, on Qwen2.5-7B on 16 H20s (Table 9), ours holds
 >= 90% chat attainment up to 64 programs, and disaggregation only up to 16, across all P:D ratios swept; deadline order
 on its prefill pods changes nothing. The gap is the per-round re-ship: conditional disaggregation, which prefills

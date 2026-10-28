@@ -333,7 +333,7 @@ how the kernel sees it.
 | **16** | FA2 | one-token rows: every decode row, and every draft step's rows | Qwen2.5-7B decode (1 token x 7 heads = 7 packed rows); Llama-3.3-70B decode (1 x 8 = 8); GLM-4.5-Air decode (1 x 12 = 12). Draft steps are one token per request on a one-layer head, so they land here for all three models. |
 | **32** | FA2 | 4-token verify rows of models with 7-8 grouped-query heads | Qwen2.5-7B verify (4 x 7 = 28 packed rows); Llama-3.3-70B verify (4 x 8 = 32, an exact fit) |
 | **48** | FA2 | 4-token verify rows of wide grouped-query models | GLM-4.5-Air verify (4 x 12 = 48, an exact fit). This class exists for GLM: at 16 rows a GLM verify row needs three tiles, and at 64 it wastes a quarter of one. |
-| **64** | FA2, or FA3 above 64 packed rows | the tail of a chunk, and verify rows too wide for 48 | the remainder tile of any prefill chunk that is not a multiple of 128 rows; GLM verify rows when the 48 class is disabled. Section 7 uses this class to free an FA3 warpgroup. |
+| **64** | **boundary, currently FA2** | the tail of a chunk, and verify rows too wide for 48 | the remainder tile of any prefill chunk that is not a multiple of 128 rows; GLM verify rows when the 48 class is disabled. The dispatcher sends items above 64 packed rows to FA3, so 64 is the largest FA2 class. **This boundary is the one tile size we have not measured on both executors:** 64 rows is wgmma's native tile (one consumer warpgroup), while FA2 must build it from four 16-row blocks, so it may belong on FA3. Section 7 revisits it. |
 | **128** | FA3 | the body of a prefill chunk: full 128-row query tiles | all three models, prefill and append chunks. One chunk of c tokens is floor(c/128) tiles here plus one remainder tile above. |
 
 Two consequences a reader should take from Table 2. First, the three models' decode rows all land in the same 16-row
@@ -342,6 +342,24 @@ a single query tile for every row wastes most of it: a 64-row tile holds one 7-r
 16-row tiles force a 48-row GLM verify row into three tiles. This is the padding that C1 removes, and it explains
 the model ordering in section 6.2 -- the further a model's verify row sits from the single call's tile, the more the
 role split alone recovers.
+
+**Table 3: measured tile mix on the mixed long-context TraceLab replay** (87 932 steps, load factor 3, median
+cached prefix 119K tokens; share of all query tiles issued in a step). Only the verify class moves between models,
+because only the grouped-query ratio changes: Qwen2.5-7B and Llama-3.3-70B verify rows pack to 28 and 32 rows and
+take the 32 class, GLM-4.5-Air's pack to 48 and take the 48 class.
+
+| model | 16 | 32 | 48 | 64 | 128 |
+|---|---:|---:|---:|---:|---:|
+| Qwen2.5-7B | 69.3% | 13.5% | 0.1% | 1.2% | 16.0% |
+| Llama-3.3-70B | 69.3% | 13.5% | 0.1% | 1.2% | 16.0% |
+| GLM-4.5-Air | 69.3% | 0.1% | 13.5% | 1.2% | 16.0% |
+
+Read with section 5.1's arithmetic, Table 3 is the central tension of the dispatcher: **16-row tiles are 69% of all
+tiles and 128-row chunk tiles only 16%, yet at a 119K prefix the chunk carries essentially all of the step's
+attention work** (a 2048-token chunk over a 128K prefix is 0.73 s of the 0.73 s step on an H20). The dispatcher
+spends most of its tiles on the cheapest work. That is why removing the row classes' padding is worth a few per cent
+rather than a factor, and why the 64 class -- 1.2% of tiles, all of them chunk remainders -- is interesting out of
+proportion to its count: it is the only place where a chunk tile is small enough to share an SM with rows.
 
 Second, the tile classes are not evenly used. In a four-mode step the 16-row class carries the many decode rows, one
 or two 32- or 48-row tiles carry the verify rows, and the 128-row class carries nearly all of the arithmetic, because

@@ -8,12 +8,12 @@ set -u
 ulimit -n $(ulimit -Hn)  # 1024 soft limit: a burst of concurrent requests runs the client out of sockets
 OUT=$1; RPORT=$2
 W=/dev/shm/w
-# The CLIENT runs against a self-consistent sglang tree, not the server's. Our serving tree carries only the
-# bench_serving deprecation shim (no sglang/benchmark/), and grafting upstream's benchmark package onto our srt
-# breaks on modules our tree predates (sglang.srt.utils.network). BENCH_PY defaults to upstream's checkout, which
-# has a matching benchmark/ and srt/; the servers are launched separately with SGL_PY, so this does not change any
-# arm's serving code.
-export PYTHONPATH=${BENCH_PY:-$W/up/python}:$W/fi
+# The client needs OUR bench (it alone knows --dataset-name tracelab-claude and --cache-report) on a tree whose
+# srt it matches. Our repo ships no sglang/benchmark/ package, so provisioning installs
+# drivers/serving/bench_overlay_20261026/serving.py as sglang/benchmark/serving.py in ourpy/python and python_slo.
+# Upstream's own benchmark/ is NOT usable here: it lacks the tracelab dataset, and grafting it onto our srt breaks
+# on modules our tree predates (sglang.srt.utils.network). BENCH_PY overrides the default for one-off runs.
+export PYTHONPATH=${BENCH_PY:-$W/python}:$W/fi
 mkdir -p $OUT; rm -rf $OUT/barrier
 export BENCH_BARRIER_DIR=$OUT/barrier
 S=${SESSIONS:-64}; T=${TURNS:-6}

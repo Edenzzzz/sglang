@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.14.0 — Table 3 (measured tile mix) and the tile-64 boundary correction (2026-10-28)
+- Table 3 added to paper 5.1: measured share of query tiles per class on the mixed long-context TraceLab replay
+  (87,932 steps, median 119K prefix). Qwen/Llama: 16=69.3%, 32=13.5%, 48=0.1%, 64=1.2%, 128=16.0%; GLM swaps 32 and
+  48 because only the grouped-query ratio changes. 16-row tiles are 69% of tiles but the 16% of 128-row chunk tiles
+  carry essentially all the arithmetic at a 119K prefix -- the central tension, and why row padding is worth per
+  cent not a factor.
+- CORRECTION (user): Table 2 claimed the 64 class as "FA2, or FA3 above 64" as if settled. 64 rows is wgmma's native
+  tile (one consumer warpgroup) while FA2 builds it from four 16-row blocks, and the measured basis (A3: FA2 wins
+  verify-width 28-48; A5.1: FA3 q64 wins short-KV few-row) never tested 64 itself on both executors. Table 2 now
+  marks it the one unmeasured boundary. This also simplifies item 18: if 64-row work belongs on FA3 q64, the spare
+  warpgroup is the natural home for it rather than a special mode.
+- Bench client fixed: our overlay (drivers/serving/bench_overlay_20261026/serving.py, the only one with
+  --dataset-name tracelab-claude and --cache-report) installed as sglang/benchmark/serving.py in ourpy/python and
+  python_slo on all four pods; mn_bench.sh BENCH_PY now defaults to our tree. Upstream's benchmark/ is unusable
+  here (no tracelab dataset, and it breaks on sglang.srt.utils.network against our srt).
+
 ## v2.13.0 — Table 2: tile class -> model x mode mapping, read from the tile's side (2026-10-28)
 - Replaced the per-work-item list with a table keyed BY TILE CLASS (16 / 32 / 48 / 64 / 128), naming for each the
   executor, what lands there, and which model and which of the four modes produce it -- so a reader can follow the

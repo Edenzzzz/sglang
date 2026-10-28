@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.50.0 — Decomposition L0: our stack beats sglang prefill-prioritized on every metric; the chunk rule is the loser (2026-10-28)
+- L0 = our tree (H20 lineage), A6 kernel, four-mode MTP step, our cache router, with sglang's FCFS and sglang's own
+  default chunk; acceptance 1.993. vs sglang prefill-prioritized at alpha 3: chat 91.2 vs 83.2% (+8.0 pts), agent
+  94.3 vs 93.2%, agent tok/s 2493 vs 2448; chat TPOT p90 29.8 vs 41.9 ms (-28.9%), agent TPOT p90 38.0 vs 47.2
+  (-19.5%), chat TTFT p90 0.60 vs 2.81 s (-79%). Superset holds for L0.
+- Bar PARTLY met: chat TPOT p90 and chat TTFT clear 30%; agent TPOT p90 (-19.5%) and throughput (combined goodput
+  +5.2%; agent +1.8%, chat +11.5%) do not; chat p99 ITL is worse than pp (162.9 vs 130.8 ms).
+- Confirms the diagnosis: adding the SLO-budgeted chunk turns this win into a loss (r5/r6). The gain over sglang comes
+  from tree + kernel + four-mode + router; our scheduler layer currently subtracts. L1 (+EDF) and the :life redesign
+  run next.
+
 ## v2.49.0 — Lifetime-mean budget (:life) for the SLO-budgeted chunk; queued after the decomposition (2026-10-28)
 - Fix for the diagnosed root cause (the budget is a MIN over resident rows, and a just-admitted row has banked
   nothing, so it pins every step and the mean-TPOT rule degrades to a per-step bound). ":life" budgets each row by its

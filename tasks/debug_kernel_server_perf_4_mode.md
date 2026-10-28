@@ -109,6 +109,23 @@
          - Next: run the prepared decomposition (L0 = our tree + sglang default chunk + FCFS; L1 = + EDF) against pp to
            confirm the chunk rule is the losing layer, and redesign the budget so a fresh row's first steps are not the
            binding constraint (e.g. evaluate each row's mean TPOT over its expected lifetime, not its first token).
+       - **[x] DECOMPOSITION L0 (2026-10-28 16:1x): the CHUNK RULE is the losing layer; without it our stack beats
+         pp on every metric.** `mn_decomp_v2_16g_20261028.sh`, log `/tmp/h20/mn_decomp_v2_r1.log`. L0 = our serving
+         tree (H20 lineage), A6 kernel, four-mode MTP step, our cache router -- with sglang's FCFS admission and
+         sglang's own default chunk. Valid: acceptance 1.993.
+         | alpha 3 | chat | agent | agent tok/s | chat TPOT p50/p90 | agent TPOT p90 | chat TTFT p90 | chat ITL p99 |
+         |---|---:|---:|---:|---:|---:|---:|---:|
+         | **L0** | **91.2%** | **94.3%** | **2493** | **10.8 / 29.8** | **38.0** | **0.60 s** | 162.9 |
+         | sglang prefill-prioritized (r5) | 83.2% | 93.2% | 2448 | 15.8 / 41.9 | 47.2 | 2.81 s | **130.8** |
+         | ours + SLO chunk, uncapped (r5) | 84.4% | 90.3% | 2259 | 15.5 / 43.6 | 48.8 | 2.80 s | 151.9 |
+         - L0 vs pp: chat TPOT p90 -28.9% (p50 -32%), agent TPOT p90 -19.5%, chat TTFT p90 -79%, chat attainment
+           +8.0 pts; agent attainment +1.1 and goodput +1.8% (both inside the noise floor). SUPERSET HOLDS for L0.
+         - **Bar, honestly: PARTLY met.** Chat TPOT p90 (-28.9%) and chat TTFT (-79%) are at/past 30%. Agent TPOT p90
+           (-19.5%) is short of 30%; throughput is short of 10% (agent goodput +1.8%, chat goodput 1456 vs 1306 =
+           +11.5%, combined +5.2%). Chat p99 ITL is WORSE than pp (162.9 vs 130.8 ms).
+         - So the gain over sglang comes from the tree + A6 + four-mode + router, and our scheduler layer (EDF +
+           SLO-budgeted chunk) currently SUBTRACTS from it. L1 (= L0 + EDF) isolates EDF next; the :life arm tests the
+           chunk-rule redesign.
        - Decision: reorder. Running mc / pdmux against an arm already known to be defective adds little; the
          decision-relevant number is whether qcap closes the gap to pp at alpha 3. The sweep is stopped after pp and
          re-queued as `mn_superset_v2_16g_20261028.sh` with ours = the qcap tree, run first.

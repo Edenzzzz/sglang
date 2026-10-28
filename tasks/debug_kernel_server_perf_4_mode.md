@@ -270,6 +270,15 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     L1's 61.8%. The first is met with room to spare (55.8), the second is not (23.6%). So the registered reading
     applies -- the knob works, the value is wrong -- and the next step is the sweep on that one number, NOT another
     redesign of the budget. **This is the first result that is evidence ABOUT the policy rather than about a bug.**
+  - **THE 2048 ARM IS THE BASELINE FOR THE TPOT-CONTROL STUDY, and it is the cleanest comparison we have.** It
+    differs from our arm in one thing only -- where the chunk comes from -- so every delta is attributable to the
+    sizing decision; it is the throughput-side endpoint of the frontier; and it is the ad-hoc policy the rule must
+    beat, which is not a straw man since at alpha 3 it lands on top of rung L0 inside the noise floor.
+    - **Decisive advantage over the sglang comparisons: the acceptance matches.** The two alpha-6 arms measured
+      **2.023 and 2.013**, within 0.5%. Every sglang arm sits at 1.765-1.795 against our 1.982-2.001, which is why
+      those goodput margins are held back. Against c2048 there is no acceptance confound, so the -51% / -43%
+      tail-TPOT result stands without a caveat. **The TPOT-control study should therefore be reported against
+      c2048, with the sglang arms as the external comparison.**
   - **Why a sweep should find a frontier rather than a compromise.** We now hold two points on the same curve from
     the same tree: 600 ms is far on the TPOT-protective side (TPOT p90 55.8, TTFT p90 41.7 s) and the 2048 constant
     sits on the throughput side (114.6 ms, 5.91 s). The bound is a latency in milliseconds, so it is monotonic and

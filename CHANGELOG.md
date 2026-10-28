@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.00.0 — The 2048 arm is the baseline for the TPOT-control study (2026-10-28)
+- Recorded its three roles: the leave-one-out control for chunk sizing (identical tree, kernel, four-mode step,
+  router and EDF -- only the chunk source differs), the throughput-side endpoint of the stepcap frontier, and the
+  ad-hoc policy the rule must beat, which is not a straw man since at alpha 3 it matches rung L0 inside the noise.
+- The decisive advantage over the sglang comparisons: acceptance matches to within 0.5% (2.023 vs 2.013), where
+  every sglang arm sits at 1.765-1.795 against our 1.982-2.001. So the -51% chat / -43% agent tail-TPOT result
+  against c2048 carries no acceptance caveat, and the TPOT-control study is reported against it with the sglang
+  arms as the external comparison.
+
 ## v2.99.0 — The SLO chunk rule is measured: -51% tail TPOT, but the bound is far too tight (2026-10-28)
 - First clean measurement of the policy (alpha 6, accept 2.023), against the fixed-2048 arm from the same tree:
   chat TPOT p90 55.8 vs 114.6 ms (**-51%**), agent 59.2 vs 103.9 (**-43%**). The mechanism works and the user's

@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.55.0 — Paper: one kernel claim everywhere, and C3's worker policy is no longer [pending] (2026-10-28)
+- The abstract, the introduction's results paragraph, the outline bullet and the conclusion all quoted the
+  superseded H20 figure (1.43-1.51x over sglang's single FA3 call) with the fair baseline left [pending], while
+  §6.2 already carried the H200 ladder. All four now lead with the claim the user asked for -- 4.0-8.7% over naive
+  FA3 + stock FA2 on Qwen2.5-7B, 2.8-5.8% on Llama-3.3-70B, 2.0-2.8% on GLM-4.5-Air -- and state the 1.86-2.92x
+  against sglang's call as mostly the role split, which is not ours.
+- Table 4c's C3 row: the worker policy's own contribution was [pending] and is now the measured L1-vs-L0 rung.
+
 ## v2.54.0 — Queue the overload point (alpha 6), which no run on this cluster had reached (2026-10-28)
 - `tasks/pd_colocation/mn_overload_decomp_16g_20261028.sh`: the alpha = 6 decomposition (L0, L1, pp, mc, pdmux) on
   the 16 H20s, chained after the :life arm. Every earlier driver declared `for A in 3 6` and was stopped or

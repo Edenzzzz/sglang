@@ -45,9 +45,12 @@
       split, in which stock FA2 picks one query tile for all of its rows
     - bar: faster than naive FA3 + FA2 on every model, with FP32-exact output; the step stays predictable for the
       router and EDF
-    - measured: 1.43-1.51x sglang's FA3 call on the H200 (Qwen2.5-7B, 96 trace-sampled steps); vs naive FA3 + FA2
-      [pending: H200]; Llama-3.3-70B 1.38-1.61x and GLM-4.5-Air 1.28-1.41x sglang on H20 [pending: H200 replay of the
-      same captures]; step model 2.0% held-out MAPE vs 1.9% for the single FA3 call (per-step-type split [pending: re-fit with the corrected tracer])
+    - measured on the H200, 96 fresh Qwen2.5-7B captures: **1.040-1.087x over naive FA3 + stock FA2**, which is the
+      claim, and 1.86-2.92x over sglang's single varlen FA3 call, which is mostly the role split and not ours; the
+      same comparison on rank-0 captures replayed for Llama-3.3-70B gives 1.028-1.058x and for GLM-4.5-Air
+      1.020-1.028x over the naive role split (an earlier H20 pass gave 1.43-1.51x over sglang's call and is
+      superseded); step model 2.0% held-out MAPE vs 1.9% for the single FA3 call (per-step-type split [pending:
+      re-fit with the corrected tracer])
     - figures: time-weighted speedup per (model, context, mode) with 95% CI vs sglang FA3 and v3; per-item timeline
       of one step; ablation bars: FA2 / FA3 overlap by PDL 2.2-6.1% of the step, longest-first order <= 0.7%,
       persistent vs hardware dispatch -0.2..-1.3%, JIT release of merges (ready queue) -1.8..+0.5% vs the same loop with ticketed merges (H200,
@@ -106,9 +109,10 @@ phase isolation disaggregation buys with fixed roles. Each worker orders prefill
 have already missed. Across symmetric nodes, a router predicts each request's TTFT and TPOT on every node and sends it
 to the node with the most cached prefix that can still meet its SLOs and those of the requests already there.
 
-On 96 mixed steps sampled from Qwen2.5-7B serving traces and replayed on an H200, mixed-step attention is 1.43-1.51x
-faster than sglang's single FA3 call, with FP32-exact output, and [pending] faster than stock FA3 and stock FA2 run
-as two separately planned kernels. On one node, SLO attainment rises for both tenants: on Qwen2.5-7B, chat attainment
+On 96 mixed steps sampled from Qwen2.5-7B serving traces and replayed on an H200, mixed-step attention is 4.0-8.7%
+faster, with FP32-exact output, than stock FA3 and stock FA2 run as two separately planned kernels -- the fair
+baseline, since splitting sglang's single varlen call by role is itself an obvious engineering step worth 1.8-2.8x.
+The same margin over the naive role split is 2.8-5.8% on Llama-3.3-70B and 2.0-2.8% on GLM-4.5-Air. On one node, SLO attainment rises for both tenants: on Qwen2.5-7B, chat attainment
 rises by 38-74 points, and at 128-256K contexts agent attainment rises from 13-19% to 44-50% with 8-11% more agent
 throughput; on GLM-4.5-Air, throughput rises 27-28% for both tenants. On 16 H20s, at 64 agent programs plus chat, AttentionFuse keeps 93.6% chat
 attainment with 1100 tok/s of agent SLO goodput, where PD disaggregation at its best P:D ratio reaches 13.1% and
@@ -184,8 +188,9 @@ selective write-through and timeout prefetch; we add only the router-side mirror
 The serving engine is upstream sglang at a pinned commit, and both attention executors are stock kernels (FA3 from
 flash-attention, FA2's BatchPrefill body from flashinfer).
 
-**Results.** On trace-sampled steps on an H200, the kernel is 1.43-1.51x faster than sglang's FA3 call and [pending]
-faster than naive FA3 + FA2. On one node, Qwen2.5-7B chat attainment
+**Results.** On trace-sampled steps on an H200, the kernel is 4.0-8.7% faster than naive FA3 + FA2 on Qwen2.5-7B
+(2.8-5.8% on Llama-3.3-70B, 2.0-2.8% on GLM-4.5-Air), and 1.86-2.92x faster than sglang's single FA3 call, of which
+the role split alone accounts for 1.76-2.80x. On one node, Qwen2.5-7B chat attainment
 rises by 38-74 points under the paper's SLOs, agent attainment at 128-256K rises from 13-19% to 44-50%, and
 GLM-4.5-Air throughput rises 27-28%. On 16 GPUs with the full stack, AttentionFuse holds 93.6% chat attainment and
 1100 tok/s agent SLO goodput at 64 agent programs, against 13.1% / 80 for the best stock PD configuration and
@@ -1060,7 +1065,7 @@ leave-one-out arms queued on the trace replay at alpha 3 (16 H20s) and the singl
 | C1 unified dispatcher | **naive role split: a stock FA3 call for the chunk and a stock FA2 call for the rows** | **4.0-8.7% of attention time** across the four capture cells (section 5.1). Against sglang's single FA3 call the same build is 1.86-2.92x, but the naive role split alone accounts for 1.76-2.80x of that, so the fair comparison is the first number. In serving without speculation the kernel alone is -6.7% TPOT at 32K and -2.8% at 128K; on the cluster replay, removing it costs 1.4% of goodput (2436 against 2471 tok/s), inside the noise floor. The gain is confined to the decode and verify rows, so it shrinks as the prefill chunk grows to dominate the step | 6.2, 6.3, 7 |
 | C1 parts | PDL overlap off; enumeration instead of longest-first order; merge-free bound | 2.2-6.1%; <= 0.7%; the merge costs <= 0.9% of trace-sampled steps and 6-13% of decode-heavy batches. Running the two naive calls on separate streams rather than serially adds nothing (1.763x against 1.759x in the 128K four-mode cell), which bounds what any launch-level overlap can contribute here | 7 |
 | C2 four-mode step | stock MTP steps (verify on its own step) | **The largest single-node contribution, and inert on the cluster -- for one reason.** On one H200, with the kernel held at the stock FA3 call, the four-mode step alone cuts mean TPOT from 22.9 to 14.2 ms at 32K (38%) and from 97.3 to 48.0 ms at 128K (51%). On the cluster replay it changes nothing (agent 93.8% / 2492 tokens/s without it against 94.2% / 2471 with it). The cause is its engagement rule: a step merges verify rows into a prefill chunk only once that chunk carries at least 8192 uncached tokens. The single-node stages carry 32K to 128K of uncached prefill and always clear it; on the cluster, cache affinity leaves a typical agent round with about 1085 uncached tokens, roughly seven times below the rule, so the merged step rarely forms. **The four-mode step therefore pays exactly where prefill is long and cold, and our own cache-first routing removes that condition** -- a tension we report rather than tune away, and the reason the two contributions must be evaluated on separate workloads. Short-prompt ShareGPT: the merged step's host read-back cost 6-7% (section 5.5) | 5.5, 6.3, 6.4 |
-| C3 per-worker deadline scheduling | FCFS admission | single node, agent burst: demotion cuts chat TTFT 96-98%. **On the cluster replay it costs**: FCFS reaches chat 73.9% / agent 83.2% / 1922 tok/s against 65.1-68.5% / 72.6-78.7% / 1501-1763 for the full stack. It buys a TTFT tail (chat p90 1.03-1.19 vs 3.03 s) and pays in TPOT (p50 27-30 vs 21.5 ms), which a 2 s + 50 ms SLO does not reward. The H20 arms ran ordering + chunk preemption / parking and never demotion; the decomposition shows chunk preemption / parking costs the goodput (1501-1763 with it, 1912 and 1986 across two runs without it). Deadline ordering against FCFS is inside this workload's run-to-run noise floor (about 5 points of attainment and 4% of goodput, measured between two identical configurations), and demotion has not yet run multi-node: the code is gated behind the preemption flag, which those arms disabled. The final configuration drops parking; the worker policy's own contribution is [pending] | 3.3, 5.3, 6.4, 7 |
+| C3 per-worker deadline scheduling | FCFS admission | single node, agent burst: demotion cuts chat TTFT 96-98%. **On the cluster replay it costs**: FCFS reaches chat 73.9% / agent 83.2% / 1922 tok/s against 65.1-68.5% / 72.6-78.7% / 1501-1763 for the full stack. It buys a TTFT tail (chat p90 1.03-1.19 vs 3.03 s) and pays in TPOT (p50 27-30 vs 21.5 ms), which a 2 s + 50 ms SLO does not reward. The H20 arms ran ordering + chunk preemption / parking and never demotion; the decomposition shows chunk preemption / parking costs the goodput (1501-1763 with it, 1912 and 1986 across two runs without it). Deadline ordering against FCFS is inside this workload's run-to-run noise floor (about 5 points of attainment and 4% of goodput, measured between two identical configurations), and demotion has not yet run multi-node: the code is gated behind the preemption flag, which those arms disabled. The final configuration drops parking. **The worker policy's own contribution is now measured in isolation** (Table 9c): adding per-tenant deadline ordering to our tree with sglang's own chunk policy, changing nothing else, moves every metric by less than the noise floor at load factor 3 (chat 91.2 -> 90.9%, agent goodput 2493 -> 2481 tok/s, chat TPOT p90 29.8 -> 32.0 ms), so at capacity deadline ordering neither helps nor hurts; the overload point where a deadline is actually in danger is [pending] | 3.3, 5.3, 6.4, 7 |
 | C3 router (cluster level) | sglang's own `cache_aware` router | **Our router raises chat SLO attainment by 7.3 points (90.6% against 83.3%) and cuts the chat TTFT tail by 79% (p90 0.67 s against 3.24 s), at identical agent goodput (2471 against 2482 tokens/s) and identical draft acceptance.** On the cluster trace replay at load factor 3, all arms on one tree. The mechanism is the load tie-break among workers whose prefix hit ties: `cache_aware` picks on hit length alone and piles arriving chat onto whichever worker already holds the prefix. **Caveat, measured: the SLO-checked variant of this router LOSES on these session-affine traces (chat 65.1-68.5%), because its feasibility checks move requests off their cached prefix; the contribution is the cheap tie-break, not the SLO check.** Earlier 8-H20 runs on a hot shared-prefix mix, where sessions do not pin to one worker, showed the opposite ordering for the SLO check (chat TTFT 10x, resident check worth 32% of chat ITL), so the two policies are workload-dependent and both are reported | 5.2.1, 7 |
 
 **Status.**
@@ -1805,7 +1810,8 @@ tile classes of 16, 32 and 64 packed rows for decode and verify rows. The plan b
 reduces every split row inside the FA2 launch. The fusion lives in the plan and the merge, not in the instruction
 stream; the two executors stay stock kernels at their own warp layouts. This is why the design avoids the 2.16x loss
 of a co-compiled kernel, and why it carries over to Blackwell with FA4 in place of FA3. On trace-sampled steps the
-kernel is 1.43-1.51x faster than sglang's single FA3 call, with FP32-exact output (naive FA3 + FA2 [pending]). The
+kernel is 4.0-8.7% faster than naive FA3 + stock FA2 with FP32-exact output, and 1.86-2.92x faster than sglang's
+single FA3 call, most of which is the role split rather than our dispatcher. The
 fused step is also as predictable as the stock one (2.0% held-out MAPE).
 
 *Node.* Because each row gets its own tile class, speculative decoding fits inside colocation: a prefill chunk and

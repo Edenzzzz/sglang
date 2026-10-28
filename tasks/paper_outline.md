@@ -799,14 +799,20 @@ With the tracer corrected (verify rows counted as decode rows), the per-type spl
 alpha 3 (Qwen2.5-7B, 16 H20 workers, about 2,500 merged steps per worker), a model fit on the first half of four
 workers' traces and scored on the second half has these held-out errors:
 
-| step type | MLP with acceptance | GBT |
-|---|---:|---:|
-| merged prefill chunk + verify rows | 3.4-4.0% | 2.8-3.6% |
-| prefill | 4.6-5.5% | 6.9-7.8% |
-| decode | 18-23% (short steps of about 10-20 ms) | 21-25% |
+| step type | linear (lin4mode) | MLP with acceptance | GBT |
+|---|---:|---:|---:|
+| merged prefill chunk + verify rows | 2.8-4.2% | 3.4-4.0% | 2.8-3.6% |
+| prefill | 5.6-6.2% | 4.6-5.5% | 6.9-7.8% |
+| decode | 34-38% | 18-23% (short steps of about 10-20 ms) | 21-25% |
+
+On the merged steps every model lands within about a point of the others: the linear model is as accurate as the
+MLP there, and the analytic overlap form (2.4-4.4%) is no worse. The models separate only on decode-only steps, where
+the linear model's 34-38% is the cost of its missing nonlinearity in a short, launch-dominated step. The chunk rule
+of section 5.2.3 sizes only merged steps, so it uses the linear model, which costs nothing in accuracy where it is
+applied and gives the closed form the rule needs.
 
 The comparison with sglang's single FA3 call on the same schedule is [pending]: the traced leave-one-out arm without
-C1. A single error figure for the linear model hides where it is used. Over all steps of the replay it misses by 25% (24% on the held-out half), but that average is set by decode-only steps -- 84% of steps, each only 10 to 20 ms long, where small absolute misses are large relative ones (29% error). On the steps that carry a prefill chunk beside rows, which are the only steps the chunk rule of section 5.2.3 sizes, the same model misses by 4.7% (5.0% held out), and on prefill-only steps by 6.2%. The rule therefore uses the linear model for its closed form, and its accuracy is the merged-step figure, not the all-step one. A model of the launch-to-launch gap, which includes host waits, is not fittable at all (45% error), so every model here targets GPU time. The chunk budget of section 5.2.3 therefore needs the
+C1. A single error figure for the linear model hides where it is used: averaged over every step it misses by about 25%, but that average is set by decode-only steps, which are 84% of steps and only 10 to 20 ms long. On the chunk-carrying steps the table above applies, and there it matches the MLP. A model of the launch-to-launch gap, which includes host waits, is not fittable at all (45% error), so every model here targets GPU time. The chunk budget of section 5.2.3 therefore needs the
 nonlinear model [pending]. Llama-3.3-70B and GLM-4.5-Air fits are [pending].
 
 Table 3: held-out step-time MAPE by step type (Qwen2.5-7B, H200, four-mode serving). "prefill" includes the four-mode

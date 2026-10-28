@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.42.0 — Step-model claim corrected: the linear model matches the MLP on merged steps (2026-10-28)
+- Re-ran fit_4mode_step.py --target gpu --pool on the four alpha-3 STEPTRACE logs (@3:4), held-out second halves.
+  Merged steps: lin4mode 2.8-4.2%, overlap 2.4-4.4%, GBT 2.8-3.6%, MLP 3.4-4.2%, MLP with acceptance 3.4-4.0% (the
+  paper's figure reproduces). Decode-only: lin4mode 34-38% vs MLP 18-23%.
+- The paper said "a linear model does not suffice" with the acceptance MLP as the model of choice. That is wrong for
+  merged steps -- all five models are within ~1 point there; the MLP wins only on decode-only steps, which the chunk
+  rule never sizes. Table gains a linear column and the text now says so. (Per-worker, non-pooled fits made the MLP
+  look worse still, 5.8-14.9%, which is why the pooled protocol is the one reported.)
+- This supports the user's "simple methods" framing: the closed-form linear model the chunk rule uses is as accurate
+  as the learned one on the steps it acts on.
+
 ## v2.41.0 — smoke9 PASSES end to end; superset sweep running with our arm first (2026-10-28)
 - smoke9: agent completed 652 rounds and chat 300, 0 tracebacks -- the first fully working smoke arm on this
   cluster. The gate's post-smoke GPU check aborted on CUDA-context release lag (all 16 GPUs read 0 MiB moments later);

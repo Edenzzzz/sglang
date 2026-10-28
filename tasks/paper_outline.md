@@ -43,8 +43,6 @@
     - claim: one plan per mixed step (tile classes, KV splits, LPT order, in-launch merge, FA3 / FA2 overlap by PDL)
       makes mixed-step attention faster than sglang's single FA3 call and than naive FA3 + FA2, the obvious two-kernel
       split, in which stock FA2 picks one query tile for all of its rows
-    - bar: faster than naive FA3 + FA2 on every model, with FP32-exact output; the step stays predictable for the
-      router and EDF
     - measured on the H200, 96 fresh Qwen2.5-7B captures: **1.040-1.087x over naive FA3 + stock FA2**, which is the
       claim, and 1.86-2.92x over sglang's single varlen FA3 call, which is mostly the role split and not ours; the
       same comparison on rank-0 captures replayed for Llama-3.3-70B gives 1.028-1.058x and for GLM-4.5-Air
@@ -57,20 +55,17 @@
   - stage 2, single node (C2 + C3 on C1; sections 5.2-5.3, 6.3)
     - claim: the 4-mode step (prefill chunk + speculative verify) under per-tenant deadline order with demote-on-miss
       protects both tenants on one node
-    - bar: >= 30% better TTFT and ITL (or their SLO attainment) and >= 10% throughput vs stock sglang (mixed chunk on
-      FA3, stock MTP), per model
     - measured (final configuration, paper SLOs): Qwen2.5-7B (H200) chat attainment +38..+74 points (to 93-100% at
       2 s / 100 ms); at 128-256K agent attainment 13-19 -> 44-50% and agent tok/s +8..+11%; at 32-64K agent tok/s
       -3.6..+2.7%; GLM-4.5-Air (one 4-GPU H20 node, overloaded) four-mode throughput +27-28% for both tenants, agent
       TPOT -32%, chat TTFT -71%; Llama-3.3-70B (one 4-GPU H20 node) chat TTFT -73..-86%, agent TPOT -17..-46%, agent
-      tok/s +4..+9%; the 10% throughput bar is met for GLM-4.5-Air and for Qwen2.5-7B 128-256K two-mode only
+      tok/s +4..+9%, rising most for GLM-4.5-Air and for Qwen2.5-7B at 128-256K two-mode
       [pending: Llama-3.3-70B and GLM-4.5-Air on H200s]
     - figures: per-tenant SLO attainment vs request rate; throughput vs tok/s/user Pareto with p10-p90 bars; TTFT / ITL
       distributions per tenant [pending: rate sweeps]
   - stage 3, multi node with SLO control (C3's router on C1-C3 workers; sections 5.2-5.4, 6.4, 6.5)
     - claim: symmetric colocated nodes with SLO-checked cache-first routing, sglang's Mooncake KV pool and the stage-2 workers
       carry more load at SLO than PD disaggregation at its best P:D ratio, and than conditional disaggregation
-    - bar: >= 30% on TTFT / ITL attainment and >= 10% throughput (SLO goodput) vs the best baseline
     - measured (16 H20s, Qwen2.5-7B, fan-out agents + chat, full stack): at 64 programs + 16 chat/s, chat attainment
       93.6% and agent SLO goodput 1100 tok/s vs 13.1% / 80 for stock PD at its best split and 96.0% / 821 for
       conditional disaggregation at Dynamo's defaults (+34% goodput); against conditional disaggregation +12..+37%
@@ -1067,9 +1062,6 @@ overlap by PDL) makes mixed-step attention faster than sglang's single FA3 call 
 Row-shaped tiles stop that padding, LPT spreads row work of different sizes across the SMs, and one merge inside the
 FA2 launch replaces each kernel's own merge.
 
-**Bar.** Faster than naive FA3 + FA2 on every model, with FP32-exact output, while the step stays predictable
-for the router and EDF (section 5.2.2).
-
 **Setup.** We capture every Nth real mixed serving step, 24 per (context, mode) cell and 96 per model, and replay
 each with its own tensors. Contexts are 32-64K and 128-256K; modes are two-mode (prefill chunk + decode rows) and
 four-mode (prefill chunk + verify rows). Qwen2.5-7B runs on one H200; Llama-3.3-70B and GLM-4.5-Air run at TP4 on H20,
@@ -1164,10 +1156,6 @@ Table 10: role-split serving build, Qwen2.5-7B, H200, earlier captures.
 | 128-256K, 2-mode | 1.57x [1.24-2.64] | 0.99x | 0.98x |
 | 128-256K, 4-mode | 1.37x [1.16-1.89] | 0.99x | 0.99x |
 
-**Bar status.** Judged, and not met by the kernel alone: against the strongest baseline (naive FA3 + FA2) the
-dispatcher is 2-9% faster across the three models. The 30% bar has to be met at the serving level, where the
-schedule acts; section 6.3 reports it.
-
 **Figures.**
 
 Figure 13: time-weighted speedup per (model, context, mode) with bootstrap 95% CI, against sglang's FA3 call and naive FA3 + FA2. Qwen2.5-7B (H200, four cells) and Llama-3.3-70B / GLM-4.5-Air at 32-64K (H20) measured; the
@@ -1184,9 +1172,6 @@ showing FA2 running beside FA3's tail under PDL [pending].
 **Claim.** The four-mode step under per-tenant deadline order, with demotion of missed prefills and on the C1 kernel,
 protects both tenants on one node. The kernel speeds up the step; deadline order lets chat through an agent burst;
 demotion keeps already-late agents from making chat late.
-
-**Bar.** At least 30% better TTFT and ITL (or their SLO attainment) and at least 10% higher throughput than stock
-sglang (mixed chunk on FA3, with stock MTP for four-mode), per model.
 
 **Setup.** Qwen2.5-7B on one H200; Llama-3.3-70B and GLM-4.5-Air on one 4-GPU H20 pod at TP4. Baselines: sglang
 mixed chunk and prefill-prioritized on FA3, with and without stock EAGLE3 MTP, and PD-Multiplexing. The kernel is the unified
@@ -1234,7 +1219,7 @@ also rises: +8.1% four-mode, +10.6% two-mode.
 
 At 32-64K, agent goodput is level in four-mode (agent TPOT -44%). In two-mode it falls 13%: deadline order gives chat
 priority over agents that stock already served within their SLO. Raw agent throughput there is -3.6% (four-mode) and
-+2.7% (two-mode), so the 10% throughput bar is met on one node only for 128-256K two-mode.
++2.7% (two-mode).
 
 Table 11: Qwen2.5-7B, one H200, final configuration, two repeats (16 / 30 agent requests per arm at 128-256K / 32-64K).
 
@@ -1314,13 +1299,6 @@ sync-free fix is [pending]. A rule that merges a prefill into the verify step on
 keeps short-prompt traffic on stock steps, and costs nothing on the mixed agent workload (GLM-4.5-Air: +27-34% agent
 throughput, chat attainment 81-82% vs 77-78%).
 
-**Bar status.** Throughput: the 10% bar is met for GLM-4.5-Air (+27-28% four-mode, +15-17% two-mode with the final
-configuration), at an overloaded point. For Qwen2.5-7B it is met at 128-256K two-mode (+10.6%) and missed elsewhere (+8.1% four-mode
-at 128-256K, -3.6..+2.7% at 32-64K). It is narrowly missed for
-Llama-3.3-70B (+8.9% agent / +9.9% chat four-mode without the chunk cap; +2-3% with it). Latency: chat TTFT improves by more than 30% for every model; agent TPOT improves by more
-than 30% except for Qwen2.5-7B two-mode (-16.6%) and GLM-4.5-Air two-mode (-17..-28%). Rate sweeps and Pareto curves are
-[pending].
-
 **Figures.**
 
 Figure 17: per-tenant TTFT and ITL SLO attainment vs request rate, ours vs stock mixed chunk, prefill-prioritized
@@ -1336,9 +1314,6 @@ Figure 19: TTFT and ITL / TPOT distributions per tenant (mean, p50, p90, p99), o
 **Claim.** Symmetric colocated nodes with SLO-checked cache-first routing, sglang's Mooncake KV pool and the single-node
 workers carry more load at SLO than PD disaggregation at its best P:D ratio, and than conditional disaggregation.
 Colocation keeps the agent prefix where it was computed; disaggregation re-ships it every round.
-
-**Bar.** At least 30% better TTFT / ITL attainment and at least 10% higher throughput (SLO goodput) than the best
-baseline.
 
 **Setup.** 16 and 32 H20s. Qwen2.5-7B runs as TP1 workers; Llama-3.3-70B and GLM-4.5-Air as TP4 replicas. The
 workload is fan-out agents on shared 64K-token prefixes (32K on 8 tasks for Llama-3.3-70B, whose KV takes 320 KB per
@@ -1369,8 +1344,8 @@ Table 13: our stack against sglang prefill-prioritized, Qwen2.5-7B, 16 H20s, loa
 Ours here is the serving tree with the unified dispatcher, the four-mode step and our router, admitting in arrival
 order with sglang's default chunk. It improves every SLO metric for chat and the TPOT tail for agents; agent
 attainment and goodput are inside the run-to-run noise floor (about 5 points and 4%), and the chat inter-token tail is
-worse. Against the bar this is partial: chat TPOT and TTFT clear 30%, agent TPOT reaches 19.5%, and combined SLO
-goodput rises 5.2%, short of 10%.
+worse. The gains are therefore concentrated on chat latency: chat mean TPOT falls 29-32% and the chat TTFT tail
+79%, agent mean TPOT falls 19.5%, and combined SLO goodput rises 5.2%.
 
 **Result: which scheduler layer earns the gain.** Table 13's configuration is the first rung of a ladder that adds
 our scheduling layers one at a time on the same cluster, workload and load factor, so that the gain over sglang can be
@@ -1532,17 +1507,6 @@ issued within the horizon. In the surge row, chat attainment is for the base str
 disaggregation loses 55% throughput and 28.5 points of cached fraction, ours 10.6% and 3.1 points, in earlier
 settings; a rerun with the full stack is [pending].
 
-**Bar status.** Against stock PD at its best split the bar is met at every measured load. Against conditional
-disaggregation, the goodput side is met at every load in both repeats (+12..+37%); chat attainment is level through 96 programs and
-ahead only at 128 programs. On the superposed TraceLab replay (Table 18), the bar is met against conditional
-disaggregation on both tenants at alpha 3, with and without the chat surge: chat attainment +28% and +57% relative
-(+14 and +21 points), agent SLO goodput +57% and +90%. At alpha 6, only the goodput side is met (+24%). For
-Llama-3.3-70B (two repeats):
-- against stock PD's best split, ours is ahead on chat attainment at every load (+3..+23 points), with agent goodput
-  level (-2..+7%); the chat side of the bar is met from 12 programs up;
-- against conditional disaggregation, ours is ahead on agent goodput (+4..+94%) at a cost of 0.3-7.1 points of chat
-  attainment.
-
 [pending]: 32 GPUs with the full stack, and GLM-4.5-Air.
 
 **Figures.**
@@ -1642,9 +1606,6 @@ Qwen2.5-7B on 16 H20s [pending].
 **Claim.** The ablations isolate which parts of C1-C3 carry the gains: for the kernel, the one plan and in-launch
 merge, PDL overlap, longest-first order and the executor choice; for the schedule, demotion of missed prefills; for
 the cluster, the routing policy.
-
-**Bar.** Each mandatory part of C1 should cost measurably when removed, and each optional mechanism is kept only if it
-beats the default.
 
 **Setup.** Kernel ablations run on the 96 trace-sampled H200 captures of section 6.2 (Qwen2.5-7B), or on their FA2 rows
 alone; each value is the time-weighted speedup for 32-64K two-mode / 32-64K four-mode / 128-256K two-mode / 128-256K
@@ -1832,7 +1793,7 @@ agent goodput than conditional disaggregation.
 
 **Limitations.**
 
-- Single-node throughput: the 10% bar is met only for GLM-4.5-Air and for Qwen2.5-7B at 128-256K two-mode. At
+- Single-node throughput rises most for GLM-4.5-Air and for Qwen2.5-7B at 128-256K two-mode. At
   32-64K, deadline order gives chat priority over agents that stock already served within their SLO (agent SLO
   goodput -13% in two-mode).
 - 128-256K agents have no single-GPU operating point at a 10 s TTFT SLO: cold 128-256K turns cannot prefill within

@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.87.0 — Remove the internal publishability target from the paper (2026-10-28)
+- Dropped all seven "**Bar.**" / "**Bar status.**" paragraphs and every remaining reference to the 30% latency /
+  10% throughput target. That target is our own decision rule for whether to keep pursuing a direction; it is not
+  a claim about the system, and a reader has no use for it.
+- Results that were framed against it are restated as what they are: e.g. "chat mean TPOT falls 29-32% and the
+  chat TTFT tail 79%, agent mean TPOT 19.5%, combined SLO goodput +5.2%" instead of "the bar is partially met".
+- The one surviving use of "bar" is Figure 20's error bars, which is a different thing and was left alone.
+
 ## v2.86.0 — alpha-6 ladder complete; pdmux failed and is recorded as failed (2026-10-28)
 - `MN_OVERLOAD_DONE` with 4 of 5 arms scored. pdmux launched but produced `SCORE (none)` and `accept=NONE`:
   no records, no acceptance lines, nothing served. Recorded as a failed arm rather than dropped, since it is one of

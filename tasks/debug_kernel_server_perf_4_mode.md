@@ -305,6 +305,11 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     absolute misses are large relative ones). The chunk rule acts only on chunk-carrying steps, where the error is
     4.7-5.0%. Paper 5.2.2 rewritten to state the per-type split and why the merged figure is the relevant one; the
     separate 45% launch-to-launch-gap claim kept. Items (2)-(3) below (MLP bisection comparison) remain optional.
+    - **Do NOT use `tasks/perf_model/model.pt` for the MLP comparison.** It was trained by
+      `train_perf_model_mlp.py` on an offline PROFILER sweep of Qwen3-8B with five features (n_p, r_p, r_d,
+      decode_bs, overlap) and no acceptance input. The paper's "MLP with acceptance, 3.4-4.0% on merged steps" was
+      fit by `fit_4mode_step.py` on our Qwen2.5-7B serving STEPTRACE and was not saved. The comparison needs that
+      model refit (CPU only, from `/tmp/pfix/st3/w*.log`), then `chunk_predictor.py` run with it via bisection.
   - [x] (resolved above) **CONSISTENCY CHECK NEEDED before the paper's chunk claims are final (2026-10-28).** paper_outline.md says
     "a linear model does not suffice: lin4mode reaches only 25% in-sample on GPU time", while
     `chunk_predictor.py` uses that SAME lin4mode model (`step_qwen_h20_a6_gpu_20261027.json`) and reports 4.7% MAPE.

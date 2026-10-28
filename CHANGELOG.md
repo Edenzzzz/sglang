@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.68.0 — pp's low acceptance is NOT the rope defect, and is now unexplained (2026-10-28)
+- Checked the pp arm's worker log: the YaRN override carries `rope_theta 1000000`, so the arm runs the correct
+  Qwen2.5 and the 1.795 acceptance is not the 2026-10-28 defect.
+- That makes the 9.4% acceptance gap against our 1.982 unexplained, which is worse for the claim than a known
+  cause: a schedule should not move acceptance, so the candidates are a configuration difference between stock MTP
+  and our four-mode step, a different request mix (pp issued 5984 agent rounds against our 6373), or a genuine
+  effect of the merged step -- only the last would be ours.
+- The +9.3% agent goodput margin stays unusable until one is established, since the acceptance deficit alone costs
+  pp ~9% more forwards per output token. The acceptance-independent results stand: chat TTFT p90 -62%, and the
+  inter-token tails we lose (chat p99 +99%, agent +79%).
+- Next: diff the two arms' resolved speculative configuration from their worker logs before re-running anything.
+
 ## v2.67.0 — alpha 6 vs sglang prefill-prioritized: we win the means, lose the tails, bar not met (2026-10-28)
 - pp at alpha 6 (accept 1.795): chat 57.8% / 685 tok/s, TTFT p90 9.02 s, TPOT p90 94.9 ms, ITL p99 502.5 ms; agent
   79.9% / 2012 tok/s, TPOT p50/p90 45.6/104.2, ITL p99 514.2 ms.

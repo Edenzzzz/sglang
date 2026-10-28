@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.04.0 — Draft-share measurement unresolved after three attempts; de-prioritised (2026-10-28)
+- The CUDA-event wrapper installs ("DRAFT_SHARE instrumentation active") and verify is defined on EAGLEWorkerV2 in
+  the tree being run, but zero reports appear even at a threshold of 20 verify calls, so the instrumented method is
+  not on the executed path for that arm; the native arm also crashed behind the driver's grep filter.
+- Left OPEN and NOT claimed. Diagnostics recorded for whoever resumes: log type(self.spec_worker) at startup instead
+  of assuming EAGLEWorkerV2 (frozen_kv_mtp_worker_v2.py and multi_layer_eagle_worker_v2.py define their own
+  draft_forward), and widen the driver's output filter so crashes are visible.
+- De-prioritised because the number is only a CEILING for an unbuilt idea, and only 0.2% of decode wall time lies
+  outside the traced forward, so a large payoff is already unlikely. H200 freed for critical-path work.
+
 ## v2.03.0 — Client/server tree separation; smoke arm before sweeps (2026-10-28)
 - Third deployment blocker: with upstream's benchmark/ copied into our tree, the client died on
   ModuleNotFoundError: No module named 'sglang.srt.utils.network' -- upstream's benchmark client imports modules our

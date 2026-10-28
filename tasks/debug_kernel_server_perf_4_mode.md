@@ -351,7 +351,20 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
         has no effect -- the patch must go into `$SRC/python/sglang/srt`. The first attempt produced zero
         `DRAFT_SHARE` lines for exactly this reason. Patch `$SRC` and check for
         "DRAFT_SHARE instrumentation active" in `server.log` before trusting a run.
-      - Result: [pending, run in flight]. Until the number exists this item stays open and must not be claimed.
+      - **Result after three attempts: UNRESOLVED, and de-prioritised (2026-10-28).** The wrapper installs (the
+        server logs "DRAFT_SHARE instrumentation active") and `verify` is defined on `EAGLEWorkerV2` in the tree
+        being run (`eagle_worker_v2.py:2369`, `speculative_algorithm='EAGLE3'`), yet **zero reports appear even with
+        the threshold at 20 verify calls** -- so the instrumented method is not on the executed path for this arm.
+        The `native` arm additionally crashed with a traceback the driver's grep filter swallowed.
+        - Diagnostics for whoever resumes it: print the resolved class of the live spec worker at startup
+          (`type(self.spec_worker)`) rather than assuming `EAGLEWorkerV2`; candidates in this tree are
+          `frozen_kv_mtp_worker_v2.py` and `multi_layer_eagle_worker_v2.py`, which define their own
+          `draft_forward`. Widen the driver's output filter before re-running, or the crash stays invisible.
+        - **Why it is de-prioritised rather than pursued:** this number is only a CEILING for an idea that would
+          then still have to be built, and the surrounding evidence already makes a large payoff unlikely -- only
+          0.2% of decode wall time lies outside the traced forward, so there is no host-side slack, and the draft
+          forwards are inside the same `gpu=` window as the verify. The H200 has been freed for work on the
+          critical path. The item stays OPEN and is NOT claimed.
   - [x] **Llama-3.3-70B kernel ladder on the H200 (2026-10-28), completing the three-model set.**
     `unified/a6_ladder_model_h200_20261028.sh /opt/tiger/w/trace_sampled_llama70b_h20_20261025 llama70b`, log
     `/opt/tiger/w/ladder_llama.log`; 38 rank-0 captures replayed from the H20, FP32 worst error 0.0059, 0 failures.

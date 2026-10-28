@@ -597,12 +597,21 @@ A persistent FA2 executor, cluster-scheduled reduction over distributed shared m
 multicast and intra-CTA row hosting were all built and measured; none beats the default, and section 7 reports each
 with its numbers.
 
-**Baselines for this design.** The baseline is naive FA3 + FA2: stock FA3 on the prefill rows and stock flashinfer
-FA2 on the decode and verify rows, two kernels with two plans, each splitting KV and merging its own way. Stock FA2
-picks one query tile for the whole launch from its rows' average packed length (16, 64 or 128 rows), so it either
-pads one-token decode rows into 64-row tiles or runs 4-token verify rows on 16-row tiles. C1's
-mandatory parts are the one plan and the split-KV reduction of FA2 and FA3 partials in the FA2 launch with no merge
-launch.
+**Baseline for this design.** Naive FA3 + FA2, which is what any implementation gets for free once it decides to
+split the roles:
+
+- **Two kernels, two plans.** Stock FA3 runs the prefill rows; stock flashinfer FA2 runs the decode and verify
+  rows. Each splits KV its own way and merges its own partials, in its own launch.
+- **One query tile for the whole FA2 launch.** Stock FA2 picks it from its rows' average packed length -- 16, 64 or
+  128 rows -- so it either pads one-token decode rows into 64-row tiles or runs 4-token verify rows on 16-row
+  tiles. It cannot give two rows in one launch different tiles.
+- **A separate merge.** Neither launch can reduce the other's partials, so FA3's split-KV combine and FA2's merge
+  are distinct passes over the same step's output.
+
+Against that baseline, the two parts of C1 that are mandatory rather than optional are:
+
+- **one plan** for the whole step, which is what lets each row take a tile of its own size; and
+- **one reduction**, of both executors' split-KV partials inside the FA2 launch, so no merge launch runs at all.
 
 **Correctness and plan cost.** The planner is exact on 44 captured geometries, with plan time 48-78 us mean. On the 96
 captures, the previous build's FP32 worst relative error was 0.0067. Plan time on serving shapes of all three models

@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.07.0 — 5.1's baseline paragraph becomes bullets (2026-10-28)
+- The "Baselines for this design" blob packed three separable facts into one run of prose. Split into bullets:
+  two kernels with two plans each merging its own partials; one query tile for the whole FA2 launch, chosen from
+  the rows' average packed length, so it cannot give two rows in one launch different tiles; and a separate merge
+  pass because neither launch can reduce the other's partials.
+- Followed by the two parts of C1 that are mandatory rather than optional, also as bullets: one plan for the step,
+  and one reduction of both executors' partials inside the FA2 launch.
+
 ## v3.06.0 — List each stage's baselines at the head of its section (2026-10-28)
 - 6.2: naive FA3 + stock FA2 (serial and two-stream, the fair baseline our 4-9% claim is measured against),
   sglang's single varlen FA3 call, POD-Attention's one-FA2-kernel structure, and our earlier two-plan build.

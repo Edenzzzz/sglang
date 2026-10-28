@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.20.0 — Item 18's causal chain stated precisely: the register wall is why q64 and not q128 (2026-10-28)
+- The point, in one line: q128 cannot share a CTA with q16 because its TWO consumer warpgroups at ~168 registers
+  each already consume the register budget (the measured 1,436 B spill, 2-6x slowdown); q64 uses ONE consumer
+  warpgroup and leaves room for a register-light q16 warpgroup (16 accumulator regs/thread at head_dim 128). So
+  q64 x q16 is the only intra-CTA overlap Hopper permits.
+- It is immune to the SM-saturation argument because the CTA is already resident and the warpgroup already
+  allocated -- unlike two-stream concurrency, which needs spare SMs and finds 4.5% at best, harmful at chunk 2048.
+- Paper 5.1 now carries the register arithmetic as the argument rather than asserting the mechanism; the task doc
+  carries the one-sentence form at the head of the item.
+
 ## v2.19.0 — TWO RETRACTIONS on item 18, and its reach is ~95%, not 1.15% (2026-10-28)
 - RETRACTED: the two-stream sweep does NOT test item 18. Item 18 is INTRA-CTA (the FA3 CTA is already resident, its
   second warpgroup already allocated, so rows ride inside it and SM saturation is irrelevant). The sweep also varied

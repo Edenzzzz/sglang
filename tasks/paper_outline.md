@@ -401,9 +401,21 @@ across CTAs. That design depends on both roles issuing the same class of tensor-
    pull loop, a just-in-time ready queue, cluster-level reduction through distributed shared memory, KV multicast,
    and KV-position ordering -- all land at or below parity.
 
-The one intra-SM overlap that Hopper does permit is narrow and specific: FA3 at a 64-row query tile occupies a
-single consumer warpgroup instead of two, which frees a warpgroup that can issue `mma.sync` for 16-row rows in the
-same CTA. Different warpgroups may issue different instruction classes concurrently, so this is not blocked by (2).
+The one overlap this architecture still permits follows directly from the register wall in (3), and it is specific:
+**a 128-row FA3 tile cannot share a CTA with 16-row row work, but a 64-row tile can.** The arithmetic is the whole
+argument. FA3 at a 128-row tile runs two consumer warpgroups at roughly 168 registers per thread, which is the SM's
+entire register budget -- adding a third warpgroup to issue `mma.sync` is what made our co-compiled kernel spill
+1 436 bytes per tile class and run 2 to 6 times slower. At a 64-row tile FA3 runs ONE consumer warpgroup, leaving
+roughly a third of the register file free, and a 16-row tile is register-light: at head dimension 128 it needs only
+sixteen accumulator registers per thread. The freed warpgroup therefore fits without spilling. Different warpgroups
+may issue different instruction classes concurrently, so (2) does not block it either: the restriction is on shapes
+within a warpgroup, not across them.
+
+This is why the overlap is **intra-CTA** rather than inter-kernel, and why it is immune to (1). The CTA is already
+resident and its second warpgroup already allocated; the rows ride inside the chunk's own CTAs instead of competing
+for streaming multiprocessors. Nothing about spare SM capacity is required, which is precisely what two-stream
+concurrency needs and cannot find: that recovers 4.5% of the step at best and is marginally harmful at a
+2 048-token chunk.
 Its reach, by contrast, is large. The tile is a kernel-internal choice rather than a property of the chunk: a
 2 048-token chunk is thirty-two 64-row tiles or sixteen 128-row tiles, so running the chunk at 64 rows frees one
 warpgroup per tile. Planning that offload over the 10 185 four-mode steps of the replay, **94.8%** of all row items

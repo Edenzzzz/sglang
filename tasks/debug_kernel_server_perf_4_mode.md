@@ -282,6 +282,12 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       merged steps; option 1 only removes a search we can already afford. Either way it is a learned predictor over
       our own fused step, not a borrowed formula.
     - Labels come from traces we already hold, so training needs no new GPU time.
+  - **ITEM 18 IN ONE SENTENCE (user, 2026-10-28): q128 cannot overlap with q16 inside a CTA because the two
+    consumer warpgroups at ~168 registers each already take the whole register budget -- that is the measured
+    1,436 B spill -- while q64 uses ONE consumer warpgroup and leaves room for a register-light q16 warpgroup
+    (16 accumulator registers per thread at head_dim 128). So q64 x q16 is the ONLY intra-CTA overlap Hopper
+    permits, it is immune to SM saturation because the CTA is already resident, and its reach is ~95% of row items
+    because the whole chunk can be tiled at q64. The decisive test is the compile: does q64 + q16 clear the spill?**
   - [x] **CROSS-ROLE BACKFILL (`tma_store_wait`) IS BUILT, MEASURED AND SHIPPED -- see A5.6 for the primary
     record. Correction (2026-10-28): an earlier entry in this section called it "untested" and bounded it
     analytically; that was wrong, written without re-reading A5.6.** What is actually in the shipped A6 kernel:

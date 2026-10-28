@@ -8,12 +8,12 @@ set -u
 ulimit -n $(ulimit -Hn)  # 1024 soft limit: a burst of concurrent requests runs the client out of sockets
 OUT=$1; RPORT=$2
 W=/dev/shm/w
-# The client needs OUR bench (it alone knows --dataset-name tracelab-claude and --cache-report) on a tree whose
-# srt it matches. Our repo ships no sglang/benchmark/ package, so provisioning installs
-# drivers/serving/bench_overlay_20261026/serving.py as sglang/benchmark/serving.py in ourpy/python and python_slo.
-# Upstream's own benchmark/ is NOT usable here: it lacks the tracelab dataset, and grafting it onto our srt breaks
-# on modules our tree predates (sglang.srt.utils.network). BENCH_PY overrides the default for one-off runs.
-export PYTHONPATH=${BENCH_PY:-$W/python}:$W/fi
+# The client is our bench overlay INSTALLED INTO UPSTREAM's tree, per drivers/serving/bench_overlay_20261026/README:
+# serving.py, session_replay.py and session_concurrency.py into $W/up/python/sglang/benchmark/, tracelab.py into its
+# datasets/. The overlay is written against upstream's srt (it imports sglang.srt.utils.network, which our serving
+# tree predates), so it must run on up/python -- grafting it onto our tree fails, and upstream's stock benchmark/
+# lacks --dataset-name tracelab-claude. Servers launch separately via SGL_PY, so no arm's serving code changes.
+export PYTHONPATH=${BENCH_PY:-$W/up/python}:$W/fi
 mkdir -p $OUT; rm -rf $OUT/barrier
 export BENCH_BARRIER_DIR=$OUT/barrier
 S=${SESSIONS:-64}; T=${TURNS:-6}

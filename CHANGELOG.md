@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.28.0 — Bench client installed the documented way; servers now come up clean (2026-10-28)
+- smoke4: 16 workers healthy in 94 s with no retries, so the GPU-preflight fix holds and the server path is clean.
+  The client then failed on sglang.benchmark.session_replay: the overlay's serving.py imports sibling modules.
+- drivers/serving/bench_overlay_20261026/README says to deploy the overlay into UPSTREAM's tree: serving.py,
+  session_replay.py, session_concurrency.py into $W/up/python/sglang/benchmark/ and tracelab.py into its datasets/.
+  It is written against upstream's srt (imports sglang.srt.utils.network), so grafting it onto our tree cannot work.
+  Installed that way on all four pods; import verified on each, with --dataset-name tracelab-claude present.
+- mn_bench.sh BENCH_PY default back to $W/up/python, with a comment stating why. Servers still launch via SGL_PY.
+- smoke5 + sweep queued behind gate4 rather than killing smoke4: killing a driver mid-run is what orphaned 16 servers.
+
 ## v2.27.0 — Cluster blocker resolved: my own orphaned servers held every GPU (2026-10-28)
 - CORRECTION: the "launch-path regression" diagnosis was wrong. worker_r0_g0.log was missing only because each
   failed retry is renamed to bindfailN.log; all five smoke3 attempts died of CUDA OOM ("Process 4061538 has

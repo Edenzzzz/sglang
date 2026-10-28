@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.04.0 — Queue the stepcap sweep: fill the interior of the frontier we already bracket (2026-10-28)
+- `tasks/pd_colocation/mn_capsweep_16g_20261028.sh`: stepcap at 1000 / 1500 / 2000 / 3000 ms, alpha 6, chained
+  last. The measured arm says the mechanism works (-51% chat tail TPOT) and the 600 ms value starves prefill
+  (TTFT p90 41.65 s, attainment 23.6% against the constant's 60.5%), so this sweeps the one number rather than
+  redesigning the budget again.
+- Read as a Pareto curve of chat TPOT p90 against chat attainment, which doubles as C4's throughput-latency
+  frontier. The script records the falsifiable reading: the rule earns its place only if some value beats the
+  constant on tail TPOT without giving up attainment; if none does, the finding is that a per-step latency bound
+  cannot buy tail TPOT here without starving prefill, and the next lever is capping by the tightest RESIDENT
+  tenant's target rather than a global constant.
+
 ## v3.03.0 — Queue the pdmux retry at both loads with MEM_FRAC lowered (2026-10-28)
 - `tasks/pd_colocation/mn_pdmux_retry_16g_20261028.sh`: PD multiplexing at alpha 3 and 6 with MEM_FRAC 0.70 -> 0.55.
   pdmux captures CUDA graphs per SM group, so graph memory multiplies and the 0.70 carried over from the 8-GPU

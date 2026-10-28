@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.29.0 — The abstract understated the conditional-disaggregation margin (2026-10-28)
+- It quoted +12-37% agent SLO goodput, which is the FAN-OUT figure, while the realistic replay measures 2.75x at
+  40.7 points higher chat attainment. Fan-out gives every program of a task the same prefix, so the baseline's
+  local-append rule keeps the work local and it nearly matches us; that workload understates the comparison.
+- The abstract now leads with the replay number. The fan-out figures stay in 6.4, where the contrast between the
+  two workloads is the argument for why per-session history is what separates the designs.
+
 ## v3.28.0 — Consistency check after tonight's edits: one duplicate figure number fixed (2026-10-28)
 - Ran the renumbering tool in dry-run over both sequences after ~25 separate edits to the draft. Tables are clean
   (identity mapping 1-21, every reference resolves) and all seventeen numbered sections are present.

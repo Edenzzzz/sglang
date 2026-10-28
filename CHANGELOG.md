@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.02.0 — Second superset blocker: our tree lacks sglang/benchmark/ (2026-10-28)
+- Run r2 produced nothing for 40 minutes with healthy workers and a live router: every bench client died with
+  ModuleNotFoundError: No module named 'sglang.benchmark.serving'. Our pushed tree carries only the deprecation
+  shim (sglang/bench_serving.py); the repo has no python/sglang/benchmark/serving.py at all, so the stage-2 push
+  could never have included it. Upstream's up/python is the only copy on the pods.
+- Fixed by copying up/python/sglang/benchmark into ourpy/python/sglang and python_slo/sglang on all four pods
+  (verified, including --cache-report). Sweep relaunched as r3.
+- Lesson recorded: after re-provisioning, run ONE short arm end-to-end before queueing a sweep -- the driver log
+  showed nothing because the failure was inside bench_agent.log on the pod.
+
 ## v2.01.0 — Deferred KV commit closed; draft-share threshold lowered (2026-10-28)
 - Deferred KV commit for rejected draft tokens is CLOSED with no GPU time: sglang already compacts only the
   accepted slots after verify (fill_accepted_out_cache_loc, eagle_info_v2.py:405), and the draft tokens' KV writes

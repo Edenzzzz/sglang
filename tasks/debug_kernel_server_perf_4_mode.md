@@ -17,8 +17,19 @@
      (`MIXED_CHUNK=0`), **mixed chunk** (`MIXED_CHUNK=1`), and **PD multiplexing** (`PDMUX=1`, which has no overlap
      scheduling, so its throughput is expected about 10% lower).
    - Driver: `pd_colocation/mn_superset_16g_20261028.sh`, alpha 3 and alpha 6, acceptance logged per arm.
-     Run r1 produced NOTHING and was discarded (override-JSON bug below). Run r2 relaunched 2026-10-28 08:4x, log
-     `/tmp/h20/mn_superset_16g_r2.log`.
+     Runs r1 and r2 both produced NOTHING and were discarded (two separate bugs, below). Run r3 relaunched
+     2026-10-28 09:2x, log `/tmp/h20/mn_superset_16g_r3.log`.
+   - **[!] Second blocker (r2): our pushed tree is MISSING `sglang/benchmark/`.** The benchmark client died with
+     `ModuleNotFoundError: No module named 'sglang.benchmark.serving'` on every arm, including the baseline, because
+     `mn_bench.sh` puts our tree on `PYTHONPATH` and our tree carries only the deprecation shim
+     (`sglang/bench_serving.py`), not the implementation. The repo itself does not contain
+     `python/sglang/benchmark/serving.py`, so the stage-2 push could never have included it -- upstream's `up/python`
+     is the only copy on the pods.
+     - Fixed by copying `up/python/sglang/benchmark` into both `ourpy/python/sglang` and `python_slo/sglang` on all
+       four pods (verified present, and `--cache-report` present in it).
+     - **Lesson: after re-provisioning, run ONE short arm end-to-end before queueing a sweep.** r2 sat for 40
+       minutes with healthy workers and a live router while every bench client was dying, and the driver's log
+       showed nothing because the failure was inside `bench_agent.log` on the pod.
    - **[!] Bug I introduced and fixed: the `ROPE_THETA` edit produced INVALID override JSON.** The form
      `'..."type":"yarn"'${ROPE_THETA:+,"rope_theta":$ROPE_THETA}'}}'` looks right, but bash's quote removal strips
      the quotes inside `${VAR:+...}`, yielding `,rope_theta:1000000` with an unquoted key. Every worker died with

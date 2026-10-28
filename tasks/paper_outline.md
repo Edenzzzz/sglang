@@ -379,18 +379,39 @@ Table 4 reports these arms. The conclusion is architectural and the opposite of 
 Hopper and later the gain comes from giving each role the executor its tile shape deserves, not from fusing them --
 and because CTAs occupy more of the SM with each generation, designs that need spare SM capacity should age badly.
 
-The one exception follows from the register wall: **a 128-row FA3 tile cannot share a CTA with 16-row row work, but
-a 64-row tile can.** At 128 rows FA3 runs two consumer warpgroups and the register file is spent; at 64 rows it runs
-one, and a 16-row tile needs only sixteen accumulator registers per thread. The freed warpgroup fits, and because
-the CTA is already resident this is immune to the SM-saturation argument above. Tiling a chunk at 64 rows instead of
-128 frees one warpgroup per tile, which over the four-mode steps of our replay could host **94.8%** of all row
-items, with the rows fitting entirely in 91.1% of steps (median 31 freed warpgroups against 13 rows). Capacity is
-therefore not the limit. The limit is that the rows are cheap: if every row tile rode completely free, the step
-would shrink by **1.1 to 2.3% at a 128K cached prefix** (Qwen2.5-7B 1.1-1.3%, GLM-4.5-Air 1.6-1.8%, Llama-3.3-70B
-2.3%), rising to 4.5-10.2% at 32K where the chunk is cheaper. That is an upper bound with zero overhead assumed, and
-it is below what programmatic dependent launch already recovers. We report it because it completes the argument:
-the one overlap this architecture still permits is worth one to two per cent on long-context agentic serving, which
-is why we do not pursue fusion further.
+We also tested the one apparent exception to that conclusion, and it closes the same way. A warpgroup is the unit
+that must agree on an instruction shape, so if a chunk's CTA had a warpgroup with nothing to do, that warpgroup
+could issue `mma.sync` for 16-row decode and verify work inside a CTA the chunk has already made resident -- which
+would be immune to the SM-saturation argument above, since it needs no spare SM capacity. The attraction is that
+such a warpgroup appears to be free: a 128-row FA3 tile runs two consumer warpgroups and spends the whole register
+file, while a 64-row tile runs one. **Three measurements say the warpgroup is not free, and we therefore do not
+claim this mechanism.**
+
+First, a smaller tile does not free a warpgroup; it shrinks the CTA. Both FA3 implementations we build against
+derive the consumer count from the tile, so 128 rows give one producer warpgroup and two consumers (384 threads)
+and 64 rows give one producer and one consumer (256 threads). Nothing is left idle inside a 384-thread CTA, so the
+warpgroup has to be added back by hand, as extra width the kernel asks for. Second, a smaller tile does not relieve
+the per-thread register pressure that the design rests on, because each consumer warpgroup owns 64 query rows at
+either tile; the arithmetic that makes 64 rows look cheaper describes the CTA's total register demand, not what one
+thread needs. Third, taking the 64-row tile actively costs the chunk. Compiling the kernel at 64 rows makes the
+compiler allocate 144 registers per thread rather than 168 and warn that `wgmma` instructions are serialized for
+want of registers -- in every build, including the control with no row work present at all -- whereas the 128-row
+build is spill-free and carries no such warning.
+
+What remains is the register cost of hosting the guest, and the compiler charges it whichever tile we choose.
+The chunk kernel compiled alone spills nothing; adding only the 16-row row mainloop to the same kernel takes it to
+7.5 KB of spill stores, and adding all three row tile classes to 33 KB. This is the same effect as Table 2's: one
+register budget per kernel, shared across code paths that never run together. The 16-row tile is register-light in
+its accumulator and not in its effect on that budget.
+
+Even granting a perfect implementation, the ceiling is small, because the rows are cheap rather than
+capacity-starved. Tiling a chunk at 64 rows gives a median of 31 tiles against a median of 13 rows, so capacity
+exceeds demand twofold and 94.8% of all row items in our replay could in principle be hosted. But if every row tile
+rode completely free, the step would shrink by only **1.1 to 2.3% at a 128K cached prefix** (Qwen2.5-7B 1.1-1.3%,
+GLM-4.5-Air 1.6-1.8%, Llama-3.3-70B 2.3%), rising to 4.5-10.2% at 32K where the chunk is cheaper -- an upper bound
+with zero overhead assumed, and below what programmatic dependent launch already recovers. We report the attempt
+because it completes the argument: the last intra-SM overlap the architecture seems to permit turns out to cost the
+chunk more than the rows are worth, which is why we do not pursue fusion further.
 
 **Table 4: attention time of every design we could run, relative to ours, across four workloads.** Each column is
 a workload cell from the trace-sampled captures (24 captures each, time-weighted, every arm checked against an FP32
@@ -537,9 +558,13 @@ through distributed shared memory (DSMEM, the shared memory of a thread-block cl
 
 **What is fused, and why there.** The fusion is in the plan and the reduction, not in the instruction stream. Prefill
 rows want Hopper's warpgroup MMA (wgmma) on multiples of 64 rows behind a warp-specialized producer; decode and verify
-rows want small mma.sync tiles over long KV. Hopper (wgmma) and Blackwell (tcgen05) cannot overlap MMA instructions of
-different shapes inside one kernel. Single-kernel prefill/decode overlap, as in POD-Attention, is therefore FA2-only,
-and our own co-compiled FA3 + FA2 kernel was 2.16x slower (below).
+rows want small mma.sync tiles over long KV. On Hopper (wgmma) and Blackwell (tcgen05) the MMA instruction is issued
+per warpgroup and fixes that warpgroup's shape, so one warpgroup cannot interleave the two. Different warpgroups of
+one CTA could in principle issue different shapes, and we measured that route rather than dismissing it: it fails
+because a chunk tile small enough to leave a warpgroup over shrinks the CTA instead of freeing a slot in it, and
+because the compiler gives one register budget per kernel, so the two mainloops spill against each other
+(section 5.1). Single-kernel prefill/decode overlap, as in POD-Attention, is therefore FA2-only in practice, and our
+own co-compiled FA3 + FA2 kernel was 2.16x slower (below).
 
 **Portability.** Because the fusion sits in the plan and the merge, the executors stay stock kernels behind a small
 interface: the prefill executor writes split-KV partials (output and LSE) where the plan says, and the small-tile
@@ -611,6 +636,24 @@ Table 2: registers and spill per build (H200).
 | fused kernel, FA2 outlined: FA3 / FA2 | | 64 B / 17 500 B |
 | FA2 at FA3's geometry (384 threads x 1 CTA) | 168 | 1 136 B |
 | FA2 at its own geometry (128 threads x 2 CTAs) | 255 | 0 B |
+
+Table 2b isolates the same effect for the intra-CTA hosting attempt of section 5.1, and adds the tile dimension. The
+builds differ from Table 2's in their chunk mainloop and flags, so the two tables are read within themselves and not
+across; what carries is the direction. Each row is one compilation of a single kernel containing the chunk role and
+whichever row tile classes are named, at the chunk's query tile width; spill is spill stores.
+
+| one kernel containing | 128-row chunk tile | 64-row chunk tile |
+|---|---|---|
+| the chunk role alone | 168 reg, 0 B | 144 reg, 1 560 B, `wgmma` serialized |
+| + the 16-row row mainloop (what hosting needs) | 168 reg, 7 528 B | 144 reg, 5 448 B, `wgmma` serialized |
+| + all three row tile classes (16, 64, 128) | 168 reg, 33 424 B | 144 reg, 19 840 B, `wgmma` serialized |
+
+Two readings matter. Down a column, the chunk role alone is spill-free at the 128-row tile and every byte of spill is
+the price of hosting a guest in the same register budget, not a cost of the chunk's own work. Across a row, the
+64-row tile lowers the spill but lowers the register allocation with it, and at that allocation the compiler reports
+that it can no longer keep the chunk's `wgmma` instructions asynchronous -- a warning absent from every 128-row
+build. Raising the compiler's register ceiling does not change the 64-row numbers, so the allocation is the
+compiler's judgement about the code, not a limit we can lift.
 
 The net effect: the fused kernel was 2.16x slower than FA2 alone on every input (155.9 vs 72.3 us, both numerically
 correct; 1.83x on a fixture with 16 823 KV tokens), while two launches of the same executors at their own layouts
@@ -1674,8 +1717,10 @@ cache, and use conditional disaggregation as our strongest baseline.
 prefill into chunks run beside decode. PD-Multiplexing (MuxWise) runs prefill and decode in separate SM groups with
 green contexts. POD-Attention fuses prefill and decode attention in a single FA2 kernel. That fusion is available
 only in FA2: its CTA-level interleaving of a large prefill tile with small decode tiles depends on both roles using
-Ampere-style mma.sync in one kernel body, and Hopper's wgmma and Blackwell's tcgen05 cannot overlap MMA instructions
-of different shapes inside one kernel (section 5.1). A POD-style design on Hopper or Blackwell therefore gives up
+Ampere-style mma.sync in one kernel body, whereas on Hopper and Blackwell the MMA instruction is issued per warpgroup
+and fixes its shape. We measured the one route that restriction leaves open -- letting a different warpgroup of the
+same CTA issue the small-tile instruction -- and it fails for reasons of CTA sizing and register allocation rather
+than of the instruction set (section 5.1). A POD-style design on Hopper or Blackwell therefore gives up
 FA3 / FA4 for the prefill tiles, which is where most of a long-context step's time is: on H20, a 2048-token chunk
 over a 128K prefix is about 0.73 s of attention FLOPs, essentially the whole step. Neither supports speculative
 decoding: POD-Attention's hybrid batch has one-token decode rows only, and sglang's multiplexing loop runs the whole
@@ -1772,7 +1817,11 @@ agent goodput than conditional disaggregation.
   (3.2) is "disagg + EDF" in `pd_colocation_vs_disagg.md`.
 - Measurement dates: register / spill table, H200, `-Xptxas -v` per named function, 2026-10-06; SM-sharing bound on
   TraceLab, 2026-10-17; persistent 48/32/16 runner spill and FA2-rows-alone merge comparison, 2026-10-24; DSMEM cluster
-  reduction, 2026-10-25.
+  reduction, 2026-10-25; intra-CTA hosting register table (Table 2b) and its 64-row-tile arms, H200, one
+  `nvcc -c` per cell with `-Xptxas -v`, 2026-10-28.
+- Table 2b's builds are compiled rather than run, and the compiler is driven directly rather than through PyTorch's
+  extension loader, which keys its cache on the extension name and reuses a shared object when only preprocessor
+  flags change. Register counts are compared only within one toolchain.
 - KV split policy "flashinfer's KV-length limit" is flashinfer's `kv_len_limit`.
 - The KV pool is Mooncake's L3 store with sglang's write-through-selective policy.
 - PD-Multiplexing is the `pdmux` baseline.

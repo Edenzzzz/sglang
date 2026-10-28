@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.25.0 — Session end state: cluster arms blocked on a launch-path regression (2026-10-28)
+- smoke3's workers never write worker_r0_g0.log: mn_node.sh exits before the launch redirect. smoke2 DID reach
+  "16 workers healthy after 482 s" and failed only at the bench client, so the server path can work and this is a
+  regression from an edit between the two runs (mn_bench.sh BENCH_PY, client-only and expected inert; or the
+  sglang/benchmark copy into ourpy/python and python_slo).
+- Next diagnostic recorded in the task doc: run mn_node.sh by hand on pod 0 with the smoke env and capture stderr
+  directly -- mn_run.py discards it, which is why three consecutive faults were invisible in the driver log.
+- Blocked behind it: the corrected arm set, the alpha 3 / alpha 6 sweep, and the re-measured
+  colocation-vs-disaggregation comparison. The kernel results do not depend on it and are complete.
+
 ## v2.24.0 — Kernel results presented as one normalized table with ours as a row (2026-10-28)
 - User: our method must be a ROW, not the reference frame, in POD Figure 1's convention, across several workloads.
   Tables 4 and 5 merged into ONE table: methods as rows (ours included at 1.00), four workload columns

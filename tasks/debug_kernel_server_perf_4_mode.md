@@ -43,6 +43,20 @@
        `SMOKE_FAIL` and points at the pod-side `bench_agent.log`. Log `/tmp/h20/smoke_then_sweep.log`. This
        removes the failure mode that cost r1, r2 and r3 -- a sweep running for 40 minutes against dead clients
        while the driver log looked healthy.
+   - **[ ] STILL BLOCKED (2026-10-28, end of session): the smoke arm's workers do not come up.** smoke3 reaches
+     the "ports" stage and then `worker_r0_g0.log` is never created, so `mn_node.sh` exits before the launch
+     redirect. smoke2 reached "16 workers healthy after 482 s" and then failed only at the bench client, so the
+     server side CAN work -- which makes this a launch-path regression introduced after smoke2, i.e. by one of the
+     edits between them: the `mn_bench.sh` BENCH_PY change (client only, should be inert for the launch) or the
+     `sglang/benchmark/` copy into `ourpy/python` and `python_slo` (could matter: the BASELINE arm launches from
+     `up/python`, but `python_slo` and `ourpy` were both modified).
+     - **Next diagnostic, in order:** (1) run `mn_node.sh` by hand on pod 0 with the smoke arm's env and capture
+       stderr directly, since `mn_run.py` discards it and that is why three faults in a row were invisible;
+       (2) check whether `cp .../benchmark` into `python_slo` broke that tree's import (the baseline arm does not
+       use it, but confirm); (3) diff the env between smoke2 (worked) and smoke3 (did not).
+     - The cluster arms -- the corrected arm set, the alpha 3 / alpha 6 sweep, and the re-measured
+       colocation-vs-disaggregation comparison -- are all blocked behind this. Nothing about the kernel results
+       depends on it.
    - **[!] Fifth and sixth faults, both mine, in the smoke runs themselves (2026-10-28):**
      1. **Both smoke attempts used `RUN_TAG=_smoke1`**, so they wrote into ONE directory
         (`coloc_sgl_mtps_hc_smoke1`) and their logs interleaved -- which made the diagnosis read as a contradiction

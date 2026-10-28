@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.57.0 — Queue the tail-bounded chunk arm at both loads (2026-10-28)
+- `tasks/pd_colocation/mn_tailchunk_16g_20261028.sh`: the mean-TPOT chunk rule with the inter-token tail target as
+  its second bound (`stepcap=600`, the chat p99 target, in place of 2000 ms), at alpha 3 and alpha 6, chained
+  after the overload decomposition. Only our arm runs; the L0 / L1 / pp / mc / pdmux references come from the
+  decomposition drivers on the same cluster and window set.
+- Also adds the H200 boot helper (`unified/h200_boot_20261028.sh`) that keeps all four GPUs loaded while the
+  re-forked trial provisions, since idleness is what got the previous trial reaped.
+
 ## v2.56.0 — Which budget the SLO chunk rule should use: two of the three forms are dead ends (2026-10-28)
 - `chunk_predictor.py` gains `--rule {step,life,amort,tail}` and `--out-len`, and replays the 10,185 recorded
   merged steps under each. `amort` (remaining slack over remaining output) is *identical* to the per-step form,

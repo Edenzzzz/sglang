@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.45.0 — PD re-measure queued; full evaluation pipeline now chained end to end (2026-10-28)
+- mn_pd_remeasure_16g_20261028.sh: stock PD disaggregation (disagg_p2, sglang PD router, upstream tree) and
+  conditional disaggregation (cond_p1, Dynamo defaults, our tree and router) at alpha 3 and 6. Re-measured because
+  every earlier disagg_p* number ran the upstream tree with the rope-base defect; ROPE_THETA now reaches it as a
+  top-level override field.
+- Pipeline now runs unattended in order: superset sweep r5 (ours, pp, mc, pdmux at alpha 3 and 6) -> qcap follow-up
+  (ours with the per-step cap) -> PD re-measure. Each stage starts only after the previous finishes, behind the
+  GPU-memory preflight. superset_report.py judges the superset claim and the bar from the logs.
+
 ## v2.44.0 — Per-step cap for the SLO-budgeted chunk (qcap / stepcap), built and queued (2026-10-28)
 - Fix for the defect the r5 ours arm exposed (unlimited banking spent ~6 s of slack in one 16,384-token step).
   apply_slo_budget_chunk_20261026.py gains ":qcap" -- bound one step's budget by the remaining TTFT slack of the

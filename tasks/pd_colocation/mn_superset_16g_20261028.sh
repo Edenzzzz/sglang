@@ -51,7 +51,7 @@ RA=$(grep -oE "ROUTER_ARGS=.*" $CAL 2>/dev/null | tail -1 | cut -d= -f2-)
 ROUTER_ARGS_ALL="${RA:-} --pool-kv-tokens $POOL_KV_TOKENS --prefetch-policy timeout"
 for A in 3 6; do
   point $A
-  T=_tl2_a${A}_superset_r1
+  T=_tl2_a${A}_superset_r2
   # --- baselines: sglang's own policies, sglang's own chunk policy, upstream tree
   (unset CHUNK SLO_CHUNK; MIXED_CHUNK=0 RUN_TAG=${T}_pp SGL_PY=/dev/shm/w/up/python KERNEL=lpt \
      python3 -u mn_run.py coloc_sgl_mtps_hc); report coloc_sgl_mtps_hc${T}_pp

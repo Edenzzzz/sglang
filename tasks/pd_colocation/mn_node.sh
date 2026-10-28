@@ -130,8 +130,15 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # rope_scaling dict and so drops rope_theta, falling back to 10000 while Qwen2.5 needs 1e6; that mis-configures
   # every upstream-tree baseline (measured 2026-10-28: draft acceptance 1.420 against 1.991). Our tree preserves it
   # in utils/hf_transformers/config.py, so setting it here makes both trees build the same RoPE.
-  [ "${YARN_FACTOR:-4.0}" != 0 ] && ARGS+=(--json-model-override-args \
-    '{"rope_scaling":{"factor":'${YARN_FACTOR:-4.0}',"original_max_position_embeddings":32768,"type":"yarn"'${ROPE_THETA:+,"rope_theta":$ROPE_THETA}'}}')
+  # Built in steps: quotes inside ${VAR:+...} are removed by bash's quote removal, which silently produced
+  # `,rope_theta:1000000` (unquoted key) and an invalid override JSON.
+  if [ "${YARN_FACTOR:-4.0}" != 0 ]; then
+    OVERRIDE='{"rope_scaling":{"factor":'${YARN_FACTOR:-4.0}',"original_max_position_embeddings":32768,"type":"yarn"'
+    [ -n "${ROPE_THETA:-}" ] && OVERRIDE="$OVERRIDE,\"rope_theta\":${ROPE_THETA}"
+    OVERRIDE="$OVERRIDE}}"
+    python3 -c "import json,sys; json.loads(sys.argv[1])" "$OVERRIDE" || { echo "BAD_OVERRIDE_JSON: $OVERRIDE" >&2; exit 1; }
+    ARGS+=(--json-model-override-args "$OVERRIDE")
+  fi
   # Shared L3 prefix cache (goal points 2 and 4): every colocated worker writes the prefixes it
   # computes through to a cluster-wide mooncake store (RDMA, host DRAM) and prefetches a request's
   # prefix from it on a local miss, so any node can pull from any other -- a complete graph, with

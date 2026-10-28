@@ -354,7 +354,20 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       rather than the schedule. Both sglang arms land at 1.765-1.795 while both of ours land at 1.982-2.001, which
       makes a per-arm fluke unlikely and a systematic difference between the trees or the step structure likely --
       exactly what the per-tenant acceptance logging is for.
-  - pdmux follows on the same cluster and window set.
+  - **Arm 5, pdmux: FAILED, not measured (2026-10-28).** The arm launched -- the driver logged
+    `coloc_sgl_mtps_hc_pdmux_tl2_a6_overload_r1_pdmux ... pdmux=True` -- but the scorer found no records
+    (`SCORE (none)`) and no worker emitted an `accept len:` line (`accept=NONE`), so nothing ran to completion.
+    Recorded as a failed arm rather than dropped, because pdmux is one of the three single-node baselines the user
+    named and a missing baseline silently weakens the comparison.
+    - Likely cause, to check first: PD multiplexing partitions the SMs into groups and captures CUDA graphs per
+      group, which multiplies graph memory, and `MEM_FRAC=0.70` was carried over from the earlier 8-GPU driver. A
+      capture-time OOM would produce exactly this signature -- workers that start, never serve, and leave no
+      acceptance lines. Check `worker_r0_g*.log` for `OutOfMemoryError` and `worker_*.bindfail*.log` before
+      re-running, per the orphaned-server lesson.
+    - Second candidate: `mn_run.py`'s pdmux layout disables the overlap scheduler, and this driver's env carries
+      `EDF_UNCACHED=1` and `HC_PREFETCH=timeout` which the stock pdmux path may not accept.
+    - The alpha-3 pdmux arm was never run either, so pdmux is currently unmeasured at both loads on this cluster.
+  - **Ladder complete: `MN_OVERLOAD_DONE`, 4 of 5 arms scored.**
 - **[x] ROPE-BASE DEFECT: THE SCOPE IS EVERY UPSTREAM-TREE BASELINE, INCLUDING THE PAPER'S HEADLINE PD BASELINE
   (verified 2026-10-28).** Loaded `ModelConfig("/dev/shm/w/qwen7b", model_override_args=<the YaRN override>)` under
   each tree on worker 0 (CPU only, mid-run, harmless):

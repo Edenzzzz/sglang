@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.86.0 — alpha-6 ladder complete; pdmux failed and is recorded as failed (2026-10-28)
+- `MN_OVERLOAD_DONE` with 4 of 5 arms scored. pdmux launched but produced `SCORE (none)` and `accept=NONE`:
+  no records, no acceptance lines, nothing served. Recorded as a failed arm rather than dropped, since it is one of
+  the three single-node baselines the user named.
+- First cause to check: PD multiplexing captures CUDA graphs per SM group, multiplying graph memory, and
+  MEM_FRAC=0.70 was carried over from the 8-GPU driver -- a capture-time OOM gives exactly this signature. Second:
+  the pdmux path disables overlap scheduling and may reject this driver's EDF_UNCACHED / HC_PREFETCH env.
+- pdmux is therefore unmeasured at both load factors on this cluster.
+
 ## v2.85.0 — No bold in the abstract; measured the abstract/intro redundancy (2026-10-28)
 - Removed the bold spans from the abstract: abstracts are not typeset with emphasis. Bolding stays in the
   introduction, section 6 and the ablations, where a reader skims for numbers.

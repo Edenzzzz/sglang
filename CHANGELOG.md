@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.96.0 — Root cause of the failed chunk arm: a driver crash, not the policy (2026-10-28)
+- `mn_run.py:153` indexed `[l for l in out.splitlines() if l.startswith("UP=")][-1]`. The worker health poll
+  returned output with no UP= line, so the list was empty, IndexError aborted the arm before the router launched,
+  and the arm directory ended up with worker logs but no router.log, no mn_bench.log and no bench_*.log. The
+  scheduler never crashed -- the server logged "fired up and ready to roll" -- and nothing was ever served.
+- Fixed: a missing UP= line now logs, sleeps and retries, letting the existing 40-minute timeout decide, which is
+  how every other transient in that loop already behaves. One bad poll cost a 30-minute cluster slot.
+- So the SLO-budgeted chunk is STILL untested: four attempts, three invalidated by budget bugs since fixed and
+  this one by a driver crash unrelated to the rule.
+
 ## v2.95.0 — The 2048 constant matches rung L0; our chunk arm failed to serve (2026-10-28)
 - `c2048` (our tree, A6, four-mode, router, EDF, fixed 2048 chunk), accept 1.994, alpha 3: chat 90.6% / 1451 tok/s,
   TPOT p50/p90 11.2/31.6 ms; agent 93.8% / 2473 tok/s, TPOT p50/p90 18.0/41.1 ms. That lands on top of rung L0

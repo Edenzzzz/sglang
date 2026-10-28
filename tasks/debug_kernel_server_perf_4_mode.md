@@ -267,7 +267,14 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     fired up and ready to roll!" and contains no traceback. No `accept len:` line means no decode ran, so no
     requests were served -- a client-side or bench-start failure for that arm only, since `c2048` ran immediately
     afterwards on the same cluster.
-  - **Next diagnostics, in order (do not re-run the ladder blind):**
+  - **[x] ROOT-CAUSED (2026-10-28): a driver crash, not the rule and not the bench.** The driver log for that arm
+    carries `IndexError: list index out of range` at `mn_run.py:153`, where the worker health poll does
+    `[l for l in out.splitlines() if l.startswith("UP=")][-1]`. The poll returned output with no `UP=` line, the
+    list was empty, and the arm aborted before the router launched -- which is why its directory has worker logs
+    but no `router.log`, `mn_bench.log` or `bench_*.log`, and why the server could log "fired up and ready to roll"
+    while nothing was ever served. Fixed: a missing line now logs, sleeps and retries, leaving the existing
+    40-minute timeout to decide, as every other transient in that loop already does.
+  - (superseded by the root cause above) Next diagnostics, in order:
     1. `mn_bench.log` and `bench_agent.log` / `bench_chat.log` in that arm's directory, plus the `MNBENCHDONE
        status=` marker -- that marker was made unconditional precisely so a crashed client is visible.
     2. Whether all 16 workers reached healthy for this arm: a partially healthy cluster leaves the bench waiting on

@@ -150,7 +150,16 @@ def run_arm(arm):
         all_w = urls(hs)
         check = " ".join(f"'{u}/health'" for u, _, _ in all_w)
         rc, out = C.run(0, f"n=0; for u in {check}; do [ \"$(curl -sg -o /dev/null -w '%{{http_code}}' --max-time 3 $u)\" = 200 ] && n=$((n+1)); done; echo UP=$n")
-        up = int([l for l in out.splitlines() if l.startswith("UP=")][-1][3:])
+        # A transient exec failure returns output with no UP= line. Indexing [-1] on that empty list raised
+        # IndexError and aborted the whole arm before the router launched -- 30 minutes of cluster time for one bad
+        # poll (2026-10-28, the a3_tail_r1_ours arm). Treat a missing line as "0 healthy" and let the timeout below
+        # decide, which is what every other transient here already does.
+        marks = [l for l in out.splitlines() if l.startswith("UP=")]
+        if not marks:
+            print(f"  health poll returned no UP= line (rc={rc}); retrying", flush=True)
+            time.sleep(10)
+            continue
+        up = int(marks[-1][3:])
         if up == len(all_w) == (int(os.environ.get("GPUS_PER_POD", "2")) // int(os.environ.get("TP", "1"))) * NPODS:
             break
         if time.time() - t0 > 2400:

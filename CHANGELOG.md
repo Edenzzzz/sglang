@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.41.0 — smoke9 PASSES end to end; superset sweep running with our arm first (2026-10-28)
+- smoke9: agent completed 652 rounds and chat 300, 0 tracebacks -- the first fully working smoke arm on this
+  cluster. The gate's post-smoke GPU check aborted on CUDA-context release lag (all 16 GPUs read 0 MiB moments later);
+  the sweep wrapper now retries that check for up to 3 min.
+- Router: the calibration's --decode-grid points at a file from the OLD cluster, and Router.__init__ loads it
+  unconditionally, so our arm's router would have crashed at startup. Our arm uses the plain `cache` policy, which
+  routes on prefix hit and in-flight count only and never reads the perf model the grid feeds (router.py choose()),
+  so the flag is stripped -- behaviour unchanged.
+- mn_superset_oursfirst_16g_20261028.sh: same arms, OUR arm first at each load, so a failure of its never-launched
+  serving tree (H20 lineage + A6 + SLO-chunk patch) shows in ~30 min, not after ~90 min of baselines. Restarted
+  cleanly (mn_kill.sh, all GPUs 0 MiB). Running as r5.
+
 ## v2.40.0 — The "ours" arm's serving tree rebuilt on the correct lineage before the sweep reached it (2026-10-28)
 - Found while smoke9 ran: the stage-2 push used the REPO tree as the serving tree, which has no A6 hooks and no
   late-demote EDF. Every prior cluster result ran the H20 serving tree (upstream 3fef129 + 31-file overlay

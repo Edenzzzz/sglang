@@ -48,10 +48,14 @@ point() { export ALPHA=$1; local dur=$(( 3600 / $1 ))
   export CHAT_RATE=8 CHAT_N=$(( 8 * dur * 3 / 2 )) BENCH_REPLAY_HORIZON_S=$(( dur * 3 / 2 )); }
 CAL=/tmp/h20/mn_a6_calibrate_16g.log
 RA=$(grep -oE "ROUTER_ARGS=.*" $CAL 2>/dev/null | tail -1 | cut -d= -f2-)
+# --decode-grid points at /dev/shm/w/mn/decode_grid.json from the OLD cluster; Router.__init__ loads it
+# unconditionally, so a missing file crashes the router. Our arm uses the plain `cache` policy, which routes on
+# prefix hit and in-flight count only and never reads the perf model the grid feeds, so dropping it is neutral.
+RA=$(echo "${RA:-}" | sed -E "s/--decode-grid [^ ]+//")
 ROUTER_ARGS_ALL="${RA:-} --pool-kv-tokens $POOL_KV_TOKENS --prefetch-policy timeout"
 for A in 3 6; do
   point $A
-  T=_tl2_a${A}_superset_r3
+  T=_tl2_a${A}_superset_r4
   # --- baselines: sglang's own policies, sglang's own chunk policy, upstream tree
   (unset CHUNK SLO_CHUNK; MIXED_CHUNK=0 RUN_TAG=${T}_pp SGL_PY=/dev/shm/w/up/python KERNEL=lpt \
      python3 -u mn_run.py coloc_sgl_mtps_hc); report coloc_sgl_mtps_hc${T}_pp

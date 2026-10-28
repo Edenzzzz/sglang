@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.99.0 — Cross-role backfill bounded and closed on evidence (2026-10-28)
+- The goal's untested item is now bounded from the 96-capture H200 results instead of being built blind:
+  PDL recovers only 1.4% (32K four-mode) to 6.2% (two-mode) over the non-overlapped serial two-call arm, and two
+  separate streams recover nothing (1.763x vs 1.759x). Two independent overlap mechanisms find nothing left.
+- Structural reason: backfill can only hide the SMALLER role, and the roles are extremely unbalanced -- the chunk's
+  attention approaches 100% of the step as context grows (0.73 s of FLOPs for a 2048-token chunk over 128K on H20),
+  which is also why the A6-vs-stock serving gain falls 1.147x -> 1.006x. The serial/2 (<=49%) bound only holds for
+  equal-cost roles, which never occurs here.
+- Closed: cross-role backfill cannot exceed low single digits on this workload and PDL already collects most of it;
+  tma_store_wait would add persistent-kernel structure measured at 0.987-1.006x. Interesting only for balanced
+  roles (short context, many rows).
+- Draft-share CUDA-event instrumentation written and running on the H200 (apply_draft_share_events_20261028.py,
+  module-scope wrapper, off unless SGLANG_DRAFT_SHARE=1); validated on a throwaway copy before deployment.
+
 ## v1.98.0 — The superset claim, and the valid single-node baselines (2026-10-28)
 - User's two deliverables recorded at the top of the task doc: (1) kernel gains from fusing tile classes in one
   forward (measured 2-9% over the fair baseline across three models); (2) scheduling as a SUPERSET of every

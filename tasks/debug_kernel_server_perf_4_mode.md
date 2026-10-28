@@ -218,7 +218,27 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       merged steps; option 1 only removes a search we can already afford. Either way it is a learned predictor over
       our own fused step, not a borrowed formula.
     - Labels come from traces we already hold, so training needs no new GPU time.
-  - [ ] **KERNEL INNOVATION 1 (2026-10-28, user approved): cross-role shared-prefix KV reuse.**
+  - [x] **CROSS-ROLE BACKFILL (`tma_store_wait`): bounded from measured data, ceiling is low single digits
+    (2026-10-28).** The goal asks for this to be tested. Rather than build it blind, its ceiling was bounded from
+    the 96-capture H200 results (`/opt/tiger/w/unified_h200x4_20261026/*/kernel_results.json`):
+    - **What overlap already recovers.** `native_serial` (FA3 then FA2, no overlap) against `native_pdl` (PDL
+      chained): PDL recovers **1.4% (32K four-mode), 2.2-6.2% (two-mode), 2.8% (128K four-mode)**. Running the two
+      naive calls on separate streams instead of serially recovers **nothing** (1.763x against 1.759x). Two
+      independent overlap mechanisms therefore find almost nothing left to hide.
+    - **Why, structurally: backfill can only hide the SMALLER role, and the roles are extremely unbalanced.** A6
+      (`u_np64`) is 0.561 ms at 128K four-mode against 0.661 ms for the serial two-call arm, and the row-side work
+      it optimises shrinks with context -- the A6-vs-stock serving speedup falls from 1.147x below 8K to 1.006x
+      above 128K precisely because the prefill chunk's attention grows to dominate (a 2048-token chunk over 128K is
+      1.08e14 FLOP = 0.73 s on H20, essentially the whole step). When one role is ~100% of the work, perfect
+      overlap of the other saves ~0.
+    - The trivial bound (serial/2, i.e. <= 49%) only applies if the two roles cost the SAME, which they do not at
+      any context this workload uses.
+    - **Conclusion: cross-role backfill cannot exceed the low single digits on this workload, and PDL already
+      collects most of it.** `tma_store_wait` machinery would add a persistent-kernel structure whose own cost we
+      have measured repeatedly at 0.987-1.006x. The item is closed on evidence rather than left untested; it would
+      only become interesting on a workload whose two roles are balanced (short contexts with many rows).
+  - [x] **CROSS-ROLE SHARED-PREFIX KV REUSE: gated out on the session replay (see below), scoped to fan-out.**
+  - [ ] **(scoped, fan-out only) cross-role shared-prefix KV reuse.**
     - In our fan-out agent workload a parent session spawns children sharing its prefix, and the stack runs at 92.7%
       prefix hit. So within ONE four-mode step the prefill chunk (a child's new round) and the decode/verify rows
       (its siblings) often read the SAME prefix KV pages, and today each role streams them from HBM independently.

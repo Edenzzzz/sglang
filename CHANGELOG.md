@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.58.0 — The chunk-rule regression was a guard bug, not the policy (2026-10-28)
+- The `:life` arm finished and its own log shows the lifetime budget NEVER engaged: `budget_ms=92.6 ... capped=7001
+  of calls=7001`, i.e. every step was clamped to the ~90 ms per-step allowance. Score chat 86.3% / agent 91.2% /
+  2 323 tok/s against rung L0's 91.2 / 94.3 / 2 493, so it repeated the earlier arm.
+- Two guard bugs found and fixed in `apply_slo_budget_chunk_20261026.py`:
+  1. A row with no output token yet (`o == 0`) has no mean TPOT at all -- its latency so far is TTFT -- but the
+     demotion test `spent > s_r * max(o, 1)` fired on it after one ordinary step, and since the budget is a MIN
+     over resident rows, one just-admitted row clamped every step. Such rows now contribute no bound.
+  2. The demotion test used the INSTANTANEOUS mean. A row three tokens in whose first step waited behind a long
+     prefill chunk fails it on every early step, so the same clamp returned one token later. Under `:life` the test
+     now asks whether the row can still reach its target BY COMPLETION (`spent > s_r * L`).
+- The rule's log now prints `fresh=`, `life=`, `nolife=`, `demoted=`, the learned rate and the per-tenant output
+  length, so a silent fall-through can no longer be mistaken for "the rule did not help".
+- Chunk-size prediction is standard practice (SLOs-Serve, FlowPrefill, PD-Multiplexing); the regression was ours.
+- Also: `cp -a` of the symlinked `$W/python` wrote the patch into the main serving tree. Reverted by structure on
+  all four pods and re-verified marker by marker; `python_slo_life` is now a real directory. Recorded in memory.
+
 ## v2.57.0 — Queue the tail-bounded chunk arm at both loads (2026-10-28)
 - `tasks/pd_colocation/mn_tailchunk_16g_20261028.sh`: the mean-TPOT chunk rule with the inter-token tail target as
   its second bound (`stepcap=600`, the chat p99 target, in place of 2000 ms), at alpha 3 and alpha 6, chained

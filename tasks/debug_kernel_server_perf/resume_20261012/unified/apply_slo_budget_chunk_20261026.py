@@ -133,10 +133,34 @@ method = '''
             o = len(r.output_ids) - r._slo_o0
             spent = (now - r._slo_t0) * 1000.0
             per_step = s_r * tps
-            if cfg["demote"] and spent > s_r * max(o, 1):
-                # Already past its SLO: it cannot be rescued on its mean, but each new token still costs at most
-                # its target, so the step is bounded by its per-step allowance (no backlog recovery, no banking).
+            if o < 1:
+                # The row has not emitted a token yet, so it HAS no mean TPOT: the latency it has accumulated so
+                # far is its TTFT, which the deadline and demotion machinery govern, not this bound. Judging it
+                # here is what broke the rule in the measured arms. `spent` for such a row is the time since it
+                # was first seen, which is already tens of milliseconds after one ordinary step, so the test below
+                # fired on it, pinned the budget to the bare per-step allowance, and -- because the budget is a
+                # MIN over rows -- let one just-admitted row clamp every step in the batch. Measured 2026-10-28:
+                # budget_ms 90-146 and capped=7001 of calls=7001, i.e. the lifetime budget never once applied.
+                self.slo_chunk_fresh = getattr(self, "slo_chunk_fresh", 0) + 1
+                continue
+            # L and rate are needed BEFORE the demotion test, because under the lifetime reading the test is
+            # "can this row still reach its target by completion", not "is its mean above target right now". A row
+            # three tokens in whose first step waited behind a long prefill chunk fails the instantaneous test on
+            # every one of its early steps, and since the budget is a MIN over rows, that one row then clamps the
+            # step to the bare per-step allowance -- the same failure as the fresh-row case above, one token later.
+            L = rate = None
+            if cfg["life"]:
+                cls_l = "agent" if s_r == cfg["agent_ms"] else "chat"
+                life_l = getattr(self, "_slo_life", {}).get(cls_l)
+                if life_l is not None and life_l[1] >= 8:
+                    L = max(life_l[0], o + tps)
+                    rate = spent / o if o >= 4 else getattr(self, "_slo_rate", s_r)
+            if cfg["demote"] and spent > s_r * (L if L is not None else o):
+                # Past rescue: even running the rest of its output at its target rate it cannot reach its mean, so
+                # it lends no slack. Each new token still costs at most its target, so the step is bounded by its
+                # per-step allowance (no backlog recovery, no banking).
                 budget = min(budget, per_step)
+                self.slo_chunk_demoted = getattr(self, "slo_chunk_demoted", 0) + 1
                 continue
             if cfg["life"]:
                 # Lifetime mean TPOT. The SLO is a request's mean TPOT over its WHOLE output, so a step's cost is
@@ -147,11 +171,13 @@ method = '''
                 # Without this, the bound below makes a just-admitted row -- which has banked nothing -- the minimum
                 # on nearly every step, and the mean-TPOT rule degrades into a per-step bound (measured 2026-10-28:
                 # chunks of 147-333 tokens, agent TTFT p90 9.5 s against prefill-prioritized's 3.4 s).
-                cls = "agent" if s_r == cfg["agent_ms"] else "chat"
-                life = getattr(self, "_slo_life", {}).get(cls)
-                if life is not None and life[1] >= 8:
-                    L = max(life[0], o + tps)
-                    rate = spent / o if o >= 4 else getattr(self, "_slo_rate", s_r)
+                if L is None:
+                    # Fewer than eight finished requests for this tenant, so there is no output length to project
+                    # from yet. Counted, because a silent fall-through to the per-step bound below is
+                    # indistinguishable in the metrics from the lifetime rule simply not helping.
+                    self.slo_chunk_nolife = getattr(self, "slo_chunk_nolife", 0) + 1
+                else:
+                    self.slo_chunk_life = getattr(self, "slo_chunk_life", 0) + 1
                     remaining = max(0.0, L - o - tps)
                     budget = min(budget, s_r * L - spent - remaining * rate)
                     continue
@@ -258,10 +284,15 @@ method = '''
         self.slo_chunk_capped = getattr(self, "slo_chunk_capped", 0) + int(out < chunk_size)
         self.slo_chunk_zero = getattr(self, "slo_chunk_zero", 0) + int(out == 0)
         if self.slo_chunk_calls % 500 == 1:
-            logger.info("SLO_CHUNK calls=%d capped=%d zero=%d floored=%d qcapped=%d rows=%d tps=%.2f budget_ms=%.1f "
-                        "chunk=%d->%d", self.slo_chunk_calls, self.slo_chunk_capped, self.slo_chunk_zero,
-                        getattr(self, "slo_chunk_floored", 0), getattr(self, "slo_chunk_qcapped", 0), len(rows), tps,
-                        budget, chunk_size, out)
+            logger.info("SLO_CHUNK calls=%d capped=%d zero=%d floored=%d qcapped=%d fresh=%d life=%d nolife=%d "
+                        "rows=%d tps=%.2f budget_ms=%.1f chunk=%d->%d",
+                        self.slo_chunk_calls, self.slo_chunk_capped, self.slo_chunk_zero,
+                        getattr(self, "slo_chunk_floored", 0), getattr(self, "slo_chunk_qcapped", 0),
+                        getattr(self, "slo_chunk_fresh", 0), getattr(self, "slo_chunk_life", 0),
+                        getattr(self, "slo_chunk_nolife", 0), len(rows), tps, budget, chunk_size, out)
+            logger.info("SLO_CHUNK demoted=%d rate_ms=%.1f life_len=%s",
+                        getattr(self, "slo_chunk_demoted", 0), getattr(self, "_slo_rate", float("nan")),
+                        {k: (round(v[0], 1), v[1]) for k, v in getattr(self, "_slo_life", {}).items()})
         return out
 '''
 anchor2 = re.search(r"\n    def get_new_batch_prefill\(self[^)]*\)[^:]*:", s).group(0)

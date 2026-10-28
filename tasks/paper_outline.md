@@ -834,11 +834,15 @@ Figure 10: predicted vs measured step time, per step type (decode, prefill, mixe
 
 #### 5.2.3 Fair Resource sharing
 
-**Chunk size.** Prefill runs in fixed 2048-token chunks in every result of section 6. Every gain reported there,
-single node and cluster, is measured with this chunk size. An earlier variant also capped each step's chunk while
-chat waited; dropping that cap raised Llama-3.3-70B's throughput gain over stock from +2-3% to +9-10% (section 6.3).
+**Chunk size is predicted, not configured.** AttentionFuse has no chunk-size constant. A constant cannot fit both
+ends of the load, and it is not a policy a reader can transfer to another cluster or model: the same token count is
+a different amount of work at a 32K prefix and at a 256K one, and costs the resident decode rows a different
+amount again depending on how many of them there are. Prior work that sizes the chunk from predicted latency
+rather than from a constant -- FlowPrefill, PD-Multiplexing and SLOs-Serve -- makes the same argument. We differ
+from them in what the prediction is solved against and in how it is solved: a measured step-time model of our own
+fused kernel, inverted by bisection rather than by a dynamic program.
 
-**SLO-budgeted chunk size.** A fixed chunk size cannot fit both ends of the load. When prefill
+**The rule.** A fixed chunk size cannot fit both ends of the load. When prefill
 load is high and few rows are decoding, a larger chunk would finish the prefill in fewer steps, each step paying its
 fixed cost and re-reading the prefix's KV once. When many rows are decoding, every chunk token lengthens every
 resident's inter-token gap. We therefore size each step's chunk from the step-time model of section 5.2.2. The chunk
@@ -906,9 +910,11 @@ not a solution.
 The solver is three lines and a bisection -- 16 evaluations of a ten-term linear model, about 2 microseconds per
 step. It needs no dynamic program, and nothing in it is specific to a workload.
 
-It replaces the fixed 2048-token chunk if it does better on prefill-heavy loads and does no worse on decode-heavy and
-mixed loads. The cluster comparison is [pending]:
-- arms: fixed 2048 (the current configuration), fixed 8192 and 16384, and the rule at h = 0, 10% and 20%;
+**Status of the measurements in section 6.** The results currently reported in section 6 were produced before this
+rule worked, with a 2048-token chunk, and are being re-measured with the predicted chunk; no number in the final
+paper will rest on a chunk constant. Constant-chunk arms are retained only as baselines, next to sglang's own chunk
+policy. The comparison still to land is:
+- arms: the rule, against sglang's own chunk policy and against fixed 2048 / 8192 / 16384 as reference points;
 - loads: prefill-heavy agent loads, the mixed loads of Table 7b, decode-heavy loads, and ShareGPT.
 
 **Preemption and parking: measured and dropped.** We built preemption of the in-progress chunked prefill (it yields
@@ -1439,6 +1445,19 @@ budget is a minimum over resident rows and a just-admitted row, having banked no
 allowance; long agent prefills then advance a few hundred tokens a step and miss their TTFT target (p90 9.5 s against
 the baseline's 3.4 s). The redesigned budget, which projects each row's mean TPOT over its whole output, is
 [pending].
+
+**Model-fidelity caveat on the disaggregated baselines, and what is being re-measured.** The fix that carries
+Qwen2.5's rope base (10^6) through a YaRN context-extension override lives in our serving tree only; the upstream
+tree the stock PD-disaggregation baseline runs on drops it and falls back to 10^4, which is a different model. We
+verified this directly by loading the model configuration under each tree with the same override. Output lengths in
+these workloads come from the trace, so the compute per token is unchanged, but the draft model's acceptance length
+falls from about 2.0 to about 1.4, which costs the affected baseline roughly 40% more forward passes per output
+token. The direction therefore inflates our margin. Every arm reported below on *our* tree -- including conditional
+disaggregation, which runs on our workers -- is unaffected, as is Table 9a, whose baseline was run with the rope
+base passed explicitly. The stock PD rows of Tables 9, 10, 10b, 10c and 10d are affected and are being re-measured
+with the corrected configuration at both load factors; their margins are large enough (3-14x of agent SLO goodput)
+that the direction of the comparison is not in question, but the magnitudes in those rows should be read as upper
+bounds until the re-measurement lands. Every table states each arm's measured acceptance from now on.
 
 **Result: scheduler only.** With the kernel off and no speculation, on Qwen2.5-7B on 16 H20s (Table 9), ours holds
 >= 90% chat attainment up to 64 programs, and disaggregation only up to 16, across all P:D ratios swept; deadline order

@@ -254,6 +254,24 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     (`ROPE_THETA`) and `mn_run.py` (`ROPE_THETA` in the env string).
   - Push files with `Cluster(SID, cp, nodes=[f"worker-{i}" for i in range(NPODS)])`; without `nodes=` every call
     goes to one default instance that is not even one of the workers.
+- **[x] ROPE-BASE DEFECT: THE SCOPE IS EVERY UPSTREAM-TREE BASELINE, INCLUDING THE PAPER'S HEADLINE PD BASELINE
+  (verified 2026-10-28).** Loaded `ModelConfig("/dev/shm/w/qwen7b", model_override_args=<the YaRN override>)` under
+  each tree on worker 0 (CPU only, mid-run, harmless):
+  | tree | effective rope config |
+  |---|---|
+  | `/dev/shm/w/python` (ours) | `{factor 4.0, original_max_position_embeddings 32768, type yarn, rope_theta 1000000.0}` |
+  | `/dev/shm/w/up/python` (sglang-policy baselines) | no `rope_theta` -> `get_rope_config` falls back to **10000** |
+  | `/dev/shm/w/up_clean/python` (stock PD disagg) | no `rope_theta` -> **10000** |
+  - The 2026-10-12 fix is in OUR tree only, and `ROPE_THETA` (which forces it into the override as a top-level
+    sibling) only exists in `mn_node.sh` since 2026-10-28. So **every stock-PD arm in Tables 9 / 10 / 10b / 10c /
+    10d ran a mis-configured Qwen.** Conditional disaggregation runs on our tree and is unaffected; Table 9a's
+    prefill-prioritized baseline was run with `ROPE_THETA` and logged acceptance 1.837.
+  - Direction: output lengths come from the trace, so compute per token is unchanged, but acceptance falls ~2.0 ->
+    ~1.4, costing the baseline ~40% more forwards per output token. **The defect inflates our margin**, and the
+    stock-PD margins (3-14x agent SLO goodput) are far larger than 40%, so the direction of the comparison is not
+    in question -- but the magnitudes are upper bounds until re-measured.
+  - Re-measurement queued: `mn_pd_remeasure_16g_20261028.sh` (stock PD `disagg_p2` + conditional `cond_p1`, alpha 3
+    and 6, `ROPE_THETA=1000000`), chained after the tail-chunk arm. Caveat written into paper 6.4.
 - **H200 trial re-forked 2026-10-28 17:10 CST: `3f9e6a55ef7ae47e`** (vibecuda, 4x H200, i18n-bd), because
   `bf7d041fb8313d8a` was **killed at 2026-10-28 04:02 UTC for resource under-utilisation** (`exit_code -77777`,
   "trial 因资源利用率不达标被查杀"; read with `merlin-cli job list-trial-exit-info --json '{"trial_id":"304747380"}'`
@@ -501,8 +519,68 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     - **Consequence for the decision:** implementing it is justified as EVIDENCE for the architectural claim ("even
       the one overlap this hardware permits, with zero overhead, is worth 1-2% at long context"), not as a gain to
       claim. Record the bound in the paper either way; build only if the compile test is cheap.
-  - **ITEM 18 IN ONE SENTENCE (user, 2026-10-28): q128 cannot overlap with q16 inside a CTA because the two
-    consumer warpgroups at ~168 registers each already take the whole register budget -- that is the measured
+  - [ ] **ITEM 18 REOPENED (user, 2026-10-28, and the user is right): NEITHER CONSTRAINT I CLOSED IT ON IS A WALL.**
+    The user's objection: "the fucking tile 64 does not need extra shared memory -- isn't tile 128 just composed of
+    two tile 64? same for register, how is it possible that 64 + 16 causes spill but 64 + 64 doesn't? just reuse
+    smem?" Both halves check out against my own measurements.
+    - **Shared memory is a budget I never re-allocated, not a limit.** Measured FA3 request: 163,920 B at q128 and
+      147,536 B at q64 -- a difference of exactly 16,384 B = one 64-row Q tile (64 x 128 x 2 B). That confirms the
+      two consumer warpgroups SHARE one KV staging buffer and that the O epilogue tile is unioned with Q (halving
+      CTA_Q would otherwise have saved 32,768 B). Subtracting the Q tile leaves **131,152 B of KV staging, which is
+      exactly `CTA_KV=128, NUM_STAGES=2` (65,536 B of K+V per stage, plus 80 B of pipeline state)**. So:
+      | configuration | FA3 smem | + 16-row guest (69,632 B) | vs the 232,448 B opt-in max |
+      |---|---:|---:|---|
+      | q128, 2 stages (what I measured) | 163,920 | 234,544 | over by 2,096 B |
+      | q64, 2 stages | 147,536 | 218,160 | fits |
+      | **q128, 1 stage** | **98,384** | **168,016** | **fits with 64 KB to spare** |
+      | **q64, 1 stage** | **82,000** | **151,632** | **fits with 80 KB to spare** |
+      Dropping one KV stage costs FA3 load/compute overlap depth; shrinking the GUEST's staging instead costs
+      nothing on the FA3 side. Either funds the guest. `FUSED_FA3_STAGES` is already a build knob in
+      `gate_q64_registers_20261028.py`, so this is a compile away.
+    - **The register allocation is ptxas's occupancy heuristic, not the hardware.** flashinfer declares
+      `__launch_bounds__(Ktraits::NUM_WARPS * 32, 1)` (`hopper/prefill_sm90.cuh:366`) -- min blocks per SM = 1 --
+      so at q64's 256 threads ptxas MAY use up to 65,536/256 = 256 registers per thread. It chose **144 and
+      spilled**, while q128 at 384 threads chose 168 and spilled nothing. 168 x 384 = 64,512 of the SM's 65,536
+      registers, so q64 at 168 would need only 43,008: there is more headroom at q64, not less. Each consumer owns
+      64 query rows at EITHER tile, so per-thread demand is identical -- which is exactly the user's point. And
+      `--maxrregcount=240` could not fix it because a cap cannot RAISE an allocation. C7512 ("wgmma serialized due
+      to insufficient register resources") at q64 then follows from the same 144: the O and S accumulators for 64
+      rows at head_dim 128 are ~128 registers on their own.
+    - **THE RIGHT BUILD (user, 2026-10-28): REPLACE a consumer warpgroup, do not ADD one.** "Since there are two
+      consumer warps overlapped, this should cost nothing for the other tile 64, just that data movement is more
+      complicated?" Correct, and it dissolves both constraints at once:
+      - At q128 the two consumer warpgroups read the SAME KV stages from the one producer and differ only in which
+        64 Q rows they own. Give warpgroup 1 to the 16-row FA2 body and warpgroup 0 keeps its Q tile, its KV
+        pipeline and its 240 registers: `NUM_WARPS` stays 12, `NUM_MMA_THREADS` stays 256, and the budget stays
+        240*256 + 24*128 = **64,512**, which is today's q128 configuration and spills NOTHING.
+      - What I built ADDS a warpgroup: `kFusedPiggybackThreads = FUSED_Q64_PIGGYBACK ? 128u : 0u`
+        (`persistent_fa3_fused.cuh:140`) takes the CTA to 16 warps / 512 threads, so NUM_MMA_THREADS becomes 384
+        and the kernel's own static_assert caps the consumer at (65536 - 3072)/384 = **162** registers. That is why
+        ptxas forced 128 and spilled 4,460 B. **The spill was self-inflicted by adding rather than replacing.**
+      - Shared memory, corrected: retiring one consumer frees its 64-row Q tile, so the pair needs
+        147,536 + 69,632 - 16,384 = **217,168 B <= 232,448 B**. It fits with `NUM_STAGES` UNTOUCHED. My 234,544 B
+        figure summed the full q128 request plus the whole guest, double-counting the Q tile of the warpgroup being
+        replaced. `FLASHINFER_FUSED_ALIAS_SMEM` already exists for this aliasing.
+      - **TMA for the mma.sync guest: possible in principle, wrong here for an unrelated reason.** TMA is an async
+        smem fill and is indifferent to whether the consumer is wgmma (smem operands) or ldmatrix + mma.sync; it
+        needs only a supported swizzle and a matching element layout. The blocker is page_size 1: a row's keys are
+        a gather over arbitrary page indices, which a TMA descriptor (a strided view of one tensor) cannot express
+        -- the same wall A5.5's multicast hit. So the guest keeps the `cp.async` gather the FA2 BatchPrefill body
+        already uses, and the real new work is a SECOND load pipeline with its own mbarriers, issued by the same
+        producer warpgroup beside FA3's TMA.
+    - **Decisive tests, all compile-only (no GPU, `nvcc -c`):**
+      0. **(the one that matters) replace-a-consumer at q128**: 12 warps, FA3 role covering 64 rows per CTA, guest
+         in warpgroup 1, its buffers aliased onto the retired Q tile. Expect 240 regs and 0 B spill, since the
+         allocation is byte-for-byte today's q128.
+      1. q64 and q128 with `FUSED_FA3_CONSUMER_REGS` forcing the consumer allocation to 168+ (and
+         `__maxnreg__`/`setmaxnreg` if the macro does not reach ptxas): does the spill and C7512 clear?
+      2. q64 and q128 at `FA3_STAGES=1` with the 16-row guest: does the CTA become creatable?
+      3. Both together, which is the configuration the proposal actually needs.
+    - The upper bound (1.1-2.3% of the step at 128K, 4.5-10.2% at 32K) is unchanged and still bounds the PAYOFF;
+      what is withdrawn is the claim that the thing cannot be BUILT. The 5.1 architectural argument must not lean
+      on it until these compiles are read.
+  - **(superseded) ITEM 18 IN ONE SENTENCE (user, 2026-10-28): q128 cannot overlap with q16 inside a CTA because the
+    two consumer warpgroups at ~168 registers each already take the whole register budget -- that is the measured
     1,436 B spill -- while q64 uses ONE consumer warpgroup and leaves room for a register-light q16 warpgroup
     (16 accumulator registers per thread at head_dim 128). So q64 x q16 is the ONLY intra-CTA overlap Hopper
     permits, it is immune to SM saturation because the CTA is already resident, and its reach is ~95% of row items

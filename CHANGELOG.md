@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.34.0 — the piggyback's two constraints point opposite ways: only q64 can launch, and q64 is where wgmma serializes (2026-10-28)
+- The corrected mechanism now has numbers. `FUSED_Q64_PIGGYBACK=1` with the CTA widened by one warpgroup compiles to
+  **128 reg / 4 460 B** spill at the 128-row chunk tile (512 threads) and **144 reg / 3 716 B + C7512** at 64 rows
+  (384 threads). Widening the CTA lowers the spill against hosting at the same width (7 528 / 5 448 B) because the
+  guest's live range hangs off a thread-index branch that returns, but at 512 threads the allocation falls to 128
+  registers per thread, below the 168 FA3's consumers need to stay spill-free.
+- `unified/probe_fused_smem_sizes_20261028.cu` reports the shared-memory demand at compile time, by reading the sizes
+  out of a deliberately failed template instantiation (no GPU, no runtime). The piggyback is the only configuration
+  where both roles' shared memory is live at once, so the request is their SUM: FA3 163 920 B at q128 / 147 536 B at
+  q64, rows 69 632 B, giving **234 544 B at q128 — over the 232 448 B opt-in maximum by 2 096 B, so the CTA cannot be
+  created** — against 218 160 B at q64, which fits with 14 288 B spare. The q128 figure independently reproduces the
+  number already recorded for the co-resident two-stage layout, which checks the probe.
+- **So the two constraints point opposite ways: the only launchable tile is the one that costs the chunk its `wgmma`
+  pipelining.** That, not the spill count, is the reason item 18 is closed; paper 5.1 and Table 2b now say so.
+- Toolchain cross-check, which is what lets the arms be read as one table: the H200 trial dropped its ssh listener
+  mid-session, so the piggyback arms were compiled on the dev box. `unified/gen_fi07_config_20261028.py` renders
+  flashinfer 0.7's `batch_attention_config.inc` there (`PersistentParams` is defined in that generated header, and
+  the box's cache held a 0.3.1 render, which fails with 54 "no member" errors). The shared arm — default build at
+  q128 — gives 168 reg / 33 424 B on both hosts, so the two agree bit for bit; that run is also the regression
+  control showing the piggyback edits leave the default build unchanged.
+
 ## v2.33.0 — lin4mode 25% vs 4.7% resolved: same model, different step types (2026-10-28)
 - Per-type error of the lin4mode step model on the 87,932-step replay: merged 4.7% (5.0% held out), prefill 6.2%,
   decode 29.0%, all steps 25.2% (24.0% held out). The paper's "25%" is the all-step figure, dominated by decode-only

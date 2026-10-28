@@ -379,13 +379,14 @@ Table 4 reports these arms. The conclusion is architectural and the opposite of 
 Hopper and later the gain comes from giving each role the executor its tile shape deserves, not from fusing them --
 and because CTAs occupy more of the SM with each generation, designs that need spare SM capacity should age badly.
 
-We also tested the one apparent exception to that conclusion, and it closes the same way. A warpgroup is the unit
+We also built and tested the one apparent exception to that conclusion, and it closes too, for reasons of its own.
+A warpgroup is the unit
 that must agree on an instruction shape, so if a chunk's CTA had a warpgroup with nothing to do, that warpgroup
 could issue `mma.sync` for 16-row decode and verify work inside a CTA the chunk has already made resident -- which
 would be immune to the SM-saturation argument above, since it needs no spare SM capacity. The attraction is that
 such a warpgroup appears to be free: a 128-row FA3 tile runs two consumer warpgroups and spends the whole register
-file, while a 64-row tile runs one. **Three measurements say the warpgroup is not free, and we therefore do not
-claim this mechanism.**
+file, while a 64-row tile runs one. **The warpgroup is not free, and the mechanism's two constraints point opposite
+ways, so we do not claim it.**
 
 First, a smaller tile does not free a warpgroup; it shrinks the CTA. Both FA3 implementations we build against
 derive the consumer count from the tile, so 128 rows give one producer warpgroup and two consumers (384 threads)
@@ -402,7 +403,23 @@ What remains is the register cost of hosting the guest, and the compiler charges
 The chunk kernel compiled alone spills nothing; adding only the 16-row row mainloop to the same kernel takes it to
 7.5 KB of spill stores, and adding all three row tile classes to 33 KB. This is the same effect as Table 2's: one
 register budget per kernel, shared across code paths that never run together. The 16-row tile is register-light in
-its accumulator and not in its effect on that budget.
+its accumulator and not in its effect on that budget. Asking for the guest warpgroup as extra CTA width rather than
+re-using one of the chunk's lowers that cost without removing it, to 4.5 KB, because the guest's live range then
+hangs off a thread-index branch that returns; but a 512-thread CTA is allowed only 128 registers per thread, below
+the 168 the chunk's consumers need to stay spill-free, so the saving is paid for in the same currency.
+
+**Shared memory is the binding constraint, and it points the other way from the registers.** This is the one
+configuration in which the chunk's shared memory and the rows' are live at the same time. Everywhere else the two
+regions may overlap, because a CTA takes one role or the other, so a kernel asks for the larger of the two; here it
+must ask for their sum. On an H200 a CTA may opt into 232 448 bytes. The chunk role needs 163 920 bytes at a 128-row
+tile and 147 536 at 64 rows; the 16-row row mainloop needs 69 632. With alignment and the queue's own slot the
+request is **234 544 bytes at the 128-row tile, over the limit by 2 096**, and 218 160 at 64 rows, which fits with
+14 288 to spare. So the mechanism can only be launched at the 64-row tile -- and the 64-row tile is precisely where
+the compiler can no longer keep the chunk's `wgmma` asynchronous. **The tile that buys the shared memory is the tile
+that costs the chunk its tensor-core pipelining, and no tile does both.** That is not a budget to be tuned; it is
+why we stop here. We report the mechanism as built and measured at compile time -- register allocation, spill and
+shared-memory demand, each per named kernel -- and not as run: a design whose only launchable form degrades the
+chunk, for an upper bound of one to two per cent of the step, does not warrant the comparison.
 
 Even granting a perfect implementation, the ceiling is small, because the rows are cheap rather than
 capacity-starved. Tiling a chunk at 64 rows gives a median of 31 tiles against a median of 13 rows, so capacity
@@ -647,13 +664,16 @@ whichever row tile classes are named, at the chunk's query tile width; spill is 
 | the chunk role alone | 168 reg, 0 B | 144 reg, 1 560 B, `wgmma` serialized |
 | + the 16-row row mainloop (what hosting needs) | 168 reg, 7 528 B | 144 reg, 5 448 B, `wgmma` serialized |
 | + all three row tile classes (16, 64, 128) | 168 reg, 33 424 B | 144 reg, 19 840 B, `wgmma` serialized |
+| + the 16-row mainloop in an ADDED warpgroup (CTA widened to 512 / 384 threads) | 128 reg, 4 460 B | 144 reg, 3 716 B, `wgmma` serialized |
+| shared memory the CTA must request (chunk + rows, since both are live) | **234 544 B — over the 232 448 B limit** | 218 160 B — fits |
 
-Two readings matter. Down a column, the chunk role alone is spill-free at the 128-row tile and every byte of spill is
-the price of hosting a guest in the same register budget, not a cost of the chunk's own work. Across a row, the
+Three readings matter. Down a column, the chunk role alone is spill-free at the 128-row tile, so every byte of spill
+is the price of hosting a guest in the same register budget and not a cost of the chunk's own work. Across a row, the
 64-row tile lowers the spill but lowers the register allocation with it, and at that allocation the compiler reports
 that it can no longer keep the chunk's `wgmma` instructions asynchronous -- a warning absent from every 128-row
-build. Raising the compiler's register ceiling does not change the 64-row numbers, so the allocation is the
-compiler's judgement about the code, not a limit we can lift.
+build. Raising the compiler's register ceiling does not change the 64-row numbers, so the allocation is its judgement
+about the code and not a limit we can lift. The last row is the one that settles it: only the 64-row column can be
+launched at all, and it is the column with the serialized `wgmma`.
 
 The net effect: the fused kernel was 2.16x slower than FA2 alone on every input (155.9 vs 72.3 us, both numerically
 correct; 1.83x on a fixture with 16 823 KV tokens), while two launches of the same executors at their own layouts

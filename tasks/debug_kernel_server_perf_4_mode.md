@@ -2059,7 +2059,7 @@ per-item narrative follows below; the reader-facing summary is `paper_outline.md
 | 16 | draft/verify pipelining across staggered groups | ceiling UNMEASURED after 3 instrumentation attempts | **OPEN**, not claimed | `apply_draft_share_events_20261028.py` |
 | 17 | draft/verify epilogue op fusion | bounded ~4% of kernel time | not built | section B |
 | 17b | **POD-Attention's structure on Hopper, MEASURED** (one stock FA2 call covering chunk and rows, against our FA3 chunk + FA2 rows) | ours **3.69x** faster at 32K, **3.45x** at 128K (2048-token chunk, 32 rows) | POD runs on Hopper but lags; this is an UPPER bound for it, since its CTA interleaving sits on top of the same kernel | `unified/bench_pod_proxy_20261028.py` |
-| 18 | **FA3 q-tile 64 co-scheduled with an `mma.sync` 16-row warpgroup in ONE CTA** (user, 2026-10-28); q128 rows keep the separate-launch PDL path | **gating compile FAILS: q64 does not clear the spill and makes FA3 WORSE** -- FA3 alone 168 reg / **0 B** spill at q128 against 144 reg / 1 560 B and `ptxas` C7512 "wgmma serialized for want of registers" at q64; hosting the 16-row class costs 7 528 B (q128) / 5 448 B (q64) of spill from zero | **CLOSED as proposed**; the premise that q64 frees a warpgroup is false (it halves the CTA). Corrected 384-thread form written and compiling, not measured | `unified/gate_q64_registers_20261028.py` |
+| 18 | **FA3 q-tile 64 co-scheduled with an `mma.sync` 16-row warpgroup in ONE CTA** (user, 2026-10-28); q128 rows keep the separate-launch PDL path | **gating compile FAILS, and the two constraints point opposite ways.** The CTA only LAUNCHES at q64 (q128 wants 234 544 B of smem against a 232 448 B max) and q64 is where `ptxas` reports `wgmma` serialized for want of registers (C7512) -- in every q64 build, including FA3 alone, while q128 FA3 alone is spill-free at 168 reg | **CLOSED as proposed**; the premise that q64 frees a warpgroup is false (it halves the CTA). Corrected widened-CTA form built and measured for registers + smem, never run | `unified/gate_q64_registers_20261028.py`, `unified/probe_fused_smem_sizes_20261028.cu` |
 
 **Item 18, the user's proposal, and why it is the one overlap idea not already ruled out.** The Hopper restriction
 is that a SINGLE warpgroup cannot interleave wgmma of different shapes -- not that a kernel cannot issue wgmma and
@@ -2147,6 +2147,46 @@ issue `mma.sync` for 16-row rows alongside.
      - **Verdict by the gate's own rule: it still spills, so STOP.** The register wall holds for the mechanism as
        proposed, and for a reason stronger than the byte count -- q64 is not a register-relief configuration for
        FA3 at all.
+  1b. **[x] The corrected form, compiled: CTA widened by one warpgroup (`FUSED_Q64_PIGGYBACK=1`, 2026-10-28).**
+     Since q64 frees nothing, the guest warpgroup is ADDED: the CTA is launched at
+     `FA3Traits::NUM_THREADS + 128`, those threads never enter FA3's body, and they drain the 16-row class while
+     the rest of the CTA runs FA3's mainloop. Same gate script, `--extra=-DFUSED_DRAIN_ONLY16=1
+     -DFUSED_Q64_PIGGYBACK=1`:
+     | | CTA threads | reg | spill stores | wgmma serialized (C7512) |
+     |---|---:|---:|---:|---|
+     | piggyback at q128 | 384 + 128 = 512 | **128** | 4 460 B | no |
+     | piggyback at q64 | 256 + 128 = 384 | 144 | 3 716 B | **yes** |
+     - Widening the CTA LOWERS the spill against the same-width hosting above (q128 7 528 -> 4 460 B, q64
+       5 448 -> 3 716 B), because the guest's live range is now reachable only on a thread-id branch that returns.
+       It does not reach zero, and at q128 the 512-thread CTA drops the allocation to **128 registers per thread**
+       -- below the 168 FA3's consumers need to stay spill-free, which is where its 4 460 B comes from.
+     - **q64 keeps the C7512 warning even in this form.** So neither tile gives a clean build: q128 starves the
+       allocation by widening the CTA, q64 starves it by shrinking the tile.
+  1c. **[x] SHARED MEMORY is the harder constraint, and it is what actually decides this (2026-10-28).** The
+     piggyback is the only configuration in which an FA3 CTA and the row mainloop need their shared memory AT THE
+     SAME TIME; every other mode lets the two regions alias, because a CTA takes one role or the other. So the
+     request becomes FA3 + rows, not max(FA3, rows). Measured by compile-time report
+     (`unified/probe_fused_smem_sizes_20261028.cu`, which reads the sizes out of a deliberately failed template
+     instantiation -- no GPU, no runtime):
+     | | FA3 `SharedStorage` | 16-row `SharedStorage` | sum | the dispatch's actual request (1 KB-aligned base + slot + 48 B tail) | vs the 232 448 B opt-in max |
+     |---|---:|---:|---:|---:|---|
+     | q128 | 163 920 B | 69 632 B | 233 552 B | **234 544 B** | **OVER by 2 096 B -- cannot launch** |
+     | q64 | **147 536 B** | 69 632 B | 217 168 B | 218 160 B | fits, 14 288 B spare |
+     - The 234 544 B figure independently reproduces the number already recorded in this tree for the co-resident
+       STAGES=2 layout, which is a check on the probe rather than a new finding.
+     - **This is the vise, and it is the result worth reporting.** The piggyback NEEDS the 64-row chunk tile,
+       because at 128 rows the CTA cannot be created at all -- and the 64-row tile is exactly the configuration
+       where ptxas drops to 144 registers and reports it can no longer keep FA3's `wgmma` asynchronous. The tile
+       that buys the shared memory is the tile that costs the chunk its tensor-core pipelining. Not a byte count
+       to tune: the two constraints point opposite ways.
+  1d. **Toolchain cross-check, so the arms above may be read as one table.** Arms 1 and 1b were compiled on
+     different hosts (the H200 trial dropped its ssh listener mid-session, so the piggyback arms ran on the dev
+     box against an unpacked flashinfer 0.7 wheel; `unified/gen_fi07_config_20261028.py` renders the 0.7
+     `batch_attention_config.inc` there, which is needed because `PersistentParams` is DEFINED in that generated
+     header and the box's cache held a 0.3.1 render). The shared arm -- default build at q128 -- comes out
+     **168 reg / 33 424 B spill stores on both**, together with the same 255 reg / 72 B for `FA2ExecutorKernel`,
+     so the two toolchains agree bit for bit on this translation unit. That run is also the regression control for
+     the piggyback edits: at `FUSED_Q64_PIGGYBACK=0` the default build is unchanged.
   2. **[!] RETRACTED (2026-10-28) -- the plan-only count used the wrong assumption.** It assumed only a chunk's
      REMAINDER tile runs at q64, giving 1.15% of row items hostable. But the tile size is a kernel-internal choice
      independent of the chunk's token count: a 2048-token chunk is 32 tiles of 64 rows OR 16 tiles of 128 rows.
@@ -2206,16 +2246,23 @@ issue `mma.sync` for 16-row rows alongside.
     flag they move past `FirstUserBarrier`.
   - **Only the 16-row runner may be inlined** (`FUSED_DRAIN_ONLY16=1`): the kernel's allocation is set by the
     widest body in it, and the 64/128-row classes stay on the separate FA2 executor.
-  **Status: compiles; no register number and no runtime number.** The 4-GPU H200 trial dropped its ssh listener
-  before the probe arms could be built, and ptxas counts are not comparable across toolchains, so the arms must run
-  on that host to sit beside the table above. `unified/run_q64_piggyback_gate_20261028.sh` waits for the host and
-  then builds both the `=0` regression control and the `=1` arm.
-- **Standing verdict (2026-10-28): CLOSED as proposed, and it should not be claimed as a gain.** Three independent
+  **Status: COMPILED and measured for registers and shared memory (tests 1b and 1c above); never run.** What is
+  missing is correctness and a timing, and neither is worth the GPU hours given 1c: the launchable configuration is
+  the one whose chunk loses `wgmma` pipelining, so the mechanism's best case is bounded above by an upper bound of
+  1.1-2.3% at 128K while its cost to the chunk is unbounded and unmeasured.
+  `unified/run_q64_piggyback_gate_20261028.sh` waits for the H200 and rebuilds both arms there, as independent
+  confirmation of 1b on the trial's toolchain.
+- **Standing verdict (2026-10-28): CLOSED as proposed, and it should not be claimed as a gain.** Four independent
   reasons, in order of strength:
-  1. The mechanism's premise does not hold -- q64 halves the CTA instead of freeing a slot, and costs FA3 its
-     wgmma pipelining (C7512) before any row work is hosted.
-  2. Hosting even the narrowest guest turns a spill-free FA3 kernel into one with 7 528 B of spill stores.
-  3. **Even a perfect implementation is bounded at 1.1-2.3% of the step at a 128K prefix and 4.5-10.2% at 32K**
+  1. **The two constraints point opposite ways (1c).** The piggyback can only be LAUNCHED at the 64-row chunk tile
+     (at 128 rows the shared-memory request is 234 544 B against a 232 448 B maximum), and the 64-row tile is the
+     one where ptxas reports it can no longer keep the chunk's `wgmma` asynchronous. There is no tile that is both
+     launchable and leaves FA3 intact.
+  2. The mechanism's premise does not hold -- q64 halves the CTA instead of freeing a slot, so the guest warpgroup
+     is extra width the kernel has to ask for, and per-thread register pressure is unchanged either way.
+  3. Hosting even the narrowest guest turns a spill-free FA3 kernel into one that spills: 7 528 B at the same CTA
+     width, 4 460 B with the CTA widened (and then at 128 registers per thread instead of 168).
+  4. **Even a perfect implementation is bounded at 1.1-2.3% of the step at a 128K prefix and 4.5-10.2% at 32K**
      (the upper bound below, `unified/bench_q64_piggyback_ub_20261028.py`), because the row work is ~1% of
      attention time where real steps live. Rows are cheap, not capacity-starved: a 2048-token chunk is 32 q64
      tiles against a median of 13 rows.

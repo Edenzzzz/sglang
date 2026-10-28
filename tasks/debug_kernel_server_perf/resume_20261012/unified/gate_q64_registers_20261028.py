@@ -54,6 +54,11 @@ ap.add_argument("--local-root", default=None,
 ap.add_argument("--data", default=None,
                 help="flashinfer 0.7 wheel payload dir (the `flashinfer/data` of an unpacked "
                      "flashinfer_python-0.7.*.whl), used as the merge base")
+ap.add_argument("--gen", default=None,
+                help="the generated batch-attention config dir. PersistentParams is DEFINED "
+                     "there, and a 0.3.1 render lacks the fields 0.7 added, so this must be "
+                     "named explicitly rather than globbed when both versions sit in the cache "
+                     "(see gen_fi07_config_20261028.py)")
 ap.add_argument("--std", default="c++20")
 args = ap.parse_args()
 args.out.mkdir(parents=True, exist_ok=True)
@@ -79,8 +84,11 @@ if args.local_root:
         shutil.rmtree(inc, ignore_errors=True)
         shutil.copytree(data / "include", inc)
         shutil.copytree(top / "port07" / "include", inc, dirs_exist_ok=True)
-    gen = next(iter(sorted(Path(os.path.expanduser(
-        "~/.cache/flashinfer")).glob("*/generated/batch_attention_with*"))))
+    assert args.gen, "--gen is required with --local-root (see its help)"
+    gen = Path(args.gen)
+    assert "k_sf_stride_page" in (gen / "batch_attention_config.inc").read_text(), \
+        f"{gen} is a pre-0.7 render of batch_attention_config.inc; PersistentParams there is " \
+        "missing the fields the overlay needs"
     includes = [str(gen), str(inc), str(data / "csrc"), str(data / "cutlass/include"),
                 str(data / "cutlass/tools/util/include"), str(data / "spdlog/include"),
                 str(data / "cccl/thrust"), str(data / "cccl/libcudacxx/include"),

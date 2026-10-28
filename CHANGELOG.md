@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.47.0 — Sweep reordered: the qcap-fixed arm runs next against prefill-prioritized (2026-10-28)
+- Stopped sweep r5 after its pp arm (local drivers by PID, mn_kill.sh on all pods, 16 GPUs free in 15 s), and the
+  two chained follow-ups that keyed on its completion marker.
+- mn_superset_v2_16g_20261028.sh (r6): ours = the qcap-fixed arm (python_slo_qcap,
+  SLO_CHUNK=...:demote:ttft:qcap:stepcap=2000), first at each load; mc and pdmux at alpha 3; ours, pp, mc, pdmux at
+  alpha 6. pp at alpha 3 is reused from r5 (same cluster). The PD re-measure is chained after it in /tmp/run_v2.sh,
+  each stage behind the GPU-memory preflight.
+
 ## v2.46.0 — First superset verdict: VIOLATED at alpha 3 -- sglang's default prefill-prioritized wins (2026-10-28)
 - Same cluster and load, superset_report.py: sglang prefill-prioritized 83.2% chat / 93.2% agent / 2448 tok/s,
   TPOT p90 41.9 / 47.2 ms, against ours (uncapped SLO chunk) 84.4 / 90.3 / 2259, 43.6 / 48.8 ms. pp wins agent

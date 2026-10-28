@@ -476,7 +476,27 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     - If the sweep's frontier does NOT envelope them, the honest finding is that a single per-step latency bound
       is not expressive enough, and the next lever is the per-tenant form (cap by the tightest RESIDENT tenant's
       target), not a tighter constant.
-  - **Also needed for motivation 2 and now cheap:** plot the P/D demand RATIO over time, not two separate demand
+  - **[x] MOTIVATION 2 IS NOW MEASURED (2026-10-28, `tasks/paper_figures/pd_ratio_20261028.py`, zero GPU cost --
+    the demand-shift figure's own data).** The prefill-to-decode demand ratio (issued uncached prompt tokens/s over
+    issued output tokens/s, 30 s windows):
+    | arm | P/D p10 / p50 / p90 | max/min over the run | median in surge | median outside |
+    |---|---|---|---|---|
+    | colocation, no surge | 63.6 / 82.4 / 107.1 | 4.2x | -- | -- |
+    | colocation, chat surge | 37.6 / 79.6 / 106.8 | **37x** | **38.4** | **85.1** |
+    | conditional disagg, surge | 33.6 / 53.8 / 73.9 | 3.4x | 36.7 | 56.9 |
+    - **The ratio halves inside the surge window (38.4 against 85.1 outside, a 2.2x shift) and spans 3.4-4.2x
+      within a run even with no surge at all.** So the claim is no longer "no static ratio is good enough" but the
+      stronger and more direct one: **the right ratio changes by more than 2x within minutes, so a partition of
+      nodes chosen before the run cannot track it.** That is motivation 2, measured.
+    - Worth stating in the paper because it also bounds what a load factor can show: compressing timestamps by
+      alpha makes everything arrive faster while PRESERVING the trace's P:D proportion, so rate scaling alone
+      cannot demonstrate ratio variation. The variation here comes from the trace's own structure plus the surge
+      arms, which move the mix in opposite directions -- a chat surge adds short-prompt long-decode work at a fixed
+      agent rate (toward decode), a fan-out spike adds cold prefills (toward prefill).
+    - Also useful as a control: conditional disaggregation sees a *smaller* swing (1.55x against 2.2x) because it
+      prefills short appends locally, so part of the prefill demand never becomes cross-node work -- consistent
+      with the mechanism claim 1 rests on.
+    - **[superseded] the original note:** plot the P/D demand RATIO over time, not two separate demand
     panels. `fig23_demand_shift.py` already extracts issued prefill tokens/s and issued decode tokens/s, so
     dividing them turns "no static ratio wins" into "the ratio itself moves by Nx during the surge, so no static
     split can track it". Our two spike arms move it in OPPOSITE directions -- the chat surge toward decode at a

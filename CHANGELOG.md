@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.19.0 — Motivation 2 measured: the P/D demand ratio shifts 2.2x within minutes (2026-10-28)
+- `tasks/paper_figures/pd_ratio_20261028.py`, zero GPU cost, from the demand-shift figure's own data: the
+  prefill-to-decode demand ratio has median 82.4 on the colocated no-surge arm and spans 4.2x over the run; on the
+  surge arm its median is 38.4 inside the surge window against 85.1 outside -- a 2.2x shift -- with 37x between
+  its extremes.
+- So motivation 2 upgrades from "no static ratio is good enough" to the direct claim: the right ratio changes by
+  more than 2x within minutes, so a partition of nodes fixed before the run cannot track it.
+- Also recorded: rate scaling alone cannot show this, because compressing timestamps by alpha preserves the
+  trace's P:D proportion. The variation comes from the trace's structure plus the surge arms, which move the mix in
+  opposite directions. And conditional disaggregation sees a smaller swing (1.55x) because it prefills short
+  appends locally -- consistent with the mechanism motivation 1 rests on.
+- 8 of 11 arXiv reference PDFs downloaded to /opt/tiger/papers (outside the repo, so no binaries are committed).
+
 ## v3.18.0 — Restore the outline's one-line goal (2026-10-28)
 - Reverted the goal bullet to its original one-liner (meet per-tenant SLOs while maximizing throughput for mixed
   agentic + chat workloads, without a fixed prefill:decode node ratio). The outline is a scaffold; the expanded

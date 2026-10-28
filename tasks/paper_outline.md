@@ -328,7 +328,17 @@ arriving within 60 s at 32-64K context holds chat time-to-first-token at **4.5-1
 the server's throughput is unharmed. The blocking is also self-inflicted in a way a larger chunk cannot fix: raising
 the chunk size shortens the queue of chunks but lengthens each step, which pushes the cost onto the resident decode
 rows' inter-token latency instead. The two knobs trade one tenant's latency against the other's, and neither knob
-knows which tenant is waiting. Llama-3.3-70B and GLM-4.5-Air: [pending].
+knows which tenant is waiting.
+
+sglang does already shrink the prefill it admits, but for a different reason, and the distinction matters for what
+this paper claims. When admitting more prefill would exhaust the KV cache pool, the scheduler backs off -- it
+lowers the ratio of new tokens it will admit and, in the limit, retracts running requests to free their blocks. That
+mechanism is driven by memory, not by time: it guarantees that the requests already running can produce their next
+token at all, which is liveness. It says nothing about *when* that token arrives, which is the SLO. A server with
+ample KV headroom never triggers it and will still miss every latency target under the burst above, and conversely a
+server that triggers it has already given up on the retracted requests' deadlines. So the existing back-off is not
+a weak form of SLO control that we are strengthening; it is a different guarantee, and the latency axis is
+unmanaged. Llama-3.3-70B and GLM-4.5-Air: [pending].
 
 Figure 6: chat TTFT over time around the agent burst, with per-tenant attainment, under sglang's prefill-prioritized
 schedule at several chunk sizes; one H200, Qwen2.5-7B. Llama-3.3-70B / GLM-4.5-Air [pending].

@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.76.0 — 3.3: sglang's OOM-driven chunk back-off protects liveness, not SLOs (2026-10-28)
+- Added the caveat a reviewer would otherwise raise: sglang DOES shrink the prefill it admits, lowering its
+  new-token ratio and ultimately retracting running requests when admitting more would exhaust the KV pool. That
+  mechanism is driven by memory, not time -- it guarantees a running request can produce its next token at all
+  (liveness), not when the token arrives (the SLO).
+- Why the distinction matters for the claim: a server with ample KV headroom never triggers it and still misses
+  every target under the measured burst, and one that does trigger it has already abandoned the retracted
+  requests' deadlines. So it is not a weak form of SLO control we are strengthening; it is a different guarantee,
+  and the latency axis is unmanaged.
+
 ## v2.75.0 — 3.3 explains sglang's prefill-prioritized policy instead of pre-empting our solution (2026-10-28)
 - The section argued about EDF and demotion, which are C3's mechanisms and belong in section 5; a motivation
   section should only establish that the deployed policy fails. Rewritten to state what the policy IS (fill each

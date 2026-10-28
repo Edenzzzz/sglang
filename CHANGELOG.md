@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.77.0 — Mixed chunk at alpha 6 reframes the ITL-tail finding (2026-10-28)
+- mc (accept 1.765): chat 53.8% / 684 tok/s, TTFT p90 8.19 s, TPOT p90 102.0 ms, ITL p99 1245.9 ms; agent 77.4% /
+  1926 tok/s, TPOT p90 108.4 ms, ITL p99 1301.3 ms.
+- The chat ITL p99 ordering is pp 503 < ours 999 < mc 1246 ms (agent 514 < 920 < 1301). Mixed chunk folds prefill
+  into decode steps, as our four-mode step does, and has the worst tail of the three; prefill-prioritized
+  serializes prefill and has the best. So the tail cost is the price of mixing, we pay less of it than sglang's own
+  mixed chunk, and pp buys its tail by giving up throughput and TTFT.
+- L1 vs mc wins every metric: chat attainment +8.0 pts, agent +2.9, agent goodput +14.2% (clears the 10% bar),
+  chat TTFT p90 -58%, agent TPOT p50/p90 -13%/-9.8%, chat ITL p99 -20%, agent ITL p99 -29%.
+- Acceptance caveat hardens: both sglang arms land at 1.765-1.795, both ours at 1.982-2.001. A per-arm fluke is now
+  unlikely and a systematic tree or step-structure difference likely -- which is what the per-tenant logging will
+  separate, and until then the goodput margins stay unclaimed.
+
 ## v2.76.0 — 3.3: sglang's OOM-driven chunk back-off protects liveness, not SLOs (2026-10-28)
 - Added the caveat a reviewer would otherwise raise: sglang DOES shrink the prefill it admits, lowering its
   new-token ratio and ultimately retracting running requests when admitting more would exhaust the KV pool. That

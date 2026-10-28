@@ -336,7 +336,25 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
         `agent_tokens`), so per-tenant acceptance can be compared directly. If per-tenant acceptance matches across
         arms, the gap is mix and the margin is real; if it does not, (c) holds and the merged step changes what the
         draft sees -- which would itself be a finding about C2 rather than about the schedule.
-  - mc and pdmux follow on the same cluster and window set.
+  - **Arm 4, mc (sglang's mixed chunk, its own chunk policy), accept 1.765:** chat tight 53.8% (684 tok/s), TTFT
+    p50/p90 0.35/8.19 s, TPOT p50/p90 38.3/102.0 ms, ITL p99 1245.9 ms; agent tight 77.4% (1926 tok/s),
+    not_issued 7223, TPOT p50/p90 46.5/108.4 ms, ITL p99 1301.3 ms.
+  - **THIS REFRAMES THE ITL-TAIL REGRESSION, and the ordering is the mechanism.** The three arms' chat ITL p99:
+    **pp 503 ms < ours 999 ms < mc 1246 ms** (agent: 514 < 920 < 1301). Mixed chunk folds prefill into decode steps
+    -- the same thing our four-mode step does -- and it has the WORST tail of the three; prefill-prioritized
+    serializes prefill into its own steps and has the best. Our tail sits between them, i.e. **we are better than
+    the baseline that shares our mechanism and worse than the one that avoids it.** The honest statement is not
+    "our step lengthening is a regression" but "step lengthening costs tail latency, we incur less of it than
+    sglang's own mixed chunk does, and prefill-prioritized buys a better tail by giving up the throughput and TTFT
+    that come with mixing".
+  - **L1 vs mc: we win every metric.** chat attainment +8.0 pts (61.8 vs 53.8), agent +2.9 pts, agent SLO goodput
+    **+14.2%** (2199 vs 1926, clearing the 10% bar), chat TTFT p90 **-58%** (3.42 vs 8.19 s), agent TPOT p50/p90
+    -13% / -9.8%, chat ITL p99 -20%, agent ITL p99 -29%, and 524 fewer agent rounds unissued.
+    - Same caveat as pp: mc's acceptance is 1.765 against our 1.982, so part of the +14.2% is the acceptance gap
+      rather than the schedule. Both sglang arms land at 1.765-1.795 while both of ours land at 1.982-2.001, which
+      makes a per-arm fluke unlikely and a systematic difference between the trees or the step structure likely --
+      exactly what the per-tenant acceptance logging is for.
+  - pdmux follows on the same cluster and window set.
 - **[x] ROPE-BASE DEFECT: THE SCOPE IS EVERY UPSTREAM-TREE BASELINE, INCLUDING THE PAPER'S HEADLINE PD BASELINE
   (verified 2026-10-28).** Loaded `ModelConfig("/dev/shm/w/qwen7b", model_override_args=<the YaRN override>)` under
   each tree on worker 0 (CPU only, mid-run, harmless):

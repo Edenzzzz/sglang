@@ -266,7 +266,25 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     (chat 91.2%, TPOT p90 29.8 ms, ITL p99 162.9 ms) chat attainment falls 29.7 points, TPOT p90 grows 3.5x and the
     inter-token tail reaches ~1 s, with 6788 agent rounds never issued. Deadline ordering was neutral at alpha 3 by
     construction (nothing was in danger); here there is something to order.
-  - L1 (+ EDF), pp, mc and pdmux follow on the same cluster and window set.
+  - **Arm 2, L1 (= L0 + per-tenant deadline ordering), accept 1.982:** chat tight 61.8% (785 tok/s), TTFT p50/p90
+    0.16/3.42 s, TPOT p50/p90 35.2/105.2 ms, ITL p99 999.0 ms; agent tight 80.3% (2199 tok/s), not_issued 6699,
+    TTFT p50/p90 0.67/6.04 s, TPOT p50/p90 40.6/97.8 ms, ITL p99 919.8 ms. Duration 1039 s.
+  - **VERDICT: EDF ordering flips sign between the two loads, which is the behaviour the design wants, but the
+    magnitude is small.** Against L0 at alpha 6: agent SLO goodput **+5.7%** (2199 vs 2080), chat TTFT p90
+    **-24%** (3.42 vs 4.50 s), agent TTFT p90 -9.0%, agent TPOT p90 -5.5% (97.8 vs 103.5 ms), agent ITL p99 -4.1%,
+    agent attainment +1.2 points, 89 fewer rounds unissued. Chat TPOT p90 is 1.5% worse (105.2 vs 103.6) and chat
+    attainment is level (+0.3 points).
+    - Against the cluster's noise floor (~5 points of attainment, ~4% of goodput, ~3 ms of TPOT p90), the deltas
+      clearly outside it are **agent goodput +5.7%, chat TTFT p90 -24% and agent TPOT p90 -5.5 ms**; the rest is
+      inside. Every agent-side metric moves the same way, which a single repeat cannot prove but does not
+      contradict.
+    - At alpha 3 the same comparison was uniformly, marginally NEGATIVE (all inside noise). So deadline ordering
+      costs nothing at capacity and pays a little under overload -- exactly the shape the goal states ("no
+      regression vs FCFS at low load, better TPOT attainment at high load"), **but nowhere near the 30% / 10% bar
+      on its own.** C3's case therefore rests on the SLO-budgeted chunk layer on top of this ordering, which is
+      what the tail-bounded arm tests.
+    - Needs a second repeat before the +5.7% is quoted as more than directional.
+  - pp, mc and pdmux follow on the same cluster and window set.
 - **[x] ROPE-BASE DEFECT: THE SCOPE IS EVERY UPSTREAM-TREE BASELINE, INCLUDING THE PAPER'S HEADLINE PD BASELINE
   (verified 2026-10-28).** Loaded `ModelConfig("/dev/shm/w/qwen7b", model_override_args=<the YaRN override>)` under
   each tree on worker 0 (CPU only, mid-run, harmless):

@@ -1310,7 +1310,17 @@ slightly worse, which is what ordering by deadline should do when no deadline is
 locality for an ordering that buys nothing. And the inter-token tail grows on both rungs relative to sglang (chat p99
 130.8 -> 162.9 -> 185.5 ms), because our tree runs longer steps that fold a prefill chunk into the verify forward. This
 satisfies the design goal of no regression at low load, and it means deadline ordering has to earn its place under
-overload, where a deadline is in danger; that measurement is [pending].
+overload, where a deadline is in danger.
+
+At load factor 6 it does, mildly. That load is genuine overload: rung L0's chat attainment falls from 91.2% to
+61.5%, its mean-TPOT 90th percentile grows from 29.8 to 103.6 ms, its inter-token tail reaches about one second,
+and 6 788 agent rounds are never issued. Adding deadline ordering there raises agent SLO goodput by 5.7%
+(2 199 against 2 080 tokens/s), cuts the chat time-to-first-token tail by 24% (3.42 against 4.50 s) and the agent
+mean-TPOT tail by 5.5% (97.8 against 103.5 ms), at 1.5% worse chat TPOT tail and level chat attainment. Of those,
+the goodput, the chat TTFT tail and the agent TPOT tail are outside this cluster's run-to-run noise; the rest is
+inside it. So ordering by deadline costs nothing when nothing is in danger and pays a little when something is,
+which is the behaviour the design intends -- but it is not on its own close to the gains reported in section 6.4,
+and C3's case rests on the chunk-sizing layer built above it. One repeat; a second is [pending].
 
 **Result: the schedule alone, without the kernel or speculation.** This arm isolates colocation from C1 and C2
 (Table 15). Ours holds at least 90% chat attainment up to 64 agent programs; stock disaggregation only to 16, at

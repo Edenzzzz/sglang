@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.66.0 — EDF ordering flips sign at overload: +5.7% agent goodput, -24% chat TTFT tail (2026-10-28)
+- alpha 6 L1 vs L0 on 16 H20s (`mn_overload_decomp_16g_20261028.sh`, log /tmp/h20/mn_overload_r1.log, accept
+  1.982 / 2.001): agent SLO goodput 2199 vs 2080 (+5.7%), chat TTFT p90 3.42 vs 4.50 s (-24%), agent TPOT p90 97.8
+  vs 103.5 ms, agent ITL p99 919.8 vs 958.7, agent attainment +1.2 pts, 89 fewer rounds unissued; chat TPOT p90
+  1.5% worse, chat attainment level.
+- Outside the noise floor (~5 pts, ~4%, ~3 ms): goodput, chat TTFT p90, agent TPOT p90. The rest is inside it.
+- At alpha 3 the same comparison was uniformly, marginally negative. So deadline ordering costs nothing at capacity
+  and pays a little under overload -- the shape the goal asks for, but far from the 30%/10% bar alone. C3's case
+  rests on the chunk layer above it, which the tail-bounded arm tests next.
+- alpha 6 is confirmed genuine overload: L0 chat attainment 91.2% -> 61.5%, TPOT p90 29.8 -> 103.6 ms, ITL p99 ~1 s,
+  6788 agent rounds never issued.
+
 ## v2.65.0 — Draft-share instrumentation root-caused: it wrapped a class the arm never built (2026-10-28)
 - Three attempts to measure the draft share of decode wall time produced zero reports while logging
   "instrumentation active". Cause, found offline: `_create_eagle_worker` (speculative/spec_info.py:264) returns

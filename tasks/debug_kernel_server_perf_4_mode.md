@@ -87,6 +87,28 @@
        - Per the superset rule this is a defect, not a result. Leading cause, already diagnosed: the uncapped rule
          spends up to ~6 s of banked slack in single 16,384-token steps, which lands in exactly the metrics pp wins on
          (TPOT tails, agent attainment). Fix built (qcap + stepcap=2000, tree `python_slo_qcap`).
+       - **[x] qcap RESULT (r6, 2026-10-28 15:2x): the cap works mechanically and does NOT fix the loss -- the stall
+         diagnosis was WRONG.**
+         | alpha 3 | accept | chat | agent | agent tok/s | chat TPOT p90 | agent TPOT p90 | agent TTFT p90 |
+         |---|---:|---:|---:|---:|---:|---:|---:|
+         | ours, uncapped (r5) | 2.012 | 84.4% | 90.3% | 2259 | 43.6 | 48.8 | 8.33 s |
+         | ours, qcap + stepcap=2000 (r6) | 1.987 | 84.6% | 89.3% | 2237 | 43.9 | 50.5 | 9.52 s |
+         | sglang prefill-prioritized (r5) | 1.837 | 83.2% | **93.2%** | **2448** | **41.9** | **47.2** | **3.38 s** |
+         - The cap did what it was built for: the rule log shows capped=8001 of 8001 calls (none at the full 16,384)
+           and qcapped=490. Yet TPOT p90 did NOT improve (43.6 -> 43.9). The ~6 s stalls were not the cause.
+         - **The real loss is agent TTFT: p90 9.5 s for us against 3.4 s for pp.** The rule's typical chunk is
+           147-333 tokens (budget_ms 89-147), so long agent prefills advance a few hundred tokens per step and miss
+           the 10 s agent TTFT SLO -- exactly the agent attainment pp wins on (+3.9 pts).
+         - **pp protects TPOT about as well as we do (41.9 vs 43.9 ms p90) WITHOUT throttling prefill.** So the rule
+           over-protects TPOT and pays for it in TTFT, with no TPOT gain to show. This is a design flaw: the budget is
+           almost always the per-step allowance s_r x a (~100 ms), i.e. the rule is behaving as a per-step ITL bound
+           despite unlimited banking, because the binding row is the freshest one, which has banked nothing.
+         - **Root cause, by the rule's own structure:** the budget is a MIN over resident rows, and a just-admitted row
+           has zero banked slack, so one fresh row pins every step to its bare allowance. Under steady admission there
+           is almost always a fresh row. The mean-TPOT intent (rows that are ahead may lend) is defeated by the minimum.
+         - Next: run the prepared decomposition (L0 = our tree + sglang default chunk + FCFS; L1 = + EDF) against pp to
+           confirm the chunk rule is the losing layer, and redesign the budget so a fresh row's first steps are not the
+           binding constraint (e.g. evaluate each row's mean TPOT over its expected lifetime, not its first token).
        - Decision: reorder. Running mc / pdmux against an arm already known to be defective adds little; the
          decision-relevant number is whether qcap closes the gap to pp at alpha 3. The sweep is stopped after pp and
          re-queued as `mn_superset_v2_16g_20261028.sh` with ours = the qcap tree, run first.

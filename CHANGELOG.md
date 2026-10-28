@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.48.0 — qcap does not fix the loss; the real cause is the chunk rule starving prefill (2026-10-28)
+- r6 ours (qcap + stepcap=2000): 84.6% chat / 89.3% agent / 2237 tok/s, chat TPOT p90 43.9, agent TTFT p90 9.52 s.
+  The cap works (capped 8001/8001, none at 16,384; qcapped 490) but TPOT p90 did not improve (43.6 -> 43.9): the
+  ~6 s stall diagnosis was WRONG.
+- Real loss: agent TTFT p90 9.5 s vs sglang prefill-prioritized's 3.4 s. The rule's typical chunk is 147-333 tokens,
+  so long agent prefills crawl and miss the 10 s agent TTFT SLO, which is the agent attainment pp wins on. pp protects
+  TPOT about as well (41.9 vs 43.9 ms p90) without throttling prefill.
+- Root cause from the rule's structure: the budget is a MIN over resident rows, and a just-admitted row has banked
+  nothing, so one fresh row pins every step to its bare per-step allowance (~100 ms). Under steady admission there is
+  nearly always a fresh row, so the "mean TPOT" rule degenerates to a per-step ITL bound.
+- Next: decomposition L0/L1 vs pp to confirm the chunk rule is the losing layer; redesign the budget so a fresh row's
+  first steps are not binding.
+
 ## v2.47.0 — Sweep reordered: the qcap-fixed arm runs next against prefill-prioritized (2026-10-28)
 - Stopped sweep r5 after its pp arm (local drivers by PID, mn_kill.sh on all pods, 16 GPUs free in 15 s), and the
   two chained follow-ups that keyed on its completion marker.

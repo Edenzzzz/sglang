@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.32.0 — item 18's gating compile fails: q64 does not free a warpgroup and costs FA3 its wgmma pipelining (2026-10-28)
+- `unified/gate_q64_registers_20261028.py` compiles the co-compiled fused translation unit (FA3's wgmma mainloop and
+  the FA2 `mma.sync` runners in one ptxas allocation) at FA3 tile 128 and 64 and reads registers and spill bytes. It
+  drives `nvcc -c` directly rather than `cpp_extension.load`, which keys its cache on the extension name and serves a
+  stale `.so` when only `-D` flags change.
+- Result, H200 toolchain, `FusedFA3PersistentKernel` spill STORES: FA3 alone is **168 reg / 0 B** at q128 against
+  **144 reg / 1 560 B** at q64; adding only the 16-row runner costs **7 528 B** (q128) / 5 448 B (q64); all three FA2
+  classes cost 33 424 B / 19 840 B. `ptxas` emits C7512 "wgmma.mma_async instructions are serialized due to
+  insufficient register resources" at q64 in every build and never at q128, and `--maxrregcount=240` does not move it.
+- Root cause of the proposal's premise being wrong: both FA3 implementations derive the consumer warpgroup count from
+  the tile (`NUM_WARPS = ((CTA_Q/64)+1)*4`; upstream's `AtomLayoutQK = Shape<Int<kBlockM/64>,_1,_1>`), so a 64-row tile
+  HALVES the CTA to 256 threads rather than freeing a slot in a 384-thread one, and each consumer owns 64 query rows at
+  either tile, so per-thread register pressure is unchanged.
+- The corrected mechanism is implemented behind `FUSED_Q64_PIGGYBACK=1` (flashinfer `persistent_fa3_fused.cuh`,
+  `fused_barriers.cuh`): the CTA is launched one warpgroup wider than FA3's thread count, that warpgroup drains only the
+  16-row tile class concurrently with FA3's mainloop, shared memory is forced disjoint (aliasing is only sound when the
+  roles do not overlap in time) and the FA2 named-barrier ids move past CUTLASS's `FirstUserBarrier` (arrivals are
+  counted, not tagged, so a shared id releases one role's barrier on the other's arrivals). Defaults are byte-for-byte
+  unchanged at `=0`; **compiled, not measured** — the H200 trial dropped its ssh listener before the probe arms ran.
+- Item 18 is recorded as CLOSED as proposed, with the measured upper bound (1.1–2.3% of the step at 128K, 4.5–10.2% at
+  32K) noted so no gain is claimed above it. Its value to the paper is as evidence for the 5.1 claim that POD-style
+  intra-SM overlap does not carry to Hopper's warp-specialised FA3.
+
 ## v2.31.0 — smoke5: chat client end to end, teardown and done-marker both work; dataset registered (2026-10-28)
 - smoke5 is the first run with all three fixes live. Chat completed end to end (300 requests, mean TTFT 54.2 ms,
   mean TPOT 3.4 ms, p99 ITL 6.5 ms, 0 tracebacks). The bench reported `MNBENCHDONE status=1` at once instead of

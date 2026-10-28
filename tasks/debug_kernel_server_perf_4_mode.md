@@ -2047,7 +2047,7 @@ per-item narrative follows below; the reader-facing summary is `paper_outline.md
 | 16 | draft/verify pipelining across staggered groups | ceiling UNMEASURED after 3 instrumentation attempts | **OPEN**, not claimed | `apply_draft_share_events_20261028.py` |
 | 17 | draft/verify epilogue op fusion | bounded ~4% of kernel time | not built | section B |
 | 17b | **POD-Attention's structure on Hopper, MEASURED** (one stock FA2 call covering chunk and rows, against our FA3 chunk + FA2 rows) | ours **3.69x** faster at 32K, **3.45x** at 128K (2048-token chunk, 32 rows) | POD runs on Hopper but lags; this is an UPPER bound for it, since its CTA interleaving sits on top of the same kernel | `unified/bench_pod_proxy_20261028.py` |
-| 18 | **FA3 q-tile 64 co-scheduled with an `mma.sync` 16-row warpgroup in ONE CTA** (user, 2026-10-28); q128 rows keep the separate-launch PDL path | [pending: first test is a compile, no GPU] | **OPEN, the most promising untried overlap** | proposal below |
+| 18 | **FA3 q-tile 64 co-scheduled with an `mma.sync` 16-row warpgroup in ONE CTA** (user, 2026-10-28); q128 rows keep the separate-launch PDL path | **gating compile FAILS: q64 does not clear the spill and makes FA3 WORSE** -- FA3 alone 168 reg / **0 B** spill at q128 against 144 reg / 1 560 B and `ptxas` C7512 "wgmma serialized for want of registers" at q64; hosting the 16-row class costs 7 528 B (q128) / 5 448 B (q64) of spill from zero | **CLOSED as proposed**; the premise that q64 frees a warpgroup is false (it halves the CTA). Corrected 384-thread form written and compiling, not measured | `unified/gate_q64_registers_20261028.py` |
 
 **Item 18, the user's proposal, and why it is the one overlap idea not already ruled out.** The Hopper restriction
 is that a SINGLE warpgroup cannot interleave wgmma of different shapes -- not that a kernel cannot issue wgmma and
@@ -2094,9 +2094,47 @@ issue `mma.sync` for 16-row rows alongside.
     exactly item 18's regime. The tile mix is a function of C3's chunk sizing, which couples the two contributions
     and is an argument FOR the mechanism rather than against it.
   - Test 2 below must therefore be run against the chunk sizes the rule actually picks, not against a fixed 2048.
+- **[!] THE PREMISE IS FALSE: a 64-row query tile does not free a warpgroup, it HALVES THE CTA** (read off both FA3
+  implementations, 2026-10-28). The consumer count is derived from the tile in each:
+
+      flashinfer:  NUM_WARPS    = ((CTA_Q / 64) + 1) * 4                     hopper/kernel_traits.cuh:93
+      upstream FA3: AtomLayoutQK = Layout<Shape<Int<kBlockM / 64>, _1, _1>>   flash-attention
+                                                       hopper/mainloop_fwd_sm90_tma_gmma_ws.hpp:89
+
+  so q128 is 1 TMA producer + 2 wgmma consumers = 12 warps / 384 threads, and q64 is 1 producer + 1 consumer =
+  **8 warps / 256 threads**. No slot opens inside a 384-thread CTA; the CTA simply gets smaller, and a warpgroup
+  for row work has to be ADDED BACK explicitly. Nor does q64 relieve per-thread pressure, which is what the
+  proposal's register arithmetic assumed: each consumer warpgroup owns **64 query rows at both tiles**
+  (`AtomLayoutQKD` is one MMA atom per consumer either way), so a thread's accumulator is the same size at q64 as
+  at q128. The 384x168 -> 256x168 arithmetic describes the CTA's total, not what a thread needs.
+- **Nor is q64 free for the FA3 role, which the proposal also assumed.** See the gate table below: `ptxas` emits
+  **C7512 "wgmma.mma_async instructions are serialized due to insufficient register resources"** at q64 in EVERY
+  build including the FA3-alone control, and never at q128. Taking q64 degrades FA3's own mainloop before a single
+  row of FA2 work is added. (A5.1's "q64 wins on short-KV few-row items" was measured on the standalone FA3 kernel
+  at its own geometry, not on this co-compiled translation unit.)
 - **Two cheap tests, in order:**
-  1. **Compile only, no GPU:** build the co-compiled kernel with the FA3 role at q64 and read `ptxas -v` registers
-     and spill bytes. The first co-compiled attempt spilled 1,436 B; if q64 clears it and fits 2 CTAs/SM, proceed.
+  1. **[x] Compile only, no GPU (2026-10-28): the gate FAILS. q64 does not clear the spill, and the spill is
+     entirely a co-residency cost that q64 only halves.** `unified/gate_q64_registers_20261028.py` drives `nvcc -c`
+     directly (not `cpp_extension.load`, which keys its cache on the extension NAME and serves a stale `.so` when
+     only `-D` flags change) over `port07/tests/fused_fa3_persistent_ext.cu` -- the one existing kernel where FA3's
+     wgmma mainloop and the FA2 `mma.sync` runners share a single ptxas register allocation. Registers per thread
+     and spill STORE bytes for `FusedFA3PersistentKernel`, H200 toolchain:
+     | FA2 bodies co-compiled into the FA3 kernel | q128 | q64 |
+     |---|---|---|
+     | none (`FLASHINFER_FUSED_DRAIN_NOOP=1`, FA3 alone) | 168 reg / **0 B** | 144 reg / 1 560 B + **C7512** |
+     | the 16-row class only (`FUSED_DRAIN_ONLY16=1`) -- what item 18 would place here | 168 reg / **7 528 B** | 144 reg / 5 448 B + **C7512** |
+     | all three classes (128 / 64 / 16), today's build | 168 reg / **33 424 B** | 144 reg / 19 840 B + **C7512** |
+     - **FA3 alone at q128 spills NOTHING.** The whole 33 424 B is the price of co-residency, confirming the
+       tree's standing note (33 676 B fused against 52 B alone) and locating it in ptxas's per-FUNCTION allocation
+       across the two roles' mutually exclusive branches.
+     - **Restricting the guest to the 16-row class -- the only class item 18 proposes to host -- cuts that to
+       7 528 B but does not remove it.** So "the 16-row tile is register-light" is true of its accumulator (16
+       regs/thread) and false of its effect on this allocation.
+     - q64's lower register count is ptxas's own choice, not a cap that can be lifted:
+       `-Xptxas --maxrregcount=240` leaves it at 144 reg / 5 448 B / C7512, bit for bit.
+     - **Verdict by the gate's own rule: it still spills, so STOP.** The register wall holds for the mechanism as
+       proposed, and for a reason stronger than the byte count -- q64 is not a register-relief configuration for
+       FA3 at all.
   2. **[!] RETRACTED (2026-10-28) -- the plan-only count used the wrong assumption.** It assumed only a chunk's
      REMAINDER tile runs at q64, giving 1.15% of row items hostable. But the tile size is a kernel-internal choice
      independent of the chunk's token count: a 2048-token chunk is 32 tiles of 64 rows OR 16 tiles of 128 rows.
@@ -2131,15 +2169,47 @@ issue `mma.sync` for 16-row rows alongside.
      - **Absolute ceiling: 4.5% of the step at best (chunk 128), and 0% at the 2048-token chunk real steps use**,
        because the row work is ~1% of serial time there. Independently consistent with the 1.763x vs 1.759x
        two-stream result on the real captures.
-     - **Verdict, corrected: item 18 is UNTESTED and now looks worth building.** Its reach is ~95% of row items
-       (test 2, recounted), not 1.15%, and no measurement yet bounds its per-step gain, because launch-level
-       concurrency is a different mechanism. The remaining work is the compile test (does q64 clear the 1,436 B
-       spill?) and then an implementation that issues `mma.sync` row work from the freed warpgroup.
+     - (Superseded by test 1's gate, above.) Previously stated verdict: item 18 is UNTESTED and now looks worth
+       building; its reach is ~95% of row items, and the remaining work is the compile test and then an
+       implementation that issues `mma.sync` row work from the freed warpgroup.
      - (The paragraph below was written under the retracted framing.) Previously stated verdict: Its value is as EVIDENCE for the
        architectural claim (paper 5.1): it is the only intra-SM overlap Hopper permits, and measuring its reach at
        1.15% is what makes "POD-style overlap does not carry to Hopper" a quantified statement rather than an
        opinion. Test 1 (the compile) is still worth running for the same reason -- to show the register wall is
        real -- but no serving gain should be claimed.
+- **The corrected mechanism, written and compiling but NOT MEASURED (`FUSED_Q64_PIGGYBACK=1`, flashinfer
+  `persistent_fa3_fused.cuh` / `fused_barriers.cuh`, 2026-10-28).** Since q64 does not free a warpgroup, the
+  width is added by hand: the CTA is launched ONE WARPGROUP WIDER than `FA3Traits::NUM_THREADS`, those 128 threads
+  never enter FA3's body (so they sit outside every barrier FA3 arms, all of which are sized to FA3's own thread
+  count), and they drain the 16-row tile class from the same queue the FA2 executor uses while the rest of the CTA
+  runs FA3's mainloop. Three things the flag has to change with it, each a real hazard rather than a detail:
+  - **Shared memory cannot alias.** `FLASHINFER_FUSED_ALIAS_SMEM` puts the FA2 runners' storage at offset 0 on top
+    of FA3's, which is sound only because a CTA takes one role or the other. Under the piggyback both regions are
+    live at once, so the flag forces the disjoint layout and forces the FA2 region to be reserved whatever
+    `sm_split` says (otherwise a launch with every SM on FA3 -- the case the piggyback is FOR -- gives the guest
+    warpgroup no workspace).
+  - **Named barriers must move out of CUTLASS's reserved range.** The FA2 mainloop uses ids 2 and 5, inside it,
+    which is safe only while the two roles never overlap in time. Arrivals are counted, not tagged, so a shared id
+    would not corrupt data visibly -- it would release one role's barrier on the other role's arrivals. Under the
+    flag they move past `FirstUserBarrier`.
+  - **Only the 16-row runner may be inlined** (`FUSED_DRAIN_ONLY16=1`): the kernel's allocation is set by the
+    widest body in it, and the 64/128-row classes stay on the separate FA2 executor.
+  **Status: compiles; no register number and no runtime number.** The 4-GPU H200 trial dropped its ssh listener
+  before the probe arms could be built, and ptxas counts are not comparable across toolchains, so the arms must run
+  on that host to sit beside the table above. `unified/run_q64_piggyback_gate_20261028.sh` waits for the host and
+  then builds both the `=0` regression control and the `=1` arm.
+- **Standing verdict (2026-10-28): CLOSED as proposed, and it should not be claimed as a gain.** Three independent
+  reasons, in order of strength:
+  1. The mechanism's premise does not hold -- q64 halves the CTA instead of freeing a slot, and costs FA3 its
+     wgmma pipelining (C7512) before any row work is hosted.
+  2. Hosting even the narrowest guest turns a spill-free FA3 kernel into one with 7 528 B of spill stores.
+  3. **Even a perfect implementation is bounded at 1.1-2.3% of the step at a 128K prefix and 4.5-10.2% at 32K**
+     (the upper bound below, `unified/bench_q64_piggyback_ub_20261028.py`), because the row work is ~1% of
+     attention time where real steps live. Rows are cheap, not capacity-starved: a 2048-token chunk is 32 q64
+     tiles against a median of 13 rows.
+  So its value to the paper is as EVIDENCE for the architectural claim in 5.1 -- the register wall and the
+  tile-derived warpgroup count are what make "POD-style intra-SM overlap does not carry to Hopper's warp-specialised
+  FA3" a measured statement rather than an opinion -- not as a contribution.
 
 **End-to-end checks of item 1, which is what the paper rests on:**
 

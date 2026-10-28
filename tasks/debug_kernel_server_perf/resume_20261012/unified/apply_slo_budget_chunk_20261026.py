@@ -24,6 +24,8 @@ every running decode row within its mean-TPOT SLO, with headroom h; with no rows
 - ":qcap" / ":stepcap=MS" (2026-10-28): cap what ONE step may spend -- by the remaining TTFT slack of the tightest
   waiting request (qcap), and/or a hard ceiling (stepcap). Unlimited banking alone let ~6 s of banked slack be spent
   in a single 16,384-token step.
+- ":life" (2026-10-28): budget each row by its projected mean TPOT at COMPLETION, using the tenant's expected
+  output length learned online from finished requests, so a just-admitted row no longer pins every step.
 - ":ttft": TTFT floor. The earliest-deadline prefill (in-progress chunk, else the head of the deadline-ordered queue),
   while it can still meet its deadline, gets at least the chunk that finishes its remaining tokens by the deadline at
   the predicted step time. A TPOT-only budget starved prefill far past capacity (alpha 6: chat TTFT p50 74 s).
@@ -87,6 +89,7 @@ method = '''
                 bank_steps=float(next((f[5:] for f in fields[5:] if f.startswith("bank=")), "inf")),
                 ttft="ttft" in fields[5:],
                 qcap="qcap" in fields[5:],
+                life="life" in fields[5:],
                 stepcap=float(next((f[8:] for f in fields[5:] if f.startswith("stepcap=")), "inf")))
             logger.info("SLO_CHUNK model=%s target=%s S=%g T=%g h=%g chat=%gms agent=%gms (>= %d tokens) demote=%s",
                         fields[0], target, cfg["S"], cfg["T"], cfg["h"], cfg["chat_ms"], cfg["agent_ms"],
@@ -105,6 +108,23 @@ method = '''
             prev = getattr(self, "_slo_chunk_tps", None)
             self._slo_chunk_tps = sample if prev is None else 0.9 * prev + 0.1 * sample
         tps = getattr(self, "_slo_chunk_tps", None) or 1.0
+        if cfg.get("life"):
+            seen = getattr(self, "_slo_seen", {})
+            live = {id(r) for r in rows}
+            lives = getattr(self, "_slo_life", {})
+            for rid, (cls, n, ms) in list(seen.items()):
+                if rid not in live:          # the row left the batch: it finished, so its length is a sample
+                    m, k = lives.get(cls, (0.0, 0))
+                    lives[cls] = (m + (n - m) / (k + 1), k + 1)
+                    if n >= 4:
+                        prev = getattr(self, "_slo_rate", None)
+                        self._slo_rate = ms / n if prev is None else 0.9 * prev + 0.1 * ms / n
+                    del seen[rid]
+            for r in rows:
+                if getattr(r, "_slo_t0", None) is not None:
+                    cls = "agent" if len(r.origin_input_ids) >= cfg["agent_tokens"] else "chat"
+                    seen[id(r)] = (cls, len(r.output_ids) - r._slo_o0, (now - r._slo_t0) * 1000.0)
+            self._slo_seen, self._slo_life = seen, lives
         budget = float("inf")
         for r in rows:
             if getattr(r, "_slo_t0", None) is None:
@@ -118,6 +138,23 @@ method = '''
                 # its target, so the step is bounded by its per-step allowance (no backlog recovery, no banking).
                 budget = min(budget, per_step)
                 continue
+            if cfg["life"]:
+                # Lifetime mean TPOT. The SLO is a request's mean TPOT over its WHOLE output, so a step's cost is
+                # spread over the tokens it has not produced yet. Projected mean at completion:
+                #     (spent + step + remaining * rate) / L  <=  s_r   =>   step <= s_r * L - spent - remaining * rate
+                # with L the tenant's expected output length (running mean of requests that actually finished,
+                # never below what this row has already produced) and rate this row's own measured ms per token.
+                # Without this, the bound below makes a just-admitted row -- which has banked nothing -- the minimum
+                # on nearly every step, and the mean-TPOT rule degrades into a per-step bound (measured 2026-10-28:
+                # chunks of 147-333 tokens, agent TTFT p90 9.5 s against prefill-prioritized's 3.4 s).
+                cls = "agent" if s_r == cfg["agent_ms"] else "chat"
+                life = getattr(self, "_slo_life", {}).get(cls)
+                if life is not None and life[1] >= 8:
+                    L = max(life[0], o + tps)
+                    rate = spent / o if o >= 4 else getattr(self, "_slo_rate", s_r)
+                    remaining = max(0.0, L - o - tps)
+                    budget = min(budget, s_r * L - spent - remaining * rate)
+                    continue
             # Banked slack is capped at BANK_STEPS steps' worth, so one step cannot stall a row for seconds.
             budget = min(budget, s_r * (o + tps) - spent, cfg["bank_steps"] * per_step)
         # Per-step cap. Unlimited banking is the right reading of each resident row's MEAN TPOT, but it lets slack a

@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.49.0 — Lifetime-mean budget (:life) for the SLO-budgeted chunk; queued after the decomposition (2026-10-28)
+- Fix for the diagnosed root cause (the budget is a MIN over resident rows, and a just-admitted row has banked
+  nothing, so it pins every step and the mean-TPOT rule degrades to a per-step bound). ":life" budgets each row by its
+  projected mean TPOT at COMPLETION: step <= s_r * L - spent - remaining * rate, with L the tenant's expected output
+  length and rate the row's own measured ms per token.
+- No tuned prior: L is the running mean of output lengths of requests that actually FINISHED (learned online as rows
+  leave the batch), never below what the row has produced; until 8 have finished the old bound applies. For scale,
+  TraceLab agent rounds have median 218 / mean 516 output tokens.
+- Applied to a copy of our arm's scheduler: parses. Built into python_slo_life on all four pods; mn_life_16g_20261028.sh
+  (qcap + stepcap=2000 + life, alpha 3) chained to run after the decomposition, against r5's prefill-prioritized.
+
 ## v2.48.0 — qcap does not fix the loss; the real cause is the chunk rule starving prefill (2026-10-28)
 - r6 ours (qcap + stepcap=2000): 84.6% chat / 89.3% agent / 2237 tok/s, chat TPOT p90 43.9, agent TTFT p90 9.52 s.
   The cap works (capped 8001/8001, none at 16,384; qcapped 490) but TPOT p90 did not improve (43.6 -> 43.9): the

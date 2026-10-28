@@ -254,6 +254,19 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     (`ROPE_THETA`) and `mn_run.py` (`ROPE_THETA` in the env string).
   - Push files with `Cluster(SID, cp, nodes=[f"worker-{i}" for i in range(NPODS)])`; without `nodes=` every call
     goes to one default instance that is not even one of the workers.
+- **[ ] ALPHA 6 OVERLOAD DECOMPOSITION (running 2026-10-28 from 17:45, `mn_overload_decomp_16g_20261028.sh`, log
+  `/tmp/h20/mn_overload_r1.log`).** Arms L0, L1, pp, mc, pdmux at load factor 6 on the 16 H20s; every earlier driver
+  declared `for A in 3 6` and was stopped before leaving alpha 3, so this is the first measurement of the second
+  half of the node-level goal (better TPOT attainment under high load).
+  - **Arm 1, L0 (our tree + A6 + four-mode + router, sglang FCFS and sglang chunk), accept 2.001:**
+    chat tight 61.5% (777 tok/s), TTFT p50/p90 0.16/4.50 s, TPOT p50/p90 35.4/103.6 ms, ITL mean/p99 54.8/1002.9 ms;
+    agent tight 79.1% (2080 tok/s), not_issued 6788, TTFT p50/p90 0.69/6.64 s, TPOT p50/p90 40.2/103.5 ms,
+    ITL p99 958.7 ms. Duration 1048 s.
+  - **This confirms alpha 6 is genuine overload and therefore the right load point:** against L0 at alpha 3
+    (chat 91.2%, TPOT p90 29.8 ms, ITL p99 162.9 ms) chat attainment falls 29.7 points, TPOT p90 grows 3.5x and the
+    inter-token tail reaches ~1 s, with 6788 agent rounds never issued. Deadline ordering was neutral at alpha 3 by
+    construction (nothing was in danger); here there is something to order.
+  - L1 (+ EDF), pp, mc and pdmux follow on the same cluster and window set.
 - **[x] ROPE-BASE DEFECT: THE SCOPE IS EVERY UPSTREAM-TREE BASELINE, INCLUDING THE PAPER'S HEADLINE PD BASELINE
   (verified 2026-10-28).** Loaded `ModelConfig("/dev/shm/w/qwen7b", model_override_args=<the YaRN override>)` under
   each tree on worker 0 (CPU only, mid-run, harmless):
@@ -2475,11 +2488,69 @@ issue `mma.sync` for 16-row rows alongside.
      | q64 | **147 536 B** | 69 632 B | 217 168 B | 218 160 B | fits, 14 288 B spare |
      - The 234 544 B figure independently reproduces the number already recorded in this tree for the co-resident
        STAGES=2 layout, which is a check on the probe rather than a new finding.
-     - **This is the vise, and it is the result worth reporting.** The piggyback NEEDS the 64-row chunk tile,
-       because at 128 rows the CTA cannot be created at all -- and the 64-row tile is exactly the configuration
-       where ptxas drops to 144 registers and reports it can no longer keep FA3's `wgmma` asynchronous. The tile
-       that buys the shared memory is the tile that costs the chunk its tensor-core pipelining. Not a byte count
-       to tune: the two constraints point opposite ways.
+     - **This was read as a vise, and 1e below shows it is not one.** The piggyback does need the 64-row chunk
+       tile, because at 128 rows the CTA cannot be created at all. The other half of the argument -- that the
+       64-row tile is where ptxas drops to 144 registers and can no longer keep FA3's `wgmma` asynchronous -- was
+       a property of letting FA3's traits set the register split, not of the tile: the CTA is 12 warps wide in
+       this configuration whatever the tile says, and following that width removes the warning (1e).
+  1e. **[x] REPLACE A CONSUMER instead of adding a warpgroup (2026-10-28): 168 reg, 164 B spill, no C7512.**
+     Arm 1b widens the CTA; this one takes the warpgroup out of FA3's own allocation. FA3 runs at `CTA_Q=64` --
+     one consumer warpgroup plus the producer, 8 warps -- while the CTA is still launched 12 warps wide, and the
+     4 warps a q128 FA3 would have given its SECOND consumer run the 16-row row mainloop instead. The CTA is then
+     384 threads, exactly today's q128 FA3 CTA, and the runtime register split is the q128 one as well: two
+     consumer-class warpgroups at 216 and the producer at 72, i.e. 64 512 of the SM's 65 536 registers, with the
+     guest holding the share FA3's second consumer would have had. Build
+     `FUSED_PIGGYBACK_REPLACE=1 FUSED_Q64_PIGGYBACK=1 FUSED_FA3_CTA_Q=64 FUSED_DRAIN_ONLY16=1`; same gate script,
+     dev box CUDA 13.1, flashinfer `unified_dispatch_20261024` @ `03d3759` + this change:
+     | `FusedFA3PersistentKernel` arm | reg | spill stores | C7512 |
+     |---|---:|---:|---|
+     | default build at q128, all three FA2 classes (regression control) | 168 | 33 424 B | no |
+     | FA3 alone at q128 (`FLASHINFER_FUSED_DRAIN_NOOP=1`) | 168 | 0 B | no |
+     | FA3 alone at q64, no piggyback | 144 | 1 560 B | **yes** |
+     | piggyback q64 + 16-row guest, no replace mode (arm 1b, reproduced) | 144 | 3 716 B | **yes** |
+     | **replace mode + 16-row guest** | **168** | **164 B** | **no** |
+     | replace mode, guest compiled out (role-alone control) | 168 | 16 B | no |
+     | replace mode + 16-row guest at `FLASHINFER_FA2_MMA_KV=1` | 168 | 104 B | no |
+     - **240 registers is unreachable for any variant whose CTA is 384 threads, and the q128 build it was meant to
+       match is itself 168.** ptxas names `min(launch-bound cap, the setmaxnreg value)` registers per thread, and
+       the cap at 384 threads with one CTA per SM is 65 536/384 -> 168. Measured on a 20-line kernel:
+       `__launch_bounds__(384,1)` with `setmaxnreg.inc 240` gives 168; `(256,1)` with 240 gives 240; `(256,1)`
+       with 152 gives 152; `-maxrregcount=240` leaves `(384,1)` at 168. The 64 512-register arithmetic is the
+       PHYSICAL distribution, which replace mode restores exactly -- it is not a ptxas count.
+     - **The spill was a SECOND inlined copy of the row mainloop, not the guest.** With the guest hosted and the
+       FA3-role queue backfill still compiled into the same branch, the arm sits at 3 936 B; removing that
+       backfill drops it to 164 B against 16 B for the role-alone control, so the guest's marginal cost is 148 B.
+       The removal is also required for correctness, not a tuning choice: the guest holds the CTA's only
+       row-mainloop shared-memory slot for the whole kernel, a second slot does not fit (148 480 + 2 x 69 632 is
+       past the 232 448 B maximum), and both draw from the same cursor, so a post-FA3 drain in that CTA would be
+       a second claimant of a live slot and could not add throughput anyway.
+     - **C7512 is gone, and the leave-one-out names the cause.** The same geometry without replace mode gives
+       FA3's consumer the 8-warp share (144) and ptxas reports `wgmma` serialized; following the launched 12-warp
+       width instead (216, so the 168 ceiling binds) removes the warning. That is 1c's "vise", released.
+     - **Checked that the guest computes, rather than assuming the compile means anything.** `cuobjdump -sass`
+       shows 396 `HMMA` (`mma.sync`) and 48 `GMMA` (`wgmma`) inside the one `FusedFA3PersistentKernel`, 0 `HMMA`
+       with the guest compiled out, and exactly half the `HMMA` at `FLASHINFER_FA2_MMA_KV=1`.
+     - Shared memory, by compile-time `sizeof`: 147 536 B (FA3 at q64) + 69 632 B (16-row slot), and the launch's
+       actual request -- 1 KB-aligned base + slot + 48 B tail -- is **218 160 B** against the 232 448 B opt-in
+       maximum, **`NUM_STAGES` untouched at 2**, 14 288 B spare.
+     - Two concurrency hazards the compile cannot see were found by reading and fixed with it, both of which the
+       1b build would also have hit on a GPU: (i) three raw `__syncthreads()` on the row mainloop's single-stage
+       path (`persistent.cuh`) are barrier 0 with the CTA's full count, which the 256 threads inside FA3 never
+       arrive at -- now the warpgroup's own `persistent_block_sync`; (ii) FA3's two block-wide rendezvous (the
+       pipeline-init publish in `prefill_sm90.cuh` and the post-epilogue wait) are likewise barrier 0, which the
+       guest never arrives at -- now named barrier 3 counted over FA3's own 256 threads.
+     - **NOT RUN: no GPU this session, so there is no correctness or timing number.** What is needed on the H200,
+       in order: push the four changed headers (`persistent_fa3_fused.cuh`, `fused_barriers.cuh`, `persistent.cuh`,
+       `hopper/prefill_sm90.cuh`) to the overlay tree and re-run this gate there, since ptxas counts are only
+       comparable within one toolchain (`unified/run_q64_piggyback_gate_20261028.sh` does the push, and needs the
+       two new files added to its list); then build through `base_loader.load_fused_fa3` with a per-flag-set
+       extension NAME, never `cpp_extension.load`'s cache; then the harness fixture three ways -- FA3 rows alone
+       with an empty queue, 16-row items alone, and both at once -- gated on per-row max relative error against
+       the stock FA3 and FA2 references and on the forward-composition counter being non-zero. A hang, not a wrong
+       number, is the expected first failure: check `FUSED_SMEM_REPORT=1` reports 218 160 B and that
+       `cudaFuncSetAttribute` accepts it, that the plan emitted 64-row FA3 tiles (`kFa3TileQ` follows
+       `FUSED_FA3_CTA_Q`, so the chunk needs twice the CTAs and the `fa3_num_ctas == sm_split` contract must still
+       hold), and that `FLASHINFER_FUSED_SYMMETRIC` is unset (replace mode now rejects it outright).
   1d. **Toolchain cross-check, so the arms above may be read as one table.** Arms 1 and 1b were compiled on
      different hosts (the H200 trial dropped its ssh listener mid-session, so the piggyback arms ran on the dev
      box against an unpacked flashinfer 0.7 wheel; `unified/gen_fi07_config_20261028.py` renders the 0.7

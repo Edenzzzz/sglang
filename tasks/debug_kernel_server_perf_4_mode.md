@@ -2010,9 +2010,29 @@ issue `mma.sync` for 16-row rows alongside.
 - **Bounded by the same role-imbalance argument as every other overlap result** (rows 3, 7): intra-CTA overlap can
   only hide the SMALLER role, and at 128K the chunk is ~100% of step attention. Expect gains at short-to-medium
   context with many rows, ~nothing at long context. Do not promise more than that.
-- **First test costs no GPU time:** compile the co-compiled kernel with the FA3 role at q64 and read `ptxas -v` for
-  registers and spill bytes. If the 1,436 B spill goes away and it fits 2 CTAs/SM, build it; if it still spills,
-  the idea dies for the same reason the first co-compiled attempt did.
+- **The user's extension (same day), which is what makes this a contribution rather than an overlap trick:** the
+  spare warpgroup is not just a place to hide work, it is **extra tile-16 CAPACITY whose size depends on how many
+  q64 chunk tiles the step has**. The plan can therefore OFFLOAD tile-16 rows from the FA2 executor into FA3 CTAs:
+
+      spare_slots      = (number of q64 chunk tiles) x 1 warpgroup
+      rows_to_FA3      = min(spare_slots, pending tile-16 rows)
+      rows_to_FA2      = the remainder
+
+  **Stated goal: always maximise tensor-core utilisation and minimise tile waste.** The two executors' capacity
+  stops being fixed at launch and becomes fungible, so neither role idles while the other still has a queue.
+- **Why only our design can express it.** It requires ONE plan that sees both roles' work items and can co-assign
+  across them. PDL cannot (two launches, capacity fixed per launch); POD-Attention cannot (FA2-only, no wgmma role
+  to free a warpgroup from); DeFT does not (one call, one role). This is the first mechanism in this project whose
+  novelty rests on the unified plan itself rather than on tile sizing.
+- **Honest bound, from A5.3:** co-running the FA3 role with FA2 on the remaining SMs measured **18% where the roles
+  balance**, but only **<= 2% of serving GPU time on TraceLab** is in that balanced regime. So expect gains at
+  short-to-medium context with many rows and ~nothing where the chunk dominates. Claim it scoped to that regime.
+- **Two cheap tests, in order:**
+  1. **Compile only, no GPU:** build the co-compiled kernel with the FA3 role at q64 and read `ptxas -v` registers
+     and spill bytes. The first co-compiled attempt spilled 1,436 B; if q64 clears it and fits 2 CTAs/SM, proceed.
+  2. **Plan only, no kernel change:** from the trace replay, count per step the q64 chunk tiles and the pending
+     tile-16 rows, and report how many rows COULD move and what fraction of FA2 tile slots that is. That bounds the
+     gain before any kernel work, the same way the page-overlap count bounded cross-role reuse (item 14).
 
 **End-to-end checks of item 1, which is what the paper rests on:**
 

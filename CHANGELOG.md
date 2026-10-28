@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.11.0 — Item 18 extended: tile-16 offload from FA2 to FA3 q64 CTAs (2026-10-28)
+- User's extension: the warpgroup freed by running the FA3 role at q64 is extra tile-16 CAPACITY sized by the number
+  of q64 chunk tiles, so the plan can offload tile-16 rows from the FA2 executor into FA3 CTAs
+  (rows_to_FA3 = min(spare_slots, pending tile-16 rows)). Goal: maximise tensor-core utilisation, minimise tile
+  waste. The two executors' capacity becomes fungible instead of fixed at launch.
+- This is the first mechanism whose novelty rests on the UNIFIED PLAN rather than tile sizing: it needs one plan
+  that sees both roles and co-assigns across them. PDL cannot (capacity fixed per launch), POD cannot (FA2-only),
+  DeFT does not (one call, one role).
+- Honest bound from A5.3: co-running the roles measured 18% where they balance, but <=2% of serving GPU time on
+  TraceLab is in that regime. Claim scoped to short-to-medium context with many rows.
+- Two cheap tests recorded, in order: (1) compile-only ptxas registers/spills at q64 (the first co-compiled attempt
+  spilled 1,436 B); (2) plan-only count from the trace of how many tile-16 rows could move, bounding the gain
+  before any kernel work.
+
 ## v2.10.0 — New kernel item 18: FA3 q64 co-scheduled with an mma.sync 16-row warpgroup (2026-10-28)
 - User's proposal, recorded as kernel item 18 and the most promising untried overlap. The Hopper restriction is
   per-warpgroup wgmma shape, not wgmma-vs-mma.sync across warpgroups: FA3 at q64 uses one consumer warpgroup

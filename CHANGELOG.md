@@ -1,6 +1,6 @@
 # Changelog
 
-## v2.64.0 — Draft-share instrumentation root-caused: it wrapped a class the arm never built (2026-10-28)
+## v2.65.0 — Draft-share instrumentation root-caused: it wrapped a class the arm never built (2026-10-28)
 - Three attempts to measure the draft share of decode wall time produced zero reports while logging
   "instrumentation active". Cause, found offline: `_create_eagle_worker` (speculative/spec_info.py:264) returns
   `EAGLEWorkerV2` only when `enable_overlap=True` and the v1 `EAGLEWorker` otherwise, and both define

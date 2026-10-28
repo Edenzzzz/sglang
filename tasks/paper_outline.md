@@ -1612,12 +1612,15 @@ resident. We bounded it before building it, by giving every row tile a free ride
 measuring what the step would save: **1.1-2.3% at a 128K prefix and 4.5-10.2% at 32K** for Qwen2.5-7B, and at most
 10.2% for any of the three models, the largest being Llama-3.3-70B at 32K whose 64 query heads over 8 KV heads make
 each row tile comparatively expensive. The ceiling is small for the reason Table 3 gives: rows are numerous but
-cheap, costing 0.08-0.41 ms against a 7-23 ms chunk. The first implementation added a warpgroup to the CTA, which
-takes it to 512 threads; the kernel's register budget is shared across its MMA warpgroups, so that build was capped
-at 128 registers per thread against the 168 the chunk needs, and it spilled. Hosting by *replacing* one of the two
-consumer warpgroups instead leaves the budget untouched, since the CTA keeps its 384 threads, and frees the retired
-warpgroup's query tile for the guest's buffers; that build is [pending]. Either way the mechanism cannot move the
-paper's claims, which is why it is reported here as a bound rather than as a contribution.
+cheap, costing 0.08-0.41 ms against a 7-23 ms chunk. The first implementation added a warpgroup to the CTA, taking it to 512
+threads; ptxas caps a kernel's register count at the launch bound, 65 536 registers divided by the CTA's threads,
+so that build was named 128 registers per thread against the 168 the chunk needs, and it spilled 4 460 bytes.
+Structuring it as a *replacement* instead -- the prefill role at a 64-row tile in eight warps, the guest in the
+ninth through twelfth, so the CTA keeps 384 threads -- restores exactly the register distribution a 128-row prefill
+CTA has, and the guest then costs **148 bytes of spill** (164 against 16 for the same kernel with the guest
+compiled out), with no serialization warning. Shared memory is 218 160 bytes against the 232 448-byte limit, with
+the prefill pipeline's depth unchanged. So the mechanism is implementable after all; what does not change is its
+ceiling, which is why it is reported here as a bound rather than as a contribution.
 
 **Result: KV multicast.** We bounded multicast before building it. For FA2, only 0.3-0.9% of KV page reads across the
 96 captures are shared with another tile. For FA3, 99% of reads are re-reads by the same prefill row's other query

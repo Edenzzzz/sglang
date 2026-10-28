@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.06.0 — rope_theta was nested in the wrong place; smoke arm caught it (2026-10-28)
+- Qwen2.5 carries rope_theta as a TOP-LEVEL config field, a sibling of rope_scaling. My override nested it inside
+  rope_scaling, which corrupted the context-length derivation (worker logged "derived context_length (2048)") and
+  the server then died with CUDA OOM at startup. Correct form: {"rope_scaling":{...},"rope_theta":1000000};
+  verified by parsing and checking top-level keys, redeployed to all four pods, smoke arm relaunched.
+- This is the fourth deployment fault in a row (invalid override JSON, missing sglang/benchmark, client/server tree
+  mismatch, rope_theta misplaced). Each was found only by running one short arm, and the smoke gate found this one
+  in five minutes instead of a 40-minute sweep.
+
 ## v2.05.0 — Smoke-gated sweep launch (2026-10-28)
 - /tmp/smoke_then_sweep.sh waits for the smoke arm, verifies it wrote at least one result JSON, and only then
   launches the superset sweep as r4; otherwise it reports SMOKE_FAIL and points at the pod-side bench_agent.log.

@@ -40,6 +40,16 @@
        `SMOKE_FAIL` and points at the pod-side `bench_agent.log`. Log `/tmp/h20/smoke_then_sweep.log`. This
        removes the failure mode that cost r1, r2 and r3 -- a sweep running for 40 minutes against dead clients
        while the driver log looked healthy.
+   - **[!] Fourth blocker, caught by the smoke arm in five minutes: `rope_theta` was nested in the WRONG PLACE.**
+     Qwen2.5's `config.json` carries `rope_theta: 1000000.0` as a TOP-LEVEL field, a sibling of `rope_scaling`, not
+     a member of it. My override put it inside the `rope_scaling` dict, which corrupted the context-length
+     derivation -- the worker logged `Target model's context_length (131072) is greater than the derived
+     context_length (2048)` and then died with a CUDA OOM on startup.
+     - Correct override: `{"rope_scaling":{...},"rope_theta":1000000}`. Verified by parsing it and checking the
+       top-level keys are exactly `['rope_scaling', 'rope_theta']`, then redeployed to all four pods.
+     - **This is the value of the gate:** the same fault inside a sweep would have burned another 40 minutes and
+       looked like a slow arm. Four deployment faults in a row (override JSON invalid, missing `sglang/benchmark`,
+       client/server tree mismatch, `rope_theta` misplaced) were each found only by running one short arm.
      - **Lesson: after re-provisioning, run ONE short arm end-to-end before queueing a sweep.** r2 sat for 40
        minutes with healthy workers and a live router while every bench client was dying, and the driver's log
        showed nothing because the failure was inside `bench_agent.log` on the pod.

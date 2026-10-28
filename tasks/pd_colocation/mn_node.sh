@@ -133,9 +133,12 @@ launch() {  # launch <gpu>: probe ports, start the worker, publish its ports
   # Built in steps: quotes inside ${VAR:+...} are removed by bash's quote removal, which silently produced
   # `,rope_theta:1000000` (unquoted key) and an invalid override JSON.
   if [ "${YARN_FACTOR:-4.0}" != 0 ]; then
-    OVERRIDE='{"rope_scaling":{"factor":'${YARN_FACTOR:-4.0}',"original_max_position_embeddings":32768,"type":"yarn"'
+    OVERRIDE='{"rope_scaling":{"factor":'${YARN_FACTOR:-4.0}',"original_max_position_embeddings":32768,"type":"yarn"}'
+    # rope_theta is a TOP-LEVEL config field (Qwen2.5 config.json has rope_theta: 1000000.0), a SIBLING of
+    # rope_scaling -- not a member of it. Nesting it inside rope_scaling corrupted the context-length derivation
+    # (the worker logged "derived context_length (2048)") and the server OOMed on startup.
     [ -n "${ROPE_THETA:-}" ] && OVERRIDE="$OVERRIDE,\"rope_theta\":${ROPE_THETA}"
-    OVERRIDE="$OVERRIDE}}"
+    OVERRIDE="$OVERRIDE}"
     python3 -c "import json,sys; json.loads(sys.argv[1])" "$OVERRIDE" || { echo "BAD_OVERRIDE_JSON: $OVERRIDE" >&2; exit 1; }
     ARGS+=(--json-model-override-args "$OVERRIDE")
   fi

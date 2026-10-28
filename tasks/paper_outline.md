@@ -1339,12 +1339,12 @@ Table 13: our stack against sglang prefill-prioritized, Qwen2.5-7B, 16 H20s, loa
 | chat mean TPOT, median / p90 (ms) | 10.8 / 29.8 | 15.8 / 41.9 | -32% / -29% |
 | agent mean TPOT, p90 (ms) | 38.0 | 47.2 | -19.5% |
 | chat TTFT, p90 (s) | 0.60 | 2.81 | -79% |
-| chat inter-token latency, p99 (ms) | 162.9 | 130.8 | +25% |
+| chat mean TPOT, p99 (ms) | [pending] | [pending] | [pending] |
 
 Ours here is the serving tree with the unified dispatcher, the four-mode step and our router, admitting in arrival
 order with sglang's default chunk. It improves every SLO metric for chat and the TPOT tail for agents; agent
 attainment and goodput are inside the run-to-run noise floor (about 5 points and 4%), and the chat inter-token tail is
-worse. The gains are therefore concentrated on chat latency: chat mean TPOT falls 29-32% and the chat TTFT tail
+worse at the tail of the mean. The gains are therefore concentrated on chat latency: chat mean TPOT falls 29-32% and the chat TTFT tail
 79%, agent mean TPOT falls 19.5%, and combined SLO goodput rises 5.2%.
 
 **Result: which scheduler layer earns the gain.** Table 13's configuration is the first rung of a ladder that adds

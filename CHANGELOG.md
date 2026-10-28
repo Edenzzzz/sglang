@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.89.0 — Report TPOT only, not inter-token percentiles (2026-10-28)
+- `tracelab_windows.py` no longer prints the ITL cell. TPOT p50/p90/p99 is the latency metric: a per-request mean
+  is what the SLO is written against and what a user feels, while an inter-token percentile is taken over every gap
+  in the run, is dominated by single long steps, and is not comparable to a TPOT percentile. Reporting both side by
+  side invited reading one as the other, which is exactly the confusion that arose over the alpha-6 arms.
+- Table 14's inter-token row becomes the chat mean-TPOT p99 row, marked [pending] until a run reports it -- the
+  honest state, since the old number was an ITL percentile and cannot be relabelled as a TPOT one.
+
 ## v2.88.0 — The alpha-6 tail loss is an arm without the chunk layer, and tail TPOT is the metric (2026-10-28)
 - Stated plainly what the earlier entries implied but did not say: L1 is a decomposition rung carrying sglang's
   default chunk policy, so the mechanism that protects TPOT -- the chunk sizing -- is NOT in the arm that loses the

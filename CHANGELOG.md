@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.36.0 — Paper sections 3.1 and 6.2 filled from measured data; stale H20 kernel figures replaced (2026-10-28)
+- 3.1 step census (87,932 steps of the cluster replay): chunk-plus-rows steps are 11.6% of steps but 67.2% of GPU
+  time; rows-only 83.9% / 27.6%; prefill-only 4.5% / 5.1%. Attention share of a long-context mixed step stated as an
+  arithmetic estimate (1.08e14 FLOP = 0.73 s on H20 vs a 0.727 s step); the per-layer split of Figure 3 stays pending.
+- 6.2: the H20-era "1.43-1.51x faster than sglang's FA3 call" replaced by the H200 ladder (1.86-2.92x vs sglang's
+  call, 4.0-8.7% vs naive FA3 + FA2); Llama-3.3-70B and GLM-4.5-Air now from the H200 replay (1.028-1.058x and
+  1.020-1.028x vs naive). Bar status judged: not met by the kernel alone (2-9% vs the strongest baseline); the 30% bar
+  must be met at serving level.
+- Pending markers 75 -> 70; the rest are cluster results awaiting the sweep, and two figures.
+
 ## v2.35.0 — Windowed TraceLab cut: same replay, 2.4x smaller, so it can actually reach the pods (2026-10-28)
 - The full release (357,161 rounds, 54 MB) was pushing at ~16% per 25 min, i.e. ~2.5 h, through the cluster's
   base64-over-exec channel. tasks/pd_colocation/make_windowed_trace_20261028.py keeps only the whole sessions the

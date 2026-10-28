@@ -277,8 +277,13 @@ At 32-256K contexts, attention dominates the mixed step, and in our traces most 
 beside decode or verify rows. Attention speed therefore decides step time at long context, which motivates C1. We
 will break down per-layer time of real serving steps at 32-64K and 128-256K, in two-mode steps (prefill chunk plus
 decode rows) and four-mode steps (prefill chunk plus speculative verify rows), for all three models, and count step
-composition (prefill chunk with rows, rows only, prefill only) from the same traces. Attention share: [pending]. Step
-census: [pending].
+composition (prefill chunk with rows, rows only, prefill only) from the same traces. Step census, measured on the
+87 932 steps of the cluster replay (Qwen2.5-7B, median cached prefix 119K): steps that carry a prefill chunk beside
+rows are **11.6% of steps but 67.2% of GPU time**; rows-only steps are 83.9% of steps and 27.6% of time; prefill-only
+steps are 4.5% and 5.1%. The step that matters is therefore the mixed one, rare by count and dominant by time.
+Attention share of a long-context mixed step is close to all of it: a 2 048-token chunk over a 128K-token prefix is
+1.08x10^14 attention FLOP, about 0.73 s on an H20, against a measured step of 0.727 s. (This is an arithmetic
+estimate; the per-layer attention / GEMM split of Figure 3 is [pending].)
 
 Figure 3: stacked bars of attention, GEMM and other time per context bucket (32-64K, 128-256K) and mode, three models
 [pending].
@@ -1073,15 +1078,16 @@ for the router and EDF (section 5.2.2).
 **Setup.** We capture every Nth real mixed serving step, 24 per (context, mode) cell and 96 per model, and replay
 each with its own tensors. Contexts are 32-64K and 128-256K; modes are two-mode (prefill chunk + decode rows) and
 four-mode (prefill chunk + verify rows). Qwen2.5-7B runs on one H200; Llama-3.3-70B and GLM-4.5-Air run at TP4 on H20,
-measured on rank 0 (H200 replay of the same captures [pending]). Baselines are sglang's FA3 call, naive FA3 + FA2, the best fixed FA3 configuration, the per-step FA3
+measured on rank 0 and replayed on the H200, so every number in this section is from one H200. Baselines are sglang's FA3 call, naive FA3 + FA2, the best fixed FA3 configuration, the per-step FA3
 oracle and the role split on FA3.
 We report time-weighted speedup over each cell's steps with a
 bootstrap 95% confidence interval (CI), and FP32 worst relative error.
 
 **Results on the H200.** The unified dispatcher runs one plan, stock FA3 at the plan's split, and our tuned FA2
 BatchPrefill body with the chunk-parallel in-launch merge. On 96 fresh Qwen2.5-7B captures, all FP32-exact (worst
-relative error 0.0082), it is 1.43-1.51x faster than sglang's FA3 call (Table 5). Naive FA3 + FA2 on the same
-captures is [pending: H200].
+relative error 0.0082), it is 1.86-2.92x faster than sglang's FA3 call and 4.0-8.7% faster than naive FA3 + FA2
+on the same captures (Table 4). An earlier H20 measurement gave 1.43-1.51x against sglang's call; the H200 replay
+supersedes it.
 
 Table 5: unified dispatcher speedup, Qwen2.5-7B, H200, 96 captures.
 
@@ -1127,7 +1133,8 @@ the obvious engineering step rather than a contribution. Our dispatcher's own ga
 **Results on H20.** On the H20 (78 SMs), the same build is 1.10-1.23x faster than sglang's FA3 call on Qwen2.5-7B;
 there FA3 sets the step time, and the FA2 path's savings run beneath it. Llama-3.3-70B (TP4, 32-64K) is 1.38x /
 1.61x sglang's FA3 call on two- / four-mode steps, and GLM-4.5-Air (TP4, 32-64K, 43 captures) 1.28x / 1.41x. These
-H20 numbers are to be replaced by H200 replays of the same captures [pending].
+Replayed on the H200, our dispatcher is 1.028-1.058x naive FA3 + FA2 on Llama-3.3-70B (38 captures) and
+1.020-1.028x on GLM-4.5-Air (43 captures), while the role split alone is 6.7-7.7x and 5.3-6.0x sglang's call.
 
 GLM-4.5-Air needs the third FA2 tile class. Its 4-token verify rows pack 48 queries per KV head, and sending them to
 FA3 cost 28% of the four-mode step. A 64-row FA2 class, launched as its own instantiation so that it does not raise
@@ -1147,15 +1154,17 @@ Table 6: role-split serving build, Qwen2.5-7B, H200, earlier captures.
 | 128-256K, 2-mode | 1.57x [1.24-2.64] | 0.99x | 0.98x |
 | 128-256K, 4-mode | 1.37x [1.16-1.89] | 0.99x | 0.99x |
 
-**Bar status.** Not yet judged: naive FA3 + FA2 on the H200 is [pending].
+**Bar status.** Judged, and not met by the kernel alone: against the strongest baseline (naive FA3 + FA2) the
+dispatcher is 2-9% faster across the three models. The 30% bar has to be met at the serving level, where the
+schedule acts; section 6.3 reports it.
 
 **Figures.**
 
 Figure 13: time-weighted speedup per (model, context, mode) with bootstrap 95% CI, against sglang's FA3 call and naive FA3 + FA2. Qwen2.5-7B (H200, four cells) and Llama-3.3-70B / GLM-4.5-Air at 32-64K (H20) measured; the
-remaining Llama-3.3-70B / GLM-4.5-Air cells [pending].
+Llama-3.3-70B and GLM-4.5-Air at 32K from the H200 replay; their 128K cells were not captured.
 
 Figure 14: CDF of per-step speedup over the 96 captures, per (context, mode), against each baseline; Qwen2.5-7B,
-H200. Other models [pending].
+H200. Llama-3.3-70B and GLM-4.5-Air from the H200 replay of their rank-0 captures.
 
 Figure 15: per-item timeline of one captured four-mode step: FA3 tiles, FA2 tiles and merge items per SM over time,
 showing FA2 running beside FA3's tail under PDL [pending].

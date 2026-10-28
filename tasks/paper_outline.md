@@ -684,7 +684,7 @@ Figure 10: predicted vs measured step time, per step type (decode, prefill, mixe
 single node and cluster, is measured with this chunk size. An earlier variant also capped each step's chunk while
 chat waited; dropping that cap raised Llama-3.3-70B's throughput gain over stock from +2-3% to +9-10% (section 6.3).
 
-**SLO-budgeted chunk size [pending validation].** A fixed chunk size cannot fit both ends of the load. When prefill
+**SLO-budgeted chunk size.** A fixed chunk size cannot fit both ends of the load. When prefill
 load is high and few rows are decoding, a larger chunk would finish the prefill in fewer steps, each step paying its
 fixed cost and re-reading the prefix's KV once. When many rows are decoding, every chunk token lengthens every
 resident's inter-token gap. We therefore size each step's chunk from the step-time model of section 5.2.2. The chunk
@@ -698,8 +698,39 @@ is the largest c whose predicted step time keeps every running decode row within
 - With no rows decoding, the chunk is bounded only by memory.
 - The router prices a prefill's TTFT under the same rule, walking it chunk by chunk under each node's decode load.
 
+**Why a fixed chunk is not defensible, measured.** Replaying 10,185 four-mode steps of the cluster trace through
+the step model shows a fixed 2048-token chunk produces a step costing **5.1 times** the per-step allowance its
+resident rows can absorb (90th percentile 8.4 times), where the allowance is the tenant's mean-TPOT target times the
+tokens one step emits. That is the latency the rule removes. The model itself predicts those steps to **4.7% mean
+absolute error** (90th percentile 7.5%) at the chunk the run actually used, so the fused step is predictable enough
+to size from -- the property section 5.1's single dispatcher buys us.
+
+**The rule adapts in both directions, which is the point.** Rows in that trace decode at 13.9 ms against a 50 ms
+target, so every token a row emits banks 36 ms of slack. The chunk the rule selects therefore grows with how long
+the resident rows have been running:
+
+| tokens a resident row has emitted | banked slack | chunk chosen (median) | steps allowing >= 2048 |
+|---:|---:|---:|---:|
+| 0 (just admitted) | 0 ms | 192 | 0% |
+| 10 | 361 ms | 1 600 | 31% |
+| 20 | 722 ms | 3 072 | 84% |
+| 50 | 1 806 ms | 7 168 | 100% |
+| 200 | 7 224 ms | 16 384 | 100% |
+
+So in steady state the rule admits far **more** prefill than a 2048-token cap would, up to the server's maximum, and
+it clamps only while rows are fresh and have no slack to spend. A cap cannot express either behaviour: it throttles
+prefill when nothing needs protecting, and admits too much when something does.
+
+Banking must be unlimited, because the SLO states a request's *mean* TPOT. An earlier version capped a row's banked
+slack at four steps' allowance, which silently turns the rule into a per-token bound; it held chat's 90th-percentile
+TPOT to 64 ms but admitted so little work that attainment fell to 7.9% and throughput to 107 tokens/s. Requests that
+are never admitted still miss their SLO, so a rule that protects latency by refusing work is not a solution.
+
+The solver is three lines and a bisection -- 16 evaluations of a ten-term linear model, about 2 microseconds per
+step. It needs no dynamic program, and nothing in it is specific to a workload.
+
 It replaces the fixed 2048-token chunk if it does better on prefill-heavy loads and does no worse on decode-heavy and
-mixed loads. The comparison is [pending]:
+mixed loads. The cluster comparison is [pending]:
 - arms: fixed 2048 (the current configuration), fixed 8192 and 16384, and the rule at h = 0, 10% and 20%;
 - loads: prefill-heavy agent loads, the mixed loads of Table 7b, decode-heavy loads, and ShareGPT.
 

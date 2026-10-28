@@ -1,5 +1,25 @@
 # Current goal
 
+## The two deliverables (user, 2026-10-28)
+
+1. **Colocation kernel gains from fusing multiple tile classes in one forward.** Measured against the fair baseline
+   (a stock FA3 call for the chunk plus a stock FA2 call for the rows), this is **2-9%** across Qwen2.5-7B,
+   Llama-3.3-70B and GLM-4.5-Air. The 1.8x-7.7x figures belong to the role split itself and are not ours.
+2. **Scheduling: be a SUPERSET of every baseline, through simple SLO control and a latency model.** With a step
+   model and per-request slack we can reproduce any baseline's policy and then improve on it, so our arm should be
+   at or above every baseline at every load on the curve. **Anywhere a baseline wins is a bug to investigate, not a
+   result to report.**
+   - This reframes an earlier result: FCFS beating us at alpha 3 (chat 73.9% against 65.1%) was a VIOLATION of the
+     superset property, caused by chunk preemption / parking (since dropped) and the fixed 2048 chunk (replaced by
+     the adaptive rule). It was never a legitimate finding about FCFS.
+   - **The chunk-2048 + FCFS arm is NOT a valid baseline** -- it was our chunk control with sglang's ordering.
+   - Valid single-node baselines, each with sglang's OWN chunk policy: **default prefill-prioritized**
+     (`MIXED_CHUNK=0`), **mixed chunk** (`MIXED_CHUNK=1`), and **PD multiplexing** (`PDMUX=1`, which has no overlap
+     scheduling, so its throughput is expected about 10% lower).
+   - Driver: `pd_colocation/mn_superset_16g_20261028.sh` (launched 2026-10-28 08:2x, log
+     `/tmp/h20/mn_superset_16g_r1.log`), alpha 3 and alpha 6, acceptance logged per arm.
+
+
 Fused FA3 + FA2 attention for the 4-mode MTP (EAGLE3) serving schedule, built to the user's tile rule and optimised on
 real serving steps, then the EDF step model and the PD-colocation argument (`pd_colocation_vs_disagg.md`).
 - **Bar:** >= 30% on TTFT and ITL (or their SLO attainment) and >= 10% throughput on realistic chat + TraceLab

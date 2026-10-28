@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.98.0 — The superset claim, and the valid single-node baselines (2026-10-28)
+- User's two deliverables recorded at the top of the task doc: (1) kernel gains from fusing tile classes in one
+  forward (measured 2-9% over the fair baseline across three models); (2) scheduling as a SUPERSET of every
+  baseline via simple SLO control + a latency model, read as domination at every load on the curve.
+- Consequence: FCFS beating us at alpha 3 was a VIOLATION of the superset property (caused by chunk parking, now
+  dropped, and the fixed chunk, now adaptive), not a finding about FCFS. The chunk-2048 + FCFS arm is not a valid
+  baseline at all -- it was our chunk control with sglang's ordering.
+- Valid single-node baselines, each with sglang's own chunk policy: default prefill-prioritized (MIXED_CHUNK=0),
+  mixed chunk (MIXED_CHUNK=1), PD multiplexing (PDMUX=1, no overlap scheduling, ~10% lower throughput expected).
+- mn_superset_16g_20261028.sh launched on the new cluster: those three baselines against ours (A6 + four-mode +
+  EDF coupled to the SLO chunk at 16384), alpha 3 and alpha 6, acceptance logged per arm.
+- A6 kernel libraries deployed to all four pods (5 .so + 2 shims) from the local bundle.
+
 ## v1.97.0 — Draft-share ceiling inconclusive from traces; no host headroom at decode (2026-10-28)
 - Tried to bound draft/verify pipelining at zero GPU cost: on 18,075 consecutive decode-step pairs the wall gap
   between target forwards is p50 30.08 ms against a traced forward GPU time of p50 30.98 ms, so `gpu=` already

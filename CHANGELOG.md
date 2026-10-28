@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.05.0 — Smoke-gated sweep launch (2026-10-28)
+- /tmp/smoke_then_sweep.sh waits for the smoke arm, verifies it wrote at least one result JSON, and only then
+  launches the superset sweep as r4; otherwise it reports SMOKE_FAIL and points at the pod-side bench_agent.log.
+  This closes the failure mode that cost sweeps r1-r3: a run proceeding for 40 minutes with healthy workers and a
+  live router while every bench client was dead, invisible in the driver log.
+
 ## v2.04.0 — Draft-share measurement unresolved after three attempts; de-prioritised (2026-10-28)
 - The CUDA-event wrapper installs ("DRAFT_SHARE instrumentation active") and verify is defined on EAGLEWorkerV2 in
   the tree being run, but zero reports appear even at a threshold of 20 verify calls, so the instrumented method is

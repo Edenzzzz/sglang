@@ -35,6 +35,11 @@
        while the servers keep launching from `SGL_PY` (our tree, or `python_slo`). No arm's serving code changes.
      - A short smoke arm (`/tmp/smoke.sh`, one baseline arm at alpha 12 with a 180 s horizon, log
        `/tmp/h20/smoke1.log`) now runs BEFORE any sweep, which is what should have caught all three of these.
+     - **Gated automatically:** `/tmp/smoke_then_sweep.sh` waits for `SMOKE_DONE`, checks that the smoke arm wrote
+       at least one result JSON, and launches the sweep (`_superset_r4`) only then; otherwise it prints
+       `SMOKE_FAIL` and points at the pod-side `bench_agent.log`. Log `/tmp/h20/smoke_then_sweep.log`. This
+       removes the failure mode that cost r1, r2 and r3 -- a sweep running for 40 minutes against dead clients
+       while the driver log looked healthy.
      - **Lesson: after re-provisioning, run ONE short arm end-to-end before queueing a sweep.** r2 sat for 40
        minutes with healthy workers and a live router while every bench client was dying, and the driver's log
        showed nothing because the failure was inside `bench_agent.log` on the pod.

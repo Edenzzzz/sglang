@@ -387,25 +387,35 @@ the CTA is already resident this is immune to the SM-saturation argument above. 
 items, with the rows fitting entirely in 91.1% of steps (median 31 freed warpgroups against 13 rows). We report the
 reach; we have not built it, and claim no gain from it.
 
-**Table 4: our dispatcher against every alternative we could run, two-mode steps** (time-weighted attention speedup,
-96 captures per cell, FP32-checked; higher is better for us).
+**Table 4: our dispatcher against every alternative we could run, two-mode steps.** Each cell is OUR attention time
+divided into the baseline's, so a larger number means that baseline is SLOWER than us. Rows are ordered from the
+strongest baseline to the weakest. Time-weighted over 96 captures per cell, every arm checked against an FP32
+reference.
 
-| baseline | 32K context | 128K context |
+| baseline, strongest first | 32K context | 128K context |
 |---|---:|---:|
-| sglang's single variable-length FA3 call | 2.107x | 2.921x |
-| naive role split: stock FA3 chunk + stock FA2 rows, serial | 1.079x | 1.044x |
-| the same two calls on two streams | 1.040x | 1.042x |
+| naive role split on two streams (the strongest baseline) | 1.040x | 1.042x |
+| naive role split, serial: stock FA3 chunk + stock FA2 rows | 1.079x | 1.044x |
 | our earlier two-plan build (v3) | 1.343x | 1.769x |
-| POD-Attention's structure: one FA2 kernel covering chunk and rows | **3.69x** | **3.45x** |
+| sglang's single variable-length FA3 call | 2.107x | 2.921x |
+| POD-Attention's structure: one FA2 kernel covering chunk and rows | 3.69x | 3.45x |
 
 **Table 5: the same, four-mode steps** (prefill chunk beside speculative verify rows).
 
-| baseline | 32K context | 128K context |
+| baseline, strongest first | 32K context | 128K context |
 |---|---:|---:|
-| sglang's single variable-length FA3 call | 2.647x | 1.861x |
+| naive role split on two streams | 1.070x | 1.056x |
 | naive role split, serial | 1.087x | 1.058x |
-| the same two calls on two streams | 1.070x | 1.056x |
 | our earlier two-plan build (v3) | 1.924x | 1.366x |
+| sglang's single variable-length FA3 call | 2.647x | 1.861x |
+| POD-Attention's structure (measured at a 2 048-token chunk) | 3.69x | 3.45x |
+
+The ordering is the result. **The strongest baseline is the naive role split, which we beat by only 4-9%; the two
+designs a reader might expect to be strong are the two weakest.** sglang's shipped single call is 2.1-2.9x behind
+because it picks one query tile for every row in the batch, so a one-token decode row is computed at the chunk's
+tile width. POD's single-kernel fusion is 3.5-3.7x behind because its prefill half must issue `mma.sync` where FA3
+issues `wgmma`. Both gaps come from the same cause -- a tile or an instruction chosen for the wrong work -- which is
+what the dispatcher exists to avoid.
 
 The honest reading of Tables 4 and 5 is that the large factors belong to separating the roles, which any
 implementation gets, and that our dispatcher adds 4-9% on top by giving each row its own tile class and merging the

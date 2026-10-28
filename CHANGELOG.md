@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.23.0 — Tables 4 and 5 reordered so the comparison direction is unambiguous (2026-10-28)
+- The columns were being misread as absolute speed. Each cell is OUR time divided into the baseline's, so larger =
+  that baseline is slower; the header now says so and the rows run strongest baseline first.
+- Ordering (two-mode, 128K): naive role split on two streams 1.042x, serial 1.044x, our v3 1.769x, sglang's single
+  FA3 call 2.921x, POD's structure 3.45x. So sglang's single call and POD are the WEAKEST arms, not the strongest.
+- Stated the reason explicitly: sglang's call picks one query tile for every row, so a one-token decode row is
+  computed at the chunk's tile width; POD's prefill half issues mma.sync where FA3 issues wgmma. Both are the same
+  failure -- a tile or instruction chosen for the wrong work -- which is what the dispatcher avoids. The strongest
+  baseline is the naive role split, which we beat by only 4-9%.
+- POD rows added to both tables with the measured factors.
+
 ## v2.22.0 — POD measured on Hopper instead of called not-implementable (2026-10-28)
 - User correction: POD is FA2-based, so it RUNS on Hopper and should be measured, not ruled out.
   bench_pod_proxy_20261028.py times POD's structure (one stock flashinfer FA2 call covering the chunk AND the rows)

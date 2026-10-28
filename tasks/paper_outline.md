@@ -366,11 +366,22 @@ prefill chunk and one-token decode rows inside a single FA2 kernel, interleaving
 across CTAs. That design depends on both roles issuing the same class of tensor-core instruction -- Ampere's
 `mma.sync` -- from one kernel body. On Hopper it does not survive, for four reasons we measured rather than assumed.
 
-1. *The prefill role has to leave FA2.* Separating the roles so the chunk runs on FA3 and the rows on FA2 is worth
-   1.76x to 7.7x of attention time over a single variable-length call, depending on the model (section 6.2), and
-   conversely running the rows on FA3 tiles instead of FA2 costs 15 to 25 points of agent inter-token latency. A
-   Hopper design that keeps the chunk in an FA2 kernel to enable POD's interleaving gives up more than the
-   interleaving can return.
+1. *The prefill role has to leave FA2, and the instruction that replaces it monopolises the SM by design.*
+   Ampere's `mma.sync` is a warp-level instruction over a small tile (16x8x16). Many warps from several CTAs
+   coexist on one SM, each holding a modest slice of the register file, so a kernel can genuinely interleave a large
+   prefill tile with small decode tiles -- POD's premise is that the SM has slack. Hopper's `wgmma` and Blackwell's
+   `tcgen05.mma` are built on the opposite trade: they are warpgroup- and CTA-level instructions over large tiles
+   (64 rows by N, and whole-tile operations staged through tensor memory), and they are meant to be driven by warp
+   specialisation -- a producer warp issuing TMA loads into a deep shared-memory pipeline while consumer warpgroups
+   issue back-to-back MMAs. A single FA3 CTA is therefore *sized to fill the SM*: 384 threads at roughly 168
+   registers each is the whole register budget, and its K/V pipeline claims the shared memory. One CTA, in some
+   configurations one instruction, consumes the SM's capacity because that is how these architectures convert area
+   into throughput. The slack POD exploits does not exist, and it is becoming scarcer with each generation rather
+   than more plentiful.
+   The measurements agree with the hardware argument: separating the roles so the chunk runs on FA3 and the rows on
+   FA2 is worth 1.76x to 7.7x of attention time over a single variable-length call (section 6.2), while running the
+   rows on FA3 tiles instead costs 15 to 25 points of agent inter-token latency. A Hopper design that keeps the
+   chunk in an FA2 kernel to preserve POD's interleaving gives up far more than the interleaving can return.
 2. *The two roles cannot share a warpgroup.* `wgmma` is issued per warpgroup and cannot interleave operand shapes
    within one, so a single warpgroup cannot alternate between a 128-row chunk tile and a 16-row row tile the way
    `mma.sync` can.
@@ -397,7 +408,11 @@ functions. We therefore report this as a mechanism with a measured ceiling rathe
 claim no serving gain from it.
 
 The conclusion we draw is architectural, and it is the opposite of POD's: **on Hopper and later, the gain comes from
-giving each role the executor its tile shape deserves, not from fusing the roles into one kernel.** Fusion was the
+giving each role the executor its tile shape deserves, not from fusing the roles into one kernel.** The trend in the
+instruction set is the reason, and it points the same way for Blackwell: as the MMA unit grows and moves behind warp
+specialisation and tensor memory, a throughput-tuned CTA occupies more of the SM, not less, so intra-SM co-residency
+of two differently shaped roles becomes harder with each generation. Designs that depend on spare SM capacity should
+be expected to age badly; designs that schedule whole tiles onto the right executor should not. Fusion was the
 right answer when both roles spoke `mma.sync`; once the prefill role must speak `wgmma` to be competitive, the roles
 are better separated and merely sequenced. This is why C1 is a dispatcher and a plan rather than a fused mainloop.
 

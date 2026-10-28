@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.17.0 — The hardware reason POD-style overlap cannot work on Hopper+ (2026-10-28)
+- Strengthened reason (1) of the POD argument in paper 5.1 with the architectural cause the user supplied: Ampere's
+  mma.sync is warp-level over a 16x8x16 tile, so many warps from several CTAs coexist on an SM and a kernel really
+  can interleave a large prefill tile with small decode tiles -- POD's premise is SM slack. Hopper's wgmma and
+  Blackwell's tcgen05.mma make the opposite trade: warpgroup/CTA-level instructions over large tiles, driven by warp
+  specialisation (producer TMA warp feeding a deep SMEM pipeline, consumer warpgroups issuing back-to-back MMAs). A
+  single FA3 CTA is sized to FILL the SM (384 threads x ~168 registers is the whole register budget, plus the K/V
+  pipeline's shared memory), so one CTA -- in some configurations one instruction -- consumes the SM's capacity by
+  design. The slack POD exploits does not exist and is getting scarcer per generation.
+- Conclusion extended to be forward-looking: as the MMA unit grows and moves behind warp specialisation and tensor
+  memory, intra-SM co-residency of two differently shaped roles gets harder, so designs depending on spare SM
+  capacity should age badly while whole-tile dispatch to the right executor should not.
+
 ## v2.16.0 — Item 18 bounded by a plan-only count: 1.15% of row items could move (2026-10-28)
 - Counted over the 87,932-step alpha-3 replay: 83,959 steps carry rows; only 9,516 of them (11.3%) also have a q64
   chunk remainder, so 9,516 of 828,705 row items (1.15%) could move into a freed warpgroup, and even where capacity

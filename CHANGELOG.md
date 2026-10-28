@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.06.0 — List each stage's baselines at the head of its section (2026-10-28)
+- 6.2: naive FA3 + stock FA2 (serial and two-stream, the fair baseline our 4-9% claim is measured against),
+  sglang's single varlen FA3 call, POD-Attention's one-FA2-kernel structure, and our earlier two-plan build.
+- 6.3: sglang prefill-prioritized and mixed chunk on FA3 (each with and without stock EAGLE3 MTP) and
+  PD-Multiplexing, all with sglang's own chunk policy -- with pdmux named as the most informative, since it attains
+  our latency protection structurally.
+- 6.4: stock PD disaggregation with the P:D ratio swept (headline), conditional disaggregation at Dynamo's
+  defaults, sglang's own colocated schedules on the same cluster, and the fixed-2048 chunk flagged as an internal
+  control rather than a published system.
+- Each list says WHY the baseline is there, so a reader can see which comparison carries which claim.
+
 ## v3.05.0 — Highlight the outline scaffold so it is skimmable (2026-10-28)
 - Bolded 27 anchors in "Paper Outline (10/24)": the six top-level headings (goal, motivation, design, distributed
   inference, evaluation, story), each motivation item's subject, the design and evaluation subjects, and every

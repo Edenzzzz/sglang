@@ -1067,6 +1067,15 @@ leave-one-out arms queued on the trace replay at alpha 3 (16 H20s) and the singl
 
 ### 6.2 Kernel microbenchmarks
 
+**Baselines.** All on the same captured steps, all FP32-checked:
+- **naive FA3 + stock FA2** -- stock FA3 on the prefill chunk and stock flashinfer FA2 on the decode and verify
+  rows, as two separately planned kernels, run serially and on two streams. This is the fair baseline and the one
+  our claim is measured against: splitting the roles is the obvious engineering step, and we report what the plan
+  adds on top of it.
+- **sglang's single variable-length FA3 call**, its shipped default, which is what mixed-chunk prefill runs.
+- **POD-Attention's structure**, one FA2 kernel covering the chunk and the rows, measured rather than argued away.
+- **our own earlier two-plan build**, so the one-plan design is shown to beat the design it replaced.
+
 **Claim.** One plan per mixed step (tile classes, KV splits, longest-first order, the in-launch merge, FA3 / FA2
 overlap by PDL) makes mixed-step attention faster than sglang's single FA3 call and than naive FA3 + FA2. The reasons:
 - in one variable-length FA3 call, a 4-token verify row (28-48 packed rows) is tiled at 128 rows;
@@ -1181,6 +1190,14 @@ Figure 15: per-item timeline of one captured four-mode step: FA3 tiles, FA2 tile
 showing FA2 running beside FA3's tail under PDL [pending].
 
 ### 6.3 Single-node benchmarks
+
+**Baselines**, each with sglang's own chunk policy and never ours:
+- **sglang prefill-prioritized** on FA3, with and without stock EAGLE3 MTP.
+- **sglang mixed chunk** on FA3, with and without stock EAGLE3 MTP -- sglang's colocation default.
+- **PD-Multiplexing**, which gives decode and layer-split prefill their own groups of streaming multiprocessors.
+  This is the most informative of the three: it attains the latency protection we pursue by sizing the chunk,
+  structurally, so the comparison asks what the fused kernel and the four-mode step add once that protection is
+  granted.
 
 **Claim.** The four-mode step under per-tenant deadline order, with demotion of missed prefills and on the C1 kernel,
 protects both tenants on one node. The kernel speeds up the step; deadline order lets chat through an agent burst;
@@ -1323,6 +1340,17 @@ with p10-p90 bars and p1-p99 whiskers, per model [pending].
 Figure 19: TTFT and ITL / TPOT distributions per tenant (mean, p50, p90, p99), ours vs stock, per model [pending].
 
 ### 6.4 Multi-node benchmarks
+
+**Baselines.**
+- **Stock PD disaggregation** with the prefill-to-decode ratio swept, reported at its best ratio per load. This is
+  the headline comparison.
+- **Conditional disaggregation** at Dynamo's defaults (remote prefill above 2048 uncached tokens or 0.7 of the
+  prompt), which prefills short appends locally and is the stronger disaggregated design.
+- **sglang's own colocated schedules** -- prefill-prioritized, mixed chunk and PD multiplexing -- on the same
+  cluster, workload and window set, so colocation is compared against colocation before it is compared against
+  disaggregation.
+- A **fixed 2048-token chunk** on our own tree appears as an internal control for the chunk-sizing study only
+  (section 5.2.3); it is not a published system.
 
 **Claim.** Symmetric colocated nodes with SLO-checked cache-first routing, sglang's Mooncake KV pool and the single-node
 workers carry more load at SLO than PD disaggregation at its best P:D ratio, and than conditional disaggregation.

@@ -34,14 +34,40 @@ BORDERS = ("<w:tblBorders>" + "".join(
     f'<w:{side} w:val="single" w:sz="4" w:space="0" w:color="808080"/>'
     for side in ("top", "left", "bottom", "right", "insideH", "insideV")) + "</w:tblBorders>")
 HEADER_SHADE = '<w:shd w:val="clear" w:color="auto" w:fill="E7E6E6"/>'
+# Table text is set smaller than body text and the cell padding is tightened. Without this a seven-column table --
+# the tile-class map and the normalized-latency table are both seven columns -- is stretched to the full page width
+# at 11 pt, so every cell wraps two or three times and the table runs most of a page. w:sz is in half-points.
+TABLE_PT = 8
+TABLE_SZ = f'<w:sz w:val="{TABLE_PT * 2}"/><w:szCs w:val="{TABLE_PT * 2}"/>'
+CELL_MARGINS = ("<w:tblCellMar>" + "".join(
+    f'<w:{side} w:w="{w}" w:type="dxa"/>'
+    for side, w in (("top", 0), ("left", 57), ("bottom", 0), ("right", 57))) + "</w:tblCellMar>")
+
+
+def shrink_runs(fragment):
+    """Give every run in `fragment` the table font size, creating an rPr where a run has none.
+
+    w:sz goes at the END of an existing rPr: the OOXML schema fixes the order of run properties, and w:b (which
+    the header row adds) precedes w:sz. A run that already carries a size is left alone so this stays idempotent.
+    """
+    def one(match):
+        run = match.group(0)
+        if "<w:sz " in run:
+            return run
+        if "<w:rPr>" in run:
+            return run.replace("</w:rPr>", TABLE_SZ + "</w:rPr>", 1)
+        return run.replace("<w:r>", "<w:r><w:rPr>" + TABLE_SZ + "</w:rPr>", 1)
+    return re.sub(r"<w:r>.*?</w:r>", one, fragment, flags=re.S)
 
 
 def format_tables(document):
     """Pandoc's tables use a "Table" style that the reference document does not define, so Word and Google Docs show
-    them borderless, like text. Give every table grid borders at full page width, and shade and bold its header row."""
+    them borderless, like text. Give every table grid borders at full page width, shade and bold its header row, and
+    set the cell text smaller than body text with tight padding so a wide table still fits on the page."""
     document = document.replace('<w:tblW w:type="auto" w:w="0" />', '<w:tblW w:type="pct" w:w="5000" />')
     document = re.sub(r"<w:tblPr>(.*?)</w:tblPr>",
-                      lambda m: "<w:tblPr>" + m.group(1).replace("<w:tblLook", BORDERS + "<w:tblLook", 1)
+                      lambda m: "<w:tblPr>" + m.group(1).replace("<w:tblLook", BORDERS + CELL_MARGINS
+                                                                 + "<w:tblLook", 1)
                       + "</w:tblPr>", document, flags=re.S)
 
     def header(row):
@@ -49,8 +75,10 @@ def format_tables(document):
         return re.sub(r"<w:r>(<w:rPr>.*?</w:rPr>)?<w:t", lambda m: "<w:r><w:rPr><w:b/></w:rPr><w:t"
                       if not m.group(1) else "<w:r>" + m.group(1).replace("<w:rPr>", "<w:rPr><w:b/>", 1) + "<w:t",
                       row)
-    return re.sub(r'<w:tr><w:trPr><w:tblHeader w:val="on" /></w:trPr>.*?</w:tr>', lambda m: header(m.group(0)),
-                  document, flags=re.S)
+    document = re.sub(r'<w:tr><w:trPr><w:tblHeader w:val="on" /></w:trPr>.*?</w:tr>', lambda m: header(m.group(0)),
+                      document, flags=re.S)
+    # Shrink runs inside tables only, so body text and captions keep the reference document's size.
+    return re.sub(r"<w:tbl>.*?</w:tbl>", lambda m: shrink_runs(m.group(0)), document, flags=re.S)
 
 
 def compile_docx():
@@ -75,7 +103,11 @@ def table_report(path):
     tables = re.findall(r"<w:tbl>.*?</w:tbl>", document, flags=re.S)
     shapes = [(len(re.findall(r"<w:tr>", table)), len(re.findall(r"<w:gridCol ", table))) for table in tables]
     bordered = sum("<w:tblBorders>" in table for table in tables)
-    return len(tables), bordered, shapes
+    # Every run in every table must carry the smaller size, or a wide table silently reverts to body text and runs
+    # most of a page. Counted as "tables whose runs are ALL sized", so one missed run fails the check.
+    sized = sum(all("<w:sz " in run for run in re.findall(r"<w:r>.*?</w:r>", table, flags=re.S))
+                for table in tables)
+    return len(tables), bordered, shapes, sized
 
 
 def access_token():
@@ -131,12 +163,14 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="compile only")
     arguments = parser.parse_args()
     path = compile_docx()
-    count, bordered, shapes = table_report(path)
-    print(f"PAPER_DOCX {path} {path.stat().st_size} bytes; {count} tables ({bordered} bordered), rows x cols {shapes}",
+    count, bordered, shapes, sized = table_report(path)
+    print(f"PAPER_DOCX {path} {path.stat().st_size} bytes; {count} tables ({bordered} bordered, {sized} resized), "
+          f"rows x cols {shapes}",
           flush=True)
     expected = len(re.findall(r"^\|[\s:|-]+\|\s*$", DRAFT.read_text(), flags=re.M))
-    if count != expected or bordered != count:
-        raise SystemExit(f"table check failed: {expected} markdown tables, {count} in the docx, {bordered} bordered")
+    if count != expected or bordered != count or sized != count:
+        raise SystemExit(f"table check failed: {expected} markdown tables, {count} in the docx, {bordered} "
+                         f"bordered, {sized} with resized text")
     if arguments.dry_run:
         return
     info = upload(path)

@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.59.0 — Offline test for the chunk rule; smaller tables in the docx sync (2026-10-28)
+- `tasks/perf_model/test_slo_chunk_rule.py`: lifts the injected `_slo_budget_chunk` out of the patch and runs it
+  against synthetic rows, 8/8 passing. The decisive pair is rows one token in: 751 tokens under the old fallback
+  against 4 753 with the lifetime projection. The rule has now been wrong twice in ways no serving metric could
+  distinguish from "the policy does not help", because the budget is a minimum over rows and one mishandled row
+  clamps the batch; this makes that class of bug cost seconds instead of a 16-GPU arm.
+- `tasks/paper_sync_gdrive.py`: table text is set to 8 pt with tight cell padding. The script forced every table to
+  100% page width while leaving cell text at body size, so the four seven-column tables wrapped in every cell and
+  ran most of a page. The table check now also verifies that every run in every table carries the smaller size
+  (27 tables, 27 bordered, 27 resized), so a silent revert to body text fails the sync.
+
 ## v2.58.0 — The chunk-rule regression was a guard bug, not the policy (2026-10-28)
 - The `:life` arm finished and its own log shows the lifetime budget NEVER engaged: `budget_ms=92.6 ... capped=7001
   of calls=7001`, i.e. every step was clamped to the ~90 ms per-step allowance. Score chat 86.3% / agent 91.2% /

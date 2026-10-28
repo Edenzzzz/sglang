@@ -488,6 +488,35 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       `stepcap=600`,** the chat p99 ITL target, instead of 2000.
     - Written into paper 5.2.3 (the over-claiming "banked slack" table is deleted; it described the per-step form
       with banking, which the cluster measurement contradicts).
+  - [x] **THE CHUNK-RULE REGRESSION WAS A GUARD BUG, NOT THE POLICY (2026-10-28; user: "it can't be a regression
+    given so many papers actually are based on it" -- correct).** Chunk-size prediction from predicted latency is
+    standard (SLOs-Serve, FlowPrefill, PD-Multiplexing); what regressed was our budget code.
+    - **The `:life` arm never ran the lifetime branch.** Its own log: `budget_ms=92.6 / 89.9 / 146.2`,
+      `capped=7001 of calls=7001`, `chunk=16384->183/188/315`. That is the ~90 ms per-step allowance, so the arm
+      repeated the earlier rule. Score: chat 86.3% (1365 tok/s) / agent 91.2% (2323 tok/s), chat TPOT p50/p90
+      14.0/39.9 ms, agent TTFT p90 7.28 s, accept 1.982 -- against rung L0's 91.2 / 94.3 / 2493.
+    - **Bug 1: a row with no output token yet was judged on a mean it does not have.** `spent > s_r * max(o, 1)`
+      with `o == 0` fires once the row has been resident ~50 ms, which is one ordinary step. The budget is a MIN
+      over resident rows, so one just-admitted row clamped every step in the batch. Such rows now contribute no
+      bound (their latency so far is TTFT, which the deadline and demotion machinery own).
+    - **Bug 2: demotion used the INSTANTANEOUS mean,** so the same clamp returned one token later -- a row at
+      o=2 whose first step waited behind a 600 ms prefill chunk shows a 314 ms/token mean and is declared past
+      rescue. Under `:life` the test now asks whether the row can still reach its target BY COMPLETION
+      (`spent > s_r * L`), which is the same reading the budget itself uses.
+    - **Offline unit test, `tasks/perf_model/test_slo_chunk_rule.py` (8/8).** Lifts the injected method out of the
+      patch and runs it against fakes, so a guard bug costs seconds instead of a 30-minute 16-GPU arm. The
+      decisive pair: rows one token in give 751 tokens under the old fallback and 4 753 with the lifetime
+      projection. Also covers no rows resident (-> server maximum), a row genuinely past rescue (-> 449 tokens,
+      still clamped, as it must be), and the un-learned-output-length fallback.
+    - Rule log now prints `fresh= life= nolife= demoted=` plus the learned rate and per-tenant output length, so a
+      silent fall-through can no longer look like "the policy did not help".
+    - Deployed to all four pods as a REAL directory (`python_slo_life`, md5 ce3044988e85f537); the tail-bounded arm
+      (`mn_tailchunk_16g_20261028.sh`, `stepcap=600`, alpha 3 and 6) is queued behind the overload decomposition.
+    - **Collateral, fixed: `cp -a` of the symlinked `$W/python` wrote the patch into the MAIN serving tree.**
+      `$W/python` is a symlink to `$W/h20py/python`, so `cp -a` copied the link. Reverted by structure
+      (`/tmp/unpatch_slo.py`, which deletes the `def` block rather than matching the forward patch's text, since
+      that text drifts) on all four pods to md5 cab26cd9a85fed83, and re-verified marker by marker: backend
+      `SGLANG_NATIVE_PDL` 5, scheduler demotion 6, `edf` 121, `rope_theta` in the hf config 4. Use `cp -aL`.
   - [ ] **Chunk predictor, optional refinement: a learned head instead of bisection.**
     - The user does not want SLOs-Serve's dynamic program (it would read as borrowing their method). Instead predict
       the chunk from state we already have, using the step model that the fused kernel makes easy to fit.

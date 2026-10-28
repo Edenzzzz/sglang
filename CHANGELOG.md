@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.94.0 — A single calibration constant does not fix the decode bias: it is load-dependent (2026-10-28)
+- Fitted one multiplicative factor on the chronologically first half of 73 774 decode steps (x1.1602) and validated
+  on the second: held-out bias -13.3%, unchanged from the uncalibrated -13.0%. Train bias +15.0% against a
+  median-fitted 0.0%. So the bias is NOT stationary -- the superposed windows shift the load mix across the run and
+  the error is load-dependent, which no scalar correction can remove.
+- This answers the MLP question from the other direction. The linear model is missing a load-varying feature, which
+  is the regime where the MLP already measures better on decode steps (18-23% against 34-38%). So an MLP earns its
+  keep for DECODE-step time in the router's TPOT prediction, not for chunk sizing, where a threshold tolerates
+  error ~1:1 and the linear model suffices. The "simple methods suffice" conclusion stands only for the chunk.
+- Next, no GPU time: evaluate the step MLP's decode-step SIGNED bias on the same chronological split. Small bias
+  means the router should use it; a similar -13% means the problem is a missing feature (decode batch composition,
+  KV-length distribution) rather than model capacity.
+
 ## v2.93.0 — The decode-step error is biased -13%, so predicted TPOT is systematically optimistic (2026-10-28)
 - `tasks/perf_model/tpot_bias.py` on 73 774 decode-only steps: per-step MAPE 29.0% (p90 49.6%), per-step SIGNED
   bias **-13.0%** (median -23.1%), sd 33.7%.

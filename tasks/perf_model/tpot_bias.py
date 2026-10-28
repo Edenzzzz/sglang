@@ -25,3 +25,19 @@ print(f"  per-step error sd      {100*err.std():.1f}%")
 for n in (50, 200, 500):
     print(f"  implied error on a {n:>3}-token request's mean TPOT: "
           f"bias {100*err.mean():+.1f}% + noise {100*err.std()/np.sqrt(n):.1f}%")
+
+# Calibration. A systematic bias with a stable median is a multiplicative constant, not a modelling failure, so
+# fit one factor on a TRAINING half and report the residual on the held-out half. Fitting on all the data and
+# reporting the resulting bias as zero would be circular -- the factor is defined to make it zero.
+# The split is chronological (the trace is time-sorted), which is the honest one for a model that will be used
+# online on later steps than it was fitted on.
+cut = len(dec) // 2
+k = float(np.median(real[:cut] / np.maximum(pred[:cut], 1e-6)))
+print(f"\ncalibration: one multiplicative factor fitted on the first {cut} steps -> x{k:.4f}")
+for name, lo, hi in (("train", 0, cut), ("HELD OUT", cut, len(dec))):
+    e2 = (pred[lo:hi] * k - real[lo:hi]) / np.maximum(real[lo:hi], 1e-6)
+    print(f"  {name:>8}: bias {100*e2.mean():+.1f}%  median {100*np.median(e2):+.1f}%  "
+          f"MAPE {100*np.abs(e2).mean():.1f}%  sd {100*e2.std():.1f}%")
+    if name == "HELD OUT":
+        print(f"            implied error on a 500-token request's mean TPOT: "
+              f"bias {100*e2.mean():+.1f}% + noise {100*e2.std()/np.sqrt(500):.1f}%")

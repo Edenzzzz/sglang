@@ -280,11 +280,27 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       TPOT will be better than it will be, so attainment is over-promised at exactly the loads where it matters.
       It also makes the chunk rule's budget too permissive, since the decode base cost it subtracts is
       under-estimated.
-    - **Fix, zero GPU cost: calibrate per step type.** A systematic -13% is a multiplicative constant, not a
-      modelling failure, so fit a per-step-type correction on a training split and validate the bias on a held-out
-      split; report the corrected bias and the residual sd. Do NOT fit it on all the data and quote the bias as
-      zero, which would be circular. Until that lands, no TPOT-prediction accuracy claim should appear in the
-      paper, and 5.2.2's 2.0% aggregate must not be read as a TPOT number.
+    - **[x] A SINGLE CALIBRATION CONSTANT DOES NOT FIX IT (2026-10-28), and that is the useful part.** Fitting one
+      multiplicative factor on the chronologically first half (median ratio, x1.1602) and validating on the second:
+      | split | bias | median | MAPE | sd |
+      |---|---|---|---|---|
+      | train | +15.0% | +0.0% (median-fitted) | 33.7% | 47.2% |
+      | **HELD OUT** | **-13.3%** | -12.3% | 19.2% | 20.7% |
+      The held-out bias is unchanged from the uncalibrated -13.0%, so **the bias is not stationary** -- the
+      relationship differs between the first and second halves of the replay. Since the superposed windows change
+      the load mix over the run, the decode-step error is **load-dependent, not a constant offset**, and no scalar
+      correction can remove it.
+    - **What this implies, and it answers the MLP question from the other direction.** The linear model is missing
+      a feature that varies with load, which is exactly the regime where the MLP already measures better on decode
+      steps (18-23% against the linear 34-38%, paper 5.2.2). So the place an MLP earns its keep is **decode-step
+      time for the router's TPOT prediction**, not chunk sizing -- where a threshold tolerates error ~1:1 and the
+      linear model is sufficient (measured: a 5% model error moves the median chunk 6%). Two different predictions,
+      two different answers, and the earlier "simple methods suffice" conclusion stands only for the chunk.
+    - **Next, zero GPU cost:** evaluate the step MLP's decode-step signed bias on the same chronological held-out
+      split, not just its MAPE. If its bias is small the router should use it; if its bias is also -13% the problem
+      is a missing feature (decode batch composition / KV-length distribution) rather than model capacity.
+    - Until that lands, no TPOT-prediction accuracy claim appears in the paper, and 5.2.2's 2.0% aggregate must not
+      be read as a TPOT number.
   - **Why not the alternatives, recorded so the choice is defensible:** a dynamic program over future steps (as in
     SLOs-Serve) is both the method the user does not want to borrow and unnecessary, since the budget is exact
     arithmetic and only the step time needs a model; a direct regression from (SLO, progress, length stats) to

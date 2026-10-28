@@ -597,19 +597,10 @@ A persistent FA2 executor, cluster-scheduled reduction over distributed shared m
 multicast and intra-CTA row hosting were all built and measured; none beats the default, and section 7 reports each
 with its numbers.
 
-**Baselines for this design.** Four designs run the same mixed step, and section 6.2 measures all of them:
-
-- **sglang's single variable-length FA3 call** -- its shipped default, and what mixed-chunk prefill runs. One tile
-  shape for both roles, so a one-token decode row is computed at the prefill chunk's 128-row width.
-- **POD-Attention's structure** -- one FA2 kernel covering the chunk and the rows together, which is the only way
-  to interleave them inside a kernel, and is FA2-only.
-- **naive FA3 + stock FA2, serial** -- the two roles as two separately planned kernels, one after the other. This
-  is the fair baseline our claim is measured against, because splitting by role is the obvious engineering step
-  that any implementation gets for free.
-- **naive FA3 + stock FA2 on two streams** -- the same two kernels launched concurrently, which is the cheapest
-  way to seek overlap between the roles and needs no plan at all.
-
-Three properties of the naive split are what C1 improves on:
+**What the plan has to improve on.** Splitting the step by role -- stock FA3 for the prefill chunk, stock
+flashinfer FA2 for the decode and verify rows, as two separately planned kernels -- is the obvious step any
+implementation gets for free, and it is the comparison section 6.2 measures us against. Three properties of that
+split are what the single plan removes:
 
 - **Two plans.** Each kernel splits KV its own way and merges its own partials, in its own launch.
 - **One query tile for the whole FA2 launch.** Stock FA2 picks it from its rows' average packed length -- 16, 64 or

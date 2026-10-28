@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.10.0 — Baselines belong in the evaluation sections only (2026-10-28)
+- Removed the four-baseline list from 5.1. Baselines are listed at the head of each evaluation section -- 6.2, 6.3
+  and 6.4 -- and nowhere else; 5.1 is the design and should not carry a comparison list.
+- What stays in 5.1 is design rationale rather than a baseline list: the role split is named in one sentence as
+  what the plan must improve on, followed by the three properties of it the single plan removes (two plans, one
+  query tile per FA2 launch, a separate merge).
+- 6.2's list carries all four kernel baselines, with two-stream overlap as its own entry.
+
 ## v3.09.0 — 5.1's baseline block lists all four designs; two-stream gets its own bullet (2026-10-28)
 - 5.1's bulleted baseline block had been scoped to naive FA3 + FA2 alone, so sglang's single varlen FA3 call and
   POD's one-FA2-kernel structure were named in 6.2 but missing where the design is introduced. It now lists all

@@ -1587,12 +1587,12 @@ four-mode. Schedule and router ablations run on the workloads of sections 6.3 an
 are [pending].
 
 **Result: each contribution, removed in turn.** The first ablation is the one that matters: take the full system
-and remove one contribution at a time, on the same workload and load. Table 19b collects it; section 6.1's Table 8
+and remove one contribution at a time, on the same workload and load. Table 20 collects it; section 6.1's Table 8
 gives the same decomposition with the mechanism of each effect. Read together they say that the kernel and the
 four-mode step carry the single-node result, the router's load tie-break carries the cluster result, and the
 worker-side scheduling layers are load-dependent -- neutral at capacity, mildly positive under overload.
 
-Table 19b: leave-one-out per contribution. Each row removes one contribution from the full system; the workload is
+Table 20: leave-one-out per contribution. Each row removes one contribution from the full system; the workload is
 the superposed TraceLab replay plus chat on 16 H20s at load factor 3, except where a row names a single-node
 measurement because the mechanism is inert on the cluster.
 
@@ -1606,7 +1606,7 @@ measurement because the mechanism is inert on the cluster.
 | KV pool (credited to sglang / Mooncake, not ours) | no cluster pool | [pending] |
 
 Figure 25: per-contribution leave-one-out bars -- chat and agent SLO attainment and agent SLO goodput for the full
-system and for each row of Table 19b, at load factors 3 and 6. This is the figure that carries the ablation; the
+system and for each row of Table 20, at load factors 3 and 6. This is the figure that carries the ablation; the
 kernel-internal bars below are supporting detail.
 
 **Result: the plan and the merge.** Removing every
@@ -1621,7 +1621,7 @@ costs 6-13% of the step: that is where the reduction matters.
 0.975 / 0.978x, so the overlap is worth 2.2-6.1% of the step. Enumeration order instead of longest first gives 0.993 /
 0.996 / 1.001 / 1.001x.
 
-Table 20: kernel ablations, H200, Qwen2.5-7B, 96 captures (32-64K two / 32-64K four / 128-256K two / 128-256K four).
+Table 21: kernel ablations, H200, Qwen2.5-7B, 96 captures (32-64K two / 32-64K four / 128-256K two / 128-256K four).
 
 | ablation | relative to the unified dispatcher |
 |---|---|
@@ -1672,7 +1672,7 @@ Section 5.2.1 gives the details. The same comparison with the full stack is [pen
 
 **Figures.**
 
-Figure 26: kernel ablation bars: time-weighted speedup per ablation (Tables 20 and 21) per (context, mode); H200,
+Figure 26: kernel ablation bars: time-weighted speedup per ablation (Table 21) per (context, mode); H200,
 Qwen2.5-7B measured; Llama-3.3-70B [pending].
 
 Figure 27: the same FA2 executors on synthetic decode and verify batches of 16-1024 rows (ShareGPT, math, long-tail

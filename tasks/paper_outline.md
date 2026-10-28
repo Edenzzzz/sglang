@@ -12,9 +12,12 @@
   - **the KV cache is transferred over and over.** Disaggregation computes each round's prefill on a prefill node
     and must ship that round's growing prefix to a decode node; the next round repeats it. The transfer scales
     with the session's history, not with the few hundred tokens the round actually added.
-  - **the prefill-to-decode ratio is a static configuration, and the workload is not.** An agent session's own
-    demand swings between prefill-heavy and decode-heavy within minutes as tool calls land, and the mix across
-    sessions shifts on top of that, so no single P:D split is right for long.
+  - **the correction is slower than the disturbance.** The ratio of uncached input to output tokens moves at
+    minute scale -- on our own 16-GPU replay its median halves inside a chat surge (38.4 against 85.1 outside) and
+    spans 3.4-4.2x even with no surge -- while re-partitioning a cluster between prefill and decode roles takes
+    tens of minutes. Independent trace analysis finds the same phenomenon at fleet scale (peak-to-mean up to 4.7x
+    at minute timescales, and a median 24.5x hourly span within a single day). A static split is not merely the
+    wrong value; it is a control loop whose actuator is an order of magnitude slower than the signal.
   - **a static split collapses under a load spike, measured.** With a +32-program spike on top of 64 programs,
     stock PD at its best swept ratio delivers 32-46 tokens/s of agent SLO goodput and 8-9% chat attainment,
     against 1 053 tokens/s and 93.2% for colocation on the same cluster (section 6.4). Whichever side was

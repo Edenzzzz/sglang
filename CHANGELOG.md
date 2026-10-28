@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.22.0 — Motivation 2 restated as a timescale mismatch, with both sources of evidence (2026-10-28)
+- The outline's second motivation said "the ratio is a static configuration and the workload is not", which asserts
+  rigidity without saying why it is fatal. Restated as the control-loop argument: the uncached-input-to-output
+  ratio moves at minute scale while re-partitioning roles takes tens of minutes, so a static split is a loop whose
+  actuator is an order of magnitude slower than its signal.
+- Carries both kinds of evidence, each labelled: our own in-run measurement (median ratio halves inside the chat
+  surge, 38.4 vs 85.1; 3.4-4.2x spread with no surge, from pd_ratio_20261028.py) and independent trace analysis at
+  fleet scale (peak-to-mean up to 4.7x at minute timescales, median 24.5x hourly within a day). Ours is causal and
+  in-run; theirs establishes generality.
+
 ## v3.21.0 — Crossflow's methodology read from the paper: rate-only load axis, trace-analysis evidence (2026-10-28)
 - Verified rather than recalled: "A load factor alpha divides every timestamp offset from the first arrival by
   alpha, increasing rate without changing the trace's temporal shape." So its load axis is only the rate and it

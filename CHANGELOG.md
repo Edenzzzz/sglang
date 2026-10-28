@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.15.0 — Claim 3 is already measured; trim the outline's kernel design bullet (2026-10-28)
+- Claim 3 ("provisioning for either phase wastes the other's throughput") is supported once stated as the
+  consequence rather than the mechanism: the spike arm gives stock PD at its best swept ratio 32-46 tok/s of agent
+  SLO goodput and 8-9% chat attainment against 1053 tok/s and 93.2% for colocation (Table 17). The outline now
+  says that, with the figure. What remains unmeasured is only the mechanism -- idle capacity on one side -- so the
+  goodput collapse is the finding and idle capacity the explanation.
+- Only claim 2 still overstates; it stays written as the sweep result until per-window re-scoring shows the
+  leading ratio changes over a run.
+- Trimmed the outline's kernel design bullet, which had carried executor and CTA-level detail that 5.1 already
+  covers. It now states the plan, the tile classes, the balancing and the single reduction, plus the one
+  architectural point (both executors stay stock at their own warp layouts; the fusion is in the plan and the
+  reduction, not the instruction stream), and points to 5.1 for the mechanism.
+
 ## v3.14.0 — Audit: does our evidence support the rewritten motivation? Two of three (2026-10-28)
 - Claim 1, repeated KV transfer: WELL SUPPORTED. Median 875 uncached tokens over a median 119K cached prefix, and
   conditional disaggregation -- which prefills appends locally and skips the re-ship -- matches us to 64 programs

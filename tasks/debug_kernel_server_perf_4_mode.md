@@ -451,15 +451,18 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
      winning early and ratio B winning late within one run. **Cheap fix, no new runs:** re-score the existing
      stock-PD arms in 60 s windows and report which ratio leads in each window. If the leader changes, the claim
      is measured; if one ratio leads throughout, the claim must be weakened to "no ratio is good enough".
-  3. **"Provisioning for either phase wastes the other's throughput; idle capacity cannot be lent across the role
-     boundary" -- WEAKEST, currently an assertion.** 3.2 rests on the P:D sweep, but we have no per-role
-     utilisation trace showing one side idle while the other saturates. **This is the claim a reviewer will ask for
-     a figure on.** It needs prefill-node and decode-node GPU utilisation (or issued-tokens-per-second per role)
-     against time on one stock-PD arm -- recordable from the existing per-arm logs if the router logged per-role
-     dispatch, otherwise one instrumented re-run.
-  - Until 2 and 3 are closed, the outline's motivation overstates what we can show. Claim 1 may be stated flatly;
-    claims 2 and 3 should be written as the sweep result ("no configuration we swept holds") rather than as
-    statements about rigidity and waste.
+  3. **"Provisioning for either phase wastes the other's throughput" -- SUPPORTED after all (user, 2026-10-28),
+     once stated as the consequence rather than the mechanism.** The spike arm already measures it: with a
+     +32-program spike on 64 programs, stock PD at its best swept ratio gives **32-46 tok/s** of agent SLO goodput
+     and 8.8% / 8.0% chat attainment, against **1 053 tok/s** and 93.2% for colocation on the same cluster
+     (Table 17). A static split's goodput collapses when the mix moves, which is the claim that matters.
+     - What is NOT separately measured is the mechanism -- idle capacity on one side while the other saturates --
+       because we have no per-role utilisation trace. So the paper states the goodput collapse as the finding and
+       the idle capacity as the explanation, not the other way round. A per-role utilisation figure would
+       strengthen it but is not required for the claim.
+  - So claims 1 and 3 may be stated flatly, each with its measured control. Only claim 2 still overstates: write it
+    as the sweep result ("no configuration we swept holds any load point") until the per-window re-scoring shows
+    the leading ratio actually changes over a run.
 - **[ ] PDMUX IS THE STRONGEST BASELINE WE HAVE, NOT A WEAK ONE (user, 2026-10-28): "same SLO control, but no
   kernel/overlap schedule".** This reframes it and makes the failed arm the most important missing measurement in
   the paper.

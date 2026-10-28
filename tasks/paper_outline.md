@@ -15,8 +15,10 @@
   - **the prefill-to-decode ratio is a static configuration, and the workload is not.** An agent session's own
     demand swings between prefill-heavy and decode-heavy within minutes as tool calls land, and the mix across
     sessions shifts on top of that, so no single P:D split is right for long.
-  - **provisioning for either phase wastes the other's throughput.** Whichever side is over-provisioned sits idle
-    at the moment the workload wants the other, and the idle capacity cannot be lent across the role boundary.
+  - **a static split collapses under a load spike, measured.** With a +32-program spike on top of 64 programs,
+    stock PD at its best swept ratio delivers 32-46 tokens/s of agent SLO goodput and 8-9% chat attainment,
+    against 1 053 tokens/s and 93.2% for colocation on the same cluster (section 6.4). Whichever side was
+    provisioned for the pre-spike mix cannot be lent to the other when the mix moves.
 
   Serving several request classes on one cluster -- agentic coding sessions beside chat turns, whose lengths and
   latency targets differ by an order of magnitude -- makes all three worse, because no deployed policy knows which
@@ -28,14 +30,11 @@
     in KV transfer at 64 agent programs on 16 H20s), leaves decode compute idle, needs a tuned P:D ratio
   - **pd multiplexing** -- costs throughput and capture memory: attains the same latency protection as ours but attained structurally, by partitioning SMs; no CPU-GPU overlap schedule, CUDA graphs multiplied by SM groups; a baseline only
 - **design**
-  - **kernel:** a unified fine-grained tile dispatcher for the mixed step - ONE CPU-side plan assigns every work tile of
-    the batch to an executor and a tile class (FA2 classes of 16, 32 and 64 packed query rows for decode / verify
-    rows, FA3 for prefill rows and rows of more than 64 packed queries), orders them longest first, splits
-    KV where it balances the SMs, and in the same pass fixes the merge schedule:
-    which tiles of a row are partials, and which tile merges them inside the launch, so no separate merge kernel runs
-  - the executors are stock FA3 and FA2's BatchPrefill body (one CTA per plan item, both tile classes in one launch),
-    chained by PDL; FA2 runs second and reduces every split row, FA2's and FA3's, in its epilogue, which removes the FA2-merge
-    and FA3-combine launches that two separately planned kernels need; the plan and that merge, not either kernel, are the contribution
+  - **kernel:** one CPU-side plan per mixed step assigns every work tile its own size -- FA3 for the prefill
+    chunk's large query tiles, FA2 classes of 16 / 32 / 48 / 64 packed rows for decode, draft and verify rows --
+    balances them across the streaming multiprocessors, and reduces every split row inside one launch, so no
+    separate merge kernel runs. Both executors stay stock kernels at their own warp layouts; the fusion is in the
+    plan and the reduction, not in the instruction stream (section 5.1 gives the mechanism).
   - **4-mode step:** prefill chunk + speculative verify rows in one forward
   - why does this help? the small-query-tile work -- decode rows, draft steps and speculative verify rows -- stops
     paying the cost of the prefill chunk's large query tiles, and the step time becomes a function of shape that a

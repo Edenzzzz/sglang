@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.28.0 — Consistency check after tonight's edits: one duplicate figure number fixed (2026-10-28)
+- Ran the renumbering tool in dry-run over both sequences after ~25 separate edits to the draft. Tables are clean
+  (identity mapping 1-21, every reference resolves) and all seventeen numbered sections are present.
+- Figures had two "Figure 25": section 6.5's per-tenant attainment figure and the per-contribution leave-one-out
+  figure I inserted into section 7. Renumbered section 7's block up by one, so figures now run 1-29 with every
+  reference resolving.
+- Draft is 30 114 words, up from 24 342, because the annotated reference list came back (3 435) and tonight added
+  the conditional-disaggregation table, the motivation rewrite and the baseline lists. Body text is about 26.7k.
+
 ## v3.27.0 — Paper 6.4 leads the disaggregation comparison with the replay result (2026-10-28)
 - Added the alpha-3 conditional-disaggregation table: chat attainment 91.2% against 50.5% (+40.7 points), agent
   94.3% against 64.9%, agent SLO goodput 2493 against 905 (2.75x), chat mean-TPOT p90 29.8 against 193.8 ms

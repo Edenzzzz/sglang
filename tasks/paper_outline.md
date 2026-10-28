@@ -1727,7 +1727,7 @@ measurement because the mechanism is inert on the cluster.
 | C3 router: load tie-break | sglang's `cache_aware` router | chat attainment +7.3 points (90.6 against 83.3%), chat TTFT p90 -79% (0.67 against 3.24 s), at identical agent goodput and acceptance |
 | KV pool (credited to sglang / Mooncake, not ours) | no cluster pool | [pending] |
 
-Figure 25: per-contribution leave-one-out bars -- chat and agent SLO attainment and agent SLO goodput for the full
+Figure 26: per-contribution leave-one-out bars -- chat and agent SLO attainment and agent SLO goodput for the full
 system and for each row of Table 20, at load factors 3 and 6. This is the figure that carries the ablation; the
 kernel-internal bars below are supporting detail.
 
@@ -1794,16 +1794,16 @@ Section 5.2.1 gives the details. The same comparison with the full stack is [pen
 
 **Figures.**
 
-Figure 26: kernel ablation bars: time-weighted speedup per ablation (Table 21) per (context, mode); H200,
+Figure 27: kernel ablation bars: time-weighted speedup per ablation (Table 21) per (context, mode); H200,
 Qwen2.5-7B measured; Llama-3.3-70B [pending].
 
-Figure 27: the same FA2 executors on synthetic decode and verify batches of 16-1024 rows (ShareGPT, math, long-tail
+Figure 28: the same FA2 executors on synthetic decode and verify batches of 16-1024 rows (ShareGPT, math, long-tail
 and shared-prefix length mixes), time relative to the default executor against batch size [pending: decode-only
 instantiation and chunk rounding]. KV-split sizing is what this figure is for: rounding each slot's share up to 256
 keys rather than to a power of two keeps the longest unsplit row from setting the step, worth 1.003-1.006x on
 trace-sampled steps but up to 1.28x on synthetic shared-prefix, long-tail and math batches.
 
-Figure 28: schedule and router ablations: per-tenant attainment and throughput for stock, deadlines alone, deadlines
+Figure 29: schedule and router ablations: per-tenant attainment and throughput for stock, deadlines alone, deadlines
 with demotion, and each routing policy, on the section 6.3 / 6.4 workloads. Router [pending].
 
 ## 8. Background and Related Work

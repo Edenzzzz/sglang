@@ -123,9 +123,20 @@
          - **Bar, honestly: PARTLY met.** Chat TPOT p90 (-28.9%) and chat TTFT (-79%) are at/past 30%. Agent TPOT p90
            (-19.5%) is short of 30%; throughput is short of 10% (agent goodput +1.8%, chat goodput 1456 vs 1306 =
            +11.5%, combined +5.2%). Chat p99 ITL is WORSE than pp (162.9 vs 130.8 ms).
-         - So the gain over sglang comes from the tree + A6 + four-mode + router, and our scheduler layer (EDF +
-           SLO-budgeted chunk) currently SUBTRACTS from it. L1 (= L0 + EDF) isolates EDF next; the :life arm tests the
-           chunk-rule redesign.
+         - **[x] L1 (= L0 + EDF ordering, still sglang's default chunk), acceptance 1.993: EDF alone is NEUTRAL at
+           alpha 3**, which is the stated goal for low load (no regression vs FCFS).
+           | alpha 3 | chat | agent | agent tok/s | chat TPOT p50/p90 | agent TPOT p90 | chat ITL p99 |
+           |---|---:|---:|---:|---:|---:|---:|
+           | L0 (FCFS) | 91.2% | 94.3% | 2493 | 10.8 / 29.8 | 38.0 | 162.9 |
+           | L1 (+ EDF) | 90.9% | 93.9% | 2481 | 11.4 / 32.0 | 40.4 | 185.5 |
+           Every difference is inside the noise floor (~5 pts attainment, ~4% goodput), though every one of them is
+           in the same direction -- slightly worse -- and the p99 ITL tails grow (chat 162.9 -> 185.5, agent
+           227.4 -> 246.4 ms). EDF neither helps nor hurts here; its value has to come at overload (alpha 6), where
+           the earlier cluster measured +7.5% goodput over FCFS.
+         - **Attribution so far, at alpha 3:** tree + A6 + four-mode + router = the whole gain over sglang
+           prefill-prioritized (L0); EDF = neutral; SLO-budgeted chunk = a large regression (r5/r6).
+         - The :life arm (chunk-rule redesign) is running now; after it, whichever configuration wins must still be
+           run against mixed chunk and pdmux, and at alpha 6, before any superset claim holds.
        - Decision: reorder. Running mc / pdmux against an arm already known to be defective adds little; the
          decision-relevant number is whether qcap closes the gap to pp at alpha 3. The sweep is stopped after pp and
          re-queued as `mn_superset_v2_16g_20261028.sh` with ours = the qcap tree, run first.

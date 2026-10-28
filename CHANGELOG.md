@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.52.0 — Decomposition L1: EDF ordering is neutral at alpha 3 (2026-10-28)
+- L1 (L0 + EDF, sglang's default chunk), acceptance 1.993: chat 90.9% / agent 93.9% / 2481 tok/s, chat TPOT p50/p90
+  11.4/32.0 ms, agent TPOT p90 40.4, chat ITL p99 185.5. Against L0 (FCFS: 91.2 / 94.3 / 2493, 10.8/29.8, 38.0,
+  162.9) every difference is inside the noise floor -- but all of them point the same way (slightly worse), and both
+  p99 ITL tails grow. EDF alone neither helps nor hurts at this load, which satisfies the "no regression at low load"
+  goal; its case rests on overload (alpha 6, where the old cluster measured +7.5% goodput).
+- Attribution at alpha 3 is now: tree + A6 + four-mode + router = the entire gain over sglang prefill-prioritized;
+  EDF neutral; SLO-budgeted chunk a large regression. The :life redesign is running.
+
 ## v2.51.0 — Paper 6.4: Table 9a, our stack against sglang's own colocated schedule on one cluster (2026-10-28)
 - New first result in 6.4, before the disaggregation tables: L0 vs sglang prefill-prioritized, same 16 H20s, same
   superposed TraceLab + chat at load factor 3, both arms checked by draft acceptance (1.99 / 1.84).

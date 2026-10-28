@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.63.0 — A more accurate step model would not change the chunk (2026-10-28)
+- `chunk_predictor.py --model-error e` scales the prediction and re-solves: the chosen chunk moves ~1:1 with model
+  error (median 2 304 at -5%, 2 176 at 0, 2 048 at +5%). Swapping the ten-term linear model (4.7% MAPE) for the
+  step MLP (3.4-4.0% on merged steps) would move the median chunk ~1.3%, an order of magnitude below the serving
+  noise floor.
+- So the simple model is sufficient on the merits: sizing a chunk is a threshold question (where the step time
+  crosses the budget), and thresholds tolerate error that point predictions do not. A direct regression head to the
+  max safe chunk is unnecessary for the same reason. Written into paper 5.2.3.
+
 ## v2.62.0 — Cross-role shared-prefix KV reuse closed on fan-out too (2026-10-28)
 - `tasks/perf_model/fanout_role_overlap.py`: the gating number for the one kernel mechanism that only C2 makes
   possible (both roles in one step, so the plan could group by KV page instead of by request).

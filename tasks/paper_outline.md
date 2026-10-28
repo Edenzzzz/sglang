@@ -781,6 +781,15 @@ not a solution.
 The solver is three lines and a bisection -- 16 evaluations of a ten-term linear model, about 2 microseconds per
 step. It needs no dynamic program, and nothing in it is specific to a workload.
 
+**A more accurate model would not help, which is why the linear one is the design.** The rule never needs the step
+time; it needs the chunk at which the step time crosses the budget, and that crossing is insensitive to the model.
+Perturbing the prediction by a factor and re-solving over the same 10 185 steps moves the median chunk roughly one
+for one: -5% gives 2 304 tokens and +5% gives 2 048, against 2 176 unperturbed. Replacing the linear model with the
+multi-layer perceptron of section 5.2.2, which is more accurate on merged steps (3.4-4.0% against 4.7% mean
+absolute error), would therefore move the chunk by about 1%, far below the run-to-run noise of any metric in
+section 6. We report this because it is the reason a simple method is sufficient here rather than a compromise:
+sizing a chunk is a threshold question, and thresholds tolerate error that point predictions do not.
+
 **Preemption and parking: measured and dropped.** We built preemption of the in-progress chunked prefill (it yields
 at its next chunk boundary and is parked with its computed prefix kept in the radix cache) and reservation of chunk
 budget for requests due earlier. On the cluster trace replay they cost about a quarter of agent SLO goodput

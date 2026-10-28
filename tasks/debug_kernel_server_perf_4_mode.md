@@ -517,7 +517,26 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       (`/tmp/unpatch_slo.py`, which deletes the `def` block rather than matching the forward patch's text, since
       that text drifts) on all four pods to md5 cab26cd9a85fed83, and re-verified marker by marker: backend
       `SGLANG_NATIVE_PDL` 5, scheduler demotion 6, `edf` 121, `rope_theta` in the hf config 4. Use `cp -aL`.
-  - [ ] **Chunk predictor, optional refinement: a learned head instead of bisection.**
+  - [x] **CHUNK PREDICTOR: A MORE ACCURATE MODEL IS NOT WORTH FITTING (2026-10-28, measured offline).**
+    `chunk_predictor.py --model-error e` scales the prediction by (1+e) and re-solves over the same 10,185 merged
+    steps. The chosen chunk moves roughly 1:1 with the error, no worse:
+    | model error | chunk p10/p50/p90 (tail target 600 ms) |
+    |---|---|
+    | -15% | 1536 / 2624 / 4096 |
+    | -5% | 1344 / 2304 / 3648 |
+    | 0 | 1280 / 2176 / 3456 |
+    | +5% | 1216 / 2048 / 3264 |
+    | +15% | 1088 / 1856 / 2944 |
+    - So swapping the ten-term linear model (4.7% MAPE) for the validated step MLP (3.4-4.0% on merged steps) would
+      move the median chunk by **~1.3%** -- an order of magnitude below the serving noise floor (~5 points of
+      attainment, ~4% of goodput). **The simple model is sufficient on the merits, not as a compromise**, because
+      sizing a chunk is a THRESHOLD question (where does T_step cross the budget) and thresholds tolerate error
+      that point predictions do not. Written into paper 5.2.3.
+    - A direct regression head to the max safe chunk is therefore also unnecessary: it would remove a 2 us
+      bisection and inherit the same sensitivity.
+    - Note on the checkpoint: `tasks/perf_model/model.pt` has features `[n_p, r_p, r_d, decode_bs, overlap]` with
+      `overlap` at ~1e-8 standard deviation (a dead feature), i.e. it is the overlap model, not the merged-step
+      MLP; do not wire it into the rule without confirming the feature semantics.
     - The user does not want SLOs-Serve's dynamic program (it would read as borrowing their method). Instead predict
       the chunk from state we already have, using the step model that the fused kernel makes easy to fit.
     - Inputs, all already logged per step in STEPTRACE: chunk tokens, prefix length, decode rows and their KV

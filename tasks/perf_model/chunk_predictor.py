@@ -151,6 +151,11 @@ def main():
     ap.add_argument("--rule", default="step", choices=("step", "life", "amort", "tail"))
     ap.add_argument("--itl-ms", type=float, default=150.0,
                     help="inter-token tail target, the bound that binds under rule=tail")
+    ap.add_argument("--model-error", type=float, default=0.0,
+                    help="scale the step model's prediction by (1+e), to see how far the chosen chunk moves when "
+                         "the model is wrong by e. This is what decides whether a more accurate model is worth "
+                         "fitting: the rule does not need the step time, only the chunk where it crosses the "
+                         "budget.")
     ap.add_argument("--out-len", type=float, default=500.0, help="projected output length per row (tokens)")
     args = ap.parse_args()
     model = StepModel(args.model)
@@ -174,7 +179,7 @@ def main():
         a = max(1.0, r["acc"])
         budget = budget_ms(args.rule, args.chat_ms, args.headroom, a, args.out_len, rate_ms, args.itl_ms)
         budgets.append(budget)
-        c = max_chunk(model, budget, r["pf"], r["nd"], r["dkv"], args.max_chunk)
+        c = max_chunk(model, budget / (1.0 + args.model_error), r["pf"], r["nd"], r["dkv"], args.max_chunk)
         chosen.append(c)
         actual.append(r["ptok"])
         pred_ms.append(model.predict_ms(r["ptok"], r["pf"], r["nd"], r["dkv"]))

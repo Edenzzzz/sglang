@@ -436,6 +436,30 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     sensitivity sweep on that one number, not another redesign of the budget.
   - Against mixed chunk, which shares our mechanism, a large tail win IS expected: mc's chat TPOT p90 is 102.0 ms
     with no bound either.
+- **[!] PD RE-MEASUREMENT, alpha 3 stock disagg: BROKEN ARM, NOT A RESULT (2026-10-28, log
+  `/tmp/h20/mn_pdre_r1.log`). Do not use these numbers, and note that they flatter us.**
+  - Reported: chat tight 4.9% (78 tok/s), TTFT p50/p90 **189.98 / 311.20 s**, `failed=1890`; agent tight 4.3%
+    (25 tok/s), `not_issued=3934`, **`lost_after_failure=7470`**; TPOT p50/p90 2.9/5.9 ms; **`accept=NONE`**.
+  - **Four independent signs it is broken rather than slow:** (1) 1 890 requests FAILED and 7 470 were lost after
+    a failure, so the arm did not complete its workload; (2) `accept=NONE` means no worker ever logged an
+    acceptance length, yet this arm is configured with stock MTP (`mtps`) -- so speculative decoding never ran;
+    (3) TTFT of 190-311 s is three orders of magnitude above the 2 s target, i.e. requests queued behind something
+    that never drained; (4) TPOT of 2.9 ms is implausibly FAST, which is what requests that emit almost no tokens
+    before dying look like.
+  - **This is the most dangerous failure mode we have hit, because the broken numbers are hugely favourable to
+    us.** "Stock PD reaches 4.9% chat attainment" would sail through a casual read and into the paper. The rule it
+    argues for: an arm with non-zero `failed` or `lost_after_failure`, or with `accept=NONE` while MTP is
+    configured, is void regardless of how its score reads.
+  - **Diagnosis order.** The decode side most likely died: check `worker_*.log` on the decode pods for
+    `OutOfMemoryError` and for mooncake KV-transfer errors, then `bench_*.log` for the client's view of the
+    failures. Two candidates specific to this driver: the `ROPE_THETA` override now passed to the upstream tree
+    (stock PD runs `up/python`, and `mn_node.sh` builds the override string -- a malformed one killed all 16
+    workers once already, 2026-10-28), and the disagg prefill path's spec_info identity assert, which is why
+    `mn_node.sh` documents running stock PD on CLEAN upstream (`up_clean`) rather than the overlaid tree -- this
+    driver uses `SGL_PY=/dev/shm/w/up/python`, which may be the overlaid one.
+  - Until this is fixed, every stock-PD comparison in the paper rests on the PRE-correction arms, whose own caveat
+    (the upstream tree dropped `rope_theta`) is still live. **So the disaggregation headline currently has no
+    valid measurement at either load**, and that is the single biggest hole in the evaluation.
 - **[ ] REFERENCE PAPERS ARE NOW ON DISK: `/opt/tiger/papers/`, 11 arXiv PDFs (2026-10-28).** Downloaded outside
   the repo so no binaries are committed; `arxiv.org` is reachable from this box, and each file was checked for the
   `%PDF` magic bytes because a wrong id returns an HTML error page with exit status 0.

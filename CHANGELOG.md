@@ -1,5 +1,21 @@
 # Changelog
 
+## v3.23.0 — The rope-corrected stock-PD arm is BROKEN, and its numbers flatter us (2026-10-28)
+- alpha 3 stock disagg reported chat 4.9% / 78 tok/s with TTFT p50/p90 189.98/311.20 s, failed=1890,
+  lost_after_failure=7470, TPOT 2.9/5.9 ms and accept=NONE. Four signs it is broken rather than slow: thousands of
+  failed and lost requests; no acceptance line at all despite stock MTP being configured; TTFT three orders of
+  magnitude above target; and implausibly FAST TPOT, the signature of requests that emit almost nothing before
+  dying.
+- Flagged prominently because this is the most dangerous failure shape yet: the broken numbers are hugely
+  favourable to us, and "stock PD reaches 4.9%" would pass a casual read into the paper. New rule recorded: an arm
+  with non-zero failed / lost_after_failure, or accept=NONE while MTP is configured, is void whatever its score.
+- Diagnosis order recorded: decode-side OOM and mooncake KV-transfer errors first; then two driver-specific
+  candidates -- the ROPE_THETA override now passed to the upstream tree (a malformed override killed all 16 workers
+  once already), and that mn_node.sh documents stock PD needing CLEAN upstream (up_clean) while this driver passes
+  SGL_PY=up/python.
+- Consequence: the disaggregation headline has no valid measurement at either load, since the pre-correction arms
+  carry the dropped-rope_theta caveat. This is now the biggest hole in the evaluation.
+
 ## v3.22.0 — Motivation 2 restated as a timescale mismatch, with both sources of evidence (2026-10-28)
 - The outline's second motivation said "the ratio is a static configuration and the workload is not", which asserts
   rigidity without saying why it is fatal. Restated as the control-loop argument: the uncached-input-to-output

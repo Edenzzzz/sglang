@@ -3,3 +3,14 @@ the Crossflow-style timestamp-window TraceLab replay (--tracelab-window-start-s 
 -window-rounds segment, start-at-timestamps scheduling) and the natural-text token source (--tracelab-text-source);
 session_concurrency.py is the pod copy, unchanged. Tests: drivers/serving/test_tracelab_window.py. Deploy all four
 together into $W/up/python/sglang/benchmark/ (tracelab.py into datasets/).
+
+Deploy checklist (2026-10-28, learned the hard way on a re-provisioned cluster):
+1. Copy serving.py, session_replay.py, session_concurrency.py into $W/up/python/sglang/benchmark/.
+2. Copy tracelab.py into $W/up/python/sglang/benchmark/datasets/.
+3. REGISTER the dataset in $W/up/python/sglang/benchmark/datasets/__init__.py -- step 2 alone is not enough, and the
+   agent client then fails with "ValueError: Unknown dataset: tracelab-claude" while the chat client succeeds:
+     from sglang.benchmark.datasets.tracelab import TraceLabClaudeDataset
+     DATASET_MAPPING["tracelab-claude"] = TraceLabClaudeDataset
+4. Run the client against UPSTREAM's tree (mn_bench.sh BENCH_PY defaults to $W/up/python). The overlay imports
+   sglang.srt.utils.network, which our serving tree predates, so it cannot run on our tree.
+5. Verify: PYTHONPATH=$W/up/python python -c 'from sglang.benchmark.datasets import DATASET_MAPPING as M; M["tracelab-claude"]'

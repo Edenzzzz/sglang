@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.31.0 — smoke5: chat client end to end, teardown and done-marker both work; dataset registered (2026-10-28)
+- smoke5 is the first run with all three fixes live. Chat completed end to end (300 requests, mean TTFT 54.2 ms,
+  mean TPOT 3.4 ms, p99 ITL 6.5 ms, 0 tracebacks). The bench reported `MNBENCHDONE status=1` at once instead of
+  holding the cluster 90 min, and mn_kill.sh returned all 16 GPUs to 0 MiB.
+- The agent client failed with "ValueError: Unknown dataset: tracelab-claude": tracelab.py was copied into
+  datasets/ but never added to DATASET_MAPPING in datasets/__init__.py. Registered on all four pods; resolves to
+  TraceLabClaudeDataset on each.
+- The overlay README now carries a five-step deploy checklist including the registration, which it omitted.
+- smoke6 launched behind the GPU preflight; superset r4 follows if both agent.json and chat.json appear.
+
 ## v2.30.0 — True root cause of the orphaned servers: mn_kill.sh was never deployed (2026-10-28)
 - The GPU preflight caught it: after smoke4's "normal" teardown, all 16 GPUs were still at 86.7 GB, and gate5
   aborted instead of OOMing. mn_run.py's teardown is `bash .../mn_kill.sh`, and that script was never pushed to the

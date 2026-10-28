@@ -8,7 +8,12 @@ set -u
 ulimit -n $(ulimit -Hn)  # 1024 soft limit: a burst of concurrent requests runs the client out of sockets
 OUT=$1; RPORT=$2
 W=/dev/shm/w
-export PYTHONPATH=$W/python:$W/fi
+# The CLIENT runs against a self-consistent sglang tree, not the server's. Our serving tree carries only the
+# bench_serving deprecation shim (no sglang/benchmark/), and grafting upstream's benchmark package onto our srt
+# breaks on modules our tree predates (sglang.srt.utils.network). BENCH_PY defaults to upstream's checkout, which
+# has a matching benchmark/ and srt/; the servers are launched separately with SGL_PY, so this does not change any
+# arm's serving code.
+export PYTHONPATH=${BENCH_PY:-$W/up/python}:$W/fi
 mkdir -p $OUT; rm -rf $OUT/barrier
 export BENCH_BARRIER_DIR=$OUT/barrier
 S=${SESSIONS:-64}; T=${TURNS:-6}

@@ -27,6 +27,14 @@
      is the only copy on the pods.
      - Fixed by copying `up/python/sglang/benchmark` into both `ourpy/python/sglang` and `python_slo/sglang` on all
        four pods (verified present, and `--cache-report` present in it).
+   - **[!] Third blocker (r3): grafting upstream's `benchmark/` onto our `srt` tree does not work either.** With
+     the package copied in, the client then died on `ModuleNotFoundError: No module named 'sglang.srt.utils.network'`
+     -- a module upstream's benchmark client imports but our serving tree predates.
+     - Fixed properly by separating client from server: `mn_bench.sh` now exports
+       `PYTHONPATH=${BENCH_PY:-$W/up/python}:$W/fi`, so the CLIENT runs against a self-consistent upstream checkout
+       while the servers keep launching from `SGL_PY` (our tree, or `python_slo`). No arm's serving code changes.
+     - A short smoke arm (`/tmp/smoke.sh`, one baseline arm at alpha 12 with a 180 s horizon, log
+       `/tmp/h20/smoke1.log`) now runs BEFORE any sweep, which is what should have caught all three of these.
      - **Lesson: after re-provisioning, run ONE short arm end-to-end before queueing a sweep.** r2 sat for 40
        minutes with healthy workers and a live router while every bench client was dying, and the driver's log
        showed nothing because the failure was inside `bench_agent.log` on the pod.

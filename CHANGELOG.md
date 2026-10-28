@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.03.0 — Client/server tree separation; smoke arm before sweeps (2026-10-28)
+- Third deployment blocker: with upstream's benchmark/ copied into our tree, the client died on
+  ModuleNotFoundError: No module named 'sglang.srt.utils.network' -- upstream's benchmark client imports modules our
+  serving tree predates. Grafting the package was the wrong fix.
+- Proper fix: mn_bench.sh now runs the CLIENT against a self-consistent upstream checkout via
+  PYTHONPATH=${BENCH_PY:-$W/up/python}:$W/fi, while servers still launch from SGL_PY (our tree or python_slo). No
+  arm's serving code changes. Deployed and verified on all four pods.
+- A short smoke arm (one baseline, alpha 12, 180 s horizon) now runs before any sweep. Three separate deployment
+  faults (invalid rope override JSON, missing sglang/benchmark, client/server tree mismatch) each burned a full
+  sweep attempt and would all have been caught by it.
+- pkill self-match hit a third time: a pattern naming the driver matched the shell issuing the command and killed it
+  mid-script, so a heredoc never ran. Kill by PID only.
+
 ## v2.02.0 — Second superset blocker: our tree lacks sglang/benchmark/ (2026-10-28)
 - Run r2 produced nothing for 40 minutes with healthy workers and a live router: every bench client died with
   ModuleNotFoundError: No module named 'sglang.benchmark.serving'. Our pushed tree carries only the deprecation

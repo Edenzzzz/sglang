@@ -266,9 +266,18 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       merged steps; option 1 only removes a search we can already afford. Either way it is a learned predictor over
       our own fused step, not a borrowed formula.
     - Labels come from traces we already hold, so training needs no new GPU time.
-  - [x] **CROSS-ROLE BACKFILL (`tma_store_wait`): bounded from measured data, ceiling is low single digits
-    (2026-10-28).** The goal asks for this to be tested. Rather than build it blind, its ceiling was bounded from
-    the 96-capture H200 results (`/opt/tiger/w/unified_h200x4_20261026/*/kernel_results.json`):
+  - [x] **CROSS-ROLE BACKFILL (`tma_store_wait`) IS BUILT, MEASURED AND SHIPPED -- see A5.6 for the primary
+    record. Correction (2026-10-28): an earlier entry in this section called it "untested" and bounded it
+    analytically; that was wrong, written without re-reading A5.6.** What is actually in the shipped A6 kernel:
+    the FA3 launch triggers its PDL dependent at kernel entry (`griddepcontrol.launch_dependents` in
+    `StockFA3PdlPrimary`) and **drains its TMA stores with `tma_store_wait` before exit**, so FA2 CTAs fill each SM
+    an FA3 CTA frees and FA2 rows run beside FA3's tail. Measured worth: **2.2-6.1% of the step** (PDL-off
+    ablation, H200, 96 captures). The IN-KERNEL variant (an FA3 CTA taking FA2 work itself) was also built and
+    measured -- correct, and worth 1.4-5.5x over no backfill -- but that whole co-compiled path ran 2-6x slower, so
+    co-launch shipped. Multicast is in A5.5, measured at 0.76x and dropped. The goal's "test multicast and
+    cross-role backfill (needs tma_store_wait)" is therefore DONE, with numbers.
+    The ceiling analysis below remains useful for why no FURTHER backfill work pays, bounded from the 96-capture
+    H200 results (`/opt/tiger/w/unified_h200x4_20261026/*/kernel_results.json`):
     - **What overlap already recovers.** `native_serial` (FA3 then FA2, no overlap) against `native_pdl` (PDL
       chained): PDL recovers **1.4% (32K four-mode), 2.2-6.2% (two-mode), 2.8% (128K four-mode)**. Running the two
       naive calls on separate streams instead of serially recovers **nothing** (1.763x against 1.759x). Two
@@ -413,7 +422,8 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       classes look like the mechanism when the role split was.
     - **Conclusion across three models: C1 is 2-9% over a fair baseline, and every large number (1.8x, 2.9x, 6.0x)
       belongs to the role split, which is not our contribution.** No further kernel item has produced a significant
-      gain; the remaining untested idea is cross-role backfill (needs `tma_store_wait`), which is the only one that
+      gain. (Correction: cross-role backfill is NOT untested -- it ships in A6 via `tma_store_wait` and is worth
+      2.2-6.1%; see A5.6.) The idea that remains is further overlap work, which
       attacks beta (0.796 on H20) rather than the row-side work.
   - **Where C1's gain actually is, measured step-for-step (2026-10-27, user challenged the 4% figure).**
     - Method: STEPTRACE from two arms of the same alpha-3 replay, same schedule and router, matched by step shape.

@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.07.0 — CORRECTION: cross-role backfill with tma_store_wait ships in A6 and is measured (2026-10-28)
+- An earlier entry this session called cross-role backfill "untested" and bounded it analytically. That was wrong,
+  written without re-reading the A5.6 record. The shipped A6 kernel DOES do cross-role backfill: the FA3 launch
+  triggers its PDL dependent at kernel entry and drains its TMA stores with tma_store_wait before exit, so FA2 CTAs
+  fill each SM an FA3 CTA frees. Measured worth 2.2-6.1% of the step (PDL-off ablation, H200, 96 captures).
+- The in-kernel variant (an FA3 CTA taking FA2 work itself) was also built and measured: correct and worth 1.4-5.5x
+  over no backfill, but that co-compiled path ran 2-6x slower, so co-launch shipped.
+- With multicast measured at 0.76x (A5.5), the goal's "test multicast and cross-role backfill (needs
+  tma_store_wait)" is DONE with numbers. The ceiling analysis stands as the reason no FURTHER backfill work pays.
+
 ## v2.06.0 — rope_theta was nested in the wrong place; smoke arm caught it (2026-10-28)
 - Qwen2.5 carries rope_theta as a TOP-LEVEL config field, a sibling of rope_scaling. My override nested it inside
   rope_scaling, which corrupted the context-length derivation (worker logged "derived context_length (2048)") and

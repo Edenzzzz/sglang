@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.24.0 — Broken PD arm root-caused: the KV transfer fails, not the rope override (2026-10-28)
+- Decode pod logged 2819 x "transfer failed for request" plus KVTransferError(bootstrap_room=...) aborts, while
+  the prefill pod's Mooncake store set up and warmed successfully and all workers carry rope_theta 1000000. So
+  prefill computes the KV and cannot hand it to decode -- that is the failed=1890 / lost_after_failure=7470. The
+  arm measured a broken transfer path, and the rope override is exonerated.
+- Next in order: (1) switch the driver from SGL_PY=up/python to up_clean/python, which mn_node.sh's own header
+  says stock PD requires because the serving overlay trips disagg prefill's spec_info assert -- the documented
+  configuration and the cheapest hypothesis; (2) if transfers still fail, check decode-to-prefill bootstrap port
+  reachability and whether RDMA is available on THIS job, since the published disagg numbers came from a different
+  one.
+- Noted what the root cause does NOT explain: accept=NONE. A failing transfer should still leave acceptance lines
+  from whatever decoded, so either almost nothing decoded or stock MTP is not running on this tree -- check for an
+  MTP startup line before trusting a re-run.
+
 ## v3.23.0 — The rope-corrected stock-PD arm is BROKEN, and its numbers flatter us (2026-10-28)
 - alpha 3 stock disagg reported chat 4.9% / 78 tok/s with TTFT p50/p90 189.98/311.20 s, failed=1890,
   lost_after_failure=7470, TPOT 2.9/5.9 ms and accept=NONE. Four signs it is broken rather than slow: thousands of

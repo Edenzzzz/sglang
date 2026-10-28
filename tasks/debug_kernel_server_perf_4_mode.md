@@ -450,13 +450,23 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     us.** "Stock PD reaches 4.9% chat attainment" would sail through a casual read and into the paper. The rule it
     argues for: an arm with non-zero `failed` or `lost_after_failure`, or with `accept=NONE` while MTP is
     configured, is void regardless of how its score reads.
-  - **Diagnosis order.** The decode side most likely died: check `worker_*.log` on the decode pods for
-    `OutOfMemoryError` and for mooncake KV-transfer errors, then `bench_*.log` for the client's view of the
-    failures. Two candidates specific to this driver: the `ROPE_THETA` override now passed to the upstream tree
-    (stock PD runs `up/python`, and `mn_node.sh` builds the override string -- a malformed one killed all 16
-    workers once already, 2026-10-28), and the disagg prefill path's spec_info identity assert, which is why
-    `mn_node.sh` documents running stock PD on CLEAN upstream (`up_clean`) rather than the overlaid tree -- this
-    driver uses `SGL_PY=/dev/shm/w/up/python`, which may be the overlaid one.
+  - **[x] ROOT CAUSE (2026-10-28): the PD KV transfer fails en masse, and the rope override is NOT at fault.**
+    Worker logs for this arm:
+    - prefill pod 0: `Mooncake store setup successfully` and `warmup successfully` on all four workers, and
+      `rope_theta":1000000` present on all four -- so the model config is correct and the store came up.
+    - decode pod 2: **2 819 x `transfer failed for request`**, plus `KVTransferError(bootstrap_room=...)` aborts.
+    So prefill computes the KV and then cannot hand it to decode, which is exactly what `failed=1890` and
+    `lost_after_failure=7470` are. The arm measured a broken transfer path, not a slow schedule.
+  - **Next, in order.** (1) `mn_node.sh`'s own header says the stock PD baseline must run CLEAN upstream
+    (`$W/up_clean/python`) "because the serving overlay's spec-v2 changes trip disagg prefill's spec_info identity
+    assert", while this driver passes `SGL_PY=/dev/shm/w/up/python` -- switch it to `up_clean` and re-run, since
+    that is the documented configuration and the cheapest hypothesis. (2) If transfers still fail, the issue is
+    mooncake connectivity on this cluster rather than the tree: check that the decode pods can reach the prefill
+    pods' bootstrap ports (the arm's `claimed_ports` / `ports_r*_g*.txt`), and whether RDMA is available here --
+    the earlier 8-GPU disagg runs that produced the published numbers were on a DIFFERENT job.
+  - Note what this does NOT explain: `accept=NONE`. Even a failing transfer should leave acceptance lines from
+    whatever decoded successfully, so either almost nothing decoded at all, or stock MTP is not running on this
+    tree. Check for an MTP startup line on the decode pods before trusting a re-run.
   - Until this is fixed, every stock-PD comparison in the paper rests on the PRE-correction arms, whose own caveat
     (the upstream tree dropped `rope_theta`) is still live. **So the disaggregation headline currently has no
     valid measurement at either load**, and that is the single biggest hole in the evaluation.

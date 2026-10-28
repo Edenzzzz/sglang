@@ -954,6 +954,31 @@ Table 5: unified dispatcher speedup, Qwen2.5-7B, H200, 96 captures.
 | 128K context, 2-mode | 2.921x | 1.044x | 1.042x |
 | 128K context, 4-mode | 1.861x | 1.058x | 1.056x |
 
+**The same comparison on two more models** (rank-0 captures replayed on the H200, FP32-checked):
+
+| model | our dispatcher over the naive role split | the role split itself over sglang's single call |
+|---|---:|---:|
+| Qwen2.5-7B | 1.040-1.087x | 1.76-2.80x |
+| Llama-3.3-70B | 1.028-1.058x | 6.7-7.7x |
+| GLM-4.5-Air | 1.020-1.028x | 5.3-6.0x |
+
+The ordering is consistent and instructive: the worse sglang's single call serves a model's verify rows, the more the
+role split alone recovers and the *less* our tile classes add on top, because a stock FA2 call already tiles those
+rows well. GLM-4.5-Air, whose 48-query verify rows motivated the 64-row tile class, is where our marginal gain is
+smallest. We therefore claim 2-9% for the dispatcher and attribute the large factors to the role split, which is not
+a contribution of this paper.
+
+**What bounds this.** Four independent measurements explain why the dispatcher cannot do better on this workload.
+A 2048-token chunk over a 128K-token prefix is 1.08x10^14 FLOP, about 0.73 s on an H20 and essentially the whole
+step, and both our kernel and the baseline run that chunk through the same FA3 code -- so the share of a step we can
+influence shrinks as context grows, which is exactly why our serving speedup decays from 1.147x below 8K to 1.006x
+above 128K (section 6.3). Running the two role calls on separate streams instead of serially recovers nothing
+(1.763x against 1.759x), and programmatic dependent launch recovers only 1.4-6.2%, so the overlap between the roles
+is already nearly exhausted. Only 0.2% of decode-step wall time lies outside the traced forward, so there is no
+host-side time to reclaim. And a persistent-kernel structure, cluster-level reduction through distributed shared
+memory, a just-in-time ready queue and KV multicast all measured at or below parity (0.60-1.006x). The kernel's
+contribution on long-context agentic serving is real but small, and we report it as such.
+
 Measured on an H200 over 96 captures taken from real four-mode serving (24 per cell), every arm checked against an
 FP32 reference (worst head relative error 0.0083). The middle column is the comparison that matters: separating the
 roles into a stock FA3 call for the chunk and a stock FA2 call for the rows is worth 1.76-2.80x by itself, and is

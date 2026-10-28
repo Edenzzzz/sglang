@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.18.0 — MEASURED the tile-16-with-FA3 overlap gain; q64 hypothesis refuted (2026-10-28)
+- bench_q64_overlap_20261028.py on the H200: chunk/rows concurrency over a 131K prefix. streams/serial = 0.966x at
+  chunk 64, 0.955x at 128, 0.973x at 256, and 1.006x (harmful) at 2048; gap-to-ideal recovered 13 / 48 / 41 / 0%.
+- The q64 hypothesis is refuted as stated: chunk 128 overlaps BETTER than chunk 64. The deciding variable is the
+  absolute size of the FA3 work, not the query tile -- at chunk 64 FA3 already splits the 131K KV across enough CTAs
+  to fill the GPU, and at 2048 it fills every SM.
+- Absolute ceiling 4.5% of the step at best, 0% at the 2048-token chunk real steps use (row work is ~1% of serial
+  time there). Independently consistent with the 1.763 vs 1.759x two-stream result on real captures.
+- Both bounds on the mechanism are now measured by different mechanisms: launch-level concurrency <=4.5% (this run)
+  and intra-CTA reach 1.15% of row items (plan-only count). The conclusion holds either way. Paper 5.1 reason (4)
+  carries the sweep.
+
 ## v2.17.0 — The hardware reason POD-style overlap cannot work on Hopper+ (2026-10-28)
 - Strengthened reason (1) of the POD argument in paper 5.1 with the architectural cause the user supplied: Ampere's
   mma.sync is warp-level over a 16x8x16 tile, so many warps from several CTAs coexist on an SM and a kernel really

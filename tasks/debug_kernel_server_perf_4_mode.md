@@ -2053,6 +2053,25 @@ issue `mma.sync` for 16-row rows alongside.
        where capacity exists only 7.7% of that step's rows can move.
      - This matches Table 3 independently (64-row tiles are 1.2% of all query tiles) and matches the user's own
        read that the mechanism is "a small percentage".
+  3. **[x] MEASURED the overlap gain itself (2026-10-28), which the plan-only count did not give.**
+     `unified/bench_q64_overlap_20261028.py` on the H200 (one GPU, stock FA3 via `sgl_kernel.flash_attn` for the
+     chunk and stock flashinfer FA2 for 32 one-token rows, KV 131072, row KV 4096):
+     | chunk | FA3 ms | FA2 ms | serial | two streams | streams/serial | serial->ideal gap recovered |
+     |---:|---:|---:|---:|---:|---:|---:|
+     | 64 | 0.2274 | 0.0749 | 0.3048 | 0.2944 | **0.966x** | 13% |
+     | 128 | 0.6920 | 0.0733 | 0.7640 | 0.7294 | **0.955x** | **48%** |
+     | 256 | 1.1043 | 0.0731 | 1.1813 | 1.1498 | 0.973x | 41% |
+     | 2048 | 7.0750 | 0.0750 | 7.1880 | 7.2284 | **1.006x** | 0% |
+     - **The q64 hypothesis is REFUTED as stated: chunk 128 overlaps BETTER than chunk 64** (48% of the gap against
+       13%). The query tile is not what decides it -- the absolute size of the FA3 work is. At chunk 64 FA3 already
+       splits the 131K KV across many CTAs to fill the GPU, so no SM slack remains; at chunk 2048 it fills every SM
+       and two streams are slightly HARMFUL (1.006x).
+     - **Absolute ceiling: 4.5% of the step at best (chunk 128), and 0% at the 2048-token chunk real steps use**,
+       because the row work is ~1% of serial time there. Independently consistent with the 1.763x vs 1.759x
+       two-stream result on the real captures.
+     - Scope note: this measures LAUNCH-level concurrency (two streams), which depends on SM slack. True intra-CTA
+       warpgroup sharing does not, but its reach is the 1.15% of row items from test 2. Both bounds are small, by
+       different mechanisms, which is why the conclusion holds either way.
      - **Verdict: not worth building for throughput on this workload.** Its value is as EVIDENCE for the
        architectural claim (paper 5.1): it is the only intra-SM overlap Hopper permits, and measuring its reach at
        1.15% is what makes "POD-style overlap does not carry to Hopper" a quantified statement rather than an

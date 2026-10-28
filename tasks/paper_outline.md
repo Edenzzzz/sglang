@@ -392,7 +392,12 @@ across CTAs. That design depends on both roles issuing the same class of tensor-
    unusable.
 4. *So overlap reduces to the launch level, where little is left.* With the roles in separate launches, programmatic
    dependent launch recovers 1.4 to 6.2% of the step and two independent streams recover nothing (1.763x against
-   1.759x on the 128K four-mode captures). Six further mechanisms -- a persistent runner, a longest-processing-time
+   1.759x on the 128K four-mode captures). A controlled sweep of the chunk size shows why, and shows that the query
+   tile is not the variable: running a chunk and 32 one-token rows concurrently on two streams over a 131K-token
+   cached prefix recovers 4.5% of the step at a 128-token chunk, 3.4% at 64, 2.7% at 256, and **nothing at a
+   2 048-token chunk, where it is marginally harmful (1.006x)**. At a small chunk FA3 already splits the key range
+   across enough CTAs to fill the device, and at a large one it fills every streaming multiprocessor outright; in
+   neither case is there room for a second role, and the row work is about one per cent of the step's time anyway. Six further mechanisms -- a persistent runner, a longest-processing-time
    pull loop, a just-in-time ready queue, cluster-level reduction through distributed shared memory, KV multicast,
    and KV-position ordering -- all land at or below parity.
 

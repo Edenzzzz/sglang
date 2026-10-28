@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.46.0 — First superset verdict: VIOLATED at alpha 3 -- sglang's default prefill-prioritized wins (2026-10-28)
+- Same cluster and load, superset_report.py: sglang prefill-prioritized 83.2% chat / 93.2% agent / 2448 tok/s,
+  TPOT p90 41.9 / 47.2 ms, against ours (uncapped SLO chunk) 84.4 / 90.3 / 2259, 43.6 / 48.8 ms. pp wins agent
+  attainment (+2.9 pts), goodput (+8.4%) and both TPOT tails; chat is a tie. Bar NOT MET (TPOT p90 -3.4%, goodput
+  -7.7% vs the best valid baseline).
+- Not a broken baseline: pp is valid and its acceptance (1.837) is LOWER than ours (2.012), yet it still wins.
+- Treated as a defect per the superset rule. Diagnosed cause: the uncapped rule's ~6 s single-step stalls. The sweep
+  is reordered so the qcap-fixed arm runs next against pp, instead of running two more baselines against an arm
+  already known to be defective.
+
 ## v2.45.0 — PD re-measure queued; full evaluation pipeline now chained end to end (2026-10-28)
 - mn_pd_remeasure_16g_20261028.sh: stock PD disaggregation (disagg_p2, sglang PD router, upstream tree) and
   conditional disaggregation (cond_p1, Dynamo defaults, our tree and router) at alpha 3 and 6. Re-measured because

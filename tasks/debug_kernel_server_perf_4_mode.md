@@ -72,7 +72,24 @@
        one step's budget derived from the chat TTFT SLO, so a step can never be longer than the time a queued chat
        request can afford to wait. (2) ties the cap to an SLO rather than a tuned constant, which is the user's
        requirement for the chunk rule, so it is the one to prefer.
-     - The verdict that matters is still against this sweep's sglang baselines (pp / mc / pdmux), running now.
+     - **[x] FIRST SUPERSET VERDICT (2026-10-28 14:5x): VIOLATED at alpha 3.** sglang's DEFAULT prefill-prioritized
+       schedule (`coloc_sgl_mtps_hc_tl2_a3_superset_r5_pp`, upstream tree, sglang cache_aware router, its own chunk
+       policy) against ours, same cluster and load, `superset_report.py /tmp/h20/mn_superset_16g_r5.log`:
+       | alpha 3 | accept | chat | agent | agent tok/s | chat TPOT p50/p90 | agent TPOT p50/p90 | chat TTFT p90 |
+       |---|---:|---:|---:|---:|---:|---:|---:|
+       | ours (EDF + SLO chunk, uncapped) | 2.012 | 84.4% | 90.3% | 2259 | 15.5 / 43.6 | 21.4 / 48.8 | 2.80 s |
+       | sglang prefill-prioritized | 1.837 | 83.2% | **93.2%** | **2448** | 15.8 / **41.9** | 22.1 / **47.2** | 2.81 s |
+       pp beats ours on agent attainment (+2.9 pts), agent SLO goodput (+8.4%), chat TPOT p90 and agent TPOT p90;
+       chat attainment is a tie inside the noise floor. **BAR vs the best valid baseline: TPOT p90 -3.4%, goodput
+       -7.7% -> NOT MET.**
+       - Not explained by a broken baseline: pp is valid, and its acceptance (1.837) is LOWER than ours (2.012),
+         which should handicap it -- it wins anyway.
+       - Per the superset rule this is a defect, not a result. Leading cause, already diagnosed: the uncapped rule
+         spends up to ~6 s of banked slack in single 16,384-token steps, which lands in exactly the metrics pp wins on
+         (TPOT tails, agent attainment). Fix built (qcap + stepcap=2000, tree `python_slo_qcap`).
+       - Decision: reorder. Running mc / pdmux against an arm already known to be defective adds little; the
+         decision-relevant number is whether qcap closes the gap to pp at alpha 3. The sweep is stopped after pp and
+         re-queued as `mn_superset_v2_16g_20261028.sh` with ours = the qcap tree, run first.
    - **[!] The "ours" arm would not have run our system (found 2026-10-28, before the sweep reached it).** The
      stage-2 push used the REPO tree (`python/sglang` at HEAD) as the serving tree. That tree has NO A6 hooks
      (`SGLANG_NATIVE_PDL` count 0) and NO late-demote EDF; every prior cluster result ran on the H20 SERVING tree

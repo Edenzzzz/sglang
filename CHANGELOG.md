@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.00.0 — Fixed the invalid override JSON that killed every worker (2026-10-28)
+- My ROPE_THETA edit was wrong: bash strips the quotes inside ${VAR:+...}, so the override became
+  `,rope_theta:1000000` (unquoted key) and every worker died with JSONDecodeError at column 86. The first superset
+  run stalled 12 minutes and produced no arm.
+- mn_node.sh now builds the override in steps and validates it with json.loads before use, failing loudly with
+  BAD_OVERRIDE_JSON. Verified valid with and without ROPE_THETA; redeployed to all four pods with the guard string
+  checked on each, and the sweep relaunched as r2.
+- Process lessons recorded: pkill -f matched and killed the shell running the command containing the pattern, so a
+  later tar never ran and a STALE tarball was pushed while push reported success; pgrep -cf counts itself, making
+  clean pods look occupied; a `b"""` typo for `b="""` skipped a doc edit while the commit still succeeded.
+
 ## v1.99.0 — Cross-role backfill bounded and closed on evidence (2026-10-28)
 - The goal's untested item is now bounded from the 96-capture H200 results instead of being built blind:
   PDL recovers only 1.4% (32K four-mode) to 6.2% (two-mode) over the non-overlapped serial two-call arm, and two

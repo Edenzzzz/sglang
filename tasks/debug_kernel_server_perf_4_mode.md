@@ -16,8 +16,22 @@
    - Valid single-node baselines, each with sglang's OWN chunk policy: **default prefill-prioritized**
      (`MIXED_CHUNK=0`), **mixed chunk** (`MIXED_CHUNK=1`), and **PD multiplexing** (`PDMUX=1`, which has no overlap
      scheduling, so its throughput is expected about 10% lower).
-   - Driver: `pd_colocation/mn_superset_16g_20261028.sh` (launched 2026-10-28 08:2x, log
-     `/tmp/h20/mn_superset_16g_r1.log`), alpha 3 and alpha 6, acceptance logged per arm.
+   - Driver: `pd_colocation/mn_superset_16g_20261028.sh`, alpha 3 and alpha 6, acceptance logged per arm.
+     Run r1 produced NOTHING and was discarded (override-JSON bug below). Run r2 relaunched 2026-10-28 08:4x, log
+     `/tmp/h20/mn_superset_16g_r2.log`.
+   - **[!] Bug I introduced and fixed: the `ROPE_THETA` edit produced INVALID override JSON.** The form
+     `'..."type":"yarn"'${ROPE_THETA:+,"rope_theta":$ROPE_THETA}'}}'` looks right, but bash's quote removal strips
+     the quotes inside `${VAR:+...}`, yielding `,rope_theta:1000000` with an unquoted key. Every worker died with
+     `JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 86`, so the first superset
+     run stalled 12 minutes with no output and no arm.
+     - Fixed by building the override in steps and VALIDATING it with `json.loads` before use, so a malformed
+       override fails loudly with `BAD_OVERRIDE_JSON` instead of silently killing every worker. Verified valid both
+       with and without `ROPE_THETA`, and redeployed to all four pods with the guard string checked on each.
+     - Three process lessons that cost time: `pkill -f <pattern>` killed the shell running the command that
+       contained that pattern, so a later `tar` never ran and I pushed a STALE tarball while the push reported
+       success; `pgrep -cf <pattern>` counts itself, making clean pods look occupied; and a `b"""` typo for
+       `b="""` in a patch heredoc silently skipped the edit while the commit still went through. Kill by PID,
+       verify a push by grepping a string unique to the new file, and check a doc edit landed before committing.
 
 
 Fused FA3 + FA2 attention for the 4-mode MTP (EAGLE3) serving schedule, built to the user's tile rule and optimised on

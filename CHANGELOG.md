@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.83.0 — Highlight the headline results so the paper is skimmable (2026-10-28)
+- Bolded the numbers a reader should find without reading prose, in the abstract and the introduction's results
+  paragraph: the kernel's 4.0-8.7% over the fair baseline, single-node chat attainment +38-74 points and agent
+  attainment 13-19% -> 44-50%, GLM throughput +27-28%, the cluster headline (93.6% chat attainment at 1100 tok/s
+  agent goodput), +12-37% over conditional disaggregation and +21-24% under a spike, the shifting-demand result
+  (+57%, +90% under a chat surge, +14-21 points chat attainment), the fault-tolerance result, and the Llama margins.
+- Applied idempotently (each string is bolded once and skipped if already bold), so the pass can be re-run as more
+  results land. Synced to Drive.
+
 ## v2.82.0 — C4: the mixed-traffic evaluation becomes its own contribution (2026-10-28)
 - New contribution item for the scenario, which is compelling on its own: an agentic coding product and a chat
   product sharing GPUs, as Codex and ChatGPT traffic do -- TraceLab coding sessions on real timestamps (10 s TTFT /

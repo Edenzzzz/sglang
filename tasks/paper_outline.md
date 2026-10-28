@@ -108,14 +108,14 @@ phase isolation disaggregation buys with fixed roles. Each worker orders prefill
 have already missed. Across symmetric nodes, a router predicts each request's TTFT and TPOT on every node and sends it
 to the node with the most cached prefix that can still meet its SLOs and those of the requests already there.
 
-On 96 mixed steps sampled from Qwen2.5-7B serving traces and replayed on an H200, mixed-step attention is 4.0-8.7%
-faster, with FP32-exact output, than stock FA3 and stock FA2 run as two separately planned kernels -- the fair
+On 96 mixed steps sampled from Qwen2.5-7B serving traces and replayed on an H200, mixed-step attention is **4.0-8.7%
+faster**, with FP32-exact output, than stock FA3 and stock FA2 run as two separately planned kernels -- the fair
 baseline, since splitting sglang's single varlen call by role is itself an obvious engineering step worth 1.8-2.8x.
 The same margin over the naive role split is 2.8-5.8% on Llama-3.3-70B and 2.0-2.8% on GLM-4.5-Air. On one node, SLO attainment rises for both tenants: on Qwen2.5-7B, chat attainment
-rises by 38-74 points, and at 128-256K contexts agent attainment rises from 13-19% to 44-50% with 8-11% more agent
-throughput; on GLM-4.5-Air, throughput rises 27-28% for both tenants. On 16 H20s, at 64 agent programs plus chat, AttentionFuse keeps 93.6% chat
-attainment with 1100 tok/s of agent SLO goodput, where PD disaggregation at its best P:D ratio reaches 13.1% and
-80 tok/s; against conditional disaggregation it carries 12-37% more agent SLO goodput at every load (two repeats) and 21-24% more under
+rises by **38-74 points**, and at 128-256K contexts agent attainment rises from **13-19% to 44-50%** with **8-11% more agent
+throughput**; on GLM-4.5-Air, throughput rises **27-28%** for both tenants. On 16 H20s, at 64 agent programs plus chat, AttentionFuse keeps **93.6% chat
+attainment with 1100 tok/s** of agent SLO goodput, where PD disaggregation at its best P:D ratio reaches 13.1% and
+80 tok/s; against conditional disaggregation it carries **12-37% more agent SLO goodput** at every load (two repeats) and **21-24% more** under
 a load spike. On a replay of real coding-agent traces whose prefill / decode demand swings within minutes, it
 carries 57% more agent SLO goodput than conditional disaggregation with 14 points more chat attainment, and 90% more
 with 21 points more under a chat surge; stock PD collapses at the same load. With Llama-3.3-70B on the same 16 GPUs,
@@ -191,18 +191,18 @@ selective write-through and timeout prefetch; we add only the router-side mirror
 The serving engine is upstream sglang at a pinned commit, and both attention executors are stock kernels (FA3 from
 flash-attention, FA2's BatchPrefill body from flashinfer).
 
-**Results.** On trace-sampled steps on an H200, the kernel is 4.0-8.7% faster than naive FA3 + FA2 on Qwen2.5-7B
+**Results.** On trace-sampled steps on an H200, the kernel is **4.0-8.7% faster** than naive FA3 + FA2 on Qwen2.5-7B
 (2.8-5.8% on Llama-3.3-70B, 2.0-2.8% on GLM-4.5-Air), and 1.86-2.92x faster than sglang's single FA3 call, of which
 the role split alone accounts for 1.76-2.80x. On one node, Qwen2.5-7B chat attainment
 rises by 38-74 points under the paper's SLOs, agent attainment at 128-256K rises from 13-19% to 44-50%, and
-GLM-4.5-Air throughput rises 27-28%. On 16 GPUs with the full stack, AttentionFuse holds 93.6% chat attainment and
-1100 tok/s agent SLO goodput at 64 agent programs, against 13.1% / 80 for the best stock PD configuration and
+GLM-4.5-Air throughput rises 27-28%. On 16 GPUs with the full stack, AttentionFuse holds **93.6% chat attainment and
+1100 tok/s agent SLO goodput** at 64 agent programs, against 13.1% / 80 for the best stock PD configuration and
 96.0% / 821 for conditional disaggregation, and carries 12-37% more agent SLO goodput than conditional
 disaggregation from 32 to 128 programs. On a replay of the TraceLab trace with shifting prefill / decode demand, it
-carries 57% more agent SLO goodput than conditional disaggregation (90% under a chat surge) with 14-21 points more
-chat attainment, and it loses no requests and no attainment when a quarter of the cluster fails. With
-Llama-3.3-70B, it holds 3-23 points more chat attainment than stock PD at equal agent goodput, and 4-94% more agent
-goodput than conditional disaggregation. [32 GPUs pending]
+carries **57% more agent SLO goodput** than conditional disaggregation (**90% under a chat surge**) with **14-21 points more
+chat attainment**, and **it loses no requests and no attainment when a quarter of the cluster fails**. With
+Llama-3.3-70B, it holds **3-23 points more chat attainment** than stock PD at equal agent goodput, and **4-94% more agent
+goodput** than conditional disaggregation. [32 GPUs pending]
 
 - C4, an evaluation on concurrently mixed, differently-SLO'd traffic. The scenario is one many clusters already
   serve: an agentic coding product and a chat product sharing the same GPUs, as Codex and ChatGPT traffic do. We

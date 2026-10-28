@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.99.0 — The SLO chunk rule is measured: -51% tail TPOT, but the bound is far too tight (2026-10-28)
+- First clean measurement of the policy (alpha 6, accept 2.023), against the fixed-2048 arm from the same tree:
+  chat TPOT p90 55.8 vs 114.6 ms (**-51%**), agent 59.2 vs 103.9 (**-43%**). The mechanism works and the user's
+  expectation of a large tail-TPOT win is confirmed.
+- But a 600 ms ceiling starves prefill: chat TTFT p90 41.65 s against 5.91, chat attainment 60.5 -> 23.6%, agent
+  SLO goodput 1976 -> 900 tok/s, 8161 agent rounds never issued.
+- Against the prediction registered before the run (TPOT p90 <= 95 ms AND attainment above 61.8%): first met with
+  room, second not. So the registered reading applies -- the knob works, the value is wrong -- and the next step is
+  a sweep of `stepcap` (1000/1500/2000/3000 ms), not another budget redesign. Two points on one curve now exist,
+  the bound is a monotonic latency, and the sweep doubles as C4's throughput-latency frontier.
+- Second lever if needed: cap by the tightest RESIDENT tenant's tail target instead of a global constant, so
+  agent-only steps may run long while steps carrying chat rows stay short. No new model.
+
+## v2.98.1 — Refit the step MLP: a nonlinear model on the same features makes the decode bias worse
+- `fit_step_mlp_20261028.py` (new, saved artifact): held-out decode bias **-19.9%** against the linear model's
+  -13.0%, with train bias +6.8% -- a 27-point swing across the chronological split, i.e. distribution shift rather
+  than model capacity.
+- So the router must not be given an MLP on these five features. The missing information is likely the decode
+  batch's KV-length distribution (only its mean is logged) and the resident tenant mix. TPOT prediction carries a
+  load-dependent 13-20% bias and no accuracy claim can be made until such a feature is logged.
+
 ## v2.98.0 — The MLP the paper credits has no saved artifact (2026-10-28)
 - Checked all three checkpoints under tasks/perf_model/ (model.pt, lpt_model.pt, dmc_model.pt): identical five
   features ['n_p','r_p','r_d','decode_bs','overlap'] from train_perf_model_mlp.py, with `overlap` at ~1e-8 sd in

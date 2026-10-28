@@ -254,6 +254,32 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     (`ROPE_THETA`) and `mn_run.py` (`ROPE_THETA` in the env string).
   - Push files with `Cluster(SID, cp, nodes=[f"worker-{i}" for i in range(NPODS)])`; without `nodes=` every call
     goes to one default instance that is not even one of the workers.
+- **[x] THE SLO-BUDGETED CHUNK IS MEASURED AT LAST, AND THE MECHANISM WORKS -- THE OPERATING POINT DOES NOT
+  (2026-10-28, alpha 6, `mn_tailchunk_16g_20261028.sh`, log `/tmp/h20/mn_tailchunk_r1.log`, accept 2.023).**
+  | alpha 6 | chat attain | chat tok/s | chat TPOT p50/p90 | chat TTFT p50/p90 | agent attain | agent tok/s | agent TPOT p50/p90 |
+  |---|---|---|---|---|---|---|---|
+  | rule, `:life` + `stepcap=600` | 23.6% | 346 | 41.3 / **55.8 ms** | 7.12 / **41.65 s** | 49.5% | 900 | 43.1 / **59.2 ms** |
+  | fixed 2048 (same arm otherwise) | 60.5% | 756 | 35.4 / 114.6 ms | 0.17 / 5.91 s | 76.9% | 1976 | 40.9 / 103.9 ms |
+  - **It does exactly what it was designed to do.** Chat mean-TPOT p90 **-51%** (55.8 against 114.6 ms) and agent
+    **-43%** (59.2 against 103.9). The user's expectation that the chunk rule wins big on tail TPOT is confirmed,
+    and the mechanism -- bounding a step by the inter-token tail target -- is validated.
+  - **And the operating point is badly wrong.** A 600 ms ceiling at alpha 6 over long prefixes admits so little
+    prefill that chat TTFT p90 reaches **41.65 s** against 5.91, chat attainment falls 60.5 -> 23.6% and agent SLO
+    goodput halves (900 against 1976 tok/s). 8 161 agent rounds never issue.
+  - **Against the prediction registered before the run:** it required TPOT p90 <= 95 ms AND attainment above
+    L1's 61.8%. The first is met with room to spare (55.8), the second is not (23.6%). So the registered reading
+    applies -- the knob works, the value is wrong -- and the next step is the sweep on that one number, NOT another
+    redesign of the budget. **This is the first result that is evidence ABOUT the policy rather than about a bug.**
+  - **Why a sweep should find a frontier rather than a compromise.** We now hold two points on the same curve from
+    the same tree: 600 ms is far on the TPOT-protective side (TPOT p90 55.8, TTFT p90 41.7 s) and the 2048 constant
+    sits on the throughput side (114.6 ms, 5.91 s). The bound is a latency in milliseconds, so it is monotonic and
+    interpretable, and the interesting region is between them. Sweep `stepcap` at 1000 / 1500 / 2000 / 3000 ms at
+    alpha 6, and report chat TPOT p90 against chat attainment as a Pareto curve -- which is also exactly the
+    throughput-latency frontier C4 claims and currently marks [pending].
+  - **A second lever, if the sweep's frontier is not good enough:** the bound is applied per step regardless of
+    which tenant is waiting. Capping by the *tightest resident* tenant's tail target rather than a global constant
+    would let agent-only steps run long while protecting steps with chat rows -- the per-tenant form of the same
+    rule, and no new model.
 - **[ ] TAIL-BOUNDED CHUNK ARM, alpha 3: OUR ARM FAILED AGAIN; THE 2048 BASELINE RAN (2026-10-28,
   `mn_tailchunk_16g_20261028.sh`, log `/tmp/h20/mn_tailchunk_r1.log`).**
   - **`c2048` (our tree, A6, four-mode, router, EDF, fixed 2048-token chunk), accept 1.994:** chat tight 90.6%
@@ -342,6 +368,27 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
         5.2.2 quotes a number from a fit whose artifact was never saved, so it is not currently reproducible;
         either refit and save it, or drop the column. A reviewer asking for the model would find three copies of a
         different one.
+      - **[x] REFIT AND SAVED, AND IT IS A NEGATIVE (2026-10-28): a nonlinear model on the same features makes the
+        decode bias WORSE.** `tasks/perf_model/fit_step_mlp_20261028.py` fits a 64-32 MLP on the five features
+        STEPTRACE carries (chunk tokens, prefix, decode rows, their KV, acceptance), log1p inputs and target,
+        chronological half/half split, saved to `step_mlp_20261028.pt`:
+        | split | rows | MAPE | bias | median |
+        |---|---|---|---|---|
+        | train, all steps | 43 966 | 28.1% | +6.5% | -2.7% |
+        | HELD OUT, all steps | 43 966 | 23.3% | -15.8% | -20.8% |
+        | train, decode only | 36 734 | 29.8% | +6.8% | -5.3% |
+        | **HELD OUT, decode only** | 37 040 | 24.0% | **-19.9%** | -24.1% |
+        Held-out decode bias is **-19.9% against the linear model's -13.0%** -- worse. Train bias is +6.8% and
+        held-out -19.9%, a 27-point swing across the chronological split, which is the signature of distribution
+        shift rather than of model capacity.
+        - **Conclusion: more model does not fix this, and the router must not be given an MLP on these features.**
+          The step time depends on something that changes across the run and is not in the five logged features --
+          the obvious candidates are the decode batch's KV-length *distribution* (only its mean `dkv` is logged)
+          and the mix of tenant classes resident. Until a feature capturing that is logged, the honest position is
+          that TPOT prediction carries a load-dependent bias of 13-20% and no TPOT-accuracy claim can be made.
+        - This also means paper 5.2.2's "MLP with acceptance" column cannot simply be reproduced by refitting: the
+          figure it quotes (3.4-4.0%) is a MAPE on merged steps, and the measurement that matters for the router is
+          the decode-step bias, which is where both model classes fail.
       - Do NOT wire any of the three existing checkpoints into the rule or the router: their feature semantics are
         unconfirmed and one input is dead, which is how a confidently wrong predictor gets deployed.
     - Until that lands, no TPOT-prediction accuracy claim appears in the paper, and 5.2.2's 2.0% aggregate must not

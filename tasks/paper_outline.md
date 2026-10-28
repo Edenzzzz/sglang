@@ -320,24 +320,34 @@ tile for all of them from their average packed length (16, 64 or 128 rows), so a
 one-token decode rows pays either a 64-row tile per decode row or 16-row tiles for every verify row. Rows need tiles
 of their own size, under one plan that also balances and merges them, which motivates C1.
 
-**Which work maps to which tile.** The packed row count of a work item is the product of its token count and the
-model's grouped-query ratio, so the tile a row needs is a property of the model and the role, not a tuning choice.
+**Which work maps to which tile.** A step of the four-mode schedule carries up to four kinds of work -- a prefill
+chunk, speculative verify rows, one-token decode rows, and the draft model's own steps -- and each kind's size in
+*packed rows* is its token count times the model's grouped-query ratio. The tile a work item needs is therefore a
+property of the model and the mode, not a tuning choice. Table 2 reads the dispatcher from the tile's side, which is
+how the kernel sees it.
 
-| work item | tokens | grouped-query heads | packed rows | tile it needs | executor |
-|---|---:|---:|---:|---:|---|
-| Qwen2.5-7B decode row | 1 | 7 | 7 | 16 | FA2 |
-| Llama-3.3-70B decode row | 1 | 8 | 8 | 16 | FA2 |
-| GLM-4.5-Air decode row | 1 | 12 | 12 | 16 | FA2 |
-| Qwen2.5-7B verify row (4 draft tokens) | 4 | 7 | 28 | 32 | FA2 |
-| Llama-3.3-70B verify row | 4 | 8 | 32 | 32 | FA2 |
-| GLM-4.5-Air verify row | 4 | 12 | 48 | 48 / 64 | FA2 |
-| prefill chunk, per step | the step's chunk size | 1 | = chunk size | 128 (64 for a small chunk or the remainder) | FA3 |
+**Table 2: which model and which of the four modes map to each tile class.**
 
-The three decode rows all land in the same 16-row tile while the verify rows span 28 to 48 packed rows, which is why
+| tile | executor | what lands here | models and modes |
+|---:|---|---|---|
+| **16** | FA2 | one-token rows: every decode row, and every draft step's rows | Qwen2.5-7B decode (1 token x 7 heads = 7 packed rows); Llama-3.3-70B decode (1 x 8 = 8); GLM-4.5-Air decode (1 x 12 = 12). Draft steps are one token per request on a one-layer head, so they land here for all three models. |
+| **32** | FA2 | 4-token verify rows of models with 7-8 grouped-query heads | Qwen2.5-7B verify (4 x 7 = 28 packed rows); Llama-3.3-70B verify (4 x 8 = 32, an exact fit) |
+| **48** | FA2 | 4-token verify rows of wide grouped-query models | GLM-4.5-Air verify (4 x 12 = 48, an exact fit). This class exists for GLM: at 16 rows a GLM verify row needs three tiles, and at 64 it wastes a quarter of one. |
+| **64** | FA2, or FA3 above 64 packed rows | the tail of a chunk, and verify rows too wide for 48 | the remainder tile of any prefill chunk that is not a multiple of 128 rows; GLM verify rows when the 48 class is disabled. Section 7 uses this class to free an FA3 warpgroup. |
+| **128** | FA3 | the body of a prefill chunk: full 128-row query tiles | all three models, prefill and append chunks. One chunk of c tokens is floor(c/128) tiles here plus one remainder tile above. |
+
+Two consequences a reader should take from Table 2. First, the three models' decode rows all land in the same 16-row
+tile while their verify rows span 28 to 48 packed rows, which is why
 a single query tile for every row wastes most of it: a 64-row tile holds one 7-row decode item at 11% occupancy, and
 16-row tiles force a 48-row GLM verify row into three tiles. This is the padding that C1 removes, and it explains
 the model ordering in section 6.2 -- the further a model's verify row sits from the single call's tile, the more the
 role split alone recovers.
+
+Second, the tile classes are not evenly used. In a four-mode step the 16-row class carries the many decode rows, one
+or two 32- or 48-row tiles carry the verify rows, and the 128-row class carries nearly all of the arithmetic, because
+the chunk's attention grows with the cached prefix while a row's does not. That imbalance is the single most
+important fact about the dispatcher: it is why removing the padding from the row classes is worth a few per cent
+rather than a factor (section 6.2), and why the chunk's own tile is where the step's time actually goes.
 
 On the prefill side the tile follows the chunk, so it follows the scheduler. In the cluster trace a round appends a
 median of 875 uncached tokens over a median 119K-token cached prefix (10th/90th percentile 199 / 7 119 tokens), and

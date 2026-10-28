@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.13.0 — Table 2: tile class -> model x mode mapping, read from the tile's side (2026-10-28)
+- Replaced the per-work-item list with a table keyed BY TILE CLASS (16 / 32 / 48 / 64 / 128), naming for each the
+  executor, what lands there, and which model and which of the four modes produce it -- so a reader can follow the
+  fusion without reconstructing it. 16: all decode rows and all draft steps (7 / 8 / 12 packed rows). 32: Qwen and
+  Llama verify (28 / 32). 48: GLM verify (48, exact; the class exists for GLM). 64: chunk remainder tiles and the
+  warpgroup-freeing case of item 18. 128: the body of every prefill chunk, all models.
+- Added the two consequences explicitly: the three models' decode rows share one tile while verify rows span 28-48
+  (hence the model ordering in 6.2), and the classes are unevenly used -- the 128 class carries nearly all the
+  arithmetic, which is why removing row padding is worth per cent rather than a factor.
+
 ## v2.12.0 — Tile-mapping table in the paper; q64 regime comes from our chunk rule (2026-10-28)
 - Added a work-item -> tile table to paper section 5.1: decode rows are 7 / 8 / 12 packed rows (Qwen / Llama-70B /
   GLM) and all need the 16-row tile, while verify rows are 28 / 32 / 48 and need 32 / 32 / 48-64; the prefill chunk

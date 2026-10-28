@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.80.0 — Add the fixed-2048 baseline to the queued chunk arm (2026-10-28)
+- `mn_tailchunk_16g_20261028.sh` gains a `c2048` arm at both loads: identical tree, A6 kernel, four-mode step,
+  router and EDF ordering, differing only in that the chunk is a fixed 2048 tokens instead of solved from the step
+  model. That is a clean leave-one-out on the chunk-sizing decision, and it is the bar the rule must clear -- a
+  model-driven chunk has to beat a constant to justify its complexity, and beating sglang while losing to the
+  constant would kill the contribution.
+- Added before the driver started, replaced atomically with mv, syntax-checked.
+
 ## v2.79.0 — Fixed chunk 2048 stays as a baseline, not as our policy (2026-10-28)
 - The 6.1 marker conflated two things. Corrected: for OUR arms the constant is being replaced, because a constant
   cannot be justified across loads; as a BASELINE the fixed 2048-token chunk stays, since it is the simple ad-hoc

@@ -75,5 +75,12 @@ for A in 3 6; do
     SGL_PY=/dev/shm/w/python_slo_life RUN_TAG=${T}_ours ROUTER_ARGS="$ROUTER_ARGS_ALL" \
     python3 -u mn_run.py coloc_cache_edf_mtp_hc
   report coloc_cache_edf_mtp_hc${T}_ours
+  # The ad-hoc constant, as a BASELINE our rule has to beat (user, 2026-10-28). Identical to the arm above in
+  # every respect -- same tree, same A6 kernel, same four-mode step, same router, same EDF ordering -- except that
+  # the chunk is a fixed 2048 tokens instead of solved from the step model. That makes it a clean leave-one-out on
+  # the chunk-sizing decision alone: a model-driven chunk has to beat a constant to justify its complexity, and
+  # beating sglang while losing to this would kill the contribution.
+  (unset SLO_CHUNK; KERNEL=a6 EDF=1 CHUNK=2048 RUN_TAG=${T}_c2048 ROUTER_ARGS="$ROUTER_ARGS_ALL" \
+     python3 -u mn_run.py coloc_cache_edf_mtp_hc); report coloc_cache_edf_mtp_hc${T}_c2048
 done
 echo MN_TAILCHUNK_DONE

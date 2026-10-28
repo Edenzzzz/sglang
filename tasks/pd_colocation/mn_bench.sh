@@ -138,5 +138,8 @@ wait_status=0
 for client_pid in $A $C $S $M ${FO_BASE:-} ${FO_SP:-}; do
   wait "$client_pid" || wait_status=$?
 done
+# Always write the marker, with the status. mn_run.py polls for MNBENCHDONE for up to 90 min before tearing down;
+# exiting without it on a client failure (the old behaviour) made a crashed client indistinguishable from a running
+# one and held all 16 GPUs for the full timeout (smoke4, 2026-10-28: client died at the startup barrier, 0/2 ready).
+echo "MNBENCHDONE status=$wait_status"
 [ "$wait_status" -eq 0 ] || exit "$wait_status"
-echo MNBENCHDONE

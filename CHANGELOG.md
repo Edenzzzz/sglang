@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.29.0 — mn_bench.sh always writes its done-marker; a crashed client no longer holds the cluster 90 min (2026-10-28)
+- mn_bench.sh ran `[ "$wait_status" -eq 0 ] || exit "$wait_status"` BEFORE `echo MNBENCHDONE`, so any client failure
+  exited without the marker. mn_run.py polls for MNBENCHDONE for up to 5400 s before its teardown, so a client that
+  crashed in seconds looked identical to one still running and held all 16 GPUs for the full 90 minutes. smoke4 hit
+  exactly this (client died at the startup barrier, "released: 0/2 ready").
+- Now writes `MNBENCHDONE status=<n>` unconditionally, then exits non-zero on failure. The failure is still reported
+  -- in the marker and the exit status -- but no longer masked as "running". Deployed to all four pods.
+- smoke4 released by hand-writing the marker into its pod log so mn_run.py took its NORMAL teardown path, rather than
+  kill -9 on the driver (which is what orphaned 16 servers earlier).
+
 ## v2.28.0 — Bench client installed the documented way; servers now come up clean (2026-10-28)
 - smoke4: 16 workers healthy in 94 s with no retries, so the GPU-preflight fix holds and the server path is clean.
   The client then failed on sglang.benchmark.session_replay: the overlay's serving.py imports sibling modules.

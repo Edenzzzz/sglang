@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.85.0 — No bold in the abstract; measured the abstract/intro redundancy (2026-10-28)
+- Removed the bold spans from the abstract: abstracts are not typeset with emphasis. Bolding stays in the
+  introduction, section 6 and the ablations, where a reader skims for numbers.
+- Measured the redundancy the draft was suspected of: all 9 numeric results in the abstract also appear in the
+  introduction, i.e. the abstract is a strict subset (abstract-only numbers: 0) and the introduction restates it
+  before adding 17 more. Repeating one or two headline figures is conventional; restating the whole abstract is
+  not, and the introduction's results paragraph should instead organise by baseline and point forward to section 6.
+  Flagged, not yet rewritten.
+
 ## v2.84.0 — Abstract rewritten: 606 -> ~290 words, key results in it (2026-10-28)
 - The abstract was 606 words and carried no headline number in its first half. Rewritten to four paragraphs:
   the scenario (agentic coding and chat on one cluster, lengths and targets an order of magnitude apart), why both

@@ -94,16 +94,16 @@ either tenant's latency: a single attention call computes a one-token decode row
 tile width, and admitting prefill in arrival order blocks a 200-token chat turn behind a 64K-token prompt.
 
 AttentionFuse makes colocation meet SLOs. One CPU-side plan per step gives every row a tile of its own size and
-reduces all split rows inside one launch, which costs **4.0-8.7%** less attention time than running stock FA3 and
+reduces all split rows inside one launch, which costs 4.0-8.7% less attention time than running stock FA3 and
 stock FA2 as two planned kernels and lets a prefill chunk and speculative verify rows share one forward. Each
 worker then orders prefills by deadline and sizes each chunk from a measured step-time model, and a router places
 requests on the symmetric node with the most cached prefix that can still meet every SLO.
 
 On four nodes of four GPUs replaying agentic coding sessions concurrently with chat, AttentionFuse carries
-**3.7-14x** the agent SLO goodput of disaggregation at its best prefill-to-decode ratio (**93.6% against 13.1%**
-chat SLO attainment), **12-37%** more than conditional disaggregation and **57%** more under shifting
-prefill-decode demand, and **14.2%** more than sglang's mixed chunk at **8.0 points** higher chat attainment, while
-cutting chat mean time-per-output-token **32%** and the chat time-to-first-token tail **79%** against
+3.7-14x the agent SLO goodput of disaggregation at its best prefill-to-decode ratio (93.6% against 13.1%
+chat SLO attainment), 12-37% more than conditional disaggregation and 57% more under shifting
+prefill-decode demand, and 14.2% more than sglang's mixed chunk at 8.0 points higher chat attainment, while
+cutting chat mean time-per-output-token 32% and the chat time-to-first-token tail 79% against
 prefill-prioritized scheduling. It loses no requests when a quarter of the cluster fails.
 
 ## 1. Introduction

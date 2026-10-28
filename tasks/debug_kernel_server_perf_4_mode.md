@@ -1989,6 +1989,30 @@ per-item narrative follows below; the reader-facing summary is `paper_outline.md
 | 15 | deferred KV commit for rejected draft tokens | premise false: the writes are required by the verify forward | closed, not built | `eagle_info_v2.py:405` |
 | 16 | draft/verify pipelining across staggered groups | ceiling UNMEASURED after 3 instrumentation attempts | **OPEN**, not claimed | `apply_draft_share_events_20261028.py` |
 | 17 | draft/verify epilogue op fusion | bounded ~4% of kernel time | not built | section B |
+| 18 | **FA3 q-tile 64 co-scheduled with an `mma.sync` 16-row warpgroup in ONE CTA** (user, 2026-10-28); q128 rows keep the separate-launch PDL path | [pending: first test is a compile, no GPU] | **OPEN, the most promising untried overlap** | proposal below |
+
+**Item 18, the user's proposal, and why it is the one overlap idea not already ruled out.** The Hopper restriction
+is that a SINGLE warpgroup cannot interleave wgmma of different shapes -- not that a kernel cannot issue wgmma and
+`mma.sync` concurrently from DIFFERENT warpgroups. FA3 at q128 runs two consumer warpgroups (64 rows each) plus a
+TMA producer and sits at the register limit; at **q64 it runs one consumer**, freeing a warpgroup slot that can
+issue `mma.sync` for 16-row rows alongside.
+- **Nothing is lost by taking q64 for the FA3 role**: A5.1 measured q64 winning only on short-KV few-row items (up
+  to 24%), and those are verify-width rows that route to FA2 anyway; FA3's rows are prefill/append chunks where
+  q128 is never slower. So the tile is free to repurpose.
+- **It attacks the measured blocker directly.** The co-compiled persistent kernel spilled every class (1,436 B) and
+  the fused build needed `FLASHINFER_FUSED_NO_SETMAXNREG` because FA3's warpgroup protocol balances exactly at the
+  168-register baseline and cannot hold with the FA2 mainloop in the same allocation. Halving the FA3 consumer
+  warpgroups is the one change that relieves that pressure rather than working around it.
+- Register arithmetic: FA3 q128 is ~384 threads x ~168 regs = ~64K, i.e. the whole SM budget. FA3 q64 is ~256
+  threads x ~168 = ~43K, and a 16-row `mma.sync` warpgroup is register-LIGHT (a 16-row tile at head_dim 128 needs
+  only 16 accumulator registers per thread, 16x128/128), so ~128 x ~80 = ~10K more, about 53K total. That is why
+  the FA2 side can ride along at q64 but not at q128.
+- **Bounded by the same role-imbalance argument as every other overlap result** (rows 3, 7): intra-CTA overlap can
+  only hide the SMALLER role, and at 128K the chunk is ~100% of step attention. Expect gains at short-to-medium
+  context with many rows, ~nothing at long context. Do not promise more than that.
+- **First test costs no GPU time:** compile the co-compiled kernel with the FA3 role at q64 and read `ptxas -v` for
+  registers and spill bytes. If the 1,436 B spill goes away and it fits 2 CTAs/SM, build it; if it still spills,
+  the idea dies for the same reason the first co-compiled attempt did.
 
 **End-to-end checks of item 1, which is what the paper rests on:**
 

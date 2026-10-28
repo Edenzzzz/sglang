@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.10.0 — New kernel item 18: FA3 q64 co-scheduled with an mma.sync 16-row warpgroup (2026-10-28)
+- User's proposal, recorded as kernel item 18 and the most promising untried overlap. The Hopper restriction is
+  per-warpgroup wgmma shape, not wgmma-vs-mma.sync across warpgroups: FA3 at q64 uses one consumer warpgroup
+  instead of two, freeing a slot that can issue mma.sync for 16-row rows in the same CTA. q128 rows keep the
+  separate-launch PDL path.
+- Nothing is lost by taking q64 for the FA3 role: A5.1 measured q64 winning only on short-KV few-row items, which
+  route to FA2 anyway, and q128 is never slower on FA3's prefill/append chunks.
+- It attacks the measured blocker directly: the co-compiled persistent kernel spilled every class (1,436 B) because
+  FA3's warpgroup protocol balances at 168 registers and cannot hold with the FA2 mainloop co-compiled. Register
+  arithmetic: q128 ~64K (whole SM budget), q64 ~43K, plus a register-light 16-row mma.sync warpgroup (~16
+  accumulator regs/thread) at ~10K => ~53K.
+- Bounded by role imbalance like rows 3 and 7: expect gains at short-to-medium context with many rows, ~nothing at
+  long context. First test is a COMPILE (ptxas -v registers and spills), no GPU time.
+
 ## v2.09.0 — Kernel items consolidated into one results table (2026-10-28)
 - Added "Kernel items: one table, every measured result" at the top of section A: 17 mechanisms, each with its
   measured effect, verdict and evidence pointer, plus four end-to-end checks of the shipped dispatcher and the four

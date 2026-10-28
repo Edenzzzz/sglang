@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.02.0 — pdmux reframed as the strongest baseline, which makes its failed arm blocking (2026-10-28)
+- Per the user: pdmux has "same SLO control, but no kernel/overlap schedule". It gives decode and layer-split
+  prefill their own SM groups, so an arriving prefill cannot block a running decode row -- it attains the TPOT
+  protection our chunk rule pursues by sizing, but structurally. So it is the one baseline that already solves the
+  problem C3 solves, and the comparison answers the reviewer's question: if partitioning SMs meets the SLO goal,
+  what do the kernel and four-mode step add?
+- It is the clean serving-level leave-one-out for C1+C2, the counterpart of the fixed-2048 arm (which isolates
+  chunk sizing while holding the kernel constant). The two bracket the contributions from both sides, which is why
+  pdmux is definite and 2048 potential.
+- Expected shape registered in advance: close to us on tail TPOT, behind on throughput (no overlap scheduling, and
+  partitioning costs occupancy on both sides; prior ~10%). If it matches us on BOTH, the kernel and four-mode
+  contributions do not survive at the serving level and the story must change -- so this is the highest-value arm
+  to get right, and it is currently unmeasured at both loads.
+
 ## v3.01.0 — Baseline status: sglang's three policies definite, fixed-2048 potential (2026-10-28)
 - 6.1 now states it plainly: prefill-prioritized, mixed chunk and PD multiplexing stay in every table. The fixed
   2048-token chunk is a potential baseline, first to be cut if space is tight -- it is a control rather than a

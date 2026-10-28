@@ -963,7 +963,12 @@ Table 6: CUDA graph count, capture memory and decode step time, ours vs PD-Multi
 > (section 5.2.3). Those arms are being re-run with the predicted chunk.
 >
 > The **definite** baselines are sglang's own three colocated policies, each with sglang's own chunk policy:
-> prefill-prioritized, mixed chunk, and PD multiplexing. Those stay in every table.
+> prefill-prioritized, mixed chunk, and PD multiplexing. Those stay in every table. PD multiplexing is the most
+> informative of the three and should not be read as a weak one: by giving decode and layer-split prefill their own
+> groups of streaming multiprocessors, it prevents an arriving prefill from blocking a running decode row at all,
+> and so attains the latency protection section 5.2.3 pursues by sizing the chunk -- structurally, by partitioning
+> the device. It is the baseline that already solves the problem, differently, and the comparison therefore asks
+> what the fused kernel and the four-mode step add once latency protection is granted.
 >
 > The fixed 2048-token chunk is a **potential** baseline, to be cut if space is tight. Its value is internal: it
 > differs from our arm in one variable only -- where the chunk comes from -- and its draft acceptance matches ours

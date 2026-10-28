@@ -436,7 +436,27 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     sensitivity sweep on that one number, not another redesign of the budget.
   - Against mixed chunk, which shares our mechanism, a large tail win IS expected: mc's chat TPOT p90 is 102.0 ms
     with no bound either.
-- **[ ] PDMUX MUST BE MEASURED -- the user keeps it as a definite baseline (2026-10-28).** The paper's definite
+- **[ ] PDMUX IS THE STRONGEST BASELINE WE HAVE, NOT A WEAK ONE (user, 2026-10-28): "same SLO control, but no
+  kernel/overlap schedule".** This reframes it and makes the failed arm the most important missing measurement in
+  the paper.
+  - **Why it is the real alternative design.** PD multiplexing gives decode and layer-split prefill their own SM
+    groups, so an arriving prefill cannot block a running decode row -- it achieves the TPOT protection our chunk
+    rule pursues by sizing, but STRUCTURALLY, by partitioning the device instead of bounding the step. It is
+    therefore the one baseline that already solves the problem C3 solves, and the comparison answers the question a
+    reviewer will actually ask: if the SLO-control goal can be met by partitioning SMs, what do the kernel and the
+    four-mode step add?
+  - **What the comparison isolates.** pdmux holds the SLO-control story roughly constant and removes our kernel
+    (A6 tile dispatch) and the overlap schedule, so it is the clean leave-one-out for **C1 + C2** at the serving
+    level -- the counterpart of the fixed-2048 arm, which isolates the chunk sizing while holding the kernel
+    constant. Together the two arms bracket the contributions from both sides, which is why the paper keeps pdmux
+    as definite and 2048 as potential.
+  - **Expected shape, stated in advance so the result is not read post hoc:** pdmux should be close to us on tail
+    TPOT (its protection is structural) and behind on throughput, because it has no overlap scheduling and because
+    partitioning the SMs costs occupancy on both sides -- the user's standing prior is ~10% lower throughput. If it
+    instead matches us on BOTH, the kernel and four-mode contributions do not survive at the serving level and the
+    paper's story has to change. That makes this the highest-value arm to get right.
+  - **It is currently unmeasured at BOTH loads on this cluster** (alpha-6 arm failed with `SCORE (none)` /
+    `accept=NONE`; alpha 3 never run), so that failure is now blocking the paper rather than cosmetic. The paper's definite
   baselines are sglang's three colocated policies with sglang's own chunk policy: prefill-prioritized, mixed chunk
   and **PD multiplexing**. The fixed-2048 arm is only a POTENTIAL baseline, to be cut if space is tight (it is a
   control, not a system anyone publishes; its value is internal, as the one-variable chunk-sizing control with

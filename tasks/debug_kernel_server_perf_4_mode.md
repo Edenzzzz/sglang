@@ -436,6 +436,30 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     sensitivity sweep on that one number, not another redesign of the budget.
   - Against mixed chunk, which shares our mechanism, a large tail win IS expected: mc's chat TPOT p90 is 102.0 ms
     with no bound either.
+- **[ ] DOES THE EVIDENCE SUPPORT THE REWRITTEN MOTIVATION? Audited 2026-10-28; two of three claims hold, one is
+  weak and needs a figure.**
+  1. **"The KV cache is transferred over and over, scaling with session history rather than with the tokens the
+     round added" -- WELL SUPPORTED.** The workload stat is measured (median 875 uncached tokens over a median
+     119K cached prefix), and the control is decisive: conditional disaggregation prefills short appends LOCALLY
+     and so skips the re-ship, and it matches us to 64 agent programs (94.6% against our 94.2% chat attainment)
+     while stock PD falls to 31.2% on the same cluster and workload. One mechanism differs between those two
+     baselines, so the gap isolates it.
+  2. **"The P:D ratio is a static configuration while demand swings within minutes" -- MOSTLY SUPPORTED, with a
+     gap.** Measured: issued prefill demand swings between ~100K and ~500K uncached tokens/s within minutes on the
+     replay (Figure 24), and no swept P:D configuration holds any load point at >= 90% attainment. But that
+     establishes *no static ratio works*, NOT *the best ratio changes over time* -- we have never shown ratio A
+     winning early and ratio B winning late within one run. **Cheap fix, no new runs:** re-score the existing
+     stock-PD arms in 60 s windows and report which ratio leads in each window. If the leader changes, the claim
+     is measured; if one ratio leads throughout, the claim must be weakened to "no ratio is good enough".
+  3. **"Provisioning for either phase wastes the other's throughput; idle capacity cannot be lent across the role
+     boundary" -- WEAKEST, currently an assertion.** 3.2 rests on the P:D sweep, but we have no per-role
+     utilisation trace showing one side idle while the other saturates. **This is the claim a reviewer will ask for
+     a figure on.** It needs prefill-node and decode-node GPU utilisation (or issued-tokens-per-second per role)
+     against time on one stock-PD arm -- recordable from the existing per-arm logs if the router logged per-role
+     dispatch, otherwise one instrumented re-run.
+  - Until 2 and 3 are closed, the outline's motivation overstates what we can show. Claim 1 may be stated flatly;
+    claims 2 and 3 should be written as the sweep result ("no configuration we swept holds") rather than as
+    statements about rigidity and waste.
 - **[ ] PDMUX IS THE STRONGEST BASELINE WE HAVE, NOT A WEAK ONE (user, 2026-10-28): "same SLO control, but no
   kernel/overlap schedule".** This reframes it and makes the failed arm the most important missing measurement in
   the paper.

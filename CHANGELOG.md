@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.14.0 — Audit: does our evidence support the rewritten motivation? Two of three (2026-10-28)
+- Claim 1, repeated KV transfer: WELL SUPPORTED. Median 875 uncached tokens over a median 119K cached prefix, and
+  conditional disaggregation -- which prefills appends locally and skips the re-ship -- matches us to 64 programs
+  (94.6% vs 94.2%) while stock PD falls to 31.2% on the same cluster. One mechanism differs, so the gap isolates it.
+- Claim 2, rigidity of the P:D ratio: MOSTLY SUPPORTED. We show demand swinging 100K-500K uncached tokens/s within
+  minutes and that no swept ratio holds any load point at >=90%. But that is "no static ratio works", not "the best
+  ratio changes over time". Cheap fix with no new runs: re-score the existing stock-PD arms in 60 s windows and
+  report which ratio leads per window.
+- Claim 3, over-provisioning wastes throughput: WEAKEST, currently an assertion. No per-role utilisation trace
+  exists showing one side idle while the other saturates. This is the claim a reviewer will want a figure for.
+- Until 2 and 3 close, claims 2 and 3 should be written as the sweep result rather than as statements about
+  rigidity and waste.
+
 ## v3.13.0 — Motivation is the agentic workload's shape, not the tenant mix (2026-10-28)
 - The motivation had been narrowed to "a cluster serves chat and agents at once", which is a complication rather
   than the reason. Rewritten around the workload: an agent session is long decode interleaved with small prefills

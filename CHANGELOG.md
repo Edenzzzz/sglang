@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.33.0 — lin4mode 25% vs 4.7% resolved: same model, different step types (2026-10-28)
+- Per-type error of the lin4mode step model on the 87,932-step replay: merged 4.7% (5.0% held out), prefill 6.2%,
+  decode 29.0%, all steps 25.2% (24.0% held out). The paper's "25%" is the all-step figure, dominated by decode-only
+  steps (84% of steps, 10-20 ms each). The chunk rule only sizes chunk-carrying steps, where it is 4.7-5.0%.
+- Paper 5.2.2 rewritten to give the per-type split and say which figure governs the chunk rule; the separate 45%
+  launch-to-launch-gap claim kept (an intermediate edit had dropped it).
+
 ## v2.32.0 — smoke6: last missing piece is the TraceLab trace file itself (2026-10-28)
 - smoke6 again completed chat end to end (300 requests, mean TTFT 53.6 ms, TPOT 3.4 ms, 0 tracebacks; the dataset
   registration resolved). The agent client then failed with FileNotFoundError on

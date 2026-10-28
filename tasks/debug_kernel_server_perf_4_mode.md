@@ -293,7 +293,19 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     - Simplicity is the point (user): three lines of arithmetic plus a bisection over a 10-term linear model
       (~2 us), no dynamic program, nothing borrowed from SLOs-Serve.
     - Still to run on the cluster: the arm set with this rule against sglang's own schedule and chunk policy.
-  - [ ] **CONSISTENCY CHECK NEEDED before the paper's chunk claims are final (2026-10-28).** paper_outline.md says
+  - [x] **CONSISTENCY CHECK RESOLVED (2026-10-28): both numbers are correct, for different step types.** Same
+    lin4mode model (`step_qwen_h20_a6_gpu_20261027.json`) over the 87,932-step alpha-3 replay:
+    | step type | all steps | held-out 2nd half |
+    |---|---:|---:|
+    | merged (chunk + rows) | 4.7% (n=10,185) | 5.0% (n=5,127) |
+    | prefill only | 6.2% (n=3,973) | 6.1% (n=1,799) |
+    | decode only | 29.0% (n=73,774) | 27.5% (n=37,040) |
+    | all steps | 25.2% | 24.0% |
+    The paper's "25%" is the all-step figure, set by decode-only steps (84% of steps, 10-20 ms each, so small
+    absolute misses are large relative ones). The chunk rule acts only on chunk-carrying steps, where the error is
+    4.7-5.0%. Paper 5.2.2 rewritten to state the per-type split and why the merged figure is the relevant one; the
+    separate 45% launch-to-launch-gap claim kept. Items (2)-(3) below (MLP bisection comparison) remain optional.
+  - [x] (resolved above) **CONSISTENCY CHECK NEEDED before the paper's chunk claims are final (2026-10-28).** paper_outline.md says
     "a linear model does not suffice: lin4mode reaches only 25% in-sample on GPU time", while
     `chunk_predictor.py` uses that SAME lin4mode model (`step_qwen_h20_a6_gpu_20261027.json`) and reports 4.7% MAPE.
     Both can hold -- the 25% is plausibly over ALL steps, where short 10-20 ms decode steps dominate relative error

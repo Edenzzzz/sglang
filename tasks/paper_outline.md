@@ -820,8 +820,7 @@ workers' traces and scored on the second half has these held-out errors:
 | decode | 18-23% (short steps of about 10-20 ms) | 21-25% |
 
 The comparison with sglang's single FA3 call on the same schedule is [pending]: the traced leave-one-out arm without
-C1. A linear model does not suffice: lin4mode reaches only 25% in-sample on GPU time, and the launch-to-launch gap
-(which includes host waits) is not fittable at all (45%). The chunk budget of section 5.2.3 therefore needs the
+C1. A single error figure for the linear model hides where it is used. Over all steps of the replay it misses by 25% (24% on the held-out half), but that average is set by decode-only steps -- 84% of steps, each only 10 to 20 ms long, where small absolute misses are large relative ones (29% error). On the steps that carry a prefill chunk beside rows, which are the only steps the chunk rule of section 5.2.3 sizes, the same model misses by 4.7% (5.0% held out), and on prefill-only steps by 6.2%. The rule therefore uses the linear model for its closed form, and its accuracy is the merged-step figure, not the all-step one. A model of the launch-to-launch gap, which includes host waits, is not fittable at all (45% error), so every model here targets GPU time. The chunk budget of section 5.2.3 therefore needs the
 nonlinear model [pending]. Llama-3.3-70B and GLM-4.5-Air fits are [pending].
 
 Table 3: held-out step-time MAPE by step type (Qwen2.5-7B, H200, four-mode serving). "prefill" includes the four-mode

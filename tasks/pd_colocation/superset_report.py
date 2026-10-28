@@ -19,7 +19,7 @@ Claude, 2026-10-28.
 import argparse
 import re
 
-ARM = re.compile(r"_tl2_a(\d+)_superset_r\d+_(\w+)")
+ARM = re.compile(r"_tl2_a(\d+)_(superset|qcap)_r\d+_(\w+)")
 
 
 def parse_tenant(block):
@@ -38,17 +38,17 @@ def parse_tenant(block):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("log")
+    ap.add_argument("logs", nargs="+", help="sweep log(s); a qcap log adds an ours_qcap row")
     ap.add_argument("--min-accept", type=float, default=1.8)
     a = ap.parse_args()
     arms, accept = {}, {}
-    for line in open(a.log):
+    for line in (l for f in a.logs for l in open(f)):
         if line.startswith("SCORE PAPER "):
             name = line.split()[2]
             m = ARM.search(name)
             if not m:
                 continue
-            alpha, kind = int(m.group(1)), m.group(2)
+            alpha, kind = int(m.group(1)), m.group(3) + ("_qcap" if m.group(2) == "qcap" else "")
             chat = line.split("chat:", 1)[1].split("|", 1)[0] if "chat:" in line else ""
             agent = line.split("agent:", 1)[1] if "agent:" in line else ""
             arms[(alpha, kind)] = dict(chat=parse_tenant(chat), agent=parse_tenant(agent))
@@ -57,7 +57,7 @@ def main():
             m = ARM.search(parts[1])
             v = re.search(r"accept=([\d.]+)", line)
             if m and v:
-                accept[(int(m.group(1)), m.group(2))] = float(v.group(1))
+                accept[(int(m.group(1)), m.group(3) + ("_qcap" if m.group(2) == "qcap" else ""))] = float(v.group(1))
     if not arms:
         raise SystemExit("no SCORE PAPER lines for superset arms in this log")
 

@@ -21,6 +21,9 @@ every running decode row within its mean-TPOT SLO, with headroom h; with no rows
   has earned the time for an occasional 446 ms merged step, and that is what the fixed-chunk arms rely on. Capping it
   at 4 steps turned the rule into a per-step (ITL) bound and lost every metric at alpha 3, chat TPOT included
   (45.0 vs 30.0 ms p50).
+- ":qcap" / ":stepcap=MS" (2026-10-28): cap what ONE step may spend -- by the remaining TTFT slack of the tightest
+  waiting request (qcap), and/or a hard ceiling (stepcap). Unlimited banking alone let ~6 s of banked slack be spent
+  in a single 16,384-token step.
 - ":ttft": TTFT floor. The earliest-deadline prefill (in-progress chunk, else the head of the deadline-ordered queue),
   while it can still meet its deadline, gets at least the chunk that finishes its remaining tokens by the deadline at
   the predicted step time. A TPOT-only budget starved prefill far past capacity (alpha 6: chat TTFT p50 74 s).
@@ -82,7 +85,9 @@ method = '''
                 chat_ms=float(fields[2]), agent_ms=float(fields[3]), agent_tokens=int(fields[4]),
                 demote="demote" in fields[5:],
                 bank_steps=float(next((f[5:] for f in fields[5:] if f.startswith("bank=")), "inf")),
-                ttft="ttft" in fields[5:])
+                ttft="ttft" in fields[5:],
+                qcap="qcap" in fields[5:],
+                stepcap=float(next((f[8:] for f in fields[5:] if f.startswith("stepcap=")), "inf")))
             logger.info("SLO_CHUNK model=%s target=%s S=%g T=%g h=%g chat=%gms agent=%gms (>= %d tokens) demote=%s",
                         fields[0], target, cfg["S"], cfg["T"], cfg["h"], cfg["chat_ms"], cfg["agent_ms"],
                         cfg["agent_tokens"], cfg["demote"])
@@ -115,6 +120,25 @@ method = '''
                 continue
             # Banked slack is capped at BANK_STEPS steps' worth, so one step cannot stall a row for seconds.
             budget = min(budget, s_r * (o + tps) - spent, cfg["bank_steps"] * per_step)
+        # Per-step cap. Unlimited banking is the right reading of each resident row's MEAN TPOT, but it lets slack a
+        # row banked over many fast steps be spent as ONE long stall (measured 2026-10-28: budgets up to 5,867 ms,
+        # full 16,384-token chunks on ~7% of steps), which every resident row and every request still waiting must
+        # sit through. ":qcap" bounds one step by the remaining TTFT slack of the tightest WAITING request, so no
+        # step is longer than the most urgent queued request can afford; ":stepcap=MS" is a hard ceiling for when
+        # the queue is empty. Both come from SLO deadlines rather than a tuned chunk constant.
+        if cfg["qcap"] or cfg["stepcap"] != float("inf"):
+            cap = cfg["stepcap"]
+            if cfg["qcap"]:
+                head = self.chunked_req
+                for q in self.waiting_queue[:64]:
+                    if q is head:
+                        continue
+                    d = getattr(q, "priority", None)
+                    if d is not None and d > now:
+                        cap = min(cap, (d - now) * 1000.0)
+            if cap < budget:
+                budget = cap
+                self.slo_chunk_qcapped = getattr(self, "slo_chunk_qcapped", 0) + 1
         self.slo_chunk_calls = getattr(self, "slo_chunk_calls", 0) + 1
         if budget == float("inf"):
             out = chunk_size
@@ -186,9 +210,10 @@ method = '''
         self.slo_chunk_capped = getattr(self, "slo_chunk_capped", 0) + int(out < chunk_size)
         self.slo_chunk_zero = getattr(self, "slo_chunk_zero", 0) + int(out == 0)
         if self.slo_chunk_calls % 500 == 1:
-            logger.info("SLO_CHUNK calls=%d capped=%d zero=%d floored=%d rows=%d tps=%.2f budget_ms=%.1f chunk=%d->%d",
-                        self.slo_chunk_calls, self.slo_chunk_capped, self.slo_chunk_zero,
-                        getattr(self, "slo_chunk_floored", 0), len(rows), tps, budget, chunk_size, out)
+            logger.info("SLO_CHUNK calls=%d capped=%d zero=%d floored=%d qcapped=%d rows=%d tps=%.2f budget_ms=%.1f "
+                        "chunk=%d->%d", self.slo_chunk_calls, self.slo_chunk_capped, self.slo_chunk_zero,
+                        getattr(self, "slo_chunk_floored", 0), getattr(self, "slo_chunk_qcapped", 0), len(rows), tps,
+                        budget, chunk_size, out)
         return out
 '''
 anchor2 = re.search(r"\n    def get_new_batch_prefill\(self[^)]*\)[^:]*:", s).group(0)

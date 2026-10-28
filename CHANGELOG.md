@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.44.0 — Per-step cap for the SLO-budgeted chunk (qcap / stepcap), built and queued (2026-10-28)
+- Fix for the defect the r5 ours arm exposed (unlimited banking spent ~6 s of slack in one 16,384-token step).
+  apply_slo_budget_chunk_20261026.py gains ":qcap" -- bound one step's budget by the remaining TTFT slack of the
+  tightest WAITING request, so no step is longer than the most urgent queued request can afford -- and
+  ":stepcap=MS", a hard ceiling for an empty queue. Both derive from SLO deadlines, not a tuned chunk constant; the
+  mean-TPOT banking for resident rows is unchanged. SLO_CHUNK log lines now report qcapped=.
+- Validated by applying it to a copy of the A6 bundle's scheduler.py (the one our arm runs): parses, and the SLO
+  hook, the cap and late-demote EDF are all present.
+- Built into a SEPARATE tree python_slo_qcap on all four pods, leaving python_slo untouched for the sweep's alpha-6
+  ours arm. mn_qcap_16g_20261028.sh (ours + qcap + stepcap=2000, the chat TTFT SLO, at alpha 3 and 6) is chained to
+  start when the superset sweep finishes. superset_report.py reads both logs and shows ours_qcap as its own row.
+
 ## v2.43.0 — First valid "ours" result on the new cluster, and a chunk-rule defect it exposes (2026-10-28)
 - Superset sweep r5, ours at alpha 3 (EDF + SLO-budgeted chunk, A6, cache router): chat 84.4% / agent 90.3% /
   2259 tok/s; chat TPOT p50/p90 15.5/43.6 ms; agent 21.4/48.8 ms; chat TTFT p90 2.80 s. Valid: acceptance 2.012;

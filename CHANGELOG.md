@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.73.0 — Section 7 leads with per-contribution leave-one-out; negatives to one line each (2026-10-28)
+- The ablation now opens with the figure SLOs-Serve's Figure 14 does: remove one contribution at a time from the
+  full system. New table collects C1, C2, C3-worker (ordering and chunk separately), C3-router and the pool, each
+  with the cost of removing it, and a figure spec for the bars at load factors 3 and 6. The kernel-internal
+  ablations are demoted to supporting detail.
+- Every kernel negative that does not change a claim is now one line with its number: persistent executor
+  (0.987-1.006x), ready-queue merge (0.982-1.005x), DSMEM cluster reduction (0.597-0.993x, gang scheduling costs
+  1-11% even with nothing to reduce), KV multicast (1.3-1.5x in isolation, 0.76-0.77x in the step, lockstep pairing
+  alone costing 6%), L2 ordering (1.08x on a 48K shared prefix, -29% elsewhere), intra-CTA hosting (implementable
+  at 148 B of spill, bounded at 1.1-2.3%).
+- Tables renumbered for the insertion.
+
 ## v2.72.0 — Third chunk-rule bug found offline: :qcap starves prefill under load (2026-10-28)
 - The user's position that a chunk-sizing regression "can't go wrong -- there must be a bug" is right, and this is
   the third of the same family. `:qcap` caps a step by the tightest WAITING request's remaining TTFT slack, but a

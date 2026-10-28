@@ -1586,6 +1586,29 @@ alone; each value is the time-weighted speedup for 32-64K two-mode / 32-64K four
 four-mode. Schedule and router ablations run on the workloads of sections 6.3 and 6.4. Llama-3.3-70B kernel ablations
 are [pending].
 
+**Result: each contribution, removed in turn.** The first ablation is the one that matters: take the full system
+and remove one contribution at a time, on the same workload and load. Table 19b collects it; section 6.1's Table 8
+gives the same decomposition with the mechanism of each effect. Read together they say that the kernel and the
+four-mode step carry the single-node result, the router's load tie-break carries the cluster result, and the
+worker-side scheduling layers are load-dependent -- neutral at capacity, mildly positive under overload.
+
+Table 19b: leave-one-out per contribution. Each row removes one contribution from the full system; the workload is
+the superposed TraceLab replay plus chat on 16 H20s at load factor 3, except where a row names a single-node
+measurement because the mechanism is inert on the cluster.
+
+| removed | replaced by | cost of removing it |
+|---|---|---|
+| C1 unified dispatcher | naive role split (stock FA3 chunk + stock FA2 rows) | 4.0-8.7% of attention time on captures; -6.7% TPOT at 32K and -2.8% at 128K in serving without speculation; 1.4% of cluster goodput (inside noise) |
+| C2 four-mode step | stock MTP, verify on its own step | single node: mean TPOT 22.9 -> 14.2 ms at 32K (-38%) and 97.3 -> 48.0 ms at 128K (-51%). Cluster: nothing (93.8% / 2492 tok/s without it against 94.2% / 2471 with it), because its 8192-uncached-token gate rarely fires at a 92.7% prefix hit |
+| C3 worker: deadline ordering | arrival order | alpha 3: nothing (every metric inside noise). alpha 6: agent SLO goodput +5.7%, chat TTFT p90 -24%, agent TPOT p90 -5.5% |
+| C3 worker: predicted chunk size | sglang's own chunk policy | [pending: the first arm on the corrected rule] |
+| C3 router: load tie-break | sglang's `cache_aware` router | chat attainment +7.3 points (90.6 against 83.3%), chat TTFT p90 -79% (0.67 against 3.24 s), at identical agent goodput and acceptance |
+| KV pool (credited to sglang / Mooncake, not ours) | no cluster pool | [pending] |
+
+Figure 25: per-contribution leave-one-out bars -- chat and agent SLO attainment and agent SLO goodput for the full
+system and for each row of Table 19b, at load factors 3 and 6. This is the figure that carries the ablation; the
+kernel-internal bars below are supporting detail.
+
 **Result: the plan and the merge.** Removing every
 check-in fence, counter atomic and merge item (a timing bound with wrong output) gives 1.009 / 0.980 / 1.004 / 0.988x,
 so the unified merge costs <= 0.9% of the step. A full-step timeline agrees: merge time left after both FA3 and FA2
@@ -1606,57 +1629,21 @@ Table 20: kernel ablations, H200, Qwen2.5-7B, 96 captures (32-64K two / 32-64K f
 | FA2 and FA3 serial instead of PDL overlap | 0.939 / 0.967 / 0.975 / 0.978x |
 | enumeration order instead of longest first | 0.993 / 0.996 / 1.001 / 1.001x |
 
-**Result: FA2 executor.** With the same plan and the same merge, Table 21 compares FA2 executors against the default
-non-persistent BatchPrefill body. Persistent dispatch is level with or slightly behind hardware-launched CTAs;
-releasing merges as soon as their partials are ready, through a global ready queue, adds polling that slows the
-compute. Reducing partials inside a thread-block cluster over DSMEM is exact (FP32 and graph replay pass on all 96
-captures) but slower at every cluster size measured: to fit one split group into one cluster, the plan raises the FA2
-KV chunk to at least the maximum KV length divided by the cluster size C, which leaves the longest request too few
-splits.
-
-Table 21: FA2 executor, same plan and merge, H200 (32-64K two / 32-64K four / 128-256K two / 128-256K four).
-
-| executor | relative to the non-persistent BatchPrefill body |
-|---|---|
-| BatchPrefill body on a persistent LPT pull loop | 0.987 / 0.998 / 0.996 / 0.993x |
-| flashinfer's persistent runner, plan-chosen 2-3 CTAs/SM | 0.993 / 0.991 / 1.006 / 0.997x |
-| persistent loop + merges released from a global ready queue as partials complete (vs the same loop with ticketed merge items) | 0.997 / 0.982 / 1.003 / 1.005x |
-| DSMEM cluster reduction (cluster barrier, no global sync), C = 2 | 0.597 / 0.667 / 0.622 / 0.703x |
-| DSMEM cluster reduction, C = 8 | 0.925 / 0.927 / 0.913 / 0.940x |
-| DSMEM cluster reduction, C = 16 (non-portable cluster) | 0.967 / 0.984 / 0.967 / 0.978x |
-| DSMEM cluster reduction, splits uncapped, groups larger than a cluster reduced by their last member, C = 4 (vs the in-launch merge, same build) | 0.993 / 0.988 / 0.992 / 0.993x |
-| the same, C = 8 / 16 | 0.974-0.990x / 0.955-0.983x |
-
-On FA2 rows alone, the plan-scheduled merge items took 4.86 ms, against 6.21 ms for a merge done by the last CTA to
-arrive and 5.36 ms for stock flashinfer BatchAttention. flashinfer's persistent runner needed two register-targeted
-instantiations, chosen by the plan, to reach parity: 3 CTAs per SM for decode-only plans, and 2 with deeper KV tiles
-for verify plans. On FA2 rows alone on the H20, the persistent executor takes 5.37 / 6.66 ms and the non-persistent
-one 5.23 / 6.42 ms (two- / four-mode).
-
-**Result: intra-CTA row hosting.** The one overlap the architecture seems to permit is to run the 16-row mainloop
-in a warpgroup of the prefill chunk's own CTA, which needs no spare SM capacity because the CTA is already
-resident. We bounded it before building it, by giving every row tile a free ride inside the chunk's CTA and
-measuring what the step would save: **1.1-2.3% at a 128K prefix and 4.5-10.2% at 32K** for Qwen2.5-7B, and at most
-10.2% for any of the three models, the largest being Llama-3.3-70B at 32K whose 64 query heads over 8 KV heads make
-each row tile comparatively expensive. The ceiling is small for the reason Table 3 gives: rows are numerous but
-cheap, costing 0.08-0.41 ms against a 7-23 ms chunk. The first implementation added a warpgroup to the CTA, taking it to 512
-threads; ptxas caps a kernel's register count at the launch bound, 65 536 registers divided by the CTA's threads,
-so that build was named 128 registers per thread against the 168 the chunk needs, and it spilled 4 460 bytes.
-Structuring it as a *replacement* instead -- the prefill role at a 64-row tile in eight warps, the guest in the
-ninth through twelfth, so the CTA keeps 384 threads -- restores exactly the register distribution a 128-row prefill
-CTA has, and the guest then costs **148 bytes of spill** (164 against 16 for the same kernel with the guest
-compiled out), with no serialization warning. Shared memory is 218 160 bytes against the 232 448-byte limit, with
-the prefill pipeline's depth unchanged. So the mechanism is implementable after all; what does not change is its
-ceiling, which is why it is reported here as a bound rather than as a contribution.
-
-**Result: KV multicast.** We bounded multicast before building it. For FA2, only 0.3-0.9% of KV page reads across the
-96 captures are shared with another tile. For FA3, 99% of reads are re-reads by the same prefill row's other query
-tiles, but they hit in L2: with FA3's KV loads compiled out, the step is only 0.1-1.3% faster (Qwen2.5-7B, H20, 92
-captures). Multicast for either executor is therefore bounded under about 1%. We built it anyway for FA3, as a 2-CTA
-exchange: page-size-1 KV cannot use TMA multicast, so each CTA gathers half of each tile and pushes it to its peer over
-DSMEM. It delivers tiles 1.3-1.5x faster in isolation and is exact on all 96 steps, but in the step it runs
-0.76-0.77x. Pairing two CTAs in lockstep alone costs 6%, more than the ceiling, and the push stalls FA3's two-stage
-pipeline. FA3's KV loads are already hidden; the step's lever is overlap between the two executors, not KV traffic.
+**Everything else we built and measured, in one line each.** None of these beats the default, and none changes a
+claim, so each is stated with its number and not developed: a persistent FA2 executor that keeps CTAs resident and
+pulls plan items in longest-first order is level with hardware-launched CTAs (0.987-1.006x), winning only on
+decode batches of 256-1024 rows and then through occupancy rather than through persistence; releasing merges from a
+global ready queue as partials complete adds polling that slows the compute (0.982-1.005x); reducing partials inside
+a thread-block cluster over distributed shared memory is numerically exact but slower at every cluster size
+(0.597-0.993x), because a cluster's CTAs start together and hold their SMs until the slowest finishes, costing
+1-11% even on steps with nothing to reduce; we also built KV multicast, as a two-CTA exchange over distributed
+shared memory since page-size-1 KV cannot use the memory accelerator's multicast, and although it delivers tiles
+1.3-1.5x faster in isolation it runs at 0.76-0.77x in the step, because pairing two CTAs in lockstep alone costs 6%
+-- more than the 1% ceiling we had bounded it at, since 99% of the prefill role's KV reads are re-reads that already
+hit in L2; an L2-ordered item sweep helps only when a shared prefix exceeds L2 and its rows are split (1.08x on a
+48K shared prefix, -29% elsewhere); and hosting a 16-row tile inside the chunk's own CTA is implementable once the
+guest replaces a consumer warpgroup rather than adding one (148 bytes of spill, no serialization, 218 160 of
+232 448 bytes of shared memory) but is bounded at 1.1-2.3% of the step at the contexts that matter.
 
 **Result: tile classes and KV splits.** GLM-4.5-Air's four-mode verify rows pack
 48 queries. Sending them to FA3 makes the four-mode step 1.38x slower than placing them on a 64-row FA2 class built

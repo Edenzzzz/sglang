@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.96.0 — New cluster fully re-provisioned (2026-10-28)
+- Stage 1 on all 4 pods: venv/torch/sgl_kernel/flashinfer, Qwen2.5-7B + EAGLE3, ShareGPT, TraceLab.
+- Stage 2 pushed from the repo: our serving tree (ourpy/python -> python), port07 kernel sources, drivers/serving,
+  step model + scorers under perf/, and python_slo = our tree + the chunk patch. Verified on every pod, with the
+  patch carrying bank="inf" and :ttft. up/python remains untouched upstream for the BASELINE arm.
+- A6 libraries restored from the local bundle a6_bundle_20261025.tgz (H20 sm90); not rebuildable quickly on a fresh
+  pod. Recorded fallback: if they cannot be restored, run the chunk/EDF arms with the kernel held at KERNEL=lpt on
+  both sides -- cleaner for C3, since C1 is 1.4% at cluster level (inside the noise floor).
+
 ## v1.95.0 — Cross-role KV reuse gated out on the session replay (zero GPU cost) (2026-10-28)
 - The gating measurement is answered structurally: (1) tracelab.py draws each session's tokens independently from
   the global RNG, so concurrent sessions share NO prefix -- our 92.7% hit is temporal (round N+1 reusing round N),

@@ -12,7 +12,24 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     `/dev/shm/w` with it. **Note for diagnosis: when pods become unreachable and merlin-cli reports "webshell relay
     redirected to SSO", CHECK THE JOB STATUS FIRST** -- a finished job produces exactly that error, and the login
     token may be perfectly valid. The ssh proxy gives the honest message ("job run ... is not running").
-  - Re-provisioning needed on the new job before any arm: the serving tree, workloads, models, the SLO-chunk tree
+  - **Re-provisioning done (2026-10-28 08:00).** Stage 1 (`mn_provision_20261016.sh`, all 4 pods in parallel):
+    venv, torch, sgl_kernel, flashinfer, Qwen2.5-7B (4 shards), the EAGLE3 head, ShareGPT, TraceLab. Stage 2 (pushed
+    with `Cluster.push`, base64 over exec, ~8 MB of base64 at 60 KB a chunk): our serving tree from the repo
+    (`/dev/shm/w/ourpy/python`, symlinked as `python`), `port07` (fused-kernel sources), `drivers/serving`, the step
+    model and scorers under `perf/`, and `python_slo` = our tree + `apply_slo_budget_chunk_20261026.py`.
+    - Verified on all four pods: `python=1 up=1 slo=1 model=1 scorer=1`, and the chunk patch carries the corrected
+      defaults (`bank=` default `"inf"`, `:ttft` supported). `up/python` is the untouched upstream tree, which is
+      what the BASELINE arm must use.
+    - `port07` holds only kernel sources (include/, tests/), not a Python package -- flashinfer itself comes from
+      pip, so a missing `$W/fi/flashinfer` is expected and not an error.
+    - The five A6 kernel libraries had to come from the local bundle `/tmp/a6_bundle_20261025/a6_bundle.tgz`
+      (built for H20 sm90 on the previous cluster); they are not rebuildable in reasonable time on a fresh pod.
+      `mn_node.sh KERNEL=a6` expects them at `/opt/tiger/w/a6lib` with the python shims in `$W/a6`.
+    - **If the A6 libraries ever cannot be restored, the corrected chunk/EDF arm set should still run with the
+      kernel held CONSTANT at `KERNEL=lpt` on both sides.** That is in fact the cleaner experiment for C3: C1
+      measures 1.4% at cluster level (inside the noise floor), so holding the kernel fixed isolates the schedule and
+      chunk contribution without confounding it, and avoids attributing a scheduling gain to the kernel.
+  - (superseded) Re-provisioning needed on the new job before any arm: the serving tree, workloads, models, the SLO-chunk tree
     (`/dev/shm/w/python_slo`) and the step model, plus `tasks/pd_colocation/` with today's `mn_node.sh`
     (`ROPE_THETA`) and `mn_run.py` (`ROPE_THETA` in the env string).
   - Push files with `Cluster(SID, cp, nodes=[f"worker-{i}" for i in range(NPODS)])`; without `nodes=` every call

@@ -52,6 +52,14 @@
        teardown, so the remote servers kept running. Every launch since then OOMed against them.
      - Fixed: killed the remote processes by PID (collected via `ps`, so the kill cannot match its own shell): 22 on
        pod 0, 12 on each other pod; all 16 GPUs read 0 MiB afterwards.
+     - **Open validity check before ANY result from smoke4 / superset r4 is used (2026-10-28):** the baseline
+       (upstream tree) logs `User-specified context_length (131072) is greater than the derived context_length
+       (32768)`, i.e. upstream derives the native 32K and may not apply the YaRN factor when building RoPE. That
+       would be a second silent model corruption of the same kind as the rope-base bug. A separate
+       `derived context_length (2048)` warning belongs to the EAGLE3 draft head and is expected. **Gate: the baseline
+       arm's mean draft acceptance must be ~2.0 like the clean arms (1.98-2.00); ~1.4 means the baseline model is
+       broken and the arm is invalid.** Read it with
+       `grep -o 'accept len: [0-9.]*' worker_r0_g*.log | awk '{s+=$3;n++} END {print s/n}'`.
      - **Guard added** (`/tmp/gate4.sh`): a preflight that reads every GPU's memory and ABORTS naming the busy ones,
        run before the smoke arm and again before the sweep. Rule: never stop a cluster driver without clearing the
        pods, and never launch without the preflight.

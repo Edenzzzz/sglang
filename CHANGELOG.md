@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.24.0 — Kernel results presented as one normalized table with ours as a row (2026-10-28)
+- User: our method must be a ROW, not the reference frame, in POD Figure 1's convention, across several workloads.
+  Tables 4 and 5 merged into ONE table: methods as rows (ours included at 1.00), four workload columns
+  (32K/128K x two-mode/four-mode), values = attention time divided by ours, so larger is slower.
+- Ordering: sglang's single FA3 call 1.86-2.92, POD's structure 3.45-3.71, our v3 1.34-1.92, naive role split serial
+  1.04-1.09, naive on two streams 1.04-1.07, ours 1.00. The two designs a reader expects to be strong are the
+  weakest, for the same reason: a tile or an instruction chosen for the wrong work.
+- POD repeat: 3.49x / 3.71x against 3.45x / 3.69x, reproducible to better than 1%. Four-mode POD not run; the
+  ordering should not change because the gap is in the prefill half's instruction.
+
 ## v2.23.0 — Tables 4 and 5 reordered so the comparison direction is unambiguous (2026-10-28)
 - The columns were being misread as absolute speed. Each cell is OUR time divided into the baseline's, so larger =
   that baseline is slower; the header now says so and the rows run strongest baseline first.

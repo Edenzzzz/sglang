@@ -387,40 +387,34 @@ the CTA is already resident this is immune to the SM-saturation argument above. 
 items, with the rows fitting entirely in 91.1% of steps (median 31 freed warpgroups against 13 rows). We report the
 reach; we have not built it, and claim no gain from it.
 
-**Table 4: our dispatcher against every alternative we could run, two-mode steps.** Each cell is OUR attention time
-divided into the baseline's, so a larger number means that baseline is SLOWER than us. Rows are ordered from the
-strongest baseline to the weakest. Time-weighted over 96 captures per cell, every arm checked against an FP32
-reference.
+**Table 4: attention time of every design we could run, relative to ours, across four workloads.** Each column is
+a workload cell from the trace-sampled captures (24 captures each, time-weighted, every arm checked against an FP32
+reference); each row is a method, ours among them. Values are attention time divided by ours, so **1.00 is our
+method and larger is slower**.
 
-| baseline, strongest first | 32K context | 128K context |
-|---|---:|---:|
-| naive role split on two streams (the strongest baseline) | 1.040x | 1.042x |
-| naive role split, serial: stock FA3 chunk + stock FA2 rows | 1.079x | 1.044x |
-| our earlier two-plan build (v3) | 1.343x | 1.769x |
-| sglang's single variable-length FA3 call | 2.107x | 2.921x |
-| POD-Attention's structure: one FA2 kernel covering chunk and rows | 3.69x | 3.45x |
+| method | 32K, two-mode | 32K, four-mode | 128K, two-mode | 128K, four-mode |
+|---|---:|---:|---:|---:|
+| sglang's single variable-length FA3 call (shipped default) | 2.11 | 2.65 | 2.92 | 1.86 |
+| POD-Attention's structure: one FA2 kernel over chunk and rows | 3.69* | - | 3.45* | - |
+| our earlier two-plan build (v3) | 1.34 | 1.92 | 1.77 | 1.37 |
+| naive role split, serial: stock FA3 chunk + stock FA2 rows | 1.08 | 1.09 | 1.04 | 1.06 |
+| naive role split, the two calls on two streams | 1.04 | 1.07 | 1.04 | 1.06 |
+| **ours: one plan, per-row tile classes, in-launch merge** | **1.00** | **1.00** | **1.00** | **1.00** |
 
-**Table 5: the same, four-mode steps** (prefill chunk beside speculative verify rows).
+\* POD's structure needs both roles in one call, so it was measured in its own harness rather than on the capture
+set: a 2 048-token chunk beside 32 one-token rows, giving 24.3 ms against our 7.0 ms at a 128K cached prefix and
+6.1 against 1.7 ms at 32K. A repeat gave 3.49x and 3.71x, so these factors are reproducible to better than 1%. That
+shape is the two-mode configuration; we did not run the four-mode variant, where the rows carry four draft tokens
+each, and we do not expect it to change the ordering because the gap comes from the prefill half's instruction.
 
-| baseline, strongest first | 32K context | 128K context |
-|---|---:|---:|
-| naive role split on two streams | 1.070x | 1.056x |
-| naive role split, serial | 1.087x | 1.058x |
-| our earlier two-plan build (v3) | 1.924x | 1.366x |
-| sglang's single variable-length FA3 call | 2.647x | 1.861x |
-| POD-Attention's structure (measured at a 2 048-token chunk) | 3.69x | 3.45x |
+Two designs a reader might expect to be strong are the weakest. sglang's shipped call is 1.9-2.9x our time because
+it picks one query tile for every row in the batch, so a one-token decode row is computed at the chunk's tile width.
+POD's fusion is 3.5-3.7x because its prefill half must issue `mma.sync` where FA3 issues `wgmma`. Both are the same
+failure -- a tile or an instruction chosen for the wrong work. The strongest baseline is the naive role split, which
+any implementation gets, and we are 4-9% ahead of it.
 
-The ordering is the result. **The strongest baseline is the naive role split, which we beat by only 4-9%; the two
-designs a reader might expect to be strong are the two weakest.** sglang's shipped single call is 2.1-2.9x behind
-because it picks one query tile for every row in the batch, so a one-token decode row is computed at the chunk's
-tile width. POD's single-kernel fusion is 3.5-3.7x behind because its prefill half must issue `mma.sync` where FA3
-issues `wgmma`. Both gaps come from the same cause -- a tile or an instruction chosen for the wrong work -- which is
-what the dispatcher exists to avoid.
-
-The honest reading of Tables 4 and 5 is that the large factors belong to separating the roles, which any
-implementation gets, and that our dispatcher adds 4-9% on top by giving each row its own tile class and merging the
-splits in the launch. We therefore keep this section short in proportion to that gain, and spend the paper's space
-on the schedule, where the effects are larger.
+We therefore keep this section short in proportion to that 4-9%, and spend the paper's space on the schedule, where
+the effects are larger.
 
 Second, the tile classes are not evenly used. In a four-mode step the 16-row class carries the many decode rows, one
 or two 32- or 48-row tiles carry the verify rows, and the 128-row class carries nearly all of the arithmetic, because

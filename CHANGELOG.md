@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.11.0 — The outline's motivation states the motivation, not just the baselines (2026-10-28)
+- The motivation bullet listed four existing systems and their flaws without ever saying what problem the paper is
+  solving. It now leads with it: one cluster serving an agentic coding product and a chat product at once, whose
+  prompt lengths and latency targets differ by an order of magnitude, where every deployed answer meets one of
+  throughput or latency and gives up the other, and none knows which tenant is waiting.
+- Each of the four failure modes now names the quantity it costs (throughput; the running requests'
+  time-between-tokens; the network and the agent's round latency; throughput and capture memory), so the list reads
+  as evidence for the motivation rather than as a roster of systems.
+
 ## v3.10.0 — Baselines belong in the evaluation sections only (2026-10-28)
 - Removed the four-baseline list from 5.1. Baselines are listed at the head of each evaluation section -- 6.2, 6.3
   and 6.4 -- and nowhere else; 5.1 is the design and should not carry a comparison list.

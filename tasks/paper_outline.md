@@ -4,13 +4,17 @@
 
 - **goal** - meet per-tenant SLOs while maximizing throughput for mixed chat + agent LLM workloads, without a fixed
   prefill:decode node ratio
-- **motivation**
-  - **mixed-chunk prefill (sglang on FA3)** -- every decode / verify row pays prefill-width attention tiles in the one
+- **motivation** -- one cluster now serves an agentic coding product and a chat product at once (Codex-style
+  sessions beside ChatGPT-style turns), whose prompt lengths and latency targets differ by an order of magnitude:
+  an agent round carries tens to hundreds of thousands of cached tokens and tolerates seconds of time-to-first-token,
+  a chat turn carries a few hundred and tolerates neither. Every deployed answer meets one of throughput or latency
+  and gives up the other, and none of them knows which tenant is waiting:
+  - **mixed-chunk prefill (sglang on FA3)** -- costs throughput: every decode / verify row pays prefill-width attention tiles in the one
     varlen call; chat waits behind long agent prefills (chat TTFT 4.5-23 s on one H200)
-  - **prefill prioritized** -- an arriving prefill takes the step's budget before the decode rows, so requests already generating stall; time-between-tokens blows up
-  - **pd disaggregation** -- re-ships each agent round's prefix KV from prefill to decode (decode pods hold 52-55 requests
+  - **prefill prioritized** -- costs the running requests' time-between-tokens: an arriving prefill takes the step's budget before the decode rows, so requests already generating stall; time-between-tokens blows up
+  - **pd disaggregation** -- costs the network and the agent's round latency: re-ships each agent round's prefix KV from prefill to decode (decode pods hold 52-55 requests
     in KV transfer at 64 agent programs on 16 H20s), leaves decode compute idle, needs a tuned P:D ratio
-  - **pd multiplexing** -- same latency protection as ours but attained structurally, by partitioning SMs; no CPU-GPU overlap schedule, CUDA graphs multiplied by SM groups; a baseline only
+  - **pd multiplexing** -- costs throughput and capture memory: attains the same latency protection as ours but attained structurally, by partitioning SMs; no CPU-GPU overlap schedule, CUDA graphs multiplied by SM groups; a baseline only
 - **design**
   - **kernel:** a unified fine-grained tile dispatcher for the mixed step - ONE CPU-side plan assigns every work tile of
     the batch to an executor and a tile class (FA2 classes of 16, 32 and 64 packed query rows for decode / verify

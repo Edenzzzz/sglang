@@ -6,7 +6,8 @@ spans the whole step, so draft and verify are indistinguishable there (measured 
 gap p50 30.08 ms against a traced forward of p50 30.98 ms, i.e. only 0.2% outside the forward).
 
 Appends a wrapper at module scope -- no edit to any method body -- that times `EagleDraftWorker.draft_forward` and
-`EAGLEWorkerV2.verify` with CUDA events and logs the split every N verify calls. Events are recorded on the current
+`verify` on EVERY speculative worker class this tree defines (v1 and v2 -- the factory picks between
+them on enable_overlap) with CUDA events, and logs the split every N verify calls. Events are recorded on the current
 stream and synchronised only at report time, so the steady-state cost is two event records per call.
 
   SGLANG_DRAFT_SHARE=1            turn it on (off by default, so no arm changes unless asked)
@@ -72,8 +73,38 @@ if _ds_os.environ.get("SGLANG_DRAFT_SHARE") == "1":
     # draft_forward runs once per speculative step (3 per verify at --speculative-num-steps 3), so the draft bucket
     # accumulates every draft forward and nd/nv shows the ratio actually used.
     _ds_wrap(EagleDraftWorker, "draft_forward", "draft")
-    _ds_wrap(EAGLEWorkerV2, "verify", "verify")
-    _ds_log.info("DRAFT_SHARE instrumentation active")
+    # BOTH worker classes must be wrapped, which is why the first three attempts reported nothing.
+    # `_create_eagle_worker` (speculative/spec_info.py) returns EAGLEWorkerV2 only when enable_overlap is true and
+    # the v1 EAGLEWorker otherwise, and BOTH define `draft_forward` and `verify`. Wrapping v2 alone therefore
+    # instruments a class the arm may never construct, and the failure is silent: the module-scope patch installs,
+    # logs "active", and no report ever fires. Wrap whichever classes this tree defines, and name them.
+    _ds_installed = []
+    for _ds_modname, _ds_clsname in (("eagle_worker_v2", "EAGLEWorkerV2"), ("eagle_worker", "EAGLEWorker")):
+        try:
+            _ds_mod = __import__(f"sglang.srt.speculative.{_ds_modname}", fromlist=[_ds_clsname])
+            _ds_cls = getattr(_ds_mod, _ds_clsname)
+        except (ImportError, AttributeError):
+            continue
+        if "verify" in vars(_ds_cls):
+            _ds_wrap(_ds_cls, "verify", "verify")
+            _ds_installed.append(_ds_clsname)
+    _ds_log.info("DRAFT_SHARE instrumentation active on %s", ", ".join(_ds_installed) or "NOTHING")
+    assert _ds_installed, "no speculative worker class carried a `verify` to wrap"
+
+    # And report which class the live worker actually is, so a zero-report run is diagnosable in one line instead
+    # of three driver attempts.
+    try:
+        from sglang.srt.managers import tp_worker as _ds_tp
+        _ds_sched_init = _ds_tp.TpModelWorker.__init__
+
+        def _ds_init(self, *a, **k):
+            _ds_sched_init(self, *a, **k)
+            _ds_sw = getattr(self, "spec_worker", None)
+            _ds_log.info("DRAFT_SHARE live spec worker: %s", type(_ds_sw).__name__ if _ds_sw else "none")
+
+        _ds_tp.TpModelWorker.__init__ = _ds_init
+    except Exception as _ds_exc:  # the probe must never break a run
+        _ds_log.info("DRAFT_SHARE could not install the live-worker probe: %r", _ds_exc)
 '''
 open(p, "w").write(s)
 print("patched")

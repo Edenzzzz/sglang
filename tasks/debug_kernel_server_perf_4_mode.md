@@ -779,10 +779,21 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
         being run (`eagle_worker_v2.py:2369`, `speculative_algorithm='EAGLE3'`), yet **zero reports appear even with
         the threshold at 20 verify calls** -- so the instrumented method is not on the executed path for this arm.
         The `native` arm additionally crashed with a traceback the driver's grep filter swallowed.
-        - Diagnostics for whoever resumes it: print the resolved class of the live spec worker at startup
-          (`type(self.spec_worker)`) rather than assuming `EAGLEWorkerV2`; candidates in this tree are
-          `frozen_kv_mtp_worker_v2.py` and `multi_layer_eagle_worker_v2.py`, which define their own
-          `draft_forward`. Widen the driver's output filter before re-running, or the crash stays invisible.
+        - **[x] ROOT-CAUSED OFFLINE (2026-10-28, zero GPU cost): the patch wrapped a class the arm may never
+          construct.** `_create_eagle_worker` in `python/sglang/srt/speculative/spec_info.py:264` returns
+          `EAGLEWorkerV2` **only when `enable_overlap=True`** and the v1 `EAGLEWorker` otherwise -- and BOTH define
+          `draft_forward` and `verify` (`eagle_worker.py:686/775`, `eagle_worker_v2.py:311/576`). The patch wrapped
+          v2 alone, so on an arm without the overlap scheduler it instrumented a class that was never built, and the
+          failure was silent in the worst way: the module-scope patch installs, logs "instrumentation active", and
+          no report ever fires. That is exactly the observed symptom across all three attempts.
+        - **Fixed in `unified/apply_draft_share_events_20261028.py`:** it now wraps `verify` on every speculative
+          worker class the tree defines (v1 and v2, skipping any that does not define its own), asserts at least one
+          was wrapped, logs WHICH ones, and installs a probe on `TpModelWorker.__init__` that logs
+          `type(self.spec_worker).__name__` for the live worker. A zero-report run is now diagnosable from one log
+          line instead of a driver re-run.
+        - Still to do when the H200 is up: widen the driver's output filter (it swallowed the `native` arm's
+          traceback), and patch `$SRC/python/sglang/srt` rather than a previous run's `root/`, since `make_root`
+          re-copies the tree every run.
         - **Why it is de-prioritised rather than pursued:** this number is only a CEILING for an idea that would
           then still have to be built, and the surrounding evidence already makes a large payoff unlikely -- only
           0.2% of decode wall time lies outside the traced forward, so there is no host-side slack, and the draft

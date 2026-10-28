@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.64.0 — Draft-share instrumentation root-caused: it wrapped a class the arm never built (2026-10-28)
+- Three attempts to measure the draft share of decode wall time produced zero reports while logging
+  "instrumentation active". Cause, found offline: `_create_eagle_worker` (speculative/spec_info.py:264) returns
+  `EAGLEWorkerV2` only when `enable_overlap=True` and the v1 `EAGLEWorker` otherwise, and both define
+  `draft_forward` and `verify`. The patch wrapped v2 alone, so an arm without the overlap scheduler instrumented a
+  class that was never constructed -- a silent failure, since the module-scope patch still installs.
+- `apply_draft_share_events_20261028.py` now wraps `verify` on every speculative worker class the tree defines,
+  asserts at least one was wrapped, logs which, and probes `TpModelWorker.__init__` to log the live worker's class.
+  A zero-report run is diagnosable from one log line.
+
 ## v2.64.0 — Item 18 built by replacing a consumer warpgroup (2026-10-28)
 - Item 18's register wall is not a wall, and 1c's "vise" is released. Replacing one of FA3's consumer warpgroups
   with the 16-row row mainloop (flashinfer `FUSED_PIGGYBACK_REPLACE=1`, commit `0b4b342`) holds

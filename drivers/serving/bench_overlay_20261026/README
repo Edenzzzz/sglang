@@ -14,3 +14,12 @@ Deploy checklist (2026-10-28, learned the hard way on a re-provisioned cluster):
 4. Run the client against UPSTREAM's tree (mn_bench.sh BENCH_PY defaults to $W/up/python). The overlay imports
    sglang.srt.utils.network, which our serving tree predates, so it cannot run on our tree.
 5. Verify: PYTHONPATH=$W/up/python python -c 'from sglang.benchmark.datasets import DATASET_MAPPING as M; M["tracelab-claude"]'
+6. EXTEND upstream's DatasetRow (sglang/benchmark/datasets/common.py): the overlay's TraceLab loader passes
+   session-replay fields upstream's dataclass lacks, and the agent client fails with
+   "TypeError: DatasetRow.__init__() got an unexpected keyword argument 'session_id'". Add, all with defaults so no
+   other loader changes: warmup_only: bool = False, session_id: Optional[str] = None,
+   round_index: Optional[int] = None, inter_round_delay_s: float = 0.0 (timestamp already exists).
+7. DRY-RUN the agent client before any smoke arm (seconds, no servers): call the client's own cli_main with the
+   agent arguments and run_benchmark replaced by a stub that calls get_dataset and exits. Expected on the 24
+   superposed windows at alpha 3: 13,353 rows / 324 sessions / 281 warmups. Each of the deployment gaps above
+   cost a 15-minute smoke run to find; the dry-run finds all of them at once.

@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.39.0 — Agent client dry-runs clean; the slim trace reproduces the old replay round for round (2026-10-28)
+- smoke8: the slim trace arrived intact (md5 d55fcf85dd87, 629 s). The agent client then failed with
+  "DatasetRow.__init__() got an unexpected keyword argument 'session_id'": upstream's DatasetRow lacks the
+  session-replay fields our TraceLab loader passes. Added warmup_only, session_id, round_index, inter_round_delay_s
+  (all defaulted, so other loaders are unchanged) on all four pods.
+- Instead of finding the next gap with another 15-minute smoke run, dry-ran the agent client on pod 0: its own
+  cli_main and argument parser, run_benchmark stubbed to call get_dataset and exit. DRYRUN_OK in 38 s: 13,353 rows,
+  324 sessions, 281 warmups.
+- Independent fidelity check of the slim trace: 13,353 - 281 = 13,072 real rounds, which is exactly the old
+  cluster's best-config arm with the FULL trace (11,424 issued + 1,648 not issued = 13,072).
+- Overlay README now lists the DatasetRow extension and the dry-run as deploy steps 6 and 7. smoke9 launched.
+
 ## v2.38.0 — superset_report.py: judge the sweep by the agreed rules the moment it lands (2026-10-28)
 - tasks/pd_colocation/superset_report.py reads the sweep log's SCORE / ACCEPT lines and prints, per load: every arm's
   chat and agent attainment, agent goodput and TPOT p50/p90; an acceptance VALIDITY gate (default 1.8; the

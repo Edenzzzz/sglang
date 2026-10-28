@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.08.0 — Our own earlier build is not a baseline (2026-10-28)
+- Removed "our own earlier two-plan build" from the baseline list at the head of 6.2. A system's own superseded
+  version is not a comparison anyone else can check, and listing it beside external baselines inflates the
+  apparent contribution the way the role-split factors would.
+- Its row stays in the normalized table, marked *(ours, superseded)*, with a sentence saying why it is there --
+  evidence that the one-plan structure was the right call -- and why it is not in the baseline list. Deleting the
+  row outright would have discarded a measured data point for the wrong reason.
+
 ## v3.07.0 — 5.1's baseline paragraph becomes bullets (2026-10-28)
 - The "Baselines for this design" blob packed three separable facts into one run of prose. Split into bullets:
   two kernels with two plans each merging its own partials; one query tile for the whole FA2 launch, chosen from

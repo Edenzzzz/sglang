@@ -361,6 +361,42 @@ spends most of its tiles on the cheapest work. That is why removing the row clas
 rather than a factor, and why the 64 class -- 1.2% of tiles, all of them chunk remainders -- is interesting out of
 proportion to its count: it is the only place where a chunk tile is small enough to share an SM with rows.
 
+**Why POD-Attention-style overlap does not carry to Hopper and later, and what replaces it.** POD-Attention fuses a
+prefill chunk and one-token decode rows inside a single FA2 kernel, interleaving a large query tile with small ones
+across CTAs. That design depends on both roles issuing the same class of tensor-core instruction -- Ampere's
+`mma.sync` -- from one kernel body. On Hopper it does not survive, for four reasons we measured rather than assumed.
+
+1. *The prefill role has to leave FA2.* Separating the roles so the chunk runs on FA3 and the rows on FA2 is worth
+   1.76x to 7.7x of attention time over a single variable-length call, depending on the model (section 6.2), and
+   conversely running the rows on FA3 tiles instead of FA2 costs 15 to 25 points of agent inter-token latency. A
+   Hopper design that keeps the chunk in an FA2 kernel to enable POD's interleaving gives up more than the
+   interleaving can return.
+2. *The two roles cannot share a warpgroup.* `wgmma` is issued per warpgroup and cannot interleave operand shapes
+   within one, so a single warpgroup cannot alternate between a 128-row chunk tile and a 16-row row tile the way
+   `mma.sync` can.
+3. *Nor can they share a kernel body.* We built the co-compiled kernel: FA3's mainloop and FA2's mainloop in one
+   translation unit, one launch. It required disabling FA3's warpgroup register protocol, because that protocol
+   balances exactly at a 168-register baseline that the combined body cannot hold; the persistent form then spilled
+   every tile class (1 436 bytes), and the whole path ran 2 to 6 times slower than two launches. Correct, and
+   unusable.
+4. *So overlap reduces to the launch level, where little is left.* With the roles in separate launches, programmatic
+   dependent launch recovers 1.4 to 6.2% of the step and two independent streams recover nothing (1.763x against
+   1.759x on the 128K four-mode captures). Six further mechanisms -- a persistent runner, a longest-processing-time
+   pull loop, a just-in-time ready queue, cluster-level reduction through distributed shared memory, KV multicast,
+   and KV-position ordering -- all land at or below parity.
+
+The one intra-SM overlap that Hopper does permit is narrow and specific: FA3 at a 64-row query tile occupies a
+single consumer warpgroup instead of two, which frees a warpgroup that can issue `mma.sync` for 16-row rows in the
+same CTA. Different warpgroups may issue different instruction classes concurrently, so this is not blocked by (2).
+But Table 3 bounds its reach: 64-row tiles are **1.2%** of all query tiles on the long-context agent replay, because
+they arise only as the remainder of a prefill chunk. We therefore report it as a mechanism with a measured ceiling
+rather than a general technique.
+
+The conclusion we draw is architectural, and it is the opposite of POD's: **on Hopper and later, the gain comes from
+giving each role the executor its tile shape deserves, not from fusing the roles into one kernel.** Fusion was the
+right answer when both roles spoke `mma.sync`; once the prefill role must speak `wgmma` to be competitive, the roles
+are better separated and merely sequenced. This is why C1 is a dispatcher and a plan rather than a fused mainloop.
+
 Second, the tile classes are not evenly used. In a four-mode step the 16-row class carries the many decode rows, one
 or two 32- or 48-row tiles carry the verify rows, and the 128-row class carries nearly all of the arithmetic, because
 the chunk's attention grows with the cached prefix while a row's does not. That imbalance is the single most

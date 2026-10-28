@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.15.0 — Negative result promoted to a claim: POD-style overlap does not carry to Hopper (2026-10-28)
+- User's framing, written into paper 5.1 with the full evidence chain: POD-Attention's fusion needs both roles
+  issuing Ampere mma.sync from one kernel body, and on Hopper that fails four ways we MEASURED, not assumed.
+  (1) The prefill role must leave FA2: the role split is worth 1.76-7.7x, and running rows on FA3 costs 15-25 points
+  of agent ITL. (2) wgmma cannot interleave operand shapes within a warpgroup. (3) The co-compiled kernel we built
+  needed FA3's register protocol disabled, spilled every class (1,436 B) and ran 2-6x slower. (4) Overlap therefore
+  reduces to launch level: PDL 1.4-6.2%, two streams nothing, and six further mechanisms at or below parity.
+- The one intra-SM overlap Hopper permits is FA3 q64 (one consumer warpgroup) + mma.sync 16-row rows in the freed
+  warpgroup -- different warpgroups may issue different instruction classes. Table 3 bounds it at 1.2% of tiles,
+  since 64-row tiles arise only as chunk remainders. Reported as a mechanism with a ceiling, not a technique.
+- Architectural conclusion stated: on Hopper and later the gain comes from giving each role the executor its tile
+  shape deserves, not from fusing the roles. This is why C1 is a dispatcher and a plan, not a fused mainloop.
+
 ## v2.14.0 — Table 3 (measured tile mix) and the tile-64 boundary correction (2026-10-28)
 - Table 3 added to paper 5.1: measured share of query tiles per class on the mixed long-context TraceLab replay
   (87,932 steps, median 119K prefix). Qwen/Llama: 16=69.3%, 32=13.5%, 48=0.1%, 64=1.2%, 128=16.0%; GLM swaps 32 and

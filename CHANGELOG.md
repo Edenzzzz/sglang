@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.26.0 — Conditional disaggregation at alpha 3: valid, and our margin is far larger on the replay (2026-10-28)
+- cond_p1 at alpha 3, accept 2.003, failed=0 on both tenants (passing the gates the stock-PD arm failed): chat
+  50.5% / 665 tok/s with TPOT p50/p90 44.8/193.8 ms; agent 64.9% / 905 tok/s, not_issued 6148.
+- Against rung L0 on the identical workload and cluster (91.2% / 94.3% / 2493 tok/s, chat TPOT 10.8/29.8 ms):
+  +40.7 points chat attainment, +29.4 agent, 2.75x agent SLO goodput, chat mean-TPOT p90 -85%.
+- Why this dwarfs the fan-out margin (+12-37%): fan-out gives every program of a task the same prefix, so
+  conditional disaggregation's local-append rule keeps most work local and it nearly matches us. On the TraceLab
+  replay each session carries its own long history (median 119K cached tokens), so appends are local but the
+  prefix must still be where the decode is -- exactly the mechanism motivation 1 claims. This is the workload that
+  separates the designs, and it is the realistic one.
+- Caveat recorded: the acceptance mean rests on n=15 samples against ~1000-5800 elsewhere. failed=0 and 14 400 /
+  6 924 requests served mean the score stands, but 2.003 is thin and must not be used to argue about acceptance.
+
 ## v3.25.0 — Queue stock PD on clean upstream, the documented configuration (2026-10-28)
 - `tasks/pd_colocation/mn_pdre_clean_16g_20261028.sh`: the r1 arms re-run with SGL_PY=up_clean/python instead of
   up/python. mn_node.sh's header states stock PD requires clean upstream because the serving overlay's spec-v2

@@ -436,6 +436,25 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     sensitivity sweep on that one number, not another redesign of the budget.
   - Against mixed chunk, which shares our mechanism, a large tail win IS expected: mc's chat TPOT p90 is 102.0 ms
     with no bound either.
+- **[x] CONDITIONAL DISAGGREGATION, alpha 3 on the TraceLab replay: VALID, and our margin is far larger here than
+  on the fan-out sweep (2026-10-28, `mn_pd_remeasure_16g_20261028.sh`, log `/tmp/h20/mn_pdre_r1.log`).**
+  - `cond_p1_edf_mtp_hc_tl2_a3_pdre_r1_cond1`, accept 2.003, **failed=0 on both tenants** (so it passes the two
+    hard gates the stock-PD arm failed): chat tight 50.5% (665 tok/s), TTFT p50/p90 0.17/7.01 s, TPOT p50/p90
+    44.8/193.8 ms; agent tight 64.9% (905 tok/s), not_issued 6148, TTFT p50/p90 0.74/19.41 s, TPOT p50/p90
+    47.8/188.2 ms.
+  - **Against rung L0 on the identical workload and cluster** (91.2% / 94.3% / 2493 tok/s, chat TPOT p50/p90
+    10.8/29.8 ms): **+40.7 points chat attainment, +29.4 points agent, 2.75x agent SLO goodput, and chat mean-TPOT
+    p90 -85%** (29.8 against 193.8 ms).
+  - **Why the margin is so much bigger than the fan-out result (+12-37% goodput):** the fan-out workload gives
+    every program of a task the SAME prefix, so conditional disaggregation's local-append rule keeps most work
+    local and it nearly matches us. The TraceLab replay instead has each session carrying its OWN long history
+    (median 119K cached tokens), so the appends are local but the 119K prefix still has to be where the decode is
+    -- which is exactly the mechanism motivation 1 claims. **This is the workload that separates the designs, and
+    it is the realistic one.**
+  - **One caveat to carry:** the acceptance mean rests on only **n=15** samples, against ~1 000-5 800 in other
+    arms. failed=0 and 14 400 chat / 6 924 agent requests served mean the arm ran, so the SCORE stands, but the
+    acceptance figure is thin -- do not use this arm to argue anything about acceptance, and check why its workers
+    logged so few lines before quoting 2.003.
 - **[!] PD RE-MEASUREMENT, alpha 3 stock disagg: BROKEN ARM, NOT A RESULT (2026-10-28, log
   `/tmp/h20/mn_pdre_r1.log`). Do not use these numbers, and note that they flatter us.**
   - Reported: chat tight 4.9% (78 tok/s), TTFT p50/p90 **189.98 / 311.20 s**, `failed=1890`; agent tight 4.3%

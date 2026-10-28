@@ -441,6 +441,35 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     same held-out split the MLP table uses; (2) re-run `chunk_predictor.py` with the step MLP (`model.pt`, held-out
     3.4-4.0% on merged steps) via bisection and report whether the chosen chunks differ; (3) state in 5.2.3 which
     model the rule uses and why the per-type error is the relevant one.
+  - [x] **WHICH BUDGET THE CHUNK RULE SHOULD USE -- settled offline, 2026-10-28, and it is a negative result about
+    two of the three forms.** `tasks/perf_model/chunk_predictor.py --rule {step,life,amort,tail}` on the 10,185
+    merged steps of the alpha-3 replay traces (`/tmp/pfix/st3/w*.log`), step model
+    `tasks/perf_model/step_qwen_h20_a6_gpu_20261027.json`, observed rate 13.9 ms/token from 73,774 decode-only
+    steps against the 50 ms chat target.
+    | budget form | grants per step | chunk p10/p50/p90 | admits less than the run used |
+    |---|---:|---:|---:|
+    | `step` = target x tokens this step emits | 89-91 ms | 64 / 192 / 320 | 99.0% |
+    | `amort` = remaining slack / remaining output x tokens | 89-91 ms | 64 / 192 / 320 | 99.0% |
+    | `life` = projected mean TPOT at completion | 16 279 ms | 16 384 / 16 384 / 16 384 | 0% (saturates on 100%) |
+    - **`amort` is identical to `step`, not a fix.** Its minimum over resident rows is attained at a freshly
+      admitted row, where `(s*L - 0)/L * a = s*a` exactly. Any budget that is a min over rows and must hold for a
+      row admitted this step collapses to the bare per-step allowance.
+    - **`life` is correct for a mean-TPOT SLO and useless as a bound.** One slow step raises a row's mean by 1/n of
+      its excess, so pricing it that way permits multi-second steps; the bound is loose by exactly the margin by
+      which the server beats its target. Target sweep: `life` picks 1-4K chunks only at a **14.5-16 ms** target
+      (8-15% above the achieved 13.9 ms) -- a usable band about **1.5 ms wide**; at 20 ms it already saturates the
+      maximum on 12.9% of steps and at 25 ms on 70.5%.
+    - **Consequence for the arm that is running.** `:life` with `stepcap=2000` grants far more than any step will
+      use, so that arm effectively measures an UNCAPPED chunk with a 2 s ceiling. Expect good TTFT and a bad ITL
+      tail, not a fixed version of the rule.
+    - **The bound that binds is the inter-token tail target**, which the workload also states and which does not
+      evaporate when the mean is comfortable: `--rule tail` = min(`life`, tail target). At a 600 ms tail the median
+      chunk is 2 176 tokens -- sglang's scale -- while admitting MORE than the run used on 65% of steps and less on
+      35%; at 150 ms it is 192/384/640. The chunk is still solved from the step model, so it adapts with prefix
+      length and decode batch size and is vacuous when no rows are resident. **Next arm: `:life` with
+      `stepcap=600`,** the chat p99 ITL target, instead of 2000.
+    - Written into paper 5.2.3 (the over-claiming "banked slack" table is deleted; it described the per-step form
+      with banking, which the cluster measurement contradicts).
   - [ ] **Chunk predictor, optional refinement: a learned head instead of bisection.**
     - The user does not want SLOs-Serve's dynamic program (it would read as borrowing their method). Instead predict
       the chunk from state we already have, using the step model that the fused kernel makes easy to fit.

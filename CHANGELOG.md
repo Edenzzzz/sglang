@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.56.0 — Which budget the SLO chunk rule should use: two of the three forms are dead ends (2026-10-28)
+- `chunk_predictor.py` gains `--rule {step,life,amort,tail}` and `--out-len`, and replays the 10,185 recorded
+  merged steps under each. `amort` (remaining slack over remaining output) is *identical* to the per-step form,
+  because its minimum is attained at a freshly admitted row where it equals target x tokens by construction -- so
+  the structural reason the deployed rule regressed is not fixable by amortizing.
+- `life` (projected mean TPOT at completion) is the correct reading of a mean SLO and useless as a bound: it grants
+  16.3 s and saturates the chunk maximum on 100% of steps. Its usable band is about 1.5 ms wide (a 14.5-16 ms
+  target against a 13.9 ms achieved rate). The running `:life` arm with `stepcap=2000` therefore measures an
+  effectively uncapped chunk.
+- The bound that binds is the inter-token tail target, also stated by the workload: `--rule tail` at 600 ms gives a
+  median chunk of 2 176 tokens while admitting more than the run used on 65% of steps and less on 35%.
+- Paper 5.2.3 rewritten: the "banked slack raises the chunk" table is deleted (it described a form the cluster
+  measurement contradicts) and replaced by the measured three-form comparison and the tail bound.
+
 ## v2.55.0 — Paper: one kernel claim everywhere, and C3's worker policy is no longer [pending] (2026-10-28)
 - The abstract, the introduction's results paragraph, the outline bullet and the conclusion all quoted the
   superseded H20 figure (1.43-1.51x over sglang's single FA3 call) with the fair baseline left [pending], while

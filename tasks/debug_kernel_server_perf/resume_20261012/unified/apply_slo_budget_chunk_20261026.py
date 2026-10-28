@@ -157,12 +157,23 @@ method = '''
                     continue
             # Banked slack is capped at BANK_STEPS steps' worth, so one step cannot stall a row for seconds.
             budget = min(budget, s_r * (o + tps) - spent, cfg["bank_steps"] * per_step)
-        # Per-step cap. Unlimited banking is the right reading of each resident row's MEAN TPOT, but it lets slack a
-        # row banked over many fast steps be spent as ONE long stall (measured 2026-10-28: budgets up to 5,867 ms,
-        # full 16,384-token chunks on ~7% of steps), which every resident row and every request still waiting must
-        # sit through. ":qcap" bounds one step by the remaining TTFT slack of the tightest WAITING request, so no
-        # step is longer than the most urgent queued request can afford; ":stepcap=MS" is a hard ceiling for when
-        # the queue is empty. Both come from SLO deadlines rather than a tuned chunk constant.
+        # Per-step cap, and the bound that actually binds. Unlimited banking is the right reading of each resident
+        # row's MEAN TPOT, but it lets slack a row banked over many fast steps be spent as ONE long stall (measured
+        # 2026-10-28: budgets up to 5,867 ms, full 16,384-token chunks on ~7% of steps), which every resident row
+        # and every request still waiting must sit through.
+        #
+        # The offline sweep over 10,185 recorded merged steps (tasks/perf_model/chunk_predictor.py --rule) shows
+        # the mean-TPOT budget has almost no usable band: at the paper's 50 ms target against a 13.9 ms/token
+        # observed rate the lifetime budget is 16.3 s and saturates the chunk maximum on 100% of steps, while the
+        # per-step form grants 90 ms and admits less than the run used on 99% of them. Only a target within about
+        # 8-15% of the achieved rate (14.5-16 ms here) puts the lifetime budget in the 1-4 K token range. So the
+        # bound that binds at normal load has to be the INTER-TOKEN TAIL target, which the workload also states:
+        # ":stepcap=MS" is that target in milliseconds, and the chunk solved under it still adapts with prefix
+        # length and decode batch size rather than being a fixed token count -- with no rows resident the bound is
+        # vacuous and the chunk is the server maximum. The sweep puts a 600 ms tail target at the same median
+        # chunk as sglang's 2048 (p50 2176 tokens) while admitting more on 65% of steps and less on 35%.
+        # ":qcap" bounds one step by the remaining TTFT slack of the tightest WAITING request, so no step is longer
+        # than the most urgent queued request can afford. Both come from SLO deadlines, not a tuned chunk constant.
         if cfg["qcap"] or cfg["stepcap"] != float("inf"):
             cap = cfg["stepcap"]
             if cfg["qcap"]:

@@ -846,39 +846,62 @@ is the largest c whose predicted step time keeps every running decode row within
 
   step(c, decode rows, their KV, the prefix, acceptance) <= (1 - h) x min over running rows r of budget_r.
 
-- budget_r is row r's remaining mean-TPOT slack: its tenant's TPOT target times the tokens it will have emitted
-  after this step, minus the decode time it has already spent.
+- budget_r prices how much of row r's latency allowance this step may consume. Three readings of a mean-TPOT SLO
+  give three different budgets, and the choice decides whether the rule helps or hurts; the next paragraphs measure
+  all three and settle on the smaller of a projected mean-TPOT budget and the tenant's inter-token tail target.
 - A row ahead of its target lends slack; a row behind it shrinks the budget.
 - With no rows decoding, the chunk is bounded only by memory.
 - The router prices a prefill's TTFT under the same rule, walking it chunk by chunk under each node's decode load.
 
 **Why a fixed chunk is not defensible, measured.** Replaying 10,185 four-mode steps of the cluster trace through
-the step model shows a fixed 2048-token chunk produces a step costing **5.1 times** the per-step allowance its
-resident rows can absorb (90th percentile 8.4 times), where the allowance is the tenant's mean-TPOT target times the
-tokens one step emits. That is the latency the rule removes. The model itself predicts those steps to **4.7% mean
-absolute error** (90th percentile 7.5%) at the chunk the run actually used, so the fused step is predictable enough
-to size from -- the property section 5.1's single dispatcher buys us.
+the step model shows that a fixed 2048-token chunk takes no account of what is resident: the step it produces costs
+**5.1 times** (90th percentile 8.4 times) the time one step of output is worth at the tenant's mean-TPOT target.
+A constant cannot do otherwise, because the same token count costs a 32K-prefix step and a 256K-prefix step
+different amounts of time, and costs the resident rows differently again depending on how many there are. What the
+right bound on that step time is, is the subject of the next paragraphs, and is less obvious than it looks. The
+model itself predicts those steps to **4.7% mean absolute error** (90th percentile 7.5%) at the chunk the run
+actually used, so the fused step is predictable enough to size from -- the property section 5.1's single dispatcher
+buys us.
 
-**The rule adapts in both directions, which is the point.** Rows in that trace decode at 13.9 ms against a 50 ms
-target, so every token a row emits banks 36 ms of slack. The chunk the rule selects therefore grows with how long
-the resident rows have been running:
+**Which budget, and the negative result that decides it.** The slack a row lends depends on how the mean-TPOT
+target is turned into a bound on one step, and that choice turns out to decide whether the rule helps or hurts. We
+replayed the same 10,185 recorded steps under three forms of budget_r (rows decoding at 13.9 ms against a 50 ms
+target, projected output 500 tokens):
 
-| tokens a resident row has emitted | banked slack | chunk chosen (median) | steps allowing >= 2048 |
-|---:|---:|---:|---:|
-| 0 (just admitted) | 0 ms | 192 | 0% |
-| 10 | 361 ms | 1 600 | 31% |
-| 20 | 722 ms | 3 072 | 84% |
-| 50 | 1 806 ms | 7 168 | 100% |
-| 200 | 7 224 ms | 16 384 | 100% |
+| form of budget_r | what it grants per step | chunk chosen (p10 / p50 / p90) | steps admitting less than the run used |
+|---|---:|---:|---:|
+| per-step: target x tokens this step emits | 89-91 ms | 64 / 192 / 320 | 99.0% |
+| remaining slack amortized over remaining output | 89-91 ms | 64 / 192 / 320 | 99.0% |
+| projected mean TPOT at completion | 16 279 ms | 16 384 / 16 384 / 16 384 | 0% |
 
-So in steady state the rule admits far **more** prefill than a 2048-token cap would, up to the server's maximum, and
-it clamps only while rows are fresh and have no slack to spend. A cap cannot express either behaviour: it throttles
-prefill when nothing needs protecting, and admits too much when something does.
+The per-step form is the one we first deployed, and it is a large regression on the cluster (section 6.4): it pins
+nearly every step to a bare 90 ms, so a long agent prefill advances a few hundred tokens per step and misses its
+TTFT target. The reason is structural rather than a bad constant. budget_r is a *minimum over resident rows*, and a
+row admitted this step has banked nothing, so whatever the other rows have saved is irrelevant -- the fresh row
+sets the bound. Amortizing the remaining slack over the remaining output does not escape this: its minimum is
+attained at exactly that fresh row, where it equals the per-step form by construction.
 
-Banking must be unlimited, because the SLO states a request's *mean* TPOT. An earlier version capped a row's banked
-slack at four steps' allowance, which silently turns the rule into a per-token bound; it held chat's 90th-percentile
-TPOT to 64 ms but admitted so little work that attainment fell to 7.9% and throughput to 107 tokens/s. Requests that
-are never admitted still miss their SLO, so a rule that protects latency by refusing work is not a solution.
+The third form escapes it, because a mean is an average: one slow step raises a row's mean TPOT by only one *n*-th
+of its excess, where *n* is the row's output length. Priced that way a step may run for seconds. But the bound is
+then loose by exactly the margin by which the server beats its target, and that margin is large -- 13.9 against
+50 ms -- so the budget is 16.3 s and the chunk saturates the server's maximum on every step. Sweeping the target
+shows the usable band is about 1.5 ms wide: only a target of 14.5-16 ms, within 8-15% of the rate the rows already
+get, puts the chunk in the 1-4K token range.
+
+**So the bound that binds is the inter-token tail, and it also comes from an SLO.** Workloads state a tail target
+as well as a mean, and a tail target does not evaporate when the mean is comfortable. We therefore take
+budget_r as the smaller of the projected-mean-TPOT budget above and the tenant's inter-token tail target. The chunk
+is still solved from the step model, so it is not a fixed token count: with no rows resident the bound is vacuous
+and the chunk is the server's maximum; with many long rows it shrinks. On the same 10,185 steps, a 600 ms tail
+target gives a median chunk of 2 176 tokens -- the same scale as sglang's 2048 -- while admitting *more* than the
+run used on 65% of steps and less on 35%, which is the adaptivity a constant cannot express. Tighter targets move
+the whole distribution down (150 ms: 192 / 384 / 640 tokens).
+
+Banking the mean's slack must stay unlimited, because the SLO states a request's *mean* TPOT. An earlier version
+capped a row's banked slack at four steps' allowance, which silently turns the rule into a per-token bound; it held
+chat's 90th-percentile TPOT to 64 ms but admitted so little work that attainment fell to 7.9% and throughput to 107
+tokens/s. Requests that are never admitted still miss their SLO, so a rule that protects latency by refusing work is
+not a solution.
 
 The solver is three lines and a bisection -- 16 evaluations of a ten-term linear model, about 2 microseconds per
 step. It needs no dynamic program, and nothing in it is specific to a workload.

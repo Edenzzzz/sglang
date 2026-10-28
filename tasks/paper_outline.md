@@ -323,9 +323,14 @@ What it cannot do is bound anyone's latency, because arrival order and a fixed c
 long a request will occupy the prefill side and how urgent it is. The failure is head-of-line blocking, and it is
 severe rather than marginal: a 64K-token prompt admitted one chunk at a time holds the prefill side for tens of
 consecutive steps, and every request that arrives behind it waits for all of them -- including a 200-token chat turn
-whose own prefill would take a single step. Measured on one H200 with Qwen2.5-7B, an agent burst of 32 requests
-arriving within 60 s at 32-64K context holds chat time-to-first-token at **4.5-13.9 s** against a 2 s target, while
-the server's throughput is unharmed. The blocking is also self-inflicted in a way a larger chunk cannot fix: raising
+whose own prefill would take a single step. Two measurements, in the settings section 6 evaluates. On one H200
+with Qwen2.5-7B, an agent burst of 32 requests arriving within 60 s at 32-64K context holds chat
+time-to-first-token at **4.5-13.9 s** against a 2 s target while the server's throughput is unharmed (the
+single-node setting of section 6.3). On 16 H20s under the superposed TraceLab replay plus chat at load factor 6 --
+the cluster setting of section 6.4 -- sglang's prefill-prioritized schedule holds chat TTFT at a 90th percentile of
+**9.02 s** against the same 2 s target, with 7 088 agent rounds never issued, while its agent SLO goodput
+(2 012 tokens/s) is within 9% of the best arm we measure. The policy is not failing at throughput; it is failing
+only at latency, and it fails there at both scales. The blocking is also self-inflicted in a way a larger chunk cannot fix: raising
 the chunk size shortens the queue of chunks but lengthens each step, which pushes the cost onto the resident decode
 rows' inter-token latency instead. The two knobs trade one tenant's latency against the other's, and neither knob
 knows which tenant is waiting.
@@ -402,6 +407,14 @@ set by the scheduler rather than by the trace: a round appends a median of 875 u
 prefix, but chunked prefill splits the append across steps, and the rule of section 5.2.3 chooses between 192 and
 16 384 tokens according to the resident rows' slack -- one or two chunk tiles at the low end, 128 of them at the
 high end.
+
+**And the cost is visible end to end, in the setting section 6.4 evaluates.** On 16 H20s under the superposed
+TraceLab replay plus chat at load factor 6, sglang's mixed chunk reaches the lowest agent SLO goodput of every arm
+measured -- **1 926 tokens/s**, against 2 012 for its own prefill-prioritized schedule and 2 199 for ours -- and
+the worst inter-token tails, at a 99th percentile of 1 246 ms for chat and 1 301 ms for agents. Its chat SLO
+attainment is 53.8%. So the tile-level waste derived above is not a microbenchmark artefact: the policy that pays
+it is the slowest of the three schedules on the workload the paper evaluates, which is what section 3.4's title
+claims.
 
 **Why POD-Attention's answer does not carry to Hopper.** POD-Attention interleaves a prefill chunk with
 one-token decode rows inside a single FA2 kernel. That design is FA2-only, and FA2 is the problem: on Hopper and

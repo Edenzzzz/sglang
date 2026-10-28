@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.78.0 — Motivation sections now carry data from the settings we evaluate (2026-10-28)
+- 3.3 gains the cluster-scale measurement of head-of-line blocking, in section 6.4's own setting: on 16 H20s under
+  the superposed TraceLab replay plus chat at alpha 6, sglang's prefill-prioritized schedule holds chat TTFT p90 at
+  9.02 s against a 2 s target with 7088 agent rounds never issued, while its agent SLO goodput is within 9% of the
+  best arm. The policy fails only at latency, and at both scales -- the single-node burst (4.5-13.9 s on one H200,
+  section 6.3's setting) and the cluster.
+- 3.4 gains the end-to-end cost of mixed chunk in the same setting: lowest agent SLO goodput of every arm measured
+  (1926 tok/s against 2012 for prefill-prioritized and 2199 for ours), worst inter-token tails (chat p99 1246 ms,
+  agent 1301 ms), chat attainment 53.8%. The tile-level waste derived in that section is therefore not a
+  microbenchmark artefact: the policy that pays it is the slowest of the three schedules on the paper's workload.
+
 ## v2.77.0 — Mixed chunk at alpha 6 reframes the ITL-tail finding (2026-10-28)
 - mc (accept 1.765): chat 53.8% / 684 tok/s, TTFT p90 8.19 s, TPOT p90 102.0 ms, ITL p99 1245.9 ms; agent 77.4% /
   1926 tok/s, TPOT p90 108.4 ms, ITL p99 1301.3 ms.

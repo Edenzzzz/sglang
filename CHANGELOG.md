@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.43.0 — First valid "ours" result on the new cluster, and a chunk-rule defect it exposes (2026-10-28)
+- Superset sweep r5, ours at alpha 3 (EDF + SLO-budgeted chunk, A6, cache router): chat 84.4% / agent 90.3% /
+  2259 tok/s; chat TPOT p50/p90 15.5/43.6 ms; agent 21.4/48.8 ms; chat TTFT p90 2.80 s. Valid: acceptance 2.012;
+  A6 and SLO_CHUNK both active in the worker logs.
+- Worse than our own earlier best config (cache + FCFS, chunk 2048: 90.6/94.2/2471, chat TPOT p90 31.9, chat TTFT
+  p90 0.67 s) beyond the noise floor. Cause CONFIRMED from the rule's log: 93% of steps are capped (chunks down to
+  256), but ~7% run the full 16,384-token chunk, with budgets up to 5,867 ms -- unlimited banking lets ~6 s of banked
+  slack be spent as ONE stall, which lands in the p90 TPOT tail and in chat TTFT.
+- Fix recorded: keep the mean-TPOT budget but cap what one step may spend, preferably by a cap derived from the chat
+  TTFT SLO (an SLO, not a tuned constant). Baselines for the superset verdict still running.
+
 ## v2.42.0 — Step-model claim corrected: the linear model matches the MLP on merged steps (2026-10-28)
 - Re-ran fit_4mode_step.py --target gpu --pool on the four alpha-3 STEPTRACE logs (@3:4), held-out second halves.
   Merged steps: lin4mode 2.8-4.2%, overlap 2.4-4.4%, GBT 2.8-3.6%, MLP 3.4-4.2%, MLP with acceptance 3.4-4.0% (the

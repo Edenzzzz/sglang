@@ -43,6 +43,36 @@
        `SMOKE_FAIL` and points at the pod-side `bench_agent.log`. Log `/tmp/h20/smoke_then_sweep.log`. This
        removes the failure mode that cost r1, r2 and r3 -- a sweep running for 40 minutes against dead clients
        while the driver log looked healthy.
+   - **[x] SUPERSET SWEEP r5, first arm: OURS at alpha 3 (2026-10-28 14:1x).** Driver
+     `pd_colocation/mn_superset_oursfirst_16g_20261028.sh`, log `/tmp/h20/mn_superset_16g_r5.log`; serving tree
+     `python_slo` (H20 lineage + A6 + SLO-chunk patch, launch chunk 16384,
+     `SLO_CHUNK=step_qwen_h20_a6_gpu_20261027.json:0.1:50:80:24000:demote:ttft`), EDF, cache router.
+     **Valid: acceptance 2.012** (n=5,145). A6 active (1,568 `a6_unified=1` calls on worker 0); SLO_CHUNK active.
+     | alpha 3 | chat | agent | agent tok/s | chat TPOT p50/p90 | agent TPOT p50/p90 | chat TTFT p90 |
+     |---|---:|---:|---:|---:|---:|---:|
+     | ours (EDF + SLO chunk), r5 | 84.4% | 90.3% | 2259 | 15.5 / 43.6 ms | 21.4 / 48.8 ms | 2.80 s |
+     | our earlier best config (cache + FCFS, chunk 2048), old cluster | 90.6% | 94.2% | 2471 | 11.8 / 31.9 ms | 17.5 / 38.5 ms | 0.67 s |
+     - **WARNING, to investigate before the paper uses this arm:** against our own earlier configuration it is worse
+       on every metric beyond the ~5 pt / 4% noise floor -- chat attainment -6.2 pts, goodput -8.6%, chat TPOT p90
+       31.9 -> 43.6 ms (the metric the rule exists to protect), chat TTFT p90 0.67 -> 2.80 s.
+     - Leading hypothesis: UNLIMITED BANKING. Rows that run fast bank large slack, so the rule admits very large
+       chunks (up to the 16384 launch size); those steps land in the p90 TPOT tail and stall chat admission. Not
+       proven -- the two runs are on different clusters. Test: (a) histogram of chunk sizes chosen from this arm's
+       SLO_CHUNK log lines; (b) an arm with a bank cap between 4 (which starved) and unbounded, or a hard chunk max
+       derived from the per-step allowance; (c) a cache+FCFS arm on THIS cluster to remove the cross-cluster doubt.
+     - **Hypothesis CONFIRMED from the rule's own log** (`SLO_CHUNK calls=... capped=... budget_ms=... chunk=a->b`
+       lines on the workers): 7,466 of 8,001 calls (93%) are capped below the 16,384 launch size, with chunks as small
+       as 256-399 tokens -- but the remaining ~7% run the FULL 16,384-token chunk, and one logged call had
+       **budget_ms=5867.0**: rows had banked ~6 s of slack and the rule spent it in a single step. Unlimited banking
+       is the correct reading of each resident row's MEAN TPOT, but nothing stops the bank being spent as ONE
+       multi-second stall that every resident row and every newly arriving chat request then waits through. That is
+       the p90 TPOT tail (43.6 ms) and the chat TTFT p90 (2.80 s).
+     - **Fix to test:** keep the mean-TPOT budget but cap what a single step may spend. Two candidate forms:
+       (1) `bank=K` with K between 4 (starved: per-step ITL bound) and unbounded, e.g. K = 16; or (2) a hard cap on
+       one step's budget derived from the chat TTFT SLO, so a step can never be longer than the time a queued chat
+       request can afford to wait. (2) ties the cap to an SLO rather than a tuned constant, which is the user's
+       requirement for the chunk rule, so it is the one to prefer.
+     - The verdict that matters is still against this sweep's sglang baselines (pp / mc / pdmux), running now.
    - **[!] The "ours" arm would not have run our system (found 2026-10-28, before the sweep reached it).** The
      stage-2 push used the REPO tree (`python/sglang` at HEAD) as the serving tree. That tree has NO A6 hooks
      (`SGLANG_NATIVE_PDL` count 0) and NO late-demote EDF; every prior cluster result ran on the H20 SERVING tree

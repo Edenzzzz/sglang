@@ -254,6 +254,27 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     (`ROPE_THETA`) and `mn_run.py` (`ROPE_THETA` in the env string).
   - Push files with `Cluster(SID, cp, nodes=[f"worker-{i}" for i in range(NPODS)])`; without `nodes=` every call
     goes to one default instance that is not even one of the workers.
+- **[ ] TPOT PREDICTION ACCURACY IS NOT ESTABLISHED, and the paper already carries the evidence (user asked to
+  verify it, 2026-10-28).** The quoted 2.0% held-out step-time MAPE is an AGGREGATE over step types, and the
+  per-type split in paper 5.2.2 shows decode steps are by far the worst: **linear 34-38%, MLP 18-23%, GBT 21-25%**.
+  TPOT is almost entirely decode steps, so 2.0% is the wrong number to quote for TPOT -- the aggregate looks good
+  because long prefill steps dominate an error-weighted mean, not because decode is predicted well.
+  - **Why this does not invalidate the chunk rule, but does block the router's TPOT claim.** The chunk rule needs
+    the time of the step it is about to run, which is a MIXED step (chunk + rows), measured at 4.7% on 10,185
+    merged steps, and its output is a threshold so it tolerates error ~1:1 (a 5% error moves the median chunk 6%).
+    The ROUTER's TPOT prediction instead sums many future DECODE steps, where the 18-38% error lives and can
+    compound. Those are different predictions and must be validated separately; conflating them is how a 2.0%
+    headline would end up standing in for both.
+  - **What to measure, no new GPU time:** predicted versus measured PER-REQUEST TPOT on the traces already on
+    disk -- walk each finished request's steps, sum the predicted step times over the tokens it emitted, and
+    compare with its recorded mean TPOT. Report MAPE and the p90 of the signed error, split by tenant class. That
+    is the number the router and the SLO check actually rely on, and it has never been measured end to end.
+  - **Why not the alternatives, recorded so the choice is defensible:** a dynamic program over future steps (as in
+    SLOs-Serve) is both the method the user does not want to borrow and unnecessary, since the budget is exact
+    arithmetic and only the step time needs a model; a direct regression from (SLO, progress, length stats) to
+    chunk size would be trained on labels the step model generates, so it inherits that error plus its own, must
+    additionally learn the budget arithmetic we can compute exactly, and is single-purpose where the step model is
+    reused by the router and the deadline predictor.
 - **[ ] PREDICTION REGISTERED BEFORE THE TAIL-CHUNK ARM LANDS (2026-10-28), so it is judged against a stated
   expectation rather than post hoc.** User's expectation: with the SLO-budgeted chunk on we should win by a lot on
   tail TPOT, because pp suffers significant head-of-line blocking.

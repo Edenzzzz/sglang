@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.92.0 — TPOT prediction accuracy is not established; say so and separate the two predictions (2026-10-28)
+- The 2.0% held-out step-time MAPE is an aggregate. The per-type split already in paper 5.2.2 shows decode steps at
+  34-38% (linear), 18-23% (MLP), 21-25% (GBT). TPOT is almost entirely decode steps, so 2.0% must not be quoted
+  for TPOT: the aggregate looks good because long prefill steps dominate an error-weighted mean.
+- Separated the two predictions. The chunk rule needs the time of one MIXED step (4.7% on 10,185 merged steps) and
+  its output is a threshold, tolerating error ~1:1. The router's TPOT prediction sums many future DECODE steps,
+  where the 18-38% error lives and compounds. Validating one does not validate the other.
+- Recorded the measurement that closes it, with no new GPU time: predicted versus measured PER-REQUEST TPOT from
+  the traces on disk, MAPE and p90 signed error, split by tenant. Never measured end to end.
+- Recorded why not the alternatives: a DP over future steps is unnecessary (the budget is exact arithmetic) as well
+  as the method we are avoiding; a direct chunk regressor trains on step-model labels, so it inherits that error
+  plus its own, must learn arithmetic we compute exactly, and is single-purpose where the step model is reused.
+
 ## v2.91.0 — Correct the head-of-line-blocking mechanism, and flag survivor bias in the TPOT tails (2026-10-28)
 - 3.3 described the wrong mechanism: prefill queuing behind prefill (a TTFT effect). The real one, per the user, is
   incoming prefill blocking RUNNING decode -- sglang serves the waiting queue before the decode rows, so an

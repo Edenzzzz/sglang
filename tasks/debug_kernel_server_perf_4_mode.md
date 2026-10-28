@@ -265,10 +265,26 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     The ROUTER's TPOT prediction instead sums many future DECODE steps, where the 18-38% error lives and can
     compound. Those are different predictions and must be validated separately; conflating them is how a 2.0%
     headline would end up standing in for both.
-  - **What to measure, no new GPU time:** predicted versus measured PER-REQUEST TPOT on the traces already on
-    disk -- walk each finished request's steps, sum the predicted step times over the tokens it emitted, and
-    compare with its recorded mean TPOT. Report MAPE and the p90 of the signed error, split by tenant class. That
-    is the number the router and the SLO check actually rely on, and it has never been measured end to end.
+  - **[x] MEASURED (2026-10-28, `tasks/perf_model/tpot_bias.py`, 73 774 decode-only steps from the alpha-3
+    traces): the decode-step error is BIASED, so averaging does not rescue it.**
+    | statistic | value |
+    |---|---|
+    | per-step MAPE | 29.0% (p90 49.6%) |
+    | per-step SIGNED bias | **-13.0%** (median -23.1%) |
+    | per-step error sd | 33.7% |
+    | implied error on a 500-token request's mean TPOT | **-13.0% bias** + 1.5% noise |
+    - The right statistic is the signed error, not the MAPE: a request's TPOT is a MEAN over its decode steps, so
+      zero-mean independent error would shrink as 1/sqrt(n) -- and it does, from 33.7% to 1.5% at 500 tokens. But
+      the bias is untouched by averaging, so **predicted TPOT is systematically about 13% optimistic.**
+    - **That is the worst direction for SLO control.** The router and the SLO check admit requests believing their
+      TPOT will be better than it will be, so attainment is over-promised at exactly the loads where it matters.
+      It also makes the chunk rule's budget too permissive, since the decode base cost it subtracts is
+      under-estimated.
+    - **Fix, zero GPU cost: calibrate per step type.** A systematic -13% is a multiplicative constant, not a
+      modelling failure, so fit a per-step-type correction on a training split and validate the bias on a held-out
+      split; report the corrected bias and the residual sd. Do NOT fit it on all the data and quote the bias as
+      zero, which would be circular. Until that lands, no TPOT-prediction accuracy claim should appear in the
+      paper, and 5.2.2's 2.0% aggregate must not be read as a TPOT number.
   - **Why not the alternatives, recorded so the choice is defensible:** a dynamic program over future steps (as in
     SLOs-Serve) is both the method the user does not want to borrow and unnecessary, since the budget is exact
     arithmetic and only the step time needs a model; a direct regression from (SLO, progress, length stats) to

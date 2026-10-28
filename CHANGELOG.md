@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.93.0 — The decode-step error is biased -13%, so predicted TPOT is systematically optimistic (2026-10-28)
+- `tasks/perf_model/tpot_bias.py` on 73 774 decode-only steps: per-step MAPE 29.0% (p90 49.6%), per-step SIGNED
+  bias **-13.0%** (median -23.1%), sd 33.7%.
+- The signed error is the statistic that matters, because a request's TPOT is a mean over its decode steps:
+  independent error shrinks as 1/sqrt(n) (33.7% -> 1.5% at 500 tokens) but bias does not. So predicted TPOT is
+  about 13% optimistic, which is the worst direction -- the router and SLO check admit requests expecting better
+  TPOT than they will get, and the chunk rule's budget is too permissive because the decode base it subtracts is
+  under-estimated.
+- Fix is a per-step-type multiplicative calibration, fitted on a training split and validated on held-out data;
+  fitting on all the data and reporting zero bias would be circular. Until then no TPOT-accuracy claim goes in the
+  paper and 5.2.2's 2.0% aggregate must not be read as a TPOT number.
+
 ## v2.92.0 — TPOT prediction accuracy is not established; say so and separate the two predictions (2026-10-28)
 - The 2.0% held-out step-time MAPE is an aggregate. The per-type split already in paper 5.2.2 shows decode steps at
   34-38% (linear), 18-23% (MLP), 21-25% (GBT). TPOT is almost entirely decode steps, so 2.0% must not be quoted

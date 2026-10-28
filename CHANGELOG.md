@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.26.0 — Item 18's upper bound measured per model: 1.1-2.3% at 128K (2026-10-28)
+- bench_q64_piggyback_ub_20261028.py: if every row tile rode free inside a chunk CTA the gain equals the share of
+  attention time rows cost today. Chunk 2048 (32 q64 tiles) beside 32 rows, H200.
+  Qwen2.5-7B 4.50/5.22% at 32K and 1.07/1.33% at 128K (2-mode/4-mode); Llama-3.3-70B 10.20/9.51% and 2.33/2.26%;
+  GLM-4.5-Air 6.67/6.37% and 1.75/1.61%.
+- Capacity is NOT the constraint (32 q64 tiles vs 32 row tiles, each chunk tile far heavier) -- rows are simply
+  cheap: 0.08-0.41 ms against a 7-23 ms chunk.
+- At 128K the ceiling is below the 2.2-6.1% PDL already delivers and at/below the serving noise floor. Building it
+  is justified as EVIDENCE for the architectural claim, not as a claimable gain. Paper 5.1 carries the bound and
+  states that this is why we do not pursue fusion further.
+
 ## v2.25.0 — Session end state: cluster arms blocked on a launch-path regression (2026-10-28)
 - smoke3's workers never write worker_r0_g0.log: mn_node.sh exits before the launch redirect. smoke2 DID reach
   "16 workers healthy after 482 s" and failed only at the bench client, so the server path can work and this is a

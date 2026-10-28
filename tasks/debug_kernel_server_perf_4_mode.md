@@ -296,6 +296,23 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       merged steps; option 1 only removes a search we can already afford. Either way it is a learned predictor over
       our own fused step, not a borrowed formula.
     - Labels come from traces we already hold, so training needs no new GPU time.
+  - [x] **ITEM 18 UPPER BOUND MEASURED (2026-10-28, before writing any kernel, at the user's instruction).**
+    `unified/bench_q64_piggyback_ub_20261028.py` on the H200: if every row tile rides free inside a chunk CTA, the
+    gain is exactly the share of attention time the rows cost today. Chunk 2048 (= 32 q64 tiles) beside 32 rows.
+    | model (heads/kv-heads) | 32K 2-mode | 32K 4-mode | 128K 2-mode | 128K 4-mode |
+    |---|---:|---:|---:|---:|
+    | Qwen2.5-7B (28/4) | 4.50% | 5.22% | **1.07%** | **1.33%** |
+    | Llama-3.3-70B (64/8) | 10.20% | 9.51% | **2.33%** | **2.26%** |
+    | GLM-4.5-Air (96/8) | 6.67% | 6.37% | **1.75%** | **1.61%** |
+    - **Capacity is NOT the constraint.** A 2048-token chunk gives 32 q64 tiles against 32 row tiles, and a chunk
+      tile's work exceeds a row tile's by a wide margin, so every row fits in a freed warpgroup. The constraint is
+      that rows are cheap: 0.08-0.41 ms against a 7-23 ms chunk.
+    - **At 128K the ceiling is 1.1-2.3%, below the 2.2-6.1% PDL already delivers and at or below the serving noise
+      floor.** Best case is Llama-3.3-70B at 32K (10.2%), whose 64 query heads over 8 KV heads make each row tile
+      heavier.
+    - **Consequence for the decision:** implementing it is justified as EVIDENCE for the architectural claim ("even
+      the one overlap this hardware permits, with zero overhead, is worth 1-2% at long context"), not as a gain to
+      claim. Record the bound in the paper either way; build only if the compile test is cheap.
   - **ITEM 18 IN ONE SENTENCE (user, 2026-10-28): q128 cannot overlap with q16 inside a CTA because the two
     consumer warpgroups at ~168 registers each already take the whole register budget -- that is the measured
     1,436 B spill -- while q64 uses ONE consumer warpgroup and leaves room for a register-light q16 warpgroup

@@ -384,8 +384,13 @@ a 64-row tile can.** At 128 rows FA3 runs two consumer warpgroups and the regist
 one, and a 16-row tile needs only sixteen accumulator registers per thread. The freed warpgroup fits, and because
 the CTA is already resident this is immune to the SM-saturation argument above. Tiling a chunk at 64 rows instead of
 128 frees one warpgroup per tile, which over the four-mode steps of our replay could host **94.8%** of all row
-items, with the rows fitting entirely in 91.1% of steps (median 31 freed warpgroups against 13 rows). We report the
-reach; we have not built it, and claim no gain from it.
+items, with the rows fitting entirely in 91.1% of steps (median 31 freed warpgroups against 13 rows). Capacity is
+therefore not the limit. The limit is that the rows are cheap: if every row tile rode completely free, the step
+would shrink by **1.1 to 2.3% at a 128K cached prefix** (Qwen2.5-7B 1.1-1.3%, GLM-4.5-Air 1.6-1.8%, Llama-3.3-70B
+2.3%), rising to 4.5-10.2% at 32K where the chunk is cheaper. That is an upper bound with zero overhead assumed, and
+it is below what programmatic dependent launch already recovers. We report it because it completes the argument:
+the one overlap this architecture still permits is worth one to two per cent on long-context agentic serving, which
+is why we do not pursue fusion further.
 
 **Table 4: attention time of every design we could run, relative to ours, across four workloads.** Each column is
 a workload cell from the trace-sampled captures (24 captures each, time-weighted, every arm checked against an FP32

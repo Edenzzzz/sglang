@@ -329,9 +329,21 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       time for the router's TPOT prediction**, not chunk sizing -- where a threshold tolerates error ~1:1 and the
       linear model is sufficient (measured: a 5% model error moves the median chunk 6%). Two different predictions,
       two different answers, and the earlier "simple methods suffice" conclusion stands only for the chunk.
-    - **Next, zero GPU cost:** evaluate the step MLP's decode-step signed bias on the same chronological held-out
-      split, not just its MAPE. If its bias is small the router should use it; if its bias is also -13% the problem
-      is a missing feature (decode batch composition / KV-length distribution) rather than model capacity.
+    - **[!] BLOCKED, and the blocker is itself a finding (2026-10-28): the MLP the paper credits is not on disk.**
+      All three checkpoints under `tasks/perf_model/` -- `model.pt`, `lpt_model.pt`, `dmc_model.pt` -- carry the
+      SAME five features `['n_p', 'r_p', 'r_d', 'decode_bs', 'overlap']` and come from
+      `train_perf_model_mlp.py`; `overlap` has ~1e-8 standard deviation in all of them, i.e. it was constant in
+      training and is a dead input. **None of them is the "MLP with acceptance" that paper 5.2.2's table credits
+      at 3.4-4.0% on merged steps**, and no script under `tasks/perf_model/` saves such a model (only
+      `train_perf_model_mlp.py` calls `torch.save`; `fit_steptrace.py` fits an MLP in memory and discards it).
+      - **Consequences, both of which matter.** (1) The router cannot be given that MLP, because it does not
+        exist as an artifact -- so the "use the MLP for decode-step time" plan above needs the model refit and
+        SAVED first, from the traces on disk, which is zero GPU cost but is work rather than a lookup. (2) Paper
+        5.2.2 quotes a number from a fit whose artifact was never saved, so it is not currently reproducible;
+        either refit and save it, or drop the column. A reviewer asking for the model would find three copies of a
+        different one.
+      - Do NOT wire any of the three existing checkpoints into the rule or the router: their feature semantics are
+        unconfirmed and one input is dead, which is how a confidently wrong predictor gets deployed.
     - Until that lands, no TPOT-prediction accuracy claim appears in the paper, and 5.2.2's 2.0% aggregate must not
       be read as a TPOT number.
   - **Why not the alternatives, recorded so the choice is defensible:** a dynamic program over future steps (as in

@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.98.0 — The MLP the paper credits has no saved artifact (2026-10-28)
+- Checked all three checkpoints under tasks/perf_model/ (model.pt, lpt_model.pt, dmc_model.pt): identical five
+  features ['n_p','r_p','r_d','decode_bs','overlap'] from train_perf_model_mlp.py, with `overlap` at ~1e-8 sd in
+  every one, i.e. constant in training and a dead input. None is the "MLP with acceptance" that paper 5.2.2 credits
+  at 3.4-4.0% on merged steps, and no script there saves such a model -- fit_steptrace.py fits one in memory and
+  discards it.
+- Two consequences. The plan to give the router an MLP for decode-step time needs that model refit and SAVED first
+  (zero GPU cost, but work rather than a lookup). And 5.2.2 quotes a figure from a fit with no artifact, so it is
+  not reproducible: refit and save, or drop the column.
+- Recorded a do-not: none of the three existing checkpoints may be wired into the chunk rule or the router, since
+  their feature semantics are unconfirmed and one input is dead.
+
 ## v2.97.0 — Queue the alpha-3 chunk-rule retry; the driver fix is confirmed working (2026-10-28)
 - The health-poll fix takes effect per arm, since each arm is a fresh `python3 -u mn_run.py`. Confirmed on the
   next arm: `a6_tail_r1_ours` reported "16 workers healthy after 156 s" and launched its router -- the exact step

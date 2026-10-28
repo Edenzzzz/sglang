@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.03.0 — Queue the pdmux retry at both loads with MEM_FRAC lowered (2026-10-28)
+- `tasks/pd_colocation/mn_pdmux_retry_16g_20261028.sh`: PD multiplexing at alpha 3 and 6 with MEM_FRAC 0.70 -> 0.55.
+  pdmux captures CUDA graphs per SM group, so graph memory multiplies and the 0.70 carried over from the 8-GPU
+  driver is the suspected cause of the arm that started workers and served nothing.
+- The driver carries the reason this arm matters most: pdmux has the same SLO control as ours but no kernel and no
+  overlap schedule, attaining latency protection structurally by partitioning SMs, so it is the serving-level
+  leave-one-out for C1+C2. Registered expectation in the script: close on tail TPOT, behind on throughput; if it
+  matches on both, C1 and C2 do not survive at the serving level.
+- Chained last, behind the PD re-measurement and the alpha-3 chunk retry.
+
 ## v3.02.0 — pdmux reframed as the strongest baseline, which makes its failed arm blocking (2026-10-28)
 - Per the user: pdmux has "same SLO control, but no kernel/overlap schedule". It gives decode and layer-split
   prefill their own SM groups, so an arriving prefill cannot block a running decode row -- it attains the TPOT

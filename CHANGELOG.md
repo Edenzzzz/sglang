@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.67.0 — alpha 6 vs sglang prefill-prioritized: we win the means, lose the tails, bar not met (2026-10-28)
+- pp at alpha 6 (accept 1.795): chat 57.8% / 685 tok/s, TTFT p90 9.02 s, TPOT p90 94.9 ms, ITL p99 502.5 ms; agent
+  79.9% / 2012 tok/s, TPOT p50/p90 45.6/104.2, ITL p99 514.2 ms.
+- L1 vs pp: agent goodput +9.3%, chat TTFT p90 -62%, agent TPOT p50/p90 -11%/-6.1%, chat attainment +4.0 pts --
+  but chat ITL p99 +99% and agent ITL p99 +79%, chat TPOT p90 +10.9%. The inter-token tail is a genuine
+  regression and ours by construction (a prefill chunk folded into the verify forward lengthens the step), the
+  alpha-3 signature amplified ~4x. The tail-bounded chunk arm (stepcap=600) is queued precisely for this.
+- Bar NOT met at alpha 6: TPOT attainment +0.4..+4.0 pts against 30%, goodput +9.3% against 10%.
+- **The +9.3% is not usable yet:** pp's acceptance 1.795 is below our own 1.8 validity gate and ~9.4% under ours,
+  which costs it about 9% more forwards per output token -- the same order as the gap claimed. Must check the pp
+  workers' effective rope base before quoting it.
+
 ## v2.66.0 — EDF ordering flips sign at overload: +5.7% agent goodput, -24% chat TTFT tail (2026-10-28)
 - alpha 6 L1 vs L0 on 16 H20s (`mn_overload_decomp_16g_20261028.sh`, log /tmp/h20/mn_overload_r1.log, accept
   1.982 / 2.001): agent SLO goodput 2199 vs 2080 (+5.7%), chat TTFT p90 3.42 vs 4.50 s (-24%), agent TPOT p90 97.8

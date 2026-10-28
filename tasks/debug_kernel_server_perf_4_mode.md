@@ -284,7 +284,36 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       on its own.** C3's case therefore rests on the SLO-budgeted chunk layer on top of this ordering, which is
       what the tail-bounded arm tests.
     - Needs a second repeat before the +5.7% is quoted as more than directional.
-  - pp, mc and pdmux follow on the same cluster and window set.
+  - **Arm 3, pp (sglang's own prefill-prioritized schedule, its own chunk policy, upstream tree), accept 1.795:**
+    chat tight 57.8% (685 tok/s), TTFT p50/p90 0.21/9.02 s, TPOT p50/p90 35.6/94.9 ms, ITL p99 502.5 ms; agent tight
+    79.9% (2012 tok/s), not_issued 7088, TTFT p90 5.66 s, TPOT p50/p90 45.6/104.2 ms, ITL p99 514.2 ms.
+  - **L1 vs pp at alpha 6 -- we win the means and LOSE the tails, and the bar is still not met.**
+    | metric | L1 | pp | change |
+    |---|---:|---:|---:|
+    | chat attainment | 61.8% | 57.8% | +4.0 pts (at the noise floor) |
+    | agent attainment | 80.3% | 79.9% | +0.4 pts (noise) |
+    | agent SLO goodput | 2199 | 2012 | **+9.3%** |
+    | chat TTFT p90 | 3.42 s | 9.02 s | **-62%** |
+    | agent TPOT p50 / p90 | 40.6 / 97.8 | 45.6 / 104.2 | -11% / -6.1% |
+    | chat TPOT p90 | 105.2 ms | 94.9 ms | **+10.9% WORSE** |
+    | chat ITL p99 | 999.0 ms | 502.5 ms | **+99% WORSE** |
+    | agent ITL p99 | 919.8 ms | 514.2 ms | **+79% WORSE** |
+    | agent rounds never issued | 6699 | 7088 | 389 fewer |
+    - **The inter-token tail is a real regression, not noise:** both tenants' p99 ITL is about twice the baseline's.
+      This is the same signature as alpha 3 (chat p99 162.9 vs 130.8 ms, +25%) amplified roughly fourfold under
+      overload, and the mechanism is ours by construction -- our steps fold a prefill chunk into the verify forward,
+      so a step is longer and every resident row waits through it. It is exactly what a per-step latency bound would
+      fix, which is the tail-bounded chunk arm queued next (`stepcap=600`).
+    - **Bar at alpha 6 against pp: NOT MET.** TPOT attainment +0.4..+4.0 points (needs 30%); agent SLO goodput
+      +9.3% (needs 10%, and see the caveat below). Chat TTFT p90 -62% clears 30% easily but TTFT is the metric the
+      user ranks second.
+    - **CAVEAT THAT MAY ACCOUNT FOR MOST OF THE +9.3%: pp's draft acceptance is 1.795 against our 1.982, which is
+      BELOW our own validity gate of 1.8.** A 9.4% lower acceptance costs that arm about 9% more target forwards per
+      output token -- the same order as the goodput gap we are claiming. The upstream tree is the one that drops
+      `rope_theta`, and although this driver exports `ROPE_THETA=1000000`, the gap needs explaining before the
+      goodput number is used: check the pp worker logs for the effective rope base and re-run if it did not take.
+      Until then the +9.3% is NOT a usable result.
+  - mc and pdmux follow on the same cluster and window set.
 - **[x] ROPE-BASE DEFECT: THE SCOPE IS EVERY UPSTREAM-TREE BASELINE, INCLUDING THE PAPER'S HEADLINE PD BASELINE
   (verified 2026-10-28).** Loaded `ModelConfig("/dev/shm/w/qwen7b", model_override_args=<the YaRN override>)` under
   each tree on worker 0 (CPU only, mid-run, harmless):

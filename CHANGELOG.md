@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.25.0 — Queue stock PD on clean upstream, the documented configuration (2026-10-28)
+- `tasks/pd_colocation/mn_pdre_clean_16g_20261028.sh`: the r1 arms re-run with SGL_PY=up_clean/python instead of
+  up/python. mn_node.sh's header states stock PD requires clean upstream because the serving overlay's spec-v2
+  changes trip disagg prefill's spec_info identity assert, and r1 used the overlaid tree.
+- The script carries the r1 evidence and, more importantly, two pre-trust checks in its header, because a score
+  alone cannot distinguish a working arm from r1's: `accept=` must not be NONE (a failing transfer should still
+  leave acceptance lines, so NONE means nothing decoded or MTP is absent, and an arm without MTP is not the
+  baseline), and failed / lost_after_failure must both be 0.
+- Written as a new file and chained last, so no driver with arms in flight is patched.
+
 ## v3.24.0 — Broken PD arm root-caused: the KV transfer fails, not the rope override (2026-10-28)
 - Decode pod logged 2819 x "transfer failed for request" plus KVTransferError(bootstrap_room=...) aborts, while
   the prefill pod's Mooncake store set up and warmed successfully and all workers carry rope_theta 1000000. So

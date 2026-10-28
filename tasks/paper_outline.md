@@ -962,10 +962,15 @@ Table 6: CUDA graph count, capture memory and decode step time, ours vs PD-Multi
 > constant cannot be justified across loads and is not a policy a reader can transfer to another cluster or model
 > (section 5.2.3). Those arms are being re-run with the predicted chunk.
 >
-> As a **baseline**, the fixed 2048-token chunk stays. It is the simple, ad-hoc policy that a deployed system
-> actually uses, and a scheduler that sizes the chunk from a latency model has to beat it to be worth its
-> complexity -- so it is the comparison that matters most, not one to retire for being unprincipled. It is marked
-> here as potentially removable only if the final arm set makes it redundant beside sglang's own chunk policy.
+> The **definite** baselines are sglang's own three colocated policies, each with sglang's own chunk policy:
+> prefill-prioritized, mixed chunk, and PD multiplexing. Those stay in every table.
+>
+> The fixed 2048-token chunk is a **potential** baseline, to be cut if space is tight. Its value is internal: it
+> differs from our arm in one variable only -- where the chunk comes from -- and its draft acceptance matches ours
+> to within 0.5%, which makes it the clean control for the chunk-sizing study and the throughput-side endpoint of
+> the latency-throughput sweep. It is also the simple ad-hoc policy a deployed system actually uses, so a
+> model-driven chunk has to beat it to be worth its complexity. But it is a control rather than a system anyone
+> publishes, so it is the first row to go if the table does not fit.
 > Sizing the chunk from predicted latency is what FlowPrefill, PD-Multiplexing and SLOs-Serve all do; the
 > regression we measured was in our budget, not in the policy.
 

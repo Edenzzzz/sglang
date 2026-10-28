@@ -436,6 +436,18 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     sensitivity sweep on that one number, not another redesign of the budget.
   - Against mixed chunk, which shares our mechanism, a large tail win IS expected: mc's chat TPOT p90 is 102.0 ms
     with no bound either.
+- **[ ] PDMUX MUST BE MEASURED -- the user keeps it as a definite baseline (2026-10-28).** The paper's definite
+  baselines are sglang's three colocated policies with sglang's own chunk policy: prefill-prioritized, mixed chunk
+  and **PD multiplexing**. The fixed-2048 arm is only a POTENTIAL baseline, to be cut if space is tight (it is a
+  control, not a system anyone publishes; its value is internal, as the one-variable chunk-sizing control with
+  acceptance matched to 0.5%).
+  - **But pdmux is currently unmeasured at BOTH loads on this cluster:** its alpha-6 arm failed (`SCORE (none)`,
+    `accept=NONE`) and alpha 3 was never run. Since it is a definite baseline, that failure is now blocking rather
+    than cosmetic.
+  - Fix first, then re-run at alpha 3 and 6: check `worker_r0_g*.log` for `OutOfMemoryError` and the
+    `worker_*.bindfail*.log` files, and lower `MEM_FRAC` from the 0.70 carried over from the 8-GPU driver --
+    PD multiplexing captures CUDA graphs per SM group, which multiplies graph memory, so a capture-time OOM gives
+    exactly the observed signature of workers that start, never serve, and leave no acceptance lines.
 - **[ ] ALPHA 6 OVERLOAD DECOMPOSITION (running 2026-10-28 from 17:45, `mn_overload_decomp_16g_20261028.sh`, log
   `/tmp/h20/mn_overload_r1.log`).** Arms L0, L1, pp, mc, pdmux at load factor 6 on the 16 H20s; every earlier driver
   declared `for A in 3 6` and was stopped before leaving alpha 3, so this is the first measurement of the second

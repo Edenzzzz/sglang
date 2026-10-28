@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.01.0 — Baseline status: sglang's three policies definite, fixed-2048 potential (2026-10-28)
+- 6.1 now states it plainly: prefill-prioritized, mixed chunk and PD multiplexing stay in every table. The fixed
+  2048-token chunk is a potential baseline, first to be cut if space is tight -- it is a control rather than a
+  system anyone publishes, though internally it is the best one we have (one variable differs, acceptance matched
+  to 0.5%).
+- Consequence flagged as blocking: pdmux is a DEFINITE baseline and is currently unmeasured at both loads -- its
+  alpha-6 arm failed with no score and no acceptance lines, and alpha 3 was never run. Fix before re-running:
+  check for capture-time OOM and lower MEM_FRAC from the 0.70 carried over from the 8-GPU driver, since PD
+  multiplexing captures CUDA graphs per SM group.
+
 ## v3.00.0 — The 2048 arm is the baseline for the TPOT-control study (2026-10-28)
 - Recorded its three roles: the leave-one-out control for chunk sizing (identical tree, kernel, four-mode step,
   router and EDF -- only the chunk source differs), the throughput-side endpoint of the stepcap frontier, and the

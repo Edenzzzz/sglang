@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.09.0 — 5.1's baseline block lists all four designs; two-stream gets its own bullet (2026-10-28)
+- 5.1's bulleted baseline block had been scoped to naive FA3 + FA2 alone, so sglang's single varlen FA3 call and
+  POD's one-FA2-kernel structure were named in 6.2 but missing where the design is introduced. It now lists all
+  four: sglang's single call, POD's structure, naive serial (the fair baseline), and naive on two streams.
+- Two-stream overlap is now its own baseline in both 5.1 and 6.2 rather than a clause inside the naive bullet. It
+  is a distinct design -- the cheapest attempt at overlapping the roles, needing no plan -- and it bounds what
+  launch-level overlap can be worth.
+- The three properties of the naive split that C1 improves on (two plans, one query tile per FA2 launch, a separate
+  merge) are kept as a separate list, so baselines and the gap they leave are not interleaved.
+
 ## v3.08.0 — Our own earlier build is not a baseline (2026-10-28)
 - Removed "our own earlier two-plan build" from the baseline list at the head of 6.2. A system's own superseded
   version is not a comparison anyone else can check, and listing it beside external baselines inflates the

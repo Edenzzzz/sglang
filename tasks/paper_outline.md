@@ -597,11 +597,21 @@ A persistent FA2 executor, cluster-scheduled reduction over distributed shared m
 multicast and intra-CTA row hosting were all built and measured; none beats the default, and section 7 reports each
 with its numbers.
 
-**Baseline for this design.** Naive FA3 + FA2, which is what any implementation gets for free once it decides to
-split the roles:
+**Baselines for this design.** Four designs run the same mixed step, and section 6.2 measures all of them:
 
-- **Two kernels, two plans.** Stock FA3 runs the prefill rows; stock flashinfer FA2 runs the decode and verify
-  rows. Each splits KV its own way and merges its own partials, in its own launch.
+- **sglang's single variable-length FA3 call** -- its shipped default, and what mixed-chunk prefill runs. One tile
+  shape for both roles, so a one-token decode row is computed at the prefill chunk's 128-row width.
+- **POD-Attention's structure** -- one FA2 kernel covering the chunk and the rows together, which is the only way
+  to interleave them inside a kernel, and is FA2-only.
+- **naive FA3 + stock FA2, serial** -- the two roles as two separately planned kernels, one after the other. This
+  is the fair baseline our claim is measured against, because splitting by role is the obvious engineering step
+  that any implementation gets for free.
+- **naive FA3 + stock FA2 on two streams** -- the same two kernels launched concurrently, which is the cheapest
+  way to seek overlap between the roles and needs no plan at all.
+
+Three properties of the naive split are what C1 improves on:
+
+- **Two plans.** Each kernel splits KV its own way and merges its own partials, in its own launch.
 - **One query tile for the whole FA2 launch.** Stock FA2 picks it from its rows' average packed length -- 16, 64 or
   128 rows -- so it either pads one-token decode rows into 64-row tiles or runs 4-token verify rows on 16-row
   tiles. It cannot give two rows in one launch different tiles.
@@ -1077,10 +1087,12 @@ leave-one-out arms queued on the trace replay at alpha 3 (16 H20s) and the singl
 ### 6.2 Kernel microbenchmarks
 
 **Baselines.** All on the same captured steps, all FP32-checked:
-- **naive FA3 + stock FA2** -- stock FA3 on the prefill chunk and stock flashinfer FA2 on the decode and verify
-  rows, as two separately planned kernels, run serially and on two streams. This is the fair baseline and the one
-  our claim is measured against: splitting the roles is the obvious engineering step, and we report what the plan
-  adds on top of it.
+- **naive FA3 + stock FA2, serial** -- stock FA3 on the prefill chunk and stock flashinfer FA2 on the decode and
+  verify rows, as two separately planned kernels, one after the other. This is the fair baseline and the one our
+  claim is measured against: splitting the roles is the obvious engineering step, and we report what the plan adds
+  on top of it.
+- **naive FA3 + stock FA2 on two streams** -- the same two kernels launched concurrently. This is the cheapest
+  attempt at overlapping the roles, needs no plan, and bounds what launch-level overlap can be worth here.
 - **sglang's single variable-length FA3 call**, its shipped default, which is what mixed-chunk prefill runs.
 - **POD-Attention's structure**, one FA2 kernel covering the chunk and the rows, measured rather than argued away.
 

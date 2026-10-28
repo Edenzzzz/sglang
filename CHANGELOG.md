@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.32.0 — smoke6: last missing piece is the TraceLab trace file itself (2026-10-28)
+- smoke6 again completed chat end to end (300 requests, mean TTFT 53.6 ms, TPOT 3.4 ms, 0 tracebacks; the dataset
+  registration resolved). The agent client then failed with FileNotFoundError on
+  /dev/shm/w/workloads/tracelab/syfi_coding_trace.jsonl.gz: provisioning creates that directory and never fills it.
+- The only local file I had pushed before (/tmp/h200prov/tracelab.jsonl.gz) is the LENGTH-ONLY variant: no
+  timing_events. Pushing it would have silently turned the timestamp replay (AGENT_MODE=tracelab_ts) into a plain
+  length replay. Not used.
+- Located the real full release at workloads/tracelab/syfi_coding_trace.jsonl.gz in the repo checkout: 357,161
+  rounds, md5 465ccfb7d0d9, per-round timing_events, spanning 253.4 days. Two other local copies are older subsets
+  (135K and 140K rounds, different md5s). Verified all 48 window starts in tracelab_top_hours_20261026.json fall fully
+  inside the trace's span. Pushing it to pod 0 (the bench client's pod), with an md5 check on arrival.
+
 ## v2.32.0 — item 18's gating compile fails: q64 does not free a warpgroup and costs FA3 its wgmma pipelining (2026-10-28)
 - `unified/gate_q64_registers_20261028.py` compiles the co-compiled fused translation unit (FA3's wgmma mainloop and
   the FA2 `mma.sync` runners in one ptxas allocation) at FA3 tile 128 and 64 and reads registers and spill bytes. It

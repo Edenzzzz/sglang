@@ -379,56 +379,17 @@ Table 4 reports these arms. The conclusion is architectural and the opposite of 
 Hopper and later the gain comes from giving each role the executor its tile shape deserves, not from fusing them --
 and because CTAs occupy more of the SM with each generation, designs that need spare SM capacity should age badly.
 
-We also built and tested the one apparent exception to that conclusion, and it closes too, for reasons of its own.
-A warpgroup is the unit
-that must agree on an instruction shape, so if a chunk's CTA had a warpgroup with nothing to do, that warpgroup
-could issue `mma.sync` for 16-row decode and verify work inside a CTA the chunk has already made resident -- which
-would be immune to the SM-saturation argument above, since it needs no spare SM capacity. The attraction is that
-such a warpgroup appears to be free: a 128-row FA3 tile runs two consumer warpgroups and spends the whole register
-file, while a 64-row tile runs one. **The warpgroup is not free, and the mechanism's two constraints point opposite
-ways, so we do not claim it.**
-
-First, a smaller tile does not free a warpgroup; it shrinks the CTA. Both FA3 implementations we build against
-derive the consumer count from the tile, so 128 rows give one producer warpgroup and two consumers (384 threads)
-and 64 rows give one producer and one consumer (256 threads). Nothing is left idle inside a 384-thread CTA, so the
-warpgroup has to be added back by hand, as extra width the kernel asks for. Second, a smaller tile does not relieve
-the per-thread register pressure that the design rests on, because each consumer warpgroup owns 64 query rows at
-either tile; the arithmetic that makes 64 rows look cheaper describes the CTA's total register demand, not what one
-thread needs. Third, taking the 64-row tile actively costs the chunk. Compiling the kernel at 64 rows makes the
-compiler allocate 144 registers per thread rather than 168 and warn that `wgmma` instructions are serialized for
-want of registers -- in every build, including the control with no row work present at all -- whereas the 128-row
-build is spill-free and carries no such warning.
-
-What remains is the register cost of hosting the guest, and the compiler charges it whichever tile we choose.
-The chunk kernel compiled alone spills nothing; adding only the 16-row row mainloop to the same kernel takes it to
-7.5 KB of spill stores, and adding all three row tile classes to 33 KB. This is the same effect as Table 2's: one
-register budget per kernel, shared across code paths that never run together. The 16-row tile is register-light in
-its accumulator and not in its effect on that budget. Asking for the guest warpgroup as extra CTA width rather than
-re-using one of the chunk's lowers that cost without removing it, to 4.5 KB, because the guest's live range then
-hangs off a thread-index branch that returns; but a 512-thread CTA is allowed only 128 registers per thread, below
-the 168 the chunk's consumers need to stay spill-free, so the saving is paid for in the same currency.
-
-**Shared memory is the binding constraint, and it points the other way from the registers.** This is the one
-configuration in which the chunk's shared memory and the rows' are live at the same time. Everywhere else the two
-regions may overlap, because a CTA takes one role or the other, so a kernel asks for the larger of the two; here it
-must ask for their sum. On an H200 a CTA may opt into 232 448 bytes. The chunk role needs 163 920 bytes at a 128-row
-tile and 147 536 at 64 rows; the 16-row row mainloop needs 69 632. With alignment and the queue's own slot the
-request is **234 544 bytes at the 128-row tile, over the limit by 2 096**, and 218 160 at 64 rows, which fits with
-14 288 to spare. So the mechanism can only be launched at the 64-row tile -- and the 64-row tile is precisely where
-the compiler can no longer keep the chunk's `wgmma` asynchronous. **The tile that buys the shared memory is the tile
-that costs the chunk its tensor-core pipelining, and no tile does both.** That is not a budget to be tuned; it is
-why we stop here. We report the mechanism as built and measured at compile time -- register allocation, spill and
-shared-memory demand, each per named kernel -- and not as run: a design whose only launchable form degrades the
-chunk, for an upper bound of one to two per cent of the step, does not warrant the comparison.
-
-Even granting a perfect implementation, the ceiling is small, because the rows are cheap rather than
-capacity-starved. Tiling a chunk at 64 rows gives a median of 31 tiles against a median of 13 rows, so capacity
-exceeds demand twofold and 94.8% of all row items in our replay could in principle be hosted. But if every row tile
-rode completely free, the step would shrink by only **1.1 to 2.3% at a 128K cached prefix** (Qwen2.5-7B 1.1-1.3%,
-GLM-4.5-Air 1.6-1.8%, Llama-3.3-70B 2.3%), rising to 4.5-10.2% at 32K where the chunk is cheaper -- an upper bound
-with zero overhead assumed, and below what programmatic dependent launch already recovers. We report the attempt
-because it completes the argument: the last intra-SM overlap the architecture seems to permit turns out to cost the
-chunk more than the rows are worth, which is why we do not pursue fusion further.
+The last overlap the architecture seems to permit is to host the 16-row row mainloop in a warpgroup inside the
+chunk's own CTA, which needs no spare SM capacity. We built it and stopped at compile time, for three measured
+reasons. A smaller tile does not free a warpgroup: both FA3 implementations derive the consumer count from the tile,
+so a 64-row tile simply shrinks the CTA from 384 to 256 threads, and the guest has to be added back as extra width.
+Hosting the guest spills the chunk's registers whichever tile we pick (7.5 KB of spill stores against zero for the
+chunk alone at 128 rows). And shared memory decides it: with both roles live at once the CTA must request their sum,
+234 544 bytes at a 128-row tile against the H200's 232 448-byte limit, so it can only launch at 64 rows -- where the
+compiler serializes the chunk's `wgmma` for want of registers, in every build including the control with no rows.
+The tile that fits in shared memory is the tile that costs the chunk its pipelining. Even a perfect implementation
+would be worth at most **1.1-2.3% of the step at a 128K prefix** (4.5-10.2% at 32K), below what programmatic
+dependent launch already recovers, which is why we do not pursue fusion further.
 
 **Table 4: attention time of every design we could run, relative to ours, across four workloads.** Each column is
 a workload cell from the trace-sampled captures (24 captures each, time-weighted, every arm checked against an FP32

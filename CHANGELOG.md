@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.34.1 — H200 trial killed; item 18 closed at compile time; its paper section cut to match its (zero) gain (2026-10-28)
+- H200 trial bf7d041fb8313d8a: trial_status killed, completed 2026-10-28 04:02 UTC, no stop reason recorded. Not
+  re-forked: the reason (idle underutilization vs preemption) is unknown, H200 is scarce, and all remaining work is
+  multi-node on H20. Kernel results stand; the agent's ptxas numbers agree bit-for-bit between the dev box and the
+  trial on the default-build control.
+- Item 18 (q64 x q16 intra-CTA overlap) closed by the kernel worker at compile time. Premise refuted: q64 shrinks the
+  CTA (384 -> 256 threads) rather than freeing a warpgroup. The guest spills the chunk's registers at either tile
+  (7.5 KB vs 0). Shared memory decides it: both roles live at once need 234,544 B at q128 vs the 232,448 B limit, so
+  it launches only at q64, where ptxas serializes the chunk's wgmma (C7512) even with no rows present. Built behind
+  FUSED_Q64_PIGGYBACK=1 (flashinfer 03d3759), never run.
+- Paper 5.1's account of it cut from five paragraphs to one, per the instruction that writing be proportional to
+  gains. Duplicate changelog heading v2.32.0 renumbered v2.32.1.
+
 ## v2.34.0 — the piggyback's two constraints point opposite ways: only q64 can launch, and q64 is where wgmma serializes (2026-10-28)
 - The corrected mechanism now has numbers. `FUSED_Q64_PIGGYBACK=1` with the CTA widened by one warpgroup compiles to
   **128 reg / 4 460 B** spill at the 128-row chunk tile (512 threads) and **144 reg / 3 716 B + C7512** at 64 rows
@@ -40,7 +53,7 @@
   (135K and 140K rounds, different md5s). Verified all 48 window starts in tracelab_top_hours_20261026.json fall fully
   inside the trace's span. Pushing it to pod 0 (the bench client's pod), with an md5 check on arrival.
 
-## v2.32.0 — item 18's gating compile fails: q64 does not free a warpgroup and costs FA3 its wgmma pipelining (2026-10-28)
+## v2.32.1 — item 18's gating compile fails: q64 does not free a warpgroup and costs FA3 its wgmma pipelining (2026-10-28)
 - `unified/gate_q64_registers_20261028.py` compiles the co-compiled fused translation unit (FA3's wgmma mainloop and
   the FA2 `mma.sync` runners in one ptxas allocation) at FA3 tile 128 and 64 and reads registers and spill bytes. It
   drives `nvcc -c` directly rather than `cpp_extension.load`, which keys its cache on the extension name and serves a

@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.30.0 — True root cause of the orphaned servers: mn_kill.sh was never deployed (2026-10-28)
+- The GPU preflight caught it: after smoke4's "normal" teardown, all 16 GPUs were still at 86.7 GB, and gate5
+  aborted instead of OOMing. mn_run.py's teardown is `bash .../mn_kill.sh`, and that script was never pushed to the
+  re-provisioned cluster, so EVERY teardown failed with "exit status 2" (printed just before MNRUNDONE and ignored).
+  This corrects the earlier diagnosis that blamed only kill -9 on local drivers.
+- mn_summary.py and calibrate_h20.py were missing too: the stage-2 bundle was hand-picked. All three deployed; the
+  rule is now to deploy every script the drivers reference (grep the drivers for tasks/pd_colocation/*.{sh,py}).
+- mn_kill.sh verified: KILL_RC=0 on all four pods, all 16 GPUs free in ~30 s. Its header documents the identical
+  86 GB orphan failure from 2026-10-16. gate5 relaunched (PREFLIGHT_OK).
+
 ## v2.29.0 — mn_bench.sh always writes its done-marker; a crashed client no longer holds the cluster 90 min (2026-10-28)
 - mn_bench.sh ran `[ "$wait_status" -eq 0 ] || exit "$wait_status"` BEFORE `echo MNBENCHDONE`, so any client failure
   exited without the marker. mn_run.py polls for MNBENCHDONE for up to 5400 s before its teardown, so a client that

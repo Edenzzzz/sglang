@@ -47,9 +47,14 @@
      The earlier diagnosis ("mn_node.sh exits before the launch redirect") was wrong. `worker_r0_g0.log` was absent
      only because the retry loop renames each failed attempt to `worker_r0_g0.bindfailN.log`; all five of smoke3's
      attempts died with `torch.OutOfMemoryError ... 18.88 MiB is free. Process 4061538 has 84.60 GiB`.
-     - Cause: **all 16 GPUs held ~86.7 GB each by servers up to 3.2 h old** -- the 16-server sets of superset r2/r3
-       and smoke2. I had stopped those runs by `kill -9` on their LOCAL drivers, which never runs `mn_run.py`'s
-       teardown, so the remote servers kept running. Every launch since then OOMed against them.
+     - Cause: **all 16 GPUs held ~86.7 GB each by servers up to 3.2 h old.** CORRECTED ROOT CAUSE (found later the
+       same day): **`mn_kill.sh` was never deployed to this cluster**, so `mn_run.py`'s teardown
+       (`C.run_all(KILL)`, KILL = `bash .../mn_kill.sh`) failed with `exit status 2` on EVERY run -- not only the
+       runs I stopped with `kill -9`, which skipped teardown too. `mn_summary.py` and `calibrate_h20.py` were missing
+       for the same reason: the stage-2 bundle was hand-picked instead of derived from the scripts the drivers
+       reference. `mn_kill.sh`'s own header documents the identical 86 GB orphan failure from 2026-10-16.
+       All three are now deployed, and `mn_kill.sh` frees all 16 GPUs in ~30 s (verified). Deploy rule: every file
+       in `grep -ohE "tasks/pd_colocation/[a-z_0-9]+\.(sh|py)" mn_run.py mn_node.sh mn_bench.sh | sort -u`.
      - Fixed: killed the remote processes by PID (collected via `ps`, so the kill cannot match its own shell): 22 on
        pod 0, 12 on each other pod; all 16 GPUs read 0 MiB afterwards.
      - **Open validity check before ANY result from smoke4 / superset r4 is used (2026-10-28):** the baseline

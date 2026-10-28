@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.35.0 — Windowed TraceLab cut: same replay, 2.4x smaller, so it can actually reach the pods (2026-10-28)
+- The full release (357,161 rounds, 54 MB) was pushing at ~16% per 25 min, i.e. ~2.5 h, through the cluster's
+  base64-over-exec channel. tasks/pd_colocation/make_windowed_trace_20261028.py keeps only the whole sessions the
+  windowed replay can select: 689 of 4,265 sessions, 158,849 rounds, 22.3 MB (md5 42f498f35197).
+- Exact by construction, and checked: tracelab.py measures each window start in seconds after the trace's FIRST
+  round, so the session holding the earliest event is always kept -- dropping it would silently shift every window
+  onto different hours. Verified the origin is unchanged and that all 35,543 in-window rounds are present.
+- Pushing to pod 0; chain7 launches smoke7 (then superset r4) only if the arrival md5 matches.
+
 ## v2.34.1 — H200 trial killed; item 18 closed at compile time; its paper section cut to match its (zero) gain (2026-10-28)
 - H200 trial bf7d041fb8313d8a: trial_status killed, completed 2026-10-28 04:02 UTC, no stop reason recorded. Not
   re-forked: the reason (idle underutilization vs preemption) is unknown, H200 is scarce, and all remaining work is

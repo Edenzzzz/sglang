@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.64.0 — Item 18 built by replacing a consumer warpgroup (2026-10-28)
+- Item 18's register wall is not a wall, and 1c's "vise" is released. Replacing one of FA3's consumer warpgroups
+  with the 16-row row mainloop (flashinfer `FUSED_PIGGYBACK_REPLACE=1`, commit `0b4b342`) holds
+  `FusedFA3PersistentKernel` at 168 registers with 164 B of spill stores and no C7512 `wgmma`-serialized warning,
+  against 16 B for the same kernel with the guest compiled out and 33 424 B for the default q128 build.
+- 240 registers was never reachable: ptxas names `min(launch-bound cap, setmaxnreg value)`, and the cap at 384
+  threads with one CTA per SM is 65 536/384 -> 168. Measured on a standalone kernel, and `-maxrregcount` cannot
+  lift it. The 64 512-register figure is the physical distribution, which the replace build restores exactly.
+- The spill was a second inlined copy of the row mainloop on the FA3 role's backfill path, not the guest body;
+  that backfill is also unsound in this mode, since the guest holds the CTA's only row-mainloop shared-memory slot.
+- Shared memory, by compile-time `sizeof`: the launch asks 218 160 B of the 232 448 B opt-in maximum with
+  `NUM_STAGES` untouched at 2.
+- Still never run on a GPU: no correctness or timing number is claimed. `tasks/debug_kernel_server_perf_4_mode.md`
+  item 18 bullet 1e records the arms, the SASS check (396 `HMMA` + 48 `GMMA` in one kernel) and what the H200 run
+  needs.
+
 ## v2.63.0 — A more accurate step model would not change the chunk (2026-10-28)
 - `chunk_predictor.py --model-error e` scales the prediction and re-solves: the chosen chunk moves ~1:1 with model
   error (median 2 304 at -5%, 2 176 at 0, 2 048 at +5%). Swapping the ten-term linear model (4.7% MAPE) for the

@@ -2618,23 +2618,30 @@ issue `mma.sync` for 16-row rows alongside.
     flag they move past `FirstUserBarrier`.
   - **Only the 16-row runner may be inlined** (`FUSED_DRAIN_ONLY16=1`): the kernel's allocation is set by the
     widest body in it, and the 64/128-row classes stay on the separate FA2 executor.
-  **Status: COMPILED and measured for registers and shared memory (tests 1b and 1c above); never run.** What is
-  missing is correctness and a timing, and neither is worth the GPU hours given 1c: the launchable configuration is
-  the one whose chunk loses `wgmma` pipelining, so the mechanism's best case is bounded above by an upper bound of
-  1.1-2.3% at 128K while its cost to the chunk is unbounded and unmeasured.
+  **Status: COMPILED and measured for registers and shared memory (tests 1b, 1c and 1e above); never run.** The
+  build to run is 1e's -- replace a consumer (`FUSED_PIGGYBACK_REPLACE=1`), which keeps the allocation at the q128
+  build's 168 registers, costs 148 B of spill over the role-alone control and no longer serializes FA3's `wgmma`.
+  What is missing is correctness and a timing. The reason to spend GPU hours is now reason 4 alone, not 1c: the
+  mechanism's best case is bounded above by 1.1-2.3% at 128K and 4.5-10.2% at 32K, so a correctness run is cheap
+  and a serving claim is not available either way.
   `unified/run_q64_piggyback_gate_20261028.sh` waits for the H200 and rebuilds both arms there; the host did not
   return before the session ended (ssh refused for over an hour), so that confirmation is still OPEN -- though 1d
   shows the two toolchains agree bit for bit on the shared arm, so it is a check rather than a dependency.
 - **Standing verdict (2026-10-28): CLOSED as proposed, and it should not be claimed as a gain.** Four independent
   reasons, in order of strength:
-  1. **The two constraints point opposite ways (1c).** The piggyback can only be LAUNCHED at the 64-row chunk tile
-     (at 128 rows the shared-memory request is 234 544 B against a 232 448 B maximum), and the 64-row tile is the
-     one where ptxas reports it can no longer keep the chunk's `wgmma` asynchronous. There is no tile that is both
-     launchable and leaves FA3 intact.
+  1. **[superseded by 1e] The two constraints were read as pointing opposite ways (1c).** The launch constraint
+     stands: only the 64-row chunk tile fits (at 128 rows the request is 234 544 B against a 232 448 B maximum).
+     The register half does not. Replacing a consumer rather than widening the CTA holds the allocation at 168
+     registers and removes the `wgmma`-serialized warning, so there IS a configuration that is both launchable
+     and leaves FA3's pipelining intact -- measured in 1e, still unrun on a GPU.
   2. The mechanism's premise does not hold -- q64 halves the CTA instead of freeing a slot, so the guest warpgroup
-     is extra width the kernel has to ask for, and per-thread register pressure is unchanged either way.
-  3. Hosting even the narrowest guest turns a spill-free FA3 kernel into one that spills: 7 528 B at the same CTA
-     width, 4 460 B with the CTA widened (and then at 128 registers per thread instead of 168).
+     is extra width the kernel has to ask for, and per-thread register pressure is unchanged either way. (1e takes
+     the width out of FA3's own 12-warp CTA instead of asking for more, which is what makes the register numbers
+     above come out at the q128 build's.)
+  3. **[superseded by 1e]** Hosting even the narrowest guest was measured to turn a spill-free FA3 kernel into one
+     that spills (7 528 B at the same CTA width, 4 460 B widened, at 128 registers per thread). In the replace
+     build the guest's marginal cost is 148 B of spill at 168 registers; what carried the earlier numbers was a
+     second inlined copy of the row mainloop on the FA3 role's backfill path.
   4. **Even a perfect implementation is bounded at 1.1-2.3% of the step at a 128K prefix and 4.5-10.2% at 32K**
      (the upper bound below, `unified/bench_q64_piggyback_ub_20261028.py`), because the row work is ~1% of
      attention time where real steps live. Rows are cheap, not capacity-starved: a 2048-token chunk is 32 q64

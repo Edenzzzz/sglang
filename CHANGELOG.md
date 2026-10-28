@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.95.0 — The 2048 constant matches rung L0; our chunk arm failed to serve (2026-10-28)
+- `c2048` (our tree, A6, four-mode, router, EDF, fixed 2048 chunk), accept 1.994, alpha 3: chat 90.6% / 1451 tok/s,
+  TPOT p50/p90 11.2/31.6 ms; agent 93.8% / 2473 tok/s, TPOT p50/p90 18.0/41.1 ms. That lands on top of rung L0
+  (91.2% / 93.8% / 2493, 10.8/29.8) with every difference inside the noise floor -- so the constant is a strong
+  baseline and the rule must beat a configuration that already matches sglang's own chunk policy.
+- The `:life` + `stepcap=600` arm produced accept=NONE and no score. The patched scheduler did NOT crash: the
+  worker log ends "fired up and ready to roll" with no traceback, and no acceptance line means nothing was served
+  -- a client-side or bench-start failure for that arm alone, since c2048 ran right after on the same cluster.
+- Diagnostics recorded in order (bench logs and the unconditional MNBENCHDONE marker; whether all 16 workers
+  reached healthy; whether the new SLO_CHUNK spec parses in the DEPLOYED tree, since the config is parsed lazily
+  on first call and a bad field would raise inside the scheduler loop after the server reports ready).
+- The SLO-budgeted chunk still has no measurement: four attempts, three invalidated by bugs since fixed and this
+  one by an arm that never served. Untested, not disproven.
+
 ## v2.94.0 — A single calibration constant does not fix the decode bias: it is load-dependent (2026-10-28)
 - Fitted one multiplicative factor on the chronologically first half of 73 774 decode steps (x1.1602) and validated
   on the second: held-out bias -13.3%, unchanged from the uncalibrated -13.0%. Train bias +15.0% against a

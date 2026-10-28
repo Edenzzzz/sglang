@@ -254,6 +254,32 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     (`ROPE_THETA`) and `mn_run.py` (`ROPE_THETA` in the env string).
   - Push files with `Cluster(SID, cp, nodes=[f"worker-{i}" for i in range(NPODS)])`; without `nodes=` every call
     goes to one default instance that is not even one of the workers.
+- **[ ] TAIL-BOUNDED CHUNK ARM, alpha 3: OUR ARM FAILED AGAIN; THE 2048 BASELINE RAN (2026-10-28,
+  `mn_tailchunk_16g_20261028.sh`, log `/tmp/h20/mn_tailchunk_r1.log`).**
+  - **`c2048` (our tree, A6, four-mode, router, EDF, fixed 2048-token chunk), accept 1.994:** chat tight 90.6%
+    (1451 tok/s), TTFT p50/p90 0.07/0.73 s, TPOT p50/p90 11.2/31.6 ms; agent tight 93.8% (2473 tok/s),
+    not_issued 1691, TTFT p50/p90 0.50/3.73 s, TPOT p50/p90 18.0/41.1 ms. Duration 1815 s.
+    - **The constant is a strong baseline, as the user predicted:** it lands on top of rung L0, which uses sglang's
+      own chunk policy (91.2% / 93.8% / 2493 tok/s, chat TPOT p50/p90 10.8/29.8) -- every difference inside the
+      noise floor. So the chunk rule has to beat a configuration that already matches L0, not a weak straw man.
+  - **`ours` (the same arm with `:life` + `stepcap=600`) FAILED: `accept=NONE` and no `SCORE PAPER` line.** The
+    server is NOT the cause and the patched scheduler did not crash: `worker_r0_g0.log` ends with "The server is
+    fired up and ready to roll!" and contains no traceback. No `accept len:` line means no decode ran, so no
+    requests were served -- a client-side or bench-start failure for that arm only, since `c2048` ran immediately
+    afterwards on the same cluster.
+  - **Next diagnostics, in order (do not re-run the ladder blind):**
+    1. `mn_bench.log` and `bench_agent.log` / `bench_chat.log` in that arm's directory, plus the `MNBENCHDONE
+       status=` marker -- that marker was made unconditional precisely so a crashed client is visible.
+    2. Whether all 16 workers reached healthy for this arm: a partially healthy cluster leaves the bench waiting on
+       the release barrier and produces exactly this signature (server up, nothing served). Check
+       `worker_*.bindfail*.log` and the per-pod health count in the driver log.
+    3. Whether `SLO_CHUNK` with the new `stepcap=600:life` spec parses in the deployed tree: the config is parsed
+       lazily on the first call, so a bad field would raise inside the scheduler loop rather than at startup, and
+       the arm would serve nothing while the server still reported ready. `test_slo_chunk_rule.py` covers the
+       parse offline -- run it against the DEPLOYED file, not the local one.
+  - **Standing position unchanged: the SLO-budgeted chunk still has no measurement.** Four attempts, three of them
+    invalidated by bugs since fixed, this one by an arm that never served. The policy remains untested rather than
+    disproven.
 - **[ ] TPOT PREDICTION ACCURACY IS NOT ESTABLISHED, and the paper already carries the evidence (user asked to
   verify it, 2026-10-28).** The quoted 2.0% held-out step-time MAPE is an AGGREGATE over step types, and the
   per-type split in paper 5.2.2 shows decode steps are by far the worst: **linear 34-38%, MLP 18-23%, GBT 21-25%**.

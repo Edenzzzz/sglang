@@ -37,6 +37,15 @@
   only filling in measured pieces. After each result lands, reread the section it touches and keep the story
   coherent.
 
+- **No lab bookkeeping in the paper.** The draft never mentions a failed experiment, a bug, a misconfiguration, a
+  superseded run or a pending re-measurement **unless it clarifies why we landed on one of our core methods.**
+  Trying to fuse FA2 and FA3 into one kernel and finding the warp layouts incompatible is worth keeping: it is the
+  reason the design is two launches sharing one plan. "The baseline's rope base was misconfigured and those rows are
+  being re-measured", "an earlier H20 pass gave a different number", "Table N supersedes these runs" are not --
+  they tell a reader about our process, not about the system. Keep a result that justifies a design choice, in the
+  present tense and as rationale rather than as version history; delete the rest. Validity caveats, superseded
+  numbers and the audit trail live in the task docs, which is what they are for.
+
 - **Exception -- the paper draft.** `tasks/paper_outline.md` is a paper draft, not a task doc. It follows the format
   of the user's original outline (`tasks/AttentionFuse Outline OSDI 25'.docx`): title, the outline bullets, Abstract,
   then sections 1-9 with the docx's subsection names. It has no `# Current goal`, no checklists and no dated

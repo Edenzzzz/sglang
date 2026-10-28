@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.61.0 — No lab bookkeeping in the paper (2026-10-28)
+- New CLAUDE.md rule: the draft mentions a failed experiment, bug, misconfiguration, superseded run or pending
+  re-measurement only when it clarifies why we landed on a core method. The FA2/FA3 fusion failing on warp layout
+  qualifies -- it is why the design is two launches sharing one plan. A baseline's misconfigured rope base does
+  not; that belongs in the task docs.
+- Removed from the draft accordingly: the model-fidelity caveat paragraph in §6.4, "Status of the measurements in
+  section 6" (which runs are pending a re-measurement), the superseded single-node configuration result, two
+  "an earlier H20 measurement supersedes" notes, and the hint at what a broken model's acceptance looks like.
+- Kept, reframed from version history into design rationale: why the slack bank is uncapped.
+- Tables renumbered 1-21 to close the gap the deletions left.
+
 ## v2.60.0 — Paper: readable for a first external read (2026-10-28)
 - §5.1 renamed "Fused Kernel for Fine-Grained Tile Dispatch": the design is no longer a persistent kernel, and the
   old title named a mechanism that section 7 shows does not win.

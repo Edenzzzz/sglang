@@ -40,6 +40,19 @@
        `SMOKE_FAIL` and points at the pod-side `bench_agent.log`. Log `/tmp/h20/smoke_then_sweep.log`. This
        removes the failure mode that cost r1, r2 and r3 -- a sweep running for 40 minutes against dead clients
        while the driver log looked healthy.
+   - **[!] Fifth and sixth faults, both mine, in the smoke runs themselves (2026-10-28):**
+     1. **Both smoke attempts used `RUN_TAG=_smoke1`**, so they wrote into ONE directory
+        (`coloc_sgl_mtps_hc_smoke1`) and their logs interleaved -- which made the diagnosis read as a contradiction
+        (`ls` showed `worker_r0_g0.log` while `grep` reported it missing, and `bindfail5` logs appeared from port
+        contention between the two overlapping attempts). Fixed: the smoke driver now takes `SMOKE_N` so each
+        attempt gets its own tag and directory.
+     2. **My GPU-clearing `pkill -9 -f sglang.launch_server` raced a live launch**: `supervise_r0_g0.log` records
+        `mn_node.sh: line 308: 43273 Killed`, i.e. the worker was SIGKILLed while starting. Clearing GPUs and
+        starting a run must be separated, and the clear must be confirmed complete (no compute apps) BEFORE the
+        launch -- not interleaved with it.
+     - Verified the override block itself is NOT at fault: executing the real `mn_node.sh` block on pod 0 yields
+       `{"rope_scaling":{...},"rope_theta":1000000}` and `python3` is present, so the `BAD_OVERRIDE_JSON` guard is
+       not what stopped the launch.
    - **[!] Fourth blocker, caught by the smoke arm in five minutes: `rope_theta` was nested in the WRONG PLACE.**
      Qwen2.5's `config.json` carries `rope_theta: 1000000.0` as a TOP-LEVEL field, a sibling of `rope_scaling`, not
      a member of it. My override put it inside the `rope_scaling` dict, which corrupted the context-length

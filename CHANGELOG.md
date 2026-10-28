@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.08.0 — Two more self-inflicted faults in the smoke runs (2026-10-28)
+- Both smoke attempts reused RUN_TAG=_smoke1, so they shared one directory and interleaved logs, making the failure
+  read as a contradiction (ls showed worker_r0_g0.log while grep reported it missing; bindfail5 logs came from port
+  contention between the overlapping attempts). The smoke driver now takes SMOKE_N for a distinct tag per attempt.
+- The GPU-clearing pkill raced a live launch: supervise_r0_g0.log records "mn_node.sh: line 308: 43273 Killed".
+  Clearing GPUs must complete and be confirmed before a launch, never interleaved with one.
+- Verified the override block is NOT at fault: running the real mn_node.sh block on pod 0 emits
+  {"rope_scaling":{...},"rope_theta":1000000} and python3 is present, so the BAD_OVERRIDE_JSON guard did not stop
+  the launch.
+
 ## v2.07.0 — CORRECTION: cross-role backfill with tma_store_wait ships in A6 and is measured (2026-10-28)
 - An earlier entry this session called cross-role backfill "untested" and bounded it analytically. That was wrong,
   written without re-reading the A5.6 record. The shipped A6 kernel DOES do cross-role backfill: the FA3 launch

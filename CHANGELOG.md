@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.13.0 — Motivation is the agentic workload's shape, not the tenant mix (2026-10-28)
+- The motivation had been narrowed to "a cluster serves chat and agents at once", which is a complication rather
+  than the reason. Rewritten around the workload: an agent session is long decode interleaved with small prefills
+  -- a median of under a thousand uncached tokens appended to a prefix of tens to hundreds of thousands the
+  previous round already computed -- and three consequences make the fixed role split the wrong shape for it:
+  the KV cache is transferred over and over, scaling with session history rather than with the tokens the round
+  added; the prefill-to-decode ratio is a static configuration while the demand swings within minutes as tool
+  calls land; and provisioning for either phase wastes the other's throughput, since idle capacity cannot be lent
+  across the role boundary.
+- The multi-class mix (agentic sessions beside chat turns) is now what makes all three worse, because no deployed
+  policy knows which class is waiting -- a second-order point rather than the headline.
+
 ## v3.12.0 — Replace the "prefill-width tiles" shorthand with what it means (2026-10-28)
 - "rows stop paying prefill-width tiles" assumed the reader already knows which work has small query tiles and
   that the chunk's tiles are the large ones. Now stated: the small-query-tile work -- decode rows, draft steps and

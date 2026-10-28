@@ -4,11 +4,23 @@
 
 - **goal** - meet per-tenant SLOs while maximizing throughput for mixed chat + agent LLM workloads, without a fixed
   prefill:decode node ratio
-- **motivation** -- one cluster now serves an agentic coding product and a chat product at once (Codex-style
-  sessions beside ChatGPT-style turns), whose prompt lengths and latency targets differ by an order of magnitude:
-  an agent round carries tens to hundreds of thousands of cached tokens and tolerates seconds of time-to-first-token,
-  a chat turn carries a few hundred and tolerates neither. Every deployed answer meets one of throughput or latency
-  and gives up the other, and none of them knows which tenant is waiting:
+- **motivation** -- agentic serving does not look like the workload disaggregation was designed for. An agent
+  session is **long decode interleaved with small prefills**: each round appends a tool result or a short
+  instruction -- a median of under a thousand uncached tokens -- on top of a prefix of tens to hundreds of
+  thousands that the previous round already computed, then decodes for a long time. Three consequences, and they
+  are why the fixed role split is the wrong shape for it:
+  - **the KV cache is transferred over and over.** Disaggregation computes each round's prefill on a prefill node
+    and must ship that round's growing prefix to a decode node; the next round repeats it. The transfer scales
+    with the session's history, not with the few hundred tokens the round actually added.
+  - **the prefill-to-decode ratio is a static configuration, and the workload is not.** An agent session's own
+    demand swings between prefill-heavy and decode-heavy within minutes as tool calls land, and the mix across
+    sessions shifts on top of that, so no single P:D split is right for long.
+  - **provisioning for either phase wastes the other's throughput.** Whichever side is over-provisioned sits idle
+    at the moment the workload wants the other, and the idle capacity cannot be lent across the role boundary.
+
+  Serving several request classes on one cluster -- agentic coding sessions beside chat turns, whose lengths and
+  latency targets differ by an order of magnitude -- makes all three worse, because no deployed policy knows which
+  class is waiting. Every existing answer meets one of throughput or latency and gives up the other:
   - **mixed-chunk prefill (sglang on FA3)** -- costs throughput: every decode / verify row pays prefill-width attention tiles in the one
     varlen call; chat waits behind long agent prefills (chat TTFT 4.5-23 s on one H200)
   - **prefill prioritized** -- costs the running requests' time-between-tokens: an arriving prefill takes the step's budget before the decode rows, so requests already generating stall; time-between-tokens blows up

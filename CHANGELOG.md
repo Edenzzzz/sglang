@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.37.0 — Fix the tracer so decode steps record their KV length (2026-10-29)
+- `tasks/pd_colocation/apply_steptrace_decode_kv_20261029.py`: where `seq_lens_cpu` is absent -- which it is on the
+  decode path -- the tracer fell back to an EMPTY list, so every row's KV length read as 0 and `dkv` accumulated 0
+  on all 73 770 decode steps. It now falls back to the requests themselves (prompt + output tokens is exactly a
+  decode row's KV length), which adds no device synchronisation and so does not perturb the measured path.
+- Matched by regex on the captured indentation rather than a hard-coded column: the first version hard-coded one
+  and failed against a fixture built from the deployed tracer block, which is the silent-failure shape that has
+  cost arms repeatedly. Verified to apply, parse and be idempotent on that fixture.
+- This is what unblocks point 3 of the four-points doc. Order after applying: re-trace one arm with
+  SGLANG_STEP_TRACE=1, confirm DECODE lines carry dkv > 0, refit, then re-measure the decode-step SIGNED bias on a
+  chronological split. Only a bias surviving that is evidence against the perf-model premise.
+
 ## v3.36.0 — The decode bias is a DEAD INPUT: dkv is zero on every decode step (2026-10-29)
 - Counted over the alpha-3 traces: DECODE 73 770 steps with 0 having dkv > 0; EXTEND 14 162 steps with 10 189
   having dkv > 0 (up to 100 375). The tracer records the decode rows' KV length on mixed/prefill steps and never on

@@ -6224,3 +6224,38 @@ exactly the composition our tile dispatcher is built for.
   sub-millisecond chat-dominant steps where our mixed step takes exactly the SUM of its two roles -- the signature
   of host work on the critical path between launches -- and where the host plan costs 0.5-12 ms against 0.4-4 ms
   kernels.
+
+## Merging the draft model's attention into the target forward: the blocker is dataflow, not dimensions (2026-10-29, user)
+
+**I claimed EAGLE3's draft cannot merge into the target forward because it is a separate model. That is wrong.**
+Attention is weight-free: it is Q.K^T.V over a KV cache, and the kernel does not care which model produced Q, K
+and V. Head dimension is already a template parameter (`HEAD_DIM_VO`) and head count a runtime one, and the
+dispatcher already mixes tile classes of different query widths in one plan. **Two geometries in one launch is the
+same kind of parameterization, not a different problem.** Being a separate model blocks sharing a GEMM, which has
+weights; it does not block sharing an attention launch.
+
+**The real constraint is one level up, in the dataflow.** The draft's layer-k attention needs the draft's layer-k
+Q/K/V, which comes out of its layer-(k-1) MLP. So merging the two models' attention means **interleaving their
+layer loops** so both models' layer-k attention is ready at the same point, rather than running one forward and
+then the other. That is a scheduler and executor change, not a kernel limitation.
+
+**Delayed verification is what makes it tractable.** Hold iteration i's verify rows until i+1, and that iteration
+carries the previous step's verify work alongside the current step's draft and prefill -- **work types that are
+mutually independent**, so there is no ordering constraint between them to violate. The remaining engineering is
+interleaving two layer loops and having one plan cover two geometries. That is the path to a genuine four-way
+batch, and it is why stages 1 and 2 must be remeasured only AFTER the schedule changes: today's captures carry
+prefill-plus-verify compositions and would understate a four-way batch.
+
+**Sequencing, so no cluster time is wasted:**
+1. Settle per draft type whether the draft forward can interleave -- MTP shares the target's weights, EAGLE3 does
+   not, but by the argument above that affects the GEMMs and not the attention merge.
+2. Implement delayed verification: hold verify rows one iteration.
+3. Interleave the layer loops and extend the plan to two geometries.
+4. Regenerate stage-1 captures FROM that schedule, then rerun the kernel ladder.
+5. Rerun the stage-2 single-node A/Bs.
+
+**Record of being wrong here, because the pattern matters more than the instances.** Three successive claims about
+this were wrong -- that draft and verify run sequentially with no overlap, that they overlap across requests in
+one launch, and that EAGLE3 cannot merge at all. Each came from reasoning off a partial signal (an API's call
+order, a tile-class count, the word "model") instead of from what attention actually is and what
+`forward_mixed_spec` actually documents.

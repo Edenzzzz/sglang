@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.87.0 — Draft/target attention merge is blocked by dataflow, not dimensions (2026-10-29)
+- Corrected: I claimed EAGLE3's draft cannot merge into the target forward because it is a separate model.
+  Attention is weight-free -- Q.K^T.V over a KV cache -- so the kernel does not care which model produced Q, K, V.
+  Head dim is already a template parameter and head count a runtime one, and the dispatcher already mixes tile
+  classes in one plan. Separate weights block sharing a GEMM, not an attention launch.
+- The real constraint is dataflow: the draft's layer-k attention needs its own layer-k QKV, so merging means
+  interleaving the two models' layer loops rather than running one forward then the other. Scheduler and executor
+  work, not a kernel limitation.
+- Delayed verification makes it tractable: holding iteration i's verify rows until i+1 puts the previous verify
+  alongside the current draft and prefill, which are mutually independent, leaving only the interleaving and a
+  plan covering two geometries.
+- Sequencing recorded so no cluster time is wasted: change the schedule FIRST, then regenerate stage-1 captures
+  from it, then rerun the ladder and the stage-2 A/Bs. Today's captures carry prefill-plus-verify compositions and
+  would understate a four-way batch.
+
 ## v3.86.0 — Point 3 measured: decode-step prediction is 9.4% MAPE, not 29% (2026-10-29)
 - 3598 decode steps with real dkv, scored against the fitted model: signed bias -5.2%, MAPE 9.4% overall; first
   half +2.0% / 6.0%, chronological held-out half -12.5% / 15.0%.

@@ -5954,6 +5954,19 @@ lives in the FA2 launch, so FA3's split partials are reduced only once the FA2 k
 little or no work, that is a launch the step waits on for almost nothing. **The user's instruction is that neither
 of these appears in the paper: they are implementation-level optimizations, not contributions.**
 
+0. **DONE and gated: skip the merge tail, and its grid-dependency barrier, when there is nothing to reduce**
+   (`skip_empty_merge_tail_20261029.py`). The FA3 split partials are reduced BY THE FA2 KERNEL, which in the static
+   path ends with `cudaGridDependencySynchronize()` followed by `UnifiedMergeFA3Tail`. Under PDL that barrier is
+   where a CTA waits for the PREVIOUS kernel, so the old sequence was: FA2 CTAs launch early, run their tiles, then
+   **block holding their SMs until the whole FA3 grid completes.** On a prefill-dominated step FA3 is the long pole,
+   so those CTAs occupy SMs that FA3's own CTAs could use -- contention, not merely latency, which fits a fixed
+   0.38-1.02 ms cost better than a bare barrier would. The realistic-chunk plans report `fa3_merge_reqs = 0`, so
+   the tail had nothing to reduce and the barrier was paid for nothing. Guarding on `num_fa3_merge_reqs > 0` lets
+   those CTAs fall off the end of the kernel and retire, releasing their SMs; it also covers the CTAs that a
+   cluster-sized persistent grid leaves with no items at all, which previously still ran to the barrier and waited.
+   **Correctness gate: 10 of 10 captures PASS, 0 failures** -- including all six toy-chunk captures where
+   `fa3merge=1`, which is the control showing the split path is unchanged where partials really exist. Timing
+   against the 0.937-0.972x baseline (sub-1% spreads) is running.
 1. **Use the default merge schedule when the plan has no FA2 tiles.** The dispatch site is
    `unified_dispatch_ext.cu:1115`, where `only16` already specialises the launch on the FA2 class mix:
    `const bool only16 = pp.num_fa2_items0 == 0 && pp.num_fa2_items1 == 0;`

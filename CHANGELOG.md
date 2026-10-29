@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.70.0 — Skip the FA3 merge tail and its barrier when there is nothing to reduce (2026-10-29)
+- Implemented, not just measured. The FA3 split partials are reduced by the FA2 kernel, which in the static path
+  ends with cudaGridDependencySynchronize() then UnifiedMergeFA3Tail. Under PDL that barrier is where a CTA waits
+  for the previous kernel, so FA2 CTAs launched early, ran their tiles, then blocked HOLDING THEIR SMs until the
+  whole FA3 grid finished -- SMs that FA3's own CTAs could use on a prefill-dominated step. That is contention
+  rather than latency and fits the measured fixed 0.38-1.02 ms better than a bare barrier.
+- The realistic-chunk plans report fa3_merge_reqs = 0, so the tail had nothing to reduce and the barrier was paid
+  for nothing. Guarding on num_fa3_merge_reqs > 0 lets those CTAs retire and release their SMs, and also covers the
+  CTAs a cluster-sized persistent grid leaves with no items at all, which previously still waited.
+- Correctness gate: 10 of 10 captures PASS, 0 failures, including all six toy-chunk captures where fa3merge=1 --
+  the control showing the split path is byte-for-byte unchanged where partials exist. Timing in progress against a
+  0.937-0.972x baseline whose spreads are under 1%.
+- Implementation-level; deliberately not described in the paper.
+
 ## v3.69.0 — Realistic chunk + agent-dominant rows: 2.8-6.3% slower, spreads under 1% (2026-10-29)
 - 4096-token chunk over a 65536-token prefix with 75% of rows at 64K-200K, three repeats: 0.972x, 0.957x, 0.956x
   and 0.937x against sglang's single attention call, and 0.896-0.949x against v3. Every spread under 1%, so this is

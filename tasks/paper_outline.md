@@ -165,7 +165,7 @@ admitting it.
 - **SLO control without disaggregation.** A fused step has a predictable duration, so a worker runs prefills in
   deadline order and a router admits each request to the highest-cache-hit node its step-time model says can still
   meet every tenant's targets.
-- **An evaluation on concurrently mixed, differently-SLO'd traffic.** We replay TraceLab's agentic coding sessions
+- **Evaluation on realistic mixed agentic workloads simulating industry scale under SLO constraints.** We replay TraceLab's agentic coding sessions
   on their real arrival timestamps, concurrently with ShareGPT chat under a far tighter target, and sweep load
   until both tenants break -- the case where a policy that cannot tell the two apart fails. On 16 GPUs
   AttentionFuse holds 90.9% chat and 93.9% agent attainment at capacity, against 50.5% and 64.9% for conditional

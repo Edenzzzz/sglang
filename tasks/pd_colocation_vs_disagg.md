@@ -2273,6 +2273,35 @@ then just noise on a quantity the cap barely moves.
 budget cannot work on this workload; and that a more accurate step model would optimise the wrong objective. None
 of those were tested, because what was measured was a rule that starves prefill 41% of the time.
 
+### The budget must reject prefill only when running requests need ALL capacity (SLOs-Serve section 4.1)
+
+The floor below is a backstop, not the fix. The structural defect is that the budget is a **minimum over resident
+rows of their slack**, so one row in trouble vetoes prefill for the whole step. SLOs-Serve section 4.1 does the
+thing we should: prioritise the requests that can still meet their deadlines, and serve the late ones out of
+**surplus capacity**. Ours has neither half -- the worst row holds a veto, and there is no surplus path, which is
+why a late prefill received nothing at all.
+
+**Why the refusal is wrong even when the prediction is right.** The model is not over-predicting. Attention for a
+chunk costs chunk x prefix, so at a ~100K prefix the fitted coefficient gives about 0.29 ms per chunk token and a
+2048-token chunk really does cost roughly 600 ms; the baseline's own chat TPOT p99 of 401 ms at alpha 6 shows it
+absorbs steps that size. But the SLO is a **mean** over a request's output: a single 600 ms step raises a row's
+mean TPOT by 600/n ms, about **1.5 ms for a 400-token output**. That is absorbable, and refusing to prefill on
+account of it is the error. A fixed 2048-token chunk never consults the budget, which is exactly why the `c2048`
+control tracks L0 while our arm collapses -- and since `c2048` and our arm share the identical router, tree and
+policy, **routing to loaded nodes is ruled out as a cause.** pdmux never meets this at all: it partitions SMs
+spatially and has no latency-budgeted chunk.
+
+**A specific numerical inconsistency to chase, which the logs already show.** Under the `life` form a YOUNG row
+should grant a large budget, because its remaining output is credited at the observed rate while it is allowed the
+target rate. For a row 10 tokens into a 400-token output at 14 ms against a 50 ms target:
+`T_r = s*L - E - (L-o-a)*rate = 50*400 - 140 - 388*14 = 14 428 ms`. The logged budgets at alpha 6 are **40-188 ms**
+-- three orders of magnitude smaller -- while `nolife=729` says the lifetime branch was almost always taken. So
+either that branch is not supplying these rows or the minimum comes from a row the demote test should have
+excluded. **The next step is to log WHICH row supplies the minimum (index, o, spent, target, projected length),
+rather than reason about it**, and only then replace the minimum with the section 4.1 rule: price the step against
+the rows that can still be saved, admit prefill from the surplus, and reject only when the savable rows need all of
+it.
+
 **FIXED AND QUEUED (`apply_late_prefill_floor_20261029.py`).** When no chunk size lets the head prefill meet its
 deadline, it now gets a minimum chunk of one page or 256 tokens, whichever is larger -- the same starting floor the
 search already uses, so the cost to resident rows' time per output token is bounded by one small chunk per step

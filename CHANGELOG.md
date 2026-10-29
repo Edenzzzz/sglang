@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.72.0 — The budget's minimum-over-rows is the defect; reject only when all capacity is needed (2026-10-29)
+- The model is not over-predicting. A chunk's attention costs chunk x prefix, so at a ~100K prefix a 2048-token
+  chunk really does cost about 600 ms, and the baseline's chat TPOT p99 of 401 ms shows it absorbs such steps. The
+  decision is what is wrong: the SLO is a MEAN, so one 600 ms step adds 600/n ms to a row's mean -- about 1.5 ms at
+  a 400-token output -- which is absorbable.
+- The structural defect is that the budget is a MINIMUM over resident rows' slack, so one row in trouble vetoes
+  prefill for the whole step. SLOs-Serve section 4.1 instead prioritises requests that can still meet their
+  deadlines and serves late ones from surplus capacity; ours has neither half. The fix is to price the step against
+  savable rows, admit prefill from the surplus, and reject only when the savable rows need all of it.
+- Two causes eliminated by controls rather than argument: a fixed 2048-token chunk never consults the budget, which
+  is why c2048 tracks L0; and since c2048 shares our router, tree and policy, routing to loaded nodes cannot be the
+  cause. pdmux does not face this -- it partitions SMs and has no latency-budgeted chunk.
+- Recorded a numerical inconsistency to chase first: under the life form a row 10 tokens into a 400-token output at
+  14 ms against a 50 ms target should grant 14 428 ms, yet logged budgets at alpha 6 are 40-188 ms while
+  nolife=729 says the lifetime branch was taken. Next step is to log which row supplies the minimum rather than
+  reason about it.
+
 ## v3.71.0 — The SLO-chunk "loss" is a fifth bug: a zero chunk on 41% of calls (2026-10-29)
 - The user pushed back on the loss being real. It is not. The arms ran the tree with all four earlier fixes present,
   but the rule's own counters show it returns a chunk of ZERO on 2674 of 6501 calls (41%), i.e. it admits no prefill

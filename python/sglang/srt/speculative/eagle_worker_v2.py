@@ -1491,6 +1491,8 @@ class EAGLEWorkerV2(BaseSpecWorker):
                     self.draft_worker._draft_extend_for_decode(
                         batch, batch_output, kv_loc_plan=verify_input.kv_loc_plan
                     )
+                    if os.environ.get("SGLANG_DELAYED_VERIFY") == "1":
+                        self._detach_draft_outputs(batch_output.next_draft_input)
 
             if (
                 get_parallel().pp_size > 1
@@ -1973,6 +1975,23 @@ class EAGLEWorkerV2(BaseSpecWorker):
             )
         return result
 
+    def _detach_draft_outputs(self, draft_input):
+        """Copy the draft-extend outputs out of the CUDA graph's static buffers.
+
+        On the graph path _draft_extend_for_decode returns the runner's own output buffers, so
+        hidden_states on the next draft input aliases them. Delayed verification makes two
+        draft extends per iteration the normal case -- the running batch's inside run_batch and
+        the held batch's in the drain -- and the first would end up reading the second's values.
+        The damage is silent: the emitted text stays target-greedy and only the draft quality,
+        and so the acceptance length, changes.
+        """
+        if draft_input is None:
+            return
+        for name in ("topk_p", "topk_index", "hidden_states"):
+            t = getattr(draft_input, name, None)
+            if t is not None:
+                setattr(draft_input, name, t.clone())
+
     @property
     def _dv_stash(self) -> List:
         stash = getattr(self, "_dv_stash_list", None)
@@ -1992,11 +2011,16 @@ class EAGLEWorkerV2(BaseSpecWorker):
         that otherwise sits between the verify launch and the next one.
         """
         running, ver_result, snap = self._dv_stash.pop(0)
+        # Every field _draft_extend_for_decode reads, taken from the snapshot rather than from
+        # ver_result: the scheduler has replaced accept_lens / next_token_ids / hidden_states on
+        # that object with host copies by now. next_draft_input is the object the extend WRITES
+        # its results into, so it must be the real one, not a copy.
         shim = SimpleNamespace(
             accept_lens=snap["accept_lens"],
             next_token_ids=snap["next_token_ids"],
             prepared_draft_extend_inputs=snap["prepared_draft_extend_inputs"],
             logits_output=SimpleNamespace(hidden_states=snap["hidden_states"]),
+            next_draft_input=ver_result.next_draft_input,
         )
         with (
             draft_tp_context(self.draft_worker.draft_owns_attention),
@@ -2005,6 +2029,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
             spec_stage_span("draft_extend"),
         ):
             self.draft_worker._draft_extend_for_decode(running, shim)
+            self._detach_draft_outputs(ver_result.next_draft_input)
         return running, ver_result
 
     def _forward_prefill_batch(

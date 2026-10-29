@@ -4688,10 +4688,21 @@ class Scheduler(
                             # Delayed verification: take these requests out of the batch until
                             # the drain. Their futures stay published and valid -- a held
                             # request is in no batch, so nothing resolves or overwrites them.
+                            #
+                            # The verification RESULT travels with them: committing it here
+                            # would free the KV of any request that finished on this step, and
+                            # the draft extend that still has to run in the drain would then
+                            # write through freed slots. So it is delivered in the drain,
+                            # after the extend -- the order the non-delayed path has.
                             assert _dv is self.running_batch, (
                                 "held batch is not the running batch"
                             )
-                            self._dv_held.append((self._dv_iter, _dv))
+                            self._dv_held.append(
+                                (self._dv_iter, _dv, batch_result.mixed_running_batch,
+                                 batch_result.mixed_running_result)
+                            )
+                            batch_result.mixed_running_batch = None
+                            batch_result.mixed_running_result = None
                             self.running_batch = ScheduleBatch(
                                 reqs=[], batch_is_full=_dv.batch_is_full
                             )
@@ -4820,10 +4831,21 @@ class Scheduler(
                             # Delayed verification: take these requests out of the batch until
                             # the drain. Their futures stay published and valid -- a held
                             # request is in no batch, so nothing resolves or overwrites them.
+                            #
+                            # The verification RESULT travels with them: committing it here
+                            # would free the KV of any request that finished on this step, and
+                            # the draft extend that still has to run in the drain would then
+                            # write through freed slots. So it is delivered in the drain,
+                            # after the extend -- the order the non-delayed path has.
                             assert _dv is self.running_batch, (
                                 "held batch is not the running batch"
                             )
-                            self._dv_held.append((self._dv_iter, _dv))
+                            self._dv_held.append(
+                                (self._dv_iter, _dv, batch_result.mixed_running_batch,
+                                 batch_result.mixed_running_result)
+                            )
+                            batch_result.mixed_running_batch = None
+                            batch_result.mixed_running_result = None
                             self.running_batch = ScheduleBatch(
                                 reqs=[], batch_is_full=_dv.batch_is_full
                             )
@@ -6130,9 +6152,11 @@ class Scheduler(
                 "spec worker holds a delayed verification the scheduler never registered"
             )
         while self._dv_held and self._dv_held[0][0] < self._dv_iter:
-            _it, expected = self._dv_held.pop(0)
+            _it, expected, snapshot, ver_result = self._dv_held.pop(0)
             held, _ver = self.model_worker.drain_delayed_verify()
             assert held is expected, "delayed verify stash out of order"
+            # Extend first, then commit: committing frees the KV of finished requests.
+            self.batch_result_processor.process_batch_result_decode(snapshot, ver_result)
             self._dv_rejoin.append(held)
             self.dv_drained = getattr(self, "dv_drained", 0) + 1
             self.dv_lag = getattr(self, "dv_lag", 0) + (self._dv_iter - _it)

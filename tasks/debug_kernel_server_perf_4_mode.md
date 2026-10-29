@@ -5676,10 +5676,15 @@ the control that settles this.
    | **4** | **0.541** | **0.514** | **0.637** | 2.252 |
    | 8 | 0.668 | 0.535 | 0.695 | 2.267 |
 
-   Four resident CTAs per SM is the best of the five and beats today's default by **17% / 12% / 5% / 2%** as the
-   batch grows, which is the right shape: the 16-row class's grid matters most when there is least work to hide an
-   under-filled launch behind. **This is a real optimization and the default should move**, but it does not close
-   the gap on its own -- against v3 the arm goes from 0.63x to 0.92x at batch 16 and remains 0.71-0.84x above it.
+   Four resident CTAs per SM is the best of the five on THIS set and beats its default by 17% / 12% / 5% / 2% as
+   the batch grows, which is the right shape: the 16-row class's grid matters most when there is least work to
+   hide an under-filled launch behind. It narrows the gap to v3 from 0.63x to 0.92x at batch 16 without closing it.
+   - **NOT yet sufficient to move the default (corrected 2026-10-29).** The sweep ran on `longtail_two` only, in a
+     single pass per arm. On `sharegpt_two`, which also routes to the 16-row class, the tuned grid reads slightly
+     WORSE than the earlier default-grid pass (0.487 against 0.458 at batch 256, 0.832 against 0.793 at 512),
+     though those passes differ in iteration count as well as in grid, so they do not settle it either. Deciding a
+     default needs PAIRED repeats of both grids on every set; only the tuned grid is being repeated now. Until
+     then this is a promising knob, not a landed optimization, and the shipped default stays where it is.
    - **Methodological catch worth keeping: v3's own time varies 8-34% between passes at these batch sizes** (mean
      0.499 at batch 16 with a 34% spread across four passes). The knob under test cannot affect v3, so that
      spread is pure run-to-run noise, and it means **no single-pass small-batch comparison here is trustworthy** --

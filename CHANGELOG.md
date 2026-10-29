@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.69.0 — Realistic chunk + agent-dominant rows: 2.8-6.3% slower, spreads under 1% (2026-10-29)
+- 4096-token chunk over a 65536-token prefix with 75% of rows at 64K-200K, three repeats: 0.972x, 0.957x, 0.956x
+  and 0.937x against sglang's single attention call, and 0.896-0.949x against v3. Every spread under 1%, so this is
+  settled for this composition. All four captures passed the FP32 gate first.
+- The penalty is a FIXED 0.38-1.02 ms on a 13-16 ms step, growing only mildly with batch, so it is the two-launch
+  structure plus the merge rather than the tile mechanism. The reason it earns nothing here: a 4096-token chunk
+  over a 65K prefix does about 67x the attention work of 32 decode rows at 126K, so the step is overwhelmingly one
+  prefill row's attention, which both arms give to FA3 identically.
+- The three sweeps now bracket the mechanism by prefill-to-decode work ratio rather than contradicting one another:
+  about 1:2 gives 1.15-7.44x (10% agent) and 2.12x-0.74x by batch (75% agent); about 67:1 gives 0.937-0.972x.
+- Both queued merge-placement optimizations target the fixed cost, and this is the capture set to measure them on.
+- Caveat carried rather than buried: the trace-sampled 1.86-2.92x is a statement about the real distribution of
+  that ratio, and those captures cannot currently be regenerated on this trial.
+
 ## v3.68.0 — The decode-KV tracer works: 11541 decode steps, none with dkv=0 (2026-10-29)
 - The alpha-3 traced point launched fresh workers against the patched tree and records real KV lengths, against
   6117 of 6117 zeroes in the arm that ran before the patch. Sample: DECODE bs=8 nd=8 dkv=163904 kv=163904

@@ -5969,3 +5969,46 @@ of these appears in the paper: they are implementation-level optimizations, not 
 Both are measured the same way as everything else here: paired repeats at 200 iterations on the realistic-chunk
 agent-dominant captures, which are the steps where the fixed cost is visible, with the FP32 gate first. Neither is
 started yet.
+
+## Realistic chunk + agent-dominant rows: the dispatcher is 2.8-6.3% SLOWER, and spreads settle it (2026-10-29)
+
+4096-token chunk over a 65 536-token prefix, 75% of rows at 64K-200K, three repeats, 200 iterations. All four
+captures passed the FP32 gate first (worst 0.0036 against FP32, 0.0047 against sglang's own call).
+
+| mode | batch | ours | spread | sglang | spread | v3 | vs sglang | vs v3 | absolute |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| two | 16 | 13.640 | 0.6% | 13.258 | 0.7% | 12.942 | 0.972x | 0.949x | +0.38 ms |
+| two | 32 | 16.392 | 0.4% | 15.681 | 0.3% | 14.804 | 0.957x | 0.903x | +0.71 ms |
+| four | 16 | 13.805 | 0.3% | 13.197 | 0.7% | 12.898 | 0.956x | 0.934x | +0.61 ms |
+| four | 32 | 16.082 | 0.2% | 15.066 | 0.2% | 14.404 | 0.937x | 0.896x | +1.02 ms |
+
+**Every spread is under 1%, so this is settled for this composition: the dispatcher is 2.8-6.3% slower than
+sglang's single attention call, and 5-10% slower than v3.**
+
+**The penalty is a fixed cost, which is why it is worth fixing rather than explaining away.** The absolute delta is
+0.38-1.02 ms and grows only mildly with batch, while the step itself is 13-16 ms. It is not the tile mechanism
+being wrong: it is the two-launch structure plus the merge, paid in full on a step where the tile mechanism has
+almost nothing to earn. The arithmetic for why it earns nothing here: a 4096-token chunk over a 65K prefix does
+about **67x the attention work** of 32 decode rows at 126K, so the step is overwhelmingly the prefill row's
+attention, which both arms hand to FA3 identically.
+
+**Read together with the other two compositions, the three sweeps bracket the mechanism rather than contradicting
+each other:**
+
+| prefill : decode attention work | composition | result |
+|---|---|---|
+| ~1 : 2 | 512-token chunk on 4K, 75% agent rows | 2.12x at batch 16 falling to 0.74x at 64 |
+| ~1 : 2 | 512-token chunk on 4K, 10% agent rows | 1.15-7.44x, median 3.64x |
+| ~67 : 1 | 4096-token chunk on 64K, 75% agent rows | 0.937-0.972x |
+
+The dispatcher pays exactly where decode and verify work of differing widths is a real share of step attention, and
+costs a fixed 0.4-1.0 ms where it is not. **Both of the queued merge-placement optimizations target that fixed
+cost, and this is the capture set to measure them on.**
+
+**What this does and does not say about the paper's kernel claim.** It does not touch the trace-sampled 1.86-2.92x,
+which is measured on steps captured from real serving and therefore carries the real distribution of the
+prefill-to-decode ratio rather than one chosen point of it. It does say that the claim is a statement about that
+distribution, not about any step, and that a reader asking "when does this not help?" deserves the answer: on steps
+whose attention is almost entirely one long prefill. The honest caveat to carry is that the trace-sampled captures
+cannot currently be regenerated on this trial, so that headline rests on data measured earlier rather than
+re-verified tonight.

@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.43.0 — Rule out the device-name hypothesis for the stock-PD transfer failure (2026-10-29)
+- mn_node.sh:281 computes IB=mlx5_1..mlx5_4 and all four are present and ACTIVE on the pods, so the decode side
+  does receive a valid --disaggregation-ib-device. The earlier reading -- that the MOONCAKE_PROTOCOL/DEVICE exports
+  being guarded by `[ "$MODE" != decode ]` starves the decode side -- does not hold: those exports configure the
+  hierarchical-cache store, while the disagg path is configured separately at line 284 with its own device.
+- That leaves cross-pod bootstrap reachability as the live candidate, and it matches the signature: an unreachable
+  bootstrap port fails per request rather than at startup, so servers report ready, thousands of individual
+  transfers fail, and no acceptance line is ever written. The check must be run FROM a decode pod against the
+  prefill pods' --disaggregation-bootstrap-port, not inferred.
+
 ## v3.42.0 — RDMA is healthy, so the stock-PD transfer failure is configuration, not hardware (2026-10-29)
 - The pods expose five InfiniBand devices (mlx5_0..mlx5_4), every port in state `4: ACTIVE`, with 20 RDMA/NCCL_IB
   environment variables set. So the fabric is present and the KV-transfer failure is not a missing-RDMA problem.

@@ -541,10 +541,18 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
   - **[x] RDMA IS PRESENT AND HEALTHY, so that is not the cause either (2026-10-29):** the pods expose five
     InfiniBand devices (`mlx5_0..mlx5_4`) with every port in state `4: ACTIVE`, and 20 RDMA/NCCL_IB environment
     variables are set. So the fabric is there and the failure is a CONFIGURATION one, not a missing-hardware one.
-    - That narrows it to two candidates, in order: (a) which device or interface Mooncake selects -- its master
-      log carries no protocol line at all for these arms, where a working transfer names one; (b) whether the
-      decode pods can reach the prefill pods' bootstrap ports (the arm's `claimed_ports` / `ports_r*_g*.txt`),
-      since a reachable-but-wrong port gives a connect failure per request rather than a startup error.
+    - **Candidate (a), the device name, is RULED OUT (2026-10-29).** `mn_node.sh:281` computes
+      `IB=mlx5_$(( 1 + (ROLE * 2 + g) % 4 ))`, i.e. `mlx5_1..mlx5_4`, and all four are present and `ACTIVE` on the
+      pods (five devices, `mlx5_0..mlx5_4`). So the decode side does receive a valid
+      `--disaggregation-ib-device`, and an earlier reading of this as a prefill/decode asymmetry -- because the
+      `MOONCAKE_PROTOCOL`/`MOONCAKE_DEVICE` exports at `mn_node.sh:150` are guarded by `[ "$MODE" != decode ]` --
+      does not hold: those exports configure the hierarchical-cache store, while the disagg path is configured
+      separately at line 284 and gets its own device.
+    - **So the live candidate is (b): cross-pod bootstrap reachability.** A reachable-but-wrong or unreachable
+      bootstrap port gives a connect failure PER REQUEST rather than a startup error, which is exactly the shape
+      observed -- servers report ready, 2 819 individual transfers fail, and no acceptance line is ever written.
+      The check is whether a decode pod can open the prefill pods' `--disaggregation-bootstrap-port` (`$BOOT`,
+      recorded in each arm's `ports_r*_g*.txt` / `claimed_ports`), run from the decode pod rather than inferred.
     - **So stock PD is probably fixable on this cluster rather than impossible**, which changes the paper decision:
       hold the comparison open rather than writing "could not be run here". A single short arm with Mooncake's
       device/protocol pinned explicitly is the cheapest test.

@@ -2273,6 +2273,52 @@ then just noise on a quantity the cap barely moves.
 budget cannot work on this workload; and that a more accurate step model would optimise the wrong objective. None
 of those were tested, because what was measured was a rule that starves prefill 41% of the time.
 
+### TWO defects, and a measurement that discriminates between them (2026-10-29, user)
+
+**The cluster is NOT the problem, and the baselines prove it.** If alpha 6 were past the point where TPOT is
+attainable, the baselines would also sit at 41%. They do not: prefill-prioritized 57.8%, mixed chunk 53.8%, L0
+61.5%, on the same cluster, load and windows. So 54-62% is demonstrably achievable and our rule gives up roughly
+20 points that the baselines collect. `budget_ms = -11731` is therefore evidence about our accounting, not about
+the cluster -- no baseline could reach 62% if rows really were 11.7 s past their allowances.
+
+**The trade is real in direction but wildly lopsided, and the overshoot is the tell.** At alpha 6, chat, against
+targets of 2 s and 50 ms:
+
+| | mean TPOT | mean TTFT | attainment | agent rounds admitted |
+|---|---:|---:|---:|---:|
+| L0 (sglang's chunk policy) | 57.1 ms (**over** target) | 2.28 s | 61.5% | 6284 |
+| ours (budgeted chunk) | 46.3 ms (**under** target) | 8.26 s | 41.1% | 5545 |
+
+We buy 19% of TPOT and pay 262% of TTFT, admit 12% fewer agent rounds, and carry 30% less SLO-attaining
+throughput. **No axis justifies it.** The diagnostic is that we land at 46.3 ms against a 50 ms target: the rule
+does not merely protect TPOT, it overshoots PAST the target, spending prefill capacity on headroom the SLO never
+asked for. **The correctness criterion is therefore sharper than "reject only when all capacity is needed":
+admit chunk until the resident rows' projected mean TPOT REACHES its target -- not exceeds it, and not falls
+short.** A fix that lands TPOT well under target is still over-protecting whatever attainment does.
+
+**Two independent defects produce that overshoot, and they compound:**
+1. **Structural.** The budget is a minimum over resident rows, so one outlier vetoes every step and the population
+   ends up far inside its target. The baselines' 54-62% says the population is mostly healthy, so the row
+   supplying `-11731` is an outlier the demote test fails to exclude. A row can escape demotion while vetoing: the
+   test fires on `spent > s*L` (history), but the budget also contains `(L-o-a)*rate` (projection), so a row that
+   has decoded slowly but not yet accumulated much total time looks savable and still produces a hugely negative
+   bound.
+2. **Predictive.** The rule bisects `T_step(c, prefix, nd, dkv)`, and **that model was fitted with `dkv`
+   identically zero** -- the dominant term in decode attention cost was a dead input across all 73 770 decode
+   steps of the training traces. Its decode terms are fitted to noise, and `nd`/`dkv` are exactly what matters at
+   overload when many rows are resident. Over-pricing the chunk makes the bisection stop early, which is the same
+   signature: TPOT lands under target.
+
+**The discriminator, which needs no GPU time.** The alpha-3 traced arm produced **11 541 decode steps with real
+`dkv`**. Refit the step model on those, re-measure the decode-step signed bias on a chronological split, then
+re-run the rule bisecting the corrected model. **If chat TPOT moves to about 49-50 ms the gap was prediction; if
+it stays near 46 the residual is structural and the minimum-over-rows is what to fix.** That separates the two
+rather than patching both blind -- which is what the last three patches did.
+
+**Also withdrawn here:** the earlier argument that "a better model would optimise the wrong objective." It rested
+on the seven-cap sweep, which measured a starving rule, and on the assumption that the model was sound, which it
+was not.
+
 ### The budget must reject prefill only when running requests need ALL capacity (SLOs-Serve section 4.1)
 
 The floor below is a backstop, not the fix. The structural defect is that the budget is a **minimum over resident

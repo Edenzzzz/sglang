@@ -1,5 +1,23 @@
 # Changelog
 
+## v3.80.0 — Two defects in the chunk rule, and a zero-GPU discriminator (2026-10-29)
+- The baselines refute the "cluster is overloaded" explanation: pp 57.8%, mc 53.8%, L0 61.5% at the same alpha 6,
+  so 54-62% is attainable and our 41.1% gives up ~20 points. budget_ms = -11731 is evidence about our accounting,
+  not the cluster.
+- The tell is an overshoot: we land chat TPOT at 46.3 ms against a 50 ms TARGET while paying 8.26 s of TTFT
+  against L0's 2.28 s, admitting 12% fewer agent rounds and carrying 30% less SLO-attaining throughput. The rule
+  does not protect TPOT, it overshoots past the target and spends prefill capacity on headroom the SLO never asked
+  for. Correctness criterion sharpened: admit until projected mean TPOT REACHES the target, neither exceeding nor
+  falling short.
+- Two compounding causes: (1) structural -- the minimum over rows lets one outlier veto, and a row can escape the
+  demote test (which fires on history, spent > s*L) while vetoing through the projection term (L-o-a)*rate;
+  (2) predictive -- the model was fitted with dkv identically zero, so its decode terms, the ones that matter at
+  overload, are fitted to noise and over-price the chunk.
+- Discriminator needing no GPU: refit on the 11541 clean decode steps from the alpha-3 traced arm and re-run. TPOT
+  near 49-50 means the gap was prediction; TPOT still near 46 means the residual is structural.
+- Withdrawn: "a better model would optimise the wrong objective" -- it rested on a starving rule and on assuming
+  the model was sound.
+
 ## v3.79.0 — The gain's mechanism: padding wastes compute, not bandwidth (2026-10-29)
 - Unifies every kernel measurement of the day into one falsifiable claim. Padding a one-query decode input into a
   128-row tile does not change KV traffic -- the same bytes stream either way -- it wastes the MMA. So the waste is

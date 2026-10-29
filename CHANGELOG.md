@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.75.0 — The merge-tail guard is a no-op: the barrier was not the fixed cost (2026-10-29)
+- Three repeats per arm: -0.1%, +0.1%, +0.1%, +0.2% against the pre-patch build, all inside the sub-1% spread. The
+  grid-dependency barrier was NOT the 0.4-1.0 ms fixed penalty, so that hypothesis is refuted by its own
+  measurement.
+- Why the reasoning failed: the barrier sits at the very END of the FA2 kernel, where those CTAs have already
+  finished their tiles, and under PDL FA3's CTAs are already resident and running. Waiting there delays those CTAs'
+  retirement, not FA3's progress. "Holding SMs that FA3 needs" assumed FA3 was still waiting to be scheduled.
+- The guard is kept -- free, gated correct at 10/10, and it removes a barrier that does nothing -- but the fixed
+  cost remains unexplained. Remaining candidates: the second launch itself, and our FA2 kernel's cost on these row
+  shapes against FA3 handling the same rows.
+
 ## v3.74.0 — Read the papers: the difference is an admission decision, not a floor (2026-10-29)
 - Checked against tasks/papers/. Two earlier notes were wrong: first that pdmux does not use a latency-budgeted
   allocation, then that its knob cannot reach zero.

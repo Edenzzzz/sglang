@@ -5965,8 +5965,24 @@ of these appears in the paper: they are implementation-level optimizations, not 
    those CTAs fall off the end of the kernel and retire, releasing their SMs; it also covers the CTAs that a
    cluster-sized persistent grid leaves with no items at all, which previously still ran to the barrier and waited.
    **Correctness gate: 10 of 10 captures PASS, 0 failures** -- including all six toy-chunk captures where
-   `fa3merge=1`, which is the control showing the split path is unchanged where partials really exist. Timing
-   against the 0.937-0.972x baseline (sub-1% spreads) is running.
+   `fa3merge=1`, which is the control showing the split path is unchanged where partials really exist.
+   **TIMING: NO EFFECT, so the hypothesis is REFUTED (three repeats each, same captures):**
+   | set | batch | before | after | change | vs sglang |
+   |---|---:|---:|---:|---:|---:|
+   | agentmix four-mode | 16 | 13.805 | 13.796 | -0.1% | 0.957x |
+   | agentmix four-mode | 32 | 16.082 | 16.094 | +0.1% | 0.936x |
+   | agentmix two-mode | 16 | 13.640 | 13.660 | +0.1% | 0.971x |
+   | agentmix two-mode | 32 | 16.392 | 16.423 | +0.2% | 0.957x |
+
+   Everything is inside the sub-1% spread, so **the grid-dependency barrier was not the fixed cost.** The likely
+   reason the reasoning failed: the barrier sits at the very END of the FA2 kernel, by which point those CTAs have
+   finished their tiles, and FA3's CTAs are already resident and running -- so waiting there costs those CTAs'
+   retirement, not FA3's progress. "Holding SMs FA3 needs" assumed FA3 was still waiting to be scheduled, which
+   under PDL it is not.
+   The guard is kept: it is free, it is correct (gated), and it removes a barrier that does nothing. But **the
+   fixed 0.4-1.0 ms is still unexplained**, and the remaining candidates are the second launch itself and our FA2
+   kernel's cost on these row shapes relative to FA3 handling the same rows. That is what the routing work is
+   testing.
 1. **Use the default merge schedule when the plan has no FA2 tiles.** The dispatch site is
    `unified_dispatch_ext.cu:1115`, where `only16` already specialises the launch on the FA2 class mix:
    `const bool only16 = pp.num_fa2_items0 == 0 && pp.num_fa2_items1 == 0;`

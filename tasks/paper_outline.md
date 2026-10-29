@@ -174,7 +174,11 @@ admitting it.
     deadline order; one that has already missed its deadline is demoted behind those that can still meet theirs,
     and one the step model predicts will miss is demoted rather than any running request being preempted. Ordering
     and demotion are the whole mechanism -- we built preemption and chunk-budget reservation, measured both, and
-    dropped them (sections 5.2.3 and 7). The chunk size each step admits is solved from the same step model.
+    dropped them (sections 5.2.3 and 7). The chunk size each step admits is solved from the same step model, and that
+part of the policy is **scoped to overload**: measured against a fixed-chunk control on the same tree, it cuts the
+chat mean-TPOT tail 46% when the cluster is past capacity and worsens it about 20% at capacity, because a budget
+that rarely binds lets the chunk run to its ceiling and lengthens the step. We therefore claim it as an overload
+mechanism rather than a general one (section 6.4).
   - *Per cluster: an SLO-checked router over symmetric nodes.* For each request and node, from state the router keeps
     itself, it predicts:
     - TTFT: the deadline-ordered work queued ahead of the request, the cost of its uncached tokens on top of the

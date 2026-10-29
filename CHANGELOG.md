@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.45.0 — Scope C3's chunk claim to overload, per the alpha-3/alpha-6 pair (2026-10-29)
+- C3 presented the predicted chunk size as an unqualified part of the worker policy. The measured pair says
+  otherwise: against a fixed-chunk control on the same tree it cuts the chat mean-TPOT tail 46% past capacity and
+  worsens it about 20% at capacity, because a budget that rarely binds lets the chunk run to its ceiling and
+  lengthens the step.
+- The paper now claims it as an overload mechanism rather than a general one, with the reason stated. That is
+  narrower than before and is what the evidence supports.
+
 ## v3.44.0 — alpha-3 no-regression check: approximately met, but the rule's sign flips with load (2026-10-29)
 - alpha 3, demote fix, stepcap 2000, accept 1.987, failed=0: chat 88.3% / 1417 tok/s, TPOT p50/p90 13.4/35.7 ms;
   agent 92.2% / 2374 tok/s. Against rung L0 (91.2% / 94.3% / 2493, 10.8/29.8) attainment is -2.9 and -2.1 points,

@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.85.0 — Read arXiv 2512.01278: delayed verification is CPU/GPU overlap, and we lack it (2026-10-29)
+- Downloaded to tasks/papers/2512.01278.pdf. It separates two contributions I had conflated: "(1) unified
+  scheduler to batch both draft and verification phases to maximize parallelism, (2) delayed verification for
+  CPU/GPU overlap".
+- (1) is our four-mode step -- the same mechanism, which is why both tile kinds ride in one launch.
+- (2) is different and we do not appear to have it: it "delays verification by one iteration to remove CPU
+  verification from the critical path", postponing iteration i's CPU work to iteration i+1 to overlap with the
+  GPU. It concerns HOST work, not the two GPU phases.
+- This is the first candidate explanation for a gap measured tonight that nothing else accounted for: the host
+  plan costs 0.5-12 ms against 0.4-4 ms kernels, and on small-step captures our mixed step equals the exact SUM of
+  its roles with no overlap -- the signature of host work on the critical path. The eight sub-1.0x chat-dominant
+  captures are where a fixed host cost would dominate. A model of launch-to-launch gap was previously found
+  unfittable at 45% error, consistent with it being host-scheduling bound rather than shape bound.
+
 ## v3.84.0 — Retracted: draft and verify ARE overlapped, across requests (2026-10-29)
 - I claimed from eagle_worker_v2's sequential draft() then verify() calls that our schedule overlaps nothing. That
   does not follow, and the four-mode step refutes it: if the two were strictly sequential a single plan could not

@@ -5767,8 +5767,23 @@ calls are the per-request chain inside the worker, not a statement about what sh
   overlap, and the figure has to be re-derived against what is actually overlapped before it is quoted anywhere.
   What remains genuinely unavailable is only the intra-request chain, which is the one case the data dependency
   does block.
-- **Still open:** how this relates to the delayed-verify schedule of arXiv 2512.01278, which is not among the
-  papers on disk and which I have not read. The comparison must not be asserted either way until it is.
+- **arXiv 2512.01278 READ (downloaded to `tasks/papers/2512.01278.pdf`), and it separates two things I had
+  conflated.** The paper lists as distinct contributions "(1) unified scheduler to batch both draft and
+  verification phases to maximize parallelism, (2) delayed verification for CPU/GPU overlap" (p1).
+  - **(1) is what our four-mode step already does.** Batching draft and verify tiles into one plan is the same
+    mechanism, which is why both tile kinds appear in one launch.
+  - **(2) is a DIFFERENT optimization and we do not appear to have it.** Delayed verification "delays verification
+    by one iteration to remove CPU verification from the critical path" (p2, section 4.3): the CPU operations of
+    iteration i "are postponed to the (i+1)-th iteration to overlap CPU work" with the GPU. It is about HOST work,
+    not about overlapping the two GPU phases.
+  - **This is the first candidate explanation for a gap measured tonight that nothing else accounted for.** The
+    host plan costs 0.5-12 ms against kernels of 0.4-4 ms, and on the small-step captures our mixed step takes
+    exactly the SUM of its two roles with no overlap -- the signature of host work sitting on the critical path
+    between launches. If CPU-side verification and planning are serialising against the GPU, their mechanism is
+    the fix, and the eight sub-1.0x chat-dominant captures are exactly where a fixed host cost would dominate.
+    **Next step: measure the host-side gap directly** (launch-to-launch minus GPU time is already in STEPTRACE,
+    and a model of it was previously found unfittable at 45% error, which is itself consistent with it being
+    dominated by host scheduling rather than by step shape).
 
 **What stands in the way is a true data dependency, not engineering.** Within a step, verify needs the draft's
 tokens, so the only pipelining available is across steps -- and the draft for step N+1 needs the accepted prefix

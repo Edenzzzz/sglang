@@ -173,12 +173,17 @@ admitting it.
     tokens, read by a prefix match at enqueue, so a cached agent round gets a chat-like deadline. Prefills run in
     deadline order; one that has already missed its deadline is demoted behind those that can still meet theirs,
     and one the step model predicts will miss is demoted rather than any running request being preempted. Ordering
-    and demotion are the whole mechanism -- we built preemption and chunk-budget reservation, measured both, and
-    dropped them (sections 5.2.3 and 7). The chunk size each step admits is solved from the same step model, and that
-part of the policy is **scoped to overload**: measured against a fixed-chunk control on the same tree, it cuts the
-chat mean-TPOT tail 46% when the cluster is past capacity and worsens it about 20% at capacity, because a budget
-that rarely binds lets the chunk run to its ceiling and lengthens the step. We therefore claim it as an overload
-mechanism rather than a general one (section 6.4).
+    and demotion are the whole mechanism. We built three further pieces -- preemption, chunk-budget reservation,
+    and sizing each step's prefill chunk from the step model so that running requests stay inside their latency
+    targets -- measured all three, and dropped them (sections 5.2.3, 6.4 and 7). The last of these is worth stating
+    as a negative result, because it is the piece a latency model most obviously suggests. Solving the chunk from a
+    latency budget does exactly what it is designed to do: past capacity it cuts mean time per output token by 19%
+    for chat and 23% for agent rounds against a control that differs only in using sglang's own chunk policy. But a
+    smaller chunk makes every prefill longer, so mean time to first token rises by 3.6x and 3.9x, the cluster
+    admits 12% fewer agent rounds, and SLO attainment -- which requires a request to meet both of its targets --
+    falls 20 points for chat and 16 for agent rounds. The component is therefore excluded from our contribution,
+    not scoped to overload: it would only pay where time per output token binds and the time-to-first-token target
+    is loose, which is not the regime any of our tenants are in (section 6.4).
   - *Per cluster: an SLO-checked router over symmetric nodes.* For each request and node, from state the router keeps
     itself, it predicts:
     - TTFT: the deadline-ordered work queued ahead of the request, the cost of its uncached tokens on top of the
@@ -1070,9 +1075,24 @@ Table 7: workloads, loads and hardware per stage.
 - Agent rounds: 10 s TTFT (20 s for prefills of more than 200K uncached tokens) and 80 ms mean TPOT.
 - Earlier results also report chat at 0.5 s / 20 ms, marked where used.
 
-**Metrics.** Throughput vs per-user tok/s (a Pareto curve) with p10-p90 bars; TTFT and ITL SLO attainment vs request
-rate, per tenant; per-tenant SLO goodput, the tok/s of requests that meet both of their tenant's targets. Every
-serving result shows per-request spread and per-repeat values.
+**Metrics.** Three quantities, per tenant. **SLO attainment** is the share of a tenant's requests that meet both of
+its targets, and is the primary metric: it is what the service-level objective asks. **Mean time to first token**
+and **mean time per output token** say by how much requests made or missed those targets, and each is reported with
+a tenth-to-ninety-ninth-percentile spread across requests, so a mean cannot conceal a tail. The spread is
+asymmetric by design: latency is bounded below and has a long upper tail, so a symmetric interval would
+misdescribe it, and the ninety-ninth percentile is where queueing appears.
+
+Time per output token is the quantity we weigh most heavily. It is a per-request mean -- a request's total
+inter-token time divided by the number of gaps -- which is both what the objective is written against and what a
+user experiences as the speed of their own reply. We do not report inter-token percentiles taken over every gap in
+a run: such a percentile is dominated by individual long steps, is not comparable with a per-request figure, and
+invites reading one as the other.
+
+We also do not report an SLO-attaining token rate. It is a third axis that moves with attainment, with latency and
+with the mix of requests that happened to arrive, so it makes a comparison harder to read without answering
+anything the first three leave open. Where capacity itself is the question -- how much load a system absorbs before
+it stops meeting its objectives -- we answer it with the capacity curve (figure 12), which is the measurement that
+locates capacity directly. Every serving result shows per-request spread and per-repeat values.
 
 **Protocol.** Both arms run on the same frozen software tree, in opposite-order pairs, two repeats each, with metrics
 recomputed from raw token arrival times and CUDA graphs and overlap scheduling on. A quality gate (GSM8K and passkey
@@ -1085,8 +1105,8 @@ disaggregation is implemented in our router on the same workers as ours, since D
 **Attribution.** Every gain is tied to a contribution by removing that contribution alone (Table 8). The
 leave-one-out arms are run on one workload and load (the cluster trace replay at alpha 3), so a contribution can
 help on one workload and cost on another; where that happens Table 8 says so rather than quoting the favourable
-case. Two identical configurations of that replay differ by about 5 points of attainment and 4% of agent SLO
-goodput, so differences at or below that are reported as indistinguishable rather than as effects.
+case. Two identical configurations of that replay differ by about 5 points of attainment, so differences at or below that
+are reported as indistinguishable rather than as effects.
 - At the kernel level the comparison arms remove parts of C1.
 - At the single-node and cluster levels, each ablation arm runs the full stack minus one contribution, on the same
   workload and load.

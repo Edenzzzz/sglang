@@ -2130,6 +2130,64 @@ says otherwise. Commands and logs are in `debug_kernel_server_perf_4_mode.md`.
 | **3.** EDF predictor with acceptance length | **UNMEASURED, not refuted (corrected 2026-10-29): the decode KV length is a DEAD INPUT.** `dkv` is zero on all 73 770 decode steps in the traces and non-zero on 10 189 of 14 162 mixed/prefill steps, so decode step time was being predicted from the row count alone, without the dominant term. The -13% bias and 29% MAPE are the signature of that, not of an unmodelable quantity -- and on a random split the held-out median bias is +0.1%. The tracer must populate `dkv` on decode steps before the premise can be tested at all. (Superseded reading: **the premise is REFUTED.**) The step model predicts merged steps to 4.7% MAPE, but DECODE steps -- which are almost all of TPOT -- carry a **-13.0% signed bias** (29.0% MAPE) that a scalar calibration cannot remove (held-out -13.3%), and a nonlinear fit on the same features is WORSE (-19.9%). So predicted TPOT is systematically ~13% optimistic, the worst direction for admission control. `tpot_bias.py`, `fit_step_mlp_20261028.py`. | That a *better-featured* model would fix it. The missing information is likely the decode batch's KV-length distribution (only its mean is logged) and the resident tenant mix. No TPOT-accuracy claim may appear in the paper. |
 | **4.** two-way RDMA, complete vs bipartite graph | **New, and it is the motivation rather than the mechanism:** the prefill-to-decode demand RATIO moves 2.2x inside a chat surge (median 38.4 against 85.1 outside) and spans 3.4-4.2x within a run with no surge at all, while re-partitioning roles takes tens of minutes (`pd_ratio_20261028.py`). Independent trace analysis finds 4.7x peak-to-mean at minute scale and 24.5x hourly within a day. So a static split is a control loop slower than its signal. | Congestion itself. The random-pull rule remains refuted at the scale we can test, and we have no per-link measurement. |
 
+## Every 16-GPU arm re-scored in the reported metrics — 2026-10-29
+
+Reporting changed to SLO attainment plus mean TTFT and mean TPOT with a p10-p99 spread, with no token rate (user).
+Rather than restate old numbers, **all 48 surviving arm record sets were re-scored from their raw per-request
+records**, so every figure below is measured in the metric it is now reported in and none is converted or
+estimated. Raw lines: `tasks/paper_figures/data/rescore_means_20261029.txt`. Command:
+`python tasks/perf_model/tracelab_windows.py <run dir>...` (sglang 3fef129ff; overlay at this commit).
+Comparability was checked rather than assumed: every arm at a given load ran 1016-1083 s (alpha 6) or 1804-2080 s
+(alpha 3) with the same chat request count (7200 / 14400) and `failed=0`.
+
+**Against conditional disaggregation** -- the strong PD baseline, our router's implementation of Dynamo's rule, on
+the same workers and tree. Two repeats of the baseline at each load:
+
+| load | chat attainment | agent attainment | chat mean TPOT | agent mean TPOT | chat mean TTFT | agent rounds issued |
+|---|---|---|---|---|---|---|
+| alpha 3 | +40.4 / +43.4 points | +29.0 / +30.2 points | -76% / -79% | -69% / -72% | -79% / -86% | +65% / +82% |
+| alpha 6 | +8.3 / +13.1 points | +25.8 / +30.6 points | -30% / -39% | -44% / -49% | -75% / -81% | +73% / +78% |
+
+**Against sglang's own colocated schedules** on our tree, which is the leave-one-out that isolates the schedule:
+
+| comparison | chat attainment | agent attainment | chat mean TPOT | agent mean TPOT | chat mean TTFT |
+|---|---|---|---|---|---|
+| alpha 3 vs prefill-prioritized | +7.7 points | +0.7 points | -30% | -18% | -63% |
+| alpha 6 vs prefill-prioritized | +4.0 points | +0.4 points | -7% | -15% | -42% |
+| alpha 6 vs mixed chunk | +8.0 points | +2.9 points | -3% | -14% | -42% |
+
+Read against the ~5-point attainment noise floor: the agent-attainment differences against sglang's own schedules
+are inside it, the chat ones at alpha 3 and against mixed chunk are at or just past it, and the mean-TPOT and
+mean-TTFT differences are the solid part. The margins against conditional disaggregation are far outside it.
+
+### The SLO-budgeted chunk is a NEGATIVE result on these metrics, and the rate had hidden it
+
+Measured against L0 -- the same tree, same kernel, same four-mode step, same router, differing ONLY in using
+sglang's own chunk policy -- at load factor 6, best chunk arm (demote fix, 2000 ms cap):
+
+| metric | sglang's chunk policy (L0) | SLO-budgeted chunk | change |
+|---|---|---|---|
+| chat attainment | 61.5% | 41.1% | **-20.4 points** |
+| agent attainment | 79.1% | 63.5% | **-15.6 points** |
+| chat mean TPOT | 57.1 ms | 46.3 ms | -18.9% |
+| agent mean TPOT | 56.1 ms | 43.0 ms | -23.4% |
+| chat mean TTFT | 2.28 s | 8.26 s | **3.6x worse** |
+| agent mean TTFT | 2.92 s | 11.45 s | **3.9x worse** |
+| agent rounds issued | 6284 | 5545 | -11.8% |
+
+The mechanism is coherent and not a bug: a budget solved from a latency model makes chunks smaller, which shortens
+every step and so genuinely improves time per output token by 19-23%; but a smaller chunk makes each prefill take
+more steps, so time to first token nearly quadruples, the cluster admits 12% less work, and attainment -- which
+requires a request to meet BOTH its targets -- collapses. The whole cap sweep agrees: 1000 / 1500 / 2000 / 3000 ms
+give chat 32.7 / 33.2 / 35.3 / 28.8%, all far below L0.
+- **This reverses the 2026-10-28 reading**, which was taken on the SLO-attaining token rate and the TPOT tail and
+  concluded the rule "cuts the tail 46% past capacity". That is still true of the tail, and it is not the question:
+  on attainment the rule loses at both loads. The component is therefore **excluded from the contribution**, not
+  scoped to overload. It would only pay where TPOT binds and the TTFT target is loose, which is not the regime any
+  tenant here is in.
+- Four earlier bugs in the rule were real and are fixed; this result is measured with all four fixed, so it is a
+  property of the policy and not of its implementation.
+
 **Two arms the older sections lean on are now VOID, and both failures flattered us:**
 - **Stock PD disaggregation has no valid measurement at either load.** The 2026-10-29 re-measurement reported chat
   4.9% with TTFT p50/p90 190/311 s -- but `failed=1890`, `lost_after_failure=7470`, `accept=NONE`, and the decode

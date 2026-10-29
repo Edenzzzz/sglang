@@ -1,5 +1,25 @@
 # Changelog
 
+## v3.50.0 — All 48 arms re-scored; the SLO-budgeted chunk is a negative result (2026-10-29)
+- Rather than convert old numbers into the new metric set, every surviving arm's raw per-request records were
+  re-scored, so each reported figure is measured in the metric it is reported in. Comparability was checked, not
+  assumed: equal chat request counts, failed=0, and durations within 1016-1083 s (alpha 6) / 1804-2080 s (alpha 3).
+  Raw lines kept at tasks/paper_figures/data/rescore_means_20261029.txt.
+- Against conditional disaggregation (two baseline repeats per load): alpha 3 +40.4/+43.4 points chat and
+  +29.0/+30.2 agent attainment, mean TPOT -69..-79%, mean TTFT -79..-86%, and 65-82% more agent rounds issued;
+  alpha 6 +8.3/+13.1 chat and +25.8/+30.6 agent, TPOT -30..-49%, 73-78% more rounds.
+- Against sglang's own colocated schedules: chat attainment +7.7 points at alpha 3 and +4.0/+8.0 at alpha 6, chat
+  mean TPOT -30%/-7%/-3%, agent mean TPOT -18%/-15%/-14%, chat mean TTFT -42..-63%. The agent-attainment
+  differences are inside the ~5-point noise floor and are reported as such; the latency means are the solid part.
+- **The SLO-budgeted chunk is withdrawn from the contribution.** Against L0 (same tree and kernel, differing only
+  in using sglang's chunk policy) at alpha 6 it improves mean TPOT 19-23% and costs 20.4 points of chat attainment,
+  15.6 of agent, a 3.6-3.9x worse mean TTFT and 11.8% fewer agent rounds issued. The whole cap sweep agrees. This
+  reverses the 2026-10-28 reading, which was taken on the token rate and the TPOT tail: the tail claim stands and
+  was the wrong question, because attainment requires both targets. The four earlier bugs in the rule were real and
+  are fixed; this is measured with all four fixed, so it is the policy and not the implementation.
+- Paper: the metrics section now defines the three reported quantities and says why no rate is reported, and C3's
+  chunk component is stated as a negative result rather than scoped to overload.
+
 ## v3.49.0 — pdmux is incompatible with speculative decoding on this base; fixed (2026-10-29)
 - Root cause, read off the deployed tree rather than guessed: pdmux holds one attention backend per SM group, but
   `ForwardBatch.needs_forward_metadata_init()` tracks planning readiness per BATCH while metadata lives per backend

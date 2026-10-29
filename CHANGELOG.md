@@ -1,5 +1,24 @@
 # Changelog
 
+## v3.52.0 — Kernel gains measured on mixed input: 1.23-7.51x where input is heterogeneous (2026-10-29)
+- The A6 unified dispatcher now builds and runs on the H200 trial. The build needed flash-attention's hopper
+  headers, which were absent; the register gate had never revealed it because that gate compiles flashinfer's own
+  FA3 mainloop rather than the upstream one.
+- Correctness: 18 of 18 generated mixed-step captures PASS the FP32 gate, worst error 0.0030-0.0036 against an FP32
+  reference and 0.0045-0.0048 against sglang's FA3 call. Four-mode steps place verify inputs on the 32-row class
+  and two-mode steps place decode inputs on the 16-row class, with FA3 partials merged in-launch.
+- Timing against the single attention call sglang runs today: 1.23-7.51x (median 3.15x) on heterogeneous input
+  (90% ShareGPT plus 10% agent inputs of 64K-200K), and 0.75-1.42x (median 1.20x) on uniform short input. The gain
+  tracks heterogeneity, which is the mechanism stated as a prediction and then confirmed -- where every input has
+  nearly the same width there is no tile waste to remove.
+- Three caveats recorded rather than glossed: A6 loses to v3 on three heterogeneous rows (0.36-0.78x), which
+  contradicts the standing "A6 cannot lose to v3" expectation and is a defect to chase; the host plan costs 5-10 ms
+  against a 0.6-3.8 ms kernel in this harness; and batches of 256-1024 are above our serving regime, which caps
+  max_running_requests at 48 under speculative decoding.
+- Paper: C1 restated as a unified tile dispatch kernel implementation that maximizes compute efficiency by removing
+  tile waste for mixed input, and the abstract and contributions now name all four inputs (prefill, decode, draft,
+  verify) instead of three, dropping the kernel-internal word "rows".
+
 ## v3.51.0 — Item 18's register story was measured against the wrong baseline (2026-10-29)
 - The user asked why the guest-free arm spills at all, since a 16-row tile is cheaper in registers than a 64-row
   one. Both halves of that were right, and chasing it found the real baseline error.

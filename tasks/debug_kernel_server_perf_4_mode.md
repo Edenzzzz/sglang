@@ -5566,3 +5566,55 @@ cluster-wide request volume, scheduling flexibility under load spikes / mixed wo
     and chunk size the knobs; report our attention and step time against stock chunked prefill on the same axes (P:D
     ratio x chunk size, including non-multiples of the tile), so the attention share SARATHI leaves is the part our
     kernel is shown to remove.
+
+## Kernel-level gains on mixed input, measured on the H200 (2026-10-29)
+
+**Why this run exists.** Every prior kernel number came from trace-sampled captures that do not exist on the
+current trial, so the dispatcher's gain on MIXED input had never been measured on this hardware. These captures are
+generated directly in the capture format (`gen_synth_meld_20261025.py`), with ShareGPT and OpenR1-Math length
+distributions, so no serving run is needed: `sharegpt` is uniform short context, `longtail` is 90% ShareGPT plus
+10% agent inputs of 64K-200K, which is our mixed chat-plus-agent shape.
+
+**Correctness first: 18 of 18 captures PASS** the FP32 gate (`check_unified_capture_20261024.py`), worst error
+0.0030-0.0036 against an FP32 reference and 0.0045-0.0048 against sglang's own FA3 call, every value finite. The
+tile classes confirm the dispatcher does what C1 claims: four-mode steps place verify inputs on the 32-row class,
+two-mode steps place decode inputs on the 16-row class, and FA3 partials are merged in-launch (`fa3merge=1`).
+
+**Timing** (`bench_unified_trace_20261024.py --iterations 40`, graph replay, both arm orders; ms per step):
+
+| set | batch | ours | sglang's single FA3 call | vs sglang | v3 | vs v3 |
+|---|---:|---:|---:|---:|---:|---:|
+| sharegpt four-mode | 512 | 0.787 | 0.945 | **1.20x** | 0.827 | 1.05x |
+| sharegpt four-mode | 1024 | 2.083 | 1.568 | 0.75x | 1.897 | 0.91x |
+| sharegpt two-mode | 256 | 0.458 | 0.354 | 0.77x | 0.253 | 0.55x |
+| sharegpt two-mode | 512 | 0.793 | 0.961 | **1.21x** | 0.858 | 1.08x |
+| sharegpt two-mode | 1024 | 1.214 | 1.728 | **1.42x** | 1.224 | 1.01x |
+| longtail four-mode | 64 | 0.774 | 3.917 | **5.06x** | 0.947 | 1.22x |
+| longtail four-mode | 128 | 3.837 | 4.706 | **1.23x** | 2.995 | 0.78x |
+| longtail two-mode | 32 | 0.682 | 2.150 | **3.15x** | 0.245 | 0.36x |
+| longtail two-mode | 64 | 0.605 | 4.542 | **7.51x** | 0.452 | 0.75x |
+| longtail two-mode | 128 | 1.975 | 4.826 | **2.44x** | 1.919 | 0.97x |
+
+**The gain is a function of how heterogeneous the input is, which is exactly the claim.** On heterogeneous input
+the dispatcher is **1.23x to 7.51x (median 3.15x)** faster than the single attention call sglang runs today; on
+uniform short input it is **0.75x to 1.42x (median 1.20x)**. That is the mechanism stated as a prediction and then
+confirmed: tile waste is what is being removed, so where every input already has nearly the same width there is
+little to remove, and at the largest uniform batches the plan's own cost can lose.
+
+**Three things this run also says, which must not be glossed:**
+- **A6 is NOT a superset of v3 on these sets.** It loses at longtail two-mode batch 32 (0.36x) and 64 (0.75x) and
+  at longtail four-mode 128 (0.78x). That contradicts the standing expectation that A6 cannot lose to v3, so it is
+  a defect to investigate rather than a result to report. Caveat before chasing it: one capture logged
+  `NATIVE_PDL_WORKSPACE_GROW` mid-run, which reallocates the workspace and can perturb a timing in the same pass.
+- **The host plan costs 5-10 ms against a kernel of 0.6-3.8 ms.** In serving the plan is built on the host while
+  the previous step runs, so it need not appear in step time, but it is larger than the kernel here and no claim
+  about it should be made from this harness.
+- **These batch sizes are above our serving regime.** Speculative decoding caps `max_running_requests` at 48 on
+  this model, so batches of 256-1024 are MELD's range, not ours. The rows that matter for our story are the
+  heterogeneous ones at 32-128, and those are the strongest.
+
+Commands and provenance: captures `gen_synth_meld_20261025.py /opt/tiger/w/synth_i18 sharegpt longtail`; build
+`build_unified_h200_20261024.py /dev/shm/w/port07` (UNIFIED_BUILD_OK, tiles 48/32/16); H200 trial
+3f9e6a55ef7ae47e; sglang 3fef129ff; logs `/opt/tiger/w/{check_all,bench}.log`, per-set JSON
+`/opt/tiger/w/bench_<set>.json`. The build needed flash-attention's hopper headers pushed to the trial, which the
+register gate had not revealed because it compiles flashinfer's own FA3 mainloop rather than the upstream one.

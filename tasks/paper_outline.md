@@ -155,7 +155,8 @@ admitting it.
 
 **Contributions.**
 
-- **A unified tile dispatcher that removes tile waste for mixed input.** One plan per step gives each of a step's
+- **A unified tile dispatch kernel implementation that maximizes compute efficiency by removing tile waste for
+  mixed input.** One plan per step gives each of a step's
   prefill, decode, draft and verify inputs a tile of its own width, and folds the split-KV merge into the same
   launch.
 - **Speculative decoding inside colocation.** Because each input gets a tile class of its own size, a prefill

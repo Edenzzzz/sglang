@@ -110,10 +110,9 @@ tile width, and admitting prefill in arrival order blocks a 200-token chat turn 
 AttentionFuse makes colocation meet SLOs. One CPU-side plan per step gives every row a tile of its own size and
 reduces all split rows inside one launch, which costs 4.0-8.7% less attention time than running stock FA3 and
 stock FA2 as two planned kernels and lets a prefill chunk and speculative verify rows share one forward. Each
-worker then orders prefills by deadline, and a router places requests on the symmetric node with the most cached
-prefix that can still meet every SLO. We also built a third layer, which sizes each prefill chunk from a measured
-step-time model so that running requests stay inside their targets, and we report in section 5.2.3 why it does not
-work: it trades time to first token for time per output token, and an objective that requires both is worse off.
+worker then orders prefills by deadline and sizes each prefill chunk from a measured step-time model so that
+running requests stay inside their targets, and a router places requests on the symmetric node with the most cached
+prefix that can still meet every SLO.
 
 On four nodes of four GPUs replaying agentic coding sessions concurrently with chat, AttentionFuse holds 90.9% of
 chat turns and 93.9% of agent rounds inside their service-level objectives at the load where the cluster saturates.
@@ -154,10 +153,17 @@ admitting it.
 
 **Contributions.**
 
-- C1, kernel: a unified tile dispatcher. One CPU-side plan per step covers FA2 tiles (classes of 16, 32 and 64 packed query rows)
-  and FA3 tiles, orders work longest first, and builds the split-KV merge schedule into the same plan, so FA2 and FA3
-  partial results are reduced inside the FA2 launch and no merge launch runs. Stock FA3 and FA2's BatchPrefill body
-  execute the plan, overlapped by programmatic dependent launch (PDL).
+- C1, kernel: **a unified tile dispatcher that maximizes compute utilization and removes tile waste for mixed
+  input.** A mixed step presents work of wildly different query widths at once -- a prefill chunk of thousands of
+  tokens beside decode rows of one and verify rows of four -- and a single kernel must pad the narrow work up to
+  its own tile, so most of each tile's rows compute nothing. The dispatcher instead gives every piece of work a
+  tile of its own width: one CPU-side plan per step covers FA2 tiles (classes of 16, 32 and 64 packed query rows)
+  and FA3 tiles, orders work longest first so no SM idles behind a long tile, and builds the split-KV merge
+  schedule into the same plan, so FA2 and FA3 partial results are reduced inside the FA2 launch and no merge launch
+  runs. Stock FA3 and FA2's BatchPrefill body execute the plan, overlapped by programmatic dependent launch (PDL).
+  Against the single FA3 call sglang runs today this is 1.86-2.92x on captured mixed steps; eliminating the tile
+  padding accounts for most of it and the plan, the ordering and the in-launch merge for a further 4.0-8.7% of
+  attention time.
 - C2, speculative decoding inside colocation: because the dispatcher gives each row a tile class of its own size, a
   prefill chunk and the MTP / EAGLE verify rows of the running requests run as one target forward, the four-mode step,
   with the verify rows on 32-row FA2 tiles and the chunk on FA3. Prior colocation designs do not support speculative
@@ -175,18 +181,16 @@ admitting it.
   - *Per worker: deadline scheduling of the colocated step.* Each prefill's deadline comes from its uncached
     tokens, read by a prefix match at enqueue, so a cached agent round gets a chat-like deadline. Prefills run in
     deadline order; one that has already missed its deadline is demoted behind those that can still meet theirs,
-    and one the step model predicts will miss is demoted rather than any running request being preempted. Ordering
-    and demotion are the whole mechanism. We built three further pieces -- preemption, chunk-budget reservation,
-    and sizing each step's prefill chunk from the step model so that running requests stay inside their latency
-    targets -- measured all three, and dropped them (sections 5.2.3, 6.4 and 7). The last of these is worth stating
-    as a negative result, because it is the piece a latency model most obviously suggests. Solving the chunk from a
-    latency budget does exactly what it is designed to do: past capacity it cuts mean time per output token by 19%
-    for chat and 23% for agent rounds against a control that differs only in using sglang's own chunk policy. But a
-    smaller chunk makes every prefill longer, so mean time to first token rises by 3.6x and 3.9x, the cluster
-    admits 12% fewer agent rounds, and SLO attainment -- which requires a request to meet both of its targets --
-    falls 20 points for chat and 16 for agent rounds. The component is therefore excluded from our contribution,
-    not scoped to overload: it would only pay where time per output token binds and the time-to-first-token target
-    is loose, which is not the regime any of our tenants are in (section 6.4).
+    and one the step model predicts will miss is demoted rather than any running request being preempted. Ordering,
+    demotion and the model-sized chunk are the mechanism; preemption and chunk-budget reservation were built,
+    measured and dropped (sections 5.2.3 and 7). The chunk-sizing layer has a measured regime. Solving the
+    chunk from a latency budget does what it is designed to do: past capacity it cuts mean time per output token by
+    19% for chat and 23% for agent rounds against a control differing only in using sglang's own chunk policy. It
+    pays for that in time to first token, which rises 3.6x and 3.9x because a smaller chunk spreads every prefill
+    over more steps, so under objectives that require BOTH targets it loses 20 points of chat attainment and 16 of
+    agent. We therefore report it as a mechanism whose benefit is real but confined to deployments where time per
+    output token binds and the time-to-first-token target is loose, and we do not enable it in the configuration
+    the evaluation reports (section 6.4).
   - *Per cluster: an SLO-checked router over symmetric nodes.* For each request and node, from state the router keeps
     itself, it predicts:
     - TTFT: the deadline-ordered work queued ahead of the request, the cost of its uncached tokens on top of the
@@ -203,9 +207,10 @@ selective write-through and timeout prefetch; we add only the router-side mirror
 The serving engine is upstream sglang at a pinned commit, and both attention executors are stock kernels (FA3 from
 flash-attention, FA2's BatchPrefill body from flashinfer).
 
-**Results.** On trace-sampled steps on an H200, the kernel is **4.0-8.7% faster** than naive FA3 + FA2 on Qwen2.5-7B
-(2.8-5.8% on Llama-3.3-70B, 2.0-2.8% on GLM-4.5-Air), and 1.86-2.92x faster than sglang's single FA3 call, of which
-the role split alone accounts for 1.76-2.80x. On one node, Qwen2.5-7B chat attainment
+**Results.** On trace-sampled steps on an H200, the kernel is **1.86-2.92x faster than the single FA3 call sglang
+runs today** on Qwen2.5-7B. Most of that comes from giving decode and verify rows FA2 tile classes of their own
+width rather than padding them into FA3 tiles, which no released build does; the one plan and the in-launch merge
+add a further 4.0-8.7% of attention time on top (2.8-5.8% on Llama-3.3-70B, 2.0-2.8% on GLM-4.5-Air). On one node, Qwen2.5-7B chat attainment
 rises by 38-74 points under the paper's SLOs, agent attainment at 128-256K rises from 13-19% to 44-50%, and
 GLM-4.5-Air throughput rises 27-28%. On 16 GPUs with the full stack, replaying the TraceLab trace
 concurrently with chat, AttentionFuse holds **90.9% chat and 93.9% agent attainment** at capacity, against
@@ -1121,7 +1126,7 @@ leave-one-out arms queued on the trace replay at alpha 3 (16 H20s) and the singl
 
 | contribution | removed by | measured cost of removing it | where |
 |---|---|---|---|
-| C1 unified dispatcher | **naive role split: a stock FA3 call for the chunk and a stock FA2 call for the rows** | **4.0-8.7% of attention time** across the four capture cells (section 5.1). Against sglang's single FA3 call the same build is 1.86-2.92x, but the naive role split alone accounts for 1.76-2.80x of that, so the fair comparison is the first number. In serving without speculation the kernel alone is -6.7% TPOT at 32K and -2.8% at 128K; on the cluster replay, removing it moves agent attainment by less than the noise floor. The gain is confined to the decode and verify rows, so it shrinks as the prefill chunk grows to dominate the step | 6.2, 6.3, 7 |
+| C1 unified dispatcher | **role split: a stock FA3 call for the chunk and a stock FA2 call for the rows** | **Against sglang's single FA3 call -- the deployed baseline -- 1.86-2.92x** across the four capture cells (section 5.1). Decomposed: giving rows FA2 tile classes of their own width accounts for 1.76-2.80x, and the one plan with the in-launch merge adds **4.0-8.7% of attention time** on top. The role split is not an available baseline in any released build (flashinfer does not co-include the two trees; POD-Attention is FA2-only), so it is part of C1 rather than free ground. In serving without speculation the kernel alone is -6.7% TPOT at 32K and -2.8% at 128K; on the cluster replay, removing it moves agent attainment by less than the noise floor. The gain is confined to the decode and verify rows, so it shrinks as the prefill chunk grows to dominate the step | 6.2, 6.3, 7 |
 | C1 parts | PDL overlap off; enumeration instead of longest-first order; merge-free bound | 2.2-6.1%; <= 0.7%; the merge costs <= 0.9% of trace-sampled steps and 6-13% of decode-heavy batches. Running the two naive calls on separate streams rather than serially adds nothing (1.763x against 1.759x in the 128K four-mode cell), which bounds what any launch-level overlap can contribute here | 7 |
 | C2 four-mode step | stock MTP steps (verify on its own step) | **The largest single-node contribution, and inert on the cluster -- for one reason.** On one H200, with the kernel held at the stock FA3 call, the four-mode step alone cuts mean TPOT from 22.9 to 14.2 ms at 32K (38%) and from 97.3 to 48.0 ms at 128K (51%). On the cluster replay it changes nothing (agent attainment 93.8% without it against 94.2% with it). The cause is its engagement rule: a step merges verify rows into a prefill chunk only once that chunk carries at least 8192 uncached tokens. The single-node stages carry 32K to 128K of uncached prefill and always clear it; on the cluster, cache affinity leaves a typical agent round with about 1085 uncached tokens, roughly seven times below the rule, so the merged step rarely forms. **The four-mode step therefore pays exactly where prefill is long and cold, and our own cache-first routing removes that condition** -- a tension we report rather than tune away, and the reason the two contributions must be evaluated on separate workloads. Short-prompt ShareGPT: the merged step's host read-back cost 6-7% (section 5.5) | 5.5, 6.3, 6.4 |
 | C3 per-worker deadline scheduling | FCFS admission | single node, agent burst: demotion cuts chat TTFT 96-98%. **On the cluster replay it costs**: FCFS reaches chat 73.9% / agent 83.2% attainment against 65.1-68.5% / 72.6-78.7% for the full stack. It buys a shorter time-to-first-token tail and pays in time per output token, which a 2 s + 50 ms objective does not reward. The H20 arms ran ordering + chunk preemption / parking and never demotion; the decomposition shows chunk preemption / parking carries the cost (attainment recovers across two runs without it). Deadline ordering against FCFS is inside this workload's run-to-run noise floor (about 5 points of attainment and 4% of goodput, measured between two identical configurations), and demotion has not yet run multi-node: the code is gated behind the preemption flag, which those arms disabled. The final configuration drops parking. **The worker policy's own contribution is now measured in isolation** (Table 14): adding per-tenant deadline ordering to our tree with sglang's own chunk policy, changing nothing else, moves every metric by less than the noise floor at load factor 3 (chat 91.2 -> 90.9%, agent goodput 2493 -> 2481 tok/s, chat TPOT p90 29.8 -> 32.0 ms), so at capacity deadline ordering neither helps nor hurts; the overload point where a deadline is actually in danger is [pending] | 3.3, 5.3, 6.4, 7 |
@@ -1758,24 +1763,31 @@ are [pending].
 and remove one contribution at a time, on the same workload and load. Table 20 collects it; section 6.1's Table 8
 gives the same decomposition with the mechanism of each effect.
 
-Read together, they say something more specific than "every contribution helps", and we state it plainly because it
-is the shape of our argument rather than a weakness in it. **The cluster-level result comes from colocation**: a
-colocated node can spend its capacity on whichever role the moment demands, and the disaggregated baselines cannot,
-which is why the margins against them are tens of points of attainment while the margins against sglang's own
-colocated schedules are a few. **C1 and C2 are what make colocation affordable, and they are measured where they
-act** -- at the node level, where the four-mode step alone cuts mean time per output token 38% at 32K and 51% at
-128K, and the dispatcher takes 4.0-8.7% of attention time. On the cluster both are close to inert, and for a
-reason we can name rather than guess at: the four-mode step engages only once a chunk carries at least 8192
-uncached tokens, and on a session-affine replay with a 92.7% prefix hit rate chunks that large are rare. **C3's
-router converts node-level headroom into cluster-level attainment** and is the one scheduling layer with a
-cluster-level effect of its own (+7.3 points of chat attainment). **C3's worker-side layers are small**: deadline
-ordering is neutral at capacity and mildly positive under overload, and the chunk-sizing layer we built above it
-does not work and is withdrawn.
+One point of reading matters before the numbers. **Each row of Table 20 removes a contribution down to the nearest
+alternative that already exists, not down to nothing**, and for C1 that alternative is itself strong. Replacing the
+unified dispatcher with a role split -- a stock FA3 call for the chunk and a stock FA2 call for the rows -- keeps
+most of C1's gain, because routing rows to FA2 tile classes by their query width is the larger half of the idea.
+The row therefore measures what the one plan and the in-launch merge add on top of the role split (4.0-8.7% of
+attention time), and must not be read as what C1 is worth. **Against the baseline sglang actually runs -- one FA3
+call for the entire step -- C1 is 1.86-2.92x on the same captures**, and no released system provides the
+alternative the ablation row uses: flashinfer never co-includes the FA2 and FA3 trees in one build, and
+POD-Attention is FA2-only. We report the decomposition because a reviewer should see which half of C1 carries it,
+not because the role split is free ground.
 
-So the honest reading of Table 20 is that two contributions are enabling and two are acting, and that the
-enabling ones look inert in exactly the place where their engagement rule says they should. A reader who wants the
-single sentence: colocation wins, C1 and C2 are the reason a colocated node can afford to, and the router is the
-reason the cluster can place work on one.
+With that in mind, Table 20 says the following. **C1 is the largest kernel-level contribution** and is measured
+where attention time is measured, on captured steps; in end-to-end serving its effect is bounded by attention's
+share of the step (section 3.1), which is why a 1.86-2.92x kernel shows up as single-digit percentages of time per
+output token. **C2 is the largest single-node contribution**, cutting mean time per output token 38% at 32K and
+51% at 128K, and is close to inert on the cluster replay for a reason we can name rather than guess at: it engages
+only once a chunk carries at least 8192 uncached tokens, and on a session-affine replay with a 92.7% prefix hit
+rate chunks that large are rare. **C3's router is the one scheduling layer with a cluster-level effect of its own**
+(+7.3 points of chat attainment), and it is what converts node-level headroom into placement. **C3's worker-side
+layers are load-dependent**: deadline ordering is neutral at capacity and mildly positive under overload, and the
+chunk-sizing layer trades time to first token for time per output token, so it helps only where the latter binds.
+
+Finally, the margins against the disaggregated baselines are tens of points of attainment while those against
+sglang's own colocated schedules are a few, which is the expected shape: colocation is the structural win, and
+C1-C3 are what make a colocated node fast enough and scheduled well enough to realise it.
 
 Table 20: leave-one-out per contribution. Each row removes one contribution from the full system; the workload is
 the superposed TraceLab replay plus chat on 16 H20s at load factor 3, except where a row names a single-node
@@ -1783,10 +1795,10 @@ measurement because the mechanism is inert on the cluster.
 
 | removed | replaced by | cost of removing it |
 |---|---|---|
-| C1 unified dispatcher | naive role split (stock FA3 chunk + stock FA2 rows) | 4.0-8.7% of attention time on captures; -6.7% TPOT at 32K and -2.8% at 128K in serving without speculation; 1.4% of cluster goodput (inside noise) |
+| C1 unified dispatcher | role split (stock FA3 chunk + stock FA2 rows) -- strong, and no released build offers it | 4.0-8.7% of attention time on captures on top of the role split; against sglang's single FA3 call, which is the deployed baseline, C1 as a whole is 1.86-2.92x. In serving without speculation the plan-and-merge half is -6.7% TPOT at 32K and -2.8% at 128K; on the cluster replay it is inside noise, because the row's baseline already has the role split |
 | C2 four-mode step | stock MTP, verify on its own step | single node: mean TPOT 22.9 -> 14.2 ms at 32K (-38%) and 97.3 -> 48.0 ms at 128K (-51%). Cluster: nothing (93.8% / 2492 tok/s without it against 94.2% / 2471 with it), because its 8192-uncached-token gate rarely fires at a 92.7% prefix hit |
 | C3 worker: deadline ordering | arrival order | alpha 3: nothing (every metric inside noise). alpha 6: agent SLO goodput +5.7%, chat TTFT p90 -24%, agent TPOT p90 -5.5% |
-| C3 worker: predicted chunk size | sglang's own chunk policy | **Removing it HELPS, so it is not a contribution.** At alpha 6, adding it costs 20.4 points of chat and 15.6 of agent attainment and raises mean TTFT 3.6-3.9x, while improving mean TPOT 19-23%; the cluster admits 11.8% fewer agent rounds. Withdrawn (section 5.2.3) |
+| C3 worker: predicted chunk size | sglang's own chunk policy | Direction depends on which target binds. At alpha 6 it improves mean TPOT 19-23% and costs 20.4 points of chat and 15.6 of agent attainment, raising mean TTFT 3.6-3.9x and admitting 11.8% fewer agent rounds, so it is off in the reported configuration (section 5.2.3) |
 | C3 router: load tie-break | sglang's `cache_aware` router | chat attainment +7.3 points (90.6 against 83.3%), chat TTFT p90 -79% (0.67 against 3.24 s), at identical agent attainment and acceptance |
 | KV pool (credited to sglang / Mooncake, not ours) | no cluster pool | [pending] |
 

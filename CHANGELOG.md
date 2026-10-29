@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.86.0 — Point 3 measured: decode-step prediction is 9.4% MAPE, not 29% (2026-10-29)
+- 3598 decode steps with real dkv, scored against the fitted model: signed bias -5.2%, MAPE 9.4% overall; first
+  half +2.0% / 6.0%, chronological held-out half -12.5% / 15.0%.
+- Supersedes the recorded 29.0% MAPE and -13.0% bias, which were measured with dkv identically zero. MAPE is three
+  times better than recorded. Point 3's premise -- a fused step is predictable enough to schedule against -- is
+  supported rather than refuted.
+- The sign is OPPOSITE to the hypothesis I had been working from: the model UNDER-predicts decode step time by ~5%
+  rather than over-pricing it. The "model over-prices the chunk so the bisection stops early" argument loses its
+  evidence, leaving the minimum-over-rows as the better-supported explanation; merged-step bias must be measured
+  separately before concluding anything about the chunk rule.
+- The chronological split still degrades (+2.0% -> -12.5%, MAPE 6.0% -> 15.0%), which is drift within one run
+  rather than a bad fit. The fix is online tracking, not a refit.
+
 ## v3.85.0 — Read arXiv 2512.01278: delayed verification is CPU/GPU overlap, and we lack it (2026-10-29)
 - Downloaded to tasks/papers/2512.01278.pdf. It separates two contributions I had conflated: "(1) unified
   scheduler to batch both draft and verification phases to maximize parallelism, (2) delayed verification for

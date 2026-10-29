@@ -2273,6 +2273,39 @@ then just noise on a quantity the cap barely moves.
 budget cannot work on this workload; and that a more accurate step model would optimise the wrong objective. None
 of those were tested, because what was measured was a rule that starves prefill 41% of the time.
 
+### POINT 3 MEASURED AT LAST: decode-step prediction on real `dkv` (2026-10-29, no GPU time)
+
+3 598 decode steps from the alpha-3 traced arm, every one carrying a real KV length, scored against the fitted
+step model (`step_qwen_h20_a6_gpu_20261027.json`). Bias is `(predicted - measured) / measured`, medians:
+
+| split | signed bias | MAPE |
+|---|---:|---:|
+| all steps | **-5.2%** | **9.4%** |
+| first half | +2.0% | 6.0% |
+| **held out (chronological second half)** | **-12.5%** | **15.0%** |
+| dkv >= 20 000 tokens | -5.2% | 9.4% |
+
+**This overturns the recorded figures and supersedes them.** The 29.0% MAPE and -13.0% signed bias in the earlier
+rows were measured with `dkv` identically zero: **MAPE is three times better than recorded (9.4% against 29.0%)
+and the overall bias halves.** So the premise of point 3 -- that a fused step is predictable enough to schedule
+against -- is supported rather than refuted, and the "no TPOT-accuracy claim may appear in the paper" embargo can
+be lifted once a second arm confirms it.
+
+**Two findings that matter beyond the headline:**
+1. **The sign is OPPOSITE to the hypothesis I was working from.** The model UNDER-predicts decode step time by
+   about 5%; it does not over-price. The argument that "the model over-prices the chunk, so the bisection stops
+   early and TPOT lands under target" therefore loses its evidence. The chunk rule bisects MERGED steps, not
+   decode-only ones, so this does not settle that case directly -- but it means the structural defect (the
+   minimum over rows) is now the better-supported explanation for the chunk rule's behaviour, and the merged-step
+   bias must be measured separately before anything is concluded about it.
+2. **The chronological split still degrades**: +2.0% on the first half against -12.5% held out, with MAPE rising
+   6.0% -> 15.0%. That is **drift within a single run**, not a bad fit, and it is the thing an online correction
+   (the EWMA the user proposed for acceptance length) would address. A model refit on this trace would start
+   unbiased and drift again; the fix is to track, not to refit.
+
+Command: `python3 - <<'PY'` over `/tmp/st_a3.txt`, extracted from
+`/dev/shm/w/mn/coloc_cache_edf_mtp_hc_tl2_a3_demotefix_r1_cap2000/worker_r0_g2.log`.
+
 ### FIRST CLEAN READING OF THE CORRECTED ARM SET, alpha 3 (2026-10-29)
 
 Ours = EDF coupled with the SLO-budgeted chunk (floor hoisted, no fixed chunk anywhere in our arm); baseline =

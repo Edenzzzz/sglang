@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.78.0 — The floor fix failed because of where I put it; hoisted (2026-10-29)
+- Measured: alpha 6 with the floor deployed gives chat 40.9% against 41.1% without it, and zero=2255 of calls=5501
+  -- still 41%, unchanged. The floor never fired.
+- Cause: the `elif not meets:` branch sat inside `if deadline is not None and deadline > now:`. A prefill whose
+  deadline has already passed has deadline <= now, so the block is skipped -- the common case under overload and
+  exactly the one the floor exists to serve. The rescue was inside a guard excluding whoever needs rescuing.
+- The same run shows budget_ms = -11731.3, so the budget is deeply negative rather than merely small.
+- apply_floor_hoist_20261029.py moves an unconditional minimum out of the deadline guard, and logs latefloor=,
+  which the first patch computed but never printed -- which is why the failure had to be inferred from zero rather
+  than read directly. Deployed and verified on python_slo_life on all four nodes.
+- The alpha-3 point of the first run is unusable: its tree was patched mid-driver.
+
 ## v3.77.0 — The failed merge experiment rules out DSMEM/global-barrier merge fusion (2026-10-29)
 - Deleting the barrier and the merge tail outright moved the step -0.1% to +0.2%, inside the sub-1% spread. So
   fusing the reduction into FA3 behind a global barrier, or handing partials between cluster CTAs over distributed

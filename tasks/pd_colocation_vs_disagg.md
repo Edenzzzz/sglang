@@ -2337,7 +2337,24 @@ rather than reason about it**, and only then replace the minimum with the sectio
 the rows that can still be saved, admit prefill from the surplus, and reject only when the savable rows need all of
 it.
 
-**FIXED AND QUEUED (`apply_late_prefill_floor_20261029.py`).** When no chunk size lets the head prefill meet its
+**FIRST FLOOR ATTEMPT FAILED, AND THE REASON IS WHERE I PUT IT (measured 2026-10-29).** The alpha-6 arm with the
+floor deployed came back at chat **40.9%** against 41.1% without it -- unchanged -- and the counters say why:
+`zero=2255` of `calls=5501`, still 41%, exactly as before. The `elif not meets:` branch was placed INSIDE
+
+    if deadline is not None and deadline > now:
+
+and a prefill whose deadline has **already passed** has `deadline <= now`, so the block is skipped entirely. Under
+overload that is the common case and precisely the one the floor exists to serve: **the rescue was placed inside a
+guard that excludes whoever needs rescuing.** The run also shows `budget_ms=-11731.3`, so the budget is not merely
+small but deeply negative, confirming resident rows are far past their targets.
+`apply_floor_hoist_20261029.py` moves an unconditional minimum out of the deadline guard -- whenever the rule would
+admit less than a page, the earliest-deadline prefill gets one page or 256 tokens whatever its deadline state --
+and additionally **logs `latefloor=`, which the first patch computed but never printed**, which is why its failure
+had to be inferred from `zero` instead of read. Deployed and verified on `python_slo_life` on all four nodes.
+`mn_hoist_16g_20261029.sh` re-runs both loads. **The alpha-3 point of the first run is unusable: its tree was
+patched mid-driver, so its provenance is ambiguous.**
+
+**SUPERSEDED (first attempt, kept for the record): `apply_late_prefill_floor_20261029.py`.** When no chunk size lets the head prefill meet its
 deadline, it now gets a minimum chunk of one page or 256 tokens, whichever is larger -- the same starting floor the
 search already uses, so the cost to resident rows' time per output token is bounded by one small chunk per step
 rather than being unbounded. The meets-path is untouched, so the change can only raise a chunk, never lower it.

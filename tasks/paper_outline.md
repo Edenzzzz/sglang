@@ -1166,15 +1166,22 @@ them with agent inputs of 64K to 200K tokens. Both sets carry a 512-token prefil
 inputs, and all 18 generated steps pass the FP32 gate (worst head relative error 0.0030-0.0036; 0.0045-0.0048
 against sglang's own call).
 
-| input shape | speedup over sglang's single attention call |
+| input shape | our dispatcher against sglang's single attention call |
 |---|---|
-| spread KV lengths (a tenth of inputs 64K-200K) | **1.23x to 7.51x, median 3.15x** |
-| uniform short KV lengths | parity: 0.75x to 1.42x across batch sizes, within run-to-run spread [three repeats pending] |
+| spread KV lengths (a tenth of inputs 64K-200K) | **1.13x to 6.70x, median 3.92x faster** |
+| uniform short KV lengths | 0.57x to 1.36x, median **0.83x -- that is, slower** |
 
-The uniform-input row is reported as parity rather than as a speedup on purpose. Repeated passes of the same
-configuration move both arms by about 13% on those sets -- the same size as the difference being measured -- so a
-single pass cannot separate a small gain from noise there. The heterogeneous row is far outside that spread, which
-is why it is stated as a ratio.
+Both halves are informative, and the second is a limit on the mechanism rather than an embarrassment. These
+generated steps carry a deliberately small prefill chunk -- 512 tokens over a 4096-token context, against the
+2048-16384 tokens over 32K-256K contexts a serving step carries -- so the plan and the second launch are amortised
+over very little attention work. When a step has neither tile-width heterogeneity to exploit nor a chunk large
+enough to pay for the plan, the dispatcher has nothing to earn and its overhead is what remains. That is the
+boundary of the design, and it is worth stating because it also explains the trace-sampled result: real steps carry
+both, which is why the same build is 1.86-2.92x there.
+
+[Three repeats of this sweep are pending. Pass-to-pass variation on these generated sets has been observed at 13%,
+and once at 40% on a point that a provably inert knob could not have moved, so these ratios are reported without
+error bars only until those land.]
 
 The split is the mechanism stated as a prediction and then confirmed. What the dispatcher removes is the padding of
 narrow work up to a wide tile, so where every input already has nearly the same width there is almost nothing to

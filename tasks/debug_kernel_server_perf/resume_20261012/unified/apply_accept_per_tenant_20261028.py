@@ -77,10 +77,25 @@ addition = '''
 # The trailing newline matters: without it `pass` concatenates with the following statement.
 source = source[:line_end + 1] + addition.lstrip("\n") + "\n" + source[line_end + 1:]
 
+# WHERE the alias import goes is not cosmetic. Prepending it to the top of the file -- which the first version of
+# this patch did -- puts it ABOVE `from __future__ import annotations`, and Python requires every __future__ import
+# to be the first statement after the docstring. The module then raises SyntaxError at import, so every scheduler
+# process on the tree dies before it opens a port, and the driver reports "0/16 workers healthy", which reads as a
+# cluster or network fault. On 2026-10-29 that cost four trees on four nodes and sent two pdmux retries chasing
+# backend and memory parameters that were never the problem. So insert AFTER the last __future__ line when there is
+# one, and verify with compile() -- not ast.parse(), which does not apply the __future__ ordering rule at all and
+# therefore accepts exactly this defect.
 if not re.search(r"^import os\b", source, re.M):
-    source = "import os as _os\n" + source
+    futures = list(re.finditer(r"^from __future__ import .*$", source, re.M))
+    if futures:
+        at = source.index("\n", futures[-1].end()) + 1
+        source = source[:at] + "import os as _os\n" + source[at:]
+    else:
+        source = "import os as _os\n" + source
 else:
     source = source.replace("import os\n", "import os\nimport os as _os\n", 1)
+
+compile(source, path, "exec")  # refuses to write a file the interpreter would reject
 
 open(path, "w").write(source)
 print("patched per-tenant acceptance")

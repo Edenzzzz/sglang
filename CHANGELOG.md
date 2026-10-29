@@ -1,5 +1,38 @@
 # Changelog
 
+## v3.48.0 — Attainment and mean latency with error bars; no goodput (2026-10-29)
+- Reporting changed on the user's instruction: every serving result is SLO attainment plus mean TTFT and mean TPOT,
+  each carried by a p10-p99 spread. The SLO-attaining token rate is dropped. It is a third axis moving with
+  attainment, latency and the request mix at once, so it made tables harder to read without answering what the
+  first two leave open; where capacity itself is the question, the capacity curve answers it. TPOT leads, since we
+  claim it matters more than TTFT.
+- `tracelab_windows.py` emits the new line; `superset_report.py` reads it and still reads pre-change logs, which
+  carry a MEDIAN and a rate. Those are marked `*`, and the reader now REFUSES to compare a median against a mean
+  anywhere -- in the superset verdict, in the "would beat ours" note and in the publishability bar. The mean of a
+  right-skewed latency distribution sits well above its median, so mixing them manufactures differences between
+  arms measured either side of the change; the first mixed table produced two such spurious findings.
+- The bar's throughput half is no longer judged from this table, which carries no rate; it is read off the capacity
+  curve. The latency half is judged on mean TPOT, and attainment gains are stated in points as well as relatively,
+  because a metric that saturates near 100 makes a small absolute gain look large in relative terms.
+- `test_tracelab_scorer.py` (new, 9 checks, all passing) builds records whose mean TTFT is 5.49 s against a 0.10 s
+  median, so a scorer reporting the wrong statistic cannot pass, and checks the scorer-to-reader round trip.
+
+## v3.47.1 — pdmux's third failure was ours: an import above `from __future__` (2026-10-29)
+- The per-tenant acceptance patch prepended `import os as _os` to `metrics_reporter.py`, above its
+  `from __future__ import annotations`. Python requires every `__future__` import to come first, so the module
+  raised SyntaxError and every scheduler on four trees across all four nodes died before opening a port. The driver
+  reported "only 0/16 workers healthy after 40 min", indistinguishable at that level from an RDMA or cluster fault,
+  and two pdmux retries had already been spent on the attention backend and the memory fraction.
+- The repair tool's first gate used `ast.parse`, which does not apply the `__future__` ordering rule at all: it
+  reported "already-ok" for all four broken files, so the first repair pass changed nothing and printed success.
+  Validation of patched Python now uses `compile()`. Tool kept as `fix_metrics_import.py`.
+- The patch now inserts after the last `__future__` line and compiles the result before writing.
+- No recorded result is contaminated: every arm that ran before the patch has acceptance ~2.0, full request counts
+  and failed=0, checked individually for the demotefix and capsweep arms at both loads. Only the two pdmux arms
+  died, and pdmux remains unmeasured -- a failed arm fills no row.
+- The scorer no longer aborts on an arm with no records; it reports NO_RECORDS and continues, after one dead arm's
+  empty directory stopped a 40-arm re-scoring pass at arm six.
+
 ## v3.47.0 — Item 18's register result reproduces bit-for-bit on the H200 (2026-10-29)
 - All four arms match the CPU box exactly: q128 control 168 reg / 33 424 B, q128 guest-out 168 / 0 B, replace +
   16-row guest 168 / 164 B, replace guest-out 168 / 16 B. So the toolchains agree and the variant's marginal cost

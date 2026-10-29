@@ -2136,10 +2136,27 @@ says otherwise. Commands and logs are in `debug_kernel_server_perf_4_mode.md`.
   pod logged **2 819 `transfer failed for request`** plus KVTransferError aborts. It measured a broken KV-transfer
   path, not a schedule. A clean-upstream re-run is queued (`mn_pdre_clean_16g_20261028.sh`), since `mn_node.sh`
   requires stock PD on `up_clean/python`.
-- **PD multiplexing is unmeasured at both loads.** Every worker failed all five launch attempts with
-  `AttributeError: 'NoneType' object has no attribute 'swa_out_cache_loc'` -- `forward_metadata` is None inside the
-  FA3 backend on the pdmux path. It is a backend incompatibility, not the capture memory two MEM_FRAC guesses
-  assumed. Re-run queued on sglang's default backend.
+- **PD multiplexing is unmeasured at both loads, and the THIRD attempt failed for a reason of our own making.**
+  The first failure was real: every worker died with `AttributeError: 'NoneType' object has no attribute
+  `swa_out_cache_loc'` -- `forward_metadata` is None inside the FA3 backend on the pdmux path, a backend
+  incompatibility and not the capture memory two MEM_FRAC guesses had assumed. The retry on sglang's default
+  backend then reported `only 0/16 workers healthy after 40 min`, which looks like the same class of fault and is
+  not. The cause (2026-10-29) is that our own per-tenant acceptance patch had inserted `import os as _os` at the
+  TOP of `metrics_reporter.py`, above its `from __future__ import annotations`; Python requires every `__future__`
+  import to come first, so the module raised `SyntaxError` and every scheduler process on four trees
+  (`up`, `python`, `python_slo_life`, `h20py`) on all four nodes died before opening a port.
+  **Three consequences worth keeping:**
+  1. A cluster-wide "no workers healthy" report says nothing about the cluster. Read a worker log first: an
+     import-time `SyntaxError` and an RDMA fault present identically at the driver.
+  2. The repair tool's own gate used `ast.parse`, which does NOT apply the `__future__` ordering rule, so it
+     reported `already-ok` for all four broken files and the first repair pass changed nothing while printing
+     success. Validation of patched Python must use `compile()`.
+  3. **No recorded result is contaminated.** Every arm that ran before the patch has healthy acceptance (~2.0),
+     full request counts and `failed=0`: the demotefix and capsweep arms at both loads were checked individually.
+     Only the two pdmux arms were killed by it.
+  All four trees were repaired in place and verified with `compile()`; the patch now inserts after the last
+  `__future__` line and refuses to write a file the interpreter would reject. pdmux stays unmeasured until an arm
+  gets past launch, so no pdmux row may be filled from a failed arm.
 
 **Standing:** point 1 is the paper's claim and now rests on the realistic replay rather than on fan-out, where
 shared prefixes let the baseline nearly match us. Point 4 has become an argument about timescales, supported by

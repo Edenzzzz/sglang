@@ -2288,8 +2288,18 @@ absorbs steps that size. But the SLO is a **mean** over a request's output: a si
 mean TPOT by 600/n ms, about **1.5 ms for a 400-token output**. That is absorbable, and refusing to prefill on
 account of it is the error. A fixed 2048-token chunk never consults the budget, which is exactly why the `c2048`
 control tracks L0 while our arm collapses -- and since `c2048` and our arm share the identical router, tree and
-policy, **routing to loaded nodes is ruled out as a cause.** pdmux never meets this at all: it partitions SMs
-spatially and has no latency-budgeted chunk.
+policy, **routing to loaded nodes is ruled out as a cause.**
+
+**pdmux runs THE SAME POLICY, and is the strongest evidence that the policy is sound and our implementation is
+not** (corrected 2026-10-29; an earlier note here wrongly said pdmux does not do this). pdmux sizes the prefill SM
+allocation from a performance model of what decode needs to hold its SLO -- the same decision as ours, with SMs as
+the resource instead of chunk tokens. The difference is decisive: **pdmux's knob cannot reach zero.** It shifts
+prefill onto fewer SMs; it never allocates prefill none. Ours drives the chunk to zero on 41% of steps, which is
+the same policy with an unbounded knob. Two systems using this policy without the pathology, plus SLOs-Serve's
+section 4.1 surplus rule, say the same thing: **the resource given to prefill must be reduced, never withdrawn.**
+That is the principle the fix implements, and it also tells us what the floor's value should be -- the analogue of
+pdmux's minimum SM group, i.e. the smallest allocation that still makes progress, rather than an arbitrary
+constant.
 
 **A specific numerical inconsistency to chase, which the logs already show.** Under the `life` form a YOUNG row
 should grant a large budget, because its remaining output is credited at the observed rate while it is allowed the

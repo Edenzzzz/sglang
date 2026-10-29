@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.73.0 — Correction: pdmux runs the same policy, which is why ours is the broken one (2026-10-29)
+- An earlier note claimed pdmux does not use a latency-budgeted allocation. Wrong: pdmux sizes the prefill SM
+  allocation from a performance model of what decode needs to hold its SLO -- the same decision as our chunk rule,
+  with SMs as the resource rather than chunk tokens.
+- That makes pdmux the strongest evidence that the policy is sound and our implementation is not. pdmux's knob
+  CANNOT reach zero: it moves prefill onto fewer SMs, never onto none. Ours drives the chunk to zero on 41% of
+  steps -- the same policy with an unbounded knob.
+- Two systems running this policy without the pathology, plus SLOs-Serve 4.1's surplus rule, give one principle:
+  the resource granted to prefill must be REDUCED, never withdrawn. That also fixes the floor's value -- the
+  analogue of pdmux's minimum SM group, the smallest allocation that still makes progress, rather than a constant
+  picked by hand.
+
 ## v3.72.0 — The budget's minimum-over-rows is the defect; reject only when all capacity is needed (2026-10-29)
 - The model is not over-predicting. A chunk's attention costs chunk x prefix, so at a ~100K prefix a 2048-token
   chunk really does cost about 600 ms, and the baseline's chat TPOT p99 of 401 ms shows it absorbs such steps. The

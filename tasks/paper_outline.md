@@ -111,7 +111,7 @@ turn behind a 64K-token prompt.
 AttentionFuse makes colocation meet SLOs. One CPU-side plan per step gives each of a step's prefill, decode,
 draft and verify inputs a tile of its own width and reduces every split partial inside one launch. Against the
 single attention call deployed today this is 1.86-2.92x on captured mixed steps, and it lets a prefill chunk and a
-step's draft and verify inputs share one forward, which no prior colocated design supports. Each
+step's verify inputs share one forward, which no prior colocated design supports. Each
 worker then orders prefills by deadline and sizes each prefill chunk from a measured step-time model so that
 running requests stay inside their targets, and a router places requests on the symmetric node with the most cached
 prefix that can still meet every SLO.
@@ -160,8 +160,10 @@ admitting it.
   prefill, decode, draft and verify inputs a tile of its own width, and folds the split-KV merge into the same
   launch.
 - **Speculative decoding inside colocation.** Because each input gets a tile class of its own size, a prefill
-  chunk and the running requests' draft and verify inputs execute in one step -- which no prior colocation design
-  supports, though frontier models are served with speculative decoding.
+  chunk and the running requests' verify inputs execute in one target forward -- which no prior colocation design
+  supports, though frontier models are served with speculative decoding. The step is formed late, inside the
+  worker after the draft model has run, because the verify inputs do not exist before then; a scheduler that
+  assembles the step up front cannot build this batch at all.
 - **SLO control without disaggregation.** A fused step has a predictable duration, so a worker runs prefills in
   deadline order and a router admits each request to the highest-cache-hit node its step-time model says can still
   meet every tenant's targets.

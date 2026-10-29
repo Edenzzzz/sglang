@@ -6199,3 +6199,28 @@ next step.
 **Two structural gaps now isolated, each worth its own item:** our FA3 role is 1.7% behind flash-attention's own
 launch on a large prefill and 25-40% behind on narrow long-KV rows, because its chunk rule under-splits those; and
 PDL buys about zero overlap whenever the FA3 role saturates the machine, so the mixed step is the sum of its parts.
+
+## The "four modes in one batch" claim is an overclaim, and delayed verification would make it true (2026-10-29)
+
+**What the code does.** `forward_mixed_spec` puts **the prefill chunk and the verify rows** in one target forward.
+The draft model runs its OWN forward before it, so the documented order is `draft(running)` ->
+`prepare_for_verify` -> one mixed target forward over `[prefill tokens | draft tokens]` -> sample -> acceptance ->
+draft extends. **Two work types share the launch, not four.** The name "four-mode" describes the work types
+present across the iteration, and that slipped into the paper as though all four shared a kernel. Corrected in
+section 1 and the contribution bullet: the claim is a prefill chunk plus the running requests' VERIFY inputs in
+one target forward, and what makes it possible is forming the step LATE -- inside the worker, after the draft has
+run -- which a scheduler that assembles steps up front cannot do.
+
+**Delayed verification (arXiv 2512.01278, section 4.3) would make the stronger claim true, and is worth building
+for that reason as much as for its own.** It "delays verification by one iteration to remove CPU verification from
+the critical path", postponing iteration i's CPU work to iteration i+1. If iteration i's verify rows are processed
+in iteration i+1, then that iteration's batch carries **the previous step's verify rows alongside the current
+step's draft and prefill work** -- which is genuinely more work types in one batch than we have today, and is
+exactly the composition our tile dispatcher is built for.
+- It is **complementary to C2, not the same mechanism and not the opposite one.** C2 pulls verify rows forward
+  into the prefill's forward within an iteration; delayed verification pushes verification's HOST work into the
+  next iteration. One is about which rows share a kernel, the other about what blocks the next launch.
+- **It also targets the one kernel family still below parity.** The eight remaining sub-1.0x captures are
+  sub-millisecond chat-dominant steps where our mixed step takes exactly the SUM of its two roles -- the signature
+  of host work on the critical path between launches -- and where the host plan costs 0.5-12 ms against 0.4-4 ms
+  kernels.

@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.84.0 — Retracted: draft and verify ARE overlapped, across requests (2026-10-29)
+- I claimed from eagle_worker_v2's sequential draft() then verify() calls that our schedule overlaps nothing. That
+  does not follow, and the four-mode step refutes it: if the two were strictly sequential a single plan could not
+  carry both tile kinds, which it does. Those calls are the per-request chain, not a statement about what shares a
+  step.
+- The dependency is per REQUEST; the overlap is across requests. Step N+1's draft depends on step N's verify for
+  the SAME request, but request A's draft tiles and request B's verify tiles share one launch -- two-batch
+  overlap, which is what makes the step four-mode in the first place.
+- Consequence: the 17-28% draft share is NOT an untapped pipelining ceiling. It is wholly or partly realised
+  already, and must be re-derived against what is actually overlapped before being quoted. Only the intra-request
+  chain remains blocked by the data dependency.
+- Still open and not to be asserted either way: the relation to the delayed-verify schedule of arXiv 2512.01278,
+  which is not on disk and which I have not read.
+
 ## v3.83.0 — Paired run confirms the chunk-cap fix, with revised figures (2026-10-29)
 - Both arms under identical conditions, three repeats each, supersedes the after-only pass: below-1.0x 13/28 ->
   9/28 (not 8/28), median 1.008 -> 1.161 (not 1.169), realistic chunk 0.975/0.981/0.955/0.937 ->

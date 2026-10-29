@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.68.0 — The decode-KV tracer works: 11541 decode steps, none with dkv=0 (2026-10-29)
+- The alpha-3 traced point launched fresh workers against the patched tree and records real KV lengths, against
+  6117 of 6117 zeroes in the arm that ran before the patch. Sample: DECODE bs=8 nd=8 dkv=163904 kv=163904
+  gpu=14.8003 -- eight decode rows holding 164K KV tokens in a 14.8 ms step, the term the decode-step model had
+  been fitted without.
+- Point 3's premise is testable for the first time: refit on these traces and measure the decode-step signed bias
+  on a chronological split. The three readings that rested on the dead input -- 29.0% MAPE, -13.0% bias, and the
+  nonlinear fit being worse at -19.9% -- were all measured against a zero feature and remain withdrawn until this
+  refit lands.
+
 ## v3.67.0 — Deferred KV commit for rejected draft tokens: declined with arithmetic (2026-10-29)
 - Two independent grounds, no GPU time. The traffic is negligible: 2 048 B per token of K and V, two rejected
   tokens per row, 48 rows, is 192 KiB per step -- 1.9 to 9.4 MiB/s, about 0.00005% of the H20's ~4 TB/s. And the

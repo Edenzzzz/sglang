@@ -2156,6 +2156,12 @@ recorded. Checked before that arm took the cluster lock, and it would have measu
   is stale from an earlier extend step rather than reset per step. It is not among the step model's columns
   (`1, ptok, attn, nd, dkv/1e3, np, mixed, nd*S, nd*T, dkv*T/1e3`), so no fitted coefficient depends on it, but any
   future feature set that reaches for `et` would be reading a stale value.
+- **VERIFIED WORKING (2026-10-29 15:36).** The alpha-3 point launched fresh workers against the patched tree and
+  its trace carries real values: **11 541 decode steps, none with `dkv=0`**, against 6 117 of 6 117 zero in the
+  void arm. A representative line reads `STEPTRACE DECODE bs=8 nd=8 dkv=163904 kv=163904 gpu=14.8003` -- eight
+  decode rows holding 164K KV tokens between them in a 14.8 ms step, which is the quantity the decode-step model
+  was missing entirely. **Point 3's premise can be tested for the first time**: refit on these traces and measure
+  the decode-step signed bias on a chronological split. The arm is still writing; the fit waits for it to finish.
 - **Two general lessons, both already paid for once today.** A deployment step must verify a MARKER rather than
   trust an exit code or a following `echo`; and a patch's anchor is a property of the tree it is applied to, so a
   patch written against one revision must be re-read against the deployed one before it is chained into anything

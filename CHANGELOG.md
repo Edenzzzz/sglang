@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.66.0 — The alpha-6 traced point is void: 6117 of 6117 decode steps carry dkv=0 (2026-10-29)
+- Confirmed rather than inferred. That arm launched at 14:37, before the corrected tracer patch went on at about
+  15:00, so every decode step in it records a zero KV length -- the defect the trace exists to measure, for the
+  second time, exactly as the chain's unconditional DKV_DEPLOYED implied.
+- The alpha-3 point is queued behind the pdmux smoke and will launch fresh workers against the patched tree, so
+  point 3 waits on that single arm rather than on re-running both.
+- Also recorded: those decode lines read et=16384 (extend_num_tokens) on steps with np=0 and no prefill, so that
+  field is stale from an earlier extend step rather than reset per step. No fitted coefficient depends on it -- it
+  is not among the step model's columns -- but any future feature set reaching for `et` would read a stale value.
+
 ## v3.65.0 — Agent-dominant timing is parity (median 1.09x), and the chunk size is why (2026-10-29)
 - Three repeats, six reachable captures, spreads 0-4%: 2.12x and 1.71x at batch 16, 1.20x and 0.99x at 32, 0.88x
   and 0.74x at 64 for two- and four-mode. Overall median 1.09x, monotonically declining with batch. On the

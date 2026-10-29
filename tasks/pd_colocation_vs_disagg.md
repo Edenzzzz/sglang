@@ -2145,6 +2145,17 @@ recorded. Checked before that arm took the cluster lock, and it would have measu
   already uses for the running batch: where the host copy is absent, take each row's KV from the request
   (`len(origin_input_ids) + len(output_ids)`), which adds no device synchronisation. Applied and verified on both
   trees on all four nodes with `compile()` and a marker count: `dkv=1 verify=1 COMPILES` everywhere.
+- **The cost was one traced point, and it is now confirmed rather than feared.** The chain's alpha-6 arm had
+  already launched at 14:37, before the corrected patch went on at about 15:00, and its trace shows
+  **6 117 of 6 117 decode steps with `dkv=0`** -- every one. That point is therefore void for point 3, exactly as
+  the unconditional `DKV_DEPLOYED` implied. The alpha-3 point is queued behind the pdmux smoke and will launch
+  fresh workers against the patched tree, so it will carry real values; point 3 waits on that one arm rather than
+  on a re-run of both.
+- **A second tracer input is also wrong, and it is worth recording even though it does not affect the fit.** Those
+  decode lines read `et=16384` -- `extend_num_tokens` -- on steps with `np=0` and no prefill at all, so the field
+  is stale from an earlier extend step rather than reset per step. It is not among the step model's columns
+  (`1, ptok, attn, nd, dkv/1e3, np, mixed, nd*S, nd*T, dkv*T/1e3`), so no fitted coefficient depends on it, but any
+  future feature set that reaches for `et` would be reading a stale value.
 - **Two general lessons, both already paid for once today.** A deployment step must verify a MARKER rather than
   trust an exit code or a following `echo`; and a patch's anchor is a property of the tree it is applied to, so a
   patch written against one revision must be re-read against the deployed one before it is chained into anything

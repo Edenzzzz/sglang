@@ -296,6 +296,8 @@ class EAGLEWorker(TpModelWorker):
                 ):
                     # decode is not finished
                     self.forward_draft_extend_after_decode(batch)
+                    if DELAYED_VERIFY:
+                        self._detach_draft_outputs(batch)
 
             return GenerationBatchResult(
                 logits_output=logits_output,
@@ -444,6 +446,22 @@ class EAGLEWorker(TpModelWorker):
         )
         return result
 
+    def _detach_draft_outputs(self, batch: ScheduleBatch):
+        """Copy the draft-extend outputs out of the CUDA graph's static buffers.
+
+        EAGLEDraftExtendCudaGraphRunner.replay() RETURNS output_buffers[bs], so two replays in
+        one iteration leave the first batch's spec_info pointing at the second batch's values.
+        Delayed verification makes two replays per iteration the normal case -- the running
+        batch's inside run_batch and the held batch's in the drain -- and the damage is silent:
+        the emitted text stays target-greedy, only the draft tokens and so the acceptance
+        length change. Hence the copy, and hence acceptance length is part of the gate.
+        """
+        spec_info = batch.spec_info
+        for name in ("topk_p", "topk_index", "hidden_states"):
+            t = getattr(spec_info, name, None)
+            if t is not None:
+                setattr(spec_info, name, t.clone())
+
     @property
     def _delayed_verify_stash(self) -> List:
         stash = getattr(self, "_delayed_verify_stash_list", None)
@@ -474,6 +492,7 @@ class EAGLEWorker(TpModelWorker):
         with self.draft_tp_context(self.draft_model_runner.tp_group):
             if running.spec_info.verified_id.shape[0] > 0:
                 self.forward_draft_extend_after_decode(running)
+                self._detach_draft_outputs(running)
         result = GenerationBatchResult(
             logits_output=ver_out,
             next_token_ids=res.verified_id,

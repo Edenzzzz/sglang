@@ -5664,10 +5664,27 @@ not the critical path through it. The split is doing real work and the merge it 
 the control that settles this.
 
 **Candidates still open for the gap, in the order they are worth testing:**
-1. The 16-row FA2 class's occupancy. These captures are two-mode, so A6 routes decode inputs to the 16-row class
-   while v3's native kernel uses a 32-row tile. A 32-row tile holding one useful row is waste by our own argument,
-   yet it is faster here, which points at the 16-row instantiation being under-occupied rather than at tile width.
-   `UNIFIED_FA2_CTAS_PER_SM16` tests this with no rebuild.
+1. **The 16-row FA2 class's grid was under-tuned -- PARTIALLY CONFIRMED (2026-10-29).** These captures are
+   two-mode, so A6 routes decode inputs to the 16-row class while v3's native kernel uses a 32-row tile. Sweeping
+   `UNIFIED_FA2_CTAS_PER_SM16` over 1 / 2 / 4 / 8:
+
+   | resident CTAs per SM | bs 16 | bs 32 | bs 64 | bs 128 |
+   |---:|---:|---:|---:|---:|
+   | default | 0.655 | 0.584 | 0.668 | 2.293 |
+   | 1 | 0.674 | 0.662 | 0.729 | 2.206 |
+   | 2 | 0.624 | 0.605 | 0.668 | 2.267 |
+   | **4** | **0.541** | **0.514** | **0.637** | 2.252 |
+   | 8 | 0.668 | 0.535 | 0.695 | 2.267 |
+
+   Four resident CTAs per SM is the best of the five and beats today's default by **17% / 12% / 5% / 2%** as the
+   batch grows, which is the right shape: the 16-row class's grid matters most when there is least work to hide an
+   under-filled launch behind. **This is a real optimization and the default should move**, but it does not close
+   the gap on its own -- against v3 the arm goes from 0.63x to 0.92x at batch 16 and remains 0.71-0.84x above it.
+   - **Methodological catch worth keeping: v3's own time varies 8-34% between passes at these batch sizes** (mean
+     0.499 at batch 16 with a 34% spread across four passes). The knob under test cannot affect v3, so that
+     spread is pure run-to-run noise, and it means **no single-pass small-batch comparison here is trustworthy** --
+     including the first table that reported the gap as 0.61x. The gap is real because it reproduces in every
+     pass, but its magnitude at batch 16 and 64 is only known to about a third of its own size.
 2. The in-launch merge itself, independent of the split count (`UNIFIED_SKIP_MERGE=1`, needs a rebuild).
 3. The plan's host cost, which is 0.5-8.7 ms here against a kernel of 0.5-2.3 ms. It is overlapped in serving but
    the harness may not hide it.

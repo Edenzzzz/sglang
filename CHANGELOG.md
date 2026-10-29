@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.54.0 — The 16-row class's grid is under-tuned; v3's own timing is noisy (2026-10-29)
+- Sweeping UNIFIED_FA2_CTAS_PER_SM16 over 1/2/4/8 on the heterogeneous two-mode captures: four resident CTAs per SM
+  beats today's default by 17% / 12% / 5% / 2% as the batch grows, which is the expected shape -- the 16-row
+  class's grid matters most when there is least other work to hide an under-filled launch behind. The default
+  should move. It narrows the gap to v3 from 0.63x to 0.92x at batch 16 but does not close it (0.71-0.84x above).
+- Recorded a methodological limit that applies to every small-batch number in this harness: v3's own time varies
+  8-34% between passes, and the knob under test cannot affect v3, so that spread is run-to-run noise. The gap to v3
+  is real because it reproduces in every pass, but its magnitude at batches 16 and 64 is known only to about a
+  third of its own size. The first table's 0.61x should be read with that spread.
+- The FA3-split hypothesis stays refuted; the in-launch merge is built as a separate extension and chained to bench
+  as a timing probe only, since output is incomplete with the merge compiled out.
+
 ## v3.53.0 — A6's FA3 KV split is why it loses to v3 on heterogeneous steps (2026-10-29)
 - Confirmed the regression at 200 iterations with the workspace pre-grown: A6 runs at 0.61-0.83x of v3 on the
   heterogeneous two-mode captures, while both beat sglang's single attention call by 2.0-7.0x. Correctness is

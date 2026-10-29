@@ -2246,8 +2246,18 @@ not of the cap's value, which is what makes it a finding rather than a tuning ga
   decode step per stream, which non-speculative pdmux already pays.
   **Why fix the baseline rather than run it without MTP:** pdmux is the colocation baseline the single-node bar is
   judged against, and running it without speculation while our arm has it would hold its configuration below ours.
-  A short smoke arm (alpha 12, 180 s) is queued behind the cap sweep; **pdmux stays unmeasured until an arm gets
-  past launch, and no pdmux row may be filled from a failed arm.**
+  **The smoke arm then failed a FOURTH time, on a fault the fix itself introduced.** The draft model's CUDA graph
+  capture died with `Cannot copy between CPU and CUDA tensors during CUDA graph capture unless the CPU tensor is
+  pinned`, raised from `eagle_draft_cuda_graph_runner.py`: planning copies plan data host-to-device, and capture
+  rejects an unpinned host source. Forcing the plan unconditionally therefore broke capture, where the readiness
+  mark had previously made the forward skip planning. Capture has its own planning path -- the decode graph runner
+  plans each per-stream backend as it captures -- so the forced plan belongs only on the eager forward.
+  `apply_pdmux_capture_guard_20261029.py` adds `not torch.cuda.is_current_stream_capturing()` to the condition;
+  deployed and compiling on all four nodes.
+  **This is the third distinct cause behind one symptom.** "0/16 workers healthy after 40 min" has now meant an
+  import-time SyntaxError in our own patch, a backend/metadata mismatch, and an illegal copy inside graph capture.
+  The symptom carries no information; only a worker log does, and every one of these was found by reading one.
+  **pdmux stays unmeasured until an arm gets past launch, and no pdmux row may be filled from a failed arm.**
 
 **Standing:** point 1 is the paper's claim and now rests on the realistic replay rather than on fan-out, where
 shared prefixes let the baseline nearly match us. Point 4 has become an argument about timescales, supported by

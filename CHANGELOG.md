@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.55.0 — The pdmux fix broke CUDA graph capture; guarded (2026-10-29)
+- The spec-metadata fix forced a plan on the resolved per-stream backend whenever pdmux was on. Planning copies
+  plan data host-to-device and CUDA graph capture rejects an unpinned host source, so the draft model's capture
+  died with "Cannot copy between CPU and CUDA tensors during CUDA graph capture". The readiness mark had previously
+  made the forward skip planning during capture, which is why the fault appeared only after the fix.
+- apply_pdmux_capture_guard_20261029.py adds `not torch.cuda.is_current_stream_capturing()`. Capture has its own
+  planning path -- the decode graph runner plans each per-stream backend as it captures -- so the forced plan
+  belongs only on the eager forward. Deployed and compiling on all four nodes.
+- Recorded that "0/16 workers healthy after 40 min" has now had three distinct causes: an import-time SyntaxError
+  in our own patch, a backend/metadata mismatch, and an illegal copy inside graph capture. The symptom carries no
+  information; each cause was found only by reading a worker log.
+
 ## v3.54.0 — The 16-row class's grid is under-tuned; v3's own timing is noisy (2026-10-29)
 - Sweeping UNIFIED_FA2_CTAS_PER_SM16 over 1/2/4/8 on the heterogeneous two-mode captures: four resident CTAs per SM
   beats today's default by 17% / 12% / 5% / 2% as the batch grows, which is the expected shape -- the 16-row

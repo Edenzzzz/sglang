@@ -32,6 +32,11 @@ is affected.
 Cost: one plan call per decode step per stream. Non-speculative pdmux already pays exactly this, because without a
 pre-planner `needs_forward_metadata_init()` is true every step.
 
+The capture guard is not optional. Planning copies plan data host-to-device, which CUDA graph capture rejects
+unless the source is pinned, so forcing the plan unconditionally kills the draft model's capture with "Cannot copy
+between CPU and CUDA tensors during CUDA graph capture unless the CPU tensor is pinned" -- measured, 2026-10-29.
+Capture has its own planning path, so only the eager forward needs this.
+
   python apply_pdmux_spec_metadata.py <tree>/python/sglang/srt
 
 Idempotent. This makes the BASELINE runnable in the same MTP configuration as our arm, which is the comparison the
@@ -56,8 +61,15 @@ NEW = """        # _pdmux_spec_metadata: readiness is marked on the BATCH by a p
         # the backend this forward resolved -- and planning that backend cannot disturb pre-planned draft
         # metadata, which lives elsewhere. Testing the resolved object rather than `forward_metadata is None`
         # matters from the second step on, when a per-stream backend still holds the previous step's stale plan.
+        #
+        # NOT during CUDA graph capture. Planning copies plan data from host to device, and inside a capture that
+        # is illegal unless the source is pinned -- the first version of this patch forced the plan
+        # unconditionally and the draft model's capture died with "Cannot copy between CPU and CUDA tensors
+        # during CUDA graph capture". Capture has its own planning path (the decode graph runner plans each
+        # per-stream backend as it captures), so the eager forward is the only place that needs this.
         _needs_plan = forward_batch.needs_forward_metadata_init()
-        if enable_pdmux and attn_backend is not model_runner.attn_backend:
+        if (enable_pdmux and attn_backend is not model_runner.attn_backend
+                and not torch.cuda.is_current_stream_capturing()):
             _needs_plan = True
         if _needs_plan:
             if hasattr(model_runner.model, "prepare_forward_batch"):"""

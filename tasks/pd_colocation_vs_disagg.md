@@ -2198,6 +2198,24 @@ control's behaviour; that it does not, across six values spanning an order of ma
 sizing the chunk from a latency budget at all on this workload rather than from the cap's value. The trade is therefore a property of sizing the chunk from a latency budget at all on this workload,
 not of the cap's value, which is what makes it a finding rather than a tuning gap.
 `mn_capsweep2_16g_20261029.sh`, log `/tmp/h20/mn_capsweep2_r1.log`.
+### Why a more accurate step model will not rescue the rule
+
+The natural next move is to bisect the validated step MLP (3.4-4.0% on merged steps) instead of the linear model,
+on the theory that the rule picks bad chunks because it mispredicts step time. **The six-cap sweep says otherwise,
+and it is worth being explicit because it saves a GPU run.** If the rule's problem were prediction error, relaxing
+the tail cap would move the arm toward the control, since a cap that rarely binds leaves the budget rarely binding
+too. Across 1000, 1500, 2000, 3000, 4000 and 8000 ms the arm never approaches the control and is not even
+monotonic. What every cap shares is the OBJECTIVE: keep every resident row inside its mean-TPOT slack. Minimising
+over resident rows can only shrink the chunk, shrinking the chunk can only lengthen each prefill, and the arms
+confirm both halves -- mean TPOT improves 11-28% at every cap while mean TTFT rises 3.5-4x and attainment falls.
+A perfectly accurate model of step time optimises that objective better, which is the wrong direction.
+
+**So the next rule to try is a different objective, not a better model: choose the chunk that maximises expected
+attainment, which must price the queue's time-to-first-token against the residents' time-per-output-token rather
+than treating the latter as a constraint and the former as free.** `chunk_predictor.py` already bisects a step
+model with no dynamic program, so the machinery carries over unchanged; only the quantity being bisected changes.
+That is recorded here as the design direction the measurement points at, and it is not claimed as a result.
+
 - **This reverses the 2026-10-28 reading**, which was taken on the SLO-attaining token rate and the TPOT tail and
   concluded the rule "cuts the tail 46% past capacity". That is still true of the tail, and it is not the question:
   on attainment the rule loses at both loads. The component is therefore **excluded from the contribution**, not

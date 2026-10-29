@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.59.0 — Full generated-capture sweep: 3.92x median on heterogeneous input, 0.83x on uniform (2026-10-29)
+- All four generated sets at the tuned 16-row grid, 200 iterations, unfiltered output. Heterogeneous input
+  1.13-6.70x median 3.92x over sglang's single attention call; uniform short input 0.57-1.36x median 0.83x, i.e.
+  about 17% SLOWER. Against v3 the dispatcher loses almost everywhere (median 0.69x).
+- The uniform-input loss is recorded rather than softened, with the two properties of these generated sets that
+  decide what it means: the prefill chunk is a fixed 512 tokens on a 4096-token context, against 2048-16384 tokens
+  over 32K-256K in serving, so FA3's share is small and the plan plus second launch are amortised over very little
+  work; and batches of 64-1024 sit far above the 48-request cap speculative decoding imposes. The reading is that
+  the gain comes from tile-width heterogeneity, and a step with neither heterogeneity nor a chunk large enough to
+  amortise the plan gives the mechanism nothing to earn.
+- Three repeats of the sweep are running. Pass-to-pass variation has been seen at 13% and once at 40% on a point a
+  provably inert knob could not have moved, so no row is quoted without bars.
+
 ## v3.58.0 — Compiling the in-launch merge out deadlocks the kernel (2026-10-29)
 - UNIFIED_SKIP_MERGE=1 does not produce a timing probe; it hangs. The GPU sits at 100% utilisation while the host
   sleeps on one thread -- a host blocked in a CUDA sync behind a kernel that never completes. Two attempts hung,

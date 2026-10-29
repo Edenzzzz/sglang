@@ -5761,3 +5761,52 @@ depends on how well acceptance length can be predicted per step rather than on a
 (section on the perf model), so treat the shares as indicative of magnitude rather than as tight. The ordering --
 verify dominates, the draft share shrinks with context -- is robust because it follows from which terms carry KV
 length, not from the fit's precision.
+
+## Full generated-capture sweep at the tuned 16-row grid (2026-10-29, H200, 200 iterations)
+
+All four sets, `UNIFIED_FA2_CTAS_PER_SM16=4`, output unfiltered. Ratios are sglang's single attention call divided
+by ours, so above 1 means we are faster.
+
+| set | batch | ours (ms) | sglang | vs sglang | v3 | vs v3 |
+|---|---:|---:|---:|---:|---:|---:|
+| sharegpt four-mode | 64 | 0.400 | 0.406 | 1.02x | 0.210 | 0.52x |
+| sharegpt four-mode | 128 | 0.493 | 0.279 | 0.57x | 0.344 | 0.70x |
+| sharegpt four-mode | 256 | 0.626 | 0.474 | 0.76x | 0.416 | 0.66x |
+| sharegpt four-mode | 512 | 0.888 | 0.819 | 0.92x | 0.789 | 0.89x |
+| sharegpt four-mode | 1024 | 1.865 | 1.597 | 0.86x | 1.611 | 0.86x |
+| sharegpt two-mode | 64 | 0.369 | 0.243 | 0.66x | 0.184 | 0.50x |
+| sharegpt two-mode | 128 | 0.418 | 0.329 | 0.79x | 0.239 | 0.57x |
+| sharegpt two-mode | 256 | 0.487 | 0.394 | 0.81x | 0.450 | 0.93x |
+| sharegpt two-mode | 512 | 0.832 | 0.744 | 0.89x | 0.721 | 0.87x |
+| sharegpt two-mode | 1024 | 1.289 | 1.756 | **1.36x** | 1.318 | 1.02x |
+| longtail four-mode | 16 | 1.110 | 3.820 | **3.44x** | 0.739 | 0.67x |
+| longtail four-mode | 32 | 0.632 | 2.733 | **4.33x** | 0.433 | 0.69x |
+| longtail four-mode | 64 | 1.087 | 3.948 | **3.63x** | 0.758 | 0.70x |
+| longtail four-mode | 128 | 4.056 | 4.603 | 1.13x | 2.619 | 0.65x |
+| longtail two-mode | 16 | 0.667 | 3.712 | **5.57x** | 0.423 | 0.63x |
+| longtail two-mode | 32 | 0.521 | 2.188 | **4.20x** | 0.463 | 0.89x |
+| longtail two-mode | 64 | 0.673 | 4.510 | **6.70x** | 0.462 | 0.69x |
+| longtail two-mode | 128 | 2.266 | 4.583 | **2.02x** | 1.687 | 0.74x |
+
+**Heterogeneous input: 1.13-6.70x, median 3.92x. Uniform short input: 0.57-1.36x, median 0.83x -- that is, about
+17% SLOWER than sglang's single call at the median.** Against v3 the dispatcher loses almost everywhere
+(0.50-1.02x, median 0.69x).
+
+**Two properties of these generated sets decide how much the uniform-input loss means, and both push the same way.**
+They were built to vary KV-length spread, not to resemble a serving step, and they differ from our serving regime
+in exactly the directions that penalise a dispatcher:
+1. **The prefill chunk is tiny and fixed: 512 tokens on a 4096-token context.** In serving, chunks are 2048-16384
+   tokens over 32K-256K contexts. A small chunk makes FA3's share of the step small, so the plan's cost and the
+   second launch are amortised over very little work -- the worst case for this design, and not the case it is
+   for.
+2. **Batches of 64-1024 are far above our serving regime**, which caps `max_running_requests` at 48 under
+   speculative decoding.
+So the right reading is not "the kernel is slower than sglang": it is that **the dispatcher's gain comes from
+tile-width heterogeneity, and when a step has neither heterogeneity nor a prefill chunk large enough to amortise
+the plan, the mechanism has nothing to earn and its overhead shows.** The trace-sampled captures, which have
+realistic chunk sizes, are where the 1.86-2.92x over sglang comes from, and they remain the paper's kernel result.
+
+**Open and being measured:** three repeats of this whole sweep are running, because pass-to-pass variation on
+these sets has been seen at 13% and once at 40% on a point that a provably inert knob could not have moved
+(four-mode work goes to the 32-row class, so `CTAS_PER_SM16` cannot affect it). No row above should be quoted
+without those bars.

@@ -5823,7 +5823,35 @@ composition we do not claim, and it understates the heterogeneous case while ove
 - Queued ahead of the default-grid control, with a correctness gate first because a 75%-agent mix carries far more
   split-KV work than anything gated so far. Three repeats, for the same variance reason as below.
 
-**Open and being measured:** three repeats of the `longtail`/`sharegpt` sweep are running, because pass-to-pass
-variation on these sets has been seen at 13% and once at 40% on a point that a provably inert knob could not have
-moved (four-mode work goes to the 32-row class, so `CTAS_PER_SM16` cannot affect it). No row above should be quoted
-without those bars, and the headline composition is `agentmix` rather than `longtail` regardless.
+### Three repeats, 200 iterations: the spread is small and the earlier "40% noise" was my own error
+
+| set | batch | ours (mean of 3) | spread | sglang | spread | vs sglang | vs v3 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| longtail four-mode | 16 | 1.107 | 0% | 3.836 | 1% | **3.47x** | 0.66x |
+| longtail four-mode | 32 | 0.645 | 6% | 2.779 | 0% | **4.31x** | 0.75x |
+| longtail four-mode | 64 | 1.086 | 2% | 3.966 | 1% | **3.65x** | 0.68x |
+| longtail four-mode | 128 | 4.028 | 2% | 4.622 | 1% | 1.15x | 0.66x |
+| longtail two-mode | 16 | 0.643 | 8% | 3.716 | 2% | **5.78x** | 0.65x |
+| longtail two-mode | 32 | 0.597 | 6% | 2.170 | 1% | **3.63x** | 0.72x |
+| longtail two-mode | 64 | 0.614 | 10% | 4.570 | 0% | **7.44x** | 0.92x |
+| longtail two-mode | 128 | 2.278 | 1% | 4.613 | 1% | **2.03x** | 0.73x |
+| sharegpt four-mode | 64..1024 | 0.394-1.848 | 1-16% | 0.357-1.594 | 1-12% | 0.76-1.01x | 0.64-0.89x |
+| sharegpt two-mode | 64..1024 | 0.358-1.308 | 1-11% | 0.216-1.659 | 4-16% | 0.60-1.27x | 0.49-0.97x |
+
+**Heterogeneous 90/10: 1.15-7.44x, median 3.64x. Uniform short: 0.60-1.27x, median 0.86x.**
+
+**Two methodological corrections, both of my own earlier statements:**
+1. **The within-configuration spread is 0-16%, not 40%.** The 40% figure came from aggregating by capture FILENAME,
+   and the two-mode and four-mode sets use the same filenames -- so it averaged two different workloads together
+   and reported their difference as variance. Keyed by (set, capture) the repeats agree to 0-16%, usually under
+   10%. The claim that "no single-pass small-batch number is trustworthy to better than a third of its size" was
+   therefore too pessimistic for THIS harness; it still holds for the v3 arm across the earlier knob sweep, where
+   the spread was genuinely 8-34% and measured correctly.
+2. **40-iteration runs overstate our arm by up to 40%.** `longtail_four` batch 64 read 0.774 at 40 iterations and
+   1.086 +-2% at 200, in a configuration where the only changed knob provably cannot affect four-mode work
+   (`CTAS_PER_SM16` applies when every FA2 input fits the 16-row tile, which four-mode never does). So the
+   difference is the iteration count, not the knob and not noise. **The first table in this section, taken at 40
+   iterations, is superseded by these numbers**, and no 40-iteration measurement should be quoted.
+
+**Still the wrong composition.** All of the above is the 90%-chat mix. The `agentmix` sweep at 75% agent inputs is
+queued and is the composition that belongs in the paper.

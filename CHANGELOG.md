@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.62.0 — Three repeats: spread is 0-16%, and two of my own methodology claims were wrong (2026-10-29)
+- Three repeats at 200 iterations, keyed by (set, capture): heterogeneous 90/10 mix 1.15-7.44x median 3.64x over
+  sglang's single attention call; uniform short input 0.60-1.27x median 0.86x. Within-configuration spread is
+  0-16%, usually under 10%.
+- CORRECTION 1: the "40% pass-to-pass variation" reported earlier was an artefact of my aggregation, which keyed on
+  capture filename -- and the two-mode and four-mode sets reuse filenames, so it averaged two different workloads
+  and called their difference variance. The pessimistic "no single-pass number is trustworthy to a third of its
+  size" does not apply to this harness, though it does stand for the v3 arm in the earlier knob sweep where the
+  8-34% spread was measured correctly.
+- CORRECTION 2: 40-iteration runs overstate our arm by up to 40% (longtail four-mode batch 64: 0.774 at 40
+  iterations against 1.086 +-2% at 200, with the only changed knob provably inert for four-mode work). The first
+  kernel table in the task doc, taken at 40 iterations, is superseded and no 40-iteration number should be quoted.
+- All of this is still the 90%-chat mix; the agent-dominant sweep is queued and is what belongs in the paper.
+
 ## v3.61.0 — The generated mix was inverted: agent inputs must dominate (2026-10-29)
 - The `longtail` set is 90% chat inputs with 10% agent inputs of 64K-200K. The evaluated workload has agent inputs
   dominating at over 70% (user). The share of wide-KV inputs is exactly what decides how much tile waste there is

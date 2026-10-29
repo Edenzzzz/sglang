@@ -1,5 +1,28 @@
 # Changelog
 
+## v3.91.0 — Delayed verification on the fork's 4-mode step (SGLANG_DELAYED_VERIFY=1, off by default) (2026-10-29)
+- Implements arXiv 2512.01278 section 4.3 on the fork's EAGLE v1 path: a request whose draft tokens were just
+  verified sits out ONE iteration while the host computes acceptance, so that host work overlaps the next
+  iteration's GPU work instead of standing between two launches.
+- `EagleVerifyInput.verify()` is split at its first host read. `verify_sample()` is the device half (penalties,
+  grammar mask, the acceptance kernels); `verify()` keeps the host half and now takes `presampled` and
+  `host_copies`. With neither argument the path is byte-identical to before.
+- `EAGLEWorker._verify_device_half()` runs that device half right after the mixed target forward and starts the
+  D2H of accept_index / predict / accept_length into pinned buffers, then records an event. Without those copies
+  the delay wins nothing: a `tolist()` issued one iteration later is stream-ordered BEHIND that iteration's
+  forward, so the host would wait for it.
+- `forward_mixed_spec` stashes (batch, verify input, logits, presampled, host copies, event) instead of calling
+  `_verify_post`, skips the verify half's draft extend, and returns `delayed_verify_held`.
+  `EAGLEWorker.drain_delayed_verify()` finishes the oldest stash: event wait, host acceptance, draft extend.
+- The scheduler takes the held batch out of `running_batch` for one iteration, drains after launching the next
+  forward, and lets the requests rejoin at the following batch formation (not at drain time: the running batch may
+  still be mid-processing). Admission, the prefill adder's reservation, abort and the idle check all count held
+  requests, which are no longer in `running_batch`. Always-on `dv_drained` / `DELAYED_VERIFY` counters.
+- Scope note: the fork's v1 worker is the only path with a host-side verification sync to remove. The serving tree
+  (upstream 3fef129 + overlay, `eagle_worker_v2`) already defers it -- `run_eagle_verify` keeps accept_lens on the
+  device, the scheduler async-D2Hs it on a copy stream behind `copy_done`, and `event_loop_overlap` processes
+  iteration i's result only after iteration i+1 is launched.
+
 ## v3.90.0 — The fix the diagnosis pointed to: exclude unsavable rows from the budget's minimum (2026-10-29)
 - The demote test judges savability by HISTORY (spent > s_r*L), which misses the row that actually vetoes: ten
   tokens into its output a row has spent almost nothing, yet its projection remaining*rate at a slow observed rate

@@ -441,6 +441,15 @@ class Scheduler(
         self.waiting_queue: List[Req] = []
         # The running decoding batch for continuous batching
         self.running_batch: ScheduleBatch = ScheduleBatch(reqs=[], batch_is_full=False)
+        # Delayed verification (SGLANG_DELAYED_VERIFY=1, arXiv 2512.01278 section 4.3).
+        # _dv_held: batches whose verification is stashed in the spec worker; they are taken out
+        # of the batch for one iteration so the host-side acceptance can run while the next
+        # iteration's forward is already on the GPU.
+        # _dv_rejoin: batches whose verification has been drained and which rejoin the running
+        # batch at the next batch formation (not earlier: the running batch may be mid-processing).
+        self._dv_held: List[Tuple[int, ScheduleBatch]] = []
+        self._dv_rejoin: List[ScheduleBatch] = []
+        self._dv_iter: int = 0
         # The current forward batch
         self.cur_batch: Optional[ScheduleBatch] = None
         # The current split prefill batch
@@ -1158,6 +1167,7 @@ class Scheduler(
     def event_loop_normal(self):
         """A normal scheduler loop."""
         while True:
+            self._dv_iter += 1
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
 
@@ -1166,10 +1176,15 @@ class Scheduler(
 
             if batch:
                 result = self.run_batch(batch)
+                # Delayed verification: the previous iteration's host-side acceptance, run now
+                # that THIS iteration's forward is already in flight on the GPU.
+                self.drain_delayed_verify()
                 self.process_batch_result(batch, result)
             else:
-                # When the server is idle, do self-check and re-init some states
-                self.self_check_during_idle()
+                self.drain_delayed_verify()
+                if not self._dv_held:
+                    # When the server is idle, do self-check and re-init some states
+                    self.self_check_during_idle()
 
             self.last_batch = batch
             self.publish_load_snapshot_if_due()
@@ -1180,6 +1195,7 @@ class Scheduler(
         self.result_queue: Deque[Tuple[ScheduleBatch, GenerationBatchResult]] = deque()
 
         while True:
+            self._dv_iter += 1
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
 
@@ -1190,6 +1206,7 @@ class Scheduler(
             if batch:
                 batch_result = self.run_batch(batch)
                 self.result_queue.append((batch.copy(), batch_result))
+            self.drain_delayed_verify()
 
             if self.last_batch:
                 # Process the results of the last batch
@@ -1874,6 +1891,24 @@ class Scheduler(
                     # Merge running_batch with prefill batch
                     self.running_batch.merge_batch(self.last_batch)
 
+        # Delayed verification: requests whose verification was drained last iteration rejoin
+        # here, at the same point the prefill batch merges in. Doing it at drain time would
+        # mutate a batch whose own result was still being processed.
+        while self._dv_rejoin:
+            held = self._dv_rejoin.pop(0)
+            held.filter_batch()
+            if held.is_empty():
+                continue
+            if self.running_batch.is_empty():
+                held.batch_is_full = self.running_batch.batch_is_full
+                self.running_batch = held
+            else:
+                # Same direction as the merge above: the decode-origin batch absorbs the
+                # prefill-origin one, which is the only direction merge_batch documents.
+                held.batch_is_full = self.running_batch.batch_is_full
+                held.merge_batch(self.running_batch)
+                self.running_batch = held
+
         new_batch = self.get_new_batch_prefill()
 
         need_dp_attn_preparation = require_mlp_sync(self.server_args)
@@ -1965,7 +2000,9 @@ class Scheduler(
         ) and self.chunked_req is None:
             return None
 
-        running_bs = len(self.running_batch.reqs)
+        # Delayed verification takes requests out of running_batch for one iteration; they are
+        # still resident, so admission must count them.
+        running_bs = len(self.running_batch.reqs) + len(self.delayed_verify_reqs)
         # Ignore the check if self.chunked_req is not None.
         # In the non-PP case, when self.chunked_req is not None, num_allocatable_reqs should always be greater than 0,
         # as the space for the chunked request has just been released.
@@ -2096,11 +2133,20 @@ class Scheduler(
             effective_chunk_size = max(min(effective_chunk_size, n), min(floor, effective_chunk_size))
 
         # Prefill policy
+        adder_running_batch = self.running_batch
+        if self._dv_held or self._dv_rejoin:
+            # Reserve for the held requests as well. Under preemption the real running batch is
+            # passed instead, so a held request is never a preemption candidate.
+            if not self.try_preemption:
+                adder_running_batch = ScheduleBatch(
+                    reqs=self.running_batch.reqs + self.delayed_verify_reqs,
+                    batch_is_full=self.running_batch.batch_is_full,
+                )
         adder = PrefillAdder(
             self.page_size,
             self.tree_cache,
             self.token_to_kv_pool_allocator,
-            self.running_batch,
+            adder_running_batch,
             self.new_token_ratio,
             self.max_prefill_tokens,
             effective_chunk_size,
@@ -2396,6 +2442,44 @@ class Scheduler(
         return batch
 
     # placeholder for override
+    @property
+    def delayed_verify_reqs(self) -> List[Req]:
+        """Requests currently sitting out an iteration for delayed verification, or waiting to
+        rejoin after it. They are not in self.running_batch, so every site that reasons about
+        what the server is holding has to add them."""
+        out = []
+        for _it, held in self._dv_held:
+            out.extend(held.reqs)
+        for held in self._dv_rejoin:
+            out.extend(held.reqs)
+        return out
+
+    def drain_delayed_verify(self):
+        """Finish verifications stashed in an EARLIER iteration: the spec worker runs the
+        host-side acceptance (its inputs were copied to the host when the forward was issued,
+        so this waits for nothing that has been launched since) and the draft extend, and the
+        requests are queued to rejoin the running batch at the next batch formation."""
+        while self._dv_held and self._dv_held[0][0] < self._dv_iter:
+            _it, expected = self._dv_held.pop(0)
+            held, result = self.draft_worker.drain_delayed_verify()
+            assert held is expected, "delayed verify stash out of order"
+            held.output_ids = result.next_token_ids
+            result.extend_input_len_per_req = [r.extend_input_len for r in held.reqs]
+            self.update_cache_from_scheduler(held, result)
+            self.process_batch_result_decode(held, result)
+            self._dv_rejoin.append(held)
+            # Always-on counter: the only evidence that the delayed path ran must not be a
+            # debug log line that perf runs switch off.
+            self.dv_drained = getattr(self, "dv_drained", 0) + 1
+            self.dv_lag = getattr(self, "dv_lag", 0) + (self._dv_iter - _it)
+            if self.dv_drained % 100 == 1:
+                logger.info(
+                    "DELAYED_VERIFY drained=%d mean_lag_iters=%.2f rows=%d",
+                    self.dv_drained,
+                    self.dv_lag / self.dv_drained,
+                    len(held.reqs),
+                )
+
     def update_cache_from_scheduler(
         self, schedule_batch: ScheduleBatch, batch_result: GenerationBatchResult
     ):
@@ -2581,6 +2665,16 @@ class Scheduler(
                     running.output_ids = rr.next_token_ids
                     rr.extend_input_len_per_req = [r.extend_input_len for r in running.reqs]
                     self.update_cache_from_scheduler(running, rr)
+                _dv = getattr(batch_result, "delayed_verify_held", None)
+                if _dv is not None:
+                    # Delayed verification: the verify rows' acceptance is stashed in the worker.
+                    # Take those requests out of the batch until it is drained -- their seq_lens,
+                    # output_ids and spec_info are all mid-flight until then.
+                    assert _dv is self.running_batch, "held batch is not the running batch"
+                    self._dv_held.append((self._dv_iter, _dv))
+                    self.running_batch = ScheduleBatch(
+                        reqs=[], batch_is_full=_dv.batch_is_full
+                    )
 
             # NOTE: future_indices_or_next_token_ids is used in ScheduleBatch,
             #       which can probably be replaced by future_indices later [TODO(lsyin)].
@@ -2913,6 +3007,8 @@ class Scheduler(
     def _is_no_request(self):
         no_request = (
             len(self.waiting_queue) == 0
+            and not self._dv_held
+            and not self._dv_rejoin
             and self.running_batch.is_empty()
             and (self.last_batch is None or self.last_batch.is_empty())
             and (self.cur_batch is None or self.cur_batch.is_empty())
@@ -2958,7 +3054,7 @@ class Scheduler(
             logging.warning(
                 f"Cache not flushed because there are pending requests. "
                 f"#queue-req: {len(self.waiting_queue)}, "
-                f"#running-req: {len(self.running_batch.reqs)}"
+                f"#running-req: {len(self.running_batch.reqs) + len(self.delayed_verify_reqs)}"
             )
             if_success = False
         return if_success
@@ -3315,6 +3411,7 @@ class Scheduler(
             reqs = self.running_batch.reqs
         else:
             reqs = self.running_batch.reqs + self.cur_batch.reqs
+        reqs = reqs + self.delayed_verify_reqs
 
         for req in reqs:
             if not req.finished() and (

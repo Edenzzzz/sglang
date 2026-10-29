@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.61.0 — The generated mix was inverted: agent inputs must dominate (2026-10-29)
+- The `longtail` set is 90% chat inputs with 10% agent inputs of 64K-200K. The evaluated workload has agent inputs
+  dominating at over 70% (user). The share of wide-KV inputs is exactly what decides how much tile waste there is
+  to remove, so every ratio measured on `longtail` is measured on a composition we do not claim -- understating the
+  heterogeneous case and over-weighting the uniform one.
+- add_agent_dominant_20261029.py adds `agentmix`: 75% agent inputs of 64K-200K, 25% ShareGPT, identical in every
+  other respect to `longtail` so the two are directly comparable. Generated median KV is 117K-162K against
+  `longtail`'s ~1K.
+- Queued ahead of the default-grid control, with a correctness gate first, since a 75%-agent mix carries far more
+  split-KV work than anything gated so far. Three repeats.
+
 ## v3.60.0 — The corrected cap sweep is complete: seven caps, all 19-33 points down (2026-10-29)
 - cap16000 lands at chat 37.8% / agent 64.2%, flat against cap8000's 37.7% / 62.9% and still 23.7 points of chat
   attainment below the control's 61.5%. Acceptance 1.926, failed=0.

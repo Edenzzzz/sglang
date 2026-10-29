@@ -5811,7 +5811,19 @@ tile-width heterogeneity, and when a step has neither heterogeneity nor a prefil
 the plan, the mechanism has nothing to earn and its overhead shows.** The trace-sampled captures, which have
 realistic chunk sizes, are where the 1.86-2.92x over sglang comes from, and they remain the paper's kernel result.
 
-**Open and being measured:** three repeats of this whole sweep are running, because pass-to-pass variation on
-these sets has been seen at 13% and once at 40% on a point that a provably inert knob could not have moved
-(four-mode work goes to the 32-row class, so `CTAS_PER_SM16` cannot affect it). No row above should be quoted
-without those bars.
+**THE MIX ABOVE IS WRONG FOR OUR CLAIM (user, 2026-10-29).** `longtail` is 90% chat inputs and 10% agent inputs;
+the evaluated workload has **agent inputs dominating at over 70%**. That is not a detail: the share of wide-KV
+inputs is precisely what decides how much tile waste exists to remove, so it is the one parameter that has to match
+the workload rather than take a convenient default. Every ratio in the table above is therefore measured on a
+composition we do not claim, and it understates the heterogeneous case while over-weighting the uniform one.
+- `add_agent_dominant_20261029.py` adds an **`agentmix`** set: 75% agent inputs of 64K-200K, 25% ShareGPT, with
+  everything else identical to `longtail` (512-token prefill chunk on a 4096-token context, Qwen2.5 geometry,
+  two-mode and four-mode variants) so it is directly comparable. Generated median KV is 117K-162K against
+  `longtail`'s roughly 1K, which is the intended shift.
+- Queued ahead of the default-grid control, with a correctness gate first because a 75%-agent mix carries far more
+  split-KV work than anything gated so far. Three repeats, for the same variance reason as below.
+
+**Open and being measured:** three repeats of the `longtail`/`sharegpt` sweep are running, because pass-to-pass
+variation on these sets has been seen at 13% and once at 40% on a point that a provably inert knob could not have
+moved (four-mode work goes to the 32-row class, so `CTAS_PER_SM16` cannot affect it). No row above should be quoted
+without those bars, and the headline composition is `agentmix` rather than `longtail` regardless.

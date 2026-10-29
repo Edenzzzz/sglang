@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.63.0 — Agent-dominant correctness gate: every reachable size exact, one unreachable size fails (2026-10-29)
+- The 75%-agent set passes the FP32 gate at batches 16, 32 and 64 in both two- and four-mode (worst 0.0035 against
+  FP32, 0.0047 against sglang's own call).
+- Batch 128 produces non-finite output. The first reading -- that merge_groups=0 meant partials went unreduced --
+  was wrong: the plan dump shows fa2_chunk 448512 against a longest KV of 199670, so FA2 declined to split and
+  there was nothing to reduce. The real point is that this step needs 14801057 KV tokens, 2.21x the server's
+  6696000-token pool, so it cannot occur in our configuration; batch 64 sits at 0.89x and is exact.
+- Both batch-128 captures moved to synth_ag/_unreachable/ so the timing sweep does not spend three repeats on a
+  non-finite arm and no result can be quoted from it. The cause of the NaN in an unsplit FA2 pass over ~200K tokens
+  is recorded as an unchased limit beyond the pool, with the arithmetic that bounds it.
+- Harness lesson recorded: the generator takes batch sizes from a plan list and knows nothing about the KV pool, so
+  generated sets must be checked against POOL_KV_TOKENS before being measured.
+
 ## v3.62.0 — Three repeats: spread is 0-16%, and two of my own methodology claims were wrong (2026-10-29)
 - Three repeats at 200 iterations, keyed by (set, capture): heterogeneous 90/10 mix 1.15-7.44x median 3.64x over
   sglang's single attention call; uniform short input 0.60-1.27x median 0.86x. Within-configuration spread is

@@ -5855,3 +5855,34 @@ composition we do not claim, and it understates the heterogeneous case while ove
 
 **Still the wrong composition.** All of the above is the 90%-chat mix. The `agentmix` sweep at 75% agent inputs is
 queued and is the composition that belongs in the paper.
+
+## Agent-dominant set: correctness gate, and one capture that cannot exist (2026-10-29)
+
+`agentmix` = 75% agent inputs of 64K-200K, 25% ShareGPT. Correctness gate before any timing, since this mix carries
+far more split-KV work than anything gated before it.
+
+| capture | rows | 32/16-row items | FA3 items | merge groups | vs FP32 | vs sglang FA3 | verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| four-mode 16 | 17 | 172 | 336 | 48 | 0.0035 | 0.0047 | PASS |
+| four-mode 32 | 33 | 196 | 336 | 68 | 0.0035 | 0.0046 | PASS |
+| four-mode 64 | 65 | 272 | 336 | 16 | 0.0031 | 0.0045 | PASS |
+| four-mode 128 | 129 | 512 | 336 | **0** | 0.0030 | nan | **FAIL (non-finite)** |
+| two-mode 16 | 17 | 176 | 336 | 44 | 0.0033 | 0.0045 | PASS |
+| two-mode 32 | 33 | 208 | 336 | 80 | 0.0035 | 0.0047 | PASS |
+| two-mode 64 | 65 | 260 | 336 | 4 | 0.0031 | 0.0045 | PASS |
+
+**The batch-128 failure is a harness-sizing artifact, and the arithmetic settles it rather than a hypothesis.**
+- `merge_groups = 0` is CORRECT there, not a lost merge: the plan dump shows `fa2_chunk = 448512` against a longest
+  KV of 199 670, so FA2 declined to split and there are no partials to reduce (`float_bytes = 0`). The first
+  reading -- that partials went unreduced -- was wrong.
+- **That step cannot occur in our serving configuration.** Its rows need **14 801 057 KV tokens, which is 2.21x the
+  server's 6 696 000-token pool** (`POOL_KV_TOKENS`). Batch 64 needs 5 951 590 tokens, 0.89x the pool, and is
+  exact. So every realizable size passes and the only failure is a step the server could never assemble.
+- Both batch-128 captures are moved to `synth_ag/_unreachable/` so the timing sweep does not spend three repeats on
+  an arm whose output is non-finite, and so no row of the agent-dominant table can be quoted from it.
+- **Open, and bounded:** the cause of the non-finite output in an unsplit FA2 pass over a ~200K-token KV is not
+  identified. It is recorded as a limit of the kernel at a size beyond the pool rather than chased now, because no
+  reachable configuration reproduces it; if a within-pool configuration ever does, this note is the starting point.
+- **Harness lesson:** the generator takes batch sizes from a plan list and knows nothing about the KV pool, so it
+  will happily emit steps the server cannot hold. Generated capture sets should be checked against
+  `POOL_KV_TOKENS` before they are measured.

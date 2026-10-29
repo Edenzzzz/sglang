@@ -29,10 +29,23 @@ DO NOT apply this to a tree while an arm is running against it: the serving tree
 driver, and patching one mid-chain invalidates whatever is in flight without any visible error.
 Claude, 2026-10-28.
 """
+import os
 import re
 import sys
 
-path = f"{sys.argv[1]}/managers/scheduler_metrics_mixin.py"
+# The acceptance line lives in a DIFFERENT file in the deployed trees than in this repo's checkout. Locally it is
+# managers/scheduler_metrics_mixin.py; on the pods (sglang 3fef129) it is
+# managers/scheduler_components/metrics_reporter.py, and the first version of this patch targeted only the local
+# layout -- so it would have silently failed to apply on every pod (2026-10-29: all three deployed trees have no
+# mixin file). Try both, and fail loudly if neither is present rather than reporting success.
+CANDIDATES = ["managers/scheduler_components/metrics_reporter.py", "managers/scheduler_metrics_mixin.py"]
+path = None
+for _rel in CANDIDATES:
+    _p = f"{sys.argv[1]}/{_rel}"
+    if os.path.isfile(_p) and "accept len:" in open(_p).read():
+        path = _p
+        break
+assert path, f"no file carrying the acceptance log line among {CANDIDATES} under {sys.argv[1]}"
 source = open(path).read()
 if "ACCEPT_TENANT" in source:
     print("already")

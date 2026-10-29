@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.40.0 — The per-tenant acceptance patch targeted a file no pod has (2026-10-29)
+- It patched `managers/scheduler_metrics_mixin.py`, which is where the acceptance line lives in THIS checkout. On
+  the deployed trees (sglang 3fef129) that file does not exist at all -- all three carry the line in
+  `managers/scheduler_components/metrics_reporter.py:979`. So the patch committed earlier as "ready to deploy"
+  would have silently failed to apply on every pod.
+- Fixed to try both paths, require that the chosen file actually contains the acceptance log line, and assert
+  loudly when neither is present instead of reporting success. Found by deploying it and reading the errors rather
+  than trusting the earlier dry-run, which had only ever run against the local layout.
+- Lesson consistent with tonight's others: a patch verified against the local checkout proves nothing about the
+  deployed tree.
+
 ## v3.39.0 — Withdraw 5.2.2's decode row: it was fitted on an absent feature (2026-10-29)
 - The per-step-type table reported decode-step errors of 34-38% (linear), 18-23% (MLP) and 21-25% (GBT), and the
   text read that spread as the linear model's missing nonlinearity. Both are withdrawn: the trace records each

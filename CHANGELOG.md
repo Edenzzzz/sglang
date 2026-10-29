@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.33.0 — pdmux root-caused: FA3's backend is incompatible with it, not a memory limit (2026-10-29)
+- The arm directory has no worker log at all, only bindfail1..5 for every GPU, and the bindfail log ends
+  `AttributeError: 'NoneType' object has no attribute 'swa_out_cache_loc'` at
+  `swa_loc=self.forward_metadata.swa_out_cache_loc`. So forward_metadata is None inside the FA3 backend on the
+  pdmux path: pdmux runs decode and layer-split prefill on separate SM-group streams and the per-forward metadata
+  is not initialised there.
+- MEM_FRAC was never the cause, which is why 0.70 and 0.55 failed identically. Two parameter guesses cost two arms
+  when the bindfail log would have said this the first time -- the lesson is to read bindfail logs before changing
+  a parameter.
+- `mn_pdmux_backend_16g_20261029.sh` queued: pdmux on sglang's default backend (PDMUX_ATTN, default flashinfer)
+  instead of the forced ATTN_BACKEND=fa3 every other arm uses. Fair for a baseline whose point is the SM
+  partitioning rather than the attention kernel, and the paper will say pdmux is measured on its own backend.
+
 ## v3.32.0 — Apply the demote fix and launch its arm at both loads (2026-10-29)
 - A row that cannot reach its target is now EXCLUDED from the budget minimum rather than given the tightest bound
   in it. The old behaviour made overload self-reinforcing, and the flat stepcap sweep is the evidence: across

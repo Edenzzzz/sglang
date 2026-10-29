@@ -438,7 +438,22 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
   - **Until that is measured, the honest statement for the paper is that the SLO-budgeted chunk protects tail TPOT
     (-51% against a matched control) and cannot yet be operated at overload without starving prefill.** The
     mechanism is validated; the policy is not.
-- **[x] PDMUX FAILED AGAIN at both loads (2026-10-29, `mn_pdmux_retry_16g_20261028.sh`, log
+- **[x] PDMUX ROOT-CAUSED (2026-10-29): FA3's attention backend is incompatible with the PD-multiplexing path, and
+  MEM_FRAC was never the problem.** The arm directory has NO `worker_r0_g0.log` -- only
+  `worker_r0_g0.bindfail1..5.log` for all four GPUs, i.e. every worker failed all five launch attempts (the
+  signature [[orphaned-remote-servers]] says to check first). The bindfail log ends:
+  `AttributeError: 'NoneType' object has no attribute 'swa_out_cache_loc'` at
+  `swa_loc=self.forward_metadata.swa_out_cache_loc`, then a sigquit from the child.
+  - So `self.forward_metadata` is None inside the FA3 backend on the pdmux path: pdmux runs decode and
+    layer-split prefill on separate SM-group streams, and the metadata the FA3 backend sets per forward is not
+    initialised on that path. It is a code incompatibility, not capture memory -- which is why both MEM_FRAC
+    guesses (0.70, then 0.55) failed identically. **Two parameter guesses cost two arms; the bindfail log would
+    have said this the first time.**
+  - **Next: run pdmux on an attention backend that supports it.** Our drivers force `ATTN_BACKEND=fa3` for every
+    arm so the kernel is held constant, but that is the one thing pdmux cannot take. Re-run with sglang's default
+    backend for the pdmux arm only, and note in the paper that pdmux is measured on its own backend -- which is
+    fair, since pdmux is a baseline whose point is the SM partitioning, not the attention kernel.
+  - (superseded) PDMUX FAILED AGAIN at both loads (2026-10-29, `mn_pdmux_retry_16g_20261028.sh`, log
   `/tmp/h20/mn_pdmux_r2.log`): `accept=NONE` on both arms, so lowering MEM_FRAC 0.70 -> 0.55 was not the cause.**
   - Since pdmux is a DEFINITE baseline and the serving-level leave-one-out for C1+C2, this now needs the worker
     logs read rather than another parameter guess: check `worker_r*_g*.log` for the pdmux SM-group setup lines and

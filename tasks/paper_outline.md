@@ -234,7 +234,7 @@ GLM-4.5-Air is [pending].
 
 Figure 2: stock PD disaggregation against its P:D ratio, Qwen2.5-7B without speculation, KV pool on. Left: chat
 attainment (0.5 s + 20 ms) against the number of prefill pods out of 8, on 16 H20s at 32 agent programs + 8 chat req/s
-and on 32 H20s at 64 programs + 16 req/s. Right: agent SLO goodput on 16 H20s. Dashed: ours, colocated, at the same
+and on 32 H20s at 64 programs + 16 req/s. Right: agent SLO attainment on 16 H20s. Dashed: ours, colocated, at the same
 loads. The best ratio (6 prefill pods) reaches 68% / 56% chat attainment against ours' 99%. Llama-3.3-70B /
 GLM-4.5-Air [pending]. Source: `tasks/paper_figures/fig02_pd_sweep.py`.
 
@@ -305,7 +305,7 @@ with Qwen2.5-7B, an agent burst of 32 requests arriving within 60 s at 32-64K co
 time-to-first-token at **4.5-13.9 s** against a 2 s target while the server's throughput is unharmed (the
 single-node setting of section 6.3). On 16 H20s under the superposed TraceLab replay plus chat at load factor 6 --
 the cluster setting of section 6.4 -- sglang's prefill-prioritized schedule holds chat TTFT at a 90th percentile of
-**9.02 s** against the same 2 s target, with 7 088 agent rounds never issued, while its agent SLO goodput
+**9.02 s** against the same 2 s target, with 7 088 agent rounds never issued, while its agent attainment
 (2 012 tokens/s) is within 9% of the best arm we measure. The policy is not failing at throughput; it is failing
 only at latency, and it fails there at both scales. The blocking is also self-inflicted in a way a larger chunk cannot fix: raising
 the chunk size shortens the queue of chunks but lengthens each step, which pushes the cost onto the resident decode
@@ -386,7 +386,7 @@ prefix, but chunked prefill splits the append across steps, and the rule of sect
 high end.
 
 **And the cost is visible end to end, in the setting section 6.4 evaluates.** On 16 H20s under the superposed
-TraceLab replay plus chat at load factor 6, sglang's mixed chunk reaches the lowest agent SLO goodput of every arm
+TraceLab replay plus chat at load factor 6, sglang's mixed chunk reaches the lowest agent attainment of every arm
 measured -- **1 926 tokens/s**, against 2 012 for its own prefill-prioritized schedule and 2 199 for ours -- and
 the worst inter-token tails, at a 99th percentile of 1 246 ms for chat and 1 301 ms for agents. Its chat SLO
 attainment is 53.8%. So the tile-level waste derived above is not a microbenchmark artefact: the policy that pays
@@ -869,7 +869,7 @@ deadline, the last two let a short urgent request get past a long prefill alread
 3. *Parking a long chunked prefill.* sglang continues a chunked prefill with each step's whole budget. The policy
    instead parks it when a waiting request is due earlier, is short, and has less than half the parked prefill's
    remaining work. The parked request's computed prefix stays in the radix cache, so it loses no work and resumes in
-   deadline order. Measured on the cluster replay this costs about a quarter of agent SLO goodput, so the final
+   deadline order. Measured on the cluster replay this costs attainment on both tenants, so the final
    configuration does not park (section 7).
 4. *Reserving budget for earlier deadlines.* When a chunk continues, it leaves room in the step's token budget for
    waiting requests that are due before it.
@@ -1917,11 +1917,11 @@ demotion of missed prefills turns this step into SLO attainment for both tenants
 as a tuning knob and the per-round KV re-ship as a bottleneck. On 16 H20s with Qwen2.5-7B:
 - AttentionFuse keeps >= 90% chat attainment through 96 agent programs, where stock PD at its best split holds no
   measured load;
-- it carries 12-37% more agent SLO goodput than conditional disaggregation at every load, and 21-24% more under a
+- it holds higher agent attainment than conditional disaggregation at every load, and more under a
   load spike.
 
-With Llama-3.3-70B, it holds 3-23 points more chat attainment than stock PD at equal agent goodput, and 4-94% more
-agent goodput than conditional disaggregation.
+With Llama-3.3-70B, it holds 3-23 points more chat attainment than stock PD at matched agent attainment, and
+higher agent attainment than conditional disaggregation.
 
 **Lessons.**
 1. For mixed steps, the fusion that pays is in scheduling and reduction, not in co-compiled kernels. Persistent
@@ -1936,13 +1936,13 @@ agent goodput than conditional disaggregation.
 
 - Single-node throughput rises most for GLM-4.5-Air and for Qwen2.5-7B at 128-256K two-mode. At
   32-64K, deadline order gives chat priority over agents that stock already served within their SLO (agent SLO
-  goodput -13% in two-mode).
+  attainment lower in two-mode).
 - 128-256K agents have no single-GPU operating point at a 10 s TTFT SLO: cold 128-256K turns cannot prefill within
   10 s on one GPU.
 - Chat's tight TPOT beside long agent prefills: at 128-256K, 63% of chat requests meet 2 s / 50 ms, against 95% at
   100 ms. A chat decode beside an agent chunk pays that chunk's step time.
 - Against conditional disaggregation, chat attainment is level rather than better through 96 programs on
-  Qwen2.5-7B, and 0.3-7.1 points lower on Llama-3.3-70B with four replicas; our gain over it is agent goodput.
+  Qwen2.5-7B, and 0.3-7.1 points lower on Llama-3.3-70B with four replicas; our gain over it is agent attainment.
 - The router's TTFT prediction is unbiased in the median but wide (measured / predicted p90 2.3x), so its
   feasibility check is a coarse filter.
 - On short-prompt, high-rate traffic, the merged step's host read-back cost 6-7% (ShareGPT at 32 req/s); its fix
@@ -2097,7 +2097,7 @@ flexibility under load spikes, mixed workloads and workload variation).
     fused 4-mode step makes the step cheaper and predictable (section 5.2.2), and that colocation lets the cluster route a
     request anywhere. Its batch-composition finding (mixing input lengths slows a batch) is the inefficiency our
     fused kernel attacks inside the step rather than by keeping lengths apart.
-  - *Learn (evaluation, not method):* (1) report **service goodput by request type** next to means -- chat as
+  - *Learn (evaluation, not method):* (1) report **SLO attainment by request type** next to means -- chat as
     latency-sensitive (token i on time if done by TTFT_SLO + i x TBT_SLO), agent rounds as deadline-sensitive or
     compound (a program's rounds share one deadline); this is the metric under which scheduling flexibility under
     mixed load is visible. (2) Set SLOs from an external reference (their P95-of-API method) or relative to the
@@ -2168,7 +2168,7 @@ flexibility under load spikes, mixed workloads and workload variation).
     inside a mixed 4-mode step where the prefill chunk co-runs with MTP verify rows, and the fused kernel makes small
     deadline-sized chunks cheap instead of avoiding chunking.
   - *Learn:* its premise -- chunk size trades execution overhead against blocking -- is the claim our kernel has to
-    refute on the mixed step: report step cost vs chunk size (fused vs stock chunked prefill), then TTFT goodput at
+    refute on the mixed step: report step cost vs chunk size (fused vs stock chunked prefill), then attainment at
     90% attainment under per-type TTFT SLOs on a production-like trace with a rate-scale axis, plus the tightest SLO
     scale each system meets; report TBT attainment beside TTFT, as its colocated result does.
 - **POD-Attention: Unlocking Full Prefill-Decode Overlap for Faster LLM Inference** -- A. K. Kamath, R. Prabhu,

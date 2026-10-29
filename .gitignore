@@ -258,3 +258,6 @@ tasks/debug_kernel_server_perf/profile_logs/bench_results/
 tasks/debug_kernel_server_perf/profile_logs/*.sqlite
 tasks/debug_kernel_server_perf/profile_logs/*.perfetto-trace
 workloads/ShareGPT_V3_unfiltered_cleaned_split.json
+
+# arXiv PDFs and the pypdf used to read them: large binaries, kept with the task docs but not versioned
+tasks/papers/

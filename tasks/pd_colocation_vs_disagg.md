@@ -2290,16 +2290,27 @@ account of it is the error. A fixed 2048-token chunk never consults the budget, 
 control tracks L0 while our arm collapses -- and since `c2048` and our arm share the identical router, tree and
 policy, **routing to loaded nodes is ruled out as a cause.**
 
-**pdmux runs THE SAME POLICY, and is the strongest evidence that the policy is sound and our implementation is
-not** (corrected 2026-10-29; an earlier note here wrongly said pdmux does not do this). pdmux sizes the prefill SM
-allocation from a performance model of what decode needs to hold its SLO -- the same decision as ours, with SMs as
-the resource instead of chunk tokens. The difference is decisive: **pdmux's knob cannot reach zero.** It shifts
-prefill onto fewer SMs; it never allocates prefill none. Ours drives the chunk to zero on 41% of steps, which is
-the same policy with an unbounded knob. Two systems using this policy without the pathology, plus SLOs-Serve's
-section 4.1 surplus rule, say the same thing: **the resource given to prefill must be reduced, never withdrawn.**
-That is the principle the fix implements, and it also tells us what the floor's value should be -- the analogue of
-pdmux's minimum SM group, i.e. the smallest allocation that still makes progress, rather than an arbitrary
-constant.
+**Both pdmux and SLOs-Serve run this policy, and READ FROM THE PAPERS the difference is an ADMISSION decision we
+do not have** (checked 2026-10-29 against `tasks/papers/2504.14489.pdf` and `2504.08784.pdf`; two earlier notes
+here were wrong -- first that pdmux does not use a latency-budgeted allocation, then that its knob cannot reach
+zero. Neither claim survives reading).
+- **MuxWise (pdmux)**, p8: *"the remaining compute resources are allocated to the prefill"*, at a granularity of
+  16 SMs. Decode gets what the model says it needs and prefill takes the remainder -- the same decision as ours
+  with SMs as the resource. **Nothing in the paper establishes a nonzero floor**, so the claim that its knob cannot
+  reach zero is unverified. What is true is narrower: in our own pdmux runs prefill held 40-56 of 78 SMs, which is
+  evidence about those runs and not about the policy.
+- **SLOs-Serve**, p7: *"requests to consume surplus token budgets and executing them when sufficient memory is
+  available"*; p8: *"cannot meet the SLO, the request is routed to the next replica"*; p11: *"under high request
+  load. By rejecting ..."*. So a request that cannot meet its SLO is **rerouted or rejected at admission**. It is
+  never admitted and then handed nothing.
+
+**That is the distinction, and it is not about a floor.** Both systems decide ONCE whether they can serve a
+request -- rejecting it, deferring it, or rerouting it -- and thereafter serve what they admitted, using surplus
+for the late ones. **We have no admission decision at all:** the router admits every request, and the chunk rule
+then re-decides against it on every step, which is how an admitted prefill received nothing 41% of the time. A
+floor bounds the damage; what the policy actually needs is for the infeasible case to be resolved at admission --
+reroute to another worker, or defer -- rather than re-litigated per step. That also connects this to point 1 of
+the four PD-colocation points, where the router is supposed to make exactly that call.
 
 **A specific numerical inconsistency to chase, which the logs already show.** Under the `life` form a YOUNG row
 should grant a large budget, because its remaining output is credited at the observed rate while it is allowed the

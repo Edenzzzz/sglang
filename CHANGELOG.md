@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.74.0 — Read the papers: the difference is an admission decision, not a floor (2026-10-29)
+- Checked against tasks/papers/. Two earlier notes were wrong: first that pdmux does not use a latency-budgeted
+  allocation, then that its knob cannot reach zero.
+- MuxWise p8: "the remaining compute resources are allocated to the prefill", at 16-SM granularity -- decode takes
+  what the model says it needs and prefill the remainder, the same decision as ours with SMs as the resource.
+  Nothing in the paper establishes a nonzero floor, so that claim is withdrawn; what holds is only that our own
+  pdmux runs gave prefill 40-56 of 78 SMs.
+- SLOs-Serve p7/p8/p11: late requests consume SURPLUS budget, a request that cannot meet its SLO is ROUTED TO THE
+  NEXT REPLICA, and under high load requests are REJECTED. So the infeasible case is resolved at admission.
+- The real distinction: both systems decide once whether they can serve a request and then serve what they
+  admitted. We have no admission decision -- the router admits everything and the chunk rule re-decides against it
+  every step, which is how an admitted prefill got nothing 41% of the time. A floor bounds the damage; the policy
+  needs the infeasible case resolved at admission (reroute or defer), which is point 1 of the four PD-colocation
+  points.
+
 ## v3.73.0 — Correction: pdmux runs the same policy, which is why ours is the broken one (2026-10-29)
 - An earlier note claimed pdmux does not use a latency-budgeted allocation. Wrong: pdmux sizes the prefill SM
   allocation from a performance model of what decode needs to hold its SLO -- the same decision as our chunk rule,

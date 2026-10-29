@@ -34,7 +34,7 @@
   - **pd multiplexing** -- costs throughput and capture memory: attains the same latency protection as ours but attained structurally, by partitioning SMs; no CPU-GPU overlap schedule, CUDA graphs multiplied by SM groups; a baseline only
 - **design**
   - **kernel:** one CPU-side plan per mixed step assigns every work tile its own size -- FA3 for the prefill
-    chunk's large query tiles, FA2 classes of 16 / 32 / 48 / 64 packed rows for decode, draft and verify rows --
+    chunk's large query tiles, FA2 classes of 16 / 32 / 48 / 64 packed rows for decode and verify rows --
     balances them across the streaming multiprocessors, and reduces every split row inside one launch, so no
     separate merge kernel runs. Both executors stay stock kernels at their own warp layouts; the fusion is in the
     plan and the reduction, not in the instruction stream (section 5.1 gives the mechanism).
@@ -109,9 +109,10 @@ tile width, so most of that tile computes nothing, and admitting prefill in arri
 turn behind a 64K-token prompt.
 
 AttentionFuse makes colocation meet SLOs. One CPU-side plan per step gives each of a step's prefill, decode,
-draft and verify inputs a tile of its own width and reduces every split partial inside one launch. Against the
+decode inputs -- or, under speculative decoding, its verify inputs -- a tile of its own width, and reduces every
+split partial inside one launch. Against the
 single attention call deployed today this is 1.86-2.92x on captured mixed steps, and it lets a prefill chunk and a
-step's draft and verify inputs share one forward, which no prior colocated design supports. Each
+step's verify inputs share one forward, which no prior colocated design supports. Each
 worker then orders prefills by deadline and sizes each prefill chunk from a measured step-time model so that
 running requests stay inside their targets, and a router places requests on the symmetric node with the most cached
 prefix that can still meet every SLO.
@@ -157,10 +158,10 @@ admitting it.
 
 - **A unified tile dispatch kernel implementation that maximizes compute efficiency by removing tile waste for
   mixed input.** One plan per step gives each of a step's
-  prefill, decode, draft and verify inputs a tile of its own width, and folds the split-KV merge into the same
-  launch.
+  prefill and decode inputs -- or, with speculative decoding, its prefill and verify inputs -- a tile of its own
+  width, and folds the split-KV merge into the same launch.
 - **Speculative decoding inside colocation.** Because each input gets a tile class of its own size, a prefill
-  chunk and the running requests' draft and verify inputs execute in one step -- which no prior colocation design
+  chunk and the running requests' verify inputs execute in one forward -- which no prior colocation design
   supports, though frontier models are served with speculative decoding.
 - **SLO control without disaggregation.** A fused step has a predictable duration, so a worker runs prefills in
   deadline order and a router admits each request to the highest-cache-hit node its step-time model says can still
@@ -1889,14 +1890,16 @@ to this work.
 ## 9. Conclusion and limitations
 
 **Conclusion.** Mixed chat and agent traffic breaks both ways production systems serve the two phases of inference.
-- Colocation under chunked prefill makes the small-query-tile work -- decode, draft and verify rows -- pay the cost of the prefill chunk's large query tiles in attention tiles, and makes chat wait
+- Colocation under chunked prefill makes the small-query-tile work -- decode rows, or verify rows under
+  speculative decoding -- pay the cost of the prefill chunk's large query tiles in attention tiles, and makes chat wait
   behind long agent prefills.
 - Disaggregation re-ships every agent round's prefix KV, and needs a P:D ratio tuned to a mix that keeps changing.
 
 AttentionFuse keeps nodes symmetric and makes colocation cheap and controllable at three levels: the kernel, the node
 and the cluster.
 
-*Kernel.* One CPU-side plan per mixed step gives each of the step's prefill, decode, draft and verify inputs a tile
+*Kernel.* One CPU-side plan per mixed step gives each of the step's prefill and decode inputs -- or prefill and
+verify under speculative decoding -- a tile
 of its own width: FA3 for the prefill chunk, and FA2 tile classes of 16, 32 and 64 packed queries for the rest. The
 plan balances the tiles across the SMs and reduces every split partial inside the FA2 launch. The fusion lives in
 the plan and the merge, not in the instruction stream; the two executors stay stock kernels at their own warp

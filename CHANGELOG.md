@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.41.0 — Stock PD is void on clean upstream too: the tree was never the cause (2026-10-29)
+- Both arms fail the driver's own gates: alpha 3 chat 4.3% with failed=1728, alpha 6 chat 13.2% with failed=145,
+  accept=NONE on both, TTFT 195-327 s, TPOT 2.7-3.0 ms. Identical signature to r1.
+- So the up_clean switch changed nothing and the spec_info-assert hypothesis is refuted. The r1 diagnosis stands
+  (2819 transfer-failed errors on the decode pod) and is now attributable to the environment: Mooncake's KV
+  transfer does not work on this job. Next step is checking RDMA availability and bootstrap-port reachability, not
+  another tree or parameter.
+- Consequence: stock PD may not be measurable on this cluster. The honest options are to report only against
+  conditional disaggregation (valid, failed=0, both loads) and say so, or to obtain a job where the transfer works.
+  The pre-correction numbers are not an option -- mis-configured model and, on this evidence, the same broken
+  transfer.
+- The conditional-disagg arms here are valid (accept 1.992/2.017) and repeat r1, but alpha-3 agent goodput differs
+  15% between repeats (905 vs 771) against a stated 4% noise floor, so a third repeat is needed before quoting.
+
 ## v3.40.0 — The per-tenant acceptance patch targeted a file no pod has (2026-10-29)
 - It patched `managers/scheduler_metrics_mixin.py`, which is where the acceptance line lives in THIS checkout. On
   the deployed trees (sglang 3fef129) that file does not exist at all -- all three carry the line in

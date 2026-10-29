@@ -527,6 +527,31 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     sensitivity sweep on that one number, not another redesign of the budget.
   - Against mixed chunk, which shares our mechanism, a large tail win IS expected: mc's chat TPOT p90 is 102.0 ms
     with no bound either.
+- **[!] STOCK PD IS VOID ON CLEAN UPSTREAM TOO: the tree was never the cause (2026-10-29,
+  `mn_pdre_clean_16g_20261028.sh`, log `/tmp/h20/mn_pdre_r2.log`, completed 06:50).** Both arms fail the gates in
+  the driver's own header:
+  | arm | chat | agent | failed | accept | chat TTFT p50/p90 |
+  |---|---|---|---|---|---|
+  | disagg_p2 alpha 3 | 4.3% (67 tok/s) | 5.0% (36) | **1 728** | **NONE** | 195.60 / 318.62 s |
+  | disagg_p2 alpha 6 | 13.2% (146) | 9.6% (50) | **145** | **NONE** | 200.04 / 326.71 s |
+  - So switching `SGL_PY` from `up/python` to `up_clean/python` changed nothing, and **the hypothesis that the
+    serving overlay trips disagg prefill's spec_info assert is refuted.** The signature is identical to r1: TTFT
+    in the hundreds of seconds, thousands of lost requests, no acceptance line at all, and TPOT of 2.7-3.0 ms,
+    which is what requests that emit almost nothing before dying look like.
+  - **What this leaves:** the r1 diagnosis stands -- 2 819 `transfer failed for request` on the decode pod -- and
+    it is now attributable to the ENVIRONMENT rather than to our code. Mooncake's KV transfer does not work on
+    this job. The published disagg numbers came from a different job, so the next step is not another tree or
+    parameter change but checking whether RDMA is available here at all (the earlier 8-GPU runs that produced
+    those numbers ran elsewhere), and whether the decode pods can reach the prefill pods' bootstrap ports.
+  - **Consequence for the paper, stated plainly: stock PD disaggregation may not be measurable on this cluster.**
+    If it is not, the honest options are to report the comparison only against conditional disaggregation (which is
+    valid, failed=0, at both loads) and say stock PD could not be run here, or to obtain a job where the transfer
+    works. Quoting the pre-correction stock-PD numbers is not an option -- they ran a mis-configured model AND, as
+    r1/r2 now show, very likely the same broken transfer.
+  - **The conditional-disaggregation arms in this run ARE valid** (failed=0, accept 1.992 / 2.017) and repeat the
+    r1 result: alpha 3 chat 47.5% (582 tok/s) / agent 63.7% (771) against r1's 50.5% / 64.9% (905); alpha 6 chat
+    53.5% (653) / agent 54.5% (705). The alpha-3 goodput differs 15% between repeats (905 vs 771), which is larger
+    than the stated 4% noise floor and needs a third repeat before either is quoted.
 - **[x] CONDITIONAL DISAGGREGATION, alpha 3 on the TraceLab replay: VALID, and our margin is far larger here than
   on the fan-out sweep (2026-10-28, `mn_pd_remeasure_16g_20261028.sh`, log `/tmp/h20/mn_pdre_r1.log`).**
   - `cond_p1_edf_mtp_hc_tl2_a3_pdre_r1_cond1`, accept 2.003, **failed=0 on both tenants** (so it passes the two

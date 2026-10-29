@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.44.0 — alpha-3 no-regression check: approximately met, but the rule's sign flips with load (2026-10-29)
+- alpha 3, demote fix, stepcap 2000, accept 1.987, failed=0: chat 88.3% / 1417 tok/s, TPOT p50/p90 13.4/35.7 ms;
+  agent 92.2% / 2374 tok/s. Against rung L0 (91.2% / 94.3% / 2493, 10.8/29.8) attainment is -2.9 and -2.1 points,
+  both inside the ~5-point noise floor, so there is no collapse and the no-regression requirement is approximately
+  met. Goodput is -4.8% and chat TPOT p90 is 20% WORSE, the latter outside the 3 ms floor.
+- The sign flips between loads: at alpha 6 the rule cuts the tail 46% against the fixed-2048 control; at alpha 3 it
+  worsens it. Mechanically, at capacity the budget rarely binds so the chunk runs to its 16384 ceiling and steps
+  get longer than sglang's own chunk policy allows.
+- So the rule is an OVERLOAD mechanism rather than a general one -- narrower than C3 currently claims, and the
+  paper should say so. It also means the corrected sweep must cover alpha 3 too, and that one global cap may not
+  serve both loads, which is the argument for the per-tenant form over a constant.
+
 ## v3.43.0 — Rule out the device-name hypothesis for the stock-PD transfer failure (2026-10-29)
 - mn_node.sh:281 computes IB=mlx5_1..mlx5_4 and all four are present and ACTIVE on the pods, so the decode side
   does receive a valid --disaggregation-ib-device. The earlier reading -- that the MOONCAKE_PROTOCOL/DEVICE exports

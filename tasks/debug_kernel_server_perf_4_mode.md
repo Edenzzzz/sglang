@@ -440,6 +440,25 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
   - **The fix is worth +5.8 points chat attainment, +7.1 points agent, +27% agent SLO goodput and -49% chat TTFT
     p50**, at a 12.5% worse chat TPOT tail -- which is the intended trade, since the clamp was buying tail at the
     price of starving prefill. The death spiral is broken.
+  - **ALPHA 3, the no-regression check (accept 1.987, failed=0): approximately satisfied, but the rule buys
+    nothing at capacity and costs the tail.**
+    | alpha 3 | chat attain | agent attain | agent tok/s | chat TPOT p50/p90 |
+    |---|---|---|---|---|
+    | L0 (sglang's own chunk policy) | 91.2% | 94.3% | 2493 | 10.8 / 29.8 ms |
+    | fixed 2048 (control) | 90.6% | 93.8% | 2473 | 11.2 / 31.6 ms |
+    | **rule + demote fix, stepcap 2000** | 88.3% | 92.2% | 2374 | 13.4 / **35.7 ms** |
+    - Attainment is -2.9 and -2.1 points against L0, both INSIDE the ~5-point noise floor, so there is no collapse
+      -- the "no regression at low load" requirement is approximately met. But goodput is -4.8% (marginally
+      outside the 4% floor) and **chat TPOT p90 is 20% WORSE** (35.7 against 29.8 ms), which is outside the 3 ms
+      floor.
+    - **The sign flips between loads, and that is the honest characterisation of the policy.** At alpha 6 the rule
+      improves the tail enormously (61.9 against the constant's 114.6 ms, -46%); at alpha 3 it makes the tail
+      worse. The reason is mechanical: at capacity the budget rarely binds, so the chunk runs to its 16384 ceiling
+      and the steps get longer than sglang's own chunk policy would allow. **So the rule is a overload mechanism,
+      not a general one** -- which is a narrower claim than C3 currently makes, and the paper should say so.
+    - That also means the corrected cap sweep should include alpha 3, not only alpha 6: the right cap at capacity
+      is plainly lower than 2000 ms, and a single global value may not serve both loads -- which is the argument
+      for the per-tenant form (cap by the tightest RESIDENT tenant's target) rather than one constant.
   - **AND IT INVALIDATES THE STEPCAP SWEEP: that sweep was flat BECAUSE of this bug.** With most rows clamping the
     step to ~90 ms regardless, the cap could not bind, so 600-3000 ms all looked alike. Now that the clamp is gone
     the cap should actually matter, and the sweep has to be redone -- at HIGHER values, since the fix moved the arm

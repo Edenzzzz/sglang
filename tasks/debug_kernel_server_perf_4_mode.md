@@ -538,12 +538,22 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     serving overlay trips disagg prefill's spec_info assert is refuted.** The signature is identical to r1: TTFT
     in the hundreds of seconds, thousands of lost requests, no acceptance line at all, and TPOT of 2.7-3.0 ms,
     which is what requests that emit almost nothing before dying look like.
+  - **[x] RDMA IS PRESENT AND HEALTHY, so that is not the cause either (2026-10-29):** the pods expose five
+    InfiniBand devices (`mlx5_0..mlx5_4`) with every port in state `4: ACTIVE`, and 20 RDMA/NCCL_IB environment
+    variables are set. So the fabric is there and the failure is a CONFIGURATION one, not a missing-hardware one.
+    - That narrows it to two candidates, in order: (a) which device or interface Mooncake selects -- its master
+      log carries no protocol line at all for these arms, where a working transfer names one; (b) whether the
+      decode pods can reach the prefill pods' bootstrap ports (the arm's `claimed_ports` / `ports_r*_g*.txt`),
+      since a reachable-but-wrong port gives a connect failure per request rather than a startup error.
+    - **So stock PD is probably fixable on this cluster rather than impossible**, which changes the paper decision:
+      hold the comparison open rather than writing "could not be run here". A single short arm with Mooncake's
+      device/protocol pinned explicitly is the cheapest test.
   - **What this leaves:** the r1 diagnosis stands -- 2 819 `transfer failed for request` on the decode pod -- and
-    it is now attributable to the ENVIRONMENT rather than to our code. Mooncake's KV transfer does not work on
+    it is a configuration fault in the transfer path rather than in our scheduling code. Mooncake's KV transfer does not work on
     this job. The published disagg numbers came from a different job, so the next step is not another tree or
     parameter change but checking whether RDMA is available here at all (the earlier 8-GPU runs that produced
     those numbers ran elsewhere), and whether the decode pods can reach the prefill pods' bootstrap ports.
-  - **Consequence for the paper, stated plainly: stock PD disaggregation may not be measurable on this cluster.**
+  - **Consequence for the paper (revised after the RDMA check): the comparison stays OPEN, not abandoned.**
     If it is not, the honest options are to report the comparison only against conditional disaggregation (which is
     valid, failed=0, at both loads) and say stock PD could not be run here, or to obtain a job where the transfer
     works. Quoting the pre-correction stock-PD numbers is not an option -- they ran a mis-configured model AND, as

@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.42.0 — RDMA is healthy, so the stock-PD transfer failure is configuration, not hardware (2026-10-29)
+- The pods expose five InfiniBand devices (mlx5_0..mlx5_4), every port in state `4: ACTIVE`, with 20 RDMA/NCCL_IB
+  environment variables set. So the fabric is present and the KV-transfer failure is not a missing-RDMA problem.
+- That narrows it to configuration: (a) Mooncake's device/interface selection -- its master log carries no protocol
+  line for these arms, where a working transfer names one; (b) cross-pod bootstrap-port reachability, which would
+  give a per-request connect failure rather than a startup error, matching the observed 2819 transfer-failed count.
+- Revises yesterday's conclusion: stock PD is probably fixable here rather than impossible, so the paper decision
+  changes from "report that it could not be run on this cluster" to holding the comparison open. The cheapest test
+  is one short arm with Mooncake's device and protocol pinned explicitly.
+
 ## v3.41.0 — Stock PD is void on clean upstream too: the tree was never the cause (2026-10-29)
 - Both arms fail the driver's own gates: alpha 3 chat 4.3% with failed=1728, alpha 6 chat 13.2% with failed=145,
   accept=NONE on both, TTFT 195-327 s, TPOT 2.7-3.0 ms. Identical signature to r1.

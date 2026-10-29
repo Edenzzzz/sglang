@@ -186,44 +186,18 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
         )
         return kv_indices, cum_kv_seq_len, qo_indptr, self.custom_mask
 
-    def verify(
+    def verify_sample(
         self,
         batch: ScheduleBatch,
         logits_output: LogitsProcessorOutput,
-        token_to_kv_pool_allocator: BaseTokenToKVPoolAllocator,
-        page_size: int,
-        vocab_mask: Optional[torch.Tensor] = None,  # For grammar
-    ) -> torch.Tensor:
+        vocab_mask: Optional[torch.Tensor] = None,
+    ):
+        """Device half of verify(): penalties, grammar mask and the acceptance kernels.
+
+        Returns the four device-side values the host half consumes. Split out so a caller
+        can issue this half right after the target forward and read the results back one
+        iteration later (SGLANG_DELAYED_VERIFY), with no device sync in between.
         """
-        Verify and find accepted tokens based on logits output and batch
-        (which contains spec decoding information).
-
-        WARNING: This API in-place modifies the states of logits_output
-
-        This API updates values inside logits_output based on the accepted
-        tokens. I.e., logits_output.next_token_logits only contains
-        accepted token logits.
-        """
-        if batch.forward_mode.is_idle():
-            return EagleVerifyOutput(
-                draft_input=EagleDraftInput.create_idle_input(
-                    device=batch.device,
-                    hidden_size=batch.model_config.hidden_size,
-                    dtype=batch.model_config.dtype,
-                    topk=self.topk,
-                    capture_hidden_mode=CaptureHiddenMode.LAST,
-                ),
-                logits_output=logits_output,
-                verified_id=torch.empty(0, dtype=torch.long, device=batch.device),
-                accept_length_per_req_cpu=[],
-                accepted_indices=torch.full(
-                    (0, self.spec_steps + 1),
-                    -1,
-                    dtype=torch.int32,
-                    device=batch.device,
-                ),
-            )
-
         bs = self.retrive_index.shape[0]
         candidates = self.draft_token.reshape(bs, self.draft_token_num)
         sampling_info = batch.sampling_info
@@ -357,11 +331,69 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                 bs=bs,
                 spec_steps=self.spec_steps,
             )
+        return predict, accept_index, accept_length, bs
+
+    def verify(
+        self,
+        batch: ScheduleBatch,
+        logits_output: LogitsProcessorOutput,
+        token_to_kv_pool_allocator: BaseTokenToKVPoolAllocator,
+        page_size: int,
+        vocab_mask: Optional[torch.Tensor] = None,  # For grammar
+        presampled: Optional[tuple] = None,
+        host_copies: Optional[tuple] = None,
+    ) -> torch.Tensor:
+        """
+        Verify and find accepted tokens based on logits output and batch
+        (which contains spec decoding information).
+
+        WARNING: This API in-place modifies the states of logits_output
+
+        This API updates values inside logits_output based on the accepted
+        tokens. I.e., logits_output.next_token_logits only contains
+        accepted token logits.
+
+        presampled: the four values verify_sample() returns, when the caller already ran the
+            device half (delayed verification). None runs it here, as before.
+        host_copies: (accept_index, predict, accept_length) already resident on the host, so the
+            loop below reads them without a device sync. Only valid together with presampled.
+        """
+        if batch.forward_mode.is_idle():
+            return EagleVerifyOutput(
+                draft_input=EagleDraftInput.create_idle_input(
+                    device=batch.device,
+                    hidden_size=batch.model_config.hidden_size,
+                    dtype=batch.model_config.dtype,
+                    topk=self.topk,
+                    capture_hidden_mode=CaptureHiddenMode.LAST,
+                ),
+                logits_output=logits_output,
+                verified_id=torch.empty(0, dtype=torch.long, device=batch.device),
+                accept_length_per_req_cpu=[],
+                accepted_indices=torch.full(
+                    (0, self.spec_steps + 1),
+                    -1,
+                    dtype=torch.int32,
+                    device=batch.device,
+                ),
+            )
+
+        if presampled is None:
+            presampled = self.verify_sample(batch, logits_output, vocab_mask)
+        predict, accept_index, accept_length, bs = presampled
 
         unfinished_index = []
         unfinished_accept_index = []
-        accept_index_cpu = accept_index.tolist()
-        predict_cpu = predict.tolist()
+        if host_copies is None:
+            accept_index_cpu = accept_index.tolist()
+            predict_cpu = predict.tolist()
+            accept_length_host = None
+        else:
+            # Already on the host: these tolist() calls touch no device memory, which is the
+            # whole point of issuing the copies an iteration earlier.
+            accept_index_host, predict_host, accept_length_host = host_copies
+            accept_index_cpu = accept_index_host.tolist()
+            predict_cpu = predict_host.tolist()
         has_finished = False
 
         # Iterate every accepted token and check if req has finished after append the token
@@ -407,7 +439,12 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
         verified_id = predict[accept_index]
         evict_mask = torch.full_like(self.draft_token, True, dtype=torch.bool)
         evict_mask[accept_index] = False
-        accept_length_cpu = accept_length.cpu()
+        if accept_length_host is not None and not has_finished:
+            # has_finished recomputes accept_length on the device from the mask the loop above
+            # edited, so only the unfinished case can reuse the host copy taken before it.
+            accept_length_cpu = accept_length_host
+        else:
+            accept_length_cpu = accept_length.cpu()
         # FIXME: this `tolist()` fixes the numerical calculation consistency
         # try to unify the tensor representation and list representation
         accept_length_list = accept_length_cpu.tolist()

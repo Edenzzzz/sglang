@@ -67,6 +67,10 @@ if is_cuda():
 
 logger = logging.getLogger(__name__)
 SGLANG_RETURN_ORIGINAL_LOGPROB = get_bool_env_var("SGLANG_RETURN_ORIGINAL_LOGPROB")
+# Delayed verification (arXiv 2512.01278 section 4.3): a request whose draft tokens were just
+# verified on the GPU sits out ONE iteration while the host computes acceptance, so that host work
+# overlaps the next iteration's GPU work instead of standing between two launches. Off by default.
+DELAYED_VERIFY = get_bool_env_var("SGLANG_DELAYED_VERIFY")
 
 
 class EAGLEWorker(TpModelWorker):
@@ -393,13 +397,33 @@ class EAGLEWorker(TpModelWorker):
         ver_out = LogitsProcessorOutput(
             next_token_logits=logits[n_pre_rows:], hidden_states=hidden[t_pre:]
         )
-        ver_out, res = self._verify_post(running, spec_info, ver_out, None)
+        if DELAYED_VERIFY:
+            # Delayed verification: issue the acceptance kernels and the D2H of what the host
+            # half reads, then STOP. The host half, the draft extend that depends on it, and
+            # the result for these requests are produced by drain_delayed_verify() in the next
+            # iteration -- during which these requests are held out of the batch.
+            presampled, host_copies, event = self._verify_device_half(
+                running, spec_info, ver_out
+            )
+            self._delayed_verify_stash.append(
+                (running, spec_info, ver_out, presampled, host_copies, event)
+            )
+            self._delayed_verify_stashed = getattr(self, "_delayed_verify_stashed", 0) + 1
+            if self._delayed_verify_stashed % 100 == 1:
+                logger.info(
+                    "DELAYED_VERIFY stashed=%d pending=%d rows=%d",
+                    self._delayed_verify_stashed,
+                    len(self._delayed_verify_stash),
+                    running.batch_size(),
+                )
+        else:
+            ver_out, res = self._verify_post(running, spec_info, ver_out, None)
 
         with self.draft_tp_context(self.draft_model_runner.tp_group):
             self.forward_draft_extend(
                 batch, pre_out.hidden_states, next_token_ids, p_mwb.seq_lens_cpu
             )
-            if running.spec_info.verified_id.shape[0] > 0:
+            if not DELAYED_VERIFY and running.spec_info.verified_id.shape[0] > 0:
                 self.forward_draft_extend_after_decode(running)
 
         result = GenerationBatchResult(
@@ -408,6 +432,10 @@ class EAGLEWorker(TpModelWorker):
             num_accepted_tokens=0,
             can_run_cuda_graph=False,
         )
+        if DELAYED_VERIFY:
+            # The scheduler reads this to learn that `running` must sit out the next iteration.
+            result.delayed_verify_held = running
+            return result
         result.mixed_running_result = GenerationBatchResult(
             logits_output=ver_out,
             next_token_ids=res.verified_id,
@@ -415,6 +443,44 @@ class EAGLEWorker(TpModelWorker):
             can_run_cuda_graph=False,
         )
         return result
+
+    @property
+    def _delayed_verify_stash(self) -> List:
+        stash = getattr(self, "_delayed_verify_stash_list", None)
+        if stash is None:
+            stash = self._delayed_verify_stash_list = []
+        return stash
+
+    def has_delayed_verify(self) -> bool:
+        return bool(self._delayed_verify_stash)
+
+    def drain_delayed_verify(self) -> Tuple[ScheduleBatch, GenerationBatchResult]:
+        """Finish the OLDEST stashed verification: host-side acceptance, then the draft extend
+        that needs its accepted tokens. Returns the batch it belongs to and its result, for the
+        scheduler to deliver to those requests and let them rejoin the running batch."""
+        running, spec_info, ver_out, presampled, host_copies, event = (
+            self._delayed_verify_stash.pop(0)
+        )
+        # Waits on the forward that produced these logits, and on nothing launched since.
+        event.synchronize()
+        ver_out, res = self._verify_post(
+            running,
+            spec_info,
+            ver_out,
+            None,
+            presampled=presampled,
+            host_copies=host_copies,
+        )
+        with self.draft_tp_context(self.draft_model_runner.tp_group):
+            if running.spec_info.verified_id.shape[0] > 0:
+                self.forward_draft_extend_after_decode(running)
+        result = GenerationBatchResult(
+            logits_output=ver_out,
+            next_token_ids=res.verified_id,
+            num_accepted_tokens=sum(res.accept_length_per_req_cpu),
+            can_run_cuda_graph=False,
+        )
+        return running, result
 
     def check_forward_draft_extend_after_decode(self, batch: ScheduleBatch):
         local_need_forward = batch.spec_info.verified_id.shape[0] > 0
@@ -812,10 +878,48 @@ class EAGLEWorker(TpModelWorker):
         )
         return logits_output, res, model_worker_batch, can_run_cuda_graph
 
-    def _verify_post(self, batch, spec_info, logits_output, grammar_cpu):
+    def _verify_device_half(self, batch, spec_info, logits_output):
+        """The part of verify() that only touches the device, plus the host copies its host
+        half reads. Issued right after the target forward so that, one iteration later, the
+        acceptance loop finds its inputs already on the host and waits for nothing.
+
+        Returns (presampled, host_copies, event). The event is recorded on the current stream
+        after the D2H copies, so the drain only has to wait for THIS iteration's forward --
+        not for whatever was launched in between.
+        """
+        if self.enable_nan_detection:
+            detect_nan(logits_output)
+        spec_info.hidden_states = logits_output.hidden_states
+        presampled = spec_info.verify_sample(batch, logits_output, None)
+        predict, accept_index, accept_length = presampled[:3]
+
+        def _to_host(t):
+            # A fresh pinned buffer per stash: a second 4-mode step can be launched before the
+            # first one is drained, so a cached buffer would be overwritten while in flight.
+            h = torch.empty(t.shape, dtype=t.dtype, pin_memory=True)
+            h.copy_(t, non_blocking=True)
+            return h
+
+        host_copies = (_to_host(accept_index), _to_host(predict), _to_host(accept_length))
+        event = torch.get_device_module(self.device).Event()
+        event.record()
+        return presampled, host_copies, event
+
+    def _verify_post(
+        self,
+        batch,
+        spec_info,
+        logits_output,
+        grammar_cpu,
+        presampled=None,
+        host_copies=None,
+    ):
         """Everything verify() does after the target forward: grammar mask, acceptance,
         KV bookkeeping, and the next draft input. Shared with the mixed spec step, whose
-        verify logits come out of a forward that also carried prefill rows."""
+        verify logits come out of a forward that also carried prefill rows.
+
+        presampled/host_copies: supplied by the delayed path, which already ran the device
+        half in the previous iteration (see _verify_device_half)."""
         if grammar_cpu is not None:
             retrieve_next_token_cpu, retrieve_next_sibling_cpu, draft_tokens_cpu = grammar_cpu
         vocab_mask = None
@@ -838,16 +942,18 @@ class EAGLEWorker(TpModelWorker):
                 # and will be applied to produce wrong results
                 batch.sampling_info.vocab_mask = None
 
-        if self.enable_nan_detection:
-            detect_nan(logits_output)
-
-        spec_info.hidden_states = logits_output.hidden_states
+        if presampled is None:
+            if self.enable_nan_detection:
+                detect_nan(logits_output)
+            spec_info.hidden_states = logits_output.hidden_states
         res: EagleVerifyOutput = spec_info.verify(
             batch,
             logits_output,
             self.token_to_kv_pool_allocator,
             self.page_size,
             vocab_mask,
+            presampled=presampled,
+            host_copies=host_copies,
         )
 
         # Post process based on verified outputs.

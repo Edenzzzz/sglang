@@ -1169,7 +1169,12 @@ against sglang's own call).
 | input shape | speedup over sglang's single attention call |
 |---|---|
 | spread KV lengths (a tenth of inputs 64K-200K) | **1.23x to 7.51x, median 3.15x** |
-| uniform short KV lengths | 0.75x to 1.42x, median 1.20x |
+| uniform short KV lengths | parity: 0.75x to 1.42x across batch sizes, within run-to-run spread [three repeats pending] |
+
+The uniform-input row is reported as parity rather than as a speedup on purpose. Repeated passes of the same
+configuration move both arms by about 13% on those sets -- the same size as the difference being measured -- so a
+single pass cannot separate a small gain from noise there. The heterogeneous row is far outside that spread, which
+is why it is stated as a ratio.
 
 The split is the mechanism stated as a prediction and then confirmed. What the dispatcher removes is the padding of
 narrow work up to a wide tile, so where every input already has nearly the same width there is almost nothing to

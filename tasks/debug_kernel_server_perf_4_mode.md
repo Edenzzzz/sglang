@@ -6106,3 +6106,55 @@ of magnitude: moving the prefill-to-decode work ratio from about 1:2 to about 67
 0.94x, far more than any plausible H100/H200 difference. So the GPU should move these numbers by single-digit
 percents and the workload mix by multiples -- which also means a kernel ratio measured on one GPU must be
 re-measured on another rather than assumed to carry over.
+
+## The sub-1x shapes are fixed, and my routing hypothesis was refuted on the way (2026-10-29)
+
+flashinfer `unified_dispatch_20261024` commit **d9cd7e6** (parent 230f8b1), mirrored to `/dev/shm/w/port07`.
+
+**My hypothesis was wrong, and the measurement that killed it is worth keeping.** I argued that routing every row
+to FA3 must degrade to the baseline, since the worst case is "what sglang does". It does not, because **our FA3
+role is not sglang's FA3 call.** Per-role decomposition on the same rows (`role_decompose.py`, 200 iterations,
+2 repeats):
+
+| rows measured alone | sglang's single FA3 call | our FA3 role | our FA2 role |
+|---|---:|---:|---:|
+| realistic prefill, 4096 q x 65K KV | 11.38-11.43 ms | 11.57-11.64 ms (+1.7%) | -- |
+| 32 decode rows, 1.3-191K KV | 3.67-3.75 ms | 5.22 ms (+40%) | 4.89 ms (+30%) |
+| 64 decode rows, 0.1-196K KV | 5.65-5.74 ms | 7.08-7.14 ms (+25%) | 7.77 ms (+36%) |
+
+The all-FA3 limit is 1.7-25% ABOVE the baseline, so routing alone could never reach 1.0x. The direction was tested
+anyway (`UNIFIED_FA3_MIN_KV`, and a full per-row cost model): all-FA3 beat the mixed assignment everywhere on the
+agent captures and still stayed under `default` in every case.
+
+**The actual cause was flashinfer's FA2 KV-chunk rule degenerating on all-long batches.** `kv_len_limit` is total
+work divided by clusters, so when every row is long it lands at the longest row, nothing splits, and one row runs
+alone on one CTA -- toy-chunk bs64 gave 260 items for 256 row-heads and 7.77 ms against a 3.9 ms work bound. **This
+also explains the non-monotonicity I could not account for** (2.12x at batch 16 falling to 0.88x at 64): the chunk
+grows with total work until it stops splitting at all. Fix: cap the chunk so no item exceeds a quarter of the keys
+one slot must walk (`UNIFIED_FA2_ITEMS_PER_SLOT`, default 4, 0 restores the old rule), plus skipping the FA2 launch
+when its queue is empty so an all-FA3 plan is literally one launch.
+
+| capture | before | after |
+|---|---:|---:|
+| rc agentmix_two s00016 / s00032 | 0.975 / 0.981 | **1.016 / 1.056** |
+| rc agentmix_four s00016 / s00032 | 0.955 / 0.937 | **1.008 / 1.028** |
+| ag two s00016 / s00032 / s00064 | 2.138 / 1.205 / 0.910 | 2.591 / 1.591 / **1.219** |
+| ag four s00016 / s00032 / s00064 | 1.685 / 1.002 / 0.745 | 2.405 / 1.430 / **1.120** |
+| longtail two / four | 2.06-6.81 / 1.16-4.32 | 2.51-7.45 / 1.64-4.72 |
+
+**Below 1.0x: 13/28 -> 8/28; median 1.008 -> 1.169; correctness 28/28 PASS** (worst fp32 0.0035, worst vs-FA3
+0.0050), two independent runs of the after-arm agreeing within 0.5%. **The 0.937-0.972x realistic-chunk result
+recorded earlier today is superseded: those shapes are now 1.008-1.056x.**
+
+**What is still below 1.0x, and why it is a different problem.** Only the chat-dominant/uniform set (8 captures,
+0.60-1.04x): 0.2-1.6 ms steps with ~800-key KV, where there is nothing to split so the chunk fix cannot apply.
+Decomposing `sharegpt_two s00064` (sglang 0.191 ms): our FA3 role 0.212 vs 0.138 ms on the prefill, our FA2 role
+0.102 vs 0.076 ms on the decodes, and our mixed step 0.333 ms is the SUM of our parts -- **PDL buys no overlap at
+this size**, while sglang's single launch co-schedules for free. The cap also costs a median 9% on these rows by
+splitting their few 5-13K rows for partials that are not worth it; making it merge-cost aware
+(`UNIFIED_SPLIT_POLICY=dynamic` already models this, within 10% on the long sets) or gating it on step size is the
+next step.
+
+**Two structural gaps now isolated, each worth its own item:** our FA3 role is 1.7% behind flash-attention's own
+launch on a large prefill and 25-40% behind on narrow long-KV rows, because its chunk rule under-splits those; and
+PDL buys about zero overlap whenever the FA3 role saturates the machine, so the mixed step is the sum of its parts.

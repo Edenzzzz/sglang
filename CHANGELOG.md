@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.81.0 — Sub-1x shapes fixed: flashinfer's FA2 chunk rule degenerates on all-long batches (2026-10-29)
+- flashinfer unified_dispatch_20261024 d9cd7e6. Below-1.0x captures 13/28 -> 8/28, median 1.008 -> 1.169,
+  correctness 28/28 PASS, two independent after-runs within 0.5%.
+- My routing hypothesis was refuted by per-role decomposition: our FA3 role is NOT sglang's FA3 call. It is +1.7%
+  on a large prefill and +25..+40% on narrow long-KV rows, so the all-FA3 limit sits ABOVE the baseline and
+  routing alone could never reach 1.0x.
+- Actual cause: flashinfer's kv_len_limit is total work / clusters, so on a batch whose rows are all long it lands
+  at the longest row, nothing splits, and one row runs alone on one CTA (260 items for 256 row-heads, 7.77 ms
+  against a 3.9 ms work bound). This also explains the non-monotonicity -- the chunk grows with total work until
+  it stops splitting. Fix caps the chunk at a quarter of the keys one slot must walk, plus an empty-queue launch
+  skip.
+- Supersedes today's 0.937-0.972x realistic-chunk result: those shapes are now 1.008-1.056x, and the agent
+  -dominant regressions (0.745-0.910x) are now 1.120-1.219x.
+- Still below 1.0x only on chat-dominant/uniform captures: 0.2-1.6 ms steps with ~800-key KV where there is
+  nothing to split, both roles are individually behind on tiny work, and the mixed step equals the SUM of our
+  parts because PDL buys no overlap at that size.
+
 ## v3.80.0 — Two defects in the chunk rule, and a zero-GPU discriminator (2026-10-29)
 - The baselines refute the "cluster is overloaded" explanation: pp 57.8%, mc 53.8%, L0 61.5% at the same alpha 6,
   so 54-62% is attainable and our 41.1% gives up ~20 points. budget_ms = -11731 is evidence about our accounting,

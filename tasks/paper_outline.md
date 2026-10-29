@@ -71,7 +71,7 @@
       of one step; ablation bars: FA2 / FA3 overlap by PDL 2.2-6.1% of the step, longest-first order <= 0.7%,
       persistent vs hardware dispatch -0.2..-1.3%, JIT release of merges (ready queue) -1.8..+0.5% vs the same loop with ticketed merges (H200,
       Qwen2.5-7B) [pending: Llama-3.3-70B]
-  - stage 2, single node (C2 + C3 on C1; sections 5.2-5.3, 6.3)
+  - stage 2, single node (C2 + C3 on C1, on C4's mixed workload at node scale; sections 5.2-5.3, 6.3)
     - **claim:** the 4-mode step (prefill chunk + speculative verify) under per-tenant deadline order with demote-on-miss
       protects both tenants on one node
     - **measured** (final configuration, paper SLOs): Qwen2.5-7B (H200) chat attainment +38..+74 points (to 93-100% at
@@ -82,7 +82,7 @@
       [pending: Llama-3.3-70B and GLM-4.5-Air on H200s]
     - *figures:* per-tenant SLO attainment vs request rate; throughput vs tok/s/user Pareto with p10-p90 bars; TTFT / ITL
       distributions per tenant [pending: rate sweeps]
-  - stage 3, multi node with SLO control (C3's router on C1-C3 workers; sections 5.2-5.4, 6.4, 6.5)
+  - stage 3, multi node with SLO control (C3's router on C1-C3 workers, evaluated on C4's concurrently mixed, differently-SLO'd traffic; sections 5.2-5.4, 6.4, 6.5)
     - **claim:** symmetric colocated nodes with SLO-checked cache-first routing, sglang's Mooncake KV pool and the stage-2 workers
       carry more load at SLO than PD disaggregation at its best P:D ratio, and than conditional disaggregation
     - **measured** (16 H20s, Qwen2.5-7B, full stack; all arms re-scored from raw records in the reported metrics):
@@ -153,99 +153,45 @@ admitting it.
 
 **Contributions.**
 
-- C1, kernel: **a unified tile dispatcher that maximizes compute utilization and removes tile waste for mixed
-  input.** A mixed step presents work of wildly different query widths at once -- a prefill chunk of thousands of
-  tokens beside decode rows of one and verify rows of four -- and a single kernel must pad the narrow work up to
-  its own tile, so most of each tile's rows compute nothing. The dispatcher instead gives every piece of work a
-  tile of its own width: one CPU-side plan per step covers FA2 tiles (classes of 16, 32 and 64 packed query rows)
-  and FA3 tiles, orders work longest first so no SM idles behind a long tile, and builds the split-KV merge
-  schedule into the same plan, so FA2 and FA3 partial results are reduced inside the FA2 launch and no merge launch
-  runs. Stock FA3 and FA2's BatchPrefill body execute the plan, overlapped by programmatic dependent launch (PDL).
-  Against the single FA3 call sglang runs today this is 1.86-2.92x on captured mixed steps; eliminating the tile
-  padding accounts for most of it and the plan, the ordering and the in-launch merge for a further 4.0-8.7% of
-  attention time.
-- C2, speculative decoding inside colocation: because the dispatcher gives each row a tile class of its own size, a
-  prefill chunk and the MTP / EAGLE verify rows of the running requests run as one target forward, the four-mode step,
-  with the verify rows on 32-row FA2 tiles and the chunk on FA3. Prior colocation designs do not support speculative
-  decoding: POD-Attention overlaps a prefill chunk with one-token decode rows inside an FA2 kernel, and PD multiplexing
-  (MuxWise, sglang's pdmux) runs the prefill split across iterations without the draft model's state. Frontier models
-  are served with speculative decoding, so this is what makes a colocated schedule practical for them.
-- C3, SLO control without disaggregation. Disaggregation meets TPOT by isolating decode on its own nodes;
-  colocation must instead keep each tenant within its SLOs by deciding where and when every prefill runs. C3 does
-  this at two levels, per worker and per cluster. We evaluate both on the case that motivates them: a cluster
-  serving several kinds of request at once, with different lengths and different SLOs -- a replay of TraceLab's
-  agentic coding sessions on their real arrival timestamps, whose rounds carry tens to hundreds of thousands of
-  cached tokens, mixed with ShareGPT chat turns of a few hundred tokens under a far tighter latency target. That
-  mixture, rather than a single-workload benchmark, is what industry-scale serving looks like, and it is where a
-  policy that cannot tell the two apart fails.
-  - *Per worker: deadline scheduling of the colocated step.* Each prefill's deadline comes from its uncached
-    tokens, read by a prefix match at enqueue, so a cached agent round gets a chat-like deadline. Prefills run in
-    deadline order; one that has already missed its deadline is demoted behind those that can still meet theirs,
-    and one the step model predicts will miss is demoted rather than any running request being preempted. Ordering,
-    demotion and the model-sized chunk are the mechanism; preemption and chunk-budget reservation were built,
-    measured and dropped (sections 5.2.3 and 7). The chunk-sizing layer has a measured regime. Solving the
-    chunk from a latency budget does what it is designed to do: past capacity it cuts mean time per output token by
-    19% for chat and 23% for agent rounds against a control differing only in using sglang's own chunk policy. It
-    pays for that in time to first token, which rises 3.6x and 3.9x because a smaller chunk spreads every prefill
-    over more steps, so under objectives that require BOTH targets it loses 20 points of chat attainment and 16 of
-    agent. We therefore report it as a mechanism whose benefit is real but confined to deployments where time per
-    output token binds and the time-to-first-token target is loose, and we do not enable it in the configuration
-    the evaluation reports (section 6.4).
-  - *Per cluster: an SLO-checked router over symmetric nodes.* For each request and node, from state the router keeps
-    itself, it predicts:
-    - TTFT: the deadline-ordered work queued ahead of the request, the cost of its uncached tokens on top of the
-      cached prefix (a calibrated prefill curve), minus the prefix pages the node can pull from the cluster pool while
-      the request waits;
-    - TPOT: the rows that will decode beside the request.
-
-    It sends the request to the highest-hit node that passes four checks: the request's own TTFT and TPOT, the
-    deadlines of requests queued behind it, and the TPOT of requests already decoding there (section 5.2.1). Routing
-    is therefore an admission decision priced in SLO terms, not just cache affinity plus load balance.
-
-*What we reuse.* The cluster KV pool is sglang's hierarchical cache over the Mooncake distributed store, with sglang's
-selective write-through and timeout prefetch; we add only the router-side mirror of its contents that prices a pull.
-The serving engine is upstream sglang at a pinned commit, and both attention executors are stock kernels (FA3 from
-flash-attention, FA2's BatchPrefill body from flashinfer).
-
-**Results.** On trace-sampled steps on an H200, the kernel is **1.86-2.92x faster than the single FA3 call sglang
-runs today** on Qwen2.5-7B. Most of that comes from giving decode and verify rows FA2 tile classes of their own
-width rather than padding them into FA3 tiles, which no released build does; the one plan and the in-launch merge
-add a further 4.0-8.7% of attention time on top (2.8-5.8% on Llama-3.3-70B, 2.0-2.8% on GLM-4.5-Air). On one node, Qwen2.5-7B chat attainment
-rises by 38-74 points under the paper's SLOs, agent attainment at 128-256K rises from 13-19% to 44-50%, and
-GLM-4.5-Air throughput rises 27-28%. On 16 GPUs with the full stack, replaying the TraceLab trace
-concurrently with chat, AttentionFuse holds **90.9% chat and 93.9% agent attainment** at capacity, against
-**50.5% and 64.9%** for conditional disaggregation -- the stronger disaggregated design -- while cutting mean time
-per output token by **69-79%** and mean time to first token by **77-86%**, and admitting **65-82% more agent
-rounds**. Driven to six times that load the ordering holds: **+8 to +13 points of chat and +26 to +31 points of
-agent attainment**, with mean time per output token **30-49% lower**. Against sglang's own colocated schedules on
-the same tree -- the comparison that isolates the schedule -- it holds **7.7 points more chat attainment** at
-capacity with chat mean time per output token **30% lower** and mean time to first token **63% lower**, and at
-overload 4.0 to 8.0 points more chat attainment with mean time per output token 3-15% lower. **It loses no requests
-and no attainment when a quarter of the cluster fails.** [Llama-3.3-70B and 32 GPUs pending]
-
-- C4, an evaluation on concurrently mixed, differently-SLO'd traffic. The scenario is one many clusters already
-  serve: an agentic coding product and a chat product sharing the same GPUs, as Codex and ChatGPT traffic do. We
-  replay TraceLab's agentic coding sessions on their real arrival timestamps -- rounds carrying tens to hundreds of
-  thousands of cached tokens, under a 10 s time-to-first-token and 80 ms mean-TPOT target -- concurrently with
-  ShareGPT chat turns of a few hundred tokens under 2 s and 50 ms, on **four nodes of four GPUs**, sweeping load
-  until both tenants' targets break. Measured on that mixture, AttentionFuse beats both families of baseline:
-  - against **PD disaggregation** at its best prefill-to-decode ratio, chat attainment 97.4% against 53.2% at 32
-    agent programs and 93.6% against 13.1% at 64; no disaggregated configuration holds any load point at 90%
-    attainment;
-  - against **conditional disaggregation** (Dynamo's defaults), which prefills appends locally and is the stronger
-    disaggregated design, 29 to 30 points more agent attainment and 40 to 43 more chat attainment at capacity, and
-    26 to 31 points more agent attainment at six times that load, in two repeats of the baseline at each load, with
-    mean time per output token 44-72% lower for agent rounds and 65-82% more agent rounds admitted;
-  - against **sglang's own colocated schedules** on the same cluster and workload, 8.0 points more chat attainment
-    than mixed chunk at overload with agent mean time per output token 14% lower, and 7.7 points more chat
-    attainment than prefill-prioritized at capacity with chat mean time per output token 30% lower and chat mean
-    time to first token 63% lower. The agent-attainment differences against these two are inside this workload's
-    run-to-run noise, and we report them as such.
-  The shape of the result is a throughput-latency frontier rather than a single point: at a fixed throughput target
-  we deliver higher SLO attainment and lower mean TPOT, and at fixed attainment we carry more load. The Pareto
-  curve that states this directly, and the per-tenant distributions behind it, are [pending]. One margin is
-  deliberately withheld: our goodput advantage over prefill-prioritized coincides with a draft-acceptance
-  difference large enough to explain it, and we do not claim it until per-tenant acceptance separates the two.
+- **C1, a unified tile dispatcher that maximizes compute utilization and removes tile waste for mixed input.** A
+  mixed step carries work of very different query widths at once -- a prefill chunk of thousands of tokens beside
+  decode rows of one and verify rows of four -- and a single kernel pads the narrow work up to its own tile width.
+  One CPU-side plan per step instead gives every piece of work a tile of its own width (FA2 classes of 16, 32 and
+  64 packed rows, FA3 for the chunk), orders work longest first, and folds the split-KV merge into the same plan so
+  no merge launch runs. Stock FA3 and FA2 bodies execute it, overlapped by programmatic dependent launch. On
+  captured mixed steps this is 1.86-2.92x the single FA3 call sglang runs today (section 6.2).
+- **C2, speculative decoding inside colocation.** Because every row gets a tile class of its own size, a prefill
+  chunk and the running requests' MTP/EAGLE verify rows execute as one target forward -- the four-mode step. Prior
+  colocation designs cannot do this: POD-Attention overlaps a chunk with one-token decode rows only, and PD
+  multiplexing splits the prefill across iterations without the draft model's state. Frontier models are served
+  with speculative decoding, so this is what makes colocation practical for them (section 5.2).
+- **C3, SLO control without disaggregation: pricing a request before admitting it.** Disaggregation meets a decode
+  target by isolating decode on its own nodes; colocation must instead decide where and when each prefill runs,
+  which requires predicting what a step will cost. A fused step has a predictable duration, so we fit a step-time
+  model and use it in two places. Per worker, prefills run in deadline order -- the deadline derived from a
+  request's uncached tokens, so a cached agent round gets a chat-like one -- with missed prefills demoted and each
+  chunk sized from the model. Per cluster, a router prices every candidate node's time to first token and time per
+  output token from state it keeps itself, and admits the request to the highest-cache-hit node that still
+  satisfies every tenant's objectives. On the steps a scheduling decision is made about -- those carrying a prefill
+  chunk -- the model predicts step time to 4.7% mean error, which is what makes the admission test meaningful
+  rather than nominal (sections 5.2, 5.3).
+- **C4, an evaluation on concurrently mixed, differently-SLO'd traffic, and the gains on it.** Many clusters
+  already serve an agentic coding product beside a chat product on the same GPUs, as Codex and ChatGPT traffic do.
+  We replay TraceLab's agentic coding sessions on their real arrival timestamps -- rounds carrying tens to hundreds
+  of thousands of cached tokens under a 10 s first-token and 80 ms per-token target -- concurrently with ShareGPT
+  chat turns of a few hundred tokens under 2 s and 50 ms, sweeping load until both tenants' targets break. That
+  mixture, rather than a single-workload benchmark, is where a policy that cannot tell the two apart fails. On 16
+  GPUs AttentionFuse holds **90.9% chat and 93.9% agent attainment** at capacity, against **50.5% and 64.9%** for
+  conditional disaggregation -- the stronger disaggregated design -- with mean time per output token **69-79%
+  lower**, mean time to first token **77-86% lower**, and **65-82% more agent rounds admitted**; stock
+  disaggregation at its best prefill-to-decode ratio holds 13.1% chat attainment. At six times that load the
+  ordering holds (**+8 to +13 points chat, +26 to +31 agent**). Against sglang's own colocated schedules, which
+  isolates the schedule from the kernel, it holds **7.7 points more chat attainment** at capacity with chat mean
+  time per output token **30% lower**, and 4.0 to 8.0 points more at overload. It loses no requests and no
+  attainment when a quarter of the cluster fails. On one node, chat attainment rises by 38-74 points and agent
+  attainment at 128-256K from 13-19% to 44-50%. One margin is withheld: our advantage over prefill-prioritized
+  scheduling coincides with a draft-acceptance difference large enough to explain it, and we do not claim it until
+  per-tenant acceptance separates the two. [Llama-3.3-70B and 32 GPUs pending]
 
 ## 2. Background
 

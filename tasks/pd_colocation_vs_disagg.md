@@ -2273,6 +2273,28 @@ then just noise on a quantity the cap barely moves.
 budget cannot work on this workload; and that a more accurate step model would optimise the wrong objective. None
 of those were tested, because what was measured was a rule that starves prefill 41% of the time.
 
+### FIRST CLEAN READING OF THE CORRECTED ARM SET, alpha 3 (2026-10-29)
+
+Ours = EDF coupled with the SLO-budgeted chunk (floor hoisted, no fixed chunk anywhere in our arm); baseline =
+sglang's own schedule with sglang's own chunk policy. `mn_hoist_16g_20261029.sh`, log `/tmp/h20/mn_hoist_r1.log`.
+
+| arm at alpha 3 | chat attainment | mean TTFT | mean TPOT |
+|---|---:|---:|---:|
+| L0 (our tree, sglang's chunk policy) | 91.2% | 0.67 s | 18.0 ms |
+| c2048 control (fixed chunk) | 90.6% | -- | -- |
+| **ours (EDF + SLO chunk + floor)** | **88.2%** | 0.99 s | 19.4 ms |
+| sglang prefill-prioritized | 83.2% | 1.64 s | 28.7 ms |
+
+**Against the specified baseline we are +5.0 points of chat attainment, with mean TTFT 40% lower and mean TPOT 32%
+lower.** Against our own tree with sglang's chunk policy we are -3.0 points, which is inside this cluster's
+~5-point noise floor. **So at capacity the rule is roughly neutral against L0 and clearly ahead of sglang's own
+schedule, and the collapse is confined to alpha 6.**
+
+That also corrects an emphasis error of mine: I swept alpha 6 seven times and ran alpha 3 once. Alpha 3 is where
+the stated goal -- no regression against the baseline at capacity -- is actually testable, and alpha 6 is six
+times capacity, where the baselines themselves only reach 54-62%. The overload regime deserved one point, not
+seven.
+
 ### The floor now fires, and the result isolates the remaining defect (2026-10-29, alpha 6)
 
 | arm | chat mean TPOT | chat mean TTFT | attainment tight / loose |

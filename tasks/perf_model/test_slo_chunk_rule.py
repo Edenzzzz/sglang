@@ -120,9 +120,17 @@ def main():
                   healthy(13, 40) + [Req(1000, 2, 628.0, now)], "big"))
     cases.append(("all rows healthy and well into their output", healthy(14, 60), "big"))
     cases.append(("no rows resident at all", [], "max"))
-    # A row that genuinely cannot reach its target by completion must still clamp the step.
-    cases.append(("one row past rescue (mean 120 ms against a 50 ms target, 390 of 400 tokens done)",
-                  healthy(13, 40) + [Req(1000, 390, 390 * 120.0, now)], "small"))
+    # A row that genuinely cannot reach its target by completion must be EXCLUDED from the minimum, not given the
+    # tightest bound in it. Clamping on its behalf made overload self-reinforcing: at alpha 6 most rows are behind,
+    # so nearly every step was pinned to the bare per-step allowance whatever the tail cap said, and the measured
+    # stepcap sweep was flat from 600 to 3000 ms (chat TPOT p90 55.0-56.1 ms, TTFT p90 31-42 s, attainment
+    # 23.6-35.3% against a fixed-2048 control's 60.5%). A row that has already missed cannot be rescued, so
+    # constraining the rows that have not costs the prefill that would stop the queue growing.
+    cases.append(("one row past rescue, which must NOT clamp the others (mean 120 ms against a 50 ms target)",
+                  healthy(13, 40) + [Req(1000, 390, 390 * 120.0, now)], "big"))
+    # ...but a batch of ONLY past-rescue rows must still leave the tail cap in force, or nothing bounds the step.
+    cases.append(("every row past rescue: the tail cap is the only bound left",
+                  [Req(1000, 390, 390 * 120.0, now) for _ in range(14)], "big"))
     # Before eight requests of a tenant have finished there is no projected length, so the rule falls back to the
     # banked bound. Rows well into their output have banked real slack, so a large chunk is correct there...
     cases.append(("lifetime length not learned, rows 60 tokens in (banked slack carries it)",

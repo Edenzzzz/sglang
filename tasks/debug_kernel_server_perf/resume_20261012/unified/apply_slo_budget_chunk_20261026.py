@@ -156,10 +156,18 @@ method = '''
                     L = max(life_l[0], o + tps)
                     rate = spent / o if o >= 4 else getattr(self, "_slo_rate", s_r)
             if cfg["demote"] and spent > s_r * (L if L is not None else o):
-                # Past rescue: even running the rest of its output at its target rate it cannot reach its mean, so
-                # it lends no slack. Each new token still costs at most its target, so the step is bounded by its
-                # per-step allowance (no backlog recovery, no banking).
-                budget = min(budget, per_step)
+                # Past rescue: even running the rest of its output at its target rate it cannot reach its mean.
+                # It is therefore EXCLUDED from the minimum rather than given the tightest bound in it, which is
+                # what "demote" means -- it has already missed, so constraining every other row on its behalf buys
+                # nothing and costs exactly the prefill that would stop the queue from growing.
+                #
+                # Giving it `per_step` instead (the previous behaviour) made overload self-reinforcing, and the
+                # stepcap sweep is the evidence: across caps of 600-3000 ms at alpha 6 the chunk barely moved
+                # (chat TPOT p90 55.0-56.1 ms, TTFT p90 31-42 s, attainment 23.6-35.3% against a fixed-2048
+                # control's 60.5%), because at that load MOST rows are behind their target and so nearly every
+                # step was pinned to the bare ~90 ms allowance whatever the cap said. A row falls behind, clamps
+                # the step, the chunk collapses, prefill starves, more rows fall behind: the mechanism meant to
+                # protect latency under overload was disabled BY overload.
                 self.slo_chunk_demoted = getattr(self, "slo_chunk_demoted", 0) + 1
                 continue
             if cfg["life"]:

@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.32.0 — Apply the demote fix and launch its arm at both loads (2026-10-29)
+- A row that cannot reach its target is now EXCLUDED from the budget minimum rather than given the tightest bound
+  in it. The old behaviour made overload self-reinforcing, and the flat stepcap sweep is the evidence: across
+  600-3000 ms the chunk barely moved because at alpha 6 most rows are behind, so nearly every step was pinned to
+  the bare ~90 ms allowance whatever the cap said.
+- Offline test extended to lock the fix in rather than the bug: the past-rescue row must NOT clamp the others, and
+  a batch of ONLY past-rescue rows must still leave the tail cap in force so something still bounds the step.
+  9/9 pass.
+- Deployed to all four pods with `cp -aL` (the main tree is a symlink; `cp -a` would patch it), verified identical
+  md5 6e1e53057f110ad4 and that the result parses.
+- `mn_demotefix_16g_20261029.sh` launched at alpha 6 and alpha 3 with stepcap=2000, the best of the swept caps.
+  alpha 6 tests whether the death spiral is gone; alpha 3 tests the no-regression requirement against rung L0.
+
 ## v3.31.0 — The stepcap sweep is flat: the demote branch binds, not the cap (2026-10-29)
 - alpha 6, caps 600/1000/1500/2000/3000 ms, all failed=0: chat TPOT p90 stays 55.0-56.1 ms and chat TTFT p90 stays
   31-42 s across the whole range, with attainment 23.6-35.3% against the fixed-2048 control's 60.5%. A 5x change

@@ -5645,9 +5645,29 @@ which fill the machine on their own, so the split adds no parallelism and every 
 merge. The split policy was tuned on trace-sampled captures whose contexts are 32K-256K, where splitting is
 necessary; applied to a short context beside plenty of FA2 work it is pure overhead.
 
-**Status.** `apply_fa3_cta_target_20261029.py` exposes the target as `UNIFIED_FA3_CTAS` (no default changed, so no
-other arm moves), and a sweep over 132 / 64 / 16 / 1 is running to measure how much of the gap the split accounts
-for. The 132 arm reproduces the baseline exactly (0.655-2.293, splits 3, chunk 1664), which is the control that
-makes the rest readable. If the gap closes at a low target, the fix is to make the FA3 split target depend on the
-FA2 work in the same plan rather than on the SM count alone -- the plan already knows both, so this costs nothing
-at runtime.
+**HYPOTHESIS REFUTED by its own control sweep (2026-10-29).** `apply_fa3_cta_target_20261029.py` exposed the
+target as `UNIFIED_FA3_CTAS` and the sweep says the opposite of what the diagnosis predicted -- lowering the
+target, which lowers the split count, makes the step monotonically SLOWER:
+
+| `UNIFIED_FA3_CTAS` | bs 16 | bs 32 | bs 64 | bs 128 |
+|---:|---:|---:|---:|---:|
+| **132 (default)** | **0.655** | **0.584** | **0.668** | **2.293** |
+| 64 | -- | 0.736 | 0.865 | 2.525 |
+| 16 | 1.103 | 1.028 | 1.156 | 2.770 |
+| 1 | 10.335 | 10.223 | 10.256 | 12.081 |
+
+The default is the best of the four and a target of 1 is fifteen times worse. **Why the reasoning was wrong: FA3
+runs FIRST under programmatic dependent launch, so the step waits on it, and its own parallelism matters however
+many FA2 items follow it.** "The FA2 items already fill the machine" describes occupancy over the step as a whole,
+not the critical path through it. The split is doing real work and the merge it forces is not the dominant cost, so
+**the FA3 KV split is not the lever on the v3 gap.** The knob stays, defaulted to today's behaviour, because it is
+the control that settles this.
+
+**Candidates still open for the gap, in the order they are worth testing:**
+1. The 16-row FA2 class's occupancy. These captures are two-mode, so A6 routes decode inputs to the 16-row class
+   while v3's native kernel uses a 32-row tile. A 32-row tile holding one useful row is waste by our own argument,
+   yet it is faster here, which points at the 16-row instantiation being under-occupied rather than at tile width.
+   `UNIFIED_FA2_CTAS_PER_SM16` tests this with no rebuild.
+2. The in-launch merge itself, independent of the split count (`UNIFIED_SKIP_MERGE=1`, needs a rebuild).
+3. The plan's host cost, which is 0.5-8.7 ms here against a kernel of 0.5-2.3 ms. It is overlapped in serving but
+   the harness may not hide it.

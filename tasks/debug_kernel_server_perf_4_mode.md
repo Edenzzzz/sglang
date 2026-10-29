@@ -951,6 +951,31 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     in question -- but the magnitudes are upper bounds until re-measured.
   - Re-measurement queued: `mn_pd_remeasure_16g_20261028.sh` (stock PD `disagg_p2` + conditional `cond_p1`, alpha 3
     and 6, `ROPE_THETA=1000000`), chained after the tail-chunk arm. Caveat written into paper 6.4.
+- **[x] H200 TRIAL `3f9e6a55ef7ae47e` IS PROVISIONED AND VERIFIED (2026-10-29).** Running since 07:20 with a
+  bounded matmul load on all four GPUs so it cannot be reaped for under-utilisation again. Environment, each item
+  checked by name rather than inferred from an exit status:
+  | check | result |
+  |---|---|
+  | sglang at the pinned commit | `3fef129ff8` |
+  | torch | 2.14.1+cu130, 4 GPUs visible |
+  | flashinfer / sgl_kernel / numpy | import OK |
+  | models | Qwen2.5-7B (14 shards) + EAGLE3 head |
+  | serving overlay (`_edf_limit_chunk`) | 2 markers -- OUR tree, not clean upstream |
+  | port07 fused FA3 header | present |
+  | prebuilt native `.so` | 4 |
+  | bench scripts in `ub/` | 92 |
+  | `fi` symlink | `/dev/shm/w/port07` |
+  - **What this cost, recorded because the same traps will recur:** the webshell exec caps at 100 s, so the sglang
+    source build returned the relay's JSON error as `rc=1` until it was run detached with polling; `px.push` takes
+    (local, STAGING path, DEST DIRECTORY) and returns a bool, and passing `None` for the staging path appended 137
+    chunks to a file literally named `None` while creating the destination as a directory -- and because a prior
+    attempt had used the same path, the two payloads concatenated and decoded 180 000 bytes too long with a
+    truncated tar. See [[webshell-push-and-timeout-traps]].
+  - **The ladder is NOT the next step: the capture set is gone.** It was lost with the previous trial, so the
+    sequence is captures-by-serving (`ub/trace_sampled_capture_h20_20261024.sh`, which sets
+    `TRACE_DATASET_PATH` to a TraceLab file) -> FP32 check (`ub/check_unified_capture_20261024.py`) -> ladder
+    (`ub/a6_h200x4_kernel_ladder_20261026.sh`) -> single-node A/Bs. The capture script's dataset is the one bundle
+    entry I excluded to halve the push, so it is transferring separately now.
 - **H200 trial re-forked 2026-10-28 17:10 CST: `3f9e6a55ef7ae47e`** (vibecuda, 4x H200, i18n-bd), because
   `bf7d041fb8313d8a` was **killed at 2026-10-28 04:02 UTC for resource under-utilisation** (`exit_code -77777`,
   "trial 因资源利用率不达标被查杀"; read with `merlin-cli job list-trial-exit-info --json '{"trial_id":"304747380"}'`

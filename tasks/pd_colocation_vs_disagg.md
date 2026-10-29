@@ -2182,11 +2182,20 @@ requires a request to meet BOTH its targets -- collapses. The whole cap sweep ag
 give chat 32.7 / 33.2 / 35.3 / 28.8%, all far below L0.
 
 **Relaxing the cap further does not rescue it (2026-10-29, corrected sweep).** A larger tail cap means the budget
-binds less often, so one might expect the arm to converge on L0's behaviour. At 4000 ms it does not: chat 42.8% /
-agent 64.8% against L0's 61.5% / 79.1%, with mean TTFT 7.93 s against 2.28 and mean TPOT 49.7 ms against 57.1 --
-still 18.7 points of chat attainment down, with the same shape of trade (TPOT 13% better, TTFT 3.5x worse) and
-5618 agent rounds issued against L0's 6284. Acceptance 2.027, `failed=0`, so the arm is valid. 8000 and 16000 ms
-are running. The trade is therefore a property of sizing the chunk from a latency budget at all on this workload,
+binds less often, so one might expect the arm to converge on L0's behaviour. It does not, at either value tried so far:
+
+| tail cap | chat attain | agent attain | chat mean TPOT | chat mean TTFT | agent rounds issued | accept |
+|---:|---:|---:|---:|---:|---:|---:|
+| L0 (sglang's own chunk policy) | **61.5%** | **79.1%** | 57.1 ms | 2.28 s | 6284 | 2.0 |
+| 1000 / 1500 / 2000 / 3000 ms | 32.7 / 33.2 / 35.3 / 28.8% | -- | ~41 ms | -- | -- | 2.0 |
+| 4000 ms | 42.8% | 64.8% | 49.7 ms | 7.93 s | 5618 | 2.027 |
+| 8000 ms | 37.7% | 62.9% | 50.7 ms | 9.18 s | 5452 | 2.017 |
+
+Every arm has `failed=0` and acceptance about 2.0, so all are valid. The sweep is **not even monotonic** -- 8000 ms
+is worse than 4000 -- and all six caps from 1000 to 8000 ms sit 19 to 33 points of chat attainment below the
+control while improving mean TPOT by 11-28%. 16000 ms is running. A cap that rarely binds should converge on the
+control's behaviour; that it does not, across six values spanning an order of magnitude, says the loss comes from
+sizing the chunk from a latency budget at all on this workload rather than from the cap's value. The trade is therefore a property of sizing the chunk from a latency budget at all on this workload,
 not of the cap's value, which is what makes it a finding rather than a tuning gap.
 `mn_capsweep2_16g_20261029.sh`, log `/tmp/h20/mn_capsweep2_r1.log`.
 - **This reverses the 2026-10-28 reading**, which was taken on the SLO-attaining token rate and the TPOT tail and

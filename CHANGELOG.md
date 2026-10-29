@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.64.0 — The decode-KV tracer fix never applied; the chain claimed it had (2026-10-29)
+- Caught before the traced arm took the cluster lock. The patch anchors on a multi-line `_sl = (...)` block that
+  the deployed tracer does not contain -- it reads `seq_lens = ... if ... else []` on one line -- so the assertion
+  fired on all four nodes. But the chain printed DKV_DEPLOYED unconditionally and queued the arm, which would have
+  recorded dkv=0 on every decode step for the second time and surfaced only in the fit afterwards.
+- apply_steptrace_decode_kv_v2_20261029.py targets the deployed text with the same shape the verify-rows patch uses
+  for the running batch. Applied and verified on both trees on all four nodes by marker count and compile():
+  dkv=1 verify=1 COMPILES everywhere.
+- Lessons recorded: a deployment step must verify a marker rather than trust an exit code or a following echo, and
+  a patch anchor is a property of the tree it targets, so it must be re-read against the deployed revision before
+  being chained into a long run.
+
 ## v3.63.0 — Agent-dominant correctness gate: every reachable size exact, one unreachable size fails (2026-10-29)
 - The 75%-agent set passes the FP32 gate at batches 16, 32 and 64 in both two- and four-mode (worst 0.0035 against
   FP32, 0.0047 against sglang's own call).

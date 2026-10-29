@@ -2130,6 +2130,26 @@ says otherwise. Commands and logs are in `debug_kernel_server_perf_4_mode.md`.
 | **3.** EDF predictor with acceptance length | **UNMEASURED, not refuted (corrected 2026-10-29): the decode KV length is a DEAD INPUT.** `dkv` is zero on all 73 770 decode steps in the traces and non-zero on 10 189 of 14 162 mixed/prefill steps, so decode step time was being predicted from the row count alone, without the dominant term. The -13% bias and 29% MAPE are the signature of that, not of an unmodelable quantity -- and on a random split the held-out median bias is +0.1%. The tracer must populate `dkv` on decode steps before the premise can be tested at all. (Superseded reading: **the premise is REFUTED.**) The step model predicts merged steps to 4.7% MAPE, but DECODE steps -- which are almost all of TPOT -- carry a **-13.0% signed bias** (29.0% MAPE) that a scalar calibration cannot remove (held-out -13.3%), and a nonlinear fit on the same features is WORSE (-19.9%). So predicted TPOT is systematically ~13% optimistic, the worst direction for admission control. `tpot_bias.py`, `fit_step_mlp_20261028.py`. | That a *better-featured* model would fix it. The missing information is likely the decode batch's KV-length distribution (only its mean is logged) and the resident tenant mix. No TPOT-accuracy claim may appear in the paper. |
 | **4.** two-way RDMA, complete vs bipartite graph | **New, and it is the motivation rather than the mechanism:** the prefill-to-decode demand RATIO moves 2.2x inside a chat surge (median 38.4 against 85.1 outside) and spans 3.4-4.2x within a run with no surge at all, while re-partitioning roles takes tens of minutes (`pd_ratio_20261028.py`). Independent trace analysis finds 4.7x peak-to-mean at minute scale and 24.5x hourly within a day. So a static split is a control loop slower than its signal. | Congestion itself. The random-pull rule remains refuted at the scale we can test, and we have no per-link measurement. |
 
+## The decode-KV tracer fix did not apply, and the chain reported success anyway — 2026-10-29
+
+Point 3 (the EDF predictor's accuracy) rests on a traced arm where `dkv`, the decode rows' KV length, is actually
+recorded. Checked before that arm took the cluster lock, and it would have measured nothing:
+- `apply_steptrace_decode_kv_20261029.py` anchors on a multi-line `_sl = (...)` block. **The deployed tracer has no
+  such block** -- it reads `seq_lens = batch.seq_lens_cpu.tolist() if batch.seq_lens_cpu is not None else []` on
+  one line. The patch asserted "the seq_lens_cpu fallback moved" on all four nodes, which is the assertion doing
+  its job.
+- **The chain printed `DKV_DEPLOYED` regardless and queued the traced arm**, because `echo` followed the patch step
+  unconditionally. The arm would have recorded `dkv=0` on every decode step for the second time -- the exact defect
+  the trace exists to measure -- and the failure would only have surfaced after the run, in the fit.
+- `apply_steptrace_decode_kv_v2_20261029.py` targets the deployed text, using the same shape the verify-rows patch
+  already uses for the running batch: where the host copy is absent, take each row's KV from the request
+  (`len(origin_input_ids) + len(output_ids)`), which adds no device synchronisation. Applied and verified on both
+  trees on all four nodes with `compile()` and a marker count: `dkv=1 verify=1 COMPILES` everywhere.
+- **Two general lessons, both already paid for once today.** A deployment step must verify a MARKER rather than
+  trust an exit code or a following `echo`; and a patch's anchor is a property of the tree it is applied to, so a
+  patch written against one revision must be re-read against the deployed one before it is chained into anything
+  long. The same mistake with `ast.parse` cost four trees this morning.
+
 ## Every 16-GPU arm re-scored in the reported metrics — 2026-10-29
 
 Reporting changed to SLO attainment plus mean TTFT and mean TPOT with a p10-p99 spread, with no token rate (user).

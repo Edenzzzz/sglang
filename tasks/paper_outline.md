@@ -1120,7 +1120,6 @@ divided by ours, so **1.00 is our method and larger is slower**.
 | POD-Attention's structure: one FA2 kernel over chunk and rows | 3.69* | -- | 3.45* | -- |
 | naive role split, serial: stock FA3 chunk + stock FA2 rows | 1.08 | 1.09 | 1.04 | 1.06 |
 | naive role split, the two calls on two streams | 1.04 | 1.07 | 1.04 | 1.06 |
-| *(ours, superseded)* our earlier two-plan build | 1.34 | 1.92 | 1.77 | 1.37 |
 | **ours: one plan, per-row tile classes, in-launch merge** | **1.00** | **1.00** | **1.00** | **1.00** |
 
 \* POD's structure needs both roles in one call, so it was measured in its own harness rather than on the capture
@@ -1128,10 +1127,6 @@ set: a 2 048-token chunk beside 32 one-token rows, giving 24.3 ms against our 7.
 6.1 against 1.7 ms at 32K. A repeat gave 3.49 and 3.71, so these factors reproduce to better than 1%. That shape is
 the two-mode configuration; we did not run the four-mode variant, and do not expect it to change the ordering,
 because the gap comes from the prefill half's instruction choice.
-
-The two-plan row is our own superseded design, included so the one-plan structure is shown to be the right one and
-not as a baseline: a system's own earlier version is not a comparison anyone else can check, and quoting it
-alongside external baselines would inflate the apparent contribution the way the role-split factors would.
 
 Two designs a reader might expect to be strong are the weakest. sglang's shipped call is 1.9-2.9x our time because
 it picks one query tile for every row in the batch, so a one-token decode row is computed at the chunk's tile width.

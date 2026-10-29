@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.79.0 — The gain's mechanism: padding wastes compute, not bandwidth (2026-10-29)
+- Unifies every kernel measurement of the day into one falsifiable claim. Padding a one-query decode input into a
+  128-row tile does not change KV traffic -- the same bytes stream either way -- it wastes the MMA. So the waste is
+  free exactly when it hides behind memory traffic: bandwidth-bound long-KV inputs absorb it, compute-bound
+  short-KV inputs do not. That predicts the measured split (1.15-7.44x spread-KV, 0.937-0.972x prefill-dominated)
+  rather than describing it after the fact.
+- Hardware consequence, against the intuition that faster memory erodes a kernel gain: machine balance is ~295
+  FLOP/byte on H100 against ~206 on H200, and a lower balance makes a given shape more likely compute bound, so
+  H200 puts MORE of the step in the regime where tile waste costs time. Capacity agrees independently -- 141 GB
+  holds larger mixed batches, hence more narrow-width work beside each chunk.
+- Caveat recorded: this is machine-balance reasoning, not a paired measurement, and composition dominates hardware
+  by an order of magnitude (1:2 to 67:1 work ratio swung 7.44x to 0.94x). A kernel ratio must be re-measured on new
+  silicon rather than assumed to carry.
+
 ## v3.78.0 — The floor fix failed because of where I put it; hoisted (2026-10-29)
 - Measured: alpha 6 with the floor deployed gives chat 40.9% against 41.1% without it, and zero=2255 of calls=5501
   -- still 41%, unchanged. The floor never fired.

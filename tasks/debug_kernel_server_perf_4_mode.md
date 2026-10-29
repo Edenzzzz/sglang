@@ -6073,3 +6073,36 @@ neither. The coherent design uses both at different levels: **the floor as a loc
 PD-colocation points, and which handles the case a floor cannot: rerouting to a node that can actually serve the
 request. A floor alone keeps admitting work a node cannot serve; admission alone requires the per-step rule never
 to mispredict.
+
+## Why the gain appears only in some regimes: padding wastes COMPUTE, not bandwidth (2026-10-29)
+
+This unifies every kernel measurement of the day and is the mechanism the paper should state, because it makes the
+claim falsifiable rather than empirical.
+
+**What tile padding actually costs.** Putting a one-query decode input into a 128-row FA3 tile does not change the
+KV traffic at all -- the same keys and values are streamed either way. What it wastes is the MMA: 128 query rows
+are computed where one is useful. The waste is FLOPs, not bytes.
+
+**So the waste is free exactly when it hides behind memory traffic.** An input with very long KV is bandwidth
+bound, so the padded MMA overlaps the streaming and costs nothing; an input with short KV is compute bound, so the
+padding appears directly in step time. That predicts the split we measured, rather than merely describing it:
+
+| regime | measured |
+|---|---|
+| short, spread KV lengths (compute bound) | 1.15-7.44x |
+| long KV, prefill-dominated (bandwidth bound) | 0.937-0.972x |
+
+**Consequence for hardware choice.** Machine balance is peak FLOPs over peak bandwidth: about 295 FLOP/byte on
+H100 against about 206 on H200. A LOWER balance means a given attention shape is more likely to be compute bound,
+so on H200 more of the step sits in the regime where tile waste costs time. **More bandwidth moves work toward our
+mechanism, not away from it**, which is the opposite of the intuition that a faster memory system would erode a
+kernel gain. Capacity points the same way for an independent reason: 141 GB holds larger mixed batches, and a
+larger batch means more decode and verify inputs beside each chunk -- more narrow-width work for the tile classes
+to serve.
+
+**Caveat, stated because it bounds the claim.** This is an argument from machine balance, not a paired
+measurement; we have no H100-versus-H200 run. And tonight's data says composition dominates hardware by an order
+of magnitude: moving the prefill-to-decode work ratio from about 1:2 to about 67:1 swung the result from 7.44x to
+0.94x, far more than any plausible H100/H200 difference. So the GPU should move these numbers by single-digit
+percents and the workload mix by multiples -- which also means a kernel ratio measured on one GPU must be
+re-measured on another rather than assumed to carry over.

@@ -1284,7 +1284,8 @@ class Scheduler(
         # which are taken out of the batch for one iteration; _dv_rejoin: drained, waiting to
         # rejoin at the next batch formation. A held request is in no batch, so nothing
         # resolves or re-publishes its future while it is held.
-        self._dv_held: List[Tuple[int, ScheduleBatch]] = []
+        # (iteration, held batch, the verify half's live batch, its result)
+        self._dv_held: List[Tuple] = []
         self._dv_rejoin: List[ScheduleBatch] = []
         self._dv_iter: int = 0
         # The current forward batch
@@ -4627,6 +4628,31 @@ class Scheduler(
                     # matches the batch after any filtering.
                     _mix_run = getattr(batch_result, "mixed_running_batch", None)
                     _mix_res = getattr(batch_result, "mixed_running_result", None)
+                    if (
+                        _mix_run is not None
+                        and _mix_res is not None
+                        and getattr(batch_result, "delayed_verify_held", None) is not None
+                    ):
+                        # Delayed verification: NONE of the verify half's post-processing can
+                        # run here. next_draft_input is still empty -- the draft extend that
+                        # fills topk_p / topk_index / hidden_states runs in the drain -- so
+                        # publishing it or stashing its relay payload stores None, which the
+                        # future map dereferences (measured: AttributeError in FutureMap.stash,
+                        # 186 of 192 requests lost). The whole half is handed to the drain,
+                        # which runs it after the extend. Committing the result here would also
+                        # free the KV of any request that finished on this step, which the
+                        # extend still has to write through.
+                        _dv = batch_result.delayed_verify_held
+                        assert _dv is self.running_batch, (
+                            "held batch is not the running batch"
+                        )
+                        self._dv_held.append((self._dv_iter, _dv, _mix_run, _mix_res))
+                        batch_result.mixed_running_batch = None
+                        batch_result.mixed_running_result = None
+                        self.running_batch = ScheduleBatch(
+                            reqs=[], batch_is_full=_dv.batch_is_full
+                        )
+                        _mix_run = _mix_res = None
                     if _mix_run is not None and _mix_res is not None:
                         _mix_run.spec_info = _mix_res.next_draft_input
                         _mix_run.spec_info.future_dsa_topk_indices_available = (
@@ -4683,29 +4709,6 @@ class Scheduler(
                         # shared by reference, so committed tokens still land on the real
                         # requests; the live object keeps the spec_info set above.
                         batch_result.mixed_running_batch = _mix_run.copy()
-                        _dv = getattr(batch_result, "delayed_verify_held", None)
-                        if _dv is not None:
-                            # Delayed verification: take these requests out of the batch until
-                            # the drain. Their futures stay published and valid -- a held
-                            # request is in no batch, so nothing resolves or overwrites them.
-                            #
-                            # The verification RESULT travels with them: committing it here
-                            # would free the KV of any request that finished on this step, and
-                            # the draft extend that still has to run in the drain would then
-                            # write through freed slots. So it is delivered in the drain,
-                            # after the extend -- the order the non-delayed path has.
-                            assert _dv is self.running_batch, (
-                                "held batch is not the running batch"
-                            )
-                            self._dv_held.append(
-                                (self._dv_iter, _dv, batch_result.mixed_running_batch,
-                                 batch_result.mixed_running_result)
-                            )
-                            batch_result.mixed_running_batch = None
-                            batch_result.mixed_running_result = None
-                            self.running_batch = ScheduleBatch(
-                                reqs=[], batch_is_full=_dv.batch_is_full
-                            )
             elif self.enable_pdmux and batch.forward_mode.is_split_prefill():
                 resolve_forward_inputs(batch, self.future_map)
                 batch_result = self.tp_worker.forward_batch_split_prefill(batch)
@@ -4810,6 +4813,31 @@ class Scheduler(
                     # CPU) -- and hand result processing a snapshot, as the overlap path does.
                     _mix_run = getattr(batch_result, "mixed_running_batch", None)
                     _mix_res = getattr(batch_result, "mixed_running_result", None)
+                    if (
+                        _mix_run is not None
+                        and _mix_res is not None
+                        and getattr(batch_result, "delayed_verify_held", None) is not None
+                    ):
+                        # Delayed verification: NONE of the verify half's post-processing can
+                        # run here. next_draft_input is still empty -- the draft extend that
+                        # fills topk_p / topk_index / hidden_states runs in the drain -- so
+                        # publishing it or stashing its relay payload stores None, which the
+                        # future map dereferences (measured: AttributeError in FutureMap.stash,
+                        # 186 of 192 requests lost). The whole half is handed to the drain,
+                        # which runs it after the extend. Committing the result here would also
+                        # free the KV of any request that finished on this step, which the
+                        # extend still has to write through.
+                        _dv = batch_result.delayed_verify_held
+                        assert _dv is self.running_batch, (
+                            "held batch is not the running batch"
+                        )
+                        self._dv_held.append((self._dv_iter, _dv, _mix_run, _mix_res))
+                        batch_result.mixed_running_batch = None
+                        batch_result.mixed_running_result = None
+                        self.running_batch = ScheduleBatch(
+                            reqs=[], batch_is_full=_dv.batch_is_full
+                        )
+                        _mix_run = _mix_res = None
                     if _mix_run is not None and _mix_res is not None:
                         _mix_run.spec_info = _mix_res.next_draft_input
                         _mix_seq = _mix_res.new_seq_lens
@@ -4826,29 +4854,6 @@ class Scheduler(
                             return_hidden_states=_mix_run.return_hidden_states,
                         )
                         batch_result.mixed_running_batch = _mix_run.copy()
-                        _dv = getattr(batch_result, "delayed_verify_held", None)
-                        if _dv is not None:
-                            # Delayed verification: take these requests out of the batch until
-                            # the drain. Their futures stay published and valid -- a held
-                            # request is in no batch, so nothing resolves or overwrites them.
-                            #
-                            # The verification RESULT travels with them: committing it here
-                            # would free the KV of any request that finished on this step, and
-                            # the draft extend that still has to run in the drain would then
-                            # write through freed slots. So it is delivered in the drain,
-                            # after the extend -- the order the non-delayed path has.
-                            assert _dv is self.running_batch, (
-                                "held batch is not the running batch"
-                            )
-                            self._dv_held.append(
-                                (self._dv_iter, _dv, batch_result.mixed_running_batch,
-                                 batch_result.mixed_running_result)
-                            )
-                            batch_result.mixed_running_batch = None
-                            batch_result.mixed_running_result = None
-                            self.running_batch = ScheduleBatch(
-                                reqs=[], batch_is_full=_dv.batch_is_full
-                            )
                     # Only the last PP rank owns real results requiring D2H; other ranks
                     # consume device tensors rebuilt from the output ring.
                     batch_result.copy_done = self.device_module.Event()
@@ -5634,7 +5639,7 @@ class Scheduler(
             inflight_batches = [self.running_batch, self.last_batch]
         else:
             inflight_batches = [*self.running_mbs, *self.mbs]
-        inflight_batches.extend(held for _it, held in self._dv_held)
+        inflight_batches.extend(entry[1] for entry in self._dv_held)
         inflight_batches.extend(self._dv_rejoin)
         if self.enable_continuous_input_polling and self.result_queue:
             # Polling can run intake before the newest queued batch becomes last_batch.
@@ -6135,11 +6140,59 @@ class Scheduler(
         They are not in running_batch, so every site that reasons about what this worker is
         holding has to add them."""
         out = []
-        for _it, held in self._dv_held:
-            out.extend(held.reqs)
+        for entry in self._dv_held:
+            out.extend(entry[1].reqs)
         for held in self._dv_rejoin:
             out.extend(held.reqs)
         return out
+
+    def _finish_mixed_verify_half(self, run: ScheduleBatch, res):
+        """The verify half's post-forward wiring, for the delayed path to run in the drain.
+
+        Mirrors what run_batch does inline when delayed verification is off: give the half its
+        own draft input and -- under the overlap scheduler -- its own future wiring, then the
+        same host copy the batch that ran gets. Returns the snapshot result processing needs,
+        because `run` is the live object the scheduler keeps merging into.
+        """
+        run.spec_info = res.next_draft_input
+        if self.enable_overlap:
+            run.spec_info.future_dsa_topk_indices_available = (
+                run.spec_info.dsa_topk_indices is not None
+            )
+            # Forward stream, not the schedule stream: these are scatters of tensors the
+            # forward produced, and on the schedule stream they published stale seq_lens.
+            with self.forward_stream_ctx:
+                self.future_map.publish(run.req_pool_indices, res.new_seq_lens)
+                run.spec_info.future_indices = run.req_pool_indices
+                self._relay_forward_payload(run, run.req_pool_indices, res)
+            res.copy_done = self.device_module.Event()
+            if _is_hip:
+                res.copy_to_cpu(
+                    return_logprob=run.return_logprob,
+                    return_hidden_states=run.return_hidden_states,
+                )
+            else:
+                self.copy_stream.wait_stream(self.forward_stream)
+                with self.copy_stream_ctx:
+                    res.copy_to_cpu(
+                        return_logprob=run.return_logprob,
+                        return_hidden_states=run.return_hidden_states,
+                    )
+        else:
+            new_seq_lens = res.new_seq_lens
+            if new_seq_lens is not None and new_seq_lens is not run.seq_lens:
+                run.seq_lens = new_seq_lens
+                if run.seq_lens_cpu is not None:
+                    run.seq_lens_cpu = new_seq_lens.to("cpu")
+                    run.seq_lens_sum = int(run.seq_lens_cpu.sum())
+            run.input_ids = None
+            self.update_cache_from_scheduler(run, res)
+            res.copy_done = self.device_module.Event()
+            res.copy_to_cpu(
+                return_logprob=run.return_logprob,
+                return_hidden_states=run.return_hidden_states,
+            )
+        return run.copy()
 
     def drain_delayed_verify(self):
         """Run the draft extend for verify rows stashed in an EARLIER iteration, and queue
@@ -6152,10 +6205,12 @@ class Scheduler(
                 "spec worker holds a delayed verification the scheduler never registered"
             )
         while self._dv_held and self._dv_held[0][0] < self._dv_iter:
-            _it, expected, snapshot, ver_result = self._dv_held.pop(0)
+            _it, expected, run, ver_result = self._dv_held.pop(0)
             held, _ver = self.model_worker.drain_delayed_verify()
             assert held is expected, "delayed verify stash out of order"
-            # Extend first, then commit: committing frees the KV of finished requests.
+            # Extend, then wire the half up, then commit. The extend fills the draft input the
+            # wiring publishes, and committing frees the KV of requests that finished.
+            snapshot = self._finish_mixed_verify_half(run, ver_result)
             self.batch_result_processor.process_batch_result_decode(snapshot, ver_result)
             self._dv_rejoin.append(held)
             self.dv_drained = getattr(self, "dv_drained", 0) + 1

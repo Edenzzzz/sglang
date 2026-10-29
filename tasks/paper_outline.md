@@ -104,12 +104,14 @@ Production clusters increasingly serve an agentic coding product and a chat prod
 lengths and latency targets an order of magnitude apart. Prefill-decode disaggregation meets decode targets by
 isolating decode on its own nodes, but every agent round re-ships its growing KV cache across the network.
 Colocation avoids that transfer and is the cheaper arrangement, yet the schedules deployed today cannot bound
-either tenant's latency: a single attention call computes a one-token decode row at the prefill chunk's 128-row
-tile width, and admitting prefill in arrival order blocks a 200-token chat turn behind a 64K-token prompt.
+either tenant's latency: a single attention call computes a one-token decode input at the prefill chunk's full
+tile width, so most of that tile computes nothing, and admitting prefill in arrival order blocks a 200-token chat
+turn behind a 64K-token prompt.
 
-AttentionFuse makes colocation meet SLOs. One CPU-side plan per step gives every row a tile of its own size and
-reduces all split rows inside one launch, which costs 4.0-8.7% less attention time than running stock FA3 and
-stock FA2 as two planned kernels and lets a prefill chunk and speculative verify rows share one forward. Each
+AttentionFuse makes colocation meet SLOs. One CPU-side plan per step gives each of a step's prefill, decode,
+draft and verify inputs a tile of its own width and reduces every split partial inside one launch. Against the
+single attention call deployed today this is 1.86-2.92x on captured mixed steps, and it lets a prefill chunk and a
+step's draft and verify inputs share one forward, which no prior colocated design supports. Each
 worker then orders prefills by deadline and sizes each prefill chunk from a measured step-time model so that
 running requests stay inside their targets, and a router places requests on the symmetric node with the most cached
 prefix that can still meet every SLO.
@@ -153,12 +155,12 @@ admitting it.
 
 **Contributions.**
 
-- **A unified tile dispatcher that removes tile waste for mixed input.** One plan per step gives every piece of
-  work -- prefill chunk, decode rows, verify rows -- a tile of its own query width, and folds the split-KV merge
-  into the same launch.
-- **Speculative decoding inside colocation.** Because each row gets a tile class of its own size, a prefill chunk
-  and the running requests' verify rows execute as one target forward -- which no prior colocation design
-  supports, though frontier models are served with it.
+- **A unified tile dispatcher that removes tile waste for mixed input.** One plan per step gives each of a step's
+  prefill, decode, draft and verify inputs a tile of its own width, and folds the split-KV merge into the same
+  launch.
+- **Speculative decoding inside colocation.** Because each input gets a tile class of its own size, a prefill
+  chunk and the running requests' draft and verify inputs execute in one step -- which no prior colocation design
+  supports, though frontier models are served with speculative decoding.
 - **SLO control without disaggregation.** A fused step has a predictable duration, so a worker runs prefills in
   deadline order and a router admits each request to the highest-cache-hit node its step-time model says can still
   meet every tenant's targets.

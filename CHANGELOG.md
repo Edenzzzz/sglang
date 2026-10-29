@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.38.0 — Stage the decode-KV tracer deploy and a traced arm for point 3 (2026-10-29)
+- `/tmp/deploy_dkv_and_trace.sh` chained after the queue drains: patches both trees an arm can run on
+  (h20py/python and python_slo_life), asserts each still parses, then runs one short traced arm with
+  SGLANG_STEP_TRACE=1 so decode steps finally carry dkv.
+- Deliberately NOT applied mid-chain. A running server has already imported scheduler.py so patching cannot
+  disturb it, but the next arm launches fresh workers and would pick the patch up, leaving two arms in one driver
+  with different instrumentation -- the same class of mistake as patching a shared tree while arms are in flight.
+- After that trace lands: refit with fit_step_mlp_20261028.py and re-measure the decode-step signed bias with
+  tpot_bias.py on a chronological split. Only a bias surviving that is evidence against the perf-model premise;
+  until then point 3 stays UNMEASURED rather than refuted.
+
 ## v3.37.0 — Fix the tracer so decode steps record their KV length (2026-10-29)
 - `tasks/pd_colocation/apply_steptrace_decode_kv_20261029.py`: where `seq_lens_cpu` is absent -- which it is on the
   decode path -- the tracer fell back to an EMPTY list, so every row's KV length read as 0 and `dkv` accumulated 0

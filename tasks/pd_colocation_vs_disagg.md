@@ -2180,6 +2180,15 @@ every step and so genuinely improves time per output token by 19-23%; but a smal
 more steps, so time to first token nearly quadruples, the cluster admits 12% less work, and attainment -- which
 requires a request to meet BOTH its targets -- collapses. The whole cap sweep agrees: 1000 / 1500 / 2000 / 3000 ms
 give chat 32.7 / 33.2 / 35.3 / 28.8%, all far below L0.
+
+**Relaxing the cap further does not rescue it (2026-10-29, corrected sweep).** A larger tail cap means the budget
+binds less often, so one might expect the arm to converge on L0's behaviour. At 4000 ms it does not: chat 42.8% /
+agent 64.8% against L0's 61.5% / 79.1%, with mean TTFT 7.93 s against 2.28 and mean TPOT 49.7 ms against 57.1 --
+still 18.7 points of chat attainment down, with the same shape of trade (TPOT 13% better, TTFT 3.5x worse) and
+5618 agent rounds issued against L0's 6284. Acceptance 2.027, `failed=0`, so the arm is valid. 8000 and 16000 ms
+are running. The trade is therefore a property of sizing the chunk from a latency budget at all on this workload,
+not of the cap's value, which is what makes it a finding rather than a tuning gap.
+`mn_capsweep2_16g_20261029.sh`, log `/tmp/h20/mn_capsweep2_r1.log`.
 - **This reverses the 2026-10-28 reading**, which was taken on the SLO-attaining token rate and the TPOT tail and
   concluded the rule "cuts the tail 46% past capacity". That is still true of the tail, and it is not the question:
   on attainment the rule loses at both loads. The component is therefore **excluded from the contribution**, not

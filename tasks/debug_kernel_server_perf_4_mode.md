@@ -5755,6 +5755,16 @@ T=4 draft tokens, `nd*S` prices the draft forwards and `nd*T` plus `dkv*T` price
 context while the draft's do not. That is more than an order of magnitude above the cross-role KV reuse ceiling
 (1.3%), so unlike that mechanism this one is worth considering on size.
 
+**What our schedule does today, checked rather than assumed (2026-10-29).** `eagle_worker_v2.py` runs them
+sequentially inside one step -- `verify_input = self.draft_worker.draft(...)` at line 554 followed by
+`self.verify(...)` at 557 -- and the dependency is explicit in the API it uses,
+`get_verify_buffers_to_fill_after_draft()` (line 270). **So we do not implement a delayed-verify schedule and
+nothing is overlapped across steps**; the 17-28% above is an untapped ceiling rather than a partly realised one.
+- **OPEN QUESTION (user, 2026-10-29): is this the same mechanism as SparseSpec's delayed verify?** That paper is
+  not among the eleven in `tasks/papers/`, so the comparison has not been made and must not be asserted either
+  way. If it turns out we already realise part of it, the 17-28% has to be re-derived against what is actually
+  overlapped before it is quoted anywhere.
+
 **What stands in the way is a true data dependency, not engineering.** Within a step, verify needs the draft's
 tokens, so the only pipelining available is across steps -- and the draft for step N+1 needs the accepted prefix
 from step N's verify. Breaking that requires drafting from a PREDICTED accepted prefix. At the acceptance we

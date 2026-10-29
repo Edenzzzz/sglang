@@ -1952,6 +1952,9 @@ class EAGLEWorkerV2(BaseSpecWorker):
                         "DELAYED_VERIFY stashed=%d pending=%d rows=%d",
                         self._dv_stashed, len(self._dv_stash), len(running.reqs),
                     )
+                if self._dv_stashed <= 5:
+                    logger.info("DELAYED_VERIFY stash_shapes=%s",
+                                self._dv_shapes(running, self._dv_stash[-1][2]))
                 result.delayed_verify_held = running
             else:
                 self.draft_worker._draft_extend_for_decode(
@@ -1974,6 +1977,31 @@ class EAGLEWorkerV2(BaseSpecWorker):
                 getattr(result.mixed_running_result, "accept_lens", None),
             )
         return result
+
+    @staticmethod
+    def _dv_shapes(batch, snap=None):
+        """Token-length fields of the held batch, for comparing stash time against drain time.
+
+        The deferred draft extend fails with a 4-against-1511 size mismatch, 1511 being the
+        prefill chunk's token count, so by drain time one of these is prefill-shaped. Logged at
+        both ends for the first few steps rather than guessed at.
+        """
+        def sh(x):
+            return None if x is None else tuple(x.shape)
+
+        out = {
+            "bs": len(batch.reqs),
+            "seq_lens": sh(getattr(batch, "seq_lens", None)),
+            "seq_lens_cpu": sh(getattr(batch, "seq_lens_cpu", None)),
+            "out_cache_loc": sh(getattr(batch, "out_cache_loc", None)),
+            "input_ids": sh(getattr(batch, "input_ids", None)),
+            "req_pool_indices": sh(getattr(batch, "req_pool_indices", None)),
+            "forward_mode": str(getattr(batch, "forward_mode", None)),
+            "spec_info": type(getattr(batch, "spec_info", None)).__name__,
+        }
+        if snap is not None:
+            out.update({"snap_" + k: sh(v) for k, v in snap.items()})
+        return out
 
     def _detach_draft_outputs(self, draft_input):
         """Copy the draft-extend outputs out of the CUDA graph's static buffers.
@@ -2011,6 +2039,9 @@ class EAGLEWorkerV2(BaseSpecWorker):
         that otherwise sits between the verify launch and the next one.
         """
         running, ver_result, snap = self._dv_stash.pop(0)
+        self._dv_drained = getattr(self, "_dv_drained", 0) + 1
+        if self._dv_drained <= 5:
+            logger.info("DELAYED_VERIFY drain_shapes=%s", self._dv_shapes(running, snap))
         # Every field _draft_extend_for_decode reads, taken from the snapshot rather than from
         # ver_result: the scheduler has replaced accept_lens / next_token_ids / hidden_states on
         # that object with host copies by now. next_draft_input is the object the extend WRITES

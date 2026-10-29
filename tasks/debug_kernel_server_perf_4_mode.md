@@ -408,7 +408,26 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     chunk size would be trained on labels the step model generates, so it inherits that error plus its own, must
     additionally learn the budget arithmetic we can compute exactly, and is single-purpose where the step model is
     reused by the router and the deadline predictor.
-- **[x] THE STEPCAP SWEEP IS FLAT, WHICH LOCATES THE REAL BINDING CONSTRAINT: THE DEMOTE BRANCH, NOT THE CAP
+- **[x] THE DEMOTE FIX WORKS, AND IT INVALIDATES THE SWEEP BELOW (2026-10-29,
+  `mn_demotefix_16g_20261029.sh`, log `/tmp/h20/mn_demotefix_r1.log`, alpha 6, stepcap 2000, accept 2.010,
+  failed=0).** Excluding past-rescue rows from the budget minimum, against the identical arm with them clamping:
+  | alpha 6, stepcap 2000 | chat attain | chat TPOT p50/p90 | chat TTFT p50/p90 | agent attain | agent tok/s |
+  |---|---|---|---|---|---|
+  | demote clamps (capsweep) | 35.3% | 38.4 / 55.0 ms | 4.00 / 32.38 s | 56.4% | 1150 |
+  | **demote excluded (fix)** | **41.1%** | 38.4 / 61.9 ms | **2.04 / 26.75 s** | **63.5%** | **1463** |
+  | fixed 2048 (control) | 60.5% | 35.4 / 114.6 ms | 0.17 / 5.91 s | 76.9% | 1976 |
+  - **The fix is worth +5.8 points chat attainment, +7.1 points agent, +27% agent SLO goodput and -49% chat TTFT
+    p50**, at a 12.5% worse chat TPOT tail -- which is the intended trade, since the clamp was buying tail at the
+    price of starving prefill. The death spiral is broken.
+  - **AND IT INVALIDATES THE STEPCAP SWEEP: that sweep was flat BECAUSE of this bug.** With most rows clamping the
+    step to ~90 ms regardless, the cap could not bind, so 600-3000 ms all looked alike. Now that the clamp is gone
+    the cap should actually matter, and the sweep has to be redone -- at HIGHER values, since the fix moved the arm
+    toward throughput and the remaining gap to the constant is attainment and goodput, not tail.
+  - **Where it stands against the constant:** still behind on attainment (41.1 vs 60.5%) and goodput (1463 vs
+    1976) and well ahead on the tail (61.9 vs 114.6 ms, -46%). So the rule now trades tail for throughput along a
+    real curve instead of collapsing; whether any point on that curve beats the constant is what the re-sweep
+    decides.
+- **[x] (superseded by the fix above -- the flatness was the bug, not the knob) THE STEPCAP SWEEP IS FLAT: THE DEMOTE BRANCH, NOT THE CAP
   (2026-10-29, `mn_capsweep_16g_20261028.sh`, log `/tmp/h20/mn_capsweep_r1.log`, alpha 6, all arms failed=0).**
   | stepcap | chat attain | chat TPOT p50/p90 | chat TTFT p50/p90 | agent attain |
   |---|---|---|---|---|

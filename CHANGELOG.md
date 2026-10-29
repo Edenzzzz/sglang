@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.34.0 — The demote fix works, and it invalidates the flat sweep (2026-10-29)
+- alpha 6, stepcap 2000, accept 2.010, failed=0. Excluding past-rescue rows from the budget minimum against the
+  identical arm with them clamping: chat attainment 35.3 -> 41.1% (+5.8 pts), agent 56.4 -> 63.5% (+7.1), agent SLO
+  goodput 1150 -> 1463 tok/s (+27%), chat TTFT p50 4.00 -> 2.04 s (-49%), at a 12.5% worse chat TPOT tail (55.0 ->
+  61.9 ms). The intended trade: the clamp was buying tail by starving prefill. The death spiral is broken.
+- The stepcap sweep was flat BECAUSE of this bug -- with most rows pinning the step to ~90 ms the cap could not
+  bind, so 600-3000 ms all looked alike. It must be redone, and at HIGHER values, since the fix moved the arm
+  toward throughput and the remaining gap to the fixed-2048 control is attainment and goodput, not tail.
+- Against that control the rule is still behind on attainment (41.1 vs 60.5%) and goodput (1463 vs 1976) and well
+  ahead on the tail (61.9 vs 114.6 ms, -46%). It now trades along a real curve instead of collapsing.
+- `mn_capsweep2_16g_20261029.sh` queued: caps 4000 / 8000 / 16000 ms at alpha 6, chained after pdmux.
+
 ## v3.33.0 — pdmux root-caused: FA3's backend is incompatible with it, not a memory limit (2026-10-29)
 - The arm directory has no worker log at all, only bindfail1..5 for every GPU, and the bindfail log ends
   `AttributeError: 'NoneType' object has no attribute 'swa_out_cache_loc'` at

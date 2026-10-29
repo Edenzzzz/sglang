@@ -1911,6 +1911,7 @@ class Scheduler(
     def event_loop_normal(self):
         """A normal scheduler loop."""
         while True:
+            self._dv_iter += 1
             if self.gracefully_exit:
                 break
 
@@ -1931,11 +1932,16 @@ class Scheduler(
             # Launch the current batch
             if batch:
                 result = self.run_batch(batch)
+                # Delayed verification: the held rows' draft extend, now that this
+                # iteration's forward is already in flight.
+                self.drain_delayed_verify()
                 self.process_batch_result(batch, result)
             else:
+                self.drain_delayed_verify()
                 # When the server is idle, do self-check and re-init some states.
                 self._sched_idled = True
-                self.on_idle()
+                if not self._dv_held:
+                    self.on_idle()
 
             # Update last_batch
             self.last_batch = batch

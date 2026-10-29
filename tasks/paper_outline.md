@@ -213,7 +213,7 @@ mixed chunk gives a chat TTFT mean of 579.5 ms and an agent inter-token latency 
 prefill-prioritized brings chat ITL p99 down to 27.3 ms but makes chat TTFT worse. This motivates C3. The same
 comparison for Llama-3.3-70B and GLM-4.5-Air is [pending].
 
-Figure 1: per schedule (mixed chunk, prefill-prioritized, each with and without MTP), per tenant: TTFT mean, ITL p99
+Figure 2: per schedule (mixed chunk, prefill-prioritized, each with and without MTP), per tenant: TTFT mean, ITL p99
 and SLO attainment; one H200, Qwen2.5-7B, chat 8 req/s + agent concurrency 8. Llama-3.3-70B / GLM-4.5-Air [pending].
 
 ### 2.3 PD Disaggregation
@@ -230,9 +230,9 @@ to 67.8% with six (the best), and falls to 50.0% with seven. This motivates colo
 (section 6.4). The sweep for Llama-3.3-70B and
 GLM-4.5-Air is [pending].
 
-![Figure 2](paper_figures/fig02_pd_sweep.png)
+![Figure 3](paper_figures/fig02_pd_sweep.png)
 
-Figure 2: stock PD disaggregation against its P:D ratio, Qwen2.5-7B without speculation, KV pool on. Left: chat
+Figure 3: stock PD disaggregation against its P:D ratio, Qwen2.5-7B without speculation, KV pool on. Left: chat
 attainment (0.5 s + 20 ms) against the number of prefill pods out of 8, on 16 H20s at 32 agent programs + 8 chat req/s
 and on 32 H20s at 64 programs + 16 req/s. Right: agent SLO attainment on 16 H20s. Dashed: ours, colocated, at the same
 loads. The best ratio (6 prefill pods) reaches 68% / 56% chat attainment against ours' 99%. Llama-3.3-70B /
@@ -245,9 +245,22 @@ case, studied by ThunderAgent, is thrashing: the working set of active prefixes 
 capacity. On 16 H20s at an agent program concurrency of 32, we swept the working set over 16, 64 and 128 tasks with
 64K-token prefixes (about 1M, 4M and 8M KV tokens, against about 6.7M tokens of capacity). The cached-prefix fraction
 of PD disaggregation falls from 0.890 to 0.605, while ours falls from 0.980 to 0.949. This motivates colocation with
-cache-first routing; Figure 23 (section 6.4) plots it.
+cache-first routing; Figure 34 (section 6.4) plots it.
 
 ## 3. Challenges and motivation
+
+![Figure 1](paper_figures/schedule_timelines_motivation.png)
+
+Figure 1: how each production schedule handles one mixed arrival, and what it costs. Requests A and B are already
+decoding when C and D arrive needing prefill. *SGLang* runs C and D's prefills as their own steps, so A and B's
+decodes stall behind them. *SGLang mixed chunk* folds the prefill chunk and the decode rows into one kernel, but
+the prefill's wide query tile pads the decode rows, which is compute spent on nothing. *vLLM v1* prioritises the
+running decodes, so C and D's prefills stall instead -- the same interference with the tenants swapped.
+*Chunked prefill (Sarathi-Serve)* splits each prefill into chunks that interleave with decodes, trading the stall
+for a kernel launch per chunk. *AttentionFuse* runs the prefill chunk and the decode and verify inputs as one step
+in which each input gets a tile of its own width, so neither role waits for the other and no tile is padded. The
+sections below quantify each of these costs in turn.
+
 
 ### 3.1 Attention computation time ratio
 
@@ -261,12 +274,12 @@ rows are **11.6% of steps but 67.2% of GPU time**; rows-only steps are 83.9% of 
 steps are 4.5% and 5.1%. The step that matters is therefore the mixed one, rare by count and dominant by time.
 Attention share of a long-context mixed step is close to all of it: a 2 048-token chunk over a 128K-token prefix is
 1.08x10^14 attention FLOP, about 0.73 s on an H20, against a measured step of 0.727 s. (This is an arithmetic
-estimate; the per-layer attention / GEMM split of Figure 3 is [pending].)
+estimate; the per-layer attention / GEMM split of Figure 4 is [pending].)
 
-Figure 3: stacked bars of attention, GEMM and other time per context bucket (32-64K, 128-256K) and mode, three models
+Figure 4: stacked bars of attention, GEMM and other time per context bucket (32-64K, 128-256K) and mode, three models
 [pending].
 
-Figure 4: fraction of steps that are prefill chunk + rows, rows only, or prefill only, from the same traces [pending].
+Figure 5: fraction of steps that are prefill chunk + rows, rows only, or prefill only, from the same traces [pending].
 
 ### 3.2 PD Disaggregation underutilizes resources
 
@@ -278,7 +291,7 @@ order instead of first-come-first-served (FCFS) moves chat attainment from 31.2%
 per-round KV transfer, not the prefill queue, which motivates colocating across the cluster. The same measurement for Llama-3.3-70B and
 GLM-4.5-Air is [pending].
 
-Figure 5: decode-pod time series of requests waiting on transfer, running requests and KV usage, with chat
+Figure 6: decode-pod time series of requests waiting on transfer, running requests and KV usage, with chat
 attainment under FCFS and under deadline order on the prefill pods; 16 H20s, stock PD 6 + 2 pods, 64 agent programs
 + chat 16 req/s, Qwen2.5-7B. Llama-3.3-70B / GLM-4.5-Air [pending].
 
@@ -322,7 +335,7 @@ server that triggers it has already given up on the retracted requests' deadline
 a weak form of SLO control that we are strengthening; it is a different guarantee, and the latency axis is
 unmanaged. Llama-3.3-70B and GLM-4.5-Air: [pending].
 
-Figure 6: chat TTFT over time around the agent burst, with per-tenant attainment, under sglang's prefill-prioritized
+Figure 7: chat TTFT over time around the agent burst, with per-tenant attainment, under sglang's prefill-prioritized
 schedule at several chunk sizes; one H200, Qwen2.5-7B. Llama-3.3-70B / GLM-4.5-Air [pending].
 
 ### 3.4 Mixed-chunk prefill reduces throughput
@@ -423,14 +436,14 @@ chunk's own CTA, which needs no spare SM capacity because the CTA is already res
 at most 1.1-2.3% of the step at a 128K prefix, 4.5-10.2% at 32K, measured by giving every row tile a free ride --
 so it cannot change the paper's claims either way; section 7 reports where the implementation stands.
 
-Figure 7: per-step attention time of the single FA3 call vs the role split, and the fraction of row tiles that are
+Figure 8: per-step attention time of the single FA3 call vs the role split, and the fraction of row tiles that are
 padding; 96 captures, Qwen2.5-7B. Padding fraction [pending].
 
 ### 3.5 Can we increase request capacity while maintaining SLOs?
 
 Yes, if rows get their own kernel tiles, chat is not queued behind prefills that can no longer meet their deadlines,
 and nodes stay symmetric so that routing follows the cache. C1-C3 are that answer. We measure it as the load
-each system holds at >= 90% per-tenant attainment (Figure 20). With the scheduler alone on 16 GPUs, ours holds 64
+each system holds at >= 90% per-tenant attainment (Figure 31). With the scheduler alone on 16 GPUs, ours holds 64
 agent programs against 16 for PD disaggregation (section 6.4). With the full stack, ours keeps >= 90% chat attainment
 through 96 programs plus 24 chat/s, where stock PD at its best split holds no measured load point (Table 16).
 
@@ -454,7 +467,7 @@ that is predicted to meet its SLO; if that is not its best cache holder, the nod
 pool.
 
 Every serving experiment reports this objective: load is swept on agent program concurrency and chat request rate,
-and per-tenant attainment is recorded at each point (Figure 20). It is measured at 16 and 32 GPUs for the scheduler
+and per-tenant attainment is recorded at each point (Figure 31). It is measured at 16 and 32 GPUs for the scheduler
 alone and at 16 GPUs for the full stack (section 6.4); single-node capacity from rate sweeps is [pending].
 
 ## 5. Implementation
@@ -517,7 +530,7 @@ merge or combine launch per split.
 - the LPT order puts the longest rows' chunks first, so they do not set the end of the step;
 - the merge items reduce each row's chunks inside the FA2 launch, as soon as its last chunk checks in.
 
-Per-step timing of such steps is Figure 15.
+Per-step timing of such steps is Figure 26.
 
 **What is fused, and why there.** The fusion is in the plan and the reduction, not in the instruction stream.
 Prefill rows want Hopper's warpgroup MMA (`wgmma`) on multiples of 64 rows behind a warp-specialized producer;
@@ -587,7 +600,7 @@ Against that baseline, the two parts of C1 that are mandatory rather than option
 captures, the previous build's FP32 worst relative error was 0.0067. Plan time on serving shapes of all three models
 is [pending].
 
-Figure 8: host plan time per step (mean and p99) vs batch size, on captured serving geometries of all three models
+Figure 9: host plan time per step (mean and p99) vs batch size, on captured serving geometries of all three models
 [pending: serving shapes].
 
 ### 5.2 Router and resource sharing
@@ -694,7 +707,7 @@ orders r by the same deadline.
 
 The same comparison with the full stack on 16 H20s, for all three models, is [pending].
 
-Figure 9: per-tenant attainment vs load and cached-prefix fraction, per routing policy (cache-first + SLO check,
+Figure 20: per-tenant attainment vs load and cached-prefix fraction, per routing policy (cache-first + SLO check,
 cache-only, round-robin); 16 H20s, three models [pending].
 
 #### 5.2.2 Performance model
@@ -747,7 +760,7 @@ merged steps (see above); "mixed" is a prefill chunk beside one-token decode row
 | mixed | 5.9% | 7.7% |
 | prefill | 8.7% | 7.5% |
 
-Figure 10: predicted vs measured step time, per step type (decode, prefill, mixed, four-mode), per model [pending].
+Figure 21: predicted vs measured step time, per step type (decode, prefill, mixed, four-mode), per model [pending].
 
 #### 5.2.3 Fair Resource sharing
 
@@ -843,7 +856,7 @@ admit fewer agent rounds, and what they buy is only the time-to-first-token tail
 and 50 ms mean-TPOT objective that trade loses, so the final configuration runs deadline order and demotion alone
 (section 7).
 
-Figure 11: why sizing the chunk from the latency budget does not pay. Per-tenant SLO attainment and mean time to
+Figure 22: why sizing the chunk from the latency budget does not pay. Per-tenant SLO attainment and mean time to
 first token and time per output token, on 16 H20s at six times the saturating load, for sglang's own chunk policy
 and for the budgeted chunk at tail caps of 1000, 1500, 2000 and 3000 ms. The budgeted arms improve mean time per
 output token at every cap and lose 20 points of chat attainment at the best of them, because mean time to first
@@ -881,7 +894,7 @@ GLM-4.5-Air is [pending].
 Under tensor parallelism, every TP rank must judge deadlines on the same clock, so rank 0's clock rides the
 per-iteration request broadcast.
 
-Figure 12: chat TTFT distribution and per-tenant attainment for stock, per-tenant deadlines alone, and deadlines with
+Figure 23: chat TTFT distribution and per-tenant attainment for stock, per-tenant deadlines alone, and deadlines with
 demotion of missed prefills; one node per model (Qwen2.5-7B on one H200; Llama-3.3-70B and GLM-4.5-Air on four
 H200s). Llama-3.3-70B / GLM-4.5-Air [pending].
 
@@ -894,7 +907,7 @@ missing pages while the request waits in its queue, for up to 1 s plus 0.25 s pe
 timeout prefetch policy), and recomputes whatever has not arrived.
 The pool is sglang's; we add only the router's mirror of it and the pull pricing. Under the thrashing sweep of section 6.4 (working set 1M -> 8M KV tokens against a
 6.7M-token pool), ours loses 10.6% throughput and 3.1 points of cached fraction, vs 55% and 28.5 points for
-disaggregation, in earlier settings (Figure 23). Pool on vs off is [pending].
+disaggregation, in earlier settings (Figure 34). Pool on vs off is [pending].
 
 ### 5.5 CUDA Graph support
 
@@ -1217,13 +1230,13 @@ Table 10: role-split serving build, Qwen2.5-7B, H200, earlier captures.
 
 **Figures.**
 
-Figure 13: time-weighted speedup per (model, context, mode) with bootstrap 95% CI, against sglang's FA3 call and naive FA3 + FA2. Qwen2.5-7B (H200, four cells) and Llama-3.3-70B / GLM-4.5-Air at 32-64K (H20) measured; the
+Figure 24: time-weighted speedup per (model, context, mode) with bootstrap 95% CI, against sglang's FA3 call and naive FA3 + FA2. Qwen2.5-7B (H200, four cells) and Llama-3.3-70B / GLM-4.5-Air at 32-64K (H20) measured; the
 Llama-3.3-70B and GLM-4.5-Air at 32K from the H200 replay; their 128K cells were not captured.
 
-Figure 14: CDF of per-step speedup over the 96 captures, per (context, mode), against each baseline; Qwen2.5-7B,
+Figure 25: CDF of per-step speedup over the 96 captures, per (context, mode), against each baseline; Qwen2.5-7B,
 H200. Llama-3.3-70B and GLM-4.5-Air from the H200 replay of their rank-0 captures.
 
-Figure 15: per-item timeline of one captured four-mode step: FA3 tiles, FA2 tiles and merge items per SM over time,
+Figure 26: per-item timeline of one captured four-mode step: FA3 tiles, FA2 tiles and merge items per SM over time,
 showing FA2 running beside FA3's tail under PDL [pending].
 
 ### 6.3 Single-node benchmarks
@@ -1297,9 +1310,9 @@ Table 11: Qwen2.5-7B, one H200, final configuration, two repeats (16 / 30 agent 
 | 32-64K (agent conc 8, chat 8/s), 4-mode | 56.4 -> 97.2% | 56.5 -> 99.6% | 5.8 -> 2.8 s | 70.0-73.3 -> 80.0% | 74-84 -> 85-86 tok/s | -3.6% |
 | 32-64K, 2-mode | 54.3 -> 95.4% | 54.4 -> 99.8% | 5.7 -> 2.8 s | 83.3 -> 83.3-86.7% | 101-107 -> 88-90 tok/s | +2.7% |
 
-![Figure 16](paper_figures/fig16a_single_node.png)
+![Figure 27](paper_figures/fig16a_single_node.png)
 
-Figure 16: single-node SLO attainment under the paper's SLOs, stock sglang (mixed chunk on FA3, stock MTP in
+Figure 27: single-node SLO attainment under the paper's SLOs, stock sglang (mixed chunk on FA3, stock MTP in
 four-mode) vs ours (final configuration), Qwen2.5-7B on one H200, at the Table 11 loads. Bars are the mean of two
 repeats, with whiskers where the repeats differ; dashed: the 90% target. Source:
 `tasks/paper_figures/fig16a_single_node.py`.
@@ -1350,7 +1363,7 @@ throughput +3.6-3.8%. Chat SLO attainment improves from 67% to 72-74% at 2 s / 1
 Chat's mean TPOT rises (13% four-mode, 57% two-mode), and the reason is instructive. Deadline order serves a chat
 prefill before the agent prefill it would have waited behind, so the wait for one agent-chunk step (about 1 s for a
 2048-token chunk at TP4) moves from chat's TTFT into its first inter-token gap. The median chat TPOT is lower in
-ours (16.0 vs 17.6 ms); the mean is carried by those single first gaps (Figure 19 shows the TTFT / ITL
+ours (16.0 vs 17.6 ms); the mean is carried by those single first gaps (Figure 30 shows the TTFT / ITL
 distributions per tenant). This run also drops a per-step deadline-sized chunk cap that the earlier single-node runs
 used. The cap doubled the number of mixed steps chat rode in, and removing it improved every chat metric.
 
@@ -1368,13 +1381,13 @@ throughput, chat attainment 81-82% vs 77-78%).
 
 **Figures.**
 
-Figure 17: per-tenant TTFT and ITL SLO attainment vs request rate, ours vs stock mixed chunk, prefill-prioritized
+Figure 28: per-tenant TTFT and ITL SLO attainment vs request rate, ours vs stock mixed chunk, prefill-prioritized
 (+/- MTP) and PD-Multiplexing, per model and context mixture [pending: rate sweeps].
 
-Figure 18: throughput vs interactivity Pareto curve: output tok/s vs per-user tok/s, one point per load, median marker
+Figure 29: throughput vs interactivity Pareto curve: output tok/s vs per-user tok/s, one point per load, median marker
 with p10-p90 bars and p1-p99 whiskers, per model [pending].
 
-Figure 19: TTFT and ITL / TPOT distributions per tenant (mean, p50, p90, p99), ours vs stock, per model [pending].
+Figure 30: TTFT and ITL / TPOT distributions per tenant (mean, p50, p90, p99), ours vs stock, per model [pending].
 
 ### 6.4 Multi-node benchmarks
 
@@ -1617,31 +1630,31 @@ settings; a rerun with the full stack is [pending].
 
 **Figures.**
 
-![Figure 20](paper_figures/fig19_capacity.png)
+![Figure 31](paper_figures/fig19_capacity.png)
 
-Figure 20: capacity at SLO on 16 H20s with the full stack. Chat and agent attainment (chat: 2 s TTFT + 50 ms mean
+Figure 31: capacity at SLO on 16 H20s with the full stack. Chat and agent attainment (chat: 2 s TTFT + 50 ms mean
 TPOT; agent: 10 s TTFT, 20 s above 200K uncached tokens, + 80 ms; dashed line: the 90% target) against agent
 programs,
 with chat at programs / 4 req/s. Each point is the mean of two repeats, and the bar spans them. Top: Qwen2.5-7B;
 bottom: Llama-3.3-70B. Ours, conditional disaggregation, and stock PD at its two best splits. 32 GPUs and
 GLM-4.5-Air [pending]. Source: `tasks/paper_figures/fig19_capacity.py`.
 
-Figure 21: throughput vs per-user tok/s Pareto curve (p10-p90 bars) at 16 and 32 GPUs, ours vs baselines [pending].
+Figure 32: throughput vs per-user tok/s Pareto curve (p10-p90 bars) at 16 and 32 GPUs, ours vs baselines [pending].
 
-Figure 22: scaling: load held at >= 90% attainment on 16 vs 32 GPUs, ours vs best PD disaggregation (scheduler only
+Figure 33: scaling: load held at >= 90% attainment on 16 vs 32 GPUs, ours vs best PD disaggregation (scheduler only
 measured; full stack [pending]).
 
-![Figure 23](paper_figures/fig22_thrashing.png)
+![Figure 34](paper_figures/fig22_thrashing.png)
 
-Figure 23: cache thrashing, in ThunderAgent's setting. Qwen2.5-7B on 16 H20s at 32 agent programs, with the working set
+Figure 34: cache thrashing, in ThunderAgent's setting. Qwen2.5-7B on 16 H20s at 32 agent programs, with the working set
 grown from ~1M to ~8M live KV tokens by the number of distinct 64K-token agent tasks (dashed: the ~6.7M-token cluster
 KV capacity). Ours (colocated, cluster pool) vs stock PD 2 + 2, scheduler-only settings. Panels: cached prompt
 fraction, agent output tok/s, and mean agent TTFT. Ours loses 3.1 points of cached fraction and 10.6% of throughput;
 stock PD loses 28.5 points and 55%. Full stack [pending]. Source: `tasks/paper_figures/fig22_thrashing.py`.
 
-![Figure 24](paper_figures/fig23_demand_shift.png)
+![Figure 35](paper_figures/fig23_demand_shift.png)
 
-Figure 24: the superposed TraceLab replay at alpha = 3 with a chat surge of +16 req/s from 300 s to 600 s (shaded),
+Figure 35: the superposed TraceLab replay at alpha = 3 with a chat surge of +16 req/s from 300 s to 600 s (shaded),
 on 16 H20s, in 30 s windows by request start, for ours and conditional disaggregation. From top: issued prefill
 demand (uncached prompt tokens / s), issued decode demand (requested output tokens / s), chat attainment
 (2 s + 50 ms, base stream), and agent attainment (10 s + 80 ms). Issued demand differs by system, because a round
@@ -1704,7 +1717,7 @@ node (4 of 16 GPUs) killed at 300 s; one repeat.
 Earlier, on 8 GPUs with the scheduler only (2 of 8 GPUs killed at 300 s), ours rerouted (agent attainment 96.4 ->
 98.1%, chat 85.0%), while PD disaggregation loses half its prefill capacity (18 -> 34%, chat 9-15%).
 
-Figure 25: per-tenant TTFT and ITL attainment and throughput in 30 s windows before, during and after each kill, with
+Figure 36: per-tenant TTFT and ITL attainment and throughput in 30 s windows before, during and after each kill, with
 lost requests and recovery time; ours, conditional disaggregation and stock PD (prefill-node and decode-node kills);
 Qwen2.5-7B on 16 H20s [pending].
 
@@ -1762,7 +1775,7 @@ measurement because the mechanism is inert on the cluster.
 | C3 router: load tie-break | sglang's `cache_aware` router | chat attainment +7.3 points (90.6 against 83.3%), chat TTFT p90 -79% (0.67 against 3.24 s), at identical agent attainment and acceptance |
 | KV pool (credited to sglang / Mooncake, not ours) | no cluster pool | [pending] |
 
-Figure 26: per-contribution leave-one-out bars -- chat and agent SLO attainment and agent SLO goodput for the full
+Figure 37: per-contribution leave-one-out bars -- chat and agent SLO attainment and agent SLO goodput for the full
 system and for each row of Table 20, at load factors 3 and 6. This is the figure that carries the ablation; the
 kernel-internal bars below are supporting detail.
 
@@ -1831,16 +1844,16 @@ Section 5.2.1 gives the details. The same comparison with the full stack is [pen
 
 **Figures.**
 
-Figure 27: kernel ablation bars: time-weighted speedup per ablation (Table 21) per (context, mode); H200,
+Figure 38: kernel ablation bars: time-weighted speedup per ablation (Table 21) per (context, mode); H200,
 Qwen2.5-7B measured; Llama-3.3-70B [pending].
 
-Figure 28: the same FA2 executors on synthetic decode and verify batches of 16-1024 rows (ShareGPT, math, long-tail
+Figure 39: the same FA2 executors on synthetic decode and verify batches of 16-1024 rows (ShareGPT, math, long-tail
 and shared-prefix length mixes), time relative to the default executor against batch size [pending: decode-only
 instantiation and chunk rounding]. KV-split sizing is what this figure is for: rounding each slot's share up to 256
 keys rather than to a power of two keeps the longest unsplit row from setting the step, worth 1.003-1.006x on
 trace-sampled steps but up to 1.28x on synthetic shared-prefix, long-tail and math batches.
 
-Figure 29: schedule and router ablations: per-tenant attainment and throughput for stock, deadlines alone, deadlines
+Figure 40: schedule and router ablations: per-tenant attainment and throughput for stock, deadlines alone, deadlines
 with demotion, and each routing policy, on the section 6.3 / 6.4 workloads. Router [pending].
 
 ## 8. Background and Related Work

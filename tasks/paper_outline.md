@@ -1448,19 +1448,20 @@ Table 13: our stack against sglang prefill-prioritized, Qwen2.5-7B, 16 H20s, loa
 
 | metric | ours | sglang prefill-prioritized | change |
 |---|---:|---:|---:|
-| chat SLO attainment | 91.2% | 83.2% | +8.0 pts |
-| agent SLO attainment | 94.3% | 93.2% | +1.1 pts |
-| agent SLO goodput (tok/s) | 2 493 | 2 448 | +1.8% |
-| chat mean TPOT, median / p90 (ms) | 10.8 / 29.8 | 15.8 / 41.9 | -32% / -29% |
-| agent mean TPOT, p90 (ms) | 38.0 | 47.2 | -19.5% |
-| chat TTFT, p90 (s) | 0.60 | 2.81 | -79% |
-| chat mean TPOT, p99 (ms) | [pending] | [pending] | [pending] |
+| chat SLO attainment | 91.2% | 83.2% | +8.0 points |
+| agent SLO attainment | 94.3% | 93.2% | +1.1 points |
+| chat mean TPOT (ms) [p10-p99] | 18.0 [3.2-132.8] | 28.7 [5.8-191.9] | -37% |
+| agent mean TPOT (ms) [p10-p99] | 23.6 [7.4-135.4] | 30.4 [9.6-166.6] | -22% |
+| chat mean TTFT (s) [p10-p99] | 0.67 [0.03-17.05] | 1.64 [0.04-32.36] | -59% |
+| agent mean TTFT (s) [p10-p99] | 1.77 [0.18-26.65] | 1.77 [0.17-27.91] | level |
 
 Ours here is the serving tree with the unified dispatcher, the four-mode step and our router, admitting in arrival
-order with sglang's default chunk. It improves every SLO metric for chat and the TPOT tail for agents; agent
-attainment and goodput are inside the run-to-run noise floor (about 5 points and 4%), and the chat inter-token tail is
-worse at the tail of the mean. The gains are therefore concentrated on chat latency: chat mean TPOT falls 29-32% and the chat TTFT tail
-79%, agent mean TPOT falls 19.5%, and combined SLO goodput rises 5.2%.
+order with sglang's default chunk. It improves every metric for chat and time per output token for
+agents; the agent-attainment difference is inside the run-to-run noise floor of about 5 points. The gains are
+therefore concentrated on latency: chat mean time per output token falls 37% and chat mean time to first token 59%,
+agent mean time per output token falls 22%, and agent mean time to first token is level. Both arms' upper
+percentiles remain wide, which is the workload's own spread rather than an artefact of either schedule: the agent
+stream mixes rounds of a few hundred tokens with rounds carrying over a hundred thousand cached tokens.
 
 **Result: which scheduler layer earns the gain.** Table 13's configuration is the first rung of a ladder that adds
 our scheduling layers one at a time on the same cluster, workload and load factor, so that the gain over sglang can be
@@ -1468,31 +1469,34 @@ attributed. Rung L0 is the configuration of Table 13: our serving tree (unified 
 router) admitting in arrival order with sglang's default chunk policy. Rung L1 adds per-tenant deadline ordering.
 
 Table 14: scheduling decomposition, Qwen2.5-7B, 16 H20s, load factor 3; the noise floor on this cluster is about 5
-points of attainment, 4% of goodput and 3 ms of TPOT p90.
+points of attainment.
 
-| rung | chat attain | agent attain | agent goodput (tok/s) | chat TPOT p50/p90 (ms) | agent TPOT p90 (ms) | chat ITL p99 (ms) |
+| rung | chat attain | agent attain | chat mean TPOT (ms) | agent mean TPOT (ms) | chat mean TTFT (s) | agent mean TTFT (s) |
 |---|---:|---:|---:|---:|---:|---:|
-| sglang prefill-prioritized | 83.2% | 93.2% | 2 448 | 15.8 / 41.9 | 47.2 | 130.8 |
-| L0: our tree, arrival order, sglang chunk | 91.2% | 94.3% | 2 493 | 10.8 / 29.8 | 38.0 | 162.9 |
-| L1: L0 + per-tenant deadline order | 90.9% | 93.9% | 2 481 | 11.4 / 32.0 | 40.4 | 185.5 |
+| sglang prefill-prioritized | 83.2% | 93.2% | 28.7 | 30.4 | 1.64 | 1.77 |
+| L0: our tree, arrival order, sglang chunk | 91.2% | 94.3% | 18.0 | 23.6 | 0.67 | 1.77 |
+| L1: L0 + per-tenant deadline order | 90.9% | 93.9% | 20.1 | 24.9 | 0.60 | 1.78 |
 
-At this load the entire gain over sglang comes from L0. Deadline ordering is neutral: every L1-to-L0 difference is
-inside the noise floor. Two details are worth stating rather than rounding away. All of them point the same way,
-slightly worse, which is what ordering by deadline should do when no deadline is in danger -- it trades a little
-locality for an ordering that buys nothing. And the inter-token tail grows on both rungs relative to sglang (chat p99
-130.8 -> 162.9 -> 185.5 ms), because our tree runs longer steps that fold a prefill chunk into the verify forward. This
-satisfies the design goal of no regression at low load, and it means deadline ordering has to earn its place under
-overload, where a deadline is in danger.
+At this load the entire gain over sglang comes from L0. Deadline ordering is neutral: the attainment differences
+between L1 and L0 are inside the noise floor, and its latency effects point both ways by small amounts -- mean time
+to first token improves slightly for chat, mean time per output token worsens slightly for both tenants. That is
+what ordering by deadline should do when no deadline is in danger: it trades a little cache locality for an
+ordering that buys nothing. This satisfies the design goal of no regression at low load, and it means deadline
+ordering has to earn its place under overload, where a deadline is in danger.
 
 At load factor 6 it does, mildly. That load is genuine overload: rung L0's chat attainment falls from 91.2% to
-61.5%, its mean-TPOT 90th percentile grows from 29.8 to 103.6 ms, its inter-token tail reaches about one second,
-and 6 788 agent rounds are never issued. Adding deadline ordering there raises agent SLO goodput by 5.7%
-(2 199 against 2 080 tokens/s), cuts the chat time-to-first-token tail by 24% (3.42 against 4.50 s) and the agent
-mean-TPOT tail by 5.5% (97.8 against 103.5 ms), at 1.5% worse chat TPOT tail and level chat attainment. Of those,
-the goodput, the chat TTFT tail and the agent TPOT tail are outside this cluster's run-to-run noise; the rest is
-inside it. So ordering by deadline costs nothing when nothing is in danger and pays a little when something is,
-which is the behaviour the design intends -- but it is not on its own close to the gains reported in section 6.4,
-and C3's case rests on the chunk-sizing layer built above it. One repeat; a second is [pending].
+61.5%, its chat mean time per output token grows from 18.0 to 57.1 ms, and 6 788 agent rounds are never issued.
+Adding deadline ordering there raises agent attainment from 79.1% to 80.3% and cuts agent mean time to first token
+from 2.92 to 2.76 s, while admitting 1.4% more agent rounds (6 373 against 6 284); chat attainment is level (61.5%
+to 61.8%) and chat mean time per output token is 8% worse (57.1 to 61.9 ms). Every one of those differences is at
+or inside this cluster's run-to-run noise except the extra rounds admitted. So ordering by deadline costs nothing when nothing is in danger and pays a little when something is,
+which is the behaviour the design intends -- but on its own it is a small effect, and most of what section 6.4
+reports against the disaggregated baselines comes from colocation with the stage-1 and stage-2 workers underneath
+it rather than from this ordering. We state that plainly because the layer we built to carry the rest of C3's
+weight -- solving each step's chunk from the latency model -- does not work (section 5.2.3), so the honest account
+of the worker policy is that deadline ordering is cheap, slightly positive under overload, and not the source of
+the cluster-level result. The cluster-level half of C3, the SLO-checked router, is a separate mechanism and is
+measured separately below. One repeat; a second is [pending].
 
 **Result: against conditional disaggregation on the realistic replay.** Conditional disaggregation is the
 strongest disaggregated design, because it prefills a round's short append locally and so avoids shipping the

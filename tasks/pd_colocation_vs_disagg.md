@@ -2190,12 +2190,16 @@ binds less often, so one might expect the arm to converge on L0's behaviour. It 
 | 1000 / 1500 / 2000 / 3000 ms | 32.7 / 33.2 / 35.3 / 28.8% | -- | ~41 ms | -- | -- | 2.0 |
 | 4000 ms | 42.8% | 64.8% | 49.7 ms | 7.93 s | 5618 | 2.027 |
 | 8000 ms | 37.7% | 62.9% | 50.7 ms | 9.18 s | 5452 | 2.017 |
+| 16000 ms | 37.8% | 64.2% | 49.3 ms | 8.52 s | ~5500 | 1.926 |
 
-Every arm has `failed=0` and acceptance about 2.0, so all are valid. The sweep is **not even monotonic** -- 8000 ms
-is worse than 4000 -- and all six caps from 1000 to 8000 ms sit 19 to 33 points of chat attainment below the
-control while improving mean TPOT by 11-28%. 16000 ms is running. A cap that rarely binds should converge on the
-control's behaviour; that it does not, across six values spanning an order of magnitude, says the loss comes from
-sizing the chunk from a latency budget at all on this workload rather than from the cap's value. The trade is therefore a property of sizing the chunk from a latency budget at all on this workload,
+**The sweep is COMPLETE and the conclusion is settled.** Every arm has `failed=0` and acceptance 1.93-2.03, so all
+are valid. Seven caps spanning 1000 to 16000 ms -- a sixteen-fold range -- all sit **19 to 33 points of chat
+attainment below the control** while improving mean TPOT by 11-28%, and the sweep is **not even monotonic** (8000
+is worse than 4000, 16000 flat against 8000). A cap that rarely binds should converge on the control's behaviour.
+That it never does, anywhere in that range, is what moves this from "the cap was mistuned" to **the loss comes
+from sizing the chunk from a latency budget at all on this workload.** By 16000 ms the cap is larger than any
+plausible step, so the budget -- not the cap -- is what still binds, which is the direct evidence for that reading.
+`bash tasks/pd_colocation/mn_capsweep2_16g_20261029.sh`, log `/tmp/h20/mn_capsweep2_r1.log`. The trade is therefore a property of sizing the chunk from a latency budget at all on this workload,
 not of the cap's value, which is what makes it a finding rather than a tuning gap.
 `mn_capsweep2_16g_20261029.sh`, log `/tmp/h20/mn_capsweep2_r1.log`.
 ### Why a more accurate step model will not rescue the rule

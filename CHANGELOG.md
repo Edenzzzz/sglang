@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.60.0 — The corrected cap sweep is complete: seven caps, all 19-33 points down (2026-10-29)
+- cap16000 lands at chat 37.8% / agent 64.2%, flat against cap8000's 37.7% / 62.9% and still 23.7 points of chat
+  attainment below the control's 61.5%. Acceptance 1.926, failed=0.
+- Seven caps from 1000 to 16000 ms -- a sixteen-fold range -- all sit 19-33 points below the control while
+  improving mean TPOT 11-28%, non-monotonically. At 16000 ms the cap exceeds any plausible step time, so what
+  still binds is the budget rather than the cap, which is the direct evidence that the loss comes from sizing the
+  chunk from a latency budget on this workload rather than from a mistuned cap.
+- This closes the question the sweep was run to answer and supports the earlier decision to report the chunk layer
+  with its measured regime rather than as a general mechanism.
+
 ## v3.59.0 — Full generated-capture sweep: 3.92x median on heterogeneous input, 0.83x on uniform (2026-10-29)
 - All four generated sets at the tuned 16-row grid, 200 iterations, unfiltered output. Heterogeneous input
   1.13-6.70x median 3.92x over sglang's single attention call; uniform short input 0.57-1.36x median 0.83x, i.e.

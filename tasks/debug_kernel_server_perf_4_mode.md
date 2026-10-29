@@ -408,6 +408,42 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
     chunk size would be trained on labels the step model generates, so it inherits that error plus its own, must
     additionally learn the budget arithmetic we can compute exactly, and is single-purpose where the step model is
     reused by the router and the deadline predictor.
+- **[x] THE STEPCAP SWEEP IS FLAT, WHICH LOCATES THE REAL BINDING CONSTRAINT: THE DEMOTE BRANCH, NOT THE CAP
+  (2026-10-29, `mn_capsweep_16g_20261028.sh`, log `/tmp/h20/mn_capsweep_r1.log`, alpha 6, all arms failed=0).**
+  | stepcap | chat attain | chat TPOT p50/p90 | chat TTFT p50/p90 | agent attain |
+  |---|---|---|---|---|
+  | 600 ms | 23.6% | 41.3 / 55.8 ms | 7.12 / 41.65 s | 49.5% |
+  | 1000 ms | 32.7% | 39.1 / 55.5 ms | 5.03 / 37.00 s | 55.8% |
+  | 1500 ms | 33.2% | 39.7 / 56.1 ms | 3.91 / 31.54 s | 57.1% |
+  | 2000 ms | 35.3% | 38.4 / 55.0 ms | 4.00 / 32.38 s | 56.4% |
+  | 3000 ms | 28.8% | 39.7 / 56.0 ms | 5.51 / 37.81 s | 56.8% |
+  | **fixed 2048 (control)** | **60.5%** | 35.4 / 114.6 ms | 0.17 / **5.91 s** | **76.9%** |
+  - **A 5x change in the cap moves nothing.** TPOT p90 stays 55.0-56.1 ms across the whole range and TTFT p90 stays
+    31-42 s. So `stepcap` is NOT the binding constraint anywhere in 600-3000 ms, and the registered plan ("the knob
+    works, the value is wrong, sweep it") is refuted: there is no value to find.
+  - **What binds instead, and it is the fourth instance of the same error.** The budget is a MIN over resident
+    rows, and the `demote` branch gives any row that cannot reach its target the bare per-step allowance
+    (s_r x tps ~ 90 ms). At alpha 6 that describes most rows -- chat TPOT p90 is already 55 ms against a 50 ms
+    target -- so nearly every step is pinned to ~90 ms regardless of the tail cap, which is exactly the observed
+    55 ms TPOT with 30-40 s TTFT.
+  - **It is a death spiral, which is why overload is the worst case rather than the best:** a row falls behind ->
+    it clamps the step to the bare allowance -> the chunk collapses -> prefill starves -> more rows arrive late and
+    fall behind -> the clamp tightens. The mechanism designed to protect latency under overload is disabled BY
+    overload.
+  - **The fix is to invert the demote branch's effect, and it follows from what demotion is for.** A row that has
+    already missed its mean cannot be rescued, so letting it constrain every other row buys nothing and costs the
+    prefill that would stop the queue growing. It should be EXCLUDED from the minimum (demoted out of the budget),
+    not given the tightest bound in it. That is a one-line change -- `continue` without touching `budget` -- and it
+    is what the option name "demote" always implied.
+  - **Until that is measured, the honest statement for the paper is that the SLO-budgeted chunk protects tail TPOT
+    (-51% against a matched control) and cannot yet be operated at overload without starving prefill.** The
+    mechanism is validated; the policy is not.
+- **[x] PDMUX FAILED AGAIN at both loads (2026-10-29, `mn_pdmux_retry_16g_20261028.sh`, log
+  `/tmp/h20/mn_pdmux_r2.log`): `accept=NONE` on both arms, so lowering MEM_FRAC 0.70 -> 0.55 was not the cause.**
+  - Since pdmux is a DEFINITE baseline and the serving-level leave-one-out for C1+C2, this now needs the worker
+    logs read rather than another parameter guess: check `worker_r*_g*.log` for the pdmux SM-group setup lines and
+    for `OutOfMemoryError`, and `worker_*.bindfail*.log`, before any further re-run. Two parameter attempts have
+    now failed, so the next step is diagnosis, not a third guess.
 - **[ ] PREDICTION REGISTERED BEFORE THE TAIL-CHUNK ARM LANDS (2026-10-28), so it is judged against a stated
   expectation rather than post hoc.** User's expectation: with the SLO-budgeted chunk on we should win by a lot on
   tail TPOT, because pp suffers significant head-of-line blocking.

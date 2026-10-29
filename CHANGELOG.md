@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.31.0 — The stepcap sweep is flat: the demote branch binds, not the cap (2026-10-29)
+- alpha 6, caps 600/1000/1500/2000/3000 ms, all failed=0: chat TPOT p90 stays 55.0-56.1 ms and chat TTFT p90 stays
+  31-42 s across the whole range, with attainment 23.6-35.3% against the fixed-2048 control's 60.5%. A 5x change
+  in the cap moves nothing, so stepcap is not the binding constraint and the registered plan ("sweep the value")
+  is refuted -- there is no value to find.
+- What binds is the `demote` branch, the fourth instance of the same error: the budget is a MIN over rows, and any
+  row that cannot reach its target gets the bare per-step allowance (~90 ms). At alpha 6 that is most rows, so
+  nearly every step is pinned there whatever the cap.
+- It is a death spiral: a row falls behind, clamps the step, the chunk collapses, prefill starves, more rows fall
+  behind. The mechanism meant to protect latency under overload is disabled BY overload.
+- Fix identified and one line: a row that has already missed cannot be rescued, so it must be EXCLUDED from the
+  minimum rather than given the tightest bound in it -- which is what "demote" always implied.
+- Honest paper statement until that is measured: the rule protects tail TPOT (-51% against a matched control) and
+  cannot yet be operated at overload without starving prefill. Mechanism validated, policy not.
+- pdmux failed again at both loads (accept=NONE), so MEM_FRAC was not the cause. Two parameter guesses have failed;
+  next step is reading the worker logs, not a third guess.
+
 ## v3.30.0 — Fix the abstract edit: no bold, and no dangling clause (2026-10-29)
 - The previous commit put a bold span into the abstract, contradicting the standing instruction that abstracts are
   not typeset with emphasis, and left "57% more under shifting prefill-decode demand" dangling from the clause it

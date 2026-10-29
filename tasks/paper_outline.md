@@ -775,11 +775,20 @@ workers' traces and scored on the second half has these held-out errors:
 |---|---:|---:|---:|
 | merged prefill chunk + verify rows | 2.8-4.2% | 3.4-4.0% | 2.8-3.6% |
 | prefill | 5.6-6.2% | 4.6-5.5% | 6.9-7.8% |
-| decode | 34-38% | 18-23% (short steps of about 10-20 ms) | 21-25% |
+| decode | [withdrawn] | [withdrawn] | [withdrawn] |
 
 On the merged steps every model lands within about a point of the others: the linear model is as accurate as the
-MLP there, and the analytic overlap form (2.4-4.4%) is no worse. The models separate only on decode-only steps, where
-the linear model's 34-38% is the cost of its missing nonlinearity in a short, launch-dominated step. The chunk rule
+MLP there, and the analytic overlap form (2.4-4.4%) is no worse. That is the row the chunk rule depends on, since
+it sizes a chunk for a merged step.
+
+The decode row is withdrawn rather than reported, because the models were fitted on a feature that was absent. The
+trace records each row's KV length from a host-side copy of the sequence lengths that the decode path does not
+populate, and the fallback recorded zero: across the traces, all 73 770 decode steps carry a zero KV length while
+10 189 of 14 162 mixed steps carry a real one. The decode row therefore measured models predicting a decode step
+from its row count alone, without the quantity that dominates its attention cost, and the apparent separation
+between model families on that row is an artefact of fitting different functions to a dead input. The tracer is
+fixed and the row will be re-measured; no claim about decode-step or time-per-output-token prediction accuracy is
+made until then. The chunk rule
 of section 5.2.3 sizes only merged steps, so it uses the linear model, which costs nothing in accuracy where it is
 applied and gives the closed form the rule needs.
 

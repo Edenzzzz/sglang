@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.39.0 — Withdraw 5.2.2's decode row: it was fitted on an absent feature (2026-10-29)
+- The per-step-type table reported decode-step errors of 34-38% (linear), 18-23% (MLP) and 21-25% (GBT), and the
+  text read that spread as the linear model's missing nonlinearity. Both are withdrawn: the trace records each
+  row's KV length from a host copy of the sequence lengths that the decode path does not populate, and the
+  fallback recorded zero, so all 73 770 decode steps carry a zero KV length against 10 189 of 14 162 mixed steps
+  carrying a real one.
+- So that row measured models predicting a decode step from its row count alone, without the quantity that
+  dominates decode attention cost, and the separation between model families there is an artefact of fitting
+  different functions to a dead input.
+- The merged-step row stands and is the one the chunk rule depends on, since it sizes a chunk for a merged step.
+  No decode-step or TPOT prediction-accuracy claim appears until the tracer fix is deployed and the row re-measured.
+
 ## v3.38.0 — Stage the decode-KV tracer deploy and a traced arm for point 3 (2026-10-29)
 - `/tmp/deploy_dkv_and_trace.sh` chained after the queue drains: patches both trees an arm can run on
   (h20py/python and python_slo_life), asserts each still parses, then runs one short traced arm with

@@ -450,6 +450,16 @@ def build_eagle_verify_input(
 
     prepared_out_cache_loc = None
     prepared_mrope_positions = None
+    if os.environ.get("SGLANG_DEBUG_MIX_SYNC") == "1" and batch.seq_lens.is_cuda:
+        torch.cuda.synchronize()
+        logger.error(
+            "TREEINPUT bs=%d seq_shape=%s seq_sum=%s bonus_shape=%s draft_shape=%s "
+            "scores_shape=%s parent_shape=%s top_index_shape=%s",
+            batch.seq_lens.shape[0], tuple(batch.seq_lens.shape), batch.seq_lens_sum,
+            tuple(draft_input.bonus_tokens.shape), tuple(draft_tokens.shape),
+            tuple(draft_input.draft_probs.shape) if draft_input.draft_probs is not None else None,
+            tuple(parent_list.shape), tuple(top_scores_index.shape),
+        )
     if (
         batch.seq_lens.is_cuda
         and topk == 1

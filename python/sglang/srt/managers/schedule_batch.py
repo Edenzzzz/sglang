@@ -3220,25 +3220,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         # Snapshot what the 1-token merge is about to produce for the tail rows.
         pre_rows = self.batch_size()
         self.mixed_pre_sampling_info = self.sampling_info
-
-        # merge_batch dereferences self.sampling_info.penalizer_orchestrator with no None check.
-        # MEASURED: on a 4-mode step the PREFILL batch is the one missing it, the running decode
-        # batch has it. Borrow from whichever side does.
-        if self.sampling_info is not None and running_batch.sampling_info is not None:
-            if (
-                self.sampling_info.penalizer_orchestrator is None
-                and running_batch.sampling_info.penalizer_orchestrator is not None
-            ):
-                self.sampling_info.penalizer_orchestrator = (
-                    running_batch.sampling_info.penalizer_orchestrator
-                )
-            elif (
-                running_batch.sampling_info.penalizer_orchestrator is None
-                and self.sampling_info.penalizer_orchestrator is not None
-            ):
-                running_batch.sampling_info.penalizer_orchestrator = (
-                    self.sampling_info.penalizer_orchestrator
-                )
+        self.sampling_info = copy.copy(self.sampling_info)
+        if self.sampling_info.custom_params is not None:
+            self.sampling_info.custom_params = list(self.sampling_info.custom_params)
 
         verify_out_cache_loc = running_batch.out_cache_loc
         verify_input_ids = verify_input.draft_token
@@ -3940,23 +3924,32 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         # merge_batch historically mutated the list in place; they now rebind
         # new lists, but the slice stays so this snapshot never aliases the
         # original.
+        snapshot_tensor = lambda value: value.clone() if isinstance(value, torch.Tensor) else value
+        snapshot_spec = self.spec_info
+        if snapshot_spec is not None:
+            snapshot_spec = copy.copy(snapshot_spec)
+            if dataclasses.is_dataclass(snapshot_spec):
+                for field in dataclasses.fields(snapshot_spec):
+                    value = getattr(snapshot_spec, field.name)
+                    if isinstance(value, torch.Tensor):
+                        setattr(snapshot_spec, field.name, value.clone())
         return ScheduleBatch(
             reqs=self.reqs[:],
             extend_lens=self.extend_lens,
             prefix_lens=self.prefix_lens,
             req_to_token_pool=self.req_to_token_pool,
-            req_pool_indices=self.req_pool_indices,
-            req_pool_indices_cpu=self.req_pool_indices_cpu,
+            req_pool_indices=snapshot_tensor(self.req_pool_indices),
+            req_pool_indices_cpu=snapshot_tensor(self.req_pool_indices_cpu),
             model_config=self.model_config,
             forward_mode=self.forward_mode,
-            out_cache_loc=self.out_cache_loc,
+            out_cache_loc=snapshot_tensor(self.out_cache_loc),
             return_logprob=self.return_logprob,
             has_grammar=self.has_grammar,
             return_hidden_states=self.return_hidden_states,
             return_hidden_states_mode=self.return_hidden_states_mode,
             decoding_reqs=self.decoding_reqs,
             spec_algorithm=self.spec_algorithm,
-            spec_info=self.spec_info,
+            spec_info=snapshot_spec,
             dp_spec_prefill_coordination_metadata=self.dp_spec_prefill_coordination_metadata,
             dp_spec_prefill_coordination_applied=self.dp_spec_prefill_coordination_applied,
             global_num_tokens=self.global_num_tokens,
@@ -3967,7 +3960,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             dp_prefill_cuda_graph_max_prefix_len=self.dp_prefill_cuda_graph_max_prefix_len,
             is_extend_in_batch=self.is_extend_in_batch,
             is_prefill_only=self.is_prefill_only,
-            seq_lens_cpu=self.seq_lens_cpu,
+            seq_lens_cpu=snapshot_tensor(self.seq_lens_cpu),
             enable_overlap=self.enable_overlap,
             mamba_track_indices=self.mamba_track_indices,
             mamba_track_buffer_indices=self.mamba_track_buffer_indices,

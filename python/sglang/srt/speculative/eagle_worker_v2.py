@@ -712,6 +712,21 @@ class EagleDraftWorker(EagleDraftWorkerBase):
             self.topk,
             self.speculative_num_steps,
         )
+        if (
+            os.environ.get("SGLANG_DEBUG_MIX_SYNC") == "1"
+            and not torch.cuda.is_current_stream_capturing()
+        ):
+            torch.cuda.synchronize()
+            pool_size = getattr(self.draft_runner.token_to_kv_pool, "size", None)
+            logger.error(
+                "DRAFTCACHE_INIT bs=%d steps=%d shape=%s min=%s max=%s pool_size=%s req_rows=%s",
+                forward_batch.batch_size, self.speculative_num_steps,
+                tuple(out_cache_loc.shape),
+                int(out_cache_loc.min().item()) if out_cache_loc.numel() else None,
+                int(out_cache_loc.max().item()) if out_cache_loc.numel() else None,
+                pool_size,
+                tuple(self.draft_runner.req_to_token_pool.req_to_token.shape),
+            )
 
         # Return values
         score_list: List[torch.Tensor] = []
@@ -792,6 +807,27 @@ class EagleDraftWorker(EagleDraftWorkerBase):
                     ),
                     canary_index_ctx,
                 ):
+                    if (
+                        os.environ.get("SGLANG_DEBUG_MIX_SYNC") == "1"
+                        and not torch.cuda.is_current_stream_capturing()
+                    ):
+                        torch.cuda.synchronize()
+                        logger.error(
+                            "DRAFTCACHE step=%d bs=%d input_shape=%s out_shape=%s "
+                            "out_min=%s out_max=%s out_numel=%d pos_shape=%s pos_min=%s pos_max=%s",
+                            i, forward_batch.batch_size, tuple(input_ids.shape),
+                            tuple(forward_batch.out_cache_loc.shape),
+                            int(forward_batch.out_cache_loc.min().item())
+                            if forward_batch.out_cache_loc.numel() else None,
+                            int(forward_batch.out_cache_loc.max().item())
+                            if forward_batch.out_cache_loc.numel() else None,
+                            int(forward_batch.out_cache_loc.numel()),
+                            tuple(forward_batch.positions.shape),
+                            int(forward_batch.positions.min().item())
+                            if forward_batch.positions.numel() else None,
+                            int(forward_batch.positions.max().item())
+                            if forward_batch.positions.numel() else None,
+                        )
                     logits_output = self.draft_runner.forward(
                         forward_batch
                     ).logits_output
@@ -846,6 +882,18 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         draft_probs = (
             torch.stack(draft_probs_list, dim=1) if needs_draft_probs else None
         )
+
+        if (
+            os.environ.get("SGLANG_DEBUG_MIX_SYNC") == "1"
+            and not torch.cuda.is_current_stream_capturing()
+        ):
+            torch.cuda.synchronize()
+            logger.error(
+                "DRAFTFORWARD_DONE bs=%d topk_p=%s topk_index=%s hidden=%s probs=%s",
+                forward_batch.batch_size, tuple(topk_p.shape), tuple(topk_index.shape),
+                None if hidden_states is None else tuple(hidden_states.shape),
+                None if draft_probs is None else tuple(draft_probs.shape),
+            )
 
         # Organize the results
         if draft_tokens_topk1 is not None:
@@ -1519,6 +1567,15 @@ class EAGLEWorkerV2(BaseSpecWorker):
         assert self.topk == 1, "4-mode step requires --speculative-eagle-topk 1"
         running: ScheduleBatch = batch.mixed_spec_running
         batch.mixed_spec_running = None
+        mixed_graph_runner = self.target_worker.model_runner.decode_cuda_graph_runner
+        disable_mixed_graph = os.environ.get("SGLANG_MIXED_SPEC_DISABLE_VERIFY_GRAPH") == "1"
+        debug_mix_sync = os.environ.get("SGLANG_DEBUG_MIX_SYNC") == "1"
+        mixed_draft_graph_runner = self.draft_worker.cuda_graph_runner
+        mixed_draft_extend_graph_runner = self.draft_worker.cuda_graph_runner_for_draft_extend
+        if disable_mixed_graph:
+            self.target_worker.model_runner.decode_cuda_graph_runner = None
+            self.draft_worker.cuda_graph_runner = None
+            self.draft_worker.cuda_graph_runner_for_draft_extend = None
 
         with (
             draft_tp_context(self.draft_worker.draft_owns_attention),
@@ -1527,7 +1584,20 @@ class EAGLEWorkerV2(BaseSpecWorker):
             spec_stage_span("draft"),
         ):
             verify_input = self.draft_worker.draft(running)
+        if debug_mix_sync:
+            torch.cuda.synchronize()
+            logger.error("MIXSYNC phase=draft_complete")
         assert verify_input.is_verify_input()
+        if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
+            torch.cuda.synchronize()
+            logger.error(
+                "VERIFYINDEX draft=%s retrieve=%s next=%s sibling=%s positions=%s "
+                "mask=%s seq=%s",
+                tuple(verify_input.draft_token.shape), tuple(verify_input.retrieve_index.shape),
+                tuple(verify_input.retrieve_next_token.shape), tuple(verify_input.retrieve_next_sibling.shape),
+                tuple(verify_input.positions.shape), tuple(verify_input.custom_mask.shape),
+                None if verify_input.seq_lens_cpu is None else verify_input.seq_lens_cpu.tolist(),
+            )
         running.spec_info = verify_input
 
         # Allocate the n KV slots per verify row and point running.out_cache_loc at them. We want
@@ -1541,6 +1611,9 @@ class EAGLEWorkerV2(BaseSpecWorker):
         _vfb, _vfb_cg = eagle_prepare_for_verify(
             verify_input, self.req_to_token_pool, running, self.target_worker
         )
+        if debug_mix_sync:
+            torch.cuda.synchronize()
+            logger.error("MIXSYNC phase=verify_prepare_complete graph=%s", _vfb_cg)
 
         # Gate (b), v2: take the reference BEFORE the merged forward, reusing the verify batch
         # the step already prepared. v1 called eagle_prepare_for_verify again for the
@@ -1597,6 +1670,11 @@ class EAGLEWorkerV2(BaseSpecWorker):
         batch_output = self.target_worker.forward_batch_generation(
             batch=None, forward_batch=fb, is_verify=True, pp_proxy_tensors=pp_proxy_tensors
         )
+        if debug_mix_sync:
+            torch.cuda.synchronize()
+            logger.error("MIXSYNC phase=merged_forward_complete")
+        if disable_mixed_graph:
+            self.target_worker.model_runner.decode_cuda_graph_runner = mixed_graph_runner
         # Split the single forward's output. Row order follows the merged batch, which
         # mix_with_verify builds as [chunk rows | verify rows], so the prefill rows are the first
         # n_pre_rows of next_token_logits and the first t_pre of hidden_states.
@@ -1628,6 +1706,26 @@ class EAGLEWorkerV2(BaseSpecWorker):
                 int((a.float().argmax(-1) != b.float().argmax(-1)).sum())
                 if tuple(a.shape) == tuple(b.shape) else -1
             )
+            def log_mixed_logit_flips(reference_logits, mixed_logits, role):
+                if reference_logits.shape != mixed_logits.shape:
+                    return
+                reference_values, reference_ids = reference_logits.float().topk(2, dim=-1)
+                mixed_values, mixed_ids = mixed_logits.float().topk(2, dim=-1)
+                reference_argmax = reference_logits.argmax(dim=-1)
+                mixed_argmax = mixed_logits.argmax(dim=-1)
+                changed_rows = torch.nonzero(
+                    reference_argmax != mixed_argmax
+                ).flatten().tolist()
+                for row in changed_rows[:8]:
+                    logger.error(
+                        "MIXED_LOGIT_FLIP role=%s row=%d ref_ids=%s ref_values=%s "
+                        "mixed_ids=%s mixed_values=%s ref_argmax=%d mixed_argmax=%d",
+                        role, row, reference_ids[row].tolist(), reference_values[row].tolist(),
+                        mixed_ids[row].tolist(), mixed_values[row].tolist(),
+                        int(reference_argmax[row]), int(mixed_argmax[row]),
+                    )
+
+            log_mixed_logit_flips(_ref_ver, ver_logits, "verify")
             # Null case: the same comparison on the prefill rows, which are known good.
             # The verdict is only readable while this reads 0.
             _pre_err = _pre_flips = None
@@ -1643,6 +1741,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
                 ).logits_output.next_token_logits
                 _pre_err = _err(_pref, pre_logits)
                 _pre_flips = _flips(_pref, pre_logits)
+                log_mixed_logit_flips(_pref, pre_logits, "prefill")
             except Exception as _e:
                 _pre_err = repr(_e)[:60]
             # Per-POSITION agreement: a verify row holds n draft tokens, and only the
@@ -1804,6 +1903,10 @@ class EAGLEWorkerV2(BaseSpecWorker):
             result.next_draft_input = self.draft_worker._draft_extend_for_prefill(
                 batch, pre_out.hidden_states, pre_next_token_ids
             )
+            if disable_mixed_graph:
+                self.target_worker.model_runner.decode_cuda_graph_runner = mixed_graph_runner
+                self.draft_worker.cuda_graph_runner = mixed_draft_graph_runner
+                self.draft_worker.cuda_graph_runner_for_draft_extend = mixed_draft_extend_graph_runner
             # No tensor narrowing here. Once `next_token_ids = predict` makes the draft-extend batch
             # report n tokens (raw_num_tokens = input_ids.shape[0]), EVERY field is correctly n-wide
             # and the earlier out_cache_loc narrowing (commits 19/21) becomes the bug -- the two are

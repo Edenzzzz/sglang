@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from enum import IntEnum
 from functools import partial
 from typing import TYPE_CHECKING, List, Optional, Tuple
@@ -50,6 +51,8 @@ _is_xpu = is_xpu()
 _is_cpu = is_cpu()
 
 logger = logging.getLogger(__name__)
+_fused_verify_epilogue = os.environ.get("SGLANG_FUSED_VERIFY_EPILOGUE", "0") == "1"
+_fused_verify_logged = False
 
 if _is_cuda or _is_hip:
     from sglang.kernels.ops.speculative.tree import (
@@ -802,6 +805,22 @@ def eagle_sample(
         grammar_mask.apply(next_token_logits)
 
     candidates = verify_input.draft_token.reshape(bs, verify_input.draft_token_num)
+    if _fused_verify_epilogue and _is_cuda and sampling_info.is_all_greedy and SIMULATE_ACC_LEN <= 0:
+        from sglang.kernels.ops.speculative.fused_verify import fused_greedy_verify
+
+        result = fused_greedy_verify(
+            next_token_logits,
+            candidates,
+            verify_input.retrieve_index,
+            verify_input.retrieve_next_token,
+            verify_input.retrieve_next_sibling,
+            verify_input.max_tree_depth,
+        )
+        global _fused_verify_logged
+        if not _fused_verify_logged:
+            logger.info("FUSED_VERIFY_EPILOGUE active draft_tokens=%d", verify_input.draft_token_num)
+            _fused_verify_logged = True
+        return result
     predict_shape = list(next_token_logits.shape)[:-1]
     predict = torch.zeros(predict_shape, dtype=torch.int32, device=device).flatten()
     accept_index = torch.full(

@@ -26,7 +26,7 @@ import torch
 
 logger = logging.getLogger(__name__)
 
-_LOADED = False
+_LOADED_NAMESPACES: set[str] = set()
 
 
 def fi_root() -> str:
@@ -188,11 +188,56 @@ def _merged_include_tree(data: str, root: str) -> str:
     return os.path.join(out, "inc")
 
 
-def load_fused_fa3(verbose: bool = False) -> None:
-    """Compile and register `torch.ops.fused_fa3.fused_run`. Idempotent."""
-    global _LOADED
-    if _LOADED and hasattr(torch.ops, "fused_fa3"):
-        return
+
+def _fa2_tile_widths() -> tuple[int, int, int]:
+    """The three FA2 class widths, largest first, from SGLANG_FUSED_FA2_TILES.
+
+    One source for both the compile-time runner widths and the planner's FUSED_FA2_TILES, which
+    must agree: the planner decides which task slot a row lands in, the runners decide what tile
+    that slot actually computes. Silent disagreement is a wrong answer, not an error.
+    """
+    raw = os.environ.get("SGLANG_FUSED_FA2_TILES", "128,64,16")
+    try:
+        w = tuple(int(x) for x in raw.split(","))
+    except ValueError:
+        raise ValueError(f"SGLANG_FUSED_FA2_TILES={raw!r} is not three integers") from None
+    if len(w) != 3 or any(x <= 0 for x in w):
+        raise ValueError(f"SGLANG_FUSED_FA2_TILES={raw!r} must be three positive widths")
+    if not (w[0] > w[1] > w[2]):
+        raise ValueError(
+            f"SGLANG_FUSED_FA2_TILES={raw!r} must be strictly decreasing (largest first): the "
+            "planner routes a row to the smallest class that can hold it and derives its "
+            "thresholds from this order"
+        )
+    for x in w:
+        # Mirror of the device-side constraint: some warps_q dividing 8 must give an integral
+        # num_mma_q. Checked here too so the failure names the env var rather than surfacing as a
+        # static_assert deep in a template instantiation.
+        if not any(8 % q == 0 and x % (q * 16) == 0 for q in range(1, 9)):
+            raise ValueError(
+                f"FA2 tile width {x} has no valid warp layout at 8 warps: needs some warps_q "
+                "dividing 8 with warps_q*16 dividing the width (16/32/48/64/96/128 all work)"
+            )
+    return w
+
+
+def _fa2_tile_flags() -> list[str]:
+    """nvcc flags for the three widths, and keep the planner's env var in step."""
+    w = _fa2_tile_widths()
+    # The planner reads this; set it so it cannot disagree with what was compiled.
+    os.environ["FUSED_FA2_TILES"] = ",".join(str(x) for x in w)
+    return [f"-DFUSED_FA2_W{i}={x}" for i, x in enumerate(w)]
+
+
+def load_fused_fa3(verbose: bool = False, cta_q: int | None = None) -> str:
+    """Compile/register one FA3 tile variant and return its operator namespace."""
+    explicit_variant = cta_q is not None
+    compile_q = int(cta_q if explicit_variant else os.environ.get("FA3_CTA_Q", "128"))
+    if compile_q not in (64, 128):
+        raise ValueError(f"FA3 CTA_Q must be 64 or 128, got {compile_q}")
+    namespace = f"fused_fa3_q{compile_q}" if explicit_variant else "fused_fa3"
+    if namespace in _LOADED_NAMESPACES and hasattr(getattr(torch.ops, namespace), "fused_run"):
+        return namespace
     from torch.utils.cpp_extension import load
 
     root = fi_root()
@@ -240,7 +285,7 @@ def load_fused_fa3(verbose: bool = False) -> None:
             f"{root}/3rdparty/spdlog/include",
         ]
     load(
-        name="fused_fa3",
+        name=namespace,
         sources=[src],
         extra_include_paths=includes,
         extra_cuda_cflags=[
@@ -257,9 +302,42 @@ def load_fused_fa3(verbose: bool = False) -> None:
             # Our port ran 1 stage to fit shared memory and thereby removed that invariant, which
             # is the measured race. 2 stages fits once ALIAS_SMEM is on (below).
             "-DFUSED_FA3_STAGES=" + os.environ.get("FA3_STAGES", "2"),
+            "-DFUSED_FA3_CONSUMER_REGS=" + os.environ.get("SGLANG_FUSED_FA3_CONSUMER_REGS", "0"),
             # Store-completion handshake: the producer cannot refill smem_v (which sO aliases)
             # until the consumer has finished reading sO for the current work item. Off by
             # default until measured -- a mismatched arrival count here deadlocks the kernel.
+            # CROSS-ITEM Q FENCE. smem_q is one buffer reused by every work item a CTA runs.
+            # Stock waits on barrier_O only AFTER refilling it, and the consumer arrives on
+            # barrier_O after only the FIRST QK gemm is issued -- while tSrQ is a smem descriptor
+            # iterator, so sQ is re-read on every later kv tile. Sound for one item per CTA, a
+            # hazard for many. =1 hoists the producer's wait above the Q load and moves the
+            # consumer's arrival to after its last sQ read. Off by default until measured; it
+            # serialises producer and consumer across items, so it is expected to cost time.
+            # A2. FA2 tile-class widths. These are COMPILE-TIME on the runner side (one
+            # BlockBatchPagedAttentionPersistent instantiation per class) while the host planner
+            # reads FUSED_FA2_TILES at run time, so the two can disagree -- and a width the
+            # runners were not built for routes rows to a tile class that does not exist, with no
+            # error. Both are therefore derived HERE from one value, and the planner's env var is
+            # set to match rather than read independently.
+            #
+            # {16,32,48,64,96,128} are all expressible at kFa2Warps=8; the extension
+            # static_asserts the two layout invariants, so an unbuildable width fails the compile
+            # instead of mis-routing. Default {128,64,16} is the previous behaviour.
+            *_fa2_tile_flags(),
+            "-DFUSED_CONST_PERS_PARAMS=" + os.environ.get("FUSED_CONST_PERS_PARAMS", "0"),
+            "-DFUSED_FA2_REG_REALLOC=" + os.environ.get("FUSED_FA2_REG_REALLOC", "0"),
+            "-DFLASHINFER_FA2_MMA_KV=" + os.environ.get("SGLANG_FUSED_FA2_MMA_KV", "2"),
+            "-DFLASHINFER_FA2_QSPLIT=" + os.environ.get("SGLANG_FUSED_FA2_QSPLIT", "0"),
+            # Per-item pipeline accounting: tiles the producer INTENDED to load vs tiles the
+            # consumer actually CONSUMED, accumulated in registers and printed once per block
+            # AFTER the loop. The print placement is the whole point -- every instrument that
+            # slowed this kernel inside the loop (printf probe, racecheck, memcheck) masked the
+            # defect, so the counting happens during the race and the reporting happens after it.
+            # Raw tile-sequence trace for ONE block/item: is the deterministic gather sequence
+            # CORRECT? The register signature proved only that it is identical every run.
+            "-DFUSED_TILE_TRACE=" + os.environ.get("TILE_TRACE", "0"),
+            "-DFUSED_PIPE_COUNT=" + os.environ.get("PIPE_COUNT", "0"),
+            "-DFUSED_Q_REUSE_FENCE=" + os.environ.get("Q_REUSE_FENCE", "0"),
             "-DFUSED_O_HANDSHAKE=" + os.environ.get("O_HANDSHAKE", "0"),
             # Un-alias smem_o from smem_v. Stock unions them, which is safe for one work item per
             # CTA; our persistent scheduler gives a CTA many, so the producer's next V load can
@@ -296,20 +374,26 @@ def load_fused_fa3(verbose: bool = False) -> None:
             # FA3 tile shape. CTA_KV must divide the planner's kTileKV of 128 (a static_assert in
             # the ext enforces it), so 64 or 128. Shrinking CTA_KV is how the second pipeline
             # stage gets bought.
-            "-DFUSED_FA3_CTA_Q=" + os.environ.get("FA3_CTA_Q", "128"),
+            f"-DFUSED_FA3_CTA_Q={compile_q}",
+            f"-DFUSED_OP_NAMESPACE={namespace}",
             "-DFUSED_FA3_CTA_KV=" + os.environ.get("FA3_CTA_KV", "128"),
             # Diagnostic: skip the packed-GQA Q gather entirely and leave whatever is in smem, so
             # the difference in kernel time BOUNDS what that load costs. Output is garbage by
             # construction -- this measures the load, not the kernel -- so it is only ever read as
             # a timing delta, never as a correctness arm.
             "-DFLASHINFER_SKIP_PACKED_Q=" + os.environ.get("SKIP_PACKED_Q", "0"),
+            # Multicast ceiling diagnostic: FA3 K/V copies zero-fill instead of reading global
+            # memory (wrong output by construction; timing only). Added only when set, so the
+            # default build's flags -- and its cached extension -- are unchanged.
+            *([] if os.environ.get("FA3_SKIP_KV_LOAD") is None
+              else ["-DFLASHINFER_FA3_SKIP_KV_LOAD=" + os.environ["FA3_SKIP_KV_LOAD"]]),
             # The FA3 role's CAUSAL template parameter. Default 0 was set from a measurement
             # ("CAUSAL=1 is worse") taken while fa3.k_page_stride was unassigned, so every key
             # read page 0 and all keys were identical -- a configuration in which causal and
             # non-causal are indistinguishable. That measurement was therefore vacuous. The
             # reference is bottom-right CAUSAL and the stock wrapper is built with causal=True,
             # so this has to be 1 for the comparison to mean anything.
-            "-DFLASHINFER_FUSED_FA3_CAUSAL=" + os.environ.get("FA3_CAUSAL", "0"),
+            "-DFLASHINFER_FUSED_FA3_CAUSAL=" + os.environ.get("FA3_CAUSAL", "1"),
             # Device-side trace of what the FA2 role actually loaded and where it writes. The
             # plan's units cannot be settled by reading either side's source -- a unit audit
             # written from the same understanding passed while the kernel still faulted.
@@ -323,6 +407,8 @@ def load_fused_fa3(verbose: bool = False) -> None:
             # configuration that instantiates store_partial, so without it the split-KV path
             # is compiled out and split rows write no partial.
             "-DFLASHINFER_FUSED_UNIFIED_WGMMA=1",
+            "-DFLASHINFER_FUSED_CLUSTER=" + os.environ.get("FUSED_CLUSTER", "1"),
+            "-DFLASHINFER_FA3_PAGED_TMA=" + os.environ.get("FA3_PAGED_TMA", "0"),
             # Packed-GQA addressing for the FA3 role, as a COMPILE-TIME group size: the unified
             # plan tiles FA3 work over (token, head-in-group) pairs, which the Q tensormap cannot
             # express, so both the Q load and the O store index rows through packed_coord.
@@ -356,14 +442,13 @@ def load_fused_fa3(verbose: bool = False) -> None:
         is_python_module=False,
         verbose=verbose,
     )
-    if not hasattr(torch.ops, "fused_fa3") or not hasattr(
-        torch.ops.fused_fa3, "fused_run"
-    ):
+    if not hasattr(getattr(torch.ops, namespace), "fused_run"):
         raise RuntimeError(
-            "fused_fa3 compiled but torch.ops.fused_fa3.fused_run is not registered"
+            f"{namespace} compiled but torch.ops.{namespace}.fused_run is not registered"
         )
-    _LOADED = True
+    _LOADED_NAMESPACES.add(namespace)
     logger.info(
-        "fused_fa3 kernel loaded (src=%s, headers=%s, generated=%s)",
-        root, data or f"{root} (source tree)", gen,
+        "fused FA3 tile variant loaded (namespace=%s, cta_q=%d, src=%s, headers=%s, generated=%s)",
+        namespace, compile_q, root, data or f"{root} (source tree)", gen,
     )
+    return namespace

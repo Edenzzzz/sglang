@@ -306,6 +306,51 @@ _FS_NP = {torch.int32: "int32", torch.int64: "int64"}
 # extra wrapper is never planned. Output stays correct either way, so a clean run isolates the
 # fault to that extra plan rather than to the FA3 half.
 FUSED_SPLIT_NO_FA2_WRAPPER = os.environ.get("SGLANG_FUSED_SPLIT_NOFA2", "0") == "1"
+FUSED_KERNEL_EXEC = os.environ.get("SGLANG_FUSED_KERNEL_EXEC", "0") == "1"
+# Two-launch split: run the FA3 rows on a side stream (holding all but SGLANG_FUSED_SM_MARGIN SMs)
+# concurrently with the stock FA2 rows on the current stream, instead of back to back. FA3 rows
+# are compute-bound prefill chunks and FA2 rows memory-bound verify rows, so they overlap well.
+SPLIT_OVERLAP = os.environ.get("SGLANG_SPLIT_OVERLAP", "0") == "1"
+
+
+def _force_synchronous_flashinfer_plans():
+    """SGLANG_FI_PLAN_SYNC=1 (diagnostic): every flashinfer wrapper plan copies its pinned host
+    staging to the device synchronously. A non-blocking copy reads the pinned buffer when it
+    EXECUTES, so a second plan on the same wrapper issued before the GPU reaches the first copy
+    rewrites the first plan's metadata under it."""
+    import flashinfer
+
+    def wrap(cls):
+        plan = cls.plan
+
+        def plan_sync(self, *args, **kwargs):
+            kwargs["non_blocking"] = False
+            return plan(self, *args, **kwargs)
+
+        cls.plan = plan_sync
+        cls.begin_forward = plan_sync
+
+    for name in ("BatchPrefillWithPagedKVCacheWrapper", "BatchPrefillWithRaggedKVCacheWrapper",
+                 "BatchDecodeWithPagedKVCacheWrapper"):
+        cls = getattr(flashinfer, name, None)
+        if cls is not None:
+            wrap(cls)
+
+
+def _synchronous_fast_plan(fast_plan):
+    def plan_sync(*args, **kwargs):
+        kwargs["non_blocking"] = False
+        return fast_plan(*args, **kwargs)
+
+    return plan_sync
+
+
+if os.environ.get("SGLANG_FI_PLAN_SYNC", "0") == "1":
+    _force_synchronous_flashinfer_plans()
+    # The CUDA-graph wrappers bind these per instance (partial(fast_decode_plan, w)), bypassing
+    # the class methods patched above, so the module globals they are looked up from are wrapped.
+    fast_prefill_plan = _synchronous_fast_plan(fast_prefill_plan)
+    fast_decode_plan = _synchronous_fast_plan(fast_decode_plan)
 # Skip the full-batch paged plan when the split will serve the whole batch. Under the split
 # that plan is never consumed -- the dispatch replaces prefill_wrapper_paged.forward outright
 # -- so the split was paying TWO flashinfer plans per step (host work plus a scheduling kernel
@@ -352,10 +397,12 @@ class FlashInferAttnBackend(AttentionBackend):
         # 6.8% serving regression. Buffers only ever grow, so the steady state allocates nothing.
         self._fs_dev: dict = {}
         self._fs_host: dict = {}
+        self._fs_copy_done: dict = {}
         self.fused_split_calls = 0
         self.fused_split_onesided = 0
         self.fused_split_plans = 0
         self.fused_split_err = 0.0
+        self._fused_kernel_state = None
 
         self.req_to_token_pool = model_runner.req_to_token_pool
         self.token_to_kv_pool = model_runner.token_to_kv_pool
@@ -764,6 +811,8 @@ class FlashInferAttnBackend(AttentionBackend):
         forward_batch: ForwardBatch,
         in_capture: bool = False,
     ):
+        self.fused_split_mask = None
+        self.fused_split_plan = None
         bs = forward_batch.batch_size
         req_pool_indices = forward_batch.req_pool_indices
         seq_lens = forward_batch.seq_lens
@@ -788,6 +837,20 @@ class FlashInferAttnBackend(AttentionBackend):
             self._prepare_cuda_graph_metadata(bs, num_tokens, forward_mode, spec_info)
 
         if forward_mode.is_decode_or_idle():
+            if os.environ.get("SGLANG_DBG_INDEX_STATE") == "1":
+                logger.error(
+                    "INDEXSTATE mode=%s bs=%d req_shape=%s req_min=%s req_max=%s "
+                    "seq_shape=%s seq_min=%s seq_max=%s seq_cpu_shape=%s seq_sum=%s "
+                    "spec=%s plan=%s",
+                    forward_mode, bs, tuple(req_pool_indices.shape),
+                    int(req_pool_indices[:bs].min().item()) if bs else None,
+                    int(req_pool_indices[:bs].max().item()) if bs else None,
+                    tuple(seq_lens.shape), int(seq_lens[:bs].min().item()) if bs else None,
+                    int(seq_lens[:bs].max().item()) if bs else None,
+                    None if seq_lens_cpu is None else tuple(seq_lens_cpu.shape),
+                    seq_lens_sum, type(spec_info).__name__ if spec_info is not None else None,
+                    type(forward_batch.kv_loc_plan).__name__ if forward_batch.kv_loc_plan is not None else None,
+                )
             self.indices_updater_decode.update(
                 seq_lens[:bs],
                 seq_lens_cpu[:bs] if seq_lens_cpu is not None else None,
@@ -801,6 +864,20 @@ class FlashInferAttnBackend(AttentionBackend):
                 plan=forward_batch.kv_loc_plan,
             )
         elif forward_mode.is_target_verify():
+            if os.environ.get("SGLANG_DBG_INDEX_STATE") == "1":
+                logger.error(
+                    "INDEXSTATE mode=%s bs=%d req_shape=%s req_min=%s req_max=%s "
+                    "seq_shape=%s seq_min=%s seq_max=%s seq_cpu_shape=%s seq_sum=%s "
+                    "spec=%s plan=%s",
+                    forward_mode, bs, tuple(req_pool_indices.shape),
+                    int(req_pool_indices[:bs].min().item()) if bs else None,
+                    int(req_pool_indices[:bs].max().item()) if bs else None,
+                    tuple(seq_lens.shape), int(seq_lens[:bs].min().item()) if bs else None,
+                    int(seq_lens[:bs].max().item()) if bs else None,
+                    None if seq_lens_cpu is None else tuple(seq_lens_cpu.shape),
+                    seq_lens_sum, type(spec_info).__name__ if spec_info is not None else None,
+                    type(forward_batch.kv_loc_plan).__name__ if forward_batch.kv_loc_plan is not None else None,
+                )
             self.indices_updater_prefill.update(
                 req_pool_indices[:bs],
                 seq_lens[:bs],
@@ -1007,6 +1084,8 @@ class FlashInferAttnBackend(AttentionBackend):
         return layer.k_scale, layer.v_scale
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
+        self.fused_split_mask = None
+        self.fused_split_plan = None
         swa_out_cache_loc = None
         if self.use_sliding_window_kv_pool and forward_batch.out_cache_loc is not None:
             swa_out_cache_loc = self.kv_index_translator.write_ids(
@@ -1133,6 +1212,8 @@ class FlashInferAttnBackend(AttentionBackend):
                         if not self._fused_split_plan(forward_batch):
                             self.fused_split_mask = None
                 except Exception as _e:
+                    if FUSED_KERNEL_EXEC:
+                        raise
                     # A partition failure must not degrade the ordinary path silently; log and
                     # fall through to the standard single-wrapper dispatch.
                     self.fused_split_mask = None
@@ -1155,6 +1236,15 @@ class FlashInferAttnBackend(AttentionBackend):
                     and not self.use_paged
                 )
                 extend_no_prefix = not any(forward_batch.extend_prefix_lens_cpu)
+
+            # The split runs on the paged path only (forward_extend dispatches it there), so a
+            # two-sided split plan must turn ragged off -- for the fused kernel and for the
+            # two-launch split alike. Forcing it only under FUSED_KERNEL_EXEC left the two-launch
+            # split planned every step and never run.
+            if self.fused_split_plan is not None and (
+                not FUSED_KERNEL_EXEC or "fused_kernel" in self.fused_split_plan
+            ):
+                use_ragged = False
 
             # Process multi-item scoring in attention backend instead of ForwardBatch
             multi_item_params = MultiItemScoringParams()
@@ -1503,12 +1593,24 @@ class FlashInferAttnBackend(AttentionBackend):
         return b[:n]
 
     def _fs_upload(self, name, arr, dtype, device):
-        """Stage a numpy array through the pinned host buffer into the device buffer."""
+        """Stage a numpy array through the pinned host buffer into the device buffer.
+
+        The host buffer is reused every step, so the CPU must not rewrite it while the previous
+        step's non-blocking copy out of it is still queued: wait for that copy's event first
+        (normally already complete, so this does not stall).
+        """
         n = int(arr.shape[0])
+        done = self._fs_copy_done.get(name)
+        if done is not None:
+            done.synchronize()
         h = self._fs_host_buf(name, n, dtype)
         h.copy_(torch.from_numpy(arr.astype(_FS_NP[dtype], copy=False)))
         d = self._fs_dev_buf(name, n, dtype, device)
         d.copy_(h, non_blocking=True)
+        if h.is_pinned():
+            if done is None:
+                done = self._fs_copy_done[name] = torch.cuda.Event()
+            done.record()
         return d
 
     def _fused_split_debug_check(self, where: str) -> None:
@@ -1849,9 +1951,180 @@ class FlashInferAttnBackend(AttentionBackend):
             n_fa3=len(fa3_rows),
             n_fa2=n2,
         )
+        if FUSED_KERNEL_EXEC and _fa3_span == (0, int(tok_off[int(_f3[-1]) + 1])):
+            self._prepare_fused_kernel_plan(
+                forward_batch,
+                self.fused_split_plan,
+                fa3_rows,
+                fa2_rows,
+                qo_lens,
+                seq_lens_cpu,
+                rp_cpu,
+                tok_off,
+                iu,
+                dev,
+            )
         if FUSED_SPLIT_DEBUG:
             self._fused_split_debug_check("plan")
         return True
+
+    def _prepare_fused_kernel_plan(
+        self,
+        forward_batch,
+        split_plan,
+        fa3_rows,
+        fa2_rows,
+        qo_lens,
+        seq_lens_cpu,
+        rp_cpu,
+        tok_off,
+        iu,
+        dev,
+    ):
+        """Prepare the real single-launch FA3+FA2 executor.
+
+        The ordinary split path below is retained for A/Bs. This path is only enabled by
+        ``SGLANG_FUSED_KERNEL_EXEC=1`` and calls the port07 extension directly. The extension
+        consumes its own four-task plan, so it cannot reuse BatchAttention's three-task plan.
+        """
+        try:
+            from sglang.srt.layers.attention.fused_fa3_loader import load_fused_fa3
+
+            import numpy as np
+            from flashinfer import BatchPrefillWithPagedKVCacheWrapper
+
+            # A1: compile-time FA3 tile variants are selected per batch at the dispatch seam.
+            # Small packed FA3 work uses 64 rows; larger work retains the 128-row WGMMA tile.
+            # Each variant has its own operator namespace, so loading one never replaces the
+            # other in torch.ops.
+            _gqa = iu.num_qo_heads // iu.num_kv_heads
+            _max_fa3_packed_q = int((np.asarray(qo_lens, dtype=np.int64)[fa3_rows] * _gqa).max())
+            fa3_cta_q = 64 if _max_fa3_packed_q <= 64 else 128
+            fused_namespace = load_fused_fa3(cta_q=fa3_cta_q)
+            fused_ops = getattr(torch.ops, fused_namespace)
+
+            num_sm = torch.cuda.get_device_properties(dev).multi_processor_count
+            # The single-launch executor has a different balance point from the legacy
+            # two-wrapper split: on the H200 mixed-MTP fixture, 112 FA3 SMs is the measured
+            # minimum of the fused kernel's makespan (0.0938 ms vs 0.1054 at 96 and 0.1508 at
+            # 120). Keep it overrideable for shape-specific serving sweeps.
+            sm_split = int(os.environ.get("SGLANG_FUSED_SM_FA3", "112"))
+            if not 0 < sm_split < num_sm:
+                raise ValueError(f"SM split {sm_split} must be between 1 and {num_sm - 1}")
+
+            if int(fa3_rows[0]) != 0 or not np.array_equal(
+                fa3_rows, np.arange(len(fa3_rows), dtype=fa3_rows.dtype)
+            ):
+                raise RuntimeError("fused kernel requires FA3 rows as a contiguous prefix")
+            if not np.array_equal(
+                fa2_rows,
+                np.arange(len(fa3_rows), len(qo_lens), dtype=fa2_rows.dtype),
+            ):
+                raise RuntimeError("fused kernel requires FA2 rows as a contiguous suffix")
+
+            state = self._fused_kernel_state
+            if state is None:
+                state = self._fused_kernel_state = {
+                    "fa3_workspace": torch.empty(256 << 20, dtype=torch.uint8, device=dev),
+                    "pers_int": torch.empty(64 << 20, dtype=torch.uint8, device=dev),
+                    "pers_float": torch.empty(128 << 20, dtype=torch.uint8, device=dev),
+                    "pers_pinned": torch.empty(64 << 20, dtype=torch.uint8, device="cpu", pin_memory=True),
+                }
+
+            n_fa3 = len(fa3_rows)
+            qo_np = np.asarray(qo_lens, dtype=np.int32)
+            kv_np = np.asarray(seq_lens_cpu.tolist(), dtype=np.int32)
+            qo_indptr_np = np.concatenate(([0], np.cumsum(qo_np, dtype=np.int64))).astype(np.int32)
+            page_counts = ((kv_np + self.page_size - 1) // self.page_size).astype(np.int32)
+            page_indptr_np = np.concatenate(([0], np.cumsum(page_counts, dtype=np.int64))).astype(np.int32)
+            kv_page_ids = []
+            r2t = self.req_to_token_pool.req_to_token
+            for row in range(len(qo_np)):
+                req = int(rp_cpu[row])
+                ids = r2t[req, : int(kv_np[row]) : self.page_size]
+                kv_page_ids.append((ids // self.page_size).to(torch.int32))
+            all_page_ids = torch.cat(kv_page_ids).to(dev)
+            fa3_page_ids = all_page_ids[: int(page_indptr_np[n_fa3])]
+            if os.environ.get("SGLANG_FUSED_KERNEL_DEBUG", "0") == "1":
+                key_cache, _ = self.token_to_kv_pool.get_kv_buffer(0)
+                cache_slots = int(key_cache.shape[0])
+                logger.info(
+                    "FUSED_KERNEL_LAYOUT q=%d rows=%d pages=%d fa3_pages=%d "
+                    "cache_slots=%d page_min=%d page_max=%d",
+                    int(qo_indptr_np[-1]),
+                    len(qo_np),
+                    int(page_indptr_np[-1]),
+                    int(page_indptr_np[n_fa3]),
+                    cache_slots,
+                    int(all_page_ids.min().item()) if all_page_ids.numel() else -1,
+                    int(all_page_ids.max().item()) if all_page_ids.numel() else -1,
+                )
+            fa3_q = torch.from_numpy(qo_indptr_np[: n_fa3 + 1])
+            fa3_k = torch.from_numpy(page_indptr_np[: n_fa3 + 1])
+            fa3_last = torch.from_numpy(
+                np.where(kv_np[:n_fa3] % self.page_size == 0, self.page_size, kv_np[:n_fa3] % self.page_size).astype(np.int32)
+            ).to(dev)
+            fa3 = BatchPrefillWithPagedKVCacheWrapper(
+                state["fa3_workspace"], kv_layout="NHD", backend="fa3"
+            )
+            fa3.plan(
+                fa3_q,
+                fa3_k,
+                fa3_page_ids,
+                fa3_last,
+                iu.num_qo_heads,
+                iu.num_kv_heads,
+                iu.head_dim,
+                self.page_size,
+                causal=True,
+                q_data_type=iu.q_data_type,
+                kv_data_type=iu.data_type,
+            )
+            fa3_sparse = fa3_page_ids
+            mask_cpu = torch.zeros(len(qo_np), dtype=torch.bool)
+            mask_cpu[:n_fa3] = True
+            pers_plan = fused_ops.build_fused_plan(
+                state["pers_int"],
+                state["pers_pinned"],
+                state["pers_float"],
+                torch.from_numpy(qo_indptr_np),
+                torch.from_numpy(page_indptr_np),
+                torch.from_numpy(kv_np),
+                mask_cpu,
+                iu.num_qo_heads,
+                iu.num_kv_heads,
+                iu.head_dim,
+                iu.head_dim,
+                self.page_size,
+                sm_split,
+                num_sm,
+                True,
+            )
+            split_plan["fused_kernel"] = dict(
+                fa3_int=fa3._int_workspace_buffer,
+                fa3_plan=list(fa3._plan_info),
+                pers_int=state["pers_int"],
+                pers_float=state["pers_float"],
+                pers_plan=list(pers_plan),
+                kv_indices=all_page_ids,
+                fa3_sparse=fa3_sparse,
+                sm_split=sm_split,
+                fa3_num_ctas=sm_split,
+                fa3_tokens=int(tok_off[n_fa3]),
+                fa3_pages=int(page_indptr_np[n_fa3]),
+                num_requests=len(qo_np),
+                max_pages=int(page_counts.max()),
+                max_q=int(qo_np.max()),
+                kv_lens=torch.from_numpy(kv_np).to(dev),
+                q_indptr=torch.from_numpy(qo_indptr_np).to(dev),
+                kv_indptr=torch.from_numpy(page_indptr_np).to(dev),
+                op_namespace=fused_namespace,
+                fa3_cta_q=fa3_cta_q,
+            )
+            logger.info("FUSED_KERNEL_PLAN ready fa3_rows=%d fa2_rows=%d", n_fa3, len(fa2_rows))
+        except Exception as exc:
+            split_plan.pop("fused_kernel", None)
+            raise RuntimeError("FUSED_KERNEL_PLAN failed") from exc
 
     def _fused_split_dispatch(
         self, q, layer, forward_batch, causal, logits_soft_cap, ref_wrapper=None, kv_cache=None
@@ -1870,6 +2143,12 @@ class FlashInferAttnBackend(AttentionBackend):
         pl = self.fused_split_plan
         if pl is None:
             return None
+        query_rows = q.numel() // (layer.tp_q_head_num * layer.head_dim)
+        if query_rows != pl["tok_total"]:
+            raise ValueError(
+                f"FUSED_SPLIT plan token extent {pl['tok_total']} does not match "
+                f"query rows {query_rows} for layer {layer.layer_id}"
+            )
         # Features the split does not yet cover. Each is refused, never approximated: the
         # alternative is silently wrong attention, which a throughput A/B would not reveal.
         # TODO(swa): a sliding-window layer reads `self._swa_kv_pool` with its own cache locs
@@ -1908,6 +2187,214 @@ class FlashInferAttnBackend(AttentionBackend):
             return None
         if FUSED_SPLIT_DEBUG:
             self._fused_split_debug_check(f"dispatch:L{layer.layer_id}")
+        fused_kernel = pl.get("fused_kernel")
+        if fused_kernel is not None:
+            try:
+                hq = layer.tp_q_head_num
+                qv = q.view(-1, hq, layer.head_dim)
+                o = torch.empty_like(qv)
+                from sglang.srt.mem_cache.layout.paged_view import paged_kv_view
+
+                key_cache, value_cache = self.token_to_kv_pool.get_kv_buffer(layer.layer_id)
+                key_cache = paged_kv_view(
+                    key_cache, self.page_size, layer.tp_k_head_num, layer.head_dim
+                )
+                value_cache = paged_kv_view(
+                    value_cache, self.page_size, layer.tp_v_head_num, layer.v_head_dim
+                )
+                getattr(torch.ops, fused_kernel["op_namespace"]).fused_run(
+                    qv,
+                    key_cache,
+                    value_cache,
+                    fused_kernel["kv_indices"],
+                    o,
+                    fused_kernel["fa3_int"],
+                    fused_kernel["fa3_plan"],
+                    fused_kernel["pers_int"],
+                    fused_kernel["pers_float"],
+                    fused_kernel["pers_plan"],
+                    self.indices_updater_prefill.num_qo_heads,
+                    self.indices_updater_prefill.num_kv_heads,
+                    self.page_size,
+                    layer.scaling,
+                    fused_kernel["sm_split"],
+                    fused_kernel["fa3_tokens"],
+                    fused_kernel["fa3_num_ctas"],
+                    fused_kernel["fa3_pages"],
+                    fused_kernel["fa3_sparse"],
+                    o,
+                    fused_kernel["num_requests"],
+                    fused_kernel["max_pages"],
+                    fused_kernel["max_q"],
+                    fused_kernel["kv_lens"],
+                    fused_kernel["q_indptr"],
+                    fused_kernel["kv_indptr"],
+                )
+                if os.environ.get("SGLANG_FUSED_KERNEL_SYNC", "0") == "1":
+                    torch.cuda.synchronize()
+                if FUSED_SPLIT_VERIFY:
+                    if ref_wrapper is None:
+                        raise RuntimeError("Fused verification requires the full-batch reference plan")
+                    before_reference = (
+                        o.detach().cpu()
+                        if os.environ.get("SGLANG_FUSED_VERIFY_SNAPSHOT") == "1"
+                        else None
+                    )
+                    reference = ref_wrapper.forward(
+                        qv,
+                        kv_cache,
+                        causal=causal,
+                        sm_scale=layer.scaling,
+                        logits_soft_cap=logits_soft_cap,
+                    ).view_as(o)
+                    if before_reference is not None:
+                        after_reference = o.detach().cpu()
+                        if not torch.equal(
+                            before_reference.view(torch.uint8), after_reference.view(torch.uint8)
+                        ):
+                            raise RuntimeError("Reference execution changed the fused output buffer")
+                    reference_norm = reference.float().norm(dim=-1).clamp_min(1e-6)
+                    relative_error = (
+                        (o.float() - reference.float()).norm(dim=-1) / reference_norm
+                    )
+                    if not torch.isfinite(o).all() or not torch.isfinite(reference).all():
+                        raise RuntimeError("Fused verification found non-finite attention output")
+                    worst_error = relative_error.max().item()
+                    failed_verification = worst_error > FUSED_SPLIT_TOL
+                    failed_head = None
+                    if failed_verification:
+                        from sglang.srt.layers.attention.fused_fa3_validation import verify_disputed_heads
+
+                        adjudication = verify_disputed_heads(
+                            qv, key_cache, value_cache, o, reference,
+                            fused_kernel["q_indptr"], fused_kernel["kv_indptr"],
+                            fused_kernel["kv_lens"], fused_kernel["kv_indices"],
+                            torch.nonzero(relative_error > FUSED_SPLIT_TOL),
+                            layer.scaling, FUSED_SPLIT_TOL,
+                            causal=causal, logits_soft_cap=logits_soft_cap or 0.0,
+                            key_scale=layer.k_scale_float if layer.k_scale_float is not None else 1.0,
+                            value_scale=layer.v_scale_float if layer.v_scale_float is not None else 1.0,
+                        )
+                        failed_verification = not all(result["passed"] for result in adjudication)
+                        logger.info("FUSED_KERNEL_VERIFY_FP32 %s", adjudication)
+                        if failed_verification:
+                            failed_head = max(
+                                (result for result in adjudication if not result["passed"]),
+                                key=lambda result: result["fused_relative_error"],
+                            )
+                            worst_error = failed_head["fused_relative_error"]
+                    if failed_verification:
+                        dump_path = os.environ.get("SGLANG_FUSED_FAILURE_DUMP")
+                        if dump_path:
+                            page_ids = fused_kernel["kv_indices"].long()
+                            plan_values = fused_kernel["pers_plan"]
+                            if len(plan_values) != 59:
+                                raise RuntimeError("Unexpected fused plan layout in failure capture")
+                            plan_bytes = plan_values[55] + ((plan_values[56] * 4 + 15) // 16) * 16
+                            saved_integer_workspace = fused_kernel["pers_int"][:plan_bytes].cpu()
+                            integer_values = saved_integer_workspace.view(torch.int32)
+                            merge_rows = plan_values[57]
+                            merge_offsets = integer_values[
+                                plan_values[49] // 4 : plan_values[49] // 4 + merge_rows + 1
+                            ]
+                            merge_destinations = integer_values[
+                                plan_values[50] // 4 : plan_values[50] // 4 + merge_rows
+                            ]
+                            worst_query_row = failed_head["query_row"]
+                            worst_query_head = failed_head["query_head"]
+                            chunk_role = 3 if worst_query_row < fused_kernel["fa3_tokens"] else 0
+                            matching_rows = torch.nonzero(
+                                merge_destinations // hq == worst_query_row
+                            ).flatten().tolist()
+                            kv_heads = self.indices_updater_prefill.num_kv_heads
+                            partial_rows = []
+                            for merge_row in matching_rows:
+                                slot_begin = int(merge_offsets[merge_row])
+                                slot_end = int(merge_offsets[merge_row + 1])
+                                output_begin = plan_values[47] + slot_begin * kv_heads * hd * 2
+                                output_end = plan_values[47] + slot_end * kv_heads * hd * 2
+                                lse_begin = plan_values[48] + slot_begin * kv_heads * 4
+                                lse_end = plan_values[48] + slot_end * kv_heads * 4
+                                partial_rows.append({
+                                    "head_in_group": int(merge_destinations[merge_row] % hq),
+                                    "output": fused_kernel["pers_float"][output_begin:output_end]
+                                        .view(torch.bfloat16).reshape(-1, kv_heads, hd).cpu(),
+                                    "lse": fused_kernel["pers_float"][lse_begin:lse_end]
+                                        .view(torch.float32).reshape(-1, kv_heads).cpu(),
+                                })
+                            torch.save(
+                                {
+                                    "q": qv.detach().cpu(),
+                                    "k": key_cache.index_select(0, page_ids).cpu(),
+                                    "v": value_cache.index_select(0, page_ids).cpu(),
+                                    "output": o.detach().cpu(),
+                                    "reference": reference.detach().cpu(),
+                                    "q_indptr": fused_kernel["q_indptr"].cpu(),
+                                    "kv_indptr": fused_kernel["kv_indptr"].cpu(),
+                                    "page_ids": page_ids.cpu(),
+                                    "kv_lens": fused_kernel["kv_lens"].cpu(),
+                                    "num_fa3_rows": pl["n_fa3"],
+                                    "sm_split": fused_kernel["sm_split"],
+                                    "sm_scale": layer.scaling,
+                                    "layer_id": layer.layer_id,
+                                    "page_size": self.page_size,
+                                    "k_stride": key_cache.stride(),
+                                    "v_stride": value_cache.stride(),
+                                    "q_stride": qv.stride(),
+                                    "o_stride": o.stride(),
+                                    "pers_plan": list(plan_values),
+                                    "pers_int": saved_integer_workspace,
+                                    "worst_query_row": worst_query_row,
+                                    "worst_query_head": worst_query_head,
+                                    "partial_rows": partial_rows,
+                                    "kv_chunk_size": int(
+                                        integer_values[plan_values[46] // 4 + chunk_role]
+                                    ),
+                                    "fa3_plan": list(fused_kernel["fa3_plan"]),
+                                    "fa3_int": fused_kernel["fa3_int"].cpu(),
+                                    "kernel_metadata": {
+                                        name: fused_kernel[name]
+                                        for name in (
+                                            "sm_split", "fa3_num_ctas", "fa3_tokens", "fa3_pages",
+                                            "num_requests", "max_pages", "max_q",
+                                        )
+                                    },
+                                    "kernel_heads": (
+                                        self.indices_updater_prefill.num_qo_heads,
+                                        self.indices_updater_prefill.num_kv_heads,
+                                    ),
+                                    "kernel_environment": {
+                                        name: value for name, value in os.environ.items()
+                                        if name.startswith((
+                                            "FUSED_", "FLASHINFER_FUSED_", "SGLANG_FUSED_",
+                                        )) or name in (
+                                            "FA3_STAGES", "Q_REUSE_FENCE", "O_HANDSHAKE",
+                                            "SPLIT_SMEM_O", "NB_SYNC", "GRID_1D", "PACKED_O",
+                                            "ALIAS_SMEM",
+                                        )
+                                    },
+                                },
+                                dump_path,
+                            )
+                            logger.error("FUSED_KERNEL_FAILURE_DUMP %s", dump_path)
+                        raise RuntimeError(
+                            f"Fused verification failed on layer {layer.layer_id}: "
+                            f"worst head relative error {worst_error:.6f}"
+                        )
+                    if layer.layer_id == 0:
+                        logger.info("FUSED_KERNEL_VERIFY PASS worst_head=%.6f", worst_error)
+                self.fused_split_calls += 1
+                if self.fused_split_calls % 100 == 1:
+                    logger.info(
+                        "FUSED_KERNEL_CALLS %d fa3_rows=%d fa2_rows=%d sm_split=%d",
+                        self.fused_split_calls,
+                        pl["n_fa3"],
+                        pl["n_fa2"],
+                        fused_kernel["sm_split"],
+                    )
+                return o
+            except Exception as exc:
+                raise RuntimeError("FUSED_KERNEL launch failed") from exc
         o = torch.empty_like(qv)
         # Contiguous spans -> write through views, no scatter. See the plan for the measurement.
         _s3, _s2 = pl.get("fa3_span"), pl.get("fa2_span")
@@ -1934,6 +2421,19 @@ class FlashInferAttnBackend(AttentionBackend):
         k_buf = paged_kv_view(_k_raw, self.page_size, layer.tp_k_head_num, hd)
         v_buf = paged_kv_view(_v_raw, self.page_size, layer.tp_v_head_num, layer.v_head_dim)
         _q3 = qv[_s3[0] : _s3[1]] if _use_views else qv[pl["fa3_tok"]]
+        _overlap = (
+            SPLIT_OVERLAP
+            and not pl.get("no_fa2_wrapper")
+            and not torch.cuda.is_current_stream_capturing()
+        )
+        if _overlap:
+            _main = torch.cuda.current_stream()
+            if getattr(self, "_split_side_stream", None) is None:
+                self._split_side_stream = torch.cuda.Stream(device=qv.device)
+            _side = self._split_side_stream
+            _side.wait_stream(_main)
+            _side_ctx = torch.cuda.stream(_side)
+            _side_ctx.__enter__()
         o_fa3 = flash_attn_with_kvcache(
             q=_q3,
             k_cache=k_buf,
@@ -1947,10 +2447,22 @@ class FlashInferAttnBackend(AttentionBackend):
             softcap=logits_soft_cap if logits_soft_cap else 0.0,
             sm_margin=self.fused_sm_margin,
         )
-        if _use_views:
-            o[_s3[0] : _s3[1]].copy_(o_fa3.view(-1, hq, hd))
+        if _overlap:
+            # Leave the side stream; FA2 now launches on the main stream while FA3 still runs.
+            _side_ctx.__exit__(None, None, None)
+            _fa3_done = torch.cuda.Event()
+            _fa3_done.record(_side)
+            # Main-stream tensors the side stream reads must not be recycled before it finishes;
+            # o_fa3 was allocated on the side stream and is consumed on the main one.
+            for _t in (_q3, pl["page_table"], pl["cache_seqlens"], pl["cu_q"]):
+                if isinstance(_t, torch.Tensor):
+                    _t.record_stream(_side)
+            o_fa3.record_stream(_main)
         else:
-            o.index_copy_(0, pl["fa3_tok"], o_fa3.view(-1, hq, hd).to(o.dtype))
+            if _use_views:
+                o[_s3[0] : _s3[1]].copy_(o_fa3.view(-1, hq, hd))
+            else:
+                o.index_copy_(0, pl["fa3_tok"], o_fa3.view(-1, hq, hd).to(o.dtype))
 
         if pl.get("no_fa2_wrapper"):
             if ref_wrapper is None or kv_cache is None:
@@ -1985,6 +2497,13 @@ class FlashInferAttnBackend(AttentionBackend):
             o[_s2[0] : _s2[1]].copy_(o_fa2.view(-1, hq, hd))
         else:
             o.index_copy_(0, pl["fa2_tok"], o_fa2.view(-1, hq, hd).to(o.dtype))
+        if _overlap:
+            _main.wait_event(_fa3_done)
+            if _use_views:
+                o[_s3[0] : _s3[1]].copy_(o_fa3.view(-1, hq, hd))
+            else:
+                o.index_copy_(0, pl["fa3_tok"], o_fa3.view(-1, hq, hd).to(o.dtype))
+            self.split_overlap_calls = getattr(self, "split_overlap_calls", 0) + 1
         self.fused_split_views = getattr(self, "fused_split_views", 0) + (1 if _use_views else 0)
         # Logged, not merely counted: an unlogged counter already made one perf arm
         # uninterpretable (base_plan_skipped=n/a).
@@ -2038,12 +2557,14 @@ class FlashInferAttnBackend(AttentionBackend):
         # has already produced one false pass on this project.
         if self.fused_split_calls % 500 == 1:
             logger.info(
-                "FUSED_SPLIT_CALLS %d (fa3_rows=%d fa2_rows=%d sm_margin=%d onesided=%d)",
+                "FUSED_SPLIT_CALLS %d (fa3_rows=%d fa2_rows=%d sm_margin=%d onesided=%d "
+                "overlapped=%d)",
                 self.fused_split_calls,
                 pl["n_fa3"],
                 pl["n_fa2"],
                 self.fused_sm_margin,
                 self.fused_split_onesided,
+                getattr(self, "split_overlap_calls", 0),
             )
         # The caller flattens to [-1, hq*hd]; hand back the head-shaped tensor.
         return o

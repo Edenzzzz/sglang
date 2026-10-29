@@ -260,6 +260,7 @@ def predict_forward_snapshot_ms(
     decode_kv_tokens: int,
     decode_batch_size: int,
     chunked_prefill_size: Optional[int],
+    acceptance_length: float = 1.0,
 ) -> Optional[float]:
     """Predict the next full model-forward cost for a server load snapshot.
 
@@ -289,7 +290,11 @@ def predict_forward_snapshot_ms(
     )
     if n_p == 0 and decode_bs == 0:
         return 0.0
-    return float(model_predict_fn(model_n_p, model_r_p, decode_avg_kv, decode_bs))
+    return float(
+        model_predict_fn(
+            model_n_p, model_r_p, decode_avg_kv, decode_bs, acceptance_length
+        )
+    )
 
 
 def edf_compute_max_chunk_size(
@@ -354,7 +359,8 @@ def edf_compute_max_chunk_size(
     # the violation. A pure-decode step lets overdue requests catch up and
     # refreshes their slack before the next admission decision.
     decode_only_ms = (
-        model_predict_fn(0, 0, decode_avg_kv, decode_bs) * LATENCY_SAFETY_MARGIN
+        model_predict_fn(0, 0, decode_avg_kv, decode_bs, bind_a)
+        * LATENCY_SAFETY_MARGIN
         + plan_overhead_ms
     )
     if min_slack_ms <= 0 or decode_only_ms > min_slack_ms:
@@ -369,7 +375,9 @@ def edf_compute_max_chunk_size(
             mid, prefill_prefix_len
         )
         predicted_ms = (
-            model_predict_fn(model_n_p, model_r_p, decode_avg_kv, decode_bs)
+            model_predict_fn(
+                model_n_p, model_r_p, decode_avg_kv, decode_bs, bind_a
+            )
             * LATENCY_SAFETY_MARGIN
             + plan_overhead_ms
         )
@@ -437,7 +445,14 @@ class LatencyPredictor:
         ]
         logger.info(f"EDF latency model loaded: features={checkpoint.get('feature_names', 'unknown')}")
 
-    def predict(self, n_p: int, r_p: float, r_d: float, decode_bs: int) -> float:
+    def predict(
+        self,
+        n_p: int,
+        r_p: float,
+        r_d: float,
+        decode_bs: int,
+        acceptance_length: float = 1.0,
+    ) -> float:
         """Predict server step latency in milliseconds.
 
         Uses overlap=False (non-overlapped execution) for conservative estimate.
@@ -468,7 +483,14 @@ class LinearStepPredictor:
             self.c = json.load(f)["coef"]
         logger.info("EDF linear step model loaded from %s: %s", path, self.c)
 
-    def predict(self, n_p: float, r_p: float, decode_avg_kv: float, decode_bs: float) -> float:
+    def predict(
+        self,
+        n_p: float,
+        r_p: float,
+        decode_avg_kv: float,
+        decode_bs: float,
+        acceptance_length: float = 1.0,
+    ) -> float:
         c = self.c
         return (
             c["c0"]
@@ -476,6 +498,7 @@ class LinearStepPredictor:
             + c["c_attn"] * (n_p * r_p + 0.5 * n_p * n_p) / 1e6
             + c["c_bs"] * decode_bs
             + c["c_kv"] * decode_bs * decode_avg_kv / 1e3
+            + c.get("c_acc", 0.0) * acceptance_length
         )
 
 

@@ -494,7 +494,21 @@ class SamplingBatchInfo:
             self.has_custom_logit_processor = False
 
     def merge_batch(self, other: SamplingBatchInfo):
-        self.penalizer_orchestrator.merge(other.penalizer_orchestrator)
+        if self.penalizer_orchestrator is not None:
+            if other.penalizer_orchestrator is None:
+                raise ValueError("Cannot merge scheduler sampling state with forward-only sampling state")
+            self.penalizer_orchestrator.merge(other.penalizer_orchestrator)
+        elif other.penalizer_orchestrator is not None:
+            raise ValueError("Cannot merge forward-only sampling state with scheduler sampling state")
+        else:
+            self.acc_additive_penalties = merge_bias_tensor(
+                self.acc_additive_penalties, other.acc_additive_penalties,
+                len(self), len(other), self.device, 0.0,
+            )
+            self.acc_scaling_penalties = merge_bias_tensor(
+                self.acc_scaling_penalties, other.acc_scaling_penalties,
+                len(self), len(other), self.device, 1.0,
+            )
 
         # Merge the custom logit processors and custom params lists
         if self.has_custom_logit_processor or other.has_custom_logit_processor:

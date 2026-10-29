@@ -383,8 +383,19 @@ def get_config(
             current = getattr(config, key, None)
             if isinstance(value, dict) and isinstance(current, PretrainedConfig):
                 current.update(value)
-            else:
-                setattr(config, key, value)
+                continue
+            if key in ("rope_scaling", "rope_parameters") and isinstance(value, dict):
+                # transformers v5 stores rope_theta inside the rope dict, so replacing the
+                # dict with a scaling-only override drops the base frequency and
+                # get_rope_config falls back to 10000 (Qwen2.5 uses 1e6).
+                current_rope = getattr(config, "rope_parameters", None) or current
+                if (
+                    "rope_theta" not in value
+                    and isinstance(current_rope, dict)
+                    and "rope_theta" in current_rope
+                ):
+                    value = {**value, "rope_theta": current_rope["rope_theta"]}
+            setattr(config, key, value)
 
     if is_gguf and not gguf_has_sidecar_config:
         if config.model_type not in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES:

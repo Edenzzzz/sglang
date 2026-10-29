@@ -107,7 +107,14 @@ class AnalyticOverlapPredictor:
             return t_d + t_p
         return max(t_p, t_d) + p.beta * min(t_p, t_d)
 
-    def predict(self, n_p: float, r_p: float, decode_avg_kv: float, decode_bs: float) -> float:
+    def predict(
+        self,
+        n_p: float,
+        r_p: float,
+        decode_avg_kv: float,
+        decode_bs: float,
+        acceptance_length: float = 1.0,
+    ) -> float:
         """Whole forward-step latency in ms.
 
         Args match the EDF MLP contract: n_p prefill chunk tokens, r_p the

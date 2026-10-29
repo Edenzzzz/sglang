@@ -4138,6 +4138,24 @@ class Scheduler(
         # CANNOT happen here -- the draft tokens do not exist until draft() runs inside the spec
         # worker, which is after the scheduler has formed the step. So attach the running batch and
         # let EAGLEWorkerV2.forward_mixed_spec draft, merge (mix_with_verify) and split.
+        # CLAUSE-LEVEL GATE TRACE (ours, 2026-10-11). The gate's existing MIXEDGATE print lives
+        # INSIDE this if, so when the condition is false it says nothing -- which is exactly the
+        # state eight serving attempts reached: 0 MIXEDGATE lines over a 9474-line run with 4195
+        # prefill batches that had decode co-resident. This prints each clause BEFORE the branch, so
+        # a false condition names its own cause instead of being silent. Gated on the same debug
+        # flag; one line per step, so it is only for diagnosis runs.
+        if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
+            logger.error(
+                "MIXEDCLAUSE env=%s mixed_chunk=%s spec=%s running_nonempty=%s "
+                "no_logprob=%s no_embeds=%s no_beam=%s",
+                os.environ.get("SGLANG_MIXED_SPEC") == "1",
+                self.is_mixed_chunk,
+                not self.spec_algorithm.is_none(),
+                not running_batch.is_empty(),
+                not (new_batch.return_logprob or running_batch.return_logprob),
+                new_batch.input_embeds is None,
+                all(r.beam_group is None for r in running_batch.reqs),
+            )
         if (
             os.environ.get("SGLANG_MIXED_SPEC") == "1"
             and self.is_mixed_chunk
@@ -4364,30 +4382,46 @@ class Scheduler(
            passes overlap=False.
         """
         # 1. snapshot
-        snapshot_v2_full = not batch.spec_algorithm.is_none()
-        sched_snapshot = (
-            {f.name: getattr(batch, f.name) for f in dataclasses.fields(batch)}
-            if snapshot_v2_full
-            else None
-        )
-        sched_sampling_info = batch.sampling_info
+        participants = [batch]
+        mixed_running = getattr(batch, "mixed_spec_running", None)
+        if mixed_running is not None and mixed_running is not batch:
+            participants.append(mixed_running)
+        snapshots = []
+        for participant in participants:
+            snapshot = (
+                {field.name: getattr(participant, field.name) for field in dataclasses.fields(participant)}
+                if not participant.spec_algorithm.is_none()
+                else None
+            )
+            snapshots.append((participant, snapshot, participant.sampling_info))
 
         # 2. sampling_info substitute
-        if sched_sampling_info is not None:
-            batch.sampling_info = sched_sampling_info.copy_for_forward()
+        for participant, _, sampling_info in snapshots:
+            if sampling_info is not None:
+                participant.sampling_info = sampling_info.copy_for_forward()
 
         # 3. pin for 2-iter tensor lifetime (overlap path only)
         if overlap:
             self.record_batch_in_overlap(batch)
+            for participant in participants[1:]:
+                self.batch_record_buf[self.batch_record_ct].extend([
+                    participant,
+                    [getattr(participant, field.name) for field in dataclasses.fields(participant)],
+                ])
+                for field in dataclasses.fields(participant):
+                    value = getattr(participant, field.name)
+                    if hasattr(value, "is_cuda") and value.is_cuda:
+                        value.record_stream(self.forward_stream)
 
         try:
             yield
         finally:
-            if snapshot_v2_full:
-                for name, value in sched_snapshot.items():
-                    setattr(batch, name, value)
-            else:
-                batch.sampling_info = sched_sampling_info
+            for participant, snapshot, sampling_info in snapshots:
+                if snapshot is not None:
+                    for name, value in snapshot.items():
+                        setattr(participant, name, value)
+                else:
+                    participant.sampling_info = sampling_info
 
     @scheduler_stage_method(SCHEDULER_STAGE_RUN_BATCH)
     def run_batch(
@@ -4476,9 +4510,21 @@ class Scheduler(
                                 )
 
                         # FIXME: pp is not compatible with overlap
+                        _step_sync = os.environ.get("SGLANG_DEBUG_STEP_SYNC", "")
+                        _is_mixed_step = getattr(batch, "mixed_spec_running", None) is not None
+                        self._steptrace_begin(batch)
                         batch_result = self.model_worker.forward_batch_generation(
                             batch, **fwd_kwargs
                         )
+                        self._steptrace_end()
+                        # Diagnostic: device sync after a step, to bisect a cross-step race by step
+                        # kind (all | mixed | nonmixed).
+                        if (
+                            _step_sync == "all"
+                            or (_step_sync == "mixed" and _is_mixed_step)
+                            or (_step_sync == "nonmixed" and not _is_mixed_step)
+                        ):
+                            torch.cuda.synchronize()
                         if batch.spec_algorithm.is_none():
                             self.future_map.publish(future_indices, batch.seq_lens + 1)
                         # Park any refs the worker wants kept alive 2 iters
@@ -4560,15 +4606,22 @@ class Scheduler(
                         # extends. Correct for the next iteration's resolve, but it gives up
                         # that overlap -- revisit once the step is green (perf, not
                         # correctness).
-                        self.future_map.publish(
-                            _mix_run.req_pool_indices, _mix_res.new_seq_lens
-                        )
-                        _mix_run.spec_info.future_indices = _mix_run.req_pool_indices
-                        # Stash the verify half's relay payload, or next iter's
-                        # resolve_forward_inputs for this batch finds nothing to resolve.
-                        self._relay_forward_payload(
-                            _mix_run, _mix_run.req_pool_indices, _mix_res
-                        )
+                        # Both writes are GPU scatters of tensors the forward stream is still
+                        # producing (new_seq_lens, the draft input), and this code runs after
+                        # the forward-stream block, so issue them on the forward stream: on the
+                        # schedule stream they raced the step and published stale seq_lens,
+                        # which the next step resolved into out-of-range indices (the graphs-on
+                        # device assert that a sync after mixed steps cured).
+                        with self.forward_stream_ctx:
+                            self.future_map.publish(
+                                _mix_run.req_pool_indices, _mix_res.new_seq_lens
+                            )
+                            _mix_run.spec_info.future_indices = _mix_run.req_pool_indices
+                            # Stash the verify half's relay payload, or next iter's
+                            # resolve_forward_inputs for this batch finds nothing to resolve.
+                            self._relay_forward_payload(
+                                _mix_run, _mix_run.req_pool_indices, _mix_res
+                            )
                         # ... and give it the same D2H as the batch that ran:
                         # _resolve_spec_v2_tokens asserts next_token_ids.is_cpu.
                         _mix_res.copy_done = self.device_module.Event()
@@ -4663,6 +4716,9 @@ class Scheduler(
                     # Non-overlap: drive the V2 worker synchronously (no
                     # future_map relay / on_publish).
                     resolve_forward_inputs(batch, self.future_map)
+                    _mix_pre = getattr(batch, "mixed_spec_running", None)
+                    if _mix_pre is not None:
+                        resolve_forward_inputs(_mix_pre, self.future_map)
                     with self._forward_isolation(batch, overlap=False):
                         batch_result = self.model_worker.forward_batch_generation(
                             batch, pp_proxy_tensors=pp_proxy_tensors
@@ -4687,6 +4743,28 @@ class Scheduler(
                             batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
                     batch.input_ids = None  # rebuilt next iter from draft_token
                     self.update_cache_from_scheduler(batch, batch_result)
+                    # 4-mode step: carry the verify half forward the way the lines above
+                    # carry `batch` -- its own draft input, accepted seq_lens and a host copy
+                    # of its results (process_batch_result_decode needs next_token_ids on the
+                    # CPU) -- and hand result processing a snapshot, as the overlap path does.
+                    _mix_run = getattr(batch_result, "mixed_running_batch", None)
+                    _mix_res = getattr(batch_result, "mixed_running_result", None)
+                    if _mix_run is not None and _mix_res is not None:
+                        _mix_run.spec_info = _mix_res.next_draft_input
+                        _mix_seq = _mix_res.new_seq_lens
+                        if _mix_seq is not None and _mix_seq is not _mix_run.seq_lens:
+                            _mix_run.seq_lens = _mix_seq
+                            if _mix_run.seq_lens_cpu is not None:
+                                _mix_run.seq_lens_cpu = _mix_seq.to("cpu")
+                                _mix_run.seq_lens_sum = int(_mix_run.seq_lens_cpu.sum())
+                        _mix_run.input_ids = None
+                        self.update_cache_from_scheduler(_mix_run, _mix_res)
+                        _mix_res.copy_done = self.device_module.Event()
+                        _mix_res.copy_to_cpu(
+                            return_logprob=_mix_run.return_logprob,
+                            return_hidden_states=_mix_run.return_hidden_states,
+                        )
+                        batch_result.mixed_running_batch = _mix_run.copy()
                     # Only the last PP rank owns real results requiring D2H; other ranks
                     # consume device tensors rebuilt from the output ring.
                     batch_result.copy_done = self.device_module.Event()
@@ -4786,6 +4864,60 @@ class Scheduler(
         if pending is not None:
             self.ipc_channels.send_to_tokenizer.send_output(pending)
             model_runner._pending_elastic_scale_update = None
+
+    def _steptrace_begin(self, batch: ScheduleBatch) -> None:
+        """SGLANG_STEP_TRACE=1: one STEPTRACE line per forward, the input of the EDF step-model
+        fit (tasks/perf_model/fit_mtp_step.py). Rows with more than one new token are prefill
+        rows (n_p, their tokens and prefix); the rest, plus a 4-mode step's verify rows, are
+        decode rows (n_d, their KV). t is the host launch time; gpu= is the forward's GPU time,
+        logged once its end event has completed so tracing never synchronises."""
+        if os.environ.get("SGLANG_STEP_TRACE") != "1":
+            return
+        trace = getattr(self, "_steptrace", None)
+        if trace is None:
+            trace = self._steptrace = []
+        is_extend = batch.forward_mode.is_extend()
+        seq_lens = batch.seq_lens_cpu.tolist() if batch.seq_lens_cpu is not None else []
+        n_p = p_tok = p_prefix = n_d = d_kv = max_ext = 0
+        for i, req in enumerate(batch.reqs):
+            ext = int(getattr(req, "extend_input_len", 0) or 0) if is_extend else 0
+            sl = int(seq_lens[i]) if i < len(seq_lens) else 0
+            if ext > 1:
+                n_p += 1
+                p_tok += ext
+                p_prefix += max(sl - ext, 0)
+                max_ext = max(max_ext, ext)
+            else:
+                n_d += 1
+                d_kv += sl
+        running = getattr(batch, "mixed_spec_running", None)
+        if running is not None and running.seq_lens_cpu is not None:
+            run_lens = running.seq_lens_cpu.tolist()
+            n_d += len(run_lens)
+            d_kv += int(sum(run_lens))
+            seq_lens = seq_lens + run_lens
+        reporter = self.metrics_reporter
+        acc = (
+            reporter.spec_total_num_accept_tokens / reporter.spec_total_num_forward_ct
+            if reporter.spec_total_num_forward_ct else 1.0
+        )
+        feat = (
+            "STEPTRACE %s et=%d bs=%d np=%d ptok=%d pf=%d nd=%d dkv=%d kv=%d mx=%d acc=%.4f t=%.6f"
+            % (getattr(batch.forward_mode, "name", str(batch.forward_mode)),
+               int(batch.extend_num_tokens or 0), batch.batch_size(), n_p, p_tok, p_prefix,
+               n_d, d_kv, int(sum(seq_lens)), max_ext, acc, time.perf_counter())
+        )
+        while trace and trace[0][2].query():
+            done_feat, begin, end = trace.pop(0)
+            logger.info("%s gpu=%.4f", done_feat, begin.elapsed_time(end))
+        begin = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        trace.append((feat, begin, end))
+        begin.record()
+
+    def _steptrace_end(self) -> None:
+        if os.environ.get("SGLANG_STEP_TRACE") == "1" and getattr(self, "_steptrace", None):
+            self._steptrace[-1][2].record()
 
     def _relay_forward_payload(
         self,

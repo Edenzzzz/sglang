@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.51.0 — Item 18's register story was measured against the wrong baseline (2026-10-29)
+- The user asked why the guest-free arm spills at all, since a 16-row tile is cheaper in registers than a 64-row
+  one. Both halves of that were right, and chasing it found the real baseline error.
+- "Guest compiled out" is FLASHINFER_FUSED_DRAIN_NOOP=1: it deletes the three Runner::Run call sites but keeps
+  replace mode's CTA shape and its explicit warpgroup_reg_dealloc<24> / warpgroup_reg_alloc<240>. With no guest the
+  spill is 16 B, i.e. nothing; adding the 16-row guest costs 148 B more, which is small for exactly the reason
+  given -- a 16-row tile is cheap.
+- The correction: quoting 164 B against the guest-free 16 B framed the guest as a cost to justify. Against the
+  STOCK q64 path (same TU, bodies out, no piggyback) the piggyback build is strictly BETTER: 168 registers against
+  144, and 164 B of spill against 1560 B with a 536 B stack frame. Same kernel, same tile, same 256-thread CTA, so
+  it is single-axis. There is no register case against item 18 to answer.
+- Also killed: that 168 is a hardware cap here. At 256 threads the launch-bound cap is 256; 168 is a chosen
+  allocation. The 168 = 65536/384 coincidence belongs to the q128 arm only.
+- Shared memory measured on the H200: FA3 at q64 147 536 B + the 16-row class 69 632 B = 217 168 B against the
+  232 448 B opt-in maximum, so it fits with 6.6% headroom. Supersedes the estimated 218 160 B.
+- Both remaining item-18 questions are now the only ones: is it correct, and is it faster.
+
 ## v3.50.0 — All 48 arms re-scored; the SLO-budgeted chunk is a negative result (2026-10-29)
 - Rather than convert old numbers into the new metric set, every surviving arm's raw per-request records were
   re-scored, so each reported figure is measured in the metric it is reported in. Comparability was checked, not

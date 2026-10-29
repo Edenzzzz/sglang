@@ -1328,8 +1328,31 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       | q128, guest compiled out (control) | 168 reg / **0 B** | 168 / 0 B |
       | **replace + 16-row guest** | 168 reg / **164 B** | 168 / 164 B |
       | **replace, guest compiled out** | 168 reg / **16 B** | 168 / 16 B |
-      Every arm matches exactly, so the toolchains agree and **the variant's marginal cost of 148 B is confirmed on
-      the target hardware.** Commands: `ub/gate_q64_registers_20261028.py --qs 64
+      Every arm matches exactly, so the toolchains agree.
+      - **CORRECTED 2026-10-29 (user): 148 B is the wrong figure to quote, because the guest-free arm is the wrong
+        baseline.** Reading 164 B against the guest-free 16 B frames the guest as a register cost needing
+        justification. The right baseline is the STOCK q64 path -- the same translation unit with the Runner bodies
+        compiled out and no piggyback, so FA3 runs at q64 in its own CTA without replace mode's register
+        redistribution. All three are the same kernel (`FusedFA3PersistentKernel`), the same tile and the same
+        256-thread CTA (`NUM_WARPS = ((CTA_Q/64)+1)*4 = 8`, which replace mode requires by static assert), so this
+        is a single-axis comparison:
+        | arm | registers | spill stores | spill loads | stack |
+        |---|---|---|---|---|
+        | stock q64, no piggyback | 144 | **1560 B** | 1312 B | 536 B |
+        | replace + guest compiled out | 168 | **16 B** | 20 B | 16 B |
+        | replace + 16-row guest | 168 | **164 B** | 280 B | 96 B |
+        **The piggyback build is strictly better on registers than the stock q64 path, guest included**: 168
+        registers against 144 and 9.5x less spill. The explicit `warpgroup_reg_dealloc<24>` /
+        `warpgroup_reg_alloc<240>` redistribution gives FA3's consumers an allocation ptxas does not find on its
+        own at q64, where it settles at 144 registers with a 536 B stack frame. So there is no register case
+        against item 18 to answer; the question is only whether it is CORRECT and FASTER.
+      - Two readings this kills: that the guest costs registers (it costs 148 B on top of an allocation that is
+        already 1.4k B better than stock), and that 168 is a hardware cap here. At 256 threads the launch-bound cap
+        is 65536/256 = 256, so 168 is a chosen allocation, not a ceiling. The 168 = 65536/384 coincidence belongs
+        to the q128 arm and must not be carried over to this one.
+      - **Do not read the Symmetric row as the variant's.** `FusedFA3PersistentSymmetricKernel` is built from the
+        same TU and shows 216 registers / 3740 B with the guest, but symmetric mode is RETRACTED -- it computes FA3
+        wrong (relative error 4.0) -- so it is not the kernel in play and its spill says nothing about this one. Commands: `ub/gate_q64_registers_20261028.py --qs 64
       "--extra=-DFUSED_Q64_PIGGYBACK=1 -DFUSED_PIGGYBACK_REPLACE=1 [-DFUSED_DRAIN_ONLY16=1 |
       -DFLASHINFER_FUSED_DRAIN_NOOP=1]"`, logs `/opt/tiger/w/i18_{only16,noop}.log`.
       - **Two wrong invocations failed loudly rather than producing a number, which is why this is trustworthy.**
@@ -1345,6 +1368,18 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
       - Still outstanding on this item: the correctness fixture (needs a GPU run, not just `nvcc -c`) and the
         timing, both of which can run on this trial now. The 1.1-2.3% ceiling at 128K is unchanged, so neither can
         move the paper's claims.
+    - **[x] Shared memory MEASURED on the H200 (2026-10-29), and it fits.** The piggyback is the only configuration
+      where an FA3 CTA and the 16-row row mainloop need their shared memory at the same time, so the kernel must
+      ask for the SUM rather than the maximum. Read out of a deliberately failed template instantiation
+      (`probe_fused_smem_sizes_20261028.cu`, reusing the only16 arm's exact flag set):
+      | region | bytes |
+      |---|---|
+      | FA3 at CTA_Q=64 | 147 536 |
+      | the 16-row FA2 class | 69 632 |
+      | **piggyback sum** | **217 168** |
+      | device opt-in maximum | 232 448 |
+      So it fits with **15 280 B of headroom (6.6%)**, and the sum is exact (147 536 + 69 632 = 217 168). This
+      supersedes the 218 160 B figure quoted earlier, which was an estimate from a different flag set.
     - **Decisive tests, all compile-only (no GPU, `nvcc -c`):**
       0. **(the one that matters) replace-a-consumer at q128**: 12 warps, FA3 role covering 64 rows per CTA, guest
          in warpgroup 1, its buffers aliased onto the retired Q tile. Expect 240 regs and 0 B spill, since the

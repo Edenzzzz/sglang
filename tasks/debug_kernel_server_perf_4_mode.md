@@ -5924,3 +5924,24 @@ agent-dominant row mix AND a chunk of 2048-16384 tokens over a long prefix. Gene
 with realistic chunk sizes -- is the next run, and it is the one whose number belongs beside the trace-sampled
 figure. Until then **no agent-dominant ratio above should be quoted as the kernel's gain on our workload**; it is
 the gain on a step with almost no prefill in it.
+
+## Deferred KV commit for rejected draft tokens: declined, with the arithmetic (2026-10-29, no GPU)
+
+**The idea.** A draft step writes KV for all T=4 speculative tokens; at the acceptance we measure (about 2.0) half
+are rejected, and their KV is then discarded. Deferring the commit would avoid persisting what gets thrown away.
+
+**It cannot pay, on two independent grounds.**
+1. **The traffic is negligible.** With 4 KV heads at head dimension 128 in bf16, a token's K and V together are
+   2 048 B. Two rejected tokens per row at 48 resident rows is **192 KiB per step** -- 1.9 to 9.4 MiB/s across step
+   times of 100 down to 20 ms, which is **0.00005% of the H20's roughly 4 TB/s of memory bandwidth**. There is no
+   bandwidth to recover.
+2. **The dependency forbids the version that would save anything.** Verify computes attention for the draft tokens
+   as queries against the existing KV *and against the draft tokens themselves*, so their KV must be resident
+   during verify. The commit cannot be deferred past the point where it is used. What remains is writing draft KV
+   to a scratch buffer and copying only the accepted entries into the pool, which replaces one pool write with a
+   scratch write plus a copy -- a wash at best, and worse for the accepted tokens, which are the ones that matter.
+
+**So the mechanism is declined with a reason, like cross-role KV grouping (0 pages shared, <= 1.3% of step time)
+and unlike draft/verify pipelining (17-28% ceiling, blocked by a real dependency).** Recording all three the same
+way keeps the paper's design section honest: the fused step opens several mechanisms, two are not worth building,
+one is worth building and is blocked on predicting acceptance length per step rather than on engineering.

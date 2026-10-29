@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.67.0 — Deferred KV commit for rejected draft tokens: declined with arithmetic (2026-10-29)
+- Two independent grounds, no GPU time. The traffic is negligible: 2 048 B per token of K and V, two rejected
+  tokens per row, 48 rows, is 192 KiB per step -- 1.9 to 9.4 MiB/s, about 0.00005% of the H20's ~4 TB/s. And the
+  dependency forbids the useful version: verify attends over the draft tokens themselves, so their KV must be
+  resident during verify and the commit cannot be deferred past its use. What remains is a scratch write plus a
+  copy of the accepted entries, which is a wash at best.
+- Completes the set of fused-step mechanisms evaluated on measured grounds rather than listed as future work:
+  cross-role KV grouping (0 shared pages, <= 1.3% of step time) declined; deferred KV commit declined; draft/verify
+  pipelining worth building (17-28% ceiling) but blocked on predicting accepted length per step.
+
 ## v3.66.0 — The alpha-6 traced point is void: 6117 of 6117 decode steps carry dkv=0 (2026-10-29)
 - Confirmed rather than inferred. That arm launched at 14:37, before the corrected tracer patch went on at about
   15:00, so every decode step in it records a zero KV length -- the defect the trace exists to measure, for the

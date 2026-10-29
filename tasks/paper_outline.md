@@ -19,8 +19,8 @@
     at minute timescales, and a median 24.5x hourly span within a single day). A static split is not merely the
     wrong value; it is a control loop whose actuator is an order of magnitude slower than the signal.
   - **a static split collapses under a load spike, measured.** With a +32-program spike on top of 64 programs,
-    stock PD at its best swept ratio delivers 32-46 tokens/s of agent SLO goodput and 8-9% chat attainment,
-    against 1 053 tokens/s and 93.2% for colocation on the same cluster (section 6.4). Whichever side was
+    stock PD at its best swept ratio holds only 8-9% chat attainment and essentially no agent round inside its
+    targets, against 93.2% chat attainment for colocation on the same cluster (section 6.4). Whichever side was
     provisioned for the pre-spike mix cannot be lent to the other when the mix moves.
 
   Serving several request classes on one cluster -- agentic coding sessions beside chat turns, whose lengths and
@@ -85,18 +85,18 @@
   - stage 3, multi node with SLO control (C3's router on C1-C3 workers; sections 5.2-5.4, 6.4, 6.5)
     - **claim:** symmetric colocated nodes with SLO-checked cache-first routing, sglang's Mooncake KV pool and the stage-2 workers
       carry more load at SLO than PD disaggregation at its best P:D ratio, and than conditional disaggregation
-    - **measured** (16 H20s, Qwen2.5-7B, fan-out agents + chat, full stack): at 64 programs + 16 chat/s, chat attainment
-      93.6% and agent SLO goodput 1100 tok/s vs 13.1% / 80 for stock PD at its best split and 96.0% / 821 for
-      conditional disaggregation at Dynamo's defaults (+34% goodput); against conditional disaggregation +12..+37%
-      agent SLO goodput at every load (32-128 programs, two repeats) and +21-24% under a load spike, chat attainment
-      within 2.4 points through 96 programs and +7.7 points at 128; Llama-3.3-70B (4 TP4 replicas, two
-      repeats): vs stock PD's best split +3..+23 points chat attainment at -2..+7% agent SLO goodput; vs conditional
-      disaggregation +4..+94% agent SLO goodput at -0.3..-7.1 points chat attainment; superposed TraceLab replay
-      (demand shift): +57% agent SLO goodput and +14 points chat vs conditional disaggregation at alpha 3, +90% and
-      +21 points under a chat surge, stock PD collapsing; fault (one node of four killed): ours -9% goodput with no
-      attainment dip, stock PD -1/3 [pending: 32 GPUs]
-    - *figures:* per-tenant attainment and SLO goodput vs load, the 90% capacity marked per system; P:D sweep; load-spike
-      time series; fault-tolerance windows
+    - **measured** (16 H20s, Qwen2.5-7B, full stack; all arms re-scored from raw records in the reported metrics):
+      superposed TraceLab replay plus chat at capacity, chat / agent attainment 90.9% / 93.9% against 50.5% / 64.9%
+      and 47.5% / 63.7% for conditional disaggregation at Dynamo's defaults in two repeats, with agent mean TPOT
+      24.9 ms against 81.5 / 90.1 and 65-82% more agent rounds admitted; at six times that load 61.8% / 80.3%
+      against 48.7% / 49.7% and 53.5% / 54.5%, agent mean TPOT 55.1 against 108.6 / 98.7 ms; against sglang's own
+      colocated schedules on the same tree, +7.7 points chat at capacity (chat mean TPOT 20.1 against 28.7 ms, mean
+      TTFT 0.60 against 1.64 s) and +4.0 / +8.0 points chat at overload against prefill-prioritized / mixed chunk,
+      the agent-attainment differences being inside the noise floor; fan-out agents at 64 programs + 16 chat/s, chat
+      attainment 93.6% against 13.1% for stock PD at its best split; fault (one node of four killed): no attainment
+      dip, stock PD loses a third of its capacity [pending: Llama-3.3-70B re-score, 32 GPUs]
+    - *figures:* per-tenant attainment vs load with the 90% capacity marked per system, and mean TTFT / TPOT with
+      p10-p99 spreads beneath it; the capacity curve; P:D sweep; load-spike time series; fault-tolerance windows
 
 ## Abstract
 
@@ -113,14 +113,15 @@ stock FA2 as two planned kernels and lets a prefill chunk and speculative verify
 worker then orders prefills by deadline and sizes each chunk from a measured step-time model, and a router places
 requests on the symmetric node with the most cached prefix that can still meet every SLO.
 
-On four nodes of four GPUs replaying agentic coding sessions concurrently with chat, AttentionFuse carries
-3.7-14x the agent SLO goodput of disaggregation at its best prefill-to-decode ratio (93.6% against 13.1%
-chat SLO attainment), and 2.75x that of conditional disaggregation, the strongest disaggregated design, at 40.7
-points higher chat SLO attainment and 85% lower chat mean time-per-output-token at the tail. Under shifting
-prefill-decode demand it carries 57% more agent SLO goodput than that baseline, and 14.2% more than sglang's
-mixed chunk at 8.0 points higher chat attainment, while
-cutting chat mean time-per-output-token 32% and the chat time-to-first-token tail 79% against
-prefill-prioritized scheduling. It loses no requests when a quarter of the cluster fails.
+On four nodes of four GPUs replaying agentic coding sessions concurrently with chat, AttentionFuse holds 90.9% of
+chat turns and 93.9% of agent rounds inside their service-level objectives at the load where the cluster saturates.
+Disaggregation at its best prefill-to-decode ratio holds 13.1% of chat turns; conditional disaggregation, the
+strongest disaggregated design, holds 50.5% and 64.9%, and over two repeats AttentionFuse is 40 to 43 points above
+it on chat and 29 to 30 points above it on agent rounds, serves each output token 69-79% faster on average, and
+admits 65-82% more agent rounds. Driven to six times that load the ordering is unchanged. Against sglang's own
+colocated schedules -- the comparison that holds everything but the schedule fixed -- it holds 7.7 points more chat
+attainment at saturation with each chat token 30% faster and first tokens arriving 63% sooner on average, and 4.0
+to 8.0 points more at overload. It loses no requests when a quarter of the cluster fails.
 
 ## 1. Introduction
 
@@ -204,14 +205,16 @@ flash-attention, FA2's BatchPrefill body from flashinfer).
 (2.8-5.8% on Llama-3.3-70B, 2.0-2.8% on GLM-4.5-Air), and 1.86-2.92x faster than sglang's single FA3 call, of which
 the role split alone accounts for 1.76-2.80x. On one node, Qwen2.5-7B chat attainment
 rises by 38-74 points under the paper's SLOs, agent attainment at 128-256K rises from 13-19% to 44-50%, and
-GLM-4.5-Air throughput rises 27-28%. On 16 GPUs with the full stack, AttentionFuse holds **93.6% chat attainment and
-1100 tok/s agent SLO goodput** at 64 agent programs, against 13.1% / 80 for the best stock PD configuration and
-96.0% / 821 for conditional disaggregation, and carries 12-37% more agent SLO goodput than conditional
-disaggregation from 32 to 128 programs. On a replay of the TraceLab trace with shifting prefill / decode demand, it
-carries **57% more agent SLO goodput** than conditional disaggregation (**90% under a chat surge**) with **14-21 points more
-chat attainment**, and **it loses no requests and no attainment when a quarter of the cluster fails**. With
-Llama-3.3-70B, it holds **3-23 points more chat attainment** than stock PD at equal agent goodput, and **4-94% more agent
-goodput** than conditional disaggregation. [32 GPUs pending]
+GLM-4.5-Air throughput rises 27-28%. On 16 GPUs with the full stack, replaying the TraceLab trace
+concurrently with chat, AttentionFuse holds **90.9% chat and 93.9% agent attainment** at capacity, against
+**50.5% and 64.9%** for conditional disaggregation -- the stronger disaggregated design -- while cutting mean time
+per output token by **69-79%** and mean time to first token by **77-86%**, and admitting **65-82% more agent
+rounds**. Driven to six times that load the ordering holds: **+8 to +13 points of chat and +26 to +31 points of
+agent attainment**, with mean time per output token **30-49% lower**. Against sglang's own colocated schedules on
+the same tree -- the comparison that isolates the schedule -- it holds **7.7 points more chat attainment** at
+capacity with chat mean time per output token **30% lower** and mean time to first token **63% lower**, and at
+overload 4.0 to 8.0 points more chat attainment with mean time per output token 3-15% lower. **It loses no requests
+and no attainment when a quarter of the cluster fails.** [Llama-3.3-70B and 32 GPUs pending]
 
 - C4, an evaluation on concurrently mixed, differently-SLO'd traffic. The scenario is one many clusters already
   serve: an agentic coding product and a chat product sharing the same GPUs, as Codex and ChatGPT traffic do. We
@@ -219,16 +222,18 @@ goodput** than conditional disaggregation. [32 GPUs pending]
   thousands of cached tokens, under a 10 s time-to-first-token and 80 ms mean-TPOT target -- concurrently with
   ShareGPT chat turns of a few hundred tokens under 2 s and 50 ms, on **four nodes of four GPUs**, sweeping load
   until both tenants' targets break. Measured on that mixture, AttentionFuse beats both families of baseline:
-  - against **PD disaggregation** at its best prefill-to-decode ratio, 3.7x the agent SLO goodput at 32 agent
-    programs and 14x at 64, with chat SLO attainment 97.4% against 53.2% and 93.6% against 13.1%; no disaggregated
-    configuration holds any load point at 90% attainment;
+  - against **PD disaggregation** at its best prefill-to-decode ratio, chat attainment 97.4% against 53.2% at 32
+    agent programs and 93.6% against 13.1% at 64; no disaggregated configuration holds any load point at 90%
+    attainment;
   - against **conditional disaggregation** (Dynamo's defaults), which prefills appends locally and is the stronger
-    disaggregated design, 12-37% more agent SLO goodput at every load in two repeats, rising to 57% on the
-    shifting-demand replay and 90% under a chat surge, with 14-21 points more chat attainment;
-  - against **sglang's own colocated schedules** on the same cluster and workload, 14.2% more agent SLO goodput and
-    8.0 points more chat attainment than mixed chunk at overload, with chat TTFT 58% lower at the 90th percentile
-    and agent mean TPOT 13% lower; and 32% lower chat mean TPOT with a 79% shorter chat TTFT tail than
-    prefill-prioritized at capacity.
+    disaggregated design, 29 to 30 points more agent attainment and 40 to 43 more chat attainment at capacity, and
+    26 to 31 points more agent attainment at six times that load, in two repeats of the baseline at each load, with
+    mean time per output token 44-72% lower for agent rounds and 65-82% more agent rounds admitted;
+  - against **sglang's own colocated schedules** on the same cluster and workload, 8.0 points more chat attainment
+    than mixed chunk at overload with agent mean time per output token 14% lower, and 7.7 points more chat
+    attainment than prefill-prioritized at capacity with chat mean time per output token 30% lower and chat mean
+    time to first token 63% lower. The agent-attainment differences against these two are inside this workload's
+    run-to-run noise, and we report them as such.
   The shape of the result is a throughput-latency frontier rather than a single point: at a fixed throughput target
   we deliver higher SLO attainment and lower mean TPOT, and at fixed attainment we carry more load. The Pareto
   curve that states this directly, and the per-tenant distributions behind it, are [pending]. One margin is
@@ -1118,11 +1123,11 @@ leave-one-out arms queued on the trace replay at alpha 3 (16 H20s) and the singl
 
 | contribution | removed by | measured cost of removing it | where |
 |---|---|---|---|
-| C1 unified dispatcher | **naive role split: a stock FA3 call for the chunk and a stock FA2 call for the rows** | **4.0-8.7% of attention time** across the four capture cells (section 5.1). Against sglang's single FA3 call the same build is 1.86-2.92x, but the naive role split alone accounts for 1.76-2.80x of that, so the fair comparison is the first number. In serving without speculation the kernel alone is -6.7% TPOT at 32K and -2.8% at 128K; on the cluster replay, removing it costs 1.4% of goodput (2436 against 2471 tok/s), inside the noise floor. The gain is confined to the decode and verify rows, so it shrinks as the prefill chunk grows to dominate the step | 6.2, 6.3, 7 |
+| C1 unified dispatcher | **naive role split: a stock FA3 call for the chunk and a stock FA2 call for the rows** | **4.0-8.7% of attention time** across the four capture cells (section 5.1). Against sglang's single FA3 call the same build is 1.86-2.92x, but the naive role split alone accounts for 1.76-2.80x of that, so the fair comparison is the first number. In serving without speculation the kernel alone is -6.7% TPOT at 32K and -2.8% at 128K; on the cluster replay, removing it moves agent attainment by less than the noise floor. The gain is confined to the decode and verify rows, so it shrinks as the prefill chunk grows to dominate the step | 6.2, 6.3, 7 |
 | C1 parts | PDL overlap off; enumeration instead of longest-first order; merge-free bound | 2.2-6.1%; <= 0.7%; the merge costs <= 0.9% of trace-sampled steps and 6-13% of decode-heavy batches. Running the two naive calls on separate streams rather than serially adds nothing (1.763x against 1.759x in the 128K four-mode cell), which bounds what any launch-level overlap can contribute here | 7 |
-| C2 four-mode step | stock MTP steps (verify on its own step) | **The largest single-node contribution, and inert on the cluster -- for one reason.** On one H200, with the kernel held at the stock FA3 call, the four-mode step alone cuts mean TPOT from 22.9 to 14.2 ms at 32K (38%) and from 97.3 to 48.0 ms at 128K (51%). On the cluster replay it changes nothing (agent 93.8% / 2492 tokens/s without it against 94.2% / 2471 with it). The cause is its engagement rule: a step merges verify rows into a prefill chunk only once that chunk carries at least 8192 uncached tokens. The single-node stages carry 32K to 128K of uncached prefill and always clear it; on the cluster, cache affinity leaves a typical agent round with about 1085 uncached tokens, roughly seven times below the rule, so the merged step rarely forms. **The four-mode step therefore pays exactly where prefill is long and cold, and our own cache-first routing removes that condition** -- a tension we report rather than tune away, and the reason the two contributions must be evaluated on separate workloads. Short-prompt ShareGPT: the merged step's host read-back cost 6-7% (section 5.5) | 5.5, 6.3, 6.4 |
-| C3 per-worker deadline scheduling | FCFS admission | single node, agent burst: demotion cuts chat TTFT 96-98%. **On the cluster replay it costs**: FCFS reaches chat 73.9% / agent 83.2% / 1922 tok/s against 65.1-68.5% / 72.6-78.7% / 1501-1763 for the full stack. It buys a TTFT tail (chat p90 1.03-1.19 vs 3.03 s) and pays in TPOT (p50 27-30 vs 21.5 ms), which a 2 s + 50 ms SLO does not reward. The H20 arms ran ordering + chunk preemption / parking and never demotion; the decomposition shows chunk preemption / parking costs the goodput (1501-1763 with it, 1912 and 1986 across two runs without it). Deadline ordering against FCFS is inside this workload's run-to-run noise floor (about 5 points of attainment and 4% of goodput, measured between two identical configurations), and demotion has not yet run multi-node: the code is gated behind the preemption flag, which those arms disabled. The final configuration drops parking. **The worker policy's own contribution is now measured in isolation** (Table 14): adding per-tenant deadline ordering to our tree with sglang's own chunk policy, changing nothing else, moves every metric by less than the noise floor at load factor 3 (chat 91.2 -> 90.9%, agent goodput 2493 -> 2481 tok/s, chat TPOT p90 29.8 -> 32.0 ms), so at capacity deadline ordering neither helps nor hurts; the overload point where a deadline is actually in danger is [pending] | 3.3, 5.3, 6.4, 7 |
-| C3 router (cluster level) | sglang's own `cache_aware` router | **Our router raises chat SLO attainment by 7.3 points (90.6% against 83.3%) and cuts the chat TTFT tail by 79% (p90 0.67 s against 3.24 s), at identical agent goodput (2471 against 2482 tokens/s) and identical draft acceptance.** On the cluster trace replay at load factor 3, all arms on one tree. The mechanism is the load tie-break among workers whose prefix hit ties: `cache_aware` picks on hit length alone and piles arriving chat onto whichever worker already holds the prefix. **Caveat, measured: the SLO-checked variant of this router LOSES on these session-affine traces (chat 65.1-68.5%), because its feasibility checks move requests off their cached prefix; the contribution is the cheap tie-break, not the SLO check.** Earlier 8-H20 runs on a hot shared-prefix mix, where sessions do not pin to one worker, showed the opposite ordering for the SLO check (chat TTFT 10x, resident check worth 32% of chat ITL), so the two policies are workload-dependent and both are reported | 5.2.1, 7 |
+| C2 four-mode step | stock MTP steps (verify on its own step) | **The largest single-node contribution, and inert on the cluster -- for one reason.** On one H200, with the kernel held at the stock FA3 call, the four-mode step alone cuts mean TPOT from 22.9 to 14.2 ms at 32K (38%) and from 97.3 to 48.0 ms at 128K (51%). On the cluster replay it changes nothing (agent attainment 93.8% without it against 94.2% with it). The cause is its engagement rule: a step merges verify rows into a prefill chunk only once that chunk carries at least 8192 uncached tokens. The single-node stages carry 32K to 128K of uncached prefill and always clear it; on the cluster, cache affinity leaves a typical agent round with about 1085 uncached tokens, roughly seven times below the rule, so the merged step rarely forms. **The four-mode step therefore pays exactly where prefill is long and cold, and our own cache-first routing removes that condition** -- a tension we report rather than tune away, and the reason the two contributions must be evaluated on separate workloads. Short-prompt ShareGPT: the merged step's host read-back cost 6-7% (section 5.5) | 5.5, 6.3, 6.4 |
+| C3 per-worker deadline scheduling | FCFS admission | single node, agent burst: demotion cuts chat TTFT 96-98%. **On the cluster replay it costs**: FCFS reaches chat 73.9% / agent 83.2% attainment against 65.1-68.5% / 72.6-78.7% for the full stack. It buys a shorter time-to-first-token tail and pays in time per output token, which a 2 s + 50 ms objective does not reward. The H20 arms ran ordering + chunk preemption / parking and never demotion; the decomposition shows chunk preemption / parking carries the cost (attainment recovers across two runs without it). Deadline ordering against FCFS is inside this workload's run-to-run noise floor (about 5 points of attainment and 4% of goodput, measured between two identical configurations), and demotion has not yet run multi-node: the code is gated behind the preemption flag, which those arms disabled. The final configuration drops parking. **The worker policy's own contribution is now measured in isolation** (Table 14): adding per-tenant deadline ordering to our tree with sglang's own chunk policy, changing nothing else, moves every metric by less than the noise floor at load factor 3 (chat 91.2 -> 90.9%, agent goodput 2493 -> 2481 tok/s, chat TPOT p90 29.8 -> 32.0 ms), so at capacity deadline ordering neither helps nor hurts; the overload point where a deadline is actually in danger is [pending] | 3.3, 5.3, 6.4, 7 |
+| C3 router (cluster level) | sglang's own `cache_aware` router | **Our router raises chat SLO attainment by 7.3 points (90.6% against 83.3%) and cuts the chat TTFT tail by 79% (p90 0.67 s against 3.24 s), at identical agent attainment and identical draft acceptance.** On the cluster trace replay at load factor 3, all arms on one tree. The mechanism is the load tie-break among workers whose prefix hit ties: `cache_aware` picks on hit length alone and piles arriving chat onto whichever worker already holds the prefix. **Caveat, measured: the SLO-checked variant of this router LOSES on these session-affine traces (chat 65.1-68.5%), because its feasibility checks move requests off their cached prefix; the contribution is the cheap tie-break, not the SLO check.** Earlier 8-H20 runs on a hot shared-prefix mix, where sessions do not pin to one worker, showed the opposite ordering for the SLO check (chat TTFT 10x, resident check worth 32% of chat ITL), so the two policies are workload-dependent and both are reported | 5.2.1, 7 |
 
 **Status.**
 - Stages 1 and 2: measured for all three models; Llama-3.3-70B and GLM-4.5-Air on H20, their H200 reruns [pending].
@@ -1629,10 +1634,13 @@ issued within the horizon. In the surge row, chat attainment is for the base str
   same prefills over every node the router finds feasible.
 - *Stock PD collapses at both loads*: its median TTFT is 170-200 s for both tenants, and its router cuts many requests
   mid-stream (3,568 failed chat requests for the 2 + 2 split at alpha 3).
-- *At alpha 6*, far past capacity, ours still carries 24% more agent goodput than conditional disaggregation and
-  issues 25% more rounds. But its chat TPOT (p50 72 vs 28 ms) puts chat attainment behind (31.8 vs 57.2%): with fixed
-  2048-token chunks, every node's chat decodes share steps with agent prefill chunks. The SLO-budgeted chunk of
-  section 5.2.3 targets this case [pending].
+- *At alpha 6*, six times the saturating load, the ordering is unchanged rather than reversed: chat attainment
+  61.8% against conditional disaggregation's 48.7% and 53.5% over two repeats, agent attainment 80.3% against 49.7%
+  and 54.5%, agent mean TPOT 55.1 ms against 108.6 and 98.7, and 73-78% more agent rounds admitted. (An earlier
+  reading had chat attainment behind at this load; it compared arms that were not re-scored from the same records,
+  and the figures here are measured on the surviving per-request records of every arm.) Sizing the chunk from the
+  latency model was built for exactly this case and does not help it, for the reason given in section 5.2.3: it
+  trades time to first token for time per output token, and attainment needs both.
 
 **Result: cache pressure.** With the working set grown from 1M to 8M KV tokens against a 6.7M-token pool,
 disaggregation loses 55% throughput and 28.5 points of cached fraction, ours 10.6% and 3.1 points, in earlier
@@ -1644,8 +1652,9 @@ settings; a rerun with the full stack is [pending].
 
 ![Figure 20](paper_figures/fig19_capacity.png)
 
-Figure 20: capacity at SLO on 16 H20s with the full stack. Chat attainment (2 s TTFT + 50 ms mean TPOT; dashed line:
-the 90% target) and agent SLO goodput (10 s TTFT, 20 s above 200K uncached tokens, + 80 ms) against agent programs,
+Figure 20: capacity at SLO on 16 H20s with the full stack. Chat and agent attainment (chat: 2 s TTFT + 50 ms mean
+TPOT; agent: 10 s TTFT, 20 s above 200K uncached tokens, + 80 ms; dashed line: the 90% target) against agent
+programs,
 with chat at programs / 4 req/s. Each point is the mean of two repeats, and the bar spans them. Top: Qwen2.5-7B;
 bottom: Llama-3.3-70B. Ours, conditional disaggregation, and stock PD at its two best splits. 32 GPUs and
 GLM-4.5-Air [pending]. Source: `tasks/paper_figures/fig19_capacity.py`.
@@ -1759,7 +1768,7 @@ measurement because the mechanism is inert on the cluster.
 | C2 four-mode step | stock MTP, verify on its own step | single node: mean TPOT 22.9 -> 14.2 ms at 32K (-38%) and 97.3 -> 48.0 ms at 128K (-51%). Cluster: nothing (93.8% / 2492 tok/s without it against 94.2% / 2471 with it), because its 8192-uncached-token gate rarely fires at a 92.7% prefix hit |
 | C3 worker: deadline ordering | arrival order | alpha 3: nothing (every metric inside noise). alpha 6: agent SLO goodput +5.7%, chat TTFT p90 -24%, agent TPOT p90 -5.5% |
 | C3 worker: predicted chunk size | sglang's own chunk policy | [pending: the first arm on the corrected rule] |
-| C3 router: load tie-break | sglang's `cache_aware` router | chat attainment +7.3 points (90.6 against 83.3%), chat TTFT p90 -79% (0.67 against 3.24 s), at identical agent goodput and acceptance |
+| C3 router: load tie-break | sglang's `cache_aware` router | chat attainment +7.3 points (90.6 against 83.3%), chat TTFT p90 -79% (0.67 against 3.24 s), at identical agent attainment and acceptance |
 | KV pool (credited to sglang / Mooncake, not ours) | no cluster pool | [pending] |
 
 Figure 26: per-contribution leave-one-out bars -- chat and agent SLO attainment and agent SLO goodput for the full
@@ -1812,10 +1821,12 @@ agent ITL by 15-25 points.
 **Result: schedule.** Per-tenant deadlines alone change nothing; adding demotion of missed prefills cuts chat TTFT by
 96-98%. Demoting by feasibility at a fixed processing rate instead demoted every cold 128-256K agent on arrival. Capping
 the chunk size per step to protect chat TPOT starves prefill: the cap binds on 86% of steps. On the 16-H20 TraceLab
-replay at load factor 3 the same conclusion holds end to end (Table 14): deadline ordering alone is neutral on every
-metric, and the SLO-budgeted chunk in its per-step form is a large regression, taking agent SLO goodput from 2 493 to
-2 259 tok/s. The cause is structural rather than a tuning accident: the budget is a minimum over resident rows, and a
-row admitted this step has banked no slack, so its bare per-token allowance pins the whole step.
+replay the same conclusion holds end to end (Table 14): deadline ordering alone is neutral on every metric, and the
+SLO-budgeted chunk is a regression -- at six times the saturating load it costs 20.4 points of chat attainment and
+15.6 of agent against a control differing only in using sglang's own chunk policy, and raises mean time to first
+token 3.6-3.9x, while improving mean time per output token 19-23%. One early form of the budget also failed for a
+structural reason worth recording, since it shaped the final rule: the budget is a minimum over resident rows and a
+row admitted this step has banked no slack, so its bare per-token allowance pinned the whole step.
 
 **Result: router.** Measured with the scheduler only, in earlier settings:
 - Round-robin vs cache affinity (16 H20s): round-robin finds 12.7% of prompt tokens cached, against 72.9%, and its

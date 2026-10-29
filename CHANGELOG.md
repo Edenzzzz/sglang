@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.65.0 — Agent-dominant timing is parity (median 1.09x), and the chunk size is why (2026-10-29)
+- Three repeats, six reachable captures, spreads 0-4%: 2.12x and 1.71x at batch 16, 1.20x and 0.99x at 32, 0.88x
+  and 0.74x at 64 for two- and four-mode. Overall median 1.09x, monotonically declining with batch. On the
+  90%-chat set the same build measured 1.15-7.44x, so correcting the composition removed almost all the gain.
+- The cause is not the mix defeating the mechanism: these generated steps carry a 512-token chunk on a 4096-token
+  context, so with 75% of rows at 64K-200K essentially all work is long-KV decode and verify input -- the regime a
+  single FA3 call is built for, with almost no tile padding to remove. Our narrower classes walk the same long KV
+  less efficiently as the number of long rows grows.
+- The sets vary row KV spread while holding the other determinant of the mechanism, the chunk's share of the step,
+  fixed at an unrealistic value. The trace-sampled 1.86-2.92x is unaffected: those are real serving steps where the
+  chunk carries thousands of tokens and both roles are genuinely present.
+- Next run: agent-dominant rows WITH realistic chunk sizes (2048-16384 tokens over a long prefix), which is what a
+  four-mode serving step is. Until then no agent-dominant ratio may be quoted as the kernel's gain on our workload.
+
 ## v3.64.0 — The decode-KV tracer fix never applied; the chain claimed it had (2026-10-29)
 - Caught before the traced arm took the cluster lock. The patch anchors on a multi-line `_sl = (...)` block that
   the deployed tracer does not contain -- it reads `seq_lens = ... if ... else []` on one line -- so the assertion

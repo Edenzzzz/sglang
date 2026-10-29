@@ -5886,3 +5886,41 @@ far more split-KV work than anything gated before it.
 - **Harness lesson:** the generator takes batch sizes from a plan list and knows nothing about the KV pool, so it
   will happily emit steps the server cannot hold. Generated capture sets should be checked against
   `POOL_KV_TOKENS` before they are measured.
+
+## Agent-dominant timing: parity, not 3.6x — and the reason is the chunk, not the mix (2026-10-29)
+
+Three repeats, 200 iterations, the six reachable captures (batch 128 excluded as unbuildable, above).
+
+| set | batch | ours (mean) | spread | sglang | spread | vs sglang | vs v3 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| agentmix two-mode | 16 | 2.174 | 0% | 4.604 | 1% | **2.12x** | 0.72x |
+| agentmix two-mode | 32 | 4.271 | 2% | 5.138 | 4% | **1.20x** | 0.76x |
+| agentmix two-mode | 64 | 7.716 | 2% | 6.807 | 0% | 0.88x | 0.72x |
+| agentmix four-mode | 16 | 2.598 | 2% | 4.442 | 0% | **1.71x** | 0.65x |
+| agentmix four-mode | 32 | 4.711 | 2% | 4.641 | 0% | 0.99x | 0.65x |
+| agentmix four-mode | 64 | 8.559 | 0% | 6.338 | 2% | 0.74x | 0.64x |
+
+**Overall median 1.09x: parity.** We win 1.7-2.1x at batch 16 and lose at batch 64 (0.74-0.88x), monotonically, with
+spreads of 0-4% so the trend is real. On the 90%-chat `longtail` set the same build measured 1.15-7.44x. **Changing
+the composition to the one we claim removed almost all of the gain.**
+
+**Why, and it is NOT that the mix defeats the mechanism.** These generated steps carry a **512-token prefill chunk
+on a 4096-token context** -- a token gesture at the prefill role. With 75% of rows at 64K-200K tokens, essentially
+all the work in the step is long-KV decode and verify input, and that is the regime a single FA3 call is already
+built for: one wide tile walking a long KV stream is efficient, and there is almost no tile padding to remove
+because there is hardly any prefill work to contrast against. Our 16- and 32-row classes walk the same long KV with
+narrower tiles, which costs more as the number of long rows grows -- hence the monotone decline from batch 16 to 64.
+So the sets vary the one parameter they were built to vary (row KV spread) while holding the OTHER determinant of
+the mechanism -- the chunk's share of the step -- fixed at an unrealistic value.
+
+**This does not touch the trace-sampled result.** The 1.86-2.92x over sglang's call in section 6.2 of the paper is
+measured on steps captured from real serving, where a chunk carries thousands of tokens over a long prefix and the
+two roles are genuinely both present. That is the measurement the kernel claim rests on, and these generated sweeps
+are a controlled study beside it, not a replacement for it.
+
+**The experiment that is actually wanted, and the composition error I made twice.** First the mix was
+chat-dominant; corrected to 75% agent, the chunk is still a toy. A four-mode serving step has BOTH an
+agent-dominant row mix AND a chunk of 2048-16384 tokens over a long prefix. Generating that -- agent-dominant rows
+with realistic chunk sizes -- is the next run, and it is the one whose number belongs beside the trace-sampled
+figure. Until then **no agent-dominant ratio above should be quoted as the kernel's gain on our workload**; it is
+the gain on a step with almost no prefill in it.

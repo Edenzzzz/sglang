@@ -5688,3 +5688,33 @@ the control that settles this.
 2. The in-launch merge itself, independent of the split count (`UNIFIED_SKIP_MERGE=1`, needs a rebuild).
 3. The plan's host cost, which is 0.5-8.7 ms here against a kernel of 0.5-2.3 ms. It is overlapped in serving but
    the harness may not hide it.
+
+## Cross-role KV page overlap: zero on the realistic replay (2026-10-29, no GPU time)
+
+**The question.** Cross-role shared-prefix KV reuse means grouping a step's work by KV page instead of by request,
+so a page both roles read is fetched once. It is only conceivable because C2 puts the prefill chunk and the
+decode/verify inputs in ONE step; a disaggregated or two-call design has the roles in separate kernels. DeFT
+(arXiv 2404.00242) does KV-guided grouping for a decoding tree inside one call -- ours would be cross-ROLE and
+cross-REQUEST, a different grouping over different work, which is the distinction to keep in the paper.
+
+**Answered by reading the workload generator, not by instrumenting a step.** A tracer copying per-step page sets to
+the host would perturb the step times the traced arm exists to measure, and the generator settles it exactly.
+Two roles share a page only if they share a token prefix, because the radix cache hands identical pool slots to
+identical prefixes. In `bench_serving.py`'s tracelab path:
+1. **Across sessions:** `session_prompt_ids = random.choices(available_tokens, k=first_prefix_len)` draws each
+   session's prompt independently from the full vocabulary. Two independent uniform draws agree on their first
+   token with probability 1/V = 6.6e-6 for Qwen2.5's 151 936-token vocabulary, so the expected shared prefix is
+   6.6e-6 tokens, and a page is shared only if EVERY token in it matches. **Zero pages.**
+2. **Within a session:** round N+1 reuses round N's tokens verbatim
+   (`prefix_ids = session_prompt_ids[:prefix_len]`), which is where the replay's 92.7% prefix hit rate comes from
+   -- but the replay issues round N+1 only after round N finishes, so a session never has two rounds in flight and
+   the request being prefilled is never from the same session as a resident decode input. **Zero pages.**
+
+**Result: the overlap is 0, for two independent reasons, so KV-page grouping across roles has nothing to reuse on
+the workload our headline numbers come from.** On a fan-out workload built to maximise it -- programs of one task
+starting from a shared long prefix -- the page overlap is high by construction and still bounded at **<= 1.3% of
+step time**, because compiling the prefill role's KV loads out of the kernel entirely makes the step only 0.1-1.3%
+faster: those reads are already hidden behind compute and hit in L2. **So this is a mechanism we decline to build,
+with the reason measured rather than asserted**, and the paper says so in one sentence rather than listing it as
+future work. `python tasks/perf_model/cross_role_page_overlap.py`, and the time bound from
+`tasks/perf_model/fanout_role_overlap.py`.

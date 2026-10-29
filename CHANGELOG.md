@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.56.0 — Cross-role KV page overlap is zero on the realistic replay (2026-10-29)
+- Settles the number that gates cross-role shared-prefix KV reuse, with no GPU time, by reading the workload
+  generator instead of instrumenting a step -- a tracer copying per-step page sets would perturb the step times
+  the traced arm exists to measure.
+- Two roles share a page only if they share a token prefix. Across sessions the replay draws each session's prompt
+  independently from the full vocabulary, so two sessions agree on their first token with probability 6.6e-6 and a
+  page needs every token to match: zero pages. Within a session rounds reuse tokens verbatim, but round N+1 is
+  issued only after N finishes, so the prefilling request is never from the same session as a resident decode
+  input: zero pages.
+- Consequence recorded as a design decision rather than future work: the mechanism has nothing to reuse on the
+  workload the headline results use, and even on a fan-out workload built to maximise page overlap it is bounded
+  at <= 1.3% of step time, because compiling the prefill role's KV loads out entirely is worth only 0.1-1.3%.
+- tasks/perf_model/cross_role_page_overlap.py states the arithmetic.
+
 ## v3.55.0 — The pdmux fix broke CUDA graph capture; guarded (2026-10-29)
 - The spec-metadata fix forced a plan on the resolved per-stream backend whenever pdmux was on. Planning copies
   plan data host-to-device and CUDA graph capture rejects an unpinned host source, so the draft model's capture

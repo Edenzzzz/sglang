@@ -1168,8 +1168,8 @@ against sglang's own call).
 
 | input shape | our dispatcher against sglang's single attention call |
 |---|---|
-| spread KV lengths (a tenth of inputs 64K-200K) | **1.13x to 6.70x, median 3.92x faster** |
-| uniform short KV lengths | 0.57x to 1.36x, median **0.83x -- that is, slower** |
+| spread KV lengths | **1.15x to 7.44x, median 3.64x faster** (three repeats, within-configuration spread 0-16%) |
+| uniform short KV lengths | 0.60x to 1.27x, median **0.86x -- that is, slower** |
 
 Both halves are informative, and the second is a limit on the mechanism rather than an embarrassment. These
 generated steps carry a deliberately small prefill chunk -- 512 tokens over a 4096-token context, against the
@@ -1179,9 +1179,9 @@ enough to pay for the plan, the dispatcher has nothing to earn and its overhead 
 boundary of the design, and it is worth stating because it also explains the trace-sampled result: real steps carry
 both, which is why the same build is 1.86-2.92x there.
 
-[Three repeats of this sweep are pending. Pass-to-pass variation on these generated sets has been observed at 13%,
-and once at 40% on a point that a provably inert knob could not have moved, so these ratios are reported without
-error bars only until those land.]
+[The set used here draws a tenth of its inputs from the agent distribution. The evaluated workload has agent
+inputs dominating, and the sweep at that composition is pending; it should raise the heterogeneous figure, since the
+share of wide-KV inputs is what determines how much tile padding there is to remove.]
 
 The split is the mechanism stated as a prediction and then confirmed. What the dispatcher removes is the padding of
 narrow work up to a wide tile, so where every input already has nearly the same width there is almost nothing to

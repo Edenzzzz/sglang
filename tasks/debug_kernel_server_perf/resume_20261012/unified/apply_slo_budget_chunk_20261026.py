@@ -187,7 +187,26 @@ method = '''
                 else:
                     self.slo_chunk_life = getattr(self, "slo_chunk_life", 0) + 1
                     remaining = max(0.0, L - o - tps)
-                    budget = min(budget, s_r * L - spent - remaining * rate)
+                    _t_r = s_r * L - spent - remaining * rate
+                    if cfg["demote"] and _t_r <= 0.0:
+                        # NOT SAVABLE, judged by the budget's OWN formula rather than by history.
+                        #
+                        # The demote test above asks `spent > s_r * L` -- has this row already consumed its whole
+                        # allowance? That misses the row that actually vetoes. A row ten tokens into its output
+                        # has spent almost nothing, so it passes that test, but its PROJECTION
+                        # `remaining * rate` at a slow observed rate is hundreds of seconds, so `_t_r` is deeply
+                        # negative and, because the budget is a MIN over rows, it pins the whole step to zero.
+                        # Measured 2026-10-29: budget_ms = -11731 while demotion fired on only ~10% of calls, and
+                        # the rule returned a zero chunk on 41% of steps.
+                        #
+                        # `_t_r <= 0` means no chunk size whatever lets this row reach its target -- not even a
+                        # chunk of zero. It cannot be rescued, so it is excluded from the minimum instead of
+                        # setting it, which is SLOs-Serve section 4.1's rule: price the step against the requests
+                        # that can still meet their deadlines, and serve the rest from what is left over. The
+                        # floor below is what serves them.
+                        self.slo_chunk_unsavable = getattr(self, "slo_chunk_unsavable", 0) + 1
+                        continue
+                    budget = min(budget, _t_r)
                     continue
             # Banked slack is capped at BANK_STEPS steps' worth, so one step cannot stall a row for seconds.
             budget = min(budget, s_r * (o + tps) - spent, cfg["bank_steps"] * per_step)
@@ -313,11 +332,11 @@ method = '''
         self.slo_chunk_capped = getattr(self, "slo_chunk_capped", 0) + int(out < chunk_size)
         self.slo_chunk_zero = getattr(self, "slo_chunk_zero", 0) + int(out == 0)
         if self.slo_chunk_calls % 500 == 1:
-            logger.info("SLO_CHUNK calls=%d capped=%d zero=%d floored=%d latefloor=%d qcapped=%d fresh=%d life=%d nolife=%d "
+            logger.info("SLO_CHUNK calls=%d capped=%d zero=%d floored=%d latefloor=%d unsavable=%d qcapped=%d fresh=%d life=%d nolife=%d "
                         "rows=%d tps=%.2f budget_ms=%.1f chunk=%d->%d",
                         self.slo_chunk_calls, self.slo_chunk_capped, self.slo_chunk_zero,
                         getattr(self, "slo_chunk_floored", 0), getattr(self, "slo_chunk_late_floor", 0),
-                        getattr(self, "slo_chunk_qcapped", 0),
+                        getattr(self, "slo_chunk_unsavable", 0), getattr(self, "slo_chunk_qcapped", 0),
                         getattr(self, "slo_chunk_fresh", 0), getattr(self, "slo_chunk_life", 0),
                         getattr(self, "slo_chunk_nolife", 0), len(rows), tps, budget, chunk_size, out)
             logger.info("SLO_CHUNK demoted=%d rate_ms=%.1f life_len=%s",

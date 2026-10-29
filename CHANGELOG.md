@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.90.0 — The fix the diagnosis pointed to: exclude unsavable rows from the budget's minimum (2026-10-29)
+- The demote test judges savability by HISTORY (spent > s_r*L), which misses the row that actually vetoes: ten
+  tokens into its output a row has spent almost nothing, yet its projection remaining*rate at a slow observed rate
+  makes T_r deeply negative, and the minimum pins the step. Measured: budget_ms = -11731 with demotion firing on
+  ~10% of calls and a zero chunk on 41% of steps.
+- Fix judges savability by the budget's OWN formula: T_r <= 0 means no chunk size, not even zero, lets the row
+  reach its target, so it is excluded from the minimum rather than setting it. That is SLOs-Serve 4.1 -- price the
+  step against requests that can still meet their deadlines, serve the rest from what is left.
+- Offline, with every resident row unsavable, the admitted chunk goes from 256 tokens (the bare floor) to 4753.
+  test_slo_chunk_rule.py pins the floor and this case: 11/11.
+- Deployed to python_slo_life on all four nodes (marker=2, compiles); python_slo correctly refused, its rule text
+  differs. A `unsavable=` counter is in the log line so the next arm is checkable the way the bug was found.
+- mn_savable_16g_20261029.sh running at alpha 6 then alpha 3.
+
 ## v3.89.0 — Merged-step prediction measured: the model under-prices, so the defect is structural (2026-10-29)
 - 2693 chunk-carrying steps from the traced arm: bias -4.9% / MAPE 6.7% overall, -5.9% / 7.2% on genuinely merged
   steps, and -2.3% / 2.6% on chunks of 2048 tokens or more -- most accurate exactly where the rule needs it.

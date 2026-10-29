@@ -2271,9 +2271,18 @@ then just noise on a quantity the cap barely moves.
 
 **Consequently the following are WITHDRAWN:** that the chunk layer is a loss; that sizing a chunk from a latency
 budget cannot work on this workload; and that a more accurate step model would optimise the wrong objective. None
-of those were tested, because what was measured was a rule that starves prefill 41% of the time. The fix is to
-grant the earliest-deadline prefill a floor whether or not it can still meet its deadline, and then re-run the
-alpha 3 and alpha 6 arms.
+of those were tested, because what was measured was a rule that starves prefill 41% of the time.
+
+**FIXED AND QUEUED (`apply_late_prefill_floor_20261029.py`).** When no chunk size lets the head prefill meet its
+deadline, it now gets a minimum chunk of one page or 256 tokens, whichever is larger -- the same starting floor the
+search already uses, so the cost to resident rows' time per output token is bounded by one small chunk per step
+rather than being unbounded. The meets-path is untouched, so the change can only raise a chunk, never lower it.
+Deployed and verified on all three SLO trees on all four nodes (`late_floor=2 fresh=2 demoted=2 COMPILES`), and
+folded into `apply_slo_budget_chunk_20261026.py` so a fresh deployment carries it, with a `latefloor=` counter
+added to the rule's log line so the next arm can be checked the same way this bug was found.
+`mn_latefloor_16g_20261029.sh` runs the corrected arm set -- ours = EDF coupled with the SLO-budgeted chunk, no
+fixed chunk anywhere in our arm -- at alpha 6 and alpha 3, chained behind the traced arm so it does not race it
+for the cluster lock. **The corrected arm set is therefore unmeasured rather than measured and found wanting.**
 
 ### Superseded: why a more accurate step model would not rescue the rule (kept for the record, premise now void)
 

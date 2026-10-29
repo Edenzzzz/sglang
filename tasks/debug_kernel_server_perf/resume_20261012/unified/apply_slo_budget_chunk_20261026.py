@@ -289,13 +289,24 @@ method = '''
                 if meets and floor > out:
                     self.slo_chunk_floored = getattr(self, "slo_chunk_floored", 0) + 1
                     out = int(floor)
+                elif not meets:
+                    # A prefill that cannot meet its deadline at any chunk size must still make progress.
+                    # Withholding service is self-reinforcing -- it can never stop being late -- and measured on
+                    # 2026-10-29 it returned a zero chunk on 41% of steps, costing 19-33 points of attainment
+                    # while flattering TPOT. Being late is grounds for not blocking others, which ordering and
+                    # demotion handle, not for getting nothing.
+                    _late = max(int(self.page_size), 256)
+                    if _late > out:
+                        self.slo_chunk_late_floor = getattr(self, "slo_chunk_late_floor", 0) + 1
+                        out = int(_late)
         self.slo_chunk_capped = getattr(self, "slo_chunk_capped", 0) + int(out < chunk_size)
         self.slo_chunk_zero = getattr(self, "slo_chunk_zero", 0) + int(out == 0)
         if self.slo_chunk_calls % 500 == 1:
-            logger.info("SLO_CHUNK calls=%d capped=%d zero=%d floored=%d qcapped=%d fresh=%d life=%d nolife=%d "
+            logger.info("SLO_CHUNK calls=%d capped=%d zero=%d floored=%d latefloor=%d qcapped=%d fresh=%d life=%d nolife=%d "
                         "rows=%d tps=%.2f budget_ms=%.1f chunk=%d->%d",
                         self.slo_chunk_calls, self.slo_chunk_capped, self.slo_chunk_zero,
-                        getattr(self, "slo_chunk_floored", 0), getattr(self, "slo_chunk_qcapped", 0),
+                        getattr(self, "slo_chunk_floored", 0), getattr(self, "slo_chunk_late_floor", 0),
+                        getattr(self, "slo_chunk_qcapped", 0),
                         getattr(self, "slo_chunk_fresh", 0), getattr(self, "slo_chunk_life", 0),
                         getattr(self, "slo_chunk_nolife", 0), len(rows), tps, budget, chunk_size, out)
             logger.info("SLO_CHUNK demoted=%d rate_ms=%.1f life_len=%s",

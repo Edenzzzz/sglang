@@ -2273,6 +2273,36 @@ then just noise on a quantity the cap barely moves.
 budget cannot work on this workload; and that a more accurate step model would optimise the wrong objective. None
 of those were tested, because what was measured was a rule that starves prefill 41% of the time.
 
+### MERGED-STEP prediction measured too, and it eliminates the second defect (2026-10-29, no GPU time)
+
+The chunk rule bisects MERGED steps, not decode-only ones, so the decode-step figures below did not settle whether
+the model over-prices a chunk. 2 693 chunk-carrying steps from the same traced arm, scored against the fitted
+model, medians:
+
+| subset | signed bias | MAPE |
+|---|---:|---:|
+| all chunk-carrying steps | -4.9% | 6.7% |
+| with decode rows (genuinely merged) | -5.9% | 7.2% |
+| prefill-only | -1.6% | 5.4% |
+| **chunk >= 2048 tokens** | **-2.3%** | **2.6%** |
+| chunk < 512 tokens | -6.3% | 8.5% |
+| held out (chronological second half) | -7.1% | 8.1% |
+
+**Two conclusions, and together they close the diagnosis.**
+1. **The model does NOT over-price chunks -- it UNDER-prices them by about 5%**, and it is most accurate exactly
+   where the rule needs it, at 2.6% MAPE on chunks of 2048 tokens or more. An under-predicting model would make
+   the bisection admit MORE, not starve prefill. **So the prediction defect is refuted on merged steps as well as
+   on decode steps, and the minimum-over-rows is the sole surviving explanation** for the chunk rule's behaviour.
+   The fix is the aggregation -- price the step against the rows that can still be saved and serve the rest from
+   surplus, per SLOs-Serve section 4.1 -- not a better model.
+2. **Point 3's premise is confirmed on the quantity that matters.** 2.6-7.2% MAPE on chunk-carrying steps is
+   accurate enough to schedule against, and it corroborates the 3.4-4.0% recorded earlier for merged steps, now
+   on traces where `dkv` is real. A learned predictor or an MLP would be optimising a model that is already
+   within a few percent where it is used.
+
+Extraction: `grep -oE 'STEPTRACE (EXTEND|MIXED) [^|]*gpu=[0-9.]+'` over
+`/dev/shm/w/mn/coloc_cache_edf_mtp_hc_tl2_a3_demotefix_r1_cap2000/worker_r0_g2.log`.
+
 ### POINT 3 MEASURED AT LAST: decode-step prediction on real `dkv` (2026-10-29, no GPU time)
 
 3 598 decode steps from the alpha-3 traced arm, every one carrying a real KV length, scored against the fitted

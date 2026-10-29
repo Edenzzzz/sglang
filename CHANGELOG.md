@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.89.0 — Merged-step prediction measured: the model under-prices, so the defect is structural (2026-10-29)
+- 2693 chunk-carrying steps from the traced arm: bias -4.9% / MAPE 6.7% overall, -5.9% / 7.2% on genuinely merged
+  steps, and -2.3% / 2.6% on chunks of 2048 tokens or more -- most accurate exactly where the rule needs it.
+- The model UNDER-prices chunks by about 5%. An under-predicting model makes the bisection admit MORE, not starve
+  prefill, so the prediction hypothesis is refuted on merged steps as well as decode steps. The minimum-over-rows
+  aggregation is now the sole surviving explanation, and the fix is to price the step against savable rows and
+  serve the rest from surplus rather than to improve the model.
+- Point 3's premise is confirmed on the quantity that matters: 2.6-7.2% MAPE on chunk-carrying steps, corroborating
+  the 3.4-4.0% recorded earlier, now on traces where dkv is real. A learned predictor would be optimising a model
+  already within a few percent where it is used.
+
 ## v3.88.0 — A test that reproduces the starvation bug, and the source patch fixed against it (2026-10-29)
 - tasks/perf_model/test_slo_chunk_rule.py gains two cases for the floor, which it had none for -- the reason the
   "floor inside the deadline guard" bug survived deployment and cost a cluster arm.

@@ -2273,6 +2273,32 @@ then just noise on a quantity the cap barely moves.
 budget cannot work on this workload; and that a more accurate step model would optimise the wrong objective. None
 of those were tested, because what was measured was a rule that starves prefill 41% of the time.
 
+### The floor now fires, and the result isolates the remaining defect (2026-10-29, alpha 6)
+
+| arm | chat mean TPOT | chat mean TTFT | attainment tight / loose |
+|---|---:|---:|---:|
+| L0 (sglang's chunk policy) | 57.1 ms | 2.28 s | **61.5%** / -- |
+| ours, no floor | 46.3 ms | 8.26 s | 41.1% / 50.3% |
+| ours, floor v1 (never fired) | 48.0 ms | 8.14 s | 40.9% / -- |
+| **ours, hoisted floor (firing)** | **57.0 ms** | **6.41 s** | 39.4% / **56.7%** |
+
+**The floor works and the overshoot is gone:** TPOT moved 46.3 -> 57.0 ms, landing on L0's 57.1, and mean TTFT
+improved 8.26 -> 6.41 s with loose attainment up 50.3 -> 56.7%. So admitting prefill does spend the slack, exactly
+as predicted.
+
+**But tight attainment did not move, because we now miss BOTH targets.** TPOT 57.0 is above the 50 ms target and
+TTFT 6.41 s is still 2.8x L0's 2.28 s. **The rule has surrendered its TPOT advantage without buying back enough
+TTFT, so it is now strictly worse than the baseline on both axes** -- which is a cleaner statement of the problem
+than anything before it: the chunk is still far smaller than the baseline's, and a floor can only raise it to a
+constant, not to the right value.
+
+**That isolates the remaining defect to the budget's magnitude, which is what the discriminator below tests.**
+The floor is now excluded as the explanation: it fires, it does what it should, and the gap survives it. What is
+left is (1) the model over-pricing the chunk, fitted as it was with `dkv` identically zero, and (2) the minimum
+over rows letting one outlier set the budget. Both make the budget too small; neither is addressed by a floor.
+**Do not add a larger constant** -- that would be tuning the floor toward the baseline's chunk size, which is just
+the baseline with extra steps.
+
 ### TWO defects, and a measurement that discriminates between them (2026-10-29, user)
 
 **The cluster is NOT the problem, and the baselines prove it.** If alpha 6 were past the point where TPOT is

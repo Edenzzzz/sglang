@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.82.0 — The floor fires and the overshoot is gone, but the gap survives it (2026-10-29)
+- Hoisted floor at alpha 6: chat TPOT 46.3 -> 57.0 ms, landing on L0's 57.1, mean TTFT 8.26 -> 6.41 s, loose
+  attainment 50.3 -> 56.7%. So the floor does spend the slack, as predicted.
+- Tight attainment did not move (39.4% against L0's 61.5%) because we now miss BOTH targets: TPOT 57.0 is over the
+  50 ms target and TTFT 6.41 s is still 2.8x the baseline's 2.28 s. The rule surrendered its TPOT advantage
+  without buying back enough TTFT, so it is now strictly worse than the baseline on both axes.
+- This EXCLUDES the floor as the explanation -- it fires, it behaves correctly, and the gap survives it. What
+  remains is the budget's magnitude: the model over-pricing the chunk (fitted with dkv identically zero) and the
+  minimum over rows letting one outlier set it. A larger constant would only tune the floor toward the baseline's
+  chunk size, which is the baseline with extra steps.
+
 ## v3.81.0 — Sub-1x shapes fixed: flashinfer's FA2 chunk rule degenerates on all-long batches (2026-10-29)
 - flashinfer unified_dispatch_20261024 d9cd7e6. Below-1.0x captures 13/28 -> 8/28, median 1.008 -> 1.169,
   correctness 28/28 PASS, two independent after-runs within 0.5%.

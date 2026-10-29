@@ -1320,6 +1320,31 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
         -- the same wall A5.5's multicast hit. So the guest keeps the `cp.async` gather the FA2 BatchPrefill body
         already uses, and the real new work is a SECOND load pipeline with its own mbarriers, issued by the same
         producer warpgroup beside FA3's TMA.
+    - **[x] REPRODUCED ON THE H200 ITSELF (2026-10-29), bit for bit.** The register numbers had been measured on a
+      CPU-only box, and ptxas counts are only comparable within one toolchain, so they were re-run on the trial:
+      | arm | H200 | CPU box |
+      |---|---|---|
+      | q128 default, all FA2 classes (control) | 168 reg / 33 424 B | 168 / 33 424 B |
+      | q128, guest compiled out (control) | 168 reg / **0 B** | 168 / 0 B |
+      | **replace + 16-row guest** | 168 reg / **164 B** | 168 / 164 B |
+      | **replace, guest compiled out** | 168 reg / **16 B** | 168 / 16 B |
+      Every arm matches exactly, so the toolchains agree and **the variant's marginal cost of 148 B is confirmed on
+      the target hardware.** Commands: `ub/gate_q64_registers_20261028.py --qs 64
+      "--extra=-DFUSED_Q64_PIGGYBACK=1 -DFUSED_PIGGYBACK_REPLACE=1 [-DFUSED_DRAIN_ONLY16=1 |
+      -DFLASHINFER_FUSED_DRAIN_NOOP=1]"`, logs `/opt/tiger/w/i18_{only16,noop}.log`.
+      - **Two wrong invocations failed loudly rather than producing a number, which is why this is trustworthy.**
+        `FUSED_PIGGYBACK_REPLACE` alone hits an `#error` (it is a MODE of the piggyback path, not an alternative);
+        with it at q128 four `static_assert`s fire on the tile, the CTA width, the register distribution and the
+        shared-memory sum. Replace mode requires `NUM_WARPS == 8`, i.e. the FA3 role at a 64-row tile with the
+        guest in the warpgroup the second consumer would have used.
+      - **And one number must NOT be quoted:** the default class set at q64 gives 4 432 B, which is neither the
+        164 B (16-row guest only) nor the 21 008 B (all three classes) figure. The guest hosts ONE tile class, so
+        `FUSED_DRAIN_ONLY16=1` is the configuration the mechanism needs; reading 4 432 B as a cross-toolchain
+        discrepancy would have repeated the `dkv` error of treating a number as a property of the code when it is
+        a property of the inputs.
+      - Still outstanding on this item: the correctness fixture (needs a GPU run, not just `nvcc -c`) and the
+        timing, both of which can run on this trial now. The 1.1-2.3% ceiling at 128K is unchanged, so neither can
+        move the paper's claims.
     - **Decisive tests, all compile-only (no GPU, `nvcc -c`):**
       0. **(the one that matters) replace-a-consumer at q128**: 12 warps, FA3 role covering 64 rows per CTA, guest
          in warpgroup 1, its buffers aliased onto the retired Q tile. Expect 240 regs and 0 B spill, since the

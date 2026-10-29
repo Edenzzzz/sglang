@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.47.0 — Item 18's register result reproduces bit-for-bit on the H200 (2026-10-29)
+- All four arms match the CPU box exactly: q128 control 168 reg / 33 424 B, q128 guest-out 168 / 0 B, replace +
+  16-row guest 168 / 164 B, replace guest-out 168 / 16 B. So the toolchains agree and the variant's marginal cost
+  of 148 B is confirmed on the target hardware rather than inferred from a CPU-only box.
+- Two wrong invocations failed loudly instead of producing numbers, which is what makes the result trustworthy:
+  FUSED_PIGGYBACK_REPLACE alone hits an #error because it is a MODE of the piggyback path, and at q128 four
+  static_asserts fire on tile, CTA width, register distribution and the shared-memory sum.
+- Recorded a number NOT to quote: the default class set at q64 gives 4 432 B, which matches neither the 164 B
+  (16-row guest only) nor the 21 008 B (all three classes) arm. The guest hosts one tile class, so DRAIN_ONLY16 is
+  the configuration the mechanism needs. Reading 4 432 B as a toolchain discrepancy would have repeated the dkv
+  error -- treating a number as a property of the code when it is a property of the inputs.
+- Outstanding on this item: the correctness fixture and timing, both of which need a GPU run and can now run here.
+
 ## v3.46.0 — H200 trial provisioned and verified; the ladder's real blocker is the capture set (2026-10-29)
 - Trial 3f9e6a55ef7ae47e running since 07:20 with all four GPUs loaded so it cannot be reaped again. Verified by
   name: sglang at 3fef129ff8, torch 2.14.1+cu130 on 4 GPUs, flashinfer/sgl_kernel/numpy importing, Qwen2.5-7B plus

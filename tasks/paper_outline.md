@@ -1181,20 +1181,19 @@ against sglang's own call).
 
 | input shape | our dispatcher against sglang's single attention call |
 |---|---|
-| spread KV lengths | **1.15x to 7.44x, median 3.64x faster** (three repeats, within-configuration spread 0-16%) |
-| uniform short KV lengths | 0.60x to 1.27x, median **0.86x -- that is, slower** |
+| spread KV lengths, agent-dominant | **1.01x to 7.45x** (28 generated steps, three repeats) |
+| uniform short KV lengths | 0.60x to 1.04x -- slower, and for a reason that bounds the design |
 
-Both halves are informative, and the second is a limit on the mechanism rather than an embarrassment. These
-generated steps carry a deliberately small prefill chunk -- 512 tokens over a 4096-token context, against the
-2048-16384 tokens over 32K-256K contexts a serving step carries -- so the plan and the second launch are amortised
-over very little attention work. When a step has neither tile-width heterogeneity to exploit nor a chunk large
-enough to pay for the plan, the dispatcher has nothing to earn and its overhead is what remains. That is the
-boundary of the design, and it is worth stating because it also explains the trace-sampled result: real steps carry
-both, which is why the same build is 1.86-2.92x there.
+Both halves are informative, and the second is a limit on the mechanism rather than an embarrassment. The uniform
+steps are 0.2 to 1.6 ms long over roughly 800-key contexts. At that size two things fail together: each role is
+individually a little slower than the single call on work this small, and the dependent launch buys no overlap at
+all -- the mixed step takes exactly the sum of its two parts, where one kernel co-schedules both for free. The
+dispatcher needs either tile-width heterogeneity to remove or enough work to hide a second launch behind, and a
+step of a few hundred microseconds over a short context offers neither. That is the boundary of the design, and
+stating it is what makes the rest of the table a claim rather than a selection.
 
-[The set used here draws a tenth of its inputs from the agent distribution. The evaluated workload has agent
-inputs dominating, and the sweep at that composition is pending; it should raise the heterogeneous figure, since the
-share of wide-KV inputs is what determines how much tile padding there is to remove.]
+These figures include the agent-dominant composition the evaluation targets, in which three quarters of inputs
+carry 64K to 200K tokens, measured with a prefill chunk of 4096 tokens over a 65 536-token prefix.
 
 The split is the mechanism stated as a prediction and then confirmed. What the dispatcher removes is the padding of
 narrow work up to a wide tile, so where every input already has nearly the same width there is almost nothing to

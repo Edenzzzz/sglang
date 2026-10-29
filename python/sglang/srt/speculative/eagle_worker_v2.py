@@ -2,6 +2,7 @@ import contextlib
 import os
 import logging
 import time
+from types import SimpleNamespace
 from typing import List, Optional
 
 import torch
@@ -1920,9 +1921,40 @@ class EAGLEWorkerV2(BaseSpecWorker):
             # num_tokens_per_req = speculative_num_draft_tokens. Next: find what the runner derives
             # raw_num_tokens from for this batch (input_ids.numel() / extend_num_tokens /
             # num_accept_tokens) and make it bs*n, rather than resizing the tensors.
-            self.draft_worker._draft_extend_for_decode(
-                running, result.mixed_running_result
-            )
+            if os.environ.get("SGLANG_DELAYED_VERIFY") == "1":
+                # Delayed verification (arXiv 2512.01278 section 4.3): the verify rows' draft
+                # extend, and the requests themselves, wait one iteration. The scheduler takes
+                # them out of the next batch and calls drain_delayed_verify() after that
+                # iteration's forward is launched, so this work overlaps it.
+                #
+                # The device tensors the extend needs are snapshotted HERE because the scheduler
+                # replaces accept_lens / next_token_ids / hidden_states on the result object with
+                # host copies (copy_to_cpu) before the next iteration -- an extend run later off
+                # the result object would read host tensors and mix them with device ones.
+                _vr = result.mixed_running_result
+                self._dv_stash.append(
+                    (
+                        running,
+                        _vr,
+                        {
+                            "accept_lens": _vr.accept_lens,
+                            "next_token_ids": _vr.next_token_ids,
+                            "prepared_draft_extend_inputs": _vr.prepared_draft_extend_inputs,
+                            "hidden_states": _vr.logits_output.hidden_states,
+                        },
+                    )
+                )
+                self._dv_stashed = getattr(self, "_dv_stashed", 0) + 1
+                if self._dv_stashed % 100 == 1:
+                    logger.info(
+                        "DELAYED_VERIFY stashed=%d pending=%d rows=%d",
+                        self._dv_stashed, len(self._dv_stash), len(running.reqs),
+                    )
+                result.delayed_verify_held = running
+            else:
+                self.draft_worker._draft_extend_for_decode(
+                    running, result.mixed_running_result
+                )
         if os.environ.get("SGLANG_DBG_DRAFT_COPY") == "1":
             def _sh(x):
                 return None if x is None else tuple(x.shape)
@@ -1940,6 +1972,40 @@ class EAGLEWorkerV2(BaseSpecWorker):
                 getattr(result.mixed_running_result, "accept_lens", None),
             )
         return result
+
+    @property
+    def _dv_stash(self) -> List:
+        stash = getattr(self, "_dv_stash_list", None)
+        if stash is None:
+            stash = self._dv_stash_list = []
+        return stash
+
+    def has_delayed_verify(self) -> bool:
+        return bool(self._dv_stash)
+
+    def drain_delayed_verify(self):
+        """Run the held verify rows' draft extend, one iteration after their verify forward.
+
+        Returns the batch it belongs to. The acceptance itself is already on the result object
+        (run_eagle_verify leaves it in device tensors) and the scheduler delivers it through the
+        usual one-iteration-late path; what waits here is the draft extend, which is the work
+        that otherwise sits between the verify launch and the next one.
+        """
+        running, ver_result, snap = self._dv_stash.pop(0)
+        shim = SimpleNamespace(
+            accept_lens=snap["accept_lens"],
+            next_token_ids=snap["next_token_ids"],
+            prepared_draft_extend_inputs=snap["prepared_draft_extend_inputs"],
+            logits_output=SimpleNamespace(hidden_states=snap["hidden_states"]),
+        )
+        with (
+            draft_tp_context(self.draft_worker.draft_owns_attention),
+            speculative_moe_backend_context(),
+            speculative_moe_a2a_backend_context(),
+            spec_stage_span("draft_extend"),
+        ):
+            self.draft_worker._draft_extend_for_decode(running, shim)
+        return running, ver_result
 
     def _forward_prefill_batch(
         self, batch, on_publish=None, pp_proxy_tensors=None, coordination_plan=None

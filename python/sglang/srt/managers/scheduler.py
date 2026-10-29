@@ -1279,6 +1279,14 @@ class Scheduler(
         self.waiting_queue: List[Req] = []
         # The running decoding batch for continuous batching
         self.running_batch: ScheduleBatch = ScheduleBatch(reqs=[], batch_is_full=False)
+        # Delayed verification (SGLANG_DELAYED_VERIFY=1, arXiv 2512.01278 section 4.3).
+        # _dv_held: batches whose verify rows' draft extend is stashed in the spec worker and
+        # which are taken out of the batch for one iteration; _dv_rejoin: drained, waiting to
+        # rejoin at the next batch formation. A held request is in no batch, so nothing
+        # resolves or re-publishes its future while it is held.
+        self._dv_held: List[Tuple[int, ScheduleBatch]] = []
+        self._dv_rejoin: List[ScheduleBatch] = []
+        self._dv_iter: int = 0
         # The current forward batch
         self.cur_batch_for_debug: Optional[ScheduleBatch] = None
         # The last forward batch
@@ -1947,6 +1955,7 @@ class Scheduler(
             self.process_batch_result(tmp_batch, tmp_result)
 
         while True:
+            self._dv_iter += 1
             if self.gracefully_exit:
                 break
 
@@ -1989,6 +1998,11 @@ class Scheduler(
             else:
                 batch_result = None
                 self._sched_idled = True
+
+            # Delayed verification: the held rows' draft extend, now that this iteration's
+            # forward is already in flight. Before pop_and_process, so the order within the
+            # iteration matches the non-delayed path (extend, then result processing).
+            self.drain_delayed_verify()
 
             # Process the last batch
             if self.last_batch:
@@ -3721,6 +3735,22 @@ class Scheduler(
                     # Merge running_batch with prefill batch
                     running_batch.merge_batch(last_batch)
 
+        # Delayed verification: requests whose draft extend was drained last iteration rejoin
+        # here, at the same point the prefill batch merges in. Doing it at drain time would
+        # mutate a batch whose own result was still being processed.
+        while self._dv_rejoin:
+            held = self._dv_rejoin.pop(0)
+            held.filter_batch()
+            if held.is_empty():
+                continue
+            held.batch_is_full = running_batch.batch_is_full
+            if running_batch.is_empty():
+                running_batch = held
+            else:
+                # Decode-origin absorbs prefill-origin, the direction merge_batch documents.
+                held.merge_batch(running_batch)
+                running_batch = held
+
         # For prefill-only batch, filter out finished requests since they
         # won't go through the decode step. This keeps running_batch accurate
         # for load reporting (num_running_reqs via /v1/loads).
@@ -3859,7 +3889,9 @@ class Scheduler(
         ) and self.chunked_req is None:
             return None, running_batch
 
-        running_bs = len(running_batch.reqs)
+        # Delayed verification takes requests out of running_batch for one iteration; they
+        # are still resident, so admission has to count them.
+        running_bs = len(running_batch.reqs) + len(self.delayed_verify_reqs)
         # Skipped during a chunked prefill: that pass must proceed regardless.
         if (
             self.min_free_slots_delayer is not None
@@ -3975,7 +4007,7 @@ class Scheduler(
             ):
                 continue
 
-            running_bs = len(running_batch.reqs)
+            running_bs = len(running_batch.reqs) + len(self.delayed_verify_reqs)
             candidate_beam_width = (
                 req.beam_group.beam_width if req.beam_group is not None else None
             )
@@ -4645,6 +4677,18 @@ class Scheduler(
                         # shared by reference, so committed tokens still land on the real
                         # requests; the live object keeps the spec_info set above.
                         batch_result.mixed_running_batch = _mix_run.copy()
+                        _dv = getattr(batch_result, "delayed_verify_held", None)
+                        if _dv is not None:
+                            # Delayed verification: take these requests out of the batch until
+                            # the drain. Their futures stay published and valid -- a held
+                            # request is in no batch, so nothing resolves or overwrites them.
+                            assert _dv is self.running_batch, (
+                                "held batch is not the running batch"
+                            )
+                            self._dv_held.append((self._dv_iter, _dv))
+                            self.running_batch = ScheduleBatch(
+                                reqs=[], batch_is_full=_dv.batch_is_full
+                            )
             elif self.enable_pdmux and batch.forward_mode.is_split_prefill():
                 resolve_forward_inputs(batch, self.future_map)
                 batch_result = self.tp_worker.forward_batch_split_prefill(batch)
@@ -4765,6 +4809,18 @@ class Scheduler(
                             return_hidden_states=_mix_run.return_hidden_states,
                         )
                         batch_result.mixed_running_batch = _mix_run.copy()
+                        _dv = getattr(batch_result, "delayed_verify_held", None)
+                        if _dv is not None:
+                            # Delayed verification: take these requests out of the batch until
+                            # the drain. Their futures stay published and valid -- a held
+                            # request is in no batch, so nothing resolves or overwrites them.
+                            assert _dv is self.running_batch, (
+                                "held batch is not the running batch"
+                            )
+                            self._dv_held.append((self._dv_iter, _dv))
+                            self.running_batch = ScheduleBatch(
+                                reqs=[], batch_is_full=_dv.batch_is_full
+                            )
                     # Only the last PP rank owns real results requiring D2H; other ranks
                     # consume device tensors rebuilt from the output ring.
                     batch_result.copy_done = self.device_module.Event()
@@ -5550,6 +5606,8 @@ class Scheduler(
             inflight_batches = [self.running_batch, self.last_batch]
         else:
             inflight_batches = [*self.running_mbs, *self.mbs]
+        inflight_batches.extend(held for _it, held in self._dv_held)
+        inflight_batches.extend(self._dv_rejoin)
         if self.enable_continuous_input_polling and self.result_queue:
             # Polling can run intake before the newest queued batch becomes last_batch.
             inflight_batches.extend(batch for batch, _ in self.result_queue)
@@ -6043,6 +6101,41 @@ class Scheduler(
             )
 
     # placeholder for override
+    @property
+    def delayed_verify_reqs(self) -> List[Req]:
+        """Requests sitting out an iteration for delayed verification, or waiting to rejoin.
+        They are not in running_batch, so every site that reasons about what this worker is
+        holding has to add them."""
+        out = []
+        for _it, held in self._dv_held:
+            out.extend(held.reqs)
+        for held in self._dv_rejoin:
+            out.extend(held.reqs)
+        return out
+
+    def drain_delayed_verify(self):
+        """Run the draft extend for verify rows stashed in an EARLIER iteration, and queue
+        those requests to rejoin the running batch at the next batch formation."""
+        if not self._dv_held and not self.spec_algorithm.is_none():
+            # A stash the scheduler never registered would be drained by nobody and its
+            # requests would stall with no error.
+            worker_has = getattr(self.model_worker, "has_delayed_verify", None)
+            assert worker_has is None or not worker_has(), (
+                "spec worker holds a delayed verification the scheduler never registered"
+            )
+        while self._dv_held and self._dv_held[0][0] < self._dv_iter:
+            _it, expected = self._dv_held.pop(0)
+            held, _ver = self.model_worker.drain_delayed_verify()
+            assert held is expected, "delayed verify stash out of order"
+            self._dv_rejoin.append(held)
+            self.dv_drained = getattr(self, "dv_drained", 0) + 1
+            self.dv_lag = getattr(self, "dv_lag", 0) + (self._dv_iter - _it)
+            if self.dv_drained % 100 == 1:
+                logger.info(
+                    "DELAYED_VERIFY drained=%d mean_lag_iters=%.2f rows=%d",
+                    self.dv_drained, self.dv_lag / self.dv_drained, len(held.reqs),
+                )
+
     def update_cache_from_scheduler(
         self, schedule_batch: ScheduleBatch, batch_result: GenerationBatchResult
     ):

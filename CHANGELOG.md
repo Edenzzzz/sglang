@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.76.0 — pdmux structurally cannot allocate zero SMs; read from the implementation (2026-10-29)
+- Settled by reading python/sglang/srt/multiplex/pdmux_context.py rather than the paper, which is silent on it.
+  divide_sm() enumerates partitions as [x for x in range(min_per_part, total_sms - min_per_part + 1, multiple)
+  if x >= total_sms - x and total_sms - x >= 16], appended as (prefill SMs, decode SMs). On Hopper min_per_part is
+  8 with multiple 8, so prefill always takes at least half and decode always keeps at least 16: neither role can
+  ever be allocated zero.
+- That reinstates the original claim and withdraws yesterday's retraction of it. Both of my readings of the paper
+  were unfounded because the paper does not address the question; the code does. Our runs' 40-56 of 78 SMs for
+  prefill are an instance of the constraint rather than a coincidence.
+- Consequence for the fix: there are TWO differences from the systems that run this policy successfully, not one.
+  pdmux bounds the resource below; SLOs-Serve resolves infeasibility at admission. Our rule did neither -- it drove
+  the chunk to zero and re-litigated feasibility every step.
+
 ## v3.75.0 — The merge-tail guard is a no-op: the barrier was not the fixed cost (2026-10-29)
 - Three repeats per arm: -0.1%, +0.1%, +0.1%, +0.2% against the pre-patch build, all inside the sub-1% spread. The
   grid-dependency barrier was NOT the 0.4-1.0 ms fixed penalty, so that hypothesis is refuted by its own

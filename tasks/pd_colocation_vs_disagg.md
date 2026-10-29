@@ -2295,16 +2295,30 @@ do not have** (checked 2026-10-29 against `tasks/papers/2504.14489.pdf` and `250
 here were wrong -- first that pdmux does not use a latency-budgeted allocation, then that its knob cannot reach
 zero. Neither claim survives reading).
 - **MuxWise (pdmux)**, p8: *"the remaining compute resources are allocated to the prefill"*, at a granularity of
-  16 SMs. Decode gets what the model says it needs and prefill takes the remainder -- the same decision as ours
-  with SMs as the resource. **Nothing in the paper establishes a nonzero floor**, so the claim that its knob cannot
-  reach zero is unverified. What is true is narrower: in our own pdmux runs prefill held 40-56 of 78 SMs, which is
-  evidence about those runs and not about the policy.
+  16 SMs -- the same decision as ours with SMs as the resource. The paper states no floor, so reading it could not
+  settle whether the allocation can reach zero. **The sglang IMPLEMENTATION settles it: it cannot.**
+  `python/sglang/srt/multiplex/pdmux_context.py`, `divide_sm()`:
+
+      possible_values = [x for x in range(min_per_part, total_sms - min_per_part + 1, multiple)
+                         if x >= total_sms - x and total_sms - x >= 16]
+      ...
+      divisions.append((part1, part2))   # (prefill SMs, decode SMs)
+
+  On Hopper `get_arch_constraints` gives `min_per_part = 8, multiple = 8`. Every candidate therefore satisfies
+  `x >= total_sms - x` (prefill takes at least half) and `total_sms - x >= 16` (decode keeps at least 16), so
+  **neither role is ever allocated zero SMs** -- the partition set structurally excludes it. Our own runs' 40-56
+  of 78 SMs for prefill are an instance of that constraint, not a coincidence.
+  **So the earlier retraction of "pdmux's knob cannot reach zero" was itself wrong, and the original claim stands
+  on the implementation.** The lesson is narrow and worth keeping: a policy question like this is settled by the
+  code that runs, not by the paper that describes it -- the paper was silent, and both of my readings of it were
+  therefore unfounded, in opposite directions.
 - **SLOs-Serve**, p7: *"requests to consume surplus token budgets and executing them when sufficient memory is
   available"*; p8: *"cannot meet the SLO, the request is routed to the next replica"*; p11: *"under high request
   load. By rejecting ..."*. So a request that cannot meet its SLO is **rerouted or rejected at admission**. It is
   never admitted and then handed nothing.
 
-**That is the distinction, and it is not about a floor.** Both systems decide ONCE whether they can serve a
+**So there are TWO differences, not one, and we lack both.** pdmux's resource has a hard floor (above), and
+SLOs-Serve resolves infeasibility at admission. Both systems decide ONCE whether they can serve a
 request -- rejecting it, deferring it, or rerouting it -- and thereafter serve what they admitted, using surplus
 for the late ones. **We have no admission decision at all:** the router admits every request, and the chunk rule
 then re-decides against it on every step, which is how an admitted prefill received nothing 41% of the time. A

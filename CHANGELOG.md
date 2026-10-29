@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.77.0 — The failed merge experiment rules out DSMEM/global-barrier merge fusion (2026-10-29)
+- Deleting the barrier and the merge tail outright moved the step -0.1% to +0.2%, inside the sub-1% spread. So
+  fusing the reduction into FA3 behind a global barrier, or handing partials between cluster CTAs over distributed
+  shared memory, cannot be worth more than deleting them. Declined on evidence; the evidence exists only because
+  the optimization failed.
+- By elimination the fixed 0.4-1.0 ms is the second launch's existence or our FA2 kernel's cost on long-KV rows
+  against FA3 handling the same rows. The latter is the only candidate consistent with everything measured: the
+  penalty scales with the number of long rows, vanishes where rows are short and heterogeneous, and survives every
+  merge-side change. Cost-aware role routing is the fix, and its worst case degrades to the baseline's assignment
+  plus PDL rather than below it.
+- Policy note: pdmux's floor and SLOs-Serve's admission control are the same property in different components, not
+  competing choices. A zero chunk is sound only when admission guarantees it is transient -- theirs is, ours was a
+  steady state. The design uses both: the floor as a local safety net, router-side SLO-checked admission as the
+  global policy, which is point 1 of the PD-colocation points.
+
 ## v3.76.0 — pdmux structurally cannot allocate zero SMs; read from the implementation (2026-10-29)
 - Settled by reading python/sglang/srt/multiplex/pdmux_context.py rather than the paper, which is silent on it.
   divide_sm() enumerates partitions as [x for x in range(min_per_part, total_sms - min_per_part + 1, multiple)

@@ -6041,3 +6041,35 @@ distribution, not about any step, and that a reader asking "when does this not h
 whose attention is almost entirely one long prefill. The honest caveat to carry is that the trace-sampled captures
 cannot currently be regenerated on this trial, so that headline rests on data measured earlier rather than
 re-verified tonight.
+
+## What the failed merge-tail experiment rules out, and where the fixed cost must be (2026-10-29)
+
+A natural next step on the no-FA2-tiles case is a fancier merge: fuse the reduction into FA3 behind a global
+barrier, or hand partials between cluster CTAs over distributed shared memory, instead of leaving it in the FA2
+epilogue. **The merge-tail measurement bounds all of those at zero.** Deleting the barrier AND the merge tail
+changed the step by -0.1% to +0.2% -- inside the sub-1% spread -- so relocating them into FA3, or passing partials
+over DSMEM, cannot be worth more than deleting them. The merge is short and PDL already hides the second launch.
+That is a mechanism declined on evidence, and the evidence exists only because the optimization failed.
+
+**By elimination the fixed 0.4-1.0 ms is the second launch's existence or our FA2 kernel's cost on long-KV rows**
+relative to FA3 handling the same rows. The second is the only candidate consistent with everything measured: the
+penalty scales with the number of long rows (0.38 ms at batch 16 to 1.02 ms at batch 32-64), it vanishes when rows
+are short and heterogeneous (where we win 2-7x), and it is unaffected by every merge-side change. Cost-aware role
+routing -- send a row to FA3 when FA2's tile classes would be slower on it -- is therefore the right fix, and it
+has the property that the worst case degrades to the baseline's own assignment plus PDL rather than below it.
+
+## The policy question, settled: a floor and admission control are the same property in different places
+
+pdmux and SLOs-Serve are not alternatives to choose between.
+- **pdmux puts the guarantee in the allocator**: `divide_sm()` cannot return a zero share, so starvation is
+  impossible by construction regardless of what the model predicts.
+- **SLOs-Serve puts it in admission**: a zero-prefill step is safe there *because the admitted set is feasible by
+  construction* -- an infeasible request is rerouted to another replica or rejected. Their zero is a transient;
+  ours was a steady state at 41% of steps.
+
+So a chunk of zero is only sound when paired with admission control that bounds how long it can last. We had
+neither. The coherent design uses both at different levels: **the floor as a local safety net on the worker**
+(deployed), and **router-side SLO-checked admission as the global policy** -- which is point 1 of the four
+PD-colocation points, and which handles the case a floor cannot: rerouting to a node that can actually serve the
+request. A floor alone keeps admitting work a node cannot serve; admission alone requires the per-step rule never
+to mispredict.

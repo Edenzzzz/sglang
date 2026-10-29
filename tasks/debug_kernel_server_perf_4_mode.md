@@ -5685,7 +5685,17 @@ the control that settles this.
      spread is pure run-to-run noise, and it means **no single-pass small-batch comparison here is trustworthy** --
      including the first table that reported the gap as 0.61x. The gap is real because it reproduces in every
      pass, but its magnitude at batch 16 and 64 is only known to about a third of its own size.
-2. The in-launch merge itself, independent of the split count (`UNIFIED_SKIP_MERGE=1`, needs a rebuild).
+2. **The in-launch merge: UNTESTABLE BY REMOVAL -- compiling it out DEADLOCKS the kernel (2026-10-29).** A
+   separate extension built with `UNIFIED_SKIP_MERGE=1` hangs: the GPU sits at 100% utilisation while the host
+   process sleeps on a single thread, which is the signature of a host blocked in a CUDA sync behind a kernel that
+   never finishes. Two attempts hung, one for 16 minutes before being killed, and the first produced no diagnostic
+   because the driver piped its output through `grep` -- which hid both the hang and any error, a harness mistake
+   worth not repeating.
+   **What this says about the design, and it belongs in the paper:** the in-launch merge is not an optional stage
+   whose cost can be measured by deleting it. The FA2 launch's synchronisation depends on the merge completing --
+   skipping it leaves the ticketed handshake unsatisfied -- so the merge is structurally integral to the one-launch
+   structure rather than a bolt-on to it. Measuring its cost needs a build where the merge body is replaced by a
+   no-op that still signals the handshake, which is a kernel change rather than a flag.
 3. The plan's host cost, which is 0.5-8.7 ms here against a kernel of 0.5-2.3 ms. It is overlapped in serving but
    the harness may not hide it.
 

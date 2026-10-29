@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.58.0 — Compiling the in-launch merge out deadlocks the kernel (2026-10-29)
+- UNIFIED_SKIP_MERGE=1 does not produce a timing probe; it hangs. The GPU sits at 100% utilisation while the host
+  sleeps on one thread -- a host blocked in a CUDA sync behind a kernel that never completes. Two attempts hung,
+  one for 16 minutes.
+- The FA2 launch's synchronisation depends on the merge completing, so removing the merge leaves the ticketed
+  handshake unsatisfied. The merge is structurally integral to the one-launch design rather than a stage bolted on
+  to it, which is a point worth making in the paper about why the fusion lives in the plan and the merge.
+- Measuring the merge's cost therefore needs a build whose merge body is a no-op that still signals the handshake,
+  which is a kernel change rather than a flag. Candidate 2 for the v3 gap is closed by this route.
+- Harness mistake recorded: the first attempt piped the driver's output through grep, which hid both the hang and
+  any error. A probe's output must not be filtered until it is known to terminate.
+
 ## v3.57.0 — Draft/verify pipelining ceiling is 17-28%; the blocker is a data dependency (2026-10-29)
 - Computed the draft share of decode step time from the fitted step model, which separates the speculative terms
   (nd*S for the S=3 draft forwards, nd*T and dkv*T for verify), so no GPU time was needed. Draft is 22.7% at 8

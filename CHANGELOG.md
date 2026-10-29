@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.53.0 — A6's FA3 KV split is why it loses to v3 on heterogeneous steps (2026-10-29)
+- Confirmed the regression at 200 iterations with the workspace pre-grown: A6 runs at 0.61-0.83x of v3 on the
+  heterogeneous two-mode captures, while both beat sglang's single attention call by 2.0-7.0x. Correctness is
+  unaffected (18/18 FP32 gate).
+- Cause read off the plan: the planner splits the FA3 chunk until FA3 alone has `fa3_ctas` items, hardcoded to the
+  SM count. On a 4096-token context that splits a small chunk three ways (chunk 1664, 336 items, 12-56 merge
+  groups, ~0.5 MB of partials) to avoid idle SMs -- ignoring the 188-612 FA2 items running concurrently under PDL,
+  which already fill the machine. The policy was tuned on 32K-256K contexts where splitting is necessary.
+- apply_fa3_cta_target_20261029.py exposes UNIFIED_FA3_CTAS without changing any default; a 132/64/16/1 sweep is
+  measuring how much of the gap the split accounts for, with the 132 arm reproducing the baseline as its control.
+
 ## v3.52.0 — Kernel gains measured on mixed input: 1.23-7.51x where input is heterogeneous (2026-10-29)
 - The A6 unified dispatcher now builds and runs on the H200 trial. The build needed flash-attention's hopper
   headers, which were absent; the register gate had never revealed it because that gate compiles flashinfer's own

@@ -5618,3 +5618,36 @@ Commands and provenance: captures `gen_synth_meld_20261025.py /opt/tiger/w/synth
 3f9e6a55ef7ae47e; sglang 3fef129ff; logs `/opt/tiger/w/{check_all,bench}.log`, per-set JSON
 `/opt/tiger/w/bench_<set>.json`. The build needed flash-attention's hopper headers pushed to the trial, which the
 register gate had not revealed because it compiles flashinfer's own FA3 mainloop rather than the upstream one.
+
+## A6 loses to v3 on heterogeneous two-mode steps, and the FA3 KV split is why (2026-10-29)
+
+**The defect.** A6 is meant to be a superset of v3 -- v3's kernels plus one plan plus the in-launch merge -- so it
+cannot lose to v3 by construction. On the generated heterogeneous two-mode captures it does, reproducibly:
+200 iterations with the native workspace pre-grown (so no arm reallocates mid-pass), H200, 132 SMs.
+
+| batch | A6 | v3 | sglang single call | A6 vs v3 | A6 vs sglang |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 0.676 | 0.414 | 3.714 | **0.61x** | 5.49x |
+| 32 | 0.523 | 0.435 | 2.190 | **0.83x** | 4.19x |
+| 64 | 0.651 | 0.464 | 4.557 | **0.71x** | 7.00x |
+| 128 | 2.280 | 1.640 | 4.650 | **0.72x** | 2.04x |
+
+Both still beat sglang's single attention call by 2.0-7.0x, so this is a margin we are leaving on the table rather
+than a correctness or viability problem. Correctness is unaffected: 18 of 18 captures pass the FP32 gate.
+
+**The cause, read off the plan rather than guessed.** Every capture reports `max_splits_fa3 = 3` and
+`fa3_chunk = 1664` on a 4096-token context, producing 336 FA3 items and 12-56 merge groups with about half a
+megabyte of partials. The planner splits the FA3 chunk until FA3 alone has `fa3_ctas` work items, and that target
+is hardcoded to the SM count (`unified_executor_20261024.py`: `self.fa3_ctas = self.num_sm`). Unsplit, this chunk
+yields roughly 112 items against 132 SMs, so the planner splits three ways to avoid idle SMs.
+**That reasoning ignores the FA2 items running CONCURRENTLY under PDL.** These steps carry 188 to 612 FA2 items,
+which fill the machine on their own, so the split adds no parallelism and every split forces partials through the
+merge. The split policy was tuned on trace-sampled captures whose contexts are 32K-256K, where splitting is
+necessary; applied to a short context beside plenty of FA2 work it is pure overhead.
+
+**Status.** `apply_fa3_cta_target_20261029.py` exposes the target as `UNIFIED_FA3_CTAS` (no default changed, so no
+other arm moves), and a sweep over 132 / 64 / 16 / 1 is running to measure how much of the gap the split accounts
+for. The 132 arm reproduces the baseline exactly (0.655-2.293, splits 3, chunk 1664), which is the control that
+makes the rest readable. If the gap closes at a low target, the fix is to make the FA3 split target depend on the
+FA2 work in the same plan rather than on the SM count alone -- the plan already knows both, so this costs nothing
+at runtime.

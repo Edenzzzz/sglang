@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.71.0 — The SLO-chunk "loss" is a fifth bug: a zero chunk on 41% of calls (2026-10-29)
+- The user pushed back on the loss being real. It is not. The arms ran the tree with all four earlier fixes present,
+  but the rule's own counters show it returns a chunk of ZERO on 2674 of 6501 calls (41%), i.e. it admits no prefill
+  at all on four steps in ten.
+- Cause: the TTFT floor's guard is `if meets and floor > out`, where `meets` means the head prefill can still make
+  its deadline. Under overload almost nothing can, so no floor is granted and the chunk stays zero -- self
+  reinforcing, since a prefill denied service can never stop being late. Same error as the demote bug fixed earlier:
+  treating "already missed" as grounds to withhold service rather than grounds not to block others.
+- It explains every symptom together: TPOT better by 11-28% (decode unobstructed), TTFT 3.5-4x worse and attainment
+  19-33 points down (prefill starved), fewer rounds admitted, and insensitivity to the cap across a 16x range
+  because the cap never bound -- `zero` did.
+- WITHDRAWN: that the chunk layer is a loss; that budget-sizing cannot work on this workload; and that a better
+  step model would optimise the wrong objective. Fix is to floor the earliest-deadline prefill regardless of
+  whether it can still meet its deadline, then re-run alpha 3 and alpha 6.
+
 ## v3.70.0 — Skip the FA3 merge tail and its barrier when there is nothing to reduce (2026-10-29)
 - Implemented, not just measured. The FA3 split partials are reduced by the FA2 kernel, which in the static path
   ends with cudaGridDependencySynchronize() then UnifiedMergeFA3Tail. Under PDL that barrier is where a CTA waits

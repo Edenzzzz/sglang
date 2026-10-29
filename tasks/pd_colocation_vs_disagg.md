@@ -2239,7 +2239,43 @@ plausible step, so the budget -- not the cap -- is what still binds, which is th
 `bash tasks/pd_colocation/mn_capsweep2_16g_20261029.sh`, log `/tmp/h20/mn_capsweep2_r1.log`. The trade is therefore a property of sizing the chunk from a latency budget at all on this workload,
 not of the cap's value, which is what makes it a finding rather than a tuning gap.
 `mn_capsweep2_16g_20261029.sh`, log `/tmp/h20/mn_capsweep2_r1.log`.
-### Why a more accurate step model will not rescue the rule
+### THE LOSS IS A BUG, FOUND 2026-10-29: the rule returns a zero chunk on 41% of calls
+
+The arms above ran the tree with all four earlier fixes present (`fresh`, `demoted`, `life`, `bank=inf` markers all
+in `/dev/shm/w/python_slo_life`, compiles clean), so this is a fifth defect rather than a stale build. The rule's
+own counters give it away:
+
+| arm | calls | capped | **zero** | floored |
+|---|---:|---:|---:|---:|
+| cap 4000 ms | 6501 | 6414 | **2674 (41%)** | 234 (3.6%) |
+| cap 2000 ms (demote fix) | 6501 | 6501 | **2703 (42%)** | 728 (11%) |
+
+**The rule admits NO prefill at all on 41% of steps.** The TTFT floor exists to stop exactly that and fires on
+3.6-11% of calls, because of its own guard:
+
+    # A prefill that cannot meet its deadline at any chunk size is treated as late: no floor.
+    if meets and floor > out:
+        out = int(floor)
+
+Under overload nearly every prefill is already past its deadline, so `meets` is false and **no floor is granted**,
+leaving the chunk at zero. That is self-reinforcing: a prefill denied service can never stop being late. It is the
+same error as the demote bug fixed earlier in the day -- treating "has already missed" as grounds to withhold
+service, when it is only grounds not to let that request block others, which deadline ordering and demotion
+already handle.
+
+**This explains every symptom at once**, which is why it supersedes the earlier reading: mean TPOT improves 11-28%
+(decode steps run unobstructed by prefill), mean TTFT rises 3.5-4x and attainment falls 19-33 points (prefill is
+starved), fewer rounds are admitted, and the result is **insensitive to the cap across a sixteen-fold range**
+because the cap was never the binding constraint -- `zero` was. The non-monotonicity between 4000 and 8000 ms is
+then just noise on a quantity the cap barely moves.
+
+**Consequently the following are WITHDRAWN:** that the chunk layer is a loss; that sizing a chunk from a latency
+budget cannot work on this workload; and that a more accurate step model would optimise the wrong objective. None
+of those were tested, because what was measured was a rule that starves prefill 41% of the time. The fix is to
+grant the earliest-deadline prefill a floor whether or not it can still meet its deadline, and then re-run the
+alpha 3 and alpha 6 arms.
+
+### Superseded: why a more accurate step model would not rescue the rule (kept for the record, premise now void)
 
 The natural next move is to bisect the validated step MLP (3.4-4.0% on merged steps) instead of the linear model,
 on the theory that the rule picks bad chunks because it mispredicts step time. **The six-cap sweep says otherwise,

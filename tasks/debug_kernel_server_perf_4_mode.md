@@ -6134,17 +6134,28 @@ grows with total work until it stops splitting at all. Fix: cap the chunk so no 
 one slot must walk (`UNIFIED_FA2_ITEMS_PER_SLOT`, default 4, 0 restores the old rule), plus skipping the FA2 launch
 when its queue is empty so an all-FA3 plan is literally one launch.
 
+Numbers below are from the FULLY PAIRED run -- both arms, identical conditions, three repeats each -- which
+supersedes the first after-only pass:
+
 | capture | before | after |
 |---|---:|---:|
-| rc agentmix_two s00016 / s00032 | 0.975 / 0.981 | **1.016 / 1.056** |
-| rc agentmix_four s00016 / s00032 | 0.955 / 0.937 | **1.008 / 1.028** |
-| ag two s00016 / s00032 / s00064 | 2.138 / 1.205 / 0.910 | 2.591 / 1.591 / **1.219** |
-| ag four s00016 / s00032 / s00064 | 1.685 / 1.002 / 0.745 | 2.405 / 1.430 / **1.120** |
-| longtail two / four | 2.06-6.81 / 1.16-4.32 | 2.51-7.45 / 1.64-4.72 |
+| rc agentmix_two s00016 / s00032 | 0.975 / 0.981 | **1.011 / 1.059** |
+| rc agentmix_four s00016 / s00032 | 0.955 / 0.937 | **1.003 / 1.027** |
+| ag two s00064 | 0.910 | **1.231** |
+| ag four s00064 | 0.745 | **1.091** |
+| longtail (8 captures) | 1.161-6.813 | 1.681-7.192 |
 
-**Below 1.0x: 13/28 -> 8/28; median 1.008 -> 1.169; correctness 28/28 PASS** (worst fp32 0.0035, worst vs-FA3
-0.0050), two independent runs of the after-arm agreeing within 0.5%. **The 0.937-0.972x realistic-chunk result
-recorded earlier today is superseded: those shapes are now 1.008-1.056x.**
+**Below 1.0x: 13/28 -> 9/28; median 1.008 -> 1.161; correctness 28/28 PASS** (worst fp32 0.0035, worst vs-FA3
+0.0050). **The 0.937-0.972x realistic-chunk result recorded earlier today is superseded: those shapes are now
+1.003-1.059x.**
+
+**Precision differs sharply by family, and only one family is quotable per capture.** The agent-dominant and
+realistic-chunk rows -- the ones carrying the fix -- have 0.4-4% spreads and reproduce to within 0.5% across
+independent runs. The nine remaining sub-1.0x captures are all chat-dominant sharegpt, and **their per-capture
+values move 10-20% between runs with 12-78% intra-run spreads** (s00256 reads 0.812x in one pass and 0.851x in
+another; s00512 0.843 against 0.955). The direction holds across all ten of them, but **no individual sharegpt
+ratio may be quoted to better than +-15%** -- which is consistent with their being sub-millisecond steps where
+launch and plan jitter is a large share of the measurement.
 
 **What is still below 1.0x, and why it is a different problem.** Only the chat-dominant/uniform set (8 captures,
 0.60-1.04x): 0.2-1.6 ms steps with ~800-key KV, where there is nothing to split so the chunk fix cannot apply.

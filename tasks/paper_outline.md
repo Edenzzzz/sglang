@@ -1181,8 +1181,8 @@ against sglang's own call).
 
 | input shape | our dispatcher against sglang's single attention call |
 |---|---|
-| spread KV lengths, agent-dominant | **1.01x to 7.45x** (28 generated steps, three repeats) |
-| uniform short KV lengths | 0.60x to 1.04x -- slower, and for a reason that bounds the design |
+| spread KV lengths, agent-dominant | **1.00x to 7.19x** (paired arms, three repeats, spreads 0.4-4%) |
+| uniform short KV lengths | 0.64x to 1.35x, median about 0.85x -- slower, for a reason that bounds the design |
 
 Both halves are informative, and the second is a limit on the mechanism rather than an embarrassment. The uniform
 steps are 0.2 to 1.6 ms long over roughly 800-key contexts. At that size two things fail together: each role is

@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.83.0 — Paired run confirms the chunk-cap fix, with revised figures (2026-10-29)
+- Both arms under identical conditions, three repeats each, supersedes the after-only pass: below-1.0x 13/28 ->
+  9/28 (not 8/28), median 1.008 -> 1.161 (not 1.169), realistic chunk 0.975/0.981/0.955/0.937 ->
+  1.011/1.059/1.003/1.027, toy chunk bs64 0.910 -> 1.231 and 0.745 -> 1.091, long-tail 1.161-6.813 -> 1.681-7.192.
+- Precision differs by family and only one family is quotable per capture: the agent-dominant and realistic-chunk
+  rows that carry the fix have 0.4-4% spreads and reproduce within 0.5%, while the nine remaining sub-1.0x
+  sharegpt captures move 10-20% between runs with 12-78% intra-run spreads. No individual sharegpt ratio may be
+  quoted to better than +-15% -- consistent with sub-millisecond steps where launch and plan jitter dominate.
+- Paper 6.2 updated to the paired figures.
+
 ## v3.82.0 — The floor fires and the overshoot is gone, but the gap survives it (2026-10-29)
 - Hoisted floor at alpha 6: chat TPOT 46.3 -> 57.0 ms, landing on L0's 57.1, mean TTFT 8.26 -> 6.41 s, loose
   attainment 50.3 -> 56.7%. So the floor does spend the slack, as predicted.

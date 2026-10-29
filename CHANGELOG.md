@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.57.0 — Draft/verify pipelining ceiling is 17-28%; the blocker is a data dependency (2026-10-29)
+- Computed the draft share of decode step time from the fitted step model, which separates the speculative terms
+  (nd*S for the S=3 draft forwards, nd*T and dkv*T for verify), so no GPU time was needed. Draft is 22.7% at 8
+  decode inputs rising to 28.3% at 48, and falling to 16.8% at 120K context because verify's KV reads scale with
+  context while the draft's do not.
+- That is the ceiling on pipelining, and it is more than an order of magnitude above the cross-role KV reuse
+  ceiling of 1.3%, so this mechanism is worth considering on size where that one is not.
+- The blocker is a true data dependency: verify needs the draft's tokens within a step, so pipelining is only
+  available across steps, and the draft for step N+1 needs step N's accepted prefix. Breaking it requires drafting
+  from a predicted accepted prefix, and at the measured acceptance of about 2.0 of 4 tokens the accepted length is
+  uncertain enough that wasted draft work eats into the ceiling.
+- Caveat recorded with the numbers: the model's 25% all-step error makes the shares indicative of magnitude, though
+  the ordering follows from which terms carry KV length rather than from the fit's precision.
+
 ## v3.56.0 — Cross-role KV page overlap is zero on the realistic replay (2026-10-29)
 - Settles the number that gates cross-role shared-prefix KV reuse, with no GPU time, by reading the workload
   generator instead of instrumenting a step -- a tracer copying per-step page sets would perturb the step times

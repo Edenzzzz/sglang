@@ -5718,3 +5718,36 @@ faster: those reads are already hidden behind compute and hit in L2. **So this i
 with the reason measured rather than asserted**, and the paper says so in one sentence rather than listing it as
 future work. `python tasks/perf_model/cross_role_page_overlap.py`, and the time bound from
 `tasks/perf_model/fanout_role_overlap.py`.
+
+## Draft/verify pipelining: the ceiling is 17-28%, and the dependency is what stands in the way (2026-10-29, no GPU)
+
+**Why measure the share first.** Pipelining the draft forwards against verify can save at most the time the draft
+forwards take, so that share is the ceiling and is worth knowing before any implementation. It is computable from
+the fitted step model without a run, because the model separates the speculative terms: with S=3 draft steps and
+T=4 draft tokens, `nd*S` prices the draft forwards and `nd*T` plus `dkv*T` price verify
+(`tasks/perf_model/step_qwen_h20_a6_gpu_20261027.json`).
+
+| decode inputs | mean KV each | step | draft | draft share | verify | verify share |
+|---:|---:|---:|---:|---:|---:|---:|
+| 8 | 20K | 20.6 ms | 4.7 ms | 22.7% | 10.4 ms | 50.3% |
+| 16 | 20K | 36.3 ms | 9.4 ms | 25.8% | 20.7 ms | 57.1% |
+| 32 | 20K | 67.7 ms | 18.7 ms | 27.6% | 41.5 ms | 61.3% |
+| 48 | 20K | 99.1 ms | 28.1 ms | 28.3% | 62.2 ms | 62.8% |
+| 32 | 60K | 85.1 ms | 18.7 ms | 22.0% | 57.9 ms | 68.0% |
+| 32 | 120K | 111.3 ms | 18.7 ms | 16.8% | 82.5 ms | 74.2% |
+
+**The ceiling is 17-28% of decode step time**, falling as context grows because verify's KV reads scale with
+context while the draft's do not. That is more than an order of magnitude above the cross-role KV reuse ceiling
+(1.3%), so unlike that mechanism this one is worth considering on size.
+
+**What stands in the way is a true data dependency, not engineering.** Within a step, verify needs the draft's
+tokens, so the only pipelining available is across steps -- and the draft for step N+1 needs the accepted prefix
+from step N's verify. Breaking that requires drafting from a PREDICTED accepted prefix. At the acceptance we
+measure (about 2.0 of 4 tokens) the accepted length is genuinely uncertain, so a predicted prefix is wrong often
+enough that the wasted draft work eats into the 17-28%, and the realisable share is some fraction of it that
+depends on how well acceptance length can be predicted per step rather than on average.
+
+**Caveat on these numbers:** the model's in-sample error is 25% over all steps, dominated by decode-only steps
+(section on the perf model), so treat the shares as indicative of magnitude rather than as tight. The ordering --
+verify dominates, the draft share shrinks with context -- is robust because it follows from which terms carry KV
+length, not from the fit's precision.

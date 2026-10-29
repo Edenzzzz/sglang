@@ -299,6 +299,17 @@ method = '''
                     if _late > out:
                         self.slo_chunk_late_floor = getattr(self, "slo_chunk_late_floor", 0) + 1
                         out = int(_late)
+        # The deadline-aware floor above lives inside `deadline > now`, so it never fires for a prefill whose
+        # deadline has ALREADY passed -- the common case under overload, and exactly the one a floor exists for.
+        # Starving it is self-reinforcing: a prefill denied service can never stop being late. Grant a minimum
+        # regardless of deadline state; the rescue path above still gives a larger chunk to anything that can
+        # still make its deadline. Measured 2026-10-29: without this the rule returned a ZERO chunk on 41% of
+        # steps at overload. `test_slo_chunk_rule.py` pins both cases.
+        if cfg["ttft"] and (self.chunked_req is not None or self.waiting_queue):
+            _min = max(int(self.page_size), 256)
+            if out < _min:
+                self.slo_chunk_late_floor = getattr(self, "slo_chunk_late_floor", 0) + 1
+                out = _min
         self.slo_chunk_capped = getattr(self, "slo_chunk_capped", 0) + int(out < chunk_size)
         self.slo_chunk_zero = getattr(self, "slo_chunk_zero", 0) + int(out == 0)
         if self.slo_chunk_calls % 500 == 1:

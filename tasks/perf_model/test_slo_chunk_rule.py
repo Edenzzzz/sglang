@@ -142,6 +142,33 @@ def main():
     cases.append(("lifetime length learned, rows 1 token in (projection keeps the chunk open)",
                   healthy(14, 1), "big"))
 
+    # THE CASE THAT WAS MISSING, AND THAT COST A CLUSTER RUN (2026-10-29).
+    # Under overload every resident row is far past its target, so the budget goes deeply negative (measured:
+    # budget_ms = -11731) and the rule returned a chunk of ZERO on 41% of steps -- prefill starved, which is self
+    # reinforcing because a starved prefill can never stop being late. The first fix added a floor but placed it
+    # inside `if deadline is not None and deadline > now:`, so it never fired for a prefill whose deadline had
+    # ALREADY passed, which under overload is the common case and exactly the one a floor exists for. The arm came
+    # back at 40.9% against 41.1% without it -- indistinguishable -- and the failure could only be inferred from
+    # the `zero` counter, because the floor's own counter was computed and never logged.
+    # These two cases pin the behaviour directly: whatever the deadline state, a resident prefill gets a chunk.
+    # The row must ESCAPE demotion and still veto, which is the production shape. Demotion fires on history
+    # (spent > s*L), so a row 10 tokens into a ~400-token output has spent far less than its 20 000 ms allowance
+    # and is NOT demoted -- but the budget also carries the projection (L - o - a) * rate, and at a slow observed
+    # rate that term alone is hundreds of seconds, so the minimum over rows goes deeply negative. Rows that are
+    # simply far past target get demoted and leave the minimum empty, which is why a fixture built that way passes
+    # without exercising anything.
+    late = [Req(1000, 10, 10 * 500.0, now) for _ in range(14)]   # o=10, 500 ms/token: not demoted, budget << 0
+    cases.append(("ALL rows far past target (budget goes negative): prefill must still get a chunk",
+                  late, "nonzero"))
+    cases.append(("the same, with the head prefill's own deadline already in the past",
+                  late, "nonzero", None, -5.0))
+
+    print("\n-- the floor, against a budget that has gone negative")
+    for rate_ms in (100.0, 300.0, 1000.0):
+        rows_ = [Req(1000, 10, 10 * rate_ms, now) for _ in range(14)]
+        sh = Shim(fn, rows_)
+        print(f"   14 young rows at {rate_ms:>6.0f} ms/token -> chunk {sh.budget_chunk(MAX):>6} tokens")
+
     # The `:qcap` cap, tested separately because it takes its bound from the WAITING queue rather than from the
     # resident rows. A queued request's deadline says when it must be ADMITTED, not what one step may cost, so
     # capping every step by the nearest deadline shrinks the chunk exactly when the queue is deep -- the same
@@ -155,11 +182,15 @@ def main():
     for case in cases:
         name, reqs, want = case[0], case[1], case[2]
         life = case[3] if len(case) > 3 else None
-        sh = Shim(fn, reqs, life=life)
+        due_in = case[4] if len(case) > 4 else 5.0
+        sh = Shim(fn, reqs, life=life, waiting=[Waiting(due_in, now)])
         out = sh.budget_chunk(MAX)
         if want == "max":
             ok = out == MAX
             need = f"the server maximum ({MAX})"
+        elif want == "nonzero":
+            ok = out > 0
+            need = "> 0 tokens -- a resident prefill must never be starved outright"
         elif want == "big":
             ok = out >= 1024
             need = ">= 1024 tokens"

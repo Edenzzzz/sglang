@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.88.0 — A test that reproduces the starvation bug, and the source patch fixed against it (2026-10-29)
+- tasks/perf_model/test_slo_chunk_rule.py gains two cases for the floor, which it had none for -- the reason the
+  "floor inside the deadline guard" bug survived deployment and cost a cluster arm.
+- The first fixture PASSED FOR THE WRONG REASON and was rewritten: rows simply far past target get demoted, which
+  leaves the minimum empty and returns a large chunk without exercising anything. The production shape is a row
+  that ESCAPES demotion and still vetoes -- demotion fires on history (spent > s*L), so a row 10 tokens into its
+  output has spent far less than its allowance, while the budget's projection term (L - o - a) * rate at a slow
+  observed rate sinks the minimum.
+- With that fixture the test reproduced the bug offline in under a second: with the head prefill's deadline in the
+  past the rule returns a chunk of ZERO, which is the production failure.
+- The hoisted floor had only been applied to the deployed trees, never folded back into
+  apply_slo_budget_chunk_20261026.py. Folded in; 11/11 cases pass.
+
 ## v3.87.0 — Draft/target attention merge is blocked by dataflow, not dimensions (2026-10-29)
 - Corrected: I claimed EAGLE3's draft cannot merge into the target forward because it is a separate model.
   Attention is weight-free -- Q.K^T.V over a KV cache -- so the kernel does not care which model produced Q, K, V.

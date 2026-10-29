@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.35.0 — Refresh the four-points evidence table in pd_colocation_vs_disagg.md (2026-10-29)
+- The table was dated 2026-10-21 and predated every 16-GPU TraceLab replay arm. Rewritten with what each point now
+  rests on:
+  - Point 1 gains the strongest evidence yet: +40.7 points chat attainment, 2.75x agent SLO goodput and -85% chat
+    mean-TPOT p90 against conditional disaggregation at alpha 3, both arms failed=0 at matched acceptance.
+  - Point 3's premise is REFUTED on the quantity that matters: decode-step prediction carries a -13.0% signed bias
+    no scalar calibration removes and a nonlinear fit makes worse (-19.9%), so predicted TPOT is ~13% optimistic.
+    It must come out of the contribution list until a better-featured model is measured.
+  - Point 4 becomes a timescale argument supported by measurement: the P/D demand ratio moves 2.2x inside a surge
+    and 3.4-4.2x within a run, while re-partitioning takes tens of minutes.
+  - Point 2 unchanged.
+- Records that two arms the older sections lean on are VOID, and that both failures flattered us: stock PD (2819
+  KV-transfer failures) and pdmux (every worker failed to launch on an FA3-backend incompatibility).
+
 ## v3.34.0 — The demote fix works, and it invalidates the flat sweep (2026-10-29)
 - alpha 6, stepcap 2000, accept 2.010, failed=0. Excluding past-rescue rows from the budget minimum against the
   identical arm with them clamping: chat attainment 35.3 -> 41.1% (+5.8 pts), agent 56.4 -> 63.5% (+7.1), agent SLO

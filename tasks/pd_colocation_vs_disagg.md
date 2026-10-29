@@ -2116,7 +2116,37 @@ mixed step, and one short prompt agreed with stock MTP for 5 tokens (noise floor
   coloc_cache_mtp run on the fixed router.
 
 
-## Evidence state of the four points — 2026-10-21 (supersedes the 2026-10-10 table below)
+## Evidence state of the four points — 2026-10-29 (supersedes the 2026-10-21 table below)
+
+Rewritten because the 16-GPU TraceLab replay arms of 2026-10-28/29 change what each point rests on, and because
+two arms that the older sections rely on are now VOID. Everything below is Qwen2.5-7B on 16 H20s (4 pods x 4
+GPUs), superposed TraceLab coding replay plus ShareGPT chat, load factor alpha, both systems on FA3 unless the row
+says otherwise. Commands and logs are in `debug_kernel_server_perf_4_mode.md`.
+
+| point | measured now | still argument only |
+|---|---|---|
+| **1.** highest-hit-first with an EDF/SLO check | **The strongest evidence yet, on the realistic replay: against conditional disaggregation at alpha 3 we hold +40.7 points chat attainment (91.2 vs 50.5%), +29.4 agent, 2.75x agent SLO goodput (2493 vs 905) and -85% chat mean-TPOT p90** (29.8 vs 193.8 ms), both arms failed=0 at matched acceptance. Conditional disagg is the right control because it prefills short appends LOCALLY, so the remaining gap is the session history being in the wrong place. | The SLO-check *variant* of the router still loses on session-affine traces (chat 65.1-68.5%); the contribution is the cheap load tie-break, not the feasibility check. Stock PD at either load has NO valid number (see below). |
+| **2.** best-effort cache migration / replication | Unchanged from 2026-10-21: the replication effect as cached fraction under the thrashing sweep (ours -3.1 points and -10.6% throughput, disagg -28.5 points and -55%), scheduler-only settings. | A full-stack rerun; migration is still never the deciding mechanism in any arm we have. |
+| **3.** EDF predictor with acceptance length | **The premise is now REFUTED on the quantity that matters.** The step model predicts merged steps to 4.7% MAPE, but DECODE steps -- which are almost all of TPOT -- carry a **-13.0% signed bias** (29.0% MAPE) that a scalar calibration cannot remove (held-out -13.3%), and a nonlinear fit on the same features is WORSE (-19.9%). So predicted TPOT is systematically ~13% optimistic, the worst direction for admission control. `tpot_bias.py`, `fit_step_mlp_20261028.py`. | That a *better-featured* model would fix it. The missing information is likely the decode batch's KV-length distribution (only its mean is logged) and the resident tenant mix. No TPOT-accuracy claim may appear in the paper. |
+| **4.** two-way RDMA, complete vs bipartite graph | **New, and it is the motivation rather than the mechanism:** the prefill-to-decode demand RATIO moves 2.2x inside a chat surge (median 38.4 against 85.1 outside) and spans 3.4-4.2x within a run with no surge at all, while re-partitioning roles takes tens of minutes (`pd_ratio_20261028.py`). Independent trace analysis finds 4.7x peak-to-mean at minute scale and 24.5x hourly within a day. So a static split is a control loop slower than its signal. | Congestion itself. The random-pull rule remains refuted at the scale we can test, and we have no per-link measurement. |
+
+**Two arms the older sections lean on are now VOID, and both failures flattered us:**
+- **Stock PD disaggregation has no valid measurement at either load.** The 2026-10-29 re-measurement reported chat
+  4.9% with TTFT p50/p90 190/311 s -- but `failed=1890`, `lost_after_failure=7470`, `accept=NONE`, and the decode
+  pod logged **2 819 `transfer failed for request`** plus KVTransferError aborts. It measured a broken KV-transfer
+  path, not a schedule. A clean-upstream re-run is queued (`mn_pdre_clean_16g_20261028.sh`), since `mn_node.sh`
+  requires stock PD on `up_clean/python`.
+- **PD multiplexing is unmeasured at both loads.** Every worker failed all five launch attempts with
+  `AttributeError: 'NoneType' object has no attribute 'swa_out_cache_loc'` -- `forward_metadata` is None inside the
+  FA3 backend on the pdmux path. It is a backend incompatibility, not the capture memory two MEM_FRAC guesses
+  assumed. Re-run queued on sglang's default backend.
+
+**Standing:** point 1 is the paper's claim and now rests on the realistic replay rather than on fan-out, where
+shared prefixes let the baseline nearly match us. Point 4 has become an argument about timescales, supported by
+measurement. Point 2 is unchanged. **Point 3's premise is refuted** and must be removed from the contribution list
+until a feature capturing the decode KV distribution is logged and the bias re-measured.
+
+## Evidence state of the four points — 2026-10-21 (superseded by the table above)
 
 Rewritten because the table below says "nothing measured" for points 2 and 4 and "no multi-node
 run" for point 1, all of which are now out of date, and because every baseline in it ran

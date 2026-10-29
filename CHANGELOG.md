@@ -1,5 +1,36 @@
 # Changelog
 
+## v3.92.0 — Delayed verification measured: three bugs, and the gate as specified is unmeasurable (2026-10-29)
+- **The overlap path needed its own implementation.** sglang builds the EAGLE v1 worker that carries the fork's
+  4-mode step ONLY with the overlap scheduler off; enabling spec v2 switches to the v2 worker, which has no 4-mode
+  step on the fork's base. The serving tree uses the v2 worker either way, so the mechanism is ported there
+  (branch `dv_overlap`, deployed as a generated idempotent patch to a COPY of the serving tree).
+- **Bug 1, silent.** `EAGLEDraftExtendCudaGraphRunner.replay()` returns `output_buffers[bs]` itself. Delayed
+  verification makes two replays per iteration normal -- the running batch's inside run_batch and the held batch's
+  in the drain -- so the first batch's spec_info ends up pointing at the second's topk_p / topk_index /
+  hidden_states. With a chain draft and greedy verify the emitted text stays target-greedy either way, so only the
+  acceptance length moves. Fixed by copying the three tensors out; this is why acceptance length is a gate.
+- **Bug 2, fatal, 186 of 192 requests lost.** The verify half's future publish and relay stash ran before the
+  deferred draft extend, so the relay payload held a `None` topk_p (`AttributeError` in `FutureMap.stash`). None of
+  that half can run before the extend; the whole block is now performed in the drain, which also puts the two
+  overlap modes on one code path.
+- **Bug 3, fatal, 183 of 192 lost.** The held entry grew to four fields when the verification result started
+  travelling with it, and two readers still unpacked two. They index now.
+- **The acceptance gate as specified cannot be met by ANY arm here.** Two runs of the IDENTICAL baseline
+  configuration agree on only 144 of 192 outputs (match rate 75.0%); a changed arrival gap gives 66.1%. Concurrent
+  requests batch differently run to run and that moves the logits in the last bits. The gate is now scored against
+  a conc=1 sequential reference, with the DV=0 concurrent arms providing the band.
+- **Baseline, serving tree, overlap on, 192x256 tokens on one H20, three runs:** 1007 / 1007 / 1002 forwards, of
+  which 166 / 168 / 167 (16.5-16.7%) carry prefill AND verify rows together, 151 four-mode steps each; acceptance
+  2.444 / 2.439 / 2.437. Host gap (launch-to-launch minus own GPU time) is 9.1 ms p50 on mixed steps against 169 ms
+  of GPU, and 0.04 ms p50 on decode-only steps against 13 ms -- i.e. with the overlap scheduler on, host work is
+  already off the critical path, which is the paper's stated motivation for the mechanism.
+- **The fork tree cannot run on this cluster.** `sgl_kernel.apply_rope_with_cos_sin_cache_inplace`, which its
+  `rotary_embedding.py` imports at module scope, is absent from the installed wheel (0.4.9) and from flashinfer in
+  `$W/fi`. Redirecting a RoPE kernel underneath a correctness gate was declined; the v1 implementation is instead
+  checked statically, by an AST comparison showing both halves of the `verify()` split are verbatim in-order
+  extractions (121 and 204 non-blank lines).
+
 ## v3.91.0 — Delayed verification on the fork's 4-mode step (SGLANG_DELAYED_VERIFY=1, off by default) (2026-10-29)
 - Implements arXiv 2512.01278 section 4.3 on the fork's EAGLE v1 path: a request whose draft tokens were just
   verified sits out ONE iteration while the host computes acceptance, so that host work overlaps the next

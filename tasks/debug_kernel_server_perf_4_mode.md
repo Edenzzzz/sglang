@@ -5945,3 +5945,27 @@ are rejected, and their KV is then discarded. Deferring the commit would avoid p
 and unlike draft/verify pipelining (17-28% ceiling, blocked by a real dependency).** Recording all three the same
 way keeps the paper's design section honest: the fused step opens several mechanisms, two are not worth building,
 one is worth building and is blocked on predicting acceptance length per step rather than on engineering.
+
+## Two merge-placement optimizations to implement (user, 2026-10-29) — NOT for the paper
+
+Both come from the realistic-chunk finding: on a prefill-dominated step the dispatcher carries a near-constant
+0.4-1.04 ms penalty against a single FA3 call, which is a fixed cost rather than a proportional one. The merge
+lives in the FA2 launch, so FA3's split partials are reduced only once the FA2 kernel runs -- and when FA2 has
+little or no work, that is a launch the step waits on for almost nothing. **The user's instruction is that neither
+of these appears in the paper: they are implementation-level optimizations, not contributions.**
+
+1. **Use the default merge schedule when the plan has no FA2 tiles.** The dispatch site is
+   `unified_dispatch_ext.cu:1115`, where `only16` already specialises the launch on the FA2 class mix:
+   `const bool only16 = pp.num_fa2_items0 == 0 && pp.num_fa2_items1 == 0;`
+   The case to add is the one where ALL THREE classes are empty, so the FA2 launch exists only to reduce FA3's
+   partials. There the merge should go wherever it goes without a dispatcher -- FA3's own path -- and the FA2
+   launch should be skipped entirely.
+2. **Fuse the merge into FA3, behind a flag.** Worth noting before starting: **an FA3-side merge path already
+   exists in the plan.** `pp.num_fa3_merge_items` is counted into the persistent grid at
+   `unified_dispatch_ext.cu:1060`, and the checker reports `fa3merge` per capture (1 on the toy-chunk sets, 0 on
+   the realistic-chunk ones). So this may be a question of routing the merge items to the FA3 launch rather than
+   writing a new reduction, which would make it a small change with a real payoff on prefill-dominated steps.
+
+Both are measured the same way as everything else here: paired repeats at 200 iterations on the realistic-chunk
+agent-dominant captures, which are the steps where the fixed cost is visible, with the FP32 gate first. Neither is
+started yet.

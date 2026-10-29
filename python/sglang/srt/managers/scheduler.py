@@ -450,6 +450,16 @@ class Scheduler(
         self._dv_held: List[Tuple[int, ScheduleBatch]] = []
         self._dv_rejoin: List[ScheduleBatch] = []
         self._dv_iter: int = 0
+        if get_bool_env_var("SGLANG_DELAYED_VERIFY"):
+            # The mechanism lives in the 4-mode step of the EAGLE v1 worker, which sglang only
+            # instantiates with the overlap scheduler off. Say so at startup rather than letting
+            # the flag look effective while nothing stashes.
+            logger.info(
+                "DELAYED_VERIFY requested: enable_overlap=%s mixed_spec=%s -- engages only "
+                "with enable_overlap=False and SGLANG_MIXED_SPEC=1",
+                self.enable_overlap,
+                os.environ.get("SGLANG_MIXED_SPEC", "0") == "1",
+            )
         # The current forward batch
         self.cur_batch: Optional[ScheduleBatch] = None
         # The current split prefill batch
@@ -2459,6 +2469,13 @@ class Scheduler(
         host-side acceptance (its inputs were copied to the host when the forward was issued,
         so this waits for nothing that has been launched since) and the draft extend, and the
         requests are queued to rejoin the running batch at the next batch formation."""
+        if not self._dv_held and not self.spec_algorithm.is_none():
+            # A stash the scheduler never registered would be drained by nobody and its
+            # requests would stall silently. Fail instead.
+            worker_has = getattr(self.draft_worker, "has_delayed_verify", None)
+            assert worker_has is None or not worker_has(), (
+                "spec worker holds a delayed verification the scheduler never registered"
+            )
         while self._dv_held and self._dv_held[0][0] < self._dv_iter:
             _it, expected = self._dv_held.pop(0)
             held, result = self.draft_worker.drain_delayed_verify()

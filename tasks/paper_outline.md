@@ -1158,6 +1158,27 @@ the obvious engineering step rather than a contribution. Our dispatcher's own ga
 **4.0 to 8.7%**. Running the two naive calls on separate streams instead of serially adds nothing (1.763x against
 1.759x in the 128K four-mode cell), which bounds how much any launch-level overlap can be worth here.
 
+**Result: the gain is a function of how heterogeneous the step's input is.** The captures above are sampled from
+one trace, so they fix the degree of heterogeneity and cannot separate it from the mechanism. We therefore generate
+mixed steps directly, with the length distributions of ShareGPT and of a reasoning-math corpus, and vary only how
+spread the KV lengths are: one set draws every input from the chat distribution, the other replaces a tenth of
+them with agent inputs of 64K to 200K tokens. Both sets carry a 512-token prefill chunk beside the decode or verify
+inputs, and all 18 generated steps pass the FP32 gate (worst head relative error 0.0030-0.0036; 0.0045-0.0048
+against sglang's own call).
+
+| input shape | speedup over sglang's single attention call |
+|---|---|
+| spread KV lengths (a tenth of inputs 64K-200K) | **1.23x to 7.51x, median 3.15x** |
+| uniform short KV lengths | 0.75x to 1.42x, median 1.20x |
+
+The split is the mechanism stated as a prediction and then confirmed. What the dispatcher removes is the padding of
+narrow work up to a wide tile, so where every input already has nearly the same width there is almost nothing to
+remove, and at the largest uniform batches the plan's own cost can exceed what it saves. Where inputs differ by
+three orders of magnitude in KV length -- which is what a cluster serving agent rounds beside chat turns looks
+like -- the same build is three times faster at the median. This is also why the end-to-end effect is smaller than
+the kernel ratio: attention is a fraction of the step (section 3.1), and the step mixes shapes that are not all
+heterogeneous.
+
 **Results on H20.** On the H20 (78 SMs), the same build is 1.10-1.23x faster than sglang's FA3 call on Qwen2.5-7B;
 there FA3 sets the step time, and the FA2 path's savings run beneath it. Llama-3.3-70B (TP4, 32-64K) is 1.38x /
 1.61x sglang's FA3 call on two- / four-mode steps, and GLM-4.5-Air (TP4, 32-64K, 43 captures) 1.28x / 1.41x. These

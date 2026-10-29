@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.36.0 — The decode bias is a DEAD INPUT: dkv is zero on every decode step (2026-10-29)
+- Counted over the alpha-3 traces: DECODE 73 770 steps with 0 having dkv > 0; EXTEND 14 162 steps with 10 189
+  having dkv > 0 (up to 100 375). The tracer records the decode rows' KV length on mixed/prefill steps and never on
+  decode-only steps, so the step model's dkv terms contribute nothing there and decode step time was predicted from
+  the row COUNT alone -- without the dominant term in decode attention cost.
+- That explains the 29% MAPE and -13% bias. Control: the same correction fitted on a RANDOM half gives a held-out
+  median bias of +0.1% against -12.3% chronologically, so the model is unbiased in the median within one
+  distribution and the chronological gap is covariate shift (GPU time per decode step grows 1.31x across the run).
+- Two earlier conclusions withdrawn: the MLP being worse (-19.9%) was a nonlinear fit to noise in a feature set
+  with the key input zeroed, and "more model does not fix this" was wrong -- no model can fix an always-zero
+  feature.
+- Point 3 of the four-points doc goes from REFUTED to UNMEASURED, which is the honest state. Fix order: populate
+  dkv on decode steps, re-trace one arm, refit, re-measure the signed bias on a chronological split.
+
 ## v3.35.0 — Refresh the four-points evidence table in pd_colocation_vs_disagg.md (2026-10-29)
 - The table was dated 2026-10-21 and predated every 16-GPU TraceLab replay arm. Rewritten with what each point now
   rests on:

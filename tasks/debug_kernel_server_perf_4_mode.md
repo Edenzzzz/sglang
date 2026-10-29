@@ -377,8 +377,29 @@ real serving steps, then the EDF step model and the PD-colocation argument (`pd_
         5.2.2 quotes a number from a fit whose artifact was never saved, so it is not currently reproducible;
         either refit and save it, or drop the column. A reviewer asking for the model would find three copies of a
         different one.
-      - **[x] REFIT AND SAVED, AND IT IS A NEGATIVE (2026-10-28): a nonlinear model on the same features makes the
-        decode bias WORSE.** `tasks/perf_model/fit_step_mlp_20261028.py` fits a 64-32 MLP on the five features
+      - **[!!] THE DECODE BIAS IS A DEAD INPUT, NOT A MODELLING LIMIT (2026-10-29). `dkv` IS ZERO ON EVERY DECODE
+        STEP.** Counted over the alpha-3 traces: **DECODE 73 770 steps, 0 with dkv > 0; EXTEND 14 162 steps,
+        10 189 with dkv > 0** (values up to 100 375). So the tracer records the decode rows' KV length on mixed /
+        prefill steps and NEVER on decode-only steps, and the step model's `dkv/1e3` and `dkv*T/1e3` terms
+        contribute nothing there -- decode step time is being predicted from the row COUNT alone, with no KV length
+        at all, which is the dominant term in decode attention cost.
+        - **That fully explains the 29% MAPE and the -13% bias, and it means point 3's premise was never tested.**
+          The control: fitting the same correction on a RANDOM half instead of a chronological one gives a held-out
+          median bias of **+0.1%** (against -12.3% chronologically), so the model is unbiased in the median when
+          train and test come from one distribution. The chronological gap is covariate shift -- load grows across
+          the run, GPU time per decode step 1.31x and `nd` 1.13x between halves -- which an online recalibration
+          handles. Neither finding supports "TPOT is hard to model"; both point at the missing feature.
+        - **So the earlier conclusions are withdrawn:** the MLP being worse (-19.9%) was a nonlinear model fitting
+          noise in a feature set with the key input zeroed, and "more model does not fix this" was the wrong
+          reading. The correct statement is that no model can fix a feature that is always zero.
+        - **Fix, in order:** (1) populate `dkv` on decode steps in the tracer -- it is the mean (or better, the
+          distribution) of the resident rows' KV lengths, which the scheduler already has; (2) re-trace one arm;
+          (3) refit and re-measure the decode-step signed bias on a chronological split. Only if a bias survives
+          THAT is point 3's premise actually in doubt.
+        - Until then paper 5.2.2's decode row and the four-points doc's point 3 must say the decode prediction is
+          **unmeasured** rather than inaccurate, which is the honest state.
+      - **[x] (superseded by the dead-input finding above) REFIT AND SAVED, AND IT IS A NEGATIVE (2026-10-28): a
+        nonlinear model on the same features makes the decode bias WORSE.** `tasks/perf_model/fit_step_mlp_20261028.py` fits a 64-32 MLP on the five features
         STEPTRACE carries (chunk tokens, prefix, decode rows, their KV, acceptance), log1p inputs and target,
         chronological half/half split, saved to `step_mlp_20261028.pt`:
         | split | rows | MAPE | bias | median |

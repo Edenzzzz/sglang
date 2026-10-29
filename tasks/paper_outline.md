@@ -743,13 +743,20 @@ On the merged steps every model lands within about a point of the others: the li
 MLP there, and the analytic overlap form (2.4-4.4%) is no worse. That is the row the chunk rule depends on, since
 it sizes a chunk for a merged step.
 
-**The model is used only where it is validated: on steps that carry a prefill chunk.** Those are the steps a
-scheduling decision is made about -- what to admit and how large a chunk to cut -- and there the linear form matches
-the nonlinear one, so the closed form the rule needs costs nothing in accuracy. We make no claim about predicting
-decode-only step time, and therefore none about predicting time per output token; a mean error quoted over all
-steps would be dominated by decode-only steps, which are 84% of steps and 10 to 20 ms long, and would describe
-neither regime. A model of the launch-to-launch gap, which includes host waits, is not fittable at all (45%
-error), so every model here targets GPU time. Llama-3.3-70B and GLM-4.5-Air fits are [pending].
+**The model is accurate where the scheduler uses it, and we report it separately by step type because the two
+regimes differ.** The decision the model informs -- what to admit, and how large a chunk to cut -- is made on
+steps that carry a prefill chunk. Measured on 2 693 such steps from a cluster replay, the linear form predicts
+step time to a **6.7% median absolute error with a -4.9% median signed bias**, and on the chunks large enough for
+the decision to matter, 2048 tokens or more, to **2.6% with a -2.3% bias**. On the 3 598 decode-only steps of the
+same run it predicts to **9.4% with a -5.2% bias**. The signs matter as much as the magnitudes: the model
+*under*-prices a step in both regimes, so a scheduler bisecting it errs toward admitting more work rather than
+toward starving prefill.
+
+Two caveats belong with those numbers. A model of the launch-to-launch gap, which includes host waits rather than
+GPU time alone, is not fittable at all (45% error), so every model here targets GPU time. And prediction degrades
+within a single run: splitting the same trace chronologically gives +2.0% bias on the first half against -12.5% on
+the second, which is drift rather than a bad fit, and argues for tracking the residual online rather than
+refitting. Llama-3.3-70B and GLM-4.5-Air fits are [pending].
 
 Table 5: held-out step-time MAPE by step type (Qwen2.5-7B, H200, four-mode serving). "prefill" includes the four-mode
 merged steps (see above); "mixed" is a prefill chunk beside one-token decode rows.

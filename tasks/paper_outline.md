@@ -1877,14 +1877,22 @@ to this work.
 AttentionFuse keeps nodes symmetric and makes colocation cheap and controllable at three levels: the kernel, the node
 and the cluster.
 
-*Kernel.* One CPU-side plan per mixed step gives every row a tile of its own size: FA3 for prefill chunks, and FA2
-tile classes of 16, 32 and 64 packed rows for decode and verify rows. The plan balances the tiles across the SMs and
-reduces every split row inside the FA2 launch. The fusion lives in the plan and the merge, not in the instruction
-stream; the two executors stay stock kernels at their own warp layouts. This is why the design avoids the 2.16x loss
-of a co-compiled kernel, and why it carries over to Blackwell with FA4 in place of FA3. On trace-sampled steps the
-kernel is 4.0-8.7% faster than naive FA3 + stock FA2 with FP32-exact output, and 1.86-2.92x faster than sglang's
-single FA3 call, most of which is the role split rather than our dispatcher. The
-fused step is also as predictable as the stock one (2.0% held-out MAPE).
+*Kernel.* One CPU-side plan per mixed step gives each of the step's prefill, decode, draft and verify inputs a tile
+of its own width: FA3 for the prefill chunk, and FA2 tile classes of 16, 32 and 64 packed queries for the rest. The
+plan balances the tiles across the SMs and reduces every split partial inside the FA2 launch. The fusion lives in
+the plan and the merge, not in the instruction stream; the two executors stay stock kernels at their own warp
+layouts. This is why the design avoids the 2.16x loss of a co-compiled kernel, and why it carries over to Blackwell
+with FA4 in place of FA3. On captured mixed steps the kernel is 1.86-2.92x the single attention call sglang runs
+today, with FP32-exact output, and the gain scales with how heterogeneous the step's input is -- a median of 3.15x
+where a tenth of inputs carry 64K to 200K tokens, against 1.20x where every input is short. The fused step is also
+as predictable as the stock one (2.0% held-out MAPE).
+
+One mechanism the fused step makes conceivable, and which we decline on measured grounds, is worth naming because a
+reader will think of it: since both roles are in one step under one plan, the plan could group work by KV page so a
+page both roles read is fetched once. On our workload they share no page at all -- sessions draw independent
+prompts, and a session never has a prefill and a decode in flight at the same time -- and on a workload built to
+maximise the sharing the ceiling is 1.3% of step time, because the prefill role's KV reads are already hidden
+behind compute and hit in L2. The opportunity exists only in the plan's reach, not in the measured time.
 
 *Node.* Because each row gets its own tile class, speculative decoding fits inside colocation: a prefill chunk and
 the MTP / EAGLE verify rows run as one forward, which earlier colocation designs cannot do. Deadline order with

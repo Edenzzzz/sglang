@@ -2155,8 +2155,32 @@ says otherwise. Commands and logs are in `debug_kernel_server_perf_4_mode.md`.
      full request counts and `failed=0`: the demotefix and capsweep arms at both loads were checked individually.
      Only the two pdmux arms were killed by it.
   All four trees were repaired in place and verified with `compile()`; the patch now inserts after the last
-  `__future__` line and refuses to write a file the interpreter would reject. pdmux stays unmeasured until an arm
-  gets past launch, so no pdmux row may be filled from a failed arm.
+  `__future__` line and refuses to write a file the interpreter would reject.
+- **With that cleared, the ACTUAL pdmux defect surfaced, and it is structural: pdmux cannot run with speculative
+  decoding on this sglang base.** The repaired workers reached CUDA-graph capture and then died with
+  `AttributeError: 'NoneType' object has no attribute 'decode_wrappers'` on flashinfer -- the same fault as FA3's
+  `swa_out_cache_loc`, which is why switching backends never helped. Both are `self.forward_metadata` being None in
+  `forward_decode`. The mechanism, read off the deployed tree:
+  - pdmux holds one attention backend per SM group (`decode_attn_backend_group`), and `eager_runner._execute_decode`
+    resolves one and publishes it through `ForwardContext` for the model layers to read via `get_attn_backend()`.
+  - Whether to PLAN is decided by `ForwardBatch.needs_forward_metadata_init()`, which is a property of the BATCH: a
+    pre-planner calls `mark_forward_metadata_ready()` and the forward then skips planning. **Speculative decoding
+    is such a pre-planner.**
+  - Readiness is therefore tracked per batch while metadata lives per backend OBJECT, and pdmux has N+1 objects.
+    The speculative worker plans the main or draft backend and marks the batch ready; the decode forward then runs
+    the model under a per-stream backend nobody planned, and the first attention layer dereferences None.
+  **Fixed, not worked around** (`apply_pdmux_spec_metadata.py`, deployed and compiling on all four nodes): under
+  pdmux, plan whenever the resolved backend is not the object the mark could refer to. This is sound because a
+  pre-planner never plans a per-stream decode backend, so planning one cannot disturb pre-planned multi-step draft
+  metadata -- that lives on a different object. It is deliberately stronger than testing `forward_metadata is
+  None`: from the second decode step on, a per-stream backend still holds the PREVIOUS step's plan, so the None
+  test would pass on stale metadata and corrupt silently instead of crashing. Outside pdmux the resolved backend is
+  `model_runner.attn_backend`, so the condition is unchanged and no other arm is touched. Cost is one plan call per
+  decode step per stream, which non-speculative pdmux already pays.
+  **Why fix the baseline rather than run it without MTP:** pdmux is the colocation baseline the single-node bar is
+  judged against, and running it without speculation while our arm has it would hold its configuration below ours.
+  A short smoke arm (alpha 12, 180 s) is queued behind the cap sweep; **pdmux stays unmeasured until an arm gets
+  past launch, and no pdmux row may be filled from a failed arm.**
 
 **Standing:** point 1 is the paper's claim and now rests on the realistic replay rather than on fan-out, where
 shared prefixes let the baseline nearly match us. Point 4 has become an argument about timescales, supported by

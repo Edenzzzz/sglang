@@ -32,13 +32,17 @@ NOT_ISSUED = {}  # tenant -> rounds past the replay horizon (BENCH_REPLAY_HORIZO
 LOST = {}  # tenant -> rounds never issued because an earlier round of their session failed
 
 
+class Unscorable(Exception):
+    """One arm cannot be scored. Raised rather than exiting, so a batch of arms survives one bad member."""
+
+
 def load(path, tenant):
     if not path.exists():
         return []
     d = json.loads(path.read_text().splitlines()[-1])
     starts = d.get("request_start_epoch")
     if starts is None:
-        raise SystemExit(f"{path}: no request_start_epoch (client predates the windowed-scoring overlay)")
+        raise Unscorable(f"{path.name}: no request_start_epoch (client predates the windowed-scoring overlay)")
     cached = d.get("cached_tokens") or [0] * len(starts)
     out = []
     for i, error in enumerate(d["errors"]):
@@ -137,8 +141,14 @@ def main():
     for d in map(Path, args.dirs):
         NOT_ISSUED.clear()
         LOST.clear()
-        rows = (load(d / "agent.json", "agent") + load(d / "chat.json", "chat")
-                + load(d / "chat_spike.json", "chat_spike") + load(d / "math" / "math.json", "math"))
+        try:
+            rows = (load(d / "agent.json", "agent") + load(d / "chat.json", "chat")
+                    + load(d / "chat_spike.json", "chat_spike") + load(d / "math" / "math.json", "math"))
+        except Unscorable as e:
+            # Same reasoning as NO_RECORDS below: an old arm whose client lacked the start-time field is one arm's
+            # problem, and exiting here discarded the 25 arms that came after it in a 48-arm pass.
+            print(f"PAPER {d.name} UNSCORABLE -- {e}", flush=True)
+            continue
         # An arm whose workers never came up leaves a directory with no records at all. Report that as its own
         # outcome and carry on: aborting here discards the scores of every arm after it in the batch, which is how
         # one dead pdmux arm stopped a 40-arm re-scoring pass midway. "No records" is a result, not an error.

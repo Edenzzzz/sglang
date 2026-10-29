@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.49.0 — pdmux is incompatible with speculative decoding on this base; fixed (2026-10-29)
+- Root cause, read off the deployed tree rather than guessed: pdmux holds one attention backend per SM group, but
+  `ForwardBatch.needs_forward_metadata_init()` tracks planning readiness per BATCH while metadata lives per backend
+  OBJECT. Speculative decoding pre-plans the main or draft backend and marks the batch ready, so the decode forward
+  runs the model under a per-stream backend nobody planned and the first attention layer dereferences None. FA3's
+  `swa_out_cache_loc` and flashinfer's `decode_wrappers` are the same fault, which is why switching backends never
+  helped -- all three pdmux attempts died at launch.
+- `apply_pdmux_spec_metadata.py`: under pdmux, plan whenever the resolved backend is not the object the readiness
+  mark could refer to. Sound because a pre-planner never plans a per-stream decode backend, so planning one cannot
+  disturb pre-planned draft metadata. Deliberately stronger than a `forward_metadata is None` test, which from the
+  second step on would pass on the previous step's stale plan and corrupt silently rather than crash. Inert outside
+  pdmux. Deployed and compiling on all four nodes; a smoke arm is queued.
+- The baseline is fixed rather than run without MTP: pdmux is what the single-node bar is judged against, and
+  running it unspeculated while our arm speculates would hold its configuration below ours.
+- The scorer no longer exits on an arm whose client predates the start-time field; it reports UNSCORABLE and
+  continues. That abort had discarded 25 of 48 arms in a re-scoring pass.
+
 ## v3.48.0 — Attainment and mean latency with error bars; no goodput (2026-10-29)
 - Reporting changed on the user's instruction: every serving result is SLO attainment plus mean TTFT and mean TPOT,
   each carried by a p10-p99 spread. The SLO-attaining token rate is dropped. It is a third axis moving with
